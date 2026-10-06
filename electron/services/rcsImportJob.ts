@@ -53,6 +53,12 @@ export type RcsJobKind = "cache";
 export const RCS_CACHE_JOB_LABEL = "all Android texts";
 /** SR (2026-10-02): at most this many deal chats in a claim's must-see list (the page checks at most 300 chats). */
 export const RCS_DEAL_CHATS_MAX = 300;
+/**
+ * BACKLOG-3668 M3: at most this many chats checked (/match) per job. The page
+ * checks at most 300 list chats plus the must-see chats (switched back on,
+ * deal chats ≤ RCS_DEAL_CHATS_MAX) and one retry each, far below this.
+ */
+export const RCS_JOB_MAX_CHATS = 2_000;
 
 export interface RcsJobProgress {
   listed: number;
@@ -275,6 +281,8 @@ export class RcsImportJob {
   private readonly matched = new Set<string>();
   /** conversationId -> the normalized E.164 numbers its Details showed (BACKLOG-3630). */
   private readonly participantNumbers = new Map<string, string[]>();
+  /** BACKLOG-3668 M3: /match calls refused past RCS_JOB_MAX_CHATS. A count only. */
+  chatsOverCap = 0;
 
   constructor(nowMs: number, jobId?: string, startDate: string | null = null) {
     this.jobId = jobId ?? crypto.randomUUID();
@@ -417,7 +425,13 @@ export class RcsImportJob {
    * /chat and images use. P3b: with the contacts-only flag on, `cacheAllow`
    * keeps only chats with a transaction contact.
    */
-  match(conversationId: string, numbers: string[], cacheAllow?: (numbers: string[]) => boolean): void {
+  match(conversationId: string, numbers: string[], cacheAllow?: (numbers: string[]) => boolean): boolean {
+    // BACKLOG-3668 M3: a new chat past the per-job cap is not recorded (not
+    // matched: nothing of it is saved), and counted.
+    if (!this.participantNumbers.has(conversationId) && this.participantNumbers.size >= RCS_JOB_MAX_CHATS) {
+      this.chatsOverCap += 1;
+      return false;
+    }
     this.participantNumbers.set(conversationId, participantKey(numbers.slice(0, 50)).split(",").filter(Boolean));
     this.progress.checked += 1;
     const recorded = this.participantNumbers.get(conversationId) ?? [];
@@ -425,6 +439,7 @@ export class RcsImportJob {
       if (!this.matched.has(conversationId)) this.progress.matched += 1;
       this.matched.add(conversationId);
     }
+    return true;
   }
 
   isMatched(conversationId: string): boolean {

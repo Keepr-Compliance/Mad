@@ -19,6 +19,13 @@ const count = z.number().finite().min(0).nullish();
 const text = (max: number) => z.string().max(max).nullish();
 const anyObject = z.looseObject({}).nullish();
 
+/**
+ * BACKLOG-3668 M3: at most this many messages in one /chat POST. The page
+ * sends a chat in one POST and reads at most ~2,000 messages of it (scan.js
+ * loadHistory cap, plus what is on screen), so a real Sync stays well under.
+ */
+export const RCS_MAX_MESSAGES_PER_POST = 5_000;
+
 export const RcsBridgeBodySchemas = {
   claim: z.looseObject({}),
   cancel: z.looseObject({}),
@@ -29,7 +36,7 @@ export const RcsBridgeBodySchemas = {
   chat: z.looseObject({
     conversationId: id,
     title: text(2000),
-    messages: z.array(z.looseObject({})).max(50_000),
+    messages: z.array(z.looseObject({})).max(RCS_MAX_MESSAGES_PER_POST),
   }),
   attachment: z.looseObject({
     conversationId: id,

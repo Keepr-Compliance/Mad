@@ -265,6 +265,13 @@ export function consentToRecordOnSync(
   return consentIsCurrent(consentVersion) ? null : RCS_CONSENT_VERSION;
 }
 
+/** BACKLOG-3668 M3: a Sync refused before staging — too little free disk space. */
+export const RCS_DISK_SPACE_REFUSAL: CacheStartRefusal = {
+  status: 507,
+  error: "disk_space",
+  message: "Not enough free disk space to sync. Free up space and try again.",
+};
+
 /**
  * Who may start a cache Sync: a signed-in user (whose consent, Keepr's
  * record, is current — only while RCS_CONSENT_REQUIRED), while no Sync runs
@@ -276,6 +283,12 @@ export function decideCacheStart(input: {
   consentVersion: number | null | undefined;
   activeLabel: string | null | undefined;
   writesPaused: boolean;
+  /**
+   * BACKLOG-3668 M3: the free-disk check (checkDiskSpaceForOperation
+   * "rcsCacheSync") passed. `false` refuses the start before any staging.
+   * Omitted: not checked (treated as enough, as the check itself does on error).
+   */
+  diskSufficient?: boolean;
   /** Test seam: defaults to RCS_CONSENT_REQUIRED. */
   consentRequired?: boolean;
 }): { ok: true; userId: string } | CacheStartRefusal {
@@ -294,6 +307,7 @@ export function decideCacheStart(input: {
       message: `Keepr is already syncing${input.activeLabel ? `: ${input.activeLabel}` : ""}. Wait for it to finish, or cancel it.`,
     };
   }
+  if (input.diskSufficient === false) return RCS_DISK_SPACE_REFUSAL;
   return { ok: true, userId: input.userId };
 }
 

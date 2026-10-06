@@ -56,6 +56,7 @@ import * as http from "http";
 import {
   parseNotReached,
   participantKey,
+  RCS_JOB_MAX_CHATS,
   RcsJobRegistry,
   type RcsCacheSaved,
   type RcsImportJob,
@@ -108,6 +109,13 @@ export class RcsBusyError extends Error {
 
 /** BACKLOG-3657: the reply while Keepr clears the Google Messages for Web texts. */
 export const RCS_CLEARING_MESSAGE = "Keepr is clearing imported texts. Try again in a moment.";
+
+/**
+ * BACKLOG-3668 M3: chats/images being saved at once. The page sends one at a
+ * time (job.js awaits each POST); a third concurrent write is refused (503).
+ */
+export const RCS_MAX_CONCURRENT_WRITES = 2;
+export const RCS_WRITES_BUSY_MESSAGE = "Keepr is still saving. Try again in a moment.";
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 /** One image as base64 (4/3 of the raw cap) plus JSON framing. */
@@ -895,6 +903,11 @@ export class RcsExtensionBridge {
         sendJson(res, 503, { error: "busy", message: RCS_CLEARING_MESSAGE });
         return;
       }
+      // BACKLOG-3668 M3: refused, not queued, past RCS_MAX_CONCURRENT_WRITES.
+      if (isWrite && this.inFlightWrites >= RCS_MAX_CONCURRENT_WRITES) {
+        sendJson(res, 503, { error: "busy", message: RCS_WRITES_BUSY_MESSAGE });
+        return;
+      }
       if (isWrite) this.inFlightWrites += 1;
       try {
         await this.route(req, res, path, jobMatch);
@@ -1186,7 +1199,12 @@ export class RcsExtensionBridge {
         const allow = job.userId && this.options.cacheChatAllowed
           ? (n: string[]) => this.options.cacheChatAllowed!(job.jobId, job.userId as string, n)
           : undefined;
-        job.match(conversationId, shown, allow);
+        if (!job.match(conversationId, shown, allow)) {
+          // BACKLOG-3668 M3: past the per-job chat cap — not kept, counted.
+          if (job.chatsOverCap === 1) this.logger.warn(`[RcsBridge] Chat cap (${RCS_JOB_MAX_CHATS}) reached: further chats are not saved`);
+          sendJson(res, 200, { matched: false, contactIds: [], overCap: true });
+          return;
+        }
         this.emitJob(job.snapshot());
         // Every chat with a number is kept (BACKLOG-3658); no contact gate.
         // (contactIds stays in the reply, always empty, for older pages.)
@@ -1251,7 +1269,11 @@ export class RcsExtensionBridge {
         job.progress.reactions += result.reactions;
         job.progress.removedNotRelinked += result.removedByUser ?? 0;
         this.emitJob(job.snapshot());
-        sendJson(res, 200, { ok: true, ...result });
+        // BACKLOG-3668 M3: messages refused for size — a count only.
+        if (chat.refusedOversize) {
+          this.logger.warn(`[RcsBridge] ${chat.refusedOversize} message(s) in a chat refused: over the size limit`);
+        }
+        sendJson(res, 200, { ok: true, ...result, ...(chat.refusedOversize ? { refusedOversize: chat.refusedOversize } : {}) });
         return;
       }
       case "attachment": {

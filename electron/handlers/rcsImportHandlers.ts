@@ -103,6 +103,7 @@ import {
 } from "../services/rcsClearService";
 import { bringAppToFrontForLink, bringAppToFrontOrFlash } from "../utils/bringAppToFront";
 import { wrapHandler } from "../utils/wrapHandler";
+import { checkDiskSpaceForOperation } from "../services/diagnostics/diskSpaceDiagnostics";
 import { getMainWindow } from "../windowRegistry";
 import { ValidationError } from "../utils/validation";
 import { RCS_MEDIA_DEFAULTS, clearPendingMediaRead, getRcsMediaOptions, hasPendingMediaRead, recordRcsMediaSeen, setRcsMediaOptions } from "../services/db/rcsMediaDbService";
@@ -833,12 +834,15 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   const state = userId ? databaseService.getRcsCacheState(userId) : null;
   // P3b: Keepr's consent record (a gate only while RCS_CONSENT_REQUIRED).
   const consent = userId ? databaseService.getRcsConsent(userId) : null;
+  // BACKLOG-3668 M3: free disk space, before any staging (sufficient on a check error).
+  const disk = userId ? await checkDiskSpaceForOperation("rcsCacheSync").catch(() => null) : null;
   const active = bridge.activeJob();
   const decision = decideCacheStart({
     userId,
     consentVersion: consent?.consentVersion,
     activeLabel: active ? active.label ?? "" : null,
     writesPaused: bridge.writesArePaused,
+    diskSufficient: disk ? disk.sufficient : undefined,
   });
   if (!("ok" in decision)) return { ok: false, ...decision };
   // BACKLOG-3666: no Sync until the extension is paired with this Keepr.
