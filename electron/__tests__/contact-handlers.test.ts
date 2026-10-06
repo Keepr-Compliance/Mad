@@ -113,9 +113,11 @@ jest.mock("../services/logService", () => ({
 
 // TASK-1950: Mock preferenceHelper for contact source gating
 const mockIsContactSourceEnabled = jest.fn().mockResolvedValue(true);
+const mockIsTextPeopleEnabled = jest.fn().mockResolvedValue(true);
 jest.mock("../utils/preferenceHelper", () => ({
   __esModule: true,
   isContactSourceEnabled: (...args: any[]) => mockIsContactSourceEnabled(...args),
+  isTextPeopleEnabled: (...args: any[]) => mockIsTextPeopleEnabled(...args),
 }));
 
 // TASK-1950: Mock outlookFetchService for syncOutlookContacts tests
@@ -414,6 +416,26 @@ describe("Contact Handlers", () => {
     mockLinkedSourceKeys = new Set<string>();
     // TASK-1950: Default all sources to enabled
     mockIsContactSourceEnabled.mockResolvedValue(true);
+    mockIsTextPeopleEnabled.mockResolvedValue(true);
+  });
+
+  // BACKLOG-3670: people found in Google Messages texts only while Settings →
+  // Contacts → Auto-discover → Messages / SMS is on (default off). Mutation:
+  // the gate not read, or passed as always-on → red.
+  describe("people found in texts follow the Messages / SMS auto-discover switch (BACKLOG-3670)", () => {
+    const messagesSwitch = (on: boolean) => mockIsTextPeopleEnabled.mockResolvedValue(on);
+
+    // Live FK fix: people found in texts are never in the SAVED lists, whatever
+    // the switch says (they are offered by contacts:get-available instead).
+    it.each([true, false])("contacts:get-all and contacts:search never ask for text people (switch %s)", async (on) => {
+      messagesSwitch(on);
+      mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+      await registeredHandlers.get("contacts:get-all")(mockEvent, TEST_USER_ID);
+      expect(mockDatabaseService.getImportedContactsByUserIdAsync).toHaveBeenLastCalledWith(TEST_USER_ID);
+      await registeredHandlers.get("contacts:search")(mockEvent, TEST_USER_ID, "Test");
+      expect(mockDatabaseService.searchContactsForSelection).toHaveBeenLastCalledWith(TEST_USER_ID, "Test");
+      expect(mockIsTextPeopleEnabled).not.toHaveBeenCalled();
+    });
   });
 
   describe("contacts:get-all", () => {
@@ -982,7 +1004,34 @@ describe("Contact Handlers", () => {
 
     // BACKLOG-2316: the over-suppression regression. These assert EXACT contact
     // identity SETS survive dedup — counts alone hide identity bugs.
+    // Live (Windows freeze): off a Mac the AddressBook is never probed, even
+    // with an empty address-book table. Mutation: the platform guard removed → red.
+    it("win32: get-available never calls getContactNames", async () => {
+      const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value: "win32" });
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(0);
+        (getContactNames as jest.Mock).mockClear();
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+        const result = await registeredHandlers.get("contacts:get-available")(mockEvent, TEST_USER_ID);
+        expect(result.success).toBe(true);
+        expect(getContactNames).not.toHaveBeenCalled();
+      } finally {
+        if (realPlatform) Object.defineProperty(process, "platform", realPlatform);
+      }
+    });
+
     describe("distinct contacts are not over-suppressed (BACKLOG-2316)", () => {
+      // The macOS AddressBook probe runs only on a Mac (live Windows freeze fix).
+      const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+      beforeAll(() => Object.defineProperty(process, "platform", { value: "darwin" }));
+      afterAll(() => {
+        if (realPlatform) Object.defineProperty(process, "platform", realPlatform);
+      });
+
       it("keeps BOTH people who share one normalized phone (household/office line)", async () => {
         // Two DISTINCT people (different first names) share one landline. The
         // old predicate suppressed the second on the shared phone alone; both

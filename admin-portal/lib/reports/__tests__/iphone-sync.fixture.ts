@@ -1094,3 +1094,98 @@ export const RATE_ROW_IDS = [
   ROW_IDS.rate0914,
   ROW_IDS.rate0915afternoon,
 ] as const;
+
+// ─── Derived users (BACKLOG-3450 PR 2) ───────────────────────────
+
+/**
+ * NOT TRANSCRIBED — DERIVED. A user row with NO display name, so `userLabel`
+ * falls back to the account's email.
+ *
+ * No real user of this report is in that state:
+ *
+ *   select count(*) filter (where display_name is null or display_name = '')
+ *   from users
+ *   where id in (select distinct user_id from sync_outcomes
+ *                where source = 'iphone-backup');   -- 0, of 8
+ *
+ * `display_name` is nullable and `buildRun` falls back to `email` explicitly,
+ * so the state is emittable — it just has no instance today. It exists here so
+ * that "a saved view's stored blob carries no email" is a control that CAN go
+ * red: against {@link FIXTURE_USERS_24}, where every user has a display name,
+ * a leaked user label would carry no `@` and the assertion would be vacuous.
+ *
+ * Kept OUT of `FIXTURE_USERS_24` on purpose: adding it there would put an
+ * email into the serialized model and redden PR 1's `ships NO email to the
+ * browser` control, which is a true statement about that fixture.
+ */
+export const USERS_WITH_A_MISSING_DISPLAY_NAME: ReportUser[] = [
+  { id: U1, email: 'sync-user-a@example.test', display_name: null },
+  ...FIXTURE_USERS.slice(1),
+];
+
+// ─── The founder's own failed run (BACKLOG-3450 founder QA) ───────
+
+/**
+ * TRANSCRIBED from `public.sync_outcomes` on 2026-09-19, the run the founder
+ * checked the round-2 preview against field by field:
+ *
+ *   select created_at, outcome, elapsed_ms, backup_bytes, backup_bytes_unmeasured,
+ *          device_used_bytes, messages_extracted, last_phase, reason_code,
+ *          ended_by, app_version, platform, incremental, prior_backup,
+ *          device_model, device_ios_version, was_encrypted, is_packaged,
+ *          started_at, bytes_transferred, phases
+ *   from sync_outcomes where source='iphone-backup' and id::text like '6c87…';
+ *
+ * Its id and user are synthetic, as everywhere else in this file; every number
+ * and code is verbatim.
+ *
+ * IT IS THE FIRST REAL ROW CARRYING THE 2.38.1 EVIDENCE FIELDS. The plan
+ * measured `last_phase`, `reason_code`, `ended_by` and `bytes_transferred` on
+ * ZERO of 24 rows and every control over them had to use a derived row. This
+ * one has all four, from a dev build of 2.38.0.
+ *
+ * It is the fixture for all three founder-QA fixes, and it separates each of
+ * them from its old behaviour:
+ *
+ *   min/GB   58 063 511 552 B over 317 454 ms, with NO backup written.
+ *            Before: 5.2909 min / 54.078 GiB = "0.1 min/GB" — a throughput
+ *            figure for a run that moved nothing. After: "—".
+ *   GB       58 063 511 552 / 1000^3 = "58.1 GB", which is what iOS Settings
+ *            showed him. / 1024^3 = "54.1 GB", which is what the card said.
+ *   labels   `backup:waiting-for-device` / `INSUFFICIENT_SPACE` /
+ *            `device-error` rendered raw beside a phase chart already reading
+ *            "Waiting for device".
+ *
+ * KEPT OUT of `FIXTURE_ROWS_24`: it was written after that corpus was
+ * transcribed, and adding it would move every expected value in the 24-row
+ * suites for no gain.
+ */
+export const FOUNDER_QA_ROW: SyncOutcomeRow = {
+  id: 'f0000001-0000-4000-8000-000000345019', // pii-allow-uuid: synthetic fixture id
+  user_id: U1,
+  created_at: '2026-09-19T23:27:40.938395Z',
+  source: 'iphone-backup',
+  outcome: 'error',
+  elapsed_ms: 317454,
+  phases: [phase('backup', 5046), phase('backup:waiting-for-device', 312316)],
+  prior_backup: 'none',
+  incremental: false,
+  was_encrypted: false,
+  device_model: 'iPhone17,1',
+  device_ios_version: '26.6.2',
+  device_used_bytes: 58063511552,
+  backup_bytes: null,
+  backup_bytes_unmeasured: true,
+  messages_extracted: null,
+  conversations_extracted: null,
+  contacts_extracted: null,
+  app_version: '2.38.0',
+  platform: 'darwin',
+  is_packaged: false,
+  started_at: '2026-09-19T23:27:40.754000Z',
+  bytes_transferred: 0,
+  bytes_last_increased_at: null,
+  last_phase: 'backup:waiting-for-device',
+  reason_code: 'INSUFFICIENT_SPACE',
+  ended_by: 'device-error',
+};

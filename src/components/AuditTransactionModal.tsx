@@ -1,5 +1,10 @@
 import React, { useState, useCallback } from "react";
+import type { SourceCoverageGap } from "../../electron/types/auditCoverage";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
+import {
+  FloatingActionBar,
+  FLOATING_ACTION_BAR_CONTENT_PADDING,
+} from "./common/FloatingActionBar";
 import AddressVerificationStep from "./audit/AddressVerificationStep";
 import ContactAssignmentStep from "./audit/ContactAssignmentStep";
 import type { Transaction } from "../../electron/types/models";
@@ -8,6 +13,10 @@ import { useAuditTransaction } from "../hooks/useAuditTransaction";
 import { OfflineNotice } from "./common/OfflineNotice";
 import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
 import { AuditCoveragePrompt } from "./transactionDetailsModule/components/AuditCoveragePrompt";
+import { dialogTextSource } from "./transactionDetailsModule/components/TextCoverageNotice";
+import { useImportSource } from "../hooks/useImportSource";
+import { usePlatform } from "../contexts/PlatformContext";
+import { parseMoney } from "./transactionDates/commission";
 
 // Type definitions
 interface AuditTransactionModalProps {
@@ -45,12 +54,18 @@ function AuditTransactionModal({
   // BACKLOG-2292 (Layer 1): audit-window completeness prompt at date selection.
   const { checkCoverage, runMessagesImport, importing, progress, indeterminate } =
     useAuditCoverageCheck(userId);
+  // Live (founder): the dialog names only the user's own text source.
+  const { isMacOS } = usePlatform();
+  const importSource = useImportSource(userId, false);
   const [coveragePrompt, setCoveragePrompt] = useState<{
     hasGap: boolean;
     importerAvailable: boolean;
     // BACKLOG-2305: failsafe/error notice; when present the prompt stays open with
     // re-enabled actions so the user can retry or skip (never trapped).
     notice?: string | null;
+    // BACKLOG-3663: other sources that do not reach this range (soft lines).
+    sourceGaps?: SourceCoverageGap[];
+    proposedStartISO?: string | null;
   } | null>(null);
   const originalStartedAt = editTransaction?.started_at ?? null;
 
@@ -100,7 +115,10 @@ function AuditTransactionModal({
       step === 1 &&
       !!proposed &&
       addressData.property_address.trim().length > 0 &&
-      !(addressData.closed_at && proposed > addressData.closed_at);
+      !(addressData.closed_at && proposed > addressData.closed_at) &&
+      // BACKLOG-3614: an unparseable Listing Price defers to handleNextStep,
+      // which shows the error.
+      parseMoney(addressData.listing_price_text ?? "").ok;
     if (!basicValid) {
       handleNextStep();
       return;
@@ -126,6 +144,8 @@ function AuditTransactionModal({
     setCoveragePrompt({
       hasGap,
       importerAvailable: !!coverage?.messagesImporterAvailable,
+      sourceGaps: coverage?.sourceGaps ?? [],
+      proposedStartISO: proposed ?? null,
     });
   }, [
     step,
@@ -189,7 +209,7 @@ function AuditTransactionModal({
   const displayStep = isEditing ? 1 : Math.min(step, 3);
 
   return (
-    <ResponsiveModal onClose={onClose} panelClassName={MODAL_PANEL.lg}>
+    <ResponsiveModal onClose={onClose} panelClassName={`${MODAL_PANEL.lg} relative`}>
         {/* Header */}
         <div className="flex-shrink-0 bg-gradient-to-r from-indigo-500 to-purple-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg">
           {/* Mobile layout */}
@@ -218,7 +238,7 @@ function AuditTransactionModal({
           <div className="hidden sm:flex items-center justify-between">
             <div>
               <h2 className="text-xl font-bold text-white">
-                {isEditing ? "Edit Transaction Details" : "Audit New Transaction"}
+                {isEditing ? "Edit Transaction Details" : "New Transaction"}
               </h2>
               <p className="text-indigo-100 text-sm">
                 {isEditing ? (
@@ -281,7 +301,13 @@ function AuditTransactionModal({
         )}
 
         {/* Content */}
-        <div className={`flex-1 min-h-0 ${step === 1 ? "overflow-y-auto p-6" : "flex flex-col overflow-hidden pt-0 px-2 pb-2"}`}>
+        {/* BACKLOG-3614: bottom padding keeps the last field clear of the floating
+            action group. Steps 2/3 scroll inside nested lists, so the padding sits
+            on this outer container and the group floats over the padding band. */}
+        <div
+          className={`flex-1 min-h-0 ${FLOATING_ACTION_BAR_CONTENT_PADDING} ${step === 1 ? "overflow-y-auto px-6 pt-6" : "flex flex-col overflow-hidden pt-0 px-2"}`}
+          data-testid="audit-modal-content"
+        >
           {step === 1 && (
             <AddressVerificationStep
               addressData={addressData}
@@ -298,10 +324,16 @@ function AuditTransactionModal({
               onEndDateChange={(date) =>
                 setAddressData(prev => ({ ...prev, closed_at: date }))
               }
+              onListingPriceChange={(text) =>
+                setAddressData(prev => ({ ...prev, listing_price_text: text }))
+              }
               showAutocomplete={showAddressAutocomplete}
               suggestions={addressSuggestions}
               onSelectSuggestion={selectAddress}
               startDateMode="manual"
+              // BACKLOG-3613: End Date is on the Edit screen only. A new deal
+              // starts ongoing (no end date); it is entered at Submit / Export.
+              showEndDate={isEditing}
             />
           )}
 
@@ -341,88 +373,47 @@ function AuditTransactionModal({
           )}
         </div>
 
-        {/* Footer — desktop: sticky bar, mobile: floating button */}
-        {/* BACKLOG-1654: Hide nav buttons when contact form modal is open to prevent overlap */}
-        {/* Desktop footer */}
-        {!isContactFormOpen && <div className="hidden sm:flex flex-shrink-0 px-6 py-4 bg-gray-50 rounded-b-xl items-center gap-3 justify-between">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg font-medium transition-all"
-          >
-            Cancel
-          </button>
-          <div className="flex items-center gap-3">
-            {step > 1 && (
-              <button
-                onClick={handlePreviousStep}
-                disabled={loading}
-                className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg font-medium transition-all"
-                data-testid="create-audit-back"
-              >
-                &larr; Back
-              </button>
-            )}
-            <button
-              onClick={handleGatedNext}
-              disabled={loading}
-              className={`px-6 py-2 rounded-lg font-semibold transition-all ${
-                loading
-                  ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                  : "bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 shadow-md hover:shadow-lg"
-              }`}
-              data-testid="create-audit-submit"
-            >
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  {isEditing ? "Saving..." : "Creating..."}
-                </span>
-              ) : isEditing ? (
-                "Save Changes"
-              ) : step === 3 ? (
-                "Create Transaction"
-              ) : (
-                "Continue \u2192"
-              )}
-            </button>
-          </div>
-        </div>}
-        {/* Mobile floating button */}
-        {!isContactFormOpen && <div className="sm:hidden fixed bottom-4 right-4 z-[71] flex items-center gap-2">
-          {step > 1 && (
-            <button
-              onClick={handlePreviousStep}
-              disabled={loading}
-              className="px-4 py-3 rounded-full font-medium text-sm bg-white text-gray-700 shadow-lg hover:shadow-xl transition-all"
-              data-testid="create-audit-back"
-            >
-              &larr;
-            </button>
-          )}
-          <button
-            onClick={handleNextStep}
-            disabled={loading}
-            className={`px-6 py-3 rounded-full font-semibold text-sm shadow-lg transition-all ${
-              loading
-                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                : "bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 hover:shadow-xl"
-            }`}
-            data-testid="create-audit-submit"
-          >
-            {loading ? (
-              <span className="flex items-center gap-2">
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                {isEditing ? "Saving..." : "Creating..."}
-              </span>
-            ) : isEditing ? (
-              "Save"
-            ) : step === 3 ? (
-              "Create"
-            ) : (
-              "Continue →"
-            )}
-          </button>
-        </div>}
+        {/* BACKLOG-3614: one floating action group at every width (was a pinned
+            desktop bar plus a separate <640px pill that had no Cancel and skipped
+            the coverage gate). BACKLOG-1654: hidden while the contact form is open. */}
+        {!isContactFormOpen && (
+          <FloatingActionBar
+            testId="audit-floating-actions"
+            actions={[
+              { key: "cancel", label: "Cancel", onClick: onClose, variant: "secondary" },
+              // Below 640px the labels shorten (as the old narrow pill's did) so
+              // Cancel + Back + Create fit a ~360px-wide window without clipping.
+              step > 1 && {
+                key: "back",
+                label: (
+                  <>
+                    {"\u2190"}
+                    <span className="hidden sm:inline"> Back</span>
+                  </>
+                ),
+                onClick: handlePreviousStep,
+                variant: "secondary",
+                disabled: loading,
+                testId: "create-audit-back",
+              },
+              {
+                key: "primary",
+                label: isEditing ? (
+                  <ResponsiveLabel short="Save" full="Save Changes" />
+                ) : step === 3 ? (
+                  <ResponsiveLabel short="Create" full="Create Transaction" />
+                ) : (
+                  "Continue \u2192"
+                ),
+                onClick: handleGatedNext,
+                variant: "primary",
+                loading,
+                loadingLabel: isEditing ? "Saving..." : "Creating...",
+                testId: "create-audit-submit",
+              },
+            ]}
+          />
+        )}
 
         {/* BACKLOG-2292 (Layer 1): audit-window coverage prompt. */}
         {coveragePrompt && (
@@ -436,9 +427,22 @@ function AuditTransactionModal({
             onUpdateNow={handleUpdateNow}
             onSkip={proceedAfterPrompt}
             onCancel={() => setCoveragePrompt(null)}
+            sourceGaps={coveragePrompt.sourceGaps}
+            proposedStartISO={coveragePrompt.proposedStartISO}
+            chosenSource={dialogTextSource(importSource, isMacOS)}
           />
         )}
     </ResponsiveModal>
+  );
+}
+
+/** A short label below 640px, the full one from 640px up (BACKLOG-3614). */
+function ResponsiveLabel({ short, full }: { short: string; full: string }): React.ReactElement {
+  return (
+    <>
+      <span className="sm:hidden">{short}</span>
+      <span className="hidden sm:inline">{full}</span>
+    </>
   );
 }
 

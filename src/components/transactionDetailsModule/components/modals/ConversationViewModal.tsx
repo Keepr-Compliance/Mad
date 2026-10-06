@@ -13,7 +13,8 @@ import { isEmptyOrReplacementChar, formatMessageTime } from "../../../../utils/m
 import {
   partitionReactions,
   aggregateReactions,
-  REACTION_EMOJI,
+  reactionEmojiFromBody,
+  reactionGlyph,
 } from "../../../../utils/reactionUtils";
 import logger from '../../../../utils/logger';
 import type { HideFromExportState } from "../../../../hooks/useHideFromExportState";
@@ -206,6 +207,8 @@ function ReactionPills({
       actor: actorKey,
       sentAt: r.sent_at || r.received_at || "",
       associatedType: r.associated_message_type,
+      // BACKLOG-3620: a reaction row that stores its own emoji renders it.
+      emoji: reactionEmojiFromBody(r.body_text),
     };
   });
 
@@ -223,12 +226,12 @@ function ReactionPills({
         const names = agg.actors.map((a) => nameByActorKey.get(a) || a);
         return (
           <span
-            key={agg.kind}
+            key={agg.key}
             title={names.join(", ")}
-            data-testid={`reaction-pill-${agg.kind}`}
+            data-testid={`reaction-pill-${agg.key}`}
             className="inline-flex items-center gap-0.5 rounded-full bg-white px-1.5 py-0.5 text-[11px] leading-none text-gray-700 shadow-md ring-1 ring-black/5"
           >
-            <span aria-hidden="true">{REACTION_EMOJI[agg.kind]}</span>
+            <span aria-hidden="true">{reactionGlyph(agg)}</span>
             {agg.count > 1 && <span className="font-semibold">{agg.count}</span>}
           </span>
         );

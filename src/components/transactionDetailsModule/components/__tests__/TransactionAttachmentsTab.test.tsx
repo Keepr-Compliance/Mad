@@ -227,4 +227,51 @@ describe("TransactionAttachmentsTab (BACKLOG-322)", () => {
     );
     expect(screen.queryByTestId("preview-modal")).not.toBeInTheDocument();
   });
+
+  /**
+   * BACKLOG-3730 — the tab shows only attachments main placed inside the
+   * transaction dates, with a "Show all" toggle. Membership is the id set only.
+   */
+  describe("transaction date window (BACKLOG-3730)", () => {
+    const IN = new Set(["pdf1", "vid1", "doc1"]);
+
+    it("T1: default shows only in-window attachments", () => {
+      render(<TransactionAttachmentsTab attachments={ATTACHMENTS} loading={false} error={null} inWindowIds={IN} />);
+      expect(cardIdsInOrder().sort()).toEqual(["doc1", "pdf1", "vid1"]);
+      expect(screen.getByTestId("attachments-count")).toHaveTextContent("3 attachments");
+      expect(screen.getByTestId("attachments-window-toggle")).toHaveTextContent(
+        "Show all (6) — 3 dated outside the transaction dates are hidden",
+      );
+    });
+
+    it("T2: the toggle shows all, and unticking scopes again", () => {
+      render(<TransactionAttachmentsTab attachments={ATTACHMENTS} loading={false} error={null} inWindowIds={IN} />);
+      fireEvent.click(screen.getByTestId("attachments-show-all"));
+      expect(cardIdsInOrder().sort()).toEqual(["aud1", "doc1", "img1", "oth1", "pdf1", "vid1"]);
+      fireEvent.click(screen.getByTestId("attachments-show-all"));
+      expect(cardIdsInOrder().sort()).toEqual(["doc1", "pdf1", "vid1"]);
+    });
+
+    it("T3: no dates (null) → everything, no toggle", () => {
+      render(<TransactionAttachmentsTab attachments={ATTACHMENTS} loading={false} error={null} inWindowIds={null} />);
+      expect(cardIdsInOrder()).toHaveLength(6);
+      expect(screen.queryByTestId("attachments-window-toggle")).not.toBeInTheDocument();
+    });
+
+    it("T4: all inside → no toggle", () => {
+      const all = new Set(ATTACHMENTS.map((a) => a.id));
+      render(<TransactionAttachmentsTab attachments={ATTACHMENTS} loading={false} error={null} inWindowIds={all} />);
+      expect(cardIdsInOrder()).toHaveLength(6);
+      expect(screen.queryByTestId("attachments-window-toggle")).not.toBeInTheDocument();
+    });
+
+    it("T5: none inside → says so, toggle still offers all", () => {
+      render(<TransactionAttachmentsTab attachments={ATTACHMENTS} loading={false} error={null} inWindowIds={new Set()} />);
+      expect(screen.getByTestId("attachments-filtered-empty")).toHaveTextContent(
+        "No attachments dated inside the transaction dates",
+      );
+      fireEvent.click(screen.getByTestId("attachments-show-all"));
+      expect(cardIdsInOrder()).toHaveLength(6);
+    });
+  });
 });

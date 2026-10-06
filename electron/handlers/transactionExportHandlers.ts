@@ -23,11 +23,14 @@ import { ensureTransactionEmailsSynced } from "../services/transactionSyncTrigge
 // (Layer 3). Non-throwing; the renderer ExportModal is the primary prompt.
 import { ensureTransactionMessagesSynced } from "../services/messagesSyncTrigger";
 import { wrapHandler } from "../utils/wrapHandler";
-import {
-  enforceExportGate,
-  emitExportCompleted,
-} from "../services/exportGate";
-import type { SubmissionProgress } from "../services/submissionService";
+import { emitExportCompleted } from "../services/exportGate";
+// BACKLOG-3733: load → paywall gate → resolve, in ONE shared function.
+import { prepareTransactionCommunications } from "../services/transactionCommunicationSet";
+import type {
+  SubmissionProgress,
+  SubmissionResult,
+  SubmitOptions,
+} from "../services/submissionService";
 import type { TransactionResponse } from "../types/handlerTypes";
 import type { FolderExportProgress } from "../types/ipc";
 import {
@@ -40,11 +43,9 @@ import {
 // content filters that used to be written out inline in this file (once here,
 // once again inside enhancedExportService) now live in exportPlan.ts.
 import {
-  resolveExportPlan,
   normalizeAttachmentType,
   normalizeContentType,
   normalizeEmailMode,
-  type ExportPlanRequest,
 } from "../services/exportPlan";
 
 import { sendToMainWindow } from "../windowRegistry";
@@ -113,6 +114,46 @@ export const cleanupTransactionHandlers = (): void => {
  * Register transaction export and submission IPC handlers
  * @param _mainWindow - Main window instance. No push reads it any more (BACKLOG-3454: pushes resolve the live window via sendToMainWindow), but its truthiness still gates the submission sync pollers below.
  */
+
+/**
+ * BACKLOG-3403: the renderer's confirmation of what will be left out. Anything
+ * malformed reads as "nothing confirmed", which makes the service ask again
+ * rather than send.
+ */
+function validateSubmitOptions(raw: unknown): SubmitOptions {
+  if (!raw || typeof raw !== "object") return {};
+  const keys = (raw as { acceptedExclusionKeys?: unknown }).acceptedExclusionKeys;
+  if (!Array.isArray(keys) || keys.length > 10000) return {};
+  return {
+    acceptedExclusionKeys: keys.filter(
+      (k): k is string => typeof k === "string" && k.length > 0 && k.length <= 300
+    ),
+  };
+}
+
+/** One response shape for submit and resubmit. */
+function toSubmitResponse(result: SubmissionResult): TransactionResponse {
+  return {
+    success: result.success,
+    submissionId: result.submissionId,
+    messagesCount: result.messagesCount,
+    attachmentsCount: result.attachmentsCount,
+    // BACKLOG-3389: in-window items whose attachments are not included.
+    flaggedWithoutAttachments: result.flaggedWithoutAttachments,
+    // BACKLOG-3681: which ones, and why (display only).
+    notIncluded: result.notIncluded,
+    // BACKLOG-3600: the checklists did not reach the broker on a submission
+    // that otherwise succeeded. Absent when there is nothing to say.
+    checklistsNotSent: result.checklistsNotSent,
+    // BACKLOG-3398 / 3403: the three non-success outcomes that are not errors
+    // of the app: cancelled, the list changed, the answer was lost.
+    cancelled: result.cancelled,
+    preflightChanged: result.preflightChanged,
+    unconfirmed: result.unconfirmed,
+    error: result.error,
+  };
+}
+
 export function registerTransactionExportHandlers(
   _mainWindow: BrowserWindow | null,
 ): void {
@@ -162,7 +203,7 @@ export function registerTransactionExportHandlers(
       });
       // BACKLOG-2292 (Layer 3 backstop): also awaited + non-throwing for TEXTS.
       // Imports older messages when the audit start predates the imported floor,
-      // then expands attached threads. The single getTransactionDetails re-fetch
+      // then expands attached threads. The shared prep's re-fetch (BACKLOG-3733)
       // below picks up both freshly-linked emails AND texts. This is the last
       // line of defense — the renderer ExportModal gate is the primary prompt.
       await ensureTransactionMessagesSynced({
@@ -170,32 +211,28 @@ export function registerTransactionExportHandlers(
         userId: details.user_id,
         reason: "export",
       });
-      details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
-
-      // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
-      // A locked transaction is blocked outright (PAYWALL_LOCKED); an unlocked
-      // one exports the full record. Reading is free; only export is gated.
-      const pdfGate = await enforceExportGate({
+      // BACKLOG-3733: re-fetch (picks up what the sync linked) → paywall gate
+      // (BACKLOG-2006a / 2075, fail-closed: a locked transaction throws
+      // PAYWALL_LOCKED) → resolve, in the shared prep every channel uses.
+      //
+      // BACKLOG-2771: this channel has no renderer caller
+      // (`window.api.transactions.exportPDF` is referenced nowhere in src/) and
+      // takes no options, so it requests no audit window and no attachments —
+      // the resolver returns the full record, which is exactly what this channel
+      // produced when it had no filtering of its own.
+      const pdfPrep = await prepareTransactionCommunications({
         transactionId: validatedTransactionId,
-        userId: details.user_id,
-        communications: details.communications || [],
-      });
-
-      // BACKLOG-2771: this channel goes through the SAME resolver as the other
-      // two. It has no renderer caller (`window.api.transactions.exportPDF` is
-      // referenced nowhere in src/) and takes no options, so it requests no
-      // audit window and no attachments — the resolver returns the full record,
-      // which is exactly what this channel produced when it had no filtering of
-      // its own. Its include set is now stated rather than merely absent.
-      const pdfPlan = resolveExportPlan(
-        {
+        fallback: details,
+        request: () => ({
           format: "pdf",
           contentType: "both",
           attachmentType: "none",
           emailMode: "thread",
-        },
-        pdfGate.communications,
-      );
+        }),
+      });
+      if (!pdfPrep) return { success: false, error: "Transaction not found" };
+      details = pdfPrep.details;
+      const pdfPlan = pdfPrep.plan;
 
       // Use provided output path or generate default one
       const pdfPath =
@@ -211,14 +248,16 @@ export function registerTransactionExportHandlers(
         details,
         pdfPlan.communications,
         pdfPath,
-        { hiddenTextCount: pdfPlan.hiddenTextCount, hiddenTexts: pdfPlan.hiddenTexts },
+        // BACKLOG-3683: `attachmentType: "none"` — this channel writes no
+        // attachment files, so none can be left out.
+        { hiddenTextCount: pdfPlan.hiddenTextCount, hiddenTexts: pdfPlan.hiddenTexts, filesNotIncluded: [] },
       );
 
       // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
       await emitExportCompleted({
         userId: details.user_id,
         transactionId: validatedTransactionId,
-        mode: pdfGate.decision.mode,
+        mode: pdfPrep.decision.mode,
         format: "pdf",
       });
 
@@ -293,7 +332,7 @@ export function registerTransactionExportHandlers(
       });
       // BACKLOG-2292 (Layer 3 backstop): also awaited + non-throwing for TEXTS.
       // Imports older messages when the audit start predates the imported floor,
-      // then expands attached threads. The single getTransactionDetails re-fetch
+      // then expands attached threads. The shared prep's re-fetch (BACKLOG-3733)
       // below picks up both freshly-linked emails AND texts. This is the last
       // line of defense — the renderer ExportModal gate is the primary prompt.
       await ensureTransactionMessagesSynced({
@@ -301,24 +340,20 @@ export function registerTransactionExportHandlers(
         userId: details.user_id,
         reason: "export",
       });
-      details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
-
-      // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
+      // BACKLOG-3733: re-fetch → paywall gate → resolve, in the shared prep.
+      // BACKLOG-2006a / 2075 — the gate is fail-closed: a locked tx throws.
       // Bulk export loops per-transaction through THIS handler, so gating here
-      // covers bulk with zero extra work. A locked tx is blocked outright.
-      const enhancedGate = await enforceExportGate({
-        transactionId: validatedTransactionId,
-        userId: details.user_id,
-        communications: details.communications || [],
-      });
-
+      // covers bulk with zero extra work.
+      //
       // BACKLOG-2771: the SAME resolver the folder handler uses. The audit
       // window prefers the explicit option dates and falls back to the
       // transaction's — that per-entry-point difference lives in the REQUEST,
       // not in a second copy of the filter.
       const enhancedFormat = sanitizedOptions.exportFormat;
-      const enhancedPlan = resolveExportPlan(
-        {
+      const enhancedPrep = await prepareTransactionCommunications({
+        transactionId: validatedTransactionId,
+        fallback: details,
+        request: (loaded) => ({
           format:
             enhancedFormat === "csv" ||
             enhancedFormat === "excel" ||
@@ -331,14 +366,16 @@ export function registerTransactionExportHandlers(
           emailMode: normalizeEmailMode(sanitizedOptions.emailExportMode),
           startDate:
             (sanitizedOptions.startDate as string | undefined) ||
-            (details.started_at as string | undefined),
+            (loaded.started_at as string | undefined),
           endDate:
             (sanitizedOptions.endDate as string | undefined) ||
-            (details.closed_at as string | undefined),
+            (loaded.closed_at as string | undefined),
           summaryOnly: sanitizedOptions.summaryOnly === true,
-        },
-        enhancedGate.communications,
-      );
+        }),
+      });
+      if (!enhancedPrep) return { success: false, error: "Transaction not found" };
+      details = enhancedPrep.details;
+      const enhancedPlan = enhancedPrep.plan;
 
       // Export with options (full record — no sample reduction under Option A)
       const exportPath = await enhancedExportService.exportTransaction(
@@ -387,7 +424,7 @@ export function registerTransactionExportHandlers(
       await emitExportCompleted({
         userId: details.user_id,
         transactionId: validatedTransactionId,
-        mode: enhancedGate.decision.mode,
+        mode: enhancedPrep.decision.mode,
         format: sanitizedOptions.exportFormat || "pdf",
       });
 
@@ -447,7 +484,7 @@ export function registerTransactionExportHandlers(
       });
       // BACKLOG-2292 (Layer 3 backstop): also awaited + non-throwing for TEXTS.
       // Imports older messages when the audit start predates the imported floor,
-      // then expands attached threads. The single getTransactionDetails re-fetch
+      // then expands attached threads. The shared prep's re-fetch (BACKLOG-3733)
       // below picks up both freshly-linked emails AND texts. This is the last
       // line of defense — the renderer ExportModal gate is the primary prompt.
       await ensureTransactionMessagesSynced({
@@ -455,21 +492,13 @@ export function registerTransactionExportHandlers(
         userId: details.user_id,
         reason: "export",
       });
-      details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
-
       // BACKLOG-2771: ONE resolver decides the include set. The audit window is
       // the transaction's own dates (the ExportModal saves them immediately
       // before invoking this channel); the folder wire carries no explicit
       // window.
       const folderContentType = normalizeContentType(sanitizedOptions.contentType);
-      const folderRequest: ExportPlanRequest = {
-        format: "folder",
-        contentType: folderContentType,
-        attachmentType: normalizeAttachmentType(sanitizedOptions.attachmentType, "all"),
-        emailMode: normalizeEmailMode(sanitizedOptions.emailExportMode),
-        startDate: details.started_at as string | null | undefined,
-        endDate: details.closed_at as string | null | undefined,
-      };
+      // BACKLOG-3733: re-fetch → paywall gate → resolve, in the shared prep.
+      //
       // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
       // A locked tx is blocked outright; an unlocked one exports the full
       // (filtered) record.
@@ -489,12 +518,21 @@ export function registerTransactionExportHandlers(
       // content selection matches nothing now returns PAYWALL_LOCKED instead of
       // "No text communications found...". The paywall is the truer answer, and
       // it is what export-pdf and export-enhanced have always returned.
-      const folderGate = await enforceExportGate({
+      const folderPrep = await prepareTransactionCommunications({
         transactionId: validatedTransactionId,
-        userId: details.user_id,
-        communications: details.communications || [],
+        fallback: details,
+        request: (loaded) => ({
+          format: "folder",
+          contentType: folderContentType,
+          attachmentType: normalizeAttachmentType(sanitizedOptions.attachmentType, "all"),
+          emailMode: normalizeEmailMode(sanitizedOptions.emailExportMode),
+          startDate: loaded.started_at as string | null | undefined,
+          endDate: loaded.closed_at as string | null | undefined,
+        }),
       });
-      const folderPlan = resolveExportPlan(folderRequest, folderGate.communications);
+      if (!folderPrep) return { success: false, error: "Transaction not found" };
+      details = folderPrep.details;
+      const folderPlan = folderPrep.plan;
       const communications = folderPlan.communications;
 
       logService.info("Resolved folder export include set", "Transactions", {
@@ -581,7 +619,7 @@ export function registerTransactionExportHandlers(
       await emitExportCompleted({
         userId: details.user_id,
         transactionId: validatedTransactionId,
-        mode: folderGate.decision.mode,
+        mode: folderPrep.decision.mode,
         format: "folder",
       });
 
@@ -607,6 +645,7 @@ export function registerTransactionExportHandlers(
     wrapHandler(async (
       event: IpcMainInvokeEvent,
       transactionId: string,
+      rawOptions?: unknown,
     ): Promise<TransactionResponse> => {
       logService.info("Submitting transaction for broker review", "Transactions", {
         transactionId,
@@ -626,7 +665,8 @@ export function registerTransactionExportHandlers(
         validatedTransactionId,
         (progress: SubmissionProgress) => {
           sendToMainWindow("transactions:submit-progress", progress);
-        }
+        },
+        validateSubmitOptions(rawOptions)
       );
 
       if (result.success) {
@@ -655,18 +695,7 @@ export function registerTransactionExportHandlers(
         });
       }
 
-      return {
-        success: result.success,
-        submissionId: result.submissionId,
-        messagesCount: result.messagesCount,
-        attachmentsCount: result.attachmentsCount,
-        attachmentsFailed: result.attachmentsFailed,
-        // BACKLOG-3389: in-window items that advertised an attachment and
-        // contributed none. Carried across the boundary because a number the
-        // renderer cannot read is a number no one will ever act on.
-        flaggedWithoutAttachments: result.flaggedWithoutAttachments,
-        error: result.error,
-      };
+      return toSubmitResponse(result);
     }, { module: "Transactions" }),
   );
 
@@ -676,6 +705,7 @@ export function registerTransactionExportHandlers(
     wrapHandler(async (
       event: IpcMainInvokeEvent,
       transactionId: string,
+      rawOptions?: unknown,
     ): Promise<TransactionResponse> => {
       logService.info("Resubmitting transaction for broker review", "Transactions", {
         transactionId,
@@ -695,7 +725,8 @@ export function registerTransactionExportHandlers(
         validatedTransactionId,
         (progress: SubmissionProgress) => {
           sendToMainWindow("transactions:submit-progress", progress);
-        }
+        },
+        validateSubmitOptions(rawOptions)
       );
 
       if (result.success) {
@@ -747,18 +778,80 @@ export function registerTransactionExportHandlers(
         });
       }
 
+      return toSubmitResponse(result);
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-3403: what cannot be sent, decided before anything is sent. Runs
+  // the on-demand email attachment download first.
+  ipcMain.handle(
+    "transactions:submit-preflight",
+    wrapHandler(async (
+      event: IpcMainInvokeEvent,
+      transactionId: string,
+    ): Promise<TransactionResponse> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError(
+          "Transaction ID validation failed",
+          "transactionId",
+        );
+      }
+      const result = await submissionService.preflightSubmission(validatedTransactionId);
       return {
         success: result.success,
-        submissionId: result.submissionId,
-        messagesCount: result.messagesCount,
-        attachmentsCount: result.attachmentsCount,
-        attachmentsFailed: result.attachmentsFailed,
-        // BACKLOG-3389: in-window items that advertised an attachment and
-        // contributed none. Carried across the boundary because a number the
-        // renderer cannot read is a number no one will ever act on.
-        flaggedWithoutAttachments: result.flaggedWithoutAttachments,
+        notIncluded: result.notIncluded,
         error: result.error,
       };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-3683: what a submission with the dates on the date step would
+  // send. Read-only; downloads nothing.
+  ipcMain.handle(
+    "transactions:submission-scope",
+    wrapHandler(async (
+      event: IpcMainInvokeEvent,
+      transactionId: string,
+      candidate: { started_at?: unknown; closed_at?: unknown },
+    ): Promise<TransactionResponse> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError(
+          "Transaction ID validation failed",
+          "transactionId",
+        );
+      }
+      const asDate = (v: unknown): string | null =>
+        typeof v === "string" && v.length > 0 && v.length <= 40 ? v : null;
+      const result = await submissionService.getSubmissionScope(validatedTransactionId, {
+        started_at: asDate(candidate?.started_at),
+        closed_at: asDate(candidate?.closed_at),
+      });
+      return {
+        success: result.success,
+        inWindow: result.inWindow,
+        error: result.error,
+      };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-3398: Cancel really cancels — refused once the final step began.
+  ipcMain.handle(
+    "transactions:cancel-submit",
+    wrapHandler(async (
+      event: IpcMainInvokeEvent,
+      transactionId: string,
+    ): Promise<TransactionResponse> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError(
+          "Transaction ID validation failed",
+          "transactionId",
+        );
+      }
+      const result = submissionService.cancelSubmission(validatedTransactionId);
+      return { success: true, cancelled: result.cancelled, reason: result.reason };
     }, { module: "Transactions" }),
   );
 

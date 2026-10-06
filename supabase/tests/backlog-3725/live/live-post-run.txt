@@ -1,0 +1,43 @@
+PASS L1 retried upserts (parent, message, attachment row): no error :: [null,null,null,null,null,null]
+PASS L1 retried upserts: exactly one row each :: "1,1,1"
+PASS L1b attachment row outside its own folder: refused by RLS :: "42501"
+PASS L2 anon key: finalize refused :: {"status":401,"code":"42501","message":"permission denied for function finalize_submission"}
+PASS L2 anon key: submission still uploading :: "uploading"
+PASS L2 same-org agent: not_owner :: {"ok":false,"code":"not_owner"}
+PASS L2 submitter: finalize ok -> submitted :: {"ok":true,"status":"submitted","already_final":false}
+PASS L2 repeat: already_final :: {"ok":true,"status":"submitted","already_final":true}
+PASS L3a broker of the org: remove() removes nothing :: {"removed":0}
+PASS L3b submitter, uploading, NOT fenced: remove() removes nothing :: {"removed":0}
+PASS L3c fence on an uploading submission: 1 row :: {"rows":1,"error":null,"ms":6}
+PASS L3d broker after the fence: remove() removes nothing :: {"removed":0}
+PASS L3e submitter, fenced: remove() removes the object :: {"removed":1}
+PASS L3e bytes gone (service download fails)
+PASS L3f after finalize: fence matches 0 rows :: {"rows":0,"error":null,"ms":4}
+PASS L3f after finalize: remove() removes nothing, bytes still there :: {"removed":[0,0]}
+PASS R1 remove() while finalize holds the row (no fence): removes nothing :: {"removed":0}
+PASS R2 fence waits for finalize, then matches 0 rows :: {"rows":0,"error":null,"ms":3049}
+PASS R1/R2 finalize committed; object still there :: {"fin":"{\"sub\":\"<id>\",\"role\":\"authenticated\"}\nFIN:{\"ok\": true, \"status\": \"submitted\", \"already_final\": false}","status":"submitted","objects":1}
+PASS R2 remove() after the 0-row fence: removes nothing :: {"removed":0}
+PASS R3 fence first (1 row), then finalize: abandoned, still uploading :: {"fence":1,"fin":{"ok":false,"code":"abandoned"}}
+PASS R3 abandoned upload: remove() removes the object :: {"removed":1}
+PASS R1-row attachment-row delete during finalize (no fence): deletes nothing :: {"deleted":0}
+PASS R1-row finalize committed with its attachment row :: {"status":"submitted","rows":1}
+PASS L6 finalize that refuses still holds the row: the fence waits, then matches 1 row :: {"fence":{"rows":1,"error":null,"ms":3058},"fin":"FIN:{\"ok\": false, \"code\": \"incomplete\", \"messages_extra\": 1, \"objects_missing\": 0, \"checklists_found\": 0, \"messages_missing\": 0, \"checklists_expected\": null, \"attachment_rows_extra\": 0, \"attachment_rows_missing\": 0, \"paths_outside_submission\": 0, \"attachment_message_links_wrong\": 0}"}
+PASS L7a metadata abandoned flag no longer fences: remove() removes nothing :: {"removed":0}
+PASS L7b fence sets abandoned_at once: 1 row, then 0 rows :: [1,0]
+PASS L7c abandoned_at back to NULL: matches 0 rows, value kept :: {"rows":0,"set":"t"}
+PASS L7d 2.38-shaped flip of an abandoned upload: matches 0 rows, still uploading :: {"rows":0}
+PASS L7e broker cannot set abandoned_at on a submission it reviews (42501) :: "42501"
+PASS L7g client writes a future abandoned_at: stored value is server time :: {"rows":1,"skew_s":0.03863}
+PASS L7f service role (server sweep) sets abandoned_at: 1 row :: {"rows":1}
+PASS L5 record_submission_attempt as the agent: ok :: {"ok":true,"outcome":"failed","unchanged":false}
+PASS SR1 record_submission_attempt refuses outcome committed :: {"ok":false,"code":"committed_is_server_only"}
+PASS L5 record_submission_attempt with the anon key: refused :: "42501"
+PASS L5 agent sees own attempt; counts kept only numbers :: [{"submission_id":"<id>","outcome":"failed","counts":{"messages":4,"attachments":2}}]
+PASS L5 broker of the org sees it :: 1
+PASS L5 staff (internal role) sees it :: 1
+PASS L5 agent of another org does not :: 0
+PASS L5 another agent of the same org does not :: 0
+PASS L5 direct INSERT into submission_attempts: refused :: "42501"
+PASS L5 finalize wrote the attempt row as committed :: [{"outcome":"committed","stage":"finalize"}]
+live-run post: 42 pass, 0 fail

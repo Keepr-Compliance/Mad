@@ -715,6 +715,263 @@ CREATE TABLE IF NOT EXISTS message_import_state (
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
 
+-- BACKLOG-3658: Google Messages for Web cache state, per user, on THIS device.
+-- opted_in_at: the user agreed to keep a local copy of recent chats (local only).
+-- last_cache_finished_at: the last cache Sync that finished (next one starts 1 day before).
+-- own_number: the user's own number, once 3+ chats agreed (left out of chat keys).
+-- extension_*: what the extension last reported (POST /hello).
+CREATE TABLE IF NOT EXISTS rcs_cache_state (
+  user_id TEXT PRIMARY KEY,
+  opted_in_at DATETIME,
+  last_cache_finished_at DATETIME,
+  own_number TEXT,
+  extension_version TEXT,
+  extension_seen_at DATETIME,
+  paired_at DATETIME,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3658: the cache Sync's staging area. A cache job COLLECTS every
+-- chat here first; only a finished job commits it to messages (one database
+-- transaction, limited by the user's months / max-messages settings).
+-- Cancel, error, a user switch or app quit discards the job's rows. Rows
+-- exist only while a job runs (any found when a new job starts are stale).
+-- Images are staged as files under <userData>/rcs-cache-staging/<job id>/.
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_chats (
+  job_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,               -- rcsChatHash of the Details numbers
+  conversation_id TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  people_json TEXT NOT NULL,             -- RcsChatPeople
+  staged_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (job_id, chat_hash)
+);
+
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_messages (
+  job_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  msg_id TEXT NOT NULL,
+  sent_at TEXT NOT NULL,                 -- ISO-8601, as the page sent it
+  seq INTEGER NOT NULL,                  -- position in the chat as sent
+  message_json TEXT NOT NULL,            -- RcsIncomingMessage, reactions included
+  PRIMARY KEY (job_id, chat_hash, msg_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rcs_cache_staging_messages_sent ON rcs_cache_staging_messages(job_id, sent_at);
+
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_images (
+  job_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  msg_id TEXT NOT NULL,
+  idx INTEGER NOT NULL,
+  mime_type TEXT NOT NULL,
+  byte_size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  temp_path TEXT NOT NULL,
+  PRIMARY KEY (job_id, chat_hash, msg_id, idx)
+);
+
+-- 3671 P3 (SR 2026-10-03): per-chat commits. A cache job's own record, kept
+-- with its staging so a run a crash cut short can still save its finished
+-- chats at the next start (same user, started within 7 days): the user, the
+-- start time, the limits (JSON) and the read (JSON). Gone with the staging.
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_jobs (
+  job_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  started_at TEXT NOT NULL,              -- ISO-8601
+  limits_json TEXT NOT NULL,             -- CacheLimits (chat floors excluded)
+  read_json TEXT NOT NULL                -- { fullRead, floorISO, mediaPending }
+);
+
+-- 3671 P3: what the page said of each staged chat — its own floor (a live
+-- deal), the floor it was asked to read down to, whether it got there, and
+-- when it was read. Chat hashes only. Gone with the staging.
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_chat_meta (
+  job_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  chat_floor_ms INTEGER,
+  read_floor_ms INTEGER,
+  reached_floor INTEGER NOT NULL DEFAULT 0,
+  read_at TEXT NOT NULL,                 -- ISO-8601
+  PRIMARY KEY (job_id, chat_hash)
+);
+
+-- 3671 P3: when each saved chat was last read, and whether down to its floor
+-- (chat hash, never a conversation id). "Try again" after a failed run skips
+-- a chat read at or after that run's start that reached its floor.
+CREATE TABLE IF NOT EXISTS rcs_chat_reads (
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  read_at TEXT NOT NULL,                 -- ISO-8601
+  reached_floor INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, chat_hash),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- 3671 P3: the user's last cache run FAILED (its finished chats were saved);
+-- the next run is "Try again". Cleared by a fully finished run and by Force
+-- re-import.
+CREATE TABLE IF NOT EXISTS rcs_cache_failed_run (
+  user_id TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL,              -- ISO-8601
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3658 (SR S2): files a cache commit moves into message-attachments,
+-- journaled before the move and cleared once the commit is done. A
+-- row left behind (a crash) names a file the next sweep deletes when no
+-- attachments row uses it.
+CREATE TABLE IF NOT EXISTS rcs_cache_placed_files (
+  path TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  placed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- BACKLOG-3658 P3b: the user's consent to the Google Messages cache, and its
+-- options. Keepr's record is the ONLY gate for a cache Sync: a consent_version
+-- below the current one blocks the NEXT Sync (re-consent). contacts_only
+-- (feature flag, off) keeps only chats with a transaction contact;
+-- auto_delete_days (off = NULL; 90 when on) deletes chats linked to nothing
+-- whose last message is older than that. A new table (not a column) so this
+-- branch needs no versioned migration; it folds into one at merge.
+CREATE TABLE IF NOT EXISTS rcs_consent (
+  user_id TEXT PRIMARY KEY,
+  consent_at DATETIME,
+  consent_version INTEGER,
+  contacts_only INTEGER NOT NULL DEFAULT 0,
+  auto_delete_days INTEGER,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3658 P3c: chats the user switched off ("Don't sync") with the eye on
+-- their row in Google Messages. conversation_id is what the page knows; the
+-- chat's hash (gmweb2 key) is recorded at the next /match so the exclusion
+-- survives a re-pair. Nothing already imported is deleted.
+CREATE TABLE IF NOT EXISTS rcs_chat_exclusions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  chat_hash TEXT,
+  conversation_id TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_conv ON rcs_chat_exclusions(user_id, conversation_id) WHERE conversation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_hash ON rcs_chat_exclusions(user_id, chat_hash);
+
+-- Live (0.3.15): chats switched back ON. The next cache Sync reads them in
+-- full whatever their age; each row is cleared once its chat is saved.
+CREATE TABLE IF NOT EXISTS rcs_pending_full_sync (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  conversation_id TEXT,
+  chat_hash TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_rcs_pending_full_sync_user ON rcs_pending_full_sync(user_id);
+
+-- BACKLOG-3666: the extension paired with this Keepr (SPAKE2, pair-protocol.js).
+-- key_hex: the session key (HMAC-SHA256), in this encrypted database only.
+-- One pairing per user: a re-pair replaces it; sign-out removes it.
+CREATE TABLE IF NOT EXISTS rcs_extension_pairings (
+  pair_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  key_hex TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- SR M (2026-10-02): Google Messages media options, per user, on THIS device.
+-- photos_all_chats: keep photos of every chat in the window (default ON), not
+-- only chats with a transaction contact; videos_all_chats likewise (default
+-- OFF; videos are counted, not downloaded, until the video bubble is traced).
+-- last_*_seen: the bubbles the last Sync counted (the video storage estimate).
+CREATE TABLE IF NOT EXISTS rcs_media_options (
+  user_id TEXT PRIMARY KEY,
+  photos_all_chats INTEGER NOT NULL DEFAULT 1,
+  videos_all_chats INTEGER NOT NULL DEFAULT 0,
+  last_photos_seen INTEGER,
+  last_videos_seen INTEGER,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- SR M: a media toggle was switched ON: the next cache Sync reads every chat
+-- down to the floor so existing chats get their media; cleared by its commit.
+CREATE TABLE IF NOT EXISTS rcs_pending_media (
+  user_id TEXT PRIMARY KEY,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3670: people found in texts. One row per (chat, member number) of a
+-- Google Messages chat Keepr stored, with the name the phone's address book
+-- shows for that number (Details rows; a 1:1 chat's title). LOCAL ONLY: never
+-- sent anywhere. Read as contact suggestions (number = the key, never the
+-- name); cleared with the texts by both Android Force re-imports and auto-delete.
+CREATE TABLE IF NOT EXISTS rcs_chat_people (
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  number_e164 TEXT NOT NULL,
+  name TEXT,
+  last_message_at DATETIME,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, chat_hash, number_e164),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_rcs_chat_people_number ON rcs_chat_people(user_id, number_e164);
+
+-- BACKLOG-3658 L2: the last finished Google Messages cache run per user (its
+-- floor, full read or not, how the list scan stopped, whether it reached its
+-- floor, and how many chats it could not confirm complete). Backfills the
+-- coverage; drives "N chats may be incomplete". Cleared by Force re-import.
+CREATE TABLE IF NOT EXISTS rcs_cache_runs (
+  user_id TEXT PRIMARY KEY,
+  floor_iso DATETIME NOT NULL,
+  full_read INTEGER NOT NULL DEFAULT 0,
+  list_stop TEXT,
+  reached_floor INTEGER NOT NULL DEFAULT 0,
+  not_settled_chats INTEGER NOT NULL DEFAULT 0,
+  finished_at DATETIME NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3663: how far back each text source's import is known to reach
+-- ("covered since"), per user. General (any source); today written by the
+-- Google Messages cache — in its commit transaction, and only when that run
+-- read down to its floor. Mac reads message_import_state; iPhone and the
+-- Android companion fall back to MIN(sent_at) ("approximate") until their
+-- importers write here (follow-up).
+-- SR (2026-10-02): per-chat coverage of Google Messages, keyed by the CHAT
+-- HASH (never a conversation id). A chat on a live deal may be read further
+-- back than the months setting (to the deal's audit start); the source row
+-- below keeps its meaning (every chat down to the settings floor) and is
+-- never raised by such a chat. Written in the cache commit's transaction,
+-- only for a chat whose history reached its floor. A chat with no row is
+-- covered as far as the source row says. Cleared by Force re-import.
+CREATE TABLE IF NOT EXISTS rcs_chat_coverage (
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  covered_since DATETIME NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, chat_hash),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS message_source_coverage (
+  user_id TEXT NOT NULL,
+  source TEXT NOT NULL,                   -- iphone | mac | android_companion | google_messages
+  covered_since DATETIME,
+  last_sync_at DATETIME,
+  PRIMARY KEY (user_id, source),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS message_thread_names (
   user_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")
@@ -1012,6 +1269,17 @@ CREATE TABLE IF NOT EXISTS transactions (
   listing_price REAL,
   sale_price REAL,
   earnest_money_amount REAL,
+
+  -- Commission Figures (BACKLOG-3519, M2 -- figures only, no charges/split
+  -- amount; see the v73 migration entry for the full design note). Percentage
+  -- as entered (2.50), not a fraction (0.025). commission_gross_amount is
+  -- computed and rounded to whole dollars once by the writer, not derived on read.
+  -- Figures only: no split is stored or resolved by this feature, locally or
+  -- in the cloud submission record.
+  commission_offered_rate REAL,
+  commission_actual_rate REAL,
+  commission_gross_amount REAL,
+  commission_adjustment_reason TEXT,
 
   -- Key Dates (auto-extracted)
   mutual_acceptance_date DATE,
@@ -1486,6 +1754,140 @@ CREATE TABLE IF NOT EXISTS transaction_hidden_texts (
 CREATE INDEX IF NOT EXISTS idx_hidden_texts_txn_external
   ON transaction_hidden_texts(transaction_id, message_external_id)
   WHERE message_external_id IS NOT NULL;
+
+-- ===========================================================================
+-- BACKLOG-3475 BEGIN — transaction checklists (local half)
+-- ===========================================================================
+-- A checklist is a broker template copied ONTO one transaction at the moment
+-- the user picks it. Four tables, all IF NOT EXISTS: schema.sql's
+-- unconditional exec on every launch creates them on fresh and existing
+-- installs alike (the same delivery as BACKLOG-3366's transaction_hidden_texts).
+-- BACKLOG-3476 changed transaction_checklists' shape after it had reached dev
+-- databases, so migration v72 rebuilds a table that still has the old shape;
+-- any later change to these four tables' DDL needs its own migration. Every
+-- divergence key is recorded in ALLOWED_EVOLUTION in
+-- databaseService.schema-parity.test.ts.
+--
+-- The BEGIN/END markers are load-bearing: checklistSchemaUpgrade-3475.test.ts
+-- strips this block to synthesise a pre-3475 database and prove the upgrade
+-- path delivers the tables.
+--
+--   transaction_checklists        several per transaction, each from a
+--                                 different template (UNIQUE (transaction_id,
+--                                 template_id)); `sort_order` is the display
+--                                 order the user built. `template_id` is the
+--                                 source template's cloud id and is
+--                                 PROVENANCE ONLY — no read joins
+--                                 through it. The titles, required flags and
+--                                 document types below are COPIES, so editing
+--                                 or deleting the broker template never
+--                                 rewrites a checklist already in use.
+--   transaction_checklist_items   the copied rows. `checked_at` is the record
+--                                 of a toggle; the paired CHECK makes it
+--                                 structurally impossible for it to disagree
+--                                 with `is_checked`.
+--   transaction_checklist_links   one row per evidence GROUP; its id is the
+--                                 stable key. UNIQUE (id, kind) exists so a
+--                                 member can carry a composite FK and cannot
+--                                 disagree with its group's kind.
+--   ..._link_members              the emails or attachments in that group. An
+--                                 email link is the SET of member email_ids; a
+--                                 single email is a group of one. There is no
+--                                 thread_id column anywhere — thread_id is
+--                                 nullable at both producers (Gmail writes
+--                                 `threadId || ""` -> NULL), and the UI groups
+--                                 by subject while the DB keys on thread_id,
+--                                 so a thread-keyed link would silently miss.
+--
+-- No user_id and no FK to users_local, on purpose: the legacy user-id
+-- migration re-points a hard-coded table list and then deletes the old
+-- users_local row with FK ON, so a cascading user FK not on that list would be
+-- wiped. Ownership comes through transactions.user_id. Same reasoning as
+-- transaction_hidden_texts.hidden_by above.
+--
+-- Members cascade from `emails` and `attachments` BY DECISION: an email Force
+-- Re-cache and a macOS/Android message re-import delete those rows and
+-- re-insert them under new ids, and a checklist link dies with them exactly as
+-- a transaction link does — one force button, one behaviour. The AFTER DELETE
+-- trigger then removes a group whose last member is gone, so a group never
+-- survives empty and would never render as an evidence chip pointing at
+-- nothing.
+-- No standalone CREATE INDEX may name `sort_order` (or any column the pre-v72
+-- shape lacks) here: this file runs BEFORE the versioned migrations, against
+-- the old table, and such an index throws and stops every upgraded open. The
+-- composite UNIQUE's autoindex already serves lookups by transaction_id.
+CREATE TABLE IF NOT EXISTS transaction_checklists (
+  id             TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL,
+  template_id    TEXT NOT NULL,
+  template_name  TEXT NOT NULL CHECK (length(trim(template_name)) BETWEEN 1 AND 200),
+  sort_order     INTEGER NOT NULL DEFAULT 0,
+  selected_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (transaction_id, template_id),
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS transaction_checklist_items (
+  id                     TEXT PRIMARY KEY,
+  checklist_id           TEXT NOT NULL,
+  title                  TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 300),
+  description            TEXT CHECK (description IS NULL OR length(description) <= 2000),
+  is_required            INTEGER NOT NULL DEFAULT 0 CHECK (is_required IN (0, 1)),
+  expected_document_type TEXT CHECK (expected_document_type IS NULL OR expected_document_type IN
+                           ('offer', 'inspection', 'disclosure', 'contract', 'appraisal',
+                            'amendment', 'addendum', 'title', 'closing', 'other')),
+  is_checked             INTEGER NOT NULL DEFAULT 0 CHECK (is_checked IN (0, 1)),
+  checked_at             DATETIME,
+  note                   TEXT,
+  sort_order             INTEGER NOT NULL DEFAULT 0,
+  created_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+  CHECK ((is_checked = 0) = (checked_at IS NULL)),
+  FOREIGN KEY (checklist_id) REFERENCES transaction_checklists(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_checklist_items_checklist
+  ON transaction_checklist_items(checklist_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS transaction_checklist_links (
+  id         TEXT PRIMARY KEY,
+  item_id    TEXT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('attachment', 'email')),
+  label      TEXT NOT NULL CHECK (length(trim(label)) >= 1),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (id, kind),
+  FOREIGN KEY (item_id) REFERENCES transaction_checklist_items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_checklist_links_item
+  ON transaction_checklist_links(item_id);
+
+CREATE TABLE IF NOT EXISTS transaction_checklist_link_members (
+  id            TEXT PRIMARY KEY,
+  link_id       TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  attachment_id TEXT,
+  email_id      TEXT,
+  CHECK ((kind = 'attachment' AND attachment_id IS NOT NULL AND email_id IS NULL)
+      OR (kind = 'email' AND email_id IS NOT NULL AND attachment_id IS NULL)),
+  UNIQUE (link_id, attachment_id),
+  UNIQUE (link_id, email_id),
+  FOREIGN KEY (link_id, kind) REFERENCES transaction_checklist_links(id, kind) ON DELETE CASCADE,
+  FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_checklist_members_attachment
+  ON transaction_checklist_link_members(attachment_id) WHERE attachment_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_checklist_members_email
+  ON transaction_checklist_link_members(email_id) WHERE email_id IS NOT NULL;
+
+CREATE TRIGGER IF NOT EXISTS trg_checklist_link_members_drop_empty_link
+AFTER DELETE ON transaction_checklist_link_members
+WHEN NOT EXISTS (SELECT 1 FROM transaction_checklist_link_members m WHERE m.link_id = OLD.link_id)
+BEGIN
+  DELETE FROM transaction_checklist_links WHERE id = OLD.link_id;
+END;
+-- ===========================================================================
+-- BACKLOG-3475 END
+-- ===========================================================================
 
 -- Initialize schema version if not exists.
 -- Version 70: the post-reset baseline (BACKLOG-2993). This file IS the

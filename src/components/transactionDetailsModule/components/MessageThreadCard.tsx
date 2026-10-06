@@ -6,6 +6,7 @@
 import React, { useState } from "react";
 import type { Communication, Message } from "../types";
 import { ConversationViewModal } from "./modals";
+import { ChecklistCheckbox } from "./checklist/ChecklistCheckbox";
 import { normalizePhoneForLookup } from "../../../utils/phoneNormalization";
 import { getContactAvatarInitial } from "../../../utils/avatarUtils";
 import type { HideFromExportState } from "../../../hooks/useHideFromExportState";
@@ -318,25 +319,20 @@ export function MessageThreadCard({
           onClick={showSelection ? () => onToggleSelect?.() : undefined}
         >
           <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-            {/* BACKLOG-1719: selection checkbox (matches transaction-window style) */}
+            {/* BACKLOG-1719: selection checkbox — the app's shared checkbox, a
+                real <button role="checkbox" aria-checked>: focusable, and
+                Enter/Space toggle, on the Texts tab and in Attach messages
+                alike. The wrapper only keeps the click from also reaching the
+                header's own toggle. */}
             {showSelection && (
-              <div
-                className="flex-shrink-0"
-                onClick={(e) => { e.stopPropagation(); onToggleSelect?.(); }}
-                data-testid="message-thread-select"
-              >
-                <div
-                  className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
-                    isSelected ? "bg-blue-500 border-blue-500" : "border-gray-300 hover:border-blue-400"
-                  }`}
-                >
-                  {isSelected && (
-                    <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                    </svg>
-                  )}
-                </div>
-              </div>
+              <span className="flex-shrink-0 flex" onClick={(e) => e.stopPropagation()}>
+                <ChecklistCheckbox
+                  checked={isSelected}
+                  label="Select conversation"
+                  onClick={() => onToggleSelect?.()}
+                  testId="message-thread-select"
+                />
+              </span>
             )}
 
             {/* Avatar - Purple for group, Green for 1:1 */}

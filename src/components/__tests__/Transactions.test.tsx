@@ -452,7 +452,9 @@ describe("Transactions", () => {
 
       // Audit modal should open
       await waitFor(() => {
-        expect(screen.getByText(/audit new transaction/i)).toBeInTheDocument();
+        // BACKLOG-3614: desktop title renamed from "Audit New Transaction".
+        expect(screen.getAllByRole("heading", { name: "New Transaction" }).length).toBeGreaterThan(0);
+        expect(screen.queryByText(/audit new transaction/i)).toBeNull();
       });
     });
   });

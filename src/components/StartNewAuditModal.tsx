@@ -69,7 +69,7 @@ function StartNewAuditModal({
         {/* Header */}
         <div className="flex-shrink-0 bg-gradient-to-r from-blue-500 to-indigo-600 px-6 py-4 flex items-center justify-between rounded-t-xl">
           <div>
-            <h2 className="text-xl font-bold text-white">Start New Audit</h2>
+            <h2 className="text-xl font-bold text-white">New Transaction</h2>
             <p className="text-blue-100 text-sm">
               {hasAIAddon
                 ? "Review AI-detected transactions or create one manually"

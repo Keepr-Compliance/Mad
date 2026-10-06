@@ -41,6 +41,7 @@ export type { FeatureAccess } from "../../electron/types/featureGate";
 const STRICT_FEATURE_KEYS: Record<StrictFeatureKey, true> = {
   email_contact_inference: true,
   desktop_hide_from_export: true,
+  transaction_checklists: true,
 };
 
 interface UseFeatureGateReturn {

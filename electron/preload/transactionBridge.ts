@@ -596,16 +596,40 @@ export const transactionBridge = {
    * @param transactionId - Transaction ID to submit
    * @returns Submission result with cloud submission ID
    */
-  submit: (transactionId: string) =>
-    ipcRenderer.invoke("transactions:submit", transactionId),
+  submit: (
+    transactionId: string,
+    options?: { acceptedExclusionKeys?: string[] }
+  ) => ipcRenderer.invoke("transactions:submit", transactionId, options),
 
   /**
    * Resubmit transaction (creates new version)
    * @param transactionId - Transaction ID to resubmit
    * @returns Submission result with new submission ID
    */
-  resubmit: (transactionId: string) =>
-    ipcRenderer.invoke("transactions:resubmit", transactionId),
+  resubmit: (
+    transactionId: string,
+    options?: { acceptedExclusionKeys?: string[] }
+  ) => ipcRenderer.invoke("transactions:resubmit", transactionId, options),
+
+  /**
+   * BACKLOG-3403: list the attachments that cannot be sent (after downloading
+   * any email attachment not on this computer yet), before submitting.
+   */
+  submitPreflight: (transactionId: string) =>
+    ipcRenderer.invoke("transactions:submit-preflight", transactionId),
+
+  /** BACKLOG-3683: what a submission with these (not yet saved) dates would send. */
+  getSubmissionScope: (
+    transactionId: string,
+    candidate: { started_at: string | null; closed_at: string | null }
+  ) => ipcRenderer.invoke("transactions:submission-scope", transactionId, candidate),
+
+  /**
+   * BACKLOG-3398: cancel the running submission. Refused once the final step
+   * has begun.
+   */
+  cancelSubmit: (transactionId: string) =>
+    ipcRenderer.invoke("transactions:cancel-submit", transactionId),
 
   /**
    * Get submission status from cloud
@@ -683,6 +707,21 @@ export const transactionBridge = {
     ipcRenderer.on("submission-status-changed", handler);
     return () => {
       ipcRenderer.removeListener("submission-status-changed", handler);
+    };
+  },
+
+  /**
+   * BACKLOG-3595: main added a broker checklist to this transaction with no
+   * status change (an owed pull landed). Sent after the local write commits.
+   * Deliberately a separate channel: every `submission-status-changed` raises
+   * a notification (useSubmissionSync).
+   * @returns Cleanup function
+   */
+  onChecklistsChanged: (callback: (data: { transactionId: string }) => void) => {
+    const handler = (_event: unknown, data: { transactionId: string }) => callback(data);
+    ipcRenderer.on("transaction-checklists-changed", handler);
+    return () => {
+      ipcRenderer.removeListener("transaction-checklists-changed", handler);
     };
   },
 
@@ -845,6 +884,10 @@ export const transactionBridge = {
    */
   checkExportCompleteness: (transactionId: string, userId: string) =>
     ipcRenderer.invoke("transactions:check-export-completeness", transactionId, userId),
+
+  /** BACKLOG-3663: per-source text coverage for one transaction (the Texts tab). */
+  getTextCoverage: (transactionId: string, userId: string, chosenSource: string | null) =>
+    ipcRenderer.invoke("transactions:get-text-coverage", transactionId, userId, chosenSource),
 
   /**
    * The "Update now" action: run a targeted messages import + expansion for an

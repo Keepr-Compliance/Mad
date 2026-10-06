@@ -594,3 +594,38 @@ describe("the write boundary compares exactly (BACKLOG-2481, SR required change 
     ]);
   });
 });
+
+/* ==========================================================================
+ * Live FK fix (2026-10-04): a person found in Google Messages texts
+ * (rcsChatPeopleDbService.getTextDerivedPeople) is imported before it joins a
+ * deal. Its record: id msg_tel_<e164>, source 'messages', a phone, and as its
+ * name either the phone's address-book name or the formatted number — or none.
+ * Mutations: the messages source refused; the phone not stored; a nameless
+ * record refused → red.
+ * ========================================================================== */
+describe("contacts:import accepts a person found in Google Messages texts", () => {
+  const phones = (contactId: string) =>
+    (mockDb!.prepare("SELECT phone_e164 FROM contact_phones WHERE contact_id = ?").all(contactId) as Array<{ phone_e164: string }>).map((r) => r.phone_e164);
+
+  it("named by its formatted number, with a phone: saved (manual), the phone kept", async () => {
+    const outcome = await importRecords([
+      { id: "msg_tel_+15555550111", display_name: "(555) 555-0111", name: "(555) 555-0111", email: null, phone: "+15555550111", company: null, source: "messages", is_imported: 0 },
+    ]);
+    expect(outcome).toEqual({ refused: false, error: null });
+    const saved = rows();
+    expect(saved).toHaveLength(1);
+    expect(saved[0].source).toBe("manual");
+    expect(saved[0].id).not.toMatch(/^msg_/);
+    expect(phones(saved[0].id)).toEqual(["+15555550111"]);
+  });
+
+  it("with no name at all, only a phone: saved, the phone kept", async () => {
+    const outcome = await importRecords([
+      { id: "msg_tel_+15555550112", display_name: null, name: null, email: null, phone: "+15555550112", company: null, source: "messages", is_imported: 0 },
+    ]);
+    expect(outcome).toEqual({ refused: false, error: null });
+    const saved = rows();
+    expect(saved).toHaveLength(1);
+    expect(phones(saved[0].id)).toEqual(["+15555550112"]);
+  });
+});

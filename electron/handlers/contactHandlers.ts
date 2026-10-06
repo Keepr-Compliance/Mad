@@ -144,7 +144,21 @@ import {
 // the import goes with it. Only the type remains in use.
 import { type ContactOrigin } from "../services/db/contactOriginLink";
 import { getValidUserId } from "../utils/userIdHelper";
-import { isContactSourceEnabled } from "../utils/preferenceHelper";
+import { isContactSourceEnabled, isTextPeopleEnabled } from "../utils/preferenceHelper";
+
+/**
+ * BACKLOG-3670: people found in Google Messages texts are offered only while
+ * Settings → Contacts → Auto-discover from conversations → Messages / SMS is
+ * on — by default on for an Android: Google Messages user (C1, founder
+ * decision b), off otherwise; an explicit off stays off. A failed read → off.
+ */
+async function textPeopleEnabled(userId: string): Promise<boolean> {
+  try {
+    return await isTextPeopleEnabled(userId);
+  } catch {
+    return false;
+  }
+}
 // BACKLOG-1717 — people found in the user's Outlook and Gmail mail.
 import {
   getEmailDerivedContactsAsync,
@@ -1177,6 +1191,9 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         }
 
         // TASK-1956: Use worker thread to avoid blocking main process during contact load
+        // FK fix (live): people found in texts are NOT saved contacts — they
+        // are offered in the address-book half (contacts:get-available), so
+        // picking one imports it first. Never in the saved lists.
         const importedContacts =
           await databaseService.getImportedContactsByUserIdAsync(validatedUserId);
 
@@ -1626,7 +1643,8 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         // alone. The two now agree; before this change the automatic path and the
         // manual path could reach opposite conclusions about the same address
         // book.
-        if (macosEnabled) {
+        // Live (Windows freeze): the macOS AddressBook probe only on a Mac.
+        if (macosEnabled && process.platform === "darwin") {
           // Check if shadow table is populated, if not trigger background sync
           const cachedCount = externalContactDb.getCount(validatedUserId);
 
@@ -2086,6 +2104,31 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
             "[Contacts] Could not read people from email; the rest of the picker is unaffected",
             "Contacts",
             { error: emailDerivedError },
+          );
+        }
+
+        /**
+         * FK fix (live 2026-10-04): PEOPLE FOUND IN GOOGLE MESSAGES TEXTS
+         * (BACKLOG-3670) go in the ADDRESS-BOOK half, exactly as people found
+         * in email (BACKLOG-1717, above): picking one runs contacts:import and
+         * the deal gets the SAVED contact's id. In the saved half their
+         * made-up `msg_tel_` id reached transaction_contacts and the create
+         * failed with "FOREIGN KEY constraint failed". Same gate as before
+         * (Settings → Auto-discover → Messages / SMS); a failed read → none.
+         */
+        try {
+          if (await textPeopleEnabled(validatedUserId)) {
+            const textPeople = databaseService.getTextDerivedPeople(validatedUserId);
+            for (const person of textPeople) {
+              availableContacts.push({ ...person, user_id: validatedUserId } as unknown as (typeof availableContacts)[number]);
+            }
+            logService.info(`[Contacts] Offered ${textPeople.length} people found in texts`, "Contacts");
+          }
+        } catch (textPeopleError) {
+          logService.error(
+            "[Contacts] Could not read people from texts; the rest of the picker is unaffected",
+            "Contacts",
+            { error: textPeopleError },
           );
         }
 

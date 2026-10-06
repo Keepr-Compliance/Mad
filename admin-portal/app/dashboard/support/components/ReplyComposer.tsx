@@ -11,6 +11,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Send, Lock, MessageSquare, ChevronDown, ChevronUp, FileText, Search } from 'lucide-react';
 import { addMessage, uploadAttachment, listTemplates } from '@/lib/support-queries';
+import { applyTemplateVariables } from '@/lib/support-reply';
 import type { MessageType, SupportResponseTemplate } from '@/lib/support-types';
 import { FileUpload } from './FileUpload';
 import type { PendingFile } from './FileUpload';
@@ -21,20 +22,10 @@ interface ReplyComposerProps {
   onMessageSent: () => void;
   requesterName?: string;
   ticketNumber?: number;
-  agentName?: string;
+  /** Signed-in staff member's display name; fills {{agent_name}} (BACKLOG-3702). */
+  agentName: string;
   ticketSubject?: string;
   requesterEmail?: string;
-}
-
-function applyTemplateVariables(
-  body: string,
-  vars: { customerName?: string; ticketNumber?: number; agentName?: string }
-): string {
-  let result = body;
-  if (vars.customerName) result = result.replace(/\{\{customer_name\}\}/gi, vars.customerName);
-  if (vars.ticketNumber) result = result.replace(/\{\{ticket_number\}\}/gi, String(vars.ticketNumber));
-  if (vars.agentName) result = result.replace(/\{\{agent_name\}\}/gi, vars.agentName);
-  return result;
 }
 
 function TemplatePicker({

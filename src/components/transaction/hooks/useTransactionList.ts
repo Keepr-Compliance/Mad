@@ -170,6 +170,18 @@ export function useTransactionList(
       );
     }
 
+    // BACKLOG-3595: a broker review changed a deal's submission status. Main
+    // emits this after writing the row, so a silent re-read picks up the new
+    // status chip. Not filtered by id, for the same reason as the two above.
+    const subscribeStatus = window.api?.transactions?.onSubmissionStatusChanged;
+    if (typeof subscribeStatus === "function") {
+      unsubscribes.push(
+        subscribeStatus(() => {
+          void loadTransactionsSilently();
+        })
+      );
+    }
+
     return () => {
       for (const unsubscribe of unsubscribes) unsubscribe();
     };

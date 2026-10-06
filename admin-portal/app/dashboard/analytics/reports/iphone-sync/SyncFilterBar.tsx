@@ -16,7 +16,6 @@ import { Filter, Search, X } from 'lucide-react';
 import { MultiSelectDropdown } from '@/components/shared/MultiSelectDropdown';
 import { PERIOD_OPTIONS, type PeriodRange } from '@/lib/reports/period';
 import type { RunFilters } from '@/lib/reports/iphone-sync-filters';
-import type { SyncType } from '@/lib/reports/iphone-sync';
 
 const SELECT_CLASS =
   'text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
@@ -27,27 +26,41 @@ const TYPE_OPTIONS = [
   { value: 'unknown', label: 'not recorded' },
 ];
 
-export interface SyncFilterBarProps {
+/** What the bar edits — the iPhone report's RunFilters, or another report's same-shaped set. */
+export interface BarFilters {
+  types: string[];
+  outcomes: string[];
+  platforms: string[];
+  search: string;
+}
+
+export interface SyncFilterBarProps<F extends BarFilters = RunFilters> {
   period: PeriodRange;
-  filters: RunFilters;
+  filters: F;
+  /** The Type dropdown's choices (default: the iPhone sync types). */
+  typeOptions?: { value: string; label: string }[];
   outcomeOptions: string[];
   platformOptions: string[];
   hasFilters: boolean;
   onPeriodChange: (period: string, from?: string, to?: string) => void;
-  onFiltersChange: (filters: RunFilters) => void;
+  onFiltersChange: (filters: F) => void;
   onClear: () => void;
+  /** The Views dropdown. A slot, so this bar stays free of saved-view state. */
+  viewsSlot?: React.ReactNode;
 }
 
-export function SyncFilterBar({
+export function SyncFilterBar<F extends BarFilters = RunFilters>({
   period,
   filters,
+  typeOptions = TYPE_OPTIONS,
   outcomeOptions,
   platformOptions,
   hasFilters,
   onPeriodChange,
   onFiltersChange,
   onClear,
-}: SyncFilterBarProps) {
+  viewsSlot,
+}: SyncFilterBarProps<F>) {
   const custom = period.key === 'custom';
 
   return (
@@ -92,9 +105,10 @@ export function SyncFilterBar({
 
       <MultiSelectDropdown
         label="Type"
-        options={TYPE_OPTIONS}
+        options={typeOptions}
         selected={filters.types}
-        onChange={(types) => onFiltersChange({ ...filters, types: types as SyncType[] })}
+        // The options are the report's own type values, so the cast holds.
+        onChange={(types) => onFiltersChange({ ...filters, types } as F)}
       />
       <MultiSelectDropdown
         label="Outcome"
@@ -134,6 +148,8 @@ export function SyncFilterBar({
           Clear filters
         </button>
       ) : null}
+
+      {viewsSlot ? <div className="ml-auto">{viewsSlot}</div> : null}
     </div>
   );
 }

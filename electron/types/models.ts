@@ -828,6 +828,14 @@ export interface Transaction {
   sale_price?: number;
   earnest_money_amount?: number;
 
+  // Commission Figures (BACKLOG-3519, M2 -- figures only). Percentage as
+  // entered (2.50), not a fraction. commission_gross_amount is whole dollars
+  // (half up). Figures only: no split is stored.
+  commission_offered_rate?: number;
+  commission_actual_rate?: number;
+  commission_gross_amount?: number;
+  commission_adjustment_reason?: string;
+
   // Key Dates (auto-extracted)
   mutual_acceptance_date?: string;
   inspection_deadline?: string;

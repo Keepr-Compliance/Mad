@@ -189,7 +189,12 @@ export async function ensureTransactionEmailsSynced(params: {
 
     // 4. Required audit window (single source of truth — kills the blind
     //    precache/first-scan ceilings for the per-transaction path).
-    const { start: reqStart, end: reqEnd } = computeTransactionDateRange(details);
+    //    BACKLOG-3613: ONE clock read governs both the window and the gate
+    //    below. With no (or an unparseable) end date the window ends at "now";
+    //    reading the clock a second time for the gate let a 1 ms tick skip an
+    //    ongoing deal as past_window.
+    const gateNow = new Date(Date.now());
+    const { start: reqStart, end: reqEnd } = computeTransactionDateRange(details, gateNow);
 
     // BACKLOG-1862: open-trigger past-window gate (founder policy, 2026-07-06).
     // Auto-sync-on-open applies ONLY to ONGOING transactions whose effective window
@@ -197,7 +202,7 @@ export async function ensureTransactionEmailsSynced(params: {
     // transactions are never auto-mutated on open — manual "Sync Emails" is the
     // deliberate path. Export / date-change / create / scan keep their current
     // behavior unchanged. BYPASS_THROTTLE reasons are also unaffected.
-    if (reason === "open" && reqEnd.getTime() < Date.now()) {
+    if (reason === "open" && reqEnd.getTime() < gateNow.getTime()) {
       logService.info("[BACKLOG-1862] open-trigger skip: past-window transaction", "TxnSyncTrigger", {
         transactionId,
         reqEnd: reqEnd.toISOString(),

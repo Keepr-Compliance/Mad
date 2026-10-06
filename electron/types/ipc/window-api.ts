@@ -24,6 +24,8 @@ import type {
   WindowApiApp,
   WindowApiAppCleanup,
 } from "./window-api-services";
+import type { WindowApiChecklists } from "./window-api-checklists";
+import type { WindowApiRcsImport } from "./window-api-rcs-import";
 import type { WindowApiEntitlement } from "./window-api-entitlement";
 import type { WindowApiPayment } from "./window-api-payment";
 import type { WindowApiPairing } from "./window-api-pairing";
@@ -85,6 +87,8 @@ export interface WindowApi extends WindowApiEvents {
   privacy: WindowApiPrivacy;
   failureLog: WindowApiFailureLog;
   featureGate: WindowApiFeatureGate;
+  checklists: WindowApiChecklists;
+  rcsImport: WindowApiRcsImport;
   entitlement: WindowApiEntitlement;
   payment: WindowApiPayment;
   support: WindowApiSupport;

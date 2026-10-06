@@ -1,0 +1,58 @@
+name: Migration Grants
+
+# BACKLOG-3611 — check the grants in Supabase migration files ADDED by the PR.
+# The rules, exemptions and limits are documented in the header of
+# scripts/ci/check-migration-grants.mjs. The guard's own tests are
+# scripts/__tests__/checkMigrationGrants.test.ts and run in the main jest job
+# (jest.config.js testMatch includes scripts/__tests__/**).
+#
+# ## Why this is its own workflow and not a step in migration-check.yml
+#
+# migration-check.yml has a `paths:` filter. A PR that adds no migration never
+# starts that workflow, so it creates no check run, and a check run that is
+# never created cannot be made a required check (BACKLOG-3075). This workflow
+# has no `paths:` filter and no job-level `if:`: it always runs, and on a PR
+# with no added migration it reports "nothing to check" and passes. Ubuntu, no
+# node_modules, no build — it costs seconds.
+#
+# ## Not required yet
+#
+# This job is advisory when it merges. Making "Migration Grants Check" a
+# required check on `develop` (and `main`) is a separate step after merge.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  migration-grants:
+    name: Migration Grants Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # The check diffs against the base branch and reads the base tree's
+          # migrations, so it needs history, not a shallow clone.
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git fetch origin "$BASE_REF"
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+
+      # Exit 1 = a finding in an added migration (the author's to fix).
+      # Exit 2 = the check could not resolve its input (infrastructure).
+      - name: Check grants in added migrations
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: node scripts/ci/check-migration-grants.mjs --base "origin/$BASE_REF"

@@ -40,6 +40,7 @@ jest.mock('@/lib/impersonation-guards', () => ({
 }));
 
 import DashboardPage from '@/app/dashboard/page';
+import { brokerageMembership } from '../../helpers/postgrestEmulator';
 
 /** A Supabase query builder stand-in: every filter returns itself, and the
  *  builder itself is awaitable (the page awaits the chain, not a terminal). */
@@ -60,8 +61,12 @@ const dataClient = { from: jest.fn(() => queryBuilder({ data: [], error: null })
 
 beforeEach(() => {
   jest.clearAllMocks();
-  // organization_members lookup for the it_admin redirect guard.
-  mockAuthFrom.mockImplementation(() => queryBuilder({ data: { role: 'agent' }, error: null }));
+  // organization_members lookup (the shared portal query, BACKLOG-3080). A
+  // brokerage broker: the full dashboard, not it_admin, so no redirect. The
+  // floor's own header is covered in __tests__/agentFloor-3080/.
+  mockAuthFrom.mockImplementation(() =>
+    queryBuilder({ data: [brokerageMembership('broker')], error: null })
+  );
   mockGetDataClient.mockResolvedValue({
     client: dataClient,
     impersonation: null,

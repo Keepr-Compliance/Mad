@@ -124,26 +124,60 @@ describe("BACKLOG-1717 — picking a person found in email", () => {
   });
 
   /**
-   * P2 — THE CONTROL THAT MAKES P1 MEAN SOMETHING.
-   *
-   * The same record in the SAVED half. Nothing is imported and the synthetic
-   * id is selected — a deal pointing at a contact that was never created.
-   *
-   * This documents the wrong placement AND proves the harness can tell the two
-   * apart: without it, P1 would pass for a component that called `import` on
-   * every click regardless of which half a row came from.
+   * P2 — the same record in the SAVED half (live FK fix, 2026-10-04): a
+   * made-up email_ / msg_ id is never "already saved", whichever half it
+   * arrives in — it is imported and the saved id selected. Before, the
+   * synthetic id was selected and the deal insert failed on the foreign key.
    */
-  it("P2: the same record in the saved half creates nothing — the wrong placement", async () => {
+  it("P2: the same record in the saved half is imported too (never the made-up id)", async () => {
     const p = props({ contacts: [EMAIL_PERSON] });
     render(<ContactAssignmentStep {...p} />);
-
-    expect(row(`email_${ADDRESS}`)).not.toBeNull();
     fireEvent.click(row(`email_${ADDRESS}`));
-
+    await waitFor(() => expect(window.api.contacts.import).toHaveBeenCalledTimes(1));
     await waitFor(() => {
       const selections = (p.onSelectedContactIdsChange as jest.Mock).mock.calls.flat(2);
-      expect(selections).toContain(`email_${ADDRESS}`);
+      expect(selections).toContain(SAVED_ID);
+      expect(selections).not.toContain(`email_${ADDRESS}`);
     });
+  });
+
+  /** P3 — THE CONTROL: a real saved contact is selected as it is, nothing imported. */
+  it("P3: a real saved contact is selected directly — no import", async () => {
+    const real = { ...EMAIL_PERSON, id: SAVED_ID, is_message_derived: 0, source: "manual" } as unknown as Contact;
+    const p = props({ contacts: [real] });
+    render(<ContactAssignmentStep {...p} />);
+    fireEvent.click(row(SAVED_ID));
+    await waitFor(() => expect((p.onSelectedContactIdsChange as jest.Mock).mock.calls.flat(2)).toContain(SAVED_ID));
     expect(window.api.contacts.import).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Live FK fix: a person found in Google Messages texts (msg_tel_<e164>),
+   * offered in the address-book half — and, defensively, if it ever arrives
+   * in the saved half — is imported and the deal gets the saved id.
+   */
+  it.each(["externalContacts", "contacts"])("P4: a person found in texts (%s) is imported, then the saved id selected", async (half) => {
+    const TEXT_PERSON = {
+      ...EMAIL_PERSON,
+      id: "msg_tel_+15555550111",
+      display_name: "(555) 555-0111",
+      name: "(555) 555-0111",
+      email: null,
+      allEmails: [],
+      phone: "+15555550111",
+      source: "messages",
+    } as unknown as Contact;
+    importMock().mockResolvedValue({ success: true, contacts: [{ ...TEXT_PERSON, id: SAVED_ID, is_message_derived: 0, source: "manual" }] } as never);
+    const p = props({ [half]: [TEXT_PERSON] });
+    render(<ContactAssignmentStep {...p} />);
+    fireEvent.click(row("msg_tel_+15555550111"));
+    await waitFor(() => expect(window.api.contacts.import).toHaveBeenCalledTimes(1));
+    const [, records] = importMock().mock.calls[0] as unknown as [string, Contact[]];
+    expect(records[0]).toMatchObject({ phone: "+15555550111", source: "messages" });
+    await waitFor(() => {
+      const selections = (p.onSelectedContactIdsChange as jest.Mock).mock.calls.flat(2);
+      expect(selections).toContain(SAVED_ID);
+      expect(selections).not.toContain("msg_tel_+15555550111");
+    });
   });
 });

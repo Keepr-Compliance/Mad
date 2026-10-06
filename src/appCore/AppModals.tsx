@@ -18,6 +18,10 @@ import { AndroidSyncModal } from "./modals/AndroidSyncModal";
 import type { AppStateMachine } from "./state/types";
 import type { Transaction } from "@/types";
 import { useEmailSettingsCallbacks } from "./hooks/useEmailSettingsCallbacks";
+import { scrollToSettingsSection } from "../utils/scrollToSettingsSection";
+import { useGoogleMessagesSyncStatus } from "../hooks/useGoogleMessagesSyncStatus";
+import { useExtensionFolderRefresh } from "../hooks/useExtensionFolderRefresh";
+import { useSubmissionStatusNotice } from "./hooks/useSubmissionStatusNotice";
 
 interface AppModalsProps {
   app: AppStateMachine;
@@ -52,6 +56,10 @@ export function AppModals({ app }: AppModalsProps) {
     closeAndroidSync,
   } = app;
 
+  // BACKLOG-3658: a Google Messages Sync on the dashboard indicator, even minimized.
+  useGoogleMessagesSyncStatus();
+  useExtensionFolderRefresh();
+
   // Track newly created transaction so TransactionList can auto-open its details
   const [auditCreatedTransaction, setAuditCreatedTransaction] = useState<Transaction | null>(null);
 
@@ -77,16 +85,18 @@ export function AppModals({ app }: AppModalsProps) {
     openTransactions();
   }, [closeContacts, openTransactions]);
 
+  // BACKLOG-3594: tell the agent when a submission comes back from the broker;
+  // its "Open" action reuses the open-by-id path above.
+  useSubmissionStatusNotice({ onOpenTransaction: handleOpenTransactionFromContact });
+
   // Email connect/disconnect callbacks for Settings modal
   const { handleEmailConnectedFromSettings, handleEmailDisconnectedFromSettings } =
     useEmailSettingsCallbacks({ userId: currentUser?.id });
 
-  // BACKLOG-2347: "Connect your Android phone" CTA in Settings — close Settings
-  // and open the guided Android sync wizard (same entry point as the Dashboard
-  // card) instead of the old stale/duplicated in-Settings pairing instructions.
-  const handleConnectAndroidFromSettings = useCallback(() => {
+  // Founder: Settings › Google Messages' Link / Relink — the same modal, at its link step.
+  const handleLinkGoogleMessagesFromSettings = useCallback(() => {
     closeSettings();
-    openAndroidSync();
+    openAndroidSync("link");
   }, [closeSettings, openAndroidSync]);
 
   return (
@@ -121,7 +131,7 @@ export function AppModals({ app }: AppModalsProps) {
           onLogout={handleLogout}
           onEmailConnected={handleEmailConnectedFromSettings}
           onEmailDisconnected={handleEmailDisconnectedFromSettings}
-          onConnectAndroid={handleConnectAndroidFromSettings}
+          onLinkGoogleMessages={handleLinkGoogleMessagesFromSettings}
         />
       )}
 
@@ -186,8 +196,17 @@ export function AppModals({ app }: AppModalsProps) {
       {modalState.showIPhoneSync && <IPhoneSyncModal onClose={closeIPhoneSync} />}
 
       {/* Android Sync Wizard Modal (BACKLOG-2320) */}
+      {/* SR C6 (founder): always Google Messages — the Companion's UI is removed. */}
       {modalState.showAndroidSync && currentUser && (
-        <AndroidSyncModal userId={currentUser.id} onClose={closeAndroidSync} />
+        <AndroidSyncModal
+          userId={currentUser.id}
+          onClose={closeAndroidSync}
+          startAtLink={modalState.androidSyncStart === "link"}
+          onOpenSettings={(target) => {
+            openSettings();
+            scrollToSettingsSection(target);
+          }}
+        />
       )}
     </>
   );

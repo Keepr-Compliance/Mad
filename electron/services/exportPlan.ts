@@ -218,8 +218,8 @@ function communicationDate(comm: Communication): Date {
  *
  * The calendar day is read from the leading `YYYY-MM-DD` of a string value, or
  * from the UTC components of a `Date` — because every writer of `closed_at` in
- * this app produces a DATE-ONLY value (`useAuditAddressForm.ts` `getTodayDate()`,
- * the AddressVerificationStep date input, `ExportModal.tsx` `.split("T")[0]`),
+ * this app produces a DATE-ONLY value (the AddressVerificationStep date input on
+ * Edit Transaction Details, `ExportModal.tsx` `.split("T")[0]`),
  * and the `Date` callers get theirs from `new Date(<that date string>)`, which
  * is UTC midnight. Reading LOCAL components off such a Date would name the
  * PREVIOUS day for every user west of UTC. A time-bearing `closed_at` is
@@ -257,10 +257,9 @@ function communicationDate(comm: Communication): Date {
  *   it is pinned to this function by the parity corpus in
  *   `electron/__tests__/localMidnightBoundary-2788.test.ts`.
  *
- * Audit-window START bounds (`filterByDateWindow`'s start,
- * `messageMatchingService`'s `>= ?`, `computeTransactionDateRange`'s start) are
- * NOT touched by BACKLOG-2788 and are still UTC-parsed: moving them would
- * REMOVE communications from existing windows, which is a separate decision.
+ * Audit-window START bounds were left UTC-parsed by BACKLOG-2788 as a separate
+ * decision. BACKLOG-3734 is that decision: they now go through
+ * `auditWindowStart` below, so the window starts at LOCAL 00:00 of the start day.
  *
  * Mutating this function reds the export include-set tests, the submission
  * closing-day sweeps, the attachment sweeps, the auto-link bound test, the
@@ -277,6 +276,61 @@ export function auditWindowEnd(endDate: Date | string | null | undefined): Date 
   // clock, which is what makes the two DST days above come out exact.
   return new Date(year, monthIndex, dayOfMonth, 23, 59, 59, 999);
 }
+
+/**
+ * The inclusive START of a transaction's audit window (BACKLOG-3734).
+ *
+ * A DATE-ONLY value ("2026-09-24" — what every live writer of `started_at`
+ * produces: the AddressVerificationStep date input and
+ * `saveConfirmedTransactionDates`) means LOCAL 00:00:00.000 of that day, the
+ * mirror of `auditWindowEnd`. `new Date("2026-09-24")` is UTC midnight, which
+ * in America/Chicago is 18:00/19:00 the PREVIOUS evening, so the old parse put
+ * the evening before the deal started inside the window.
+ *
+ * A value that already carries a time is an instant and is returned as parsed,
+ * unchanged (deliberately NOT normalized to its day, unlike `auditWindowEnd`).
+ * A `Date` is passed through as a copy. An unparseable value yields an Invalid
+ * Date (not `null`), matching the end bound's loud-failure contract.
+ *
+ * DST: the wall clock 00:00 is resolved with the offset in effect at that
+ * moment, so both transition days are exact (US zones never skip midnight).
+ *
+ * Callers: `auditPeriodFromRow` (submit, scope preview, Attachments tab),
+ * `filterByDateWindow` (every export), `computeTransactionDateRange` (email
+ * fetch / import window), `messageMatchingService` (auto-link candidates) and
+ * the attachment audit-stats handler. The renderer's
+ * `parseLocalCalendarDay` (`src/utils/dateRangeUtils.ts`) is the mirror for the
+ * Texts tab; `localStartOfDay-3734.test.ts` pins them together.
+ */
+export function auditWindowStart(startDate: Date | string | null | undefined): Date | null {
+  if (!startDate) return null;
+  if (startDate instanceof Date) return new Date(startDate.getTime());
+
+  // `.match`, not `RegExp#exec`: the SQL boundary gate reads any `.exec(` as SQL.
+  const match = startDate.trim().match(DATE_ONLY);
+  if (match) {
+    const year = Number(match[1]);
+    const monthIndex = Number(match[2]) - 1;
+    const day = Number(match[3]);
+    if (monthIndex >= 0 && monthIndex <= 11 && day >= 1 && day <= 31) {
+      return new Date(year, monthIndex, day, 0, 0, 0, 0); // LOCAL midnight
+    }
+  }
+  return new Date(startDate);
+}
+
+/**
+ * `auditWindowStart` as the ISO string a lexicographic SQL `>= ?` binds. An
+ * unparseable value is returned raw, so a corrupt `started_at` filters exactly
+ * as it did before rather than throwing from `toISOString()`.
+ */
+export function auditWindowStartParam(startDate: string): string {
+  const start = auditWindowStart(startDate);
+  return start && !isNaN(start.getTime()) ? start.toISOString() : startDate;
+}
+
+/** Exactly a calendar day, nothing after it: "2026-09-24". */
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /** Leading calendar day of an ISO-ish string: "2026-07-29", "2026-07-29T..." or "2026-07-29 12:00:00". */
 const CALENDAR_DAY_PREFIX = /^(\d{4})-(\d{2})-(\d{2})/;
@@ -316,7 +370,7 @@ function filterByDateWindow(
 ): Communication[] {
   if (!startDate && !endDate) return communications;
 
-  const start = startDate ? new Date(startDate) : null;
+  const start = auditWindowStart(startDate);
   const end = auditWindowEnd(endDate);
 
   return communications.filter((comm) => {
@@ -515,4 +569,27 @@ export function normalizeAttachmentType(
 /** Normalize an untrusted wire value into the email-render vocabulary. */
 export function normalizeEmailMode(value: unknown): ExportEmailMode {
   return value === "individual" ? "individual" : "thread";
+}
+
+declare const selectedTextIdsBrand: unique symbol;
+
+/**
+ * BACKLOG-3733 — the message ids of the texts an export of this deal includes:
+ * the owner's copies, hidden texts and reactions to hidden texts removed,
+ * duplicates collapsed. The submit, its pre-flight and the summary counts send
+ * only texts in this set.
+ *
+ * Branded so it can only come from a resolved plan
+ * ({@link selectedTextIdsFromPlan}); a plain `Set<string>` does not type-check
+ * where one is required.
+ */
+export type SelectedTextIds = ReadonlySet<string> & { readonly [selectedTextIdsBrand]: true };
+
+/** The text ids of a resolved plan. Emails are never in the set. */
+export function selectedTextIdsFromPlan(plan: Pick<ExportPlan, "communications">): SelectedTextIds {
+  const ids = new Set<string>();
+  for (const comm of plan.communications) {
+    if (isTextMessage(comm) && typeof comm.id === "string") ids.add(comm.id);
+  }
+  return ids as unknown as SelectedTextIds;
 }

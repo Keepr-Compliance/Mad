@@ -1,4 +1,3 @@
-import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { Clock, XCircle, CheckCircle2, Files, Inbox } from 'lucide-react';
@@ -18,6 +17,8 @@ import {
   type ViewerUser,
 } from '@/lib/utils/userDisplay';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { getPortalAccess } from '@/lib/auth/portalAccess';
+import { FloorDashboard } from './components/FloorDashboard';
 
 interface SubmissionStats {
   total: number;
@@ -93,19 +94,20 @@ export default async function DashboardPage() {
   // impersonation, where the session names the target user instead.
   let authUser: ViewerUser | null = null;
 
+  // BACKLOG-3080: only a full-portal user gets the brokerage overview.
+  // Everyone else gets the floor, decided BEFORE any submission is read.
+  let isFullPortal = false;
+
   // IT admins only manage users — redirect to Users page (skip during impersonation)
   if (!impersonation) {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      authUser = user;
-      const { data: membership } = await supabase
-        .from('organization_members')
-        .select('role')
-        .eq('user_id', user.id)
-        .maybeSingle();
-      if (membership?.role === 'it_admin') {
-        redirect('/dashboard/users');
+    const portal = await getPortalAccess();
+    if (portal) {
+      authUser = portal.user;
+      if (portal.access.kind === 'full') {
+        isFullPortal = true;
+        if (portal.access.role === 'it_admin') {
+          redirect('/dashboard/users');
+        }
       }
     }
   }
@@ -113,6 +115,10 @@ export default async function DashboardPage() {
   // BACKLOG-3077: greet the person by first name; falls back to "Dashboard"
   // when neither a name nor an email local part is available.
   const headerTitle = getDashboardHeading(resolveViewerIdentity(impersonation, authUser));
+
+  if (!impersonation && !isFullPortal) {
+    return <FloorDashboard headerTitle={headerTitle} />;
+  }
 
   // BACKLOG-908: Use deduped helper for org ID resolution
   const orgId = getTargetOrganizationId(organizationId);

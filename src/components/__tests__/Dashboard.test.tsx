@@ -44,8 +44,12 @@ jest.mock("../../hooks/useReconnectionSummary", () => ({
   useReconnectionSummary: () => {},
 }));
 
+let mockIndicatorProps: { onViewSyncDetails?: (type: string) => void } = {};
 jest.mock("../dashboard/index", () => ({
-  SyncStatusIndicator: () => <div data-testid="sync-status-indicator" />,
+  SyncStatusIndicator: (p: { onViewSyncDetails?: (type: string) => void }) => {
+    mockIndicatorProps = p;
+    return <div data-testid="sync-status-indicator" />;
+  },
 }));
 
 jest.mock("../StartNewAuditModal", () => ({
@@ -108,7 +112,7 @@ describe("Dashboard sync cards", () => {
       expect(screen.getByTestId("sync-android-card")).toBeInTheDocument();
       expect(screen.getByText("Sync Android Messages")).toBeInTheDocument();
       // Founder-specified: Wi-Fi, NOT "via USB cable".
-      expect(screen.getByText("Import texts over Wi-Fi")).toBeInTheDocument();
+      expect(screen.getByText("Copy texts from Google Messages")).toBeInTheDocument();
     });
 
     it("does NOT render the Android card when onSyncAndroid is omitted", () => {
@@ -116,6 +120,15 @@ describe("Dashboard sync cards", () => {
 
       expect(screen.queryByTestId("sync-android-card")).not.toBeInTheDocument();
       expect(screen.queryByText("Sync Android Messages")).not.toBeInTheDocument();
+    });
+
+    // BACKLOG-3658: the indicator's Details for a Google Messages Sync reopens
+    // the Sync Android window. Mutation: the mapping missing → red.
+    it("the sync indicator's Details for Google Messages reopens Sync Android", () => {
+      const onSyncAndroid = jest.fn();
+      render(<Dashboard {...baseProps} onSyncAndroid={onSyncAndroid} />);
+      mockIndicatorProps.onViewSyncDetails?.("google-messages");
+      expect(onSyncAndroid).toHaveBeenCalledTimes(1);
     });
 
     it("invokes onSyncAndroid when the Android card is clicked (opens the wizard modal)", async () => {
@@ -171,5 +184,79 @@ describe("Dashboard sync cards", () => {
       expect(cls).toContain("grid-cols-1");
       expect(cls).not.toContain("sm:grid-cols-2");
     });
+  });
+});
+
+describe("Dashboard primary action label (BACKLOG-3614)", () => {
+  it("reads New Transaction, not New Audit", () => {
+    render(<Dashboard {...baseProps} />);
+    expect(screen.getByRole("heading", { name: "New Transaction" })).toBeInTheDocument();
+    expect(screen.queryByText(/new audit/i)).toBeNull();
+  });
+});
+
+describe("Dashboard primary cards: New Transaction stays on one line (BACKLOG-3614 QA)", () => {
+  // jsdom does no layout. These tests resolve the grid's Tailwind classes at
+  // each window width (sm: = 640px, md: = 768px, lg: = 1024px) and pin the
+  // no-wrap class. The layout itself was measured in Chromium (Tailwind
+  // compiled over this component's rendered HTML) from 400 to 1280px: before,
+  // "New Transaction" wrapped to two lines at every width from 640 to 730;
+  // after, one line at every width swept. Results are on BACKLOG-3614.
+  const BREAKPOINTS: Record<string, number> = { sm: 640, md: 768, lg: 1024, xl: 1280 };
+
+  /** The grid-cols-N in effect at `width`, from classes like "grid-cols-1 md:grid-cols-2". */
+  const columnsAt = (className: string, width: number): number => {
+    let cols = 1;
+    let from = -1;
+    for (const cls of className.split(/\s+/)) {
+      const m = /^(?:(sm|md|lg|xl):)?grid-cols-(\d+)$/.exec(cls);
+      if (!m) continue;
+      const min = m[1] ? BREAKPOINTS[m[1]] : 0;
+      if (width >= min && min >= from) {
+        cols = Number(m[2]);
+        from = min;
+      }
+    }
+    return cols;
+  };
+
+  const primaryGrid = () =>
+    screen.getByTestId("nav-new-audit").parentElement as HTMLElement;
+
+  it.each([
+    [400, 1],
+    [639, 1],
+    [640, 1],
+    [660, 1],
+    [680, 1],
+    [700, 1],
+    [730, 1],
+    [767, 1],
+    [768, 2],
+    [1024, 2],
+    [1280, 2],
+  ])("%ipx: the primary cards sit %i per row", (width, expected) => {
+    render(<Dashboard {...baseProps} />);
+    const grid = primaryGrid();
+    expect(grid.contains(screen.getByTestId("nav-transactions"))).toBe(true);
+    // Two per row from 640px squeezed each card to ~272px and wrapped the title.
+    expect(columnsAt(grid.className, width)).toBe(expected);
+  });
+
+  it("the New Transaction title never wraps", () => {
+    render(<Dashboard {...baseProps} />);
+    const title = screen.getByRole("heading", { name: "New Transaction" });
+    expect(title.className.split(/\s+/)).toContain("whitespace-nowrap");
+  });
+
+  it("the title keeps the same type style as the All Audits card", () => {
+    render(<Dashboard {...baseProps} />);
+    const style = (name: string) =>
+      screen
+        .getByRole("heading", { name })
+        .className.split(/\s+/)
+        .filter((c) => c !== "whitespace-nowrap")
+        .sort();
+    expect(style("New Transaction")).toEqual(style("All Audits"));
   });
 });

@@ -121,6 +121,19 @@
  */
 
 jest.mock("../supabaseService");
+// BACKLOG-3600 / BACKLOG-3599: this suite has no local database (databaseService
+// is automocked and dbConnection is real, so ensureDb() throws). The checklist
+// snapshot's local read and the resubmit's owed-pull read go straight to the
+// db modules, not through databaseService; before BACKLOG-3600 the throw was
+// swallowed, now a failed local checklist read fails the submit. The deal
+// here has no checklists and no owed pull, stated as such.
+jest.mock("../db/checklistDbService", () => ({
+  getChecklistsForTransaction: async () => ({ checklists: [], requiredDone: 0, requiredTotal: 0 }),
+}));
+jest.mock("../db/submissionDbService", () => ({
+  ...jest.requireActual("../db/submissionDbService"),
+  getOwedReviewChecklistPullsFor: () => [],
+}));
 jest.mock("../supabaseStorageService");
 jest.mock("../databaseService");
 jest.mock("../logService");
@@ -134,6 +147,8 @@ jest.mock("electron", () => ({
 }));
 
 import { submissionService } from "../submissionService";
+import { buildAttachmentStoragePath } from "../submissionAttachmentFiles";
+import { setPreflightStatForTests } from "../submissionPreflight";
 import supabaseService from "../supabaseService";
 import supabaseStorageService from "../supabaseStorageService";
 import databaseService from "../databaseService";
@@ -206,6 +221,9 @@ class FakeSupabase {
    */
   lookupError: { code: string; message: string } | null = null;
 
+  /** BACKLOG-3403: INSERT/upsert calls on transaction_submissions. */
+  submissionInsertAttempts = 0;
+
   /** Monotonic, so `created_at` ordering is deterministic in the fake. */
   private clock = 0;
   nextCreatedAt(): string {
@@ -245,11 +263,29 @@ class FakeSupabase {
     }
     if (tableName === "submission_messages") return false;
     if (tableName === "submission_attachments") {
+      // BACKLOG-3403 + 3725: agents_can_delete_own_attachments also requires
+      // the parent to be fenced (abandoned_at set).
       const parent = this.submissions.find((s) => s.id === row.submission_id);
-      return !!parent && parent.submitted_by === USER && parent.status === "uploading";
+      return (
+        !!parent &&
+        parent.submitted_by === USER &&
+        parent.status === "uploading" &&
+        !!parent.abandoned_at
+      );
     }
     return true;
   }
+
+  /** BACKLOG-3403: storage objects by path; abandon removes by exact path. */
+  objects = new Set<string>();
+  storage = {
+    from: (_bucket: string) => ({
+      remove: async (paths: string[]) => {
+        const gone = paths.filter((p) => this.objects.delete(p));
+        return { data: gone.map((name) => ({ name })), error: null };
+      },
+    }),
+  };
 
   /** ON DELETE CASCADE from submission_id, transcribed from the FKs. */
   private cascade(submissionIds: unknown[]): void {
@@ -259,6 +295,50 @@ class FakeSupabase {
     );
   }
 
+  /**
+   * BACKLOG-3607: a transaction with no checklist sends `[]` to
+   * snapshot_submission_checklists. Answered as migration 20260929120000 does
+   * for an empty set with the feature on: zero counts, and the carry's status
+   * from carry_submission_checklist_reviews - `no_parent` when the submission
+   * has no parent (a first submission), else `no_checklists` (no headers on
+   * this version). Any other call, or a non-empty set, is unmocked here and
+   * says so.
+   */
+  snapshotCalls: Row[] = [];
+  rpc(fn: string, args: Row): Promise<{ data: unknown; error: { code: string; message: string } | null }> {
+    // BACKLOG-3403: the commit step, its state branches transcribed from
+    // 20261004192647_backlog_3403_finalize_submission.sql:237-302 (the
+    // manifest check is the subject of submissionAtomic-3403, not this suite).
+    if (fn === "record_submission_attempt") {
+      return Promise.resolve({ data: { ok: true, outcome: args.p_outcome, unchanged: false }, error: null });
+    }
+    if (fn === "finalize_submission") {
+      const sub = this.submissions.find((s) => s.id === args.p_submission_id);
+      if (!sub) return Promise.resolve({ data: { ok: false, code: "not_found" }, error: null });
+      if (sub.submitted_by !== USER) return Promise.resolve({ data: { ok: false, code: "not_owner" }, error: null });
+      const target = sub.parent_submission_id ? "resubmitted" : "submitted";
+      if (sub.status === target) return Promise.resolve({ data: { ok: true, already_final: true, status: target }, error: null });
+      if (sub.status !== "uploading") return Promise.resolve({ data: { ok: false, code: "not_uploading" }, error: null });
+      if (sub.abandoned_at) return Promise.resolve({ data: { ok: false, code: "abandoned" }, error: null });
+      sub.status = target;
+      return Promise.resolve({ data: { ok: true, already_final: false, status: target }, error: null });
+    }
+    const list = args?.p_checklists;
+    if (fn !== "snapshot_submission_checklists" || !Array.isArray(list) || list.length !== 0) {
+      throw new Error(`FakeSupabase: unmocked rpc("${fn}")`);
+    }
+    this.snapshotCalls.push(args);
+    const sub = this.submissions.find((s) => s.id === args.p_submission_id);
+    const carryStatus = sub?.parent_submission_id ? "no_checklists" : "no_parent";
+    return Promise.resolve({
+      data: {
+        checklists: 0, items: 0, links: 0, members: 0, dropped_members: 0, dropped_links: 0,
+        carry: { status: carryStatus },
+      },
+      error: null,
+    });
+  }
+
   from(tableName: string) {
     const rows = () => this.table(tableName);
     const filters: Array<(r: Row) => boolean> = [];
@@ -266,6 +346,7 @@ class FakeSupabase {
     let limitN: number | null = null;
     let mode: "select" | "insert" | "update" | "delete" = "select";
     let payload: Row | Row[] | null = null;
+    let ignoreDuplicateIds = false;
 
     const matched = () => rows().filter((r) => filters.every((f) => f(r)));
 
@@ -314,13 +395,18 @@ class FakeSupabase {
       }
 
       if (mode === "update") {
-        for (const r of matched()) Object.assign(r, payload as Row);
-        return { data: matched(), error: null };
+        // RETURNING the rows the WHERE matched (the fence filters on the
+        // column it sets, so re-matching afterwards would return none).
+        const hit = matched();
+        for (const r of hit) Object.assign(r, payload as Row);
+        return { data: hit, error: null };
       }
 
       // insert
+      if (tableName === "transaction_submissions") this.submissionInsertAttempts += 1;
       const incoming = Array.isArray(payload) ? payload : [payload as Row];
       for (const rec of incoming) {
+        if (ignoreDuplicateIds && rec.id !== undefined && rows().some((r) => r.id === rec.id)) continue;
         if (tableName === "transaction_submissions") {
           if (!STATUS_CHECK.includes(String(rec.status))) {
             return {
@@ -380,7 +466,18 @@ class FakeSupabase {
 
     const builder: Record<string, unknown> = {
       select(_cols?: string) {
-        mode = "select";
+        // After insert/update/delete this is RETURNING, not a new SELECT.
+        return builder;
+      },
+      upsert(records: Row | Row[], opts?: { ignoreDuplicates?: boolean }) {
+        // BACKLOG-3403: ON CONFLICT (id) DO NOTHING.
+        mode = "insert";
+        payload = records;
+        ignoreDuplicateIds = opts?.ignoreDuplicates === true;
+        return builder;
+      },
+      is(col: string, val: unknown) {
+        filters.push((r) => (val === null ? r[col] === null || r[col] === undefined : r[col] === val));
         return builder;
       },
       insert(records: Row | Row[]) {
@@ -566,19 +663,20 @@ beforeEach(() => {
     contactMap: {},
   });
 
-  (supabaseStorageService.uploadAttachments as jest.Mock).mockResolvedValue({
-    results: [
-      {
-        localId: "/local/inspection.pdf",
-        storagePath: `${ORG}/new/inspection.pdf`,
-        success: true,
-        mimeType: "application/pdf",
-        fileSizeBytes: 1024,
-      },
-    ],
-    successCount: 1,
-    failedCount: 0,
-  });
+  // BACKLOG-3403: one call per file, stored under the manifest's path.
+  (supabaseStorageService.uploadAttachmentWithRetry as jest.Mock).mockImplementation(
+    async (org: string, sub: string, id: string, localPath: string, filename: string) => {
+      const storagePath = buildAttachmentStoragePath(org, sub, id, filename);
+      fake.objects.add(storagePath);
+      return { localId: localPath, storagePath, success: true, mimeType: "application/pdf", fileSizeBytes: 1024 };
+    }
+  );
+  // The fixture's `/local/inspection.pdf` stands for a file on disk.
+  setPreflightStatForTests(async () => ({ size: 1024 }));
+});
+
+afterEach(() => {
+  setPreflightStatForTests(null);
 });
 
 /**
@@ -651,7 +749,7 @@ function resetFake(): void {
   (supabaseService.getClient as jest.Mock).mockImplementation(() => fake);
   localTransaction.submission_id = null;
   localTransaction.submission_status = "not_submitted";
-  (supabaseStorageService.uploadAttachments as jest.Mock).mockClear();
+  (supabaseStorageService.uploadAttachmentWithRetry as jest.Mock).mockClear();
 }
 
 /**
@@ -713,7 +811,7 @@ describe("BACKLOG-2853 · LIVE_RLS disposition (anon key + user session, the des
     // The refusal happens BEFORE the longest stage. Without the guard this
     // upload runs to completion and only then does the insert die on the
     // unique key, leaving files in Storage under an id that never exists.
-    expect(supabaseStorageService.uploadAttachments).not.toHaveBeenCalled();
+    expect(supabaseStorageService.uploadAttachmentWithRetry).not.toHaveBeenCalled();
   });
 
   test("a 'resubmitted' row can only exist at version >= 2 — the fixture the app can actually produce", async () => {
@@ -755,7 +853,7 @@ describe("BACKLOG-2853 · LIVE_RLS disposition (anon key + user session, the des
    * BACKLOG-3390 — AND IT NOW REFUSES. What this test asserted until then was
    * the founder's defect, written down and called expected:
    *
-   *   expect(supabaseStorageService.uploadAttachments).toHaveBeenCalled();
+   *   expect(supabaseStorageService.uploadAttachmentWithRetry).toHaveBeenCalled();
    *   expect(result.error).toMatch(/duplicate key/i);
    *   expect(result.error).toMatch(
    *     /transaction_submissions_org_txn_version_user_key/
@@ -783,7 +881,7 @@ describe("BACKLOG-2853 · LIVE_RLS disposition (anon key + user session, the des
     const { parentId, resubmittedId } = await arriveAtResubmitted();
 
     const before = survivors();
-    (supabaseStorageService.uploadAttachments as jest.Mock).mockClear();
+    (supabaseStorageService.uploadAttachmentWithRetry as jest.Mock).mockClear();
     fake.maybeSingleLookups = [];
 
     const result = await submissionService.submitTransaction(TX);
@@ -805,7 +903,7 @@ describe("BACKLOG-2853 · LIVE_RLS disposition (anon key + user session, the des
 
     // BEFORE THE LONGEST STAGE. This is the observable that separates an
     // immediate refusal from a multi-minute walk to a database error.
-    expect(supabaseStorageService.uploadAttachments).not.toHaveBeenCalled();
+    expect(supabaseStorageService.uploadAttachmentWithRetry).not.toHaveBeenCalled();
 
     // AND NOT THE DATABASE'S WORDS. The founder's exact screen, asserted absent.
     expect(result.error).not.toMatch(/duplicate key/i);
@@ -877,13 +975,17 @@ describe("BACKLOG-2853 · LIVE_RLS disposition (anon key + user session, the des
         seedSubmission(status);
       }
 
-      (supabaseStorageService.uploadAttachments as jest.Mock).mockClear();
+      (supabaseStorageService.uploadAttachmentWithRetry as jest.Mock).mockClear();
       fake.maybeSingleLookups = [];
+      fake.submissionInsertAttempts = 0;
 
       const result = await submissionService.submitTransaction(TX);
 
-      const uploaded = (supabaseStorageService.uploadAttachments as jest.Mock)
-        .mock.calls.length;
+      // BACKLOG-3403: the parent row is now written before any upload, so a
+      // status the guard lets through collides at the INSERT and never
+      // uploads either. "Refused" is therefore read as "never reached the
+      // insert" — the guard's own stop — not "never uploaded".
+      const uploaded = fake.submissionInsertAttempts;
       (uploaded === 0 ? refusedBeforeUpload : fellThroughToUpload).push(status);
 
       const guardLookup = fake.maybeSingleLookups.find(
@@ -1031,7 +1133,7 @@ describe("BACKLOG-2867 · once a deal has two submission versions", () => {
     brokerSetsStatus(parentId, "rejected");
 
     const before = survivors();
-    (supabaseStorageService.uploadAttachments as jest.Mock).mockClear();
+    (supabaseStorageService.uploadAttachmentWithRetry as jest.Mock).mockClear();
     fake.maybeSingleLookups = [];
 
     const result = await submissionService.submitTransaction(TX);
@@ -1057,7 +1159,7 @@ describe("BACKLOG-2867 · once a deal has two submission versions", () => {
     expect(result.error).toBe(BLOCKED_SUBMISSION_MESSAGES.under_review);
 
     // Before the longest stage, which is the whole point.
-    expect(supabaseStorageService.uploadAttachments).not.toHaveBeenCalled();
+    expect(supabaseStorageService.uploadAttachmentWithRetry).not.toHaveBeenCalled();
 
     // Nothing moved, by id, across all three tables.
     expect(survivors()).toEqual(before);
@@ -1074,7 +1176,7 @@ describe("BACKLOG-2867 · once a deal has two submission versions", () => {
     const refusedWith: Record<number, string | null> = {};
 
     const pressSubmit = async (depth: number): Promise<void> => {
-      (supabaseStorageService.uploadAttachments as jest.Mock).mockClear();
+      (supabaseStorageService.uploadAttachmentWithRetry as jest.Mock).mockClear();
       fake.maybeSingleLookups = [];
       const result = await submissionService.submitTransaction(TX);
       const lookup = fake.maybeSingleLookups.find(
@@ -1083,7 +1185,7 @@ describe("BACKLOG-2867 · once a deal has two submission versions", () => {
       named[depth] = lookup?.returnedIds ?? [];
       refusedWith[depth] = result.error ?? null;
       expect(result.success).toBe(false);
-      expect(supabaseStorageService.uploadAttachments).not.toHaveBeenCalled();
+      expect(supabaseStorageService.uploadAttachmentWithRetry).not.toHaveBeenCalled();
     };
 
     // DEPTH 1 — produced by the app: a first, successful submit.
@@ -1156,7 +1258,7 @@ describe("BACKLOG-2867 · once a deal has two submission versions", () => {
     expect(result.error).toMatch(/JWT expired/);
 
     // Refused before the upload, and nothing was written.
-    expect(supabaseStorageService.uploadAttachments).not.toHaveBeenCalled();
+    expect(supabaseStorageService.uploadAttachmentWithRetry).not.toHaveBeenCalled();
     expect(survivors()).toEqual({
       submissions: [],
       messages: [],
@@ -1255,7 +1357,7 @@ describe("BACKLOG-2853 · PERMIT_DELETE disposition (service_role_full_access_su
     brokerSetsStatus(resubmittedId, "needs_changes");
 
     const before = survivors();
-    (supabaseStorageService.uploadAttachments as jest.Mock).mockClear();
+    (supabaseStorageService.uploadAttachmentWithRetry as jest.Mock).mockClear();
     fake.maybeSingleLookups = [];
 
     const result = await submissionService.submitTransaction(TX);
@@ -1281,7 +1383,10 @@ describe("BACKLOG-2853 · PERMIT_DELETE disposition (service_role_full_access_su
     // upload still runs and the insert still collides. What BACKLOG-3390 did
     // change is the WORDS — the collision no longer names the constraint.
     expect(result.success).toBe(false);
-    expect(supabaseStorageService.uploadAttachments).toHaveBeenCalled();
+    // BACKLOG-3403: the parent row is now written BEFORE any upload, so the
+    // collision stops the submit before a single file is sent (it used to
+    // run the whole upload first).
+    expect(supabaseStorageService.uploadAttachmentWithRetry).not.toHaveBeenCalled();
     expect(result.error).toMatch(/already has a submission at this version/i);
     expect(result.error).not.toMatch(/duplicate key/i);
   });

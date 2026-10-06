@@ -64,7 +64,6 @@ jest.mock('@/lib/supabase/client', () => ({
       getUser: mockGetUser,
       signOut: mockSignOut,
       signInWithOAuth: jest.fn().mockResolvedValue({ error: null }),
-      signInWithOtp: jest.fn().mockResolvedValue({ error: null }),
     },
     from: () => ({
       select: () => ({

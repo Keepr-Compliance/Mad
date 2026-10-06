@@ -139,7 +139,7 @@ const SOURCE_OPTIONS: SourceConfig[] = [
   {
     key: "androidContacts",
     label: "Android Phone Contacts",
-    description: "Import contacts synced from your Android companion app",
+    description: "Import contacts from your Android phone",
     icon: (
       <svg className="w-7 h-7 text-green-600" viewBox="0 0 24 24" fill="none" stroke="currentColor">
         <path
@@ -153,6 +153,11 @@ const SOURCE_OPTIONS: SourceConfig[] = [
     selectedBorder: "border-green-400",
     selectedBg: "bg-green-50",
     phoneType: "android",
+    // Founder (2026-10-05): hidden with the Android Companion's UI — only the
+    // Companion pushed these contacts. Google Messages never reads this key
+    // (its people use contactSources.inferred.messages). Not written by Skip
+    // or Continue while hidden; stored values are untouched.
+    hidden: true,
   },
 ];
 

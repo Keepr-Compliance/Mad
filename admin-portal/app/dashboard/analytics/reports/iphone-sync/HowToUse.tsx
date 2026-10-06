@@ -40,12 +40,19 @@ export function HowToUse({ baseline, totalRuns }: { baseline: Baseline; totalRun
         </Para>
         <Para>
           <strong>Cards are all live:</strong> the five default cards, both charts and the table
-          follow the filters.
+          follow the filters. Your own cards come from Views, the same way the PM backlog pins a
+          saved view as a gauge: save the current filters with a name, pick a column and a function
+          (count, average, sum, min, max), and it appears as a dashed card that follows whichever
+          period is selected. Click a card to apply its filters; up to five pinned.
         </Para>
         <Para>
-          <strong>Rate</strong> is the backup size divided by the transfer phase, in MB per second.
-          Only runs that wrote a backup have one today; from 2.38.1 the byte counter gives a rate to
-          cancelled and stalled runs too, which is how a slow phone or cable will show up.
+          <strong>Rate</strong> is the backup size divided by the transfer phase, in MB per second,
+          where 1 MB is 1,048,576 bytes. The Backup column and the Device used figure count a GB as
+          1,000,000,000 bytes, the way the phone does — so dividing one by the other will not give
+          you the Rate column exactly. Only runs that wrote a backup have one today; from 2.38.1 the
+          byte
+          counter gives a rate to cancelled and stalled runs too, which is how a slow phone or cable
+          will show up.
         </Para>
         <Para>
           <strong>Periods and times.</strong> Weeks start Monday, and every time on this page is

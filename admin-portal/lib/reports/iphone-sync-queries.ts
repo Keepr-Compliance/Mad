@@ -71,11 +71,43 @@ export interface IphoneSyncData {
   truncated: boolean;
 }
 
+/** The iPhone report's rows: source 'iphone-backup', dev builds included (unchanged). */
 export async function getIphoneSyncRuns(
   supabase: SupabaseClient,
   range: PeriodRange,
   limit = RUN_LIMIT
 ): Promise<IphoneSyncData> {
+  return getSyncRuns<SyncOutcomeRow>(supabase, range, { source: 'iphone-backup', limit, packagedOnly: false });
+}
+
+export interface SyncRunsQuery {
+  /** sync_outcomes.source — each report reads its own source, under its own cap. */
+  source: string;
+  limit?: number;
+  /**
+   * BACKLOG-3671 P2: leave out dev builds (is_packaged = false). ON by default;
+   * a row with no is_packaged (NULL) is kept — absent is not "dev".
+   */
+  packagedOnly?: boolean;
+  /** Columns this source adds to {@link RUN_COLUMNS} (additive). */
+  extraColumns?: readonly string[];
+}
+
+export interface SyncRunsData<R> {
+  rows: R[];
+  users: ReportUser[];
+  failed: boolean;
+  truncated: boolean;
+}
+
+/** Any report's runs of one source in the period (newest first, capped). */
+export async function getSyncRuns<R extends { user_id: string | null }>(
+  supabase: SupabaseClient,
+  range: PeriodRange,
+  query: SyncRunsQuery
+): Promise<SyncRunsData<R>> {
+  const limit = query.limit ?? RUN_LIMIT;
+  const columns = query.extraColumns && query.extraColumns.length > 0 ? `${RUN_COLUMNS}, ${query.extraColumns.join(', ')}` : RUN_COLUMNS;
   // The `running` exclusion is here as well as in `buildIphoneSyncReport`, and
   // the two filters do different jobs. This one keeps the RUN_LIMIT window
   // meaningful: rows are ordered newest-first, and runs in flight are the
@@ -88,22 +120,23 @@ export async function getIphoneSyncRuns(
   // A client-side period would leave the cap measuring the newest 200 runs of
   // all time rather than the newest 200 IN the period, so an older period
   // would silently come back empty while the page looked fine.
-  const { data: rows, error } = await supabase
+  let request = supabase
     .from('sync_outcomes')
-    .select(RUN_COLUMNS)
-    .eq('source', 'iphone-backup')
+    .select(columns)
+    .eq('source', query.source)
     .neq('outcome', IN_PROGRESS_OUTCOME)
     .gte('created_at', range.fromIso)
-    .lt('created_at', range.toIso)
-    .order('created_at', { ascending: false })
-    .limit(limit);
+    .lt('created_at', range.toIso);
+  // NOT (is_packaged IS FALSE): true and NULL both stay.
+  if (query.packagedOnly !== false) request = request.not('is_packaged', 'is', false);
+  const { data: rows, error } = await request.order('created_at', { ascending: false }).limit(limit);
 
   if (error || !rows) {
     console.error('getIphoneSyncRuns error:', error?.message);
     return { rows: [], users: [], failed: true, truncated: false };
   }
 
-  const runs = rows as unknown as SyncOutcomeRow[];
+  const runs = rows as unknown as R[];
   const truncated = runs.length >= limit;
 
   const userIds = [...new Set(runs.map((r) => r.user_id).filter((id): id is string => !!id))];

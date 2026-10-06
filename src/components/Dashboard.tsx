@@ -237,6 +237,10 @@ function Dashboard({
               if (type === 'iphone' && onSyncPhone) {
                 onSyncPhone();
               }
+              // BACKLOG-3658: reopen the Google Messages Sync window (live progress).
+              if (type === 'google-messages' && onSyncAndroid) {
+                onSyncAndroid();
+              }
             }}
           />
         </div>
@@ -252,7 +256,7 @@ function Dashboard({
         </div>
 
         {/* Action Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-8">
           {/* Start New Audit Card */}
           <button
             onClick={handleStartNewAuditClick}
@@ -286,8 +290,8 @@ function Dashboard({
                 </svg>
               </div>
               <div className="flex-1">
-                <h2 className="text-xl font-bold text-gray-900">
-                  New Audit
+                <h2 className="text-xl font-bold text-gray-900 whitespace-nowrap">
+                  New Transaction
                 </h2>
               </div>
               {/* Pending count badge - AI add-on only */}
@@ -502,7 +506,7 @@ function Dashboard({
                     Sync Android Messages
                   </h3>
                   <p className="text-sm text-gray-500">
-                    Import texts over Wi-Fi
+                    Copy texts from Google Messages
                   </p>
                 </div>
                 <svg

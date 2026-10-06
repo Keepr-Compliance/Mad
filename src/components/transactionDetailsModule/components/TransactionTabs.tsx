@@ -2,7 +2,11 @@
  * TransactionTabs Component
  * Tab navigation for transaction details view
  *
- * Tab order: Overview | Texts | Emails | Attachments
+ * Tab order: Overview | Texts | Emails | Attachments | Checklist
+ *
+ * The Checklist tab (BACKLOG-3476) renders only when `showChecklist` is true.
+ * The caller decides that from the plan and from whether a checklist exists;
+ * this component never reads either.
  */
 import React from "react";
 import type { TransactionTab } from "../types";
@@ -12,6 +16,8 @@ interface TransactionTabsProps {
   conversationCount: number;
   emailCount: number;
   onTabChange: (tab: TransactionTab) => void;
+  /** Render the Checklist tab. Absent means hidden. */
+  showChecklist?: boolean;
 }
 
 export function TransactionTabs({
@@ -19,13 +25,14 @@ export function TransactionTabs({
   conversationCount: _conversationCount,
   emailCount: _emailCount,
   onTabChange,
+  showChecklist = false,
 }: TransactionTabsProps): React.ReactElement {
   return (
     <div className="flex-shrink-0 border-b border-gray-200 px-3 sm:px-6 overflow-x-auto scrollbar-hide">
-      <div className="flex gap-1 sm:gap-4">
+      <div className="flex gap-0.5 sm:gap-1">
         <button
           onClick={() => onTabChange("overview")}
-          className={`px-2 sm:px-4 py-2.5 sm:py-3 font-medium text-sm transition-all whitespace-nowrap ${
+          className={`px-2 sm:px-3 py-2.5 sm:py-3 font-medium text-sm transition-all whitespace-nowrap ${
             activeTab === "overview"
               ? "border-b-2 border-green-500 text-green-600"
               : "text-gray-600 hover:text-gray-900"
@@ -35,7 +42,7 @@ export function TransactionTabs({
         </button>
         <button
           onClick={() => onTabChange("messages")}
-          className={`px-2 sm:px-4 py-2.5 sm:py-3 font-medium text-sm transition-all flex items-center gap-1 sm:gap-1.5 whitespace-nowrap ${
+          className={`px-2 sm:px-3 py-2.5 sm:py-3 font-medium text-sm transition-all flex items-center gap-1 sm:gap-1.5 whitespace-nowrap ${
             activeTab === "messages"
               ? "border-b-2 border-green-500 text-green-600"
               : "text-gray-600 hover:text-gray-900"
@@ -58,7 +65,7 @@ export function TransactionTabs({
         </button>
         <button
           onClick={() => onTabChange("emails")}
-          className={`px-2 sm:px-4 py-2.5 sm:py-3 font-medium text-sm transition-all flex items-center gap-1 sm:gap-1.5 whitespace-nowrap ${
+          className={`px-2 sm:px-3 py-2.5 sm:py-3 font-medium text-sm transition-all flex items-center gap-1 sm:gap-1.5 whitespace-nowrap ${
             activeTab === "emails"
               ? "border-b-2 border-green-500 text-green-600"
               : "text-gray-600 hover:text-gray-900"
@@ -95,7 +102,7 @@ export function TransactionTabs({
         <button
           onClick={() => onTabChange("attachments")}
           data-testid="tab-attachments"
-          className={`px-2 sm:px-4 py-2.5 sm:py-3 font-medium text-sm transition-all flex items-center gap-1 sm:gap-1.5 whitespace-nowrap ${
+          className={`px-2 sm:px-3 py-2.5 sm:py-3 font-medium text-sm transition-all flex items-center gap-1 sm:gap-1.5 whitespace-nowrap ${
             activeTab === "attachments"
               ? "border-b-2 border-green-500 text-green-600"
               : "text-gray-600 hover:text-gray-900"
@@ -116,6 +123,32 @@ export function TransactionTabs({
           </svg>
           Attachments
         </button>
+        {showChecklist && (
+          <button
+            onClick={() => onTabChange("checklist")}
+            data-testid="tab-checklist"
+            className={`px-2 sm:px-3 py-2.5 sm:py-3 font-medium text-sm transition-all flex items-center gap-1 sm:gap-1.5 whitespace-nowrap ${
+              activeTab === "checklist"
+                ? "border-b-2 border-green-500 text-green-600"
+                : "text-gray-600 hover:text-gray-900"
+            }`}
+          >
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
+              />
+            </svg>
+            Checklist
+          </button>
+        )}
       </div>
     </div>
   );

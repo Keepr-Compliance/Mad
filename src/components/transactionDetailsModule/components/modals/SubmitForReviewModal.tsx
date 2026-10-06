@@ -4,17 +4,257 @@
  * Confirmation modal for submitting a transaction to the broker portal.
  * Shows summary of what will be submitted and progress during submission.
  * Part of BACKLOG-391: Submit for Review UI.
+ *
+ * BACKLOG-3498: for a deal that can still be submitted (no status,
+ * `not_submitted`, `needs_changes`) the dialog has two screens. Screen 1 is the
+ * shared date step (the same component Export's Step 1 renders), titled
+ * "Verify Transaction Details" by this dialog's own header; the block's heading
+ * is not drawn, so the title is not said twice. Next leads to screen 2, the
+ * lead and the Submission Summary, with Back. Pressing Submit saves the confirmed dates through the shared writer,
+ * waits for the save, and only then submits. The statuses the modal blocks
+ * render their single screen unchanged.
  */
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ResponsiveModal } from "../../../common/ResponsiveModal";
+import {
+  TransactionDatesFields,
+  VERIFY_TRANSACTION_DETAILS_TITLE,
+  saveConfirmedTransactionDates,
+  useCommissionForm,
+  useTransactionDatesForm,
+  validateTransactionDates,
+} from "../../../transactionDates";
 import type { Transaction } from "@/types";
+import { useSubmissionScope } from "../../hooks/useSubmissionScope";
 
 export interface SubmitProgress {
-  stage: "preparing" | "attachments" | "transaction" | "messages" | "complete" | "failed";
+  stage:
+    | "preparing"
+    | "attachments"
+    | "transaction"
+    | "messages"
+    // BACKLOG-3398: the final step; the submission can no longer be cancelled.
+    | "finalizing"
+    | "complete"
+    | "failed";
   stageProgress: number;
   overallProgress: number;
   currentItem?: string;
 }
+
+/**
+ * BACKLOG-3600: why a successful submission's checklists did not reach the
+ * broker. Mirrors `SubmissionResult.checklistsNotSent` in the main process
+ * (a type cannot be value-imported across the boundary, so it is restated).
+ */
+export type ChecklistsNotSentReason =
+  | "not_in_plan"
+  | "refused"
+  // BACKLOG-3599 (resubmit only): the broker's review checklists were still
+  // owed and could not be downloaded first.
+  | "brokerChecklistsNotDownloaded";
+
+/** The one amber line the success screen shows for each reason. */
+export const CHECKLISTS_NOT_SENT_COPY: Record<ChecklistsNotSentReason, string> = {
+  not_in_plan:
+    "Submitted, but your checklists were not sent: checklists are not included in your current plan.",
+  refused: "Submitted, but your checklists could not be sent to your broker.",
+  brokerChecklistsNotDownloaded:
+    "Submitted, but the checklists your broker added could not be downloaded first, so this version does not include them.",
+};
+
+/**
+ * BACKLOG-3681 / BACKLOG-3403: why an attachment is not sent. Mirrors
+ * `NotIncludedReason` in electron/services/submissionPreflight.ts (a type
+ * cannot be value-imported across the boundary, so it is restated).
+ *
+ * BACKLOG-3403 supersedes BACKLOG-2758's "couldn't be uploaded" line: under
+ * all-or-nothing a failed upload fails the whole submission, so a success
+ * screen can no longer report one.
+ */
+export type NotIncludedReason =
+  | "email_attachment_not_downloaded"
+  | "text_attachment_not_on_this_computer"
+  | "file_missing_on_this_computer"
+  | "file_too_large"
+  // BACKLOG-3731: why the macOS import skipped the file.
+  | "text_attachment_not_downloaded_by_messages"
+  | "text_attachment_too_large_to_import"
+  | "text_attachment_type_not_imported"
+  | "text_attachment_unreadable";
+
+/** One attachment (or one message's attachments) that is not sent. */
+export interface NotIncludedItem {
+  key: string;
+  kind: "text" | "email";
+  localMessageId: string;
+  /** BACKLOG-3731: the conversation, for grouping. Null when unknown. */
+  threadId: string | null;
+  sentAt: string | null;
+  label: string;
+  filename: string | null;
+  reason: NotIncludedReason;
+  localAttachmentId: string | null;
+}
+
+/** The heading over the list, before sending and after. */
+export const NOT_INCLUDED_HEADING_BEFORE =
+  "These attachments can't be sent:";
+export const NOT_INCLUDED_HEADING_AFTER =
+  "Not included — your broker won't see these attachments:";
+
+function shortDate(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+/**
+ * BACKLOG-3731: the import's limit for copying a text attachment. Mirrors
+ * `MAX_ATTACHMENT_SIZE` in electron/services/macOSMessagesImportService/types.ts
+ * (restated: the renderer cannot value-import from electron/). A parity test
+ * pins the two together.
+ */
+export const IMPORT_SIZE_LIMIT_MB = 100;
+
+function capitalize(text: string): string {
+  return text.length > 0 ? text[0].toUpperCase() + text.slice(1) : text;
+}
+
+/** Which message the item came from: "Text with X" / "Email "subject"". */
+export function notIncludedSource(item: NotIncludedItem): string {
+  return item.kind === "text"
+    ? `Text with ${item.label || "an unknown sender"}`
+    : `Email "${item.label || "(no subject)"}"`;
+}
+
+/**
+ * BACKLOG-3731: why the item is not sent, as one plain sentence. Each reason
+ * says only what is known: a text with no recorded reason does not claim one.
+ */
+export function notIncludedReasonText(item: NotIncludedItem): string {
+  const file = item.filename || (item.kind === "text" ? "a photo or file" : "an attachment");
+  switch (item.reason) {
+    case "text_attachment_not_on_this_computer":
+      return "Keepr doesn't have a copy of a photo or file from this text.";
+    case "text_attachment_not_downloaded_by_messages":
+      return `${capitalize(file)} isn't on this Mac. To include it, open this chat in Messages on this Mac, download the attachment, then sync your messages.`;
+    case "text_attachment_too_large_to_import":
+      return `${capitalize(file)} is larger than ${IMPORT_SIZE_LIMIT_MB} MB, the largest file Keepr imports.`;
+    case "text_attachment_type_not_imported":
+      return `${capitalize(file)} is a type of file Keepr doesn't import.`;
+    case "text_attachment_unreadable":
+      return `Keepr couldn't read ${file} on this Mac.`;
+    case "email_attachment_not_downloaded":
+      return `${capitalize(file)} couldn't be downloaded from the mailbox.`;
+    case "file_missing_on_this_computer":
+      return `${capitalize(file)} is no longer on this computer.`;
+    case "file_too_large":
+      return `${capitalize(file)} is larger than 50 MB.`;
+  }
+}
+
+/**
+ * BACKLOG-3681: one line per item — which message, when, which file, why.
+ * Factual; no "submit again" (after a successful submit the deal is with the
+ * broker and cannot be resubmitted until it comes back).
+ */
+export function notIncludedLine(item: NotIncludedItem): string {
+  const when = shortDate(item.sentAt);
+  const source = notIncludedSource(item);
+  const head = when ? `${source}, ${when}` : source;
+  return `${head} — ${notIncludedReasonText(item)}`;
+}
+
+/** BACKLOG-3731: one conversation's items in the grouped list. */
+export interface NotIncludedGroup {
+  key: string;
+  source: string;
+  items: NotIncludedItem[];
+}
+
+/**
+ * BACKLOG-3731: group items by conversation (thread), in the order each
+ * conversation first appears. An item with no thread groups by its source
+ * line, so it still joins others from the same contact or subject.
+ */
+export function groupNotIncluded(items: NotIncludedItem[]): NotIncludedGroup[] {
+  const groups = new Map<string, NotIncludedGroup>();
+  for (const item of items) {
+    const source = notIncludedSource(item);
+    const key = `${item.kind}:${item.threadId ?? `label:${source}`}`;
+    const group = groups.get(key);
+    if (group) group.items.push(item);
+    else groups.set(key, { key, source, items: [item] });
+  }
+  return [...groups.values()];
+}
+
+/** BACKLOG-3731: lines shown before "Show more", across all groups. */
+export const NOT_INCLUDED_VISIBLE_LINES = 5;
+
+/**
+ * BACKLOG-3731 (founder 6e7b4c31): the not-included list, grouped by
+ * conversation with a count, and the first few lines shown until "Show more".
+ * Used before sending (the warning) and after (the success list).
+ */
+export function NotIncludedList({
+  items,
+  testId,
+}: {
+  items: NotIncludedItem[];
+  testId: string;
+}): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const groups = groupNotIncluded(items);
+  let budget = expanded ? Number.POSITIVE_INFINITY : NOT_INCLUDED_VISIBLE_LINES;
+  const hidden = Math.max(0, items.length - NOT_INCLUDED_VISIBLE_LINES);
+  return (
+    <div data-testid={testId}>
+      <ul className="mt-1 space-y-2">
+        {groups.map((group) => {
+          if (budget <= 0) return null;
+          const shown = group.items.slice(0, budget);
+          budget -= shown.length;
+          const count = group.items.length;
+          return (
+            <li key={group.key} data-testid={`${testId}-group`}>
+              <p className="font-medium">
+                {group.source} — {count} {count === 1 ? "attachment" : "attachments"}
+              </p>
+              <ul className="list-disc pl-5 space-y-1">
+                {shown.map((item) => {
+                  const when = shortDate(item.sentAt);
+                  const text = notIncludedReasonText(item);
+                  return (
+                    <li key={item.key} data-testid={`${testId}-line`}>
+                      {when ? `${when} — ${text}` : text}
+                    </li>
+                  );
+                })}
+              </ul>
+            </li>
+          );
+        })}
+      </ul>
+      {hidden > 0 && (
+        <button
+          type="button"
+          className="mt-1 underline"
+          data-testid={`${testId}-toggle`}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? "Show less" : `Show more (${hidden})`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** BACKLOG-3398: shown after a cancel. Mirrors SUBMISSION_CANCELLED_MESSAGE. */
+export const SUBMISSION_CANCELLED_COPY =
+  "Submission cancelled. Nothing was sent to your broker.";
 
 interface SubmitForReviewModalProps {
   transaction: Transaction;
@@ -64,13 +304,58 @@ interface SubmitForReviewModalProps {
    * test pins the two entry points to one component by identity.
    */
   onExport?: () => void;
+  /**
+   * BACKLOG-3498: called once the confirmed dates have been SAVED, before the
+   * submit runs and whatever the submit then does. TransactionDetails re-reads
+   * the row here, so its tabs and the Edit form show the saved dates even when
+   * the submit fails.
+   */
+  onDatesSaved?: () => void;
+  /**
+   * BACKLOG-3600: set when the submission succeeded but its checklists did not
+   * reach the broker. Rendered only on the success screen.
+   */
+  checklistsNotSent?: ChecklistsNotSentReason | null;
+  /**
+   * BACKLOG-3681: each attachment left out of a successful submission, and
+   * why. Rendered only on the success screen.
+   */
+  notIncluded?: NotIncludedItem[];
+  /** BACKLOG-3403: the pre-flight (download + check) is running. */
+  isCheckingFiles?: boolean;
+  /**
+   * BACKLOG-3403: attachments that cannot be sent, shown BEFORE anything is
+   * sent with Go back / Continue anyway. `null` = no question pending.
+   */
+  preflightItems?: NotIncludedItem[] | null;
+  /** BACKLOG-3403: the list changed after the agent confirmed it. */
+  preflightChanged?: boolean;
+  /** BACKLOG-3403: Go back — nothing is sent. */
+  onPreflightBack?: () => void;
+  /** BACKLOG-3403: Continue anyway — send the rest. */
+  onPreflightContinue?: () => void;
+  /** BACKLOG-3398: the agent cancelled; nothing was sent. */
+  cancelled?: boolean;
+  /** BACKLOG-3398: the cancel is being carried out. */
+  isCancelling?: boolean;
+  /** BACKLOG-3398: really cancel the running submission. */
+  onCancelSubmit?: () => void;
 }
+
+/**
+ * BACKLOG-3520 — the panel owns its height and clips (`sm:overflow-hidden`);
+ * the body region inside scrolls, so the scrollbar sits inside the rounded
+ * frame instead of on the panel's outer edge. Padding lives on the header,
+ * body and footer rows (not here) so the scrollbar is not inset by it.
+ */
+const SUBMIT_PANEL = "max-w-xl sm:h-auto sm:max-h-[90vh] sm:overflow-hidden";
 
 const STAGE_LABELS: Record<string, string> = {
   preparing: "Preparing submission...",
   attachments: "Uploading attachments...",
   transaction: "Creating submission record...",
   messages: "Uploading messages...",
+  finalizing: "Finalizing submission...",
   complete: "Submission complete!",
   failed: "Submission failed",
 };
@@ -99,6 +384,17 @@ export function SubmitForReviewModal({
   onCancel,
   onSubmit,
   onExport,
+  onDatesSaved,
+  checklistsNotSent = null,
+  notIncluded = [],
+  isCheckingFiles = false,
+  preflightItems = null,
+  preflightChanged = false,
+  onPreflightBack,
+  onPreflightContinue,
+  cancelled = false,
+  isCancelling = false,
+  onCancelSubmit,
 }: SubmitForReviewModalProps): React.ReactElement {
   /**
    * BACKLOG-2853 — THE DEAL ALREADY HAS A SUBMISSION SITTING WITH THE BROKER.
@@ -269,6 +565,13 @@ export function SubmitForReviewModal({
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   const isActivelySubmitting = isSubmitting && progress?.stage !== "complete" && progress?.stage !== "failed";
+  /**
+   * BACKLOG-3398: the final step has begun. The server decides from here, so
+   * Cancel is not offered — a cancel now could only misreport the outcome.
+   */
+  const isFinalizing = isActivelySubmitting && progress?.stage === "finalizing";
+  /** BACKLOG-3403: the pre-flight question is on screen. */
+  const showPreflight = !isSubmitting && preflightItems !== null;
 
   /**
    * BACKLOG-2849 — the submit SUCCEEDED. Load-bearing, and not the same test
@@ -285,12 +588,133 @@ export function SubmitForReviewModal({
    */
   const isSuccess = progress?.stage === "complete" && !error;
 
+  /**
+   * BACKLOG-3498 — the date step.
+   *
+   * It applies exactly when the deal is not blocked. `blockedCopy` is the ONLY
+   * gate: `screen` starts at "dates" for every status, so a blocked deal is
+   * kept off the step by this term alone.
+   *
+   * `datesError` holds both the date-rule message and a failed save
+   * ("Failed to save dates: …"). It is local, not the hook's `error`: routing a
+   * failed save through `error` would hide the date fields under a
+   * "Submission Failed" heading. A save that fails on a RETRY after a failed
+   * submit (when the hook's `error` is still set) must also land on the date
+   * step, hence the `datesError !== null` escape in `showDateStep`.
+   */
+  const dateStepApplies = blockedCopy === undefined;
+  const [screen, setScreen] = useState<"dates" | "summary">("dates");
+  const { dates, setDate } = useTransactionDatesForm(transaction);
+  // BACKLOG-3520 — the commission block of the same step.
+  const commission = useCommissionForm(transaction);
+  const [datesError, setDatesError] = useState<string | null>(null);
+  const [savingDates, setSavingDates] = useState(false);
+  // BACKLOG-3683: the summary counts what the dates on this step include.
+  const { state: scopeState, load: loadScope } = useSubmissionScope(transaction.id);
+  /**
+   * Where the date step applies, the summary's numbers are the in-window
+   * ones — never the all-linked totals passed in, which include items the
+   * submission will not send (founder decision B).
+   */
+  const scopeApplies = dateStepApplies && scopeState.status !== "idle";
+  const scopeReady = dateStepApplies && scopeState.status === "ready" ? scopeState : null;
+  const scopePending = scopeApplies && scopeReady === null;
+  const shownEmailCount = scopeReady ? scopeReady.scope.inWindow.emails : emailCount;
+  const shownEmailAttachmentCount = scopeReady
+    ? scopeReady.scope.inWindow.emailAttachments
+    : emailAttachmentCount;
+  const shownTextThreadCount = scopeReady ? scopeReady.scope.inWindow.textThreads : textThreadCount;
+  const shownAttachmentCount = scopeReady ? scopeReady.scope.inWindow.attachments : attachmentCount;
+  const shownTotalSizeBytes = scopeReady ? scopeReady.scope.inWindow.attachmentBytes : totalSizeBytes;
+  const pendingMark = scopeState.status === "failed" ? "—" : "…";
+  const showDateStep =
+    dateStepApplies &&
+    screen === "dates" &&
+    !isSubmitting &&
+    !isSuccess &&
+    // BACKLOG-3403 / 3398: the pre-flight question, the file check and the
+    // cancelled notice each replace the screen they were reached from.
+    !isCheckingFiles &&
+    preflightItems === null &&
+    !cancelled &&
+    (!error || datesError !== null);
+
+  /**
+   * Set once the dialog is dismissed or unmounted. A save still in flight must
+   * not go on to submit a dialog the user has closed: while the save runs,
+   * `isSubmitting` is false, so the X closes immediately (no confirm) and the
+   * awaited continuation would otherwise fire `onSubmit`.
+   */
+  const dismissedRef = useRef(false);
+  useEffect(() => {
+    dismissedRef.current = false;
+    return () => {
+      dismissedRef.current = true;
+    };
+  }, []);
+
   const handleCancelClick = () => {
+    // During the final step the confirm is not rendered (see its gate), so
+    // the X raises nothing; while a cancel is running it does nothing either.
+    if (isCancelling) {
+      return;
+    }
     if (isActivelySubmitting) {
       setShowCancelConfirm(true);
     } else {
+      dismissedRef.current = true;
       onCancel();
     }
+  };
+
+  const handleNext = () => {
+    const message = validateTransactionDates(dates);
+    setDatesError(message);
+    if (message !== null) return;
+    // An unparseable figure blocks Next — its message is already shown inline
+    // by the commission block. An EMPTY commission never does: the block shows
+    // an inline warning and Next proceeds.
+    if (!commission.parsed.ok) return;
+    void loadScope(dates);
+    setScreen("summary");
+  };
+
+  const handleBack = () => {
+    setDatesError(null);
+    setScreen("dates");
+  };
+
+  /**
+   * Submit: save the confirmed dates, WAIT for the save, then submit. The
+   * submission reads its audit period from the stored row, so submitting
+   * before the save lands would send the old dates.
+   *
+   * Re-entry is prevented by `savingDates` in the button's `disabled`
+   * expression, not by a check in here.
+   */
+  // BACKLOG-3477: the unticked-required-items warning no longer lives here.
+  // TransactionDetails shows it before this window opens (ChecklistWarningDialog).
+  const proceed = async () => {
+    if (!dateStepApplies) {
+      onSubmit();
+      return;
+    }
+    setDatesError(null);
+    setSavingDates(true);
+    // With nothing to say about commission the call is exactly the two-argument
+    // call it was before BACKLOG-3520.
+    const saved = commission.update
+      ? await saveConfirmedTransactionDates(transaction.id, dates, commission.update)
+      : await saveConfirmedTransactionDates(transaction.id, dates);
+    if (saved.success) onDatesSaved?.();
+    if (dismissedRef.current) return;
+    setSavingDates(false);
+    if (!saved.success) {
+      setDatesError(`Failed to save dates: ${saved.error}`);
+      setScreen("dates");
+      return;
+    }
+    onSubmit();
   };
 
   return (
@@ -307,7 +731,7 @@ export function SubmitForReviewModal({
     <ResponsiveModal
       onClose={handleCancelClick}
       zIndex="z-[70]"
-      panelClassName="max-w-md p-6"
+      panelClassName={SUBMIT_PANEL}
       testId="submit-review-modal"
     >
         {/*
@@ -330,7 +754,7 @@ export function SubmitForReviewModal({
           which is what lets the suite keep asserting `.text-green-600` at zero
           as a guard against that callout returning.
         */}
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex items-center gap-3 mb-4 flex-shrink-0 px-6 pt-6" data-testid="submit-review-header">
           <div
             className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${
               isSuccess ? "bg-green-100 text-green-700" : "bg-blue-100"
@@ -370,6 +794,13 @@ export function SubmitForReviewModal({
           <h3 className="text-lg font-bold text-gray-900">
             {isSuccess
               ? "Successfully Submitted"
+              : /* BACKLOG-3498 — the date screen's title (founder, 2026-09-21:
+                   "I don't think we need both Submit for Review and Verify
+                   Transaction Details"). The shared block's own heading is
+                   not drawn on this screen. The summary screen, blocked
+                   statuses and success keep their titles. */
+              showDateStep
+              ? VERIFY_TRANSACTION_DETAILS_TITLE
               : /* BACKLOG-2853 — the title carried the same lie as the button:
                    a deal already sitting with the broker was asked "Submit for
                    Review?", a question about an act the service will refuse.
@@ -412,8 +843,41 @@ export function SubmitForReviewModal({
           </button>
         </div>
 
-        {/* Content - not submitting, not yet submitted */}
-        {!isSubmitting && !error && !isSuccess && (
+        {/*
+          BACKLOG-3520 — the scrolling region. The panel owns its height and
+          clips (SUBMIT_PANEL), so a scrollbar can only appear here, inside the
+          rounded frame; the header above and the action row below stay fixed
+          and the buttons never scroll out of view.
+        */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-6" data-testid="submit-review-body">
+        {/*
+          BACKLOG-3498 — screen 1, the date step. The date fields ONLY; the
+          lead ("…The following data will be sent to your broker:") stays with
+          the Submission Summary on screen 2.
+        */}
+        {showDateStep && (
+          <div className="mb-4" data-testid="submit-review-dates">
+            {datesError && (
+              <div
+                className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg"
+                data-testid="submit-review-dates-error"
+              >
+                <p className="text-sm text-red-800">{datesError}</p>
+              </div>
+            )}
+            <TransactionDatesFields
+              transaction={transaction}
+              dates={dates}
+              onDateChange={setDate}
+              hideHeading
+              commission={commission}
+              commissionRoute="submit"
+            />
+          </div>
+        )}
+
+        {/* Content - not submitting, not yet submitted (screen 2 when the date step applies) */}
+        {!isSubmitting && !error && !isSuccess && !showDateStep && !isCheckingFiles && !showPreflight && !cancelled && (
           <>
             <p className="text-sm text-gray-600 mb-4" data-testid="submit-review-lead">
               {/* BACKLOG-2853 — "The following data will be sent to your
@@ -479,11 +943,11 @@ export function SubmitForReviewModal({
                     />
                   </svg>
                   <span className="text-gray-600">Emails:</span>
-                  <span className="font-medium text-gray-900">
-                    {emailCount}
-                    {emailAttachmentCount > 0 && (
+                  <span className="font-medium text-gray-900" data-testid="submit-review-email-count">
+                    {scopePending ? pendingMark : shownEmailCount}
+                    {!scopePending && shownEmailAttachmentCount > 0 && (
                       <span className="text-gray-500 font-normal">
-                        {" "}({emailAttachmentCount} {emailAttachmentCount === 1 ? "attachment" : "attachments"})
+                        {" "}({shownEmailAttachmentCount} {shownEmailAttachmentCount === 1 ? "attachment" : "attachments"})
                       </span>
                     )}
                   </span>
@@ -505,8 +969,8 @@ export function SubmitForReviewModal({
                     />
                   </svg>
                   <span className="text-gray-600">Text threads:</span>
-                  <span className="font-medium text-gray-900">
-                    {textThreadCount}
+                  <span className="font-medium text-gray-900" data-testid="submit-review-text-thread-count">
+                    {scopePending ? pendingMark : shownTextThreadCount}
                   </span>
                 </div>
 
@@ -526,17 +990,32 @@ export function SubmitForReviewModal({
                     />
                   </svg>
                   <span className="text-gray-600">Total attachments:</span>
-                  <span className="font-medium text-gray-900">
-                    {attachmentCount} {attachmentCount === 1 ? "file" : "files"}
-                    {totalSizeBytes > 0 && (
-                      <span className="text-gray-500 font-normal">
-                        {" "}({formatBytes(totalSizeBytes)})
-                      </span>
+                  <span className="font-medium text-gray-900" data-testid="submit-review-attachment-count">
+                    {scopePending ? pendingMark : (
+                      <>
+                        {shownAttachmentCount} {shownAttachmentCount === 1 ? "file" : "files"}
+                        {shownTotalSizeBytes > 0 && (
+                          <span className="text-gray-500 font-normal">
+                            {" "}({formatBytes(shownTotalSizeBytes)})
+                          </span>
+                        )}
+                      </>
                     )}
                   </span>
                 </div>
               </div>
             </div>
+
+            {/* BACKLOG-3683: the in-window counts above couldn't be loaded. */}
+            {scopeState.status === "failed" && dateStepApplies && (
+              <div
+                className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+                role="status"
+                data-testid="submit-review-scope-failed"
+              >
+                Couldn&apos;t count what falls inside these dates. Only emails and texts dated from the start date to the end date will be sent.
+              </div>
+            )}
 
             {/*
               BACKLOG-2849 — the pre-submit export SECTION is gone: the blue
@@ -577,6 +1056,78 @@ export function SubmitForReviewModal({
           dismissibility, so this takes the conservative reading (the X and the
           backdrop both close it). See the BACKLOG-2849 report.
         */}
+        {/*
+          BACKLOG-3600 — the submission succeeded but the broker did not get
+          its checklists (a plan without checklists, or a refused copy). A
+          network failure never lands here: it fails the submission instead.
+          BACKLOG-3599 — or a resubmit could not first download the
+          checklists the broker added at review.
+        */}
+        {isSuccess && checklistsNotSent && (
+          <p
+            data-testid="submit-review-checklists-not-sent"
+            role="status"
+            className="text-sm text-amber-700 mb-4"
+          >
+            {CHECKLISTS_NOT_SENT_COPY[checklistsNotSent]}
+          </p>
+        )}
+        {/*
+          BACKLOG-3681 — the submission succeeded without some attachments
+          (the agent chose Continue anyway). Grouped by conversation (BACKLOG-3731); one line per file:
+          when, which file, why. Same amber as above.
+        */}
+        {isSuccess && notIncluded.length > 0 && (
+          <div
+            data-testid="submit-review-not-included"
+            role="status"
+            className="text-sm text-amber-700 mb-4"
+          >
+            <p className="font-medium">{NOT_INCLUDED_HEADING_AFTER}</p>
+            <NotIncludedList items={notIncluded} testId="submit-review-not-included-list" />
+          </div>
+        )}
+        {/* BACKLOG-3403 — downloading and checking the files before sending. */}
+        {isCheckingFiles && !isSubmitting && (
+          <div className="flex items-center gap-3 mb-4" data-testid="submit-review-checking">
+            <svg className="w-5 h-5 text-blue-600 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            <span className="text-sm font-medium text-gray-900">Checking attachments...</span>
+          </div>
+        )}
+        {/*
+          BACKLOG-3403 — founder 2026-10-04: warn ahead of time and let the
+          agent decide. Nothing has been sent while this is on screen.
+        */}
+        {showPreflight && preflightItems && (
+          <div
+            data-testid="submit-review-preflight"
+            className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4 text-sm text-amber-800"
+          >
+            {preflightChanged && (
+              <p className="mb-2" data-testid="submit-review-preflight-changed">
+                Some attachments changed since you reviewed them, so nothing was sent yet.
+              </p>
+            )}
+            <p className="font-medium">{NOT_INCLUDED_HEADING_BEFORE}</p>
+            <NotIncludedList items={preflightItems} testId="submit-review-preflight-list" />
+            <p className="mt-2">
+              Continue anyway to send everything else. Your broker will see which files weren't included.
+            </p>
+          </div>
+        )}
+        {/* BACKLOG-3398 — the cancel really cancelled. */}
+        {cancelled && !isSubmitting && (
+          <p
+            data-testid="submit-review-cancelled"
+            role="status"
+            className="text-sm text-gray-700 mb-4"
+          >
+            {SUBMISSION_CANCELLED_COPY}
+          </p>
+        )}
         {isSuccess && (
           <p
             data-testid="submit-review-success-ask"
@@ -654,8 +1205,8 @@ export function SubmitForReviewModal({
           </div>
         )}
 
-        {/* Error display */}
-        {error && (
+        {/* Error display. Not over the date step: a failed date save shows its own message there (BACKLOG-3498). */}
+        {error && !showDateStep && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
             <div className="flex items-start gap-2">
               <svg
@@ -682,7 +1233,7 @@ export function SubmitForReviewModal({
         )}
 
         {/* Cancel confirmation */}
-        {showCancelConfirm && (
+        {showCancelConfirm && isActivelySubmitting && !isFinalizing && (
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
             <div className="flex items-start gap-2">
               <svg
@@ -703,20 +1254,31 @@ export function SubmitForReviewModal({
                   Submission in progress
                 </p>
                 <p className="text-sm text-amber-700 mt-1">
-                  Cancelling now will result in an incomplete submission. Are you sure?
+                  {/* BACKLOG-3398 — what Cancel now really does. */}
+                  {isCancelling
+                    ? "Cancelling..."
+                    : "Cancel this submission? Nothing will be sent to your broker."}
                 </p>
                 <div className="flex gap-2 mt-3">
                   <button
                     onClick={() => setShowCancelConfirm(false)}
-                    className="px-3 py-1.5 bg-amber-100 text-amber-800 hover:bg-amber-200 rounded-lg text-sm font-medium transition-all"
+                    disabled={isCancelling}
+                    className="px-3 py-1.5 bg-amber-100 text-amber-800 hover:bg-amber-200 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
                   >
                     Keep Uploading
                   </button>
                   <button
-                    onClick={onCancel}
-                    className="px-3 py-1.5 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg text-sm font-medium transition-all"
+                    onClick={() => {
+                      // BACKLOG-3398: stop the submission in the main process;
+                      // the window stays open until it reports back.
+                      if (onCancelSubmit) onCancelSubmit();
+                      else onCancel();
+                    }}
+                    disabled={isCancelling}
+                    data-testid="submit-review-cancel-confirm"
+                    className="px-3 py-1.5 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
                   >
-                    Cancel Anyway
+                    Cancel Submission
                   </button>
                 </div>
               </div>
@@ -724,12 +1286,25 @@ export function SubmitForReviewModal({
           </div>
         )}
 
+        </div>
+
         {/*
           Actions. BACKLOG-2849 removed the Cancel/Close row button entirely —
           dismissal is the X in the header (and the backdrop). What is left is
           the founder's pair: Export and Submit.
         */}
-        <div className="flex items-center gap-3 justify-end">
+        <div className="flex items-center gap-3 justify-end flex-shrink-0 px-6 pb-6 pt-4" data-testid="submit-review-footer">
+          {/* BACKLOG-3498 — Back to the date step, on screen 2 only. */}
+          {dateStepApplies && !isSubmitting && !error && !isSuccess && !showDateStep && !isCheckingFiles && !showPreflight && !cancelled && (
+            <button
+              onClick={handleBack}
+              disabled={savingDates}
+              data-testid="submit-review-back"
+              className="mr-auto px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Back
+            </button>
+          )}
           {/*
             EXPORT PDF — one button, one label, one handler, in both of the
             places the founder asked for it: beside Submit before the decision,
@@ -764,16 +1339,49 @@ export function SubmitForReviewModal({
               Export PDF
             </button>
           )}
-          {!progress?.stage || progress.stage === "failed" ? (
+          {showDateStep ? (
+            /* BACKLOG-3498 — screen 1's primary. Disabled until Start and End
+               are filled, as Export's Step 1 primary is. */
             <button
-              onClick={onSubmit}
+              onClick={handleNext}
+              disabled={!dates.startDate || !dates.endDate}
+              data-testid="submit-review-next"
+              className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          ) : showPreflight ? (
+            <>
+              <button
+                onClick={onPreflightBack}
+                data-testid="submit-review-preflight-back"
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-all"
+              >
+                Go back
+              </button>
+              <button
+                onClick={onPreflightContinue}
+                data-testid="submit-review-preflight-continue"
+                className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all"
+              >
+                Continue anyway
+              </button>
+            </>
+          ) : cancelled || isCheckingFiles ? null : !progress?.stage || progress.stage === "failed" ? (
+            <button
+              onClick={() => {
+                void proceed();
+              }}
               /* BACKLOG-2853 — disabled in the four states the service
                  refuses. The click could be left live and allowed to surface
                  the service's error, but that spends a multi-minute attachment
                  upload before the refusal in the shape this code had, and it
                  asks the user to discover by failure what the screen can just
-                 say. */
-              disabled={isSubmitting || submissionIsWithBroker}
+                 say.
+                 BACKLOG-3498 — and while the date save runs, so a second press
+                 cannot save and submit twice (useSubmitForReview.submit has no
+                 re-entry guard). */
+              disabled={isSubmitting || submissionIsWithBroker || savingDates}
               data-testid="submit-review-submit"
               className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
@@ -842,7 +1450,7 @@ export function SubmitForReviewModal({
             a visual-weight preference, raised in the report for the founder,
             not decided here.
           */}
-          {isSuccess && (
+          {(isSuccess || (cancelled && !isSubmitting)) && (
             <button
               onClick={handleCancelClick}
               data-testid="submit-review-done"

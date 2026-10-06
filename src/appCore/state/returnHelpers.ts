@@ -106,7 +106,7 @@ interface ModalFlowReturn {
   closeMoveAppPrompt: () => void;
   openIPhoneSync: () => void;
   closeIPhoneSync: () => void;
-  openAndroidSync: () => void;
+  openAndroidSync: (start?: "default" | "link") => void;
   closeAndroidSync: () => void;
 }
 

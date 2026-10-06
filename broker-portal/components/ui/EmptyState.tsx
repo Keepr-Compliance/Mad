@@ -78,7 +78,14 @@ export function AttachmentIcon({ className }: { className?: string }) {
 /**
  * Empty Submissions State
  */
-export function EmptySubmissions({ filtered = false }: { filtered?: boolean }) {
+export function EmptySubmissions({
+  filtered = false,
+  emptyDescription = "When agents submit transactions for review, they'll appear here. You'll be notified of new submissions in real-time.",
+}: {
+  filtered?: boolean;
+  /** BACKLOG-3080: the unfiltered empty-state text; the default is the broker queue's. */
+  emptyDescription?: string;
+}) {
   if (filtered) {
     return (
       <EmptyState
@@ -93,7 +100,7 @@ export function EmptySubmissions({ filtered = false }: { filtered?: boolean }) {
     <EmptyState
       icon={<InboxIcon />}
       title="No submissions yet"
-      description="When agents submit transactions for review, they'll appear here. You'll be notified of new submissions in real-time."
+      description={emptyDescription}
     />
   );
 }
