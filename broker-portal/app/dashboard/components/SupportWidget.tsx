@@ -182,14 +182,12 @@ export function SupportWidget() {
       // Fire-and-forget: send confirmation email to requester.
       // NOTE: Server-side trigger also sends this via send-ticket-confirmation
       // edge function (BACKLOG-1573). This client call is kept as a fallback.
+      // The route reads recipient, subject and link from the ticket row (BACKLOG-3712).
       fetch('/api/email/ticket-confirmation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ticketNumber: `TKT-${String(result.ticket_number).padStart(4, '0')}`,
-          ticketSubject: subject,
-          requesterEmail: email,
-          ticketLink: `${window.location.origin}/support/${result.id}`,
+          ticketId: result.id,
         }),
       }).catch(() => { /* best-effort */ });
 
