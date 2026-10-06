@@ -83,6 +83,39 @@ describe("scrubRcsEventPII: only RCS events", () => {
     const once = scrubUpdaterEventPII(updater);
     expect(scrubRcsEventPII(once)).toBe(once);
   });
+
+  // SR residual (S7): an untagged exception (unhandled rejection / uncaught
+  // error via main.ts's process handlers) from RCS code. Mutation: the frame
+  // check removed → red.
+  const withFrames = (files: string[], tags?: Record<string, string>) => ({
+    ...(tags ? { tags } : {}),
+    exception: {
+      values: [{
+        value: "insert failed for +1 555 555 0199",
+        stacktrace: { frames: files.map((filename) => ({ filename })) },
+      }],
+    },
+  });
+
+  it("an untagged exception with a stack frame in an RCS file is scrubbed (source or compiled path)", () => {
+    for (const file of [
+      "app:///dist-electron/services/rcsExtensionBridge.js",
+      "C:\\Program Files\\Keepr\\resources\\app.asar\\dist-electron\\handlers\\rcsImportHandlers.js",
+      "/app/electron/services/rcsCacheStaging.ts",
+      "app:///dist-electron/services/db/rcsCacheRunsDbService.js",
+    ]) {
+      const e = scrubRcsEventPII(withFrames(["node:internal/process/task_queues", file]));
+      expect([file, /555/.test(JSON.stringify(e.exception))]).toEqual([file, false]);
+      expect(JSON.stringify(e.exception)).toContain("<phone>");
+    }
+  });
+
+  it("frames outside RCS files, or an auto-updater event, are left to their own scrub", () => {
+    const plain = withFrames(["app:///dist-electron/main.js", "app:///dist-electron/services/transactionService.js", "app:///dist-electron/services/rcs.js"]);
+    expect(scrubRcsEventPII(plain)).toBe(plain);
+    const updater = withFrames(["app:///dist-electron/services/rcsExtensionBridge.js"], { component: "auto-updater" });
+    expect(scrubRcsEventPII(updater)).toBe(updater);
+  });
 });
 
 describe("wrapHandler: RCS options", () => {
