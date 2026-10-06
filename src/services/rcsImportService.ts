@@ -226,12 +226,12 @@ export const rcsImportService = {
    * unsubscribe.
    */
   /** C1: Keepr's link screen state (the popup's pending code), and whether this user is linked. */
-  async linkState(): Promise<ApiResult<{ link: RcsLinkState; linked: boolean }>> {
+  async linkState(): Promise<ApiResult<{ link: RcsLinkState; linked: boolean; clipboardFill: boolean }>> {
     const bridge = api();
     if (!bridge || !bridge.linkState) return { success: false, error: NOT_AVAILABLE };
     try {
       const r = await bridge.linkState();
-      return { success: true, data: { link: r.link, linked: r.linked } };
+      return { success: true, data: { link: r.link, linked: r.linked, clipboardFill: r.clipboardFill === true } };
     } catch (err) {
       return { success: false, error: getErrorMessage(err) };
     }

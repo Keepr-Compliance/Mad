@@ -267,6 +267,13 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
   // Live (founder): the link screen's "Open Google Messages" opens Messages
   // with #keepr-link (the extension moves to the open tab and opens its link
   // window). Mutation: the plain URL → red.
+  // Founder: link-state says whether the box fills itself here (main's one
+  // platform rule). Mutation: the field missing → red.
+  it("link-state: clipboardFill follows the platform rule", async () => {
+    const r = (await handlers.get("rcs-import:link-state")!({})) as { clipboardFill?: boolean };
+    expect(r.clipboardFill).toBe(process.platform === "win32");
+  });
+
   it("Open Google Messages: the Messages URL with #keepr-link", async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { shell } = require("electron") as { shell: { openExternal: jest.Mock } };

@@ -13,13 +13,14 @@ type Link =
   | { state: "locked"; until: number; intrusion: boolean };
 let mockLink: Link = { state: "none", intrusion: false };
 let mockLinked = false;
+let mockClipboardFill = false;
 const mockEnter = jest.fn(async (_code: string) => ({ success: true }) as { success: boolean; error?: string });
 const mockOpenMessages = jest.fn(async () => undefined);
 let mockOpenLinkScreen: ((payload: { code?: string }) => void) | null = null;
 let mockHeld: string | null = null;
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
-    linkState: async () => ({ success: true, data: { link: mockLink, linked: mockLinked } }),
+    linkState: async () => ({ success: true, data: { link: mockLink, linked: mockLinked, clipboardFill: mockClipboardFill } }),
     linkEnterCode: (code: string) => mockEnter(code),
     linkDismissWarning: async () => undefined,
     openGoogleMessages: () => mockOpenMessages(),
@@ -63,6 +64,7 @@ beforeEach(() => {
   jest.useFakeTimers();
   mockLink = { state: "none", intrusion: false };
   mockLinked = false;
+  mockClipboardFill = false;
   mockEnter.mockClear();
   mockOpenMessages.mockClear();
 });
@@ -300,6 +302,23 @@ describe("LinkBrowserPanel", () => {
     });
     await flush();
     expect(mockEnter).not.toHaveBeenCalled();
+  });
+
+  // Founder: Windows (the box fills itself from the Copy button) says so;
+  // Mac / Linux keep "Type the code from Chrome". Mutations: the line not
+  // following clipboardFill → red.
+  it("step 2: Windows → \"In Chrome, click Copy code and open Keepr\"; elsewhere → \"Type the code from Chrome\"", async () => {
+    mockLink = waiting();
+    mockClipboardFill = true;
+    const { unmount } = render(<LinkBrowserPanel />);
+    await flush();
+    expect(screen.getByTestId("gm-link-step-2")).toHaveTextContent("In Chrome, click Copy code and open Keepr");
+    expect(screen.getByTestId("gm-link-code")).toBeInTheDocument();
+    unmount();
+    mockClipboardFill = false;
+    render(<LinkBrowserPanel />);
+    await flush();
+    expect(screen.getByTestId("gm-link-step-2")).toHaveTextContent("Type the code from Chrome");
   });
 
   it("a refused code says why, and the field is cleared", async () => {

@@ -17,7 +17,7 @@ jest.mock("electron", () => ({ app: { focus: mockAppFocus }, BrowserWindow: jest
 jest.mock("../logService", () => ({ __esModule: true, default: { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() } }));
 
 import type { BrowserWindow } from "electron";
-import { clearLinkCodeFromClipboard, focusForBrowser, linkCodeFromClipboard } from "../rcsLinkFocus";
+import { clearLinkCodeFromClipboard, focusForBrowser, linkCodeAutoFillOn, linkCodeFromClipboard } from "../rcsLinkFocus";
 import { bringAppToFrontForLink } from "../../utils/bringAppToFront";
 
 function deps(state: () => { state: string }) {
@@ -226,5 +226,14 @@ describe("clearLinkCodeFromClipboard (after the code is accepted)", () => {
     expect(handler.indexOf("clearLinkCodeFromClipboard(")).toBeGreaterThan(ok);
     expect(handler.indexOf("clearLinkCodeFromClipboard(")).toBeLessThan(handler.indexOf("return { success: true };"));
     expect(handler.match(/clearLinkCodeFromClipboard\(/g)).toHaveLength(1);
+  });
+});
+
+// Founder: ONE platform rule for the fill, the clear and the link screen's
+// copy. Mutation: a second platform let in → red.
+describe("linkCodeAutoFillOn", () => {
+  it("Windows only", () => {
+    expect(linkCodeAutoFillOn("win32")).toBe(true);
+    for (const p of ["darwin", "linux", "freebsd"]) expect(linkCodeAutoFillOn(p)).toBe(false);
   });
 });

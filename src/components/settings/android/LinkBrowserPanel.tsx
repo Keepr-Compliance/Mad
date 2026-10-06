@@ -27,6 +27,8 @@ export const LINK_PANEL_ID = "gm-link-panel";
 export const LINK_COPY = {
   title: "Link your browser",
   enter: "Type the code from Chrome",
+  /** Windows: the box fills itself from the extension's Copy button. */
+  enterCopy: "In Chrome, click Copy code and open Keepr",
   usedUp: "Code used up. Get a new code in Chrome.",
   expired: "Code expired. Get a new code in Chrome.",
   locked: "Another app tried to link — check for unknown software",
@@ -71,6 +73,8 @@ type Check =
 export function LinkBrowserPanel({ onLinked, onJustLinked, bare = false }: LinkBrowserPanelProps) {
   const [link, setLink] = useState<RcsLinkState | null>(null);
   const [linked, setLinked] = useState(false);
+  /** The box fills itself on this platform (main's rule, via linkState). */
+  const [clipboardFill, setClipboardFill] = useState(false);
   const [code, setCode] = useState("");
   const [check, setCheck] = useState<Check>({ kind: "idle" });
   const [focused, setFocused] = useState(false);
@@ -83,6 +87,7 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, bare = false }: LinkB
     if (!r.success || !r.data) return;
     const l = r.data.link;
     setLink(l);
+    setClipboardFill(r.data.clipboardFill === true);
     const c = checkRef.current;
     if (c.kind === "checking") {
       const expired = c.expiresAt !== null && Date.now() > c.expiresAt;
@@ -243,7 +248,7 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, bare = false }: LinkB
             <div className={`${stepNum} mt-7`}>2</div>
             <div className="flex-grow flex flex-col gap-1.5">
               <label className="flex flex-col gap-1.5 text-[14px] text-[#374151]">
-                {LINK_COPY.enter}
+                {clipboardFill ? LINK_COPY.enterCopy : LINK_COPY.enter}
                 <span className="relative block">
                   <input
                     ref={input}

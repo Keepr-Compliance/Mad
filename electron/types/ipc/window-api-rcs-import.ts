@@ -149,7 +149,8 @@ export interface WindowApiRcsImport {
   /** BACKLOG-3658: a cache Sync was saved and auto-linked. Returns an unsubscribe. */
   onDataChanged?: (callback: (event: { reason: string }) => void) => () => void;
   /** C1: Keepr's "Enter the code from your browser" screen. */
-  linkState?: () => Promise<{ success: true; link: RcsLinkState; linked: boolean }>;
+  /** clipboardFill: the link box fills itself from "Copy code and open Keepr" (Windows). */
+  linkState?: () => Promise<{ success: true; link: RcsLinkState; linked: boolean; clipboardFill?: boolean }>;
   linkEnterCode?: (args: { code: string }) => Promise<{ success: true } | { success: false; error: string }>;
   linkDismissWarning?: () => Promise<{ success: true }>;
   /** SR (B1): Keepr's "Forget link". */

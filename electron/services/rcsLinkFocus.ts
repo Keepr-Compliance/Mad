@@ -22,12 +22,17 @@
  * The value is never logged or stored; the caller passes it to the renderer
  * once. Returns the 6 digits or null.
  */
+/** The ONE platform rule for the link code from the clipboard (fill and clear; the link screen's copy). */
+export function linkCodeAutoFillOn(platform: string): boolean {
+  return platform === "win32";
+}
+
 export function linkCodeFromClipboard(deps: {
   platform: string;
   linkState: () => { state: string };
   readClipboard: () => string;
 }): string | null {
-  if (deps.platform !== "win32") return null;
+  if (!linkCodeAutoFillOn(deps.platform)) return null;
   let waiting = false;
   try {
     waiting = deps.linkState().state === "waiting";
@@ -62,7 +67,7 @@ export function clearLinkCodeFromClipboard(deps: {
   readClipboard: () => string;
   clearClipboard: () => void;
 }): boolean {
-  if (deps.platform !== "win32") return false;
+  if (!linkCodeAutoFillOn(deps.platform)) return false;
   const accepted = /^\d{6}$/.test(deps.code) ? deps.code : clipboardLinkCode(deps.code);
   if (!accepted) return false;
   try {

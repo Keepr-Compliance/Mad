@@ -109,7 +109,7 @@ import { NOT_PAIRED_MESSAGE, RcsPairingAuth, type LinkState } from "../services/
 import { loadPairProtocol } from "../services/rcsPairProtocol";
 import { rcsPairingStore } from "../services/db/rcsPairingDbService";
 import { RcsSyncOutcomeTracker } from "../services/rcsSyncOutcome";
-import { focusForBrowser, RCS_OPEN_LINK_SCREEN_CHANNEL, linkCodeFromClipboard, clearLinkCodeFromClipboard } from "../services/rcsLinkFocus";
+import { focusForBrowser, RCS_OPEN_LINK_SCREEN_CHANNEL, linkCodeFromClipboard, clearLinkCodeFromClipboard, linkCodeAutoFillOn } from "../services/rcsLinkFocus";
 import {
   recordSyncOutcomeSettled,
   recordSyncRunMetrics,
@@ -1358,9 +1358,16 @@ export function registerRcsImportHandlers(): void {
   // C1 (UX redesign): Keepr's "Enter the code from your browser" screen.
   ipcMain.handle(
     "rcs-import:link-state",
-    wrapHandler(async (): Promise<{ success: true; link: LinkState; linked: boolean }> => {
+    wrapHandler(async (): Promise<{ success: true; link: LinkState; linked: boolean; clipboardFill: boolean }> => {
       const userId = await currentUserId();
-      return { success: true, link: pairingAuth.linkState(), linked: userId ? pairingAuth.isLinkProven(userId) : false };
+      return {
+        success: true,
+        link: pairingAuth.linkState(),
+        linked: userId ? pairingAuth.isLinkProven(userId) : false,
+        // Founder: the box fills itself from "Copy code and open Keepr" here
+        // (the same rule as the fill) — the link screen says so.
+        clipboardFill: linkCodeAutoFillOn(process.platform),
+      };
     }, { module: LOG_TAG }),
   );
 
