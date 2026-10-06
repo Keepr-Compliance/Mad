@@ -74,6 +74,8 @@ export const fixtureTemplates = (): ChecklistTemplate[] => [
     description: null,
     sortOrder: 0,
     updatedAt: "2026-03-01T00:00:00+00:00",
+    isMine: false,
+    includeInSubmission: true,
     items: [
       { id: "tpi-1", title: "Probe item 1", description: "What counts for probe item 1.", isRequired: true, expectedDocumentType: null, sortOrder: 0 },
       { id: "tpi-2", title: "Probe item 2", description: null, isRequired: true, expectedDocumentType: null, sortOrder: 1 },
@@ -87,6 +89,8 @@ export const fixtureTemplates = (): ChecklistTemplate[] => [
     description: null,
     sortOrder: 1,
     updatedAt: "2026-03-01T00:00:00+00:00",
+    isMine: false,
+    includeInSubmission: true,
     items: [
       { id: "tpo-1", title: "Other item 1", description: null, isRequired: true, expectedDocumentType: null, sortOrder: 0 },
       { id: "tpo-2", title: "Other item 2", description: null, isRequired: true, expectedDocumentType: null, sortOrder: 1 },
@@ -99,6 +103,8 @@ export const fixtureTemplates = (): ChecklistTemplate[] => [
     description: null,
     sortOrder: 2,
     updatedAt: "2026-03-01T00:00:00+00:00",
+    isMine: false,
+    includeInSubmission: true,
     items: [
       { id: "tpd-1", title: "Done item 1", description: null, isRequired: true, expectedDocumentType: null, sortOrder: 0 },
       { id: "tpd-2", title: "Done item 2", description: null, isRequired: false, expectedDocumentType: null, sortOrder: 1 },
@@ -110,6 +116,8 @@ export const fixtureTemplates = (): ChecklistTemplate[] => [
     description: null,
     sortOrder: 3,
     updatedAt: "2026-03-01T00:00:00+00:00",
+    isMine: false,
+    includeInSubmission: true,
     items: [
       { id: "tpf-1", title: "Fresh item 1", description: null, isRequired: true, expectedDocumentType: null, sortOrder: 0 },
     ],

@@ -1,5 +1,5 @@
 /**
- * Checklist template editor access gate — BACKLOG-3474, BACKLOG-3535.
+ * Checklists page access gate — BACKLOG-3474, BACKLOG-3535, BACKLOG-3618.
  *
  * One place decides whether the Checklists surfaces exist for the caller: the
  * sidebar entry (via app/dashboard/layout.tsx), the /dashboard/checklists route
@@ -14,13 +14,18 @@
  * - Which organization: a brokerage row wins whatever its role
  *   (pickBrokerageMembership, lib/auth/membership.ts). Only a user with no
  *   brokerage row is routed on their personal organization. There is no
- *   fall-through: a brokerage agent the database refuses is refused, even if
- *   they also own a personal organization.
- * - Whether: one call to can_edit_checklist_templates(p_org_id), the same
- *   function RLS and save_checklist_template use. The role list, the
- *   personal-owner rule and the feature check live there only; the portal
- *   carries no copy of them. FAIL-CLOSED: an RPC error or anything other than a
- *   literal `true` refuses.
+ *   fall-through to the personal organization.
+ * - Whether, in two questions to the database, in this order:
+ *   1. can_edit_checklist_templates(org): may edit the organization's own
+ *      templates (broker / admin / it_admin, or a personal organization's
+ *      owner; feature on). Yes → `canEditOrg`.
+ *   2. Only when 1 says no and the organization is a brokerage:
+ *      can_create_own_checklist_templates(org) (BACKLOG-3618): any member,
+ *      feature on. Yes → admitted with `canEditOrg: false`: the caller keeps
+ *      their own checklists and reads the brokerage's.
+ *   The role list, the personal-owner rule and the feature check live in the
+ *   database only. FAIL-CLOSED: an RPC error or anything other than a literal
+ *   `true` refuses.
  */
 
 import { createClient } from '@/lib/supabase/server';
@@ -37,11 +42,15 @@ export const CHECKLIST_FEATURE_KEY = 'transaction_checklists';
 
 type ServerClient = Awaited<ReturnType<typeof createClient>>;
 
-export interface ChecklistEditorAccess {
+export interface ChecklistAccess {
   supabase: ServerClient;
   userId: string;
   organizationId: string;
   role: string;
+  /** May edit the organization's templates (can_edit_checklist_templates). */
+  canEditOrg: boolean;
+  /** The organization is the caller's personal organization (solo user: one list). */
+  personalOrg: boolean;
 }
 
 /**
@@ -59,10 +68,10 @@ export function pickChecklistMembership(
 }
 
 /**
- * Authorize the caller for checklist template work. Throws on refusal so a
- * server action cannot continue past it.
+ * Authorize the caller for the Checklists page and its actions. Throws on
+ * refusal so a server action cannot continue past it.
  */
-export async function requireChecklistEditorAccess(): Promise<ChecklistEditorAccess> {
+export async function requireChecklistAccess(): Promise<ChecklistAccess> {
   if (await getImpersonationSession()) throw new Error('Not authorized');
 
   const supabase = await createClient();
@@ -85,27 +94,38 @@ export async function requireChecklistEditorAccess(): Promise<ChecklistEditorAcc
   // Boolean only: the route and every action refuse when the database
   // refuses. The sidebar's grayed entry (lib/checklist-nav.ts, BACKLOG-3477)
   // is presentation only and never makes the route reachable.
-  const { data: allowed, error } = await supabase.rpc('can_edit_checklist_templates', {
+  const { data: canEdit, error } = await supabase.rpc('can_edit_checklist_templates', {
     p_org_id: membership.organization_id,
   });
-  if (error || allowed !== true) throw new Error('Not authorized');
-
-  return {
+  if (error) throw new Error('Not authorized');
+  const personalOrg = isPersonalMembership(membership);
+  const base = {
     supabase,
     userId: user.id,
     organizationId: membership.organization_id,
     role: membership.role,
+    personalOrg,
   };
+  if (canEdit === true) return { ...base, canEditOrg: true };
+
+  // BACKLOG-3618: asked second, and only for a brokerage member, so an editor
+  // never depends on it.
+  if (personalOrg) throw new Error('Not authorized');
+  const { data: canOwn, error: ownError } = await supabase.rpc('can_create_own_checklist_templates', {
+    p_org_id: membership.organization_id,
+  });
+  if (ownError || canOwn !== true) throw new Error('Not authorized');
+  return { ...base, canEditOrg: false };
 }
 
 /**
  * Non-throwing form for rendering decisions (sidebar entry, route gate).
- * Shares requireChecklistEditorAccess so the two cannot drift. Any throw is a
+ * Shares requireChecklistAccess so the two cannot drift. Any throw is a
  * refusal.
  */
-export async function isChecklistEditorEnabled(): Promise<boolean> {
+export async function isChecklistPageEnabled(): Promise<boolean> {
   try {
-    await requireChecklistEditorAccess();
+    await requireChecklistAccess();
     return true;
   } catch {
     return false;

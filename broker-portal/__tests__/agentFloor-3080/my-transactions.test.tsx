@@ -101,7 +101,7 @@ jest.mock('@/lib/impersonation-guards', () => {
   return { ...actual, getDataClient: jest.fn(actual.getDataClient) };
 });
 jest.mock('@/lib/checklist-access', () => ({
-  isChecklistEditorEnabled: jest.fn(async () => false),
+  isChecklistPageEnabled: jest.fn(async () => false),
 }));
 
 /** Browser Supabase client: records every Storage call and every table read. */

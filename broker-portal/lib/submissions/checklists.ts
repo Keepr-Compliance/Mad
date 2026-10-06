@@ -252,17 +252,25 @@ export async function loadSubmissionChecklists(
   };
 }
 
-/** The organization's templates a reviewer may add (archived ones excluded). */
+/**
+ * The organization's templates a reviewer may add (archived ones excluded).
+ * BACKLOG-3618: brokerage templates only (owner_user_id NULL), never anyone's
+ * own; ordered by sort_order, then name, then id, so ties sort the same way
+ * every time.
+ */
 export async function loadAddableTemplates(
   client: SupabaseClient,
   organizationId: string
 ): Promise<TemplateOption[]> {
   const { data, error } = await client
     .from('checklist_templates')
-    .select('id, name, sort_order')
+    .select('id, name, sort_order, owner_user_id')
     .eq('organization_id', organizationId)
     .is('archived_at', null)
-    .order('sort_order', { ascending: true });
+    .is('owner_user_id', null)
+    .order('sort_order', { ascending: true })
+    .order('name', { ascending: true })
+    .order('id', { ascending: true });
   if (error || !Array.isArray(data)) {
     console.error('[submissions] checklist templates unavailable:', error?.message);
     return [];
