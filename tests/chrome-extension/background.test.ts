@@ -139,7 +139,7 @@ describe("service worker: keepr-link-found", () => {
   // SR: one helper for both routes. Mutation: a route with its own tab scan → red.
   it("routeJob and routeLink share signedInMessagesTabs / moveToTab", () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const src = (require("fs") as typeof import("fs")).readFileSync(require("path").join(__dirname, "..", "..", "chrome-extension", "background.js"), "utf8");
+    const src = (require("fs") as typeof import("fs")).readFileSync(require("path").join(__dirname, "..", "..", "chrome-extension", "background.js"), "utf8").replace(/\r\n/g, "\n");
     for (const fn of ["routeJob", "routeLink"]) {
       const body = src.slice(src.indexOf("async function " + fn + "("), src.indexOf("\n}\n", src.indexOf("async function " + fn + "(")));
       expect(body).toContain("signedInMessagesTabs(senderTab.id)");
