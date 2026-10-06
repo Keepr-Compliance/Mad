@@ -911,6 +911,34 @@ describe("runJob: a cache Sync", () => {
     expect(progressIdx).toBeLessThan(match2);
   });
 
+  // Live (founder): a delta Sync printed "floor 1 days" while deal chats read
+  // to their deal — the per-chat floor and the depth line now say the floor
+  // each chat ACTUALLY used. Mutations: the per-chat floor from the run's
+  // since; every limit counted as the months limit → red.
+  it("delta Sync: a deal chat's own floor in its line; the depth line by the floor each chat used", async () => {
+    const DAYms = 864e5;
+    const t = cacheEnv({
+      rows: ROWS,
+      numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"] },
+      claimExtra: { since: new Date(NOW - 1 * DAYms).toISOString(), floor: new Date(NOW - 30 * DAYms).toISOString() },
+      matchFloor: { [id(0)]: NOW - 62 * DAYms },
+    });
+    (t.env.scan as Record<string, unknown>).loadHistory = async () => ({ stopReason: "date_floor", count: 1, scrolls: 1, nudges: 0 });
+    await job.runJob(JOB, t.env);
+    const [, , extras] = t.shown[t.shown.length - 1] as [string, boolean, { details: string; copy: string }];
+    expect(extras.copy).toContain("(floor 62 days)");
+    expect(extras.copy).toContain("(floor 1 days)");
+    expect(extras.details).toContain("History depth: 1 chats reached the last Sync · 1 read back to their deal");
+  });
+
+  it("floorKind: deal < months limit; last Sync > months limit; else the months limit", () => {
+    const M = 1000;
+    expect(job.floorKind(500, 2000, M)).toBe("deal");
+    expect(job.floorKind(2000, 2000, M)).toBe("lastSync");
+    expect(job.floorKind(M, M, M)).toBe("months");
+    expect(job.floorKind(null, null, null)).toBe("months");
+  });
+
   // 3671 history depth: per chat "oldest read: N days ago (floor N days)",
   // and a "History depth" summary — counts and day numbers only. Mutation:
   // the depth not counted / the line missing → red.

@@ -478,16 +478,19 @@ export function cacheCommitInsideTransaction(
  * 3671 P3: what each saved chat records, INSIDE its own transaction: its
  * coverage (only when it reached its own floor) and when it was read.
  */
-export function cacheChatCommitted(userId: string, chat: { chatHash: string; meta: StagedChatMeta | null }): void {
+export function cacheChatCommitted(userId: string, chat: { chatHash: string; meta: StagedChatMeta | null }): boolean {
   const m = chat.meta;
-  if (!m) return;
+  if (!m) return false;
+  let covered = false;
   // Inside the chat's own transaction (a nested one is a savepoint).
   dbTransaction(() => {
     if (m.reachedFloor && typeof m.readFloorMs === "number") {
       recordChatCoverage(userId, chat.chatHash, new Date(m.readFloorMs).toISOString());
+      covered = true;
     }
     recordChatRead(userId, chat.chatHash, m.readAt, m.reachedFloor);
   });
+  return covered;
 }
 
 /**
@@ -507,10 +510,14 @@ export async function commitCacheStaging(
   // Live: a run that read nothing records nothing (no coverage, no last-sync
   // time, no run record; a pending media read / failed run stays as it was).
   const readNothing = !!run.snapshot && cacheRunReadNothing(run.snapshot);
+  // Live (founder): counts only — how many chats recorded their coverage.
+  let coverageRecorded = 0;
   const r = await cacheStaging().commit(jobId, userId, limits, commitWriter, {
     // SR: a chat switched to Don't sync since it was read is not saved.
     chatExcluded: (u, hash, conversationId) => databaseService.checkRcsExclusion(u, hash, conversationId),
-    perChat: (chat) => cacheChatCommitted(userId, chat),
+    perChat: (chat) => {
+      if (cacheChatCommitted(userId, chat)) coverageRecorded += 1;
+    },
     runDone: () => {
       if (readNothing) {
         void logService.warn("[RcsCache] The Sync read no messages (every chat empty): nothing recorded", LOG_TAG);
@@ -523,6 +530,7 @@ export async function commitCacheStaging(
   // Not complete (failed, crash-cut, a chat that failed, or stopped by the save
   // timeout): the next run is "Try again" — it skips the chats this one finished.
   if (!run.complete || (r.chatsFailed ?? 0) > 0 || r.stopped || r.runRecordFailed) setFailedRun(userId, run.startedAt);
+  void logService.info(`[RcsCache] chat coverage recorded: ${coverageRecorded}`, LOG_TAG);
   return r;
 }
 

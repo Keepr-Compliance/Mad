@@ -33,9 +33,10 @@ jest.mock("electron", () => ({
   shell: { openExternal: jest.fn() },
   clipboard: { writeText: jest.fn() },
 }));
+const mockLogInfo = jest.fn().mockResolvedValue(undefined);
 jest.mock("../../services/logService", () => {
   const noop = jest.fn().mockResolvedValue(undefined);
-  return { __esModule: true, default: { info: noop, warn: noop, error: noop, debug: noop } };
+  return { __esModule: true, default: { info: (...a: unknown[]) => mockLogInfo(...a), warn: noop, error: noop, debug: noop } };
 });
 jest.mock("@sentry/electron/main", () => ({ captureException: jest.fn() }));
 jest.mock("../../capabilities/windowsProvider", () => ({ hostWindows: { broadcast: jest.fn() } }));
@@ -198,6 +199,16 @@ describe("3671 P3: per-chat commits (SR 2026-10-03)", () => {
     expect(getFailedRun(USER)).toBe(started);
     expect(getSourceCoverage(USER).find((c) => c.source === "google_messages")?.coveredSince ?? null).toBeNull();
     expect(count("SELECT COUNT(*) AS n FROM rcs_cache_runs")).toBe(0); // no run record either
+  });
+
+  // Live (founder): counts only — "chat coverage recorded: N" (chats that
+  // reached their floor). Mutation: not counted / not logged → red.
+  it("the commit logs how many chats recorded their coverage (counts only)", async () => {
+    mockLogInfo.mockClear();
+    const started = new Date(NOW - 5 * 60_000).toISOString();
+    stageRun(USER, started, { a: true, b: false });
+    await commitCacheStaging(JOB, USER, LIMITS, READ, { complete: false, startedAt: started });
+    expect(mockLogInfo.mock.calls.map((c) => String(c[0]))).toContain("[RcsCache] chat coverage recorded: 1");
   });
 
   it("a complete run clears the failed-run marker and records the source coverage (P8)", async () => {

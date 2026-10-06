@@ -494,12 +494,32 @@
     return Math.round(floorDays) + "-day";
   }
 
+/**
+   * Live (founder): which floor a chat read to — a deal's (earlier than the
+   * months limit), the months limit, or (a delta Sync) the last Sync.
+   */
+  function floorKind(chatFloorMs, runFloorMs, monthsFloorMs) {
+    if (chatFloorMs === null) return "months";
+    if (monthsFloorMs !== null && chatFloorMs < monthsFloorMs) return "deal";
+    if (runFloorMs !== null && monthsFloorMs !== null && chatFloorMs > monthsFloorMs) return "lastSync";
+    return "months";
+  }
+
   /** "History depth: …" — counts only (no dates, no names). */
   function historyDepthLine(d) {
     if (!d || d.limit + d.start + d.partial === 0) return null;
     var label = windowLabel(d.floorDays);
     var limit = label ? "the " + label + " limit" : "the months limit";
-    return "History depth: " + d.limit + " chats reached " + limit + " · " + d.start + " reached the chat's start · " +
+    // Live (founder): by the floor each chat actually used.
+    var by = d.limitBy || { lastSync: 0, months: d.limit, deal: 0 };
+    var reached = [];
+    if (by.lastSync > 0) reached.push([by.lastSync, "reached the last Sync"]);
+    if (by.months > 0) reached.push([by.months, "reached " + limit]);
+    if (by.deal > 0) reached.push([by.deal, "read back to their deal"]);
+    if (reached.length === 0) reached.push([0, "reached " + limit]);
+    // The first count says "chats" (as before): "4 chats reached … · 2 reached …".
+    var parts = reached.map(function (r, i) { return r[0] + (i === 0 ? " chats " : " ") + r[1]; });
+    return "History depth: " + parts.join(" · ") + " · " + d.start + " reached the chat's start · " +
       d.partial + " not fully loaded" +
       (d.gaps > 0 ? " · " + d.gaps + " gaps (" + d.gapsRecovered + " recovered)" : "");
   }
@@ -951,7 +971,7 @@
     }
     var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0, notChecked: 0 };
     var totals = { chats: 0, messages: 0, images: 0, reactions: 0, historyConfirmed: { marker: 0, first_page: 0, no_overflow: 0, date_floor: 0, none: 0 },
-      depth: { limit: 0, start: 0, partial: 0, gaps: 0, gapsRecovered: 0, floorDays: null }, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0, alreadySaved: 0, shortCodes: 0 };
+      depth: { limit: 0, start: 0, partial: 0, gaps: 0, gapsRecovered: 0, floorDays: null, limitBy: { lastSync: 0, months: 0, deal: 0 } }, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0, alreadySaved: 0, shortCodes: 0 };
     // SR M: every photo / video bubble against what was saved (counts only).
     var media = {
       photos: { seen: 0, saved: 0, notKept: 0, notLoaded: 0, readFailed: 0, tooLarge: 0, failed: 0, recovered: 0 },
@@ -1714,9 +1734,16 @@
           var ot = Date.parse(messages[od].sentAt);
           if (isFinite(ot) && (oldestMs === null || ot < oldestMs)) oldestMs = ot;
         }
-        var floorDays = floorMs === null ? null : Math.round((nowMs - floorMs) / DAY_MS);
-        if (prevSent === undefined) totals.depth[depthKind(hist)] += 1;
-        totals.depth.floorDays = floorDays;
+        // Live (founder): the floor THIS chat used (a delta Sync reads to the
+        // last Sync; a chat switched back on to the months limit; a deal chat
+        // back to its deal) — the log and the depth line say which.
+        var floorDays = chatFloorMs === null ? null : Math.round((nowMs - chatFloorMs) / DAY_MS);
+        if (prevSent === undefined) {
+          totals.depth[depthKind(hist)] += 1;
+          if (depthKind(hist) === "limit") totals.depth.limitBy[floorKind(chatFloorMs, floorMs, fullFloorMs)] += 1;
+        }
+        // The months limit, for the depth line's wording.
+        totals.depth.floorDays = fullFloorMs === null ? null : Math.round((nowMs - fullFloorMs) / DAY_MS);
         totals.depth.gaps += hist.gapsDetected || 0;
         totals.depth.gapsRecovered += hist.gapsRecovered || 0;
         log("  oldest read: " + (oldestMs === null ? "none" : Math.floor((nowMs - oldestMs) / DAY_MS) + " days ago") +
@@ -3079,6 +3106,8 @@
     waitForPageState: waitForPageState,
     NOT_SIGNED_IN: NOT_SIGNED_IN,
     DONE_LINE: DONE_LINE,
+    floorKind: floorKind,
+    historyDepthLine: historyDepthLine,
     makePacedSleep: makePacedSleep,
     PACED_MAX_WAIT_MS: PACED_MAX_WAIT_MS,
     PACED_MAX_FAILURES: PACED_MAX_FAILURES,
