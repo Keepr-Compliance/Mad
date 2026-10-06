@@ -20,6 +20,7 @@ import {
 } from "../../../../utils/threadMergeUtils";
 import { formatDate } from "../../../../utils/formatUtils";
 import { extractAllHandles } from "../../../../utils/phoneNormalization";
+import { highlightMatch } from "../../../../utils/highlightMatch";
 
 interface AttachMessagesModalProps {
   /** User ID to fetch unlinked messages for */
@@ -73,6 +74,18 @@ interface MergedContact {
   threadNames: string[];
   messageCount: number;
   lastMessageAt: string;
+}
+
+/**
+ * BACKLOG-3753: the group names in the order the roster row shows them — names
+ * the search matched first (same lowercase-substring rule as the filter), the
+ * rest after, each keeping its relative order.
+ */
+function groupNamesForSearch(names: string[], searchQuery: string): string[] {
+  const query = searchQuery.trim().toLowerCase();
+  if (!query) return names;
+  const matched = names.filter((n) => n.toLowerCase().includes(query));
+  return [...matched, ...names.filter((n) => !matched.includes(n))];
 }
 
 /**
@@ -748,10 +761,18 @@ export function AttachMessagesModal({
                             )}
                             <span>Last: {formatDate(contact.lastMessageAt)}</span>
                           </div>
-                          {/* Live (founder): the group chats this person is in, by name (searchable too). */}
+                          {/* Live (founder): the group chats this person is in, by name (searchable too).
+                              BACKLOG-3753: a group name the search matched leads the line (so the
+                              truncation never hides it), with the match marked by the app's shared
+                              search highlighter. */}
                           {contact.threadNames.length > 0 && (
                             <p className="text-xs text-gray-500 mt-0.5 truncate" data-testid="picker-contact-groups">
-                              {contact.threadNames.join(", ")}
+                              {groupNamesForSearch(contact.threadNames, searchQuery).map((name, i) => (
+                                <React.Fragment key={name}>
+                                  {i > 0 && ", "}
+                                  {highlightMatch(name, searchQuery)}
+                                </React.Fragment>
+                              ))}
                             </p>
                           )}
                         </div>
