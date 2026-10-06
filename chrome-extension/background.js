@@ -712,6 +712,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "keepr-job-found":
       routeJob(message.jobId, sender.tab).then(sendResponse, fail);
       return true;
+    case "keepr-wake": {
+      // A running Sync's wait (job.js makePacedSleep): answered after this
+      // worker's own timer, which a hidden tab does not throttle. Only from a
+      // tab's content script; short (≤ 60 s); nothing is kept between waits.
+      if (!sender || !sender.tab || !/^https:\/\/messages\.google\.com\//.test(String(sender.url || sender.tab.url || ""))) return false;
+      const ms = Math.max(0, Math.min(60000, Number(message.ms) || 0));
+      setTimeout(() => sendResponse({ ok: true }), ms);
+      return true;
+    }
     case "keepr-keep-tab":
       // Founder (2026-10-03): the job's tab is not auto-discarded while a run is on.
       keepTab(sender && sender.tab, message.keep === true).then(sendResponse, fail);

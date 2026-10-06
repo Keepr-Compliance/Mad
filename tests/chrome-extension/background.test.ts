@@ -21,7 +21,7 @@ import * as path from "path";
 
 type Listener = (
   message: Record<string, unknown>,
-  sender: { id: string; tab?: { id: number } },
+  sender: { id: string; url?: string; tab?: { id: number; url?: string } },
   sendResponse: (reply: unknown) => void,
 ) => boolean;
 
@@ -66,9 +66,12 @@ async function loadWorker(opts: { storage?: Record<string, unknown>; paired?: bo
   if (!listener) throw new Error("background.js registered no message listener");
   const registered: Listener = listener;
 
-  function send(message: Record<string, unknown>): Promise<Record<string, unknown>> {
+  function send(
+    message: Record<string, unknown>,
+    sender: { id: string; url?: string; tab?: { id: number; url?: string } } = { id: EXTENSION_ID, tab: { id: 1 } },
+  ): Promise<Record<string, unknown>> {
     return new Promise((resolve) => {
-      const async = registered(message, { id: EXTENSION_ID, tab: { id: 1 } }, (reply) =>
+      const async = registered(message, sender, (reply) =>
         resolve(reply as Record<string, unknown>),
       );
       if (!async) resolve({ sync: true });
@@ -81,6 +84,37 @@ async function loadWorker(opts: { storage?: Record<string, unknown>; paired?: bo
   fetchStub.mockClear();
   return { send, fetchStub, startupCalls, chromeStub };
 }
+
+// Live A/B (Step A): a running Sync's waits are answered from the worker's
+// own timer. Only from a messages.google.com tab of this extension; capped.
+// Mutations: the origin check removed; no cap → red.
+describe("service worker: keepr-wake (paced waits)", () => {
+  const MSG_TAB = { id: EXTENSION_ID, url: "https://messages.google.com/web/conversations", tab: { id: 1, url: "https://messages.google.com/web/conversations" } };
+  it("answers after its own timer; only for a Messages tab; capped at 60 s", async () => {
+    const w = await loadWorker();
+    jest.useFakeTimers();
+    try {
+      let answered: Record<string, unknown> | null = null;
+      void w.send({ type: "keepr-wake", ms: 250 }, MSG_TAB).then((r) => (answered = r));
+      jest.advanceTimersByTime(249);
+      await Promise.resolve();
+      expect(answered).toBeNull();
+      jest.advanceTimersByTime(1);
+      await Promise.resolve();
+      expect(answered).toEqual({ ok: true });
+      let capped: Record<string, unknown> | null = null;
+      void w.send({ type: "keepr-wake", ms: 10 * 60_000 }, MSG_TAB).then((r) => (capped = r));
+      jest.advanceTimersByTime(60_000);
+      await Promise.resolve();
+      expect(capped).toEqual({ ok: true });
+    } finally {
+      jest.useRealTimers();
+    }
+    // Another site, or no tab (an extension page): refused.
+    expect(await w.send({ type: "keepr-wake", ms: 1 }, { id: EXTENSION_ID, url: "https://example.test/", tab: { id: 2, url: "https://example.test/" } })).toEqual({ sync: true });
+    expect(await w.send({ type: "keepr-wake", ms: 1 }, { id: EXTENSION_ID })).toEqual({ sync: true });
+  });
+});
 
 describe("service worker: POST only (BACKLOG-3628)", () => {
   it("the pending check is a POST to /job/pending", async () => {

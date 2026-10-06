@@ -232,6 +232,89 @@
    * the run fails as google_unresponsive instead of waiting forever.
    */
   var RUN_NO_PROGRESS_MS = 5 * 60000;
+
+  /**
+   * Live A/B (2026-10-05): in a hidden tab Chrome clamps the page's timers to
+   * about once a minute, so every 250 ms wait of a Sync took a minute. While a
+   * user-started Sync runs, each wait is instead ONE message to the service
+   * worker ("wake me in N ms"), answered from the worker's own timer — the
+   * worker's timers are not throttled by the tab being hidden.
+   *
+   * Within Chrome's service-worker rules (developer.chrome.com/docs/
+   * extensions/develop/concepts/service-workers/lifecycle; the MV3 migration
+   * guide): a message keeps the worker alive only for the operation; each
+   * request is short (≤ PACED_MAX_WAIT_MS, far under the 5-minute cap); no
+   * port, no heartbeat; nothing at all when no Sync runs (the pacer exists
+   * only inside a run and is stopped when it ends).
+   *
+   * The worker can be stopped at any time: a wait whose answer does not come
+   * within 2 × N (+ PACED_GRACE_MS) — or whose message fails — ends on the
+   * page's own timer instead; after PACED_MAX_FAILURES failures in a row the
+   * run stops asking. A run longer than PACED_RUN_MAX_MS goes back to the
+   * page's timers.
+   */
+  var PACED_MAX_WAIT_MS = 60000;
+  var PACED_GRACE_MS = 1000;
+  var PACED_MAX_FAILURES = 3;
+  var PACED_RUN_MAX_MS = 3 * 60 * 60000;
+
+  /**
+   * io: { send(ms) → Promise<boolean> (true = the worker answered),
+   *       localSleep(ms) → Promise, now() → ms }.
+   * Returns { sleep(ms), stop(), stats() }.
+   */
+  function makePacedSleep(io) {
+    var startedAt = io.now();
+    var stopped = false;
+    var failuresInRow = 0;
+    var st = { paced: 0, fallbacks: 0, askedMs: 0, tookMs: 0 };
+    function useWorker() {
+      return !stopped && failuresInRow < PACED_MAX_FAILURES && io.now() - startedAt < PACED_RUN_MAX_MS;
+    }
+    function sleep(ms) {
+      var wait = typeof ms === "number" && isFinite(ms) && ms > 0 ? ms : 0;
+      if (!useWorker()) return io.localSleep(wait);
+      var askMs = Math.min(wait, PACED_MAX_WAIT_MS);
+      var askedAt = io.now();
+      return new Promise(function (resolve) {
+        var done = false;
+        function finish(ok) {
+          if (done) return;
+          done = true;
+          if (ok) {
+            failuresInRow = 0;
+            st.paced += 1;
+            // The tick rate actually seen (SR: measured before relied on).
+            st.askedMs += askMs;
+            st.tookMs += Math.max(0, io.now() - askedAt);
+            // A wait longer than one request: the rest, the same way.
+            if (wait > askMs) { sleep(wait - askMs).then(resolve); return; }
+            resolve();
+          } else {
+            failuresInRow += 1;
+            st.fallbacks += 1;
+            resolve();
+          }
+        }
+        // The worker may be gone: the page's own timer ends this wait.
+        io.localSleep(2 * askMs + PACED_GRACE_MS).then(function () { finish(false); });
+        var asked;
+        try { asked = io.send(askMs); } catch (_e) { asked = Promise.resolve(false); }
+        Promise.resolve(asked).then(function (ok) {
+          if (ok) finish(true);
+          // A failed message: wait the time out locally (never a busy loop).
+          else io.localSleep(askMs).then(function () { finish(false); });
+        }, function () {
+          io.localSleep(askMs).then(function () { finish(false); });
+        });
+      });
+    }
+    return {
+      sleep: sleep,
+      stop: function () { stopped = true; },
+      stats: function () { return { paced: st.paced, fallbacks: st.fallbacks, askedMs: st.askedMs, tookMs: st.tookMs }; },
+    };
+  }
   var GOOGLE_UNRESPONSIVE_MESSAGE =
     "Keepr stopped: Google Messages stopped loading messages for 5 minutes. Check your connection, then sync again from Keepr.";
   /** The paused box's line for each pause. */
@@ -2922,6 +3005,9 @@
     waitForPageState: waitForPageState,
     NOT_SIGNED_IN: NOT_SIGNED_IN,
     DONE_LINE: DONE_LINE,
+    makePacedSleep: makePacedSleep,
+    PACED_MAX_WAIT_MS: PACED_MAX_WAIT_MS,
+    PACED_MAX_FAILURES: PACED_MAX_FAILURES,
     SYNCING_HINT: SYNCING_HINT,
     LIST_NOT_REACHABLE: LIST_NOT_REACHABLE,
     detailsText: detailsText,
@@ -2989,8 +3075,25 @@
     });
   }
 
-  function sleep(ms) {
+  function localSleep(ms) {
     return new Promise(function (r) { setTimeout(r, ms); });
+  }
+  /** The run's paced sleep (makePacedSleep) while a Sync runs; else the page's timer. */
+  var pacer = null;
+  function sleep(ms) {
+    return pacer ? pacer.sleep(ms) : localSleep(ms);
+  }
+  /** One wait through the worker: true once it answered after its own timer. */
+  function askWorkerToWake(ms) {
+    return new Promise(function (resolve) {
+      try {
+        chrome.runtime.sendMessage({ type: "keepr-wake", ms: ms }, function (r) {
+          resolve(!chrome.runtime.lastError && !!(r && r.ok));
+        });
+      } catch (_e) {
+        resolve(false);
+      }
+    });
   }
 
   // Overlay ------------------------------------------------------------------
@@ -3482,6 +3585,8 @@
     if (!document.body) {
       await new Promise(function (r) { document.addEventListener("DOMContentLoaded", r, { once: true }); });
     }
+    // Only while this user-started Sync runs (stopped in finally).
+    pacer = makePacedSleep({ send: askWorkerToWake, localSleep: localSleep, now: function () { return Date.now(); } });
     try {
       await runJob(jobId, env());
     } catch (err) {
@@ -3493,6 +3598,13 @@
         body: { code: "scan_failed", message: String((err && err.message) || err), metrics: currentRunMetrics() },
       });
     } finally {
+      if (pacer) {
+        var paced = pacer.stats();
+        pacer.stop();
+        pacer = null;
+        sendLog("waits paced by the worker: " + paced.paced + " (asked " + Math.round(paced.askedMs / 1000) + "s, took " +
+          Math.round(paced.tookMs / 1000) + "s), fell back to the page timer: " + paced.fallbacks);
+      }
       currentJobId = null;
       runMetricsFn = null;
       setRunning(false);
