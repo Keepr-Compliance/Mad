@@ -202,6 +202,7 @@ Also: the 128×128 icon (`icons/keepr-128.png`, 96 art + 16 padding) and a
 | 0.3.80 | A chat ends after 10 minutes of loading history, however few polls ran. |
 | 0.3.81 | The link code can be selected and copied (Ctrl+C); one "Copy code and open Keepr" button; the welcome page shows the countdown and "Code expired" (one shared code area). |
 | 0.3.82 | A retried chat that reads less far back than before is not marked complete. |
+| 0.3.83 | Short-code senders: their own "skipped" line, not "Not fully imported". |
 
 ## 10. Review history
 

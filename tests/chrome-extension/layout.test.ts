@@ -525,7 +525,10 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
   });
 
   // BACKLOG-3658 #11. Mutation: every empty result reported as no_numbers → red.
-  it("short-code and named-sender chats are reported apart from no_numbers, never sent to /match", async () => {
+  // Live (founder): a short-code sender is skipped on purpose — its own
+  // Details line, never "Not fully imported" (/finish notReached included).
+  // Mutations: short codes left out as before; the line missing → red.
+  it("short-code senders: their own line, not \"Not fully imported\"; named senders apart from no_numbers; never sent to /match", async () => {
     const t = planJob([
       { name: "Chat Short Code", numbers: [], numbersKind: "short_code" },
       { name: "Chat Business", numbers: [], numbersKind: "business" },
@@ -533,11 +536,15 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     ]);
     const outcome = await job.runJob(JOB, t.env);
     expect(outcome.notReached).toEqual([
-      { name: "Chat Short Code", reason: "short_code" },
       { name: "Chat Business", reason: "business" },
       { name: "Chat No Details", reason: "no_numbers" },
     ]);
     expect(t.calls.filter(([, p]) => p.endsWith("/match"))).toEqual([]);
+    const fin = t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { notReached: Array<{ reason: string }> };
+    expect(fin.notReached.some((e) => e.reason === "short_code")).toBe(false);
+    const last = t.details[t.details.length - 1];
+    expect(last).toContain("1 short-code sender skipped (no phone number)");
+    expect(last).not.toMatch(/Chat Short Code|a short-code sender \(no phone number\)/);
   });
 
   it("every way a chat is left out, or imported only in part, is named in /finish and on the page (M6, M9)", async () => {

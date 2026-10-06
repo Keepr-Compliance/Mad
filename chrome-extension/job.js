@@ -300,6 +300,9 @@
     if (s.notText > 0) {
       lines.push(s.notText + " not a text conversation (e.g. an AI chat) — skipped");
     }
+    if (s.shortCodes > 0) {
+      lines.push(s.shortCodes + " short-code sender" + (s.shortCodes === 1 ? "" : "s") + " skipped (no phone number)");
+    }
     if (s.retry && s.retry.retried > 0) {
       lines.push("Retried " + plural(s.retry.retried, "chat", "chats") + ", recovered " + s.retry.recovered +
         (s.retry.notRetried > 0 ? " · " + s.retry.notRetried + " not retried (time limit)" : ""));
@@ -848,7 +851,7 @@
     }
     var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0, notChecked: 0 };
     var totals = { chats: 0, messages: 0, images: 0, reactions: 0, historyConfirmed: { marker: 0, first_page: 0, no_overflow: 0, date_floor: 0, none: 0 },
-      depth: { limit: 0, start: 0, partial: 0, gaps: 0, gapsRecovered: 0, floorDays: null }, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0, alreadySaved: 0 };
+      depth: { limit: 0, start: 0, partial: 0, gaps: 0, gapsRecovered: 0, floorDays: null }, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0, alreadySaved: 0, shortCodes: 0 };
     // SR M: every photo / video bubble against what was saved (counts only).
     var media = {
       photos: { seen: 0, saved: 0, notKept: 0, notLoaded: 0, readFailed: 0, tooLarge: 0, failed: 0, recovered: 0 },
@@ -1135,6 +1138,7 @@
         removedByUser: totals.removedByUser,
         imagesNotKept: totals.imagesNotKept,
         notText: totals.notText,
+        shortCodes: totals.shortCodes,
         noMessagesYet: totals.noMessagesYet,
         notSynced: totals.notSynced,
         notReached: reported,
@@ -1383,6 +1387,13 @@
           // BACKLOG-3658 #11: short codes and named senders apart.
           var why = numbers && (numbers.kind === "short_code" || numbers.kind === "business") ? numbers.kind : "no_numbers";
           if (why !== "no_numbers") log("  " + why.replace("_", " "));
+          if (why === "short_code") {
+            // Live (founder): a short-code sender is skipped on purpose — its
+            // own line, never "Not fully imported" (nor counted as such).
+            totals.shortCodes += 1;
+            log("  skipped: short-code sender");
+            continue;
+          }
           leaveOut(conv, why);
           // Details timed out: a transient failure, retried once at the end.
           if (numbers && numbers.kind === "no_details") noteTransient(conv, "details_timeout");
