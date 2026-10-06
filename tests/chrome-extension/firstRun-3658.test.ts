@@ -46,6 +46,48 @@ describe("first-run (C4)", () => {
     expect(read("welcome.html")).toMatch(/<script src="linkcode\.js"><\/script>\r?\n<script src="welcome\.js"><\/script>/);
   });
 
+  // Founder (2026-10-06): an update (incl. ↻ on an unpacked copy) reloads the
+  // open Messages tabs so the new content script runs; install and Chrome's
+  // own updates do not. Mutations: no reload on update; a reload on install /
+  // chrome_update; other sites' tabs reloaded → red.
+  it("an update reloads the open Messages tabs (only those); nothing else does", async () => {
+    let installed: ((d: { reason: string }) => void) | null = null;
+    const queried: unknown[] = [];
+    const reloaded: number[] = [];
+    const chromeStub = {
+      runtime: {
+        id: "x",
+        onMessage: { addListener: () => undefined },
+        onInstalled: { addListener: (fn: (d: { reason: string }) => void) => (installed = fn) },
+        getURL: (p: string) => "chrome-extension://x/" + p,
+        getManifest: () => ({ version: "9.9.9" }),
+      },
+      tabs: {
+        query: jest.fn(async (q: { url?: string }) => {
+          queried.push(q);
+          return q.url === "https://messages.google.com/web/*" ? [{ id: 7 }, { id: 9 }] : [];
+        }),
+        reload: jest.fn(async (id: number) => void reloaded.push(id)),
+        create: () => undefined,
+      },
+    };
+    const fetchStub = jest.fn(async () => ({ status: 404, json: async () => ({}) }));
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    new Function("chrome", "fetch", read("background.js"))(chromeStub, fetchStub);
+    queried.length = 0;
+    for (const reason of ["install", "chrome_update", "shared_module_update"]) installed!({ reason });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reloaded).toEqual([]);
+    installed!({ reason: "update" });
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(queried).toEqual([{ url: "https://messages.google.com/web/*" }]);
+    expect(reloaded).toEqual([7, 9]);
+    // No new permission: still "storage" only, the same host access.
+    const manifest = JSON.parse(read("manifest.json"));
+    expect(manifest.permissions).toEqual(["storage"]);
+  });
+
   it("is informational: the agreement is given in Keepr (F3)", () => {
     // SR C7: the agreement is asked in Keepr before the first sync.
     expect(read("options.html")).toMatch(/Before your first sync, Keepr asks you to agree/);

@@ -792,7 +792,26 @@ if (chrome.runtime.onInstalled) {
         // The popup has everything anyway.
       }
     }
+    // Founder (2026-10-06): an UPDATE (a new version, or ↻ on an unpacked
+    // copy) leaves the open Messages tabs running the OLD content script,
+    // cut off from this worker — a Sync there cannot run. Reload them so the
+    // new one runs. Only "update" (not "install", nor Chrome's own updates);
+    // only the tabs the content script runs in. No new permission: the
+    // messages.google.com host access lets the query see them.
+    if (details && details.reason === "update") void reloadMessagesTabs();
   });
+}
+
+/** The open Messages for Web tabs (the content script's pages), reloaded. */
+async function reloadMessagesTabs() {
+  try {
+    const tabs = await chrome.tabs.query({ url: "https://messages.google.com/web/*" });
+    for (const tab of tabs || []) {
+      if (tab && typeof tab.id === "number") await chrome.tabs.reload(tab.id).catch(() => undefined);
+    }
+  } catch (_err) {
+    // No tabs API here: nothing to reload.
+  }
 }
 
 // BACKLOG-3658: the worker started (install, browser start, or a wake-up):
