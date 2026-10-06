@@ -17,7 +17,7 @@ jest.mock("electron", () => ({ app: { focus: mockAppFocus }, BrowserWindow: jest
 jest.mock("../logService", () => ({ __esModule: true, default: { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() } }));
 
 import type { BrowserWindow } from "electron";
-import { focusForBrowser } from "../rcsLinkFocus";
+import { clearLinkCodeFromClipboard, focusForBrowser, linkCodeFromClipboard } from "../rcsLinkFocus";
 import { bringAppToFrontForLink } from "../../utils/bringAppToFront";
 
 function deps(state: () => { state: string }) {
@@ -132,5 +132,99 @@ describe("bringAppToFrontForLink", () => {
     expect(w.calls).not.toContain("unmaximize");
     expect(w.calls).not.toContain("maximize");
     expect(w.calls).toContain("focus");
+  });
+});
+
+// Founder (2026-10-06): keepr://link fills the link box with the code
+// "Copy code and open Keepr" copied — Windows only, while a link is waiting,
+// exactly the code. Mutations (each red): not Windows-only; read with no link
+// waiting; any digits accepted (5 / 7 / text); the clipboard read when the
+// gate already says no.
+describe("linkCodeFromClipboard (keepr://link, Windows)", () => {
+  const read = jest.fn(() => "123456");
+  const waiting = () => ({ state: "waiting" });
+  beforeEach(() => read.mockClear());
+
+  it("Windows + a link waiting + exactly the code → the 6 digits (spaced as shown, too)", () => {
+    expect(linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: read })).toBe("123456");
+    read.mockReturnValueOnce("123 456");
+    expect(linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: read })).toBe("123456");
+    read.mockReturnValueOnce(" 042137\r\n");
+    expect(linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: read })).toBe("042137");
+  });
+
+  it("anything but the code is ignored", () => {
+    for (const text of ["12345", "1234567", "12 3456", "123  456", "abcdef", "123-456", "code 123456", ""]) {
+      read.mockReturnValueOnce(text);
+      expect(linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: read })).toBeNull();
+    }
+  });
+
+  it("Mac / Linux, or no link waiting (stale): the clipboard is never read", () => {
+    for (const platform of ["darwin", "linux"]) {
+      expect(linkCodeFromClipboard({ platform, linkState: waiting, readClipboard: read })).toBeNull();
+    }
+    for (const state of ["none", "answered", "locked"]) {
+      expect(linkCodeFromClipboard({ platform: "win32", linkState: () => ({ state }), readClipboard: read })).toBeNull();
+    }
+    expect(linkCodeFromClipboard({ platform: "win32", linkState: () => { throw new Error("x"); }, readClipboard: read })).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("a clipboard that cannot be read: null, never a throw", () => {
+    expect(linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: () => { throw new Error("busy"); } })).toBeNull();
+  });
+
+  it("the deep link logs whether a code came, never the code itself", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const main = (require("fs") as typeof import("fs")).readFileSync(require("path").join(__dirname, "..", "..", "main.ts"), "utf8");
+    const at = main.indexOf("if (isRcsLinkDeepLink(url)) {");
+    const branch = main.slice(at, main.indexOf("return;", at));
+    expect(branch).toContain('log.info("[DeepLink] Link screen requested", { codeFromClipboard: code !== null });');
+    // The one log call in the branch is that one: a boolean, never the value.
+    expect(branch.match(/log\.[a-z]+\(/g)).toHaveLength(1);
+  });
+});
+
+// Founder (2026-10-06): the accepted code leaves the clipboard — Windows
+// only, and only if the clipboard still holds THAT code. Mutations (each
+// red): cleared when it changed; cleared off Windows; cleared without
+// comparing.
+describe("clearLinkCodeFromClipboard (after the code is accepted)", () => {
+  const clear = jest.fn();
+  beforeEach(() => clear.mockClear());
+
+  it("Windows, the same code still there (as shown, too): cleared", () => {
+    expect(clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: () => "123456", clearClipboard: clear })).toBe(true);
+    expect(clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: () => "123 456", clearClipboard: clear })).toBe(true);
+    expect(clear).toHaveBeenCalledTimes(2);
+  });
+
+  it("the user copied something else since (another code, text): left as it is", () => {
+    for (const text of ["654321", "an address", "", "1234567"]) {
+      expect(clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: () => text, clearClipboard: clear })).toBe(false);
+    }
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  it("not Windows, or no valid code: never touched; a read that fails: nothing", () => {
+    for (const platform of ["darwin", "linux"]) {
+      expect(clearLinkCodeFromClipboard({ platform, code: "123456", readClipboard: () => "123456", clearClipboard: clear })).toBe(false);
+    }
+    expect(clearLinkCodeFromClipboard({ platform: "win32", code: "", readClipboard: () => "", clearClipboard: clear })).toBe(false);
+    expect(clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: () => { throw new Error("busy"); }, clearClipboard: clear })).toBe(false);
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  it("only after an accepted code: the handler clears inside the success branch", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const src = (require("fs") as typeof import("fs")).readFileSync(require("path").join(__dirname, "..", "..", "handlers", "rcsImportHandlers.ts"), "utf8");
+    const at = src.indexOf('"rcs-import:link-enter-code"');
+    const handler = src.slice(at, src.indexOf("{ module: LOG_TAG }", at));
+    const ok = handler.indexOf("if (r.ok) {");
+    expect(ok).toBeGreaterThan(0);
+    expect(handler.indexOf("clearLinkCodeFromClipboard(")).toBeGreaterThan(ok);
+    expect(handler.indexOf("clearLinkCodeFromClipboard(")).toBeLessThan(handler.indexOf("return { success: true };"));
+    expect(handler.match(/clearLinkCodeFromClipboard\(/g)).toHaveLength(1);
   });
 });

@@ -152,6 +152,7 @@ import {
   registerRcsImportHandlers,
   startRcsExtensionBridge,
   stopRcsExtensionBridge,
+  rcsLinkCodeForDeepLink,
 } from "./handlers/rcsImportHandlers";
 import { registerAttachmentHandlers } from "./handlers/attachmentHandlers";
 import { registerContactHandlers } from "./handlers/contactHandlers";
@@ -507,8 +508,11 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
     // your browser" screen. Any parameters are ignored (any local app can
     // fire keepr://); nothing is read from the URL.
     if (isRcsLinkDeepLink(url)) {
-      log.info("[DeepLink] Link screen requested");
-      sendToRenderer("rcs-import:open-link-screen", {});
+      // Founder (2026-10-06): the code "Copy code and open Keepr" copied —
+      // Windows only, while a link is waiting, exactly the code (never logged).
+      const code = rcsLinkCodeForDeepLink();
+      log.info("[DeepLink] Link screen requested", { codeFromClipboard: code !== null });
+      sendToRenderer("rcs-import:open-link-screen", code ? { code } : {});
       focusMainWindow();
       return;
     }

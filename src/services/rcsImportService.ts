@@ -48,6 +48,11 @@ async function callJob(
   }
 }
 
+/** keepr://link's code waiting for the link box (see holdLinkCodePrefill). */
+let linkPrefill: { code: string; at: number } | null = null;
+/** A held code older than this is dropped (the box opens within moments). */
+export const LINK_PREFILL_MS = 10_000;
+
 export const rcsImportService = {
   async getStatus(): Promise<ApiResult<RcsImportStatus>> {
     const bridge = api();
@@ -276,10 +281,23 @@ export const rcsImportService = {
   },
 
   /** C1: keepr://link asked for the link screen. Returns an unsubscribe. */
-  onOpenLinkScreen(callback: () => void): () => void {
+  onOpenLinkScreen(callback: (payload: { code?: string }) => void): () => void {
     const bridge = api();
     if (!bridge || !bridge.onOpenLinkScreen) return () => {};
-    return bridge.onOpenLinkScreen(callback);
+    return bridge.onOpenLinkScreen((payload) => callback(payload ?? {}));
+  },
+
+  /**
+   * keepr://link's code (Windows), held for the link box when it opens after
+   * the signal: taken ONCE, and only within LINK_PREFILL_MS (never kept).
+   */
+  holdLinkCodePrefill(code: string | undefined, nowMs: number = Date.now()): void {
+    linkPrefill = code ? { code, at: nowMs } : null;
+  },
+  takeLinkCodePrefill(nowMs: number = Date.now()): string | null {
+    const p = linkPrefill;
+    linkPrefill = null;
+    return p && nowMs - p.at <= LINK_PREFILL_MS ? p.code : null;
   },
 
   onDataChanged(callback: (event: { reason: string }) => void): () => void {

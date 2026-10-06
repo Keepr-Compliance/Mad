@@ -109,7 +109,7 @@ import { NOT_PAIRED_MESSAGE, RcsPairingAuth, type LinkState } from "../services/
 import { loadPairProtocol } from "../services/rcsPairProtocol";
 import { rcsPairingStore } from "../services/db/rcsPairingDbService";
 import { RcsSyncOutcomeTracker } from "../services/rcsSyncOutcome";
-import { focusForBrowser, RCS_OPEN_LINK_SCREEN_CHANNEL } from "../services/rcsLinkFocus";
+import { focusForBrowser, RCS_OPEN_LINK_SCREEN_CHANNEL, linkCodeFromClipboard, clearLinkCodeFromClipboard } from "../services/rcsLinkFocus";
 import {
   recordSyncOutcomeSettled,
   recordSyncRunMetrics,
@@ -1235,6 +1235,15 @@ export async function clearAllAndroidTexts(userId: string): Promise<SharedForceC
  * ("Open Keepr"). Windows may still refuse the foreground change, so the
  * taskbar button flashes as the fallback, until Keepr gets focus.
  */
+/** keepr://link: the link code from the clipboard (Windows, link waiting, exactly the code) — see linkCodeFromClipboard. */
+export function rcsLinkCodeForDeepLink(): string | null {
+  return linkCodeFromClipboard({
+    platform: process.platform,
+    linkState: () => pairingAuth.linkState(),
+    readClipboard: () => clipboard.readText(),
+  });
+}
+
 export function focusKeeprFromBrowser(): void {
   bringAppToFrontOrFlash(getMainWindow());
 }
@@ -1360,7 +1369,17 @@ export function registerRcsImportHandlers(): void {
       if (!userId) return { success: false, error: "Sign in to Keepr first." };
       const code = args && typeof args === "object" ? (args as { code?: unknown }).code : undefined;
       const r = pairingAuth.linkEnterCode(userId, typeof code === "string" ? code : "");
-      if (r.ok) return { success: true };
+      if (r.ok) {
+        // Founder (Windows): the accepted code leaves the clipboard — only if
+        // it still holds that same code (never logged).
+        clearLinkCodeFromClipboard({
+          platform: process.platform,
+          code: typeof code === "string" ? code : "",
+          readClipboard: () => clipboard.readText(),
+          clearClipboard: () => clipboard.clear(),
+        });
+        return { success: true };
+      }
       return { success: false, error: LINK_ENTER_ERRORS[r.reason] };
     }, { module: LOG_TAG }),
   );

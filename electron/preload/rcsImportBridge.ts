@@ -70,8 +70,9 @@ export const rcsImportBridge = {
   linkForget: () => ipcRenderer.invoke("rcs-import:link-forget"),
   openGoogleMessages: () => ipcRenderer.invoke("rcs-import:open-google-messages"),
   openExtensionStore: () => ipcRenderer.invoke("rcs-import:open-extension-store"),
-  onOpenLinkScreen: (callback: () => void) => {
-    const handler = () => callback();
+  onOpenLinkScreen: (callback: (payload: { code?: string }) => void) => {
+    const handler = (_event: unknown, data?: { code?: unknown }) =>
+      callback(data && typeof data.code === "string" && /^\d{6}$/.test(data.code) ? { code: data.code } : {});
     ipcRenderer.on("rcs-import:open-link-screen", handler);
     return () => {
       ipcRenderer.removeListener("rcs-import:open-link-screen", handler);

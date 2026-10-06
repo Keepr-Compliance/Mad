@@ -159,7 +159,8 @@ export interface WindowApiRcsImport {
   /** A02: the extension's Chrome Web Store listing. */
   openExtensionStore?: () => Promise<{ success: true }>;
   /** C1: keepr://link asked for the link screen. Returns an unsubscribe. */
-  onOpenLinkScreen?: (callback: () => void) => () => void;
+  /** keepr://link (Windows): the link code from the clipboard, when it was exactly the code. */
+  onOpenLinkScreen?: (callback: (payload: { code?: string }) => void) => () => void;
   /**
    * BACKLOG-3658: start the cache job (all recent chats), for the signed-in
    * user. `sinceDays` (1..3650) is a DEV-ONLY window override, ignored in a

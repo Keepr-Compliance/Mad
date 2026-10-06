@@ -15,14 +15,20 @@ let mockLink: Link = { state: "none", intrusion: false };
 let mockLinked = false;
 const mockEnter = jest.fn(async (_code: string) => ({ success: true }) as { success: boolean; error?: string });
 const mockOpenMessages = jest.fn(async () => undefined);
-let mockOpenLinkScreen: (() => void) | null = null;
+let mockOpenLinkScreen: ((payload: { code?: string }) => void) | null = null;
+let mockHeld: string | null = null;
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
     linkState: async () => ({ success: true, data: { link: mockLink, linked: mockLinked } }),
     linkEnterCode: (code: string) => mockEnter(code),
     linkDismissWarning: async () => undefined,
     openGoogleMessages: () => mockOpenMessages(),
-    onOpenLinkScreen: (cb: () => void) => {
+    takeLinkCodePrefill: () => {
+      const c = mockHeld;
+      mockHeld = null;
+      return c;
+    },
+    onOpenLinkScreen: (cb: (payload: { code?: string }) => void) => {
       mockOpenLinkScreen = cb;
       return () => {
         mockOpenLinkScreen = null;
@@ -209,7 +215,7 @@ describe("LinkBrowserPanel", () => {
     expect(document.activeElement).not.toBe(input);
     expect(mockOpenLinkScreen).not.toBeNull();
     await act(async () => {
-      mockOpenLinkScreen!();
+      mockOpenLinkScreen!({});
       jest.advanceTimersByTime(1);
     });
     expect(document.activeElement).toBe(input);
@@ -229,7 +235,7 @@ describe("LinkBrowserPanel", () => {
     document.body.appendChild(other);
     fireEvent.change(input, { target: { value: "12" } });
     await act(async () => {
-      mockOpenLinkScreen!();
+      mockOpenLinkScreen!({});
       jest.advanceTimersByTime(1);
     });
     other.focus();
@@ -245,6 +251,55 @@ describe("LinkBrowserPanel", () => {
       window.dispatchEvent(new Event("focus"));
     });
     expect(document.activeElement).not.toBe(input);
+  });
+
+  // Founder (Windows): keepr://link's code fills the box and goes through the
+  // SAME check as typing it (one try); a wrong one shows the existing wrong
+  // state and the user can type. Mutations: the prefill not used (signal or
+  // held); used without the check → red.
+  it("keepr://link's code (signal while open): filled and checked once, like typing it", async () => {
+    mockLink = waiting();
+    render(<LinkBrowserPanel />);
+    await flush();
+    await act(async () => {
+      mockOpenLinkScreen!({ code: "123456" });
+    });
+    await flush();
+    expect(mockEnter).toHaveBeenCalledTimes(1);
+    expect(mockEnter).toHaveBeenCalledWith("123456");
+  });
+
+  it("a code held for a box that opens after the signal: used once on mount", async () => {
+    mockLink = waiting();
+    mockHeld = "654321";
+    render(<LinkBrowserPanel />);
+    await flush();
+    expect(mockEnter).toHaveBeenCalledWith("654321");
+    expect(mockHeld).toBeNull();
+  });
+
+  it("a wrong prefilled code: the existing wrong state, the field cleared for typing", async () => {
+    mockLink = waiting();
+    mockEnter.mockResolvedValueOnce({ success: false, error: "That code didn't work." });
+    render(<LinkBrowserPanel />);
+    await flush();
+    await act(async () => {
+      mockOpenLinkScreen!({ code: "111111" });
+    });
+    await flush();
+    expect(screen.getByTestId("gm-link-error")).toHaveTextContent("That code didn't work.");
+    expect((screen.getByTestId("gm-link-code") as HTMLInputElement).value).toBe("");
+  });
+
+  it("the signal without a code (Mac / Linux, or nothing to fill): nothing checked", async () => {
+    mockLink = waiting();
+    render(<LinkBrowserPanel />);
+    await flush();
+    await act(async () => {
+      mockOpenLinkScreen!({});
+    });
+    await flush();
+    expect(mockEnter).not.toHaveBeenCalled();
   });
 
   it("a refused code says why, and the field is cleared", async () => {

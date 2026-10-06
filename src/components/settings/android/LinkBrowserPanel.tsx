@@ -147,7 +147,17 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, bare = false }: LinkB
       document.addEventListener("visibilitychange", once);
       pending = cleanup;
     };
-    const off = rcsImportService.onOpenLinkScreen(() => {
+    // Founder (Windows): keepr://link's code pre-fills the box — the same
+    // path as typing it (onType → the 6th digit checks it once).
+    const prefill = (code: string | null): void => {
+      if (code) onTypeRef.current(code);
+    };
+    prefill(rcsImportService.takeLinkCodePrefill());
+    const off = rcsImportService.onOpenLinkScreen((payload) => {
+      if (payload && payload.code) {
+        rcsImportService.takeLinkCodePrefill();
+        prefill(payload.code);
+      }
       setTimeout(focusField, 0);
       armRetry();
     });
@@ -186,6 +196,9 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, bare = false }: LinkB
     [submit],
   );
 
+  // The mount effect above reads the latest onType through this ref.
+  const onTypeRef = useRef(onType);
+  onTypeRef.current = onType;
   const locked = link?.state === "locked";
   const justLinked = check.kind === "linked";
   const usedUp = check.kind === "usedUp";

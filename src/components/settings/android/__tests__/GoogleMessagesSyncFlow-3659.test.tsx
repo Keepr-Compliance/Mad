@@ -45,6 +45,7 @@ jest.mock("../../../../services/rcsImportService", () => ({
     linkEnterCode: async () => ({ success: true }),
     linkDismissWarning: async () => undefined,
     onOpenLinkScreen: () => () => undefined,
+    takeLinkCodePrefill: () => null,
     cancelJob: async () => ({ success: true, data: null }),
     getJob: async () => ({ success: true, data: mockCurrentJob }),
     onJobProgress: (cb: (j: RcsJobInfo) => void) => {

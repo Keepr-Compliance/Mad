@@ -10,7 +10,9 @@ import { rcsImportService } from "../services/rcsImportService";
 export function useOpenLinkScreen(openSyncAndroid: (start: "link") => void): void {
   useEffect(
     () =>
-      rcsImportService.onOpenLinkScreen(() => {
+      rcsImportService.onOpenLinkScreen((payload) => {
+        // Windows: the code from the clipboard waits for the link box.
+        rcsImportService.holdLinkCodePrefill(payload.code);
         openSyncAndroid("link");
       }),
     [openSyncAndroid],
