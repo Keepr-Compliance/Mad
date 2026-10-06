@@ -12,7 +12,7 @@ export {
   validateTransactionDates,
 } from "./useTransactionDatesForm";
 export type { TransactionDateField, TransactionDatesForm } from "./useTransactionDatesForm";
-export { saveConfirmedTransactionDates } from "./saveConfirmedTransactionDates";
+export { saveConfirmedTransactionDates, confirmedDatesUpdate } from "./saveConfirmedTransactionDates";
 export type { ConfirmedTransactionDates } from "./saveConfirmedTransactionDates";
 export { CommissionFields } from "./CommissionFields";
 export { useCommissionForm, initialCommissionInputs } from "./useCommissionForm";

@@ -141,7 +141,9 @@ function localInstant(
   return new Date(y, m, d + dayOffset, hours, minutes, seconds, ms).toISOString();
 }
 
-const EARLY_OUT = "2025-12-31T23:59:59.999Z"; // before the audit start -> OUT
+// LOCAL 23:59:59.999 the evening before the audit start -> OUT in every zone
+// (BACKLOG-3734: the start is local 00:00, so a fixed UTC string would be IN east of UTC).
+const EARLY_OUT = new Date(2025, 11, 31, 23, 59, 59, 999).toISOString();
 const MID_IN = "2026-06-15T12:00:00.000Z"; // comfortably inside -> IN
 const DAWN = localInstant(0, 30, 0, 0); // 12:30am local ON the closing day (BACKLOG-2781) -> IN
 const EVENING = localInstant(21, 0, 0, 0); // 9pm local on the closing day (BACKLOG-2788) -> IN
@@ -171,17 +173,29 @@ const EXPECTED_IN_WINDOW = 4;
 function createSchema(db: DatabaseType): void {
   db.exec(`
     CREATE TABLE emails (id TEXT PRIMARY KEY, sent_at DATETIME);
-    CREATE TABLE messages (id TEXT PRIMARY KEY, thread_id TEXT, sent_at DATETIME);
+    -- user_id: NOT NULL in schema.sql; BACKLOG-3733 joins on it.
+    -- external_id: the text-side Apple-id fallback (BACKLOG-3733) reads it;
+    -- every row here leaves it NULL, so that fallback never fires.
+    CREATE TABLE messages (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL DEFAULT 'user-1',
+      thread_id TEXT,
+      sent_at DATETIME,
+      external_id TEXT
+    );
+    -- external_message_id: same fallback, attachment side; same reason left NULL.
     CREATE TABLE attachments (
       id TEXT PRIMARY KEY,
       message_id TEXT,
       email_id TEXT,
+      external_message_id TEXT,
       filename TEXT NOT NULL,
       file_size_bytes INTEGER,
       storage_path TEXT
     );
     CREATE TABLE communications (
       id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL DEFAULT 'user-1', -- NOT NULL in schema.sql; BACKLOG-3733 joins on it
       transaction_id TEXT,
       message_id TEXT,
       email_id TEXT,

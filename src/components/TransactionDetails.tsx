@@ -309,12 +309,18 @@ function TransactionDetails({
   // + text/iMessage) for the transaction via a dedicated IPC query, independent
   // of which communications channels have been loaded. No audit-date window is
   // applied (matches the Emails/Texts tabs, which show all linked content).
+  // BACKLOG-3730: `inWindowIds` marks the ones inside the transaction dates
+  // (main's submit window), which the Attachments tab shows by default.
   const {
     attachments,
     loading: attachmentsLoading,
     error: attachmentsError,
     refresh: refreshAttachments,
-  } = useTransactionAllAttachments(transaction.id);
+    inWindowIds: attachmentsInWindowIds,
+  } = useTransactionAllAttachments(transaction.id, undefined, undefined, {
+    startedAt: transaction.started_at,
+    closedAt: transaction.closed_at,
+  });
 
   // Refresh messages by reloading text communications from the parent state.
   // This ensures derivedMessages (from useTransactionMessages) updates correctly,
@@ -717,9 +723,16 @@ function TransactionDetails({
     progress: submitProgress,
     error: submitError,
     checklistsNotSent: submitChecklistsNotSent,
-    attachmentsFailed: submitAttachmentsFailed,
-    flaggedWithoutAttachments: submitFlaggedWithoutAttachments,
+    notIncluded: submitNotIncluded,
+    isCheckingFiles: submitCheckingFiles,
+    preflightItems: submitPreflightItems,
+    preflightChanged: submitPreflightChanged,
+    cancelled: submitCancelled,
+    isCancelling: submitCancelling,
     submit: handleSubmitForReview,
+    confirmPreflight: confirmSubmitPreflight,
+    dismissPreflight: dismissSubmitPreflight,
+    cancel: cancelSubmit,
     reset: resetSubmit,
   } = useSubmitForReview({
     transactionId: transaction.id,
@@ -1495,6 +1508,7 @@ function TransactionDetails({
               loading={attachmentsLoading}
               error={attachmentsError}
               refresh={refreshAttachments}
+              inWindowIds={attachmentsInWindowIds}
             />
           )}
 
@@ -1730,8 +1744,21 @@ function TransactionDetails({
           progress={submitProgress}
           error={submitError}
           checklistsNotSent={submitChecklistsNotSent}
-          attachmentsFailed={submitAttachmentsFailed}
-          flaggedWithoutAttachments={submitFlaggedWithoutAttachments}
+          notIncluded={submitNotIncluded}
+          isCheckingFiles={submitCheckingFiles}
+          preflightItems={submitPreflightItems}
+          preflightChanged={submitPreflightChanged}
+          onPreflightBack={dismissSubmitPreflight}
+          onPreflightContinue={() => {
+            void confirmSubmitPreflight();
+          }}
+          cancelled={submitCancelled}
+          isCancelling={submitCancelling}
+          // BACKLOG-3398: Cancel stops the submission in the main process; the
+          // window stays open until it reports that nothing was sent.
+          onCancelSubmit={() => {
+            void cancelSubmit();
+          }}
           onCancel={() => {
             setShowSubmitModal(false);
             resetSubmit();

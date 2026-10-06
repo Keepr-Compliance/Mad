@@ -3,13 +3,36 @@ import fs from "fs/promises";
 import { app } from "electron";
 import folderExportService from "./folderExportService";
 import logService from "./logService";
+import { downloadMissingEmailAttachments } from "./emailAttachmentDownload";
 import { Transaction, Communication } from "../types/models";
 import type { TransactionWithDetails } from "./transactionService/types";
 import { isEmailMessage, isTextMessage } from "../utils/channelHelpers";
 import { sanitizeFileSystemName } from "../utils/fileUtils";
 // BACKLOG-2771: this service no longer decides its own include set.
 import type { ExportPlan } from "./exportPlan";
-import { orderAttachmentComms } from "./exportPlan";
+import { auditWindowEnd, auditWindowStart, orderAttachmentComms } from "./exportPlan";
+
+/**
+ * BACKLOG-3734: the start date printed in the CSV and SUMMARY.txt headers.
+ * `new Date("2026-09-24")` is UTC midnight, which `toLocaleDateString()` shows
+ * as 9/23 anywhere west of UTC. `auditWindowStart` reads a date-only value as
+ * LOCAL midnight, so the printed day is the day the agent entered.
+ */
+function auditStartDayLabel(startedAt: string): string {
+  const start = auditWindowStart(startedAt);
+  return start ? start.toLocaleDateString() : "N/A";
+}
+
+/**
+ * BACKLOG-3734: the Closing Date printed in the same two headers. Same bug as
+ * the start: `new Date("2026-09-24")` prints 9/23 west of UTC. `auditWindowEnd`
+ * resolves the closing calendar day to its LOCAL last instant, so the printed
+ * day is the day the agent entered.
+ */
+function auditClosingDayLabel(closedAt: string): string {
+  const end = auditWindowEnd(closedAt);
+  return end ? end.toLocaleDateString() : "N/A";
+}
 // BACKLOG-3367: every format states what the export left out.
 import { exportNoticeLines, type ExportOmissionDetail } from "./exportNotices";
 // BACKLOG-2805: mirrors src/constants/transactionTypes.ts (electron cannot
@@ -87,6 +110,9 @@ class EnhancedExportService {
       const omissions: ExportOmissionDetail = {
         hiddenTextCount: plan.hiddenTextCount,
         hiddenTexts: plan.hiddenTexts,
+        // BACKLOG-3683: known only once attachments are written; set by the
+        // PDF branch that writes them. No other format lists files.
+        filesNotIncluded: [],
       };
 
       // Export based on format
@@ -157,6 +183,32 @@ class EnhancedExportService {
       const folderPath = path.join(downloadsPath, folderName);
       await fs.mkdir(folderPath, { recursive: true });
 
+      // BACKLOG-3683: attachments FIRST, so the PDF can list what could not be
+      // included. The PDF's file name and folder are unchanged.
+      // Export attachments into an /attachments subfolder
+      const attachmentsPath = path.join(folderPath, "attachments");
+      await fs.mkdir(attachmentsPath, { recursive: true });
+
+      // The plan's attachment selection, in this exporter's descending order —
+      // manifest.json encodes array position as `sourceEmailIndex`, so the
+      // order is observable and preserved. Nothing re-derives the predicate.
+      const attachmentComms = orderAttachmentComms(plan, communications);
+
+      // BACKLOG-3683: download first (the submit's rule applies to export). A
+      // linked email attachment that is not on this computer yet is fetched
+      // from the mailbox now; only one the mailbox does not return is listed.
+      if (attachmentComms.some((c) => isEmailMessage(c))) {
+        await downloadMissingEmailAttachments(transaction.id, "[Export]");
+      }
+
+      // Use folderExportService's attachment export
+      const filesNotIncluded = await folderExportService.exportAttachments(
+        transaction,
+        attachmentComms,
+        attachmentsPath,
+        omissions,
+      );
+
       // Generate the combined PDF inside the folder.
       // BACKLOG-3449: the PDF states the property address too. It used to be a
       // bare "Combined_Report.pdf", so the moment it left this folder — moved,
@@ -173,25 +225,8 @@ class EnhancedExportService {
         transaction,
         communications,
         pdfPath,
-        omissions,
+        { ...omissions, filesNotIncluded },
         summaryOnly,
-      );
-
-      // Export attachments into an /attachments subfolder
-      const attachmentsPath = path.join(folderPath, "attachments");
-      await fs.mkdir(attachmentsPath, { recursive: true });
-
-      // The plan's attachment selection, in this exporter's descending order —
-      // manifest.json encodes array position as `sourceEmailIndex`, so the
-      // order is observable and preserved. Nothing re-derives the predicate.
-      const attachmentComms = orderAttachmentComms(plan, communications);
-
-      // Use folderExportService's attachment export
-      await folderExportService.exportAttachments(
-        transaction,
-        attachmentComms,
-        attachmentsPath,
-        omissions,
       );
 
       return folderPath;
@@ -261,12 +296,12 @@ class EnhancedExportService {
       `Generated: ${new Date().toLocaleString()}`,
       `Representation Start: ${
         transaction.started_at
-          ? new Date(transaction.started_at).toLocaleDateString()
+          ? auditStartDayLabel(transaction.started_at)
           : "N/A"
       }`,
       `Closing Date: ${
         transaction.closed_at
-          ? new Date(transaction.closed_at).toLocaleDateString()
+          ? auditClosingDayLabel(transaction.closed_at)
           : "N/A"
       }`,
       `Total Communications: ${communications.length}`,
@@ -487,14 +522,14 @@ class EnhancedExportService {
     lines.push(
       `Representation Start Date: ${
         transaction.started_at
-          ? new Date(transaction.started_at).toLocaleDateString()
+          ? auditStartDayLabel(transaction.started_at)
           : "N/A"
       }`,
     );
     lines.push(
       `Closing Date: ${
         transaction.closed_at
-          ? new Date(transaction.closed_at).toLocaleDateString()
+          ? auditClosingDayLabel(transaction.closed_at)
           : "N/A"
       }`,
     );

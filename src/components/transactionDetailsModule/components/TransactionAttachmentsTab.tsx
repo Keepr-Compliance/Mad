@@ -39,6 +39,13 @@ interface TransactionAttachmentsTabProps {
   error: string | null;
   /** Reload the list after an on-demand download reconciles a row. */
   refresh?: () => void;
+  /**
+   * BACKLOG-3730: ids dated inside the transaction's start–end window, as main
+   * computes it for the submission. When set, the tab shows only these by
+   * default, with a "Show all" toggle. `null`/absent = no dates, show all.
+   * Membership comes from main only; the tab applies no date logic of its own.
+   */
+  inWindowIds?: Set<string> | null;
 }
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
@@ -78,7 +85,19 @@ export function TransactionAttachmentsTab({
   loading,
   error,
   refresh,
+  inWindowIds = null,
 }: TransactionAttachmentsTabProps): React.ReactElement {
+  const [showAll, setShowAll] = useState(false);
+  // BACKLOG-3730: default view = only what the submission would include by date.
+  const scoped = !showAll && inWindowIds !== null;
+  const visible = useMemo(
+    () => (scoped ? attachments.filter((a) => inWindowIds!.has(a.id)) : attachments),
+    [attachments, inWindowIds, scoped],
+  );
+  const outsideCount = useMemo(
+    () => (inWindowIds ? attachments.filter((a) => !inWindowIds.has(a.id)).length : 0),
+    [attachments, inWindowIds],
+  );
   // Empty Set == "All" (see file header). Robust to the available buckets
   // changing after a refetch.
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
@@ -92,9 +111,9 @@ export function TransactionAttachmentsTab({
   // Which type buckets are actually present (drives which type options render).
   const presentBuckets = useMemo(() => {
     const set = new Set<AttachmentTypeBucket>();
-    for (const a of attachments) set.add(getAttachmentTypeBucket(a.mime_type));
+    for (const a of visible) set.add(getAttachmentTypeBucket(a.mime_type));
     return set;
-  }, [attachments]);
+  }, [visible]);
 
   const typeGroups: OptionGroup[] = useMemo(
     () =>
@@ -111,7 +130,7 @@ export function TransactionAttachmentsTab({
   const typeSummary = useMemo(() => makeSummary(typeGroups.length), [typeGroups.length]);
 
   const filteredSorted = useMemo(() => {
-    const filtered = attachments.filter((a) => {
+    const filtered = visible.filter((a) => {
       if (selectedSources.size > 0 && !selectedSources.has(a.source)) return false;
       if (
         selectedTypes.size > 0 &&
@@ -153,7 +172,7 @@ export function TransactionAttachmentsTab({
         break;
     }
     return sorted;
-  }, [attachments, selectedSources, selectedTypes, sortBy]);
+  }, [visible, selectedSources, selectedTypes, sortBy]);
 
   const emailCount = useMemo(
     () => filteredSorted.filter((a) => a.source === "email").length,
@@ -212,6 +231,26 @@ export function TransactionAttachmentsTab({
         )}
       </h3>
 
+      {/* BACKLOG-3730: date-window toggle, only when some attachments fall outside */}
+      {inWindowIds !== null && outsideCount > 0 && (
+        <label
+          className="flex items-center gap-2 text-sm text-gray-600 mb-4 cursor-pointer"
+          data-testid="attachments-window-toggle"
+        >
+          <input
+            type="checkbox"
+            data-testid="attachments-show-all"
+            checked={showAll}
+            onChange={(e) => setShowAll(e.target.checked)}
+            className="rounded border-gray-300 text-green-600 focus:ring-green-500"
+          />
+          <span>
+            Show all ({attachments.length}) — {outsideCount} dated outside the transaction dates
+            {showAll ? "" : " are hidden"}
+          </span>
+        </label>
+      )}
+
       {/* One row: filters LEFT, sort RIGHT (matches the Emails tab pattern) */}
       <div className="flex items-center justify-between gap-3 flex-wrap mb-6">
         <div className="flex items-center gap-2 flex-wrap" data-testid="attachment-filters">
@@ -265,8 +304,14 @@ export function TransactionAttachmentsTab({
       {/* Grid */}
       {filteredSorted.length === 0 ? (
         <div className="text-center py-12" data-testid="attachments-filtered-empty">
-          <p className="text-gray-600 mb-2">No attachments match these filters</p>
-          <p className="text-sm text-gray-500">Try a different source or file type.</p>
+          {visible.length === 0 ? (
+            <p className="text-gray-600 mb-2">No attachments dated inside the transaction dates</p>
+          ) : (
+            <>
+              <p className="text-gray-600 mb-2">No attachments match these filters</p>
+              <p className="text-sm text-gray-500">Try a different source or file type.</p>
+            </>
+          )}
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2" data-testid="attachments-grid">

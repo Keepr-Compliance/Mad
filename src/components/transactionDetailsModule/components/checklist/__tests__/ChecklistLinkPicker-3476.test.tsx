@@ -2,8 +2,8 @@
  * BACKLOG-3476 — the link picker (mock state 3).
  *
  * Wrong implementations this suite is here to catch:
- *   C-L  offering what main refuses — the legacy fallback attachment, texts as
- *        email threads, emails outside the Emails tab's Linked list.
+ *   C-L  offering what main refuses — texts as email threads, emails outside
+ *        the Emails tab's Linked list.
  *   C-M  a thread linked as one email, or grouped differently from the Emails
  *        tab (thread_id first, normalized subject when it is NULL).
  *   C-N  Link enabled with nothing selected.
@@ -76,13 +76,12 @@ function renderPicker(opts: {
 const settle = () => act(async () => {});
 
 describe("C-L — only what main would accept", () => {
-  it("offers email and text attachments, not the legacy fallback row", async () => {
+  it("offers email and text attachments", async () => {
     renderPicker();
     await settle();
     expect(screen.getByTestId("checklist-picker-attachment-att-1")).toBeInTheDocument();
     expect(screen.getByTestId("checklist-picker-attachment-att-2")).toBeInTheDocument();
     expect(screen.getByTestId("checklist-picker-attachment-att-text")).toBeInTheDocument();
-    expect(screen.queryByTestId("checklist-picker-attachment-att-legacy")).not.toBeInTheDocument();
   });
 
   it("offers no text messages as threads, and drops all-address_missing threads (Needs review)", async () => {
@@ -148,7 +147,7 @@ describe("SR condition 2 — Select all", () => {
     await settle();
     expect(screen.getByTestId("checklist-picker-attachment-att-1")).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(screen.getByTestId("checklist-picker-select-all-attachments"));
-    // att-2 and att-text; att-1 is linked, att-legacy is not offered.
+    // att-2 and att-text; att-1 is linked.
     expect(screen.getByTestId("checklist-picker-link")).toHaveTextContent("Link 2 items");
     expect(screen.getByTestId("checklist-picker-count")).toHaveTextContent("2 selected");
   });

@@ -64,6 +64,42 @@ export const NO_OMISSIONS: ExportOmissions = { hiddenTextCount: 0 };
 export interface ExportOmissionDetail extends ExportOmissions {
   /** The omitted texts themselves, as `ExportPlan.hiddenTexts` lists them. */
   hiddenTexts: Communication[];
+  /**
+   * BACKLOG-3683 (coordinator routing 2026-10-04): attachments this export
+   * selected but could not write, as `exportAttachments` found them. Listed at
+   * the end of the combined PDF. Empty for an export that writes no
+   * attachment files.
+   */
+  filesNotIncluded: ExportFileNotIncluded[];
+}
+
+/** Why an export could not write an attachment. */
+export type ExportFileNotIncludedReason =
+  /** The attachment has no file on this computer (never downloaded). */
+  | "not_on_this_computer"
+  /** An email attachment the mailbox did not return when the export tried to download it. */
+  | "download_failed"
+  /** The attachment's file was here and is gone. */
+  | "file_missing"
+  /** The file is here but could not be copied. */
+  | "copy_failed";
+
+/** One attachment an export left out. Display data; never logged. */
+export interface ExportFileNotIncluded {
+  filename: string;
+  /** The message it came from; null when no linked message was found. */
+  sourceKind: "email" | "text" | null;
+  /** The email's subject (emails only). */
+  subject: string | null;
+  /**
+   * The text's sender handle (texts only). Raw — the PDF renderer names it
+   * through the same resolution its text sections use, never printing a
+   * handle that has a name.
+   */
+  handle: string | null;
+  /** When the source message was sent (ISO), or null. */
+  sentAt: string | null;
+  reason: ExportFileNotIncludedReason;
 }
 
 export type ExportNoticeScope = "transaction" | "conversation";

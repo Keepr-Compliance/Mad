@@ -29,6 +29,14 @@ export const REPORTS: ReportEntry[] = [
     source: 'sync_outcomes',
     permission: PERMISSIONS.ANALYTICS_VIEW,
   },
+  {
+    slug: 'submissions',
+    title: 'Submissions',
+    description:
+      'Every submit attempt: which committed, which failed and where, and which are still open or stalled.',
+    source: 'submission_attempts',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
 ];
 
 export function reportHref(slug: string): string {

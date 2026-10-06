@@ -2,13 +2,19 @@
  * Ticket reply notification email template.
  *
  * Sent to the customer when a support agent replies to their ticket.
- * Includes ticket subject, number, agent name, reply preview, and CTA link.
+ * Includes ticket subject, number, agent name, the full reply, and CTA link.
  *
  * TASK-2197: Email Service Infrastructure
+ * BACKLOG-3702: full reply (no truncation), line breaks kept, and a notice that
+ * replies to the email itself are not read.
  */
 
 import { baseLayout } from './base-layout';
 import type { EmailContent, TicketReplyNotificationParams } from '../types';
+
+/** Shown next to the "View Full Conversation" button (BACKLOG-3702). */
+export const NO_REPLY_NOTICE =
+  "Replies to this email aren't read. To respond, click View Full Conversation.";
 
 /**
  * Build the ticket reply notification email (subject, HTML, plain text).
@@ -28,11 +34,10 @@ export function buildTicketReplyNotification(
 
   const subject = `Re: [${ticketNumber}] ${ticketSubject}`;
 
-  // Truncate preview to 200 characters
-  const preview =
-    replyPreview.length > 200
-      ? replyPreview.slice(0, 200) + '...'
-      : replyPreview;
+  // The whole reply. `replyPreview` keeps its historical name (API contract).
+  const replyText = replyPreview.replace(/\r\n?/g, '\n');
+  // Escape FIRST, then turn newlines into <br> so user-typed markup stays inert.
+  const replyHtml = escapeHtml(replyText).replace(/\n/g, '<br>');
 
   const html = baseLayout({
     preheader: `${agentName} replied to your support request`,
@@ -50,7 +55,7 @@ export function buildTicketReplyNotification(
               ${escapeHtml(agentName)}
             </p>
             <p style="margin:0; font-size:14px; color:#374151; line-height:1.6;">
-              ${escapeHtml(preview)}
+              ${replyHtml}
             </p>
           </td>
         </tr>
@@ -66,6 +71,9 @@ export function buildTicketReplyNotification(
           </td>
         </tr>
       </table>
+      <p style="margin:0 0 16px 0; font-size:13px; color:#6b7280; line-height:1.5;">
+        ${NO_REPLY_NOTICE}
+      </p>
       <p style="margin:0; font-size:13px; color:#9ca3af; line-height:1.5;">
         You are receiving this because you submitted a support request.
       </p>
@@ -76,9 +84,10 @@ export function buildTicketReplyNotification(
     `New reply on your support ticket: [${ticketNumber}] ${ticketSubject}`,
     '',
     `${agentName} wrote:`,
-    preview,
+    replyText,
     '',
     `View the full conversation: ${ticketLink}`,
+    NO_REPLY_NOTICE,
     '',
     'You are receiving this because you submitted a support request.',
   ].join('\n');

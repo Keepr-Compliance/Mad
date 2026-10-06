@@ -17,7 +17,7 @@
 
 import * as crypto from "crypto";
 import * as os from "os";
-import { app, net } from "electron";
+import { app } from "electron";
 import supabaseService from "./supabaseService";
 /**
  * BACKLOG-2868 — the refusal copy is CANONICAL in its own module because the
@@ -30,16 +30,42 @@ import {
   BLOCKED_SUBMISSION_MESSAGES,
   type BlockedSubmissionStatus,
 } from "./submissionStatusMessages";
-import supabaseStorageService, {
-  LocalAttachment,
-  AttachmentUploadResult,
-} from "./supabaseStorageService";
+import supabaseStorageService from "./supabaseStorageService";
+import mime from "mime-types";
+import type { SupabaseClient } from "@supabase/supabase-js";
+// BACKLOG-3403: the one producer of an attachment's object path.
+import { buildAttachmentStoragePath } from "./submissionAttachmentFiles";
+import {
+  runSubmissionPreflight,
+  type NotIncludedItem,
+  type NotIncludedReason,
+} from "./submissionPreflight";
+import {
+  SubmissionCancelledError,
+  SubmissionStageError,
+  throwIfCancelled,
+  withStageRetry,
+  type SubmissionStageName,
+} from "./submissionStageRetry";
+import { abandonSubmission, readSubmissionStatus } from "./submissionAbandon";
+import { auditPeriodFromRow, type AuditPeriodSource } from "./submissionAuditPeriod";
+import { selectSubmissionTextIds } from "./transactionCommunicationSet";
+import type { SelectedTextIds } from "./exportPlan";
+import {
+  flatAttemptCounts,
+  pickRefusalCounts,
+  recordSubmissionAttempt,
+  reportSubmissionExclusions,
+  reportSubmissionFailure,
+  reportSubmissionScope,
+  type FinalizeRefusalCounts,
+  type ManifestCounts,
+  type SubmissionFailureReason,
+  inProgressAttemptCounts,
+} from "./submissionReporting";
 import databaseService from "./databaseService";
 import logService from "./logService";
-import emailAttachmentService from "./emailAttachmentService";
-import gmailFetchService from "./gmailFetchService";
-import outlookFetchService from "./outlookFetchService";
-import { TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL } from "./db/submissionEmailSql";
+import { downloadMissingEmailAttachments as downloadMissingEmailAttachmentsShared } from "./emailAttachmentDownload";
 import { snapshotSubmissionChecklists } from "./submissionChecklistSnapshot";
 import {
   notifyChecklistsChanged,
@@ -48,7 +74,7 @@ import {
   endResubmitChecklistGuard,
 } from "./submissionChecklistPull";
 // BACKLOG-3599: direct, not through the databaseService facade.
-import { getOwedReviewChecklistPullsFor } from "./db/submissionDbService";
+import { getOwedReviewChecklistPullsFor, type SubmissionAttachment } from "./db/submissionDbService";
 // BACKLOG-2758 finding 3: party names come from the SAME resolver the exported
 // PDF uses, not from a second read of the macOS AddressBook. The AddressBook is
 // still consulted — as tier 3 inside that resolver — so no name previously
@@ -78,32 +104,32 @@ export interface SubmissionResult {
   success: boolean;
   submissionId: string | null;
   error?: string;
-  /**
-   * Attachments that were gathered and then FAILED TO UPLOAD. Unchanged in
-   * BACKLOG-3389 — see {@link SubmissionResult.flaggedWithoutAttachments} for
-   * the number this one never could have reported.
-   */
-  attachmentsFailed: number;
   messagesCount: number;
   attachmentsCount: number;
   /**
-   * BACKLOG-3389: in-window texts and emails that ADVERTISE an attachment
-   * (`has_attachments`) and contributed NOTHING to this submission.
-   *
-   * `attachmentsFailed` counts upload failures, so it can only ever see an
-   * attachment the gather already returned. Everything lost BEFORE the gather —
-   * a metadata-only row whose bytes were never downloaded, a download that
-   * failed, an attachment row the importer never wrote — was invisible: the run
-   * reported `attachmentsCount: 0, attachmentsFailed: 0` while silently
-   * dropping a real attachment. That silent zero is what made BACKLOG-3389
-   * take a month to notice.
-   *
-   * Counted AFTER the gather, so it is the honest residue of the whole
-   * pipeline — pre-download included — and not a prediction made inside any one
-   * step of it. Zero here means "nothing to send"; non-zero means "we could not
-   * send these", and the two are now distinguishable.
+   * BACKLOG-3389: in-window texts and emails whose attachments are not in this
+   * submission. BACKLOG-3403: the number of distinct messages in
+   * {@link SubmissionResult.notIncluded}.
    */
   flaggedWithoutAttachments: number;
+  /**
+   * BACKLOG-3681: each attachment (or message) that was left out of a
+   * SUCCESSFUL submission, and why. Display data — never logged.
+   * BACKLOG-3403: on `preflightChanged`, the current list to confirm again.
+   */
+  notIncluded: NotIncludedItem[];
+  /** BACKLOG-3398: the user cancelled; nothing was sent. */
+  cancelled?: boolean;
+  /**
+   * BACKLOG-3403: the files that cannot be sent changed since the agent
+   * confirmed them. Nothing was sent; `notIncluded` holds the new list.
+   */
+  preflightChanged?: boolean;
+  /**
+   * BACKLOG-3403: the server's answer to the final step was lost and could not
+   * be read back. Nothing was deleted and the local status was not changed.
+   */
+  unconfirmed?: boolean;
   /**
    * BACKLOG-3600: set only on a SUCCESSFUL submission whose checklists did not
    * all reach the broker. Absent means nothing to say.
@@ -116,6 +142,40 @@ export interface SubmissionResult {
    *               The 3600 reasons take precedence when both apply.
    */
   checklistsNotSent?: ChecklistsNotSentReason;
+}
+
+/** BACKLOG-3403: what the agent confirmed on the pre-flight warning. */
+export interface SubmitOptions {
+  /** `NotIncludedItem.key`s the agent chose to leave out. */
+  acceptedExclusionKeys?: string[];
+}
+
+/** BACKLOG-3403: the pre-flight answer (`transactions:submit-preflight`). */
+export interface SubmissionPreflightResult {
+  success: boolean;
+  notIncluded: NotIncludedItem[];
+  error?: string;
+}
+
+/** BACKLOG-3683: what a submission with these dates would send. */
+export interface SubmissionScopeResult {
+  success: boolean;
+  inWindow?: {
+    emails: number;
+    texts: number;
+    textThreads: number;
+    attachments: number;
+    emailAttachments: number;
+    attachmentBytes: number;
+  };
+  error?: string;
+}
+
+/** BACKLOG-3398: the answer to `transactions:cancel-submit`. */
+export interface CancelSubmissionResult {
+  cancelled: boolean;
+  /** Why nothing was cancelled. */
+  reason?: "not_running" | "finalizing";
 }
 
 /** Why a submitted version lacks checklists (BACKLOG-3600, BACKLOG-3599). */
@@ -132,12 +192,42 @@ export type ChecklistsNotSentReason =
 export const CHECKLISTS_NOT_SENT_ERROR =
   "Your checklists could not be sent to your broker, so nothing was submitted. Check your connection and try again.";
 
+/** BACKLOG-3403: any failure after the agent pressed Submit. Nothing reached the broker. */
+export const SUBMISSION_NOT_SENT_ERROR =
+  "Your submission didn't go through, so nothing was sent to your broker. Check your connection and submit again.";
+
+/** BACKLOG-3398: the agent cancelled. Nothing reached the broker. */
+export const SUBMISSION_CANCELLED_MESSAGE =
+  "Submission cancelled. Nothing was sent to your broker.";
+
+/**
+ * BACKLOG-3403: the final step's answer was lost and the status could not be
+ * read back. Pressing Submit again is safe: if the first one went through, the
+ * existing-submission check refuses and says so; if it did not, the leftover
+ * is cleared first.
+ */
+export const SUBMISSION_UNCONFIRMED_ERROR =
+  "We couldn't confirm whether your submission reached your broker. Wait a minute, then press Submit again: if it already went through, Keepr will tell you.";
+
+/** BACKLOG-3403: the files that cannot be sent changed after the agent confirmed them. */
+export const PREFLIGHT_CHANGED_ERROR =
+  "Some attachments changed since you reviewed them, so nothing was sent. Review the list and continue again.";
+
+/**
+ * BACKLOG-3403: a submit that never showed the agent the list (bulk submit
+ * from the transactions list) and found attachments that cannot be sent.
+ */
+export const PREFLIGHT_NOT_REVIEWED_ERROR =
+  "Some attachments in this transaction can't be sent, so nothing was sent. Open the transaction and press Submit to review them.";
+
 /** Progress stages for submission flow */
 export type SubmissionStage =
   | "preparing"
   | "attachments"
   | "transaction"
   | "messages"
+  // BACKLOG-3398: from here the submission can no longer be cancelled.
+  | "finalizing"
   | "complete"
   | "failed";
 
@@ -231,6 +321,8 @@ interface SubmissionRecord {
 
 /** Record structure for submission_messages table */
 interface SubmissionMessageRecord {
+  /** BACKLOG-3403: minted by the desktop, so a retried insert is a no-op. */
+  id: string;
   submission_id: string;
   local_message_id: string;
   channel: string;
@@ -248,6 +340,8 @@ interface SubmissionMessageRecord {
 
 /** Record structure for submission_attachments table */
 interface SubmissionAttachmentRecord {
+  /** BACKLOG-3403: minted by the desktop. */
+  id: string;
   submission_id: string;
   filename: string;
   mime_type?: string;
@@ -259,6 +353,26 @@ interface SubmissionAttachmentRecord {
    * checklist snapshot matches evidence links on it. Not unique in the cloud.
    */
   local_attachment_id: string | null;
+  /**
+   * BACKLOG-3682: the submission message (text or email) this file came from,
+   * by its minted cloud id. Null when the owner is not in this submission.
+   */
+  message_id: string | null;
+}
+
+/**
+ * BACKLOG-3403: one file the agent chose to leave out, as stored in
+ * `submission_metadata.excluded_files` for the broker. Names are fine here —
+ * the broker sees the messages themselves.
+ */
+interface ExcludedFileRecord {
+  filename: string | null;
+  kind: "text" | "email";
+  /** The cloud id of the message the file came from (in this submission). */
+  message_id: string | null;
+  sent_at: string | null;
+  source_label: string;
+  reason: NotIncludedReason;
 }
 
 /** Cloud submission status response */
@@ -275,6 +389,37 @@ interface CloudSubmissionStatus {
 // ============================================
 
 const MESSAGE_BATCH_SIZE = 50;
+const ATTACHMENT_ROW_BATCH_SIZE = 100;
+
+/** BACKLOG-3600: the checklist copy failed on every attempt (transient). */
+class ChecklistsNotSentError extends Error {
+  constructor() {
+    super(CHECKLISTS_NOT_SENT_ERROR);
+    this.name = "ChecklistsNotSentError";
+  }
+}
+
+/** BACKLOG-3403: finalize did not commit, for a known reason. */
+class FinalizeFailedError extends Error {
+  readonly reason: SubmissionFailureReason;
+  readonly stage: SubmissionStageName;
+  readonly code: string | null;
+  constructor(reason: SubmissionFailureReason, stage: SubmissionStageName, code: string | null = null) {
+    super(`finalize: ${reason}`);
+    this.name = "FinalizeFailedError";
+    this.reason = reason;
+    this.stage = stage;
+    this.code = code;
+  }
+}
+
+/** BACKLOG-3403: finalize's answer was lost and the row could not be read. */
+class UnconfirmedSubmissionError extends Error {
+  constructor() {
+    super("finalize unconfirmed");
+    this.name = "UnconfirmedSubmissionError";
+  }
+}
 
 // ============================================
 // SERVICE CLASS
@@ -298,9 +443,15 @@ class SubmissionService {
    */
   async submitTransaction(
     transactionId: string,
-    onProgress?: (progress: SubmissionProgress) => void
+    onProgress?: (progress: SubmissionProgress) => void,
+    submitOptions?: SubmitOptions
   ): Promise<SubmissionResult> {
-    return this.submitTransactionInternal(transactionId, undefined, onProgress);
+    return this.submitTransactionInternal(
+      transactionId,
+      undefined,
+      onProgress,
+      submitOptions
+    );
   }
 
   /**
@@ -312,7 +463,8 @@ class SubmissionService {
    */
   async resubmitTransaction(
     transactionId: string,
-    onProgress?: (progress: SubmissionProgress) => void
+    onProgress?: (progress: SubmissionProgress) => void,
+    submitOptions?: SubmitOptions
   ): Promise<SubmissionResult> {
     const transaction = await this.loadTransaction(transactionId);
 
@@ -356,7 +508,8 @@ class SubmissionService {
           version: newVersion,
           parentSubmissionId: transaction.submission_id,
         },
-        onProgress
+        onProgress,
+        submitOptions
       );
     } finally {
       endResubmitChecklistGuard(transactionId);
@@ -467,7 +620,249 @@ class SubmissionService {
   }
 
   /**
-   * Internal submission implementation
+   * BACKLOG-3403: what can and cannot be sent, decided before anything is sent.
+   * Runs the on-demand email attachment download first (inside the gather), so
+   * an attachment that only needed downloading is never listed.
+   */
+  async preflightSubmission(
+    transactionId: string
+  ): Promise<SubmissionPreflightResult> {
+    try {
+      const gathered = await this.gatherForSubmission(transactionId);
+      return { success: true, notIncluded: gathered.preflight.notIncluded };
+    } catch (error) {
+      logService.warn(
+        `[Submission] Pre-flight failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "SubmissionService"
+      );
+      return {
+        success: false,
+        notIncluded: [],
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
+  }
+
+  /**
+   * BACKLOG-3683 (founder decision B, narrowed 2026-10-05: the summary shows
+   * in-window counts only, never an out-of-window notice): what a submission
+   * with these dates would send. The dates are the ones on the date step, not
+   * yet saved — `candidate` is the payload the renderer will save
+   * (`confirmedDatesUpdate`), read through the same `auditPeriodFromRow` and
+   * the same queries the submit uses. Nothing is downloaded here; the
+   * pre-flight after the save stays the authority on which files can be sent.
+   */
+  async getSubmissionScope(
+    transactionId: string,
+    candidate: AuditPeriodSource
+  ): Promise<SubmissionScopeResult> {
+    try {
+      const { auditStartDate, auditEndDate } = auditPeriodFromRow(candidate);
+      // BACKLOG-3733: the texts the export would include, as the submit sends.
+      const selected = await selectSubmissionTextIds(transactionId);
+      const texts = databaseService.getTransactionMessages(transactionId, auditStartDate, auditEndDate, selected);
+      const emails = databaseService.getTransactionEmails(transactionId, auditStartDate, auditEndDate);
+      const attachments = databaseService.getTransactionAttachments(
+        transactionId,
+        auditStartDate,
+        auditEndDate,
+        selected
+      );
+
+      const inWindow = {
+        emails: emails.length,
+        texts: texts.length,
+        textThreads: new Set(texts.map((m) => m.thread_id || `msg:${m.id}`)).size,
+        attachments: attachments.length,
+        emailAttachments: attachments.filter((a) => (a as Attachment & { email_id?: string | null }).email_id).length,
+        attachmentBytes: attachments.reduce((sum, a) => sum + (Number(a.file_size_bytes) || 0), 0),
+      };
+
+      reportSubmissionScope(transactionId, {
+        inWindow: {
+          emails: inWindow.emails,
+          texts: inWindow.texts,
+          textThreads: inWindow.textThreads,
+          attachments: inWindow.attachments,
+        },
+      });
+
+      return { success: true, inWindow };
+    } catch (error) {
+      logService.warn(
+        `[Submission] Scope preview failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "SubmissionService"
+      );
+      return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+    }
+  }
+
+  /**
+   * BACKLOG-3398: stop the running submission. Refused once the final step has
+   * begun — from then the server decides, and a cancel could only lie about
+   * the outcome.
+   */
+  cancelSubmission(transactionId: string): CancelSubmissionResult {
+    const active = this.active;
+    if (!active || active.transactionId !== transactionId) {
+      return { cancelled: false, reason: "not_running" };
+    }
+    if (active.finalizing) {
+      return { cancelled: false, reason: "finalizing" };
+    }
+    active.controller.abort();
+    logService.info(
+      `[Submission] Cancel requested for ${transactionId}`,
+      "SubmissionService"
+    );
+    return { cancelled: true };
+  }
+
+  /** BACKLOG-3398: the running submission, for {@link cancelSubmission}. */
+  private active: {
+    transactionId: string;
+    controller: AbortController;
+    finalizing: boolean;
+  } | null = null;
+
+  /**
+   * Gather everything a submission sends, after the on-demand download, and
+   * run the pre-flight over it. Shared by the pre-flight IPC and the submit,
+   * so both see the same list.
+   */
+  private async gatherForSubmission(transactionId: string): Promise<{
+    transaction: Transaction;
+    messages: Message[];
+    emails: Record<string, unknown>[];
+    partyNames: HandleNameResolution;
+    currentUserId: string;
+    preflight: Awaited<ReturnType<typeof runSubmissionPreflight>>;
+  }> {
+    const transaction = await this.loadTransaction(transactionId);
+    // BACKLOG-3683: the same reader the scope preview uses.
+    const { auditStartDate, auditEndDate } = auditPeriodFromRow({
+      started_at: transaction.started_at ?? null,
+      closed_at: transaction.closed_at ?? null,
+    });
+
+    // BACKLOG-3733: one text set for the texts AND their attachments — the
+    // texts the export of this deal would include (owner's copies, hidden
+    // texts and reactions to them removed, duplicates collapsed).
+    const selected = await selectSubmissionTextIds(transactionId);
+    const messages = await this.loadTransactionMessages(
+      transactionId,
+      auditStartDate,
+      auditEndDate,
+      selected
+    );
+    const emails = await this.loadTransactionEmails(
+      transactionId,
+      auditStartDate,
+      auditEndDate
+    );
+    // Downloads missing email attachment bytes FIRST (BACKLOG-1369), then reads.
+    const attachments = await this.loadTransactionAttachments(
+      transactionId,
+      auditStartDate,
+      auditEndDate,
+      selected
+    );
+    const emailIds = emails
+      .map((e) => e.id)
+      .filter((id): id is string => typeof id === "string");
+    const undownloaded =
+      (emailIds.length > 0
+        ? databaseService.getUndownloadedEmailAttachments(emailIds)
+        : []) ?? [];
+
+    const currentUserId = await this.getCurrentUserId();
+    // BACKLOG-2757/2758: one resolver, scoped to this user and this
+    // transaction, returning the same honest label the PDF prints.
+    let partyNames: HandleNameResolution = { names: {}, matches: {} };
+    try {
+      partyNames = await resolveHandles(
+        extractParticipantHandles(messages),
+        currentUserId,
+        { userId: currentUserId, transactionId }
+      );
+      logService.info(
+        `[Submission] Resolved ${Object.keys(partyNames.names).length} handle keys for name resolution`,
+        "SubmissionService"
+      );
+    } catch (err) {
+      logService.warn(
+        `[Submission] Could not resolve party names: ${err instanceof Error ? err.message : "Unknown error"}`,
+        "SubmissionService"
+      );
+    }
+
+    const preflight = await runSubmissionPreflight({
+      messages,
+      emails,
+      attachments,
+      undownloadedEmailAttachments: undownloaded,
+      textLabel: (m) => this.textOtherPartyLabel(m, partyNames),
+    });
+
+    if (preflight.notIncluded.length > 0) {
+      // Counts only: the list itself holds names.
+      const byReason: Record<string, number> = {};
+      for (const i of preflight.notIncluded) byReason[i.reason] = (byReason[i.reason] ?? 0) + 1;
+      logService.warn(
+        `[Submission] ${preflight.notIncluded.length} attachments cannot be sent`,
+        "SubmissionService",
+        { transactionId, byReason, attachmentsSendable: preflight.sendable.length }
+      );
+    }
+
+    return { transaction, messages, emails, partyNames, currentUserId, preflight };
+  }
+
+  /** The other party of a text, as the agent knows them. Display only. */
+  private textOtherPartyLabel(
+    message: Message,
+    partyNames: HandleNameResolution
+  ): string {
+    let participants: Record<string, unknown> = {};
+    try {
+      participants =
+        typeof message.participants === "string"
+          ? JSON.parse(message.participants)
+          : ((message.participants as unknown as Record<string, unknown>) ?? {});
+    } catch {
+      participants = {};
+    }
+    const to = Array.isArray(participants.to)
+      ? (participants.to as unknown[])
+      : participants.to
+        ? [participants.to]
+        : [];
+    const handle =
+      message.direction === "outbound"
+        ? (to.find((h) => typeof h === "string" && h !== "me") as string | undefined)
+        : (participants.from as string | undefined);
+    if (!handle || typeof handle !== "string") return "";
+    return nameForHandle(partyNames, handle) || handle;
+  }
+
+  /**
+   * Internal submission implementation — BACKLOG-3403, all or nothing.
+   *
+   *   0  gather + pre-flight (download first); refuse if the agent has not
+   *      confirmed exactly what will be left out
+   *   1  clear a stale `uploading` row of this deal (fenced, files first)
+   *   2  parent row as `uploading`         ┐ client-minted ids,
+   *   3  messages, batches of 50           │ ON CONFLICT (id) DO NOTHING,
+   *   4  attachment rows, exact paths      │ 3 tries each
+   *   5  upload the files                  ┘ (the uploader retries 3 times)
+   *   6  checklist snapshot
+   *   7  finalize_submission(manifest)  — the server checks every piece and
+   *      flips the status in one statement. From here no cancel.
+   *   8  local status, from the server's answer only
+   *
+   * Any failure → the fence, then files, then rows; the agent is told nothing
+   * was sent. A lost answer from step 7 → read the row before deleting
+   * anything.
    */
   private async submitTransactionInternal(
     transactionId: string,
@@ -475,14 +870,49 @@ class SubmissionService {
       version?: number;
       parentSubmissionId?: string;
     },
-    onProgress?: (progress: SubmissionProgress) => void
+    onProgress?: (progress: SubmissionProgress) => void,
+    submitOptions?: SubmitOptions
   ): Promise<SubmissionResult> {
     const submissionId = crypto.randomUUID();
-    let attachmentUploadResults: AttachmentUploadResult[] = [];
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const isResubmit = !!options?.parentSubmissionId;
+    const client = supabaseService.getClient();
 
+    let stage: SubmissionStageName = "gather";
+    let orgId: string | null = null;
+    /** Set BEFORE the parent insert: once sent, the row may exist. */
+    let parentSent = false;
+    /** The `in_progress` attempt row was written (C1): only then a final one. */
+    let attemptStarted = false;
+    /** Known once the manifest is built / the snapshot ran (C3). */
+    let cloudIdByLocalOuter = new Map<string, string>();
+    let checklistsNotSentOuter: ChecklistsNotSentReason | undefined;
+    let manifestPaths: string[] = [];
+    let manifestCounts: ManifestCounts | null = null;
+    let refusal: FinalizeRefusalCounts | null = null;
+    let notIncluded: NotIncludedItem[] = [];
+
+    const failedResult = (
+      error: string,
+      extra: Partial<SubmissionResult> = {}
+    ): SubmissionResult => ({
+      success: false,
+      submissionId: null,
+      error,
+      messagesCount: 0,
+      attachmentsCount: 0,
+      // Nothing was submitted, so nothing was dropped from a submission.
+      flaggedWithoutAttachments: 0,
+      notIncluded: [],
+      ...extra,
+    });
+
+    // S1: a local reference, so a second run on the singleton cannot null it.
+    const active = { transactionId, controller, finalizing: false };
+    this.active = active;
     this._isSubmitting = true;
     try {
-      // Stage 1: Prepare (10%)
       onProgress?.({
         stage: "preparing",
         stageProgress: 0,
@@ -490,591 +920,385 @@ class SubmissionService {
         currentItem: "Loading transaction data...",
       });
 
-      const transaction = await this.loadTransaction(transactionId);
+      // ---- 0. Gather + pre-flight -------------------------------------
+      const gathered = await this.gatherForSubmission(transactionId);
+      const { transaction, messages, emails, partyNames, currentUserId } = gathered;
+      notIncluded = gathered.preflight.notIncluded;
+      const sendable = gathered.preflight.sendable;
 
-      // Parse audit period dates from transaction
-      const auditStartDate = transaction.started_at
-        ? new Date(transaction.started_at)
-        : null;
-      const auditEndDate = transaction.closed_at
-        ? new Date(transaction.closed_at)
-        : null;
-
-      // Load messages and emails filtered by audit period
-      const messages = await this.loadTransactionMessages(
-        transactionId,
-        auditStartDate,
-        auditEndDate
-      );
-      const emails = await this.loadTransactionEmails(
-        transactionId,
-        auditStartDate,
-        auditEndDate
-      );
-      const attachments = await this.loadTransactionAttachments(
-        transactionId,
-        auditStartDate,
-        auditEndDate
-      );
-
-      // BACKLOG-3389: what advertised an attachment and gave us nothing. Must
-      // be measured HERE — after the gather, before anything is uploaded — so
-      // it counts the residue of the whole pipeline rather than of one step.
-      const flaggedWithoutAttachments = this.countFlaggedWithoutAttachments(
-        messages,
-        emails,
-        attachments
-      );
-      if (flaggedWithoutAttachments > 0) {
+      // The agent confirmed a list; if it is no longer the same list, ask
+      // again before anything is written.
+      const accepted = new Set(submitOptions?.acceptedExclusionKeys ?? []);
+      if (notIncluded.some((item) => !accepted.has(item.key))) {
         logService.warn(
-          `[Submission] ${flaggedWithoutAttachments} in-window items advertise an attachment but contributed none — they will NOT be in this submission`,
+          `[Submission] Not sent: ${notIncluded.filter((i) => !accepted.has(i.key)).length} attachments that cannot be sent were not confirmed by the agent`,
           "SubmissionService",
-          {
-            transactionId,
-            flaggedWithoutAttachments,
-            attachmentsGathered: attachments.length,
-          }
+          { transactionId }
+        );
+        return failedResult(
+          submitOptions?.acceptedExclusionKeys === undefined
+            ? PREFLIGHT_NOT_REVIEWED_ERROR
+            : PREFLIGHT_CHANGED_ERROR,
+          { preflightChanged: true, notIncluded }
         );
       }
+      throwIfCancelled(signal);
 
-      const orgId = await this.getUserOrganizationId();
-      const currentUserId = await this.getCurrentUserId();
-
-      // Load contact names for phone number resolution.
-      // BACKLOG-2757/2758: one resolver, scoped to this user and this
-      // transaction, returning the same honest label the PDF prints — including
-      // "A or B" when a handle names more than one contact. The portal and the
-      // archived PDF now cannot name the same party differently.
-      let partyNames: HandleNameResolution = { names: {}, matches: {} };
-      try {
-        partyNames = await resolveHandles(
-          extractParticipantHandles(messages),
-          currentUserId,
-          { userId: currentUserId, transactionId }
-        );
-        logService.info(
-          `[Submission] Resolved ${Object.keys(partyNames.names).length} handle keys for name resolution`,
-          "SubmissionService"
-        );
-      } catch (err) {
-        logService.warn(
-          `[Submission] Could not resolve party names: ${err instanceof Error ? err.message : "Unknown error"}`,
-          "SubmissionService"
-        );
-      }
-
+      orgId = await this.getUserOrganizationId();
       if (!orgId) {
         throw new Error("User is not a member of any organization");
       }
+      const org: string = orgId;
 
-      // Check for existing submission
-      const client = supabaseService.getClient();
+      await this.guardExistingSubmission(client, org, transactionId, options);
 
-      /**
-       * The version this attempt will INSERT. Mirrors `mapToSubmission`, which
-       * writes `version: options?.version || 1` — the two must agree, because
-       * the delete below is keyed off the comparison.
-       */
-      const pendingVersion = options?.version || 1;
+      // ---- Manifest: every id minted here, every path built here ------
+      const cloudIdByLocal = new Map<string, string>();
+      cloudIdByLocalOuter = cloudIdByLocal;
+      const textRecords = messages.map((m) => {
+        const record = this.mapToSubmissionMessage(m, submissionId, partyNames);
+        cloudIdByLocal.set(`text:${m.id}`, record.id);
+        return record;
+      });
+      const emailRecords = emails.map((e) => {
+        const record = this.mapEmailToSubmissionMessage(e, submissionId);
+        cloudIdByLocal.set(`email:${record.local_message_id}`, record.id);
+        return record;
+      });
+      const messageRecords = [...textRecords, ...emailRecords];
 
-      /**
-       * BACKLOG-2867 — NAME ONE ROW, AND READ THE ERROR.
-       *
-       * This lookup used to be
-       *
-       *   const { data: existingSubmission } = await client
-       *     .from("transaction_submissions")
-       *     .select("id, status")
-       *     .eq("organization_id", orgId)
-       *     .eq("local_transaction_id", transactionId)
-       *     .maybeSingle();
-       *
-       * — no ordering, no limit, and the `error` not destructured at all.
-       *
-       * A deal that has been round-tripped once has TWO rows here: the unique
-       * key is (organization_id, local_transaction_id, version, submitted_by),
-       * so versions coexist legally, and the versioning path deliberately
-       * retains its parent. `.maybeSingle()` against two rows makes PostgREST
-       * answer PGRST116 with `data: null` — and with the error discarded, that
-       * is indistinguishable from "this deal has never been submitted".
-       * `if (existingSubmission)` was false and the entire status guard below
-       * was skipped, on exactly the deals furthest along: measured live on
-       * 2026-08-25, one transaction sat at versions [1, 2] / statuses
-       * [rejected, under_review] and was unguarded.
-       *
-       * Both halves are needed, and each is proved by its own control:
-       *
-       *   ORDER BY version DESC LIMIT 1 — decide against the CURRENT version.
-       *     Secondary order on created_at because the unique key permits a
-       *     version tie between two submitters in one org; without it the row
-       *     the database happens to return first would decide the guard.
-       *
-       *   The ERROR, read and refused on. With `limit(1)` a multi-row PGRST116
-       *     can no longer occur, so there is no "no rows" case left to
-       *     tolerate: `data: null` means no submission exists, and an `error`
-       *     means the question could not be answered. Failing closed is the
-       *     point — the alternative is what this item is about, a failed check
-       *     read as a clean bill of health.
-       */
-      const { data: existingSubmission, error: existingSubmissionError } =
-        await client
-          .from("transaction_submissions")
-          .select("id, status, version")
-          .eq("organization_id", orgId)
-          .eq("local_transaction_id", transactionId)
-          .order("version", { ascending: false })
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
+      const attachmentPlan = sendable.map((a) => {
+        const row = a as SubmissionAttachment;
+        // BACKLOG-3731: a text row is owned by the text the shared lookup resolved.
+        const ownerKey = row.email_id ? `email:${row.email_id}` : `text:${row.resolved_message_id}`;
+        const record: SubmissionAttachmentRecord = {
+          id: crypto.randomUUID(),
+          submission_id: submissionId,
+          filename: row.filename || "unknown",
+          mime_type: (mime.lookup(row.filename || "") || row.mime_type || "application/octet-stream") as string,
+          file_size_bytes: gathered.preflight.sizeById.get(row.id) ?? row.file_size_bytes,
+          storage_path: buildAttachmentStoragePath(org, submissionId, row.id, row.filename || "unknown"),
+          document_type: row.document_type,
+          local_attachment_id: row.id,
+          // BACKLOG-3682: written at upload time from the manifest.
+          message_id: cloudIdByLocal.get(ownerKey) ?? null,
+        };
+        return { local: row, record };
+      });
+      manifestPaths = attachmentPlan.map((p) => p.record.storage_path);
 
-      if (existingSubmissionError) {
-        logService.error(
-          `[Submission] Existing-submission check failed for ${transactionId} — refusing to submit`,
-          "SubmissionService",
-          {
-            code: existingSubmissionError.code ?? null,
-            message: existingSubmissionError.message,
-          }
-        );
-        throw new Error(
-          `Could not check whether this transaction has already been submitted, so nothing was submitted. Please try again. (${existingSubmissionError.message})`
-        );
-      }
+      const excludedFiles: ExcludedFileRecord[] = notIncluded.map((item) => ({
+        filename: item.filename,
+        kind: item.kind,
+        message_id: cloudIdByLocal.get(`${item.kind}:${item.localMessageId}`) ?? null,
+        sent_at: item.sentAt,
+        source_label: item.label,
+        reason: item.reason,
+      }));
 
-      if (existingSubmission) {
-        /**
-         * BACKLOG-2853 — `submitted` IS BLOCKED. This list is the whole item.
-         *
-         * Until this change the list was
-         * ["under_review", "approved", "rejected"], so a deal sitting at
-         * `submitted` — awaiting the broker, nothing wrong with it — fell
-         * through to the delete below, whose own comment advertises that it
-         * "cascades to messages and attachments". The renderer offered that
-         * path an unqualified, enabled "Submit" button (SubmitForReviewModal
-         * computed `isResubmit` from `needs_changes` alone), so one mis-click
-         * on Complete → Submit aimed a cascading delete at a live submission.
-         *
-         * WHAT THE DATABASE ACTUALLY DOES TODAY — measured against the live
-         * Keepr project (`pg_policies`, `pg_class`), not read off the
-         * migration files, because it changes what this guard is FOR:
-         *
-         *   transaction_submissions: relrowsecurity = true,
-         *                            relforcerowsecurity = true
-         *   the only agent-facing DELETE policy is
-         *     agents_can_delete_stale_uploads
-         *     USING ((submitted_by = auth.uid())
-         *            AND (status::text = 'uploading'::text))
-         *
-         * The desktop client holds the ANON key plus the user session
-         * (supabaseService.ts — "never fall back to service_role key"), so
-         * that policy governs it. A DELETE aimed at a `submitted` row matches
-         * no row, PostgREST returns 204, and the result below is not checked
-         * anyway. The cascade never fires. The destruction is real in THIS
-         * FILE and is prevented by the database.
-         *
-         * So what a user hit instead was a LATE failure: the delete no-ops,
-         * then the attachment upload runs — the longest stage — and only then
-         * does the insert violate the live unique key
-         *   UNIQUE (organization_id, local_transaction_id, version,
-         *           submitted_by)
-         * with a duplicate-key error, having already pushed files to Storage
-         * under a submission id that will never exist. This check runs BEFORE
-         * that upload, so blocking here replaces a multi-minute walk to a
-         * confusing error with an immediate, accurate refusal.
-         *
-         * And it is the ONLY application-layer guard: `service_role_full_access_submissions`
-         * grants ALL on this table and is live, so any service-role caller
-         * that ever reaches this code is not covered by the RLS that covers
-         * the desktop today.
-         *
-         * BACKLOG-3390 — `resubmitted` IS ON THE LIST NOW, and this paragraph
-         * is where it used to say it was not.
-         *
-         * BACKLOG-2853 justified leaving it off with "it carries the identical
-         * hazard one broker round trip later" — WRONG, and withdrawn. It was
-         * then argued that adding the word would change nothing, because a
-         * `resubmitted` row only exists at version >= 2, two rows share
-         * `(organization_id, local_transaction_id)`, and the old single-row
-         * lookup returned PGRST116 so execution never arrived here at all.
-         * BACKLOG-2867 fixed that lookup and spent the second argument too,
-         * leaving a live decision sitting in front of a user.
-         *
-         * It arrived as one. After a successful resubmit the deal sits at
-         * `resubmitted`; the modal labels its action "Resubmit for Review"
-         * while `TransactionDetails` routes only `needs_changes` to
-         * `resubmitTransaction`, so the press ran a PLAIN submit holding
-         * version 1. The fixed lookup named the version-2 row, the list let it
-         * through, the full attachment upload ran, and the insert collided with
-         * the retained version-1 row — reaching the user as a raw unique
-         * constraint name. Released v2.37.0, founder QA 2026-09-16.
-         *
-         * The refusal now happens HERE, before the upload. The routing is
-         * deliberately NOT widened to send `resubmitted` to
-         * `resubmitTransaction`: that would insert version 3 and succeed,
-         * sending a second package on a deal the broker has not answered.
-         *
-         * The version-mismatch condition on the delete below is unchanged and
-         * still load-bearing — `needs_changes` at version >= 2 reaches it.
-         *
-         * BACKLOG-2868 — THE LIST AND THE MESSAGES NOW LIVE IN THEIR OWN
-         * MODULE. Not for tidiness: the renderer must tell the user the same
-         * thing this throw does, cannot import this file, and drifted the
-         * moment it had to write the words a second time. The modal's mirror
-         * is pinned to these strings by a parity test.
-         */
-        if (
-          (BLOCKED_SUBMISSION_STATUSES as readonly string[]).includes(
-            existingSubmission.status
-          )
-        ) {
-          throw new Error(
-            BLOCKED_SUBMISSION_MESSAGES[
-              existingSubmission.status as BlockedSubmissionStatus
-            ] || `Cannot resubmit with status: ${existingSubmission.status}`
-          );
-        }
-
-        /**
-         * BACKLOG-2853 — THE VERSIONING PATH NEVER DELETES ITS OWN PARENT.
-         *
-         * `resubmitTransaction` reads the current version, adds one, and calls
-         * this method with `parentSubmissionId` set to the row it is
-         * versioning FROM — the same row `existingSubmission` names here. The
-         * delete below would therefore have destroyed the parent, and the
-         * insert that follows carries
-         *   parent_submission_id -> that id
-         * against a foreign key that is plain
-         *   FOREIGN KEY (parent_submission_id)
-         *   REFERENCES transaction_submissions(id)
-         * with NO ON DELETE clause (verified live via pg_constraint). Had the
-         * delete ever succeeded, the resubmit would have destroyed the
-         * original AND then failed its own insert on that FK — losing the
-         * broker's review round trip outright.
-         *
-         * It has not fired in production only because the RLS policy quoted
-         * above no-ops the delete; the broker round trip works today by
-         * accident of the database, not by intent of this code. Skipping the
-         * delete when a version is being created makes the intent explicit and
-         * is what "needs_changes reaches the versioning path, never the delete
-         * branch" means. The unique key includes `version`, so the old and new
-         * rows coexist legally — nothing forces the delete.
-         *
-         * Production behaviour is unchanged by this branch: the delete it
-         * skips was already a no-op for every status that reaches it.
-         */
-        const existingVersion: number = existingSubmission.version ?? 1;
-
-        if (options?.parentSubmissionId) {
-          logService.info(
-            `[Submission] Versioning from submission ${existingSubmission.id} (status: ${existingSubmission.status}) — previous version retained`,
-            "SubmissionService"
-          );
-        } else if (existingVersion !== pendingVersion) {
-          /**
-           * BACKLOG-2867 — THE DELETE MAY ONLY REMOVE THE ROW THIS INSERT
-           * WOULD COLLIDE WITH.
-           *
-           * This condition exists because of the fix above, not despite it.
-           * Before it, the lookup could not name a row on a multi-version
-           * deal, so this branch was unreachable there. Now that the lookup
-           * names the CURRENT version, a plain `submitTransaction` on a
-           * round-tripped deal arrives here holding version 2 while about to
-           * insert version 1 — and would have deleted the live submission.
-           * Under the desktop's RLS that delete no-ops, but
-           * `service_role_full_access_submissions` is live on this table and
-           * grants ALL, and under it the row and its cascaded messages and
-           * attachments are gone and the version-1 insert then fails on the
-           * unique key anyway. Destruction with nothing to show for it, newly
-           * reachable, caused by a fix. Closed here rather than shipped.
-           *
-           * What the delete is FOR is clearing
-           *   UNIQUE (organization_id, local_transaction_id, version,
-           *           submitted_by)
-           * for the row about to be inserted at `pendingVersion`. A row at any
-           * OTHER version does not block that insert, so deleting it buys
-           * nothing and costs a submission.
-           *
-           * Every path that reached the delete before BACKLOG-2867 reached it
-           * at equal versions, so production behaviour is unchanged.
-           */
-          logService.warn(
-            `[Submission] Existing submission ${existingSubmission.id} is at version ${existingVersion} but this submit inserts version ${pendingVersion} — leaving it in place`,
-            "SubmissionService"
-          );
-        } else {
-          // Allowed to replace (status is 'resubmitted' or 'needs_changes')
-          logService.info(
-            `[Submission] Replacing existing submission ${existingSubmission.id} (status: ${existingSubmission.status}) at version ${existingVersion}`,
-            "SubmissionService"
-          );
-          // Delete old submission (cascades to messages and attachments)
-          await client
-            .from("transaction_submissions")
-            .delete()
-            .eq("id", existingSubmission.id);
-        }
-      }
-
-      const totalMessageCount = messages.length + emails.length;
+      const totalMessageCount = messageRecords.length;
       onProgress?.({
         stage: "preparing",
         stageProgress: 100,
         overallProgress: 10,
-        currentItem: `Found ${messages.length} texts, ${emails.length} emails, ${attachments.length} attachments`,
+        currentItem: `Found ${messages.length} texts, ${emails.length} emails, ${attachmentPlan.length} attachments`,
       });
 
-      // Stage 2: Upload attachments (30%)
-      if (attachments.length > 0) {
-        onProgress?.({
-          stage: "attachments",
-          stageProgress: 0,
-          overallProgress: 10,
-          currentItem: `Uploading ${attachments.length} attachments...`,
-        });
+      // ---- 1. A stale `uploading` row of this deal ---------------------
+      stage = "sweep";
+      await this.sweepStaleUploads(client, org, transactionId);
+      throwIfCancelled(signal);
 
-        const localAttachments: LocalAttachment[] = attachments.map((a) => ({
-          id: a.id,
-          localPath: a.storage_path || "",
-          filename: a.filename,
-        }));
-
-        const uploadResult = await supabaseStorageService.uploadAttachments(
-          orgId,
-          submissionId,
-          localAttachments,
-          (overallPct, current) => {
-            onProgress?.({
-              stage: "attachments",
-              stageProgress: overallPct,
-              overallProgress: 10 + overallPct * 0.3,
-              currentItem: `Uploading ${current.filename}...`,
-            });
-          }
-        );
-
-        attachmentUploadResults = uploadResult.results;
-
-        if (uploadResult.failedCount > 0) {
-          logService.warn(
-            `[Submission] ${uploadResult.failedCount} attachments failed to upload`,
-            "SubmissionService"
-          );
-        }
-      }
-
-      // Stage 3: Insert transaction submission (20%)
+      // ---- 2. Parent row as `uploading` --------------------------------
+      stage = "parent";
       onProgress?.({
         stage: "transaction",
         stageProgress: 0,
-        overallProgress: 40,
+        overallProgress: 15,
         currentItem: "Creating submission record...",
       });
-
       const submissionRecord = this.mapToSubmission(
         transaction,
-        orgId,
+        org,
         currentUserId,
         submissionId,
         totalMessageCount,
-        attachmentUploadResults.filter((r) => r.success).length,
+        attachmentPlan.length,
         options
       );
-
-      // Two-phase commit: insert as 'uploading' first, then finalize to 'submitted'
-      // after all messages and attachments are written. This prevents partial
-      // submissions from being visible on the broker portal if the app crashes mid-upload.
+      // Hidden from the broker until finalize_submission flips it.
       submissionRecord.status = "uploading";
-
-      // Clean up any stale 'uploading' record from a previous failed attempt
-      // (same org + local transaction = unique constraint)
-      const { data: staleRows } = await client
-        .from("transaction_submissions")
-        .select("id")
-        .eq("organization_id", orgId)
-        .eq("local_transaction_id", submissionRecord.local_transaction_id)
-        .eq("status", "uploading");
-
-      if (staleRows && staleRows.length > 0) {
-        const staleIds = staleRows.map((r: { id: string }) => r.id);
-        await client
-          .from("submission_attachments")
-          .delete()
-          .in("submission_id", staleIds);
-        await client
-          .from("submission_messages")
-          .delete()
-          .in("submission_id", staleIds);
-        await client
-          .from("transaction_submissions")
-          .delete()
-          .in("id", staleIds);
+      if (excludedFiles.length > 0) {
+        // The ONLY write of submission_metadata in this flow (a REST update
+        // would replace the whole object).
+        submissionRecord.submission_metadata = {
+          ...(submissionRecord.submission_metadata ?? {}),
+          excluded_files: excludedFiles,
+        };
       }
-
-      const { error: insertError } = await client
-        .from("transaction_submissions")
-        .insert(submissionRecord);
-
-      if (insertError) {
-        /**
-         * BACKLOG-3390 — THE LAST LINE OF DEFENCE DOES NOT SPEAK SQL.
-         *
-         * `23505` is Postgres's unique_violation. On this insert it can only be
-         * UNIQUE (organization_id, local_transaction_id, version, submitted_by)
-         * — i.e. this user already has a submission of this transaction at this
-         * version. The driver's `message` for it is the sentence the founder was
-         * shown verbatim:
-         *
-         *   duplicate key value violates unique constraint
-         *   "transaction_submissions_org_txn_version_user_key"
-         *
-         * The guard above is what stops him ever reaching this line by pressing
-         * Resubmit; this is what stops the raw name reaching ANY user by any
-         * other route (a second device, a service-role caller, a policy drift).
-         * A guard that only covers the one reported press would leave the string
-         * itself intact, and defect 2 of the item is the string.
-         *
-         * The raw driver text is LOGGED, not thrown — the diagnosis must survive
-         * somewhere, and the application log is the right somewhere. Other
-         * insert failures keep the driver's words, because they are genuinely
-         * unclassified and a vague sentence would be worse than a specific one;
-         * this branch is narrow on purpose.
-         */
-        if (insertError.code === "23505") {
+      // C1 (SR 8fa92bef): the attempt starts HERE, after every guard and just
+      // before the first write of this submission. Awaited, so a slow
+      // `in_progress` can never land after (and overwrite) the final outcome.
+      // A refusal before this point writes nothing and records no attempt.
+      attemptStarted = true;
+      await recordSubmissionAttempt(client, {
+        submissionId,
+        organizationId: org,
+        outcome: "in_progress",
+        stage: "parent",
+        reasonCode: null,
+        retryCount: 0,
+        // BACKLOG-3715 (coordinator ruling): what this attempt is about to
+        // send, flat snake_case whole numbers. The server merges counts with
+        // `||`, so a later update keeps these unless it sends the same key.
+        counts: inProgressAttemptCounts(
+          messageRecords.length,
+          attachmentPlan.length,
+          excludedFiles.length
+        ),
+        isResubmit,
+      });
+      parentSent = true;
+      try {
+        await withStageRetry(
+          "parent",
+          () =>
+            client
+              .from("transaction_submissions")
+              .upsert(submissionRecord, { onConflict: "id", ignoreDuplicates: true }),
+          { signal }
+        );
+      } catch (error) {
+        if (error instanceof SubmissionStageError && error.code === "23505") {
+          /**
+           * BACKLOG-3390 — THE LAST LINE OF DEFENCE DOES NOT SPEAK SQL.
+           * `23505` on this insert can only be
+           * UNIQUE (organization_id, local_transaction_id, version, submitted_by):
+           * this user already has a submission of this transaction at this
+           * version. The driver's text names the constraint; the user gets a
+           * sentence. (ON CONFLICT (id) does not swallow this one.)
+           */
           logService.error(
             `[Submission] Insert collided with an existing submission for ${transactionId} at version ${submissionRecord.version}`,
             "SubmissionService",
-            {
-              code: insertError.code,
-              message: insertError.message,
-            }
+            // The driver's words stay in the local log, never in front of the user.
+            { code: error.code, message: error.driverMessage }
           );
           throw new Error(
             "This transaction already has a submission at this version, so nothing new was sent. Close this window and reopen the transaction to refresh its status, then try again."
           );
         }
-        throw new Error(
-          `Failed to insert submission: ${insertError.message}`
-        );
+        throw error;
       }
+      throwIfCancelled(signal);
 
-      onProgress?.({
-        stage: "transaction",
-        stageProgress: 100,
-        overallProgress: 60,
-        currentItem: "Submission record created",
-      });
-
-      // Stage 4: Insert messages + emails (30%)
-      if (totalMessageCount > 0) {
-        onProgress?.({
-          stage: "messages",
-          stageProgress: 0,
-          overallProgress: 60,
-          currentItem: `Uploading ${messages.length} texts, ${emails.length} emails...`,
+      // ---- 3–6. Write, upload, snapshot (re-runnable) -----------------
+      const writeAll = async (rerun: boolean, includeChecklists: boolean) => {
+        stage = "messages";
+        await this.insertMessagesBatched(client, messageRecords, signal, (pct) => {
+          onProgress?.({
+            stage: "messages",
+            stageProgress: pct,
+            overallProgress: 20 + pct * 0.2,
+            currentItem: "Uploading messages...",
+          });
         });
 
-        // Map text messages
-        const textRecords = messages.map((m) =>
-          this.mapToSubmissionMessage(m, submissionId, partyNames)
-        );
-        // Map emails
-        const emailRecords = emails.map((e) =>
-          this.mapEmailToSubmissionMessage(e, submissionId)
-        );
-        const allMessageRecords = [...textRecords, ...emailRecords];
+        stage = "attachment_rows";
+        const rows = attachmentPlan.map((p) => p.record);
+        for (let i = 0; i < rows.length; i += ATTACHMENT_ROW_BATCH_SIZE) {
+          throwIfCancelled(signal);
+          const batch = rows.slice(i, i + ATTACHMENT_ROW_BATCH_SIZE);
+          await withStageRetry(
+            "attachment_rows",
+            () =>
+              client
+                .from("submission_attachments")
+                .upsert(batch, { onConflict: "id", ignoreDuplicates: true }),
+            { signal }
+          );
+        }
 
-        await this.insertMessagesBatched(
-          allMessageRecords,
-          (batchProgress) => {
-            onProgress?.({
-              stage: "messages",
-              stageProgress: batchProgress,
-              overallProgress: 60 + batchProgress * 0.3,
-              currentItem: `Uploading messages...`,
-            });
-          }
-        );
-      }
-
-      // Stage 5: Insert attachment metadata (10%)
-      const successfulUploads = attachmentUploadResults.filter((r) => r.success);
-      if (successfulUploads.length > 0) {
-        const attachmentRecords = successfulUploads.map((upload) => {
-          // BACKLOG-3477: `upload.localId` is the local FILE PATH, and local
-          // attachment files are content-addressed — two attachment rows with
-          // the same bytes share one path, so a find() by path names the first
-          // row for both. `uploadAttachments` returns one result per input, in
-          // input order, so the row this upload came from is the one at the
-          // same index. The find() stays as the fallback.
-          const paired = attachments[attachmentUploadResults.indexOf(upload)];
-          const originalAttachment =
-            paired &&
-            (paired.storage_path === upload.localId || paired.id === upload.localId)
-              ? paired
-              : attachments.find(
-                  (a) => a.storage_path === upload.localId || a.id === upload.localId
-                );
-          return this.mapToSubmissionAttachment(
-            upload,
+        stage = "uploads";
+        for (let i = 0; i < attachmentPlan.length; i++) {
+          throwIfCancelled(signal);
+          const { local, record } = attachmentPlan[i];
+          const base = (i / Math.max(attachmentPlan.length, 1)) * 100;
+          const result = await supabaseStorageService.uploadAttachmentWithRetry(
+            org,
             submissionId,
-            originalAttachment
+            local.id,
+            local.storage_path || "",
+            local.filename || "unknown",
+            (progress) => {
+              const pct = base + (progress.percentage / attachmentPlan.length);
+              onProgress?.({
+                stage: "attachments",
+                stageProgress: pct,
+                overallProgress: 40 + pct * 0.4,
+                currentItem: `Uploading ${record.filename}...`,
+              });
+            },
+            undefined,
+            { earlierAttemptMayHaveSent: rerun }
           );
+          if (!result?.success) {
+            throw new SubmissionStageError(
+              "uploads",
+              null,
+              true,
+              3,
+              "An attachment could not be uploaded"
+            );
+          }
+          if (result.storagePath !== record.storage_path) {
+            // One producer of the path; a mismatch is a bug, not a retry.
+            throw new SubmissionStageError(
+              "uploads",
+              "path_mismatch",
+              false,
+              1,
+              "An attachment was stored under an unexpected path"
+            );
+          }
+        }
+
+        if (includeChecklists) {
+          stage = "checklists";
+          throwIfCancelled(signal);
+          const outcome = await snapshotSubmissionChecklists(
+            client,
+            submissionId,
+            transactionId
+          );
+          if (outcome.status === "failed") {
+            if (outcome.kind === "transient") {
+              throw new ChecklistsNotSentError();
+            }
+            return { checklists: null, checklistsNotSent: outcome.kind };
+          }
+          if (outcome.status === "none") return { checklists: 0, checklistsNotSent: undefined };
+          return {
+            checklists: outcome.counts ? outcome.counts.checklists : null,
+            checklistsNotSent: undefined,
+          };
+        }
+        return null;
+      };
+
+      const first = await writeAll(false, true);
+      let manifestChecklists = first?.checklists ?? null;
+      const checklistsNotSent: ChecklistsNotSentReason | undefined = first?.checklistsNotSent;
+      checklistsNotSentOuter = checklistsNotSent;
+
+      const manifest = () => ({
+        message_ids: messageRecords.map((m) => m.id),
+        attachments: attachmentPlan.map((p) => ({
+          id: p.record.id,
+          storage_path: p.record.storage_path,
+          message_id: p.record.message_id,
+        })),
+        checklists: manifestChecklists,
+      });
+      manifestCounts = {
+        messages: messageRecords.length,
+        attachments: attachmentPlan.length,
+        checklists: manifestChecklists,
+      };
+
+      // ---- 7. Finalize — the point of no return ------------------------
+      throwIfCancelled(signal);
+      stage = "finalize";
+      active.finalizing = true;
+      onProgress?.({
+        stage: "finalizing",
+        stageProgress: 0,
+        overallProgress: 90,
+        currentItem: "Finalizing submission...",
+      });
+
+      let answer = await this.callFinalize(client, submissionId, manifest());
+      if (answer.kind === "refused" && answer.code === "incomplete") {
+        // The refusal carries counts only, so re-send every piece once
+        // (all idempotent) and ask again. The checklist snapshot runs again
+        // only when the checklists are what is missing (it refuses a second
+        // copy of a set that landed).
+        refusal = pickRefusalCounts(answer.data);
+        logService.warn(
+          "[Submission] Finalize refused as incomplete; re-sending once",
+          "SubmissionService",
+          { submissionId, refusal }
+        );
+        const checklistsShort =
+          typeof refusal.checklists_expected === "number" &&
+          refusal.checklists_found !== refusal.checklists_expected;
+        active.finalizing = false;
+        const again = await writeAll(true, checklistsShort);
+        if (again && again.checklists !== undefined && checklistsShort) {
+          manifestChecklists = again.checklists;
+        }
+        // C2 (SR 8fa92bef): Cancel is accepted during the re-run, so check it
+        // again before asking the server a second time.
+        throwIfCancelled(signal);
+        active.finalizing = true;
+        answer = await this.callFinalize(client, submissionId, manifest());
+      }
+
+      let committedStatus: string | null = null;
+      if (answer.kind === "ok") {
+        committedStatus = answer.status;
+      } else if (answer.kind === "refused" && answer.code === "not_uploading") {
+        // The id is minted per attempt: out of `uploading` means OUR finalize
+        // committed (SR condition 2). Read what it became.
+        committedStatus = await this.readCommittedStatus(client, submissionId);
+      } else if (answer.kind === "no_answer") {
+        stage = "read_back";
+        let row: { status: string } | null;
+        try {
+          row = await readSubmissionStatus(client, submissionId);
+        } catch {
+          // Do NOT clean up: it may have committed. Do not touch local state.
+          throw new UnconfirmedSubmissionError();
+        }
+        if (!row) {
+          throw new FinalizeFailedError("not_found", "finalize");
+        }
+        if (row.status !== "uploading") {
+          committedStatus = row.status;
+        } else {
+          throw new FinalizeFailedError("retries_exhausted", "finalize", answer.code);
+        }
+      } else if (answer.kind === "refused") {
+        if (answer.code === "incomplete") {
+          refusal = pickRefusalCounts(answer.data);
+          throw new FinalizeFailedError("finalize_refused", "finalize");
+        }
+        const reason: SubmissionFailureReason =
+          answer.code === "abandoned"
+            ? "abandoned"
+            : answer.code === "not_owner"
+              ? "not_owner"
+              : answer.code === "not_found"
+                ? "not_found"
+                : "permanent_error";
+        throw new FinalizeFailedError(reason, "finalize", answer.code);
+      } else {
+        throw new FinalizeFailedError(answer.reason, "finalize", answer.code);
+      }
+
+      // ---- 8. Local status, from the server's answer ------------------
+      if (committedStatus) {
+        await this.updateLocalSubmissionStatus(transactionId, {
+          submission_status: committedStatus as SubmissionStatus,
+          submission_id: submissionId,
+          submitted_at: new Date().toISOString(),
         });
-
-        const { error: attachError } = await client
-          .from("submission_attachments")
-          .insert(attachmentRecords);
-
-        if (attachError) {
-          logService.warn(
-            `[Submission] Failed to insert attachment records: ${attachError.message}`,
-            "SubmissionService"
-          );
-        }
-      }
-
-      // Stage 5b (BACKLOG-3477): copy every checklist while the submission is
-      // still 'uploading' — the copy tables refuse inserts after finalize.
-      // BACKLOG-3600: a transient failure (retries exhausted) FAILS the
-      // submission here, before finalize, so the catch removes the uploading
-      // row and the broker never sees a version without its checklists. A
-      // permanent refusal (plan without checklists, or drift) submits and
-      // reports `checklistsNotSent` so the agent is told.
-      const checklistOutcome = await snapshotSubmissionChecklists(
-        client,
-        submissionId,
-        transactionId
-      );
-      let checklistsNotSent: ChecklistsNotSentReason | undefined;
-      if (checklistOutcome.status === "failed") {
-        if (checklistOutcome.kind === "transient") {
-          throw new Error(CHECKLISTS_NOT_SENT_ERROR);
-        }
-        checklistsNotSent = checklistOutcome.kind;
-      }
-
-      // Stage 6: Finalize submission — all data written, mark as 'submitted'
-      // This is the commit point: only now does the submission become visible to brokers
-      const finalStatus = options?.version ? "resubmitted" : "submitted";
-      const { error: finalizeError } = await client
-        .from("transaction_submissions")
-        .update({ status: finalStatus })
-        .eq("id", submissionId);
-
-      if (finalizeError) {
-        throw new Error(
-          `Failed to finalize submission: ${finalizeError.message}`
+      } else {
+        logService.warn(
+          `[Submission] ${submissionId} committed but its status could not be read; local status left for the sync pass`,
+          "SubmissionService"
         );
       }
-
-      // Stage 7: Update local status
-      await this.updateLocalSubmissionStatus(transactionId, {
-        submission_status: options?.version
-          ? "resubmitted"
-          : ("submitted" as SubmissionStatus),
-        submission_id: submissionId,
-        submitted_at: new Date().toISOString(),
-      });
 
       onProgress?.({
         stage: "complete",
@@ -1083,6 +1307,9 @@ class SubmissionService {
         currentItem: "Submission complete",
       });
 
+      const flaggedWithoutAttachments = new Set(
+        notIncluded.map((i) => `${i.kind}:${i.localMessageId}`)
+      ).size;
       logService.info(
         `[Submission] Transaction ${transactionId} submitted successfully as ${submissionId}`,
         "SubmissionService",
@@ -1090,39 +1317,187 @@ class SubmissionService {
           textsCount: messages.length,
           emailsCount: emails.length,
           totalMessages: totalMessageCount,
-          attachmentsCount: successfulUploads.length,
-          attachmentsFailed: attachmentUploadResults.filter((r) => !r.success)
-            .length,
-          // BACKLOG-3389: the number that used to be unrecorded. Logged even
-          // when it is 0 — a zero that is PRINTED is a measurement; a zero that
-          // is absent is what this item was.
+          attachmentsCount: attachmentPlan.length,
+          // BACKLOG-3389: printed even when 0 — a printed zero is a measurement.
           flaggedWithoutAttachments,
+          notIncluded: notIncluded.length,
         }
       );
+      reportSubmissionExclusions(submissionId, notIncluded, cloudIdByLocal);
 
-      this._isSubmitting = false;
       return {
         success: true,
         submissionId,
         messagesCount: totalMessageCount,
-        attachmentsCount: successfulUploads.length,
-        attachmentsFailed: attachmentUploadResults.filter((r) => !r.success)
-          .length,
+        attachmentsCount: attachmentPlan.length,
         flaggedWithoutAttachments,
+        notIncluded,
         ...(checklistsNotSent ? { checklistsNotSent } : {}),
       };
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
+      return await this.handleSubmitFailure({
+        error,
+        client,
+        transactionId,
+        submissionId,
+        orgId,
+        stage,
+        parentSent,
+        manifestPaths,
+        manifestCounts,
+        refusal,
+        notIncludedCount: notIncluded.length,
+        notIncluded,
+        cloudIdByLocal: cloudIdByLocalOuter,
+        checklistsNotSent: checklistsNotSentOuter,
+        attemptStarted,
+        isResubmit,
+        onProgress,
+        failedResult,
+      });
+    } finally {
+      if (this.active === active) this.active = null;
+      this._isSubmitting = false;
+    }
+  }
 
-      logService.error(
-        `[Submission] Failed to submit transaction ${transactionId}: ${errorMessage}`,
-        "SubmissionService"
-      );
+  /**
+   * Every failure after Submit lands here. The fence runs first (inside
+   * `abandonSubmission`); if it finds the submission already committed, this
+   * reports success instead — that is what "a lost answer is safe" means.
+   */
+  private async handleSubmitFailure(ctx: {
+    error: unknown;
+    client: SupabaseClient;
+    transactionId: string;
+    submissionId: string;
+    orgId: string | null;
+    stage: SubmissionStageName;
+    parentSent: boolean;
+    manifestPaths: string[];
+    manifestCounts: ManifestCounts | null;
+    refusal: FinalizeRefusalCounts | null;
+    notIncludedCount: number;
+    notIncluded: NotIncludedItem[];
+    cloudIdByLocal: Map<string, string>;
+    checklistsNotSent: ChecklistsNotSentReason | undefined;
+    attemptStarted: boolean;
+    isResubmit: boolean;
+    onProgress?: (progress: SubmissionProgress) => void;
+    failedResult: (error: string, extra?: Partial<SubmissionResult>) => SubmissionResult;
+  }): Promise<SubmissionResult> {
+    const { error, client, transactionId, submissionId, orgId, stage } = ctx;
+    const cancelled = error instanceof SubmissionCancelledError;
+    const unconfirmed = error instanceof UnconfirmedSubmissionError;
 
-      // Log to Supabase error_logs (fire-and-forget)
+    let reason: SubmissionFailureReason;
+    let errorCode: string | null = null;
+    let attempts = 1;
+    let shown: string;
+    if (cancelled) {
+      reason = "permanent_error";
+      shown = SUBMISSION_CANCELLED_MESSAGE;
+    } else if (unconfirmed) {
+      reason = "unconfirmed";
+      shown = SUBMISSION_UNCONFIRMED_ERROR;
+    } else if (error instanceof FinalizeFailedError) {
+      reason = error.reason;
+      errorCode = error.code;
+      shown = SUBMISSION_NOT_SENT_ERROR;
+    } else if (error instanceof SubmissionStageError) {
+      reason = error.transient ? "retries_exhausted" : "permanent_error";
+      errorCode = error.code;
+      attempts = error.attempts;
+      shown = SUBMISSION_NOT_SENT_ERROR;
+    } else if (error instanceof ChecklistsNotSentError) {
+      reason = "retries_exhausted";
+      shown = CHECKLISTS_NOT_SENT_ERROR;
+    } else {
+      // A guard's own refusal (already submitted, not a member, …): its
+      // sentence is the report.
+      reason = "permanent_error";
+      shown = error instanceof Error ? error.message : "Unknown error";
+    }
+
+    logService.error(
+      `[Submission] Failed to submit transaction ${transactionId} at ${stage}: ${cancelled ? "cancelled" : reason}${errorCode ? ` (${errorCode})` : ""}`,
+      "SubmissionService"
+    );
+
+    // Clean up — fence first. Never after an unconfirmed finalize, and only
+    // when the parent row may exist.
+    let cleanupComplete: boolean | null = null;
+    if (ctx.parentSent && !unconfirmed && !(error instanceof FinalizeFailedError && error.reason === "not_found")) {
+      const abandoned = await abandonSubmission(client, submissionId, ctx.manifestPaths);
+      cleanupComplete = abandoned.cleanupComplete;
+      if (abandoned.outcome === "committed" && abandoned.status) {
+        // The fence found it committed: it went through. Report the truth.
+        logService.warn(
+          `[Submission] ${submissionId} had committed (${abandoned.status}); nothing deleted`,
+          "SubmissionService"
+        );
+        await this.updateLocalSubmissionStatus(transactionId, {
+          submission_status: abandoned.status as SubmissionStatus,
+          submission_id: submissionId,
+          submitted_at: new Date().toISOString(),
+        });
+        ctx.onProgress?.({ stage: "complete", stageProgress: 100, overallProgress: 100, currentItem: "Submission complete" });
+        // C3 (SR 8fa92bef): the same success as the main path — the agent
+        // still sees what was left out, and the 3681 warning is still sent.
+        reportSubmissionExclusions(submissionId, ctx.notIncluded, ctx.cloudIdByLocal);
+        return {
+          success: true,
+          submissionId,
+          messagesCount: ctx.manifestCounts?.messages ?? 0,
+          attachmentsCount: ctx.manifestCounts?.attachments ?? 0,
+          flaggedWithoutAttachments: new Set(
+            ctx.notIncluded.map((i) => `${i.kind}:${i.localMessageId}`)
+          ).size,
+          notIncluded: ctx.notIncluded,
+          ...(ctx.checklistsNotSent ? { checklistsNotSent: ctx.checklistsNotSent } : {}),
+        };
+      }
+      if (abandoned.outcome === "unknown") {
+        logService.warn(
+          `[Submission] Could not fence ${submissionId}; nothing deleted (it stays hidden from the broker)`,
+          "SubmissionService"
+        );
+      }
+    }
+
+    // C1: a final outcome only for an attempt that started (its `in_progress`
+    // row was written just before the parent write).
+    if (orgId && ctx.attemptStarted) {
+      await recordSubmissionAttempt(client, {
+        submissionId,
+        organizationId: orgId,
+        outcome: cancelled ? "cancelled" : unconfirmed ? "unconfirmed" : "failed",
+        stage,
+        reasonCode: cancelled ? "user_cancelled" : reason,
+        retryCount: attempts > 0 ? attempts - 1 : 0,
+        counts: flatAttemptCounts(ctx.manifestCounts, ctx.notIncludedCount, ctx.refusal),
+        isResubmit: ctx.isResubmit,
+      });
+    }
+
+    if (!cancelled && ctx.parentSent) {
+      reportSubmissionFailure({
+        submissionId,
+        isResubmit: ctx.isResubmit,
+        stage,
+        reason,
+        attempts,
+        errorCode,
+        manifest: ctx.manifestCounts,
+        refusal: ctx.refusal,
+        cleanupComplete,
+      });
+    }
+
+    // Supabase error_logs (fire-and-forget). The shown sentence only — never
+    // the driver's text, which can carry a path or file name.
+    if (!cancelled) {
       try {
-        const client = supabaseService.getClient();
         const session = await supabaseService.getAuthSession();
         await client.from("error_logs").insert({
           user_id: session?.userId ?? null,
@@ -1132,38 +1507,397 @@ class SubmissionService {
           os_version: os.release(),
           platform: process.arch,
           error_type: "submission_failure",
-          error_message: errorMessage,
-          stack_trace: error instanceof Error ? error.stack : null,
+          error_message: shown,
+          stack_trace: null,
           current_screen: "SubmitForReviewModal",
-          app_state: { transactionId, submissionId },
+          app_state: { transactionId, submissionId, stage, reason, errorCode },
         });
       } catch {
         // Don't let error logging prevent the main error flow
       }
+    }
 
-      onProgress?.({
-        stage: "failed",
-        stageProgress: 0,
-        overallProgress: 0,
-        currentItem: errorMessage,
+    ctx.onProgress?.({
+      stage: "failed",
+      stageProgress: 0,
+      overallProgress: 0,
+      currentItem: shown,
+    });
+
+    return ctx.failedResult(shown, {
+      ...(cancelled ? { cancelled: true } : {}),
+      ...(unconfirmed ? { unconfirmed: true } : {}),
+    });
+  }
+
+  /** Ask the server to finalize. Classifies every answer; never throws. */
+  private async callFinalize(
+    client: SupabaseClient,
+    submissionId: string,
+    manifest: Record<string, unknown>
+  ): Promise<
+    | { kind: "ok"; status: string }
+    | { kind: "refused"; code: string; data: unknown }
+    | { kind: "no_answer"; code: string | null }
+    | { kind: "permanent"; reason: SubmissionFailureReason; code: string | null }
+  > {
+    try {
+      const data = await withStageRetry("finalize", () =>
+        client.rpc("finalize_submission", {
+          p_submission_id: submissionId,
+          p_manifest: manifest,
+        })
+      );
+      const d = (data ?? {}) as { ok?: boolean; status?: string; code?: string };
+      if (d.ok === true && typeof d.status === "string") {
+        return { kind: "ok", status: d.status };
+      }
+      return { kind: "refused", code: typeof d.code === "string" ? d.code : "unknown", data };
+    } catch (error) {
+      if (error instanceof SubmissionStageError) {
+        if (!error.transient) {
+          // PGRST202: this database does not have finalize_submission. The
+          // desktop has no fallback to the old client-side flip on purpose.
+          return {
+            kind: "permanent",
+            reason: error.code === "PGRST202" ? "rpc_missing" : "permanent_error",
+            code: error.code,
+          };
+        }
+        return { kind: "no_answer", code: error.code };
+      }
+      return { kind: "no_answer", code: null };
+    }
+  }
+
+  /** After `not_uploading`: the status our finalize committed, or null if unreadable. */
+  private async readCommittedStatus(
+    client: SupabaseClient,
+    submissionId: string
+  ): Promise<string | null> {
+    try {
+      const row = await readSubmissionStatus(client, submissionId);
+      return row && row.status !== "uploading" ? row.status : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Clear a stale `uploading` submission of this deal (an earlier attempt that
+   * never finished) so the parent insert does not collide with it. Each goes
+   * through the same fence → files → rows as any other abandon. Best effort: a
+   * row that survives makes the insert refuse in plain words.
+   */
+  private async sweepStaleUploads(
+    client: SupabaseClient,
+    orgId: string,
+    transactionId: string
+  ): Promise<void> {
+    let staleIds: string[] = [];
+    try {
+      const rows = (await withStageRetry("sweep", () =>
+        client
+          .from("transaction_submissions")
+          .select("id")
+          .eq("organization_id", orgId)
+          .eq("local_transaction_id", transactionId)
+          .eq("status", "uploading")
+      )) as { id: string }[] | null;
+      staleIds = (rows ?? []).map((r) => r.id);
+    } catch {
+      return;
+    }
+    for (const staleId of staleIds) {
+      let paths: string[] = [];
+      try {
+        const rows = (await withStageRetry("sweep", () =>
+          client
+            .from("submission_attachments")
+            .select("storage_path")
+            .eq("submission_id", staleId)
+        )) as { storage_path: string }[] | null;
+        paths = (rows ?? []).map((r) => r.storage_path);
+      } catch {
+        // Without the paths the files cannot be named; leave the row alone.
+        continue;
+      }
+      const result = await abandonSubmission(client, staleId, paths, {
+        finishEarlierAbandon: true,
       });
+      logService.info(
+        `[Submission] Stale upload ${staleId}: ${result.outcome}`,
+        "SubmissionService",
+        { cleanupComplete: result.cleanupComplete, filesRemoved: result.filesRemoved }
+      );
+    }
+  }
 
-      // Cleanup on failure
-      await this.cleanupFailedSubmission(submissionId);
+  /**
+   * BACKLOG-2853 / 2867 / 3390 — refuse before anything is written when the
+   * deal already has a submission the broker holds. Unchanged in substance;
+   * moved out of the flow so the flow reads top to bottom.
+   */
+  private async guardExistingSubmission(
+    client: SupabaseClient,
+    orgId: string,
+    transactionId: string,
+    options?: { version?: number; parentSubmissionId?: string }
+  ): Promise<void> {
+    /**
+     * The version this attempt will INSERT. Mirrors `mapToSubmission`, which
+     * writes `version: options?.version || 1` — the two must agree, because
+     * the delete below is keyed off the comparison.
+     */
+    const pendingVersion = options?.version || 1;
+    /**
+     * BACKLOG-2867 — NAME ONE ROW, AND READ THE ERROR.
+     *
+     * This lookup used to be
+     *
+     *   const { data: existingSubmission } = await client
+     *     .from("transaction_submissions")
+     *     .select("id, status")
+     *     .eq("organization_id", orgId)
+     *     .eq("local_transaction_id", transactionId)
+     *     .maybeSingle();
+     *
+     * — no ordering, no limit, and the `error` not destructured at all.
+     *
+     * A deal that has been round-tripped once has TWO rows here: the unique
+     * key is (organization_id, local_transaction_id, version, submitted_by),
+     * so versions coexist legally, and the versioning path deliberately
+     * retains its parent. `.maybeSingle()` against two rows makes PostgREST
+     * answer PGRST116 with `data: null` — and with the error discarded, that
+     * is indistinguishable from "this deal has never been submitted".
+     * `if (existingSubmission)` was false and the entire status guard below
+     * was skipped, on exactly the deals furthest along: measured live on
+     * 2026-08-25, one transaction sat at versions [1, 2] / statuses
+     * [rejected, under_review] and was unguarded.
+     *
+     * Both halves are needed, and each is proved by its own control:
+     *
+     *   ORDER BY version DESC LIMIT 1 — decide against the CURRENT version.
+     *     Secondary order on created_at because the unique key permits a
+     *     version tie between two submitters in one org; without it the row
+     *     the database happens to return first would decide the guard.
+     *
+     *   The ERROR, read and refused on. With `limit(1)` a multi-row PGRST116
+     *     can no longer occur, so there is no "no rows" case left to
+     *     tolerate: `data: null` means no submission exists, and an `error`
+     *     means the question could not be answered. Failing closed is the
+     *     point — the alternative is what this item is about, a failed check
+     *     read as a clean bill of health.
+     */
+    const { data: existingSubmission, error: existingSubmissionError } =
+      await client
+        .from("transaction_submissions")
+        .select("id, status, version")
+        .eq("organization_id", orgId)
+        .eq("local_transaction_id", transactionId)
+        .order("version", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-      this._isSubmitting = false;
-      return {
-        success: false,
-        submissionId: null,
-        error: errorMessage,
-        messagesCount: 0,
-        attachmentsCount: 0,
-        attachmentsFailed: 0,
-        // Nothing was submitted, so nothing was dropped from a submission. The
-        // error is the report here; this field would only add a second,
-        // weaker one.
-        flaggedWithoutAttachments: 0,
-      };
+    if (existingSubmissionError) {
+      logService.error(
+        `[Submission] Existing-submission check failed for ${transactionId} — refusing to submit`,
+        "SubmissionService",
+        {
+          code: existingSubmissionError.code ?? null,
+          message: existingSubmissionError.message,
+        }
+      );
+      throw new Error(
+        `Could not check whether this transaction has already been submitted, so nothing was submitted. Please try again. (${existingSubmissionError.message})`
+      );
+    }
+
+    if (existingSubmission) {
+      /**
+       * BACKLOG-2853 — `submitted` IS BLOCKED. This list is the whole item.
+       *
+       * Until this change the list was
+       * ["under_review", "approved", "rejected"], so a deal sitting at
+       * `submitted` — awaiting the broker, nothing wrong with it — fell
+       * through to the delete below, whose own comment advertises that it
+       * "cascades to messages and attachments". The renderer offered that
+       * path an unqualified, enabled "Submit" button (SubmitForReviewModal
+       * computed `isResubmit` from `needs_changes` alone), so one mis-click
+       * on Complete → Submit aimed a cascading delete at a live submission.
+       *
+       * WHAT THE DATABASE ACTUALLY DOES TODAY — measured against the live
+       * Keepr project (`pg_policies`, `pg_class`), not read off the
+       * migration files, because it changes what this guard is FOR:
+       *
+       *   transaction_submissions: relrowsecurity = true,
+       *                            relforcerowsecurity = true
+       *   the only agent-facing DELETE policy is
+       *     agents_can_delete_stale_uploads
+       *     USING ((submitted_by = auth.uid())
+       *            AND (status::text = 'uploading'::text))
+       *
+       * The desktop client holds the ANON key plus the user session
+       * (supabaseService.ts — "never fall back to service_role key"), so
+       * that policy governs it. A DELETE aimed at a `submitted` row matches
+       * no row, PostgREST returns 204, and the result below is not checked
+       * anyway. The cascade never fires. The destruction is real in THIS
+       * FILE and is prevented by the database.
+       *
+       * So what a user hit instead was a LATE failure: the delete no-ops,
+       * then the attachment upload runs — the longest stage — and only then
+       * does the insert violate the live unique key
+       *   UNIQUE (organization_id, local_transaction_id, version,
+       *           submitted_by)
+       * with a duplicate-key error, having already pushed files to Storage
+       * under a submission id that will never exist. This check runs BEFORE
+       * that upload, so blocking here replaces a multi-minute walk to a
+       * confusing error with an immediate, accurate refusal.
+       *
+       * And it is the ONLY application-layer guard: `service_role_full_access_submissions`
+       * grants ALL on this table and is live, so any service-role caller
+       * that ever reaches this code is not covered by the RLS that covers
+       * the desktop today.
+       *
+       * BACKLOG-3390 — `resubmitted` IS ON THE LIST NOW, and this paragraph
+       * is where it used to say it was not.
+       *
+       * BACKLOG-2853 justified leaving it off with "it carries the identical
+       * hazard one broker round trip later" — WRONG, and withdrawn. It was
+       * then argued that adding the word would change nothing, because a
+       * `resubmitted` row only exists at version >= 2, two rows share
+       * `(organization_id, local_transaction_id)`, and the old single-row
+       * lookup returned PGRST116 so execution never arrived here at all.
+       * BACKLOG-2867 fixed that lookup and spent the second argument too,
+       * leaving a live decision sitting in front of a user.
+       *
+       * It arrived as one. After a successful resubmit the deal sits at
+       * `resubmitted`; the modal labels its action "Resubmit for Review"
+       * while `TransactionDetails` routes only `needs_changes` to
+       * `resubmitTransaction`, so the press ran a PLAIN submit holding
+       * version 1. The fixed lookup named the version-2 row, the list let it
+       * through, the full attachment upload ran, and the insert collided with
+       * the retained version-1 row — reaching the user as a raw unique
+       * constraint name. Released v2.37.0, founder QA 2026-09-16.
+       *
+       * The refusal now happens HERE, before the upload. The routing is
+       * deliberately NOT widened to send `resubmitted` to
+       * `resubmitTransaction`: that would insert version 3 and succeed,
+       * sending a second package on a deal the broker has not answered.
+       *
+       * The version-mismatch condition on the delete below is unchanged and
+       * still load-bearing — `needs_changes` at version >= 2 reaches it.
+       *
+       * BACKLOG-2868 — THE LIST AND THE MESSAGES NOW LIVE IN THEIR OWN
+       * MODULE. Not for tidiness: the renderer must tell the user the same
+       * thing this throw does, cannot import this file, and drifted the
+       * moment it had to write the words a second time. The modal's mirror
+       * is pinned to these strings by a parity test.
+       */
+      if (
+        (BLOCKED_SUBMISSION_STATUSES as readonly string[]).includes(
+          existingSubmission.status
+        )
+      ) {
+        throw new Error(
+          BLOCKED_SUBMISSION_MESSAGES[
+            existingSubmission.status as BlockedSubmissionStatus
+          ] || `Cannot resubmit with status: ${existingSubmission.status}`
+        );
+      }
+
+      /**
+       * BACKLOG-2853 — THE VERSIONING PATH NEVER DELETES ITS OWN PARENT.
+       *
+       * `resubmitTransaction` reads the current version, adds one, and calls
+       * this method with `parentSubmissionId` set to the row it is
+       * versioning FROM — the same row `existingSubmission` names here. The
+       * delete below would therefore have destroyed the parent, and the
+       * insert that follows carries
+       *   parent_submission_id -> that id
+       * against a foreign key that is plain
+       *   FOREIGN KEY (parent_submission_id)
+       *   REFERENCES transaction_submissions(id)
+       * with NO ON DELETE clause (verified live via pg_constraint). Had the
+       * delete ever succeeded, the resubmit would have destroyed the
+       * original AND then failed its own insert on that FK — losing the
+       * broker's review round trip outright.
+       *
+       * It has not fired in production only because the RLS policy quoted
+       * above no-ops the delete; the broker round trip works today by
+       * accident of the database, not by intent of this code. Skipping the
+       * delete when a version is being created makes the intent explicit and
+       * is what "needs_changes reaches the versioning path, never the delete
+       * branch" means. The unique key includes `version`, so the old and new
+       * rows coexist legally — nothing forces the delete.
+       *
+       * Production behaviour is unchanged by this branch: the delete it
+       * skips was already a no-op for every status that reaches it.
+       */
+      const existingVersion: number = existingSubmission.version ?? 1;
+
+      if (options?.parentSubmissionId) {
+        logService.info(
+          `[Submission] Versioning from submission ${existingSubmission.id} (status: ${existingSubmission.status}) — previous version retained`,
+          "SubmissionService"
+        );
+      } else if (existingVersion !== pendingVersion) {
+        /**
+         * BACKLOG-2867 — THE DELETE MAY ONLY REMOVE THE ROW THIS INSERT
+         * WOULD COLLIDE WITH.
+         *
+         * This condition exists because of the fix above, not despite it.
+         * Before it, the lookup could not name a row on a multi-version
+         * deal, so this branch was unreachable there. Now that the lookup
+         * names the CURRENT version, a plain `submitTransaction` on a
+         * round-tripped deal arrives here holding version 2 while about to
+         * insert version 1 — and would have deleted the live submission.
+         * Under the desktop's RLS that delete no-ops, but
+         * `service_role_full_access_submissions` is live on this table and
+         * grants ALL, and under it the row and its cascaded messages and
+         * attachments are gone and the version-1 insert then fails on the
+         * unique key anyway. Destruction with nothing to show for it, newly
+         * reachable, caused by a fix. Closed here rather than shipped.
+         *
+         * What the delete is FOR is clearing
+         *   UNIQUE (organization_id, local_transaction_id, version,
+         *           submitted_by)
+         * for the row about to be inserted at `pendingVersion`. A row at any
+         * OTHER version does not block that insert, so deleting it buys
+         * nothing and costs a submission.
+         *
+         * Every path that reached the delete before BACKLOG-2867 reached it
+         * at equal versions, so production behaviour is unchanged.
+         */
+        logService.warn(
+          `[Submission] Existing submission ${existingSubmission.id} is at version ${existingVersion} but this submit inserts version ${pendingVersion} — leaving it in place`,
+          "SubmissionService"
+        );
+      } else if (existingSubmission.status === "uploading") {
+        /**
+         * BACKLOG-3403 — an `uploading` row at this version is an earlier
+         * attempt that never finished. It is NOT deleted here: a plain delete
+         * would skip the fence and orphan its files (the bucket policies read
+         * the row). The stale-upload sweep removes it — fence, files, rows —
+         * right before the new parent insert.
+         */
+        logService.info(
+          `[Submission] Earlier unfinished attempt ${existingSubmission.id} at version ${existingVersion} — left for the stale-upload sweep`,
+          "SubmissionService"
+        );
+      } else {
+        // Allowed to replace (status is 'resubmitted' or 'needs_changes')
+        logService.info(
+          `[Submission] Replacing existing submission ${existingSubmission.id} (status: ${existingSubmission.status}) at version ${existingVersion}`,
+          "SubmissionService"
+        );
+        // Delete old submission (cascades to messages and attachments)
+        await client
+          .from("transaction_submissions")
+          .delete()
+          .eq("id", existingSubmission.id);
+      }
     }
   }
 
@@ -1181,10 +1915,11 @@ class SubmissionService {
 
   private async loadTransactionMessages(
     transactionId: string,
-    auditStartDate?: Date | null,
-    auditEndDate?: Date | null
+    auditStartDate: Date | null | undefined,
+    auditEndDate: Date | null | undefined,
+    selected: SelectedTextIds
   ): Promise<Message[]> {
-    const rows = databaseService.getTransactionMessages(transactionId, auditStartDate, auditEndDate);
+    const rows = databaseService.getTransactionMessages(transactionId, auditStartDate, auditEndDate, selected);
 
     logService.info(
       `[Submission] Loaded ${rows.length} text messages for audit period`,
@@ -1224,55 +1959,6 @@ class SubmissionService {
   }
 
   /**
-   * BACKLOG-3389: how many in-window texts and emails advertise an attachment
-   * and contributed none to this submission.
-   *
-   * Counted by SET MEMBERSHIP against the attachments actually gathered — the
-   * owning `message_id` / `email_id` of each — not by re-running a query or
-   * subtracting counts. Two counts agreeing is not the same as the right rows
-   * being present, and this number exists precisely because a count agreed with
-   * itself while an attachment went missing.
-   *
-   * `has_attachments` arrives as SQLite's 0/1 through a `boolean` field on
-   * {@link Message} and as an unknown on the email rows, so the truth test is
-   * explicit about all three spellings rather than leaning on truthiness.
-   */
-  private countFlaggedWithoutAttachments(
-    messages: Message[],
-    emails: Record<string, unknown>[],
-    attachments: Attachment[]
-  ): number {
-    const messagesWithBytes = new Set<string>();
-    const emailsWithBytes = new Set<string>();
-    for (const attachment of attachments) {
-      // `getTransactionAttachments` does `SELECT a.*`, so `email_id` is on the
-      // row at runtime even though the `Attachment` interface omits it.
-      const row = attachment as Attachment & { email_id?: string | null };
-      if (row.message_id) messagesWithBytes.add(row.message_id);
-      if (row.email_id) emailsWithBytes.add(row.email_id);
-    }
-
-    const advertisesAttachment = (value: unknown): boolean =>
-      value === true || value === 1 || value === "1";
-
-    let missing = 0;
-    for (const message of messages) {
-      const flagged = advertisesAttachment(
-        (message as unknown as Record<string, unknown>).has_attachments
-      );
-      if (flagged && !messagesWithBytes.has(message.id)) missing += 1;
-    }
-    for (const email of emails) {
-      const id = email.id;
-      if (typeof id !== "string") continue;
-      if (advertisesAttachment(email.has_attachments) && !emailsWithBytes.has(id)) {
-        missing += 1;
-      }
-    }
-    return missing;
-  }
-
-  /**
    * BACKLOG-1369: Load transaction attachments, downloading any missing email
    * attachments on-demand before returning.
    *
@@ -1286,140 +1972,19 @@ class SubmissionService {
    */
   private async loadTransactionAttachments(
     transactionId: string,
-    auditStartDate?: Date | null,
-    auditEndDate?: Date | null
+    auditStartDate: Date | null | undefined,
+    auditEndDate: Date | null | undefined,
+    selected: SelectedTextIds
   ): Promise<Attachment[]> {
     // Download missing email attachments before returning
     await this.downloadMissingEmailAttachments(transactionId);
 
-    return databaseService.getTransactionAttachments(transactionId, auditStartDate, auditEndDate);
+    return databaseService.getTransactionAttachments(transactionId, auditStartDate, auditEndDate, selected);
   }
 
-  /**
-   * BACKLOG-1369: Download missing email attachments for a transaction.
-   * Finds emails linked to this transaction that have has_attachments=true and
-   * are missing the BYTES of at least one attachment, then downloads from the
-   * provider.
-   *
-   * BACKLOG-3389: "missing the bytes" replaced "have no attachment records".
-   * A normal sync writes a metadata-only row (`storage_path` NULL), which
-   * satisfied the old row-existence test — so the download was skipped and the
-   * gather then discarded the row for having nothing to upload. The predicate
-   * and the reasoning live in `db/submissionEmailSql.ts`.
-   */
   private async downloadMissingEmailAttachments(transactionId: string): Promise<void> {
-    // Check network connectivity first
-    try {
-      if (!net.isOnline()) {
-        logService.warn(
-          "[Submission] Cannot download missing attachments: device is offline",
-          "SubmissionService",
-          { transactionId }
-        );
-        return;
-      }
-    } catch {
-      // net.isOnline() may not be available in all contexts; proceed anyway
-    }
-
-    try {
-      const db = databaseService.getRawDatabase();
-
-      // Find emails linked to this transaction that have attachments but no records
-      const emailsMissing = db
-        .prepare(TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL)
-        .all(transactionId) as { id: string; external_id: string; source: string; user_id: string }[];
-
-      if (emailsMissing.length === 0) return;
-
-      logService.info(
-        `[Submission] Downloading attachments for ${emailsMissing.length} emails before export`,
-        "SubmissionService",
-        { transactionId }
-      );
-
-      // Group by source for efficient provider initialization
-      const outlookEmails = emailsMissing.filter(e => e.source === "outlook");
-      const gmailEmails = emailsMissing.filter(e => e.source === "gmail");
-
-      if (outlookEmails.length > 0) {
-        const userId = outlookEmails[0].user_id;
-        try {
-          const isReady = await outlookFetchService.initialize(userId);
-          if (isReady) {
-            for (const email of outlookEmails) {
-              try {
-                const graphAttachments = await outlookFetchService.getAttachments(email.external_id);
-                if (graphAttachments.length > 0) {
-                  await emailAttachmentService.downloadEmailAttachments(
-                    email.user_id, email.id, email.external_id, "outlook",
-                    graphAttachments.map((att: { id: string; name: string; contentType: string; size: number }) => ({
-                      filename: att.name || "attachment",
-                      mimeType: att.contentType || "application/octet-stream",
-                      size: att.size || 0,
-                      // BACKLOG-3187: a Graph attachment has no MIME part, so no identity
-                      // beyond its own id. Explicitly null — the field is required so this
-                      // decision cannot be left unmade at a new call site.
-                      partId: null,
-                      attachmentId: att.id,
-                    })),
-                  );
-                }
-              } catch (err) {
-                logService.warn("[Submission] Failed to download Outlook attachment for export", "SubmissionService", {
-                  emailId: email.id, error: err instanceof Error ? err.message : "Unknown",
-                });
-              }
-            }
-          }
-        } catch (err) {
-          logService.warn("[Submission] Outlook init failed for attachment download", "SubmissionService", {
-            error: err instanceof Error ? err.message : "Unknown",
-          });
-        }
-      }
-
-      if (gmailEmails.length > 0) {
-        const userId = gmailEmails[0].user_id;
-        try {
-          const isReady = await gmailFetchService.initialize(userId);
-          if (isReady) {
-            for (const email of gmailEmails) {
-              try {
-                const fullEmail = await gmailFetchService.getEmailById(email.external_id);
-                if (fullEmail.attachments && fullEmail.attachments.length > 0) {
-                  await emailAttachmentService.downloadEmailAttachments(
-                    email.user_id, email.id, email.external_id, "gmail",
-                    fullEmail.attachments.map((att: { filename?: string; name?: string; mimeType?: string; contentType?: string; size?: number; partId?: string; attachmentId?: string; id?: string }) => ({
-                      filename: att.filename || att.name || "attachment",
-                      mimeType: att.mimeType || att.contentType || "application/octet-stream",
-                      size: att.size || 0,
-                      // BACKLOG-3187: identity (Gmail's immutable MIME part id) travels
-                      // separately from the fetch token below, which rotates between calls.
-                      partId: att.partId ?? null,
-                      attachmentId: att.attachmentId || att.id || "",
-                    })),
-                  );
-                }
-              } catch (err) {
-                logService.warn("[Submission] Failed to download Gmail attachment for export", "SubmissionService", {
-                  emailId: email.id, error: err instanceof Error ? err.message : "Unknown",
-                });
-              }
-            }
-          }
-        } catch (err) {
-          logService.warn("[Submission] Gmail init failed for attachment download", "SubmissionService", {
-            error: err instanceof Error ? err.message : "Unknown",
-          });
-        }
-      }
-    } catch (err) {
-      logService.warn("[Submission] Failed to download missing email attachments for export", "SubmissionService", {
-        transactionId,
-        error: err instanceof Error ? err.message : "Unknown",
-      });
-    }
+    // BACKLOG-3683: moved to emailAttachmentDownload.ts (shared with the PDF export).
+    await downloadMissingEmailAttachmentsShared(transactionId, "[Submission]");
   }
 
   private async getUserOrganizationId(): Promise<string | null> {
@@ -1655,6 +2220,7 @@ class SubmissionService {
     }
 
     return {
+      id: crypto.randomUUID(),
       submission_id: submissionId,
       local_message_id: message.id,
       channel: message.channel || "email",
@@ -1697,6 +2263,7 @@ class SubmissionService {
     }
 
     return {
+      id: crypto.randomUUID(),
       submission_id: submissionId,
       local_message_id: email.id as string,
       channel: "email",
@@ -1714,48 +2281,34 @@ class SubmissionService {
     };
   }
 
-  private mapToSubmissionAttachment(
-    uploadResult: AttachmentUploadResult,
-    submissionId: string,
-    originalAttachment?: Attachment
-  ): SubmissionAttachmentRecord {
-    return {
-      submission_id: submissionId,
-      filename: originalAttachment?.filename || "unknown",
-      mime_type: uploadResult.mimeType || originalAttachment?.mime_type,
-      file_size_bytes:
-        uploadResult.fileSizeBytes || originalAttachment?.file_size_bytes,
-      storage_path: uploadResult.storagePath,
-      document_type: originalAttachment?.document_type,
-      local_attachment_id: originalAttachment?.id ?? null,
-    };
-  }
-
   // ============================================
   // DATABASE OPERATIONS
   // ============================================
 
+  /**
+   * BACKLOG-3403: every batch must land. Each row carries its minted id, so a
+   * retried batch whose first answer was lost inserts nothing twice
+   * (ON CONFLICT (id) DO NOTHING). A failure is thrown, never only warned.
+   */
   private async insertMessagesBatched(
+    client: SupabaseClient,
     records: SubmissionMessageRecord[],
+    signal: AbortSignal,
     onProgress?: (percent: number) => void
   ): Promise<void> {
-    const client = supabaseService.getClient();
     const total = records.length;
-
     for (let i = 0; i < records.length; i += MESSAGE_BATCH_SIZE) {
+      throwIfCancelled(signal);
       const batch = records.slice(i, i + MESSAGE_BATCH_SIZE);
-
-      const { error } = await client.from("submission_messages").insert(batch);
-
-      if (error) {
-        logService.warn(
-          `[Submission] Batch insert warning: ${error.message}`,
-          "SubmissionService"
-        );
-      }
-
-      const progress = Math.min(100, ((i + batch.length) / total) * 100);
-      onProgress?.(progress);
+      await withStageRetry(
+        "messages",
+        () =>
+          client
+            .from("submission_messages")
+            .upsert(batch, { onConflict: "id", ignoreDuplicates: true }),
+        { signal }
+      );
+      onProgress?.(Math.min(100, ((i + batch.length) / total) * 100));
     }
   }
 
@@ -1779,46 +2332,6 @@ class SubmissionService {
         "SubmissionService"
       );
       // Don't throw - the cloud submission succeeded
-    }
-  }
-
-  // ============================================
-  // CLEANUP
-  // ============================================
-
-  private async cleanupFailedSubmission(submissionId: string): Promise<void> {
-    try {
-      const client = supabaseService.getClient();
-
-      // Delete messages (cascade will handle this, but be explicit)
-      await client
-        .from("submission_messages")
-        .delete()
-        .eq("submission_id", submissionId);
-
-      // Delete attachments records
-      await client
-        .from("submission_attachments")
-        .delete()
-        .eq("submission_id", submissionId);
-
-      // Delete submission record
-      await client
-        .from("transaction_submissions")
-        .delete()
-        .eq("id", submissionId);
-
-      // Note: Storage files are NOT deleted here (orphaned files are cleaned up separately)
-
-      logService.info(
-        `[Submission] Cleaned up failed submission ${submissionId}`,
-        "SubmissionService"
-      );
-    } catch (error) {
-      logService.warn(
-        `[Submission] Cleanup warning: ${error instanceof Error ? error.message : "Unknown error"}`,
-        "SubmissionService"
-      );
     }
   }
 }
