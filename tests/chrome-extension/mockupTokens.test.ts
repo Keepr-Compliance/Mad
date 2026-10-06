@@ -126,8 +126,12 @@ describe("the popup = the mockups (Popup*.dc.html)", () => {
     expect(linked.querySelector(".foot")!.textContent).toBe("UnlinkPrivacyExtension 0.3.41");
     const linking = draw({ state: "linking", link: { code: "482913", expiresAt: 112_000 } });
     expect(linking.querySelector(".title")!.textContent).toBe("Link with Keepr");
-    expect(linking.querySelector(".middle")!.textContent).toBe("Type this code in Keepr482 913Expires in 1:52");
-    expect(keys(linking, ".actions > *")).toEqual(["open-app", "cancel"]);
+    // The "482 913" gap is CSS (two halves), so a selection copies the 6 digits.
+    expect(linking.querySelector(".middle")!.textContent).toBe("Type this code in Keepr482913Expires in 1:52");
+    expect(Array.from(linking.querySelectorAll(".code span")).map((n) => n.textContent)).toEqual(["482", "913"]);
+    // Founder (live): ONE primary action, Copy code and open Keepr, then Cancel.
+    expect(keys(linking, ".actions > *")).toEqual(["copy-open", "cancel"]);
+    expect(linking.querySelector('[data-keepr="copy-open"]')!.className).toBe("primary");
     const down = draw({ state: "keepr_down", version: "0.3.41" });
     expect(down.querySelector(".status.warn")!.textContent).toBe("Keepr isn't running");
     expect(down.querySelector(".foot")!.textContent).toBe("Don't have Keepr?PrivacyExtension 0.3.41");

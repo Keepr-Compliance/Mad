@@ -47,7 +47,8 @@
   .ask { font-size: 14px; color: var(--body); }
   .sub { font-size: 13px; color: var(--muted); }
   .error { font-size: 13px; color: var(--danger); }
-  .code { padding: 14px 0; border-radius: 12px; background: var(--code-bg); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 38px; font-weight: 700; letter-spacing: 0.12em; color: var(--code-text); }
+  .code { padding: 14px 0; border-radius: 12px; background: var(--code-bg); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 38px; font-weight: 700; letter-spacing: 0.12em; color: var(--code-text); user-select: all; }
+  .code span + span { margin-left: 0.4em; }
   .actions { display: flex; flex-direction: column; gap: 10px; }
   button { font-family: inherit; cursor: pointer; }
   button.primary { min-height: 48px; border: none; border-radius: 10px; background: var(--primary); color: var(--primary-text); font-size: 15px; font-weight: 700; }
@@ -59,6 +60,7 @@
 </head>
 <body>
 <main id="keepr-popup" aria-live="polite"></main>
+<script src="linkcode.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>

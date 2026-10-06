@@ -10,7 +10,7 @@
  *                 [Link with Keepr]  Go to Google Messages
  *                 footer: Extension x · Help
  *   linking       title "Link with Keepr"; "Type this code in Keepr",
- *                 the code, "Expires in m:ss"            [Open Keepr]  Cancel
+ *                 the code, "Expires in m:ss"   [Copy code and open Keepr]  Cancel
  *   linked        "Linked to Keepr", the masked email, last sync
  *                 [Go to Google Messages] [Open Keepr]
  *                 footer: Unlink (→ confirm) · Extension x
@@ -29,9 +29,6 @@
     out_of_date: "Update the Keepr extension",
     not_linked: "Not linked",
     notLinkedLine: "Link once to sync your texts.",
-    linking: "Type this code in Keepr",
-    expired: "Code expired",
-    newCode: "Get a new code",
     linked: "Linked to Keepr",
     unlinkAsk: "Unlink from Keepr? You'll need to link again to sync",
   };
@@ -54,23 +51,9 @@
     return "Last sync " + Math.floor(min / (24 * 60)) + " d ago";
   }
 
-  function countdown(ms) {
-    var s = Math.max(0, Math.ceil(ms / 1000));
-    return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
-  }
-
-  /** E01: the code ran out (the countdown reached 0, or the worker said expired). */
-  function isExpired(view, nowMs) {
-    var l = view && view.link;
-    if (!l) return false;
-    if (view.state === "linking" && typeof l.expiresAt === "number" && nowMs >= l.expiresAt) return true;
-    return view.state === "not_linked" && l.status === "failed" && l.expired === true;
-  }
-
-  /** "123456" → "123 456" (easier to read and type). */
-  function spaced(code) {
-    return typeof code === "string" && code.length === 6 ? code.slice(0, 3) + " " + code.slice(3) : String(code || "");
-  }
+  /** The shared code area (linkcode.js): countdown, expiry, copy and open. */
+  var LinkCode = root.KeeprLinkCode || (typeof require === "function" ? require("./linkcode.js") : null);
+  Object.keys(LinkCode.COPY).forEach(function (k) { COPY[k] = LinkCode.COPY[k]; });
 
   /**
    * Draw one state into `box`. io: { link, cancel, openKeepr, openApp,
@@ -80,8 +63,16 @@
   var PRIVACY_URL = "https://keeprcompliance.com/privacy";
 
   function renderPopup(doc, box, view, io) {
-    while (box.firstChild) box.removeChild(box.firstChild);
     var state = view && view.state;
+    // Live (founder, 0.3.80): re-drawn every second while linking — the same
+    // code area is only updated in place (its selection survives Ctrl+C).
+    var drawn = box.querySelector('.middle[data-drawn]');
+    var key = LinkCode.drawKey(view, io.now ? io.now() : Date.now());
+    if (drawn && key && drawn.getAttribute("data-drawn") === key && !io.confirmUnlink) {
+      LinkCode.render(doc, drawn, view, io, {});
+      return;
+    }
+    while (box.firstChild) box.removeChild(box.firstChild);
     var version = view && view.version ? "Extension " + view.version : "";
 
     var head = el(doc, "div", "head");
@@ -148,24 +139,15 @@
     } else if (state === "out_of_date") {
       status("warn", COPY.out_of_date);
       middle.appendChild(el(doc, "div", "sub", "This is " + (view.version || "?") + "; Keepr needs " + (view.minVersion || "a newer one") + "."));
-    } else if (isExpired(view, now)) {
-      // Founder (E01): "Code expired" + Get a new code — the old digits never.
+    } else if (LinkCode.drawKey(view, now)) {
+      // Linking, or (E01) "Code expired" + Get a new code — the old digits never.
       head.lastChild.textContent = COPY.linkingTitle;
       middle.className = "middle code-gap";
-      var gone = el(doc, "div", "expired", COPY.expired);
-      gone.setAttribute("data-keepr", "expired");
-      middle.appendChild(gone);
-      button("new-code", COPY.newCode, "primary", io.link);
-    } else if (state === "linking") {
-      var link = view.link || {};
-      middle.className = "middle code-gap";
-      middle.appendChild(el(doc, "div", "ask", COPY.linking));
-      var code = el(doc, "div", "code", spaced(link.code));
-      code.setAttribute("data-keepr", "code");
-      middle.appendChild(code);
-      if (typeof link.expiresAt === "number") middle.appendChild(el(doc, "div", "sub", "Expires in " + countdown(link.expiresAt - now)));
-      button("open-app", "Open Keepr", "primary", io.openApp);
-      anchor(actions, "cancel", "Cancel", "action", io.cancel);
+      LinkCode.render(doc, middle, view, io, {
+        actions: actions,
+        button: function (_parent, key, label, cls, fn) { return button(key, label, cls, fn); },
+      });
+      if (state === "linking" && !LinkCode.isExpired(view, now)) anchor(actions, "cancel", "Cancel", "action", io.cancel);
     } else if (state === "linked") {
       if (io.confirmUnlink) {
         middle.appendChild(el(doc, "div", "line", COPY.unlinkAsk));
@@ -277,6 +259,8 @@
       // Live (founder): Keepr not running → keepr://open; linking → keepr://link
       // (its code screen) — from this popup, never a new tab.
       openApp: function () { launchKeepr(doc, view && view.state === "linking" ? "keepr://link" : "keepr://open"); },
+      // Live (founder): the code to the clipboard — a write, on the user's click.
+      copyCode: function (text) { LinkCode.copyCode(text); },
       // Linked: signed /focus only (no tab); refused or unreachable → keepr://open.
       openKeepr: function () {
         ask({ type: "keepr-focus" }).then(function (r) {
@@ -303,7 +287,7 @@
     return refresh();
   }
 
-  var api = { launchKeepr: launchKeepr, renderPopup: renderPopup, start: start, COPY: COPY, lastSyncText: lastSyncText, spaced: spaced, KEEPR_SITE: KEEPR_SITE };
+  var api = { launchKeepr: launchKeepr, renderPopup: renderPopup, start: start, COPY: COPY, lastSyncText: lastSyncText, KEEPR_SITE: KEEPR_SITE };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else if (typeof document !== "undefined" && typeof chrome !== "undefined") {

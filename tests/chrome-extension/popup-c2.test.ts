@@ -8,6 +8,8 @@
  *   P3 the popup not asking the worker when it opens    → "asks the worker on open"
  *   P4 linking not asked again while it waits           → "linking: asked again"
  *   P5 the manifest without the popup                   → "the toolbar button opens it"
+ *   P6 linking re-drawn every second (the selection lost) → "the code keeps its selection"
+ *   P7 the copy button not copying, or copying "123 456"  → "Copy code and open Keepr"
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -27,6 +29,7 @@ function draw(view: Record<string, unknown>, io: Record<string, unknown> = {}) {
     link: () => calls.push("link"),
     cancel: () => calls.push("cancel"),
     openApp: () => calls.push("openApp"),
+    copyCode: (t: string) => calls.push("copy " + t),
     openKeepr: () => calls.push("openKeepr"),
     openMessages: () => calls.push("openMessages"),
     unlink: () => calls.push("unlink"),
@@ -62,12 +65,16 @@ describe("the popup (C2)", () => {
     expect(failed.box.textContent).toContain("That code expired.");
 
     const linking = draw({ state: "linking", link: { status: "waiting", code: "042137", expiresAt: NOW + 95_000 } });
-    expect(linking.box.querySelector(".code")!.textContent).toBe("042 137");
+    // Spaced by CSS (two halves): a selection copies the 6 digits.
+    expect(linking.box.querySelector(".code")!.textContent).toBe("042137");
+    expect(linking.box.querySelectorAll(".code span")).toHaveLength(2);
+    expect(q(linking.box, "open-app")).toBeNull();
+    expect(q(linking.box, "copy-open")!.textContent).toBe("Copy code and open Keepr");
     expect(linking.box.textContent).toContain(popup.COPY.linking);
     expect(linking.box.textContent).toContain("1:35");
-    q(linking.box, "open-app")!.click();
+    q(linking.box, "copy-open")!.click();
     q(linking.box, "cancel")!.click();
-    expect(linking.calls).toEqual(["openApp", "cancel"]);
+    expect(linking.calls).toEqual(["copy 042137", "openApp", "cancel"]);
 
     const linked = draw({ state: "linked", email: "a***@example.test", lastSyncAt: NOW - 5 * 60_000 });
     expect(linked.box.textContent).toContain(popup.COPY.linked);
@@ -106,7 +113,7 @@ describe("the popup (C2)", () => {
     };
     await popup.start(document, chromeStub);
     expect(asked).toEqual(["keepr-popup-state"]);
-    expect(document.querySelector(".code")!.textContent).toBe("123 456");
+    expect(document.querySelector(".code")!.textContent).toBe("123456");
     state = "linked";
     jest.advanceTimersByTime(1000);
     await Promise.resolve();
@@ -200,9 +207,51 @@ describe("the popup's Open Keepr (live)", () => {
     expect(down.launched).toEqual(["keepr://open"]);
     expect(down.sent).not.toContain("keepr-open-app");
     jest.restoreAllMocks();
+    const written: string[] = [];
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: (t: string) => (written.push(t), Promise.resolve()) } });
     const linking = await popupWith({ state: "linking", link: { status: "waiting", code: "123456", expiresAt: Date.now() + 60_000 } }, false);
-    (document.querySelector('[data-keepr="open-app"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-keepr="copy-open"]') as HTMLButtonElement).click();
+    // P7: the 6 digits (Keepr's field submits a pasted code by itself), then Keepr.
+    expect(written).toEqual(["123456"]);
     expect(linking.launched).toEqual(["keepr://link"]);
+    delete (navigator as unknown as Record<string, unknown>).clipboard;
+  });
+
+  // Live (founder, 0.3.80): the code could be highlighted but Ctrl+C copied
+  // nothing — the popup re-drew everything every second while linking, so
+  // the selection was gone. Mutation P6: a full re-draw each second → red.
+  it("linking: the code keeps its selection across the every-second refresh; a new code re-draws (P6)", async () => {
+    jest.useFakeTimers();
+    document.body.innerHTML = '<main id="keepr-popup"></main>';
+    let code = "123456";
+    const expiresAt = Date.now() + 60_000;
+    const chromeStub = {
+      runtime: {
+        lastError: undefined,
+        sendMessage: (m: { type: string }, cb: (r: unknown) => void) =>
+          cb(m.type === "keepr-popup-state" ? { state: "linking", link: { status: "waiting", code, expiresAt } } : { ok: true }),
+      },
+    };
+    await popup.start(document, chromeStub);
+    const first = document.querySelector(".code")!;
+    const sel = window.getSelection()!;
+    sel.selectAllChildren(first);
+    expect(sel.toString()).toBe("123456");
+    const before = document.querySelector('[data-keepr="expires"]')!.textContent;
+    jest.advanceTimersByTime(2000);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(document.querySelector(".code")).toBe(first);
+    expect(first.isConnected).toBe(true);
+    expect(sel.toString()).toBe("123456");
+    expect(document.querySelector('[data-keepr="expires"]')!.textContent).not.toBe(before);
+    code = "654321";
+    jest.advanceTimersByTime(1000);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(document.querySelector(".code")!.textContent).toBe("654321");
+    expect(first.isConnected).toBe(false);
+    jest.useRealTimers();
   });
 
   it("launchKeepr: only keepr://open and keepr://link", () => {

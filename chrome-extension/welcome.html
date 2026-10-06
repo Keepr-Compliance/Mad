@@ -39,7 +39,10 @@
   button.secondary { min-height: 44px; padding: 0 18px; border: 1px solid var(--outline); border-radius: 10px; background: var(--secondary-bg); color: var(--text); font-size: 15px; font-weight: 600; }
   .row { display: flex; gap: 12px; }
   .ask { font-size: 14px; color: var(--body); }
-  .code { padding: 14px 28px; border-radius: 12px; background: var(--code-bg); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 38px; font-weight: 700; letter-spacing: 0.12em; color: var(--code-text); }
+  .code { padding: 14px 28px; border-radius: 12px; background: var(--code-bg); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 38px; font-weight: 700; letter-spacing: 0.12em; color: var(--code-text); user-select: all; }
+  .code span + span { margin-left: 0.4em; }
+  .sub { font-size: 13px; color: var(--muted); }
+  .expired { font-size: 18px; font-weight: 700; color: var(--danger); }
   .status { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; }
   .dot { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 8px; }
   .status.ok { color: var(--ok-text); } .status.ok .dot { background: var(--ok-dot); }
@@ -65,6 +68,7 @@
   <div class="spacer"></div>
   <div class="foot">Texts go only to Keepr on this computer, encrypted.</div>
 </main>
+<script src="linkcode.js"></script>
 <script src="welcome.js"></script>
 </body>
 </html>

@@ -3,24 +3,24 @@
  * 2026-10-03), laid out as the approved mockup (Welcome.dc.html):
  * 1 Pin Keepr · 2 Link with Keepr · 3 Sync from Keepr, then the link area.
  * It links here like the toolbar popup: the worker makes the 6-digit code
- * (never sent anywhere); the user types it in Keepr.
+ * (never sent anywhere); the user types or pastes it in Keepr. The code area
+ * (countdown, "Code expired", Copy code and open Keepr) is the popup's own
+ * (linkcode.js) — one copy.
  */
-(function () {
+(function (root) {
   "use strict";
 
+  /** The shared code area (linkcode.js). */
+  var LinkCode = root.KeeprLinkCode || (typeof require === "function" ? require("./linkcode.js") : null);
+
   var COPY = {
-    linking: "Type this code in Keepr",
+    linking: LinkCode.COPY.linking,
     linked: "Linked with Keepr",
     keeprDown: "Keepr isn't running",
   };
 
-  function spaced(code) {
-    return typeof code === "string" && code.length === 6 ? code.slice(0, 3) + " " + code.slice(3) : String(code || "");
-  }
-
-  /** Draw the link area for a popup-style state ({state, link}). io: {link, openApp}. */
+  /** Draw the link area for a popup-style state ({state, link}). io: {now, link, openApp, copyCode}. */
   function renderLinkStep(doc, box, view, io) {
-    while (box.firstChild) box.removeChild(box.firstChild);
     var add = function (parent, tag, cls, text) {
       var n = doc.createElement(tag);
       if (cls) n.className = cls;
@@ -40,16 +40,12 @@
       add(s, "span", "dot");
       add(s, "span", null, text);
     };
+    // Linking / expired: the shared code area (updated in place each second).
+    if (LinkCode.render(doc, box, view, io, { button: button })) return;
+    while (box.firstChild) box.removeChild(box.firstChild);
     var state = view && view.state;
     if (state === "linked") {
       status("ok", COPY.linked);
-      return;
-    }
-    if (state === "linking") {
-      add(box, "div", "ask", COPY.linking);
-      var code = add(box, "div", "code", spaced(view.link && view.link.code));
-      code.setAttribute("data-keepr", "code");
-      button(box, "open-app", "Open Keepr", "primary", io.openApp);
       return;
     }
     if (state === "keepr_down") {
@@ -102,7 +98,10 @@
       });
     };
     var io = {
+      now: function () { return Date.now(); },
       link: function () { ask({ type: "keepr-link-start" }).then(refresh); },
+      // Live (founder): the code to the clipboard — a write, on the user's click.
+      copyCode: function (text) { LinkCode.copyCode(text); },
       // Live (founder): from this page, never a new tab — linking: its code screen.
       openApp: function () { launchKeepr(doc, lastState === "linking" ? "keepr://link" : "keepr://open"); },
     };
@@ -123,4 +122,4 @@
   } else if (typeof document !== "undefined" && typeof chrome !== "undefined") {
     start(document, chrome);
   }
-})();
+})(typeof globalThis !== "undefined" ? globalThis : this);
