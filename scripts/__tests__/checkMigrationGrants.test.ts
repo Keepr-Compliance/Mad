@@ -39,6 +39,7 @@ import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, renameSync
 import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 
 const REPO = path.resolve(__dirname, '..', '..');
 const GUARD = path.join(REPO, 'scripts', 'ci', 'check-migration-grants.mjs');
@@ -253,6 +254,60 @@ describe('signature normalisation and string escapes', () => {
     const sql = `${NEW_FN}\nCOMMENT ON FUNCTION ${SIG} IS E'don\\'t; REVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon; --';\n`;
     expect(sql).toContain("E'don\\'t;");
     expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
+  });
+});
+
+/**
+ * BACKLOG-3611 — CodeQL js/redos (high): `normType`'s array-marker regex used
+ * to be `((?:\s*\[\s*\d*\s*\])+|\s+array)$`. With `\d*` allowed to match zero
+ * digits, the two `\s*` runs flanking it become interchangeable for the same
+ * whitespace, and that ambiguity multiplies across the repeated group —
+ * exponential backtracking on a long run of bracket pairs that never finds a
+ * trailing match. Spawns a standalone probe script (not through jest's own
+ * module loader, since this repo's jest config does not transform `.mjs`)
+ * that imports the real exported `normType` and times one call. The import
+ * specifier is a `file://` URL (not a bare OS path) so this also works on
+ * Windows CI — a `C:\...` path is not a valid ES module specifier and node
+ * rejects it with ERR_UNSUPPORTED_ESM_URL_SCHEME.
+ */
+describe('array type normalisation (ReDoS guard)', () => {
+  const GUARD_URL = pathToFileURL(GUARD).href;
+
+  function runNormType(input: string): { elapsed: number; result: string } {
+    const probe = path.join(tmp, `redos-probe-${counter++}.mjs`);
+    writeFileSync(
+      probe,
+      `import { normType } from ${JSON.stringify(GUARD_URL)};\n` +
+        `const start = Date.now();\n` +
+        `const result = normType(${JSON.stringify(input)});\n` +
+        `process.stdout.write(JSON.stringify({ elapsed: Date.now() - start, result }));\n`,
+    );
+    const res = spawnSync(process.execPath, [probe], { encoding: 'utf8', timeout: 5000 });
+    if (res.status !== 0) throw new Error(`probe failed (status ${res.status}): ${res.stderr}`);
+    return JSON.parse(res.stdout);
+  }
+
+  it('a long run of bracket pairs with no closing match finishes in well under a second', () => {
+    // Before the fix this took 126s at n=40 (measured) and did not plateau;
+    // n=200 is 5x that with room to spare under the 5s subprocess timeout.
+    // This is the control: it fails (probe times out past 5s) against the
+    // pre-fix regex — verified by reverting the fix locally and rerunning.
+    const pathological = 'text[' + ' ]['.repeat(200);
+    expect(runNormType(pathological).elapsed).toBeLessThan(1000);
+  });
+
+  // Parity pin, not a control for the ReDoS fix: this also passes under the
+  // pre-fix regex (same strings, same non-pathological inputs), so reverting
+  // the fix does not turn it red. It exists to pin normType's output shape
+  // now that the array-marker regex has changed, independent of backtracking.
+  it('still normalises real array markers the same way (text[], spaced brackets, dimensions, ARRAY)', () => {
+    expect(runNormType('text[]').result).toBe('text[]');
+    expect(runNormType('text [ ]').result).toBe('text[]');
+    expect(runNormType('int4[]').result).toBe('integer[]');
+    expect(runNormType('text[3]').result).toBe('text[]');
+    expect(runNormType('text[3][4]').result).toBe('text[][]');
+    expect(runNormType('text array').result).toBe('text[]');
+    expect(runNormType('text ARRAY').result).toBe('text[]');
   });
 });
 

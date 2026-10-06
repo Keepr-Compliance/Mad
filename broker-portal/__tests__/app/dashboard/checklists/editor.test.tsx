@@ -70,8 +70,6 @@ const FEATURE_OFF = withFeature(ORG_WITHOUT_PLAN_FEATURES, CHECKLIST_FEATURE_KEY
  * the database it asks.
  */
 const DB_EDITOR_ROLES = ['broker', 'admin', 'it_admin'];
-const canEditAnswer = (role: string, features: unknown): boolean =>
-  DB_EDITOR_ROLES.includes(role) && features !== FEATURE_OFF;
 const canEditRpc = (role: string, features: unknown, personal = false) =>
   jest.fn(async (fn: string) =>
     fn === 'can_edit_checklist_templates'

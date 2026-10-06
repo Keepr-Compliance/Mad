@@ -374,7 +374,18 @@ export function normType(raw) {
   let t = raw.trim();
   let arraySuffix = "";
   // Array markers: text[] / text [] / text ARRAY
-  const arr = /((?:\s*\[\s*\d*\s*\])+|\s+array)$/i.exec(t);
+  // BACKLOG-3611: each bracket pair used to be `\s*\[\s*\d*\s*\]`. With \d*
+  // allowed to match zero digits, the two \s* runs flanking it become
+  // interchangeable for any whitespace between the brackets — the engine can
+  // attribute it to either one — and that ambiguity multiplies across the
+  // repeated group, causing exponential backtracking on a long run of
+  // bracket pairs that never finds a trailing match (CodeQL js/redos, high).
+  // Gating the inner \s* behind a mandatory \d+ removes the ambiguity: with
+  // no digits present only the single outer \s* can consume the gap, so
+  // there is exactly one way to match. Matching behaviour is unchanged —
+  // verified against every file in supabase/migrations (before/after diff)
+  // plus a dedicated pathological-input test in checkMigrationGrants.test.ts.
+  const arr = /((?:\s*\[\s*(?:\d+\s*)?\])+|\s+array)$/i.exec(t);
   if (arr) {
     const dims = (arr[1].match(/\[/g) || ["["]).length;
     arraySuffix = "[]".repeat(dims);
