@@ -204,6 +204,7 @@ Also: the 128×128 icon (`icons/keepr-128.png`, 96 art + 16 padding) and a
 | 0.3.82 | A retried chat that reads less far back than before is not marked complete. |
 | 0.3.83 | Short-code senders: their own "skipped" line, not "Not fully imported". |
 | 0.3.84 | While a Sync runs, each wait is one short message to the service worker, answered from its own timer (a hidden tab throttles the page's timers); the page timer is the fallback; nothing when no Sync runs, no port, no keepalive. Within the service-worker rules: https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle and https://developer.chrome.com/docs/extensions/develop/migrate/to-service-workers |
+| 0.3.85 | A chat read back past its date floor is complete for that Sync even if the page never settled; the Done box says when chats were not fully synced. |
 
 ## 10. Review history
 

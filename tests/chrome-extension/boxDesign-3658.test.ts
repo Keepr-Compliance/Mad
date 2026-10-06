@@ -98,6 +98,20 @@ describe("states (design C)", () => {
     expect(box.querySelector('[data-keepr="cancel"]')).not.toBeNull();
   });
 
+  // Founder: chats not fully synced — one line under the counts, the
+  // counts' style; none when 0. Mutation: the line not drawn → red.
+  it("done: the not-fully-synced line under the counts, in their style; none without it", () => {
+    const box = render(job.DONE_LINE, false, { summary: "20 chats · 412 messages", details: "d", notFullyLine: "1 chat not fully synced. Sync again to finish." }, { theme: "light" });
+    const lines = Array.from(box.children).map((c) => c.textContent);
+    const i = lines.indexOf("20 chats · 412 messages");
+    expect(lines[i + 1]).toBe("1 chat not fully synced. Sync again to finish.");
+    const counts = box.children[i] as HTMLElement;
+    const extra = box.children[i + 1] as HTMLElement;
+    expect([extra.style.fontSize, extra.style.color]).toEqual([counts.style.fontSize, counts.style.color]);
+    const plain = render(job.DONE_LINE, false, { summary: "20 chats · 412 messages", details: "d", notFullyLine: "" }, { theme: "light" });
+    expect(plain.textContent).not.toContain("not fully synced");
+  });
+
   it("done: auto-expanded with ✓, link not underlined, Open Keepr primary, closable; no green (D4, D5)", () => {
     const close = jest.fn();
     const box = render(job.DONE_LINE, false, { details: "d", copy: "c" }, { close, theme: "light" });

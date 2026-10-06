@@ -374,6 +374,34 @@ describe("runJob: a cache Sync", () => {
     // (166) yet stopped as no_more. Keepr keeps both attempts (staged by
     // message id); the retry must not claim the chat complete.
     // Mutation: the read-less guard removed → red (reachedFloor true, recovered).
+    // Founder: ONE line in the Done box when a chat is really not fully
+    // synced (history that did not reach its floor); none when all are
+    // complete. Mutations: the line not passed / not counted → red.
+    describe("the Done box: chats not fully synced", () => {
+      const doneExtras = (t: Env) => {
+        const last = t.shown[t.shown.length - 1] as [string, boolean, { notFullyLine?: string }];
+        expect(last[0]).toBe(job.DONE_LINE);
+        return last[2];
+      };
+      it("a chat that did not reach its floor: \"1 chat not fully synced. Sync again to finish.\"", async () => {
+        const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"] } });
+        (t.env.scan as Record<string, unknown>).loadHistory = async () => ({ stopReason: "not_settled", count: 3, elapsedMs: 1000, idleMs: 0 });
+        (t.env as Record<string, unknown>).transientRetryPoolMs = 0;
+        await job.runJob(JOB, t.env);
+        expect(doneExtras(t).notFullyLine).toBe("1 chat not fully synced. Sync again to finish.");
+      });
+      it("every chat complete (date_floor): no line", async () => {
+        const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"] } });
+        (t.env.scan as Record<string, unknown>).loadHistory = async () => ({ stopReason: "date_floor", count: 3, elapsedMs: 1000, idleMs: 0 });
+        await job.runJob(JOB, t.env);
+        expect(doneExtras(t).notFullyLine).toBe("");
+      });
+      it("the plural", () => {
+        expect(job.notFullySyncedLine(0)).toBe("");
+        expect(job.notFullySyncedLine(3)).toBe("3 chats not fully synced. Sync again to finish.");
+      });
+    });
+
     describe("a retry that reads less far back (live)", () => {
       const msg = (n: number, daysAgo: number) => ({
         msgId: "m" + n, direction: "inbound", sender: "x", text: "t", sentAt: new Date(NOW - daysAgo * DAY).toISOString(), transport: "rcs", imageSrcs: [], files: [],

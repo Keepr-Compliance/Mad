@@ -347,6 +347,10 @@
 
   /** BACKLOG-3641 founder UX: the finished overlay is this one line + Details. */
   var DONE_LINE = "Sync done — switch back to Keepr.";
+  /** Founder: the Done box's one line for chats not fully synced ("" when none). */
+  function notFullySyncedLine(n) {
+    return n > 0 ? n + " chat" + (n === 1 ? "" : "s") + " not fully synced. Sync again to finish." : "";
+  }
   /** The done box's title (the mockup); the counts go on the line below. */
   var DONE_TITLE = "Sync done";
   /** A cache Sync, between the last chat and Keepr's answer to /finish. */
@@ -1242,8 +1246,13 @@
       }
       var version = typeof env.extensionVersion === "string" ? env.extensionVersion : "";
       var detailsLines = detailsText(s);
+      // Founder: chats really not fully synced (a failure, or history that did
+      // not reach the floor / has a gap) — one line in the Done box.
+      var incomplete = Object.keys(entriesByConv).filter(function (id) {
+        return (entriesByConv[id] || []).some(function (e) { return FAILED_REASONS[e.reason] === true || e.reason === "history_gap"; });
+      }).length;
       // The done box's line (storyboard A10): "20 chats · 412 messages (38 new) · 64 photos".
-      return { details: detailsLines, summary: s.saved && typeof s.saved === "object" ? cacheSummaryLine(s.saved) : String(detailsLines).split("\n")[0], copy: copyText(s, tags, logLines, version), version: version };
+      return { notFullyLine: notFullySyncedLine(incomplete), details: detailsLines, summary: s.saved && typeof s.saved === "object" ? cacheSummaryLine(s.saved) : String(detailsLines).split("\n")[0], copy: copyText(s, tags, logLines, version), version: version };
     }
 
     async function fail(code, message) {
@@ -2601,6 +2610,7 @@
     // done / error: one line (the counts, or the failure), then the bottom row.
     var bodyLine = state === "error" ? text : extras && extras.summary ? extras.summary : "";
     if (bodyLine) box.appendChild(el("div", "progress", bodyStyle, bodyLine));
+    if (state === "done" && extras && extras.notFullyLine) box.appendChild(el("div", "not-fully", bodyStyle, extras.notFullyLine));
     // SR U4 (the mockup): Done ALWAYS has See details (left) + Open Keepr
     // (right); with no details, See details shows the summary / copy.
     // Storyboard H01: a failed Sync that can try again shows its reason and
@@ -2968,6 +2978,7 @@
     STOPPED_BODY: STOPPED_BODY,
     STOP_SYNC_BODY: STOP_SYNC_BODY,
     DONE_TITLE: DONE_TITLE,
+    notFullySyncedLine: notFullySyncedLine,
     statusLine: statusLine,
     runFraction: runFraction,
     perChatStats: perChatStats,

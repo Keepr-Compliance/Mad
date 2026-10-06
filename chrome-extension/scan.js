@@ -1220,6 +1220,15 @@
     var firstPage = count;
     var stalls = 0;
     var finish = async function (stopReason, confirmedBy) {
+      // Live (founder, 0.3.84 hidden run): a chat read back PAST its floor
+      // (88 days for a 30-day floor) ended not_settled — the page never
+      // settled, though everything this Sync wants was read. Read past the
+      // floor = complete for this Sync: the same "date_floor" stop as when
+      // the loop sees it.
+      if (stopReason === "not_settled" && floorMs !== null && readPastFloor()) {
+        stopReason = "date_floor";
+        noProgress = false;
+      }
       if (stopReason !== "history_gap" && io.imagePass) await imagePass();
       return result(stopReason, confirmedBy);
     };
@@ -1252,6 +1261,15 @@
           if (moved === false) break; // at the bottom
         }
       }
+    }
+    /** The oldest message read so far (kept or on screen) is older than the floor. */
+    function readPastFloor() {
+      var oldest = typeof io.oldestMs === "function" ? io.oldestMs() : null;
+      for (var id in collected) {
+        var t = Date.parse(collected[id].sentAt);
+        if (isFinite(t) && (oldest === null || t < oldest)) oldest = t;
+      }
+      return typeof oldest === "number" && oldest < floorMs;
     }
     function imagesCollected() {
       var n = 0;
