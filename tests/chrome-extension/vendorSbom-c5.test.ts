@@ -34,7 +34,7 @@ describe("vendored code is recorded (N19)", () => {
       ["@noble/curves", "1.9.7", "MIT"],
       ["@noble/hashes", "1.8.0", "MIT"],
     ]);
-    for (const c of sbom.components) expect(c.purl).toBe(`pkg:npm/${c.name.replace("@", "%40")}@${c.version}`);
+    for (const c of sbom.components) expect(c.purl).toBe(`pkg:npm/${c.name.replace(/@/g, "%40")}@${c.version}`);
   });
 
   it("every vendored script is in the SBOM, with its sha256", () => {

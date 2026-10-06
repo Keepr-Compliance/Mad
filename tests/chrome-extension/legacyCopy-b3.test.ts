@@ -23,6 +23,17 @@ const FILES = [
   "chrome-extension/options.js", "chrome-extension/options.html",
 ];
 /** String literals only (comments may tell the history). */
+/** HTML comments removed until none is left (one pass can leave a "<!--" built from fragments). */
+function withoutHtmlComments(src: string): string {
+  let prev: string;
+  let out = src;
+  do {
+    prev = out;
+    out = out.replace(/<!--[\s\S]*?-->/g, "");
+  } while (out !== prev);
+  return out;
+}
+
 function literals(src: string): string[] {
   return Array.from(src.matchAll(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g)).map((m) => m[0]);
 }
@@ -31,7 +42,7 @@ describe("no stale pairing copy (B3)", () => {
   it("none in the extension's user-facing text", () => {
     for (const f of FILES) {
       const src = fs.readFileSync(path.join(ROOT, f), "utf8");
-      const text = f.endsWith(".html") ? src.replace(/<!--[\s\S]*?-->/g, "") : literals(src).join("\n");
+      const text = f.endsWith(".html") ? withoutHtmlComments(src) : literals(src).join("\n");
       for (const re of STALE) expect([f, re.source, re.test(text)]).toEqual([f, re.source, false]);
     }
   });
