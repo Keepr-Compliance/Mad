@@ -23,7 +23,7 @@ import type { RcsExtensionState, RcsJobInfo } from "../../../../electron/types/i
 import { doneSummaryLines, googleMessagesStep } from "./googleMessagesSyncSteps";
 import { LinkBrowserPanel } from "./LinkBrowserPanel";
 import { syncFailureLine } from "./syncFailureLines";
-import { EXTENSION_PUBLISHED, readBetaInstallPreference, wantsBetaInstall } from "./extensionDistribution";
+import { EXTENSION_PUBLISHED, EXTENSION_UPDATE_READY_LINE, readBetaInstallPreference, showExtensionUpdateReady, wantsBetaInstall } from "./extensionDistribution";
 import { browserLinkView, CHECKING_BROWSER, LINK_CHECK_MS, useLinkCheckOver } from "./browserLinkState";
 
 const POLL_MS = 3000;
@@ -331,6 +331,11 @@ export function GoogleMessagesSyncFlow({
         <div className="flex flex-col gap-4 min-h-[360px]" data-testid="gm-linked-screen">
           <h2 className={title}>Sync Android</h2>
           <div className="flex-1 flex flex-col justify-center gap-4" data-testid="gm-linked-body">
+            {showExtensionUpdateReady(state?.extensionUpdateReady, published) && (
+              <p className="text-[14px] text-[#374151]" role="status" data-testid="gm-extension-update">
+                {EXTENSION_UPDATE_READY_LINE}
+              </p>
+            )}
             {/* Founder (2026-10-05): before the first Sync, the consent line,
                 Agree and sync and the months note only — the linked row
                 returns once consent is given (B2). */}

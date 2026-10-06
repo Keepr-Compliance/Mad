@@ -64,6 +64,10 @@ import {
   extensionTargetDir,
   launchChrome,
   prepareExtensionFolderShared,
+  refreshExtensionFolderIfOlder,
+  folderExtensionVersion,
+  isOlderVersion,
+  type DeliveryFs,
 } from "../services/rcsExtensionDelivery";
 import {
   backfillCoverageFrom,
@@ -706,6 +710,35 @@ onSessionChanged((change) => {
   // on a sign-in only (app start runs it from startRcsExtensionBridge).
   if (signedIn) void recoverLeftoverStaging(change.userId).catch(() => undefined);
 });
+
+/** The extension this Keepr ships (<resources>/chrome-extension, or the repo's in development). */
+function bundledExtensionDir(): string {
+  return extensionSourceDir({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
+}
+
+/** The real file system for rcsExtensionDelivery. */
+const deliveryFs: DeliveryFs = {
+  exists: async (p) => fs.promises.access(p).then(() => true, () => false),
+  readText: (p) => fs.promises.readFile(p, "utf8"),
+  copyDir: (from, to) => fs.promises.cp(from, to, { recursive: true, errorOnExist: true }),
+  removeDir: (p) => fs.promises.rm(p, { recursive: true, force: true }),
+  rename: (from, to) => fs.promises.rename(from, to),
+  listDir: (p) => fs.promises.readdir(p),
+};
+
+/** The bundled extension's version, read once. */
+let bundledVersionCache: Promise<string | null> | null = null;
+function bundledExtensionVersion(): Promise<string | null> {
+  // Never fails the caller (get-extension-state): unreadable → null (no "update ready").
+  if (!bundledVersionCache) {
+    try {
+      bundledVersionCache = folderExtensionVersion(bundledExtensionDir(), deliveryFs).catch(() => null);
+    } catch {
+      return Promise.resolve(null);
+    }
+  }
+  return bundledVersionCache;
+}
 
 /**
  * What the extension last said (POST /hello). Kept in memory while signed
@@ -1361,10 +1394,13 @@ export function registerRcsImportHandlers(): void {
       const userId = await currentUserId();
       const state = userId ? databaseService.getRcsCacheState(userId) : null;
       const consent = userId ? databaseService.getRcsConsent(userId) : null;
+      const seenVersion = extensionPresence.version ?? state?.extensionVersion ?? null;
       return {
         success: true,
         state: {
-          extensionVersion: extensionPresence.version ?? state?.extensionVersion ?? null,
+          extensionVersion: seenVersion,
+          // Live (founder): the extension seen is older than the one this Keepr ships.
+          extensionUpdateReady: isOlderVersion(seenVersion, await bundledExtensionVersion()),
           extensionSeenAt: extensionPresence.seenAt ?? state?.extensionSeenAt ?? null,
           pairedAt: extensionPresence.pairedAt ?? state?.pairedAt ?? null,
           optedIn: consentIsCurrent(consent?.consentVersion),
@@ -1428,24 +1464,24 @@ export function registerRcsImportHandlers(): void {
     "rcs-import:prepare-extension",
     wrapHandler(async (): Promise<{ success: true; folder: string; version: string } | { success: false; error: string }> => {
       try {
-        const source = extensionSourceDir({
-          isPackaged: app.isPackaged,
-          resourcesPath: process.resourcesPath,
-          appPath: app.getAppPath(),
-        });
         // Concurrent callers (StrictMode runs the effect twice) share one run.
-        const out = await prepareExtensionFolderShared(source, app.getPath("downloads"), {
-          exists: async (p) => fs.promises.access(p).then(() => true, () => false),
-          readText: (p) => fs.promises.readFile(p, "utf8"),
-          copyDir: (from, to) => fs.promises.cp(from, to, { recursive: true, errorOnExist: true }),
-          removeDir: (p) => fs.promises.rm(p, { recursive: true, force: true }),
-          rename: (from, to) => fs.promises.rename(from, to),
-          listDir: (p) => fs.promises.readdir(p),
-        });
+        const out = await prepareExtensionFolderShared(bundledExtensionDir(), app.getPath("downloads"), deliveryFs);
         return { success: true, ...out };
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
+    }, { module: LOG_TAG }),
+  );
+
+  // Live (founder): at app start (the renderer, while the extension is not in
+  // the store), refresh a Downloads copy older than the bundled extension.
+  ipcMain.handle(
+    "rcs-import:refresh-extension-folder",
+    wrapHandler(async (): Promise<{ success: true; refreshed: boolean; bundledVersion: string | null; error?: string }> => {
+      const r = await refreshExtensionFolderIfOlder(bundledExtensionDir(), app.getPath("downloads"), deliveryFs);
+      if (r.refreshed) void logService.info("[RcsImport] Extension folder refreshed to " + r.bundledVersion, LOG_TAG);
+      else if (r.error) void logService.warn("[RcsImport] Extension folder not refreshed (in use)", LOG_TAG);
+      return { success: true, ...r };
     }, { module: LOG_TAG }),
   );
 

@@ -229,11 +229,24 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(mockStartCache).not.toHaveBeenCalled();
   });
 
+  // Live (founder): Chrome runs the old unpacked copy until it is reloaded.
+  // Mutations: the line not shown; shown for a store install → red.
+  it("an older extension seen: one \"update ready\" line (unpacked only)", async () => {
+    mockState = { ...INSTALLED, extensionUpdateReady: true };
+    const { unmount } = render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-extension-update")).toHaveTextContent("Extension update ready. In chrome://extensions, click ↻ on Keepr.");
+    unmount();
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} published />);
+    expect(await screen.findByTestId("gm-sync-now")).toBeInTheDocument();
+    expect(screen.queryByTestId("gm-extension-update")).toBeNull();
+  });
+
   it("consent current: no line, Sync now", async () => {
     mockState = INSTALLED;
     render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
     expect(await screen.findByTestId("gm-sync-now")).toHaveTextContent("Sync now");
     expect(screen.queryByTestId("gm-consent-line")).toBeNull();
+    expect(screen.queryByTestId("gm-extension-update")).toBeNull();
     // B2 again once consent is given: the linked row is back.
     expect(screen.getByTestId("gm-linked-row")).toHaveTextContent("Linked with your browser");
   });

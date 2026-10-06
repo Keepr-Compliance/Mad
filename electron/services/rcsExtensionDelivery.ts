@@ -127,6 +127,58 @@ export function prepareExtensionFolderShared(
   return run;
 }
 
+/** "0.3.84" < "0.3.80"? Dotted numbers, missing parts as 0; anything unreadable is not older. */
+export function isOlderVersion(a: string | null | undefined, b: string | null | undefined): boolean {
+  const parse = (v: string | null | undefined): number[] | null =>
+    typeof v === "string" && /^\d+(\.\d+)*$/.test(v) ? v.split(".").map(Number) : null;
+  const x = parse(a);
+  const y = parse(b);
+  if (!x || !y) return false;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d !== 0) return d < 0;
+  }
+  return false;
+}
+
+/** A folder's extension version (its manifest), or null. */
+export async function folderExtensionVersion(dir: string, fs: DeliveryFs): Promise<string | null> {
+  try {
+    const parsed = JSON.parse(await fs.readText(path.join(dir, "manifest.json"))) as { version?: unknown };
+    return typeof parsed.version === "string" ? parsed.version : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Live (founder, 2026-10-05): after a Keepr update, Downloads/"Keepr
+ * Extension" kept the OLD extension — it was only copied by the install step,
+ * which runs only while no extension is seen. At app start (an update
+ * restarts the app), a folder the user already has is refreshed when this
+ * Keepr bundles a newer extension. No folder → nothing (the install step
+ * makes it). Windows holding it open → RCS_EXTENSION_FOLDER_BUSY, tried
+ * again next start.
+ */
+export async function refreshExtensionFolderIfOlder(
+  sourceDir: string,
+  downloadsDir: string,
+  fs: DeliveryFs,
+): Promise<{ refreshed: boolean; bundledVersion: string | null; error?: string }> {
+  const bundledVersion = await folderExtensionVersion(sourceDir, fs);
+  const folder = extensionTargetDir(downloadsDir);
+  if (!bundledVersion || !(await fs.exists(folder))) return { refreshed: false, bundledVersion };
+  const current = await folderExtensionVersion(folder, fs);
+  // A folder with no readable manifest is Keepr's to fix too.
+  if (current !== null && !isOlderVersion(current, bundledVersion)) return { refreshed: false, bundledVersion };
+  try {
+    await prepareExtensionFolderShared(sourceDir, downloadsDir, fs);
+    return { refreshed: true, bundledVersion };
+  } catch (err) {
+    return { refreshed: false, bundledVersion, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 async function swapIn(
   sourceDir: string,
   folder: string,

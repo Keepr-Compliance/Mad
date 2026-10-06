@@ -32,8 +32,75 @@ import {
   prepareExtensionFolderShared,
   RCS_EXTENSION_FOLDER_BUSY,
   RCS_EXTENSION_FOLDER_NAME,
+  isOlderVersion,
+  refreshExtensionFolderIfOlder,
   type DeliveryFs,
 } from "../rcsExtensionDelivery";
+
+// Live (founder, 2026-10-05): after a Keepr update, Downloads/"Keepr
+// Extension" stayed at the old version (copied only by the install step).
+// Mutations: no refresh when older; a refresh when the same / newer or with
+// no folder; the busy message lost; the version compare as text → red.
+describe("the extension folder refreshed at app start (live)", () => {
+  const withOldManifest = (version: string | null) => {
+    const r = realSetup();
+    if (version !== null) nodeFs.writeFileSync(path.join(r.old, "manifest.json"), JSON.stringify({ version }));
+    return r;
+  };
+
+  it("an older folder is replaced by the bundled extension (no file of the old build left)", async () => {
+    const r = withOldManifest("0.3.4");
+    try {
+      const out = await refreshExtensionFolderIfOlder(r.src, r.downloads, r.fsOps());
+      expect(out).toEqual({ refreshed: true, bundledVersion: "0.3.5" });
+      expect(JSON.parse(nodeFs.readFileSync(path.join(r.old, "manifest.json"), "utf8")).version).toBe("0.3.5");
+      expect(nodeFs.existsSync(path.join(r.old, "removed-in-new-build.js"))).toBe(false);
+    } finally {
+      r.cleanup();
+    }
+  });
+
+  it("the same or a newer folder, or no folder at all: left as it is", async () => {
+    for (const v of ["0.3.5", "0.3.10"]) {
+      const r = withOldManifest(v);
+      try {
+        expect(await refreshExtensionFolderIfOlder(r.src, r.downloads, r.fsOps())).toEqual({ refreshed: false, bundledVersion: "0.3.5" });
+        expect(nodeFs.readFileSync(path.join(r.old, "job.js"), "utf8")).toBe("old");
+      } finally {
+        r.cleanup();
+      }
+    }
+    const r = realSetup();
+    try {
+      nodeFs.rmSync(r.old, { recursive: true, force: true });
+      expect(await refreshExtensionFolderIfOlder(r.src, r.downloads, r.fsOps())).toEqual({ refreshed: false, bundledVersion: "0.3.5" });
+      expect(nodeFs.existsSync(r.old)).toBe(false);
+    } finally {
+      r.cleanup();
+    }
+  });
+
+  it("Windows holding the folder: the existing message, the old folder untouched", async () => {
+    const r = withOldManifest("0.3.4");
+    try {
+      const out = await refreshExtensionFolderIfOlder(r.src, r.downloads, r.fsOps((from) => from === r.old));
+      expect(out).toEqual({ refreshed: false, bundledVersion: "0.3.5", error: RCS_EXTENSION_FOLDER_BUSY });
+      expect(nodeFs.readFileSync(path.join(r.old, "job.js"), "utf8")).toBe("old");
+    } finally {
+      r.cleanup();
+    }
+  });
+
+  it("isOlderVersion: numeric parts, not text", () => {
+    expect(isOlderVersion("0.3.80", "0.3.84")).toBe(true);
+    expect(isOlderVersion("0.3.9", "0.3.10")).toBe(true);
+    expect(isOlderVersion("0.3.10", "0.3.9")).toBe(false);
+    expect(isOlderVersion("0.3.84", "0.3.84")).toBe(false);
+    expect(isOlderVersion("0.3", "0.3.1")).toBe(true);
+    expect(isOlderVersion(null, "0.3.84")).toBe(false);
+    expect(isOlderVersion("x", "0.3.84")).toBe(false);
+  });
+});
 
 function fakeFs(files: Record<string, string>): DeliveryFs & { copies: Array<[string, string]>; renames: Array<[string, string]> } {
   const copies: Array<[string, string]> = [];

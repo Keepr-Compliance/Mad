@@ -56,6 +56,8 @@ export const rcsImportBridge = {
 
   /** BACKLOG-3659: the extension, delivered to Downloads (Release 1: unpacked). */
   prepareExtension: (): Promise<RcsPrepareExtensionResult> => ipcRenderer.invoke("rcs-import:prepare-extension"),
+  refreshExtensionFolder: (): Promise<{ success: boolean; refreshed?: boolean; bundledVersion?: string | null; error?: string }> =>
+    ipcRenderer.invoke("rcs-import:refresh-extension-folder"),
   showExtensionFolder: (): Promise<{ success: boolean }> => ipcRenderer.invoke("rcs-import:show-extension-folder"),
   openChromeForExtension: (): Promise<{ success: true; copied: boolean; opened: boolean }> =>
     ipcRenderer.invoke("rcs-import:open-chrome-for-extension"),

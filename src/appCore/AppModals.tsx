@@ -20,6 +20,7 @@ import type { Transaction } from "@/types";
 import { useEmailSettingsCallbacks } from "./hooks/useEmailSettingsCallbacks";
 import { scrollToSettingsSection } from "../utils/scrollToSettingsSection";
 import { useGoogleMessagesSyncStatus } from "../hooks/useGoogleMessagesSyncStatus";
+import { useExtensionFolderRefresh } from "../hooks/useExtensionFolderRefresh";
 import { useSubmissionStatusNotice } from "./hooks/useSubmissionStatusNotice";
 
 interface AppModalsProps {
@@ -57,6 +58,7 @@ export function AppModals({ app }: AppModalsProps) {
 
   // BACKLOG-3658: a Google Messages Sync on the dashboard indicator, even minimized.
   useGoogleMessagesSyncStatus();
+  useExtensionFolderRefresh();
 
   // Track newly created transaction so TransactionList can auto-open its details
   const [auditCreatedTransaction, setAuditCreatedTransaction] = useState<Transaction | null>(null);

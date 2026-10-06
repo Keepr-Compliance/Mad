@@ -32,6 +32,17 @@ export function betaInstallPreferencePatch(on: boolean): Record<string, unknown>
   return { messageImport: { googleMessages: { betaExtensionInstall: on } } };
 }
 
+/**
+ * Live (founder): after a Keepr update the folder in Downloads is refreshed
+ * (app start), but Chrome runs the old copy until it is reloaded. One line,
+ * only for the unpacked install (a store install updates itself).
+ */
+export const EXTENSION_UPDATE_READY_LINE = "Extension update ready. In chrome://extensions, click ↻ on Keepr.";
+
+export function showExtensionUpdateReady(updateReady: boolean | undefined, published: boolean = EXTENSION_PUBLISHED): boolean {
+  return !published && updateReady === true;
+}
+
 /** The install path this account sees: beta when chosen, or while the store listing is not live. */
 export function wantsBetaInstall(preferenceOn: boolean, published: boolean = EXTENSION_PUBLISHED): boolean {
   return !published || preferenceOn;

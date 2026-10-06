@@ -79,6 +79,8 @@ export type RcsLinkState =
 
 export interface RcsExtensionState {
   extensionVersion: string | null;
+  /** Live (founder): the extension seen is older than the one this Keepr ships. */
+  extensionUpdateReady?: boolean;
   extensionSeenAt: string | null;
   pairedAt: string | null;
   /** The consent is current (P3b). */
@@ -182,6 +184,8 @@ export interface WindowApiRcsImport {
   clearTexts?: () => Promise<RcsClearTextsResult>;
   /** BACKLOG-3659: copy the extension to Downloads/"Keepr Extension". */
   prepareExtension?: () => Promise<RcsPrepareExtensionResult>;
+  /** Live (founder): refresh an older Downloads/"Keepr Extension" (app start). */
+  refreshExtensionFolder?: () => Promise<{ success: boolean; refreshed?: boolean; bundledVersion?: string | null; error?: string }>;
   /** BACKLOG-3659: show that folder in the file manager. */
   showExtensionFolder?: () => Promise<{ success: boolean }>;
   /** BACKLOG-3659: copy "chrome://extensions" and start Chrome. */

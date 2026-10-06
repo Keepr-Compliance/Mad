@@ -158,6 +158,18 @@ export const rcsImportService = {
     }
   },
 
+  /** Live (founder): refresh an older Downloads/"Keepr Extension" (app start; never throws). */
+  async refreshExtensionFolder(): Promise<{ refreshed: boolean; error?: string }> {
+    const bridge = api();
+    if (!bridge || !bridge.refreshExtensionFolder) return { refreshed: false };
+    try {
+      const r = await bridge.refreshExtensionFolder();
+      return { refreshed: r.refreshed === true, ...(r.error ? { error: r.error } : {}) };
+    } catch {
+      return { refreshed: false };
+    }
+  },
+
   /** BACKLOG-3659: copy the extension to Downloads/"Keepr Extension". */
   async prepareExtension(): Promise<ApiResult<{ folder: string; version: string }>> {
     const bridge = api();
