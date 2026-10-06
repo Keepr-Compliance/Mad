@@ -535,8 +535,9 @@ describe("SR fix 1: a job Keepr no longer knows ends the run", () => {
       api: (_m, p) => {
         if (p.endsWith("/progress")) {
           progressCalls += 1;
-          // 1st = the pre-loop "Checking N chats"; 2nd = after chat 1.
-          if (progressCalls >= 2) return { ok: false, status: 410, body: { error: "job_over" } };
+          // 1st = the pre-loop "Checking N chats"; 2nd = chat 1's start (Keepr's
+          // card follows each chat); 3rd = after chat 1.
+          if (progressCalls >= 3) return { ok: false, status: 410, body: { error: "job_over" } };
         }
         return undefined;
       },

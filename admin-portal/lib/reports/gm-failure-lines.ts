@@ -30,6 +30,7 @@ export const GM_FAILURE_LINES: Readonly<Record<string, string>> = {
   scan_failed: 'The Sync stopped unexpectedly.',
   pc_offline: 'This computer is offline.',
   keepr_busy: 'Keepr is busy. Try again.',
+  google_unresponsive: 'Google Messages stopped responding.',
 };
 
 export const GM_FAILURE_FALLBACK = 'The Sync stopped unexpectedly.';

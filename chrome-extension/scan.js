@@ -690,6 +690,12 @@
    */
   var HISTORY_BUDGET_EXTEND_MS = 30000;
   var HISTORY_BUDGET_GROWTH_WINDOW_MS = 10000;
+  /**
+   * Live (2026-10-05): a chat whose history has not grown for this long ends
+   * (not_settled → "not fully imported") — Google's backend may have stopped
+   * answering. Counted on the wall clock too (see tick()).
+   */
+  var HISTORY_NO_PROGRESS_MS = 75000;
   var HISTORY_BUDGET_CAP_MS = 300000;
   /**
    * SR: the extra time is a per-RUN pool, shared by every chat of a Sync.
@@ -903,6 +909,8 @@
     var poolLeftMs = typeof io.extensionPoolLeftMs === "number" ? Math.max(0, io.extensionPoolLeftMs) : RCS_HISTORY_EXTENSION_POOL_MS;
     var chatCapMs = Math.min(budgetCapMs, baseBudgetMs + poolLeftMs);
     var poolExhausted = false;
+    /** Live (2026-10-05): the chat ended because its history stopped growing. */
+    var noProgress = false;
     var lastGrowthAt = -Infinity;
     var batches = 0;
     var startSelectors = io.startMarkerSelectors || HISTORY_START_MARKER_SELECTORS;
@@ -914,6 +922,14 @@
     var scrolls = 0;
     var nudges = 0;
     var spent = 0;
+    // Live (2026-10-05): `spent` counted only the nominal sleeps; a hidden
+    // tab's throttled timers (≈ a minute per 250 ms poll) made every budget
+    // last hours. It now follows the wall clock whenever that is further on.
+    var clockNow = typeof io.now === "function" ? io.now : function () { return Date.now(); };
+    var startedAt = clockNow();
+    function tick(ms) {
+      spent = Math.max(spent + ms, clockNow() - startedAt);
+    }
 
     function absorb() {
       var wrappers = doc.querySelectorAll(SELECTORS.message);
@@ -931,6 +947,11 @@
     }
     /** Budget left? Out of it while still growing → extended (up to the cap). */
     function inBudget() {
+      // Live (2026-10-05): no growth for HISTORY_NO_PROGRESS_MS ends the chat.
+      if (spent - Math.max(lastGrowthAt, 0) > HISTORY_NO_PROGRESS_MS) {
+        noProgress = true;
+        return false;
+      }
       if (spent < budgetMs) return true;
       if (spent - lastGrowthAt <= HISTORY_BUDGET_GROWTH_WINDOW_MS) {
         if (budgetMs < chatCapMs) {
@@ -988,7 +1009,7 @@
       for (var attempt = 0; attempt < GAP_RECOVERY_ATTEMPTS && inBudget(); attempt++) {
         await io.stepBack();
         await io.sleep(step);
-        spent += step;
+        tick(step);
         absorb();
         collect();
         var ids = onScreenIds();
@@ -1014,6 +1035,9 @@
       var extraMs = Math.max(0, Math.min(spent, budgetMs) - baseBudgetMs);
       if (extraMs > 0) r.extraMs = extraMs;
       if (poolExhausted) r.poolExhausted = true;
+      // Live (2026-10-05): how long the history had not grown when it ended (ms).
+      r.idleMs = Math.max(0, spent - Math.max(lastGrowthAt, 0));
+      if (noProgress) r.noProgress = true;
       if (confirmedBy) r.confirmedBy = confirmedBy;
       if (gapsDetected > 0) {
         r.gapsDetected = gapsDetected;
@@ -1046,7 +1070,7 @@
       var waited = 0;
       while (waited < HISTORY_FIRST_PAGE_MAX_WAIT_MS && inBudget()) {
         await io.sleep(step);
-        spent += step;
+        tick(step);
         waited += step;
         absorb();
         if (shortOnly && count >= HISTORY_FIRST_PAGE) return false;
@@ -1081,7 +1105,7 @@
       var waited = 0;
       while (waited < ms && inBudget()) {
         await io.sleep(poll);
-        spent += poll;
+        tick(poll);
         waited += poll;
         absorb();
         collect();
@@ -1096,7 +1120,7 @@
       var waited = 0;
       while (waited < ms && inBudget()) {
         await io.sleep(poll);
-        spent += poll;
+        tick(poll);
         absorb();
         collect();
         if (count > fromCount) return true;
@@ -1110,7 +1134,7 @@
       var total = 0;
       while (quiet < HISTORY_QUIET_MS && total < HISTORY_QUIET_CAP_MS && inBudget()) {
         await io.sleep(poll);
-        spent += poll;
+        tick(poll);
         total += poll;
         if (absorb() > 0) quiet = 0;
         else quiet += poll;
@@ -1191,7 +1215,7 @@
           if (!io.stepDown) return;
           var moved = await io.stepDown(HISTORY_IMAGE_STEP_FRACTION);
           await io.sleep(poll);
-          spent += poll;
+          tick(poll);
           absorb();
           collect();
           var now = imagesCollected();
@@ -1425,6 +1449,7 @@
     HISTORY_BUDGET_GROWTH_WINDOW_MS: HISTORY_BUDGET_GROWTH_WINDOW_MS,
     HISTORY_BUDGET_CAP_MS: HISTORY_BUDGET_CAP_MS,
     RCS_HISTORY_EXTENSION_POOL_MS: RCS_HISTORY_EXTENSION_POOL_MS,
+    HISTORY_NO_PROGRESS_MS: HISTORY_NO_PROGRESS_MS,
     HISTORY_SMALL_CHAT: HISTORY_SMALL_CHAT,
     HISTORY_FIRST_GROWTH_MS: HISTORY_FIRST_GROWTH_MS,
     HISTORY_NUDGE_WATCH_MS: HISTORY_NUDGE_WATCH_MS,

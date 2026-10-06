@@ -645,6 +645,48 @@ describe("runJob: a cache Sync", () => {
     expect(lastSlow[2].details).toContain("Keepr is still saving — see Keepr for the result");
   });
 
+  // Live (2026-10-05): Google's backend stopped answering (no banner): chats
+  // whose history stopped growing, back to back, for 5 minutes in all → the
+  // run fails as google_unresponsive ("Google Messages stopped responding."),
+  // never waiting forever. Mutation: the run limit removed → red.
+  it("chats with no new messages for 5 minutes in all: the run fails as google_unresponsive", async () => {
+    const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"], [id(2)]: ["+15555550103"] } });
+    (t.env.scan as Record<string, unknown>).loadHistory = async () => ({
+      stopReason: "not_settled", count: 0, scrolls: 0, nudges: 0, elapsedMs: 160_000, idleMs: 160_000, noProgress: true,
+    });
+    const outcome = await job.runJob(JOB, t.env);
+    expect(outcome).toEqual({ outcome: "google_unresponsive" });
+    expect(t.calls.filter(([, p]) => p.endsWith("/match"))).toHaveLength(2); // 2 × 160 s ≥ 5 min: chat 3 never opened
+    expect(t.calls.find(([, p]) => p.endsWith("/error"))?.[2]).toMatchObject({ code: "google_unresponsive" });
+    expect(t.shown[t.shown.length - 1][0]).toBe("Google Messages stopped responding.");
+  });
+
+  it("a chat that loaded something restarts the count: no failure for one idle chat after a growing one", async () => {
+    const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"] } });
+    const stops = [
+      { stopReason: "not_settled", count: 0, elapsedMs: 250_000, idleMs: 250_000, noProgress: true },
+      { stopReason: "not_settled", count: 2000, elapsedMs: 200_000, idleMs: 80_000, noProgress: true }, // 250 + 80 s would pass 5 min
+    ];
+    let n = 0;
+    (t.env.scan as Record<string, unknown>).loadHistory = async () => stops[n++];
+    expect((await job.runJob(JOB, t.env)).outcome).toBe("finished");
+  });
+
+  // Live (2026-10-05): Keepr's card showed "Reading chat 1 of 4" while a later
+  // chat loaded only its first page — each chat's start now posts its line.
+  // Mutation: no /progress at a chat's start → red.
+  it("each chat's start tells Keepr its line ('Reading chat N of M')", async () => {
+    // Chat 1 is skipped (no end-of-chat progress): only chat 2's start can post its line.
+    const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"] }, matchSkip: [id(0)] });
+    await job.runJob(JOB, t.env);
+    const stages = t.calls.filter(([, p]) => p.endsWith("/progress")).map(([, , b]) => String(b?.stage));
+    const chat2 = stages.findIndex((st) => /chat 2 of/.test(st));
+    const match2 = t.calls.findIndex(([, p, b]) => p.endsWith("/match") && b?.conversationId === id(1));
+    const progressIdx = t.calls.findIndex(([, p, b]) => p.endsWith("/progress") && /chat 2 of/.test(String(b?.stage)));
+    expect(chat2).toBeGreaterThanOrEqual(0);
+    expect(progressIdx).toBeLessThan(match2);
+  });
+
   // 3671 history depth: per chat "oldest read: N days ago (floor N days)",
   // and a "History depth" summary — counts and day numbers only. Mutation:
   // the depth not counted / the line missing → red.

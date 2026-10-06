@@ -93,6 +93,7 @@
     scan_failed: "The Sync stopped unexpectedly.",
     pc_offline: "This computer is offline.",
     keepr_busy: "Keepr is busy. Try again.",
+    google_unresponsive: "Google Messages stopped responding.",
   };
   var FAILURE_FALLBACK = "The Sync stopped unexpectedly.";
   /** An older Keepr asked for a per-transaction Sync (removed 2026-10-05). */
@@ -205,6 +206,14 @@
     phone_unreachable: "Keepr stopped: your phone wasn't reachable for 5 minutes. Check it's on and connected, then sync again from Keepr.",
     pc_offline: "Keepr stopped: this computer was offline for 5 minutes. Connect to the internet, then sync again from Keepr.",
   };
+  /**
+   * Live (2026-10-05): chats whose history stopped growing, back to back, for
+   * this long in all — Google's backend stopped answering (no banner shown):
+   * the run fails as google_unresponsive instead of waiting forever.
+   */
+  var RUN_NO_PROGRESS_MS = 5 * 60000;
+  var GOOGLE_UNRESPONSIVE_MESSAGE =
+    "Keepr stopped: Google Messages stopped loading messages for 5 minutes. Check your connection, then sync again from Keepr.";
   /** The paused box's line for each pause. */
   var PAUSE_BODIES = {};
   /** Step-log lines kept for the overlay's Copy. */
@@ -849,6 +858,8 @@
     // BACKLOG-3671 P2 (telemetry; counts and ms only): phase times, each
     // chat's read time (summarised before it leaves), bytes read.
     var clock = function () { return (env.now ? env.now() : new Date()).getTime(); };
+    /** Live (2026-10-05): see RUN_NO_PROGRESS_MS. */
+    var noProgressRunMs = 0;
     var tm = { findingAt: null, readingAt: null, readEndAt: null, chatMs: [], bytesRead: 0, chatsFound: 0, chatsInRange: 0, chatsFailed: 0 };
     var chromeVersion = null;
     function runMetrics() {
@@ -1013,7 +1024,7 @@
             scrollUp: env.scrollMessagesUp || function () {},
             nudge: env.nudgeMessages, nudgeDown: env.nudgeDownMessages, nudgeReturnStep: env.nudgeReturnMessages,
             stepDown: env.stepDownMessages, stepBack: env.stepBackMessages, hasScroller: env.hasMessageScroller,
-            imagePass: true, sleep: env.sleep,
+            imagePass: true, sleep: env.sleep, now: function () { return (env.now ? env.now() : new Date()).getTime(); },
             floorMs: typeof item.oldestMs === "number" ? item.oldestMs - 1 : item.floorMs,
             budgetMs: Math.max(1000, Math.min(60000, poolMs - used)), extensionPoolLeftMs: 0,
             extractBatch: function () { return env.extract(env.doc, loc.href, env.now ? env.now() : new Date()).messages; },
@@ -1293,7 +1304,9 @@
       var lostChat = await holdWhileOffline(stageText(i + 1, candidates.length));
       if (lostChat && lostChat.code) return fail(lostChat.code, lostChat.message);
       try {
-        showPhase(stageText(i + 1, candidates.length));
+        // Live (2026-10-05): Keepr's card follows each chat too (it showed the
+        // first chat's line while a later one loaded only its first page).
+        await report(stageText(i + 1, candidates.length));
         // BACKLOG-3658 #12: the conversation id as a 6-hex tag salted per job
         // (never the raw id), so two chats with the same name are told apart.
         log("#" + (i + 1) + "/" + candidates.length + " chat " + (await tag(conv.name)) +
@@ -1403,6 +1416,8 @@
           budgetMs: env.historyBudgetMs,
           extensionPoolLeftMs: Math.max(0, extraTime.poolMs - extraTime.usedMs),
           sleep: env.sleep,
+          // Live (2026-10-05): the budgets also run on the wall clock.
+          now: clock,
           floorMs: chatFloorMs,
           cap: env.historyCap,
           noNewTimeoutMs: env.historyNoNewMs,
@@ -1443,6 +1458,14 @@
           hist = await env.scan.loadHistory(env.doc, histIo);
         }
         history.push({ conversationId: conv.conversationId, stopReason: hist.stopReason, count: hist.count });
+        // Live (2026-10-05): the time Google's side has given nothing, across
+        // chats — a chat that grew restarts it from its own trailing idle.
+        noProgressRunMs = (hist.count > 0 && hist.idleMs < (hist.elapsedMs || 0) ? 0 : noProgressRunMs) + (hist.idleMs || 0);
+        if (hist.noProgress) log("  history stopped growing for " + Math.round((hist.idleMs || 0) / 1000) + "s");
+        if (noProgressRunMs >= RUN_NO_PROGRESS_MS) {
+          log("  stopped: no new messages from Google for " + Math.round(noProgressRunMs / 1000) + "s");
+          return fail("google_unresponsive", GOOGLE_UNRESPONSIVE_MESSAGE);
+        }
         var settled = await env.scan.waitForMessageSwap(env.doc, "", {
           sleep: env.sleep,
           timeoutMs: env.messagesTimeoutMs,
