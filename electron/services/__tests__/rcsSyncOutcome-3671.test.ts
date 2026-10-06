@@ -444,10 +444,12 @@ describe("migration hygiene", () => {
   const raw = files.length === 1 ? fs.readFileSync(path.join(dir, files[0]), "utf8").replace(/\r\n?/g, "\n") : "";
   const sqlOnly = raw.split("\n").map((l) => l.replace(/--.*$/, "")).join(" ").replace(/\s+/g, " ");
 
-  it("exactly one 3671 migration, sorting after every other", () => {
-    expect(files).toHaveLength(1);
-    const all = fs.readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
-    expect(all[all.length - 1]).toBe(files[0]);
+  // Applied to production as version 20261004222332 (supabase_migrations
+  // history): the file carries that version, so its place in the order is the
+  // one it was applied in — develop's later migrations (3726, …) sort after it.
+  // Mutation: the file back under its pre-apply name → red.
+  it("exactly one 3671 migration, under the version it was applied as", () => {
+    expect(files).toEqual(["20261004222332_backlog_3671_google_messages_sync_metrics.sql"]);
   });
 
   it("four nullable columns, no default; the size cap NOT VALID; nothing else", () => {
