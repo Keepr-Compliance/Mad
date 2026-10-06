@@ -1313,6 +1313,12 @@
     };
     /** Messages already sent per chat: a retried chat is not counted twice. */
     var sentMessages = {};
+    /**
+     * Live (founder, 0.3.80): a chat's oldest message sent this run (ms), by
+     * conversation. A retry that reads LESS far back than an earlier attempt
+     * must not claim the chat's start (its "no_more" is not believed).
+     */
+    var oldestSentByConv = {};
     for (var wi = 0; wi < work.length; wi++) {
       var item = work[wi];
       var i = item.attempt > 0 ? candidates.length - 1 : wi;
@@ -1547,6 +1553,19 @@
           leaveOut(conv, "no_messages");
           continue;
         }
+        var attemptOldest = null;
+        for (var ao = 0; ao < messages.length; ao++) {
+          var at = Date.parse(messages[ao].sentAt);
+          if (isFinite(at) && (attemptOldest === null || at < attemptOldest)) attemptOldest = at;
+        }
+        var earlierOldest = oldestSentByConv[conv.conversationId];
+        if (earlierOldest !== undefined && depthKind(hist) !== "partial" && (attemptOldest === null || attemptOldest > earlierOldest)) {
+          // Keepr keeps every message of both attempts (staged by message id);
+          // what this attempt may not do is say the chat is complete.
+          log("  retry read less far back than before: not marked complete");
+          hist = Object.assign({}, hist, { stopReason: "not_settled", readLess: true });
+        }
+        if (attemptOldest !== null && (earlierOldest === undefined || attemptOldest < earlierOldest)) oldestSentByConv[conv.conversationId] = attemptOldest;
         var commitAt = clock();
         var sent = await call("POST", base + "/chat", {
           conversationId: conv.conversationId,

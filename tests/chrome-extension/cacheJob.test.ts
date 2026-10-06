@@ -369,6 +369,50 @@ describe("runJob: a cache Sync", () => {
       expect(details(t)).toContain("Retried 1 chat, recovered 1");
     });
 
+    // Live (founder, 0.3.80): chat 1's first pass read back 29 days and ended
+    // not_settled (239 messages); the end-of-run retry read only 24 days back
+    // (166) yet stopped as no_more. Keepr keeps both attempts (staged by
+    // message id); the retry must not claim the chat complete.
+    // Mutation: the read-less guard removed → red (reachedFloor true, recovered).
+    describe("a retry that reads less far back (live)", () => {
+      const msg = (n: number, daysAgo: number) => ({
+        msgId: "m" + n, direction: "inbound", sender: "x", text: "t", sentAt: new Date(NOW - daysAgo * DAY).toISOString(), transport: "rcs", imageSrcs: [], files: [],
+      });
+      const run = async (retryOldestDays: number) => {
+        const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"] } });
+        let loads = 0;
+        (t.env.scan as Record<string, unknown>).loadHistory = async () => {
+          loads += 1;
+          return loads === 1
+            ? { stopReason: "not_settled", count: 3, elapsedMs: 61_000, idleMs: 0 }
+            : { stopReason: "no_more", count: 2, elapsedMs: 4_000, idleMs: 4_000 };
+        };
+        (t.env as Record<string, unknown>).extract = () => ({
+          conversationId: id(0), title: "x", skipped: { noDate: 0, noText: 0 },
+          messages: loads === 1 ? [msg(1, 29), msg(2, 10), msg(3, 1)] : [msg(4, retryOldestDays), msg(3, 1)],
+        });
+        await job.runJob(JOB, t.env);
+        const chats = t.calls.filter(([, p]) => p.endsWith("/chat")).map(([, , b]) => b as { reachedFloor: boolean; messages: unknown[] });
+        return { t, loads, chats };
+      };
+
+      it("read less: not marked complete; still \"not fully imported\"; both attempts sent", async () => {
+        const { t, loads, chats } = await run(24);
+        expect(loads).toBe(2);
+        expect(chats.map((c) => c.reachedFloor)).toEqual([false, false]);
+        expect(chats.map((c) => c.messages.length)).toEqual([3, 2]);
+        const f = finishBody(t);
+        expect(f.retry).toEqual({ retried: 1, recovered: 0, notRetried: 0 });
+        expect(f.notReached.some((e) => e.reason === "history_not_settled")).toBe(true);
+      });
+
+      it("read further back: believed — complete and recovered", async () => {
+        const { t, chats } = await run(31);
+        expect(chats.map((c) => c.reachedFloor)).toEqual([false, true]);
+        expect(finishBody(t).retry).toEqual({ retried: 1, recovered: 1, notRetried: 0 });
+      });
+    });
+
     it("messages that did not load the first time are read on the retry", async () => {
       const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"] } });
       let swaps = 0;

@@ -201,6 +201,7 @@ Also: the 128×128 icon (`icons/keepr-128.png`, 96 art + 16 padding) and a
 | 0.3.79 | Step timings in the diagnostics log (one line per chat, one photo line) and as run totals in the Sync metrics. |
 | 0.3.80 | A chat ends after 10 minutes of loading history, however few polls ran. |
 | 0.3.81 | The link code can be selected and copied (Ctrl+C); one "Copy code and open Keepr" button; the welcome page shows the countdown and "Code expired" (one shared code area). |
+| 0.3.82 | A retried chat that reads less far back than before is not marked complete. |
 
 ## 10. Review history
 
