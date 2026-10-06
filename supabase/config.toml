@@ -372,6 +372,11 @@ deno_version = 2
 [functions.submission-sweep]
 verify_jwt = false
 
+# BACKLOG-3711: called by the support_tickets trigger, which sends no JWT.
+# The function checks its own x-webhook-secret header instead.
+[functions.send-ticket-confirmation]
+verify_jwt = false
+
 [analytics]
 enabled = false
 port = 54327
