@@ -16,7 +16,10 @@ import fs from "fs";
 import path from "path";
 import { RCS_EXTENSION_STORE_URL } from "../../handlers/rcsImportHandlers";
 import { EXTENSION_PUBLISHED } from "../../../src/components/settings/android/extensionDistribution";
-import { LOOKBACK_DEFAULT_CUTOVER_ISO } from "../lookbackGrandfatherService";
+import { DEFAULT_LOOKBACK_MONTHS } from "../macOSMessagesImportService/importHelpers";
+import { EMAIL_CACHE_DURATION_MONTHS_DEFAULT } from "../../constants";
+import { resolveEmailCacheDurationMonths } from "../../utils/preferenceHelper";
+import { resolveLookbackMonths } from "../macOSMessagesImportService/importHelpers";
 
 jest.mock("electron", () => ({ app: { getPath: () => "", isPackaged: false }, ipcMain: { handle: jest.fn(), on: jest.fn() }, shell: { openExternal: jest.fn() }, BrowserWindow: { getAllWindows: () => [] } }));
 
@@ -55,9 +58,21 @@ describe("release guards (C4)", () => {
     mathSpy.mockRestore();
   });
 
-  it("the lookback cut-over is final", () => {
-    expect(LOOKBACK_DEFAULT_CUTOVER_ISO).toBe("2026-10-05T00:00:00.000Z");
-    const src = fs.readFileSync(path.join(ROOT, "electron", "services", "lookbackGrandfatherService.ts"), "utf8");
-    expect(src).not.toMatch(/TODO|RELEASE OWNER/);
+  // Founder (2026-10-06): 1.5 months for ALL accounts — no grandfathering of
+  // older accounts at 3; an explicit choice always wins. Sign-in writes no
+  // lookback preference. Mutations: a default back at 3; a sign-in path
+  // writing the window again → red.
+  it("the lookback default: 1.5 for every account; an explicit choice wins; sign-in writes nothing", () => {
+    expect(DEFAULT_LOOKBACK_MONTHS).toBe(1.5);
+    expect(EMAIL_CACHE_DURATION_MONTHS_DEFAULT).toBe(1.5);
+    expect(resolveLookbackMonths(null, DEFAULT_LOOKBACK_MONTHS)).toBe(1.5);
+    expect(resolveLookbackMonths({ lookbackMonths: 3 }, DEFAULT_LOOKBACK_MONTHS)).toBe(3);
+    expect(resolveEmailCacheDurationMonths(null)).toBe(1.5);
+    expect(resolveEmailCacheDurationMonths({ emailCache: { durationMonths: 3 } })).toBe(3);
+    expect(fs.existsSync(path.join(ROOT, "electron", "services", "lookbackGrandfatherService.ts"))).toBe(false);
+    for (const f of [["electron", "main.ts"], ["electron", "handlers", "sessionHandlers.ts"]]) {
+      const src = fs.readFileSync(path.join(ROOT, ...f), "utf8");
+      expect(src).not.toMatch(/lookbackGrandfather|grandfatherLookback/);
+    }
   });
 });

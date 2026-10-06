@@ -1188,12 +1188,6 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
     // persistence just above). Fire-and-forget + fail-closed; the helper itself
     // gates on the flag + a Microsoft mailbox and start() is idempotent, so this
     // co-existing with the OAuth-callback call is harmless.
-    // SR (2026-10-02): a restored session runs the one-time lookback
-    // grandfathering too (idempotent: a marker makes it run once per user).
-    void import("../services/lookbackGrandfatherService")
-      .then(({ grandfatherLookbackDefaultsForUser }) => grandfatherLookbackDefaultsForUser(user.id))
-      .catch(() => { /* logged inside; retried on the next sign-in */ });
-
     void import("../services/shadowDeltaSyncService")
       .then(({ maybeStartShadowDeltaSync }) => maybeStartShadowDeltaSync(user.id))
       .catch((err) => {
