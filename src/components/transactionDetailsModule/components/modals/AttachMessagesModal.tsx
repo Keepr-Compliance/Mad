@@ -9,6 +9,7 @@ import {
   groupMessagesByThread,
   sortThreadsByRecent,
   type MessageLike,
+  getThreadDisplayName,
 } from "../MessageThreadCard";
 import {
   mergeThreadsByContact,
@@ -882,6 +883,12 @@ export function AttachMessagesModal({
                             )}
                             <span>Last: {formatDate(contact.lastMessageAt)}</span>
                           </div>
+                          {/* Live (founder): the group chats this person is in, by name (searchable too). */}
+                          {contact.threadNames.length > 0 && (
+                            <p className="text-xs text-gray-500 mt-0.5 truncate" data-testid="picker-contact-groups">
+                              {contact.threadNames.join(", ")}
+                            </p>
+                          )}
                         </div>
                         <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -969,7 +976,8 @@ export function AttachMessagesModal({
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5 min-w-0">
                               <h4 className="font-semibold text-gray-900 text-sm truncate">
-                                {isGroup ? "Group Chat" : `Chat with ${selectedContactName || formatPhoneNumber(selectedContact || "")}`}
+                                {/* Live (founder): a named group shows its name, as its card does. */}
+                                {isGroup ? (getThreadDisplayName(messages) ?? "Group Chat") : `Chat with ${selectedContactName || formatPhoneNumber(selectedContact || "")}`}
                               </h4>
                               {isGroup && (
                                 <span className="inline-block px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded-full flex-shrink-0">

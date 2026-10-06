@@ -28,7 +28,7 @@ jest.mock("../logService", () => {
 import { setDb } from "../db/core/dbConnection";
 import { batchInsertMessages, findRcsContentDuplicates, getMessageIdMap, insertReactionRows, rcsClearDbOps, rcsAutoDeleteDbOps } from "../db/syncDbService";
 import { recordRcsThreadName } from "../db/rcsChatPeopleDbService";
-import { getMessageContacts } from "../db/messageDbService";
+import { getMessageContacts, getMessagesByContact } from "../db/messageDbService";
 import { getCommunicationsWithMessages } from "../db/communicationDbService";
 import {
   peopleFrom,
@@ -102,6 +102,19 @@ describe("Google Messages group names (live)", () => {
     db.prepare("INSERT INTO communications (id, user_id, transaction_id, message_id, thread_id) VALUES (?, ?, ?, ?, ?)").run("comm-1", USER, TXN, m.id, m.t);
     const rows = (await getCommunicationsWithMessages(TXN, "text")) as unknown as Array<{ thread_display_name?: string }>;
     expect(rows[0].thread_display_name).toBe("Closing Team");
+  });
+
+  // Live (founder): the Attach messages picker's thread rows showed "Group
+  // Chat" — its loader did not join the name the cards use. Mutation: the
+  // join removed from getMessagesByContact → red.
+  it("the picker: the roster carries the group name, and the thread rows the card's thread_display_name", () => {
+    store("Closing Team");
+    const roster = getMessageContacts(USER);
+    const row = roster.find((r) => r.threadNames.includes("Closing Team"));
+    expect(row).toBeDefined();
+    const rows = getMessagesByContact(USER, row!.contact) as unknown as Array<{ thread_display_name?: string | null }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.thread_display_name === "Closing Team")).toBe(true);
   });
 
   it("an unnamed group (Google shows the members' names joined) gets no name; a rename back removes it", () => {
