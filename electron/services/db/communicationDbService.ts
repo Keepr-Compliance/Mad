@@ -922,7 +922,16 @@ export async function getCommunicationsWithMessages(
       (c.message_id IS NOT NULL AND c.message_id = m.id)
       OR
       -- Thread-based linking
-      (c.message_id IS NULL AND c.email_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id)
+      -- BACKLOG-3733: AND m.user_id = c.user_id. One local database can hold
+      -- several signed-in users, each with their own copy of every message,
+      -- and thread ids are shared across those copies. Without the user term a
+      -- thread link pulls in every user's copy; the content dedup below then
+      -- keeps whichever copy sorts first and empty-body rows (photos,
+      -- reactions) come back once per user. c.user_id is the user who made the
+      -- link. It must be here, BEFORE the dedup: filtering afterwards can drop
+      -- the survivor whose own copy the dedup already discarded.
+      (c.message_id IS NULL AND c.email_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id
+       AND m.user_id = c.user_id)
     )
     LEFT JOIN emails e ON (
       -- BACKLOG-506: Email linking - join only when email_id is set and matches

@@ -34,6 +34,72 @@ export type ReviewSyncReason =
  * join display data itself would render nothing for exactly the rows this
  * feature exists to show.
  */
+/**
+ * BACKLOG-3681 / 3403: one attachment (or one message's attachments) that is
+ * not sent. Mirrors `NotIncludedItem` in electron/services/submissionPreflight.ts.
+ */
+export interface SubmitNotIncludedItem {
+  key: string;
+  kind: "text" | "email";
+  localMessageId: string;
+  /** BACKLOG-3731: the conversation, for grouping. */
+  threadId: string | null;
+  sentAt: string | null;
+  label: string;
+  filename: string | null;
+  reason:
+    | "email_attachment_not_downloaded"
+    | "text_attachment_not_on_this_computer"
+    | "file_missing_on_this_computer"
+    | "file_too_large"
+    | "text_attachment_not_downloaded_by_messages"
+    | "text_attachment_too_large_to_import"
+    | "text_attachment_type_not_imported"
+    | "text_attachment_unreadable";
+  localAttachmentId: string | null;
+}
+
+/**
+ * BACKLOG-3683: the answer to `transactions:submission-scope`. Mirrors
+ * `SubmissionScopeResult` in electron/services/submissionService.ts.
+ */
+export interface SubmissionScopeIpcResult {
+  success: boolean;
+  inWindow?: {
+    emails: number;
+    texts: number;
+    textThreads: number;
+    attachments: number;
+    emailAttachments: number;
+    attachmentBytes: number;
+  };
+  error?: string;
+}
+
+/** The answer to `transactions:submit` / `transactions:resubmit`. */
+export interface SubmitIpcResult {
+  success: boolean;
+  submissionId?: string | null;
+  messagesCount?: number;
+  attachmentsCount?: number;
+  /** BACKLOG-3389: in-window texts/emails whose attachments are not included. */
+  flaggedWithoutAttachments?: number;
+  /** BACKLOG-3681: which ones, and why. */
+  notIncluded?: SubmitNotIncludedItem[];
+  /**
+   * BACKLOG-3600: set only when the submission succeeded but its checklists
+   * did not all reach the broker. Mirrors `SubmissionResult.checklistsNotSent`.
+   */
+  checklistsNotSent?: "not_in_plan" | "refused" | "brokerChecklistsNotDownloaded";
+  /** BACKLOG-3398: the agent cancelled; nothing was sent. */
+  cancelled?: boolean;
+  /** BACKLOG-3403: the list of files that cannot be sent changed; confirm again. */
+  preflightChanged?: boolean;
+  /** BACKLOG-3403: the final answer was lost; nothing deleted, status unchanged. */
+  unconfirmed?: boolean;
+  error?: string;
+}
+
 export interface ReviewItemDisplayDto {
   title: string;
   subtitle: string;
@@ -1022,50 +1088,45 @@ export interface WindowApiTransactions {
   // ============================================
 
   /**
-   * Submit transaction to broker portal for review
+   * Submit transaction to broker portal for review.
+   * BACKLOG-3403: `acceptedExclusionKeys` are the pre-flight items the agent
+   * chose to leave out; anything else that cannot be sent makes the submit
+   * refuse (`preflightChanged`) before anything is written.
    */
-  submit: (transactionId: string) => Promise<{
-    success: boolean;
-    submissionId?: string;
-    messagesCount?: number;
-    attachmentsCount?: number;
-    /** Gathered attachments that failed to UPLOAD. */
-    attachmentsFailed?: number;
-    /**
-     * BACKLOG-3389: in-window texts/emails that advertise an attachment and
-     * contributed none — lost before the upload stage, so `attachmentsFailed`
-     * structurally cannot see them.
-     */
-    flaggedWithoutAttachments?: number;
-    /**
-     * BACKLOG-3600: set only when the submission succeeded but its checklists
-     * did not all reach the broker. Mirrors `SubmissionResult.checklistsNotSent`.
-     */
-    checklistsNotSent?: "not_in_plan" | "refused" | "brokerChecklistsNotDownloaded";
-    error?: string;
-  }>;
+  submit: (
+    transactionId: string,
+    options?: { acceptedExclusionKeys?: string[] }
+  ) => Promise<SubmitIpcResult>;
 
   /**
    * Resubmit transaction (creates new version)
    */
-  resubmit: (transactionId: string) => Promise<{
+  resubmit: (
+    transactionId: string,
+    options?: { acceptedExclusionKeys?: string[] }
+  ) => Promise<SubmitIpcResult>;
+
+  /**
+   * BACKLOG-3403: the attachments that cannot be sent, after the on-demand
+   * email download.
+   */
+  submitPreflight: (transactionId: string) => Promise<{
     success: boolean;
-    submissionId?: string;
-    messagesCount?: number;
-    attachmentsCount?: number;
-    /** Gathered attachments that failed to UPLOAD. */
-    attachmentsFailed?: number;
-    /**
-     * BACKLOG-3389: in-window texts/emails that advertise an attachment and
-     * contributed none — lost before the upload stage, so `attachmentsFailed`
-     * structurally cannot see them.
-     */
-    flaggedWithoutAttachments?: number;
-    /**
-     * BACKLOG-3600: set only when the submission succeeded but its checklists
-     * did not all reach the broker. Mirrors `SubmissionResult.checklistsNotSent`.
-     */
-    checklistsNotSent?: "not_in_plan" | "refused" | "brokerChecklistsNotDownloaded";
+    notIncluded?: SubmitNotIncludedItem[];
+    error?: string;
+  }>;
+
+  /** BACKLOG-3683: what a submission with these (not yet saved) dates would send. */
+  getSubmissionScope: (
+    transactionId: string,
+    candidate: { started_at: string | null; closed_at: string | null }
+  ) => Promise<SubmissionScopeIpcResult>;
+
+  /** BACKLOG-3398: cancel the running submission. */
+  cancelSubmit: (transactionId: string) => Promise<{
+    success: boolean;
+    cancelled?: boolean;
+    reason?: "not_running" | "finalizing";
     error?: string;
   }>;
 

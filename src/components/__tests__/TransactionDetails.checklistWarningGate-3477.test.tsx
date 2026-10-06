@@ -80,17 +80,15 @@ jest.mock("../transactionDetailsModule", () => {
 jest.mock("../transactionDetailsModule/components/modals/SubmitForReviewModal", () => ({
   SubmitForReviewModal: (props: {
     checklistsNotSent?: string | null;
-    attachmentsFailed?: number;
-    flaggedWithoutAttachments?: number;
+    notIncluded?: { key: string; reason: string }[];
     onSubmit: () => void;
   }) => (
     <div data-testid="submit-modal">
       {/* BACKLOG-3600 */}
       <span data-testid="checklists-not-sent">{String(props.checklistsNotSent)}</span>
-      {/* BACKLOG-3399 */}
-      <span data-testid="attachments-failed">{String(props.attachmentsFailed)}</span>
-      <span data-testid="flagged-without-attachments">
-        {String(props.flaggedWithoutAttachments)}
+      {/* BACKLOG-3681 */}
+      <span data-testid="not-included">
+        {(props.notIncluded ?? []).map((i) => `${i.key}:${i.reason}`).join(",")}
       </span>
       <button data-testid="modal-submit" onClick={() => props.onSubmit()} />
     </div>
@@ -512,28 +510,28 @@ it("BACKLOG-3600: a submit result's checklistsNotSent reaches the modal", async 
 });
 
 /**
- * BACKLOG-3399 (the last link): the REAL useSubmitForReview holds the IPC
- * result's attachment counts, and TransactionDetails hands both to the modal.
+ * BACKLOG-3681 (the last link): the REAL useSubmitForReview holds the IPC
+ * result's not-included list, and TransactionDetails hands it to the modal.
+ * (Replaces the BACKLOG-3399 counts: under BACKLOG-3403 a failed upload fails
+ * the submission, so a success has no "couldn't be uploaded" count to carry.)
  */
-it("BACKLOG-3399: a submit result's attachment counts reach the modal", async () => {
+it("BACKLOG-3681: a submit result's not-included list reaches the modal", async () => {
   mockGate.value = "allowed";
   /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
   (window.api.transactions as any).submit = jest.fn().mockResolvedValue({
     success: true,
-    submissionId: "sub-3399-0001",
-    attachmentsFailed: 3,
-    flaggedWithoutAttachments: 2,
+    submissionId: "sub-3681-0001",
+    flaggedWithoutAttachments: 1,
+    notIncluded: [{ key: "att:a1", reason: "file_too_large" }],
   });
   await mount();
   await clickComplete();
   await waitFor(() => expect(modal()).toBeInTheDocument());
-  expect(screen.getByTestId("attachments-failed").textContent).toBe("0");
-  expect(screen.getByTestId("flagged-without-attachments").textContent).toBe("0");
+  expect(screen.getByTestId("not-included").textContent).toBe("");
   await act(async () => {
     fireEvent.click(screen.getByTestId("modal-submit"));
   });
   await waitFor(() =>
-    expect(screen.getByTestId("attachments-failed").textContent).toBe("3"),
+    expect(screen.getByTestId("not-included").textContent).toBe("att:a1:file_too_large"),
   );
-  expect(screen.getByTestId("flagged-without-attachments").textContent).toBe("2");
 });

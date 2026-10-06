@@ -819,7 +819,8 @@ describe("Transaction Handlers", () => {
         // BACKLOG-3367: the omissions argument the renderer now requires. This
         // fixture hides nothing, so the real values are pinned rather than
         // loosened to `expect.anything()` — a wrong count here must still red.
-        { hiddenTextCount: 0, hiddenTexts: [] },
+        // BACKLOG-3683: this channel writes no attachment files → none left out.
+        { hiddenTextCount: 0, hiddenTexts: [], filesNotIncluded: [] },
       );
     });
 

@@ -74,6 +74,12 @@ if (typeof window !== 'undefined') {
       // about review state behave as they did before the gate existed. Suites
       // that ARE about it set their own value.
       getReviewState: jest.fn().mockResolvedValue({ items: [], count: 0 }),
+      // BACKLOG-3403: Submit asks first which attachments cannot be sent.
+      // Default = nothing to list, so suites that are not about the
+      // pre-flight submit as they did before it existed.
+      submitPreflight: jest.fn().mockResolvedValue({ success: true, notIncluded: [] }),
+      // BACKLOG-3398: Cancel really cancels.
+      cancelSubmit: jest.fn().mockResolvedValue({ success: true, cancelled: true }),
       bulkDelete: jest.fn(),
       bulkUpdateStatus: jest.fn(),
       batchUpdateContacts: jest.fn(),

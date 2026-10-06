@@ -36,6 +36,26 @@ type ConfirmedDatesUpdate = {
   closing_date_verified: 1;
 } & Partial<CommissionUpdate>;
 
+/**
+ * BACKLOG-3683 — the confirmed dates as the row stores them. The ONE place the
+ * form's dates become `started_at` / `closed_at`: the save below sends this,
+ * and the submit summary's scope preview sends the same object's two dates,
+ * so the preview counts exactly the window the submission will read back.
+ */
+export function confirmedDatesUpdate(dates: ConfirmedTransactionDates): {
+  started_at: string;
+  closing_deadline: string | null;
+  closed_at: string;
+  closing_date_verified: 1;
+} {
+  return {
+    started_at: dates.startDate,
+    closing_deadline: dates.closingDate || null,
+    closed_at: dates.endDate,
+    closing_date_verified: 1,
+  };
+}
+
 export async function saveConfirmedTransactionDates(
   transactionId: string,
   dates: ConfirmedTransactionDates,
@@ -47,10 +67,7 @@ export async function saveConfirmedTransactionDates(
   commission?: CommissionUpdate | null,
 ): Promise<ApiResult> {
   const update: ConfirmedDatesUpdate = {
-    started_at: dates.startDate,
-    closing_deadline: dates.closingDate || null,
-    closed_at: dates.endDate,
-    closing_date_verified: 1,
+    ...confirmedDatesUpdate(dates),
     ...(commission ?? {}),
   };
   return transactionService.update(transactionId, update);

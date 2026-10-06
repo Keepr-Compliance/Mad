@@ -2166,15 +2166,19 @@ export async function getMessagesForContact(
   }
 
   // Fallback: fill any thread still missing a transaction_id from the
-  // communications junction (message_id or thread_id linkage).
+  // communications junction (message_id or thread_id linkage). `user_id = ?`
+  // (BACKLOG-3733): a `thread_id` link row is shared across every signed-in
+  // user's copy of the provider thread, so without this a thread this user
+  // never linked could come back attributed to another user's deal.
   for (const thread of threadMap.values()) {
     if (thread.transaction_id) continue;
     const link = dbGet<{ transaction_id: string | null }>(
       sql`SELECT transaction_id FROM communications
        WHERE transaction_id IS NOT NULL
+         AND user_id = ?
          AND (thread_id = ? OR message_id IN (${placeholderList(thread.messages.length)}))
        LIMIT 1`,
-      [thread.thread_id, ...thread.messages.map((m) => m.id)],
+      [userId, thread.thread_id, ...thread.messages.map((m) => m.id)],
     );
     if (link?.transaction_id) thread.transaction_id = link.transaction_id;
   }

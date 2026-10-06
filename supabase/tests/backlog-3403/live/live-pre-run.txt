@@ -1,0 +1,4 @@
+PASS pre: finalize_submission is absent on the venue :: "f"
+PASS pre: PostgREST answers PGRST202 for the missing RPC :: {"status":404,"code":"PGRST202"}
+PASS pre: supabase-js surfaces the same code :: "PGRST202"
+live-run pre: 3 pass, 0 fail

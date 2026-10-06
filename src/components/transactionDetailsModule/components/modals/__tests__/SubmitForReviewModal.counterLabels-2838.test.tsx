@@ -23,7 +23,7 @@
  * because an assertion that both say the same thing would be asserting the bug.
  */
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { SubmitForReviewModal } from "../SubmitForReviewModal";
 import type { Transaction } from "@/types";
@@ -47,11 +47,26 @@ const transaction = {
   closed_at: "2026-03-14T18:22:05.000Z",
 } as unknown as Transaction;
 
+/**
+ * BACKLOG-3683: where the date step applies, the summary's figures come from
+ * the scope preview (in-window counts), not from the all-linked props. The
+ * founder's shape (99 emails, 4 conversations) is therefore supplied through
+ * the scope; the label assertions below are unchanged.
+ */
+beforeEach(() => {
+  (window.api.transactions as unknown as Record<string, unknown>).getSubmissionScope = jest.fn().mockResolvedValue({
+    success: true,
+    inWindow: { emails: 99, texts: 40, textThreads: 4, attachments: 12, emailAttachments: 9, attachmentBytes: 1024 },
+  });
+});
+
 describe("BACKLOG-2838: the submit summary names what it counts", () => {
   /** Renders, then Next from the date step to the Submission Summary (BACKLOG-3498). */
-  const renderModal = () => {
+  const renderModal = async () => {
     const utils = renderUnadvanced();
-    fireEvent.click(screen.getByTestId("submit-review-next"));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("submit-review-next"));
+    });
     expect(screen.getByText("Submission Summary")).toBeInTheDocument();
     return utils;
   };
@@ -74,8 +89,8 @@ describe("BACKLOG-2838: the submit summary names what it counts", () => {
       />,
     );
 
-  it('labels the email figure "Emails", never "Email threads"', () => {
-    renderModal();
+  it('labels the email figure "Emails", never "Email threads"', async () => {
+    await renderModal();
 
     expect(screen.getByText("Emails:")).toBeInTheDocument();
     // The specific wrong word, named. A generic /email/i query would pass on
@@ -84,8 +99,8 @@ describe("BACKLOG-2838: the submit summary names what it counts", () => {
     expect(screen.getByText("99")).toBeInTheDocument();
   });
 
-  it('still labels the text figure "Text threads", because that one IS threads', () => {
-    renderModal();
+  it('still labels the text figure "Text threads", because that one IS threads', async () => {
+    await renderModal();
 
     expect(screen.getByText("Text threads:")).toBeInTheDocument();
     expect(screen.getByText("4")).toBeInTheDocument();

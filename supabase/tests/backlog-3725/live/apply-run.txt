@@ -1,0 +1,19 @@
+md5 d92c51abbebf4c579bb1fc9d95f4a6fe  supabase/migrations/20261004220000_backlog_3725_abandoned_at.sql
+venue: local supabase start (postgres 17.6, storage-api v1.71.0, postgrest v14.5, gotrue v2.196.0) + backlog-3403 prelude + 20261004192647 applied
+ALTER TABLE
+COMMENT
+CREATE FUNCTION
+REVOKE
+psql:<stdin>:88: NOTICE:  trigger "submission_abandoned_at_guard" for relation "public.transaction_submissions" does not exist, skipping
+DROP TRIGGER
+CREATE TRIGGER
+DROP POLICY
+CREATE POLICY
+CREATE FUNCTION
+REVOKE
+GRANT
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+exit 0
