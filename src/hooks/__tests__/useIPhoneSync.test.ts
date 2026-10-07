@@ -1463,6 +1463,23 @@ describe("useIPhoneSync", () => {
       // once usePlatform() correctly reports Windows.
     });
 
+    // BACKLOG-3363: on Windows on ARM the driver can never work — never check
+    // for it and never offer the recovery install.
+    it("Windows on ARM: no driver check, driverMissing stays false", async () => {
+      setMockPlatform("windows");
+      Object.assign(mockPlatform, { isWindowsArm64: true });
+      const { checkApple } = setupDriverMocks({ isInstalledSeq: [false] });
+
+      const { result } = renderHook(() => useIPhoneSync(true));
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(checkApple).not.toHaveBeenCalled();
+      expect(result.current.driverMissing).toBe(false);
+    });
+
     // BACKLOG-1919 (scope b): startSync's first-sync recovery nudge. Before
     // running full diagnostics, on Windows with no device connected, if the
     // Apple driver is absent it must surface DRIVER_ABSENT_GUIDANCE instead of

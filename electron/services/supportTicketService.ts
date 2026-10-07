@@ -25,6 +25,8 @@ import { getRecentUpdaterFailure } from "./updaterFailureStore";
 import { deviceDetectionService } from "./deviceDetectionService";
 import type { IphoneSyncDiagnostic } from "./deviceDetectionService";
 import { checkAppleDrivers } from "./appleDriverService";
+import { getHostArchitecture } from "./diagnostics/hostArchitecture";
+import type { HostArchitecture } from "./diagnostics/hostArchitecture";
 import { pairingService } from "./pairingService";
 import localSyncService from "./localSyncService";
 import supabaseService from "./supabaseService";
@@ -145,6 +147,8 @@ export interface AppDiagnostics {
   os_platform: string;
   os_version: string;
   os_arch: string;
+  /** BACKLOG-3363: raw inputs behind the Windows-on-ARM decision. */
+  host_architecture?: HostArchitecture;
   node_version: string;
   db_initialized: boolean;
   db_encrypted: boolean;
@@ -232,6 +236,14 @@ export function composeDiagnosticsSummary(diag: AppDiagnostics): string {
   lines.push(
     `OS: ${diag.os_platform || "unknown"} ${diag.os_version || ""} (${diag.os_arch || "unknown"})`.trim()
   );
+  // BACKLOG-3363: the raw Windows-on-ARM inputs, verbatim.
+  if (diag.host_architecture) {
+    const h = diag.host_architecture;
+    lines.push(
+      `Host: arch=${h.arch}, arm64_translation=${String(h.running_under_arm64_translation)}, ` +
+        `machine=${h.os_machine ?? "unknown"}, windows_arm64=${yn(h.windows_arm64)}`
+    );
+  }
   lines.push(`DB: initialized=${yn(diag.db_initialized)}, encrypted=${yn(diag.db_encrypted)}`);
   lines.push(
     `Sync: running=${yn(diag.sync_status.is_running)}` +
@@ -372,6 +384,11 @@ export async function collectDiagnostics(): Promise<AppDiagnostics> {
   }
   try {
     diagnostics.os_arch = process.arch;
+  } catch {
+    /* ignore */
+  }
+  try {
+    diagnostics.host_architecture = getHostArchitecture();
   } catch {
     /* ignore */
   }

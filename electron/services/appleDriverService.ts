@@ -15,6 +15,7 @@ import https from "https";
 import { app } from "electron";
 import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
+import { isWindowsArm64 } from "../utils/windowsArm64";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -365,6 +366,27 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
     return {
       success: false,
       error: "Driver installation only supported on Windows",
+      rebootRequired: false,
+    };
+  }
+
+  // BACKLOG-3363: Apple's driver is x64-only and cannot load on Windows on ARM.
+  // Refuse before any installer runs. Not a driver failure, so nothing is
+  // reported to Sentry and no install breadcrumb is emitted. The renderer
+  // never offers Install on these PCs; this is the main-process backstop.
+  if (
+    isWindowsArm64(
+      process.platform,
+      process.arch,
+      app?.runningUnderARM64Translation,
+    )
+  ) {
+    log.info(
+      "[AppleDriverService] Windows on ARM: Apple driver install not supported, skipping",
+    );
+    return {
+      success: false,
+      error: "iPhone USB sync isn't supported on this PC",
       rebootRequired: false,
     };
   }
