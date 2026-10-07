@@ -77,10 +77,11 @@ describe("migration v74 — the Google Messages import's local tables", () => {
   let db: DatabaseType;
   afterEach(() => db?.close());
 
-  it("in the chain, as the last entry, with no gap", () => {
+  it("in the chain, with no gap (v75, BACKLOG-3764, follows it)", () => {
     const versions = chain().map((m) => m.version);
-    expect(versions[versions.length - 1]).toBe(74);
+    expect(versions).toContain(74);
     expect(versions).toContain(73);
+    expect(versions.indexOf(75)).toBe(versions.indexOf(74) + 1);
   });
 
   it("the migration's statements are identical to schema.sql's (no drift)", () => {
