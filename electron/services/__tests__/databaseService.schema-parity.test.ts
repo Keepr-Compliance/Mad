@@ -166,7 +166,11 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     why:
       "BACKLOG-3475: the group id is the stable key a submission snapshot maps " +
       "through. UNIQUE (id, kind) exists so a member can carry a composite FK " +
-      "and cannot disagree with its group's kind.",
+      "and cannot disagree with its group's kind. BACKLOG-3764 adds " +
+      "include_outside_dates (INTEGER NOT NULL DEFAULT 0; migration v75 adds it to " +
+      "existing databases). The table is already a whole-table divergence here, so " +
+      "the fingerprint emits no separate COLUMN key for it; v75's own upgrade test " +
+      "(databaseService.migration-v75.test.ts) is the guard for the column.",
     ref: "BACKLOG-3475",
   },
   {
