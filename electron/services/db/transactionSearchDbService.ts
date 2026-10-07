@@ -1478,20 +1478,6 @@ export function buildGlobalTextQuery(
       OR ${TEXT_ATTACHMENT_MATCH}`;
   const matchParams = [pat, pat, pat];
 
-  // Membership set: messages linked to some transaction (direct or thread-batch).
-  const memberSet = `
-      SELECT comm.message_id AS mid
-      FROM communications comm
-      WHERE comm.message_id IS NOT NULL AND comm.transaction_id IS NOT NULL
-      UNION
-      SELECT m2.id AS mid
-      FROM messages m2
-      JOIN communications comm2 ON comm2.thread_id = m2.thread_id
-      WHERE comm2.message_id IS NULL
-        AND comm2.email_id IS NULL
-        AND comm2.thread_id IS NOT NULL
-        AND comm2.transaction_id IS NOT NULL`;
-
   const sql = `${MARK.texts}
     SELECT m.id AS id, m.body_text AS body_text, m.participants_flat AS participants_flat,
            m.sent_at AS sentAt,

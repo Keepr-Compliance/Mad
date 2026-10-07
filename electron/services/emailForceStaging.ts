@@ -85,12 +85,8 @@ import {
   type EmailForceSet,
 } from "./db/emailForceSetSql";
 import {
-  columnList,
-  deriveStagingIndexDdl,
-  deriveStagingTableDdl,
   checkedStagingTable,
   type StagingTableName,
-  emailTableDdl as tableDdl,
 } from "./db/stagingDdlSql";
 
 /** Prefix every ephemeral table shares, so a crashed run's leftovers are findable. */
