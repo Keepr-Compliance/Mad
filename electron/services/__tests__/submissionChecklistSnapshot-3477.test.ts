@@ -1625,6 +1625,24 @@ describe("BACKLOG-3764 — out-of-dates checklist evidence is asked about, never
     expect(cloudLinkMembers()).toContain("Inspection booked:e-inspection");
   });
 
+  it("a yes on ANOTHER deal's checklist does not send that email with this deal", async () => {
+    run(`INSERT INTO transactions (id, user_id, property_address) VALUES ('txn-other', ?, '9 Other St')`, USER);
+    run(`INSERT INTO communications (id, user_id, transaction_id, email_id, link_source) VALUES ('c-late-other', ?, 'txn-other', 'e-late', 'manual')`, USER);
+    const other = await selectChecklistTemplate({
+      transactionId: "txn-other",
+      templateId: TPL_PURCHASE,
+      templateName: "Residential Purchase",
+      items: [{ title: "Other deal item", isRequired: true, sortOrder: 0 }],
+    });
+    expect(other.status).toBe("added");
+    const r = await addChecklistLink({ itemId: itemId("Other deal item"), kind: "email", targetIds: ["e-late"], includeOutsideDates: true });
+    expect(r.status).toBe("added");
+    const { result } = await submitAcceptingPreflight();
+    expect(result.success).toBe(true);
+    expect(uploadedEmails()).not.toContain("e-late");
+    expect(uploadedAttachments()).not.toContain("att-late");
+  });
+
   it("an unconfirmed link gap refuses the submit and returns the list again (nothing sent)", async () => {
     await setDates("2026-03-01", "2026-03-01");
     const preflight = await submissionService.preflightSubmission(TX);
