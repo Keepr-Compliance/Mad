@@ -173,6 +173,18 @@ describe("BACKLOG-3598: every other error still fails the write", () => {
     expect(warn.mock.calls.some((c) => String(c[0]).includes("row dropped"))).toBe(true);
   });
 
+  it("an error NAMING a leftover column but not 'unknown column' (column privilege) is not retried", async () => {
+    getClient.mockReturnValue(
+      mockClient({ upsert: [pgError("42501", "permission denied for column leftover_cleanup")] }),
+    );
+
+    recordSyncOutcome(rowWithLeftover());
+    await flush();
+
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes("row dropped"))).toBe(true);
+  });
+
   it("an unknown-column error for a DIFFERENT column is not retried", async () => {
     getClient.mockReturnValue(
       mockClient({
