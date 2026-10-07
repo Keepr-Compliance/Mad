@@ -105,7 +105,11 @@ import supabaseService from "../supabaseService";
 import supabaseStorageService from "../supabaseStorageService";
 import databaseService from "../databaseService";
 import logService from "../logService";
-import { addChecklistLink, selectChecklistTemplate } from "../db/checklistDbService";
+import {
+  addChecklistLink,
+  selectChecklistTemplate,
+  setChecklistLinkIncludeOutsideDates,
+} from "../db/checklistDbService";
 import {
   SNAPSHOT_RETRY,
   SNAPSHOT_RPC,
@@ -1604,6 +1608,21 @@ describe("BACKLOG-3764 — out-of-dates checklist evidence is asked about, never
     expect(fake.rpcCalls).toHaveLength(1);
     expect(result.checklistLinksNotAttached).toBeUndefined();
     expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it("pre-flight Include it: the answer is stored on that link, the question goes, and the email is sent", async () => {
+    await setDates("2026-03-01", "2026-03-01");
+    const first = await submissionService.preflightSubmission(TX);
+    const gap = (first.checklistLinkGaps ?? []).find((g) => g.itemTitle === "Inspection scheduled")!;
+    expect(gap.reason).toBe("outside_audit_dates");
+    // Another deal's id is refused: only a link on THIS transaction changes.
+    expect(await setChecklistLinkIncludeOutsideDates("txn-other", gap.linkId)).toBe(false);
+    expect(await setChecklistLinkIncludeOutsideDates(TX, gap.linkId)).toBe(true);
+    const { preflight, result } = await submitAcceptingPreflight();
+    expect((preflight.checklistLinkGaps ?? []).map((g) => g.itemTitle)).not.toContain("Inspection scheduled");
+    expect(result.success).toBe(true);
+    expect(uploadedEmails()).toEqual(["e-inspection", "e-offer"]);
+    expect(cloudLinkMembers()).toContain("Inspection booked:e-inspection");
   });
 
   it("an unconfirmed link gap refuses the submit and returns the list again (nothing sent)", async () => {
