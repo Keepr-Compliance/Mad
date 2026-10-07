@@ -147,10 +147,44 @@ export function htmlToPlainText(html: string | null | undefined): string {
   //    so the quadratic case was a remote freeze, once per message. Measured:
   //    1 MB of `<script>` openings took 16,927 ms two-pass, ~1 ms this way.
   //    The perf guard in the test suite fails at 2 s if this ever regresses.
-  text = text.replace(/<(script|style)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi, " ");
+  //
+  //    BACKLOG-3774 — the regex only runs on the prefix ending at the LAST
+  //    `>`. Both the opening (`[^>]*>`) and the close (`<\/\1\s*>`) end in a
+  //    `>`, so no match can start or close after it, and an unanchored scan
+  //    from a start that cannot match is what made this quadratic. The one
+  //    difference `$` makes: on the full string an unclosed block runs to end
+  //    of input, swallowing the tail; on the prefix it stops at the prefix end.
+  //    The close is captured, so "a match without a close reached the prefix
+  //    end" identifies exactly that case, and the tail is dropped with it.
+  //    Output is identical to the plain whole-string replace — the
+  //    differential test `htmlToPlainText.equivalence.test.ts` proves it.
+  {
+    const lastGt = text.lastIndexOf(">");
+    if (lastGt >= 0) {
+      const head = text.slice(0, lastGt + 1);
+      let ranToEnd = false;
+      const replaced = head.replace(
+        /<(script|style)\b[^>]*>[\s\S]*?(?:(<\/\1\s*>)|$)/gi,
+        (m: string, _tag: string, close: string | undefined, offset: number) => {
+          if (close === undefined && offset + m.length === head.length) ranToEnd = true;
+          return " ";
+        },
+      );
+      text = ranToEnd ? replaced : replaced + text.slice(lastGt + 1);
+    }
+  }
 
   // 2. Comments (includes Outlook's `<!--[if mso]>…<![endif]-->` blocks).
-  text = text.replace(/<!--[\s\S]*?-->/g, " ");
+  //    BACKLOG-3774 — every match ends at the end of some `-->`, so all of them
+  //    lie in the prefix ending at the LAST `-->`; the tail is never scanned.
+  {
+    const lastClose = text.lastIndexOf("-->");
+    if (lastClose >= 0) {
+      text =
+        text.slice(0, lastClose + 3).replace(/<!--[\s\S]*?-->/g, " ") +
+        text.slice(lastClose + 3);
+    }
+  }
 
   // 3. Source whitespace → single spaces, before any tag becomes a newline.
   text = text.replace(/\s+/g, " ");
@@ -161,7 +195,14 @@ export function htmlToPlainText(html: string | null | undefined): string {
   text = text.replace(BLOCK_CLOSE_TAGS, "\n");
 
   // 5. Everything else that looks like a tag.
-  text = text.replace(/<[^>]*>/g, "");
+  //    BACKLOG-3774 — a tag must end at a `>`, so none starts after the LAST
+  //    one; every `<` before it does match. Scan only that prefix.
+  {
+    const lastGt = text.lastIndexOf(">");
+    if (lastGt >= 0) {
+      text = text.slice(0, lastGt + 1).replace(/<[^>]*>/g, "") + text.slice(lastGt + 1);
+    }
+  }
 
   // 6. Entities (see decodeHtmlEntities — order matters).
   text = decodeHtmlEntities(text);
