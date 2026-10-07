@@ -187,6 +187,18 @@ export interface WindowApiUser {
    * user. Called only when the setup queue completes (OnboardingFlow).
    */
   completeAccountSetup: () => Promise<{ success: boolean; error?: string }>;
+  /**
+   * BACKLOG-3674: the per-account "dashboard tour dismissed" record
+   * (`users.tour_dismissed_at`) for the SESSION user. "unknown" when the server
+   * cannot be read (no local copy exists). Handler: tourStateHandlers.ts.
+   */
+  getTourState: () => Promise<{
+    success: boolean;
+    tour: "dismissed" | "not-dismissed" | "unknown";
+    error?: string;
+  }>;
+  /** BACKLOG-3674: set `users.tour_dismissed_at` (first value kept) for the SESSION user. */
+  dismissTour: () => Promise<{ success: boolean; error?: string }>;
   /** TASK-1600: sets phone type in Supabase cloud storage. */
   setPhoneTypeCloud: (
     userId: string,

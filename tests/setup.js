@@ -272,6 +272,10 @@ if (typeof window !== 'undefined') {
         contactSourceAnswered: false,
       }),
       completeAccountSetup: jest.fn().mockResolvedValue({ success: true }),
+      // BACKLOG-3674: the per-account "tour dismissed" record (session user).
+      // Default "not-dismissed" keeps the dashboard tour starting as before.
+      getTourState: jest.fn().mockResolvedValue({ success: true, tour: "not-dismissed" }),
+      dismissTour: jest.fn().mockResolvedValue({ success: true }),
     },
     shell: {
       openExternal: jest.fn(),
