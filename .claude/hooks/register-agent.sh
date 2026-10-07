@@ -84,6 +84,28 @@ if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
 fi
 [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ] && exit 0
 
+# --- BACKLOG-3778: let the COORDINATOR's own Stop hook learn its sprint -----
+# track-main-session.sh cannot safely read .claude/.current-task for sprint
+# attribution: that file is shared across every session in this project
+# directory, not scoped to one coordinator. A session-keyed marker, refreshed
+# each time THIS session spawns an agent whose brief names a BACKLOG item, is
+# free of that race -- "the sprint of the last item this coordinator
+# dispatched" is already what the sidecar above encodes for the agent itself.
+# Best-effort: failure here must never block agent registration.
+if [ -n "$LEGACY_ID" ] && [ -n "$SESSION_ID" ]; then
+  ITEM_SPRINT=$(curl -s -m 5 \
+    "${SUPABASE_URL}/rest/v1/pm_backlog_items?legacy_id=eq.${LEGACY_ID}&deleted_at=is.null&select=sprint_id&limit=1" \
+    -H "apikey: ${SUPABASE_KEY}" -H "Authorization: Bearer ${SUPABASE_KEY}" 2>/dev/null \
+    | jq -r '.[0].sprint_id // empty' 2>/dev/null)
+  if [ -n "$ITEM_SPRINT" ]; then
+    MAIN_SPRINT_DIR="${HOME}/.claude/metrics/main-sprint"
+    if mkdir -p "$MAIN_SPRINT_DIR" 2>/dev/null; then
+      printf '%s' "$ITEM_SPRINT" > "${MAIN_SPRINT_DIR}/${SESSION_ID}" 2>/dev/null || true
+      find "$MAIN_SPRINT_DIR" -type f -mtime +7 -delete 2>/dev/null || true
+    fi
+  fi
+fi
+
 PAYLOAD=$(jq -n \
   --arg agent_id "$AGENT_ID" \
   --arg agent_type "$AGENT_TYPE" \

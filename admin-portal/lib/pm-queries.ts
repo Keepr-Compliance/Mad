@@ -1006,6 +1006,10 @@ function validateSprintDetailResponse(data: unknown): SprintDetailResponse {
 // ---------------------------------------------------------------------------
 
 import type { TokenMetricRow, TokenMetricsSummary } from './pm-types';
+import {
+  attributeRowsToSprint,
+  type AttributableMetricRow,
+} from './sprint-token-attribution';
 
 /** Fetch raw metric rows for a backlog item.
  *  Queries by: (1) direct backlog_item_id FK, (2) child task legacy_ids, (3) backlog item's own legacy_id.
@@ -1067,16 +1071,54 @@ export async function getTaskMetrics(backlogItemId: string): Promise<TokenMetric
   return result;
 }
 
-/** Fetch raw metric rows for a sprint (by sprint UUID). */
+/**
+ * Fetch raw metric rows for a sprint (by sprint UUID), attributed at READ
+ * TIME (BACKLOG-3778) rather than by each row's own stored `sprint_id`.
+ *
+ * Two queries, unioned and deduplicated by id:
+ *   (a) rows whose backlog item is CURRENTLY in this sprint -- counts even
+ *       when the row's own stored `sprint_id` is null or stale (the bug:
+ *       an item added to the sprint after its agent ran).
+ *   (b) rows whose own stored `sprint_id` matches -- the fallback for rows
+ *       with no backlog item (e.g. main-session turns) or whose item
+ *       currently carries no sprint.
+ * See `sprint-token-attribution.ts` for the attribution rule itself.
+ */
 export async function getSprintMetrics(sprintId: string): Promise<TokenMetricRow[]> {
   const supabase = createClient();
-  const { data, error } = await supabase
+  const cols = 'id, agent_id, agent_type, task_id, description, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, total_tokens, billable_tokens, duration_ms, api_calls, model, recorded_at';
+
+  type JoinedRow = TokenMetricRow & {
+    backlog_item_id: string | null;
+    sprint_id: string | null;
+    pm_backlog_items: { sprint_id: string | null } | null;
+  };
+
+  const { data: viaItem, error: viaItemErr } = await supabase
     .from('pm_token_metrics')
-    .select('id, agent_id, agent_type, task_id, description, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, total_tokens, billable_tokens, duration_ms, api_calls, model, recorded_at')
-    .eq('sprint_id', sprintId)
-    .order('recorded_at', { ascending: true });
-  if (error) throw error;
-  return (data ?? []) as TokenMetricRow[];
+    .select(`${cols}, backlog_item_id, sprint_id, pm_backlog_items!inner(sprint_id)`)
+    .eq('pm_backlog_items.sprint_id', sprintId);
+  if (viaItemErr) throw viaItemErr;
+
+  const { data: viaStored, error: viaStoredErr } = await supabase
+    .from('pm_token_metrics')
+    .select(`${cols}, backlog_item_id, sprint_id, pm_backlog_items(sprint_id)`)
+    .eq('sprint_id', sprintId);
+  if (viaStoredErr) throw viaStoredErr;
+
+  const flatten = (row: JoinedRow): TokenMetricRow & AttributableMetricRow => ({
+    ...row,
+    item_sprint_id: row.pm_backlog_items?.sprint_id ?? null,
+  });
+
+  const candidates = [
+    ...((viaItem ?? []) as unknown as JoinedRow[]).map(flatten),
+    ...((viaStored ?? []) as unknown as JoinedRow[]).map(flatten),
+  ];
+
+  const attributed = attributeRowsToSprint(candidates, sprintId);
+  attributed.sort((a, b) => a.recorded_at.localeCompare(b.recorded_at));
+  return attributed;
 }
 
 /** Summarize metrics by agent_type for a set of rows. */
