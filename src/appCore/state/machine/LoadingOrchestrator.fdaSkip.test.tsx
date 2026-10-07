@@ -17,9 +17,16 @@
  * pass for the wrong reason, which is why the shape is transcribed rather than
  * invented — and why the "wrong shape" test below exists to pin it.
  *
- * The discriminating pair, at this layer:
- *   - flag present -> `ready`
- *   - flag absent  -> `onboarding` (the app still asks)
+ * The discriminating pair, at this layer (BACKLOG-3673: Full Disk Access no
+ * longer routes; only the account record does, so the pair is observed on an
+ * account still in setup):
+ *   - flag present -> `permissions` seeded as answered (not asked again)
+ *   - flag absent  -> `permissions` not seeded (the app still asks)
+ *
+ * The BACKLOG-3293 block that used to follow (the email-onboarding handler's
+ * answer reaching the router) is gone with that handler; its successor is
+ * LoadingOrchestrator.accountRecord-3673.test.tsx (C4: a "completed" email
+ * answer and a connected mailbox never route).
  *
  * @module appCore/state/machine/LoadingOrchestrator.fdaSkip.test
  */
@@ -60,7 +67,6 @@ const mockApi = {
   auth: {
     getCurrentUser: jest.fn(),
     preValidateSession: jest.fn(),
-    checkEmailOnboarding: jest.fn(),
   },
   system: {
     hasEncryptionKeyStore: jest.fn(),
@@ -72,6 +78,7 @@ const mockApi = {
   },
   user: {
     getPhoneType: jest.fn(),
+    getAccountSetup: jest.fn(),
   },
   preferences: {
     get: jest.fn(),
@@ -106,7 +113,6 @@ beforeEach(() => {
   // A returning macOS user: phone type chosen, mailbox connected, email
   // onboarding done — everything EXCEPT Full Disk Access, which is not granted.
   mockApi.user.getPhoneType.mockResolvedValue({ success: true, phoneType: "iphone" });
-  mockApi.auth.checkEmailOnboarding.mockResolvedValue({ success: true, completed: true });
   mockApi.system.checkAllConnections.mockResolvedValue({
     success: true,
     google: { connected: true },
@@ -118,6 +124,15 @@ beforeEach(() => {
   });
   // Default: nothing on record (a user who has never skipped).
   mockApi.preferences.get.mockResolvedValue({ success: true, preferences: {} });
+  // BACKLOG-3673: this account has NOT finished setup (record empty), but has
+  // answered contacts and the email step. Shape transcribed from
+  // accountSetupHandlers.getAccountSetup.
+  mockApi.user.getAccountSetup.mockResolvedValue({
+    success: true,
+    setup: "not-finished",
+    emailStepAnswered: true,
+    contactSourceAnswered: true,
+  });
 });
 
 function loadingUserDataState(): AppState {
@@ -132,7 +147,16 @@ function loadingUserDataState(): AppState {
 /** Surfaces the resolved status so the routing decision is directly observable. */
 function StatusProbe() {
   const { state } = useAppState();
-  return <div data-testid="status">{state.status}</div>;
+  const seededPermissions =
+    state.status === "onboarding" && state.completedSteps.includes("permissions");
+  const fda = state.status === "onboarding" ? state.fda : undefined;
+  return (
+    <>
+      <div data-testid="status">{state.status}</div>
+      <div data-testid="permissions-seeded">{String(seededPermissions)}</div>
+      <div data-testid="fda">{String(fda)}</div>
+    </>
+  );
 }
 
 async function renderAndSettle() {
@@ -156,7 +180,7 @@ async function renderAndSettle() {
 }
 
 describe("LoadingOrchestrator Phase 4 — persisted FDA skip (BACKLOG-3212)", () => {
-  it("reads onboarding.fdaSkipped and routes the user to ready instead of onboarding", async () => {
+  it("reads onboarding.fdaSkipped and seeds permissions as answered (not asked again)", async () => {
     mockApi.preferences.get.mockResolvedValue({
       success: true,
       preferences: {
@@ -167,15 +191,18 @@ describe("LoadingOrchestrator Phase 4 — persisted FDA skip (BACKLOG-3212)", ()
     const status = await renderAndSettle();
 
     expect(mockApi.preferences.get).toHaveBeenCalledWith(baseUser.id);
-    expect(status).toBe("ready");
+    expect(status).toBe("onboarding");
+    expect(screen.getByTestId("fda").textContent).toBe("declined");
+    expect(screen.getByTestId("permissions-seeded").textContent).toBe("true");
   });
 
-  it("CONTROL: with no flag on record the same user goes to onboarding — the app still asks", async () => {
+  it("CONTROL: with no flag on record the same user is still asked", async () => {
     mockApi.preferences.get.mockResolvedValue({ success: true, preferences: {} });
 
     const status = await renderAndSettle();
 
     expect(status).toBe("onboarding");
+    expect(screen.getByTestId("permissions-seeded").textContent).toBe("false");
   });
 
   it("CONTROL: a preferences bag whose `onboarding` key holds only the 1842 resume marker is not a skip", async () => {
@@ -187,6 +214,7 @@ describe("LoadingOrchestrator Phase 4 — persisted FDA skip (BACKLOG-3212)", ()
     const status = await renderAndSettle();
 
     expect(status).toBe("onboarding");
+    expect(screen.getByTestId("permissions-seeded").textContent).toBe("false");
   });
 
   it("CONTROL: the flag at the WRONG path does not count (pins the key this code reads)", async () => {
@@ -201,6 +229,7 @@ describe("LoadingOrchestrator Phase 4 — persisted FDA skip (BACKLOG-3212)", ()
     const status = await renderAndSettle();
 
     expect(status).toBe("onboarding");
+    expect(screen.getByTestId("permissions-seeded").textContent).toBe("false");
   });
 
   it("a preferences read failure degrades to asking again, never to skipping", async () => {
@@ -209,6 +238,7 @@ describe("LoadingOrchestrator Phase 4 — persisted FDA skip (BACKLOG-3212)", ()
     const status = await renderAndSettle();
 
     expect(status).toBe("onboarding");
+    expect(screen.getByTestId("permissions-seeded").textContent).toBe("false");
   });
 
   it("survives a preload bridge with no preferences namespace at all", async () => {
@@ -223,96 +253,5 @@ describe("LoadingOrchestrator Phase 4 — persisted FDA skip (BACKLOG-3212)", ()
     } finally {
       (mockApi as { preferences?: unknown }).preferences = saved;
     }
-  });
-});
-
-/**
- * BACKLOG-3293 — the seam that carries the MAIN-PROCESS answer to the router.
- *
- * The suite above cannot observe that seam: its `beforeEach` mocks
- * `checkAllConnections -> google connected`, so BOTH operands of the OR at
- * LoadingOrchestrator.tsx:684 are true and `checkEmailOnboarding`'s answer is
- * masked. The cases below disconnect the mailbox so the handler's answer is the
- * only thing left deciding — which is exactly the founder's reproduced state:
- * Full Disk Access declined and on record, iPhone picked, no mailbox. He
- * reached the dashboard, quit, relaunched, and was sent back to onboarding
- * because the main-process handler discarded the persisted flag.
- */
-describe("LoadingOrchestrator Phase 4 — the handler's answer reaches the router (BACKLOG-3293)", () => {
-  /** The founder's state: FDA declined and on record, iPhone, NO mailbox. */
-  function founderState() {
-    mockApi.system.checkAllConnections.mockResolvedValue({
-      success: true,
-      google: { connected: false },
-      microsoft: { connected: false },
-    });
-    mockApi.preferences.get.mockResolvedValue({
-      success: true,
-      preferences: {
-        onboarding: { fdaSkipped: true, fdaSkippedAt: 1_700_000_000_000 },
-      },
-    });
-  }
-
-  it("a user who answered the email step with no mailbox connected reaches ready", async () => {
-    founderState();
-    mockApi.auth.checkEmailOnboarding.mockResolvedValue({
-      success: true,
-      completed: true,
-    });
-
-    const status = await renderAndSettle();
-
-    expect(status).toBe("ready");
-  });
-
-  it("CONTROL: the pre-fix handler answer (completed=false) sends the same user to onboarding", async () => {
-    // This is what the founder hit, twice. It proves the seam actually carries
-    // the handler's answer rather than the connection OR: with the mailbox
-    // disconnected, `completed` is the only operand left.
-    //
-    // `success: true` is deliberate and transcribed from the handler, not
-    // invented: the pre-fix handler RETURNED successfully and answered
-    // completed=false (`return { success: true, completed }`). `success: false`
-    // is the failure path — a different cause, covered by the case below — and
-    // using it here would flip two variables against the positive case instead
-    // of isolating `completed`, which is the one this control is about.
-    founderState();
-    mockApi.auth.checkEmailOnboarding.mockResolvedValue({
-      success: true,
-      completed: false,
-    });
-
-    const status = await renderAndSettle();
-
-    expect(status).toBe("onboarding");
-  });
-
-  it("a connected mailbox still rescues the user when the handler call itself fails", async () => {
-    // After BACKLOG-3293 a live token makes `completed` true on its own
-    // (`checkGoogleConnection` in connectionStatusService.ts reads the same
-    // oauth_tokens row the handler does), so the `|| hasEmailConnected` operand
-    // of `hasCompletedEmailOnboarding` is redundant on a normal launch. Its
-    // ONLY remaining job is the handler's failure paths — the `.catch` on the
-    // checkEmailOnboarding call in LoadingOrchestrator, and the transient
-    // DB-not-ready return in `handleCheckEmailOnboarding` — both of which
-    // answer completed=false for a user who DOES have a mailbox. Nothing else
-    // pins that operand, and it is the last thing between a transient
-    // main-process hiccup and a mailbox-having user dropped into onboarding.
-    mockApi.preferences.get.mockResolvedValue({
-      success: true,
-      preferences: {
-        onboarding: { fdaSkipped: true, fdaSkippedAt: 1_700_000_000_000 },
-      },
-    });
-    mockApi.auth.checkEmailOnboarding.mockResolvedValue({
-      success: false,
-      completed: false,
-    });
-    // `beforeEach` leaves google connected — that is the operand under test.
-
-    const status = await renderAndSettle();
-
-    expect(status).toBe("ready");
   });
 });

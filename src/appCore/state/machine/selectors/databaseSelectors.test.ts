@@ -46,6 +46,7 @@ describe("databaseSelectors", () => {
       hasEmailConnected: true,
       needsDriverSetup: false,
       fda: "granted",
+      setup: "finished",
     },
   };
 

@@ -48,7 +48,6 @@ if (typeof window !== 'undefined') {
       microsoftConnectMailbox: jest.fn().mockResolvedValue({ success: true }),
       googleDisconnectMailbox: jest.fn().mockResolvedValue({ success: true }),
       microsoftDisconnectMailbox: jest.fn().mockResolvedValue({ success: true }),
-      checkEmailOnboarding: jest.fn().mockResolvedValue({ success: true, completed: false }),
       completeEmailOnboarding: jest.fn().mockResolvedValue({ success: true }),
       completePendingLogin: jest.fn().mockResolvedValue({ success: true }),
       // Pre-DB mailbox connection methods
@@ -265,6 +264,14 @@ if (typeof window !== 'undefined') {
       // TASK-1600: Cloud phone type storage (Supabase)
       getPhoneTypeCloud: jest.fn().mockResolvedValue({ success: true, phoneType: null }),
       setPhoneTypeCloud: jest.fn().mockResolvedValue({ success: true }),
+      // BACKLOG-3673: the per-account "setup finished" record (session user).
+      getAccountSetup: jest.fn().mockResolvedValue({
+        success: true,
+        setup: "not-finished",
+        emailStepAnswered: false,
+        contactSourceAnswered: false,
+      }),
+      completeAccountSetup: jest.fn().mockResolvedValue({ success: true }),
     },
     shell: {
       openExternal: jest.fn(),

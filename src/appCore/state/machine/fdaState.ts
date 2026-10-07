@@ -103,12 +103,8 @@ export function isFdaGranted(fda: FdaState): boolean {
  * THE NAVIGATION QUESTION: is there still something to ask this user about
  * Full Disk Access?
  *
- * Deliberately PURE on `fda`. `isOnboardingComplete` additionally releases a
- * user who declined AND has a mailbox (BACKLOG-3212), but that conjunct reads
- * `hasEmailConnected` — a second field — so it stays at its call site in
- * `reducer.ts` rather than being folded in here. A function that reads a second
- * field is not a projection of this union and cannot be exhaustively checked
- * on it.
+ * Deliberately PURE on `fda`. A function that reads a second field is not a
+ * projection of this union and cannot be exhaustively checked on it.
  *
  * This is the function that replaces the `platform.isMacOS &&` guards at
  * `reducer.ts:89` and `:157`: `"not-applicable"` answers "no, nothing to ask",

@@ -9,8 +9,9 @@
  */
 
 import type { FdaState } from "./fdaState";
+import type { AccountSetup } from "./routing/routeAccount";
 
-export type { FdaState };
+export type { FdaState, AccountSetup };
 
 // ============================================
 // LOADING PHASES
@@ -92,8 +93,25 @@ export interface User {
 export interface UserData {
   /** Selected phone type during onboarding */
   phoneType: "iphone" | "android" | null;
-  /** True if user completed email onboarding (connected or skipped) */
+  /**
+   * BACKLOG-3673: the ACCOUNT's answer to the email step (connected or
+   * skipped), read from the server record `users.email_onboarding_completed_at`.
+   * Used only to seed the email step as answered when setup is resumed.
+   * It is NOT a routing input -- see `setup`.
+   */
   hasCompletedEmailOnboarding: boolean;
+  /**
+   * BACKLOG-3673: the per-account "setup finished" record
+   * (`users.onboarding_completed_at`, or its offline session cache).
+   * The ONLY routing input; read by `routeAccount`. `"unknown"` fails closed.
+   */
+  setup: AccountSetup;
+  /**
+   * BACKLOG-3673: the account has answered the contacts question
+   * (`user_preferences.preferences.contactSources.direct` is set). Seeds the
+   * contact-source step as answered on resume, on any computer.
+   */
+  contactSourceAnswered?: boolean;
   /** True if user has connected an email account */
   hasEmailConnected: boolean;
   /** True if Windows + iPhone user needs Apple Mobile Device driver */
@@ -137,6 +155,7 @@ export type AppErrorCode =
   | "AUTH_FAILED" // Failed to authenticate user
   | "USER_DATA_FAILED" // Failed to load user data
   | "NETWORK_ERROR" // Network connectivity issue
+  | "ACCOUNT_SETUP_UNAVAILABLE" // BACKLOG-3673: the account's setup record could not be read
   | "UNKNOWN_ERROR"; // Catch-all for unexpected errors
 
 // ============================================
@@ -236,6 +255,15 @@ export interface OnboardingState {
   /** Phone type selected during onboarding (iphone or android) */
   selectedPhoneType?: "iphone" | "android";
   /**
+   * BACKLOG-3673: account-level answers already recorded on the server, carried
+   * from USER_DATA_LOADED so the setup queue seeds those steps as answered and
+   * never asks them again (any computer). Absent = nothing recorded.
+   */
+  accountAnswers?: {
+    contactSource: boolean;
+    emailStep: boolean;
+  };
+  /**
    * True when DB initialization is deferred for first-time macOS users.
    * DB will be initialized during the secure-storage onboarding step.
    */
@@ -288,7 +316,6 @@ export type AppAction =
   | LoginSuccessAction
   | UserDataLoadedAction
   | OnboardingStepCompleteAction
-  | OnboardingSkipAction
   | OnboardingQueueDoneAction
   | FdaGrantedAction
   | PhoneTypeResetAction
@@ -316,10 +343,9 @@ export type AppAction =
  *
  * Deliberately separate from `ONBOARDING_STEP_COMPLETE{step:"permissions"}`:
  * that action says where the user is, this one says what the app can do. The
- * two are dispatched together today, but `ONBOARDING_SKIP` re-dispatches as a
- * step completion (see its case in the reducer), so a step completion can
- * arrive from a path that granted nothing. Exhaustiveness checking cannot see
- * that — the coupling is semantic, not typed — so the separation is structural
+ * two are dispatched together today, but a step completion can arrive from a
+ * path that granted nothing (BACKLOG-3673 removed `ONBOARDING_SKIP`, one such
+ * path, but the coupling is semantic, not typed). The separation is structural
  * rather than conventional.
  */
 export interface FdaGrantedAction {
@@ -458,15 +484,6 @@ export interface PhoneTypeResetAction {
 export interface ResumeMarkerAppliedAction {
   type: "RESUME_MARKER_APPLIED";
   phoneType: "iphone" | "android" | null;
-}
-
-/**
- * User skipped an onboarding step.
- */
-export interface OnboardingSkipAction {
-  type: "ONBOARDING_SKIP";
-  /** The step that was skipped */
-  step: OnboardingStep;
 }
 
 /**

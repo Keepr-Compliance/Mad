@@ -66,12 +66,26 @@ const declinedFdaMidOnboarding: UserData = {
   hasEmailConnected: false,
   needsDriverSetup: false,
   fda: "declined",
+  setup: "not-finished",
 };
 
 const loading: LoadingState = { status: "loading", phase: "loading-user-data" };
 
 function load(data: UserData, platform: PlatformInfo = macOS): AppState {
   return appStateReducer(loading, { type: "USER_DATA_LOADED", data, user: mockUser, platform });
+}
+
+/**
+ * BACKLOG-3673: a step completion never leaves setup; the queue end does. This
+ * is the step completion followed by that exit -- the only road to `ready`
+ * from onboarding. It carries `fda` exactly as the old early release did.
+ */
+function completeStepThenFinish(state: AppState, step: "email-connect" | "permissions"): AppState {
+  const afterStep = appStateReducer(state, { type: "ONBOARDING_STEP_COMPLETE", step });
+  if (afterStep.status !== "onboarding") {
+    throw new Error(`a step completion left setup (${afterStep.status}) -- BACKLOG-3673 forbids it`);
+  }
+  return appStateReducer(afterStep, { type: "ONBOARDING_QUEUE_DONE" });
 }
 
 describe("BACKLOG-3275 — a declined permission is never reported as granted", () => {
@@ -102,7 +116,7 @@ describe("BACKLOG-3275 — a declined permission is never reported as granted", 
     // Was: `hasPermissions` became true because `completedSteps` contained
     // "permissions". Navigation no longer decides capability.
     const onboarding = load(declinedFdaMidOnboarding);
-    const after = appStateReducer(onboarding, { type: "ONBOARDING_STEP_COMPLETE", step: "email-connect" });
+    const after = completeStepThenFinish(onboarding, "email-connect");
 
     expect(after).not.toBe(onboarding); // ANTI-VACUITY (BACKLOG-3277)
     expect(after.status).toBe("ready");
@@ -115,7 +129,7 @@ describe("BACKLOG-3275 — a declined permission is never reported as granted", 
     // FIX 1 — deleting only the inversion left this broken, which is why the
     // two were fixed together.
     const onboarding = load(declinedFdaMidOnboarding);
-    const after = appStateReducer(onboarding, { type: "ONBOARDING_STEP_COMPLETE", step: "email-connect" });
+    const after = completeStepThenFinish(onboarding, "email-connect");
     expect(after).not.toBe(onboarding); // ANTI-VACUITY (BACKLOG-3277)
     if (after.status !== "ready") throw new Error("expected ready");
     expect(after.userData.fda).toBe("declined");
@@ -128,7 +142,7 @@ describe("BACKLOG-3275 — a declined permission is never reported as granted", 
     // capability — so fixing the inversion alone would have re-asked every
     // user who declined, which is exactly the bug BACKLOG-3212 removed.
     const onboarding = load(declinedFdaMidOnboarding);
-    const ready = appStateReducer(onboarding, { type: "ONBOARDING_STEP_COMPLETE", step: "email-connect" });
+    const ready = completeStepThenFinish(onboarding, "email-connect");
     expect(ready).not.toBe(onboarding); // ANTI-VACUITY (BACKLOG-3277)
     if (ready.status !== "ready") throw new Error("expected ready");
 
@@ -165,6 +179,7 @@ describe("BACKLOG-3275 — a declined permission is never reported as granted", 
         hasEmailConnected: false,
         needsDriverSetup: false,
         fda: "declined",
+        setup: "not-finished",
       },
       producible
     );
@@ -198,13 +213,9 @@ describe("BACKLOG-3275 — only an observed capability may report `granted`", ()
 
   it("completing the permissions step does NOT by itself report granted", () => {
     // The single production dispatcher sends FDA_GRANTED alongside this action
-    // (usePermissionsFlow.ts). `ONBOARDING_SKIP` also re-dispatches as a step
-    // completion, so a step completion can arrive from a path that granted
-    // nothing — which is why capability is not derived from it.
-    const after = appStateReducer(onboardingMacOS, {
-      type: "ONBOARDING_STEP_COMPLETE",
-      step: "permissions",
-    });
+    // (usePermissionsFlow.ts). A step completion can arrive from a path that
+    // granted nothing, which is why capability is not derived from it.
+    const after = completeStepThenFinish(onboardingMacOS, "permissions");
     if (after.status !== "ready") throw new Error("expected ready");
     expect(isFdaGranted(after.userData.fda)).toBe(false);
     expect(after.userData.fda).toBe("not-asked");
@@ -216,17 +227,14 @@ describe("BACKLOG-3275 — only an observed capability may report `granted`", ()
     if (observed.status !== "onboarding") return;
     expect(observed.fda).toBe("granted");
 
-    const after = appStateReducer(observed, { type: "ONBOARDING_STEP_COMPLETE", step: "permissions" });
+    const after = completeStepThenFinish(observed, "permissions");
     if (after.status !== "ready") throw new Error("expected ready");
     expect(isFdaGranted(after.userData.fda)).toBe(true);
   });
 
   it("FDA_GRANTED upgrades a ready user who granted later (the Settings path)", () => {
     const onboarding = load(declinedFdaMidOnboarding);
-    const ready = appStateReducer(onboarding, {
-      type: "ONBOARDING_STEP_COMPLETE",
-      step: "email-connect",
-    });
+    const ready = completeStepThenFinish(onboarding, "email-connect");
     expect(ready).not.toBe(onboarding); // ANTI-VACUITY (BACKLOG-3277)
     if (ready.status !== "ready") throw new Error("expected ready");
     expect(ready.userData.fda).toBe("declined");
@@ -271,15 +279,23 @@ describe("BACKLOG-3275 — the third state: never-asked stays distinguishable fr
     expect(fromDeclined).not.toBe(declinedBefore);
     expect(fromNeverAsked).not.toBe(neverBefore);
 
-    if (fromDeclined.status !== "ready") throw new Error("expected ready");
-    expect(fromDeclined.userData.fda).toBe("declined");
+    // BACKLOG-3673: a step completion no longer leaves setup, so both legs stay
+    // in onboarding. The distinction is what each still records: the declined
+    // user has answered `permissions`; the never-asked user has not.
+    if (fromDeclined.status !== "onboarding") throw new Error("expected onboarding");
+    expect(fromDeclined.fda).toBe("declined");
+    expect(fromDeclined.completedSteps).toContain("permissions");
 
-    // The never-asked user is still in onboarding — they have not answered, so
-    // the permissions step is still queued. That difference IS the distinction.
     expect(fromNeverAsked.status).toBe("onboarding");
     if (fromNeverAsked.status !== "onboarding") return;
     expect(fromNeverAsked.fda).toBe("not-asked");
-    expect(fromNeverAsked.fda).not.toBe(fromDeclined.userData.fda);
+    expect(fromNeverAsked.completedSteps).not.toContain("permissions");
+    expect(fromNeverAsked.fda).not.toBe(fromDeclined.fda);
+
+    // And through the one exit, the decline is still distinguishable.
+    const declinedOut = appStateReducer(fromDeclined, { type: "ONBOARDING_QUEUE_DONE" });
+    if (declinedOut.status !== "ready") throw new Error("expected ready");
+    expect(declinedOut.userData.fda).toBe("declined");
   });
 
   it("neither state reports the capability as present", () => {
@@ -301,6 +317,7 @@ describe("BACKLOG-3275 — Windows acquires no onboarding steps it did not have"
     hasEmailConnected: true,
     needsDriverSetup: true,
     fda: "not-applicable",
+    setup: "not-finished",
   };
 
   it("does not seed `permissions` or `secure-storage` for a Windows user", () => {

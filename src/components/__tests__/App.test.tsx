@@ -309,9 +309,12 @@ describe("App", () => {
       google: { connected: true, email: "test@gmail.com" },
       microsoft: { connected: false },
     });
-    jest.mocked(window.api.auth.checkEmailOnboarding).mockResolvedValue({
+    // BACKLOG-3673: this account has finished setup (the server record).
+    jest.mocked(window.api.user.getAccountSetup).mockResolvedValue({
       success: true,
-      completed: true,
+      setup: "finished",
+      emailStepAnswered: true,
+      contactSourceAnswered: true,
     });
     // BACKLOG-2414: `getAppInfo` also returns a required `name`; only `version`
     // is asserted here, so the fixture stays as-is and the shortfall is cast.
