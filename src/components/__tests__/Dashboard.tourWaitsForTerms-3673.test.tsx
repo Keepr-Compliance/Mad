@@ -9,6 +9,10 @@
  *
  * Real `useTour` (localStorage + its 500 ms start timer) and the real
  * AuthContext object; only Joyride itself is replaced, to read its `run` prop.
+ *
+ * BACKLOG-3674: the tour now starts only after an async server read
+ * (window.api.user.getTourState, "not-dismissed" by default in tests/setup.js),
+ * so each timer advance runs in an async act to let that read resolve.
  */
 
 import React from "react";
@@ -86,33 +90,37 @@ describe("C19 — dashboard tour waits for the terms screen (BACKLOG-3673)", () 
     jest.useRealTimers();
   });
 
-  it("terms outdated: the tour does not start while the terms screen is up", () => {
+  it("terms outdated: the tour does not start while the terms screen is up", async () => {
     render(tree(true));
-    act(() => {
-      jest.advanceTimersByTime(2000);
+    await act(async () => {
+      // async: lets the server read resolve between timer steps
+      await jest.advanceTimersByTimeAsync(2000);
     });
     expect(mockJoyrideRuns.length).toBeGreaterThan(0);
     expect(mockJoyrideRuns.every((run) => run === false)).toBe(true);
   });
 
-  it("terms accepted in the same run: the tour starts after acceptance", () => {
+  it("terms accepted in the same run: the tour starts after acceptance", async () => {
     const { rerender } = render(tree(true));
-    act(() => {
-      jest.advanceTimersByTime(2000);
+    await act(async () => {
+      // async: lets the server read resolve between timer steps
+      await jest.advanceTimersByTimeAsync(2000);
     });
     expect(mockJoyrideRuns[mockJoyrideRuns.length - 1]).toBe(false);
 
     rerender(tree(false));
-    act(() => {
-      jest.advanceTimersByTime(2000);
+    await act(async () => {
+      // async: lets the server read resolve between timer steps
+      await jest.advanceTimersByTimeAsync(2000);
     });
     expect(mockJoyrideRuns[mockJoyrideRuns.length - 1]).toBe(true);
   });
 
-  it("terms current: the tour starts as before", () => {
+  it("terms current: the tour starts as before", async () => {
     render(tree(false));
-    act(() => {
-      jest.advanceTimersByTime(2000);
+    await act(async () => {
+      // async: lets the server read resolve between timer steps
+      await jest.advanceTimersByTimeAsync(2000);
     });
     expect(mockJoyrideRuns[mockJoyrideRuns.length - 1]).toBe(true);
   });

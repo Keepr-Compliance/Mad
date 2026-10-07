@@ -109,6 +109,22 @@ export const userBridge = {
    */
   completeAccountSetup: (): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke("user:complete-account-setup"),
+
+  /**
+   * BACKLOG-3674: has the session user's account dismissed the dashboard tour?
+   * Takes no user id on purpose: main reads the signed-in session's id.
+   */
+  getTourState: (): Promise<{
+    success: boolean;
+    tour: "dismissed" | "not-dismissed" | "unknown";
+    error?: string;
+  }> => ipcRenderer.invoke("user:get-tour-state"),
+
+  /**
+   * BACKLOG-3674: record that the session user's account dismissed the tour.
+   */
+  dismissTour: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("user:dismiss-tour"),
 };
 
 /**
