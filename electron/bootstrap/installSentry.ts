@@ -106,7 +106,7 @@ Sentry.init({
   // scrubRcsEventPII. The updater scrub runs first, unchanged; an RCS event
   // whose scrub throws is dropped (its text may hold a number or a message).
   beforeSend(event) {
-    let scrubbed = event;
+    let scrubbed: typeof event;
     try {
       scrubbed = scrubUpdaterEventPII(event);
     } catch (scrubError) {

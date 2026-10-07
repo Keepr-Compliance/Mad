@@ -1909,12 +1909,10 @@
         // P02: a chat finished (read, skipped or failed) — the bar advances, never back.
         if (item.attempt === 0) run.done = Math.min(run.total, run.done + 1);
         if (item.attempt === 0 && !gone) tm.chatMs.push(Math.max(0, clock() - chatAt));
-        if (chatTiming) {
-          log(timingLine(chatTiming, clock() - chatAt, hiddenStats.peek().ms - chatTiming.hiddenAt));
-          if (chatTiming.photoRead.length > 0) log(photoTimingLine(chatTiming));
-          addSteps(chatTiming);
-          chatTiming = null;
-        }
+        log(timingLine(chatTiming, clock() - chatAt, hiddenStats.peek().ms - chatTiming.hiddenAt));
+        if (chatTiming.photoRead.length > 0) log(photoTimingLine(chatTiming));
+        addSteps(chatTiming);
+        chatTiming = null;
       }
       // Also the cancel check between chats: a job Keepr dropped answers 404/410.
       if (i + 1 < candidates.length) run.index = i + 2;
@@ -2017,7 +2015,7 @@
     if (!finished || !finished.ok) {
       return fail("finish_refused", messageOf(finished, "Keepr could not finish this Sync."));
     }
-    if (finished && finished.body && Object.prototype.hasOwnProperty.call(finished.body, "saved")) {
+    if (finished.body && Object.prototype.hasOwnProperty.call(finished.body, "saved")) {
       saved = finished.body.saved;
     }
     log("done: listed " + progress.listed + ", candidates " + progress.candidates + ", checked " + progress.checked +
@@ -3283,7 +3281,7 @@
   /** The box's remembered place (chrome.storage.local), once read. */
   var savedPosition = null;
   /** SR: read the place from the extension's storage; drop what an older build left in the page's. */
-  var positionLoaded = (function () {
+  void (function () {
     try { localStorage.removeItem(POSITION_KEY); } catch (_e) { /* nothing left */ }
     return new Promise(function (resolve) {
       try {
@@ -3470,7 +3468,7 @@
         launchKeepr(document, "keepr://open");
         return false;
       }
-      var jobId = r && r.ok && r.body && typeof r.body.jobId === "string" ? r.body.jobId : null;
+      var jobId = r.ok && r.body && typeof r.body.jobId === "string" ? r.body.jobId : null;
       if (!jobId || running) return false;
       idleExpanded = false;
       void start(jobId);

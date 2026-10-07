@@ -15,7 +15,7 @@
  */
 
 import React from "react";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { RcsExtensionState, RcsJobInfo } from "../../../../../electron/types/ipc/window-api-rcs-import";
 import { googleMessagesStep } from "../googleMessagesSyncSteps";
@@ -30,7 +30,6 @@ const mockConsent = jest.fn();
 let mockCurrentJob: RcsJobInfo | null = null;
 let mockLinkState = (): unknown => ({ success: true, data: { link: { state: "none", intrusion: false }, linked: false } });
 
-const mockPairCode = jest.fn();
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
     getExtensionState: async () => ({ success: true, data: mockState }),

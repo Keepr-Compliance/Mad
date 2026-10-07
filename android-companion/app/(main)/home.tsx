@@ -19,13 +19,11 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import {
   startBackgroundSync,
-  stopBackgroundSync,
   performSync,
   isBackgroundSyncActive,
   MAX_SYNC_CYCLES_PER_RUN,
 } from '../../services/backgroundSync';
 import type { SyncOperationResult } from '../../services/backgroundSync';
-import { resetAllSyncData } from '../../services/smsQueueService';
 import {
   getSyncStats,
   getQueueSize,
