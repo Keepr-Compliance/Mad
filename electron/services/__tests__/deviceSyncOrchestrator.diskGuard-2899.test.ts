@@ -81,6 +81,7 @@ const mockStartBackup = jest.fn();
 const mockCancelBackup = jest.fn();
 const mockCheckBackupStatus = jest.fn();
 const mockDeleteBackup = jest.fn();
+const mockRemoveLeftoverBackup = jest.fn();
 const mockDecryptionCleanup = jest.fn();
 const mockGetDeviceStorageInfo = jest.fn();
 
@@ -133,6 +134,12 @@ jest.mock("../backupService", () => ({
     checkBackupStatus: (...args: unknown[]) => mockCheckBackupStatus(...args),
     startBackup: (...args: unknown[]) => mockStartBackup(...args),
     cancelBackup: (...args: unknown[]) => mockCancelBackup(...args),
+    // BACKLOG-3598: leftover cleanup. The removal itself is proven in
+    // deviceSyncOrchestrator.failedSyncCleanup-3598.test.ts against a real folder;
+    // here only whether the guard's exit asks for it.
+    sweepLeftoverBackups: jest.fn().mockResolvedValue({ removed: 0, bytesFreed: 0, failures: [] }),
+    classifyBackupFolder: jest.fn().mockResolvedValue("leftover"),
+    removeLeftoverBackup: (...args: unknown[]) => mockRemoveLeftoverBackup(...args),
     deleteBackup: (...args: unknown[]) => mockDeleteBackup(...args),
   })),
 }));
@@ -340,6 +347,7 @@ describe("BACKLOG-2899 — sync disk guard", () => {
     // which was also what a THROWN check returned — so this suite could not have told
     // the difference between the guard's first-sync path and its failure path.
     mockCheckBackupStatus.mockResolvedValue({ state: "absent" });
+    mockRemoveLeftoverBackup.mockResolvedValue({ outcome: "removed", bytes: 3 * GB });
     mockGetDeviceStorageInfo.mockResolvedValue({
       totalCapacity: 128 * GB,
       availableSpace: 113 * GB,
@@ -380,7 +388,14 @@ describe("BACKLOG-2899 — sync disk guard", () => {
       expect(result.error).toMatch(/disk space/i);
     });
 
-    it("leaves the partial backup resumable rather than deleting it", async () => {
+    // BACKLOG-3598 INVERTED this test. It used to assert the partial was KEPT
+    // ("leaves the partial backup resumable rather than deleting it"). The founder's
+    // rule is now that a failed sync leaves `Backups/<udid>` as it found it: this
+    // sync started from NO backup (`state: "absent"` above), so its unfinished
+    // first backup is removed. A first-sync partial has no Manifest.db and is
+    // refused as a prior backup by `isUsablePriorBackup`, so keeping it bought no
+    // resume — only the disk space the guard had just stopped to protect.
+    it("removes the unfinished first backup when the guard stops a first sync", async () => {
       const disk = installDisk({
         initialFree: 10 * GB,
         drainBytesPerSec: FIXTURE_DRAIN_BYTES_PER_SEC,
@@ -390,12 +405,16 @@ describe("BACKLOG-2899 — sync disk guard", () => {
         succeedAfterMs: BACKUP_DURATION_MS,
       });
 
-      await runSync(orchestrator, 1_600_000);
+      const result = await runSync(orchestrator, 1_600_000);
 
-      // `Backups/<udid>` must survive: checkBackupStatus reports it on the next
-      // run (exists / isCorrupted). Note this asserts the partial is KEPT, not
-      // that the next run continues from it — BACKLOG-2911 measured the next
-      // sync starting from zero despite the "will attempt to resume" log line.
+      // The user is told what happened to the space, not that it was kept.
+      expect(result.error).toMatch(/unfinished backup was removed/i);
+      expect(result.error).not.toMatch(/kept on disk/i);
+
+      // Asserted on the NEW removal method — the old `deleteBackup` is never
+      // called by the sync path, so asserting on it would pass either way.
+      expect(mockRemoveLeftoverBackup).toHaveBeenCalledTimes(1);
+      expect(mockRemoveLeftoverBackup).toHaveBeenCalledWith(TEST_UDID);
       expect(mockDeleteBackup).not.toHaveBeenCalled();
       expect(mockDecryptionCleanup).not.toHaveBeenCalled();
     });

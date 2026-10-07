@@ -130,6 +130,20 @@ class MockBackupService extends EventEmitter {
   cancelBackup() {
     // No-op for mock
   }
+
+  // BACKLOG-3598: leftover cleanup. Inert here; proven in
+  // deviceSyncOrchestrator.failedSyncCleanup-3598.test.ts against a real folder.
+  async sweepLeftoverBackups() {
+    return { removed: 0, bytesFreed: 0, failures: [] };
+  }
+
+  async classifyBackupFolder(_udid: string) {
+    return "absent" as const;
+  }
+
+  async removeLeftoverBackup(_udid: string) {
+    return { outcome: "kept" as const, folder: "absent" as const };
+  }
 }
 
 class MockBackupDecryptionService {
