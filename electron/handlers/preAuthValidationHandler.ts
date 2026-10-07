@@ -202,7 +202,9 @@ async function keepOrRejectOnNetworkError(
 ): Promise<PreAuthResult> {
   const lastValidated = lastServerValidatedAt || 0;
   const elapsed = Date.now() - lastValidated;
-  const withinGrace = lastValidated > 0 && elapsed < OFFLINE_GRACE_PERIOD_MS;
+  // elapsed >= 0: a last-check time in the future (clock set back) is not within grace.
+  const withinGrace =
+    lastValidated > 0 && elapsed >= 0 && elapsed < OFFLINE_GRACE_PERIOD_MS;
 
   await logService.warn(
     withinGrace

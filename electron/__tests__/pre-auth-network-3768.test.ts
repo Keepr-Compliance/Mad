@@ -137,6 +137,14 @@ describe("BACKLOG-3768: pre-auth on network errors (A′)", () => {
     expect(mockClearSession).toHaveBeenCalledTimes(1);
   });
 
+  it("A2: retryable error, last server check 30 days in the future (clock set back) -> cleared, token_invalid", async () => {
+    mockLoadSession.mockResolvedValue(sessionValidatedAgo(-30 * 24 * HOUR));
+    mockSetSession.mockResolvedValue({ data: { session: null, user: null }, error: await retryableCertError() });
+
+    expect(await handlePreAuthValidation()).toEqual({ valid: false, reason: "token_invalid" });
+    expect(mockClearSession).toHaveBeenCalledTimes(1);
+  });
+
   it("A1: retryable error, never validated -> cleared, token_invalid", async () => {
     mockLoadSession.mockResolvedValue({ ...sessionValidatedAgo(0), lastServerValidatedAt: undefined });
     mockSetSession.mockResolvedValue({ data: { session: null, user: null }, error: await retryableCertError() });
