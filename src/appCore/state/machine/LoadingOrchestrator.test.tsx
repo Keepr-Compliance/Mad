@@ -15,6 +15,7 @@ import { AppStateProvider } from "./AppStateContext";
 
 import { AuthProvider } from "../../../contexts/AuthContext";
 import type { AppState } from "./types";
+import { accountSetupNotFinished } from "./__tests__/testUtils";
 
 // ============================================
 // MOCK SETUP
@@ -1020,12 +1021,10 @@ describe("LoadingOrchestrator Phase 4 — db-ready gate (BACKLOG-2171)", () => {
 
   function mockFastFallbacks() {
     mockApi.user.getPhoneType.mockResolvedValue({ success: false, phoneType: null });
-    mockApi.user.getAccountSetup.mockResolvedValue({
-      success: true,
-      setup: "unknown",
-      emailStepAnswered: false,
-      contactSourceAnswered: false,
-    });
+    // BACKLOG-3673: "unknown" now shows the account-settings error screen
+    // (no children). These tests are about the db-ready gate's timing, so the
+    // record is the empty one (-> setup, children rendered), as before.
+    mockApi.user.getAccountSetup.mockResolvedValue(accountSetupNotFinished());
     mockApi.system.checkAllConnections.mockResolvedValue({
       success: false,
       google: { connected: false },

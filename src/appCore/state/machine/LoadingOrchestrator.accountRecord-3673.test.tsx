@@ -25,7 +25,8 @@
  *       sign-in, mac AND win) -> dashboard WITH the terms screen
  *   C7  outdated terms are never skipped: the terms screen is up over the
  *       dashboard; an unfinished account gets it over setup (row 17)
- *   row 20  no record readable (bridge missing / rejected) -> setup
+ *   row 20  no record readable (bridge missing / rejected) -> the
+ *           "Couldn't load your account settings" screen, never setup
  */
 
 import React from "react";
@@ -154,9 +155,15 @@ beforeEach(() => {
 });
 
 let latest: AppState | null = null;
+/** Every status the Probe rendered (it unmounts while the error screen shows). */
+const history: string[] = [];
+beforeEach(() => {
+  history.length = 0;
+});
 function Probe() {
   const { state } = useAppState();
   latest = state;
+  history.push(state.status);
   return <div data-testid="status">{state.status}</div>;
 }
 
@@ -301,17 +308,21 @@ describe("C5 — a mailbox disconnect never restarts setup (BACKLOG-3338)", () =
   });
 });
 
-describe("row 20 — no readable record fails closed to setup", () => {
-  it("bridge method missing -> setup", async () => {
+describe("row 20 — no readable record -> the account-settings screen, never setup", () => {
+  const TITLE = "Couldn't load your account settings";
+
+  it("bridge method missing -> account-settings screen", async () => {
     mockApi.user.getAccountSetup = undefined;
     render(tree(loadingUserData("mac")));
-    expect(await settle("onboarding")).toBe("onboarding");
+    expect(await screen.findByText(TITLE, undefined, { timeout: 3000 })).toBeInTheDocument();
+    expect(history).not.toContain("onboarding");
   });
 
-  it("IPC rejects -> setup", async () => {
+  it("IPC rejects -> account-settings screen", async () => {
     mockApi.user.getAccountSetup!.mockRejectedValue(new Error("ipc down"));
     render(tree(loadingUserData("mac")));
-    expect(await settle("onboarding")).toBe("onboarding");
+    expect(await screen.findByText(TITLE, undefined, { timeout: 3000 })).toBeInTheDocument();
+    expect(history).not.toContain("onboarding");
   });
 });
 

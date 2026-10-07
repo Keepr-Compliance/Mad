@@ -208,6 +208,36 @@ describe("C10 — user:get-account-setup", () => {
     expect((await getSetup()).setup).toBe("finished");
     expect(mockGetAccountSetupRecord).not.toHaveBeenCalled();
   });
+
+  it("no session user is logged and tagged apart from a failed server read (SR C4)", async () => {
+    const logService = jest.requireMock("../../services/logService").default as { warn: jest.Mock };
+    const tagsOf = () =>
+      mockCaptureException.mock.calls.map(
+        (c) => (c[1] as { tags?: Record<string, string> } | undefined)?.tags ?? {},
+      );
+
+    mockGetAuthUserId.mockReturnValue(null);
+    mockLoadSession.mockResolvedValue(null);
+    expect((await getSetup()).setup).toBe("unknown");
+    expect(tagsOf()).toEqual([
+      { service: "account-setup", operation: "getAccountSetup", account_setup_reason: "no-session-user" },
+    ]);
+    expect(logService.warn.mock.calls.map((c) => c[0])).toEqual([
+      "[AccountSetup] No session user; answering from cache",
+    ]);
+
+    // A failed server read for a session user does NOT carry that tag.
+    jest.clearAllMocks();
+    mockGetAuthUserId.mockReturnValue(SESSION_USER);
+    mockGetPreferences.mockResolvedValue({});
+    mockGetAccountSetupRecord.mockRejectedValue(new Error("network down"));
+    mockLoadSession.mockResolvedValue(null);
+    expect((await getSetup()).setup).toBe("unknown");
+    expect(tagsOf().some((t) => t.account_setup_reason === "no-session-user")).toBe(false);
+    expect(logService.warn.mock.calls.map((c) => c[0])).toEqual([
+      "[AccountSetup] Server read failed; answering from cache",
+    ]);
+  });
 });
 
 describe("C10 — user:complete-account-setup", () => {

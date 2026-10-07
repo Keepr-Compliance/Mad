@@ -155,6 +155,7 @@ export type AppErrorCode =
   | "AUTH_FAILED" // Failed to authenticate user
   | "USER_DATA_FAILED" // Failed to load user data
   | "NETWORK_ERROR" // Network connectivity issue
+  | "ACCOUNT_SETUP_UNAVAILABLE" // BACKLOG-3673: the account's setup record could not be read
   | "UNKNOWN_ERROR"; // Catch-all for unexpected errors
 
 // ============================================

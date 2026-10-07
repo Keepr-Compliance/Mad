@@ -24,6 +24,7 @@ import {
 } from "./utils/platformInit";
 import { waitForApi } from "./utils/waitForApi";
 import { useAuth } from "../../../contexts";
+import { authService } from "@/services";
 import { fdaFromProbe, unknownFdaFor } from "./fdaState";
 import { readAccountSetup } from "./routing/readAccountSetup";
 import type { PlatformInfo, User, UserData } from "./types";
@@ -79,7 +80,7 @@ export function LoadingOrchestrator({
   children,
 }: LoadingOrchestratorProps): React.ReactElement {
   const { state, dispatch, loadingPhase } = useAppState();
-  const { login } = useAuth();
+  const { login, logout, sessionToken } = useAuth();
 
   // Track auth data across phases (needed for USER_DATA_LOADED context)
   const authDataRef = useRef<{
@@ -104,6 +105,20 @@ export function LoadingOrchestrator({
     },
     [dispatch]
   );
+
+  // BACKLOG-3673: Sign out from the "Couldn't load your account settings"
+  // screen. With a session token, the normal logout. Without one (the relaunch
+  // fallback in handleGetCurrentUser returns no sessionToken), logout() would
+  // only clear renderer state and the next launch would sign the user straight
+  // back in, so main is asked to force the sign-out first. logout() still runs
+  // to clear AuthContext.
+  const handleSignOut = useCallback(async () => {
+    if (!sessionToken) {
+      await authService.forceLogout();
+    }
+    await logout();
+    dispatch({ type: "LOGOUT" });
+  }, [sessionToken, logout, dispatch]);
 
   // Get full platform info including hasIPhone (determined during onboarding)
   const getPlatformInfo = (): PlatformInfo => ({
@@ -662,7 +677,7 @@ export function LoadingOrchestrator({
           // account's recorded answers, read by main for the SESSION user from
           // the server (or its offline cache). Wrapped like the preferences
           // read below: a missing bridge or a rejection means "unknown", which
-          // routes to setup (fail closed).
+          // routes to the account-settings error screen (never setup).
           Promise.resolve()
             .then(() => window.api.user.getAccountSetup?.())
             .catch(() => undefined),
@@ -729,7 +744,7 @@ export function LoadingOrchestrator({
           connectionsResult.microsoft?.connected === true);
 
       // BACKLOG-3673: the account record. Anything but a well-formed answer is
-      // "unknown" (routes to setup). The email-step and contacts answers only
+      // "unknown" (routes to the account-settings error screen). The email-step and contacts answers only
       // seed the setup queue; neither is a routing input, and a connected
       // mailbox no longer stands in for either.
       const accountSetup = readAccountSetup(accountSetupResult);
@@ -810,7 +825,8 @@ export function LoadingOrchestrator({
           if (cancelled) return;
           // console.error("[LoadingOrchestrator] Failed to load user data:", error);
 
-          // Fallback to empty user data - will trigger onboarding
+          // Fallback to empty user data. setup "unknown" shows the
+          // account-settings error screen (BACKLOG-3673), not onboarding.
           const fallbackData: UserData = {
             phoneType: null,
             hasCompletedEmailOnboarding: false,
@@ -820,7 +836,8 @@ export function LoadingOrchestrator({
             // recorded decline. We could not read preferences, so we do not
             // know — and "ask again" is the safe direction to be wrong in.
             fda: unknownFdaFor(platform),
-            // BACKLOG-3673: we could not read the account record -> setup.
+            // BACKLOG-3673: we could not read the account record -> the
+            // account-settings error screen (Retry / Sign out), never setup.
             setup: "unknown",
             contactSourceAnswered: false,
           };
@@ -970,6 +987,9 @@ export function LoadingOrchestrator({
       <ErrorScreen
         error={state.error}
         onRetry={state.recoverable ? () => dispatch({ type: "RETRY" }) : undefined}
+        onSignOut={
+          state.error.code === "ACCOUNT_SETUP_UNAVAILABLE" ? handleSignOut : undefined
+        }
       />
     );
   }

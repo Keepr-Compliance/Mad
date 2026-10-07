@@ -73,13 +73,29 @@ async function writeCache(finishedAt: string | null): Promise<void> {
  * - server row with the record set   -> "finished"
  * - server row without it, or no row -> "not-finished"
  * - server unreachable / no session user -> the session cache if it says
- *   finished, otherwise "unknown" (the renderer routes "unknown" to setup)
+ *   finished, otherwise "unknown" (the renderer shows the "Couldn't load your
+ *   account settings" screen for "unknown", never setup)
  */
 export async function getAccountSetup(): Promise<GetAccountSetupResult> {
   const userId = supabaseService.getAuthUserId();
 
   if (!userId) {
     const cached = await readCachedFinishedAt();
+    // No session user is a different case from a failed server read (below):
+    // Retry cannot fix it, only Sign out can. Logged and tagged separately so
+    // the two can be told apart.
+    logService.warn("[AccountSetup] No session user; answering from cache", MODULE, {
+      cached: cached !== null,
+    });
+    Sentry.captureException(new Error("Account setup read with no session user"), {
+      level: "warning",
+      tags: {
+        service: "account-setup",
+        operation: "getAccountSetup",
+        account_setup_reason: "no-session-user",
+      },
+      extra: { cached: cached !== null },
+    });
     return {
       success: true,
       setup: cached ? "finished" : "unknown",

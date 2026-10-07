@@ -9,8 +9,12 @@
  * - `"not-finished"` — the record is empty
  * - `"unknown"`      — the server could not be read and there is no cache
  *
- * Rules:
- * - Only `"finished"` goes to the dashboard. `"unknown"` fails CLOSED to setup.
+ * Rules (allowlist):
+ * - `"finished"` goes to the dashboard.
+ * - `"not-finished"` goes to setup. Setup needs this positive answer.
+ * - Anything else (`"unknown"`, or a malformed runtime value) goes to
+ *   `"unavailable"`: the "Couldn't load your account settings" screen with
+ *   Retry and Sign out. A failed read never means a new account.
  * - Device state (mailbox token, Full Disk Access, Apple driver, the email-step
  *   answer) is NOT an input. It is checked at point of use, never here.
  * - Terms are NOT an input. The terms screen is AuthContext's
@@ -23,7 +27,7 @@
 export type AccountSetup = "finished" | "not-finished" | "unknown";
 
 /** Where a signed-in account lands after loading. */
-export type AccountDestination = "dashboard" | "setup";
+export type AccountDestination = "dashboard" | "setup" | "unavailable";
 
 export interface RouteAccountInput {
   setup: AccountSetup;
@@ -36,12 +40,16 @@ export interface RouteAccountResult {
 /**
  * Decide the landing for a signed-in account.
  *
- * Any value other than the literal `"finished"` (including a malformed value
- * arriving over IPC at runtime) routes to setup.
+ * Only the literal `"finished"` reaches the dashboard and only the literal
+ * `"not-finished"` reaches setup. Every other value (including a malformed
+ * value arriving at runtime) is `"unavailable"`.
  */
 export function routeAccount(input: RouteAccountInput): RouteAccountResult {
   if (input.setup === "finished") {
     return { destination: "dashboard" };
   }
-  return { destination: "setup" };
+  if (input.setup === "not-finished") {
+    return { destination: "setup" };
+  }
+  return { destination: "unavailable" };
 }

@@ -4,6 +4,8 @@
  * TASK-1802: Added Reset App Data self-healing feature
  * BACKLOG-1629: Improved UX — friendly message, SupportWidget integration,
  *   collapsible technical details, Sentry logging, streamlined reset dialog
+ * BACKLOG-3673: ACCOUNT_SETUP_UNAVAILABLE variant — "Couldn't load your account
+ *   settings" with Retry and Sign out; Reset App Data hidden for that code only
  *
  * Displays error information when the application encounters
  * a non-recoverable error during initialization.
@@ -23,6 +25,8 @@ interface ErrorScreenProps {
   error: AppError;
   /** Callback when user clicks retry (optional) */
   onRetry?: () => void;
+  /** Callback when user clicks Sign out (optional; shown only when given) */
+  onSignOut?: () => void;
 }
 
 /** Dispatch the 'open-support-widget' custom event to open the SupportWidget dialog. */
@@ -40,7 +44,11 @@ function openSupportWidget(subject: string): void {
 export function ErrorScreen({
   error,
   onRetry,
+  onSignOut,
 }: ErrorScreenProps): React.ReactElement {
+  // BACKLOG-3673: the account's setup record could not be read.
+  const accountVariant = error.code === "ACCOUNT_SETUP_UNAVAILABLE";
+
   // Reset dialog state
   const [showResetDialog, setShowResetDialog] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
@@ -122,13 +130,22 @@ export function ErrorScreen({
 
         {/* User-friendly error message */}
         <h1 className="text-xl font-semibold text-gray-900 mb-2">
-          Something went wrong
+          {accountVariant
+            ? "Couldn't load your account settings"
+            : "Something went wrong"}
         </h1>
-        <p className="text-gray-600 mb-4">
-          Keepr couldn&apos;t start because the local database failed to
-          initialize. This is usually fixed by restarting the app. If the
-          problem persists, please contact support.
-        </p>
+        {accountVariant ? (
+          <p className="text-gray-600 mb-4">
+            Keepr couldn&apos;t reach the server to check your account. Check
+            your internet connection, then try again.
+          </p>
+        ) : (
+          <p className="text-gray-600 mb-4">
+            Keepr couldn&apos;t start because the local database failed to
+            initialize. This is usually fixed by restarting the app. If the
+            problem persists, please contact support.
+          </p>
+        )}
         <p className="text-xs text-gray-400 mb-4">
           Error code: {error.code}
         </p>
@@ -161,7 +178,18 @@ export function ErrorScreen({
               className="w-full px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
               type="button"
             >
-              Try Again
+              {accountVariant ? "Retry" : "Try Again"}
+            </button>
+          )}
+
+          {/* Sign out button (BACKLOG-3673: account-settings variant only) */}
+          {onSignOut && (
+            <button
+              onClick={onSignOut}
+              className="w-full px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+              type="button"
+            >
+              Sign out
             </button>
           )}
 
@@ -174,14 +202,18 @@ export function ErrorScreen({
             Contact Support
           </button>
 
-          {/* Reset App Data button */}
-          <button
-            onClick={() => setShowResetDialog(true)}
-            className="w-full px-6 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition-colors text-sm"
-            type="button"
-          >
-            Reset App Data
-          </button>
+          {/* Reset App Data button. BACKLOG-3673: hidden when the account
+              record could not be read -- deleting local data does not fix a
+              server read. */}
+          {!accountVariant && (
+            <button
+              onClick={() => setShowResetDialog(true)}
+              className="w-full px-6 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition-colors text-sm"
+              type="button"
+            >
+              Reset App Data
+            </button>
+          )}
         </div>
       </div>
 

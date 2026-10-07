@@ -10,20 +10,20 @@ import { routeAccount, type AccountSetup } from "../routeAccount";
 import { readAccountSetup } from "../readAccountSetup";
 
 describe("C1 — routeAccount", () => {
-  const table: Array<[AccountSetup, "dashboard" | "setup"]> = [
+  const table: Array<[AccountSetup, "dashboard" | "setup" | "unavailable"]> = [
     ["finished", "dashboard"], // rows 11-16, 18, 19 (record or cache set)
     ["not-finished", "setup"], // rows 1-10, 17
-    ["unknown", "setup"], // row 20: fail CLOSED
+    ["unknown", "unavailable"], // row 20: the Retry / Sign out screen, never setup
   ];
 
   it.each(table)("setup=%s -> %s", (setup, destination) => {
     expect(routeAccount({ setup })).toEqual({ destination });
   });
 
-  it("a malformed runtime value routes to setup, never the dashboard", () => {
+  it("a malformed runtime value is unavailable: never the dashboard, never setup (SR C1 allowlist)", () => {
     for (const bad of [undefined, null, "", "FINISHED", "done", true, 1]) {
       expect(routeAccount({ setup: bad as unknown as AccountSetup })).toEqual({
-        destination: "setup",
+        destination: "unavailable",
       });
     }
   });

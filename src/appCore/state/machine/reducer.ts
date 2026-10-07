@@ -354,7 +354,24 @@ export function appStateReducer(
 
       // BACKLOG-3673: the ONE routing decision. Only the per-account record
       // decides; device state and the email-step answer do not.
-      if (routeAccount({ setup: data.setup }).destination === "dashboard") {
+      const destination = routeAccount({ setup: data.setup }).destination;
+
+      // The record could not be read: show the account-settings error screen
+      // (Retry re-runs this phase via previousState; Sign out leaves). Never
+      // setup, never the dashboard.
+      if (destination === "unavailable") {
+        return {
+          status: "error",
+          error: {
+            code: "ACCOUNT_SETUP_UNAVAILABLE",
+            message: "The account setup record could not be read",
+          },
+          recoverable: true,
+          previousState: state,
+        };
+      }
+
+      if (destination === "dashboard") {
         return {
           status: "ready",
           user,

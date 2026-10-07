@@ -35,6 +35,7 @@ import { AppStateProvider } from "./AppStateContext";
 import { useAppState } from "./useAppState";
 import { AuthProvider } from "../../../contexts/AuthContext";
 import type { AppState } from "./types";
+import { accountSetupNotFinished } from "./__tests__/testUtils";
 
 jest.mock("@sentry/electron/renderer", () => ({
   addBreadcrumb: jest.fn(),
@@ -89,6 +90,8 @@ const mockApi = {
       return { success: true };
     }),
     getPhoneTypeCloud: jest.fn(async (_userId: string) => ({ success: true, phoneType: store.cloud })),
+    // BACKLOG-3673: the account record, empty -> setup (shared fixture).
+    getAccountSetup: jest.fn(async () => accountSetupNotFinished()),
   },
   preferences: { get: jest.fn() },
   drivers: { checkApple: jest.fn() },

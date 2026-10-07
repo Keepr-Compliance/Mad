@@ -3,7 +3,8 @@
  *
  * Anything that is not a well-formed answer -- a missing bridge, a rejection,
  * `success: false`, or an unrecognised `setup` value -- becomes
- * `setup: "unknown"`, which `routeAccount` sends to setup (fail closed).
+ * `setup: "unknown"`, which `routeAccount` sends to the "Couldn't load your
+ * account settings" screen (never to setup, never to the dashboard).
  * The two answers default to `false` ("not recorded" -> the step is asked).
  *
  * @module appCore/state/machine/routing/readAccountSetup
