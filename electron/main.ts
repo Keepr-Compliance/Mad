@@ -229,6 +229,8 @@ applyLogFileConfig(log.transports.file);
 import * as Sentry from "@sentry/electron/main";
 import { runStartupHealthChecks } from "./services/startupHealthCheck";
 import { getInstallMode } from "./services/diagnostics/installMode";
+import { getHostArchitecture } from "./services/diagnostics/hostArchitecture";
+import { WINDOWS_ARM64_ARGV_TOKEN } from "./utils/windowsArm64";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
 // The Windows one-click installer migrates a prior per-machine install to
@@ -254,6 +256,17 @@ Sentry.setTag("install_mode", installMode);
 // Logged as well so the value is observable locally, without waiting for a
 // Sentry event to fire.
 log.info(`[Startup] Install mode: ${installMode}`);
+
+// BACKLOG-3363: record the four raw inputs behind the Windows-on-ARM decision,
+// not just the derived boolean, so the first real ARM PC run is a measurement.
+const hostArchitecture = getHostArchitecture();
+Sentry.setContext("host_architecture", { ...hostArchitecture });
+Sentry.setTag("windows_arm64", String(hostArchitecture.windows_arm64));
+Sentry.setTag(
+  "arm64_translation",
+  String(hostArchitecture.running_under_arm64_translation),
+);
+log.info(`[Startup] Host architecture: ${JSON.stringify(hostArchitecture)}`);
 
 // Global error handlers - must be registered early, before any async operations
 // These catch uncaught exceptions and unhandled promise rejections to prevent silent crashes
@@ -1118,6 +1131,12 @@ function createWindow(): void {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, "preload.js"),
+      // BACKLOG-3363: synchronous flag for the preload (process.argv), present
+      // only on Windows on ARM. Read on every createWindow() (macOS activate
+      // re-creates the window).
+      additionalArguments: getHostArchitecture().windows_arm64
+        ? [WINDOWS_ARM64_ARGV_TOKEN]
+        : [],
     },
     titleBarStyle: WINDOW_CONFIG.TITLE_BAR_STYLE as
       | "default"

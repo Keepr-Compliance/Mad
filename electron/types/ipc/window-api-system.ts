@@ -14,6 +14,8 @@ import type { HealthIssue } from "./healthIssue";
 export interface WindowApiSystem {
   // Platform detection (migrated from window.electron.platform)
   platform: NodeJS.Platform;
+  /** BACKLOG-3363: true on a Windows on ARM PC (iPhone USB sync unsupported). */
+  isWindowsArm64?: boolean;
 
   // App info methods (migrated from window.electron)
   getAppInfo: () => Promise<{ version: string; name: string }>;

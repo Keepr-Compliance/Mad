@@ -10,6 +10,8 @@ import { createHash } from "crypto";
 import { promisify } from "util";
 import { EventEmitter } from "events";
 import log from "electron-log";
+import { app } from "electron";
+import { isWindowsArm64 } from "../utils/windowsArm64";
 import * as Sentry from "@sentry/electron/main";
 import { iOSDevice, DeviceStorageInfo } from "../types/device";
 import { getCommand, canUseLibimobiledevice } from "./libimobiledeviceService";
@@ -236,6 +238,21 @@ export class DeviceDetectionService extends EventEmitter {
    * @param intervalMs Polling interval in milliseconds (minimum 2000)
    */
   start(intervalMs: number = 2000): void {
+    // BACKLOG-3363: on Windows on ARM no iPhone can ever be detected (Apple's
+    // x64 driver cannot load), so never spawn idevice_id or poll.
+    if (
+      isWindowsArm64(
+        process.platform,
+        process.arch,
+        app?.runningUnderARM64Translation,
+      )
+    ) {
+      log.info(
+        "[DeviceDetection] Windows on ARM: iPhone USB sync not supported, not polling",
+      );
+      return;
+    }
+
     if (this.pollInterval) {
       log.warn("[DeviceDetection] Already running, stopping first");
       this.stop();
