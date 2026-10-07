@@ -11,3 +11,8 @@ trg:auth.users|d41d8cd98f00b204e9800998ecf8427e|The venue's schema baseline cove
 # After migration 1 is applied, the two policies it replaces carry their new text:
 policy:s2|e7a45518a090b26f35d08a23a1c61f98|Migration 1's agents_can_create_submissions (venue has migration 1 applied).
 policy:s3|c4c52619e1f6b8adfda16a7dd274a7bf|Migration 1's "Members can upload submission attachments" (venue has migration 1 applied).
+#
+# BACKLOG-3538 (20261007210000) revokes EXECUTE on claim_pending_invite() from PUBLIC and anon.
+# Value below is the expected ACL {postgres,authenticated,service_role}, computed, not yet measured.
+# After the production apply: re-read fnacl:claim_pending_invite on production, update gate-expected.txt, delete this line.
+fnacl:claim_pending_invite|c47fdd4add22ed1e478ecebd8e7195f3|BACKLOG-3538 revokes EXECUTE from PUBLIC and anon; venue ahead of production until the apply.
