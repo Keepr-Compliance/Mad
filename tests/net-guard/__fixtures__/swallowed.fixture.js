@@ -10,7 +10,7 @@
 const axios = require('axios');
 
 async function handlerThatSwallows() {
-  let outcome = 'unsupported';
+  let outcome;
   try { await axios.post('https://example.invalid/endpoint'); outcome = 'ok'; }
   catch (e) { outcome = 'failed'; }
   return { success: true, outcome };

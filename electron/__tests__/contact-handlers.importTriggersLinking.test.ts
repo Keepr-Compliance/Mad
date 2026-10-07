@@ -276,13 +276,6 @@ function proposalTriples(): string[] {
     .sort();
 }
 
-function contactIdByName(name: string): string {
-  const row = mockDb!
-    .prepare("SELECT id FROM contacts WHERE user_id = ? AND display_name = ?")
-    .get(USER, name) as { id: string } | undefined;
-  if (!row) throw new Error(`no saved contact named ${name}`);
-  return row.id;
-}
 
 beforeEach(() => {
   mockDb = openTestDb();

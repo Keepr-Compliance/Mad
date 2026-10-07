@@ -70,8 +70,6 @@ function runV71(db: DatabaseType): void {
   }
 }
 
-const TRIMSET = "' '||char(9)||char(10)||char(13)||char(11)||char(12)||char(160)";
-
 describe("migration v71 — BACKLOG-2551 attachments", () => {
   let db: DatabaseType;
   afterEach(() => {

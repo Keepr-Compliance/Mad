@@ -715,7 +715,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     // still delivers all 7 protected messages, because they were never the
     // cap's business. An implementation that merely gave audit messages
     // PRIORITY within the cap would return one message here.
-    const result = await macOSMessagesImportService.importMessages(
+    await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
       testImportPlan({
@@ -772,7 +772,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     const recentDateISO = (n: number) =>
       new Date(NOW_MS - (13 - n) * DAY_MS).toISOString();
 
-    const result = await macOSMessagesImportService.importMessages(
+    await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
       testImportPlan({
