@@ -36,8 +36,14 @@ beforeAll(() => {
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("BACKLOG-3675 check-offline-pass-keys", () => {
-  it("FAILS on the file in the repo today (the placeholder)", () => {
+  it("passes on the file in the repo (production key k1)", () => {
     const r = run();
+    expect(r.stdout).toMatch(/OK — 1 key\(s\): k1/);
+    expect(r.status).toBe(0);
+  });
+
+  it("FAILS on an empty map (the placeholder)", () => {
+    const r = run(["--file", fixture("")]);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/empty \(placeholder\)/);
   });
