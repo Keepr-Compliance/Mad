@@ -1854,6 +1854,10 @@ CREATE TABLE IF NOT EXISTS transaction_checklist_links (
   label      TEXT NOT NULL CHECK (length(trim(label)) >= 1),
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  -- BACKLOG-3764 (migration v75 adds it to existing databases): 1 when the
+  -- agent chose to send this group although its evidence is dated outside the
+  -- deal's audit dates. No index/trigger/view may name it here (see v75).
+  include_outside_dates INTEGER NOT NULL DEFAULT 0,
   UNIQUE (id, kind),
   FOREIGN KEY (item_id) REFERENCES transaction_checklist_items(id) ON DELETE CASCADE
 );

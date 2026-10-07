@@ -76,6 +76,24 @@ export interface SubmissionScopeIpcResult {
   error?: string;
 }
 
+/**
+ * BACKLOG-3764: one checklist group whose evidence this submission would not
+ * send. Mirrors `ChecklistLinkGap` in electron/services/submissionChecklistLinkGaps.ts.
+ */
+export interface SubmitChecklistLinkGap {
+  key: string;
+  linkId: string;
+  itemTitle: string;
+  label: string;
+  kind: "attachment" | "email";
+  reason: "outside_audit_dates" | "not_included";
+  detail: "not_on_transaction" | "cannot_be_sent" | "message_not_sent" | "not_sent" | null;
+  missingIds: string[];
+  sentAt: string | null;
+  auditStart: string | null;
+  auditEnd: string | null;
+}
+
 /** The answer to `transactions:submit` / `transactions:resubmit`. */
 export interface SubmitIpcResult {
   success: boolean;
@@ -91,6 +109,10 @@ export interface SubmitIpcResult {
    * did not all reach the broker. Mirrors `SubmissionResult.checklistsNotSent`.
    */
   checklistsNotSent?: "not_in_plan" | "refused" | "brokerChecklistsNotDownloaded";
+  /** BACKLOG-3764: on `preflightChanged`, the checklist evidence to confirm again. */
+  checklistLinkGaps?: SubmitChecklistLinkGap[];
+  /** BACKLOG-3764: evidence was dropped that the pre-flight did not list. */
+  checklistLinksNotAttached?: boolean;
   /** BACKLOG-3398: the agent cancelled; nothing was sent. */
   cancelled?: boolean;
   /** BACKLOG-3403: the list of files that cannot be sent changed; confirm again. */
@@ -1113,6 +1135,8 @@ export interface WindowApiTransactions {
   submitPreflight: (transactionId: string) => Promise<{
     success: boolean;
     notIncluded?: SubmitNotIncludedItem[];
+    /** BACKLOG-3764: checklist evidence this submission would not send. */
+    checklistLinkGaps?: SubmitChecklistLinkGap[];
     error?: string;
   }>;
 

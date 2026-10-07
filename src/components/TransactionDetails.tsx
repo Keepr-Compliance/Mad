@@ -727,6 +727,9 @@ function TransactionDetails({
     isCheckingFiles: submitCheckingFiles,
     preflightItems: submitPreflightItems,
     preflightChanged: submitPreflightChanged,
+    preflightLinkGaps: submitPreflightLinkGaps,
+    checklistLinksNotAttached: submitChecklistLinksNotAttached,
+    includeLinkGap: includeSubmitLinkGap,
     cancelled: submitCancelled,
     isCancelling: submitCancelling,
     submit: handleSubmitForReview,
@@ -1748,6 +1751,11 @@ function TransactionDetails({
           isCheckingFiles={submitCheckingFiles}
           preflightItems={submitPreflightItems}
           preflightChanged={submitPreflightChanged}
+          preflightLinkGaps={submitPreflightLinkGaps}
+          onIncludeLinkGap={(gap) => {
+            void includeSubmitLinkGap(gap);
+          }}
+          checklistLinksNotAttached={submitChecklistLinksNotAttached}
           onPreflightBack={dismissSubmitPreflight}
           onPreflightContinue={() => {
             void confirmSubmitPreflight();

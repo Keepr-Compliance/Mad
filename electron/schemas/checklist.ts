@@ -172,6 +172,14 @@ export const AddChecklistLinkArgsSchema = z.object({
   itemId: UuidSchema,
   kind: ChecklistLinkKindSchema,
   targetIds: z.array(UuidSchema).min(1).max(200),
+  /** BACKLOG-3764: the agent's "Include it" to the outside-the-dates question. */
+  includeOutsideDates: z.boolean().optional(),
+});
+
+/** BACKLOG-3764: "Include it" for an existing group, from the submit pre-flight. */
+export const IncludeChecklistLinkOutsideDatesArgsSchema = z.object({
+  transactionId: UuidSchema,
+  linkId: UuidSchema,
 });
 
 export const RemoveChecklistLinkArgsSchema = z.object({
@@ -185,3 +193,6 @@ export type SetChecklistItemCheckedArgs = z.infer<typeof SetChecklistItemChecked
 export type SetChecklistItemNoteArgs = z.infer<typeof SetChecklistItemNoteArgsSchema>;
 export type AddChecklistLinkArgs = z.infer<typeof AddChecklistLinkArgsSchema>;
 export type RemoveChecklistLinkArgs = z.infer<typeof RemoveChecklistLinkArgsSchema>;
+export type IncludeChecklistLinkOutsideDatesArgs = z.infer<
+  typeof IncludeChecklistLinkOutsideDatesArgsSchema
+>;

@@ -74,6 +74,10 @@ import {
   V74_RCS_LOCAL_TABLES_DDL,
 } from "./db/migrationV74Sql";
 import {
+  V75_ADD_INCLUDE_OUTSIDE_DATES_SQL,
+  V75_CHECKLIST_LINKS_TABLE_INFO_SQL,
+} from "./db/migrationV75Sql";
+import {
   SCHEMA_VERSION_UPDATE_SQL,
   SCHEMA_VERSION_TABLE_EXISTS_SQL,
   CONNECTIVITY_PROBE_SQL,
@@ -1451,6 +1455,25 @@ class DatabaseService implements IDatabaseService {
       // CREATE … IF NOT EXISTS only: a no-op where schema.sql's exec already made them.
       migrate: (d) => {
         d.exec(V74_RCS_LOCAL_TABLES_DDL);
+      },
+    },
+    {
+      version: 75,
+      description:
+        "BACKLOG-3764 transaction_checklist_links.include_outside_dates: the agent's " +
+        "answer to sending evidence dated outside the deal's audit dates",
+      // Guarded like v73: a FRESH install already has the column from schema.sql
+      // (schema_version seeds at BASELINE 70, then this migration still runs), so
+      // the ALTER is skipped there and the migration is re-runnable. Existing
+      // links get 0: they were made without the question, so they are asked at
+      // the submit pre-flight if their evidence falls outside the dates.
+      migrate: (d) => {
+        const hasCol = (
+          d.prepare(V75_CHECKLIST_LINKS_TABLE_INFO_SQL).all() as Array<{ name: string }>
+        ).some((c) => c.name === "include_outside_dates");
+        if (!hasCol) {
+          d.exec(V75_ADD_INCLUDE_OUTSIDE_DATES_SQL);
+        }
       },
     },
   ];

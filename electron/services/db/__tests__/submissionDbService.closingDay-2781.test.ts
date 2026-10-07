@@ -58,6 +58,8 @@ import path from "path";
 const mockEnsureDb = jest.fn();
 jest.mock("../core/dbConnection", () => ({
   ensureDb: () => mockEnsureDb(),
+  // BACKLOG-3764: the link-time outside-dates check (checklistDbService).
+  dbAll: (sql: string, params: unknown[] = []) => mockEnsureDb().prepare(sql).all(...params),
 }));
 
 // Require the REAL native driver (the default Jest moduleNameMapper rewrites it
@@ -74,6 +76,7 @@ import {
   getTransactionAttachments,
 } from "../submissionDbService";
 import { auditWindowEnd, resolveExportPlan } from "../../exportPlan";
+import { outsideAuditDates } from "../checklistDbService";
 import { auditPeriodFromRow } from "../../submissionAuditPeriod";
 import type { Communication } from "../../../types/models";
 import { ALL_TEXT_IDS } from "../../__tests__/helpers/selectedTextIds";
@@ -172,6 +175,17 @@ function createSchema(db: DatabaseType): void {
       message_id TEXT,
       email_id TEXT,
       thread_id TEXT
+    );
+    -- BACKLOG-3764: the readers send a checklist group's evidence the agent
+    -- chose to include regardless of the dates. The columns that query reads,
+    -- as in schema.sql.
+    CREATE TABLE transaction_checklists (id TEXT PRIMARY KEY, transaction_id TEXT NOT NULL);
+    CREATE TABLE transaction_checklist_items (id TEXT PRIMARY KEY, checklist_id TEXT NOT NULL);
+    CREATE TABLE transaction_checklist_links (
+      id TEXT PRIMARY KEY, item_id TEXT NOT NULL, include_outside_dates INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE transaction_checklist_link_members (
+      id TEXT PRIMARY KEY, link_id TEXT NOT NULL, attachment_id TEXT, email_id TEXT
     );
   `);
 }
@@ -289,6 +303,28 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
     expect(emailIds.has("AE_evening")).toBe(true);
     expect(emailIds.has("AE_lastin")).toBe(true);
     expect(emailIds.has("AE_firstout")).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-3764 C5 — the question asked at link time ("outside the dates?")
+  // and the submit's filter are the same test on every instant of the sweep:
+  // a target is outside exactly when the submit would not send it. Literal
+  // sets too, so a change that moved both together would still go red.
+  // -------------------------------------------------------------------------
+  it("BACKLOG-3764 C5: link-time 'outside the dates' is the exact complement of the submit, on every instant", () => {
+    const sentEmails = new Set(getTransactionEmails("T1", auditStart, auditEnd).map((r) => r.id as string));
+    const sentAtts = new Set(
+      getTransactionAttachments("T1", auditStart, auditEnd, ALL_TEXT_IDS).map((r) => r.id as string),
+    );
+    const emailIds = SWEEP.map(([k]) => `E_${k}`);
+    const attIds = SWEEP.flatMap(([k]) => [`AE_${k}`, `AT_${k}`]);
+    const outsideEmails = new Set(outsideAuditDates("email", emailIds, STARTED_AT, CLOSED_AT).map((r) => r.id));
+    const outsideAtts = new Set(outsideAuditDates("attachment", attIds, STARTED_AT, CLOSED_AT).map((r) => r.id));
+
+    for (const id of emailIds) expect([id, outsideEmails.has(id)]).toEqual([id, !sentEmails.has(id)]);
+    for (const id of attIds) expect([id, outsideAtts.has(id)]).toEqual([id, !sentAtts.has(id)]);
+    expect(outsideEmails).toEqual(new Set(["E_early", "E_firstout"]));
+    expect(outsideAtts).toEqual(new Set(["AE_early", "AE_firstout", "AT_early", "AT_firstout"]));
   });
 
   // -------------------------------------------------------------------------

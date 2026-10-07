@@ -386,7 +386,7 @@ describe("BACKLOG-3389 — an attachment that exists only as metadata", () => {
 
     const preflight = await submissionService.preflightSubmission(TX);
 
-    expect(preflight).toEqual({ success: true, notIncluded: [] });
+    expect(preflight).toEqual({ success: true, notIncluded: [], checklistLinkGaps: [] });
     expect(downloadEmailAttachments).toHaveBeenCalledTimes(1);
   });
 
