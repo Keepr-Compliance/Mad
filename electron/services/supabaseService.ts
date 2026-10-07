@@ -11,6 +11,7 @@ import { User, SubscriptionTier, Subscription } from "../types/models";
 import type { AuditLogEntry } from "./auditService";
 import logService from "./logService";
 import sessionService from "./sessionService";
+import { supabaseNetFetch } from "./supabaseNetFetch";
 
 /**
  * User data for sync operations
@@ -207,6 +208,9 @@ class SupabaseService {
           removeItem: (key: string) => { this._memoryStorage.delete(key); },
         },
       },
+      // BACKLOG-3768: every request (auth, token refresh, PostgREST, functions,
+      // storage) goes through Electron's network stack, not Node's fetch.
+      global: { fetch: supabaseNetFetch },
     });
 
     // TASK-2040: Listen for auth state changes to keep local session cache

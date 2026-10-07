@@ -17,6 +17,7 @@
 import { ipcMain, net } from "electron";
 import sessionService from "../services/sessionService";
 import supabaseService from "../services/supabaseService";
+import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import logService from "../services/logService";
 
 /** Offline grace period: 24 hours (SOC 2 compliant revocation window) */
@@ -82,6 +83,15 @@ export async function handlePreAuthValidation(): Promise<PreAuthResult> {
     });
 
     if (setSessionError) {
+      // BACKLOG-3768 (A′): a network/TLS failure is not a rejection.
+      if (isAuthRetryableFetchError(setSessionError)) {
+        return await keepOrRejectOnNetworkError(
+          "setSession",
+          setSessionError,
+          session.lastServerValidatedAt,
+          "token_invalid"
+        );
+      }
       // console.log("[PRE-AUTH] ❌ setSession FAILED — token invalid:", setSessionError.message);
       await logService.info(
         "Pre-auth: setSession failed, clearing session",
@@ -93,6 +103,16 @@ export async function handlePreAuthValidation(): Promise<PreAuthResult> {
 
     // Server-side validation
     const { data, error: getUserError } = await client.auth.getUser();
+
+    // BACKLOG-3768 (A′): a network/TLS failure is not a rejection.
+    if (getUserError && isAuthRetryableFetchError(getUserError)) {
+      return await keepOrRejectOnNetworkError(
+        "getUser",
+        getUserError,
+        session.lastServerValidatedAt,
+        "session_revoked"
+      );
+    }
 
     if (getUserError || !data.user) {
       // console.log("[PRE-AUTH] ❌ Server REJECTED session — user revoked/deleted. DB will NOT be decrypted.");
@@ -162,6 +182,48 @@ async function rejectAfterClearingSession(
     // Logging must not change the outcome: the DB stays closed either way.
   }
   return { valid: false, reason: "session_clear_failed" };
+}
+
+/**
+ * BACKLOG-3768 (founder answer "3768 A", built as A′ per SR ruling f3d7522a):
+ * the server could not be reached (transport failure or 5xx). If the server
+ * last confirmed this session within OFFLINE_GRACE_PERIOD_MS, stay signed in.
+ * Otherwise take exactly today's path: clear the session and return the same
+ * reason as a rejection, which the renderer routes to a working Login.
+ *
+ * Deliberately NOT handleOfflineGracePeriod: its expired branch returns
+ * "offline_grace_expired", which leaves the DB closed (BACKLOG-3555 route).
+ */
+async function keepOrRejectOnNetworkError(
+  step: "setSession" | "getUser",
+  error: { message: string; status?: number },
+  lastServerValidatedAt: number | undefined,
+  rejectReason: "token_invalid" | "session_revoked"
+): Promise<PreAuthResult> {
+  const lastValidated = lastServerValidatedAt || 0;
+  const elapsed = Date.now() - lastValidated;
+  const withinGrace = lastValidated > 0 && elapsed < OFFLINE_GRACE_PERIOD_MS;
+
+  await logService.warn(
+    withinGrace
+      ? "Pre-auth: network error, last server check within grace, keeping session"
+      : "Pre-auth: network error, last server check outside grace, clearing session",
+    "PreAuthValidation",
+    {
+      step,
+      status: error.status,
+      // Status 0 messages are Chromium error names (net::ERR_*); 5xx messages
+      // are "{}" after the fetch wrapper rebuilds the Response.
+      error: error.message,
+      elapsedMs: elapsed,
+      graceMs: OFFLINE_GRACE_PERIOD_MS,
+    }
+  );
+
+  if (withinGrace) {
+    return { valid: true };
+  }
+  return await rejectAfterClearingSession(rejectReason);
 }
 
 /**
