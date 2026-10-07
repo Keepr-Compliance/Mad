@@ -35,16 +35,17 @@ import {
   roundedTopBarPath,
   stackSegments,
   thinLabels,
+  type ChartRun,
   type DayBucket,
 } from '@/lib/reports/iphone-sync-charts';
 
-interface Tooltip {
+export interface Tooltip {
   x: number;
   y: number;
   lines: string[];
 }
 
-function GridLines({ max, unit }: { max: number; unit: string }) {
+export function GridLines({ max, unit }: { max: number; unit: string }) {
   const values = gridValues(max);
   return (
     <g aria-hidden="true">
@@ -75,7 +76,7 @@ function formatTick(value: number, unit: string): string {
   return String(Math.round(value));
 }
 
-function DayLabels({ buckets }: { buckets: DayBucket[] }) {
+export function DayLabels({ buckets }: { buckets: { dayIso: string; dayLabel: string }[] }) {
   const bars = barLayout(buckets.length);
   const show = thinLabels(buckets.length);
   return (
@@ -104,14 +105,14 @@ function DayLabels({ buckets }: { buckets: DayBucket[] }) {
  * alone would leave an empty day unhoverable, and "no runs that day" is
  * exactly what a reader wants the tooltip to say.
  */
-function HitRects({
+export function HitRects<B extends { dayIso: string }>({
   buckets,
   lines,
   onShow,
   onHide,
 }: {
-  buckets: DayBucket[];
-  lines: (bucket: DayBucket) => string[];
+  buckets: B[];
+  lines: (bucket: B) => string[];
   onShow: (tooltip: Tooltip) => void;
   onHide: () => void;
 }) {
@@ -135,7 +136,7 @@ function HitRects({
   );
 }
 
-function TooltipBox({ tooltip }: { tooltip: Tooltip | null }) {
+export function TooltipBox({ tooltip }: { tooltip: Tooltip | null }) {
   if (!tooltip) return null;
   return (
     <div
@@ -152,7 +153,7 @@ function TooltipBox({ tooltip }: { tooltip: Tooltip | null }) {
   );
 }
 
-function ChartFrame({
+export function ChartFrame({
   title,
   subtitle,
   children,
@@ -177,7 +178,7 @@ function ChartFrame({
   );
 }
 
-function LegendSwatch({ color, label }: { color: string; label: string }) {
+export function LegendSwatch({ color, label }: { color: string; label: string }) {
   return (
     <span className="inline-flex items-center gap-1.5 text-xs text-gray-600">
       <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: color }} aria-hidden="true" />
@@ -186,7 +187,8 @@ function LegendSwatch({ color, label }: { color: string; label: string }) {
   );
 }
 
-export function SyncCharts({ buckets }: { buckets: DayBucket[] }) {
+/** Any report's day buckets (see ChartRun): the iPhone and Google Messages reports share it. */
+export function SyncCharts({ buckets }: { buckets: DayBucket<ChartRun>[] }) {
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
   const duration = buildDurationSeries(buckets);
   const failures = buildFailureSeries(buckets);

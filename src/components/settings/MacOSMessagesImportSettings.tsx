@@ -35,6 +35,7 @@ import {
   type ImportPhaseDisplay,
 } from "../../utils/importPhaseDisplay";
 import { FdaHelpSheet } from "../permissions/FdaHelpSheet";
+import { LookbackMonthsSelect, forceWindowLine, lastMonthsPhrase, lookbackOptionLabel } from "./LookbackMonthsSelect";
 import { usePlatform } from "../../contexts/PlatformContext";
 import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
 import { settingsService, systemService } from '../../services';
@@ -2001,20 +2002,11 @@ export function MacOSMessagesImportSettings({
         {/* Date Range Filter */}
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs text-gray-600">Import messages from</span>
-          <select
-            value={lookbackMonths ?? "all"}
-            onChange={(e) => handleLookbackChange(e.target.value)}
+          <LookbackMonthsSelect
+            value={lookbackMonths}
+            onChange={(v) => handleLookbackChange(v)}
             disabled={controlsDisabled}
-            className="text-xs border border-gray-300 rounded px-3 py-2.5 bg-white text-gray-900 disabled:opacity-50 min-h-[44px]"
-          >
-            <option value="3">Last 3 months</option>
-            <option value="6">Last 6 months</option>
-            <option value="9">Last 9 months</option>
-            <option value="12">Last 12 months</option>
-            <option value="18">Last 18 months</option>
-            <option value="24">Last 24 months</option>
-            <option value="all">All time</option>
-          </select>
+          />
         </div>
 
         {/* Message Count Cap */}
@@ -2071,12 +2063,12 @@ export function MacOSMessagesImportSettings({
             <p className="text-xs text-blue-600 mt-2">
               {hasProtectedHistory
                 ? lookbackMonths !== null
-                  ? `Importing last ${lookbackMonths} months, covering ${availableCount!.toLocaleString()} messages (your ${planCap!.toLocaleString()} newest plus your deals' protected history)`
+                  ? `Importing ${lastMonthsPhrase(lookbackMonths)}, covering ${availableCount!.toLocaleString()} messages (your ${planCap!.toLocaleString()} newest plus your deals' protected history)`
                   : `Covering ${availableCount!.toLocaleString()} messages — your ${planCap!.toLocaleString()} newest, plus your deals' protected history`
                 : lookbackMonths !== null && maxMessages !== null
-                  ? `Importing last ${lookbackMonths} months, up to ${maxMessages.toLocaleString()} messages`
+                  ? `Importing ${lastMonthsPhrase(lookbackMonths)}, up to ${maxMessages.toLocaleString()} messages`
                   : lookbackMonths !== null
-                    ? `Importing messages from the last ${lookbackMonths} months`
+                    ? `Importing messages from ${lastMonthsPhrase(lookbackMonths)}`
                     : `Importing up to ${maxMessages!.toLocaleString()} messages`}
             </p>
           )
@@ -2354,7 +2346,7 @@ export function MacOSMessagesImportSettings({
             rangeLabel={
               lookbackMonths === null
                 ? "All time"
-                : `Last ${lookbackMonths} months`
+                : lookbackOptionLabel(lookbackMonths, null)
             }
             capFittingRange={capFittingRange}
             capRangeSearching={capRangeSearching}
@@ -2542,6 +2534,9 @@ export function MacOSMessagesImportSettings({
             transactions — you&rsquo;ll need to re-attach them afterward. Links
             from checklist items to their attachments are removed too. This
             can take a while.
+          </p>
+          <p className="text-sm font-medium text-gray-800 -mt-4 mb-6" data-testid="force-window-line">
+            {forceWindowLine(lookbackMonths, "texts")}
           </p>
           {/* BACKLOG-2749 / founder `c2300351`: "switch the design of the
               cancel button and the Re-Import&Unlink so the cancel is red and

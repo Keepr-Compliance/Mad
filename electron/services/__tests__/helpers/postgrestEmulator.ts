@@ -299,8 +299,36 @@ export interface Emulator {
   reset: () => void;
 }
 
+/**
+ * BACKLOG-3403: answers for the submission RPCs, transcribed from
+ * `supabase/migrations/20261004192647_backlog_3403_finalize_submission.sql`:
+ *   finalize_submission success  → {ok, already_final:false, status} (:302)
+ *   record_submission_attempt    → {ok, outcome, unchanged:false}     (:208)
+ * A suite that is not about the commit step uses these so its submissions
+ * can finish; the commit step itself is tested in submissionAtomic-3403.
+ */
+export const SUBMISSION_RPC_SUCCESS: Record<string, (args: unknown) => ChainResult> = {
+  finalize_submission: () => ({
+    data: { ok: true, already_final: false, status: "submitted" },
+    error: null,
+    status: 200,
+  }),
+  record_submission_attempt: (args) => ({
+    data: {
+      ok: true,
+      outcome: (args as { p_outcome?: string } | undefined)?.p_outcome ?? "in_progress",
+      unchanged: false,
+    },
+    error: null,
+    status: 200,
+  }),
+};
+
 export function createPostgrestEmulator(
-  initial: Partial<Pick<EmulatorState, "columnPresent" | "rows">> = {}
+  initial: Partial<Pick<EmulatorState, "columnPresent" | "rows">> & {
+    /** BACKLOG-3403: extra RPC answers, by function name. */
+    rpcHandlers?: Record<string, (args: unknown) => ChainResult>;
+  } = {}
 ): Emulator {
   const state: EmulatorState = {
     columnPresent: initial.columnPresent ?? true,
@@ -323,6 +351,8 @@ export function createPostgrestEmulator(
      */
     async rpc(fn: string, args?: unknown) {
       state.rpcs.push({ fn, args });
+      const handler = initial.rpcHandlers?.[fn];
+      if (handler) return handler(args);
       if (fn !== "ensure_personal_organization") {
         throw new Error(`postgrestEmulator: unmocked rpc("${fn}")`);
       }

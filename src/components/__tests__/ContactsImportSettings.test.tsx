@@ -362,6 +362,42 @@ describe("ContactsImportSettings", () => {
 
       expect(mockOnToggleSource).toHaveBeenCalledWith("inferred", "messages", false);
     });
+
+    // BACKLOG-3670: the Messages / SMS row names the selected text-message
+    // import source (Settings → Messages' own labels), on Windows too.
+    // Mutation: no label, or a different string → red.
+    it.each([
+      ["android-messages-web", "(Android: Google Messages)"],
+      ["iphone-sync", "(iPhone Sync)"],
+      ["android-companion", "(Android: Google Messages)"], // SR C6: a stored Companion source shows as Google Messages
+      ["macos-native", "(macOS Messages)"],
+    ] as const)("Messages / SMS shows the import source %s as %s", (source, label) => {
+      renderWithPlatform(
+        <ContactsImportSettings {...defaultProps} isMicrosoftConnected={true} messagesImportSource={source} />,
+        "win32"
+      );
+      expect(screen.getByTestId("autodiscover-messages-source")).toHaveTextContent(label);
+    });
+
+    // C2: a Google-Messages-only Windows user (no mailbox) still gets the
+    // panel and its Auto-discover switch. Mutation: the message source not
+    // counted as a source → the placeholder only → red.
+    it("Windows, no mailbox, import source Android: Google Messages → the panel and Messages / SMS render", () => {
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} messagesImportSource="android-messages-web" />, "win32");
+      expect(screen.getByTestId("contacts-block-autodiscover")).toBeInTheDocument();
+      expect(screen.getByLabelText("Messages SMS auto-discover")).toBeInTheDocument();
+    });
+
+    it("Windows, no mailbox, no import source → the connect placeholder", () => {
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} />, "win32");
+      expect(screen.queryByTestId("contacts-block-autodiscover")).toBeNull();
+    });
+
+    it("no import source: no label", () => {
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} isMicrosoftConnected={true} />, "win32");
+      expect(screen.queryByTestId("autodiscover-messages-source")).toBeNull();
+      expect(screen.getByLabelText("Messages SMS auto-discover")).toBeInTheDocument();
+    });
   });
 
   // BACKLOG-2142: a disabled import toggle (no email connection) must explain

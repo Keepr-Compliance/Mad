@@ -66,5 +66,9 @@ describe("BACKLOG-3476 — force re-cache warning", () => {
     expect(dialog).toHaveTextContent(
       /Links from checklist items to those emails and their attachments are removed too\./,
     );
+    // SR F1: the dialog states the window it keeps. Mutation: line missing → red.
+    expect(screen.getByTestId("force-window-line")).toHaveTextContent(
+      "Keeps emails from the last 1.5 months; older emails are removed from this computer.",
+    );
   });
 });

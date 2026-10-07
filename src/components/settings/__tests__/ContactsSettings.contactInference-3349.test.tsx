@@ -93,7 +93,6 @@ function renderSettings(strictState?: jest.Mock) {
         initialPreferences={PREFS as never}
         isMicrosoftConnected={true}
         isGoogleConnected={false}
-        androidCompanionActive={false}
       />
     </PlatformProvider>,
   );

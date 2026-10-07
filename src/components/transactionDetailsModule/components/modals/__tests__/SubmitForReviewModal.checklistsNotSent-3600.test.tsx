@@ -110,7 +110,13 @@ describe("BACKLOG-3600 — useSubmitForReview holds the field from the IPC resul
     submit.mockReset();
     resubmit.mockReset();
     (window as unknown as { api: unknown }).api = {
-      transactions: { submit, resubmit, onSubmitProgress: () => () => undefined },
+      transactions: {
+        submit,
+        resubmit,
+        // BACKLOG-3403: nothing to list, so Submit goes straight to sending.
+        submitPreflight: async () => ({ success: true, notIncluded: [] }),
+        onSubmitProgress: () => () => undefined,
+      },
     };
   });
 

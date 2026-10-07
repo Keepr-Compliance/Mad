@@ -22,6 +22,8 @@ function setup(overrides: Partial<React.ComponentProps<typeof AuditCoveragePromp
     onUpdateNow: jest.fn(),
     onSkip: jest.fn(),
     onCancel: jest.fn(),
+    // The Mac lines are the Mac source's (live: never another source's).
+    chosenSource: "mac",
     ...overrides,
   };
   render(<AuditCoveragePrompt {...props} />);

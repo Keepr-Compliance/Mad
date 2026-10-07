@@ -92,7 +92,7 @@ describe("BACKLOG-2561 · the lookback dropdown tells the truth about stored sta
    * lookback key is exactly what `handleMaxMessagesChange` plus the preference
    * deep-merge leave behind for a user who has only ever changed the cap.
    */
-  it("shows Last 3 months when the lookbackMonths KEY is absent", async () => {
+  it("shows the 1.5-month default when the lookbackMonths KEY is absent", async () => {
     mockGetPreferences.mockResolvedValue({
       success: true,
       data: { messageImport: { filters: { maxMessages: 10000 } } },
@@ -103,7 +103,7 @@ describe("BACKLOG-2561 · the lookback dropdown tells the truth about stored sta
     await waitFor(() => {
       expect(screen.getByDisplayValue("10,000")).toBeInTheDocument();
     });
-    expect(screen.getByDisplayValue("Last 3 months")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Last 1.5 months (default)")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("All time")).not.toBeInTheDocument();
   });
 
@@ -129,17 +129,17 @@ describe("BACKLOG-2561 · the lookback dropdown tells the truth about stored sta
     renderStrict(<MacOSMessagesImportSettings userId="user-2561" />);
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("Last 12 months")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("Last 1 year")).toBeInTheDocument();
     });
   });
 
-  it("shows Last 3 months when no messageImport preference exists at all", async () => {
+  it("shows the 1.5-month default when no messageImport preference exists at all", async () => {
     mockGetPreferences.mockResolvedValue({ success: true, data: {} });
 
     renderStrict(<MacOSMessagesImportSettings userId="user-2561" />);
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("Last 3 months")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("Last 1.5 months (default)")).toBeInTheDocument();
     });
   });
 });

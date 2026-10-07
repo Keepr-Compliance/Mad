@@ -6,7 +6,8 @@
  * - Loading and saving import source preference
  * - Radio button selection and state management
  * - iPhone sync instructions visibility
- * - Android companion option visibility and pairing UI
+ * - SR C6 (founder): no Android Companion option; a stored
+ *   "android-companion" shows as Google Messages and is not rewritten
  */
 
 import React from "react";
@@ -51,10 +52,11 @@ describe("ImportSourceSettings", () => {
       });
 
       expect(screen.getByText("iPhone Sync")).toBeInTheDocument();
-      expect(screen.getByText("Android Companion")).toBeInTheDocument();
+      expect(screen.getByText("Android: Google Messages")).toBeInTheDocument();
+      expect(screen.getAllByRole("radio")).toHaveLength(3);
     });
 
-    it("should render on non-macOS with iPhone Sync and Android Companion only", async () => {
+    it("should render on non-macOS with iPhone Sync and Google Messages only", async () => {
       (usePlatform as jest.Mock).mockReturnValue({ isMacOS: false });
 
       render(<ImportSourceSettings userId={mockUserId} />);
@@ -64,7 +66,16 @@ describe("ImportSourceSettings", () => {
       });
 
       expect(screen.queryByText("macOS Messages")).not.toBeInTheDocument();
-      expect(screen.getByText("Android Companion")).toBeInTheDocument();
+      expect(screen.getByText("Android: Google Messages")).toBeInTheDocument();
+    });
+
+    // SR C6 (founder). Mutations: the Companion radio back, or the
+    // "Recommended" pill back → red.
+    it("offers no Android Companion and no Recommended pill", async () => {
+      const { container } = render(<ImportSourceSettings userId={mockUserId} />);
+      await screen.findByText("macOS Messages");
+      expect(container.querySelector('input[value="android-companion"]')).not.toBeInTheDocument();
+      expect(container.textContent).not.toMatch(/Companion|Recommended/);
     });
 
     it("should show description text", async () => {
@@ -187,7 +198,8 @@ describe("ImportSourceSettings", () => {
       });
     });
 
-    it("should load saved android-companion preference", async () => {
+    // SR C6. Mutation: shownImportSource bypassed → no radio checked → red.
+    it("a saved android-companion preference shows as Google Messages, and is not rewritten", async () => {
       jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
@@ -198,11 +210,9 @@ describe("ImportSourceSettings", () => {
       render(<ImportSourceSettings userId={mockUserId} />);
 
       await waitFor(() => {
-        const androidRadio = screen.getByRole("radio", {
-          name: /android companion/i,
-        });
-        expect(androidRadio).toBeChecked();
+        expect(screen.getByRole("radio", { name: /android: google messages/i })).toBeChecked();
       });
+      expect(window.api.preferences.update).not.toHaveBeenCalled();
     });
 
     it("should handle preference load error gracefully", async () => {
@@ -229,7 +239,7 @@ describe("ImportSourceSettings", () => {
           screen.getByText("macOS Messages")
         ).toBeInTheDocument();
         expect(screen.getByText("iPhone Sync")).toBeInTheDocument();
-        expect(screen.getByText("Android Companion")).toBeInTheDocument();
+        expect(screen.getByText("Android: Google Messages")).toBeInTheDocument();
       });
     });
 
@@ -247,22 +257,6 @@ describe("ImportSourceSettings", () => {
       await user.click(iphoneRadio);
 
       expect(iphoneRadio).toBeChecked();
-    });
-
-    it("should update selection when Android Companion is clicked", async () => {
-      const user = userEvent.setup();
-      render(<ImportSourceSettings userId={mockUserId} />);
-
-      await waitFor(() => {
-        expect(screen.getByText("Android Companion")).toBeInTheDocument();
-      });
-
-      const androidRadio = screen.getByRole("radio", {
-        name: /android companion/i,
-      });
-      await user.click(androidRadio);
-
-      expect(androidRadio).toBeChecked();
     });
 
     it("should update selection when macOS Messages is clicked", async () => {
@@ -309,21 +303,14 @@ describe("ImportSourceSettings", () => {
       });
     });
 
-    it("should save preference when selection changes to android-companion", async () => {
+    // BACKLOG-3659. Mutation: drop the Google Messages radio → red.
+    it("should save preference when selection changes to Android: Google Messages", async () => {
       const user = userEvent.setup();
       render(<ImportSourceSettings userId={mockUserId} />);
-
-      await waitFor(() => {
-        expect(screen.getByText("Android Companion")).toBeInTheDocument();
-      });
-
-      const androidRadio = screen.getByRole("radio", {
-        name: /android companion/i,
-      });
-      await user.click(androidRadio);
-
+      const radio = await screen.findByRole("radio", { name: /android: google messages/i });
+      await user.click(radio);
       expect(window.api.preferences.update).toHaveBeenCalledWith(mockUserId, {
-        messages: { source: "android-companion" },
+        messages: { source: "android-messages-web" },
       });
     });
 
@@ -441,148 +428,6 @@ describe("ImportSourceSettings", () => {
     });
   });
 
-  describe("Android Companion Details (BACKLOG-1447 / BACKLOG-2289)", () => {
-    // BACKLOG-2289: the ad-hoc inline pair button + QR modal were removed from
-    // this component. Pairing now happens ONLY through the guided AndroidSyncSetup
-    // wizard (single entry point), so this component keeps device management only.
-    it("should NOT render an inline pair button when android-companion is selected", async () => {
-      jest.mocked(window.api.preferences.get).mockResolvedValue({
-        success: true,
-        preferences: {
-          messages: { source: "android-companion" },
-        },
-      });
-
-      render(<ImportSourceSettings userId={mockUserId} />);
-
-      await waitFor(() => {
-        expect(screen.getByText(/no devices paired yet/i)).toBeInTheDocument();
-      });
-
-      // No ad-hoc inline QR/pairing entry point remains here — connecting now
-      // goes through the guided wizard CTA (see next test).
-      expect(
-        screen.queryByRole("button", { name: /pair android phone|pair new device/i })
-      ).not.toBeInTheDocument();
-    });
-
-    it("should show a 'Connect your Android phone' CTA wired to the guided wizard when no devices are paired (BACKLOG-2347)", async () => {
-      // BACKLOG-2544 — THE RACE IS NOW RUN ON EVERY EXECUTION, DELIBERATELY.
-      //
-      // This component makes TWO independent async loads. On a fast machine
-      // both settle in one tick and the race never happens; on macOS CI it
-      // sometimes did, and the test failed there and nowhere else — on the same
-      // commit that passed elsewhere.
-      //
-      // Delaying the second load by one tick is what a slower runner does for
-      // free. Injecting it here makes the condition DETERMINISTIC: the test can
-      // no longer pass by being lucky, and a future change that reintroduces
-      // the race fails immediately rather than four merges later.
-      jest.mocked(window.api.pairing.getStatus).mockImplementation(
-        () => new Promise((r) => setTimeout(() => r({ success: true, devices: [] }), 0)) as never,
-      );
-      jest.mocked(window.api.preferences.get).mockResolvedValue({
-        success: true,
-        preferences: {
-          messages: { source: "android-companion" },
-        },
-      });
-
-      const onConnectAndroid = jest.fn();
-      render(
-        <ImportSourceSettings userId={mockUserId} onConnectAndroid={onConnectAndroid} />
-      );
-
-      /**
-       * BACKLOG-2544 — WAIT FOR THE SECOND LOAD BEFORE TOUCHING ANYTHING.
-       *
-       * This component makes TWO independent async loads: the preference, and
-       * then the Android pairing/sync status. The test used to find the button
-       * as soon as the FIRST resolved and click it — so on a slower machine the
-       * second could land in between, re-render, and leave the click on a
-       * detached node. The handler never fired and the assertion failed, on
-       * macOS CI only, on the same commit that passed elsewhere.
-       *
-       * Reproduced deterministically by delaying the second load by one tick,
-       * which is what a slower runner does for free. `Loading devices…` is the
-       * component's own marker for that load being in flight, so waiting for it
-       * to clear waits for the exact thing that was racing.
-       *
-       * `queryBy` + `waitFor`, not `waitForElementToBeRemoved`: the marker may
-       * never render at all when both loads settle in one tick, and that must
-       * not be an error.
-       */
-      // TWO waits, in this order, and the order is the fix.
-      //
-      // Waiting only for `Loading devices…` to be ABSENT passes instantly —
-      // `androidLoading` starts false, so at that moment the second load has
-      // not begun. Established by running it: the button was found and then
-      // detached before the very next line.
-      //
-      // So: wait for the second load to have STARTED, then for it to have
-      // FINISHED. Only then is the tree stable enough to touch.
-      await waitFor(() => expect(window.api.pairing.getStatus).toHaveBeenCalled());
-      await waitFor(() => {
-        expect(screen.queryByText(/loading devices/i)).not.toBeInTheDocument();
-      });
-
-      const user = userEvent.setup();
-      const cta = await screen.findByRole("button", {
-        name: /connect your android phone/i,
-      });
-      expect(cta).toBeInTheDocument();
-
-      await user.click(cta);
-      await waitFor(() => expect(onConnectAndroid).toHaveBeenCalledTimes(1));
-    });
-
-    it("should show paired devices when devices are paired", async () => {
-      jest.mocked(window.api.preferences.get).mockResolvedValue({
-        success: true,
-        preferences: {
-          messages: { source: "android-companion" },
-        },
-      });
-
-      jest.mocked(window.api.pairing.getStatus).mockResolvedValue({
-        success: true,
-        status: {
-          isPaired: true,
-          devices: [{
-            deviceId: "device-1",
-            deviceName: "Samsung Galaxy S24",
-            secret: "test-secret",
-            pairedAt: new Date().toISOString(),
-            lastSeen: new Date().toISOString(),
-          }],
-        },
-      });
-
-      render(<ImportSourceSettings userId={mockUserId} />);
-
-      await waitFor(() => {
-        expect(screen.getByText("Samsung Galaxy S24")).toBeInTheDocument();
-      });
-
-      expect(screen.getByText("Disconnect")).toBeInTheDocument();
-    });
-
-    it("should NOT show Android details when another source is selected", async () => {
-      render(<ImportSourceSettings userId={mockUserId} />);
-
-      // Wait for loading to complete (radio buttons visible)
-      await waitFor(() => {
-        expect(screen.getByText("macOS Messages")).toBeInTheDocument();
-      });
-
-      // The Android device-management block (and its connect CTA) only
-      // renders for the android-companion source.
-      expect(
-        screen.queryByRole("button", { name: /connect your android phone/i })
-      ).not.toBeInTheDocument();
-    });
-  });
-
   describe("Disabled State", () => {
     it("should disable radio buttons while saving", async () => {
       // Make the update take a while
@@ -655,22 +500,14 @@ describe("ImportSourceSettings", () => {
       expect(macosLabel).not.toHaveClass("border-blue-500");
     });
 
-    it("should show green border on Android Companion when selected", async () => {
+    it("should show the indigo border on Google Messages when selected", async () => {
       const user = userEvent.setup();
       render(<ImportSourceSettings userId={mockUserId} />);
 
-      await waitFor(() => {
-        expect(screen.getByText("Android Companion")).toBeInTheDocument();
-      });
+      const gmRadio = await screen.findByRole("radio", { name: /android: google messages/i });
+      await user.click(gmRadio);
 
-      const androidRadio = screen.getByRole("radio", {
-        name: /android companion/i,
-      });
-      await user.click(androidRadio);
-
-      // Android label should have green border
-      const androidLabel = screen.getByText("Android Companion").closest("label");
-      expect(androidLabel).toHaveClass("border-green-500");
+      expect(screen.getByText("Android: Google Messages").closest("label")).toHaveClass("border-indigo-500");
     });
   });
 });

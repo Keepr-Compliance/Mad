@@ -30,6 +30,7 @@ import type {
   RecentTicket,
   SupportSavedView,
 } from './support-types';
+import { getStaffDisplayName, replyBodyForEmail } from './support-reply';
 
 // ---------------------------------------------------------------------------
 // Email notification helpers (TASK-2199)
@@ -89,8 +90,9 @@ function notifyCustomerOfReply(
   agentName: string,
   brokerPortalUrl: string
 ): void {
-  const plainText = stripHtmlAndMarkdown(replyBody);
-  const replyPreview = plainText.substring(0, 200) + (plainText.length > 200 ? '...' : '');
+  // BACKLOG-3702: send the whole reply, line breaks intact. The field keeps its
+  // historical name `replyPreview` (API contract with the broker portal).
+  const replyPreview = replyBodyForEmail(replyBody);
   const ticketNumber = `TKT-${String(ticket.ticket_number).padStart(4, '0')}`;
 
   sendTicketNotification({
@@ -385,7 +387,7 @@ export async function addMessage(
     supabase.auth.getUser()
       .then(({ data: userData }) => {
         if (userData?.user) {
-          const agentName = userData.user.user_metadata?.full_name || 'Support Team';
+          const agentName = getStaffDisplayName(userData.user);
           notifyCustomerOfReply(ticketId, body, ticketMeta, agentName, brokerPortalUrl);
         }
       })

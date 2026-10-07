@@ -101,6 +101,7 @@ const createModalState = (
   showTermsModal: false,
   showIPhoneSync: false,
   showAndroidSync: false,
+  androidSyncStart: "default",
   ...overrides,
 });
 

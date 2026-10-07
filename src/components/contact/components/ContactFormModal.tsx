@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { ResponsiveModal } from "../../common/ResponsiveModal";
+import { isUnsavedContact } from "../../../utils/unsavedContactId";
 import { ExtendedContact, ContactFormData, ContactEmailEntry, ContactPhoneEntry } from "../types";
 import { ROLE_DISPLAY_NAMES, SPECIFIC_ROLES } from "../../../constants/contactRoles";
 import { contactService } from "../../../services/contactService";
@@ -122,7 +123,8 @@ function ContactFormModal({
   }, [contact]);
 
   // Check if this is an external contact being imported
-  const isExternalContact = contact?.id?.startsWith("msg_") || !!contact?.is_message_derived;
+  // SR: the one rule (src/utils/unsavedContactId) — an email_ record counts too.
+  const isExternalContact = isUnsavedContact(contact);
 
   // Multi-entry UI is used for all modes (edit, add, import)
   const useMultiEntry = !loadingEntries;

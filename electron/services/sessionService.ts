@@ -6,6 +6,7 @@ import { hostSecretStore } from "../capabilities/secretStoreProvider";
 import * as Sentry from "@sentry/electron/main";
 import type { User, OAuthProvider, Subscription } from "../types/models";
 import logService from "./logService";
+import { emitSessionChanged } from "./authEvents";
 
 // ============================================
 // TYPES & INTERFACES
@@ -306,6 +307,8 @@ export class SessionService {
       }
       await fs.writeFile(this.getSessionFilePath(), fileContent, "utf8");
       await logService.info("Session saved successfully", "SessionService");
+      // BACKLOG-3658: sign-in / refresh — listeners drop cached user state.
+      emitSessionChanged({ kind: "saved", userId: data.user?.id ?? null });
       return true;
     } catch (error) {
       await logService.error("Error saving session", "SessionService", {
@@ -399,10 +402,12 @@ export class SessionService {
     try {
       await fs.unlink(this.getSessionFilePath());
       await logService.info("Session cleared successfully", "SessionService");
+      emitSessionChanged({ kind: "cleared", userId: null });
       return true;
     } catch (error: unknown) {
       if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
         // File doesn't exist, that's fine
+        emitSessionChanged({ kind: "cleared", userId: null });
         return true;
       }
       await logService.error("Error clearing session", "SessionService", {

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { ResponsiveModal } from "./common/ResponsiveModal";
 import { LLMSettings } from "./settings/LLMSettings";
 import { MacOSMessagesImportSettings } from "./settings/MacOSMessagesImportSettings";
-import { AndroidMessagesSettings } from "./settings/AndroidMessagesSettings";
+import { GoogleMessagesSettings } from "./settings/GoogleMessagesSettings";
 import { ImportSourceSettings } from "./settings/ImportSourceSettings";
 import { IphoneSyncSettings } from "./settings/IphoneSyncSettings";
 import { FeatureGate } from "./common/FeatureGate";
@@ -24,6 +24,8 @@ import { OfflineNotice } from './common/OfflineNotice';
 import { settingsService } from '../services';
 import logger from '../utils/logger';
 import type { ImportSource } from '../services/settingsService';
+import { shownImportSource } from './settings/importSourceLabels';
+import { effectiveImportSource } from '../services/importSourcePolicy';
 import type { PreferencesResult } from './settings/types';
 
 const SETTINGS_TABS = [
@@ -52,12 +54,12 @@ interface SettingsComponentProps {
   onLogout?: () => Promise<void>;
   onEmailConnected?: (email: string, provider: "google" | "microsoft") => void;
   onEmailDisconnected?: (provider: "google" | "microsoft") => void;
-  /** BACKLOG-2347: open the guided Android sync wizard from Settings. */
-  onConnectAndroid?: () => void;
+  /** Settings › Google Messages' Link / Relink: the Sync Android modal at its link step. */
+  onLinkGoogleMessages?: () => void;
 }
 
 /** Settings — tab container that delegates to focused sub-components. */
-function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected, onConnectAndroid }: SettingsComponentProps) {
+function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected, onLinkGoogleMessages }: SettingsComponentProps) {
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
   // BACKLOG-3423: lets a source change re-gate iPhone USB detection live.
@@ -118,12 +120,14 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             | { source?: ImportSource }
             | undefined;
           if (messagesPrefs?.source) {
-            setActiveImportSource(messagesPrefs.source);
+            // SR C6: a stored "android-companion" shows as Google Messages.
+            // BACKLOG-3749: a value this build does not know → the platform default.
+            setActiveImportSource(shownImportSource(effectiveImportSource(messagesPrefs.source, isMacOS)));
           } else {
             // No saved source — check phoneType for default
             const phoneResult = await settingsService.getPhoneType(userId);
             if (phoneResult.success && phoneResult.data === 'android') {
-              setActiveImportSource('android-companion');
+              setActiveImportSource('android-messages-web');
             } else {
               setActiveImportSource(isMacOS ? 'macos-native' : 'iphone-sync');
             }
@@ -216,19 +220,19 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             <div id="settings-messages" className="mb-8">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Messages</h3>
               <div className="space-y-4">
-                <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} onConnectAndroid={onConnectAndroid} />
-                {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below */}
-                {activeImportSource === 'android-companion' ? (
-                  /* BACKLOG-2320: the guided install→pair→sync wizard moved to a
-                     Dashboard button (mirroring iOS). Settings keeps only the
-                     device/status management below. */
-                  <AndroidMessagesSettings userId={userId} />
+                <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} />
+                {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below.
+                    SR C6 (founder): the Android Companion panel is no longer mounted. */}
+                {activeImportSource === 'android-messages-web' ? (
+                  /* BACKLOG-3659 P3d: Android with Google Messages (Keepr's
+                     extension): its status and its own reset. The source picker
+                     above shows it selected — so a Mac that skips its Messages
+                     (BACKLOG-1467) says why (BACKLOG-3749). */
+                  <GoogleMessagesSettings userId={userId} onOpenSyncAndroid={onLinkGoogleMessages} />
                 ) : (
-                  /* BACKLOG-2335: macOS panel renders for every non-Android
-                     source, but only macos-native can actually import — the
-                     orchestrator skips macOS Messages for any other source. So
-                     gray it out (disabled controls + note) unless macOS is the
-                     active source, rather than leaving live controls that no-op. */
+                  /* BACKLOG-2335: the macOS panel is live only for macos-native
+                     (an unknown stored value reads as that on a Mac, 3749);
+                     iPhone Sync greys it out and says why. */
                   <MacOSMessagesImportSettings
                     userId={userId}
                     enabled={activeImportSource === 'macos-native'}
@@ -275,10 +279,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
               initialPreferences={preferences}
               isMicrosoftConnected={isMicrosoftConnected}
               isGoogleConnected={isGoogleConnected}
-              /* BACKLOG-2986: the Android contact re-import note only offers to
-                 jump to the Android Companion panel when that panel is on the
-                 page, which is exactly when this source is active (see :210). */
-              androidCompanionActive={activeImportSource === 'android-companion'}
+              messagesImportSource={activeImportSource}
             />
 
             {/* AI Settings - Only visible with AI add-on (BACKLOG-462) */}

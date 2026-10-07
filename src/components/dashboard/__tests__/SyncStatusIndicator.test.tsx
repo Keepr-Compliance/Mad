@@ -1054,6 +1054,32 @@ describe("SyncStatusIndicator", () => {
       expect(onViewSyncDetails).toHaveBeenCalledWith('iphone');
     });
 
+    // BACKLOG-3658: a Google Messages Sync on the ONE indicator, with its own
+    // label and the same Details affordance as iPhone. Mutations: no label
+    // case, no Details for it, or the saved counts not on the completion
+    // card → red.
+    it("Google Messages: its own pill and label, Details reopens it", () => {
+      const onViewSyncDetails = jest.fn();
+      const queue = [createSyncItem('google-messages', 'running', 19, undefined, true, 'chat 4 of 21')];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(queue, true, 19));
+      render(<SyncStatusIndicator onViewSyncDetails={onViewSyncDetails} />);
+      expect(screen.getByTestId("sync-status-indicator")).toHaveTextContent("Android: Google Messages");
+      fireEvent.click(screen.getByTestId("sync-view-details"));
+      expect(onViewSyncDetails).toHaveBeenCalledWith('google-messages');
+    });
+
+    it("Google Messages: the completion card shows its saved counts", () => {
+      mockIsAllowed.mockImplementation((key: string) => key !== "ai_detection");
+      const running = [createSyncItem('google-messages', 'running', 50, undefined, true, 'chat 10 of 20')];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(running, true, 50));
+      const { rerender } = render(<SyncStatusIndicator />);
+      const done = [{ ...createSyncItem('google-messages', 'complete', 100, undefined, true), summary: "Google Messages: saved 7 chats · 212 messages (200 new)" }];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(done, false, 100));
+      rerender(<SyncStatusIndicator />);
+      expect(screen.getByText("Sync Complete")).toBeInTheDocument();
+      expect(screen.getByText("Google Messages: saved 7 chats · 212 messages (200 new)")).toBeInTheDocument();
+    });
+
     it("should show iPhone pill alongside email/contacts pills during simultaneous sync", () => {
       const queue = [
         createSyncItem('contacts', 'running', 50),

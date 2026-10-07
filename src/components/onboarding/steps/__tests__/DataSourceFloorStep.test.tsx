@@ -149,7 +149,9 @@ describe("DataSourceFloorStep content (BACKLOG-1821)", () => {
 
   it("tailors the texts hint for Android users", () => {
     renderStep(jest.fn(), { phoneType: "android" });
-    expect(screen.getByText(/keepr companion app/i)).toBeInTheDocument();
+    // SR C6: Google Messages, never the Companion.
+    expect(screen.getByText(/Sync Android on the dashboard to copy your Google Messages texts/)).toBeInTheDocument();
+    expect(screen.queryByText(/companion/i)).toBeNull();
   });
 
   it("registers as a valid OnboardingStep (meta + Content)", () => {

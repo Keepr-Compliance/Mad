@@ -42,6 +42,7 @@ import {
   prepareInsertMessage,
   prepareRetagReaction,
   prepareUpdateAttachmentMessageId,
+  prepareRecordAttachmentSkips,
   selectAttachmentRecords,
   selectAttachmentsByExternalId,
   selectAttachmentStoragePaths,
@@ -49,6 +50,12 @@ import {
   selectExistingMessageIds,
   selectStoredAttachmentKeys,
 } from "../db/messageImportForceSql";
+import {
+  accessErrorReason,
+  unsupportedTypeReason,
+  type TextAttachmentSkip,
+  type TextAttachmentSkipReason,
+} from "../textAttachmentSkips";
 import {
   ALL_ATTACHMENT_STORAGE_PATHS_SQL,
   ALL_MESSAGE_EXTERNAL_IDS_SQL,
@@ -59,12 +66,10 @@ import {
   ATTACHMENTS_BY_MESSAGE_ID_SQL,
   MESSAGE_EXISTS_SQL,
   MESSAGE_EXTERNAL_ID_BY_ID_SQL,
-  selectAttachmentsByExternalMessageIds,
-  selectAttachmentsByMessageIds,
-  selectMessageExternalIds,
   UPDATE_ATTACHMENT_MESSAGE_ID_BY_EXTERNAL_SQL,
   UPDATE_ATTACHMENT_MESSAGE_ID_SQL,
 } from "../db/messageImportSql";
+import { selectTextAttachmentsForMessages } from "../db/textAttachmentLookupSql";
 import {
   MACOS_ATTACHMENT_FILENAME_GUIDS_SQL,
   MACOS_CHAT_ACCOUNT_LOGINS_SQL,
@@ -2009,6 +2014,26 @@ class MacOSMessagesImportService {
     // loaded ABOVE, before the pre-flight — the guard needs it to size only the
     // attachments this loop could actually link and write.
 
+    // BACKLOG-3731: why each attachment that was not stored was skipped, keyed
+    // by the chat.db message_guid (NOT the local message id). Written to
+    // `messages.metadata.attachmentSkips` after the loop, scoped to THIS
+    // user's own row via `(user_id, external_id)` — on a DB with more than one
+    // signed-in user, `existingMessageIdMap`/`messageIdMap` can resolve the
+    // guid to either user's copy, and the skip must only ever land on the
+    // IMPORTING user's (R1, BACKLOG-3731 SR review df47f037). See
+    // `textAttachmentSkips.ts`.
+    const skipsByMessage = new Map<string, TextAttachmentSkip[]>();
+    const recordSkip = (
+      guid: string,
+      name: string | null | undefined,
+      reason: TextAttachmentSkipReason
+    ): void => {
+      const list = skipsByMessage.get(guid) ?? [];
+      list.push({ name: name || null, reason });
+      skipsByMessage.set(guid, list);
+    };
+    let completed = true;
+
     // Process attachments with progress reporting and event loop yielding
     const totalAttachments = attachments.length;
     // TASK-2097: Report at ~5% increments (min 1) for smooth progress with any attachment count
@@ -2031,13 +2056,32 @@ class MacOSMessagesImportService {
           `Attachment import cancelled at ${processed}/${totalAttachments}`,
           MacOSMessagesImportService.SERVICE_NAME
         );
+        completed = false;
         break;
       }
 
       try {
-        // Skip unsupported attachment types (TASK-1122: expanded to include videos, audio, documents)
         const filename = attachment.transfer_name || attachment.filename;
+
+        // Get the internal message ID for this attachment's message
+        // First check the current import batch, then existing messages.
+        // BACKLOG-3731: resolved BEFORE the type and size checks, so a skip on
+        // either can be recorded against the message it belongs to.
+        let internalMessageId = messageIdMap.get(attachment.message_guid);
+        if (!internalMessageId) {
+          internalMessageId = existingMessageIdMap.get(attachment.message_guid);
+        }
+        if (!internalMessageId) {
+          // Message not found - skip this attachment
+          skipped++;
+          processed++;
+          continue;
+        }
+
+        // Skip unsupported attachment types (TASK-1122: expanded to include videos, audio, documents)
         if (!isSupportedMediaType(filename)) {
+          // BACKLOG-3731: a link preview is told apart from other types here.
+          recordSkip(attachment.message_guid, filename, unsupportedTypeReason(filename));
           skipped++;
           processed++;
           continue;
@@ -2049,19 +2093,7 @@ class MacOSMessagesImportService {
             `Skipping oversized attachment: ${attachment.total_bytes} bytes`,
             MacOSMessagesImportService.SERVICE_NAME
           );
-          skipped++;
-          processed++;
-          continue;
-        }
-
-        // Get the internal message ID for this attachment's message
-        // First check the current import batch, then existing messages
-        let internalMessageId = messageIdMap.get(attachment.message_guid);
-        if (!internalMessageId) {
-          internalMessageId = existingMessageIdMap.get(attachment.message_guid);
-        }
-        if (!internalMessageId) {
-          // Message not found - skip this attachment
+          recordSkip(attachment.message_guid, filename, "too_large");
           skipped++;
           processed++;
           continue;
@@ -2086,11 +2118,13 @@ class MacOSMessagesImportService {
         // Check if source file exists (async)
         try {
           await fs.promises.access(sourcePath, fs.constants.R_OK);
-        } catch {
+        } catch (accessError) {
           logService.debug(
             `Attachment file not found: ${sourcePath}`,
             MacOSMessagesImportService.SERVICE_NAME
           );
+          // BACKLOG-3731: ENOENT = Messages never downloaded it; else unreadable.
+          recordSkip(attachment.message_guid, filename, accessErrorReason(accessError));
           skipped++;
           processed++;
           continue;
@@ -2259,6 +2293,27 @@ class MacOSMessagesImportService {
 
     // Stop progress bar
     attachProgressBar.stop();
+
+    // BACKLOG-3731: record the skip reasons. Only on a run that went through
+    // the whole list — a cancelled run saw some attachments of a message and
+    // not others, and the value is replaced whole.
+    if (completed && skipsByMessage.size > 0) {
+      try {
+        const recordStmt = prepareRecordAttachmentSkips(db, target);
+        const writeAll = db.transaction(() => {
+          for (const [guid, skips] of skipsByMessage) {
+            recordStmt.run({ skips: JSON.stringify(skips), userId, guid });
+          }
+        });
+        writeAll();
+      } catch (error) {
+        // A note for the pre-flight's wording, never a reason to fail an import.
+        logService.warn(
+          `Could not record attachment skip reasons: ${error instanceof Error ? error.message : String(error)}`,
+          MacOSMessagesImportService.SERVICE_NAME
+        );
+      }
+    }
 
     logService.info(
       `Attachments: ${stored} imported, ${updated} updated, ${skipped} skipped`,
@@ -2570,83 +2625,45 @@ class MacOSMessagesImportService {
       MacOSMessagesImportService.SERVICE_NAME
     );
 
-    // First, try direct message_id lookup
-    const directRows = selectAttachmentsByMessageIds<MessageAttachment>(db, messageIds);
+    // BACKLOG-3731: the read is the shared lookup (direct message_id rows, then
+    // the TASK-1110 Apple-id fallback for messages with no direct row). The
+    // submit and the Attachments tab use the same function. The repair write
+    // below stays HERE, in the view only; the shared lookup never writes.
+    const resolved = selectTextAttachmentsForMessages<
+      MessageAttachment & { external_message_id: string | null }
+    >(db, messageIds);
 
-    // Group direct results by message_id
-    for (const row of directRows) {
-      const existing = result.get(row.message_id) || [];
-      existing.push(row);
-      result.set(row.message_id, existing);
+    const attachmentsToUpdate: { attachmentId: string; newMessageId: string }[] = [];
+    for (const { row, resolved_message_id } of resolved) {
+      const viewRow: MessageAttachment = {
+        id: row.id,
+        message_id: resolved_message_id,
+        filename: row.filename,
+        mime_type: row.mime_type,
+        file_size_bytes: row.file_size_bytes,
+        storage_path: row.storage_path,
+      };
+      const existing = result.get(resolved_message_id) || [];
+      existing.push(viewRow);
+      result.set(resolved_message_id, existing);
+      if (row.message_id !== resolved_message_id) {
+        attachmentsToUpdate.push({ attachmentId: row.id, newMessageId: resolved_message_id });
+      }
     }
 
-    // TASK-1110: For messages without direct results, try external_message_id fallback
-    const missingMessageIds = messageIds.filter(id => !result.has(id));
-
-    if (missingMessageIds.length > 0) {
-      // Look up external_ids for messages that didn't have direct matches
-      const messageExternalIds = selectMessageExternalIds<{ id: string; external_id: string }>(
-        db,
-        missingMessageIds
+    // Batch update stale message_ids for future queries
+    if (attachmentsToUpdate.length > 0) {
+      logService.info(
+        `[Attachments] Found ${attachmentsToUpdate.length} attachments via external_message_id fallback, updating message_ids`,
+        MacOSMessagesImportService.SERVICE_NAME
       );
-
-      if (messageExternalIds.length > 0) {
-        // Query attachments by external_message_id
-        const externalIds = messageExternalIds.map(m => m.external_id);
-        const fallbackRows = selectAttachmentsByExternalMessageIds<
-          MessageAttachment & { external_message_id: string }
-        >(db, externalIds);
-
-        // Build a map of external_id -> internal message id for updating
-        const externalToInternalMap = new Map<string, string>();
-        for (const msg of messageExternalIds) {
-          externalToInternalMap.set(msg.external_id, msg.id);
+      const updateStmt = db.prepare(UPDATE_ATTACHMENT_MESSAGE_ID_SQL);
+      const updateMany = db.transaction((updates: typeof attachmentsToUpdate) => {
+        for (const update of updates) {
+          updateStmt.run(update.newMessageId, update.attachmentId);
         }
-
-        // Group fallback results and update stale message_ids
-        const attachmentsToUpdate: { attachmentId: string; newMessageId: string; externalMessageId: string }[] = [];
-
-        for (const row of fallbackRows) {
-          const internalMessageId = externalToInternalMap.get(row.external_message_id);
-          if (internalMessageId) {
-            // Update the row's message_id to the correct internal ID
-            const correctedRow: MessageAttachment = {
-              id: row.id,
-              message_id: internalMessageId,
-              filename: row.filename,
-              mime_type: row.mime_type,
-              file_size_bytes: row.file_size_bytes,
-              storage_path: row.storage_path,
-            };
-
-            const existing = result.get(internalMessageId) || [];
-            existing.push(correctedRow);
-            result.set(internalMessageId, existing);
-
-            // Track for batch update
-            attachmentsToUpdate.push({
-              attachmentId: row.id,
-              newMessageId: internalMessageId,
-              externalMessageId: row.external_message_id,
-            });
-          }
-        }
-
-        // Batch update stale message_ids for future queries
-        if (attachmentsToUpdate.length > 0) {
-          logService.info(
-            `[Attachments] Found ${attachmentsToUpdate.length} attachments via external_message_id fallback, updating message_ids`,
-            MacOSMessagesImportService.SERVICE_NAME
-          );
-          const updateStmt = db.prepare(UPDATE_ATTACHMENT_MESSAGE_ID_SQL);
-          const updateMany = db.transaction((updates: typeof attachmentsToUpdate) => {
-            for (const update of updates) {
-              updateStmt.run(update.newMessageId, update.attachmentId);
-            }
-          });
-          updateMany(attachmentsToUpdate);
-        }
-      }
+      });
+      updateMany(attachmentsToUpdate);
     }
 
     logService.debug(

@@ -1,13 +1,17 @@
 /**
- * liveMoneyFormat — the pure half of LiveMoneyInput (BACKLOG-3614).
+ * liveMoneyFormat — the pure half of LiveMoneyInput (BACKLOG-3614, BACKLOG-3677).
  * Grouping is swept across every digit count from 1 to 12, not sampled.
+ *
+ * BACKLOG-3677 reverses SR review 3008b20f (leading zeros kept while typing):
+ * a whole part with no non-zero digit is blank, never 0 (founder rule,
+ * pm_comments 882e5ecc on BACKLOG-3500).
  */
 
 import {
   deleteAcrossSeparator,
   formatMoneyEdit,
   formatMoneyLive,
-  trimLeadingZeros,
+  settleMoneyOnBlur,
 } from "../liveMoneyFormat";
 import { parseMoney } from "../../components/transactionDates/commission";
 
@@ -26,13 +30,19 @@ describe("formatMoneyLive — grouping", () => {
 
   it.each([
     ["", ""],
-    // SR review 3008b20f: leading zeros are kept while typing (deleting the 5
-    // in 500,000 must leave 00,000); trimLeadingZeros removes them on blur.
-    ["0", "0"],
-    ["000", "000"],
-    ["007", "007"],
-    ["00000", "00,000"],
-    [".5", ".5"],
+    // BACKLOG-3677: leading zeros are dropped; nothing but zeros is blank.
+    ["0", ""],
+    ["000", ""],
+    ["007", "7"],
+    ["00000", ""],
+    ["000123", "123"],
+    [".5", "0.5"],
+    ["0.5", "0.5"],
+    ["00.50", "0.50"],
+    [".", "0."],
+    ["1234.50", "1,234.50"],
+    ["1234.", "1,234."],
+    ["12345678901234567890", "12,345,678,901,234,567,890"],
     ["1234.5", "1,234.5"],
     ["1234.567", "1,234.56"],
     ["1.2.3", "1.23"],
@@ -52,8 +62,11 @@ describe("formatMoneyLive — caret", () => {
     ["1000", 2, "1,000", 3],
     ["15,00,000", 2, "1,500,000", 3],
     ["1,23567", 4, "123,567", 3],
-    ["0012", 2, "0,012", 3],
-    ["00,000", 0, "00,000", 0],
+    ["0012", 2, "12", 0],
+    ["0012", 3, "12", 1],
+    ["00,000", 0, "", 0],
+    [".", 1, "0.", 2],
+    [".5", 0, "0.5", 0],
     ["600,000", 1, "600,000", 1],
   ])("%j @%i -> %j @%i", (raw, rawCaret, text, caret) => {
     expect(formatMoneyLive(raw, rawCaret)).toEqual({ text, caret });
@@ -85,9 +98,9 @@ describe("deleteAcrossSeparator", () => {
     expect(deleteAcrossSeparator("1,", "1", 1, "Delete")).toBeNull();
   });
 
-  it("Backspace over the comma in 1,|000,000 keeps the zeros (SR 3008b20f)", () => {
+  it("Backspace over the comma in 1,|000,000 deletes the 1 and leaves the box blank", () => {
     expect(deleteAcrossSeparator("1,000,000", "1000,000", 1, "Backspace")).toEqual({
-      text: "000,000",
+      text: "",
       caret: 0,
     });
   });
@@ -109,25 +122,26 @@ describe("formatMoneyEdit — never drops a character that was already there", (
     ["1,234", "1,2.34", 4, "12.34", 3], // "." leaving two decimals
     ["1,234.56", "1,234.567", 9, "1,234.56", 8], // extra typed cent: only the new digit drops
     ["", "$1,234.567", 10, "1,234.56", 8], // paste into an empty field
-    ["500,000", "00,000", 0, "00,000", 0],
-    ["00,000", "600,000", 1, "600,000", 1],
+    ["500,000", "00,000", 0, "", 0], // BACKLOG-3677: blank, never 0
+    ["1,000,000", ",000,000", 0, "", 0], // the founder's leading-1 case
+    ["1,050", ",050", 0, "50", 0],
   ])("%j -> %j @%i gives %j @%i", (previous, raw, rawCaret, text, caret) => {
     expect(formatMoneyEdit(previous, raw, rawCaret)).toEqual({ text, caret });
   });
 });
 
-describe("trimLeadingZeros (on blur)", () => {
+describe("settleMoneyOnBlur", () => {
   it.each([
-    ["00,000", "0"],
-    ["000,000", "0"],
-    ["007", "7"],
-    ["0,012", "12"],
-    ["00.5", "0.5"],
-    ["0", "0"],
-    [".5", ".5"],
+    ["0.", ""],
+    ["0.0", ""],
+    ["0.00", ""],
     ["", ""],
+    ["12.", "12"],
+    ["1,234.", "1,234"],
+    ["0.5", "0.5"],
     ["1,000", "1,000"],
+    ["1,234.50", "1,234.50"],
   ])("%j -> %j", (text, expected) => {
-    expect(trimLeadingZeros(text)).toBe(expected);
+    expect(settleMoneyOnBlur(text)).toBe(expected);
   });
 });
