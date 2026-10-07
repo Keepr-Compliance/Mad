@@ -28,22 +28,14 @@ import { EventEmitter } from "events";
 
 const UDID = "00008030-0011223344556677";
 const GB = 1024 * 1024 * 1024;
-const MB = 1024 * 1024;
 
 /**
  * The founder's measured prior backup, 57.9 GB. Deliberately NOT a round number and
- * deliberately far from the device-storage guess below, so an assertion on `bytes`
- * cannot pass by coincidence.
+ * deliberately far from the device-storage guess (11,547 MB, in the
+ * getDeviceStorageInfo mock below), so an assertion on `bytes` cannot pass by
+ * coincidence.
  */
 const MEASURED_PRIOR_BACKUP_BYTES = Math.round(57.9 * GB);
-
-/**
- * The number Keepr actually printed on 2026-08-28: "Estimated backup size: 11547 MB
- * (25% of used space)". Wired in as the device-storage answer so the WRONG number is
- * reachable — a fixture where both paths give the same figure could not tell them
- * apart. This is the 2918 half of the item.
- */
-const DEVICE_STORAGE_GUESS_BYTES = 11_547 * MB;
 
 const mockStartBackup = jest.fn();
 const mockCheckBackupStatus = jest.fn();
@@ -170,7 +162,11 @@ jest.mock("../deviceDetectionService", () => {
       totalCapacity: 256 * 1024 * 1024 * 1024,
       usedSpace: 128 * 1024 * 1024 * 1024,
       availableSpace: 128 * 1024 * 1024 * 1024,
-      // 11,547 MB — the exact wrong number from the 2026-08-28 run.
+      // 11,547 MB — the number Keepr actually printed on 2026-08-28 ("Estimated
+      // backup size: 11547 MB (25% of used space)"). Wired in as the device-storage
+      // answer so the WRONG number is reachable — a fixture where both paths give
+      // the same figure could not tell them apart. This is the 2918 half of the item.
+      // Inline because a hoisted jest.mock factory cannot read module constants.
       estimatedBackupSize: 11_547 * 1024 * 1024,
     }),
   });
@@ -198,7 +194,7 @@ jest.mock("../iosContactsParser", () => ({
   })),
 }));
 
-import { DeviceSyncOrchestrator, SyncProgress } from "../deviceSyncOrchestrator";
+import { DeviceSyncOrchestrator } from "../deviceSyncOrchestrator";
 import type { PriorBackupState } from "../../types/ipc/window-api-platform";
 
 // ---------------------------------------------------------------------------
@@ -211,7 +207,7 @@ const INTERRUPTED_MANIFEST_INTACT = {
   isComplete: true,
   isInterrupted: true,
   snapshotState: "unfinished" as const,
-  size: { measured: true as const, bytes: Math.round(57.9 * GB) },
+  size: { measured: true as const, bytes: MEASURED_PRIOR_BACKUP_BYTES },
   lastModified: new Date("2026-08-28T12:24:42Z"),
 };
 

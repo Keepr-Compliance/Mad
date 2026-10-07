@@ -754,8 +754,6 @@ describe("macOSMessagesImportService Core Functions", () => {
 
     it("retains caption-less media (empty text + attachment) so the attachment links", () => {
       expect(shouldRetainMessageContent("", 1)).toBe(true);
-      // Stored has_attachments flag derivation:
-      expect(1 > 0 ? 1 : 0).toBe(1);
     });
 
     it("drops empty, attachment-less messages (reactions/system with no content)", () => {

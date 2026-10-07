@@ -109,7 +109,7 @@ jest.mock("../../contactResolutionService", () => ({
     handle: string | null | undefined
   ) => {
     if (!resolution || !handle) return [];
-    const normalized = (handle || "").replace(/\D/g, "").slice(-10);
+    const normalized = handle.replace(/\D/g, "").slice(-10);
     return (
       resolution.matches[normalized] ||
       resolution.matches[handle] ||

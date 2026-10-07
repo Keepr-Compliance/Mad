@@ -364,7 +364,7 @@ describe('BACKLOG-3596 — the added-ticks file (ticks on a checklist added at r
     for (const fn of ['set_submission_checklist_reviewer_check(uuid, boolean)', 'carry_submission_checklist_reviews(uuid)']) {
       expect(s()).toContain(`REVOKE EXECUTE ON FUNCTION public.${fn} FROM PUBLIC, anon;`);
       expect(s()).toContain(`GRANT EXECUTE ON FUNCTION public.${fn} TO authenticated;`);
-      expect(s()).not.toMatch(new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${fn.replace(/[()]/g, '\\$&')} TO [^;]*anon`));
+      expect(s()).not.toMatch(new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${fn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} TO [^;]*anon`));
     }
     expect(tk()).toContain("RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''");
     expect(cr()).toContain("RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''");

@@ -310,7 +310,7 @@ describe("BACKLOG-2639 — the Add Contacts commit control participates in layou
       "items-center",
       "justify-between",
     ]) {
-      expect(c).toMatch(new RegExp(`(?:^|\\s)${kept.replace(/[-]/g, "-")}(?:\\s|$)`));
+      expect(c).toMatch(new RegExp(`(?:^|\\s)${kept}(?:\\s|$)`));
     }
     // ...and it is a flex row at EVERY width now, not only at sm+.
     expect(c).toMatch(/(?:^|\s)flex(?:\s|$)/);
