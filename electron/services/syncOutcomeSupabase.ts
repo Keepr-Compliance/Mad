@@ -188,6 +188,12 @@ export function buildSyncOutcomeRow(
     host_disk_free_bytes: bigintNum(f, "hostDiskFreeBytes"),
     host_disk_total_bytes: bigintNum(f, "hostDiskTotalBytes"),
 
+    // BACKLOG-3598: space this run reclaimed from unfinished backups (the start sweep
+    // plus its own unfinished backup on failure), and whether a removal failed. The
+    // cleanup value is `removed` or `failed:<errno>` — never a path.
+    leftover_backup_bytes_cleared: bigintNum(f, "leftoverBackupBytesCleared"),
+    leftover_cleanup: str(f, "leftoverCleanup"),
+
     backup_bytes: bigintNum(f, "backupBytes"),
     backup_bytes_unmeasured: bool(f, "backupBytesUnmeasured"),
     messages_extracted: num(f, "messagesExtracted"),
@@ -285,6 +291,66 @@ async function authedUserId(client: ReturnType<typeof supabaseService.getClient>
  */
 type SyncRunVerb = "start" | "heartbeat" | "heartbeat-running" | "metrics" | "terminal";
 
+/**
+ * BACKLOG-3598: the two columns its migration adds. A desktop build can reach a
+ * database where that migration has not been applied yet; PostgREST then refuses the
+ * WHOLE write (PGRST204, "Could not find the '<col>' column of '<table>' in the schema
+ * cache" — postgrest-js parses the response body into `error`, so `code` is PostgREST's
+ * own; template cited from PostgREST, not measured against this table). Without the
+ * tolerance below, every heartbeat and the terminal row of a run that removed a leftover
+ * are dropped, and the row stays `running`.
+ *
+ * Narrow on purpose: the retry fires ONLY for an unknown-column error that NAMES one of
+ * these two columns. Any other error — another missing column, RLS, network — is thrown
+ * unchanged. Contrast `submissionService.ts` (BACKLOG-3519), which deliberately does NOT
+ * strip: there the stripped keys are what the agent typed; here they are telemetry.
+ */
+const LEFTOVER_COLUMNS = ["leftover_backup_bytes_cleared", "leftover_cleanup"] as const;
+const UNKNOWN_COLUMN_CODES = new Set(["PGRST204", "42703"]);
+
+/** Set once the database has told us the columns are absent; lives for the process. */
+let leftoverColumnsAbsent = false;
+
+/** Test-only: forget what the database told us. */
+export function __resetLeftoverColumnsForTests(): void {
+  leftoverColumnsAbsent = false;
+}
+
+type PostgrestErrorLike = { code?: string; message?: string } | null | undefined;
+
+function isLeftoverColumnMissing(error: PostgrestErrorLike): boolean {
+  if (!error || !error.code || !UNKNOWN_COLUMN_CODES.has(error.code)) return false;
+  const message = error.message ?? "";
+  return LEFTOVER_COLUMNS.some((col) => message.includes(col));
+}
+
+function withoutLeftoverColumns(payload: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...payload };
+  for (const col of LEFTOVER_COLUMNS) delete out[col];
+  return out;
+}
+
+/**
+ * Send `payload`; if the database rejects it ONLY because the leftover columns are
+ * absent, remember that and send it once more without them. Throws any other error.
+ */
+async function sendTolerant(
+  payload: Record<string, unknown>,
+  send: (p: Record<string, unknown>) => PromiseLike<{ error: PostgrestErrorLike }>,
+): Promise<void> {
+  const first = await send(leftoverColumnsAbsent ? withoutLeftoverColumns(payload) : payload);
+  if (!first.error) return;
+  if (leftoverColumnsAbsent || !isLeftoverColumnMissing(first.error)) {
+    throw new Error(first.error.message);
+  }
+  leftoverColumnsAbsent = true;
+  log.warn(
+    `${LOG_TAG} sync_outcomes has no leftover-cleanup columns yet; writing rows without them for the rest of this session`,
+  );
+  const retry = await send(withoutLeftoverColumns(payload));
+  if (retry.error) throw new Error(retry.error.message);
+}
+
 async function writeSyncRun(row: SyncOutcomeRow, verb: SyncRunVerb) {
   const client = supabaseService.getClient();
 
@@ -298,14 +364,15 @@ async function writeSyncRun(row: SyncOutcomeRow, verb: SyncRunVerb) {
   }
 
   const env = readEnv();
-  const table = client.from(SYNC_OUTCOMES_TABLE);
+  // A fresh builder per send: the retry in `sendTolerant` cannot reuse a consumed one.
+  const table = () => client.from(SYNC_OUTCOMES_TABLE);
 
   if (verb === "heartbeat") {
-    if (!row.runId) return;
-    const { error } = await table
-      .update(buildSyncRunProgressRow(row, userId, env))
-      .eq("id", row.runId);
-    if (error) throw new Error(error.message);
+    const runId = row.runId;
+    if (!runId) return;
+    await sendTolerant(buildSyncRunProgressRow(row, userId, env), (p) =>
+      table().update(p).eq("id", runId),
+    );
     return;
   }
 
@@ -313,12 +380,11 @@ async function writeSyncRun(row: SyncOutcomeRow, verb: SyncRunVerb) {
   // late one (fire-and-forget, no ordering) never rewrites a finished row's
   // counts or updated_at, let alone its outcome (which it never carries).
   if (verb === "heartbeat-running") {
-    if (!row.runId) return;
-    const { error } = await table
-      .update(buildSyncRunProgressRow(row, userId, env))
-      .eq("id", row.runId)
-      .eq("outcome", "running");
-    if (error) throw new Error(error.message);
+    const runId = row.runId;
+    if (!runId) return;
+    await sendTolerant(buildSyncRunProgressRow(row, userId, env), (p) =>
+      table().update(p).eq("id", runId).eq("outcome", "running"),
+    );
     return;
   }
 
@@ -327,19 +393,18 @@ async function writeSyncRun(row: SyncOutcomeRow, verb: SyncRunVerb) {
   // never reason_code.
   if (verb === "metrics") {
     if (!row.runId || !row.sourceMetrics) return;
-    const { error } = await table
+    const { error } = await table()
       .update({ source_metrics: row.sourceMetrics, updated_at: new Date().toISOString() })
       .eq("id", row.runId);
     if (error) throw new Error(error.message);
     return;
   }
 
-  const payload = buildSyncOutcomeRow(row, userId, env);
-  const { error } =
+  await sendTolerant(buildSyncOutcomeRow(row, userId, env), (p) =>
     verb === "start"
-      ? await table.upsert(payload, { onConflict: "id", ignoreDuplicates: true })
-      : await table.upsert(payload, { onConflict: "id" });
-  if (error) throw new Error(error.message);
+      ? table().upsert(p, { onConflict: "id", ignoreDuplicates: true })
+      : table().upsert(p, { onConflict: "id" }),
+  );
 }
 
 /** Shared fire-and-forget wrapper. NEVER throws, never awaits, never delays a sync. */

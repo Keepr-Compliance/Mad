@@ -26,6 +26,7 @@ import {
   deviceDetectionService,
 } from "./deviceDetectionService";
 import { BackupService } from "./backupService";
+import type { LeftoverRemoval } from "./backupService";
 import type { PriorBackupState } from "../types/ipc/window-api-platform";
 import { BackupDecryptionService } from "./backupDecryptionService";
 import { iOSMessagesParser } from "./iosMessagesParser";
@@ -509,6 +510,21 @@ export interface ProcessBackupOptions {
  * const result = await orchestrator.sync({ udid: '...' });
  * ```
  */
+/**
+ * BACKLOG-3598: the last sentence of the disk-guard message, following what happened
+ * to the unfinished backup. `null` means no removal was attempted because the sync
+ * started from a usable backup (or from an unknown reading), which is kept.
+ */
+function diskGuardCleanupSentence(cleanup: LeftoverRemoval | null): string {
+  if (cleanup?.outcome === "removed") {
+    return "The unfinished backup was removed to give that space back. Free up more space and sync again.";
+  }
+  if (cleanup?.outcome === "failed") {
+    return "The unfinished backup could not be removed yet; Keepr will try again at the next sync. Free up space and sync again.";
+  }
+  return "Your existing backup was kept. Free up space and sync again.";
+}
+
 export class DeviceSyncOrchestrator extends EventEmitter {
   private deviceService: DeviceDetectionService;
   private backupService: BackupService;
@@ -545,6 +561,19 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   private diskSpaceMonitor: NodeJS.Timeout | null = null;
   private diskSpaceAborted: boolean = false;
   private diskSpaceAtAbort: number = 0;
+
+  /**
+   * BACKLOG-3598 (SR R1): set while a sync frame's backup process may still be alive
+   * — from the call to `startBackup` until that call has settled AND any cleanup of
+   * the unfinished backup has finished. Settling is the only true "the process has
+   * exited" signal: `BackupService.isRunning` is cleared by `cancelBackup` before the
+   * process exits, and the watchdog nulls `currentProcess` while it may still run.
+   *
+   * `forceReset()` deliberately does NOT clear this. It aborts the frame's controller
+   * but kills nothing, so after a "Try Again" the earlier idevicebackup2 can still be
+   * writing into `Backups/<udid>`; a new frame must not sweep that folder.
+   */
+  private backupInFlight: object | null = null;
 
   /**
    * Tracks the last successfully synced backup for skip detection (TASK-908)
@@ -672,6 +701,31 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       return this.errorResult("Sync already in progress");
     }
 
+    // BACKLOG-3598 (SR R1): an earlier frame's backup process may still be alive
+    // (after "Try Again", or a cancel whose process has not exited yet). This frame
+    // would throw "Backup already in progress" at `startBackup` anyway, and before
+    // that its leftover sweep would run against a folder that process is still
+    // writing. Fail fast instead. Returned directly, NOT through `errorResult`:
+    // `isRunning` is false here, so `errorResult` would close the sync timeline,
+    // which still belongs to the earlier frame — this frame never called `beginSync`.
+    if (this.backupInFlight !== null) {
+      log.warn(
+        "[DeviceSyncOrchestrator] Sync refused: the previous sync's backup is still stopping",
+      );
+      Sentry.addBreadcrumb({
+        category: "sync",
+        message: "Sync refused while a previous backup is still stopping",
+      });
+      return {
+        success: false,
+        messages: [],
+        contacts: [],
+        conversations: [],
+        error: "Sync already in progress",
+        duration: 0,
+      };
+    }
+
     this.isRunning = true;
     // BACKLOG-2907: a new run must establish its own answer. Without this reset the
     // early progress events of run 2 would carry run 1's prior-backup state.
@@ -707,6 +761,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     log.info("[DeviceSyncOrchestrator] Starting sync", { udid: options.udid, sessionId });
 
     try {
+      // BACKLOG-3598: remove unfinished backups that earlier failed or cancelled syncs
+      // left behind (including ones left by builds before this one). BEFORE the disk
+      // check, so a leftover cannot fail the very check that would reclaim its space.
+      await this.sweepLeftoverBackups();
+
       // TASK-2276: Pre-sync checks with user-facing error messages
       // Check disk space using the diagnostic utility (enriched errors for UI)
       const diskCheck = await checkDiskSpaceForOperation("sync");
@@ -887,6 +946,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // established. Collapsing it to `true` or `false` is the BACKLOG-2917 defect, and
       // it would poison the very split this field exists to make.
       syncTimeline.setContext({ priorBackup: this.priorBackup });
+
+      // BACKLOG-3598: what THIS frame found at start, kept in a local so a later frame
+      // rewriting `this.priorBackup` cannot change this frame's decision. A failed or
+      // cancelled sync may remove the folder only if it was absent or unusable when
+      // the sync began; a usable prior backup is kept, and an unknown read decides
+      // nothing. (The removal itself re-reads the folder after the backup process has
+      // exited and deletes only when `Manifest.db` is missing.)
+      const mayRemoveUnfinishedBackup =
+        backupStatus.state === "absent" ||
+        (backupStatus.state === "present" && !usableAsPriorBackup);
 
 
       // BACKLOG-2917: `let existingBackupSize = 0` used to live here, and it was the
@@ -1373,131 +1442,149 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       // BACKLOG-2899: re-measure free space WHILE the transfer runs.
       let backupResult: BackupResult;
-      this.startDiskSpaceMonitor();
+      // BACKLOG-3598 (SR R1): see `backupInFlight`. Held until the backup has settled
+      // and any cleanup of its unfinished folder is done.
+      const backupInFlightToken = {};
+      this.backupInFlight = backupInFlightToken;
       try {
-        backupResult = await this.backupService.startBackup({
-          udid: options.udid,
-          password: options.password,
-          forceFullBackup: options.forceFullBackup,
-        });
-      } finally {
-        this.stopDiskSpaceMonitor();
-      }
+        this.startDiskSpaceMonitor();
+        try {
+          backupResult = await this.backupService.startBackup({
+            udid: options.udid,
+            password: options.password,
+            forceFullBackup: options.forceFullBackup,
+          });
+        } finally {
+          this.stopDiskSpaceMonitor();
+        }
 
-      // BACKLOG-2899: the monitor cancelled the backup to protect the volume.
-      //
-      // The partial backup is deliberately left on disk — nothing on this path
-      // deletes `Backups/<udid>`, so the next run's checkBackupStatus still
-      // finds it. It does NOT follow that the next run continues from it:
-      // BACKLOG-2911 measured the next sync starting from zero. Do not promise
-      // resume in the message below until 2911 lands.
-      if (this.diskSpaceAborted) {
-        const freeGB = (this.diskSpaceAtAbort / 1024 / 1024 / 1024).toFixed(1);
-        const reserveGB = (SYNC_DISK_RESERVE_BYTES / 1024 / 1024 / 1024).toFixed(1);
-        const message =
-          `Sync stopped to protect your computer: free disk space fell to ${freeGB} GB ` +
-          `(below the ${reserveGB} GB this sync keeps in reserve) while the iPhone backup was running. ` +
-          `The partial backup was kept on disk. Free up space and sync again — the next sync currently starts over rather than continuing from it.`;
-        log.warn("[DeviceSyncOrchestrator] Sync aborted mid-transfer: disk space", {
-          availableBytes: this.diskSpaceAtAbort,
-          reserveBytes: SYNC_DISK_RESERVE_BYTES,
-          estimatedBackupSize: this.estimatedBackupSize,
-        });
-        Sentry.captureMessage("Sync aborted mid-transfer to protect disk space", {
-          level: "error",
-          tags: { service: "sync-orchestrator", failure_reason: "disk_space" },
-          extra: {
+        // BACKLOG-2899: the monitor cancelled the backup to protect the volume.
+        //
+        // BACKLOG-3598: an unfinished FIRST backup is removed here (it has no index,
+        // so the next sync could not reuse it anyway, and on a full disk it is the
+        // space the user needs back). A usable earlier backup is kept.
+        if (this.diskSpaceAborted) {
+          const cleanup = await this.removeUnfinishedBackup(
+            options.udid,
+            mayRemoveUnfinishedBackup,
+          );
+          const freeGB = (this.diskSpaceAtAbort / 1024 / 1024 / 1024).toFixed(1);
+          const reserveGB = (SYNC_DISK_RESERVE_BYTES / 1024 / 1024 / 1024).toFixed(1);
+          const message =
+            `Sync stopped to protect your computer: free disk space fell to ${freeGB} GB ` +
+            `(below the ${reserveGB} GB this sync keeps in reserve) while the iPhone backup was running. ` +
+            diskGuardCleanupSentence(cleanup);
+          log.warn("[DeviceSyncOrchestrator] Sync aborted mid-transfer: disk space", {
             availableBytes: this.diskSpaceAtAbort,
             reserveBytes: SYNC_DISK_RESERVE_BYTES,
             estimatedBackupSize: this.estimatedBackupSize,
-          },
-        });
-        // BACKLOG-3440: the app stopped this run to protect the volume. That is neither
-        // a user act nor a device fault, and the row can now say which it was.
-        //
-        // `endedBy` only, deliberately no `reasonCode`. `reason_code` carries the
-        // `BackupErrorCode` union and nothing else; inventing a fourteenth value here
-        // would be the same mistake BACKLOG-2953 found — a string outside the union,
-        // hidden from `tsc` — and `ended_by=host-guard` already identifies this
-        // completely.
-        syncTimeline.setContext({ endedBy: "host-guard" });
-        this.isRunning = false;
-        this.setPhase("error");
-        this.emit("error", { message });
-        return this.errorResult(message);
-      }
-
-      if (this.abortController?.signal.aborted) {
-        this.isRunning = false;
-        return this.errorResult("Sync cancelled by user");
-      }
-
-      // BACKLOG-2914 (FIX 4): recorded BEFORE the failure return, so a FAILED run
-      // carries the same dimensions as a successful one. A failure row missing the
-      // incremental flag cannot be compared with the success rows it is a fraction of,
-      // and BACKLOG-2952 reads both halves of that fraction from this one row.
-      //
-      // `backupModeSource=device-reported` means idevicebackup2 printed "Full backup
-      // mode." or "Incremental backup mode." and that is what the flag says.
-      // `inferred` means it never printed one and the flag is the old derivation from
-      // whether a directory existed — the derivation that reported `incremental=true`
-      // for a 61.2 GB, 52-minute transfer on 2026-08-28. Two facts of very different
-      // quality, and an aggregate that cannot separate them is worth less than one that
-      // can.
-      syncTimeline.setContext({
-        incremental: backupResult.isIncremental,
-        backupModeSource:
-          backupResult.deviceReportedBackupMode === null ||
-          backupResult.deviceReportedBackupMode === undefined
-            ? "inferred"
-            : "device-reported",
-        wasEncrypted: !!backupResult.isEncrypted,
-        ...(backupResult.backupSize === null
-          ? { backupBytesUnmeasured: true }
-          : { backupBytes: backupResult.backupSize }),
-      });
-
-      if (!backupResult.success || !backupResult.backupPath) {
-        const error = backupResult.error || "Backup failed";
-
-        // BACKLOG-3440: STOP DISCARDING THE CAUSE THAT WAS ALREADY ESTABLISHED.
-        //
-        // Since BACKLOG-2913 the backup path has parsed the device's own account of a
-        // failure — `MBErrorDomain/208` becomes `errorCode: "DEVICE_LOCKED"`, a broken
-        // usbmuxd pipe becomes `CONNECTION_LOST`, the 30-minute no-progress watchdog
-        // becomes `BACKUP_TIMEOUT` — and kept the numeric MBErrorDomain code beside it.
-        // Both were sitting on `backupResult` and neither reached the row: only
-        // `backupResult.error`, the sentence written for the user, was forwarded. So
-        // "her phone was locked" was observable at the moment it happened and then
-        // thrown away, and the founder had to ask the user instead.
-        //
-        // Nothing is classified here. The values are copied.
-        syncTimeline.setContext({
-          ...(backupResult.errorCode ? { reasonCode: backupResult.errorCode } : {}),
-          // `null` means "the device did not say", never "no error". Absent stays
-          // absent rather than becoming a zero code — the same rule the rest of this
-          // sync path already follows for an unmeasured backup size.
-          ...(typeof backupResult.failureCause?.deviceErrorCode === "number"
-            ? { deviceErrorCode: backupResult.failureCause.deviceErrorCode }
-            : {}),
-          // The watchdog killing an unresponsive process and the device reporting a
-          // fault are different events with different fixes; they were the same row.
-          endedBy: backupResult.errorCode === "BACKUP_TIMEOUT" ? "watchdog" : "device-error",
-        });
-
-        const isDiskSpaceError = /disk space|no space|ENOSPC|not enough space/i.test(error);
-        if (isDiskSpaceError) {
-          Sentry.captureMessage("Backup failed due to insufficient disk space", {
+          });
+          Sentry.captureMessage("Sync aborted mid-transfer to protect disk space", {
             level: "error",
             tags: { service: "sync-orchestrator", failure_reason: "disk_space" },
             extra: {
+              availableBytes: this.diskSpaceAtAbort,
+              reserveBytes: SYNC_DISK_RESERVE_BYTES,
               estimatedBackupSize: this.estimatedBackupSize,
-              error,
             },
           });
+          // BACKLOG-3440: the app stopped this run to protect the volume. That is neither
+          // a user act nor a device fault, and the row can now say which it was.
+          //
+          // `endedBy` only, deliberately no `reasonCode`. `reason_code` carries the
+          // `BackupErrorCode` union and nothing else; inventing a fourteenth value here
+          // would be the same mistake BACKLOG-2953 found — a string outside the union,
+          // hidden from `tsc` — and `ended_by=host-guard` already identifies this
+          // completely.
+          syncTimeline.setContext({ endedBy: "host-guard" });
+          this.isRunning = false;
+          this.setPhase("error");
+          this.emit("error", { message });
+          return this.errorResult(message);
         }
-        this.isRunning = false;
-        return this.errorResult(error);
+
+        if (this.abortController?.signal.aborted) {
+          // BACKLOG-3598: a cancelled first sync leaves nothing behind.
+          await this.removeUnfinishedBackup(options.udid, mayRemoveUnfinishedBackup);
+          this.isRunning = false;
+          return this.errorResult("Sync cancelled by user");
+        }
+
+        // BACKLOG-2914 (FIX 4): recorded BEFORE the failure return, so a FAILED run
+        // carries the same dimensions as a successful one. A failure row missing the
+        // incremental flag cannot be compared with the success rows it is a fraction of,
+        // and BACKLOG-2952 reads both halves of that fraction from this one row.
+        //
+        // `backupModeSource=device-reported` means idevicebackup2 printed "Full backup
+        // mode." or "Incremental backup mode." and that is what the flag says.
+        // `inferred` means it never printed one and the flag is the old derivation from
+        // whether a directory existed — the derivation that reported `incremental=true`
+        // for a 61.2 GB, 52-minute transfer on 2026-08-28. Two facts of very different
+        // quality, and an aggregate that cannot separate them is worth less than one that
+        // can.
+        syncTimeline.setContext({
+          incremental: backupResult.isIncremental,
+          backupModeSource:
+            backupResult.deviceReportedBackupMode === null ||
+            backupResult.deviceReportedBackupMode === undefined
+              ? "inferred"
+              : "device-reported",
+          wasEncrypted: !!backupResult.isEncrypted,
+          ...(backupResult.backupSize === null
+            ? { backupBytesUnmeasured: true }
+            : { backupBytes: backupResult.backupSize }),
+        });
+
+        if (!backupResult.success || !backupResult.backupPath) {
+          const error = backupResult.error || "Backup failed";
+
+          // BACKLOG-3440: STOP DISCARDING THE CAUSE THAT WAS ALREADY ESTABLISHED.
+          //
+          // Since BACKLOG-2913 the backup path has parsed the device's own account of a
+          // failure — `MBErrorDomain/208` becomes `errorCode: "DEVICE_LOCKED"`, a broken
+          // usbmuxd pipe becomes `CONNECTION_LOST`, the 30-minute no-progress watchdog
+          // becomes `BACKUP_TIMEOUT` — and kept the numeric MBErrorDomain code beside it.
+          // Both were sitting on `backupResult` and neither reached the row: only
+          // `backupResult.error`, the sentence written for the user, was forwarded. So
+          // "her phone was locked" was observable at the moment it happened and then
+          // thrown away, and the founder had to ask the user instead.
+          //
+          // Nothing is classified here. The values are copied.
+          syncTimeline.setContext({
+            ...(backupResult.errorCode ? { reasonCode: backupResult.errorCode } : {}),
+            // `null` means "the device did not say", never "no error". Absent stays
+            // absent rather than becoming a zero code — the same rule the rest of this
+            // sync path already follows for an unmeasured backup size.
+            ...(typeof backupResult.failureCause?.deviceErrorCode === "number"
+              ? { deviceErrorCode: backupResult.failureCause.deviceErrorCode }
+              : {}),
+            // The watchdog killing an unresponsive process and the device reporting a
+            // fault are different events with different fixes; they were the same row.
+            endedBy: backupResult.errorCode === "BACKUP_TIMEOUT" ? "watchdog" : "device-error",
+          });
+
+          // BACKLOG-3598: a failed first sync (device error, disconnect, watchdog,
+          // disk full) leaves nothing behind. A usable earlier backup is kept.
+          await this.removeUnfinishedBackup(options.udid, mayRemoveUnfinishedBackup);
+
+          const isDiskSpaceError = /disk space|no space|ENOSPC|not enough space/i.test(error);
+          if (isDiskSpaceError) {
+            Sentry.captureMessage("Backup failed due to insufficient disk space", {
+              level: "error",
+              tags: { service: "sync-orchestrator", failure_reason: "disk_space" },
+              extra: {
+                estimatedBackupSize: this.estimatedBackupSize,
+                error,
+              },
+            });
+          }
+          this.isRunning = false;
+          return this.errorResult(error);
+        }
+      } finally {
+        if (this.backupInFlight === backupInFlightToken) {
+          this.backupInFlight = null;
+        }
       }
 
       // BACKLOG-2898/2894: what the backup phase produced. `incremental` is
@@ -1739,6 +1826,111 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       this.emit("error", error);
 
       return this.errorResult(errorMessage);
+    }
+  }
+
+  /**
+   * BACKLOG-3598: remove leftover unfinished backups at the start of a sync. Never
+   * throws — a cleanup problem must not stop the sync it runs in front of.
+   */
+  private async sweepLeftoverBackups(): Promise<void> {
+    try {
+      const sweep = await this.backupService.sweepLeftoverBackups(() => {
+        // SR R2: a large leftover can take minutes to delete. Say so, rather than
+        // sit silently at the start of a sync.
+        this.emitProgress({
+          phase: "backup",
+          phaseProgress: 0,
+          overallProgress: 0,
+          message: "Clearing an unfinished backup from an earlier sync...",
+        });
+      });
+      if (sweep.removed > 0 || sweep.failures.length > 0) {
+        log.info("[DeviceSyncOrchestrator] Leftover backup sweep", {
+          removed: sweep.removed,
+          bytesFreed: sweep.bytesFreed,
+          failures: sweep.failures,
+        });
+      }
+      if (sweep.removed > 0) {
+        this.recordLeftoverCleanup({ outcome: "removed", bytes: sweep.bytesFreed });
+      }
+      for (const errorCode of sweep.failures) {
+        this.recordLeftoverCleanup({ outcome: "failed", errorCode });
+      }
+    } catch (error) {
+      log.warn("[DeviceSyncOrchestrator] Leftover backup sweep failed; continuing", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      Sentry.captureException(error, {
+        tags: { service: "sync-orchestrator", operation: "leftoverCleanup" },
+      });
+    }
+  }
+
+  /**
+   * BACKLOG-3598: after a failed or cancelled backup, remove its unfinished folder so
+   * the sync leaves `Backups/<udid>` as it found it.
+   *
+   * `mayRemove` is this frame's own start reading (absent, or present but unusable).
+   * When it is false nothing is attempted: a usable earlier backup survives a failed
+   * incremental (BACKLOG-2911 measured `Manifest.db` unchanged by an interruption), and
+   * deleting it would turn every later sync into a full one. When it is true the
+   * service still re-reads the folder now that the backup process has exited, and
+   * deletes only if `Manifest.db` is missing.
+   *
+   * Returns what happened, or `null` if nothing was attempted. Never throws: the
+   * sync's own error is what the user needs to see.
+   */
+  private async removeUnfinishedBackup(
+    udid: string,
+    mayRemove: boolean,
+  ): Promise<LeftoverRemoval | null> {
+    if (!mayRemove) return null;
+    try {
+      if ((await this.backupService.classifyBackupFolder(udid)) === "leftover") {
+        this.emitProgress({
+          phase: "backup",
+          phaseProgress: 0,
+          overallProgress: 0,
+          message: "Removing the unfinished backup to free up disk space...",
+        });
+      }
+      const removal = await this.backupService.removeLeftoverBackup(udid);
+      this.recordLeftoverCleanup(removal);
+      return removal;
+    } catch (error) {
+      log.warn("[DeviceSyncOrchestrator] Could not clean up the unfinished backup", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      Sentry.captureException(error, {
+        tags: { service: "sync-orchestrator", operation: "leftoverCleanup" },
+      });
+      return null;
+    }
+  }
+
+  /**
+   * BACKLOG-3598: put a cleanup on the outcome row. Bytes add up across the start
+   * sweep and the post-failure removal of one run; `leftoverCleanup` is `removed`
+   * unless any removal in the run failed, in which case the failure (errno code only,
+   * never a path) is what the row keeps.
+   */
+  private recordLeftoverCleanup(removal: LeftoverRemoval): void {
+    const context = syncTimeline.contextSnapshot();
+    if (removal.outcome === "removed") {
+      // An unmeasured size adds nothing rather than a stand-in.
+      if (removal.bytes !== null) {
+        const prior = context.leftoverBackupBytesCleared;
+        syncTimeline.setContext({
+          leftoverBackupBytesCleared: (typeof prior === "number" ? prior : 0) + removal.bytes,
+        });
+      }
+      if (typeof context.leftoverCleanup !== "string" || !context.leftoverCleanup.startsWith("failed:")) {
+        syncTimeline.setContext({ leftoverCleanup: "removed" });
+      }
+    } else if (removal.outcome === "failed") {
+      syncTimeline.setContext({ leftoverCleanup: `failed:${removal.errorCode}` });
     }
   }
 
