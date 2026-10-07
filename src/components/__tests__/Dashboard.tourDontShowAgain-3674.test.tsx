@@ -51,11 +51,16 @@ jest.mock("../../contexts/LicenseContext", () => ({
 jest.mock("../../hooks/useFeatureGate", () => ({
   useFeatureGate: () => ({ isAllowed: () => true }),
 }));
+// Number of tour steps; the 3-step block below raises it (name must start with "mock").
+let mockStepCount = 2;
 jest.mock("../../config/tourSteps", () => ({
-  getDashboardTourSteps: () => [
-    { target: "body", content: "Step one", placement: "center", disableBeacon: true },
-    { target: "body", content: "Step two", placement: "center", disableBeacon: true },
-  ],
+  getDashboardTourSteps: () =>
+    ["one", "two", "three"].slice(0, mockStepCount).map((n) => ({
+      target: "body",
+      content: `Step ${n}`,
+      placement: "center",
+      disableBeacon: true,
+    })),
   JOYRIDE_STYLES: {},
   JOYRIDE_LOCALE: { last: "Done" },
 }));
@@ -123,6 +128,7 @@ describe("BACKLOG-3674 — Don't show this again", () => {
   });
   afterEach(() => {
     jest.useRealTimers();
+    mockStepCount = 2;
   });
 
   describe("T1 / C-6 — ticked, then closed: written once, not shown on another computer", () => {
@@ -197,6 +203,35 @@ describe("BACKLOG-3674 — Don't show this again", () => {
     const b = await otherComputer("dismissed");
     expect(tooltip()).toBeNull();
     b.unmount();
+  });
+
+  describe("T8 — the box belongs to the whole tour, not to one step (3-step tour)", () => {
+    const closers: Array<[string, () => void]> = [
+      ["Skip", () => fireEvent.click(button("skip"))],
+      ["Esc", () => fireEvent.keyDown(document.body, { code: "Escape", key: "Escape" })],
+    ];
+    it.each(closers)("ticked on step 1, still ticked on step 2, %s from step 2: one write", async (_name, close) => {
+      mockStepCount = 3;
+      const view = await mountWithTour();
+      expect(document.querySelector('[role="alertdialog"]')?.getAttribute("aria-label")).toBe("Step one");
+      fireEvent.click(checkbox()!);
+      expect(checkbox()!.checked).toBe(true);
+
+      fireEvent.click(button("primary"));
+      await settle();
+      expect(document.querySelector('[role="alertdialog"]')?.getAttribute("aria-label")).toBe("Step two");
+      expect(checkbox()).not.toBeNull();
+      expect(checkbox()!.checked).toBe(true);
+      expect(dismissTour).not.toHaveBeenCalled();
+
+      close();
+      await settle();
+
+      expect(tooltip()).toBeNull();
+      expect(dismissTour).toHaveBeenCalledTimes(1);
+      expect(localStorage.getItem(KEY)).toBe("true");
+      view.unmount();
+    });
   });
 
   it("T4 — the server answer is never copied into this computer's key", async () => {
