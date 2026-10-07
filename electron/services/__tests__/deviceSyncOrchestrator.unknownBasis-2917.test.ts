@@ -42,14 +42,6 @@ const UDID = "00008030-0011223344556677";
 const GB = 1024 * 1024 * 1024;
 /** What `getDeviceStorageInfo` reports below. Drives the device-storage estimate. */
 const DEVICE_STORAGE_ESTIMATE = 50 * GB;
-/**
- * Free space chosen so BOTH headroom branches warn, and the warning's "~N GB
- * recommended" therefore reports which multiplier ran:
- *   1.1 x 50 GB = 55.0 GB      1.5 x 50 GB = 75.0 GB
- * It is above SYNC_DISK_RESERVE_BYTES (2 GB) so the up-front refusal does not fire
- * first and mask the branch under test.
- */
-const FREE_SPACE = 10 * GB;
 
 const mockStartBackup = jest.fn();
 const mockCheckBackupStatus = jest.fn();
@@ -89,6 +81,12 @@ jest.mock("better-sqlite3-multiple-ciphers", () =>
 jest.mock("check-disk-space", () =>
   jest.fn().mockImplementation(async () => ({
     diskPath: "C:",
+    // 10 GB free, chosen so BOTH headroom branches warn, and the warning's "~N GB
+    // recommended" therefore reports which multiplier ran:
+    //   1.1 x 50 GB = 55.0 GB      1.5 x 50 GB = 75.0 GB
+    // It is above SYNC_DISK_RESERVE_BYTES (2 GB) so the up-front refusal does not
+    // fire first and mask the branch under test. Inline because a hoisted
+    // jest.mock factory cannot read module constants.
     free: 10 * 1024 * 1024 * 1024,
     size: 1000 * 1024 * 1024 * 1024,
   })),

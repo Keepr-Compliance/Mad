@@ -136,10 +136,7 @@ jest.mock("../services/autoLinkService", () => ({
 // Imported after the mocks so the handler module binds to them.
 import { registerMessageImportHandlers } from "../handlers/messageImportHandlers";
 import macOSMessagesImportService from "../services/macOSMessagesImportService";
-import {
-  computeImportCutoffNano,
-  DEFAULT_LOOKBACK_MONTHS,
-} from "../services/macOSMessagesImportService/importHelpers";
+import { DEFAULT_LOOKBACK_MONTHS } from "../services/macOSMessagesImportService/importHelpers";
 import { MAC_EPOCH } from "../constants";
 
 const TEST_USER_ID = "11111111-2222-4333-8444-555555555555";
@@ -411,12 +408,6 @@ describe("BACKLOG-2561 · the label handler and the import handler agree", () =>
  * ID-set assertions quietly testing a predicate production no longer uses.
  */
 describe("BACKLOG-2561 · the production date filter has not changed shape", () => {
-  const servicePath = path.join(
-    __dirname,
-    "../services/macOSMessagesImportService/importHelpers.ts"
-  );
-  const source = fs.readFileSync(servicePath, "utf8");
-
   /*
    * BACKLOG-3062 rewrote these three, and the rewrite is why the guard is now
    * stronger again.

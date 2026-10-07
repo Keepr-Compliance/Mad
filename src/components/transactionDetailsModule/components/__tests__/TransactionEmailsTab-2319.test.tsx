@@ -20,8 +20,7 @@
  * Identity, not counts: assertions target specific email ids / subjects.
  */
 import React from "react";
-import { render, screen, waitFor, act } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { TransactionEmailsTab } from "../TransactionEmailsTab";
 import type { Communication } from "../../types";
@@ -63,8 +62,6 @@ function makeComms(overrides: Partial<Record<string, string>> = {}): Communicati
     },
   ] as Communication[];
 }
-
-const within = (testId: string) => screen.getByTestId(testId);
 
 beforeAll(() => {
   /* eslint-disable @typescript-eslint/no-explicit-any */

@@ -212,7 +212,7 @@ describe("BACKLOG-2914: `closePhase` stops a finished phase absorbing the next g
     // and after `persistSyncResult` reached its first progress callback. The founder's
     // run recorded `phase=cleanup elapsedMs=246270`: four minutes charged to closing
     // two SQLite parsers.
-    const { timeline, lines, tick } = makeTimeline();
+    const { timeline, tick } = makeTimeline();
 
     timeline.beginSync();
     timeline.enter("cleanup");
