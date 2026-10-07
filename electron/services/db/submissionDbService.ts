@@ -37,6 +37,40 @@ export type SubmissionTransactionRow = {
   last_review_notes: string | null;
 };
 
+// ============================================
+// CHECKLIST LINKS SENT REGARDLESS OF THE DATES (BACKLOG-3764)
+// ============================================
+
+/**
+ * The members of this transaction's checklist groups the agent chose to send
+ * although they are dated outside the audit dates
+ * (`transaction_checklist_links.include_outside_dates = 1`). One bound
+ * parameter: the transaction id. Scoped through items -> checklists to THIS
+ * transaction, so a flagged group on another deal pulls nothing in.
+ *
+ * Used INSIDE the shared readers below, never by the gather alone: the scope
+ * preview and the submit read through the same functions, so the summary
+ * still counts exactly what is sent (BACKLOG-3683).
+ */
+const FLAGGED_LINK_EMAIL_IDS_SQL = `
+  SELECT lm.email_id
+  FROM transaction_checklist_link_members lm
+  JOIN transaction_checklist_links l ON l.id = lm.link_id
+  JOIN transaction_checklist_items i ON i.id = l.item_id
+  JOIN transaction_checklists cl ON cl.id = i.checklist_id
+  WHERE cl.transaction_id = ? AND l.include_outside_dates = 1 AND lm.email_id IS NOT NULL
+`;
+
+/** As {@link FLAGGED_LINK_EMAIL_IDS_SQL}, for attachment members. One bound parameter. */
+const FLAGGED_LINK_ATTACHMENT_IDS_SQL = `
+  SELECT lm.attachment_id
+  FROM transaction_checklist_link_members lm
+  JOIN transaction_checklist_links l ON l.id = lm.link_id
+  JOIN transaction_checklist_items i ON i.id = l.item_id
+  JOIN transaction_checklists cl ON cl.id = i.checklist_id
+  WHERE cl.transaction_id = ? AND l.include_outside_dates = 1 AND lm.attachment_id IS NOT NULL
+`;
+
 /**
  * Load messages linked to a transaction via communications junction table,
  * with optional audit date range filter.
@@ -87,6 +121,9 @@ export function getTransactionMessages(
 /**
  * Load emails linked to a transaction via communications.email_id,
  * with optional audit date range filter.
+ *
+ * BACKLOG-3764: plus the emails of checklist groups the agent chose to send
+ * regardless of the dates (they are still emails linked to this transaction).
  */
 export function getTransactionEmails(
   transactionId: string,
@@ -103,14 +140,19 @@ export function getTransactionEmails(
   `;
   const params: (string | number)[] = [transactionId];
 
+  const inWindow: string[] = [];
   if (auditStartDate) {
-    sql += ` AND e.sent_at >= ?`;
+    inWindow.push(`e.sent_at >= ?`);
     params.push(auditStartDate.toISOString());
   }
   const emailsEnd = auditWindowEnd(auditEndDate);
   if (emailsEnd) {
-    sql += ` AND e.sent_at <= ?`;
+    inWindow.push(`e.sent_at <= ?`);
     params.push(emailsEnd.toISOString());
+  }
+  if (inWindow.length > 0) {
+    sql += ` AND ((${inWindow.join(" AND ")}) OR e.id IN (${FLAGGED_LINK_EMAIL_IDS_SQL}))`;
+    params.push(transactionId);
   }
 
   sql += ` ORDER BY e.sent_at ASC`;
@@ -143,17 +185,45 @@ export function getTransactionAttachments(
     .filter(({ row }) => typeof row.storage_path === "string")
     .map(({ row, resolved_message_id }) => ({ ...row, resolved_message_id }));
 
-  // Build email date filter
+  // BACKLOG-3764: a text attachment of a checklist group the agent chose to
+  // send regardless of the dates. Still only the attachments of texts in
+  // `selected` (hidden texts, owner copies and duplicates stay out), and still
+  // only rows with a local file; the date is the only thing waived.
+  const flaggedAttachmentIds = new Set(
+    (db.prepare(FLAGGED_LINK_ATTACHMENT_IDS_SQL).all(transactionId) as { attachment_id: string }[]).map(
+      (r) => r.attachment_id
+    )
+  );
+  if (flaggedAttachmentIds.size > 0 && (auditStartDate || auditEndDate)) {
+    const inWindowTexts = new Set(textMessageIds);
+    const outsideTexts = getTransactionMessages(transactionId, null, null, selected)
+      .map((m) => m.id)
+      .filter((id) => !inWindowTexts.has(id));
+    textAttachments.push(
+      ...selectTextAttachmentsForMessages<SubmissionAttachment & { message_id: string }>(db, outsideTexts)
+        .filter(({ row }) => typeof row.storage_path === "string" && flaggedAttachmentIds.has(row.id))
+        .map(({ row, resolved_message_id }) => ({ ...row, resolved_message_id }))
+    );
+  }
+
+  // Build email date filter. BACKLOG-3764: a flagged checklist group's email
+  // brings ALL its files, and a flagged file comes on its own; both still need
+  // a local file (`storage_path`), which stays outside the OR.
   let emailDateFilter = "";
   const emailDateParams: string[] = [];
+  const emailInWindow: string[] = [];
   if (auditStartDate) {
-    emailDateFilter += " AND e.sent_at >= ?";
+    emailInWindow.push("e.sent_at >= ?");
     emailDateParams.push(auditStartDate.toISOString());
   }
   const emailAttachmentsEnd = auditWindowEnd(auditEndDate);
   if (emailAttachmentsEnd) {
-    emailDateFilter += " AND e.sent_at <= ?";
+    emailInWindow.push("e.sent_at <= ?");
     emailDateParams.push(emailAttachmentsEnd.toISOString());
+  }
+  if (emailInWindow.length > 0) {
+    emailDateFilter = ` AND ((${emailInWindow.join(" AND ")}) OR e.id IN (${FLAGGED_LINK_EMAIL_IDS_SQL}) OR a.id IN (${FLAGGED_LINK_ATTACHMENT_IDS_SQL}))`;
+    emailDateParams.push(transactionId, transactionId);
   }
 
   // Query 2: Email attachments

@@ -77,8 +77,17 @@ export const checklistBridge = {
     itemId: string;
     kind: ChecklistLinkKind;
     targetIds: string[];
+    /** BACKLOG-3764: the agent's "Include it" to the outside-the-dates question. */
+    includeOutsideDates?: boolean;
   }): Promise<{ success: boolean; result?: AddChecklistLinkResult; error?: string }> =>
     ipcRenderer.invoke("checklists:add-link", args),
+
+  /** BACKLOG-3764: "Include it" for an existing group, from the submit pre-flight. */
+  includeLinkOutsideDates: (args: {
+    transactionId: string;
+    linkId: string;
+  }): Promise<{ success: boolean; changed?: boolean; error?: string }> =>
+    ipcRenderer.invoke("checklists:include-link-outside-dates", args),
 
   /** Remove one evidence group. Its members follow by cascade. */
   removeLink: (args: {

@@ -47,6 +47,8 @@ export type ChecklistLoadState =
 export interface ChecklistLinkRequest {
   kind: ChecklistLinkKind;
   targetIds: string[];
+  /** BACKLOG-3764: the agent answered "Include it" to the outside-the-dates question. */
+  includeOutsideDates?: boolean;
 }
 
 export interface ChecklistLinkOutcome {
@@ -214,7 +216,12 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
         // Sequential: each group is all-or-nothing in main, and a partial
         // failure has to be attributable to the row that caused it.
         for (const request of requests) {
-          const result = await checklistService.addLink(itemId, request.kind, request.targetIds);
+          const result = await checklistService.addLink(
+            itemId,
+            request.kind,
+            request.targetIds,
+            request.includeOutsideDates,
+          );
           outcomes.push({ request, result });
         }
         return outcomes;

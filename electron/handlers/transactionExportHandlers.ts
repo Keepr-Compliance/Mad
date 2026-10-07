@@ -145,6 +145,10 @@ function toSubmitResponse(result: SubmissionResult): TransactionResponse {
     // BACKLOG-3600: the checklists did not reach the broker on a submission
     // that otherwise succeeded. Absent when there is nothing to say.
     checklistsNotSent: result.checklistsNotSent,
+    // BACKLOG-3764: checklist evidence to confirm again (with
+    // preflightChanged), and evidence dropped that was never listed.
+    checklistLinkGaps: result.checklistLinkGaps,
+    checklistLinksNotAttached: result.checklistLinksNotAttached,
     // BACKLOG-3398 / 3403: the three non-success outcomes that are not errors
     // of the app: cancelled, the list changed, the answer was lost.
     cancelled: result.cancelled,
@@ -801,6 +805,7 @@ export function registerTransactionExportHandlers(
       return {
         success: result.success,
         notIncluded: result.notIncluded,
+        checklistLinkGaps: result.checklistLinkGaps ?? [],
         error: result.error,
       };
     }, { module: "Transactions" }),
