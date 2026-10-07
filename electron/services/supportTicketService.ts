@@ -58,6 +58,11 @@ import {
 export interface IphoneSyncDiagnostics {
   /** User's selected phone type (from user_preferences), or "unknown". */
   phone_type: "iphone" | "android" | "unknown";
+  /**
+   * BACKLOG-3418: iPhone checking was on for the account, so the device probes
+   * ran. False → the device fields below are defaults, not measurements.
+   */
+  iphone_checking_on: boolean;
   /** libimobiledevice CLI tools available. */
   libimobiledevice_available: boolean;
   /** libimobiledevice reachable on PATH/bundled (macOS-focused signal). */
@@ -287,6 +292,8 @@ function composeIphoneSyncLine(s: IphoneSyncDiagnostics): string {
   const yn = (v: boolean): string => (v ? "yes" : "no");
   const parts = [
     `phone_type=${s.phone_type}`,
+    // BACKLOG-3418: "no" → the iPhone helper did not run; devices/detected are not measurements.
+    `iphone_checking=${yn(s.iphone_checking_on)}`,
     `devices=${s.connected_device_count}`,
     `mounted=${yn(s.device_mounted)}`,
     `detected=${yn(s.device_detected)}`,
@@ -592,6 +599,7 @@ function readIntlTimeZone(): string | null {
 function defaultIphoneSyncDiagnostics(): IphoneSyncDiagnostics {
   return {
     phone_type: "unknown",
+    iphone_checking_on: false,
     libimobiledevice_available: false,
     libimobiledevice_in_path: false,
     connected_device_count: 0,
@@ -630,6 +638,7 @@ async function collectIphoneSyncDiagnostics(): Promise<IphoneSyncDiagnostics> {
   try {
     const dev: IphoneSyncDiagnostic =
       await deviceDetectionService.collectIphoneSyncDiagnostics();
+    section.iphone_checking_on = dev.iphoneCheckingOn;
     section.libimobiledevice_available = dev.libimobiledeviceAvailable;
     section.libimobiledevice_in_path = dev.libimobiledeviceInPath;
     section.connected_device_count = dev.connectedDeviceCount;
