@@ -1830,7 +1830,7 @@ export function MacOSMessagesImportSettings({
 
           No <h1>-<h6> in here on purpose — `settingsBlockShape-3156` reds on
           any heading a block does not declare, and this notice declares none. */}
-      {isMacOS && enabled && fdaStatus === "denied" && (
+      {enabled && fdaStatus === "denied" && (
         <div
           data-testid="macos-fda-denied-notice"
           className="mb-3 p-3 rounded text-xs bg-amber-50 text-amber-800 border border-amber-200"
@@ -1900,7 +1900,7 @@ export function MacOSMessagesImportSettings({
           same class of notice. No <h1>-<h6> in here on purpose —
           `settingsBlockShape-3156` reds on any heading a block does not
           declare, and this notice declares none. */}
-      {isMacOS && enabled && fdaStatus === "absent" && (
+      {enabled && fdaStatus === "absent" && (
         <div
           data-testid="macos-messages-absent-notice"
           className="mb-3 p-3 rounded text-xs bg-amber-50 text-amber-800 border border-amber-200"
@@ -1924,7 +1924,7 @@ export function MacOSMessagesImportSettings({
           re-check. Settings is somewhere the user is in the middle of
           something else; an app that quit itself out from under them there
           would be a worse bug than the one this fixes. */}
-      {isMacOS && enabled && fdaStatus === "granted" && fdaWasDenied && (
+      {enabled && fdaStatus === "granted" && fdaWasDenied && (
         <div
           data-testid="macos-fda-restart-notice"
           className="mb-3 p-3 rounded text-xs bg-blue-50 text-blue-800 border border-blue-200"

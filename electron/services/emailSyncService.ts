@@ -2534,7 +2534,7 @@ class EmailSyncService {
         // BACKLOG-2127: surface auth-class (expired/revoked token) failures so
         // the sync UI can prompt a reconnect. Transient/network errors are left
         // unrecorded so the sync still completes green (AC).
-        if (isTokenExpiryError(outlookError) && !providerError) {
+        if (isTokenExpiryError(outlookError)) {
           providerError = {
             provider: "microsoft",
             message: classifyProviderError(outlookError),
