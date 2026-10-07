@@ -55,6 +55,93 @@ function describeError(error: unknown): string {
 }
 
 /**
+ * BACKLOG-3598: does a backup index file exist? ENOENT is the ONLY "no".
+ *
+ * Any other failure (EPERM, EBUSY, EACCES — a locked file on Windows) throws, because
+ * "could not look" is not "not there". Callers that decide whether to DELETE a backup
+ * read this, and a lock read as "missing" would delete a usable backup.
+ */
+async function indexFileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.stat(filePath);
+    return true;
+  } catch (err: unknown) {
+    if (errnoCode(err) === "ENOENT") return false;
+    throw err;
+  }
+}
+
+/** The errno-style code of a caught value, or `undefined` if it carries none. */
+function errnoCode(err: unknown): string | undefined {
+  if (err && typeof err === "object" && "code" in err) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+  }
+  return undefined;
+}
+
+/**
+ * BACKLOG-3598 (SR R3): the udid, if `name` validates to EXACTLY itself; else null.
+ * `validateDeviceUdid` trims, so a folder named `" <udid>"` validates — and would be
+ * acted on at a different path than the one that was listed.
+ */
+function exactUdidOrNull(name: string): string | null {
+  try {
+    return validateDeviceUdid(name) === name ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * BACKLOG-3598 (SR R2): every leftover-backup removal in the process runs through
+ * this one chain, so two callers never delete in the same tree at the same time.
+ * Module-level on purpose: the sync orchestrator and the IPC handlers each own a
+ * separate `BackupService` instance, and an instance field would not serialise them.
+ * A second caller waits its turn; each removal re-reads the folder right before it
+ * deletes, so waiting cannot turn a stale reading into a delete.
+ */
+let leftoverCleanupChain: Promise<unknown> = Promise.resolve();
+
+function serialiseLeftoverCleanup<T>(work: () => Promise<T>): Promise<T> {
+  const run = leftoverCleanupChain.then(work, work);
+  leftoverCleanupChain = run.catch(() => undefined);
+  return run;
+}
+
+/**
+ * BACKLOG-3598: what is in `Backups/<udid>`, for the purpose of deciding whether it
+ * may be deleted.
+ *
+ * - `absent`   — ENOENT on the folder. Nothing to delete.
+ * - `leftover` — the folder exists and `Manifest.db` is ENOENT. An unfinished first
+ *                backup: the device has no index to diff against, so nothing in it
+ *                can be reused (it is also refused by `isUsablePriorBackup`).
+ * - `indexed`  — `Manifest.db` is present. Never deleted by the cleanup, whether or
+ *                not `Info.plist` is present: idevicebackup2 removes and rewrites
+ *                `Info.plist` at the start of every backup run, so a run killed in
+ *                that window leaves a real backup without one.
+ * - `unknown`  — a read failed (EPERM/EBUSY/...). Never deleted.
+ */
+export type BackupFolderClass = "absent" | "leftover" | "indexed" | "unknown";
+
+/** BACKLOG-3598: the result of one attempt to remove a leftover backup folder. */
+export type LeftoverRemoval =
+  | { outcome: "removed"; bytes: number | null }
+  | { outcome: "kept"; folder: Exclude<BackupFolderClass, "leftover"> }
+  | { outcome: "failed"; errorCode: string };
+
+/** BACKLOG-3598: what a sweep of `Backups/` did. */
+export interface LeftoverSweep {
+  /** Folders removed. */
+  removed: number;
+  /** Bytes freed by measured removals. Folders whose size could not be read add 0. */
+  bytesFreed: number;
+  /** One errno code per folder that could not be removed. */
+  failures: string[];
+}
+
+/**
  * BACKLOG-2899: how idevicebackup2 reports that the HOST disk is full.
  *
  * TRANSCRIBED, in two steps, because BACKLOG-2870 is the precedent for a
@@ -2209,14 +2296,15 @@ export class BackupService extends EventEmitter {
       const infoPlistPath = path.join(deviceBackupPath, "Info.plist");
       const statusPlistPath = path.join(deviceBackupPath, "Status.plist");
 
-      // Use fs.stat directly instead of fs.access to avoid TOCTOU race condition
-      const fileExists = async (p: string): Promise<boolean> => {
-        try { await fs.stat(p); return true; } catch { return false; }
-      };
-
+      // BACKLOG-3598: STRICT. Only ENOENT means "this index file is missing". The
+      // catch-all this replaced turned EPERM/EBUSY on a locked `Manifest.db` (a
+      // Windows virus scanner, a still-closing idevicebackup2) into "absent", and a
+      // usable backup into "not complete". That read now decides whether a failed
+      // sync deletes the folder, so a lock must surface as `unknown` (the catch
+      // below), never as a missing manifest.
       const [hasManifest, hasInfoPlist] = await Promise.all([
-        fileExists(manifestPath),
-        fileExists(infoPlistPath),
+        indexFileExists(manifestPath),
+        indexFileExists(infoPlistPath),
       ]);
 
       // A complete backup should have Manifest.db and Info.plist
@@ -2501,6 +2589,117 @@ export class BackupService extends EventEmitter {
       log.error("[BackupService] Error getting backup info:", error);
       return null;
     }
+  }
+
+  /**
+   * BACKLOG-3598: classify `Backups/<udid>` for the leftover cleanup. See
+   * `BackupFolderClass`. A udid that does not validate to exactly itself is
+   * `unknown` (never deleted) rather than a thrown error.
+   */
+  async classifyBackupFolder(udid: string): Promise<BackupFolderClass> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return "unknown";
+    return this.classifyFolderAt(path.join(this.getDefaultBackupPath(), validatedUdid));
+  }
+
+  private async classifyFolderAt(folder: string): Promise<BackupFolderClass> {
+    try {
+      // lstat: a symlink is not a backup folder this app wrote, so it is never
+      // classified as a leftover.
+      const stats = await fs.lstat(folder);
+      if (!stats.isDirectory()) return "unknown";
+      return (await indexFileExists(path.join(folder, "Manifest.db")))
+        ? "indexed"
+        : "leftover";
+    } catch (err: unknown) {
+      if (errnoCode(err) === "ENOENT") return "absent";
+      log.warn("[BackupService] Could not classify backup folder; leaving it alone:", describeError(err));
+      return "unknown";
+    }
+  }
+
+  /**
+   * BACKLOG-3598: delete `Backups/<udid>` if, and only if, it is a leftover — an
+   * unfinished backup with no `Manifest.db`.
+   *
+   * The folder is re-read immediately before the delete, inside the process-wide
+   * cleanup chain, so a caller's earlier reading can never be what authorises it. The
+   * path is built here from the app's own backup root and a validated udid; no caller
+   * path is accepted. Never throws: a failed delete (a locked file on Windows) is
+   * returned as `failed` with its errno code, logged and reported, and the folder is
+   * retried by the next sweep.
+   */
+  async removeLeftoverBackup(udid: string): Promise<LeftoverRemoval> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return { outcome: "kept", folder: "unknown" };
+    const folder = path.join(this.getDefaultBackupPath(), validatedUdid);
+
+    return serialiseLeftoverCleanup(async (): Promise<LeftoverRemoval> => {
+      const before = await this.classifyFolderAt(folder);
+      if (before !== "leftover") return { outcome: "kept", folder: before };
+
+      const size = await this.measureBackupSize(folder);
+      try {
+        // Node retries EBUSY/EPERM/ENOTEMPTY/EMFILE itself when maxRetries is set.
+        await fs.rm(folder, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
+      } catch (err: unknown) {
+        const errorCode = errnoCode(err) ?? "UNKNOWN";
+        log.warn("[BackupService] Could not remove an unfinished backup; will retry on the next sync:", errorCode);
+        Sentry.captureException(err, {
+          tags: { service: "backup", operation: "leftoverCleanup" },
+          extra: { errorCode },
+        });
+        return { outcome: "failed", errorCode };
+      }
+
+      const bytes = size.measured ? size.bytes : null;
+      log.info("[BackupService] Removed an unfinished backup", {
+        bytesFreed: bytes ?? "unmeasured",
+      });
+      Sentry.addBreadcrumb({
+        category: "backup",
+        message: "Removed an unfinished backup",
+        data: { bytesFreed: bytes ?? "unmeasured" },
+      });
+      return { outcome: "removed", bytes };
+    });
+  }
+
+  /**
+   * BACKLOG-3598: remove every leftover backup folder under `Backups/`.
+   *
+   * Only direct children whose name is exactly a valid udid are considered (SR R3:
+   * `validateDeviceUdid` trims, so `" <udid>"` would otherwise be read and deleted at
+   * the trimmed path). Everything else is left untouched. `onRemoving` is called before
+   * each removal so the caller can tell the user why the sync is pausing.
+   */
+  async sweepLeftoverBackups(onRemoving?: () => void): Promise<LeftoverSweep> {
+    const result: LeftoverSweep = { removed: 0, bytesFreed: 0, failures: [] };
+    let entries: import("fs").Dirent[];
+    try {
+      entries = await fs.readdir(this.getDefaultBackupPath(), { withFileTypes: true });
+    } catch (err: unknown) {
+      if (errnoCode(err) !== "ENOENT") {
+        log.warn("[BackupService] Could not list backups for leftover cleanup:", describeError(err));
+      }
+      return result;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (exactUdidOrNull(entry.name) === null) continue;
+      if ((await this.classifyBackupFolder(entry.name)) !== "leftover") continue;
+
+      onRemoving?.();
+      const removal = await this.removeLeftoverBackup(entry.name);
+      if (removal.outcome === "removed") {
+        result.removed += 1;
+        result.bytesFreed += removal.bytes ?? 0;
+      } else if (removal.outcome === "failed") {
+        result.failures.push(removal.errorCode);
+      }
+    }
+    return result;
   }
 
   /**

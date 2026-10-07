@@ -188,6 +188,12 @@ export function buildSyncOutcomeRow(
     host_disk_free_bytes: bigintNum(f, "hostDiskFreeBytes"),
     host_disk_total_bytes: bigintNum(f, "hostDiskTotalBytes"),
 
+    // BACKLOG-3598: space this run reclaimed from unfinished backups (the start sweep
+    // plus its own unfinished backup on failure), and whether a removal failed. The
+    // cleanup value is `removed` or `failed:<errno>` — never a path.
+    leftover_backup_bytes_cleared: bigintNum(f, "leftoverBackupBytesCleared"),
+    leftover_cleanup: str(f, "leftoverCleanup"),
+
     backup_bytes: bigintNum(f, "backupBytes"),
     backup_bytes_unmeasured: bool(f, "backupBytesUnmeasured"),
     messages_extracted: num(f, "messagesExtracted"),

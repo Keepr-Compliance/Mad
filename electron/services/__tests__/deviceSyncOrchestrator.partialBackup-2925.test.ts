@@ -117,6 +117,11 @@ jest.mock("../backupService", () => ({
       checkBackupStatus: mockCheckBackupStatus,
       startBackup: mockStartBackup,
       cancelBackup: jest.fn(),
+      // BACKLOG-3598: leftover cleanup. Inert here; the cleanup itself is proven in
+      // deviceSyncOrchestrator.failedSyncCleanup-3598.test.ts against a real folder.
+      sweepLeftoverBackups: jest.fn().mockResolvedValue({ removed: 0, bytesFreed: 0, failures: [] }),
+      classifyBackupFolder: jest.fn().mockResolvedValue("absent"),
+      removeLeftoverBackup: jest.fn().mockResolvedValue({ outcome: "kept", folder: "absent" }),
     });
   }),
 }));
