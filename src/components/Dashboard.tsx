@@ -237,6 +237,10 @@ function Dashboard({
               if (type === 'iphone' && onSyncPhone) {
                 onSyncPhone();
               }
+              // BACKLOG-3658: reopen the Google Messages Sync window (live progress).
+              if (type === 'google-messages' && onSyncAndroid) {
+                onSyncAndroid();
+              }
             }}
           />
         </div>
@@ -502,7 +506,7 @@ function Dashboard({
                     Sync Android Messages
                   </h3>
                   <p className="text-sm text-gray-500">
-                    Import texts over Wi-Fi
+                    Copy texts from Google Messages
                   </p>
                 </div>
                 <svg

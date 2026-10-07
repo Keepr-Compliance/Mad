@@ -1,0 +1,7 @@
+MUTATION APPLIED u1: USING has term=f guard stamps=t
+FAIL L7c abandoned_at back to NULL: matches 0 rows, value kept :: {"error":"42501","set":"t"}
+FAIL L7d 2.38-shaped flip of an abandoned upload: matches 0 rows, still uploading :: {"rows":1}
+live-run post: 40 pass, 2 fail
+MUTATION APPLIED a49: USING has term=t guard stamps=f
+FAIL L7g client writes a future abandoned_at: stored value is server time :: {"rows":1,"skew_s":3131753939.300463}
+live-run post: 41 pass, 1 fail

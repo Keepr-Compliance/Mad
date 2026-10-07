@@ -185,11 +185,24 @@ export interface ReactionActorEvent {
   sentAt: string;
   /** Raw Apple associated_message_type (2000–3005). */
   associatedType: number | null | undefined;
+  /**
+   * BACKLOG-3620: the reaction's own emoji, when the row carries one (see
+   * reactionEmojiFromBody). Only used for kind "other": each distinct emoji
+   * becomes its own pill instead of every "other" merging into one star.
+   */
+  emoji?: string | null;
 }
 
 /** An active tapback kind with the actors who currently hold it. */
 export interface AggregatedReaction {
+  /**
+   * Unique per pill: the kind, or `other:<emoji>` for an "other" reaction that
+   * carries its own emoji (BACKLOG-3620). Use as the React key.
+   */
+  key: string;
   kind: ReactionKind;
+  /** The reaction's own emoji for kind "other"; null means use REACTION_EMOJI. */
+  emoji: string | null;
   count: number;
   /** Actors currently holding this tapback (first-seen order). */
   actors: string[];
@@ -208,13 +221,23 @@ export function aggregateReactions(
   // key = actor   kind
   const latest = new Map<
     string,
-    { at: string; isRemoval: boolean; actor: string; kind: ReactionKind }
+    {
+      at: string;
+      isRemoval: boolean;
+      actor: string;
+      kind: ReactionKind;
+      pill: string;
+      emoji: string | null;
+    }
   >();
 
   for (const ev of events) {
     const mapped = mapReactionType(ev.associatedType);
     if (!mapped) continue;
-    const key = `${ev.actor} ${mapped.kind}`;
+    // BACKLOG-3620: an "other" reaction with its own emoji is its own pill.
+    const emoji = mapped.kind === "other" && ev.emoji ? ev.emoji : null;
+    const pill = emoji ? `other:${emoji}` : mapped.kind;
+    const key = `${ev.actor} ${pill}`;
     const prev = latest.get(key);
     if (!prev || ev.sentAt >= prev.at) {
       latest.set(key, {
@@ -222,21 +245,58 @@ export function aggregateReactions(
         isRemoval: mapped.isRemoval,
         actor: ev.actor,
         kind: mapped.kind,
+        pill,
+        emoji,
       });
     }
   }
 
-  const byKind = new Map<ReactionKind, string[]>();
+  const byPill = new Map<string, { kind: ReactionKind; emoji: string | null; actors: string[] }>();
   for (const entry of latest.values()) {
     if (entry.isRemoval) continue; // inactive — a removal was the latest event
-    const arr = byKind.get(entry.kind);
-    if (arr) arr.push(entry.actor);
-    else byKind.set(entry.kind, [entry.actor]);
+    const group = byPill.get(entry.pill);
+    if (group) group.actors.push(entry.actor);
+    else byPill.set(entry.pill, { kind: entry.kind, emoji: entry.emoji, actors: [entry.actor] });
   }
 
   const result: AggregatedReaction[] = [];
-  for (const [kind, actors] of byKind) {
-    result.push({ kind, count: actors.length, actors });
+  for (const [key, group] of byPill) {
+    result.push({
+      key,
+      kind: group.kind,
+      emoji: group.emoji,
+      count: group.actors.length,
+      actors: group.actors,
+    });
   }
   return result;
+}
+
+// ============================================
+// OWN-EMOJI REACTIONS (BACKLOG-3620)
+// ============================================
+
+/** Letters or digits: a sentence, not a bare emoji. */
+const HAS_WORD_CHARACTER = /[\p{L}\p{N}]/u;
+const HAS_PICTOGRAPH = /\p{Extended_Pictographic}/u;
+
+/**
+ * The emoji a reaction row carries in its body, or null.
+ *
+ * A Messages for Web reaction row stores exactly the emoji as `body_text`. A
+ * macOS custom tapback (2006/2007) stores a sentence, which has letters, so it
+ * returns null and keeps the generic "other" glyph.
+ */
+export function reactionEmojiFromBody(body: string | null | undefined): string | null {
+  if (!body) return null;
+  const trimmed = body.trim();
+  if (trimmed.length === 0 || trimmed.length > 16) return null;
+  if (HAS_WORD_CHARACTER.test(trimmed)) return null;
+  if (!HAS_PICTOGRAPH.test(trimmed)) return null;
+  return trimmed;
+}
+
+/** The glyph for one aggregated pill: its own emoji, else the kind's glyph. */
+export function reactionGlyph(agg: Pick<AggregatedReaction, "kind" | "emoji">): string {
+  return agg.emoji ?? REACTION_EMOJI[agg.kind];
 }

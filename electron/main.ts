@@ -28,6 +28,8 @@ import {
 } from "electron";
 import path from "path";
 import log from "electron-log";
+import { isRcsLinkDeepLink, isRcsOpenDeepLink } from "./utils/rcsLinkDeepLink";
+import { bringAppToFrontOrFlash } from "./utils/bringAppToFront";
 import {
   buildFirstRunNotice,
   getAppliedAppDataPaths,
@@ -146,6 +148,12 @@ import { registerEmailAutoLinkHandlers } from "./handlers/emailAutoLinkHandlers"
 import { registerReviewQueueHandlers } from "./handlers/reviewQueueHandlers";
 import { registerHiddenTextHandlers } from "./handlers/hiddenTextHandlers";
 import { registerChecklistHandlers } from "./handlers/checklistHandlers";
+import {
+  registerRcsImportHandlers,
+  startRcsExtensionBridge,
+  stopRcsExtensionBridge,
+  rcsLinkCodeForDeepLink,
+} from "./handlers/rcsImportHandlers";
 import { registerAttachmentHandlers } from "./handlers/attachmentHandlers";
 import { registerContactHandlers } from "./handlers/contactHandlers";
 import { registerAddressHandlers } from "./handlers/addressHandlers";
@@ -493,6 +501,28 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       log.info("[DeepLink] Payment callback received", { hasSession: !!sessionId });
       sendToRenderer("payment:deep-link-callback", { sessionId });
       focusMainWindow();
+      return;
+    }
+
+    // C1 (UX redesign): keepr://link — ONLY opens Keepr's "Enter the code from
+    // your browser" screen. Any parameters are ignored (any local app can
+    // fire keepr://); nothing is read from the URL.
+    if (isRcsLinkDeepLink(url)) {
+      // Founder (2026-10-06): the code "Copy code and open Keepr" copied —
+      // Windows only, while a link is waiting, exactly the code (never logged).
+      const code = rcsLinkCodeForDeepLink();
+      log.info("[DeepLink] Link screen requested", { codeFromClipboard: code !== null });
+      sendToRenderer("rcs-import:open-link-screen", code ? { code } : {});
+      focusMainWindow();
+      return;
+    }
+
+    // Live (founder): keepr://open — the extension's "Open Keepr" fallback.
+    // ONLY shows + focuses the main window (flashes the taskbar on Windows if
+    // focus is refused); nothing is read from the URL.
+    if (isRcsOpenDeepLink(url)) {
+      log.info("[DeepLink] Open requested");
+      bringAppToFrontOrFlash(mainWindow);
       return;
     }
 
@@ -944,11 +974,9 @@ app.on("second-instance", (_event, commandLine) => {
     handleDeepLinkCallback(url);
   }
 
-  // Focus main window when second instance is attempted
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  }
+  // Focus main window when second instance is attempted: restored, shown,
+  // focused — and on Windows the taskbar flashes if focus is refused.
+  if (mainWindow && !mainWindow.isDestroyed()) bringAppToFrontOrFlash(mainWindow);
 });
 
 /**
@@ -1759,6 +1787,10 @@ app.whenReady().then(async () => {
   registerHiddenTextHandlers();
   // BACKLOG-3475: transaction checklists — broker templates, items, evidence links.
   registerChecklistHandlers();
+  // BACKLOG-3619: RCS import from the Chrome extension. The loopback bridge
+  // never throws; a taken port leaves it "unavailable" and the app runs on.
+  registerRcsImportHandlers();
+  void startRcsExtensionBridge();
   registerAttachmentHandlers(mainWindow!);
   registerContactHandlers(mainWindow!);
   registerAddressHandlers();
@@ -1934,6 +1966,8 @@ app.on("before-quit", () => {
   cleanupLocalSyncHandlers();
   // Clean up pairing sessions (TASK-1428)
   cleanupPairingHandlers();
+  // BACKLOG-3619: close the RCS import bridge.
+  void stopRcsExtensionBridge();
   // BACKLOG-1831: stop the shadow delta sync poller timers (interval hygiene)
   try {
     const { default: shadowDeltaSyncService } = require("./services/shadowDeltaSyncService");

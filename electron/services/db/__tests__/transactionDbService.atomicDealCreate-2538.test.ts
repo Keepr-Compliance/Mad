@@ -420,3 +420,33 @@ describe("creating a deal with its parties is ONE write (BACKLOG-2538)", () => {
     });
   });
 });
+
+/**
+ * Live FK bug (2026-10-04): a made-up id (a person found in texts,
+ * msg_tel_<e164>) reached the create and failed with a bare "FOREIGN KEY
+ * constraint failed". Every party must be one of THIS user's saved contacts,
+ * checked first: a clear error, no deal, no party rows. Mutations: no check
+ * (the bare FK error); the check not scoped to the user; the id in the message → red.
+ */
+describe("parties that aren't saved contacts are refused before anything is written", () => {
+  it("an unknown id: a clear error, no deal, no parties", () => {
+    let message = "";
+    try {
+      createTransactionWithContactsSync(DEAL, assignmentsFor(["c-buyer", "msg_tel_+15555550111"]));
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toBe("A selected contact isn't saved in Keepr. Add them again from the contact list.");
+    expect(message).not.toContain("5555550111");
+    expect(dealIds()).toEqual([]);
+    expect(attachedContactIds()).toEqual([]);
+  });
+
+  it("another user's contact is not this user's: refused", () => {
+    mockDb!.prepare("INSERT INTO contacts (id, user_id, display_name) VALUES (?, ?, ?)").run("c-other", "someone-else", "Other Party");
+    expect(() => createTransactionWithContactsSync(DEAL, assignmentsFor(["c-buyer", "c-other", "msg_x"]))).toThrow(
+      "2 selected contacts aren't saved in Keepr. Add them again from the contact list.",
+    );
+    expect(dealIds()).toEqual([]);
+  });
+});

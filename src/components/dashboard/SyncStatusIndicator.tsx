@@ -28,7 +28,10 @@ import { useFeatureGate } from "../../hooks/useFeatureGate";
 import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
 import type { SyncType, SyncItemStatus, ReconnectProvider } from "../../services/SyncOrchestratorService";
 import logger from "../../utils/logger";
+import { rcsImportService } from "../../services/rcsImportService";
+import { GOOGLE_MESSAGES_SYNC_TYPE } from "../../hooks/googleMessagesSyncStatus";
 import { openEmailSettings } from "../../utils/openEmailSettings";
+import { IMPORT_SOURCE_LABELS } from "../settings/importSourceLabels";
 // BACKLOG-3128: the macOS Messages phase vocabulary, shared with the Settings
 // panel so the pill and the panel cannot disagree about what is happening.
 import { importPhaseDisplayFor } from "../../utils/importPhaseDisplay";
@@ -71,6 +74,8 @@ const getLabelForType = (type: SyncType): string => {
       return 'Restore';
     case 'ccpa-export':
       return 'Data Export';
+    case 'google-messages':
+      return IMPORT_SOURCE_LABELS['android-messages-web'];
     default:
       return type;
   }
@@ -104,6 +109,8 @@ export function SyncStatusIndicator({
 }: SyncStatusIndicatorProps) {
   const [showCompletion, setShowCompletion] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  /** Founder: Keepr's Try again for a failed Google Messages Sync could not start. */
+  const [gmRetryError, setGmRetryError] = useState<string | null>(null);
   const wasSyncingRef = useRef(false);
   const hadErrorsDuringSync = useRef(false);
   const errorItemsDuringSync = useRef<string[]>([]);
@@ -111,6 +118,8 @@ export function SyncStatusIndicator({
   // connection expired — reconnect to sync email") so the completion subtitle
   // names the failure and reconnect action instead of a generic "Failed: emails".
   const errorMessagesDuringSync = useRef<string[]>([]);
+  /** BACKLOG-3658: external syncs' own result lines (e.g. Google Messages' saved counts). */
+  const summariesDuringSync = useRef<string[]>([]);
   // BACKLOG-2127: capture the TYPED reconnect provider (from the item's
   // reconnectProvider discriminator — NOT parsed from the message) so the
   // completion card can render a provider-aware "Reconnect" CTA that routes to
@@ -186,6 +195,7 @@ export function SyncStatusIndicator({
         hadErrorsDuringSync.current = false;
         errorItemsDuringSync.current = [];
         errorMessagesDuringSync.current = [];
+        summariesDuringSync.current = [];
         reconnectProviderDuringSync.current = null;
         // BACKLOG-2748: a cancel belongs to the run it stopped, not the next one.
         cancelledDuringSync.current = false;
@@ -197,6 +207,10 @@ export function SyncStatusIndicator({
       setDismissed(false);
       // Track errors as they happen during sync
       for (const item of queue) {
+        // BACKLOG-3658: an external sync's own result line (counts only).
+        if (item.status === "complete" && item.summary && !summariesDuringSync.current.includes(item.summary)) {
+          summariesDuringSync.current.push(item.summary);
+        }
         // BACKLOG-2748: a multi-type run (contacts, emails, messages) can land
         // the cancelled messages item while the others are still going, so the
         // flag has to be observed here too and not only at the transition.
@@ -241,6 +255,10 @@ export function SyncStatusIndicator({
       // below, which meant a cancel returned early and the run's errors were
       // never recorded — see the ordering note on that gate.
       for (const item of queue) {
+        // BACKLOG-3658: an external sync's own result line (counts only).
+        if (item.status === "complete" && item.summary && !summariesDuringSync.current.includes(item.summary)) {
+          summariesDuringSync.current.push(item.summary);
+        }
         // BACKLOG-2748: catch an internal cancel that only became visible on
         // the transition itself (the single-sync case: the messages item flips
         // to complete+cancelled and `isRunning` goes false in one update).
@@ -389,7 +407,15 @@ export function SyncStatusIndicator({
 
     const styles = completionStyles[completionVariant];
 
+    // Storyboard H02 (founder 2026-10-04): a failed Google Messages Sync alone
+    // is "Sync failed", its reason, Try again — no support-ticket line.
+    const gmFailed =
+      completionVariant === 'error' &&
+      errorItemsDuringSync.current.length === 1 &&
+      errorItemsDuringSync.current[0] === GOOGLE_MESSAGES_SYNC_TYPE;
+
     const completionTitle =
+      gmFailed ? 'Sync failed' :
       completionVariant === 'error' ? 'Sync Completed with Errors' :
       completionVariant === 'pending' ? `${pendingCount} transaction${pendingCount !== 1 ? "s" : ""} found` :
       'Sync Complete';
@@ -403,7 +429,7 @@ export function SyncStatusIndicator({
             ? errorMessagesDuringSync.current.join(' ')
             : `Failed: ${errorItemsDuringSync.current.join(', ')}`) :
       completionVariant === 'pending' ? 'New transactions detected and ready for review' :
-      'All data synced successfully';
+      (summariesDuringSync.current.length > 0 ? summariesDuringSync.current.join(' ') : 'All data synced successfully');
 
     return (
       <div
@@ -431,6 +457,10 @@ export function SyncStatusIndicator({
                     d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"
                   />
                 </svg>
+              ) : gmFailed ? (
+                <span className="text-[18px] font-extrabold text-[#B45309]" aria-hidden="true" data-testid="sync-gm-failed-icon">
+                  !
+                </span>
               ) : completionVariant === 'error' ? (
                 <svg
                   className="w-5 h-5 text-amber-600"
@@ -476,7 +506,10 @@ export function SyncStatusIndicator({
               >
                 {completionSubtitle}
               </p>
-              {completionVariant === 'error' && (
+              {gmRetryError && (
+                <p className="text-xs text-amber-800 mt-1" role="alert" data-testid="sync-gm-retry-error">{gmRetryError}</p>
+              )}
+              {completionVariant === 'error' && !gmFailed && (
                 <p className="text-xs text-amber-600 mt-1">
                   If this persists, please <button type="button" onClick={() => window.dispatchEvent(new CustomEvent('open-support-widget', { detail: { subject: `Sync Error: ${errorItemsDuringSync.current.join(', ')}` } }))} className="underline hover:text-amber-800">submit a support ticket</button>.
                 </p>
@@ -500,6 +533,23 @@ export function SyncStatusIndicator({
                 data-testid="sync-reconnect-button"
               >
                 Reconnect {reconnectProviderDuringSync.current === 'microsoft' ? 'Outlook' : 'Gmail'}
+              </button>
+            )}
+            {/* Founder (2026-10-04): a failed Google Messages Sync tries again
+                from here (the chats it saved are skipped). */}
+            {completionVariant === 'error' && errorItemsDuringSync.current.includes(GOOGLE_MESSAGES_SYNC_TYPE) && (
+              <button
+                onClick={() => {
+                  setGmRetryError(null);
+                  void rcsImportService.retryCacheJob().then((r) => {
+                    if (r.success) handleDismiss();
+                    else setGmRetryError(r.error ?? "Keepr could not start the Sync.");
+                  });
+                }}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+                data-testid="sync-gm-try-again"
+              >
+                Try again
               </button>
             )}
             {completionVariant === 'pending' && onViewPending && (

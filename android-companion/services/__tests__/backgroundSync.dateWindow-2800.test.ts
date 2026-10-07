@@ -233,7 +233,7 @@ const DAY = 24 * 60 * 60 * 1000;
 /** Fixed clock. All window arithmetic in these tests is relative to it. */
 const NOW = new Date(2026, 7, 30, 12, 0, 0).getTime();
 /** The 3-month edge for NOW, computed the way the implementation does. */
-const THREE_MONTHS_AGO = new Date(2026, 4, 30, 12, 0, 0).getTime();
+const THREE_MONTHS_AGO = NOW - 91 * DAY; // 3 months × 30.4375 days
 
 async function setPaired(): Promise<void> {
   await AsyncStorage.setItem(

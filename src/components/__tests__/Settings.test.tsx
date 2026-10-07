@@ -598,7 +598,56 @@ describe("Settings", () => {
      * why it is asserted here — with the macOS panel's absence checked too, so
      * the test cannot pass by silently having rendered the other branch.
      */
-    it("Android: the same Sources block sits above the Android panel", async () => {
+    // BACKLOG-3659 P3d. Mutation: the android-messages-web branch removed → red.
+    // BACKLOG-1467 stands; BACKLOG-3749: a Mac that skips its Messages because
+    // Google Messages is selected SHOWS that selection (radio + section),
+    // never a blank or greyed panel. Mutation: the macOS panel shown → red.
+    it("Android with Google Messages: the radio and the Google Messages section; no macOS or companion panel", async () => {
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: { source: "android-messages-web" },
+        },
+      });
+
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      expect(await screen.findByTestId("google-messages-settings")).toBeInTheDocument();
+      expect(screen.queryByTestId("android-block-actions")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("macos-messages-import")).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect((document.querySelector('input[value="android-messages-web"]') as HTMLInputElement | null)?.checked).toBe(true),
+      );
+    });
+
+    // BACKLOG-3749: a stored value this build does not know (e.g. from a newer
+    // build) is read as the platform default — on a Mac, macOS Messages,
+    // checked and live; nothing is written back. Mutation: the raw value used
+    // (no radio checked, the panel disabled) → red.
+    it("an unknown stored source: on a Mac, the macOS radio is checked and its panel is live; nothing written", async () => {
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: { source: "some-future-source" },
+        },
+      });
+
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      expect(await screen.findByTestId("macos-messages-import")).toBeInTheDocument();
+      await waitFor(() =>
+        expect((container.querySelector('input[value="macos-native"]') as HTMLInputElement | null)?.checked).toBe(true),
+      );
+      expect(screen.queryByTestId("google-messages-settings")).not.toBeInTheDocument();
+      expect(window.api.preferences.update).not.toHaveBeenCalled();
+    });
+
+    // SR C6 (founder): the Companion panel is no longer mounted — a stored
+    // "android-companion" shows the Google Messages section, under the same
+    // Sources block. Mutation: the Companion branch back → red.
+    it("Android (a stored Companion source): the same Sources block sits above the Google Messages section", async () => {
       jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
@@ -610,22 +659,13 @@ describe("Settings", () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
       const sourcesBlock = await screen.findByTestId("messages-block-sources");
-      const preferences = await screen.findByTestId("android-block-preferences");
-      const actions = await screen.findByTestId("android-block-actions");
-
-      // This really is the Android branch, not the macOS one.
+      const gm = await screen.findByTestId("google-messages-settings");
+      expect(screen.queryByTestId("android-block-preferences")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("android-block-actions")).not.toBeInTheDocument();
       expect(screen.queryByTestId("macos-messages-import")).not.toBeInTheDocument();
-
-      expect(
-        `sources then android preferences: ${
-          (sourcesBlock.compareDocumentPosition(preferences) & 4) !== 0
-        }`,
-      ).toBe("sources then android preferences: true");
-      expect(
-        `android preferences then actions: ${
-          (preferences.compareDocumentPosition(actions) & 4) !== 0
-        }`,
-      ).toBe("android preferences then actions: true");
+      expect(`sources then google messages: ${(sourcesBlock.compareDocumentPosition(gm) & 4) !== 0}`).toBe(
+        "sources then google messages: true",
+      );
       expect(within(sourcesBlock).getByText("Sources")).toBeInTheDocument();
     });
 
@@ -1242,7 +1282,9 @@ describe("Settings", () => {
   // Android device/status management (AndroidMessagesSettings). The wizard
   // (android-sync-setup) must no longer render inline in Settings.
   describe("Android Sync Wizard relocated to Dashboard (BACKLOG-2320)", () => {
-    it("does NOT render the inline guided wizard for an Android user", async () => {
+    // SR C6 (founder): no Companion UI at all — no wizard, no Companion panel,
+    // no Companion radio; a stored "android-companion" gets Google Messages.
+    it("does NOT render the inline guided wizard, or any Companion UI, for an Android user", async () => {
       jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
@@ -1253,37 +1295,15 @@ describe("Settings", () => {
 
       const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      // The guided wizard is gone from Settings (relocated to the Dashboard).
+      expect(await screen.findByTestId("google-messages-settings")).toBeInTheDocument();
       expect(screen.queryByTestId("android-sync-setup")).not.toBeInTheDocument();
       expect(screen.queryByText("Install Keepr Companion")).not.toBeInTheDocument();
-
-      // ...but the Messages section + Android device/status management remain.
-      expect(container.querySelector("#settings-messages")).toBeInTheDocument();
-      // BACKLOG-2468 scoped this to the HEADING rather than bare text, because
-      // "Android Companion" appeared TWICE inside #settings-messages: as the
-      // panel's own <h4> (what this assertion is about) and as the label of the
-      // import-source radio. Whether the radio renders depends on
-      // `usePlatform()`, so a bare findByText passed under plain-node jest and
-      // threw "Found multiple elements" under ELECTRON_RUN_AS_NODE — the route
-      // the pre-push hook picks when the native module rests on the Electron
-      // ABI. The <h4> was the only heading with the name, so the role-scoped
-      // query worked in either runtime.
-      //
-      // BACKLOG-3156 stage E deleted that <h4>: Emails and Contacts open
-      // straight onto their first card, and carrying a panel header on Messages
-      // alone was the divergence the shared shape forbids. The words now appear
-      // exactly ONCE on the screen — on the radio — so neither the heading query
-      // nor a text query can name the panel any more.
-      //
-      // The anchor moves to the panel's own testids, which is what the claim was
-      // always about: the Android device/status management rendered. Both are
-      // checked, and both are absent whenever the panel is absent, in either
-      // runtime and regardless of what the radio does.
-      expect(
-        await screen.findByTestId("android-block-preferences"),
-      ).toBeInTheDocument();
-      expect(screen.getByTestId("android-block-actions")).toBeInTheDocument();
-      expect(container.querySelector("#settings-android-companion")).toBeInTheDocument();
+      expect(container.querySelector("#settings-android-companion")).not.toBeInTheDocument();
+      expect(container.querySelector('input[value="android-companion"]')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Android Companion/)).not.toBeInTheDocument();
+      // The stored value is shown as Google Messages, and not rewritten.
+      expect((container.querySelector('input[value="android-messages-web"]') as HTMLInputElement).checked).toBe(true);
+      expect(window.api.preferences.update).not.toHaveBeenCalled();
     });
 
     it("does NOT render the wizard for a non-Android import source either", async () => {

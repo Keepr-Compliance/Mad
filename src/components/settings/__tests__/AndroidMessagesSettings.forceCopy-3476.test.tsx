@@ -36,7 +36,7 @@ describe("BACKLOG-3476 — Android force re-import warning", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /force re-import/i }));
 
-    const heading = await screen.findByText(/Force re-import will delete all Android data/);
+    const heading = await screen.findByText(/Force re-import will delete every text imported from your Android phone/);
     const warning = heading.parentElement as HTMLElement;
     expect(warning).toHaveTextContent(
       /Links from checklist items to those messages’ attachments are removed too\./,

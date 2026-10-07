@@ -405,7 +405,7 @@ describe("BACKLOG-2760 — the guard fails CLOSED while the estimate is unknown"
     const pendingAllTime = deferred<typeof ALL_TIME_RESULT>();
     (window.api.messages.getImportCount as jest.Mock).mockImplementation(
       (_userId: string, selection: { lookbackMonths: number | null }) =>
-        selection?.lookbackMonths === null
+        selection?.lookbackMonths === 12
           ? pendingAllTime.promise
           : Promise.resolve(THREE_MONTH_RESULT)
     );
@@ -414,10 +414,11 @@ describe("BACKLOG-2760 — the guard fails CLOSED while the estimate is unknown"
 
     await waitFor(() => expect(importButton()).toBeEnabled());
 
-    // Switch to All time. The new estimate is in flight and unknown.
+    // Switch to a wider window (1 year; All time is no longer offered). The
+    // new estimate is in flight and unknown.
     const select = screen.getByDisplayValue("Last 3 months") as HTMLSelectElement;
     await act(async () => {
-      select.value = "all";
+      select.value = "12";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
 

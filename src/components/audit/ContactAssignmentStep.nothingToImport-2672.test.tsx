@@ -221,7 +221,13 @@ describe("BACKLOG-2672 — the transaction picker", () => {
    * with no name but WITH a phone is the common, useful case, and it is the leg
    * a too-broad predicate eats.
    */
-  it("a record with NO NAME but WITH a phone keeps a working + Add", () => {
+  it("a record with NO NAME but WITH a phone keeps a working + Add", async () => {
+    // Live FK fix: picking a record with no row IMPORTS it first and the deal
+    // gets the SAVED id (the made-up msg_ id failed the transaction insert).
+    jest.mocked(window.api.contacts.import).mockResolvedValue({
+      success: true,
+      contacts: [{ ...namelessButReachable, id: "saved-reachable", is_message_derived: 0 }],
+    } as never);
     const onSelectedContactIdsChange = jest.fn();
     render(
       <ContactAssignmentStep
@@ -241,7 +247,9 @@ describe("BACKLOG-2672 — the transaction picker", () => {
     ).toBeNull();
 
     fireEvent.click(rowFor("msg_reachable"));
-    expect(onSelectedContactIdsChange).toHaveBeenCalledWith(["msg_reachable"]);
+    await waitFor(() => expect(window.api.contacts.import).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onSelectedContactIdsChange.mock.calls.flat(2)).toContain("saved-reachable"));
+    expect(onSelectedContactIdsChange.mock.calls.flat(2)).not.toContain("msg_reachable");
   });
 
   /** And an ordinary saved contact is untouched by any of this. */
@@ -388,17 +396,24 @@ describe("the transaction flow imports a nameless record too (BACKLOG-2707)", ()
    */
   it("card leg — two presses reach the preview, and its Import control is live", async () => {
     const onSelectedContactIdsChange = jest.fn();
+    jest.mocked(window.api.contacts.import).mockResolvedValue({
+      success: true,
+      contacts: [{ ...messageDerivedPerson, id: "saved-dana", is_message_derived: 0 }],
+    } as never);
 
-    // STEP 2 — pressing the row selects it. This is the first of the two
-    // presses, and it is what puts the record in front of step 3.
+    // STEP 2 — pressing the row IMPORTS it (live FK fix; was BACKLOG-3188:
+    // the made-up msg_ id was selected and the deal insert failed) and
+    // selects the saved contact.
     const { unmount } = render(
       <ContactAssignmentStep
         {...propsWith([messageDerivedPerson], { onSelectedContactIdsChange })}
       />,
     );
     fireEvent.click(rowFor("msg_dana whitlock"));
-    expect(onSelectedContactIdsChange).toHaveBeenCalledWith(["msg_dana whitlock"]);
+    await waitFor(() => expect(onSelectedContactIdsChange.mock.calls.flat(2)).toContain("saved-dana"));
+    expect(onSelectedContactIdsChange.mock.calls.flat(2)).not.toContain("msg_dana whitlock");
     unmount();
+    jest.mocked(window.api.contacts.import).mockClear();
 
     // STEP 3 — the selected record gets a ContactRoleRow, and pressing it opens
     // the card. This is the caller the old test said did not exist.
@@ -425,17 +440,11 @@ describe("the transaction flow imports a nameless record too (BACKLOG-2707)", ()
       screen.queryByTestId("contact-preview-import-blocked"),
     ).not.toBeInTheDocument();
 
-    // The press reaches `handlePreviewImportAction`, which closes the card.
-    //
-    // WHAT THIS DELIBERATELY DOES NOT ASSERT: that the record is imported. On
-    // this leg the press does NOT import — `handleImportContact` decides
-    // "external" by membership of `contacts`, and message-derived rows arrive
-    // inside `contacts`, so the already-imported branch runs and a synthesized
-    // `msg_*` id with no `contacts` row is added to the transaction. That is
-    // pre-existing, untouched by BACKLOG-2707, and filed as BACKLOG-3188.
-    // Asserting an import here would claim a path is handled when it is not,
-    // which is the mistake this whole item exists to stop.
+    // The press reaches `handlePreviewImportAction`, which closes the card —
+    // and now IMPORTS the record (live FK fix, BACKLOG-3188): a made-up msg_
+    // id is never "already in the database".
     fireEvent.click(live);
+    await waitFor(() => expect(window.api.contacts.import).toHaveBeenCalledTimes(1));
     await waitFor(() =>
       expect(screen.queryByTestId("contact-preview-name")).not.toBeInTheDocument(),
     );

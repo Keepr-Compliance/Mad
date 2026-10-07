@@ -20,12 +20,45 @@ jest.mock("../../../components/settings/android/AndroidSyncSetup", () => ({
   ),
 }));
 
+jest.mock("../../../components/settings/android/GoogleMessagesSyncFlow", () => ({
+  GoogleMessagesSyncFlow: ({ onOpenSettings }: { onOpenSettings?: () => void }) => (
+    <>
+      <div data-testid="gm-flow-stub">google messages flow</div>
+      {onOpenSettings && (
+        <button type="button" data-testid="gm-change-stub" onClick={onOpenSettings}>
+          Change
+        </button>
+      )}
+    </>
+  ),
+}));
+
 describe("AndroidSyncModal", () => {
+  // SR C6 (founder): always the Google Messages flow; no way to the
+  // Companion wizard. Mutation: the companion branch back → red.
+  it("always the Google Messages flow — never the Companion wizard", () => {
+    render(<AndroidSyncModal userId="user-1" onClose={jest.fn()} />);
+    expect(screen.getByTestId("gm-flow-stub")).toBeInTheDocument();
+    expect(screen.queryByTestId("android-sync-setup-stub")).not.toBeInTheDocument();
+    expect(screen.queryByText(/another texting app/i)).not.toBeInTheDocument();
+  });
+
+  // Founder: "Change" closes the modal and opens Settings at the Google
+  // Messages months control. Mutation: wrong target / modal left open → red.
+  it("Google Messages: Change closes the modal and opens Settings at the months control", () => {
+    const onClose = jest.fn();
+    const onOpenSettings = jest.fn();
+    render(<AndroidSyncModal userId="user-1" onClose={onClose} onOpenSettings={onOpenSettings} />);
+    fireEvent.click(screen.getByTestId("gm-change-stub"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onOpenSettings).toHaveBeenCalledWith("settings-gm-lookback");
+  });
+
   it("renders the wizard flush inside a scrollable body", () => {
     render(<AndroidSyncModal userId="user-1" onClose={jest.fn()} />);
 
-    // The wizard is mounted in the modal body.
-    expect(screen.getByTestId("android-sync-setup-stub")).toBeInTheDocument();
+    // The flow is mounted in the modal body.
+    expect(screen.getByTestId("gm-flow-stub")).toBeInTheDocument();
 
     // The body scrolls so nothing is unreachable in a narrow/short viewport.
     const body = screen.getByTestId("android-sync-modal-body");

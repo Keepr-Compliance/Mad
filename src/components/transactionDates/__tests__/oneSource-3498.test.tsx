@@ -24,7 +24,10 @@ jest.mock("../TransactionDatesFields", () => {
   const actual = jest.requireActual("../TransactionDatesFields");
   return { ...actual, TransactionDatesFields: jest.fn(actual.TransactionDatesFields) };
 });
+// BACKLOG-3683: the module also exports the pure payload builder the submit
+// summary's scope preview uses; only the WRITER is replaced.
 jest.mock("../saveConfirmedTransactionDates", () => ({
+  ...jest.requireActual("../saveConfirmedTransactionDates"),
   saveConfirmedTransactionDates: jest.fn(),
 }));
 

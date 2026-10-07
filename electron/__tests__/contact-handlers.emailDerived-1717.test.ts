@@ -72,10 +72,13 @@ jest.mock("../handlers/featureGateHandlers", () => ({
 
 // --- the user's own switches -------------------------------------------------
 const mockSourceEnabled = jest.fn();
+const mockTextPeopleOn = jest.fn(() => Promise.resolve(false));
 jest.mock("../utils/preferenceHelper", () => ({
   ...(jest.requireActual("../utils/preferenceHelper") as object),
   isContactSourceEnabled: (...a: unknown[]) => mockSourceEnabled(...a),
+  isTextPeopleEnabled: () => mockTextPeopleOn(),
 }));
+const mockTextPeople = jest.fn((): unknown[] => []);
 
 // --- the producer ------------------------------------------------------------
 const mockProducer = jest.fn();
@@ -103,6 +106,7 @@ jest.mock("../services/databaseService", () => ({
     isInitialized: jest.fn(() => true),
     backfillContactEmails: jest.fn(() => Promise.resolve(0)),
     backfillContactPhones: jest.fn(() => Promise.resolve(0)),
+    getTextDerivedPeople: () => mockTextPeople(),
   },
 }));
 
@@ -418,5 +422,67 @@ describe("BACKLOG-1717 — the gate in front of people found in email", () => {
     const res = await getAll(mockEvent, USER);
     const ids = (res.contacts ?? []).map((c: any) => String(c.id));
     expect(ids.filter((id: string) => id.startsWith("email_"))).toEqual([]);
+  });
+});
+
+/**
+ * Live FK fix (2026-10-04): people found in Google Messages texts are offered
+ * in the ADDRESS-BOOK half (as email people above), so picking one imports it
+ * and the deal gets the saved id. In the saved half their made-up msg_tel_ id
+ * reached transaction_contacts → "FOREIGN KEY constraint failed".
+ * Mutations: not offered here; offered with the switch off; a read failure
+ * taking the picker down → red.
+ */
+describe("people found in texts are offered in the address-book half", () => {
+  const TEXT_PERSON = {
+    id: "msg_tel_+15555550111",
+    display_name: "(555) 555-0111",
+    name: "(555) 555-0111",
+    email: null,
+    phone: "+15555550111",
+    company: null,
+    source: "messages",
+    is_imported: 0,
+    is_message_derived: 1,
+    last_communication_at: "2026-09-20T10:00:00.000Z",
+    communication_count: 3,
+  };
+  beforeEach(() => {
+    mockDb = openTestDb();
+    mockDb.exec(CONTACT_IDENTITY_SCHEMA);
+    mockShadowRows = [SHADOW_ROW];
+    registeredHandlers.clear();
+    jest.clearAllMocks();
+    mockProducer.mockResolvedValue([]);
+    gate({});
+    mockTextPeople.mockReturnValue([TEXT_PERSON]);
+    registerContactHandlers({} as any);
+  });
+  afterEach(() => {
+    mockDb?.close();
+    mockDb = null;
+  });
+
+  it("switch on: offered with the address book (the rest untouched)", async () => {
+    mockTextPeopleOn.mockResolvedValue(true);
+    const res = await getAvailable();
+    expect(res.contacts.map((c: any) => c.id)).toEqual(expect.arrayContaining(["ext-1", "msg_tel_+15555550111"]));
+    expect(res.contacts.find((c: any) => c.id === "msg_tel_+15555550111")).toMatchObject({ phone: "+15555550111", source: "messages", user_id: USER });
+  });
+
+  it("switch off: not offered", async () => {
+    mockTextPeopleOn.mockResolvedValue(false);
+    const res = await getAvailable();
+    expect(res.contacts.some((c: any) => String(c.id).startsWith("msg_tel_"))).toBe(false);
+  });
+
+  it("a failed read: the rest of the picker survives", async () => {
+    mockTextPeopleOn.mockResolvedValue(true);
+    mockTextPeople.mockImplementation(() => {
+      throw new Error("db");
+    });
+    const res = await getAvailable();
+    expect(res.success).toBe(true);
+    expect(res.contacts.some((c: any) => c.id === "ext-1")).toBe(true);
   });
 });

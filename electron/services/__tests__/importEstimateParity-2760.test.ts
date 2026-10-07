@@ -59,11 +59,9 @@ type StoredFilters = { lookbackMonths?: number | null };
 /** Apple-epoch nanoseconds, the units chat.db stores `message.date` in. */
 const toAppleNano = (d: Date): number => (d.getTime() - MAC_EPOCH) * NANOS_PER_MS;
 
-/** `now` minus N months, matching computeImportCutoffNano's own arithmetic. */
+/** `now` minus N months: N × 30.4375 days, rounded (restated as a literal, see lookbackWindow.ts). */
 function monthsBefore(months: number, now: Date = NOW): Date {
-  const d = new Date(now.getTime());
-  d.setMonth(d.getMonth() - months);
-  return d;
+  return new Date(now.getTime() - Math.round(months * 30.4375) * 24 * 60 * 60 * 1000);
 }
 
 /**
@@ -98,6 +96,8 @@ function estimateFilters(prefs: StoredFilters, rawAuditStartISO: string | null) 
  * boundary, 1 ms before, 1 ms after. Ids are asserted as sets.
  */
 const THREE_MONTH_CUTOFF = monthsBefore(3);
+/** The default window (1.5 months, founder 2026-10-02). */
+const DEFAULT_CUTOFF = monthsBefore(1.5);
 const TWENTY_FOUR_MONTH_CUTOFF = monthsBefore(24);
 
 const CORPUS: Array<{ id: string; at: Date }> = [
@@ -109,6 +109,9 @@ const CORPUS: Array<{ id: string; at: Date }> = [
   { id: "before-3mo", at: new Date(THREE_MONTH_CUTOFF.getTime() - 1) },
   { id: "on-3mo", at: new Date(THREE_MONTH_CUTOFF.getTime()) },
   { id: "after-3mo", at: new Date(THREE_MONTH_CUTOFF.getTime() + 1) },
+  { id: "before-default", at: new Date(DEFAULT_CUTOFF.getTime() - 1) },
+  { id: "on-default", at: new Date(DEFAULT_CUTOFF.getTime()) },
+  { id: "after-default", at: new Date(DEFAULT_CUTOFF.getTime() + 1) },
   { id: "yesterday", at: new Date("2026-08-15T12:00:00.000Z") },
 ];
 
@@ -124,13 +127,17 @@ function selectedIds(cutoffNano: number | null): string[] {
 }
 
 const ALL_IDS = CORPUS.map((m) => m.id);
-const FROM_3MO = ["after-3mo", "yesterday"];
+const FROM_DEFAULT = ["after-default", "yesterday"];
+const FROM_3MO = ["after-3mo", "before-default", "on-default", "after-default", "yesterday"];
 const FROM_24MO = [
   "after-24mo",
   "mid-window",
   "before-3mo",
   "on-3mo",
   "after-3mo",
+  "before-default",
+  "on-default",
+  "after-default",
   "yesterday",
 ];
 
@@ -179,13 +186,13 @@ const SHAPES: Array<{
     expected: FROM_24MO,
   },
   {
-    // Absent key = no preference = the 3-month default, NOT All time. This is
+    // Absent key = no preference = the 1.5-month default, NOT All time. This is
     // the shape BACKLOG-2561 was about, and it reaches here whenever only the
     // message cap has ever been changed.
     name: "ABSENT preference key, NO transaction",
     prefs: {},
     auditStartISO: null,
-    expected: FROM_3MO,
+    expected: FROM_DEFAULT,
   },
   {
     name: "ABSENT preference key, audit period widens it",

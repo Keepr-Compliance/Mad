@@ -238,7 +238,9 @@ describe("ContactSourceStep", () => {
   // =========================================================================
 
   describe("Content - Android phone type", () => {
-    it("renders Android Phone Contacts when phone type is android", () => {
+    // Founder (2026-10-05): hidden with the Android Companion's UI.
+    // Mutation: the card shown again → red.
+    it("does not render Android Phone Contacts, even when phone type is android", () => {
       (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
 
       render(
@@ -248,7 +250,7 @@ describe("ContactSourceStep", () => {
         />
       );
 
-      expect(screen.getByText("Android Phone Contacts")).toBeInTheDocument();
+      expect(screen.queryByText("Android Phone Contacts")).not.toBeInTheDocument();
     });
 
     it("hides macOS Contacts when phone type is android", () => {
@@ -277,7 +279,9 @@ describe("ContactSourceStep", () => {
       expect(screen.queryByText("Android Phone Contacts")).not.toBeInTheDocument();
     });
 
-    it("pre-selects Android Contacts and Google Contacts for Android users", async () => {
+    // Founder (2026-10-05): the Android contacts card is hidden, so it is not
+    // written either (the backend derives the default for an absent key).
+    it("pre-selects Google Contacts for Android users; no Android contacts key written", async () => {
       (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
       const onAction = jest.fn();
 
@@ -298,7 +302,6 @@ describe("ContactSourceStep", () => {
               direct: {
                 outlookContacts: false,
                 googleContacts: true,
-                androidContacts: true,
               },
             },
           }
@@ -648,39 +651,31 @@ describe("ContactSourceStep", () => {
     });
 
     describe("Android is unchanged on both platforms", () => {
-      it("writes Android + Google on macOS", async () => {
+      it("writes Google on macOS (Android contacts hidden)", async () => {
         const direct = await captureContinuePayload({
           platform: "macos",
           phoneType: "android",
           authProvider: "google",
         });
 
-        expect(Object.keys(direct).sort()).toEqual([
-          "androidContacts",
-          "googleContacts",
-          "outlookContacts",
-        ]);
+        // Founder (2026-10-05): the Android contacts card is hidden — not written.
+        expect(Object.keys(direct).sort()).toEqual(["googleContacts", "outlookContacts"]);
         expect(direct).toEqual({
-          androidContacts: true,
           googleContacts: true,
           outlookContacts: false,
         });
       });
 
-      it("writes Android + Google on Windows", async () => {
+      it("writes Google on Windows (Android contacts hidden)", async () => {
         const direct = await captureContinuePayload({
           platform: "windows",
           phoneType: "android",
           authProvider: "google",
         });
 
-        expect(Object.keys(direct).sort()).toEqual([
-          "androidContacts",
-          "googleContacts",
-          "outlookContacts",
-        ]);
+        // Founder (2026-10-05): the Android contacts card is hidden — not written.
+        expect(Object.keys(direct).sort()).toEqual(["googleContacts", "outlookContacts"]);
         expect(direct).toEqual({
-          androidContacts: true,
           googleContacts: true,
           outlookContacts: false,
         });

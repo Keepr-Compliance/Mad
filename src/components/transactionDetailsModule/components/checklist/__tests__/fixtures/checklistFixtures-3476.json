@@ -271,21 +271,6 @@
       "source": "text"
     },
     {
-      "id": "att-legacy",
-      "filename": "probe-legacy.png",
-      "mime_type": "image/png",
-      "file_size_bytes": 51200,
-      "storage_path": null,
-      "created_at": "2026-03-10T12:00:00.000Z",
-      "email_id": null,
-      "message_id": null,
-      "source_date": "2026-03-06T10:00:00Z",
-      "direction": "inbound",
-      "context_subject": null,
-      "context_sender": null,
-      "source": "text"
-    },
-    {
       "id": "att-1",
       "filename": "probe-document.pdf",
       "mime_type": "application/pdf",

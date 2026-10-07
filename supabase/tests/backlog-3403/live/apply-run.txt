@@ -1,0 +1,34 @@
+md5 b7cc539fff85417f850341020eb9c405  supabase/migrations/20261004200000_backlog_3403_finalize_submission.sql
+venue: local supabase start (postgres 17.6, storage-api v1.71.0, postgrest v14.5, gotrue v2.196.0) + lib/parity-prelude.sql
+CREATE INDEX
+CREATE INDEX
+CREATE TABLE
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+ALTER TABLE
+REVOKE
+GRANT
+GRANT
+DROP POLICY
+psql:<stdin>:107: NOTICE:  policy "submission_attempts_select" for relation "public.submission_attempts" does not exist, skipping
+CREATE POLICY
+COMMENT
+CREATE FUNCTION
+REVOKE
+GRANT
+CREATE FUNCTION
+REVOKE
+GRANT
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+psql:<stdin>:361: NOTICE:  policy "Submitters can delete attachments of their abandoned upload" for relation "storage.objects" does not exist, skipping
+CREATE POLICY
+exit 0

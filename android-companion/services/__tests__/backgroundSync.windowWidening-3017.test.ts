@@ -235,9 +235,9 @@ const DAY = 24 * 60 * 60 * 1000;
 
 /** Fixed clock. All window arithmetic below is relative to it. */
 const NOW = new Date(2026, 7, 30, 12, 0, 0).getTime();
-/** Edges computed the way `computeWindowStart` computes them. */
-const THREE_MONTHS_AGO = new Date(2026, 4, 30, 12, 0, 0).getTime();
-const NINE_MONTHS_AGO = new Date(2025, 10, 30, 12, 0, 0).getTime();
+/** Edges computed the way `computeWindowStart` computes them (months × 30.4375 days). */
+const THREE_MONTHS_AGO = NOW - 91 * DAY;
+const NINE_MONTHS_AGO = NOW - 274 * DAY;
 
 function prefs(lookbackMonths: number | null): PrefRow {
   return {
