@@ -23,7 +23,7 @@ import {
 import type { SyncErrorType } from '../../types/sync';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
-import { borderRadius, spacing } from '../../theme/spacing';
+import { spacing } from '../../theme/spacing';
 import { Button, Card, CardDivider, CardRow } from '../../components/ui';
 
 /**

@@ -111,7 +111,7 @@ Sentry.init({
     return scrubHttpBreadcrumb(breadcrumb);
   },
   beforeSend(event) {
-    let scrubbed = event;
+    let scrubbed: typeof event;
     try {
       scrubbed = scrubUpdaterEventPII(event);
     } catch (scrubError) {

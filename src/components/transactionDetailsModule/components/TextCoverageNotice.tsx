@@ -37,7 +37,9 @@ const ACTION: Record<TextSource, string> = {
  * counts only on a Mac; anything else (the parked Android Companion
  * included) maps through chosenTextSource.
  */
-export function dialogTextSource(effective: string, onMac: boolean): TextSource | null {
+// BACKLOG-3418: `effective` is null when the user chose no source (Windows/
+// Linux) — the dialog then names no source, like any unrecognised value.
+export function dialogTextSource(effective: string | null, onMac: boolean): TextSource | null {
   const chosen = chosenTextSource(effective);
   return chosen === "mac" && !onMac ? null : chosen;
 }

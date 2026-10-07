@@ -87,6 +87,16 @@ describe("DeviceDetectionService - collectIphoneSyncDiagnostics (BACKLOG-1918)",
     delete process.env.MOCK_DEVICE;
     originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
     service = new DeviceDetectionService();
+    // BACKLOG-3418: the probes run only while iPhone detection is on (the
+    // renderer has called start()). Start it here — with the poll itself
+    // stubbed, so it spawns nothing and consumes none of the mocks below —
+    // while the platform is still the host's (start() returns early on
+    // Windows on ARM). The "off" behaviour has its own suite
+    // (iphoneDiagnosticsGate-3418.test.ts).
+    jest
+      .spyOn(service as unknown as { pollDevices: () => Promise<void> }, "pollDevices")
+      .mockResolvedValue(undefined);
+    service.start();
   });
 
   afterEach(() => {
