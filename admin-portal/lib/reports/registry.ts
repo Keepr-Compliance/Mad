@@ -29,6 +29,22 @@ export const REPORTS: ReportEntry[] = [
     source: 'sync_outcomes',
     permission: PERMISSIONS.ANALYTICS_VIEW,
   },
+  {
+    slug: 'google-messages-sync',
+    title: 'Google Messages Sync Performance',
+    description:
+      'How long each Google Messages Sync took per stage (finding, reading, saving), how many chats and messages it moved, and why runs did not complete.',
+    source: 'sync_outcomes',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
+  {
+    slug: 'submissions',
+    title: 'Submissions',
+    description:
+      'Every submit attempt: which committed, which failed and where, and which are still open or stalled.',
+    source: 'submission_attempts',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
 ];
 
 export function reportHref(slug: string): string {

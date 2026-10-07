@@ -277,17 +277,21 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
   // SELECT *. Partition them out of the returned bubble list so they never render
   // as empty bubbles on the contact-browsing surface (pills are attached in the
   // conversation modal, not here).
+  // Live (founder): the picker's thread rows carry the group's name like the
+  // Texts tab's loader (communicationDbService, BACKLOG-2814): the same
+  // message_thread_names join on (user_id, thread_id).
   if (threadIds.length === 0) {
     const fallbackSql = `
-      SELECT * FROM messages
-      WHERE user_id = ?
-        AND transaction_id IS NULL
-        AND channel IN ('sms', 'imessage')
+      SELECT m.*, tn.display_name AS thread_display_name FROM messages m
+      LEFT JOIN message_thread_names tn ON tn.thread_id = m.thread_id AND tn.user_id = m.user_id
+      WHERE m.user_id = ?
+        AND m.transaction_id IS NULL
+        AND m.channel IN ('sms', 'imessage')
         AND (
-          json_extract(participants, '$.from') = ?
-          OR json_extract(participants, '$.to[0]') = ?
+          json_extract(m.participants, '$.from') = ?
+          OR json_extract(m.participants, '$.to[0]') = ?
         )
-      ORDER BY sent_at DESC
+      ORDER BY m.sent_at DESC
     `;
     const rows = db.prepare(fallbackSql).all(userId, contact, contact) as Message[];
     return rows.filter((m) => !isReactionRow(m));
@@ -295,12 +299,13 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
 
   const placeholders = threadIds.map(() => '?').join(', ');
   const messagesSql = `
-    SELECT * FROM messages
-    WHERE user_id = ?
-      AND transaction_id IS NULL
-      AND channel IN ('sms', 'imessage')
-      AND thread_id IN (${placeholders})
-    ORDER BY sent_at DESC
+    SELECT m.*, tn.display_name AS thread_display_name FROM messages m
+    LEFT JOIN message_thread_names tn ON tn.thread_id = m.thread_id AND tn.user_id = m.user_id
+    WHERE m.user_id = ?
+      AND m.transaction_id IS NULL
+      AND m.channel IN ('sms', 'imessage')
+      AND m.thread_id IN (${placeholders})
+    ORDER BY m.sent_at DESC
   `;
   const rows = db.prepare(messagesSql).all(userId, ...threadIds) as Message[];
   return rows.filter((m) => !isReactionRow(m));

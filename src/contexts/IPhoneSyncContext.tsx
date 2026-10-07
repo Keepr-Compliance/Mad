@@ -44,6 +44,7 @@ import { usePlatform } from "./PlatformContext";
 import { settingsService, type ImportSource } from "../services/settingsService";
 import { resolveIphoneSyncEnabled } from "../utils/iphoneSyncEnabled";
 import logger from "../utils/logger";
+import { effectiveImportSource } from "../services/importSourcePolicy";
 
 const IPhoneSyncContext = createContext<UseIPhoneSyncReturn | null>(null);
 
@@ -127,7 +128,10 @@ export function IPhoneSyncProvider({ userId = null, children }: IPhoneSyncProvid
 
         // BACKLOG-3423: the source is needed whether or not there is an explicit
         // opt-in — it now gates the opt-in rather than only standing in for it.
-        let source: ImportSource | null = prefs?.messages?.source ?? null;
+        // BACKLOG-3749: a value this build does not know → the platform default.
+        let source: ImportSource | null = prefs?.messages?.source
+          ? effectiveImportSource(prefs.messages.source, platform === "macos")
+          : null;
         if (!source) {
           // Mirror Settings.tsx / useImportSource default derivation.
           const phone = await settingsService.getPhoneType(userId);

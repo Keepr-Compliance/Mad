@@ -104,7 +104,7 @@ function textsCta(context: OnboardingStepContentProps["context"]): {
   if (context.phoneType === "android") {
     return {
       label: "Set up text messages",
-      hint: "Pair the Keepr Companion app to sync your Android texts.",
+      hint: "Use Sync Android on the dashboard to copy your Google Messages texts.",
     };
   }
   // Default / iPhone path (both platforms).

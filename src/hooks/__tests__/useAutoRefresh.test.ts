@@ -338,6 +338,11 @@ describe("useAutoRefresh", () => {
 
       const { result } = renderHook(() => useAutoRefresh(defaultOptions));
 
+      // BACKLOG-3749 follow-up: Mac Messages waits for the preferences read.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       await act(async () => {
         await result.current.triggerRefresh();
       });
@@ -468,7 +473,9 @@ describe("useAutoRefresh", () => {
     });
   });
 
-  describe("BACKLOG-1467: skip macOS messages for Android users", () => {
+  // BACKLOG-1467 stands (founder, 2026-10-05): a known other source skips Mac
+  // Messages; BACKLOG-3749: an unknown value never does.
+  describe("Mac Messages and the import source (BACKLOG-1467, BACKLOG-3749)", () => {
     it("should NOT include messages when import source is android-companion on macOS", async () => {
       (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
 
@@ -495,11 +502,84 @@ describe("useAutoRefresh", () => {
         await Promise.resolve();
       });
 
-      // Should have contacts + emails but NOT messages
       expect(mockRequestSync).toHaveBeenCalledWith(
         ['contacts', 'emails'],
         'test-user-123'
       );
+    });
+
+    it("an unknown import source on macOS still includes messages (BACKLOG-3749)", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+      mockPreferencesGet.mockResolvedValue({
+        success: true,
+        preferences: {
+          sync: { autoSyncOnLogin: true },
+          messages: { source: 'some-future-source' },
+        },
+      });
+
+      renderHook(() => useAutoRefresh(defaultOptions));
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+      });
+
+      expect(mockRequestSync).toHaveBeenCalledWith(
+        ['contacts', 'emails', 'messages'],
+        'test-user-123'
+      );
+    });
+
+    // SR (BACKLOG-3749 follow-up): the source is unknown until the preferences
+    // load — no Mac Messages run before that (an Android user on a Mac must
+    // not get one). Mutation: start at "macos-native" / no load gate → red.
+    it("before the preferences load, no Mac Messages run — then an Android source keeps it skipped", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+      let release: (v: unknown) => void = () => undefined;
+      mockPreferencesGet.mockImplementation(() => new Promise((r) => { release = r; }));
+
+      const { result } = renderHook(() => useAutoRefresh(defaultOptions));
+      await act(async () => {
+        await result.current.triggerRefresh();
+      });
+      expect(mockRequestSync).toHaveBeenCalledWith(['contacts', 'emails'], 'test-user-123');
+      expect(mockRequestSync.mock.calls.some((c) => (c[0] as string[]).includes('messages'))).toBe(false);
+
+      await act(async () => {
+        release({ success: true, preferences: { sync: { autoSyncOnLogin: true }, messages: { source: 'android-messages-web' } } });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+      });
+      expect(mockRequestSync.mock.calls.some((c) => (c[0] as string[]).includes('messages'))).toBe(false);
+    });
+
+    // SR (BACKLOG-3749 follow-up): a failed preferences read falls back to the
+    // Mac default — Mac Messages still runs once the read has settled.
+    // Mutation: the load flag not set on failure → red.
+    it("the preferences read throws: Mac Messages still runs (the Mac default)", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+      mockPreferencesGet.mockRejectedValue(new Error("offline"));
+
+      const { result } = renderHook(() => useAutoRefresh(defaultOptions));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      mockRequestSync.mockClear();
+      await act(async () => {
+        await result.current.triggerRefresh();
+      });
+
+      expect(mockRequestSync).toHaveBeenCalledWith(['contacts', 'emails', 'messages'], 'test-user-123');
     });
 
     it("should NOT include messages when import source is iphone-sync on macOS", async () => {
@@ -871,6 +951,11 @@ describe("useAutoRefresh", () => {
 
       const { result } = renderHook(() => useAutoRefresh(defaultOptions));
 
+      // BACKLOG-3749 follow-up: Mac Messages waits for the preferences read.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       await act(async () => {
         await result.current.triggerRefresh();
       });
@@ -897,6 +982,11 @@ describe("useAutoRefresh", () => {
     it("should work without waiting for auto-trigger delay", async () => {
       const { result } = renderHook(() => useAutoRefresh(defaultOptions));
 
+      // BACKLOG-3749 follow-up: Mac Messages waits for the preferences read.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       await act(async () => {
         await result.current.triggerRefresh();
       });
@@ -1272,6 +1362,11 @@ describe("useAutoRefresh", () => {
 
       const { result } = renderHook(() => useAutoRefresh(defaultOptions));
 
+      // BACKLOG-3749 follow-up: Mac Messages waits for the preferences read.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       await act(async () => {
         await Promise.resolve();
         await result.current.triggerRefresh();

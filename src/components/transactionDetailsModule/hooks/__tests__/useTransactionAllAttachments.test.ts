@@ -66,4 +66,60 @@ describe("useTransactionAllAttachments", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(getAllAttachments).not.toHaveBeenCalled();
   });
+
+  /**
+   * BACKLOG-3730 — in-window membership comes from main (the submit's window),
+   * never from the renderer comparing dates. The fixture is chosen so a
+   * renderer-side date compare gets BOTH rows wrong: "late" is dated after the
+   * closing day's UTC midnight yet main (local-midnight closing day) keeps it;
+   * "early" is dated inside the naive range yet main left it out.
+   */
+  describe("transaction date window (BACKLOG-3730)", () => {
+    const row = (id: string, source_date: string) => ({
+      id, filename: `${id}.pdf`, mime_type: "application/pdf", file_size_bytes: 1, storage_path: "/x",
+      created_at: null, source: "email", source_date, direction: null, context_subject: null,
+      context_sender: null, email_id: "E", message_id: null,
+    });
+    const LATE = row("late", "2026-07-30T03:00:00.000Z");
+    const EARLY = row("early", "2026-03-01T00:00:00.000Z");
+
+    it("W1: fetches the window with the RAW dates and takes membership from main's answer", async () => {
+      getAllAttachments.mockImplementation((_id: string, start?: string) =>
+        Promise.resolve({ success: true, data: start ? [LATE] : [LATE, EARLY] }),
+      );
+      const { result } = renderHook(() =>
+        useTransactionAllAttachments("txn-1", undefined, undefined, {
+          startedAt: "2026-01-01",
+          closedAt: "2026-07-29",
+        }),
+      );
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      expect(getAllAttachments).toHaveBeenCalledWith("txn-1", undefined, undefined);
+      expect(getAllAttachments).toHaveBeenCalledWith("txn-1", "2026-01-01", "2026-07-29");
+      expect(result.current.attachments.map((a) => a.id)).toEqual(["late", "early"]);
+      expect([...(result.current.inWindowIds ?? [])]).toEqual(["late"]);
+    });
+
+    it("W2: no dates → one fetch, inWindowIds null (nothing to scope to)", async () => {
+      const { result } = renderHook(() =>
+        useTransactionAllAttachments("txn-1", undefined, undefined, { startedAt: null, closedAt: null }),
+      );
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(getAllAttachments).toHaveBeenCalledTimes(1);
+      expect(result.current.inWindowIds).toBeNull();
+    });
+
+    it("W3: refresh() refetches both lists", async () => {
+      const { result } = renderHook(() =>
+        useTransactionAllAttachments("txn-1", undefined, undefined, { startedAt: "2026-01-01", closedAt: null }),
+      );
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(getAllAttachments).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        await result.current.refresh();
+      });
+      expect(getAllAttachments).toHaveBeenCalledTimes(4);
+    });
+  });
 });

@@ -1,0 +1,1486 @@
+/**
+ * BACKLOG-3620 — the conversation-list scan, Details reading and the job runner.
+ *
+ * Runs chrome-extension/scan.js and job.js (the same files the content script
+ * loads) against synthetic fixtures whose headers state what was observed on
+ * the live page and what is unverified.
+ *
+ * Control 10: the scan loads a lazily rendered list fully and stops (stable
+ *             count over 3 scrolls, or the item cap).
+ * Control 11: Details is closed with Done, and its participant rows are gone,
+ *             before the scan moves on.
+ * Control 12: on the sign-in page the job reports not_signed_in and scans nothing.
+ */
+
+import * as fs from "fs";
+import * as path from "path";
+
+interface Conv {
+  conversationId: string;
+  name: string;
+  href: string;
+}
+
+interface ScanModule {
+  signInState: (pathname: string) => string;
+  readConversationList: (doc: Document) => Conv[];
+  collectConversations: (
+    doc: Document,
+    opts: {
+      scroll: () => void | Promise<void>;
+      sleep: (ms: number) => Promise<void>;
+      now?: () => number;
+      waitMs?: number;
+      stableRounds?: number;
+      maxItems?: number;
+      maxMs?: number;
+    },
+  ) => Promise<{ conversations: Conv[]; stopReason: string }>;
+  readParticipantsAndClose: (
+    doc: Document,
+    io: { click: (el: Element) => void; sleep: (ms: number) => Promise<void>; timeoutMs?: number; escape?: () => void },
+  ) => Promise<string[] & { rows?: Array<{ name: string; number: string }> }>;
+}
+
+interface ApiReply {
+  ok: boolean;
+  status: number;
+  body: Record<string, unknown> | null;
+}
+
+interface JobModule {
+  chatAlreadyOpen: (env: { doc: Document; getLocation: () => { pathname: string; href: string } }, conv: { conversationId: string; name: string }) => boolean;
+  jobIdFromHash: (hash: string) => string | null;
+  NOT_SIGNED_IN: string;
+  runJob: (jobId: string, env: Record<string, unknown>) => Promise<{ outcome: string }>;
+  transportKind: (reply: { status: number; body?: Record<string, unknown> } | null) => string | null;
+  KEEPR_LOST_MESSAGES: Record<string, string>;
+}
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+const scan = require("../../chrome-extension/scan.js") as ScanModule;
+const job = require("../../chrome-extension/job.js") as JobModule;
+const extract = require("../../chrome-extension/extract.js") as {
+  extractConversation: (doc: Document, href: string, now: Date) => unknown;
+};
+/* eslint-enable @typescript-eslint/no-require-imports */
+
+const LIST = fs.readFileSync(path.join(__dirname, "fixtures", "conversation-list.synthetic.html"), "utf8");
+const DETAILS = fs.readFileSync(path.join(__dirname, "fixtures", "details.synthetic.html"), "utf8");
+
+// Every harness sleep resolves at once, so a loop that never stops starves the
+// event loop and jest's own timeout never fires. Each sleep counts toward a
+// per-test budget and throws past it, so a runaway loop fails in seconds.
+// (The longest real test here sleeps a few hundred times.)
+const SLEEP_BUDGET = 20_000;
+let sleepCalls = 0;
+beforeEach(() => {
+  sleepCalls = 0;
+});
+function budget(): void {
+  sleepCalls += 1;
+  if (sleepCalls > SLEEP_BUDGET) throw new Error(`test harness: more than ${SLEEP_BUDGET} sleeps — runaway loop`);
+}
+jest.setTimeout(10_000);
+
+const noSleep = (): Promise<void> => {
+  budget();
+  return Promise.resolve();
+};
+
+function listItem(id: string, name: string): string {
+  return `<mws-conversation-list-item><a data-e2e-conversation href="/web/conversations/${id}"><span data-e2e-conversation-name>${name}</span></a></mws-conversation-list-item>`;
+}
+
+function appendItems(from: number, count: number): void {
+  const scroller = document.getElementById("list-scroller");
+  if (!scroller) throw new Error("fixture has no #list-scroller");
+  let html = "";
+  for (let i = from; i < from + count; i++) html += listItem(`lazy${String(i).padStart(15, "0")}`, `Lazy Person ${i}`);
+  scroller.insertAdjacentHTML("beforeend", html);
+}
+
+describe("readConversationList / signInState", () => {
+  beforeEach(() => {
+    document.body.innerHTML = LIST;
+  });
+
+  it("reads id, name and link of every list item", () => {
+    const list = scan.readConversationList(document);
+    expect(list.map((c) => c.conversationId)).toEqual([
+      "aaaaaaaaaaaaaaaaaaa",
+      "bbbbbbbbbbbbbbbbbbb",
+      "ccccccccccccccccccc",
+      "ddddddddddddddddddd",
+      "eeeeeeeeeeeeeeeeeee",
+    ]);
+    expect(list[0]).toEqual({
+      conversationId: "aaaaaaaaaaaaaaaaaaa",
+      name: "Test Contact A",
+      href: "/web/conversations/aaaaaaaaaaaaaaaaaaa",
+      timeMs: null, // the synthetic list shows no times
+    });
+  });
+
+  it.each([
+    ["/web/welcome", "not_signed_in"],
+    ["/web/authentication", "not_signed_in"],
+    ["/web/conversations", "signed_in"],
+    ["/web/conversations/aaaaaaaaaaaaaaaaaaa", "signed_in"],
+    ["/", "unknown"],
+  ])("%s -> %s", (p, state) => {
+    expect(scan.signInState(p)).toBe(state);
+  });
+});
+
+describe("collectConversations (control 10)", () => {
+  beforeEach(() => {
+    document.body.innerHTML = LIST;
+  });
+
+  it("loads a lazy list that only grows on some scrolls, then stops after 3 unchanged scrolls", async () => {
+    // Every OTHER scroll renders 10 more items, up to 40 more (then the list ends).
+    let scrolls = 0;
+    let added = 0;
+    const result = await scan.collectConversations(document, {
+      scroll: () => {
+        scrolls += 1;
+        if (scrolls % 2 === 0 && added < 40) {
+          appendItems(added, 10);
+          added += 10;
+        }
+      },
+      sleep: noSleep,
+    });
+    expect(result.conversations).toHaveLength(45);
+    expect(result.stopReason).toBe("stable");
+    // The list stopped growing at scroll 8; three unchanged scrolls follow.
+    expect(scrolls).toBe(11);
+  });
+
+  it("a list that never grows is scrolled exactly 3 times", async () => {
+    let scrolls = 0;
+    const result = await scan.collectConversations(document, {
+      scroll: () => {
+        scrolls += 1;
+      },
+      sleep: noSleep,
+    });
+    expect(result.conversations).toHaveLength(5);
+    expect(scrolls).toBe(3);
+  });
+
+  it("a list that never stops growing stops at the item cap", async () => {
+    let added = 0;
+    let t = 0;
+    const result = await scan.collectConversations(document, {
+      scroll: () => {
+        appendItems(added, 10);
+        added += 10;
+      },
+      sleep: async (ms) => {
+        t += ms;
+      },
+      now: () => t,
+      maxItems: 50,
+      maxMs: 60_000,
+    });
+    expect(result.stopReason).toBe("max_items");
+    expect(result.conversations).toHaveLength(50);
+  });
+});
+
+/**
+ * Wires the Details fixture the way the page behaves: the menu button renders
+ * the Details item; Details renders the participant panel; Done removes it.
+ */
+type DetailsRow = string | { name: string; number: string };
+function mountDetails(numbers: DetailsRow[]): { clicks: string[]; click: (el: Element) => void } {
+  document.body.innerHTML = DETAILS;
+  const clicks: string[] = [];
+  const click = (el: Element): void => {
+    if (el.matches("[data-e2e-conversation-menu-button]")) {
+      clicks.push("menu");
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        '<div role="menu" id="menu"><button data-e2e-details-button>Details</button></div>',
+      );
+    } else if (el.matches("[data-e2e-details-button]")) {
+      clicks.push("details");
+      document.getElementById("menu")?.remove();
+      const rows = numbers
+        .map((n, i) => {
+          const r = typeof n === "string" ? { name: `Person ${i}`, number: n } : n;
+          return `<li data-e2e-details-participant><h3 data-e2e-details-participant-name>${r.name}</h3><span data-e2e-details-participant-number>${r.number}</span></li>`;
+        })
+        .join("");
+      document.getElementById("overlay-container")?.insertAdjacentHTML(
+        "beforeend",
+        `<mw-conversation-details><ul>${rows}</ul></mw-conversation-details><div class="dialog-actions"><button aria-label="Done">Done</button></div>`,
+      );
+    } else if (el.matches('button[aria-label="Done"]')) {
+      clicks.push("done");
+      document.getElementById("overlay-container")!.innerHTML = "";
+    }
+  };
+  return { clicks, click };
+}
+
+// BACKLOG-3630: the chat key excludes the user's own number, which Details may
+// or may not list ("You"). Mutation: keep the "You" row → red.
+describe("readParticipantsAndClose: the user's own row (BACKLOG-3630)", () => {
+  it("the 'You' row is never read, so the numbers are the same whether Details lists it or not", async () => {
+    let page = mountDetails([{ name: "Test Contact A", number: "(555) 555-0199" }, { name: "You", number: "(555) 555-0100" }]);
+    const withSelf = await scan.readParticipantsAndClose(document, { click: page.click, sleep: noSleep });
+    page = mountDetails([{ name: "Test Contact A", number: "(555) 555-0199" }]);
+    const withoutSelf = await scan.readParticipantsAndClose(document, { click: page.click, sleep: noSleep });
+    expect(Array.from(withSelf)).toEqual(["(555) 555-0199"]);
+    expect(Array.from(withoutSelf)).toEqual(["(555) 555-0199"]);
+    expect(withSelf.rows).toEqual([{ name: "Test Contact A", number: "(555) 555-0199" }]);
+  });
+});
+
+// BACKLOG-3658 #11 (real phone: 19 of 180 chats "no_numbers"; a group's
+// list held "*aaaaa aaaaaa"). Mutations: accept any number-span text, drop
+// the short-code / business kinds, or key a chat on a name → red.
+describe("readParticipantsAndClose: only phone-shaped numbers; short codes and named senders apart (#11)", () => {
+  type Read = string[] & { kind?: string; rows?: Array<{ name: string; number: string }> };
+  const read = async (rows: DetailsRow[]): Promise<Read> => {
+    const page = mountDetails(rows);
+    return (await scan.readParticipantsAndClose(document, { click: page.click, sleep: noSleep })) as Read;
+  };
+
+  it("a number span holding non-number text is not a number", async () => {
+    const r = await read([{ name: "Test Contact A", number: "(555) 555-0199" }, { name: "Test Contact B", number: "*Test Label" }]);
+    expect(Array.from(r)).toEqual(["(555) 555-0199"]);
+    expect(r.rows).toEqual([{ name: "Test Contact A", number: "(555) 555-0199" }]);
+  });
+
+  it("a short-code sender (3-8 digits): kind short_code, no number", async () => {
+    const r = await read([{ name: "72975", number: "" }]);
+    expect(Array.from(r)).toEqual([]);
+    expect(r.kind).toBe("short_code");
+    const spaced = await read([{ name: "Test Bank Alerts", number: "227 898" }]);
+    expect(spaced.kind).toBe("short_code");
+  });
+
+  it("a named sender with no number: kind business — the name is never used as a key", async () => {
+    const r = await read([{ name: "Test Shop Deliveries", number: "" }]);
+    expect(Array.from(r)).toEqual([]);
+    expect(r.kind).toBe("business");
+  });
+
+  it("the box names short_code and business apart from no_numbers", () => {
+    const details = (job as unknown as { detailsText: (s: Record<string, unknown>) => string }).detailsText({
+      listed: 3, checked: 3, matched: 0, chats: 0, messages: 0, images: 0, notChecked: 0, contactsWithoutPhone: 0,
+      removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0, notReachedMore: 0,
+      notReached: [
+        { name: "Chat One", reason: "short_code" },
+        { name: "Chat Two", reason: "business" },
+        { name: "Chat Three", reason: "no_numbers" },
+      ],
+    });
+    expect(details).toContain("Chat One (a short-code sender (no phone number))");
+    expect(details).toContain("Chat Two (a named sender with no phone number (e.g. a business))");
+    expect(details).toContain("Chat Three (no phone number shown)");
+  });
+});
+
+describe("readParticipantsAndClose (control 11)", () => {
+  it("reads every participant's number, clicks Done, and returns only once the rows are gone", async () => {
+    const page = mountDetails(["(555) 555-0199", "(555) 555-0101"]);
+    const numbers = await scan.readParticipantsAndClose(document, { click: page.click, sleep: noSleep });
+    expect(numbers).toEqual(["(555) 555-0199", "(555) 555-0101"]);
+    expect(page.clicks).toEqual(["menu", "details", "done"]);
+    expect(document.querySelector("li[data-e2e-details-participant]")).toBeNull();
+  });
+
+  it("an unsaved contact has an empty number span and the number in the name heading: that number is read; a plain name or a short number is not", async () => {
+    const page = mountDetails([
+      { name: "Test Contact A", number: "(555) 555-0101" }, // saved: name in h3, number in span
+      { name: "(555) 555-0199", number: "" }, // unsaved: number in h3, span empty
+      { name: "+1 555-555-0102", number: "" }, // unsaved, international form
+      { name: "Test Contact B", number: "" }, // a name and no number: nothing
+      { name: "(555) 555-01", number: "" }, // 8 digits: not a number
+    ]);
+    const numbers = await scan.readParticipantsAndClose(document, { click: page.click, sleep: noSleep });
+    expect(numbers).toEqual(["(555) 555-0101", "(555) 555-0199", "+1 555-555-0102"]);
+  });
+
+  it("rejects when Details never closes", async () => {
+    const page = mountDetails(["(555) 555-0199"]);
+    const stuck = (el: Element): void => {
+      if (el.matches('button[aria-label="Done"]')) return; // Done does nothing
+      page.click(el);
+    };
+    await expect(
+      scan.readParticipantsAndClose(document, { click: stuck, sleep: noSleep, timeoutMs: 500 }),
+    ).rejects.toThrow("Details to close");
+  });
+});
+
+describe("job runner", () => {
+  const JOB = "11111111-2222-4333-8444-555555555555"; // pii-allow-uuid: invented, not from any live row
+
+  it("reads the job id from the page address hash", () => {
+    expect(job.jobIdFromHash(`#keepr-job=${JOB}`)).toBe(JOB);
+    expect(job.jobIdFromHash("#other")).toBeNull();
+  });
+
+  it("control 12: on the sign-in page it reports not_signed_in, shows the message, and scans nothing", async () => {
+    document.body.innerHTML = "<mw-welcome-page-container><button data-e2e-welcome-page-sign-in-button>Sign in</button></mw-welcome-page-container>";
+    const calls: Array<[string, string, unknown]> = [];
+    const shown: Array<[string, boolean]> = [];
+    const collect = jest.fn();
+    const outcome = await job.runJob(JOB, {
+      doc: document,
+      getLocation: () => ({ pathname: "/web/welcome", href: "https://messages.google.com/web/welcome?redirectUrl=x" }),
+      api: async (method: string, p: string, body: unknown): Promise<ApiReply> => {
+        calls.push([method, p, body]);
+        return { ok: true, status: 200, body: { ok: true } };
+      },
+      overlay: { show: (text: string, isError: boolean) => shown.push([text, isError]) },
+      sleep: noSleep,
+      pageTimeoutMs: 1000,
+      scan: { ...scan, collectConversations: collect },
+    });
+    expect(outcome.outcome).toBe("not_signed_in");
+    expect(calls).toEqual([
+      ["POST", `/job/${JOB}/error`, { code: "not_signed_in", message: job.NOT_SIGNED_IN }],
+    ]);
+    expect(job.NOT_SIGNED_IN).toBe("Sign in to Google Messages, then click Sync in Keepr again");
+    // Storyboard I01: its own card ("Sign in to Google Messages"), not an error.
+    expect(shown).toEqual([["Sign in to Google Messages", false]]);
+    expect(collect).not.toHaveBeenCalled();
+  });
+
+  it("imports only the chat Keepr matched, closes Details before the next chat, uploads its image, then finishes", async () => {
+    document.body.innerHTML = LIST;
+    const listHtml = document.body.innerHTML;
+    const calls: Array<[string, string, Record<string, unknown> | undefined]> = [];
+    const order: string[] = [];
+    let open = "";
+    const detailsNumbers: Record<string, string[]> = {
+      aaaaaaaaaaaaaaaaaaa: ["(555) 555-0199"],
+      ccccccccccccccccccc: ["(555) 555-0101"],
+      ddddddddddddddddddd: ["(555) 555-0102", "(555) 555-0103"],
+      eeeeeeeeeeeeeeeeeee: ["(555) 555-0104"],
+    };
+    let page = mountDetails([]);
+    const env = {
+      doc: document,
+      getLocation: () => ({
+        pathname: `/web/conversations/${open}`,
+        href: `https://messages.google.com/web/conversations/${open}`,
+      }),
+      api: async (method: string, p: string, body?: Record<string, unknown>): Promise<ApiReply> => {
+        calls.push([method, p, body]);
+        if (p.endsWith("/claim")) {
+          return { ok: true, status: 200, body: { jobId: JOB, kind: "cache", since: "2026-01-01T00:00:00.000Z" } };
+        }
+        if (p.endsWith("/match")) {
+          order.push(`match:${String(body?.conversationId)}`);
+          // Participant rows must be gone when Keepr is asked.
+          expect(document.querySelector("li[data-e2e-details-participant]")).toBeNull();
+          const matched = body?.conversationId === "aaaaaaaaaaaaaaaaaaa";
+          return { ok: true, status: 200, body: { matched, contactIds: [], keepPhotos: matched } };
+        }
+        return { ok: true, status: 200, body: { ok: true } };
+      },
+      overlay: { show: () => {} },
+      sleep: noSleep,
+      click: (el: Element) => page.click(el),
+      scroll: () => {},
+      openConversation: async (conv: Conv) => {
+        order.push(`open:${conv.conversationId}`);
+        expect(document.querySelector("li[data-e2e-details-participant]")).toBeNull();
+        open = conv.conversationId;
+        page = mountDetails(detailsNumbers[conv.conversationId] ?? []);
+        if (open === "aaaaaaaaaaaaaaaaaaa") {
+          document.body.insertAdjacentHTML(
+            "beforeend",
+            `<mws-message-wrapper msg-id="1"><div data-e2e-message-wrapper-core data-e2e-message-outgoing="false" data-e2e-message-rcs="true">
+              <mws-text-message-part aria-label="Test Contact A said: hello. Received on September 20, 2026 at 9:05 AM."><mws-message-part-content data-e2e-message-content>hello</mws-message-part-content></mws-text-message-part>
+              <mws-image-message-part aria-label="Test Contact A sent an image. Received on September 20, 2026 at 9:05 AM."><div data-e2e-message-image><img src="blob:https://messages.google.com/x-1"></div></mws-image-message-part>
+            </div></mws-message-wrapper>`,
+          );
+        }
+      },
+      readImage: async (src: string) => ({ mimeType: "image/gif", base64: `B64(${src})` }),
+      extract: extract.extractConversation,
+      scan,
+    };
+    // The list is read first, from the list page.
+    document.body.innerHTML = listHtml;
+    // The transient retry has its own tests (retry-3671); none here.
+    (env as Record<string, unknown>).transientRetryPoolMs = 0;
+    const outcome = await job.runJob(JOB, env);
+    expect(outcome.outcome).toBe("finished");
+
+    const posts = calls.filter(([m]) => m === "POST").map(([, p]) => p.replace(`/job/${JOB}`, ""));
+    expect(posts.filter((p) => p === "/chat")).toHaveLength(1);
+    const chat = calls.find(([, p]) => p.endsWith("/chat"))?.[2] as { conversationId: string; messages: Array<Record<string, unknown>> };
+    expect(chat.conversationId).toBe("aaaaaaaaaaaaaaaaaaa");
+    expect(chat.messages[0]).not.toHaveProperty("imageSrcs");
+    expect(chat.messages[0]).toMatchObject({ images: 1, text: "hello" });
+    const upload = calls.find(([, p]) => p.endsWith("/attachment"))?.[2];
+    expect(upload).toEqual({
+      conversationId: "aaaaaaaaaaaaaaaaaaa",
+      msgId: "1",
+      index: 0,
+      mimeType: "image/gif",
+      base64: "B64(blob:https://messages.google.com/x-1)",
+    });
+    expect(posts[posts.length - 1]).toBe("/finish");
+    // EVERY chat is checked, in list order (a cache Sync). Each match is
+    // asked after its Details closed. Chat b shows no number, so it is
+    // reported (no_numbers) and never sent to /match.
+    expect(order).toEqual([
+      "open:aaaaaaaaaaaaaaaaaaa", "match:aaaaaaaaaaaaaaaaaaa",
+      "open:bbbbbbbbbbbbbbbbbbb",
+      "open:ccccccccccccccccccc", "match:ccccccccccccccccccc",
+      "open:ddddddddddddddddddd", "match:ddddddddddddddddddd",
+      "open:eeeeeeeeeeeeeeeeeee", "match:eeeeeeeeeeeeeeeeeee",
+    ]);
+  });
+});
+
+/** One synthetic message wrapper (observed shape, see the conversation fixture). */
+function wrapper(msgId: string, text: string): string {
+  return `<mws-message-wrapper msg-id="${msgId}"><div data-e2e-message-wrapper-core data-e2e-message-outgoing="false" data-e2e-message-rcs="true">
+    <mws-text-message-part aria-label="Test Contact A said: ${text}. Received on September 20, 2026 at 9:05 AM."><mws-message-part-content data-e2e-message-content>${text}</mws-message-part-content></mws-text-message-part>
+  </div></mws-message-wrapper>`;
+}
+
+const STALE = wrapper("900", "stale one") + wrapper("901", "stale two");
+const FRESH = wrapper("1", "hello");
+
+/**
+ * A job page driven by a fake clock: `sleep(ms)` advances it. The message pane
+ * starts with the PREVIOUS chat's messages (STALE). Opening chat A keeps them
+ * on screen until `swapAfterMs` of clock have passed (null = never), then
+ * replaces them with A's own (FRESH) — the shape measured live on 2026-09-29.
+ */
+function jobPage(opts: {
+  swapAfterMs: number | null;
+  api?: (method: string, p: string, body?: Record<string, unknown>) => ApiReply | undefined;
+  onOpen?: (id: string) => void;
+}) {
+  const JOB = "11111111-2222-4333-8444-555555555555"; // pii-allow-uuid: invented, not from any live row
+  const calls: Array<[string, string, Record<string, unknown> | undefined]> = [];
+  const opened: string[] = [];
+  const shown: Array<[string, boolean]> = [];
+  let clock = 0;
+  let pane = STALE;
+  let swapAt: number | null = null;
+  let open = "";
+  let page = mountDetails([]);
+  const renderPane = (): void => {
+    document.getElementById("pane")?.remove();
+    document.body.insertAdjacentHTML("beforeend", `<div id="pane">${pane}</div>`);
+  };
+  const tick = (): void => {
+    if (swapAt !== null && clock >= swapAt && pane !== FRESH) {
+      pane = FRESH;
+      renderPane();
+    }
+  };
+  document.body.innerHTML = LIST;
+  renderPane();
+  const env = {
+    doc: document,
+    getLocation: () => ({ pathname: `/web/conversations/${open}`, href: `https://messages.google.com/web/conversations/${open}` }),
+    api: async (method: string, p: string, body?: Record<string, unknown>): Promise<ApiReply> => {
+      calls.push([method, p, body]);
+      const custom = opts.api?.(method, p, body);
+      if (custom) return custom;
+      if (p.endsWith("/claim")) {
+        return { ok: true, status: 200, body: { jobId: JOB, kind: "cache", since: "2026-01-01T00:00:00.000Z" } };
+      }
+      if (p.endsWith("/match")) {
+        const matched = body?.conversationId === "aaaaaaaaaaaaaaaaaaa";
+        return { ok: true, status: 200, body: { matched, contactIds: [], keepPhotos: matched } };
+      }
+      return { ok: true, status: 200, body: { ok: true } };
+    },
+    overlay: { show: (text: string, isError: boolean) => shown.push([text, isError]) },
+    sleep: async (ms: number) => {
+      budget();
+      clock += ms;
+      tick();
+    },
+    click: (el: Element) => page.click(el),
+    scroll: () => {},
+    openConversation: async (conv: Conv) => {
+      opened.push(conv.conversationId);
+      open = conv.conversationId;
+      page = mountDetails(["(555) 555-0199"]);
+      if (open === "aaaaaaaaaaaaaaaaaaa" && opts.swapAfterMs !== null) swapAt = clock + opts.swapAfterMs;
+      renderPane();
+      opts.onOpen?.(open);
+    },
+    readImage: async () => null,
+    extract: extract.extractConversation,
+    scan,
+  };
+  const posts = (): string[] => calls.filter(([m]) => m === "POST").map(([, p]) => p.replace(`/job/${JOB}`, ""));
+  return { JOB, env, calls, opened, shown, posts };
+}
+
+describe("SR fix 1: a job Keepr no longer knows ends the run", () => {
+  it("/progress answering 410 after the first chat stops the page: no further chats, no /finish, no /error", async () => {
+    let progressCalls = 0;
+    const t = jobPage({
+      swapAfterMs: 0,
+      api: (_m, p) => {
+        if (p.endsWith("/progress")) {
+          progressCalls += 1;
+          // 1st = the pre-loop "Checking N chats"; 2nd = chat 1's start (Keepr's
+          // card follows each chat); 3rd = after chat 1.
+          if (progressCalls >= 3) return { ok: false, status: 410, body: { error: "job_over" } };
+        }
+        return undefined;
+      },
+    });
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome.outcome).toBe("job_gone");
+    expect(t.opened).toEqual(["aaaaaaaaaaaaaaaaaaa"]);
+    expect(t.posts()).not.toContain("/finish");
+    expect(t.posts()).not.toContain("/error");
+    expect(t.shown[t.shown.length - 1]).toEqual(["Sync cancelled in Keepr", true]);
+  });
+
+  it("/match answering 404 is not counted as a skipped chat — the run ends", async () => {
+    const t = jobPage({
+      swapAfterMs: 0,
+      api: (_m, p) => (p.endsWith("/match") ? { ok: false, status: 404, body: { error: "no_job" } } : undefined),
+    });
+    const outcome = await job.runJob(t.JOB, t.env);
+    // Live (founder): Keepr no longer knows the job (it restarted) — Keepr lost.
+    expect(outcome).toMatchObject({ outcome: "keepr_lost", reason: "unknown_job" });
+    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr closed or restarted.", true]);
+    expect(t.opened).toEqual(["aaaaaaaaaaaaaaaaaaa"]);
+    expect(t.posts()).not.toContain("/finish");
+  });
+});
+
+// Live (founder 2026-10-03, 3671 P1): Keepr was restarted mid-run and the
+// page read on, chat after chat "error", then said "done … 0 chats".
+// Mutations: no stop when Keepr is unreachable → red; no one-more-try → red;
+// a 401 read on → red; no circuit breaker → red; "done" when every chat
+// failed → red; a refused /finish shown as done → red.
+describe("Keepr lost mid-run: the run stops with its reason", () => {
+  it("unreachable (after one more try): stops at once — 'Keepr closed.', no more chats, no /finish", async () => {
+    const t = jobPage({ swapAfterMs: 0, api: (_m, p) => (p.endsWith("/match") ? { ok: false, status: 0, body: {} } : undefined) });
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome).toMatchObject({ outcome: "keepr_lost", reason: "unreachable" });
+    expect(t.opened).toHaveLength(1);
+    expect(t.posts().filter((p) => p === "/match")).toHaveLength(2);
+    expect(t.posts()).not.toContain("/finish");
+    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr closed or restarted.", true]);
+  });
+
+  it("a blip: the one more try succeeds and the run goes on", async () => {
+    let first = true;
+    const t = jobPage({
+      swapAfterMs: 0,
+      api: (_m, p) => {
+        if (p.endsWith("/match") && first) {
+          first = false;
+          return { ok: false, status: 0, body: {} };
+        }
+        return undefined;
+      },
+    });
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome.outcome).toBe("finished");
+    expect(t.posts()).toContain("/finish");
+  });
+
+  it("refused (401): stops at once with the not-linked line", async () => {
+    const t = jobPage({ swapAfterMs: 0, api: (_m, p) => (p.endsWith("/match") ? { ok: false, status: 401, body: { error: "not_paired" } } : undefined) });
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome).toMatchObject({ outcome: "keepr_lost", reason: "refused" });
+    expect(t.opened).toHaveLength(1);
+    expect(t.shown[t.shown.length - 1][0]).toBe("This browser isn't linked.");
+  });
+
+  it("circuit breaker: 3 chats in a row refused by Keepr end the run with its reason", async () => {
+    const t = jobPage({ swapAfterMs: 0, api: (_m, p) => (p.endsWith("/match") ? { ok: false, status: 500, body: { error: "boom" } } : undefined) });
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome).toMatchObject({ outcome: "keepr_error" });
+    expect(t.opened).toHaveLength(3);
+    expect(t.posts()).toContain("/error");
+    expect(t.posts()).not.toContain("/finish");
+    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr couldn't save the chats.", true]);
+  });
+
+  it("a refused /finish is a failed run, never 'done'", async () => {
+    const t = jobPage({ swapAfterMs: 0, api: (_m, p) => (p.endsWith("/finish") ? { ok: false, status: 500, body: { message: "Keepr could not save." } } : undefined) });
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome.outcome).toBe("finish_refused");
+    // SR U1: the card's short line; Keepr's own words go to the details.
+    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr couldn't finish the Sync.", true]);
+  });
+
+  it("transportKind: 0 → unreachable, 401 → refused, 404 no_job → unknown_job; 410 / a bare 404 / 500 → none", () => {
+    expect(job.transportKind({ status: 0 })).toBe("unreachable");
+    expect(job.transportKind(null)).toBe("unreachable");
+    expect(job.transportKind({ status: 401, body: {} })).toBe("refused");
+    expect(job.transportKind({ status: 404, body: { error: "no_job" } })).toBe("unknown_job");
+    expect(job.transportKind({ status: 404, body: {} })).toBeNull();
+    expect(job.transportKind({ status: 410, body: { error: "job_over" } })).toBeNull();
+    expect(job.transportKind({ status: 500, body: {} })).toBeNull();
+  });
+
+  it("the page's Try again with Keepr not running launches keepr://open", () => {
+    const src = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8").replace(/\r\n/g, "\n");
+    const fn = /function retrySync\(\) \{[\s\S]*?\n {2}\}/.exec(src)![0];
+    expect(fn).toContain('if (!r || r.status === 0) {');
+    expect(fn).toContain('launchKeepr(document, "keepr://open");');
+  });
+});
+
+// Storyboards H03 / H07 at the job level. Mutations: the claim's retrying
+// ignored; a stop from this page shown as "cancelled in Keepr" → red.
+describe("storyboards H03 / H07 in the job", () => {
+  it("H03: a Try again run's progress carries retrying (the box says 'skipping saved chats')", async () => {
+    const extras: Array<Record<string, unknown> | undefined> = [];
+    const t = jobPage({
+      swapAfterMs: 0,
+      api: (_m, p) => (p.endsWith("/claim") ? { ok: true, status: 200, body: { jobId: t.JOB, kind: "cache", since: "2026-09-01T00:00:00.000Z", retrying: true } } : undefined),
+    });
+    (t.env as Record<string, unknown>).overlay = { show: (_text: string, _e: boolean, x?: Record<string, unknown>) => extras.push(x) };
+    await job.runJob(t.JOB, t.env);
+    expect(extras.some((x) => !!x && x.cancel === true && x.retrying === true)).toBe(true);
+  });
+
+  it("H07: stopped from this page → 'Sync stopped' (not 'cancelled in Keepr')", async () => {
+    let progressCalls = 0;
+    const t = jobPage({
+      swapAfterMs: 0,
+      api: (_m, p) => {
+        if (p.endsWith("/progress") && ++progressCalls >= 2) return { ok: false, status: 410, body: { error: "job_over" } };
+        return undefined;
+      },
+    });
+    (t.env as Record<string, unknown>).stoppedHere = () => true;
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome.outcome).toBe("stopped");
+    expect(t.shown[t.shown.length - 1]).toEqual(["Sync stopped", false]);
+  });
+});
+
+describe("SR fix 2: Details rows from an earlier chat", () => {
+  it("readParticipantsAndClose throws details_stuck when an earlier chat's Details cannot be closed (Escape and Done tried)", async () => {
+    const page = mountDetails(["(555) 555-0109"]);
+    page.click(document.querySelector("[data-e2e-conversation-menu-button]")!);
+    page.click(document.querySelector("[data-e2e-details-button]")!);
+    page.clicks.length = 0; // the earlier chat's Details is open and never closed
+    const stuckClick = (el: Element): void => {
+      if (el.matches('button[aria-label="Done"]')) {
+        page.clicks.push("done (ignored)");
+        return;
+      }
+      page.click(el);
+    };
+    const escapes: string[] = [];
+    let result: string[] | undefined;
+    const err = await scan
+      .readParticipantsAndClose(document, { click: stuckClick, sleep: noSleep, timeoutMs: 500, escape: () => escapes.push("esc") })
+      .then((r) => {
+        result = r;
+        return null;
+      }, (e: Error & { code?: string }) => e);
+    expect(result).toBeUndefined();
+    expect(err?.code).toBe("details_stuck");
+    expect(escapes).toEqual(["esc"]);
+    expect(page.clicks).toEqual(["done (ignored)"]); // and never the menu
+  });
+
+  // SR (before the cache test): one stuck panel must not end a 300-chat run.
+  it("an earlier chat's Details that closes on recovery: the read goes on for this chat", async () => {
+    const page = mountDetails(["(555) 555-0109"]);
+    page.click(document.querySelector("[data-e2e-conversation-menu-button]")!);
+    page.click(document.querySelector("[data-e2e-details-button]")!);
+    page.clicks.length = 0;
+    const numbers = await scan.readParticipantsAndClose(document, { click: page.click, sleep: noSleep, timeoutMs: 500, escape: () => {} });
+    expect(Array.from(numbers)).toEqual(["(555) 555-0109"]);
+    expect(page.clicks).toEqual(["done", "menu", "details", "done"]);
+  });
+
+  it("Done does nothing at the end of a read but Escape closes Details: the numbers are returned", async () => {
+    const page = mountDetails(["(555) 555-0199"]);
+    const noDone = (el: Element): void => {
+      if (el.matches('button[aria-label="Done"]')) return;
+      page.click(el);
+    };
+    const escape = (): void => {
+      document.getElementById("overlay-container")!.innerHTML = "";
+    };
+    const numbers = await scan.readParticipantsAndClose(document, { click: noDone, sleep: noSleep, timeoutMs: 500, escape });
+    expect(Array.from(numbers)).toEqual(["(555) 555-0199"]);
+  });
+
+  it("the job fails with details_stuck instead of skipping: no /match for that chat, no /finish", async () => {
+    const t = jobPage({
+      swapAfterMs: 0,
+      onOpen: (id) => {
+        if (id === "ccccccccccccccccccc") {
+          document.body.insertAdjacentHTML(
+            "beforeend",
+            "<mw-conversation-details><ul><li data-e2e-details-participant><span data-e2e-details-participant-number>(555) 555-0199</span></li></ul></mw-conversation-details>",
+          );
+        }
+      },
+    });
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome.outcome).toBe("details_stuck");
+    const matches = t.calls.filter(([, p]) => p.endsWith("/match")).map(([, , b]) => b?.conversationId);
+    // The queue is the list order (a cache Sync): a, b, then c — where Details sticks.
+    expect(matches).toEqual(["aaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbb"]);
+    const err = t.calls.find(([, p]) => p.endsWith("/error"));
+    expect(err?.[2]).toMatchObject({ code: "details_stuck" });
+    expect(t.posts()).not.toContain("/finish");
+    expect(t.opened).toEqual(["aaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbb", "ccccccccccccccccccc"]);
+  });
+});
+
+describe("chat switch readiness (live measurement 2026-09-29)", () => {
+  it("the previous chat's messages stay 2 s after the click: only the new chat's messages are sent", async () => {
+    const t = jobPage({ swapAfterMs: 2000 });
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome.outcome).toBe("finished");
+    const chats = t.calls.filter(([, p]) => p.endsWith("/chat"));
+    expect(chats).toHaveLength(1);
+    const sent = chats[0][2] as { conversationId: string; messages: Array<{ msgId: string; text: string }> };
+    expect(sent.conversationId).toBe("aaaaaaaaaaaaaaaaaaa");
+    expect(sent.messages.map((m) => m.msgId)).toEqual(["1"]);
+    expect(sent.messages[0].text).toBe("hello");
+  });
+
+  it("messages that never change: the chat is skipped as messages_not_loaded, nothing sent, the job still finishes", async () => {
+    const t = jobPage({ swapAfterMs: null });
+    const outcome = (await job.runJob(t.JOB, t.env)) as { outcome: string; skips?: Array<{ conversationId: string; reason: string }> };
+    expect(outcome.outcome).toBe("finished");
+    expect(t.calls.filter(([, p]) => p.endsWith("/chat"))).toHaveLength(0);
+    expect(outcome.skips).toEqual([{ conversationId: "aaaaaaaaaaaaaaaaaaa", reason: "messages_not_loaded" }]);
+    expect(t.posts()[t.posts().length - 1]).toBe("/finish");
+  });
+
+  it("waitForMessageSwap: an empty pane never counts as ready, a new set must hold 500 ms", async () => {
+    const s = scan as unknown as {
+      messageIdSet: (d: Document) => string;
+      waitForMessageSwap: (d: Document, before: string, io: { sleep: (ms: number) => Promise<void>; timeoutMs?: number }) => Promise<boolean>;
+    };
+    document.body.innerHTML = `<div id="pane">${STALE}</div>`;
+    const before = s.messageIdSet(document);
+    document.getElementById("pane")!.innerHTML = "";
+    let clock = 0;
+    expect(await s.waitForMessageSwap(document, before, { sleep: async (ms) => { clock += ms; } })).toBe(false);
+    expect(clock).toBe(8000);
+
+    // New set appears at 300 ms, then a second message at 600 ms: ready only
+    // after the set stops changing for 500 ms.
+    document.getElementById("pane")!.innerHTML = STALE;
+    clock = 0;
+    const ready = await s.waitForMessageSwap(document, before, {
+      sleep: async (ms) => {
+        clock += ms;
+        if (clock === 300) document.getElementById("pane")!.innerHTML = FRESH;
+        if (clock === 600) document.getElementById("pane")!.insertAdjacentHTML("beforeend", wrapper("2", "second"));
+      },
+    });
+    expect(ready).toBe(true);
+    expect(clock).toBe(1100);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// History loading (live measurement #2, 2026-09-29: only the latest 25
+// messages render when a chat opens). Synthetic chats only.
+// ---------------------------------------------------------------------------
+
+interface HistoryModule {
+  RCS_HISTORY_EXTENSION_POOL_MS: number;
+  HISTORY_BUDGET_EXTEND_MS: number;
+  HISTORY_BUDGET_GROWTH_WINDOW_MS: number;
+  HISTORY_BUDGET_CAP_MS: number;
+  findMessageScroller: (doc: Document) => Element | null;
+  loadHistory: (
+    doc: Document,
+    io: {
+      scrollUp: () => void | Promise<void>;
+      sleep: (ms: number) => Promise<void>;
+      oldestMs: () => number | null;
+      floorMs?: number | null;
+      cap?: number;
+      noNewTimeoutMs?: number;
+      budgetMs?: number;
+      budgetCapMs?: number;
+      extensionPoolLeftMs?: number;
+      nudge?: () => void | Promise<void>;
+      startMarkerSelectors?: string[];
+      hasScroller?: () => boolean;
+      nudgeDown?: () => void;
+      nudgeReturnStep?: (i: number, n: number) => void;
+      imagePass?: boolean;
+      stepDown?: (f: number) => boolean;
+      extractBatch?: () => unknown[];
+      onProgress?: (n: number) => void;
+    },
+  ) => Promise<{ stopReason: string; count: number; scrolls: number; nudges: number; confirmedBy?: string; gapsDetected?: number; messages?: unknown[];
+    batches?: number; elapsedMs?: number; budgetExtensions?: number; extraMs?: number; poolExhausted?: boolean }>;
+}
+const hist = scan as unknown as HistoryModule;
+const extractFn = extract.extractConversation as (d: Document, h: string, n: Date) => {
+  messages: Array<{ msgId: string; sentAt: string }>;
+};
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const PAGE = 25;
+
+/** Message i of a synthetic chat: i = 0 is the newest, one per day going back from 2026-09-20 09:05 local. */
+function historyDate(i: number): Date {
+  return new Date(2026, 8, 20 - i, 9, 5);
+}
+function historyWrapper(i: number): string {
+  const d = historyDate(i);
+  const phrase = `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} at 9:05 AM`;
+  return `<mws-message-wrapper msg-id="h${i}"><div data-e2e-message-wrapper-core data-e2e-message-outgoing="false" data-e2e-message-rcs="true">
+    <mws-text-message-part aria-label="Test Contact A said: note ${i}. Received on ${phrase}."><mws-message-part-content data-e2e-message-content>note ${i}</mws-message-part-content></mws-text-message-part>
+  </div></mws-message-wrapper>`;
+}
+
+/**
+ * A chat pane holding the latest 25 of `total` messages. `scrollUp()` asks for
+ * 25 older ones, which appear `loadDelayMs` of clock later (clock advanced by
+ * `sleep`). `virtualized`: the pane only ever holds the 30 oldest loaded.
+ */
+function historyPane(opts: { total: number; loadDelayMs?: number; virtualized?: boolean; spinner?: boolean; startMarker?: boolean; parkAfter?: number }) {
+  const delay = opts.loadDelayMs ?? 400;
+  let loaded = Math.min(PAGE, opts.total);
+  let clock = 0;
+  let pendingAt: number | null = null;
+  const scrollClocks: number[] = [];
+  const render = (): void => {
+    // A virtualized pane keeps the oldest loaded page plus 5 rows of the previous one (real lists overlap).
+    const from = opts.virtualized ? Math.max(0, loaded - PAGE - 5) : 0;
+    let html = "";
+    // #10: a loading indicator while a page is pending; a start marker once all is loaded.
+    if (opts.spinner && pendingAt !== null) html += `<div role="progressbar" data-test-visible></div>`;
+    if (opts.startMarker && loaded >= opts.total) html += `<div data-test-chat-start></div>`;
+    for (let i = loaded - 1; i >= from; i--) html += historyWrapper(i);
+    const pane = document.getElementById("pane");
+    if (pane) pane.innerHTML = html;
+    else document.body.insertAdjacentHTML("beforeend", `<div id="pane">${html}</div>`);
+  };
+  const tick = (): void => {
+    if (pendingAt !== null && clock >= pendingAt) {
+      pendingAt = null;
+      loaded = Math.min(opts.total, loaded + PAGE);
+      render();
+    }
+  };
+  return {
+    render,
+    clock: () => clock,
+    scrollClocks,
+    /** A load request the page makes itself (e.g. after the nudge's scroll events). */
+    trigger: (): void => {
+      if (loaded < opts.total && pendingAt === null) pendingAt = clock + delay;
+    },
+    scrollUp: (): void => {
+      scrollClocks.push(clock);
+      // A page parked at the top stops requesting history on plain scroll-ups.
+      if (opts.parkAfter !== undefined && scrollClocks.length > opts.parkAfter) return;
+      if (loaded < opts.total && pendingAt === null) {
+        pendingAt = clock + delay;
+        if (opts.spinner) render();
+      }
+    },
+    sleep: async (ms: number): Promise<void> => {
+      budget();
+      clock += ms;
+      // The longest real case (the cap test) uses ~32 s of clock; far past that is a loop.
+      if (clock > 500_000) throw new Error("history harness: runaway loop");
+      tick();
+    },
+    oldestMs: (): number | null => {
+      const msgs = extractFn(document, "https://messages.google.com/web/conversations/aaaaaaaaaaaaaaaaaaa", new Date(2026, 8, 21)).messages;
+      if (msgs.length === 0) return null;
+      return Math.min(...msgs.map((m) => Date.parse(m.sentAt)));
+    },
+  };
+}
+
+describe("findMessageScroller: picked by computed style", () => {
+  function sized(el: Element, scrollHeight: number, clientHeight: number): void {
+    Object.defineProperty(el, "scrollHeight", { configurable: true, value: scrollHeight });
+    Object.defineProperty(el, "clientHeight", { configurable: true, value: clientHeight });
+  }
+
+  it("returns the nearest ancestor with overflow-y auto/scroll whose content overflows it", () => {
+    document.body.innerHTML = `<div id="outer" style="overflow-y: auto"><div id="anchored" style="overflow-y: scroll"><div id="clipped" style="overflow-y: auto"><div id="list">${historyWrapper(0)}</div></div></div></div>`;
+    sized(document.getElementById("list")!, 5000, 400); // overflows but overflow-y visible
+    sized(document.getElementById("clipped")!, 400, 400); // scrollable style, nothing to scroll
+    sized(document.getElementById("anchored")!, 5000, 600); // the one
+    sized(document.getElementById("outer")!, 9000, 800);
+    expect(hist.findMessageScroller(document)?.id).toBe("anchored");
+  });
+
+  it("returns null when no ancestor scrolls, or there are no messages", () => {
+    document.body.innerHTML = `<div id="list">${historyWrapper(0)}</div>`;
+    sized(document.getElementById("list")!, 5000, 400);
+    expect(hist.findMessageScroller(document)).toBeNull();
+    document.body.innerHTML = `<div style="overflow-y: auto"></div>`;
+    expect(hist.findMessageScroller(document)).toBeNull();
+  });
+});
+
+describe("loadHistory: scroll up until the start date, the confirmed start, the cap — or an unconfirmed stop", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  const base = (p: ReturnType<typeof historyPane>) => ({ scrollUp: p.scrollUp, sleep: p.sleep, oldestMs: p.oldestMs, hasScroller: () => true });
+
+  // L1: jsdom has no layout — a progress element is "visible" here only when
+  // it says so (data-test-visible), so a test states which spinners are on screen.
+  let rectSpy: jest.SpyInstance;
+  beforeEach(() => {
+    rectSpy = jest.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const on = this.hasAttribute("data-test-visible");
+      return { left: 0, top: 0, right: on ? 10 : 0, bottom: on ? 10 : 0, width: on ? 10 : 0, height: on ? 10 : 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    });
+  });
+  afterEach(() => rectSpy.mockRestore());
+
+  it("stops once the oldest loaded message is earlier than the date floor", async () => {
+    const p = historyPane({ total: 200 });
+    p.render();
+    const floorMs = new Date(2026, 8, 20 - 60).getTime(); // midnight of message 60's day
+    const r = await hist.loadHistory(document, { ...base(p), floorMs });
+    expect(r).toMatchObject({ stopReason: "date_floor", count: 75, scrolls: 2, nudges: 0 });
+    expect(p.oldestMs()).toBe(historyDate(74).getTime());
+  });
+
+  it("a message dated exactly at the floor is inside the window: one more scroll is needed", async () => {
+    const p = historyPane({ total: 200 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: historyDate(49).getTime() });
+    expect(r).toMatchObject({ stopReason: "date_floor", count: 75, scrolls: 2, nudges: 0 });
+  });
+
+  it("does not scroll at all when the first 25 already reach past the floor", async () => {
+    const p = historyPane({ total: 200 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: historyDate(10).getTime() });
+    expect(r).toMatchObject({ stopReason: "date_floor", count: 25, scrolls: 0, nudges: 0 });
+    expect(p.scrollClocks).toEqual([]);
+  });
+
+  // BACKLOG-3658 #10. Mutation: confirm on the first empty wait (the old
+  // rule) → "no_more" after 3 s → red.
+  // v2: a small chat (< 100 messages, no loading indicator) is at its start
+  // after ONE stall (a batch request + a nudge that both bring nothing), in
+  // ≤ 10 s. Mutations: two stalls for small chats / a longer stall → red.
+  it("a small chat: ONE stall (batch + nudge) confirms the start, within 10 s", async () => {
+    const p = historyPane({ total: 60 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 60, scrolls: 3, nudges: 1, confirmedBy: "one_stall" });
+    const lastScroll = p.scrollClocks[p.scrollClocks.length - 2]; // the stalled batch request (its nudge re-requests too)
+    expect(p.clock() - lastScroll).toBeLessThanOrEqual(10_000);
+  });
+
+  it("a larger chat (≥ 100): TWO stalls confirm the start", async () => {
+    const p = historyPane({ total: 150 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 150, nudges: 2, confirmedBy: "two_stalls" });
+  });
+
+  // v2: fast chats are not held by fixed waits. Mutation: no early return on
+  // the first growth → each batch waits the full window → red.
+  it("adaptive batches: the next request follows the first growth + a short quiet period", async () => {
+    const p = historyPane({ total: 200 });
+    p.render();
+    await hist.loadHistory(document, { ...base(p), floorMs: new Date(2026, 8, 20 - 150).getTime() });
+    const gaps = p.scrollClocks.slice(1).map((c, i) => c - p.scrollClocks[i]);
+    // a 400 ms load + ≤ 950 ms quiet cap, never the 4.3 s window
+    for (const g of gaps) expect(g).toBeLessThanOrEqual(1400);
+  });
+
+  // The real-phone case: the next page took longer than 3 s. Mutation: no
+  // nudges → stops at 25 → red.
+  it("a page slower than the first-growth window (5 s) is still loaded thanks to the nudge", async () => {
+    const p = historyPane({ total: 60, loadDelayMs: 5000 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 60 });
+  });
+
+  // v2 + gap guard: a page parked at the top only loads again after the
+  // nudge; the batch that nudge loads overlaps what was read, so no gap.
+  // Mutation: the nudge return steps judged for gaps → history_gap → red.
+  it("a nudge that loads one batch keeps the overlap and raises no history_gap", async () => {
+    const p = historyPane({ total: 90, virtualized: true, parkAfter: 1 });
+    p.render();
+    const r = await hist.loadHistory(document, {
+      ...base(p), floorMs: null, nudgeReturnStep: (i: number, n: number) => (i === n - 1 ? p.trigger() : undefined),
+    });
+    expect(r.stopReason).toBe("no_more");
+    expect(r.count).toBe(90);
+    expect(r.gapsDetected).toBeUndefined();
+  });
+
+  it("while a loading indicator stays visible, a small chat is never confirmed (the budget ends it)", async () => {
+    const p = historyPane({ total: 40 });
+    p.render();
+    // The pane re-renders on each load: the indicator is put back after every step.
+    const spin = () => {
+      const pane = document.getElementById("pane")!;
+      if (!pane.querySelector("[role=progressbar]")) pane.insertAdjacentHTML("beforeend", `<div role="progressbar" data-test-visible></div>`);
+    };
+    spin();
+    const sleep = async (ms: number) => {
+      await p.sleep(ms);
+      spin();
+    };
+    const r = await hist.loadHistory(document, { ...base(p), sleep, floorMs: null, budgetMs: 30_000 });
+    expect(r.stopReason).toBe("not_settled");
+  });
+
+  // Mutation: the loading indicator ignored → 22 s of waits < 25 s → red.
+  it("while a loading indicator shows, the wait goes on (a 25 s page still arrives)", async () => {
+    const p = historyPane({ total: 60, loadDelayMs: 25_000, spinner: true });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r.count).toBe(60);
+  });
+
+  // Mutation: the start marker not checked → "not_settled" → red.
+  it("a start marker on screen CONFIRMS the start: no_more, no nudges", async () => {
+    const p = historyPane({ total: 60, startMarker: true });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, startMarkerSelectors: ["[data-test-chat-start]"] });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 60, scrolls: 2, nudges: 0, confirmedBy: "marker" });
+  });
+
+  it("the start marker list is a named constant, empty until traced live", () => {
+    expect((scan as unknown as { HISTORY_START_MARKER_SELECTORS: string[] }).HISTORY_START_MARKER_SELECTORS).toEqual([]);
+    expect((scan as unknown as { HISTORY_SMALL_CHAT: number }).HISTORY_SMALL_CHAT).toBe(100);
+    expect((scan as unknown as { RCS_HISTORY_BUDGET_MS: number }).RCS_HISTORY_BUDGET_MS).toBe(60_000);
+  });
+
+  // Mutation: drop the first-page rule → nudges and "not_settled" → red.
+  it("a chat that fits on the first page (under 25) is complete: confirmed, no scroll", async () => {
+    const p = historyPane({ total: 20 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 20, scrolls: 0, nudges: 0, confirmedBy: "first_page" });
+    // Only after the set was stable for 1 s.
+    expect(p.clock()).toBeGreaterThanOrEqual(1000);
+  });
+
+  // SR S2. Mutation: confirm without checking the loading indicator → red.
+  it("a short first page with a loading indicator showing is NOT confirmed", async () => {
+    const p = historyPane({ total: 20 });
+    p.render();
+    document.getElementById("pane")!.insertAdjacentHTML("beforeend", `<div role="progressbar" data-test-visible></div>`);
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, budgetMs: 30_000 });
+    expect(r.confirmedBy).toBeUndefined();
+    expect(r.stopReason).toBe("not_settled");
+  });
+
+  // L1 (live: a 7-message chat ended not_settled). Mutations: search the
+  // whole document, or count an invisible spinner → red.
+  it("a spinner outside the messages pane (a list row's), or an invisible one, is not loading", async () => {
+    const p = historyPane({ total: 7 });
+    p.render();
+    document.body.insertAdjacentHTML("afterbegin", `<mws-conversation-list-item><div role="progressbar" data-test-visible></div></mws-conversation-list-item>`);
+    document.getElementById("pane")!.insertAdjacentHTML("beforeend", `<div role="progressbar"></div>`); // zero size
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toMatchObject({ stopReason: "no_more", confirmedBy: "first_page", scrolls: 0 });
+  });
+
+  // L1 ADD. Mutation: no no_overflow rule → it scrolls / nudges → red.
+  it("a chat that does not overflow (no message scroller) is confirmed as no_overflow after 1 s, without scrolling", async () => {
+    const p = historyPane({ total: 30 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, hasScroller: () => false });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 25, scrolls: 0, nudges: 0, confirmedBy: "no_overflow" });
+    expect(p.scrollClocks).toEqual([]);
+    expect(p.clock()).toBeGreaterThanOrEqual(1000);
+  });
+
+  // SR S2. Mutation: confirm without the stability wait → red.
+  it("a short first page still changing is NOT confirmed until it has been stable for 1 s", async () => {
+    const p = historyPane({ total: 20 });
+    p.render();
+    let clock = 0;
+    let n = 100;
+    const changing = async (ms: number) => {
+      clock += ms;
+      // A new message every 500 ms for the first 2 s, then quiet.
+      if (clock <= 2000 && clock % 500 === 0) document.getElementById("pane")!.insertAdjacentHTML("beforeend", historyWrapper(n++));
+      await p.sleep(ms);
+    };
+    const r = await hist.loadHistory(document, { ...base(p), sleep: changing, floorMs: null });
+    expect(r).toMatchObject({ stopReason: "no_more", confirmedBy: "first_page", scrolls: 0 });
+    expect(clock).toBeGreaterThanOrEqual(3000);
+    // Never while it keeps changing: the 3 s stability window runs out → it scrolls.
+    document.body.innerHTML = "";
+    const q = historyPane({ total: 20 });
+    q.render();
+    let c2 = 0;
+    let m = 200;
+    const always = async (ms: number) => {
+      c2 += ms;
+      if (c2 <= 3000 && c2 % 500 === 0) document.getElementById("pane")!.insertAdjacentHTML("beforeend", historyWrapper(m++));
+      await q.sleep(ms);
+    };
+    const r2 = await hist.loadHistory(document, { ...base(q), sleep: always, floorMs: null, budgetMs: 30_000 });
+    expect(r2.scrolls).toBeGreaterThan(0);
+  });
+
+  // Mutation: no budget → the spinner keeps it waiting forever (harness throws) → red.
+  it("the per-chat budget (60 s) ends a load that never settles: unconfirmed", async () => {
+    const p = historyPane({ total: 60, loadDelayMs: 10_000_000, spinner: true });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toMatchObject({ stopReason: "not_settled", count: 25 });
+    expect(p.clock()).toBeLessThanOrEqual(60_000);
+    expect(p.clock()).toBeGreaterThanOrEqual(59_000);
+    document.body.innerHTML = "";
+    const big = historyPane({ total: 5000 });
+    big.render();
+    // No room to extend (cap = budget): a growing chat still stops.
+    const r2 = await hist.loadHistory(document, { ...base(big), floorMs: null, budgetMs: 5000, budgetCapMs: 5000 });
+    expect(r2.stopReason).toBe("not_settled");
+    expect(r2.count).toBeLessThan(5000);
+    expect(r2.budgetExtensions).toBeUndefined();
+  });
+
+  // Real phone (2026-10-02): the biggest chats ran out of budget still
+  // loading. The budget follows progress. Mutations: no extension → red
+  // ("keeps going"); no hard cap → red ("hard cap").
+  it("the budget is extended while batches keep growing: a big chat loads to its start", async () => {
+    const p = historyPane({ total: 1500 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, budgetMs: 5000 });
+    expect(r.stopReason).toBe("no_more");
+    expect(r.count).toBe(1500);
+    expect(r.budgetExtensions).toBeGreaterThan(0);
+    expect(r.elapsedMs).toBeGreaterThan(5000);
+    expect(r.batches).toBeGreaterThan(0);
+  });
+
+  it("the extension has a hard cap per chat", async () => {
+    const p = historyPane({ total: 5000 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, budgetMs: 5000, budgetCapMs: 20_000 });
+    expect(r.stopReason).toBe("not_settled");
+    expect(r.count).toBeLessThan(2000);
+    expect(r.elapsedMs).toBeLessThanOrEqual(20_075); // at most one 75 ms poll past it
+    expect(r.elapsedMs).toBeGreaterThanOrEqual(19_000);
+  });
+
+  // SR: the extra time is a per-RUN pool. Mutations: the pool ignored → red
+  // ("pool spent", "pool partly left"); extraMs counting the granted time
+  // instead of the used time → red ("used, not granted").
+  it("pool spent: a growing chat gets only the base budget and ends not_settled", async () => {
+    const p = historyPane({ total: 1500 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, budgetMs: 5000, extensionPoolLeftMs: 0 });
+    expect(r.stopReason).toBe("not_settled");
+    expect(r.budgetExtensions).toBeUndefined();
+    expect(r.extraMs).toBeUndefined();
+    expect(r.poolExhausted).toBe(true);
+    expect(r.elapsedMs).toBeLessThanOrEqual(5_075);
+  });
+
+  it("pool partly left: extensions stop where the pool ends", async () => {
+    const p = historyPane({ total: 5000 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, budgetMs: 5000, extensionPoolLeftMs: 10_000 });
+    expect(r.stopReason).toBe("not_settled");
+    expect(r.poolExhausted).toBe(true);
+    expect(r.extraMs).toBe(10_000);
+    expect(r.elapsedMs).toBeLessThanOrEqual(15_075);
+  });
+
+  it("used, not granted: a chat that finishes inside an extension draws only what it used", async () => {
+    const p = historyPane({ total: 1500 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, budgetMs: 5000, extensionPoolLeftMs: 600_000 });
+    expect(r.stopReason).toBe("no_more");
+    expect(r.poolExhausted).toBeUndefined();
+    expect(r.extraMs).toBe((r.elapsedMs ?? 0) - 5000);
+    expect(r.extraMs! % 30_000).not.toBe(0); // not a whole number of grants
+  });
+
+  it("the run's extra-time pool is 30 min", () => {
+    expect(hist.RCS_HISTORY_EXTENSION_POOL_MS).toBe(30 * 60_000);
+  });
+
+  it("the default extension: +30 s while growth in the last 10 s, up to 5 min", () => {
+    expect(hist.HISTORY_BUDGET_EXTEND_MS).toBe(30_000);
+    expect(hist.HISTORY_BUDGET_GROWTH_WINDOW_MS).toBe(10_000);
+    expect(hist.HISTORY_BUDGET_CAP_MS).toBe(300_000);
+  });
+
+  it("stops at the 2,000-message cap", async () => {
+    const p = historyPane({ total: 5000 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toMatchObject({ stopReason: "cap", count: 2000, scrolls: 79, nudges: 0 });
+  });
+
+  it("counts new msg-ids, not the number on screen: a list that drops its newest rows still loads", async () => {
+    const p = historyPane({ total: 100, virtualized: true });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 100, confirmedBy: "two_stalls" });
+  });
+
+  it("the nudge: down once, then 10 eased return steps", async () => {
+    const p = historyPane({ total: 60 });
+    p.render();
+    const down = jest.fn();
+    const back = jest.fn();
+    await hist.loadHistory(document, { ...base(p), floorMs: null, nudgeDown: down, nudgeReturnStep: back } as Parameters<typeof hist.loadHistory>[1]);
+    expect(down).toHaveBeenCalledTimes(1);
+    expect(back.mock.calls.map((c) => c[0])).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
+  // v2 image pass (kept-image chats only): images mount only in view.
+  // Mutations: no pass / no stagnant stop / no time bound → red.
+  it("image pass: steps down collecting lazily mounted images; 4 stagnant steps stop it; ≤ 3 s", async () => {
+    const p = historyPane({ total: 10 });
+    p.render();
+    let downs = 0;
+    const startClock = p.clock();
+    const r = await hist.loadHistory(document, {
+      ...base(p),
+      floorMs: null,
+      hasScroller: () => false,
+      imagePass: true,
+      stepDown: () => {
+        downs += 1;
+        return true;
+      },
+      extractBatch: () => [{ msgId: "h3", sentAt: "2026-09-17T09:05:00.000Z", imageSrcs: downs >= 2 ? ["blob:x"] : [] }],
+    } as Parameters<typeof hist.loadHistory>[1]);
+    expect(((r as unknown as { messages: Array<{ imageSrcs: string[] }> }).messages)[0].imageSrcs).toEqual(["blob:x"]);
+    expect(downs).toBe(2 + 4 + 4); // until the image, 4 stagnant, then one retry pass of 4
+    expect(p.clock() - startClock).toBeLessThanOrEqual(3000 + 3000); // stability check + the ≤ 3 s pass
+  });
+});
+
+
+describe("job runner: loads history before extracting a matched chat", () => {
+  function historyJob(opts: {
+    total: number;
+    startDate: string | null;
+    historyCap?: number;
+    /** GAP GUARD: the chat pane recycles its rows (only 30 in the DOM). */
+    virtualized?: boolean;
+    api?: (method: string, p: string, body?: Record<string, unknown>) => ApiReply | undefined;
+  }) {
+    const JOB = "11111111-2222-4333-8444-555555555555"; // pii-allow-uuid: invented, not from any live row
+    const calls: Array<[string, string, Record<string, unknown> | undefined]> = [];
+    const shown: string[] = [];
+    let open = "";
+    let page = mountDetails([]);
+    let pane: ReturnType<typeof historyPane> | null = null;
+    let clock = 0;
+    document.body.innerHTML = LIST;
+    const env = {
+      hasMessageScroller: () => true,
+      doc: document,
+      getLocation: () => ({ pathname: `/web/conversations/${open}`, href: `https://messages.google.com/web/conversations/${open}` }),
+      api: async (method: string, p: string, body?: Record<string, unknown>): Promise<ApiReply> => {
+        calls.push([method, p, body]);
+        const custom = opts.api?.(method, p, body);
+        if (custom) return custom;
+        if (p.endsWith("/claim")) {
+          return { ok: true, status: 200, body: { jobId: JOB, kind: "cache", since: opts.startDate } };
+        }
+        if (p.endsWith("/match")) {
+          const matched = body?.conversationId === "aaaaaaaaaaaaaaaaaaa";
+          return { ok: true, status: 200, body: { matched, contactIds: [], keepPhotos: matched } };
+        }
+        return { ok: true, status: 200, body: { ok: true } };
+      },
+      overlay: { show: (text: string) => shown.push(text) },
+      sleep: async (ms: number) => {
+        budget();
+        clock += ms;
+        if (pane) await pane.sleep(ms);
+      },
+      click: (el: Element) => page.click(el),
+      scroll: () => {},
+      scrollMessagesUp: () => pane?.scrollUp(),
+      openConversation: async (conv: Conv) => {
+        open = conv.conversationId;
+        page = mountDetails(["(555) 555-0199"]);
+        pane = open === "aaaaaaaaaaaaaaaaaaa" ? historyPane({ total: opts.total, virtualized: opts.virtualized }) : null;
+        pane?.render();
+      },
+      readImage: async (_src: string): Promise<{ mimeType: string; base64: string } | null> => null,
+      messagesTimeoutMs: undefined as number | undefined,
+      messagesStableMs: undefined as number | undefined,
+      extract: extract.extractConversation,
+      now: () => new Date(2026, 8, 21),
+      historyCap: opts.historyCap,
+      scan,
+    };
+    const sentIds = (): string[] => {
+      const chat = calls.find(([, p]) => p.endsWith("/chat"));
+      return ((chat?.[2]?.messages as Array<{ msgId: string }>) ?? []).map((m) => m.msgId);
+    };
+    const posts = (): string[] => calls.filter(([m]) => m === "POST").map(([, p]) => p.replace(`/job/${JOB}`, ""));
+    return { JOB, env, shown, sentIds, posts, calls, clock: () => clock };
+  }
+
+  type HistoryOutcome = { outcome: string; history?: Array<{ conversationId: string; stopReason: string; count: number }> };
+
+  it("the transaction's start date: sends every message back to the first one before it, and shows progress", async () => {
+    const t = historyJob({ total: 200, startDate: new Date(2026, 8, 20 - 60).toISOString() });
+    const outcome = (await job.runJob(t.JOB, t.env)) as HistoryOutcome;
+    expect(outcome.outcome).toBe("finished");
+    expect(outcome.history).toEqual([{ conversationId: "aaaaaaaaaaaaaaaaaaa", stopReason: "date_floor", count: 75 }]);
+    const ids = t.sentIds();
+    expect(ids).toHaveLength(75);
+    expect(ids).toContain("h74");
+    expect(ids).not.toContain("h75");
+    // Founder (P02): the card never shows the phase ("Loading history…"):
+    // "Reading chat i of M" throughout the load.
+    expect(t.shown.some((x: string) => /Loading history/.test(x))).toBe(false);
+    expect(t.shown.filter((x: string) => x === "Reading chat 1 of 5").length).toBeGreaterThan(3);
+  });
+
+  // #10: an unconfirmed stop is imported as far as it loaded AND reported
+  // (history_not_settled). Mutation: not reported → red.
+  // GAP GUARD: on a recycling pane, /chat carries every message read during
+  // the load, not only the rows left in the DOM. Mutation: send the final
+  // DOM only → red.
+  it("a recycling pane: every message read is sent, not only the final DOM", async () => {
+    const t = historyJob({ total: 120, startDate: null, virtualized: true });
+    await job.runJob(t.JOB, t.env);
+    expect(document.querySelectorAll("mws-message-wrapper").length).toBeLessThanOrEqual(30);
+    expect(t.sentIds()).toHaveLength(120);
+  });
+
+  it("no start date: loads until nothing new comes; an unconfirmed start is imported and reported", async () => {
+    const t = historyJob({ total: 120, startDate: null });
+    const outcome = (await job.runJob(t.JOB, t.env)) as HistoryOutcome & { notReached?: Array<{ reason: string }> };
+    // v2: a chat of 120 messages is at its start after two stalls (confirmed).
+    expect(outcome.history).toEqual([{ conversationId: "aaaaaaaaaaaaaaaaaaa", stopReason: "no_more", count: 120 }]);
+    expect(t.sentIds()).toHaveLength(120);
+    expect(outcome.notReached ?? []).toEqual([]);
+  });
+
+  it("a cancel during the history load ends the run at the first checkpoint: no more scrolls, no /chat, no /finish", async () => {
+    const t = historyJob({
+      total: 500,
+      startDate: null,
+      api: (_m, p, body) =>
+        p.endsWith("/progress") && typeof body?.historyLoaded === "number"
+          ? { ok: false, status: 410, body: { error: "job_over" } }
+          : undefined,
+    });
+    let scrolls = 0;
+    const scrollUp = t.env.scrollMessagesUp;
+    t.env.scrollMessagesUp = () => {
+      scrolls += 1;
+      return scrollUp();
+    };
+    const outcome = (await job.runJob(t.JOB, t.env)) as HistoryOutcome;
+    expect(outcome.outcome).toBe("job_gone");
+    expect(scrolls).toBe(1);
+    expect(t.posts()).not.toContain("/chat");
+    expect(t.posts()).not.toContain("/finish");
+    expect(t.posts()).not.toContain("/error");
+    // Each checkpoint carries the loaded count.
+    const cp = t.calls.find(([, p, b]) => p.endsWith("/progress") && typeof b?.historyLoaded === "number");
+    expect(cp?.[2]).toMatchObject({ historyLoaded: 50, stage: "Reading chat 1 of 5" });
+  });
+
+  it("an image upload answering 410 ends the run: no further upload, no /finish", async () => {
+    const t = historyJob({
+      total: 1,
+      startDate: null,
+      api: (_m, p) => (p.endsWith("/attachment") ? { ok: false, status: 410, body: { error: "job_over" } } : undefined),
+    });
+    const open = t.env.openConversation;
+    t.env.openConversation = async (conv: Conv) => {
+      await open(conv);
+      if (conv.conversationId === "aaaaaaaaaaaaaaaaaaa") {
+        document
+          .querySelector('mws-message-wrapper[msg-id="h0"] [data-e2e-message-wrapper-core]')
+          ?.insertAdjacentHTML(
+            "beforeend",
+            `<mws-image-message-part aria-label="Test Contact A sent an image. Received on September 20, 2026 at 9:05 AM."><div data-e2e-message-image><img src="blob:https://messages.google.com/x-1"></div><div data-e2e-message-image><img src="blob:https://messages.google.com/x-2"></div></mws-image-message-part>`,
+          );
+      }
+    };
+    t.env.readImage = async (src: string) => ({ mimeType: "image/gif", base64: `B64(${src})` });
+    const outcome = (await job.runJob(t.JOB, t.env)) as HistoryOutcome;
+    expect(outcome.outcome).toBe("job_gone");
+    expect(t.posts().filter((p) => p === "/attachment")).toHaveLength(1);
+    expect(t.posts()).not.toContain("/finish");
+    expect(t.posts()).not.toContain("/error");
+  });
+
+  it("a chat still changing (or emptied) after the history load is skipped as history_not_settled, not sent", async () => {
+    const t = historyJob({ total: 30, startDate: null });
+    t.env.messagesTimeoutMs = 1000;
+    t.env.messagesStableMs = 500;
+    // The first scroll empties the pane and it never refills.
+    t.env.scrollMessagesUp = () => {
+      document.getElementById("pane")!.innerHTML = "";
+    };
+    const outcome = (await job.runJob(t.JOB, t.env)) as HistoryOutcome & { skips: Array<{ reason: string }> };
+    expect(outcome.outcome).toBe("finished");
+    expect(outcome.skips).toEqual([{ conversationId: "aaaaaaaaaaaaaaaaaaa", reason: "history_not_settled" }]);
+    expect(t.posts()).not.toContain("/chat");
+    expect(t.posts()).toContain("/finish");
+  });
+
+  // SR (live, 0.3.18): the top chat was ALREADY open at job start; clicking it
+  // re-rendered the same messages, the swap never came, and it was left out as
+  // messages_not_loaded. Mutation: the "before" snapshot taken as usual → red.
+  it("a chat already open (URL + header) is read as shown, not skipped as not loaded", async () => {
+    const t = historyJob({ total: 30, startDate: null });
+    t.env.messagesTimeoutMs = 1500;
+    // The page already shows the chat: its URL, header and messages.
+    await t.env.openConversation({ conversationId: "aaaaaaaaaaaaaaaaaaa", name: "Test Contact A", href: "" } as never);
+    document.body.insertAdjacentHTML("afterbegin", LIST);
+    const outcome = (await job.runJob(t.JOB, t.env)) as HistoryOutcome & { skips: Array<{ reason: string }> };
+    expect(outcome.outcome).toBe("finished");
+    expect(outcome.skips).not.toContainEqual({ conversationId: "aaaaaaaaaaaaaaaaaaa", reason: "messages_not_loaded" });
+    expect(t.posts()).toContain("/chat");
+    expect(t.sentIds().length).toBeGreaterThan(0);
+  });
+
+  it("chatAlreadyOpen: the URL AND the header must both show the chat", () => {
+    document.body.innerHTML = '<div data-e2e-header-title><h2>Test Contact A</h2></div>';
+    const env = (path: string) => ({ doc: document, getLocation: () => ({ pathname: path, href: "" }) });
+    const conv = { conversationId: "aaaaaaaaaaaaaaaaaaa", name: "Test Contact A" };
+    expect(job.chatAlreadyOpen(env("/web/conversations/aaaaaaaaaaaaaaaaaaa"), conv)).toBe(true);
+    expect(job.chatAlreadyOpen(env("/web/conversations/bbbbbbbbbbbbbbbbbbb"), conv)).toBe(false);
+    expect(job.chatAlreadyOpen(env("/web/conversations/aaaaaaaaaaaaaaaaaaa"), { ...conv, name: "Someone Else" })).toBe(false);
+    document.body.innerHTML = "";
+    expect(job.chatAlreadyOpen(env("/web/conversations/aaaaaaaaaaaaaaaaaaa"), conv)).toBe(false);
+  });
+
+  it("stops at the cap", async () => {
+    const t = historyJob({ total: 500, startDate: null, historyCap: 50 });
+    const outcome = (await job.runJob(t.JOB, t.env)) as HistoryOutcome;
+    expect(outcome.history).toEqual([{ conversationId: "aaaaaaaaaaaaaaaaaaa", stopReason: "cap", count: 50 }]);
+    expect(t.sentIds()).toHaveLength(50);
+  });
+});

@@ -6,7 +6,7 @@
  */
 
 import { useState, useCallback, useMemo } from "react";
-import type { ModalState } from "../types";
+import type { AndroidSyncStart, ModalState } from "../types";
 
 export interface UseModalFlowReturn {
   // State
@@ -49,7 +49,7 @@ export interface UseModalFlowReturn {
   closeIPhoneSync: () => void;
 
   // Android sync modal
-  openAndroidSync: () => void;
+  openAndroidSync: (start?: AndroidSyncStart) => void;
   closeAndroidSync: () => void;
 
   // Internal setters (for orchestrator to control)
@@ -71,6 +71,7 @@ export function useModalFlow(): UseModalFlowReturn {
   const [showTermsModal, setShowTermsModal] = useState<boolean>(false);
   const [showIPhoneSync, setShowIPhoneSync] = useState<boolean>(false);
   const [showAndroidSync, setShowAndroidSync] = useState<boolean>(false);
+  const [androidSyncStart, setAndroidSyncStart] = useState<AndroidSyncStart>("default");
 
   // Semantic modal methods
   const openProfile = useCallback(() => setShowProfile(true), []);
@@ -106,8 +107,16 @@ export function useModalFlow(): UseModalFlowReturn {
   const openIPhoneSync = useCallback(() => setShowIPhoneSync(true), []);
   const closeIPhoneSync = useCallback(() => setShowIPhoneSync(false), []);
 
-  const openAndroidSync = useCallback(() => setShowAndroidSync(true), []);
-  const closeAndroidSync = useCallback(() => setShowAndroidSync(false), []);
+  // SR: the start comes with each open (a dashboard open is always "default";
+  // an onClick event passed through is never "link").
+  const openAndroidSync = useCallback((start?: AndroidSyncStart) => {
+    setAndroidSyncStart(start === "link" ? "link" : "default");
+    setShowAndroidSync(true);
+  }, []);
+  const closeAndroidSync = useCallback(() => {
+    setShowAndroidSync(false);
+    setAndroidSyncStart("default");
+  }, []);
 
   // Memoized modal state object
   const modalState = useMemo<ModalState>(
@@ -122,6 +131,7 @@ export function useModalFlow(): UseModalFlowReturn {
       showTermsModal,
       showIPhoneSync,
       showAndroidSync,
+      androidSyncStart,
     }),
     [
       showProfile,
@@ -134,6 +144,7 @@ export function useModalFlow(): UseModalFlowReturn {
       showTermsModal,
       showIPhoneSync,
       showAndroidSync,
+      androidSyncStart,
     ],
   );
 

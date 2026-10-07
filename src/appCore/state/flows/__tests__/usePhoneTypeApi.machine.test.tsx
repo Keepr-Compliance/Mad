@@ -387,7 +387,8 @@ describe("usePhoneTypeApi - State Machine Path", () => {
 
     // BACKLOG-1842: an Android user must have messages.source persisted so the
     // dashboard sync path never imports local macOS iMessages for them.
-    it("persists messages.source='android-companion' when Android is selected", async () => {
+    // BACKLOG-3659: a new Android answer defaults to Google Messages (extension).
+    it("persists messages.source='android-messages-web' when Android is selected", async () => {
       const { result } = renderHook(() => usePhoneTypeApi(defaultOptions), {
         wrapper: createWrapper(onboardingStatePhoneType),
       });
@@ -397,7 +398,7 @@ describe("usePhoneTypeApi - State Machine Path", () => {
       });
 
       expect(mockUpdatePreferences).toHaveBeenCalledWith("test-user", {
-        messages: { source: "android-companion" },
+        messages: { source: "android-messages-web" },
       });
     });
 

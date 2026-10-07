@@ -13,7 +13,7 @@
  * Kept import-light on purpose: only the boundary modules, so the child needs
  * no jest module mapping, no electron, and no database.
  */
-import { auditWindowEnd } from "../../electron/services/exportPlan";
+import { auditWindowEnd, auditWindowStart } from "../../electron/services/exportPlan";
 import { computeTransactionDateRange } from "../../electron/utils/emailDateRange";
 import {
   parseLocalCalendarDay,
@@ -39,18 +39,18 @@ const report = {
   /** The email/import window end (closing day + 30-day buffer). */
   emailRangeEnd: computeTransactionDateRange({ closed_at: "2026-07-29" }).end.toISOString(),
   /**
-   * The audit-window START, which BACKLOG-2788 deliberately does NOT change.
-   * The instant one millisecond before UTC midnight of the start day: the
-   * export and the submission parse their start with `new Date("2026-01-01")`
-   * (UTC midnight) and exclude it in every zone, while the tab reads the start
-   * as a LOCAL day and so admits it east of UTC. Reported so the divergence is
-   * a recorded measurement rather than a surprise.
+   * The audit-window START edge: the instant one millisecond before UTC
+   * midnight of the start day. The tab reads the start as a LOCAL day; since
+   * BACKLOG-3734 the export and the submission do too (`auditWindowStart`), so
+   * `mainAtStartEdge` must equal this in every zone.
    */
   tabAtStartEdge: isTimestampInAuditPeriod(
     "2025-12-31T23:59:59.999Z",
     parseLocalCalendarDay(AUDIT_START),
     parseLocalCalendarDay("2026-07-29"),
   ),
+  /** The export/submission answer for the same instant (lexicographic ISO, as the SQL does). */
+  mainAtStartEdge: "2025-12-31T23:59:59.999Z" >= auditWindowStart(AUDIT_START)!.toISOString(),
 };
 
 for (const day of DAYS) {

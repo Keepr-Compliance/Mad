@@ -171,6 +171,12 @@ export interface SyncOutcomeRow {
    * runs that had a bad network.
    */
   startedAt: number;
+  /**
+   * BACKLOG-3671 P2: the source's own metrics (Google Messages only), ALREADY
+   * built by that source's allow-list builder (rcsSyncOutcome.buildRcsSourceMetrics
+   * — the only writer). Never a spread of producer data.
+   */
+  sourceMetrics?: Record<string, unknown>;
 }
 
 /**

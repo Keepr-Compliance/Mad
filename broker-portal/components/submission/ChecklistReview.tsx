@@ -77,6 +77,7 @@ import {
   ConversationModal,
   groupMessagesIntoThreads,
   type Message,
+  type AttachmentsByMessage,
   type Thread,
 } from './MessageList';
 
@@ -126,6 +127,8 @@ export interface ChecklistReviewProps {
   versionHistory?: unknown;
   /** BACKLOG-3607: this version's number, for "restored from version N". */
   version?: number | null;
+  /** BACKLOG-3748: files shown inside their message's bubble in the View viewer. */
+  attachmentsByMessage?: AttachmentsByMessage;
   /**
    * BACKLOG-3607: section id -> documents and emails linked to it on this
    * version, counted server-side by the remove RPC's rule, for the confirmation.
@@ -208,6 +211,7 @@ export function ChecklistReview({
   versionHistory,
   version = null,
   linkedCounts,
+  attachmentsByMessage,
 }: ChecklistReviewProps) {
   const isAgent = viewerRole === 'agent';
   const router = useRouter();
@@ -251,7 +255,10 @@ export function ChecklistReview({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [viewer, setViewer] = useState<ChipTarget>({ attachment: null, thread: null });
 
-  const threads = useMemo(() => groupMessagesIntoThreads(messages), [messages]);
+  const threads = useMemo(
+    () => groupMessagesIntoThreads(messages, attachmentsByMessage),
+    [messages, attachmentsByMessage]
+  );
   const attachmentsById = useMemo(() => new Map(attachments.map((a) => [a.id, a])), [attachments]);
 
   const chipTarget = useCallback(
@@ -738,7 +745,11 @@ export function ChecklistReview({
         onClose={() => setViewer({ attachment: null, thread: null })}
       />
       {viewer.thread && (
-        <ConversationModal thread={viewer.thread} onClose={() => setViewer({ attachment: null, thread: null })} />
+        <ConversationModal
+          thread={viewer.thread}
+          onClose={() => setViewer({ attachment: null, thread: null })}
+          attachmentsByMessage={attachmentsByMessage}
+        />
       )}
     </div>
   );

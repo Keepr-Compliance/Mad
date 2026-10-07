@@ -16,7 +16,7 @@
  * exactly as the rendered Undo button would.
  */
 import React from "react";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { TransactionMessagesTab } from "../TransactionMessagesTab";
@@ -269,8 +269,8 @@ describe("BACKLOG-2390 — messages attach-undo", () => {
     // Pick the contact, then its conversation, then attach.
     await waitFor(() => expect(screen.getByText("John Doe")).toBeInTheDocument());
     await userEvent.click(screen.getByText("John Doe"));
-    await waitFor(() => expect(screen.getByTestId("thread-thread-1")).toBeInTheDocument());
-    await userEvent.click(screen.getByTestId("thread-thread-1"));
+    await waitFor(() => expect(within(screen.getByTestId("attach-messages-modal")).getByTestId("message-thread-card")).toHaveAttribute("data-thread-id", "thread-1"));
+    await userEvent.click(within(screen.getByTestId("attach-messages-modal")).getByTestId("message-thread-select"));
     await act(async () => {
       await userEvent.click(screen.getByTestId("attach-button"));
     });

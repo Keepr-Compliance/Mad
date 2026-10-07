@@ -357,11 +357,11 @@ describe("AttachMessagesModal", () => {
       fireEvent.click(screen.getByText("John Doe"));
 
       await waitFor(() => {
-        expect(screen.getByTestId("thread-thread-1")).toBeInTheDocument();
+        expect(screen.getByTestId("message-thread-card")).toHaveAttribute("data-thread-id", "thread-1");
       });
 
       // Click to select thread
-      fireEvent.click(screen.getByTestId("thread-thread-1"));
+      fireEvent.click(screen.getByTestId("message-thread-select"));
 
       // Should show selection count (footer shows "N selected")
       expect(screen.getByText(/1 selected/i)).toBeInTheDocument();
@@ -411,11 +411,11 @@ describe("AttachMessagesModal", () => {
       fireEvent.click(screen.getByText("John Doe"));
 
       await waitFor(() => {
-        expect(screen.getByTestId("thread-thread-1")).toBeInTheDocument();
+        expect(screen.getByTestId("message-thread-card")).toHaveAttribute("data-thread-id", "thread-1");
       });
 
       // Select thread
-      fireEvent.click(screen.getByTestId("thread-thread-1"));
+      fireEvent.click(screen.getByTestId("message-thread-select"));
 
       // Click attach
       fireEvent.click(screen.getByTestId("attach-button"));
@@ -450,10 +450,10 @@ describe("AttachMessagesModal", () => {
       fireEvent.click(screen.getByText("John Doe"));
 
       await waitFor(() => {
-        expect(screen.getByTestId("thread-thread-1")).toBeInTheDocument();
+        expect(screen.getByTestId("message-thread-card")).toHaveAttribute("data-thread-id", "thread-1");
       });
 
-      fireEvent.click(screen.getByTestId("thread-thread-1"));
+      fireEvent.click(screen.getByTestId("message-thread-select"));
       fireEvent.click(screen.getByTestId("attach-button"));
 
       await waitFor(() => {
@@ -514,10 +514,10 @@ describe("AttachMessagesModal", () => {
       fireEvent.click(screen.getByText("John Doe"));
 
       await waitFor(() => {
-        expect(screen.getByTestId("thread-thread-1")).toBeInTheDocument();
+        expect(screen.getByTestId("message-thread-card")).toHaveAttribute("data-thread-id", "thread-1");
       });
 
-      fireEvent.click(screen.getByTestId("thread-thread-1"));
+      fireEvent.click(screen.getByTestId("message-thread-select"));
       fireEvent.click(screen.getByTestId("attach-button"));
 
       await waitFor(() => {
@@ -549,10 +549,10 @@ describe("AttachMessagesModal", () => {
       fireEvent.click(screen.getByText("John Doe"));
 
       await waitFor(() => {
-        expect(screen.getByTestId("thread-thread-1")).toBeInTheDocument();
+        expect(screen.getByTestId("message-thread-card")).toHaveAttribute("data-thread-id", "thread-1");
       });
 
-      fireEvent.click(screen.getByTestId("thread-thread-1"));
+      fireEvent.click(screen.getByTestId("message-thread-select"));
       fireEvent.click(screen.getByTestId("attach-button"));
 
       await waitFor(() => {
@@ -658,7 +658,7 @@ describe("AttachMessagesModal", () => {
       });
       const threadEntries = screen
         .getByTestId("attach-messages-modal")
-        .querySelectorAll('[data-testid^="thread-"]');
+        .querySelectorAll('[data-testid="message-thread-card"]');
       expect(threadEntries).toHaveLength(1);
 
       // Select the whole conversation and attach → the exact union of all four
@@ -730,7 +730,7 @@ describe("AttachMessagesModal", () => {
       });
       const threadEntries = screen
         .getByTestId("attach-messages-modal")
-        .querySelectorAll('[data-testid^="thread-"]');
+        .querySelectorAll('[data-testid="message-thread-card"]');
       expect(threadEntries).toHaveLength(2);
     });
   });

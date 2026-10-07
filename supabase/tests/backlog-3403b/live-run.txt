@@ -1,0 +1,8 @@
+L1 success=true row=submitted|3|2|finalize_submission objects=2 attachments_linked_to_their_message=2 attempt=committed
+L2 preflight=file_too_large success=true status=submitted excluded=file_too_large|1 objects=2
+L3 success=false error="Your submission didn't go through, so nothing was sent to your broker. Check your connection and submit again." submissions_left=0 objects_added=0 attempt=failed|messages|retries_exhausted
+L4 success=false finalize_calls=2 submissions_left=0 objects_added=0
+L5 success=true status=submitted messages=3 objects=2
+L6 success=true status=submitted objects=2
+L7 success=false cancelled=true submissions_left=0 objects_added=0 attempt=cancelled
+L8 abandon=committed status_read=submitted waited_ms>=2000:true status_now=submitted objects=2 rows=2

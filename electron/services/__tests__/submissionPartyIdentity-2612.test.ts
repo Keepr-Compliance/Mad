@@ -186,12 +186,18 @@ describe("BACKLOG-2758 — the submission upload names parties from the app's ow
       "5035550199": "Robin Hale",
       "+15035550199": "Robin Hale",
     };
+    // The AddressBook is macOS-only (live Windows freeze fix): run as a Mac.
+    const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const restore = () => {
+      if (realPlatform) Object.defineProperty(process, "platform", realPlatform);
+    };
     return resolveHandles(["+15035550199"], USER_ID, {
       userId: USER_ID,
       transactionId: TX,
     }).then((resolution) => {
       expect(resolution.names["5035550199"]).toBe("Robin Hale");
-    });
+    }).finally(restore);
   });
 
   test("the hand-rolled first-match-wins tail scan is GONE", () => {

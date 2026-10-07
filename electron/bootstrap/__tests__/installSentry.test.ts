@@ -49,11 +49,14 @@ function load(options: {
   dsn?: string;
   resourcesPath?: string;
   scrubThrows?: boolean;
+  /** BACKLOG-3668: the updater scrub hands the event on unchanged (so the RCS scrub after it is seen). */
+  scrubPassThrough?: boolean;
 }): Loaded {
   const init = jest.fn();
   const dotenvConfig = jest.fn();
   const scrub = jest.fn((event: unknown) => {
     if (options.scrubThrows) throw new Error("scrub failed");
+    if (options.scrubPassThrough) return event;
     return { scrubbed: event };
   });
   const logError = jest.fn();
@@ -189,6 +192,21 @@ describe("installSentry: the init call transcribed from main.ts (BACKLOG-2962)",
     expect(loaded.logError).toHaveBeenCalledTimes(1);
     expect(loaded.logError.mock.calls[0][0]).toContain("[Sentry] beforeSend PII scrub failed");
     expect(loaded.logError.mock.calls[0][1]).toBeInstanceOf(Error);
+  });
+});
+
+// BACKLOG-3668 L3. Mutations: the RCS scrub not called in beforeSend, or run
+// on every event → red.
+describe("installSentry: RCS events are scrubbed after the updater scrub", () => {
+  it("an RCS-tagged event loses phone numbers and emails; an untagged one is untouched", () => {
+    const loaded = load({ isPackaged: false, scrubPassThrough: true });
+    const { beforeSend } = initOptions(loaded);
+    const rcs = beforeSend({ tags: { component: "rcs" }, message: "chat with +1 (555) 555-0199 sam@example.com failed" }) as { message: string };
+    expect(loaded.scrub).toHaveBeenCalledTimes(1);
+    expect(rcs.message).not.toContain("555");
+    expect(rcs.message).not.toContain("sam@");
+    const other = { tags: { component: "sync" }, message: "chat with +1 (555) 555-0199 failed" };
+    expect(beforeSend(other)).toBe(other);
   });
 });
 

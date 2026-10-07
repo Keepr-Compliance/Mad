@@ -457,7 +457,7 @@ function median(values: number[]): number | null {
   return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-function userLabelFor(userId: string | null, users: Map<string, ReportUser>): string {
+export function userLabelFor(userId: string | null, users: Map<string, ReportUser>): string {
   if (!userId) return 'Unknown user';
   const user = users.get(userId);
   if (!user) return 'Unknown user';

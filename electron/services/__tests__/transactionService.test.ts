@@ -31,8 +31,10 @@ jest.mock("../db/core/dbConnection", () => ({
 
 // TASK-1951: Mock preferenceHelper
 const mockIsContactSourceEnabled = jest.fn();
+const mockIsTextPeopleEnabled = jest.fn();
 jest.mock("../../utils/preferenceHelper", () => ({
   isContactSourceEnabled: (...args: unknown[]) => mockIsContactSourceEnabled(...args),
+  isTextPeopleEnabled: (...args: unknown[]) => mockIsTextPeopleEnabled(...args),
 }));
 
 /**
@@ -405,9 +407,11 @@ describe("TransactionService - Inferred Contact Preferences (TASK-1951)", () => 
     expect(mockIsContactSourceEnabled).toHaveBeenCalledWith(
       mockUserId, "inferred", "gmailEmails", false
     );
-    expect(mockIsContactSourceEnabled).toHaveBeenCalledWith(
-      mockUserId, "inferred", "messages", false
-    );
+    // BACKLOG-3670 C1: the Messages / SMS switch through the ONE rule
+    // (default on for Android: Google Messages), not its own default.
+    // Mutation: back to isContactSourceEnabled(..., "messages", false) → red.
+    expect(mockIsTextPeopleEnabled).toHaveBeenCalledWith(mockUserId);
+    expect(mockIsContactSourceEnabled).not.toHaveBeenCalledWith(mockUserId, "inferred", "messages", false);
   });
 });
 
@@ -489,7 +493,8 @@ describe("TransactionService - the scan is not wired to the plan gate (BACKLOG-3
     // reached the preference read. It did — the call above proves it — and this
     // records whether anything was thrown afterwards, so a future change that
     // moves the throw earlier fails here rather than passing silently.
-    expect(mockIsContactSourceEnabled.mock.calls.length).toBeGreaterThanOrEqual(3);
+    // BACKLOG-3670 C1: the messages switch is read through isTextPeopleEnabled.
+    expect(mockIsContactSourceEnabled.mock.calls.length + mockIsTextPeopleEnabled.mock.calls.length).toBeGreaterThanOrEqual(3);
 
     // The scan consults NO route to plan data.
     expect(mockPlanRoutes.isContactInferenceAllowed).not.toHaveBeenCalled();

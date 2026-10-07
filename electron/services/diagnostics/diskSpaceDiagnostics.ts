@@ -58,6 +58,14 @@ export const DISK_SPACE_THRESHOLDS = {
    * attachment estimate counts.
    */
   messagesImport: 3072, // 3GB -- see the measurement above
+  /**
+   * BACKLOG-3668 M3: floor for a Google Messages for Web (RCS) Sync, checked
+   * before its staging starts. A run checks at most ~300 chats of at most
+   * ~2,000 messages each; at the measured 1,690 bytes per message (above)
+   * that is ~1.0 GB of staged rows at the very worst. A floor, not a
+   * prediction; photos are bounded per image (RCS_MAX_IMAGE_BYTES).
+   */
+  rcsCacheSync: 1024, // 1GB
   general: 100, // 100MB -- minimum for app operation
 } as const;
 

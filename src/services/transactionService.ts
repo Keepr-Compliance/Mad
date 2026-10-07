@@ -6,7 +6,9 @@
  */
 
 import type { Transaction } from "@/types";
+import type { SubmissionScopeIpcResult } from "@electron/types/ipc/window-api-transactions";
 import logger from '../utils/logger';
+import type { EnsureMessagesCoverageResult, TextCoverageResult } from "../../electron/types/auditCoverage";
 
 /**
  * Valid detection status values
@@ -247,6 +249,21 @@ export const transactionService = {
   /**
    * Get all transactions for a user
    */
+  /**
+   * BACKLOG-3663: per-source text coverage for one transaction (the Texts
+   * tab). null when this build has no such IPC (never an error shown).
+   */
+  async getTextCoverage(transactionId: string, userId: string, chosenSource: string | null): Promise<TextCoverageResult | null> {
+    const get = window.api?.transactions?.getTextCoverage;
+    if (!get) return null;
+    return get(transactionId, userId, chosenSource);
+  },
+
+  /** The Texts tab's "Update now" (Mac): a targeted messages import for an explicit start. */
+  async ensureMessagesCoverage(userId: string, proposedStartISO: string | null, transactionId?: string): Promise<EnsureMessagesCoverageResult> {
+    return window.api.transactions.ensureMessagesCoverage(userId, proposedStartISO, transactionId);
+  },
+
   async getAll(userId: string): Promise<ApiResult<Transaction[]>> {
     try {
       const result = await window.api.transactions.getAll(userId);
@@ -323,6 +340,23 @@ export const transactionService = {
         return { success: true, data: { hidden: !!result.hidden } };
       }
       return { success: false, error: result.error };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return { success: false, error: message };
+    }
+  },
+
+  /**
+   * BACKLOG-3683: what a submission with these (not yet saved) dates would
+   * send. `candidate` must come from `confirmedDatesUpdate` — the same
+   * payload the date save writes.
+   */
+  async getSubmissionScope(
+    transactionId: string,
+    candidate: { started_at: string | null; closed_at: string | null },
+  ): Promise<SubmissionScopeIpcResult> {
+    try {
+      return await window.api.transactions.getSubmissionScope(transactionId, candidate);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       return { success: false, error: message };

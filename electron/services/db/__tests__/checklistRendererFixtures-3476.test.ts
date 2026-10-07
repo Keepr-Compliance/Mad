@@ -43,12 +43,12 @@
  * The envelope therefore sums to 3 of 6 required; counting optional ticks
  * would give 5 of 9 and counting only the first checklist 1 of 2.
  *
- * The attachment list also carries one LEGACY row reached only through the
- * `external_message_id` fallback arm, with `message_id` and `email_id` both
- * NULL. The current schema's CHECK refuses that row, so it is inserted with
- * `ignore_check_constraints` — which is exactly the database it lives in: one
- * created before the CHECK existed. The link picker must not offer it
- * (checklistSql.ts `targetsInTransactionSql` has no fallback arm).
+ * The seed also inserts one row, `att-legacy`, with `message_id` and `email_id`
+ * both NULL (via `ignore_check_constraints`). Since BACKLOG-3731 the producer
+ * does not return it: the tab uses the shared text-attachment lookup, which
+ * matches by Apple id only for a text with no row of its own, and `m-1` has
+ * `att-text`. No writer in the tree emits that row shape; it stays in the seed
+ * only so the generated fixture is unchanged.
  */
 import * as nodePath from "path";
 import * as fs from "fs";
@@ -129,7 +129,7 @@ function seed(): void {
             ('att-2', 'e-thread-1', 'probe-photo.jpg', 'image/jpeg', 204800)`,
   );
 
-  // A text thread on the transaction, and the legacy fallback attachment.
+  // A text thread on the transaction, and the row the producer no longer returns.
   run(
     `INSERT INTO messages (id, user_id, channel, external_id, thread_id, body_text, sent_at, direction)
      VALUES ('m-1', ?, 'imessage', 'guid-probe-1', 'chat-probe', 'probe text', '2026-03-06T10:00:00Z', 'inbound')`,

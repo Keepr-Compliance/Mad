@@ -9,6 +9,7 @@ import {
   composeDiagnosticsSummary,
   appendDiagnosticsToDescription,
   DIAGNOSTICS_BLOCK_HEADER,
+  setGoogleMessagesDiagnosticsProvider,
   type AppDiagnostics,
 } from "../supportTicketService";
 
@@ -193,6 +194,26 @@ afterAll(() => {
 describe("supportTicketService", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  // Founder (2026-10-06): the Google Messages section — the provider's
+  // local state as is; none / a throwing provider → null, never a broken
+  // collection. Mutation: the section not collected → red.
+  describe("collectDiagnostics: google_messages", () => {
+    afterEach(() => setGoogleMessagesDiagnosticsProvider(null));
+    it("the provider's section; null without one, or when it throws", async () => {
+      const section = {
+        extension_version_seen: "0.3.88", extension_seen_at: "2026-10-06T10:00:00.000Z", link: "linked" as const,
+        last_cache_finished_at: "2026-10-06T09:00:00.000Z", last_run: { state: "failed", reason_code: "phone_unreachable", ended_at: "2026-10-06T09:30:00.000Z" },
+        failed_run_started_at: "2026-10-06T09:25:00.000Z",
+      };
+      setGoogleMessagesDiagnosticsProvider(() => section);
+      expect((await collectDiagnostics()).google_messages).toEqual(section);
+      setGoogleMessagesDiagnosticsProvider(null);
+      expect((await collectDiagnostics()).google_messages).toBeNull();
+      setGoogleMessagesDiagnosticsProvider(() => { throw new Error("x"); });
+      expect((await collectDiagnostics()).google_messages).toBeNull();
+    });
   });
 
   describe("collectDiagnostics", () => {

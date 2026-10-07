@@ -147,7 +147,7 @@ describe("aggregateReactions (BACKLOG-2280)", () => {
       { actor: "+1555", sentAt: "2026-01-01T00:00:02Z", associatedType: 3000 }, // remove heart
       { actor: "+1555", sentAt: "2026-01-01T00:00:03Z", associatedType: 2000 }, // re-add heart
     ]);
-    expect(result).toEqual([{ kind: "heart", count: 1, actors: ["+1555"] }]);
+    expect(result).toEqual([{ key: "heart", kind: "heart", emoji: null, count: 1, actors: ["+1555"] }]);
   });
 
   it("treats a trailing removal as inactive (no pill)", () => {
@@ -164,7 +164,7 @@ describe("aggregateReactions (BACKLOG-2280)", () => {
       { actor: "me", sentAt: "2026-01-01T00:00:01Z", associatedType: 2000 }, // add
       { actor: "me", sentAt: "2026-01-01T00:00:02Z", associatedType: 3000 }, // remove (middle)
     ]);
-    expect(result).toEqual([{ kind: "heart", count: 1, actors: ["me"] }]);
+    expect(result).toEqual([{ key: "heart", kind: "heart", emoji: null, count: 1, actors: ["me"] }]);
   });
 
   it("groups multiple actors of the same kind with a count", () => {
@@ -203,5 +203,42 @@ describe("renderer mirror parity (electron vs src)", () => {
   it("exposes the same band constants", () => {
     expect(rendererMirror.REACTION_TYPE_BAND_MIN).toBe(REACTION_TYPE_BAND_MIN);
     expect(rendererMirror.REACTION_TYPE_BAND_MAX).toBe(REACTION_TYPE_BAND_MAX);
+  });
+});
+
+// BACKLOG-3620: "other" reactions that carry their own emoji
+describe("own-emoji reactions (BACKLOG-3620)", () => {
+  const {
+    aggregateReactions: agg,
+    reactionEmojiFromBody,
+    reactionGlyph,
+  } = require("../reactionUtils") as typeof import("../reactionUtils");
+
+  it("groups kind other by emoji, one pill per distinct emoji", () => {
+    const out = agg([
+      { actor: "a", sentAt: "1", associatedType: 2006, emoji: "😡" },
+      { actor: "b", sentAt: "1", associatedType: 2006, emoji: "😢" },
+      { actor: "c", sentAt: "1", associatedType: 2006, emoji: "😡" },
+    ]);
+    expect(out.map((r) => [r.key, r.count, reactionGlyph(r)])).toEqual([
+      ["other:😡", 2, "😡"],
+      ["other:😢", 1, "😢"],
+    ]);
+  });
+
+  it("ignores the emoji for the six standard kinds", () => {
+    const out = agg([{ actor: "a", sentAt: "1", associatedType: 2000, emoji: "😡" }]);
+    expect(out).toEqual([{ key: "heart", kind: "heart", emoji: null, count: 1, actors: ["a"] }]);
+  });
+
+  it.each([
+    ["😡", "😡"],
+    [" 😢 ", "😢"],
+    ["Reacted 😡 to a message", null],
+    ["ok", null],
+    ["", null],
+    [null, null],
+  ])("reactionEmojiFromBody(%p) -> %p", (body, expected) => {
+    expect(reactionEmojiFromBody(body as string | null)).toBe(expected);
   });
 });

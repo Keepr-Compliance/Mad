@@ -49,6 +49,7 @@ import {
   resolveLookbackMonths,
   computeWindowStart,
   DEFAULT_LOOKBACK_MONTHS,
+  LOOKBACK_DAYS_PER_MONTH,
 } from '../syncWindow';
 
 describe('resolveLookbackMonths — absent vs explicit null (BACKLOG-2561 rules)', () => {
@@ -238,49 +239,50 @@ describe('computeWindowStart — All time', () => {
   });
 });
 
-describe('computeWindowStart — month-end clamp, swept not sampled', () => {
+describe('computeWindowStart — months are 30.4375 days (one rule with the desktop app)', () => {
   /**
-   * Naive `setMonth` OVERFLOWS at month ends, and every overflow moves the edge
-   * FORWARD — i.e. it silently NARROWS the window the user asked for:
+   * Founder (2026-10-02): every "last N months" window is
+   * round(N × 30.4375) whole days — the desktop's `lookbackWindow.ts` rule —
+   * so 1.5 months (the new default) is 46 days and whole months no longer
+   * depend on the calendar. Swept over every option the panel offers.
    *
-   *   31 Aug − 6mo -> 3 Mar   (should be 28 Feb)  — 3 days narrower
-   *   31 Mar − 1mo -> 3 Mar   (should be 28 Feb)  — skips February outright
-   *   29 Feb − 12mo -> 1 Mar  (should be 28 Feb)
-   *
-   * Expected values are built with LOCAL Date constructors, matching the
-   * implementation, so the assertions hold in any timezone and across DST
-   * without needing TZ pinned.
-   *
-   * MUTATION: drop the clamp (use a bare `setMonth`) and every case here goes
-   * red except the non-month-end control at the end.
+   * MUTATION: back to calendar months (`setMonth`) → the 1.5 case reads 1
+   * month and every case goes red.
    */
-  const cases: Array<[string, Date, number, Date]> = [
-    // [label, now, months, expected window start]
-    ['31 Aug minus 6 clamps to 28 Feb', new Date(2026, 7, 31, 12, 0, 0), 6, new Date(2026, 1, 28, 12, 0, 0)],
-    ['31 Mar minus 1 clamps to 28 Feb (never skips February)', new Date(2026, 2, 31, 12, 0, 0), 1, new Date(2026, 1, 28, 12, 0, 0)],
-    ['31 May minus 3 clamps to 28 Feb', new Date(2026, 4, 31, 12, 0, 0), 3, new Date(2026, 1, 28, 12, 0, 0)],
-    ['31 Dec minus 1 clamps to 30 Nov', new Date(2026, 11, 31, 12, 0, 0), 1, new Date(2026, 10, 30, 12, 0, 0)],
-    ['31 Mar minus 1 in a LEAP year clamps to 29 Feb', new Date(2024, 2, 31, 12, 0, 0), 1, new Date(2024, 1, 29, 12, 0, 0)],
-    ['29 Feb minus 12 clamps to 28 Feb of the prior year', new Date(2024, 1, 29, 12, 0, 0), 12, new Date(2023, 1, 28, 12, 0, 0)],
-    ['a mid-month date needs no clamp', new Date(2026, 7, 30, 12, 0, 0), 3, new Date(2026, 4, 30, 12, 0, 0)],
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const cases: Array<[number, number]> = [
+    [1, 30], [1.5, 46], [2, 61], [3, 91], [4, 122], [5, 152], [6, 183], [12, 365],
+  ];
+  const nows = [
+    new Date(2026, 7, 31, 12, 0, 0), new Date(2026, 2, 31, 12, 0, 0), new Date(2024, 1, 29, 12, 0, 0),
   ];
 
-  it.each(cases)('%s', (_label, now, months, expected) => {
-    expect(computeWindowStart(months, now.getTime())).toBe(expected.getTime());
+  it.each(cases)('%s months is %s days back, from any date', (months, days) => {
+    for (const now of nows) {
+      expect(computeWindowStart(months, now.getTime())).toBe(now.getTime() - days * DAY_MS);
+    }
   });
 
+  it('the days rule mirrors the desktop constant', () => {
+    expect(LOOKBACK_DAYS_PER_MONTH).toBe(30.4375);
+    expect(DEFAULT_LOOKBACK_MONTHS).toBe(1.5);
+  });
+
+  const months = [1, 1.5, 2, 3, 4, 5, 6, 12];
+
   it('the window start is always in the PAST and never after `now`', () => {
-    for (const [, now, months] of cases) {
-      const start = computeWindowStart(months, now.getTime());
-      expect(start).not.toBeNull();
-      expect(start as number).toBeLessThan(now.getTime());
+    for (const now of nows) {
+      for (const m of months) {
+        const start = computeWindowStart(m, now.getTime());
+        expect(start).not.toBeNull();
+        expect(start as number).toBeLessThan(now.getTime());
+      }
     }
   });
 
   it('a larger lookback always reaches strictly further back', () => {
     const now = new Date(2026, 7, 31, 12, 0, 0).getTime();
-    const months = [3, 6, 9, 12, 18, 24];
-    const starts = months.map((m) => computeWindowStart(m, now) as number);
+    const starts = [...months, 18, 24].map((m) => computeWindowStart(m, now) as number);
     for (let i = 1; i < starts.length; i += 1) {
       expect(starts[i]).toBeLessThan(starts[i - 1]);
     }

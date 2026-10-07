@@ -99,10 +99,9 @@ function renderSettings(
   options: {
     platform?: "darwin" | "win32";
     stats?: Record<string, number>;
-    androidCompanionActive?: boolean;
   } = {},
 ) {
-  const { platform = "darwin", stats = FOUNDER_STATS, androidCompanionActive = false } = options;
+  const { platform = "darwin", stats = FOUNDER_STATS } = options;
 
   Object.defineProperty(window, "api", {
     value: {
@@ -130,7 +129,6 @@ function renderSettings(
         initialPreferences={preferences as never}
         isMicrosoftConnected={true}
         isGoogleConnected={false}
-        androidCompanionActive={androidCompanionActive}
       />
     </PlatformProvider>,
   );
@@ -176,153 +174,60 @@ afterEach(() => {
   });
 });
 
-describe("BACKLOG-2986 — the Android count appears in the source grid", () => {
-  /** THE ITEM'S OWN CONTROL. Red before the fix: the cell did not exist. */
-  it("renders the android_sync external-contact count next to the other sources", async () => {
-    renderSettings(prefs({ macosContacts: true }));
-
-    expect(await androidCellCount()).toBe("389");
-  });
-
-  it("shows the external-record count, not the number promoted to the contacts table", async () => {
-    // 389 external records; 26 of those were promoted on the same sync. Every
-    // other cell in this grid is an external-record count, so this one is too —
-    // a cell that silently meant "promoted" would be the only one in the row
-    // measuring something else.
-    renderSettings(prefs({ macosContacts: true }));
-
-    expect(await androidCellCount()).toBe("389");
-    expect(screen.queryByText("26")).not.toBeInTheDocument();
-  });
-
-  it("renders a real 0 rather than disappearing when the phone's contacts are gone", async () => {
-    // The state immediately after an Android Force Re-import. A grid that
-    // dropped the cell here would look identical to a grid on a machine that
-    // never had Android contacts — which is the missing SIGNAL this item calls
-    // the worse of its two defects.
-    renderSettings(prefs({ androidContacts: true }), {
-      stats: { ...FOUNDER_STATS, android_sync: 0 },
-    });
-
-    expect(await androidCellCount()).toBe("0");
-  });
-
-  it("stays out of the way for a user with no Android relationship at all", async () => {
-    // No declared Android phone, no stored preference, no android_sync rows.
-    renderSettings(prefs({ macosContacts: true }), {
-      stats: { ...FOUNDER_STATS, android_sync: 0 },
-    });
-
+/**
+ * Founder (2026-10-05): the Android contacts option is HIDDEN with the Android
+ * Companion's UI (only the Companion pushed these contacts). BACKLOG-2986's
+ * switch, count cell and re-import note no longer render — for every user,
+ * declared Android or not, with or without android_sync rows — and nothing is
+ * written: the stored androidContacts value and the imported contacts stay.
+ * Google Messages never reads this key (its people: contactSources.inferred.messages).
+ *
+ * Mutation: the option shown again (ANDROID_CONTACTS_OPTION_SHOWN true) → red.
+ */
+describe("the Android contacts option is hidden (founder, 2026-10-05)", () => {
+  const cases: Array<[string, Record<string, unknown>, Record<string, number> | undefined]> = [
+    ["the founder's 389 Android contacts, iPhone declared", prefs({ macosContacts: true }), undefined],
+    ["a declared Android phone, nothing stored", prefs({}, "android"), { ...FOUNDER_STATS, android_sync: 0 }],
+    ["an explicitly stored true", prefs({ androidContacts: true }, "android"), undefined],
+    ["an explicitly stored false", prefs({ androidContacts: false }, "android"), undefined],
+  ];
+  it.each(cases)("%s: no switch, no Android count, no note — nothing written", async (_name, p, stats) => {
+    renderSettings(p, stats ? { stats } : {});
     await screen.findByText("1,174");
-    expect(screen.queryByText("Android")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(ANDROID_SWITCH)).not.toBeInTheDocument();
+    expect(screen.queryByText("Android")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("android-contacts-note")).not.toBeInTheDocument();
+    expect(mockUpdatePreferences).not.toHaveBeenCalled();
   });
 });
 
-describe("BACKLOG-2986 — Android Contacts has a switch, and it starts OFF", () => {
-  /**
-   * THE ONE THAT MATTERS on this side. Absent key + no declared Android phone
-   * is the state nearly every user is in, and it used to read as `true`.
-   * Founder, 2026-08-30: "contacts aren't auto imported."
-   */
-  it("draws OFF when nothing is stored, matching the backend's derived default", async () => {
-    renderSettings(prefs({ macosContacts: true }));
-
-    expect(await screen.findByLabelText(ANDROID_SWITCH)).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
+// SR (after a0d89d8b6): the hidden Android contacts are not a source the
+// screen can show, so a user whose ONLY source they are gets the "no sources"
+// placeholder. Mutation: the empty-state check counting the hidden Android
+// source again → red.
+it("only the hidden Android contacts (Windows, Android phone, no mailbox): the no-sources placeholder", async () => {
+  Object.defineProperty(window, "api", {
+    value: {
+      ...originalApi,
+      system: { ...originalApi?.system, platform: "win32" },
+      contacts: {
+        getExternalSyncStatus: jest.fn().mockResolvedValue({ success: true, lastSyncAt: null, contactCount: 0 }),
+        getSourceStats: jest.fn().mockResolvedValue({ success: true, stats: { android_sync: 389 } }),
+      },
+    },
+    writable: true,
+    configurable: true,
   });
-
-  it("draws OFF on Windows too — the rule reads the phone, not the desktop", async () => {
-    renderSettings(prefs({ outlookContacts: true }), { platform: "win32" });
-
-    expect(await screen.findByLabelText(ANDROID_SWITCH)).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
-  });
-
-  it("draws ON for a user who declared an Android phone and stored nothing", async () => {
-    // Not a hole in "default OFF": the companion is that user's only address
-    // book, and it is the card onboarding would have pre-ticked. Same clause
-    // that keeps iPhone Contacts ON on Windows.
-    renderSettings({ phone_type: "android", contactSources: { direct: {} } });
-
-    expect(await screen.findByLabelText(ANDROID_SWITCH)).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-  });
-
-  it("reflects an explicitly stored true", async () => {
-    renderSettings(prefs({ androidContacts: true }));
-    expect(await screen.findByLabelText(ANDROID_SWITCH)).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-  });
-
-  it("reflects an explicitly stored false", async () => {
-    renderSettings(prefs({ androidContacts: false }));
-    expect(await screen.findByLabelText(ANDROID_SWITCH)).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
-  });
-
-  it("writes androidContacts when toggled — Settings is now a writer of this key", async () => {
-    // Until this change onboarding was the ONLY writer, and only for a declared
-    // Android user. That is why the founder could not switch his 389 Android
-    // contacts off from anywhere.
-    renderSettings(prefs({ androidContacts: true }));
-
-    fireEvent.click(await screen.findByLabelText(ANDROID_SWITCH));
-
-    await waitFor(() => expect(mockUpdatePreferences).toHaveBeenCalled());
-    expect(mockUpdatePreferences).toHaveBeenCalledWith("user-1", {
-      contactSources: { direct: { androidContacts: false } },
-    });
-  });
-
-  it("stays reachable after a Force Re-import has emptied the count", async () => {
-    // phone_type "iphone", a stored preference, and zero android_sync rows —
-    // the founder's literal state between clearing and the next sync. A
-    // visibility gate of "declared Android OR count > 0" would hide the switch
-    // from exactly the person who reported its absence.
-    renderSettings(prefs({ androidContacts: true }), {
-      stats: { ...FOUNDER_STATS, android_sync: 0 },
-    });
-
-    expect(await screen.findByLabelText(ANDROID_SWITCH)).toBeInTheDocument();
-  });
-});
-
-describe("BACKLOG-2986 — the re-import is findable from the Contacts screen", () => {
-  it("says the phone holds the only copy, and offers the jump when that panel is on the page", async () => {
-    renderSettings(prefs({ androidContacts: true }), { androidCompanionActive: true });
-
-    expect(
-      await screen.findByText(/phone holds the only copy/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /Go to Android Companion re-import/i }),
-    ).toBeInTheDocument();
-  });
-
-  it("does not offer a jump to a panel that is not rendered", async () => {
-    // `Settings.tsx` renders AndroidMessagesSettings — and with it the working
-    // Force Re-import — only when the active import source is the companion. A
-    // button that scrolled there regardless would land the user on the macOS
-    // panel and claim to have taken them somewhere.
-    renderSettings(prefs({ androidContacts: true }), { androidCompanionActive: false });
-
-    expect(await screen.findByText(/phone holds the only copy/i)).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /Go to Android Companion re-import/i }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByText(/Set your message import source to Android/i),
-    ).toBeInTheDocument();
-  });
+  render(
+    <PlatformProvider>
+      <ContactsSettings
+        userId="user-1"
+        initialPreferences={prefs({ androidContacts: true }, "android") as never}
+        isMicrosoftConnected={false}
+        isGoogleConnected={false}
+      />
+    </PlatformProvider>,
+  );
+  expect(await screen.findByText("Connect a Microsoft or Google account, or use macOS to import contacts.")).toBeInTheDocument();
+  expect(screen.queryByLabelText(ANDROID_SWITCH)).not.toBeInTheDocument();
 });

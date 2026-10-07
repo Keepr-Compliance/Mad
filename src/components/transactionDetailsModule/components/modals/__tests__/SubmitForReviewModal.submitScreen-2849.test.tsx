@@ -235,8 +235,8 @@ describe("BACKLOG-2849 §1 — dismissal is an X, not a Cancel button", () => {
   it.each(IDLE_SCREENS)("offers no Cancel button anywhere on the idle screen (%s)", (which) => {
     renderIdleScreen(which);
 
-    // Exact-text role query. "Cancel Anyway" (the mid-upload confirm, which
-    // stays) does not satisfy it, so this names the button that was removed
+    // Exact-text role query. "Cancel Submission" (the mid-upload confirm,
+    // "Cancel Anyway" before BACKLOG-3398) does not satisfy it, so this names the button that was removed
     // and not the one that survived.
     expect(
       screen.queryByRole("button", { name: "Cancel" }),
@@ -288,8 +288,9 @@ describe("BACKLOG-2849 §1 — dismissal is an X, not a Cancel button", () => {
 
     expect(onCancel).not.toHaveBeenCalled();
     expect(screen.getByText("Submission in progress")).toBeInTheDocument();
+    // BACKLOG-3398 renamed it: Cancel now really cancels.
     expect(
-      screen.getByRole("button", { name: "Cancel Anyway" }),
+      screen.getByRole("button", { name: "Cancel Submission" }),
     ).toBeInTheDocument();
   });
 });

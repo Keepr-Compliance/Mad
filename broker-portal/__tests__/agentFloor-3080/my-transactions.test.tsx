@@ -738,6 +738,68 @@ describe('detail page', () => {
     expect(mockStorageOps).toEqual([]);
     expect(mockBrowserTables).toEqual([]);
   });
+
+  /**
+   * BACKLOG-3748 regression (SR review 536beb24): this page used to render
+   * <MessageList messages={...} /> with no attachmentsByMessage map at all,
+   * so every flagged text here showed no paperclip, photo texts included.
+   * Both texts share one thread so the fixture needs exactly one "View Full".
+   */
+  describe('BACKLOG-3748: the attachments-by-message map is wired in', () => {
+    const THREAD = 'thread-3748-paperclip';
+
+    function given3748(): void {
+      given('brokerage agent', ON);
+      const linkMsg = {
+        ...messageRow({ id: 'msg-3748-link', submissionId: S_A, subject: 'n/a' }),
+        channel: 'imessage',
+        message_type: 'text',
+        thread_id: THREAD,
+        body_text: 'Check this out: https://example.test/listing',
+        has_attachments: true,
+        attachment_count: 0,
+        sent_at: '2026-09-04T10:00:00Z',
+      };
+      const photoMsg = {
+        ...messageRow({ id: 'msg-3748-photo', submissionId: S_A, subject: 'n/a' }),
+        channel: 'imessage',
+        message_type: 'attachment_only',
+        thread_id: THREAD,
+        body_text: null,
+        has_attachments: true,
+        attachment_count: 0,
+        sent_at: '2026-09-04T10:01:00Z',
+      };
+      const photoAttachment = {
+        ...attachmentRow({ id: 'att-3748-photo', submissionId: S_A, organizationId: BROKERAGE, filename: 'House.jpg', mimeType: 'image/jpeg' }),
+        message_id: 'msg-3748-photo',
+      };
+      const rows = mockEmulator.state.rows;
+      rows.submission_messages = [linkMsg, photoMsg];
+      rows.submission_attachments = [photoAttachment];
+    }
+
+    it('a photo text keeps its paperclip with the real count; a link-only text shows none', async () => {
+      given3748();
+      const element = elementOf(await run(detail(S_A)));
+      // SR review ed5a0a09: the fixture emulator returns full rows regardless
+      // of the select string, so the rendered paperclip alone cannot catch a
+      // regression that drops message_id from the real query. Assert the
+      // column directly.
+      expect(
+        mockEmulator.state.selects.find((s) => s.table === 'submission_attachments')?.columns
+      ).toMatch(/\bmessage_id\b/);
+      render(element);
+      fireEvent.click(screen.getByRole('button', { name: /View Full/ }));
+
+      const photoBubble = screen.getByRole('button', { name: 'House.jpg' }).closest('.rounded-2xl') as HTMLElement;
+      expect(within(photoBubble).getByText('1')).toBeTruthy();
+
+      const linkBubble = screen.getByText('Check this out: https://example.test/listing').closest('.rounded-2xl') as HTMLElement;
+      expect(linkBubble.querySelectorAll('svg').length).toBe(0);
+      expect(within(linkBubble).queryByText('0')).toBeNull();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
