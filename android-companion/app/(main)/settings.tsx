@@ -34,7 +34,6 @@ import type {
   ContactsPermissionResult,
 } from '../../services/permissions';
 import {
-  isBackgroundSyncActive,
   startBackgroundSync,
   stopBackgroundSync,
   updateSyncInterval,
