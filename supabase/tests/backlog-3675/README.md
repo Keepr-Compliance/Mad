@@ -21,4 +21,28 @@ SSH_HOST=<nas ssh alias> PG_CONTAINER=supabase_db_keepr-test bash supabase/tests
 | d7 | rollback then re-apply works |
 | d8 | rollback leaves no definition and no override |
 
-Every mutant in `lib/mutants.py` must print `KILLED`.
+## Reading the output
+
+`controls` ends with `CONTROLS: pass=X fail=Y error=Z` (one count per control
+file) and exits 0 only when every control passes. `ERROR` means psql failed
+(fixture, syntax, a raise) or the control produced no checks: the control
+proved nothing, which is not the same as `FAIL`.
+
+`mutants` first runs every control against the unmutated migration and stops,
+running no mutant, unless all of them pass. Each mutant is then:
+
+| Verdict | Meaning |
+|---|---|
+| `KILLED` | at least one target control reported an assertion `FAIL`, and none errored |
+| `SURVIVED` | every target control passed |
+| `INVALID` | a target control errored, so the run says nothing about the mutant |
+
+The run ends with `MUTANTS: killed=X survived=Y invalid=Z` and exits 0 only
+when every mutant is `KILLED`. The verdict logic is `mutants.py classify`;
+`python3 lib/test_mutants.py` checks it without a database.
+
+## Fixtures
+
+`lib/fixtures.sql` inserts the Individual plan (values transcribed from
+production) when the database has none, so the controls do not depend on the
+test database's seed rows. The insert rolls back with the run.
