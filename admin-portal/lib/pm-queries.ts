@@ -5,8 +5,9 @@
  * Follows the same pattern as support-queries.ts.
  */
 
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
-import { fetchAllPages, type FetchAllResult } from './pm-paging';
+import { fetchAllPages, fetchAllRows, type FetchAllResult } from './pm-paging';
 import type {
   ItemListParams,
   ItemListResponse,
@@ -1078,14 +1079,25 @@ export async function getTaskMetrics(backlogItemId: string): Promise<TokenMetric
  * Two queries, unioned and deduplicated by id:
  *   (a) rows whose backlog item is CURRENTLY in this sprint -- counts even
  *       when the row's own stored `sprint_id` is null or stale (the bug:
- *       an item added to the sprint after its agent ran).
+ *       an item added to the sprint after its agent ran). Excludes rows
+ *       whose item is soft-deleted, matching the hook's own lookup
+ *       (`register-agent.sh`'s `deleted_at=is.null`).
  *   (b) rows whose own stored `sprint_id` matches -- the fallback for rows
  *       with no backlog item (e.g. main-session turns) or whose item
  *       currently carries no sprint.
  * See `sprint-token-attribution.ts` for the attribution rule itself.
+ *
+ * Both queries are paged via `fetchAllRows` (BACKLOG-3778 part 2): PostgREST
+ * caps a plain `.select()` at 1000 rows with no error, and a single active
+ * sprint (e.g. SPRINT-174: 1,064 rows) already crosses that.
+ *
+ * `supabase` is injectable so tests can exercise the real query/paging/
+ * attribution wiring against a stub client instead of the browser singleton.
  */
-export async function getSprintMetrics(sprintId: string): Promise<TokenMetricRow[]> {
-  const supabase = createClient();
+export async function getSprintMetrics(
+  sprintId: string,
+  supabase: SupabaseClient = createClient()
+): Promise<TokenMetricRow[]> {
   const cols = 'id, agent_id, agent_type, task_id, description, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, total_tokens, billable_tokens, duration_ms, api_calls, model, recorded_at';
 
   type JoinedRow = TokenMetricRow & {
@@ -1094,27 +1106,38 @@ export async function getSprintMetrics(sprintId: string): Promise<TokenMetricRow
     pm_backlog_items: { sprint_id: string | null } | null;
   };
 
-  const { data: viaItem, error: viaItemErr } = await supabase
-    .from('pm_token_metrics')
-    .select(`${cols}, backlog_item_id, sprint_id, pm_backlog_items!inner(sprint_id)`)
-    .eq('pm_backlog_items.sprint_id', sprintId);
-  if (viaItemErr) throw viaItemErr;
+  // supabase-js infers the embedded `pm_backlog_items` relation as an array
+  // regardless of cardinality, same as the pre-paging code -- cast through
+  // `unknown` to `JoinedRow[]` AFTER fetchAllRows, rather than constraining
+  // its generic to JoinedRow directly, so that inference mismatch doesn't
+  // become a type error at the query boundary.
+  const viaItemRaw = await fetchAllRows((from, to) =>
+    supabase
+      .from('pm_token_metrics')
+      .select(`${cols}, backlog_item_id, sprint_id, pm_backlog_items!inner(sprint_id)`)
+      .eq('pm_backlog_items.sprint_id', sprintId)
+      .is('pm_backlog_items.deleted_at', null)
+      .order('id')
+      .range(from, to)
+  );
+  const viaItem = viaItemRaw as unknown as JoinedRow[];
 
-  const { data: viaStored, error: viaStoredErr } = await supabase
-    .from('pm_token_metrics')
-    .select(`${cols}, backlog_item_id, sprint_id, pm_backlog_items(sprint_id)`)
-    .eq('sprint_id', sprintId);
-  if (viaStoredErr) throw viaStoredErr;
+  const viaStoredRaw = await fetchAllRows((from, to) =>
+    supabase
+      .from('pm_token_metrics')
+      .select(`${cols}, backlog_item_id, sprint_id, pm_backlog_items(sprint_id)`)
+      .eq('sprint_id', sprintId)
+      .order('id')
+      .range(from, to)
+  );
+  const viaStored = viaStoredRaw as unknown as JoinedRow[];
 
   const flatten = (row: JoinedRow): TokenMetricRow & AttributableMetricRow => ({
     ...row,
     item_sprint_id: row.pm_backlog_items?.sprint_id ?? null,
   });
 
-  const candidates = [
-    ...((viaItem ?? []) as unknown as JoinedRow[]).map(flatten),
-    ...((viaStored ?? []) as unknown as JoinedRow[]).map(flatten),
-  ];
+  const candidates = [...viaItem.map(flatten), ...viaStored.map(flatten)];
 
   const attributed = attributeRowsToSprint(candidates, sprintId);
   attributed.sort((a, b) => a.recorded_at.localeCompare(b.recorded_at));

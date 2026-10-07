@@ -86,3 +86,40 @@ export async function fetchAllPages<T extends { id: string }>(
 
   return { items, total_count: totalCount, complete: seen.size >= totalCount };
 }
+
+/**
+ * Fetch every row of a plain PostgREST table query, paging past the
+ * provider's own 1000-row response cap via `.range()` (BACKLOG-3778).
+ *
+ * `fetchAllPages` above wraps an RPC that echoes back `total_count` and the
+ * server-clamped `page_size`; a raw `supabase.from(table).select(...)` query
+ * has neither -- PostgREST silently truncates at 1000 rows with no signal
+ * that more exist (`Content-Range: 0-999/1064` is on the HTTP header, not in
+ * the body the JS client returns). This helper instead walks fixed-size
+ * `.range()` windows until a SHORT page proves there is no more.
+ *
+ * Requires the query to be ordered by a column that is a TOTAL order across
+ * the result set (no ties) -- `id` on every `pm_*` table qualifies, since it
+ * is a primary-key uuid. That sidesteps the tie-group hazard `fetchAllPages`
+ * has to detect and report (`sort_order`/`created_at` are NOT unique there);
+ * here a short page is simply the end.
+ */
+export async function fetchAllRows<T>(
+  fetchPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
+  options?: { pageSize?: number; maxPages?: number }
+): Promise<T[]> {
+  const pageSize = options?.pageSize ?? SERVER_MAX_PAGE_SIZE;
+  const maxPages = options?.maxPages ?? DEFAULT_MAX_PAGES;
+
+  const rows: T[] = [];
+  for (let page = 0; page < maxPages; page++) {
+    const from = page * pageSize;
+    const to = from + pageSize - 1;
+    const { data, error } = await fetchPage(from, to);
+    if (error) throw error;
+    const batch = data ?? [];
+    rows.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+  return rows;
+}
