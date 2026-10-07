@@ -68,6 +68,7 @@
               "kind": "attachment",
               "label": "probe-document.pdf",
               "sortOrder": 0,
+              "includeOutsideDates": false,
               "members": [
                 {
                   "id": "id-7",
@@ -87,6 +88,7 @@
               "kind": "email",
               "label": "Probe thread",
               "sortOrder": 0,
+              "includeOutsideDates": false,
               "members": [
                 {
                   "id": "id-9",
@@ -114,6 +116,7 @@
               "kind": "email",
               "label": "Probe solo",
               "sortOrder": 0,
+              "includeOutsideDates": false,
               "members": [
                 {
                   "id": "id-12",
@@ -141,6 +144,7 @@
               "kind": "email",
               "label": "Probe gone",
               "sortOrder": 0,
+              "includeOutsideDates": false,
               "members": [
                 {
                   "id": "id-15",

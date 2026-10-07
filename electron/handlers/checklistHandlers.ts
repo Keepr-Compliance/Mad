@@ -73,12 +73,14 @@ import {
   selectChecklistTemplate,
   setChecklistItemChecked,
   setChecklistItemNote,
+  setChecklistLinkIncludeOutsideDates,
 } from "../services/db/checklistDbService";
 import logService from "../services/logService";
 import supabaseService from "../services/supabaseService";
 import {
   AddChecklistLinkArgsSchema,
   GetChecklistArgsSchema,
+  IncludeChecklistLinkOutsideDatesArgsSchema,
   RemoveChecklistArgsSchema,
   RemoveChecklistLinkArgsSchema,
   SelectChecklistTemplateArgsSchema,
@@ -491,8 +493,29 @@ export function registerChecklistHandlers(): void {
           itemId: args.itemId,
           kind: args.kind,
           targetIds: args.targetIds,
+          includeOutsideDates: args.includeOutsideDates,
         });
         return { success: true, result };
+      },
+      { module: "Checklists" },
+    ),
+  );
+
+  /**
+   * BACKLOG-3764: the agent answered "Include it" at the submit pre-flight for
+   * a group dated outside the deal's audit dates. Only a group on this
+   * transaction is changed.
+   */
+  ipcMain.handle(
+    "checklists:include-link-outside-dates",
+    wrapHandler(
+      async (_event: IpcMainInvokeEvent, payload: unknown): Promise<ChecklistWriteResponse> => {
+        const args = parseArgs(IncludeChecklistLinkOutsideDatesArgsSchema, payload, "payload");
+        if (!(await isChecklistsAllowed())) {
+          return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
+        }
+        const changed = await setChecklistLinkIncludeOutsideDates(args.transactionId, args.linkId);
+        return { success: true, changed };
       },
       { module: "Checklists" },
     ),

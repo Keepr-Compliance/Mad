@@ -21,6 +21,12 @@
  * Main decides membership, all-or-nothing per group. A refused group stays
  * selectable-no-more and is marked "No longer on this transaction"; the rest
  * are kept.
+ *
+ * BACKLOG-3764: main also answers `outside_dates` for a group with evidence
+ * dated outside the deal's audit dates, and writes nothing. The picker then
+ * asks once for every such group in the pick (founder's sentence): "Include
+ * it" repeats those requests with `includeOutsideDates`; "Don't link" links
+ * none of them. The picker never compares dates itself.
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { ResponsiveModal } from "../../../common/ResponsiveModal";
@@ -36,6 +42,13 @@ import type { ChecklistItem, ChecklistLink } from "../../../../../electron/types
 import type { Communication } from "../../types";
 import { linkableAttachments, linkableThreads, plural } from "../../utils/checklistLinks";
 import { formatDate, formatFileSize } from "../../../../utils/formatUtils";
+import {
+  includeAnywayQuestion,
+  outsideDatesPluralSentence,
+  outsideDatesSentence,
+  shortDay,
+  type OutsideEvidenceKind,
+} from "../../utils/outsideAuditDatesCopy";
 import logger from "../../../../utils/logger";
 
 interface ChecklistLinkPickerProps {
@@ -59,6 +72,24 @@ interface ChecklistLinkPickerProps {
 }
 
 type RowKey = string;
+
+/** BACKLOG-3764: one group main refused as outside the audit dates. */
+interface OutsidePending {
+  key: RowKey;
+  request: ChecklistLinkRequest;
+  label: string;
+  evidence: OutsideEvidenceKind;
+  sentAt: string | null;
+  auditStart: string | null;
+  auditEnd: string | null;
+}
+
+/** BACKLOG-3764: the question on screen, and where the pick stood when it was asked. */
+interface OutsideQuestion {
+  pending: OutsidePending[];
+  added: number;
+  total: number;
+}
 const attKey = (id: string): RowKey => `a:${id}`;
 const threadKey = (id: string): RowKey => `t:${id}`;
 
@@ -83,6 +114,7 @@ export function ChecklistLinkPicker({
   const [selected, setSelected] = useState<Set<RowKey>>(new Set());
   const [refused, setRefused] = useState<Set<RowKey>>(new Set());
   const [linking, setLinking] = useState(false);
+  const [question, setQuestion] = useState<OutsideQuestion | null>(null);
   // View goes through the shared open flow, so a metadata-only email
   // attachment is downloaded before it is previewed (BACKLOG-3476).
   const attachmentPreview = useAttachmentPreview(onRefreshTargets);
@@ -166,21 +198,26 @@ export function ChecklistLinkPicker({
   const enabledAttachmentKeys = visibleAttachments.filter((a) => !attachmentDisabled(a)).map((a) => attKey(a.id));
   const enabledThreadKeys = visibleThreads.filter((t) => !threadDisabled(t)).map((t) => threadKey(t.id));
 
-  const handleLink = async () => {
-    if (selected.size === 0 || linking) return;
-    const requests: Array<{ key: RowKey; request: ChecklistLinkRequest }> = [];
-    for (const a of offeredAttachments) {
-      if (selected.has(attKey(a.id))) requests.push({ key: attKey(a.id), request: { kind: "attachment", targetIds: [a.id] } });
+  /** What the agent sees for one requested group (label + what kind of thing it is). */
+  const describe = (key: RowKey, request: ChecklistLinkRequest): { label: string; evidence: OutsideEvidenceKind } => {
+    if (request.kind === "attachment") {
+      const a = offeredAttachments.find((x) => attKey(x.id) === key);
+      return { label: a?.filename ?? "", evidence: "file" };
     }
-    for (const t of offeredThreads) {
-      if (selected.has(threadKey(t.id))) {
-        // Every email in the conversation, as one group: `emails.id`, which is
-        // what Communication.id carries for an email row.
-        requests.push({ key: threadKey(t.id), request: { kind: "email", targetIds: t.emails.map((e) => e.id) } });
-      }
-    }
-    if (requests.length === 0) return;
+    const t = offeredThreads.find((x) => threadKey(x.id) === key);
+    return { label: t?.subject ?? "", evidence: request.targetIds.length > 1 ? "conversation" : "email" };
+  };
 
+  /**
+   * Send these requests and settle the outcome. `priorAdded` / `total` carry
+   * the pick across the outside-the-dates question, so the final message
+   * counts the whole pick.
+   */
+  const runLink = async (
+    requests: Array<{ key: RowKey; request: ChecklistLinkRequest }>,
+    priorAdded: number,
+    total: number,
+  ) => {
     setLinking(true);
     let outcomes: ChecklistLinkOutcome[];
     try {
@@ -193,10 +230,11 @@ export function ChecklistLinkPicker({
     }
     setLinking(false);
 
-    let added = 0;
+    let added = priorAdded;
     let itemGone = false;
     let failedMessage: string | null = null;
     const newlyRefused = new Set<RowKey>();
+    const outside: OutsidePending[] = [];
     outcomes.forEach((outcome, i) => {
       const key = requests[i].key;
       if (!outcome.result.success || !outcome.result.data) {
@@ -218,6 +256,21 @@ export function ChecklistLinkPicker({
           // Unreachable from here: every request carries at least one id, and
           // IPC refuses an empty list. Treated as a refusal, never a success.
           newlyRefused.add(key);
+          break;
+        case "outside_dates":
+          if (requests[i].request.includeOutsideDates) {
+            // Already answered yes; main cannot ask again. Never a success.
+            failedMessage = "Could not link to this checklist item.";
+            break;
+          }
+          outside.push({
+            key,
+            request: requests[i].request,
+            ...describe(key, requests[i].request),
+            sentAt: data.outside[0]?.sentAt ?? null,
+            auditStart: data.auditStart,
+            auditEnd: data.auditEnd,
+          });
           break;
         default: {
           const exhaustive: never = data;
@@ -243,10 +296,52 @@ export function ChecklistLinkPicker({
       });
       if (newlyRefused.size > 0) onRefreshTargets();
       if (failedMessage && added === 0 && newlyRefused.size === 0) onShowError(failedMessage);
-      else onShowError(`${added} of ${plural(requests.length, "link")} added.`);
+      else onShowError(`${added} of ${plural(total, "link")} added.`);
+      return;
+    }
+    if (outside.length > 0) {
+      setQuestion({ pending: outside, added, total });
       return;
     }
     onShowSuccess(added === 1 ? "Linked to checklist item" : `${added} links added`);
+    onClose();
+  };
+
+  const handleLink = async () => {
+    if (selected.size === 0 || linking) return;
+    const requests: Array<{ key: RowKey; request: ChecklistLinkRequest }> = [];
+    for (const a of offeredAttachments) {
+      if (selected.has(attKey(a.id))) requests.push({ key: attKey(a.id), request: { kind: "attachment", targetIds: [a.id] } });
+    }
+    for (const t of offeredThreads) {
+      if (selected.has(threadKey(t.id))) {
+        // Every email in the conversation, as one group: `emails.id`, which is
+        // what Communication.id carries for an email row.
+        requests.push({ key: threadKey(t.id), request: { kind: "email", targetIds: t.emails.map((e) => e.id) } });
+      }
+    }
+    if (requests.length === 0) return;
+    await runLink(requests, 0, requests.length);
+  };
+
+  /** BACKLOG-3764: "Include it" — the same groups again, with the answer. */
+  const includeOutside = async () => {
+    if (!question || linking) return;
+    const { pending, added, total } = question;
+    setQuestion(null);
+    await runLink(
+      pending.map((p) => ({ key: p.key, request: { ...p.request, includeOutsideDates: true } })),
+      added,
+      total,
+    );
+  };
+
+  /** BACKLOG-3764: "Don't link" — none of the outside groups is linked. */
+  const declineOutside = () => {
+    if (!question) return;
+    const { added } = question;
+    setQuestion(null);
+    onShowSuccess(added === 0 ? "Not linked" : added === 1 ? "Linked to checklist item" : `${added} links added`);
     onClose();
   };
 
@@ -493,6 +588,59 @@ export function ChecklistLinkPicker({
         </div>
       </ResponsiveModal>
 
+      {question && (
+        <ResponsiveModal
+          onClose={declineOutside}
+          zIndex="z-[80]"
+          testId="checklist-outside-dates-question"
+          panelClassName="max-w-md"
+        >
+          <div className="p-5 space-y-3 text-sm text-gray-800">
+            {question.pending.length === 1 ? (
+              <p data-testid="checklist-outside-dates-sentence">
+                {outsideDatesSentence(
+                  question.pending[0].evidence,
+                  question.pending[0].sentAt,
+                  question.pending[0].auditStart,
+                  question.pending[0].auditEnd,
+                )}{" "}
+                {includeAnywayQuestion(1)}
+              </p>
+            ) : (
+              <>
+                <p data-testid="checklist-outside-dates-sentence">
+                  {outsideDatesPluralSentence(question.pending[0].auditStart, question.pending[0].auditEnd)}{" "}
+                  {includeAnywayQuestion(question.pending.length)}
+                </p>
+                <ul className="list-disc pl-5 space-y-1" data-testid="checklist-outside-dates-list">
+                  {question.pending.map((p) => {
+                    const day = shortDay(p.sentAt);
+                    return <li key={p.key}>{day ? `${p.label} — ${day}` : p.label}</li>;
+                  })}
+                </ul>
+              </>
+            )}
+          </div>
+          <div className="px-5 py-3 bg-gray-50 rounded-b-xl flex justify-end gap-3 border-t border-gray-200">
+            <button
+              type="button"
+              onClick={declineOutside}
+              className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg font-medium"
+              data-testid="checklist-outside-dates-decline"
+            >
+              Don&apos;t link
+            </button>
+            <button
+              type="button"
+              onClick={() => void includeOutside()}
+              className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold"
+              data-testid="checklist-outside-dates-include"
+            >
+              {question.pending.length === 1 ? "Include it" : "Include them"}
+            </button>
+          </div>
+        </ResponsiveModal>
+      )}
       <AttachmentPreviewHost preview={attachmentPreview} />
       {viewingThread && (
         <EmailThreadViewModal
