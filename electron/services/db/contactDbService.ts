@@ -17,7 +17,7 @@ import { CONTACT_UPDATE_FIELD_TO_COLUMN } from "../../types/models";
 import { LOCAL_REACTION_EXCLUSION, reactionExclusion } from "./reactionExclusion";
 import { isReactionRow } from "../../utils/reactionUtils";
 // BACKLOG-1933: pure phone-matching helpers only (no transaction-scoped finders).
-import { normalizePhone, phonesMatch } from "../messageMatchingService";
+import { phonesMatch } from "../messageMatchingService";
 import { getContactNames } from "../contactsService";
 import { queryContacts, isPoolReady } from "../../workers/contactWorkerPool";
 import { ContactSchema, validateResponse } from "../../schemas";

@@ -1847,7 +1847,6 @@ class MacOSMessagesImportService {
      * own user — so a read is bound with it in force mode and with nothing in
      * delta mode, where the query is the original unscoped one.
      */
-    const attachmentsTable = staging ? `"${staging.attachmentsTable}"` : "attachments";
     const target: ImportTarget = staging
       ? {
           mode: "force",

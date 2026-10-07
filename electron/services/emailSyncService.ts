@@ -50,7 +50,7 @@ import {
   formatEmailPrecacheTimingLine,
   type EmailPrecacheMode,
 } from "./emailPrecacheTiming";
-import { dbGet, dbAll, dbRun, getRawDatabase } from "./db/core/dbConnection";
+import { getRawDatabase } from "./db/core/dbConnection";
 // BACKLOG-2960 — imported from `dbTiming`, not `dbConnection`, on purpose: the
 // pre-cache suites `jest.mock` `dbConnection` with a hand-written partial, so a
 // new export there would arrive `undefined` and render `dbMs=NaN`. The pure
@@ -2534,7 +2534,7 @@ class EmailSyncService {
         // BACKLOG-2127: surface auth-class (expired/revoked token) failures so
         // the sync UI can prompt a reconnect. Transient/network errors are left
         // unrecorded so the sync still completes green (AC).
-        if (isTokenExpiryError(outlookError) && !providerError) {
+        if (isTokenExpiryError(outlookError)) {
           providerError = {
             provider: "microsoft",
             message: classifyProviderError(outlookError),

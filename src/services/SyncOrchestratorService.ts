@@ -509,13 +509,13 @@ class SyncOrchestratorServiceClass {
             logger.info('[SyncOrchestrator] Outlook contacts synced:', outlookResult.count);
           } else if (outlookResult.tokenExpired) {
             logger.warn('[SyncOrchestrator] Outlook contacts token expired — reconnect required');
-            contactsReconnect = contactsReconnect ?? { provider: 'microsoft', cause: 'token-expired' };
+            contactsReconnect = { provider: 'microsoft', cause: 'token-expired' };
           } else if (outlookResult.reconnectRequired) {
             // BACKLOG-3203: log the provider's OWN error rather than naming a
             // cause this branch has not established — `reconnectRequired`
             // covers a missing Contacts.Read grant and a 403 at fetch alike.
             logger.warn('[SyncOrchestrator] Outlook contacts need reconnection:', outlookResult.error);
-            contactsReconnect = contactsReconnect ?? { provider: 'microsoft', cause: 'reconnect-required' };
+            contactsReconnect = { provider: 'microsoft', cause: 'reconnect-required' };
           } else {
             logger.warn('[SyncOrchestrator] Outlook contacts sync returned error:', outlookResult.error);
           }

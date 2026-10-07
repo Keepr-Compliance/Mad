@@ -1048,29 +1048,29 @@ export class DeviceDetectionService extends EventEmitter {
    * resolves to a safe default.
    */
   private async checkCorporateUsbRestrictions(): Promise<UsbRestrictionResult> {
-    let usbDriverStatus: UsbRestrictionResult["appleUsbDriverService"] =
-      "not_found";
+    let usbDriverStatus: UsbRestrictionResult["appleUsbDriverService"];
     let pnpDeviceFound = false;
     let pnpStatus = "unknown";
 
+    // Check Apple Mobile Device USB Driver service status. Its catch takes
+    // every failure, so it needs no outer guard and always assigns a status.
     try {
-      // Check Apple Mobile Device USB Driver service status
-      try {
-        const { stdout: scOutput } = await execAsync(
-          'sc query "Apple Mobile Device USB Driver"',
-          { timeout: 5000 },
-        );
-        if (scOutput.includes("RUNNING")) {
-          usbDriverStatus = "running";
-        } else if (scOutput.includes("STOPPED")) {
-          usbDriverStatus = "stopped";
-        } else {
-          usbDriverStatus = "other";
-        }
-      } catch {
-        usbDriverStatus = "not_found";
+      const { stdout: scOutput } = await execAsync(
+        'sc query "Apple Mobile Device USB Driver"',
+        { timeout: 5000 },
+      );
+      if (scOutput.includes("RUNNING")) {
+        usbDriverStatus = "running";
+      } else if (scOutput.includes("STOPPED")) {
+        usbDriverStatus = "stopped";
+      } else {
+        usbDriverStatus = "other";
       }
+    } catch {
+      usbDriverStatus = "not_found";
+    }
 
+    try {
       // Check if Windows PnP sees any Apple/iPhone USB device.
       // BACKLOG-1918: `wmic` is removed on Windows 11 24H2+ (build 26200+), so it
       // throws ENOENT/"not recognized" there and this probe always came back

@@ -129,7 +129,6 @@ function Transactions({
     openAuditCreate,
     closeAuditCreate,
     quickExportTransaction,
-    openQuickExport,
     closeQuickExport,
     quickExportSuccess,
     setQuickExportSuccess,

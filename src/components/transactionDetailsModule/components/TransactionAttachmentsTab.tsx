@@ -16,7 +16,7 @@
  * on demand (reconciling the metadata row in place — BACKLOG-1870), then the
  * refreshed row is previewed.
  */
-import React, { useMemo, useState, useCallback } from "react";
+import React, { useMemo, useState } from "react";
 import { AttachmentCard } from "./AttachmentCard";
 import { GroupedMultiSelect, type OptionGroup } from "../../shared/GroupedMultiSelect";
 import type { UnifiedAttachment } from "../hooks/useTransactionAllAttachments";
