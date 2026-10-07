@@ -36,6 +36,7 @@ import { AppStateProvider } from "./AppStateContext";
 import { useAppState } from "./useAppState";
 import { AuthProvider, useAuth } from "../../../contexts/AuthContext";
 import { AppModals } from "../../AppModals";
+import { NotificationProvider } from "../../../contexts/NotificationContext";
 import { useLoginHandlers } from "../flows/auth/useLoginHandlers";
 import type { AppState } from "./types";
 import type { AppStateMachine } from "../types";
@@ -193,7 +194,13 @@ function TermsLayer() {
   const app = new Proxy(base, {
     get: (t, k: string) => (k in t ? t[k] : jest.fn()),
   }) as unknown as AppStateMachine;
-  return <AppModals app={app} />;
+  // BACKLOG-3594: AppModals now calls useSubmissionStatusNotice, which needs the real
+  // NotificationProvider (precedent: AppModals-3594-submission-notice.test.tsx:142).
+  return (
+    <NotificationProvider>
+      <AppModals app={app} />
+    </NotificationProvider>
+  );
 }
 
 /** Sign-in driver: the real useLoginHandlers, fed the main.ts deep-link payload. */
