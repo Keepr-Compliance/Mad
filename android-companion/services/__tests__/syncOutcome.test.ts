@@ -40,7 +40,6 @@ jest.mock('@sentry/react-native', () => ({
 import * as Sentry from '@sentry/react-native';
 
 import {
-  buildOutcomeTags,
   classifyAddress,
   classifySyncOutcome,
   durationBucket,
