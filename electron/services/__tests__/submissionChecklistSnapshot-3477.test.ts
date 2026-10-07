@@ -609,13 +609,21 @@ beforeEach(() => {
 async function submitConfirmed() {
   const preflight = await submissionService.preflightSubmission(TX);
   return submissionService.submitTransaction(TX, undefined, {
-    acceptedExclusionKeys: preflight.notIncluded.map((i) => i.key),
+    // BACKLOG-3764: and the checklist evidence it lists (att-nobytes's link).
+    acceptedExclusionKeys: [
+      ...preflight.notIncluded.map((i) => i.key),
+      ...(preflight.checklistLinkGaps ?? []).map((g) => g.key),
+    ],
   });
 }
 async function resubmitConfirmed() {
   const preflight = await submissionService.preflightSubmission(TX);
   return submissionService.resubmitTransaction(TX, undefined, {
-    acceptedExclusionKeys: preflight.notIncluded.map((i) => i.key),
+    // BACKLOG-3764: and the checklist evidence it lists (att-nobytes's link).
+    acceptedExclusionKeys: [
+      ...preflight.notIncluded.map((i) => i.key),
+      ...(preflight.checklistLinkGaps ?? []).map((g) => g.key),
+    ],
   });
 }
 

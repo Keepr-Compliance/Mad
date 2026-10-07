@@ -849,8 +849,21 @@ class SubmissionService {
     // (SubmitForReviewModal `proceed` awaits the save, then submits).
     const sentEmailIds = new Set(emailIds);
     const sentAttachmentIds = new Set(preflight.sendable.map((a) => a.id));
+    // A failed local read fails the submit the same way a failed checklist
+    // copy does (BACKLOG-3600): nothing is sent, and the agent is told why.
+    let localChecklists: Awaited<ReturnType<typeof getChecklistsForTransaction>>;
+    try {
+      localChecklists = await getChecklistsForTransaction(transactionId);
+    } catch (error) {
+      logService.warn(
+        `[Submission] Checklists could not be read before submit: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "SubmissionService",
+        { transactionId }
+      );
+      throw new ChecklistsNotSentError();
+    }
     const checklistLinkGaps = findChecklistLinkGaps({
-      checklists: await getChecklistsForTransaction(transactionId),
+      checklists: localChecklists,
       sentEmailIds,
       sentAttachmentIds,
       notIncluded: preflight.notIncluded,
