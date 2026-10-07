@@ -2,8 +2,12 @@
  * BACKLOG-3418 — when iPhone device detection may run.
  *
  * Founder decision 2026-09-21 (pm_comments f59ce258):
- *   1. Keep the iPhone default for signed-in non-Android Windows users, so
- *      nobody signed in loses auto-detect.
+ *   1. SUPERSEDED 2026-10-07 (pm_comments 1d7ab5ff; Q1 answered "a",
+ *      3df4e6f6): a signed-in Windows user gets detection only after choosing
+ *      iPhone (a stored iPhone source, or an iPhone phone type with no source
+ *      stored) — the macOS opt-in. A user who chose nothing gets none. The
+ *      three tests that encoded the old default are rewritten below and say so;
+ *      the full set of controls is iphoneSyncChosenSource-3418.test.tsx.
  *   2. No detection before a user and their preferences are loaded, on every
  *      platform. The login screen used to run the Windows device poll, because
  *      the resolver returned `true` for any non-macOS platform while the source
@@ -162,16 +166,22 @@ function serveNewUser() {
   api().user.getPhoneType.mockResolvedValue({ success: true, phoneType: null });
 }
 
-/** Hold the preference read open until the test releases it. */
-function holdPreferenceRead() {
+/** Hold the preference read open until the test releases it with `preferences`. */
+function holdPreferenceRead(preferences: Record<string, unknown> = {}) {
   let release: (value: unknown) => void = () => undefined;
   api().preferences.get.mockReturnValue(
     new Promise((resolve) => {
       release = resolve;
     }),
   );
-  return () => release({ success: true, preferences: {} });
+  return () => release({ success: true, preferences });
 }
+
+/** Let every queued microtask run (a macrotask cannot start before they finish). */
+const drain = () =>
+  act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
 
 const settle = () =>
   act(async () => {
@@ -246,13 +256,18 @@ describe("BACKLOG-3418: no iPhone detection before sign-in; stop it when onboard
     );
   });
 
-  describe("signed in on Windows (nobody signed in loses auto-detect)", () => {
-    it("a new user — nothing stored, phone type not Android — gets detection once preferences are read", async () => {
+  describe("signed in on Windows (only a user who chose iPhone gets detection)", () => {
+    // Rewritten for the 2026-10-07 rule (3df4e6f6): this test used to assert
+    // that a new user with nothing chosen GETS detection.
+    it("a new user — nothing stored, no phone type — gets NO detection once preferences are read", async () => {
       renderProvider("user-3418");
-      await settle();
+      // Barrier: the read has gone all the way to the phone-type fallback.
+      await waitFor(() => expect(api().user.getPhoneType).toHaveBeenCalledWith("user-3418"));
+      await drain();
+      await drain();
 
       expect(api().preferences.get).toHaveBeenCalledWith("user-3418");
-      expect(syncApi().startDetection).toHaveBeenCalled();
+      expect(syncApi().startDetection).not.toHaveBeenCalled();
     });
 
     it("a user who answered iPhone (phone type stored, no source) gets detection", async () => {
@@ -263,8 +278,10 @@ describe("BACKLOG-3418: no iPhone detection before sign-in; stop it when onboard
       expect(syncApi().startDetection).toHaveBeenCalled();
     });
 
-    it("starts nothing while the preference read is in flight, and starts once it lands", async () => {
-      const releasePreferences = holdPreferenceRead();
+    // Rewritten for the 2026-10-07 rule (3df4e6f6): the read now lands with
+    // an iPhone source, since a user who chose nothing would never start.
+    it("starts nothing while the preference read is in flight, and starts once an iPhone source lands", async () => {
+      const releasePreferences = holdPreferenceRead({ messages: { source: "iphone-sync" } });
       renderProvider("user-3418");
       await settle();
 
@@ -367,19 +384,28 @@ describe("BACKLOG-3418: no iPhone detection before sign-in; stop it when onboard
   });
 
   describe("onboarding phone-type answer re-gates live, without a restart", () => {
-    it("Android stops detection at once; going back and answering iPhone starts it again", async () => {
+    // Rewritten for the 2026-10-07 rule (3df4e6f6): before any answer a new
+    // Windows user now has NO detection (it used to start on the iPhone default).
+    it("nothing before the answer; iPhone starts detection; Android stops it at once; iPhone again restarts it", async () => {
       const app = makeApp();
       renderOnboarding(app);
-      await settle();
+      await waitFor(() => expect(api().user.getPhoneType).toHaveBeenCalled());
+      await drain();
+      await drain();
 
-      // Before the answer the new Windows user gets the iPhone default.
+      // Before the answer: nothing chosen, nothing running.
+      expect(syncApi().startDetection).not.toHaveBeenCalled();
+
+      await answerPhoneType("iphone");
+
+      expect(app.handleSelectIPhone).toHaveBeenCalledTimes(1);
       expect(syncApi().startDetection).toHaveBeenCalledTimes(1);
-      const stopsBeforeAnswer = syncApi().stopDetection.mock.calls.length;
+      const stopsBeforeAndroid = syncApi().stopDetection.mock.calls.length;
 
       await answerPhoneType("android");
 
       expect(app.handleSelectAndroid).toHaveBeenCalledTimes(1);
-      expect(syncApi().stopDetection.mock.calls.length).toBe(stopsBeforeAnswer + 1);
+      expect(syncApi().stopDetection.mock.calls.length).toBe(stopsBeforeAndroid + 1);
 
       // Nothing restarts it while the Android answer stands.
       await settle();
@@ -387,12 +413,16 @@ describe("BACKLOG-3418: no iPhone detection before sign-in; stop it when onboard
 
       await answerPhoneType("iphone");
 
-      expect(app.handleSelectIPhone).toHaveBeenCalledTimes(1);
+      expect(app.handleSelectIPhone).toHaveBeenCalledTimes(2);
       expect(syncApi().startDetection).toHaveBeenCalledTimes(2);
     });
 
     it("an Android answer given while the preference read is in flight is not undone when the read lands", async () => {
-      const releasePreferences = holdPreferenceRead();
+      // The read lands with an iPhone phone type in the cloud preferences, so
+      // on its own it WOULD start detection (BACKLOG-3418: an iPhone phone type
+      // with no source stored is an iPhone choice) — only the in-flight guard
+      // keeps the newer Android answer.
+      const releasePreferences = holdPreferenceRead({ phone_type: "iphone" });
       renderOnboarding(makeApp());
       await settle();
       expect(syncApi().startDetection).not.toHaveBeenCalled();
@@ -400,11 +430,13 @@ describe("BACKLOG-3418: no iPhone detection before sign-in; stop it when onboard
       await answerPhoneType("android");
 
       // The read started before the answer, so it knows nothing of it and
-      // derives the pre-answer default (`iphone-sync` on Windows).
+      // derives the pre-answer source (`iphone-sync` from the phone type).
       await act(async () => {
         releasePreferences();
       });
-      await settle();
+      await waitFor(() => expect(api().user.getPhoneType).toHaveBeenCalled());
+      await drain();
+      await drain();
 
       expect(syncApi().startDetection).not.toHaveBeenCalled();
     });
