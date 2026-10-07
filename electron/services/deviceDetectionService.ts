@@ -126,6 +126,11 @@ export interface UsbRestrictionResult {
  * (support ticket #64).
  */
 export interface IphoneSyncDiagnostic {
+  /**
+   * BACKLOG-3418: whether iPhone checking was on, i.e. whether the probes below
+   * ran at all. False → every other field is its default and nothing was spawned.
+   */
+  iphoneCheckingOn: boolean;
   /** libimobiledevice CLI tools available (idevice_id --version succeeds). */
   libimobiledeviceAvailable: boolean;
   /** libimobiledevice reachable on PATH/bundled — mirrors availability; kept as a distinct signal for macOS. */
@@ -177,6 +182,16 @@ export class DeviceDetectionService extends EventEmitter {
   private currentPollIntervalMs: number = MIN_POLL_INTERVAL_MS;
   /** BACKLOG-1627: Track trust-pending devices with last-attempt timestamp for back-off */
   private trustPendingDevices: Map<string, number> = new Map();
+  /**
+   * BACKLOG-3418: true while the app has asked for iPhone detection — set by
+   * `start()` (after the Windows-on-ARM early return) and cleared by `stop()`.
+   * The renderer's IPhoneSyncProvider is the only start/stop authority, and it
+   * starts detection only for an account with iPhone checking on, so this flag
+   * IS that account state, without a second copy of the renderer's rule here.
+   * Support diagnostics read it so the iPhone helper is not run for accounts
+   * with iPhone checking off (founder, 2026-10-07).
+   */
+  private detectionRequested: boolean = false;
 
   constructor() {
     super();
@@ -257,6 +272,7 @@ export class DeviceDetectionService extends EventEmitter {
       log.warn("[DeviceDetection] Already running, stopping first");
       this.stop();
     }
+    this.detectionRequested = true;
 
     const actualInterval = Math.max(intervalMs, MIN_POLL_INTERVAL_MS);
     this.currentPollIntervalMs = actualInterval;
@@ -277,6 +293,7 @@ export class DeviceDetectionService extends EventEmitter {
    * Stops polling for devices.
    */
   stop(): void {
+    this.detectionRequested = false;
     if (this.pollInterval) {
       log.info("[DeviceDetection] Stopping device polling");
       clearInterval(this.pollInterval);
@@ -537,14 +554,25 @@ export class DeviceDetectionService extends EventEmitter {
   async collectIphoneSyncDiagnostics(): Promise<IphoneSyncDiagnostic> {
     const isWindows = process.platform === "win32";
 
+    // BACKLOG-3418 (founder, 2026-10-07): run the iPhone helper (`idevice_id
+    // --version` / `-l`, and `ideviceinfo` for trust) only when iPhone checking
+    // is on for the account. Gated HERE, in main, so both callers are covered —
+    // the support ticket (support:collect-diagnostics) and the support-access
+    // report queue — and so the answer does not depend on a renderer component
+    // sitting inside IPhoneSyncProvider. The Windows USB/PnP probe below is
+    // not the iPhone helper and still runs.
+    const iphoneCheckingOn = this.detectionRequested;
+
     // libimobiledevice availability (fresh check).
     let libimobiledeviceAvailable = false;
-    try {
-      // Reset cache so we reflect current reality (e.g. iTunes installed mid-session).
-      this.libimobiledeviceAvailable = null;
-      libimobiledeviceAvailable = await this.checkLibimobiledeviceAvailable();
-    } catch {
-      libimobiledeviceAvailable = false;
+    if (iphoneCheckingOn) {
+      try {
+        // Reset cache so we reflect current reality (e.g. iTunes installed mid-session).
+        this.libimobiledeviceAvailable = null;
+        libimobiledeviceAvailable = await this.checkLibimobiledeviceAvailable();
+      } catch {
+        libimobiledeviceAvailable = false;
+      }
     }
 
     // Device enumeration count (idevice_id -l).
@@ -577,7 +605,8 @@ export class DeviceDetectionService extends EventEmitter {
       : deviceDetected;
 
     // driverMissingSuspected: physically mounted but libimobiledevice can't see it.
-    const driverMissingSuspected = deviceMounted && !deviceDetected;
+    // Only meaningful when libimobiledevice was asked (BACKLOG-3418).
+    const driverMissingSuspected = iphoneCheckingOn && deviceMounted && !deviceDetected;
 
     // Trust/lock state: only meaningful when a device is present-but-unusable.
     // Probe the first enumerated device; getDeviceInfo rejects with the stderr
@@ -594,6 +623,7 @@ export class DeviceDetectionService extends EventEmitter {
     }
 
     return {
+      iphoneCheckingOn,
       libimobiledeviceAvailable,
       // On non-Windows, availability == on-PATH/bundled reachability.
       libimobiledeviceInPath: libimobiledeviceAvailable,

@@ -46,8 +46,15 @@ jest.mock("../../contexts/PlatformContext", () => ({
 // One shared in-memory preference store, standing in for Supabase
 // user_preferences. `null` models an install that has never written one.
 // ---------------------------------------------------------------------------
-type PrefStore = { messages?: { source?: string } } | null;
+type PrefStore = { messages?: { source?: string }; phone_type?: string } | null;
 let mockPrefs: PrefStore = null;
+// The local onboarding phone type (`user:get-phone-type` → users_local).
+// BACKLOG-3418: read when no known source is stored.
+let mockLocalPhoneType: "iphone" | "android" | null = null;
+const mockGetPhoneType = jest.fn(async () => ({
+  success: true,
+  data: mockLocalPhoneType,
+}));
 
 const mockGetPreferences = jest.fn(async () => ({
   success: true,
@@ -76,6 +83,7 @@ jest.mock("../../services/settingsService", () => ({
       mockUpdatePreferences(...(a as [string, Record<string, unknown>])),
     setPhoneType: (...a: unknown[]) => mockSetPhoneType(...(a as [])),
     setPhoneTypeCloud: (...a: unknown[]) => mockSetPhoneTypeCloud(...(a as [])),
+    getPhoneType: (...a: unknown[]) => mockGetPhoneType(...(a as [])),
   },
 }));
 jest.mock("@/services", () => ({
@@ -85,6 +93,7 @@ jest.mock("@/services", () => ({
       mockUpdatePreferences(...(a as [string, Record<string, unknown>])),
     setPhoneType: (...a: unknown[]) => mockSetPhoneType(...(a as [])),
     setPhoneTypeCloud: (...a: unknown[]) => mockSetPhoneTypeCloud(...(a as [])),
+    getPhoneType: (...a: unknown[]) => mockGetPhoneType(...(a as [])),
   },
 }));
 
@@ -129,7 +138,7 @@ async function completePhoneTypeStep(
 }
 
 /** Read the import source the way the dashboard does. */
-async function readImportSource(): Promise<string> {
+async function readImportSource(): Promise<string | null> {
   const { result } = renderHook(() => useImportSource(USER_ID, false));
   const stored = mockPrefs?.messages?.source;
 
@@ -153,9 +162,17 @@ async function readImportSource(): Promise<string> {
     // Nothing stored, so the hook keeps its platform seed and there is no
     // value change to wait for. Settle the read anyway, so "unchanged" is a
     // resolved outcome rather than an unfinished one.
+    // BACKLOG-3418: the hook now also reads the phone type when nothing is
+    // stored — settle that too before reading the result.
     await act(async () => {
       await Promise.all(
         mockGetPreferences.mock.results.map((r) => r.value as Promise<unknown>),
+      );
+    });
+    await waitFor(() => expect(mockGetPhoneType).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.all(
+        mockGetPhoneType.mock.results.map((r) => r.value as Promise<unknown>),
       );
     });
   }
@@ -166,6 +183,7 @@ async function readImportSource(): Promise<string> {
 beforeEach(() => {
   jest.clearAllMocks();
   mockPrefs = null;
+  mockLocalPhoneType = null;
   mockIsMacOS = true;
   (featureFlags.isNewStateMachineEnabled as jest.Mock).mockReturnValue(true);
 });
@@ -185,13 +203,40 @@ describe("useImportSource — existing installs with no stored preference", () =
     expect(mockPrefs).toBeNull();
   });
 
-  it("resolves to iphone-sync off macOS when no preference is stored", async () => {
+  // BACKLOG-3418 (founder 2026-10-07, pm_comments 66f5b114): rewritten
+  // deliberately. Off macOS a user who chose nothing has NO source — the
+  // Dashboard hides "Import from iPhone", matching iPhone detection (off).
+  it("resolves to null off macOS when no preference and no phone type are stored", async () => {
     mockIsMacOS = false;
 
     const source = await readImportSource();
 
-    expect(source).toBe("iphone-sync");
+    expect(source).toBeNull();
+    expect(mockGetPhoneType).toHaveBeenCalledWith(USER_ID);
     expect(mockPrefs).toBeNull();
+  });
+
+  // BACKLOG-3418 (SR C-1): the 4 production Windows iPhone users with a phone
+  // type and no stored source keep the button (detection stays ON for them).
+  it("resolves to iphone-sync off macOS from a LOCAL iPhone phone type", async () => {
+    mockIsMacOS = false;
+    mockLocalPhoneType = "iphone";
+
+    expect(await readImportSource()).toBe("iphone-sync");
+  });
+
+  it("resolves to iphone-sync off macOS from the CLOUD phone_type when local is empty", async () => {
+    mockIsMacOS = false;
+    mockPrefs = { phone_type: "iphone" };
+
+    expect(await readImportSource()).toBe("iphone-sync");
+  });
+
+  it("stays macos-native on macOS with an iPhone phone type and nothing stored (Mac unchanged)", async () => {
+    mockIsMacOS = true;
+    mockLocalPhoneType = "iphone";
+
+    expect(await readImportSource()).toBe("macos-native");
   });
 });
 
@@ -269,11 +314,16 @@ describe("BACKLOG-2408: onboarding round-trip — the answer is written and read
     // The value onboarding now writes must equal the value the platform default
     // produced before it was written — on both platforms. Any divergence here
     // would silently move an existing population.
+    // BACKLOG-3418: "an iPhone user" without the source write is one whose
+    // phone type says iPhone (onboarding records it too) — that, not "nothing
+    // at all", is the population this guards (859445f9 §5: 4 such accounts).
     for (const isMac of [true, false]) {
       mockIsMacOS = isMac;
 
       mockPrefs = null;
+      mockLocalPhoneType = "iphone";
       const withoutWrite = await readImportSource();
+      mockLocalPhoneType = null;
 
       mockPrefs = null;
       await completePhoneTypeStep(
