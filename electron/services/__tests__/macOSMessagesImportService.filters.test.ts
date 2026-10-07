@@ -488,8 +488,6 @@ describe("shouldRetainMessageContent (BACKLOG-2262)", () => {
     // attachment can link to it (previously dropped, orphaning the attachment).
     expect(shouldRetainMessageContent("", 1)).toBe(true);
     expect(shouldRetainMessageContent("", 2)).toBe(true);
-    // has_attachments is stored as (cache_has_attachments > 0 ? 1 : 0)
-    expect(1 > 0 ? 1 : 0).toBe(1);
   });
 
   it("retains a legitimate message whose text starts with '[' (no longer dropped)", () => {
