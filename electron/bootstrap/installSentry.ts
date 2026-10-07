@@ -73,6 +73,7 @@ import dotenv from "dotenv";
 import * as Sentry from "@sentry/electron/main";
 import { scrubUpdaterEventPII } from "../services/updateDiagnostics";
 import { scrubRcsEventPII } from "../services/rcsSentryScrub";
+import { scrubHttpBreadcrumb } from "../services/httpBreadcrumbScrub";
 
 // Load environment files based on whether app is packaged or in development
 if (app.isPackaged) {
@@ -105,6 +106,10 @@ Sentry.init({
   // "google-messages"): phone numbers, emails, quoted text — see
   // scrubRcsEventPII. The updater scrub runs first, unchanged; an RCS event
   // whose scrub throws is dropped (its text may hold a number or a message).
+  // BACKLOG-3768: HTTP breadcrumbs keep origin + path only (no query string).
+  beforeBreadcrumb(breadcrumb) {
+    return scrubHttpBreadcrumb(breadcrumb);
+  },
   beforeSend(event) {
     let scrubbed = event;
     try {
