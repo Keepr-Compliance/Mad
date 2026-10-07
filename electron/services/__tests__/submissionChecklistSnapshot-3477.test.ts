@@ -1626,7 +1626,9 @@ describe("BACKLOG-3764 — out-of-dates checklist evidence is asked about, never
   });
 
   it("a yes on ANOTHER deal's checklist does not send that email with this deal", async () => {
-    run(`INSERT INTO transactions (id, user_id, property_address) VALUES ('txn-other', ?, '9 Other St')`, USER);
+    // The other deal has dates too, so its yes is a real stored answer (a
+    // link made with no question stores none).
+    run(`INSERT INTO transactions (id, user_id, property_address, started_at, closed_at) VALUES ('txn-other', ?, '9 Other St', '2026-03-01', '2026-03-31')`, USER);
     run(`INSERT INTO communications (id, user_id, transaction_id, email_id, link_source) VALUES ('c-late-other', ?, 'txn-other', 'e-late', 'manual')`, USER);
     const other = await selectChecklistTemplate({
       transactionId: "txn-other",
@@ -1637,6 +1639,7 @@ describe("BACKLOG-3764 — out-of-dates checklist evidence is asked about, never
     expect(other.status).toBe("added");
     const r = await addChecklistLink({ itemId: itemId("Other deal item"), kind: "email", targetIds: ["e-late"], includeOutsideDates: true });
     expect(r.status).toBe("added");
+    expect(db.prepare(`SELECT count(*) AS n FROM transaction_checklist_links WHERE include_outside_dates = 1`).get()).toEqual({ n: 1 });
     const { result } = await submitAcceptingPreflight();
     expect(result.success).toBe(true);
     expect(uploadedEmails()).not.toContain("e-late");
