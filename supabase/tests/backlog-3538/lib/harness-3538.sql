@@ -27,4 +27,4 @@ CREATE FUNCTION pg_temp.fp3538() RETURNS text LANGUAGE sql AS $f$
 $f$;
 
 CREATE FUNCTION pg_temp.guard_md5() RETURNS text LANGUAGE sql AS $f$
-  SELECT md5(pg_get_functiondef('public.guard_invite_acceptance()'::regprocedure)) $f$;
+  SELECT md5(pg_get_functiondef(to_regprocedure('public.guard_invite_acceptance()'))) $f$;
