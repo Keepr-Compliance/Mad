@@ -7,8 +7,22 @@ import type { Message, Attachment } from "../../types";
 import { ensureDb } from "./core/dbConnection";
 // BACKLOG-2781: the closing-day end bound is the export resolver's, not a
 // local re-derivation. Each call below is its own call site on purpose —
-// four independent queries, four independent regressions to guard.
-import { auditWindowEnd } from "../exportPlan";
+// three independent queries (texts, emails, email attachments), three
+// independent regressions to guard. Text attachments have no window of their
+// own: they follow the texts `getTransactionMessages` returns (BACKLOG-3731).
+import { auditWindowEnd, type SelectedTextIds } from "../exportPlan";
+import { selectTextAttachmentsForMessages } from "./textAttachmentLookupSql";
+
+/**
+ * An attachment row as the submit sees it. Text rows carry
+ * `resolved_message_id` — the text they belong to under the shared lookup
+ * (BACKLOG-3731). Key text rows on it, never on `message_id`.
+ */
+export type SubmissionAttachment = Attachment & {
+  email_id?: string | null;
+  external_message_id?: string | null;
+  resolved_message_id?: string;
+};
 
 // ============================================
 // SUBMISSION QUERIES (TASK-2100)
@@ -26,11 +40,16 @@ export type SubmissionTransactionRow = {
 /**
  * Load messages linked to a transaction via communications junction table,
  * with optional audit date range filter.
+ *
+ * BACKLOG-3733: only texts in `selected` are returned — the texts the export of
+ * this deal would include (`selectSubmissionTextIds`). Required, so a caller
+ * that has not been switched to the shared set does not compile.
  */
 export function getTransactionMessages(
   transactionId: string,
-  auditStartDate?: Date | null,
-  auditEndDate?: Date | null
+  auditStartDate: Date | null | undefined,
+  auditEndDate: Date | null | undefined,
+  selected: SelectedTextIds
 ): Message[] {
   const db = ensureDb();
 
@@ -40,7 +59,11 @@ export function getTransactionMessages(
     INNER JOIN communications c ON (
       (c.message_id IS NOT NULL AND c.message_id = m.id)
       OR
-      (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id)
+      -- BACKLOG-3733: the same thread arm as the export's reader
+      -- (getCommunicationsWithMessages): an email link that carries a thread
+      -- id is not a text link, and only the linking user's copy of a thread.
+      (c.message_id IS NULL AND c.email_id IS NULL AND c.thread_id IS NOT NULL
+       AND c.thread_id = m.thread_id AND m.user_id = c.user_id)
     )
     WHERE c.transaction_id = ?
   `;
@@ -57,7 +80,8 @@ export function getTransactionMessages(
   }
 
   sql += ` ORDER BY m.sent_at ASC`;
-  return db.prepare(sql).all(...params) as Message[];
+  const rows = db.prepare(sql).all(...params) as Message[];
+  return rows.filter((m) => selected.has(m.id));
 }
 
 /**
@@ -96,44 +120,28 @@ export function getTransactionEmails(
 /**
  * Load attachments linked to a transaction (both text message and email attachments),
  * with optional audit date range filter.
+ *
+ * BACKLOG-3733: text attachments belong to the texts in `selected` only, the
+ * same set {@link getTransactionMessages} sends.
  */
 export function getTransactionAttachments(
   transactionId: string,
-  auditStartDate?: Date | null,
-  auditEndDate?: Date | null
-): Attachment[] {
+  auditStartDate: Date | null | undefined,
+  auditEndDate: Date | null | undefined,
+  selected: SelectedTextIds
+): SubmissionAttachment[] {
   const db = ensureDb();
 
-  // Build date filter conditions for text messages
-  let dateFilter = "";
-  const dateParams: string[] = [];
-  if (auditStartDate) {
-    dateFilter += " AND m.sent_at >= ?";
-    dateParams.push(auditStartDate.toISOString());
-  }
-  const textAttachmentsEnd = auditWindowEnd(auditEndDate);
-  if (textAttachmentsEnd) {
-    dateFilter += " AND m.sent_at <= ?";
-    dateParams.push(textAttachmentsEnd.toISOString());
-  }
-
-  // Query 1: Text message attachments
-  const textAttachmentsSql = `
-    SELECT DISTINCT a.*
-    FROM attachments a
-    INNER JOIN messages m ON a.message_id = m.id
-    INNER JOIN communications c ON (
-      (c.message_id IS NOT NULL AND c.message_id = m.id)
-      OR
-      (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id)
-    )
-    WHERE c.transaction_id = ?
-    AND a.storage_path IS NOT NULL
-    ${dateFilter}
-  `;
-  const textAttachments = db
-    .prepare(textAttachmentsSql)
-    .all(transactionId, ...dateParams) as Attachment[];
+  // BACKLOG-3731: text attachments come from the shared lookup the Messages
+  // view uses, over exactly the texts this submission sends. Read-only.
+  const textMessageIds = getTransactionMessages(transactionId, auditStartDate, auditEndDate, selected).map(
+    (m) => m.id
+  );
+  const textAttachments: SubmissionAttachment[] = selectTextAttachmentsForMessages<
+    SubmissionAttachment & { message_id: string }
+  >(db, textMessageIds)
+    .filter(({ row }) => typeof row.storage_path === "string")
+    .map(({ row, resolved_message_id }) => ({ ...row, resolved_message_id }));
 
   // Build email date filter
   let emailDateFilter = "";
@@ -175,6 +183,33 @@ export function getTransactionAttachments(
   });
 
   return uniqueAttachments;
+}
+
+/**
+ * BACKLOG-3403: email attachment rows that still have no local file. Run AFTER
+ * the on-demand download, so what it returns is what the download could not
+ * fetch. Keyed by the in-window email ids the gather already chose.
+ */
+export function getUndownloadedEmailAttachments(
+  emailIds: string[]
+): { id: string; email_id: string; filename: string | null }[] {
+  if (emailIds.length === 0) return [];
+  const db = ensureDb();
+  const out: { id: string; email_id: string; filename: string | null }[] = [];
+  // SQLite caps bound parameters; 500 per statement stays well under it.
+  for (let i = 0; i < emailIds.length; i += 500) {
+    const chunk = emailIds.slice(i, i + 500);
+    const placeholders = chunk.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT id, email_id, filename FROM attachments
+          WHERE email_id IN (${placeholders}) AND storage_path IS NULL
+          ORDER BY id`
+      )
+      .all(...chunk) as { id: string; email_id: string; filename: string | null }[];
+    out.push(...rows);
+  }
+  return out;
 }
 
 // ============================================
@@ -243,4 +278,121 @@ export function updateTransactionSubmissionStatus(
          updated_at = ?
      WHERE id = ?`
   ).run(submissionStatus, lastReviewNotes, new Date().toISOString(), transactionId);
+}
+
+// ============================================
+// OWED BROKER-CHECKLIST PULLS (BACKLOG-3599)
+// ============================================
+
+/**
+ * Key in `transactions.metadata` (local-only JSON; no other writer or reader)
+ * holding the submission ids whose broker-added checklists are still owed.
+ *
+ * A SET, not a slot: marking adds an id if absent, clearing removes exactly
+ * one id, and nothing overwrites. With a single slot, a resubmit while S1 is
+ * owed followed by three failed pulls for S2 would replace S1 and lose S1's
+ * checklist for good.
+ *
+ * It lives in the database so it survives a restart, a crash and a sign-out.
+ */
+const OWED_PULLS_KEY = "reviewChecklistPullOwed";
+
+/** One transaction with at least one owed pull. */
+export interface OwedReviewChecklistPulls {
+  transactionId: string;
+  submissionIds: string[];
+}
+
+function readMetadataObject(raw: unknown): Record<string, unknown> {
+  if (typeof raw !== "string" || raw.length === 0) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function owedIdsOf(meta: Record<string, unknown>): string[] {
+  const value = meta[OWED_PULLS_KEY];
+  return Array.isArray(value)
+    ? value.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : [];
+}
+
+/**
+ * Apply `change` to the owed set of one transaction, atomically. Returns false
+ * when the transaction does not exist.
+ */
+function updateOwedSet(
+  transactionId: string,
+  change: (ids: string[]) => string[]
+): boolean {
+  const db = ensureDb();
+  return db.transaction((): boolean => {
+    const row = db
+      .prepare(`SELECT metadata FROM transactions WHERE id = ?`)
+      .get(transactionId) as { metadata: unknown } | undefined;
+    if (!row) return false;
+    const meta = readMetadataObject(row.metadata);
+    const before = owedIdsOf(meta);
+    const after = change(before);
+    if (after.length === before.length && after.every((id, i) => id === before[i])) {
+      return true;
+    }
+    if (after.length > 0) meta[OWED_PULLS_KEY] = after;
+    else delete meta[OWED_PULLS_KEY];
+    db.prepare(`UPDATE transactions SET metadata = ? WHERE id = ?`).run(
+      Object.keys(meta).length > 0 ? JSON.stringify(meta) : null,
+      transactionId
+    );
+    return true;
+  })();
+}
+
+/** Record that `submissionId`'s broker-added checklists are owed. Adds if absent. */
+export function markReviewChecklistPullOwed(
+  transactionId: string,
+  submissionId: string
+): boolean {
+  return updateOwedSet(transactionId, (ids) =>
+    ids.includes(submissionId) ? ids : [...ids, submissionId]
+  );
+}
+
+/** Remove exactly `submissionId` from the owed set; other ids stay. */
+export function clearReviewChecklistPullOwed(
+  transactionId: string,
+  submissionId: string
+): void {
+  updateOwedSet(transactionId, (ids) => ids.filter((id) => id !== submissionId));
+}
+
+/** The owed ids of one transaction (empty when none). */
+export function getOwedReviewChecklistPullsFor(transactionId: string): string[] {
+  const db = ensureDb();
+  const row = db
+    .prepare(`SELECT metadata FROM transactions WHERE id = ?`)
+    .get(transactionId) as { metadata: unknown } | undefined;
+  return row ? owedIdsOf(readMetadataObject(row.metadata)) : [];
+}
+
+/** Every transaction with at least one owed pull. */
+export function getOwedReviewChecklistPulls(): OwedReviewChecklistPulls[] {
+  const db = ensureDb();
+  const rows = db
+    .prepare(
+      `SELECT id, metadata FROM transactions
+        WHERE json_valid(metadata)
+          AND json_type(metadata, '$.${OWED_PULLS_KEY}') = 'array'`
+    )
+    .all() as Array<{ id: string; metadata: unknown }>;
+  return rows
+    .map((row) => ({
+      transactionId: row.id,
+      submissionIds: owedIdsOf(readMetadataObject(row.metadata)),
+    }))
+    .filter((row) => row.submissionIds.length > 0);
 }

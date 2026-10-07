@@ -455,9 +455,6 @@ export class KeeprAppDriver implements AppDriver {
       await this.clickTestidOrThrow(CreateAudit.typePurchaseTestId, 'createAudit: select Purchase');
     }
     await this.fillTestid(CreateAudit.startDateInputTestId, input.startDate, 'createAudit: fill start date');
-    if (input.closedAt) {
-      await this.fillTestid(CreateAudit.endDateInputTestId, input.closedAt, 'createAudit: fill end date');
-    }
     await this.clickTestidOrThrow(CreateAudit.submitTestId, 'createAudit: continue to step 2');
 
     // ---- Step 2: Select a contact ID-AGNOSTICALLY (BACKLOG-1948 / BACKLOG-1949) — by visible display

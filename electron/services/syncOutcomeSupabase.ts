@@ -195,6 +195,13 @@ export function buildSyncOutcomeRow(
     contacts_extracted: num(f, "contactsExtracted"),
     extraction_ms: bigintNum(f, "extractionMs"),
 
+    // BACKLOG-3671 P2 (Google Messages): built by rcsSyncOutcome's allow-list
+    // builder — the only writer — so nothing unnamed reaches the jsonb.
+    source_metrics: row.sourceMetrics,
+    run_kind: str(f, "runKind"),
+    extension_version: str(f, "extensionVersion"),
+    chrome_version: str(f, "chromeVersion"),
+
     app_version: env.appVersion,
     // No `?? str(f, "platform")` fallback: `readEnv()` returns `process.platform` on
     // BOTH its success and its catch path, so the right-hand side was unreachable.
@@ -276,7 +283,9 @@ async function authedUserId(client: ReturnType<typeof supabaseService.getClient>
  * outright with 42501. The migration therefore adds an own-rows SELECT policy; this
  * comment is here so nobody "simplifies" it away.
  */
-async function writeSyncRun(row: SyncOutcomeRow, verb: "start" | "heartbeat" | "terminal") {
+type SyncRunVerb = "start" | "heartbeat" | "heartbeat-running" | "metrics" | "terminal";
+
+async function writeSyncRun(row: SyncOutcomeRow, verb: SyncRunVerb) {
   const client = supabaseService.getClient();
 
   // RLS ("Users can insert/update own sync outcomes") requires user_id = auth.uid().
@@ -300,6 +309,31 @@ async function writeSyncRun(row: SyncOutcomeRow, verb: "start" | "heartbeat" | "
     return;
   }
 
+  // BACKLOG-3671 P2: a heartbeat that can only touch a row still RUNNING — a
+  // late one (fire-and-forget, no ordering) never rewrites a finished row's
+  // counts or updated_at, let alone its outcome (which it never carries).
+  if (verb === "heartbeat-running") {
+    if (!row.runId) return;
+    const { error } = await table
+      .update(buildSyncRunProgressRow(row, userId, env))
+      .eq("id", row.runId)
+      .eq("outcome", "running");
+    if (error) throw new Error(error.message);
+    return;
+  }
+
+  // BACKLOG-3671 P2: a follow-up after the terminal row (e.g. the save's counts
+  // arrived after the wait): ONLY source_metrics (+ updated_at). Never outcome,
+  // never reason_code.
+  if (verb === "metrics") {
+    if (!row.runId || !row.sourceMetrics) return;
+    const { error } = await table
+      .update({ source_metrics: row.sourceMetrics, updated_at: new Date().toISOString() })
+      .eq("id", row.runId);
+    if (error) throw new Error(error.message);
+    return;
+  }
+
   const payload = buildSyncOutcomeRow(row, userId, env);
   const { error } =
     verb === "start"
@@ -309,7 +343,7 @@ async function writeSyncRun(row: SyncOutcomeRow, verb: "start" | "heartbeat" | "
 }
 
 /** Shared fire-and-forget wrapper. NEVER throws, never awaits, never delays a sync. */
-function fireAndForget(row: SyncOutcomeRow, verb: "start" | "heartbeat" | "terminal"): void {
+function fireAndForget(row: SyncOutcomeRow, verb: SyncRunVerb): Promise<void> {
   // ONE handler, not two, and the reason is worth stating because the first draft had
   // two. `writeSyncRun` is an ASYNC function, so a throw anywhere inside it —
   // including `supabaseService.getClient()` on a machine with no client configured —
@@ -320,7 +354,10 @@ function fireAndForget(row: SyncOutcomeRow, verb: "start" | "heartbeat" | "termi
   // detached catch below is what actually carries the load — deleting THAT reds three
   // tests.
   const write = writeSyncRun(row, verb);
-  void write.catch((error: unknown) => {
+  // The settled write (it never rejects): a caller that must ORDER a later
+  // write after this one chains on it (BACKLOG-3671 P2); nobody awaits it on
+  // a sync's path.
+  return write.catch((error: unknown) => {
     log.warn(
       `${LOG_TAG} ${verb} row dropped (offline, signed out, or write failed); sync unaffected:`,
       error instanceof Error ? error.message : String(error),
@@ -336,12 +373,22 @@ function fireAndForget(row: SyncOutcomeRow, verb: "start" | "heartbeat" | "termi
  * record was assembled at the end and that run had no end.
  */
 export function recordSyncRunStart(row: SyncOutcomeRow): void {
-  fireAndForget(row, "start");
+  void fireAndForget(row, "start");
 }
 
 /** BACKLOG-3440: the run is still alive, and here is how far it has got. */
 export function recordSyncRunProgress(row: SyncOutcomeRow): void {
-  fireAndForget(row, "heartbeat");
+  void fireAndForget(row, "heartbeat");
+}
+
+/** BACKLOG-3671 P2: a heartbeat that never touches a row no longer running. */
+export function recordSyncRunProgressWhileRunning(row: SyncOutcomeRow): void {
+  void fireAndForget(row, "heartbeat-running");
+}
+
+/** BACKLOG-3671 P2: a follow-up that updates source_metrics only (never outcome / reason_code). */
+export function recordSyncRunMetrics(row: SyncOutcomeRow): void {
+  void fireAndForget(row, "metrics");
 }
 
 /**
@@ -349,13 +396,25 @@ export function recordSyncRunProgress(row: SyncOutcomeRow): void {
  * awaits, never delays or fails the sync.
  */
 export function recordSyncOutcome(row: SyncOutcomeRow): void {
-  fireAndForget(row, "terminal");
+  void fireAndForget(row, "terminal");
+}
+
+/**
+ * BACKLOG-3671 P2: the terminal write, with a promise that settles (never
+ * rejects) once it has landed or been dropped — so a follow-up can be sent
+ * strictly AFTER it, never concurrently (a late follow-up would otherwise be
+ * overwritten by the terminal upsert's source_metrics).
+ */
+export function recordSyncOutcomeSettled(row: SyncOutcomeRow): Promise<void> {
+  return fireAndForget(row, "terminal");
 }
 
 export default {
   recordSyncOutcome,
   recordSyncRunStart,
   recordSyncRunProgress,
+  recordSyncRunProgressWhileRunning,
+  recordSyncRunMetrics,
   buildSyncOutcomeRow,
   buildSyncRunProgressRow,
   SYNC_OUTCOMES_TABLE,

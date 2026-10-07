@@ -1,0 +1,7 @@
+MUTATION APPLIED M37: catalogue check = row-delete policy has abandoned term: false
+FAIL R1-row attachment-row delete during finalize (no fence): deletes nothing :: {"deleted":1}
+FAIL R1-row finalize committed with its attachment row :: {"status":"submitted","rows":0}
+live-run post: 33 pass, 2 fail
+MUTATION APPLIED M38: catalogue check = finalize has FOR UPDATE: false
+FAIL L6 finalize that refuses still holds the row: the fence waits, then matches 1 row :: {"fence":{"rows":1,"error":null,"ms":8},"fin":"FIN:{\"ok\": false, \"code\": \"incomplete\", \"messages_extra\": 1, \"objects_missing\": 0, \"checklists_found\": 0, \"messages_missing\": 0, \"checklists_expected\": null, \"attachment_rows_extra\": 0, \"attachment_rows_missing\": 0, \"paths_outside_submission\": 0, \"attachment_message_links_wrong\": 0}"}
+live-run post: 34 pass, 1 fail

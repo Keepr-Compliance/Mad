@@ -131,6 +131,8 @@ export interface AuditedTransactionData {
   started_at?: string;
   closed_at?: string;
   closing_deadline?: string;
+  /** BACKLOG-3614: optional, entered on step 1 of creating a transaction. */
+  listing_price?: number | null;
 }
 
 /**

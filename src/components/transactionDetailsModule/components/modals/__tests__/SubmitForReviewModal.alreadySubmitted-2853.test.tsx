@@ -29,18 +29,32 @@
  * RUNNER: npx jest src/components/transactionDetailsModule/components/modals/__tests__/SubmitForReviewModal.alreadySubmitted-2853.test.tsx
  */
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { SubmitForReviewModal } from "../SubmitForReviewModal";
 import type { Transaction } from "@/types";
 
+/**
+ * BACKLOG-3498: dated, so the date step's Next is enabled. A deal that can
+ * still be submitted now opens on "Verify Transaction Dates"; the action this
+ * suite reads sits on the next screen. Date-only start (wizard,
+ * useAuditSubmission.ts:140-142) and ISO-timestamp end (detection path,
+ * electron/services/transactionService/transactionService.ts:958).
+ */
 const baseTransaction = {
   id: "txn-2853",
   user_id: "user-2853",
   property_address: "18 Bellweather Lane",
   transaction_type: "purchase",
   status: "active",
+  started_at: "2026-01-05",
+  closed_at: "2026-03-14T18:22:05.000Z",
 } as unknown as Transaction;
+
+/** BACKLOG-3498: Next from the date step to the screen that carries the action. */
+function goToSummary(): void {
+  fireEvent.click(screen.getByTestId("submit-review-next"));
+}
 
 function renderAt(submissionStatus?: string) {
   return render(
@@ -131,6 +145,9 @@ describe("BACKLOG-2853 — the action on a deal already with the broker", () => 
     ["rejected", "Already Submitted", true],
   ])("status %s → label %s, disabled=%s", (status, label, disabled) => {
     renderAt(status as string);
+    // BACKLOG-3498: a status that can still submit opens on the date step
+    // (the step itself is pinned in SubmitForReviewModal.dateStep-3498).
+    if (!disabled) goToSummary();
     expect(action()).toHaveTextContent(label as string);
     if (disabled) {
       expect(action()).toBeDisabled();
@@ -141,6 +158,7 @@ describe("BACKLOG-2853 — the action on a deal already with the broker", () => 
 
   test("a transaction with NO submission_status is untouched — this is the first-submit screen", () => {
     renderAt(undefined);
+    goToSummary();
     expect(action()).toHaveTextContent("Submit");
     expect(action()).toBeEnabled();
     expect(
@@ -177,6 +195,10 @@ describe("BACKLOG-2853 — the action on a deal already with the broker", () => 
       "rejected",
     ]) {
       const { unmount } = renderAt(status);
+      // BACKLOG-3498: pass the date step wherever it is offered, to reach the
+      // action. WHICH statuses get the step is dateStep-3498's C3a; this test
+      // stays the derivation of the disabled set.
+      if (screen.queryByTestId("submit-review-next")) goToSummary();
       if ((action() as HTMLButtonElement).disabled) disabled.add(status);
       unmount();
     }

@@ -56,6 +56,10 @@ type TransactionField = Extract<
   | "sale_price"
   | "listing_price"
   | "closing_date_verified"
+  | "commission_offered_rate"
+  | "commission_actual_rate"
+  | "commission_gross_amount"
+  | "commission_adjustment_reason"
   | "started_at"
   | "closed_at"
   | "closing_deadline"
@@ -664,6 +668,14 @@ export interface ValidatedTransactionData {
   listing_price?: number | null;
   /** `null` is meaningful: how the flag is cleared (BACKLOG-2759). */
   closing_date_verified?: number | null;
+  /** BACKLOG-3520. A percentage (2.50, not 0.025), 0..100, 3 decimals. `null` clears. */
+  commission_offered_rate?: number | null;
+  /** BACKLOG-3520. As above. */
+  commission_actual_rate?: number | null;
+  /** BACKLOG-3520. Money, rounded to cents here. `null` clears. */
+  commission_gross_amount?: number | null;
+  /** BACKLOG-3520. Trimmed, 1..2000 chars; blank is stored as `null`. */
+  commission_adjustment_reason?: string | null;
   /** `null` is meaningful: how the start date is cleared (BACKLOG-2759). */
   started_at?: string | null;
   /** `null` is meaningful: how the closing date is cleared (BACKLOG-2759). */
@@ -727,6 +739,38 @@ export interface ContactAssignmentData {
 export type RawTransactionData = Partial<Record<TransactionField, unknown>> & {
   contact_assignments?: unknown;
 };
+
+/** numeric(12,2)'s largest value. The cloud column rejects anything above it. */
+const MAX_COMMISSION_GROSS = 9_999_999_999.99;
+/** The cloud CHECK's upper bound on `commission_adjustment_reason`. */
+const MAX_COMMISSION_REASON_LENGTH = 2000;
+
+/**
+ * A finite number from a number or a numeric string, else `null`. Rejects
+ * booleans, arrays and objects, which `Number()` would coerce to 0 or 1.
+ */
+function parseFiniteNumber(value: unknown): number | null {
+  if (typeof value === "string") {
+    if (value.trim() === "") return null;
+  } else if (typeof value !== "number") {
+    return null;
+  }
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Round half up to `places` decimals without binary-float drift:
+ * `1.005 * 100` is `100.49999999999999`, so the shift is done on the decimal
+ * string. A value written in exponent form has no shiftable string, so it
+ * falls back to the arithmetic form (such values are far outside any range
+ * this is called with).
+ */
+function roundDecimal(value: number, places: number): number {
+  const shifted = Number(`${value}e${places}`);
+  if (!Number.isFinite(shifted)) return Math.round(value * 10 ** places) / 10 ** places;
+  return Number(`${Math.round(shifted)}e-${places}`);
+}
 
 /**
  * Validate transaction data for creation/update
@@ -916,6 +960,72 @@ export function validateTransactionData(
         );
       }
       validated.closing_date_verified = verified;
+    }
+  }
+
+  // Commission figures (BACKLOG-3520; BACKLOG-3180's rule applied to exactly
+  // these four columns and no others). Each is a per-field branch with its own
+  // bound, because the cloud mirror has a CHECK on each
+  // (transaction_submissions_*_check): a value the client accepts and the
+  // cloud rejects would fail the SUBMIT, far from where it was typed.
+  //   - rates: percent, 0..100 inclusive, rounded to 3 decimals
+  //     (numeric(6,3)). `null` and `""` clear; 0 is a legal value.
+  //   - gross: money >= 0, rounded to cents here as a backstop (the renderer
+  //     rounds first), capped at numeric(12,2)'s largest value.
+  //   - reason: optional text, trimmed, 2000 max (the cloud CHECK), blank
+  //     stores NULL because the cloud CHECK rejects a zero-length reason.
+  for (const field of ["commission_offered_rate", "commission_actual_rate"] as const) {
+    if (data[field] !== undefined) {
+      const raw = data[field];
+      if (raw === null || raw === "") {
+        validated[field] = null;
+      } else {
+        const rate = parseFiniteNumber(raw);
+        if (rate === null || rate < 0 || rate > 100) {
+          throw new ValidationError(
+            "Commission rate must be a percentage between 0 and 100",
+            field,
+          );
+        }
+        validated[field] = roundDecimal(rate, 3);
+      }
+    }
+  }
+
+  if (data.commission_gross_amount !== undefined) {
+    const raw = data.commission_gross_amount;
+    if (raw === null || raw === "") {
+      validated.commission_gross_amount = null;
+    } else {
+      const gross = parseFiniteNumber(raw);
+      if (gross === null || gross < 0 || gross > MAX_COMMISSION_GROSS) {
+        throw new ValidationError(
+          "Commission amount must be a non-negative amount within range",
+          "commission_gross_amount",
+        );
+      }
+      validated.commission_gross_amount = roundDecimal(gross, 2);
+    }
+  }
+
+  if (data.commission_adjustment_reason !== undefined) {
+    const raw = data.commission_adjustment_reason;
+    if (raw === null) {
+      validated.commission_adjustment_reason = null;
+    } else if (typeof raw !== "string") {
+      throw new ValidationError(
+        "Commission reason must be text",
+        "commission_adjustment_reason",
+      );
+    } else {
+      const reason = raw.trim();
+      if (reason.length > MAX_COMMISSION_REASON_LENGTH) {
+        throw new ValidationError(
+          `Commission reason must be at most ${MAX_COMMISSION_REASON_LENGTH} characters`,
+          "commission_adjustment_reason",
+        );
+      }
+      validated.commission_adjustment_reason = reason === "" ? null : reason;
     }
   }
 

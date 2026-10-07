@@ -6,7 +6,9 @@
  * Provides auth context to the application with:
  * - Current user and session
  * - Loading state
- * - Sign out function
+ *
+ * BACKLOG-3601: no sign-out function here. It had no caller; the portal signs
+ * out through /auth/logout and the "Sign Out All Devices" action.
  */
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
@@ -17,14 +19,12 @@ interface AuthContextType {
   user: User | null;
   session: Session | null;
   loading: boolean;
-  signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
   session: null,
   loading: true,
-  signOut: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -53,14 +53,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, [supabase.auth]);
 
-  const signOut = async () => {
-    await supabase.auth.signOut();
-    // Redirect handled by middleware
-    window.location.href = '/login';
-  };
-
   return (
-    <AuthContext.Provider value={{ user, session, loading, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading }}>
       {children}
     </AuthContext.Provider>
   );

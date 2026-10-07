@@ -39,6 +39,13 @@ jest.mock("../../contactsService", () => ({
 import { getContactNamesByPhones } from "../contactDbService";
 
 describe("contactDbService.getContactNamesByPhones", () => {
+  // The macOS AddressBook probe runs only on a Mac (live Windows freeze fix).
+  const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  beforeAll(() => Object.defineProperty(process, "platform", { value: "darwin" }));
+  afterAll(() => {
+    if (realPlatform) Object.defineProperty(process, "platform", realPlatform);
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     // Default: no macOS contacts
@@ -252,5 +259,23 @@ describe("contactDbService.getContactNamesByPhones", () => {
       // Should NOT have +1 variants (only for 10-digit numbers)
       expect(result.has("+15551234")).toBe(false);
     });
+  });
+});
+
+// Live (Windows freeze): the macOS AddressBook probe never runs off a Mac.
+// Mutation: the platform guard removed → red.
+describe("not a Mac: no AddressBook probe", () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  beforeAll(() => Object.defineProperty(process, "platform", { value: "win32" }));
+  afterAll(() => {
+    if (realPlatform) Object.defineProperty(process, "platform", realPlatform);
+  });
+  it("win32: unresolved phones stay unresolved; getContactNames never called", async () => {
+    mockDbAll.mockReturnValue([]);
+    mockGetContactNames.mockClear();
+    mockGetContactNames.mockResolvedValue({ contactMap: { "(555) 666-7777": "macOS Contact" } });
+    const result = await getContactNamesByPhones(["5556667777"]);
+    expect(result.get("5556667777")).toBeUndefined();
+    expect(mockGetContactNames).not.toHaveBeenCalled();
   });
 });

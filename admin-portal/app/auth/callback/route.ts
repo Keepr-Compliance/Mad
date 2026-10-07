@@ -11,6 +11,7 @@
 
 import { createClient, createServiceClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
+import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
 
 /**
  * Log an authentication event to admin_audit_logs.
@@ -107,8 +108,10 @@ export async function GET(request: Request) {
       source: 'admin_portal',
       reason: 'no_internal_role',
     }, request);
-    await supabase.auth.signOut();
-    return NextResponse.redirect(`${origin}/login?error=not_authorized`);
+    await signOutLocal(supabase);
+    const response = NextResponse.redirect(`${origin}/login?error=not_authorized`);
+    clearAuthCookies(request, response);
+    return response;
   }
 
   // Auth succeeded but no user returned

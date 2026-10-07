@@ -10,6 +10,8 @@ import { ipcMain } from "electron";
 import localSyncService from "../services/localSyncService";
 import logService from "../services/logService";
 import { checkInboundFirewallAllowed } from "../services/firewallService";
+import { clearAllAndroidTexts } from "./rcsImportHandlers";
+import type { SharedForceClearResult } from "../services/rcsClearService";
 
 const LOG_TAG = "LocalSyncHandlers";
 
@@ -54,9 +56,20 @@ export function registerLocalSyncHandlers(): void {
     async (
       _event,
       options: { userId: string }
-    ): Promise<{ messagesDeleted: number; contactsDeleted: number }> => {
+    ): Promise<SharedForceClearResult> => {
       logService.info("[LocalSync] IPC: clear-android-data requested", LOG_TAG);
-      return localSyncService.clearAndroidData(options.userId);
+      // BACKLOG-3657 (founder re-confirmed 2026-10-01): one shared Android
+      // reset — also the texts imported from Google Messages, cleared FIRST so
+      // a refusal deletes nothing. The user's removals are kept.
+      const r = await clearAllAndroidTexts(options.userId);
+      return {
+        messagesDeleted: r.messagesDeleted,
+        contactsDeleted: r.contactsDeleted,
+        gmwebMessagesDeleted: r.gmwebMessagesDeleted,
+        gmwebCleared: r.gmwebCleared,
+        androidCleared: r.androidCleared,
+        ...(r.error ? { error: r.error } : {}),
+      };
     }
   );
 }

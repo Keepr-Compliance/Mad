@@ -52,8 +52,8 @@ const mockUploadAttachments = jest.fn();
 jest.mock("../supabaseStorageService", () => ({
   __esModule: true,
   default: {
-    uploadAttachments: (...args: unknown[]) => mockUploadAttachments(...args),
-    deleteSubmissionAttachments: jest.fn(),
+    // BACKLOG-3403: the submission uploads one file per call.
+    uploadAttachmentWithRetry: (...args: unknown[]) => mockUploadAttachments(...args),
   },
 }));
 

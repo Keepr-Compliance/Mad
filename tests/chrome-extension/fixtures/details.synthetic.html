@@ -1,0 +1,23 @@
+<!--
+  Fixture for chrome-extension/scan.js readParticipantsAndClose (BACKLOG-3620).
+  SYNTHETIC VALUES.
+
+  STRUCTURE observed on the live page (2026-09-29):
+  mw-conversation-menu > button[data-e2e-conversation-menu-button]; the menu's
+  [data-e2e-details-button]; mw-conversation-details li[data-e2e-details-participant]
+  with h3[data-e2e-details-participant-name] and
+  span[data-e2e-details-participant-number] "(555) 555-0199"; the Done button
+  button[aria-label="Done"], NOT inside mw-conversation-details; clicking Done
+  removes the participant rows.
+
+  STRUCTURE UNVERIFIED: the menu's own markup (the test inserts the Details
+  item when the menu button is clicked, and the details panel when Details is
+  clicked, as the page does), and the element wrapping the Done button.
+-->
+<mws-conversation-header>
+  <div data-e2e-header-title><h2>Test Contact A</h2></div>
+  <mw-conversation-menu>
+    <button data-e2e-conversation-menu-button aria-label="Conversation menu" aria-haspopup="menu"></button>
+  </mw-conversation-menu>
+</mws-conversation-header>
+<div id="overlay-container"></div>

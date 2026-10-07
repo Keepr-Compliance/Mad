@@ -34,6 +34,7 @@ import { useSyncOrchestrator } from "./useSyncOrchestrator";
 import type { SyncType, SyncItem } from "../services/SyncOrchestratorService";
 import type { ImportSource } from "../services/settingsService";
 import { providerNeedsEmailSync } from "../utils/connectionStatus";
+import { macMessagesSyncOn } from "../services/importSourcePolicy";
 
 // Module-level flag to track if auto-refresh has been triggered this session
 // Using module-level prevents React strict mode from triggering twice
@@ -199,7 +200,10 @@ export function useAutoRefresh({
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [hasLoadedPreference, setHasLoadedPreference] = useState(false);
   // BACKLOG-1467: Track import source to skip macOS messages for Android users
-  const [importSource, setImportSource] = useState<ImportSource>('macos-native');
+  // SR (BACKLOG-3749 follow-up): unknown until the preferences load — never a
+  // guessed "macos-native" (an Android user on a Mac must not get one Mac
+  // Messages run before the read).
+  const [importSource, setImportSource] = useState<ImportSource | null>(null);
 
   // Load auto-sync and notification preferences
   useEffect(() => {
@@ -299,8 +303,9 @@ export function useAutoRefresh({
       if (shouldSyncEmails) {
         typesToSync.push('emails');
       }
-      // BACKLOG-1467: Skip macOS messages when import source is android-companion or iphone-sync
-      if (isMacOS && hasPermissions && importSource === 'macos-native') {
+      // BACKLOG-1467: skip Mac Messages for another known source (iPhone,
+      // Android). BACKLOG-3749: an unknown value never turns it off.
+      if (isMacOS && hasPermissions && hasLoadedPreference && macMessagesSyncOn(importSource)) {
         typesToSync.push('messages');
       }
 
@@ -309,7 +314,7 @@ export function useAutoRefresh({
         requestSync(typesToSync, uid);
       }
     },
-    [isMacOS, hasPermissions, hasAIAddon, importSource, requestSync]
+    [isMacOS, hasPermissions, hasAIAddon, importSource, hasLoadedPreference, requestSync]
   );
 
   /**

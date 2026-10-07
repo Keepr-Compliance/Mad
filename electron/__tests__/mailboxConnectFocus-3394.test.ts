@@ -249,6 +249,8 @@ describe("BACKLOG-3394: focusing the app on a mailbox connect", () => {
     restore: jest.fn(),
     show: jest.fn(),
     focus: mockWindowFocus,
+    // BACKLOG-3636: used by bringAppToFront's Windows branch only.
+    setAlwaysOnTop: jest.fn(),
     webContents: { send: mockSend },
   };
 
@@ -482,5 +484,45 @@ describe("BACKLOG-3394: focusing the app on a mailbox connect", () => {
 
     expect(mockMainWindow.restore).toHaveBeenCalledTimes(1);
     expect(mockWindowFocus).toHaveBeenCalledTimes(1);
+  });
+
+  // BACKLOG-3636 added a Windows-only always-on-top step to bringAppToFront;
+  // on macOS a mailbox connect must behave exactly as before.
+  it("macOS: unchanged — steal-focus the app and focus the window, never always-on-top", async () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      mockGoogleAuthService.authenticateForMailbox.mockResolvedValue(
+        fixture({
+          authUrl: "https://accounts.google.com/oauth/mailbox",
+          codePromise: Promise.resolve("google-auth-code"),
+          codeVerifier: "verifier-123",
+          scopes: ["gmail.readonly"],
+        }),
+      );
+      mockGoogleAuthService.exchangeCodeForTokens.mockResolvedValue(
+        fixture({
+          tokens: {
+            access_token: "google-access",
+            refresh_token: "google-refresh",
+            expires_at: "2030-01-01T00:00:00.000Z",
+            scopes: ["gmail.readonly"],
+          },
+        }),
+      );
+      mockGoogleAuthService.getUserInfo.mockResolvedValue(
+        fixture({ id: "g1", email: "broker@example.com", verified_email: true }),
+      );
+
+      const handler = registeredHandlers.get("auth:google:connect-mailbox");
+      await handler(mockEvent, TEST_USER_ID);
+      await waitForSend(mockSend, "google:mailbox-connected");
+
+      expect(mockAppFocus).toHaveBeenCalledWith({ steal: true });
+      expect(mockWindowFocus).toHaveBeenCalledTimes(1);
+      expect(mockMainWindow.setAlwaysOnTop).not.toHaveBeenCalled();
+    } finally {
+      if (realPlatform) Object.defineProperty(process, "platform", realPlatform);
+    }
   });
 });

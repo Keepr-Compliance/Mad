@@ -9,6 +9,7 @@ import {
 } from "../../constants/contactRoles";
 import type { Transaction } from "../../../electron/types/models";
 import type { AddressData, ContactAssignment, ContactAssignments } from "./types";
+import { parseMoney } from "../../components/transactionDates/commission";
 
 interface UseAuditSubmissionProps {
   userId: string;
@@ -124,6 +125,13 @@ export function useAuditSubmission({
 
       let result: { success: boolean; transaction?: Transaction; error?: string };
 
+      // BACKLOG-3614: the optional Listing Price, typed as text on step 1.
+      // Step validation has already rejected an unparseable value, so `ok` is
+      // true here; blank parses to null (not entered).
+      const { listing_price_text: listingPriceText, ...address } = addressData;
+      const listingParsed = parseMoney(listingPriceText ?? "");
+      const listingPrice = listingParsed.ok ? listingParsed.value : null;
+
       if (isEditing && editTransaction) {
         const updateData = {
           property_address: addressData.property_address,
@@ -140,6 +148,8 @@ export function useAuditSubmission({
           started_at: addressData.started_at,
           closing_deadline: addressData.closing_deadline || null,
           closed_at: addressData.closed_at || null,
+          // BACKLOG-3614: blank clears it.
+          listing_price: listingPrice,
         };
 
         const updateResult = await window.api.transactions.update(
@@ -165,7 +175,10 @@ export function useAuditSubmission({
         };
       } else {
         result = await window.api.transactions.createAudited(userId, {
-          ...addressData,
+          ...address,
+          // BACKLOG-3614: sent only when entered; a blank field creates the deal
+          // with no listing price.
+          ...(listingPrice !== null ? { listing_price: listingPrice } : {}),
           contact_assignments: assignments,
         });
       }

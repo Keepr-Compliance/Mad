@@ -1,0 +1,42 @@
+<!--
+  Fixture for chrome-extension/scan.js (BACKLOG-3620). SYNTHETIC VALUES: every
+  name, number and id below is invented.
+
+  STRUCTURE observed on the live page (2026-09-29): one
+  mws-conversation-list-item per chat, the chat name in
+  [data-e2e-conversation-name], the link a[data-e2e-conversation] with href
+  /web/conversations/<id>.
+
+  STRUCTURE UNVERIFIED: how the name sits relative to the link (nested here),
+  the list's wrapping elements, and which element scrolls. The lazy rendering
+  is simulated by the test, not transcribed.
+-->
+<mws-conversations-list>
+  <div class="conv-container" id="list-scroller">
+    <mws-conversation-list-item>
+      <a data-e2e-conversation href="/web/conversations/aaaaaaaaaaaaaaaaaaa">
+        <span data-e2e-conversation-name>Test Contact A</span>
+      </a>
+    </mws-conversation-list-item>
+    <mws-conversation-list-item>
+      <a data-e2e-conversation href="/web/conversations/bbbbbbbbbbbbbbbbbbb">
+        <span data-e2e-conversation-name>Someone Else</span>
+      </a>
+    </mws-conversation-list-item>
+    <mws-conversation-list-item>
+      <a data-e2e-conversation href="/web/conversations/ccccccccccccccccccc">
+        <span data-e2e-conversation-name>(555) 555-0101</span>
+      </a>
+    </mws-conversation-list-item>
+    <mws-conversation-list-item>
+      <a data-e2e-conversation href="/web/conversations/ddddddddddddddddddd">
+        <span data-e2e-conversation-name>Test, Other Person and 2 others</span>
+      </a>
+    </mws-conversation-list-item>
+    <mws-conversation-list-item>
+      <a data-e2e-conversation href="/web/conversations/eeeeeeeeeeeeeeeeeee">
+        <span data-e2e-conversation-name>Test B. Contact</span>
+      </a>
+    </mws-conversation-list-item>
+  </div>
+</mws-conversations-list>

@@ -1,0 +1,30 @@
+-- e06: save_checklist_template: scope on create, the row decides on update,
+-- the send-with-submissions switch, and the old six-argument named call
+-- (plan R6).
+SELECT set_config('t3618.p', pg_temp.tpl3618('o_t1', pg_temp.id('u_t1_agent'), 'A1 private')::text, true) IS NOT NULL;
+SELECT pg_temp.act_as(pg_temp.id('u_t1_agent'));
+SELECT pg_temp.expect('e06a agent save NEW personal', format($q$SELECT * FROM public.save_checklist_template(%L, NULL, NULL, 'e06a', NULL, '[{"title":"x"}]'::jsonb, true)$q$, pg_temp.id('o_t1')), 'rows:1');
+SELECT pg_temp.expect('e06b agent save NEW personal, not sent', format($q$SELECT * FROM public.save_checklist_template(%L, NULL, NULL, 'e06b', NULL, '[{"title":"x"}]'::jsonb, true, false)$q$, pg_temp.id('o_t1')), 'rows:1');
+SELECT pg_temp.expect('e06c agent save NEW brokerage (p_personal false)', format($q$SELECT * FROM public.save_checklist_template(%L, NULL, NULL, 'e06c', NULL, '[{"title":"x"}]'::jsonb, false)$q$, pg_temp.id('o_t1')), '~^42501:not_authorized');
+SELECT pg_temp.expect('e06d agent save NEW brokerage (six-argument named call)', format($q$SELECT * FROM public.save_checklist_template(p_org_id => %L, p_template_id => NULL, p_expected_updated_at => NULL, p_name => 'e06d', p_description => NULL, p_items => '[{"title":"x"}]'::jsonb)$q$, pg_temp.id('o_t1')), '~^42501:not_authorized');
+SELECT pg_temp.expect('e06e agent save existing BROKERAGE template with p_personal true', format($q$SELECT * FROM public.save_checklist_template(%L, %L, (SELECT to_json(updated_at)#>>'{}' FROM public.checklist_templates WHERE id = %L), 'e06e', NULL, '[{"title":"x"}]'::jsonb, true)$q$, pg_temp.id('o_t1'), pg_temp.id('tpl_t1_a'), pg_temp.id('tpl_t1_a')), '~^42501:not_authorized');
+-- own template: exclude, then a save that omits the switch keeps it, then include
+SELECT pg_temp.expect('e06f agent save own, not sent', format($q$SELECT * FROM public.save_checklist_template(%L, %L, (SELECT to_json(updated_at)#>>'{}' FROM public.checklist_templates WHERE id = %L), 'e06f', NULL, '[{"title":"x"}]'::jsonb, false, false)$q$, pg_temp.id('o_t1'), current_setting('t3618.p'), current_setting('t3618.p')), 'rows:1');
+SELECT pg_temp.check((SELECT NOT include_in_submission AND owner_user_id = pg_temp.id('u_t1_agent') FROM public.checklist_templates WHERE id = current_setting('t3618.p')::uuid), 'e06g own template: excluded, still owned (p_personal false ignored on update)');
+SELECT pg_temp.expect('e06h agent save own, switch omitted', format($q$SELECT * FROM public.save_checklist_template(p_org_id => %L, p_template_id => %L, p_expected_updated_at => (SELECT to_json(updated_at)#>>'{}' FROM public.checklist_templates WHERE id = %L), p_name => 'e06h', p_description => NULL, p_items => '[{"title":"y"}]'::jsonb)$q$, pg_temp.id('o_t1'), current_setting('t3618.p'), current_setting('t3618.p')), 'rows:1');
+SELECT pg_temp.check((SELECT NOT include_in_submission AND name = 'e06h' FROM public.checklist_templates WHERE id = current_setting('t3618.p')::uuid), 'e06i switch omitted: still excluded');
+SELECT pg_temp.expect('e06j agent save own, sent again', format($q$SELECT * FROM public.save_checklist_template(%L, %L, (SELECT to_json(updated_at)#>>'{}' FROM public.checklist_templates WHERE id = %L), 'e06j', NULL, '[{"title":"y"}]'::jsonb, true, true)$q$, pg_temp.id('o_t1'), current_setting('t3618.p'), current_setting('t3618.p')), 'rows:1');
+SELECT pg_temp.check((SELECT include_in_submission FROM public.checklist_templates WHERE id = current_setting('t3618.p')::uuid), 'e06k included again');
+SELECT pg_temp.act_as(pg_temp.id('u_t1_broker'));
+SELECT pg_temp.expect('e06l broker save existing agent template', format($q$SELECT * FROM public.save_checklist_template(%L, %L, '2020-01-01', 'e06l', NULL, '[{"title":"x"}]'::jsonb, false)$q$, pg_temp.id('o_t1'), current_setting('t3618.p')), '~stale_or_not_found');
+SELECT pg_temp.expect('e06m broker save NEW brokerage (six-argument named call)', format($q$SELECT * FROM public.save_checklist_template(p_org_id => %L, p_template_id => NULL, p_expected_updated_at => NULL, p_name => 'e06m', p_description => NULL, p_items => '[{"title":"x"}]'::jsonb)$q$, pg_temp.id('o_t1')), 'rows:1');
+SELECT pg_temp.expect('e06n broker save NEW brokerage, not sent', format($q$SELECT * FROM public.save_checklist_template(%L, NULL, NULL, 'e06n', NULL, '[{"title":"x"}]'::jsonb, false, false)$q$, pg_temp.id('o_t1')), '~^22023:not_excludable');
+SELECT pg_temp.expect('e06o broker save existing brokerage, not sent', format($q$SELECT * FROM public.save_checklist_template(%L, %L, (SELECT to_json(updated_at)#>>'{}' FROM public.checklist_templates WHERE id = %L), 'e06o', NULL, '[{"title":"x"}]'::jsonb, false, false)$q$, pg_temp.id('o_t1'), pg_temp.id('tpl_t1_a'), pg_temp.id('tpl_t1_a')), '~^22023:not_excludable');
+SELECT pg_temp.expect('e06p broker save NEW personal', format($q$SELECT * FROM public.save_checklist_template(%L, NULL, NULL, 'e06p', NULL, '[{"title":"x"}]'::jsonb, true)$q$, pg_temp.id('o_t1')), 'rows:1');
+SELECT pg_temp.act_owner();
+SELECT pg_temp.check((SELECT owner_user_id = pg_temp.id('u_t1_agent') AND include_in_submission FROM public.checklist_templates WHERE name = 'e06a'), 'e06q e06a owned by agent, sent');
+SELECT pg_temp.check((SELECT owner_user_id = pg_temp.id('u_t1_agent') AND NOT include_in_submission FROM public.checklist_templates WHERE name = 'e06b'), 'e06r e06b owned by agent, not sent');
+SELECT pg_temp.check((SELECT owner_user_id IS NULL AND include_in_submission FROM public.checklist_templates WHERE name = 'e06m'), 'e06s e06m is a brokerage template, sent');
+SELECT pg_temp.check((SELECT owner_user_id = pg_temp.id('u_t1_broker') FROM public.checklist_templates WHERE name = 'e06p'), 'e06t e06p owned by broker');
+SELECT pg_temp.check((SELECT name FROM public.checklist_templates WHERE id = current_setting('t3618.p')::uuid) = 'e06j', 'e06u broker did not rename the agent template');
+SELECT pg_temp.check(NOT EXISTS (SELECT 1 FROM public.checklist_templates WHERE name IN ('e06c', 'e06d', 'e06e', 'e06l', 'e06n', 'e06o')), 'e06v refused saves wrote nothing');

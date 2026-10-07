@@ -14,6 +14,7 @@ import {
 } from "../services/db/localUserSql";
 import logService from "../services/logService";
 import supabaseService from "../services/supabaseService";
+import featureGateService from "../services/featureGateService";
 import type { LicenseType, UserLicense } from "../types/models";
 
 // SPRINT-062: License validation service imports
@@ -87,6 +88,10 @@ async function getLicenseData(): Promise<LicenseResponse> {
     // Check Supabase for organization membership (source of truth for team license)
     // This takes precedence over local database
     const orgMembership = await supabaseService.getActiveOrganizationMembership(user.id);
+
+    // BACKLOG-3476: the strict feature reader caches this same lookup. If the
+    // organization changed, this is where the app first sees it.
+    featureGateService.noteMembership(user.id, orgMembership?.organization_id ?? null);
 
     /**
      * BACKLOG-3364 — A PERSONAL ORGANIZATION IS NOT A TEAM.

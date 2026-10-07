@@ -185,7 +185,7 @@ describe("BACKLOG-2734 · the panels no longer reconfigure each other", () => {
     // choice — the display half of the same defect.
     renderStrict(<MacOSMessagesImportSettings userId="u-2734" />);
     await waitFor(() =>
-      expect(screen.getByDisplayValue("Last 12 months")).toBeInTheDocument()
+      expect(screen.getByDisplayValue("Last 1 year")).toBeInTheDocument()
     );
     expect(screen.getByDisplayValue("10,000")).toBeInTheDocument();
   });
@@ -200,7 +200,7 @@ describe("BACKLOG-2734 · the panels no longer reconfigure each other", () => {
 
     const mac = renderStrict(<MacOSMessagesImportSettings userId="u-2734" />);
     await waitFor(() =>
-      expect(screen.getByDisplayValue("Last 12 months")).toBeInTheDocument()
+      expect(screen.getByDisplayValue("Last 1 year")).toBeInTheDocument()
     );
 
     await userEvent.selectOptions(
@@ -252,7 +252,7 @@ describe("BACKLOG-2734 · the seed cannot race the user", () => {
 
     renderStrict(<AndroidMessagesSettings userId="u-2734" />);
 
-    const rangeSelect = screen.getByDisplayValue("Last 3 months");
+    const rangeSelect = screen.getByDisplayValue("Last 1.5 months (default)");
     const capSelect = screen.getByDisplayValue("50,000");
     expect(rangeSelect).toBeDisabled();
     expect(capSelect).toBeDisabled();
@@ -260,7 +260,7 @@ describe("BACKLOG-2734 · the seed cannot race the user", () => {
     releasePrefs!();
 
     await waitFor(() =>
-      expect(screen.getByDisplayValue("Last 18 months")).not.toBeDisabled()
+      expect(screen.getByDisplayValue("Custom: 18 months")).not.toBeDisabled()
     );
     expect(screen.getByDisplayValue("10,000")).not.toBeDisabled();
     // The seed has landed by the time the controls open, so the first thing the
@@ -289,7 +289,7 @@ describe("BACKLOG-2734 · the seed cannot race the user", () => {
     renderStrict(<AndroidMessagesSettings userId="u-2734" />);
 
     await waitFor(() =>
-      expect(screen.getByDisplayValue("Last 3 months")).not.toBeDisabled()
+      expect(screen.getByDisplayValue("Last 1.5 months (default)")).not.toBeDisabled()
     );
     expect(screen.getByDisplayValue("50,000")).not.toBeDisabled();
   });
@@ -308,7 +308,7 @@ describe("BACKLOG-2734 · the one-time migration", () => {
     );
     // Seeding is not editing: the shared value is untouched by the migration.
     expect(sharedFilters()).toEqual({ lookbackMonths: 18, maxMessages: 10000 });
-    expect(screen.getByDisplayValue("Last 18 months")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Custom: 18 months")).toBeInTheDocument();
     expect(screen.getByDisplayValue("10,000")).toBeInTheDocument();
   });
 
@@ -381,7 +381,7 @@ describe("BACKLOG-2734 · the one-time migration", () => {
 
     renderStrict(<AndroidMessagesSettings userId="u-2734" />);
     await waitFor(() =>
-      expect(screen.getByDisplayValue("Last 18 months")).toBeInTheDocument()
+      expect(screen.getByDisplayValue("Custom: 18 months")).toBeInTheDocument()
     );
 
     expect(mockUpdatePreferences).not.toHaveBeenCalled();

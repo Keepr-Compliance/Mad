@@ -143,4 +143,16 @@ describe("TransactionDetails — attachments auto-refresh (BACKLOG-322 #3)", () 
       expect(getAllAttachments.mock.calls.length).toBeGreaterThan(before),
     );
   });
+
+  // BACKLOG-3730: the Attachments tab asks main for the transaction's own
+  // window, passing the row's raw dates (main reads them with auditPeriodFromRow).
+  it("asks for the in-window set with the transaction's raw start/closing dates", async () => {
+    const dated = { ...baseTransaction, started_at: "2026-01-01", closed_at: "2026-07-29" } as unknown as Transaction;
+    render(<TransactionDetails transaction={dated} onClose={jest.fn()} onTransactionUpdated={jest.fn()} />);
+
+    await waitFor(() =>
+      expect(getAllAttachments).toHaveBeenCalledWith("txn-123", "2026-01-01", "2026-07-29"),
+    );
+    expect(getAllAttachments).toHaveBeenCalledWith("txn-123", undefined, undefined);
+  });
 });

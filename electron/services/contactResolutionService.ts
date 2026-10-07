@@ -16,6 +16,7 @@
 import databaseService from "./databaseService";
 import { getContactNames } from "./contactsService";
 import * as externalContactDb from "./db/externalContactDbService";
+import { getRcsPeopleNamesByDigits } from "./db/rcsChatPeopleDbService";
 import logService from "./logService";
 import { legacyDigitKey } from "../utils/phoneNormalization";
 import type { Communication } from "../types/models";
@@ -380,9 +381,10 @@ export async function resolvePhoneNames(
 
   afterExternal = countResolved();
 
-  // Source 3: macOS Contacts database (AddressBook)
+  // Source 3: macOS Contacts database (AddressBook) — only on a Mac (live:
+  // the probe ran on Windows on every resolution).
   try {
-    const { contactMap } = await getContactNames();
+    const { contactMap } = process.platform === "darwin" ? await getContactNames() : { contactMap: {} as Record<string, string> };
 
     for (const phone of phones) {
       const normalized = normalizePhone(phone);
@@ -432,6 +434,46 @@ export async function resolvePhoneNames(
     );
   }
 
+  const afterMacos = countResolved();
+
+  // Source 4: the names Google Messages showed for numbers in this user's
+  // synced chats (rcs_chat_people) — a group's senders who are in the phone's
+  // address book but not in Keepr's contacts. Fills ONLY handles still
+  // unresolved (a real contact always wins); Don't-sync chats are left out;
+  // not gated on the inferred-contacts setting (it names, it adds no contact).
+  const rcsUserId = scope?.userId ?? userId;
+  if (rcsUserId) {
+    try {
+      const open = phones.filter((p) => !(result[normalizePhone(p)] || result[p]));
+      if (open.length > 0) {
+        const byLast10 = new Map<string, string>();
+        for (const row of getRcsPeopleNamesByDigits(rcsUserId, open)) {
+          const key = row.number.replace(/\D/g, "").slice(-10);
+          if (!byLast10.has(key)) byLast10.set(key, row.name);
+        }
+        for (const phone of open) {
+          const digitsOnly = phone.replace(/\D/g, "");
+          if (digitsOnly.length < 10) continue;
+          const name = byLast10.get(digitsOnly.slice(-10));
+          if (!name) continue;
+          const normalized = normalizePhone(phone);
+          const e164 = `+${digitsOnly.length === 10 ? "1" + digitsOnly : digitsOnly}`;
+          for (const key of [normalized, phone, e164]) {
+            if (result[key]) continue;
+            result[key] = name;
+            resolution.matches[key] = [name];
+          }
+        }
+      }
+    } catch (error) {
+      logService.warn(
+        "[ContactResolution] Failed to look up phone names from Google Messages",
+        "ContactResolution",
+        { error }
+      );
+    }
+  }
+
   // BACKLOG-2393: in -> out (reason for the difference), the same shape as the
   // contacts funnel. A no-op outside a granted support window.
   const resolved = countResolved();
@@ -441,7 +483,8 @@ export async function resolvePhoneNames(
     unresolved: phones.length - resolved,
     by_imported_contacts: afterImported,
     by_external_contacts: afterExternal - afterImported,
-    by_macos_contacts: resolved - afterExternal,
+    by_macos_contacts: afterMacos - afterExternal,
+    by_google_messages_names: resolved - afterMacos,
     had_user_id: Boolean(userId),
   });
 

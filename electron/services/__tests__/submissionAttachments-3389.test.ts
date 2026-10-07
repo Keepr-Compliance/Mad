@@ -48,6 +48,7 @@ import os from "os";
 import path from "path";
 
 import {
+  SUBMISSION_RPC_SUCCESS,
   createPostgrestEmulator,
   brokerageMembership,
   FIXTURE_USER_ID,
@@ -70,8 +71,16 @@ let emulator: Emulator;
 
 // The real statement modules read their handle through `ensureDb()`; point it
 // at the test database so the SHIPPED SQL text is what runs.
+// BACKLOG-3600: the checklist snapshot reads through dbAll/dbGet (not
+// ensureDb). With only ensureDb here that read threw and the submit used to
+// swallow it; a failed local checklist read now fails the submit, so the
+// helpers are provided — the transaction simply has no checklists.
 jest.mock("../db/core/dbConnection", () => ({
   ensureDb: () => db,
+  dbGet: (sql: string, params: unknown[] = []) => db.prepare(sql).get(...(params as never[])),
+  dbAll: (sql: string, params: unknown[] = []) => db.prepare(sql).all(...(params as never[])),
+  dbRun: (sql: string, params: unknown[] = []) => db.prepare(sql).run(...(params as never[])),
+  dbTransaction: (fn: () => unknown) => db.transaction(fn)(),
 }));
 
 const mockGetAuthSession = jest.fn();
@@ -80,7 +89,24 @@ jest.mock("../supabaseService", () => ({
   default: {
     getClient: () => ({
       from: (table: string) => emulator.from(table),
-      rpc: (fn: string, args?: unknown) => emulator.rpc(fn, args),
+      // BACKLOG-3607: a transaction with no checklist sends `[]` to
+      // snapshot_submission_checklists; answered as migration 20260929120000
+      // does for an empty set on a first submission (the carry returns
+      // `no_parent`: every submit in this suite is a first submission). Every
+      // other rpc goes to the emulator, which refuses unmocked calls loudly.
+      rpc: (fn: string, args?: unknown) => {
+        const list = (args as { p_checklists?: unknown } | undefined)?.p_checklists;
+        if (fn === "snapshot_submission_checklists" && Array.isArray(list) && list.length === 0) {
+          return Promise.resolve({
+            data: {
+              checklists: 0, items: 0, links: 0, members: 0, dropped_members: 0, dropped_links: 0,
+              carry: { status: "no_parent" },
+            },
+            error: null,
+          });
+        }
+        return emulator.rpc(fn, args);
+      },
     }),
     getAuthSession: (...args: unknown[]) => mockGetAuthSession(...args),
   },
@@ -91,24 +117,19 @@ const uploaded: { id: string; localPath: string; filename: string }[] = [];
 jest.mock("../supabaseStorageService", () => ({
   __esModule: true,
   default: {
-    uploadAttachments: jest.fn(
-      async (
-        _orgId: string,
-        _submissionId: string,
-        localAttachments: { id: string; localPath: string; filename: string }[],
-      ) => {
-        uploaded.push(...localAttachments);
+    // BACKLOG-3403: one file at a time, stored under the manifest's path.
+    uploadAttachmentWithRetry: jest.fn(
+      async (orgId: string, submissionId: string, id: string, localPath: string, filename: string) => {
+        uploaded.push({ id, localPath, filename });
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const files = require("../submissionAttachmentFiles");
         return {
-          results: localAttachments.map((a) => ({
-            localId: a.id,
-            success: true,
-            remotePath: `remote/${a.id}`,
-          })),
-          failedCount: 0,
+          localId: localPath,
+          storagePath: files.buildAttachmentStoragePath(orgId, submissionId, id, filename),
+          success: true,
         };
       },
     ),
-    deleteSubmissionAttachments: jest.fn(),
   },
 }));
 
@@ -121,6 +142,8 @@ jest.mock("../supabaseStorageService", () => ({
 jest.mock("../databaseService", () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const submissionDb = require("../db/submissionDbService");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const communicationDb = require("../db/communicationDbService");
   return {
     __esModule: true,
     default: {
@@ -132,7 +155,14 @@ jest.mock("../databaseService", () => {
         (submissionDb.getTransactionEmails as (...a: unknown[]) => unknown)(...args),
       getTransactionAttachments: (...args: unknown[]) =>
         (submissionDb.getTransactionAttachments as (...a: unknown[]) => unknown)(...args),
+      getUndownloadedEmailAttachments: (...args: unknown[]) =>
+        (submissionDb.getUndownloadedEmailAttachments as (...a: unknown[]) => unknown)(...args),
       updateTransaction: jest.fn(),
+      // BACKLOG-3733: the submit's text set comes from the export's reader,
+      // through transactionService.getTransactionDetails.
+      getCommunicationsByTransaction: (...args: unknown[]) =>
+        (communicationDb.getCommunicationsWithMessages as (...a: unknown[]) => unknown)(...args),
+      getTransactionContactsWithRoles: jest.fn().mockResolvedValue([]),
     },
   };
 });
@@ -203,8 +233,9 @@ jest.mock("electron", () => ({
   net: { isOnline: jest.fn().mockReturnValue(true) },
 }));
 
-import { submissionService } from "../submissionService";
+import { submissionService, PREFLIGHT_NOT_REVIEWED_ERROR } from "../submissionService";
 import databaseService from "../databaseService";
+import { setPreflightStatForTests } from "../submissionPreflight";
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -263,7 +294,17 @@ function storedTextAttachment(id: string, messageId: string): void {
   ).run(id, messageId, `/local/bytes/${id}`);
 }
 
-const submit = () => submissionService.submitTransaction(TX);
+/**
+ * BACKLOG-3403: Submit is two steps — the pre-flight lists what cannot be
+ * sent, and the agent confirms. These controls are about what is GATHERED,
+ * so they confirm whatever the pre-flight listed.
+ */
+const submit = async () => {
+  const preflight = await submissionService.preflightSubmission(TX);
+  return submissionService.submitTransaction(TX, undefined, {
+    acceptedExclusionKeys: preflight.notIncluded.map((i) => i.key),
+  });
+};
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -286,7 +327,11 @@ beforeEach(() => {
 
   emulator = createPostgrestEmulator({
     rows: { organization_members: [brokerageMembership()] },
+    rpcHandlers: SUBMISSION_RPC_SUCCESS,
   });
+  // The fixture's `/local/bytes/…` paths stand for files on disk; the
+  // pre-flight checks the disk, so it is told they are there (1 KB).
+  setPreflightStatForTests(async () => ({ size: 1024 }));
   mockGetAuthSession.mockResolvedValue({ userId: FIXTURE_USER_ID });
   (databaseService.getTransactionById as jest.Mock).mockResolvedValue({
     id: TX,
@@ -298,6 +343,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setPreflightStatForTests(null);
   db.close();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
@@ -328,6 +374,23 @@ describe("BACKLOG-3389 — an attachment that exists only as metadata", () => {
   });
 
   /**
+   * BACKLOG-3403, founder 58695a05: "don't flag files that are missing because
+   * we haven't downloaded them yet". The pre-flight runs AFTER the download,
+   * so an attachment that only needed downloading is never listed.
+   * MUTATION: run the pre-flight before `downloadMissingEmailAttachments`
+   * → this lists `a-meta` as not downloaded.
+   */
+  it("pre-flight: an email attachment that only needed downloading is NOT listed", async () => {
+    insertEmail("e-meta", IN_WINDOW);
+    metadataOnlyEmailAttachment("a-meta", "e-meta");
+
+    const preflight = await submissionService.preflightSubmission(TX);
+
+    expect(preflight).toEqual({ success: true, notIncluded: [] });
+    expect(downloadEmailAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  /**
    * CONTROL 2. The reported defect is not only the drop — it is the SILENCE.
    * Deleting the `countFlaggedWithoutAttachments` call and hardcoding 0 turns
    * this red; `attachmentsFailed` cannot be made to see it, because the
@@ -338,16 +401,49 @@ describe("BACKLOG-3389 — an attachment that exists only as metadata", () => {
     metadataOnlyEmailAttachment("a-fails", "e-fails");
     downloadShouldFail = true;
 
+    const preflight = await submissionService.preflightSubmission(TX);
+    // BACKLOG-3403: listed BEFORE sending, by file and reason.
+    expect(preflight.notIncluded).toEqual([
+      expect.objectContaining({
+        key: "att:a-fails",
+        kind: "email",
+        filename: "disclosure.pdf",
+        reason: "email_attachment_not_downloaded",
+      }),
+    ]);
+
     const result = await submit();
 
     expect(result.success).toBe(true);
     expect(result.attachmentsCount).toBe(0);
-    // The old, uninformative pair — still reported, still zero, and still
-    // structurally incapable of describing what happened.
-    expect(result.attachmentsFailed).toBe(0);
-    // The number that now says it.
+    // The number that says it, and (BACKLOG-3681) which one and why.
     expect(result.flaggedWithoutAttachments).toBe(1);
+    expect(result.notIncluded.map((i) => [i.key, i.reason])).toEqual([
+      ["att:a-fails", "email_attachment_not_downloaded"],
+    ]);
     expect(uploaded).toEqual([]);
+  });
+
+  /**
+   * BACKLOG-3403: the agent must have confirmed the list. A submit that did
+   * not (bulk submit from the list, or a list that changed) sends nothing.
+   * MUTATION: drop the confirmation check → this submits.
+   */
+  it("an unconfirmed attachment that cannot be sent stops the submit before anything is written", async () => {
+    insertEmail("e-fails", IN_WINDOW);
+    metadataOnlyEmailAttachment("a-fails", "e-fails");
+    downloadShouldFail = true;
+
+    const result = await submissionService.submitTransaction(TX);
+
+    expect(result).toMatchObject({ success: false, preflightChanged: true });
+    // No confirmation was sent at all (bulk submit from the list): the agent is
+    // sent to the transaction to review the list.
+    expect(result.error).toBe(PREFLIGHT_NOT_REVIEWED_ERROR);
+    expect(result.notIncluded.map((i) => i.key)).toEqual(["att:a-fails"]);
+    expect(
+      emulator.state.writes.filter((w) => w.table !== "error_logs")
+    ).toEqual([]);
   });
 
   /**

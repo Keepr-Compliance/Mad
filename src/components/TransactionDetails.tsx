@@ -56,6 +56,11 @@ import { useResolvedContactNames } from "./transactionDetailsModule/hooks/useRes
 import { useCompleteTransaction } from "./transactionDetailsModule/hooks/useCompleteTransaction";
 import { NeedsReviewScreen } from "./transactionDetailsModule/components/NeedsReviewScreen";
 import { ReviewPromptDialog } from "./transactionDetailsModule/components/ReviewPromptDialog";
+import { ChecklistWarningDialog } from "./transactionDetailsModule/components/ChecklistWarningDialog";
+import {
+  readUncheckedRequiredItems,
+  type UncheckedRequiredItem,
+} from "../services/checklistWarningGate";
 import { ReviewQueueSection } from "./transactionDetailsModule/components/ReviewQueueSection";
 import { useSubmitForReview } from "./transactionDetailsModule/hooks/useSubmitForReview";
 import type {
@@ -69,6 +74,11 @@ import { restoreRemovedEmailsByContentIds, type EmailUndoOutcome } from "./trans
 import { isEmailMessage } from '@/utils/channelHelpers';
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
+// BACKLOG-3476: the Checklist tab.
+import { useSessionStrictFeatureState } from "../contexts/StrictFeatureContext";
+import { useTransactionChecklist } from "./transactionDetailsModule/hooks/useTransactionChecklist";
+import { TransactionChecklistTab } from "./transactionDetailsModule/components/checklist/TransactionChecklistTab";
+import { ChecklistOverviewSection } from "./transactionDetailsModule/components/checklist/ChecklistOverviewSection";
 
 interface TransactionDetailsComponentProps {
   transaction: Transaction;
@@ -151,6 +161,30 @@ function TransactionDetails({
   // Tab state hook - use initialTab prop
   const { activeTab, setActiveTab } = useTransactionTabs(initialTab);
 
+  // BACKLOG-3476: the Checklist tab shows when the plan allows checklists, or
+  // when this transaction already has at least one (read-only then — `get` and `remove`
+  // are ungated in main). Never while the plan is still being read.
+  // Resolved once per session above this modal (StrictFeatureProvider), so the
+  // tab renders on the first frame with the others; each open re-asks main in
+  // the background.
+  const checklistGate = useSessionStrictFeatureState("transaction_checklists");
+  const checklist = useTransactionChecklist(transaction.id);
+  const showChecklist =
+    checklistGate === "allowed" ||
+    (checklistGate !== "pending" && (checklist.data?.checklists.length ?? 0) > 0);
+  // The tab can disappear under the user (checklist removed, plan changed):
+  // fall back to Overview rather than render an empty panel.
+  useEffect(() => {
+    if (
+      activeTab === "checklist" &&
+      !showChecklist &&
+      checklistGate !== "pending" &&
+      checklist.state.status !== "loading"
+    ) {
+      setActiveTab("overview");
+    }
+  }, [activeTab, showChecklist, checklistGate, checklist.state.status, setActiveTab]);
+
   // BACKLOG-1869: highlight target produced by the linked-content search; consumed
   // by the Emails or Messages tab to scroll+highlight the matching conversation card.
   // BACKLOG-1876: seeded from `initialHighlight` when opened from a global search hit.
@@ -171,6 +205,10 @@ function TransactionDetails({
   // Overview only needs contacts (loaded by loadOverview on mount).
   // Emails tab loads only email comms; Messages tab loads only text comms.
   const loadedChannelsRef = React.useRef<Set<string>>(new Set());
+  // BACKLOG-3476 (SR B1): the email load in flight (or finished) for this
+  // transaction. Every caller of ensureEmailsLoaded awaits THIS promise, so a
+  // second caller never resolves before the data arrives.
+  const emailLoadRef = React.useRef<Promise<void> | null>(null);
   // BACKLOG-1888: StrictMode-safe highlight reset — compare the previous transaction
   // id rather than counting effect runs. The old boolean guard (didMountRef) flipped
   // to true after StrictMode's first run, so run 2 was misinterpreted as a real
@@ -186,6 +224,7 @@ function TransactionDetails({
   const prevTransactionIdRef = React.useRef<string | null>(null);
   useEffect(() => {
     loadedChannelsRef.current.clear();
+    emailLoadRef.current = null;
     const prev = prevTransactionIdRef.current;
     if (prev !== null && prev !== transaction.id) {
       setHighlightTarget(null);
@@ -196,7 +235,7 @@ function TransactionDetails({
   useEffect(() => {
     if (activeTab === "emails" && !loadedChannelsRef.current.has("email")) {
       loadedChannelsRef.current.add("email");
-      loadCommunications("email");
+      emailLoadRef.current = loadCommunications("email");
     } else if (activeTab === "messages" && !loadedChannelsRef.current.has("text")) {
       loadedChannelsRef.current.add("text");
       loadCommunications("text");
@@ -204,6 +243,30 @@ function TransactionDetails({
     // BACKLOG-322: the Attachments tab no longer piggybacks on email
     // communications — useTransactionAllAttachments loads its own unified data.
   }, [activeTab, loadCommunications]);
+
+  // BACKLOG-3476 (SR condition 1): the checklist link picker needs the emails
+  // even when the Emails tab was never opened. SILENT on purpose:
+  // loadCommunications flips `loading`, and with no contacts the early return
+  // below swaps this whole modal for a spinner, unmounting the picker. Marking
+  // the channel loaded means opening the Emails tab later does not fetch again.
+  //
+  // SR B1: a caller that finds the channel already marked awaits the load that
+  // marked it (silent or loud), never an early return; otherwise the picker
+  // says "No email threads" while the emails are still on their way. Under
+  // StrictMode the picker's effect runs twice, and the second run awaits the
+  // first run's fetch.
+  // Known limit: the silent loader logs and swallows a failed fetch, so after a
+  // failure the picker offers no threads. It can only under-offer; main still
+  // decides every link it is asked to write.
+  const ensureEmailsLoaded = useCallback((): Promise<void> => {
+    if (loadedChannelsRef.current.has("email")) {
+      return emailLoadRef.current ?? Promise.resolve();
+    }
+    loadedChannelsRef.current.add("email");
+    const load = refreshCommunicationsSilently("email");
+    emailLoadRef.current = load;
+    return load;
+  }, [refreshCommunicationsSilently]);
 
   // Communications hook
   const {
@@ -246,12 +309,18 @@ function TransactionDetails({
   // + text/iMessage) for the transaction via a dedicated IPC query, independent
   // of which communications channels have been loaded. No audit-date window is
   // applied (matches the Emails/Texts tabs, which show all linked content).
+  // BACKLOG-3730: `inWindowIds` marks the ones inside the transaction dates
+  // (main's submit window), which the Attachments tab shows by default.
   const {
     attachments,
     loading: attachmentsLoading,
     error: attachmentsError,
     refresh: refreshAttachments,
-  } = useTransactionAllAttachments(transaction.id);
+    inWindowIds: attachmentsInWindowIds,
+  } = useTransactionAllAttachments(transaction.id, undefined, undefined, {
+    startedAt: transaction.started_at,
+    closedAt: transaction.closed_at,
+  });
 
   // Refresh messages by reloading text communications from the parent state.
   // This ensures derivedMessages (from useTransactionMessages) updates correctly,
@@ -310,15 +379,72 @@ function TransactionDetails({
   // One review-state read feeds the badge, S2, P2 and the Complete gate.
   const [showNeedsReview, setShowNeedsReview] = useState<boolean>(false);
   const reviewQueue = useReviewQueue(transaction.id);
+  // BACKLOG-3477: the unticked-required-items warning, shown BEFORE the Submit
+  // for Review window opens. `null` = not showing.
+  const [checklistWarning, setChecklistWarning] = useState<UncheckedRequiredItem[] | null>(null);
+  // Every openSubmitFlow run takes a number; only the newest may act on its
+  // reads. Go back / Continue anyway bump it too, so a read still in flight
+  // from an earlier click can never re-raise the warning or open the window.
+  const submitFlowSeqRef = useRef(0);
   const openSubmitFlow = useCallback(async () => {
+    const seq = ++submitFlowSeqRef.current;
     try {
       const refreshed = await transactionService.getDetails(transaction.id);
       if (refreshed.success && refreshed.data) setTransaction(refreshed.data);
     } catch (err) {
       logger.error("Failed to refresh transaction before submit:", err);
     }
+    if (seq !== submitFlowSeqRef.current) return;
     loadAttachmentCounts();
+    // BACKLOG-3477 — warn, never block. Only when the plan allows checklists:
+    // for any other gate value the Checklist tab is read-only, so the agent
+    // could not act on the warning.
+    //
+    // The read is fresh, at click time — not `checklist.data`, which is only
+    // as current as the last event the tab's hook handled.
+    //
+    // The warning reflects the checklist at the moment Complete is pressed.
+    // Main can still write checklists after this read, and nothing re-checks:
+    //  - a status sync moving the deal to needs_changes pulls the broker's
+    //    added checklists (submissionSyncService `beforeStatusWrite`);
+    //  - every sync pass retries a broker checklist pull that failed earlier
+    //    (`retryOwedReviewChecklistPulls`);
+    //  - the resubmit itself pulls owed broker checklists before its snapshot
+    //    (submissionService `pullOwedReviewChecklistsBeforeResubmit`).
+    // The Submit for Review window no longer warns a second time (PM ruling,
+    // BACKLOG-3477): the warning never blocks, and the resubmit-time pull lands
+    // after every point the app could read anyway.
+    if (checklistGate === "allowed") {
+      const unchecked = await readUncheckedRequiredItems(transaction.id);
+      if (seq !== submitFlowSeqRef.current) return;
+      if (unchecked.length > 0) {
+        setChecklistWarning(unchecked);
+        return;
+      }
+    }
     setShowSubmitModal(true);
+  }, [transaction.id, checklistGate]);
+  /** Warning "Go back": close it, open nothing. */
+  const handleChecklistWarningGoBack = useCallback(() => {
+    submitFlowSeqRef.current++;
+    setChecklistWarning(null);
+  }, []);
+  /** Warning "Continue anyway": open the Submit for Review window. */
+  const handleChecklistWarningContinue = useCallback(() => {
+    submitFlowSeqRef.current++;
+    setChecklistWarning(null);
+    setShowSubmitModal(true);
+  }, []);
+  // BACKLOG-3498: the submit dialog has saved the confirmed dates. Re-read the
+  // row now — not on submit success — so the tabs and the Edit form (which
+  // prefills from `transaction`) hold the saved dates even if the submit fails.
+  const rereadAfterDatesSaved = useCallback(async () => {
+    try {
+      const refreshed = await transactionService.getDetails(transaction.id);
+      if (refreshed.success && refreshed.data) setTransaction(refreshed.data);
+    } catch (err) {
+      logger.error("Failed to refresh transaction after saving dates:", err);
+    }
   }, [transaction.id]);
   // T1 — the sync runs on EVERY open. The renderer owns this call because it is
   // the one that advances the watermark, which is what makes `added` mean "new
@@ -416,6 +542,58 @@ function TransactionDetails({
   // message import, or the 2293 re-sync expansion). Drives the Texts "Sync" button's
   // active affordance so it reads "working" instead of a dead disabled gray.
   const [messagesSyncInFlight, setMessagesSyncInFlight] = useState<boolean>(false);
+
+  // BACKLOG-3595: a broker review changed this deal's submission status while
+  // the details are open. `transaction` is local state seeded from the list
+  // row at open, so a list re-read never reaches it — the header needs its own
+  // subscriber. Re-read via getOverview (get-details would start a background
+  // sync) and patch only the two fields the status sync writes.
+  // BACKLOG-3595 follow-up: the same event also re-reads the checklists — main
+  // pulls a broker-added checklist and commits it before it emits. Beside the
+  // header re-read, not inside it, so a failed header read cannot skip it.
+  // `refresh` never shows loading and keeps the last good checklist on a
+  // failed read, so an open tab and an unsaved note survive.
+  const refreshChecklist = checklist.refresh;
+  useEffect(() => {
+    const subscribe = window.api?.transactions?.onSubmissionStatusChanged;
+    if (typeof subscribe !== "function") return;
+    const transactionId = transaction.id;
+    return subscribe((data) => {
+      if (data.transactionId !== transactionId) return;
+      void refreshChecklist();
+      void window.api.transactions
+        .getOverview(transactionId)
+        .then((result) => {
+          if (!result.success || !result.transaction) return;
+          const fresh = result.transaction;
+          setTransaction((prev) =>
+            prev.id === transactionId
+              ? {
+                  ...prev,
+                  submission_status: fresh.submission_status,
+                  last_review_notes: fresh.last_review_notes,
+                }
+              : prev
+          );
+        })
+        .catch(() => {
+          /* non-critical: the next event or open re-reads it */
+        });
+    });
+  }, [transaction.id, refreshChecklist]);
+
+  // BACKLOG-3595 follow-up: main landed a broker checklist with no status
+  // change (an owed pull retried by the sync pass, or pulled before a
+  // resubmit). Same re-read, same transaction guard; no header re-read.
+  useEffect(() => {
+    const subscribe = window.api?.transactions?.onChecklistsChanged;
+    if (typeof subscribe !== "function") return;
+    const transactionId = transaction.id;
+    return subscribe((data) => {
+      if (data.transactionId !== transactionId) return;
+      void refreshChecklist();
+    });
+  }, [transaction.id, refreshChecklist]);
 
   // BACKLOG-1832: Subscribe to background auto-sync lifecycle events so the UI
   // reflects the in-flight fetch state and auto-refreshes when emails arrive.
@@ -544,7 +722,17 @@ function TransactionDetails({
     isSubmitting,
     progress: submitProgress,
     error: submitError,
+    checklistsNotSent: submitChecklistsNotSent,
+    notIncluded: submitNotIncluded,
+    isCheckingFiles: submitCheckingFiles,
+    preflightItems: submitPreflightItems,
+    preflightChanged: submitPreflightChanged,
+    cancelled: submitCancelled,
+    isCancelling: submitCancelling,
     submit: handleSubmitForReview,
+    confirmPreflight: confirmSubmitPreflight,
+    dismissPreflight: dismissSubmitPreflight,
+    cancel: cancelSubmit,
     reset: resetSubmit,
   } = useSubmitForReview({
     transactionId: transaction.id,
@@ -1157,6 +1345,7 @@ function TransactionDetails({
           conversationCount={transaction.text_thread_count || 0}
           emailCount={transaction.email_count || 0}
           onTabChange={setActiveTab}
+          showChecklist={showChecklist}
         />
 
         <OfflineNotice />
@@ -1197,6 +1386,14 @@ function TransactionDetails({
               removedContactsOpen={removedContactsOpen}
               onRemovedContactsOpenChange={setRemovedContactsOpen}
               removedContactsRefreshKey={removedContactsRefreshKey}
+              checklistSection={
+                showChecklist && checklist.data && checklist.data.checklists.length > 0 ? (
+                  <ChecklistOverviewSection
+                    data={checklist.data}
+                    onOpen={() => setActiveTab("checklist")}
+                  />
+                ) : null
+              }
             />
           )}
 
@@ -1311,6 +1508,25 @@ function TransactionDetails({
               loading={attachmentsLoading}
               error={attachmentsError}
               refresh={refreshAttachments}
+              inWindowIds={attachmentsInWindowIds}
+            />
+          )}
+
+          {activeTab === "checklist" && showChecklist && (
+            <TransactionChecklistTab
+              checklist={checklist}
+              gate={checklistGate}
+              attachments={attachments}
+              attachmentsLoading={attachmentsLoading}
+              emailCommunications={emailCommunications}
+              ensureEmailsLoaded={ensureEmailsLoaded}
+              onRefreshLinkTargets={() => {
+                refreshAttachments();
+                if (loadedChannelsRef.current.has("email")) void refreshCommunicationsSilently("email");
+              }}
+              onShowSuccess={showSuccess}
+              onShowError={showError}
+              nameMap={emailNameMap}
             />
           )}
         </div>
@@ -1505,6 +1721,16 @@ function TransactionDetails({
         />
       )}
 
+      {/* BACKLOG-3477 — unticked required checklist items. Warns before the
+          Submit for Review window opens; never blocks. */}
+      {checklistWarning !== null && (
+        <ChecklistWarningDialog
+          items={checklistWarning}
+          onGoBack={handleChecklistWarningGoBack}
+          onContinue={handleChecklistWarningContinue}
+        />
+      )}
+
       {/* Submit for Review Modal (BACKLOG-391) */}
       {showSubmitModal && (
         <SubmitForReviewModal
@@ -1517,11 +1743,30 @@ function TransactionDetails({
           isSubmitting={isSubmitting}
           progress={submitProgress}
           error={submitError}
+          checklistsNotSent={submitChecklistsNotSent}
+          notIncluded={submitNotIncluded}
+          isCheckingFiles={submitCheckingFiles}
+          preflightItems={submitPreflightItems}
+          preflightChanged={submitPreflightChanged}
+          onPreflightBack={dismissSubmitPreflight}
+          onPreflightContinue={() => {
+            void confirmSubmitPreflight();
+          }}
+          cancelled={submitCancelled}
+          isCancelling={submitCancelling}
+          // BACKLOG-3398: Cancel stops the submission in the main process; the
+          // window stays open until it reports that nothing was sent.
+          onCancelSubmit={() => {
+            void cancelSubmit();
+          }}
           onCancel={() => {
             setShowSubmitModal(false);
             resetSubmit();
           }}
           onSubmit={handleSubmitForReview}
+          onDatesSaved={() => {
+            void rereadAfterDatesSaved();
+          }}
           // BACKLOG-2792: S4's Export option — the founder's "the confirmation
           // window includes an Export option that triggers the same S3 export
           // flow an individual gets", literally the same modal, not a parallel

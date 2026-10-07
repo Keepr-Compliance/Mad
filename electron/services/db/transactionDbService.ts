@@ -259,9 +259,9 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
     why: "Companion of `stage`; same decision.",
   },
   listing_price: {
-    insert: "db-default",
+    insert: "writable",
     update: "writable",
-    why: "Entered by the user after the deal exists; no creating caller supplies it. Already accepted on the update path and forwarded by the IPC validator.",
+    why: "Entered by the user, optionally, on step 1 of creating a deal (BACKLOG-3614) and editable afterwards. The IPC validator forwards it on both paths; createAuditedTransaction passes it through.",
   },
   sale_price: {
     insert: "db-default",
@@ -272,6 +272,26 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
     insert: "db-default",
     update: "writable",
     why: "Entered by the user after the deal exists; no creating caller supplies it. Already accepted on the update path.",
+  },
+  commission_offered_rate: {
+    insert: "db-default",
+    update: "writable",
+    why: "BACKLOG-3520 (desktop capture at close): entered on the Verify Transaction Details step and written through the update path (the same one as `sale_price`). Opened for UPDATE only: no creating caller supplies commission figures, and a figure has no meaning before the deal exists. The IPC validator bounds it to 0..100 (BACKLOG-3180 rule: one branch per admitted field).",
+  },
+  commission_actual_rate: {
+    insert: "db-default",
+    update: "writable",
+    why: "Companion of `commission_offered_rate`; same decision.",
+  },
+  commission_gross_amount: {
+    insert: "db-default",
+    update: "writable",
+    why: "Companion of `commission_offered_rate`; same decision. Rounded to WHOLE DOLLARS (half up) once by the renderer before it is sent; the validator rounds to cents as a backstop only -- never derived here or on read.",
+  },
+  commission_adjustment_reason: {
+    insert: "db-default",
+    update: "writable",
+    why: "Companion of `commission_offered_rate`; same decision. Blank is stored as NULL by the validator.",
   },
   mutual_acceptance_date: {
     insert: "db-default",
@@ -434,7 +454,7 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
   metadata: {
     insert: "db-default",
     update: "db-default",
-    why: "No caller passes the JSON blob on either path today, and it has no reader on the write paths. Left closed rather than opened speculatively.",
+    why: "Closed to the generic insert/update: no caller passes the JSON blob on either path. Its one writer is dedicated — BACKLOG-3599's owed broker-checklist pull set ($.reviewChecklistPullOwed, submissionDbService.markReviewChecklistPullOwed / clearReviewChecklistPullOwed). Opening this to 'writable' would let a spread of a whole transaction row overwrite that set.",
   },
   created_at: {
     insert: "db-default",
@@ -805,6 +825,24 @@ export function createTransactionWithContactsSync(
   assignments: TransactionContactData[],
 ): Transaction {
   return dbTransaction(() => {
+    // Live FK bug (2026-10-04): a made-up id (a person found in texts, msg_tel_…)
+    // reached here and the insert failed with a bare "FOREIGN KEY constraint
+    // failed". Every party must be one of THIS user's saved contacts; checked
+    // first, inside the same transaction, so nothing is written otherwise. The
+    // ids are not put in the message (a msg_tel_ id carries a phone number).
+    const ids = Array.from(new Set(assignments.map((a) => a.contact_id)));
+    if (ids.length > 0) {
+      const found = dbAll<{ id: string }>(
+        sql`SELECT id FROM contacts WHERE user_id = ? AND id IN (SELECT value FROM json_each(?))`,
+        [transactionData.user_id, JSON.stringify(ids)],
+      );
+      const missing = ids.length - new Set(found.map((r) => r.id)).size;
+      if (missing > 0) {
+        throw new DatabaseError(
+          `${missing === 1 ? "A selected contact isn't" : `${missing} selected contacts aren't`} saved in Keepr. Add them again from the contact list.`,
+        );
+      }
+    }
     const transaction = createTransactionSync(transactionData);
     for (const assignment of assignments) {
       assignContactToTransactionSync(transaction.id, assignment);

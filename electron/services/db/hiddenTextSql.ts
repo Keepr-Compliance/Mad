@@ -53,7 +53,7 @@ export const HIDE_TEXT_FROM_EXPORT_SQL = sql`
         AND (
           (c.message_id IS NOT NULL AND c.message_id = m.id)
           OR (c.message_id IS NULL AND c.email_id IS NULL
-              AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id)
+              AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id AND m.user_id = c.user_id)
         )
     )
     AND NOT EXISTS (

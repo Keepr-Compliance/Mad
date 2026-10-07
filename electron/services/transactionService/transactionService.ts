@@ -57,7 +57,7 @@ import auditService from "../auditService";
 import { createEmail, getEmailByExternalId } from "../db/emailDbService";
 import emailAttachmentService from "../emailAttachmentService";
 import * as externalContactDb from "../db/externalContactDbService";
-import { isContactSourceEnabled } from "../../utils/preferenceHelper";
+import { isContactSourceEnabled, isTextPeopleEnabled } from "../../utils/preferenceHelper";
 
 // Hybrid extraction imports
 import { HybridExtractorService } from "../extraction/hybridExtractorService";
@@ -183,7 +183,8 @@ class TransactionService {
       [inferOutlookContacts, inferGmailContacts, inferMessageContacts] = await Promise.all([
         isContactSourceEnabled(userId, "inferred", "outlookEmails", false),
         isContactSourceEnabled(userId, "inferred", "gmailEmails", false),
-        isContactSourceEnabled(userId, "inferred", "messages", false),
+        // BACKLOG-3670 C1: one switch, one default (on for Android: Google Messages).
+        isTextPeopleEnabled(userId),
       ]);
 
       await logService.info(
@@ -1123,6 +1124,7 @@ class TransactionService {
         started_at,
         closed_at,
         closing_deadline,
+        listing_price,
       } = data;
 
       // BACKLOG-2538: the deal and every party on it are written in ONE
@@ -1148,6 +1150,9 @@ class TransactionService {
         started_at,
         closed_at,
         closing_deadline,
+        // BACKLOG-3614: optional; undefined (not entered) is skipped by the
+        // writer, so the column keeps its NULL default.
+        listing_price: listing_price ?? undefined,
         // BACKLOG-2756: `false`, not `property_coordinates ? true : false`.
         // Coordinates are a fact about the ADDRESS. This column means "a person
         // confirmed the closing date", and the only thing that legitimately

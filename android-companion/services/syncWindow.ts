@@ -111,8 +111,10 @@ async function currentUserId(): Promise<string | undefined> {
  * import from neither. What holds this to the others is not the type system but
  * `__tests__/syncWindow.mirror-2800.test.ts`, which replays the
  * BACKLOG-2561 absent-vs-explicit-null cases against this resolver.
+ *
+ * Founder (2026-10-02): 1.5 months for every message source (was 3).
  */
-export const DEFAULT_LOOKBACK_MONTHS = 3;
+export const DEFAULT_LOOKBACK_MONTHS = 1.5;
 
 /** AsyncStorage key for the cached window setting. */
 const SYNC_WINDOW_KEY = "@keepr/sync-window";
@@ -307,15 +309,23 @@ export function resolveLookbackMonths(preferences: unknown): number | null {
 }
 
 /**
+ * Days per month for every "last N months" window: the MIRROR of
+ * `LOOKBACK_DAYS_PER_MONTH` in `electron/utils/lookbackWindow.ts` (the one
+ * months→days rule of the desktop app; this package cannot import it).
+ * 1 → 30 days, 1.5 → 46, 3 → 91, 6 → 183, 12 → 365.
+ */
+export const LOOKBACK_DAYS_PER_MONTH = 30.4375;
+
+const WINDOW_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
  * The oldest timestamp a read may reach, for a given lookback.
  *
- * Calendar months, CLAMPED at month ends. Naive `setMonth` overflows — 31 Aug
- * minus 6 months lands on 3 March rather than 28 February, and 31 March minus 1
- * month lands on 3 March, skipping February outright. Overflow always moves the
- * edge FORWARD, i.e. it silently NARROWS the window the user asked for, so the
- * clamp is the faithful reading of "the last N months" and not a nicety.
- * Boundary cases are swept, not sampled, in `syncWindow.mirror-2800.test.ts`
- * ("computeWindowStart — month-end clamp, swept not sampled").
+ * Founder (2026-10-02): a month is 30.4375 days, rounded to whole days — the
+ * same rule as every desktop source — so 1.5 months is 46 days. (Calendar
+ * months with a month-end clamp could not express 1.5, and `setMonth` would
+ * truncate it to 1.) The time of day is kept: the edge is `now` minus whole
+ * days, never rounded to midnight.
  *
  * @returns the lower bound in epoch ms, or `null` for "All time".
  */
@@ -324,24 +334,7 @@ export function computeWindowStart(
   now: number
 ): number | null {
   if (months === null) return null; // All time — no lower bound.
-
-  const from = new Date(now);
-  const day = from.getDate();
-
-  // Move to the 1st BEFORE shifting the month so the shift can never overflow,
-  // then clamp the day to the target month's length.
-  const target = new Date(now);
-  target.setDate(1);
-  target.setMonth(target.getMonth() - months);
-
-  const daysInTargetMonth = new Date(
-    target.getFullYear(),
-    target.getMonth() + 1,
-    0
-  ).getDate();
-  target.setDate(Math.min(day, daysInTargetMonth));
-
-  return target.getTime();
+  return now - Math.round(months * LOOKBACK_DAYS_PER_MONTH) * WINDOW_DAY_MS;
 }
 
 // ============================================

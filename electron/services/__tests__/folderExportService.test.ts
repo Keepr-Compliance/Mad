@@ -123,7 +123,7 @@ import type { ExportOmissionDetail } from "../exportNotices";
  * not on omissions — nothing is hidden in their fixtures, so they say so
  * explicitly. The parameter is required precisely so a caller has to state it.
  */
-const NO_OMISSIONS_3367: ExportOmissionDetail = { hiddenTextCount: 0, hiddenTexts: [] };
+const NO_OMISSIONS_3367: ExportOmissionDetail = { hiddenTextCount: 0, hiddenTexts: [], filesNotIncluded: [] };
 
 describe("FolderExportService", () => {
   let folderExportService: typeof import("../folderExportService").default;

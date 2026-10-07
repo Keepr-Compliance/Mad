@@ -413,45 +413,45 @@ describe("preferenceHelper", () => {
       expect(result).toBe(6);
     });
 
-    it("should fall back to 3 when preference key is missing", async () => {
+    it("should fall back to 1.5 when preference key is missing", async () => {
       mockGetPreferences.mockResolvedValue({});
 
       const result = await getEmailCacheDurationMonths("user-1");
-      expect(result).toBe(3);
+      expect(result).toBe(1.5);
     });
 
-    it("should fall back to 3 when value is not a number", async () => {
+    it("should fall back to 1.5 when value is not a number", async () => {
       mockGetPreferences.mockResolvedValue({
         emailCache: { durationMonths: "6" },
       });
 
       const result = await getEmailCacheDurationMonths("user-1");
-      expect(result).toBe(3);
+      expect(result).toBe(1.5);
     });
 
-    it("should fall back to 3 when value is zero", async () => {
+    it("should fall back to 1.5 when value is zero", async () => {
       mockGetPreferences.mockResolvedValue({
         emailCache: { durationMonths: 0 },
       });
 
       const result = await getEmailCacheDurationMonths("user-1");
-      expect(result).toBe(3);
+      expect(result).toBe(1.5);
     });
 
-    it("should fall back to 3 when value is negative", async () => {
+    it("should fall back to 1.5 when value is negative", async () => {
       mockGetPreferences.mockResolvedValue({
         emailCache: { durationMonths: -2 },
       });
 
       const result = await getEmailCacheDurationMonths("user-1");
-      expect(result).toBe(3);
+      expect(result).toBe(1.5);
     });
 
-    it("should fall back to 3 and log warning when getPreferences throws", async () => {
+    it("should fall back to 1.5 and log warning when getPreferences throws", async () => {
       mockGetPreferences.mockRejectedValue(new Error("DB unavailable"));
 
       const result = await getEmailCacheDurationMonths("user-1");
-      expect(result).toBe(3);
+      expect(result).toBe(1.5);
       expect(logService.warn).toHaveBeenCalledWith(
         expect.stringContaining("Could not load email cache duration"),
         "Preferences",
@@ -504,7 +504,7 @@ describe("preferenceHelper", () => {
         await expect(getEmailCacheDurationMonths("user-1")).resolves.toBe(6);
       });
 
-      it("falls back to 3 when the legacy key holds a value the domain rejects", async () => {
+      it("falls back to 1.5 when the legacy key holds a value the domain rejects", async () => {
         // Sweep, not sample: every non-positive / non-numeric shape the stored
         // JSON can hold must land on the default, exactly as the canonical key
         // already does. A single case here could not catch an off-by-one at 0.
@@ -514,7 +514,7 @@ describe("preferenceHelper", () => {
           mockGetPreferences.mockResolvedValue({
             emailSync: { lookbackMonths: value },
           });
-          await expect(getEmailCacheDurationMonths("user-1")).resolves.toBe(3);
+          await expect(getEmailCacheDurationMonths("user-1")).resolves.toBe(1.5);
         }
       });
 
@@ -532,7 +532,7 @@ describe("preferenceHelper", () => {
         const settingsScreenValue = (prefs: Record<string, any>): number => {
           const val =
             prefs?.emailCache?.durationMonths ?? prefs?.emailSync?.lookbackMonths;
-          return typeof val === "number" && val > 0 ? val : 3;
+          return typeof val === "number" && val > 0 ? val : 1.5; // the Settings screen's DEFAULT_EMAIL_CACHE_MONTHS
         };
 
         const bags: Array<Record<string, any>> = [
@@ -556,12 +556,19 @@ describe("preferenceHelper", () => {
   });
 
   describe("computeEmailCacheSinceDate", () => {
+    // Founder (2026-10-02): the one months→days rule — round(months × 30.4375).
+    // Mutation: back to months × 30 days → red (6 months is 183 days, not 180).
+    it.each([[1.5, 46], [3, 91], [6, 183], [12, 365]])("%s months is exactly %s days back", (months, days) => {
+      const now = Date.UTC(2026, 9, 2, 12);
+      expect(computeEmailCacheSinceDate(months, now).getTime()).toBe(now - days * 24 * 60 * 60 * 1000);
+    });
+
     it("should return a date approximately N months in the past", () => {
       const durationMonths = 6;
       const before = Date.now();
       const result = computeEmailCacheSinceDate(durationMonths);
 
-      const expectedMs = durationMonths * 30 * 24 * 60 * 60 * 1000;
+      const expectedMs = 183 * 24 * 60 * 60 * 1000;
       const toleranceMs = 24 * 60 * 60 * 1000; // 1 day
 
       // The result should be approximately expectedMs ago

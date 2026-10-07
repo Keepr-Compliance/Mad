@@ -31,6 +31,49 @@ export function isBeforeFloor(
   return p < f;
 }
 
+// ============================================
+// BACKLOG-3663: per-source text coverage
+// ============================================
+
+/** A text source Keepr imports from. */
+export type TextSource = "iphone" | "mac" | "android_companion" | "google_messages";
+
+/** How far back one source is known to reach. */
+export interface SourceCoverage {
+  source: TextSource;
+  /** Oldest point covered (ISO), or null when the source never completed a full read. */
+  coveredSince: string | null;
+  lastSyncAt: string | null;
+  /** Derived from the oldest stored text (MIN(sent_at)), not from the import: a soft notice only. */
+  approximate: boolean;
+  /** The user has texts from this source. */
+  hasRows: boolean;
+  /** L2 (Google Messages): chats whose history the last full run could not confirm complete. */
+  incompleteChats?: number;
+}
+
+/** A source that does not reach back to an audit start. Never blocks export. */
+export interface SourceCoverageGap {
+  source: TextSource;
+  coveredSince: string | null;
+  approximate: boolean;
+  /**
+   * "later": covers only since coveredSince; "never": no full read yet;
+   * "incomplete" (L2): covered, but some chats' history could not be
+   * confirmed complete (incompleteChats).
+   */
+  kind: "later" | "never" | "incomplete";
+  incompleteChats?: number;
+}
+
+/** Result of transactions:get-text-coverage (the Texts tab). */
+export interface TextCoverageResult {
+  success: boolean;
+  auditStartISO: string | null;
+  gaps: SourceCoverageGap[];
+  error?: string;
+}
+
 /** Result of transactions:get-audit-coverage. All dates are ISO strings. */
 export interface AuditCoverageResult {
   success: boolean;
@@ -57,6 +100,8 @@ export interface AuditCoverageResult {
   expansionStale: boolean;
   /** macOS + Full Disk Access — whether a targeted messages import can run here. */
   messagesImporterAvailable: boolean;
+  /** BACKLOG-3663: per-source gaps for the proposed start (soft; the Mac rule above is unchanged). */
+  sourceGaps?: SourceCoverageGap[];
   error?: string;
 }
 
@@ -71,6 +116,8 @@ export interface ExportCompletenessResult {
   needsMessagesImport: boolean;
   expansionStale: boolean;
   messagesImporterAvailable: boolean;
+  /** BACKLOG-3663: per-source gaps (informational; never changes `complete`). */
+  sourceGaps?: SourceCoverageGap[];
   error?: string;
 }
 

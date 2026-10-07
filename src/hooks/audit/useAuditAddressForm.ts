@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { Transaction } from "../../../electron/types/models";
 import type { AddressData, AddressSuggestion, AddressDetails, AddressDetailsResult, Coordinates } from "./types";
 import logger from "../../utils/logger";
+import { formatSaleInput } from "../../components/transactionDates/commission";
 
 /**
  * Get default start date (3 months ago from today)
@@ -16,10 +17,6 @@ function getDefaultStartDate(): string {
   const date = new Date();
   date.setMonth(date.getMonth() - 3);
   return date.toISOString().split("T")[0]; // YYYY-MM-DD format
-}
-
-function getTodayDate(): string {
-  return new Date().toISOString().split("T")[0];
 }
 
 export const initialAddressData: AddressData = {
@@ -32,7 +29,13 @@ export const initialAddressData: AddressData = {
   transaction_type: "purchase",
   started_at: getDefaultStartDate(),
   closing_deadline: undefined,
-  closed_at: getTodayDate(),
+  // BACKLOG-3613: a new deal has no end date — it is ongoing, so its audit
+  // window rolls forward to today. The agent enters the end date at Submit for
+  // review or Export. (Until 3613 this pre-filled today and every new deal was
+  // saved with its creation day as the end date.)
+  closed_at: undefined,
+  // BACKLOG-3614: optional, blank by default.
+  listing_price_text: "",
 };
 
 interface UseAuditAddressFormProps {
@@ -221,6 +224,8 @@ export function useAuditAddressForm({
         closed_at: txn.closed_at
           ? txn.closed_at.split("T")[0]
           : undefined,
+        // BACKLOG-3614: same display as the sale price on the commission step.
+        listing_price_text: formatSaleInput(txn.listing_price),
       };
 
       setAddressData(prefillData);

@@ -64,10 +64,13 @@ jest.mock("../modals/IPhoneSyncModal", () => ({
 }));
 
 jest.mock("../modals/AndroidSyncModal", () => ({
-  AndroidSyncModal: ({ userId }: { userId: string }) => (
-    <div data-testid="android-sync-modal" data-user-id={userId}>Android Sync Modal</div>
+  AndroidSyncModal: ({ userId, startAtLink, ...rest }: { userId: string; startAtLink?: boolean; app?: string }) => (
+    <div data-testid="android-sync-modal" data-user-id={userId} data-app={rest.app ?? "none"} data-start-at-link={String(!!startAtLink)}>
+      Android Sync Modal
+    </div>
   ),
 }));
+
 
 // Mock useEmailSettingsCallbacks hook
 jest.mock("../hooks/useEmailSettingsCallbacks", () => ({
@@ -75,6 +78,13 @@ jest.mock("../hooks/useEmailSettingsCallbacks", () => ({
     handleEmailConnectedFromSettings: jest.fn(),
     handleEmailDisconnectedFromSettings: jest.fn(),
   }),
+}));
+
+// BACKLOG-3594: the submission notice needs NotificationProvider, which this
+// suite does not render. Its behaviour is pinned in
+// AppModals-3594-submission-notice.test.tsx, against the real hook.
+jest.mock("../hooks/useSubmissionStatusNotice", () => ({
+  useSubmissionStatusNotice: jest.fn(),
 }));
 
 // Helper to create default modal state
@@ -91,6 +101,7 @@ const createModalState = (
   showTermsModal: false,
   showIPhoneSync: false,
   showAndroidSync: false,
+  androidSyncStart: "default",
   ...overrides,
 });
 
@@ -536,16 +547,33 @@ describe("AppModals", () => {
   // BACKLOG-2320: Android sync wizard now launches from a Dashboard button via a
   // modal, mirroring the iPhone sync modal.
   describe("Android Sync Modal (BACKLOG-2320)", () => {
-    it("should render AndroidSyncModal when showAndroidSync is true and a user exists", () => {
+    it("should render AndroidSyncModal when showAndroidSync is true and a user exists", async () => {
       const app = createAppStateMock({
         modalState: createModalState({ showAndroidSync: true }),
         currentUser: mockUser,
       });
       render(<AppModals app={app} />);
-      const modal = screen.getByTestId("android-sync-modal");
+      const modal = await screen.findByTestId("android-sync-modal");
       expect(modal).toBeInTheDocument();
       // The desktop user id is forwarded to the wizard (BACKLOG-2224 account-match).
       expect(modal).toHaveAttribute("data-user-id", mockUser.id);
+      // SR C6: no app choice any more — the modal is always Google Messages.
+      expect(modal).toHaveAttribute("data-app", "none");
+    });
+
+    // SR: the start is modal state handed to the modal as a prop.
+    // Mutation: the prop not passed → red.
+    it("passes the link start to the modal (Settings' Link / keepr://link); a default open does not", async () => {
+      const linkApp = createAppStateMock({
+        modalState: createModalState({ showAndroidSync: true, androidSyncStart: "link" }),
+        currentUser: mockUser,
+      });
+      const view = render(<AppModals app={linkApp} />);
+      expect(await screen.findByTestId("android-sync-modal")).toHaveAttribute("data-start-at-link", "true");
+      view.unmount();
+      const plain = createAppStateMock({ modalState: createModalState({ showAndroidSync: true }), currentUser: mockUser });
+      render(<AppModals app={plain} />);
+      expect(await screen.findByTestId("android-sync-modal")).toHaveAttribute("data-start-at-link", "false");
     });
 
     it("should not render AndroidSyncModal when showAndroidSync is false", () => {

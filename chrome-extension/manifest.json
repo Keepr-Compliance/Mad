@@ -1,0 +1,61 @@
+{
+  "manifest_version": 3,
+  "name": "Keepr for Google Messages",
+  "version": "0.3.89",
+  "description": "Copies your Google Messages texts to the Keepr desktop app when you start a Sync in Keepr.",
+  "icons": {
+    "16": "icons/keepr-16.png",
+    "32": "icons/keepr-32.png",
+    "48": "icons/keepr-48.png",
+    "128": "icons/keepr-128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA/Z7wK4LRB9cJHFJmLFAQP/5YvAQjF4bHn0crzUmnP+8MUrVEDkGvnz4RzD3Lufngpk0c0HJs8KMY1vCMc56TYkqayOpM1I5fi0U2s0CQ+/mlDQNTfKOBCtfxgEj9TgIJq3d6COXIcnbenz326K/O6MF0cXz4a5x1ZYq/fOdK377K06NtXxtl9DLnVGRDIjTK7kJap2lTbWyzLdyRkp0NgW8qF1pxNtMlWOezke4mCqsEbRT7Q5j+ynLntW8K9n2/Hmi2HIILGpw8NwPeBtTew02QxHQhCN/P5ljFj/nTJAHcRgLev0wbTYxTCyFWvzp7Di0PMTJHZSi6XcmTidxS5wIDAQAB",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Keepr",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/keepr-16.png",
+      "32": "icons/keepr-32.png",
+      "48": "icons/keepr-48.png",
+      "128": "icons/keepr-128.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://messages.google.com/*",
+    "http://127.0.0.1:38619/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://messages.google.com/web/*"
+      ],
+      "js": [
+        "text.js",
+        "extract.js",
+        "scan.js",
+        "job.js",
+        "eyes.js",
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "commands": {
+    "toggle-eye": {
+      "suggested_key": {
+        "default": "Alt+Shift+E"
+      },
+      "description": "Sync on/off for the selected chat (Keepr's eye)"
+    }
+  }
+}

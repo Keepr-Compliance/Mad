@@ -40,7 +40,7 @@ beforeEach(() => {
 describe("BACKLOG-2561 · the Android lookback dropdown tells the truth", () => {
   /**
    * The absent-key case needs an ANCHOR, because the component's initial state
-   * is already 3 months — "Last 3 months" is on screen before the stored
+   * is already the default — "Last 1.5 months (default)" is on screen before the stored
    * preference has even been read, so an assertion made at that moment passes
    * no matter what the component does with the preference. The first draft of
    * this test did exactly that and stayed GREEN with the fix reverted; the
@@ -53,7 +53,7 @@ describe("BACKLOG-2561 · the Android lookback dropdown tells the truth", () => 
    * with no lookback key is exactly what `handleMaxMessagesChange` plus the
    * preference deep-merge leave behind.
    */
-  it("shows Last 3 months when the lookbackMonths KEY is absent", async () => {
+  it("shows the 1.5-month default when the lookbackMonths KEY is absent", async () => {
     mockGetPreferences.mockResolvedValue({
       success: true,
       data: { messageImport: { filters: { maxMessages: 10000 } } },
@@ -64,7 +64,7 @@ describe("BACKLOG-2561 · the Android lookback dropdown tells the truth", () => 
     await waitFor(() => {
       expect(screen.getByDisplayValue("10,000")).toBeInTheDocument();
     });
-    expect(screen.getByDisplayValue("Last 3 months")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Last 1.5 months (default)")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("All time")).not.toBeInTheDocument();
   });
 
@@ -90,7 +90,7 @@ describe("BACKLOG-2561 · the Android lookback dropdown tells the truth", () => 
     renderStrict(<AndroidMessagesSettings userId="user-2561" />);
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("Last 18 months")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("Custom: 18 months")).toBeInTheDocument();
     });
   });
 });

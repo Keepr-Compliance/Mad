@@ -1,6 +1,6 @@
 {
   "name": "keepr",
-  "version": "2.38.1",
+  "version": "2.39.0",
   "description": "Keepr - Export and archive iMessage conversations and emails",
   "main": "electron/main.js",
   "engines": {
@@ -27,7 +27,9 @@
     "watch:preload": "esbuild electron/preload.ts --bundle --platform=node --outfile=dist-electron/preload.js --external:electron --define:__DEV__=true --watch",
     "build": "npm run build:react && npm run build:electron && npm run build:preload",
     "build:react": "vite build",
-    "build:electron": "tsc -p tsconfig.electron.json && npm run copy:database",
+    "build:electron": "tsc -p tsconfig.electron.json && npm run copy:database && npm run build:pair",
+    "package:extension": "node scripts/package-extension.mjs",
+    "build:pair": "esbuild chrome-extension/pair-protocol.js --bundle --platform=node --format=cjs --outfile=dist-electron/pair-protocol.cjs",
     "copy:database": "node scripts/copy-database.js",
     "download:drivers": "node scripts/download-apple-drivers.js",
     "package": "npm run build && dotenv -e .env.local -- electron-builder",
@@ -139,6 +141,7 @@
     "postcss": "^8.5.10",
     "react-joyride": "^2.9.2",
     "react-pdf": "^10.4.1",
+    "sharp": ">=0.35.5 <0.36",
     "tailwindcss": "^3.4.17",
     "ts-jest": "^29.4.9",
     "ts-node": "^10.9.2",
@@ -273,6 +276,13 @@
       },
       ".env.production",
       {
+        "from": "chrome-extension",
+        "to": "chrome-extension",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
         "from": "scripts/cleanup-macos.sh",
         "to": "cleanup-macos.sh"
       },
@@ -303,6 +313,8 @@
     "fast-uri": ">=3.1.2 <4",
     "ws@>=8": ">=8.21.0 <9",
     "js-yaml@>=4": ">=4.3.0 <5",
-    "@xmldom/xmldom": ">=0.8.13"
+    "@xmldom/xmldom": ">=0.8.13",
+    "sharp": ">=0.35.5 <0.36",
+    "shell-quote": ">=1.12.0 <2"
   }
 }

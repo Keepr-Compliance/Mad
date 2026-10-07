@@ -12,11 +12,17 @@
 import { useState, useMemo } from 'react';
 import { EmptyMessages } from '@/components/ui/EmptyState';
 import { ChevronRight, MapPin, Mic, Paperclip, Users, X } from 'lucide-react';
+import { AttachmentViewerModal } from './AttachmentViewerModal';
+import { InlineMessageAttachments } from './InlineMessageAttachments';
+import type { MessageAttachment } from '@/lib/submissions/attachmentKinds';
+
+/** BACKLOG-3748: submission_messages.id -> the files that came with it (groupAttachmentsByMessage). */
+export type AttachmentsByMessage = Record<string, MessageAttachment[]>;
 
 /** Message type values matching desktop app */
 type MessageType = 'text' | 'voice_message' | 'location' | 'attachment_only' | 'system' | 'unknown';
 
-interface Message {
+export interface Message {
   id: string;
   channel: string;
   direction: string;
@@ -43,11 +49,13 @@ interface Message {
 
 interface MessageListProps {
   messages: Message[];
+  /** BACKLOG-3748: files shown inside their message's bubble. Omitted = none. */
+  attachmentsByMessage?: AttachmentsByMessage;
 }
 
 type FilterType = 'all' | 'email' | 'text';
 
-interface Thread {
+export interface Thread {
   id: string;
   messages: Message[];
   channel: string;
@@ -265,9 +273,22 @@ function formatDateRange(firstDate: string, lastDate: string): string {
 }
 
 /**
+ * BACKLOG-3748: the real attachment count for one message. `has_attachments`
+ * alone is not trustworthy — Apple sets it true for link-preview texts with
+ * `attachment_count` 0. Matched rows (from `groupAttachmentsByMessage`) are
+ * authoritative when present; otherwise fall back to `attachment_count`.
+ */
+function realAttachmentCount(msg: Message, inline: MessageAttachment[]): number {
+  return inline.length > 0 ? inline.length : msg.attachment_count;
+}
+
+/**
  * Group messages into threads
  */
-function groupMessagesIntoThreads(messages: Message[]): Thread[] {
+export function groupMessagesIntoThreads(
+  messages: Message[],
+  attachmentsByMessage?: AttachmentsByMessage
+): Thread[] {
   const threadMap = new Map<string, Message[]>();
 
   // Group messages by thread key
@@ -299,7 +320,10 @@ function groupMessagesIntoThreads(messages: Message[]): Thread[] {
       firstDate: firstMsg.sent_at,
       lastDate: lastMsg.sent_at,
       participantDisplay: participantInfo.display,
-      totalAttachments: sortedMsgs.reduce((sum, m) => sum + m.attachment_count, 0),
+      totalAttachments: sortedMsgs.reduce(
+        (sum, m) => sum + realAttachmentCount(m, attachmentsByMessage?.[m.id] ?? []),
+        0
+      ),
       uniqueParticipantCount: participantInfo.count,
       primaryContactName: participantInfo.primaryName,
       primaryPhone: participantInfo.primaryPhone,
@@ -361,20 +385,26 @@ function MessageTypeIcon({ icon, className }: { icon: 'mic' | 'map-pin' | 'paper
 }
 
 /**
- * Phone-style conversation modal
+ * Phone-style conversation modal. Exported for the checklist chips'
+ * View action (BACKLOG-3477), which opens the same viewer as View Full.
  */
-function ConversationModal({
+export function ConversationModal({
   thread,
   onClose,
+  attachmentsByMessage,
 }: {
   thread: Thread;
   onClose: () => void;
+  /** BACKLOG-3748: files shown inside their message's bubble. Omitted = none. */
+  attachmentsByMessage?: AttachmentsByMessage;
 }) {
   const isEmail = thread.channel === 'email';
   // Group chat = more than one unique participant (matching desktop logic)
   const isGroupChat = thread.uniqueParticipantCount > 1;
+  const [viewing, setViewing] = useState<MessageAttachment | null>(null);
 
   return (
+    <>
     <div
       className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
       onClick={onClose}
@@ -418,7 +448,14 @@ function ConversationModal({
           {thread.messages.map((msg) => {
             const isOutbound = msg.direction === 'outbound';
             const msgText = msg.body_text || '';
-            const typeDisplay = getMessageTypeDisplay(msg.message_type);
+            // BACKLOG-3748: matched only by submission_attachments.message_id.
+            const inline = attachmentsByMessage?.[msg.id] ?? [];
+            const hasInline = inline.length > 0;
+            const realCount = realAttachmentCount(msg, inline);
+            // A shown file replaces the "Media Attachment" indicator and placeholder.
+            const typeDisplay = hasInline && msg.message_type === 'attachment_only'
+              ? { indicator: null, icon: null }
+              : getMessageTypeDisplay(msg.message_type);
             const isSpecialType = typeDisplay.indicator !== null;
 
             // System messages get special centered styling
@@ -461,17 +498,25 @@ function ConversationModal({
                       <span className="font-medium text-sm">{typeDisplay.indicator}</span>
                     </div>
                   )}
-                  <p className={`text-sm whitespace-pre-wrap break-words ${
-                    isSpecialType ? 'italic opacity-75' : ''
-                  }`}>
-                    {msgText || (isSpecialType ? `[${typeDisplay.indicator}]` : '[No content]')}
-                  </p>
+                  {hasInline && (
+                    <InlineMessageAttachments attachments={inline} onOpen={setViewing} />
+                  )}
+                  {(msgText || !hasInline) && (
+                    <p className={`text-sm whitespace-pre-wrap break-words ${
+                      isSpecialType ? 'italic opacity-75' : ''
+                    }`}>
+                      {msgText || (isSpecialType ? `[${typeDisplay.indicator}]` : '[No content]')}
+                    </p>
+                  )}
                   <div className={`flex items-center gap-2 mt-1 ${isOutbound ? (isEmail ? 'text-primary-100' : 'text-green-100') : 'text-gray-400'}`}>
                     <span className="text-xs">{formatMessageTime(msg.sent_at)}</span>
-                    {msg.has_attachments && (
+                    {/* BACKLOG-3748: has_attachments lies for link-preview texts
+                        (Apple sets it true with attachment_count 0). Gate on a
+                        real count, never the flag alone. */}
+                    {realCount > 0 && (
                       <span className="flex items-center gap-1 text-xs">
                         <Paperclip className="w-3 h-3" />
-                        {msg.attachment_count}
+                        {realCount}
                       </span>
                     )}
                   </div>
@@ -492,6 +537,14 @@ function ConversationModal({
         </div>
       </div>
     </div>
+    {/* BACKLOG-3748: a sibling of the backdrop, so clicking the viewer's own
+        backdrop closes the viewer and not the conversation behind it. */}
+    <AttachmentViewerModal
+      attachment={viewing}
+      open={!!viewing}
+      onClose={() => setViewing(null)}
+    />
+    </>
   );
 }
 
@@ -598,7 +651,7 @@ function ThreadCard({
   );
 }
 
-export function MessageList({ messages }: MessageListProps) {
+export function MessageList({ messages, attachmentsByMessage }: MessageListProps) {
   const [filter, setFilter] = useState<FilterType>('all');
   const [selectedThread, setSelectedThread] = useState<Thread | null>(null);
 
@@ -611,7 +664,10 @@ export function MessageList({ messages }: MessageListProps) {
   });
 
   // Group filtered messages into threads
-  const threads = useMemo(() => groupMessagesIntoThreads(filteredMessages), [filteredMessages]);
+  const threads = useMemo(
+    () => groupMessagesIntoThreads(filteredMessages, attachmentsByMessage),
+    [filteredMessages, attachmentsByMessage]
+  );
 
   const emailCount = messages.filter((m) => m.channel === 'email').length;
   const textCount = messages.filter((m) => m.channel !== 'email').length;
@@ -673,6 +729,7 @@ export function MessageList({ messages }: MessageListProps) {
         <ConversationModal
           thread={selectedThread}
           onClose={() => setSelectedThread(null)}
+          attachmentsByMessage={attachmentsByMessage}
         />
       )}
     </>

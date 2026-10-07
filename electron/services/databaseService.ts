@@ -55,6 +55,24 @@ import {
   V71_RENAME_THREAD_NAMES_SQL,
   V71_RECREATE_THREAD_NAME_INDEX_SQL,
 } from "./db/migrationV71Sql";
+// BACKLOG-3476: migration v72's SQL, same rule as v71's.
+import {
+  V72_CHECKLIST_INDEX_LIST_SQL,
+  V72_INDEX_COLUMNS_SQL,
+  V72_CREATE_CHECKLISTS_NEW_SQL,
+  V72_COPY_CHECKLISTS_SQL,
+  V72_DROP_CHECKLISTS_SQL,
+  V72_RENAME_CHECKLISTS_SQL,
+} from "./db/migrationV72Sql";
+// BACKLOG-3519: migration v73's SQL text, same boundary rule.
+import {
+  V73_TRANSACTIONS_TABLE_INFO_SQL,
+  V73_ADD_COMMISSION_COLUMNS_SQL,
+} from "./db/migrationV73Sql";
+// BACKLOG-3619: migration v74 — the RCS import's local tables, same boundary rule.
+import {
+  V74_RCS_LOCAL_TABLES_DDL,
+} from "./db/migrationV74Sql";
 import {
   SCHEMA_VERSION_UPDATE_SQL,
   SCHEMA_VERSION_TABLE_EXISTS_SQL,
@@ -111,6 +129,7 @@ import type {
 import { databaseEncryptionService } from "./databaseEncryptionService";
 import { initializationBroadcaster } from "./initializationBroadcaster";
 import type { AuditLogEntry } from "./auditService";
+import type { SelectedTextIds } from "./exportPlan";
 
 // Import domain services for delegation
 import * as userDb from "./db/userDbService";
@@ -127,6 +146,7 @@ import * as diagnosticDb from "./db/diagnosticDbService";
 import * as attachmentDb from "./db/attachmentDbService";
 import * as submissionDb from "./db/submissionDbService";
 import * as syncDb from "./db/syncDbService";
+import * as rcsChatPeopleDb from "./db/rcsChatPeopleDbService";
 import * as maintenanceDb from "./db/maintenanceDbService";
 
 // Re-export types for backward compatibility
@@ -1369,6 +1389,70 @@ class DatabaseService implements IDatabaseService {
         );
       },
     },
+    {
+      version: 72,
+      description:
+        "BACKLOG-3476 transaction_checklists: several per transaction " +
+        "(UNIQUE (transaction_id, template_id) + sort_order; table rebuild)",
+      // Same runner conditions as v71: synchronous, raw d.prepare / d.exec on the
+      // handle passed in, foreign_keys OFF for the whole body.
+      migrate: (d) => {
+        // Guarded: only the old shape carries a UNIQUE index on exactly
+        // (transaction_id). A fresh install builds the new shape from schema.sql
+        // and still runs v72 (schema_version is seeded at BASELINE 70), so this
+        // is a no-op there, and the migration is re-runnable.
+        const uniqueIndexes = (
+          d.prepare(V72_CHECKLIST_INDEX_LIST_SQL).all() as Array<{ name: string; origin: string }>
+        ).filter((index) => index.origin === "u");
+        const hasOldShape = uniqueIndexes.some((index) => {
+          const columns = (
+            d.prepare(V72_INDEX_COLUMNS_SQL).all(index.name) as Array<{ name: string }>
+          ).map((column) => column.name);
+          return columns.length === 1 && columns[0] === "transaction_id";
+        });
+        if (!hasOldShape) {
+          return;
+        }
+
+        // Order: create new, copy, drop old, rename new. See migrationV72Sql.ts
+        // for why renaming the old table aside first would kill the cascades.
+        d.exec(V72_CREATE_CHECKLISTS_NEW_SQL);
+        const copied = d.prepare(V72_COPY_CHECKLISTS_SQL).run().changes;
+        d.exec(V72_DROP_CHECKLISTS_SQL);
+        d.exec(V72_RENAME_CHECKLISTS_SQL);
+
+        hostLogger.info(`[v72] rebuilt transaction_checklists, copied ${copied} row(s)`);
+      },
+    },
+    {
+      version: 73,
+      description:
+        "BACKLOG-3519 commission figures on transactions: commission_offered_rate, " +
+        "commission_actual_rate, commission_gross_amount, commission_adjustment_reason",
+      // Guarded like v71's provider_attachment_id: a FRESH install already has all
+      // four columns from schema.sql (schema_version seeds at BASELINE 70, then this
+      // migration still runs), so checking one column's presence is enough to make
+      // the ALTER TABLE block a no-op there and keep this migration re-runnable.
+      // No index: nothing queries transactions by these columns.
+      migrate: (d) => {
+        const hasCol = (
+          d.prepare(V73_TRANSACTIONS_TABLE_INFO_SQL).all() as Array<{ name: string }>
+        ).some((c) => c.name === "commission_offered_rate");
+        if (!hasCol) {
+          d.exec(V73_ADD_COMMISSION_COLUMNS_SQL);
+        }
+      },
+    },
+    {
+      version: 74,
+      description:
+        "BACKLOG-3619 Google Messages import: the 18 rcs_* local tables and " +
+        "message_source_coverage (with their indexes) in one versioned migration",
+      // CREATE … IF NOT EXISTS only: a no-op where schema.sql's exec already made them.
+      migrate: (d) => {
+        d.exec(V74_RCS_LOCAL_TABLES_DDL);
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
@@ -1636,12 +1720,12 @@ class DatabaseService implements IDatabaseService {
     return contactDb.getContacts(filters);
   }
 
-  async getImportedContactsByUserId(userId: string): Promise<Contact[]> {
-    return contactDb.getImportedContactsByUserId(userId);
+  async getImportedContactsByUserId(userId: string, opts?: contactDb.TextPeopleOption): Promise<Contact[]> {
+    return contactDb.getImportedContactsByUserId(userId, opts);
   }
 
-  async getImportedContactsByUserIdAsync(userId: string): Promise<Contact[]> {
-    return contactDb.getImportedContactsByUserIdAsync(userId);
+  async getImportedContactsByUserIdAsync(userId: string, opts?: contactDb.TextPeopleOption): Promise<Contact[]> {
+    return contactDb.getImportedContactsByUserIdAsync(userId, undefined, opts);
   }
 
   async getUnimportedContactsByUserId(userId: string): Promise<Contact[]> {
@@ -1691,8 +1775,12 @@ class DatabaseService implements IDatabaseService {
     return contactDb.backfillContactPhones(contactId, phones, source);
   }
 
-  async getContactsSortedByActivity(userId: string, propertyAddress?: string): Promise<contactDb.ContactWithActivity[]> {
-    return contactDb.getContactsSortedByActivity(userId, propertyAddress);
+  async getContactsSortedByActivity(
+    userId: string,
+    propertyAddress?: string,
+    opts?: contactDb.TextPeopleOption,
+  ): Promise<contactDb.ContactWithActivity[]> {
+    return contactDb.getContactsSortedByActivity(userId, propertyAddress, opts);
   }
 
   async backfillContactCommunicationDates(userId: string): Promise<number> {
@@ -1703,8 +1791,13 @@ class DatabaseService implements IDatabaseService {
     return contactDb.searchContacts(query, userId);
   }
 
-  searchContactsForSelection(userId: string, query: string, limit?: number): contactDb.ContactWithActivity[] {
-    return contactDb.searchContactsForSelection(userId, query, limit);
+  searchContactsForSelection(
+    userId: string,
+    query: string,
+    limit?: number,
+    opts?: contactDb.TextPeopleOption,
+  ): contactDb.ContactWithActivity[] {
+    return contactDb.searchContactsForSelection(userId, query, limit, opts);
   }
 
   async updateContact(contactId: string, updates: ContactUpdateFields): Promise<void> {
@@ -2291,16 +2384,31 @@ class DatabaseService implements IDatabaseService {
   // SUBMISSION QUERIES (Delegate to submissionDbService)
   // ============================================
 
-  getTransactionMessages(transactionId: string, auditStartDate?: Date | null, auditEndDate?: Date | null) {
-    return submissionDb.getTransactionMessages(transactionId, auditStartDate, auditEndDate);
+  getTransactionMessages(
+    transactionId: string,
+    auditStartDate: Date | null | undefined,
+    auditEndDate: Date | null | undefined,
+    selected: SelectedTextIds
+  ) {
+    return submissionDb.getTransactionMessages(transactionId, auditStartDate, auditEndDate, selected);
   }
 
   getTransactionEmails(transactionId: string, auditStartDate?: Date | null, auditEndDate?: Date | null) {
     return submissionDb.getTransactionEmails(transactionId, auditStartDate, auditEndDate);
   }
 
-  getTransactionAttachments(transactionId: string, auditStartDate?: Date | null, auditEndDate?: Date | null) {
-    return submissionDb.getTransactionAttachments(transactionId, auditStartDate, auditEndDate);
+  getTransactionAttachments(
+    transactionId: string,
+    auditStartDate: Date | null | undefined,
+    auditEndDate: Date | null | undefined,
+    selected: SelectedTextIds
+  ) {
+    return submissionDb.getTransactionAttachments(transactionId, auditStartDate, auditEndDate, selected);
+  }
+
+  /** BACKLOG-3403: email attachment rows the on-demand download could not fill. */
+  getUndownloadedEmailAttachments(emailIds: string[]) {
+    return submissionDb.getUndownloadedEmailAttachments(emailIds);
   }
 
   getTransactionBySubmissionId(submissionId: string) {
@@ -2346,6 +2454,121 @@ class DatabaseService implements IDatabaseService {
 
   insertAttachment(params: Parameters<typeof syncDb.insertAttachment>[0]) {
     return syncDb.insertAttachment(params);
+  }
+
+  markMessageHasAttachments(messageId: string) {
+    return syncDb.markMessageHasAttachments(messageId);
+  }
+
+
+  // BACKLOG-3665: a legacy chat removal moved onto the chat's gmweb2 thread
+
+  // BACKLOG-3658: the RCS cache job
+  getRcsCacheState(userId: string) {
+    return syncDb.getRcsCacheState(userId);
+  }
+
+  updateRcsCacheState(userId: string, patch: Parameters<typeof syncDb.updateRcsCacheState>[1]) {
+    return syncDb.updateRcsCacheState(userId, patch);
+  }
+
+  resetRcsCacheState(userId: string) {
+    return syncDb.resetRcsCacheState(userId);
+  }
+
+  rcsNumbersMatchLiveContact(userId: string, numbers: readonly string[]) {
+    return syncDb.rcsNumbersMatchLiveContact(userId, numbers);
+  }
+
+  // BACKLOG-3630: the RCS content guard
+  findRcsContentDuplicates(
+    userId: string,
+    rows: {
+      externalId: string;
+      sentAt: string;
+      direction: string;
+      bodyText: string | null;
+      participants: string;
+      participantsFlat: string;
+    }[],
+  ) {
+    return syncDb.findRcsContentDuplicates(userId, rows);
+  }
+
+  // BACKLOG-3657: database operations for clearing Google Messages for Web texts
+  rcsClearDbOps() {
+    return syncDb.rcsClearDbOps();
+  }
+
+  // BACKLOG-3658: the cache Sync's staging area
+  rcsStagingDbOps() {
+    return syncDb.rcsStagingDbOps();
+  }
+
+  // BACKLOG-3658 P3b: consent + cache options + auto-delete
+  getRcsConsent(userId: string) {
+    return syncDb.getRcsConsent(userId);
+  }
+
+  setRcsConsent(userId: string, version: number | null, nowIso: string) {
+    return syncDb.setRcsConsent(userId, version, nowIso);
+  }
+
+  setRcsCacheOptions(userId: string, patch: Parameters<typeof syncDb.setRcsCacheOptions>[1]) {
+    return syncDb.setRcsCacheOptions(userId, patch);
+  }
+
+  rcsAutoDeleteDbOps() {
+    return syncDb.rcsAutoDeleteDbOps();
+  }
+
+  // BACKLOG-3658 P3c: per-chat exclusions ("Don't sync")
+  listRcsExclusionConversationIds(userId: string, max: number) {
+    return syncDb.listRcsExclusionConversationIds(userId, max);
+  }
+
+  /**
+   * BACKLOG-3670: the people found in this user's Google Messages texts (not
+   * saved contacts — offered in the picker's address-book half only).
+   */
+  getTextDerivedPeople(userId: string) {
+    return rcsChatPeopleDb.getTextDerivedPeople(userId);
+  }
+
+  /** BACKLOG-3670: a stored Google Messages chat's people (numbers + shown names). */
+  recordRcsChatPeople(
+    userId: string,
+    chatHash: string,
+    rows: import("./db/rcsChatPeopleDbService").RcsChatPersonRow[],
+    lastMessageAt: string | null,
+  ) {
+    return rcsChatPeopleDb.recordRcsChatPeople(userId, chatHash, rows, lastMessageAt);
+  }
+
+  /** Live (founder): a Google Messages group's name (message_thread_names); null removes it. */
+  recordRcsThreadName(userId: string, threadId: string, name: string | null) {
+    return rcsChatPeopleDb.recordRcsThreadName(userId, threadId, name);
+  }
+
+  setRcsExclusion(userId: string, conversationId: string, excluded: boolean) {
+    return syncDb.setRcsExclusion(userId, conversationId, excluded);
+  }
+
+
+  checkRcsExclusion(userId: string, chatHash: string, conversationId: string) {
+    return syncDb.checkRcsExclusion(userId, chatHash, conversationId);
+  }
+
+  listRcsExclusionsForSettings(userId: string) {
+    return syncDb.listRcsExclusionsForSettings(userId);
+  }
+
+  rcsExclusionHashes(userId: string) {
+    return syncDb.rcsExclusionHashes(userId);
+  }
+
+  insertReactionRows(rows: Parameters<typeof syncDb.insertReactionRows>[0]) {
+    return syncDb.insertReactionRows(rows);
   }
 
   // ============================================

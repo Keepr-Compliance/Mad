@@ -17,6 +17,22 @@
  * account page through that flow. It could not be added to either existing
  * bucket: it_admin never sees memberNavItems, and a broker never sees
  * adminNavItems, so either home would hide it from somebody who owns the data.
+ *
+ * BACKLOG-3474 adds Checklists for broker/admin/it_admin, after Users (founder,
+ * 2026-09-24). The layout decides `showChecklists` from lib/checklist-access.ts.
+ * Users is in the admin bucket, which only admin and it_admin see, so the entry
+ * is inserted right after Users there. A broker has no admin bucket; it gets the
+ * entry through a second branch at the end of the member items — the slot Users
+ * would take. Hidden during impersonation.
+ *
+ * BACKLOG-3080 adds the floor bucket for everyone who is not a full-portal user
+ * (a brokerage agent, the owner of a personal organization): Dashboard and
+ * Support, then My Account. The layout decides `floorOnly` from the shared
+ * portal classifier. The other buckets are unchanged.
+ *
+ * BACKLOG-3080 (My Transactions): a floor entry after Support, shown only when
+ * the layout's `showMyTransactions` (lib/my-transactions-access.ts) says so.
+ * The pages refuse on their own; a hidden entry is not the gate.
  */
 
 import Link from 'next/link';
@@ -24,6 +40,8 @@ import { usePathname } from 'next/navigation';
 import {
   ChevronLeft,
   ChevronRight,
+  ClipboardCheck,
+  FileText,
   Files,
   Headphones,
   LayoutDashboard,
@@ -56,6 +74,26 @@ const adminNavItems: NavItem[] = [
   { label: 'Org Settings', href: '/dashboard/settings', icon: Settings },
 ];
 
+/** BACKLOG-3080: the floor. No brokerage data, so no Submissions. */
+const floorNavItems: NavItem[] = [
+  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+  { label: 'Support', href: '/dashboard/support', icon: Headphones },
+];
+
+const myTransactionsNavItem: NavItem = {
+  label: 'My Transactions',
+  href: '/dashboard/my-transactions',
+  icon: FileText,
+};
+
+const checklistsNavItem: NavItem = { label: 'Checklists', href: '/dashboard/checklists', icon: ClipboardCheck };
+
+/** A copy of `items` with `item` placed right after the entry with `href`. */
+export function insertAfter(items: NavItem[], href: string, item: NavItem): NavItem[] {
+  const i = items.findIndex((x) => x.href === href);
+  return i < 0 ? [...items, item] : [...items.slice(0, i + 1), item, ...items.slice(i + 1)];
+}
+
 /** Personal, not org policy. Shown to every role, impersonation included. */
 const personalNavItems: NavItem[] = [
   { label: 'My Account', href: '/dashboard/account', icon: UserCircle },
@@ -76,6 +114,18 @@ export interface SidebarProps {
   displayEmail: string;
   /** Role label shown in the footer; hidden during impersonation. */
   displayRole?: string;
+  /** BACKLOG-3474: the caller passes lib/checklist-access.ts (layout.tsx). */
+  showChecklists?: boolean;
+  /**
+   * BACKLOG-3477: when set (and showChecklists is false), the Checklists entry
+   * renders GRAYED, not as a link, with this one neutral line. Presentation
+   * only; the route still refuses.
+   */
+  checklistsUnavailableLabel?: string | null;
+  /** BACKLOG-3080: the layout passes lib/my-transactions-access.ts. Floor bucket only. */
+  showMyTransactions?: boolean;
+  /** BACKLOG-3080: not a full-portal user; show the floor bucket only. */
+  floorOnly?: boolean;
 }
 
 export function Sidebar({
@@ -86,12 +136,28 @@ export function Sidebar({
   displayName,
   displayEmail,
   displayRole,
+  showChecklists = false,
+  checklistsUnavailableLabel = null,
+  showMyTransactions = false,
+  floorOnly = false,
 }: SidebarProps) {
   const pathname = usePathname();
 
+  // BACKLOG-3080: the floor replaces the member and admin buckets entirely.
+  const showFloorNav = floorOnly && !isImpersonating;
+
   // BACKLOG-907: preserve the exact nav gating of the previous top-nav.
-  const showMemberNav = isImpersonating || role !== 'it_admin';
-  const showAdminNav = !isImpersonating && (role === 'admin' || role === 'it_admin');
+  const showMemberNav = !showFloorNav && (isImpersonating || role !== 'it_admin');
+  const showAdminNav =
+    !showFloorNav && !isImpersonating && (role === 'admin' || role === 'it_admin');
+  const showChecklistsEntry = showChecklists && !isImpersonating;
+  const showChecklistsGrayed =
+    !showChecklistsEntry && !!checklistsUnavailableLabel && !isImpersonating && !showFloorNav;
+  const checklistsSlot = showChecklistsEntry || showChecklistsGrayed;
+  const floorItems = showMyTransactions ? [...floorNavItems, myTransactionsNavItem] : floorNavItems;
+  const adminItems = checklistsSlot
+    ? insertAfter(adminNavItems, '/dashboard/users', checklistsNavItem)
+    : adminNavItems;
 
   // BACKLOG-3077: shared resolution — the dashboard header names the same person.
   const name = resolveViewerName({ displayName, displayEmail }) || 'User';
@@ -101,6 +167,28 @@ export function Sidebar({
   const exactMatchPaths = new Set(['/dashboard']);
 
   const renderNavItem = (item: NavItem) => {
+    if (item === checklistsNavItem && showChecklistsGrayed) {
+      const GrayedIcon = item.icon;
+      return (
+        <div
+          key={item.href}
+          aria-disabled="true"
+          data-testid="checklists-nav-grayed"
+          className={`flex cursor-not-allowed items-center rounded-md text-sm font-medium text-gray-500 ${
+            collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
+          }`}
+          title={collapsed ? `${item.label}: ${checklistsUnavailableLabel}` : checklistsUnavailableLabel ?? undefined}
+        >
+          <GrayedIcon className="h-5 w-5 shrink-0" aria-hidden="true" />
+          {!collapsed && (
+            <span className="flex min-w-0 flex-col leading-tight">
+              <span>{item.label}</span>
+              <span className="mt-0.5 text-xs font-normal text-gray-500">{checklistsUnavailableLabel}</span>
+            </span>
+          )}
+        </div>
+      );
+    }
     const isActive = exactMatchPaths.has(item.href)
       ? pathname === item.href
       : pathname === item.href || pathname.startsWith(`${item.href}/`);
@@ -159,8 +247,10 @@ export function Sidebar({
 
       {/* Navigation */}
       <nav className={`flex-1 py-4 space-y-1 overflow-y-auto scrollbar-hide ${collapsed ? 'px-2' : 'px-3'}`}>
+        {showFloorNav && floorItems.map(renderNavItem)}
         {showMemberNav && memberNavItems.map(renderNavItem)}
-        {showAdminNav && adminNavItems.map(renderNavItem)}
+        {!showAdminNav && checklistsSlot && renderNavItem(checklistsNavItem)}
+        {showAdminNav && adminItems.map(renderNavItem)}
         {personalNavItems.map(renderNavItem)}
       </nav>
 

@@ -52,15 +52,15 @@ const CLOSED_DEAL_END = "2024-09-30T23:59:59.999Z";
  *
  * An EXPECTATION builder only. It is never fed back into the resolver — see the
  * fixture helper's docblock for why a hand-built `ImportPlan` must never DRIVE a
- * test. The default lookback (3) and default cap (50000) are written as LITERALS
+ * test. The default lookback (1.5) and default cap (50000) are written as LITERALS
  * rather than read from `DEFAULT_LOOKBACK_MONTHS` / `DEFAULT_MAX_MESSAGES`,
  * so that changing either constant reds every test built on this baseline
  * instead of silently moving the expectation along with the code.
  */
 const expectedPlan = (overrides: Partial<ImportPlan> = {}): ImportPlan => ({
   mode: "delta",
-  fetchStartISO: monthsBackISO(3),
-  cutoffNano: toAppleNano(monthsBackISO(3)),
+  fetchStartISO: monthsBackISO(1.5),
+  cutoffNano: toAppleNano(monthsBackISO(1.5)),
   effectiveCap: 50000,
   protectedSpans: [],
   fetchAttachments: true,
@@ -198,16 +198,16 @@ describe("resolveImportPlan — the founder's equivalence", () => {
 
 describe("resolveImportPlan — lookback resolution (BACKLOG-2561)", () => {
   it("pins the default lookback the plan baseline is written against", () => {
-    // The literal `3` appears throughout `expectedPlan`. If the shipped default
+    // The literal `1.5` appears throughout `expectedPlan`. If the shipped default
     // ever moves, this reds first and says why the rest went red with it.
-    expect(DEFAULT_LOOKBACK_MONTHS).toBe(3);
+    expect(DEFAULT_LOOKBACK_MONTHS).toBe(1.5);
   });
 
   it.each([
     ["no filters object at all", undefined],
     ["a null filters object", null],
     ["an empty filters object", {}],
-  ])("%s falls back to the default 3-month window", (_label, storedFilters) => {
+  ])("%s falls back to the default 1.5-month window", (_label, storedFilters) => {
     expect(testImportPlan({ storedFilters })).toEqual(expectedPlan());
   });
 
@@ -236,7 +236,7 @@ describe("resolveImportPlan — lookback resolution (BACKLOG-2561)", () => {
     );
   });
 
-  it.each([1, 3, 6, 12, 24])("%i months resolves to exactly that many months back", (months) => {
+  it.each([1, 1.5, 3, 6, 12, 24])("%s months resolves to exactly that many months back", (months) => {
     expect(testImportPlan({ storedFilters: { lookbackMonths: months } })).toEqual(
       expectedPlan({
         fetchStartISO: monthsBackISO(months),
@@ -496,7 +496,7 @@ describe("resolveImportPlan — protectedSpans (Cap': the exemption, scoped)", (
        */
       expect(
         testImportPlan({
-          storedFilters: { lookbackMonths: 3 },
+          storedFilters: { lookbackMonths: 1.5 },
           auditSpans: [span(badStart)],
         }),
       ).toEqual(expectedPlan());

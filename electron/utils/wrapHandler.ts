@@ -43,6 +43,10 @@ export function wrapHandler<T extends AnyIpcHandler>(
   options?: {
     /** Module name for error logging (defaults to "IPC") */
     module?: string;
+    /** Tags on the Sentry event (BACKLOG-3668: `component: "rcs"` drives the RCS beforeSend scrub). */
+    sentryTags?: Record<string, string>;
+    /** Scrub the error's text before it is logged (BACKLOG-3668 L3); the log then omits the raw error. */
+    scrubLogText?: (error: unknown) => string;
   },
 ): T {
   const wrappedHandler = async (
@@ -57,10 +61,15 @@ export function wrapHandler<T extends AnyIpcHandler>(
       }
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";
-      Sentry.captureException(error);
-      logService.error(`Handler error: ${errorMessage}`, options?.module ?? "IPC", {
-        error,
-      });
+      if (options?.sentryTags) Sentry.captureException(error, { tags: options.sentryTags });
+      else Sentry.captureException(error);
+      if (options?.scrubLogText) {
+        logService.error(`Handler error: ${options.scrubLogText(error)}`, options.module ?? "IPC");
+      } else {
+        logService.error(`Handler error: ${errorMessage}`, options?.module ?? "IPC", {
+          error,
+        });
+      }
       return { success: false, error: errorMessage };
     }
   };

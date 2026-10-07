@@ -11,6 +11,7 @@
 import { useState, useEffect } from "react";
 import { usePlatform } from "../contexts/PlatformContext";
 import { settingsService, type ImportSource } from "../services/settingsService";
+import { effectiveImportSource } from "../services/importSourcePolicy";
 
 export function useImportSource(
   userId: string | undefined,
@@ -25,12 +26,13 @@ export function useImportSource(
     if (!userId) return;
     settingsService.getPreferences(userId).then((result) => {
       if (result.success && result.data?.messages?.source) {
-        setImportSource(result.data.messages.source);
+        // BACKLOG-3749: a value this build does not know → the platform default.
+        setImportSource(effectiveImportSource(result.data.messages.source, isMacOS));
       }
     }).catch(() => {
       // Silently ignore — keep platform default
     });
-  }, [userId, showSettings]);
+  }, [userId, showSettings, isMacOS]);
 
   return importSource;
 }
