@@ -58,6 +58,11 @@ import {
 export interface IphoneSyncDiagnostics {
   /** User's selected phone type (from user_preferences), or "unknown". */
   phone_type: "iphone" | "android" | "unknown";
+  /**
+   * BACKLOG-3418: iPhone checking was on for the account, so the device probes
+   * ran. False → the device fields below are defaults, not measurements.
+   */
+  iphone_checking_on: boolean;
   /** libimobiledevice CLI tools available. */
   libimobiledevice_available: boolean;
   /** libimobiledevice reachable on PATH/bundled (macOS-focused signal). */
@@ -592,6 +597,7 @@ function readIntlTimeZone(): string | null {
 function defaultIphoneSyncDiagnostics(): IphoneSyncDiagnostics {
   return {
     phone_type: "unknown",
+    iphone_checking_on: false,
     libimobiledevice_available: false,
     libimobiledevice_in_path: false,
     connected_device_count: 0,
@@ -630,6 +636,7 @@ async function collectIphoneSyncDiagnostics(): Promise<IphoneSyncDiagnostics> {
   try {
     const dev: IphoneSyncDiagnostic =
       await deviceDetectionService.collectIphoneSyncDiagnostics();
+    section.iphone_checking_on = dev.iphoneCheckingOn;
     section.libimobiledevice_available = dev.libimobiledeviceAvailable;
     section.libimobiledevice_in_path = dev.libimobiledeviceInPath;
     section.connected_device_count = dev.connectedDeviceCount;

@@ -51,7 +51,7 @@ import { usePlatform } from "./PlatformContext";
 import { settingsService, type ImportSource } from "../services/settingsService";
 import { resolveIphoneSyncEnabled } from "../utils/iphoneSyncEnabled";
 import logger from "../utils/logger";
-import { effectiveImportSource } from "../services/importSourcePolicy";
+import { loadChosenImportSource } from "../services/importSourcePolicy";
 
 const IPhoneSyncContext = createContext<UseIPhoneSyncReturn | null>(null);
 
@@ -147,19 +147,16 @@ export function IPhoneSyncProvider({ userId = null, children }: IPhoneSyncProvid
 
         // BACKLOG-3423: the source is needed whether or not there is an explicit
         // opt-in — it now gates the opt-in rather than only standing in for it.
-        // BACKLOG-3749: a value this build does not know → the platform default.
-        let source: ImportSource | null = prefs?.messages?.source
-          ? effectiveImportSource(prefs.messages.source, platform === "macos")
-          : null;
-        if (!source) {
-          // Mirror Settings.tsx / useImportSource default derivation.
-          const phone = await settingsService.getPhoneType(userId);
-          if (phone.success && phone.data === "android") {
-            source = "android-companion";
-          } else {
-            source = platform === "macos" ? "macos-native" : "iphone-sync";
-          }
-        }
+        // BACKLOG-3418: the one shared derivation (importSourcePolicy
+        // `chosenImportSource`) — a Windows/Linux user who chose nothing has
+        // no source, so no detection. The cloud `phone_type` comes from this
+        // same preferences object, so a returning account whose local phone
+        // type is not recovered yet still counts as an iPhone choice.
+        const source = await loadChosenImportSource(
+          prefs,
+          platform === "macos",
+          () => settingsService.getPhoneType(userId),
+        );
 
         if (cancelled) return;
         applyPrefEnabled(storedPref);
