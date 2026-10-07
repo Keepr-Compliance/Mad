@@ -182,7 +182,7 @@ describe("BACKLOG-3768: supabaseService client on net.fetch", () => {
           if (e.name === "__tests__" || e.name === "node_modules") continue;
           walk(p);
         } else if (/\.ts$/.test(e.name) && !/\.test\.ts$/.test(e.name)) {
-          if (/\bcreateClient\s*\(/.test(fs.readFileSync(p, "utf8"))) hits.push(path.relative(root, p));
+          if (/\bcreateClient\s*\(/.test(fs.readFileSync(p, "utf8"))) hits.push(path.relative(root, p).split(path.sep).join("/"));
         }
       }
     };
