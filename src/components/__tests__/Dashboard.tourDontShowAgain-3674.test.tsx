@@ -249,7 +249,7 @@ describe("BACKLOG-3674 — Don't show this again", () => {
     expect(button("skip")).not.toBeNull();
     expect(button("skip").textContent).toBe("Skip");
     expect(button("primary").textContent).toMatch(/Next/);
-    expect(document.querySelector('[role="alertdialog"]')).not.toBeNull();
+    expect(document.querySelector('[role="alertdialog"]')?.getAttribute("aria-label")).toBe("Step one");
     view.unmount();
   });
 });

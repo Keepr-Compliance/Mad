@@ -36,6 +36,7 @@ export function TourTooltip(props: TooltipRenderProps): React.ReactElement {
 
   return (
     <div
+      aria-label={typeof (title ?? content) === "string" ? String(title ?? content) : undefined}
       className="react-joyride__tooltip"
       style={styles.tooltip}
       {...tooltipProps}
