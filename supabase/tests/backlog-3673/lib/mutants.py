@@ -9,6 +9,13 @@ apply can never be counted.
 
 usage: mutants.py list
        mutants.py apply <name> <migration> <rollback> <out-migration> <out-rollback>
+       mutants.py classify < status-lines
+
+classify reads the PASS|/FAIL|/ERROR| lines of every target control run
+against one mutant and prints its verdict:
+  INVALID   any ERROR line, or no status line at all: the run proved nothing
+  KILLED    no ERROR and at least one FAIL: a control's assertion saw the mutant
+  SURVIVED  only PASS lines
 """
 import sys
 
@@ -49,7 +56,19 @@ MUTANTS = {
 }
 
 
+def classify(lines):
+    status = [l.split("|", 1)[0] for l in lines if l.split("|", 1)[0] in ("PASS", "FAIL", "ERROR")]
+    if not status or "ERROR" in status:
+        return "INVALID"
+    if "FAIL" in status:
+        return "KILLED"
+    return "SURVIVED"
+
+
 def main():
+    if sys.argv[1] == "classify":
+        print(classify(sys.stdin.read().splitlines()))
+        return
     if sys.argv[1] == "list":
         for k, v in MUTANTS.items():
             print(f"{k}|{v[-1]}")

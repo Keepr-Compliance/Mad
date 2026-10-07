@@ -18,8 +18,12 @@
 #   -- harness: rollback       ROLLBACK_FILE runs after the migration
 #   -- harness: reapply        ...and then the migration runs again
 #   -- harness: full-rollback  ...and then FULL_ROLLBACK_FILE runs
-# Output: PASS|label|detail or FAIL|label|detail; exit 1 on any FAIL or on a
-# control that produced no checks.
+# Output: PASS|label|detail or FAIL|label|detail per check. A control that
+# raises, or produces no checks, is ERROR (psql's error text is printed).
+# `controls` ends with `CONTROLS: pass= fail= error=`; `mutants` first requires
+# every control to PASS on the unmutated migration, then ends with
+# `MUTANTS: killed= survived= invalid=` (verdict: lib/mutants.py classify).
+# Exit 0 only when all controls pass / all mutants are KILLED.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
@@ -29,10 +33,14 @@ RB="${ROLLBACK_FILE:?set ROLLBACK_FILE}"; FULL_RB="${FULL_ROLLBACK_FILE:?set FUL
 psql_in() { ssh -o BatchMode=yes -o ConnectTimeout=20 "$SSH_HOST" "docker exec -i $CONTAINER psql -U postgres -v ON_ERROR_STOP=1 -X -q -tA -f -"; }
 
 # A rollback file as run inside the harness transaction: its own BEGIN/COMMIT
-# stripped, the pasted id list replaced by the fixtures' pre-check list.
+# stripped, the pasted id list replaced by the fixtures' pre-check list, and each
+# `RAISE EXCEPTION '[full ]rollback verify: ...'` turned into a FAIL check with
+# the same label. The conditions are untouched; only what happens when one is
+# true changes. Any other raise in the file still aborts the run (ERROR).
 rb_body() {
   grep -viE '^\s*(begin|commit);\s*$' "$1" \
-    | sed 's/^INSERT INTO r3673_ids .*-- @IDS.*$/INSERT INTO r3673_ids (id) SELECT id FROM t3673_pre;/'
+    | sed -E "s/^INSERT INTO r3673_ids .*-- @IDS.*$/INSERT INTO r3673_ids (id) SELECT id FROM t3673_pre;/" \
+    | sed -E "s/RAISE EXCEPTION '((full )?rollback verify: [^']*)';/PERFORM pg_temp.check('\1', false);/"
 }
 
 build() { # $1 control file, $2 migration file, $3 data rollback file
@@ -41,7 +49,15 @@ build() { # $1 control file, $2 migration file, $3 data rollback file
   cat "$HERE/lib/harness.sql" "$HERE/lib/fixtures.sql"
   if ! grep -q -- '-- harness: baseline' "$ctl"; then
     cat "$mig"
-    grep -q -- '-- harness: apply-twice' "$ctl" && cat "$mig"
+    if grep -q -- '-- harness: apply-twice' "$ctl"; then
+      # The second apply runs inside a block so that the one expected refusal
+      # (duplicate_object, 42710) is recorded as a FAIL check. Any other error
+      # propagates and the run is ERROR.
+      echo 'DO $apply2$ BEGIN'
+      cat "$mig"
+      echo "EXCEPTION WHEN duplicate_object THEN PERFORM pg_temp.check('apply-twice: second apply raised', false, SQLSTATE || ' ' || SQLERRM);"
+      echo 'END $apply2$;'
+    fi
     if grep -q -- '-- harness: rollback' "$ctl"; then
       rb_body "$rb"
       grep -q -- '-- harness: reapply' "$ctl" && cat "$mig"
@@ -54,43 +70,70 @@ build() { # $1 control file, $2 migration file, $3 data rollback file
   echo "ROLLBACK;"
 }
 
-run_one() { # $1 control, $2 migration, $3 data rollback; prints results, returns 1 on failure
+run_one() { # $1 control, $2 migration, $3 data rollback; prints status lines;
+  # returns 0 all checks PASS, 1 some FAIL, 2 ERROR (psql failed, or no checks)
   local out
-  out="$(build "$1" "$2" "$3" | psql_in 2>&1)" || { echo "$out" | tail -3; echo "ERROR|$(basename "$1")|psql failed"; return 1; }
+  if ! out="$(build "$1" "$2" "$3" | psql_in 2>&1)"; then
+    echo "$out" | grep -v '^$' | tail -6
+    echo "ERROR|$(basename "$1")|psql failed"; return 2
+  fi
   echo "$out" | grep -E '^(PASS|FAIL)\|' || true
   local n; n="$(echo "$out" | sed -n 's/^CHECKS|//p')"
-  if [ -z "$n" ] || [ "$n" = "0" ]; then echo "ERROR|$(basename "$1")|0 checks"; return 1; fi
-  ! echo "$out" | grep -q '^FAIL|'
+  if [ -z "$n" ] || [ "$n" = "0" ]; then echo "ERROR|$(basename "$1")|0 checks"; return 2; fi
+  if echo "$out" | grep -q '^FAIL|'; then return 1; fi
+  return 0
+}
+
+# Every control (optionally filtered) against the unmutated migration; prints
+# the CONTROLS tally; returns 0 only when every control PASSes.
+run_controls() { # $1 fragment
+  local pass=0 fail=0 err=0 rc c
+  for c in "$HERE"/controls/*${1}*.sql; do
+    [ -e "$c" ] || continue
+    echo "== $(basename "$c")"
+    rc=0; run_one "$c" "$MIG" "$RB" || rc=$?
+    case $rc in 0) pass=$((pass+1));; 1) fail=$((fail+1));; *) err=$((err+1));; esac
+  done
+  echo "CONTROLS: pass=$pass fail=$fail error=$err"
+  [ "$fail" = 0 ] && [ "$err" = 0 ] && [ "$pass" -gt 0 ]
 }
 
 md5of() { (md5 -q "$1" 2>/dev/null || md5sum "$1" | cut -d' ' -f1); }
 echo "FILES|migration $(basename "$MIG") md5=$(md5of "$MIG")|rollback md5=$(md5of "$RB")|full-rollback md5=$(md5of "$FULL_RB")"
 echo "VENUE|$(echo "select version() || ' | users=' || (select count(*) from public.users) || ' | owner=' || (select tableowner from pg_tables where schemaname='public' and tablename='users');" | psql_in)"
 
+grep -q 'apply2\$' "$MIG" && { echo "ERROR|migration contains the \$apply2\$ tag build() uses"; exit 2; }
+
 mode="${1:-controls}"; frag="${2:-}"
 case "$mode" in
   controls)
-    rc=0
-    for c in "$HERE"/controls/*${frag}*.sql; do
-      echo "== $(basename "$c")"; run_one "$c" "$MIG" "$RB" || rc=1
-    done
-    exit $rc ;;
+    run_controls "$frag" || exit 1 ;;
   mutants)
+    echo "-- baseline: every control against the unmutated migration"
+    if ! run_controls ""; then
+      echo "MUTANTS: aborted - baseline controls did not all PASS; no mutant was run"
+      exit 1
+    fi
     tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-    rc=0
+    killed=0; survived=0; invalid=0
     while IFS='|' read -r name targets; do
       [ -n "$frag" ] && [[ "$name" != *"$frag"* ]] && continue
       # raises unless the pattern occurs exactly once, so an unapplied mutant never counts
       python3 "$HERE/lib/mutants.py" apply "$name" "$MIG" "$RB" "$tmp/m.sql" "$tmp/rb.sql"
       changed="$( (diff "$MIG" "$tmp/m.sql"; diff "$RB" "$tmp/rb.sql") | grep -E '^[<>]' | head -1 | cut -c1-140 || true)"
-      [ -n "$changed" ] || { echo "ERROR|$name|mutant changed nothing"; rc=1; continue; }
+      if [ -z "$changed" ]; then echo "INVALID|$name|mutant changed nothing"; invalid=$((invalid+1)); continue; fi
       echo "== $name  MUTATION APPLIED: $changed"
-      red=0
+      : >"$tmp/status"
       for t in $targets; do
-        if run_one "$HERE/controls/$t.sql" "$tmp/m.sql" "$tmp/rb.sql" >"$tmp/out" 2>&1; then :; else red=1; grep -E '^(FAIL|ERROR)\|' "$tmp/out" | head -3; fi
+        run_one "$HERE/controls/$t.sql" "$tmp/m.sql" "$tmp/rb.sql" >"$tmp/out" 2>&1 || true
+        grep -E '^(PASS|FAIL|ERROR)\|' "$tmp/out" >>"$tmp/status" || true
+        grep -vE '^(PASS)\|' "$tmp/out" | head -8 || true
       done
-      if [ $red = 1 ]; then echo "KILLED|$name"; else echo "SURVIVED|$name"; rc=1; fi
+      verdict="$(python3 "$HERE/lib/mutants.py" classify <"$tmp/status")"
+      echo "$verdict|$name"
+      case "$verdict" in KILLED) killed=$((killed+1));; SURVIVED) survived=$((survived+1));; *) invalid=$((invalid+1));; esac
     done < <(python3 "$HERE/lib/mutants.py" list)
-    exit $rc ;;
+    echo "MUTANTS: killed=$killed survived=$survived invalid=$invalid"
+    [ "$survived" = 0 ] && [ "$invalid" = 0 ] && [ "$killed" -gt 0 ] ;;
   *) echo "usage: run.sh controls|mutants [fragment]"; exit 2 ;;
 esac
