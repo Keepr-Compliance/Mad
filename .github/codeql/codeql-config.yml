@@ -1,0 +1,13 @@
+# CodeQL configuration (BACKLOG-3762)
+#
+# chrome-extension/vendor/ holds an unmodified third-party bundle (@noble/curves
+# + @noble/hashes; versions in chrome-extension/vendor/SBOM.json). It is not
+# Keepr code and is not patched locally. Its integrity is checked by
+# tests/chrome-extension/vendorSbom-c5.test.ts and its versions are tracked by
+# Dependabot via vendor-manifests/chrome-extension-noble/.
+#
+# Every other path stays scanned. Queries are set on the workflow's init step.
+name: Keepr CodeQL config
+
+paths-ignore:
+  - chrome-extension/vendor/**
