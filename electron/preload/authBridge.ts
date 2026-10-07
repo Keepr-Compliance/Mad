@@ -130,14 +130,6 @@ export const authBridge = {
     ipcRenderer.invoke("auth:complete-email-onboarding", userId),
 
   /**
-   * Checks if user has completed email onboarding
-   * @param userId - User ID to check
-   * @returns Onboarding status
-   */
-  checkEmailOnboarding: (userId: string) =>
-    ipcRenderer.invoke("auth:check-email-onboarding", userId),
-
-  /**
    * Completes a pending login after keychain/database setup
    * Called when OAuth succeeded but database wasn't initialized yet
    * @param oauthData - The pending OAuth data from login-pending event

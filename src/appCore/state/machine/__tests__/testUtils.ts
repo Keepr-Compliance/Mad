@@ -39,6 +39,13 @@ export interface MockSystemApi {
   initializeSecureStorage: jest.Mock<
     Promise<{ success: boolean; available: boolean; error?: string }>
   >;
+  checkAllConnections: jest.Mock<Promise<unknown>>;
+  checkPermissions: jest.Mock<Promise<unknown>>;
+}
+
+export interface MockUserApi {
+  getPhoneType: jest.Mock<Promise<unknown>>;
+  getAccountSetup: jest.Mock<Promise<unknown>>;
 }
 
 export interface MockAuthApi {
@@ -59,6 +66,34 @@ export interface MockAuthApi {
 export interface MockApi {
   system: MockSystemApi;
   auth: MockAuthApi;
+  user: MockUserApi;
+}
+
+// ============================================
+// ACCOUNT SETUP FIXTURE (BACKLOG-3673)
+// ============================================
+
+/**
+ * `user:get-account-setup` for an account whose record is empty, transcribed
+ * from the success return of accountSetupHandlers.getAccountSetup
+ * (`{ success: true, setup, emailStepAnswered, contactSourceAnswered }`).
+ * Both answers `false` -- the values readAccountSetup produced for these tests
+ * before the record was stubbed. A fresh copy per call.
+ *
+ * Never default a fixture to `"finished"`: it would hide routing.
+ */
+export function accountSetupNotFinished(): {
+  success: true;
+  setup: "not-finished";
+  emailStepAnswered: false;
+  contactSourceAnswered: false;
+} {
+  return {
+    success: true,
+    setup: "not-finished",
+    emailStepAnswered: false,
+    contactSourceAnswered: false,
+  };
 }
 
 // ============================================
@@ -74,9 +109,15 @@ export function createMockApi(): MockApi {
     system: {
       hasEncryptionKeyStore: jest.fn(),
       initializeSecureStorage: jest.fn(),
+      checkAllConnections: jest.fn(),
+      checkPermissions: jest.fn(),
     },
     auth: {
       getCurrentUser: jest.fn(),
+    },
+    user: {
+      getPhoneType: jest.fn(),
+      getAccountSetup: jest.fn(),
     },
   };
 }
@@ -92,9 +133,15 @@ export const mockApi: MockApi = {
   system: {
     hasEncryptionKeyStore: jest.fn(),
     initializeSecureStorage: jest.fn(),
+    checkAllConnections: jest.fn(),
+    checkPermissions: jest.fn(),
   },
   auth: {
     getCurrentUser: jest.fn(),
+  },
+  user: {
+    getPhoneType: jest.fn(),
+    getAccountSetup: jest.fn(),
   },
 };
 
@@ -109,6 +156,10 @@ export function resetMockApi(): void {
   mockApi.system.hasEncryptionKeyStore.mockReset();
   mockApi.system.initializeSecureStorage.mockReset();
   mockApi.auth.getCurrentUser.mockReset();
+  mockApi.system.checkAllConnections.mockReset();
+  mockApi.system.checkPermissions.mockReset();
+  mockApi.user.getPhoneType.mockReset();
+  mockApi.user.getAccountSetup.mockReset();
   (window as unknown as { api: MockApi }).api = mockApi;
 }
 
@@ -539,6 +590,35 @@ export function setupDefaultMocks(): void {
   });
   mockApi.auth.getCurrentUser.mockResolvedValue({
     success: false,
+  });
+  stubPhase4Reads();
+}
+
+/**
+ * BACKLOG-3673: the Phase 4 reads (LoadingOrchestrator loadUserData).
+ *
+ * Before the account record existed, this harness had no `user` bridge, so
+ * Phase 4 threw and took its catch fallback (setup "unknown" -> setup). That
+ * fallback now shows the account-settings error screen. These stubs give the
+ * same Phase 4 data the fallback gave, except `setup`, which is the record's
+ * "not-finished" (same destination: setup):
+ * - getPhoneType / checkAllConnections / checkPermissions return the shapes
+ *   LoadingOrchestrator's own `.catch()` wrappers produce for a failed read.
+ * - getAccountSetup returns accountSetupNotFinished().
+ * One known difference: on Windows the fallback set needsDriverSetup=true;
+ * with phoneType null the reads give false. No test here reads it.
+ */
+export function stubPhase4Reads(): void {
+  mockApi.user.getPhoneType.mockResolvedValue({ success: false, phoneType: null });
+  mockApi.user.getAccountSetup.mockResolvedValue(accountSetupNotFinished());
+  mockApi.system.checkAllConnections.mockResolvedValue({
+    success: false,
+    google: { connected: false },
+    microsoft: { connected: false },
+  });
+  mockApi.system.checkPermissions.mockResolvedValue({
+    hasPermission: false,
+    fullDiskAccess: false,
   });
 }
 

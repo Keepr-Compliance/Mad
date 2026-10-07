@@ -196,6 +196,20 @@ export const authService = {
   },
 
   /**
+   * Sign out without a session token: clears local sessions and the cloud
+   * session in main (`auth:force-logout`). For a renderer that has a user but
+   * no token to pass to `logout` (BACKLOG-3673).
+   */
+  async forceLogout(): Promise<ApiResult> {
+    try {
+      const result = await window.api.auth.forceLogout();
+      return { success: result.success, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /**
    * Validate a session token
    */
   async validateSession(sessionToken: string): Promise<ApiResult<SessionValidation>> {

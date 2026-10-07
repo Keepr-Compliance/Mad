@@ -104,7 +104,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   // value from the main process via window.api (IPC), which works under
   // contextIsolation — unlike `process.platform`, which is undefined here
   // because the renderer runs with nodeIntegration:false/contextIsolation:true.
-  const { isWindows, isMacOS } = usePlatform();
+  const { isWindows, isMacOS, isWindowsArm64 } = usePlatform();
   const [isConnected, setIsConnected] = useState(false);
   const [device, setDevice] = useState<iOSDevice | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
@@ -717,7 +717,9 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   // StrictMode-safe: uses a `cancelled` flag (value comparison, not a didMount
   // guard) so the dev double-invoke can't leave stale state.
   useEffect(() => {
-    if (!enabled || !isWindows) return;
+    // BACKLOG-3363: on Windows on ARM the driver can never work, so never offer
+    // the recovery install — ConnectionStatus shows the unsupported view instead.
+    if (!enabled || !isWindows || isWindowsArm64) return;
     // A connected device proves the driver is present; nothing to check.
     if (isConnected) {
       setDriverMissing(false);
@@ -743,7 +745,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     return () => {
       cancelled = true;
     };
-  }, [enabled, isConnected, isWindows]);
+  }, [enabled, isConnected, isWindows, isWindowsArm64]);
 
   // TASK-910 / BACKLOG-1773: Poll sync status while mounted AND enabled.
   // Uses a recursive setTimeout with exponential backoff instead of a fixed 5s

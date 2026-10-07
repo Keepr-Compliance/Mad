@@ -5,6 +5,7 @@ import { SyncProgress } from "./SyncProgress";
 import { BackupPasswordModal } from "./BackupPasswordModal";
 import { SyncLockBanner } from "../sync/SyncLockBanner";
 import logger from "../../utils/logger";
+import { isWindowsArm64 } from "../../utils/platform";
 import { SyncStepChangeLog } from "../../utils/syncStepLog";
 
 interface IPhoneSyncFlowProps {
@@ -144,6 +145,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           onInstallDriver={recoverInstallDriver}
           isInstallingDriver={installDriverStatus === "installing"}
           driverInstallError={installDriverError}
+          isWindowsArm64={isWindowsArm64()}
         />
       )}
 

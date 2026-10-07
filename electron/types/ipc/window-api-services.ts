@@ -168,6 +168,25 @@ export interface WindowApiUser {
   syncPhoneTypeFromCloud: (
     userId: string,
   ) => Promise<{ success: boolean; error?: string }>;
+  /**
+   * BACKLOG-3673: the per-account "setup finished" record
+   * (`users.onboarding_completed_at`) plus the account's recorded answers, for
+   * the SESSION user (main ignores any renderer-supplied id). When the server
+   * cannot be read, main answers from the session-file cache, else "unknown".
+   * Bridge: settingsBridge.ts. Handler: accountSetupHandlers.ts.
+   */
+  getAccountSetup: () => Promise<{
+    success: boolean;
+    setup: "finished" | "not-finished" | "unknown";
+    emailStepAnswered: boolean;
+    contactSourceAnswered: boolean;
+    error?: string;
+  }>;
+  /**
+   * BACKLOG-3673: write `users.onboarding_completed_at` once, for the SESSION
+   * user. Called only when the setup queue completes (OnboardingFlow).
+   */
+  completeAccountSetup: () => Promise<{ success: boolean; error?: string }>;
   /** TASK-1600: sets phone type in Supabase cloud storage. */
   setPhoneTypeCloud: (
     userId: string,

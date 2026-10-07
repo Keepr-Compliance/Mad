@@ -227,7 +227,7 @@ class DatabaseService implements IDatabaseService {
     // permissionHandlers.ts. Value is milliseconds to sleep before DB init
     // proceeds -- e.g. `KEEPR_TEST_DB_DELAY=5000 npm run dev` delays DB
     // readiness by 5s so the db-ready-gated consumers (getCurrentUser,
-    // get-phone-type, check-email-onboarding, check-all-connections, the
+    // get-phone-type, check-all-connections, the
     // onboarding resume-marker flow) can be exercised against a real race
     // instead of only unit-test mocks.
     if (!hostAppLifecycle.isPackaged() && process.env.KEEPR_TEST_DB_DELAY) {

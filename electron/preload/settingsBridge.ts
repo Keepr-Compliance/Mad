@@ -91,6 +91,24 @@ export const userBridge = {
     userId: string
   ): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke("user:sync-phone-type-from-cloud", userId),
+
+  /**
+   * BACKLOG-3673: the per-account "setup finished" record for the session user.
+   * Takes no user id on purpose: main reads the signed-in session's id.
+   */
+  getAccountSetup: (): Promise<{
+    success: boolean;
+    setup: "finished" | "not-finished" | "unknown";
+    emailStepAnswered: boolean;
+    contactSourceAnswered: boolean;
+    error?: string;
+  }> => ipcRenderer.invoke("user:get-account-setup"),
+
+  /**
+   * BACKLOG-3673: record that setup finished (write-once) for the session user.
+   */
+  completeAccountSetup: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("user:complete-account-setup"),
 };
 
 /**
