@@ -32,6 +32,10 @@
  * login screen runs no device detection on Windows, where it used to. The
  * onboarding phone-type answer re-gates through `applyImportSource` (called by
  * OnboardingFlow), so an Android answer stops detection at once.
+ * Founder 2026-10-07: on Windows / Linux a signed-in user who chose nothing
+ * (no iPhone source, no iPhone phone type) also has no source, so no detection
+ * — the macOS opt-in. The source comes from importSourcePolicy
+ * `chosenImportSource`, the same rule Settings and the Dashboard use.
  *
  * @module contexts/IPhoneSyncContext
  */
@@ -105,7 +109,8 @@ export function IPhoneSyncProvider({ userId = null, children }: IPhoneSyncProvid
   // read that was already in flight when the source changed live must not
   // overwrite the newer value: an onboarding "Android" answer given while the
   // read is pending would otherwise be replaced by the read's pre-answer
-  // default (`iphone-sync` on Windows) and detection would start again.
+  // source (e.g. `iphone-sync` from an iPhone phone type already in the cloud
+  // preferences) and detection would start again.
   const liveSourceChangesRef = useRef(0);
 
   // Mirror of `prefEnabled` so the optimistic-write path can restore the exact

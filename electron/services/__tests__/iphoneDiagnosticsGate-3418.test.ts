@@ -198,22 +198,31 @@ afterEach(() => {
 
 describe("BACKLOG-3418 Q2: the iPhone helper runs in diagnostics only while iPhone checking is on", () => {
   describe("DeviceDetectionService.collectIphoneSyncDiagnostics", () => {
-    it.each(["darwin", "win32"] as const)(
-      "%s, checking off (never started): spawns nothing and says it did not check",
-      async (platform) => {
-        Object.defineProperty(process, "platform", { value: platform });
+    it("macOS, checking off (never started): spawns nothing and says it did not check", async () => {
+      const result = await deviceDetectionService.collectIphoneSyncDiagnostics();
 
-        const result = await deviceDetectionService.collectIphoneSyncDiagnostics();
+      expect(ideviceCalls()).toEqual([]);
+      expect(mockExec).not.toHaveBeenCalled();
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(result.iphoneCheckingOn).toBe(false);
+      expect(result.libimobiledeviceAvailable).toBe(false);
+    });
 
-        expect(ideviceCalls()).toEqual([]);
-        // Not even the Windows USB/PnP probe runs.
-        expect(mockExec).not.toHaveBeenCalled();
-        expect(mockSpawn).not.toHaveBeenCalled();
-        expect(result.iphoneCheckingOn).toBe(false);
-        expect(result.libimobiledeviceAvailable).toBe(false);
-        expect(result.windows).toBeNull();
-      },
-    );
+    it("Windows, checking off: no iPhone helper; the USB/PnP probe (not the helper) still runs", async () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+
+      const result = await deviceDetectionService.collectIphoneSyncDiagnostics();
+
+      expect(ideviceCalls()).toEqual([]);
+      expect(mockSpawn).not.toHaveBeenCalled();
+      // Anti-vacuity: the probe ran, so "no idevice call" is not "nothing ran".
+      expect(mockExec).toHaveBeenCalled();
+      expect(result.windows).not.toBeNull();
+      expect(result.iphoneCheckingOn).toBe(false);
+      expect(result.libimobiledeviceAvailable).toBe(false);
+      // No helper asked → never a "driver missing" verdict.
+      expect(result.driverMissingSuspected).toBe(false);
+    });
 
     it("checking on (started): runs `idevice_id --version` and `idevice_id -l`", async () => {
       deviceDetectionService.start();
@@ -246,7 +255,7 @@ describe("BACKLOG-3418 Q2: the iPhone helper runs in diagnostics only while iPho
 
       expect(result.iphoneCheckingOn).toBe(false);
       expect(ideviceCalls()).toEqual([]);
-      expect(mockExec).not.toHaveBeenCalled();
+      expect(mockSpawn).not.toHaveBeenCalled();
     });
   });
 

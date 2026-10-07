@@ -626,6 +626,7 @@ describe("supportTicketService", () => {
         uptime_seconds: 3600,
         iphone_sync: {
           phone_type: "iphone",
+          iphone_checking_on: true,
           libimobiledevice_available: true,
           libimobiledevice_in_path: true,
           connected_device_count: 0,

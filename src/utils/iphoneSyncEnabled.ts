@@ -25,13 +25,14 @@
  *   source (not the raw onboarding phoneType) because that is the exact signal
  *   already used to gate the Dashboard "Import from iPhone" button
  *   (BACKLOG-1653), which keeps the button and the detection in lock-step.
- *   The platform difference lives in the source DEFAULT, not here: with nothing
- *   stored, IPhoneSyncContext derives `macos-native` on macOS (so a fresh macOS
- *   user gets no detection until they choose iPhone sync) and `iphone-sync` on
- *   Windows / Linux unless the phone type is Android (so a signed-in Windows
- *   iPhone user still gets detection with no setup).
- * - BACKLOG-3418 (founder, 2026-09-21): an UNKNOWN source means OFF on every
- *   platform. The source is unknown while nobody is signed in (the login
+ *   What "the source" is comes from ONE derivation, importSourcePolicy
+ *   `chosenImportSource` (BACKLOG-3418, founder 2026-10-07): with nothing
+ *   stored, macOS derives `macos-native` (no detection until the user chooses
+ *   iPhone sync); Windows / Linux derive `iphone-sync` only from an iPhone
+ *   phone type (local, else the cloud `phone_type`) and `null` — OFF — when
+ *   the user chose nothing.
+ * - BACKLOG-3418 (founder, 2026-09-21; extended 2026-10-07): an UNKNOWN
+ *   source means OFF on every platform. The source is unknown while nobody is signed in (the login
  *   screen) and while a signed-in user's preferences are still loading.
  *   BACKLOG-1706 kept Windows / Linux ON in that state so their primary import
  *   path started on the first frame; that ran device detection on the login

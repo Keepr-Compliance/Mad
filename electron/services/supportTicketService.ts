@@ -292,6 +292,8 @@ function composeIphoneSyncLine(s: IphoneSyncDiagnostics): string {
   const yn = (v: boolean): string => (v ? "yes" : "no");
   const parts = [
     `phone_type=${s.phone_type}`,
+    // BACKLOG-3418: "no" → the iPhone helper did not run; devices/detected are not measurements.
+    `iphone_checking=${yn(s.iphone_checking_on)}`,
     `devices=${s.connected_device_count}`,
     `mounted=${yn(s.device_mounted)}`,
     `detected=${yn(s.device_detected)}`,
