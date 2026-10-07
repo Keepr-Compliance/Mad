@@ -27,6 +27,16 @@ const { createClient } = jest.requireActual<typeof import("@supabase/supabase-js
 
 type FetchFn = typeof fetch;
 
+/**
+ * CI runs jest on Node 20, which has no global WebSocket; realtime-js throws in
+ * createClient without one. Realtime is never connected in these tests.
+ */
+class NoRealtimeWebSocket {
+  constructor() {
+    throw new Error("realtime is not used in this test");
+  }
+}
+
 function memoryStorage() {
   const m = new Map<string, string>();
   return {
@@ -49,6 +59,7 @@ function client(fetchImpl: FetchFn) {
   return createClient("https://fixture.supabase.co", "anon", {
     auth: { persistSession: false, autoRefreshToken: false, storage: memoryStorage() },
     global: { fetch: fetchImpl },
+    realtime: { transport: NoRealtimeWebSocket as unknown as typeof WebSocket },
   });
 }
 

@@ -40,6 +40,17 @@ jest.mock("../logService", () => ({
   },
 }));
 
+// CI runs jest on Node 20, which has no global WebSocket; realtime-js throws in
+// createClient without one (Electron 38's Node 22 has it). Realtime is never
+// connected here, so a stub that refuses construction is enough.
+if (typeof (globalThis as { WebSocket?: unknown }).WebSocket === "undefined") {
+  (globalThis as { WebSocket?: unknown }).WebSocket = class NoRealtimeWebSocket {
+    constructor() {
+      throw new Error("realtime is not used in this test");
+    }
+  };
+}
+
 process.env.SUPABASE_URL = "https://fixture.supabase.co";
 process.env.SUPABASE_ANON_KEY = "anon-key";
 

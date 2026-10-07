@@ -77,6 +77,16 @@ function electronLikeResponse(status: number, body: string): Response {
 
 const captureMessage = Sentry.captureMessage as jest.Mock;
 
+/**
+ * CI runs jest on Node 20, which has no global WebSocket; realtime-js throws in
+ * createClient without one. Realtime is never connected in these tests.
+ */
+class NoRealtimeWebSocket {
+  constructor() {
+    throw new Error("realtime is not used in this test");
+  }
+}
+
 describe("supabaseNetFetch", () => {
   const realFetch = globalThis.fetch;
   let nodeFetch: jest.Mock;
@@ -166,6 +176,7 @@ describe("supabaseNetFetch", () => {
     const sb = createClient("https://fixture.supabase.co", "anon", {
       auth: { persistSession: false, autoRefreshToken: false },
       global: { fetch: supabaseNetFetch },
+      realtime: { transport: NoRealtimeWebSocket as unknown as typeof WebSocket },
     });
     const { error } = await sb.auth.getUser("t");
     expect(error?.name).toBe("AuthRetryableFetchError");
