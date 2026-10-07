@@ -126,6 +126,7 @@ type InitOptions = {
   environment: string;
   release: string;
   enabled: boolean;
+  beforeBreadcrumb: (breadcrumb: unknown) => unknown;
   beforeSend: (event: unknown) => unknown;
 };
 
@@ -135,11 +136,22 @@ function initOptions(loaded: Loaded): InitOptions {
 }
 
 describe("installSentry: the init call transcribed from main.ts (BACKLOG-2962)", () => {
-  it("passes exactly the five options main.ts passed, in the same order", () => {
+  it("passes exactly the five options main.ts passed, plus beforeBreadcrumb (BACKLOG-3768), in order", () => {
     const options = initOptions(load({ isPackaged: false }));
     // `Object.keys` order is insertion order — a dropped, added or reordered
     // key reds here before any value is looked at.
-    expect(Object.keys(options)).toEqual(["dsn", "environment", "release", "enabled", "beforeSend"]);
+    expect(Object.keys(options)).toEqual(["dsn", "environment", "release", "enabled", "beforeBreadcrumb", "beforeSend"]);
+  });
+
+  it("BACKLOG-3768: beforeBreadcrumb drops the query from an electron.net breadcrumb", () => {
+    const options = initOptions(load({ isPackaged: false }));
+    // Shape measured from @sentry/electron main (scratchpad 3768-eng/probe-bc.js).
+    const out = options.beforeBreadcrumb({
+      category: "electron.net",
+      type: "http",
+      data: { url: "https://x.supabase.co/rest/v1/users?email=eq.jane@example.com", method: "GET", status_code: 200 },
+    }) as { data: { url: string } };
+    expect(out.data.url).toBe("https://x.supabase.co/rest/v1/users");
   });
 
   it("development without SENTRY_DSN: disabled, no dsn, environment development, release from app.getVersion()", () => {
