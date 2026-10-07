@@ -119,6 +119,11 @@ export interface ConnectionStatusProps {
   isInstallingDriver?: boolean;
   /** BACKLOG-1919: Error message from a failed/cancelled inline driver install. */
   driverInstallError?: string | null;
+  /**
+   * BACKLOG-3363: Windows on ARM PC — iPhone USB sync can never work. Takes
+   * precedence over every other view (including driverMissing).
+   */
+  isWindowsArm64?: boolean;
 }
 
 export interface DeviceInfoProps {

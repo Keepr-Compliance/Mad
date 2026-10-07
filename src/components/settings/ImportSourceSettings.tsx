@@ -27,6 +27,7 @@ import { settingsService } from '../../services';
 import logger from '../../utils/logger';
 import { IMPORT_SOURCE_LABELS, shownImportSource } from "./importSourceLabels";
 import { effectiveImportSource } from "../../services/importSourcePolicy";
+import { WindowsArm64Unsupported } from "../iphone/WindowsArm64Unsupported";
 
 // Re-export type for consumers
 export type { ImportSource } from "../../services/settingsService";
@@ -42,7 +43,7 @@ interface ImportSourceSettingsProps {
  * Allows switching between macOS native import, iPhone sync, and Google Messages.
  */
 export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSettingsProps) {
-  const { isMacOS } = usePlatform();
+  const { isMacOS, isWindowsArm64 } = usePlatform();
   const [source, setSource] = useState<ImportSource>(isMacOS ? "macos-native" : "iphone-sync");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -234,7 +235,13 @@ export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSet
           </div>
 
           {/* Show iPhone instructions when that source is selected */}
-          {source === "iphone-sync" && (
+          {/* BACKLOG-3363: Windows on ARM — no connect/Trust steps; they can't work. */}
+          {source === "iphone-sync" && isWindowsArm64 && (
+            <div className="mt-3">
+              <WindowsArm64Unsupported variant="compact" />
+            </div>
+          )}
+          {source === "iphone-sync" && !isWindowsArm64 && (
             <div className="mt-3 p-3 bg-blue-50 rounded text-xs text-blue-700">
               <p className="font-medium mb-1">To use iPhone Sync:</p>
               <ol className="list-decimal list-inside space-y-1">
