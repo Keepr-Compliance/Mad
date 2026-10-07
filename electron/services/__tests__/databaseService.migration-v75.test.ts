@@ -16,9 +16,8 @@
  * `include_outside_dates` in schema.sql. schema.sql runs before v75, so on a
  * v74 database that statement fails on the missing column and the launch dies.
  *
- * Launch 1 builds an install at the current version and then removes the
- * column (SQLite DROP COLUMN), which is exactly the v74 table: v75 is the
- * only change to it. A precondition asserts that shape rather than assuming it.
+ * Launch 1 builds an install at the current version and then replaces the
+ * link table with its v74 CREATE TABLE (v75 is the only change to it). A precondition asserts that shape rather than assuming it.
  *
  * Run under Electron's node locally (the shared native module is Electron-ABI):
  *   ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js \
@@ -120,7 +119,24 @@ describe("migration v75 — BACKLOG-3764, a v74 database on the real upgrade pat
     const first = loadService();
     await expect(first.initialize()).resolves.toBe(true);
     const firstDb = first.db as DatabaseType;
-    firstDb.exec("ALTER TABLE transaction_checklist_links DROP COLUMN include_outside_dates");
+    // The v74 table, verbatim from schema.sql at v74 (BACKLOG-3476's shape).
+    // DROP + CREATE rather than DROP COLUMN: DROP TABLE also removes any index
+    // schema.sql put on the table, so a mutated schema.sql cannot fail HERE —
+    // only in launch 2, where the claim is.
+    firstDb.pragma("foreign_keys = OFF");
+    firstDb.exec(`DROP TABLE transaction_checklist_links;
+      CREATE TABLE transaction_checklist_links (
+        id         TEXT PRIMARY KEY,
+        item_id    TEXT NOT NULL,
+        kind       TEXT NOT NULL CHECK (kind IN ('attachment', 'email')),
+        label      TEXT NOT NULL CHECK (length(trim(label)) >= 1),
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (id, kind),
+        FOREIGN KEY (item_id) REFERENCES transaction_checklist_items(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_checklist_links_item ON transaction_checklist_links(item_id);`);
+    firstDb.pragma("foreign_keys = ON");
     firstDb.prepare("UPDATE schema_version SET version = 74 WHERE id = 1").run();
     firstDb.exec(`
       INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES ('u-3764', 'agent@example.test', 'google', 'oa-3764');
