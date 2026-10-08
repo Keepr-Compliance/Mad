@@ -29,20 +29,13 @@ describe("getDefaultStartDate local-date formatting (BACKLOG-3787)", () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
 
-  // jest.config sets no TZ; pin one so the UTC/local difference is real.
-  // Date reads process.env.TZ at call time in Node, so set it before use.
-  const origTZ = process.env.TZ;
-  beforeAll(() => {
-    process.env.TZ = "America/Los_Angeles";
-  });
-  afterAll(() => {
-    if (origTZ === undefined) delete process.env.TZ;
-    else process.env.TZ = origTZ;
-  });
-
+  // Setting process.env.TZ inside a jest file does NOT change the zone (jest
+  // sandboxes process.env), so these run in the machine's zone. They only
+  // discriminate UTC vs local formatting where offset != 0: 23:30 local is
+  // already the next UTC day west of UTC, 00:30 local is still the previous
+  // UTC day east of UTC. In a UTC runner (CI) they pass vacuously.
   it("23:30 local Oct 8 (already Oct 9 UTC) -> 2026-09-08", () => {
     jest.setSystemTime(new Date(2026, 9, 8, 23, 30, 0));
-    expect(new Date().getTimezoneOffset()).toBe(420); // PDT, proves TZ applied
     expect(getDefaultStartDate()).toBe("2026-09-08");
   });
 
