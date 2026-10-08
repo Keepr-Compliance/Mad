@@ -232,7 +232,10 @@ import { runStartupHealthChecks } from "./services/startupHealthCheck";
 import { getInstallMode } from "./services/diagnostics/installMode";
 import { getHostArchitecture } from "./services/diagnostics/hostArchitecture";
 import { WINDOWS_ARM64_ARGV_TOKEN } from "./utils/windowsArm64";
-import { WindowResponsivenessTracker } from "./services/windowResponsivenessTracker";
+import {
+  WindowResponsivenessTracker,
+  attachResponsivenessTracking,
+} from "./services/windowResponsivenessTracker";
 import { syncTimeline } from "./services/syncTimeline";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
@@ -1764,35 +1767,29 @@ app.whenReady().then(async () => {
       getPhase: () => syncTimeline.currentPhase(),
     });
 
-    mainWindow.on("responsive", () => {
-      responsivenessTracker.onResponsive();
-    });
-
-    mainWindow.on("unresponsive", () => {
-      responsivenessTracker.onUnresponsive();
-      void (async () => {
-      console.warn("[Main] Window became unresponsive");
-      log.warn("[Main] Window became unresponsive");
-
-      Sentry.captureMessage("Window became unresponsive", { level: "warning" });
-
-      const { response } = await dialog.showMessageBox({
-        type: "warning",
-        title: "Application Not Responding",
-        message: "The application is not responding.",
-        detail: "Would you like to wait or reload?",
-        buttons: ["Wait", "Reload", "Quit"],
-        defaultId: 0,
-        cancelId: 0,
-      });
-
-      if (response === 1) {
+    attachResponsivenessTracking(mainWindow, responsivenessTracker, {
+      warn: (line) => {
+        console.warn(line);
+        log.warn(line);
+      },
+      promptUser: async () => {
+        const { response } = await dialog.showMessageBox({
+          type: "warning",
+          title: "Application Not Responding",
+          message: "The application is not responding.",
+          detail: "Would you like to wait or reload?",
+          buttons: ["Wait", "Reload", "Quit"],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        return response;
+      },
+      reload: () => {
         mainWindow?.webContents.reload();
-      } else if (response === 2) {
+      },
+      quit: () => {
         app.quit();
-      }
-      // response === 0: Wait (do nothing)
-      })();
+      },
     });
   }
 

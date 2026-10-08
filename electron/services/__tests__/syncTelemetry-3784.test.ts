@@ -186,6 +186,7 @@ describe("BACKLOG-3784: WindowResponsivenessTracker", () => {
             kind: "window_unresponsive",
             duration_bucket: "5s_15s",
             sync_phase: "storing:messages",
+            ended_by: "responsive",
           },
         },
       },

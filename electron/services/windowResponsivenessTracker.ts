@@ -55,6 +55,19 @@ export class WindowResponsivenessTracker {
 
   /** Returns the freeze duration in ms, or null when there was no freeze to close. */
   onResponsive(): number | null {
+    return this.close("responsive");
+  }
+
+  /**
+   * The user chose Reload or Quit while the window was frozen. `responsive` may never
+   * fire after this, so report the freeze now with the duration so far. A freeze that
+   * already closed (or never started) sends nothing, so one freeze is one event.
+   */
+  flush(reason: "reload" | "quit"): number | null {
+    return this.close(reason);
+  }
+
+  private close(endedBy: "responsive" | "reload" | "quit"): number | null {
     if (this.unresponsiveSince === null) return null;
     const at = this.now();
     const durationMs = at - this.unresponsiveSince;
@@ -62,7 +75,11 @@ export class WindowResponsivenessTracker {
     this.unresponsiveSince = null;
     this.phaseAtStart = null;
 
-    this.deps.log(`[Main] Window responsive again durationMs=${durationMs} phase=${phase}`);
+    this.deps.log(
+      endedBy === "responsive"
+        ? `[Main] Window responsive again durationMs=${durationMs} phase=${phase}`
+        : `[Main] Window still unresponsive at ${endedBy} durationMs=${durationMs} phase=${phase}`,
+    );
 
     if (
       durationMs > SENTRY_THRESHOLD_MS &&
@@ -76,6 +93,7 @@ export class WindowResponsivenessTracker {
             kind: "window_unresponsive",
             duration_bucket: durationBucket(durationMs),
             sync_phase: phase,
+            ended_by: endedBy,
           },
         });
       } catch {
@@ -92,4 +110,48 @@ export class WindowResponsivenessTracker {
       return null;
     }
   }
+}
+
+/** Minimal window surface so the wiring can be tested with an EventEmitter. */
+export interface ResponsivenessWindow {
+  on(event: "responsive" | "unresponsive", listener: () => void): unknown;
+}
+
+export interface ResponsivenessActions {
+  /** Shows the "Application Not Responding" dialog; resolves 0 Wait, 1 Reload, 2 Quit. */
+  promptUser: () => Promise<number>;
+  reload: () => void;
+  quit: () => void;
+  warn: (line: string) => void;
+}
+
+/**
+ * Wires a window's `responsive` / `unresponsive` events to the tracker and handles
+ * the dialog. Reload and Quit flush the tracker first so a freeze that never recovers
+ * is still reported (once).
+ */
+export function attachResponsivenessTracking(
+  win: ResponsivenessWindow,
+  tracker: WindowResponsivenessTracker,
+  actions: ResponsivenessActions,
+): void {
+  win.on("responsive", () => {
+    tracker.onResponsive();
+  });
+
+  win.on("unresponsive", () => {
+    tracker.onUnresponsive();
+    void (async () => {
+      actions.warn("[Main] Window became unresponsive");
+      const response = await actions.promptUser();
+      if (response === 1) {
+        tracker.flush("reload");
+        actions.reload();
+      } else if (response === 2) {
+        tracker.flush("quit");
+        actions.quit();
+      }
+      // response === 0: Wait (do nothing)
+    })();
+  });
 }
