@@ -539,8 +539,7 @@ export const SIGNATURE_REFUSAL_MESSAGE =
 
 /**
  * Copy the installer into a new, randomly named directory Keepr has just
- * created. The copy is what gets checked and installed, so nothing can swap
- * the file at its usual location between the check and the install.
+ * created. The copy is what gets checked and installed.
  */
 function stageInstallerCopy(sourcePath: string): { dir: string; file: string } {
   const dir = fs.mkdtempSync(path.join(app.getPath("temp"), "keepr-amds-"));
