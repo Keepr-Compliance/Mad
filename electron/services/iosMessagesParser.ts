@@ -91,20 +91,46 @@ export class iOSMessagesParser {
     "/var/mobile/",
   ];
 
-  /** The only MediaDomain subtree an attachment path may point into. */
-  private static readonly ATTACHMENT_ROOT = "Library/SMS/Attachments/";
+  /**
+   * The MediaDomain subtrees an attachment path may point into: message
+   * attachments and sticker images. Both are backed up in MediaDomain with the
+   * same relative path sms.db records.
+   */
+  private static readonly ATTACHMENT_ROOTS: readonly string[] = [
+    "Library/SMS/Attachments/",
+    "Library/SMS/StickerCache/",
+  ];
+
+  /** Rejected attachment paths since the last summary, counted by rule. */
+  private static rejectedPathCounts = new Map<string, number>();
+
+  /**
+   * Log one summary line of attachment paths rejected since the last call,
+   * counted by rule, then reset the counts. No-op when nothing was rejected.
+   * @returns the counts that were logged
+   */
+  static flushRejectedPathSummary(): Record<string, number> {
+    const counts = Object.fromEntries(iOSMessagesParser.rejectedPathCounts);
+    iOSMessagesParser.rejectedPathCounts = new Map();
+    if (Object.keys(counts).length > 0) {
+      log.warn("iOSMessagesParser: Rejected attachment paths", counts);
+    }
+    return counts;
+  }
 
   /**
    * Convert an attachment path from sms.db into its MediaDomain relative path.
-   * Accepts only `~/Library/SMS/Attachments/...` and
-   * `/var/mobile/Library/SMS/Attachments/...`. Every `/`-separated segment
+   * Accepts only `~/` or `/var/mobile/` followed by `Library/SMS/Attachments/...`
+   * or `Library/SMS/StickerCache/...`. Rejections are counted by rule and logged
+   * by flushRejectedPathSummary(). Every `/`-separated segment
    * must be a real name: empty, `.` and `..` segments are rejected, as are
    * backslashes and NUL. Dots inside a name (`Offer...pdf`) are allowed.
    * @returns the relative path (e.g. `Library/SMS/Attachments/ab/01/x.jpg`), or null
    */
   static toMediaDomainRelativePath(originalPath: string): string | null {
     const reject = (rule: string): null => {
-      log.warn("iOSMessagesParser: Rejected attachment path", { rule });
+      const counts = iOSMessagesParser.rejectedPathCounts;
+      counts.set(rule, (counts.get(rule) ?? 0) + 1);
       return null;
     };
 
@@ -116,7 +142,9 @@ export class iOSMessagesParser {
 
     if (relativePath.includes("\\")) return reject("backslash");
     if (relativePath.includes("\0")) return reject("nul");
-    if (!relativePath.startsWith(iOSMessagesParser.ATTACHMENT_ROOT)) return reject("root");
+    if (!iOSMessagesParser.ATTACHMENT_ROOTS.some((root) => relativePath.startsWith(root))) {
+      return reject("root");
+    }
 
     for (const segment of relativePath.split("/")) {
       if (segment === "" || segment === "." || segment === "..") {

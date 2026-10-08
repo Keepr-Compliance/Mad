@@ -51,6 +51,7 @@ jest.mock("../db/externalContactDbService");
 jest.mock("../iosMessagesParser", () => ({
   iOSMessagesParser: {
     resolveAttachmentPath: jest.fn(),
+    flushRejectedPathSummary: jest.fn(),
   },
 }));
 jest.mock("../../utils/messageTypeDetector", () => ({

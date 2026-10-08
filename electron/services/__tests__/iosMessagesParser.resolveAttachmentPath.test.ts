@@ -1,8 +1,9 @@
 /**
  * BACKLOG-3789: attachment path validation for iOS backups.
  *
- * Real sms.db attachment paths must resolve to their MediaDomain backup file;
- * anything outside `Library/SMS/Attachments/` or containing a `..`/`.`/empty
+ * Real sms.db attachment and sticker paths must resolve to their MediaDomain
+ * backup file; anything outside `Library/SMS/Attachments/` and
+ * `Library/SMS/StickerCache/`, or containing a `..`/`.`/empty
  * segment, a backslash or a NUL must be rejected.
  */
 import crypto from "crypto";
@@ -14,7 +15,13 @@ jest.mock("electron-log", () => ({
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 
+import log from "electron-log";
 import { iOSMessagesParser } from "../iosMessagesParser";
+
+beforeEach(() => {
+  iOSMessagesParser.flushRejectedPathSummary();
+  jest.clearAllMocks();
+});
 
 const BACKUP = path.resolve("/backups/00008030-TEST");
 const GUID = "5F2C0E1A-9B7D-4C3E-8A11-2D4F6B8C0E9A"; // pii-allow-uuid: synthetic attachment GUID, not a record id
@@ -48,6 +55,9 @@ describe("iOSMessagesParser.resolveAttachmentPath — accepted", () => {
     [`/var/mobile/Library/SMS/Attachments/0f/15/at_0_${GUID}/a...b...c.mov`, `Library/SMS/Attachments/0f/15/at_0_${GUID}/a...b...c.mov`],
     // Spaces and unicode in names
     [`~/Library/SMS/Attachments/aa/02/at_1_${GUID}/Purchase Contract – final.pdf`, `Library/SMS/Attachments/aa/02/at_1_${GUID}/Purchase Contract – final.pdf`],
+    // Sticker images (StickerCache) are attachments too
+    [`~/Library/SMS/StickerCache/4c/${GUID}/sticker.heic`, `Library/SMS/StickerCache/4c/${GUID}/sticker.heic`],
+    [`/var/mobile/Library/SMS/StickerCache/4c/${GUID}/sticker..png`, `Library/SMS/StickerCache/4c/${GUID}/sticker..png`],
     // Flat form used by older fixtures
     ["~/Library/SMS/Attachments/photo.jpg", "Library/SMS/Attachments/photo.jpg"],
   ];
@@ -71,10 +81,13 @@ describe("iOSMessagesParser.resolveAttachmentPath — accepted", () => {
 });
 
 describe("iOSMessagesParser.resolveAttachmentPath — rejected", () => {
-  const BASE_SEGMENTS = ["Library", "SMS", "Attachments", "3a", "10", `at_0_${GUID}`, "IMG_4021.HEIC"];
+  const BASES = [
+    ["Library", "SMS", "Attachments", "3a", "10", `at_0_${GUID}`, "IMG_4021.HEIC"],
+    ["Library", "SMS", "StickerCache", "4c", GUID, "sticker.heic"],
+  ];
 
   // Insert a bad segment at every depth, and also replace each segment with it.
-  function segmentVariants(bad: string): string[] {
+  function segmentVariants(BASE_SEGMENTS: string[], bad: string): string[] {
     const out: string[] = [];
     for (let i = 0; i <= BASE_SEGMENTS.length; i++) {
       const inserted = [...BASE_SEGMENTS.slice(0, i), bad, ...BASE_SEGMENTS.slice(i)];
@@ -92,14 +105,16 @@ describe("iOSMessagesParser.resolveAttachmentPath — rejected", () => {
 
   const REJECTED: string[] = [];
   for (const prefix of PREFIXES) {
-    for (const bad of ["..", ".", ""]) {
-      for (const rel of segmentVariants(bad)) REJECTED.push(prefix + rel);
-    }
-    // Backslash and NUL at every character position of the relative path
-    const rel = BASE_SEGMENTS.join("/");
-    for (let i = 0; i <= rel.length; i++) {
-      REJECTED.push(prefix + rel.slice(0, i) + "\\" + rel.slice(i));
-      REJECTED.push(prefix + rel.slice(0, i) + "\0" + rel.slice(i));
+    for (const base of BASES) {
+      for (const bad of ["..", ".", ""]) {
+        for (const rel of segmentVariants(base, bad)) REJECTED.push(prefix + rel);
+      }
+      // Backslash and NUL at every character position of the relative path
+      const rel = base.join("/");
+      for (let i = 0; i <= rel.length; i++) {
+        REJECTED.push(prefix + rel.slice(0, i) + "\\" + rel.slice(i));
+        REJECTED.push(prefix + rel.slice(0, i) + "\0" + rel.slice(i));
+      }
     }
     // Backslash traversal spelled Windows-style
     REJECTED.push(`${prefix}Library\\SMS\\Attachments\\..\\..\\sms.db`);
@@ -107,7 +122,10 @@ describe("iOSMessagesParser.resolveAttachmentPath — rejected", () => {
     // Outside the attachments root
     REJECTED.push(`${prefix}Library/SMS/sms.db`);
     REJECTED.push(`${prefix}Library/SMS/AttachmentsX/3a/10/x.jpg`);
-    REJECTED.push(`${prefix}Library/SMS/StickerCache/3a/x.png`);
+    REJECTED.push(`${prefix}Library/SMS/StickerCacheX/3a/x.png`);
+    REJECTED.push(`${prefix}Library/SMS/StickerCache`);
+    REJECTED.push(`${prefix}Library/SMS/StickerCache/`);
+    REJECTED.push(`${prefix}Library/SMS/StickerCache/../sms.db`);
     REJECTED.push(`${prefix}Library/Preferences/com.apple.x.plist`);
     REJECTED.push(`${prefix}library/sms/attachments/3a/x.jpg`);
     REJECTED.push(`${prefix}Library/SMS/Attachments`);
@@ -131,7 +149,7 @@ describe("iOSMessagesParser.resolveAttachmentPath — rejected", () => {
   );
 
   it("sweep covers every variant (sanity)", () => {
-    expect(REJECTED.length).toBeGreaterThan(400);
+    expect(REJECTED.length).toBeGreaterThan(800);
   });
 
   it.each(REJECTED.map((p) => [JSON.stringify(p)] as [string]))("%s", (encoded) => {
@@ -142,5 +160,34 @@ describe("iOSMessagesParser.resolveAttachmentPath — rejected", () => {
 
   it("rejects an empty path", () => {
     expect(iOSMessagesParser.resolveAttachmentPath(BACKUP, "")).toBeNull();
+  });
+});
+
+describe("iOSMessagesParser.flushRejectedPathSummary", () => {
+  it("logs nothing per path, then one warn line with counts by rule", () => {
+    const paths = [
+      "/etc/passwd", // prefix
+      "~/Library/Preferences/x.plist", // root
+      "~/Library/SMS/Attachments/../sms.db", // segment
+      "~/Library/SMS/Attachments/a/../../sms.db", // segment
+      "~/Library/SMS/Attachments\\x.jpg", // backslash
+      "~/Library/SMS/Attachments/x\0.jpg", // nul
+      `~/Library/SMS/Attachments/3a/10/at_0_${GUID}/Offer...pdf`, // accepted
+    ];
+    for (const p of paths) iOSMessagesParser.resolveAttachmentPath(BACKUP, p);
+    expect(log.warn).not.toHaveBeenCalled();
+
+    const counts = iOSMessagesParser.flushRejectedPathSummary();
+    expect(counts).toEqual({ prefix: 1, root: 1, segment: 2, backslash: 1, nul: 1 });
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith("iOSMessagesParser: Rejected attachment paths", counts);
+  });
+
+  it("resets after flushing and logs nothing when there were no rejections", () => {
+    iOSMessagesParser.resolveAttachmentPath(BACKUP, "/etc/passwd");
+    iOSMessagesParser.flushRejectedPathSummary();
+    jest.clearAllMocks();
+    expect(iOSMessagesParser.flushRejectedPathSummary()).toEqual({});
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });

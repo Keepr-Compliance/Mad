@@ -829,6 +829,8 @@ class IPhoneSyncStorageService {
       }
     }
 
+    iOSMessagesParser.flushRejectedPathSummary();
+
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Attachments complete`, {
       stored,
       skipped,
