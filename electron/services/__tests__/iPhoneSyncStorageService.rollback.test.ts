@@ -957,6 +957,9 @@ describe("cancel during attachments phase", () => {
 
     // Orphaned files should be cleaned up
     expect(mockFsPromises.unlink).toHaveBeenCalledWith("/mock/userData/message-attachments/abc123.jpg");
+
+    // BACKLOG-3789: rejected attachment paths are summarized once, even on cancel
+    expect(iOSMessagesParser.flushRejectedPathSummary).toHaveBeenCalledTimes(1);
   });
 });
 
