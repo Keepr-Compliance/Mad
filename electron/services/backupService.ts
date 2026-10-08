@@ -810,6 +810,9 @@ export class BackupService extends EventEmitter {
    */
   private static readonly PASSCODE_WAIT_DETECTION_MS = 5000;
 
+  /** BACKLOG-3598: longest a quit waits for idevicebackup2 to exit before force-killing it. */
+  static readonly QUIT_STOP_TIMEOUT_MS = 3000;
+
   // BACKLOG-1582: Watchdog timer to detect zombie idevicebackup2 processes.
   //
   // BACKLOG-2911 (FIX 2): THE WATCHDOG COULD NOT FIRE, AND THIS PAIR OF FIELDS IS WHY.
@@ -1800,6 +1803,72 @@ export class BackupService extends EventEmitter {
         }));
       }
     }, 10_000);
+  }
+
+  /**
+   * BACKLOG-3598: stop idevicebackup2 because the app is quitting.
+   *
+   * The child is spawned without `detached`, and Node does not kill an undetached child
+   * when the parent exits, so without this a quit left the backup running. Asks the
+   * process to stop, waits up to `timeoutMs` for it to exit, then force-kills it (on
+   * Windows the whole tree, with taskkill). Returns null when no backup process is alive.
+   * Never rejects and never waits longer than `timeoutMs`. Records nothing: the run's
+   * own close handler reports the outcome, if the app is still alive to hear it. The unfinished folder is left for the leftover
+   * sweep at the start of the next sync.
+   */
+  stopForQuit(
+    timeoutMs: number = BackupService.QUIT_STOP_TIMEOUT_MS,
+  ): Promise<"exited" | "killed"> | null {
+    const proc = this.currentProcess;
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
+      // Nothing to stop: return synchronously so the quit is not deferred at all.
+      return null;
+    }
+
+    this.clearWatchdog();
+    this.isRunning = false;
+    log.info(`[BackupService] App quitting; stopping backup process (PID: ${proc.pid})`);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const finish = (how: "exited" | "killed") => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        proc.removeListener("exit", onExit);
+        resolve(how);
+      };
+      const onExit = () => finish("exited");
+      proc.once("exit", onExit);
+
+      timer = setTimeout(() => {
+        log.warn(
+          `[BackupService] Backup process did not exit within ${timeoutMs} ms of quit; force-killing`,
+        );
+        finish("killed");
+        try {
+          if (process.platform === "win32" && proc.pid !== undefined) {
+            spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
+              stdio: "ignore",
+              windowsHide: true,
+            }).on("error", () => {
+              /* best effort: the app is exiting */
+            });
+          } else {
+            proc.kill("SIGKILL");
+          }
+        } catch {
+          /* already gone */
+        }
+      }, timeoutMs);
+
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        finish("exited");
+      }
+    });
   }
 
   /**

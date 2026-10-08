@@ -560,6 +560,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   private contactsParser: iOSContactsParser;
 
   private isRunning: boolean = false;
+  /** BACKLOG-3598: set once the app quit has stopped this run's backup process. */
+  private stoppedForQuit: boolean = false;
   private abortController: AbortController | null = null;
   private currentPhase: SyncPhase = "idle";
   private estimatedBackupSize: number = 0;
@@ -777,6 +779,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     }
 
     this.isRunning = true;
+    this.stoppedForQuit = false;
     // BACKLOG-2907: a new run must establish its own answer. Without this reset the
     // early progress events of run 2 would carry run 1's prior-backup state.
     this.priorBackup = "unknown";
@@ -1624,6 +1627,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           // thrown away, and the founder had to ask the user instead.
           //
           // Nothing is classified here. The values are copied.
+          // BACKLOG-3598: the app quit killed this backup. That is not a device fault
+          // (BACKLOG-3440 separated the two), so the row says `app-quit` and carries no
+          // reasonCode; the unfinished folder is left to the next sync's sweep.
+          if (this.stoppedForQuit) {
+            syncTimeline.setContext({ endedBy: "app-quit" });
+            this.isRunning = false;
+            return this.errorResult(error);
+          }
           syncTimeline.setContext({
             ...(backupResult.errorCode ? { reasonCode: backupResult.errorCode } : {}),
             // `null` means "the device did not say", never "no error". Absent stays
@@ -2110,6 +2121,22 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // the backup process may still be alive (race condition on disconnect/error)
     this.backupService.cancelBackup();
     this.setPhase("idle");
+  }
+
+  /**
+   * BACKLOG-3598: the app is quitting — stop this orchestrator's own idevicebackup2.
+   * Not `cancel()`: that records a user cancel, which this is not. Records `endedBy=app-quit` only.
+   * Null when no backup process is alive.
+   */
+  stopBackupForQuit(timeoutMs?: number): Promise<"exited" | "killed"> | null {
+    const stopping = this.backupService.stopForQuit(timeoutMs);
+    if (stopping) {
+      // Set before the child exits, so the sync's failure path (which runs when the
+      // killed backup's close handler resolves) records an app quit, not a device error.
+      this.stoppedForQuit = true;
+      syncTimeline.noteEndedBy("app-quit");
+    }
+    return stopping;
   }
 
   /**

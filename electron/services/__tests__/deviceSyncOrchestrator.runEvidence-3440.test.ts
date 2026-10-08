@@ -27,6 +27,7 @@ const GB = 1024 * 1024 * 1024;
 const mockStartBackup = jest.fn();
 const mockCheckBackupStatus = jest.fn();
 const mockCancelBackup = jest.fn();
+const mockStopForQuit = jest.fn();
 
 jest.mock("electron", () => ({
   app: { isPackaged: false, getPath: jest.fn().mockReturnValue("/tmp") },
@@ -94,6 +95,7 @@ jest.mock("../backupService", () => ({
       checkBackupStatus: mockCheckBackupStatus,
       startBackup: mockStartBackup,
       cancelBackup: mockCancelBackup,
+      stopForQuit: mockStopForQuit,
       // BACKLOG-3598: leftover cleanup. Inert here; the cleanup itself is proven in
       // deviceSyncOrchestrator.failedSyncCleanup-3598.test.ts against a real folder.
       sweepLeftoverBackups: jest.fn().mockResolvedValue({ removed: 0, bytesFreed: 0, failures: [] }),
@@ -404,5 +406,51 @@ describe("BACKLOG-3440: the orchestrator forwards the transferred byte count", (
       incremental: false,
       backupModeSource: "device-reported",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3598 — an app quit that kills the backup is not a device fault
+// ---------------------------------------------------------------------------
+
+describe("BACKLOG-3598: quitting during a backup is recorded as app-quit, not device-error", () => {
+  it("stopBackupForQuit during a pending backup, then the killed backup fails -> endedBy=app-quit", async () => {
+    // Drop the `stoppedForQuit` branch in the orchestrator's backup-failure path and this
+    // reds: the killed backup's failure falls through to endedBy=device-error.
+    logLines.length = 0;
+    mockCheckBackupStatus.mockReset().mockResolvedValue(PRIOR_BACKUP_PRESENT);
+    mockStopForQuit.mockReset().mockReturnValue(Promise.resolve("exited"));
+    let resolveBackup!: (r: unknown) => void;
+    mockStartBackup.mockReset().mockReturnValue(new Promise((r) => (resolveBackup = r)));
+
+    const orchestrator = new DeviceSyncOrchestrator();
+    orchestrator.on("error", () => {});
+    const syncing = orchestrator.sync({ udid: UDID });
+    for (let i = 0; i < 200 && mockStartBackup.mock.calls.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(mockStartBackup).toHaveBeenCalled();
+
+    expect(orchestrator.stopBackupForQuit()).not.toBeNull();
+    // What onProcessClose resolves after the child is killed.
+    resolveBackup({
+      success: false,
+      backupPath: null,
+      duration: 1000,
+      deviceUdid: UDID,
+      backupSize: null,
+      isIncremental: true,
+      isEncrypted: false,
+      deviceReportedBackupMode: null,
+      error: "Backup process exited with code null",
+      errorCode: "UNKNOWN_ERROR",
+    });
+    await syncing;
+
+    const rows = logLines.filter((l) => l.includes("sync-outcome"));
+    const last = rows[rows.length - 1];
+    expect(last).toContain("endedBy=app-quit");
+    expect(last).not.toContain("endedBy=device-error");
+    expect(last).not.toContain("reasonCode=");
   });
 });
