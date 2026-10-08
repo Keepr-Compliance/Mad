@@ -97,6 +97,13 @@ describe("BACKLOG-3819: log scrub + retention", () => {
     expect(read("main.log")).toBe("");
   });
 
+  it("after the marker, a file whose first line has no timestamp is still checked in full", () => {
+    fs.writeFileSync(path.join(dir, SCRUB_MARKER), "x");
+    fs.writeFileSync(path.join(dir, "main.log"), `[log cropped]\n${buildLog(NOW - 20 * DAY)}${buildLog(NOW - DAY)}`);
+    expect(runLogMaintenance(dir, NOW).rewritten).toEqual(["main.log"]);
+    expect(read("main.log").startsWith(stamp(NOW - DAY))).toBe(true);
+  });
+
   it("an archive whose entries are all past retention is deleted even if its mtime is recent", () => {
     fs.writeFileSync(path.join(dir, "main.old.log"), buildLog(NOW - 20 * DAY));
     expect(runLogMaintenance(dir, NOW).deleted).toEqual(["main.old.log"]);

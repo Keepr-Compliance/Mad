@@ -71,11 +71,13 @@ describe("BACKLOG-3819: the electron-log sink redacts emails and phones", () => 
     realLog.info(`[Main] contact ${EMAIL} phone ${PHONE}`, {
       handle: "+15555550177",
       nested: { list: ["555-555-0188", { email: "bob.x@example.org" }] },
+      url: new URL("https://example.com/c?email=carol.y@example.net"),
+      map: new Map([["k", "dan.z@example.com"]]),
     });
     realLog.error("[Main] failure", err);
 
     const text = fileText();
-    for (const raw of [EMAIL, PHONE, "+15555550177", "555-555-0188", "bob.x@example.org"]) {
+    for (const raw of [EMAIL, PHONE, "+15555550177", "555-555-0188", "bob.x@example.org", "carol.y@example.net", "dan.z@example.com"]) {
       expect(text).not.toContain(raw);
       expect(consoleLines.join("\n")).not.toContain(raw);
     }

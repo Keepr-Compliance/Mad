@@ -145,7 +145,9 @@ export function maintainLogFile(
     // Content was redacted on an earlier launch and every line since went
     // through the sink hook: only retention can still require a rewrite.
     const head = headTimestamp(file);
-    if (head === null || head >= cutoff) return "unchanged";
+    // A null head (e.g. electron-log's "[log cropped]" first line) falls
+    // through to the full read.
+    if (head !== null && head >= cutoff) return "unchanged";
   }
 
   const original = fs.readFileSync(file, "utf8");

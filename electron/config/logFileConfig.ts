@@ -130,8 +130,10 @@ export function redactLogValue(value: unknown, depth = 0, seen = new WeakSet<obj
     if (value instanceof Date || Buffer.isBuffer(value) || ArrayBuffer.isView(value)) {
       return value;
     }
-    if (value instanceof Map || value instanceof Set) {
-      // Entries are not own enumerable properties; redact the printed form.
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) {
+      // Map, Set, URL and other class instances: their content is not in own
+      // enumerable properties, so redact the printed form instead.
       return redactLogText(inspect(value, { depth: 4 }));
     }
     const out: Record<string, unknown> = {};
