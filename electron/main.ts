@@ -17,6 +17,10 @@ import "./bootstrap/installSentry";
 // anything calls the store. Nothing calls it during module construction today,
 // but installing first is what keeps that cheap to stay true.
 import "./bootstrap/installNativeCapabilities";
+// BACKLOG-3799: axios in main goes over Electron net.fetch (OS certificate
+// store), so TLS-inspecting antivirus / proxies do not break Outlook, Gmail
+// token calls or address verification. Before any handler is registered.
+import "./bootstrap/installMainNetAxios";
 import {
   app,
   BrowserWindow,
