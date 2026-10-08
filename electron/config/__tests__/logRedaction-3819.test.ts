@@ -85,6 +85,8 @@ describe("BACKLOG-3819: the electron-log sink redacts emails and phones", () => 
     expect(text).toContain("***77");
     expect(text).toContain("***88");
     expect(text).toContain("b***@example.org");
+    // class instances keep their content (printed form), redacted
+    expect(text).toContain("example.com/c?email=c***@example.net");
     // the caller's Error is not mutated
     expect(err.message).toContain(EMAIL);
   });
