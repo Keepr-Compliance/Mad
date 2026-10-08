@@ -46,6 +46,15 @@ jest.mock("fs", () => ({
   readFileSync: jest.fn(() => ""),
   createWriteStream: jest.fn(() => ({ on: jest.fn(), close: jest.fn() })),
   unlinkSync: jest.fn(),
+  mkdtempSync: jest.fn((prefix: string) => `${prefix}x`),
+  copyFileSync: jest.fn(),
+  rmSync: jest.fn(),
+}));
+
+// BACKLOG-3806: the installer passes the Apple signature check here, so a
+// normal PC still reaches the PowerShell/msiexec spawn.
+jest.mock("../appleInstallerSignature", () => ({
+  verifyAppleSignature: jest.fn(async () => ({ ok: true, reason: "valid", status: "Valid", subject: "CN=Apple Inc., O=Apple Inc." })),
 }));
 
 import { EventEmitter } from "events";

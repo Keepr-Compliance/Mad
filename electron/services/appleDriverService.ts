@@ -7,6 +7,8 @@
  * The drivers are bundled with the app but only installed with user consent.
  */
 
+// BACKLOG-3806: every Apple installer is checked before Windows runs it.
+import { verifyAppleSignature } from "./appleInstallerSignature";
 import { exec, execFile, spawn } from "child_process";
 import { promisify } from "util";
 import path from "path";
@@ -74,6 +76,7 @@ export type DriverFailureReason =
   | "network_error"
   | "extraction_failed"
   | "msi_not_found"
+  | "signature_invalid"
   | "user_cancelled"
   | "unknown";
 
@@ -309,20 +312,11 @@ async function checkAppleMobileDeviceService(): Promise<boolean> {
 
 /**
  * Get path to bundled Apple driver MSI
- * Checks both bundled resources and previously downloaded drivers
+ * Checks the copy shipped with the app first, then previously downloaded
+ * drivers (BACKLOG-3806: bundled first). Whichever is chosen is
+ * signature-checked before it is installed.
  */
 export function getBundledDriverPath(): string | null {
-  // First, check for previously downloaded drivers
-  const downloadedPath = getDownloadedDriverPath();
-  if (downloadedPath) {
-    log.info(
-      "[AppleDriverService] Using downloaded driver at:",
-      downloadedPath,
-    );
-    return downloadedPath;
-  }
-
-  // Then check bundled resources
   const isDev = !app.isPackaged;
 
   let basePath: string;
@@ -342,6 +336,16 @@ export function getBundledDriverPath(): string | null {
   const altPath = path.join(basePath, "AppleMobileDeviceSupport.msi");
   if (fs.existsSync(altPath)) {
     return altPath;
+  }
+
+  // Then previously downloaded drivers
+  const downloadedPath = getDownloadedDriverPath();
+  if (downloadedPath) {
+    log.info(
+      "[AppleDriverService] Using downloaded driver at:",
+      downloadedPath,
+    );
+    return downloadedPath;
   }
 
   log.warn("[AppleDriverService] No driver MSI found (bundled or downloaded)");
@@ -416,19 +420,41 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
 
   log.info("[AppleDriverService] Installing Apple drivers from:", msiPath);
 
-  Sentry.addBreadcrumb({
-    category: "driver.install",
-    message: "Running MSI installer",
-    level: "info",
-    data: { msiPathAvailable: true },
-  });
-
+  // BACKLOG-3806: install from a private copy, and check the signature of
+  // that exact copy - the same path is then handed to msiexec.
+  let stagingDir: string | null = null;
   try {
+    const staged = stageInstallerCopy(msiPath);
+    stagingDir = staged.dir;
+    const installPath = staged.file;
+
+    const signature = await verifyAppleSignature(installPath);
+    if (!signature.ok) {
+      log.error(
+        "[AppleDriverService] Refusing to install: installer is not validly signed by Apple",
+        { reason: signature.reason, status: signature.status, subject: signature.subject },
+      );
+      const refused: DriverInstallResult = {
+        success: false,
+        error: SIGNATURE_REFUSAL_MESSAGE,
+        rebootRequired: false,
+      };
+      reportSignatureRefusal("install", signature);
+      return refused;
+    }
+
+    Sentry.addBreadcrumb({
+      category: "driver.install",
+      message: "Running MSI installer",
+      level: "info",
+      data: { msiPathAvailable: true },
+    });
+
     // Run MSI installer silently
     // /qn = quiet, no UI
     // /norestart = don't restart automatically
     // REBOOT=ReallySuppress = suppress reboot prompts
-    const result = await runMsiInstaller(msiPath);
+    const result = await runMsiInstaller(installPath);
 
     if (result.success) {
       log.info("[AppleDriverService] Installer reported success, verifying...");
@@ -502,43 +528,76 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
     };
     reportInstallFailure(errorResult, msiPath);
     return errorResult;
+  } finally {
+    if (stagingDir) removeDirQuietly(stagingDir);
   }
+}
+
+/** Shown when an installer fails the Apple signature check (BACKLOG-3806). */
+export const SIGNATURE_REFUSAL_MESSAGE =
+  "The Apple driver installer could not be verified as signed by Apple, so it was not installed. Please install iTunes from the Microsoft Store instead.";
+
+/**
+ * Copy the installer into a new, randomly named directory Keepr has just
+ * created. The copy is what gets checked and installed, so nothing can swap
+ * the file at its usual location between the check and the install.
+ */
+function stageInstallerCopy(sourcePath: string): { dir: string; file: string } {
+  const dir = fs.mkdtempSync(path.join(app.getPath("temp"), "keepr-amds-"));
+  const file = path.join(dir, path.basename(sourcePath));
+  fs.copyFileSync(sourcePath, file);
+  return { dir, file };
+}
+
+function removeDirQuietly(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (error) {
+    log.warn("[AppleDriverService] Could not remove temporary installer copy:", error);
+  }
+}
+
+function reportSignatureRefusal(
+  phase: "install" | "download" | "extract",
+  check: { reason: string; status: string | null; subject: string | null },
+): void {
+  if (process.platform !== "win32") return;
+  Sentry.captureMessage("Apple driver installer failed signature check", {
+    level: "error",
+    tags: {
+      component: "apple_driver",
+      platform: "win32",
+      failureReason: "signature_invalid",
+    },
+    extra: {
+      phase,
+      reason: check.reason,
+      status: check.status,
+      subject: check.subject,
+    },
+  });
 }
 
 /**
  * Run MSI installer with elevated privileges using PowerShell
  * This triggers the UAC prompt for admin elevation
  *
- * SECURITY AUDIT (TASK-601):
- * This function uses spawn("powershell", ...) with msiPath embedded in the command.
- *
- * RISK ANALYSIS:
- * - msiPath comes from getBundledDriverPath() which returns paths from:
- *   1. getDownloadedDriverPath() - paths within app.getPath("userData")
- *   2. Bundled resources (process.resourcesPath or __dirname)
- * - The path is NOT user-controlled - it's constructed internally from known directories
- * - The path is validated by fs.existsSync() before being used
- *
- * CONCLUSION: SAFE - No user-controlled input flows into the spawn command.
- * The msiPath is always from trusted internal sources (bundled resources or app's
- * userData directory with fixed subdirectory structure).
- *
- * DEFENSE-IN-DEPTH: The path is quoted in the PowerShell command to handle
- * paths with spaces, and msiexec.exe is the target executable (a known Windows binary).
+ * The MSI path reaches PowerShell only through an environment variable, never
+ * as command text, and has been signature-checked by the caller (BACKLOG-3806).
  */
+/** Environment variable that carries the MSI path to PowerShell. */
+export const MSI_PATH_ENV = "KEEPR_MSI_PATH";
+
 function runMsiInstaller(msiPath: string): Promise<DriverInstallResult> {
   return new Promise((resolve) => {
-    // Build msiexec arguments
-    // SECURITY: msiPath is from trusted internal sources (bundled or userData)
-    const msiArgs = `/i "${msiPath}" /qn /norestart REBOOT=ReallySuppress`;
-
     // Use PowerShell Start-Process with -Verb RunAs to trigger UAC elevation
     // -Wait ensures we wait for the installation to complete
     // -PassThru returns the process object so we can get the exit code
     // Wrap in try-catch to properly handle UAC decline (which throws an exception)
     const psCommand = `
       try {
-        $process = Start-Process -FilePath "msiexec.exe" -ArgumentList '${msiArgs}' -Verb RunAs -Wait -PassThru -ErrorAction Stop
+        $msiArgs = '/i "' + $env:${MSI_PATH_ENV} + '" /qn /norestart REBOOT=ReallySuppress'
+        $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Verb RunAs -Wait -PassThru -ErrorAction Stop
         exit $process.ExitCode
       } catch {
         # UAC declined or other error starting the elevated process
@@ -548,11 +607,16 @@ function runMsiInstaller(msiPath: string): Promise<DriverInstallResult> {
     `.trim();
 
     log.info("[AppleDriverService] Running elevated installer via PowerShell");
-    log.info("[AppleDriverService] msiexec args:", msiArgs);
+    log.info("[AppleDriverService] msiexec package:", msiPath);
 
-    const installer = spawn("powershell", ["-Command", psCommand], {
-      shell: false,
-    });
+    const installer = spawn(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command", psCommand],
+      {
+        shell: false,
+        env: { ...process.env, [MSI_PATH_ENV]: msiPath },
+      },
+    );
 
     let stderr = "";
     let stdout = "";
@@ -976,6 +1040,25 @@ export async function downloadAppleDrivers(
       onProgress?.({ phase: "downloading", percent }),
     );
 
+    // BACKLOG-3806: check the downloaded installer before anything opens or
+    // runs it; an unverified file is deleted, never extracted.
+    if (process.platform === "win32") {
+      const installerCheck = await verifyAppleSignature(installerPath);
+      if (!installerCheck.ok) {
+        log.error(
+          "[AppleDriverService] Downloaded installer is not validly signed by Apple; deleting it",
+          { reason: installerCheck.reason, status: installerCheck.status, subject: installerCheck.subject },
+        );
+        try {
+          fs.unlinkSync(installerPath);
+        } catch {
+          // Ignore cleanup errors
+        }
+        reportSignatureRefusal("download", installerCheck);
+        return { success: false, error: SIGNATURE_REFUSAL_MESSAGE };
+      }
+    }
+
     log.info("[AppleDriverService] Download complete, extracting...");
     onProgress?.({ phase: "extracting", percent: 0 });
 
@@ -1008,6 +1091,21 @@ export async function downloadAppleDrivers(
         error:
           "Could not extract Apple drivers from installer. Please install iTunes manually.",
       };
+    }
+
+    // BACKLOG-3806: the extracted MSI is checked too; a failure removes
+    // everything extracted so it is never picked up later.
+    if (process.platform === "win32") {
+      const msiCheck = await verifyAppleSignature(msiPath);
+      if (!msiCheck.ok) {
+        log.error(
+          "[AppleDriverService] Extracted MSI is not validly signed by Apple; deleting extracted files",
+          { reason: msiCheck.reason, status: msiCheck.status, subject: msiCheck.subject },
+        );
+        removeDirQuietly(extractDir);
+        reportSignatureRefusal("extract", msiCheck);
+        return { success: false, error: SIGNATURE_REFUSAL_MESSAGE };
+      }
     }
 
     onProgress?.({ phase: "complete", percent: 100 });
