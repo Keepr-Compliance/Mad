@@ -533,7 +533,16 @@ function diskGuardCleanupSentence(cleanup: LeftoverRemoval | null): string {
 interface BackupInFlight {
   udid: string;
   disconnected: boolean;
+  /** A disconnect is being confirmed by a second listing; further events are ignored. */
+  confirming: boolean;
 }
+
+/**
+ * BACKLOG-3598 (SR B2): how many second listings to try before giving up on confirming
+ * an unplug. A listing idevice_id could not answer is "unknown" and is retried; after
+ * this many unknowns the backup is left running (the no-progress watchdog still applies).
+ */
+const DISCONNECT_CONFIRM_ATTEMPTS = 3;
 
 /**
  * BACKLOG-3598: what the user is told when the phone being backed up is unplugged.
@@ -592,6 +601,19 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * writing into `Backups/<udid>`; a new frame must not sweep that folder.
    */
   private backupInFlight: BackupInFlight | null = null;
+
+  /**
+   * BACKLOG-3598 (SR B2): wait before the second listing that confirms an unplug. The
+   * detector polls every 2 s and one failed or empty poll is enough for it to report a
+   * disconnect. Tests shorten this.
+   */
+  disconnectConfirmDelayMs = 2000;
+
+  /**
+   * BACKLOG-3598 (SR I2): true while an unfinished backup folder is being removed, so
+   * the status reads "cleaning up" instead of "backup in progress".
+   */
+  private removingUnfinishedBackup = false;
 
   /**
    * Tracks the last successfully synced backup for skip detection (TASK-908)
@@ -1463,7 +1485,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       let backupResult: BackupResult;
       // BACKLOG-3598 (SR R1): see `backupInFlight`. Held until the backup has settled
       // and any cleanup of its unfinished folder is done.
-      const backupInFlightToken: BackupInFlight = { udid: options.udid, disconnected: false };
+      const backupInFlightToken: BackupInFlight = {
+        udid: options.udid,
+        disconnected: false,
+        confirming: false,
+      };
       this.backupInFlight = backupInFlightToken;
       try {
         this.startDiskSpaceMonitor();
@@ -1528,8 +1554,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         // 30-minute watchdog, with every Try Again refused. Same shape as the disk-guard
         // exit above: clean up, record why, end the run once. It returns BEFORE the
         // `!success` block so that block's `endedBy` (device-error / watchdog) does not
-        // overwrite this one.
-        if (backupInFlightToken.disconnected) {
+        // overwrite this one. SR B1: `abortBackupOnDisconnect` only acts while the
+        // process is alive; a backup that still came back complete is never discarded.
+        if (
+          backupInFlightToken.disconnected &&
+          !(backupResult.success && backupResult.backupPath)
+        ) {
           await this.removeUnfinishedBackup(options.udid, mayRemoveUnfinishedBackup);
           syncTimeline.setContext({ endedBy: "device-disconnect" });
           this.isRunning = false;
@@ -1922,6 +1952,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     mayRemove: boolean,
   ): Promise<LeftoverRemoval | null> {
     if (!mayRemove) return null;
+    this.removingUnfinishedBackup = true;
     try {
       if ((await this.backupService.classifyBackupFolder(udid)) === "leftover") {
         this.emitProgress({
@@ -1942,6 +1973,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         tags: { service: "sync-orchestrator", operation: "leftoverCleanup" },
       });
       return null;
+    } finally {
+      this.removingUnfinishedBackup = false;
     }
   }
 
@@ -1978,18 +2011,75 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * being backed up counts; another phone coming or going changes nothing. Acts once
    * per backup. The sync frame waiting on `startBackup` sees the process exit and
    * finishes through its device-disconnect exit.
+   *
+   * SR B1: only while the idevicebackup2 process is alive. `backupService` clears
+   * `isRunning` when the process closes, BEFORE `startBackup` measures and decrypts;
+   * an unplug after that point must not discard a backup that completed.
+   *
+   * SR B2: the detector reports a disconnect after ONE poll without the phone, and a
+   * failed `idevice_id` reads as an empty poll. Before stopping anything, a second
+   * listing must succeed and not contain the phone.
    */
   private abortBackupOnDisconnect(device: iOSDevice): void {
     const inFlight = this.backupInFlight;
-    if (inFlight === null || inFlight.disconnected || inFlight.udid !== device.udid) return;
-    inFlight.disconnected = true;
-    log.warn("[DeviceSyncOrchestrator] Device being backed up was disconnected; stopping the backup");
-    Sentry.addBreadcrumb({
-      category: "sync",
-      message: "Backup stopped: the device being backed up was disconnected",
+    if (
+      inFlight === null ||
+      inFlight.disconnected ||
+      inFlight.confirming ||
+      inFlight.udid !== device.udid
+    ) {
+      return;
+    }
+    if (!this.backupService.getStatus().isRunning) {
+      log.info(
+        "[DeviceSyncOrchestrator] Device disconnected after the backup process finished; keeping the backup",
+      );
+      return;
+    }
+    inFlight.confirming = true;
+    void this.confirmDisconnectThenStop(inFlight).finally(() => {
+      inFlight.confirming = false;
     });
-    syncTimeline.noteEndedBy("device-disconnect");
-    this.backupService.cancelBackup();
+  }
+
+  /** BACKLOG-3598 (SR B2): see `abortBackupOnDisconnect`. Never throws. */
+  private async confirmDisconnectThenStop(inFlight: BackupInFlight): Promise<void> {
+    const stillThisBackup = (): boolean =>
+      this.backupInFlight === inFlight && this.backupService.getStatus().isRunning;
+    try {
+      for (let attempt = 1; attempt <= DISCONNECT_CONFIRM_ATTEMPTS; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, this.disconnectConfirmDelayMs));
+        if (!stillThisBackup()) return;
+
+        const udids = await this.deviceService.probeConnectedUdids();
+        if (udids === null) continue; // idevice_id could not answer: unknown, not gone
+        if (udids.includes(inFlight.udid)) {
+          log.info(
+            "[DeviceSyncOrchestrator] Device reported disconnected but is still listed; backup continues",
+          );
+          return;
+        }
+
+        // The process may have finished while the listing ran (SR B1).
+        if (!stillThisBackup()) return;
+        inFlight.disconnected = true;
+        log.warn("[DeviceSyncOrchestrator] Device being backed up was disconnected; stopping the backup");
+        Sentry.addBreadcrumb({
+          category: "sync",
+          message: "Backup stopped: the device being backed up was disconnected",
+        });
+        syncTimeline.noteEndedBy("device-disconnect");
+        this.backupService.cancelBackup();
+        return;
+      }
+      log.warn(
+        "[DeviceSyncOrchestrator] Could not confirm the device disconnect; backup left running",
+      );
+    } catch (error) {
+      log.warn("[DeviceSyncOrchestrator] Confirming the device disconnect failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -2016,10 +2106,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   /**
    * Get current sync status
    */
-  getStatus(): { isRunning: boolean; phase: SyncPhase } {
+  getStatus(): { isRunning: boolean; phase: SyncPhase; removingUnfinishedBackup: boolean } {
     return {
       isRunning: this.isRunning,
       phase: this.currentPhase,
+      removingUnfinishedBackup: this.removingUnfinishedBackup,
     };
   }
 

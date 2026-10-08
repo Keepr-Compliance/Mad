@@ -78,9 +78,14 @@ jest.mock("../backupService", () => ({
 }));
 
 // Mock deviceSyncOrchestrator with controllable status
-const mockOrchestratorStatus: { isRunning: boolean; phase: SyncPhase } = {
+const mockOrchestratorStatus: {
+  isRunning: boolean;
+  phase: SyncPhase;
+  removingUnfinishedBackup: boolean;
+} = {
   isRunning: false,
   phase: "idle",
+  removingUnfinishedBackup: false,
 };
 
 jest.mock("../deviceSyncOrchestrator", () => ({
@@ -105,6 +110,7 @@ describe("SyncStatusService", () => {
     mockBackupStatus.progress = null;
     mockOrchestratorStatus.isRunning = false;
     mockOrchestratorStatus.phase = "idle";
+    mockOrchestratorStatus.removingUnfinishedBackup = false;
   });
 
   describe("getStatus", () => {
@@ -174,6 +180,19 @@ describe("SyncStatusService", () => {
         const status = syncStatusService.getStatus();
         expect(status.currentOperation).toBe(expectedLabel);
       }
+    });
+
+    it("BACKLOG-3598 (I2): while the unfinished backup is removed, says so — not 'iPhone backup in progress'", () => {
+      // The frame during `removeUnfinishedBackup` after an unplug: orchestrator still
+      // running, phase still "backup", the backup process already gone.
+      mockOrchestratorStatus.isRunning = true;
+      mockOrchestratorStatus.phase = "backup";
+      mockOrchestratorStatus.removingUnfinishedBackup = true;
+
+      const status = syncStatusService.getStatus();
+
+      expect(status.currentOperation).toBe("Cleaning up the unfinished backup");
+      expect(status.isAnyOperationRunning).toBe(true);
     });
 
     it("should return null operation for complete phase", () => {

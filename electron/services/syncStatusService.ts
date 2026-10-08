@@ -62,11 +62,14 @@ class SyncStatusService {
       isAnyOperationRunning: backupStatus.isRunning || orchestratorRunning,
       backupInProgress: backupStatus.isRunning,
       emailSyncInProgress: orchestratorRunning && !backupStatus.isRunning,
-      currentOperation: this.getCurrentOperationLabel(
-        backupStatus,
-        orchestratorRunning,
-        orchestratorStatus.phase
-      ),
+      currentOperation: orchestratorStatus.removingUnfinishedBackup
+        ? // BACKLOG-3598 (SR I2): a failed or stopped backup's folder is being removed.
+          "Cleaning up the unfinished backup"
+        : this.getCurrentOperationLabel(
+            backupStatus,
+            orchestratorRunning,
+            orchestratorStatus.phase
+          ),
       syncPhase: orchestratorStatus.phase,
     };
   }
