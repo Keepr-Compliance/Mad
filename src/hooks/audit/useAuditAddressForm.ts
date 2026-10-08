@@ -10,13 +10,21 @@ import logger from "../../utils/logger";
 import { formatSaleInput } from "../../components/transactionDates/commission";
 
 /**
- * Get default start date (3 months ago from today)
- * Typical recent transaction timeframe for real estate audits
+ * Get default start date (1 month before today).
+ * Calendar-month subtraction clamped to the last day of the previous month
+ * (Mar 31 -> Feb 28/29, May 31 -> Apr 30), because Date#setMonth alone rolls
+ * over (Mar 31 - 1 month = Mar 3). BACKLOG-3787 (was 3 months).
+ * Month arithmetic and formatting both use LOCAL date components (toISOString
+ * returned tomorrow's UTC date in the evening for US timezones).
  */
-function getDefaultStartDate(): string {
-  const date = new Date();
-  date.setMonth(date.getMonth() - 3);
-  return date.toISOString().split("T")[0]; // YYYY-MM-DD format
+export function getDefaultStartDate(now: Date = new Date()): string {
+  const day = now.getDate();
+  // Day 0 of (month) = last day of the previous month; month index -1 wraps the year.
+  const lastDayOfPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+  const year = lastDayOfPrevMonth.getFullYear();
+  const month = lastDayOfPrevMonth.getMonth() + 1;
+  const dd = Math.min(day, lastDayOfPrevMonth.getDate());
+  return `${year}-${String(month).padStart(2, "0")}-${String(dd).padStart(2, "0")}`; // local YYYY-MM-DD
 }
 
 export const initialAddressData: AddressData = {
