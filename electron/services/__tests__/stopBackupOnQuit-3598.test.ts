@@ -230,7 +230,7 @@ describe("BACKLOG-3598: BackupService.stopForQuit", () => {
 });
 
 describe("BACKLOG-3598: the orchestrator stops ITS OWN backup, not the singleton's", () => {
-  it("kills the process on the orchestrator's BackupService and records nothing", async () => {
+  it("kills the process on the orchestrator's BackupService and records only endedBy=app-quit", async () => {
     const orch = new DeviceSyncOrchestrator();
     const orchestratorProc = fakeProcess(true);
     const singletonProc = fakeProcess(true);
@@ -245,7 +245,8 @@ describe("BACKLOG-3598: the orchestrator stops ITS OWN backup, not the singleton
     expect(orchestratorProc.kill).toHaveBeenCalledWith("SIGTERM");
     expect(singletonProc.kill).not.toHaveBeenCalled();
     expect(endSync).not.toHaveBeenCalled();
-    expect(noteEndedBy).not.toHaveBeenCalled();
+    expect(noteEndedBy).toHaveBeenCalledTimes(1);
+    expect(noteEndedBy).toHaveBeenCalledWith("app-quit");
   });
 
   it("no backup running: returns null so the quit is not deferred", () => {
