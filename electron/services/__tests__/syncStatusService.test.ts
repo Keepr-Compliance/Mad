@@ -191,7 +191,7 @@ describe("SyncStatusService", () => {
 
       const status = syncStatusService.getStatus();
 
-      expect(status.currentOperation).toBe("Cleaning up the unfinished backup");
+      expect(status.currentOperation).toBe("Cleaning up the unfinished iPhone backup");
       expect(status.isAnyOperationRunning).toBe(true);
     });
 

@@ -64,7 +64,8 @@ class SyncStatusService {
       emailSyncInProgress: orchestratorRunning && !backupStatus.isRunning,
       currentOperation: orchestratorStatus.removingUnfinishedBackup
         ? // BACKLOG-3598 (SR I2): a failed or stopped backup's folder is being removed.
-          "Cleaning up the unfinished backup"
+          // Keeps "iPhone" in the label: useIPhoneSync reconnects to a running sync by it.
+          "Cleaning up the unfinished iPhone backup"
         : this.getCurrentOperationLabel(
             backupStatus,
             orchestratorRunning,

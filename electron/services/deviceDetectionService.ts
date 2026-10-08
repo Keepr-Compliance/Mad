@@ -789,9 +789,12 @@ export class DeviceDetectionService extends EventEmitter {
    *
    * `listDevices` resolves `[]` both for "no phone connected" and for "idevice_id
    * failed", so one failed poll reads as an unplug. This tells them apart: `idevice_id
-   * -l` exits 0 with empty output when no phone is connected (measured, libimobiledevice
-   * 1.4.0), and exits non-zero only when it could not get the device list. A spawn error
-   * or missing tools is also `null`.
+   * -l` exits 0 with empty output when no phone is connected (measured on macOS,
+   * Homebrew libimobiledevice 1.4.0; the bundled Windows binary is NOT measured), and
+   * prints "Unable to retrieve device list" with a non-zero exit when it could not get
+   * the list. A spawn error or missing tools is also `null`. If a platform exits
+   * non-zero on an empty list, an unplug there is never confirmed and the backup is
+   * left to the watchdog, as before BACKLOG-3598.
    */
   async probeConnectedUdids(): Promise<string[] | null> {
     const { udids, ok } = await this.listDevicesWithOutcome();
@@ -836,7 +839,9 @@ export class DeviceDetectionService extends EventEmitter {
               data: { exitCode: code, stderr: stderr.substring(0, 200) },
             });
           }
-          // Treated as "no devices" by `listDevices`. BACKLOG-3598: not a successful
+          // Treated as "no devices" by `listDevices` (the original comment here called a
+          // non-zero exit with no devices "normal"; on macOS 1.4.0 an empty list exits 0
+          // — see probeConnectedUdids). BACKLOG-3598: not a successful
           // listing — `probeConnectedUdids` reports it as unknown.
           resolve({ udids: [], ok: false });
           return;
