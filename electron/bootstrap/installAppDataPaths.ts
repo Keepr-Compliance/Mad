@@ -14,6 +14,14 @@
 import log from "electron-log";
 import path from "path";
 import { applyAppDataPaths, buildConsoleNotice } from "./appDataPaths";
+import { installLogRedactionHook } from "../config/logFileConfig";
+
+// BACKLOG-3819: redact customer emails and phone numbers from every log line.
+// Installed here, the first import in main.ts, because modules imported after
+// this one (installSentry, installNativeCapabilities, services) already log
+// during import — main.ts's own `applyLogFileConfig` line runs too late for
+// those writes. Unconditional: dev and packaged builds both redact.
+installLogRedactionHook(log);
 
 const applied = applyAppDataPaths();
 

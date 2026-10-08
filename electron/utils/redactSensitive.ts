@@ -190,3 +190,67 @@ export function scrubRcsText(err: unknown, maxLength = 300): string {
   // Phones and quoted text first: truncation must never leave half a number.
   return scrubServerErrorText(redactPhonesInText(redactQuotedText(raw)), maxLength);
 }
+
+// ---------------------------------------------------------------------------
+// Log-sink redaction [SECURITY — BACKLOG-3819]
+//
+// Applied to EVERY line electron-log writes (see electron/config/logFileConfig.ts)
+// and to the existing log files once (electron/services/logScrub.ts). Because it
+// runs over all log text rather than over a string known to be an error message,
+// it is deliberately narrower than `redactPhonesInText` above, which would turn
+// the 12-digit tail of a UUID ("...-446655440000") and every 7+ digit byte count
+// into "<phone>". A phone here must look like a phone:
+//
+//   - "+"-led international (E.164), 8–15 digits, with optional single spaces,
+//     dots, dashes or parentheses between digit groups: +15555550199,
+//     +1 (555) 555-0199, +44 20 7946 0958
+//   - North-American formats WITH separators: (555) 555-0199, 555-555-0199,
+//     555.555.0199, 555 555 0199, 1-555-555-0199
+//
+// Bare digit runs (5555550199) are NOT treated as phones: in the real log they
+// are byte counts, epoch seconds and repository ids (shape census of main.log,
+// recorded on BACKLOG-3819), and a 10-digit byte count is indistinguishable
+// from a 10-digit phone number.
+// ---------------------------------------------------------------------------
+
+/** "+"-led international number: 8–15 digits. */
+const INTL_PHONE_RE = /(?<![\w/=+*])\+\d(?:[ .()-]{0,2}\d){7,14}(?!\d)/g;
+
+/** North-American number with separators, optional leading country code 1. */
+const NANP_PHONE_RE =
+  /(?<![\w.+/:*-])(?:1[ .-]?)?(?:\(\d{3}\)[ .-]?|\d{3}[ .-])\d{3}[ .-]\d{4}(?!\w|[.:-]\d)/g;
+
+/** Same email shape as `redactEmailsInText`. */
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
+/**
+ * Redact a phone number, keeping only its last two digits so support can still
+ * tell two numbers apart in one log.
+ *
+ * The output is never itself phone-shaped, which is what makes re-running the
+ * log scrub over already-scrubbed text a no-op.
+ *
+ * @example
+ *   redactPhone("+1 (555) 555-0199")  // "***99"
+ *   redactPhone("")                    // "***"
+ */
+export function redactPhone(phone: string): string {
+  const digits = (phone || "").replace(/\D/g, "");
+  if (digits.length < 2) return "***";
+  return `***${digits.slice(-2)}`;
+}
+
+/**
+ * Redact every email address and phone number embedded in free-form log text.
+ * Emails first, so a phone-number handle such as "+15555550199@s.example.net"
+ * is consumed as an address and not half-matched as a phone.
+ *
+ * Idempotent: `redactLogText(redactLogText(x)) === redactLogText(x)`.
+ */
+export function redactLogText(input: string): string {
+  if (!input) return input;
+  return input
+    .replace(EMAIL_RE, (match) => redactEmail(match))
+    .replace(INTL_PHONE_RE, (match) => redactPhone(match))
+    .replace(NANP_PHONE_RE, (match) => redactPhone(match));
+}

@@ -103,6 +103,7 @@ Copy `.env.local.example` to `.env.local` and fill in your values. See `.env.pro
 | `INTERNAL_API_SECRET` | Shared secret for internal API routes |
 | `IMPERSONATION_COOKIE_SECRET` | Cookie signing secret (falls back to service-role key) |
 | `NEXT_PUBLIC_APP_URL` | Public app URL for invite links |
+| `NEXT_PUBLIC_CLARITY_PROJECT_ID` | Microsoft Clarity analytics ID |
 
 ## Windows Build Notes
 

@@ -9,6 +9,7 @@ import '@keepr/ui/src/styles/theme.css';
 import { AuthProvider } from '@/components/providers/AuthProvider';
 import { ImpersonationProvider } from '@/components/providers/ImpersonationProvider';
 import { getImpersonationSession } from '@/lib/impersonation';
+import ClarityAnalytics from '@/components/analytics/ClarityAnalytics';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -36,6 +37,9 @@ export default async function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
+        {process.env.NEXT_PUBLIC_CLARITY_PROJECT_ID && (
+          <ClarityAnalytics projectId={process.env.NEXT_PUBLIC_CLARITY_PROJECT_ID} />
+        )}
         <AuthProvider>
           <ImpersonationProvider session={clientSession}>
             <main className="min-h-screen">{children}</main>
