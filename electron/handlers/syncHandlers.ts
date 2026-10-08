@@ -649,6 +649,15 @@ export function setSyncUserId(userId: string | null): void {
 }
 
 /**
+ * BACKLOG-3598: stop the orchestrator's running backup because the app is quitting.
+ * Returns null when there is no orchestrator, so a quit with nothing to stop is not
+ * delayed. Must be called before `cleanupSyncHandlers()`, which drops the orchestrator.
+ */
+export function stopBackupForQuit(): Promise<unknown> | null {
+  return orchestrator ? orchestrator.stopBackupForQuit() : null;
+}
+
+/**
  * Cleanup sync handlers
  */
 export function cleanupSyncHandlers(): void {

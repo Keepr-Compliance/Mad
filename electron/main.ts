@@ -167,7 +167,12 @@ import {
   cleanupDeviceHandlers,
 } from "./handlers/deviceHandlers";
 import { registerBackupHandlers } from "./handlers/backupHandlers";
-import { registerSyncHandlers, cleanupSyncHandlers } from "./handlers/syncHandlers";
+import {
+  registerSyncHandlers,
+  cleanupSyncHandlers,
+  stopBackupForQuit,
+} from "./handlers/syncHandlers";
+import { createBackupStopOnQuit } from "./utils/backupStopOnQuit";
 import { registerDriverHandlers } from "./handlers/driverHandlers";
 import { registerLLMHandlers } from "./handlers/llmHandlers";
 import { registerLicenseHandlers } from "./handlers/licenseHandlers";
@@ -1974,7 +1979,14 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", () => {
+// BACKLOG-3598: a quit during an iPhone backup first stops idevicebackup2 (bounded).
+const deferQuitForBackupStop = createBackupStopOnQuit(app, stopBackupForQuit);
+
+app.on("before-quit", (event) => {
+  // BACKLOG-3598: must run before cleanupSyncHandlers() drops the orchestrator. When a
+  // backup is running this defers the quit and returns; the rest of this handler then
+  // runs once, on the re-quit.
+  if (deferQuitForBackupStop(event)) return;
   // TASK-1956: Shutdown persistent contact worker pool
   try {
     const { shutdownPool } = require("./workers/contactWorkerPool");

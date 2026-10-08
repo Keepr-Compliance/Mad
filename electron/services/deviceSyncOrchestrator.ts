@@ -1956,6 +1956,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   }
 
   /**
+   * BACKLOG-3598: the app is quitting — stop this orchestrator's own idevicebackup2.
+   * Not `cancel()`: that records a user cancel, which this is not. Records nothing.
+   * Null when no backup process is alive.
+   */
+  stopBackupForQuit(timeoutMs?: number): Promise<"exited" | "killed"> | null {
+    return this.backupService.stopForQuit(timeoutMs);
+  }
+
+  /**
    * Get current sync status
    */
   getStatus(): { isRunning: boolean; phase: SyncPhase } {
