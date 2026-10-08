@@ -228,6 +228,7 @@ applyLogFileConfig(log.transports.file);
 // from the import near the top of this file, before the composition root.
 // This import only binds the namespace for the calls below.
 import * as Sentry from "@sentry/electron/main";
+import { isCrashReportingEnabled } from "./services/crashReportingPreference";
 import { runStartupHealthChecks } from "./services/startupHealthCheck";
 import { getInstallMode } from "./services/diagnostics/installMode";
 import { getHostArchitecture } from "./services/diagnostics/hostArchitecture";
@@ -1281,12 +1282,13 @@ let updaterDownloadStarted = false;
 /**
  * Whether Sentry is actually reporting in this process. Mirrors the init gate
  * at Sentry.init() in ./bootstrap/installSentry.ts (app.isPackaged ||
- * SENTRY_DSN present). When disabled,
+ * SENTRY_DSN present), plus the user's "Send crash reports" switch
+ * (BACKLOG-3801) — with it off nothing is sent, so no id is real. When disabled,
  * Sentry.captureException() returns a synthetic id we must NOT treat as a real
  * event_id (BACKLOG-1903 REQUIRED change #4).
  */
 function isSentryEnabled(): boolean {
-  return app.isPackaged || !!process.env.SENTRY_DSN;
+  return (app.isPackaged || !!process.env.SENTRY_DSN) && isCrashReportingEnabled();
 }
 
 /**

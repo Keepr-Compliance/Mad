@@ -49,8 +49,10 @@
  * THE INIT OPTIONS ARE A TRANSCRIPTION
  * ------------------------------------
  * The `Sentry.init` call below is byte-for-byte the one removed from
- * `main.ts`, comments included. `installSentry.test.ts` pins the option keys
- * and their values on both `app.isPackaged` branches so the move cannot drift.
+ * `main.ts`, comments included — except two BACKLOG-3801 changes: `enabled`
+ * also requires the user's "Send crash reports" choice, and `transport` wraps
+ * the network transport in that switch. `installSentry.test.ts` pins the option
+ * keys and their values on both `app.isPackaged` branches so the move cannot drift.
  * `Sentry.setContext("auto-updater", …)` stays in `main.ts`: it is not an init
  * input, it annotates later events, and nothing this early emits one that
  * needs it.
