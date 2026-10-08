@@ -78,7 +78,7 @@ describe("C1 Chromium transport errors classify as network / retryable", () => {
   });
 
   it("walks the cause chain", () => {
-    const e = new Error("wrapped", { cause: new Error("net::ERR_NAME_NOT_RESOLVED") });
+    const e = Object.assign(new Error("wrapped"), { cause: new Error("net::ERR_NAME_NOT_RESOLVED") });
     expect(isNetworkError(e)).toBe(true);
     expect(isRetryableError(e)).toBe(true);
   });
