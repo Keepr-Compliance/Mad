@@ -410,6 +410,10 @@ const PLIST_DUMP_START = /^<(?:\?xml\b|!DOCTYPE\s+plist\b|plist\b)/i;
 const PLIST_DUMP_END = /<\/plist>\s*$/i;
 /** A `<data>` base64 continuation line. */
 const BASE64_LINE = /^[A-Za-z0-9+/]{16,}={0,2}$/;
+/** libimobiledevice debug.c packet-dump row: `0000: 3c 3f 78 ...   | <?xml ...`. */
+const HEX_DUMP_ROW = /^[0-9a-f]{4}: /i;
+/** Any angle bracket: a whole tag, or the fragment of one left by a mid-line cut. */
+const MARKUP_FRAGMENT = /[<>]/;
 /**
  * A reverse-DNS identifier (app bundle ID): three or more dot-separated labels,
  * the first alphabetic. `com.apple.*` is kept — Apple's service names
@@ -418,7 +422,8 @@ const BASE64_LINE = /^[A-Za-z0-9+/]{16,}={0,2}$/;
  * have one dot and are untouched.
  */
 const REVERSE_DNS_ID =
-  /(?<![\w.-])(?!com\.apple\.)[a-z][a-z0-9]{1,15}(?:\.[a-z0-9][a-z0-9_-]*){2,}(?![\w-])/gi;
+  /(?<![\w.-])(?!com\.apple\.)[a-z]{2,15}(?:\.[a-z0-9][a-z0-9_-]*){2,}(?![\w-])/gi;
+const FILE_NAME_SUFFIX = /\.(?:plist|bak|db|sqlite|log|txt|json|xml|tmp)$/i;
 export const REDACTED_APP_ID = "[app-id]";
 
 /**
@@ -432,6 +437,8 @@ export function filterIdeviceOutputLineForLog(
   const trimmed = line.trim();
   if (!trimmed) return null;
 
+  if (HEX_DUMP_ROW.test(trimmed)) return null;
+
   if (IDEVICE_TRACE_LINE.test(trimmed) || IDEVICE_ERROR_LINE.test(trimmed)) {
     state.inPlist = false;
   } else if (PLIST_DUMP_START.test(trimmed)) {
@@ -440,25 +447,43 @@ export function filterIdeviceOutputLineForLog(
   } else if (state.inPlist) {
     if (PLIST_DUMP_END.test(trimmed)) state.inPlist = false;
     return null;
-  } else if (trimmed.startsWith("<") || BASE64_LINE.test(trimmed)) {
+  } else if (BASE64_LINE.test(trimmed)) {
     // Plist markup with no visible start — a dump whose head was cut off by the
     // 64 KB buffer cap or a chunk boundary.
     return null;
   }
 
-  return trimmed.replace(REVERSE_DNS_ID, REDACTED_APP_ID);
+  // Any line carrying an angle bracket is plist markup or the tail of it (a
+  // mid-line cut leaves `key>PasswordProtected</key>`). Genuine error lines don't.
+  if (MARKUP_FRAGMENT.test(trimmed)) return null;
+
+  // File names such as `Status.plist.bak` also have three labels; keep them.
+  return trimmed.replace(REVERSE_DNS_ID, (m) =>
+    FILE_NAME_SUFFIX.test(m) ? m : REDACTED_APP_ID,
+  );
 }
 
 /** Apply the line filter to a whole block of output (a buffer or a chunk). */
-export function redactIdeviceOutputForLog(text: string): {
+export function redactIdeviceOutputForLog(
+  text: string,
+  options: { headTruncated?: boolean } = {},
+): {
   text: string;
   suppressedLines: number;
 } {
   const state = createIdeviceOutputLogFilterState();
   const kept: string[] = [];
   let suppressedLines = 0;
+  let first = true;
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
+    // A buffer that hit the cap starts mid-line: its first line is a fragment.
+    if (first && options.headTruncated) {
+      first = false;
+      suppressedLines++;
+      continue;
+    }
+    first = false;
     const loggable = filterIdeviceOutputLineForLog(line, state);
     if (loggable === null) suppressedLines++;
     else kept.push(loggable);
@@ -1223,6 +1248,7 @@ export class BackupService extends EventEmitter {
 
       let stdoutBuffer = "";
       let stderrBuffer = "";
+      let stderrHeadTruncated = false;
       // BACKLOG-2899: set when idevicebackup2 reports it could not write to the
       // local disk. See isIdevicebackup2DiskFullOutput for the transcription.
       let diskFullDetected = false;
@@ -1298,6 +1324,7 @@ export class BackupService extends EventEmitter {
         // With -d flag, stderr can exceed 50 MB during a long backup.
         if (stderrBuffer.length > 65536) {
           stderrBuffer = stderrBuffer.slice(-65536);
+          stderrHeadTruncated = true;
         }
 
         // BACKLOG-2911 (FIX 2): stderr is NOT evidence of life on its own. `-d` makes
@@ -1510,7 +1537,9 @@ export class BackupService extends EventEmitter {
           log.error(`[BackupService] Backup failed with code ${code}`);
           // BACKLOG-3790: the tail of stderr, without plist dumps or app bundle IDs.
           // The raw buffer still feeds classifyFailure below.
-          const loggableStderr = redactIdeviceOutputForLog(stderrBuffer);
+          const loggableStderr = redactIdeviceOutputForLog(stderrBuffer, {
+            headTruncated: stderrHeadTruncated,
+          });
           log.error("[BackupService] stderr:", loggableStderr.text);
           if (loggableStderr.suppressedLines > 0) {
             log.debug(

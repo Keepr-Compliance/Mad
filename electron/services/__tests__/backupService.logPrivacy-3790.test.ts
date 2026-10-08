@@ -289,6 +289,76 @@ describe("BACKLOG-3790: idevicebackup2 output is logged without plist dumps or a
     });
   });
 
+  describe("buffer cut mid-line (64 KB cap) and hex-dump rows", () => {
+    // Shape of SR's probe dump: the founder-reported keys plus the stand-in bundle ID.
+    const CUT_DUMP = `22:44:38.022 property_list_service.c:253 internal_plist_receive_timeout(): printing 433 bytes plist:
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+\t<key>PasswordProtected</key>
+\t<true/>
+\t<key>Applications</key>
+\t<array>
+\t\t<string>${STAND_IN_BUNDLE_ID}</string>
+\t</array>
+</dict>
+</plist>
+${GENUINE_FAULTS[0]}`;
+
+    it("no cut point of a dump lets a key, value, bundle ID or tag fragment through", () => {
+      let checked = 0;
+      for (let cut = 0; cut < CUT_DUMP.length; cut++) {
+        for (const headTruncated of [false, true]) {
+          const { text } = redactIdeviceOutputForLog(CUT_DUMP.slice(cut), {
+            headTruncated,
+          });
+          checked++;
+          expect({ cut, headTruncated, text }).toEqual({
+            cut,
+            headTruncated,
+            text: expect.not.stringMatching(
+              /PasswordProtected|Applications|trustwallet|xample|[<>]/,
+            ),
+          });
+        }
+      }
+      expect(checked).toBe(CUT_DUMP.length * 2);
+    });
+
+    it("drops the first line of a buffer that hit the cap, even a bare fragment", () => {
+      const out = redactIdeviceOutputForLog("ple.trustwallet\nERROR: Device is locked", {
+        headTruncated: true,
+      });
+      expect(out.text).toBe("ERROR: Device is locked");
+    });
+
+    it("keeps the first line when nothing was truncated", () => {
+      expect(redactIdeviceOutputForLog("ERROR: first", { headTruncated: false }).text).toBe(
+        "ERROR: first",
+      );
+    });
+
+    it("suppresses libimobiledevice packet-dump rows", () => {
+      const state = createIdeviceOutputLogFilterState();
+      for (const row of [
+        '0000: 3c 3f 78 6d 6c 20 76 65 72 73 69 6f 6e 3d 22 31   | <?xml version="1',
+        "0010: 63 6f 6d 2e 65 78 61 6d 70 6c 65 2e 74 72 75 73   | com.example.trus",
+      ]) {
+        expect(filterIdeviceOutputLineForLog(row, state)).toBeNull();
+      }
+    });
+
+    it("leaves version strings and file names alone", () => {
+      const state = createIdeviceOutputLogFilterState();
+      for (const l of ["libimobiledevice v1.3.0", "Reading Status.plist.bak"]) {
+        expect(filterIdeviceOutputLineForLog(l, state)).toBe(l);
+      }
+      expect(filterIdeviceOutputLineForLog(`Domain AppDomain-${STAND_IN_BUNDLE_ID}`, state)).toBe(
+        `Domain AppDomain-${REDACTED_APP_ID}`,
+      );
+    });
+  });
+
   describe("wiring through a real run", () => {
     it("a failed run logs no plist/app-ID text anywhere, keeps the error, and still reads the device's code", async () => {
       const result = await runBackup((proc) => {
