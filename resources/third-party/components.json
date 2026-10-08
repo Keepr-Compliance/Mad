@@ -511,7 +511,7 @@
       "homepage": "https://www.openssl.org",
       "source": {
         "url": "https://github.com/openssl/openssl/tree/OpenSSL_1_1_1i",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [
@@ -534,7 +534,7 @@
       "homepage": "https://curl.se",
       "source": {
         "url": "https://github.com/curl/curl/tree/curl-7_74_0",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [
@@ -555,7 +555,7 @@
       "homepage": "https://zlib.net",
       "source": {
         "url": "https://github.com/madler/zlib/tree/v1.2.11",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [
@@ -576,7 +576,7 @@
       "homepage": "https://gitlab.gnome.org/GNOME/libxml2",
       "source": {
         "url": "https://gitlab.gnome.org/GNOME/libxml2/-/tree/v2.9.10",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [
@@ -597,7 +597,7 @@
       "homepage": "https://www.gnu.org/software/libiconv/",
       "source": {
         "url": "https://ftp.gnu.org/gnu/libiconv/libiconv-1.16.tar.gz",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [
@@ -618,7 +618,7 @@
       "homepage": "https://tukaani.org/xz/",
       "source": {
         "url": "https://github.com/tukaani-project/xz/tree/v5.2.5",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [
@@ -639,7 +639,7 @@
       "homepage": "https://libusb.info",
       "source": {
         "url": "https://github.com/libusb/libusb/tree/v1.0.24",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [
@@ -653,14 +653,15 @@
       "versionEvidence": "NOT determined from the binary (no VERSIONINFO); inferred from the vcpkg libusb-win32 port version at the time",
       "licenseExpression": "LGPL-3.0",
       "licenses": [
-        "LGPL-3.0"
+        "LGPL-3.0",
+        "GPL-3.0"
       ],
       "licenseEvidence": "COPYING_LGPL.txt in libusb-win32-src-1.2.6.0.zip (the file vcpkg installs as this port's copyright)",
       "copyright": "Copyright the libusb-win32 authors (Stephan Meyer, Travis Robinson and contributors)",
       "homepage": "https://sourceforge.net/projects/libusb-win32/",
       "source": {
         "url": "https://sourceforge.net/projects/libusb-win32/files/libusb-win32-releases/1.2.6.0/",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [
@@ -682,7 +683,7 @@
       "homepage": "https://sourceforge.net/projects/pthreads4w/",
       "source": {
         "url": "https://sourceforge.net/projects/pthreads4w/files/pthreads4w-code-v3.0.0.zip",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [
@@ -703,7 +704,7 @@
       "homepage": "https://www.pcre.org",
       "source": {
         "url": "https://sourceforge.net/projects/pcre/files/pcre/8.44/",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [
@@ -725,7 +726,7 @@
       "homepage": "https://sourceware.org/bzip2/",
       "source": {
         "url": "https://sourceware.org/git/?p=bzip2.git;a=tree;hb=bzip2-1.0.8",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [
@@ -746,7 +747,7 @@
       "homepage": "https://libzip.org",
       "source": {
         "url": "https://github.com/nih-at/libzip/tree/v1.7.3",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [
@@ -767,7 +768,7 @@
       "homepage": "https://tiswww.case.edu/php/chet/readline/rltop.html",
       "source": {
         "url": "https://github.com/lltcggie/readline/tree/ea414b4e98475e3976198738061824e8a8379a50",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [
@@ -790,7 +791,7 @@
       "homepage": "https://github.com/libimobiledevice-win32/getopt",
       "source": {
         "url": "https://github.com/libimobiledevice-win32/getopt/tree/0.1",
-        "note": "release source at the identified version; the exact vcpkg build recipe used by imobiledevice-net is not pinned"
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
       },
       "bundle": "imobiledevice-net",
       "files": [

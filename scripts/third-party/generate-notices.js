@@ -60,7 +60,10 @@ function render(data, { withTexts = false, readLicence } = {}) {
   out.push("");
   out.push(
     data.product +
-      " includes the third-party software listed below. Each component remains under its own licence. " +
+      " includes the third-party software listed below. This file covers components bundled outside the npm dependency tree: " +
+      "the iPhone tools for Windows and the libraries they contain, and the Electron and Chromium licence files. " +
+      "The licences of the npm packages Keepr is built from are not listed in this file. " +
+      "Each component remains under its own licence. " +
       "Nothing in Keepr's own terms restricts the rights these licences give you.",
   );
   out.push("");
@@ -80,7 +83,7 @@ function render(data, { withTexts = false, readLicence } = {}) {
     );
   }
   out.push(
-    "- The complete source code for each LGPL/GPL component is published at the repository and commit (or release) listed under that component below.",
+    "- Under each component below, the source line names where its source can be found. For components marked with a pinned commit, that is the repository and commit. For the libraries built by the vcpkg package manager (libiconv, libusb, libusb-win32, readline, getopt-win32 and the other libraries in that group), it is the upstream project at the identified version; the exact build recipe used for those binaries is not recorded.",
   );
   out.push(
     "- You may replace any LGPL-licensed library in that folder with your own modified version built from that source. Keepr loads whatever is in the folder.",
@@ -120,7 +123,7 @@ function render(data, { withTexts = false, readLicence } = {}) {
       const parts = [s.url];
       if (s.commit) parts.push(`commit ${s.commit}`);
       if (s.commitDate) parts.push(`dated ${s.commitDate}`);
-      out.push(`- Source code: ${parts.join(", ")}`);
+      out.push(`- ${s.commit ? "Source code (pinned commit)" : "Upstream project"}: ${parts.join(", ")}`);
       if (s.note) out.push(`  (${s.note})`);
     }
     if (c.bundle && bundles[c.bundle]) out.push(`- Shipped as part of: ${bundles[c.bundle].name} ${bundles[c.bundle].version}`);

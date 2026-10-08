@@ -153,6 +153,60 @@ describe("third-party notices (BACKLOG-3803)", () => {
       ]),
     );
   });
+
+  describe("licence labels match the attached licence texts", () => {
+    interface Entry { file?: string }
+    const data = JSON.parse(readFileSync(path.join(ROOT, "components.json"), "utf8")) as {
+      licenses: Record<string, Entry>;
+      components: (Component & { licenseExpression: string })[];
+    };
+
+    /** "LGPL-2.1" -> the heading and version the attached text must carry. */
+    function textMatches(file: string, family: "LGPL" | "GPL", version: string): boolean {
+      const lines = readFileSync(path.join(ROOT, file), "utf8")
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const heading = lines[0].toUpperCase();
+      const versionLine = lines[1];
+      const headingOk =
+        family === "GPL"
+          ? heading === "GNU GENERAL PUBLIC LICENSE"
+          : heading === "GNU LESSER GENERAL PUBLIC LICENSE" || (version === "2.0" && heading === "GNU LIBRARY GENERAL PUBLIC LICENSE");
+      const versionOk = new RegExp("^Version " + version.replace(".", "\\.") + "(?![0-9.])|^Version " + version.split(".")[0] + ",").test(versionLine);
+      return headingOk && versionOk;
+    }
+
+    function textFor(c: Component, family: "LGPL" | "GPL", version: string): boolean {
+      return c.licenses.some((k) => {
+        const f = data.licenses[k]?.file;
+        return !!f && textMatches(f, family, version);
+      });
+    }
+
+    const tokens = (expr: string) =>
+      [...expr.matchAll(/\b(LGPL|GPL)-(\d\.\d)/g)].map((m) => ({ family: m[1] as "LGPL" | "GPL", version: m[2] }));
+
+    it("every GPL/LGPL family and version in a licence expression has an attached text of that family and version", () => {
+      const gpl = data.components.flatMap((c) => tokens(c.licenseExpression).map((t) => ({ c, t })));
+      expect(gpl.length).toBeGreaterThan(10);
+      const missing = gpl.filter(({ c, t }) => !textFor(c, t.family, t.version)).map(({ c, t }) => `${c.id}: ${t.family}-${t.version}`);
+      expect(missing).toEqual([]);
+    });
+
+    it("an LGPL-3.0 component also attaches the GPL-3.0 text (LGPLv3 section 4)", () => {
+      const v3 = data.components.filter((c) => /\bLGPL-3\.0/.test(c.licenseExpression));
+      expect(v3.map((c) => c.id)).toEqual(expect.arrayContaining(["libusb-win32", "getopt-win32", "idevicerestore"]));
+      const missing = v3.filter((c) => !textFor(c, "GPL", "3.0")).map((c) => c.id);
+      expect(missing).toEqual([]);
+    });
+
+    it("the opening does not claim complete source for components without a pinned recipe", () => {
+      const txt = readFileSync(path.join(ROOT, "THIRD_PARTY_NOTICES.txt"), "utf8");
+      expect(txt).not.toMatch(/complete source/i);
+      expect(txt).toMatch(/outside the npm dependency tree/);
+    });
+  });
 });
 
 function readdirNames(dir: string): string[] {
