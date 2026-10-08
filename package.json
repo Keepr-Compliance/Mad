@@ -1,7 +1,7 @@
 {
   "name": "keepr",
   "version": "2.39.0",
-  "description": "Keepr - Export and archive iMessage conversations and emails",
+  "description": "Keepr - every text and email from a real estate transaction in one audit-ready package",
   "main": "electron/main.js",
   "engines": {
     "node": ">=20.0.0"
@@ -91,7 +91,10 @@
     "imessage",
     "outlook"
   ],
-  "author": "",
+  "author": {
+    "name": "Blue Spaces LLC",
+    "email": "support@keeprcompliance.com"
+  },
   "license": "UNLICENSED",
   "private": true,
   "devDependencies": {
