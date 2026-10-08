@@ -1130,11 +1130,9 @@ export class DeviceDetectionService extends EventEmitter {
 
   /** BACKLOG-1926: one tick of the trust loop. One idevicepair at a time per device. */
   private async runTrustCheck(udid: string, watch: TrustWatch): Promise<void> {
+    // stop() (BACKLOG-3418 off-switch) removes every watch, so a removed or
+    // replaced watch means detection was stopped or the phone was unplugged.
     if (this.trustWatches.get(udid) !== watch) return;
-    if (!this.detectionRequested) {
-      this.endTrustWatch(udid);
-      return;
-    }
 
     watch.attempts += 1;
     const result = await this.checkPairState(udid);

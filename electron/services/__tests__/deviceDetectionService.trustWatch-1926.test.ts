@@ -319,6 +319,16 @@ describe("DeviceDetectionService trust loop (BACKLOG-1926)", () => {
     expect(validateCalls()).toBe(after);
   });
 
+  it("stop() while the first probe is still running: the probe's answer starts no loop", async () => {
+    service.start(2000);
+    await jest.advanceTimersByTimeAsync(70); // idevice_id closed at 50 ms; ideviceinfo in flight until ~100 ms
+    service.stop();
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(validateCalls()).toBe(0);
+    expect(states).toEqual([]);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
   it("caps the loop and does not restart it while the phone stays plugged in", async () => {
     service.start(2000);
     await jest.advanceTimersByTimeAsync((TRUST_WATCH_MAX_ATTEMPTS + 30) * 1100);
