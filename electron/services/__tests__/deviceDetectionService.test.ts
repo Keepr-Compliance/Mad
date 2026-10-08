@@ -239,6 +239,69 @@ describe("DeviceDetectionService", () => {
     });
   });
 
+  describe("probeConnectedUdids (BACKLOG-3598)", () => {
+    /**
+     * `idevice_id -l` with no phone connected exits 0 with empty output (measured on
+     * libimobiledevice 1.4.0). Non-zero means it could not get the list at all; the
+     * stderr text is not read by the code, only the exit code.
+     */
+    async function probeWith(
+      drive: (proc: ReturnType<typeof createMockProcess>) => void,
+    ): Promise<{ probe: string[] | null; list: string[] }> {
+      jest.useRealTimers();
+      const svc = new DeviceDetectionService();
+      mockExec.mockImplementation((...args: unknown[]) => { const callback = (typeof args[1] === 'function' ? args[1] : args[2]) as (err: Error | null, result: { stdout: string; stderr: string }) => void;
+        setTimeout(() => callback(null, { stdout: "1.4.0", stderr: "" }), 0);
+      });
+      const run = async () => {
+        const proc = createMockProcess();
+        mockSpawn.mockReturnValue(proc);
+        return { proc };
+      };
+      const p1 = await run();
+      const probePromise = svc.probeConnectedUdids();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      drive(p1.proc);
+      const probe = await probePromise;
+      const p2 = await run();
+      const listPromise = svc.listDevices();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      drive(p2.proc);
+      const list = await listPromise;
+      svc.stop();
+      return { probe, list };
+    }
+
+    it("a successful empty listing is [] (the phone is gone)", async () => {
+      const r = await probeWith((proc) => proc.emit("close", 0));
+      expect(r.probe).toEqual([]);
+      expect(r.list).toEqual([]);
+    });
+
+    it("a listing with the phone returns it", async () => {
+      const r = await probeWith((proc) => {
+        proc.stdout.emit("data", "00000000-0000000000000001\n");
+        proc.emit("close", 0);
+      });
+      expect(r.probe).toEqual(["00000000-0000000000000001"]);
+    });
+
+    it("idevice_id exiting non-zero is unknown (null) — listDevices still returns []", async () => {
+      const r = await probeWith((proc) => {
+        proc.stderr.emit("data", "could not get the device list");
+        proc.emit("close", 1);
+      });
+      expect(r.probe).toBeNull();
+      expect(r.list).toEqual([]);
+    });
+
+    it("idevice_id failing to spawn is unknown (null)", async () => {
+      const r = await probeWith((proc) => proc.emit("error", new Error("spawn EACCES")));
+      expect(r.probe).toBeNull();
+      expect(r.list).toEqual([]);
+    });
+  });
+
   describe("getDeviceInfo", () => {
     it("should parse device info from ideviceinfo output", async () => {
       const mockProcess = createMockProcess();

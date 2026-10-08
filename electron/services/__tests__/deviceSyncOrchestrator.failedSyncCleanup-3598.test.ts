@@ -119,6 +119,9 @@ jest.mock("../deviceDetectionService", () => {
     start: jest.fn(),
     stop: jest.fn(),
     getConnectedDevices: jest.fn().mockReturnValue([]),
+    // BACKLOG-3598 (B2): the second listing that confirms an unplug. Default: the phone
+    // is absent on a successful listing. `null` = idevice_id could not answer.
+    probeConnectedUdids: jest.fn().mockResolvedValue([]),
     getDeviceStorageInfo: jest.fn().mockResolvedValue({
       totalCapacity: 256 * 1024 * 1024 * 1024,
       usedSpace: 128 * 1024 * 1024 * 1024,
@@ -151,9 +154,12 @@ jest.mock("../iosContactsParser", () => ({
 }));
 
 import { BackupService } from "../backupService";
-import { DeviceSyncOrchestrator } from "../deviceSyncOrchestrator";
+import { BACKUP_DEVICE_DISCONNECTED_MESSAGE, DeviceSyncOrchestrator } from "../deviceSyncOrchestrator";
 import { syncTimeline } from "../syncTimeline";
 import type { BackupResult } from "../../types/backup";
+
+// Captured before any spy wraps it, so a gated stand-in can still run the real removal.
+const realRemoveLeftoverBackup = BackupService.prototype.removeLeftoverBackup;
 
 // ---------------------------------------------------------------------------
 // On-disk states
@@ -208,6 +214,12 @@ let startBackupSpy: jest.SpyInstance;
 let cancelBackupSpy: jest.SpyInstance;
 let sweepSpy: jest.SpyInstance;
 let removeSpy: jest.SpyInstance;
+/**
+ * BACKLOG-3598 (B1): `BackupService.getStatus().isRunning` — true from before spawn
+ * (backupService.ts :1171) until the process closes (:1382), which is BEFORE
+ * `startBackup` measures/decrypts and resolves. The fakes below drive it.
+ */
+let processAlive = false;
 
 /** The fake run writes `post` into this phone's folder, then fails with `result`. */
 function backupLeaves(post: DiskState | null, result: BackupResult = failure()): void {
@@ -220,6 +232,8 @@ function backupLeaves(post: DiskState | null, result: BackupResult = failure()):
 function newOrchestrator(): DeviceSyncOrchestrator {
   const o = new DeviceSyncOrchestrator();
   o.on("error", () => {});
+  // BACKLOG-3598 (B2): production waits ~2 s before re-listing; tests use 5 ms.
+  Object.assign(o, { disconnectConfirmDelayMs: 5 });
   return o;
 }
 
@@ -248,7 +262,20 @@ beforeEach(() => {
   cancelBackupSpy = jest.spyOn(BackupService.prototype, "cancelBackup").mockImplementation(() => {});
   sweepSpy = jest.spyOn(BackupService.prototype, "sweepLeftoverBackups");
   removeSpy = jest.spyOn(BackupService.prototype, "removeLeftoverBackup");
+  processAlive = false;
+  jest.spyOn(BackupService.prototype, "getStatus").mockImplementation(() => ({
+    isRunning: processAlive,
+    currentDeviceUdid: processAlive ? UDID : null,
+    progress: null,
+  }));
+  probeMock().mockReset();
+  probeMock().mockResolvedValue([]);
 });
+
+function probeMock(): jest.Mock {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("../deviceDetectionService").deviceDetectionService.probeConnectedUdids;
+}
 
 // ---------------------------------------------------------------------------
 // Control 1 / 2 — a first sync that fails or is cancelled leaves nothing behind
@@ -482,6 +509,392 @@ describe("BACKLOG-3598 (R1): Try Again while a first sync is still running", () 
     const sweepsBeforeC = sweepSpy.mock.calls.length;
     await orchestrator.sync({ udid: UDID });
     expect(sweepSpy.mock.calls.length).toBe(sweepsBeforeC + 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unplugging the phone mid-backup stops the backup at once (founder QA 2026-10-08)
+// ---------------------------------------------------------------------------
+
+/**
+ * The `device-disconnected` payload. Shape transcribed from the producer,
+ * `deviceDetectionService.ts` poll loop: the stored `iOSDevice` (`electron/types/device.ts`)
+ * with `isConnected` set to false before the emit. Values are placeholders.
+ */
+function detachedDevice(udid: string) {
+  return {
+    udid,
+    name: "Test iPhone",
+    productType: "iPhone14,2",
+    productVersion: "17.0",
+    serialNumber: "F2LXXXXXXXXX",
+    isConnected: false,
+  };
+}
+
+function emitDisconnect(udid: string): void {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { deviceDetectionService } = require("../deviceDetectionService");
+  deviceDetectionService.emit("device-disconnected", detachedDevice(udid));
+}
+
+const syncEndLines = () => logLines.filter((l) => l.includes("sync-end"));
+
+/**
+ * A backup that runs until its process is killed. `cancelBackup` stands in for the
+ * kill: the real `startBackup` resolves on the process `close` event, which a kill
+ * produces. The result a killed run returns after an unplug is NOT measured; a lost
+ * usbmuxd connection (`CONNECTION_LOST`) is the closest classified shape, and it is
+ * also the shape whose `endedBy=device-error` must not win.
+ */
+function backupRunsUntilKilled(): { killed: () => boolean } {
+  let resolveRun: ((r: BackupResult) => void) | null = null;
+  let killed = false;
+  startBackupSpy.mockImplementation(
+    () =>
+      new Promise<BackupResult>((resolve) => {
+        writeState(UDID, "B");
+        processAlive = true;
+        resolveRun = resolve;
+      }),
+  );
+  cancelBackupSpy.mockImplementation(() => {
+    killed = true;
+    processAlive = false;
+    resolveRun?.(failure());
+  });
+  return { killed: () => killed };
+}
+
+describe("BACKLOG-3598: unplugging the phone being backed up stops the backup", () => {
+  it("THE FOUNDER'S CASE — unplug mid-backup: process stopped, folder removed, one outcome, and Try Again starts a new backup", async () => {
+    const orchestrator = newOrchestrator();
+    const run = backupRunsUntilKilled();
+
+    const frame = orchestrator.sync({ udid: UDID });
+    await waitFor(() => startBackupSpy.mock.calls.length === 1);
+
+    emitDisconnect(UDID);
+    // The process is stopped by the disconnect itself, not by a watchdog later.
+    await waitFor(() => run.killed());
+    const result = await frame;
+
+    expect(cancelBackupSpy).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(BACKUP_DEVICE_DISCONNECTED_MESSAGE);
+    // The lock the renderer reads (`syncStatusService`: orchestrator isRunning).
+    expect(orchestrator.getStatus().isRunning).toBe(false);
+    // 3598 cleanup ran on this exit.
+    expect(exists(UDID)).toBe(false);
+    // Exactly one end for the run, recorded as a disconnect.
+    expect(syncEndLines()).toHaveLength(1);
+    expect(syncEndLines()[0]).toContain("outcome=error");
+    const row = outcomeRow();
+    expect(row).toContain("endedBy=device-disconnect");
+    expect(row).not.toContain("endedBy=device-error");
+    expect(row).toContain("leftoverCleanup=removed");
+
+    // Re-plug + Try Again: the next sync is not refused and reaches the backup.
+    startBackupSpy.mockImplementation(async () => failure());
+    const retry = await orchestrator.sync({ udid: UDID });
+    expect(retry.error).not.toBe("Sync already in progress");
+    expect(startBackupSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("another phone being unplugged does not stop this phone's backup", async () => {
+    const orchestrator = newOrchestrator();
+    let finish!: (r: BackupResult) => void;
+    startBackupSpy.mockImplementation(
+      () =>
+        new Promise<BackupResult>((resolve) => {
+          writeState(UDID, "B");
+          processAlive = true;
+          finish = resolve;
+        }),
+    );
+
+    const frame = orchestrator.sync({ udid: UDID });
+    await waitFor(() => startBackupSpy.mock.calls.length === 1 && finish !== undefined);
+
+    emitDisconnect(OTHER_UDID);
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(cancelBackupSpy).not.toHaveBeenCalled();
+    expect(orchestrator.getStatus().isRunning).toBe(true);
+
+    finish(failure());
+    const result = await frame;
+    // Ends through the ordinary failure path, not the disconnect exit.
+    expect(result.error).toBe("The connection to your iPhone was lost.");
+    expect(outcomeRow()).toContain("endedBy=device-error");
+  });
+
+  it("after a Try Again reset (isRunning cleared, process alive), unplugging still stops the process", async () => {
+    const orchestrator = newOrchestrator();
+    const run = backupRunsUntilKilled();
+
+    const frame = orchestrator.sync({ udid: UDID });
+    await waitFor(() => startBackupSpy.mock.calls.length === 1);
+    orchestrator.forceReset("restart-while-running");
+
+    emitDisconnect(UDID);
+    await waitFor(() => run.killed());
+    await frame;
+
+    expect(cancelBackupSpy).toHaveBeenCalledTimes(1);
+    expect(exists(UDID)).toBe(false);
+    startBackupSpy.mockImplementation(async () => failure());
+    await orchestrator.sync({ udid: UDID });
+    expect(startBackupSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("a repeated disconnect event stops the backup once and ends the run once", async () => {
+    const orchestrator = newOrchestrator();
+    let resolveRun: ((r: BackupResult) => void) | null = null;
+    startBackupSpy.mockImplementation(
+      () =>
+        new Promise<BackupResult>((resolve) => {
+          writeState(UDID, "B");
+          processAlive = true;
+          resolveRun = resolve;
+        }),
+    );
+    // The kill does not complete at once: the second event arrives while the
+    // process is still closing.
+    cancelBackupSpy.mockImplementation(() => {});
+
+    const frame = orchestrator.sync({ udid: UDID });
+    await waitFor(() => startBackupSpy.mock.calls.length === 1);
+    emitDisconnect(UDID);
+    emitDisconnect(UDID);
+    await waitFor(() => cancelBackupSpy.mock.calls.length >= 1);
+    emitDisconnect(UDID);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(cancelBackupSpy).toHaveBeenCalledTimes(1);
+    resolveRun!(failure());
+    await frame;
+
+    expect(syncEndLines()).toHaveLength(1);
+  });
+
+  it("an unplug with no backup running does nothing", () => {
+    newOrchestrator();
+    emitDisconnect(UDID);
+    expect(cancelBackupSpy).not.toHaveBeenCalled();
+  });
+});
+
+function success(): BackupResult {
+  return failure({
+    success: true,
+    backupPath: folderFor(UDID),
+    error: null,
+    errorCode: undefined,
+    backupSize: 5 * BLOB_BYTES,
+  } as Partial<BackupResult>);
+}
+
+/**
+ * A backup whose process is alive until `closeProcess()`, and whose `startBackup`
+ * resolves only on `finish(result)` — the real gap between them is
+ * `measureBackupSize` and, for an encrypted backup, `decryptBackup`
+ * (backupService.ts onProcessClose, after :1382).
+ */
+function backupControlled(post: DiskState = "B"): {
+  started: () => boolean;
+  closeProcess: () => void;
+  finish: (r: BackupResult) => void;
+} {
+  let resolveRun: ((r: BackupResult) => void) | null = null;
+  startBackupSpy.mockImplementation(
+    () =>
+      new Promise<BackupResult>((resolve) => {
+        writeState(UDID, post);
+        processAlive = true;
+        resolveRun = resolve;
+      }),
+  );
+  return {
+    started: () => resolveRun !== null,
+    closeProcess: () => {
+      processAlive = false;
+    },
+    finish: (r) => {
+      processAlive = false;
+      resolveRun!(r);
+    },
+  };
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+describe("BACKLOG-3598 (B1): an unplug after the backup process has finished does not discard the backup", () => {
+  it("SR PROBE — unplug while the finished backup is being measured/decrypted: no stop, no disconnect error, folder kept", async () => {
+    const orchestrator = newOrchestrator();
+    const run = backupControlled("A");
+
+    const frame = orchestrator.sync({ udid: UDID });
+    await waitFor(run.started);
+    // idevicebackup2 has exited (backupService cleared isRunning); startBackup is still
+    // measuring / decrypting. The user unplugs the phone now.
+    run.closeProcess();
+    emitDisconnect(UDID);
+    await sleep(50);
+    run.finish(success());
+    const result = await frame;
+
+    expect(cancelBackupSpy).not.toHaveBeenCalled();
+    expect(result.error).not.toBe(BACKUP_DEVICE_DISCONNECTED_MESSAGE);
+    expect(exists(UDID)).toBe(true);
+    expect(outcomeRow()).not.toContain("endedBy=device-disconnect");
+  });
+
+  it("the process finishes DURING the confirm wait: nothing is stopped (isRunning re-checked after the await)", async () => {
+    const orchestrator = newOrchestrator();
+    const run = backupControlled("A");
+    probeMock().mockImplementation(async () => {
+      // The process closes while the second listing runs; the listing then says absent.
+      run.closeProcess();
+      return [];
+    });
+
+    const frame = orchestrator.sync({ udid: UDID });
+    await waitFor(run.started);
+    emitDisconnect(UDID);
+    await waitFor(() => probeMock().mock.calls.length >= 1);
+    await sleep(30);
+    run.finish(success());
+    const result = await frame;
+
+    expect(cancelBackupSpy).not.toHaveBeenCalled();
+    expect(result.error).not.toBe(BACKUP_DEVICE_DISCONNECTED_MESSAGE);
+    expect(exists(UDID)).toBe(true);
+  });
+});
+
+describe("BACKLOG-3598 (B2): an unplug is confirmed by a second listing before the backup is stopped", () => {
+  it("one transient empty poll (phone listed again on the second listing): the backup keeps running", async () => {
+    const orchestrator = newOrchestrator();
+    const run = backupControlled("B");
+    probeMock().mockResolvedValue([UDID]);
+
+    const frame = orchestrator.sync({ udid: UDID });
+    await waitFor(run.started);
+    emitDisconnect(UDID);
+    await waitFor(() => probeMock().mock.calls.length >= 1);
+    await sleep(30);
+
+    expect(cancelBackupSpy).not.toHaveBeenCalled();
+    expect(orchestrator.getStatus().isRunning).toBe(true);
+    run.finish(failure());
+    const result = await frame;
+    expect(result.error).toBe("The connection to your iPhone was lost.");
+    expect(outcomeRow()).not.toContain("endedBy=device-disconnect");
+  });
+
+  it("absent on the poll AND on the second listing: the backup is stopped", async () => {
+    const orchestrator = newOrchestrator();
+    const run = backupRunsUntilKilled();
+    probeMock().mockResolvedValue([OTHER_UDID]);
+
+    const frame = orchestrator.sync({ udid: UDID });
+    await waitFor(() => startBackupSpy.mock.calls.length === 1);
+    emitDisconnect(UDID);
+    await waitFor(() => run.killed());
+    const result = await frame;
+
+    expect(probeMock()).toHaveBeenCalledTimes(1);
+    expect(cancelBackupSpy).toHaveBeenCalledTimes(1);
+    expect(result.error).toBe(BACKUP_DEVICE_DISCONNECTED_MESSAGE);
+  });
+
+  it("idevice_id cannot answer (error, not an empty list): the backup is NOT stopped", async () => {
+    const orchestrator = newOrchestrator();
+    const run = backupControlled("B");
+    probeMock().mockResolvedValue(null);
+
+    const frame = orchestrator.sync({ udid: UDID });
+    await waitFor(run.started);
+    emitDisconnect(UDID);
+    // Every confirm attempt answers "unknown".
+    await waitFor(() => probeMock().mock.calls.length >= 3);
+    await sleep(30);
+
+    expect(cancelBackupSpy).not.toHaveBeenCalled();
+    run.finish(failure());
+    const result = await frame;
+    expect(result.error).not.toBe(BACKUP_DEVICE_DISCONNECTED_MESSAGE);
+  });
+
+  it("an idevice_id error then a successful listing without the phone: the backup is stopped", async () => {
+    const orchestrator = newOrchestrator();
+    const run = backupRunsUntilKilled();
+    probeMock().mockResolvedValueOnce(null).mockResolvedValue([]);
+
+    const frame = orchestrator.sync({ udid: UDID });
+    await waitFor(() => startBackupSpy.mock.calls.length === 1);
+    emitDisconnect(UDID);
+    await waitFor(() => run.killed());
+    const result = await frame;
+
+    expect(probeMock()).toHaveBeenCalledTimes(2);
+    expect(result.error).toBe(BACKUP_DEVICE_DISCONNECTED_MESSAGE);
+  });
+});
+
+describe("BACKLOG-3598 (I1/I2): Try Again during the cleanup of the unfinished backup", () => {
+  it("Try Again is refused until the partial backup has been removed, and the status says it is cleaning up", async () => {
+    const orchestrator = newOrchestrator();
+    let resolveRun: ((r: BackupResult) => void) | null = null;
+    startBackupSpy.mockImplementation(
+      () =>
+        new Promise<BackupResult>((resolve) => {
+          writeState(UDID, "B");
+          processAlive = true;
+          resolveRun = resolve;
+        }),
+    );
+    // The kill is asynchronous: the process has not closed when cancelBackup returns.
+    cancelBackupSpy.mockImplementation(() => {
+      processAlive = false;
+    });
+    let releaseRemoval!: () => void;
+    const removalGate = new Promise<void>((r) => {
+      releaseRemoval = r;
+    });
+    removeSpy.mockImplementation(async function (this: BackupService, udid: string) {
+      await removalGate;
+      return realRemoveLeftoverBackup.call(this, udid);
+    });
+
+    const frame = orchestrator.sync({ udid: UDID });
+    await waitFor(() => resolveRun !== null);
+    emitDisconnect(UDID);
+    await waitFor(() => cancelBackupSpy.mock.calls.length === 1);
+
+    // Process still closing: Try Again is refused, no second start sweep.
+    const sweepsBefore = sweepSpy.mock.calls.length;
+    const early = await orchestrator.sync({ udid: UDID });
+    expect(early.error).toBe("Sync already in progress");
+    expect(sweepSpy.mock.calls.length).toBe(sweepsBefore);
+
+    // Process closes; the unfinished backup is now being removed.
+    resolveRun!(failure());
+    await waitFor(() => removeSpy.mock.calls.length >= 1);
+    const during = await orchestrator.sync({ udid: UDID });
+    expect(during.error).toBe("Sync already in progress");
+    expect(startBackupSpy).toHaveBeenCalledTimes(1);
+    expect(orchestrator.getStatus().removingUnfinishedBackup).toBe(true);
+
+    releaseRemoval();
+    const result = await frame;
+    expect(result.error).toBe(BACKUP_DEVICE_DISCONNECTED_MESSAGE);
+    expect(orchestrator.getStatus().removingUnfinishedBackup).toBe(false);
+
+    startBackupSpy.mockImplementation(async () => failure());
+    const retry = await orchestrator.sync({ udid: UDID });
+    expect(retry.error).not.toBe("Sync already in progress");
+    expect(startBackupSpy).toHaveBeenCalledTimes(2);
   });
 });
 
