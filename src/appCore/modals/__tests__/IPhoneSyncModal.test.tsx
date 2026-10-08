@@ -49,6 +49,7 @@ const baseSync: UseIPhoneSyncReturn = {
   lockReason: null,
   needsTrust: false,
   needsTrustUdid: null,
+  trustState: null,
   toolsMissing: false,
   driverMissing: false,
   installDriverStatus: "idle",

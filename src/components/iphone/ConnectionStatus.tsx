@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import type { ConnectionStatusProps } from "../../types/iphone";
+import type { ConnectionStatusProps, IPhoneTrustState } from "../../types/iphone";
 import { TrustComputerHint } from "./TrustComputerHint";
 import { WindowsArm64Unsupported } from "./WindowsArm64Unsupported";
 import logger from "../../utils/logger";
@@ -33,6 +33,30 @@ function formatLastSyncTime(date: Date): string {
   }
 }
 
+/**
+ * BACKLOG-1926: what to show while a plugged-in iPhone is not connected yet.
+ * The main process re-checks about once a second, so this changes as the user
+ * unlocks the phone and taps Trust.
+ */
+const TRUST_STATE_COPY: Record<IPhoneTrustState, { title: string; detail: string }> = {
+  locked: {
+    title: "Unlock your iPhone to continue",
+    detail: "Your iPhone is plugged in. Unlock it to continue.",
+  },
+  trust_pending: {
+    title: "Tap Trust on your iPhone, then enter your passcode",
+    detail: "Look for \u201cTrust This Computer?\u201d on your iPhone.",
+  },
+  trusted: {
+    title: "Connected",
+    detail: "Reading your iPhone\u2026",
+  },
+  denied: {
+    title: "Trust was declined",
+    detail: "Unplug your iPhone, plug it back in, and tap Trust.",
+  },
+};
+
 export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   isConnected,
   device,
@@ -43,6 +67,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   isInstallingDriver = false,
   driverInstallError = null,
   isWindowsArm64 = false,
+  trustState = null,
 }) => {
   useEffect(() => {
     logger.info("[ConnectionStatus] Mounted", { isConnected, device: device?.name, lastSyncTime });
@@ -52,6 +77,44 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   // view wins over driverMissing, the connect prompt and the Trust hint.
   if (isWindowsArm64) {
     return <WindowsArm64Unsupported />;
+  }
+  if (!isConnected && trustState) {
+    // BACKLOG-1926: a phone is plugged in and visible but not connected yet —
+    // say exactly which step it is waiting on instead of "Connect Your iPhone".
+    const copy = TRUST_STATE_COPY[trustState];
+    const tone =
+      trustState === "trusted"
+        ? "bg-green-100 text-green-500"
+        : trustState === "denied"
+          ? "bg-amber-100 text-amber-500"
+          : "bg-blue-100 text-blue-500";
+    return (
+      <div
+        className="flex flex-col items-center justify-center p-8 text-center"
+        data-testid="iphone-trust-state"
+        data-state={trustState}
+        role="status"
+        aria-live="polite"
+      >
+        <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${tone}`}>
+          <svg
+            className="w-8 h-8"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={1.5}
+              d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
+            />
+          </svg>
+        </div>
+        <h3 className="text-xl font-semibold text-gray-800">{copy.title}</h3>
+        <p className="text-gray-500 mt-2 max-w-sm">{copy.detail}</p>
+      </div>
+    );
   }
   if (!isConnected) {
     // BACKLOG-1919: Driver-absent recovery view. When no device is detected AND

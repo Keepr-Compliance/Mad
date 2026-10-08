@@ -124,7 +124,18 @@ export interface ConnectionStatusProps {
    * precedence over every other view (including driverMissing).
    */
   isWindowsArm64?: boolean;
+  /**
+   * BACKLOG-1926: trust state of a plugged-in iPhone that is not connected yet
+   * (null = nothing plugged in, or nothing to show).
+   */
+  trustState?: IPhoneTrustState | null;
 }
+
+/**
+ * BACKLOG-1926: where a plugged-in, not-yet-connected iPhone is in the
+ * unlock / Trust steps. Sent by the main process about once a second.
+ */
+export type IPhoneTrustState = "locked" | "trust_pending" | "denied" | "trusted";
 
 export interface DeviceInfoProps {
   device: iOSDevice;
@@ -188,6 +199,8 @@ export interface UseIPhoneSyncReturn {
   needsTrust: boolean;
   /** BACKLOG-1582: UDID of the device that needs trust */
   needsTrustUdid: string | null;
+  /** BACKLOG-1926: trust state of a plugged-in iPhone that is not connected yet */
+  trustState: IPhoneTrustState | null;
   /** BACKLOG-1620/1621: Whether libimobiledevice tools are missing (iTunes not installed) */
   toolsMissing: boolean;
   /**

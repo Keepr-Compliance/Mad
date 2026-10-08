@@ -38,6 +38,7 @@ const mockSyncReturn: UseIPhoneSyncReturn = {
   lockReason: null,
   needsTrust: false,
   needsTrustUdid: null,
+  trustState: null,
   toolsMissing: false,
   // BACKLOG-1919: Apple-driver recovery state + action
   driverMissing: false,
