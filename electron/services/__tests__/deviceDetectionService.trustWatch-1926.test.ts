@@ -264,6 +264,16 @@ describe("DeviceDetectionService trust loop (BACKLOG-1926)", () => {
     expect(validateCalls()).toBe(after);
   });
 
+  it("unplugged, seen first by idevicepair ('No device found'): cleared within ~1 s, before the next 2 s poll", async () => {
+    service.start(2000);
+    await jest.advanceTimersByTimeAsync(200);
+    expect(states).toEqual(["locked"]);
+    // idevice_id has not caught up yet (still lists the phone).
+    pairRuns = [{ stdout: crlf(PAIR_NO_DEVICE), code: 1 }];
+    await jest.advanceTimersByTimeAsync(1000); // t ~ 1.2 s, poll #2 is at 2.0 s
+    expect(states).toEqual(["locked", "cleared"]);
+  });
+
   it("unplugged between checks (seen only by the idevice_id poll): the loop stops", async () => {
     service.start(2000);
     await jest.advanceTimersByTimeAsync(200);
