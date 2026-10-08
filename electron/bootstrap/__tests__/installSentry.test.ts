@@ -19,6 +19,7 @@
  */
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 import ts from "typescript";
 
@@ -33,9 +34,18 @@ interface Loaded {
   dotenvConfig: jest.Mock;
   scrub: jest.Mock;
   logError: jest.Mock;
+  makeOffline: jest.Mock;
+  makeNetwork: jest.Mock;
+  networkSend: jest.Mock;
+  pref: typeof import("../../services/crashReportingPreference");
 }
 
 type ProcessWithResources = { resourcesPath?: string };
+
+const tempDirs: string[] = [];
+afterAll(() => {
+  for (const d of tempDirs) fs.rmSync(d, { recursive: true, force: true });
+});
 
 /**
  * Evaluate `installSentry.ts` in a fresh registry with every input controlled.
@@ -51,6 +61,8 @@ function load(options: {
   scrubThrows?: boolean;
   /** BACKLOG-3668: the updater scrub hands the event on unchanged (so the RCS scrub after it is seen). */
   scrubPassThrough?: boolean;
+  /** BACKLOG-3801: contents of userData/crash-reporting.json; undefined = no file. */
+  crashReportingFile?: string;
 }): Loaded {
   const init = jest.fn();
   const dotenvConfig = jest.fn();
@@ -60,6 +72,17 @@ function load(options: {
     return { scrubbed: event };
   });
   const logError = jest.fn();
+  const networkSend = jest.fn(async () => ({ statusCode: 200 }));
+  const makeNetwork = jest.fn(() => ({ send: networkSend, flush: async () => true }));
+  // Identity: hands back the (gated) base factory it was given, so a test can
+  // build the network transport exactly as the offline wrapper would.
+  const makeOffline = jest.fn((base: unknown) => base);
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-3801-is-"));
+  tempDirs.push(userData);
+  if (options.crashReportingFile !== undefined) {
+    fs.writeFileSync(path.join(userData, "crash-reporting.json"), options.crashReportingFile);
+  }
+  let pref!: Loaded["pref"];
 
   const previousDsn = process.env.SENTRY_DSN;
   if (options.dsn === undefined) {
@@ -79,7 +102,11 @@ function load(options: {
   try {
     jest.isolateModules(() => {
       jest.doMock("electron", () => ({
-        app: { isPackaged: options.isPackaged, getVersion: () => PINNED_VERSION },
+        app: {
+          isPackaged: options.isPackaged,
+          getVersion: () => PINNED_VERSION,
+          getPath: (name: string) => (name === "userData" ? userData : `/unused-${name}`),
+        },
       }));
       jest.doMock("dotenv", () => {
         const mock = { config: dotenvConfig };
@@ -89,12 +116,18 @@ function load(options: {
         const mock = { error: logError };
         return { ...mock, default: mock };
       });
-      jest.doMock("@sentry/electron/main", () => ({ init }));
+      jest.doMock("@sentry/electron/main", () => ({
+        init,
+        makeElectronOfflineTransport: makeOffline,
+        makeElectronTransport: makeNetwork,
+      }));
       jest.doMock("../../services/updateDiagnostics", () => ({
         scrubUpdaterEventPII: scrub,
       }));
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       require("../installSentry");
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      pref = require("../../services/crashReportingPreference");
     });
   } finally {
     if (previousDsn === undefined) {
@@ -118,7 +151,7 @@ function load(options: {
     jest.dontMock("../../services/updateDiagnostics");
   }
 
-  return { init, dotenvConfig, scrub, logError };
+  return { init, dotenvConfig, scrub, logError, makeOffline, makeNetwork, networkSend, pref };
 }
 
 type InitOptions = {
@@ -126,6 +159,7 @@ type InitOptions = {
   environment: string;
   release: string;
   enabled: boolean;
+  transport: unknown;
   beforeBreadcrumb: (breadcrumb: unknown) => unknown;
   beforeSend: (event: unknown) => unknown;
 };
@@ -136,11 +170,11 @@ function initOptions(loaded: Loaded): InitOptions {
 }
 
 describe("installSentry: the init call transcribed from main.ts (BACKLOG-2962)", () => {
-  it("passes exactly the five options main.ts passed, plus beforeBreadcrumb (BACKLOG-3768), in order", () => {
+  it("passes exactly the five options main.ts passed, plus transport (BACKLOG-3801) and beforeBreadcrumb (BACKLOG-3768), in order", () => {
     const options = initOptions(load({ isPackaged: false }));
     // `Object.keys` order is insertion order — a dropped, added or reordered
     // key reds here before any value is looked at.
-    expect(Object.keys(options)).toEqual(["dsn", "environment", "release", "enabled", "beforeBreadcrumb", "beforeSend"]);
+    expect(Object.keys(options)).toEqual(["dsn", "environment", "release", "enabled", "transport", "beforeBreadcrumb", "beforeSend"]);
   });
 
   it("BACKLOG-3768: beforeBreadcrumb drops the query from an electron.net breadcrumb", () => {
@@ -280,5 +314,89 @@ describe("installSentry: where main.ts imports it", () => {
 
     expect(main.includes("Sentry.init({")).toBe(false);
     expect(installSentry.split("Sentry.init({").length - 1).toBe(1);
+  });
+});
+
+// BACKLOG-3801: the "Send crash reports" switch. installSentry is the only
+// place it can act before anything is sent: it runs before app ready, and
+// every main AND renderer envelope leaves through the transport built here.
+describe("installSentry: the crash reporting switch (BACKLOG-3801)", () => {
+  type Net = { send: (env: unknown) => Promise<unknown> };
+
+  /** The network transport installSentry hands to the offline wrapper. */
+  function networkTransport(loaded: Loaded): Net {
+    const options = initOptions(loaded);
+    expect(loaded.makeOffline).toHaveBeenCalledTimes(1);
+    // The offline wrapper must be the transport, built from a base factory —
+    // NOT given a `shouldSend` option, which queues to disk when false.
+    expect(options.transport).toBe(loaded.makeOffline.mock.results[0].value);
+    const baseFactory = loaded.makeOffline.mock.calls[0][0] as (o: unknown) => Net;
+    return baseFactory({});
+  }
+
+  it("packaged, no saved choice: ON — enabled, and an envelope reaches the network", async () => {
+    const loaded = load({ isPackaged: true });
+    expect(initOptions(loaded).enabled).toBe(true);
+    await networkTransport(loaded).send({});
+    expect(loaded.networkSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("packaged, saved OFF: Sentry starts disabled", () => {
+    const loaded = load({ isPackaged: true, crashReportingFile: JSON.stringify({ enabled: false }) });
+    expect(initOptions(loaded).enabled).toBe(false);
+  });
+
+  it("packaged, saved OFF: the transport still built for the old offline queue sends nothing", async () => {
+    const loaded = load({ isPackaged: true, crashReportingFile: JSON.stringify({ enabled: false }) });
+    await networkTransport(loaded).send({});
+    expect(loaded.networkSend).not.toHaveBeenCalled();
+  });
+
+  it("the choice is read BEFORE init — nothing is initialised from a not-yet-loaded setting", () => {
+    // A file saying OFF must already be honoured by the options init receives.
+    const loaded = load({ isPackaged: true, dsn: "https://public@o0.ingest.sentry.io/0", crashReportingFile: JSON.stringify({ enabled: false }) });
+    expect(initOptions(loaded).enabled).toBe(false);
+  });
+
+  it("turned OFF mid-session: beforeSend drops the event and the transport sends nothing", async () => {
+    const loaded = load({ isPackaged: true, scrubPassThrough: true });
+    const options = initOptions(loaded);
+    const net = networkTransport(loaded);
+    const event = { message: "boom" };
+    expect(options.beforeSend(event)).toBe(event);
+
+    loaded.pref.setCrashReportingEnabled(false);
+
+    expect(options.beforeSend(event)).toBeNull();
+    expect(loaded.scrub).toHaveBeenCalledTimes(1); // not even scrubbed once off
+    await net.send({});
+    expect(loaded.networkSend).not.toHaveBeenCalled();
+  });
+});
+
+// BACKLOG-3801: the main-process gate covers the renderer only because the
+// renderer has no network transport of its own — @sentry/electron/renderer's
+// transport hands every envelope to main over IPC. A renderer `Sentry.init`
+// given its own `dsn` or `transport` would send around the switch.
+describe("renderer Sentry.init cannot send around the switch (BACKLOG-3801)", () => {
+  it("src/main.tsx passes neither dsn nor transport", () => {
+    const file = path.join(REPO_ROOT, "src", "main.tsx");
+    const source = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+    const keys: string[][] = [];
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isCallExpression(node) &&
+        node.expression.getText(source) === "Sentry.init" &&
+        node.arguments[0] &&
+        ts.isObjectLiteralExpression(node.arguments[0])
+      ) {
+        keys.push(node.arguments[0].properties.map((p) => p.name?.getText(source) ?? ""));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).not.toContain("dsn");
+    expect(keys[0]).not.toContain("transport");
   });
 });
