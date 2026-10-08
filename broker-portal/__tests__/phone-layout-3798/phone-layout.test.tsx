@@ -356,3 +356,29 @@ describe('attachments', () => {
     );
   });
 });
+
+describe('iOS focus-zoom: fields are 16px below md', () => {
+  it('review notes textarea is text-base below md and md:text-sm from md up', () => {
+    render(<ReviewActions submission={OPEN_SUBMISSION} showChecklistHint />);
+    fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
+    const ta = document.querySelector('textarea')!;
+    expect(ta).not.toBeNull();
+    const t = tokens(ta);
+    expect(t).toContain('text-base');
+    expect(t).toContain('md:text-sm');
+    expect(t).not.toContain('text-sm');
+  });
+
+  it('users search and role/status filters carry the important 16px/md:14px pair', async () => {
+    setMatchMedia(true);
+    await act(async () => {
+      render(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        <UserListClient initialMembers={MEMBERS as any} currentUserId="u0" currentUserRole="admin" organizationId="org-1" />
+      );
+    });
+    for (const id of ['user-search', 'role-filter', 'status-filter']) {
+      expect(tokens(document.getElementById(id))).toEqual(expect.arrayContaining(['!text-base', 'md:!text-sm']));
+    }
+  });
+});
