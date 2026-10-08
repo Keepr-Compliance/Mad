@@ -151,12 +151,14 @@ describe("useIPhoneSync telemetry (BACKLOG-3784)", () => {
       expect(syncApi.reportCompletionShown).toHaveBeenCalledTimes(1);
 
       // Next sync: extraction done (status back to syncing), then storage fails.
+      syncStateRef.isActive = true;
       act(() => {
         completeCb?.({ success: true, messageCount: 1, contactCount: 0, conversationCount: 1 });
       });
       act(() => {
         storageErrorCbs[storageErrorCbs.length - 1]?.({ error: "Database write failed" });
       });
+      expect(storageErrorCbs.length).toBeGreaterThan(0);
       act(() => {
         jest.advanceTimersByTime(50);
       });
