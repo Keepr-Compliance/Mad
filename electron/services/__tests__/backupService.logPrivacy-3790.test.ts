@@ -16,8 +16,9 @@
  *   `backupService.failureCause-2913.test.ts` (founder's main.log, 2026-08-27 22:44).
  * - The Windows trace lines and GENUINE_FAULTS are copied from
  *   `backupService.stderrClassification-2898.test.ts`.
- * - The `<data>` base64 line is NOT transcribed: no captured dump contains one. It
- *   is the base64 of a fixed ASCII string, present to pin the `<data>` shape.
+ * - The `<data>` base64 lines are NOT transcribed: no captured dump contains one.
+ *   They are the base64 of fixed ASCII strings, present to pin the `<data>` shape:
+ *   a full-width line and a short wrapped tail.
  */
 
 import { EventEmitter } from "events";
@@ -48,6 +49,7 @@ const DEVICE_PROPERTIES_DUMP = `22:44:38.022 property_list_service.c:253 interna
 \t<key>fm-activation-locked</key>
 \t<data>
 \tZGlzayBzcGFjZSBzdG9yYWdlIGxvY2tlZA==
+\tbG9ja2Vk
 \t</data>
 \t<key>Applications</key>
 \t<array>
@@ -213,11 +215,18 @@ describe("BACKLOG-3790: idevicebackup2 output is logged without plist dumps or a
       for (const marker of PRIVATE_MARKERS) expect(written).not.toContain(marker);
       expect(written).not.toContain("<key>");
       expect(written).not.toContain("ZGlzayBzcGFjZSBzdG9yYWdlIGxvY2tlZA");
+      expect(written).not.toContain("bG9ja2Vk");
+      expect(Sentry.addBreadcrumb).not.toHaveBeenCalled();
     });
 
     it("sweep: each plist line shape alone, with the dump head cut off, is not logged", () => {
       // The 64 KB stderr cap and chunk boundaries can drop `<?xml`/`<plist>`.
-      const bodyLines = DEVICE_PROPERTIES_DUMP.split("\n").slice(4);
+      // KNOWN LIMIT: a short base64 tail (`bG9ja2Vk`) is only recognisable INSIDE a
+      // dump — alone it is indistinguishable from an ordinary word — so it is
+      // excluded here and covered by the whole-dump test above.
+      const bodyLines = DEVICE_PROPERTIES_DUMP.split("\n")
+        .slice(4)
+        .filter((l) => l.trim() !== "bG9ja2Vk");
       for (const line of bodyLines) {
         jest.clearAllMocks();
         const service = new BackupService();
