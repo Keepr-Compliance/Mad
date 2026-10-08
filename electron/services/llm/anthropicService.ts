@@ -7,6 +7,7 @@ import {
   LLMError,
   LLMErrorType,
 } from './types';
+import { mainNetFetch } from '../mainNetFetch';
 
 /**
  * Anthropic LLM provider implementation.
@@ -26,6 +27,8 @@ export class AnthropicService extends BaseLLMService {
     this.client = new Anthropic({
       apiKey,
       timeout: this.defaultTimeout,
+      // BACKLOG-3799: Chromium network stack (OS trust store / system proxy)
+      fetch: mainNetFetch as unknown as typeof fetch,
     });
   }
 

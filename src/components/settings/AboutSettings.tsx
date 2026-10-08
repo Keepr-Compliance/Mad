@@ -57,6 +57,15 @@ export function AboutSettings() {
           >
             Terms of Service
           </button>
+          {/* BACKLOG-3803: licences of the open-source components Keepr includes */}
+          <button
+            onClick={() => {
+              void window.api.shell.openThirdPartyNotices();
+            }}
+            className="w-full text-left text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
+          >
+            Third-Party Notices
+          </button>
         </div>
         {/* TASK-2180: Contact Support — opens the floating support widget */}
         <button

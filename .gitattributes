@@ -2,3 +2,7 @@
 # migrations, and the tests slice and replace their text. Keep them LF on every
 # OS (a Windows checkout with core.autocrlf would otherwise convert them to CRLF).
 scripts/__tests__/fixtures/migration-grants/** text eol=lf
+
+# BACKLOG-3803: third-party licence texts are verbatim upstream copies hashed in
+# components.json. Keep them LF on every OS so the recorded sha256 holds.
+resources/third-party/** text eol=lf

@@ -26,10 +26,10 @@
  * @module services/supabaseNetFetch
  */
 
-import { app, net } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import logService from "./logService";
 import { authStepFromUrl, classifyNetError } from "./supabaseNetError";
+import { mainNetFetch } from "./mainNetFetch";
 
 /** One report per (auth_step, cause_code) per window, per process. */
 export const REPORT_THROTTLE_MS = 10 * 60 * 1000;
@@ -89,20 +89,6 @@ function report(authStep: string, causeCode: string, tlsIntercept: boolean, stat
   }
 }
 
-async function transportFetch(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
-  if (!process.versions.electron) {
-    // Not running in Electron (jest): Node's fetch.
-    return globalThis.fetch(input, init);
-  }
-  if (!net || typeof net.fetch !== "function") {
-    throw new Error("Electron net.fetch is unavailable in the main process");
-  }
-  if (!app.isReady()) {
-    await app.whenReady();
-  }
-  return net.fetch(input instanceof URL ? input.href : input, init);
-}
-
 /**
  * The `global.fetch` handed to supabase-js `createClient` in main.
  */
@@ -111,9 +97,11 @@ export async function supabaseNetFetch(
   init?: RequestInit,
 ): Promise<Response> {
   const authStep = authStepFromUrl(requestUrl(input));
-  let raw: Response;
+  let res: Response;
   try {
-    raw = await transportFetch(input, { ...init, credentials: "omit", cache: "no-store" });
+    // Transport, credentials/cache options and the Response rebuild live in
+    // mainNetFetch (shared with axios / gaxios, BACKLOG-3799).
+    res = await mainNetFetch(input, init);
   } catch (err) {
     try {
       const cls = classifyNetError(err);
@@ -124,13 +112,9 @@ export async function supabaseNetFetch(
     throw err;
   }
 
-  if (!raw.ok && authStep === "refresh") {
-    report(authStep, `HTTP_${raw.status}`, false, raw.status);
+  if (!res.ok && authStep === "refresh") {
+    report(authStep, `HTTP_${res.status}`, false, res.status);
   }
 
-  return new Response(raw.body, {
-    status: raw.status,
-    statusText: raw.statusText,
-    headers: raw.headers,
-  });
+  return res;
 }

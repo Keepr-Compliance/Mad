@@ -45,6 +45,22 @@ export function TourTooltip(props: TooltipRenderProps): React.ReactElement {
         {title && <h1 style={styles.tooltipTitle}>{title}</h1>}
         <div style={styles.tooltipContent}>{content}</div>
       </div>
+      {!hideFooter && showCheckbox && (
+        <div data-testid="tour-dont-show-again-row" style={{ display: "flex", alignItems: "center", marginTop: 12 }}>
+          <label
+            htmlFor={checkboxId}
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#4b5563", cursor: "pointer" }}
+          >
+            <input
+              id={checkboxId}
+              type="checkbox"
+              checked={ctx.dontShowAgain}
+              onChange={(e) => ctx.setDontShowAgain(e.target.checked)}
+            />
+            {DONT_SHOW_AGAIN_LABEL}
+          </label>
+        </div>
+      )}
       {!hideFooter && (
         <div style={styles.tooltipFooter}>
           <div style={{ ...styles.tooltipFooterSpacer, display: "flex", alignItems: "center", gap: 12 }}>
@@ -55,20 +71,6 @@ export function TourTooltip(props: TooltipRenderProps): React.ReactElement {
                 type="button"
                 {...(skipProps as ButtonProps)}
               />
-            )}
-            {showCheckbox && (
-              <label
-                htmlFor={checkboxId}
-                style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#4b5563", cursor: "pointer" }}
-              >
-                <input
-                  id={checkboxId}
-                  type="checkbox"
-                  checked={ctx.dontShowAgain}
-                  onChange={(e) => ctx.setDontShowAgain(e.target.checked)}
-                />
-                {DONT_SHOW_AGAIN_LABEL}
-              </label>
             )}
           </div>
           {!hideBackButton && index > 0 && (

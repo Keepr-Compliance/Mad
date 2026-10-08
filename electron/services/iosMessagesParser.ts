@@ -85,6 +85,138 @@ export class iOSMessagesParser {
     return crypto.createHash("sha1").update(fullPath).digest("hex");
   }
 
+  /** Path prefixes iOS writes for Messages attachments, mapped onto MediaDomain. */
+  private static readonly ATTACHMENT_PATH_PREFIXES: readonly string[] = [
+    "~/",
+    "/var/mobile/",
+  ];
+
+  /**
+   * The MediaDomain subtrees an attachment path may point into: message
+   * attachments and sticker images. Both are backed up in MediaDomain with the
+   * same relative path sms.db records.
+   */
+  private static readonly ATTACHMENT_ROOTS: readonly string[] = [
+    "Library/SMS/Attachments/",
+    "Library/SMS/StickerCache/",
+  ];
+
+  /**
+   * Rules that mean the path tried to leave the attachment roots. Each one is
+   * logged individually (sanitized, up to ATTACK_LOG_LIMIT per summary window);
+   * every other rule is only counted in the summary.
+   */
+  private static readonly ATTACK_RULES: ReadonlySet<string> = new Set([
+    "backslash",
+    "nul",
+    "dot-segment",
+    "absolute",
+  ]);
+
+  /** Individually logged attack-class rejections per summary window. */
+  static readonly ATTACK_LOG_LIMIT = 5;
+
+  /** Rejected attachment paths since the last summary, counted by rule. */
+  private static rejectedPathCounts = new Map<string, number>();
+  private static attackLinesLogged = 0;
+  private static attackLinesSuppressed = 0;
+
+  /**
+   * Describe a rejected path without exposing names: up to the first two
+   * segments (never the last one), the segment count, and the index of the
+   * segment that failed.
+   */
+  private static sanitizePath(
+    originalPath: string,
+    failedSegment: number,
+  ): { head: string; segments: number; failedSegment: number } {
+    const parts = originalPath.split("/");
+    const shown = parts
+      .slice(0, Math.min(2, parts.length - 1))
+      // eslint-disable-next-line no-control-regex
+      .map((part) => part.replace(/[\x00-\x1f\\]/g, "?").slice(0, 32));
+    return { head: shown.join("/"), segments: parts.length, failedSegment };
+  }
+
+  /**
+   * Log one summary line of attachment paths rejected since the last call,
+   * counted by rule (plus how many attack-class lines were logged and
+   * suppressed), then reset. No-op when nothing was rejected.
+   * @returns the counts that were logged
+   */
+  static flushRejectedPathSummary(): Record<string, number> {
+    const counts: Record<string, number> = Object.fromEntries(
+      iOSMessagesParser.rejectedPathCounts,
+    );
+    const hadRejections = Object.keys(counts).length > 0;
+    if (iOSMessagesParser.attackLinesSuppressed > 0) {
+      counts.attackLinesSuppressed = iOSMessagesParser.attackLinesSuppressed;
+    }
+    iOSMessagesParser.rejectedPathCounts = new Map();
+    iOSMessagesParser.attackLinesLogged = 0;
+    iOSMessagesParser.attackLinesSuppressed = 0;
+    if (hadRejections) {
+      log.warn("iOSMessagesParser: Rejected attachment paths", counts);
+    }
+    return counts;
+  }
+
+  /** Index of the first `/`-separated segment matching the predicate, or -1. */
+  private static findSegment(p: string, test: (segment: string) => boolean): number {
+    return p.split("/").findIndex(test);
+  }
+
+  /**
+   * Convert an attachment path from sms.db into its MediaDomain relative path.
+   * Accepts only `~/` or `/var/mobile/` followed by `Library/SMS/Attachments/...`
+   * or `Library/SMS/StickerCache/...`. Dots inside a name (`Offer...pdf`) are
+   * allowed; `.`/`..` segments, backslashes, NUL and absolute paths elsewhere
+   * are attack-class rejections and are logged individually (sanitized,
+   * throttled). Other rejections (unknown prefix or root, empty segment) are
+   * only counted; flushRejectedPathSummary() logs the per-sync totals.
+   * @returns the relative path (e.g. `Library/SMS/Attachments/ab/01/x.jpg`), or null
+   */
+  static toMediaDomainRelativePath(originalPath: string): string | null {
+    const reject = (rule: string, failedSegment = -1): null => {
+      const counts = iOSMessagesParser.rejectedPathCounts;
+      counts.set(rule, (counts.get(rule) ?? 0) + 1);
+      if (iOSMessagesParser.ATTACK_RULES.has(rule)) {
+        if (iOSMessagesParser.attackLinesLogged < iOSMessagesParser.ATTACK_LOG_LIMIT) {
+          iOSMessagesParser.attackLinesLogged++;
+          log.warn("iOSMessagesParser: Rejected attachment path", {
+            rule,
+            ...iOSMessagesParser.sanitizePath(originalPath, failedSegment),
+          });
+        } else {
+          iOSMessagesParser.attackLinesSuppressed++;
+        }
+      }
+      return null;
+    };
+
+    const backslashAt = iOSMessagesParser.findSegment(originalPath, (seg) => seg.includes("\\"));
+    if (backslashAt !== -1) return reject("backslash", backslashAt);
+    const nulAt = iOSMessagesParser.findSegment(originalPath, (seg) => seg.includes("\0"));
+    if (nulAt !== -1) return reject("nul", nulAt);
+    const dotAt = iOSMessagesParser.findSegment(originalPath, (seg) => seg === "." || seg === "..");
+    if (dotAt !== -1) return reject("dot-segment", dotAt);
+
+    const prefix = iOSMessagesParser.ATTACHMENT_PATH_PREFIXES.find((p) =>
+      originalPath.startsWith(p),
+    );
+    if (prefix === undefined) {
+      return originalPath.startsWith("/") ? reject("absolute", 0) : reject("prefix");
+    }
+    const relativePath = originalPath.slice(prefix.length);
+
+    if (!iOSMessagesParser.ATTACHMENT_ROOTS.some((root) => relativePath.startsWith(root))) {
+      return reject("root");
+    }
+    if (relativePath.split("/").includes("")) return reject("empty-segment");
+
+    return relativePath;
+  }
+
   /**
    * Resolve an attachment's original path to its location in the iOS backup.
    * @param backupPath Path to the iOS backup directory
@@ -94,22 +226,8 @@ export class iOSMessagesParser {
   static resolveAttachmentPath(backupPath: string, originalPath: string): string | null {
     if (!originalPath) return null;
 
-    // iOS attachment paths are like ~/Library/SMS/Attachments/...
-    // Remove the ~/ prefix to get the relative path
-    let relativePath = originalPath;
-    if (relativePath.startsWith("~/")) {
-      relativePath = relativePath.slice(2);
-    } else if (relativePath.startsWith("/var/mobile/")) {
-      // Some paths may be absolute /var/mobile/Library/...
-      relativePath = relativePath.replace("/var/mobile/", "");
-    }
-
-    // Security: Validate path doesn't contain traversal sequences
-    // This prevents malicious paths like "../../etc/passwd" from escaping the backup
-    if (relativePath.includes("..") || relativePath.includes("\\")) {
-      log.warn("iOSMessagesParser: Rejected potentially malicious path", {
-        originalPath: originalPath.substring(0, 50),
-      });
+    const relativePath = iOSMessagesParser.toMediaDomainRelativePath(originalPath);
+    if (relativePath === null) {
       return null;
     }
 

@@ -16,7 +16,7 @@ import {
   SyncProgress,
   SyncResult,
 } from "../services/deviceSyncOrchestrator";
-import { iPhoneSyncStorageService } from "../services/iPhoneSyncStorageService";
+import { iPhoneSyncStorageService, attachmentSkipFields } from "../services/iPhoneSyncStorageService";
 import { autoLinkNewMessagesForUser, expandAttachedThreadsForUser } from "../services/autoLinkService";
 import sessionService from "../services/sessionService";
 import type { iOSDevice } from "../types/device";
@@ -215,6 +215,36 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
     // TASK-2110: Signal persistence phase to stop and roll back
     persistCancelSignal.cancelled = true;
     return { success: true };
+  });
+
+  // BACKLOG-3784: renderer heartbeat during an iPhone sync. Silent unless a gap.
+  ipcMain.removeAllListeners("sync:renderer-tick");
+  ipcMain.on("sync:renderer-tick", (_event, tick: unknown) => {
+    try {
+      const t = (tick && typeof tick === "object" ? tick : {}) as { first?: unknown; hidden?: unknown };
+      syncTimeline.noteRendererTick({ first: t.first === true, hidden: t.hidden === true });
+    } catch {
+      // Telemetry only.
+    }
+  });
+
+  // BACKLOG-3784: renderer reports the sync completion UI was shown. Telemetry only.
+  ipcMain.removeAllListeners("sync:completion-shown");
+  ipcMain.on("sync:completion-shown", (_event, ack: unknown) => {
+    try {
+      const a = (ack && typeof ack === "object" ? ack : {}) as {
+        receivedAt?: unknown;
+        shownAt?: unknown;
+      };
+      syncTimeline.markCompletionShown({
+        receivedAt: typeof a.receivedAt === "number" ? a.receivedAt : undefined,
+        shownAt: typeof a.shownAt === "number" ? a.shownAt : undefined,
+      });
+    } catch (error) {
+      log.warn("[SyncHandlers] completion-shown ack failed; ignored", {
+        error: error instanceof Error ? error.message : "Unknown",
+      });
+    }
   });
 
   // Force reset sync state (for recovery from stuck state)
@@ -537,13 +567,18 @@ function setupEventForwarding(): void {
           messages: persistResult.messagesStored,
           contacts: persistResult.contactsStored,
           attachments: persistResult.attachmentsStored,
+          // BACKLOG-3784: why attachments were skipped, on the sync-outcome line.
+          ...attachmentSkipFields(persistResult.attachmentsSkipped, persistResult.attachmentsSkippedByReason),
         });
 
         // Send final completion with storage results
         log.info("[SyncHandlers] Sending sync:storage-complete to renderer");
+        // BACKLOG-3784: stamp the send so the renderer's completion ack is measured from it.
+        syncTimeline.markStorageCompleteSent();
         sendToMainWindow("sync:storage-complete", {
           messagesStored: persistResult.messagesStored,
           contactsStored: persistResult.contactsStored,
+          contactsSourceOff: persistResult.contactsSourceOff === true,
           attachmentsStored: persistResult.attachmentsStored,
           duration: persistResult.duration,
         });
@@ -648,6 +683,15 @@ export function setSyncUserId(userId: string | null): void {
 }
 
 /**
+ * BACKLOG-3598: stop the orchestrator's running backup because the app is quitting.
+ * Returns null when there is no orchestrator, so a quit with nothing to stop is not
+ * delayed. Must be called before `cleanupSyncHandlers()`, which drops the orchestrator.
+ */
+export function stopBackupForQuit(): Promise<unknown> | null {
+  return orchestrator ? orchestrator.stopBackupForQuit() : null;
+}
+
+/**
  * Cleanup sync handlers
  */
 export function cleanupSyncHandlers(): void {
@@ -673,6 +717,8 @@ export function cleanupSyncHandlers(): void {
   ipcMain.removeHandler("sync:start-detection");
   ipcMain.removeHandler("sync:stop-detection");
   ipcMain.removeHandler("sync:get-iphone-last-sync-time");
+  ipcMain.removeAllListeners("sync:completion-shown");
+  ipcMain.removeAllListeners("sync:renderer-tick");
 
   log.info("[SyncHandlers] Cleaned up sync handlers");
 }
