@@ -39,6 +39,8 @@ import type {
 } from "../types/ipc/window-api-messages";
 // BACKLOG-2748: ONE spelling of the cancel channel, shared with the preload bridge.
 import { MESSAGES_IMPORT_CANCEL_CHANNEL } from "../types/ipc/messageChannels";
+import { getTextAttachmentData } from "../services/textAttachmentDataService";
+import type { MessageAttachmentMeta, TextAttachmentDataResult } from "../types/ipc/common";
 
 import { sendToMainWindow } from "../windowRegistry";
 
@@ -550,18 +552,23 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
    * Get attachments for multiple messages at once (TASK-1012)
    * IPC: messages:get-attachments-batch
    *
+   * BACKLOG-3763: METADATA ONLY. This used to read every file of the
+   * conversation on the main thread and return all of them as base64 in one
+   * reply. The conversation view now asks for each image's bytes when it
+   * scrolls into view, through `messages:get-attachment-data`.
+   *
    * @param messageIds - Array of message IDs
-   * @returns Record of message ID to attachments
+   * @returns Record of message ID to attachment metadata
    */
   ipcMain.handle(
     "messages:get-attachments-batch",
     async (
       _event: IpcMainInvokeEvent,
       messageIds: string[]
-    ): Promise<Record<string, MessageAttachmentInfo[]>> => {
+    ): Promise<Record<string, MessageAttachmentMeta[]>> => {
       try {
         const attachmentsMap = macOSMessagesImportService.getAttachmentsByMessageIds(messageIds);
-        const result: Record<string, MessageAttachmentInfo[]> = {};
+        const result: Record<string, MessageAttachmentMeta[]> = {};
 
         for (const [msgId, attachments] of attachmentsMap) {
           result[msgId] = attachments.map((att) => ({
@@ -570,9 +577,6 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
             filename: att.filename,
             mime_type: att.mime_type,
             file_size_bytes: att.file_size_bytes,
-            data: att.storage_path
-              ? macOSMessagesImportService.getAttachmentAsBase64(att.storage_path)
-              : null,
           }));
         }
 
@@ -591,6 +595,36 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
           },
         });
         return {};
+      }
+    }
+  );
+
+  /**
+   * BACKLOG-3763: one text attachment's bytes, by attachment id.
+   * IPC: messages:get-attachment-data
+   *
+   * Takes an id, never a path. Served only for an attachment of a text owned
+   * by the signed-in user; see textAttachmentDataService.
+   */
+  ipcMain.handle(
+    "messages:get-attachment-data",
+    async (
+      _event: IpcMainInvokeEvent,
+      attachmentId: unknown
+    ): Promise<TextAttachmentDataResult> => {
+      try {
+        return await getTextAttachmentData(attachmentId);
+      } catch (error) {
+        logService.error(
+          `Failed to get attachment data: ${error instanceof Error ? error.message : "Unknown"}`,
+          "MessageImportHandlers"
+        );
+        Sentry.captureException(error, {
+          tags: { sync_type: "message_import" },
+          level: "warning",
+          extra: { handler: "messages:get-attachment-data" },
+        });
+        return { success: false, reason: "not_found" };
       }
     }
   );

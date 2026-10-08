@@ -14,6 +14,7 @@ import type {
 // BACKLOG-2832: ONE definition of the progress phase. This interface and the
 // contract's used to be unrelated hand-written unions with nothing comparing them.
 import type { ImportPhase } from "../types/ipc/importPhase";
+import type { MessageAttachmentMeta, TextAttachmentDataResult } from "../types/ipc/common";
 // BACKLOG-2748: ONE spelling of the cancel channel, shared with the handler.
 import {
   MESSAGES_IMPORT_CANCEL_CHANNEL,
@@ -162,8 +163,15 @@ export const messageBridge = {
    * @param messageIds - Array of message IDs
    * @returns Map of message ID to attachments
    */
-  getMessageAttachmentsBatch: (messageIds: string[]): Promise<Record<string, MessageAttachmentInfo[]>> =>
+  getMessageAttachmentsBatch: (messageIds: string[]): Promise<Record<string, MessageAttachmentMeta[]>> =>
     ipcRenderer.invoke("messages:get-attachments-batch", messageIds),
+
+  /**
+   * One text attachment's bytes, by attachment id (BACKLOG-3763). The
+   * conversation view calls this when an image scrolls into view.
+   */
+  getMessageAttachmentData: (attachmentId: string): Promise<TextAttachmentDataResult> =>
+    ipcRenderer.invoke("messages:get-attachment-data", attachmentId),
 
   /**
    * Repair attachment message_id mappings without full re-import.
