@@ -33,7 +33,7 @@ jest.mock("../logService", () => ({
 }));
 
 import { isNetworkError } from "../../utils/networkErrors";
-import { isRetryableError } from "../../utils/apiRateLimit";
+import { isRetryableError, withRetry } from "../../utils/apiRateLimit";
 import { installMainNetAxios, gaxiosNetFetch } from "../mainNetFetch";
 import outlookFetchService from "../outlookFetchService";
 
@@ -113,6 +113,33 @@ describe("C1 Outlook path retries a transport failure (withRetry)", () => {
     delete (process.versions as Record<string, string | undefined>).electron;
     expect(err).toBeInstanceOf(Error);
     expect(mockNetFetch).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("D1 axios-shaped certificate failure is network but NOT retryable", () => {
+  // Shape measured by SR in real Electron (BACKLOG-3799 pm_comments 9ed51b67):
+  //   AX https://self-signed.badssl.com/ ERR_NETWORK cause net::ERR_CERT_AUTHORITY_INVALID
+  //   AX https://expired.badssl.com/     ERR_NETWORK cause net::ERR_CERT_DATE_INVALID
+  const axiosCert = (m: string) =>
+    Object.assign(new Error("Network Error"), {
+      isAxiosError: true,
+      code: "ERR_NETWORK",
+      cause: new Error(m),
+    });
+
+  it.each(["net::ERR_CERT_AUTHORITY_INVALID", "net::ERR_CERT_DATE_INVALID"])(
+    "axios ERR_NETWORK with cause %s -> network, not retryable",
+    (m) => {
+      const e = axiosCert(m);
+      expect(isNetworkError(e)).toBe(true);
+      expect(isRetryableError(e)).toBe(false);
+    },
+  );
+
+  it("withRetry makes exactly one attempt on it", async () => {
+    const fn = jest.fn().mockRejectedValue(axiosCert("net::ERR_CERT_AUTHORITY_INVALID"));
+    await expect(withRetry(fn, { maxRetries: 3, baseDelay: 1 })).rejects.toBeDefined();
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });
 

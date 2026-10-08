@@ -211,6 +211,13 @@ export function isRetryableError(error: unknown): boolean {
     return true;
   }
 
+  // Certificate failures will not heal on retry. Check the message and the
+  // full cause chain BEFORE any retryable-true return: an axios error carries
+  // code ERR_NETWORK with the net::ERR_CERT_* only on `.cause` (BACKLOG-3799).
+  if (isChromiumNetError(error, true) && !isChromiumNetError(error, false)) {
+    return false;
+  }
+
   // Check for network errors
   const code = err.code;
   if (typeof code === "string") {
