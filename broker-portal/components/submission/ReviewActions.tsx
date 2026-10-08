@@ -366,7 +366,7 @@ export function ReviewActions({
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                className="w-full border border-gray-300 rounded-md p-3 text-sm text-gray-900 focus:ring-1 focus:ring-primary-500 focus:border-primary-500 resize-none"
+                className="w-full border border-gray-300 rounded-md p-3 text-base md:text-sm text-gray-900 focus:ring-1 focus:ring-primary-500 focus:border-primary-500 resize-none"
                 rows={3}
                 placeholder={
                   action === 'approve'
