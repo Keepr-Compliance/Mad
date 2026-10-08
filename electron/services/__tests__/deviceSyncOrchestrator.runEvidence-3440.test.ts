@@ -382,7 +382,10 @@ describe("BACKLOG-3598: quitting during a backup is recorded as app-quit, not de
     const orchestrator = new DeviceSyncOrchestrator();
     orchestrator.on("error", () => {});
     const syncing = orchestrator.sync({ udid: UDID });
-    await new Promise((r) => setImmediate(r));
+    for (let i = 0; i < 200 && mockStartBackup.mock.calls.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(mockStartBackup).toHaveBeenCalled();
 
     expect(orchestrator.stopBackupForQuit()).not.toBeNull();
     // What onProcessClose resolves after the child is killed.
