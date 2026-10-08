@@ -52,6 +52,8 @@ export interface PersistResult {
   messagesSkipped: number;
   contactsStored: number;
   contactsSkipped: number;
+  /** True when contacts were withheld because the iPhone Contacts source is off (BACKLOG-3791). */
+  contactsSourceOff?: boolean;
   attachmentsStored: number;
   attachmentsSkipped: number;
   duration: number;
@@ -297,6 +299,7 @@ class IPhoneSyncStorageService {
         messagesSkipped: messageResult.skipped,
         contactsStored: contactResult.stored,
         contactsSkipped: contactResult.skipped,
+        contactsSourceOff: contactResult.sourceOff === true,
         attachmentsStored: attachmentResult.stored,
         attachmentsSkipped: attachmentResult.skipped,
         duration,
@@ -576,7 +579,7 @@ class IPhoneSyncStorageService {
     contacts: iOSContact[],
     onProgress?: (current: number, total: number) => void,
     sessionId?: string
-  ): Promise<{ stored: number; skipped: number }> {
+  ): Promise<{ stored: number; skipped: number; sourceOff?: boolean }> {
     if (contacts.length === 0) {
       return { stored: 0, skipped: 0 };
     }
@@ -608,9 +611,12 @@ class IPhoneSyncStorageService {
       log.info(
         `[${IPhoneSyncStorageService.SERVICE_NAME}] iPhone contacts storage skipped: ` +
           `the iPhone Contacts source is off for this user (${contacts.length} contacts not stored). ` +
-          `On macOS this is the default — the Mac address book already carries iPhone contacts via iCloud.`
+          // BACKLOG-3791: the iCloud explanation only holds on macOS.
+          (process.platform === "darwin"
+            ? `On macOS this is the default — the Mac address book already carries iPhone contacts via iCloud.`
+            : `Turn it on in Settings to import iPhone contacts.`)
       );
-      return { stored: 0, skipped: contacts.length };
+      return { stored: 0, skipped: contacts.length, sourceOff: true };
     }
 
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Storing ${contacts.length} contacts to external_contacts`);
