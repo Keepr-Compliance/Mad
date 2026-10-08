@@ -59,15 +59,15 @@ export class WindowResponsivenessTracker {
   }
 
   /**
-   * The user chose Reload or Quit while the window was frozen. `responsive` may never
+   * The user chose Reload or Quit, or the window closed, while it was frozen. `responsive` may never
    * fire after this, so report the freeze now with the duration so far. A freeze that
    * already closed (or never started) sends nothing, so one freeze is one event.
    */
-  flush(reason: "reload" | "quit"): number | null {
+  flush(reason: "reload" | "quit" | "closed"): number | null {
     return this.close(reason);
   }
 
-  private close(endedBy: "responsive" | "reload" | "quit"): number | null {
+  private close(endedBy: "responsive" | "reload" | "quit" | "closed"): number | null {
     if (this.unresponsiveSince === null) return null;
     const at = this.now();
     const durationMs = at - this.unresponsiveSince;
@@ -114,7 +114,7 @@ export class WindowResponsivenessTracker {
 
 /** Minimal window surface so the wiring can be tested with an EventEmitter. */
 export interface ResponsivenessWindow {
-  on(event: "responsive" | "unresponsive", listener: () => void): unknown;
+  on(event: "responsive" | "unresponsive" | "closed", listener: () => void): unknown;
 }
 
 export interface ResponsivenessActions {
@@ -137,6 +137,12 @@ export function attachResponsivenessTracking(
 ): void {
   win.on("responsive", () => {
     tracker.onResponsive();
+  });
+
+  // A freeze that ends with the window gone (Wait then close, app quit by another route)
+  // would otherwise send nothing. flush() is a no-op when no freeze is open.
+  win.on("closed", () => {
+    tracker.flush("closed");
   });
 
   win.on("unresponsive", () => {

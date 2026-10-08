@@ -37,6 +37,7 @@ describe("BACKLOG-3784: attachResponsivenessTracking", () => {
     const { win } = setup(0);
     expect(win.listenerCount("responsive")).toBe(1);
     expect(win.listenerCount("unresponsive")).toBe(1);
+    expect(win.listenerCount("closed")).toBe(1);
   });
 
   it("unresponsive then responsive logs the duration and sends exactly one event above 5 s", async () => {
@@ -75,6 +76,39 @@ describe("BACKLOG-3784: attachResponsivenessTracking", () => {
     expect(captures).toHaveLength(1);
     expect(captures[0].tags).toMatchObject({ ended_by: "quit", duration_bucket: "15s_60s" });
     expect(actions.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("a freeze that ends with the window closed sends exactly one event", async () => {
+    const { win, logs, captures, flush, at } = setup(0); // Wait
+    at(0);
+    win.emit("unresponsive");
+    await flush();
+    at(7_000);
+    win.emit("closed");
+    expect(captures).toHaveLength(1);
+    expect(captures[0].tags).toMatchObject({ ended_by: "closed", duration_bucket: "5s_15s" });
+    win.emit("responsive");
+    win.emit("closed");
+    expect(captures).toHaveLength(1);
+    expect(logs).toHaveLength(1);
+  });
+
+  it("Quit followed by close still sends one event", async () => {
+    const { win, captures, flush, at } = setup(2);
+    at(0);
+    win.emit("unresponsive");
+    at(20_000);
+    await flush();
+    win.emit("closed");
+    expect(captures).toHaveLength(1);
+    expect(captures[0].tags.ended_by).toBe("quit");
+  });
+
+  it("close with no open freeze sends nothing", () => {
+    const { win, captures, logs } = setup(0);
+    win.emit("closed");
+    expect(captures).toHaveLength(0);
+    expect(logs).toHaveLength(0);
   });
 
   it("sends nothing for a Reload under 5 s", async () => {
