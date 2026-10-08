@@ -272,6 +272,12 @@ jobs:
             --output-dir release --max-content-mb 400 --max-ratio 1.5 \
             release/mac-arm64/Keepr.app release/mac/Keepr.app
 
+      - name: Verify the packages contain the third-party licence files (BACKLOG-3803)
+        run: |
+          for app in release/mac-arm64/Keepr.app release/mac/Keepr.app; do
+            node scripts/ci/check-packaged-notices.mjs mac "$app"
+          done
+
       - name: Upload macOS Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -673,6 +679,12 @@ jobs:
             --output-dir release --max-content-mb 400 `
             release/win-unpacked
           if ($LASTEXITCODE -ne 0) { Write-Error "Package sanity check failed"; exit 1 }
+
+      - name: Verify the package contains the third-party licence files (BACKLOG-3803)
+        shell: pwsh
+        run: |
+          node scripts/ci/check-packaged-notices.mjs win release/win-unpacked
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       # BACKLOG-3533. Unpacks the installer, the app archive inside it and the
       # uninstaller, finds every PE file by header, and requires

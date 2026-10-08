@@ -214,3 +214,62 @@ describe("third-party notices (BACKLOG-3803)", () => {
 function readdirNames(dir: string): string[] {
   return readdirSync(dir);
 }
+
+describe("external licence files in check() (BACKLOG-3803)", () => {
+  let repo: string;
+  beforeEach(() => {
+    repo = mkdtempSync(path.join(os.tmpdir(), "notices-3803-repo-"));
+  });
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  const put = (rel: string) => {
+    mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true });
+    writeFileSync(path.join(repo, rel), "x");
+  };
+  const checkRepo = () =>
+    spawnSync(process.execPath, [SCRIPT, "--check", "--repo", repo], { encoding: "utf8" });
+  const NOBLE = "chrome-extension/vendor/LICENSE-noble.txt";
+  const DIST = "node_modules/electron/dist/";
+
+  it("electron binary absent: skips only the two electron licence files, passes with noble present", () => {
+    put(NOBLE);
+    const r = checkRepo();
+    expect(r.stderr).not.toContain("external file");
+    expect(r.stderr).not.toContain("LICENSE-noble");
+    expect(r.stderr).not.toContain("node_modules/electron");
+  });
+
+  it("electron binary absent: a missing non-electron licence file still fails", () => {
+    const r = checkRepo();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`external file ${NOBLE} is missing`);
+    expect(r.stderr).not.toContain("node_modules/electron");
+  });
+
+  it("electron binary present but LICENSES.chromium.html missing: fails", () => {
+    put(NOBLE);
+    put(DIST + "LICENSE");
+    const r = checkRepo();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`external file ${DIST}LICENSES.chromium.html is missing`);
+    expect(r.stderr).not.toContain(`${DIST}LICENSE is missing`);
+  });
+
+  it("electron binary present but LICENSE missing: fails", () => {
+    put(NOBLE);
+    put(DIST + "LICENSES.chromium.html");
+    const r = checkRepo();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`external file ${DIST}LICENSE is missing`);
+  });
+
+  it("electron binary present with both files and noble present: no external problems", () => {
+    put(NOBLE);
+    put(DIST + "LICENSE");
+    put(DIST + "LICENSES.chromium.html");
+    const r = checkRepo();
+    expect(r.stderr).not.toContain("external file");
+  });
+});
