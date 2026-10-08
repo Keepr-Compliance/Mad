@@ -24,3 +24,30 @@ describe("getDefaultStartDate (BACKLOG-3787)", () => {
     expect(getDefaultStartDate()).toBe(expected);
   });
 });
+
+describe("getDefaultStartDate local-date formatting (BACKLOG-3787)", () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  // jest.config sets no TZ; pin one so the UTC/local difference is real.
+  // Date reads process.env.TZ at call time in Node, so set it before use.
+  const origTZ = process.env.TZ;
+  beforeAll(() => {
+    process.env.TZ = "America/Los_Angeles";
+  });
+  afterAll(() => {
+    if (origTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = origTZ;
+  });
+
+  it("23:30 local Oct 8 (already Oct 9 UTC) -> 2026-09-08", () => {
+    jest.setSystemTime(new Date(2026, 9, 8, 23, 30, 0));
+    expect(new Date().getTimezoneOffset()).toBe(420); // PDT, proves TZ applied
+    expect(getDefaultStartDate()).toBe("2026-09-08");
+  });
+
+  it("00:30 local Oct 8 -> 2026-09-08", () => {
+    jest.setSystemTime(new Date(2026, 9, 8, 0, 30, 0));
+    expect(getDefaultStartDate()).toBe("2026-09-08");
+  });
+});

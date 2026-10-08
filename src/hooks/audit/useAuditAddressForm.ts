@@ -14,8 +14,8 @@ import { formatSaleInput } from "../../components/transactionDates/commission";
  * Calendar-month subtraction clamped to the last day of the previous month
  * (Mar 31 -> Feb 28/29, May 31 -> Apr 30), because Date#setMonth alone rolls
  * over (Mar 31 - 1 month = Mar 3). BACKLOG-3787 (was 3 months).
- * Month arithmetic is local; the string is formatted via toISOString (UTC),
- * unchanged from the 3-month version.
+ * Month arithmetic and formatting both use LOCAL date components (toISOString
+ * returned tomorrow's UTC date in the evening for US timezones).
  */
 export function getDefaultStartDate(): string {
   const date = new Date();
@@ -24,7 +24,9 @@ export function getDefaultStartDate(): string {
   date.setMonth(date.getMonth() - 1);
   const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
   date.setDate(Math.min(day, lastDay));
-  return date.toISOString().split("T")[0]; // YYYY-MM-DD format
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${mm}-${dd}`; // local YYYY-MM-DD
 }
 
 export const initialAddressData: AddressData = {
