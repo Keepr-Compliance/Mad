@@ -13,6 +13,7 @@
  */
 
 import { google, people_v1 } from 'googleapis';
+import { gaxiosNetFetch } from '../mainNetFetch';
 import * as Sentry from '@sentry/electron/main';
 import databaseService from '../databaseService';
 import googleAuthService from '../googleAuthService';
@@ -171,10 +172,12 @@ export class GoogleContactProvider implements ContactSyncProvider {
     }
 
     // Create OAuth2 client for People API calls
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-    );
+    // BACKLOG-3799: People API calls and token refresh ride Electron net.fetch.
+    const oauth2Client = new google.auth.OAuth2({
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      transporterOptions: { fetchImplementation: gaxiosNetFetch },
+    });
 
     oauth2Client.setCredentials({
       access_token: tokenRecord.access_token,

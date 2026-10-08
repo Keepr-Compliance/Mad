@@ -11,11 +11,11 @@ import { exec, execFile, spawn } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import fs from "fs";
-import https from "https";
 import { app } from "electron";
 import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
 import { isWindowsArm64 } from "../utils/windowsArm64";
+import { mainNetFetch } from "./mainNetFetch";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -649,63 +649,48 @@ async function startAppleMobileDeviceService(): Promise<void> {
 }
 
 /**
- * Download a file from URL to destination
+ * Download a file from URL to destination.
+ *
+ * BACKLOG-3799: over Electron net.fetch (Chromium TLS + OS certificate
+ * store), not Node's `https`, so a TLS-inspecting antivirus does not break
+ * the driver download. Redirects are followed by the transport.
  */
-function downloadFile(
+async function downloadFile(
   url: string,
   destPath: string,
   onProgress?: (percent: number) => void,
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(destPath);
+  const response = await mainNetFetch(url, { redirect: "follow" });
+  if (response.status !== 200 || !response.body) {
+    throw new Error(`Failed to download: HTTP ${response.status}`);
+  }
 
-    const request = https.get(url, (response) => {
-      // Handle redirects
-      if (response.statusCode === 301 || response.statusCode === 302) {
-        const redirectUrl = response.headers.location;
-        if (redirectUrl) {
-          file.close();
-          fs.unlinkSync(destPath);
-          downloadFile(redirectUrl, destPath, onProgress)
-            .then(resolve)
-            .catch(reject);
-          return;
-        }
+  const totalSize = parseInt(response.headers.get("content-length") || "0", 10);
+  let downloadedSize = 0;
+  const file = fs.createWriteStream(destPath);
+  const reader = response.body.getReader();
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      downloadedSize += value.length;
+      if (!file.write(value)) {
+        await new Promise<void>((resolve) => file.once("drain", resolve));
       }
-
-      if (response.statusCode !== 200) {
-        reject(new Error(`Failed to download: HTTP ${response.statusCode}`));
-        return;
+      if (onProgress && totalSize > 0) {
+        onProgress(Math.round((downloadedSize / totalSize) * 100));
       }
-
-      const totalSize = parseInt(response.headers["content-length"] || "0", 10);
-      let downloadedSize = 0;
-
-      response.on("data", (chunk) => {
-        downloadedSize += chunk.length;
-        if (onProgress && totalSize > 0) {
-          onProgress(Math.round((downloadedSize / totalSize) * 100));
-        }
-      });
-
-      response.pipe(file);
-
-      file.on("finish", () => {
-        file.close();
-        resolve();
-      });
+    }
+    await new Promise<void>((resolve, reject) => {
+      file.once("error", reject);
+      file.end(() => resolve());
     });
-
-    request.on("error", (err) => {
-      fs.unlink(destPath, () => {}); // Delete partial file
-      reject(err);
-    });
-
-    file.on("error", (err) => {
-      fs.unlink(destPath, () => {}); // Delete partial file
-      reject(err);
-    });
-  });
+  } catch (err) {
+    file.destroy();
+    fs.unlink(destPath, () => {}); // Delete partial file
+    throw err;
+  }
 }
 
 /**

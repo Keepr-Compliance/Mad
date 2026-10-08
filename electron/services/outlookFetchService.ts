@@ -1,4 +1,5 @@
 import axios, { AxiosRequestConfig } from "axios";
+import { isTransientRefreshFailure, providerUnreachableMessage } from "./oauthRefreshFailure";
 import {
   FetchCancelledError,
   isFetchCancelledError,
@@ -649,6 +650,15 @@ class OutlookFetchService {
               Sentry.captureException(refreshError, {
                 tags: { service: "outlook-fetch", operation: "_graphRequest.tokenRefresh" },
               });
+              // BACKLOG-3799: a refresh that could not REACH Microsoft (network,
+              // antivirus TLS inspection, 5xx) is not an expired grant. Say so,
+              // and keep this message clear of the token-expiry patterns so the
+              // sync does not ask the user to reconnect.
+              if (isTransientRefreshFailure(refreshError)) {
+                throw Object.assign(new Error(providerUnreachableMessage("Microsoft")), {
+                  cause: refreshError,
+                });
+              }
               throw new Error(
                 "Microsoft access token expired and refresh failed. Please reconnect Outlook.",
               );

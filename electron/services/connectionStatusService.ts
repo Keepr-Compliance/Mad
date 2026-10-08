@@ -9,6 +9,7 @@ import microsoftAuthService from "./microsoftAuthService";
 import * as Sentry from "@sentry/electron/main";
 import logService from "./logService";
 import { OAuthToken } from "../types/models";
+import { providerUnreachableMessage } from "./oauthRefreshFailure";
 
 /**
  * Connection error types
@@ -17,7 +18,10 @@ export type ConnectionErrorType =
   | "NOT_CONNECTED"
   | "TOKEN_EXPIRED"
   | "TOKEN_REFRESH_FAILED"
-  | "CONNECTION_CHECK_FAILED";
+  | "CONNECTION_CHECK_FAILED"
+  // BACKLOG-3799: refresh could not reach the provider; connection kept.
+  // Deliberately NOT a broken-token type (no Reconnect banner).
+  | "PROVIDER_UNREACHABLE";
 
 /**
  * Connection error details
@@ -166,6 +170,29 @@ class ConnectionStatusService {
               lastSyncAt,
             };
             return this.connectionStatus.google;
+          } else if (refreshResult.unreachable) {
+            // BACKLOG-3799: Google could not be reached (network, antivirus
+            // TLS inspection, 5xx). The stored grant is still good: keep the
+            // connection and say what is wrong instead of "expired".
+            logService.warn(
+              "[ConnectionStatus] Google token refresh could not reach the provider",
+              "ConnectionStatus",
+              { error: refreshResult.error },
+            );
+            this.connectionStatus.google = {
+              connected: true,
+              lastCheck: Date.now(),
+              email: token.connected_email_address,
+              error: {
+                type: "PROVIDER_UNREACHABLE",
+                userMessage: providerUnreachableMessage("Google"),
+                action: "",
+                actionHandler: "reconnect-google",
+                details: "Token refresh could not reach the provider",
+              },
+              lastSyncAt,
+            };
+            return this.connectionStatus.google;
           } else {
             logService.error(
               "[ConnectionStatus] Google token refresh failed:",
@@ -295,6 +322,29 @@ class ConnectionStatusService {
               lastCheck: Date.now(),
               email: token.connected_email_address,
               error: null,
+              lastSyncAt,
+            };
+            return this.connectionStatus.microsoft;
+          } else if (refreshResult.unreachable) {
+            // BACKLOG-3799: Microsoft could not be reached (network, antivirus
+            // TLS inspection, 5xx). The stored grant is still good: keep the
+            // connection and say what is wrong instead of "expired".
+            logService.warn(
+              "[ConnectionStatus] Microsoft token refresh could not reach the provider",
+              "ConnectionStatus",
+              { error: refreshResult.error },
+            );
+            this.connectionStatus.microsoft = {
+              connected: true,
+              lastCheck: Date.now(),
+              email: token.connected_email_address,
+              error: {
+                type: "PROVIDER_UNREACHABLE",
+                userMessage: providerUnreachableMessage("Microsoft"),
+                action: "",
+                actionHandler: "reconnect-microsoft",
+                details: "Token refresh could not reach the provider",
+              },
               lastSyncAt,
             };
             return this.connectionStatus.microsoft;
