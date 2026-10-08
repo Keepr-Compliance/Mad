@@ -26,21 +26,27 @@ describe("getDefaultStartDate (BACKLOG-3787)", () => {
 });
 
 describe("getDefaultStartDate local-date formatting (BACKLOG-3787)", () => {
-  beforeEach(() => jest.useFakeTimers());
-  afterEach(() => jest.useRealTimers());
+  // Zone-independent: a real local Date whose toISOString is overridden to the
+  // UTC value a UTC-7 user sees in the evening (local Oct 8 23:30 = Oct 9 06:30Z).
+  function standIn(local: Date, iso: string): Date {
+    local.toISOString = () => iso;
+    return local;
+  }
 
-  // Setting process.env.TZ inside a jest file does NOT change the zone (jest
-  // sandboxes process.env), so these run in the machine's zone. They only
-  // discriminate UTC vs local formatting where offset != 0: 23:30 local is
-  // already the next UTC day west of UTC, 00:30 local is still the previous
-  // UTC day east of UTC. In a UTC runner (CI) they pass vacuously.
-  it("23:30 local Oct 8 (already Oct 9 UTC) -> 2026-09-08", () => {
-    jest.setSystemTime(new Date(2026, 9, 8, 23, 30, 0));
-    expect(getDefaultStartDate()).toBe("2026-09-08");
+  it("local 23:30 Oct 8 with UTC already Oct 9 -> 2026-09-08", () => {
+    const now = standIn(new Date(2026, 9, 8, 23, 30, 0), "2026-10-09T06:30:00.000Z");
+    expect(getDefaultStartDate(now)).toBe("2026-09-08");
   });
 
-  it("00:30 local Oct 8 -> 2026-09-08", () => {
-    jest.setSystemTime(new Date(2026, 9, 8, 0, 30, 0));
-    expect(getDefaultStartDate()).toBe("2026-09-08");
+  it("local 00:30 Oct 8 with UTC still Oct 7 -> 2026-09-08", () => {
+    const now = standIn(new Date(2026, 9, 8, 0, 30, 0), "2026-10-07T17:30:00.000Z");
+    expect(getDefaultStartDate(now)).toBe("2026-09-08");
+  });
+
+  it("does not mutate the date passed in", () => {
+    const now = new Date(2026, 2, 31, 12);
+    getDefaultStartDate(now);
+    expect(now.getMonth()).toBe(2);
+    expect(now.getDate()).toBe(31);
   });
 });

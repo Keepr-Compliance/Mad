@@ -17,16 +17,14 @@ import { formatSaleInput } from "../../components/transactionDates/commission";
  * Month arithmetic and formatting both use LOCAL date components (toISOString
  * returned tomorrow's UTC date in the evening for US timezones).
  */
-export function getDefaultStartDate(): string {
-  const date = new Date();
-  const day = date.getDate();
-  date.setDate(1);
-  date.setMonth(date.getMonth() - 1);
-  const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-  date.setDate(Math.min(day, lastDay));
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${mm}-${dd}`; // local YYYY-MM-DD
+export function getDefaultStartDate(now: Date = new Date()): string {
+  const day = now.getDate();
+  // Day 0 of (month) = last day of the previous month; month index -1 wraps the year.
+  const lastDayOfPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+  const year = lastDayOfPrevMonth.getFullYear();
+  const month = lastDayOfPrevMonth.getMonth() + 1;
+  const dd = Math.min(day, lastDayOfPrevMonth.getDate());
+  return `${year}-${String(month).padStart(2, "0")}-${String(dd).padStart(2, "0")}`; // local YYYY-MM-DD
 }
 
 export const initialAddressData: AddressData = {
