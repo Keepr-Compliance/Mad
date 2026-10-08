@@ -101,56 +101,118 @@ export class iOSMessagesParser {
     "Library/SMS/StickerCache/",
   ];
 
+  /**
+   * Rules that mean the path tried to leave the attachment roots. Each one is
+   * logged individually (sanitized, up to ATTACK_LOG_LIMIT per summary window);
+   * every other rule is only counted in the summary.
+   */
+  private static readonly ATTACK_RULES: ReadonlySet<string> = new Set([
+    "backslash",
+    "nul",
+    "dot-segment",
+    "absolute",
+  ]);
+
+  /** Individually logged attack-class rejections per summary window. */
+  static readonly ATTACK_LOG_LIMIT = 5;
+
   /** Rejected attachment paths since the last summary, counted by rule. */
   private static rejectedPathCounts = new Map<string, number>();
+  private static attackLinesLogged = 0;
+  private static attackLinesSuppressed = 0;
+
+  /**
+   * Describe a rejected path without exposing names: up to the first two
+   * segments (never the last one), the segment count, and the index of the
+   * segment that failed.
+   */
+  private static sanitizePath(
+    originalPath: string,
+    failedSegment: number,
+  ): { head: string; segments: number; failedSegment: number } {
+    const parts = originalPath.split("/");
+    const shown = parts
+      .slice(0, Math.min(2, parts.length - 1))
+      // eslint-disable-next-line no-control-regex
+      .map((part) => part.replace(/[\x00-\x1f\\]/g, "?").slice(0, 32));
+    return { head: shown.join("/"), segments: parts.length, failedSegment };
+  }
 
   /**
    * Log one summary line of attachment paths rejected since the last call,
-   * counted by rule, then reset the counts. No-op when nothing was rejected.
+   * counted by rule (plus how many attack-class lines were logged and
+   * suppressed), then reset. No-op when nothing was rejected.
    * @returns the counts that were logged
    */
   static flushRejectedPathSummary(): Record<string, number> {
-    const counts = Object.fromEntries(iOSMessagesParser.rejectedPathCounts);
+    const counts: Record<string, number> = Object.fromEntries(
+      iOSMessagesParser.rejectedPathCounts,
+    );
+    const hadRejections = Object.keys(counts).length > 0;
+    if (iOSMessagesParser.attackLinesSuppressed > 0) {
+      counts.attackLinesSuppressed = iOSMessagesParser.attackLinesSuppressed;
+    }
     iOSMessagesParser.rejectedPathCounts = new Map();
-    if (Object.keys(counts).length > 0) {
+    iOSMessagesParser.attackLinesLogged = 0;
+    iOSMessagesParser.attackLinesSuppressed = 0;
+    if (hadRejections) {
       log.warn("iOSMessagesParser: Rejected attachment paths", counts);
     }
     return counts;
   }
 
+  /** Index of the first `/`-separated segment matching the predicate, or -1. */
+  private static findSegment(p: string, test: (segment: string) => boolean): number {
+    return p.split("/").findIndex(test);
+  }
+
   /**
    * Convert an attachment path from sms.db into its MediaDomain relative path.
    * Accepts only `~/` or `/var/mobile/` followed by `Library/SMS/Attachments/...`
-   * or `Library/SMS/StickerCache/...`. Rejections are counted by rule and logged
-   * by flushRejectedPathSummary(). Every `/`-separated segment
-   * must be a real name: empty, `.` and `..` segments are rejected, as are
-   * backslashes and NUL. Dots inside a name (`Offer...pdf`) are allowed.
+   * or `Library/SMS/StickerCache/...`. Dots inside a name (`Offer...pdf`) are
+   * allowed; `.`/`..` segments, backslashes, NUL and absolute paths elsewhere
+   * are attack-class rejections and are logged individually (sanitized,
+   * throttled). Other rejections (unknown prefix or root, empty segment) are
+   * only counted; flushRejectedPathSummary() logs the per-sync totals.
    * @returns the relative path (e.g. `Library/SMS/Attachments/ab/01/x.jpg`), or null
    */
   static toMediaDomainRelativePath(originalPath: string): string | null {
-    const reject = (rule: string): null => {
+    const reject = (rule: string, failedSegment = -1): null => {
       const counts = iOSMessagesParser.rejectedPathCounts;
       counts.set(rule, (counts.get(rule) ?? 0) + 1);
+      if (iOSMessagesParser.ATTACK_RULES.has(rule)) {
+        if (iOSMessagesParser.attackLinesLogged < iOSMessagesParser.ATTACK_LOG_LIMIT) {
+          iOSMessagesParser.attackLinesLogged++;
+          log.warn("iOSMessagesParser: Rejected attachment path", {
+            rule,
+            ...iOSMessagesParser.sanitizePath(originalPath, failedSegment),
+          });
+        } else {
+          iOSMessagesParser.attackLinesSuppressed++;
+        }
+      }
       return null;
     };
+
+    const backslashAt = iOSMessagesParser.findSegment(originalPath, (seg) => seg.includes("\\"));
+    if (backslashAt !== -1) return reject("backslash", backslashAt);
+    const nulAt = iOSMessagesParser.findSegment(originalPath, (seg) => seg.includes("\0"));
+    if (nulAt !== -1) return reject("nul", nulAt);
+    const dotAt = iOSMessagesParser.findSegment(originalPath, (seg) => seg === "." || seg === "..");
+    if (dotAt !== -1) return reject("dot-segment", dotAt);
 
     const prefix = iOSMessagesParser.ATTACHMENT_PATH_PREFIXES.find((p) =>
       originalPath.startsWith(p),
     );
-    if (prefix === undefined) return reject("prefix");
+    if (prefix === undefined) {
+      return originalPath.startsWith("/") ? reject("absolute", 0) : reject("prefix");
+    }
     const relativePath = originalPath.slice(prefix.length);
 
-    if (relativePath.includes("\\")) return reject("backslash");
-    if (relativePath.includes("\0")) return reject("nul");
     if (!iOSMessagesParser.ATTACHMENT_ROOTS.some((root) => relativePath.startsWith(root))) {
       return reject("root");
     }
-
-    for (const segment of relativePath.split("/")) {
-      if (segment === "" || segment === "." || segment === "..") {
-        return reject("segment");
-      }
-    }
+    if (relativePath.split("/").includes("")) return reject("empty-segment");
 
     return relativePath;
   }

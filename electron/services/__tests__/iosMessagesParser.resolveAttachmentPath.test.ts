@@ -163,24 +163,88 @@ describe("iOSMessagesParser.resolveAttachmentPath — rejected", () => {
   });
 });
 
-describe("iOSMessagesParser.flushRejectedPathSummary", () => {
-  it("logs nothing per path, then one warn line with counts by rule", () => {
+describe("iOSMessagesParser rejection logging", () => {
+  const PER_PATH = "iOSMessagesParser: Rejected attachment path";
+  const SUMMARY = "iOSMessagesParser: Rejected attachment paths";
+  const perPathCalls = () =>
+    (log.warn as jest.Mock).mock.calls.filter(([msg]) => msg === PER_PATH);
+
+  it("logs a traversal attempt individually, sanitized (no file names)", () => {
+    iOSMessagesParser.resolveAttachmentPath(
+      BACKUP,
+      "~/Library/SMS/Attachments/3a/../../../secret-name.db",
+    );
+    expect(perPathCalls()).toEqual([
+      [PER_PATH, { rule: "dot-segment", head: "~/Library", segments: 9, failedSegment: 5 }],
+    ]);
+    expect(JSON.stringify((log.warn as jest.Mock).mock.calls)).not.toContain("secret-name");
+  });
+
+  it.each([
+    ["backslash", "~/Library/SMS/Attachments\\..\\x.db", 3],
+    ["nul", "~/Library/SMS/Attachments/x\0.jpg", 4],
+    ["dot-segment", "~/../private-file.txt", 1],
+    ["absolute", "/etc/passwd", 0],
+  ])("logs attack rule %s individually", (rule, p, failedSegment) => {
+    iOSMessagesParser.resolveAttachmentPath(BACKUP, p);
+    const calls = perPathCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toMatchObject({ rule, failedSegment });
+    expect(JSON.stringify(calls)).not.toMatch(/passwd|private-file|x\.jpg|x\.db/);
+  });
+
+  it.each([
+    ["root", "~/Library/Preferences/com.example.plist"],
+    ["prefix", "Library/SMS/Attachments/3a/x.jpg"],
+    ["empty-segment", "~/Library/SMS/Attachments/3a//x.jpg"],
+  ])("does not log benign rule %s per path", (rule, p) => {
+    expect(iOSMessagesParser.resolveAttachmentPath(BACKUP, p)).toBeNull();
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(iOSMessagesParser.flushRejectedPathSummary()).toEqual({ [rule]: 1 });
+  });
+
+  it("throttles attack lines per summary window and reports the remainder", () => {
+    const limit = iOSMessagesParser.ATTACK_LOG_LIMIT;
+    for (let i = 0; i < limit + 3; i++) {
+      iOSMessagesParser.resolveAttachmentPath(BACKUP, `~/Library/SMS/Attachments/../${i}.db`);
+    }
+    expect(perPathCalls()).toHaveLength(limit);
+    const counts = iOSMessagesParser.flushRejectedPathSummary();
+    expect(counts).toEqual({ "dot-segment": limit + 3, attackLinesSuppressed: 3 });
+    expect(log.warn).toHaveBeenLastCalledWith(SUMMARY, counts);
+
+    // The next window logs individually again
+    jest.clearAllMocks();
+    iOSMessagesParser.resolveAttachmentPath(BACKUP, "~/Library/SMS/Attachments/../again.db");
+    expect(perPathCalls()).toHaveLength(1);
+  });
+
+  it("summarizes every rule once per window", () => {
     const paths = [
-      "/etc/passwd", // prefix
-      "~/Library/Preferences/x.plist", // root
-      "~/Library/SMS/Attachments/../sms.db", // segment
-      "~/Library/SMS/Attachments/a/../../sms.db", // segment
-      "~/Library/SMS/Attachments\\x.jpg", // backslash
-      "~/Library/SMS/Attachments/x\0.jpg", // nul
+      "/etc/passwd",
+      "~/Library/Preferences/x.plist",
+      "~/Library/SMS/Attachments/../sms.db",
+      "~/Library/SMS/Attachments/a/../../sms.db",
+      "~/Library/SMS/Attachments\\x.jpg",
+      "~/Library/SMS/Attachments/x\0.jpg",
+      "relative/path.jpg",
+      "~/Library/SMS/Attachments//x.jpg",
       `~/Library/SMS/Attachments/3a/10/at_0_${GUID}/Offer...pdf`, // accepted
     ];
     for (const p of paths) iOSMessagesParser.resolveAttachmentPath(BACKUP, p);
-    expect(log.warn).not.toHaveBeenCalled();
-
+    jest.clearAllMocks();
     const counts = iOSMessagesParser.flushRejectedPathSummary();
-    expect(counts).toEqual({ prefix: 1, root: 1, segment: 2, backslash: 1, nul: 1 });
+    expect(counts).toEqual({
+      absolute: 1,
+      root: 1,
+      "dot-segment": 2,
+      backslash: 1,
+      nul: 1,
+      prefix: 1,
+      "empty-segment": 1,
+    });
     expect(log.warn).toHaveBeenCalledTimes(1);
-    expect(log.warn).toHaveBeenCalledWith("iOSMessagesParser: Rejected attachment paths", counts);
+    expect(log.warn).toHaveBeenCalledWith(SUMMARY, counts);
   });
 
   it("resets after flushing and logs nothing when there were no rejections", () => {
