@@ -436,12 +436,14 @@ export const syncBridge = {
     callback: (result: {
       messagesStored: number;
       contactsStored: number;
+      contactsSourceOff?: boolean;
       duration: number;
     }) => void
   ) => {
     const listener = (_: IpcRendererEvent, result: {
       messagesStored: number;
       contactsStored: number;
+      contactsSourceOff?: boolean;
       duration: number;
     }) => callback(result);
     ipcRenderer.on("sync:storage-complete", listener);

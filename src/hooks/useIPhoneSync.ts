@@ -69,6 +69,22 @@ export const syncStateRef = { isActive: false, deferredLogout: false };
 export let deferredLogoutCallback: (() => Promise<void>) | null = null;
 
 /**
+ * Completion text for a finished iPhone sync (BACKLOG-3791). When the iPhone
+ * Contacts source is off, "and 0 contacts" read as a failure; say what happened.
+ */
+export function formatStorageCompleteMessage(result: {
+  messagesStored: number;
+  contactsStored: number;
+  contactsSourceOff?: boolean;
+}): string {
+  const messages = `Saved ${result.messagesStored.toLocaleString()} messages`;
+  if (result.contactsSourceOff) {
+    return `${messages}. Contacts not imported (turned off in Settings)`;
+  }
+  return `${messages} and ${result.contactsStored} contacts`;
+}
+
+/**
  * Called by useSessionValidator to register the deferred logout callback.
  */
 export function setDeferredLogoutCallback(cb: (() => Promise<void>) | null): void {
@@ -511,6 +527,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           callback: (result: {
             messagesStored: number;
             contactsStored: number;
+            contactsSourceOff?: boolean;
             duration: number;
           }) => void
         ) => () => void;
@@ -536,7 +553,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           setProgress({
             phase: "complete",
             percent: 100,
-            message: `Saved ${result.messagesStored.toLocaleString()} messages and ${result.contactsStored} contacts`,
+            message: formatStorageCompleteMessage(result),
           });
 
           // TASK-2119: Notify orchestrator that iPhone sync is complete
