@@ -80,6 +80,15 @@ export async function getTextAttachmentData(
     return { success: false, reason: "outside_app_data" };
   }
 
+  // Refuse anything that is not a regular file BEFORE opening: opening a FIFO
+  // can block forever and a device node can yield endless bytes.
+  try {
+    const pre = await fs.stat(realFile);
+    if (!pre.isFile()) return { success: false, reason: "missing_file" };
+  } catch {
+    return { success: false, reason: "missing_file" };
+  }
+
   // Open once; the size check and the read use this same handle.
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {

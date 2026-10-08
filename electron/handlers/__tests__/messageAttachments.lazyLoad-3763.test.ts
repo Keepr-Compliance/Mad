@@ -33,8 +33,31 @@
 import { readFileSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from "fs";
 import os from "os";
 import path from "path";
+import { execFileSync } from "child_process";
 import type { IpcMainInvokeEvent } from "electron";
 import { openTestDb, type TestDb } from "../../services/__tests__/helpers/syncSqliteDriver";
+
+/** Which kind of link this OS lets us create, decided once at collection time. */
+function probeLinkMode(): "file" | "junction" | null {
+  const probe = mkdtempSync(path.join(os.tmpdir(), "keepr-3763-probe-"));
+  try {
+    const t = path.join(probe, "t.txt");
+    writeFileSync(t, "x");
+    for (const [kind, target] of [["file", t], ["junction", probe]] as const) {
+      try {
+        symlinkSync(target, path.join(probe, `l-${kind}`), kind);
+        return kind;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "EPERM" && code !== "EACCES") throw err;
+      }
+    }
+    return null;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+const symlinkMode = probeLinkMode();
 
 let db: TestDb;
 let userData: string;
@@ -352,32 +375,68 @@ describe("messages:get-attachment-data (BACKLOG-3763)", () => {
     expect(await call(att.id)).toEqual({ success: false, reason: "outside_app_data" });
   });
 
-  it("refuses a file inside app data whose real location is outside it", async () => {
-    const target = path.join(outside, "secret.jpg");
-    writeFileSync(target, "secret");
-    const linkPath = path.join(userData, "message-attachments", "link.jpg");
-    mkdirSync(path.dirname(linkPath), { recursive: true });
-    try {
-      symlinkSync(target, linkPath, "file");
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "EPERM" || code === "EACCES") {
-        // OS refused symlink creation (Windows without the privilege): skip, nothing else.
-        console.warn("SKIPPED: this OS refused to create a symlink");
-        return;
+  // Skipped visibly (collection-time condition) when the OS allows neither link kind.
+  const linkEach = symlinkMode === null ? it.skip.each : it.each;
+  linkEach([symlinkMode === "file" ? "file" : "junction"])(
+    "refuses a file inside app data whose real location is outside it (%s link)",
+    async () => {
+      const target = path.join(outside, "secret.jpg");
+      writeFileSync(target, "secret");
+      const linkDir = path.join(userData, "message-attachments");
+      mkdirSync(linkDir, { recursive: true });
+      let storagePath: string;
+      if (symlinkMode === "file") {
+        storagePath = path.join(linkDir, "link.jpg");
+        symlinkSync(target, storagePath, "file");
+      } else {
+        // Directory junction (no privilege needed on Windows).
+        const jdir = path.join(userData, "junction-dir");
+        symlinkSync(outside, jdir, "junction");
+        storagePath = path.join(jdir, "secret.jpg");
       }
-      throw err;
-    }
-    seedMessage("msg-3763-l", USER_A, "guid-3763-l");
+      seedMessage("msg-3763-l", USER_A, "guid-3763-l");
+      seedAttachment({
+        id: "att3763-link",
+        message_id: "msg-3763-l",
+        filename: "link.jpg",
+        mime_type: "image/jpeg",
+        file_size_bytes: 6,
+        storage_path: storagePath,
+      });
+      expect(await call("att3763-link")).toEqual({ success: false, reason: "outside_app_data" });
+    },
+  );
+
+  it("refuses a directory stored as the attachment path", async () => {
+    const dir = path.join(userData, "message-attachments", "a-folder");
+    mkdirSync(dir, { recursive: true });
+    seedMessage("msg-3763-d", USER_A, "guid-3763-d");
     seedAttachment({
-      id: "att3763-link",
-      message_id: "msg-3763-l",
-      filename: "link.jpg",
+      id: "att3763-dir",
+      message_id: "msg-3763-d",
+      filename: "d.jpg",
       mime_type: "image/jpeg",
-      file_size_bytes: 6,
-      storage_path: linkPath,
+      file_size_bytes: 0,
+      storage_path: dir,
     });
-    expect(await call("att3763-link")).toEqual({ success: false, reason: "outside_app_data" });
+    expect(await call("att3763-dir")).toEqual({ success: false, reason: "missing_file" });
+  });
+
+  const fifoIt = process.platform === "win32" ? it.skip : it;
+  fifoIt("refuses a FIFO without opening it", async () => {
+    const fifo = path.join(userData, "message-attachments", "pipe.jpg");
+    mkdirSync(path.dirname(fifo), { recursive: true });
+    execFileSync("mkfifo", [fifo]);
+    seedMessage("msg-3763-p", USER_A, "guid-3763-p");
+    seedAttachment({
+      id: "att3763-fifo",
+      message_id: "msg-3763-p",
+      filename: "p.jpg",
+      mime_type: "image/jpeg",
+      file_size_bytes: 0,
+      storage_path: fifo,
+    });
+    expect(await call("att3763-fifo")).toEqual({ success: false, reason: "missing_file" });
   });
 
   it("refuses another user's attachment reachable only through the Apple-id fallback", async () => {
