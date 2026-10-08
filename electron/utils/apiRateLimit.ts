@@ -23,6 +23,7 @@
  */
 
 import logService from "../services/logService";
+import { isChromiumNetError } from "./networkErrors";
 
 /**
  * Options for the withRetry function
@@ -220,10 +221,17 @@ export function isRetryableError(error: unknown): boolean {
       "ENETUNREACH",
       "ENOTFOUND",
       "EAI_AGAIN",
+      "ERR_NETWORK", // axios, transport failure over net.fetch (BACKLOG-3799)
     ];
     if (networkErrors.includes(code)) {
       return true;
     }
+  }
+
+  // Chromium net::ERR_* from Electron net.fetch (message or cause chain,
+  // incl. gaxios which sets no code). Cert failures will not heal on retry.
+  if (isChromiumNetError(error, false)) {
+    return true;
   }
 
   return false;

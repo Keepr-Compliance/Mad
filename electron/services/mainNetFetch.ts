@@ -148,6 +148,8 @@ interface GaxiosLikeOptions {
   headers?: Record<string, string> | Headers;
   body?: unknown;
   signal?: AbortSignal | null;
+  /** ms; gaxios does not enforce this itself under a custom fetchImplementation. */
+  timeout?: number;
 }
 
 async function toBody(body: unknown): Promise<BodyInit | undefined> {
@@ -177,11 +179,29 @@ export async function gaxiosNetFetch(
   url: string | URL,
   opts: GaxiosLikeOptions = {},
 ): Promise<Response> {
-  return mainNetFetch(url instanceof URL ? url.href : url, {
-    method: opts.method,
-    headers: opts.headers as HeadersInit | undefined,
-    body: await toBody(opts.body),
-    signal: opts.signal ?? undefined,
-    redirect: "follow",
-  });
+  const timeoutMs = typeof opts.timeout === "number" && opts.timeout > 0 ? opts.timeout : 0;
+  const timeoutSignal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
+  const callerSignal = opts.signal ?? undefined;
+  const signal =
+    timeoutSignal && callerSignal
+      ? AbortSignal.any([callerSignal, timeoutSignal])
+      : (timeoutSignal ?? callerSignal);
+  try {
+    return await mainNetFetch(url instanceof URL ? url.href : url, {
+      method: opts.method,
+      headers: opts.headers as HeadersInit | undefined,
+      body: await toBody(opts.body),
+      signal,
+      redirect: "follow",
+    });
+  } catch (err) {
+    if (timeoutSignal?.aborted && !callerSignal?.aborted) {
+      // Same code axios uses for a timeout, so the network classifiers match it.
+      throw Object.assign(new Error(`timeout of ${timeoutMs}ms exceeded`), {
+        code: "ETIMEDOUT",
+        cause: err,
+      });
+    }
+    throw err;
+  }
 }

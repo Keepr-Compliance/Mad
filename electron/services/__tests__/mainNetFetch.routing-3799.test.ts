@@ -215,3 +215,63 @@ describe("axios error shape over net.fetch", () => {
     expect(err.cause).toBe(chromium);
   });
 });
+
+/** Decode whatever body shape reached net.fetch (string / bytes / params). */
+function bodyAt(call: number): string {
+  const body = (mockNetFetch.mock.calls[call][1] as RequestInit).body as unknown;
+  if (typeof body === "string") return body;
+  if (body instanceof URLSearchParams) return body.toString();
+  if (body instanceof Uint8Array) return new TextDecoder().decode(body);
+  if (body instanceof ArrayBuffer) return new TextDecoder().decode(body);
+  return `<<${typeof body}:${String(body)}>>`;
+}
+
+describe("the request BODY reaches the transport (SR C2)", () => {
+  it("B1 Microsoft refresh form body arrives intact at net.fetch", async () => {
+    await microsoftAuthService.refreshToken("old-rt");
+    const params = new URLSearchParams(bodyAt(0));
+    expect(params.get("grant_type")).toBe("refresh_token");
+    expect(params.get("refresh_token")).toBe("old-rt");
+    expect(params.get("client_id")).toBe("test-ms-client");
+  });
+
+  it("B2 Microsoft authorization-code exchange form body arrives intact", async () => {
+    await axios.post(
+      "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+      new URLSearchParams({ grant_type: "authorization_code", code: "the-code", code_verifier: "ver" }),
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } },
+    );
+    const params = new URLSearchParams(bodyAt(0));
+    expect(params.get("code")).toBe("the-code");
+    expect(params.get("code_verifier")).toBe("ver");
+  });
+
+  it("B3 Google token refresh body arrives intact", async () => {
+    await googleAuthService.refreshToken("old-rt");
+    const params = new URLSearchParams(bodyAt(0));
+    expect(params.get("refresh_token")).toBe("old-rt");
+    expect(params.get("grant_type")).toBe("refresh_token");
+  });
+
+  it("B4 a gaxios JSON body (Gmail label create) arrives intact", async () => {
+    await gmailFetchService.initialize("u1");
+    mockNetFetch.mockClear();
+    const gmail = (gmailFetchService as unknown as {
+      gmail: { users: { labels: { create: (p: unknown) => Promise<unknown> } } };
+    }).gmail;
+    await gmail.users.labels.create({ userId: "me", requestBody: { name: "keepr-body-probe" } });
+    const call = mockNetFetch.mock.calls.findIndex(([u]) => String(u).includes("/labels"));
+    expect(call).toBeGreaterThanOrEqual(0);
+    expect(JSON.parse(bodyAt(call))).toEqual({ name: "keepr-body-probe" });
+  });
+
+  it("B5 an axios JSON body (Graph POST) arrives intact", async () => {
+    const svc = outlookFetchService as unknown as {
+      accessToken: string;
+      _graphRequest: (e: string, m: string, d: unknown) => Promise<unknown>;
+    };
+    svc.accessToken = "at";
+    await svc._graphRequest("/me/messages", "POST", { subject: "hello-body" });
+    expect(JSON.parse(bodyAt(0))).toEqual({ subject: "hello-body" });
+  });
+});
