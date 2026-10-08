@@ -52,7 +52,7 @@ describe("BACKLOG-3784: attachResponsivenessTracking", () => {
   });
 
   it("Reload sends one event with the duration so far, and the later responsive adds none", async () => {
-    const { win, captures, actions, flush, at } = setup(1);
+    const { win, logs, captures, actions, flush, at } = setup(1);
     at(0);
     win.emit("unresponsive");
     at(7_000);
@@ -63,6 +63,7 @@ describe("BACKLOG-3784: attachResponsivenessTracking", () => {
     at(8_000);
     win.emit("responsive"); // the reloaded page answers
     expect(captures).toHaveLength(1);
+    expect(logs).toHaveLength(1); // the freeze was closed once, by the Reload
   });
 
   it("Quit sends one event before quitting", async () => {
