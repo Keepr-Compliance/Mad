@@ -8,13 +8,37 @@
  * Part of BACKLOG-400.
  */
 
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { AlertTriangle, Check, Loader2, X } from 'lucide-react';
 import { Button } from '@keepr/design-system';
 import { REVIEW_MESSAGES, updatedNoRows } from '@/lib/submissions/reviewMessages';
 import { DECISION_OPEN_STATUSES, isOpenForDecision } from '@/lib/submissions/checklistModel';
+
+/**
+ * BACKLOG-3798: the fixed bar publishes its height as --review-bar-h on <html>
+ * so the support button can sit above it on a phone. A callback ref, because
+ * the status branches below mount different root nodes.
+ */
+function useReviewBarHeight() {
+  const observer = useRef<ResizeObserver | null>(null);
+  return useCallback((node: HTMLDivElement | null) => {
+    const root = document.documentElement;
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!node) {
+      root.style.removeProperty('--review-bar-h');
+      return;
+    }
+    const write = () => root.style.setProperty('--review-bar-h', `${Math.round(node.getBoundingClientRect().height)}px`);
+    write();
+    if (typeof ResizeObserver === 'function') {
+      observer.current = new ResizeObserver(write);
+      observer.current.observe(node);
+    }
+  }, []);
+}
 
 interface ReviewActionsProps {
   submission: {
@@ -54,6 +78,7 @@ export function ReviewActions({
   canDecide = true,
   showChecklistHint = false,
 }: ReviewActionsProps) {
+  const barRef = useReviewBarHeight();
   const [action, setAction] = useState<ReviewAction>(null);
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
@@ -195,7 +220,7 @@ export function ReviewActions({
   // Terminal states - review is complete (show minimal floating bar)
   if (disabled || submission.status === 'approved' || submission.status === 'rejected') {
     return (
-      <div className="fixed bottom-0 left-[var(--sidebar-w,0px)] right-0 z-30">
+      <div ref={barRef} className="fixed bottom-0 left-[var(--sidebar-w,0px)] right-0 z-30">
         <div className="bg-white border-t border-gray-200 shadow-lg">
           <div className="max-w-6xl mx-auto px-4 py-3">
             <div className="flex items-center justify-center gap-2">
@@ -225,7 +250,7 @@ export function ReviewActions({
   // resubmit, so no buttons and no hint.
   if (submission.status === 'needs_changes') {
     return (
-      <div className="fixed bottom-0 left-[var(--sidebar-w,0px)] right-0 z-30">
+      <div ref={barRef} className="fixed bottom-0 left-[var(--sidebar-w,0px)] right-0 z-30">
         <div className="bg-white border-t border-gray-200 shadow-lg">
           <div className="max-w-6xl mx-auto px-4 py-3">
             <div className="flex items-center justify-center gap-2">
@@ -310,7 +335,7 @@ export function ReviewActions({
   }
 
   return (
-    <div className="fixed bottom-0 left-[var(--sidebar-w,0px)] right-0 z-30">
+    <div ref={barRef} className="fixed bottom-0 left-[var(--sidebar-w,0px)] right-0 z-30">
       <div className={`bg-white border-t border-gray-200 shadow-lg transition-all duration-300 ${action ? 'shadow-xl' : ''}`}>
         {/* Error message */}
         {error && (
@@ -361,25 +386,45 @@ export function ReviewActions({
           )}
 
           {/* Action buttons row */}
-          <div className="flex items-center gap-3">
+          {/* BACKLOG-3798: below md the collapsed row is a 2-column grid (label,
+              Approve full width, Request Changes | Reject, hint last). md: restores
+              the desktop flex row exactly. */}
+          <div
+            className={
+              !action ? 'grid grid-cols-2 gap-2 md:flex md:items-center md:gap-3' : 'flex items-center gap-3'
+            }
+          >
             {!action ? (
               <>
                 {/* Collapsed state - show all action buttons */}
-                <span className="text-sm font-medium text-gray-700 mr-2">Review Actions:</span>
-                <Button variant="success" onClick={() => setAction('approve')}>
+                <span className="col-span-2 text-xs uppercase tracking-wide font-medium text-gray-700 md:col-span-1 md:text-sm md:normal-case md:tracking-normal mr-2">
+                  Review Actions:
+                </span>
+                <Button
+                  variant="success"
+                  onClick={() => setAction('approve')}
+                  className="col-span-2 min-h-[44px] md:col-span-1 md:min-h-0"
+                >
                   <Check className="w-4 h-4" />
                   Approve
                 </Button>
-                <Button variant="warning" onClick={() => setAction('changes')}>
+                <Button
+                  variant="warning"
+                  onClick={() => setAction('changes')}
+                  className="min-h-[44px] md:min-h-0"
+                >
                   <AlertTriangle className="w-4 h-4" />
                   Request Changes
                 </Button>
                 {showChecklistHint && (
-                  <span className="text-xs text-gray-500" data-testid="request-changes-hint">
+                  <span
+                    className="col-span-2 order-last text-xs text-gray-500 md:col-span-1 md:order-none"
+                    data-testid="request-changes-hint"
+                  >
                     {REQUEST_CHANGES_HINT}
                   </span>
                 )}
-                <Button variant="danger" onClick={() => setAction('reject')}>
+                <Button variant="danger" onClick={() => setAction('reject')} className="min-h-[44px] md:min-h-0">
                   <X className="w-4 h-4" />
                   Reject
                 </Button>

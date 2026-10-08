@@ -1,6 +1,8 @@
 // BACKLOG-3798 layout harness: load one dumped fragment + its compiled CSS into
 // Chromium at each width and print element rects as JSON.
 // usage: node measure.cjs <fragment.html> <compiled.css> <width>...
+// HTML_STYLE env: inline style for <html>, e.g. "--review-bar-h:191px" (the
+// value ReviewActions writes at runtime, which a static dump cannot carry).
 const path = require('path');
 const fs = require('fs');
 const { chromium } = require(path.resolve(__dirname, '../../../node_modules/playwright'));
@@ -17,7 +19,7 @@ const SELECTOR = [
   for (const w of widths.map(Number)) {
     const page = await browser.newPage({ viewport: { width: w, height: 812 } });
     await page.setContent(
-      `<html><head><style>${fs.readFileSync(css, 'utf8')}</style></head><body>${fs.readFileSync(frag, 'utf8')}</body></html>`
+      `<html style="${process.env.HTML_STYLE || ''}"><head><style>${fs.readFileSync(css, 'utf8')}</style></head><body>${fs.readFileSync(frag, 'utf8')}</body></html>`
     );
     out[w] = await page.evaluate((sel) => {
       const r = {};
