@@ -10,6 +10,7 @@ import type { User } from "../types/models";
 // Import services
 import databaseService from "../services/databaseService";
 import { initializationBroadcaster } from "../services/initializationBroadcaster";
+import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import supabaseService from "../services/supabaseService";
 import sessionService from "../services/sessionService";
 import sessionSecurityService from "../services/sessionSecurityService";
@@ -824,6 +825,10 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
     // The Supabase SDK uses persistSession: false, so on app restart the SDK has no session.
     // This causes RLS policy failures (auth.uid() = null) when accepting T&C.
     // We manually restore the session from stored tokens.
+    // BACKLOG-3768: set when the restore below failed on the network. The SDK
+    // then holds no session, so a getUser() would return AuthSessionMissingError
+    // (a 400, not retryable) and wrongly clear the saved sign-in.
+    let restoreFailedOnNetwork = false;
     if (session.supabaseTokens) {
       try {
         const { error: setSessionError } = await supabaseService.getClient().auth.setSession({
@@ -831,7 +836,16 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
           refresh_token: session.supabaseTokens.refresh_token,
         });
 
-        if (setSessionError) {
+        if (setSessionError && isAuthRetryableFetchError(setSessionError)) {
+          // BACKLOG-3768: network/TLS failure or 5xx -- not a rejection. Keep
+          // the saved tokens and proceed; the SDK retries on its next call.
+          restoreFailedOnNetwork = true;
+          await logService.warn(
+            "Supabase session restoration failed on the network, keeping session",
+            "SessionHandlers",
+            { status: setSessionError.status, error: setSessionError.message }
+          );
+        } else if (setSessionError) {
           await logService.warn(
             "Supabase session restoration failed",
             "SessionHandlers",
@@ -875,13 +889,21 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
     // Prevents showing authenticated UI when session was revoked remotely
     // This closes the gap where setSession() succeeds (tokens parse OK)
     // but the server has actually revoked the user/token
-    if (session.supabaseTokens) {
+    if (session.supabaseTokens && !restoreFailedOnNetwork) {
       try {
         const { data: userData, error: getUserError } = await supabaseService
           .getClient()
           .auth.getUser();
 
-        if (getUserError || !userData.user) {
+        if (getUserError && isAuthRetryableFetchError(getUserError)) {
+          // BACKLOG-3768: the server could not be reached -- proceed, same as
+          // the thrown-error path below.
+          await logService.warn(
+            "Server-side session validation failed on the network, proceeding",
+            "SessionHandlers",
+            { status: getUserError.status, error: getUserError.message }
+          );
+        } else if (getUserError || !userData.user) {
           // Session is invalid on the server (user deleted, token revoked)
           await logService.info(
             "Supabase session invalid on server, forcing re-login",
@@ -895,12 +917,12 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
           sessionSecurityService.cleanupSession(session.sessionToken);
 
           return { success: false, error: "Session no longer valid" };
+        } else {
+          await logService.info(
+            "Supabase session validated server-side",
+            "SessionHandlers"
+          );
         }
-
-        await logService.info(
-          "Supabase session validated server-side",
-          "SessionHandlers"
-        );
       } catch (validationError) {
         // Network error during validation -- proceed optimistically
         // The user may be offline, and we don't want to block them

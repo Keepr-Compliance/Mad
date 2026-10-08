@@ -226,6 +226,17 @@ const Login = ({
     logger.error(`[Login] Deep link auth error (attempt ${retryAttempt + 1}):`, data);
     clearRetryTimers();
 
+    // BACKLOG-3768: a network/TLS failure in main. Show main's message (it
+    // names the cause) AND the Try Again button. Not auto-retried.
+    if (data.code === "CONNECTION_FAILED") {
+      setBrowserAuthInProgress(false);
+      setLoading(false);
+      setIsRetrying(false);
+      setRetriesExhausted(true);
+      setError(data.error || "Can't connect to Keepr. Check your network, then try again.");
+      return;
+    }
+
     // Check if this is a non-retryable error
     const isNonRetryable = LOGIN_RETRY_CONFIG.nonRetryableCodes.includes(
       data.code as typeof LOGIN_RETRY_CONFIG.nonRetryableCodes[number]

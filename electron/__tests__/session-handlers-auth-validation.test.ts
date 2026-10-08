@@ -374,8 +374,10 @@ describe("TASK-2085: Server-side auth token validation in handleGetCurrentUser",
     });
   });
 
-  describe("network error (proceeds optimistically)", () => {
-    it("should return success when auth.getUser() throws a network error", async () => {
+  // getUser THROWS (the catch path). auth-js RETURNS network errors rather than
+  // throwing them; that case is in session-handlers-network-3768.test.ts (BACKLOG-3768).
+  describe("getUser throws (catch path, proceeds optimistically)", () => {
+    it("should return success when auth.getUser() throws", async () => {
       setupReturningUserMocks();
 
       // Network error -- getUser throws

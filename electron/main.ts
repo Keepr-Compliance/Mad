@@ -187,6 +187,7 @@ import { LLMConfigService } from "./services/llm/llmConfigService";
 import { validateLicense, createUserLicense, ensurePersonalOrganization } from "./services/licenseService";
 import { registerDevice } from "./services/deviceService";
 import supabaseService from "./services/supabaseService";
+import { deepLinkSessionErrorToPayload } from "./services/supabaseNetError";
 import databaseService from "./services/databaseService";
 import { initializationBroadcaster } from "./services/initializationBroadcaster";
 import sessionService from "./services/sessionService";
@@ -637,14 +638,18 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         });
 
       if (sessionError || !sessionData?.user) {
+        // BACKLOG-3768: a network/TLS failure (AuthRetryableFetchError) is
+        // CONNECTION_FAILED with retryable copy; only a genuine rejection is
+        // INVALID_TOKENS.
+        const failure = deepLinkSessionErrorToPayload(sessionError);
         log.error("[DeepLink] Failed to set session:", sessionError);
         Sentry.captureException(sessionError || new Error("Deep link auth: session data missing user"), {
-          tags: { component: "deep-link", action: "auth-callback", error_code: "INVALID_TOKENS", networkOnline: net.isOnline(), session_failure: sessionError?.message || "no user data" },
+          tags: { component: "deep-link", action: "auth-callback", error_code: failure.code, networkOnline: net.isOnline(), session_failure: sessionError?.message || "no user data", auth_step: "setSession", cause_code: failure.causeCode, tls_intercept: String(failure.tlsIntercept) },
           extra: { callback_path: redactDeepLinkUrl(url) },
         });
         sendToRenderer("auth:deep-link-error", {
-          error: "Invalid authentication tokens",
-          code: "INVALID_TOKENS",
+          error: failure.error,
+          code: failure.code,
         });
         return;
       }
