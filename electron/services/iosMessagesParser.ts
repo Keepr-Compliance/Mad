@@ -85,6 +85,48 @@ export class iOSMessagesParser {
     return crypto.createHash("sha1").update(fullPath).digest("hex");
   }
 
+  /** Path prefixes iOS writes for Messages attachments, mapped onto MediaDomain. */
+  private static readonly ATTACHMENT_PATH_PREFIXES: readonly string[] = [
+    "~/",
+    "/var/mobile/",
+  ];
+
+  /** The only MediaDomain subtree an attachment path may point into. */
+  private static readonly ATTACHMENT_ROOT = "Library/SMS/Attachments/";
+
+  /**
+   * Convert an attachment path from sms.db into its MediaDomain relative path.
+   * Accepts only `~/Library/SMS/Attachments/...` and
+   * `/var/mobile/Library/SMS/Attachments/...`. Every `/`-separated segment
+   * must be a real name: empty, `.` and `..` segments are rejected, as are
+   * backslashes and NUL. Dots inside a name (`Offer...pdf`) are allowed.
+   * @returns the relative path (e.g. `Library/SMS/Attachments/ab/01/x.jpg`), or null
+   */
+  static toMediaDomainRelativePath(originalPath: string): string | null {
+    const reject = (rule: string): null => {
+      log.warn("iOSMessagesParser: Rejected attachment path", { rule });
+      return null;
+    };
+
+    const prefix = iOSMessagesParser.ATTACHMENT_PATH_PREFIXES.find((p) =>
+      originalPath.startsWith(p),
+    );
+    if (prefix === undefined) return reject("prefix");
+    const relativePath = originalPath.slice(prefix.length);
+
+    if (relativePath.includes("\\")) return reject("backslash");
+    if (relativePath.includes("\0")) return reject("nul");
+    if (!relativePath.startsWith(iOSMessagesParser.ATTACHMENT_ROOT)) return reject("root");
+
+    for (const segment of relativePath.split("/")) {
+      if (segment === "" || segment === "." || segment === "..") {
+        return reject("segment");
+      }
+    }
+
+    return relativePath;
+  }
+
   /**
    * Resolve an attachment's original path to its location in the iOS backup.
    * @param backupPath Path to the iOS backup directory
@@ -94,22 +136,8 @@ export class iOSMessagesParser {
   static resolveAttachmentPath(backupPath: string, originalPath: string): string | null {
     if (!originalPath) return null;
 
-    // iOS attachment paths are like ~/Library/SMS/Attachments/...
-    // Remove the ~/ prefix to get the relative path
-    let relativePath = originalPath;
-    if (relativePath.startsWith("~/")) {
-      relativePath = relativePath.slice(2);
-    } else if (relativePath.startsWith("/var/mobile/")) {
-      // Some paths may be absolute /var/mobile/Library/...
-      relativePath = relativePath.replace("/var/mobile/", "");
-    }
-
-    // Security: Validate path doesn't contain traversal sequences
-    // This prevents malicious paths like "../../etc/passwd" from escaping the backup
-    if (relativePath.includes("..") || relativePath.includes("\\")) {
-      log.warn("iOSMessagesParser: Rejected potentially malicious path", {
-        originalPath: originalPath.substring(0, 50),
-      });
+    const relativePath = iOSMessagesParser.toMediaDomainRelativePath(originalPath);
+    if (relativePath === null) {
       return null;
     }
 
