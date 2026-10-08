@@ -67,6 +67,59 @@ function parseTrustError(errorMessage: string): TrustErrorReason | null {
   return null;
 }
 
+/** BACKLOG-1926: wait between idevicepair checks while the phone is locked or showing Trust. */
+export const TRUST_WATCH_INTERVAL_MS = 1000;
+
+/**
+ * BACKLOG-1926: most idevicepair checks per plug-in (about 3 minutes at 1 s).
+ * After that the device falls back to the normal poll and its 8 s back-off, and
+ * is not watched again until it is unplugged.
+ */
+export const TRUST_WATCH_MAX_ATTEMPTS = 180;
+
+/** BACKLOG-1926: a stuck idevicepair is killed after this long. */
+const TRUST_WATCH_PROCESS_TIMEOUT_MS = 10000;
+
+/**
+ * BACKLOG-1926: trust state of a plugged-in iPhone that is not connected yet.
+ * "cleared" tells the renderer to forget the state (unplugged / watch handed back).
+ */
+export type DeviceTrustState = "locked" | "trust_pending" | "denied" | "trusted" | "cleared";
+
+/** BACKLOG-1926: what one `idevicepair validate` run says about the phone. */
+export type PairCheckResult = "locked" | "trust_pending" | "denied" | "trusted" | "gone" | "other";
+
+/**
+ * BACKLOG-1926: classify the output of `idevicepair validate|pair -u <udid>`.
+ *
+ * Match strings are the producer's own format strings, from
+ * `strings -a resources/win/libimobiledevice/idevicepair.exe` (also identical in
+ * libimobiledevice 1.4.0 `tools/idevicepair.c`); every one is printed to stdout.
+ * Substring matches only, so CRLF (Windows) and LF line endings both parse.
+ */
+export function parsePairState(output: string, exitCode: number | null): PairCheckResult {
+  // LOCKDOWN_E_PASSWORD_PROTECTED (-17): phone is locked.
+  if (output.includes("because a passcode is set")) return "locked";
+  // LOCKDOWN_E_PAIRING_DIALOG_RESPONSE_PENDING (-19): Trust dialog is up.
+  if (output.includes("Please accept the trust dialog")) return "trust_pending";
+  // LOCKDOWN_E_USER_DENIED_PAIRING (-18): user tapped Don't Trust.
+  if (output.includes("said that the user denied the trust dialog")) return "denied";
+  if (output.includes("No device found")) return "gone";
+  if (
+    exitCode === 0 &&
+    (output.includes("SUCCESS: Paired with device") ||
+      output.includes("SUCCESS: Validated pairing with device"))
+  ) {
+    return "trusted";
+  }
+  return "other";
+}
+
+interface TrustWatch {
+  attempts: number;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
 /** Mock device for development without Windows/iPhone */
 const MOCK_DEVICE: iOSDevice = {
   udid: "00000000-0000000000000000",
@@ -192,6 +245,15 @@ export class DeviceDetectionService extends EventEmitter {
    * with iPhone checking off (founder, 2026-10-07).
    */
   private detectionRequested: boolean = false;
+  /**
+   * BACKLOG-1926: per-UDID 1 s idevicepair loop while the phone is locked or
+   * showing the Trust dialog. While a UDID is here, the poll does not probe it.
+   */
+  private trustWatches: Map<string, TrustWatch> = new Map();
+  /** BACKLOG-1926: UDIDs whose watch hit the cap or was declined; not re-watched until unplugged. */
+  private trustWatchDone: Set<string> = new Set();
+  /** BACKLOG-1926: last trust state sent per UDID (de-duplicates events). */
+  private lastTrustState: Map<string, DeviceTrustState> = new Map();
 
   constructor() {
     super();
@@ -294,6 +356,9 @@ export class DeviceDetectionService extends EventEmitter {
    */
   stop(): void {
     this.detectionRequested = false;
+    // BACKLOG-1926: the trust loop runs only while detection is requested
+    // (BACKLOG-3418 gate). Stopping detection ends every loop.
+    this.stopAllTrustWatches();
     if (this.pollInterval) {
       log.info("[DeviceDetection] Stopping device polling");
       clearInterval(this.pollInterval);
@@ -670,6 +735,11 @@ export class DeviceDetectionService extends EventEmitter {
       // Check for new devices
       for (const udid of currentUdids) {
         if (!previousUdids.has(udid)) {
+          // BACKLOG-1926: the trust loop owns this device — do not run a second
+          // lockdown handshake (ideviceinfo) alongside its idevicepair check.
+          if (this.trustWatches.has(udid)) {
+            continue;
+          }
           // BACKLOG-1627: If this device is trust-pending, back off instead of
           // hammering getDeviceInfo every 2s poll cycle
           const lastTrustAttempt = this.trustPendingDevices.get(udid);
@@ -681,22 +751,7 @@ export class DeviceDetectionService extends EventEmitter {
           log.info(`[DeviceDetection] New device found: ${udid}, fetching info...`);
           try {
             const deviceInfo = await this.getDeviceInfo(udid);
-            this.connectedDevices.set(udid, deviceInfo);
-
-            log.info(
-              `[DeviceDetection] Device connected: ${deviceInfo.name} (${udid})`,
-            );
-            Sentry.addBreadcrumb({
-              category: "device.connect",
-              message: `Device connected: ${deviceInfo.name} (${deviceInfo.productType})`,
-              level: "info",
-              data: { udid: udid.substring(0, 8) + "...", productType: deviceInfo.productType },
-            });
-            this.emit("device-connected", deviceInfo);
-            // BACKLOG-1582: Clear auto-pair flag on successful connection
-            this.autoPairAttempted.delete(udid);
-            // BACKLOG-1627: Clear trust-pending state on successful connection
-            this.trustPendingDevices.delete(udid);
+            this.markDeviceConnected(udid, deviceInfo);
           } catch (err) {
             const errorMessage = err instanceof Error ? err.message : String(err);
 
@@ -719,6 +774,13 @@ export class DeviceDetectionService extends EventEmitter {
               log.warn(
                 `[DeviceDetection] Device ${udid} trust issue: ${trustReason} (${errorMessage})`,
               );
+
+              // BACKLOG-1926: the phone is waiting on the user (locked, or the
+              // Trust dialog is up). Watch it once a second instead of waiting
+              // out the 8 s back-off.
+              if (trustReason === "locked" || trustReason === "trust_pending") {
+                this.startTrustWatch(udid, trustReason);
+              }
             } else {
               log.error(
                 `[DeviceDetection] Failed to get info for device ${udid}:`,
@@ -743,6 +805,11 @@ export class DeviceDetectionService extends EventEmitter {
           }
         }
       }
+
+      // BACKLOG-1926: a device that never connected (untrusted) is not in
+      // connectedDevices, so the loop below never sees it leave. Clear its
+      // trust bookkeeping here, so a re-plug starts fresh (and re-asks Trust).
+      this.forgetUnpluggedUntrustedDevices(currentUdids);
 
       // Check for disconnected devices
       for (const udid of previousUdids) {
@@ -984,6 +1051,220 @@ export class DeviceDetectionService extends EventEmitter {
         reject(new Error(`Failed to spawn ideviceinfo: ${err.message}`));
       });
     });
+  }
+
+  /**
+   * Records a device as connected and tells listeners. Returns false when the
+   * device was already connected (the trust loop and the poll can both get here).
+   */
+  private markDeviceConnected(udid: string, deviceInfo: iOSDevice): boolean {
+    if (this.connectedDevices.has(udid)) {
+      return false;
+    }
+    this.connectedDevices.set(udid, deviceInfo);
+
+    log.info(
+      `[DeviceDetection] Device connected: ${deviceInfo.name} (${udid})`,
+    );
+    Sentry.addBreadcrumb({
+      category: "device.connect",
+      message: `Device connected: ${deviceInfo.name} (${deviceInfo.productType})`,
+      level: "info",
+      data: { udid: udid.substring(0, 8) + "...", productType: deviceInfo.productType },
+    });
+    this.emit("device-connected", deviceInfo);
+    // BACKLOG-1582: Clear auto-pair flag on successful connection
+    this.autoPairAttempted.delete(udid);
+    // BACKLOG-1627: Clear trust-pending state on successful connection
+    this.trustPendingDevices.delete(udid);
+    // BACKLOG-1926: connected — the trust loop and its state are finished.
+    this.endTrustWatch(udid);
+    this.trustWatchDone.delete(udid);
+    this.lastTrustState.delete(udid);
+    return true;
+  }
+
+  /** BACKLOG-1926: send a trust state to listeners, once per change. */
+  private emitTrustState(udid: string, state: DeviceTrustState): void {
+    if (state === "cleared") {
+      if (!this.lastTrustState.has(udid)) return;
+      this.lastTrustState.delete(udid);
+    } else {
+      if (this.lastTrustState.get(udid) === state) return;
+      this.lastTrustState.set(udid, state);
+    }
+    log.info(`[DeviceDetection] Trust state ${deviceLogTag(udid)}: ${state}`);
+    this.emit("device-trust-state", { udid, state });
+  }
+
+  /**
+   * BACKLOG-1926: start the 1 s idevicepair loop for a phone that is locked or
+   * showing the Trust dialog. No-op in mock mode, when detection is off
+   * (BACKLOG-3418), when already watching, or after the cap / a decline.
+   */
+  private startTrustWatch(udid: string, initial: "locked" | "trust_pending"): void {
+    if (this.mockMode || !this.detectionRequested) return;
+    if (this.trustWatchDone.has(udid)) {
+      // Past the cap: the 8 s poll keeps the state current. After "Don't
+      // Trust", keep saying so until the phone is unplugged.
+      if (this.lastTrustState.get(udid) !== "denied") {
+        this.emitTrustState(udid, initial);
+      }
+      return;
+    }
+    if (this.trustWatches.has(udid)) return;
+
+    const watch: TrustWatch = { attempts: 0, timer: null };
+    this.trustWatches.set(udid, watch);
+    log.info(`[DeviceDetection] Watching trust state for ${deviceLogTag(udid)} every ${TRUST_WATCH_INTERVAL_MS}ms`);
+    this.emitTrustState(udid, initial);
+    this.scheduleTrustCheck(udid, watch);
+  }
+
+  private scheduleTrustCheck(udid: string, watch: TrustWatch): void {
+    watch.timer = setTimeout(() => {
+      watch.timer = null;
+      void this.runTrustCheck(udid, watch);
+    }, TRUST_WATCH_INTERVAL_MS);
+  }
+
+  /** BACKLOG-1926: one tick of the trust loop. One idevicepair at a time per device. */
+  private async runTrustCheck(udid: string, watch: TrustWatch): Promise<void> {
+    // stop() (BACKLOG-3418 off-switch) removes every watch, so a removed or
+    // replaced watch means detection was stopped or the phone was unplugged.
+    if (this.trustWatches.get(udid) !== watch) return;
+
+    watch.attempts += 1;
+    const result = await this.checkPairState(udid);
+
+    // Stopped, unplugged or replaced while idevicepair ran.
+    if (this.trustWatches.get(udid) !== watch) return;
+
+    switch (result) {
+      case "locked":
+      case "trust_pending":
+        this.emitTrustState(udid, result);
+        if (watch.attempts >= TRUST_WATCH_MAX_ATTEMPTS) {
+          log.warn(
+            `[DeviceDetection] Trust watch for ${deviceLogTag(udid)} stopped after ${watch.attempts} checks; back to the normal poll`,
+          );
+          this.endTrustWatch(udid);
+          this.trustWatchDone.add(udid);
+          return;
+        }
+        this.scheduleTrustCheck(udid, watch);
+        return;
+
+      case "trusted": {
+        this.endTrustWatch(udid);
+        this.trustPendingDevices.delete(udid);
+        this.emitTrustState(udid, "trusted");
+        try {
+          const deviceInfo = await this.getDeviceInfo(udid);
+          this.markDeviceConnected(udid, deviceInfo);
+        } catch (err) {
+          // The next poll retries (back-off cleared above).
+          log.warn(
+            `[DeviceDetection] Trusted ${deviceLogTag(udid)} but device info failed; the poll will retry`,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+        return;
+      }
+
+      case "denied":
+        this.endTrustWatch(udid);
+        this.trustWatchDone.add(udid);
+        this.emitTrustState(udid, "denied");
+        return;
+
+      case "gone":
+        this.endTrustWatch(udid);
+        this.clearUntrustedDevice(udid);
+        return;
+
+      default:
+        // Anything else (e.g. "not paired with this host", a mux error) goes
+        // back to the normal poll and its back-off, which handles it as before.
+        this.endTrustWatch(udid);
+        return;
+    }
+  }
+
+  /** BACKLOG-1926: run `idevicepair validate -u <udid>` once and classify it. */
+  private checkPairState(udid: string): Promise<PairCheckResult> {
+    let validatedUdid: string;
+    try {
+      validatedUdid = validateDeviceUdid(udid);
+    } catch {
+      return Promise.resolve("other");
+    }
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (result: PairCheckResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(killTimer);
+        resolve(result);
+      };
+
+      // validate, not pair: on a phone that already trusts this computer it
+      // writes nothing; with no pairing record it runs the same Pair handshake
+      // (and the same messages) as `pair` (libimobiledevice
+      // lockdownd_client_new_with_handshake).
+      const proc = spawn(getCommand("idevicepair"), ["validate", "-u", validatedUdid]);
+      let output = "";
+      proc.stdout?.on("data", (data) => { output += data.toString(); });
+      proc.stderr?.on("data", (data) => { output += data.toString(); });
+
+      const killTimer = setTimeout(() => {
+        try { proc.kill(); } catch { /* already gone */ }
+        finish("other");
+      }, TRUST_WATCH_PROCESS_TIMEOUT_MS);
+
+      proc.on("close", (code: number | null) => finish(parsePairState(output, code)));
+      proc.on("error", () => finish("other"));
+    });
+  }
+
+  private endTrustWatch(udid: string): void {
+    const watch = this.trustWatches.get(udid);
+    if (!watch) return;
+    if (watch.timer) clearTimeout(watch.timer);
+    watch.timer = null;
+    this.trustWatches.delete(udid);
+  }
+
+  private stopAllTrustWatches(): void {
+    for (const udid of Array.from(this.trustWatches.keys())) {
+      this.endTrustWatch(udid);
+    }
+  }
+
+  /** BACKLOG-1926: forget everything about an unplugged device that never connected. */
+  private clearUntrustedDevice(udid: string): void {
+    this.endTrustWatch(udid);
+    this.trustWatchDone.delete(udid);
+    this.autoPairAttempted.delete(udid);
+    this.trustPendingDevices.delete(udid);
+    this.emitTrustState(udid, "cleared");
+  }
+
+  private forgetUnpluggedUntrustedDevices(currentUdids: string[]): void {
+    const present = new Set(currentUdids);
+    const known = new Set<string>([
+      ...this.trustWatches.keys(),
+      ...this.trustWatchDone,
+      ...this.lastTrustState.keys(),
+      ...this.autoPairAttempted,
+      ...this.trustPendingDevices.keys(),
+    ]);
+    for (const udid of known) {
+      if (!present.has(udid) && !this.connectedDevices.has(udid)) {
+        this.clearUntrustedDevice(udid);
+      }
+    }
   }
 
   /**

@@ -6,7 +6,7 @@
 import { ipcMain, BrowserWindow } from "electron";
 import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
-import { deviceDetectionService } from "../services/deviceDetectionService";
+import { deviceDetectionService, type DeviceTrustState } from "../services/deviceDetectionService";
 import type { iOSDevice } from "../types/device";
 import { sendToMainWindow } from "../windowRegistry";
 
@@ -184,6 +184,12 @@ export function registerDeviceHandlers(_mainWindow: BrowserWindow): void {
   deviceDetectionService.on("device-needs-trust", (data: { udid: string; reason?: "locked" | "trust_pending" | "unknown" }) => {
     log.info(`[DeviceHandlers] Device needs trust: ${data.udid}`);
     sendToMainWindow("device:needs-trust", data);
+  });
+
+  // BACKLOG-1926: Forward trust-state changes (locked / Trust dialog up /
+  // declined / trusted / cleared) of a plugged-in iPhone that is not connected yet.
+  deviceDetectionService.on("device-trust-state", (data: { udid: string; state: DeviceTrustState }) => {
+    sendToMainWindow("device:trust-state", data);
   });
 
   // BACKLOG-1620/1621: Forward tools-missing event to renderer

@@ -6,6 +6,7 @@ import type {
   SyncStatus,
   UseIPhoneSyncReturn,
   UserFacingError,
+  IPhoneTrustState,
 } from "../types/iphone";
 import logger from '../utils/logger';
 import { syncOrchestrator } from '../services/SyncOrchestratorService';
@@ -122,6 +123,9 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   // BACKLOG-1582: Trust state — device visible but not yet trusted
   const [needsTrust, setNeedsTrust] = useState(false);
   const [needsTrustUdid, setNeedsTrustUdid] = useState<string | null>(null);
+  // BACKLOG-1926: locked / Trust dialog up / declined / trusted, for a phone
+  // that is plugged in but not connected yet. Cleared on connect and unplug.
+  const [trustState, setTrustState] = useState<IPhoneTrustState | null>(null);
   // BACKLOG-1620/1621: Tools missing state — libimobiledevice not installed
   const [toolsMissing, setToolsMissing] = useState(false);
   // BACKLOG-1919: Apple driver absent while 0 devices detected (Windows recovery path)
@@ -256,6 +260,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       // BACKLOG-1582: Clear trust state on successful connection
       setNeedsTrust(false);
       setNeedsTrustUdid(null);
+      // BACKLOG-1926: connected — the unlock/Trust steps are over.
+      setTrustState(null);
       // BACKLOG-1919: A device enumerated → the Apple driver must be present.
       // Clear any recovery prompt shown while no device was detected.
       setDriverMissing(false);
@@ -587,6 +593,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           setIsConnected(true);
           setDevice(mappedDevice);
           setError(null);
+          // BACKLOG-1926: connected — the unlock/Trust steps are over.
+          setTrustState(null);
         });
         cleanups.push(unsub);
       }
@@ -645,6 +653,21 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           // BACKLOG-1627: Show differentiated user guidance based on trust error reason
           const guidance = mapTrustReasonToGuidance(data.reason);
           setUserError(guidance);
+        });
+        cleanups.push(unsub);
+      }
+    }
+
+    // BACKLOG-1926: Listen for trust-state changes of a plugged-in iPhone that
+    // is not connected yet (main process checks about once a second).
+    if (deviceApi) {
+      type TrustStateEvent = { udid: string; state: string };
+      type DeviceApiWithTrustState = { onTrustState?: (cb: (data: TrustStateEvent) => void) => () => void };
+      const deviceApiTrust = deviceApi as DeviceApiWithTrustState;
+      if (deviceApiTrust.onTrustState) {
+        const unsub = deviceApiTrust.onTrustState((data) => {
+          logger.info("[useIPhoneSync] Trust state:", data.state);
+          setTrustState(toIPhoneTrustState(data.state));
         });
         cleanups.push(unsub);
       }
@@ -1202,6 +1225,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     // BACKLOG-1582: Trust state
     needsTrust,
     needsTrustUdid,
+    trustState,
     // BACKLOG-1620/1621: Tools missing state
     toolsMissing,
     // BACKLOG-1919: Apple-driver recovery state + action
@@ -1216,6 +1240,22 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     checkSyncStatus,
     requestTrust,
   };
+}
+
+/**
+ * BACKLOG-1926: map the main process's trust-state event to the UI state.
+ * "cleared" (unplugged / handed back to the normal poll) and anything unknown → null.
+ */
+export function toIPhoneTrustState(state: string): IPhoneTrustState | null {
+  switch (state) {
+    case "locked":
+    case "trust_pending":
+    case "denied":
+    case "trusted":
+      return state;
+    default:
+      return null;
+  }
 }
 
 /**

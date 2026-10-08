@@ -53,6 +53,8 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     lockReason,
     // BACKLOG-1919: Apple-driver recovery state + action
     driverMissing,
+    // BACKLOG-1926: unlock / Trust state of a plugged-in iPhone
+    trustState,
     installDriverStatus,
     installDriverError,
     recoverInstallDriver,
@@ -146,6 +148,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           isInstallingDriver={installDriverStatus === "installing"}
           driverInstallError={installDriverError}
           isWindowsArm64={isWindowsArm64()}
+          trustState={trustState}
         />
       )}
 

@@ -53,6 +53,16 @@ export const deviceBridge = {
   },
 
   /**
+   * BACKLOG-1926: Subscribe to trust-state changes of a plugged-in iPhone that
+   * is not connected yet: "locked" | "trust_pending" | "denied" | "trusted" | "cleared".
+   */
+  onTrustState: (callback: (data: { udid: string; state: string }) => void) => {
+    const listener = (_: IpcRendererEvent, data: { udid: string; state: string }) => callback(data);
+    ipcRenderer.on("device:trust-state", listener);
+    return () => ipcRenderer.removeListener("device:trust-state", listener);
+  },
+
+  /**
    * BACKLOG-1620/1621: Subscribe to tools-missing events.
    * Fires when libimobiledevice executables are not found (ENOENT).
    */
