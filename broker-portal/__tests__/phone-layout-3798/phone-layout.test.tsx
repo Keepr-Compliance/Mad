@@ -241,7 +241,7 @@ describe('C3 desktop restores (md:) are in place', () => {
     rerender(<SupportWidget />);
     const fab = screen.getByRole('button', { name: 'Contact Support' });
     expect(tokens(fab)).toEqual(
-      expect.arrayContaining(['md:bottom-6', 'md:right-auto', 'md:left-[calc(var(--sidebar-w,0px)_+_1.5rem)]', 'right-4', 'bottom-[calc(var(--review-bar-h,0px)_+_1rem)]'])
+      expect.arrayContaining(['md:bottom-6', 'md:left-[calc(var(--sidebar-w,0px)_+_1.5rem)]', 'left-4', 'right-auto', 'bottom-[calc(var(--review-bar-h,0px)_+_1rem)]'])
     );
   });
 
