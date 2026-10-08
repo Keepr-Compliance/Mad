@@ -55,6 +55,7 @@ jest.mock("fs", () => ({
 // normal PC still reaches the PowerShell/msiexec spawn.
 jest.mock("../appleInstallerSignature", () => ({
   verifyAppleSignature: jest.fn(async () => ({ ok: true, reason: "valid", status: "Valid", subject: "CN=Apple Inc., O=Apple Inc." })),
+  powershellPath: () => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
 }));
 
 import { EventEmitter } from "events";
@@ -96,7 +97,7 @@ describe("installAppleDrivers on Windows on ARM (BACKLOG-3363)", () => {
     setHost("win32", "x64", translated as boolean | undefined);
     await installAppleDrivers();
     expect(mockSpawn).toHaveBeenCalled();
-    expect(mockSpawn.mock.calls[0][0]).toBe("powershell");
+    expect(mockSpawn.mock.calls[0][0]).toMatch(/powershell\.exe$/);
   });
 
   it("row B — Windows on ARM (x64 under emulation): refuses without spawning, reporting, or the install breadcrumb", async () => {

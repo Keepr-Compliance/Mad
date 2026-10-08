@@ -8,7 +8,7 @@
  */
 
 // BACKLOG-3806: every Apple installer is checked before Windows runs it.
-import { verifyAppleSignature } from "./appleInstallerSignature";
+import { powershellPath, verifyAppleSignature } from "./appleInstallerSignature";
 import { exec, execFile, spawn } from "child_process";
 import { promisify } from "util";
 import path from "path";
@@ -423,10 +423,30 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
   // BACKLOG-3806: install from a private copy, and check the signature of
   // that exact copy - the same path is then handed to msiexec.
   let stagingDir: string | null = null;
+  let installPath: string;
   try {
     const staged = stageInstallerCopy(msiPath);
     stagingDir = staged.dir;
-    const installPath = staged.file;
+    installPath = staged.file;
+  } catch (error) {
+    // Node fs errors embed full paths (including the Windows user name), so
+    // nothing from the error is logged to Sentry or returned to the user.
+    log.error("[AppleDriverService] Could not prepare installer copy:", error);
+    Sentry.addBreadcrumb({
+      category: "driver.install",
+      message: STAGING_FAILURE_MESSAGE,
+      level: "error",
+    });
+    const stagingFailure: DriverInstallResult = {
+      success: false,
+      error: STAGING_FAILURE_MESSAGE,
+      rebootRequired: false,
+    };
+    reportInstallFailure(stagingFailure, msiPath);
+    return stagingFailure;
+  }
+
+  try {
 
     const signature = await verifyAppleSignature(installPath);
     if (!signature.ok) {
@@ -533,6 +553,9 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
   }
 }
 
+/** Fixed text for a failure to copy the installer (BACKLOG-3806); never includes error text or paths. */
+export const STAGING_FAILURE_MESSAGE = "Could not prepare the installer copy.";
+
 /** Shown when an installer fails the Apple signature check (BACKLOG-3806). */
 export const SIGNATURE_REFUSAL_MESSAGE =
   "The Apple driver installer could not be verified as signed by Apple, so it was not installed. Please install iTunes from the Microsoft Store instead.";
@@ -544,7 +567,12 @@ export const SIGNATURE_REFUSAL_MESSAGE =
 function stageInstallerCopy(sourcePath: string): { dir: string; file: string } {
   const dir = fs.mkdtempSync(path.join(app.getPath("temp"), "keepr-amds-"));
   const file = path.join(dir, path.basename(sourcePath));
-  fs.copyFileSync(sourcePath, file);
+  try {
+    fs.copyFileSync(sourcePath, file);
+  } catch (error) {
+    removeDirQuietly(dir);
+    throw error;
+  }
   return { dir, file };
 }
 
@@ -595,8 +623,9 @@ function runMsiInstaller(msiPath: string): Promise<DriverInstallResult> {
     // Wrap in try-catch to properly handle UAC decline (which throws an exception)
     const psCommand = `
       try {
+        $msiexec = Join-Path $env:SystemRoot 'System32\\msiexec.exe'
         $msiArgs = '/i "' + $env:${MSI_PATH_ENV} + '" /qn /norestart REBOOT=ReallySuppress'
-        $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Verb RunAs -Wait -PassThru -ErrorAction Stop
+        $process = Start-Process -FilePath $msiexec -ArgumentList $msiArgs -Verb RunAs -Wait -PassThru -ErrorAction Stop
         exit $process.ExitCode
       } catch {
         # UAC declined or other error starting the elevated process
@@ -609,7 +638,7 @@ function runMsiInstaller(msiPath: string): Promise<DriverInstallResult> {
     log.info("[AppleDriverService] msiexec package:", msiPath);
 
     const installer = spawn(
-      "powershell",
+      powershellPath(),
       ["-NoProfile", "-NonInteractive", "-Command", psCommand],
       {
         shell: false,

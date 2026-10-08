@@ -24,8 +24,9 @@ const mockApp = {
 jest.mock("electron", () => ({ app: mockApp }));
 
 const mockCaptureMessage = jest.fn();
+const mockAddBreadcrumb = jest.fn();
 jest.mock("@sentry/electron/main", () => ({
-  addBreadcrumb: jest.fn(),
+  addBreadcrumb: (...a: unknown[]) => mockAddBreadcrumb(...a),
   captureMessage: (...a: unknown[]) => mockCaptureMessage(...a),
   captureException: jest.fn(),
   setContext: jest.fn(),
@@ -40,6 +41,7 @@ jest.mock("electron-log", () => ({
 
 const mockVerify = jest.fn();
 jest.mock("../appleInstallerSignature", () => ({
+  powershellPath: jest.requireActual("../appleInstallerSignature").powershellPath,
   verifyAppleSignature: (...a: unknown[]) => mockVerify(...a),
 }));
 
@@ -109,6 +111,7 @@ import {
   installAppleDrivers,
   MSI_PATH_ENV,
   SIGNATURE_REFUSAL_MESSAGE,
+  STAGING_FAILURE_MESSAGE,
 } from "../appleDriverService";
 
 const BUNDLED_DIR = path.join(__dirname, "../../../resources/win/apple-drivers");
@@ -120,6 +123,14 @@ const INSTALLER_EXE = path.join(DRIVERS_DIR, "iTunes64Setup.exe");
 const BUNDLED_7ZA = path.join(__dirname, "../../../resources/win/7za.exe");
 const STAGING_DIR = "/tmp/os-temp/keepr-amds-RAND01";
 const STAGED_MSI = path.join(STAGING_DIR, "AppleMobileDeviceSupport64.msi");
+
+const ABS_POWERSHELL = path.win32.join(
+  process.env.SystemRoot || "C:\\Windows",
+  "System32",
+  "WindowsPowerShell",
+  "v1.0",
+  "powershell.exe",
+);
 
 const OK = { ok: true, reason: "valid", status: "Valid", subject: "CN=Apple Inc., O=Apple Inc." };
 const BAD = { ok: false, reason: "wrong_signer", status: "Valid", subject: "CN=Evil, O=Evil" };
@@ -215,7 +226,7 @@ describe("installAppleDrivers checks the exact file it installs", () => {
     await installAppleDrivers();
 
     const [cmd, args, opts] = mockSpawn.mock.calls[0] as [string, string[], { env: Record<string, string>; shell: boolean }];
-    expect(cmd).toBe("powershell");
+    expect(cmd).toBe(ABS_POWERSHELL);
     expect(opts.shell).toBe(false);
     for (const a of args) {
       expect(a).not.toContain("Remove-Item");
@@ -223,6 +234,39 @@ describe("installAppleDrivers checks the exact file it installs", () => {
     }
     expect(args.join(" ")).toContain(`$env:${MSI_PATH_ENV}`);
     expect(opts.env[MSI_PATH_ENV]).toBe(path.join(hostileDir, "AppleMobileDeviceSupport64.msi"));
+  });
+
+  it("runs the elevated step by absolute powershell path and absolute msiexec", async () => {
+    mockVerify.mockResolvedValue(OK);
+    await installAppleDrivers();
+
+    const [cmd, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(cmd).toBe(ABS_POWERSHELL);
+    expect(path.win32.isAbsolute(cmd)).toBe(true);
+    const script = args[args.length - 1];
+    expect(script).toContain("$env:SystemRoot");
+    expect(script).toContain("System32\\msiexec.exe");
+    expect(script).toContain("-FilePath $msiexec");
+    expect(script).not.toContain('-FilePath "msiexec.exe"');
+  });
+
+  it("reports a fixed message, with no path text, when the private copy cannot be made", async () => {
+    const leak = "EPERM: operation not permitted, copyfile 'C:\\Users\\jdoe\\app\\a.msi' -> 'C:\\Users\\jdoe\\AppData\\Local\\Temp\\keepr-amds-x\\a.msi'";
+    mockFs.copyFileSync.mockImplementationOnce(() => {
+      throw new Error(leak);
+    });
+    const result = await installAppleDrivers();
+
+    expect(result).toEqual({ success: false, error: STAGING_FAILURE_MESSAGE, rebootRequired: false });
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockVerify).not.toHaveBeenCalled();
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+    const sent = JSON.stringify([mockCaptureMessage.mock.calls, mockAddBreadcrumb.mock.calls]);
+    expect(sent).not.toContain("jdoe");
+    expect(sent).not.toContain("Users");
+    expect(sent).toContain(STAGING_FAILURE_MESSAGE);
+    // the half-made directory is still removed
+    expect(mockFs.rmSync).toHaveBeenCalledWith(STAGING_DIR, { recursive: true, force: true });
   });
 
   it("leaves non-Windows behaviour unchanged: no check, no copy, no spawn", async () => {

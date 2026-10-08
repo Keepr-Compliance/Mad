@@ -108,7 +108,7 @@ export function evaluateSignature(raw: RawSignatureResult): SignatureCheck {
   return { ok: true, reason: "valid", status, subject };
 }
 
-function powershellPath(): string {
+export function powershellPath(): string {
   return path.win32.join(
     process.env.SystemRoot || "C:\\Windows",
     "System32",
