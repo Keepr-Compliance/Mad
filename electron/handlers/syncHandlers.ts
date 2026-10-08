@@ -16,7 +16,7 @@ import {
   SyncProgress,
   SyncResult,
 } from "../services/deviceSyncOrchestrator";
-import { iPhoneSyncStorageService } from "../services/iPhoneSyncStorageService";
+import { iPhoneSyncStorageService, attachmentSkipFields } from "../services/iPhoneSyncStorageService";
 import { autoLinkNewMessagesForUser, expandAttachedThreadsForUser } from "../services/autoLinkService";
 import sessionService from "../services/sessionService";
 import type { iOSDevice } from "../types/device";
@@ -567,6 +567,8 @@ function setupEventForwarding(): void {
           messages: persistResult.messagesStored,
           contacts: persistResult.contactsStored,
           attachments: persistResult.attachmentsStored,
+          // BACKLOG-3784: why attachments were skipped, on the sync-outcome line.
+          ...attachmentSkipFields(persistResult.attachmentsSkipped, persistResult.attachmentsSkippedByReason),
         });
 
         // Send final completion with storage results
