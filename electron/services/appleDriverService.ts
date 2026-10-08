@@ -896,7 +896,11 @@ function findFilesRecursive(
  */
 function validateShellPath(p: string): string {
   // Only allow alphanumeric, path separators, dots, hyphens, underscores, spaces
-  if (/[`$|;&<>(){}!\[\]'"\\*?~#]/.test(p)) {
+  // A backslash is the path separator on Windows (traversal is checked below),
+  // so it is only rejected where it is not one.
+  const unsafe =
+    path.sep === "\\" ? /[`$|;&<>(){}!\[\]'"*?~#]/ : /[`$|;&<>(){}!\[\]'"\\*?~#]/;
+  if (unsafe.test(p)) {
     throw new Error(`Unsafe characters in path: ${p}`);
   }
   // Reject path traversal sequences (.. as a path component)

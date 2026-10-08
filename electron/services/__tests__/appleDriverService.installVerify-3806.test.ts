@@ -116,12 +116,15 @@ import {
 
 const BUNDLED_DIR = path.join(__dirname, "../../../resources/win/apple-drivers");
 const BUNDLED_MSI = path.join(BUNDLED_DIR, "AppleMobileDeviceSupport64.msi");
-const DRIVERS_DIR = "/tmp/test-user-data/apple-drivers";
+// Built with path.join from the mocked app.getPath inputs, as production does,
+// so the expectations hold with either separator.
+const DRIVERS_DIR = path.join("/tmp/test-user-data", "apple-drivers");
 const EXTRACT_DIR = path.join(DRIVERS_DIR, "extracted");
 const DOWNLOADED_MSI = path.join(EXTRACT_DIR, "AppleMobileDeviceSupport64.msi");
 const INSTALLER_EXE = path.join(DRIVERS_DIR, "iTunes64Setup.exe");
 const BUNDLED_7ZA = path.join(__dirname, "../../../resources/win/7za.exe");
-const STAGING_DIR = "/tmp/os-temp/keepr-amds-RAND01";
+// mkdtempSync mock returns `${prefix}RAND01`; prefix is path.join(temp, "keepr-amds-").
+const STAGING_DIR = `${path.join("/tmp/os-temp", "keepr-amds-")}RAND01`;
 const STAGED_MSI = path.join(STAGING_DIR, "AppleMobileDeviceSupport64.msi");
 
 const ABS_POWERSHELL = path.win32.join(
