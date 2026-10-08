@@ -22,6 +22,11 @@ jest.mock("../../bootstrap/appDataPaths", () => ({
 const realLog = require("electron-log/node");
 
 const EMAIL = "jane.customer@example.com";
+
+/** A class instance argument (not a plain object). */
+class ContactRef {
+  constructor(public email: string) {}
+}
 const PHONE = "+1 (555) 555-0142";
 
 describe("BACKLOG-3819: the electron-log sink redacts emails and phones", () => {
@@ -71,7 +76,7 @@ describe("BACKLOG-3819: the electron-log sink redacts emails and phones", () => 
     realLog.info(`[Main] contact ${EMAIL} phone ${PHONE}`, {
       handle: "+15555550177",
       nested: { list: ["555-555-0188", { email: "bob.x@example.org" }] },
-      url: new URL("https://example.com/c?email=carol.y@example.net"),
+      contact: new ContactRef("carol.y@example.net"),
       map: new Map([["k", "dan.z@example.com"]]),
     });
     realLog.error("[Main] failure", err);
@@ -86,7 +91,7 @@ describe("BACKLOG-3819: the electron-log sink redacts emails and phones", () => 
     expect(text).toContain("***88");
     expect(text).toContain("b***@example.org");
     // class instances keep their content (printed form), redacted
-    expect(text).toContain("example.com/c?email=c***@example.net");
+    expect(text).toContain("ContactRef { email: 'c***@example.net' }");
     // the caller's Error is not mutated
     expect(err.message).toContain(EMAIL);
   });
