@@ -687,7 +687,6 @@ export class SyncTimeline {
     this.sink(`[SyncTimeline] mark name=${name}${formatted ? " " + formatted : ""}`);
   }
 
-  /** Every phase of the current (or just-finished) sync, in order. */
   /**
    * BACKLOG-3784: main is about to send `sync:storage-complete`. Stamped so the
    * renderer's completion ack can be measured against the send, not the sync end.
@@ -771,6 +770,7 @@ export class SyncTimeline {
     return null;
   }
 
+  /** Every phase of the current (or just-finished) sync, in order. */
   records(): SyncPhaseRecord[] {
     return this.phaseRecords.map((r) => ({ ...r, counts: { ...r.counts } }));
   }

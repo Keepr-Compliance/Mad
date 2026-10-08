@@ -715,12 +715,6 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     };
   }, [enabled]);
 
-  // BACKLOG-1919: Proactive Apple-driver recovery check (Windows).
-  //
-  // The original incident: an iPhone user reached the "Connect Your iPhone"
-  // screen but the driver was never installed (onboarding skipped or the UAC
-  // prompt declined), so USB enumeration returns 0 devices forever and the UI
-  // gave no guidance. Here, whenever the integration is enabled on Windows and
   // BACKLOG-3784: RENDERER HEARTBEAT. While a sync is in progress, tick main once a
   // second. Main is silent while ticks arrive and logs one `renderer-gap` line when
   // they resume after > 3 s, so a renderer freeze is bracketed to the second.
@@ -778,6 +772,12 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     }
   }, [syncStatus]);
 
+  // BACKLOG-1919: Proactive Apple-driver recovery check (Windows).
+  //
+  // The original incident: an iPhone user reached the "Connect Your iPhone"
+  // screen but the driver was never installed (onboarding skipped or the UAC
+  // prompt declined), so USB enumeration returns 0 devices forever and the UI
+  // gave no guidance. Here, whenever the integration is enabled on Windows and
   // no device is currently connected, we check `drivers.checkApple()`. If the
   // driver is absent we surface `driverMissing` (the Connect screen then shows
   // an inline install button) — a nudge that also covers the post-onboarding /

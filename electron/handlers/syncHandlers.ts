@@ -217,7 +217,6 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
     return { success: true };
   });
 
-  // BACKLOG-3784: renderer reports the sync completion UI was shown. Telemetry only.
   // BACKLOG-3784: renderer heartbeat during an iPhone sync. Silent unless a gap.
   ipcMain.removeAllListeners("sync:renderer-tick");
   ipcMain.on("sync:renderer-tick", (_event, tick: unknown) => {
@@ -229,6 +228,7 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
     }
   });
 
+  // BACKLOG-3784: renderer reports the sync completion UI was shown. Telemetry only.
   ipcMain.removeAllListeners("sync:completion-shown");
   ipcMain.on("sync:completion-shown", (_event, ack: unknown) => {
     try {
