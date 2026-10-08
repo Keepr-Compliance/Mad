@@ -202,7 +202,7 @@ describe("third-party notices (BACKLOG-3803)", () => {
     });
 
     it("the opening does not claim complete source for components without a pinned recipe", () => {
-      const txt = readFileSync(path.join(ROOT, "THIRD_PARTY_NOTICES.txt"), "utf8");
+      const txt = readFileSync(path.join(ROOT, "THIRD_PARTY_NOTICES.md"), "utf8");
       expect(txt).not.toMatch(/complete source/i);
       expect(txt).toMatch(/outside the npm dependency tree/);
     });
