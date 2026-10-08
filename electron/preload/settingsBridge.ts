@@ -191,4 +191,12 @@ export const shellBridge = {
    */
   openFolder: (folderPath: string) =>
     ipcRenderer.invoke("open-folder", folderPath),
+
+  /**
+   * Opens the bundled third-party notices file (BACKLOG-3803).
+   * No arguments: the main process decides which file to open.
+   * @returns Open result
+   */
+  openThirdPartyNotices: () =>
+    ipcRenderer.invoke("shell:open-third-party-notices"),
 };
