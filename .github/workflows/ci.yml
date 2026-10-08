@@ -168,7 +168,7 @@ jobs:
     needs: check-changes
     if: needs.check-changes.outputs.docs-only != 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30  # Prevent CI from running indefinitely
+    timeout-minutes: 45  # Windows test runs take ~25-30 min; 30 cancelled them (BACKLOG-3794)
 
     strategy:
       fail-fast: false
