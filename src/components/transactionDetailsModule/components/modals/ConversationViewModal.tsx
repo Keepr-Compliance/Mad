@@ -180,9 +180,15 @@ function AttachmentImage({
         ref={placeholderRef}
         data-testid="attachment-image-pending"
         data-attachment-id={attachment.id}
+        aria-busy="true"
         className="w-48 h-32 flex items-center justify-center bg-gray-100 rounded-lg"
       >
-        <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
+        <div
+          data-testid="attachment-image-spinner"
+          role="status"
+          aria-label="Loading image"
+          className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin"
+        />
       </div>
     );
   }
@@ -191,7 +197,8 @@ function AttachmentImage({
     // Show placeholder for missing/failed attachments
     return (
       <div
-        className={`text-xs italic ${isOutbound ? "text-green-100" : "text-gray-400"}`}
+        data-testid="attachment-image-failed"
+        className={`w-48 h-32 flex items-center justify-center text-center px-2 text-xs italic rounded-lg ${isOutbound ? "text-green-100" : "text-gray-400 bg-gray-100"}`}
       >
         [Image: {attachment.filename || "attachment"}]
       </div>

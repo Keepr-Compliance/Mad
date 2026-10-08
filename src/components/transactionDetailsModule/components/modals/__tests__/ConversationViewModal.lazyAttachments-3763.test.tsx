@@ -177,4 +177,38 @@ describe("ConversationViewModal lazy attachment bytes (BACKLOG-3763)", () => {
 
     expect(await screen.findByText("[Image: IMG_0.jpg]")).toBeInTheDocument();
   });
+
+  it("shows a busy placeholder with a spinner until the bytes arrive, then the image", async () => {
+    let resolve!: (v: unknown) => void;
+    mockGetMessageAttachmentData.mockImplementation(
+      () => new Promise((r) => { resolve = r; }),
+    );
+    renderModal();
+    await screen.findAllByTestId("attachment-image-pending");
+    const slot = pendingFor("att-3763-3");
+    expect(slot).toHaveAttribute("aria-busy", "true");
+    expect(slot.querySelector('[data-testid="attachment-image-spinner"]')).not.toBeNull();
+
+    scrollIntoView(slot);
+    await waitFor(() => expect(mockGetMessageAttachmentData).toHaveBeenCalledTimes(1));
+    // Bytes still outstanding: spinner placeholder still there, no image.
+    expect(document.querySelector('[data-attachment-id="att-3763-3"]')).not.toBeNull();
+    expect(screen.queryByAltText("IMG_3.jpg")).toBeNull();
+
+    await act(async () => {
+      resolve({ success: true, data: "X", mime_type: "image/jpeg" });
+    });
+    expect(await screen.findByAltText("IMG_3.jpg")).toBeInTheDocument();
+    expect(document.querySelector('[data-attachment-id="att-3763-3"]')).toBeNull();
+  });
+
+  it("replaces the spinner with a failed state (no busy flag) when loading fails", async () => {
+    mockGetMessageAttachmentData.mockResolvedValue({ success: false, reason: "too_large" });
+    renderModal();
+    await screen.findAllByTestId("attachment-image-pending");
+    scrollIntoView(pendingFor("att-3763-1"));
+    expect(await screen.findByText("[Image: IMG_1.jpg]")).toBeInTheDocument();
+    expect(document.querySelector('[data-attachment-id="att-3763-1"]')).toBeNull();
+    expect(screen.getAllByTestId("attachment-image-failed")).toHaveLength(1);
+  });
 });
