@@ -84,6 +84,26 @@ export interface MessageAttachmentInfo {
   data: string | null;
 }
 
+/**
+ * BACKLOG-3763: attachment metadata the conversation view receives. No file
+ * bytes — each image's bytes are requested on demand by attachment id.
+ */
+export type MessageAttachmentMeta = Omit<MessageAttachmentInfo, "data">;
+
+/** Why `messages:get-attachment-data` did not return bytes (BACKLOG-3763). */
+export type TextAttachmentDataRefusal =
+  | "invalid_id"
+  | "not_signed_in"
+  | "not_found"
+  | "outside_app_data"
+  | "missing_file"
+  | "too_large";
+
+/** Reply of `messages:get-attachment-data` (BACKLOG-3763). */
+export type TextAttachmentDataResult =
+  | { success: true; data: string; mime_type: string | null }
+  | { success: false; reason: TextAttachmentDataRefusal };
+
 // ============================================
 // IPC RESULT TYPE GUARDS
 // ============================================

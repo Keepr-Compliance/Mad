@@ -3,7 +3,12 @@
  * iMessage/SMS and Outlook integration methods
  */
 
-import type { ConversationSummary, MessageAttachmentInfo } from "./common";
+import type {
+  ConversationSummary,
+  MessageAttachmentInfo,
+  MessageAttachmentMeta,
+  TextAttachmentDataResult,
+} from "./common";
 // BACKLOG-2743: ONE definition of the refusal shape. Re-exported here so the
 // renderer imports it from the IPC contract rather than re-spelling the literal.
 import type { AttachmentsRefusedForSpace } from "../../services/macOSMessagesImportService/types";
@@ -256,7 +261,9 @@ export interface WindowApiMessages {
   /** Get attachments for a message with base64 data (TASK-1012) */
   getMessageAttachments: (messageId: string) => Promise<MessageAttachmentInfo[]>;
   /** Get attachments for multiple messages at once (TASK-1012) */
-  getMessageAttachmentsBatch: (messageIds: string[]) => Promise<Record<string, MessageAttachmentInfo[]>>;
+  getMessageAttachmentsBatch: (messageIds: string[]) => Promise<Record<string, MessageAttachmentMeta[]>>;
+  /** One text attachment's bytes by attachment id (BACKLOG-3763) */
+  getMessageAttachmentData: (attachmentId: string) => Promise<TextAttachmentDataResult>;
   /** Repair attachment message_id mappings without full re-import */
   repairAttachments: () => Promise<{
     total: number;
