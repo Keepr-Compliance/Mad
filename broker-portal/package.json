@@ -13,7 +13,6 @@
     "@azure/identity": "^4.13.1",
     "@keepr/design-system": "file:../packages/design-system",
     "@keepr/ui": "file:../packages/ui",
-    "@microsoft/clarity": "^1.0.2",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@sentry/nextjs": "^10.49.0",
     "@supabase/ssr": "^0.10.2",
