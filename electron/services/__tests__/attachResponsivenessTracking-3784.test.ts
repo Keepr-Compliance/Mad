@@ -26,7 +26,9 @@ function setup(dialogChoice: number) {
     getPhase: () => "storing",
   });
   attachResponsivenessTracking(win, tracker, actions);
-  const flush = () => new Promise((r) => setImmediate(r));
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
   return { win, logs, captures, actions, flush, at: (ms: number) => (t = ms) };
 }
 
