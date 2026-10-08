@@ -208,7 +208,7 @@ export function SupportWidget() {
       <button
         onClick={handleOpen}
         disabled={capturing}
-        className="fixed bottom-6 left-[calc(var(--sidebar-w,0px)_+_1.5rem)] z-50 w-12 h-12 bg-primary-600 text-white rounded-full shadow-lg hover:bg-primary-700 transition-all hover:scale-105 flex items-center justify-center text-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-70"
+        className="fixed bottom-[calc(var(--review-bar-h,0px)_+_1rem)] right-4 left-auto md:bottom-6 md:right-auto md:left-[calc(var(--sidebar-w,0px)_+_1.5rem)] z-50 w-12 h-12 bg-primary-600 text-white rounded-full shadow-lg hover:bg-primary-700 transition-all hover:scale-105 flex items-center justify-center text-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-70"
         title="Contact Support"
         aria-label="Contact Support"
       >
