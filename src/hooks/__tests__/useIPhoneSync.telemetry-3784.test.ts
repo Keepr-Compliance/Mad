@@ -134,6 +134,35 @@ describe("useIPhoneSync telemetry (BACKLOG-3784)", () => {
       expect(syncApi.reportCompletionShown).toHaveBeenCalledTimes(1);
     });
 
+    it("a later sync that ends in a storage error sends no stale ack", () => {
+      const storageErrorCbs: Cb[] = [];
+      syncApi.onStorageError = jest.fn((cb: Cb) => {
+        storageErrorCbs.push(cb);
+        return jest.fn();
+      });
+      renderHook(() => useIPhoneSync());
+      syncStateRef.isActive = true;
+      act(() => {
+        storageCompleteCb?.({ messagesStored: 37, contactsStored: 0, duration: 100 });
+      });
+      act(() => {
+        jest.advanceTimersByTime(50);
+      });
+      expect(syncApi.reportCompletionShown).toHaveBeenCalledTimes(1);
+
+      // Next sync: extraction done (status back to syncing), then storage fails.
+      act(() => {
+        completeCb?.({ success: true, messageCount: 1, contactCount: 0, conversationCount: 1 });
+      });
+      act(() => {
+        storageErrorCbs[storageErrorCbs.length - 1]?.({ error: "Database write failed" });
+      });
+      act(() => {
+        jest.advanceTimersByTime(50);
+      });
+      expect(syncApi.reportCompletionShown).toHaveBeenCalledTimes(1);
+    });
+
     it("sends no ack when storage did not complete", () => {
       renderHook(() => useIPhoneSync());
       syncStateRef.isActive = true;
