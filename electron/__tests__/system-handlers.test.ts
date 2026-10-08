@@ -17,6 +17,9 @@ import type { IpcMainInvokeEvent } from "electron";
 const mockIpcHandle = jest.fn();
 const mockShellOpenExternal = jest.fn();
 const mockShellShowItemInFolder = jest.fn();
+const mockShellOpenPath = jest.fn();
+// BACKLOG-3803: dev path of the third-party notices resolves against the repo root.
+const mockGetAppPath = jest.fn();
 
 // Mock os module to simulate macOS for health check tests
 jest.mock("os", () => ({
@@ -34,6 +37,7 @@ jest.mock("electron", () => ({
     setAsDefaultProtocolClient: jest.fn(),
     requestSingleInstanceLock: jest.fn().mockReturnValue(true),
     isPackaged: false,
+    getAppPath: mockGetAppPath,
     quit: jest.fn(),
     on: jest.fn(),
     whenReady: jest.fn().mockResolvedValue(undefined),
@@ -41,6 +45,7 @@ jest.mock("electron", () => ({
   shell: {
     openExternal: mockShellOpenExternal,
     showItemInFolder: mockShellShowItemInFolder,
+    openPath: mockShellOpenPath,
   },
   BrowserWindow: jest.fn(),
   dialog: { showErrorBox: jest.fn() },
@@ -1191,6 +1196,41 @@ describe("System Handlers", () => {
   });
 
   describe("Shell Operations", () => {
+    // BACKLOG-3803: Settings > About "Third-Party Notices"
+    describe("shell:open-third-party-notices", () => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const path = require("path") as typeof import("path");
+      const repoRoot = path.resolve(__dirname, "..", "..");
+
+      it("opens the repo's notices file in development and takes no renderer path", async () => {
+        mockGetAppPath.mockReturnValue(repoRoot);
+        mockShellOpenPath.mockResolvedValue("");
+        const handler = registeredHandlers.get("shell:open-third-party-notices");
+        const result = await handler(mockEvent, "/etc/passwd");
+        expect(result).toEqual({ success: true });
+        expect(mockShellOpenPath).toHaveBeenCalledTimes(1);
+        expect(mockShellOpenPath).toHaveBeenCalledWith(
+          path.join(repoRoot, "resources", "third-party", "THIRD_PARTY_NOTICES.txt"),
+        );
+      });
+
+      it("reports failure without opening anything when the file is absent", async () => {
+        mockGetAppPath.mockReturnValue("/nonexistent-3803");
+        const handler = registeredHandlers.get("shell:open-third-party-notices");
+        const result = await handler(mockEvent);
+        expect(result.success).toBe(false);
+        expect(mockShellOpenPath).not.toHaveBeenCalled();
+      });
+
+      it("passes the OS error back when the file cannot be opened", async () => {
+        mockGetAppPath.mockReturnValue(repoRoot);
+        mockShellOpenPath.mockResolvedValue("No application is associated");
+        const handler = registeredHandlers.get("shell:open-third-party-notices");
+        const result = await handler(mockEvent);
+        expect(result).toEqual({ success: false, error: "No application is associated" });
+      });
+    });
+
     describe("shell:open-external", () => {
       beforeEach(() => {
         mockShellOpenExternal.mockReset();

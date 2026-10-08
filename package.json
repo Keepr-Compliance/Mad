@@ -226,6 +226,16 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
+      "extraResources": [
+        {
+          "from": "node_modules/electron/dist/LICENSES.chromium.html",
+          "to": "third-party/LICENSES.chromium.html"
+        },
+        {
+          "from": "node_modules/electron/dist/LICENSE",
+          "to": "third-party/LICENSE.electron.txt"
+        }
+      ],
       "target": [
         {
           "target": "dmg",
@@ -292,6 +302,13 @@
       {
         "from": "scripts/cleanup-windows.ps1",
         "to": "cleanup-windows.ps1"
+      },
+      {
+        "from": "resources/third-party",
+        "to": "third-party",
+        "filter": [
+          "**/*"
+        ]
       }
     ]
   },
