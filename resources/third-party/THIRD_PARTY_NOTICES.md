@@ -9,7 +9,7 @@ This file is generated from components.json. Do not edit it by hand.
 Several components below are licensed under the GNU Lesser General Public License (LGPL) or the GNU General Public License (GPL). Keepr does not modify them. Keepr starts the iPhone tools for Windows as separate programs; it does not link them into Keepr itself.
 
 - The files in the iPhone tools folder are unmodified copies of the imobiledevice-net v1.3.17 release (https://github.com/libimobiledevice-win32/imobiledevice-net/releases/tag/v1.3.17, asset libimobiledevice.1.2.1-r1122-win-x64.zip, sha256 d7cb57a71270848c35c3f01006701535aadf6dfb52325863ea368c94a34a2cab).
-- Under each component below, the source line names where its source can be found. For components marked with a pinned commit, that is the repository and commit. For the libraries built by the vcpkg package manager (libiconv, libusb, libusb-win32, readline, getopt-win32 and the other libraries in that group), it is the upstream project at the identified version; the exact build recipe used for those binaries is not recorded.
+- Under each component below, the source line names where its source can be found. For components marked with a pinned commit, that is the repository and commit. For the libraries built by the vcpkg package manager (libiconv, libusb, libusb-win32, getopt-win32 and the other libraries in that group), it is the upstream project at the identified version; the exact build recipe used for those binaries is not recorded.
 - You may replace any LGPL-licensed library in that folder with your own modified version built from that source. Keepr loads whatever is in the folder.
 
 Where the iPhone tools folder is on your computer:
@@ -24,13 +24,9 @@ Where the iPhone tools folder is on your computer:
 | libimobiledevice (library and idevice* tools) | imobiledevice-net build 1.2.1-r1122 | LGPL-2.1-or-later | Windows, macOS |
 | libplist (library and plist tools) | imobiledevice-net build 1.2.1-r1122 | LGPL-2.1-or-later | Windows, macOS |
 | libusbmuxd (library) | imobiledevice-net build 1.2.1-r1122 | LGPL-2.1-or-later | Windows, macOS |
-| iproxy (libusbmuxd tool) | imobiledevice-net build 1.2.1-r1122 | GPL-2.0-or-later | Windows, macOS |
-| usbmuxd (daemon) | 1.1.1 | GPL-2.0-only OR GPL-3.0-only | Windows, macOS |
 | libirecovery (library and irecovery tool) | imobiledevice-net build 1.2.1-r1122 | LGPL-2.1-or-later | Windows, macOS |
 | idevicerestore | imobiledevice-net build 1.2.1-r1122 | LGPL-3.0 | Windows, macOS |
-| ideviceinstaller | imobiledevice-net build 1.2.1-r1122 | GPL-2.0-or-later | Windows, macOS |
 | libideviceactivation (library) | imobiledevice-net build 1.2.1-r1122 | LGPL-2.1-or-later | Windows, macOS |
-| ideviceactivation (tool) | imobiledevice-net build 1.2.1-r1122 | GPL-3.0-or-later | Windows, macOS |
 | ios_webkit_debug_proxy | imobiledevice-net build 1.2.1-r1122 | BSD-3-Clause | Windows, macOS |
 | imobiledevice-net helper (imobiledevice-net-lighthouse.dll) | v1.3.17 | LGPL-2.1 | Windows, macOS |
 | OpenSSL | 1.1.1i | OpenSSL AND SSLeay | Windows, macOS |
@@ -45,7 +41,6 @@ Where the iPhone tools folder is on your computer:
 | PCRE | 8.44 | BSD-3-Clause | Windows, macOS |
 | bzip2 (libbzip2) | 1.0.8 | bzip2-1.0.6 | Windows, macOS |
 | libzip | 1.7.3 | BSD-3-Clause | Windows, macOS |
-| GNU readline (readline-win32 port) | 5.0 | GPL-2.0-or-later | Windows, macOS |
 | getopt-win32 (getopt for Microsoft C, by Ludvik Jerabek) | 0.1 | LGPL-3.0 | Windows, macOS |
 | Microsoft Visual C++ 2015 Runtime (vcruntime140.dll) | 14.00.24406.0 | LicenseRef-Proprietary | Windows, macOS |
 | Apple Mobile Device Support | see win/apple-drivers/version.txt in the installed app | LicenseRef-Proprietary | Windows |
@@ -88,28 +83,6 @@ Where the iPhone tools folder is on your computer:
 - Files: usbmuxd.dll
 - Licence text: [GNU Lesser General Public License v2.1](licenses/LGPL-2.1.txt)
 
-### iproxy (libusbmuxd tool)
-
-- Version: imobiledevice-net build 1.2.1-r1122 (pinned source commit (gitinfo))
-- Licence: GPL-2.0-or-later (tools/iproxy.c header at the pinned commit)
-- Copyright: Copyright (C) 2009-2020 Nikias Bassen, Martin Szulecki, Paul Sladen; based upon iTunnel, Copyright (c) 2008 Jing Su
-- Project: https://github.com/libimobiledevice/libusbmuxd
-- Source code (pinned commit): https://github.com/libimobiledevice-win32/libusbmuxd/tree/ac86b23f57879b8b702f3712ba66729008d059a3, commit ac86b23f57879b8b702f3712ba66729008d059a3, dated 2020-06-12
-- Shipped as part of: imobiledevice-net v1.3.17
-- Files: iproxy.exe
-- Licence text: [GNU General Public License v2.0](licenses/GPL-2.0.txt)
-
-### usbmuxd (daemon)
-
-- Version: 1.1.1 (version string inside usbmuxd.exe)
-- Licence: GPL-2.0-only OR GPL-3.0-only (src/main.c header at the pinned commit ("either version 2 or version 3"))
-- Copyright: Copyright (C) 2009-2019 Nikias Bassen, Martin Szulecki, Hector Martin, Paul Sladen, Frederik Carlier
-- Project: https://github.com/libimobiledevice/usbmuxd
-- Source code (pinned commit): https://github.com/libimobiledevice-win32/usbmuxd/tree/f1329e742825c93fd080bdb8253d710ef8b6f751, commit f1329e742825c93fd080bdb8253d710ef8b6f751, dated 2020-06-18
-- Shipped as part of: imobiledevice-net v1.3.17
-- Files: usbmuxd.exe
-- Licence text: [GNU General Public License v2.0](licenses/GPL-2.0.txt); [GNU General Public License v3.0](licenses/GPL-3.0.txt)
-
 ### libirecovery (library and irecovery tool)
 
 - Version: imobiledevice-net build 1.2.1-r1122 (pinned source commit (gitinfo))
@@ -132,17 +105,6 @@ Where the iPhone tools folder is on your computer:
 - Files: idevicerestore.exe
 - Licence text: [GNU Lesser General Public License v3.0](licenses/LGPL-3.0.txt); [GNU General Public License v3.0](licenses/GPL-3.0.txt)
 
-### ideviceinstaller
-
-- Version: imobiledevice-net build 1.2.1-r1122 (pinned source commit (gitinfo))
-- Licence: GPL-2.0-or-later (src/ideviceinstaller.c header at the pinned commit)
-- Copyright: Copyright (C) 2010-2019 Nikias Bassen, Martin Szulecki
-- Project: https://github.com/libimobiledevice/ideviceinstaller
-- Source code (pinned commit): https://github.com/libimobiledevice-win32/ideviceinstaller/tree/bebe20120657a1bfc3343beb85e59f809f6f5f07, commit bebe20120657a1bfc3343beb85e59f809f6f5f07, dated 2020-08-25
-- Shipped as part of: imobiledevice-net v1.3.17
-- Files: ideviceinstaller.exe
-- Licence text: [GNU General Public License v2.0](licenses/GPL-2.0.txt)
-
 ### libideviceactivation (library)
 
 - Version: imobiledevice-net build 1.2.1-r1122 (pinned source commit (gitinfo))
@@ -153,17 +115,6 @@ Where the iPhone tools folder is on your computer:
 - Shipped as part of: imobiledevice-net v1.3.17
 - Files: ideviceactivation.dll
 - Licence text: [GNU Lesser General Public License v2.1](licenses/LGPL-2.1.txt)
-
-### ideviceactivation (tool)
-
-- Version: imobiledevice-net build 1.2.1-r1122 (pinned source commit (gitinfo))
-- Licence: GPL-3.0-or-later (tools/ideviceactivation.c header at the pinned commit)
-- Copyright: Copyright (c) 2011-2019 Nikias Bassen, Martin Szulecki, Mirell Development
-- Project: https://github.com/libimobiledevice/libideviceactivation
-- Source code (pinned commit): https://github.com/libimobiledevice-win32/libideviceactivation/tree/fbe0476cfeddc2fc317ceb900eec12302c1d4c11, commit fbe0476cfeddc2fc317ceb900eec12302c1d4c11, dated 2020-06-15
-- Shipped as part of: imobiledevice-net v1.3.17
-- Files: ideviceactivation.exe
-- Licence text: [GNU General Public License v3.0](licenses/GPL-3.0.txt)
 
 ### ios_webkit_debug_proxy
 
@@ -332,19 +283,6 @@ Where the iPhone tools folder is on your computer:
 - Files: zip.dll
 - Licence text: [libzip licence (BSD-3-Clause)](licenses/BSD-3-Clause-libzip.txt)
 
-### GNU readline (readline-win32 port)
-
-- Version: 5.0 (vcpkg readline-win32 port (readline.pdb path in the DLL); port pins lltcggie/readline ea414b4)
-- Licence: GPL-2.0-or-later (COPYING of readline 5.0 in the port source)
-- Copyright: Copyright (C) 1987-2004 Free Software Foundation, Inc.
-- Project: https://tiswww.case.edu/php/chet/readline/rltop.html
-- Upstream project: https://github.com/lltcggie/readline/tree/ea414b4e98475e3976198738061824e8a8379a50
-  (upstream project at the identified version; the exact build recipe is not recorded)
-- Shipped as part of: imobiledevice-net v1.3.17
-- Files: readline.dll
-- Licence text: [GNU General Public License v2.0 (copy shipped by GNU readline 5.0)](licenses/GPL-2.0-readline.txt)
-- Note: Only irecovery.exe loads this library. Keepr does not run irecovery.exe.
-
 ### getopt-win32 (getopt for Microsoft C, by Ludvik Jerabek)
 
 - Version: 0.1 (vcpkg getopt-win32 port pins libimobiledevice-win32/getopt tag 0.1)
@@ -406,8 +344,6 @@ Each file is copied verbatim from the upstream source shown.
 - licenses/LGPL-2.0-libiconv.txt: GNU Library General Public License v2 (libiconv COPYING.LIB). From https://ftp.gnu.org/gnu/libiconv/libiconv-1.16.tar.gz (libiconv-1.16/COPYING.LIB)
 - licenses/LGPL-3.0.txt: GNU Lesser General Public License v3.0. From https://raw.githubusercontent.com/libimobiledevice-win32/idevicerestore/5e4e8d8095672f25f40ce9c0c347e31e4b89ab64/COPYING
 - licenses/LGPL-3.0-getopt-win32.txt: GNU Lesser General Public License v3.0 (copy shipped by getopt-win32). From https://raw.githubusercontent.com/libimobiledevice-win32/getopt/0.1/LICENSE
-- licenses/GPL-2.0.txt: GNU General Public License v2.0. From https://raw.githubusercontent.com/libimobiledevice-win32/usbmuxd/f1329e742825c93fd080bdb8253d710ef8b6f751/COPYING.GPLv2
-- licenses/GPL-2.0-readline.txt: GNU General Public License v2.0 (copy shipped by GNU readline 5.0). From https://raw.githubusercontent.com/lltcggie/readline/ea414b4e98475e3976198738061824e8a8379a50/src/readline/5.0/readline-5.0-src/COPYING
 - licenses/GPL-3.0.txt: GNU General Public License v3.0. From https://raw.githubusercontent.com/libimobiledevice-win32/usbmuxd/f1329e742825c93fd080bdb8253d710ef8b6f751/COPYING.GPLv3
 - licenses/BSD-3-Clause-ios-webkit-debug-proxy.txt: Google BSD licence (ios-webkit-debug-proxy). From https://raw.githubusercontent.com/libimobiledevice-win32/ios-webkit-debug-proxy/5ef16d17408aa5455003b0d10241ef87d415c751/LICENSE.md
 - licenses/OpenSSL-SSLeay.txt: OpenSSL License and original SSLeay License (dual). From https://raw.githubusercontent.com/openssl/openssl/OpenSSL_1_1_1i/LICENSE

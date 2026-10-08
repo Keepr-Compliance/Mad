@@ -70,8 +70,8 @@ describe("third-party notices (BACKLOG-3803)", () => {
       .split("\n")
       .filter((f) => /\.(exe|dll)$/i.test(f))
       .map((f) => path.basename(f));
-    // 27 .exe + 23 .dll measured at authoring time; identity, not just the count.
-    expect(shipped).toHaveLength(50);
+    // 23 .exe + 22 .dll after BACKLOG-3812 removed five unused tools; identity, not just the count.
+    expect(shipped).toHaveLength(45);
     expect([...listed].sort()).toEqual([...shipped].sort());
   });
 

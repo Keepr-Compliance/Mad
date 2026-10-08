@@ -83,7 +83,7 @@ function render(data, { withTexts = false, readLicence } = {}) {
     );
   }
   out.push(
-    "- Under each component below, the source line names where its source can be found. For components marked with a pinned commit, that is the repository and commit. For the libraries built by the vcpkg package manager (libiconv, libusb, libusb-win32, readline, getopt-win32 and the other libraries in that group), it is the upstream project at the identified version; the exact build recipe used for those binaries is not recorded.",
+    "- Under each component below, the source line names where its source can be found. For components marked with a pinned commit, that is the repository and commit. For the libraries built by the vcpkg package manager (libiconv, libusb, libusb-win32, getopt-win32 and the other libraries in that group), it is the upstream project at the identified version; the exact build recipe used for those binaries is not recorded.",
   );
   out.push(
     "- You may replace any LGPL-licensed library in that folder with your own modified version built from that source. Keepr loads whatever is in the folder.",

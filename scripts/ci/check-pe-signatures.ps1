@@ -16,6 +16,7 @@
 
   Per-root floors stop an empty or partial unpack from passing green. The
   measured counts for v2.38.1 are outer 7, app 64, uninst 4 (+1 installer).
+  BACKLOG-3812 removed 5 PE files from the iPhone tools folder: app 64 -> 59.
 
   Exit code: 0 = every file Valid and every floor met; 1 = anything else.
 
@@ -41,8 +42,9 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-# Minimum PE files each unpack root must contribute (v2.38.1 measured 7 / 64 / 4).
-$Floors = [ordered]@{ outer = 7; app = 60; uninst = 4 }
+# Minimum PE files each unpack root must contribute (v2.38.1 measured 7 / 64 / 4;
+# app is 59 after BACKLOG-3812).
+$Floors = [ordered]@{ outer = 7; app = 55; uninst = 4 }
 
 function Fail([string]$msg) {
   Write-Host "::error::$msg"
