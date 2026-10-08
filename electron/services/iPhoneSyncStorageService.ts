@@ -820,12 +820,15 @@ class IPhoneSyncStorageService {
           data: { error: error instanceof Error ? error.message : String(error) },
         });
         skipped++;
-      }
-
-      // Report progress
-      if ((i + 1) % 100 === 0 || i === attachmentsToStore.length - 1) {
-        onProgress?.(i + 1, attachmentsToStore.length);
-        await yieldToEventLoop();
+      } finally {
+        // Report progress. BACKLOG-3784: in `finally` so it also runs for SKIPPED
+        // attachments — every skip above `continue`s, and before this a run of
+        // already-stored attachments (an incremental sync) never reported progress
+        // and never yielded the event loop. Same throttle as before.
+        if ((i + 1) % 100 === 0 || i === attachmentsToStore.length - 1) {
+          onProgress?.(i + 1, attachmentsToStore.length);
+          await yieldToEventLoop();
+        }
       }
     }
 

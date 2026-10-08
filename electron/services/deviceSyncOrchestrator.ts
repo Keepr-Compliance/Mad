@@ -602,7 +602,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // it can be recorded. The timeline keeps a high-water mark and the timestamp of
       // the last increase; the pair is what separates "57 GB moving slowly" from "2 GB
       // and then nothing" — the distinction the 2026-09-16 incident could not make.
-      syncTimeline.recordBytesTransferred(progress.bytesTransferred);
+      //
+      // BACKLOG-3784: TRANSFER EVENTS ONLY. backupService re-emits the TOTAL backup size
+      // as `bytesTransferred` on its `decrypting` and `finishing` events (the renderer's
+      // bar needs that). Recorded here, that total overwrote the high-water mark, so an
+      // incremental run that moved a few MB reported the whole 71 GB backup — and
+      // `bytesLastIncreasedAt` jumped to the end of every run. `backupBytes` already
+      // carries the total.
+      if (progress.phase === "transferring") {
+        syncTimeline.recordBytesTransferred(progress.bytesTransferred);
+      }
 
       // Calculate progress based on bytes transferred if we have estimated size
       let calculatedProgress = progress.percentComplete;

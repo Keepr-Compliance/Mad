@@ -232,6 +232,8 @@ import { runStartupHealthChecks } from "./services/startupHealthCheck";
 import { getInstallMode } from "./services/diagnostics/installMode";
 import { getHostArchitecture } from "./services/diagnostics/hostArchitecture";
 import { WINDOWS_ARM64_ARGV_TOKEN } from "./utils/windowsArm64";
+import { WindowResponsivenessTracker } from "./services/windowResponsivenessTracker";
+import { syncTimeline } from "./services/syncTimeline";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
 // The Windows one-click installer migrates a prior per-machine install to
@@ -1753,7 +1755,21 @@ app.whenReady().then(async () => {
       })();
     });
 
+    // BACKLOG-3784: pair `unresponsive` with `responsive` so a freeze has a length.
+    const responsivenessTracker = new WindowResponsivenessTracker({
+      log: (line) => log.info(line),
+      capture: (message, context) => {
+        Sentry.captureMessage(message, context);
+      },
+      getPhase: () => syncTimeline.currentPhase(),
+    });
+
+    mainWindow.on("responsive", () => {
+      responsivenessTracker.onResponsive();
+    });
+
     mainWindow.on("unresponsive", () => {
+      responsivenessTracker.onUnresponsive();
       void (async () => {
       console.warn("[Main] Window became unresponsive");
       log.warn("[Main] Window became unresponsive");

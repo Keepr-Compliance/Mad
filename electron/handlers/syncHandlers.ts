@@ -217,6 +217,36 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
     return { success: true };
   });
 
+  // BACKLOG-3784: renderer reports the sync completion UI was shown. Telemetry only.
+  // BACKLOG-3784: renderer heartbeat during an iPhone sync. Silent unless a gap.
+  ipcMain.removeAllListeners("sync:renderer-tick");
+  ipcMain.on("sync:renderer-tick", (_event, tick: unknown) => {
+    try {
+      const t = (tick && typeof tick === "object" ? tick : {}) as { first?: unknown; hidden?: unknown };
+      syncTimeline.noteRendererTick({ first: t.first === true, hidden: t.hidden === true });
+    } catch {
+      // Telemetry only.
+    }
+  });
+
+  ipcMain.removeAllListeners("sync:completion-shown");
+  ipcMain.on("sync:completion-shown", (_event, ack: unknown) => {
+    try {
+      const a = (ack && typeof ack === "object" ? ack : {}) as {
+        receivedAt?: unknown;
+        shownAt?: unknown;
+      };
+      syncTimeline.markCompletionShown({
+        receivedAt: typeof a.receivedAt === "number" ? a.receivedAt : undefined,
+        shownAt: typeof a.shownAt === "number" ? a.shownAt : undefined,
+      });
+    } catch (error) {
+      log.warn("[SyncHandlers] completion-shown ack failed; ignored", {
+        error: error instanceof Error ? error.message : "Unknown",
+      });
+    }
+  });
+
   // Force reset sync state (for recovery from stuck state)
   ipcMain.handle("sync:reset", () => {
     log.info("[SyncHandlers] Force resetting sync state");
@@ -541,6 +571,8 @@ function setupEventForwarding(): void {
 
         // Send final completion with storage results
         log.info("[SyncHandlers] Sending sync:storage-complete to renderer");
+        // BACKLOG-3784: stamp the send so the renderer's completion ack is measured from it.
+        syncTimeline.markStorageCompleteSent();
         sendToMainWindow("sync:storage-complete", {
           messagesStored: persistResult.messagesStored,
           contactsStored: persistResult.contactsStored,
@@ -673,6 +705,8 @@ export function cleanupSyncHandlers(): void {
   ipcMain.removeHandler("sync:start-detection");
   ipcMain.removeHandler("sync:stop-detection");
   ipcMain.removeHandler("sync:get-iphone-last-sync-time");
+  ipcMain.removeAllListeners("sync:completion-shown");
+  ipcMain.removeAllListeners("sync:renderer-tick");
 
   log.info("[SyncHandlers] Cleaned up sync handlers");
 }

@@ -12,6 +12,9 @@ import { syncOrchestrator } from '../services/SyncOrchestratorService';
 import { usePlatform } from '../contexts/PlatformContext';
 import { pickDisplayUnitIndex } from '../utils/transferByteUnit';
 
+/** BACKLOG-3784: renderer heartbeat interval during an iPhone sync. */
+const RENDERER_TICK_MS = 1_000;
+
 /**
  * BACKLOG-1773: Sync status poll backoff bounds.
  * The poll starts at BASE and doubles up to MAX whenever the sync IPC is
@@ -134,6 +137,9 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const cleanupRef = useRef<(() => void)[]>([]);
   // Track current progress phase for disconnect handler (avoids stale closure)
   const progressPhaseRef = useRef<BackupProgress["phase"] | null>(null);
+  // BACKLOG-3784: renderer clock when storage-complete was handled; consumed by the
+  // completion-shown ack below, then cleared so one sync sends one ack.
+  const storageCompleteReceivedAtRef = useRef<number | null>(null);
 
   /**
    * Check unified sync status to detect if another operation is running
@@ -341,6 +347,11 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
             syncProgress.phase === "resolving"
           ) {
             phase = "extracting";
+          } else if (syncProgress.phase === "storing") {
+            // BACKLOG-3784: main sends "storing" for every database-save tick
+            // (syncHandlers). Unmapped, it fell through to "backing_up" and the
+            // modal read "Exporting - Keep connected" while saving.
+            phase = "storing";
           } else if (syncProgress.phase === "complete") {
             phase = "complete";
           }
@@ -531,6 +542,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
             duration: result.duration,
           });
 
+          storageCompleteReceivedAtRef.current = Date.now();
           setSyncStatus("complete");
           setLastSyncTime(new Date());
           setProgress({
@@ -709,6 +721,63 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   // screen but the driver was never installed (onboarding skipped or the UAC
   // prompt declined), so USB enumeration returns 0 devices forever and the UI
   // gave no guidance. Here, whenever the integration is enabled on Windows and
+  // BACKLOG-3784: RENDERER HEARTBEAT. While a sync is in progress, tick main once a
+  // second. Main is silent while ticks arrive and logs one `renderer-gap` line when
+  // they resume after > 3 s, so a renderer freeze is bracketed to the second.
+  // Stops when the sync leaves "syncing" (complete, error, cancel, idle).
+  useEffect(() => {
+    if (syncStatus !== "syncing") return;
+    const api = window.api?.sync as
+      | { rendererTick?: (tick: { first: boolean; hidden: boolean }) => void }
+      | undefined;
+    if (!api?.rendererTick) return;
+    let first = true;
+    const tick = () => {
+      try {
+        api.rendererTick?.({
+          first,
+          hidden: typeof document !== "undefined" && document.visibilityState === "hidden",
+        });
+      } catch {
+        // Telemetry only.
+      }
+      first = false;
+    };
+    tick();
+    const id = setInterval(tick, RENDERER_TICK_MS);
+    return () => clearInterval(id);
+  }, [syncStatus]);
+
+  // BACKLOG-3784: COMPLETION-SHOWN ACK. Once the completion state has committed,
+  // wait for the next frame (rAF) and let it paint (setTimeout 0), then tell main
+  // with the renderer's own stamps. Main logs `[SyncTimeline] completion-shown`, which
+  // splits the gap between "main says complete" and "user sees complete" into
+  // delivery, render and ack legs. Telemetry only: a missing bridge or a throw is
+  // swallowed. Hook-level (not in the modal) so it fires when the modal is minimized.
+  useEffect(() => {
+    if (syncStatus !== "complete") return;
+    const receivedAt = storageCompleteReceivedAtRef.current;
+    if (receivedAt === null) return;
+    storageCompleteReceivedAtRef.current = null;
+    const send = () => {
+      try {
+        const api = window.api?.sync as
+          | { reportCompletionShown?: (ack: { receivedAt: number; shownAt: number }) => void }
+          | undefined;
+        api?.reportCompletionShown?.({ receivedAt, shownAt: Date.now() });
+      } catch (err) {
+        logger.warn("[useIPhoneSync] completion-shown ack failed:", err);
+      }
+    };
+    // No cleanup cancel: the ack is one-shot (the ref is already cleared) and must
+    // still go out if another render follows this commit before the frame fires.
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => setTimeout(send, 0));
+    } else {
+      setTimeout(send, 0);
+    }
+  }, [syncStatus]);
+
   // no device is currently connected, we check `drivers.checkApple()`. If the
   // driver is absent we surface `driverMissing` (the Connect screen then shows
   // an inline install button) — a nudge that also covers the post-onboarding /

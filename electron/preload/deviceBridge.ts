@@ -450,6 +450,22 @@ export const syncBridge = {
   },
 
   /**
+   * BACKLOG-3784: tells main the sync completion UI was shown. Telemetry only.
+   * @param ack - renderer wall-clock stamps (ms): storage-complete received, completion shown
+   */
+  reportCompletionShown: (ack: { receivedAt: number; shownAt: number }) => {
+    ipcRenderer.send("sync:completion-shown", ack);
+  },
+
+  /**
+   * BACKLOG-3784: renderer heartbeat while an iPhone sync is showing. Telemetry only.
+   * @param tick - first: first tick of this sync; hidden: document is hidden
+   */
+  rendererTick: (tick: { first: boolean; hidden: boolean }) => {
+    ipcRenderer.send("sync:renderer-tick", tick);
+  },
+
+  /**
    * Subscribes to storage error events
    * @param callback - Callback with error info
    * @returns Cleanup function to remove listener
