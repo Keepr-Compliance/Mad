@@ -99,11 +99,19 @@ jest.mock("better-sqlite3-multiple-ciphers", () =>
 );
 
 jest.mock("electron", () => ({
-  app: { getPath: jest.fn().mockReturnValue("/mock/userData"), isPackaged: false },
+  app: {
+    getPath: jest.fn().mockReturnValue("/mock/userData"),
+    isPackaged: false,
+  },
 }));
 
 jest.mock("electron-log", () => ({
-  default: { info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() },
+  default: {
+    info: jest.fn(),
+    debug: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  },
   info: jest.fn(),
   debug: jest.fn(),
   warn: jest.fn(),
@@ -121,7 +129,9 @@ jest.mock("fs", () => ({
     mkdir: jest.fn().mockResolvedValue(undefined),
     access: jest.fn().mockRejectedValue(new Error("Not found")),
     readdir: jest.fn().mockResolvedValue([]),
-    stat: jest.fn().mockRejectedValue(Object.assign(new Error("no"), { code: "ENOENT" })),
+    stat: jest
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("no"), { code: "ENOENT" })),
     rm: jest.fn().mockResolvedValue(undefined),
     readFile: jest.fn().mockResolvedValue("<plist></plist>"),
   },
@@ -181,7 +191,9 @@ function runBackup(script: (proc: FakeProcess) => void): Promise<BackupResult> {
 /** Drive the private per-line stderr classifier, as the stderr handler does. */
 function classify(service: BackupService, chunk: string): void {
   for (const line of chunk.split(/\r?\n/)) {
-    (service as unknown as { classifyStderrLine(l: string): void }).classifyStderrLine(line);
+    (
+      service as unknown as { classifyStderrLine(l: string): void }
+    ).classifyStderrLine(line);
   }
 }
 
@@ -189,9 +201,13 @@ function classify(service: BackupService, chunk: string): void {
 function everythingWritten(): string {
   const levels = ["info", "debug", "warn", "error"] as const;
   const logged = levels.flatMap((lvl) =>
-    (log[lvl] as jest.Mock).mock.calls.map((c: unknown[]) => c.map((a: unknown) => JSON.stringify(a)).join(" ")),
+    (log[lvl] as jest.Mock).mock.calls.map((c: unknown[]) =>
+      c.map((a: unknown) => JSON.stringify(a)).join(" "),
+    ),
   );
-  const crumbs = (Sentry.addBreadcrumb as jest.Mock).mock.calls.map((c) => JSON.stringify(c[0]));
+  const crumbs = (Sentry.addBreadcrumb as jest.Mock).mock.calls.map((c) =>
+    JSON.stringify(c[0]),
+  );
   return [...logged, ...crumbs].join("\n");
 }
 
@@ -212,7 +228,8 @@ describe("BACKLOG-3790: idevicebackup2 output is logged without plist dumps or a
       classify(service, DEVICE_PROPERTIES_DUMP);
       expect(warnedLines()).toEqual([]);
       const written = everythingWritten();
-      for (const marker of PRIVATE_MARKERS) expect(written).not.toContain(marker);
+      for (const marker of PRIVATE_MARKERS)
+        expect(written).not.toContain(marker);
       expect(written).not.toContain("<key>");
       expect(written).not.toContain("ZGlzayBzcGFjZSBzdG9yYWdlIGxvY2tlZA");
       expect(written).not.toContain("bG9ja2Vk");
@@ -231,7 +248,10 @@ describe("BACKLOG-3790: idevicebackup2 output is logged without plist dumps or a
         jest.clearAllMocks();
         const service = new BackupService();
         classify(service, line);
-        expect({ line, written: everythingWritten() }).toEqual({ line, written: "" });
+        expect({ line, written: everythingWritten() }).toEqual({
+          line,
+          written: "",
+        });
       }
     });
 
@@ -242,14 +262,19 @@ describe("BACKLOG-3790: idevicebackup2 output is logged without plist dumps or a
     });
 
     it("still warns on every genuine fault that follows a dump which lost its </plist>", () => {
-      const truncated = DEVICE_PROPERTIES_DUMP.split("\n").slice(0, 12).join("\n");
+      const truncated = DEVICE_PROPERTIES_DUMP.split("\n")
+        .slice(0, 12)
+        .join("\n");
       expect(truncated).not.toContain("</plist>");
       for (const fault of GENUINE_FAULTS) {
         jest.clearAllMocks();
         const service = new BackupService();
         classify(service, truncated);
         classify(service, fault);
-        expect({ fault, warned: warnedLines() }).toEqual({ fault, warned: [fault] });
+        expect({ fault, warned: warnedLines() }).toEqual({
+          fault,
+          warned: [fault],
+        });
       }
     });
 
@@ -262,7 +287,9 @@ describe("BACKLOG-3790: idevicebackup2 output is logged without plist dumps or a
       // "trust" lived only inside the bundle ID, so once redacted it no longer warns:
       // the line goes to the unrecognised-line breadcrumb, redacted.
       expect(warnedLines()).toEqual([]);
-      const crumbs = (Sentry.addBreadcrumb as jest.Mock).mock.calls.map((c) => c[0].message);
+      const crumbs = (Sentry.addBreadcrumb as jest.Mock).mock.calls.map(
+        (c) => c[0].message,
+      );
       expect(crumbs).toEqual([
         `ERROR: Could not start service com.apple.mobilebackup2 for ${REDACTED_APP_ID}`,
       ]);
@@ -326,16 +353,20 @@ ${GENUINE_FAULTS[0]}`;
     });
 
     it("drops the first line of a buffer that hit the cap, even a bare fragment", () => {
-      const out = redactIdeviceOutputForLog("ple.trustwallet\nERROR: Device is locked", {
-        headTruncated: true,
-      });
+      const out = redactIdeviceOutputForLog(
+        "ple.trustwallet\nERROR: Device is locked",
+        {
+          headTruncated: true,
+        },
+      );
       expect(out.text).toBe("ERROR: Device is locked");
     });
 
     it("keeps the first line when nothing was truncated", () => {
-      expect(redactIdeviceOutputForLog("ERROR: first", { headTruncated: false }).text).toBe(
-        "ERROR: first",
-      );
+      expect(
+        redactIdeviceOutputForLog("ERROR: first", { headTruncated: false })
+          .text,
+      ).toBe("ERROR: first");
     });
 
     it("suppresses libimobiledevice packet-dump rows", () => {
@@ -353,9 +384,9 @@ ${GENUINE_FAULTS[0]}`;
       for (const l of ["libimobiledevice v1.3.0", "Reading Status.plist.bak"]) {
         expect(filterIdeviceOutputLineForLog(l, state)).toBe(l);
       }
-      expect(filterIdeviceOutputLineForLog(`Domain AppDomain-${STAND_IN_BUNDLE_ID}`, state)).toBe(
-        `Domain AppDomain-${REDACTED_APP_ID}`,
-      );
+      expect(
+        filterIdeviceOutputLineForLog(`Domain ${STAND_IN_BUNDLE_ID}`, state),
+      ).toBe(`Domain ${REDACTED_APP_ID}`);
     });
   });
 
@@ -370,7 +401,8 @@ ${GENUINE_FAULTS[0]}`;
       });
 
       const written = everythingWritten();
-      for (const marker of PRIVATE_MARKERS) expect(written).not.toContain(marker);
+      for (const marker of PRIVATE_MARKERS)
+        expect(written).not.toContain(marker);
 
       // The genuine error is still visible: as a warn, and in the failure dump.
       expect(warnedLines()).toEqual([GENUINE_FAULTS[0]]);
@@ -380,8 +412,12 @@ ${GENUINE_FAULTS[0]}`;
       expect(String(stderrDump?.[1])).toContain(GENUINE_FAULTS[0]);
 
       // Suppressed lines are counted at debug.
-      const debugLines = (log.debug as jest.Mock).mock.calls.map((c) => String(c[0]));
-      expect(debugLines.some((l) => /\d+ stderr line\(s\) not logged/.test(l))).toBe(true);
+      const debugLines = (log.debug as jest.Mock).mock.calls.map((c) =>
+        String(c[0]),
+      );
+      expect(
+        debugLines.some((l) => /\d+ stderr line\(s\) not logged/.test(l)),
+      ).toBe(true);
 
       // The raw buffer is untouched: the device's own code still classifies the failure.
       expect(result.success).toBe(false);
