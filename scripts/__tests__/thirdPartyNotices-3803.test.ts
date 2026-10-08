@@ -134,6 +134,8 @@ describe("third-party notices (BACKLOG-3803)", () => {
         const e = data.licenses[k];
         expect(e).toBeDefined();
         const where = e.file ? path.join(ROOT, e.file) : path.join(REPO, e.external as string);
+        // electron/dist is absent on an --ignore-scripts install (CI); see generate-notices.js
+        if (e.external?.startsWith("node_modules/electron/dist/") && !existsSync(path.join(REPO, "node_modules/electron/dist"))) continue;
         expect(existsSync(where)).toBe(true);
       }
     }

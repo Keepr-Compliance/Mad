@@ -229,7 +229,12 @@ function check({ root, toolsDir, repo }) {
       const got = normalisedSha256(fs.readFileSync(p));
       if (got !== e.sha256) problems.push(`licence ${k}: ${e.file} sha256 ${got} != recorded ${e.sha256}`);
     } else if (e.external) {
-      if (!fs.existsSync(path.join(repo, e.external))) problems.push(`licence ${k}: external file ${e.external} is missing`);
+      // The Electron licence files only exist after electron's postinstall has downloaded the
+      // binary. CI installs with --ignore-scripts, so skip them there; packaging copies them from
+      // the same place (package.json extraResources) and fails if they are absent.
+      const electronDist = "node_modules/electron/dist/";
+      const notDownloaded = e.external.startsWith(electronDist) && !fs.existsSync(path.join(repo, electronDist));
+      if (!notDownloaded && !fs.existsSync(path.join(repo, e.external))) problems.push(`licence ${k}: external file ${e.external} is missing`);
     } else {
       problems.push(`licence ${k}: has neither file nor external`);
     }
