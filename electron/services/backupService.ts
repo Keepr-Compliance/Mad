@@ -1641,13 +1641,17 @@ export class BackupService extends EventEmitter {
     // BACKLOG-1582: Clear watchdog on cancel
     this.clearWatchdog();
 
-    if (this.currentProcess) {
-      this.currentProcess.kill("SIGTERM");
+    const proc = this.currentProcess;
+    if (proc) {
+      proc.kill("SIGTERM");
 
-      // Give it a moment, then force kill if needed
+      // Give it a moment, then force kill if needed. BACKLOG-3598: only the process
+      // this cancel was for. `currentProcess` is cleared when that process closes, and
+      // after a disconnect the user can start a new backup within 5 s — the timer must
+      // not kill that one.
       setTimeout(() => {
-        if (this.currentProcess) {
-          this.currentProcess.kill("SIGKILL");
+        if (this.currentProcess === proc) {
+          proc.kill("SIGKILL");
         }
       }, 5000);
     }

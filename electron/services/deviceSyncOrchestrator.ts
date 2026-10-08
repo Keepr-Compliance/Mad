@@ -525,6 +525,24 @@ function diskGuardCleanupSentence(cleanup: LeftoverRemoval | null): string {
   return "Your existing backup was kept. Free up space and sync again.";
 }
 
+/**
+ * BACKLOG-3598: the backup a sync frame has in flight. `udid` is the phone being backed
+ * up, so a disconnect of a different phone is ignored; `disconnected` is set once the
+ * phone being backed up went away and its backup process was told to stop.
+ */
+interface BackupInFlight {
+  udid: string;
+  disconnected: boolean;
+}
+
+/**
+ * BACKLOG-3598: what the user is told when the phone being backed up is unplugged.
+ * Deliberately does not contain "cancelled": the renderer treats a result containing
+ * that word as a clean idle and would drop it.
+ */
+export const BACKUP_DEVICE_DISCONNECTED_MESSAGE =
+  "Your iPhone was disconnected during the backup. Reconnect it and select Try Again.";
+
 export class DeviceSyncOrchestrator extends EventEmitter {
   private deviceService: DeviceDetectionService;
   private backupService: BackupService;
@@ -573,7 +591,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * but kills nothing, so after a "Try Again" the earlier idevicebackup2 can still be
    * writing into `Backups/<udid>`; a new frame must not sweep that folder.
    */
-  private backupInFlight: object | null = null;
+  private backupInFlight: BackupInFlight | null = null;
 
   /**
    * Tracks the last successfully synced backup for skip detection (TASK-908)
@@ -690,6 +708,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
     this.deviceService.on("device-disconnected", (device: iOSDevice) => {
       this.emit("device-disconnected", device);
+      this.abortBackupOnDisconnect(device);
     });
   }
 
@@ -1444,7 +1463,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       let backupResult: BackupResult;
       // BACKLOG-3598 (SR R1): see `backupInFlight`. Held until the backup has settled
       // and any cleanup of its unfinished folder is done.
-      const backupInFlightToken = {};
+      const backupInFlightToken: BackupInFlight = { udid: options.udid, disconnected: false };
       this.backupInFlight = backupInFlightToken;
       try {
         this.startDiskSpaceMonitor();
@@ -1501,6 +1520,22 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           this.setPhase("error");
           this.emit("error", { message });
           return this.errorResult(message);
+        }
+
+        // BACKLOG-3598: the phone being backed up was unplugged, and
+        // `abortBackupOnDisconnect` stopped the backup process. Before this exit, a
+        // disconnect left idevicebackup2 running and this frame waiting on it until the
+        // 30-minute watchdog, with every Try Again refused. Same shape as the disk-guard
+        // exit above: clean up, record why, end the run once. It returns BEFORE the
+        // `!success` block so that block's `endedBy` (device-error / watchdog) does not
+        // overwrite this one.
+        if (backupInFlightToken.disconnected) {
+          await this.removeUnfinishedBackup(options.udid, mayRemoveUnfinishedBackup);
+          syncTimeline.setContext({ endedBy: "device-disconnect" });
+          this.isRunning = false;
+          this.setPhase("error");
+          this.emit("error", { message: BACKUP_DEVICE_DISCONNECTED_MESSAGE });
+          return this.errorResult(BACKUP_DEVICE_DISCONNECTED_MESSAGE);
         }
 
         if (this.abortController?.signal.aborted) {
@@ -1932,6 +1967,29 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     } else if (removal.outcome === "failed") {
       syncTimeline.setContext({ leftoverCleanup: `failed:${removal.errorCode}` });
     }
+  }
+
+  /**
+   * BACKLOG-3598: the phone whose backup is running was unplugged. Stop the backup
+   * process now instead of leaving it to the no-progress watchdog.
+   *
+   * Gated on `backupInFlight`, not `isRunning`: `forceReset` clears `isRunning` but
+   * leaves the process alive, and that process still has to be stopped. Only the phone
+   * being backed up counts; another phone coming or going changes nothing. Acts once
+   * per backup. The sync frame waiting on `startBackup` sees the process exit and
+   * finishes through its device-disconnect exit.
+   */
+  private abortBackupOnDisconnect(device: iOSDevice): void {
+    const inFlight = this.backupInFlight;
+    if (inFlight === null || inFlight.disconnected || inFlight.udid !== device.udid) return;
+    inFlight.disconnected = true;
+    log.warn("[DeviceSyncOrchestrator] Device being backed up was disconnected; stopping the backup");
+    Sentry.addBreadcrumb({
+      category: "sync",
+      message: "Backup stopped: the device being backed up was disconnected",
+    });
+    syncTimeline.noteEndedBy("device-disconnect");
+    this.backupService.cancelBackup();
   }
 
   /**
