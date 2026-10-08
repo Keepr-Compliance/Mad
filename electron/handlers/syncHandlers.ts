@@ -544,6 +544,7 @@ function setupEventForwarding(): void {
         sendToMainWindow("sync:storage-complete", {
           messagesStored: persistResult.messagesStored,
           contactsStored: persistResult.contactsStored,
+          contactsSourceOff: persistResult.contactsSourceOff === true,
           attachmentsStored: persistResult.attachmentsStored,
           duration: persistResult.duration,
         });
