@@ -346,6 +346,50 @@ describe("BACKLOG-3440: the orchestrator forwards the transferred byte count", (
     expect(row).toContain("bytesTransferred=2100000000");
   });
 
+  it("BACKLOG-3784 — the end-of-backup total does not overwrite the bytes moved", async () => {
+    // backupService re-emits the TOTAL backup size as `bytesTransferred` on its
+    // `finishing` and `decrypting` events (backupService.ts, both BACKLOG-2917 sites:
+    // `bytesTransferred: backupSize ?? 0`). On an incremental run that total is the
+    // whole 71 GB backup; the row must keep the bytes the transfer actually moved.
+    const orchestrator = new DeviceSyncOrchestrator();
+    orchestrator.on("progress", () => {});
+    syncTimeline.beginSync();
+    expect(backupServiceInstance).not.toBeNull();
+
+    const base = {
+      currentFile: null,
+      filesTransferred: 3,
+      totalFiles: null,
+      estimatedTimeRemaining: null,
+    };
+    backupServiceInstance!.emit("progress", {
+      ...base,
+      phase: "transferring",
+      percentComplete: 50,
+      bytesTransferred: 4_000_000,
+      totalBytes: null,
+    });
+    backupServiceInstance!.emit("progress", {
+      ...base,
+      phase: "decrypting",
+      percentComplete: 95,
+      bytesTransferred: 71_568_139_822,
+      totalBytes: 71_568_139_822,
+    });
+    backupServiceInstance!.emit("progress", {
+      ...base,
+      phase: "finishing",
+      percentComplete: 100,
+      bytesTransferred: 71_568_139_822,
+      totalBytes: 71_568_139_822,
+    });
+
+    syncTimeline.endSync("complete");
+    const row = logLines.filter((l) => l.includes("sync-outcome")).pop() ?? "";
+    expect(row).toContain("bytesTransferred=4000000");
+    expect(row).not.toContain("bytesTransferred=71568139822");
+  });
+
   it("THE CONTROL — the device's backup mode is recorded the moment it is announced", async () => {
     // Not at the end. Every `cancelled` run in the corpus before this change had
     // `incremental` NULL, because it was written after the sync resolved and those runs

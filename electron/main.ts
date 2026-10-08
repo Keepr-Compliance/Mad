@@ -232,6 +232,11 @@ import { runStartupHealthChecks } from "./services/startupHealthCheck";
 import { getInstallMode } from "./services/diagnostics/installMode";
 import { getHostArchitecture } from "./services/diagnostics/hostArchitecture";
 import { WINDOWS_ARM64_ARGV_TOKEN } from "./utils/windowsArm64";
+import {
+  WindowResponsivenessTracker,
+  attachResponsivenessTracking,
+} from "./services/windowResponsivenessTracker";
+import { syncTimeline } from "./services/syncTimeline";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
 // The Windows one-click installer migrates a prior per-machine install to
@@ -1753,30 +1758,38 @@ app.whenReady().then(async () => {
       })();
     });
 
-    mainWindow.on("unresponsive", () => {
-      void (async () => {
-      console.warn("[Main] Window became unresponsive");
-      log.warn("[Main] Window became unresponsive");
+    // BACKLOG-3784: pair `unresponsive` with `responsive` so a freeze has a length.
+    const responsivenessTracker = new WindowResponsivenessTracker({
+      log: (line) => log.info(line),
+      capture: (message, context) => {
+        Sentry.captureMessage(message, context);
+      },
+      getPhase: () => syncTimeline.currentPhase(),
+    });
 
-      Sentry.captureMessage("Window became unresponsive", { level: "warning" });
-
-      const { response } = await dialog.showMessageBox({
-        type: "warning",
-        title: "Application Not Responding",
-        message: "The application is not responding.",
-        detail: "Would you like to wait or reload?",
-        buttons: ["Wait", "Reload", "Quit"],
-        defaultId: 0,
-        cancelId: 0,
-      });
-
-      if (response === 1) {
+    attachResponsivenessTracking(mainWindow, responsivenessTracker, {
+      warn: (line) => {
+        console.warn(line);
+        log.warn(line);
+      },
+      promptUser: async () => {
+        const { response } = await dialog.showMessageBox({
+          type: "warning",
+          title: "Application Not Responding",
+          message: "The application is not responding.",
+          detail: "Would you like to wait or reload?",
+          buttons: ["Wait", "Reload", "Quit"],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        return response;
+      },
+      reload: () => {
         mainWindow?.webContents.reload();
-      } else if (response === 2) {
+      },
+      quit: () => {
         app.quit();
-      }
-      // response === 0: Wait (do nothing)
-      })();
+      },
     });
   }
 

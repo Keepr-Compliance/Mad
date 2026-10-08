@@ -58,6 +58,7 @@ jest.mock("../logService", () => {
 
 import { setDb } from "../db/core/dbConnection";
 import { expandAttachedThreadsForUser } from "../autoLinkService";
+import logService from "../logService";
 
 const USER_ID = "user-2285";
 const TXN_ID = "txn-2285";
@@ -599,6 +600,33 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
       transaction_id: string | null;
     };
     expect(row.transaction_id).toBeNull();
+  });
+
+  it("(3784) logs a timing line even when there is nothing attached", async () => {
+    const info = logService.info as jest.Mock;
+    info.mockClear();
+    const res = await expandAttachedThreadsForUser(USER_ID);
+    expect(res.pairsExamined).toBe(0);
+    const lines = info.mock.calls.map((c) => String(c[0]));
+    expect(lines.filter((l) => l.startsWith("[BACKLOG-3784] Attached-thread expansion skipped: 0 attached pairs durationMs="))).toHaveLength(1);
+    // Counts only: the new line carries no user id.
+    const ctx = info.mock.calls.find((c) => String(c[0]).includes("expansion skipped"))?.[2];
+    expect(ctx).toEqual({ pairsExamined: 0, durationMs: expect.any(Number) });
+  });
+
+  it("(3784) times the identity scan when there is attached work", async () => {
+    const info = logService.info as jest.Mock;
+    insertMessage({ id: "m-scan-1", threadId: "T-scan", phone: PHONE_ROMINA, sentAt: "2021-01-01T00:00:00Z", transactionId: TXN_ID });
+    db.prepare(
+      `INSERT INTO communications (id, user_id, transaction_id, message_id, thread_id, link_source, link_confidence)
+       VALUES ('comm-scan', ?, ?, 'm-scan-1', 'T-scan', 'manual', 1)`
+    ).run(USER_ID, TXN_ID);
+    info.mockClear();
+    const res = await expandAttachedThreadsForUser(USER_ID);
+    expect(res.pairsExamined).toBeGreaterThan(0);
+    const scan = info.mock.calls.filter((c) => String(c[0]).startsWith("[BACKLOG-3784] Attached-thread identity scan: rows="));
+    expect(scan).toHaveLength(1);
+    expect(scan[0][2]).toEqual({ pairsExamined: res.pairsExamined, identityRows: expect.any(Number), scanMs: expect.any(Number) });
   });
 
   // (f) — unrelated contact is not linked
