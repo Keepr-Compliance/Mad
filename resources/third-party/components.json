@@ -74,22 +74,6 @@
       "sha256": "a5681bf9b05db14d86776930017c647ad9e6e56ff6bbcfdf21e5848288dfaf1b",
       "fetchedFrom": "https://raw.githubusercontent.com/libimobiledevice-win32/getopt/0.1/LICENSE"
     },
-    "GPL-2.0": {
-      "title": "GNU General Public License v2.0",
-      "file": "licenses/GPL-2.0.txt",
-      "sha256": "7619c753cac95d4740220223bde48a032606fcaccde5e546f9bc444c81ab356d",
-      "fetchedFrom": "https://raw.githubusercontent.com/libimobiledevice-win32/usbmuxd/f1329e742825c93fd080bdb8253d710ef8b6f751/COPYING.GPLv2",
-      "identicalAt": [
-        "https://raw.githubusercontent.com/libimobiledevice-win32/libimobiledevice/0d4a7e905baeadafa098e629a5241fac6fbf7d24/COPYING",
-        "https://raw.githubusercontent.com/libimobiledevice-win32/ideviceinstaller/bebe20120657a1bfc3343beb85e59f809f6f5f07/COPYING"
-      ]
-    },
-    "GPL-2.0-readline": {
-      "title": "GNU General Public License v2.0 (copy shipped by GNU readline 5.0)",
-      "file": "licenses/GPL-2.0-readline.txt",
-      "sha256": "1420be1f1f6d656b7ae8b0b2b95c68c9a6eb5f4b1937eb6f3ae8852a019d25e6",
-      "fetchedFrom": "https://raw.githubusercontent.com/lltcggie/readline/ea414b4e98475e3976198738061824e8a8379a50/src/readline/5.0/readline-5.0-src/COPYING"
-    },
     "GPL-3.0": {
       "title": "GNU General Public License v3.0",
       "file": "licenses/GPL-3.0.txt",
@@ -288,53 +272,6 @@
       ]
     },
     {
-      "id": "iproxy",
-      "name": "iproxy (libusbmuxd tool)",
-      "version": "imobiledevice-net build 1.2.1-r1122",
-      "versionEvidence": "pinned source commit (gitinfo)",
-      "licenseExpression": "GPL-2.0-or-later",
-      "licenses": [
-        "GPL-2.0"
-      ],
-      "licenseEvidence": "tools/iproxy.c header at the pinned commit",
-      "copyright": "Copyright (C) 2009-2020 Nikias Bassen, Martin Szulecki, Paul Sladen; based upon iTunnel, Copyright (c) 2008 Jing Su",
-      "homepage": "https://github.com/libimobiledevice/libusbmuxd",
-      "source": {
-        "repository": "https://github.com/libimobiledevice-win32/libusbmuxd",
-        "commit": "ac86b23f57879b8b702f3712ba66729008d059a3",
-        "url": "https://github.com/libimobiledevice-win32/libusbmuxd/tree/ac86b23f57879b8b702f3712ba66729008d059a3",
-        "commitDate": "2020-06-12"
-      },
-      "bundle": "imobiledevice-net",
-      "files": [
-        "iproxy.exe"
-      ]
-    },
-    {
-      "id": "usbmuxd",
-      "name": "usbmuxd (daemon)",
-      "version": "1.1.1",
-      "versionEvidence": "version string inside usbmuxd.exe",
-      "licenseExpression": "GPL-2.0-only OR GPL-3.0-only",
-      "licenses": [
-        "GPL-2.0",
-        "GPL-3.0"
-      ],
-      "licenseEvidence": "src/main.c header at the pinned commit (\"either version 2 or version 3\")",
-      "copyright": "Copyright (C) 2009-2019 Nikias Bassen, Martin Szulecki, Hector Martin, Paul Sladen, Frederik Carlier",
-      "homepage": "https://github.com/libimobiledevice/usbmuxd",
-      "source": {
-        "repository": "https://github.com/libimobiledevice-win32/usbmuxd",
-        "commit": "f1329e742825c93fd080bdb8253d710ef8b6f751",
-        "url": "https://github.com/libimobiledevice-win32/usbmuxd/tree/f1329e742825c93fd080bdb8253d710ef8b6f751",
-        "commitDate": "2020-06-18"
-      },
-      "bundle": "imobiledevice-net",
-      "files": [
-        "usbmuxd.exe"
-      ]
-    },
-    {
       "id": "libirecovery",
       "name": "libirecovery (library and irecovery tool)",
       "version": "imobiledevice-net build 1.2.1-r1122",
@@ -383,29 +320,6 @@
       ]
     },
     {
-      "id": "ideviceinstaller",
-      "name": "ideviceinstaller",
-      "version": "imobiledevice-net build 1.2.1-r1122",
-      "versionEvidence": "pinned source commit (gitinfo)",
-      "licenseExpression": "GPL-2.0-or-later",
-      "licenses": [
-        "GPL-2.0"
-      ],
-      "licenseEvidence": "src/ideviceinstaller.c header at the pinned commit",
-      "copyright": "Copyright (C) 2010-2019 Nikias Bassen, Martin Szulecki",
-      "homepage": "https://github.com/libimobiledevice/ideviceinstaller",
-      "source": {
-        "repository": "https://github.com/libimobiledevice-win32/ideviceinstaller",
-        "commit": "bebe20120657a1bfc3343beb85e59f809f6f5f07",
-        "url": "https://github.com/libimobiledevice-win32/ideviceinstaller/tree/bebe20120657a1bfc3343beb85e59f809f6f5f07",
-        "commitDate": "2020-08-25"
-      },
-      "bundle": "imobiledevice-net",
-      "files": [
-        "ideviceinstaller.exe"
-      ]
-    },
-    {
       "id": "libideviceactivation",
       "name": "libideviceactivation (library)",
       "version": "imobiledevice-net build 1.2.1-r1122",
@@ -426,29 +340,6 @@
       "bundle": "imobiledevice-net",
       "files": [
         "ideviceactivation.dll"
-      ]
-    },
-    {
-      "id": "ideviceactivation-tool",
-      "name": "ideviceactivation (tool)",
-      "version": "imobiledevice-net build 1.2.1-r1122",
-      "versionEvidence": "pinned source commit (gitinfo)",
-      "licenseExpression": "GPL-3.0-or-later",
-      "licenses": [
-        "GPL-3.0"
-      ],
-      "licenseEvidence": "tools/ideviceactivation.c header at the pinned commit",
-      "copyright": "Copyright (c) 2011-2019 Nikias Bassen, Martin Szulecki, Mirell Development",
-      "homepage": "https://github.com/libimobiledevice/libideviceactivation",
-      "source": {
-        "repository": "https://github.com/libimobiledevice-win32/libideviceactivation",
-        "commit": "fbe0476cfeddc2fc317ceb900eec12302c1d4c11",
-        "url": "https://github.com/libimobiledevice-win32/libideviceactivation/tree/fbe0476cfeddc2fc317ceb900eec12302c1d4c11",
-        "commitDate": "2020-06-15"
-      },
-      "bundle": "imobiledevice-net",
-      "files": [
-        "ideviceactivation.exe"
       ]
     },
     {
@@ -753,28 +644,6 @@
       "files": [
         "zip.dll"
       ]
-    },
-    {
-      "id": "readline",
-      "name": "GNU readline (readline-win32 port)",
-      "version": "5.0",
-      "versionEvidence": "vcpkg readline-win32 port (readline.pdb path in the DLL); port pins lltcggie/readline ea414b4",
-      "licenseExpression": "GPL-2.0-or-later",
-      "licenses": [
-        "GPL-2.0-readline"
-      ],
-      "licenseEvidence": "COPYING of readline 5.0 in the port source",
-      "copyright": "Copyright (C) 1987-2004 Free Software Foundation, Inc.",
-      "homepage": "https://tiswww.case.edu/php/chet/readline/rltop.html",
-      "source": {
-        "url": "https://github.com/lltcggie/readline/tree/ea414b4e98475e3976198738061824e8a8379a50",
-        "note": "upstream project at the identified version; the exact build recipe is not recorded"
-      },
-      "bundle": "imobiledevice-net",
-      "files": [
-        "readline.dll"
-      ],
-      "notes": "Only irecovery.exe loads this library. Keepr does not run irecovery.exe."
     },
     {
       "id": "getopt-win32",
