@@ -75,7 +75,7 @@ describe("startup queue", () => {
     const q = new AtRestStartup({ log: quiet });
     registerDefaultJobs(q);
     expect(q.listJobs().map((j) => j.id)).toEqual([
-      "data-key", "logs", "temp-sweep", "attachments", "email-attachments", "backups", "legacy",
+      "data-key", "logs", "temp-sweep", "attachments", "email-attachments", "backups", "legacy-sweep",
     ]);
     q.register({ id: "logs", order: 10, run: async () => undefined });
     expect(q.listJobs().find((j) => j.id === "logs")?.placeholder).toBe(false);

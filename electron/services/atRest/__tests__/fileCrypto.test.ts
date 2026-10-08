@@ -21,7 +21,7 @@ import {
   AtRestIntegrityError,
   HEADER_BYTES,
   TAG_BYTES,
-  TMP_SUFFIX,
+  KENC_TMP_SUFFIX,
   createFileCrypto,
   layoutFor,
   type KeyResolver,
@@ -115,7 +115,7 @@ describe("KEPRENC round trip", () => {
 
   it("leaves no temp file behind and refuses a key it does not hold", async () => {
     const file = await encryptBytes(crypto.randomBytes(100));
-    expect(fs.readdirSync(dir).filter((f) => f.endsWith(TMP_SUFFIX))).toEqual([]);
+    expect(fs.readdirSync(dir).filter((f) => f.endsWith(KENC_TMP_SUFFIX))).toEqual([]);
     const other = createFileCrypto(resolver({ keyFor: async () => crypto.randomBytes(32) }));
     await expect(other.readAllDecrypted(file)).rejects.toBeInstanceOf(AtRestIntegrityError);
   });

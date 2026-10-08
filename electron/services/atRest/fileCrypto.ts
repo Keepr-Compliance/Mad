@@ -70,7 +70,7 @@ export const DEFAULT_CHUNK_BYTES = 1024 * 1024;
 /** Readers refuse a header that claims more than this — no 4 GiB allocations from a hostile file. */
 export const MAX_CHUNK_BYTES = 16 * 1024 * 1024;
 /** Suffix of every temp file this module creates. The temp sweep (S6) removes stale ones. */
-export const TMP_SUFFIX = ".kenc-tmp";
+export const KENC_TMP_SUFFIX = ".kenc-tmp"; // single source; S6 tempSweep re-exports it
 
 const HKDF_INFO = Buffer.from("keepr-at-rest/v1/file", "ascii");
 
@@ -284,7 +284,7 @@ async function fsyncDir(dir: string): Promise<void> {
 }
 
 export function tmpPathFor(target: string): string {
-  return `${target}.${crypto.randomBytes(6).toString("hex")}${TMP_SUFFIX}`;
+  return `${target}.${crypto.randomBytes(6).toString("hex")}${KENC_TMP_SUFFIX}`;
 }
 
 /**

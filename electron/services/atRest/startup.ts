@@ -13,7 +13,12 @@
  *    30    attachments           S3  — encrypt message attachments
  *    40    email-attachments     S3  — encrypt email attachments
  *    50    backups               S4  — iPhone backup at rest
- *    60    legacy                S6  — remove the legacy magic-audit directories
+ *    60    legacy-sweep          S6  — remove the legacy magic-audit directories (LAST)
+ *
+ * Filling a placeholder is one line in registerDefaultJobs, e.g.
+ *   startup.register({ id: "temp-sweep", order: 20, run: async () => { await runTempSweep(); } });
+ * The slice that merges SECOND (once S0 and its own module are both on the branch)
+ * adds its import and that line in place of the placeholder call.
  *
  * A slice replaces a placeholder by registering the same id. Jobs run one at a
  * time in order. A failing job is logged and the queue moves on — no job may
@@ -180,7 +185,7 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
   startup.register(placeholder("attachments", 30, "S3"));
   startup.register(placeholder("email-attachments", 40, "S3"));
   startup.register(placeholder("backups", 50, "S4"));
-  startup.register(placeholder("legacy", 60, "S6"));
+  startup.register(placeholder("legacy-sweep", 60, "S6"));
 }
 
 export const atRestStartup = new AtRestStartup();
