@@ -42,6 +42,14 @@ jest.mock("../../services/db/userDbService", () => ({
 
 jest.mock("../../services/db/core/dbConnection", () => ({ dbRun: jest.fn() }));
 
+jest.mock("../../services/databaseService", () => ({
+  __esModule: true,
+  default: { isInitialized: jest.fn().mockReturnValue(true) },
+}));
+jest.mock("../../services/initializationBroadcaster", () => ({
+  initializationBroadcaster: { whenDbReady: jest.fn() },
+}));
+
 jest.mock("../../services/logService", () => ({
   __esModule: true,
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },

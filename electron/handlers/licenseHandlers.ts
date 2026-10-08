@@ -14,6 +14,8 @@ import {
 } from "../services/db/localUserSql";
 import logService from "../services/logService";
 import supabaseService from "../services/supabaseService";
+import databaseService from "../services/databaseService";
+import { initializationBroadcaster } from "../services/initializationBroadcaster";
 import featureGateService from "../services/featureGateService";
 import type { LicenseType, UserLicense } from "../types/models";
 
@@ -65,6 +67,21 @@ interface LicenseResponse {
  */
 async function getLicenseData(): Promise<LicenseResponse> {
   try {
+    // BACKLOG-3792: the renderer can ask for the license on first launch after
+    // an upgrade, before migrations finish; the session and user reads below
+    // then throw DatabaseError. Await the shared db-ready signal (BACKLOG-2149
+    // pattern) instead of racing DatabaseService.initialize().
+    if (!databaseService.isInitialized()) {
+      const ready = await initializationBroadcaster.whenDbReady();
+      if (!ready.ready) {
+        logService.warn("[License] Database not ready for license read", "License", {
+          timedOut: ready.timedOut,
+          error: ready.error?.message,
+        });
+        return { success: false, error: "Database is starting up" };
+      }
+    }
+
     // First try to get license from session
     const session = await sessionService.loadSession();
 
