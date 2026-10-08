@@ -30,7 +30,7 @@
  * 50 x 2 MB conversation and prints the reply size.
  */
 
-import { readFileSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from "fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from "fs";
 import os from "os";
 import path from "path";
 import type { IpcMainInvokeEvent } from "electron";
@@ -350,6 +350,58 @@ describe("messages:get-attachment-data (BACKLOG-3763)", () => {
     };
     seedAttachment(att, { bytes: Buffer.from("out") });
     expect(await call(att.id)).toEqual({ success: false, reason: "outside_app_data" });
+  });
+
+  it("refuses a file inside app data whose real location is outside it", async () => {
+    const target = path.join(outside, "secret.jpg");
+    writeFileSync(target, "secret");
+    const linkPath = path.join(userData, "message-attachments", "link.jpg");
+    mkdirSync(path.dirname(linkPath), { recursive: true });
+    try {
+      symlinkSync(target, linkPath, "file");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        // OS refused symlink creation (Windows without the privilege): skip, nothing else.
+        console.warn("SKIPPED: this OS refused to create a symlink");
+        return;
+      }
+      throw err;
+    }
+    seedMessage("msg-3763-l", USER_A, "guid-3763-l");
+    seedAttachment({
+      id: "att3763-link",
+      message_id: "msg-3763-l",
+      filename: "link.jpg",
+      mime_type: "image/jpeg",
+      file_size_bytes: 6,
+      storage_path: linkPath,
+    });
+    expect(await call("att3763-link")).toEqual({ success: false, reason: "outside_app_data" });
+  });
+
+  it("refuses another user's attachment reachable only through the Apple-id fallback", async () => {
+    seedMessage("msg-3763-fb-b", USER_B, "guid-3763-fb-b");
+    // message_id names a message that no longer exists; only external_message_id matches USER_B's message.
+    seedMessage("msg-3763-nobody", USER_B, "guid-3763-nobody");
+    seedAttachment(
+      {
+        id: "att3763-fb-userb",
+        message_id: "msg-3763-nobody",
+        filename: "fb.jpg",
+        mime_type: "image/jpeg",
+        file_size_bytes: 5,
+        storage_path: path.join(userData, "message-attachments", "fb-b.jpg"),
+      },
+      { externalMessageId: "guid-3763-fb-b", bytes: Buffer.from("userb") },
+    );
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.prepare("DELETE FROM messages WHERE id = 'msg-3763-nobody'").run();
+    db.exec("PRAGMA foreign_keys = ON");
+    expect(await call("att3763-fb-userb")).toEqual({ success: false, reason: "not_found" });
+    // Positive control on the same row: its owner reaches it through the fallback.
+    mockLoadSession.mockResolvedValue({ user: { id: USER_B } });
+    expect((await call("att3763-fb-userb")).success).toBe(true);
   });
 
   it("refuses a file over the size cap, and serves one exactly at it", async () => {

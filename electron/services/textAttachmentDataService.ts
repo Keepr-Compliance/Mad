@@ -8,7 +8,7 @@
  *
  * The request carries an attachment id and nothing else. The file path comes
  * from the database row, and the row is returned only when it belongs to the
- * signed-in user (OWNED_TEXT_ATTACHMENT_BY_ID_SQL). The file must also sit
+ * signed-in user (OWNED_TEXT_ATTACHMENT_BY_ID_SQL). The file's real path must also sit
  * inside the app's data directory, and is refused above a size cap before any
  * byte is read. The read is asynchronous.
  */
@@ -30,9 +30,16 @@ export const MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 /** Attachment ids are UUIDs; anything with a path character is refused unread. */
 const ATTACHMENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
-function isInside(parent: string, child: string): boolean {
-  const rel = path.relative(parent, child);
-  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+/**
+ * True when `child` is strictly inside `parent`. Both must already be real
+ * (symlink-resolved) paths. Windows paths compare case-insensitively, and the
+ * prefix check includes the separator so "/data-evil" is not inside "/data".
+ */
+export function isInside(parent: string, child: string, caseInsensitive = process.platform === "win32"): boolean {
+  const norm = (p: string) => (caseInsensitive ? p.toLowerCase() : p);
+  const root = norm(parent).replace(/[\\/]+$/, "");
+  const target = norm(child);
+  return target.length > root.length + 1 && target.startsWith(root + path.sep);
 }
 
 export async function getTextAttachmentData(
@@ -56,8 +63,16 @@ export async function getTextAttachmentData(
     return { success: false, reason: "not_found" };
   }
 
-  const resolved = path.resolve(row.storage_path);
-  if (!isInside(path.resolve(app.getPath("userData")), resolved)) {
+  // Resolve both sides to real paths so a link inside app data cannot lead out.
+  let realRoot: string;
+  let realFile: string;
+  try {
+    realRoot = await fs.realpath(app.getPath("userData"));
+    realFile = await fs.realpath(path.resolve(row.storage_path));
+  } catch {
+    return { success: false, reason: "missing_file" };
+  }
+  if (!isInside(realRoot, realFile)) {
     logService.warn(
       "[Attachments] Refused to serve a file outside the app data directory",
       "TextAttachmentData",
@@ -65,22 +80,20 @@ export async function getTextAttachmentData(
     return { success: false, reason: "outside_app_data" };
   }
 
-  let size: number;
+  // Open once; the size check and the read use this same handle.
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
-    const stat = await fs.stat(resolved);
+    handle = await fs.open(realFile, "r");
+    const stat = await handle.stat();
     if (!stat.isFile()) return { success: false, reason: "missing_file" };
-    size = stat.size;
-  } catch {
-    return { success: false, reason: "missing_file" };
-  }
-  if (size > MAX_INLINE_ATTACHMENT_BYTES) {
-    return { success: false, reason: "too_large" };
-  }
-
-  try {
-    const buffer = await fs.readFile(resolved);
+    if (stat.size > MAX_INLINE_ATTACHMENT_BYTES) {
+      return { success: false, reason: "too_large" };
+    }
+    const buffer = await handle.readFile();
     return { success: true, data: buffer.toString("base64"), mime_type: row.mime_type };
   } catch {
     return { success: false, reason: "missing_file" };
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
