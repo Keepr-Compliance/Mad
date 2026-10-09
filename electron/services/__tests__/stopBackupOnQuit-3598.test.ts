@@ -323,6 +323,30 @@ describe("BACKLOG-3598: before-quit wiring (createBackupStopOnQuit)", () => {
     expect(check(makeEvent())).toBe(false);
   });
 
+  it("re-entrant re-quit: before-quit fires synchronously inside app.quit() and is not deferred (BACKLOG-3785)", async () => {
+    // Real Electron emits before-quit synchronously from app.quit().
+    let release!: () => void;
+    const stop = jest.fn(() => new Promise<void>((r) => (release = r)));
+    const reentrant: Array<{ deferred: boolean; prevented: number }> = [];
+    let check!: ReturnType<typeof createBackupStopOnQuit>;
+    const app = {
+      quit: jest.fn(() => {
+        const event = makeEvent();
+        const deferred = check(event);
+        reentrant.push({ deferred, prevented: event.preventDefault.mock.calls.length });
+      }),
+    };
+    check = createBackupStopOnQuit(app, stop);
+
+    expect(check(makeEvent())).toBe(true);
+    release();
+    await flush();
+
+    expect(app.quit).toHaveBeenCalledTimes(1);
+    expect(reentrant).toEqual([{ deferred: false, prevented: 0 }]);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
   it("a stop that rejects still quits", async () => {
     const app = makeApp();
     const check = createBackupStopOnQuit(app, () => Promise.reject(new Error("boom")));
