@@ -280,6 +280,7 @@ if (typeof window !== 'undefined') {
     shell: {
       openExternal: jest.fn(),
       openFolder: jest.fn(),
+      openThirdPartyNotices: jest.fn().mockResolvedValue({ success: true }),
     },
     // iMessage conversations (macOS) - migrated from window.electron
     messages: {

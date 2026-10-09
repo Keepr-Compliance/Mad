@@ -17,6 +17,10 @@ import "./bootstrap/installSentry";
 // anything calls the store. Nothing calls it during module construction today,
 // but installing first is what keeps that cheap to stay true.
 import "./bootstrap/installNativeCapabilities";
+// BACKLOG-3799: axios in main goes over Electron net.fetch (OS certificate
+// store), so TLS-inspecting antivirus / proxies do not break Outlook, Gmail
+// token calls or address verification. Before any handler is registered.
+import "./bootstrap/installMainNetAxios";
 import {
   app,
   BrowserWindow,
@@ -167,7 +171,12 @@ import {
   cleanupDeviceHandlers,
 } from "./handlers/deviceHandlers";
 import { registerBackupHandlers } from "./handlers/backupHandlers";
-import { registerSyncHandlers, cleanupSyncHandlers } from "./handlers/syncHandlers";
+import {
+  registerSyncHandlers,
+  cleanupSyncHandlers,
+  stopBackupForQuit,
+} from "./handlers/syncHandlers";
+import { createBackupStopOnQuit } from "./utils/backupStopOnQuit";
 import { registerDriverHandlers } from "./handlers/driverHandlers";
 import { registerLLMHandlers } from "./handlers/llmHandlers";
 import { registerLicenseHandlers } from "./handlers/licenseHandlers";
@@ -228,10 +237,16 @@ applyLogFileConfig(log.transports.file);
 // from the import near the top of this file, before the composition root.
 // This import only binds the namespace for the calls below.
 import * as Sentry from "@sentry/electron/main";
+import { isCrashReportingEnabled } from "./services/crashReportingPreference";
 import { runStartupHealthChecks } from "./services/startupHealthCheck";
 import { getInstallMode } from "./services/diagnostics/installMode";
 import { getHostArchitecture } from "./services/diagnostics/hostArchitecture";
 import { WINDOWS_ARM64_ARGV_TOKEN } from "./utils/windowsArm64";
+import {
+  WindowResponsivenessTracker,
+  attachResponsivenessTracking,
+} from "./services/windowResponsivenessTracker";
+import { syncTimeline } from "./services/syncTimeline";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
 // The Windows one-click installer migrates a prior per-machine install to
@@ -1281,12 +1296,13 @@ let updaterDownloadStarted = false;
 /**
  * Whether Sentry is actually reporting in this process. Mirrors the init gate
  * at Sentry.init() in ./bootstrap/installSentry.ts (app.isPackaged ||
- * SENTRY_DSN present). When disabled,
+ * SENTRY_DSN present), plus the user's "Send crash reports" switch
+ * (BACKLOG-3801) — with it off nothing is sent, so no id is real. When disabled,
  * Sentry.captureException() returns a synthetic id we must NOT treat as a real
  * event_id (BACKLOG-1903 REQUIRED change #4).
  */
 function isSentryEnabled(): boolean {
-  return app.isPackaged || !!process.env.SENTRY_DSN;
+  return (app.isPackaged || !!process.env.SENTRY_DSN) && isCrashReportingEnabled();
 }
 
 /**
@@ -1753,30 +1769,38 @@ app.whenReady().then(async () => {
       })();
     });
 
-    mainWindow.on("unresponsive", () => {
-      void (async () => {
-      console.warn("[Main] Window became unresponsive");
-      log.warn("[Main] Window became unresponsive");
+    // BACKLOG-3784: pair `unresponsive` with `responsive` so a freeze has a length.
+    const responsivenessTracker = new WindowResponsivenessTracker({
+      log: (line) => log.info(line),
+      capture: (message, context) => {
+        Sentry.captureMessage(message, context);
+      },
+      getPhase: () => syncTimeline.currentPhase(),
+    });
 
-      Sentry.captureMessage("Window became unresponsive", { level: "warning" });
-
-      const { response } = await dialog.showMessageBox({
-        type: "warning",
-        title: "Application Not Responding",
-        message: "The application is not responding.",
-        detail: "Would you like to wait or reload?",
-        buttons: ["Wait", "Reload", "Quit"],
-        defaultId: 0,
-        cancelId: 0,
-      });
-
-      if (response === 1) {
+    attachResponsivenessTracking(mainWindow, responsivenessTracker, {
+      warn: (line) => {
+        console.warn(line);
+        log.warn(line);
+      },
+      promptUser: async () => {
+        const { response } = await dialog.showMessageBox({
+          type: "warning",
+          title: "Application Not Responding",
+          message: "The application is not responding.",
+          detail: "Would you like to wait or reload?",
+          buttons: ["Wait", "Reload", "Quit"],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        return response;
+      },
+      reload: () => {
         mainWindow?.webContents.reload();
-      } else if (response === 2) {
+      },
+      quit: () => {
         app.quit();
-      }
-      // response === 0: Wait (do nothing)
-      })();
+      },
     });
   }
 
@@ -1974,7 +1998,14 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", () => {
+// BACKLOG-3598: a quit during an iPhone backup first stops idevicebackup2 (bounded).
+const deferQuitForBackupStop = createBackupStopOnQuit(app, stopBackupForQuit);
+
+app.on("before-quit", (event) => {
+  // BACKLOG-3598: must run before cleanupSyncHandlers() drops the orchestrator. When a
+  // backup is running this defers the quit and returns; the rest of this handler then
+  // runs once, on the re-quit.
+  if (deferQuitForBackupStop(event)) return;
   // TASK-1956: Shutdown persistent contact worker pool
   try {
     const { shutdownPool } = require("./workers/contactWorkerPool");

@@ -7,6 +7,7 @@ import {
   LLMError,
   LLMErrorType,
 } from './types';
+import { mainNetFetch } from '../mainNetFetch';
 
 /**
  * OpenAI LLM provider implementation.
@@ -26,6 +27,8 @@ export class OpenAIService extends BaseLLMService {
     this.client = new OpenAI({
       apiKey,
       timeout: this.defaultTimeout,
+      // BACKLOG-3799: Chromium network stack (OS trust store / system proxy)
+      fetch: mainNetFetch as unknown as typeof fetch,
     });
   }
 

@@ -377,6 +377,120 @@ const CONNECTION_DROPPED_PATTERN = /usbmuxd_send returned -\d+ \(Broken pipe\)/i
 const SERVICE_VERSION_EXCHANGE_PATTERN =
   /version exchange failed|Could not perform backup protocol version exchange/i;
 
+/**
+ * BACKLOG-3790: what of idevicebackup2's output may be WRITTEN to a log or Sentry.
+ *
+ * Under `-d`, libimobiledevice's `debug_plist` prints every plist it exchanges with
+ * the device to stderr: a trace header (`... printing 433 bytes plist:`) followed by
+ * bare XML lines with no prefix — `<key>PasswordProtected</key>`,
+ * `<key>fm-activation-locked</key>`, `<string>com.…</string>`, `<data>` + base64.
+ * Those lines carry device properties and the user's installed-app bundle IDs. They
+ * are never an error in themselves, yet trigger words inside key names
+ * (`password`, `locked`) logged them at warn as "stderr (error pattern)".
+ *
+ * This decides what is LOGGED only. The raw stderr/stdout buffers are untouched —
+ * `parseDeviceBackupError` reads the DLMessageProcessMessage plist out of them.
+ */
+export interface IdeviceOutputLogFilterState {
+  /** Inside a `<?xml` / `<plist` dump that has not yet reached `</plist>`. */
+  inPlist: boolean;
+}
+
+export function createIdeviceOutputLogFilterState(): IdeviceOutputLogFilterState {
+  return { inPlist: false };
+}
+
+/** Any libimobiledevice trace line, Windows (`16:06:22 D:\...\idevice.c:652 f():`)
+ * or macOS (`22:44:38.022 property_list_service.c:253 f():`). A plist dump never
+ * contains one, so it ends a dump that lost its `</plist>`. */
+const IDEVICE_TRACE_LINE = /^\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+\S+:\d+\s+\w+\(\):/;
+/** idevicebackup2's own error lines. Also end an unterminated dump. */
+const IDEVICE_ERROR_LINE = /^ERROR:/i;
+const PLIST_DUMP_START = /^<(?:\?xml\b|!DOCTYPE\s+plist\b|plist\b)/i;
+const PLIST_DUMP_END = /<\/plist>\s*$/i;
+/** A `<data>` base64 continuation line. */
+const BASE64_LINE = /^[A-Za-z0-9+/]{16,}={0,2}$/;
+/** libimobiledevice debug.c packet-dump row: `0000: 3c 3f 78 ...   | <?xml ...`. */
+const HEX_DUMP_ROW = /^[0-9a-f]{4}: /i;
+/** Any angle bracket: a whole tag, or the fragment of one left by a mid-line cut. */
+const MARKUP_FRAGMENT = /[<>]/;
+/**
+ * A reverse-DNS identifier (app bundle ID): three or more dot-separated labels,
+ * the first alphabetic. `com.apple.*` is kept — Apple's service names
+ * (`com.apple.mobilebackup2`) are what make a genuine error line diagnosable, and
+ * they identify nothing about the user. File names (`idevice.c`, `Manifest.db`)
+ * have one dot and are untouched.
+ */
+const REVERSE_DNS_ID =
+  /(?<![\w.-])(?!com\.apple\.)[a-z]{2,15}(?:\.[a-z0-9][a-z0-9_-]*){2,}(?![\w-])/gi;
+const FILE_NAME_SUFFIX = /\.(?:plist|bak|db|sqlite|log|txt|json|xml|tmp)$/i;
+export const REDACTED_APP_ID = "[app-id]";
+
+/**
+ * Decide whether one output line may be logged. Returns `null` to suppress it, or
+ * the line with any third-party bundle ID redacted.
+ */
+export function filterIdeviceOutputLineForLog(
+  line: string,
+  state: IdeviceOutputLogFilterState,
+): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  if (HEX_DUMP_ROW.test(trimmed)) return null;
+
+  if (IDEVICE_TRACE_LINE.test(trimmed) || IDEVICE_ERROR_LINE.test(trimmed)) {
+    state.inPlist = false;
+  } else if (PLIST_DUMP_START.test(trimmed)) {
+    state.inPlist = !PLIST_DUMP_END.test(trimmed);
+    return null;
+  } else if (state.inPlist) {
+    if (PLIST_DUMP_END.test(trimmed)) state.inPlist = false;
+    return null;
+  } else if (BASE64_LINE.test(trimmed)) {
+    // Plist markup with no visible start — a dump whose head was cut off by the
+    // 64 KB buffer cap or a chunk boundary.
+    return null;
+  }
+
+  // Any line carrying an angle bracket is plist markup or the tail of it (a
+  // mid-line cut leaves `key>PasswordProtected</key>`). Genuine error lines don't.
+  if (MARKUP_FRAGMENT.test(trimmed)) return null;
+
+  // File names such as `Status.plist.bak` also have three labels; keep them.
+  return trimmed.replace(REVERSE_DNS_ID, (m) =>
+    FILE_NAME_SUFFIX.test(m) ? m : REDACTED_APP_ID,
+  );
+}
+
+/** Apply the line filter to a whole block of output (a buffer or a chunk). */
+export function redactIdeviceOutputForLog(
+  text: string,
+  options: { headTruncated?: boolean } = {},
+): {
+  text: string;
+  suppressedLines: number;
+} {
+  const state = createIdeviceOutputLogFilterState();
+  const kept: string[] = [];
+  let suppressedLines = 0;
+  let first = true;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    // A buffer that hit the cap starts mid-line: its first line is a fragment.
+    if (first && options.headTruncated) {
+      first = false;
+      suppressedLines++;
+      continue;
+    }
+    first = false;
+    const loggable = filterIdeviceOutputLineForLog(line, state);
+    if (loggable === null) suppressedLines++;
+    else kept.push(loggable);
+  }
+  return { text: kept.join("\n"), suppressedLines };
+}
+
 /** Minimal XML entity decoding for a plist string value. */
 function decodePlistString(value: string): string {
   return value
@@ -696,6 +810,9 @@ export class BackupService extends EventEmitter {
    */
   private static readonly PASSCODE_WAIT_DETECTION_MS = 5000;
 
+  /** BACKLOG-3598: longest a quit waits for idevicebackup2 to exit before force-killing it. */
+  static readonly QUIT_STOP_TIMEOUT_MS = 3000;
+
   // BACKLOG-1582: Watchdog timer to detect zombie idevicebackup2 processes.
   //
   // BACKLOG-2911 (FIX 2): THE WATCHDOG COULD NOT FIRE, AND THIS PAIR OF FIELDS IS WHY.
@@ -841,6 +958,12 @@ export class BackupService extends EventEmitter {
 
   /** Fingerprints of stderr lines already sent to Sentry this run. */
   private breadcrumbedStderrLines: Set<string> = new Set();
+
+  /** BACKLOG-3790: plist-dump state for the stderr stream, reset per run. */
+  private stderrLogFilterState: IdeviceOutputLogFilterState =
+    createIdeviceOutputLogFilterState();
+  /** BACKLOG-3790: stderr lines kept out of the log this run (plist / app IDs). */
+  private suppressedStderrLineCount = 0;
   private manifestUploadPhase: boolean = false;
   private manifestUploadSize: string | null = null;
 
@@ -1091,6 +1214,9 @@ export class BackupService extends EventEmitter {
       this.stderrLineBuffer = "";
       // BACKLOG-2898: breadcrumb dedupe is per backup run
       this.breadcrumbedStderrLines.clear();
+      // BACKLOG-3790: a plist dump cut off by the last run must not swallow this one's lines
+      this.stderrLogFilterState = createIdeviceOutputLogFilterState();
+      this.suppressedStderrLineCount = 0;
       this.manifestUploadPhase = false;
       this.manifestUploadSize = null;
 
@@ -1125,6 +1251,7 @@ export class BackupService extends EventEmitter {
 
       let stdoutBuffer = "";
       let stderrBuffer = "";
+      let stderrHeadTruncated = false;
       // BACKLOG-2899: set when idevicebackup2 reports it could not write to the
       // local disk. See isIdevicebackup2DiskFullOutput for the transcription.
       let diskFullDetected = false;
@@ -1158,7 +1285,11 @@ export class BackupService extends EventEmitter {
         // Progress bars look like: [====] XX% (X.X MB/Y.Y MB)
         const isProgressBar = /\[=*\s*\]\s*\d+%/.test(output);
         if (!isProgressBar && output.trim()) {
-          log.info("[BackupService] stdout:", output.trim());
+          // BACKLOG-3790: never write plist markup or app bundle IDs to the log.
+          const loggableStdout = redactIdeviceOutputForLog(output).text;
+          if (loggableStdout) {
+            log.info("[BackupService] stdout:", loggableStdout);
+          }
         }
 
         const progress = this.parseProgress(output);
@@ -1196,6 +1327,7 @@ export class BackupService extends EventEmitter {
         // With -d flag, stderr can exceed 50 MB during a long backup.
         if (stderrBuffer.length > 65536) {
           stderrBuffer = stderrBuffer.slice(-65536);
+          stderrHeadTruncated = true;
         }
 
         // BACKLOG-2911 (FIX 2): stderr is NOT evidence of life on its own. `-d` makes
@@ -1251,6 +1383,13 @@ export class BackupService extends EventEmitter {
       const onProcessClose = async (code: number | null) => {
         const duration = Date.now() - this.startTime;
         this.isRunning = false;
+
+        // BACKLOG-3790: how much stderr was kept out of the log, so its absence is visible.
+        if (this.suppressedStderrLineCount > 0) {
+          log.debug(
+            `[BackupService] ${this.suppressedStderrLineCount} stderr line(s) not logged (plist dump / app identifiers)`,
+          );
+        }
         this.currentProcess = null;
         this.currentDeviceUdid = null;
 
@@ -1399,7 +1538,17 @@ export class BackupService extends EventEmitter {
           }
         } else {
           log.error(`[BackupService] Backup failed with code ${code}`);
-          log.error("[BackupService] stderr:", stderrBuffer);
+          // BACKLOG-3790: the tail of stderr, without plist dumps or app bundle IDs.
+          // The raw buffer still feeds classifyFailure below.
+          const loggableStderr = redactIdeviceOutputForLog(stderrBuffer, {
+            headTruncated: stderrHeadTruncated,
+          });
+          log.error("[BackupService] stderr:", loggableStderr.text);
+          if (loggableStderr.suppressedLines > 0) {
+            log.debug(
+              `[BackupService] ${loggableStderr.suppressedLines} line(s) of the failure stderr not logged (plist dump / app identifiers)`,
+            );
+          }
 
           // BACKLOG-1354: Breadcrumb with full context when backup exits with unexpected code
           Sentry.addBreadcrumb({
@@ -1408,7 +1557,7 @@ export class BackupService extends EventEmitter {
             level: "warning",
             data: {
               exitCode: code,
-              stderr: stderrBuffer.trim().substring(0, 500),
+              stderr: loggableStderr.text.substring(0, 500),
               udid: options.udid.substring(0, 8) + "...",
               duration: `${duration}ms`,
               isIncremental: this.resolveIsIncremental(previousBackupExists, options),
@@ -1495,13 +1644,17 @@ export class BackupService extends EventEmitter {
     // BACKLOG-1582: Clear watchdog on cancel
     this.clearWatchdog();
 
-    if (this.currentProcess) {
-      this.currentProcess.kill("SIGTERM");
+    const proc = this.currentProcess;
+    if (proc) {
+      proc.kill("SIGTERM");
 
-      // Give it a moment, then force kill if needed
+      // Give it a moment, then force kill if needed. BACKLOG-3598: only the process
+      // this cancel was for. `currentProcess` is cleared when that process closes, and
+      // after a disconnect the user can start a new backup within 5 s — the timer must
+      // not kill that one.
       setTimeout(() => {
-        if (this.currentProcess) {
-          this.currentProcess.kill("SIGKILL");
+        if (this.currentProcess === proc) {
+          proc.kill("SIGKILL");
         }
       }, 5000);
     }
@@ -1653,6 +1806,72 @@ export class BackupService extends EventEmitter {
   }
 
   /**
+   * BACKLOG-3598: stop idevicebackup2 because the app is quitting.
+   *
+   * The child is spawned without `detached`, and Node does not kill an undetached child
+   * when the parent exits, so without this a quit left the backup running. Asks the
+   * process to stop, waits up to `timeoutMs` for it to exit, then force-kills it (on
+   * Windows the whole tree, with taskkill). Returns null when no backup process is alive.
+   * Never rejects and never waits longer than `timeoutMs`. Records nothing: the run's
+   * own close handler reports the outcome, if the app is still alive to hear it. The unfinished folder is left for the leftover
+   * sweep at the start of the next sync.
+   */
+  stopForQuit(
+    timeoutMs: number = BackupService.QUIT_STOP_TIMEOUT_MS,
+  ): Promise<"exited" | "killed"> | null {
+    const proc = this.currentProcess;
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
+      // Nothing to stop: return synchronously so the quit is not deferred at all.
+      return null;
+    }
+
+    this.clearWatchdog();
+    this.isRunning = false;
+    log.info(`[BackupService] App quitting; stopping backup process (PID: ${proc.pid})`);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const finish = (how: "exited" | "killed") => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        proc.removeListener("exit", onExit);
+        resolve(how);
+      };
+      const onExit = () => finish("exited");
+      proc.once("exit", onExit);
+
+      timer = setTimeout(() => {
+        log.warn(
+          `[BackupService] Backup process did not exit within ${timeoutMs} ms of quit; force-killing`,
+        );
+        finish("killed");
+        try {
+          if (process.platform === "win32" && proc.pid !== undefined) {
+            spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
+              stdio: "ignore",
+              windowsHide: true,
+            }).on("error", () => {
+              /* best effort: the app is exiting */
+            });
+          } else {
+            proc.kill("SIGKILL");
+          }
+        } catch {
+          /* already gone */
+        }
+      }, timeoutMs);
+
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        finish("exited");
+      }
+    });
+  }
+
+  /**
    * BACKLOG-2898: classify ONE stderr line as a real error signal, benign
    * libimobiledevice debug chatter, or something unrecognised.
    *
@@ -1661,8 +1880,16 @@ export class BackupService extends EventEmitter {
    * regex.
    */
   private classifyStderrLine(line: string): void {
-    const trimmed = line.trim();
-    if (!trimmed) return;
+    if (!line.trim()) return;
+
+    // BACKLOG-3790: plist dumps (device properties, installed-app bundle IDs) are
+    // never logged, and a bundle ID on any other line is redacted. What survives is
+    // the only text that may reach the warn below or a Sentry breadcrumb.
+    const trimmed = filterIdeviceOutputLineForLog(line, this.stderrLogFilterState);
+    if (trimmed === null) {
+      this.suppressedStderrLineCount++;
+      return;
+    }
 
     // A libimobiledevice MUTEX trace: `np_lock(): Locked`, `np_unlock():
     // Unlocked`, `afc_lock(): Locked`. The word "Locked" here is a pthread

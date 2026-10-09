@@ -52,10 +52,61 @@ export interface PersistResult {
   messagesSkipped: number;
   contactsStored: number;
   contactsSkipped: number;
+  /** True when contacts were withheld because the iPhone Contacts source is off (BACKLOG-3791). */
+  contactsSourceOff?: boolean;
   attachmentsStored: number;
   attachmentsSkipped: number;
+  /**
+   * BACKLOG-3784: why attachments were skipped, counts only. Sums to
+   * `attachmentsSkipped`. Absent on cancelled/failed results.
+   */
+  attachmentsSkippedByReason?: AttachmentSkipCounts;
   duration: number;
   error?: string;
+}
+
+/**
+ * BACKLOG-3784: every reason `storeAttachments` skips an attachment. One counter
+ * per reason so a large "skipped" total can be explained. Counts only.
+ */
+export const ATTACHMENT_SKIP_REASONS = [
+  "noMessage",
+  "unsupportedType",
+  "alreadyStored",
+  "rejectedPath",
+  "notInBackup",
+  "tooLarge",
+  "error",
+] as const;
+export type AttachmentSkipReason = (typeof ATTACHMENT_SKIP_REASONS)[number];
+export type AttachmentSkipCounts = Record<AttachmentSkipReason, number>;
+
+export function emptyAttachmentSkipCounts(): AttachmentSkipCounts {
+  return {
+    noMessage: 0,
+    unsupportedType: 0,
+    alreadyStored: 0,
+    rejectedPath: 0,
+    notInBackup: 0,
+    tooLarge: 0,
+    error: 0,
+  };
+}
+
+/**
+ * BACKLOG-3784: per-reason attachment skip counts as flat timeline fields, e.g.
+ * `attachmentsSkipped=64019 attachmentsSkippedAlreadyStored=63990 ...`. Counts only.
+ */
+export function attachmentSkipFields(
+  total: number,
+  byReason: AttachmentSkipCounts | undefined,
+): Record<string, number> {
+  const fields: Record<string, number> = { attachmentsSkipped: total };
+  if (!byReason) return fields;
+  for (const reason of ATTACHMENT_SKIP_REASONS) {
+    fields[`attachmentsSkipped${reason.charAt(0).toUpperCase()}${reason.slice(1)}`] = byReason[reason];
+  }
+  return fields;
 }
 
 /**
@@ -230,7 +281,10 @@ class IPhoneSyncStorageService {
       }
 
       // SPRINT-068: Store attachments (if backupPath available)
-      let attachmentResult = { stored: 0, skipped: 0 };
+      let attachmentResult: { stored: number; skipped: number; skippedByReason?: AttachmentSkipCounts } = {
+        stored: 0,
+        skipped: 0,
+      };
       if (backupPath && totalAttachments > 0) {
         attachmentResult = await this.storeAttachments(
           userId,
@@ -277,6 +331,7 @@ class IPhoneSyncStorageService {
         contactsSkipped: contactResult.skipped,
         attachmentsStored: attachmentResult.stored,
         attachmentsSkipped: attachmentResult.skipped,
+        attachmentsSkippedByReason: attachmentResult.skippedByReason,
         duration,
       });
 
@@ -297,8 +352,12 @@ class IPhoneSyncStorageService {
         messagesSkipped: messageResult.skipped,
         contactsStored: contactResult.stored,
         contactsSkipped: contactResult.skipped,
+        contactsSourceOff: contactResult.sourceOff === true,
         attachmentsStored: attachmentResult.stored,
         attachmentsSkipped: attachmentResult.skipped,
+        ...(attachmentResult.skippedByReason
+          ? { attachmentsSkippedByReason: attachmentResult.skippedByReason }
+          : {}),
         duration,
       };
     } catch (error) {
@@ -576,7 +635,7 @@ class IPhoneSyncStorageService {
     contacts: iOSContact[],
     onProgress?: (current: number, total: number) => void,
     sessionId?: string
-  ): Promise<{ stored: number; skipped: number }> {
+  ): Promise<{ stored: number; skipped: number; sourceOff?: boolean }> {
     if (contacts.length === 0) {
       return { stored: 0, skipped: 0 };
     }
@@ -608,9 +667,12 @@ class IPhoneSyncStorageService {
       log.info(
         `[${IPhoneSyncStorageService.SERVICE_NAME}] iPhone contacts storage skipped: ` +
           `the iPhone Contacts source is off for this user (${contacts.length} contacts not stored). ` +
-          `On macOS this is the default — the Mac address book already carries iPhone contacts via iCloud.`
+          // BACKLOG-3791: the iCloud explanation only holds on macOS.
+          (process.platform === "darwin"
+            ? `On macOS this is the default — the Mac address book already carries iPhone contacts via iCloud.`
+            : `Turn it on in Settings to import iPhone contacts.`)
       );
-      return { stored: 0, skipped: contacts.length };
+      return { stored: 0, skipped: contacts.length, sourceOff: true };
     }
 
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Storing ${contacts.length} contacts to external_contacts`);
@@ -679,7 +741,7 @@ class IPhoneSyncStorageService {
     onProgress?: (current: number, total: number) => void,
     sessionId?: string,
     cancelSignal?: { cancelled: boolean }
-  ): Promise<{ stored: number; skipped: number }> {
+  ): Promise<{ stored: number; skipped: number; skippedByReason: AttachmentSkipCounts }> {
     // Collect all attachments with their message info
     const attachmentsToStore: Array<{
       attachment: iOSAttachment;
@@ -696,7 +758,7 @@ class IPhoneSyncStorageService {
     }
 
     if (attachmentsToStore.length === 0) {
-      return { stored: 0, skipped: 0 };
+      return { stored: 0, skipped: 0, skippedByReason: emptyAttachmentSkipCounts() };
     }
 
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Processing ${attachmentsToStore.length} attachments`);
@@ -721,7 +783,8 @@ class IPhoneSyncStorageService {
     const existingRecords = databaseService.getExistingAttachmentRecords();
 
     let stored = 0;
-    let skipped = 0;
+    // BACKLOG-3784: one counter per reason; `skipped` is their sum.
+    const skippedBy = emptyAttachmentSkipCounts();
 
     for (let i = 0; i < attachmentsToStore.length; i++) {
       // TASK-2110: Check cancel signal between attachments
@@ -736,7 +799,7 @@ class IPhoneSyncStorageService {
         // Get internal message ID
         const internalMessageId = messageIdMap.get(messageGuid);
         if (!internalMessageId) {
-          skipped++;
+          skippedBy.noMessage++;
           continue;
         }
 
@@ -746,20 +809,20 @@ class IPhoneSyncStorageService {
         // Check file extension
         const ext = path.extname(filename).toLowerCase();
         if (!SUPPORTED_EXTENSIONS.has(ext)) {
-          skipped++;
+          skippedBy.unsupportedType++;
           continue;
         }
 
         // Check if already exists
         if (existingRecords.has(`${internalMessageId}:${filename}`)) {
-          skipped++;
+          skippedBy.alreadyStored++;
           continue;
         }
 
         // Resolve source file path in backup
         const sourcePath = iOSMessagesParser.resolveAttachmentPath(backupPath, attachment.filename);
         if (!sourcePath) {
-          skipped++;
+          skippedBy.rejectedPath++;
           continue;
         }
 
@@ -768,12 +831,12 @@ class IPhoneSyncStorageService {
           const stats = await fs.promises.stat(sourcePath);
           if (stats.size > MAX_ATTACHMENT_SIZE) {
             log.debug(`[${IPhoneSyncStorageService.SERVICE_NAME}] Skipping oversized attachment: ${stats.size} bytes`);
-            skipped++;
+            skippedBy.tooLarge++;
             continue;
           }
         } catch {
           // File not found in backup
-          skipped++;
+          skippedBy.notInBackup++;
           continue;
         }
 
@@ -819,22 +882,29 @@ class IPhoneSyncStorageService {
           level: "warning",
           data: { error: error instanceof Error ? error.message : String(error) },
         });
-        skipped++;
-      }
-
-      // Report progress
-      if ((i + 1) % 100 === 0 || i === attachmentsToStore.length - 1) {
-        onProgress?.(i + 1, attachmentsToStore.length);
-        await yieldToEventLoop();
+        skippedBy.error++;
+      } finally {
+        // Report progress. BACKLOG-3784: in `finally` so it also runs for SKIPPED
+        // attachments — every skip above `continue`s, and before this a run of
+        // already-stored attachments (an incremental sync) never reported progress
+        // and never yielded the event loop. Same throttle as before.
+        if ((i + 1) % 100 === 0 || i === attachmentsToStore.length - 1) {
+          onProgress?.(i + 1, attachmentsToStore.length);
+          await yieldToEventLoop();
+        }
       }
     }
 
+    iOSMessagesParser.flushRejectedPathSummary();
+
+    const skipped = ATTACHMENT_SKIP_REASONS.reduce((sum, r) => sum + skippedBy[r], 0);
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Attachments complete`, {
       stored,
       skipped,
+      skippedByReason: skippedBy,
     });
 
-    return { stored, skipped };
+    return { stored, skipped, skippedByReason: skippedBy };
   }
 
   /**
