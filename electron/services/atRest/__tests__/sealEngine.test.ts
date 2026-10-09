@@ -150,6 +150,24 @@ describe("E5 — a source that changes while it is sealed", () => {
     expect((await files.readAllDecrypted(p)).toString()).toBe("a".repeat(100) + "b".repeat(50));
   });
 
+  it("rewritten in place (same size) AFTER it was read: the old bytes are not renamed over the new ones; retried with the new bytes", async () => {
+    const p = put("r", Buffer.from("a".repeat(100)));
+    const realFsync = fs.fsyncSync;
+    let n = 0;
+    jest.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+      // Every chunk has been read and sealed; a writer now replaces the content.
+      if (++n === 1) {
+        fs.writeFileSync(p, "b".repeat(100));
+        const t = new Date(Date.now() + 5_000);
+        fs.utimesSync(p, t, t);
+      }
+      return realFsync(fd);
+    });
+    const r = createSealEngine(engineKey, { chunkSize: CHUNK, retryDelayMs: 0 }).runBatch([p], "seal");
+    expect(r.outcomes).toEqual([{ v: "sealed-now" }]);
+    expect((await files.readAllDecrypted(p)).toString()).toBe("b".repeat(100));
+  });
+
   it("keeps changing: gives up, the latest plaintext is left in place, no temp", () => {
     const p = put("c", Buffer.from("a".repeat(100)));
     const engine = createSealEngine(engineKey, {
@@ -235,6 +253,25 @@ describe("E8 — real worker threads", () => {
       if (r.outcomes[i] === undefined) expect(fs.readFileSync(f.path).equals(f.plain)).toBe(true);
     }
     expect(fs.readdirSync(dir, { recursive: true }).filter((n) => String(n).endsWith(KENC_TMP_SUFFIX))).toEqual([]);
+  });
+
+  it("a worker stops before the first file of a batch when the flag is already set", async () => {
+    const { Worker } = await import("worker_threads");
+    const p = put("x", crypto.randomBytes(10));
+    const stop = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.store(stop, 0, 1);
+    const w = new Worker(workerScript, { workerData: { key: new Uint8Array(KEY), keyId: KEY_ID, chunkSize: CHUNK, stop: stop.buffer } });
+    try {
+      const msg = await new Promise<{ outcomes: unknown[]; stopped: boolean }>((resolve, reject) => {
+        w.once("message", resolve);
+        w.once("error", reject);
+        w.postMessage({ type: "batch", id: 0, mode: "seal", files: [p] });
+      });
+      expect(msg).toMatchObject({ outcomes: [], stopped: true });
+      expect((await probeHeader(p)).encrypted).toBe(false);
+    } finally {
+      await w.terminate();
+    }
   });
 
   it("a worker that cannot start: the pass runs in-process and still seals everything", async () => {

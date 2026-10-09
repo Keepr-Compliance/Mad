@@ -187,7 +187,6 @@ export function createSealEngine(key: EngineKey, options: SealEngineOptions = {}
   const dataKey = Buffer.from(key.key);
   const plainBuf = Buffer.allocUnsafe(chunkSize);
   const head = Buffer.alloc(HEADER_BYTES);
-  const probe = Buffer.alloc(1);
 
   /** Seal an open plaintext source. Closes `fd` (Windows cannot rename over an open file). */
   function sealOpen(filePath: string, fd: number, st: fs.Stats): void {
@@ -216,8 +215,6 @@ export function createSealEngine(key: EngineKey, options: SealEngineOptions = {}
         }
         writeFully(tfd, sealed);
       }
-      // The file must not have grown past the size we sealed.
-      if (fs.readSync(fd, probe, 0, 1, size) !== 0) throw new SourceChangedError();
       if (!options.skipDataFsyncForMeasurement) fs.fsyncSync(tfd);
       if (fs.fstatSync(tfd).size !== expectedSize) {
         throw new AtRestIntegrityError("encrypted copy is not the expected size");
@@ -226,6 +223,8 @@ export function createSealEngine(key: EngineKey, options: SealEngineOptions = {}
       tfd = null;
       fs.closeSync(fd);
       sourceOpen = false;
+      // Nothing may have written to the source since it was read: same size (it did not
+      // grow or shrink), same mtime (not rewritten in place), same inode (not replaced).
       const after = fs.statSync(filePath);
       if (after.size !== st.size || after.mtimeMs !== st.mtimeMs || (st.ino !== 0 && after.ino !== st.ino)) {
         throw new SourceChangedError();
