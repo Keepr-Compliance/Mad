@@ -219,7 +219,9 @@ describe("R3 open + O1 cleanup", () => {
     fs.writeFileSync(stale, PLAIN);
     resetOpenTempCleanupForTests();
     registerAttachmentHandlers(null); // = next launch
-    for (let i = 0; i < 50 && fs.existsSync(stale); i++) await new Promise((r) => setTimeout(r, 10));
+    const openRoot = path.join(userData, AT_REST_OPEN_DIR);
+    // the launch cleanup is fire-and-forget; wait (bounded) for the whole dir, not just the file
+    for (let i = 0; i < 200 && fs.existsSync(openRoot); i++) await new Promise((r) => setTimeout(r, 10));
     expect(fs.existsSync(path.join(userData, AT_REST_OPEN_DIR))).toBe(false);
     assertNoPlaintextInUserData();
   });
