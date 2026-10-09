@@ -77,7 +77,17 @@ import {
   type AtRestMigrationStatus,
 } from "../../types/ipc/window-api-at-rest";
 import { getAtRestFiles, getDataKeyService } from "./dataKeyService";
-import { AtRestIntegrityError, KENC_TMP_SUFFIX, type FileCrypto } from "./fileCrypto";
+import {
+  ALGORITHM_ID,
+  AtRestIntegrityError,
+  FORMAT_VERSION,
+  HEADER_BYTES,
+  KENC_TMP_SUFFIX,
+  MAGIC,
+  MAX_CHUNK_BYTES,
+  layoutFor,
+  type FileCrypto,
+} from "./fileCrypto";
 import { getMarkerStore, SCOPE_EMAIL_ATTACHMENTS, SCOPE_MESSAGE_ATTACHMENTS, type MarkerStore } from "./markers";
 
 export type MigrationScopeId = typeof SCOPE_MESSAGE_ATTACHMENTS | typeof SCOPE_EMAIL_ATTACHMENTS;
@@ -121,6 +131,8 @@ export interface ScopeRunResult {
   bytes: number;
   skipped: number;
   deferred: number;
+  /** Files that start with the KEPRENC marker but fail the header check; never touched. */
+  skippedDamaged: number;
   ms: number;
 }
 
@@ -139,6 +151,40 @@ interface WalkResult {
   plaintext: number;
   deferred: number;
   regular: number;
+  damaged: number;
+}
+
+/**
+ * Marker present AND full-header structural check fails (C-S3a). Such a file is not
+ * plaintext we can safely encrypt: re-encrypting would wrap the damage in a valid
+ * container and bury it for good. TODO(S1 merged): call S1's exported header check
+ * instead of this local copy of the structural rules.
+ */
+export function looksLikeDamagedKeprenc(buf: Buffer, fileSize: number): boolean {
+  if (buf.length < MAGIC.length || !buf.subarray(0, MAGIC.length).equals(MAGIC)) return false;
+  if (buf.length < HEADER_BYTES) return true;
+  if (buf[7] !== FORMAT_VERSION || buf[8] !== ALGORITHM_ID) return true;
+  for (const i of [9, 10, 11]) if (buf[i] !== 0) return true;
+  for (let i = 48; i < HEADER_BYTES; i++) if (buf[i] !== 0) return true;
+  const chunkSize = buf.readUInt32BE(44);
+  if (chunkSize < 1 || chunkSize > MAX_CHUNK_BYTES) return true;
+  try {
+    layoutFor(fileSize, chunkSize);
+  } catch {
+    return true;
+  }
+  return false;
+}
+
+async function isDamagedKeprenc(file: string, size: number): Promise<boolean> {
+  const handle = await fs.promises.open(file, "r");
+  try {
+    const buf = Buffer.alloc(HEADER_BYTES);
+    const { bytesRead } = await handle.read(buf, 0, HEADER_BYTES, 0);
+    return looksLikeDamagedKeprenc(buf.subarray(0, bytesRead), size);
+  } finally {
+    await handle.close();
+  }
 }
 
 function errorCode(error: unknown): string {
@@ -222,7 +268,7 @@ export function createAtRestMigration(deps: MigrationDeps): AtRestMigration {
   }
 
   async function walk(dir: string, cutoffMs: number, files: FileCrypto): Promise<WalkResult> {
-    const result: WalkResult = { candidates: [], plaintext: 0, deferred: 0, regular: 0 };
+    const result: WalkResult = { candidates: [], plaintext: 0, deferred: 0, regular: 0, damaged: 0 };
     const stack = [dir];
     while (stack.length > 0) {
       const current = stack.pop() as string;
@@ -245,6 +291,11 @@ export function createAtRestMigration(deps: MigrationDeps): AtRestMigration {
           st = await fs.promises.lstat(full);
           if (!st.isFile()) continue;
           result.regular++;
+          // Checked before isEncrypted: a damaged-header file may read as either.
+          if (await isDamagedKeprenc(full, st.size)) {
+            result.damaged++;
+            continue;
+          }
           if (await files.isEncrypted(full)) continue;
         } catch (error) {
           if (errorCode(error) === "ENOENT") continue;
@@ -302,6 +353,7 @@ export function createAtRestMigration(deps: MigrationDeps): AtRestMigration {
       bytes: 0,
       skipped: 0,
       deferred: 0,
+      skippedDamaged: 0,
       ms: 0,
     };
     const finish = (outcome: ScopeRunResult["outcome"]): ScopeRunResult => {
@@ -310,7 +362,8 @@ export function createAtRestMigration(deps: MigrationDeps): AtRestMigration {
       log(
         "info",
         `[AtRest] migration ${scope}: outcome=${outcome} files=${result.files} bytes=${result.bytes} ` +
-          `ms=${result.ms} skipped=${result.skipped} deferred=${result.deferred}`,
+          `ms=${result.ms} skipped=${result.skipped} deferred=${result.deferred} ` +
+          `skippedDamaged=${result.skippedDamaged}`,
       );
       return result;
     };
@@ -336,6 +389,10 @@ export function createAtRestMigration(deps: MigrationDeps): AtRestMigration {
     try {
       const plan = await walk(dir, started - SETTLE_MS, files);
       result.deferred = plan.deferred;
+      result.skippedDamaged = plan.damaged;
+      if (plan.damaged > 0) {
+        log("warn", `[AtRest] migration ${scope}: ${plan.damaged} file(s) with a damaged header left untouched (reason=HEADER_INVALID)`);
+      }
       if (plan.regular === 0) {
         return finish("empty");
       }
@@ -393,7 +450,9 @@ export function createAtRestMigration(deps: MigrationDeps): AtRestMigration {
       // "done" only after a fresh scan of the whole scope finds zero plaintext.
       const scan = await walk(dir, Number.POSITIVE_INFINITY, files);
       if (scan.plaintext === 0) {
-        await markers.setScope(scope, "done", { files: scan.regular });
+        // Done = no plaintext left. Damaged-header files are not plaintext; they stay
+        // as found and are recorded here. Readers refuse them (requireEncrypted).
+        await markers.setScope(scope, "done", { files: scan.regular, skippedDamaged: scan.damaged });
         return finish("done");
       }
       return finish("incomplete");

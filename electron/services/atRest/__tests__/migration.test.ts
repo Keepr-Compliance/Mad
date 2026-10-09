@@ -441,3 +441,69 @@ async function waitFor(cond: () => boolean, ms = 3000): Promise<void> {
     await new Promise((r) => setTimeout(r, 5));
   }
 }
+
+describe("C-S3a — damaged KEPRENC header is never re-encrypted", () => {
+  async function mixedScope() {
+    const files = createFileCrypto(resolver(), { chunkSize: 64 });
+    const markers = createMarkerStore({ userData: () => root });
+    const plain = crypto.randomBytes(150);
+    const plainFile = await seed("message-attachments", plain);
+
+    // Valid ciphertext written by the real writer.
+    const validSrc = path.join(root, "message-attachments", "valid-src");
+    await fs.promises.writeFile(validSrc, crypto.randomBytes(200));
+    const validFile = path.join(root, "message-attachments", "valid.bin");
+    await files.encryptStreamToFile(fs.createReadStream(validSrc), validFile);
+    await fs.promises.rm(validSrc);
+    const validBytes = await fs.promises.readFile(validFile);
+
+    // Damaged 1: real ciphertext with a reserved header byte flipped.
+    const flipped = Buffer.from(validBytes);
+    flipped[10] = 0x7f;
+    const damagedA = path.join(root, "message-attachments", "damaged-a.bin");
+    await fs.promises.writeFile(damagedA, flipped);
+    // Damaged 2: marker followed by junk (shorter than a header).
+    const junk = Buffer.concat([MAGIC, crypto.randomBytes(20)]);
+    const damagedB = path.join(root, "message-attachments", "damaged-b.bin");
+    await fs.promises.writeFile(damagedB, junk);
+    return { files, markers, plain, plainFile, validFile, validBytes, damagedA, flipped, damagedB, junk };
+  }
+
+  it("leaves damaged files byte-identical and counted; skips valid ciphertext; encrypts plaintext; scope done with skippedDamaged", async () => {
+    const s = await mixedScope();
+    const m = createAtRestMigration(deps({ crypto: s.files, markers: s.markers }));
+    const r = await m.runScope("message-attachments");
+
+    expect(r.outcome).toBe("done");
+    expect(r.skippedDamaged).toBe(2);
+    expect(r.files).toBe(1);
+    expect((await fs.promises.readFile(s.damagedA)).equals(s.flipped)).toBe(true);
+    expect((await fs.promises.readFile(s.damagedB)).equals(s.junk)).toBe(true);
+    expect((await fs.promises.readFile(s.validFile)).equals(s.validBytes)).toBe(true);
+    expect((await s.files.readAllDecrypted(s.plainFile)).equals(s.plain)).toBe(true);
+    expect(await startsWithMagic(s.plainFile)).toBe(true);
+
+    const entry = await s.markers.getScope("message-attachments");
+    expect(entry?.state).toBe("done");
+    expect(entry?.progress?.skippedDamaged).toBe(2);
+    const joined = logs.join("\n");
+    expect(joined).toContain("skippedDamaged=2");
+    expect(joined).toContain("HEADER_INVALID");
+    expect(joined).not.toContain("damaged-a");
+    expect(joined).not.toContain(root);
+  });
+
+  it("a damaged file is never offered to encryptFileInPlace", async () => {
+    const s = await mixedScope();
+    const w = wrap(s.files, () => undefined);
+    await createAtRestMigration(deps({ crypto: w, markers: s.markers })).runScope("message-attachments");
+    expect([...w.calls.keys()]).toEqual([s.plainFile]);
+  });
+
+  it("readers that require ciphertext refuse the damaged file with an error, not raw bytes", async () => {
+    const s = await mixedScope();
+    await createAtRestMigration(deps({ crypto: s.files, markers: s.markers })).runScope("message-attachments");
+    await expect(s.files.readAllDecrypted(s.damagedA, { requireEncrypted: true })).rejects.toThrow();
+    await expect(s.files.readAllDecrypted(s.damagedB, { requireEncrypted: true })).rejects.toThrow();
+  });
+});
