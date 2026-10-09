@@ -98,6 +98,9 @@ export function keyIdFor(key: Buffer): string {
   return crypto.createHmac("sha256", key).update(KEY_ID_LABEL).digest().subarray(0, 16).toString("hex");
 }
 
+/** link(2) errors that mean "this filesystem has no hard links" (FAT/exFAT, some SMB shares). */
+const LINK_UNSUPPORTED_CODES = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EINVAL"]);
+
 /** The store already exists — another writer won. The caller re-reads it. */
 class StoreExistsError extends Error {}
 
@@ -115,8 +118,26 @@ async function createStoreExclusive(file: string, contents: string): Promise<voi
     try {
       await fs.promises.link(tmp, file);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === "EEXIST") throw new StoreExistsError();
-      throw new DataKeyUnavailableError(`Could not create the file-data key store: ${String(error)}`);
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code === "EEXIST") throw new StoreExistsError();
+      if (!code || !LINK_UNSUPPORTED_CODES.has(code)) {
+        throw new DataKeyUnavailableError(`Could not create the file-data key store: ${String(error)}`);
+      }
+      // No hard links on this filesystem: exclusive create at the real path
+      // ("wx" never replaces an existing store).
+      let final: fs.promises.FileHandle;
+      try {
+        final = await fs.promises.open(file, "wx", 0o600);
+      } catch (createError) {
+        if ((createError as NodeJS.ErrnoException)?.code === "EEXIST") throw new StoreExistsError();
+        throw new DataKeyUnavailableError(`Could not create the file-data key store: ${String(createError)}`);
+      }
+      try {
+        await final.writeFile(contents);
+        await final.sync();
+      } finally {
+        await final.close();
+      }
     }
     // Persist the new directory entry before anything is sealed under this key. Without
     // it a power cut can leave the store missing on the next launch while ciphertext
@@ -240,16 +261,35 @@ export function createDataKeyService(deps: DataKeyServiceDeps): DataKeyService {
     // Never overwrite: a rename would replace a store another process created a
     // moment ago, which is regeneration by another name. Link the fsynced temp
     // into place instead — link(2) fails with EEXIST rather than replacing.
-    await createStoreExclusive(file, JSON.stringify(store, null, 2));
+    const written = JSON.stringify(store, null, 2);
+    await createStoreExclusive(file, written);
 
+    // Round-trip verify before the key is used. On failure remove ONLY the store
+    // this call just wrote (byte-compared; never an existing one), so the next
+    // launch is a first run again instead of a permanently unreadable store.
+    const discardOwnStore = async () => {
+      try {
+        if ((await fs.promises.readFile(file, "utf8")) === written) await fs.promises.unlink(file);
+      } catch {
+        /* the refusal stands either way */
+      }
+    };
     let reread: KeyStoreFile;
     try {
       reread = JSON.parse((await fs.promises.readFile(file)).toString("utf8")) as KeyStoreFile;
     } catch (error) {
+      await discardOwnStore();
       throw new DataKeyUnavailableError(`The new file-data key store could not be read back: ${String(error)}`);
     }
-    const verify = unwrap(reread.current, "new");
+    let verify: Buffer;
+    try {
+      verify = unwrap(reread.current, "new");
+    } catch (error) {
+      await discardOwnStore();
+      throw error;
+    }
     if (verify.length !== key.length || !crypto.timingSafeEqual(verify, key)) {
+      await discardOwnStore();
       throw new DataKeyUnavailableError("The new file-data key did not survive a write/read round-trip");
     }
     deps.log?.("info", `[AtRest] data key created (keyId ${keyId})`);

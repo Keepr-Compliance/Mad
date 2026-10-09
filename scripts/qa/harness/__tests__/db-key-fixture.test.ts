@@ -25,8 +25,10 @@ describe('the built-in fixed key has the seeded/validated shape', () => {
   it('DEFAULT_FIXTURE_DB_KEY is the 64-char string the seeder + readers were validated with', () => {
     expect(DEFAULT_FIXTURE_DB_KEY).toHaveLength(FIXTURE_DB_KEY_LENGTH);
     expect(isValidFixtureDbKey(DEFAULT_FIXTURE_DB_KEY)).toBe(true);
+    // The app's key store (databaseEncryptionService KEY_HEX_PATTERN) rejects anything but 64 hex on unwrap.
+    expect(DEFAULT_FIXTURE_DB_KEY).toMatch(/^[0-9a-f]{64}$/i);
     // Guard the exact value: it must NEVER drift independently of the seeder (seed↔read equality).
-    expect(DEFAULT_FIXTURE_DB_KEY).toBe('a11ce0ffee0000fixturefilterdbkey0123456789abcdef0123456789abcdef');
+    expect(DEFAULT_FIXTURE_DB_KEY).toBe('a11ce0ffee0000f1c7e0f11e7db0ce000123456789abcdef0123456789abcdef');
   });
 
   it('FIXTURE_DB_KEY resolves to the default when no env override is present at import', () => {
