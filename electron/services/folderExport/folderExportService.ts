@@ -27,6 +27,7 @@ import { app, BrowserWindow } from "electron";
 import { JSDOM } from "jsdom";
 import createDOMPurify, { type WindowLike } from "dompurify";
 import logService from "../logService";
+import { decryptStoredAttachmentTo } from "../atRest/attachmentReader";
 import databaseService from "../databaseService";
 import { getUserById } from "../db/userDbService";
 import type { Transaction, Communication } from "../../types/models";
@@ -65,6 +66,7 @@ import {
   getThreadContact,
   isGroupChat,
   generateTextThreadHTML,
+  resolveInlineImages,
 } from "./textExportHelpers";
 import { threadNaming } from "./threadContactLabel";
 // BACKLOG-2161: emails group by the SAME key the app uses on-screen so the
@@ -618,6 +620,8 @@ class FolderExportService {
             .map(p => ({ phone: p.handle, name: p.name }))
         : undefined;
       const threadMatchedNames = matchedNamesFor(resolution, contact.phone);
+      // BACKLOG-3816 S2: images are decrypted into data: URIs before the HTML is built.
+      const threadAttachments = await resolveInlineImages(msgs, getAttachmentsForMessage);
       const html = generateTextThreadHTML(
         msgs,
         contact,
@@ -626,7 +630,7 @@ class FolderExportService {
         threadIndex,
         { hiddenTextCount: hiddenByThread.get(threadKey) || 0 },
         participants,
-        getAttachmentsForMessage,
+        threadAttachments,
         threadMatchedNames
       );
       const pdfBuffer = await this.htmlToPdf(html);
@@ -874,7 +878,8 @@ class FolderExportService {
 
       try {
         if (await this.fileExists(att.storage_path)) {
-          await fs.copyFile(att.storage_path, destPath);
+          // BACKLOG-3816 S2: decrypt into the export folder (plaintext by design).
+          await decryptStoredAttachmentTo(att.storage_path, destPath);
           manifest.attachments.push({
             filename: exportFilename,
             originalMessage: comm ? getOriginalMessage(comm) : "(No Subject)",
@@ -1278,6 +1283,8 @@ class FolderExportService {
                 .map((p) => ({ phone: p.handle, name: p.name }))
             : undefined;
           const sectionId = textThreadSectionId(textIdx);
+          // BACKLOG-3816 S2: images decrypted into data: URIs first.
+          const threadAttachments = await resolveInlineImages(msgs, getAttachmentsForMessage);
           sections.push({
             id: sectionId,
             html: generateTextThreadHTML(
@@ -1288,7 +1295,7 @@ class FolderExportService {
               textIdx,
               { hiddenTextCount: hiddenByThread.get(getThreadKey(msgs[0])) || 0 },
               participants,
-              getAttachmentsForMessage,
+              threadAttachments,
               matchedNamesFor(resolution, contact.phone)
             ),
             // Text back-link → that thread's EXACT index row.

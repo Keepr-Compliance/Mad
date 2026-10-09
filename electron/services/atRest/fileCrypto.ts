@@ -341,14 +341,20 @@ async function readExactly(
   return buf;
 }
 
+async function readMagicFromHandle(
+  handle: fs.promises.FileHandle,
+): Promise<{ encrypted: boolean; size: number }> {
+  const { size } = await handle.stat();
+  if (size < MAGIC.length) return { encrypted: false, size };
+  const head = Buffer.alloc(MAGIC.length);
+  await handle.read(head, 0, MAGIC.length, 0);
+  return { encrypted: head.equals(MAGIC), size };
+}
+
 async function readMagic(filePath: string): Promise<{ encrypted: boolean; size: number }> {
   const handle = await fs.promises.open(filePath, "r");
   try {
-    const { size } = await handle.stat();
-    if (size < MAGIC.length) return { encrypted: false, size };
-    const head = Buffer.alloc(MAGIC.length);
-    await handle.read(head, 0, MAGIC.length, 0);
-    return { encrypted: head.equals(MAGIC), size };
+    return await readMagicFromHandle(handle);
   } finally {
     await handle.close();
   }
@@ -406,9 +412,29 @@ export interface FileCrypto {
   encryptFileInPlace(filePath: string): Promise<EncryptResult & { alreadyEncrypted: boolean }>;
   openDecryptStream(filePath: string, opts?: DecryptStreamOptions): Promise<DecryptStreamResult>;
   /** All-or-nothing: returns nothing unless every chunk verified. */
-  readAllDecrypted(filePath: string): Promise<Buffer>;
+  readAllDecrypted(filePath: string, opts?: ReadOptions): Promise<Buffer>;
   /** All-or-nothing: `destPath` appears only after every chunk verified. Plaintext sources are copied. */
-  decryptToFile(srcPath: string, destPath: string): Promise<{ size: number; encrypted: boolean }>;
+  decryptToFile(
+    srcPath: string,
+    destPath: string,
+    opts?: ReadOptions,
+  ): Promise<{ size: number; encrypted: boolean }>;
+  /**
+   * BACKLOG-3816 S2: the same reads bound to a handle the CALLER opened, so a size
+   * check and the read refer to the same file (no path re-resolve between them).
+   * The caller keeps ownership of the handle; these never close it.
+   */
+  statPlaintextFromHandle(handle: fs.promises.FileHandle): Promise<{ encrypted: boolean; size: number }>;
+  readAllDecryptedFromHandle(handle: fs.promises.FileHandle, opts?: ReadOptions): Promise<Buffer>;
+}
+
+/** BACKLOG-3816 S2: `requireEncrypted` for the whole-file readers (same meaning as on openDecryptStream). */
+export interface ReadOptions {
+  requireEncrypted?: boolean;
+}
+
+function refusePlaintext(): never {
+  throw new AtRestFormatError("file is not encrypted and the caller requires an encrypted file");
 }
 
 export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions = {}): FileCrypto {
@@ -417,29 +443,48 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
     throw new AtRestFormatError(`chunk size ${writeChunkSize} is out of range`);
   }
 
-  async function openEncrypted(filePath: string): Promise<{
+  interface OpenedFile {
     handle: fs.promises.FileHandle;
     header: ParsedHeader;
     layout: Layout;
     fileKey: Buffer;
-  }> {
+    /** false = the caller owns the handle; chunkPlaintexts must not close it. */
+    ownsHandle: boolean;
+  }
+
+  async function openEncryptedHandle(
+    handle: fs.promises.FileHandle,
+    ownsHandle: boolean,
+  ): Promise<OpenedFile> {
+    const { size } = await handle.stat();
+    if (size < HEADER_BYTES) throw new AtRestFormatError("file is shorter than a KEPRENC header");
+    const header = parseHeader(await readExactly(handle, HEADER_BYTES, 0));
+    const layout = layoutFor(size, header.chunkSize);
+    const dataKey = await keys.keyFor(header.keyId);
+    return { handle, header, layout, fileKey: deriveFileKey(dataKey, header.salt), ownsHandle };
+  }
+
+  async function openEncrypted(filePath: string): Promise<OpenedFile> {
     const handle = await fs.promises.open(filePath, "r");
     try {
-      const { size } = await handle.stat();
-      if (size < HEADER_BYTES) throw new AtRestFormatError("file is shorter than a KEPRENC header");
-      const header = parseHeader(await readExactly(handle, HEADER_BYTES, 0));
-      const layout = layoutFor(size, header.chunkSize);
-      const dataKey = await keys.keyFor(header.keyId);
-      return { handle, header, layout, fileKey: deriveFileKey(dataKey, header.salt) };
+      return await openEncryptedHandle(handle, true);
     } catch (error) {
       await handle.close().catch(() => undefined);
       throw error;
     }
   }
 
+  async function readAllFrom(opened: OpenedFile): Promise<Buffer> {
+    const parts: Buffer[] = [];
+    for await (const { plaintext } of chunkPlaintexts(opened, 0, opened.layout.chunkCount - 1)) {
+      parts.push(plaintext);
+    }
+    return Buffer.concat(parts);
+  }
+
   /** Yields verified plaintext for chunks first..last. Closes the handle when done or abandoned. */
   async function* chunkPlaintexts(
-    opened: Awaited<ReturnType<typeof openEncrypted>>,
+    opened: OpenedFile,
     first: number,
     last: number,
   ): AsyncGenerator<{ index: number; plaintext: Buffer }> {
@@ -456,7 +501,7 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
         yield { index, plaintext: openChunk(fileKey, header.raw, index, isFinal, sealed) };
       }
     } finally {
-      await handle.close().catch(() => undefined);
+      if (opened.ownsHandle) await handle.close().catch(() => undefined);
     }
   }
 
@@ -585,9 +630,7 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
     async openDecryptStream(filePath, opts = {}) {
       const magic = await readMagic(filePath);
       if (!magic.encrypted) {
-        if (opts.requireEncrypted) {
-          throw new AtRestFormatError("file is not encrypted and the caller requires an encrypted file");
-        }
+        if (opts.requireEncrypted) refusePlaintext();
         const { start, end } = resolveRange(opts, magic.size);
         const stream =
           end < start
@@ -620,19 +663,35 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
       return { stream: Readable.from(sliced()), encrypted: true, size, start, end };
     },
 
-    async readAllDecrypted(filePath) {
+    async readAllDecrypted(filePath, opts = {}) {
       const magic = await readMagic(filePath);
-      if (!magic.encrypted) return fs.promises.readFile(filePath);
-      const opened = await openEncrypted(filePath);
-      const parts: Buffer[] = [];
-      for await (const { plaintext } of chunkPlaintexts(opened, 0, opened.layout.chunkCount - 1)) {
-        parts.push(plaintext);
+      if (!magic.encrypted) {
+        if (opts.requireEncrypted) refusePlaintext();
+        return fs.promises.readFile(filePath);
       }
-      return Buffer.concat(parts);
+      return readAllFrom(await openEncrypted(filePath));
     },
 
-    async decryptToFile(srcPath, destPath) {
-      const { stream, encrypted, size } = await api.openDecryptStream(srcPath);
+    async statPlaintextFromHandle(handle) {
+      const { encrypted, size } = await readMagicFromHandle(handle);
+      if (!encrypted) return { encrypted: false, size };
+      const header = parseHeader(await readExactly(handle, HEADER_BYTES, 0));
+      return { encrypted: true, size: layoutFor(size, header.chunkSize).plaintextSize };
+    },
+
+    async readAllDecryptedFromHandle(handle, opts = {}) {
+      const magic = await readMagicFromHandle(handle);
+      if (!magic.encrypted) {
+        if (opts.requireEncrypted) refusePlaintext();
+        return readExactly(handle, magic.size, 0);
+      }
+      return readAllFrom(await openEncryptedHandle(handle, false));
+    },
+
+    async decryptToFile(srcPath, destPath, opts = {}) {
+      const { stream, encrypted, size } = await api.openDecryptStream(srcPath, {
+        requireEncrypted: opts.requireEncrypted,
+      });
       await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
       const tmp = tmpPathFor(destPath);
       let handle: fs.promises.FileHandle | null = null;

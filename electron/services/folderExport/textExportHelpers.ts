@@ -4,7 +4,7 @@
  * Extracted from folderExportService.ts for maintainability.
  */
 
-import fsSync from "fs";
+import { readStoredAttachment, statStoredAttachment } from "../atRest/attachmentReader";
 import type { Communication } from "../../types/models";
 import { isEmailMessage } from "../../utils/channelHelpers";
 import { escapeHtml } from "../../utils/exportUtils";
@@ -25,6 +25,85 @@ import {
   GROUP_CHAT_LABEL,
 } from "./threadContactLabel";
 import { exportNoticesHtml, type ExportOmissions } from "../exportNotices";
+
+/**
+ * BACKLOG-3816 S2: largest image (plaintext bytes) embedded in an export as a
+ * data: URI. There was no cap before — images were referenced by file:// (no
+ * cap found: `git grep -n -i "too large\|size cap\|MAX_.*BYTES" -- electron/services/folderExport`
+ * returned nothing). Larger images get a placeholder line instead.
+ */
+export const MAX_INLINE_IMAGE_BYTES = 10 * 1024 * 1024;
+
+/** An attachment row as the text export reads it. */
+export interface TextExportAttachment {
+  id: string;
+  filename: string;
+  mime_type: string | null;
+  storage_path: string | null;
+  file_size_bytes: number | null;
+  /**
+   * BACKLOG-3816 S2: the image as a data: URI, resolved (decrypted) before the
+   * HTML is built. Attachment files may be encrypted at rest, so the HTML can no
+   * longer reference them by file://.
+   */
+  inline_src?: string | null;
+  inline_status?: "embedded" | "missing" | "too_large";
+}
+
+export type TextExportAttachmentLookup = (
+  messageId: string,
+  externalId?: string,
+) => TextExportAttachment[];
+
+const SAFE_IMAGE_MIME = /^image\/[a-z0-9.+-]+$/i;
+
+/**
+ * BACKLOG-3816 S2: decrypt every image attachment of these messages into a data:
+ * URI (capped at {@link MAX_INLINE_IMAGE_BYTES}) and return a lookup that carries
+ * it. The HTML builders are synchronous; this runs first, in the async caller.
+ */
+export async function resolveInlineImages(
+  msgs: Communication[],
+  lookup: TextExportAttachmentLookup | undefined,
+): Promise<TextExportAttachmentLookup | undefined> {
+  if (!lookup) return undefined;
+  const resolved = new Map<string, TextExportAttachment[]>();
+  const keyFor = (messageId: string, externalId?: string) => `${messageId}\u0000${externalId ?? ""}`;
+  for (const msg of msgs) {
+    const messageId = msg.message_id || msg.id;
+    if (!messageId) continue;
+    const externalId = (msg as { external_id?: string }).external_id;
+    const key = keyFor(messageId, externalId);
+    if (resolved.has(key)) continue;
+    const rows = lookup(messageId, externalId);
+    const out: TextExportAttachment[] = [];
+    for (const att of rows) {
+      if (!att.mime_type?.startsWith("image/") || !att.storage_path) {
+        out.push(att);
+        continue;
+      }
+      out.push({ ...att, ...(await inlineImage(att)) });
+    }
+    resolved.set(key, out);
+  }
+  return (messageId, externalId) =>
+    resolved.get(keyFor(messageId, externalId)) ?? lookup(messageId, externalId);
+}
+
+async function inlineImage(
+  att: TextExportAttachment,
+): Promise<Pick<TextExportAttachment, "inline_src" | "inline_status">> {
+  const stat = await statStoredAttachment(att.storage_path as string);
+  if (!stat) return { inline_src: null, inline_status: "missing" };
+  if (stat.size > MAX_INLINE_IMAGE_BYTES) return { inline_src: null, inline_status: "too_large" };
+  try {
+    const bytes = await readStoredAttachment(att.storage_path as string);
+    const mime = SAFE_IMAGE_MIME.test(att.mime_type ?? "") ? att.mime_type : "image/jpeg";
+    return { inline_src: `data:${mime};base64,${bytes.toString("base64")}`, inline_status: "embedded" };
+  } catch {
+    return { inline_src: null, inline_status: "missing" };
+  }
+}
 
 /**
  * BACKLOG-2757: how a renderer asks "how many contacts does this handle name?".
@@ -380,13 +459,7 @@ export function generateTextThreadHTML(
   // state that nothing was removed from a thread that had texts removed from it.
   omissions: ExportOmissions,
   participants?: Array<{ phone: string; name: string | null }>,
-  getAttachmentsForMessage?: (messageId: string, externalId?: string) => {
-    id: string;
-    filename: string;
-    mime_type: string | null;
-    storage_path: string | null;
-    file_size_bytes: number | null;
-  }[],
+  getAttachmentsForMessage?: TextExportAttachmentLookup,
   matchedNames?: readonly string[]
 ): string {
   // BACKLOG-2280: split tapback rows out of the thread so they are attached to
@@ -608,13 +681,7 @@ export function generateTextMessageHTML(
   contact: { phone: string; name: string | null },
   phoneNameMap: Record<string, string>,
   groupChat: boolean,
-  getAttachmentsForMessage?: (messageId: string, externalId?: string) => {
-    id: string;
-    filename: string;
-    mime_type: string | null;
-    storage_path: string | null;
-    file_size_bytes: number | null;
-  }[],
+  getAttachmentsForMessage?: TextExportAttachmentLookup,
   /** BACKLOG-2280: tapbacks targeting this message, rendered as an evidentiary line. */
   reactions: Communication[] = [],
 ): string {
@@ -751,23 +818,14 @@ export function generateTextMessageHTML(
       }
 
       if (att.mime_type?.startsWith("image/") && att.storage_path) {
-        // Use file:// URL to reference image directly (more efficient than base64)
-        try {
-          if (fsSync.existsSync(att.storage_path)) {
-            // Use file:// URL - works because we load HTML from temp file
-            const fileUrl = `file://${att.storage_path}`;
-            attachmentHtml += `<div class="attachment-image"><img src="${fileUrl}" alt="${escapeHtml(att.filename)}" /></div>`;
-          } else {
-            // Image file not found - show placeholder
-            attachmentHtml += `<div class="attachment-ref">[Image: ${escapeHtml(att.filename)} - file not found]</div>`;
-          }
-        } catch (error) {
-          // Failed to read image - show placeholder
-          logService.warn("[Folder Export] Failed to embed image in PDF", "FolderExport", {
-            filename: att.filename,
-            error,
-          });
-          attachmentHtml += `<div class="attachment-ref">[Image: ${escapeHtml(att.filename)}]</div>`;
+        // BACKLOG-3816 S2: embedded as a data: URI resolved (decrypted) by
+        // resolveInlineImages — never file://, the stored file may be ciphertext.
+        if (att.inline_src) {
+          attachmentHtml += `<div class="attachment-image"><img src="${att.inline_src}" alt="${escapeHtml(att.filename)}" /></div>`;
+        } else if (att.inline_status === "too_large") {
+          attachmentHtml += `<div class="attachment-ref">[Image: ${escapeHtml(att.filename)} - too large to embed]</div>`;
+        } else {
+          attachmentHtml += `<div class="attachment-ref">[Image: ${escapeHtml(att.filename)} - file not found]</div>`;
         }
       } else {
         // Non-image attachment - show reference with specific type
@@ -778,15 +836,8 @@ export function generateTextMessageHTML(
   } else {
     // For attachment_only, still show inline images
     for (const att of attachments) {
-      if (att.mime_type?.startsWith("image/") && att.storage_path) {
-        try {
-          if (fsSync.existsSync(att.storage_path)) {
-            const fileUrl = `file://${att.storage_path}`;
-            attachmentHtml += `<div class="attachment-image"><img src="${fileUrl}" alt="${escapeHtml(att.filename)}" /></div>`;
-          }
-        } catch {
-          // Ignore errors for inline images
-        }
+      if (att.mime_type?.startsWith("image/") && att.storage_path && att.inline_src) {
+        attachmentHtml += `<div class="attachment-image"><img src="${att.inline_src}" alt="${escapeHtml(att.filename)}" /></div>`;
       }
     }
   }
