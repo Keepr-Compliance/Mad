@@ -68,7 +68,8 @@ class FakeContents implements ProfiledContents {
   destroyed = false;
   devTools = false;
   attached = false;
-  listeners = new Map<string, () => void>();
+  listeners = new Map<string, (...args: unknown[]) => void>();
+  debuggerListeners = new Map<string, () => void>();
   commands: string[] = [];
   failOn: string | null = null;
   profile: CpuProfile = blockProfile();
@@ -79,7 +80,17 @@ class FakeContents implements ProfiledContents {
     }),
     detach: jest.fn(() => {
       this.attached = false;
+      // Real Electron emits 'detach' for our own detach() too.
+      this.debuggerListeners.get("detach")?.();
     }),
+    on: (event: string, fn: () => void) => {
+      this.debuggerListeners.set(event, fn);
+      return this;
+    },
+    removeListener: (event: string) => {
+      this.debuggerListeners.delete(event);
+      return this;
+    },
     sendCommand: jest.fn(async (method: string) => {
       this.commands.push(method);
       if (this.failOn === method) throw new Error(`${method} failed`);
@@ -89,7 +100,7 @@ class FakeContents implements ProfiledContents {
   };
   isDestroyed = () => this.destroyed;
   isDevToolsOpened = () => this.devTools;
-  on = (event: string, fn: () => void) => {
+  on = (event: string, fn: (...args: unknown[]) => void) => {
     this.listeners.set(event, fn);
     return this;
   };
@@ -459,7 +470,90 @@ describe("BACKLOG-3785: the written profile", () => {
   });
 });
 
+describe("BACKLOG-3785: the profiler disarms when the page or debugger goes away", () => {
+  async function armed(): Promise<Harness> {
+    const h = harness();
+    await h.tick(0, { first: true });
+    await h.tick(1000);
+    expect(h.contents.attached).toBe(true);
+    return h;
+  }
+  const stopsAfter = (h: Harness): number => h.contents.commands.filter((c) => c === "Profiler.stop").length;
+
+  it("a main-frame navigation (Reload) stops profiling and detaches", async () => {
+    const h = await armed();
+    h.contents.listeners.get("did-start-navigation")?.({ isMainFrame: true });
+    await h.profiler.idle();
+    expect(stopsAfter(h)).toBe(1);
+    expect(h.contents.attached).toBe(false);
+    expect(h.contents.debugger.detach).toHaveBeenCalledTimes(1);
+    expect(h.contents.listeners.size).toBe(0);
+  });
+
+  it("a legacy positional main-frame navigation also disarms; a sub-frame one does not", async () => {
+    const h = await armed();
+    h.contents.listeners.get("did-start-navigation")?.({}, "u", false, false);
+    await h.profiler.idle();
+    expect(h.contents.attached).toBe(true);
+    h.contents.listeners.get("did-start-navigation")?.({}, "u", false, true);
+    await h.profiler.idle();
+    expect(h.contents.attached).toBe(false);
+  });
+
+  it("render-process-gone disarms without sending commands", async () => {
+    const h = await armed();
+    const before = h.contents.commands.length;
+    h.contents.listeners.get("render-process-gone")?.();
+    await h.profiler.idle();
+    expect(h.contents.commands.length).toBe(before);
+    expect(h.contents.listeners.size).toBe(0);
+    expect(h.contents.debuggerListeners.size).toBe(0);
+  });
+
+  it("an external debugger detach clears state: no watchdog, no further sampling or capture", async () => {
+    const h = await armed();
+    const detachSpy = h.contents.debugger.detach;
+    h.contents.attached = false; // someone else detached
+    h.contents.debuggerListeners.get("detach")?.();
+    await h.profiler.idle();
+    expect(h.contents.listeners.size).toBe(0);
+    expect(h.contents.debuggerListeners.size).toBe(0);
+    expect(detachSpy).not.toHaveBeenCalled();
+    // A 20 s silence then a tick does not capture anything from the dead session.
+    const commandsBefore = h.contents.commands.length;
+    h.window.open = false;
+    await h.tick(21_000);
+    expect(h.reports).toHaveLength(0);
+    expect(h.contents.commands.slice(commandsBefore)).toEqual([]);
+  });
+});
+
 describe("BACKLOG-3785: what leaves the machine (Sentry event)", () => {
+  it("summarizeProfile's bundleSelf holds Keepr bundle frames only (first filter, on its own)", () => {
+    const summary = summarizeProfile(blockProfile());
+    expect(summary.bundleSelf.length).toBeGreaterThan(0);
+    expect(summary.bundleSelf.every((e) => e.bundle)).toBe(true);
+    expect(summary.bundleSelf.map((e) => e.functionName)).toEqual(["buildRows"]);
+    // The unfiltered list does contain non-bundle frames, so the assertion above can fail.
+    expect(summary.self.some((e) => !e.bundle)).toBe(true);
+  });
+
+  it("buildFreezeEvent drops non-bundle entries even if handed them (second filter, on its own)", () => {
+    const entry = (functionName: string, bundle: boolean) => ({
+      label: functionName, functionName, file: "f.js", line: 1, bundle, ms: 5,
+    });
+    const event = buildFreezeEvent({
+      gapMs: 1,
+      bundleSelf: [entry("keep", true), entry("drop", false)],
+      phase: null,
+      screen: "x",
+      appVersion: "1",
+      platform: "darwin",
+    });
+    const frames = (event.extra as { top_self_frames: Array<{ functionName: string }> }).top_self_frames;
+    expect(frames.map((f) => f.functionName)).toEqual(["keep"]);
+  });
+
   it("contains only the whitelisted keys and only Keepr bundle frames", async () => {
     const h = harness();
     await freeze(h, 2000, 20_000);

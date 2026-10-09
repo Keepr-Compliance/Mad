@@ -120,14 +120,19 @@ export const PROFILE_DIR_NAME = "diagnostics";
 export const PROFILE_FILE_PREFIX = "renderer-freeze-";
 export const PROFILE_FILE_SUFFIX = ".cpuprofile.kenc";
 
+/** WebContents events the profiler listens to. */
+export type ContentsEvent = "devtools-opened" | "destroyed" | "did-start-navigation" | "render-process-gone";
+
 /** The slice of Electron's WebContents this module uses (injectable for tests). */
 export interface ProfiledContents {
   isDestroyed(): boolean;
   isDevToolsOpened(): boolean;
-  on(event: "devtools-opened" | "destroyed", listener: () => void): unknown;
-  removeListener(event: "devtools-opened" | "destroyed", listener: () => void): unknown;
+  on(event: ContentsEvent, listener: (...args: any[]) => void): unknown; // eslint-disable-line @typescript-eslint/no-explicit-any -- Electron's listener arguments differ per event
+  removeListener(event: ContentsEvent, listener: (...args: any[]) => void): unknown; // eslint-disable-line @typescript-eslint/no-explicit-any -- as above
   debugger: {
     isAttached(): boolean;
+    on(event: "detach", listener: () => void): unknown;
+    removeListener(event: "detach", listener: () => void): unknown;
     attach(protocolVersion?: string): void;
     detach(): void;
     sendCommand(method: string, params?: Record<string, unknown>): Promise<unknown>;
@@ -400,6 +405,28 @@ export class RendererFreezeProfiler {
   private readonly onDestroyed = (): void => {
     this.forget();
   };
+  /** A main-frame navigation or reload (e.g. "Not Responding" -> Reload): the profile belongs to the old page. */
+  private readonly onNavigation = (...args: unknown[]): void => {
+    // Modern Electron passes details as args[0].isMainFrame; the legacy positional form has isMainFrame at args[3].
+    const details = args[0] as { isMainFrame?: boolean } | undefined;
+    const isMainFrame = typeof details?.isMainFrame === "boolean" ? details.isMainFrame : args[3] === true;
+    if (!isMainFrame) return;
+    this.deps.log.info("[FreezeProfiler] main-frame navigation; profiler disarmed");
+    this.lastTickAt = null;
+    this.enqueue(() => this.disarm());
+  };
+  /** The renderer process died: nothing to talk to; drop state and detach without commands. */
+  private readonly onRenderProcessGone = (): void => {
+    this.deps.log.info("[FreezeProfiler] render process gone; profiler disarmed");
+    this.lastTickAt = null;
+    this.detachQuietly();
+  };
+  /** Someone else detached our debugger (or the session ended): stop sampling bookkeeping at once. */
+  private readonly onDebuggerDetached = (): void => {
+    this.deps.log.info("[FreezeProfiler] debugger detached externally; profiler disarmed");
+    this.lastTickAt = null;
+    this.detachQuietly();
+  };
 
   constructor(deps: Partial<FreezeProfilerDeps> = {}) {
     this.deps = {
@@ -601,6 +628,9 @@ export class RendererFreezeProfiler {
     this.state = "on";
     contents.on("devtools-opened", this.onDevToolsOpened);
     contents.on("destroyed", this.onDestroyed);
+    contents.on("did-start-navigation", this.onNavigation);
+    contents.on("render-process-gone", this.onRenderProcessGone);
+    contents.debugger.on("detach", this.onDebuggerDetached);
     this.startWatchdog();
     await this.command("Profiler.enable");
     await this.command("Profiler.setSamplingInterval", { interval: PROFILE_SAMPLING_INTERVAL_US });
@@ -729,6 +759,10 @@ export class RendererFreezeProfiler {
     try {
       contents.removeListener("devtools-opened", this.onDevToolsOpened);
       contents.removeListener("destroyed", this.onDestroyed);
+      contents.removeListener("did-start-navigation", this.onNavigation);
+      contents.removeListener("render-process-gone", this.onRenderProcessGone);
+      // Before our own detach() below, which would otherwise fire the handler.
+      contents.debugger.removeListener("detach", this.onDebuggerDetached);
     } catch {
       // ignore
     }
