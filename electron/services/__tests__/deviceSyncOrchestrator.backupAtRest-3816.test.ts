@@ -526,9 +526,14 @@ describe("refusals before idevicebackup2", () => {
     const flag = new Int32Array(new SharedArrayBuffer(4));
     internals.busy.set(UDID, "migrating");
     internals.pausable.set(UDID, flag);
+    // It takes several of the sync's wait intervals (pauseWaitMs 20) to reach its next
+    // file boundary, as a large file would: the sync keeps waiting, it never gives up.
+    let askedAt: number | null = null;
     let pausedAt: number | null = null;
     const pass = setInterval(() => {
-      if (Atomics.load(flag, 0) === 1 && pausedAt === null) {
+      if (Atomics.load(flag, 0) !== 1 || pausedAt !== null) return;
+      askedAt ??= Date.now();
+      if (Date.now() - askedAt >= 150) {
         pausedAt = Date.now();
         internals.release(UDID);
       }
@@ -614,6 +619,80 @@ describe("D — C-DELTA reads a parse copy", () => {
     expect(fsSync.existsSync(result.backupPath!)).toBe(false); // C4: parse copy gone after close
     await o.completeBackupAtRest();
     await sealedAfter(o);
+  });
+});
+
+describe("C2-DELTA (founder must-fix 2026-10-09) — every end of a C-DELTA sync reseals at once; persistence is not waited for", () => {
+  let copySpy: jest.SpyInstance;
+  beforeEach(() => {
+    atRest = new BackupAtRest({
+      backupsRoot: () => backups,
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => userData }),
+      ensureKey: async () => undefined,
+      freeBytes: async () => Number.MAX_SAFE_INTEGER,
+      sleep: async () => undefined,
+      log: () => undefined,
+      strategy: () => "delta",
+    });
+    copySpy = jest.spyOn(atRest, "buildParseCopy").mockImplementation(async (_udid, out) => {
+      fsSync.mkdirSync(path.join(out, "3d"), { recursive: true });
+      fsSync.writeFileSync(path.join(out, "3d", SMS_ID), "decrypted sms copy");
+      return { copied: 1, missing: 0 };
+    });
+  });
+
+  it("success: the seal starts right after the parse copy — before persistence ends; completeBackupAtRest adds nothing", async () => {
+    const o = newOrchestrator();
+    backupReturns(ok());
+    const result = await o.sync({ udid: UDID });
+    expect(result.success).toBe(true);
+    expect(copySpy).toHaveBeenCalledTimes(1);
+    // Persistence (the 'complete' listener) has NOT run completeBackupAtRest, yet:
+    await sealedAfter(o);
+    const sealPromise = o.lastAtRestSeal;
+    await o.completeBackupAtRest(true);
+    expect(o.lastAtRestSeal).toBe(sealPromise); // no second seal was started
+    await o.cleanupBackup(result.backupPath!);
+  });
+
+  it("disconnect (the tool exits, the phone is gone)", async () => {
+    const o = newOrchestrator();
+    backupReturns((orc) => {
+      (orc as unknown as { backupInFlight: { disconnected: boolean } }).backupInFlight.disconnected = true;
+      return fail();
+    }, o);
+    expect((await o.sync({ udid: UDID })).success).toBe(false);
+    await sealedAfter(o);
+    // Keeps the force-full flag semantics: a disconnect does not force C-FULL.
+    expect(await atRest.forcedFullReason(UDID)).toBeNull();
+  });
+
+  it("cancel during the backup", async () => {
+    const o = newOrchestrator();
+    backupReturns((orc) => {
+      orc.cancel();
+      return fail();
+    }, o);
+    expect((await o.sync({ udid: UDID })).error).toMatch(/cancel/i);
+    await sealedAfter(o);
+  });
+
+  it("the backup tool errors", async () => {
+    const o = newOrchestrator();
+    backupReturns(fail({ errorCode: "DEVICE_LOCKED", error: "locked" } as Partial<BackupResult>));
+    expect((await o.sync({ udid: UDID })).success).toBe(false);
+    await sealedAfter(o);
+  });
+
+  it("a throw after the parse copy (parser explodes): sealed once, not twice", async () => {
+    const o = newOrchestrator();
+    parserBehaviour = "throw";
+    backupReturns(ok());
+    const finish = jest.spyOn(atRest, "finishSync");
+    expect((await o.sync({ udid: UDID })).error).toMatch(/parser exploded/);
+    await sealedAfter(o);
+    expect(finish).toHaveBeenCalledTimes(1);
   });
 });
 

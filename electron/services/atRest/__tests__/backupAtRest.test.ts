@@ -245,7 +245,7 @@ describe("`encrypted` only after a clean scan", () => {
     const session = await service().beginSync(UDID, { strategy: "full" });
     const lockedAgain = service({ sealEngineOptions: locked });
     await lockedAgain.finishSync(session);
-    expect(await readMarkerAt(backups, UDID)).toBe("syncing");
+    expect(await readMarkerAt(backups, UDID)).toBe("sealing");
     expect(await service().migrate(UDID)).toBe("encrypted");
     expect(plaintextLeft()).toEqual([]);
   });
@@ -645,7 +645,7 @@ describe("refusals and special chains", () => {
       return realScan(u);
     });
     await s.finishSync(first, undefined, { succeeded: true });
-    expect(await readMarkerAt(backups, UDID)).toBe("syncing");
+    expect(await readMarkerAt(backups, UDID)).not.toBe("encrypted");
     const session = (await (second as unknown as Promise<unknown>)) as Awaited<ReturnType<BackupAtRest["beginSync"]>>;
     await service().finishSync(session, undefined, { succeeded: true });
     expect(plaintextLeft()).toEqual([]);
@@ -895,8 +895,8 @@ describe("B2: unreadable kept backup → quarantine + full backup", () => {
     const quarantineRoot = path.join(backups, QUARANTINE_DIR_NAME);
     expect(fs.existsSync(quarantineRoot)).toBe(false);
     expect(fs.existsSync(path.join(chain, "Manifest.db"))).toBe(true);
-    // Marker keeps saying `syncing`, so the next launch/sync seals the leftover plaintext.
-    expect(await readMarkerAt(backups, UDID)).toBe("syncing");
+    // Marker says `sealing` (not encrypted), so the next launch/sync seals the leftover plaintext.
+    expect(await readMarkerAt(backups, UDID)).toBe("sealing");
     expect(s.busyReason(UDID)).toBeNull();
   });
 
@@ -968,6 +968,93 @@ describe("per-phone lock covers the new-chain step (underLock)", () => {
 // ---------------------------------------------------------------------------
 // Should-fix: progress for passes no sync is watching
 // ---------------------------------------------------------------------------
+describe("founder must-fix 2026-10-09: reseal at once, on quit, and while idle", () => {
+  const indexFiles = () => ["Manifest.db", "Info.plist", "Status.plist", "Manifest.plist"].map((n) => path.join(chain, n));
+
+  it("quit during a sync: the unsealed index files are sealed before exit; the rest is left to the launch job", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    expect(s.sealIndexForQuit(1000)).toBeNull(); // nothing unsealed: the quit is not held
+    await s.beginSync(UDID); // C-DELTA: index + plists unsealed
+    const sent = write("cd/" + "c".repeat(40), "a file the phone sent before the quit");
+    for (const f of indexFiles()) expect(headerOf(f).equals(MAGIC)).toBe(false);
+    const quitting = s.sealIndexForQuit(5000);
+    expect(quitting).not.toBeNull();
+    await quitting;
+    for (const f of indexFiles()) expect(headerOf(f).equals(MAGIC)).toBe(true);
+    expect(headerOf(sent).equals(MAGIC)).toBe(false); // the launch job's
+    expect(await readMarkerAt(backups, UDID)).toBe("syncing");
+    // Next launch: sealed, and the marker reads `sealing` while it runs.
+    const seen: string[] = [];
+    const launch = service({ sealEngineOptions: { beforeSeal: () => void readMarkerAt(backups, UDID).then((m) => seen.push(m)) } });
+    expect((await launch.runLaunchJob())[UDID]).toBe("encrypted");
+    expect(plaintextLeft()).toEqual([]);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(new Set(seen)).toEqual(new Set(["sealing"]));
+  });
+
+  it("quit while a background seal runs: it is paused, then the index is sealed, within the bound", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    let quitting: Promise<void> | null = null;
+    let n = 0;
+    const s2 = service({
+      sealEngineOptions: {
+        beforeSeal: () => {
+          if (++n === 1) quitting = s2.sealIndexForQuit(5000);
+        },
+      },
+    });
+    // (a fresh service shares the disk, not the in-memory state: hand it the open index)
+    (s2 as unknown as { indexUnsealed: Set<string> }).indexUnsealed.add(UDID);
+    // Make the newest-first pass reach a content file first so the pause lands before the index.
+    write("cd/" + "d".repeat(40), "new");
+    await s2.finishSync(session);
+    await (quitting as unknown as Promise<void>);
+    for (const f of indexFiles()) expect(headerOf(f).equals(MAGIC)).toBe(true);
+  });
+
+  it("the quit wait is bounded: a pass that never stops does not hold the quit", async () => {
+    makeChain();
+    const s = service();
+    const internals = s as unknown as { busy: Map<string, string>; pausable: Map<string, Int32Array> };
+    internals.busy.set(UDID, "sealing");
+    internals.pausable.set(UDID, new Int32Array(new SharedArrayBuffer(4)));
+    const t0 = Date.now();
+    await s.sealIndexForQuit(80);
+    expect(Date.now() - t0).toBeLessThan(2000);
+    internals.busy.delete(UDID);
+    internals.pausable.delete(UDID);
+  });
+
+  it("idle recovery: a chain left `syncing` with no pass on it is resealed without a restart; a busy phone is left alone", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    await s.beginSync(UDID);
+    write("cd/" + "e".repeat(40), "written by the sync");
+    // The sync's seal never ran (the founder's beta.3 case); the lock is still held.
+    expect(await s.recoverIdle()).toEqual({});
+    (s as unknown as { release: (u: string) => void }).release(UDID);
+    expect(await s.recoverIdle()).toEqual({ [UDID]: "encrypted" });
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("a seal pass takes the newest files first (what the last sync wrote, the unsealed index)", async () => {
+    makeChain();
+    const old = new Date(Date.now() - 86_400_000);
+    for (const f of allContentFiles()) fs.utimesSync(f, old, old);
+    const fresh = write("cd/" + "f".repeat(40), "just written");
+    const order: string[] = [];
+    await service({ sealEngineOptions: { beforeSeal: (p) => order.push(p) } }).seal(UDID);
+    expect(order[0]).toBe(fresh);
+  });
+});
+
 describe("durability of the renames (seal throughput: one directory fsync per touched directory)", () => {
   it("every directory a seal renamed into is fsynced before the marker says encrypted", async () => {
     makeChain();

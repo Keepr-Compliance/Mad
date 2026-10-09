@@ -205,6 +205,15 @@ export interface BackupAtRestProgress {
  * PC benchmark gives the Windows figures.
  */
 export const PROGRESS_FILE_WEIGHT_BYTES = 256 * 1024;
+/**
+ * Quit (BACKLOG-3816): how long a quit waits while the unsealed index files (Manifest.db,
+ * up to ~1 GB, and the three root plists) are sealed. Measured: a 1 GB file seals in
+ * 2.3 s on the Mac bench (M1, fsync included); the bound leaves room for a slower disk
+ * and antivirus. If it is hit, the quit goes ahead and the launch job seals the rest.
+ */
+export const QUIT_SEAL_BOUND_MS = 15_000;
+/** While the app runs, a chain left `syncing` / `sealing` / `migrating` with no pass on it is resealed this often. */
+export const IDLE_RECOVERY_INTERVAL_MS = 5 * 60_000;
 /** While a sync waits for a background pass to pause, its status line is repeated this often. */
 export const PAUSE_REPORT_INTERVAL_MS = 5000;
 /** Progress for a seal pass is emitted at most this often (plus its start and end). */
@@ -322,6 +331,7 @@ export async function readMarkerAt(backupsRoot: string, udid: string): Promise<M
         parsed.state === "migrating" ||
         parsed.state === "encrypted" ||
         parsed.state === "syncing" ||
+        parsed.state === "sealing" ||
         parsed.state === "apple-encrypted")
     ) {
       return parsed.state;
@@ -341,6 +351,7 @@ export function markerProtectsChain(reading: MarkerReading): boolean {
     reading === "migrating" ||
     reading === "encrypted" ||
     reading === "syncing" ||
+    reading === "sealing" ||
     reading === "apple-encrypted"
   );
 }
@@ -411,6 +422,8 @@ async function pool<T>(items: readonly T[], limit: number, work: (item: T) => Pr
 interface ListedFile {
   path: string;
   size: number;
+  /** Last modification; a seal pass handles the newest files first. */
+  mtimeMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -442,6 +455,8 @@ export class BackupAtRest extends EventEmitter {
   private readonly pausable = new Map<string, Int32Array>();
   /** Phones whose background pass was paused for a sync, to be resumed if that sync never unseals. */
   private readonly pausedForSync = new Set<string>();
+  /** Phones whose index files a sync unsealed and no seal has closed yet (sealed first on quit). */
+  private readonly indexUnsealed = new Set<string>();
 
   constructor(private readonly deps: BackupAtRestDeps) {
     super();
@@ -593,16 +608,19 @@ export class BackupAtRest extends EventEmitter {
       }
       // Sizes in parallel (a backup has ~256 directories of ~2,000 files each).
       const sizes = new Array<number>(candidates.length);
+      const mtimes = new Array<number>(candidates.length);
       await pool(candidates.map((_, i) => i), 32, async (i) => {
         try {
-          sizes[i] = (await fs.promises.lstat(candidates[i])).size;
+          const st = await fs.promises.lstat(candidates[i]);
+          sizes[i] = st.size;
+          mtimes[i] = st.mtimeMs;
         } catch (error) {
           if ((error as NodeJS.ErrnoException)?.code === "ENOENT") sizes[i] = -1;
           else throw error;
         }
       });
       candidates.forEach((full, i) => {
-        if (sizes[i] >= 0) out.push({ path: full, size: sizes[i] });
+        if (sizes[i] >= 0) out.push({ path: full, size: sizes[i], mtimeMs: mtimes[i] });
       });
       for (const sub of subdirs) await walk(sub, false);
     };
@@ -675,7 +693,9 @@ export class BackupAtRest extends EventEmitter {
   ): Promise<PassReport> {
     const started = Date.now();
     const report = emptyReport();
-    const listed = await this.listFiles(chain, report);
+    // Newest first: what the last sync wrote (and the index files it unsealed) is sealed
+    // within seconds, before the walk over the unchanged rest of the chain.
+    const listed = (await this.listFiles(chain, report)).sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
     report.files = listed.length;
     const largest = listed.reduce((m, f) => Math.max(m, f.size), 0);
     if (!(await this.diskOk(chain, largest))) {
@@ -875,7 +895,13 @@ export class BackupAtRest extends EventEmitter {
    * A folder with no Manifest.db (an unfinished first backup) is sealed but gets NO
    * marker, so the 3598 cleanup can still remove it.
    */
-  private async sealAndRecord(udid: string, phase: "sealing" | "migrating", onProgress?: (p: BackupAtRestProgress) => void): Promise<"encrypted" | "incomplete" | "absent" | "apple" | "unindexed" | "paused"> {
+  private async sealAndRecord(
+    udid: string,
+    phase: "sealing" | "migrating",
+    onProgress?: (p: BackupAtRestProgress) => void,
+    /** Marker while the seal runs and if it does not finish (indexed chains only). */
+    markerWhile: "sealing" | "migrating" = phase === "migrating" ? "migrating" : "sealing",
+  ): Promise<"encrypted" | "incomplete" | "absent" | "apple" | "unindexed" | "paused"> {
     const chain = this.chainDir(udid);
     // Per scan: an early return below must not leave the previous scan's count behind.
     this.lastScanDamaged.delete(udid);
@@ -887,6 +913,9 @@ export class BackupAtRest extends EventEmitter {
       await this.recordAppleChain(udid);
       return "apple";
     }
+    // Says what is happening (status and UI read it) and protects the chain meanwhile.
+    // A first backup (no Manifest.db yet) gets no marker, so 3598 can still remove it.
+    if (await exists(path.join(chain, "Manifest.db"))) await this.setMarker(udid, markerWhile);
     const report = await this.seal(udid, onProgress, phase);
     if (report.paused) {
       // A sync asked for this phone. The marker stays as it is (migrating / syncing), so
@@ -925,9 +954,10 @@ export class BackupAtRest extends EventEmitter {
     }
     if (scan.plaintext === 0) {
       await this.setMarker(udid, "encrypted");
+      this.indexUnsealed.delete(udid);
       return "encrypted";
     }
-    await this.setMarker(udid, phase === "migrating" ? "migrating" : "syncing");
+    await this.setMarker(udid, markerWhile);
     return "incomplete";
   }
 
@@ -1044,6 +1074,7 @@ export class BackupAtRest extends EventEmitter {
       // job still seals such a chain when no sync comes first.
       // From the first unsealed byte on, the marker says `syncing`.
       await this.setMarker(udid, "syncing");
+      this.indexUnsealed.add(udid);
       const report =
         strategy === "full"
           ? await this.unseal(udid, undefined, opts.onProgress)
@@ -1107,6 +1138,7 @@ export class BackupAtRest extends EventEmitter {
       await fs.promises.rename(this.chainDir(udid), dest);
     });
     await this.removeMarker(udid);
+    this.indexUnsealed.delete(udid);
     this.log("warn", "[BackupAtRest] moved an unreadable backup to quarantine; this sync makes a full backup", {
       reasonCode,
     });
@@ -1247,6 +1279,105 @@ export class BackupAtRest extends EventEmitter {
   }
 
   // -------------------------------------------------------------------------
+  // Quit and idle recovery
+  // -------------------------------------------------------------------------
+
+  /**
+   * Quit (founder QA 2026-10-09: a quit at `syncing` left the index plaintext until the
+   * next launch). Pauses any background pass, then seals the index files of every phone
+   * a sync unsealed (Manifest.db and the root plists) — the rest is left to the launch
+   * job. Resolves within `boundMs` whatever happens. Null when there is nothing to do
+   * (the quit is not deferred).
+   */
+  sealIndexForQuit(boundMs: number = QUIT_SEAL_BOUND_MS): Promise<void> | null {
+    const udids = new Set<string>([...this.indexUnsealed, ...this.pausable.keys()]);
+    if (udids.size === 0) return null;
+    const work = (async () => {
+      for (const udid of udids) this.requestPause(udid);
+      await Promise.all(
+        [...udids].map((udid) => (this.pausable.has(udid) ? this.waitForRelease(udid, boundMs) : Promise.resolve(true))),
+      );
+      for (const udid of this.indexUnsealed) {
+        const report = await this.sealIndexFiles(udid);
+        this.log("info", "[BackupAtRest] sealed the index files before quitting", {
+          sealedNow: report.changed,
+          failed: report.failed,
+          ms: report.ms,
+        });
+      }
+    })().catch((error) => {
+      this.log("warn", "[BackupAtRest] could not seal the index files before quitting; the next launch does", {
+        code: errCode(error),
+      });
+    });
+    let timer: NodeJS.Timeout | undefined;
+    const bound = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, boundMs);
+    });
+    return Promise.race([work, bound]).finally(() => clearTimeout(timer));
+  }
+
+  /** Seal only Manifest.db and the root plists of `udid` (no scan, no marker change). */
+  async sealIndexFiles(udid: string): Promise<PassReport> {
+    const started = Date.now();
+    const report = emptyReport();
+    const chain = this.chainDir(udid);
+    if (await isAppleEncryptedChain(chain, this.readPlist)) return report;
+    const listed: ListedFile[] = [];
+    for (const rel of DELTA_UNSEAL_FILES) {
+      try {
+        listed.push({ path: path.join(chain, rel), size: (await fs.promises.lstat(path.join(chain, rel))).size });
+      } catch {
+        // absent: nothing to seal
+      }
+    }
+    report.files = listed.length;
+    if (listed.length === 0) return report;
+    const key = await this.sealKey();
+    const result = await this.pass(listed, "seal", key, undefined, (_i, outcomes) => outcomes.forEach((o) => this.tally(report, o)));
+    await pool([...result.touchedDirs], 4, (dir) => fsyncDir(dir));
+    report.ms = Date.now() - started;
+    return report;
+  }
+
+  /**
+   * While the app runs: reseal every chain left `syncing` / `sealing` / `migrating` (or
+   * with an unreadable marker) that no pass is working on — a seal that failed or was cut
+   * short does not wait for the next launch. Never throws.
+   */
+  async recoverIdle(): Promise<Record<string, string>> {
+    const outcomes: Record<string, string> = {};
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(this.deps.backupsRoot(), { withFileTypes: true });
+    } catch {
+      return outcomes;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !UDID_DIR_PATTERN.test(entry.name)) continue;
+      const udid = entry.name;
+      if (this.busy.has(udid)) continue;
+      const marker = await this.readMarker(udid);
+      if (marker !== "syncing" && marker !== "sealing" && marker !== "migrating" && marker !== "unreadable") continue;
+      try {
+        outcomes[udid] = await this.migrate(udid);
+      } catch (error) {
+        outcomes[udid] = `failed:${errCode(error)}`;
+      }
+    }
+    return outcomes;
+  }
+
+  /** Runs {@link recoverIdle} every `intervalMs` (unref'd). Returns a stop function. */
+  startIdleRecovery(intervalMs: number = IDLE_RECOVERY_INTERVAL_MS): () => void {
+    const timer = setInterval(() => {
+      void this.recoverIdle();
+    }, intervalMs);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }
+
+  // -------------------------------------------------------------------------
   // Launch: recovery + migration
   // -------------------------------------------------------------------------
 
@@ -1342,9 +1473,10 @@ export class BackupAtRest extends EventEmitter {
       } catch {
         return "key-unavailable";
       }
-      const indexed = await exists(path.join(chain, "Manifest.db"));
-      if (indexed && marker !== "syncing") await this.setMarker(udid, "migrating");
-      return await this.sealAndRecord(udid, "migrating", onProgress);
+      // A chain a sync or a crash left part plain is RESEALED (`sealing`); a pre-2.40 chain
+      // is MIGRATED (`migrating`).
+      const recovery = marker === "syncing" || marker === "sealing" || marker === "unreadable";
+      return await this.sealAndRecord(udid, "migrating", onProgress, recovery ? "sealing" : "migrating");
     } finally {
       this.release(udid);
     }

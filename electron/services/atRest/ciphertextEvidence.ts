@@ -44,7 +44,7 @@ export const MAX_FILES_SCANNED = 200_000;
 const STATE_FILE_NAME = "at-rest-state.json";
 const MARKER_DIR = path.join("Backups", ".keepr-at-rest");
 const ENCRYPTED_SCOPE_STATES = new Set(["migrating", "done"]);
-const ENCRYPTED_BACKUP_STATES = new Set(["migrating", "encrypted", "syncing"]);
+const ENCRYPTED_BACKUP_STATES = new Set(["migrating", "encrypted", "syncing", "sealing"]);
 
 export interface CiphertextEvidenceOptions {
   maxFiles?: number;

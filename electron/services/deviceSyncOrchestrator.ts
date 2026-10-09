@@ -852,6 +852,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // completeBackupAtRest(), which syncHandlers calls when persistence ends.
     let atRestSession: BackupSyncSession | null = null;
     let atRestHandedOff = false;
+    // BACKLOG-3816: set once this sync's seal has started (C-DELTA: right after the parse copy).
+    let atRestSealStarted = false;
     // Set when the backup tool itself failed (not a cancel, quit, disconnect, disk guard
     // or password failure): the sealing step then makes the next sync of a C-DELTA phone C-FULL.
     let forceFullNext: string | undefined;
@@ -1982,6 +1984,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         }
         backupPath = copyDir;
         parseCopyPath = copyDir;
+        // BACKLOG-3816: from here on this sync reads only the parse copy, never the chain.
+        // So the chain is sealed NOW, in the background (worker threads), while contacts
+        // and messages are parsed and stored — not after persistence. What the phone
+        // just wrote and the unsealed index files are sealed first (newest first).
+        this.lastAtRestSeal = this.atRest().finishSync(atRestSession);
+        atRestSealStarted = true;
       }
 
       // Step 3: Parse contacts
@@ -2152,7 +2160,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // BACKLOG-3816 S4-C: persistence still reads this chain; it is sealed when
       // persistence ends (syncHandlers -> completeBackupAtRest). With no listener there
       // is no persistence, so the finally below seals now.
-      if (atRestSession && this.listenerCount("complete") > 0) {
+      if (atRestSession && !atRestSealStarted && this.listenerCount("complete") > 0) {
         this.pendingAtRestSession = atRestSession;
         atRestHandedOff = true;
       }
@@ -2187,7 +2195,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // must not hold the sync's answer; the per-phone lock refuses a new sync until it
       // ends. A quit (3 s cap) does not seal: the marker stays `syncing` and the next
       // launch seals before any sync.
-      if (atRestSession && !atRestHandedOff) {
+      if (atRestSession && !atRestHandedOff && !atRestSealStarted) {
         if (this.stoppedForQuit) {
           log.info("[DeviceSyncOrchestrator] App quitting; the kept backup is sealed at next launch");
         } else {

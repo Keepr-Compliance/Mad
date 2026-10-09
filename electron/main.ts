@@ -217,6 +217,7 @@ import { deepLinkSessionErrorToPayload } from "./services/supabaseNetError";
 import databaseService from "./services/databaseService";
 import { initializationBroadcaster } from "./services/initializationBroadcaster";
 import { atRestStartup } from "./services/atRest/startup";
+import { getBackupAtRest } from "./services/atRest/backupAtRest";
 import { registerAtRestHandlers } from "./handlers/atRestHandlers";
 import sessionService from "./services/sessionService";
 import submissionService from "./services/submissionService";
@@ -2047,12 +2048,18 @@ const deferQuitForLink = createBackupStopOnQuit(app, () =>
   ),
 );
 
+// BACKLOG-3816: a quit while the kept iPhone backup's index files are unsealed (a sync,
+// or a seal still running) seals Manifest.db and the root plists first (bounded); the
+// launch job seals the rest. Runs after the backup process has been stopped.
+const deferQuitForBackupSeal = createBackupStopOnQuit(app, () => getBackupAtRest().sealIndexForQuit());
+
 app.on("before-quit", (event) => {
   // BACKLOG-3598: must run before cleanupSyncHandlers() drops the orchestrator. When a
   // backup is running this defers the quit and returns; the rest of this handler then
   // runs once, on the re-quit.
   if (deferQuitForBackupStop(event)) return;
   if (deferQuitForLink(event)) return;
+  if (deferQuitForBackupSeal(event)) return;
   // TASK-1956: Shutdown persistent contact worker pool
   try {
     const { shutdownPool } = require("./workers/contactWorkerPool");
