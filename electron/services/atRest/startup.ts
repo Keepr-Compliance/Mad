@@ -38,6 +38,7 @@
  */
 import { hostLogger } from "../../capabilities/loggerProvider";
 import { DataKeyUnavailableError, getDataKeyService } from "./dataKeyService";
+import { getAtRestMigration } from "./migration";
 
 export interface AtRestJobContext {
   log: (level: "info" | "warn" | "error", message: string) => void;
@@ -182,8 +183,8 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
   });
   startup.register(placeholder("logs", 10, "S5"));
   startup.register(placeholder("temp-sweep", 20, "S6"));
-  startup.register(placeholder("attachments", 30, "S3"));
-  startup.register(placeholder("email-attachments", 40, "S3"));
+  startup.register({ id: "attachments", order: 30, run: async () => { await getAtRestMigration().runScope("attachments"); } });
+  startup.register({ id: "email-attachments", order: 40, run: async () => { await getAtRestMigration().runScope("email-attachments"); } });
   startup.register(placeholder("backups", 50, "S4"));
   startup.register(placeholder("legacy-sweep", 60, "S6"));
 }

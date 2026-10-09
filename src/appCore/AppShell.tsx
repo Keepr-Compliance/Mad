@@ -12,6 +12,7 @@ import React from "react";
 import type { AppStateMachine } from "./state/types";
 import { OfflineBanner } from "./shell";
 import { ResumeSetupBanner } from "../components/setup/ResumeSetupBanner";
+import { AtRestMigrationBanner } from "../components/common/AtRestMigrationBanner";
 import SystemHealthMonitor from "../components/SystemHealthMonitor";
 import { isOnboardingStep } from "./routing";
 import { useSessionValidator } from "../hooks/useSessionValidator";
@@ -155,6 +156,7 @@ export function AppShell({ app, children }: AppShellProps) {
           null when the floor is satisfied (incl. texts-only) or dismissed this
           session. Not shown on the login screen. */}
       {currentStep !== "login" && <ResumeSetupBanner app={app} />}
+      {currentStep !== "login" && <AtRestMigrationBanner />}
 
       {/* System Health Monitor - Show permission/connection errors */}
       {/* BACKLOG-2127: mount whenever on the dashboard, NOT gated on
