@@ -37,6 +37,7 @@ import fsPromises from "fs/promises";
 import type { FileHandle } from "fs/promises";
 import os from "os";
 import path from "path";
+import { setAttachmentReaderDepsForTests } from "../atRest/attachmentReader";
 import {
   extractTextForAttachment,
   extractTextForAttachmentId,
@@ -290,16 +291,27 @@ describe("BACKLOG-2257 extractTextForAttachmentId — id-based entrypoint", () =
 // second open of the path), and the handle is ALWAYS closed — on the success, size-cap,
 // and error paths alike.
 describe("BACKLOG-2257 extractTextForAttachment — file-handle lifecycle", () => {
+  // BACKLOG-3816 S2: the reader decides plaintext pass-through by the folder a path
+  // is in; these paths are in no attachment folder, so no at-rest state is read.
+  beforeAll(() => setAttachmentReaderDepsForTests({ userData: () => "/nonexistent-userdata" }));
+  afterAll(() => setAttachmentReaderDepsForTests(null));
   afterEach(() => jest.restoreAllMocks());
 
+  // BACKLOG-3816 S2: reads go through handle.read (the at-rest reader probes the
+  // header, then reads the body from the SAME handle); handle.readFile is gone.
   function fakeHandle(overrides: Partial<{
     stat: jest.Mock;
-    readFile: jest.Mock;
+    read: jest.Mock;
     close: jest.Mock;
-  }> = {}) {
+  }> = {}, body: Buffer = Buffer.from("handle body")) {
     const handle = {
-      stat: overrides.stat ?? jest.fn().mockResolvedValue({ size: 20 }),
-      readFile: overrides.readFile ?? jest.fn().mockResolvedValue(Buffer.from("handle body")),
+      stat: overrides.stat ?? jest.fn().mockResolvedValue({ size: body.length }),
+      read:
+        overrides.read ??
+        jest.fn(async (buf: Buffer, offset: number, length: number, position: number) => {
+          const n = body.copy(buf, offset, position, Math.min(body.length, position + length));
+          return { bytesRead: n, buffer: buf };
+        }),
       close: overrides.close ?? jest.fn().mockResolvedValue(undefined),
     };
     return handle;
@@ -321,8 +333,8 @@ describe("BACKLOG-2257 extractTextForAttachment — file-handle lifecycle", () =
     expect(outcome).toBe("extracted");
     expect(openSpy).toHaveBeenCalledTimes(1);
     expect(openSpy).toHaveBeenCalledWith("/some/attach.txt", "r");
-    expect(handle.stat).toHaveBeenCalledTimes(1); // the size-cap check IS the fstat
-    expect(handle.readFile).toHaveBeenCalledTimes(1); // read via the same handle
+    expect(handle.stat).toHaveBeenCalled(); // the size-cap check IS the fstat (on this handle)
+    expect(handle.read).toHaveBeenCalled(); // read via the same handle
     expect(handle.close).toHaveBeenCalledTimes(1); // always released
     expect(mockSetAttachmentTextContent).toHaveBeenCalledWith("h1", "handle body");
   });
@@ -343,14 +355,16 @@ describe("BACKLOG-2257 extractTextForAttachment — file-handle lifecycle", () =
 
     expect(outcome).toBe("empty");
     expect(handle.stat).toHaveBeenCalledTimes(1);
-    expect(handle.readFile).not.toHaveBeenCalled(); // over cap → never read
+    // over cap → only the 7-byte header probe, never the body
+    expect(handle.read).toHaveBeenCalledTimes(1);
+    expect(handle.read.mock.calls[0][2]).toBe(7);
     expect(handle.close).toHaveBeenCalledTimes(1); // finally still closes
     expect(mockSetAttachmentTextContent).toHaveBeenCalledWith("h-big", "");
   });
 
   it("closes the handle even when the read/parse throws (error path)", async () => {
     const handle = fakeHandle({
-      readFile: jest.fn().mockRejectedValue(new Error("EIO read failure")),
+      read: jest.fn().mockRejectedValue(new Error("EIO read failure")),
     });
     jest.spyOn(fsPromises, "open").mockResolvedValue(handle as unknown as FileHandle);
 

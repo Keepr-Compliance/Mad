@@ -21,6 +21,10 @@ export interface UseBulkActionsResult {
   isBulkUpdating: boolean;
   /** Success message from last bulk action (auto-clears after 5 seconds) */
   bulkActionSuccess: string | null;
+  /** True after a bulk export succeeded, until dismissed (BACKLOG-3828) */
+  bulkExportNotice: boolean;
+  /** Hide the exported-files-aren't-encrypted notice */
+  dismissBulkExportNotice: () => void;
   /** Handle bulk delete of selected transactions */
   handleBulkDelete: () => Promise<void>;
   /** Handle bulk export of selected transactions */
@@ -67,6 +71,8 @@ export function useBulkActions(
   const [isBulkExporting, setIsBulkExporting] = useState(false);
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
   const [bulkActionSuccess, setBulkActionSuccess] = useState<string | null>(null);
+  const [bulkExportNotice, setBulkExportNotice] = useState(false);
+  const dismissBulkExportNotice = useCallback(() => setBulkExportNotice(false), []);
 
   // Ref for auto-clear timeout
   const successTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -146,6 +152,7 @@ export function useBulkActions(
       if (selectedCount === 0) return;
 
       setIsBulkExporting(true);
+      setBulkExportNotice(false);
       try {
         const selectedTransactionIds = Array.from(selectedIds);
 
@@ -228,6 +235,7 @@ export function useBulkActions(
           showSuccessWithAutoClear(
             `Successfully exported ${successCount} transaction${successCount > 1 ? "s" : ""}${suffix}`
           );
+          setBulkExportNotice(true);
           exitSelectionMode();
           await onComplete();
         } else if (lockedCount > 0 && errors.length === 0) {
@@ -294,6 +302,8 @@ export function useBulkActions(
     isBulkExporting,
     isBulkUpdating,
     bulkActionSuccess,
+    bulkExportNotice,
+    dismissBulkExportNotice,
     handleBulkDelete,
     handleBulkExport,
     handleBulkStatusChange,

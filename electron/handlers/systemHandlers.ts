@@ -4,6 +4,7 @@
 //          shell operations, support
 // ============================================
 
+import { devToolsPreference } from "../bootstrap/appMenu";
 import { ipcMain, shell, BrowserWindow, app } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import fs from "fs";
@@ -1284,6 +1285,7 @@ export function registerSystemHandlers(): void {
         width: 800,
         height: 700,
         webPreferences: {
+          devTools: devToolsPreference(), // BACKLOG-3830
           nodeIntegration: false,
           contextIsolation: true,
         },
