@@ -61,6 +61,14 @@ describe("BACKLOG-3819: the electron-log sink redacts emails and phones", () => 
     expect(firstImport).toBe('import "./bootstrap/installAppDataPaths";');
   });
 
+  it("the bootstrap registers electron-log's directory for the at-rest 'logs' job", () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { runConfiguredLogMaintenance } = require("../../services/logScrub");
+    const result = runConfiguredLogMaintenance();
+    expect(result).not.toBeNull();
+    expect(fs.existsSync(path.join(dir, ".keepr-log-scrub-v1"))).toBe(true);
+  });
+
   it("early write: a line logged while a module is imported is redacted", () => {
     require("./fixtures/logsAtImport3819");
     const text = fileText();
