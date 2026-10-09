@@ -403,7 +403,7 @@ describe("refusals and special chains", () => {
     const foreign = createFileCrypto({ currentKey: async () => ({ keyId: KEY_ID, key: other }), keyFor: async () => other }, { chunkSize: 64 });
     const bad = path.join(chain, "ee", "e".repeat(40));
     fs.mkdirSync(path.dirname(bad), { recursive: true });
-    await foreign.encryptStreamToFile([Buffer.from("sealed under another key")], bad);
+    await foreign.encryptStreamToFile((async function* () { yield Buffer.from("sealed under another key"); })(), bad);
     await expect(s.beginSync(UDID, { strategy: "full" })).rejects.toMatchObject({ reason: "unreadable" });
     expect(plaintextLeft()).toEqual([]);
     expect(s.busyReason(UDID)).toBeNull();

@@ -308,7 +308,7 @@ describe("C2 — the chain is sealed on every end path after the unseal", () => 
     const o = newOrchestrator();
     backupReturns((orc) => {
       Object.assign(orc, { diskSpaceAborted: true, diskSpaceAtAbort: 1024 });
-      return fail({ errorCode: "DISK_FULL" } as Partial<BackupResult>);
+      return fail({ errorCode: "INSUFFICIENT_SPACE" });
     }, o);
     const result = await o.sync({ udid: UDID });
     expect(result.error).toMatch(/protect your computer/);
