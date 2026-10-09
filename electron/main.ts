@@ -1750,6 +1750,7 @@ app.whenReady().then(async () => {
   log.debug(`[PERF] post-healthChecks: ${Date.now() - appStartTime}ms`);
 
   log.debug(`[PERF] pre-createWindow: ${Date.now() - appStartTime}ms`);
+  installApplicationMenu(); // BACKLOG-3830
   createWindow();
   log.debug(`[PERF] post-createWindow: ${Date.now() - appStartTime}ms`);
 

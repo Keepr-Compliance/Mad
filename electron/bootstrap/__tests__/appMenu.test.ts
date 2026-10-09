@@ -81,4 +81,10 @@ describe("every BrowserWindow sets devTools from the policy", () => {
     }
     expect(windows).toBe(9);
   });
+  it("main.ts installs the menu before the first createWindow()", () => {
+    const src = fs.readFileSync(path.join(__dirname, "../../main.ts"), "utf8");
+    const m = src.indexOf("  installApplicationMenu();");
+    expect(m).toBeGreaterThan(0);
+    expect(m).toBeLessThan(src.indexOf("\n  createWindow();"));
+  });
 });
