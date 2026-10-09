@@ -106,6 +106,7 @@ import {
   AT_REST_WRITE_REFUSED_MESSAGE,
   getAtRestWriteRefusal,
   resetAtRestWriteRefusalForTests,
+  sealBufferToFile,
 } from "../atRest/attachmentWriter";
 import type { iOSMessage } from "../../types/iosMessages";
 import type { RawMacAttachment } from "../macOSMessagesImportService/types";
@@ -482,5 +483,26 @@ describe("email attachments (emailAttachmentService.downloadEmailAttachments)", 
     expect(gmailFetchService.getAttachment).toHaveBeenCalledTimes(1);
     expect(await filesIn(nodePath.join(scratchDir, "attachments"))).toEqual([]);
     expect(emailDb.createAttachmentRecord).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The refusal is remembered for the process (SR N3)
+// ---------------------------------------------------------------------------
+
+describe("remembered refusal", () => {
+  it("after one refusal, later writes refuse WITHOUT asking for the key again", async () => {
+    await breakKeyStore();
+    const dest = nodePath.join(scratchDir, "message-attachments", "a.jpg");
+    await expect(sealBufferToFile(dest, fixture("jpeg"))).rejects.toBeInstanceOf(AtRestWriteRefusedError);
+
+    // The store goes away: a fresh key lookup would now CREATE a key (no ciphertext
+    // exists anywhere under userData). A remembered refusal never looks.
+    await fs.rm(nodePath.join(scratchDir, DATA_KEY_STORE_FILENAME));
+    getDataKeyService().clearCache();
+    await expect(sealBufferToFile(dest, fixture("jpeg"))).rejects.toBeInstanceOf(AtRestWriteRefusedError);
+
+    expect(fsSync.existsSync(nodePath.join(scratchDir, DATA_KEY_STORE_FILENAME))).toBe(false);
+    expect(fsSync.existsSync(dest)).toBe(false);
   });
 });
