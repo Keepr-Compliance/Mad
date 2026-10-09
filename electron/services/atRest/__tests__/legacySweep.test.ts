@@ -268,9 +268,25 @@ describe("runLegacySweep (BACKLOG-3823)", () => {
     write("appData/magic-audit/message-attachments/locked/held.png");
     write("appData/magic-audit/Backups/UDID/Manifest.db");
     write("appData/magic-audit/mad.db");
-    fs.chmodSync(path.join(root, "appData/magic-audit/message-attachments/locked"), 0o555);
-    const result = await runLegacySweep(deps());
+    // Portable lock: POSIX chmod does not stop deletion on Windows, so make the
+    // unlink of this one path fail with EBUSY (what a held Windows handle gives).
+    const heldPath = path.join(root, "appData/magic-audit/message-attachments/locked/held.png");
+    const realUnlink = fs.promises.unlink.bind(fs.promises);
+    const unlinkSpy = jest.spyOn(fs.promises, "unlink").mockImplementation(async (target) => {
+      if (String(target) === heldPath) {
+        throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+      }
+      return realUnlink(target);
+    });
+    let result;
+    try {
+      result = await runLegacySweep(deps());
+      expect(unlinkSpy).toHaveBeenCalledWith(heldPath);
+    } finally {
+      unlinkSpy.mockRestore();
+    }
     expect(result.total.skipped).toBeGreaterThan(0);
+    expect(result.total.errors).toBe(0);
     expect(fs.existsSync(path.join(root, "appData/magic-audit/Backups"))).toBe(false);
     expect(fs.existsSync(path.join(root, "appData/magic-audit/message-attachments/locked/held.png"))).toBe(true);
     expect(fs.existsSync(path.join(root, "appData/magic-audit/mad.db"))).toBe(true);
