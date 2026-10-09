@@ -21,6 +21,7 @@ import {
   requestContactLinking,
 } from "./contactLinkingScheduler";
 import { iOSMessagesParser } from "./iosMessagesParser";
+import { hashSourceFile, isAtRestWriteRefused, sealFileFrom, sourceFileSize } from "./atRest/attachmentWriter";
 import { detectMessageType } from "../utils/messageTypeDetector";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
 import type { iOSMessage, iOSConversation, iOSAttachment } from "../types/iosMessages";
@@ -63,6 +64,11 @@ export interface PersistResult {
   attachmentsSkippedByReason?: AttachmentSkipCounts;
   duration: number;
   error?: string;
+  /**
+   * BACKLOG-3816: attachments were not saved because the file-data key is
+   * unavailable (writes fail closed). `error` then carries the user-facing message.
+   */
+  atRestRefused?: boolean;
 }
 
 /**
@@ -362,7 +368,12 @@ class IPhoneSyncStorageService {
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const refused = isAtRestWriteRefused(error);
+      const errorMessage = refused
+        ? error.userMessage
+        : error instanceof Error
+          ? error.message
+          : "Unknown error";
 
       log.error(`[${IPhoneSyncStorageService.SERVICE_NAME}] Persistence failed`, {
         error: errorMessage,
@@ -379,6 +390,7 @@ class IPhoneSyncStorageService {
         attachmentsSkipped: 0,
         duration,
         error: errorMessage,
+        ...(refused ? { atRestRefused: true } : {}),
       };
     } finally {
       // BACKLOG-2474: release on EVERY exit — success, cancel and throw alike.
@@ -826,11 +838,14 @@ class IPhoneSyncStorageService {
           continue;
         }
 
-        // Check if source file exists
+        // Check if source file exists. BACKLOG-3816: the backup file is read RAW —
+        // it is Apple's plaintext (an Apple-encrypted backup arrives here already
+        // decrypted), never classified by its first bytes (attachmentWriter.ts).
+        let sourceSize: number;
         try {
-          const stats = await fs.promises.stat(sourcePath);
-          if (stats.size > MAX_ATTACHMENT_SIZE) {
-            log.debug(`[${IPhoneSyncStorageService.SERVICE_NAME}] Skipping oversized attachment: ${stats.size} bytes`);
+          sourceSize = await sourceFileSize(sourcePath);
+          if (sourceSize > MAX_ATTACHMENT_SIZE) {
+            log.debug(`[${IPhoneSyncStorageService.SERVICE_NAME}] Skipping oversized attachment: ${sourceSize} bytes`);
             skippedBy.tooLarge++;
             continue;
           }
@@ -840,19 +855,21 @@ class IPhoneSyncStorageService {
           continue;
         }
 
-        // TASK-1790: Use streaming hash instead of loading entire file into memory
-        // This prevents memory issues with large files (up to 50MB)
-        const contentHash = await this.computeFileHashStreaming(sourcePath);
+        // TASK-1790: streaming hash of the (plaintext) source: the dedupe key and the
+        // stored file name are the SHA-256 of the plaintext (BACKLOG-3816).
+        const contentHash = (await hashSourceFile(sourcePath)).sha256;
 
         // Determine destination path
         const destPath = path.join(attachmentsDir, `${contentHash}${ext}`);
 
-        // Get file size for record
-        const stats = await fs.promises.stat(sourcePath);
-
-        // Copy file if not already stored (use copyFile instead of read/write)
+        // BACKLOG-3816: store the KEPRENC ciphertext, never a plaintext copy.
         if (!existingHashes.has(contentHash)) {
-          await fs.promises.copyFile(sourcePath, destPath);
+          const sealed = await sealFileFrom(sourcePath, destPath);
+          if (sealed.sha256 !== contentHash) {
+            // The source changed between the hash and the copy: the name would lie.
+            await fs.promises.unlink(destPath).catch(() => undefined);
+            throw new Error("attachment source changed while it was being stored");
+          }
           existingHashes.add(contentHash);
         }
 
@@ -863,7 +880,7 @@ class IPhoneSyncStorageService {
           externalMessageId: messageGuid,
           filename,
           mimeType: attachment.mimeType || this.getMimeType(ext),
-          fileSizeBytes: stats.size,
+          fileSizeBytes: sourceSize,
           storagePath: destPath,
           sessionId,
         });
@@ -871,6 +888,9 @@ class IPhoneSyncStorageService {
         existingRecords.add(`${internalMessageId}:${filename}`);
         stored++;
       } catch (error) {
+        // BACKLOG-3816: a refused write (no file-data key) stops the whole run —
+        // swallowing it here would report success with every attachment "skipped".
+        if (isAtRestWriteRefused(error)) throw error;
         log.debug(`[${IPhoneSyncStorageService.SERVICE_NAME}] Failed to store attachment`, {
           filename: attachment.filename,
           error: error instanceof Error ? error.message : String(error),
@@ -905,20 +925,6 @@ class IPhoneSyncStorageService {
     });
 
     return { stored, skipped, skippedByReason: skippedBy };
-  }
-
-  /**
-   * Compute SHA-256 hash of a file using streaming (TASK-1790)
-   * Prevents loading entire file into memory for large files
-   */
-  private computeFileHashStreaming(filePath: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const hash = crypto.createHash("sha256");
-      const stream = fs.createReadStream(filePath);
-      stream.on("data", (chunk) => hash.update(chunk));
-      stream.on("end", () => resolve(hash.digest("hex")));
-      stream.on("error", reject);
-    });
   }
 
   /**

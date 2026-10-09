@@ -73,7 +73,6 @@ const READ_APIS = new Set([
 
 type Entry = { count: number; reason: string };
 
-const S1 = "PENDING S1 — writes plaintext customer content under userData; S1 routes it through atRest";
 const EXPORT = "user-initiated export to a destination the user chose; plaintext by intent";
 const SEALED = "content is already sealed (SecretStore / AES-GCM) before it is written";
 const META = "small cache/state file with no customer content";
@@ -85,12 +84,7 @@ const SQLCIPHER = "copies/moves the SQLCipher-encrypted database file (ciphertex
  */
 const WRITER_ALLOWLIST: Record<string, Entry> = {
   // --- plaintext customer content, converted by later slices -------------------
-  "electron/services/iPhoneSyncStorageService.ts": { count: 1, reason: `${S1} (iPhone message attachments)` },
-  "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts": { count: 1, reason: `${S1} (macOS Messages attachments)` },
-  "electron/services/emailAttachmentService.ts": { count: 1, reason: `${S1} (email attachments, D2)` },
-  "electron/services/rcsImportMedia.ts": { count: 1, reason: `${S1} (RCS media via injected writeFile)` },
-  "electron/handlers/rcsImportHandlers.ts": { count: 6, reason: `${S1} (RCS writeFile/rename/copyFile deps for media + staging)` },
-  "electron/services/rcsCacheStaging.ts": { count: 1, reason: `${S1} (RCS staged media temp)` },
+  "electron/handlers/rcsImportHandlers.ts": { count: 4, reason: "S1 done (media + staging write via atRest sealBufferToFile): staging move = rename, cross-volume copyFile fallback, both of KEPRENC ciphertext; plus cp/rename of the bundled extension folder (no customer content)" },
   "electron/services/backupService.ts": { count: 1, reason: "S4/BACKLOG-3816 — fs.rename of an unencrypted iPhone backup folder aside (Backups/.keepr-replaced-*) until the encrypted chain verifies; moves, never writes content" },
   "electron/services/backupDecryptionService.ts": { count: 2, reason: "S4/BACKLOG-3817 — parse copies of an encrypted iPhone backup, only under userData/at-rest-tmp/ios-<runId>, removed after persistence and swept at launch" },
   "electron/services/logService.ts": { count: 2, reason: "PENDING S5 — app log file (redaction + retention, BACKLOG-3819)" },
@@ -142,8 +136,6 @@ const READER_ALLOWLIST: Record<string, Entry> = {
   "electron/services/folderExport/attachmentHelpers.ts": { count: 1, reason: `${S2} (export copy)` },
   "electron/services/folderExport/folderExportService.ts": { count: 1, reason: `${S2} (export copy)` },
   "electron/services/folderExport/textExportHelpers.ts": { count: 2, reason: `${S2} (inline images in text export)` },
-  "electron/services/iPhoneSyncStorageService.ts": { count: 2, reason: "reads the SOURCE file in the iPhone backup to hash/copy it; S1 hashes plaintext during encrypt" },
-  "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts": { count: 2, reason: "reads the SOURCE file in ~/Library/Messages to hash/copy it; S1 scope" },
   "electron/services/supabaseStorageService.ts": { count: 1, reason: `${S2} (broker upload)` },
   "electron/services/supportAccess/supabaseSupportTransport.ts": { count: 1, reason: "reads its own ticket map, not an attachment" },
 };

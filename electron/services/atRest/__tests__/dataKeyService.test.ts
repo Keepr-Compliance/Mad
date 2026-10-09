@@ -236,6 +236,25 @@ describe("K3 — a missing store next to existing ciphertext is refused, not rec
     expect(fs.existsSync(storeFile())).toBe(true);
   });
 
+  it("plaintext beginning with KEPRENC (an attachment anyone can send) does not block creation", async () => {
+    // BACKLOG-3816 S1 fix-up: the evidence scan is structural, not the 7-byte magic.
+    const scope = path.join(dir, "message-attachments");
+    fs.mkdirSync(scope, { recursive: true });
+    fs.writeFileSync(path.join(scope, "forged-magic.jpg"), Buffer.concat([Buffer.from("KEPRENC"), crypto.randomBytes(500)]));
+    const header = Buffer.alloc(60, 0);
+    Buffer.from("KEPRENC").copy(header, 0);
+    header[7] = 1;
+    header[8] = 1;
+    crypto.randomBytes(32).copy(header, 12);
+    header.writeUInt32BE(1024 * 1024, 44);
+    fs.writeFileSync(path.join(scope, "forged-header.pdf"), Buffer.concat([header, crypto.randomBytes(5)]));
+
+    const { key } = await service(new FakeSafeStorage()).currentKey();
+
+    expect(key.length).toBe(32);
+    expect(fs.existsSync(storeFile())).toBe(true);
+  });
+
   it("an encrypted file OUTSIDE the scanned scopes does not block creation", async () => {
     // Pins the scan to its scopes: the root of userData is not walked.
     const ss = new FakeSafeStorage();

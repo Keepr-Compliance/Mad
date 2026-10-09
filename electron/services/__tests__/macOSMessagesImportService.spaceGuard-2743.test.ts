@@ -76,6 +76,14 @@ import { summarizeAttachmentEstimate } from "../macOSMessagesImportService/impor
 import { ATTACHMENTS_DIR, MAX_ATTACHMENT_SIZE } from "../macOSMessagesImportService/types";
 import type { RawMacAttachment } from "../macOSMessagesImportService/types";
 import type { AttachmentsRefusedForSpace } from "../macOSMessagesImportService/types";
+import { HEADER_BYTES, TAG_BYTES } from "../atRest/fileCrypto";
+
+/**
+ * BACKLOG-3816: stored attachments are KEPRENC ciphertext — on disk each file is
+ * its plaintext plus a 60-byte header and a 16-byte tag per 1 MiB chunk. Every
+ * fixture file here is under 1 MiB, so one chunk each.
+ */
+const KENC_OVERHEAD_ONE_CHUNK = HEADER_BYTES + TAG_BYTES;
 
 const GB = 1024 * 1024 * 1024;
 const USER = "user-2743";
@@ -274,14 +282,16 @@ describe("BACKLOG-2743 — pre-flight free-space guard", () => {
 
     // Reality: three distinct files, the identical pair collapsed into one.
     expect(written.files).toBe(3);
-    expect(written.bytes).toBe(p1.realBytes + p3.realBytes + doc.realBytes);
+    const writtenPlaintext = p1.realBytes + p3.realBytes + doc.realBytes;
+    expect(written.bytes).toBe(writtenPlaintext + 3 * KENC_OVERHEAD_ONE_CHUNK);
 
-    // The estimate is an UPPER BOUND — never below what was written. A guard
-    // that under-estimates is the dangerous direction; this pins the sign.
-    expect(estimate.eligibleBytes).toBeGreaterThanOrEqual(written.bytes);
+    // The estimate is an UPPER BOUND on the plaintext written — never below it. A
+    // guard that under-estimates is the dangerous direction; this pins the sign.
+    // (The estimate does not count the KEPRENC overhead, 76 bytes per file here.)
+    expect(estimate.eligibleBytes).toBeGreaterThanOrEqual(writtenPlaintext);
 
     // Dedup ratio for the record: written / estimated.
-    const dedupRatio = written.bytes / estimate.eligibleBytes;
+    const dedupRatio = writtenPlaintext / estimate.eligibleBytes;
     expect(dedupRatio).toBeCloseTo(210_000 / 330_000, 5);
 
     // All four eligible rows are recorded, including the deduped one (it links
@@ -367,7 +377,7 @@ describe("BACKLOG-2743 — pre-flight free-space guard", () => {
 
     const written = await bytesOnDisk(nodePath.join(scratchDir, ATTACHMENTS_DIR));
     expect(written.files).toBe(1);
-    expect(written.bytes).toBe(reachable.realBytes);
+    expect(written.bytes).toBe(reachable.realBytes + KENC_OVERHEAD_ONE_CHUNK);
   });
 
   it("still refuses when the RESOLVABLE attachments alone exceed free space", async () => {
