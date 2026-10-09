@@ -189,8 +189,6 @@ describe("BACKLOG-3819 quit and memory bound during the deferred trim", () => {
     const sink = staleSink();
     sink.pause();
     let yields = 0;
-    let gate: () => void = () => undefined;
-    const gated = new Promise<void>((r) => (gate = r));
     const trim = trimSealedLogAsync(main, Date.now(), KEY, {
       sliceMs: 0,
       shouldAbort: () => sink.isClosing,
@@ -200,9 +198,7 @@ describe("BACKLOG-3819 quit and memory bound during the deferred trim", () => {
           sink.write(main, line("HELD during trim"));
           sink.flushAtExit();
           sink.write(main, line("AFTER will-quit"));
-          gate();
         }
-        await gated.catch(() => undefined);
         await new Promise((r) => setImmediate(r));
       },
     });
