@@ -15,6 +15,7 @@ import log from "electron-log";
 import path from "path";
 import { applyAppDataPaths, buildConsoleNotice } from "./appDataPaths";
 import { installLogRedactionHook } from "../config/logFileConfig";
+import { setLogDirectoryResolver } from "../services/logScrub";
 
 // BACKLOG-3819: redact customer emails and phone numbers from every log line.
 // Installed here, the first import in main.ts, because modules imported after
@@ -22,6 +23,9 @@ import { installLogRedactionHook } from "../config/logFileConfig";
 // during import — main.ts's own `applyLogFileConfig` line runs too late for
 // those writes. Unconditional: dev and packaged builds both redact.
 installLogRedactionHook(log);
+// Where the at-rest startup job (atRest/startup.ts "logs") applies retention and
+// the one-time scrub. Resolved when the job runs, after any path override below.
+setLogDirectoryResolver(() => path.dirname(log.transports.file.getFile().path));
 
 const applied = applyAppDataPaths();
 

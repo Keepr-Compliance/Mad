@@ -25,8 +25,10 @@
  * launches then read only the first line of each file (for retention) instead
  * of re-reading up to 16 MB — measured ~150 ms per launch on an 8.5 MB log.
  *
- * NOT called from anywhere yet: the at-rest startup queue (BACKLOG-3816 S0)
- * calls {@link runLogMaintenance} at launch.
+ * Called at launch by the at-rest startup queue (atRest/startup.ts, job
+ * "logs") through {@link runConfiguredLogMaintenance}. The log directory comes
+ * from electron-log, which core modules may not import, so the Electron shell
+ * (bootstrap/installAppDataPaths.ts) supplies it via {@link setLogDirectoryResolver}.
  */
 
 import fs from "fs";
@@ -203,4 +205,20 @@ export function runLogMaintenance(logDir: string, now: number = Date.now()): Log
     }
   }
   return result;
+}
+
+let resolveLogDirectory: (() => string) | null = null;
+
+/** Called by the Electron shell: where electron-log writes its files. */
+export function setLogDirectoryResolver(resolver: (() => string) | null): void {
+  resolveLogDirectory = resolver;
+}
+
+/**
+ * Run {@link runLogMaintenance} on the directory the shell registered. Returns
+ * null when no directory was registered (non-Electron hosts, tests).
+ */
+export function runConfiguredLogMaintenance(now: number = Date.now()): LogMaintenanceResult | null {
+  if (!resolveLogDirectory) return null;
+  return runLogMaintenance(resolveLogDirectory(), now);
 }

@@ -93,7 +93,7 @@ This policy applies to all data collected, processed, and stored by Keepr, inclu
 | Data Type | Retention Period | Deletion Method | Legal Basis |
 |-----------|------------------|-----------------|-------------|
 | Application Logs (local) | 30 days rolling | Auto-rotation and deletion | Legitimate interest (debugging) |
-| Error Logs (local) | 90 days rolling | Auto-rotation and deletion | Legitimate interest (support) |
+| Desktop diagnostic logs (local, `main.log` / `main.old.log`) | 14 days rolling; email addresses and phone numbers are redacted before they are written (BACKLOG-3819) | Entries older than 14 days are removed at app launch; size rotation at 8 MB | Legitimate interest (support) |
 | Analytics Events (Supabase) | 90 days | Auto-purge | Legitimate interest (product improvement) |
 | API Usage Tracking | 90 days | Auto-purge | Legitimate interest (rate limiting) |
 | Audit Logs (Supabase) | 2 years | Append-only, then archive | Compliance requirement |

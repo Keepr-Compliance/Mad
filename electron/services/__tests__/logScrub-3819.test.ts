@@ -151,3 +151,27 @@ describe("BACKLOG-3819: log scrub + retention", () => {
     expect(text).not.toContain(RAW_VALUES[0]);
   });
 });
+
+describe("BACKLOG-3819: the at-rest startup job 'logs' runs the scrub", () => {
+  it("runs retention + scrub on the directory the shell registered", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { AtRestStartup, registerDefaultJobs } = require("../atRest/startup");
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { setLogDirectoryResolver } = require("../logScrub");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-scrub-job-3819-"));
+    try {
+      fs.writeFileSync(path.join(dir, "main.log"), `${stamp(Date.now())} [info]  contact ${RAW_VALUES[0]}\n`);
+      setLogDirectoryResolver(() => dir);
+      const q = new AtRestStartup({ log: () => undefined });
+      registerDefaultJobs(q);
+      const job = q.listJobs().find((j: { id: string }) => j.id === "logs");
+      expect(job.placeholder).toBe(false);
+      const outcomes = await q.run();
+      expect(outcomes.find((o: { id: string }) => o.id === "logs").status).toBe("ok");
+      expect(fs.readFileSync(path.join(dir, "main.log"), "utf8")).not.toContain(RAW_VALUES[0]);
+    } finally {
+      setLogDirectoryResolver(null);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

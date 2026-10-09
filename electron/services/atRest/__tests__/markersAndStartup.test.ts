@@ -77,9 +77,11 @@ describe("startup queue", () => {
     expect(q.listJobs().map((j) => j.id)).toEqual([
       "data-key", "logs", "temp-sweep", "attachments", "email-attachments", "backups", "legacy-sweep",
     ]);
-    q.register({ id: "logs", order: 10, run: async () => undefined });
+    // "logs" is real since BACKLOG-3819; "backups" (S4) is the last placeholder to land.
     expect(q.listJobs().find((j) => j.id === "logs")?.placeholder).toBe(false);
-    expect(() => q.register({ id: "logs", order: 10, run: async () => undefined })).toThrow(/already registered/);
+    q.register({ id: "backups", order: 50, run: async () => undefined });
+    expect(q.listJobs().find((j) => j.id === "backups")?.placeholder).toBe(false);
+    expect(() => q.register({ id: "backups", order: 50, run: async () => undefined })).toThrow(/already registered/);
     expect(() => q.register({ id: "data-key", order: 0, run: async () => undefined })).toThrow();
   });
 
