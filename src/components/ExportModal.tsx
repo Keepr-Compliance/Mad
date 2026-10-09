@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { ExportUnencryptedNotice } from "./common/ExportUnencryptedNotice";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import { InfoTooltip } from "./common/InfoTooltip";
 import type { Transaction } from "../../electron/types/models";
@@ -883,6 +884,7 @@ function ExportModal({
                   Done
                 </button>
               </div>
+              <ExportUnencryptedNotice />
             </div>
           )}
 
