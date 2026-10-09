@@ -429,6 +429,7 @@ describe("D1 — a failed C-DELTA backup tool forces C-FULL for the next sync; n
       return fail({ errorCode: undefined, error: "stopped" } as Partial<BackupResult>);
     }],
     ["app quit", (orc: DeviceSyncOrchestrator) => { Object.assign(orc, { stoppedForQuit: true }); return fail({ errorCode: undefined, error: "stopped" } as Partial<BackupResult>); }],
+    ["app quit as BackupService now returns it (BACKUP_CANCELLED)", (orc: DeviceSyncOrchestrator) => { Object.assign(orc, { stoppedForQuit: true }); return fail({ errorCode: "BACKUP_CANCELLED", error: "Backup stopped because Keepr was closed." } as Partial<BackupResult>); }],
     ["password failure", () => fail({ errorCode: "INCORRECT_PASSWORD", error: "wrong password" } as Partial<BackupResult>)],
     ["disk-space error from the tool", () => fail({ errorCode: undefined, error: "No space left on device" } as Partial<BackupResult>)],
   ])("%s -> the flag is NOT set and the next sync is still C-DELTA", async (_name, ending) => {
