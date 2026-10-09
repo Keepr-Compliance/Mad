@@ -70,6 +70,9 @@ function seed(db: TestDb) {
         if (u === "u1" && k % 4 === 0) insM.run(`d${t}_${k}`, "u1", "imessage", "inbound", th, sent, `body ${t}-${k % 4}`, `de${t}_${k}`);
       }
     }
+    // a text only the user who did NOT make the thread link has in this chat: unique body
+    // and time, so content dedup cannot absorb it if the user filter were dropped
+    insM.run(`only_${t}`, t % 2 ? "u1" : "u2", "imessage", "inbound", th, `2026-07-0${1 + (t % 9)}T09:00:00.000Z`, `only-other-user ${t}`, `oe${t}`);
     // thread link made by u1 (t even) or u2 (t odd)
     insC.run(`c_th${t}`, t % 2 ? "u2" : "u1", T, null, th, "manual");
   }
@@ -113,6 +116,9 @@ for (const stats of [false, true]) {
       // Absolute pin (not relative to the old SQL, which would move with a broken
       // shipped SQL): 32 attachments with the user filter, 64 without it.
       expect(fresh.atts.map((a) => a.length)).toEqual([32, 16, 18, 16]);
+      // the other user's own texts never leak in; the total is pinned absolutely
+      expect(fresh.texts.some((r: any) => String(r.id).startsWith("only_"))).toBe(false);
+      expect(fresh.texts.length).toBe(136);
       // u2's copies never leak into a u1 thread link
       expect(fresh.texts.some((r: any) => String(r.id).startsWith("m0_") && String(r.id).endsWith("_u2"))).toBe(false);
       expect(old).toEqual(fresh);
