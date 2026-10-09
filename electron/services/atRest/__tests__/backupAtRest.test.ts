@@ -289,12 +289,16 @@ describe("default strategy is C-DELTA (Step 0b)", () => {
     const smsPath = path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
     fs.writeFileSync(smsPath, fs.readFileSync(smsPath).subarray(0, 30));
     await s.finishSync(session);
-    expect(s.forcedFullReason(UDID)).toBe("DELTA_DAMAGED");
-    const next = await s.beginSync(UDID);
+    expect(await s.forcedFullReason(UDID)).toBe("DELTA_DAMAGED");
+    // A restart: a brand-new service (fresh in-memory state) reads the flag from the marker file.
+    const afterRestart = service();
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    const next = await afterRestart.beginSync(UDID);
     expect(next).toMatchObject({ kind: "keepr", strategy: "full" });
     fs.writeFileSync(smsPath, Buffer.from("rewritten by the phone"));
-    await s.finishSync(next);
-    expect(s.forcedFullReason(UDID)).toBeNull();
+    await afterRestart.finishSync(next);
+    expect(await afterRestart.forcedFullReason(UDID)).toBeNull();
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
   });
 
   it("a clean delta sync does not force C-FULL", async () => {
@@ -304,7 +308,7 @@ describe("default strategy is C-DELTA (Step 0b)", () => {
     const session = await s.beginSync(UDID);
     write("12/" + "2".repeat(40), "a brand new message attachment");
     await s.finishSync(session);
-    expect(s.forcedFullReason(UDID)).toBeNull();
+    expect(await s.forcedFullReason(UDID)).toBeNull();
     expect(await s.beginSync(UDID)).toMatchObject({ strategy: "delta" });
   });
 });

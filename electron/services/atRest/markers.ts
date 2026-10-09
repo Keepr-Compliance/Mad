@@ -31,6 +31,12 @@ export interface BackupMarker {
   udid: string;
   state: BackupAtRestState;
   updatedAt: string;
+  /**
+   * Set after a C-DELTA sync left damage: the next sync of this phone unseals everything
+   * (C-FULL). Survives a restart; cleared by a clean full sync. `reasonCode` says why.
+   */
+  nextStrategy?: "full";
+  reasonCode?: string;
 }
 
 export interface ScopeEntry {
@@ -70,7 +76,10 @@ export interface MarkerStore {
   stateFilePath(): string;
   /** null = no marker yet. A marker that exists but cannot be parsed throws — never read it as "plaintext". */
   readBackupMarker(udid: string): Promise<BackupMarker | null>;
+  /** Writes the state; keeps `nextStrategy`/`reasonCode` already recorded for the phone. */
   writeBackupMarker(udid: string, state: BackupAtRestState): Promise<BackupMarker>;
+  /** Records (reasonCode) or clears (null) "the next sync is C-FULL" on an existing marker. No marker = no-op. */
+  setNextStrategy(udid: string, reasonCode: string | null): Promise<void>;
   readState(): Promise<AtRestStateFile>;
   getScope(scope: string): Promise<ScopeEntry | null>;
   setScope(scope: string, state: ScopeAtRestState, progress?: Record<string, number>): Promise<void>;
@@ -113,9 +122,32 @@ export function createMarkerStore(deps: MarkerStoreDeps): MarkerStore {
 
     async writeBackupMarker(udid, state) {
       if (!BACKUP_STATES.has(state)) throw new Error(`unknown backup state ${state}`);
-      const marker: BackupMarker = { udid, state, updatedAt: now().toISOString() };
+      let kept: Pick<BackupMarker, "nextStrategy" | "reasonCode"> = {};
+      try {
+        const existing = await store.readBackupMarker(udid);
+        if (existing?.nextStrategy === "full") {
+          kept = { nextStrategy: "full", ...(existing.reasonCode ? { reasonCode: existing.reasonCode } : {}) };
+        }
+      } catch {
+        // an unreadable marker is being replaced; there is nothing to keep
+      }
+      const marker: BackupMarker = { udid, state, updatedAt: now().toISOString(), ...kept };
       await writeFileAtomic(backupMarkerPath(udid), JSON.stringify(marker, null, 2));
       return marker;
+    },
+
+    async setNextStrategy(udid, reasonCode) {
+      const existing = await store.readBackupMarker(udid);
+      if (!existing) return;
+      const { nextStrategy: _n, reasonCode: _r, ...rest } = existing;
+      void _n;
+      void _r;
+      const marker: BackupMarker = {
+        ...rest,
+        updatedAt: now().toISOString(),
+        ...(reasonCode ? { nextStrategy: "full" as const, reasonCode } : {}),
+      };
+      await writeFileAtomic(backupMarkerPath(udid), JSON.stringify(marker, null, 2));
     },
 
     async readState() {

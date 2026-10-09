@@ -344,11 +344,14 @@ export class BackupAtRest extends EventEmitter {
   private readonly log: LogFn;
   /** Damaged-file count from the last scan after a seal, per phone. */
   private readonly lastScanDamaged = new Map<string, number>();
-  /** Phones whose next sync is forced to C-FULL, with why. In memory: a restart forgets it. */
-  private readonly forceFullReason = new Map<string, string>();
-  /** Test/inspection: why the next sync of this phone is C-FULL, if it is. */
-  forcedFullReason(udid: string): string | null {
-    return this.forceFullReason.get(udid) ?? null;
+  /** Why the next sync of this phone is C-FULL, if it is. Kept in the phone's marker file, so it survives a restart. */
+  async forcedFullReason(udid: string): Promise<string | null> {
+    try {
+      const marker = await this.deps.markers().readBackupMarker(udid);
+      return marker?.nextStrategy === "full" ? (marker.reasonCode ?? "FORCED") : null;
+    } catch {
+      return null;
+    }
   }
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly concurrency: number;
@@ -434,21 +437,21 @@ export class BackupAtRest extends EventEmitter {
         if (entry.isDirectory()) {
           await walk(full, false);
           continue;
-        }
+      }
         if (!entry.isFile()) continue;
         if (atRoot && PLAIN_ROOT_FILES.has(entry.name)) continue;
         if (entry.name.endsWith(KENC_TMP_SUFFIX)) {
           await fs.promises.rm(full, { force: true }).catch(() => undefined);
           if (report) report.tempsRemoved++;
           continue;
-        }
+      }
         let size = 0;
         try {
           size = (await fs.promises.lstat(full)).size;
-        } catch (error) {
+      } catch (error) {
           if ((error as NodeJS.ErrnoException)?.code === "ENOENT") continue;
           throw error;
-        }
+      }
         out.push({ path: full, size });
       }
     };
@@ -551,15 +554,15 @@ export class BackupAtRest extends EventEmitter {
             if (r.alreadyEncrypted) report.already++;
             else report.changed++;
           });
-        }
+      }
       } catch (error) {
         const code = errCode(error);
         if (code === "ENOENT") {
           report.files--; // deleted while we walked (idevicebackup2 / 3598): nothing to protect
-        } else {
+      } else {
           report.failed++;
           report.failedCodes[code] = (report.failedCodes[code] ?? 0) + 1;
-        }
+      }
       }
       tick();
     });
@@ -579,9 +582,9 @@ export class BackupAtRest extends EventEmitter {
         const full = path.join(chain, rel);
         try {
           listed.push({ path: full, size: (await fs.promises.lstat(full)).size });
-        } catch (error) {
+      } catch (error) {
           if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
-        }
+      }
       }
     } else {
       listed = await this.listFiles(chain, report);
@@ -609,7 +612,7 @@ export class BackupAtRest extends EventEmitter {
             await files.decryptToFile(f.path, f.path);
           });
           report.changed++;
-        }
+      }
       } catch (error) {
         report.failed++;
         const code = errCode(error);
@@ -712,12 +715,6 @@ export class BackupAtRest extends EventEmitter {
       underLock?: () => Promise<void>;
     } = {},
   ): Promise<BackupSyncSession> {
-    const forcedFull = this.forceFullReason.get(udid);
-    const strategy: BackupUnsealStrategy =
-      opts.strategy ?? (forcedFull ? "full" : (this.deps.strategy?.() ?? BACKUP_UNSEAL_STRATEGY));
-    if (forcedFull && !opts.strategy) {
-      this.log("warn", "[BackupAtRest] this sync unseals the whole backup (C-FULL)", { reasonCode: forcedFull });
-    }
     const chain = this.chainDir(udid);
     const holder = this.busy.get(udid);
     if (holder) throw new BackupAtRestRefusal("busy", BACKUP_SECURING_MESSAGE);
@@ -728,6 +725,12 @@ export class BackupAtRest extends EventEmitter {
     let handedOut = false;
     try {
       if (opts.underLock) await opts.underLock();
+      const forcedFull = await this.forcedFullReason(udid);
+      const strategy: BackupUnsealStrategy =
+        opts.strategy ?? (forcedFull ? "full" : (this.deps.strategy?.() ?? BACKUP_UNSEAL_STRATEGY));
+      if (forcedFull && !opts.strategy) {
+        this.log("warn", "[BackupAtRest] this sync unseals the whole backup (C-FULL)", { reasonCode: forcedFull });
+      }
       const chainExists = await exists(chain);
       if (chainExists && (await isAppleEncryptedChain(chain))) {
         await this.recordAppleChain(udid);
@@ -792,7 +795,7 @@ export class BackupAtRest extends EventEmitter {
           // B2: no retry can open these files. Refusing would end iPhone sync for good;
           // the backup is a cache of the phone, so move it aside and back up in full.
           return await this.quarantineChain(udid, codes.join("+"), opts.onProgress);
-        }
+      }
         const disk = report.failedCodes.DISK_SPACE !== undefined;
         throw new BackupAtRestRefusal(
           disk ? "disk-space" : "unreadable",
@@ -892,9 +895,9 @@ export class BackupAtRest extends EventEmitter {
       if (!stamp) {
         try {
           at = (await fs.promises.lstat(path.join(root, entry.name))).mtimeMs;
-        } catch {
+      } catch {
           at = 0;
-        }
+      }
       }
       dated.push({ name: entry.name, at });
     }
@@ -934,14 +937,14 @@ export class BackupAtRest extends EventEmitter {
       if (session.kind === "keepr") {
         const damaged = this.lastScanDamaged.get(session.udid) ?? 0;
         if (session.strategy === "delta" && damaged > 0) {
-          this.forceFullReason.set(session.udid, FORCE_FULL_REASON_DELTA_DAMAGED);
+          await this.deps.markers().setNextStrategy(session.udid, FORCE_FULL_REASON_DELTA_DAMAGED);
           this.log("warn", "[BackupAtRest] a delta sync left damaged files; the next sync unseals everything", {
             reasonCode: FORCE_FULL_REASON_DELTA_DAMAGED,
             damaged,
           });
-        } else if (session.strategy === "full" && damaged === 0 && outcome === "encrypted") {
-          this.forceFullReason.delete(session.udid);
-        }
+      } else if (session.strategy === "full" && damaged === 0 && outcome === "encrypted") {
+          await this.deps.markers().setNextStrategy(session.udid, null);
+      }
       }
       // A plaintext chain moved aside for this phone (#2884) is sealed too; it stays
       // until the new encrypted chain verifies, possibly forever.
@@ -1081,19 +1084,19 @@ export class BackupAtRest extends EventEmitter {
         if (!FILE_ID_PATTERN.test(fileId)) {
           missing++;
           return;
-        }
+      }
         const src = path.join(chain, fileId.slice(0, 2), fileId);
         const dest = path.join(outDir, fileId.slice(0, 2), fileId);
         try {
           await files.decryptToFile(src, dest);
           copied++;
-        } catch (error) {
+      } catch (error) {
           if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
             missing++;
             return;
           }
           throw error;
-        }
+      }
       });
     } finally {
       await fs.promises.rm(manifestCopy, { force: true });
