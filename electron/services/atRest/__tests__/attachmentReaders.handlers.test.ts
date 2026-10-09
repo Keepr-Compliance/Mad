@@ -241,7 +241,13 @@ describe("P1 containment", () => {
   it("refuses a symlink inside the folder that points outside", async () => {
     fs.writeFileSync(path.join(outside, "secret.jpg"), PLAIN);
     const link = path.join(userData, "message-attachments", "link.jpg");
-    fs.symlinkSync(path.join(outside, "secret.jpg"), link);
+    try {
+      fs.symlinkSync(path.join(outside, "secret.jpg"), link);
+    } catch (error) {
+      // Windows runners without the symlink privilege: the junction test below covers links there.
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
     refused(await invoke("attachments:get-data", link, "image/jpeg"));
     refused(await invoke("attachments:open", link));
     expect(openedPaths).toHaveLength(0);
@@ -250,7 +256,7 @@ describe("P1 containment", () => {
   it("refuses a directory link (junction-shaped) inside the folder that points outside", async () => {
     fs.writeFileSync(path.join(outside, "secret.jpg"), PLAIN);
     const junction = path.join(userData, "message-attachments", "jdir");
-    fs.symlinkSync(outside, junction, "dir");
+    fs.symlinkSync(outside, junction, "junction"); // a real junction on Windows; a dir symlink on POSIX
     refused(await invoke("attachments:get-buffer", path.join(junction, "secret.jpg")));
   });
 

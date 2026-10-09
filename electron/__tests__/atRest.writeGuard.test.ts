@@ -130,12 +130,11 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
   "electron/services/rcsExtensionDelivery.ts": { count: 3, reason: "installs the bundled Chrome extension folder; no customer content" },
 };
 
-const S2 = "PENDING S2 — raw read of a stored attachment path; S2 converts to the atRest readers";
 
 /** Raw readers in files that name storage_path/storagePath. Count = read calls + file:// literals. */
 const READER_ALLOWLIST: Record<string, Entry> = {
   "electron/handlers/attachmentHandlers.ts": { count: 1, reason: "shell.openPath on the DECRYPTED per-run copy in userData/at-rest-open (S2 R3; removed on quit + next launch). get-data/get-buffer read through atRest/attachmentReader" },
-  "electron/services/databaseService.ts": { count: 5, reason: `${S2} where it reads attachments; other reads are DB/key files` },
+  "electron/services/databaseService.ts": { count: 5, reason: "DB file backup/restore copies (:853/:1049/:1178/:1209) and schema.sql read (:1108); no attachment reads (checked in S2)" },
   "electron/services/iPhoneSyncStorageService.ts": { count: 2, reason: "reads the SOURCE file in the iPhone backup to hash/copy it; S1 hashes plaintext during encrypt" },
   "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts": { count: 2, reason: "reads the SOURCE file in ~/Library/Messages to hash/copy it; S1 scope" },
   "electron/services/supportAccess/supabaseSupportTransport.ts": { count: 1, reason: "reads its own ticket map, not an attachment" },
