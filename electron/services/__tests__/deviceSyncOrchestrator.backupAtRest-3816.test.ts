@@ -349,6 +349,38 @@ describe("C2 — the chain is sealed on every end path after the unseal", () => 
   });
 });
 
+describe("first backup — 3598 must still remove an unfinished one", () => {
+  it("a failed FIRST backup (no Manifest.db) is removed by the 3598 cleanup, not kept by a marker", async () => {
+    fsSync.rmSync(chain, { recursive: true, force: true });
+    await atRest.removeMarker(UDID);
+    const o = newOrchestrator();
+    startBackup.mockImplementation(async () => {
+      write("ab/" + "b".repeat(40), "partial first backup");
+      write("Status.plist", plist.stringify({ SnapshotState: "uploading" }));
+      return fail();
+    });
+    const result = await o.sync({ udid: UDID });
+    expect(result.success).toBe(false);
+    await o.lastAtRestSeal;
+    expect(fsSync.existsSync(chain)).toBe(false);
+    expect(await readMarkerAt(backups, UDID)).toBe("absent");
+  });
+
+  it("a successful FIRST backup is sealed and marked once persistence ends", async () => {
+    fsSync.rmSync(chain, { recursive: true, force: true });
+    await atRest.removeMarker(UDID);
+    const o = newOrchestrator();
+    startBackup.mockImplementation(async () => {
+      makeChain();
+      return ok({ isIncremental: false });
+    });
+    expect((await o.sync({ udid: UDID })).success).toBe(true);
+    expect(await readMarkerAt(backups, UDID)).toBe("absent");
+    await o.completeBackupAtRest();
+    await sealedAfter(o);
+  });
+});
+
 describe("Q — a quit does not seal; the marker says syncing for the next launch", () => {
   it("stoppedForQuit: no seal, marker syncing", async () => {
     const o = newOrchestrator();
