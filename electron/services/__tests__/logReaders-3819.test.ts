@@ -105,6 +105,20 @@ describe("BACKLOG-3819 log readers decrypt", () => {
     expect(t).not.toContain("KEPRLOG");
   });
 
+  it("Save diagnostic log: plaintext files (dev logs, fallback, pre-seal) are redacted in the export", () => {
+    // Written directly, unredacted — e.g. a log from before the redaction hook.
+    fs.writeFileSync(main, "[dev] plain line erin@example.com +15555550199\n");
+    fs.writeFileSync(path.join(dir, "main.unsealed.log"), "[fallback] frank@example.org\n");
+    const built = buildDiagnosticLogText(dir, { keyFor: () => null });
+    expect(built.files.map((f) => f.status)).toEqual(["plaintext", "plaintext"]);
+    const t = built.text;
+    expect(t).toContain("[dev] plain line e***@example.com ***99");
+    expect(t).toContain("[fallback] f***@example.org");
+    expect(t).not.toContain("erin@example.com");
+    expect(t).not.toContain("frank@example.org");
+    expect(t).not.toContain("5555550199");
+  });
+
   it("Save diagnostic log: a file under a key this computer does not hold is named, never emitted", () => {
     const foreign = sealLogText("[x] secret line\n", FOREIGN);
     fs.writeFileSync(path.join(dir, "main.old.log"), foreign);
