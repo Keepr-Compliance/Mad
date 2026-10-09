@@ -68,6 +68,20 @@ import type { iOSMessage } from "../../types/iosMessages";
 
 const mockDb = databaseService as jest.Mocked<typeof databaseService>;
 
+// BACKLOG-3785: storeAttachments resolves ids and existing records per chunk of the
+// ids it is given. These stubs answer from a fixed table, filtered by the request,
+// the way the real scoped queries do.
+function stubIdLookup(db: { getMessageIdsByExternalIds: jest.Mock }, table: Map<string, string>): void {
+  db.getMessageIdsByExternalIds.mockImplementation((_userId: string, ids: readonly string[]) =>
+    new Map(ids.filter((g) => table.has(g)).map((g) => [g, table.get(g)!] as [string, string])),
+  );
+}
+function stubRecords(db: { getExistingAttachmentRecordsForMessages: jest.Mock }, records: Set<string>): void {
+  db.getExistingAttachmentRecordsForMessages.mockImplementation((ids: readonly string[]) =>
+    new Set([...records].filter((r) => ids.includes(r.slice(0, r.indexOf(":"))))),
+  );
+}
+
 type StoreAttachments = (
   userId: string,
   messages: iOSMessage[],
@@ -109,8 +123,8 @@ describe("BACKLOG-3784: storeAttachments progress for skipped items", () => {
 
   it("reports progress and yields on the throttle when every attachment is skipped", async () => {
     // No message id for any guid -> every attachment takes the first `continue`.
-    mockDb.getMessageIdMap.mockReturnValue(new Map());
-    mockDb.getExistingAttachmentRecords.mockReturnValue(new Set());
+    stubIdLookup(mockDb as unknown as { getMessageIdsByExternalIds: jest.Mock }, new Map());
+    stubRecords(mockDb as unknown as { getExistingAttachmentRecordsForMessages: jest.Mock }, new Set());
     const immediate = jest.spyOn(globalThis, "setImmediate");
 
     const progress: Array<[number, number]> = [];
@@ -128,16 +142,18 @@ describe("BACKLOG-3784: storeAttachments progress for skipped items", () => {
       [200, 250],
       [250, 250],
     ]);
-    expect(immediate).toHaveBeenCalledTimes(3);
+    // 3 throttle points + 2 setup yields (BACKLOG-3785): one id-lookup chunk and one
+    // after the hash load; no records chunk, because no message id resolved.
+    expect(immediate).toHaveBeenCalledTimes(3 + 2);
     immediate.mockRestore();
   });
 
   it("an already-stored attachment (the incremental case) also counts toward progress", async () => {
     const messages = messagesWithAttachments(100);
-    mockDb.getMessageIdMap.mockReturnValue(
+    stubIdLookup(mockDb as unknown as { getMessageIdsByExternalIds: jest.Mock }, 
       new Map(messages.map((m) => [m.guid, `internal-${m.id}`])),
     );
-    mockDb.getExistingAttachmentRecords.mockReturnValue(
+    stubRecords(mockDb as unknown as { getExistingAttachmentRecordsForMessages: jest.Mock }, 
       new Set(messages.map((m) => `internal-${m.id}:a${m.id}.jpg`)),
     );
 
@@ -185,14 +201,14 @@ describe("BACKLOG-3784: skipped attachments are counted per reason", () => {
         messages.push(msg(id, kind === "unsupported" ? `${kind}-${id}.xyz` : `${kind}-${id}.jpg`));
       }
     }
-    mockDb.getMessageIdMap.mockReturnValue(
+    stubIdLookup(mockDb as unknown as { getMessageIdsByExternalIds: jest.Mock }, 
       new Map(
         messages
           .filter((m) => !m.attachments[0].transferName!.startsWith("nomsg"))
           .map((m) => [m.guid, `internal-${m.id}`]),
       ),
     );
-    mockDb.getExistingAttachmentRecords.mockReturnValue(
+    stubRecords(mockDb as unknown as { getExistingAttachmentRecordsForMessages: jest.Mock }, 
       new Set(
         messages
           .filter((m) => m.attachments[0].transferName!.startsWith("already"))
@@ -254,5 +270,75 @@ describe("BACKLOG-3784: skipped attachments are counted per reason", () => {
       attachmentsSkippedError: 7,
     });
     expect(attachmentSkipFields(3, undefined)).toEqual({ attachmentsSkipped: 3 });
+  });
+});
+
+describe("BACKLOG-3785: the attachment setup looks up only this sync's messages", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb.getAttachmentStoragePaths.mockReturnValue([]);
+    (iOSMessagesParser.resolveAttachmentPath as jest.Mock).mockReturnValue(null);
+  });
+
+  it("never loads the whole message or attachment table; asks for exactly the attachment-bearing guids, in chunks of at most 500", async () => {
+    const withAttachments = messagesWithAttachments(1200);
+    const withoutAttachments = Array.from({ length: 50 }, (_, i) => ({
+      ...withAttachments[0],
+      id: 5000 + i,
+      guid: `plain-${i}`,
+      attachments: [],
+    })) as iOSMessage[];
+    stubIdLookup(
+      mockDb as unknown as { getMessageIdsByExternalIds: jest.Mock },
+      new Map(withAttachments.map((m) => [m.guid, `internal-${m.id}`])),
+    );
+    stubRecords(mockDb as unknown as { getExistingAttachmentRecordsForMessages: jest.Mock }, new Set());
+
+    const store = (
+      iPhoneSyncStorageService as unknown as { storeAttachments: StoreAttachments }
+    ).storeAttachments.bind(iPhoneSyncStorageService);
+    const result = await store("user-1", [...withAttachments, ...withoutAttachments], "/mock/backup");
+
+    expect(mockDb.getMessageIdMap).not.toHaveBeenCalled();
+    expect(mockDb.getExistingAttachmentRecords).not.toHaveBeenCalled();
+
+    const idCalls = (mockDb.getMessageIdsByExternalIds as jest.Mock).mock.calls as Array<[string, string[]]>;
+    const askedGuids = idCalls.flatMap(([, ids]) => ids);
+    expect(askedGuids).toHaveLength(1200);
+    expect(new Set(askedGuids)).toEqual(new Set(withAttachments.map((m) => m.guid)));
+    expect(idCalls.every(([userId, ids]) => userId === "user-1" && ids.length <= 500)).toBe(true);
+
+    const recordCalls = (mockDb.getExistingAttachmentRecordsForMessages as jest.Mock).mock.calls as Array<[string[]]>;
+    const askedIds = recordCalls.flatMap(([ids]) => ids);
+    expect(new Set(askedIds)).toEqual(new Set(withAttachments.map((m) => `internal-${m.id}`)));
+    expect(recordCalls.every(([ids]) => ids.length <= 500)).toBe(true);
+
+    // Every attachment still reached the per-item checks (resolved, then rejected path).
+    expect(result.skippedByReason.rejectedPath).toBe(1200);
+  });
+});
+
+describe("BACKLOG-3785: attachment progress every ~2%, yields still every 100", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb.getAttachmentStoragePaths.mockReturnValue([]);
+    stubIdLookup(mockDb as unknown as { getMessageIdsByExternalIds: jest.Mock }, new Map());
+    stubRecords(mockDb as unknown as { getExistingAttachmentRecordsForMessages: jest.Mock }, new Set());
+  });
+
+  it("12,050 attachments: progress at every 300th item and the last (41 events); a yield at every 100th and the last", async () => {
+    const immediate = jest.spyOn(globalThis, "setImmediate");
+    const progress: number[] = [];
+    const store = (
+      iPhoneSyncStorageService as unknown as { storeAttachments: StoreAttachments }
+    ).storeAttachments.bind(iPhoneSyncStorageService);
+    await store("user-1", messagesWithAttachments(12_050), "/mock/backup", (c) => progress.push(c));
+
+    // ceil(12050 / 50 / 100) * 100 = 300
+    const expected = Array.from({ length: 40 }, (_, k) => (k + 1) * 300).concat(12_050);
+    expect(progress).toEqual(expected);
+    // 121 loop yields (120 hundreds + the last) + 26 setup yields (25 lookup chunks + the hash load).
+    expect(immediate).toHaveBeenCalledTimes(121 + 26);
+    immediate.mockRestore();
   });
 });

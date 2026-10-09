@@ -196,6 +196,48 @@ export function getMessageIdMap(userId: string): Map<string, string> {
 }
 
 /**
+ * BACKLOG-3785: internal message id for each of the given external ids (one
+ * chunk). Callers pass a bounded chunk (<= a few hundred ids) and yield between
+ * chunks; this replaces loading every message row of the user just to resolve
+ * the ids an iPhone sync's attachments point at. Uses
+ * idx_messages_user_external_id. Ids not stored are simply absent from the map.
+ */
+export function getMessageIdsByExternalIds(userId: string, externalIds: readonly string[]): Map<string, string> {
+  const map = new Map<string, string>();
+  if (externalIds.length === 0) return map;
+  const db = ensureDb();
+  const placeholders = externalIds.map(() => "?").join(", ");
+  const rows = db
+    .prepare(
+      `SELECT id, external_id FROM messages WHERE user_id = ? AND external_id IN (${placeholders})`
+    )
+    .all(userId, ...externalIds) as { id: string; external_id: string }[];
+  for (const row of rows) {
+    map.set(row.external_id, row.id);
+  }
+  return map;
+}
+
+/**
+ * BACKLOG-3785: existing attachment records (`message_id:filename`) for the given
+ * message ids only (one chunk) — the scoped counterpart of
+ * getExistingAttachmentRecords. Uses idx_attachments_message_id.
+ */
+export function getExistingAttachmentRecordsForMessages(messageIds: readonly string[]): Set<string> {
+  const records = new Set<string>();
+  if (messageIds.length === 0) return records;
+  const db = ensureDb();
+  const placeholders = messageIds.map(() => "?").join(", ");
+  const rows = db
+    .prepare(`SELECT message_id, filename FROM attachments WHERE message_id IN (${placeholders})`)
+    .all(...messageIds) as { message_id: string; filename: string }[];
+  for (const row of rows) {
+    records.add(`${row.message_id}:${row.filename}`);
+  }
+  return records;
+}
+
+/**
  * Get existing attachment records for deduplication (message_id + filename pairs).
  */
 export function getExistingAttachmentRecords(): Set<string> {
