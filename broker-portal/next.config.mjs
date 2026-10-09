@@ -57,6 +57,8 @@ const nextConfig = {
       "media-src 'self' https://*.supabase.co",
       // Supabase Realtime creates blob: workers for WebSocket connections
       "worker-src 'self' blob:",
+      // Web app manifest at /manifest.webmanifest (BACKLOG-3796)
+      "manifest-src 'self'",
       // Prevent clickjacking
       "frame-ancestors 'none'",
       "base-uri 'self'",
@@ -84,6 +86,12 @@ const nextConfig = {
             value: 'strict-origin-when-cross-origin',
           },
         ],
+      },
+      // Service worker must never be served from HTTP cache, so updates ship
+      // on the next navigation (BACKLOG-3796).
+      {
+        source: '/sw.js',
+        headers: [{ key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' }],
       },
     ];
   },

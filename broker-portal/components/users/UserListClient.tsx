@@ -27,6 +27,7 @@ import DeactivateUserModal from './DeactivateUserModal';
 import RemoveUserModal from './RemoveUserModal';
 import { EmptyState, SearchIcon } from '@/components/ui/EmptyState';
 import { formatUserDisplayName } from '@/lib/utils/userDisplay';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { resendInvite } from '@/lib/actions/resendInvite';
 import type { OrganizationMember, Role } from '@/lib/types/users';
 
@@ -127,12 +128,18 @@ export default function UserListClient({
     (m) => selectedIds.has(m.id) && m.user_id !== currentUserId
   );
 
+  // BACKLOG-3798: below md the table does not fit, so cards are forced and the
+  // view toggle is hidden. Bulk select lives in the table, so it is not
+  // available below md.
+  const narrow = useMediaQuery('(max-width: 767px)');
+  const effectiveView = narrow ? 'cards' : viewMode;
+
   return (
     <div className="space-y-4">
       {/* Action bar */}
       <div className="flex items-center justify-between">
         {/* View toggle */}
-        <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+        <div className="hidden md:flex items-center gap-1 bg-gray-100 rounded-lg p-1">
           <button
             onClick={() => setViewMode('list')}
             className={`p-2 rounded-md transition-colors ${viewMode === 'list' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
@@ -151,7 +158,7 @@ export default function UserListClient({
           </button>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 max-md:ml-auto">
           {/* Bulk actions */}
           {canManage && selectedNonSelf.length > 0 && (
             <div className="flex items-center rounded-lg bg-primary-50 border border-primary-200 px-4 py-2.5">
@@ -210,9 +217,9 @@ export default function UserListClient({
             {initialMembers.length !== 1 ? 's' : ''}
           </div>
 
-          {viewMode === 'cards' ? (
-            /* Card grid view */
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {effectiveView === 'cards' ? (
+            /* Card grid view. grid-cols-1 = minmax(0,1fr), so long emails truncate. */
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {filteredMembers.map((member) => (
                 <UserCard
                   key={member.id}

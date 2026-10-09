@@ -85,6 +85,14 @@ function errnoCode(err: unknown): string | undefined {
  * `validateDeviceUdid` trims, so a folder named `" <udid>"` validates — and would be
  * acted on at a different path than the one that was listed.
  */
+/**
+ * BACKLOG-3816: prefix of a plaintext chain moved aside for an encrypted one. Starts
+ * with "." so it is never a valid udid and the 3598 sweep never classifies it.
+ */
+// Single source in the at-rest module (S4-C seals moved-aside chains by this prefix).
+export { REPLACED_CHAIN_PREFIX } from "./atRest/backupAtRest";
+import { REPLACED_CHAIN_PREFIX, markerProtectsChain, readMarkerAt } from "./atRest/backupAtRest";
+
 function exactUdidOrNull(name: string): string | null {
   try {
     return validateDeviceUdid(name) === name ? name : null;
@@ -122,6 +130,10 @@ function serialiseLeftoverCleanup<T>(work: () => Promise<T>): Promise<T> {
  *                `Info.plist` at the start of every backup run, so a run killed in
  *                that window leaves a real backup without one.
  * - `unknown`  — a read failed (EPERM/EBUSY/...). Never deleted.
+ *
+ * BACKLOG-3816 S4-C: an at-rest marker of migrating / encrypted / syncing /
+ * apple-encrypted makes the folder `indexed` regardless of its files; an unreadable
+ * marker makes it `unknown`.
  */
 export type BackupFolderClass = "absent" | "leftover" | "indexed" | "unknown";
 
@@ -1002,6 +1014,7 @@ export class BackupService extends EventEmitter {
    * treated as untrusted input.
    */
   async checkEncryptionStatus(udid: string): Promise<BackupEncryptionInfo> {
+    const unknown: BackupEncryptionInfo = { isEncrypted: false, needsPassword: false, status: "unknown" };
     try {
       // SECURITY: Validate UDID before spawning process
       // This prevents command injection via malicious UDID values
@@ -1009,7 +1022,17 @@ export class BackupService extends EventEmitter {
       const ideviceinfo = getCommand("ideviceinfo");
 
       return new Promise((resolve) => {
-        const proc = spawn(ideviceinfo, ["-u", validatedUdid, "-k", "WillEncrypt"]);
+        // BACKLOG-3817: WillEncrypt lives in the com.apple.mobile.backup domain
+        // (idevicebackup2.c reads it with lockdownd_get_value(..., "com.apple.mobile.backup",
+        // "WillEncrypt")). Queried without the domain it is not found, which read as "off".
+        const proc = spawn(ideviceinfo, [
+          "-u",
+          validatedUdid,
+          "-q",
+          "com.apple.mobile.backup",
+          "-k",
+          "WillEncrypt",
+        ]);
         let output = "";
         let errorOutput = "";
 
@@ -1022,42 +1045,33 @@ export class BackupService extends EventEmitter {
         });
 
         proc.on("close", (code) => {
-          if (code === 0) {
-            const willEncrypt = output.trim().toLowerCase() === "true";
-            log.info("[BackupService] Device encryption status:", {
-              willEncrypt,
-              rawOutput: output.trim(),
-            });
+          const value = output.trim().toLowerCase();
+          // An absent key (encryption never configured) prints nothing and exits 0.
+          if (code === 0 && (value === "true" || value === "false" || value === "")) {
+            const willEncrypt = value === "true";
+            log.info("[BackupService] Device encryption status:", { willEncrypt });
             resolve({
               isEncrypted: willEncrypt,
               needsPassword: willEncrypt,
+              status: willEncrypt ? "on" : "off",
             });
           } else {
             log.warn(
               "[BackupService] Could not determine encryption status:",
-              errorOutput,
+              errorOutput.slice(0, 200),
             );
-            resolve({
-              isEncrypted: false,
-              needsPassword: false,
-            });
+            resolve(unknown);
           }
         });
 
         proc.on("error", (error) => {
           log.error("[BackupService] Error checking encryption status:", error);
-          resolve({
-            isEncrypted: false,
-            needsPassword: false,
-          });
+          resolve(unknown);
         });
       });
     } catch (error) {
       log.error("[BackupService] Exception checking encryption status:", error);
-      return {
-        isEncrypted: false,
-        needsPassword: false,
-      };
+      return unknown;
     }
   }
 
@@ -1432,7 +1446,7 @@ export class BackupService extends EventEmitter {
         // torn backup wrote nothing — a claim this code cannot support, since
         // idevicebackup2 leaves whatever it transferred on disk.
         let backupSize: number | null = null;
-        let finalBackupPath = deviceBackupPath;
+        const finalBackupPath = deviceBackupPath;
 
         if (success) {
           const sizeReading = await this.measureBackupSize(deviceBackupPath);
@@ -1487,44 +1501,26 @@ export class BackupService extends EventEmitter {
             return;
           }
 
-          // Handle encrypted backup decryption (TASK-007)
+          // BACKLOG-3817: an encrypted backup is NOT decrypted here. It used to be — into
+          // `Backups/<udid>/decrypted`, plaintext beside the backup — and the orchestrator then
+          // tried to decrypt that folder a second time. Here the password is only checked
+          // against the backup's keybag; the orchestrator decrypts once, into a parse copy
+          // outside the backup, and `backupPath` stays the real backup.
           if (actuallyEncrypted && options.password) {
-            this.lastProgress = {
-              phase: "decrypting",
-              percentComplete: 95,
-              currentFile: null,
-              filesTransferred: 0,
-              totalFiles: null,
-              // BACKLOG-2917: `totalBytes` is already nullable and carries the
-              // unknown honestly. `bytesTransferred` is a progress-bar input typed
-              // `number`; 0 there means "no bar movement to report", which is the
-              // truth when the size is unmeasured, and it is paired with a null
-              // total so nothing downstream can compute a false percentage from it.
-              bytesTransferred: backupSize ?? 0,
-              totalBytes: backupSize,
-              estimatedTimeRemaining: 30,
-            };
-            this.emit("progress", this.lastProgress);
-
-            const decryptionResult =
-              await backupDecryptionService.decryptBackup(
-                deviceBackupPath,
-                options.password,
-              );
-
-            if (!decryptionResult.success) {
+            const passwordOk = await backupDecryptionService.verifyPassword(
+              deviceBackupPath,
+              options.password,
+            );
+            if (!passwordOk) {
               const result: BackupResult = {
                 success: false,
                 backupPath: deviceBackupPath,
-                error: decryptionResult.error || "Decryption failed",
-                errorCode:
-                  decryptionResult.error === "Incorrect password"
-                    ? "INCORRECT_PASSWORD"
-                    : "DECRYPTION_FAILED",
+                error: "Incorrect password",
+                errorCode: "INCORRECT_PASSWORD",
                 duration: Date.now() - this.startTime,
                 deviceUdid: options.udid,
                 isIncremental: this.resolveIsIncremental(previousBackupExists, options),
-              deviceReportedBackupMode: this.deviceReportedBackupMode,
+                deviceReportedBackupMode: this.deviceReportedBackupMode,
                 backupSize,
                 isEncrypted: true,
               };
@@ -1532,9 +1528,6 @@ export class BackupService extends EventEmitter {
               resolve(result);
               return;
             }
-
-            // Update path to decrypted location
-            finalBackupPath = decryptionResult.decryptedPath!;
           }
         } else {
           log.error(`[BackupService] Backup failed with code ${code}`);
@@ -2739,6 +2732,9 @@ export class BackupService extends EventEmitter {
       }
 
       for (const entry of entries) {
+        // Dot-folders are not devices: `.quarantine` (S4-C), `.keepr-at-rest` markers,
+        // `.keepr-replaced-*` chains moved aside.
+        if (entry.name.startsWith(".")) continue;
         if (entry.isDirectory()) {
           const deviceBackupPath = path.join(backupPath, entry.name);
           const info = await this.getBackupInfo(deviceBackupPath, entry.name);
@@ -2835,6 +2831,12 @@ export class BackupService extends EventEmitter {
       // classified as a leftover.
       const stats = await fs.lstat(folder);
       if (!stats.isDirectory()) return "unknown";
+      // BACKLOG-3816 S4-C: a chain Keepr sealed (or is sealing / has unsealed for a
+      // sync), or a recorded phone-encrypted chain, is never a leftover — whatever its
+      // files look like. An unreadable marker cannot rule that out: keep the folder.
+      const marker = await readMarkerAt(path.dirname(folder), path.basename(folder));
+      if (marker === "unreadable") return "unknown";
+      if (markerProtectsChain(marker)) return "indexed";
       return (await indexFileExists(path.join(folder, "Manifest.db")))
         ? "indexed"
         : "leftover";
@@ -2994,6 +2996,98 @@ export class BackupService extends EventEmitter {
   async cleanupDecryptedFiles(backupPath: string): Promise<void> {
     const decryptedPath = path.join(backupPath, "decrypted");
     await backupDecryptionService.cleanup(decryptedPath);
+  }
+
+  /**
+   * BACKLOG-3816: is `Backups/<udid>` an encrypted chain, a plaintext one, or neither?
+   * Read from Manifest.plist `IsEncrypted` (device metadata, plain in both kinds).
+   */
+  async readChainEncryption(udid: string): Promise<"encrypted" | "plaintext" | "absent" | "unknown"> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return "unknown";
+    const manifest = path.join(this.getDefaultBackupPath(), validatedUdid, "Manifest.plist");
+    try {
+      await fs.stat(manifest);
+    } catch (err: unknown) {
+      return errnoCode(err) === "ENOENT" ? "absent" : "unknown";
+    }
+    try {
+      return (await backupDecryptionService.isBackupEncrypted(path.dirname(manifest))) ? "encrypted" : "plaintext";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  /**
+   * BACKLOG-3816: move a PLAINTEXT chain out of the way so the first encrypted backup
+   * starts a new chain (a password change breaks snapshot comparison). The old chain is
+   * kept, under a name the 3598 sweep never touches, until the new one is verified.
+   */
+  async moveChainAside(udid: string): Promise<string | null> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return null;
+    const from = path.join(this.getDefaultBackupPath(), validatedUdid);
+    const to = path.join(this.getDefaultBackupPath(), `${REPLACED_CHAIN_PREFIX}${validatedUdid}-${Date.now()}`);
+    await fs.rename(from, to);
+    log.info("[BackupService] Kept the previous unencrypted backup aside until the encrypted one is verified");
+    return to;
+  }
+
+  /**
+   * BACKLOG-3816: delete `Backups/<udid>` when — re-read here, right before the delete —
+   * it is an UNENCRYPTED chain. Used only when there is no room to keep it aside while a
+   * new encrypted chain is made. An encrypted or unreadable chain is never removed.
+   */
+  async removePlaintextChain(udid: string): Promise<boolean> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return false;
+    return serialiseLeftoverCleanup(async () => {
+      if ((await this.readChainEncryption(validatedUdid)) !== "plaintext") return false;
+      await fs.rm(path.join(this.getDefaultBackupPath(), validatedUdid), {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 500,
+      });
+      log.info("[BackupService] Removed the previous unencrypted backup to make room for an encrypted one");
+      return true;
+    });
+  }
+
+  /**
+   * BACKLOG-3816: delete chains moved aside for `udid`. The CALLER must first have
+   * verified the encrypted chain opens with the saved password.
+   */
+  async removeReplacedChains(udid: string): Promise<number> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return 0;
+    const root = this.getDefaultBackupPath();
+    let entries: import("fs").Dirent[];
+    try {
+      entries = await fs.readdir(root, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+    let removed = 0;
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith(`${REPLACED_CHAIN_PREFIX}${validatedUdid}-`)) continue;
+      await fs.rm(path.join(root, entry.name), { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
+      removed++;
+    }
+    if (removed > 0) log.info("[BackupService] Removed the previous unencrypted backup", { removed });
+    return removed;
+  }
+
+  /** BACKLOG-3816: whether a moved-aside chain for `udid` is waiting for removal. */
+  async hasReplacedChain(udid: string): Promise<boolean> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return false;
+    try {
+      const entries = await fs.readdir(this.getDefaultBackupPath());
+      return entries.some((name) => name.startsWith(`${REPLACED_CHAIN_PREFIX}${validatedUdid}-`));
+    } catch {
+      return false;
+    }
   }
 
   /**

@@ -1,0 +1,844 @@
+/**
+ * @jest-environment node
+ */
+/**
+ * BACKLOG-3816 S4-C — the kept iPhone backup sealed at rest with the data key.
+ *
+ * Real fileCrypto, real files in a temp Backups root, real SQLite Manifest.db (run
+ * under Electron's node for the sqlite driver).
+ */
+// The real driver (the jest config maps the module to a mock).
+const actualModulePath = require.resolve("better-sqlite3-multiple-ciphers", {
+  paths: [require("path").join(__dirname, "../../../../node_modules")],
+});
+jest.mock("better-sqlite3-multiple-ciphers", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require(actualModulePath);
+});
+jest.mock("../../logService", () => ({
+  __esModule: true,
+  default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+}));
+import crypto from "crypto";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import plist from "simple-plist";
+
+import { ADDRESS_BOOK_FILE_ID, SMS_DB_FILE_ID } from "../../backupDecryptionService";
+import {
+  BACKUP_AT_REST_QUARANTINED_MESSAGE,
+  BackupAtRest,
+  BackupAtRestRefusal,
+  describeBackupAtRestProgress,
+  QUARANTINE_DIR_NAME,
+  QUARANTINE_MAX_AGE_MS,
+  type BackupAtRestProgress,
+  BACKUP_SECURING_MESSAGE,
+  BACKUP_SECURING_SENTENCE,
+  markerProtectsChain,
+  readMarkerAt,
+  type BackupUnsealStrategy,
+  BACKUP_UNSEAL_STRATEGY,
+} from "../backupAtRest";
+import { DataKeyUnavailableError } from "../dataKeyService";
+import { createFileCrypto, KENC_TMP_SUFFIX, MAGIC, probeHeader, type KeyResolver } from "../fileCrypto";
+import { createMarkerStore, MARKER_DIR_NAME } from "../markers";
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const Database = require(actualModulePath);
+
+const KEY = crypto.randomBytes(32);
+const KEY_ID = crypto.createHash("sha256").update(KEY).digest("hex").slice(0, 32);
+const resolver: KeyResolver = {
+  currentKey: async () => ({ keyId: KEY_ID, key: KEY }),
+  keyFor: async () => KEY,
+};
+const files = createFileCrypto(resolver, { chunkSize: 64 });
+
+const UDID = "00008110-000A1B2C3D4E5F60";
+const ATTACHMENT_ID = crypto.createHash("sha1").update("MediaDomain-Library/SMS/Attachments/ab/01/IMG_1.jpg").digest("hex");
+const OTHER_ID = "aa" + "1".repeat(38);
+
+let userData: string;
+let backups: string;
+let chain: string;
+
+function service(overrides: Partial<ConstructorParameters<typeof BackupAtRest>[0]> = {}): BackupAtRest {
+  return new BackupAtRest({
+    backupsRoot: () => backups,
+    files: () => files,
+    markers: () => createMarkerStore({ userData: () => userData }),
+    ensureKey: async () => undefined,
+    freeBytes: async () => Number.MAX_SAFE_INTEGER,
+    sleep: async () => undefined,
+    log: () => undefined,
+    concurrency: 4,
+    ...overrides,
+  });
+}
+
+function write(rel: string, data: Buffer | string): string {
+  const p = path.join(chain, rel);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, data);
+  return p;
+}
+
+/** A plaintext chain shaped like idevicebackup2 output (transcribed layout: root plists + Manifest.db + XX/<fileID>). */
+function makeChain(opts: { appleEncrypted?: boolean } = {}): void {
+  fs.mkdirSync(chain, { recursive: true });
+  write("Info.plist", plist.stringify({ "Device Name": "Test" }));
+  write("Status.plist", plist.stringify({ SnapshotState: "finished", IsFullBackup: false }));
+  write("Manifest.plist", plist.stringify({ IsEncrypted: !!opts.appleEncrypted }));
+  const db = new Database(path.join(chain, "Manifest.db"));
+  db.exec("CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB)");
+  const ins = db.prepare("INSERT INTO Files VALUES (?, ?, ?, 1, ?)");
+  ins.run(SMS_DB_FILE_ID, "HomeDomain", "Library/SMS/sms.db", Buffer.alloc(0));
+  ins.run(ADDRESS_BOOK_FILE_ID, "HomeDomain", "Library/AddressBook/AddressBook.sqlitedb", Buffer.alloc(0));
+  ins.run(ATTACHMENT_ID, "MediaDomain", "Library/SMS/Attachments/ab/01/IMG_1.jpg", Buffer.alloc(0));
+  ins.run(OTHER_ID, "AppDomain-x", "Documents/other", Buffer.alloc(0));
+  db.close();
+  write(`${SMS_DB_FILE_ID.slice(0, 2)}/${SMS_DB_FILE_ID}`, "sms database bytes ".repeat(20));
+  write(`${ADDRESS_BOOK_FILE_ID.slice(0, 2)}/${ADDRESS_BOOK_FILE_ID}`, "address book ".repeat(9));
+  write(`${ATTACHMENT_ID.slice(0, 2)}/${ATTACHMENT_ID}`, crypto.randomBytes(300));
+  write(`${OTHER_ID.slice(0, 2)}/${OTHER_ID}`, "other app data");
+  write("ff/" + "f".repeat(40), Buffer.alloc(0)); // empty file, as 93/200 sampled on the founder's PC
+}
+
+function allContentFiles(): string[] {
+  const out: string[] = [];
+  const walk = (d: string, root: boolean) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f, false);
+      else if (!(root && ["Info.plist", "Status.plist", "Manifest.plist"].includes(e.name))) out.push(f);
+    }
+  };
+  walk(chain, true);
+  return out;
+}
+
+function headerOf(file: string): Buffer {
+  const fd = fs.openSync(file, "r");
+  try {
+    const b = Buffer.alloc(7);
+    fs.readSync(fd, b, 0, 7, 0);
+    return b;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Files that hold bytes and do NOT start with the KEPRENC magic. */
+function plaintextLeft(): string[] {
+  return allContentFiles().filter((f) => fs.statSync(f).size > 0 && !headerOf(f).equals(MAGIC));
+}
+
+/** Same, for any chain-shaped directory (root plists excluded). */
+function plaintextIn(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string, root: boolean) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f, false);
+      else if (!(root && ["Info.plist", "Status.plist", "Manifest.plist"].includes(e.name))) out.push(f);
+    }
+  };
+  walk(dir, true);
+  return out.filter((f) => fs.statSync(f).size > 0 && !headerOf(f).equals(MAGIC));
+}
+
+beforeEach(() => {
+  userData = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-s4c-"));
+  backups = path.join(userData, "Backups");
+  chain = path.join(backups, UDID);
+});
+afterEach(() => {
+  fs.rmSync(userData, { recursive: true, force: true });
+});
+
+describe("seal / scan", () => {
+  it("seals every content file, leaves the three root plists plain, skips empty files", async () => {
+    makeChain();
+    const before = Object.fromEntries(allContentFiles().map((f) => [f, fs.readFileSync(f)]));
+    const s = service();
+    const report = await s.seal(UDID);
+    expect(report.failed).toBe(0);
+    expect(report.empty).toBe(1);
+    expect(plaintextLeft()).toEqual([]);
+    for (const name of ["Info.plist", "Status.plist", "Manifest.plist"]) {
+      expect(headerOf(path.join(chain, name)).equals(MAGIC)).toBe(false);
+    }
+    for (const [f, bytes] of Object.entries(before)) {
+      expect((await files.readAllDecrypted(f)).equals(bytes)).toBe(true);
+    }
+    expect(await s.scan(UDID)).toEqual({ sealed: 5, plaintext: 0, empty: 1, damaged: 0 });
+  });
+
+  it("is idempotent: a second seal changes nothing (no double encryption after a kill)", async () => {
+    makeChain();
+    const s = service();
+    await s.seal(UDID);
+    const sealed = Object.fromEntries(allContentFiles().map((f) => [f, fs.readFileSync(f)]));
+    const again = await s.seal(UDID);
+    expect(again.changed).toBe(0);
+    for (const [f, bytes] of Object.entries(sealed)) expect(fs.readFileSync(f).equals(bytes)).toBe(true);
+  });
+
+  it("leaves a damaged-header file (magic, not a valid container) untouched and counts it", async () => {
+    makeChain();
+    const damaged = write("dd/" + "d".repeat(40), Buffer.concat([MAGIC, Buffer.from("not a header at all, just bytes")]));
+    const original = fs.readFileSync(damaged);
+    const report = await service().seal(UDID);
+    expect(report.damaged).toBe(1);
+    expect(fs.readFileSync(damaged).equals(original)).toBe(true);
+    expect((await service().scan(UDID)).damaged).toBe(1);
+  });
+
+  it("removes orphaned *.kenc-tmp files (a killed unseal leaves PLAINTEXT temps)", async () => {
+    makeChain();
+    const tmp = write(`${SMS_DB_FILE_ID.slice(0, 2)}/${SMS_DB_FILE_ID}.abcdef123456.kenc-tmp`, "plaintext temp");
+    const report = await service().seal(UDID);
+    expect(report.tempsRemoved).toBe(1);
+    expect(fs.existsSync(tmp)).toBe(false);
+  });
+
+  it("refuses to start when free space is below the largest file + 1 GB", async () => {
+    makeChain();
+    const report = await service({ freeBytes: async () => 10 }).seal(UDID);
+    expect(report.failedCodes.DISK_SPACE).toBeGreaterThan(0);
+    expect(report.changed).toBe(0);
+  });
+
+  it("retries a locked file (EBUSY) and then seals it", async () => {
+    makeChain();
+    let calls = 0;
+    const flaky = {
+      ...files,
+      encryptFileInPlace: async (p: string) => {
+        calls++;
+        if (calls === 1) throw Object.assign(new Error("busy"), { code: "EBUSY" });
+        return files.encryptFileInPlace(p);
+      },
+    };
+    const report = await service({ files: () => flaky, concurrency: 1 }).seal(UDID);
+    expect(report.failed).toBe(0);
+    expect(plaintextLeft()).toEqual([]);
+  });
+});
+
+describe("`encrypted` only after a clean scan", () => {
+  it("a file that keeps failing (locked) leaves the marker short of encrypted, and the next run finishes it", async () => {
+    makeChain();
+    const smsPath = path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+    const locked = {
+      ...files,
+      encryptFileInPlace: async (p: string) => {
+        if (p === smsPath) throw Object.assign(new Error("locked"), { code: "EACCES" });
+        return files.encryptFileInPlace(p);
+      },
+    };
+    const s = service({ files: () => locked });
+    expect(await s.migrate(UDID)).toBe("incomplete");
+    expect(await readMarkerAt(backups, UDID)).toBe("migrating");
+    const session = await service().beginSync(UDID, { strategy: "full" });
+    const lockedAgain = service({ files: () => locked });
+    await lockedAgain.finishSync(session);
+    expect(await readMarkerAt(backups, UDID)).toBe("syncing");
+    expect(await service().migrate(UDID)).toBe("encrypted");
+    expect(plaintextLeft()).toEqual([]);
+  });
+});
+
+describe("markers and the 3598 classifier input", () => {
+  it("readMarkerAt: absent / state / unreadable", async () => {
+    expect(await readMarkerAt(backups, UDID)).toBe("absent");
+    await createMarkerStore({ userData: () => userData }).writeBackupMarker(UDID, "encrypted");
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    fs.writeFileSync(path.join(backups, MARKER_DIR_NAME, `${UDID}.json`), "{not json");
+    expect(await readMarkerAt(backups, UDID)).toBe("unreadable");
+    expect(markerProtectsChain("encrypted")).toBe(true);
+    expect(markerProtectsChain("syncing")).toBe(true);
+    expect(markerProtectsChain("migrating")).toBe(true);
+    expect(markerProtectsChain("plaintext")).toBe(false);
+    expect(markerProtectsChain("absent")).toBe(false);
+  });
+});
+
+describe("default strategy is C-DELTA (Step 0b)", () => {
+  it("the constant, and a beginSync with no strategy leaves unchanged content files sealed", async () => {
+    expect(BACKUP_UNSEAL_STRATEGY).toBe("delta");
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    expect(session).toMatchObject({ kind: "keepr", strategy: "delta" });
+    const smsPath = path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+    expect(headerOf(smsPath).equals(MAGIC)).toBe(true);
+    expect(headerOf(path.join(chain, "Manifest.db")).equals(MAGIC)).toBe(false);
+    await s.finishSync(session);
+  });
+
+  it("a delta sync that leaves a damaged file forces C-FULL for the next sync, recorded with a reason; a clean full sync clears it", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    // The tool truncated a still-sealed file: header magic kept, structure broken.
+    const smsPath = path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+    fs.writeFileSync(smsPath, fs.readFileSync(smsPath).subarray(0, 30));
+    await s.finishSync(session);
+    expect(await s.forcedFullReason(UDID)).toBe("DELTA_DAMAGED");
+    // A restart: a brand-new service (fresh in-memory state) reads the flag from the marker file.
+    const afterRestart = service();
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    const next = await afterRestart.beginSync(UDID);
+    expect(next).toMatchObject({ kind: "keepr", strategy: "full" });
+    fs.writeFileSync(smsPath, Buffer.from("rewritten by the phone"));
+    await afterRestart.finishSync(next, undefined, { succeeded: true });
+    expect(await afterRestart.forcedFullReason(UDID)).toBeNull();
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  describe("R1: the force-full flag clears only when the forced C-FULL sync SUCCEEDED", () => {
+    async function forcedFull() {
+      makeChain();
+      const s = service();
+      await s.migrate(UDID);
+      const first = await s.beginSync(UDID);
+      await s.finishSync(first, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+      expect(await s.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
+      const forced = await s.beginSync(UDID);
+      expect(forced).toMatchObject({ kind: "keepr", strategy: "full" });
+      return { s, forced };
+    }
+
+    it("a forced C-FULL that FAILED keeps the flag", async () => {
+      const { s, forced } = await forcedFull();
+      await s.finishSync(forced, undefined, { succeeded: false });
+      expect(await s.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
+      expect(await service().beginSync(UDID)).toMatchObject({ strategy: "full" });
+    });
+
+    it("a forced C-FULL that was CANCELLED (no succeeded option) keeps the flag", async () => {
+      const { s, forced } = await forcedFull();
+      await s.finishSync(forced);
+      expect(await s.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
+    });
+
+    it("a forced C-FULL that SUCCEEDED clears the flag", async () => {
+      const { s, forced } = await forcedFull();
+      await s.finishSync(forced, undefined, { succeeded: true });
+      expect(await s.forcedFullReason(UDID)).toBeNull();
+    });
+  });
+
+  it("D1: a delta sync whose backup tool failed forces C-FULL even though no file is damaged; a restart still reads it", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    // The tool read a still-sealed file and exited non-zero: nothing is damaged.
+    await s.finishSync(session, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    expect(await s.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
+    const afterRestart = service();
+    expect(await afterRestart.beginSync(UDID)).toMatchObject({ kind: "keepr", strategy: "full" });
+  });
+
+  it("D1: a sync that was already C-FULL does not record a tool failure (nothing was left sealed)", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID, { strategy: "full" });
+    await s.finishSync(session, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    expect(await s.forcedFullReason(UDID)).toBeNull();
+  });
+
+  it("S1: the force-full flag survives a marker rewrite after a crash (marker left `syncing`, launch reseals)", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const first = await s.beginSync(UDID);
+    await s.finishSync(first, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    // The forced C-FULL sync starts (marker `syncing`, plaintext on disk) and the app dies before finishSync.
+    const crashed = service();
+    await crashed.beginSync(UDID);
+    expect(await readMarkerAt(backups, UDID)).toBe("syncing");
+    // Next launch: the reseal rewrites the marker to `encrypted`.
+    const relaunched = service();
+    await relaunched.runLaunchJob();
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    expect(await relaunched.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
+    expect(await service().beginSync(UDID)).toMatchObject({ strategy: "full" });
+  });
+
+  it("the damaged count is per scan: an early-return seal does not reuse the last scan's count", async () => {
+    makeChain();
+    const logs: string[] = [];
+    const s = service({ log: (_level, message) => void logs.push(String(message)) });
+    await s.migrate(UDID);
+    const smsPath = path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+    const damagedSession = await s.beginSync(UDID);
+    fs.writeFileSync(smsPath, fs.readFileSync(smsPath).subarray(0, 30));
+    await s.finishSync(damagedSession);
+    expect(logs.some((m) => m.includes("left damaged files"))).toBe(true);
+    // A second delta sync whose chain is gone when it ends: the seal returns "absent" without scanning.
+    fs.rmSync(chain, { recursive: true, force: true });
+    makeChain();
+    await s.migrate(UDID);
+    await createMarkerStore({ userData: () => userData }).setNextStrategy(UDID, null);
+    logs.length = 0;
+    const second = await s.beginSync(UDID, { strategy: "delta" });
+    fs.rmSync(chain, { recursive: true, force: true });
+    await s.finishSync(second);
+    expect(logs.some((m) => m.includes("left damaged files"))).toBe(false);
+  });
+
+  it("a clean delta sync does not force C-FULL", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    write("12/" + "2".repeat(40), "a brand new message attachment");
+    await s.finishSync(session);
+    expect(await s.forcedFullReason(UDID)).toBeNull();
+    expect(await s.beginSync(UDID)).toMatchObject({ strategy: "delta" });
+  });
+});
+
+describe.each<BackupUnsealStrategy>(["full", "delta"])("sync lifecycle (%s)", (strategy) => {
+  it("unseals per strategy, marks syncing, and finishSync seals everything and marks encrypted", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+
+    const session = await s.beginSync(UDID, { strategy });
+    expect(session.kind).toBe("keepr");
+    expect(await readMarkerAt(backups, UDID)).toBe("syncing");
+    expect(headerOf(path.join(chain, "Manifest.db")).equals(MAGIC)).toBe(false); // idevicebackup2 can read it
+    const smsPath = path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+    expect(headerOf(smsPath).equals(MAGIC)).toBe(strategy === "delta");
+    expect(s.busyReason(UDID)).toBe("syncing");
+
+    // idevicebackup2 stand-in: the phone sends a new file and a changed one.
+    write("12/" + "2".repeat(40), "a brand new message attachment");
+    write(`${OTHER_ID.slice(0, 2)}/${OTHER_ID}`, "changed other app data");
+
+    await s.finishSync(session);
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    expect(s.busyReason(UDID)).toBeNull();
+  });
+
+  it("C-DELTA parse copy: sms.db/AddressBook/attachments decrypted into the copy dir, Manifest.db copy removed", async () => {
+    makeChain();
+    const smsBytes = fs.readFileSync(path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID));
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID, { strategy });
+    const out = path.join(userData, "at-rest-tmp", "ios-test");
+    const result = await s.buildParseCopy(UDID, out);
+    expect(result.copied).toBe(3);
+    expect(fs.readFileSync(path.join(out, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID)).equals(smsBytes)).toBe(true);
+    expect(fs.existsSync(path.join(out, "Manifest.db"))).toBe(false);
+    expect(fs.existsSync(path.join(out, OTHER_ID.slice(0, 2), OTHER_ID))).toBe(false);
+    await s.finishSync(session);
+  });
+});
+
+describe("refusals and special chains", () => {
+  it("an Apple-encrypted chain is never sealed; a stale Keepr marker becomes apple-encrypted (SR ruling)", async () => {
+    makeChain({ appleEncrypted: true });
+    await createMarkerStore({ userData: () => userData }).writeBackupMarker(UDID, "encrypted");
+    const before = Object.fromEntries(allContentFiles().map((f) => [f, fs.readFileSync(f)]));
+    const s = service();
+    expect(await s.migrate(UDID)).toBe("apple");
+    const session = await s.beginSync(UDID);
+    expect(session.kind).toBe("apple");
+    await s.finishSync(session);
+    for (const [f, bytes] of Object.entries(before)) expect(fs.readFileSync(f).equals(bytes)).toBe(true);
+    expect(await readMarkerAt(backups, UDID)).toBe("apple-encrypted");
+    expect(markerProtectsChain("apple-encrypted")).toBe(true);
+    // migration skips it too
+    expect(await s.migrate(UDID)).toBe("apple");
+    for (const [f, bytes] of Object.entries(before)) expect(fs.readFileSync(f).equals(bytes)).toBe(true);
+  });
+
+  it("a phone that turned encryption OFF: the apple session's new plaintext chain is sealed at the end", async () => {
+    makeChain({ appleEncrypted: true });
+    const s = service();
+    const session = await s.beginSync(UDID);
+    expect(session.kind).toBe("apple");
+    write("Manifest.plist", plist.stringify({ IsEncrypted: false })); // idevicebackup2 wrote a plaintext chain
+    await s.finishSync(session);
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("a moved-aside plaintext chain (.keepr-replaced-<udid>-*) is sealed at launch and at the end of that phone's sync", async () => {
+    makeChain();
+    const aside = path.join(backups, `.keepr-replaced-${UDID}-1700000000000`);
+    fs.renameSync(chain, aside);
+    const asideFiles = () => {
+      const out: string[] = [];
+      const walk = (d: string, root: boolean) => {
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          const f = path.join(d, e.name);
+          if (e.isDirectory()) walk(f, false);
+          else if (!(root && e.name.endsWith(".plist"))) out.push(f);
+        }
+      };
+      walk(aside, true);
+      return out.filter((f) => fs.statSync(f).size > 0 && !headerOf(f).equals(MAGIC));
+    };
+    expect(asideFiles().length).toBeGreaterThan(0);
+    const s = service();
+    const outcomes = await s.runLaunchJob();
+    expect(outcomes.aside).toBe("1");
+    expect(asideFiles()).toEqual([]);
+    expect(headerOf(path.join(aside, "Manifest.plist")).equals(MAGIC)).toBe(false);
+
+    // and through a sync's end (new Apple-encrypted chain beside it)
+    fs.rmSync(aside, { recursive: true });
+    makeChain();
+    fs.renameSync(chain, aside);
+    makeChain({ appleEncrypted: true });
+    const session = await s.beginSync(UDID);
+    await s.finishSync(session);
+    expect(asideFiles()).toEqual([]);
+  });
+
+  it("key unavailable → refused before anything is unsealed", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const locked = service({ ensureKey: async () => { throw new Error("DataKeyUnavailableError"); } });
+    await expect(locked.beginSync(UDID)).rejects.toMatchObject({ reason: "key-unavailable" });
+    expect(plaintextLeft()).toEqual([]);
+  });
+
+  it("a backup being migrated refuses the sync with the founder sentence", async () => {
+    makeChain();
+    const s = service();
+    // Started in the same tick: the lock is claimed before migrate's first await.
+    const migrating = s.migrate(UDID);
+    await expect(s.beginSync(UDID)).rejects.toBeInstanceOf(BackupAtRestRefusal);
+    await expect(s.beginSync(UDID)).rejects.toThrow(BACKUP_SECURING_SENTENCE);
+    expect(BACKUP_SECURING_MESSAGE).toContain("Syncing your iPhone will be available when this finishes.");
+    await migrating;
+  });
+
+  it("a sync that started first makes a launch migration in the same tick stand aside", async () => {
+    makeChain();
+    const s = service();
+    const syncing = s.beginSync(UDID, { strategy: "full" });
+    expect(await s.migrate(UDID)).toBe("busy");
+    await s.finishSync(await syncing);
+    expect(plaintextLeft()).toEqual([]);
+  });
+
+  it("first backup: no marker before it exists; sealed and marked once Manifest.db is there", async () => {
+    const s = service();
+    const session = await s.beginSync(UDID);
+    expect(session.kind).toBe("first");
+    expect(await readMarkerAt(backups, UDID)).toBe("absent");
+    makeChain();
+    await s.finishSync(session);
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("an unfinished first backup (no Manifest.db) is sealed but gets NO marker, so 3598 can still remove it", async () => {
+    const s = service();
+    const session = await s.beginSync(UDID);
+    fs.mkdirSync(chain, { recursive: true });
+    write("ab/" + "b".repeat(40), "partial plaintext");
+    await s.finishSync(session);
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("absent");
+  });
+
+  it("a sealed file that cannot be opened (wrong key) is quarantined sealed, and the sync becomes a full backup (B2)", async () => {
+    makeChain();
+    const s = service({ now: () => 1_700_000_000_000 });
+    await s.migrate(UDID);
+    const other = crypto.randomBytes(32);
+    const foreign = createFileCrypto({ currentKey: async () => ({ keyId: KEY_ID, key: other }), keyFor: async () => other }, { chunkSize: 64 });
+    const bad = path.join(chain, "ee", "e".repeat(40));
+    fs.mkdirSync(path.dirname(bad), { recursive: true });
+    await foreign.encryptStreamToFile((async function* () { yield Buffer.from("sealed under another key"); })(), bad);
+    const session = await s.beginSync(UDID, { strategy: "full" });
+    expect(session).toEqual({ kind: "first", udid: UDID, quarantined: { reasonCode: "INTEGRITY" } });
+    const moved = path.join(backups, QUARANTINE_DIR_NAME, `${UDID}-1700000000000`);
+    expect(fs.existsSync(chain)).toBe(false);
+    expect(plaintextIn(moved)).toEqual([]);
+    expect(s.busyReason(UDID)).toBe("syncing");
+    await s.finishSync(session);
+    expect(s.busyReason(UDID)).toBeNull();
+  });
+});
+
+describe("launch job", () => {
+  it("C3: a 'syncing' marker left by a crash is sealed at launch → encrypted", async () => {
+    makeChain();
+    await createMarkerStore({ userData: () => userData }).writeBackupMarker(UDID, "syncing");
+    const s = service();
+    const outcomes = await s.runLaunchJob();
+    expect(outcomes[UDID]).toBe("encrypted");
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("C3: a sync started before the launch job ran seals a 'syncing' chain FIRST", async () => {
+    makeChain();
+    await createMarkerStore({ userData: () => userData }).writeBackupMarker(UDID, "syncing");
+    const s = service();
+    const sealSpy = jest.spyOn(s, "seal");
+    const unsealSpy = jest.spyOn(s, "unseal");
+    const session = await s.beginSync(UDID, { strategy: "full" });
+    expect(sealSpy).toHaveBeenCalled();
+    expect(sealSpy.mock.invocationCallOrder[0]).toBeLessThan(unsealSpy.mock.invocationCallOrder[0]);
+    await s.finishSync(session);
+  });
+
+  it("migrates a pre-2.40 plaintext chain and is resumable", async () => {
+    makeChain();
+    const s = service();
+    expect(await s.migrate(UDID)).toBe("encrypted");
+    expect(plaintextLeft()).toEqual([]);
+    expect(await s.migrate(UDID)).toBe("encrypted");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B2 — a sealed backup that fails authentication does not end iPhone sync
+// ---------------------------------------------------------------------------
+describe("B2: unreadable kept backup → quarantine + full backup", () => {
+  const T0 = 1_760_000_000_000;
+  const smsFile = () => path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+
+  /** Flip one byte INSIDE the first chunk's ciphertext (not the header: a header flip reads as "damaged"). */
+  function flipByteInChunk(file: string): Buffer {
+    const buf = fs.readFileSync(file);
+    buf[60 + 5] ^= 0x01;
+    fs.writeFileSync(file, buf);
+    return buf;
+  }
+
+  async function walkFiles(dir: string): Promise<string[]> {
+    const out: string[] = [];
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const f = path.join(d, e.name);
+        if (e.isDirectory()) walk(f);
+        else out.push(f);
+      }
+    };
+    walk(dir);
+    return out;
+  }
+
+  it("one flipped byte: the chain moves to Backups/.quarantine/<udid>-<ms> sealed and untouched; the sync is a full backup", async () => {
+    makeChain();
+    const s = service({ now: () => T0 });
+    await s.migrate(UDID);
+    const flipped = flipByteInChunk(smsFile());
+    const session = await s.beginSync(UDID, { strategy: "full" });
+
+    expect(session).toEqual({ kind: "first", udid: UDID, quarantined: { reasonCode: "INTEGRITY" } });
+    const moved = path.join(backups, QUARANTINE_DIR_NAME, `${UDID}-${T0}`);
+    expect(fs.existsSync(chain)).toBe(false);
+    expect(fs.existsSync(path.join(moved, "Manifest.db"))).toBe(true);
+    // Sealed: every content file with bytes is a KEPRENC container, no temp left behind.
+    const movedFiles = await walkFiles(moved);
+    expect(movedFiles.filter((f) => f.endsWith(KENC_TMP_SUFFIX))).toEqual([]);
+    expect(plaintextIn(moved)).toEqual([]);
+    for (const f of movedFiles) {
+      if (path.basename(f).endsWith(".plist") || fs.statSync(f).size === 0) continue;
+      expect((await probeHeader(f)).encrypted).toBe(true);
+    }
+    // Untouched: the damaged file is byte-identical to what failed.
+    expect(fs.readFileSync(path.join(moved, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID))).toEqual(flipped);
+    // Marker gone with the chain; the lock is still this sync's until finishSync.
+    expect(await readMarkerAt(backups, UDID)).toBe("absent");
+    expect(s.busyReason(UDID)).toBe("syncing");
+    await s.finishSync(session);
+    expect(s.busyReason(UDID)).toBeNull();
+
+    // The next sync is not blocked: no chain → first backup, no second quarantine.
+    const next = await s.beginSync(UDID, { strategy: "full" });
+    expect(next).toEqual({ kind: "first", udid: UDID });
+    await s.finishSync(next);
+  });
+
+  it("a data key that is no longer held (KEY_MISSING) is quarantined too", async () => {
+    makeChain();
+    await service().migrate(UDID);
+    const gone = createFileCrypto(
+      {
+        currentKey: async () => ({ keyId: KEY_ID, key: KEY }),
+        keyFor: async () => {
+          throw new DataKeyUnavailableError("no key with that id");
+        },
+      },
+      { chunkSize: 64 },
+    );
+    const s = service({ files: () => gone, now: () => T0 });
+    const session = await s.beginSync(UDID, { strategy: "full" });
+    expect(session).toEqual({ kind: "first", udid: UDID, quarantined: { reasonCode: "KEY_MISSING" } });
+    expect(fs.existsSync(path.join(backups, QUARANTINE_DIR_NAME, `${UDID}-${T0}`))).toBe(true);
+    await s.finishSync(session);
+  });
+
+  it("disk space still refuses and keeps the chain in place (a later try can succeed)", async () => {
+    makeChain();
+    await service().migrate(UDID);
+    const s = service({ freeBytes: async () => 10 });
+    await expect(s.beginSync(UDID, { strategy: "full" })).rejects.toMatchObject({ reason: "disk-space" });
+    expect(fs.existsSync(path.join(chain, "Manifest.db"))).toBe(true);
+    expect(fs.existsSync(path.join(backups, QUARANTINE_DIR_NAME))).toBe(false);
+    expect(s.busyReason(UDID)).toBeNull();
+  });
+
+  it("an I/O error alongside an authentication failure still refuses (only unrecoverable-only quarantines)", async () => {
+    makeChain();
+    await service().migrate(UDID);
+    flipByteInChunk(smsFile());
+    const flaky = {
+      ...files,
+      decryptToFile: async (src: string, dest: string, opts?: { requireEncrypted?: boolean }) => {
+        if (src.endsWith(OTHER_ID)) throw Object.assign(new Error("i/o"), { code: "EIO" });
+        return files.decryptToFile(src, dest, opts);
+      },
+    };
+    const s = service({ files: () => flaky });
+    await expect(s.beginSync(UDID, { strategy: "full" })).rejects.toMatchObject({ reason: "unreadable" });
+    expect(fs.existsSync(path.join(chain, "Manifest.db"))).toBe(true);
+    expect(plaintextLeft()).toEqual([]);
+    expect(s.busyReason(UDID)).toBeNull();
+  });
+
+  it("X1: a chain whose re-seal did not finish is NOT moved to quarantine (no plaintext at rest there); the marker stays", async () => {
+    makeChain();
+    await service().migrate(UDID);
+    flipByteInChunk(smsFile());
+    // The attachment file opens fine during the unseal but cannot be sealed again (EIO).
+    const flaky = {
+      ...files,
+      encryptFileInPlace: async (p: string) => {
+        if (p.endsWith(OTHER_ID)) throw Object.assign(new Error("i/o"), { code: "EIO" });
+        return files.encryptFileInPlace(p);
+      },
+    };
+    const s = service({ files: () => flaky, now: () => T0 });
+    await expect(s.beginSync(UDID, { strategy: "full" })).rejects.toMatchObject({ reason: "unreadable" });
+    const quarantineRoot = path.join(backups, QUARANTINE_DIR_NAME);
+    expect(fs.existsSync(quarantineRoot)).toBe(false);
+    expect(fs.existsSync(path.join(chain, "Manifest.db"))).toBe(true);
+    // Marker keeps saying `syncing`, so the next launch/sync seals the leftover plaintext.
+    expect(await readMarkerAt(backups, UDID)).toBe("syncing");
+    expect(s.busyReason(UDID)).toBeNull();
+  });
+
+  it("deleteOldestQuarantined removes the oldest quarantined copy only, and reports when none is left", async () => {
+    const root = path.join(backups, QUARANTINE_DIR_NAME);
+    const older = path.join(root, `${UDID}-${T0 - 5_000}`);
+    const newer = path.join(root, `${UDID}-${T0 - 1_000}`);
+    for (const d of [newer, older]) {
+      fs.mkdirSync(path.join(d, "ab"), { recursive: true });
+      fs.writeFileSync(path.join(d, "ab", "x"), "sealed bytes");
+    }
+    const s = service({ now: () => T0 });
+    expect(await s.deleteOldestQuarantined()).toBe(true);
+    expect(fs.existsSync(older)).toBe(false);
+    expect(fs.existsSync(newer)).toBe(true);
+    expect(await s.deleteOldestQuarantined()).toBe(true);
+    expect(fs.existsSync(newer)).toBe(false);
+    expect(await s.deleteOldestQuarantined()).toBe(false);
+  });
+
+  it("launch deletes quarantined chains older than 30 days and keeps younger ones", async () => {
+    const root = path.join(backups, QUARANTINE_DIR_NAME);
+    const old = path.join(root, `${UDID}-${T0 - QUARANTINE_MAX_AGE_MS - 60_000}`);
+    const young = path.join(root, `${UDID}-${T0 - QUARANTINE_MAX_AGE_MS + 60_000}`);
+    for (const d of [old, young]) {
+      fs.mkdirSync(path.join(d, "ab"), { recursive: true });
+      fs.writeFileSync(path.join(d, "ab", "x"), "sealed bytes");
+    }
+    const outcomes = await service({ now: () => T0 }).runLaunchJob();
+    expect(outcomes.quarantinePurged).toBe("1");
+    expect(fs.existsSync(old)).toBe(false);
+    expect(fs.existsSync(young)).toBe(true);
+  });
+
+  it("the plain sentence the user is shown", () => {
+    expect(BACKUP_AT_REST_QUARANTINED_MESSAGE).toBe(
+      "Keepr couldn't read the saved iPhone backup, so it will make a fresh full backup — this takes longer.",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Should-fix: the lock is claimed before the new-chain step moves the chain
+// ---------------------------------------------------------------------------
+describe("per-phone lock covers the new-chain step (underLock)", () => {
+  it("a launch migration during underLock stands aside; the chain is not moved under it", async () => {
+    makeChain();
+    const s = service();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const begun = s.beginSync(UDID, { strategy: "full", underLock: () => gate });
+    await new Promise((r) => setImmediate(r));
+    expect(await s.migrate(UDID)).toBe("busy");
+    release();
+    const session = await begun;
+    await s.finishSync(session);
+    expect(s.busyReason(UDID)).toBeNull();
+  });
+
+  it("an error in underLock propagates unchanged (not a refusal) and releases the lock", async () => {
+    makeChain();
+    const s = service();
+    const boom = new Error("move failed");
+    await expect(s.beginSync(UDID, { underLock: async () => { throw boom; } })).rejects.toBe(boom);
+    expect(s.busyReason(UDID)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Should-fix: progress for passes no sync is watching
+// ---------------------------------------------------------------------------
+describe("progress", () => {
+  it("a seal with no caller callback reports through the 'progress' event, start to 100%", async () => {
+    makeChain();
+    const s = service();
+    const seen: BackupAtRestProgress[] = [];
+    s.on("progress", (p: BackupAtRestProgress) => seen.push(p));
+    await s.migrate(UDID);
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    expect(seen[0]).toMatchObject({ udid: UDID, phase: "migrating", done: 0 });
+    const last = seen[seen.length - 1];
+    expect(last.done).toBe(last.total);
+    expect(describeBackupAtRestProgress(last).message).toBe("Securing your iPhone backup… 100%");
+  });
+
+  it("a caller callback receives the progress instead of the event (no double reporting)", async () => {
+    makeChain();
+    const s = service();
+    const viaEvent: BackupAtRestProgress[] = [];
+    const viaCallback: BackupAtRestProgress[] = [];
+    s.on("progress", (p: BackupAtRestProgress) => viaEvent.push(p));
+    await s.seal(UDID, (p) => viaCallback.push(p));
+    expect(viaCallback.length).toBeGreaterThan(0);
+    expect(viaEvent).toEqual([]);
+  });
+
+  it("unsealing keeps its file-count wording", () => {
+    expect(describeBackupAtRestProgress({ udid: UDID, phase: "unsealing", done: 500, total: 1000 }).message).toBe(
+      "Preparing your saved iPhone backup (500 of 1,000 files)...",
+    );
+  });
+});

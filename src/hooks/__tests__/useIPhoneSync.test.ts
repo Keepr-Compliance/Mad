@@ -459,6 +459,58 @@ describe("useIPhoneSync", () => {
       expect(result.current.progress?.priorBackup).toBeUndefined();
     });
 
+    // BACKLOG-3816 S4-C: the unseal ("Preparing your saved iPhone backup...") arrives as a
+    // phase:"cleanup" tick before the transfer. During a sync it must show in the sync
+    // screen without moving the bar; after the transfer the banner owns it (no double line).
+    describe("cleanup ticks (kept-backup unseal / seal)", () => {
+      const PREPARING = "Preparing your saved iPhone backup (3 of 10 files)...";
+
+      it("before the transfer: the message shows in the sync UI and the bar does not move", () => {
+        const syncApi = setupSyncApiMock();
+        (window as any).api = { sync: syncApi };
+        const { result } = renderHook(() => useIPhoneSync());
+        syncStateRef.isActive = true;
+
+        act(() => {
+          syncProgressCallback?.({ phase: "backup", overallProgress: 25, message: "Backing up..." });
+        });
+        act(() => {
+          syncProgressCallback?.({ phase: "cleanup", overallProgress: 30, message: PREPARING });
+        });
+
+        expect(result.current.progress).toMatchObject({ phase: "backing_up", percent: 25, message: PREPARING });
+      });
+
+      it("the first tick of a sync (no progress yet) still shows the message", () => {
+        const syncApi = setupSyncApiMock();
+        (window as any).api = { sync: syncApi };
+        const { result } = renderHook(() => useIPhoneSync());
+        syncStateRef.isActive = true;
+
+        act(() => {
+          syncProgressCallback?.({ phase: "cleanup", overallProgress: 30, message: PREPARING });
+        });
+
+        expect(result.current.progress).toMatchObject({ phase: "backing_up", percent: 0, message: PREPARING });
+      });
+
+      it("after the transfer (extracting): dropped, so the banner is the only place it shows", () => {
+        const syncApi = setupSyncApiMock();
+        (window as any).api = { sync: syncApi };
+        const { result } = renderHook(() => useIPhoneSync());
+        syncStateRef.isActive = true;
+
+        act(() => {
+          syncProgressCallback?.({ phase: "parsing_messages", overallProgress: 60, message: "Reading messages" });
+        });
+        act(() => {
+          syncProgressCallback?.({ phase: "cleanup", overallProgress: 40, message: "Securing your iPhone backup… 40%" });
+        });
+
+        expect(result.current.progress).toMatchObject({ phase: "extracting", percent: 60, message: "Reading messages" });
+      });
+    });
+
     it("should map decrypting phase to extracting", () => {
       const syncApi = setupSyncApiMock();
       (window as any).api = { sync: syncApi };
