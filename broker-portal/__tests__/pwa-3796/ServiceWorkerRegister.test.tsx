@@ -10,10 +10,12 @@ import { ServiceWorkerRegister } from '@/components/pwa/ServiceWorkerRegister';
 const register = jest.fn();
 const unregister = jest.fn();
 const getRegistrations = jest.fn();
-const ORIGINAL_ENV = process.env.NODE_ENV;
 
+// Assign, never defineProperty: on Windows jest's process.env is a Proxy whose
+// reads only see values set by assignment. replaceProperty assigns and is
+// restored automatically after each test (restoreMocks / explicit restore).
 function setEnv(value: string) {
-  Object.defineProperty(process.env, 'NODE_ENV', { value, configurable: true, writable: true });
+  jest.replaceProperty(process.env, 'NODE_ENV', value);
 }
 
 beforeEach(() => {
@@ -26,7 +28,7 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => setEnv(ORIGINAL_ENV as string));
+afterEach(() => jest.restoreAllMocks());
 
 describe('BACKLOG-3796 ServiceWorkerRegister', () => {
   it('production: registers /sw.js at scope / with updateViaCache none', () => {

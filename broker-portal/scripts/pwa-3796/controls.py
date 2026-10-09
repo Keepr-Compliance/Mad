@@ -25,6 +25,7 @@ M=[
  ('M12 themeColor in metadata, not viewport','app/layout.tsx',"  appleWebApp: { capable: true, title: 'Keepr', statusBarStyle: 'black' },\n};\n\n// Next 15: themeColor belongs in the viewport export, not metadata (BACKLOG-3796).\nexport const viewport: Viewport = { themeColor: '#111827' };","  appleWebApp: { capable: true, title: 'Keepr', statusBarStyle: 'black' },\n  themeColor: '#111827',\n} as Metadata;\n\nexport const viewport: Viewport = {};"),
  ('M13 iOS title is the long page title','app/layout.tsx',"title: 'Keepr', statusBarStyle","title: 'Keepr - Broker Portal', statusBarStyle"),
  ('M14 CSP manifest-src removed','next.config.mjs',"      \"manifest-src 'self'\",\n",""),
+ ('M16 skipWaiting removed','public/sw.js',"self.addEventListener('install', function () {\n  self.skipWaiting();\n});","self.addEventListener('install', function () {\n});"),
  ('M15 /sw.js no-cache header removed','next.config.mjs',"        headers: [{ key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' }],","        headers: [],"),
 ]
 sel=sys.argv[1:] 
