@@ -213,6 +213,7 @@ import { deepLinkSessionErrorToPayload } from "./services/supabaseNetError";
 import databaseService from "./services/databaseService";
 import { initializationBroadcaster } from "./services/initializationBroadcaster";
 import { atRestStartup } from "./services/atRest/startup";
+import { registerAtRestHandlers } from "./handlers/atRestHandlers";
 import sessionService from "./services/sessionService";
 import submissionService from "./services/submissionService";
 import {
@@ -1863,6 +1864,7 @@ app.whenReady().then(async () => {
   // BACKLOG-3619: RCS import from the Chrome extension. The loopback bridge
   // never throws; a taken port leaves it "unavailable" and the app runs on.
   registerRcsImportHandlers();
+  registerAtRestHandlers();
   void startRcsExtensionBridge();
   registerAttachmentHandlers(mainWindow!);
   registerContactHandlers(mainWindow!);

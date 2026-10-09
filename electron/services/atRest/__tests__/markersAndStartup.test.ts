@@ -85,6 +85,15 @@ describe("startup queue", () => {
     expect(() => q.register({ id: "data-key", order: 0, run: async () => undefined })).toThrow();
   });
 
+  it("default registration: temp sweep second after logs, legacy sweep LAST, both real", () => {
+    const q = new AtRestStartup({ log: quiet });
+    registerDefaultJobs(q);
+    const jobs = q.listJobs();
+    expect(jobs.map((j) => j.id).slice(0, 3)).toEqual(["data-key", "logs", "temp-sweep"]);
+    expect(jobs.find((j) => j.id === "temp-sweep")).toEqual({ id: "temp-sweep", order: 20, placeholder: false });
+    expect(jobs[jobs.length - 1]).toEqual({ id: "legacy-sweep", order: 60, placeholder: false });
+  });
+
   it("scheduleAfterDbReady waits for readiness, then runs exactly once", async () => {
     let tick: (() => void) | null = null;
     let cleared = false;

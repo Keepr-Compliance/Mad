@@ -39,6 +39,10 @@
 import { hostLogger } from "../../capabilities/loggerProvider";
 import { DataKeyUnavailableError, getDataKeyService } from "./dataKeyService";
 import { runConfiguredLogMaintenance } from "../logScrub";
+import { runLegacySweep } from "./legacySweep";
+import { SCOPE_EMAIL_ATTACHMENTS, SCOPE_MESSAGE_ATTACHMENTS } from "./markers";
+import { getAtRestMigration } from "./migration";
+import { runTempSweep } from "./tempSweep";
 
 export interface AtRestJobContext {
   log: (level: "info" | "warn" | "error", message: string) => void;
@@ -190,11 +194,11 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
       ctx.log(r.errors.length ? "warn" : "info", `[AtRest] logs: rewritten ${r.rewritten.length}, deleted ${r.deleted.length}, errors ${r.errors.length}`);
     },
   });
-  startup.register(placeholder("temp-sweep", 20, "S6"));
-  startup.register(placeholder("attachments", 30, "S3"));
-  startup.register(placeholder("email-attachments", 40, "S3"));
+  startup.register({ id: "temp-sweep", order: 20, run: async () => { await runTempSweep(); } });
+  startup.register({ id: "attachments", order: 30, run: async () => { await getAtRestMigration().runScope(SCOPE_MESSAGE_ATTACHMENTS); } });
+  startup.register({ id: "email-attachments", order: 40, run: async () => { await getAtRestMigration().runScope(SCOPE_EMAIL_ATTACHMENTS); } });
   startup.register(placeholder("backups", 50, "S4"));
-  startup.register(placeholder("legacy-sweep", 60, "S6"));
+  startup.register({ id: "legacy-sweep", order: 60, run: async () => { await runLegacySweep(); } });
 }
 
 export const atRestStartup = new AtRestStartup();
