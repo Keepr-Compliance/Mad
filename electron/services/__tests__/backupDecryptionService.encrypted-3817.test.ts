@@ -214,7 +214,9 @@ describe("BACKLOG-3817 encrypted backup → parse copy", () => {
       const realCreateWriteStream = fs.createWriteStream;
       const spy = jest.spyOn(fs, "createWriteStream").mockImplementation(((dest: fs.PathLike, opts?: unknown) => {
         const name = path.basename(String(dest));
-        if (name === SMS_DB_FILE_ID || name === ADDRESS_BOOK_FILE_ID) {
+        // Only attachment writes fail: the decrypted index and the two databases are written
+        // for real, so the failure is reached inside the per-file loop.
+        if (name === "Manifest.db" || name === SMS_DB_FILE_ID || name === ADDRESS_BOOK_FILE_ID) {
           return realCreateWriteStream(dest, opts as Parameters<typeof fs.createWriteStream>[1]);
         }
         // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -233,6 +235,12 @@ describe("BACKLOG-3817 encrypted backup → parse copy", () => {
         expect(result.error).toBe(DECRYPT_DISK_ERROR_MESSAGE);
         expect(result.decryptedPath).toBeNull();
         expect(parseCopies()).toEqual([]);
+        // The loop reached at least one attachment write (not only the index).
+        const attachmentWrites = spy.mock.calls.filter(([dest]) => {
+          const name = path.basename(String(dest));
+          return name !== "Manifest.db" && name !== SMS_DB_FILE_ID && name !== ADDRESS_BOOK_FILE_ID;
+        });
+        expect(attachmentWrites.length).toBeGreaterThan(0);
       } finally {
         spy.mockRestore();
       }
