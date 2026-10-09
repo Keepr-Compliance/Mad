@@ -240,17 +240,172 @@ export function redactPhone(phone: string): string {
   return `***${digits.slice(-2)}`;
 }
 
+// ---------------------------------------------------------------------------
+// Key-context redaction [SECURITY — BACKLOG-3819, founder QA 2026-10-09]
+//
+// The pattern rules above deliberately skip BARE digit runs, because a bare
+// 10-digit phone ("5555550123") is indistinguishable from a byte count
+// ("bytes=6013820953"), epoch seconds or a repository id. A diagnostic export
+// still leaked bare phones: logService serialises metadata with
+// JSON.stringify(metadata, null, 2), so a sample such as
+// `{ "phone": "5555550123" }` reached the file as text with no separators.
+//
+// The trade-off: a bare digit run is redacted only when the KEY it sits under
+// names a phone/handle/email-like field. Anywhere else it is left alone, so
+// byte counts, durations and ids survive, and a bare phone logged under an
+// unrecognised key (e.g. `value: 5555550123`) is NOT caught — fix such calls
+// at the source. Formatted and "+"-led numbers are still caught everywhere by
+// the pattern rules above.
+//
+// Two key tiers (compared case-insensitively with "_" removed):
+//
+//   STRONG — the value IS contact data, so every phone-like digit group (4+
+//   digits) and every email inside it is redacted, whatever its format:
+//   phone, phones, phoneNumber(s), phone_e164, e164, normalized_phone,
+//   mobile, mobilePhone, handle(s), chat_identifier, email(s), emailAddress,
+//   participants, participants_flat.
+//
+//   WEAK — the key is ambiguous (`to: "develop"`, `from: "2026-10-01"`, a
+//   property `address: "12 Main St"`, `sender: "me"`), so the value is redacted
+//   only when the WHOLE value is phone-shaped: 10 digits, 11 digits starting
+//   with 1, or "+" and 8–15 digits, separators allowed. Keys: from, to, sender,
+//   recipient(s), address. (An epoch-seconds value under `from`/`to` would be
+//   over-redacted; that is the accepted cost.)
+//
+// NOT keys: contactId, transactionId, id, udid, size, bytes, *Ms, count —
+// identifiers and measurements, never redacted by key.
+//
+// Shapes covered (text): JSON `"phone": "…"` / `"phone":123`, util.inspect
+// `phone: '…'`, inline `phone: 5555550123` / `phone=5555550123`, and arrays
+// `"participants": [ "…", "…" ]` (multi-line allowed). Object arguments handed
+// to electron-log directly are covered by {@link redactValueForKey}, which the
+// sink hook (config/logFileConfig.ts) applies before the object is formatted.
+// ---------------------------------------------------------------------------
+
+const STRONG_CONTACT_KEYS = new Set([
+  "phone",
+  "phones",
+  "phonenumber",
+  "phonenumbers",
+  "phonee164",
+  "e164",
+  "normalizedphone",
+  "mobile",
+  "mobilephone",
+  "handle",
+  "handles",
+  "chatidentifier",
+  "email",
+  "emails",
+  "emailaddress",
+  "participants",
+  "participantsflat",
+]);
+
+const WEAK_CONTACT_KEYS = new Set(["from", "to", "sender", "recipient", "recipients", "address"]);
+
+function contactKeyTier(key: string): "strong" | "weak" | null {
+  const k = key.toLowerCase().replace(/_/g, "");
+  if (STRONG_CONTACT_KEYS.has(k)) return "strong";
+  if (WEAK_CONTACT_KEYS.has(k)) return "weak";
+  return null;
+}
+
+/** A digit group of 4+ digits, optionally "+"-led, with phone separators between digits. */
+const DIGIT_GROUP_RE = /\+?\(?\d(?:[ ().-]{0,2}\d)+/g;
+
+/** Redact every email and every 4+-digit group inside a value known to be contact data. */
+function redactStrongValue(value: string): string {
+  return value
+    .replace(EMAIL_RE, (match) => redactEmail(match))
+    .replace(DIGIT_GROUP_RE, (match) =>
+      match.replace(/\D/g, "").length >= 4 ? redactPhone(match) : match,
+    );
+}
+
+/** True when the whole value is a phone number: 10 digits, 1+10, or "+" and 8–15. */
+function isWholePhone(value: string): boolean {
+  const v = value.trim();
+  if (!/^\+?[\d ().-]+$/.test(v)) return false;
+  const digits = v.replace(/\D/g, "");
+  if (v.startsWith("+")) return digits.length >= 8 && digits.length <= 15;
+  return digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+}
+
+function redactByTier(tier: "strong" | "weak", value: string): string {
+  if (tier === "strong") return redactStrongValue(value);
+  return isWholePhone(value) ? redactPhone(value) : value;
+}
+
+/**
+ * Redact the value of a contact-like key in an object argument (see the tier
+ * list above). Strings, numbers and arrays of them are handled; anything else,
+ * and any key that is not contact-like, comes back unchanged.
+ */
+export function redactValueForKey(key: string, value: unknown): unknown {
+  const tier = contactKeyTier(key);
+  if (!tier) return value;
+  if (typeof value === "string") return redactByTier(tier, value);
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const s = String(value);
+    const out = redactByTier(tier, s);
+    return out === s ? value : out;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) =>
+      typeof item === "string" || typeof item === "number" ? redactValueForKey(key, item) : item,
+    );
+  }
+  return value;
+}
+
+/**
+ * `key` + `:` or `=` + a value: double-quoted, single-quoted, a bracketed list
+ * of scalars (up to 4000 chars, may span lines), or a bare number (digits, "+",
+ * parens, dots and dashes; no spaces). A list holding objects (`"samples": [ {`)
+ * is deliberately NOT consumed as one value, so the keys inside its objects are
+ * still visited.
+ */
+const KEY_CONTEXT_RE =
+  /(?<![\w$])(["']?)([A-Za-z][\w]{0,40})\1(\s*[:=]\s*)(?:"([^"\n]*)"|'([^'\n]*)'|\[([^[\]{}]{0,4000})\]|(\+?\(?\d[\d().-]*\d)(?![\w.]))/g;
+
+/** Quoted or bare scalar elements of a bracketed list. */
+const LIST_ITEM_RE = /"([^"\n]*)"|'([^'\n]*)'|(\+?\(?\d[\d().-]*\d)(?![\w.])/g;
+
+function redactKeyContexts(input: string): string {
+  return input.replace(
+    KEY_CONTEXT_RE,
+    (match, q: string, key: string, sep: string, dq?: string, sq?: string, list?: string, bare?: string) => {
+      const tier = contactKeyTier(key);
+      if (!tier) return match;
+      const head = `${q}${key}${q}${sep}`;
+      if (dq !== undefined) return `${head}"${redactByTier(tier, dq)}"`;
+      if (sq !== undefined) return `${head}'${redactByTier(tier, sq)}'`;
+      if (list !== undefined) {
+        const items = list.replace(LIST_ITEM_RE, (item, idq?: string, isq?: string, ibare?: string) => {
+          if (idq !== undefined) return `"${redactByTier(tier, idq)}"`;
+          if (isq !== undefined) return `'${redactByTier(tier, isq)}'`;
+          return redactByTier(tier, ibare ?? item);
+        });
+        return `${head}[${items}]`;
+      }
+      return `${head}${redactByTier(tier, bare ?? "")}`;
+    },
+  );
+}
+
 /**
  * Redact every email address and phone number embedded in free-form log text.
  * Emails first, so a phone-number handle such as "+15555550199@s.example.net"
- * is consumed as an address and not half-matched as a phone.
+ * is consumed as an address and not half-matched as a phone. Then the values
+ * of contact-like keys (see "Key-context redaction" above), then formatted
+ * and "+"-led numbers anywhere.
  *
  * Idempotent: `redactLogText(redactLogText(x)) === redactLogText(x)`.
  */
 export function redactLogText(input: string): string {
   if (!input) return input;
-  return input
-    .replace(EMAIL_RE, (match) => redactEmail(match))
+  return redactKeyContexts(input.replace(EMAIL_RE, (match) => redactEmail(match)))
     .replace(INTL_PHONE_RE, (match) => redactPhone(match))
     .replace(NANP_PHONE_RE, (match) => redactPhone(match));
 }

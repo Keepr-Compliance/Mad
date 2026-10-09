@@ -1196,9 +1196,9 @@ export async function backfillContactCommunicationDates(userId: string): Promise
 
   void logService.info("Backfill: Found phone-message matches", "ContactDbService", {
     matchCount: phoneMessages.length,
+    // BACKLOG-3819: no phone numbers in logs — contact id prefix and date only.
     samples: phoneMessages.slice(0, 5).map(p => ({
       contactId: p.contact_id.substring(0, 8),
-      phone: p.normalized_phone,
       lastDate: p.last_msg_date,
     })),
   });
@@ -1228,10 +1228,9 @@ export async function backfillContactCommunicationDates(userId: string): Promise
   void logService.info("Backfill complete", "ContactDbService", {
     userId,
     updatedCount,
-    topContacts: debugContacts.map(c => ({
-      name: c.display_name,
-      lastInbound: c.last_inbound_at,
-    })),
+    // BACKLOG-3819: no contact names — a contact with no name is displayed by
+    // its phone number, so display_name can itself be a bare phone.
+    topContactsLastInbound: debugContacts.map(c => c.last_inbound_at),
   });
 
   return updatedCount;
