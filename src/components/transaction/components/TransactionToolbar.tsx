@@ -2,6 +2,7 @@ import React from "react";
 import { FeatureGate } from "@/components/common/FeatureGate";
 import { useFeatureGate } from "@/hooks/useFeatureGate";
 import { CreditBalanceChip } from "./CreditBalanceChip";
+import { BulkExportNotice } from "../../common/BulkExportNotice";
 
 // ============================================
 // TYPES AND INTERFACES
@@ -53,6 +54,9 @@ export interface TransactionToolbarProps {
   error: string | null;
   quickExportSuccess: string | null;
   bulkActionSuccess: string | null;
+  /** BACKLOG-3828: show the exported-files-aren't-encrypted notice */
+  bulkExportNotice?: boolean;
+  onDismissBulkExportNotice?: () => void;
 
   /**
    * BACKLOG-2090: bumped by the list after an unlock/export spends a credit so
@@ -103,6 +107,8 @@ function TransactionToolbar({
   error,
   quickExportSuccess,
   bulkActionSuccess,
+  bulkExportNotice,
+  onDismissBulkExportNotice,
   creditRefreshSignal,
 }: TransactionToolbarProps): React.ReactElement {
   const { isAllowed } = useFeatureGate();
@@ -536,6 +542,10 @@ function TransactionToolbar({
               </div>
             </div>
           </div>
+        )}
+
+        {bulkExportNotice && onDismissBulkExportNotice && (
+          <BulkExportNotice onDismiss={onDismissBulkExportNotice} />
         )}
       </div>
     </>
