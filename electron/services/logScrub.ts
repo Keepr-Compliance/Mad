@@ -397,6 +397,8 @@ export interface AsyncTrimOptions {
   sliceMs?: number;
   /** How to yield. Default: setImmediate (lets timers, IPC and input run). */
   yieldFn?: () => Promise<void>;
+  /** True when the process is exiting: stop and leave the original file untouched. */
+  shouldAbort?: () => boolean;
 }
 
 const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -437,6 +439,7 @@ export async function trimSealedLogAsync(
       sliceStart = performance.now();
     }
   };
+  const aborted = (): boolean => opts.shouldAbort?.() === true;
 
   // Pass 1: decrypt, find the first entry at or after the cutoff.
   const kept: Buffer[] = [];
@@ -484,6 +487,7 @@ export async function trimSealedLogAsync(
     }
     first = false;
     await maybeYield();
+    if (aborted()) return "unchanged";
   }
   if (!found) {
     if (anyTimestamp) changed = true;
@@ -496,14 +500,15 @@ export async function trimSealedLogAsync(
   }
 
   // Pass 2: reseal under a fresh salt into a temp file, in slices; rename at the end.
-  await replaceWithSealedRecordsAsync(file, kept, key, {
+  const replaced = await replaceWithSealedRecordsAsync(file, kept, key, {
+    shouldAbort: aborted,
     shouldYield: () => performance.now() - sliceStart >= sliceMs,
     yieldFn: async () => {
       await yieldFn();
       sliceStart = performance.now();
     },
   });
-  return "rewritten";
+  return replaced === "aborted" ? "unchanged" : "rewritten";
 }
 
 /**
@@ -519,6 +524,7 @@ export async function runDeferredLogRetention(
 ): Promise<LogMaintenanceResult> {
   const result: LogMaintenanceResult = { deleted: [], rewritten: [], sealed: [], unreadable: [], deferred: [], errors: [] };
   for (const name of names) {
+    if (opts.shouldAbort?.()) break;
     const file = path.join(logDir, name);
     try {
       const outcome = await trimSealedLogAsync(file, now, key, opts);

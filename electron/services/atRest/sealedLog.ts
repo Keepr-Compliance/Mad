@@ -367,14 +367,16 @@ export function replaceWithSealedLogSync(file: string, text: string, key: AtRest
  * more records), under a fresh salt — like {@link replaceWithSealedLogSync}, but
  * the sealing is done in slices: whenever `shouldYield()` is true the batch so far
  * is written to the temp file and `yieldFn()` is awaited. The rename is one
- * synchronous step at the end; a failure leaves the original in place.
+ * synchronous step at the end; a failure leaves the original in place. When
+ * `shouldAbort()` turns true (checked after each yield and before the rename) the
+ * temp file is deleted, the original is left as it is, and "aborted" is returned.
  */
 export async function replaceWithSealedRecordsAsync(
   file: string,
   pieces: Buffer[],
   key: AtRestKey,
-  slice: { shouldYield: () => boolean; yieldFn: () => Promise<void> },
-): Promise<void> {
+  slice: { shouldYield: () => boolean; yieldFn: () => Promise<void>; shouldAbort?: () => boolean },
+): Promise<"replaced" | "aborted"> {
   const tmp = `${file}.seal-${process.pid}-${Date.now()}.tmp`;
   try {
     const salt = crypto.randomBytes(SALT_BYTES);
@@ -391,10 +393,19 @@ export async function replaceWithSealedRecordsAsync(
         fs.appendFileSync(tmp, Buffer.concat(batch));
         batch = [];
         await slice.yieldFn();
+        if (slice.shouldAbort?.()) {
+          fs.unlinkSync(tmp);
+          return "aborted";
+        }
       }
     }
     if (batch.length) fs.appendFileSync(tmp, Buffer.concat(batch));
+    if (slice.shouldAbort?.()) {
+      fs.unlinkSync(tmp);
+      return "aborted";
+    }
     fs.renameSync(tmp, file);
+    return "replaced";
   } catch (err) {
     try {
       fs.unlinkSync(tmp);

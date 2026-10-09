@@ -71,6 +71,10 @@ export class SealedLogSink {
   private mode: SealedLogSinkState = "pending";
   /** Sealed mode, writes held in memory while a deferred trim replaces files. */
   private paused = false;
+  /** Paused and over the memory cap: later lines go straight to the unsealed file. */
+  private pausedSpill = false;
+  /** Set by {@link flushAtExit}: a trim in flight must leave the original file alone. */
+  private closing = false;
   private buffer: Array<{ file: string; text: string; maxSize: number }> = [];
   private bufferedBytes = 0;
   private appender: SealedLogAppender | null = null;
@@ -82,6 +86,11 @@ export class SealedLogSink {
     this.cap = opts.bufferCapBytes ?? PRE_KEY_BUFFER_BYTES;
     // eslint-disable-next-line no-console
     this.report = opts.report ?? ((m) => console.error(m));
+  }
+
+  /** True once the process is exiting; a file replacement in flight must abort. */
+  get isClosing(): boolean {
+    return this.closing;
   }
 
   get state(): SealedLogSinkState {
@@ -109,8 +118,16 @@ export class SealedLogSink {
   write(file: string, text: string, maxSize = 0): void {
     try {
       if (this.mode === "sealed" && this.paused) {
+        if (this.pausedSpill) return this.writePlain(file, text, maxSize);
         this.buffer.push({ file, text, maxSize });
         this.bufferedBytes += Buffer.byteLength(text, "utf8");
+        if (this.bufferedBytes > this.cap) {
+          // Bounded memory without losing lines: the held lines (and the rest of
+          // the pause) go to the redacted unsealed file, which the trim never
+          // touches; the at-rest "logs" job seals it at the next launch.
+          this.pausedSpill = true;
+          this.spillBuffer();
+        }
         return;
       }
       if (this.mode === "sealed") return this.writeSealed(file, text, maxSize);
@@ -167,6 +184,7 @@ export class SealedLogSink {
   resume(): void {
     if (!this.paused) return;
     this.paused = false;
+    this.pausedSpill = false;
     const held = this.buffer;
     this.buffer = [];
     this.bufferedBytes = 0;
@@ -175,7 +193,10 @@ export class SealedLogSink {
 
   /** Exit (or startup failure) before the key opened: put held lines on disk, redacted. */
   flushAtExit(): void {
-    if (this.paused) return this.resume();
+    if (this.paused) {
+      this.closing = true;
+      return this.resume();
+    }
     if (this.mode !== "pending" || this.buffer.length === 0) return;
     try {
       this.spillBuffer();

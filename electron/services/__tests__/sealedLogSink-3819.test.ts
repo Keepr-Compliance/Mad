@@ -12,7 +12,7 @@ import os from "os";
 import path from "path";
 
 import { SealedLogSink } from "../sealedLogSink";
-import { runLogMaintenance } from "../logScrub";
+import { runLogMaintenance, trimSealedLogAsync } from "../logScrub";
 import { isSealedLog, openSealedLog, sealLogText } from "../atRest/sealedLog";
 
 const KEY = { keyId: "33".repeat(16), key: Buffer.alloc(32, 3) };
@@ -171,5 +171,73 @@ describe("BACKLOG-3819 maintenance with the data key", () => {
     const r = runLogMaintenance(dir, now, { key: KEY });
     expect(r.unreadable).toEqual(["main.log"]);
     expect(fs.readFileSync(main).equals(sealed)).toBe(true);
+  });
+});
+
+describe("BACKLOG-3819 quit and memory bound during the deferred trim", () => {
+  const OLD = new Date(Date.now() - 20 * DAY);
+  function staleSink(): SealedLogSink {
+    const sink = new SealedLogSink({ report: () => undefined });
+    sink.activate(KEY);
+    for (let i = 0; i < 40; i++) sink.write(main, line(`stale ${i}`, OLD));
+    sink.write(main, line("fresh head"));
+    return sink;
+  }
+  const tmpFiles = () => fs.readdirSync(dir).filter((f) => f.endsWith(".tmp"));
+
+  it("a quit mid-trim keeps every held line and every line after the flush; no temp file is left", async () => {
+    const sink = staleSink();
+    sink.pause();
+    let yields = 0;
+    let gate: () => void = () => undefined;
+    const gated = new Promise<void>((r) => (gate = r));
+    const trim = trimSealedLogAsync(main, Date.now(), KEY, {
+      sliceMs: 0,
+      shouldAbort: () => sink.isClosing,
+      yieldFn: async () => {
+        yields++;
+        if (yields === 3) {
+          sink.write(main, line("HELD during trim"));
+          sink.flushAtExit();
+          sink.write(main, line("AFTER will-quit"));
+          gate();
+        }
+        await gated.catch(() => undefined);
+        await new Promise((r) => setImmediate(r));
+      },
+    });
+    expect(await trim).toBe("unchanged");
+    const text = decrypted();
+    expect(text).toContain("HELD during trim");
+    expect(text).toContain("AFTER will-quit");
+    expect(text).toContain("stale 0");
+    expect(tmpFiles()).toEqual([]);
+  });
+
+  it("held lines over the memory cap spill to the unsealed file, in order, and none are lost", () => {
+    const sink = new SealedLogSink({ report: () => undefined, bufferCapBytes: 200 });
+    sink.activate(KEY);
+    sink.write(main, line("before pause"));
+    sink.pause();
+    const lines = Array.from({ length: 20 }, (_, i) => line(`held ${String(i).padStart(2, "0")}`));
+    for (const l of lines) sink.write(main, l);
+    expect(sink.pendingLines.length).toBe(0);
+    const unsealed = path.join(dir, "main.unsealed.log");
+    expect(fs.readFileSync(unsealed, "utf8")).toBe(lines.join(""));
+    expect(decrypted()).not.toContain("held 00");
+    sink.resume();
+    sink.write(main, line("after resume"));
+    expect(decrypted()).toContain("after resume");
+    expect(fs.readFileSync(unsealed, "utf8")).toBe(lines.join(""));
+  });
+
+  it("held lines under the cap stay in memory and are written on resume", () => {
+    const sink = staleSink();
+    sink.pause();
+    sink.write(main, line("small"));
+    expect(sink.pendingLines.length).toBe(1);
+    expect(fs.existsSync(path.join(dir, "main.unsealed.log"))).toBe(false);
+    sink.resume();
+    expect(decrypted()).toContain("small");
   });
 });

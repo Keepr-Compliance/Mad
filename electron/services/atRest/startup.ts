@@ -253,6 +253,7 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
           try {
             later = await runDeferredLogRetention(logDir, deferred, Date.now(), current, {
               onReplaced: (f) => sink.forget(f),
+              shouldAbort: () => sink.isClosing,
             });
           } finally {
             sink.resume();
