@@ -1,24 +1,13 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-3785 — LINKING MANY MESSAGES MUST NOT HOLD THE MAIN PROCESS.
+ * BACKLOG-3785 — A QUIT REQUEST MUST NOT LAND BETWEEN LINK CHUNKS.
  *
- * Linking 150 chats (30,703 messages) into a deal that already held 76k ran
- * `transactions:link-messages` for 26.9 s without a single yield; on Windows a
- * main process that long without pumping messages turns the window "Not
- * Responding". `linkMessages` now writes in chunks of LINK_MESSAGES_CHUNK_SIZE,
- * one SQLite transaction per chunk, and yields to the event loop between chunks.
- *
- * What this suite pins (real schema.sql, real engine, real writers):
- *   1. every id is linked exactly as before — pointer + junction row, skips for
- *      already-linked and missing ids, message_count += newly linked;
- *   2. the event loop runs BETWEEN chunks (a setImmediate armed at the call
- *      fires before the last chunk executes);
- *   3. a failure inside a chunk rolls back that chunk whole — earlier chunks
- *      stay fully linked and no message is left with a pointer but no junction
- *      row (the BACKLOG-2550 half-link).
- *
- * Ids and values are invented (reserved-fictional phone range, example.com).
+ * linkMessages yields between chunks, so Cmd-Q / Quit / close-to-quit / update
+ * install can arrive mid-link. The before-quit handler (electron/main.ts) defers
+ * the quit while a link runs (electron/utils/linkInFlight.ts), bounded by a max
+ * wait, using the same deferral as the iPhone backup (BACKLOG-3598). Real
+ * schema.sql, real engine, real linkMessages.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -176,6 +165,23 @@ const messageCount = (): number =>
     message_count: number;
   }).message_count;
 
+import { createBackupStopOnQuit } from "../../utils/backupStopOnQuit";
+import {
+  beginLink,
+  linkInFlightCount,
+  waitForLinksToFinish,
+} from "../../utils/linkInFlight";
+
+/** The exact wiring electron/main.ts uses. */
+function makeQuitHandler(maxWaitMs?: number, onTimeout?: () => void) {
+  const app = { quit: jest.fn() };
+  const handler = createBackupStopOnQuit(app, () => waitForLinksToFinish(maxWaitMs, onTimeout));
+  return { app, handler };
+}
+const flush = async () => {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+};
+
 beforeEach(() => {
   realDb = openTestDb();
   seed(realDb);
@@ -187,71 +193,78 @@ beforeEach(() => {
 afterEach(() => {
   realDb?.close();
   realDb = null;
+  jest.useRealTimers();
 });
 
-describe("linkMessages — chunked, yielding, atomic per chunk (BACKLOG-3785)", () => {
-  it("links every id exactly as before: pointer + junction, skips, count += newly linked", async () => {
-    await transactionService.linkMessages([...ids, ALREADY_LINKED, MISSING], TX);
+describe("quit during linkMessages (BACKLOG-3785)", () => {
+  it("quit requested mid-link: the link finishes every chunk, then the quit proceeds", async () => {
+    const { app, handler } = makeQuitHandler();
+    const event = { preventDefault: jest.fn() };
+    let deferred: boolean | null = null;
+    let quitCallsAtDeferral = -1;
 
-    expect(linkedPointers()).toEqual([...ids, ALREADY_LINKED].sort());
-    expect(junctionIds()).toEqual([...ids, ALREADY_LINKED].sort());
-    expect(messageCount()).toBe(SEEDED_COUNT + N);
-    const sources = realDb!
-      .prepare(
-        "SELECT DISTINCT link_source, link_confidence FROM communications WHERE transaction_id = ? AND id != 'c-already'",
-      )
-      .all(TX);
-    expect(sources).toEqual([{ link_source: "manual", link_confidence: 1 }]);
-  });
-
-  it("runs the event loop between chunks", async () => {
     const call = transactionService.linkMessages(ids, TX);
-    setImmediate(() => events.push("tick"));
-    await call;
-
-    const chunks = events.filter((e) => e === "chunk").length;
-    expect(chunks).toBe(Math.ceil(N / LINK_MESSAGES_CHUNK_SIZE));
-    const firstTick = events.indexOf("tick");
-    const lastChunk = events.lastIndexOf("chunk");
-    // The tick must land after the first chunk and before the last one.
-    expect(firstTick).toBeGreaterThan(events.indexOf("chunk"));
-    expect(firstTick).toBeLessThan(lastChunk);
-  });
-
-  it("re-reads message_count for every chunk: a writer that moves it during a yield is not overwritten", async () => {
-    const OTHER_WRITER_DELTA = 1000;
-    const call = transactionService.linkMessages(ids, TX);
-    // Armed before the call's first yield, so it runs inside that yield: after
-    // chunk 1 has committed, before chunk 2 starts.
+    // Fires during the first yield: chunk 1 is committed, chunks 2 and 3 are not.
     setImmediate(() => {
-      realDb!
-        .prepare("UPDATE transactions SET message_count = message_count + ? WHERE id = ?")
-        .run(OTHER_WRITER_DELTA, TX);
+      expect(events.filter((e) => e === "chunk").length).toBe(1);
+      deferred = handler(event);
+      quitCallsAtDeferral = app.quit.mock.calls.length;
     });
     await call;
+    await flush();
 
-    // A single read before the loop would end at SEEDED_COUNT + N: chunks 2 and 3
-    // would write back a total that never saw the other writer's change.
-    expect(messageCount()).toBe(SEEDED_COUNT + N + OTHER_WRITER_DELTA);
+    expect(deferred).toBe(true);
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(quitCallsAtDeferral).toBe(0);
+    // Every chunk ran before the quit was re-issued.
+    expect(events.filter((e) => e === "chunk").length).toBe(
+      Math.ceil(N / LINK_MESSAGES_CHUNK_SIZE),
+    );
+    expect(messageCount()).toBe(SEEDED_COUNT + N);
+    expect(app.quit).toHaveBeenCalledTimes(1);
+    expect(linkInFlightCount()).toBe(0);
   });
 
-  it("a failure inside a chunk rolls that chunk back whole; earlier chunks stay linked", async () => {
-    // Chunk 1 = CHUNK rows x 2 writes (pointer UPDATE, junction INSERT) + 1 count
-    // UPDATE. Crash a few writes into chunk 2.
-    crashAt = LINK_MESSAGES_CHUNK_SIZE * 2 + 1 + 9;
-    await expect(transactionService.linkMessages(ids, TX)).rejects.toThrow("INJECTED CRASH");
+  it("the counter is released when a chunk throws, so a failed link cannot hold the quit", async () => {
+    const { app, handler } = makeQuitHandler();
+    crashAt = 5;
+    const call = transactionService.linkMessages(ids, TX);
+    const result = expect(call).rejects.toThrow("INJECTED CRASH");
+    await result;
+    expect(linkInFlightCount()).toBe(0);
+    expect(handler({ preventDefault: jest.fn() })).toBe(false);
+    expect(app.quit).not.toHaveBeenCalled();
+  });
 
-    const firstChunk = ids.slice(0, LINK_MESSAGES_CHUNK_SIZE);
-    expect(linkedPointers()).toEqual([...firstChunk, ALREADY_LINKED].sort());
-    expect(junctionIds()).toEqual([...firstChunk, ALREADY_LINKED].sort());
-    expect(messageCount()).toBe(SEEDED_COUNT + LINK_MESSAGES_CHUNK_SIZE);
-    // No half-link: no pointer without a junction row.
-    const half = realDb!
-      .prepare(
-        `SELECT m.id FROM messages m WHERE m.transaction_id = ?
-           AND NOT EXISTS (SELECT 1 FROM communications c WHERE c.message_id = m.id AND c.transaction_id = m.transaction_id)`,
-      )
-      .all(TX);
-    expect(half).toEqual([]);
+  it("no link running: the quit is not deferred", () => {
+    const { app, handler } = makeQuitHandler();
+    const event = { preventDefault: jest.fn() };
+    expect(handler(event)).toBe(false);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+
+  it("max-wait path: a link that never ends is abandoned after the bound; the quit proceeds and is logged", async () => {
+    jest.useFakeTimers();
+    const onTimeout = jest.fn();
+    const { app, handler } = makeQuitHandler(60_000, onTimeout);
+    const endStuck = beginLink(); // a link that never finishes
+    const event = { preventDefault: jest.fn() };
+
+    expect(handler(event)).toBe(true);
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+
+    jest.advanceTimersByTime(59_999);
+    await flush();
+    expect(app.quit).not.toHaveBeenCalled();
+    expect(onTimeout).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(1);
+    await flush();
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(app.quit).toHaveBeenCalledTimes(1);
+    // The re-quit is not deferred a second time.
+    expect(handler({ preventDefault: jest.fn() })).toBe(false);
+    endStuck();
   });
 });

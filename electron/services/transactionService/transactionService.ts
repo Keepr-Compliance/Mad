@@ -95,6 +95,7 @@ import type {
   ReanalysisResult,
   AssignContactResult,
 } from "./types";
+import { beginLink } from "../../utils/linkInFlight";
 
 /**
  * BACKLOG-3785: how many messages `linkMessages` writes per transaction before
@@ -2105,44 +2106,50 @@ class TransactionService {
 
     let linkedCount = 0;
 
-    // BACKLOG-3785: chunked, with an event-loop yield between chunks. Linking
-    // 150 chats (30,703 messages) ran ~4 statements per message back to back
-    // and blocked the main process for 26.9 s — on Windows the window shows
-    // "Not Responding". Each chunk is ONE transaction: a message's pointer and
-    // its junction row now commit together (the BACKLOG-2550 half-link cannot
-    // happen inside a chunk), and message_count moves with the rows it counts.
-    for (let start = 0; start < messageIds.length; start += LINK_MESSAGES_CHUNK_SIZE) {
-      if (start > 0) await yieldToEventLoop();
-      const chunk = messageIds.slice(start, start + LINK_MESSAGES_CHUNK_SIZE);
-      linkedCount += dbTransaction(() => {
-        let chunkLinked = 0;
-        for (const messageId of chunk) {
-          linkMessageToTransaction(messageId, transactionId);
-          const refId = createCommunicationReferenceSync(
-            messageId,
-            transactionId,
-            userId,
-            "manual",
-            1.0
-          );
-          if (refId) chunkLinked++;
-        }
-        if (chunkLinked > 0) {
-          // Re-read inside the transaction: another writer may have moved the
-          // count while this loop yielded.
-          updateTransactionSync(transactionId, {
-            message_count: (getTransactionMessageCountSync(transactionId) ?? 0) + chunkLinked,
-          });
-        }
-        return chunkLinked;
-      });
-    }
-    if (linkedCount === 0) {
-      // Unchanged from before: the row was always written once, even when every
-      // message was already linked (it bumps updated_at).
-      updateTransactionSync(transactionId, {
-        message_count: getTransactionMessageCountSync(transactionId) ?? 0,
-      });
+    // BACKLOG-3785: a quit request waits for this link (see linkInFlight.ts).
+    const endLink = beginLink();
+    try {
+      // BACKLOG-3785: chunked, with an event-loop yield between chunks. Linking
+      // 150 chats (30,703 messages) ran ~4 statements per message back to back
+      // and blocked the main process for 26.9 s — on Windows the window shows
+      // "Not Responding". Each chunk is ONE transaction: a message's pointer and
+      // its junction row now commit together (the BACKLOG-2550 half-link cannot
+      // happen inside a chunk), and message_count moves with the rows it counts.
+      for (let start = 0; start < messageIds.length; start += LINK_MESSAGES_CHUNK_SIZE) {
+        if (start > 0) await yieldToEventLoop();
+        const chunk = messageIds.slice(start, start + LINK_MESSAGES_CHUNK_SIZE);
+        linkedCount += dbTransaction(() => {
+          let chunkLinked = 0;
+          for (const messageId of chunk) {
+            linkMessageToTransaction(messageId, transactionId);
+            const refId = createCommunicationReferenceSync(
+              messageId,
+              transactionId,
+              userId,
+              "manual",
+              1.0
+            );
+            if (refId) chunkLinked++;
+          }
+          if (chunkLinked > 0) {
+            // Re-read inside the transaction: another writer may have moved the
+            // count while this loop yielded.
+            updateTransactionSync(transactionId, {
+              message_count: (getTransactionMessageCountSync(transactionId) ?? 0) + chunkLinked,
+            });
+          }
+          return chunkLinked;
+        });
+      }
+      if (linkedCount === 0) {
+        // Unchanged from before: the row was always written once, even when every
+        // message was already linked (it bumps updated_at).
+        updateTransactionSync(transactionId, {
+          message_count: getTransactionMessageCountSync(transactionId) ?? 0,
+        });
+      }
+    } finally {
+      endLink();
     }
 
     await logService.info(

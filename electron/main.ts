@@ -193,6 +193,7 @@ import {
   stopBackupForQuit,
 } from "./handlers/syncHandlers";
 import { createBackupStopOnQuit } from "./utils/backupStopOnQuit";
+import { waitForLinksToFinish } from "./utils/linkInFlight";
 import { registerDriverHandlers } from "./handlers/driverHandlers";
 import { registerLLMHandlers } from "./handlers/llmHandlers";
 import { registerLicenseHandlers } from "./handlers/licenseHandlers";
@@ -2038,11 +2039,20 @@ app.on("window-all-closed", () => {
 // BACKLOG-3598: a quit during an iPhone backup first stops idevicebackup2 (bounded).
 const deferQuitForBackupStop = createBackupStopOnQuit(app, stopBackupForQuit);
 
+// BACKLOG-3785: a quit while chats are being attached waits (bounded) for the link to
+// finish instead of exiting between two write chunks.
+const deferQuitForLink = createBackupStopOnQuit(app, () =>
+  waitForLinksToFinish(undefined, () =>
+    console.warn("[Quit] link still running after the max wait; quitting anyway"),
+  ),
+);
+
 app.on("before-quit", (event) => {
   // BACKLOG-3598: must run before cleanupSyncHandlers() drops the orchestrator. When a
   // backup is running this defers the quit and returns; the rest of this handler then
   // runs once, on the re-quit.
   if (deferQuitForBackupStop(event)) return;
+  if (deferQuitForLink(event)) return;
   // TASK-1956: Shutdown persistent contact worker pool
   try {
     const { shutdownPool } = require("./workers/contactWorkerPool");
