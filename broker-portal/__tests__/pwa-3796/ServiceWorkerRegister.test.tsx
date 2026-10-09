@@ -14,7 +14,7 @@ const getRegistrations = jest.fn();
 // Assign, never defineProperty: on Windows jest's process.env is a Proxy whose
 // reads only see values set by assignment. replaceProperty assigns and is
 // restored automatically after each test (restoreMocks / explicit restore).
-function setEnv(value: string) {
+function setEnv(value: 'production' | 'development') {
   jest.replaceProperty(process.env, 'NODE_ENV', value);
 }
 
