@@ -85,10 +85,17 @@ const mockRemoveLeftoverBackup = jest.fn();
 const mockDecryptionCleanup = jest.fn();
 const mockGetDeviceStorageInfo = jest.fn();
 
+// BACKLOG-3816 S4-C: the kept backup's at-rest layer is not this suite's subject.
+jest.mock("../atRest/backupAtRest", () => ({
+  ...jest.requireActual("../atRest/backupAtRest"),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+}));
 jest.mock("electron", () => ({
   app: {
     isPackaged: false,
-    getPath: jest.fn().mockReturnValue("/tmp"),
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()),
   },
 }));
 
@@ -142,6 +149,17 @@ jest.mock("../backupService", () => ({
     removeLeftoverBackup: (...args: unknown[]) => mockRemoveLeftoverBackup(...args),
     deleteBackup: (...args: unknown[]) => mockDeleteBackup(...args),
   })),
+}));
+
+// BACKLOG-3817: the orchestrator reads the saved backup password before the backup starts.
+// The real store does file I/O, which fake timers do not drive, so the monitor's first
+// reading landed outside the first 60s window on some runs.
+// BACKLOG-3816 S4-C (B1): no saved-password file I/O; this suite's subject is not the password.
+jest.mock("../atRest/backupPassword", () => ({
+  ...jest.requireActual("../atRest/backupPassword"),
+  getBackupPasswordStore: () =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
 }));
 
 jest.mock("../backupDecryptionService", () => ({
@@ -450,6 +468,51 @@ describe("BACKLOG-2899 — sync disk guard", () => {
       expect(result.error).toMatch(/space/i);
     });
 
+    // S4-C (founder decision): a quarantined, unreadable backup never blocks the fresh full backup.
+    function withQuarantine(copies: number, freedPerCopy: number) {
+      let remaining = copies;
+      let freed = 0;
+      const deleteOldestQuarantined = jest.fn(async () => {
+        if (remaining === 0) return false;
+        remaining -= 1;
+        freed += freedPerCopy;
+        return true;
+      });
+      orchestrator.backupAtRest = {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        ...require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+        deleteOldestQuarantined,
+      } as never;
+      mockCheckDiskSpace.mockImplementation(async () => ({
+        diskPath: "C:",
+        free: RESERVE_BYTES - 1 + freed,
+        size: TOTAL_DISK_BYTES,
+      }));
+      return deleteOldestQuarantined;
+    }
+
+    it("deletes the oldest quarantined copy and starts when that makes room", async () => {
+      const deleteOldest = withQuarantine(3, 1);
+      installBackup({ markBackupStarted: () => {}, succeedAfterMs: 1000 });
+
+      await runSync(orchestrator, 700_000);
+
+      expect(deleteOldest).toHaveBeenCalledTimes(1); // stops as soon as the guard is satisfied
+      expect(mockStartBackup).toHaveBeenCalled();
+    });
+
+    it("keeps deleting oldest-first until the guard clears, and refuses only when none is left", async () => {
+      const deleteOldest = withQuarantine(2, 0);
+      installBackup({ markBackupStarted: () => {}, succeedAfterMs: 1000 });
+
+      const result = await runSync(orchestrator, 700_000);
+
+      expect(deleteOldest).toHaveBeenCalledTimes(3); // 2 deleted, third call reports none left
+      expect(mockStartBackup).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/space/i);
+    });
+
     it("starts when free space is exactly at the reserve", async () => {
       installDisk({ initialFree: RESERVE_BYTES, drainBytesPerSec: 0 });
       installBackup({ markBackupStarted: () => {}, succeedAfterMs: 1000 });
@@ -620,4 +683,10 @@ describe("BACKLOG-2899 — sync disk guard", () => {
       expect(result.success).toBe(true);
     });
   });
+});
+
+// BACKLOG-3816 S4-C (B1): this file's userData is a fresh directory under os.tmpdir().
+afterAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./helpers/testUserData").removeTestUserDataDir();
 });

@@ -1,205 +1,383 @@
 /**
- * Backup Decryption Service
- * Handles decryption of iOS encrypted backups
+ * Backup Decryption Service — reads an ENCRYPTED iOS backup (BACKLOG-3817).
  *
- * iOS backups use a multi-layer encryption scheme:
- * Password -> PBKDF2 -> Key Encryption Key (KEK) -> Unwrap Class Keys -> Decrypt Files
+ * iOS backup encryption, as implemented by the reference decryptor
+ * jsharkey13/iphone_backup_decrypt (`utils.py`, `iphone_backup.py`):
  *
- * Reference: https://github.com/jsharkey13/iphone_backup_decrypt
+ *   password ──PBKDF2-SHA256(DPSL, DPIC)──▶ ──PBKDF2-SHA1(SALT, ITER)──▶ passphrase key
+ *   passphrase key ──RFC 3394 unwrap──▶ class keys   (only keybag entries with WRAP & 2)
+ *   ManifestKey = class (4 bytes, LITTLE-endian) + wrapped key ──▶ Manifest.db key
+ *   Manifest.db  = AES-256-CBC (zero IV, PKCS#7) under that key
+ *   Files.file   = NSKeyedArchiver plist; `$objects[$top.root]` holds ProtectionClass and a
+ *                  UID to `{ NS.data: class(4) + wrapped file key (40) }`
+ *   each file    = AES-256-CBC (zero IV, PKCS#7) under its unwrapped file key, stored at
+ *                  `<backup>/<fileID[0:2]>/<fileID>`
+ *
+ * ## Where plaintext goes
+ *
+ * Only into a parse-copy directory under `userData/at-rest-tmp/ios-<runId>/`, laid out
+ * exactly like a backup (`XX/<fileID>`), so the parsers, `resolveAttachmentPath` and the
+ * attachment copier read it unchanged. Nothing decrypted is ever written inside the backup
+ * folder. The copy is removed by {@link BackupDecryptionService.cleanup} after persistence,
+ * and any copy a crash left behind is removed by {@link BackupDecryptionService.sweepParseCopies}.
+ *
+ * ## What may be logged
+ *
+ * Counts and file IDs. Never a password, a derived key, or decrypted content.
  */
 
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { pipeline } from "stream/promises";
 import plist from "simple-plist";
 import logService from "./logService";
-import { MANIFEST_FILE_BY_ID_SQL } from "./db/iosBackupManifestSql";
-import type {
-  DecryptionResult,
-  ManifestPlist,
-  Keybag,
-  KeybagItem,
-  EncryptionKeys,
-} from "../types/backup";
+import { hostAppPaths } from "../capabilities/appPathsProvider";
+import type { DecryptionResult, ManifestPlist } from "../types/backup";
+import { countManifestFiles, selectManifestReadFiles, type ManifestFileRow } from "./db/iosManifestDbSql";
 
-// Import better-sqlite3-multiple-ciphers for reading Manifest.db
+// Import better-sqlite3-multiple-ciphers for reading the decrypted Manifest.db
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Database = require("better-sqlite3-multiple-ciphers");
 
 /**
+ * Parse copies live here, under userData. S6's temp sweep owns the shared
+ * `AT_REST_TMP_DIR` constant (not on this base yet); this name must match it.
+ */
+export const AT_REST_TMP_DIRNAME = "at-rest-tmp";
+/** Every parse-copy directory this service creates starts with this. */
+export const IOS_PARSE_COPY_PREFIX = "ios-";
+
+/** sms.db — HomeDomain-Library/SMS/sms.db */
+export const SMS_DB_FILE_ID = "3d0d7e5fb2ce288813306e4d4636395e047a3d28";
+/** AddressBook.sqlitedb — HomeDomain-Library/AddressBook/AddressBook.sqlitedb */
+export const ADDRESS_BOOK_FILE_ID = "31bb7ba8914766d4ba40d6dfb6113c8b614be442";
+/** Message attachments: MediaDomain rows under these roots (iosMessagesParser.ATTACHMENT_ROOTS). */
+export const ATTACHMENT_RELATIVE_ROOTS: readonly string[] = [
+  "Library/SMS/Attachments/",
+  "Library/SMS/StickerCache/",
+];
+
+/**
+ * The Manifest.db rows the sync reads — sms.db, AddressBook and every message
+ * attachment. Shared by the encrypted-backup parse copy (BACKLOG-3817) and the
+ * Keepr-sealed parse copy (BACKLOG-3816 S4-C), so both copy the same set. The SQL
+ * lives in db/iosManifestDbSql.ts. `manifestDbPath` must be a PLAINTEXT SQLite file.
+ */
+export function selectReadFileRows(manifestDbPath: string): ManifestFileRow[] {
+  const db = new Database(manifestDbPath, { readonly: true });
+  try {
+    return selectManifestReadFiles(db, [SMS_DB_FILE_ID, ADDRESS_BOOK_FILE_ID], ATTACHMENT_RELATIVE_ROOTS);
+  } finally {
+    db.close();
+  }
+}
+
+/** Keybag entries whose WRAP has this bit are wrapped by the passphrase key. */
+const WRAP_PASSPHRASE = 2;
+/** Upper bounds from the reference decryptor (`utils.py` _MAX_DPIC/_MAX_ITER_ITERATIONS). */
+const MAX_DPIC_ITERATIONS = 20_000_000;
+const MAX_ITER_ITERATIONS = 1_000_000;
+export const FILE_ID_PATTERN = /^[0-9a-f]{40}$/;
+
+export class BackupPasswordIncorrectError extends Error {
+  constructor() {
+    super("Incorrect password");
+    this.name = "BackupPasswordIncorrectError";
+  }
+}
+
+interface ParsedKeybag {
+  attrs: Map<string, Buffer | number>;
+  classes: Map<number, { wrap: number; wpky: Buffer }>;
+}
+
+interface UnlockedBackup {
+  manifest: ManifestPlist;
+  classKeys: Map<number, Buffer>;
+}
+
+/** errno codes that mean the parse copy cannot be written at all, not that one file is bad. */
+const FATAL_WRITE_ERROR_CODES: ReadonlySet<string> = new Set(["ENOSPC", "EDQUOT", "EIO", "EROFS"]);
+
+function isFatalWriteError(error: unknown): error is NodeJS.ErrnoException {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return typeof code === "string" && FATAL_WRITE_ERROR_CODES.has(code);
+}
+
+/** User-facing text when the decrypted copy could not be written (disk full or I/O error). */
+export const DECRYPT_DISK_ERROR_MESSAGE =
+  "Not enough free disk space to read this iPhone's encrypted backup. Free up space on this computer and sync again.";
+
+/** The decrypt stopped because the parse copy could not be written. `code` is the errno code. */
+export class BackupDecryptionDiskError extends Error {
+  readonly code: string;
+  constructor(cause: NodeJS.ErrnoException) {
+    super(DECRYPT_DISK_ERROR_MESSAGE);
+    this.name = "BackupDecryptionDiskError";
+    this.code = cause.code ?? "EIO";
+  }
+}
+
+export interface DecryptStats {
+  /** Files written to the parse copy. */
+  decrypted: number;
+  /**
+   * Attachment rows the manifest listed that could not be decrypted (missing from disk,
+   * bad record, bad key, bad padding). Not silent: the orchestrator records the count on
+   * the sync outcome and the user is told how many could not be read.
+   */
+  skipped: number;
+}
+
+export interface BackupDecryptionDeps {
+  /** Root that holds parse-copy directories. Default `userData/at-rest-tmp`. */
+  tmpRoot?: () => string;
+}
+
+function u32(value: Buffer): number | Buffer {
+  return value.length === 4 ? value.readUInt32BE(0) : value;
+}
+
+/** Parse the BackupKeyBag TLV blob (reference `BackupKeyBag._parse_bytes`). */
+export function parseKeybag(bytes: Buffer): ParsedKeybag {
+  const attrs = new Map<string, Buffer | number>();
+  const classes = new Map<number, { wrap: number; wpky: Buffer }>();
+  let sawUuid = false;
+  let sawWrap = false;
+  let current: Map<string, Buffer | number> | null = null;
+  const flush = () => {
+    if (!current) return;
+    const clas = current.get("CLAS");
+    const wrap = current.get("WRAP");
+    const wpky = current.get("WPKY");
+    if (typeof clas === "number" && typeof wrap === "number" && Buffer.isBuffer(wpky)) {
+      classes.set(clas, { wrap, wpky });
+    }
+  };
+  let offset = 0;
+  while (offset + 8 <= bytes.length) {
+    const tag = bytes.toString("latin1", offset, offset + 4);
+    const length = bytes.readUInt32BE(offset + 4);
+    const raw = bytes.subarray(offset + 8, offset + 8 + length);
+    offset += 8 + length;
+    const value = u32(raw);
+    if (tag === "UUID" && !sawUuid) {
+      sawUuid = true;
+      attrs.set(tag, value);
+    } else if (tag === "WRAP" && !sawWrap) {
+      sawWrap = true;
+      attrs.set(tag, value);
+    } else if (tag === "UUID") {
+      // A further UUID starts a new class-key block.
+      flush();
+      current = new Map([["UUID", value]]);
+    } else if (["CLAS", "WRAP", "WPKY", "KTYP", "PBKY"].includes(tag)) {
+      if (!current) throw new Error("Unexpected BackupKeyBag format");
+      current.set(tag, tag === "WPKY" || tag === "PBKY" ? raw : value);
+    } else {
+      attrs.set(tag, value);
+    }
+  }
+  flush();
+  return { attrs, classes };
+}
+
+/** RFC 3394 AES key unwrap. Returns null when the integrity check fails (wrong key). */
+export function aesKeyUnwrap(kek: Buffer, wrapped: Buffer): Buffer | null {
+  if (wrapped.length < 24 || wrapped.length % 8 !== 0) return null;
+  const n = wrapped.length / 8 - 1;
+  const a = Buffer.from(wrapped.subarray(0, 8));
+  const r = Buffer.from(wrapped.subarray(8));
+  const decipher = crypto.createDecipheriv(`aes-${kek.length * 8}-ecb`, kek, null);
+  decipher.setAutoPadding(false);
+  const t = Buffer.alloc(8);
+  for (let j = 5; j >= 0; j--) {
+    for (let i = n; i >= 1; i--) {
+      t.writeBigUInt64BE(BigInt(n * j + i), 0);
+      for (let k = 0; k < 8; k++) a[k] ^= t[k];
+      const block = decipher.update(Buffer.concat([a, r.subarray((i - 1) * 8, i * 8)]));
+      block.copy(a, 0, 0, 8);
+      block.copy(r, (i - 1) * 8, 8, 16);
+    }
+  }
+  return a.equals(Buffer.alloc(8, 0xa6)) ? r : null;
+}
+
+function pbkdf2(password: crypto.BinaryLike, salt: Buffer, iterations: number, digest: string): Promise<Buffer> {
+  return new Promise((resolve, reject) =>
+    crypto.pbkdf2(password, salt, iterations, 32, digest, (error, key) => (error ? reject(error) : resolve(key))),
+  );
+}
+
+function boundedIterations(value: Buffer | number | undefined, name: string, max: number): number {
+  if (typeof value !== "number" || value < 1 || value > max) {
+    throw new Error(`BackupKeyBag ${name} iteration count is out of range`);
+  }
+  return value;
+}
+
+/** Decrypt a whole AES-256-CBC (zero IV, PKCS#7) file to `dest`. Validates padding. */
+async function decryptCbcFile(key: Buffer, src: string, dest: string): Promise<void> {
+  await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+  const size = (await fs.promises.stat(src)).size;
+  if (size === 0) {
+    await fs.promises.writeFile(dest, Buffer.alloc(0), { mode: 0o600 });
+    return;
+  }
+  if (size % 16 !== 0) throw new Error("Encrypted file length is not a multiple of the AES block size");
+  const decipher = crypto.createDecipheriv("aes-256-cbc", key, Buffer.alloc(16, 0));
+  // autoPadding (default) validates PKCS#7 on final() and throws on a bad pad.
+  await pipeline(fs.createReadStream(src), decipher, fs.createWriteStream(dest, { mode: 0o600 }));
+}
+
+interface FileRecord {
+  protectionClass: number;
+  /** class(4) + wrapped key, or null for a folder / empty record */
+  encryptionKey: Buffer | null;
+}
+
+/** Read the NSKeyedArchiver file record from Manifest.db (reference `FilePlist`). */
+export function parseFileRecord(blob: Buffer): FileRecord {
+  const archive = plist.parse(blob) as {
+    $objects?: unknown[];
+    $top?: { root?: { UID?: number } };
+  };
+  const objects = archive.$objects;
+  const rootId = archive.$top?.root?.UID;
+  if (!Array.isArray(objects) || typeof rootId !== "number") {
+    throw new Error("File record is not a keyed archive");
+  }
+  const root = objects[rootId] as Record<string, unknown>;
+  const protectionClass = root?.ProtectionClass;
+  if (typeof protectionClass !== "number") throw new Error("File record has no ProtectionClass");
+  const keyRef = root.EncryptionKey as { UID?: number } | undefined;
+  if (!keyRef || typeof keyRef.UID !== "number") return { protectionClass, encryptionKey: null };
+  const keyObj = objects[keyRef.UID] as { "NS.data"?: Buffer } | undefined;
+  const data = keyObj?.["NS.data"];
+  if (!Buffer.isBuffer(data)) throw new Error("File record EncryptionKey has no data");
+  return { protectionClass, encryptionKey: data };
+}
+
+/**
  * Backup Decryption Service Class
- * Decrypts iOS encrypted backups to extract messages and contacts
  */
 export class BackupDecryptionService {
   private static readonly SERVICE_NAME = "BackupDecryptionService";
+  private readonly tmpRoot: () => string;
 
-  // Files we need to decrypt
-  private readonly requiredFiles = [
-    "3d0d7e5fb2ce288813306e4d4636395e047a3d28", // sms.db
-    "31bb7ba8914766d4ba40d6dfb6113c8b614be442", // AddressBook.sqlitedb
-  ];
+  constructor(deps: BackupDecryptionDeps = {}) {
+    this.tmpRoot = deps.tmpRoot ?? (() => path.join(hostAppPaths.userData(), AT_REST_TMP_DIRNAME));
+  }
+
+  /** A fresh, empty parse-copy directory path (not yet created). */
+  newParseCopyDir(): string {
+    return path.join(this.tmpRoot(), `${IOS_PARSE_COPY_PREFIX}${crypto.randomUUID()}`);
+  }
 
   /**
-   * Decrypt an iOS backup using the provided password
-   * @param backupPath - Path to the backup directory
-   * @param password - User's backup password
-   * @returns DecryptionResult with success status and decrypted path
+   * Decrypt what the sync reads — sms.db, AddressBook and every message attachment — into
+   * a parse copy laid out like a backup. Returns the copy's path as `decryptedPath`.
    */
   async decryptBackup(
     backupPath: string,
     password: string,
-  ): Promise<DecryptionResult> {
+    options: { outputDir?: string } = {},
+  ): Promise<DecryptionResult & { stats?: DecryptStats; errorCode?: "INSUFFICIENT_SPACE" }> {
+    const outputPath = options.outputDir ?? this.newParseCopyDir();
+    let unlocked: UnlockedBackup | null = null;
     try {
-      await logService.info(
-        "Starting backup decryption",
-        BackupDecryptionService.SERVICE_NAME,
-        { backupPath },
-      );
-
-      // 1. Read and parse Manifest.plist to get encryption info
-      const manifestPath = path.join(backupPath, "Manifest.plist");
-      if (!fs.existsSync(manifestPath)) {
-        return {
-          success: false,
-          error: "Manifest.plist not found - invalid backup",
-          decryptedPath: null,
-        };
+      await logService.info("Starting backup decryption", BackupDecryptionService.SERVICE_NAME);
+      unlocked = await this.unlock(backupPath, password);
+      await fs.promises.mkdir(outputPath, { recursive: true, mode: 0o700 });
+      const manifestDbPath = path.join(outputPath, "Manifest.db");
+      await this.decryptManifestDb(backupPath, unlocked, manifestDbPath);
+      let stats: DecryptStats;
+      try {
+        stats = await this.decryptReadFiles(backupPath, manifestDbPath, unlocked, outputPath);
+      } finally {
+        await fs.promises.rm(manifestDbPath, { force: true });
       }
-
-      const manifest = await this.readManifest(manifestPath);
-      if (!manifest.IsEncrypted) {
-        return {
-          success: false,
-          error: "Backup is not encrypted",
-          decryptedPath: null,
-        };
-      }
-
-      // 2. Parse the keybag from Manifest.plist
-      const keybag = this.parseKeybag(manifest.BackupKeyBag!);
-
-      // 3. Derive decryption keys using PBKDF2
-      const keys = await this.deriveKeys(password, keybag);
-
-      // 4. Verify password is correct by attempting to unwrap class keys
-      const classKeysUnwrapped = this.unwrapClassKeys(
-        keybag,
-        keys.keyEncryptionKey,
-      );
-      if (!classKeysUnwrapped) {
-        return {
-          success: false,
-          error: "Incorrect password",
-          decryptedPath: null,
-        };
-      }
-      keys.classKeys = classKeysUnwrapped;
-
-      // 5. Decrypt Manifest.db to get file list
-      const manifestDbPath = path.join(backupPath, "Manifest.db");
-      const decryptedManifestDb = await this.decryptManifestDb(
-        manifestDbPath,
-        manifest.ManifestKey!,
-        keys,
-      );
-
-      // 6. Create output directory for decrypted files
-      const outputPath = path.join(backupPath, "decrypted");
-      if (!fs.existsSync(outputPath)) {
-        fs.mkdirSync(outputPath, { recursive: true });
-      }
-
-      // 7. Decrypt only the files we need
-      await this.decryptRequiredFiles(
-        backupPath,
-        decryptedManifestDb,
-        keys,
-        outputPath,
-      );
-
-      await logService.info(
-        "Backup decryption completed successfully",
-        BackupDecryptionService.SERVICE_NAME,
-        { outputPath },
-      );
-
-      // Clear sensitive data from memory
-      this.clearSensitiveData(keys);
-
-      return {
-        success: true,
-        error: null,
-        decryptedPath: outputPath,
-      };
+      await logService.info("Backup decryption completed", BackupDecryptionService.SERVICE_NAME, {
+        decrypted: stats.decrypted,
+        skipped: stats.skipped,
+      });
+      return { success: true, error: null, decryptedPath: outputPath, stats };
     } catch (error) {
-      await logService.error(
-        "Decryption failed",
-        BackupDecryptionService.SERVICE_NAME,
-        { error: error instanceof Error ? error.message : String(error) },
-      );
-
+      // Never leave a half-written parse copy behind.
+      await this.cleanup(outputPath);
+      const incorrect = error instanceof BackupPasswordIncorrectError;
+      await logService.error("Decryption failed", BackupDecryptionService.SERVICE_NAME, {
+        error: incorrect ? "Incorrect password" : error instanceof Error ? error.message : String(error),
+      });
+      const diskError = error instanceof BackupDecryptionDiskError || isFatalWriteError(error);
       return {
         success: false,
-        error:
-          error instanceof Error ? error.message : "Unknown decryption error",
+        error: incorrect
+          ? "Incorrect password"
+          : diskError
+            ? DECRYPT_DISK_ERROR_MESSAGE
+            : error instanceof Error
+              ? error.message
+              : "Unknown decryption error",
+        ...(diskError ? { errorCode: "INSUFFICIENT_SPACE" as const } : {}),
         decryptedPath: null,
       };
+    } finally {
+      if (unlocked) for (const key of unlocked.classKeys.values()) key.fill(0);
     }
   }
 
-  /**
-   * Check if a backup is encrypted
-   * @param backupPath - Path to the backup directory
-   * @returns true if backup is encrypted
-   */
+  /** Check if a backup is encrypted (Manifest.plist IsEncrypted). */
   async isBackupEncrypted(backupPath: string): Promise<boolean> {
     try {
-      const manifestPath = path.join(backupPath, "Manifest.plist");
-      if (!fs.existsSync(manifestPath)) {
-        return false;
-      }
-      const manifest = await this.readManifest(manifestPath);
+      const manifest = this.readManifest(path.join(backupPath, "Manifest.plist"));
       return manifest.IsEncrypted === true;
     } catch {
       return false;
     }
   }
 
-  /**
-   * Verify a backup password without fully decrypting
-   * @param backupPath - Path to the backup directory
-   * @param password - Password to verify
-   * @returns true if password is correct
-   */
+  /** True when `password` unlocks this backup's keybag. Never throws. */
   async verifyPassword(backupPath: string, password: string): Promise<boolean> {
     try {
-      const manifestPath = path.join(backupPath, "Manifest.plist");
-      const manifest = await this.readManifest(manifestPath);
-
-      if (!manifest.IsEncrypted || !manifest.BackupKeyBag) {
-        return false;
-      }
-
-      const keybag = this.parseKeybag(manifest.BackupKeyBag);
-      const keys = await this.deriveKeys(password, keybag);
-      const classKeys = this.unwrapClassKeys(keybag, keys.keyEncryptionKey);
-
-      // Clear sensitive data
-      keys.keyEncryptionKey.fill(0);
-
-      return classKeys !== null;
+      const unlocked = await this.unlock(backupPath, password);
+      for (const key of unlocked.classKeys.values()) key.fill(0);
+      return true;
     } catch {
       return false;
     }
   }
 
   /**
-   * Read and parse Manifest.plist
+   * The full round trip: the password unlocks the keybag AND Manifest.db decrypts to a
+   * SQLite database with file rows. Used before an older backup is deleted (S4). The
+   * decrypted index is written to a parse-copy dir and removed before returning.
    */
-  private async readManifest(manifestPath: string): Promise<ManifestPlist> {
-    const manifestData = fs.readFileSync(manifestPath);
-    const parsed = plist.parse(manifestData) as Record<string, unknown>;
+  async verifyManifestRoundTrip(backupPath: string, password: string): Promise<boolean> {
+    const dir = this.newParseCopyDir();
+    let unlocked: UnlockedBackup | null = null;
+    try {
+      unlocked = await this.unlock(backupPath, password);
+      await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+      const dbPath = path.join(dir, "Manifest.db");
+      await this.decryptManifestDb(backupPath, unlocked, dbPath);
+      const db = new Database(dbPath, { readonly: true });
+      try {
+        return countManifestFiles(db) > 0;
+      } finally {
+        db.close();
+      }
+    } catch {
+      return false;
+    } finally {
+      if (unlocked) for (const key of unlocked.classKeys.values()) key.fill(0);
+      await this.cleanup(dir);
+    }
+  }
 
+  private readManifest(manifestPath: string): ManifestPlist {
+    const parsed = plist.parse(fs.readFileSync(manifestPath)) as Record<string, unknown>;
     return {
       IsEncrypted: parsed.IsEncrypted as boolean,
       ManifestKey: parsed.ManifestKey as Buffer | undefined,
@@ -208,489 +386,152 @@ export class BackupDecryptionService {
     };
   }
 
-  /**
-   * Parse the keybag from backup metadata
-   * The keybag contains wrapped class keys that protect file data
-   */
-  private parseKeybag(keybagData: Buffer): Keybag {
-    const keybag: Keybag = {
-      uuid: Buffer.alloc(0),
-      type: 0,
-      classKeys: new Map(),
-    };
-
-    let offset = 0;
-    let currentClass: number | null = null;
-    let currentItem: Partial<KeybagItem> = {};
-
-    while (offset < keybagData.length) {
-      if (offset + 8 > keybagData.length) break;
-
-      // Read tag (4 bytes) and length (4 bytes)
-      const tag = keybagData.toString("ascii", offset, offset + 4);
-      const length = keybagData.readUInt32BE(offset + 4);
-      offset += 8;
-
-      if (offset + length > keybagData.length) break;
-
-      const value = keybagData.subarray(offset, offset + length);
-      offset += length;
-
-      switch (tag) {
-        case "UUID":
-          if (currentClass === null) {
-            keybag.uuid = Buffer.from(value);
-          } else {
-            currentItem.uuid = Buffer.from(value);
-          }
-          break;
-        case "TYPE":
-          keybag.type = value.readUInt32BE(0);
-          break;
-        case "HMCK":
-          keybag.hmck = Buffer.from(value);
-          break;
-        case "WRAP":
-          if (currentClass === null) {
-            keybag.wrap = value.readUInt32BE(0);
-          } else {
-            currentItem.wrap = value.readUInt32BE(0);
-          }
-          break;
-        case "SALT":
-          if (currentClass === null) {
-            keybag.salt = Buffer.from(value);
-          } else {
-            currentItem.salt = Buffer.from(value);
-          }
-          break;
-        case "ITER":
-          if (currentClass === null) {
-            keybag.iter = value.readUInt32BE(0);
-          } else {
-            currentItem.iter = value.readUInt32BE(0);
-          }
-          break;
-        case "DPWT":
-          if (currentClass === null) {
-            keybag.dpwt = value.readUInt32BE(0);
-          } else {
-            currentItem.dpwt = value.readUInt32BE(0);
-          }
-          break;
-        case "DPIC":
-          if (currentClass === null) {
-            keybag.dpic = value.readUInt32BE(0);
-          } else {
-            currentItem.dpic = value.readUInt32BE(0);
-          }
-          break;
-        case "DPSL":
-          if (currentClass === null) {
-            keybag.dpsl = Buffer.from(value);
-          } else {
-            currentItem.dpsl = Buffer.from(value);
-          }
-          break;
-        case "CLAS":
-          // Save previous class item if any
-          if (currentClass !== null && currentItem.wpky) {
-            keybag.classKeys.set(currentClass, currentItem as KeybagItem);
-          }
-          currentClass = value.readUInt32BE(0);
-          currentItem = { clas: currentClass };
-          break;
-        case "KTYP":
-          currentItem.ktyp = value.readUInt32BE(0);
-          break;
-        case "WPKY":
-          currentItem.wpky = Buffer.from(value);
-          break;
-        case "PBKY":
-          currentItem.publicKey = Buffer.from(value);
-          break;
-      }
+  /** Unlock the keybag. Throws BackupPasswordIncorrectError on a wrong password. */
+  private async unlock(backupPath: string, password: string): Promise<UnlockedBackup> {
+    const manifest = this.readManifest(path.join(backupPath, "Manifest.plist"));
+    if (manifest.IsEncrypted !== true || !manifest.BackupKeyBag) {
+      throw new Error("Backup is not encrypted");
     }
+    const keybag = parseKeybag(manifest.BackupKeyBag);
+    const dpsl = keybag.attrs.get("DPSL");
+    const salt = keybag.attrs.get("SALT");
+    if (!Buffer.isBuffer(dpsl) || !Buffer.isBuffer(salt)) throw new Error("BackupKeyBag has no salts");
+    const dpic = boundedIterations(keybag.attrs.get("DPIC"), "DPIC", MAX_DPIC_ITERATIONS);
+    const iter = boundedIterations(keybag.attrs.get("ITER"), "ITER", MAX_ITER_ITERATIONS);
 
-    // Save last class item
-    if (currentClass !== null && currentItem.wpky) {
-      keybag.classKeys.set(currentClass, currentItem as KeybagItem);
-    }
+    const round1 = await pbkdf2(password, dpsl, dpic, "sha256");
+    const passphraseKey = await pbkdf2(round1, salt, iter, "sha1");
+    round1.fill(0);
 
-    return keybag;
-  }
-
-  /**
-   * Derive encryption keys from password using PBKDF2
-   * iOS uses double PBKDF2 for backup encryption
-   */
-  private async deriveKeys(
-    password: string,
-    keybag: Keybag,
-  ): Promise<EncryptionKeys> {
-    // First round: derive key from password
-    const iterations1 = keybag.dpic || 10000;
-    const salt1 = keybag.dpsl || keybag.salt || Buffer.alloc(20);
-
-    const derivedKey1 = crypto.pbkdf2Sync(
-      password,
-      salt1,
-      iterations1,
-      32,
-      "sha256",
-    );
-
-    // Second round: derive KEK from first derived key
-    const iterations2 = keybag.iter || 1;
-    const salt2 = keybag.salt || Buffer.alloc(20);
-
-    const keyEncryptionKey = crypto.pbkdf2Sync(
-      derivedKey1,
-      salt2,
-      iterations2,
-      32,
-      "sha1",
-    );
-
-    // Clear intermediate key
-    derivedKey1.fill(0);
-
-    return {
-      keyEncryptionKey,
-      classKeys: new Map(),
-    };
-  }
-
-  /**
-   * Unwrap class keys using the Key Encryption Key
-   * Uses RFC 3394 AES Key Wrap algorithm
-   */
-  private unwrapClassKeys(
-    keybag: Keybag,
-    kek: Buffer,
-  ): Map<number, Buffer> | null {
     const classKeys = new Map<number, Buffer>();
-
-    for (const [classNum, item] of keybag.classKeys) {
-      if (!item.wpky) continue;
-
-      // Skip asymmetric keys (wrap type 2)
-      if (item.wrap === 2) continue;
-
-      try {
-        const unwrappedKey = this.aesKeyUnwrap(kek, item.wpky);
-        if (unwrappedKey) {
-          classKeys.set(classNum, unwrappedKey);
-        }
-      } catch {
-        // If any key fails to unwrap, password is likely wrong
-        return null;
-      }
-    }
-
-    // We need at least one class key to succeed
-    if (classKeys.size === 0) {
-      return null;
-    }
-
-    return classKeys;
-  }
-
-  /**
-   * AES Key Unwrap (RFC 3394)
-   * Used to unwrap class keys protected by KEK
-   */
-  private aesKeyUnwrap(kek: Buffer, wrappedKey: Buffer): Buffer | null {
-    if (wrappedKey.length < 24 || wrappedKey.length % 8 !== 0) {
-      return null;
-    }
-
-    const n = wrappedKey.length / 8 - 1;
-    const a = Buffer.from(wrappedKey.subarray(0, 8));
-    const r = Buffer.alloc(n * 8);
-    wrappedKey.copy(r, 0, 8);
-
-    // Create decipher
-    const decipher = crypto.createDecipheriv("aes-256-ecb", kek, null);
-    decipher.setAutoPadding(false);
-
-    // Perform unwrap iterations
-    for (let j = 5; j >= 0; j--) {
-      for (let i = n; i >= 1; i--) {
-        const t = BigInt(n * j + i);
-
-        // A ^ t
-        const tBuf = Buffer.alloc(8);
-        tBuf.writeBigUInt64BE(t, 0);
-        for (let k = 0; k < 8; k++) {
-          a[k] ^= tBuf[k];
-        }
-
-        // Decrypt A || R[i]
-        const block = Buffer.concat([a, r.subarray((i - 1) * 8, i * 8)]);
-        const decrypted = Buffer.concat([decipher.update(block)]);
-
-        // Update A and R[i]
-        decrypted.copy(a, 0, 0, 8);
-        decrypted.copy(r, (i - 1) * 8, 8, 16);
-      }
-    }
-
-    // Verify IV (should be 0xA6A6A6A6A6A6A6A6)
-    const expectedIv = Buffer.from([
-      0xa6, 0xa6, 0xa6, 0xa6, 0xa6, 0xa6, 0xa6, 0xa6,
-    ]);
-    if (!a.equals(expectedIv)) {
-      return null;
-    }
-
-    return r;
-  }
-
-  /**
-   * Decrypt Manifest.db to get file metadata
-   */
-  private async decryptManifestDb(
-    manifestDbPath: string,
-    manifestKey: Buffer,
-    keys: EncryptionKeys,
-  ): Promise<string> {
-    // The manifest key has the class prepended (4 bytes)
-    const protectionClass = manifestKey.readUInt32BE(0);
-    const wrappedDbKey = manifestKey.subarray(4);
-
-    // Get the class key for this protection class
-    const classKey = keys.classKeys.get(protectionClass);
-    if (!classKey) {
-      throw new Error(`No class key for protection class ${protectionClass}`);
-    }
-
-    // Unwrap the database key
-    const dbKey = this.aesKeyUnwrap(classKey, wrappedDbKey);
-    if (!dbKey) {
-      throw new Error("Failed to unwrap Manifest.db key");
-    }
-
-    // Decrypt Manifest.db
-    const encryptedDb = fs.readFileSync(manifestDbPath);
-    const decryptedDb = this.decryptAesCbc(dbKey, encryptedDb);
-
-    // Write decrypted database to temp location
-    const decryptedDbPath = manifestDbPath + ".decrypted";
-    fs.writeFileSync(decryptedDbPath, decryptedDb);
-
-    // Clear key
-    dbKey.fill(0);
-
-    return decryptedDbPath;
-  }
-
-  /**
-   * Decrypt data using AES-256-CBC with zero IV
-   */
-  private decryptAesCbc(key: Buffer, data: Buffer): Buffer {
-    const iv = Buffer.alloc(16, 0);
-    const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
-    decipher.setAutoPadding(false);
-
-    const decrypted = Buffer.concat([decipher.update(data), decipher.final()]);
-
-    // Remove PKCS7 padding
-    const paddingLength = decrypted[decrypted.length - 1];
-    if (paddingLength > 0 && paddingLength <= 16) {
-      return decrypted.subarray(0, decrypted.length - paddingLength);
-    }
-
-    return decrypted;
-  }
-
-  /**
-   * Decrypt only the files we need from the backup
-   */
-  private async decryptRequiredFiles(
-    backupPath: string,
-    manifestDbPath: string,
-    keys: EncryptionKeys,
-    outputPath: string,
-  ): Promise<void> {
-    // Open decrypted Manifest.db
-    const db = new Database(manifestDbPath, { readonly: true });
-
     try {
-      for (const fileHash of this.requiredFiles) {
-        await this.decryptFile(backupPath, fileHash, db, keys, outputPath);
+      for (const [clas, entry] of keybag.classes) {
+        if ((entry.wrap & WRAP_PASSPHRASE) === 0) continue;
+        const key = aesKeyUnwrap(passphraseKey, entry.wpky);
+        if (!key) {
+          for (const k of classKeys.values()) k.fill(0);
+          throw new BackupPasswordIncorrectError();
+        }
+        classKeys.set(clas, key);
       }
     } finally {
-      db.close();
-      // Clean up decrypted Manifest.db
-      try {
-        fs.unlinkSync(manifestDbPath);
-      } catch {
-        // Ignore cleanup errors
-      }
+      passphraseKey.fill(0);
     }
+    if (classKeys.size === 0) throw new BackupPasswordIncorrectError();
+    return { manifest, classKeys };
   }
 
-  /**
-   * Decrypt a single file from the backup
-   */
-  private async decryptFile(
-    backupPath: string,
-    fileHash: string,
-    manifestDb: typeof Database,
-    keys: EncryptionKeys,
-    outputPath: string,
-  ): Promise<void> {
-    // Look up file in Manifest.db
-    const row = manifestDb
-      .prepare(MANIFEST_FILE_BY_ID_SQL)
-      .get(fileHash) as
-      | { fileID: string; domain: string; relativePath: string; file: Buffer }
-      | undefined;
+  private unwrapFor(unlocked: UnlockedBackup, protectionClass: number, wrapped: Buffer): Buffer {
+    const classKey = unlocked.classKeys.get(protectionClass);
+    if (!classKey) throw new Error(`No class key for protection class ${protectionClass}`);
+    if (wrapped.length !== 0x28) throw new Error("Invalid wrapped key length");
+    const key = aesKeyUnwrap(classKey, wrapped);
+    if (!key) throw new Error("A file key did not unwrap");
+    return key;
+  }
 
-    if (!row) {
-      await logService.warn(
-        `File not found in manifest: ${fileHash}`,
-        BackupDecryptionService.SERVICE_NAME,
-      );
-      return;
-    }
-
-    // Parse the file metadata plist
-    let fileMetadata: Record<string, unknown>;
+  private async decryptManifestDb(backupPath: string, unlocked: UnlockedBackup, dest: string): Promise<void> {
+    const manifestKey = unlocked.manifest.ManifestKey;
+    if (!Buffer.isBuffer(manifestKey) || manifestKey.length < 8) throw new Error("Manifest.plist has no ManifestKey");
+    // The class prefix is little-endian (reference: struct.unpack('<l', ManifestKey[:4])).
+    const key = this.unwrapFor(unlocked, manifestKey.readUInt32LE(0), manifestKey.subarray(4));
     try {
-      fileMetadata = plist.parse(row.file) as Record<string, unknown>;
-    } catch {
-      await logService.warn(
-        `Failed to parse file metadata for ${fileHash}`,
-        BackupDecryptionService.SERVICE_NAME,
-      );
-      return;
-    }
-
-    const protectionClass = (fileMetadata.ProtectionClass as number) || 0;
-    const encryptionKey = fileMetadata.EncryptionKey as Buffer | undefined;
-
-    if (!encryptionKey) {
-      await logService.warn(
-        `No encryption key for file ${fileHash}`,
-        BackupDecryptionService.SERVICE_NAME,
-      );
-      return;
-    }
-
-    // Get the class key
-    const classKey = keys.classKeys.get(protectionClass);
-    if (!classKey) {
-      await logService.warn(
-        `No class key for protection class ${protectionClass}`,
-        BackupDecryptionService.SERVICE_NAME,
-      );
-      return;
-    }
-
-    // The encryption key has the class prepended
-    const wrappedFileKey = encryptionKey.subarray(4);
-    const fileKey = this.aesKeyUnwrap(classKey, wrappedFileKey);
-    if (!fileKey) {
-      await logService.warn(
-        `Failed to unwrap file key for ${fileHash}`,
-        BackupDecryptionService.SERVICE_NAME,
-      );
-      return;
-    }
-
-    // Read and decrypt the file
-    // Files are stored in subdirectories based on first 2 chars of hash
-    const encryptedFilePath = path.join(
-      backupPath,
-      fileHash.substring(0, 2),
-      fileHash,
-    );
-
-    if (!fs.existsSync(encryptedFilePath)) {
-      await logService.warn(
-        `Encrypted file not found: ${encryptedFilePath}`,
-        BackupDecryptionService.SERVICE_NAME,
-      );
-      fileKey.fill(0);
-      return;
-    }
-
-    const encryptedData = fs.readFileSync(encryptedFilePath);
-    const decryptedData = this.decryptAesCbc(fileKey, encryptedData);
-
-    // Write decrypted file
-    const outputFilePath = path.join(
-      outputPath,
-      path.basename(row.relativePath),
-    );
-    fs.writeFileSync(outputFilePath, decryptedData);
-
-    await logService.debug(
-      `Decrypted file: ${row.relativePath}`,
-      BackupDecryptionService.SERVICE_NAME,
-      { outputPath: outputFilePath },
-    );
-
-    // Clear file key
-    fileKey.fill(0);
-  }
-
-  /**
-   * Clear sensitive data from memory
-   */
-  private clearSensitiveData(keys: EncryptionKeys): void {
-    keys.keyEncryptionKey.fill(0);
-    for (const key of keys.classKeys.values()) {
+      await decryptCbcFile(key, path.join(backupPath, "Manifest.db"), dest);
+    } finally {
       key.fill(0);
     }
-    keys.classKeys.clear();
+  }
+
+  private async decryptReadFiles(
+    backupPath: string,
+    manifestDbPath: string,
+    unlocked: UnlockedBackup,
+    outputPath: string,
+  ): Promise<DecryptStats> {
+    const rows = selectReadFileRows(manifestDbPath);
+
+    const stats: DecryptStats = { decrypted: 0, skipped: 0 };
+    const required = new Set([SMS_DB_FILE_ID]);
+    for (const row of rows) {
+      const fileId = String(row.fileID).toLowerCase();
+      if (!FILE_ID_PATTERN.test(fileId)) {
+        stats.skipped++;
+        continue;
+      }
+      const src = path.join(backupPath, fileId.slice(0, 2), fileId);
+      const dest = path.join(outputPath, fileId.slice(0, 2), fileId);
+      try {
+        const record = parseFileRecord(row.file);
+        if (!record.encryptionKey) {
+          stats.skipped++;
+          continue;
+        }
+        const key = this.unwrapFor(unlocked, record.protectionClass, record.encryptionKey.subarray(4));
+        try {
+          await decryptCbcFile(key, src, dest);
+        } finally {
+          key.fill(0);
+        }
+        stats.decrypted++;
+        required.delete(fileId);
+      } catch (error) {
+        if (fileId === SMS_DB_FILE_ID) throw error;
+        await fs.promises.rm(dest, { force: true }).catch(() => undefined);
+        // A full disk or an I/O fault is not a problem with this one file: every file
+        // after it would fail too, and the sync would report success with attachments
+        // missing. Stop the decrypt instead.
+        if (isFatalWriteError(error)) throw new BackupDecryptionDiskError(error);
+        stats.skipped++;
+        await logService.warn("Could not decrypt a backup file", BackupDecryptionService.SERVICE_NAME, {
+          fileId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (required.size > 0) throw new Error("The backup has no messages database");
+    return stats;
   }
 
   /**
-   * Clean up decrypted files after parsing is complete
-   * @param decryptedPath - Path to the decrypted files directory
+   * Remove a parse copy. Refuses (logs, deletes nothing) anything that is not a direct
+   * `ios-*` child of the parse-copy root — this is the only recursive delete in the
+   * service, and it must never reach a backup.
    */
-  async cleanup(decryptedPath: string): Promise<void> {
-    try {
-      if (fs.existsSync(decryptedPath)) {
-        // Securely overwrite files before deletion
-        const files = fs.readdirSync(decryptedPath);
-        for (const file of files) {
-          const filePath = path.join(decryptedPath, file);
-          try {
-            // Open file exclusively to avoid TOCTOU race between stat and write
-            const fd = fs.openSync(filePath, "r+");
-            try {
-              const stats = fs.fstatSync(fd);
-              if (stats.isFile()) {
-                // Overwrite with zeros using the same fd
-                const zeros = Buffer.alloc(stats.size, 0);
-                fs.writeSync(fd, zeros, 0, zeros.length, 0);
-              }
-            } finally {
-              fs.closeSync(fd);
-            }
-            fs.unlinkSync(filePath);
-          } catch {
-            // File may have been removed concurrently; skip
-          }
-        }
-        fs.rmdirSync(decryptedPath);
-        await logService.debug(
-          "Cleaned up decrypted files",
-          BackupDecryptionService.SERVICE_NAME,
-          { path: decryptedPath },
-        );
-      }
-    } catch (error) {
-      await logService.warn(
-        "Failed to clean up decrypted files",
-        BackupDecryptionService.SERVICE_NAME,
-        { error: error instanceof Error ? error.message : String(error) },
-      );
+  async cleanup(decryptedPath: string): Promise<boolean> {
+    const root = path.resolve(this.tmpRoot());
+    const target = path.resolve(decryptedPath);
+    if (path.dirname(target) !== root || !path.basename(target).startsWith(IOS_PARSE_COPY_PREFIX)) {
+      await logService.warn("Refused to remove a path outside the parse-copy area", BackupDecryptionService.SERVICE_NAME);
+      return false;
     }
+    try {
+      const stats = await fs.promises.lstat(target);
+      if (!stats.isDirectory()) return false;
+      await fs.promises.rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return false;
+      await logService.warn("Failed to clean up decrypted files", BackupDecryptionService.SERVICE_NAME, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  /** Remove every parse copy (launch, or before a new sync). Returns how many were removed. */
+  async sweepParseCopies(): Promise<number> {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(this.tmpRoot(), { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+    let removed = 0;
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith(IOS_PARSE_COPY_PREFIX)) continue;
+      if (await this.cleanup(path.join(this.tmpRoot(), entry.name))) removed++;
+    }
+    return removed;
   }
 }
 

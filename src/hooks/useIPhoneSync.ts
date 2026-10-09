@@ -80,12 +80,19 @@ export function formatStorageCompleteMessage(result: {
   messagesStored: number;
   contactsStored: number;
   contactsSourceOff?: boolean;
+  attachmentsUndecryptable?: number;
 }): string {
   const messages = `Saved ${result.messagesStored.toLocaleString()} messages`;
-  if (result.contactsSourceOff) {
-    return `${messages}. Contacts not imported (turned off in Settings)`;
+  const base = result.contactsSourceOff
+    ? `${messages}. Contacts not imported (turned off in Settings)`
+    : `${messages} and ${result.contactsStored} contacts`;
+  // BACKLOG-3817: a partly-read encrypted backup is never reported as a clean success.
+  const failed = result.attachmentsUndecryptable ?? 0;
+  if (failed > 0) {
+    const noun = failed === 1 ? "attachment" : "attachments";
+    return `${base}. ${failed.toLocaleString()} ${noun} could not be read from the encrypted backup — sync again to retry`;
   }
-  return `${messages} and ${result.contactsStored} contacts`;
+  return base;
 }
 
 /**
@@ -352,6 +359,21 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
         const unsub = syncApi.onProgress((syncProgress) => {
           // Ignore progress events after cancel
           if (!syncStateRef.isActive) return;
+          // BACKLOG-3816 S4-C: "cleanup" ticks are the kept iPhone backup being prepared
+          // (unsealed, before the transfer) or secured (after it). While a sync is active
+          // the "Preparing your saved iPhone backup..." line belongs to the sync screen;
+          // once the sync is past the transfer the AtRestMigrationBanner owns the "Securing"
+          // line (it shows cleanup ticks only when NO sync is active), so this hook drops
+          // them there. The bar does not move: the tick's percent is the unseal's, not the sync's.
+          if ((syncProgress.phase as string) === "cleanup") {
+            const current = progressPhaseRef.current;
+            if (current === "extracting" || current === "storing" || current === "complete" || current === "error") return;
+            const message = syncProgress.message;
+            setProgress((prev) =>
+              prev ? { ...prev, message } : { phase: "backing_up", percent: 0, message },
+            );
+            return;
+          }
           // Map sync progress to BackupProgress format
           let phase: BackupProgress["phase"] = "backing_up";
           if (syncProgress.phase === "backup") {
@@ -540,6 +562,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
             messagesStored: number;
             contactsStored: number;
             contactsSourceOff?: boolean;
+            attachmentsUndecryptable?: number;
             duration: number;
           }) => void
         ) => () => void;
