@@ -20,6 +20,10 @@ const exportFolderMock = jest.fn();
 );
 
 const TITLE = "Exported files aren't encrypted";
+// Founder-approved body, verbatim (BACKLOG-3828 pm_comments). Literal on purpose: not imported
+// from the component, so a copy drift in the component fails here.
+const BODY =
+  "Your audit was saved as regular files so you can open it. Keepr's encryption protects your data inside Keepr only \u2014 it doesn't apply to exported files. We recommend keeping your records in Keepr rather than storing exported copies on this computer. You're responsible for how exported files are stored, shared and deleted.";
 
 const transaction = {
   id: "tx-3828",
@@ -62,12 +66,7 @@ it.each([
   await runExport(format);
   await screen.findByRole("button", { name: /open audit/i });
   expect(screen.getByText(TITLE)).toBeInTheDocument();
-  expect(screen.getByTestId("export-unencrypted-notice")).toHaveTextContent(
-    "keeping your records in Keepr",
-  );
-  expect(screen.getByTestId("export-unencrypted-notice")).toHaveTextContent(
-    "You're responsible for how exported files are stored, shared and deleted.",
-  );
+  expect(screen.getByTestId("export-unencrypted-notice")).toHaveTextContent(BODY);
 });
 
 it("is not shown on a failed export", async () => {
