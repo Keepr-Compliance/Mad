@@ -160,6 +160,10 @@ export const logBridge = {
   send: (level: string, message: string): void => {
     ipcRenderer.send("log:renderer", level, message);
   },
+  /** BACKLOG-3785: the screen NAME now shown (freeze telemetry). Names only. */
+  reportScreen: (name: string): void => {
+    ipcRenderer.send("telemetry:screen-name", name);
+  },
 };
 
 /**

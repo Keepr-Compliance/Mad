@@ -21,3 +21,17 @@ describe("BACKLOG-3785: current screen name", () => {
     expect(getCurrentScreenName()).toBe("settings+Contacts");
   });
 });
+
+describe("BACKLOG-3785: screen name reaches main", () => {
+  it("reports each new name over the log bridge (names only)", () => {
+    const reportScreen = jest.fn();
+    (window as unknown as { api: unknown }).api = { log: { reportScreen } };
+    const { rerender } = renderHook(({ step }) => useReportCurrentScreenName(step, { showSettings: true }), {
+      initialProps: { step: "dashboard" },
+    });
+    rerender({ step: "dashboard" });
+    rerender({ step: "login" });
+    expect(reportScreen.mock.calls).toEqual([["dashboard+Settings"], ["login+Settings"]]);
+    delete (window as unknown as { api?: unknown }).api;
+  });
+});

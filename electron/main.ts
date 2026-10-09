@@ -264,6 +264,7 @@ import {
   WindowResponsivenessTracker,
   attachResponsivenessTracking,
 } from "./services/windowResponsivenessTracker";
+import { createWindowFreezeReporter } from "./services/rendererFreezeProfiler";
 import { syncTimeline } from "./services/syncTimeline";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
@@ -1805,6 +1806,8 @@ app.whenReady().then(async () => {
         Sentry.captureMessage(message, context);
       },
       getPhase: () => syncTimeline.currentPhase(),
+      // BACKLOG-3785: any freeze >= 10 s, sync or not, sends `renderer_freeze` (no frames).
+      onFreeze: createWindowFreezeReporter(),
     });
 
     attachResponsivenessTracking(mainWindow, responsivenessTracker, {

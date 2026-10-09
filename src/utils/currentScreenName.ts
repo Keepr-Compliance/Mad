@@ -27,5 +27,11 @@ export function useReportCurrentScreenName(step: string, modals?: Record<string,
   const name = screenNameFor(step, modals);
   useEffect(() => {
     current = name;
+    // Tell main too, so a window freeze outside a sync can name its screen.
+    try {
+      (window as unknown as { api?: { log?: { reportScreen?: (n: string) => void } } }).api?.log?.reportScreen?.(name);
+    } catch {
+      // Telemetry only.
+    }
   }, [name]);
 }

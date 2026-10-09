@@ -25,6 +25,10 @@ import {
   summarizeProfile,
   buildFreezeEvent,
   buildCaptureFailedEvent,
+  createWindowFreezeReporter,
+  isProfilingPhase,
+  FreezeReportGate,
+  PROFILE_SAMPLING_INTERVAL_US,
   FREEZE_SILENCE_MS,
   FREEZE_CAPTURE_MIN_INTERVAL_MS,
   MAX_PROFILE_BYTES,
@@ -103,6 +107,9 @@ interface Harness {
   liveUntil: (until: number) => void;
   tick: (at: number, extra?: { first?: boolean; hidden?: boolean; stopped?: boolean; screen?: string }) => Promise<void>;
   written: Array<{ dest: string; data: Buffer }>;
+  /** Whether the post-backup profiling window is open (default: open). */
+  window: { open: boolean };
+  gate: FreezeReportGate;
   reports: Array<{ message: string; options: Record<string, unknown> }>;
   logs: string[];
 }
@@ -113,7 +120,11 @@ function harness(overrides: Partial<FreezeProfilerDeps> = {}, dir?: string): Har
   const written: Harness["written"] = [];
   const reports: Harness["reports"] = [];
   const logs: string[] = [];
+  const window = { open: true };
+  const gate = new FreezeReportGate();
   const profiler = new RendererFreezeProfiler({
+    profilingAllowed: () => window.open,
+    gate,
     now: () => clock.now,
     setInterval: (fn) => {
       watchdog = fn;
@@ -152,6 +163,8 @@ function harness(overrides: Partial<FreezeProfilerDeps> = {}, dir?: string): Har
     written,
     reports,
     logs,
+    window,
+    gate,
   };
   return h;
 }
@@ -169,6 +182,44 @@ describe("BACKLOG-3785: when the profiler captures", () => {
     await h.tick(0, { first: true });
     expect(h.contents.debugger.attach).toHaveBeenCalledWith("1.3");
     expect(h.contents.commands).toEqual(["Profiler.enable", "Profiler.setSamplingInterval", "Profiler.start"]);
+    const calls = h.contents.debugger.sendCommand.mock.calls as unknown as Array<[string, unknown?]>;
+    const interval = calls.find(([m]) => m === "Profiler.setSamplingInterval");
+    expect(interval?.[1]).toEqual({ interval: PROFILE_SAMPLING_INTERVAL_US });
+    expect(PROFILE_SAMPLING_INTERVAL_US).toBe(20_000);
+  });
+
+  it("does not profile outside the post-backup window (e.g. during the device backup)", async () => {
+    const h = harness();
+    h.window.open = false;
+    await h.tick(0, { first: true });
+    for (let t = 1000; t <= 5000; t += 1000) await h.tick(t);
+    await h.tick(30_000);
+    expect(h.contents.debugger.attach).not.toHaveBeenCalled();
+    expect(h.reports).toHaveLength(0);
+    // The window opens (backup finished): profiling starts on the next tick.
+    h.window.open = true;
+    await h.tick(31_000);
+    expect(h.contents.attached).toBe(true);
+  });
+
+  it("stops and detaches when the window closes (sync end + 3 min) while the renderer is healthy", async () => {
+    const h = harness();
+    await h.tick(0, { first: true });
+    h.window.open = false;
+    await h.tick(1000);
+    expect(h.contents.attached).toBe(false);
+    expect(h.contents.commands[h.contents.commands.length - 1]).toBe("Profiler.stop");
+  });
+
+  it("a freeze that outlasts the window is still captured when ticks resume", async () => {
+    const h = harness();
+    await h.tick(0, { first: true });
+    await h.tick(1000);
+    h.window.open = false; // window closed during the freeze
+    await h.tick(300_000);
+    expect(h.written).toHaveLength(1);
+    expect(h.reports).toHaveLength(1);
+    expect(h.contents.attached).toBe(false);
   });
 
   it("captures when the renderer is silent > 10 s and main stayed responsive", async () => {
@@ -446,6 +497,101 @@ describe("BACKLOG-3785: what leaves the machine (Sentry event)", () => {
       platform: "darwin",
     });
     expect(event.tags).toEqual({ app_version: "1", platform: "darwin", sync_phase: "none", screen: "unknown" });
+  });
+});
+
+describe("BACKLOG-3785: profiling window phases", () => {
+  it("post-backup phases only", () => {
+    for (const p of ["decrypting", "parsing-contacts", "parsing-messages", "resolving", "cleanup", "storing:messages", "storing:attachments", "running", "post-sync"]) {
+      expect([p, isProfilingPhase(p)]).toEqual([p, true]);
+    }
+    for (const p of [null, "backup", "backup:waiting-for-device", "backup:transferring", "idle"]) {
+      expect([p, isProfilingPhase(p)]).toEqual([p, false]);
+    }
+  });
+});
+
+describe("BACKLOG-3785: window freezes outside a sync (no profile)", () => {
+  function reporter(gate = new FreezeReportGate(), start = 1_000_000) {
+    const sent: Array<{ message: string; options: Record<string, unknown> }> = [];
+    const timers: Array<() => void> = [];
+    let now = start;
+    const report = createWindowFreezeReporter({
+      now: () => now,
+      setTimeout: (fn) => void timers.push(fn),
+      gate,
+      report: (message, options) => sent.push({ message, options: options as Record<string, unknown> }),
+      screen: () => "dashboard+AuditTransaction",
+      appVersion: () => "9.9.9-test",
+      platform: () => "win32",
+      log: () => undefined,
+    });
+    return {
+      sent,
+      gate,
+      fire: (ms: number, phase: string | null) => {
+        report(ms, phase);
+        while (timers.length) timers.shift()!();
+      },
+      advance: (ms: number) => {
+        now += ms;
+      },
+    };
+  }
+
+  it("a 53 s freeze outside a sync sends renderer_freeze with exactly the whitelisted keys and no frames", () => {
+    const r = reporter();
+    r.fire(53_000, null);
+    expect(r.sent).toHaveLength(1);
+    expect(r.sent[0].message).toBe("renderer_freeze");
+    const options = r.sent[0].options;
+    expect(Object.keys(options).sort()).toEqual(["extra", "level", "tags"]);
+    expect(options.level).toBe("warning");
+    expect(options.tags).toEqual({
+      app_version: "9.9.9-test",
+      platform: "win32",
+      sync_phase: "none",
+      screen: "dashboard+AuditTransaction",
+    });
+    expect(options.extra).toEqual({ freeze_ms: 53_000 });
+  });
+
+  it("under 10 s sends nothing", () => {
+    const r = reporter();
+    r.fire(9_999, null);
+    expect(r.sent).toHaveLength(0);
+  });
+
+  it("shares the 10-minute limit with profiled captures", async () => {
+    const gate = new FreezeReportGate();
+    const h = harness({ gate });
+    await freeze(h, 2000, 20_000); // profiled capture takes the slot
+    expect(h.reports).toHaveLength(1);
+    // The same freeze seen by the window events 2 s later: the capture already holds the slot.
+    const r = reporter(gate, 22_000);
+    r.fire(30_000, "post-sync");
+    expect(r.sent).toHaveLength(0);
+    r.advance(10 * 60_000);
+    r.fire(30_000, null);
+    expect(r.sent).toHaveLength(1);
+  });
+
+  it("a throwing Sentry sink never throws out of the reporter", () => {
+    const report = createWindowFreezeReporter({
+      setTimeout: (fn) => {
+        fn();
+        return 0;
+      },
+      gate: new FreezeReportGate(),
+      report: () => {
+        throw new Error("sentry down");
+      },
+      screen: () => "x",
+      appVersion: () => "1",
+      platform: () => "darwin",
+      log: () => undefined,
+    });
+    expect(() => report(20_000, null)).not.toThrow();
   });
 });
 

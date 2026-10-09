@@ -54,7 +54,59 @@ export const WATCHDOG_INTERVAL_MS = 1_000;
 /** A watchdog run this much later than scheduled counts as a main-thread stall. */
 export const MAIN_STALL_MS = 1_000;
 export const PROFILE_ROLL_MS = 60_000;
-export const PROFILE_SAMPLING_INTERVAL_US = 5_000;
+export const PROFILE_SAMPLING_INTERVAL_US = 20_000;
+/** The profiler keeps running this long after the sync ends (the field freezes began right after it). */
+export const POST_SYNC_PROFILE_MS = 3 * 60_000;
+/** A window `unresponsive` -> `responsive` freeze at least this long is reported. */
+export const WINDOW_FREEZE_REPORT_MS = 10_000;
+/** Wait this long before reporting a window freeze, so a profiled capture of the same freeze wins. */
+export const WINDOW_FREEZE_REPORT_DELAY_MS = 2_000;
+
+/**
+ * Sync phases in which the renderer is profiled: everything AFTER the device
+ * backup (idevicebackup2) has finished — decrypting, parsing, resolving, cleanup,
+ * storing:* — plus "running" (the hand-off between a closed phase and the next,
+ * which is exactly where the field freezes began) and "post-sync" (the first
+ * POST_SYNC_PROFILE_MS after the sync ends). Never during "backup*".
+ */
+export function isProfilingPhase(phase: string | null): boolean {
+  if (phase === null) return false;
+  if (phase.startsWith("backup")) return false;
+  return (
+    phase === "running" ||
+    phase === "post-sync" ||
+    phase === "decrypting" ||
+    phase === "resolving" ||
+    phase === "cleanup" ||
+    phase.startsWith("parsing") ||
+    phase.startsWith("storing")
+  );
+}
+
+/**
+ * ONE limit for every freeze report — a profiled capture or a window freeze —
+ * at most one per FREEZE_CAPTURE_MIN_INTERVAL_MS.
+ */
+export class FreezeReportGate {
+  private lastAt: number | null = null;
+  /** Takes the slot when it is free. */
+  tryAcquire(now: number): boolean {
+    if (this.lastAt !== null && now - this.lastAt < FREEZE_CAPTURE_MIN_INTERVAL_MS) return false;
+    this.lastAt = now;
+    return true;
+  }
+}
+
+export const freezeReportGate = new FreezeReportGate();
+
+let lastScreenName = "unknown";
+/** The renderer reports its screen NAME on change (and with each sync tick). */
+export function noteScreenName(screen: unknown): void {
+  lastScreenName = sanitizeScreenName(screen);
+}
+export function currentScreenName(): string {
+  return lastScreenName;
+}
 export const CDP_COMMAND_TIMEOUT_MS = 15_000;
 /**
  * The capture's Profiler.stop may wait behind a renderer that re-blocked right
@@ -111,6 +163,10 @@ export interface FreezeProfilerDeps {
   phase: () => string | null;
   appVersion: () => string;
   platform: () => string;
+  /** Whether the renderer may be profiled right now (the post-backup window). */
+  profilingAllowed: () => boolean;
+  /** The shared freeze-report limit. */
+  gate: FreezeReportGate;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,14 +189,15 @@ export interface FreezeEventFrame {
  */
 export function buildFreezeEvent(input: {
   gapMs: number;
-  bundleSelf: ProfileEntry[];
+  /** Absent when there is no profile (a window freeze): the event then has no frames key. */
+  bundleSelf?: ProfileEntry[];
   phase: string | null;
   screen: string;
   appVersion: string;
   platform: string;
 }): CaptureMessageOptions {
-  const frames: FreezeEventFrame[] = input.bundleSelf
-    .filter((e) => e.bundle)
+  const frames: FreezeEventFrame[] | undefined = input.bundleSelf
+    ?.filter((e) => e.bundle)
     .slice(0, 10)
     .map((e) => ({ functionName: e.functionName, file: e.file, line: e.line, selfMs: e.ms }));
   return {
@@ -151,7 +208,7 @@ export function buildFreezeEvent(input: {
       sync_phase: input.phase ?? "none",
       screen: sanitizeScreenName(input.screen),
     },
-    extra: { freeze_ms: input.gapMs, top_self_frames: frames },
+    extra: frames ? { freeze_ms: input.gapMs, top_self_frames: frames } : { freeze_ms: input.gapMs },
   };
 }
 
@@ -330,7 +387,6 @@ export class RendererFreezeProfiler {
   private lastTickAt: number | null = null;
   private lastTickHidden = false;
   private lastScreen = "unknown";
-  private lastCaptureAt: number | null = null;
   private watchdog: unknown = null;
   private lastWatchdogAt: number | null = null;
   private lastStallAt: number | null = null;
@@ -358,6 +414,9 @@ export class RendererFreezeProfiler {
       clearInterval: deps.clearInterval ?? ((h) => clearInterval(h as NodeJS.Timeout)),
       log: deps.log ?? { info: (m) => log.info(m), warn: (m) => log.warn(m) },
       profileDir: deps.profileDir ?? (() => path.join(hostAppPaths.userData(), PROFILE_DIR_NAME)),
+      profilingAllowed:
+        deps.profilingAllowed ?? (() => isProfilingPhase(syncTimeline.currentPhase(POST_SYNC_PROFILE_MS))),
+      gate: deps.gate ?? freezeReportGate,
       writeEncrypted:
         deps.writeEncrypted ??
         (async (destPath, data) => {
@@ -427,13 +486,13 @@ export class RendererFreezeProfiler {
     this.lastTickAt = now;
     this.lastTickHidden = tick.hidden === true;
     this.lastScreen = sanitizeScreenName(tick.screen);
+    if (tick.screen !== undefined) noteScreenName(tick.screen);
 
     if (previous !== null && this.state === "on" && !this.capturing) {
       const gapMs = now - previous;
       if (gapMs > FREEZE_SILENCE_MS) {
         const reason = this.captureRefusal(previous, now, previousHidden || tick.hidden === true);
         if (reason === null) {
-          this.lastCaptureAt = now;
           this.capturing = true;
           this.enqueue(() => this.capture(gapMs, previousScreen));
         } else {
@@ -444,6 +503,13 @@ export class RendererFreezeProfiler {
 
     if (tick.stopped) {
       this.enqueue(() => this.disarm());
+      return;
+    }
+
+    // BACKLOG-3785: profile only in the post-backup window (never during the backup).
+    const allowed = this.safe(() => this.deps.profilingAllowed(), false);
+    if (!allowed) {
+      if (this.state === "on" && !this.capturing) this.enqueue(() => this.disarm());
       return;
     }
 
@@ -465,9 +531,8 @@ export class RendererFreezeProfiler {
   private captureRefusal(gapStart: number, now: number, hidden: boolean): string | null {
     if (hidden) return "window hidden (timer throttling)";
     if (!this.mainWasResponsive(gapStart, now)) return "main was not responsive during the gap";
-    if (this.lastCaptureAt !== null && now - this.lastCaptureAt < FREEZE_CAPTURE_MIN_INTERVAL_MS) {
-      return "rate limited";
-    }
+    // Last, because it takes the shared slot when it is free.
+    if (!this.deps.gate.tryAcquire(now)) return "rate limited";
     return null;
   }
 
@@ -581,7 +646,11 @@ export class RendererFreezeProfiler {
         }),
       );
       await this.writeProfile(profile);
-      if (this.state === "on") await this.startProfiling();
+      if (this.state === "on") {
+        // Keep profiling only while the window is still open.
+        if (this.safe(() => this.deps.profilingAllowed(), false)) await this.startProfiling();
+        else this.detachQuietly();
+      }
     } catch (error) {
       this.sendEvent(buildCaptureFailedEvent({ gapMs, phase }));
       throw error;
@@ -684,6 +753,70 @@ export class RendererFreezeProfiler {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * BACKLOG-3785: a window freeze (Electron `unresponsive` -> `responsive`) of at
+ * least WINDOW_FREEZE_REPORT_MS, at any time — not only during a sync. Sends the
+ * same `renderer_freeze` event with NO frames (there is no profile), after a short
+ * delay so a profiled capture of the same freeze takes the shared slot first.
+ * Never throws.
+ */
+export function createWindowFreezeReporter(
+  deps: {
+    now?: () => number;
+    setTimeout?: (fn: () => void, ms: number) => unknown;
+    gate?: FreezeReportGate;
+    report?: (message: string, options: CaptureMessageOptions) => void;
+    screen?: () => string;
+    appVersion?: () => string;
+    platform?: () => string;
+    log?: (line: string) => void;
+  } = {},
+): (durationMs: number, phase: string | null) => void {
+  const now = deps.now ?? (() => Date.now());
+  const later = deps.setTimeout ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
+  const gate = deps.gate ?? freezeReportGate;
+  const report =
+    deps.report ??
+    ((message: string, options: CaptureMessageOptions) => {
+      if (!isCrashReportingEnabled()) return;
+      hostErrorReporter.captureMessage(message, options);
+    });
+  const log = deps.log ?? ((line: string) => logInfo(line));
+  return (durationMs, phase) => {
+    try {
+      if (!(durationMs >= WINDOW_FREEZE_REPORT_MS)) return;
+      // The screen the freeze happened on: read now, before the user navigates away.
+      const screen = (deps.screen ?? currentScreenName)();
+      later(() => {
+        try {
+          if (!gate.tryAcquire(now())) {
+            log(`[FreezeProfiler] window freeze ${durationMs}ms not reported: rate limited`);
+            return;
+          }
+          report(
+            FREEZE_EVENT_MESSAGE,
+            buildFreezeEvent({
+              gapMs: durationMs,
+              phase,
+              screen,
+              appVersion: (deps.appVersion ?? (() => app.getVersion()))(),
+              platform: (deps.platform ?? (() => process.platform))(),
+            }),
+          );
+        } catch (error) {
+          log(`[FreezeProfiler] window freeze report failed; ignored: ${describe(error)}`);
+        }
+      }, WINDOW_FREEZE_REPORT_DELAY_MS);
+    } catch {
+      // Telemetry only.
+    }
+  };
+}
+
+function logInfo(line: string): void {
+  log.info(line);
 }
 
 /** Process singleton, fed by the `sync:renderer-tick` handler. */
