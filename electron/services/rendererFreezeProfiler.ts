@@ -410,9 +410,9 @@ export class RendererFreezeProfiler {
     // Modern Electron passes details as args[0].isMainFrame; the legacy positional form has isMainFrame at args[3].
     const details = args[0] as { isMainFrame?: boolean; isSameDocument?: boolean } | undefined;
     const modern = typeof details?.isMainFrame === "boolean";
-    const isMainFrame = modern ? details!.isMainFrame === true : args[3] === true;
+    const isMainFrame = modern ? details?.isMainFrame === true : args[3] === true;
     // Same-document navigations (hash / pushState URL changes) keep the page alive; legacy form: isInPlace at args[2].
-    const isSameDocument = modern ? details!.isSameDocument === true : args[2] === true;
+    const isSameDocument = modern ? details?.isSameDocument === true : args[2] === true;
     if (!isMainFrame || isSameDocument) return;
     this.deps.log.info("[FreezeProfiler] main-frame navigation; profiler disarmed");
     this.lastTickAt = null;
