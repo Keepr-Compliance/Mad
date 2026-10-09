@@ -188,6 +188,12 @@ describe("Address verification rides net.fetch", () => {
   it("R8 Places autocomplete goes through net.fetch to maps-proxy, never to Google", async () => {
     process.env.SUPABASE_URL = "https://proj.supabase.test";
     process.env.SUPABASE_ANON_KEY = "test-anon-key";
+    // supabase-js builds a Realtime client on construction, which needs a native
+    // WebSocket (Node 22+, and Electron). CI runs jest on Node 20, so supply an
+    // inert one there. It is never opened: nothing here subscribes.
+    if (typeof (globalThis as { WebSocket?: unknown }).WebSocket === "undefined") {
+      (globalThis as { WebSocket?: unknown }).WebSocket = class {};
+    }
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const supabaseService = require("../supabaseService").default;
     const client = supabaseService.getClient();
