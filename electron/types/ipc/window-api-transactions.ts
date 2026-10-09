@@ -544,6 +544,21 @@ export interface WindowApiTransactions {
     communications?: Communication[];
     error?: string;
   }>;
+  /**
+   * BACKLOG-3785: communications changed since the caller's copy — the rows it
+   * does not hold (`added`) and the ids it holds that are gone (`removedIds`).
+   */
+  getCommunicationsDelta: (
+    transactionId: string,
+    channelFilter: "email" | "text",
+    knownIds: string[],
+  ) => Promise<{
+    success: boolean;
+    added?: Communication[];
+    removedIds?: string[];
+    total?: number;
+    error?: string;
+  }>;
   getWithContacts: (transactionId: string) => Promise<{
     success: boolean;
     transaction?: Transaction;

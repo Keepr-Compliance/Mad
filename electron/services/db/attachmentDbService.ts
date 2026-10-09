@@ -657,7 +657,10 @@ export function getTransactionAllAttachments(
        INNER JOIN communications c ON (
          (c.message_id IS NOT NULL AND c.message_id = m.id)
          OR
-         (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id AND m.user_id = c.user_id)
+         -- BACKLOG-3785: the plus in +m.user_id keeps the filter but stops the planner
+         -- driving this branch by user_id (no sqlite_stat1 = a scan of every
+         -- message of the user per link row: 12.1 s -> 21 ms for 175 rows).
+         (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id AND +m.user_id = c.user_id)
        )
        WHERE c.transaction_id = ?
          ${textFilter.clause}`

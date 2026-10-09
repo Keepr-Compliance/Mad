@@ -62,6 +62,11 @@ interface TransactionMessagesTabProps {
   /** Callback when messages are modified (attached/unlinked). Can be async for refresh. */
   onMessagesChanged?: () => void | Promise<void>;
   /**
+   * BACKLOG-3785: refresh after Attach Messages that fetches only the newly
+   * linked texts. When absent, attach falls back to onMessagesChanged.
+   */
+  onMessagesAttached?: () => void | Promise<void>;
+  /**
    * BACKLOG-1793: SILENT refresh after a removed conversation is restored
    * (refreshCommunicationsSilently("text")) — no loading flag, no spinner, the
    * scroll container never shifts. Mirrors the Emails tab's onRestoreComplete.
@@ -132,6 +137,7 @@ export function TransactionMessagesTab({
   transactionId,
   propertyAddress,
   onMessagesChanged,
+  onMessagesAttached,
   onRestoreComplete,
   onRemoveMessagesByIds,
   onShowSuccess,
@@ -392,14 +398,15 @@ export function TransactionMessagesTab({
   // Handle messages attached successfully
   const handleAttached = useCallback(
     (attachedMessageIds: string[]) => {
-      onMessagesChanged?.();
+      if (onMessagesAttached) void onMessagesAttached();
+      else void onMessagesChanged?.();
       const undoAction: NotificationAction | undefined =
         transactionId && attachedMessageIds.length > 0
           ? { label: "Undo", onClick: () => void undoAttachMessages(attachedMessageIds) }
           : undefined;
       onShowSuccess?.("Messages attached successfully", { action: undoAction });
     },
-    [onMessagesChanged, onShowSuccess, transactionId, undoAttachMessages]
+    [onMessagesAttached, onMessagesChanged, onShowSuccess, transactionId, undoAttachMessages]
   );
 
   // BACKLOG-3366: hide one text from (or put it back into) this transaction's

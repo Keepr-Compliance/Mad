@@ -12,6 +12,7 @@ import type {
 } from "../types";
 import { isTextMessage, isEmailMessage } from "@/utils/channelHelpers";
 import logger from '../../../utils/logger';
+import { mergeCommunicationsDelta } from "../utils/communicationsDelta";
 
 interface UseTransactionDetailsResult {
   // Data
@@ -35,6 +36,13 @@ interface UseTransactionDetailsResult {
    * contact path — a spinner here would collapse the expanded removed section.
    */
   refreshContactsSilently: () => Promise<void>;
+  /**
+   * BACKLOG-3785: bring one channel up to date by fetching only what changed
+   * (rows not held + ids gone) instead of every linked communication. No
+   * loading flag. Resolves false when it could not apply a delta (nothing held
+   * yet, or the call failed) so the caller can fall back to a full load.
+   */
+  applyCommunicationsDelta: (channelFilter: "email" | "text") => Promise<boolean>;
   setCommunications: React.Dispatch<React.SetStateAction<Communication[]>>;
   setResolvedSuggestions: React.Dispatch<React.SetStateAction<ResolvedSuggestedContact[]>>;
   updateSuggestedContacts: (remainingSuggestions: SuggestedContact[]) => Promise<void>;
@@ -170,6 +178,34 @@ export function useTransactionDetails(
       logger.error(`Failed to silently refresh ${channelFilter} communications:`, err);
     }
     // No setLoading() — intentionally loading-free.
+  }, [transaction.id]);
+
+  /**
+   * BACKLOG-3785: after Attach Messages on a large deal the full reload above
+   * re-downloaded every linked text (107 MB for 106k texts) and froze the
+   * window. Send the ids already held; receive only the difference. The main
+   * process computes it from the SAME reader as the full reload, so the merged
+   * list matches a reload.
+   */
+  const applyCommunicationsDelta = useCallback(async (channelFilter: "email" | "text"): Promise<boolean> => {
+    const isChannel = channelFilter === "text" ? isTextMessage : isEmailMessage;
+    const knownIds = communicationsRef.current.filter(isChannel).map((c) => c.id);
+    if (knownIds.length === 0) return false;
+    try {
+      const result = await window.api.transactions.getCommunicationsDelta(
+        transaction.id,
+        channelFilter,
+        knownIds,
+      );
+      if (!result.success) return false;
+      const added = (result.added ?? []) as Communication[];
+      const removedIds = result.removedIds ?? [];
+      setCommunications((prev) => mergeCommunicationsDelta(prev, isChannel, added, removedIds));
+      return true;
+    } catch (err) {
+      logger.error(`Failed to apply ${channelFilter} communications delta:`, err);
+      return false;
+    }
   }, [transaction.id]);
 
   /**
@@ -319,6 +355,7 @@ export function useTransactionDetails(
     loadCommunications,
     refreshCommunicationsSilently,
     refreshContactsSilently,
+    applyCommunicationsDelta,
     setCommunications,
     setResolvedSuggestions,
     updateSuggestedContacts,

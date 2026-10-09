@@ -143,6 +143,18 @@ export const transactionBridge = {
     ipcRenderer.invoke("transactions:get-communications", transactionId, channelFilter),
 
   /**
+   * BACKLOG-3785: only the communications that changed since the caller's copy
+   * (`knownIds`): `{ added, removedIds, total }`. Used after Attach Messages so
+   * the Texts tab does not re-download every linked text.
+   */
+  getCommunicationsDelta: (
+    transactionId: string,
+    channelFilter: "email" | "text",
+    knownIds: string[],
+  ) =>
+    ipcRenderer.invoke("transactions:get-communications-delta", transactionId, channelFilter, knownIds),
+
+  /**
    * Gets transaction with all associated contacts
    * @param transactionId - Transaction ID to retrieve
    * @returns Transaction with contacts

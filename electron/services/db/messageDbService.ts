@@ -248,6 +248,24 @@ export function getMessageContacts(userId: string): MessageContactRow[] {
 }
 
 /**
+ * BACKLOG-3785: the columns the Attach Messages picker gets back, instead of
+ * `m.*`. Picking 150 chats (30,703 messages) returned 33 MB to the renderer;
+ * structured clone writes every key of every row, so columns nothing in the
+ * renderer reads still cost bytes and decode time. Dropped here, none of them
+ * read from a message anywhere in src/: metadata, llm_analysis, classification_*,
+ * classified_at, false_positive_reason, stage_hint*, transaction_link_*,
+ * is_transaction_related, message_id_header, content_hash, duplicate_of,
+ * channel_account_id, sync_session_id, is_false_positive. Ids are untouched — Attach and Undo
+ * link exactly the ids shown.
+ */
+const PICKER_MESSAGE_COLUMNS = `
+      m.id, m.user_id, m.external_id, m.channel, m.direction, m.subject,
+      m.body_html, m.body_text, m.participants, m.participants_flat,
+      m.thread_id, m.sent_at, m.received_at, m.has_attachments,
+      m.transaction_id, m.message_type,
+      m.associated_message_type, m.associated_message_guid, m.created_at`;
+
+/**
  * Get unlinked messages for a specific contact (phone number)
  * Used after user selects a contact in the contact-first UI
  *
@@ -282,7 +300,7 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
   // message_thread_names join on (user_id, thread_id).
   if (threadIds.length === 0) {
     const fallbackSql = `
-      SELECT m.*, tn.display_name AS thread_display_name FROM messages m
+      SELECT ${PICKER_MESSAGE_COLUMNS}, tn.display_name AS thread_display_name FROM messages m
       LEFT JOIN message_thread_names tn ON tn.thread_id = m.thread_id AND tn.user_id = m.user_id
       WHERE m.user_id = ?
         AND m.transaction_id IS NULL
@@ -299,7 +317,7 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
 
   const placeholders = threadIds.map(() => '?').join(', ');
   const messagesSql = `
-    SELECT m.*, tn.display_name AS thread_display_name FROM messages m
+    SELECT ${PICKER_MESSAGE_COLUMNS}, tn.display_name AS thread_display_name FROM messages m
     LEFT JOIN message_thread_names tn ON tn.thread_id = m.thread_id AND tn.user_id = m.user_id
     WHERE m.user_id = ?
       AND m.transaction_id IS NULL
