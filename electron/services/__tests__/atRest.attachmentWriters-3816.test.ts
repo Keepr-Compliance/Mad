@@ -504,6 +504,35 @@ describe("macOS Messages attachments (macOSMessagesImportService.storeAttachment
   });
 });
 
+describe("reader: messages:get-attachments-batch (the text-thread viewer, ConversationViewModal)", () => {
+  it("returns the decrypted base64 of an ENCRYPTED stored attachment through the IPC handler", async () => {
+    macSchema();
+    const plain = fixture("jpeg");
+    const row = await macRow("view.jpg", plain, "m1");
+    await macStore("user-1", [row], new Map([["m1", "internal-1"]]));
+    const stored = mockDb
+      .prepare("SELECT id, message_id, filename, mime_type, file_size_bytes, storage_path FROM attachments")
+      .get() as { message_id: string; storage_path: string };
+    expect(await getAtRestFiles().isEncrypted(stored.storage_path)).toBe(true);
+    // The row lookup is DB plumbing outside this control; the file read is real.
+    jest
+      .spyOn(macOSMessagesImportService, "getAttachmentsByMessageIds")
+      .mockReturnValue(new Map([[stored.message_id, [stored as never]]]));
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { ipcMain } = require("electron") as { ipcMain: { handle: jest.Mock } };
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { registerMessageImportHandlers } = require("../../handlers/messageImportHandlers") as typeof import("../../handlers/messageImportHandlers");
+    registerMessageImportHandlers({} as never);
+    const call = ipcMain.handle.mock.calls.find((c) => c[0] === "messages:get-attachments-batch");
+    expect(call).toBeDefined();
+
+    const out = (await call![1]({}, [stored.message_id])) as Record<string, Array<{ data: string | null }>>;
+
+    expect(out[stored.message_id]).toHaveLength(1);
+    expect(Buffer.from(out[stored.message_id][0].data!, "base64").equals(plain)).toBe(true);
+  });
+});
+
 describe("macOS Messages — forged KEPRENC content and mid-copy changes (fix-up)", () => {
   it("F-R1: attachments whose content starts with KEPRENC are stored, sealed, and read back", async () => {
     macSchema();
