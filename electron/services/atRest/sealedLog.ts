@@ -184,6 +184,65 @@ export interface SealedLogReadResult {
   problems: LogProblem[];
 }
 
+export interface SealedRecordStep {
+  /** The authenticated plaintext of one record, or null when this step is a problem. */
+  text: Buffer | null;
+  problem?: LogProblem;
+  /** True when the problem ends the walk (torn tail, impossible length). */
+  fatal?: boolean;
+}
+
+/**
+ * Walk and decrypt a sealed log's records one at a time, in order. A record that
+ * fails authentication yields a problem and the walk continues; a torn tail or an
+ * impossible length yields a fatal problem and ends it. Lets a caller do the work
+ * in slices (see logScrub.trimSealedLogAsync).
+ */
+export function* sealedLogRecords(buf: Buffer, header: Buffer, fileKey: Buffer): Generator<SealedRecordStep> {
+  let off = LOG_HEADER_BYTES;
+  let index = 0;
+  while (off < buf.length) {
+    if (off + LEN_BYTES > buf.length) {
+      yield { text: null, fatal: true, problem: { kind: "torn", offset: off, message: "incomplete final record (write interrupted)" } };
+      return;
+    }
+    const len = buf.readUInt32BE(off);
+    if (len < NONCE_BYTES + TAG_BYTES || len > MAX_RECORD_BYTES + NONCE_BYTES + TAG_BYTES) {
+      yield {
+        text: null,
+        fatal: true,
+        problem: { kind: "integrity", offset: off, message: `record length ${len} is impossible; rest of file unreadable` },
+      };
+      return;
+    }
+    if (off + LEN_BYTES + len > buf.length) {
+      yield { text: null, fatal: true, problem: { kind: "torn", offset: off, message: "incomplete final record (write interrupted)" } };
+      return;
+    }
+    const body = buf.subarray(off + LEN_BYTES, off + LEN_BYTES + len);
+    const nonce = body.subarray(0, NONCE_BYTES);
+    const tag = body.subarray(body.length - TAG_BYTES);
+    const ct = body.subarray(NONCE_BYTES, body.length - TAG_BYTES);
+    let text: Buffer | null = null;
+    try {
+      const decipher = crypto.createDecipheriv("aes-256-gcm", fileKey, nonce);
+      decipher.setAAD(aadFor(header, index));
+      decipher.setAuthTag(tag);
+      text = Buffer.concat([decipher.update(ct), decipher.final()]);
+    } catch {
+      text = null;
+    }
+    if (text) yield { text };
+    else
+      yield {
+        text: null,
+        problem: { kind: "integrity", offset: off, message: `record ${index} failed authentication (altered, reordered or wrong key)` },
+      };
+    off += LEN_BYTES + len;
+    index++;
+  }
+}
+
 /**
  * Decrypt a sealed log. Every record is authenticated before its text is used;
  * a record that fails is reported and skipped (the length chain is still
@@ -219,45 +278,16 @@ export function openSealedLog(buf: Buffer, keyFor: (keyId: string) => Buffer | n
   const fileKey = deriveLogFileKey(dataKey, header.salt);
   const parts: Buffer[] = [];
   const problems: LogProblem[] = [];
-  let off = LOG_HEADER_BYTES;
-  let index = 0;
   let records = 0;
   let failed = 0;
-  while (off < buf.length) {
-    if (off + LEN_BYTES > buf.length) {
-      problems.push({ kind: "torn", offset: off, message: "incomplete final record (write interrupted)" });
-      break;
-    }
-    const len = buf.readUInt32BE(off);
-    if (len < NONCE_BYTES + TAG_BYTES || len > MAX_RECORD_BYTES + NONCE_BYTES + TAG_BYTES) {
-      problems.push({ kind: "integrity", offset: off, message: `record length ${len} is impossible; rest of file unreadable` });
-      break;
-    }
-    if (off + LEN_BYTES + len > buf.length) {
-      problems.push({ kind: "torn", offset: off, message: "incomplete final record (write interrupted)" });
-      break;
-    }
-    const body = buf.subarray(off + LEN_BYTES, off + LEN_BYTES + len);
-    const nonce = body.subarray(0, NONCE_BYTES);
-    const tag = body.subarray(body.length - TAG_BYTES);
-    const ct = body.subarray(NONCE_BYTES, body.length - TAG_BYTES);
-    try {
-      const decipher = crypto.createDecipheriv("aes-256-gcm", fileKey, nonce);
-      decipher.setAAD(aadFor(header.raw, index));
-      decipher.setAuthTag(tag);
-      const pt = Buffer.concat([decipher.update(ct), decipher.final()]);
-      parts.push(pt);
+  for (const step of sealedLogRecords(buf, header.raw, fileKey)) {
+    if (step.text) {
+      parts.push(step.text);
       records++;
-    } catch {
-      failed++;
-      problems.push({
-        kind: "integrity",
-        offset: off,
-        message: `record ${index} failed authentication (altered, reordered or wrong key)`,
-      });
+    } else if (step.problem) {
+      if (step.problem.kind === "integrity" && !step.fatal) failed++;
+      problems.push(step.problem);
     }
-    off += LEN_BYTES + len;
-    index++;
   }
   return { text: Buffer.concat(parts).toString("utf8"), keyId: header.keyId, records, failedRecords: failed, problems };
 }

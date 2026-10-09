@@ -49,16 +49,24 @@
  * (bootstrap/installAppDataPaths.ts) supplies it via {@link setLogDirectoryResolver}.
  */
 
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { performance } from "perf_hooks";
 import { redactLogText } from "../utils/redactSensitive";
 import type { AtRestKey } from "./atRest/fileCrypto";
 import {
   SEAL_TMP_RE,
+  MAX_RECORD_BYTES,
+  buildLogHeader,
+  deriveLogFileKey,
   isSealedLogFile,
   openSealedLog,
+  parseLogHeader,
   readFirstSealedRecord,
   replaceWithSealedLogSync,
+  sealLogRecord,
+  sealedLogRecords,
 } from "./atRest/sealedLog";
 import { archivePathFor, sealedTargetFor } from "./sealedLogSink";
 
@@ -382,6 +390,171 @@ export function setAsideSealedLiveLog(file: string, now: number = Date.now()): s
   const aside = path.join(p.dir, `${p.name}.sealed-${stamp}.old${p.ext}`);
   fs.renameSync(file, aside);
   return aside;
+}
+
+/** Longest stretch of trim work between yields to the event loop. */
+export const TRIM_SLICE_MS = 8;
+
+export interface AsyncTrimOptions {
+  /** Work budget per slice before yielding (ms). 0 = yield after every record. */
+  sliceMs?: number;
+  /** How to yield. Default: setImmediate (lets timers, IPC and input run). */
+  yieldFn?: () => Promise<void>;
+}
+
+const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+/**
+ * Retention for ONE sealed log, without blocking the main thread: records are
+ * decrypted, trimmed and resealed into a temp file in slices of at most
+ * `sliceMs`, yielding to the event loop between slices; the finished temp file is
+ * renamed over the original in one synchronous step.
+ *
+ * The caller must keep anything from appending to `file` until this resolves
+ * (the at-rest "logs" job pauses the sink). Lines sealed before the trim were
+ * redacted when written, so only retention is applied here.
+ *
+ * Entries older than the cutoff are dropped from the head, as {@link dropEntriesBefore}
+ * does, at line granularity inside the first kept record.
+ */
+export async function trimSealedLogAsync(
+  file: string,
+  now: number,
+  key: AtRestKey,
+  opts: AsyncTrimOptions = {},
+): Promise<FileOutcome> {
+  const sliceMs = opts.sliceMs ?? TRIM_SLICE_MS;
+  const yieldFn = opts.yieldFn ?? yieldToEventLoop;
+  const cutoff = now - LOG_RETENTION_DAYS * DAY_MS;
+  const isArchive = ARCHIVE_FILE_RE.test(path.basename(file));
+
+  const buf = fs.readFileSync(file);
+  const header = parseLogHeader(buf);
+  if (!header || header.keyId !== key.keyId) return "unreadable";
+  const records = sealedLogRecords(buf, header.raw, deriveLogFileKey(key.key, header.salt));
+
+  let sliceStart = performance.now();
+  const maybeYield = async (): Promise<void> => {
+    if (performance.now() - sliceStart >= sliceMs) {
+      await yieldFn();
+      sliceStart = performance.now();
+    }
+  };
+
+  // Pass 1: decrypt, find the first entry at or after the cutoff.
+  const kept: Buffer[] = [];
+  const noTimestampYet: Buffer[] = [];
+  let found = false;
+  let anyTimestamp = false;
+  let first = true;
+  let changed = false;
+  for (const step of records) {
+    if (!step.text) {
+      if (step.fatal && step.problem?.kind === "torn") {
+        changed = true;
+        break;
+      }
+      return "unreadable";
+    }
+    if (found) {
+      kept.push(step.text);
+    } else {
+      const lines = step.text.toString("utf8").split("\n");
+      let at = -1;
+      for (let i = 0; i < lines.length; i++) {
+        const t = parseLineTimestamp(lines[i]);
+        if (t === null) continue;
+        anyTimestamp = true;
+        if (t >= cutoff) {
+          at = i;
+          break;
+        }
+      }
+      if (at >= 0) {
+        found = true;
+        if (first && at === 0) {
+          kept.push(step.text);
+        } else {
+          changed = true;
+          kept.push(Buffer.from(lines.slice(at).join("\n"), "utf8"));
+        }
+      } else if (!anyTimestamp) {
+        noTimestampYet.push(step.text);
+      } else {
+        changed = true;
+        noTimestampYet.length = 0;
+      }
+    }
+    first = false;
+    await maybeYield();
+  }
+  if (!found) {
+    if (anyTimestamp) changed = true;
+    else kept.push(...noTimestampYet);
+  }
+  if (!changed) return "unchanged";
+  if (kept.length === 0 && isArchive) {
+    fs.unlinkSync(file);
+    return "deleted";
+  }
+
+  // Pass 2: reseal under a fresh salt into a temp file, in slices.
+  const tmp = `${file}.seal-${process.pid}-${Date.now()}.tmp`;
+  try {
+    const salt = crypto.randomBytes(16);
+    const newHeader = buildLogHeader(key.keyId, salt);
+    const fileKey = deriveLogFileKey(key.key, salt);
+    fs.writeFileSync(tmp, newHeader, { mode: 0o600 });
+    let index = 0;
+    let batch: Buffer[] = [];
+    for (const pt of kept) {
+      for (let start = 0; start < pt.length; start += MAX_RECORD_BYTES) {
+        batch.push(sealLogRecord(fileKey, newHeader, index++, pt.subarray(start, Math.min(start + MAX_RECORD_BYTES, pt.length))));
+      }
+      if (performance.now() - sliceStart >= sliceMs) {
+        fs.appendFileSync(tmp, Buffer.concat(batch));
+        batch = [];
+        await maybeYield();
+      }
+    }
+    if (batch.length) fs.appendFileSync(tmp, Buffer.concat(batch));
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* never created */
+    }
+    throw err;
+  }
+  return "rewritten";
+}
+
+/**
+ * The deferred half of launch maintenance: trim each named sealed log, one at a
+ * time, without blocking (see {@link trimSealedLogAsync}). Never throws.
+ */
+export async function runDeferredLogRetention(
+  logDir: string,
+  names: string[],
+  now: number,
+  key: AtRestKey,
+  opts: AsyncTrimOptions & { onReplaced?: (file: string) => void } = {},
+): Promise<LogMaintenanceResult> {
+  const result: LogMaintenanceResult = { deleted: [], rewritten: [], sealed: [], unreadable: [], deferred: [], errors: [] };
+  for (const name of names) {
+    const file = path.join(logDir, name);
+    try {
+      const outcome = await trimSealedLogAsync(file, now, key, opts);
+      if (outcome === "deleted") result.deleted.push(name);
+      if (outcome === "rewritten") result.rewritten.push(name);
+      if (outcome === "unreadable") result.unreadable.push(name);
+      if (outcome !== "unchanged") opts.onReplaced?.(file);
+    } catch (err) {
+      result.errors.push({ file: name, message: (err as Error).message });
+    }
+  }
+  return result;
 }
 
 let resolveLogDirectory: (() => string) | null = null;

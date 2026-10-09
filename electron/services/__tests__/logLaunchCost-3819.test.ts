@@ -14,7 +14,15 @@ import os from "os";
 import path from "path";
 
 import { SealedLogAppender, openSealedLog, sealLogText, LOG_HEADER_BYTES } from "../atRest/sealedLog";
-import { maintainLogFile, runLogMaintenance, SCRUB_MARKER, LOG_RETENTION_DAYS } from "../logScrub";
+import {
+  dropEntriesBefore,
+  maintainLogFile,
+  runDeferredLogRetention,
+  runLogMaintenance,
+  trimSealedLogAsync,
+  SCRUB_MARKER,
+  LOG_RETENTION_DAYS,
+} from "../logScrub";
 
 const KEY = { keyId: "99".repeat(16), key: Buffer.alloc(32, 9) };
 const keyFor = (id: string) => (id === KEY.keyId ? KEY.key : null);
@@ -88,3 +96,53 @@ describe("BACKLOG-3819 sealed log launch cost", () => {
     expect(runLogMaintenance(dir, NOW, { key: KEY, deferSealedRewrites: true }).deferred).toEqual(["main.log"]);
   });
 });
+
+describe("BACKLOG-3819 deferred trim does not block the main thread", () => {
+  function staleLines(n: number): string[] {
+    const out = [`${ts(NOW - 20 * DAY)} [info] too old\n`, `continuation of the old entry\n`];
+    for (let i = 0; i < n; i++) out.push(`${ts(NOW - DAY + i * 1000)} [info] kept ${i}\n`);
+    return out;
+  }
+
+  it("yields to the event loop while it works: a timer set during the trim fires before it finishes", async () => {
+    sealLines(main, staleLines(200));
+    let finished = false;
+    let timerSawFinished: boolean | null = null;
+    const trim = trimSealedLogAsync(main, NOW, KEY, { sliceMs: 0 }).then((o) => {
+      finished = true;
+      return o;
+    });
+    setTimeout(() => {
+      timerSawFinished = finished;
+    }, 0);
+    expect(await trim).toBe("rewritten");
+    expect(timerSawFinished).toBe(false);
+  });
+
+  it("same result as the synchronous trim (entries before the cutoff dropped, continuation lines with them)", async () => {
+    const lines = staleLines(50);
+    sealLines(main, lines);
+    expect(await trimSealedLogAsync(main, NOW, KEY, { sliceMs: 0 })).toBe("rewritten");
+    const read = openSealedLog(fs.readFileSync(main), keyFor);
+    expect(read.problems).toEqual([]);
+    expect(read.text).toBe(dropEntriesBefore(lines.join(""), NOW - LOG_RETENTION_DAYS * DAY));
+    expect(read.text).not.toContain("too old");
+    expect(read.text).not.toContain("continuation of the old entry");
+    // Fresh head now: nothing more to do.
+    expect(await trimSealedLogAsync(main, NOW, KEY)).toBe("unchanged");
+  });
+
+  it("an archive with nothing left is deleted; an unauthenticated file is left untouched", async () => {
+    const archive = path.join(dir, "main.old.log");
+    sealLines(archive, [`${ts(NOW - 20 * DAY)} [info] old only\n`]);
+    sealLines(main, staleLines(3));
+    corruptSecondRecord(main);
+    const before = fs.readFileSync(main);
+    const r = await runDeferredLogRetention(dir, ["main.old.log", "main.log"], NOW, KEY, { sliceMs: 0 });
+    expect(r.deleted).toEqual(["main.old.log"]);
+    expect(r.unreadable).toEqual(["main.log"]);
+    expect(fs.existsSync(archive)).toBe(false);
+    expect(fs.readFileSync(main).equals(before)).toBe(true);
+  });
+});
+

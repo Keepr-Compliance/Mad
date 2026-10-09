@@ -38,7 +38,7 @@
  */
 import { hostLogger } from "../../capabilities/loggerProvider";
 import { DataKeyUnavailableError, getDataKeyService } from "./dataKeyService";
-import { runConfiguredLogMaintenance } from "../logScrub";
+import { getConfiguredLogDirectory, runConfiguredLogMaintenance, runDeferredLogRetention } from "../logScrub";
 import { getLogSink, isLogSealingEnabled } from "../sealedLogSink";
 import type { AtRestKey } from "./fileCrypto";
 
@@ -167,14 +167,16 @@ const placeholder = (id: string, order: number, slice: string): AtRestJob => ({
 /** How long after the logs job a deferred log-retention pass runs (window is up by then). */
 export const DEFERRED_LOG_WORK_DELAY_MS = 60_000;
 
-const defaultLogWorkScheduler = (fn: () => void): void => {
-  const t = setTimeout(fn, DEFERRED_LOG_WORK_DELAY_MS) as { unref?: () => void };
+const defaultLogWorkScheduler = (fn: () => Promise<void>): void => {
+  const t = setTimeout(() => {
+    fn().catch(() => undefined);
+  }, DEFERRED_LOG_WORK_DELAY_MS) as { unref?: () => void };
   if (typeof t.unref === "function") t.unref();
 };
-let scheduleDeferredLogWork: (fn: () => void) => void = defaultLogWorkScheduler;
+let scheduleDeferredLogWork: (fn: () => Promise<void>) => void = defaultLogWorkScheduler;
 
 /** Tests only: capture deferred log work instead of running it on a timer. */
-export function setDeferredLogWorkSchedulerForTests(fn: ((work: () => void) => void) | null): void {
+export function setDeferredLogWorkSchedulerForTests(fn: ((work: () => Promise<void>) => void) | null): void {
   scheduleDeferredLogWork = fn ?? defaultLogWorkScheduler;
 }
 
@@ -236,21 +238,30 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
       }
       if (!r) return ctx.log("warn", "[AtRest] logs: no log directory registered; skipped");
       if (r.deferred.length > 0) {
-        // Retention on a sealed file = decrypt + reseal of up to 8 MB (~0.3 s,
-        // synchronous). Run it later, off the launch path. One synchronous call:
-        // no log line can be appended mid-replacement, and every replaced file is
-        // forgotten by the sink so its next append re-validates it.
-        scheduleDeferredLogWork(() => {
+        // Retention on a sealed file = decrypt + reseal of up to 8 MB. Run it later,
+        // off the launch path, and without blocking: one file at a time, in slices
+        // that yield to the event loop (logScrub.trimSealedLogAsync). The sink holds
+        // new lines in memory meanwhile, so nothing is appended to a file while it
+        // is being replaced; every replaced file is forgotten before writes resume.
+        const deferred = [...r.deferred];
+        const logDir = getConfiguredLogDirectory();
+        scheduleDeferredLogWork(async () => {
           const current = sink.currentKey;
-          if (!current) return;
-          const later = runConfiguredLogMaintenance(Date.now(), { key: current, onReplaced: (f) => sink.forget(f) });
-          if (later) {
-            ctx.log(
-              later.errors.length ? "warn" : "info",
-              `[AtRest] logs (deferred retention): rewritten ${later.rewritten.length}, ` +
-                `deleted ${later.deleted.length}, errors ${later.errors.length}`,
-            );
+          if (!current || !logDir) return;
+          sink.pause();
+          let later: Awaited<ReturnType<typeof runDeferredLogRetention>> | null = null;
+          try {
+            later = await runDeferredLogRetention(logDir, deferred, Date.now(), current, {
+              onReplaced: (f) => sink.forget(f),
+            });
+          } finally {
+            sink.resume();
           }
+          ctx.log(
+            later.errors.length ? "warn" : "info",
+            `[AtRest] logs (deferred retention): rewritten ${later.rewritten.length}, ` +
+              `deleted ${later.deleted.length}, errors ${later.errors.length}`,
+          );
         });
       }
       ctx.log(

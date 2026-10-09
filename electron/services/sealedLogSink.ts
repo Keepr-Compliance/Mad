@@ -69,6 +69,8 @@ export interface SealedLogSinkOptions {
 
 export class SealedLogSink {
   private mode: SealedLogSinkState = "pending";
+  /** Sealed mode, writes held in memory while a deferred trim replaces files. */
+  private paused = false;
   private buffer: Array<{ file: string; text: string; maxSize: number }> = [];
   private bufferedBytes = 0;
   private appender: SealedLogAppender | null = null;
@@ -106,6 +108,11 @@ export class SealedLogSink {
   /** One formatted line, including its line ending. */
   write(file: string, text: string, maxSize = 0): void {
     try {
+      if (this.mode === "sealed" && this.paused) {
+        this.buffer.push({ file, text, maxSize });
+        this.bufferedBytes += Buffer.byteLength(text, "utf8");
+        return;
+      }
       if (this.mode === "sealed") return this.writeSealed(file, text, maxSize);
       if (this.mode === "plaintext") return this.writePlain(file, text, maxSize);
       this.buffer.push({ file, text, maxSize });
@@ -147,8 +154,28 @@ export class SealedLogSink {
     this.spillBuffer();
   }
 
+  /**
+   * Hold sealed writes in memory while log files are replaced asynchronously
+   * (the deferred trim in atRest/startup.ts). Held lines are visible in
+   * {@link pendingLines} and written, in order, by {@link resume} or at exit.
+   */
+  pause(): void {
+    if (this.mode === "sealed") this.paused = true;
+  }
+
+  /** End {@link pause}: append everything held, in order. */
+  resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    const held = this.buffer;
+    this.buffer = [];
+    this.bufferedBytes = 0;
+    for (const item of held) this.write(item.file, item.text, item.maxSize);
+  }
+
   /** Exit (or startup failure) before the key opened: put held lines on disk, redacted. */
   flushAtExit(): void {
+    if (this.paused) return this.resume();
     if (this.mode !== "pending" || this.buffer.length === 0) return;
     try {
       this.spillBuffer();

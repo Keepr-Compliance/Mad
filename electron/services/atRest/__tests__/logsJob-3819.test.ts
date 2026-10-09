@@ -93,7 +93,7 @@ describe("BACKLOG-3819 at-rest logs job", () => {
 
   it("sealed main.log past retention: launch defers the trim; the deferred pass trims it and later lines stay readable", async () => {
     keyMode = "ok";
-    const deferred: Array<() => void> = [];
+    const deferred: Array<() => Promise<void>> = [];
     setDeferredLogWorkSchedulerForTests((fn) => deferred.push(fn));
     const old = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000);
     const p = (n: number) => String(n).padStart(2, "0");
@@ -110,13 +110,21 @@ describe("BACKLOG-3819 at-rest logs job", () => {
     expect(deferred).toHaveLength(1);
 
     getLogSink().write(main, "[2099-01-01 00:00:01.000] [info] before deferred pass\n");
-    deferred[0]();
+    const pass = deferred[0]();
+    // Written WHILE the trim is in flight: held in memory, appended after it.
+    getLogSink().write(main, "[2099-01-01 00:00:01.500] [info] during deferred pass\n");
+    expect(getLogSink().pendingLines.map((l) => l.text)).toEqual([
+      "[2099-01-01 00:00:01.500] [info] during deferred pass\n",
+    ]);
+    await pass;
+    expect(getLogSink().pendingLines).toHaveLength(0);
     getLogSink().write(main, "[2099-01-01 00:00:02.000] [info] after deferred pass\n");
     const read = openSealedLog(fs.readFileSync(main), (id) => (id === KEY.keyId ? KEY.key : null));
     expect(read.problems).toEqual([]);
     expect(read.text).not.toContain("past retention");
     expect(read.text).toContain("recent");
-    expect(read.text.indexOf("before deferred pass")).toBeLessThan(read.text.indexOf("after deferred pass"));
+    expect(read.text.indexOf("before deferred pass")).toBeLessThan(read.text.indexOf("during deferred pass"));
+    expect(read.text.indexOf("during deferred pass")).toBeLessThan(read.text.indexOf("after deferred pass"));
   });
 });
 
