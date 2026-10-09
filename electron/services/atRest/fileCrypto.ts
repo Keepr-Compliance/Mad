@@ -574,12 +574,10 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
     },
 
     async statPlaintext(filePath) {
-      const { encrypted, size } = await readMagic(filePath);
-      if (!encrypted) return { encrypted: false, size };
+      // BACKLOG-3816 S2: one open; the magic check and the header read use the same handle.
       const handle = await fs.promises.open(filePath, "r");
       try {
-        const header = parseHeader(await readExactly(handle, HEADER_BYTES, 0));
-        return { encrypted: true, size: layoutFor(size, header.chunkSize).plaintextSize };
+        return await api.statPlaintextFromHandle(handle);
       } finally {
         await handle.close();
       }
@@ -628,17 +626,28 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
     },
 
     async openDecryptStream(filePath, opts = {}) {
-      const magic = await readMagic(filePath);
-      if (!magic.encrypted) {
-        if (opts.requireEncrypted) refusePlaintext();
-        const { start, end } = resolveRange(opts, magic.size);
-        const stream =
-          end < start
-            ? Readable.from([])
-            : fs.createReadStream(filePath, { start, end });
-        return { stream, encrypted: false, size: magic.size, start, end };
+      // BACKLOG-3816 S2: ONE open. The encrypted/plaintext decision and every byte
+      // read come from the same handle, so a file replaced between the check and
+      // the read (the migration's rename) cannot hand back the other version's bytes.
+      const handle = await fs.promises.open(filePath, "r");
+      let opened: OpenedFile;
+      try {
+        const magic = await readMagicFromHandle(handle);
+        if (!magic.encrypted) {
+          if (opts.requireEncrypted) refusePlaintext();
+          const { start, end } = resolveRange(opts, magic.size);
+          if (end < start) {
+            await handle.close();
+            return { stream: Readable.from([]), encrypted: false, size: magic.size, start, end };
+          }
+          const stream = handle.createReadStream({ start, end, autoClose: true });
+          return { stream, encrypted: false, size: magic.size, start, end };
+        }
+        opened = await openEncryptedHandle(handle, true);
+      } catch (error) {
+        await handle.close().catch(() => undefined);
+        throw error;
       }
-      const opened = await openEncrypted(filePath);
       const size = opened.layout.plaintextSize;
       let range: { start: number; end: number };
       try {
@@ -664,12 +673,13 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
     },
 
     async readAllDecrypted(filePath, opts = {}) {
-      const magic = await readMagic(filePath);
-      if (!magic.encrypted) {
-        if (opts.requireEncrypted) refusePlaintext();
-        return fs.promises.readFile(filePath);
+      // BACKLOG-3816 S2: one open; decision and bytes from the same handle.
+      const handle = await fs.promises.open(filePath, "r");
+      try {
+        return await api.readAllDecryptedFromHandle(handle, opts);
+      } finally {
+        await handle.close().catch(() => undefined);
       }
-      return readAllFrom(await openEncrypted(filePath));
     },
 
     async statPlaintextFromHandle(handle) {

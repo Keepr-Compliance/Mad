@@ -74,7 +74,7 @@ const READ_APIS = new Set([
 type Entry = { count: number; reason: string };
 
 const S1 = "PENDING S1 — writes plaintext customer content under userData; S1 routes it through atRest";
-const EXPORT = "user-initiated export to a destination the user chose; plaintext by intent";
+const EXPORT = "user-chosen export — plaintext by design (founder requirement)";
 const SEALED = "content is already sealed (SecretStore / AES-GCM) before it is written";
 const META = "small cache/state file with no customer content";
 const SQLCIPHER = "copies/moves the SQLCipher-encrypted database file (ciphertext)";
