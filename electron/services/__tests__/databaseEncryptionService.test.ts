@@ -174,12 +174,20 @@ describe("DatabaseEncryptionService", () => {
 
       // Should have saved the key — exclusively: a "wx" temp file linked into
       // place, never a writeFileSync over the store (BACKLOG-3824).
-      expect(mockOpenSync).toHaveBeenCalledWith(expect.stringMatching(/\.tmp$/), "wx", 0o600);
+      expect(mockWriteFileSync).toHaveBeenCalledWith(
+        expect.stringMatching(/\.tmp$/),
+        expect.any(String),
+        expect.objectContaining({ flag: "wx", mode: 0o600 }),
+      );
       expect(mockLinkSync).toHaveBeenCalledWith(
         expect.stringMatching(/\.tmp$/),
         expect.stringMatching(/db-key-store\.json$/),
       );
-      expect(mockWriteFileSync).not.toHaveBeenCalled();
+      expect(mockWriteFileSync).not.toHaveBeenCalledWith(
+        expect.stringMatching(/db-key-store\.json$/),
+        expect.anything(),
+        expect.anything(),
+      );
       expect(mockEncryptString).toHaveBeenCalled();
     });
 

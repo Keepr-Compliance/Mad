@@ -371,9 +371,15 @@ export class DatabaseEncryptionService {
       // only the temp file behind, never a half-written store.
       const tmpPath = `${this.keyStorePath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
       try {
-        const fd = fs.openSync(tmpPath, "wx", 0o600); // Read/write only for owner
+        // writeFileSync (not openSync+writeSync) so the at-rest writer guard
+        // still counts this site. "wx": a stale temp name is never reused.
+        fs.writeFileSync(tmpPath, JSON.stringify(keyStore, null, 2), {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 0o600, // Read/write only for owner
+        });
+        const fd = fs.openSync(tmpPath, "r+");
         try {
-          fs.writeSync(fd, JSON.stringify(keyStore, null, 2));
           fs.fsyncSync(fd);
         } finally {
           fs.closeSync(fd);
