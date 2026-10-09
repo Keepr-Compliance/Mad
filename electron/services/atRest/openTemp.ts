@@ -27,20 +27,51 @@ export function openTempRoot(userData: string): string {
   return path.join(userData, AT_REST_OPEN_DIR);
 }
 
-/** A display-safe file name: no separators, no control characters, bounded length. */
-export function safeOpenName(name: string | null | undefined, fallback: string): string {
-  const pick = (n: string | null | undefined) =>
-    (path.basename((n ?? "").replace(/\\/g, "/")))
+/** Windows device names: reserved with or without an extension ("NUL.txt" opens the NUL device). */
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+function cleanStem(n: string | null | undefined): string {
+  return (
+    path
+      .basename((n ?? "").replace(/\\/g, "/"))
       // eslint-disable-next-line no-control-regex
       .replace(/[\x00-\x1f<>:"|?*]/g, "_")
       .replace(/^\.+/, "")
-      .trim();
-  let out = pick(name) || pick(fallback) || "attachment";
-  if (out.length > 150) {
-    const ext = path.extname(out).slice(0, 20);
-    out = out.slice(0, 150 - ext.length) + ext;
-  }
-  return out;
+      // Windows drops trailing dots and spaces from a name, so "a. " is "a".
+      .replace(/[. ]+$/, "")
+      .trim()
+  );
+}
+
+/**
+ * A display-safe file name for a decrypted open-copy: no separators, no control
+ * characters, no Windows device name, no trailing dot/space, bounded length.
+ *
+ * `storedExt` is the extension of the STORED file (what the writer chose); it
+ * always wins over whatever extension the database name carries, so the viewer
+ * opens the same type the file really is. The database name contributes only
+ * its stem.
+ */
+export function safeOpenName(
+  name: string | null | undefined,
+  fallback: string,
+  storedExt?: string,
+): string {
+  const forced = storedExt !== undefined;
+  const ext = forced ? storedExt.replace(/[^A-Za-z0-9.]/g, "").replace(/^\.+/, "").slice(0, 20) : "";
+  const extWithDot = ext ? `.${ext}` : "";
+  const split = (n: string | null | undefined): { stem: string; own: string } => {
+    const cleaned = cleanStem(n);
+    const own = path.extname(cleaned);
+    return { stem: own ? cleaned.slice(0, -own.length) : cleaned, own: own.slice(0, 20) };
+  };
+  const pick = split(name).stem ? split(name) : split(fallback);
+  const useExt = forced ? extWithDot : pick.own;
+  let stem = (pick.stem || "attachment").slice(0, Math.max(1, 150 - useExt.length));
+  stem = stem.replace(/[. ]+$/, "") || "attachment";
+  // "CON" and "con.tar" are devices on Windows: only the part before the first dot counts.
+  if (WINDOWS_RESERVED.test(stem.split(".")[0])) stem = `_${stem}`;
+  return `${stem}${useExt}`;
 }
 
 /** Destination for one decrypted copy. Each open gets its own sub-directory so names never collide. */

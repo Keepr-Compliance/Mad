@@ -67,6 +67,7 @@ import {
   isGroupChat,
   generateTextThreadHTML,
   resolveInlineImages,
+  newInlineImageBudget,
 } from "./textExportHelpers";
 import { threadNaming } from "./threadContactLabel";
 // BACKLOG-2161: emails group by the SAME key the app uses on-screen so the
@@ -1275,6 +1276,8 @@ class FolderExportService {
         }
 
         let textIdx = 0;
+        // One embed budget for the whole combined PDF (not per thread).
+        const inlineImageBudget = newInlineImageBudget();
         for (const msgs of orderedThreads) {
           const contact = getThreadContact(msgs, phoneNameMap);
           const groupChat = isGroupChat(msgs);
@@ -1284,7 +1287,7 @@ class FolderExportService {
             : undefined;
           const sectionId = textThreadSectionId(textIdx);
           // BACKLOG-3816 S2: images decrypted into data: URIs first.
-          const threadAttachments = await resolveInlineImages(msgs, getAttachmentsForMessage);
+          const threadAttachments = await resolveInlineImages(msgs, getAttachmentsForMessage, inlineImageBudget);
           sections.push({
             id: sectionId,
             html: generateTextThreadHTML(

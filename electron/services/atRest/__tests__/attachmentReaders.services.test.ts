@@ -75,7 +75,14 @@ import type { Communication } from "../../../types/models";
 import { extractTextForAttachment } from "../../attachmentTextExtractionService";
 import { exportEmailAttachmentsToThreadDirs } from "../../folderExport/attachmentHelpers";
 import folderExportService from "../../folderExport/folderExportService";
-import { generateTextThreadHTML, resolveInlineImages } from "../../folderExport/textExportHelpers";
+import logService from "../../logService";
+import {
+  generateTextThreadHTML,
+  resolveInlineImages,
+  MAX_TOTAL_INLINE_IMAGE_BYTES,
+  MAX_INLINE_IMAGE_BYTES,
+  newInlineImageBudget,
+} from "../../folderExport/textExportHelpers";
 import { runSubmissionPreflight, setPreflightStatForTests } from "../../submissionPreflight";
 import supabaseStorageService from "../../supabaseStorageService";
 import { setAttachmentReaderDepsForTests } from "../attachmentReader";
@@ -207,6 +214,56 @@ describe("R6 text export HTML", () => {
     );
     expect(html).toContain("[Image: gone.jpg - file not found]");
     expect(html).not.toContain("file://");
+  });
+});
+
+describe("R6 fix-ups: unreadable images and the embed budget", () => {
+  const render = (lookup: Awaited<ReturnType<typeof resolveInlineImages>>, msgs = [textComm()]) =>
+    generateTextThreadHTML(msgs, { phone: "+15550100", name: "Pat" }, {}, false, 0, { hiddenTextCount: 0 }, undefined, lookup);
+
+  it("a tampered encrypted image logs a typed error (no path) and reads as unverifiable, not 'not found'", async () => {
+    const bytes = fs.readFileSync(encJpeg);
+    bytes[bytes.length - 3] ^= 0xff; // damage the last chunk's tag
+    fs.writeFileSync(encJpeg, bytes);
+    mockAttachmentRows.push({
+      id: "a9", filename: "tampered.jpg", mime_type: "image/jpeg", storage_path: encJpeg, file_size_bytes: 1,
+    });
+    (logService.error as jest.Mock).mockClear();
+    const msgs = [textComm()];
+    const html = render(await resolveInlineImages(msgs, () => mockAttachmentRows as never), msgs);
+    expect(html).toContain("[Image: tampered.jpg - could not be decrypted or verified]");
+    expect(html).not.toContain("file not found");
+    expect(html).not.toContain("data:image");
+    const calls = (logService.error as jest.Mock).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][2]).toEqual({ errorType: "AtRestIntegrityError" });
+    expect(JSON.stringify(calls[0])).not.toContain(userData);
+    expect(JSON.stringify(calls[0])).not.toContain("tampered.jpg");
+  });
+
+  it("the attachment_only branch also shows a placeholder for an unembeddable image", async () => {
+    mockAttachmentRows.push({
+      id: "a10", filename: "gone2.jpg", mime_type: "image/jpeg", storage_path: path.join(userData, "message-attachments", "gone2.jpg"), file_size_bytes: 1,
+    });
+    const msg = { ...textComm(), body_text: "", message_type: "attachment_only" } as unknown as Communication;
+    const html = render(await resolveInlineImages([msg], () => mockAttachmentRows as never), [msg]);
+    expect(html).toContain("[Image: gone2.jpg - file not found]");
+  });
+
+  it("past the total embed cap an image becomes a placeholder and the export still succeeds", async () => {
+    const msgs = [textComm()];
+    const budget = newInlineImageBudget();
+    expect(budget.remaining).toBe(MAX_TOTAL_INLINE_IMAGE_BYTES);
+    budget.remaining = JPEG.length; // room for exactly one image
+    mockAttachmentRows.push(
+      { id: "b1", filename: "one.jpg", mime_type: "image/jpeg", storage_path: encJpeg, file_size_bytes: 1 },
+      { id: "b2", filename: "two.jpg", mime_type: "image/jpeg", storage_path: encJpeg, file_size_bytes: 1 },
+    );
+    const html = render(await resolveInlineImages(msgs, () => mockAttachmentRows as never, budget), msgs);
+    expect(html.match(/src="data:image\/jpeg/g)).toHaveLength(1);
+    expect(html).toContain("[Image: two.jpg - omitted to keep this export a manageable size]");
+    expect(budget.remaining).toBe(0);
+    expect(MAX_TOTAL_INLINE_IMAGE_BYTES).toBeGreaterThan(MAX_INLINE_IMAGE_BYTES);
   });
 });
 

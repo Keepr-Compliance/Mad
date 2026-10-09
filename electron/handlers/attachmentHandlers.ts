@@ -472,7 +472,11 @@ export function registerAttachmentHandlers(
 
       // BACKLOG-3816 S2: an external viewer needs plaintext, so decrypt into a
       // per-run temp dir (removed on quit and at the next launch) and open that.
-      const displayName = safeOpenName(originalNameFor(storagePath), path.basename(normalizedPath));
+      const displayName = safeOpenName(
+        originalNameFor(storagePath),
+        path.basename(normalizedPath),
+        path.extname(normalizedPath),
+      );
       const openCopy = await nextOpenPath(attachmentUserData(), displayName);
       await decryptContainedAttachmentTo(resolved, openCopy);
 

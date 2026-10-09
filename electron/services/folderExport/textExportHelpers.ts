@@ -4,6 +4,7 @@
  * Extracted from folderExportService.ts for maintainability.
  */
 
+import logService from "../logService";
 import { readStoredAttachment, statStoredAttachment } from "../atRest/attachmentReader";
 import type { Communication } from "../../types/models";
 import { isEmailMessage } from "../../utils/channelHelpers";
@@ -34,6 +35,24 @@ import { exportNoticesHtml, type ExportOmissions } from "../exportNotices";
  */
 export const MAX_INLINE_IMAGE_BYTES = 10 * 1024 * 1024;
 
+/**
+ * BACKLOG-3816 S2: total plaintext image bytes embedded across one export HTML
+ * (the combined PDF shares one budget across every thread). 50 MiB of images is
+ * about 67 MB of base64 in the HTML string. Past it, an image is NOT embedded and
+ * gets a "omitted to keep the export a manageable size" placeholder line; the
+ * export itself still succeeds.
+ */
+export const MAX_TOTAL_INLINE_IMAGE_BYTES = 50 * 1024 * 1024;
+
+/** Remaining embed allowance, shared by every resolveInlineImages call that is passed the same object. */
+export interface InlineImageBudget {
+  remaining: number;
+}
+
+export function newInlineImageBudget(): InlineImageBudget {
+  return { remaining: MAX_TOTAL_INLINE_IMAGE_BYTES };
+}
+
 /** An attachment row as the text export reads it. */
 export interface TextExportAttachment {
   id: string;
@@ -47,7 +66,7 @@ export interface TextExportAttachment {
    * longer reference them by file://.
    */
   inline_src?: string | null;
-  inline_status?: "embedded" | "missing" | "too_large";
+  inline_status?: "embedded" | "missing" | "too_large" | "unreadable" | "over_budget";
 }
 
 export type TextExportAttachmentLookup = (
@@ -65,6 +84,7 @@ const SAFE_IMAGE_MIME = /^image\/[a-z0-9.+-]+$/i;
 export async function resolveInlineImages(
   msgs: Communication[],
   lookup: TextExportAttachmentLookup | undefined,
+  budget: InlineImageBudget = newInlineImageBudget(),
 ): Promise<TextExportAttachmentLookup | undefined> {
   if (!lookup) return undefined;
   const resolved = new Map<string, TextExportAttachment[]>();
@@ -82,7 +102,7 @@ export async function resolveInlineImages(
         out.push(att);
         continue;
       }
-      out.push({ ...att, ...(await inlineImage(att)) });
+      out.push({ ...att, ...(await inlineImage(att, budget)) });
     }
     resolved.set(key, out);
   }
@@ -92,17 +112,44 @@ export async function resolveInlineImages(
 
 async function inlineImage(
   att: TextExportAttachment,
+  budget: InlineImageBudget,
 ): Promise<Pick<TextExportAttachment, "inline_src" | "inline_status">> {
   const stat = await statStoredAttachment(att.storage_path as string);
   if (!stat) return { inline_src: null, inline_status: "missing" };
   if (stat.size > MAX_INLINE_IMAGE_BYTES) return { inline_src: null, inline_status: "too_large" };
+  if (stat.size > budget.remaining) return { inline_src: null, inline_status: "over_budget" };
   try {
     const bytes = await readStoredAttachment(att.storage_path as string);
+    if (bytes.length > budget.remaining) return { inline_src: null, inline_status: "over_budget" };
+    budget.remaining -= bytes.length;
     const mime = SAFE_IMAGE_MIME.test(att.mime_type ?? "") ? att.mime_type : "image/jpeg";
     return { inline_src: `data:${mime};base64,${bytes.toString("base64")}`, inline_status: "embedded" };
-  } catch {
-    return { inline_src: null, inline_status: "missing" };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return { inline_src: null, inline_status: "missing" };
+    }
+    // An integrity failure (tamper / wrong key) must not read as a missing file.
+    // Typed name only: no path, file name or message text (those can carry customer data).
+    logService.error(
+      "[Export] attachment image could not be read or decrypted; export continues with a placeholder",
+      "Export",
+      { errorType: error instanceof Error ? error.name : "UnknownError" },
+    );
+    return { inline_src: null, inline_status: "unreadable" };
   }
+}
+
+/** The line shown in place of an image that was not embedded; each cause reads differently. */
+function imagePlaceholderHtml(att: TextExportAttachment): string {
+  const reason =
+    att.inline_status === "too_large"
+      ? "too large to embed"
+      : att.inline_status === "over_budget"
+        ? "omitted to keep this export a manageable size"
+        : att.inline_status === "unreadable"
+          ? "could not be decrypted or verified"
+          : "file not found";
+  return `<div class="attachment-ref">[Image: ${escapeHtml(att.filename)} - ${reason}]</div>`;
 }
 
 /**
@@ -115,7 +162,6 @@ async function inlineImage(
 export type MatchedNamesLookup = (
   handle: string | null | undefined
 ) => readonly string[];
-import logService from "../logService";
 
 /**
  * BACKLOG-2280: render a minimal, evidentiary reactions line for a message's
@@ -822,10 +868,8 @@ export function generateTextMessageHTML(
         // resolveInlineImages — never file://, the stored file may be ciphertext.
         if (att.inline_src) {
           attachmentHtml += `<div class="attachment-image"><img src="${att.inline_src}" alt="${escapeHtml(att.filename)}" /></div>`;
-        } else if (att.inline_status === "too_large") {
-          attachmentHtml += `<div class="attachment-ref">[Image: ${escapeHtml(att.filename)} - too large to embed]</div>`;
         } else {
-          attachmentHtml += `<div class="attachment-ref">[Image: ${escapeHtml(att.filename)} - file not found]</div>`;
+          attachmentHtml += imagePlaceholderHtml(att);
         }
       } else {
         // Non-image attachment - show reference with specific type
@@ -836,8 +880,10 @@ export function generateTextMessageHTML(
   } else {
     // For attachment_only, still show inline images
     for (const att of attachments) {
-      if (att.mime_type?.startsWith("image/") && att.storage_path && att.inline_src) {
-        attachmentHtml += `<div class="attachment-image"><img src="${att.inline_src}" alt="${escapeHtml(att.filename)}" /></div>`;
+      if (att.mime_type?.startsWith("image/") && att.storage_path) {
+        attachmentHtml += att.inline_src
+          ? `<div class="attachment-image"><img src="${att.inline_src}" alt="${escapeHtml(att.filename)}" /></div>`
+          : imagePlaceholderHtml(att);
       }
     }
   }

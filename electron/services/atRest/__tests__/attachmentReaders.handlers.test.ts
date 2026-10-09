@@ -200,7 +200,7 @@ describe("R3 open + O1 cleanup", () => {
     expect(openedPaths).toHaveLength(1);
     const opened = openedPaths[0];
     expect(opened.bytes.equals(PLAIN)).toBe(true);
-    expect(path.basename(opened.path)).toBe("Contract Final.pdf");
+    expect(path.basename(opened.path)).toBe("Contract Final.jpg"); // stem from the DB name, extension of the STORED file (.jpg)
     expect(isInside(opened.path, path.join(userData, AT_REST_OPEN_DIR))).toBe(true);
   });
 

@@ -699,14 +699,19 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
     },
 
     async decryptToFile(srcPath, destPath, opts = {}) {
-      const { stream, encrypted, size } = await api.openDecryptStream(srcPath, {
-        requireEncrypted: opts.requireEncrypted,
-      });
+      // BACKLOG-3816 S2: the destination is prepared BEFORE the source is opened. A
+      // stream opened first and then orphaned by a mkdir/open failure is never
+      // closed (an encrypted stream's generator has not started, so its finally
+      // never runs); every failure below this point owns only the temp handle.
       await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
       const tmp = tmpPathFor(destPath);
-      let handle: fs.promises.FileHandle | null = null;
+      let handle: fs.promises.FileHandle | null = await fs.promises.open(tmp, "wx", 0o600);
+      let stream: Readable | null = null;
       try {
-        handle = await fs.promises.open(tmp, "wx", 0o600);
+        const opened = await api.openDecryptStream(srcPath, {
+          requireEncrypted: opts.requireEncrypted,
+        });
+        stream = opened.stream;
         for await (const piece of stream) {
           await handle.write(piece as Buffer);
         }
@@ -714,9 +719,9 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
         await handle.close();
         handle = null;
         await renameWithRetry(tmp, destPath);
-        return { size, encrypted };
+        return { size: opened.size, encrypted: opened.encrypted };
       } catch (error) {
-        stream.destroy();
+        stream?.destroy();
         await handle?.close().catch(() => undefined);
         await fs.promises.unlink(tmp).catch(() => undefined);
         throw error;
