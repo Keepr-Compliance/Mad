@@ -168,7 +168,7 @@ maybe("BACKLOG-3785: storeAttachments setup keeps the main event loop responsive
     nodeFs.rmSync(DB_DIR, { recursive: true, force: true });
   });
 
-  it("an incremental sync whose 20k attachments are all stored: every one skipped as already stored, no stall over 250 ms", async () => {
+  it("an incremental sync whose 20k attachments are all stored: every one skipped as already stored, no long stall", async () => {
     const messages: iOSMessage[] = [];
     for (let i = 0; i < MESSAGES; i++) messages.push(makeMessage(i));
 
@@ -189,15 +189,20 @@ maybe("BACKLOG-3785: storeAttachments setup keeps the main event loop responsive
     await new Promise((resolve) => setTimeout(resolve, 50));
     histogram.disable();
     const maxBlockMs = Math.round(histogram.max / 1e6);
+    const wallMs = Date.now() - started;
     // tests/setup.js silences console; the measurement is the point, so stderr.
     process.stderr.write(
       `[3785] storeAttachments ${MESSAGES} msgs / ${MESSAGES / WITH_ATTACHMENT_EVERY} atts: ` +
-        `wall=${Date.now() - started}ms maxEventLoopDelay=${maxBlockMs}ms\n`,
+        `wall=${wallMs}ms maxEventLoopDelay=${maxBlockMs}ms\n`,
     );
 
     expect(result.stored).toBe(0);
     expect(result.skippedByReason.alreadyStored).toBe(MESSAGES / WITH_ATTACHMENT_EVERY);
     expect(result.skipped).toBe(MESSAGES / WITH_ATTACHMENT_EVERY);
-    expect(maxBlockMs).toBeLessThan(250);
+    // Measured on an arm64 Mac: 24 ms with the yields, 344 ms with them removed,
+    // 639 ms before this change. A slower CI runner stretches both, so the bound
+    // is 250 ms OR a quarter of the run, whichever is larger: without yields the
+    // longest stall is most of the run (344 of 413 ms), so it still fails.
+    expect(maxBlockMs).toBeLessThan(Math.max(250, wallMs * 0.25));
   }, 180_000);
 });
