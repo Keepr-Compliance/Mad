@@ -76,6 +76,11 @@ function sharedGetPathLiterals(source: string): string[] {
   return hits;
 }
 
+/** Repo-relative path with forward slashes, whatever the platform separator (Windows: backslash). */
+function toPosix(rel: string, sep: string): string {
+  return rel.split(sep).join("/");
+}
+
 function walk(dir: string, out: string[]): void {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "node_modules") continue;
@@ -103,6 +108,24 @@ describe("at-rest test isolation (BACKLOG-3816 S4-C B1)", () => {
     expect(sharedGetPathLiterals(`getPath: jest.fn().mockReturnValue("/mock/userData"),`)).toEqual([]);
   });
 
+  it("detector holds under Windows conditions: CRLF sources, backslash paths", () => {
+    const crlf = (t: string) => t.replace(/\n/g, "\r\n");
+    expect(sharedGetPathLiterals(crlf(`  getPath: jest.fn().mockReturnValue("/tmp"),\n`))).toHaveLength(1);
+    expect(
+      sharedGetPathLiterals(
+        crlf(`getPath: jest.fn((name: string) => {\n  const base = name;\n  return "/tmp/" + base;\n}),\n`),
+      ),
+    ).toHaveLength(1);
+    expect(sharedGetPathLiterals(crlf(`getPath: jest.fn(() => "C:\\Users\\x\\keepr"),\n`))).toHaveLength(1);
+    expect(sharedGetPathLiterals(crlf(`getPath: jest.fn().mockReturnValue("/mock/userData"),\n`))).toEqual([]);
+    // Line numbers are unaffected by \r.
+    expect(sharedGetPathLiterals(crlf(`a\nb\ngetPath: () => "/tmp",\n`))[0]).toMatch(/^3: /);
+    // The relative path the scan reports is slash-normalised on Windows.
+    expect(toPosix(path.win32.relative("C:\\r", "C:\\r\\electron\\services\\__tests__\\a.test.ts"), path.win32.sep)).toBe(
+      "electron/services/__tests__/a.test.ts",
+    );
+  });
+
   it("no suite that reaches the at-rest stores mocks userData as a shared fixed path", () => {
     const files: string[] = [];
     walk(SCAN_ROOT, files);
@@ -110,7 +133,7 @@ describe("at-rest test isolation (BACKLOG-3816 S4-C B1)", () => {
     const violations: string[] = [];
     for (const file of files) {
       const source = fs.readFileSync(file, "utf8");
-      const rel = path.relative(REPO, file);
+      const rel = toPosix(path.relative(REPO, file), path.sep);
       if (source.includes("\u0000")) {
         violations.push(`${rel}: contains a NUL byte; cannot be scanned reliably`);
         continue;
