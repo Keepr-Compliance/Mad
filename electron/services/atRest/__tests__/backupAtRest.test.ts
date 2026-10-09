@@ -578,6 +578,45 @@ describe("B2: unreadable kept backup → quarantine + full backup", () => {
     expect(s.busyReason(UDID)).toBeNull();
   });
 
+  it("X1: a chain whose re-seal did not finish is NOT moved to quarantine (no plaintext at rest there); the marker stays", async () => {
+    makeChain();
+    await service().migrate(UDID);
+    flipByteInChunk(smsFile());
+    // The attachment file opens fine during the unseal but cannot be sealed again (EIO).
+    const flaky = {
+      ...files,
+      encryptFileInPlace: async (p: string) => {
+        if (p.endsWith(OTHER_ID)) throw Object.assign(new Error("i/o"), { code: "EIO" });
+        return files.encryptFileInPlace(p);
+      },
+    };
+    const s = service({ files: () => flaky, now: () => T0 });
+    await expect(s.beginSync(UDID, { strategy: "full" })).rejects.toMatchObject({ reason: "unreadable" });
+    const quarantineRoot = path.join(backups, QUARANTINE_DIR_NAME);
+    expect(fs.existsSync(quarantineRoot)).toBe(false);
+    expect(fs.existsSync(path.join(chain, "Manifest.db"))).toBe(true);
+    // Marker keeps saying `syncing`, so the next launch/sync seals the leftover plaintext.
+    expect(await readMarkerAt(backups, UDID)).toBe("syncing");
+    expect(s.busyReason(UDID)).toBeNull();
+  });
+
+  it("deleteOldestQuarantined removes the oldest quarantined copy only, and reports when none is left", async () => {
+    const root = path.join(backups, QUARANTINE_DIR_NAME);
+    const older = path.join(root, `${UDID}-${T0 - 5_000}`);
+    const newer = path.join(root, `${UDID}-${T0 - 1_000}`);
+    for (const d of [newer, older]) {
+      fs.mkdirSync(path.join(d, "ab"), { recursive: true });
+      fs.writeFileSync(path.join(d, "ab", "x"), "sealed bytes");
+    }
+    const s = service({ now: () => T0 });
+    expect(await s.deleteOldestQuarantined()).toBe(true);
+    expect(fs.existsSync(older)).toBe(false);
+    expect(fs.existsSync(newer)).toBe(true);
+    expect(await s.deleteOldestQuarantined()).toBe(true);
+    expect(fs.existsSync(newer)).toBe(false);
+    expect(await s.deleteOldestQuarantined()).toBe(false);
+  });
+
   it("launch deletes quarantined chains older than 30 days and keeps younger ones", async () => {
     const root = path.join(backups, QUARANTINE_DIR_NAME);
     const old = path.join(root, `${UDID}-${T0 - QUARANTINE_MAX_AGE_MS - 60_000}`);
@@ -602,13 +641,13 @@ describe("B2: unreadable kept backup → quarantine + full backup", () => {
 // ---------------------------------------------------------------------------
 // Should-fix: the lock is claimed before the new-chain step moves the chain
 // ---------------------------------------------------------------------------
-describe("per-phone lock covers the new-chain step (prepare)", () => {
-  it("a launch migration during prepare stands aside; the chain is not moved under it", async () => {
+describe("per-phone lock covers the new-chain step (underLock)", () => {
+  it("a launch migration during underLock stands aside; the chain is not moved under it", async () => {
     makeChain();
     const s = service();
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const begun = s.beginSync(UDID, { strategy: "full", prepare: () => gate });
+    const begun = s.beginSync(UDID, { strategy: "full", underLock: () => gate });
     await new Promise((r) => setImmediate(r));
     expect(await s.migrate(UDID)).toBe("busy");
     release();
@@ -617,11 +656,11 @@ describe("per-phone lock covers the new-chain step (prepare)", () => {
     expect(s.busyReason(UDID)).toBeNull();
   });
 
-  it("an error in prepare propagates unchanged (not a refusal) and releases the lock", async () => {
+  it("an error in underLock propagates unchanged (not a refusal) and releases the lock", async () => {
     makeChain();
     const s = service();
     const boom = new Error("move failed");
-    await expect(s.beginSync(UDID, { prepare: async () => { throw boom; } })).rejects.toBe(boom);
+    await expect(s.beginSync(UDID, { underLock: async () => { throw boom; } })).rejects.toBe(boom);
     expect(s.busyReason(UDID)).toBeNull();
   });
 });

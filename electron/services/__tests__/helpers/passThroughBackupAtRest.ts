@@ -12,9 +12,9 @@
  */
 export const passThroughBackupAtRest = {
   busyReason: () => null,
-  // `prepare` is the orchestrator's new-chain step, run under the per-phone lock.
-  beginSync: async (udid: string, opts?: { prepare?: () => Promise<void> }) => {
-    if (opts?.prepare) await opts.prepare();
+  // `underLock` is the orchestrator's new-chain step, run under the per-phone lock.
+  beginSync: async (udid: string, opts?: { underLock?: () => Promise<void> }) => {
+    if (opts?.underLock) await opts.underLock();
     return { kind: "none" as const, udid };
   },
   finishSync: async () => undefined,

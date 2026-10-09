@@ -1610,10 +1610,10 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // the backup is being secured (launch migration or the seal after the previous
       // sync), there is no room, or a sealed file will not open.
       // The new-chain step (BACKLOG-3816: move the old chain aside or delete it) runs as
-      // `prepare`, i.e. AFTER the per-phone lock is claimed, so a launch migration cannot
+      // `underLock`, i.e. AFTER the per-phone lock is claimed, so a launch migration cannot
       // start on a chain this sync is about to move.
       if (!inMockMode()) {
-        const prepare = async () => {
+        const underLock = async () => {
           if (backupPassword && (await this.needsNewEncryptedChain(options.udid))) {
             await this.prepareNewChain(options.udid);
           }
@@ -1621,7 +1621,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         try {
           atRestSession = await this.atRest().beginSync(options.udid, {
             onProgress: (p) => this.emitAtRestProgress(p),
-            prepare,
+            underLock,
           });
         } catch (error) {
           // A failure of the new-chain step is an ordinary sync error, not a refusal.

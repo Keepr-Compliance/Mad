@@ -685,17 +685,17 @@ export class BackupAtRest extends EventEmitter {
    * enough room to unseal, or when a sealed file cannot be opened. Otherwise unseals per
    * strategy and returns the session the sync must hand to {@link finishSync}.
    *
-   * `prepare` runs UNDER the per-phone lock, before the chain is looked at: the
+   * `underLock` runs UNDER the per-phone lock, before the chain is looked at: the
    * orchestrator's new-chain step (move the old chain aside / delete it) goes there, so a
    * launch migration can never start on a chain that is about to be moved. An error from
-   * `prepare` releases the lock and propagates unchanged (it is not a refusal).
+   * `underLock` releases the lock and propagates unchanged (it is not a refusal).
    */
   async beginSync(
     udid: string,
     opts: {
       strategy?: BackupUnsealStrategy;
       onProgress?: (p: BackupAtRestProgress) => void;
-      prepare?: () => Promise<void>;
+      underLock?: () => Promise<void>;
     } = {},
   ): Promise<BackupSyncSession> {
     const strategy = opts.strategy ?? this.deps.strategy?.() ?? BACKUP_UNSEAL_STRATEGY;
@@ -708,7 +708,7 @@ export class BackupAtRest extends EventEmitter {
     this.busy.set(udid, "syncing");
     let handedOut = false;
     try {
-      if (opts.prepare) await opts.prepare();
+      if (opts.underLock) await opts.underLock();
       const chainExists = await exists(chain);
       if (chainExists && (await isAppleEncryptedChain(chain))) {
         await this.recordAppleChain(udid);
@@ -802,8 +802,14 @@ export class BackupAtRest extends EventEmitter {
     onProgress?: (p: BackupAtRestProgress) => void,
   ): Promise<BackupSyncSession> {
     this.busy.set(udid, "sealing");
-    await this.sealAndRecord(udid, "sealing", onProgress);
+    const sealed = await this.sealAndRecord(udid, "sealing", onProgress);
     this.busy.set(udid, "syncing");
+    // Nothing seals `.quarantine` afterwards, so a chain that still holds a plaintext
+    // file (one re-seal failed: EIO, an antivirus lock) must not be moved into it. Throw
+    // before the rename: the caller re-seals and refuses, as for a failed move.
+    if (sealed !== "encrypted") {
+      throw new BackupAtRestRefusal("unreadable", BACKUP_AT_REST_UNREADABLE_MESSAGE);
+    }
     const quarantineRoot = path.join(this.deps.backupsRoot(), QUARANTINE_DIR_NAME);
     await fs.promises.mkdir(quarantineRoot, { recursive: true, mode: 0o700 });
     const dest = path.join(quarantineRoot, `${udid}-${this.now()}`);
@@ -845,6 +851,45 @@ export class BackupAtRest extends EventEmitter {
       }
     }
     return removed;
+  }
+
+  /**
+   * Deletes the oldest quarantined chain (by the time in its folder name). The sync calls
+   * this when its disk guard would refuse: a quarantined copy is unreadable and must never
+   * block the fresh full backup. Never throws. Returns true when one was deleted.
+   */
+  async deleteOldestQuarantined(): Promise<boolean> {
+    const root = path.join(this.deps.backupsRoot(), QUARANTINE_DIR_NAME);
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(root, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    const dated: Array<{ name: string; at: number }> = [];
+    for (const entry of entries) {
+      const stamp = /-(\d{10,})$/.exec(entry.name);
+      let at = stamp ? Number(stamp[1]) : 0;
+      if (!stamp) {
+        try {
+          at = (await fs.promises.lstat(path.join(root, entry.name))).mtimeMs;
+        } catch {
+          at = 0;
+        }
+      }
+      dated.push({ name: entry.name, at });
+    }
+    dated.sort((a, b) => a.at - b.at);
+    for (const { name } of dated) {
+      try {
+        await fs.promises.rm(path.join(root, name), { recursive: true, force: true });
+        this.log("warn", "[BackupAtRest] deleted a quarantined backup to make room for the fresh full backup");
+        return true;
+      } catch (error) {
+        this.log("warn", "[BackupAtRest] could not delete a quarantined backup", { code: errCode(error) });
+      }
+    }
+    return false;
   }
 
   private now(): number {
