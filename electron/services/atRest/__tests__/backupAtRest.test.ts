@@ -40,6 +40,7 @@ import {
   readMarkerAt,
   type BackupUnsealStrategy,
   BACKUP_UNSEAL_STRATEGY,
+  isAppleEncryptedChain,
 } from "../backupAtRest";
 import { DataKeyUnavailableError } from "../dataKeyService";
 import * as fileCryptoModule from "../fileCrypto";
@@ -110,11 +111,11 @@ function makeChain(opts: { appleEncrypted?: boolean } = {}): void {
 
 function allContentFiles(): string[] {
   const out: string[] = [];
-  const walk = (d: string, root: boolean) => {
+  const walk = (d: string, _root: boolean) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       const f = path.join(d, e.name);
       if (e.isDirectory()) walk(f, false);
-      else if (!(root && ["Info.plist", "Status.plist", "Manifest.plist"].includes(e.name))) out.push(f);
+      else out.push(f); // root plists included: sealed too (founder QA 2026-10-09)
     }
   };
   walk(chain, true);
@@ -140,11 +141,11 @@ function plaintextLeft(): string[] {
 /** Same, for any chain-shaped directory (root plists excluded). */
 function plaintextIn(dir: string): string[] {
   const out: string[] = [];
-  const walk = (d: string, root: boolean) => {
+  const walk = (d: string, _root: boolean) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       const f = path.join(d, e.name);
       if (e.isDirectory()) walk(f, false);
-      else if (!(root && ["Info.plist", "Status.plist", "Manifest.plist"].includes(e.name))) out.push(f);
+      else out.push(f); // root plists included: sealed too (founder QA 2026-10-09)
     }
   };
   walk(dir, true);
@@ -162,7 +163,7 @@ afterEach(() => {
 });
 
 describe("seal / scan", () => {
-  it("seals every content file, leaves the three root plists plain, skips empty files", async () => {
+  it("seals every file INCLUDING the three root plists (Info.plist holds IMEI / phone number), skips empty files", async () => {
     makeChain();
     const before = Object.fromEntries(allContentFiles().map((f) => [f, fs.readFileSync(f)]));
     const s = service();
@@ -171,12 +172,12 @@ describe("seal / scan", () => {
     expect(report.empty).toBe(1);
     expect(plaintextLeft()).toEqual([]);
     for (const name of ["Info.plist", "Status.plist", "Manifest.plist"]) {
-      expect(headerOf(path.join(chain, name)).equals(MAGIC)).toBe(false);
+      expect(headerOf(path.join(chain, name)).equals(MAGIC)).toBe(true);
     }
     for (const [f, bytes] of Object.entries(before)) {
       expect((await files.readAllDecrypted(f)).equals(bytes)).toBe(true);
     }
-    expect(await s.scan(UDID)).toEqual({ sealed: 5, plaintext: 0, empty: 1, damaged: 0 });
+    expect(await s.scan(UDID)).toEqual({ sealed: 8, plaintext: 0, empty: 1, damaged: 0 });
   });
 
   it("is idempotent: a second seal changes nothing (no double encryption after a kill)", async () => {
@@ -277,6 +278,34 @@ describe("default strategy is C-DELTA (Step 0b)", () => {
     expect(headerOf(smsPath).equals(MAGIC)).toBe(true);
     expect(headerOf(path.join(chain, "Manifest.db")).equals(MAGIC)).toBe(false);
     await s.finishSync(session);
+  });
+
+  it("the three root plists: sealed after migration, plain for idevicebackup2 during a delta sync, sealed again after it; readable sealed", async () => {
+    makeChain();
+    const plists = ["Info.plist", "Status.plist", "Manifest.plist"].map((n) => path.join(chain, n));
+    const original = plists.map((p) => fs.readFileSync(p));
+    const s = service();
+    await s.migrate(UDID);
+    for (const p of plists) expect(headerOf(p).equals(MAGIC)).toBe(true);
+    // Readers outside a sync decrypt them (the Apple-encrypted check reads Manifest.plist).
+    for (const [i, p] of plists.entries()) expect((await files.readAllDecrypted(p)).equals(original[i])).toBe(true);
+    const session = await s.beginSync(UDID);
+    for (const [i, p] of plists.entries()) {
+      expect(headerOf(p).equals(MAGIC)).toBe(false);
+      expect(fs.readFileSync(p).equals(original[i])).toBe(true);
+    }
+    await s.finishSync(session, undefined, { succeeded: true });
+    for (const p of plists) expect(headerOf(p).equals(MAGIC)).toBe(true);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("an Apple-encrypted chain is still recognised after a Keepr seal never touched it, and a SEALED Manifest.plist is read decrypted", async () => {
+    makeChain({ appleEncrypted: true });
+    expect(await isAppleEncryptedChain(chain, (p) => files.readAllDecrypted(p))).toBe(true);
+    // Seal Manifest.plist by hand (a Keepr chain never says IsEncrypted, so this only proves the read path).
+    await files.encryptFileInPlace(path.join(chain, "Manifest.plist"));
+    expect(headerOf(path.join(chain, "Manifest.plist")).equals(MAGIC)).toBe(true);
+    expect(await isAppleEncryptedChain(chain, (p) => files.readAllDecrypted(p))).toBe(true);
   });
 
   it("a delta sync that leaves a damaged file forces C-FULL for the next sync, recorded with a reason; a clean full sync clears it", async () => {
@@ -487,7 +516,7 @@ describe("refusals and special chains", () => {
         for (const e of fs.readdirSync(d, { withFileTypes: true })) {
           const f = path.join(d, e.name);
           if (e.isDirectory()) walk(f, false);
-          else if (!(root && e.name.endsWith(".plist"))) out.push(f);
+          else out.push(f); // root plists included: sealed too
         }
       };
       walk(aside, true);
@@ -498,7 +527,7 @@ describe("refusals and special chains", () => {
     const outcomes = await s.runLaunchJob();
     expect(outcomes.aside).toBe("1");
     expect(asideFiles()).toEqual([]);
-    expect(headerOf(path.join(aside, "Manifest.plist")).equals(MAGIC)).toBe(false);
+    expect(headerOf(path.join(aside, "Manifest.plist")).equals(MAGIC)).toBe(true);
 
     // and through a sync's end (new Apple-encrypted chain beside it)
     fs.rmSync(aside, { recursive: true });

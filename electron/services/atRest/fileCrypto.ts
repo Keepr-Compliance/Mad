@@ -508,6 +508,40 @@ export interface ReadOptions {
   requireEncrypted?: boolean;
 }
 
+/**
+ * BACKLOG-3816: decrypt a WHOLE container that is already in memory (small index files —
+ * the backup's Info.plist / Status.plist / Manifest.plist — read by code that has its own
+ * file read). All-or-nothing: nothing is returned unless every chunk verified.
+ * A buffer that is not structurally a container is returned unchanged (plaintext passes
+ * through, the same rule as the file readers in default mode).
+ */
+export async function openContainerBytes(raw: Buffer, keys: KeyResolver): Promise<Buffer> {
+  if (raw.length < HEADER_BYTES || !raw.subarray(0, MAGIC.length).equals(MAGIC)) return raw;
+  let header: ParsedHeader;
+  let layout: Layout;
+  try {
+    header = parseHeader(raw.subarray(0, HEADER_BYTES));
+    layout = layoutFor(raw.length, header.chunkSize);
+  } catch (error) {
+    if (error instanceof AtRestFormatError) return raw;
+    throw error;
+  }
+  const fileKey = deriveFileKey(await keys.keyFor(header.keyId), header.salt);
+  try {
+    const parts: Buffer[] = [];
+    const stride = header.chunkSize + TAG_BYTES;
+    for (let index = 0; index < layout.chunkCount; index++) {
+      const isFinal = index === layout.chunkCount - 1;
+      const start = HEADER_BYTES + index * stride;
+      const end = isFinal ? raw.length : start + stride;
+      parts.push(openChunk(fileKey, header.raw, index, isFinal, raw.subarray(start, end)));
+    }
+    return Buffer.concat(parts);
+  } finally {
+    fileKey.fill(0);
+  }
+}
+
 function refusePlaintext(): never {
   throw new AtRestFormatError("file is not encrypted and the caller requires an encrypted file");
 }

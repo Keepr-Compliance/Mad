@@ -35,6 +35,7 @@ import logService from "./logService";
 import { hostAppPaths } from "../capabilities/appPathsProvider";
 import type { DecryptionResult, ManifestPlist } from "../types/backup";
 import { countManifestFiles, selectManifestReadFiles, type ManifestFileRow } from "./db/iosManifestDbSql";
+import { openBackupIndexBytes } from "./atRest/backupIndexFiles";
 
 // Import better-sqlite3-multiple-ciphers for reading the decrypted Manifest.db
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -331,7 +332,7 @@ export class BackupDecryptionService {
   /** Check if a backup is encrypted (Manifest.plist IsEncrypted). */
   async isBackupEncrypted(backupPath: string): Promise<boolean> {
     try {
-      const manifest = this.readManifest(path.join(backupPath, "Manifest.plist"));
+      const manifest = await this.readManifest(path.join(backupPath, "Manifest.plist"));
       return manifest.IsEncrypted === true;
     } catch {
       return false;
@@ -376,8 +377,10 @@ export class BackupDecryptionService {
     }
   }
 
-  private readManifest(manifestPath: string): ManifestPlist {
-    const parsed = plist.parse(fs.readFileSync(manifestPath)) as Record<string, unknown>;
+  private async readManifest(manifestPath: string): Promise<ManifestPlist> {
+    // BACKLOG-3816: sealed between syncs in a Keepr-managed chain; decrypted in memory.
+    // An Apple-encrypted chain's Manifest.plist is never sealed and passes through.
+    const parsed = plist.parse(await openBackupIndexBytes(fs.readFileSync(manifestPath))) as Record<string, unknown>;
     return {
       IsEncrypted: parsed.IsEncrypted as boolean,
       ManifestKey: parsed.ManifestKey as Buffer | undefined,
@@ -388,7 +391,7 @@ export class BackupDecryptionService {
 
   /** Unlock the keybag. Throws BackupPasswordIncorrectError on a wrong password. */
   private async unlock(backupPath: string, password: string): Promise<UnlockedBackup> {
-    const manifest = this.readManifest(path.join(backupPath, "Manifest.plist"));
+    const manifest = await this.readManifest(path.join(backupPath, "Manifest.plist"));
     if (manifest.IsEncrypted !== true || !manifest.BackupKeyBag) {
       throw new Error("Backup is not encrypted");
     }

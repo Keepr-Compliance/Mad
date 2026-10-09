@@ -3,12 +3,17 @@
  *
  * Keepr keeps one backup chain per phone at `userData/Backups/<udid>` so the next
  * sync is incremental. Between syncs every file in it is sealed with the S0 data key
- * (KEPRENC container, fileCrypto.ts), except the three device-metadata plists at the
- * chain root, which stay plain (design D3):
+ * (KEPRENC container, fileCrypto.ts). That includes the three device-metadata plists at
+ * the chain root (founder QA 2026-10-09: Info.plist holds the phone number, IMEI, ICCID,
+ * serial number and the installed-apps list; this replaces design D3, which left them plain):
  *
  *   Info.plist      device name / model / iOS version — read by the backup list
  *   Status.plist    the device's own "snapshot finished" verdict (BACKLOG-2911)
  *   Manifest.plist  IsEncrypted + keybag — how Apple-encrypted chains are recognised
+ *
+ * C-DELTA unseals them with Manifest.db before `idevicebackup2` runs (the tool and the
+ * device negotiate with them) and the seal after the sync closes them again. Readers
+ * outside a sync decrypt them in memory (backupIndexFiles.ts).
  *
  * ## What is NOT sealed
  *
@@ -64,6 +69,7 @@ import {
   type AtRestKey,
   type FileCrypto,
 } from "./fileCrypto";
+import { BACKUP_ROOT_PLISTS, openBackupIndexBytes } from "./backupIndexFiles";
 import { createMarkerStore, MARKER_DIR_NAME, type BackupAtRestState, type MarkerStore } from "./markers";
 import type { FileOutcome, SealEngineOptions, SealMode } from "./sealEngine";
 import { defaultSealWorkers, runPass, type PassFile } from "./sealPool";
@@ -90,8 +96,8 @@ export const FORCE_FULL_REASON_DELTA_DAMAGED = "DELTA_DAMAGED";
 /** The backup tool itself failed during a delta sync (it may have needed a sealed file). */
 export const FORCE_FULL_REASON_DELTA_TOOL_FAILED = "DELTA_TOOL_FAILED";
 
-/** Files at the chain ROOT that stay plain (device metadata only). */
-export const PLAIN_ROOT_FILES: ReadonlySet<string> = new Set(["Info.plist", "Status.plist", "Manifest.plist"]);
+/** Files C-DELTA unseals before `idevicebackup2` runs: the index and the root plists. */
+export const DELTA_UNSEAL_FILES: readonly string[] = ["Manifest.db", ...BACKUP_ROOT_PLISTS];
 
 /** The founder-approved sentence for the "securing your backup" phase (and only it). */
 export const BACKUP_SECURING_SENTENCE = "Syncing your iPhone will be available when this finishes.";
@@ -144,7 +150,7 @@ const UDID_DIR_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
 export type FileClass = "sealed" | "plaintext" | "empty" | "damaged";
 
 export interface PassReport {
-  /** Files looked at (the three root plists and *.kenc-tmp excluded). */
+  /** Files looked at (*.kenc-tmp excluded). */
   files: number;
   /** The pass was paused at a file boundary (a sync asked for the phone) before it finished. */
   paused?: boolean;
@@ -355,10 +361,14 @@ async function defaultFreeBytes(dir: string): Promise<number> {
 }
 
 /** Owner-encrypted chain? Manifest.plist `IsEncrypted` (plain device metadata). Never throws. */
-export async function isAppleEncryptedChain(chainDir: string): Promise<boolean> {
+export async function isAppleEncryptedChain(
+  chainDir: string,
+  readPlist: (p: string) => Promise<Buffer> = async (p) => openBackupIndexBytes(await fs.promises.readFile(p)),
+): Promise<boolean> {
   let buf: Buffer;
   try {
-    buf = await fs.promises.readFile(path.join(chainDir, "Manifest.plist"));
+    // Sealed in a Keepr chain (decrypted in memory); an Apple chain's is never sealed.
+    buf = await readPlist(path.join(chainDir, "Manifest.plist"));
   } catch {
     return false;
   }
@@ -429,6 +439,9 @@ export class BackupAtRest extends EventEmitter {
     this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.concurrency = deps.concurrency ?? DEFAULT_CONCURRENCY;
   }
+
+  /** Reads a root plist whether sealed or not (the FileCrypto's own reader). */
+  private readonly readPlist = (p: string): Promise<Buffer> => this.deps.files().readAllDecrypted(p);
 
   chainDir(udid: string): string {
     if (!UDID_DIR_PATTERN.test(udid)) throw new Error("invalid device id for a backup chain");
@@ -529,7 +542,7 @@ export class BackupAtRest extends EventEmitter {
   // -------------------------------------------------------------------------
 
   /**
-   * Every regular file in the chain except the three root plists. Symlinks are not
+   * Every regular file in the chain, root plists included. Symlinks are not
    * followed (a backup never contains one). Orphaned *.kenc-tmp files — a killed seal
    * leaves ciphertext, a killed unseal leaves PLAINTEXT — are deleted here.
    */
@@ -552,7 +565,6 @@ export class BackupAtRest extends EventEmitter {
           continue;
         }
         if (!entry.isFile()) continue;
-        if (atRoot && PLAIN_ROOT_FILES.has(entry.name)) continue;
         if (entry.name.endsWith(KENC_TMP_SUFFIX)) {
           await fs.promises.rm(full, { force: true }).catch(() => undefined);
           if (report) report.tempsRemoved++;
@@ -846,7 +858,7 @@ export class BackupAtRest extends EventEmitter {
       await this.removeMarker(udid);
       return "absent";
     }
-    if (await isAppleEncryptedChain(chain)) {
+    if (await isAppleEncryptedChain(chain, this.readPlist)) {
       await this.recordAppleChain(udid);
       return "apple";
     }
@@ -951,7 +963,7 @@ export class BackupAtRest extends EventEmitter {
         this.log("warn", "[BackupAtRest] this sync unseals the whole backup (C-FULL)", { reasonCode: forcedFull });
       }
       const chainExists = await exists(chain);
-      if (chainExists && (await isAppleEncryptedChain(chain))) {
+      if (chainExists && (await isAppleEncryptedChain(chain, this.readPlist))) {
         await this.recordAppleChain(udid);
         handedOut = true;
         return { kind: "apple", udid };
@@ -1001,7 +1013,7 @@ export class BackupAtRest extends EventEmitter {
       const report =
         strategy === "full"
           ? await this.unseal(udid, undefined, opts.onProgress)
-          : await this.unseal(udid, ["Manifest.db"], opts.onProgress);
+          : await this.unseal(udid, DELTA_UNSEAL_FILES, opts.onProgress);
       this.log("info", "[BackupAtRest] unsealed for sync", {
         strategy,
         files: report.files,
@@ -1242,7 +1254,7 @@ export class BackupAtRest extends EventEmitter {
 
   /**
    * Seal every moved-aside chain (`.keepr-replaced-<udid>-*`), or only `udid`'s. Same
-   * rules as a chain: root plists plain, empty/damaged untouched, Apple-encrypted
+   * rules as a chain: root plists sealed too, empty/damaged untouched, Apple-encrypted
    * skipped. No marker (the name keeps it out of the 3598 sweep, and removal is by
    * name after the new chain verifies). Returns how many directories are fully sealed.
    */
@@ -1259,7 +1271,7 @@ export class BackupAtRest extends EventEmitter {
     for (const entry of entries) {
       if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
       const dir = path.join(root, entry.name);
-      if (await isAppleEncryptedChain(dir)) continue;
+      if (await isAppleEncryptedChain(dir, this.readPlist)) continue;
       const label = entry.name.slice(REPLACED_CHAIN_PREFIX.length);
       const pause = udid ? this.pausable.get(udid) : undefined;
       const report = await this.sealAt(dir, label, undefined, "sealing", pause);
@@ -1285,7 +1297,7 @@ export class BackupAtRest extends EventEmitter {
     // A sync that starts meanwhile pauses this at a file boundary (see beginSync).
     this.pausable.set(udid, new Int32Array(new SharedArrayBuffer(4)));
     try {
-      if (await isAppleEncryptedChain(chain)) {
+      if (await isAppleEncryptedChain(chain, this.readPlist)) {
         await this.recordAppleChain(udid);
         return "apple";
       }
