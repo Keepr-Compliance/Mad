@@ -153,6 +153,7 @@ function TransactionDetails({
     loadCommunications,
     refreshCommunicationsSilently,
     refreshContactsSilently,
+    applyCommunicationsDelta,
     setResolvedSuggestions,
     updateSuggestedContacts,
     removeCommunicationsByIds,
@@ -335,6 +336,17 @@ function TransactionDetails({
     // linked set that just moved. See notifyCardCounters below.
     onTransactionUpdated?.();
   }, [loadCommunications, refreshAttachments, onTransactionUpdated]);
+
+  // BACKLOG-3785: after Attach Messages, fetch only the texts that changed
+  // instead of every linked text (107 MB / multi-second freeze on a 106k-text
+  // deal). Falls back to the full reload when there is nothing held to diff
+  // against. Attachments and the card counter refresh exactly as above.
+  const refreshMessagesAfterAttach = useCallback(async () => {
+    const applied = await applyCommunicationsDelta("text");
+    if (!applied) await loadCommunications("text");
+    refreshAttachments();
+    onTransactionUpdated?.();
+  }, [applyCommunicationsDelta, loadCommunications, refreshAttachments, onTransactionUpdated]);
 
   // Accurate attachment counts from database (TASK-1781)
   // PERF: Lazy-loaded — only fetched when Submit modal opens (takes ~1.3s)
@@ -1481,6 +1493,7 @@ function TransactionDetails({
               transactionId={transaction.id}
               propertyAddress={transaction.property_address}
               onMessagesChanged={refreshMessages}
+              onMessagesAttached={refreshMessagesAfterAttach}
               // BACKLOG-1793: restore uses a silent refresh — no loading cycle,
               // no spinner, scroll never moves (parallels the Emails tab).
               onRestoreComplete={handleRefreshMessagesSilently}

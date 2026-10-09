@@ -18,6 +18,29 @@ import {
 } from "../services/updaterAssetUrl";
 
 import { getMainWindow } from "../windowRegistry";
+import { stopBackupForQuit } from "./syncHandlers";
+import { waitForLinksToFinish } from "../utils/linkInFlight";
+
+/**
+ * BACKLOG-3785: on Windows `quitAndInstall` launches the installer BEFORE the quit,
+ * and the installer force-kills the app about 2.6 s later, so the before-quit
+ * deferral cannot help. Wait here, first, for in-flight links (60 s bound) and stop
+ * a running iPhone backup (its own bound, BACKLOG-3598). Never rejects.
+ */
+export function waitForQuitBlockers(): Promise<unknown> {
+  const waits: Array<Promise<unknown>> = [];
+  try {
+    const backup = stopBackupForQuit();
+    if (backup) waits.push(backup.catch(() => undefined));
+  } catch {
+    /* a failing stop must not block the install */
+  }
+  const links = waitForLinksToFinish(undefined, () =>
+    console.warn("[Updater] link still running after the max wait; installing anyway"),
+  );
+  if (links) waits.push(links);
+  return Promise.all(waits);
+}
 
 // Track registration to prevent duplicate handlers
 let handlersRegistered = false;
@@ -148,7 +171,7 @@ export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
     // Ensure app relaunches after update
     // Parameters: isSilent, isForceRunAfter
     // false = show installer, true = force run after install
-    setImmediate(() => {
+    void waitForQuitBlockers().then(() => setImmediate(() => {
       app.removeAllListeners("window-all-closed");
       // BACKLOG-3454: the live window. The captured one may be destroyed after a
       // macOS Dock reopen, and `close()` on a destroyed window throws.
@@ -158,7 +181,7 @@ export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
         liveWindow.close();
       }
       autoUpdater.quitAndInstall(false, true);
-    });
+    }));
   });
 
   // BACKLOG-1905: one-click, platform-correct manual installer.

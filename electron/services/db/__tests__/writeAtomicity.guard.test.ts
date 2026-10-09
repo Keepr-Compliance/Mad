@@ -480,8 +480,12 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // is the forced-crash suite `transactionService.unlinkAtomicity-2547.test.ts`.
   "electron/services/iPhoneSyncStorageService.ts::rollbackSession":
     "BACKLOG-2552 — a half-rolled-back sync session: attachment rows deleted while their parent message rows remain, or messages gone while contacts survive. The rollback that exists to guarantee an atomic cancel is itself non-atomic.",
-  "electron/services/transactionService/transactionService.ts::linkMessages":
-    "BACKLOG-2550 — junction rows written with messages.transaction_id still NULL, so the message is re-offered as unlinked; or the inverse, the pointer set with no junction row, so the message is invisible to every junction reader. Transient, not permanent: INSERT OR IGNORE plus the unique indexes make a re-run idempotent.",
+  // --- BACKLOG-2550: DISCHARGED by BACKLOG-3785 — `transactionService.ts::linkMessages` ---
+  // The entry that was here is deleted: linkMessages now writes in chunks, each
+  // chunk ONE `dbTransaction`, so a message's pointer and its junction row
+  // always commit together. A crash between chunks leaves earlier chunks fully
+  // linked and later ones untouched — no half-linked message. Measured: with
+  // the entry present the guard reports linkMessages as fixed-but-still-listed.
 
 
   // ==========================================================================

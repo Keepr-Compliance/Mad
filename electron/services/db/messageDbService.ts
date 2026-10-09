@@ -248,6 +248,35 @@ export function getMessageContacts(userId: string): MessageContactRow[] {
 }
 
 /**
+ * BACKLOG-3785: the columns the Attach Messages picker gets back, instead of
+ * `m.*`. Picking 150 chats (30,703 messages) returned 33 MB to the renderer;
+ * structured clone writes every key of every row, so columns nothing in the
+ * renderer reads still cost bytes and decode time. Dropped here, none of them
+ * read from a message anywhere in src/: metadata, llm_analysis, classification_*,
+ * classified_at, false_positive_reason, stage_hint*, transaction_link_*,
+ * is_transaction_related, message_id_header, content_hash, duplicate_of,
+ * channel_account_id, sync_session_id, is_false_positive. Ids are untouched — Attach and Undo
+ * link exactly the ids shown.
+ */
+const PICKER_MESSAGE_COLUMNS = `
+      m.id, m.user_id, m.external_id, m.channel, m.direction, m.subject,
+      m.body_html, m.body_text, m.participants, m.participants_flat,
+      m.thread_id, m.sent_at, m.received_at, m.has_attachments,
+      m.transaction_id, m.message_type,
+      m.associated_message_type, m.associated_message_guid, m.created_at`;
+
+/** The fields `PICKER_MESSAGE_COLUMNS` returns (plus the joined thread name) — and no others. */
+export type PickerMessage = Pick<
+  Message,
+  | "id" | "user_id" | "external_id" | "channel" | "direction" | "subject"
+  | "body_html" | "body_text" | "participants" | "participants_flat"
+  | "thread_id" | "sent_at" | "received_at" | "has_attachments"
+  | "transaction_id" | "message_type"
+  | "associated_message_type" | "associated_message_guid" | "created_at"
+  | "thread_display_name"
+>;
+
+/**
  * Get unlinked messages for a specific contact (phone number)
  * Used after user selects a contact in the contact-first UI
  *
@@ -255,7 +284,7 @@ export function getMessageContacts(userId: string): MessageContactRow[] {
  * ALL messages from those threads. This ensures group chats are fully captured
  * even when individual messages have different handles.
  */
-export function getMessagesByContact(userId: string, contact: string): Message[] {
+export function getMessagesByContact(userId: string, contact: string): PickerMessage[] {
   const db = ensureDb();
 
   // Step 1: Find all thread_ids where the contact appears in any message
@@ -282,7 +311,7 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
   // message_thread_names join on (user_id, thread_id).
   if (threadIds.length === 0) {
     const fallbackSql = `
-      SELECT m.*, tn.display_name AS thread_display_name FROM messages m
+      SELECT ${PICKER_MESSAGE_COLUMNS}, tn.display_name AS thread_display_name FROM messages m
       LEFT JOIN message_thread_names tn ON tn.thread_id = m.thread_id AND tn.user_id = m.user_id
       WHERE m.user_id = ?
         AND m.transaction_id IS NULL
@@ -293,13 +322,13 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
         )
       ORDER BY m.sent_at DESC
     `;
-    const rows = db.prepare(fallbackSql).all(userId, contact, contact) as Message[];
+    const rows = db.prepare(fallbackSql).all(userId, contact, contact) as PickerMessage[];
     return rows.filter((m) => !isReactionRow(m));
   }
 
   const placeholders = threadIds.map(() => '?').join(', ');
   const messagesSql = `
-    SELECT m.*, tn.display_name AS thread_display_name FROM messages m
+    SELECT ${PICKER_MESSAGE_COLUMNS}, tn.display_name AS thread_display_name FROM messages m
     LEFT JOIN message_thread_names tn ON tn.thread_id = m.thread_id AND tn.user_id = m.user_id
     WHERE m.user_id = ?
       AND m.transaction_id IS NULL
@@ -307,7 +336,7 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
       AND m.thread_id IN (${placeholders})
     ORDER BY m.sent_at DESC
   `;
-  const rows = db.prepare(messagesSql).all(userId, ...threadIds) as Message[];
+  const rows = db.prepare(messagesSql).all(userId, ...threadIds) as PickerMessage[];
   return rows.filter((m) => !isReactionRow(m));
 }
 

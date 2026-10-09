@@ -2279,7 +2279,7 @@ class DatabaseService implements IDatabaseService {
     return messageDb.getMessageContacts(userId);
   }
 
-  async getMessagesByContact(userId: string, contact: string): Promise<Message[]> {
+  async getMessagesByContact(userId: string, contact: string): Promise<messageDb.PickerMessage[]> {
     return messageDb.getMessagesByContact(userId, contact);
   }
 

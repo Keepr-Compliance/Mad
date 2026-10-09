@@ -887,6 +887,25 @@ export function getTransactionByIdSync(
 }
 
 /**
+ * BACKLOG-3785: read `message_count` alone, synchronously. `linkMessages`
+ * re-reads it inside every write chunk, and `getTransactionByIdSync` would
+ * also derive `email_count` (an emails query) on each of those reads.
+ */
+export function getTransactionMessageCountSync(transactionId: string): number | null {
+  const row = dbGet<{ message_count: number | null }>(
+    sql`SELECT message_count FROM transactions WHERE id = ?`,
+    [transactionId],
+  );
+  if (!row) return null;
+  return row.message_count ?? 0;
+}
+
+/** BACKLOG-3785 — the promise seam over `getTransactionMessageCountSync` (BACKLOG-2960 shape). */
+export function getTransactionMessageCount(transactionId: string): Promise<number | null> {
+  return Promise.resolve(getTransactionMessageCountSync(transactionId));
+}
+
+/**
  * Get transaction with associated contacts
  */
 export async function getTransactionWithContacts(
