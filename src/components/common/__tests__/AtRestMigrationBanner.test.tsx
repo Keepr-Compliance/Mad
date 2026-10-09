@@ -18,6 +18,7 @@ jest.mock("../../../services/atRestMigrationService", () => ({
         pushed = null;
       };
     }),
+    subscribeBackupSecuring: jest.fn(() => () => undefined),
   },
 }));
 

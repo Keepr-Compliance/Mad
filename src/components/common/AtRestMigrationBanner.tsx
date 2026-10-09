@@ -6,12 +6,18 @@
  *
  * Renders nothing when there is nothing to do (phase idle, or a run that found
  * every file already encrypted).
+ *
+ * Also shows the "cleanup" ticks of `sync:progress` — securing the kept iPhone backup
+ * after a sync and at launch ("Securing your iPhone backup… N%") — when no iPhone sync
+ * is active. During a sync the sync screen owns `sync:progress`.
  */
 import React, { useEffect, useState } from "react";
 
+import { syncStateRef } from "../../hooks/useIPhoneSync";
 import {
   atRestMigrationService,
   type AtRestMigrationStatus,
+  type BackupSecuringProgress,
 } from "../../services/atRestMigrationService";
 
 export const COPY = {
@@ -25,6 +31,48 @@ export const COPY = {
 } as const;
 
 const DONE_VISIBLE_MS = 8000;
+/** The backup line hides this long after it reaches 100%. */
+export const BACKUP_DONE_VISIBLE_MS = 4000;
+/** ...and this long after the last tick, if ticks stop before 100%. */
+export const BACKUP_STALE_MS = 60_000;
+
+/**
+ * The latest "Securing your iPhone backup… N%" tick, or null. Ticks that arrive while
+ * an iPhone sync is active are ignored (the sync screen shows them).
+ */
+export function useBackupSecuringProgress(): BackupSecuringProgress | null {
+  const [progress, setProgress] = useState<BackupSecuringProgress | null>(null);
+
+  useEffect(
+    () =>
+      atRestMigrationService.subscribeBackupSecuring((p) => {
+        if (syncStateRef.isActive) return;
+        setProgress(p);
+      }),
+    [],
+  );
+
+  useEffect(() => {
+    if (!progress) return;
+    const timer = setTimeout(() => setProgress(null), progress.percent >= 100 ? BACKUP_DONE_VISIBLE_MS : BACKUP_STALE_MS);
+    return () => clearTimeout(timer);
+  }, [progress]);
+
+  return progress;
+}
+
+function BackupSecuringLine({ progress }: { progress: BackupSecuringProgress }): React.ReactElement {
+  return (
+    <div
+      className="flex-shrink-0 bg-blue-50 border-b border-blue-200 px-4 py-2"
+      role="status"
+      aria-live="polite"
+      data-testid="at-rest-backup-securing"
+    >
+      <p className="text-sm font-medium text-blue-900 text-center">{progress.message}</p>
+    </div>
+  );
+}
 
 export function formatDetails(status: AtRestMigrationStatus): string {
   const base = `${status.done} of ${status.total} files`;
@@ -34,6 +82,18 @@ export function formatDetails(status: AtRestMigrationStatus): string {
 }
 
 export function AtRestMigrationBanner(): React.ReactElement | null {
+  const backup = useBackupSecuringProgress();
+  const files = <FileMigrationBanner />;
+  if (!backup) return files;
+  return (
+    <>
+      {files}
+      <BackupSecuringLine progress={backup} />
+    </>
+  );
+}
+
+function FileMigrationBanner(): React.ReactElement | null {
   const [status, setStatus] = useState<AtRestMigrationStatus | null>(null);
   const [doneHidden, setDoneHidden] = useState(false);
 
