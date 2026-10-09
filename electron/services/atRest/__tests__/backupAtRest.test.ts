@@ -1044,6 +1044,15 @@ describe("founder must-fix 2026-10-09: reseal at once, on quit, and while idle",
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
   });
 
+  it("a seal pass logs its start with the work to do (an interrupted run leaves a trace); counts only, no paths", async () => {
+    makeChain();
+    const lines: Array<{ m: string; d?: Record<string, unknown> }> = [];
+    await service({ log: (_l, m, d) => lines.push({ m, d }) }).migrate(UDID);
+    const startLine = lines.find((l) => l.m === "[BackupAtRest] seal pass started");
+    expect(startLine?.d).toMatchObject({ phase: "migrating", files: 9 });
+    expect(JSON.stringify(lines)).not.toContain(chain);
+  });
+
   it("a seal pass takes the newest files first (what the last sync wrote, the unsealed index)", async () => {
     makeChain();
     const old = new Date(Date.now() - 86_400_000);

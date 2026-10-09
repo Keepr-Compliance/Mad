@@ -216,6 +216,8 @@ export const QUIT_SEAL_BOUND_MS = 15_000;
 export const IDLE_RECOVERY_INTERVAL_MS = 5 * 60_000;
 /** While a sync waits for a background pass to pause, its status line is repeated this often. */
 export const PAUSE_REPORT_INTERVAL_MS = 5000;
+/** A seal pass writes a progress line to the log this often. */
+export const PROGRESS_LOG_INTERVAL_MS = 60_000;
 /** Progress for a seal pass is emitted at most this often (plus its start and end). */
 export const PROGRESS_INTERVAL_MS = 1000;
 
@@ -723,6 +725,13 @@ export class BackupAtRest extends EventEmitter {
     let done = 0;
     let doneUnits = 0;
     let lastEmit = Date.now();
+    let lastLog = Date.now();
+    // A run that is cut off (quit, crash) still leaves a trace: start, then once a minute.
+    this.log("info", "[BackupAtRest] seal pass started", {
+      phase,
+      files: listed.length,
+      mb: Math.round(listed.reduce((n, f) => n + f.size, 0) / 1048576),
+    });
     notify({ udid, phase, done: 0, total: listed.length, doneUnits: 0, totalUnits });
     const result = await this.pass(listed, "seal", key, pause, (indexes, outcomes) => {
       outcomes.forEach((o, k) => {
@@ -731,6 +740,18 @@ export class BackupAtRest extends EventEmitter {
         doneUnits += listed[indexes[k]].size + PROGRESS_FILE_WEIGHT_BYTES;
       });
       const now = Date.now();
+      if (now - lastLog >= PROGRESS_LOG_INTERVAL_MS && done < listed.length) {
+        lastLog = now;
+        this.log("info", "[BackupAtRest] seal pass progress", {
+          phase,
+          done,
+          files: listed.length,
+          sealedNow: report.changed,
+          already: report.already,
+          failed: report.failed,
+          pct: Math.floor((doneUnits / totalUnits) * 100),
+        });
+      }
       if (now - lastEmit >= PROGRESS_INTERVAL_MS && done < listed.length) {
         lastEmit = now;
         const elapsed = now - started;
