@@ -3,11 +3,11 @@ import React from "react";
 /**
  * Non-blocking notice shown on the export-finished screen: exported files are
  * plain files and are not covered by Keepr's encryption (BACKLOG-3828).
- * Copy is the founder-approved draft; edit the strings here only.
+ * Copy is the founder-approved text; edit the strings here only.
  */
 export const EXPORT_UNENCRYPTED_TITLE = "Exported files aren't encrypted";
 export const EXPORT_UNENCRYPTED_BODY =
-  "Your audit was saved as regular files so you can open and share it. Keepr's encryption protects your data inside Keepr only — it doesn't apply to exported files. We recommend sending the export where it needs to go, then deleting it from this computer. You're responsible for how exported files are stored, shared and deleted.";
+  "Your audit was saved as regular files so you can open it. Keepr's encryption protects your data inside Keepr only \u2014 it doesn't apply to exported files. We recommend keeping your records in Keepr rather than storing exported copies on this computer. You're responsible for how exported files are stored, shared and deleted.";
 
 export function ExportUnencryptedNotice(): React.ReactElement {
   return (

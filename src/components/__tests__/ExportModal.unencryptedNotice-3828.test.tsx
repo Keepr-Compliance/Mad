@@ -63,6 +63,9 @@ it.each([
   await screen.findByRole("button", { name: /open audit/i });
   expect(screen.getByText(TITLE)).toBeInTheDocument();
   expect(screen.getByTestId("export-unencrypted-notice")).toHaveTextContent(
+    "keeping your records in Keepr",
+  );
+  expect(screen.getByTestId("export-unencrypted-notice")).toHaveTextContent(
     "You're responsible for how exported files are stored, shared and deleted.",
   );
 });
