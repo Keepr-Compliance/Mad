@@ -5,10 +5,9 @@
  * by the host SecretStore (macOS Keychain / Windows DPAPI via Electron safeStorage). The raw
  * password never touches disk and is never logged.
  *
- * An entry is either a password the user typed for a phone that already encrypts its
- * backups (origin "user", stored only after it unlocked a real backup), or one Keepr
- * generated to turn encryption on (origin "generated", stored BEFORE the phone is asked to
- * use it, so a crash in between cannot leave the phone locked with a password nobody has).
+ * An entry is a password the user typed for a phone whose owner encrypts its backups,
+ * stored only after it unlocked a real backup (origin "user"). Keepr never sets or
+ * changes the phone's own backup password (option A dropped, founder 2026-10-08).
  *
  * ## Fail closed — the dataKeyService rules
  *
@@ -31,11 +30,9 @@ import { writeFileAtomic } from "./fileCrypto";
 
 export const BACKUP_PASSWORD_STORE_FILENAME = "backup-password-store.json";
 const STORE_VERSION = 1;
-/** 24 random bytes → 32 base64url characters. */
-const GENERATED_PASSWORD_BYTES = 24;
 const UDID_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
 
-export type BackupPasswordOrigin = "user" | "generated";
+export type BackupPasswordOrigin = "user";
 
 /** A stored backup password exists but cannot be produced. Never replace it. */
 export class BackupPasswordUnavailableError extends Error {
@@ -81,11 +78,6 @@ export interface BackupPasswordStoreDeps {
   baseDir: () => string;
   secretStore: SecretStore;
   log?: (level: "info" | "warn" | "error", message: string) => void;
-}
-
-/** A new random backup password. */
-export function generateBackupPassword(): string {
-  return crypto.randomBytes(GENERATED_PASSWORD_BYTES).toString("base64url");
 }
 
 function checkUdid(udid: string): string {

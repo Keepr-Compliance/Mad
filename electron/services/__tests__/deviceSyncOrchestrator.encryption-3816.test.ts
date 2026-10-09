@@ -1,12 +1,8 @@
 /**
- * BACKLOG-3816 S4 (option A) + BACKLOG-3817 at the orchestrator.
+ * BACKLOG-3816 S4 + BACKLOG-3817 at the orchestrator (phones whose owner encrypts backups).
  *
- *  E1  a phone that does not encrypt: Keepr generates a password, SAVES IT FIRST, then
- *      asks the phone; the backup runs with that password.
- *  E2  the phone does not confirm: no backup runs (never a plaintext fallback), and the
- *      run records reasonCode=ENCRYPTION_NOT_CONFIRMED.
- *  E3  a saved password that will not unlock: nothing generated, nothing turned on or
- *      off, no backup — reasonCode=BACKUP_PASSWORD_UNAVAILABLE.
+ *  E3  a saved password that will not unlock: nothing replaced, no backup —
+ *      reasonCode=BACKUP_PASSWORD_UNAVAILABLE (phone encrypting).
  *  E4  a plaintext chain is moved aside before the first encrypted backup and deleted
  *      ONLY after the encrypted backup completed and its index opened with the password.
  *  E5  every encryption failure maps to its own reasonCode with endedBy=backup-encryption.
@@ -131,7 +127,6 @@ jest.mock("../iosContactsParser", () => ({
 
 import { BackupService } from "../backupService";
 import {
-  BACKUP_ENCRYPTION_NOT_CONFIRMED_MESSAGE,
   BACKUP_PASSWORD_UNAVAILABLE_MESSAGE,
   DeviceSyncOrchestrator,
 } from "../deviceSyncOrchestrator";
@@ -145,7 +140,7 @@ let unreadable = false;
 const store: BackupPasswordStore = {
   get: jest.fn(async (udid: string) => {
     if (unreadable) throw new BackupPasswordUnavailableError("will not unwrap");
-    return saved.has(udid) ? { kind: "found" as const, password: saved.get(udid)!, origin: "generated" as const } : { kind: "absent" as const };
+    return saved.has(udid) ? { kind: "found" as const, password: saved.get(udid)!, origin: "user" as const } : { kind: "absent" as const };
   }),
   put: jest.fn(async (udid: string, password: string) => {
     if (unreadable || saved.has(udid)) throw new BackupPasswordUnavailableError("exists");
@@ -176,11 +171,10 @@ function success(over: Partial<BackupResult> = {}): BackupResult {
   } as BackupResult;
 }
 
-function newOrchestrator(optionA = false): DeviceSyncOrchestrator {
+function newOrchestrator(): DeviceSyncOrchestrator {
   const o = new DeviceSyncOrchestrator();
   o.on("error", () => {});
   o.backupPasswordStore = store;
-  o.backupEncryptionEnableAllowed = optionA;
   return o;
 }
 
@@ -221,10 +215,6 @@ beforeEach(() => {
       return success();
     }),
     checkEncryptionStatus: jest.spyOn(P, "checkEncryptionStatus"),
-    enableEncryption: jest.spyOn(P, "enableEncryption").mockImplementation(async () => {
-      events.push("enable");
-      return { enabled: true };
-    }),
     readChainEncryption: jest.spyOn(P, "readChainEncryption").mockResolvedValue("absent"),
     moveChainAside: jest.spyOn(P, "moveChainAside").mockImplementation(async () => {
       events.push("aside");
@@ -258,65 +248,25 @@ beforeEach(() => {
   phone("off");
 });
 
-describe("E1 option A — a phone that does not encrypt", () => {
-  it("generates a 32+ char password, saves it BEFORE asking the phone, and backs up with it", async () => {
-    const result = await newOrchestrator(true).sync({ udid: UDID });
-    expect(result.success).toBe(true);
-    expect(events.slice(0, 3)).toEqual(["put", "enable", "backup:with-password"]);
-    const generated = saved.get(UDID)!;
-    expect(generated.length).toBeGreaterThanOrEqual(32);
-    expect(spies.enableEncryption.mock.calls[0][1]).toBe(generated);
-    expect(spies.startBackup.mock.calls[0][0].password).toBe(generated);
-    expect(outcomeRow()).toContain("backupPassword=generated");
-    expect(outcomeRow()).toContain("encryptionEnable=enabled");
-    expect(outcomeRow()).toContain("phoneBackupEncryption=off");
-    expect(logLines.join("\n")).not.toContain(generated);
-  });
-
-  it("E2 the phone does not confirm: no backup runs, reasonCode ENCRYPTION_NOT_CONFIRMED", async () => {
-    spies.enableEncryption.mockResolvedValue({ enabled: false, reason: "not-confirmed" });
-    const result = await newOrchestrator(true).sync({ udid: UDID });
-    expect(result.success).toBe(false);
-    expect(result.error).toBe(BACKUP_ENCRYPTION_NOT_CONFIRMED_MESSAGE);
-    expect(spies.startBackup).not.toHaveBeenCalled();
-    expect(outcomeRow()).toContain("reasonCode=ENCRYPTION_NOT_CONFIRMED");
-    expect(outcomeRow()).toContain("endedBy=backup-encryption");
-  });
-
-  it("E1b a password saved by an earlier, unconfirmed attempt is reused, never regenerated", async () => {
-    saved.set(UDID, "earlier-saved-password-aaaaaaaaaaaaaaa");
-    await newOrchestrator(true).sync({ udid: UDID });
-    expect(store.put).not.toHaveBeenCalled();
-    expect(spies.enableEncryption.mock.calls[0][1]).toBe("earlier-saved-password-aaaaaaaaaaaaaaa");
-  });
-
-  it("an unknown phone setting changes nothing: no enable, the backup runs as configured", async () => {
-    phone("unknown");
-    mockDecryption.decryptBackup.mockClear();
-    spies.startBackup.mockResolvedValue(success({ isEncrypted: false }));
-    await newOrchestrator(true).sync({ udid: UDID });
-    expect(spies.enableEncryption).not.toHaveBeenCalled();
-    expect(store.put).not.toHaveBeenCalled();
-  });
-});
-
 describe("E3 a saved password that will not unlock", () => {
-  it.each(["on", "off"] as const)("phone %s: nothing generated, nothing turned on, no backup", async (status) => {
-    phone(status);
+  it("phone encrypts: nothing replaced, no backup, reasonCode BACKUP_PASSWORD_UNAVAILABLE", async () => {
+    phone("on");
     unreadable = true;
-    const result = await newOrchestrator(true).sync({ udid: UDID });
-    if (status === "on") {
-      expect(result.error).toBe(BACKUP_PASSWORD_UNAVAILABLE_MESSAGE);
-      expect(outcomeRow()).toContain("reasonCode=BACKUP_PASSWORD_UNAVAILABLE");
-    } else {
-      // Phone off: the saved password protects nothing on the phone, but a new one cannot
-      // be saved over it, so encryption is not turned on and the run fails closed.
-      expect(result.error).toBe(BACKUP_PASSWORD_UNAVAILABLE_MESSAGE);
-      expect(outcomeRow()).toContain("reasonCode=BACKUP_PASSWORD_UNAVAILABLE");
-    }
+    const result = await newOrchestrator().sync({ udid: UDID });
     expect(result.success).toBe(false);
-    expect(spies.enableEncryption).not.toHaveBeenCalled();
+    expect(result.error).toBe(BACKUP_PASSWORD_UNAVAILABLE_MESSAGE);
+    expect(outcomeRow()).toContain("reasonCode=BACKUP_PASSWORD_UNAVAILABLE");
+    expect(outcomeRow()).toContain("endedBy=backup-encryption");
     expect(spies.startBackup).not.toHaveBeenCalled();
+    expect(events).not.toContain("put");
+  });
+
+  it("phone reports encryption off: the sync runs without a password, the saved entry untouched", async () => {
+    phone("off");
+    unreadable = true;
+    spies.startBackup.mockResolvedValue(success({ isEncrypted: false }));
+    await newOrchestrator().sync({ udid: UDID });
+    expect(spies.startBackup.mock.calls[0][0].password).toBeUndefined();
     expect(events).not.toContain("put");
   });
 });
@@ -408,31 +358,26 @@ describe("E6 parse copies", () => {
   });
 });
 
-describe("option A paused (the shipped default)", () => {
-  it("a phone that does not encrypt is left alone: nothing generated, nothing turned on", async () => {
+describe("Keepr never changes the phone's own backup setting", () => {
+  it("a phone that does not encrypt is left alone and backs up without a password", async () => {
     phone("off");
     spies.startBackup.mockResolvedValue(success({ isEncrypted: false }));
-    const o = new DeviceSyncOrchestrator();
-    o.on("error", () => {});
-    o.backupPasswordStore = store; // the shipped flag value is NOT overridden here
-    await o.sync({ udid: UDID });
-    expect(o.backupEncryptionEnableAllowed).toBe(false);
-    expect(spies.enableEncryption).not.toHaveBeenCalled();
+    await newOrchestrator().sync({ udid: UDID });
     expect(store.put).not.toHaveBeenCalled();
     expect(spies.startBackup.mock.calls[0][0].password).toBeUndefined();
+    expect(events).not.toContain("aside");
   });
 
-  it("a typed password on a phone that encrypts, with a plaintext chain on disk, still starts a new chain", async () => {
+  it("a typed password on a phone that encrypts, with a plaintext chain on disk, starts a new chain", async () => {
     phone("on");
     spies.readChainEncryption.mockResolvedValue("plaintext");
-    const o = newOrchestrator(false);
+    const o = newOrchestrator();
     (o as unknown as { checkAvailableDiskSpace: () => Promise<unknown> }).checkAvailableDiskSpace = async () => ({
       hasEnoughSpace: true,
       availableSpace: 900 * 1024 ** 3,
     });
     await o.sync({ udid: UDID, password: "typed" });
     expect(events.slice(0, 2)).toEqual(["aside", "backup:with-password"]);
-    expect(spies.enableEncryption).not.toHaveBeenCalled();
   });
 });
 

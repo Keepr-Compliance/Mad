@@ -30,7 +30,6 @@ import type { LeftoverRemoval } from "./backupService";
 import type { PriorBackupState } from "../types/ipc/window-api-platform";
 import { BackupDecryptionService } from "./backupDecryptionService";
 import {
-  generateBackupPassword,
   getBackupPasswordStore,
   BackupPasswordUnavailableError,
   type BackupPasswordStore,
@@ -560,33 +559,6 @@ export const BACKUP_PASSWORD_UNAVAILABLE_MESSAGE =
   "Keepr can't unlock the iPhone backup password it saved on this computer, so it can't read this iPhone's encrypted backup. Nothing was changed. Restart Keepr and try again; if this keeps happening, contact support.";
 
 /**
- * BACKLOG-3816 option A — Keepr turning the iPhone's backup encryption ON with a password
- * it generates — is PAUSED (OFF). With the password held by one computer's SecretStore, a
- * second computer syncing the same iPhone (or a replacement PC) meets a password nobody
- * has seen; the only exit is Reset All Settings. Where the password lives is a founder
- * decision (server-held per-account / derived from an account secret / one computer per
- * phone). The flow is built and tested; storage plugs in through BackupPasswordStore
- * (`backupPasswordStore`). Everything else in S4 runs regardless of this flag.
- */
-export const KEEPR_BACKUP_ENCRYPTION_ENABLED = false;
-
-/** BACKLOG-3816: shown while the phone asks for its passcode to turn encryption on. */
-export const BACKUP_ENCRYPTION_CONFIRM_MESSAGE =
-  "Turning on encrypted backups: unlock your iPhone and enter your passcode when it asks. " +
-  "Backups Keepr makes are encrypted with a password Keepr keeps for you. If it is ever lost, " +
-  "the fix is on the iPhone: Settings > General > Transfer or Reset iPhone > Reset > Reset All Settings " +
-  "(your data stays). The first encrypted backup is a full one and can take about an hour.";
-
-export const BACKUP_ENCRYPTION_NOT_CONFIRMED_MESSAGE =
-  "Encrypted backups were not turned on because the iPhone did not confirm. Unlock your iPhone, " +
-  "select Try Again, and enter your passcode on the iPhone when it asks.";
-
-type EncryptionPlan =
-  | { kind: "unchanged" }
-  | { kind: "enabled"; password: string; newChain: boolean }
-  | { kind: "failed"; reasonCode: string; message: string };
-
-/**
  * BACKLOG-3598: what the user is told when the phone being backed up is unplugged.
  * Deliberately does not contain "cancelled": the renderer treats a result containing
  * that word as a clean idle and would drop it.
@@ -604,7 +576,6 @@ export const ENCRYPTION_REASON_CODES: ReadonlySet<string> = new Set([
   "INCORRECT_PASSWORD",
   "DECRYPTION_FAILED",
   "BACKUP_PASSWORD_UNAVAILABLE",
-  "ENCRYPTION_NOT_CONFIRMED",
 ]);
 
 function inMockMode(): boolean {
@@ -625,8 +596,6 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   private decryptionService: BackupDecryptionService;
   /** Test seam; production uses the process-wide store. */
   backupPasswordStore: BackupPasswordStore | null = null;
-  /** BACKLOG-3816: whether option A (Keepr turns encryption on) may run. Test seam. */
-  backupEncryptionEnableAllowed: boolean = KEEPR_BACKUP_ENCRYPTION_ENABLED;
   private messagesParser: iOSMessagesParser;
   private contactsParser: iOSContactsParser;
 
@@ -1585,31 +1554,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // BACKLOG-3816 telemetry: where this run's backup password came from. Never the password.
       syncTimeline.setContext({ backupPassword: passwordPlan.kind });
 
-      // BACKLOG-3816 option A: a phone that does not encrypt its backups is asked to, with
-      // a password Keepr generates and keeps; a plaintext chain is replaced by a new
-      // encrypted one.
-      let encryptionPlan: EncryptionPlan = { kind: "unchanged" };
-      if (!inMockMode()) {
-        encryptionPlan = await this.ensureBackupEncryption(
-          options.udid,
-          passwordPlan.kind === "stored" || passwordPlan.kind === "provided" ? passwordPlan.password : undefined,
-          passwordPlan.kind === "stored",
-        );
-        if (encryptionPlan.kind === "failed") {
-          syncTimeline.setContext({ endedBy: "backup-encryption", reasonCode: encryptionPlan.reasonCode });
-          this.isRunning = false;
-          this.setPhase("error");
-          this.emit("error", { message: encryptionPlan.message });
-          return this.errorResult(encryptionPlan.message);
-        }
-      }
-      const backupPassword =
-        encryptionPlan.kind === "enabled"
-          ? encryptionPlan.password
-          : passwordPlan.kind === "none"
-            ? undefined
-            : passwordPlan.password;
-      if (encryptionPlan.kind === "enabled" && encryptionPlan.newChain) {
+      // BACKLOG-3816: a phone whose OWNER encrypts its backups, with a password Keepr has
+      // (typed or saved), and an unencrypted chain still on disk: that chain cannot be
+      // continued (snapshot comparison breaks), so a new one is started.
+      const backupPassword = passwordPlan.kind === "none" ? undefined : passwordPlan.password;
+      if (backupPassword && !inMockMode() && (await this.needsNewEncryptedChain(options.udid))) {
         await this.prepareNewChain(options.udid);
       }
 
@@ -2344,16 +2293,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   }
 
   /**
-   * BACKLOG-3816 option A. Phone encrypts already → nothing to turn on (a plaintext
-   * chain on disk still needs replacing). Phone does not → use the saved password if one
-   * exists (an earlier attempt the phone never confirmed), else generate one and SAVE IT
-   * FIRST, then ask the phone. A failed read of the phone's setting fails closed.
+   * BACKLOG-3816: true when the phone encrypts its backups (owner's setting) but the chain
+   * on disk is unencrypted. Records the phone's setting for telemetry. A failed read of
+   * the setting changes nothing.
    */
-  private async ensureBackupEncryption(
-    udid: string,
-    knownPassword: string | undefined,
-    knownIsSaved: boolean,
-  ): Promise<EncryptionPlan> {
+  private async needsNewEncryptedChain(udid: string): Promise<boolean> {
     let status: BackupEncryptionInfo;
     try {
       status = await this.backupService.checkEncryptionStatus(udid);
@@ -2361,58 +2305,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       status = { isEncrypted: false, needsPassword: false, status: "unknown" };
     }
     syncTimeline.setContext({ phoneBackupEncryption: status.status ?? "unknown" });
-
-    if (status.status === "on") {
-      // A plaintext chain cannot be continued once the phone encrypts (snapshot
-      // comparison breaks): start a new chain — whoever's password this is.
-      if (!knownPassword) return { kind: "unchanged" };
-      const chain = await this.backupService.readChainEncryption(udid);
-      return chain === "plaintext"
-        ? { kind: "enabled", password: knownPassword, newChain: true }
-        : { kind: "unchanged" };
-    }
-    if (status.status !== "off") {
-      // The setting could not be read. Nothing is turned on and nothing is turned off; the
-      // backup runs as the phone is configured and the next sync asks again.
-      log.warn("[DeviceSyncOrchestrator] Phone backup encryption setting unknown; not changing it this sync");
-      return { kind: "unchanged" };
-    }
-
-    if (!this.backupEncryptionEnableAllowed) {
-      // Option A paused: the phone's setting is left exactly as it is.
-      return { kind: "unchanged" };
-    }
-    // Retry after an unconfirmed attempt reuses the SAVED password (idempotent); a typed
-    // password is never used to turn encryption on.
-    let password = knownIsSaved ? knownPassword : undefined;
-    if (!password) {
-      password = generateBackupPassword();
-      try {
-        await this.passwordStore().put(udid, password, "generated");
-      } catch (error) {
-        log.warn("[DeviceSyncOrchestrator] Could not save a new backup password; not turning encryption on", {
-          error: error instanceof Error ? error.name : "unknown",
-        });
-        return { kind: "failed", reasonCode: "BACKUP_PASSWORD_UNAVAILABLE", message: BACKUP_PASSWORD_UNAVAILABLE_MESSAGE };
-      }
-      syncTimeline.setContext({ backupPassword: "generated" });
-    }
-
-    this.emitProgress({
-      phase: "backup",
-      phaseProgress: 0,
-      overallProgress: 0,
-      message: BACKUP_ENCRYPTION_CONFIRM_MESSAGE,
-    });
-    const result = await this.backupService.enableEncryption(udid, password, {
-      signal: this.abortController?.signal,
-    });
-    syncTimeline.setContext({ encryptionEnable: result.enabled ? "enabled" : result.reason === "not-confirmed" || result.reason === "timeout" ? "not-confirmed" : "failed" });
-    if (!result.enabled) {
-      return { kind: "failed", reasonCode: "ENCRYPTION_NOT_CONFIRMED", message: BACKUP_ENCRYPTION_NOT_CONFIRMED_MESSAGE };
-    }
-    const chain = await this.backupService.readChainEncryption(udid);
-    return { kind: "enabled", password, newChain: chain === "plaintext" };
+    if (status.status !== "on") return false;
+    return (await this.backupService.readChainEncryption(udid)) === "plaintext";
   }
 
   /**

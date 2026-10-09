@@ -151,60 +151,6 @@ describe("BACKLOG-3817 startBackup with an encrypted backup", () => {
   });
 });
 
-describe("BACKLOG-3816 enableEncryption (option A)", () => {
-  const GENERATED = "GeneratedBackupPassword_0123456789abcdef";
-
-  function device(after: "true" | "false", exit = 0) {
-    mockSpawn.mockImplementation((cmd: string, _args: string[], _opts?: unknown) => {
-      const proc = new FakeProcess();
-      setTimeout(() => {
-        if (cmd.includes("ideviceinfo")) proc.stdout.emit("data", Buffer.from(`${after}\n`));
-        proc.emit("close", exit);
-      }, 0);
-      return proc;
-    });
-  }
-
-  it("passes the password ONLY in the environment, and never asks for 'encryption off'", async () => {
-    process.env.BACKUP_PASSWORD = "inherited-should-be-dropped";
-    device("true");
-    const result = await new BackupService().enableEncryption(UDID, GENERATED);
-    delete process.env.BACKUP_PASSWORD;
-    expect(result).toEqual({ enabled: true });
-
-    const enableCall = mockSpawn.mock.calls.find((c) => String(c[0]).includes("idevicebackup2"))!;
-    expect(enableCall[1]).toEqual(["-u", UDID, "encryption", "on"]);
-    expect(enableCall[2].env.BACKUP_PASSWORD_NEW).toBe(GENERATED);
-    expect(enableCall[2].env.BACKUP_PASSWORD).toBeUndefined();
-    const argv = JSON.stringify(mockSpawn.mock.calls.map((c) => c[1]));
-    expect(argv).not.toContain(GENERATED);
-    expect(argv).not.toContain('"off"');
-    expect(logged.join("\n")).not.toContain(GENERATED);
-  });
-
-  it("an exit code of 0 is not trusted: the phone still saying WillEncrypt=false is 'not-confirmed'", async () => {
-    device("false", 0);
-    expect(await new BackupService().enableEncryption(UDID, GENERATED)).toEqual({ enabled: false, reason: "not-confirmed" });
-  });
-
-  it("times out (passcode never entered) and kills the process", async () => {
-    let killed = false;
-    mockSpawn.mockImplementation(() => {
-      const proc = new FakeProcess();
-      proc.kill = jest.fn(() => {
-        killed = true;
-        return true;
-      });
-      return proc;
-    });
-    expect(await new BackupService().enableEncryption(UDID, GENERATED, { timeoutMs: 20 })).toEqual({
-      enabled: false,
-      reason: "timeout",
-    });
-    expect(killed).toBe(true);
-  });
-});
-
 describe("BACKLOG-3816 3598 interplay — a valid encrypted chain is never a leftover", () => {
   it("an encrypted Manifest.db (ciphertext, not SQLite) is 'indexed' and the sweep keeps the chain", async () => {
     const service = new BackupService();

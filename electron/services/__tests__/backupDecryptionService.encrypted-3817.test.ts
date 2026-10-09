@@ -28,6 +28,7 @@ import {
   BackupDecryptionService,
   SMS_DB_FILE_ID,
   ADDRESS_BOOK_FILE_ID,
+  ATTACHMENT_RELATIVE_ROOTS,
 } from "../backupDecryptionService";
 import { iOSMessagesParser } from "../iosMessagesParser";
 import { iOSContactsParser } from "../iosContactsParser";
@@ -183,6 +184,13 @@ describe("BACKLOG-3817 encrypted backup → parse copy", () => {
     expect(listFiles(backupDir)).toEqual(backupFilesBefore);
     expect(fs.existsSync(path.join(tmpRoot, "not-ours"))).toBe(true);
     fs.rmSync(path.join(tmpRoot, "not-ours"), { recursive: true });
+  });
+
+  it("decrypts exactly the attachment roots the messages parser resolves (parity)", () => {
+    // A root added to the parser but not here would resolve to a file never decrypted.
+    expect([...ATTACHMENT_RELATIVE_ROOTS]).toEqual([
+      ...(iOSMessagesParser as unknown as { ATTACHMENT_ROOTS: readonly string[] }).ATTACHMENT_ROOTS,
+    ]);
   });
 
   it("isBackupEncrypted reads Manifest.plist; missing or plaintext backups are not encrypted", async () => {

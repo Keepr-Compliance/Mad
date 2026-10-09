@@ -24,7 +24,6 @@ import {
   BACKUP_PASSWORD_STORE_FILENAME,
   BackupPasswordUnavailableError,
   createBackupPasswordStore,
-  generateBackupPassword,
 } from "../backupPassword";
 
 class FakeSafeStorage implements SecretStore {
@@ -62,21 +61,12 @@ beforeEach(() => {
 });
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
-describe("generateBackupPassword", () => {
-  it("is 32+ characters and different every time", () => {
-    const a = generateBackupPassword();
-    const b = generateBackupPassword();
-    expect(a.length).toBeGreaterThanOrEqual(32);
-    expect(a).not.toBe(b);
-  });
-});
-
 describe("put / get", () => {
   it("absent before anything is saved, found after; P1 the file holds no form of the password", async () => {
     expect(await store().get(UDID)).toEqual({ kind: "absent" });
-    const password = generateBackupPassword();
-    await store().put(UDID, password, "generated");
-    expect(await store().get(UDID)).toEqual({ kind: "found", password, origin: "generated" });
+    const password = "a-typed-backup-password";
+    await store().put(UDID, password, "user");
+    expect(await store().get(UDID)).toEqual({ kind: "found", password, origin: "user" });
 
     const raw = fs.readFileSync(storeFile());
     for (const form of [password, Buffer.from(password).toString("base64"), Buffer.from(password).toString("hex")]) {
@@ -87,7 +77,7 @@ describe("put / get", () => {
   it("P3 put never overwrites an existing entry", async () => {
     await store().put(UDID, "first-password", "user");
     const before = fs.readFileSync(storeFile());
-    await expect(store().put(UDID, "second-password", "generated")).rejects.toBeInstanceOf(BackupPasswordUnavailableError);
+    await expect(store().put(UDID, "second-password", "user")).rejects.toBeInstanceOf(BackupPasswordUnavailableError);
     expect(fs.readFileSync(storeFile()).equals(before)).toBe(true);
     expect(await store().get(UDID)).toEqual({ kind: "found", password: "first-password", origin: "user" });
   });
@@ -101,14 +91,14 @@ describe("put / get", () => {
 
 describe("P2 fail closed — an entry that will not unwrap", () => {
   beforeEach(async () => {
-    await store().put(UDID, "the-real-password", "generated");
+    await store().put(UDID, "the-real-password", "user");
     ss.failDecrypt = true;
   });
 
   it("get throws, put and replaceVerified refuse, and the file bytes are unchanged", async () => {
     const before = fs.readFileSync(storeFile());
     await expect(store().get(UDID)).rejects.toBeInstanceOf(BackupPasswordUnavailableError);
-    await expect(store().put(UDID, generateBackupPassword(), "generated")).rejects.toBeInstanceOf(
+    await expect(store().put(UDID, "another-password", "user")).rejects.toBeInstanceOf(
       BackupPasswordUnavailableError,
     );
     await expect(store().replaceVerified(UDID, "typed")).rejects.toBeInstanceOf(BackupPasswordUnavailableError);
@@ -127,10 +117,10 @@ describe("P2 fail closed — an entry that will not unwrap", () => {
 describe("replaceVerified", () => {
   it("replaces a readable entry and keeps other phones' entries", async () => {
     await store().put(UDID, "old", "user");
-    await store().put("OTHER-UDID", "other", "generated");
+    await store().put("OTHER-UDID", "other", "user");
     await store().replaceVerified(UDID, "new");
     expect(await store().get(UDID)).toEqual({ kind: "found", password: "new", origin: "user" });
-    expect(await store().get("OTHER-UDID")).toEqual({ kind: "found", password: "other", origin: "generated" });
+    expect(await store().get("OTHER-UDID")).toEqual({ kind: "found", password: "other", origin: "user" });
   });
 
   it("refuses when there is nothing to replace", async () => {
@@ -146,6 +136,6 @@ describe("round trip before anyone relies on a saved password", () => {
       decryptString: (b: Buffer) => `${ss.decryptString(b)}-altered`,
     };
     const s2 = createBackupPasswordStore({ baseDir: () => dir, secretStore: lying });
-    await expect(s2.put(UDID, "the-password", "generated")).rejects.toBeInstanceOf(BackupPasswordUnavailableError);
+    await expect(s2.put(UDID, "the-password", "user")).rejects.toBeInstanceOf(BackupPasswordUnavailableError);
   });
 });

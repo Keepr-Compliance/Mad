@@ -21,13 +21,12 @@ function row(fields: Record<string, string | number | boolean>, extra: Partial<S
 }
 
 describe("BACKLOG-3816 backup-encryption telemetry", () => {
-  it("records where the password came from, the phone's setting and the enable result", () => {
+  it("records where the password came from and the phone's setting", () => {
     const r = buildSyncOutcomeRow(
       row({
         backupPassword: "provided",
         phoneBackupEncryption: "on",
-        encryptionEnable: "not-confirmed",
-        reasonCode: "ENCRYPTION_NOT_CONFIRMED",
+        reasonCode: "INCORRECT_PASSWORD",
         endedBy: "backup-encryption",
       }),
       "u",
@@ -35,9 +34,8 @@ describe("BACKLOG-3816 backup-encryption telemetry", () => {
     expect(r.source_metrics).toEqual({
       backupPassword: "provided",
       phoneBackupEncryption: "on",
-      encryptionEnable: "not-confirmed",
     });
-    expect(r.reason_code).toBe("ENCRYPTION_NOT_CONFIRMED");
+    expect(r.reason_code).toBe("INCORRECT_PASSWORD");
     expect(r.ended_by).toBe("backup-encryption");
   });
 

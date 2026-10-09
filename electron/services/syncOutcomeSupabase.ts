@@ -130,9 +130,8 @@ function defined(row: Record<string, unknown>): Record<string, unknown> {
  * no migration). Allow-listed VALUES only — anything else is dropped — and never a
  * password. Only used when the source supplied no metrics of its own (iPhone rows).
  */
-const BACKUP_PASSWORD_SOURCES = new Set(["provided", "stored", "none", "unavailable", "generated"]);
+const BACKUP_PASSWORD_SOURCES = new Set(["provided", "stored", "none", "unavailable"]);
 const PHONE_BACKUP_ENCRYPTION = new Set(["on", "off", "unknown"]);
-const ENCRYPTION_ENABLE_RESULTS = new Set(["enabled", "not-confirmed", "failed"]);
 
 export function backupEncryptionMetrics(f: TimelineMeta): Record<string, string> | undefined {
   const out: Record<string, string> = {};
@@ -142,7 +141,6 @@ export function backupEncryptionMetrics(f: TimelineMeta): Record<string, string>
   };
   pick("backupPassword", BACKUP_PASSWORD_SOURCES);
   pick("phoneBackupEncryption", PHONE_BACKUP_ENCRYPTION);
-  pick("encryptionEnable", ENCRYPTION_ENABLE_RESULTS);
   return Object.keys(out).length > 0 ? out : undefined;
 }
 

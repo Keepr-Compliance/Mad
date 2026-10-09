@@ -323,9 +323,6 @@ export type BackupErrorCode =
   | "INVALID_UDID"
   // BACKLOG-3816: a password is saved for this phone but secure storage cannot unlock it.
   | "BACKUP_PASSWORD_UNAVAILABLE"
-  // BACKLOG-3816: Keepr asked the phone to encrypt its backups and the phone did not
-  // confirm (passcode not entered, declined, or timed out).
-  | "ENCRYPTION_NOT_CONFIRMED"
   | "UNKNOWN_ERROR";
 
 /**
