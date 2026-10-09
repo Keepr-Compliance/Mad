@@ -110,6 +110,9 @@ for (const stats of [false, true]) {
       expect(fresh.atts[0].length).toBeGreaterThan(5);
       // window actually narrows
       expect(fresh.atts[3].length).toBeLessThan(fresh.atts[0].length);
+      // Absolute pin (not relative to the old SQL, which would move with a broken
+      // shipped SQL): 32 attachments with the user filter, 64 without it.
+      expect(fresh.atts.map((a) => a.length)).toEqual([32, 16, 18, 16]);
       // u2's copies never leak into a u1 thread link
       expect(fresh.texts.some((r: any) => String(r.id).startsWith("m0_") && String(r.id).endsWith("_u2"))).toBe(false);
       expect(old).toEqual(fresh);
@@ -119,6 +122,7 @@ for (const stats of [false, true]) {
       const dropped = await under("noUserFilter");
       expect(rewrites).toBeGreaterThan(0);
       expect(dropped).not.toEqual(fresh);
+      expect(dropped.atts[0].length).toBeGreaterThan(fresh.atts[0].length);
     });
   });
 }
