@@ -13,6 +13,8 @@
  *   X2  after migration marks both scopes done: a plaintext file dropped into
  *       either scope is REFUSED by every S2 reader entry point; the migrated
  *       (encrypted) file still reads back as its original bytes.
+ *   X3  migrating ONE scope marks only that scope done; the other stays not-done
+ *       and its plaintext file still reads.
  */
 import crypto from "crypto";
 import fs from "fs";
@@ -59,8 +61,8 @@ async function seed(dir: string, bytes: Buffer): Promise<string> {
   return file;
 }
 
-async function migrateAll(): Promise<void> {
-  const migration = createAtRestMigration({
+function makeMigration(): ReturnType<typeof createAtRestMigration> {
+  return createAtRestMigration({
     files: () => files,
     markers: () => markers,
     userData: () => root,
@@ -72,6 +74,10 @@ async function migrateAll(): Promise<void> {
     broadcast: () => undefined,
     setTimer: () => undefined,
   });
+}
+
+async function migrateAll(): Promise<void> {
+  const migration = makeMigration();
   for (const { scope } of SCOPES) await migration.runScope(scope);
 }
 
@@ -113,5 +119,21 @@ describe.each(SCOPES)("S3 done marker → S2 reader phase switch ($dir)", ({ sco
     const dest = path.join(root, "out.bin");
     await expect(decryptStoredAttachmentTo(stray, dest)).rejects.toThrow();
     expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  it("X3 migrating only this scope does not mark the other scope done", async () => {
+    const other = SCOPES.find((s) => s.scope !== scope)!;
+    // Both scopes need a file: an empty scope finishes "empty" and is never marked done.
+    const mine = await seed(dir, crypto.randomBytes(300));
+    const theirBytes = crypto.randomBytes(300);
+    const theirs = await seed(other.dir, theirBytes);
+
+    await makeMigration().runScope(scope);
+
+    expect((await markers.getScope(scope))?.state).toBe("done");
+    expect((await markers.getScope(other.scope))?.state).not.toBe("done");
+    // The other scope's plaintext file is still served (its phase has not switched).
+    expect((await readStoredAttachment(theirs)).equals(theirBytes)).toBe(true);
+    expect(mine).not.toBe(theirs);
   });
 });
