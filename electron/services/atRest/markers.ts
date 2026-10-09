@@ -24,7 +24,12 @@ import path from "path";
 import { hostAppPaths } from "../../capabilities/appPathsProvider";
 import { writeFileAtomic } from "./fileCrypto";
 
-export type BackupAtRestState = "plaintext" | "migrating" | "encrypted" | "syncing" | "apple-encrypted";
+/**
+ * `sealing` (BACKLOG-3816): a seal is running (or was cut off) on a chain that a sync or a
+ * crash left part plain — after a sync, and the launch/idle recovery of a `syncing` chain.
+ * Protects the chain like `syncing`; the next launch finishes it.
+ */
+export type BackupAtRestState = "plaintext" | "migrating" | "encrypted" | "syncing" | "sealing" | "apple-encrypted";
 export type ScopeAtRestState = "pending" | "migrating" | "done";
 
 export interface BackupMarker {
@@ -61,7 +66,7 @@ export const STATE_FILE_NAME = "at-rest-state.json";
 export const SCOPE_MESSAGE_ATTACHMENTS = "message-attachments";
 export const SCOPE_EMAIL_ATTACHMENTS = "email-attachments";
 
-const BACKUP_STATES: ReadonlySet<string> = new Set(["plaintext", "migrating", "encrypted", "syncing", "apple-encrypted"]);
+const BACKUP_STATES: ReadonlySet<string> = new Set(["plaintext", "migrating", "encrypted", "syncing", "sealing", "apple-encrypted"]);
 const SCOPE_STATES: ReadonlySet<string> = new Set(["pending", "migrating", "done"]);
 
 /** A udid is a device identifier: hex and dashes only. Anything else could escape the marker dir. */

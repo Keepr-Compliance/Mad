@@ -101,3 +101,4 @@ supabase/.branches/
 # BACKLOG-2553: esbuild bundle of the contact worker, built and removed by
 # electron/workers/__tests__/contactWorkerPool.drain-2553.test.ts
 .tmp-2553/
+dist-bench/

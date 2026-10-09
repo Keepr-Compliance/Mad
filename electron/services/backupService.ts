@@ -92,6 +92,7 @@ function errnoCode(err: unknown): string | undefined {
 // Single source in the at-rest module (S4-C seals moved-aside chains by this prefix).
 export { REPLACED_CHAIN_PREFIX } from "./atRest/backupAtRest";
 import { REPLACED_CHAIN_PREFIX, markerProtectsChain, readMarkerAt } from "./atRest/backupAtRest";
+import { openBackupIndexBytes } from "./atRest/backupIndexFiles";
 
 function exactUdidOrNull(name: string): string | null {
   try {
@@ -2643,7 +2644,8 @@ export class BackupService extends EventEmitter {
   ): Promise<"finished" | "unfinished" | "absent"> {
     let raw: Buffer;
     try {
-      raw = await fs.readFile(statusPlistPath);
+      // BACKLOG-3816: sealed between syncs; decrypted in memory (plaintext passes through).
+      raw = await openBackupIndexBytes(await fs.readFile(statusPlistPath));
     } catch (readErr: unknown) {
       if (readErr && typeof readErr === "object" && "code" in readErr && (readErr as { code: string }).code === "ENOENT") {
         return "absent";
@@ -2815,7 +2817,8 @@ export class BackupService extends EventEmitter {
       // Atomic: read directly, handle ENOENT instead of check-then-act (TOCTOU)
       const infoPlistPath = path.join(backupPath, "Info.plist");
       try {
-        const content = await fs.readFile(infoPlistPath, "utf8");
+        // BACKLOG-3816: sealed between syncs; decrypted in memory (plaintext passes through).
+        const content = (await openBackupIndexBytes(await fs.readFile(infoPlistPath))).toString("utf8");
         const deviceNameMatch = content.match(
           /<key>Device Name<\/key>\s*<string>([^<]+)<\/string>/,
         );

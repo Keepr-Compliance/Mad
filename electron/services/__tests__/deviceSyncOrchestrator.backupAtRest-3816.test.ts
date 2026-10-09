@@ -125,6 +125,7 @@ import {
 } from "../atRest/backupAtRest";
 import { createFileCrypto, MAGIC, type KeyResolver } from "../atRest/fileCrypto";
 import { createMarkerStore } from "../atRest/markers";
+import { setBackupIndexKeysForTests } from "../atRest/backupIndexFiles";
 import { syncTimeline } from "../syncTimeline";
 import type { BackupResult } from "../../types/backup";
 
@@ -165,7 +166,9 @@ function plaintextLeft(): string[] {
     for (const e of fsSync.readdirSync(d, { withFileTypes: true })) {
       const f = path.join(d, e.name);
       if (e.isDirectory()) walk(f, false);
-      else if (!(root && e.name.endsWith(".plist"))) {
+      else {
+        // Root plists included: sealed between syncs too (founder QA 2026-10-09).
+        void root;
         const b = fsSync.readFileSync(f);
         if (b.length > 0 && !b.subarray(0, 7).equals(MAGIC)) out.push(f);
       }
@@ -246,7 +249,10 @@ beforeEach(async () => {
     sleep: async () => undefined,
     log: (_l, m, d) => process.env.S4C_DEBUG && process.stderr.write(`${m} ${JSON.stringify(d)}\n`),
     strategy: () => "full",
+    pauseWaitMs: 20,
   });
+  // Sealed root plists are read (checkBackupStatus) with the test key, never the app's key store.
+  setBackupIndexKeysForTests(resolver);
   makeChain();
   expect(await atRest.migrate(UDID)).toBe("encrypted");
 
@@ -259,6 +265,7 @@ beforeEach(async () => {
   jest.spyOn(P, "cancelBackup").mockImplementation(() => undefined);
 });
 afterEach(() => {
+  setBackupIndexKeysForTests(null);
   fsSync.rmSync(userData, { recursive: true, force: true });
   delete process.env.KEEPR_S4C_USERDATA;
 });
@@ -500,18 +507,69 @@ describe("refusals before idevicebackup2", () => {
     expect(plaintextLeft()).toEqual([]);
   });
 
-  it("B: a backup being secured → refused with the founder sentence, never spawned", async () => {
+  it("B (founder decision 2026-10-09): a sync started during the launch migration is NOT refused — the migration pauses, the sync runs, its seal finishes the rest", async () => {
+    // A pre-2.40 chain: plaintext, marker removed, so migrate really seals.
+    await atRest.removeMarker(UDID);
+    fsSync.rmSync(chain, { recursive: true, force: true });
+    makeChain();
     const o = newOrchestrator();
     backupReturns(ok());
-    const busy = (atRest as unknown as { busy: Map<string, string> }).busy;
-    busy.set(UDID, "migrating");
+    const errors: unknown[] = [];
+    o.on("error", (e) => errors.push(e));
+    // A launch migration mid-pass (the real pass/pause mechanics are covered in
+    // backupAtRest.test.ts): it holds the phone and stops when asked.
+    const internals = atRest as unknown as {
+      busy: Map<string, string>;
+      pausable: Map<string, Int32Array>;
+      release: (u: string) => void;
+    };
+    const flag = new Int32Array(new SharedArrayBuffer(4));
+    internals.busy.set(UDID, "migrating");
+    internals.pausable.set(UDID, flag);
+    // It takes several of the sync's wait intervals (pauseWaitMs 20) to reach its next
+    // file boundary, as a large file would: the sync keeps waiting, it never gives up.
+    let askedAt: number | null = null;
+    let pausedAt: number | null = null;
+    const pass = setInterval(() => {
+      if (Atomics.load(flag, 0) !== 1 || pausedAt !== null) return;
+      askedAt ??= Date.now();
+      if (Date.now() - askedAt >= 150) {
+        pausedAt = Date.now();
+        internals.release(UDID);
+      }
+    }, 5);
     const result = await o.sync({ udid: UDID });
-    busy.delete(UDID);
-    expect(result.error).toContain(BACKUP_SECURING_SENTENCE);
-    expect(startBackup).not.toHaveBeenCalled();
+    clearInterval(pass);
+    expect(pausedAt).not.toBeNull();
+    expect(result.success).toBe(true);
+    expect(startBackup).toHaveBeenCalled();
+    expect(errors).toEqual([]);
+    await o.completeBackupAtRest(true);
+    await sealedAfter(o);
   });
 
-  it("B2: a backup being secured is not moved aside or deleted by the new-chain step", async () => {
+  it("B-cancel: Cancel while the sync waits for a background seal to pause is a cancel, not 'Sync Failed', and the seal resumes", async () => {
+    const o = newOrchestrator();
+    backupReturns(ok());
+    const errors: unknown[] = [];
+    o.on("error", (e) => errors.push(e));
+    // A background pass that has not reached its next file boundary yet.
+    const internals = atRest as unknown as { busy: Map<string, string>; pausable: Map<string, Int32Array> };
+    internals.busy.set(UDID, "sealing");
+    internals.pausable.set(UDID, new Int32Array(new SharedArrayBuffer(4)));
+    const syncing = o.sync({ udid: UDID });
+    await new Promise((r) => setTimeout(r, 60));
+    o.cancel();
+    const result = await syncing;
+    expect(result.error).toBe("Sync cancelled by user");
+    expect(result.error).not.toContain(BACKUP_SECURING_SENTENCE);
+    expect(errors).toEqual([]);
+    expect(startBackup).not.toHaveBeenCalled();
+    internals.busy.delete(UDID);
+    internals.pausable.delete(UDID);
+  });
+
+  it("B2: a phone held by something that cannot pause (another sync) is not moved aside or deleted by the new-chain step", async () => {
     const P = BackupService.prototype;
     jest.spyOn(P, "checkEncryptionStatus").mockResolvedValue({ isEncrypted: true, needsPassword: true, status: "on" });
     jest.spyOn(P, "readChainEncryption").mockResolvedValue("plaintext");
@@ -561,6 +619,84 @@ describe("D — C-DELTA reads a parse copy", () => {
     expect(fsSync.existsSync(result.backupPath!)).toBe(false); // C4: parse copy gone after close
     await o.completeBackupAtRest();
     await sealedAfter(o);
+  });
+});
+
+describe("C2-DELTA (founder must-fix 2026-10-09) — every end of a C-DELTA sync reseals at once; persistence is not waited for", () => {
+  let copySpy: jest.SpyInstance;
+  beforeEach(() => {
+    atRest = new BackupAtRest({
+      backupsRoot: () => backups,
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => userData }),
+      ensureKey: async () => undefined,
+      freeBytes: async () => Number.MAX_SAFE_INTEGER,
+      sleep: async () => undefined,
+      log: () => undefined,
+      strategy: () => "delta",
+    });
+    copySpy = jest.spyOn(atRest, "buildParseCopy").mockImplementation(async (_udid, out) => {
+      fsSync.mkdirSync(path.join(out, "3d"), { recursive: true });
+      fsSync.writeFileSync(path.join(out, "3d", SMS_ID), "decrypted sms copy");
+      return { copied: 1, missing: 0 };
+    });
+  });
+
+  it("success: the seal starts right after the parse copy — before persistence ends; completeBackupAtRest adds nothing", async () => {
+    const o = newOrchestrator();
+    const finish = jest.spyOn(atRest, "finishSync");
+    backupReturns(ok());
+    const result = await o.sync({ udid: UDID });
+    expect(result.success).toBe(true);
+    expect(copySpy).toHaveBeenCalledTimes(1);
+    // The seal starts AFTER the parse copy has been made (parsers read the copy, not the chain).
+    expect(finish).toHaveBeenCalledTimes(1);
+    expect(finish.mock.invocationCallOrder[0]).toBeGreaterThan(copySpy.mock.invocationCallOrder[0]);
+    // Persistence (the 'complete' listener) has NOT run completeBackupAtRest, yet:
+    await sealedAfter(o);
+    const sealPromise = o.lastAtRestSeal;
+    await o.completeBackupAtRest(true);
+    expect(o.lastAtRestSeal).toBe(sealPromise); // no second seal was started
+    await o.cleanupBackup(result.backupPath!);
+  });
+
+  it("disconnect (the tool exits, the phone is gone)", async () => {
+    const o = newOrchestrator();
+    backupReturns((orc) => {
+      (orc as unknown as { backupInFlight: { disconnected: boolean } }).backupInFlight.disconnected = true;
+      return fail();
+    }, o);
+    expect((await o.sync({ udid: UDID })).success).toBe(false);
+    await sealedAfter(o);
+    // Keeps the force-full flag semantics: a disconnect does not force C-FULL.
+    expect(await atRest.forcedFullReason(UDID)).toBeNull();
+  });
+
+  it("cancel during the backup", async () => {
+    const o = newOrchestrator();
+    backupReturns((orc) => {
+      orc.cancel();
+      return fail();
+    }, o);
+    expect((await o.sync({ udid: UDID })).error).toMatch(/cancel/i);
+    await sealedAfter(o);
+  });
+
+  it("the backup tool errors", async () => {
+    const o = newOrchestrator();
+    backupReturns(fail({ errorCode: "DEVICE_LOCKED", error: "locked" } as Partial<BackupResult>));
+    expect((await o.sync({ udid: UDID })).success).toBe(false);
+    await sealedAfter(o);
+  });
+
+  it("a throw after the parse copy (parser explodes): sealed once, not twice", async () => {
+    const o = newOrchestrator();
+    parserBehaviour = "throw";
+    backupReturns(ok());
+    const finish = jest.spyOn(atRest, "finishSync");
+    expect((await o.sync({ udid: UDID })).error).toMatch(/parser exploded/);
+    await sealedAfter(o);
+    expect(finish).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -648,5 +784,67 @@ describe("progress for passes no sync is watching", () => {
     expect(seen.every((p) => p.phase === "cleanup")).toBe(true);
     expect(seen[seen.length - 1].message).toBe("Securing your iPhone backup… 100%");
     expect(atRest.listenerCount("progress")).toBe(1);
+  });
+});
+
+// SR PROBE (PR #2903): the founder's beta.3 sequence, driven through the REAL disconnect
+// machinery: DeviceDetection emits device-disconnected -> orchestrator confirms with a
+// second listing -> backupService.cancelBackup() -> the child exits with code null ->
+// startBackup resolves a failure -> sync ends with an error. Nothing sets
+// backupInFlight.disconnected by hand.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { deviceDetectionService: detector } = require("../deviceDetectionService");
+
+describe.each(["delta", "full"] as const)("SR probe — disconnect -> cancel -> exit code null (%s)", (strategy) => {
+  it("reseals at once and leaves nothing plaintext", async () => {
+    atRest = new BackupAtRest({
+      backupsRoot: () => backups,
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => userData }),
+      ensureKey: async () => undefined,
+      freeBytes: async () => Number.MAX_SAFE_INTEGER,
+      sleep: async () => undefined,
+      log: () => undefined,
+      strategy: () => strategy,
+    });
+    const o = newOrchestrator();
+    (o as unknown as { disconnectConfirmDelayMs: number }).disconnectConfirmDelayMs = 1;
+    let running = false;
+    let exitWithNull: (() => void) | null = null;
+    (BackupService.prototype.getStatus as unknown as jest.Mock).mockImplementation(() => ({
+      isRunning: running, currentDeviceUdid: running ? UDID : null, progress: null,
+    }));
+    (BackupService.prototype.cancelBackup as unknown as jest.Mock).mockImplementation(() => {
+      exitWithNull?.();
+    });
+    detector.probeConnectedUdids.mockResolvedValue([]);
+    const finish = jest.spyOn(atRest, "finishSync");
+    startBackup.mockImplementation(async () => {
+      running = true;
+      // The phone wrote new files (plaintext) and the index is unsealed.
+      write("cd/" + "c".repeat(40), "a file the phone sent this time");
+      write("ce/" + "e".repeat(40), "another new file");
+      return new Promise<BackupResult>((resolve) => {
+        exitWithNull = () => {
+          running = false;
+          resolve(fail({ errorCode: undefined, error: "Backup failed with code null" } as Partial<BackupResult>));
+        };
+        // Unplug while the transfer runs.
+        setTimeout(() => detector.emit("device-disconnected", { udid: UDID, name: "x" }), 5);
+      });
+    });
+    const t0 = Date.now();
+    const result = await o.sync({ udid: UDID });
+    expect(result.success).toBe(false);
+    expect(BackupService.prototype.cancelBackup).toHaveBeenCalled();
+    // The seal STARTED before sync() returned (finally path), within seconds.
+    expect(finish).toHaveBeenCalledTimes(1);
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(o.lastAtRestSeal).not.toBeNull();
+    await o.lastAtRestSeal;
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    expect(atRest.busyReason(UDID)).toBeNull();
+    expect(await atRest.forcedFullReason(UDID)).toBeNull();
   });
 });

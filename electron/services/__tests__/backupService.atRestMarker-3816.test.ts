@@ -10,7 +10,9 @@
  *      unsealed chain must not cost the user the whole chain). Unreadable marker → kept.
  *      Control: the same folder with NO marker is removed.
  *  C5  checkBackupStatus on a SEALED chain reports the same completeness and the same
- *      snapshotState as before sealing (Status.plist / Info.plist stay plain).
+ *      snapshotState as before sealing. Status.plist / Info.plist are sealed too (founder
+ *      QA 2026-10-09) and read through the in-memory decrypt; the backup list still gets
+ *      the device name.
  *
  * Status.plist bytes: the `finished` plist from backupService.leftoverCleanup-3598.test.ts
  * (derived there from a real device-written plist).
@@ -50,6 +52,7 @@ jest.mock("better-sqlite3-multiple-ciphers", () =>
 import plist from "simple-plist";
 
 import { BackupService } from "../backupService";
+import { setBackupIndexKeysForTests } from "../atRest/backupIndexFiles";
 import { BackupAtRest } from "../atRest/backupAtRest";
 import { createFileCrypto, type KeyResolver } from "../atRest/fileCrypto";
 import { createMarkerStore, MARKER_DIR_NAME, type BackupAtRestState } from "../atRest/markers";
@@ -75,6 +78,7 @@ beforeEach(() => {
   chain = path.join(backups, UDID);
 });
 afterEach(() => {
+  setBackupIndexKeysForTests(null);
   fsSync.rmSync(userData, { recursive: true, force: true });
 });
 
@@ -120,6 +124,15 @@ describe("C1 — 3598 cleanup vs the at-rest marker", () => {
   });
 });
 
+describe("sealed Manifest.plist: the encrypted-chain check decrypts it", () => {
+  it("a sealed Manifest.plist that says IsEncrypted reads as encrypted (not a parse failure read as 'plaintext')", async () => {
+    write("Manifest.plist", plist.stringify({ IsEncrypted: true }));
+    await createFileCrypto(resolver).encryptFileInPlace(path.join(backups, UDID, "Manifest.plist"));
+    setBackupIndexKeysForTests(resolver);
+    expect(await new BackupService().readChainEncryption(UDID)).toBe("encrypted");
+  });
+});
+
 describe("C5 — checkBackupStatus on a sealed chain", () => {
   it("same isComplete and snapshotState before and after sealing", async () => {
     write("Status.plist", FINISHED_BYTES);
@@ -139,7 +152,14 @@ describe("C5 — checkBackupStatus on a sealed chain", () => {
       log: () => undefined,
     });
     expect(await atRest.migrate(UDID)).toBe("encrypted");
+    for (const name of ["Status.plist", "Info.plist", "Manifest.plist"]) {
+      expect(fsSync.readFileSync(path.join(backups, UDID, name)).subarray(0, 7).toString("latin1")).toBe("KEPRENC");
+    }
+    setBackupIndexKeysForTests(resolver);
     const after = await svc.checkBackupStatus(UDID);
+    const listed = (await svc.listBackups()).find((b) => b.path.endsWith(UDID));
+    expect(listed?.deviceName).toBe("Test");
+    expect(await svc.readChainEncryption(UDID)).toBe("plaintext");
 
     expect(before.state).toBe("present");
     expect(after.state).toBe("present");
