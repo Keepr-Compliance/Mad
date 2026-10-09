@@ -534,9 +534,14 @@ describe("an error in the new-chain step is an ordinary sync error, not an at-re
     const o = newOrchestrator();
     (o as unknown as { needsNewEncryptedChain: () => Promise<boolean> }).needsNewEncryptedChain = async () => true;
     backupReturns(ok());
+    const emitted: unknown[] = [];
+    o.on("error", (e: unknown) => emitted.push(e));
     const result = await o.sync({ udid: UDID, password: "typed" });
     expect(result.success).toBe(false);
     expect(result.error).toBe("rename blew up");
+    // An ordinary failure emits the Error itself; an at-rest refusal emits { message }.
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toBeInstanceOf(Error);
     expect(result.error).not.toBe(BACKUP_AT_REST_UNREADABLE_MESSAGE);
     expect(startBackup).not.toHaveBeenCalled();
     expect(atRest.busyReason(UDID)).toBeNull();
