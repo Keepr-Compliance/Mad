@@ -1138,6 +1138,19 @@ describe("founder must-fix 2026-10-09: reseal at once, on quit, and while idle",
     expect((await s.recoverIdle())[UDID]).toBe("encrypted");
   });
 
+  it("a stale pause flag (no pass holds the lock) does not hang a sync: it starts promptly", async () => {
+    makeChain();
+    const lines: string[] = [];
+    const s = service({ log: (_l, m) => lines.push(m) });
+    await s.migrate(UDID);
+    (s as unknown as { pausable: Map<string, Int32Array> }).pausable.set(UDID, new Int32Array(new SharedArrayBuffer(4)));
+    expect(s.busyReason(UDID)).toBeNull();
+    const session = await s.beginSync(UDID);
+    expect(session.udid).toBe(UDID);
+    expect(lines).toContain("[BackupAtRest] cleared a stale pause flag; no pass holds the phone");
+    (s as unknown as { release: (u: string) => void }).release(UDID);
+  }, 3000);
+
   it("a seal pass logs its start with the work to do (an interrupted run leaves a trace); counts only, no paths", async () => {
     makeChain();
     const lines: Array<{ m: string; d?: Record<string, unknown> }> = [];

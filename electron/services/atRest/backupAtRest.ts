@@ -1066,6 +1066,13 @@ export class BackupAtRest extends EventEmitter {
     // waits, and the user's Cancel ends the wait as a cancel, not a failure.
     let pausedOne = false;
     while (this.requestPause(udid)) {
+      if (!this.busy.has(udid)) {
+        // A pause flag with no pass holding the lock is stale: nothing will ever release
+        // it, so waiting would hang this sync forever. Drop it and go on.
+        this.pausable.delete(udid);
+        this.log("warn", "[BackupAtRest] cleared a stale pause flag; no pass holds the phone", { reasonCode: "STALE_PAUSE_FLAG" });
+        break;
+      }
       pausedOne = true;
       opts.onProgress?.({ udid, phase: "pausing", done: 0, total: 0 });
       const released = await this.waitForRelease(udid, this.deps.pauseWaitMs ?? PAUSE_REPORT_INTERVAL_MS);
