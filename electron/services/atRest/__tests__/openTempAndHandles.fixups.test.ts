@@ -115,6 +115,17 @@ describe("N: safeOpenName", () => {
     });
   }
 
+  it("also prefixes superscript COM/LPT and CONIN$/CONOUT$", () => {
+    for (const r of ["COM\u00b9", "COM\u00b2", "COM\u00b3", "LPT\u00b9", "LPT\u00b3", "CONIN$", "CONOUT$"]) {
+      expect(safeOpenName(r, "f", ".txt")).toBe(`_${r}.txt`);
+    }
+  });
+
+  it("strips DEL and bidi-override characters from the stem", () => {
+    expect(safeOpenName("fdp.\u202etxt", "f", ".pdf")).toBe("fdp.pdf");
+    expect(safeOpenName("a\u007fb\u202ec", "f", ".pdf")).toBe("abc.pdf");
+  });
+
   it("does not touch names that merely start with a device name", () => {
     expect(safeOpenName("CONTRACT.pdf", "f", ".pdf")).toBe("CONTRACT.pdf");
     expect(safeOpenName("COM10", "f", ".txt")).toBe("COM10.txt");

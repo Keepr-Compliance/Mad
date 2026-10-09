@@ -89,6 +89,12 @@ jest.mock("../../databaseService", () => ({
   },
 }));
 
+const mockBudget = { bytes: 50 * 1024 * 1024 };
+jest.mock("../../folderExport/textExportHelpers", () => ({
+  ...jest.requireActual("../../folderExport/textExportHelpers"),
+  newInlineImageBudget: () => ({ remaining: mockBudget.bytes }),
+}));
+
 import type { Communication } from "../../../types/models";
 import type { TransactionWithDetails } from "../../transactionService/types";
 import enhancedExportService from "../../enhancedExportService";
@@ -298,6 +304,32 @@ describe("local exports are plaintext when the sources are encrypted", () => {
     } as never);
     assertPlainOutputs(path.dirname(outFile));
     assertEmbeddedImages(2);
+  });
+
+  it("X4 combined PDF: the image budget is SHARED by every thread (room for one image, two threads)", async () => {
+    const secondThread = {
+      ...textMsg, id: "t2", message_id: "t2", thread_id: "thread-U", sender: "+15125550199", external_id: "guid-t2",
+      sent_at: "2026-03-12T10:00:00Z",
+    } as unknown as Communication;
+    mockRows.length = 0;
+    for (const [id, msg] of [["t1", "x1"], ["t2", "x2"]]) {
+      const p = path.join(userData, `message-attachments/${msg}.jpg`);
+      await files.encryptStreamToFile(Readable.from([JPEG]), p);
+      mockRows.push({ id: `img-${id}`, message_id: id, email_id: null, filename: `${id}.jpg`, mime_type: "image/jpeg", storage_path: p, file_size_bytes: JPEG.length });
+    }
+    mockBudget.bytes = JPEG.length + 1;
+    try {
+      const outFile = path.join(root, "shared", "Audit.pdf");
+      fs.mkdirSync(path.dirname(outFile), { recursive: true });
+      await folderExportService.exportTransactionToCombinedPDF(TRANSACTION, [textMsg, secondThread], outFile, {
+        hiddenTextCount: 0, hiddenTexts: [], filesNotIncluded: [],
+      } as never);
+    } finally {
+      mockBudget.bytes = 50 * 1024 * 1024;
+    }
+    const html = renderedHtml.join("\n");
+    expect(html.match(/src="data:image\/jpeg;base64,/g)).toHaveLength(1);
+    expect(html.match(/omitted to keep this export a manageable size/g)).toHaveLength(1);
   });
 
   it("the export temp HTML is removed (no plaintext left in the temp dir)", async () => {

@@ -28,7 +28,7 @@ export function openTempRoot(userData: string): string {
 }
 
 /** Windows device names: reserved with or without an extension ("NUL.txt" opens the NUL device). */
-const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3]|conin\$|conout\$)$/i;
 
 function cleanStem(n: string | null | undefined): string {
   return (
@@ -36,6 +36,8 @@ function cleanStem(n: string | null | undefined): string {
       .basename((n ?? "").replace(/\\/g, "/"))
       // eslint-disable-next-line no-control-regex
       .replace(/[\x00-\x1f<>:"|?*]/g, "_")
+      // DEL and bidi controls (RTL override etc.) would disguise the real extension.
+      .replace(/[\x7f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
       .replace(/^\.+/, "")
       // Windows drops trailing dots and spaces from a name, so "a. " is "a".
       .replace(/[. ]+$/, "")
