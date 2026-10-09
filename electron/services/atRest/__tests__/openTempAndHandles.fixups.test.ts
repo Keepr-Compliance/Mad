@@ -58,6 +58,17 @@ describe("H: decryptToFile closes every handle on every path", () => {
       expect(openFds()).toBe(0);
     });
 
+    it(`${label}: the temp file cannot be created (open wx throws)`, async () => {
+      (fs.promises.open as jest.Mock).mockImplementation((async (...args: unknown[]) => {
+        if (args[1] === "wx") throw new Error("EACCES: no create");
+        const h = await realOpen(...(args as Parameters<typeof realOpen>));
+        opened.push(h);
+        return h;
+      }) as never);
+      await expect(files.decryptToFile(src(), path.join(dir, "out2", "o.bin"))).rejects.toThrow("no create");
+      expect(openFds()).toBe(0);
+    });
+
     it(`${label}: a write throws mid-copy`, async () => {
       (fs.promises.open as jest.Mock).mockImplementation((async (...args: unknown[]) => {
         const h = await realOpen(...(args as Parameters<typeof realOpen>));
