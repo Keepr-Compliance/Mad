@@ -56,6 +56,12 @@ export const MAIN_STALL_MS = 1_000;
 export const PROFILE_ROLL_MS = 60_000;
 export const PROFILE_SAMPLING_INTERVAL_US = 5_000;
 export const CDP_COMMAND_TIMEOUT_MS = 15_000;
+/**
+ * The capture's Profiler.stop may wait behind a renderer that re-blocked right
+ * after the tick that ended the gap. Main is idle meanwhile, so wait longer
+ * rather than lose the profile.
+ */
+export const CAPTURE_STOP_TIMEOUT_MS = 120_000;
 export const MAX_PROFILE_BYTES = 20 * 1024 * 1024;
 export const MAX_PROFILES_KEPT = 3;
 export const PROFILE_DIR_NAME = "diagnostics";
@@ -386,9 +392,23 @@ export class RendererFreezeProfiler {
   private handleTick(contents: ProfiledContents, tick: RendererTickInfo): void {
     const now = this.deps.now();
 
+    let contentsChanged = false;
     if (this.contents !== contents) {
+      contentsChanged = true;
       if (this.contents) {
-        this.enqueue(() => this.disarm());
+        // A different renderer: let go of the old one first (queued, so it runs
+        // against the old contents before anything is armed on the new one).
+        const previousContents = this.contents;
+        this.enqueue(async () => {
+          this.contents = previousContents;
+          try {
+            await this.disarm();
+          } finally {
+            this.contents = contents;
+            // A refusal (DevTools) belonged to the old renderer.
+            if (this.state === "blocked") this.state = "off";
+          }
+        });
       }
       this.contents = contents;
       this.lastTickAt = null;
@@ -427,7 +447,8 @@ export class RendererFreezeProfiler {
       return;
     }
 
-    if (this.state === "off") {
+    if (this.state === "off" || contentsChanged) {
+      // After a renderer change the old one's disarm is queued ahead of this.
       this.enqueue(() => this.arm());
     } else if (
       this.state === "on" &&
@@ -484,12 +505,16 @@ export class RendererFreezeProfiler {
     });
   }
 
-  private async command(method: string, params?: Record<string, unknown>): Promise<unknown> {
+  private async command(
+    method: string,
+    params?: Record<string, unknown>,
+    timeoutMs = CDP_COMMAND_TIMEOUT_MS,
+  ): Promise<unknown> {
     const contents = this.contents;
     if (!contents || contents.isDestroyed()) throw new Error("renderer gone");
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`${method} timed out`)), CDP_COMMAND_TIMEOUT_MS);
+      timer = setTimeout(() => reject(new Error(`${method} timed out`)), timeoutMs);
     });
     try {
       return await Promise.race([contents.debugger.sendCommand(method, params), timeout]);
@@ -533,7 +558,9 @@ export class RendererFreezeProfiler {
     const phase = this.safePhase();
     try {
       if (this.state !== "on") throw new Error("profiler not running");
-      const result = (await this.command("Profiler.stop")) as { profile?: CpuProfile } | undefined;
+      const result = (await this.command("Profiler.stop", undefined, CAPTURE_STOP_TIMEOUT_MS)) as
+        | { profile?: CpuProfile }
+        | undefined;
       this.profilingSince = null;
       const profile = result?.profile;
       if (!profile || !Array.isArray(profile.nodes)) throw new Error("Profiler.stop returned no profile");

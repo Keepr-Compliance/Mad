@@ -291,6 +291,19 @@ describe("BACKLOG-3785: the profiler never gets in the way", () => {
     expect(h2.contents.debugger.attach).not.toHaveBeenCalled();
   });
 
+  it("a tick from a different renderer detaches the old one before arming the new one", async () => {
+    const h = harness();
+    await h.tick(0, { first: true });
+    expect(h.contents.attached).toBe(true);
+    const next = new FakeContents();
+    h.profiler.noteTick(next, { first: true });
+    await h.profiler.idle();
+    expect(h.contents.attached).toBe(false);
+    expect(h.contents.debugger.detach).toHaveBeenCalled();
+    expect(next.attached).toBe(true);
+    expect(next.commands).toEqual(["Profiler.enable", "Profiler.setSamplingInterval", "Profiler.start"]);
+  });
+
   it("detaches when DevTools opens", async () => {
     const h = harness();
     await h.tick(0, { first: true });

@@ -111,6 +111,7 @@ export function wrapHandleForReplySize(target: HandleTarget, deps: ReplySizeDeps
     original(channel, async (event: unknown, ...args: unknown[]) => {
       const started = deps.now();
       const result = await listener(event, ...args);
+      const durationMs = deps.now() - started;
       try {
         const phase = deps.phase();
         if (phase !== null) {
@@ -119,7 +120,7 @@ export function wrapHandleForReplySize(target: HandleTarget, deps: ReplySizeDeps
             const capped = bytes > REPLY_SIZE_CAP_BYTES;
             deps.log(
               `[IpcReplySize] channel=${channel} approxBytes=${capped ? `${REPLY_SIZE_CAP_BYTES}+` : bytes}` +
-                ` durationMs=${deps.now() - started} phase=${phase}`,
+                ` durationMs=${durationMs} phase=${phase}`,
             );
           }
         }
