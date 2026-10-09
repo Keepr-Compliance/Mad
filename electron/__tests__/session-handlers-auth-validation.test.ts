@@ -628,6 +628,20 @@ describe("BACKLOG-3833: session:user-activity (renderer input heartbeat)", () =>
     expect(mockCleanupSession).toHaveBeenCalledWith("other-token");
   });
 
+  it("user logout still runs cleanup + LOGOUT audit when the DB row is already expired/missing", async () => {
+    // Row past its expiry (or gone for any reason), session file still present, token NOT signed out here.
+    mockDbValidateSession.mockResolvedValue(null);
+    const res = await handlers["auth:logout"]({}, "expired-row-token");
+    expect(res).toEqual({ success: true });
+    expect(audit.log).toHaveBeenCalledTimes(1);
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "unknown", action: "LOGOUT", metadata: { reason: "user" } }),
+    );
+    expect(mockDbDeleteSession).toHaveBeenCalledWith("expired-row-token");
+    expect(mockClearSession).toHaveBeenCalled();
+    expect(mockCleanupSession).toHaveBeenCalledWith("expired-row-token");
+  });
+
   it("main accepts at most one heartbeat per minute per window", async () => {
     jest.useFakeTimers();
     try {

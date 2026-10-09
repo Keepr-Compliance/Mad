@@ -7,6 +7,7 @@ import * as Sentry from "@sentry/electron/main";
 import type { User, OAuthProvider, Subscription } from "../types/models";
 import logService from "./logService";
 import { emitSessionChanged } from "./authEvents";
+import { renameWithRetry } from "./atRest/fileCrypto";
 
 // ============================================
 // TYPES & INTERFACES
@@ -314,7 +315,15 @@ export class SessionService {
       const target = this.getSessionFilePath();
       const temp = `${target}.tmp`;
       await fs.writeFile(temp, fileContent, "utf8");
-      await fs.rename(temp, target);
+      try {
+        // Retries the transient EBUSY/EPERM/EACCES locks Windows scanners take
+        // on a just-closed file.
+        await renameWithRetry(temp, target);
+      } catch (renameError) {
+        // Keep the existing session.json untouched and leave no sealed temp file.
+        await fs.unlink(temp).catch(() => undefined);
+        throw renameError;
+      }
       await logService.info("Session saved successfully", "SessionService");
       // BACKLOG-3658: sign-in / refresh — listeners drop cached user state.
       emitSessionChanged({ kind: "saved", userId: data.user?.id ?? null });
@@ -438,6 +447,8 @@ export class SessionService {
    *  or from loadSession (which is itself read-only / not queued). */
   private async _clearSessionInternal(): Promise<boolean> {
     try {
+      // A leftover temp file from an interrupted or failed save holds a sealed token.
+      await fs.unlink(`${this.getSessionFilePath()}.tmp`).catch(() => undefined);
       await fs.unlink(this.getSessionFilePath());
       await logService.info("Session cleared successfully", "SessionService");
       emitSessionChanged({ kind: "cleared", userId: null });

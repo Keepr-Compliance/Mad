@@ -88,11 +88,18 @@ describe("useSessionIdleTimeout (BACKLOG-3833)", () => {
     expect(expiredListener).toBeNull();
   });
 
-  it.each([["scroll"], ["wheel"]])("%s does not count (fires for programmatic scrolling)", (type) => {
+  it("scroll does not count (fires for programmatic scrolling)", () => {
     const onExpired = jest.fn().mockResolvedValue(undefined);
     renderHook(() => useSessionIdleTimeout({ isAuthenticated: true, onExpired }));
-    window.dispatchEvent(new Event(type));
+    window.dispatchEvent(new Event("scroll"));
     expect(reportUserActivity).not.toHaveBeenCalled();
+  });
+
+  it("wheel counts (user-only input: reading with the mouse wheel is activity)", () => {
+    const onExpired = jest.fn().mockResolvedValue(undefined);
+    renderHook(() => useSessionIdleTimeout({ isAuthenticated: true, onExpired }));
+    window.dispatchEvent(new Event("wheel"));
+    expect(reportUserActivity).toHaveBeenCalled();
   });
 
   it("main's idle sign-out: leaves the signed-in screens first, then the sign-in screen shows why", async () => {
