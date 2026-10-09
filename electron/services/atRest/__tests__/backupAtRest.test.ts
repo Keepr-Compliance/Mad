@@ -301,6 +301,68 @@ describe("default strategy is C-DELTA (Step 0b)", () => {
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
   });
 
+  it("D1: a delta sync whose backup tool failed forces C-FULL even though no file is damaged; a restart still reads it", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    // The tool read a still-sealed file and exited non-zero: nothing is damaged.
+    await s.finishSync(session, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    expect(await s.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
+    const afterRestart = service();
+    expect(await afterRestart.beginSync(UDID)).toMatchObject({ kind: "keepr", strategy: "full" });
+  });
+
+  it("D1: a sync that was already C-FULL does not record a tool failure (nothing was left sealed)", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID, { strategy: "full" });
+    await s.finishSync(session, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    expect(await s.forcedFullReason(UDID)).toBeNull();
+  });
+
+  it("S1: the force-full flag survives a marker rewrite after a crash (marker left `syncing`, launch reseals)", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const first = await s.beginSync(UDID);
+    await s.finishSync(first, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    // The forced C-FULL sync starts (marker `syncing`, plaintext on disk) and the app dies before finishSync.
+    const crashed = service();
+    await crashed.beginSync(UDID);
+    expect(await readMarkerAt(backups, UDID)).toBe("syncing");
+    // Next launch: the reseal rewrites the marker to `encrypted`.
+    const relaunched = service();
+    await relaunched.runLaunchJob();
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    expect(await relaunched.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
+    expect(await service().beginSync(UDID)).toMatchObject({ strategy: "full" });
+  });
+
+  it("the damaged count is per scan: an early-return seal does not reuse the last scan's count", async () => {
+    makeChain();
+    const logs: string[] = [];
+    const s = service({ log: (_level, message) => void logs.push(String(message)) });
+    await s.migrate(UDID);
+    const smsPath = path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+    const damagedSession = await s.beginSync(UDID);
+    fs.writeFileSync(smsPath, fs.readFileSync(smsPath).subarray(0, 30));
+    await s.finishSync(damagedSession);
+    expect(logs.some((m) => m.includes("left damaged files"))).toBe(true);
+    // A second delta sync whose chain is gone when it ends: the seal returns "absent" without scanning.
+    fs.rmSync(chain, { recursive: true, force: true });
+    makeChain();
+    await s.migrate(UDID);
+    await createMarkerStore({ userData: () => userData }).setNextStrategy(UDID, null);
+    logs.length = 0;
+    const second = await s.beginSync(UDID, { strategy: "delta" });
+    fs.rmSync(chain, { recursive: true, force: true });
+    await s.finishSync(second);
+    expect(logs.some((m) => m.includes("left damaged files"))).toBe(false);
+  });
+
   it("a clean delta sync does not force C-FULL", async () => {
     makeChain();
     const s = service();

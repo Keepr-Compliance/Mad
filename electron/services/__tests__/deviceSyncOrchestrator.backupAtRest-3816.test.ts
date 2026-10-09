@@ -356,6 +356,91 @@ describe("C2 — the chain is sealed on every end path after the unseal", () => 
   });
 });
 
+describe("D1 — a failed C-DELTA backup tool forces C-FULL for the next sync; nothing else does", () => {
+  const smsPath = () => path.join(chain, "3d", SMS_ID);
+  const smsSealed = () => fsSync.readFileSync(smsPath()).subarray(0, 7).equals(MAGIC);
+
+  // The outer setup pins C-FULL; these tests run the shipped default (C-DELTA).
+  const freshAtRest = () =>
+    new BackupAtRest({
+      backupsRoot: () => backups,
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => userData }),
+      ensureKey: async () => undefined,
+      freeBytes: async () => Number.MAX_SAFE_INTEGER,
+      sleep: async () => undefined,
+      log: () => undefined,
+    });
+  beforeEach(() => {
+    atRest = freshAtRest();
+  });
+
+  /** Run the next sync and report whether the content file was plaintext (C-FULL) or sealed (C-DELTA) when the tool started. */
+  async function nextSyncUnsealedContent(): Promise<boolean> {
+    let sealedAtStart: boolean | null = null;
+    startBackup.mockImplementation(async () => {
+      sealedAtStart = smsSealed();
+      return ok();
+    });
+    // An app restart: a new at-rest service reads the flag from the marker file, and a quit
+    // left no in-process lock behind.
+    atRest = freshAtRest();
+    const o = newOrchestrator(false);
+    await o.sync({ udid: UDID });
+    await o.lastAtRestSeal;
+    expect(sealedAtStart).not.toBeNull();
+    return sealedAtStart === false;
+  }
+
+  it("the backup tool errors (non-zero exit, nothing damaged) -> the next sync is C-FULL, reason DELTA_TOOL_FAILED", async () => {
+    const o = newOrchestrator(false);
+    backupReturns(fail({ errorCode: "BACKUP_FILE_MISSING", error: "The iPhone could not find a file the backup needed." } as Partial<BackupResult>));
+    expect((await o.sync({ udid: UDID })).success).toBe(false);
+    await sealedAfter(o);
+    expect(await atRest.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
+    expect(await nextSyncUnsealedContent()).toBe(true);
+  });
+
+  it("a tool error with no error code -> the next sync is C-FULL", async () => {
+    const o = newOrchestrator(false);
+    backupReturns(fail({ errorCode: undefined, error: "idevicebackup2 exited with code 1" } as Partial<BackupResult>));
+    await o.sync({ udid: UDID });
+    await o.lastAtRestSeal;
+    expect(await atRest.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
+  });
+
+  it("the backup call throws -> the next sync is C-FULL", async () => {
+    const o = newOrchestrator(false);
+    startBackup.mockRejectedValue(new Error("spawn failed"));
+    expect((await o.sync({ udid: UDID })).success).toBe(false);
+    await o.lastAtRestSeal;
+    expect(await atRest.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
+    expect(await nextSyncUnsealedContent()).toBe(true);
+  });
+
+  it.each([
+    ["user cancel", (orc: DeviceSyncOrchestrator) => { orc.cancel(); return fail({ errorCode: undefined, error: "stopped" } as Partial<BackupResult>); }],
+    ["phone disconnected", (orc: DeviceSyncOrchestrator) => {
+      (orc as unknown as { backupInFlight: { disconnected: boolean } }).backupInFlight.disconnected = true;
+      return fail({ errorCode: undefined, error: "stopped" } as Partial<BackupResult>);
+    }],
+    ["disk guard", (orc: DeviceSyncOrchestrator) => {
+      Object.assign(orc, { diskSpaceAborted: true, diskSpaceAtAbort: 1024 });
+      return fail({ errorCode: undefined, error: "stopped" } as Partial<BackupResult>);
+    }],
+    ["app quit", (orc: DeviceSyncOrchestrator) => { Object.assign(orc, { stoppedForQuit: true }); return fail({ errorCode: undefined, error: "stopped" } as Partial<BackupResult>); }],
+    ["password failure", () => fail({ errorCode: "INCORRECT_PASSWORD", error: "wrong password" } as Partial<BackupResult>)],
+    ["disk-space error from the tool", () => fail({ errorCode: undefined, error: "No space left on device" } as Partial<BackupResult>)],
+  ])("%s -> the flag is NOT set and the next sync is still C-DELTA", async (_name, ending) => {
+    const o = newOrchestrator(false);
+    backupReturns(ending, o);
+    await o.sync({ udid: UDID });
+    await o.lastAtRestSeal;
+    expect(await atRest.forcedFullReason(UDID)).toBeNull();
+    expect(await nextSyncUnsealedContent()).toBe(false);
+  });
+});
+
 describe("first backup — 3598 must still remove an unfinished one", () => {
   it("a failed FIRST backup (no Manifest.db) is removed by the 3598 cleanup, not kept by a marker", async () => {
     fsSync.rmSync(chain, { recursive: true, force: true });

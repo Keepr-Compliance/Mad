@@ -37,6 +37,7 @@ import {
 import {
   BACKUP_AT_REST_QUARANTINED_MESSAGE,
   BackupAtRestRefusal,
+  FORCE_FULL_REASON_DELTA_TOOL_FAILED,
   describeBackupAtRestProgress,
   getBackupAtRest,
   type BackupAtRest,
@@ -617,6 +618,24 @@ function isEncryptionReasonCode(code: string | undefined): boolean {
   return code !== undefined && ENCRYPTION_REASON_CODES.has(code);
 }
 
+/**
+ * BACKLOG-3816 S4-C: error codes for a backup that stopped for a reason other than the
+ * backup tool failing on the kept files: password, device, link, disk or input problems.
+ * A delta sync that ends in one of these does not force the next sync to C-FULL.
+ */
+const NOT_A_TOOL_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "PASSWORD_REQUIRED",
+  "INCORRECT_PASSWORD",
+  "DEVICE_NOT_FOUND",
+  "DEVICE_LOCKED",
+  "BACKUP_CANCELLED",
+  "CONNECTION_LOST",
+  "INSUFFICIENT_SPACE",
+  "DECRYPTION_FAILED",
+  "INVALID_UDID",
+  "BACKUP_PASSWORD_UNAVAILABLE",
+]);
+
 export class DeviceSyncOrchestrator extends EventEmitter {
   private deviceService: DeviceDetectionService;
   private backupService: BackupService;
@@ -833,6 +852,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // completeBackupAtRest(), which syncHandlers calls when persistence ends.
     let atRestSession: BackupSyncSession | null = null;
     let atRestHandedOff = false;
+    // Set when the backup tool itself failed (not a cancel, quit, disconnect, disk guard
+    // or password failure): the sealing step then makes the next sync of a C-DELTA phone C-FULL.
+    let forceFullNext: string | undefined;
     if (this.isRunning) {
       return this.errorResult("Sync already in progress");
     }
@@ -1659,6 +1681,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             password: backupPassword,
             forceFullBackup: options.forceFullBackup,
           });
+        } catch (toolError) {
+          if (
+            !this.abortController?.signal.aborted &&
+            !this.stoppedForQuit &&
+            !this.diskSpaceAborted &&
+            !backupInFlightToken.disconnected
+          ) {
+            forceFullNext = FORCE_FULL_REASON_DELTA_TOOL_FAILED;
+          }
+          throw toolError;
         } finally {
           this.stopDiskSpaceMonitor();
         }
@@ -1792,6 +1824,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             syncTimeline.setContext({ endedBy: "app-quit" });
             this.isRunning = false;
             return this.errorResult(error);
+          }
+          // The backup tool itself failed (the abort, quit, disconnect and disk-guard exits
+          // all returned above). Whether the next sync unseals everything is decided at seal time.
+          if (
+            !(backupResult.errorCode && NOT_A_TOOL_FAILURE_CODES.has(backupResult.errorCode)) &&
+            !/disk space|no space|ENOSPC|not enough space/i.test(error)
+          ) {
+            forceFullNext = FORCE_FULL_REASON_DELTA_TOOL_FAILED;
           }
           syncTimeline.setContext({
             ...(backupResult.errorCode ? { reasonCode: backupResult.errorCode } : {}),
@@ -2145,7 +2185,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         if (this.stoppedForQuit) {
           log.info("[DeviceSyncOrchestrator] App quitting; the kept backup is sealed at next launch");
         } else {
-          this.lastAtRestSeal = this.atRest().finishSync(atRestSession);
+          this.lastAtRestSeal = this.atRest().finishSync(atRestSession, undefined, { forceFullNext });
         }
       }
     }
