@@ -262,6 +262,31 @@ export function openSealedLog(buf: Buffer, keyFor: (keyId: string) => Buffer | n
   return { text: Buffer.concat(parts).toString("utf8"), keyId: header.keyId, records, failedRecords: failed, problems };
 }
 
+/**
+ * The text of the FIRST record only, reading the header and that one record —
+ * not the file. Used at launch to find a sealed log's oldest timestamp without
+ * decrypting the whole file. Null when the file is missing, empty of records,
+ * under a key not held, or the record does not authenticate.
+ */
+export function readFirstSealedRecord(file: string, keyFor: (keyId: string) => Buffer | null): string | null {
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(file, "r");
+    const head = Buffer.alloc(LOG_HEADER_BYTES + LEN_BYTES);
+    if (fs.readSync(fd, head, 0, head.length, 0) < head.length) return null;
+    const len = head.readUInt32BE(LOG_HEADER_BYTES);
+    if (len < NONCE_BYTES + TAG_BYTES || len > MAX_RECORD_BYTES + NONCE_BYTES + TAG_BYTES) return null;
+    const rec = Buffer.alloc(len);
+    if (fs.readSync(fd, rec, 0, len, head.length) < len) return null;
+    const read = openSealedLog(Buffer.concat([head, rec]), keyFor);
+    return read.problems.length === 0 && read.records === 1 ? read.text : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
 /** Split text into record-sized pieces, cutting after a newline where possible. */
 function splitForRecords(text: string): Buffer[] {
   const all = Buffer.from(text, "utf8");

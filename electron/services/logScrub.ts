@@ -57,6 +57,7 @@ import {
   SEAL_TMP_RE,
   isSealedLogFile,
   openSealedLog,
+  readFirstSealedRecord,
   replaceWithSealedLogSync,
 } from "./atRest/sealedLog";
 import { archivePathFor, sealedTargetFor } from "./sealedLogSink";
@@ -95,6 +96,12 @@ export interface LogMaintenanceResult {
   sealed: string[];
   /** Sealed files that could not be authenticated or are under a key not held — left untouched. */
   unreadable: string[];
+  /**
+   * Sealed files whose oldest entry is past retention, left for a later
+   * {@link runLogMaintenance} without `deferSealedRewrites` (a full decrypt +
+   * reseal, kept off the launch path).
+   */
+  deferred: string[];
   errors: Array<{ file: string; message: string }>;
 }
 
@@ -103,9 +110,15 @@ export interface LogMaintenanceOptions {
   key?: AtRestKey | null;
   /** Called after a file was replaced or removed, so a writer can drop cached state. */
   onReplaced?: (file: string) => void;
+  /**
+   * Launch path: when the scrub marker is present, a sealed file whose head entry
+   * is past retention is reported in `deferred` instead of being decrypted and
+   * resealed now.
+   */
+  deferSealedRewrites?: boolean;
 }
 
-type FileOutcome = "deleted" | "rewritten" | "unchanged" | "sealed" | "unreadable";
+type FileOutcome = "deleted" | "rewritten" | "unchanged" | "sealed" | "unreadable" | "deferred";
 
 /** Parse the timestamp an electron-log line starts with, or null for a continuation line. */
 export function parseLineTimestamp(line: string): number | null {
@@ -173,6 +186,7 @@ export function maintainLogFile(
   retentionDays = LOG_RETENTION_DAYS,
   alreadyScrubbed = false,
   key: AtRestKey | null = null,
+  deferSealedRewrite = false,
 ): FileOutcome {
   const cutoff = now - retentionDays * DAY_MS;
   const stat = fs.lstatSync(file);
@@ -187,7 +201,17 @@ export function maintainLogFile(
   if (isSealedLogFile(file)) {
     // Cannot read it without the key; an archive still expires by mtime above.
     if (!key) return "unchanged";
-    const read = openSealedLog(fs.readFileSync(file), (id) => (id === key.keyId ? key.key : null));
+    const keyFor = (id: string) => (id === key.keyId ? key.key : null);
+    if (alreadyScrubbed) {
+      // Sealed lines were redacted before they were sealed, so once the marker is
+      // down only retention can require a rewrite. Decrypt the first record only
+      // (not the file) for the oldest timestamp — launch cost stays flat.
+      const first = readFirstSealedRecord(file, keyFor);
+      const head = first === null ? null : parseLineTimestamp(first);
+      if (head !== null && head >= cutoff) return "unchanged";
+      if (deferSealedRewrite) return "deferred";
+    }
+    const read = openSealedLog(fs.readFileSync(file), keyFor);
     if (read.problems.some((p) => p.kind !== "torn")) return "unreadable";
     const torn = read.problems.length > 0;
     const next = redactLogText(dropEntriesBefore(read.text, cutoff));
@@ -243,7 +267,14 @@ export function runLogMaintenance(
   opts: LogMaintenanceOptions = {},
 ): LogMaintenanceResult {
   const key = opts.key ?? null;
-  const result: LogMaintenanceResult = { deleted: [], rewritten: [], sealed: [], unreadable: [], errors: [] };
+  const result: LogMaintenanceResult = {
+    deleted: [],
+    rewritten: [],
+    sealed: [],
+    unreadable: [],
+    deferred: [],
+    errors: [],
+  };
   let names: string[];
   try {
     names = fs.readdirSync(logDir);
@@ -269,12 +300,20 @@ export function runLogMaintenance(
         unsealed.push(name);
         continue;
       }
-      const outcome = maintainLogFile(file, now, LOG_RETENTION_DAYS, alreadyScrubbed, key);
+      const outcome = maintainLogFile(
+        file,
+        now,
+        LOG_RETENTION_DAYS,
+        alreadyScrubbed,
+        key,
+        opts.deferSealedRewrites === true,
+      );
       if (outcome === "deleted") result.deleted.push(name);
       if (outcome === "rewritten") result.rewritten.push(name);
       if (outcome === "sealed") result.sealed.push(name);
       if (outcome === "unreadable") result.unreadable.push(name);
-      if (outcome !== "unchanged") opts.onReplaced?.(file);
+      if (outcome === "deferred") result.deferred.push(name);
+      if (outcome !== "unchanged" && outcome !== "deferred") opts.onReplaced?.(file);
     } catch (err) {
       result.errors.push({ file: name, message: (err as Error).message });
     }

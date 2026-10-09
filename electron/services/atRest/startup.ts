@@ -164,6 +164,20 @@ const placeholder = (id: string, order: number, slice: string): AtRestJob => ({
   },
 });
 
+/** How long after the logs job a deferred log-retention pass runs (window is up by then). */
+export const DEFERRED_LOG_WORK_DELAY_MS = 60_000;
+
+const defaultLogWorkScheduler = (fn: () => void): void => {
+  const t = setTimeout(fn, DEFERRED_LOG_WORK_DELAY_MS) as { unref?: () => void };
+  if (typeof t.unref === "function") t.unref();
+};
+let scheduleDeferredLogWork: (fn: () => void) => void = defaultLogWorkScheduler;
+
+/** Tests only: capture deferred log work instead of running it on a timer. */
+export function setDeferredLogWorkSchedulerForTests(fn: ((work: () => void) => void) | null): void {
+  scheduleDeferredLogWork = fn ?? defaultLogWorkScheduler;
+}
+
 /** Registers the S0 data-key job and a placeholder for every slice still to land. */
 export function registerDefaultJobs(startup: AtRestStartup): void {
   startup.register({
@@ -212,16 +226,38 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
       }
       let r: ReturnType<typeof runConfiguredLogMaintenance> = null;
       try {
-        r = runConfiguredLogMaintenance(Date.now(), { key, onReplaced: (f) => sink.forget(f) });
+        r = runConfiguredLogMaintenance(Date.now(), {
+          key,
+          onReplaced: (f) => sink.forget(f),
+          deferSealedRewrites: true,
+        });
       } finally {
         if (key) sink.activate(key);
       }
       if (!r) return ctx.log("warn", "[AtRest] logs: no log directory registered; skipped");
+      if (r.deferred.length > 0) {
+        // Retention on a sealed file = decrypt + reseal of up to 8 MB (~0.3 s,
+        // synchronous). Run it later, off the launch path. One synchronous call:
+        // no log line can be appended mid-replacement, and every replaced file is
+        // forgotten by the sink so its next append re-validates it.
+        scheduleDeferredLogWork(() => {
+          const current = sink.currentKey;
+          if (!current) return;
+          const later = runConfiguredLogMaintenance(Date.now(), { key: current, onReplaced: (f) => sink.forget(f) });
+          if (later) {
+            ctx.log(
+              later.errors.length ? "warn" : "info",
+              `[AtRest] logs (deferred retention): rewritten ${later.rewritten.length}, ` +
+                `deleted ${later.deleted.length}, errors ${later.errors.length}`,
+            );
+          }
+        });
+      }
       ctx.log(
         r.errors.length ? "warn" : "info",
         `[AtRest] logs: sealing ${key ? "on" : "UNAVAILABLE (redacted plaintext this run)"}; ` +
           `rewritten ${r.rewritten.length}, sealed ${r.sealed.length}, deleted ${r.deleted.length}, ` +
-          `unreadable ${r.unreadable.length}, errors ${r.errors.length}`,
+          `unreadable ${r.unreadable.length}, deferred ${r.deferred.length}, errors ${r.errors.length}`,
       );
     },
   });

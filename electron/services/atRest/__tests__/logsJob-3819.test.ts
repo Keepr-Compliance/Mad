@@ -28,10 +28,10 @@ jest.mock("../dataKeyService", () => {
   };
 });
 
-import { AtRestStartup, registerDefaultJobs } from "../startup";
+import { AtRestStartup, registerDefaultJobs, setDeferredLogWorkSchedulerForTests } from "../startup";
 import { getLogSink, resetLogSinkForTests, SealedLogSink, setLogSealingEnabled } from "../../sealedLogSink";
-import { setLogDirectoryResolver } from "../../logScrub";
-import { isSealedLog, openSealedLog } from "../sealedLog";
+import { setLogDirectoryResolver, SCRUB_MARKER } from "../../logScrub";
+import { isSealedLog, openSealedLog, SealedLogAppender } from "../sealedLog";
 
 let dir: string;
 let main: string;
@@ -45,6 +45,7 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
   setLogDirectoryResolver(null);
   resetLogSinkForTests(null);
+  setDeferredLogWorkSchedulerForTests(null);
 });
 
 async function runLogsJob(): Promise<void> {
@@ -89,4 +90,33 @@ describe("BACKLOG-3819 at-rest logs job", () => {
     expect(raw.toString("utf8")).not.toContain("amy@example.com");
     expect(getLogSink().state).toBe("pending");
   });
+
+  it("sealed main.log past retention: launch defers the trim; the deferred pass trims it and later lines stay readable", async () => {
+    keyMode = "ok";
+    const deferred: Array<() => void> = [];
+    setDeferredLogWorkSchedulerForTests((fn) => deferred.push(fn));
+    const old = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000);
+    const p = (n: number) => String(n).padStart(2, "0");
+    const oldTs = `[${old.getFullYear()}-${p(old.getMonth() + 1)}-${p(old.getDate())} 10:00:00.000]`;
+    const a = new SealedLogAppender({ key: KEY });
+    a.append(main, `${oldTs} [info] past retention\n`);
+    a.append(main, "[2099-01-01 00:00:00.000] [info] recent\n");
+    fs.writeFileSync(path.join(dir, SCRUB_MARKER), "x");
+    const before = fs.readFileSync(main);
+
+    await runLogsJob();
+    expect(getLogSink().state).toBe("sealed");
+    expect(fs.readFileSync(main).equals(before)).toBe(true);
+    expect(deferred).toHaveLength(1);
+
+    getLogSink().write(main, "[2099-01-01 00:00:01.000] [info] before deferred pass\n");
+    deferred[0]();
+    getLogSink().write(main, "[2099-01-01 00:00:02.000] [info] after deferred pass\n");
+    const read = openSealedLog(fs.readFileSync(main), (id) => (id === KEY.keyId ? KEY.key : null));
+    expect(read.problems).toEqual([]);
+    expect(read.text).not.toContain("past retention");
+    expect(read.text).toContain("recent");
+    expect(read.text.indexOf("before deferred pass")).toBeLessThan(read.text.indexOf("after deferred pass"));
+  });
 });
+
