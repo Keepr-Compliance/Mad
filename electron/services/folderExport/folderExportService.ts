@@ -21,6 +21,7 @@
  * - attachmentHelpers: Attachment querying and file management
  */
 
+import { devToolsPreference } from "../../bootstrap/appMenu";
 import path from "path";
 import fs from "fs/promises";
 import { app, BrowserWindow } from "electron";
@@ -977,6 +978,7 @@ class FolderExportService {
         height: 1200,
         show: false,
         webPreferences: {
+          devTools: devToolsPreference(), // BACKLOG-3830
           nodeIntegration: false,
           contextIsolation: true,
         },
@@ -1025,6 +1027,7 @@ class FolderExportService {
         height: 1200,
         show: false,
         webPreferences: {
+          devTools: devToolsPreference(), // BACKLOG-3830
           nodeIntegration: false,
           contextIsolation: true,
           sandbox: true,

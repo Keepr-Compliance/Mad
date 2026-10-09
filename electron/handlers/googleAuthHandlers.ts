@@ -3,6 +3,7 @@
  * Handles Google OAuth login and Gmail mailbox connection flows
  */
 
+import { devToolsPreference } from "../bootstrap/appMenu";
 import { ipcMain, BrowserWindow, Event as ElectronEvent } from "electron";
 import os from "os";
 import crypto from "crypto";
@@ -144,6 +145,7 @@ export async function handleGoogleLogin(
       width: 500,
       height: 700,
       webPreferences: {
+        devTools: devToolsPreference(), // BACKLOG-3830
         nodeIntegration: false,
         contextIsolation: true,
         // webSecurity defaults to true - do not disable
@@ -905,6 +907,7 @@ export async function handleGoogleConnectMailboxPending(
       width: 500,
       height: 700,
       webPreferences: {
+        devTools: devToolsPreference(), // BACKLOG-3830
         nodeIntegration: false,
         contextIsolation: true,
         // webSecurity defaults to true - do not disable

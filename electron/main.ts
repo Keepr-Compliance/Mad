@@ -4,6 +4,7 @@
 // a log path on first write. tsconfig.electron.json emits CommonJS, which
 // preserves statement order, so import position IS execution position here.
 import "./bootstrap/installAppDataPaths";
+import { devToolsPreference, installApplicationMenu } from "./bootstrap/appMenu";
 // BACKLOG-2962: Sentry BEFORE the composition root, so a capability missing at
 // launch reaches Sentry before the app exits. It must stay AFTER the import
 // above (its offline queue path is read from `userData` at init) and BEFORE the
@@ -1161,6 +1162,7 @@ function createWindow(): void {
     width: WINDOW_CONFIG.DEFAULT_WIDTH,
     height: WINDOW_CONFIG.DEFAULT_HEIGHT,
     webPreferences: {
+      devTools: devToolsPreference(), // BACKLOG-3830
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, "preload.js"),
