@@ -4,6 +4,7 @@
 // a log path on first write. tsconfig.electron.json emits CommonJS, which
 // preserves statement order, so import position IS execution position here.
 import "./bootstrap/installAppDataPaths";
+import "./bootstrap/installIpcSizeProbe"; // BACKLOG-3785 repro: dev-only, KEEPR_IPC_PROBE=1
 // BACKLOG-2962: Sentry BEFORE the composition root, so a capability missing at
 // launch reaches Sentry before the app exits. It must stay AFTER the import
 // above (its offline queue path is read from `userData` at init) and BEFORE the
