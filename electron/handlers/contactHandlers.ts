@@ -2406,14 +2406,15 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
             sanitizedContact.id &&
             !sanitizedContact.id.startsWith("contacts-app-")
           ) {
-            logService.warn(`[DIAG-1270] Import path: ${sanitizedContact.name || validatedData.name} → existingDB, allEmails=[${(sanitizedContact.allEmails || []).join(', ')}]`, 'Contacts');
+            // BACKLOG-3819: counts + contact id only — no names or addresses in logs.
+            logService.warn(`[DIAG-1270] Import path: ${sanitizedContact.id} → existingDB, emails=${(sanitizedContact.allEmails || []).length}`, 'Contacts');
             existingDbContacts.push({
               id: sanitizedContact.id,
               contact: sanitizedContact,
               source: storableSource,
             });
           } else {
-            logService.warn(`[DIAG-1270] Import path: ${sanitizedContact.name || validatedData.name} → newCreate, allEmails=[${(sanitizedContact.allEmails || []).join(', ')}]`, 'Contacts');
+            logService.warn(`[DIAG-1270] Import path: newCreate, emails=${(sanitizedContact.allEmails || []).length}`, 'Contacts');
             newContactsToCreate.push({
               user_id: validatedUserId,
               /**
@@ -2484,7 +2485,8 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
           // Mark existing DB contacts as imported and backfill any missing emails/phones
           // Also update source to "contacts_app" when importing from macOS Contacts
           for (const { id, contact, source: storedSource } of existingDbContacts) {
-            void logService.warn(`[DIAG-1270] DB contact backfill: ${contact.name}, contact.allEmails=[${(contact.allEmails || []).join(', ')}], contact.allPhones=[${(contact.allPhones || []).join(', ')}]`, 'Contacts');
+            // BACKLOG-3819: counts only — no names, emails or phone numbers in logs.
+            void logService.warn(`[DIAG-1270] DB contact backfill: ${id}, emails=${(contact.allEmails || []).length}, phones=${(contact.allPhones || []).length}`, 'Contacts');
             /**
              * BACKLOG-2481 — the THIRD write of `contacts.source`, and the third
              * that could hit the CHECK. This is an `UPDATE contacts SET source = ?`
@@ -2949,7 +2951,8 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
       try {
         // DIAG-1270: Log raw input to contacts:create
         const rawInput = contactData as Record<string, unknown>;
-        logService.warn(`[DIAG-1270] contacts:create raw input: allEmails=${JSON.stringify(rawInput?.allEmails)}, allPhones=${JSON.stringify(rawInput?.allPhones)}, name=${rawInput?.name}`, "Contacts");
+        // BACKLOG-3819: counts only — no names, emails or phone numbers in logs.
+        logService.warn(`[DIAG-1270] contacts:create raw input: emails=${Array.isArray(rawInput?.allEmails) ? rawInput.allEmails.length : 0}, phones=${Array.isArray(rawInput?.allPhones) ? rawInput.allPhones.length : 0}`, "Contacts");
 
         // BACKLOG-551: Validate user ID exists in local DB
         const validatedUserId = await getValidUserId(userId, "Contacts");

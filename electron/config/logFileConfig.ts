@@ -1,6 +1,6 @@
 import { inspect } from "util";
 import type { Hook, LogMessage } from "electron-log";
-import { redactLogText } from "../utils/redactSensitive";
+import { redactLogText, redactValueForKey } from "../utils/redactSensitive";
 
 /**
  * BACKLOG-2898 — explicit capacity for the support log.
@@ -138,7 +138,9 @@ export function redactLogValue(value: unknown, depth = 0, seen = new WeakSet<obj
     }
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = redactLogValue(item, depth + 1, seen);
+      // A bare phone under a contact-like key (`{ phone: "5555550123" }`) has no
+      // separators for the text rules to see once the key is gone (BACKLOG-3819).
+      out[key] = redactLogValue(redactValueForKey(key, item), depth + 1, seen);
     }
     return out;
   } finally {
