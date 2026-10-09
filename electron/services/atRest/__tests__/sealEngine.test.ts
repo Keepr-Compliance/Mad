@@ -112,6 +112,36 @@ describe("E3/E6 — in-memory verify gates the rename", () => {
   });
 });
 
+describe("E9 — a READ-ONLY file (Windows refuses to rename over it)", () => {
+  it("is made writable and sealed, instead of failing on every pass forever", async () => {
+    const plain = crypto.randomBytes(200);
+    const p = put("ro", plain);
+    fs.chmodSync(p, 0o444);
+    const realRename = fs.renameSync;
+    // What Windows does: MoveFileEx cannot replace a read-only target.
+    jest.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if ((fs.statSync(to).mode & 0o200) === 0) throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+      return realRename(from, to);
+    });
+    const r = createSealEngine(engineKey, { chunkSize: CHUNK, retryDelayMs: 0 }).runBatch([p], "seal");
+    expect(r.outcomes).toEqual([{ v: "sealed-now" }]);
+    expect((await files.readAllDecrypted(p)).equals(plain)).toBe(true);
+    expect(tempsIn(dir)).toEqual([]);
+  });
+
+  it("a WRITABLE file that refuses (an antivirus lock) is not chmod'ed; it fails after the retries", () => {
+    const p = put("locked", crypto.randomBytes(20));
+    const chmod = jest.spyOn(fs, "chmodSync");
+    jest.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw Object.assign(new Error("busy"), { code: "EPERM" });
+    });
+    const r = createSealEngine(engineKey, { chunkSize: CHUNK, retryDelayMs: 0 }).runBatch([p], "seal");
+    expect(r.outcomes).toEqual([{ v: "failed", code: "EPERM" }]);
+    expect(chmod).not.toHaveBeenCalled();
+    expect(tempsIn(dir)).toEqual([]);
+  });
+});
+
 describe("E4 — durability order", () => {
   it("the temp's data is fsynced before the rename, every time", () => {
     const ps = [put("a/1", crypto.randomBytes(100)), put("a/2", crypto.randomBytes(5)), put("b/3", crypto.randomBytes(300))];

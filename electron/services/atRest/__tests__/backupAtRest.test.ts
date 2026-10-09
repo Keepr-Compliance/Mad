@@ -1053,6 +1053,42 @@ describe("founder must-fix 2026-10-09: reseal at once, on quit, and while idle",
     expect(JSON.stringify(lines)).not.toContain(chain);
   });
 
+  it("must-fix #2: crash mid-sync (incl. a READ-ONLY file the phone sent) → launch reseal → `encrypted`; the SECOND launch does no work and the phone is free", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    await s.beginSync(UDID);
+    const ro = write("cd/" + "9".repeat(40), "a file the phone sent read-only");
+    fs.chmodSync(ro, 0o444);
+    // What Windows does: a rename cannot replace a read-only file.
+    const realRename = fs.renameSync;
+    jest.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (fs.existsSync(to) && (fs.statSync(to).mode & 0o200) === 0) {
+        throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+      }
+      return realRename(from, to);
+    });
+    // "Crash": the process is gone; a new one launches.
+    const first = service();
+    expect((await first.runLaunchJob())[UDID]).toBe("encrypted");
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    // Second launch: no pass, no progress, nothing touched, and a sync can start at once.
+    const second = service();
+    const events: unknown[] = [];
+    second.on("progress", (p) => events.push(p));
+    const seal = jest.spyOn(second, "seal");
+    const mtimes = allContentFiles().map((f) => fs.statSync(f).mtimeMs);
+    expect((await second.runLaunchJob())[UDID]).toBe("encrypted");
+    expect(seal).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+    expect(allContentFiles().map((f) => fs.statSync(f).mtimeMs)).toEqual(mtimes);
+    expect(second.busyReason(UDID)).toBeNull();
+    const session = await second.beginSync(UDID);
+    expect(session.kind).toBe("keepr");
+    await second.finishSync(session);
+  });
+
   it("a seal pass takes the newest files first (what the last sync wrote, the unsealed index)", async () => {
     makeChain();
     const old = new Date(Date.now() - 86_400_000);

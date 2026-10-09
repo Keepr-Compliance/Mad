@@ -170,6 +170,33 @@ export function classifyHead(head: Buffer, size: number): "empty" | "plaintext" 
   }
 }
 
+/**
+ * rename(temp → file). On Windows a rename cannot replace a READ-ONLY file (EPERM), and
+ * a backup keeps the phone's own file modes, so some files arrive read-only. Such a file
+ * could never be sealed: every pass left it plaintext and the chain never reached
+ * `encrypted` (BACKLOG-3816, founder QA on the PC — MECHANISM INFERRED from 2 of 1,076
+ * files staying plaintext; see the handoff). The file's write bit is set and the rename
+ * tried once more. A writable target that still refuses is a lock (antivirus), which the
+ * caller retries.
+ */
+export function renameOver(tmp: string, target: string): void {
+  try {
+    fs.renameSync(tmp, target);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code !== "EPERM" && code !== "EACCES") throw error;
+    let mode: number;
+    try {
+      mode = fs.statSync(target).mode;
+    } catch {
+      throw error;
+    }
+    if ((mode & 0o200) !== 0) throw error;
+    fs.chmodSync(target, 0o600);
+    fs.renameSync(tmp, target);
+  }
+}
+
 export interface SealEngine {
   /** Process `files` in order; `shouldStop` is checked before each file (a safe point). */
   runBatch(files: readonly string[], mode: SealMode, shouldStop?: () => boolean): BatchResult;
@@ -229,7 +256,7 @@ export function createSealEngine(key: EngineKey, options: SealEngineOptions = {}
       if (after.size !== st.size || after.mtimeMs !== st.mtimeMs || (st.ino !== 0 && after.ino !== st.ino)) {
         throw new SourceChangedError();
       }
-      fs.renameSync(tmp, filePath);
+      renameOver(tmp, filePath);
     } catch (error) {
       if (tfd !== null) {
         try {
