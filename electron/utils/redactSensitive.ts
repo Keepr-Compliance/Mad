@@ -263,7 +263,9 @@ export function redactPhone(phone: string): string {
 //   digits) and every email inside it is redacted, whatever its format:
 //   phone, phones, phoneNumber(s), phone_e164, e164, normalized_phone,
 //   mobile, mobilePhone, handle(s), chat_identifier, email(s), emailAddress,
-//   participants, participants_flat.
+//   participants, participants_flat — plus compound names ENDING in
+//   phone/handle/email/e164 (primaryPhone, senderHandle, workEmail; see
+//   STRONG_KEY_SUFFIX_RE), excluding boolean prefixes (hasPhone) and "iPhone".
 //
 //   WEAK — the key is ambiguous (`to: "develop"`, `from: "2026-10-01"`, a
 //   property `address: "12 Main St"`, `sender: "me"`), so the value is redacted
@@ -272,7 +274,8 @@ export function redactPhone(phone: string): string {
 //   recipient(s), address. (An epoch-seconds value under `from`/`to` would be
 //   over-redacted; that is the accepted cost.)
 //
-// NOT keys: contactId, transactionId, id, udid, size, bytes, *Ms, count —
+// NOT keys: contactId, transactionId, id, udid, size, bytes, *Ms, count,
+// phoneCount, phoneType, emailsProcessed, hasPhone, iPhone —
 // identifiers and measurements, never redacted by key.
 //
 // Shapes covered (text): JSON `"phone": "…"` / `"phone":123`, util.inspect
@@ -304,9 +307,20 @@ const STRONG_CONTACT_KEYS = new Set([
 
 const WEAK_CONTACT_KEYS = new Set(["from", "to", "sender", "recipient", "recipients", "address"]);
 
+/**
+ * Compound names ending in a contact noun are STRONG too: primaryPhone,
+ * otherPhone, recipientPhone, senderHandle, fromHandle, workEmail,
+ * contact_email, mobilePhoneNumber. Matching the END of the name (not "contains")
+ * keeps phoneCount, phoneType, emailsProcessed, handler and handledCount out;
+ * a boolean prefix (hasPhone, isEmail) and Apple's "iPhone" are excluded.
+ */
+const STRONG_KEY_SUFFIX_RE = /(phone|phones|phonenumber|phonenumbers|e164|handle|handles|email|emails|emailaddress|emailaddresses)$/;
+const NOT_CONTACT_KEY_RE = /^(has|is|should|can|did|needs|no|show|use|allow)[a-z]|iphones?$/;
+
 function contactKeyTier(key: string): "strong" | "weak" | null {
   const k = key.toLowerCase().replace(/_/g, "");
   if (STRONG_CONTACT_KEYS.has(k)) return "strong";
+  if (STRONG_KEY_SUFFIX_RE.test(k) && !NOT_CONTACT_KEY_RE.test(k)) return "strong";
   if (WEAK_CONTACT_KEYS.has(k)) return "weak";
   return null;
 }

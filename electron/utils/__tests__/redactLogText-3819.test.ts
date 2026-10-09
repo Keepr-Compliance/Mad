@@ -231,3 +231,33 @@ describe("BACKLOG-3819: the sink hook redacts contact-like keys in object argume
     });
   });
 });
+
+describe("BACKLOG-3819 (SR): compound contact key names, case-insensitive", () => {
+  const COMPOUND: Array<[string, string]> = [
+    [`"primaryPhone": "${BARE_A}"`, '"primaryPhone": "***23"'],
+    [`otherPhone: ${BARE_A}`, "otherPhone: ***23"],
+    [`"recipient_phone": "${BARE_A}"`, '"recipient_phone": "***23"'],
+    [`"MobilePhoneNumber": "${BARE_A}"`, '"MobilePhoneNumber": "***23"'],
+    [`senderHandle: '${BARE_A}'`, "senderHandle: '***23'"],
+    [`"FROM_HANDLE": "${BARE_A}"`, '"FROM_HANDLE": "***23"'],
+    [`"workEmail": "${BARE_A}"`, '"workEmail": "***23"'],
+    [`"contact_email": "pat.sample@example.com"`, '"contact_email": "p***@example.com"'],
+  ];
+  it.each(COMPOUND)("%s", (input, expected) => {
+    expect(redactLogText(input)).toBe(expected);
+    expect(redactValueForKey(input.replace(/^["']?|["']?\s*[:=].*$/g, ""), BARE_A)).toBe("***23");
+  });
+
+  const NOT_CONTACT = [
+    `"phoneCount": 6013820953`,
+    `"emailCount": 6013820953`,
+    `"emailsProcessed": 6013820953`,
+    `"phoneType": 6013820953`,
+    `"hasPhone": 6013820953, "isEmail": 6013820953, "has_handle": 6013820953`,
+    `"handler": 6013820953, "handledCount": 6013820953`,
+    `"iPhone": 6013820953, "lastIphone": 6013820953`,
+  ];
+  it.each(NOT_CONTACT.map((l) => [l]))("%s", (line) => {
+    expect(redactLogText(line)).toBe(line);
+  });
+});

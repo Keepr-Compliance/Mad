@@ -2406,14 +2406,15 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
             sanitizedContact.id &&
             !sanitizedContact.id.startsWith("contacts-app-")
           ) {
-            logService.warn(`[DIAG-1270] Import path: ${sanitizedContact.name || validatedData.name} → existingDB, allEmails=[${(sanitizedContact.allEmails || []).join(', ')}]`, 'Contacts');
+            // BACKLOG-3819: counts + contact id only — no names or addresses in logs.
+            logService.warn(`[DIAG-1270] Import path: ${sanitizedContact.id} → existingDB, emails=${(sanitizedContact.allEmails || []).length}`, 'Contacts');
             existingDbContacts.push({
               id: sanitizedContact.id,
               contact: sanitizedContact,
               source: storableSource,
             });
           } else {
-            logService.warn(`[DIAG-1270] Import path: ${sanitizedContact.name || validatedData.name} → newCreate, allEmails=[${(sanitizedContact.allEmails || []).join(', ')}]`, 'Contacts');
+            logService.warn(`[DIAG-1270] Import path: newCreate, emails=${(sanitizedContact.allEmails || []).length}`, 'Contacts');
             newContactsToCreate.push({
               user_id: validatedUserId,
               /**

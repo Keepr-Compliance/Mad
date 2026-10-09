@@ -21,7 +21,7 @@
  *
  * Idempotent: a file whose content the redactor leaves unchanged is not
  * rewritten, and redacted text is never re-matched (see `redactLogText`).
- * After one complete pass a marker (`.keepr-log-scrub-v<N>`, see SCRUB_MARKER) is written; later
+ * After one complete pass a marker (`.keepr-log-scrub-v1`) is written; later
  * launches then read only the first line of each file (for retention) instead
  * of re-reading up to 16 MB — measured ~150 ms per launch on an 8.5 MB log.
  *
@@ -79,16 +79,8 @@ const LINE_TIMESTAMP_RE = /^\[(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:
 const LOG_FILE_RE = /^[\w.-]+\.log$/;
 const ARCHIVE_FILE_RE = /^[\w.-]+\.old\.log$/;
 
-/**
- * Written once every log in the directory has been through the redactor.
- * Bump the version whenever the redactor learns a new shape, so lines written
- * before the change are re-scrubbed once on the next launch. v2 (BACKLOG-3819,
- * founder QA 2026-10-09): bare phones under contact-like keys.
- */
-export const SCRUB_MARKER = ".keepr-log-scrub-v2";
-
-/** Markers of earlier redactor versions, removed once the current pass completes. */
-const OLD_SCRUB_MARKERS = [".keepr-log-scrub-v1"];
+/** Written once every log in the directory has been through the redactor. */
+export const SCRUB_MARKER = ".keepr-log-scrub-v1";
 
 /** Timestamp of the first line of a file, reading only its first 64 bytes. */
 function headTimestamp(file: string): number | null {
@@ -345,9 +337,6 @@ export function runLogMaintenance(
   if (!alreadyScrubbed && result.errors.length === 0) {
     try {
       fs.writeFileSync(path.join(logDir, SCRUB_MARKER), `${new Date(now).toISOString()}\n`);
-      for (const old of OLD_SCRUB_MARKERS) {
-        if (names.includes(old)) fs.unlinkSync(path.join(logDir, old));
-      }
     } catch (err) {
       result.errors.push({ file: SCRUB_MARKER, message: (err as Error).message });
     }

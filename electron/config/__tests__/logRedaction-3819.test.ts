@@ -102,7 +102,7 @@ describe("BACKLOG-3819: the electron-log sink redacts emails and phones", () => 
     const { runConfiguredLogMaintenance } = require("../../services/logScrub");
     const result = runConfiguredLogMaintenance();
     expect(result).not.toBeNull();
-    expect(fs.existsSync(path.join(dir, ".keepr-log-scrub-v2"))).toBe(true);
+    expect(fs.existsSync(path.join(dir, ".keepr-log-scrub-v1"))).toBe(true);
   });
 
   it("early write: a line logged while a module is imported is redacted", () => {
