@@ -1372,11 +1372,31 @@ describe("progress", () => {
       const s = service();
       await s.seal(UDID);
       age(allContentFiles());
-      const { seen, index } = await incremental(s, () => {
-        const f = write(`dd/${"d".repeat(40)}`, crypto.randomBytes(1000));
-        age([f]);
-      });
+      // A clock that moves 1.5 s per reading makes every batch emit, so updates exist
+      // MID-pass (the real throttle is one per second). The missed file is older than the
+      // estimate's cut but newer than the sealed files, so it is handled early and files
+      // still follow it.
+      let clock = Date.now();
+      const clockSpy = jest.spyOn(Date, "now").mockImplementation(() => (clock += 1500));
+      let seen: BackupAtRestProgress[];
+      let index: number;
+      try {
+        ({ seen, index } = await incremental(s, () => {
+          const f = write(`dd/${"d".repeat(40)}`, crypto.randomBytes(1000));
+          const hourAgo = new Date(clock - 3600_000);
+          fs.utimesSync(f, hourAgo, hourAgo);
+        }));
+      } finally {
+        clockSpy.mockRestore();
+      }
+      const missed = 1000 + W;
+      const mid = seen.slice(1, -1);
+      expect(mid.length).toBeGreaterThan(5);
       for (const p of seen) expect(p.doneUnits as number).toBeLessThanOrEqual(p.totalUnits as number);
+      // once the missed file has been sealed, the total includes it
+      const afterMissed = mid.filter((p) => (p.doneUnits as number) >= index + missed);
+      expect(afterMissed.length).toBeGreaterThan(0);
+      for (const p of afterMissed) expect(p.totalUnits as number).toBeGreaterThanOrEqual(index + missed);
       const last = seen[seen.length - 1];
       expect(last.doneUnits).toBe(index + 1000 + W);
       expect(last.totalUnits).toBe(last.doneUnits);
