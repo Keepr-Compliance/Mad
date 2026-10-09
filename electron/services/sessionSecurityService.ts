@@ -24,6 +24,10 @@
  * `AuthContext.tsx:89` (via `authService.ts:221`), `SupportWidget.tsx:64`, `:99`,
  * `DeviceLimitScreen.tsx:24`, `:59`. `auth:validate-session` has no renderer
  * caller.
+ *
+ * BACKLOG-3833: also `sessionIdleEnforcer.ts` — IPC `session:user-activity`
+ * (renderer input heartbeat, `useUserActivityHeartbeat` mounted in AppShell)
+ * and a once-a-minute main-side check that signs an idle session out.
  */
 
 import logService from "./logService";
@@ -71,7 +75,7 @@ class SessionSecurityService {
   static readonly BUSY_MAX_MS = 6 * 60 * 60 * 1000; // a leaked token stops counting after 6 h
   private busyTokens: Map<number, { label: string; startedAt: number }> = new Map();
   private nextBusyId = 1;
-  /** Earliest moment idle time may be measured from (set by busy end / renderer resume). */
+  /** Earliest moment idle time may be measured from (set by busy end / user Reload). */
   private idleFloor = 0;
 
   /** Mark a long user-started operation as running. Pair with `endBusy` in a `finally`. */
@@ -99,10 +103,11 @@ class SessionSecurityService {
   }
 
   /**
-   * The renderer was frozen and answered again. Nothing could report activity
-   * during the freeze, so it is not idle time: restart the idle clock.
+   * The user clicked Reload on the unresponsive-window prompt: a user action,
+   * so the idle clock restarts. (Deliberately NOT called on the window
+   * "responsive" event: a freeze can end while nobody is at the machine.)
    */
-  noteRendererResumed(): void {
+  noteUserReload(): void {
     this.idleFloor = Math.max(this.idleFloor, Date.now());
   }
 

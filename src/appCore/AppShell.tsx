@@ -14,6 +14,7 @@ import { ShellBanners } from "./shell";
 import SystemHealthMonitor from "../components/SystemHealthMonitor";
 import { isOnboardingStep } from "./routing";
 import { useSessionValidator } from "../hooks/useSessionValidator";
+import { useSessionIdleTimeout } from "../hooks/useIdleSessionExpiry";
 import { isElectron } from "../utils/platform";
 // TASK-2282: SupportWidget moved to App.tsx (outside auth routes)
 
@@ -47,6 +48,8 @@ export function AppShell({ app, children }: AppShellProps) {
     isAuthenticated,
     onSessionInvalidated: handleLogout,
   });
+  // BACKLOG-3833: user input keeps the session alive; main signs out an idle one
+  useSessionIdleTimeout({ isAuthenticated, onExpired: handleLogout });
 
   // Detect Electron for title bar drag region
   const runningInElectron = isElectron();

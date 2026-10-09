@@ -14,6 +14,7 @@ import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import supabaseService from "../services/supabaseService";
 import sessionService from "../services/sessionService";
 import sessionSecurityService from "../services/sessionSecurityService";
+import { enforceSessionIdle } from "../services/sessionIdleEnforcer";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
 import { setSyncUserId } from "./syncHandlers";
@@ -1534,6 +1535,10 @@ export function registerSessionHandlers(): void {
   ipcMain.handle("auth:complete-email-onboarding", wrapHandler(handleCompleteEmailOnboarding, { module: "SessionHandlers" }));
   ipcMain.handle("auth:validate-session", wrapHandler(handleValidateSession, { module: "SessionHandlers" }));
   ipcMain.handle("auth:get-current-user", wrapHandler(handleGetCurrentUser, { module: "SessionHandlers" }));
+  // BACKLOG-3833: renderer input heartbeat (no arguments; main loads the session itself).
+  ipcMain.handle("session:user-activity", async (): Promise<void> => {
+    await enforceSessionIdle({ recordActivity: true });
+  });
   // TASK-1507: Open browser for Supabase OAuth with deep-link callback
   ipcMain.handle("auth:open-in-browser", wrapHandler(handleOpenAuthInBrowser, { module: "SessionHandlers" }));
   // TASK-2062: Remote session validation (polls Supabase auth.getUser)

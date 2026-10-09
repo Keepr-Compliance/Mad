@@ -541,3 +541,48 @@ describe("TASK-2085: Server-side auth token validation in handleGetCurrentUser",
     });
   });
 });
+
+describe("BACKLOG-3833: session:user-activity (renderer input heartbeat)", () => {
+  const handlers: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const security = require("../services/sessionSecurityService").default as {
+    recordActivity: jest.Mock;
+  };
+
+  beforeAll(() => {
+    registerSessionHandlers();
+    for (const [channel, handler] of mockIpcHandle.mock.calls) handlers[channel] = handler;
+  });
+  beforeEach(() => jest.clearAllMocks());
+
+  it("checks validity before recording activity, with no renderer argument", async () => {
+    setupReturningUserMocks();
+    await handlers["session:user-activity"]({});
+    expect(mockCheckSessionValidity).toHaveBeenCalledWith(
+      expect.objectContaining({ created_at: "2024-01-01T00:00:00Z" }),
+      "test-session-token",
+    );
+    expect(security.recordActivity).toHaveBeenCalledWith("test-session-token");
+    expect(mockCheckSessionValidity.mock.invocationCallOrder[0]).toBeLessThan(
+      security.recordActivity.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("an idle-expired session is signed out, not revived", async () => {
+    setupReturningUserMocks();
+    mockCheckSessionValidity.mockResolvedValue({ valid: false, reason: "idle" });
+    await handlers["session:user-activity"]({});
+    expect(security.recordActivity).not.toHaveBeenCalled();
+    expect(mockDbDeleteSession).toHaveBeenCalledWith("test-session-token");
+    expect(mockClearSession).toHaveBeenCalled();
+    expect(mockCleanupSession).toHaveBeenCalledWith("test-session-token");
+  });
+
+  it("is a no-op when signed out", async () => {
+    mockDbIsInitialized.mockReturnValue(true);
+    mockLoadSession.mockResolvedValue(null);
+    await handlers["session:user-activity"]({});
+    expect(mockCheckSessionValidity).not.toHaveBeenCalled();
+    expect(security.recordActivity).not.toHaveBeenCalled();
+  });
+});

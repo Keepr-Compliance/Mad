@@ -80,10 +80,10 @@ describe("SessionSecurityService busy registry (BACKLOG-3833)", () => {
     expect(await check()).toEqual({ valid: false, reason: "idle" });
   });
 
-  it("renderer resume restarts the idle clock (freeze is not idle time)", async () => {
+  it("the user's Reload click restarts the idle clock", async () => {
     await check();
     at(29);
-    svc.noteRendererResumed();
+    svc.noteUserReload();
     at(29 + 5);
     expect((await check()).valid).toBe(true);
   });
