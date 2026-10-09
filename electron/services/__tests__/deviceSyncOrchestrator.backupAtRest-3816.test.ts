@@ -117,6 +117,7 @@ import { BackupService } from "../backupService";
 import { DeviceSyncOrchestrator } from "../deviceSyncOrchestrator";
 import {
   BACKUP_AT_REST_QUARANTINED_MESSAGE,
+  BACKUP_AT_REST_UNREADABLE_MESSAGE,
   BackupAtRest,
   BACKUP_SECURING_SENTENCE,
   QUARANTINE_DIR_NAME,
@@ -521,6 +522,24 @@ describe("lock before the new-chain step", () => {
     expect(aside).toHaveBeenCalledTimes(1);
     expect(migrationDuringMove).toBe("busy");
     await o.completeBackupAtRest();
+  });
+});
+
+describe("an error in the new-chain step is an ordinary sync error, not an at-rest refusal", () => {
+  it("moveChainAside throwing under the lock surfaces its own message and releases the lock", async () => {
+    const P = BackupService.prototype;
+    jest.spyOn(P, "checkEncryptionStatus").mockResolvedValue({ isEncrypted: true, needsPassword: true, status: "on" });
+    jest.spyOn(P, "readChainEncryption").mockResolvedValue("plaintext");
+    jest.spyOn(P, "moveChainAside").mockRejectedValue(new Error("rename blew up"));
+    const o = newOrchestrator();
+    (o as unknown as { needsNewEncryptedChain: () => Promise<boolean> }).needsNewEncryptedChain = async () => true;
+    backupReturns(ok());
+    const result = await o.sync({ udid: UDID, password: "typed" });
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("rename blew up");
+    expect(result.error).not.toBe(BACKUP_AT_REST_UNREADABLE_MESSAGE);
+    expect(startBackup).not.toHaveBeenCalled();
+    expect(atRest.busyReason(UDID)).toBeNull();
   });
 });
 

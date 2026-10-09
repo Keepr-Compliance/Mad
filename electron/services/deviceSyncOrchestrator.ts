@@ -905,7 +905,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       // TASK-2276: Pre-sync checks with user-facing error messages
       // Check disk space using the diagnostic utility (enriched errors for UI)
-      const diskCheck = await checkDiskSpaceForOperation("sync");
+      let diskCheck = await checkDiskSpaceForOperation("sync");
+      // A quarantined (unreadable) backup never blocks the sync: delete the oldest first.
+      while (!diskCheck.sufficient && (await this.deleteOldestQuarantined())) {
+        diskCheck = await checkDiskSpaceForOperation("sync");
+      }
       if (!diskCheck.sufficient) {
         const userError = formatDiskSpaceError(diskCheck.availableMB, diskCheck.requiredMB);
         log.warn("[DeviceSyncOrchestrator] Pre-sync disk space check failed", {
@@ -1379,8 +1383,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // on the founder's run, so refusing up front there would cost a user
       // nothing while a mid-transfer abort costs a full 20-25 minute run. That
       // is filed separately; this change does not make it.
-      const reserveCheck = await this.checkAvailableDiskSpace(
-        SYNC_DISK_RESERVE_BYTES,
+      const reserveCheck = await this.reclaimQuarantineUntil(
+        await this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES),
+        () => this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES),
       );
       // BACKLOG-2914 (FIX 4): host disk, from the reading the guard already took.
       if (!reserveCheck.unavailable) {
@@ -2161,6 +2166,32 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
   private atRest(): BackupAtRest {
     return this.backupAtRest ?? getBackupAtRest();
+  }
+
+  /** Deletes the oldest quarantined backup. Never throws (a double without the method counts as none). */
+  private async deleteOldestQuarantined(): Promise<boolean> {
+    try {
+      const atRest = this.atRest() as { deleteOldestQuarantined?: () => Promise<boolean> };
+      return typeof atRest.deleteOldestQuarantined === "function" ? await atRest.deleteOldestQuarantined() : false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * S4-C (founder decision): a quarantined copy is unreadable and must never block the
+   * fresh full backup. While a disk guard would refuse, delete the oldest quarantined
+   * copy and measure again.
+   */
+  private async reclaimQuarantineUntil<T extends { hasEnoughSpace: boolean }>(
+    check: T,
+    measure: () => Promise<T>,
+  ): Promise<T> {
+    let current = check;
+    while (!current.hasEnoughSpace && (await this.deleteOldestQuarantined())) {
+      current = await measure();
+    }
+    return current;
   }
 
   /** S4-C: a sync refused by the at-rest layer, before anything was spawned. */
@@ -2963,7 +2994,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       if (pollInFlight || this.diskSpaceAborted) return;
       pollInFlight = true;
 
-      void this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES, { quiet: true })
+      const measure = () => this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES, { quiet: true });
+      void measure()
+        .then((check) => this.reclaimQuarantineUntil(check, measure))
         .then((check) => {
           // A fail-open default is not a reading — do not log 0 GB free.
           if (!check.unavailable) {

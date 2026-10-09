@@ -468,6 +468,51 @@ describe("BACKLOG-2899 — sync disk guard", () => {
       expect(result.error).toMatch(/space/i);
     });
 
+    // S4-C (founder decision): a quarantined, unreadable backup never blocks the fresh full backup.
+    function withQuarantine(copies: number, freedPerCopy: number) {
+      let remaining = copies;
+      let freed = 0;
+      const deleteOldestQuarantined = jest.fn(async () => {
+        if (remaining === 0) return false;
+        remaining -= 1;
+        freed += freedPerCopy;
+        return true;
+      });
+      orchestrator.backupAtRest = {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        ...require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+        deleteOldestQuarantined,
+      } as never;
+      mockCheckDiskSpace.mockImplementation(async () => ({
+        diskPath: "C:",
+        free: RESERVE_BYTES - 1 + freed,
+        size: TOTAL_DISK_BYTES,
+      }));
+      return deleteOldestQuarantined;
+    }
+
+    it("deletes the oldest quarantined copy and starts when that makes room", async () => {
+      const deleteOldest = withQuarantine(3, 1);
+      installBackup({ markBackupStarted: () => {}, succeedAfterMs: 1000 });
+
+      await runSync(orchestrator, 700_000);
+
+      expect(deleteOldest).toHaveBeenCalledTimes(1); // stops as soon as the guard is satisfied
+      expect(mockStartBackup).toHaveBeenCalled();
+    });
+
+    it("keeps deleting oldest-first until the guard clears, and refuses only when none is left", async () => {
+      const deleteOldest = withQuarantine(2, 0);
+      installBackup({ markBackupStarted: () => {}, succeedAfterMs: 1000 });
+
+      const result = await runSync(orchestrator, 700_000);
+
+      expect(deleteOldest).toHaveBeenCalledTimes(3); // 2 deleted, third call reports none left
+      expect(mockStartBackup).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/space/i);
+    });
+
     it("starts when free space is exactly at the reserve", async () => {
       installDisk({ initialFree: RESERVE_BYTES, drainBytesPerSec: 0 });
       installBackup({ markBackupStarted: () => {}, succeedAfterMs: 1000 });

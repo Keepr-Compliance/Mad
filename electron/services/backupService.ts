@@ -2732,6 +2732,9 @@ export class BackupService extends EventEmitter {
       }
 
       for (const entry of entries) {
+        // Dot-folders are not devices: `.quarantine` (S4-C), `.keepr-at-rest` markers,
+        // `.keepr-replaced-*` chains moved aside.
+        if (entry.name.startsWith(".")) continue;
         if (entry.isDirectory()) {
           const deviceBackupPath = path.join(backupPath, entry.name);
           const info = await this.getBackupInfo(deviceBackupPath, entry.name);
