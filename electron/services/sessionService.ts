@@ -443,19 +443,24 @@ export class SessionService {
     return this.runSerialized(() => this._clearSessionInternal());
   }
 
+  /** A leftover temp file from an interrupted or failed save holds a sealed token. */
+  private async removeSessionTemp(): Promise<void> {
+    await fs.unlink(`${this.getSessionFilePath()}.tmp`).catch(() => undefined);
+  }
+
   /** Internal, NON-serialized clear. Only call from inside a runSerialized() critical section
    *  or from loadSession (which is itself read-only / not queued). */
   private async _clearSessionInternal(): Promise<boolean> {
     try {
-      // A leftover temp file from an interrupted or failed save holds a sealed token.
-      await fs.unlink(`${this.getSessionFilePath()}.tmp`).catch(() => undefined);
       await fs.unlink(this.getSessionFilePath());
+      await this.removeSessionTemp();
       await logService.info("Session cleared successfully", "SessionService");
       emitSessionChanged({ kind: "cleared", userId: null });
       return true;
     } catch (error: unknown) {
       if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
         // File doesn't exist, that's fine
+        await this.removeSessionTemp();
         emitSessionChanged({ kind: "cleared", userId: null });
         return true;
       }
