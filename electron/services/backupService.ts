@@ -85,6 +85,12 @@ function errnoCode(err: unknown): string | undefined {
  * `validateDeviceUdid` trims, so a folder named `" <udid>"` validates — and would be
  * acted on at a different path than the one that was listed.
  */
+/**
+ * BACKLOG-3816: prefix of a plaintext chain moved aside for an encrypted one. Starts
+ * with "." so it is never a valid udid and the 3598 sweep never classifies it.
+ */
+export const REPLACED_CHAIN_PREFIX = ".keepr-replaced-";
+
 function exactUdidOrNull(name: string): string | null {
   try {
     return validateDeviceUdid(name) === name ? name : null;
@@ -1002,6 +1008,7 @@ export class BackupService extends EventEmitter {
    * treated as untrusted input.
    */
   async checkEncryptionStatus(udid: string): Promise<BackupEncryptionInfo> {
+    const unknown: BackupEncryptionInfo = { isEncrypted: false, needsPassword: false, status: "unknown" };
     try {
       // SECURITY: Validate UDID before spawning process
       // This prevents command injection via malicious UDID values
@@ -1009,7 +1016,17 @@ export class BackupService extends EventEmitter {
       const ideviceinfo = getCommand("ideviceinfo");
 
       return new Promise((resolve) => {
-        const proc = spawn(ideviceinfo, ["-u", validatedUdid, "-k", "WillEncrypt"]);
+        // BACKLOG-3817: WillEncrypt lives in the com.apple.mobile.backup domain
+        // (idevicebackup2.c reads it with lockdownd_get_value(..., "com.apple.mobile.backup",
+        // "WillEncrypt")). Queried without the domain it is not found, which read as "off".
+        const proc = spawn(ideviceinfo, [
+          "-u",
+          validatedUdid,
+          "-q",
+          "com.apple.mobile.backup",
+          "-k",
+          "WillEncrypt",
+        ]);
         let output = "";
         let errorOutput = "";
 
@@ -1022,42 +1039,33 @@ export class BackupService extends EventEmitter {
         });
 
         proc.on("close", (code) => {
-          if (code === 0) {
-            const willEncrypt = output.trim().toLowerCase() === "true";
-            log.info("[BackupService] Device encryption status:", {
-              willEncrypt,
-              rawOutput: output.trim(),
-            });
+          const value = output.trim().toLowerCase();
+          // An absent key (encryption never configured) prints nothing and exits 0.
+          if (code === 0 && (value === "true" || value === "false" || value === "")) {
+            const willEncrypt = value === "true";
+            log.info("[BackupService] Device encryption status:", { willEncrypt });
             resolve({
               isEncrypted: willEncrypt,
               needsPassword: willEncrypt,
+              status: willEncrypt ? "on" : "off",
             });
           } else {
             log.warn(
               "[BackupService] Could not determine encryption status:",
-              errorOutput,
+              errorOutput.slice(0, 200),
             );
-            resolve({
-              isEncrypted: false,
-              needsPassword: false,
-            });
+            resolve(unknown);
           }
         });
 
         proc.on("error", (error) => {
           log.error("[BackupService] Error checking encryption status:", error);
-          resolve({
-            isEncrypted: false,
-            needsPassword: false,
-          });
+          resolve(unknown);
         });
       });
     } catch (error) {
       log.error("[BackupService] Exception checking encryption status:", error);
-      return {
-        isEncrypted: false,
-        needsPassword: false,
-      };
+      return unknown;
     }
   }
 
@@ -1432,7 +1440,7 @@ export class BackupService extends EventEmitter {
         // torn backup wrote nothing — a claim this code cannot support, since
         // idevicebackup2 leaves whatever it transferred on disk.
         let backupSize: number | null = null;
-        let finalBackupPath = deviceBackupPath;
+        const finalBackupPath = deviceBackupPath;
 
         if (success) {
           const sizeReading = await this.measureBackupSize(deviceBackupPath);
@@ -1487,44 +1495,26 @@ export class BackupService extends EventEmitter {
             return;
           }
 
-          // Handle encrypted backup decryption (TASK-007)
+          // BACKLOG-3817: an encrypted backup is NOT decrypted here. It used to be — into
+          // `Backups/<udid>/decrypted`, plaintext beside the backup — and the orchestrator then
+          // tried to decrypt that folder a second time. Here the password is only checked
+          // against the backup's keybag; the orchestrator decrypts once, into a parse copy
+          // outside the backup, and `backupPath` stays the real backup.
           if (actuallyEncrypted && options.password) {
-            this.lastProgress = {
-              phase: "decrypting",
-              percentComplete: 95,
-              currentFile: null,
-              filesTransferred: 0,
-              totalFiles: null,
-              // BACKLOG-2917: `totalBytes` is already nullable and carries the
-              // unknown honestly. `bytesTransferred` is a progress-bar input typed
-              // `number`; 0 there means "no bar movement to report", which is the
-              // truth when the size is unmeasured, and it is paired with a null
-              // total so nothing downstream can compute a false percentage from it.
-              bytesTransferred: backupSize ?? 0,
-              totalBytes: backupSize,
-              estimatedTimeRemaining: 30,
-            };
-            this.emit("progress", this.lastProgress);
-
-            const decryptionResult =
-              await backupDecryptionService.decryptBackup(
-                deviceBackupPath,
-                options.password,
-              );
-
-            if (!decryptionResult.success) {
+            const passwordOk = await backupDecryptionService.verifyPassword(
+              deviceBackupPath,
+              options.password,
+            );
+            if (!passwordOk) {
               const result: BackupResult = {
                 success: false,
                 backupPath: deviceBackupPath,
-                error: decryptionResult.error || "Decryption failed",
-                errorCode:
-                  decryptionResult.error === "Incorrect password"
-                    ? "INCORRECT_PASSWORD"
-                    : "DECRYPTION_FAILED",
+                error: "Incorrect password",
+                errorCode: "INCORRECT_PASSWORD",
                 duration: Date.now() - this.startTime,
                 deviceUdid: options.udid,
                 isIncremental: this.resolveIsIncremental(previousBackupExists, options),
-              deviceReportedBackupMode: this.deviceReportedBackupMode,
+                deviceReportedBackupMode: this.deviceReportedBackupMode,
                 backupSize,
                 isEncrypted: true,
               };
@@ -1532,9 +1522,6 @@ export class BackupService extends EventEmitter {
               resolve(result);
               return;
             }
-
-            // Update path to decrypted location
-            finalBackupPath = decryptionResult.decryptedPath!;
           }
         } else {
           log.error(`[BackupService] Backup failed with code ${code}`);
@@ -2994,6 +2981,147 @@ export class BackupService extends EventEmitter {
   async cleanupDecryptedFiles(backupPath: string): Promise<void> {
     const decryptedPath = path.join(backupPath, "decrypted");
     await backupDecryptionService.cleanup(decryptedPath);
+  }
+
+  /**
+   * BACKLOG-3816 (option A): ask the phone to encrypt its backups with `password`.
+   *
+   * The password goes to idevicebackup2 ONLY through the environment
+   * (`BACKUP_PASSWORD_NEW`; idevicebackup2.c reads it in non-interactive mode) — never
+   * argv, which any local process can list, and never a log line. The phone then asks
+   * for its passcode; the user must be there. idevicebackup2's exit code is not trusted:
+   * the result is the phone's own WillEncrypt read afterwards.
+   *
+   * Never called with `encryption off`. There is no path in this app that turns a
+   * phone's backup encryption off.
+   */
+  async enableEncryption(
+    udid: string,
+    password: string,
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<{ enabled: boolean; reason?: "not-confirmed" | "timeout" | "cancelled" | "spawn-failed" }> {
+    const validatedUdid = validateDeviceUdid(udid);
+    const idevicebackup2 = getCommand("idevicebackup2");
+    const timeoutMs = options.timeoutMs ?? 3 * 60 * 1000;
+    const env: NodeJS.ProcessEnv = { ...process.env, BACKUP_PASSWORD_NEW: password };
+    // Only the NEW password: with BACKUP_PASSWORD also set, idevicebackup2 would send it
+    // as OldPassword too.
+    delete env.BACKUP_PASSWORD;
+
+    log.info("[BackupService] Asking the iPhone to turn on encrypted backups");
+    const outcome = await new Promise<"exited" | "timeout" | "cancelled" | "spawn-failed">((resolve) => {
+      let settled = false;
+      const finish = (value: "exited" | "timeout" | "cancelled" | "spawn-failed") => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onAbort);
+        resolve(value);
+      };
+      let proc: ChildProcess;
+      try {
+        proc = spawn(idevicebackup2, ["-u", validatedUdid, "encryption", "on"], {
+          env,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch {
+        resolve("spawn-failed");
+        return;
+      }
+      const timer = setTimeout(() => {
+        proc.kill();
+        finish("timeout");
+      }, timeoutMs);
+      const onAbort = () => {
+        proc.kill();
+        finish("cancelled");
+      };
+      options.signal?.addEventListener("abort", onAbort);
+      // Output is drained but not logged: it is not needed and may echo device state.
+      proc.stdout?.on("data", () => undefined);
+      proc.stderr?.on("data", () => undefined);
+      proc.on("error", () => finish("spawn-failed"));
+      proc.on("close", () => finish("exited"));
+    });
+    if (outcome !== "exited") {
+      log.warn("[BackupService] Turning on encrypted backups did not finish:", outcome);
+      return { enabled: false, reason: outcome };
+    }
+    const status = await this.checkEncryptionStatus(validatedUdid);
+    const enabled = status.status === "on";
+    log.info("[BackupService] Encrypted backups after request:", { enabled });
+    return enabled ? { enabled: true } : { enabled: false, reason: "not-confirmed" };
+  }
+
+  /**
+   * BACKLOG-3816: is `Backups/<udid>` an encrypted chain, a plaintext one, or neither?
+   * Read from Manifest.plist `IsEncrypted` (device metadata, plain in both kinds).
+   */
+  async readChainEncryption(udid: string): Promise<"encrypted" | "plaintext" | "absent" | "unknown"> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return "unknown";
+    const manifest = path.join(this.getDefaultBackupPath(), validatedUdid, "Manifest.plist");
+    try {
+      await fs.stat(manifest);
+    } catch (err: unknown) {
+      return errnoCode(err) === "ENOENT" ? "absent" : "unknown";
+    }
+    try {
+      return (await backupDecryptionService.isBackupEncrypted(path.dirname(manifest))) ? "encrypted" : "plaintext";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  /**
+   * BACKLOG-3816: move a PLAINTEXT chain out of the way so the first encrypted backup
+   * starts a new chain (a password change breaks snapshot comparison). The old chain is
+   * kept, under a name the 3598 sweep never touches, until the new one is verified.
+   */
+  async moveChainAside(udid: string): Promise<string | null> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return null;
+    const from = path.join(this.getDefaultBackupPath(), validatedUdid);
+    const to = path.join(this.getDefaultBackupPath(), `${REPLACED_CHAIN_PREFIX}${validatedUdid}-${Date.now()}`);
+    await fs.rename(from, to);
+    log.info("[BackupService] Kept the previous unencrypted backup aside until the encrypted one is verified");
+    return to;
+  }
+
+  /**
+   * BACKLOG-3816: delete chains moved aside for `udid`. The CALLER must first have
+   * verified the encrypted chain opens with the saved password.
+   */
+  async removeReplacedChains(udid: string): Promise<number> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return 0;
+    const root = this.getDefaultBackupPath();
+    let entries: import("fs").Dirent[];
+    try {
+      entries = await fs.readdir(root, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+    let removed = 0;
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith(`${REPLACED_CHAIN_PREFIX}${validatedUdid}-`)) continue;
+      await fs.rm(path.join(root, entry.name), { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
+      removed++;
+    }
+    if (removed > 0) log.info("[BackupService] Removed the previous unencrypted backup", { removed });
+    return removed;
+  }
+
+  /** BACKLOG-3816: whether a moved-aside chain for `udid` is waiting for removal. */
+  async hasReplacedChain(udid: string): Promise<boolean> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return false;
+    try {
+      const entries = await fs.readdir(this.getDefaultBackupPath());
+      return entries.some((name) => name.startsWith(`${REPLACED_CHAIN_PREFIX}${validatedUdid}-`));
+    } catch {
+      return false;
+    }
   }
 
   /**

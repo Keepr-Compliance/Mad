@@ -13,6 +13,31 @@
  * - check-disk-space
  */
 
+// BACKLOG-3817: keep saved backup passwords in memory. The process-wide store writes
+// under hostAppPaths.userData(), which in jest is a shared directory — a password saved by
+// one test would be found by the next run.
+const mockSavedPasswords = new Map<string, string>();
+jest.mock("../atRest/backupPassword", () => {
+  const actual = jest.requireActual("../atRest/backupPassword");
+  return {
+    ...actual,
+    getBackupPasswordStore: () => ({
+      get: async (udid: string) =>
+        mockSavedPasswords.has(udid)
+          ? { kind: "found", password: mockSavedPasswords.get(udid), origin: "user" }
+          : { kind: "absent" },
+      put: async (udid: string, password: string) => {
+        mockSavedPasswords.set(udid, password);
+      },
+      replaceVerified: async (udid: string, password: string) => {
+        mockSavedPasswords.set(udid, password);
+      },
+      storePath: () => "",
+    }),
+  };
+});
+beforeEach(() => mockSavedPasswords.clear());
+
 import { EventEmitter } from "events";
 
 // Mock data for tests

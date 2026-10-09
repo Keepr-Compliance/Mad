@@ -91,7 +91,8 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
   "electron/services/rcsImportMedia.ts": { count: 1, reason: `${S1} (RCS media via injected writeFile)` },
   "electron/handlers/rcsImportHandlers.ts": { count: 6, reason: `${S1} (RCS writeFile/rename/copyFile deps for media + staging)` },
   "electron/services/rcsCacheStaging.ts": { count: 1, reason: `${S1} (RCS staged media temp)` },
-  "electron/services/backupDecryptionService.ts": { count: 2, reason: "PENDING S4/BACKLOG-3817 — writes decrypted iPhone backup files (option A path)" },
+  "electron/services/backupService.ts": { count: 1, reason: "S4/BACKLOG-3816 — fs.rename of an unencrypted iPhone backup folder aside (Backups/.keepr-replaced-*) until the encrypted chain verifies; moves, never writes content" },
+  "electron/services/backupDecryptionService.ts": { count: 2, reason: "S4/BACKLOG-3817 — parse copies of an encrypted iPhone backup, only under userData/at-rest-tmp/ios-<runId>, removed after persistence and swept at launch" },
   "electron/services/logService.ts": { count: 2, reason: "PENDING S5 — app log file (redaction + retention, BACKLOG-3819)" },
   "electron/outlookService.ts": { count: 1, reason: "MSAL token cache on the legacy Outlook path; design cut line 2.40.1 (dead MSAL path)" },
   // --- exports the user asked for -----------------------------------------------

@@ -126,6 +126,27 @@ function defined(row: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
+ * BACKLOG-3816: iPhone backup-encryption facts, carried in `source_metrics` (no column,
+ * no migration). Allow-listed VALUES only — anything else is dropped — and never a
+ * password. Only used when the source supplied no metrics of its own (iPhone rows).
+ */
+const BACKUP_PASSWORD_SOURCES = new Set(["provided", "stored", "none", "unavailable", "generated"]);
+const PHONE_BACKUP_ENCRYPTION = new Set(["on", "off", "unknown"]);
+const ENCRYPTION_ENABLE_RESULTS = new Set(["enabled", "not-confirmed", "failed"]);
+
+export function backupEncryptionMetrics(f: TimelineMeta): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  const pick = (key: string, allowed: Set<string>) => {
+    const v = str(f, key);
+    if (v !== undefined && allowed.has(v)) out[key] = v;
+  };
+  pick("backupPassword", BACKUP_PASSWORD_SOURCES);
+  pick("phoneBackupEncryption", PHONE_BACKUP_ENCRYPTION);
+  pick("encryptionEnable", ENCRYPTION_ENABLE_RESULTS);
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
  * Map the outcome row onto the table's columns.
  *
  * EXPLICIT, KEY BY KEY, AND NEVER A SPREAD. This function is the PII boundary: the
@@ -204,7 +225,7 @@ export function buildSyncOutcomeRow(
 
     // BACKLOG-3671 P2 (Google Messages): built by rcsSyncOutcome's allow-list
     // builder — the only writer — so nothing unnamed reaches the jsonb.
-    source_metrics: row.sourceMetrics,
+    source_metrics: row.sourceMetrics ?? backupEncryptionMetrics(f),
     run_kind: str(f, "runKind"),
     extension_version: str(f, "extensionVersion"),
     chrome_version: str(f, "chromeVersion"),

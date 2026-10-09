@@ -24,6 +24,7 @@ import { rateLimiters } from "../utils/rateLimit";
 import { syncStatusService } from "../services/syncStatusService";
 import supabaseService from "../services/supabaseService";
 import { sendToMainWindow } from "../windowRegistry";
+import { backupDecryptionService } from "../services/backupDecryptionService";
 
 let orchestrator: DeviceSyncOrchestrator | null = null;
 let currentUserId: string | null = null;
@@ -114,6 +115,16 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
 
   // Set up event forwarding to renderer
   setupEventForwarding();
+
+  // BACKLOG-3817: decrypted parse copies of an encrypted iPhone backup are plaintext.
+  // Remove any a crash or a killed quit left behind. Registration runs once at launch,
+  // before any sync can start. Never throws.
+  void backupDecryptionService
+    .sweepParseCopies()
+    .then((removed) => {
+      if (removed > 0) log.info("[SyncHandlers] Removed stale decrypted parse copies at launch", { removed });
+    })
+    .catch(() => undefined);
 
   // Start sync operation
   // Rate limited: 10 second cooldown per device to prevent sync spam.
