@@ -121,7 +121,7 @@ describe("BACKLOG-3598: iPhone backup copy is platform-neutral", () => {
     unknown: classifyBackupFailure(1, "", "", false).message,
   };
   it.each(Object.keys(messages))("%s does not say Mac", (k) => {
-    expect(messages[k]).not.toMatch(/\bmacos?\b/i);
+    expect(messages[k]).not.toMatch(/\bmac(?:os)?\b/i);
   });
 });
 
