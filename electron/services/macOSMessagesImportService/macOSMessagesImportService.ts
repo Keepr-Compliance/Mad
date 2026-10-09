@@ -18,6 +18,7 @@
  */
 
 import crypto from "crypto";
+import { refuseLocalSource } from "../../bootstrap/devFixtureMode";
 import path from "path";
 import os from "os";
 import fs from "fs";
@@ -390,6 +391,12 @@ class MacOSMessagesImportService {
     startTime: number,
     plan: ImportPlan
   ): Promise<MacOSImportResult> {
+    if (refuseLocalSource("macOS Messages import (chat.db)")) {
+      return {
+        success: false, messagesImported: 0, messagesSkipped: 0, attachmentsImported: 0,
+        attachmentsUpdated: 0, attachmentsSkipped: 0, duration: 0, error: "dev fixture mode",
+      } as MacOSImportResult;
+    }
     const forceReimport = plan.mode === "reprocess";
     // Check platform - macOS only
     if (os.platform() !== "darwin") {
@@ -2377,6 +2384,7 @@ class MacOSMessagesImportService {
      */
     fitsOnDisk?: boolean;
   }> {
+    if (refuseLocalSource("macOS Messages count (chat.db)")) return { success: false, error: "dev fixture mode" } as never;
     // Check platform
     if (os.platform() !== "darwin") {
       return {
@@ -2718,6 +2726,7 @@ class MacOSMessagesImportService {
     orphaned: number;
     alreadyCorrect: number;
   }> {
+    if (refuseLocalSource("macOS attachment repair (chat.db)")) return { total: 0, repaired: 0, orphaned: 0, alreadyCorrect: 0 };
     const db = databaseService.getRawDatabase();
     const stats = { total: 0, repaired: 0, orphaned: 0, alreadyCorrect: 0 };
 

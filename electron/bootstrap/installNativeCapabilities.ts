@@ -127,6 +127,8 @@ import { installDialog } from "../capabilities/dialogProvider";
 import { ElectronDialog } from "../capabilities/electron/electronDialog";
 import { installSecretStore } from "../capabilities/secretStoreProvider";
 import { ElectronSecretStore } from "../capabilities/electron/electronSecretStore";
+import { DevFixtureSecretStore } from "../capabilities/devFixture/devFixtureSecretStore";
+import { isDevFixtureMode } from "./devFixtureMode";
 import { assertNativeCapabilitiesInstalled } from "../capabilities/nativeCapabilities";
 
 /** Title of the error box shown when a capability is missing at launch. */
@@ -167,7 +169,16 @@ installDialog(new ElectronDialog());
 // construction, so installing it here — during `main.ts` evaluation, long before
 // `ready` — freezes nothing.
 installAppLifecycle(new ElectronAppLifecycle());
-installSecretStore(new ElectronSecretStore());
+// BACKLOG-3785 repro branch ONLY: dev fixture mode never touches safeStorage/Keychain.
+installSecretStore(
+  isDevFixtureMode()
+    ? new DevFixtureSecretStore(process.env.KEEPR_DEV_FIXTURE_KEY)
+    : new ElectronSecretStore(),
+);
+if (isDevFixtureMode()) {
+  // eslint-disable-next-line no-console
+  console.log("[DEV_FIXTURE] SecretStore = env key (safeStorage never called)");
+}
 
 // LAST — every capability above must now answer `isInstalled()`.
 try {

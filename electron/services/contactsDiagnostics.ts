@@ -56,6 +56,7 @@
  * paths and addresses this block must not carry.
  */
 
+import { refuseLocalSource } from "../bootstrap/devFixtureMode";
 import path from "path";
 import { discoverAddressBooks } from "./addressBookDiscovery";
 import {
@@ -167,6 +168,7 @@ export async function collectContactsLiveDiagnostics(options?: {
   fullDiskAccess?: "granted" | "denied" | "unknown";
 }): Promise<ContactsLiveDiagnostics> {
   const live = defaultLive();
+  if (refuseLocalSource("contacts live diagnostics")) return live;
 
   const platform = options?.platform ?? process.platform;
   live.platform_supported = platform === "darwin";

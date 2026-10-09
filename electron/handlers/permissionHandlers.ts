@@ -4,6 +4,7 @@
 // Handles: Full Disk Access, macOS version, app location
 // ============================================
 
+import { refuseLocalSource } from "../bootstrap/devFixtureMode";
 import { ipcMain, app, shell } from "electron";
 import { promises as fs } from "fs";
 import path from "path";
@@ -274,6 +275,7 @@ export function registerPermissionHandlers(): void {
   // Stays entirely in the MAIN (signed) process -- a spawned helper/child would
   // carry the wrong TCC identity and register the wrong binary.
   ipcMain.handle("trigger-full-disk-access", async () => {
+    if (refuseLocalSource("trigger-full-disk-access")) return { success: true };
     const messagesDbPath = path.join(
       process.env.HOME!,
       "Library/Messages/chat.db"
@@ -317,6 +319,7 @@ export function registerPermissionHandlers(): void {
 
   // Check permissions for Messages database
   ipcMain.handle("check-permissions", async () => {
+    if (refuseLocalSource("check-permissions (chat.db probe)")) return { hasPermission: true, fullDiskAccess: true };
     // BACKLOG-1940: the reliable unpackaged QA driver has no macOS Full Disk Access, which would
     // trap the seeded (already-onboarded) user on the permissions step. Grant it in E2E mode only.
     // DOUBLE-gated (!app.isPackaged && KEEPR_E2E=1) → dead code in any packaged/shipped build.

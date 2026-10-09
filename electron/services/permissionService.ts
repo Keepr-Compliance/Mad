@@ -3,6 +3,7 @@
  * Centralized permission checking and error handling
  */
 
+import { refuseLocalSource } from "../bootstrap/devFixtureMode";
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
@@ -109,6 +110,7 @@ class PermissionService {
    * @returns {Promise<{hasPermission: boolean, error?: string}>}
    */
   async checkFullDiskAccess(): Promise<PermissionResult> {
+    if (refuseLocalSource("FDA probe (chat.db)")) return { hasPermission: true };
     // Windows/Linux: Full Disk Access is macOS-only, skip this check
     if (os.platform() !== "darwin") {
       logService.info(
@@ -211,6 +213,7 @@ class PermissionService {
    * @returns {Promise<{hasPermission: boolean, error?: string}>}
    */
   async checkContactsPermission(): Promise<PermissionResult> {
+    if (refuseLocalSource("Contacts permission probe")) return { hasPermission: true };
     // Windows/Linux: Contacts app is macOS-only, skip this check
     if (os.platform() !== "darwin") {
       logService.info(

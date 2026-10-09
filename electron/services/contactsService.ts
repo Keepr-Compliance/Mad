@@ -15,6 +15,7 @@
  * `discoverAddressBooks`, `openAddressBookReadOnly` and `loadAddressBook`.
  */
 
+import { refuseLocalSource } from "../bootstrap/devFixtureMode";
 import path from "path";
 import fs from "fs/promises";
 import logService from "./logService";
@@ -490,6 +491,12 @@ function buildBookResult(
  * clean run.
  */
 async function getContactNames(): Promise<ContactNamesResult> {
+  if (refuseLocalSource("Contacts address-book read")) {
+    return {
+      contactMap: {}, phoneToContactInfo: {}, contacts: [],
+      status: { success: false, contactCount: 0, error: "dev fixture mode", attemptedPaths: [] },
+    } as unknown as ContactNamesResult;
+  }
   const contactMap: ContactMap = {};
   const phoneToContactInfo: PhoneToContactInfo = {};
   let lastError: Error | null = null;

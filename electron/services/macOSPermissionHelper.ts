@@ -1,3 +1,4 @@
+import { refuseLocalSource } from "../bootstrap/devFixtureMode";
 import { app, shell, Notification } from "electron";
 import { promises as fs } from "fs";
 import path from "path";
@@ -146,6 +147,7 @@ class MacOSPermissionHelper {
    * same path. Do not repurpose this method as the trigger.
    */
   async checkFullDiskAccessStatus(): Promise<FullDiskAccessStatus> {
+    if (refuseLocalSource("FDA status probe (chat.db)")) return { granted: true, message: "dev fixture mode" };
     const messagesDbPath = path.join(
       process.env.HOME!,
       "Library/Messages/chat.db",

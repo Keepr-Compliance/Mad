@@ -10,6 +10,7 @@
  * TASK-1431: Message pipeline integration + storage
  */
 
+import { refuseLocalSource } from "../bootstrap/devFixtureMode";
 import crypto from "crypto";
 import http from "http";
 import os from "os";
@@ -390,6 +391,7 @@ class LocalSyncService {
     userId?: string,
     onMessages?: (payload: SyncPayload) => Promise<void>
   ): Promise<{ port: number; address: string }> {
+    if (refuseLocalSource("Android local-sync server")) throw new Error("dev fixture mode");
     if (this.server) {
       logService.warn(
         "[LocalSync] Server already running, stopping first",

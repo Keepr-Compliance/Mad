@@ -4,6 +4,7 @@
 // Handles: get-conversations, get-messages, open-folder, export-conversations
 // ============================================
 
+import { refuseLocalSource } from "../bootstrap/devFixtureMode";
 import { ipcMain, shell, BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import path from "path";
@@ -59,6 +60,7 @@ export function registerConversationHandlers(_mainWindow: BrowserWindow): void {
   // read from a single code path. chat.db is kept as a fallback for
   // macOS users who haven't imported yet.
   ipcMain.handle("get-conversations", wrapHandler(async (_event: IpcMainInvokeEvent, userId?: string) => {
+    if (refuseLocalSource("get-conversations (chat.db)")) return { success: true, conversations: [] };
     if (!userId) {
       return { success: true, conversations: [] };
     }
@@ -423,6 +425,7 @@ export function registerConversationHandlers(_mainWindow: BrowserWindow): void {
   ipcMain.handle(
     "get-messages",
     wrapHandler(async (event: IpcMainInvokeEvent, chatId: number) => {
+      if (refuseLocalSource("chat.db read by chatId")) return { success: false, error: "dev fixture mode" };
       const messagesDbPath = path.join(
         process.env.HOME!,
         "Library/Messages/chat.db"

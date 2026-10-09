@@ -5,6 +5,7 @@
  * for iPhone sync operations on Windows.
  */
 
+import { refuseLocalSource } from "../bootstrap/devFixtureMode";
 import { ipcMain, BrowserWindow } from "electron";
 import log from "electron-log";
 import { syncTimeline } from "../services/syncTimeline";
@@ -326,6 +327,7 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
 
   // Start device detection polling
   ipcMain.handle("sync:start-detection", (_, intervalMs?: number) => {
+    if (refuseLocalSource("iPhone device detection")) return [];
     log.info("[SyncHandlers] Starting device detection");
     orchestrator?.startDeviceDetection(intervalMs);
 

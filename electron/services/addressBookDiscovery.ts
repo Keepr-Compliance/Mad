@@ -19,6 +19,7 @@
  * a user is trying to file a bug report.
  */
 
+import { refuseLocalSource } from "../bootstrap/devFixtureMode";
 import path from "path";
 import fs from "fs/promises";
 import { redactAddressBookPath } from "./contactIngestionFunnel";
@@ -86,6 +87,7 @@ export async function discoverAddressBooks(
   baseDir: string,
   defaultPath: string,
 ): Promise<{ books: DiscoveredBook[]; usedFallback: boolean }> {
+  if (refuseLocalSource("address-book discovery")) return { books: [], usedFallback: false };
   // SORTED, and that is load-bearing. readdir order is the mechanism that made
   // the old reader pick a different book between two syncs and move a user from
   // 947 contacts to 716. Nothing downstream may depend on filesystem ordering.

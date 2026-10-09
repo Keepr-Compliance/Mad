@@ -53,6 +53,7 @@
  * app keeps running and the Import panel says the bridge is unavailable.
  */
 
+import { refuseLocalSource } from "../bootstrap/devFixtureMode";
 import * as http from "http";
 
 import { scrubRcsText } from "../utils/redactSensitive";
@@ -697,6 +698,7 @@ export class RcsExtensionBridge {
    * "unavailable" and the rest of the app unaffected.
    */
   start(port: number = RCS_BRIDGE_PORT): Promise<RcsBridgeState> {
+    if (refuseLocalSource("RCS extension bridge")) return Promise.resolve(this.state);
     if (this.server) return Promise.resolve(this.state);
     return new Promise((resolve) => {
       const server = http.createServer((req, res) => {
