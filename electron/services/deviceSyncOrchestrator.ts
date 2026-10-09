@@ -2195,12 +2195,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * BACKLOG-3816 S4-C: seal a successful sync's chain once persistence has ended (ok,
    * cancelled or failed). Called by syncHandlers in a finally. Never throws.
    */
-  async completeBackupAtRest(): Promise<void> {
+  async completeBackupAtRest(succeeded = false): Promise<void> {
     const session = this.pendingAtRestSession;
     this.pendingAtRestSession = null;
     if (!session) return;
     if (this.stoppedForQuit) return; // next launch seals (marker `syncing`)
-    this.lastAtRestSeal = this.atRest().finishSync(session);
+    this.lastAtRestSeal = this.atRest().finishSync(session, undefined, { succeeded });
     await this.lastAtRestSeal;
   }
 

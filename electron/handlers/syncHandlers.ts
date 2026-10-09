@@ -471,8 +471,9 @@ function setupEventForwarding(): void {
   // attachment copier reads it). It is sealed when persistence ends, on EVERY path —
   // stored, cancelled, failed, refused, no user, or nothing to persist.
   const onSyncComplete = async (result: SyncResult) => {
+    let succeeded = false;
     try {
-      await persistCompletedSync(result);
+      succeeded = await persistCompletedSync(result);
     } catch (error) {
       // An event listener: a rejection here would be unhandled. Persistence reports its
       // own failures to the renderer; this is only what escaped it (e.g. a closed window).
@@ -482,12 +483,15 @@ function setupEventForwarding(): void {
     } finally {
       // `typeof` guard: handler suites stub the orchestrator with only what they drive.
       if (typeof orchestrator?.completeBackupAtRest === "function") {
-        await orchestrator.completeBackupAtRest();
+        await orchestrator.completeBackupAtRest(succeeded);
       }
     }
   };
 
-  const persistCompletedSync = async (result: SyncResult) => {
+  // Resolves true ONLY when persistence stored the sync (the success path); every cancel,
+  // refusal, failure and skip resolves false.
+  const persistCompletedSync = async (result: SyncResult): Promise<boolean> => {
+    let stored = false;
     log.info("[SyncHandlers] Sync complete", {
       conversations: result.conversations.length,
       messages: result.messages.length,
@@ -572,7 +576,7 @@ function setupEventForwarding(): void {
           if (result.needsCleanup && result.backupPath && orchestrator) {
             await orchestrator.cleanupBackup(result.backupPath);
           }
-          return;
+          return false;
         }
 
         // BACKLOG-3816: attachment writes fail closed when the file-data key is
@@ -584,7 +588,7 @@ function setupEventForwarding(): void {
           if (result.needsCleanup && result.backupPath && orchestrator) {
             await orchestrator.cleanupBackup(result.backupPath);
           }
-          return;
+          return false;
         }
 
         log.info("[SyncHandlers] Database persistence complete", {
@@ -639,6 +643,7 @@ function setupEventForwarding(): void {
           duration: persistResult.duration,
         });
         log.info("[SyncHandlers] sync:storage-complete sent successfully");
+        stored = true;
 
         // BACKLOG-1546: Auto-link newly synced messages to transactions.
         // Fire-and-forget — don't block the sync completion response.
@@ -723,6 +728,7 @@ function setupEventForwarding(): void {
       // BACKLOG-2898: still close the timeline.
       syncTimeline.endSync(result.success ? "complete" : "error");
     }
+    return stored;
   };
   orchestrator.on("complete", (result: SyncResult) => {
     void onSyncComplete(result);

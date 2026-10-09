@@ -296,9 +296,42 @@ describe("default strategy is C-DELTA (Step 0b)", () => {
     const next = await afterRestart.beginSync(UDID);
     expect(next).toMatchObject({ kind: "keepr", strategy: "full" });
     fs.writeFileSync(smsPath, Buffer.from("rewritten by the phone"));
-    await afterRestart.finishSync(next);
+    await afterRestart.finishSync(next, undefined, { succeeded: true });
     expect(await afterRestart.forcedFullReason(UDID)).toBeNull();
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  describe("R1: the force-full flag clears only when the forced C-FULL sync SUCCEEDED", () => {
+    async function forcedFull() {
+      makeChain();
+      const s = service();
+      await s.migrate(UDID);
+      const first = await s.beginSync(UDID);
+      await s.finishSync(first, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+      expect(await s.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
+      const forced = await s.beginSync(UDID);
+      expect(forced).toMatchObject({ kind: "keepr", strategy: "full" });
+      return { s, forced };
+    }
+
+    it("a forced C-FULL that FAILED keeps the flag", async () => {
+      const { s, forced } = await forcedFull();
+      await s.finishSync(forced, undefined, { succeeded: false });
+      expect(await s.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
+      expect(await service().beginSync(UDID)).toMatchObject({ strategy: "full" });
+    });
+
+    it("a forced C-FULL that was CANCELLED (no succeeded option) keeps the flag", async () => {
+      const { s, forced } = await forcedFull();
+      await s.finishSync(forced);
+      expect(await s.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
+    });
+
+    it("a forced C-FULL that SUCCEEDED clears the flag", async () => {
+      const { s, forced } = await forcedFull();
+      await s.finishSync(forced, undefined, { succeeded: true });
+      expect(await s.forcedFullReason(UDID)).toBeNull();
+    });
   });
 
   it("D1: a delta sync whose backup tool failed forces C-FULL even though no file is damaged; a restart still reads it", async () => {

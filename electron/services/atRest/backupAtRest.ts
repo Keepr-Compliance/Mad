@@ -930,7 +930,7 @@ export class BackupAtRest extends EventEmitter {
   async finishSync(
     session: BackupSyncSession,
     onProgress?: (p: BackupAtRestProgress) => void,
-    opts: { forceFullNext?: string } = {},
+    opts: { forceFullNext?: string; succeeded?: boolean } = {},
   ): Promise<void> {
     if (session.kind === "none") return;
     try {
@@ -958,7 +958,9 @@ export class BackupAtRest extends EventEmitter {
             reasonCode: FORCE_FULL_REASON_DELTA_DAMAGED,
             damaged,
           });
-        } else if (session.strategy === "full" && damaged === 0 && outcome === "encrypted") {
+        } else if (session.strategy === "full" && damaged === 0 && outcome === "encrypted" && opts.succeeded === true) {
+          // Only a C-FULL sync that COMPLETED (persistence stored) clears the force-full flag.
+          // A failed or cancelled forced FULL leaves the chain unproven, so the flag stays.
           await this.deps.markers().setNextStrategy(session.udid, null);
         }
       }

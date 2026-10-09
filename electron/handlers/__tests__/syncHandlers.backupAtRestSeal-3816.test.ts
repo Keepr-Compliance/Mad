@@ -121,6 +121,7 @@ describe("S4-C: the kept backup is sealed when persistence ends, on every path",
   it("stored: sealed once, AFTER persistence and the parse-copy cleanup", async () => {
     await endSync({});
     expect(order).toEqual(["persist-start", "persist-end", "cleanup", "seal"]);
+    expect(orchestratorEvents.completeBackupAtRest).toHaveBeenLastCalledWith(true); // R1: only a stored sync may clear the force-full flag
   });
 
   it("persistence cancelled (the storage-error says partial data was cleaned up)", async () => {
@@ -134,16 +135,19 @@ describe("S4-C: the kept backup is sealed when persistence ends, on every path",
     });
     expect(send).toHaveBeenCalledWith("sync:storage-error", { error: "Sync cancelled — partial data has been cleaned up." });
     expect(order).toEqual(["persist-start", "persist-end", "cleanup", "seal"]);
+    expect(orchestratorEvents.completeBackupAtRest).toHaveBeenLastCalledWith(false);
   });
 
   it("attachments refused (no file-data key)", async () => {
     await endSync({ persist: async () => ({ success: false, atRestRefused: true, error: "no key", duration: 1 }) });
     expect(order).toEqual(["persist-start", "persist-end", "cleanup", "seal"]);
+    expect(orchestratorEvents.completeBackupAtRest).toHaveBeenLastCalledWith(false);
   });
 
   it("persistence throws", async () => {
     await endSync({ persist: async () => { throw new Error("db locked"); } });
     expect(order).toEqual(["persist-start", "persist-end", "cleanup", "seal"]);
+    expect(orchestratorEvents.completeBackupAtRest).toHaveBeenLastCalledWith(false);
   });
 
   it("no user for persistence", async () => {
