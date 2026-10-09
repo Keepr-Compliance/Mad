@@ -49,7 +49,6 @@
  * (bootstrap/installAppDataPaths.ts) supplies it via {@link setLogDirectoryResolver}.
  */
 
-import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { performance } from "perf_hooks";
@@ -57,15 +56,13 @@ import { redactLogText } from "../utils/redactSensitive";
 import type { AtRestKey } from "./atRest/fileCrypto";
 import {
   SEAL_TMP_RE,
-  MAX_RECORD_BYTES,
-  buildLogHeader,
   deriveLogFileKey,
   isSealedLogFile,
   openSealedLog,
   parseLogHeader,
   readFirstSealedRecord,
   replaceWithSealedLogSync,
-  sealLogRecord,
+  replaceWithSealedRecordsAsync,
   sealedLogRecords,
 } from "./atRest/sealedLog";
 import { archivePathFor, sealedTargetFor } from "./sealedLogSink";
@@ -498,35 +495,14 @@ export async function trimSealedLogAsync(
     return "deleted";
   }
 
-  // Pass 2: reseal under a fresh salt into a temp file, in slices.
-  const tmp = `${file}.seal-${process.pid}-${Date.now()}.tmp`;
-  try {
-    const salt = crypto.randomBytes(16);
-    const newHeader = buildLogHeader(key.keyId, salt);
-    const fileKey = deriveLogFileKey(key.key, salt);
-    fs.writeFileSync(tmp, newHeader, { mode: 0o600 });
-    let index = 0;
-    let batch: Buffer[] = [];
-    for (const pt of kept) {
-      for (let start = 0; start < pt.length; start += MAX_RECORD_BYTES) {
-        batch.push(sealLogRecord(fileKey, newHeader, index++, pt.subarray(start, Math.min(start + MAX_RECORD_BYTES, pt.length))));
-      }
-      if (performance.now() - sliceStart >= sliceMs) {
-        fs.appendFileSync(tmp, Buffer.concat(batch));
-        batch = [];
-        await maybeYield();
-      }
-    }
-    if (batch.length) fs.appendFileSync(tmp, Buffer.concat(batch));
-    fs.renameSync(tmp, file);
-  } catch (err) {
-    try {
-      fs.unlinkSync(tmp);
-    } catch {
-      /* never created */
-    }
-    throw err;
-  }
+  // Pass 2: reseal under a fresh salt into a temp file, in slices; rename at the end.
+  await replaceWithSealedRecordsAsync(file, kept, key, {
+    shouldYield: () => performance.now() - sliceStart >= sliceMs,
+    yieldFn: async () => {
+      await yieldFn();
+      sliceStart = performance.now();
+    },
+  });
   return "rewritten";
 }
 

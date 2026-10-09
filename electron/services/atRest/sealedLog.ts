@@ -362,6 +362,49 @@ export function replaceWithSealedLogSync(file: string, text: string, key: AtRest
   }
 }
 
+/**
+ * Replace `file` with a sealed file whose records are `pieces` (each piece one or
+ * more records), under a fresh salt — like {@link replaceWithSealedLogSync}, but
+ * the sealing is done in slices: whenever `shouldYield()` is true the batch so far
+ * is written to the temp file and `yieldFn()` is awaited. The rename is one
+ * synchronous step at the end; a failure leaves the original in place.
+ */
+export async function replaceWithSealedRecordsAsync(
+  file: string,
+  pieces: Buffer[],
+  key: AtRestKey,
+  slice: { shouldYield: () => boolean; yieldFn: () => Promise<void> },
+): Promise<void> {
+  const tmp = `${file}.seal-${process.pid}-${Date.now()}.tmp`;
+  try {
+    const salt = crypto.randomBytes(SALT_BYTES);
+    const header = buildLogHeader(key.keyId, salt);
+    const fileKey = deriveLogFileKey(key.key, salt);
+    fs.writeFileSync(tmp, header, { mode: 0o600 });
+    let index = 0;
+    let batch: Buffer[] = [];
+    for (const pt of pieces) {
+      for (let start = 0; start < pt.length; start += MAX_RECORD_BYTES) {
+        batch.push(sealLogRecord(fileKey, header, index++, pt.subarray(start, Math.min(start + MAX_RECORD_BYTES, pt.length))));
+      }
+      if (slice.shouldYield()) {
+        fs.appendFileSync(tmp, Buffer.concat(batch));
+        batch = [];
+        await slice.yieldFn();
+      }
+    }
+    if (batch.length) fs.appendFileSync(tmp, Buffer.concat(batch));
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* never created */
+    }
+    throw err;
+  }
+}
+
 /** Leftover temp files from an interrupted {@link replaceWithSealedLogSync}. */
 export const SEAL_TMP_RE = /\.seal-\d+-\d+\.tmp$/;
 
