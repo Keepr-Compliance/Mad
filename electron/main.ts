@@ -261,6 +261,7 @@ import { runStartupHealthChecks } from "./services/startupHealthCheck";
 import { getInstallMode } from "./services/diagnostics/installMode";
 import { getHostArchitecture } from "./services/diagnostics/hostArchitecture";
 import { WINDOWS_ARM64_ARGV_TOKEN } from "./utils/windowsArm64";
+import sessionSecurityService from "./services/sessionSecurityService";
 import {
   WindowResponsivenessTracker,
   attachResponsivenessTracking,
@@ -1829,6 +1830,7 @@ app.whenReady().then(async () => {
         return response;
       },
       reload: () => {
+        sessionSecurityService.noteUserReload();
         mainWindow?.webContents.reload();
       },
       quit: () => {

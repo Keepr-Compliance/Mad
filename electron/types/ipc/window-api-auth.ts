@@ -159,6 +159,10 @@ export interface WindowApiAuth {
   // TASK-2062: Remote session validation
   validateRemoteSession: () => Promise<{ valid: boolean }>;
 
+  // BACKLOG-3833: user-input heartbeat and idle sign-out notice
+  reportUserActivity: () => Promise<void>;
+  onIdleSessionExpired: (callback: () => void) => () => void;
+
   // TASK-2062: Active devices list
   getActiveDevices: (userId: string) => Promise<{
     success: boolean;
