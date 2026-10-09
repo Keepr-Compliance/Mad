@@ -144,6 +144,23 @@ jest.mock("../backupService", () => ({
   })),
 }));
 
+// BACKLOG-3817: the orchestrator reads the saved backup password before the backup starts.
+// The real store does file I/O under a shared userData directory, which fake timers do not
+// drive, so the monitor's first reading landed outside the first 60s window on some runs.
+jest.mock("../atRest/backupPassword", () => {
+  const actual = jest.requireActual("../atRest/backupPassword");
+  return {
+    ...actual,
+    getBackupPasswordStore: () => ({
+      get: async () => ({ kind: "absent" }),
+      put: async () => undefined,
+      replaceVerified: async () => undefined,
+      replaceUnreadable: async () => undefined,
+      storePath: () => "",
+    }),
+  };
+});
+
 jest.mock("../backupDecryptionService", () => ({
   BackupDecryptionService: jest.fn().mockImplementation(() => ({
     isBackupEncrypted: jest.fn().mockResolvedValue(false),
