@@ -148,14 +148,19 @@ describe("N: safeOpenName", () => {
 });
 
 describe("S: scope keys are the strings the migration marker uses", () => {
-  it("exact values", () => {
+  it("exact values, from the one source (markers.ts)", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const m = require("../markers");
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const c = require("../containment");
-    expect(c.SCOPE_MESSAGE_ATTACHMENTS).toBe("message-attachments");
-    expect(c.SCOPE_EMAIL_ATTACHMENTS).toBe("email-attachments");
-    expect(c.ATTACHMENT_ROOTS.map((r: { scope: string }) => r.scope)).toEqual([
-      "message-attachments",
-      "email-attachments",
+    expect(m.SCOPE_MESSAGE_ATTACHMENTS).toBe("message-attachments");
+    expect(m.SCOPE_EMAIL_ATTACHMENTS).toBe("email-attachments");
+    // containment no longer declares its own copy.
+    expect(c.SCOPE_MESSAGE_ATTACHMENTS).toBeUndefined();
+    expect(c.SCOPE_EMAIL_ATTACHMENTS).toBeUndefined();
+    expect(c.ATTACHMENT_ROOTS).toEqual([
+      { dir: "message-attachments", scope: "message-attachments" },
+      { dir: "attachments", scope: "email-attachments" },
     ]);
   });
 });

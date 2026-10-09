@@ -40,6 +40,10 @@ import { hostLogger } from "../../capabilities/loggerProvider";
 import { getBackupAtRest } from "./backupAtRest";
 import { DataKeyUnavailableError, getDataKeyService } from "./dataKeyService";
 import { runConfiguredLogMaintenance } from "../logScrub";
+import { runLegacySweep } from "./legacySweep";
+import { SCOPE_EMAIL_ATTACHMENTS, SCOPE_MESSAGE_ATTACHMENTS } from "./markers";
+import { getAtRestMigration } from "./migration";
+import { runTempSweep } from "./tempSweep";
 
 export interface AtRestJobContext {
   log: (level: "info" | "warn" | "error", message: string) => void;
@@ -154,16 +158,7 @@ export class AtRestStartup {
   }
 }
 
-const placeholder = (id: string, order: number, slice: string): AtRestJob => ({
-  id,
-  order,
-  placeholder: true,
-  run: async () => {
-    throw new Error(`at-rest job "${id}" is a placeholder (${slice})`);
-  },
-});
-
-/** Registers the S0 data-key job and a placeholder for every slice still to land. */
+/** Registers the data-key job and every slice's launch job. */
 export function registerDefaultJobs(startup: AtRestStartup): void {
   startup.register({
     id: "data-key",
@@ -191,9 +186,9 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
       ctx.log(r.errors.length ? "warn" : "info", `[AtRest] logs: rewritten ${r.rewritten.length}, deleted ${r.deleted.length}, errors ${r.errors.length}`);
     },
   });
-  startup.register(placeholder("temp-sweep", 20, "S6"));
-  startup.register(placeholder("attachments", 30, "S3"));
-  startup.register(placeholder("email-attachments", 40, "S3"));
+  startup.register({ id: "temp-sweep", order: 20, run: async () => { await runTempSweep(); } });
+  startup.register({ id: "attachments", order: 30, run: async () => { await getAtRestMigration().runScope(SCOPE_MESSAGE_ATTACHMENTS); } });
+  startup.register({ id: "email-attachments", order: 40, run: async () => { await getAtRestMigration().runScope(SCOPE_EMAIL_ATTACHMENTS); } });
   startup.register({
     id: "backups",
     order: 50,
@@ -203,7 +198,7 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
       ctx.log("info", `[AtRest] backups: ${Object.values(outcomes).join(", ") || "none"}`);
     },
   });
-  startup.register(placeholder("legacy-sweep", 60, "S6"));
+  startup.register({ id: "legacy-sweep", order: 60, run: async () => { await runLegacySweep(); } });
 }
 
 export const atRestStartup = new AtRestStartup();

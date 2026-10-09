@@ -358,6 +358,21 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
         const unsub = syncApi.onProgress((syncProgress) => {
           // Ignore progress events after cancel
           if (!syncStateRef.isActive) return;
+          // BACKLOG-3816 S4-C: "cleanup" ticks are the kept iPhone backup being prepared
+          // (unsealed, before the transfer) or secured (after it). While a sync is active
+          // the "Preparing your saved iPhone backup..." line belongs to the sync screen;
+          // once the sync is past the transfer the AtRestMigrationBanner owns the "Securing"
+          // line (it shows cleanup ticks only when NO sync is active), so this hook drops
+          // them there. The bar does not move: the tick's percent is the unseal's, not the sync's.
+          if ((syncProgress.phase as string) === "cleanup") {
+            const current = progressPhaseRef.current;
+            if (current === "extracting" || current === "storing" || current === "complete" || current === "error") return;
+            const message = syncProgress.message;
+            setProgress((prev) =>
+              prev ? { ...prev, message } : { phase: "backing_up", percent: 0, message },
+            );
+            return;
+          }
           // Map sync progress to BackupProgress format
           let phase: BackupProgress["phase"] = "backing_up";
           if (syncProgress.phase === "backup") {
