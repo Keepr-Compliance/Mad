@@ -318,7 +318,8 @@ jest.mock("better-sqlite3-multiple-ciphers", () => {
 jest.mock("electron", () => ({
   app: {
     isPackaged: false,
-    getPath: jest.fn().mockReturnValue("/tmp"),
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()),
   },
 }));
 
@@ -837,4 +838,10 @@ describe("DeviceSyncOrchestrator Skip Logic (TASK-908)", () => {
       expect(mockResult.skipReason).toBe("unchanged");
     });
   });
+});
+
+// BACKLOG-3816 S4-C (B1): this file's userData is a fresh directory under os.tmpdir().
+afterAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./helpers/testUserData").removeTestUserDataDir();
 });

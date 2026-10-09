@@ -54,8 +54,16 @@ jest.mock("../atRest/backupAtRest", () => ({
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
 }));
+// BACKLOG-3816 S4-C (B1): no saved-password file I/O; this suite's subject is not the password.
+jest.mock("../atRest/backupPassword", () => ({
+  ...jest.requireActual("../atRest/backupPassword"),
+  getBackupPasswordStore: () =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
+}));
 jest.mock("electron", () => ({
-  app: { isPackaged: false, getPath: jest.fn().mockReturnValue("/tmp") },
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  app: { isPackaged: false, getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()) },
 }));
 
 jest.mock("electron-log", () => ({
@@ -397,4 +405,10 @@ describe("BACKLOG-2925: the refusal is recorded, and records only what it knows"
     expect(errors[0].message).not.toMatch(/\d+(\.\d+)?\s?(GB|MB)/);
     expect(errors[0].message).not.toMatch(/passed/i);
   });
+});
+
+// BACKLOG-3816 S4-C (B1): this file's userData is a fresh directory under os.tmpdir().
+afterAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./helpers/testUserData").removeTestUserDataDir();
 });

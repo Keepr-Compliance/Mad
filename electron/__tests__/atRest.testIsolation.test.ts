@@ -1,0 +1,91 @@
+/**
+ * BACKLOG-3816 S4-C (B1): suites that reach the at-rest stores never share userData.
+ *
+ * The sync orchestrator, the kept-backup at-rest layer, the saved backup password store
+ * and the data key service all resolve their files under `app.getPath("userData")`. A
+ * suite that mocks `getPath` as a fixed shared path ("/tmp", "/tmp/keepr-...") reads and
+ * writes the SAME store file as every other such suite — and as any later run — which
+ * is how the diskGuard-2899 flake happened (`/tmp/backup-password-store.json`).
+ *
+ * Rule: in every electron test file that names one of those modules, a `getPath` mock
+ * must not return a literal path under a shared writable location. Use a fresh directory
+ * per file instead: `helpers/testUserData.testUserDataDir()` (or an mkdtemp under
+ * os.tmpdir() set in beforeAll). A literal that cannot be created by a normal user
+ * (e.g. "/mock/userData") is allowed: nothing can be written there.
+ *
+ * Text scan, not grep: a raw NUL byte makes grep treat a file as binary and skip it
+ * (BACKLOG-2637); this reads every file and fails on a NUL rather than skipping it.
+ */
+import fs from "fs";
+import path from "path";
+
+const REPO = path.resolve(__dirname, "..", "..");
+const SCAN_ROOT = path.join(REPO, "electron");
+
+/** Modules whose files live under userData. Matched inside a quoted import/mock specifier. */
+const SCOPED_MODULE = /["'][^"'\n]*(deviceSyncOrchestrator|backupAtRest|backupPassword|dataKeyService)["']/;
+
+/** A literal absolute path in a location other suites or the developer's profile can share. */
+const SHARED_LITERAL = /["'`](\/tmp\b|\/private\/|\/var\/|\/Users\/|\/home\/|~\/|[A-Za-z]:[\\/])[^"'`]*["'`]/;
+
+/** Lines that configure `getPath`, plus the two lines after (a multi-line factory). */
+function sharedGetPathLiterals(source: string): string[] {
+  const lines = source.split("\n");
+  const hits: string[] = [];
+  lines.forEach((line, i) => {
+    if (!/getPath/.test(line)) return;
+    const window = lines.slice(i, i + 3).join("\n");
+    const m = window.match(SHARED_LITERAL);
+    if (m) hits.push(`${i + 1}: ${m[0]}`);
+  });
+  return hits;
+}
+
+function walk(dir: string, out: string[]): void {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules") continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walk(full, out);
+    else if (/\.test\.tsx?$/.test(entry.name)) out.push(full);
+  }
+}
+
+describe("at-rest test isolation (BACKLOG-3816 S4-C B1)", () => {
+  it("detector: flags a fixed shared path, accepts a per-file temp dir", () => {
+    expect(sharedGetPathLiterals(`  getPath: jest.fn().mockReturnValue("/tmp"),`)).toHaveLength(1);
+    expect(sharedGetPathLiterals(`app: { getPath: jest.fn(() => "/tmp/keepr-3598-quit") },`)).toHaveLength(1);
+    expect(
+      sharedGetPathLiterals(`getPath: jest.fn((name) => {\n  const p = { userData: '/Users/x/Library/keepr' };`),
+    ).toHaveLength(1);
+    expect(sharedGetPathLiterals(`getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()),`)).toEqual([]);
+    expect(sharedGetPathLiterals(`getPath: jest.fn(() => process.env.KEEPR_3816_USERDATA as string),`)).toEqual([]);
+    expect(sharedGetPathLiterals(`getPath: jest.fn().mockReturnValue("/mock/userData"),`)).toEqual([]);
+  });
+
+  it("no suite that reaches the at-rest stores mocks userData as a shared fixed path", () => {
+    const files: string[] = [];
+    walk(SCAN_ROOT, files);
+    const scoped: string[] = [];
+    const violations: string[] = [];
+    for (const file of files) {
+      const source = fs.readFileSync(file, "utf8");
+      const rel = path.relative(REPO, file);
+      if (source.includes("\u0000")) {
+        violations.push(`${rel}: contains a NUL byte; cannot be scanned reliably`);
+        continue;
+      }
+      if (!SCOPED_MODULE.test(source)) continue;
+      scoped.push(rel);
+      for (const hit of sharedGetPathLiterals(source)) violations.push(`${rel}:${hit}`);
+    }
+    // The scan must actually reach the suites it exists for.
+    expect(scoped).toEqual(
+      expect.arrayContaining([
+        "electron/services/__tests__/deviceSyncOrchestrator.test.ts",
+        "electron/services/__tests__/deviceSyncOrchestrator.diskGuard-2899.test.ts",
+        "electron/services/__tests__/stopBackupOnQuit-3598.test.ts",
+      ]),
+    );
+    expect(violations).toEqual([]);
+  });
+});

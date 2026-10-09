@@ -94,7 +94,8 @@ jest.mock("../atRest/backupAtRest", () => ({
 jest.mock("electron", () => ({
   app: {
     isPackaged: false,
-    getPath: jest.fn().mockReturnValue("/tmp"),
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()),
   },
 }));
 
@@ -151,21 +152,15 @@ jest.mock("../backupService", () => ({
 }));
 
 // BACKLOG-3817: the orchestrator reads the saved backup password before the backup starts.
-// The real store does file I/O under a shared userData directory, which fake timers do not
-// drive, so the monitor's first reading landed outside the first 60s window on some runs.
-jest.mock("../atRest/backupPassword", () => {
-  const actual = jest.requireActual("../atRest/backupPassword");
-  return {
-    ...actual,
-    getBackupPasswordStore: () => ({
-      get: async () => ({ kind: "absent" }),
-      put: async () => undefined,
-      replaceVerified: async () => undefined,
-      replaceUnreadable: async () => undefined,
-      storePath: () => "",
-    }),
-  };
-});
+// The real store does file I/O, which fake timers do not drive, so the monitor's first
+// reading landed outside the first 60s window on some runs.
+// BACKLOG-3816 S4-C (B1): no saved-password file I/O; this suite's subject is not the password.
+jest.mock("../atRest/backupPassword", () => ({
+  ...jest.requireActual("../atRest/backupPassword"),
+  getBackupPasswordStore: () =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
+}));
 
 jest.mock("../backupDecryptionService", () => ({
   BackupDecryptionService: jest.fn().mockImplementation(() => ({
@@ -643,4 +638,10 @@ describe("BACKLOG-2899 — sync disk guard", () => {
       expect(result.success).toBe(true);
     });
   });
+});
+
+// BACKLOG-3816 S4-C (B1): this file's userData is a fresh directory under os.tmpdir().
+afterAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./helpers/testUserData").removeTestUserDataDir();
 });
