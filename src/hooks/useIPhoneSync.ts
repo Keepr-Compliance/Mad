@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { getCurrentScreenName } from "../utils/currentScreenName";
 import * as Sentry from "@sentry/electron/renderer";
 import type {
   iOSDevice,
@@ -759,18 +760,31 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   // second. Main is silent while ticks arrive and logs one `renderer-gap` line when
   // they resume after > 3 s, so a renderer freeze is bracketed to the second.
   // Stops when the sync leaves "syncing" (complete, error, cancel, idle).
+  //
+  // BACKLOG-3785: each tick also carries the screen NAME, and the cleanup sends one
+  // `stopped` tick, so main's freeze profiler can tell a heartbeat that stopped on
+  // purpose from a renderer that went silent.
   useEffect(() => {
     if (syncStatus !== "syncing") return;
     const api = window.api?.sync as
-      | { rendererTick?: (tick: { first: boolean; hidden: boolean }) => void }
+      | {
+          rendererTick?: (tick: {
+            first: boolean;
+            hidden: boolean;
+            stopped?: boolean;
+            screen?: string;
+          }) => void;
+        }
       | undefined;
     if (!api?.rendererTick) return;
     let first = true;
-    const tick = () => {
+    const tick = (stopped = false) => {
       try {
         api.rendererTick?.({
           first,
           hidden: typeof document !== "undefined" && document.visibilityState === "hidden",
+          stopped,
+          screen: getCurrentScreenName(),
         });
       } catch {
         // Telemetry only.
@@ -778,8 +792,11 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       first = false;
     };
     tick();
-    const id = setInterval(tick, RENDERER_TICK_MS);
-    return () => clearInterval(id);
+    const id = setInterval(() => tick(), RENDERER_TICK_MS);
+    return () => {
+      clearInterval(id);
+      tick(true);
+    };
   }, [syncStatus]);
 
   // BACKLOG-3784: COMPLETION-SHOWN ACK. Once the completion state has committed,

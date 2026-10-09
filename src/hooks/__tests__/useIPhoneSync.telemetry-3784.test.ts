@@ -184,18 +184,26 @@ describe("useIPhoneSync telemetry (BACKLOG-3784)", () => {
         completeCb?.({ success: true, messageCount: 37, contactCount: 1, conversationCount: 1 });
       });
       expect(syncApi.rendererTick).toHaveBeenCalledTimes(1);
-      expect(syncApi.rendererTick.mock.calls[0][0]).toEqual({ first: true, hidden: false });
+      expect(syncApi.rendererTick.mock.calls[0][0]).toEqual({ first: true, hidden: false, stopped: false, screen: "unknown" });
 
       act(() => {
         jest.advanceTimersByTime(3000);
       });
       expect(syncApi.rendererTick).toHaveBeenCalledTimes(4);
-      expect(syncApi.rendererTick.mock.calls[3][0]).toEqual({ first: false, hidden: false });
+      expect(syncApi.rendererTick.mock.calls[3][0]).toEqual({ first: false, hidden: false, stopped: false, screen: "unknown" });
 
       act(() => {
         storageCompleteCb?.({ messagesStored: 37, contactsStored: 0, duration: 100 });
       });
       const afterComplete = syncApi.rendererTick.mock.calls.length;
+      // BACKLOG-3785: leaving "syncing" sends exactly one `stopped` tick.
+      expect(syncApi.rendererTick.mock.calls[afterComplete - 1][0]).toEqual({
+        first: false,
+        hidden: false,
+        stopped: true,
+        screen: "unknown",
+      });
+      expect(syncApi.rendererTick.mock.calls.filter(([t]: [{ stopped?: boolean }]) => t.stopped)).toHaveLength(1);
       act(() => {
         jest.advanceTimersByTime(5000);
       });

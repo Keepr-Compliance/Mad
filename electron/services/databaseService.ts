@@ -2560,6 +2560,16 @@ class DatabaseService implements IDatabaseService {
     return syncDb.getMessageIdMap(userId);
   }
 
+  /** BACKLOG-3785: one bounded chunk of external id -> internal id. */
+  getMessageIdsByExternalIds(userId: string, externalIds: readonly string[]) {
+    return syncDb.getMessageIdsByExternalIds(userId, externalIds);
+  }
+
+  /** BACKLOG-3785: one bounded chunk of `message_id:filename` records. */
+  getExistingAttachmentRecordsForMessages(messageIds: readonly string[]) {
+    return syncDb.getExistingAttachmentRecordsForMessages(messageIds);
+  }
+
   getExistingAttachmentRecords() {
     return syncDb.getExistingAttachmentRecords();
   }

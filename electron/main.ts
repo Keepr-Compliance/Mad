@@ -22,6 +22,9 @@ import "./bootstrap/installNativeCapabilities";
 // store), so TLS-inspecting antivirus / proxies do not break Outlook, Gmail
 // token calls or address verification. Before any handler is registered.
 import "./bootstrap/installMainNetAxios";
+// BACKLOG-3785: measure ipcMain.handle replies during a sync. Must patch
+// ipcMain.handle before ANY handler registers, so it stays above every handler import.
+import "./bootstrap/installIpcReplySizeLog";
 import {
   app,
   BrowserWindow,
@@ -262,6 +265,7 @@ import {
   WindowResponsivenessTracker,
   attachResponsivenessTracking,
 } from "./services/windowResponsivenessTracker";
+import { createWindowFreezeReporter } from "./services/rendererFreezeProfiler";
 import { syncTimeline } from "./services/syncTimeline";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
@@ -1803,6 +1807,8 @@ app.whenReady().then(async () => {
         Sentry.captureMessage(message, context);
       },
       getPhase: () => syncTimeline.currentPhase(),
+      // BACKLOG-3785: any freeze >= 10 s, sync or not, sends `renderer_freeze` (no frames).
+      onFreeze: createWindowFreezeReporter(),
     });
 
     attachResponsivenessTracking(mainWindow, responsivenessTracker, {

@@ -25,6 +25,11 @@ export interface ResponsivenessTrackerDeps {
   capture: ResponsivenessCapture;
   /** The sync phase right now, or null when no sync is involved. */
   getPhase?: () => string | null;
+  /**
+   * BACKLOG-3785: every closed freeze, with its duration and the phase at its start.
+   * Feeds the `renderer_freeze` report; a throw here is swallowed.
+   */
+  onFreeze?: (durationMs: number, phase: string | null) => void;
 }
 
 /** Coarse buckets so the tag has few values and no exact durations. */
@@ -72,6 +77,7 @@ export class WindowResponsivenessTracker {
     const at = this.now();
     const durationMs = at - this.unresponsiveSince;
     const phase = this.phaseAtStart ?? "none";
+    const phaseAtStart = this.phaseAtStart;
     this.unresponsiveSince = null;
     this.phaseAtStart = null;
 
@@ -99,6 +105,11 @@ export class WindowResponsivenessTracker {
       } catch {
         // Telemetry must never break the window's event handling.
       }
+    }
+    try {
+      this.deps.onFreeze?.(durationMs, phaseAtStart);
+    } catch {
+      // Telemetry must never break the window's event handling.
     }
     return durationMs;
   }

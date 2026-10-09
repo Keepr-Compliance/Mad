@@ -48,7 +48,12 @@ jest.mock("../../services/syncTimeline", () => ({
   },
 }));
 
+jest.mock("../../services/rendererFreezeProfiler", () => ({
+  rendererFreezeProfiler: { noteTick: jest.fn() },
+}));
+
 import { registerSyncHandlers, cleanupSyncHandlers } from "../syncHandlers";
+import { rendererFreezeProfiler } from "../../services/rendererFreezeProfiler";
 import { syncTimeline } from "../../services/syncTimeline";
 
 const timeline = syncTimeline as unknown as {
@@ -84,6 +89,16 @@ describe("BACKLOG-3784: telemetry IPC", () => {
     expect(timeline.noteRendererTick.mock.calls).toEqual([
       [{ first: true, hidden: false }],
       [{ first: false, hidden: false }],
+    ]);
+  });
+
+  it("BACKLOG-3785: sync:renderer-tick also feeds the freeze profiler with the sender, stopped and screen", () => {
+    const sender = { id: 1 };
+    listeners.get("sync:renderer-tick")?.({ sender }, { first: false, hidden: false, stopped: true, screen: "dashboard" });
+    listeners.get("sync:renderer-tick")?.({ sender }, { stopped: "yes", screen: 42 });
+    expect((rendererFreezeProfiler.noteTick as jest.Mock).mock.calls).toEqual([
+      [sender, { first: false, hidden: false, stopped: true, screen: "dashboard" }],
+      [sender, { first: false, hidden: false, stopped: false, screen: undefined }],
     ]);
   });
 

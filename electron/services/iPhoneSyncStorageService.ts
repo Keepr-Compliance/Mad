@@ -132,6 +132,13 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+/**
+ * BACKLOG-3785: ids per lookup query in the attachment setup. Bounded so one query
+ * (and the main-thread time it takes) stays small; the caller yields between them.
+ * Well under SQLite's host-parameter limit.
+ */
+const LOOKUP_CHUNK = 500;
+
 // Input validation constants
 const MAX_MESSAGE_TEXT_LENGTH = 100000; // 100KB - truncate extremely long messages
 const MAX_HANDLE_LENGTH = 500; // Phone numbers, emails, etc.
@@ -780,8 +787,17 @@ class IPhoneSyncStorageService {
     // Create attachments directory if it doesn't exist
     await fs.promises.mkdir(attachmentsDir, { recursive: true });
 
-    // Load existing message IDs for linking
-    const messageIdMap = databaseService.getMessageIdMap(userId);
+    // BACKLOG-3785: resolve internal ids for THIS sync's attachment-bearing messages
+    // only, in bounded chunks, yielding between chunks. This used to load every
+    // message row of the user (getMessageIdMap) and every attachment record in one
+    // synchronous pass — ~33-40 s of blocked main on a ~670k-message store.
+    const messageIdMap = new Map<string, string>();
+    const guids = [...new Set(attachmentsToStore.map((a) => a.messageGuid))];
+    for (let start = 0; start < guids.length; start += LOOKUP_CHUNK) {
+      const chunk = databaseService.getMessageIdsByExternalIds(userId, guids.slice(start, start + LOOKUP_CHUNK));
+      for (const [guid, id] of chunk ?? []) messageIdMap.set(guid, id);
+      await yieldToEventLoop();
+    }
 
     // Load existing attachment hashes for deduplication
     const existingHashes = new Set<string>();
@@ -790,9 +806,20 @@ class IPhoneSyncStorageService {
       const filename = path.basename(row.storage_path, path.extname(row.storage_path));
       existingHashes.add(filename);
     }
+    await yieldToEventLoop();
 
-    // Load existing attachment records (message_id + filename)
-    const existingRecords = databaseService.getExistingAttachmentRecords();
+    // Existing attachment records (message_id + filename) for the resolved messages
+    // only — same chunk-and-yield as above (BACKLOG-3785).
+    const existingRecords = new Set<string>();
+    const resolvedIds = [...new Set(messageIdMap.values())];
+    for (let start = 0; start < resolvedIds.length; start += LOOKUP_CHUNK) {
+      const chunk = databaseService.getExistingAttachmentRecordsForMessages(resolvedIds.slice(start, start + LOOKUP_CHUNK));
+      for (const record of chunk ?? []) existingRecords.add(record);
+      await yieldToEventLoop();
+    }
+
+    // BACKLOG-3785: progress cadence — ~2% of the run, rounded up to a multiple of 100.
+    const progressEvery = Math.max(1, Math.ceil(attachmentsToStore.length / 50 / 100)) * 100;
 
     let stored = 0;
     // BACKLOG-3784: one counter per reason; `skipped` is their sum.
@@ -908,8 +935,15 @@ class IPhoneSyncStorageService {
         // attachments — every skip above `continue`s, and before this a run of
         // already-stored attachments (an incremental sync) never reported progress
         // and never yielded the event loop. Same throttle as before.
-        if ((i + 1) % 100 === 0 || i === attachmentsToStore.length - 1) {
-          onProgress?.(i + 1, attachmentsToStore.length);
+        //
+        // BACKLOG-3785: still YIELD every 100th item, but REPORT only every ~2%
+        // (a multiple of 100, at least 100) and the last — ~50 events per run
+        // instead of one per 100 items.
+        const isLast = i === attachmentsToStore.length - 1;
+        if ((i + 1) % 100 === 0 || isLast) {
+          if ((i + 1) % progressEvery === 0 || isLast) {
+            onProgress?.(i + 1, attachmentsToStore.length);
+          }
           await yieldToEventLoop();
         }
       }

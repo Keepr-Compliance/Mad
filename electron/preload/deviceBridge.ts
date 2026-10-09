@@ -463,9 +463,10 @@ export const syncBridge = {
 
   /**
    * BACKLOG-3784: renderer heartbeat while an iPhone sync is showing. Telemetry only.
-   * @param tick - first: first tick of this sync; hidden: document is hidden
+   * @param tick - first: first tick of this sync; hidden: document is hidden;
+   *   stopped (BACKLOG-3785): the heartbeat stopped on purpose; screen: the screen NAME shown
    */
-  rendererTick: (tick: { first: boolean; hidden: boolean }) => {
+  rendererTick: (tick: { first: boolean; hidden: boolean; stopped?: boolean; screen?: string }) => {
     ipcRenderer.send("sync:renderer-tick", tick);
   },
 

@@ -72,6 +72,16 @@ jest.mock("../databaseService", () => ({
     getMessageIdMap: (...a: unknown[]) => iphoneDb.getMessageIdMap(...a),
     getAttachmentStoragePaths: (...a: unknown[]) => iphoneDb.getAttachmentStoragePaths(...a),
     getExistingAttachmentRecords: (...a: unknown[]) => iphoneDb.getExistingAttachmentRecords(...a),
+    // BACKLOG-3785: storeAttachments asks for the ids it needs, per chunk. Answer
+    // from the same fixture table the tests below stub, filtered by the request.
+    getMessageIdsByExternalIds: (userId: string, ids: readonly string[]) => {
+      const table = (iphoneDb.getMessageIdMap(userId) as Map<string, string> | undefined) ?? new Map<string, string>();
+      return new Map(ids.filter((g) => table.has(g)).map((g) => [g, table.get(g)!] as [string, string]));
+    },
+    getExistingAttachmentRecordsForMessages: (ids: readonly string[]) => {
+      const records = (iphoneDb.getExistingAttachmentRecords() as Set<string> | undefined) ?? new Set<string>();
+      return new Set([...records].filter((r) => ids.includes(r.slice(0, r.indexOf(":")))));
+    },
     insertAttachment: (...a: unknown[]) => iphoneDb.insertAttachment(...a),
     findEmailAttachmentRow: (...a: unknown[]) => emailDb.findEmailAttachmentRow(...a),
     createAttachmentRecord: (...a: unknown[]) => emailDb.createAttachmentRecord(...a),
