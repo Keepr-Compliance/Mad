@@ -28,6 +28,7 @@ import outlookFetchService from "./outlookFetchService";
 import logService from "./logService";
 import { extractTextForAttachment } from "./attachmentTextExtractionService";
 import { sanitizeFileSystemName } from "../utils/fileUtils";
+import { isAtRestWriteRefused, sealBufferToFile } from "./atRest/attachmentWriter";
 
 // Constants
 const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024; // 50MB max per attachment
@@ -66,6 +67,11 @@ export interface EmailAttachmentMeta {
  */
 export interface DownloadResult {
   success: boolean;
+  /**
+   * BACKLOG-3816: downloads stopped because the file-data key is unavailable
+   * (writes fail closed). The error detail carries the user-facing message.
+   */
+  atRestRefused?: boolean;
   stored: number;
   skipped: number;
   errors: number;
@@ -248,6 +254,18 @@ class EmailAttachmentService {
           result.errors++;
         }
       } catch (error) {
+        // BACKLOG-3816: no file-data key → stop; every further write would be refused too.
+        if (isAtRestWriteRefused(error)) {
+          result.success = false;
+          result.atRestRefused = true;
+          result.errors++;
+          result.details.push({
+            filename: attachment.filename,
+            status: "error",
+            reason: error.userMessage,
+          });
+          break;
+        }
         const errorMsg =
           error instanceof Error ? error.message : "Unknown error";
         await logService.warn(
@@ -389,7 +407,8 @@ class EmailAttachmentService {
       // CodeQL: js/http-to-file-access — This service intentionally downloads email
       // attachments to local storage. Mitigations: path traversal validation (line 301-306),
       // content-hash-based filenames, filename sanitization, deduplication.
-      await fs.writeFile(resolvedStoragePath, data);
+      // BACKLOG-3816: stored as KEPRENC ciphertext, never plaintext.
+      await sealBufferToFile(resolvedStoragePath, data);
       existingHashes.add(contentHash);
     }
 

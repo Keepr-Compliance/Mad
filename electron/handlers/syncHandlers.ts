@@ -533,6 +533,18 @@ function setupEventForwarding(): void {
           return;
         }
 
+        // BACKLOG-3816: attachment writes fail closed when the file-data key is
+        // unavailable. Tell the user instead of reporting a normal completion.
+        if (!persistResult.success && persistResult.atRestRefused) {
+          log.error("[SyncHandlers] Attachments not saved: file-data key unavailable");
+          syncTimeline.endSync("error");
+          sendToMainWindow("sync:storage-error", { error: persistResult.error });
+          if (result.needsCleanup && result.backupPath && orchestrator) {
+            await orchestrator.cleanupBackup(result.backupPath);
+          }
+          return;
+        }
+
         log.info("[SyncHandlers] Database persistence complete", {
           messagesStored: persistResult.messagesStored,
           messagesSkipped: persistResult.messagesSkipped,
