@@ -2910,7 +2910,10 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // progress", reached while isRunning is still true for the OTHER sync)
     // from genuine terminations, which all clear isRunning first.
     if (!this.isRunning) {
-      syncTimeline.endSync(/cancelled/i.test(error) ? "cancelled" : "error");
+      // BACKLOG-3598: an app quit is a cancel, whatever words the error carries.
+      syncTimeline.endSync(
+        this.stoppedForQuit || /cancelled/i.test(error) ? "cancelled" : "error",
+      );
     }
 
     return {

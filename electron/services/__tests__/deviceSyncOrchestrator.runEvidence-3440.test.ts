@@ -452,5 +452,8 @@ describe("BACKLOG-3598: quitting during a backup is recorded as app-quit, not de
     expect(last).toContain("endedBy=app-quit");
     expect(last).not.toContain("endedBy=device-error");
     expect(last).not.toContain("reasonCode=");
+    // The outcome is a cancel, not an error.
+    expect(last).toContain("outcome=cancelled");
+    expect(last).not.toContain("outcome=error");
   });
 });

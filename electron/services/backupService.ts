@@ -244,10 +244,13 @@ export const MB_ERROR_FILE_MISSING = 4;
  * `/disk space|no space|ENOSPC|not enough space/i` Sentry tag still fires. That
  * coupling is asserted by a test rather than left to be rediscovered.
  */
+export const BACKUP_STOPPED_FOR_QUIT_MESSAGE =
+  "Backup stopped because Keepr was closed.";
+
 export const BACKUP_HOST_DISK_FULL_MESSAGE =
-  "Not enough free disk space on this Mac to back up your iPhone. " +
-  "Your Mac may report far more space than this: macOS counts space held by local " +
-  "Time Machine snapshots as free, and a backup cannot use it. Deleting files often " +
+  "Not enough free disk space on this computer to back up your iPhone. " +
+  "Your computer may report far more space than this: it can count space held by local " +
+  "snapshots as free, and a backup cannot use it. Deleting files often " +
   "frees nothing while those snapshots are holding them.";
 
 /** BACKLOG-2913: correct for MBErrorDomain/208, and now shown only for it. */
@@ -269,7 +272,7 @@ export const BACKUP_DEVICE_LOCKED_MESSAGE =
  */
 export const BACKUP_CONNECTION_LOST_MESSAGE =
   "The connection to your iPhone dropped during the backup. Try a different cable, " +
-  "plug the iPhone straight into this Mac without a hub or dock, then sync again. " +
+  "plug the iPhone straight into this computer without a hub or dock, then sync again. " +
   "If it keeps dropping, restart your iPhone.";
 
 /**
@@ -295,7 +298,7 @@ export const BACKUP_CONNECTION_LOST_MESSAGE =
 export const BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE =
   "The connection to your iPhone dropped during the backup. This is often " +
   "temporary — try syncing again. If it keeps happening, plug the iPhone " +
-  "straight into this Mac without a hub, and check that neither device is going " +
+  "straight into this computer without a hub, and check that neither device is going " +
   "to sleep.";
 
 /**
@@ -310,7 +313,7 @@ export const BACKUP_SERVICE_UNAVAILABLE_MESSAGE =
 
 /** BACKLOG-2913: MBErrorDomain/4 — the device could not find a file it needed. */
 export const BACKUP_FILE_MISSING_MESSAGE =
-  "Part of the existing backup on this Mac is missing or unreadable, so your iPhone " +
+  "Part of the existing backup on this computer is missing or unreadable, so your iPhone " +
   "could not continue it. Starting a fresh backup should clear this.";
 
 /**
@@ -427,6 +430,17 @@ const FILE_NAME_SUFFIX = /\.(?:plist|bak|db|sqlite|log|txt|json|xml|tmp)$/i;
 export const REDACTED_APP_ID = "[app-id]";
 
 /**
+ * BACKLOG-3598: per-read / per-write transport trace lines that `-d` prints thousands of
+ * times per backup (`SSL_read 32768, received 32768`). Not an error. Real errors,
+ * warnings and `received 0` style failures are not matched.
+ */
+export const TRACE_NOISE_LINE =
+  /\bSSL_(?:read|write)\s+\d+|\bservice_send\b|\b(?:idevice_connection_receive_timeout|internal_plist_receive_timeout|np_get_notification)\b|\b\w+_(?:un)?lock\(\):\s*(?:Locked|Unlocked)\b/;
+
+/** BACKLOG-3598: how many stderr lines the failure log keeps. */
+export const FAILURE_STDERR_LOG_MAX_LINES = 50;
+
+/**
  * Decide whether one output line may be logged. Returns `null` to suppress it, or
  * the line with any third-party bundle ID redacted.
  */
@@ -466,7 +480,7 @@ export function filterIdeviceOutputLineForLog(
 /** Apply the line filter to a whole block of output (a buffer or a chunk). */
 export function redactIdeviceOutputForLog(
   text: string,
-  options: { headTruncated?: boolean } = {},
+  options: { headTruncated?: boolean; dropTraceNoise?: boolean; maxLines?: number } = {},
 ): {
   text: string;
   suppressedLines: number;
@@ -486,7 +500,13 @@ export function redactIdeviceOutputForLog(
     first = false;
     const loggable = filterIdeviceOutputLineForLog(line, state);
     if (loggable === null) suppressedLines++;
+    else if (options.dropTraceNoise && TRACE_NOISE_LINE.test(loggable)) suppressedLines++;
     else kept.push(loggable);
+  }
+  const max = options.maxLines;
+  if (max !== undefined && kept.length > max) {
+    suppressedLines += kept.length - max;
+    kept.splice(0, kept.length - max);
   }
   return { text: kept.join("\n"), suppressedLines };
 }
@@ -743,7 +763,7 @@ export function classifyBackupFailure(
 
   return {
     message:
-      "The backup stopped and neither this Mac nor your iPhone reported a reason" +
+      "The backup stopped and neither this computer nor your iPhone reported a reason" +
       (exitCode === null ? "" : ` (exit code ${exitCode})`) +
       ". Please try again with your iPhone unlocked and plugged in directly. If it " +
       "keeps happening, send this message to support.",
@@ -846,6 +866,12 @@ export class BackupService extends EventEmitter {
   private lastMeaningfulActivityAt: number = 0;
   private watchdogInterval: NodeJS.Timeout | null = null;
   private watchdogFired: boolean = false;
+
+  /**
+   * BACKLOG-3598: set by `stopForQuit`. A backup that ends after this is true ended
+   * because the app closed, not because of a device or tool fault.
+   */
+  private quitRequested: boolean = false;
   private static readonly WATCHDOG_CHECK_INTERVAL_MS = 30_000; // Check every 30s
 
   /**
@@ -1206,6 +1232,7 @@ export class BackupService extends EventEmitter {
       // BACKLOG-1582: Reset watchdog state
       // BACKLOG-2911 (FIX 2): one timestamp, advanced only by meaningful activity.
       this.watchdogFired = false;
+      this.quitRequested = false;
       this.lastMeaningfulActivityAt = Date.now();
       this.deviceReportedBackupMode = null;
       this.clearWatchdog();
@@ -1536,12 +1563,18 @@ export class BackupService extends EventEmitter {
             // Update path to decrypted location
             finalBackupPath = decryptionResult.decryptedPath!;
           }
+        } else if (this.quitRequested) {
+          // BACKLOG-3598: we killed this process because the app is closing. Not a failure.
+          log.info(`[BackupService] Backup stopped for app quit (exit code ${code})`);
         } else {
           log.error(`[BackupService] Backup failed with code ${code}`);
           // BACKLOG-3790: the tail of stderr, without plist dumps or app bundle IDs.
           // The raw buffer still feeds classifyFailure below.
+          // BACKLOG-3598: and without the -d per-read trace lines, capped to the last lines.
           const loggableStderr = redactIdeviceOutputForLog(stderrBuffer, {
             headTruncated: stderrHeadTruncated,
+            dropTraceNoise: true,
+            maxLines: FAILURE_STDERR_LOG_MAX_LINES,
           });
           log.error("[BackupService] stderr:", loggableStderr.text);
           if (loggableStderr.suppressedLines > 0) {
@@ -1571,7 +1604,10 @@ export class BackupService extends EventEmitter {
         let errorCode: BackupErrorCode | undefined;
         let failureCause: BackupFailureCause | undefined;
         if (!success) {
-          if (diskFullDetected) {
+          if (this.quitRequested) {
+            errorMessage = BACKUP_STOPPED_FOR_QUIT_MESSAGE;
+            errorCode = "BACKUP_CANCELLED";
+          } else if (diskFullDetected) {
             // BACKLOG-2899: the host disk filled mid-transfer, which idevicebackup2
             // absorbs in silence — it never checks its own fwrite/fclose, so this
             // can arrive alongside exit code 0 and "Backup Successful."
@@ -1826,6 +1862,7 @@ export class BackupService extends EventEmitter {
     }
 
     this.clearWatchdog();
+    this.quitRequested = true;
     this.isRunning = false;
     log.info(`[BackupService] App quitting; stopping backup process (PID: ${proc.pid})`);
 
