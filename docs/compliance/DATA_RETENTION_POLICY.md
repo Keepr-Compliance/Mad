@@ -92,7 +92,7 @@ This policy applies to all data collected, processed, and stored by Keepr, inclu
 
 | Data Type | Retention Period | Deletion Method | Legal Basis |
 |-----------|------------------|-----------------|-------------|
-| Application Logs (local) | 30 days rolling | Auto-rotation and deletion | Legitimate interest (debugging) |
+| Application Logs (local) | 14 days rolling — the same desktop log files as the row below (BACKLOG-3819) | Entries older than 14 days are removed at app launch; size rotation at 8 MB | Legitimate interest (debugging) |
 | Desktop diagnostic logs (local, `main.log` / `main.old.log`) | 14 days rolling; email addresses and phone numbers are redacted before they are written (BACKLOG-3819) | Entries older than 14 days are removed at app launch; size rotation at 8 MB | Legitimate interest (support) |
 | Analytics Events (Supabase) | 90 days | Auto-purge | Legitimate interest (product improvement) |
 | API Usage Tracking | 90 days | Auto-purge | Legitimate interest (rate limiting) |
@@ -191,7 +191,7 @@ Used for data with legal retention requirements:
 |----------|------------|------------|
 | SQLite Database | Communications, transactions, contacts | At-rest (OS-level) |
 | OS Keychain | OAuth tokens, credentials | OS keychain encryption |
-| Application Logs | Debug and error logs | None (non-sensitive) |
+| Application Logs | Debug and error logs; email addresses and phone numbers are redacted before they are written (BACKLOG-3819) | Not encrypted; content redacted |
 | Temporary Files | Processing cache | Deleted on application close |
 
 ### 5.2 Cloud Storage (Supabase)
@@ -339,7 +339,7 @@ When data is needed for dispute resolution:
 - Transaction records, financial data, legal acceptances
 
 **Legitimate Interest** (varies):
-- Logs (30-90 days), audit trails (2 years), analytics (90 days)
+- Desktop logs (14 days), audit trails (2 years), analytics (90 days)
 
 **User Consent** (user controlled):
 - Communication archives, email content
