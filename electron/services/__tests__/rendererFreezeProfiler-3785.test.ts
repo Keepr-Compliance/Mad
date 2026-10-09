@@ -490,6 +490,17 @@ describe("BACKLOG-3785: the profiler disarms when the page or debugger goes away
     expect(h.contents.listeners.size).toBe(0);
   });
 
+  it("a same-document main-frame navigation (URL change, same page) does not stop or detach", async () => {
+    const h = await armed();
+    const before = stopsAfter(h);
+    h.contents.listeners.get("did-start-navigation")?.({ isMainFrame: true, isSameDocument: true });
+    h.contents.listeners.get("did-start-navigation")?.({}, "u", true, true);
+    await h.profiler.idle();
+    expect(stopsAfter(h)).toBe(before);
+    expect(h.contents.attached).toBe(true);
+    expect(h.contents.debugger.detach).not.toHaveBeenCalled();
+  });
+
   it("a legacy positional main-frame navigation also disarms; a sub-frame one does not", async () => {
     const h = await armed();
     h.contents.listeners.get("did-start-navigation")?.({}, "u", false, false);
