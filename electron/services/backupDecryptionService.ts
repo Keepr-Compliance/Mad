@@ -57,12 +57,42 @@ export const ATTACHMENT_RELATIVE_ROOTS: readonly string[] = [
   "Library/SMS/StickerCache/",
 ];
 
+/** One Manifest.db `Files` row the sync reads. */
+export interface ReadFileRow {
+  fileID: string;
+  domain: string;
+  relativePath: string;
+  file: Buffer;
+}
+
+/**
+ * The Manifest.db rows the sync reads — sms.db, AddressBook and every message
+ * attachment. Shared by the encrypted-backup parse copy (BACKLOG-3817) and the
+ * Keepr-sealed parse copy (BACKLOG-3816 S4-C), so both copy the same set.
+ * `manifestDbPath` must be a PLAINTEXT SQLite file.
+ */
+export function selectReadFileRows(manifestDbPath: string): ReadFileRow[] {
+  const db = new Database(manifestDbPath, { readonly: true });
+  try {
+    const attachmentClauses = ATTACHMENT_RELATIVE_ROOTS.map(() => "substr(relativePath, 1, ?) = ?").join(" OR ");
+    const rootParams = ATTACHMENT_RELATIVE_ROOTS.flatMap((root) => [root.length, root]);
+    return db
+      .prepare(
+        `SELECT fileID, domain, relativePath, file FROM Files
+         WHERE flags = 1 AND (fileID IN (?, ?) OR (domain = 'MediaDomain' AND (${attachmentClauses})))`,
+      )
+      .all(SMS_DB_FILE_ID, ADDRESS_BOOK_FILE_ID, ...rootParams) as ReadFileRow[];
+  } finally {
+    db.close();
+  }
+}
+
 /** Keybag entries whose WRAP has this bit are wrapped by the passphrase key. */
 const WRAP_PASSPHRASE = 2;
 /** Upper bounds from the reference decryptor (`utils.py` _MAX_DPIC/_MAX_ITER_ITERATIONS). */
 const MAX_DPIC_ITERATIONS = 20_000_000;
 const MAX_ITER_ITERATIONS = 1_000_000;
-const FILE_ID_PATTERN = /^[0-9a-f]{40}$/;
+export const FILE_ID_PATTERN = /^[0-9a-f]{40}$/;
 
 export class BackupPasswordIncorrectError extends Error {
   constructor() {
@@ -399,20 +429,7 @@ export class BackupDecryptionService {
     unlocked: UnlockedBackup,
     outputPath: string,
   ): Promise<DecryptStats> {
-    const db = new Database(manifestDbPath, { readonly: true });
-    let rows: Array<{ fileID: string; domain: string; relativePath: string; file: Buffer }>;
-    try {
-      const attachmentClauses = ATTACHMENT_RELATIVE_ROOTS.map(() => "substr(relativePath, 1, ?) = ?").join(" OR ");
-      const rootParams = ATTACHMENT_RELATIVE_ROOTS.flatMap((root) => [root.length, root]);
-      rows = db
-        .prepare(
-          `SELECT fileID, domain, relativePath, file FROM Files
-           WHERE flags = 1 AND (fileID IN (?, ?) OR (domain = 'MediaDomain' AND (${attachmentClauses})))`,
-        )
-        .all(SMS_DB_FILE_ID, ADDRESS_BOOK_FILE_ID, ...rootParams) as typeof rows;
-    } finally {
-      db.close();
-    }
+    const rows = selectReadFileRows(manifestDbPath);
 
     const stats: DecryptStats = { decrypted: 0, skipped: 0 };
     const required = new Set([SMS_DB_FILE_ID]);
