@@ -152,6 +152,55 @@ describe("BACKLOG-3819: log scrub + retention", () => {
   });
 });
 
+describe("BACKLOG-3819: a failed first pass leaves no scrub-done marker", () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const rawFs = require("fs");
+  let dir: string;
+  beforeEach(() => {
+    dir = rawFs.mkdtempSync(path.join(os.tmpdir(), "keepr-scrub-marker-3819-"));
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
+    rawFs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const markerPath = () => path.join(dir, SCRUB_MARKER);
+  const seed = () =>
+    rawFs.writeFileSync(path.join(dir, "main.log"), buildLog(NOW - DAY));
+
+  const failures: Array<[string, string, string]> = [
+    ["read", "readFileSync", "EBUSY"],
+    ["write", "writeFileSync", "EPERM"],
+    ["rename", "renameSync", "EBUSY"],
+  ];
+
+  it.each(failures)("%s error on main.log: no marker, next launch retries and then writes it", (_l, fn, code) => {
+    seed();
+    const real = rawFs[fn].bind(rawFs);
+    const spy = jest.spyOn(rawFs, fn).mockImplementation((...args: unknown[]) => {
+      const target = String(args[0]);
+      if (target.includes("main.log")) {
+        throw Object.assign(new Error(`${code}: simulated`), { code });
+      }
+      return real(...args);
+    });
+
+    const first = runLogMaintenance(dir, NOW);
+    expect(spy).toHaveBeenCalled();
+    expect(first.errors.length).toBeGreaterThan(0);
+    expect(rawFs.existsSync(markerPath())).toBe(false);
+
+    spy.mockRestore();
+    // the original is untouched and still holds the raw value
+    expect(rawFs.readFileSync(path.join(dir, "main.log"), "utf8")).toContain(RAW_VALUES[0]);
+    const second = runLogMaintenance(dir, NOW);
+    expect(second.errors).toEqual([]);
+    expect(second.rewritten).toEqual(["main.log"]);
+    expect(rawFs.readFileSync(path.join(dir, "main.log"), "utf8")).not.toContain(RAW_VALUES[0]);
+    expect(rawFs.existsSync(markerPath())).toBe(true);
+  });
+});
+
 describe("BACKLOG-3819: the at-rest startup job 'logs' runs the scrub", () => {
   it("runs retention + scrub on the directory the shell registered", async () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
