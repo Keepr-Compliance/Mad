@@ -175,3 +175,64 @@ describe("BACKLOG-3819 nonce uniqueness under one file key", () => {
   });
 });
 
+describe("BACKLOG-3819 failed partial append", () => {
+  /** The next appendFileSync writes only the first half of its record, then fails with ENOSPC. */
+  function failNextAppendHalfway(): jest.SpyInstance {
+    const real = fs.appendFileSync;
+    const spy = jest.spyOn(fs, "appendFileSync");
+    spy.mockImplementationOnce((target: fs.PathOrFileDescriptor, data: string | Uint8Array, opts?: fs.WriteFileOptions) => {
+      const bytes = Buffer.from(data as Uint8Array);
+      real(target, bytes.subarray(0, Math.floor(bytes.length / 2)), opts);
+      throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    });
+    return spy;
+  }
+  afterEach(() => jest.restoreAllMocks());
+
+  it("cuts the partial record off at once: the file stays fully readable", () => {
+    const a = new SealedLogAppender({ key: KEY });
+    a.append(file, LINES[0]);
+    const goodSize = fs.statSync(file).size;
+    const spy = failNextAppendHalfway();
+    expect(() => a.append(file, LINES[1])).toThrow("ENOSPC");
+    expect(spy).toHaveBeenCalled();
+    expect(fs.statSync(file).size).toBe(goodSize);
+    const read = openSealedLog(fs.readFileSync(file), keyFor);
+    expect(read.problems).toEqual([]);
+    expect(read.text).toBe(LINES[0]);
+  });
+
+  it("later records stay readable (same appender), and the next launch keeps them", () => {
+    const a = new SealedLogAppender({ key: KEY });
+    a.append(file, LINES[0]);
+    const spy = failNextAppendHalfway();
+    expect(() => a.append(file, LINES[1])).toThrow("ENOSPC");
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+    a.append(file, LINES[2]);
+    // Next launch: a fresh appender validates the file, then appends.
+    new SealedLogAppender({ key: KEY }).append(file, LINES[1]);
+    const read = openSealedLog(fs.readFileSync(file), keyFor);
+    expect(read.problems).toEqual([]);
+    expect(read.text).toBe(LINES[0] + LINES[2] + LINES[1]);
+  });
+
+  it("if the cut itself fails, the cached state is dropped and the next append repairs the tail", () => {
+    const a = new SealedLogAppender({ key: KEY });
+    a.append(file, LINES[0]);
+    const spy = failNextAppendHalfway();
+    const trunc = jest.spyOn(fs, "truncateSync").mockImplementationOnce(() => {
+      throw new Error("EIO");
+    });
+    expect(() => a.append(file, LINES[1])).toThrow("ENOSPC");
+    expect(spy).toHaveBeenCalled();
+    expect(trunc).toHaveBeenCalled();
+    spy.mockRestore();
+    trunc.mockRestore();
+    a.append(file, LINES[2]);
+    const read = openSealedLog(fs.readFileSync(file), keyFor);
+    expect(read.problems).toEqual([]);
+    expect(read.text).toBe(LINES[0] + LINES[2]);
+  });
+});
+

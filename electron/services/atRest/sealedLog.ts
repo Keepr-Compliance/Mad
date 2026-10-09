@@ -364,9 +364,25 @@ export class SealedLogAppender {
     for (let start = 0; start < pt.length; start += MAX_RECORD_BYTES) {
       pieces.push(pt.subarray(start, Math.min(start + MAX_RECORD_BYTES, pt.length)));
     }
+    const abs = path.resolve(file);
     for (const piece of pieces) {
       const rec = sealLogRecord(st.fileKey, st.header, st.nextIndex, piece);
-      fs.appendFileSync(path.resolve(file), rec, { mode: 0o600 });
+      try {
+        fs.appendFileSync(abs, rec, { mode: 0o600 });
+      } catch (err) {
+        // A failed append (disk full, I/O error) may have written part of the
+        // record. Cut the file back to the last complete record so later records
+        // are not stranded behind a broken length, and drop the cached state so
+        // the next append re-validates the file from disk. Best effort: if the
+        // cut fails too, the next append's validation cuts the torn tail.
+        try {
+          fs.truncateSync(abs, st.size);
+        } catch {
+          /* re-validated on next append */
+        }
+        this.files.delete(abs);
+        throw err;
+      }
       st.nextIndex++;
       st.size += rec.length;
     }
