@@ -69,39 +69,16 @@ This guide walks through setting up Google Places API for address verification i
 
 **Don't worry:** With the free tier, you won't be charged unless you exceed it.
 
-## Adding API Key to Electron App
+## Where the key lives (BACKLOG-3834)
 
-### Option 1: Environment Variables (Recommended for Development)
+The desktop app does **not** hold a Google key. Address lookups go to the
+`maps-proxy` Supabase Edge Function with the signed-in user's session; the
+function reads the key from the server-only secret `GOOGLE_MAPS_SERVER_KEY`.
+Never put a Maps key in `.env.production` or any other file that ships with the
+app: `scripts/ci/check-packaged-secrets.mjs` fails the release if one appears.
 
-Create `.env` file in project root:
-```bash
-GOOGLE_MAPS_API_KEY=AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-```
-
-Add to `.gitignore`:
-```
-.env
-```
-
-### Option 2: Electron Store (Recommended for Production)
-
-Store API key in user's app data folder (encrypted):
-```javascript
-// electron/services/configService.js
-const Store = require('electron-store');
-const store = new Store({ encryptionKey: 'your-secret-key' });
-
-store.set('googleMapsApiKey', 'AIzaSyXXXX...');
-const apiKey = store.get('googleMapsApiKey');
-```
-
-### Option 3: Ask User on First Launch
-
-Prompt user to enter their own API key:
-1. Add settings screen
-2. User enters their own Google API key
-3. Store encrypted in electron-store
-4. Benefits: Each user uses their own free tier
+Restrict the server key to the Places API and the Geocoding API, and set
+per-API daily quotas — that quota is the hard ceiling on spend.
 
 ## Alternative Free Options
 

@@ -1122,6 +1122,22 @@ jobs:
             release/win-unpacked
           if ($LASTEXITCODE -ne 0) { Write-Error "Package sanity check failed"; exit 1 }
 
+      # BACKLOG-3834. The packaged app must not ship a Google Maps key or its
+      # variable name; release.yml runs the same check on the signed artifacts.
+      - name: Verify the macOS packages ship no Google Maps key
+        if: matrix.os == 'macos-latest'
+        run: |
+          for app in release/mac-arm64/Keepr.app release/mac/Keepr.app; do
+            node scripts/ci/check-packaged-secrets.mjs mac "$app"
+          done
+
+      - name: Verify the Windows package ships no Google Maps key
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          node scripts/ci/check-packaged-secrets.mjs win release/win-unpacked
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - name: Upload macOS package artifacts
         if: matrix.os == 'macos-latest'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

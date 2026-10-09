@@ -40,21 +40,20 @@ export const registerAddressHandlers = (): void => {
       apiKey?: string,
     ): Promise<AddressResponse> => {
       try {
-        // Validate API key
-        const validatedApiKey = validateString(apiKey, "apiKey", {
+        // BACKLOG-3834: the app holds no Maps key. A renderer-supplied key is
+        // still validated for shape (IPC contract) but never used.
+        validateString(apiKey, "apiKey", {
           required: false,
-          minLength: 20,
           maxLength: 500,
         });
 
-        const initialized =
-          addressVerificationService.initialize(validatedApiKey);
+        const initialized = addressVerificationService.initialize();
 
         return {
           success: initialized,
           message: initialized
             ? "Address verification initialized"
-            : "No API key provided",
+            : "Address verification unavailable",
         };
       } catch (error) {
         logService.error("[Main] Address initialization failed:", "AddressHandlers", { error });

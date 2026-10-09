@@ -183,11 +183,32 @@ describe("Google: token refresh AND Gmail / People fetch ride net.fetch", () => 
 });
 
 describe("Address verification rides net.fetch", () => {
-  it("R8 Places autocomplete goes through net.fetch", async () => {
-    addressVerificationService.initialize("test-maps-key");
+  // BACKLOG-3834: lookups go to the maps-proxy Edge Function (supabase-js,
+  // supabaseNetFetch), never to Google directly.
+  it("R8 Places autocomplete goes through net.fetch to maps-proxy, never to Google", async () => {
+    process.env.SUPABASE_URL = "https://proj.supabase.test";
+    process.env.SUPABASE_ANON_KEY = "test-anon-key";
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const supabaseService = require("../supabaseService").default;
+    const client = supabaseService.getClient();
+    jest.spyOn(client.auth, "getSession").mockResolvedValue({
+      data: { session: { access_token: "user-at" } },
+      error: null,
+    } as never);
+    mockNetFetch.mockImplementation(async (url: unknown) =>
+      String(url).includes("/functions/v1/maps-proxy")
+        ? json({ status: "ZERO_RESULTS", predictions: [] })
+        : answer(String(url)),
+    );
+
     await addressVerificationService.getAddressSuggestions("123 Main Street");
+
     expect(seen()).toHaveLength(1);
-    expect(seen()[0].url.startsWith("https://maps.googleapis.com/maps/api/place/autocomplete/json?")).toBe(true);
+    expect(seen()[0]).toEqual({
+      url: "https://proj.supabase.test/functions/v1/maps-proxy",
+      method: "POST",
+    });
+    expect(seen().some((s) => s.url.includes("maps.googleapis.com"))).toBe(false);
   });
 });
 
