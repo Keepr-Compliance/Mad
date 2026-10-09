@@ -119,7 +119,7 @@ beforeEach(() => {
     stagingRoot: nodePath.join(require("os").tmpdir(), "rcs-p3-staging"),
     attachmentsDir: nodePath.join(require("os").tmpdir(), "rcs-p3-attachments"),
     mkdir: async () => undefined,
-    writeFile: async () => undefined,
+    writeSealed: async () => undefined,
     exists: async () => false,
     move: async () => undefined,
     unlink: async () => undefined,

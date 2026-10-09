@@ -71,7 +71,7 @@ beforeEach(() => {
     stagingRoot: nodePath.join(tmp, "staging"),
     attachmentsDir: nodePath.join(tmp, "attachments"),
     mkdir: async (d) => void (await fs.promises.mkdir(d, { recursive: true })),
-    writeFile: (p, data) => fs.promises.writeFile(p, data),
+    writeSealed: (p, data) => fs.promises.writeFile(p, data),
     exists: async (p) => fs.existsSync(p),
     move: (from, to) => fs.promises.rename(from, to),
     unlink: async (p) => void (await fs.promises.unlink(p).catch(() => undefined)),

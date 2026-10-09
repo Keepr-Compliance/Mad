@@ -3,6 +3,7 @@
  * Handles Microsoft OAuth login and Outlook mailbox connection flows
  */
 
+import { devToolsPreference } from "../bootstrap/appMenu";
 import { ipcMain, BrowserWindow, Event as ElectronEvent } from "electron";
 import os from "os";
 import crypto from "crypto";
@@ -118,6 +119,7 @@ export async function handleMicrosoftLogin(
       height: 700,
       show: true,
       webPreferences: {
+        devTools: devToolsPreference(), // BACKLOG-3830
         nodeIntegration: false,
         contextIsolation: true,
         // webSecurity defaults to true - do not disable
@@ -755,6 +757,7 @@ export async function handleMicrosoftConnectMailboxPending(
       height: 700,
       show: true,
       webPreferences: {
+        devTools: devToolsPreference(), // BACKLOG-3830
         nodeIntegration: false,
         contextIsolation: true,
         // webSecurity defaults to true - do not disable

@@ -111,7 +111,12 @@ export interface RcsStagingFs {
   /** `<userData>/message-attachments`. */
   attachmentsDir: string;
   mkdir(dir: string): Promise<void>;
-  writeFile(filePath: string, data: Buffer): Promise<void>;
+  /**
+   * BACKLOG-3816: stores `data` as KEPRENC ciphertext (atRest/attachmentWriter).
+   * Staged files are ciphertext, so the commit's move into message-attachments
+   * is a rename of ciphertext.
+   */
+  writeSealed(filePath: string, data: Buffer): Promise<void>;
   exists(filePath: string): Promise<boolean>;
   /** Move a staged file into place (same volume: a rename). */
   move(from: string, to: string): Promise<void>;
@@ -400,7 +405,7 @@ export class RcsCacheStaging {
     const dir = this.jobDir(jobId);
     const tempPath = path.join(dir, `${slot}${ext}`);
     await this.files.mkdir(dir);
-    await this.files.writeFile(tempPath, bytes);
+    await this.files.writeSealed(tempPath, bytes);
     if (this.ended.has(jobId)) {
       // The job ended while the bytes were written: nothing stays.
       await this.files.unlink(tempPath);

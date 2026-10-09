@@ -46,6 +46,15 @@ jest.mock("fs", () => {
   };
 });
 
+// BACKLOG-3816: the attachment writer is the at-rest module; this suite's fs mock
+// cannot run real encryption, so the writer is stubbed (encryption is covered by
+// atRest.attachmentWriters-3816.test.ts).
+jest.mock("../atRest/attachmentWriter", () => ({
+  ...jest.requireActual("../atRest/attachmentWriter"),
+  sourceFileSize: jest.fn().mockResolvedValue(1024),
+  hashSourceFile: jest.fn().mockResolvedValue({ sha256: "abc123", size: 1024 }),
+  sealFileFrom: jest.fn().mockResolvedValue({ sha256: "abc123", plaintextSize: 1024 }),
+}));
 jest.mock("../databaseService");
 jest.mock("../db/externalContactDbService");
 jest.mock("../iosMessagesParser", () => ({
