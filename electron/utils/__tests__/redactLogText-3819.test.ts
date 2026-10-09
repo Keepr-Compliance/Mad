@@ -11,7 +11,7 @@
  */
 
 import { createHash, randomBytes, randomUUID } from "crypto";
-import { redactLogText, redactPhone } from "../redactSensitive";
+import { redactLogText, redactPhone, redactValueForKey } from "../redactSensitive";
 
 /** A 40-hex git SHA, generated per run. */
 const SHA = createHash("sha1").update(randomBytes(8)).digest("hex");
@@ -91,5 +91,179 @@ describe("BACKLOG-3819: emails and phones are redacted, last two digits kept", (
     expect(redactPhone("+1 (555) 555-0199")).toBe("***99");
     expect(redactPhone("")).toBe("***");
     expect(redactPhone("7")).toBe("***");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Founder QA 2026-10-09: bare phones under contact-like keys.
+//
+// The JSON fixture below is PRODUCED, not typed: logService.formatLogEntry
+// (electron/services/logService.ts) appends `JSON.stringify(metadata, null, 2)`,
+// and the metadata shape is the one ContactDbService's backfill emitted before
+// this fix. All digits are synthetic (555-01xx).
+// ---------------------------------------------------------------------------
+
+const BARE_A = "5555550123";
+const BARE_B = "5555550145";
+
+/** Exactly what logService wrote for the backfill sample before the fix. */
+const BACKFILL_SAMPLE_TEXT =
+  "2026-10-09T18:00:00.000Z INFO  [ContactDbService] Backfill: Found phone-message matches\n" +
+  JSON.stringify(
+    {
+      matchCount: 2,
+      samples: [
+        { contactId: "a1b2c3d4", phone: BARE_A, lastDate: "2026-10-01T12:00:00.000Z" },
+        { contactId: "e5f60718", phone: BARE_B, lastDate: "2026-10-02T12:00:00.000Z" },
+      ],
+    },
+    null,
+    2,
+  );
+
+describe("BACKLOG-3819: bare phones under contact-like keys are redacted", () => {
+  it("the backfill JSON sample block loses every bare phone, keeps ids and dates", () => {
+    const out = redactLogText(BACKFILL_SAMPLE_TEXT);
+    expect(out).not.toContain(BARE_A);
+    expect(out).not.toContain(BARE_B);
+    expect(out).toContain('"phone": "***23"');
+    expect(out).toContain('"phone": "***45"');
+    expect(out).toContain('"contactId": "a1b2c3d4"');
+    expect(out).toContain('"lastDate": "2026-10-01T12:00:00.000Z"');
+    expect(out).toContain('"matchCount": 2');
+    expect(redactLogText(out)).toBe(out);
+  });
+
+  const KEYED: Array<[string, string, string]> = [
+    // [input, raw value that must disappear, expected text]
+    [`phone: ${BARE_A}`, BARE_A, "phone: ***23"],
+    [`phone=${BARE_A} ok`, BARE_A, "phone=***23 ok"],
+    [`{ phone: '${BARE_A}' }`, BARE_A, "{ phone: '***23' }"],
+    [`"phoneNumber":"${BARE_A}"`, BARE_A, '"phoneNumber":"***23"'],
+    [`"phone_number": ${BARE_A},`, BARE_A, '"phone_number": ***23,'],
+    [`"normalized_phone": "${BARE_A}"`, BARE_A, '"normalized_phone": "***23"'],
+    [`"phone_e164": "1${BARE_A}"`, `1${BARE_A}`, '"phone_e164": "***23"'],
+    [`handle: '${BARE_A}'`, BARE_A, "handle: '***23'"],
+    [`"chat_identifier": "chat${BARE_A}"`, BARE_A, '"chat_identifier": "chat***23"'],
+    [`"participants_flat": "${BARE_A}, ${BARE_B}"`, BARE_A, '"participants_flat": "***23, ***45"'],
+    [`"from": "${BARE_A}"`, BARE_A, '"from": "***23"'],
+    [`to: 1${BARE_B}`, BARE_B, "to: ***45"],
+    [`"sender": "+1${BARE_A}"`, BARE_A, '"sender": "***23"'],
+    [`"address": "${BARE_B}"`, BARE_B, '"address": "***45"'],
+    [`"email": "jane@example.com"`, "jane@example.com", '"email": "j***@example.com"'],
+  ];
+
+  it.each(KEYED)("%s", (input, raw, expected) => {
+    const out = redactLogText(input);
+    expect(out).not.toContain(raw);
+    expect(out).toBe(expected);
+    expect(redactLogText(out)).toBe(out);
+  });
+
+  it("a multi-line participants array loses every bare phone", () => {
+    const text = JSON.stringify({ participants: [BARE_A, `+1${BARE_B}`, "jane@example.com"] }, null, 2);
+    const out = redactLogText(text);
+    expect(out).not.toContain(BARE_A);
+    expect(out).not.toContain(BARE_B);
+    expect(out).not.toContain("jane@example.com");
+    expect(out).toContain('"***23"');
+    expect(out).toContain('"***45"');
+    expect(redactLogText(out)).toBe(out);
+  });
+
+  it("formatted, E.164 and iMessage-handle phones are still redacted without a key", () => {
+    const out = redactLogText(
+      `a +1${BARE_A} b (555) 555-0145 c +1${BARE_B}@s.example.net d tel ${"+1 555 555 0177"}`,
+    );
+    expect(out).not.toMatch(/555.?555.?01\d\d/);
+  });
+});
+
+describe("BACKLOG-3819: key context never touches ids, counts, timestamps or ambiguous values", () => {
+  const UUID = randomUUID();
+  const UNCHANGED = [
+    "[2026-10-09 10:00:00.000] [info]  [DeviceSyncOrchestrator] backup-estimate bytes=6013820953 reusedPreviousBackup=true",
+    `"contactId": "${UUID}"`,
+    `"transactionId": "${UUID}", "id": 6013820953`,
+    `{ "durationMs": 6013820953, "size": 6013820953, "count": 6013820953 }`,
+    `"lastDate": "2026-10-01T12:00:00.000Z"`,
+    // weak keys keep values that are not whole phone numbers
+    `"to": "develop", "from": "2026-10-01", "sender": "me", "address": "12 Main St"`,
+    `to: 123456789`,
+    // a contact-like key with a short or non-numeric value
+    `"phone": "unknown", "handle": null, "phones": 3`,
+    // a key that merely contains "phone"
+    `"phoneCount": 6013820953, "hasPhone": true, "phoneLast2": "23"`,
+  ];
+  it.each(UNCHANGED.map((l) => [l]))("%s", (line) => {
+    expect(redactLogText(line)).toBe(line);
+  });
+});
+
+describe("BACKLOG-3819: redactValueForKey (object arguments to electron-log)", () => {
+  it("redacts strong keys whatever the format, weak keys only when phone-shaped", () => {
+    expect(redactValueForKey("phone", BARE_A)).toBe("***23");
+    expect(redactValueForKey("phone", Number(BARE_A))).toBe("***23");
+    expect(redactValueForKey("normalized_phone", BARE_A)).toBe("***23");
+    expect(redactValueForKey("participants", [BARE_A, BARE_B])).toEqual(["***23", "***45"]);
+    expect(redactValueForKey("to", BARE_A)).toBe("***23");
+    expect(redactValueForKey("to", "develop")).toBe("develop");
+    expect(redactValueForKey("contactId", BARE_A)).toBe(BARE_A);
+    expect(redactValueForKey("bytes", 6013820953)).toBe(6013820953);
+  });
+});
+
+describe("BACKLOG-3819: the sink hook redacts contact-like keys in object arguments", () => {
+  it("redactLogValue drops a bare phone under `phone`, keeps ids and counts", () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { redactLogValue } = require("../../config/logFileConfig");
+    const out = redactLogValue({
+      matchCount: 2,
+      samples: [{ contactId: "a1b2c3d4", phone: BARE_A, bytes: 6013820953 }],
+      participants: [BARE_B],
+    });
+    expect(JSON.stringify(out)).not.toContain(BARE_A);
+    expect(JSON.stringify(out)).not.toContain(BARE_B);
+    expect(out).toEqual({
+      matchCount: 2,
+      samples: [{ contactId: "a1b2c3d4", phone: "***23", bytes: 6013820953 }],
+      participants: ["***45"],
+    });
+  });
+});
+
+describe("BACKLOG-3819 (SR): compound contact key names, case-insensitive", () => {
+  const COMPOUND: Array<[string, string]> = [
+    [`"primaryPhone": "${BARE_A}"`, '"primaryPhone": "***23"'],
+    [`otherPhone: ${BARE_A}`, "otherPhone: ***23"],
+    [`"recipient_phone": "${BARE_A}"`, '"recipient_phone": "***23"'],
+    [`"MobilePhoneNumber": "${BARE_A}"`, '"MobilePhoneNumber": "***23"'],
+    [`senderHandle: '${BARE_A}'`, "senderHandle: '***23'"],
+    [`"FROM_HANDLE": "${BARE_A}"`, '"FROM_HANDLE": "***23"'],
+    [`"workEmail": "${BARE_A}"`, '"workEmail": "***23"'],
+    [`"contact_email": "pat.sample@example.com"`, '"contact_email": "p***@example.com"'],
+    // start with the same letters as a flag prefix, but no word boundary
+    [`"userPhone": "${BARE_A}"`, '"userPhone": "***23"'],
+    [`"canonicalPhone": "${BARE_A}"`, '"canonicalPhone": "***23"'],
+    [`"normalizedHandle": "${BARE_A}"`, '"normalizedHandle": "***23"'],
+    [`"isolatedPhone": "${BARE_A}"`, '"isolatedPhone": "***23"'],
+  ];
+  it.each(COMPOUND)("%s", (input, expected) => {
+    expect(redactLogText(input)).toBe(expected);
+    expect(redactValueForKey(input.replace(/^["']?|["']?\s*[:=].*$/g, ""), BARE_A)).toBe("***23");
+  });
+
+  const NOT_CONTACT = [
+    `"phoneCount": 6013820953`,
+    `"emailCount": 6013820953`,
+    `"emailsProcessed": 6013820953`,
+    `"phoneType": 6013820953`,
+    `"hasPhone": 6013820953, "isEmail": 6013820953, "has_handle": 6013820953`,
+    `"use_handle": 6013820953, "HAS_PHONE": 6013820953, "noEmail": 6013820953, "show_phone": 6013820953`,
+    `"handler": 6013820953, "handledCount": 6013820953`,
+    `"iPhone": 6013820953, "lastIphone": 6013820953`,
+  ];
+  it.each(NOT_CONTACT.map((l) => [l]))("%s", (line) => {
+    expect(redactLogText(line)).toBe(line);
   });
 });

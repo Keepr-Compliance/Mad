@@ -627,7 +627,8 @@ export function createContactsBatch(
         allEmails.push(contactData.email);
       }
       if (allEmails.length > 1) {
-        void logService.warn(`[DIAG-1270] Batch create: ${contactData.display_name} → storing ${allEmails.length} emails: ${allEmails.join(', ')}`, 'ContactDbService');
+        // BACKLOG-3819: counts + contact id only (display_name can itself be a phone).
+        void logService.warn(`[DIAG-1270] Batch create: ${id} → storing ${allEmails.length} emails`, 'ContactDbService');
       }
       const storedEmails = new Set<string>();
       let isFirstEmail = true;
@@ -643,7 +644,7 @@ export function createContactsBatch(
         );
         isFirstEmail = false;
       }
-      void logService.warn(`[DIAG-1270] Batch create: ${contactData.display_name} → ${storedEmails.size} emails stored (from ${allEmails.length} input)`, 'ContactDbService');
+      void logService.warn(`[DIAG-1270] Batch create: ${id} → ${storedEmails.size} emails stored (from ${allEmails.length} input)`, 'ContactDbService');
 
       // INSIDE the batch transaction, with the contact it describes. Written
       // here rather than by the caller afterwards so that an interrupted import
@@ -1065,7 +1066,7 @@ export function backfillContactEmailsSync(
   // Get existing emails for this contact
   const existingSql = sql`SELECT LOWER(email) as email FROM contact_emails WHERE contact_id = ?`;
   const existingRows = dbAll<{ email: string }>(existingSql, [contactId]);
-  void logService.warn(`[DIAG-1270] Backfill emails for ${contactId}: input=${emails.length} emails [${emails.join(', ')}], existing=${existingRows.length}`, 'ContactDbService');
+  void logService.warn(`[DIAG-1270] Backfill emails for ${contactId}: input=${emails.length} emails, existing=${existingRows.length}`, 'ContactDbService');
   for (const row of existingRows) {
     storedEmails.add(row.email);
   }
@@ -1196,9 +1197,9 @@ export async function backfillContactCommunicationDates(userId: string): Promise
 
   void logService.info("Backfill: Found phone-message matches", "ContactDbService", {
     matchCount: phoneMessages.length,
+    // BACKLOG-3819: no phone numbers in logs — contact id prefix and date only.
     samples: phoneMessages.slice(0, 5).map(p => ({
       contactId: p.contact_id.substring(0, 8),
-      phone: p.normalized_phone,
       lastDate: p.last_msg_date,
     })),
   });
@@ -1228,10 +1229,9 @@ export async function backfillContactCommunicationDates(userId: string): Promise
   void logService.info("Backfill complete", "ContactDbService", {
     userId,
     updatedCount,
-    topContacts: debugContacts.map(c => ({
-      name: c.display_name,
-      lastInbound: c.last_inbound_at,
-    })),
+    // BACKLOG-3819: no contact names — a contact with no name is displayed by
+    // its phone number, so display_name can itself be a bare phone.
+    topContactsLastInbound: debugContacts.map(c => c.last_inbound_at),
   });
 
   return updatedCount;
