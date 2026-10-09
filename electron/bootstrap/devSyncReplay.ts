@@ -135,5 +135,19 @@ export async function runDevSyncReplay(
   log(`[DEV_REPLAY] emit complete at ${new Date().toISOString()}`);
   orchestrator.emit("complete", result);
   log(`[DEV_REPLAY] emit returned, returning sync:start reply at ${new Date().toISOString()}`);
+  // CONTROL (KEEPR_DEV_FIXTURE_REPLAY_SLIM=1): identical run, but the invoke reply carries counts
+  // only — the shape the proposed fix would return. Isolates the reply from everything else.
+  if (process.env.KEEPR_DEV_FIXTURE_REPLAY_SLIM === "1") {
+    return {
+      success: true,
+      messages: [],
+      contacts: [],
+      conversations: [],
+      error: null,
+      duration: result.duration,
+      messageCount: messages.length,
+      conversationCount: conversations.length,
+    };
+  }
   return result;
 }
