@@ -633,17 +633,59 @@ describe("refusals and special chains", () => {
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
   });
 
-  it("a sync requested during the post-seal CHECK pauses it too; partial counts never write `encrypted`", async () => {
+  it("the check after a seal opens only files the pass did not see; a plaintext file that appeared meanwhile keeps the marker short of encrypted", async () => {
+    makeChain();
+    let late: string | null = null;
+    const s = service({
+      sealEngineOptions: {
+        beforeSeal: () => {
+          // Appears after the pass listed the chain (the pass never sees it).
+          late ??= write("ee/" + "e".repeat(40), "written after the listing");
+        },
+      },
+    });
+    expect(await s.migrate(UDID)).toBe("incomplete");
+    expect(await readMarkerAt(backups, UDID)).toBe("migrating");
+    expect(plaintextLeft()).toEqual([late]);
+    expect(await service().migrate(UDID)).toBe("encrypted");
+  });
+
+  it("the check does not re-open files the pass already gave a verdict for (must-fix #2: no second 573k-file walk)", async () => {
+    makeChain();
+    const s = service();
+    const internals = s as unknown as { pass: (...a: unknown[]) => Promise<unknown> };
+    const real = internals.pass.bind(s);
+    const modes: string[] = [];
+    internals.pass = (...a: unknown[]) => {
+      modes.push(a[1] as string);
+      return real(...a);
+    };
+    expect(await s.migrate(UDID)).toBe("encrypted");
+    expect(modes).toEqual(["seal"]); // no classify pass over the chain afterwards
+  });
+
+  it("a sync requested during the check pauses it too; partial counts never write `encrypted`", async () => {
     makeChain();
     await service().migrate(UDID);
     const first = await service().beginSync(UDID, { strategy: "full" });
-    const s = service();
-    const realScan = s.scan.bind(s);
+    let s: BackupAtRest | null = null;
     let second: Promise<unknown> | null = null;
-    jest.spyOn(s, "scan").mockImplementation(async (u: string) => {
-      second = s.beginSync(UDID); // the pause flag is set synchronously, before the check runs
-      return realScan(u);
+    let wrote = false;
+    s = service({
+      sealEngineOptions: {
+        beforeSeal: () => {
+          if (wrote) return;
+          wrote = true;
+          write("ee/" + "e".repeat(40), "appears after the listing: the check must open it");
+        },
+      },
     });
+    const internals = s as unknown as { checkAfterSeal: (...a: unknown[]) => Promise<unknown> };
+    const realCheck = internals.checkAfterSeal.bind(s);
+    internals.checkAfterSeal = (...a: unknown[]) => {
+      second = (s as BackupAtRest).beginSync(UDID); // pause flag set before the check's pass
+      return realCheck(...a);
+    };
     await s.finishSync(first, undefined, { succeeded: true });
     expect(await readMarkerAt(backups, UDID)).not.toBe("encrypted");
     const session = (await (second as unknown as Promise<unknown>)) as Awaited<ReturnType<BackupAtRest["beginSync"]>>;

@@ -154,6 +154,8 @@ export interface PassReport {
   files: number;
   /** The pass was paused at a file boundary (a sync asked for the phone) before it finished. */
   paused?: boolean;
+  /** Every path this pass gave a verdict for (internal: the check after a seal). */
+  seen?: Set<string>;
   /** Files this pass sealed / unsealed. */
   changed: number;
   /** Already in the target form. */
@@ -764,6 +766,7 @@ export class BackupAtRest extends EventEmitter {
       }
     });
     if (result.stopped) report.paused = true;
+    report.seen = new Set(listed.filter((_, i) => result.outcomes[i] !== undefined).map((f) => f.path));
     // One directory fsync per touched directory makes the renames durable before any
     // marker can say `encrypted` (see sealEngine.ts: a lost rename leaves the plaintext,
     // never loses it).
@@ -887,6 +890,42 @@ export class BackupAtRest extends EventEmitter {
     return report;
   }
 
+  /**
+   * What the chain holds right after a seal pass, without opening every file again.
+   *
+   * BACKLOG-3816 must-fix #2 (founder's PC): the old separate scan re-opened all 573k
+   * files after the pass had reached 100%, with no progress shown; a quit during it meant
+   * the `encrypted` marker was never written, so EVERY launch ran the full reseal again.
+   *
+   * Under the per-phone lock nothing else writes the chain, so the pass's own verdicts are
+   * the chain's state for every file it saw. A pass with a failure is incomplete as it
+   * stands (no check needed). Otherwise the chain is listed again — names and sizes only —
+   * and only files the pass did NOT see are opened.
+   */
+  private async checkAfterSeal(udid: string, report: PassReport): Promise<ScanReport> {
+    const result: ScanReport = {
+      sealed: report.changed + report.already,
+      plaintext: report.failed,
+      empty: report.empty,
+      damaged: report.damaged,
+    };
+    if (report.failed > 0 || !report.seen) return result;
+    const seen = report.seen;
+    const unseen = (await this.listFiles(this.chainDir(udid), null)).filter((f) => !seen.has(f.path));
+    if (unseen.length === 0) return result;
+    const noKey: AtRestKey = { keyId: "0".repeat(32), key: Buffer.alloc(32) };
+    const pass = await this.pass(unseen, "classify", noKey, this.pausable.get(udid));
+    if (pass.stopped) result.paused = true;
+    for (const o of pass.outcomes) {
+      if (!o || o.v === "gone") continue;
+      if (o.v === "sealed" || o.v === "sealed-now") result.sealed++;
+      else if (o.v === "empty") result.empty++;
+      else if (o.v === "damaged") result.damaged++;
+      else result.plaintext++;
+    }
+    return result;
+  }
+
   /** Header scan: what the chain holds right now. */
   async scan(udid: string): Promise<ScanReport> {
     return this.scanAt(this.chainDir(udid), this.pausable.get(udid));
@@ -950,7 +989,7 @@ export class BackupAtRest extends EventEmitter {
       return "paused";
     }
     const indexed = await exists(path.join(chain, "Manifest.db"));
-    const scan = await this.scan(udid);
+    const scan = await this.checkAfterSeal(udid, report);
     if (scan.paused) {
       this.log("info", "[BackupAtRest] paused for a sync (after sealing, during the check)", { phase, sealedNow: report.changed });
       return "paused";
