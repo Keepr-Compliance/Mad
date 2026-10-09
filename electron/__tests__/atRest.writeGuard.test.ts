@@ -92,7 +92,9 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
   "electron/handlers/rcsImportHandlers.ts": { count: 6, reason: `${S1} (RCS writeFile/rename/copyFile deps for media + staging)` },
   "electron/services/rcsCacheStaging.ts": { count: 1, reason: `${S1} (RCS staged media temp)` },
   "electron/services/backupDecryptionService.ts": { count: 2, reason: "PENDING S4/BACKLOG-3817 — writes decrypted iPhone backup files (option A path)" },
-  "electron/services/logScrub.ts": { count: 3, reason: "PENDING S5 follow-up (BACKLOG-3819) — in-place rewrite of the redacted desktop log (tmp+rename) and its scrub marker; log ENCRYPTION follows in a BACKLOG-3819 follow-up PR" },
+  "electron/services/logScrub.ts": { count: 4, reason: "BACKLOG-3819 — REDACTED-plaintext rewrite (tmp+rename) ONLY when the data key is unavailable this run (founder decision: redacted plaintext rather than a logging gap; sealed at the next launch where the key opens); the scrub marker (no content); a rename that sets an unreadable SEALED log aside. Sealed rewrites go through atRest/sealedLog" },
+  "electron/services/sealedLogSink.ts": { count: 3, reason: "BACKLOG-3819 — REDACTED plaintext fallback main.unsealed.log (append + crop) while the data key is not open: buffer overflow > 1 MB, exit before the key, or secure storage unavailable; sealed and deleted by the at-rest logs job at the next key-open. Plus rotation rename of a SEALED log. Sealed records are written by atRest/sealedLog" },
+  "electron/handlers/diagnosticLogHandlers.ts": { count: 1, reason: `${EXPORT} — "Save diagnostic log": decrypted, redacted desktop log to a user-chosen file (BACKLOG-3819)` },
   "electron/services/logService.ts": { count: 2, reason: "PENDING S5 — app log file (redaction + retention, BACKLOG-3819)" },
   "electron/outlookService.ts": { count: 1, reason: "MSAL token cache on the legacy Outlook path; design cut line 2.40.1 (dead MSAL path)" },
   // --- exports the user asked for -----------------------------------------------

@@ -191,7 +191,7 @@ Used for data with legal retention requirements:
 |----------|------------|------------|
 | SQLite Database | Communications, transactions, contacts | At-rest (OS-level) |
 | OS Keychain | OAuth tokens, credentials | OS keychain encryption |
-| Application Logs | Debug and error logs; email addresses and phone numbers are redacted before they are written (BACKLOG-3819) | Not encrypted; content redacted |
+| Application Logs | Debug and error logs; email addresses and phone numbers are redacted before they are written (BACKLOG-3819) | Encrypted at rest (AES-256-GCM, per-file key from the device data key) and content redacted. Before the data key opens at launch, lines are held in memory; redacted plaintext reaches disk only if the app exits before then, more than 1 MB is logged first, or secure storage is unavailable — and is encrypted at the next launch where the key opens. A user-saved "diagnostic log" export is plain text by design |
 | Temporary Files | Processing cache | Deleted on application close |
 
 ### 5.2 Cloud Storage (Supabase)

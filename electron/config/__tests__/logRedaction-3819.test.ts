@@ -23,6 +23,10 @@ const realLog = require("electron-log/node");
 
 const EMAIL = "jane.customer@example.com";
 
+// BACKLOG-3819 encryption: the file is sealed, so it is read through the
+// decrypting reader with this test data key (never the real keychain).
+const TEST_KEY = { keyId: "ab".repeat(16), key: Buffer.alloc(32, 7) };
+
 /** A class instance argument (not a plain object). */
 class ContactRef {
   constructor(public email: string) {}
@@ -44,6 +48,10 @@ describe("BACKLOG-3819: the electron-log sink redacts emails and phones", () => 
     };
     // The production install: the first import in main.ts.
     require("../../bootstrap/installAppDataPaths");
+    // The at-rest "logs" job opens the data key after the database opens; here
+    // the sink is handed a test key directly.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require("../../services/sealedLogSink").getLogSink().activate(TEST_KEY);
   });
 
   afterAll(() => {
@@ -52,7 +60,14 @@ describe("BACKLOG-3819: the electron-log sink redacts emails and phones", () => 
 
   function fileText(): string {
     const f = path.join(dir, "main.log");
-    return fs.existsSync(f) ? fs.readFileSync(f, "utf8") : "";
+    if (!fs.existsSync(f)) return "";
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { openSealedLog, isSealedLog } = require("../../services/atRest/sealedLog");
+    const raw = fs.readFileSync(f);
+    expect(isSealedLog(raw)).toBe(true);
+    const read = openSealedLog(raw, (id: string) => (id === TEST_KEY.keyId ? TEST_KEY.key : null));
+    expect(read.problems).toEqual([]);
+    return read.text;
   }
 
   // First import statement's module specifier; independent of CRLF/LF checkouts.

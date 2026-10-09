@@ -234,6 +234,7 @@ import {
   registerAppCleanupHandlers,
   registerBackupRestoreHandlers,
   registerCcpaHandlers,
+  registerDiagnosticLogHandlers,
   registerFailureLogHandlers,
 } from "./handlers";
 
@@ -1904,6 +1905,7 @@ app.whenReady().then(async () => {
   registerAppCleanupHandlers();
   registerBackupRestoreHandlers();
   registerCcpaHandlers();
+  registerDiagnosticLogHandlers();
   registerFailureLogHandlers();
   registerSupportTicketHandlers();
   registerSupportAccessHandlers();

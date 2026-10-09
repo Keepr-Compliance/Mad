@@ -167,6 +167,14 @@ export interface WindowApiSystem {
     initialized: boolean;
   }>;
   // Support methods
+  /** BACKLOG-3819: save a decrypted, redacted copy of the desktop log to a user-chosen file. */
+  saveDiagnosticLog: () => Promise<{
+    success: boolean;
+    canceled?: boolean;
+    filePath?: string;
+    unreadable?: string[];
+    error?: string;
+  }>;
   contactSupport: (
     errorDetails?: string,
   ) => Promise<{ success: boolean; error?: string }>;

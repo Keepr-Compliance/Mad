@@ -8,7 +8,7 @@
  *   order  id                    owner
  *   ─────  ────────────────────  ─────
  *     0    data-key              S0  — open or create the file-data key
- *    10    logs                  S5  — scrub existing log files
+ *    10    logs                  S5  — retain/scrub/seal log files, then start sealing new lines
  *    20    temp-sweep            S6  — remove stale app-owned temp files
  *    30    attachments           S3  — encrypt message attachments
  *    40    email-attachments     S3  — encrypt email attachments
@@ -39,6 +39,8 @@
 import { hostLogger } from "../../capabilities/loggerProvider";
 import { DataKeyUnavailableError, getDataKeyService } from "./dataKeyService";
 import { runConfiguredLogMaintenance } from "../logScrub";
+import { getLogSink } from "../sealedLogSink";
+import type { AtRestKey } from "./fileCrypto";
 
 export interface AtRestJobContext {
   log: (level: "info" | "warn" | "error", message: string) => void;
@@ -185,9 +187,31 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
     id: "logs",
     order: 10,
     run: async (ctx) => {
-      const r = runConfiguredLogMaintenance();
+      // BACKLOG-3819: logs are sealed at rest. The data-key job above swallows an
+      // unavailable key, so ask again here. Order matters: maintenance (seal old
+      // plaintext, merge main.unsealed.log) runs BEFORE the sink starts sealing,
+      // and nothing awaits between the two, so no line lands mid-replacement.
+      const sink = getLogSink();
+      let key: AtRestKey | null = null;
+      try {
+        key = await getDataKeyService().currentKey();
+      } catch (error) {
+        if (!(error instanceof DataKeyUnavailableError)) throw error;
+        sink.fallbackToPlaintext(error.message);
+      }
+      let r: ReturnType<typeof runConfiguredLogMaintenance> = null;
+      try {
+        r = runConfiguredLogMaintenance(Date.now(), { key, onReplaced: (f) => sink.forget(f) });
+      } finally {
+        if (key) sink.activate(key);
+      }
       if (!r) return ctx.log("warn", "[AtRest] logs: no log directory registered; skipped");
-      ctx.log(r.errors.length ? "warn" : "info", `[AtRest] logs: rewritten ${r.rewritten.length}, deleted ${r.deleted.length}, errors ${r.errors.length}`);
+      ctx.log(
+        r.errors.length ? "warn" : "info",
+        `[AtRest] logs: sealing ${key ? "on" : "UNAVAILABLE (redacted plaintext this run)"}; ` +
+          `rewritten ${r.rewritten.length}, sealed ${r.sealed.length}, deleted ${r.deleted.length}, ` +
+          `unreadable ${r.unreadable.length}, errors ${r.errors.length}`,
+      );
     },
   });
   startup.register(placeholder("temp-sweep", 20, "S6"));

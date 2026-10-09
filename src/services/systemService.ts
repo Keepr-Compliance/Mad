@@ -504,6 +504,23 @@ export const systemService = {
   // ============================================
 
   /**
+   * BACKLOG-3819: save a decrypted, redacted copy of the desktop log (logs are
+   * encrypted at rest) to a file the user picks, for sending to support.
+   */
+  async saveDiagnosticLog(): Promise<ApiResult<{ filePath?: string; canceled?: boolean; unreadable?: string[] }>> {
+    try {
+      const result = await window.api.system.saveDiagnosticLog();
+      if (result.success) {
+        return { success: true, data: { filePath: result.filePath, unreadable: result.unreadable ?? [] } };
+      }
+      if (result.canceled) return { success: true, data: { canceled: true } };
+      return { success: false, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /**
    * Contact support with optional error details
    */
   async contactSupport(errorDetails?: string): Promise<ApiResult> {

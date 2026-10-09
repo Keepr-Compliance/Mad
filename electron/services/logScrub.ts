@@ -25,6 +25,24 @@
  * launches then read only the first line of each file (for retention) instead
  * of re-reading up to 16 MB — measured ~150 ms per launch on an 8.5 MB log.
  *
+ * ## Sealed files (BACKLOG-3819 encryption follow-up)
+ *
+ * Logs are now sealed at rest (atRest/sealedLog.ts, KEPRLOG). When the data key
+ * is passed in:
+ *   - a sealed file is decrypted, retention + redaction applied, and re-sealed
+ *     under a fresh salt if anything changed (archives: deleted by mtime first,
+ *     without decrypting);
+ *   - a PLAINTEXT `*.log` (written before this build) is retained, redacted and
+ *     SEALED — the plaintext copy is replaced;
+ *   - `<name>.unsealed.log` (the redacted fallback written while the key was not
+ *     open — services/sealedLogSink.ts) is merged into the sealed `<name>.log`
+ *     and deleted.
+ * Without the key, sealed files are left as they are (archives still expire by
+ * mtime) and plaintext files get the original redact-in-place treatment.
+ *
+ * The job runs before the sink starts sealing (it holds lines in memory until
+ * then), so no log line can be appended to a file while it is being replaced.
+ *
  * Called at launch by the at-rest startup queue (atRest/startup.ts, job
  * "logs") through {@link runConfiguredLogMaintenance}. The log directory comes
  * from electron-log, which core modules may not import, so the Electron shell
@@ -34,6 +52,14 @@
 import fs from "fs";
 import path from "path";
 import { redactLogText } from "../utils/redactSensitive";
+import type { AtRestKey } from "./atRest/fileCrypto";
+import {
+  SEAL_TMP_RE,
+  isSealedLogFile,
+  openSealedLog,
+  replaceWithSealedLogSync,
+} from "./atRest/sealedLog";
+import { archivePathFor, sealedTargetFor } from "./sealedLogSink";
 
 /** Founder decision D7. */
 export const LOG_RETENTION_DAYS = 14;
@@ -65,8 +91,21 @@ function headTimestamp(file: string): number | null {
 export interface LogMaintenanceResult {
   deleted: string[];
   rewritten: string[];
+  /** Plaintext files converted to sealed files (including merged *.unsealed.log). */
+  sealed: string[];
+  /** Sealed files that could not be authenticated or are under a key not held — left untouched. */
+  unreadable: string[];
   errors: Array<{ file: string; message: string }>;
 }
+
+export interface LogMaintenanceOptions {
+  /** The open data key. null/absent = the key is not available this run. */
+  key?: AtRestKey | null;
+  /** Called after a file was replaced or removed, so a writer can drop cached state. */
+  onReplaced?: (file: string) => void;
+}
+
+type FileOutcome = "deleted" | "rewritten" | "unchanged" | "sealed" | "unreadable";
 
 /** Parse the timestamp an electron-log line starts with, or null for a continuation line. */
 export function parseLineTimestamp(line: string): number | null {
@@ -133,14 +172,43 @@ export function maintainLogFile(
   now: number,
   retentionDays = LOG_RETENTION_DAYS,
   alreadyScrubbed = false,
-): "deleted" | "rewritten" | "unchanged" {
+  key: AtRestKey | null = null,
+): FileOutcome {
   const cutoff = now - retentionDays * DAY_MS;
   const stat = fs.lstatSync(file);
   if (!stat.isFile()) return "unchanged";
+  const isArchive = ARCHIVE_FILE_RE.test(path.basename(file));
 
-  if (ARCHIVE_FILE_RE.test(path.basename(file)) && stat.mtimeMs < cutoff) {
+  if (isArchive && stat.mtimeMs < cutoff) {
     fs.unlinkSync(file);
     return "deleted";
+  }
+
+  if (isSealedLogFile(file)) {
+    // Cannot read it without the key; an archive still expires by mtime above.
+    if (!key) return "unchanged";
+    const read = openSealedLog(fs.readFileSync(file), (id) => (id === key.keyId ? key.key : null));
+    if (read.problems.some((p) => p.kind !== "torn")) return "unreadable";
+    const torn = read.problems.length > 0;
+    const next = redactLogText(dropEntriesBefore(read.text, cutoff));
+    if (next === "" && isArchive) {
+      fs.unlinkSync(file);
+      return "deleted";
+    }
+    if (next === read.text && !torn) return "unchanged";
+    replaceWithSealedLogSync(file, next, key);
+    return "rewritten";
+  }
+
+  if (key) {
+    // Plaintext written before logs were sealed: retain, redact, seal.
+    const text = redactLogText(dropEntriesBefore(fs.readFileSync(file, "utf8"), cutoff));
+    if (text === "" && isArchive) {
+      fs.unlinkSync(file);
+      return "deleted";
+    }
+    replaceWithSealedLogSync(file, text, key);
+    return "sealed";
   }
 
   if (alreadyScrubbed) {
@@ -169,8 +237,13 @@ export function maintainLogFile(
  * temp files from a crash are removed. Never throws: per-file failures are
  * collected in `errors`.
  */
-export function runLogMaintenance(logDir: string, now: number = Date.now()): LogMaintenanceResult {
-  const result: LogMaintenanceResult = { deleted: [], rewritten: [], errors: [] };
+export function runLogMaintenance(
+  logDir: string,
+  now: number = Date.now(),
+  opts: LogMaintenanceOptions = {},
+): LogMaintenanceResult {
+  const key = opts.key ?? null;
+  const result: LogMaintenanceResult = { deleted: [], rewritten: [], sealed: [], unreadable: [], errors: [] };
   let names: string[];
   try {
     names = fs.readdirSync(logDir);
@@ -182,17 +255,37 @@ export function runLogMaintenance(logDir: string, now: number = Date.now()): Log
   }
 
   const alreadyScrubbed = names.includes(SCRUB_MARKER);
+  const unsealed: string[] = [];
   for (const name of names) {
     const file = path.join(logDir, name);
     try {
-      if (/\.scrub-\d+-\d+\.tmp$/.test(name)) {
+      if (/\.scrub-\d+-\d+\.tmp$/.test(name) || SEAL_TMP_RE.test(name)) {
         fs.unlinkSync(file);
         continue;
       }
       if (!LOG_FILE_RE.test(name)) continue;
-      const outcome = maintainLogFile(file, now, LOG_RETENTION_DAYS, alreadyScrubbed);
+      // With the key, fallback files are merged after their targets are settled.
+      if (key && sealedTargetFor(file)) {
+        unsealed.push(name);
+        continue;
+      }
+      const outcome = maintainLogFile(file, now, LOG_RETENTION_DAYS, alreadyScrubbed, key);
       if (outcome === "deleted") result.deleted.push(name);
       if (outcome === "rewritten") result.rewritten.push(name);
+      if (outcome === "sealed") result.sealed.push(name);
+      if (outcome === "unreadable") result.unreadable.push(name);
+      if (outcome !== "unchanged") opts.onReplaced?.(file);
+    } catch (err) {
+      result.errors.push({ file: name, message: (err as Error).message });
+    }
+  }
+  for (const name of key ? unsealed : []) {
+    const file = path.join(logDir, name);
+    try {
+      const target = mergeUnsealedLog(file, now, key as AtRestKey);
+      result.sealed.push(name);
+      opts.onReplaced?.(file);
+      opts.onReplaced?.(target);
     } catch (err) {
       result.errors.push({ file: name, message: (err as Error).message });
     }
@@ -207,6 +300,34 @@ export function runLogMaintenance(logDir: string, now: number = Date.now()): Log
   return result;
 }
 
+/**
+ * Append the redacted fallback `<name>.unsealed.log` to the sealed `<name>.log`
+ * (re-sealed under a fresh salt), then delete the fallback. A target that cannot
+ * be read under this key is set aside as `<name>.old.log` first. Returns the target.
+ */
+export function mergeUnsealedLog(file: string, now: number, key: AtRestKey): string {
+  const target = sealedTargetFor(file);
+  if (!target) throw new Error(`${path.basename(file)} is not an unsealed log`);
+  const cutoff = now - LOG_RETENTION_DAYS * DAY_MS;
+  const extra = redactLogText(dropEntriesBefore(fs.readFileSync(file, "utf8"), cutoff));
+  let existing = "";
+  if (fs.existsSync(target)) {
+    if (isSealedLogFile(target)) {
+      const read = openSealedLog(fs.readFileSync(target), (id) => (id === key.keyId ? key.key : null));
+      if (read.problems.some((p) => p.kind !== "torn")) {
+        fs.renameSync(target, archivePathFor(target));
+      } else {
+        existing = read.text;
+      }
+    } else {
+      existing = redactLogText(fs.readFileSync(target, "utf8"));
+    }
+  }
+  replaceWithSealedLogSync(target, existing + extra, key);
+  fs.unlinkSync(file);
+  return target;
+}
+
 let resolveLogDirectory: (() => string) | null = null;
 
 /** Called by the Electron shell: where electron-log writes its files. */
@@ -218,7 +339,15 @@ export function setLogDirectoryResolver(resolver: (() => string) | null): void {
  * Run {@link runLogMaintenance} on the directory the shell registered. Returns
  * null when no directory was registered (non-Electron hosts, tests).
  */
-export function runConfiguredLogMaintenance(now: number = Date.now()): LogMaintenanceResult | null {
+export function runConfiguredLogMaintenance(
+  now: number = Date.now(),
+  opts: LogMaintenanceOptions = {},
+): LogMaintenanceResult | null {
   if (!resolveLogDirectory) return null;
-  return runLogMaintenance(resolveLogDirectory(), now);
+  return runLogMaintenance(resolveLogDirectory(), now, opts);
+}
+
+/** The directory the shell registered, or null (non-Electron hosts, tests). */
+export function getConfiguredLogDirectory(): string | null {
+  return resolveLogDirectory ? resolveLogDirectory() : null;
 }
