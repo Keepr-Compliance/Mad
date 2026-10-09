@@ -18,7 +18,9 @@ jest.mock("electron", () => ({
   ipcMain: { handle: jest.fn(), on: mockIpcOn },
   app: {
     getPath: jest.fn().mockReturnValue("/tmp/test-user-data"),
-    isPackaged: false,
+    // Packaged: logs are sealed (dev builds write redacted plaintext — see
+    // config/__tests__/logRedactionDev-3819.test.ts).
+    isPackaged: true,
     getAppPath: jest.fn(),
     quit: jest.fn(),
     on: jest.fn(),
@@ -51,6 +53,7 @@ jest.mock("../../main", () => ({ getAndClearPendingDeepLinkUser: jest.fn() }));
 jest.mock("../../bootstrap/appDataPaths", () => ({
   applyAppDataPaths: () => null,
   buildConsoleNotice: () => "",
+  logsSealedAtRest: ({ isPackaged }: { isPackaged: boolean }) => isPackaged,
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires

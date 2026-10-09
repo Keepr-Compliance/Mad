@@ -16,6 +16,7 @@ jest.mock("electron-log", () => jest.requireActual("electron-log/node"));
 jest.mock("../../bootstrap/appDataPaths", () => ({
   applyAppDataPaths: () => null,
   buildConsoleNotice: () => "",
+  logsSealedAtRest: ({ isPackaged }: { isPackaged: boolean }) => isPackaged,
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -46,6 +47,9 @@ describe("BACKLOG-3819: the electron-log sink redacts emails and phones", () => 
     realLog.transports.console.writeFn = ({ message }: { message: { data: unknown[] } }) => {
       consoleLines.push(JSON.stringify(message.data));
     };
+    // Packaged build: logs are sealed. (Dev builds: logRedactionDev-3819.test.ts.)
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require("electron").app.isPackaged = true;
     // The production install: the first import in main.ts.
     require("../../bootstrap/installAppDataPaths");
     // The at-rest "logs" job opens the data key after the database opens; here
