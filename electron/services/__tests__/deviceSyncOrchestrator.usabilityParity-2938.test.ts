@@ -55,8 +55,22 @@ const GB = 1024 * 1024 * 1024;
 const mockStartBackup = jest.fn();
 const mockCheckBackupStatus = jest.fn();
 
+// BACKLOG-3816 S4-C: the kept backup's at-rest layer is not this suite's subject.
+jest.mock("../atRest/backupAtRest", () => ({
+  ...jest.requireActual("../atRest/backupAtRest"),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+}));
+// BACKLOG-3816 S4-C (B1): no saved-password file I/O; this suite's subject is not the password.
+jest.mock("../atRest/backupPassword", () => ({
+  ...jest.requireActual("../atRest/backupPassword"),
+  getBackupPasswordStore: () =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
+}));
 jest.mock("electron", () => ({
-  app: { isPackaged: false, getPath: jest.fn().mockReturnValue("/tmp") },
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  app: { isPackaged: false, getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()) },
 }));
 
 const logLines: string[] = [];
@@ -548,4 +562,10 @@ describe("BACKLOG-2938: `processExistingBackup` reports usability, not existence
     expect(states.length).toBeGreaterThan(0);
     expect(states.every((s) => s === "exists")).toBe(true);
   });
+});
+
+// BACKLOG-3816 S4-C (B1): this file's userData is a fresh directory under os.tmpdir().
+afterAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./helpers/testUserData").removeTestUserDataDir();
 });

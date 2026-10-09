@@ -21,4 +21,16 @@ describe("formatStorageCompleteMessage", () => {
       "Saved 5 messages and 12 contacts",
     );
   });
+
+  it("BACKLOG-3817: attachments the encrypted backup could not read are reported, never a clean success", () => {
+    expect(formatStorageCompleteMessage({ messagesStored: 5, contactsStored: 12, attachmentsUndecryptable: 3 })).toBe(
+      "Saved 5 messages and 12 contacts. 3 attachments could not be read from the encrypted backup — sync again to retry",
+    );
+    expect(formatStorageCompleteMessage({ messagesStored: 5, contactsStored: 12, attachmentsUndecryptable: 1 })).toContain(
+      "1 attachment could not be read",
+    );
+    expect(formatStorageCompleteMessage({ messagesStored: 5, contactsStored: 12, attachmentsUndecryptable: 0 })).toBe(
+      "Saved 5 messages and 12 contacts",
+    );
+  });
 });

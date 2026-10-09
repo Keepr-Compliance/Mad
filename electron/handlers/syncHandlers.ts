@@ -25,6 +25,7 @@ import { syncStatusService } from "../services/syncStatusService";
 import supabaseService from "../services/supabaseService";
 import { sendToMainWindow } from "../windowRegistry";
 import { handleBusy } from "../utils/busyIpc";
+import { backupDecryptionService } from "../services/backupDecryptionService";
 
 let orchestrator: DeviceSyncOrchestrator | null = null;
 let currentUserId: string | null = null;
@@ -116,6 +117,16 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
   // Set up event forwarding to renderer
   setupEventForwarding();
 
+  // BACKLOG-3817: decrypted parse copies of an encrypted iPhone backup are plaintext.
+  // Remove any a crash or a killed quit left behind. Registration runs once at launch,
+  // before any sync can start. Never throws.
+  void backupDecryptionService
+    .sweepParseCopies()
+    .then((removed) => {
+      if (removed > 0) log.info("[SyncHandlers] Removed stale decrypted parse copies at launch", { removed });
+    })
+    .catch(() => undefined);
+
   // Start sync operation
   // Rate limited: 10 second cooldown per device to prevent sync spam.
   // Syncs involve device communication and database writes.
@@ -189,6 +200,11 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
 
       try {
         const result = await orchestrator!.sync(options);
+        // BACKLOG-3817: a run that stopped to ask for the backup password did no work. The
+        // user's retry with the password must not be refused by the cooldown above.
+        if (result?.passwordRequired) {
+          rateLimiters.sync.clearKey(options.udid);
+        }
         return result;
       } catch (error) {
         log.error("[SyncHandlers] Sync error", { error });
@@ -389,6 +405,12 @@ function setupEventForwarding(): void {
   orchestrator.on("progress", (progress: SyncProgress) => {
     sendToMainWindow("sync:progress", progress);
   });
+  // BACKLOG-3816 S4-C: the seal after a sync and the launch migration of the kept iPhone
+  // backup report through the same channel ("Securing your iPhone backup… N%").
+  // `typeof` guard: handler suites stub the orchestrator with only what they drive.
+  if (typeof orchestrator.watchBackupAtRestProgress === "function") {
+    orchestrator.watchBackupAtRestProgress();
+  }
 
   // Forward phase changes
   orchestrator.on("phase", (phase: string) => {
@@ -445,8 +467,32 @@ function setupEventForwarding(): void {
     sendToMainWindow("sync:error", { message, ...(userError ? { userError } : {}) });
   });
 
-  // Forward completion events and persist data
+  // Forward completion events and persist data.
+  // BACKLOG-3816 S4-C: the kept iPhone backup was left unsealed for persistence (the
+  // attachment copier reads it). It is sealed when persistence ends, on EVERY path —
+  // stored, cancelled, failed, refused, no user, or nothing to persist.
   const onSyncComplete = async (result: SyncResult) => {
+    let succeeded = false;
+    try {
+      succeeded = await persistCompletedSync(result);
+    } catch (error) {
+      // An event listener: a rejection here would be unhandled. Persistence reports its
+      // own failures to the renderer; this is only what escaped it (e.g. a closed window).
+      log.error("[SyncHandlers] Completing a sync failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      // `typeof` guard: handler suites stub the orchestrator with only what they drive.
+      if (typeof orchestrator?.completeBackupAtRest === "function") {
+        await orchestrator.completeBackupAtRest(succeeded);
+      }
+    }
+  };
+
+  // Resolves true ONLY when persistence stored the sync (the success path); every cancel,
+  // refusal, failure and skip resolves false.
+  const persistCompletedSync = async (result: SyncResult): Promise<boolean> => {
+    let stored = false;
     log.info("[SyncHandlers] Sync complete", {
       conversations: result.conversations.length,
       messages: result.messages.length,
@@ -531,7 +577,7 @@ function setupEventForwarding(): void {
           if (result.needsCleanup && result.backupPath && orchestrator) {
             await orchestrator.cleanupBackup(result.backupPath);
           }
-          return;
+          return false;
         }
 
         // BACKLOG-3816: attachment writes fail closed when the file-data key is
@@ -543,7 +589,7 @@ function setupEventForwarding(): void {
           if (result.needsCleanup && result.backupPath && orchestrator) {
             await orchestrator.cleanupBackup(result.backupPath);
           }
-          return;
+          return false;
         }
 
         log.info("[SyncHandlers] Database persistence complete", {
@@ -593,9 +639,12 @@ function setupEventForwarding(): void {
           contactsStored: persistResult.contactsStored,
           contactsSourceOff: persistResult.contactsSourceOff === true,
           attachmentsStored: persistResult.attachmentsStored,
+          // BACKLOG-3817: attachments the encrypted backup's decrypt could not read.
+          ...(result.attachmentsUndecryptable ? { attachmentsUndecryptable: result.attachmentsUndecryptable } : {}),
           duration: persistResult.duration,
         });
         log.info("[SyncHandlers] sync:storage-complete sent successfully");
+        stored = true;
 
         // BACKLOG-1546: Auto-link newly synced messages to transactions.
         // Fire-and-forget — don't block the sync completion response.
@@ -680,6 +729,7 @@ function setupEventForwarding(): void {
       // BACKLOG-2898: still close the timeline.
       syncTimeline.endSync(result.success ? "complete" : "error");
     }
+    return stored;
   };
   orchestrator.on("complete", (result: SyncResult) => {
     void onSyncComplete(result);

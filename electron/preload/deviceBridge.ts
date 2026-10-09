@@ -437,6 +437,7 @@ export const syncBridge = {
       messagesStored: number;
       contactsStored: number;
       contactsSourceOff?: boolean;
+      attachmentsUndecryptable?: number;
       duration: number;
     }) => void
   ) => {
@@ -444,6 +445,7 @@ export const syncBridge = {
       messagesStored: number;
       contactsStored: number;
       contactsSourceOff?: boolean;
+      attachmentsUndecryptable?: number;
       duration: number;
     }) => callback(result);
     ipcRenderer.on("sync:storage-complete", listener);
