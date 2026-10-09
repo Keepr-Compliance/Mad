@@ -7,6 +7,8 @@
 
 import { ipcMain, BrowserWindow } from "electron";
 import log from "electron-log";
+import { rendererFreezeProfiler } from "../services/rendererFreezeProfiler";
+import { setIpcReplySizePhaseSource } from "../services/ipcReplySize";
 import { syncTimeline } from "../services/syncTimeline";
 import * as Sentry from "@sentry/electron/main";
 import { redactId } from "../utils/redactSensitive";
@@ -217,12 +219,28 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
     return { success: true };
   });
 
+  // BACKLOG-3785: large ipcMain.handle replies are logged while a sync is running
+  // or just finished (the phase source gates the measurement).
+  setIpcReplySizePhaseSource(() => syncTimeline.currentPhase());
+
   // BACKLOG-3784: renderer heartbeat during an iPhone sync. Silent unless a gap.
   ipcMain.removeAllListeners("sync:renderer-tick");
-  ipcMain.on("sync:renderer-tick", (_event, tick: unknown) => {
+  ipcMain.on("sync:renderer-tick", (event, tick: unknown) => {
     try {
-      const t = (tick && typeof tick === "object" ? tick : {}) as { first?: unknown; hidden?: unknown };
+      const t = (tick && typeof tick === "object" ? tick : {}) as {
+        first?: unknown;
+        hidden?: unknown;
+        stopped?: unknown;
+        screen?: unknown;
+      };
       syncTimeline.noteRendererTick({ first: t.first === true, hidden: t.hidden === true });
+      // BACKLOG-3785: the same tick drives the freeze profiler (never throws).
+      rendererFreezeProfiler.noteTick(event.sender, {
+        first: t.first === true,
+        hidden: t.hidden === true,
+        stopped: t.stopped === true,
+        screen: typeof t.screen === "string" ? t.screen : undefined,
+      });
     } catch {
       // Telemetry only.
     }

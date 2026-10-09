@@ -22,6 +22,9 @@ import "./bootstrap/installNativeCapabilities";
 // store), so TLS-inspecting antivirus / proxies do not break Outlook, Gmail
 // token calls or address verification. Before any handler is registered.
 import "./bootstrap/installMainNetAxios";
+// BACKLOG-3785: measure ipcMain.handle replies during a sync. Must patch
+// ipcMain.handle before ANY handler registers, so it stays above every handler import.
+import "./bootstrap/installIpcReplySizeLog";
 import {
   app,
   BrowserWindow,
