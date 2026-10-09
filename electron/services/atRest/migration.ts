@@ -179,6 +179,8 @@ export function createAtRestMigration(deps: MigrationDeps): AtRestMigration {
   let filesInUse = false;
   const pausedForDisk = new Set<MigrationScopeId>();
   const running = new Set<MigrationScopeId>();
+  /** Scopes that have run at least once this launch; "done" waits for all of them. */
+  const attempted = new Set<MigrationScopeId>();
 
   function emit(): void {
     const snapshot = { ...status };
@@ -190,7 +192,8 @@ export function createAtRestMigration(deps: MigrationDeps): AtRestMigration {
   }
 
   function setPhase(): void {
-    if (running.size > 0) {
+    const scopesStillToRun = attempted.size < MIGRATION_SCOPES.length && status.total > 0;
+    if (running.size > 0 || (scopesStillToRun && pausedForDisk.size === 0)) {
       status.phase = "running";
       delete status.pauseReason;
     } else if (pausedForDisk.size > 0) {
@@ -326,6 +329,7 @@ export function createAtRestMigration(deps: MigrationDeps): AtRestMigration {
 
     const files = deps.files();
     const markers = deps.markers();
+    attempted.add(scope);
     running.add(scope);
     pausedForDisk.delete(scope);
     setPhase();

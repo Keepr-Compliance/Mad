@@ -334,6 +334,7 @@ describe("M5 — files in use", () => {
     expect(await startsWithMagic(locked)).toBe(false);
     expect((await fs.promises.readFile(locked)).equals(seeded.get(locked) as Buffer)).toBe(true);
     expect((await markers.getScope("attachments"))?.state).toBe("migrating");
+    await m.runScope("email-attachments");
     expect(m.getStatus()).toMatchObject({ phase: "paused", pauseReason: "files-in-use" });
     expect(logs.some((l) => l.includes("skipped a file (EBUSY)"))).toBe(true);
   });
@@ -367,7 +368,9 @@ describe("disk space", () => {
 
     free = 10 * DISK_HEADROOM_BYTES;
     (timer as unknown as () => void)();
-    await waitFor(() => m.getStatus().phase === "done");
+    await waitFor(() => logs.some((l) => l.includes("migration attachments: outcome=done")));
+    await m.runScope("email-attachments");
+    expect(m.getStatus().phase).toBe("done");
     for (const f of seeded.keys()) expect(await startsWithMagic(f)).toBe(true);
     expect(m.getStatus()).toMatchObject({ done: 3, total: 3 });
   });
@@ -378,6 +381,10 @@ describe("status", () => {
     await seedMany("message-attachments", 3);
     const m = createAtRestMigration(deps());
     await m.runScope("attachments");
+    // The first scope finishing is not "done" while the second has not run (no flash of the done copy).
+    expect(broadcasts.some((s) => s.phase === "done")).toBe(false);
+    expect(m.getStatus().phase).toBe("running");
+    await m.runScope("email-attachments");
     expect(broadcasts.some((s) => s.phase === "running" && s.total === 3)).toBe(true);
     const last = broadcasts[broadcasts.length - 1];
     expect(last).toMatchObject({ phase: "done", done: 3, total: 3, minutesLeft: 0 });
