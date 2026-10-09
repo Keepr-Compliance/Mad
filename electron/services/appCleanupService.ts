@@ -259,6 +259,36 @@ function extraDataPaths(
   return out.filter((p) => existsSync(p));
 }
 
+/** Folder name the app used before the rename to Keepr (BACKLOG-3823). */
+const LEGACY_DIR_NAME = "magic-audit";
+
+/**
+ * Existence-checked legacy (pre-rename) folders, BACKLOG-3823 / 3816 S7:
+ *   - <appData>/magic-audit — the old userData (sibling of the current one);
+ *     on Windows its logs live inside it (userData\logs).
+ *   - macOS: ~/Library/Logs/magic-audit — Electron keeps mac logs outside
+ *     userData, under ~/Library/Logs/<app name>.
+ * A reset/uninstall is a user-requested full wipe, so unlike the launch-time
+ * legacy sweep it removes the whole legacy folder, legacy mad.db included.
+ */
+function legacyDataPaths(
+  platform: NodeJS.Platform,
+  userData: string,
+  homeDir: string,
+  existsSync: (p: string) => boolean,
+): string[] {
+  const out: string[] = [];
+  const pathMod = platform === "win32" ? path.win32 : path.posix;
+  if (userData) {
+    const legacyUserData = pathMod.join(pathMod.dirname(userData), LEGACY_DIR_NAME);
+    if (legacyUserData !== userData) out.push(legacyUserData);
+  }
+  if (platform === "darwin" && homeDir) {
+    out.push(path.posix.join(homeDir, "Library", "Logs", LEGACY_DIR_NAME));
+  }
+  return out.filter((p) => existsSync(p));
+}
+
 /**
  * Enumerate every artifact Keepr owns. Derived from app.getPath(...) at runtime,
  * plus existence-checked extras (updater cache, %LOCALAPPDATA%\keepr) so this is
@@ -289,11 +319,13 @@ export function enumerateArtifacts(deps?: {
   const sep = platform === "win32" ? "\\" : "/";
 
   // Per-user data paths from Electron, then existence-checked extras.
+  const userData = safeGetPath(getPath, "userData");
   const rawDataPaths = [
-    safeGetPath(getPath, "userData"),
+    userData,
     safeGetPath(getPath, "sessionData"),
     safeGetPath(getPath, "logs"),
     ...extraDataPaths(platform, homeDir, localAppData, existsSync),
+    ...legacyDataPaths(platform, userData, homeDir, existsSync),
   ];
 
   // Dedupe while preserving order and dropping paths nested inside an earlier
