@@ -73,11 +73,16 @@ export type BackupUnsealStrategy = "full" | "delta";
 /**
  * C-FULL: decrypt the whole chain in place before `idevicebackup2`, seal it all after.
  * C-DELTA: decrypt only Manifest.db before; after, seal every file without a valid
- * header (what the phone sent this time). The founder's PC measurement (Step 0b) picks
- * the default; C-DELTA is only correct if `idevicebackup2` never reads an unchanged
- * content file back from the host during an incremental (MECHANISM UNTRACED).
+ * header (what the phone sent this time). The default is C-DELTA: measured on the
+ * founder's PC (Step 0b, BACKLOG-3816), an incremental read ZERO unchanged content files
+ * (571,241 of 573,726 untouched; only the index files and new/rewritten files changed).
+ * C-FULL stays selectable (`strategy` option / dep) and is forced for one phone after a
+ * delta sync leaves a damaged file (see {@link BackupAtRest.finishSync}).
  */
-export const BACKUP_UNSEAL_STRATEGY: BackupUnsealStrategy = "full";
+export const BACKUP_UNSEAL_STRATEGY: BackupUnsealStrategy = "delta";
+
+/** Why the next sync of a phone is forced to C-FULL (recorded in the log and the session). */
+export const FORCE_FULL_REASON_DELTA_DAMAGED = "DELTA_DAMAGED";
 
 /** Files at the chain ROOT that stay plain (device metadata only). */
 export const PLAIN_ROOT_FILES: ReadonlySet<string> = new Set(["Info.plist", "Status.plist", "Manifest.plist"]);
@@ -337,6 +342,14 @@ type BusyReason = "migrating" | "syncing" | "sealing";
 export class BackupAtRest extends EventEmitter {
   private readonly busy = new Map<string, BusyReason>();
   private readonly log: LogFn;
+  /** Damaged-file count from the last scan after a seal, per phone. */
+  private readonly lastScanDamaged = new Map<string, number>();
+  /** Phones whose next sync is forced to C-FULL, with why. In memory: a restart forgets it. */
+  private readonly forceFullReason = new Map<string, string>();
+  /** Test/inspection: why the next sync of this phone is C-FULL, if it is. */
+  forcedFullReason(udid: string): string | null {
+    return this.forceFullReason.get(udid) ?? null;
+  }
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly concurrency: number;
 
@@ -649,6 +662,7 @@ export class BackupAtRest extends EventEmitter {
     const report = await this.seal(udid, onProgress, phase);
     const indexed = await exists(path.join(chain, "Manifest.db"));
     const scan = await this.scan(udid);
+    this.lastScanDamaged.set(udid, scan.damaged);
     this.log("info", "[BackupAtRest] sealed", {
       phase,
       files: report.files,
@@ -698,7 +712,12 @@ export class BackupAtRest extends EventEmitter {
       underLock?: () => Promise<void>;
     } = {},
   ): Promise<BackupSyncSession> {
-    const strategy = opts.strategy ?? this.deps.strategy?.() ?? BACKUP_UNSEAL_STRATEGY;
+    const forcedFull = this.forceFullReason.get(udid);
+    const strategy: BackupUnsealStrategy =
+      opts.strategy ?? (forcedFull ? "full" : (this.deps.strategy?.() ?? BACKUP_UNSEAL_STRATEGY));
+    if (forcedFull && !opts.strategy) {
+      this.log("warn", "[BackupAtRest] this sync unseals the whole backup (C-FULL)", { reasonCode: forcedFull });
+    }
     const chain = this.chainDir(udid);
     const holder = this.busy.get(udid);
     if (holder) throw new BackupAtRestRefusal("busy", BACKUP_SECURING_MESSAGE);
@@ -908,6 +927,22 @@ export class BackupAtRest extends EventEmitter {
       // An Apple-encrypted chain is detected inside and only recorded; a phone that
       // turned encryption OFF produced a plaintext chain, which is sealed.
       const outcome = await this.sealAndRecord(session.udid, "sealing", onProgress);
+      // Safety net for C-DELTA. Reading a still-sealed file leaves no trace, so that is not
+      // detectable; what IS detectable is damage: a file that carries the sealed header but
+      // does not parse (an incremental that rewrote or truncated sealed content). Then the
+      // next sync of this phone unseals everything, and a clean C-FULL sync clears it.
+      if (session.kind === "keepr") {
+        const damaged = this.lastScanDamaged.get(session.udid) ?? 0;
+        if (session.strategy === "delta" && damaged > 0) {
+          this.forceFullReason.set(session.udid, FORCE_FULL_REASON_DELTA_DAMAGED);
+          this.log("warn", "[BackupAtRest] a delta sync left damaged files; the next sync unseals everything", {
+            reasonCode: FORCE_FULL_REASON_DELTA_DAMAGED,
+            damaged,
+          });
+        } else if (session.strategy === "full" && damaged === 0 && outcome === "encrypted") {
+          this.forceFullReason.delete(session.udid);
+        }
+      }
       // A plaintext chain moved aside for this phone (#2884) is sealed too; it stays
       // until the new encrypted chain verifies, possibly forever.
       const aside = await this.sealAsideChains(session.udid);

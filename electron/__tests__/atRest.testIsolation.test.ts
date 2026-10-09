@@ -28,16 +28,51 @@ const SCOPED_MODULE = /["'][^"'\n]*(deviceSyncOrchestrator|backupAtRest|backupPa
 /** A literal absolute path in a location other suites or the developer's profile can share. */
 const SHARED_LITERAL = /["'`](\/tmp\b|\/private\/|\/var\/|\/Users\/|\/home\/|~\/|[A-Za-z]:[\\/])[^"'`]*["'`]/;
 
-/** Lines that configure `getPath`, plus the two lines after (a multi-line factory). */
+/**
+ * The text of every `getPath` expression, however many lines it spans: from the word
+ * `getPath` to the first `,` / `;` / closing bracket at bracket depth 0 (brackets inside
+ * the value, string literals included, are balanced by counting). A factory of any length
+ * is scanned whole; there is no fixed line window.
+ */
+function getPathExpressions(source: string): Array<{ line: number; text: string }> {
+  const out: Array<{ line: number; text: string }> = [];
+  const re = /getPath/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    let depth = 0;
+    let end = source.length;
+    let quote: string | null = null;
+    for (let k = m.index + "getPath".length; k < source.length; k++) {
+      const c = source[k];
+      if (quote) {
+        if (c === "\\") k++;
+        else if (c === quote) quote = null;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") quote = c;
+      else if (c === "(" || c === "{" || c === "[") depth++;
+      else if (c === ")" || c === "}" || c === "]") {
+        if (depth === 0) {
+          end = k;
+          break;
+        }
+        depth--;
+      } else if ((c === "," || c === ";") && depth === 0) {
+        end = k;
+        break;
+      }
+    }
+    out.push({ line: source.slice(0, m.index).split("\n").length, text: source.slice(m.index, end) });
+  }
+  return out;
+}
+
 function sharedGetPathLiterals(source: string): string[] {
-  const lines = source.split("\n");
   const hits: string[] = [];
-  lines.forEach((line, i) => {
-    if (!/getPath/.test(line)) return;
-    const window = lines.slice(i, i + 3).join("\n");
-    const m = window.match(SHARED_LITERAL);
-    if (m) hits.push(`${i + 1}: ${m[0]}`);
-  });
+  for (const { line, text } of getPathExpressions(source)) {
+    const m = text.match(SHARED_LITERAL);
+    if (m) hits.push(`${line}: ${m[0]}`);
+  }
   return hits;
 }
 
@@ -56,6 +91,12 @@ describe("at-rest test isolation (BACKLOG-3816 S4-C B1)", () => {
     expect(sharedGetPathLiterals(`app: { getPath: jest.fn(() => "/tmp/keepr-3598-quit") },`)).toHaveLength(1);
     expect(
       sharedGetPathLiterals(`getPath: jest.fn((name) => {\n  const p = { userData: '/Users/x/Library/keepr' };`),
+    ).toHaveLength(1);
+    // A factory of any length: the literal is found however far below `getPath` it sits.
+    expect(
+      sharedGetPathLiterals(
+        `getPath: jest.fn((name: string) => {\n  const base = name;\n  const x = 1;\n  const y = 2;\n  return "/tmp/" + base;\n}),`,
+      ),
     ).toHaveLength(1);
     expect(sharedGetPathLiterals(`getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()),`)).toEqual([]);
     expect(sharedGetPathLiterals(`getPath: jest.fn(() => process.env.KEEPR_3816_USERDATA as string),`)).toEqual([]);

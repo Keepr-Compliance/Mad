@@ -39,6 +39,7 @@ import {
   markerProtectsChain,
   readMarkerAt,
   type BackupUnsealStrategy,
+  BACKUP_UNSEAL_STRATEGY,
 } from "../backupAtRest";
 import { DataKeyUnavailableError } from "../dataKeyService";
 import { createFileCrypto, KENC_TMP_SUFFIX, MAGIC, probeHeader, type KeyResolver } from "../fileCrypto";
@@ -262,6 +263,49 @@ describe("markers and the 3598 classifier input", () => {
     expect(markerProtectsChain("migrating")).toBe(true);
     expect(markerProtectsChain("plaintext")).toBe(false);
     expect(markerProtectsChain("absent")).toBe(false);
+  });
+});
+
+describe("default strategy is C-DELTA (Step 0b)", () => {
+  it("the constant, and a beginSync with no strategy leaves unchanged content files sealed", async () => {
+    expect(BACKUP_UNSEAL_STRATEGY).toBe("delta");
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    expect(session).toMatchObject({ kind: "keepr", strategy: "delta" });
+    const smsPath = path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+    expect(headerOf(smsPath).equals(MAGIC)).toBe(true);
+    expect(headerOf(path.join(chain, "Manifest.db")).equals(MAGIC)).toBe(false);
+    await s.finishSync(session);
+  });
+
+  it("a delta sync that leaves a damaged file forces C-FULL for the next sync, recorded with a reason; a clean full sync clears it", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    // The tool truncated a still-sealed file: header magic kept, structure broken.
+    const smsPath = path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+    fs.writeFileSync(smsPath, fs.readFileSync(smsPath).subarray(0, 30));
+    await s.finishSync(session);
+    expect(s.forcedFullReason(UDID)).toBe("DELTA_DAMAGED");
+    const next = await s.beginSync(UDID);
+    expect(next).toMatchObject({ kind: "keepr", strategy: "full" });
+    fs.writeFileSync(smsPath, Buffer.from("rewritten by the phone"));
+    await s.finishSync(next);
+    expect(s.forcedFullReason(UDID)).toBeNull();
+  });
+
+  it("a clean delta sync does not force C-FULL", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    write("12/" + "2".repeat(40), "a brand new message attachment");
+    await s.finishSync(session);
+    expect(s.forcedFullReason(UDID)).toBeNull();
+    expect(await s.beginSync(UDID)).toMatchObject({ strategy: "delta" });
   });
 });
 
