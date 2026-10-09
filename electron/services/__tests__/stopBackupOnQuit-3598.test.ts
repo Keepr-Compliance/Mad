@@ -23,7 +23,21 @@ jest.mock("child_process", () => ({
 }));
 
 jest.mock("electron", () => ({
-  app: { isPackaged: false, getPath: jest.fn(() => "/tmp/keepr-3598-quit") },
+  // BACKLOG-3816 S4-C (B1): a fresh userData per file, never a fixed shared path.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  app: { isPackaged: false, getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()) },
+}));
+// B1: the kept backup's at-rest layer and the saved-password store are not this suite's subject.
+jest.mock("../atRest/backupAtRest", () => ({
+  ...jest.requireActual("../atRest/backupAtRest"),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+}));
+jest.mock("../atRest/backupPassword", () => ({
+  ...jest.requireActual("../atRest/backupPassword"),
+  getBackupPasswordStore: () =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
 }));
 jest.mock("electron-log", () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
 jest.mock("@sentry/electron/main", () => ({
@@ -307,4 +321,9 @@ describe("BACKLOG-3598: before-quit wiring (createBackupStopOnQuit)", () => {
     expect(check(event)).toBe(false);
     expect(event.preventDefault).not.toHaveBeenCalled();
   });
+});
+
+afterAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./helpers/testUserData").removeTestUserDataDir();
 });
