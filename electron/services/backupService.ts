@@ -89,7 +89,9 @@ function errnoCode(err: unknown): string | undefined {
  * BACKLOG-3816: prefix of a plaintext chain moved aside for an encrypted one. Starts
  * with "." so it is never a valid udid and the 3598 sweep never classifies it.
  */
-export const REPLACED_CHAIN_PREFIX = ".keepr-replaced-";
+// Single source in the at-rest module (S4-C seals moved-aside chains by this prefix).
+export { REPLACED_CHAIN_PREFIX } from "./atRest/backupAtRest";
+import { REPLACED_CHAIN_PREFIX, markerProtectsChain, readMarkerAt } from "./atRest/backupAtRest";
 
 function exactUdidOrNull(name: string): string | null {
   try {
@@ -128,6 +130,10 @@ function serialiseLeftoverCleanup<T>(work: () => Promise<T>): Promise<T> {
  *                `Info.plist` at the start of every backup run, so a run killed in
  *                that window leaves a real backup without one.
  * - `unknown`  — a read failed (EPERM/EBUSY/...). Never deleted.
+ *
+ * BACKLOG-3816 S4-C: an at-rest marker of migrating / encrypted / syncing /
+ * apple-encrypted makes the folder `indexed` regardless of its files; an unreadable
+ * marker makes it `unknown`.
  */
 export type BackupFolderClass = "absent" | "leftover" | "indexed" | "unknown";
 
@@ -2822,6 +2828,12 @@ export class BackupService extends EventEmitter {
       // classified as a leftover.
       const stats = await fs.lstat(folder);
       if (!stats.isDirectory()) return "unknown";
+      // BACKLOG-3816 S4-C: a chain Keepr sealed (or is sealing / has unsealed for a
+      // sync), or a recorded phone-encrypted chain, is never a leftover — whatever its
+      // files look like. An unreadable marker cannot rule that out: keep the folder.
+      const marker = await readMarkerAt(path.dirname(folder), path.basename(folder));
+      if (marker === "unreadable") return "unknown";
+      if (markerProtectsChain(marker)) return "indexed";
       return (await indexFileExists(path.join(folder, "Manifest.db")))
         ? "indexed"
         : "leftover";

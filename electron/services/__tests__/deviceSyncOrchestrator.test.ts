@@ -17,6 +17,12 @@
 // under hostAppPaths.userData(), which in jest is a shared directory — a password saved by
 // one test would be found by the next run.
 const mockSavedPasswords = new Map<string, string>();
+// BACKLOG-3816 S4-C: the kept backup's at-rest layer is not this suite's subject.
+jest.mock("../atRest/backupAtRest", () => ({
+  ...jest.requireActual("../atRest/backupAtRest"),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+}));
 jest.mock("../atRest/backupPassword", () => {
   const actual = jest.requireActual("../atRest/backupPassword");
   return {

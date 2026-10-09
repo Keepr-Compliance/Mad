@@ -85,6 +85,12 @@ const mockRemoveLeftoverBackup = jest.fn();
 const mockDecryptionCleanup = jest.fn();
 const mockGetDeviceStorageInfo = jest.fn();
 
+// BACKLOG-3816 S4-C: the kept backup's at-rest layer is not this suite's subject.
+jest.mock("../atRest/backupAtRest", () => ({
+  ...jest.requireActual("../atRest/backupAtRest"),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+}));
 jest.mock("electron", () => ({
   app: {
     isPackaged: false,

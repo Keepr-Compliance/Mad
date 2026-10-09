@@ -6,7 +6,9 @@
  *   - Per-backup marker: `userData/Backups/.keepr-at-rest/<udid>.json`. It lives
  *     OUTSIDE the `<udid>` directory, so deleting or re-creating a backup never
  *     deletes the record of what state it was in. States: plaintext | migrating |
- *     encrypted | syncing.
+ *     encrypted | syncing | apple-encrypted (the phone's owner encrypts its backups;
+ *     Apple already encrypts every file, so Keepr never seals it — S4-C, SR ruling
+ *     on #2884. Not ciphertext evidence: no Keepr key is involved).
  *   - Per-scope state: `userData/at-rest-state.json`, one entry per migration scope
  *     (attachments, email-attachments, logs, ...). States: pending | migrating | done.
  *
@@ -22,7 +24,7 @@ import path from "path";
 import { hostAppPaths } from "../../capabilities/appPathsProvider";
 import { writeFileAtomic } from "./fileCrypto";
 
-export type BackupAtRestState = "plaintext" | "migrating" | "encrypted" | "syncing";
+export type BackupAtRestState = "plaintext" | "migrating" | "encrypted" | "syncing" | "apple-encrypted";
 export type ScopeAtRestState = "pending" | "migrating" | "done";
 
 export interface BackupMarker {
@@ -46,7 +48,7 @@ export interface AtRestStateFile {
 export const MARKER_DIR_NAME = ".keepr-at-rest";
 export const STATE_FILE_NAME = "at-rest-state.json";
 
-const BACKUP_STATES: ReadonlySet<string> = new Set(["plaintext", "migrating", "encrypted", "syncing"]);
+const BACKUP_STATES: ReadonlySet<string> = new Set(["plaintext", "migrating", "encrypted", "syncing", "apple-encrypted"]);
 const SCOPE_STATES: ReadonlySet<string> = new Set(["pending", "migrating", "done"]);
 
 /** A udid is a device identifier: hex and dashes only. Anything else could escape the marker dir. */

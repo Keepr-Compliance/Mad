@@ -92,6 +92,13 @@ export const BACKUP_AT_REST_DISK_MESSAGE =
 export const BACKUP_AT_REST_UNREADABLE_MESSAGE =
   "Part of your saved iPhone backup could not be opened, so this sync was stopped before it changed anything.";
 
+/**
+ * An unencrypted chain moved out of the way when the owner turned on phone backup
+ * encryption (S4 #2884): `Backups/.keepr-replaced-<udid>-<ms>`. Single source —
+ * backupService re-exports it.
+ */
+export const REPLACED_CHAIN_PREFIX = ".keepr-replaced-";
+
 export const DISK_HEADROOM_BYTES = 1024 * 1024 * 1024;
 export const RETRY_ATTEMPTS = 3;
 export const DEFAULT_CONCURRENCY = 8;
@@ -194,7 +201,8 @@ export async function readMarkerAt(backupsRoot: string, udid: string): Promise<M
       (parsed.state === "plaintext" ||
         parsed.state === "migrating" ||
         parsed.state === "encrypted" ||
-        parsed.state === "syncing")
+        parsed.state === "syncing" ||
+        parsed.state === "apple-encrypted")
     ) {
       return parsed.state;
     }
@@ -204,9 +212,17 @@ export async function readMarkerAt(backupsRoot: string, udid: string): Promise<M
   return "unreadable";
 }
 
-/** True when the marker says the chain holds (or may hold) Keepr ciphertext. */
+/**
+ * True when the 3598 leftover cleanup must never treat the folder as a leftover: it
+ * holds (or may hold) Keepr ciphertext, or it is a recorded phone-encrypted chain.
+ */
 export function markerProtectsChain(reading: MarkerReading): boolean {
-  return reading === "migrating" || reading === "encrypted" || reading === "syncing";
+  return (
+    reading === "migrating" ||
+    reading === "encrypted" ||
+    reading === "syncing" ||
+    reading === "apple-encrypted"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -323,6 +339,15 @@ export class BackupAtRest extends EventEmitter {
     await fs.promises.rm(this.deps.markers().backupMarkerPath(udid), { force: true });
   }
 
+  /** A phone-encrypted chain: recorded as `apple-encrypted` when it has an index, else no marker. */
+  private async recordAppleChain(udid: string): Promise<void> {
+    if (await exists(path.join(this.chainDir(udid), "Manifest.db"))) {
+      await this.setMarker(udid, "apple-encrypted");
+    } else {
+      await this.removeMarker(udid);
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Walking and classifying
   // -------------------------------------------------------------------------
@@ -422,9 +447,17 @@ export class BackupAtRest extends EventEmitter {
    * temp → verify → rename). Throws only when the chain cannot be listed.
    */
   async seal(udid: string, onProgress?: (p: BackupAtRestProgress) => void, phase: "sealing" | "migrating" = "sealing"): Promise<PassReport> {
+    return this.sealAt(this.chainDir(udid), udid, onProgress, phase);
+  }
+
+  private async sealAt(
+    chain: string,
+    udid: string,
+    onProgress?: (p: BackupAtRestProgress) => void,
+    phase: "sealing" | "migrating" = "sealing",
+  ): Promise<PassReport> {
     const started = Date.now();
     const report = emptyReport();
-    const chain = this.chainDir(udid);
     const listed = await this.listFiles(chain, report);
     report.files = listed.length;
     const largest = listed.reduce((m, f) => Math.max(m, f.size), 0);
@@ -527,8 +560,12 @@ export class BackupAtRest extends EventEmitter {
 
   /** Header scan: what the chain holds right now. */
   async scan(udid: string): Promise<ScanReport> {
+    return this.scanAt(this.chainDir(udid));
+  }
+
+  private async scanAt(dir: string): Promise<ScanReport> {
     const result: ScanReport = { sealed: 0, plaintext: 0, empty: 0, damaged: 0 };
-    const listed = await this.listFiles(this.chainDir(udid), null);
+    const listed = await this.listFiles(dir, null);
     await pool(listed, this.concurrency, async (f) => {
       try {
         const cls = await this.classify(f.path, f.size);
@@ -553,7 +590,7 @@ export class BackupAtRest extends EventEmitter {
       return "absent";
     }
     if (await isAppleEncryptedChain(chain)) {
-      await this.removeMarker(udid);
+      await this.recordAppleChain(udid);
       return "apple";
     }
     const report = await this.seal(udid, onProgress, phase);
@@ -606,7 +643,8 @@ export class BackupAtRest extends EventEmitter {
     const chain = this.chainDir(udid);
     const chainExists = await exists(chain);
     if (chainExists && (await isAppleEncryptedChain(chain))) {
-      await this.removeMarker(udid);
+      await this.recordAppleChain(udid);
+      this.busy.set(udid, "syncing");
       return { kind: "apple", udid };
     }
 
@@ -672,10 +710,14 @@ export class BackupAtRest extends EventEmitter {
   async finishSync(session: BackupSyncSession, onProgress?: (p: BackupAtRestProgress) => void): Promise<void> {
     if (session.kind === "none") return;
     try {
-      if (session.kind === "apple") return;
       this.busy.set(session.udid, "sealing");
+      // An Apple-encrypted chain is detected inside and only recorded; a phone that
+      // turned encryption OFF produced a plaintext chain, which is sealed.
       const outcome = await this.sealAndRecord(session.udid, "sealing", onProgress);
-      this.log("info", "[BackupAtRest] sync ended", { session: session.kind, outcome });
+      // A plaintext chain moved aside for this phone (#2884) is sealed too; it stays
+      // until the new encrypted chain verifies, possibly forever.
+      const aside = await this.sealAsideChains(session.udid);
+      this.log("info", "[BackupAtRest] sync ended", { session: session.kind, outcome, asideSealed: aside });
     } catch (error) {
       this.log("error", "[BackupAtRest] could not seal after sync; the next launch retries", {
         code: errCode(error),
@@ -706,6 +748,11 @@ export class BackupAtRest extends EventEmitter {
     } catch {
       return outcomes;
     }
+    try {
+      outcomes.aside = String(await this.sealAsideChains());
+    } catch (error) {
+      outcomes.aside = `failed:${errCode(error)}`;
+    }
     for (const entry of entries) {
       if (!entry.isDirectory() || !UDID_DIR_PATTERN.test(entry.name)) continue;
       const udid = entry.name;
@@ -719,12 +766,46 @@ export class BackupAtRest extends EventEmitter {
     return outcomes;
   }
 
+  /**
+   * Seal every moved-aside chain (`.keepr-replaced-<udid>-*`), or only `udid`'s. Same
+   * rules as a chain: root plists plain, empty/damaged untouched, Apple-encrypted
+   * skipped. No marker (the name keeps it out of the 3598 sweep, and removal is by
+   * name after the new chain verifies). Returns how many directories are fully sealed.
+   */
+  async sealAsideChains(udid?: string): Promise<number> {
+    const root = this.deps.backupsRoot();
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(root, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+    const prefix = udid ? `${REPLACED_CHAIN_PREFIX}${udid}-` : REPLACED_CHAIN_PREFIX;
+    let clean = 0;
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
+      const dir = path.join(root, entry.name);
+      if (await isAppleEncryptedChain(dir)) continue;
+      const label = entry.name.slice(REPLACED_CHAIN_PREFIX.length);
+      const report = await this.sealAt(dir, label);
+      const scan = await this.scanAt(dir);
+      this.log("info", "[BackupAtRest] sealed a moved-aside backup", {
+        files: report.files,
+        sealedNow: report.changed,
+        failed: report.failed,
+        plaintextLeft: scan.plaintext,
+      });
+      if (scan.plaintext === 0) clean++;
+    }
+    return clean;
+  }
+
   /** Seal one chain at launch (migration of a pre-2.40 backup, or crash recovery). */
   async migrate(udid: string, onProgress?: (p: BackupAtRestProgress) => void): Promise<string> {
     if (this.busy.has(udid)) return "busy";
     const chain = this.chainDir(udid);
     if (await isAppleEncryptedChain(chain)) {
-      await this.removeMarker(udid);
+      await this.recordAppleChain(udid);
       return "apple";
     }
     const marker = await this.readMarker(udid);

@@ -34,6 +34,15 @@ import {
   BackupPasswordUnavailableError,
   type BackupPasswordStore,
 } from "./atRest/backupPassword";
+import {
+  BACKUP_AT_REST_UNREADABLE_MESSAGE,
+  BACKUP_SECURING_MESSAGE,
+  BackupAtRestRefusal,
+  getBackupAtRest,
+  type BackupAtRest,
+  type BackupAtRestProgress,
+  type BackupSyncSession,
+} from "./atRest/backupAtRest";
 import { iOSMessagesParser } from "./iosMessagesParser";
 import { iOSContactsParser } from "./iosContactsParser";
 import {
@@ -596,6 +605,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   private decryptionService: BackupDecryptionService;
   /** Test seam; production uses the process-wide store. */
   backupPasswordStore: BackupPasswordStore | null = null;
+  /** BACKLOG-3816 S4-C: test seam; production uses the process singleton. */
+  backupAtRest: BackupAtRest | null = null;
+  /** S4-C: a successful sync's chain, sealed by {@link completeBackupAtRest} after persistence. */
+  private pendingAtRestSession: BackupSyncSession | null = null;
+  /** S4-C: the seal started by the last sync's end (tests and quit diagnostics await it). */
+  lastAtRestSeal: Promise<void> | null = null;
   private messagesParser: iOSMessagesParser;
   private contactsParser: iOSContactsParser;
 
@@ -792,6 +807,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // BACKLOG-3817: the decrypted parse copy this run made, if any — removed on every
     // failure path here; on success the handler removes it after persistence.
     let parseCopyPath: string | null = null;
+    // BACKLOG-3816 S4-C: the at-rest session for the kept backup. Every exit after
+    // beginSync seals in this function's finally, except a success, whose chain the
+    // parsers and the attachment copier still read: that one is handed to
+    // completeBackupAtRest(), which syncHandlers calls when persistence ends.
+    let atRestSession: BackupSyncSession | null = null;
+    let atRestHandedOff = false;
     if (this.isRunning) {
       return this.errorResult("Sync already in progress");
     }
@@ -1558,8 +1579,33 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // (typed or saved), and an unencrypted chain still on disk: that chain cannot be
       // continued (snapshot comparison breaks), so a new one is started.
       const backupPassword = passwordPlan.kind === "none" ? undefined : passwordPlan.password;
+
+      // BACKLOG-3816 S4-C: a backup Keepr is securing (launch migration or the seal after
+      // the previous sync) cannot be moved, unsealed or written to. Checked before the
+      // new-chain step, which moves or deletes the chain.
+      if (!inMockMode() && this.atRest().busyReason(options.udid) !== null) {
+        return this.refuseForAtRest(BACKUP_SECURING_MESSAGE, "busy");
+      }
+
       if (backupPassword && !inMockMode() && (await this.needsNewEncryptedChain(options.udid))) {
         await this.prepareNewChain(options.udid);
+      }
+
+      // BACKLOG-3816 S4-C: unseal the kept chain for idevicebackup2 (strategy C-FULL /
+      // C-DELTA). Refused BEFORE anything is spawned when the data key is unavailable,
+      // the backup is being secured, there is no room, or a sealed file will not open.
+      if (!inMockMode()) {
+        try {
+          atRestSession = await this.atRest().beginSync(options.udid, {
+            onProgress: (p) => this.emitAtRestProgress(p),
+          });
+        } catch (error) {
+          const refusal = error instanceof BackupAtRestRefusal ? error : null;
+          return this.refuseForAtRest(
+            refusal?.message ?? BACKUP_AT_REST_UNREADABLE_MESSAGE,
+            refusal?.reason ?? "unreadable",
+          );
+        }
       }
 
       // Step 1: Create backup
@@ -1832,6 +1878,21 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         parseCopyPath = backupPath;
       }
 
+      // BACKLOG-3816 S4-C, C-DELTA: unchanged files are still sealed, so the parsers and
+      // the attachment copier read a parse copy (decrypted to userData/at-rest-tmp) -
+      // removed after persistence / on failure / at launch, like the 3817 copy.
+      if (atRestSession?.kind === "keepr" && atRestSession.strategy === "delta" && !backupResult.isEncrypted) {
+        const copyDir = this.decryptionService.newParseCopyDir();
+        try {
+          await this.atRest().buildParseCopy(options.udid, copyDir);
+        } catch (error) {
+          await this.discardParseCopy(copyDir);
+          throw error;
+        }
+        backupPath = copyDir;
+        parseCopyPath = copyDir;
+      }
+
       // Step 3: Parse contacts
       this.setPhase("parsing-contacts");
       this.emitProgress({
@@ -1996,6 +2057,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         sessionId,   // TASK-2110: For ACID rollback on cancel
       };
 
+      // BACKLOG-3816 S4-C: persistence still reads this chain; it is sealed when
+      // persistence ends (syncHandlers -> completeBackupAtRest). With no listener there
+      // is no persistence, so the finally below seals now.
+      if (atRestSession && this.listenerCount("complete") > 0) {
+        this.pendingAtRestSession = atRestSession;
+        atRestHandedOff = true;
+      }
+
       this.emit("complete", result);
       return result;
     } catch (error) {
@@ -2020,7 +2089,56 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       this.emit("error", error);
 
       return this.errorResult(errorMessage);
+    } finally {
+      // BACKLOG-3816 S4-C: EVERY non-success end - error, cancel, disconnect, disk
+      // guard, watchdog, password failure - seals the chain. Not awaited: a 67 GB seal
+      // must not hold the sync's answer; the per-phone lock refuses a new sync until it
+      // ends. A quit (3 s cap) does not seal: the marker stays `syncing` and the next
+      // launch seals before any sync.
+      if (atRestSession && !atRestHandedOff) {
+        if (this.stoppedForQuit) {
+          log.info("[DeviceSyncOrchestrator] App quitting; the kept backup is sealed at next launch");
+        } else {
+          this.lastAtRestSeal = this.atRest().finishSync(atRestSession);
+        }
+      }
     }
+  }
+
+  /**
+   * BACKLOG-3816 S4-C: seal a successful sync's chain once persistence has ended (ok,
+   * cancelled or failed). Called by syncHandlers in a finally. Never throws.
+   */
+  async completeBackupAtRest(): Promise<void> {
+    const session = this.pendingAtRestSession;
+    this.pendingAtRestSession = null;
+    if (!session) return;
+    if (this.stoppedForQuit) return; // next launch seals (marker `syncing`)
+    this.lastAtRestSeal = this.atRest().finishSync(session);
+    await this.lastAtRestSeal;
+  }
+
+  private atRest(): BackupAtRest {
+    return this.backupAtRest ?? getBackupAtRest();
+  }
+
+  /** S4-C: a sync refused by the at-rest layer, before anything was spawned. */
+  private refuseForAtRest(message: string, reason: string): SyncResult {
+    log.warn("[DeviceSyncOrchestrator] Sync refused by the backup at-rest layer", { reason });
+    syncTimeline.setContext({ endedBy: "backup-at-rest", reasonCode: reason });
+    this.isRunning = false;
+    this.setPhase("error");
+    this.emit("error", { message });
+    return this.errorResult(message);
+  }
+
+  private emitAtRestProgress(p: BackupAtRestProgress): void {
+    this.emitProgress({
+      phase: "backup",
+      phaseProgress: 0,
+      overallProgress: 0,
+      message: `Preparing your saved iPhone backup (${p.done.toLocaleString()} of ${p.total.toLocaleString()} files)...`,
+    });
   }
 
   /**

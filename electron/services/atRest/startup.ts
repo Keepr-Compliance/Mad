@@ -37,6 +37,7 @@
  * so opening the data key cannot raise an unexplained keychain prompt.
  */
 import { hostLogger } from "../../capabilities/loggerProvider";
+import { getBackupAtRest } from "./backupAtRest";
 import { DataKeyUnavailableError, getDataKeyService } from "./dataKeyService";
 
 export interface AtRestJobContext {
@@ -184,7 +185,15 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
   startup.register(placeholder("temp-sweep", 20, "S6"));
   startup.register(placeholder("attachments", 30, "S3"));
   startup.register(placeholder("email-attachments", 40, "S3"));
-  startup.register(placeholder("backups", 50, "S4"));
+  startup.register({
+    id: "backups",
+    order: 50,
+    run: async (ctx) => {
+      // S4-C: seal kept iPhone backups (pre-2.40 migration; a quit/crash mid-sync).
+      const outcomes = await getBackupAtRest().runLaunchJob();
+      ctx.log("info", `[AtRest] backups: ${Object.values(outcomes).join(", ") || "none"}`);
+    },
+  });
   startup.register(placeholder("legacy-sweep", 60, "S6"));
 }
 

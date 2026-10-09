@@ -269,7 +269,7 @@ describe.each<BackupUnsealStrategy>(["full", "delta"])("sync lifecycle (%s)", (s
 });
 
 describe("refusals and special chains", () => {
-  it("an Apple-encrypted chain is never sealed and a stale marker is removed", async () => {
+  it("an Apple-encrypted chain is never sealed; a stale Keepr marker becomes apple-encrypted (SR ruling)", async () => {
     makeChain({ appleEncrypted: true });
     await createMarkerStore({ userData: () => userData }).writeBackupMarker(UDID, "encrypted");
     const before = Object.fromEntries(allContentFiles().map((f) => [f, fs.readFileSync(f)]));
@@ -279,7 +279,55 @@ describe("refusals and special chains", () => {
     expect(session.kind).toBe("apple");
     await s.finishSync(session);
     for (const [f, bytes] of Object.entries(before)) expect(fs.readFileSync(f).equals(bytes)).toBe(true);
-    expect(await readMarkerAt(backups, UDID)).toBe("absent");
+    expect(await readMarkerAt(backups, UDID)).toBe("apple-encrypted");
+    expect(markerProtectsChain("apple-encrypted")).toBe(true);
+    // migration skips it too
+    expect(await s.migrate(UDID)).toBe("apple");
+    for (const [f, bytes] of Object.entries(before)) expect(fs.readFileSync(f).equals(bytes)).toBe(true);
+  });
+
+  it("a phone that turned encryption OFF: the apple session's new plaintext chain is sealed at the end", async () => {
+    makeChain({ appleEncrypted: true });
+    const s = service();
+    const session = await s.beginSync(UDID);
+    expect(session.kind).toBe("apple");
+    write("Manifest.plist", plist.stringify({ IsEncrypted: false })); // idevicebackup2 wrote a plaintext chain
+    await s.finishSync(session);
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("a moved-aside plaintext chain (.keepr-replaced-<udid>-*) is sealed at launch and at the end of that phone's sync", async () => {
+    makeChain();
+    const aside = path.join(backups, `.keepr-replaced-${UDID}-1700000000000`);
+    fs.renameSync(chain, aside);
+    const asideFiles = () => {
+      const out: string[] = [];
+      const walk = (d: string, root: boolean) => {
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          const f = path.join(d, e.name);
+          if (e.isDirectory()) walk(f, false);
+          else if (!(root && e.name.endsWith(".plist"))) out.push(f);
+        }
+      };
+      walk(aside, true);
+      return out.filter((f) => fs.statSync(f).size > 0 && !headerOf(f).equals(MAGIC));
+    };
+    expect(asideFiles().length).toBeGreaterThan(0);
+    const s = service();
+    const outcomes = await s.runLaunchJob();
+    expect(outcomes.aside).toBe("1");
+    expect(asideFiles()).toEqual([]);
+    expect(headerOf(path.join(aside, "Manifest.plist")).equals(MAGIC)).toBe(false);
+
+    // and through a sync's end (new Apple-encrypted chain beside it)
+    fs.rmSync(aside, { recursive: true });
+    makeChain();
+    fs.renameSync(chain, aside);
+    makeChain({ appleEncrypted: true });
+    const session = await s.beginSync(UDID);
+    await s.finishSync(session);
+    expect(asideFiles()).toEqual([]);
   });
 
   it("key unavailable → refused before anything is unsealed", async () => {

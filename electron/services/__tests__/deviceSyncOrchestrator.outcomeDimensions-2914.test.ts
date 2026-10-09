@@ -40,6 +40,12 @@ const MEASURED_PRIOR_BACKUP_BYTES = Math.round(57.9 * GB);
 const mockStartBackup = jest.fn();
 const mockCheckBackupStatus = jest.fn();
 
+// BACKLOG-3816 S4-C: the kept backup's at-rest layer is not this suite's subject.
+jest.mock("../atRest/backupAtRest", () => ({
+  ...jest.requireActual("../atRest/backupAtRest"),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+}));
 jest.mock("electron", () => ({
   app: { isPackaged: false, getPath: jest.fn().mockReturnValue("/tmp") },
 }));

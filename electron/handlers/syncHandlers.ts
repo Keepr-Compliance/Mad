@@ -455,8 +455,22 @@ function setupEventForwarding(): void {
     sendToMainWindow("sync:error", { message, ...(userError ? { userError } : {}) });
   });
 
-  // Forward completion events and persist data
+  // Forward completion events and persist data.
+  // BACKLOG-3816 S4-C: the kept iPhone backup was left unsealed for persistence (the
+  // attachment copier reads it). It is sealed when persistence ends, on EVERY path —
+  // stored, cancelled, failed, refused, no user, or nothing to persist.
   const onSyncComplete = async (result: SyncResult) => {
+    try {
+      await persistCompletedSync(result);
+    } finally {
+      // `typeof` guard: handler suites stub the orchestrator with only what they drive.
+      if (typeof orchestrator?.completeBackupAtRest === "function") {
+        await orchestrator.completeBackupAtRest();
+      }
+    }
+  };
+
+  const persistCompletedSync = async (result: SyncResult) => {
     log.info("[SyncHandlers] Sync complete", {
       conversations: result.conversations.length,
       messages: result.messages.length,
