@@ -587,3 +587,89 @@ describe("AppCleanupService", () => {
     });
   });
 });
+
+// -----------------------------------------------------------------------------
+// BACKLOG-3823 / 3816 S7: legacy "magic-audit" folders + at-rest key store
+// -----------------------------------------------------------------------------
+describe("AppCleanupService — legacy folders and at-rest key store (BACKLOG-3823)", () => {
+  const macPaths = (name: string): string =>
+    ({
+      userData: "/Users/me/Library/Application Support/keepr",
+      sessionData: "/Users/me/Library/Application Support/keepr",
+      logs: "/Users/me/Library/Logs/keepr",
+      home: "/Users/me",
+    })[name] as string;
+  const winPaths = (name: string): string =>
+    ({
+      userData: "C:\\Users\\me\\AppData\\Roaming\\keepr",
+      sessionData: "C:\\Users\\me\\AppData\\Roaming\\keepr",
+      logs: "C:\\Users\\me\\AppData\\Roaming\\keepr\\logs",
+      home: "C:\\Users\\me",
+    })[name] as string;
+
+  it("macOS: existing legacy userData and legacy Logs folders are enumerated", () => {
+    const present = new Set([
+      "/Users/me/Library/Application Support/magic-audit",
+      "/Users/me/Library/Logs/magic-audit",
+    ]);
+    const result = enumerateArtifacts({
+      platform: "darwin",
+      exePath: "/Applications/Keepr.app/Contents/MacOS/Keepr",
+      getPath: macPaths as never,
+      existsSync: (p) => present.has(p),
+    });
+    expect(new Set(result.dataPaths)).toEqual(
+      new Set([
+        "/Users/me/Library/Application Support/keepr",
+        "/Users/me/Library/Logs/keepr",
+        "/Users/me/Library/Application Support/magic-audit",
+        "/Users/me/Library/Logs/magic-audit",
+      ]),
+    );
+  });
+
+  it("Windows: existing legacy %APPDATA%\\magic-audit is enumerated (its logs are inside it)", () => {
+    const present = new Set(["C:\\Users\\me\\AppData\\Roaming\\magic-audit"]);
+    const result = enumerateArtifacts({
+      platform: "win32",
+      exePath: "C:\\Program Files\\Keepr\\Keepr.exe",
+      getPath: winPaths as never,
+      existsSync: (p) => present.has(p),
+      localAppData: "C:\\Users\\me\\AppData\\Local",
+    });
+    expect(new Set(result.dataPaths)).toEqual(
+      new Set([
+        "C:\\Users\\me\\AppData\\Roaming\\keepr",
+        "C:\\Users\\me\\AppData\\Roaming\\magic-audit",
+      ]),
+    );
+  });
+
+  it("absent legacy folders are not injected", () => {
+    const result = enumerateArtifacts({
+      platform: "darwin",
+      exePath: "/Applications/Keepr.app/Contents/MacOS/Keepr",
+      getPath: macPaths as never,
+      existsSync: () => false,
+    });
+    expect(result.dataPaths.some((p) => p.includes("magic-audit"))).toBe(false);
+  });
+
+  it.each([
+    ["darwin", macPaths, "/"],
+    ["win32", winPaths, "\\"],
+  ] as const)(
+    "%s: userData/data-key-store.json is covered by the userData removal",
+    (platform, getPath, sep) => {
+      const result = enumerateArtifacts({
+        platform,
+        exePath: platform === "win32" ? "C:\\Program Files\\Keepr\\Keepr.exe" : "/Applications/Keepr.app/Contents/MacOS/Keepr",
+        getPath: getPath as never,
+        existsSync: () => false,
+        localAppData: "C:\\Users\\me\\AppData\\Local",
+      });
+      const keyStore = `${getPath("userData")}${sep}data-key-store.json`;
+      expect(result.dataPaths.some((p) => keyStore.startsWith(p + sep))).toBe(true);
+    },
+  );
+});
