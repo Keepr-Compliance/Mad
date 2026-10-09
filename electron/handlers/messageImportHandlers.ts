@@ -3,6 +3,7 @@
 // Handles: messages:import-macos, messages:get-import-count, messages:get-attachments
 // ============================================
 
+import { refuseLocalSource } from "../bootstrap/devFixtureMode";
 import { ipcMain, BrowserWindow } from "electron";
 import { MESSAGE_IMPORT_SUMMARY_SQL } from "../services/db/messageImportStatsSql";
 import type { IpcMainInvokeEvent } from "electron";
@@ -167,6 +168,12 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
       // (`AppModals` -> `Settings` -> `MacOSMessagesImportSettings` ->
       // `requestSync` -> `SyncOrchestratorService`, and `useAutoRefresh`, which
       // returns early without one).
+      if (refuseLocalSource("macOS Messages import handler")) {
+        return {
+          success: false, messagesImported: 0, messagesSkipped: 0, attachmentsImported: 0,
+          attachmentsUpdated: 0, attachmentsSkipped: 0, duration: 0, error: "dev fixture mode",
+        };
+      }
       const validUserId = userId;
       const userExists = await databaseService.getUserById(userId);
       if (!userExists) {
