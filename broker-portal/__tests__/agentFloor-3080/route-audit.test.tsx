@@ -641,13 +641,9 @@ const FLOOR_ACTIONS = [
   'lib/actions/signOutAllDevices.ts#signOutAllDevices',
   'lib/actions/enforceSingleDesktopSession.ts#enforceSingleDesktopSession',
   'lib/actions/mintDesktopSession.ts#mintDesktopSession',
+  // BACKLOG-3543: verifies the access token it stores and binds the claim to its owner.
+  'lib/actions/createTokenClaim.ts#createTokenClaim',
 ];
-
-/**
- * R6: pre-existing, out of PR 1 scope, filed separately (BACKLOG-3543). It
- * performs no caller check of its own; it is NOT a floor action.
- */
-const UNAUTHENTICATED_PREEXISTING_ACTIONS = ['lib/actions/createTokenClaim.ts#createTokenClaim'];
 
 /** Helpers exported from a 'use server' file; the org-scoped callers above decide. */
 const HELPER_ACTIONS = [
@@ -908,7 +904,6 @@ describe('set completeness', () => {
       ...Object.keys(OWN_GATE_ACTIONS),
       ...Object.keys(REVIEWER_ACTIONS),
       ...FLOOR_ACTIONS,
-      ...UNAUTHENTICATED_PREEXISTING_ACTIONS,
       ...HELPER_ACTIONS,
     ];
     expect(new Set(classified).size).toBe(classified.length);
