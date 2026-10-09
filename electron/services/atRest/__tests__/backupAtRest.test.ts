@@ -1411,7 +1411,7 @@ describe("progress", () => {
         },
       });
       expect(await s.migrate(UDID)).toBe("paused");
-      const next = (await waiting) as { kind?: string };
+      const next = (await (waiting as unknown as Promise<unknown>)) as { kind?: string };
       expect(next.kind).toBe("keepr");
     });
   });
