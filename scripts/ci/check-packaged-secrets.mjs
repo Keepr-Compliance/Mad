@@ -20,6 +20,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Under Electron's node mode, fs treats *.asar as an archive and would read
+// INSIDE it (or fail on a non-archive). Read the raw bytes instead.
+process.noAsar = true;
+
 export const RESOURCES_DIR = {
   mac: "Contents/Resources",
   win: "resources",
