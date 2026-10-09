@@ -79,12 +79,19 @@ export function formatStorageCompleteMessage(result: {
   messagesStored: number;
   contactsStored: number;
   contactsSourceOff?: boolean;
+  attachmentsUndecryptable?: number;
 }): string {
   const messages = `Saved ${result.messagesStored.toLocaleString()} messages`;
-  if (result.contactsSourceOff) {
-    return `${messages}. Contacts not imported (turned off in Settings)`;
+  const base = result.contactsSourceOff
+    ? `${messages}. Contacts not imported (turned off in Settings)`
+    : `${messages} and ${result.contactsStored} contacts`;
+  // BACKLOG-3817: a partly-read encrypted backup is never reported as a clean success.
+  const failed = result.attachmentsUndecryptable ?? 0;
+  if (failed > 0) {
+    const noun = failed === 1 ? "attachment" : "attachments";
+    return `${base}. ${failed.toLocaleString()} ${noun} could not be read from the encrypted backup — sync again to retry`;
   }
-  return `${messages} and ${result.contactsStored} contacts`;
+  return base;
 }
 
 /**
@@ -539,6 +546,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
             messagesStored: number;
             contactsStored: number;
             contactsSourceOff?: boolean;
+            attachmentsUndecryptable?: number;
             duration: number;
           }) => void
         ) => () => void;

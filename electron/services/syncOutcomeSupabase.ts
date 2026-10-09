@@ -132,15 +132,23 @@ function defined(row: Record<string, unknown>): Record<string, unknown> {
  */
 const BACKUP_PASSWORD_SOURCES = new Set(["provided", "stored", "none", "unavailable"]);
 const PHONE_BACKUP_ENCRYPTION = new Set(["on", "off", "unknown"]);
+/** What happened to an unencrypted chain when an encrypted one was started. */
+const OLD_CHAIN = new Set(["aside", "deleted-for-space", "kept"]);
 
-export function backupEncryptionMetrics(f: TimelineMeta): Record<string, string> | undefined {
-  const out: Record<string, string> = {};
+export function backupEncryptionMetrics(f: TimelineMeta): Record<string, string | number> | undefined {
+  const out: Record<string, string | number> = {};
   const pick = (key: string, allowed: Set<string>) => {
     const v = str(f, key);
     if (v !== undefined && allowed.has(v)) out[key] = v;
   };
   pick("backupPassword", BACKUP_PASSWORD_SOURCES);
   pick("phoneBackupEncryption", PHONE_BACKUP_ENCRYPTION);
+  pick("oldChain", OLD_CHAIN);
+  // BACKLOG-3817: attachments the decrypt could not read — a non-negative integer count only.
+  const undecryptable = f.attachmentsUndecryptable;
+  if (typeof undecryptable === "number" && Number.isInteger(undecryptable) && undecryptable > 0) {
+    out.attachmentsUndecryptable = undecryptable;
+  }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 

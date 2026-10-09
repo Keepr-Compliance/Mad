@@ -10,6 +10,9 @@
  *       are unchanged.
  *   P3  put never overwrites an existing entry; replaceVerified replaces only a
  *       READABLE one.
+ *   P4  replaceUnreadable (BACKLOG-3817 D-A3) — the one exception to P2, used only after a
+ *       typed password opened the backup: replaces an entry that will NOT unwrap, and
+ *       refuses a readable entry, an absent one, or an unreadable store file.
  *
  * The fake SecretStore is a real cipher (as in dataKeyService.test.ts) so P1 cannot be
  * vacuous.
@@ -125,6 +128,41 @@ describe("replaceVerified", () => {
 
   it("refuses when there is nothing to replace", async () => {
     await expect(store().replaceVerified(UDID, "new")).rejects.toBeInstanceOf(BackupPasswordUnavailableError);
+  });
+});
+
+describe("P4 replaceUnreadable", () => {
+  /** An entry sealed by a DIFFERENT secure-storage key — as after a Keychain reset. */
+  async function seedUnreadable(udid: string) {
+    const other = new FakeSafeStorage();
+    await createBackupPasswordStore({ baseDir: () => dir, secretStore: other }).put(udid, "lost-password", "user");
+  }
+
+  it("replaces an entry that will not unwrap, and keeps other phones' entries", async () => {
+    await seedUnreadable(UDID);
+    await expect(store().get(UDID)).rejects.toBeInstanceOf(BackupPasswordUnavailableError);
+    // A readable entry for another phone, written under the current key.
+    const raw = JSON.parse(fs.readFileSync(storeFile(), "utf8"));
+    raw.devices["OTHER-UDID"] = { wrapped: ss.encryptString("other").toString("base64"), origin: "user", createdAt: "x" };
+    fs.writeFileSync(storeFile(), JSON.stringify(raw));
+
+    await store().replaceUnreadable(UDID, "typed-and-verified");
+    expect(await store().get(UDID)).toEqual({ kind: "found", password: "typed-and-verified", origin: "user" });
+    expect(await store().get("OTHER-UDID")).toEqual({ kind: "found", password: "other", origin: "user" });
+  });
+
+  it("refuses a READABLE entry and leaves the file bytes unchanged", async () => {
+    await store().put(UDID, "still-readable", "user");
+    const before = fs.readFileSync(storeFile());
+    await expect(store().replaceUnreadable(UDID, "typed")).rejects.toBeInstanceOf(BackupPasswordUnavailableError);
+    expect(fs.readFileSync(storeFile()).equals(before)).toBe(true);
+  });
+
+  it("refuses when there is no entry, and when the store file itself is unreadable", async () => {
+    await expect(store().replaceUnreadable(UDID, "typed")).rejects.toBeInstanceOf(BackupPasswordUnavailableError);
+    fs.writeFileSync(storeFile(), "{ not json");
+    await expect(store().replaceUnreadable(UDID, "typed")).rejects.toBeInstanceOf(BackupPasswordUnavailableError);
+    expect(fs.readFileSync(storeFile(), "utf8")).toBe("{ not json");
   });
 });
 

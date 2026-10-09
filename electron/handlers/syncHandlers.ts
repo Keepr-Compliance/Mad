@@ -199,6 +199,11 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
 
       try {
         const result = await orchestrator!.sync(options);
+        // BACKLOG-3817: a run that stopped to ask for the backup password did no work. The
+        // user's retry with the password must not be refused by the cooldown above.
+        if (result?.passwordRequired) {
+          rateLimiters.sync.clearKey(options.udid);
+        }
         return result;
       } catch (error) {
         log.error("[SyncHandlers] Sync error", { error });
@@ -591,6 +596,8 @@ function setupEventForwarding(): void {
           contactsStored: persistResult.contactsStored,
           contactsSourceOff: persistResult.contactsSourceOff === true,
           attachmentsStored: persistResult.attachmentsStored,
+          // BACKLOG-3817: attachments the encrypted backup's decrypt could not read.
+          ...(result.attachmentsUndecryptable ? { attachmentsUndecryptable: result.attachmentsUndecryptable } : {}),
           duration: persistResult.duration,
         });
         log.info("[SyncHandlers] sync:storage-complete sent successfully");

@@ -128,6 +128,7 @@ jest.mock("../iosContactsParser", () => ({
 import { BackupService } from "../backupService";
 import {
   BACKUP_PASSWORD_UNAVAILABLE_MESSAGE,
+  BACKUP_PASSWORD_CHANGED_MESSAGE,
   DeviceSyncOrchestrator,
 } from "../deviceSyncOrchestrator";
 import { syncTimeline } from "../syncTimeline";
@@ -148,6 +149,12 @@ const store: BackupPasswordStore = {
     saved.set(udid, password);
   }),
   replaceVerified: jest.fn(async (udid: string, password: string) => {
+    saved.set(udid, password);
+  }),
+  replaceUnreadable: jest.fn(async (udid: string, password: string) => {
+    if (!unreadable) throw new BackupPasswordUnavailableError("readable");
+    events.push("replace-unreadable");
+    unreadable = false;
     saved.set(udid, password);
   }),
   storePath: () => "",
@@ -245,20 +252,51 @@ beforeEach(() => {
   });
   (store.put as jest.Mock).mockClear();
   (store.replaceVerified as jest.Mock).mockClear();
+  (store.replaceUnreadable as jest.Mock).mockClear();
   phone("off");
 });
 
 describe("E3 a saved password that will not unlock", () => {
-  it("phone encrypts: nothing replaced, no backup, reasonCode BACKUP_PASSWORD_UNAVAILABLE", async () => {
+  it("phone encrypts: asks for the password again, nothing replaced, no backup, reasonCode BACKUP_PASSWORD_UNAVAILABLE", async () => {
     phone("on");
     unreadable = true;
-    const result = await newOrchestrator().sync({ udid: UDID });
+    const o = newOrchestrator();
+    const asked = jest.fn();
+    o.on("password-required", asked);
+    const result = await o.sync({ udid: UDID });
     expect(result.success).toBe(false);
     expect(result.error).toBe(BACKUP_PASSWORD_UNAVAILABLE_MESSAGE);
+    expect(result.error).toMatch(/^Enter your backup password again\./);
+    expect(result.error).not.toMatch(/support/i);
+    expect(asked).toHaveBeenCalled();
+    expect(result.passwordRequired).toBe(true);
+    expect(store.replaceUnreadable).not.toHaveBeenCalled();
     expect(outcomeRow()).toContain("reasonCode=BACKUP_PASSWORD_UNAVAILABLE");
     expect(outcomeRow()).toContain("endedBy=backup-encryption");
     expect(spies.startBackup).not.toHaveBeenCalled();
     expect(events).not.toContain("put");
+  });
+
+  it("D-A3: the password typed next replaces the unreadable entry only after it opened the backup", async () => {
+    phone("on");
+    unreadable = true;
+    const result = await newOrchestrator().sync({ udid: UDID, password: "typed-new-password" });
+    expect(result.success).toBe(true);
+    expect(store.replaceUnreadable).toHaveBeenCalledWith(UDID, "typed-new-password");
+    expect(saved.get(UDID)).toBe("typed-new-password");
+    // Saved only after the backup verified the password (backupService) — never before it.
+    expect(events.indexOf("replace-unreadable")).toBeGreaterThan(events.indexOf("backup:with-password"));
+  });
+
+  it("D-A3: a typed password that does NOT open the backup leaves the unreadable entry alone", async () => {
+    phone("on");
+    unreadable = true;
+    spies.startBackup.mockResolvedValue({ ...success(), success: false, error: "Incorrect password", errorCode: "INCORRECT_PASSWORD" } as BackupResult);
+    const result = await newOrchestrator().sync({ udid: UDID, password: "typed-wrong" });
+    expect(result.success).toBe(false);
+    expect(result.passwordRequired).toBe(true);
+    expect(store.replaceUnreadable).not.toHaveBeenCalled();
+    expect(unreadable).toBe(true);
   });
 
   it("phone reports encryption off: the sync runs without a password, the saved entry untouched", async () => {
@@ -316,10 +354,64 @@ describe("E5 each encryption failure has its own reasonCode", () => {
     const o = newOrchestrator();
     const asked = jest.fn();
     o.on("password-required", asked);
-    await o.sync({ udid: UDID });
+    const result = await o.sync({ udid: UDID });
     expect(asked).toHaveBeenCalled();
+    expect(result.error).toBe(BACKUP_PASSWORD_CHANGED_MESSAGE);
+    expect(result.passwordRequired).toBe(true);
     expect(outcomeRow()).toContain("reasonCode=INCORRECT_PASSWORD");
     expect(outcomeRow()).toContain("endedBy=backup-encryption");
+  });
+
+  it("PASSWORD_REQUIRED marks the result so the retry skips the sync cooldown", async () => {
+    spies.startBackup.mockResolvedValue({ ...success(), success: false, backupPath: null, error: "Backup password required", errorCode: "PASSWORD_REQUIRED" } as BackupResult);
+    const result = await newOrchestrator().sync({ udid: UDID });
+    expect(result.passwordRequired).toBe(true);
+  });
+
+  it("a device fault is NOT marked password-required", async () => {
+    spies.startBackup.mockResolvedValue({ ...success(), success: false, backupPath: null, error: "lost", errorCode: "CONNECTION_LOST" } as BackupResult);
+    const result = await newOrchestrator().sync({ udid: UDID, password: "typed" });
+    expect(result.passwordRequired).toBeUndefined();
+  });
+
+  it("disk full during the decrypt: reasonCode INSUFFICIENT_SPACE, the user is told why", async () => {
+    mockDecryption.decryptBackup.mockResolvedValue({
+      success: false,
+      error: "Not enough free disk space to read this iPhone's encrypted backup. Free up space on this computer and sync again.",
+      errorCode: "INSUFFICIENT_SPACE",
+      decryptedPath: null,
+    });
+    const result = await newOrchestrator().sync({ udid: UDID, password: "typed" });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/disk space/);
+    expect(outcomeRow()).toContain("reasonCode=INSUFFICIENT_SPACE");
+    expect(outcomeRow()).toContain("endedBy=backup-encryption");
+  });
+
+  it("B3: attachments that could not be decrypted are counted on the result and the outcome row", async () => {
+    mockDecryption.decryptBackup.mockResolvedValue({
+      success: true,
+      error: null,
+      decryptedPath: path.join(userDataDir, "at-rest-tmp", "ios-run"),
+      stats: { decrypted: 10, skipped: 3 },
+    });
+    const result = await newOrchestrator().sync({ udid: UDID, password: "typed" });
+    expect(result.success).toBe(true);
+    expect(result.attachmentsUndecryptable).toBe(3);
+    expect(outcomeRow()).toContain("attachmentsUndecryptable=3");
+    expect(outcomeRow()).toContain("reasonCode=DECRYPTION_FAILED");
+  });
+
+  it("B3: a clean decrypt carries no undecryptable count", async () => {
+    mockDecryption.decryptBackup.mockResolvedValue({
+      success: true,
+      error: null,
+      decryptedPath: path.join(userDataDir, "at-rest-tmp", "ios-run"),
+      stats: { decrypted: 10, skipped: 0 },
+    });
+    const result = await newOrchestrator().sync({ udid: UDID, password: "typed" });
+    expect(result.attachmentsUndecryptable).toBeUndefined();
+    expect(outcomeRow()).not.toContain("attachmentsUndecryptable");
   });
 
   it("DECRYPTION_FAILED", async () => {

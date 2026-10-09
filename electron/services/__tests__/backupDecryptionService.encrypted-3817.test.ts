@@ -29,6 +29,7 @@ import {
   SMS_DB_FILE_ID,
   ADDRESS_BOOK_FILE_ID,
   ATTACHMENT_RELATIVE_ROOTS,
+  DECRYPT_DISK_ERROR_MESSAGE,
 } from "../backupDecryptionService";
 import { iOSMessagesParser } from "../iosMessagesParser";
 import { iOSContactsParser } from "../iosContactsParser";
@@ -204,6 +205,54 @@ describe("BACKLOG-3817 encrypted backup → parse copy", () => {
     const result = await service.decryptBackup(plain, PASSWORD);
     expect(result.success).toBe(false);
     expect(result.error).toBe("Backup is not encrypted");
+  });
+
+  describe("B3 an attachment that cannot be decrypted is never silent", () => {
+    const parseCopies = () => (fs.existsSync(tmpRoot) ? fs.readdirSync(tmpRoot).filter((n) => n.startsWith("ios-")) : []);
+
+    it("disk full while writing an attachment fails the decrypt (INSUFFICIENT_SPACE) and leaves no parse copy", async () => {
+      const realCreateWriteStream = fs.createWriteStream;
+      const spy = jest.spyOn(fs, "createWriteStream").mockImplementation(((dest: fs.PathLike, opts?: unknown) => {
+        const name = path.basename(String(dest));
+        if (name === SMS_DB_FILE_ID || name === ADDRESS_BOOK_FILE_ID) {
+          return realCreateWriteStream(dest, opts as Parameters<typeof fs.createWriteStream>[1]);
+        }
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { Writable } = require("stream") as typeof import("stream");
+        return new Writable({
+          write(_chunk, _enc, cb) {
+            const err = Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+            cb(err);
+          },
+        });
+      }) as unknown as typeof fs.createWriteStream);
+      try {
+        const result = await service.decryptBackup(backupDir, PASSWORD);
+        expect(result.success).toBe(false);
+        expect(result.errorCode).toBe("INSUFFICIENT_SPACE");
+        expect(result.error).toBe(DECRYPT_DISK_ERROR_MESSAGE);
+        expect(result.decryptedPath).toBeNull();
+        expect(parseCopies()).toEqual([]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("an attachment missing from the backup is counted, not dropped: the decrypt succeeds with skipped = 1", async () => {
+      const attachment = getAllAttachments()[0];
+      const id = fileIdFor("MediaDomain", attachment.filename.replace(/^~\//, ""));
+      const src = path.join(backupDir, id.slice(0, 2), id);
+      const moved = `${src}.moved`;
+      fs.renameSync(src, moved);
+      try {
+        const result = await service.decryptBackup(backupDir, PASSWORD);
+        expect(result.success).toBe(true);
+        expect(result.stats?.skipped).toBe(1);
+        await service.cleanup(result.decryptedPath!);
+      } finally {
+        fs.renameSync(moved, src);
+      }
+    });
   });
 
   it("sweepParseCopies removes leftover ios-* copies and nothing else", async () => {
