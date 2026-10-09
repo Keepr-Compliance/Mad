@@ -188,9 +188,13 @@ export interface BackupAtRestProgress {
 }
 
 /**
- * Per-file cost in the progress percentage, as bytes. Measured on the synthetic fixture
- * (BACKLOG-3816 bench): the fixed cost of one file (open, fsync, rename) is about the
- * cost of sealing this many bytes.
+ * Per-file cost in the progress percentage, as bytes. An ESTIMATE, not a measurement.
+ * The fixed cost of a file depends on what the pass does to it. On the Mac bench
+ * (BACKLOG-3816), a file that is SEALED costs ~6 ms more with its fsync than without
+ * (252.9 s vs 24.4 s over 37,372 files), which equals ~2 MB of data at 323 MB/s. A file
+ * that is only CHECKED (already sealed, the bulk of an incremental) costs tens of µs. The
+ * pass cannot tell the two apart before it starts, so this value sits between them. The
+ * PC benchmark gives the Windows figures.
  */
 export const PROGRESS_FILE_WEIGHT_BYTES = 256 * 1024;
 /** Progress for a seal pass is emitted at most this often (plus its start and end). */
