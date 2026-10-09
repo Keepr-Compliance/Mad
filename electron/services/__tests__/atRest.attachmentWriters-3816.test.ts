@@ -140,6 +140,10 @@ function fixture(kind: keyof typeof FORMATS, size = 3000): Buffer {
  *   header — a well-formed v1 header (version 1, algorithm 1, zero reserved bytes,
  *            1 MiB chunk) + 5 bytes: only the file-size/layout rule says it is not
  *            a container, so a magic-only OR header-only check misclassifies it.
+ *   perfect — a STRUCTURALLY VALID container (header + 16-byte "tag" + 100 bytes:
+ *            exactly one chunk) that no Keepr key sealed. Any reader classifies it
+ *            as KEPRENC, so only a writer that reads its SOURCE raw can store it —
+ *            through openDecryptStream it fails on a key id that is not held.
  */
 const FORGED = {
   magic: () => Buffer.concat([MAGIC, crypto.randomBytes(3000)]),
@@ -152,7 +156,18 @@ const FORGED = {
     h.writeUInt32BE(1024 * 1024, 44);
     return Buffer.concat([h, crypto.randomBytes(5)]);
   },
+  perfect: () => {
+    const h = Buffer.alloc(HEADER_BYTES, 0);
+    MAGIC.copy(h, 0);
+    h[7] = 1;
+    h[8] = 1;
+    crypto.randomBytes(32).copy(h, 12);
+    h.writeUInt32BE(1024 * 1024, 44);
+    return Buffer.concat([h, crypto.randomBytes(16 + 100)]);
+  },
 };
+/** Forgeries a pre-upgrade plaintext file can carry and still read back as plaintext. */
+const FORGED_NOT_CONTAINER = ["magic", "header"] as const;
 const sha256 = (b: Buffer) => crypto.createHash("sha256").update(b).digest("hex");
 
 /** W1: the file on disk is KEPRENC, shows no format magic or plaintext, and round-trips. */
@@ -364,12 +379,13 @@ describe("iPhone sync — forged KEPRENC content and mid-copy changes (fix-up)",
     const sources = [
       { id: 1, name: "IMG_0201.jpg", mime: "image/jpeg", bytes: FORGED.magic() },
       { id: 2, name: "doc.pdf", mime: "application/pdf", bytes: FORGED.header() },
+      { id: 3, name: "IMG_0203.png", mime: "image/png", bytes: FORGED.perfect() },
     ];
     const { backup, messages } = await setUpIphone(sources);
 
     const result = await iphoneStore("user-1", messages, backup);
 
-    expect(result).toMatchObject({ stored: 2, skipped: 0 });
+    expect(result).toMatchObject({ stored: 3, skipped: 0 });
     const rows = iphoneDb.insertAttachment.mock.calls.map((c) => c[0]);
     for (const [i, s] of sources.entries()) {
       expect(rows[i].fileSizeBytes).toBe(s.bytes.length);
@@ -491,13 +507,14 @@ describe("macOS Messages attachments (macOSMessagesImportService.storeAttachment
 describe("macOS Messages — forged KEPRENC content and mid-copy changes (fix-up)", () => {
   it("F-R1: attachments whose content starts with KEPRENC are stored, sealed, and read back", async () => {
     macSchema();
-    const plain = [FORGED.magic(), FORGED.header()];
-    const rows = [await macRow("f0.jpg", plain[0], "m0"), await macRow("f1.pdf", plain[1], "m1")];
+    const plain = [FORGED.magic(), FORGED.header(), FORGED.perfect()];
+    const names = ["f0.jpg", "f1.pdf", "f2.png"];
+    const rows = await Promise.all(names.map((n, i) => macRow(n, plain[i], `m${i}`)));
 
-    const result = await macStore("user-1", rows, new Map([["m0", "i0"], ["m1", "i1"]]));
+    const result = await macStore("user-1", rows, new Map(names.map((_n, i) => [`m${i}`, `i${i}`])));
 
-    expect(result.stored).toBe(2);
-    for (const [i, name] of ["f0.jpg", "f1.pdf"].entries()) {
+    expect(result.stored).toBe(3);
+    for (const [i, name] of names.entries()) {
       const { storage_path } = mockDb
         .prepare("SELECT storage_path FROM attachments WHERE filename = ?")
         .get(name) as { storage_path: string };
@@ -508,7 +525,7 @@ describe("macOS Messages — forged KEPRENC content and mid-copy changes (fix-up
     }
   });
 
-  it.each(Object.keys(FORGED) as Array<keyof typeof FORGED>)(
+  it.each(FORGED_NOT_CONTAINER)(
     "F-R2: a PRE-UPGRADE plaintext file starting with KEPRENC (%s) reads back unchanged",
     async (kind) => {
       const plain = FORGED[kind]();
@@ -581,19 +598,21 @@ describe("email attachments (emailAttachmentService.downloadEmailAttachments)", 
   it("F-R1: email attachments whose content starts with KEPRENC are stored, sealed, and round-trip", async () => {
     const a = FORGED.magic();
     const b = FORGED.header();
-    (gmailFetchService.getAttachment as jest.Mock).mockImplementation(async (_m: string, id: string) =>
-      id === "att-a" ? a : b,
-    );
+    const c = FORGED.perfect();
+    const byId: Record<string, Buffer> = { "att-a": a, "att-b": b, "att-c": c };
+    (gmailFetchService.getAttachment as jest.Mock).mockImplementation(async (_m: string, id: string) => byId[id]);
 
     const result = await emailAttachmentService.downloadEmailAttachments("user-1", "email-1", "gmail-msg-1", "gmail", [
       meta("a.pdf", "application/pdf", a.length, "att-a"),
       meta("b.png", "image/png", b.length, "att-b"),
+      meta("c.jpg", "image/jpeg", c.length, "att-c"),
     ]);
 
-    expect(result).toMatchObject({ success: true, stored: 2, errors: 0 });
+    expect(result).toMatchObject({ success: true, stored: 3, errors: 0 });
     const dir = nodePath.join(scratchDir, "attachments");
     await expectSealed(nodePath.join(dir, `${sha256(a)}.pdf`), a);
     await expectSealed(nodePath.join(dir, `${sha256(b)}.png`), b);
+    await expectSealed(nodePath.join(dir, `${sha256(c)}.jpg`), c);
   });
 
   it("W3: key unavailable -> nothing written, the run stops with the typed refusal", async () => {
