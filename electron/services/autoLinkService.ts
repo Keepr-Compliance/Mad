@@ -1529,6 +1529,13 @@ export async function expandAttachedThreadsForUser(
 
     if (pairs.length === 0) {
       result.durationMs = Date.now() - startTime;
+      // BACKLOG-3784: log this path too. Without it, a missing "expansion complete"
+      // line could mean "nothing attached" or "never finished". Counts only.
+      await logService.info(
+        `[BACKLOG-3784] Attached-thread expansion skipped: 0 attached pairs durationMs=${result.durationMs}`,
+        "AutoLinkService",
+        { pairsExamined: 0, durationMs: result.durationMs }
+      );
       return result;
     }
 
@@ -1551,6 +1558,7 @@ export async function expandAttachedThreadsForUser(
     // Identity is computed from ALL of a thread's messages (linked or not) so the
     // 1:1-vs-group classification sees the whole conversation. Built here (after the
     // pairs early-return) so it only runs when there is attached work to expand.
+    const identityScanStartedAt = Date.now();
     const identityRows = dbAll<{
       thread_id: string;
       direction: string | null;
@@ -1558,6 +1566,14 @@ export async function expandAttachedThreadsForUser(
     }>(
       THREAD_DIRECTION_PARTICIPANTS_SQL,
       [userId],
+    );
+    // BACKLOG-3784: this scan reads every text message of the user on the main
+    // thread; time it on its own. Counts only.
+    const identityScanMs = Date.now() - identityScanStartedAt;
+    await logService.info(
+      `[BACKLOG-3784] Attached-thread identity scan: rows=${identityRows.length} durationMs=${identityScanMs}`,
+      "AutoLinkService",
+      { pairsExamined: pairs.length, identityRows: identityRows.length, scanMs: identityScanMs }
     );
     const rowsByThread = new Map<
       string,

@@ -1,0 +1,737 @@
+{
+  "$comment": "Source of truth for THIRD_PARTY_NOTICES.md/.txt. Edit this file, then run: node scripts/third-party/generate-notices.js --write. The check (--check) runs in jest (scripts/__tests__/thirdPartyNotices-3803.test.ts). BACKLOG-3769 will replace the iPhone tools: update toolsDir, bundles and the components' files/source/version here and regenerate.",
+  "schemaVersion": 1,
+  "product": "Keepr",
+  "toolsDir": "resources/win/libimobiledevice",
+  "toolsDirShippedAs": {
+    "win": "resources\\win\\libimobiledevice (in the Keepr installation folder)",
+    "mac": "Keepr.app/Contents/Resources/win/libimobiledevice"
+  },
+  "bundles": {
+    "imobiledevice-net": {
+      "name": "imobiledevice-net",
+      "version": "v1.3.17",
+      "releaseUrl": "https://github.com/libimobiledevice-win32/imobiledevice-net/releases/tag/v1.3.17",
+      "asset": "libimobiledevice.1.2.1-r1122-win-x64.zip",
+      "assetSha256": "d7cb57a71270848c35c3f01006701535aadf6dfb52325863ea368c94a34a2cab",
+      "evidence": "all 50 .exe/.dll files in toolsDir are byte-identical to this release asset and to runtimes/win-x64/native in iMobileDevice-net.1.3.17.nupkg; the nupkg's gitinfo/ files pin the source commit of each libimobiledevice-family project",
+      "addedToKeepr": "commit be2a5b22d (2025-12-11)",
+      "platforms": [
+        "win",
+        "mac"
+      ],
+      "notes": "These are Windows programs. The macOS app currently carries the same folder but never runs it."
+    }
+  },
+  "licenses": {
+    "LGPL-2.1": {
+      "title": "GNU Lesser General Public License v2.1",
+      "file": "licenses/LGPL-2.1.txt",
+      "sha256": "e237fa56668030e928551ddd60f05df5fe957f75eab874bbd017e085ed722e7c",
+      "fetchedFrom": "https://raw.githubusercontent.com/libimobiledevice-win32/libimobiledevice/0d4a7e905baeadafa098e629a5241fac6fbf7d24/COPYING.LESSER",
+      "identicalAt": [
+        "https://raw.githubusercontent.com/libimobiledevice-win32/libplist/8bb8b24c0774022c9b2190b1996e3acd711325b4/COPYING.LESSER",
+        "https://raw.githubusercontent.com/libimobiledevice-win32/libusbmuxd/ac86b23f57879b8b702f3712ba66729008d059a3/COPYING",
+        "https://raw.githubusercontent.com/libimobiledevice-win32/libideviceactivation/fbe0476cfeddc2fc317ceb900eec12302c1d4c11/COPYING.LESSER"
+      ]
+    },
+    "LGPL-2.1-libirecovery": {
+      "title": "GNU Lesser General Public License v2.1 (copy shipped by libirecovery)",
+      "file": "licenses/LGPL-2.1-libirecovery.txt",
+      "sha256": "a1a33180d02960ab1c5de36cf20b1a2f0fe9888d83826ad263da5db52f1b183b",
+      "fetchedFrom": "https://raw.githubusercontent.com/libimobiledevice-win32/libirecovery/825b81cbe93deb24b099d8f0bf22f18246a82034/COPYING"
+    },
+    "LGPL-2.1-libusb": {
+      "title": "GNU Lesser General Public License v2.1 (copy shipped by libusb)",
+      "file": "licenses/LGPL-2.1-libusb.txt",
+      "sha256": "5df07007198989c622f5d41de8d703e7bef3d0e79d62e24332ee739a452af62a",
+      "fetchedFrom": "https://raw.githubusercontent.com/libusb/libusb/v1.0.24/COPYING"
+    },
+    "LGPL-2.1-imobiledevice-net": {
+      "title": "GNU Lesser General Public License v2.1 (copy shipped by imobiledevice-net)",
+      "file": "licenses/LGPL-2.1-imobiledevice-net.txt",
+      "sha256": "e59a17174c714da6b8f7e50f77b311eed0fcb625f3943e13aef506f075ea10f2",
+      "fetchedFrom": "https://raw.githubusercontent.com/libimobiledevice-win32/imobiledevice-net/v1.3.17/LICENSE.txt"
+    },
+    "LGPL-2.0-libiconv": {
+      "title": "GNU Library General Public License v2 (libiconv COPYING.LIB)",
+      "file": "licenses/LGPL-2.0-libiconv.txt",
+      "sha256": "56bdea73b6145ef6ac5259b3da390b981d840c24cb03b8e1cbc678de7ecfa18d",
+      "fetchedFrom": "https://ftp.gnu.org/gnu/libiconv/libiconv-1.16.tar.gz (libiconv-1.16/COPYING.LIB)"
+    },
+    "LGPL-3.0": {
+      "title": "GNU Lesser General Public License v3.0",
+      "file": "licenses/LGPL-3.0.txt",
+      "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+      "fetchedFrom": "https://raw.githubusercontent.com/libimobiledevice-win32/idevicerestore/5e4e8d8095672f25f40ce9c0c347e31e4b89ab64/COPYING",
+      "identicalAt": [
+        "https://downloads.sourceforge.net/project/libusb-win32/libusb-win32-releases/1.2.6.0/libusb-win32-src-1.2.6.0.zip (COPYING_LGPL.txt, CRLF line endings)"
+      ]
+    },
+    "LGPL-3.0-getopt-win32": {
+      "title": "GNU Lesser General Public License v3.0 (copy shipped by getopt-win32)",
+      "file": "licenses/LGPL-3.0-getopt-win32.txt",
+      "sha256": "a5681bf9b05db14d86776930017c647ad9e6e56ff6bbcfdf21e5848288dfaf1b",
+      "fetchedFrom": "https://raw.githubusercontent.com/libimobiledevice-win32/getopt/0.1/LICENSE"
+    },
+    "GPL-3.0": {
+      "title": "GNU General Public License v3.0",
+      "file": "licenses/GPL-3.0.txt",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "fetchedFrom": "https://raw.githubusercontent.com/libimobiledevice-win32/usbmuxd/f1329e742825c93fd080bdb8253d710ef8b6f751/COPYING.GPLv3",
+      "identicalAt": [
+        "https://raw.githubusercontent.com/libimobiledevice-win32/libideviceactivation/fbe0476cfeddc2fc317ceb900eec12302c1d4c11/COPYING"
+      ]
+    },
+    "BSD-3-Clause-iwdp": {
+      "title": "Google BSD licence (ios-webkit-debug-proxy)",
+      "file": "licenses/BSD-3-Clause-ios-webkit-debug-proxy.txt",
+      "sha256": "2b3f6fc992d69de5de4742e4637671183a59d9f2c07f41928d97e3f407c4b7f1",
+      "fetchedFrom": "https://raw.githubusercontent.com/libimobiledevice-win32/ios-webkit-debug-proxy/5ef16d17408aa5455003b0d10241ef87d415c751/LICENSE.md"
+    },
+    "OpenSSL": {
+      "title": "OpenSSL License and original SSLeay License (dual)",
+      "file": "licenses/OpenSSL-SSLeay.txt",
+      "sha256": "c32913b33252e71190af2066f08115c69bc9fddadf3bf29296e20c835389841c",
+      "fetchedFrom": "https://raw.githubusercontent.com/openssl/openssl/OpenSSL_1_1_1i/LICENSE"
+    },
+    "curl": {
+      "title": "curl License",
+      "file": "licenses/curl.txt",
+      "sha256": "db3c4a3b3695a0f317a0c5176acd2f656d18abc45b3ee78e50935a78eb1e132e",
+      "fetchedFrom": "https://raw.githubusercontent.com/curl/curl/curl-7_74_0/COPYING"
+    },
+    "Zlib": {
+      "title": "zlib License",
+      "file": "licenses/Zlib.txt",
+      "sha256": "c3ad9cdb91fe4c5843ccd230b91c97c21ea6c2e52386c1ef4e43e9f3d625427f",
+      "fetchedFrom": "https://raw.githubusercontent.com/madler/zlib/v1.2.11/zlib.h",
+      "excerpt": "zlib.h lines 1-24 (the licence comment); zlib 1.2.11 has no separate LICENSE file"
+    },
+    "MIT-libxml2": {
+      "title": "libxml2 licence (MIT)",
+      "file": "licenses/MIT-libxml2.txt",
+      "sha256": "c5c63674f8a83c4d2e385d96d1c670a03cb871ba2927755467017317878574bd",
+      "fetchedFrom": "https://gitlab.gnome.org/GNOME/libxml2/-/raw/v2.9.10/Copyright"
+    },
+    "bzip2-1.0.6": {
+      "title": "bzip2 licence (SPDX id bzip2-1.0.6; text from bzip2 1.0.8)",
+      "file": "licenses/bzip2.txt",
+      "sha256": "c6dbbf828498be844a89eaa3b84adbab3199e342eb5cb2ed2f0d4ba7ec0f38a3",
+      "fetchedFrom": "https://sourceware.org/git/?p=bzip2.git;a=blob_plain;f=LICENSE;hb=bzip2-1.0.8"
+    },
+    "BSD-3-Clause-libzip": {
+      "title": "libzip licence (BSD-3-Clause)",
+      "file": "licenses/BSD-3-Clause-libzip.txt",
+      "sha256": "deae392de70503672793ee784d603bfa8069dcd5974a325dfbf91160f3a147d6",
+      "fetchedFrom": "https://raw.githubusercontent.com/nih-at/libzip/v1.7.3/LICENSE"
+    },
+    "BSD-3-Clause-PCRE": {
+      "title": "PCRE licence (BSD)",
+      "file": "licenses/BSD-3-Clause-PCRE.txt",
+      "sha256": "0dd9c13864dbb9ee4d77a1557e96be29b2d719fb6584192ee36611aae264c4a3",
+      "fetchedFrom": "https://downloads.sourceforge.net/project/pcre/pcre/8.44/pcre-8.44.tar.bz2 (pcre-8.44/LICENCE)"
+    },
+    "PublicDomain-liblzma": {
+      "title": "XZ Utils licensing (liblzma is in the public domain)",
+      "file": "licenses/xz-liblzma-public-domain.txt",
+      "sha256": "bcb02973ef6e87ea73d331b3a80df7748407f17efdb784b61b47e0e610d3bb5c",
+      "fetchedFrom": "https://raw.githubusercontent.com/tukaani-project/xz/v5.2.5/COPYING"
+    },
+    "Apache-2.0-pthreads4w": {
+      "title": "Apache License 2.0 (copy shipped by pthreads4w)",
+      "file": "licenses/Apache-2.0-pthreads4w.txt",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+      "fetchedFrom": "https://downloads.sourceforge.net/project/pthreads4w/pthreads4w-code-v3.0.0.zip (LICENSE)"
+    },
+    "NOTICE-pthreads4w": {
+      "title": "pthreads4w NOTICE file (Apache-2.0 section 4d)",
+      "file": "licenses/NOTICE-pthreads4w.txt",
+      "sha256": "ab620b4fe865583cca883b258f728f7f2234802f7c1b8d74fdb6a4dd2642ae2c",
+      "fetchedFrom": "https://downloads.sourceforge.net/project/pthreads4w/pthreads4w-code-v3.0.0.zip (NOTICE)"
+    },
+    "MIT-electron": {
+      "title": "Electron licence (MIT)",
+      "external": "node_modules/electron/dist/LICENSE",
+      "shipped": {
+        "win": "LICENSE.electron.txt in the Keepr installation folder",
+        "mac": "Keepr.app/Contents/Resources/third-party/LICENSE.electron.txt"
+      }
+    },
+    "Chromium-notices": {
+      "title": "Chromium and its dependencies: licence notices (LICENSES.chromium.html)",
+      "external": "node_modules/electron/dist/LICENSES.chromium.html",
+      "shipped": {
+        "win": "LICENSES.chromium.html in the Keepr installation folder",
+        "mac": "Keepr.app/Contents/Resources/third-party/LICENSES.chromium.html"
+      }
+    },
+    "MIT-noble": {
+      "title": "@noble/curves licence (MIT)",
+      "external": "chrome-extension/vendor/LICENSE-noble.txt",
+      "shipped": {
+        "win": "resources/chrome-extension/vendor/LICENSE-noble.txt",
+        "mac": "Keepr.app/Contents/Resources/chrome-extension/vendor/LICENSE-noble.txt"
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "libimobiledevice",
+      "name": "libimobiledevice (library and idevice* tools)",
+      "version": "imobiledevice-net build 1.2.1-r1122",
+      "versionEvidence": "build label of the imobiledevice-net v1.3.17 asset; exact source commit pinned in the release's gitinfo",
+      "licenseExpression": "LGPL-2.1-or-later",
+      "licenses": [
+        "LGPL-2.1"
+      ],
+      "licenseEvidence": "source headers of src/ and every tools/*.c at the pinned commit",
+      "copyright": "Copyright (c) 2008-2020 Nikias Bassen, Martin Szulecki, Zach C. and other libimobiledevice contributors",
+      "homepage": "https://libimobiledevice.org",
+      "source": {
+        "repository": "https://github.com/libimobiledevice-win32/libimobiledevice",
+        "commit": "0d4a7e905baeadafa098e629a5241fac6fbf7d24",
+        "url": "https://github.com/libimobiledevice-win32/libimobiledevice/tree/0d4a7e905baeadafa098e629a5241fac6fbf7d24",
+        "commitDate": "2021-02-22"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "imobiledevice.dll",
+        "idevice_id.exe",
+        "idevicebackup.exe",
+        "idevicebackup2.exe",
+        "idevicecrashreport.exe",
+        "idevicedate.exe",
+        "idevicedebug.exe",
+        "idevicedebugserverproxy.exe",
+        "idevicediagnostics.exe",
+        "ideviceenterrecovery.exe",
+        "ideviceimagemounter.exe",
+        "ideviceinfo.exe",
+        "idevicename.exe",
+        "idevicenotificationproxy.exe",
+        "idevicepair.exe",
+        "ideviceprovision.exe",
+        "idevicescreenshot.exe",
+        "idevicesyslog.exe"
+      ],
+      "usedByKeepr": [
+        "idevice_id.exe",
+        "ideviceinfo.exe",
+        "idevicebackup2.exe",
+        "idevicepair.exe"
+      ]
+    },
+    {
+      "id": "libplist",
+      "name": "libplist (library and plist tools)",
+      "version": "imobiledevice-net build 1.2.1-r1122",
+      "versionEvidence": "pinned source commit (gitinfo)",
+      "licenseExpression": "LGPL-2.1-or-later",
+      "licenses": [
+        "LGPL-2.1"
+      ],
+      "licenseEvidence": "source headers at the pinned commit",
+      "copyright": "Copyright (c) 2008-2019 Nikias Bassen, Martin Szulecki, Zach C. and other libplist contributors",
+      "homepage": "https://github.com/libimobiledevice/libplist",
+      "source": {
+        "repository": "https://github.com/libimobiledevice-win32/libplist",
+        "commit": "8bb8b24c0774022c9b2190b1996e3acd711325b4",
+        "url": "https://github.com/libimobiledevice-win32/libplist/tree/8bb8b24c0774022c9b2190b1996e3acd711325b4",
+        "commitDate": "2021-02-22"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "plist.dll",
+        "plistutil.exe",
+        "plist_cmp.exe",
+        "plist_test.exe"
+      ]
+    },
+    {
+      "id": "libusbmuxd",
+      "name": "libusbmuxd (library)",
+      "version": "imobiledevice-net build 1.2.1-r1122",
+      "versionEvidence": "pinned source commit (gitinfo)",
+      "licenseExpression": "LGPL-2.1-or-later",
+      "licenses": [
+        "LGPL-2.1"
+      ],
+      "licenseEvidence": "src/libusbmuxd.c header at the pinned commit",
+      "copyright": "Copyright (C) 2009-2019 Nikias Bassen, Martin Szulecki, Paul Sladen",
+      "homepage": "https://github.com/libimobiledevice/libusbmuxd",
+      "source": {
+        "repository": "https://github.com/libimobiledevice-win32/libusbmuxd",
+        "commit": "ac86b23f57879b8b702f3712ba66729008d059a3",
+        "url": "https://github.com/libimobiledevice-win32/libusbmuxd/tree/ac86b23f57879b8b702f3712ba66729008d059a3",
+        "commitDate": "2020-06-12"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "usbmuxd.dll"
+      ]
+    },
+    {
+      "id": "libirecovery",
+      "name": "libirecovery (library and irecovery tool)",
+      "version": "imobiledevice-net build 1.2.1-r1122",
+      "versionEvidence": "pinned source commit (gitinfo)",
+      "licenseExpression": "LGPL-2.1-or-later",
+      "licenses": [
+        "LGPL-2.1-libirecovery"
+      ],
+      "licenseEvidence": "src/libirecovery.c and tools/irecovery.c headers at the pinned commit",
+      "copyright": "Copyright (c) 2008-2020 Nikias Bassen, Martin Szulecki, Chronic-Dev Team, Joshua Hill, Nicolas Haunold",
+      "homepage": "https://github.com/libimobiledevice/libirecovery",
+      "source": {
+        "repository": "https://github.com/libimobiledevice-win32/libirecovery",
+        "commit": "825b81cbe93deb24b099d8f0bf22f18246a82034",
+        "url": "https://github.com/libimobiledevice-win32/libirecovery/tree/825b81cbe93deb24b099d8f0bf22f18246a82034",
+        "commitDate": "2020-06-15"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "irecovery.dll",
+        "irecovery.exe"
+      ]
+    },
+    {
+      "id": "idevicerestore",
+      "name": "idevicerestore",
+      "version": "imobiledevice-net build 1.2.1-r1122",
+      "versionEvidence": "pinned source commit (gitinfo)",
+      "licenseExpression": "LGPL-3.0",
+      "licenses": [
+        "LGPL-3.0",
+        "GPL-3.0"
+      ],
+      "licenseEvidence": "repository COPYING is LGPL-3.0; individual source headers say LGPL-2.1-or-later",
+      "copyright": "Copyright (c) 2010-2019 Nikias Bassen, Martin Szulecki, Joshua Hill",
+      "homepage": "https://github.com/libimobiledevice/idevicerestore",
+      "source": {
+        "repository": "https://github.com/libimobiledevice-win32/idevicerestore",
+        "commit": "5e4e8d8095672f25f40ce9c0c347e31e4b89ab64",
+        "url": "https://github.com/libimobiledevice-win32/idevicerestore/tree/5e4e8d8095672f25f40ce9c0c347e31e4b89ab64",
+        "commitDate": "2020-06-15"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "idevicerestore.exe"
+      ]
+    },
+    {
+      "id": "libideviceactivation",
+      "name": "libideviceactivation (library)",
+      "version": "imobiledevice-net build 1.2.1-r1122",
+      "versionEvidence": "pinned source commit (gitinfo)",
+      "licenseExpression": "LGPL-2.1-or-later",
+      "licenses": [
+        "LGPL-2.1"
+      ],
+      "licenseEvidence": "src/activation.c header at the pinned commit",
+      "copyright": "Copyright (c) 2011-2019 Nikias Bassen, Martin Szulecki, Mirell Development",
+      "homepage": "https://github.com/libimobiledevice/libideviceactivation",
+      "source": {
+        "repository": "https://github.com/libimobiledevice-win32/libideviceactivation",
+        "commit": "fbe0476cfeddc2fc317ceb900eec12302c1d4c11",
+        "url": "https://github.com/libimobiledevice-win32/libideviceactivation/tree/fbe0476cfeddc2fc317ceb900eec12302c1d4c11",
+        "commitDate": "2020-06-15"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "ideviceactivation.dll"
+      ]
+    },
+    {
+      "id": "ios-webkit-debug-proxy",
+      "name": "ios_webkit_debug_proxy",
+      "version": "imobiledevice-net build 1.2.1-r1122",
+      "versionEvidence": "pinned source commit (gitinfo)",
+      "licenseExpression": "BSD-3-Clause",
+      "licenses": [
+        "BSD-3-Clause-iwdp"
+      ],
+      "licenseEvidence": "LICENSE.md at the pinned commit",
+      "copyright": "Copyright 2012, Google Inc.",
+      "homepage": "https://github.com/google/ios-webkit-debug-proxy",
+      "source": {
+        "repository": "https://github.com/libimobiledevice-win32/ios-webkit-debug-proxy",
+        "commit": "5ef16d17408aa5455003b0d10241ef87d415c751",
+        "url": "https://github.com/libimobiledevice-win32/ios-webkit-debug-proxy/tree/5ef16d17408aa5455003b0d10241ef87d415c751",
+        "commitDate": "2020-06-18"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "ios_webkit_debug_proxy.exe"
+      ]
+    },
+    {
+      "id": "imobiledevice-net",
+      "name": "imobiledevice-net helper (imobiledevice-net-lighthouse.dll)",
+      "version": "v1.3.17",
+      "versionEvidence": "byte-identical to the v1.3.17 release asset",
+      "licenseExpression": "LGPL-2.1",
+      "licenses": [
+        "LGPL-2.1-imobiledevice-net"
+      ],
+      "licenseEvidence": "repository LICENSE.txt at v1.3.17",
+      "copyright": "Copyright the imobiledevice-net contributors (maintained by Quamotion); no copyright line is stated in the repository",
+      "homepage": "https://github.com/libimobiledevice-win32/imobiledevice-net",
+      "source": {
+        "repository": "https://github.com/libimobiledevice-win32/imobiledevice-net",
+        "commit": "d043dda518cc4df830c37f8c85d3f19384978541",
+        "url": "https://github.com/libimobiledevice-win32/imobiledevice-net/tree/v1.3.17",
+        "tag": "v1.3.17"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "imobiledevice-net-lighthouse.dll"
+      ]
+    },
+    {
+      "id": "openssl",
+      "name": "OpenSSL",
+      "version": "1.1.1i",
+      "versionEvidence": "FileVersion in the DLLs' VERSIONINFO",
+      "licenseExpression": "OpenSSL AND SSLeay",
+      "licenses": [
+        "OpenSSL"
+      ],
+      "licenseEvidence": "LICENSE at tag OpenSSL_1_1_1i",
+      "copyright": "Copyright (c) 1998-2019 The OpenSSL Project; Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)",
+      "homepage": "https://www.openssl.org",
+      "source": {
+        "url": "https://github.com/openssl/openssl/tree/OpenSSL_1_1_1i",
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "libcrypto-1_1-x64.dll",
+        "libssl-1_1-x64.dll"
+      ],
+      "notes": "This product includes software developed by the OpenSSL Project for use in the OpenSSL Toolkit (http://www.openssl.org/). This product includes cryptographic software written by Eric Young (eay@cryptsoft.com)."
+    },
+    {
+      "id": "curl",
+      "name": "libcurl",
+      "version": "7.74.0-DEV",
+      "versionEvidence": "FileVersion in VERSIONINFO",
+      "licenseExpression": "curl",
+      "licenses": [
+        "curl"
+      ],
+      "licenseEvidence": "COPYING at tag curl-7_74_0",
+      "copyright": "Copyright (c) 1996 - 2020, Daniel Stenberg, <daniel@haxx.se>, and many contributors",
+      "homepage": "https://curl.se",
+      "source": {
+        "url": "https://github.com/curl/curl/tree/curl-7_74_0",
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "libcurl.dll"
+      ]
+    },
+    {
+      "id": "zlib",
+      "name": "zlib",
+      "version": "1.2.11",
+      "versionEvidence": "FileVersion in VERSIONINFO",
+      "licenseExpression": "Zlib",
+      "licenses": [
+        "Zlib"
+      ],
+      "licenseEvidence": "zlib.h licence comment at tag v1.2.11",
+      "copyright": "Copyright (C) 1995-2017 Jean-loup Gailly and Mark Adler",
+      "homepage": "https://zlib.net",
+      "source": {
+        "url": "https://github.com/madler/zlib/tree/v1.2.11",
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "zlib1.dll"
+      ]
+    },
+    {
+      "id": "libxml2",
+      "name": "libxml2",
+      "version": "2.9.10",
+      "versionEvidence": "FileVersion in VERSIONINFO",
+      "licenseExpression": "MIT",
+      "licenses": [
+        "MIT-libxml2"
+      ],
+      "licenseEvidence": "Copyright file at tag v2.9.10",
+      "copyright": "Copyright (C) 1998-2012 Daniel Veillard",
+      "homepage": "https://gitlab.gnome.org/GNOME/libxml2",
+      "source": {
+        "url": "https://gitlab.gnome.org/GNOME/libxml2/-/tree/v2.9.10",
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "libxml2.dll"
+      ]
+    },
+    {
+      "id": "libiconv",
+      "name": "GNU libiconv",
+      "version": "1.16",
+      "versionEvidence": "FileVersion in VERSIONINFO",
+      "licenseExpression": "LGPL-2.0-or-later",
+      "licenses": [
+        "LGPL-2.0-libiconv"
+      ],
+      "licenseEvidence": "COPYING.LIB in libiconv-1.16 (the file vcpkg installs as this port's copyright)",
+      "copyright": "Copyright (C) 1999-2019 Free Software Foundation, Inc.",
+      "homepage": "https://www.gnu.org/software/libiconv/",
+      "source": {
+        "url": "https://ftp.gnu.org/gnu/libiconv/libiconv-1.16.tar.gz",
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "iconv-2.dll"
+      ]
+    },
+    {
+      "id": "liblzma",
+      "name": "liblzma (XZ Utils)",
+      "version": "5.2.5",
+      "versionEvidence": "FileVersion in VERSIONINFO",
+      "licenseExpression": "LicenseRef-PublicDomain",
+      "licenses": [
+        "PublicDomain-liblzma"
+      ],
+      "licenseEvidence": "COPYING at tag v5.2.5 (liblzma is in the public domain)",
+      "copyright": "Public domain (The Tukaani Project)",
+      "homepage": "https://tukaani.org/xz/",
+      "source": {
+        "url": "https://github.com/tukaani-project/xz/tree/v5.2.5",
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "lzma.dll"
+      ]
+    },
+    {
+      "id": "libusb",
+      "name": "libusb",
+      "version": "1.0.24",
+      "versionEvidence": "FileVersion in VERSIONINFO (1.0.24.11584)",
+      "licenseExpression": "LGPL-2.1-or-later",
+      "licenses": [
+        "LGPL-2.1-libusb"
+      ],
+      "licenseEvidence": "COPYING at tag v1.0.24 and the DLL's LegalCopyright",
+      "copyright": "Copyright the libusb authors (see AUTHORS in libusb 1.0.24)",
+      "homepage": "https://libusb.info",
+      "source": {
+        "url": "https://github.com/libusb/libusb/tree/v1.0.24",
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "libusb-1.0.dll"
+      ]
+    },
+    {
+      "id": "libusb-win32",
+      "name": "libusb-win32",
+      "version": "1.2.6.0 (inferred)",
+      "versionEvidence": "NOT determined from the binary (no VERSIONINFO); inferred from the vcpkg libusb-win32 port version at the time",
+      "licenseExpression": "LGPL-3.0",
+      "licenses": [
+        "LGPL-3.0",
+        "GPL-3.0"
+      ],
+      "licenseEvidence": "COPYING_LGPL.txt in libusb-win32-src-1.2.6.0.zip (the file vcpkg installs as this port's copyright)",
+      "copyright": "Copyright the libusb-win32 authors (Stephan Meyer, Travis Robinson and contributors)",
+      "homepage": "https://sourceforge.net/projects/libusb-win32/",
+      "source": {
+        "url": "https://sourceforge.net/projects/libusb-win32/files/libusb-win32-releases/1.2.6.0/",
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "libusb0.dll"
+      ]
+    },
+    {
+      "id": "pthreads4w",
+      "name": "PThreads4W (POSIX Threads for Windows)",
+      "version": "3.0.0",
+      "versionEvidence": "FileVersion in VERSIONINFO (3, 0, 0, 0)",
+      "licenseExpression": "Apache-2.0",
+      "licenses": [
+        "Apache-2.0-pthreads4w",
+        "NOTICE-pthreads4w"
+      ],
+      "licenseEvidence": "LICENSE and NOTICE in pthreads4w-code-v3.0.0.zip (sha512 matches the vcpkg port)",
+      "copyright": "Copyright 1998 John E. Bossom; Copyright 1999-2018, Pthreads4w contributors",
+      "homepage": "https://sourceforge.net/projects/pthreads4w/",
+      "source": {
+        "url": "https://sourceforge.net/projects/pthreads4w/files/pthreads4w-code-v3.0.0.zip",
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "pthreadVC3.dll"
+      ]
+    },
+    {
+      "id": "pcre",
+      "name": "PCRE",
+      "version": "8.44",
+      "versionEvidence": "version string inside pcre.dll (\"8.44 2020-02-12\")",
+      "licenseExpression": "BSD-3-Clause",
+      "licenses": [
+        "BSD-3-Clause-PCRE"
+      ],
+      "licenseEvidence": "LICENCE in pcre-8.44",
+      "copyright": "Copyright (c) 1997-2020 University of Cambridge; Copyright (c) 2010-2020 Zoltan Herczeg; Copyright (c) 2007-2012 Google Inc.",
+      "homepage": "https://www.pcre.org",
+      "source": {
+        "url": "https://sourceforge.net/projects/pcre/files/pcre/8.44/",
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "pcre.dll",
+        "pcreposix.dll"
+      ]
+    },
+    {
+      "id": "bzip2",
+      "name": "bzip2 (libbzip2)",
+      "version": "1.0.8",
+      "versionEvidence": "version string inside bz2.dll (\"1.0.8, 13-Jul-2019\")",
+      "licenseExpression": "bzip2-1.0.6",
+      "licenses": [
+        "bzip2-1.0.6"
+      ],
+      "licenseEvidence": "LICENSE at tag bzip2-1.0.8",
+      "copyright": "Copyright (C) 1996-2019 Julian R Seward",
+      "homepage": "https://sourceware.org/bzip2/",
+      "source": {
+        "url": "https://sourceware.org/git/?p=bzip2.git;a=tree;hb=bzip2-1.0.8",
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "bz2.dll"
+      ]
+    },
+    {
+      "id": "libzip",
+      "name": "libzip",
+      "version": "1.7.3",
+      "versionEvidence": "version string inside zip.dll",
+      "licenseExpression": "BSD-3-Clause",
+      "licenses": [
+        "BSD-3-Clause-libzip"
+      ],
+      "licenseEvidence": "LICENSE at tag v1.7.3",
+      "copyright": "Copyright (C) 1999-2020 Dieter Baron and Thomas Klausner",
+      "homepage": "https://libzip.org",
+      "source": {
+        "url": "https://github.com/nih-at/libzip/tree/v1.7.3",
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "zip.dll"
+      ]
+    },
+    {
+      "id": "getopt-win32",
+      "name": "getopt-win32 (getopt for Microsoft C, by Ludvik Jerabek)",
+      "version": "0.1",
+      "versionEvidence": "vcpkg getopt-win32 port pins libimobiledevice-win32/getopt tag 0.1",
+      "licenseExpression": "LGPL-3.0",
+      "licenses": [
+        "LGPL-3.0-getopt-win32",
+        "GPL-3.0"
+      ],
+      "licenseEvidence": "repository LICENSE at tag 0.1; getopt.c header says \"License: LGPL\"",
+      "copyright": "Copyright Ludvik Jerabek (Visual C++ port); derived from the Free Software Foundation getopt library",
+      "homepage": "https://github.com/libimobiledevice-win32/getopt",
+      "source": {
+        "url": "https://github.com/libimobiledevice-win32/getopt/tree/0.1",
+        "note": "upstream project at the identified version; the exact build recipe is not recorded"
+      },
+      "bundle": "imobiledevice-net",
+      "files": [
+        "getopt.dll"
+      ]
+    },
+    {
+      "id": "msvc-runtime",
+      "name": "Microsoft Visual C++ 2015 Runtime (vcruntime140.dll)",
+      "version": "14.00.24406.0",
+      "versionEvidence": "FileVersion in VERSIONINFO",
+      "licenseExpression": "LicenseRef-Proprietary",
+      "licenses": [],
+      "attributionOnly": true,
+      "copyright": "(c) Microsoft Corporation. All rights reserved.",
+      "homepage": "https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist",
+      "bundle": "imobiledevice-net",
+      "files": [
+        "vcruntime140.dll"
+      ],
+      "notes": "Proprietary Microsoft runtime library, redistributed unmodified as part of the imobiledevice-net package. Not open source; its terms are Microsoft's and are not reproduced here."
+    },
+    {
+      "id": "apple-mobile-device-support",
+      "name": "Apple Mobile Device Support",
+      "version": "see win/apple-drivers/version.txt in the installed app",
+      "versionEvidence": "written by the Windows release build when it extracts the installer",
+      "licenseExpression": "LicenseRef-Proprietary",
+      "licenses": [],
+      "attributionOnly": true,
+      "platforms": [
+        "win"
+      ],
+      "copyright": "(c) Apple Inc.",
+      "homepage": "https://www.apple.com/itunes/download/win64",
+      "shippedAt": "resources/win/apple-drivers/AppleMobileDeviceSupport64.msi (Windows only; added by the release build, not stored in the repository)",
+      "notes": "Proprietary Apple software, redistributed unmodified. It is extracted from Apple's iTunes for Windows installer when the Windows build is made and is installed only if you choose to set up iPhone sync and confirm the Windows prompt. It is not open source and is not covered by these notices."
+    },
+    {
+      "id": "electron",
+      "name": "Electron and Chromium",
+      "version": "the Electron version this build of Keepr ships with",
+      "versionEvidence": "not repeated here so this file does not change on every Electron update",
+      "licenseExpression": "MIT AND (Chromium notices)",
+      "licenses": [
+        "MIT-electron",
+        "Chromium-notices"
+      ],
+      "copyright": "Copyright (c) Electron contributors; Copyright (c) 2013-2020 GitHub Inc.",
+      "homepage": "https://www.electronjs.org",
+      "platforms": [
+        "win",
+        "mac"
+      ],
+      "notes": "Keepr is built on Electron, which includes Chromium, Node.js, FFmpeg and other components. Their licences are in LICENSES.chromium.html. On Windows this also covers the graphics libraries Electron installs beside Keepr.exe (d3dcompiler_47.dll, dxcompiler.dll, dxil.dll, libEGL.dll, libGLESv2.dll, vk_swiftshader.dll, vulkan-1.dll, ffmpeg.dll)."
+    },
+    {
+      "id": "noble-curves",
+      "name": "@noble/curves (vendored in the Keepr Chrome extension)",
+      "version": "1.9.7",
+      "versionEvidence": "chrome-extension/vendor/LICENSE-noble.txt and SBOM.json",
+      "licenseExpression": "MIT",
+      "licenses": [
+        "MIT-noble"
+      ],
+      "copyright": "Copyright (c) 2022 Paul Miller (https://paulmillr.com)",
+      "homepage": "https://github.com/paulmillr/noble-curves",
+      "platforms": [
+        "win",
+        "mac"
+      ]
+    }
+  ]
+}

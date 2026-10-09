@@ -10,6 +10,11 @@ import { ipcMain, dialog, BrowserWindow } from "electron";
 import { exportUserData, writeExportFile } from "../services/ccpaExportService";
 import logService from "../services/logService";
 import { wrapHandler } from "../utils/wrapHandler";
+import {
+  getCrashReportingState,
+  setCrashReportingEnabled,
+  type CrashReportingState,
+} from "../services/crashReportingPreference";
 
 /**
  * Register CCPA/privacy IPC handlers
@@ -79,6 +84,35 @@ export function registerCcpaHandlers(): void {
       );
 
       return { success: true, filePath };
+    }, { module: "CcpaHandlers" }),
+  );
+
+  /**
+   * BACKLOG-3801: the "Send crash reports" switch in Settings → Data & Privacy.
+   * Turning it off stops all Sentry sending immediately; turning it on after a
+   * launch that started off takes effect on the next launch.
+   */
+  ipcMain.handle(
+    "privacy:get-crash-reporting",
+    wrapHandler(async (): Promise<{ success: boolean } & Partial<CrashReportingState>> => {
+      return { success: true, ...getCrashReportingState() };
+    }, { module: "CcpaHandlers" }),
+  );
+
+  ipcMain.handle(
+    "privacy:set-crash-reporting",
+    wrapHandler(async (_event, enabled: unknown): Promise<{ success: boolean; error?: string } & Partial<CrashReportingState>> => {
+      if (typeof enabled !== "boolean") {
+        return { success: false, error: "enabled must be a boolean" };
+      }
+      try {
+        const state = setCrashReportingEnabled(enabled);
+        logService.info(`[CcpaHandlers] Crash reporting set to ${enabled ? "on" : "off"}`, "CcpaHandlers");
+        return { success: true, ...state };
+      } catch (err) {
+        logService.error("[CcpaHandlers] Failed to save crash reporting choice", "CcpaHandlers", { error: err instanceof Error ? err.message : String(err) });
+        return { success: false, error: "Could not save the setting", ...getCrashReportingState() };
+      }
     }, { module: "CcpaHandlers" }),
   );
 

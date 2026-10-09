@@ -28,9 +28,10 @@
  * de-duplication -- a meaningfully larger change with its own failure surface. What
  * makes dropping acceptable is that the run is NOT actually lost: `@sentry/electron`
  * defaults to `makeElectronOfflineTransport` with `flushAtStartup: true`
- * (main/sdk.js), and `Sentry.init` in electron/main.ts does not override the
- * transport, so the Sentry event for that same sync is persisted to disk and sent on
- * a later launch. The asymmetry is real and worth stating: an offline run reaches
+ * (main/sdk.js), and `Sentry.init` (electron/bootstrap/installSentry.ts) keeps that
+ * offline transport, so the Sentry event for that same sync is persisted to disk and
+ * sent on a later launch — unless the user has turned crash reports off
+ * (BACKLOG-3801), in which case it is dropped, not queued. The asymmetry is real and worth stating: an offline run reaches
  * Sentry late and never reaches the corpus. A drop is logged with its own line so
  * "the corpus is thinner than Sentry" is diagnosable rather than mysterious.
  *

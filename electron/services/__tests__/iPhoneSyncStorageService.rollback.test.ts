@@ -51,6 +51,7 @@ jest.mock("../db/externalContactDbService");
 jest.mock("../iosMessagesParser", () => ({
   iOSMessagesParser: {
     resolveAttachmentPath: jest.fn(),
+    flushRejectedPathSummary: jest.fn(),
   },
 }));
 jest.mock("../../utils/messageTypeDetector", () => ({
@@ -956,6 +957,9 @@ describe("cancel during attachments phase", () => {
 
     // Orphaned files should be cleaned up
     expect(mockFsPromises.unlink).toHaveBeenCalledWith("/mock/userData/message-attachments/abc123.jpg");
+
+    // BACKLOG-3789: rejected attachment paths are summarized once, even on cancel
+    expect(iOSMessagesParser.flushRejectedPathSummary).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -42,15 +42,15 @@ const nextConfig = {
   async headers() {
     const cspDirectives = [
       "default-src 'self'",
-      // unsafe-eval required in both dev (HMR) and prod (Clarity uses dynamic evaluation)
-      "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://www.clarity.ms https://scripts.clarity.ms",
+      // unsafe-eval kept as-is (BACKLOG-3782 removed only the session-recording hosts)
+      "script-src 'self' 'unsafe-eval' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
       // blob: required for HEIC image conversion (AttachmentViewerModal, AttachmentList)
       "img-src 'self' data: blob: https:",
       // next/font/google downloads at build time and self-hosts - no external font CDN needed
       "font-src 'self'",
       // Supabase API and Realtime WebSocket connections
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.clarity.ms https://*.sentry.io",
+      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.sentry.io",
       // PDF preview uses iframes with signed Supabase storage URLs
       "frame-src 'self' https://*.supabase.co",
       // Video preview uses <video src={signedUrl}> from Supabase storage

@@ -1,7 +1,7 @@
 {
   "name": "keepr",
   "version": "2.39.0",
-  "description": "Keepr - Export and archive iMessage conversations and emails",
+  "description": "Keepr - every text and email from a real estate transaction in one audit-ready package",
   "main": "electron/main.js",
   "engines": {
     "node": ">=20.0.0"
@@ -91,7 +91,10 @@
     "imessage",
     "outlook"
   ],
-  "author": "",
+  "author": {
+    "name": "Blue Spaces LLC",
+    "email": "support@keeprcompliance.com"
+  },
   "license": "UNLICENSED",
   "private": true,
   "devDependencies": {
@@ -223,6 +226,16 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
+      "extraResources": [
+        {
+          "from": "node_modules/electron/dist/LICENSES.chromium.html",
+          "to": "third-party/LICENSES.chromium.html"
+        },
+        {
+          "from": "node_modules/electron/dist/LICENSE",
+          "to": "third-party/LICENSE.electron.txt"
+        }
+      ],
       "target": [
         {
           "target": "dmg",
@@ -289,6 +302,13 @@
       {
         "from": "scripts/cleanup-windows.ps1",
         "to": "cleanup-windows.ps1"
+      },
+      {
+        "from": "resources/third-party",
+        "to": "third-party",
+        "filter": [
+          "**/*"
+        ]
       }
     ]
   },
@@ -305,7 +325,7 @@
     "underscore": ">=1.13.8",
     "@tootallnate/once": ">=3.0.1",
     "brace-expansion": ">=5.0.6",
-    "handlebars": ">=4.7.9",
+    "handlebars": ">=4.7.10",
     "flatted": ">=3.4.2",
     "picomatch": ">=2.3.2",
     "yaml": ">=2.7.1",

@@ -123,6 +123,9 @@ export type SyncRunState = SyncOutcome | "running";
  */
 export const SYNC_RUN_HEARTBEAT_MS = 120_000;
 
+/** BACKLOG-3784: renderer heartbeat silence longer than this is logged as a gap. */
+export const RENDERER_GAP_MS = 3_000;
+
 /**
  * The one dimension that separates BACKLOG-2952's other sources from this one.
  * Exported so the transport and its tests name the same string the row does.
@@ -185,6 +188,22 @@ export interface SyncOutcomeRow {
  * call. A reporter that needs I/O fires and forgets.
  */
 export type SyncOutcomeReporter = (row: SyncOutcomeRow) => void;
+
+/**
+ * BACKLOG-3784: the run that most recently ENDED. `endSync` clears the live state
+ * before main tells the renderer storage is complete, so the completion ack (which
+ * arrives later, from the renderer) is measured against this instead.
+ */
+export interface LastSyncRun {
+  runId: string;
+  outcome: SyncOutcome;
+  startedAt: number;
+  endedAt: number;
+  /** When main sent `sync:storage-complete`. Null until it does. */
+  storageCompleteSentAt: number | null;
+  /** When the renderer reported the completion UI shown. Null until it does. */
+  completionShownAt: number | null;
+}
 
 /**
  * BACKLOG-3440: where a run reports that it has STARTED and that it is STILL ALIVE.
@@ -273,6 +292,11 @@ export class SyncTimeline {
   private readonly heartbeatMs: number;
   private readonly newRunId: () => string;
 
+  private lastRun: LastSyncRun | null = null;
+
+  /** BACKLOG-3784: when main last heard the renderer's sync heartbeat. */
+  private lastRendererTickAt: number | null = null;
+
   constructor(
     options: {
       now?: () => number;
@@ -306,6 +330,8 @@ export class SyncTimeline {
   /** Start a sync. Clears any previous run's records AND context. */
   beginSync(meta: TimelineMeta = {}): void {
     this.stopHeartbeat();
+    this.lastRun = null;
+    this.lastRendererTickAt = null;
     this.phaseRecords = [];
     this.context = {};
     this.bytesTransferred = null;
@@ -540,6 +566,18 @@ export class SyncTimeline {
     // The `sync-end` line above is deliberately NOT guarded: it is BACKLOG-2898's
     // contract and a duplicate there is still only noise.
     if (wasOpen) this.emitOutcome(outcome, elapsedMs, counts);
+    // BACKLOG-3784: keep what the completion ack needs after the live state is cleared.
+    this.lastRun =
+      wasOpen && this.syncStartedAt !== null
+        ? {
+            runId: this.runId ?? "",
+            outcome,
+            startedAt: this.syncStartedAt,
+            endedAt: this.syncStartedAt + elapsedMs,
+            storageCompleteSentAt: null,
+            completionShownAt: null,
+          }
+        : null;
     // BACKLOG-3440: the run is over, so nothing may write to its row again. A heartbeat
     // still firing after the terminal write is the single most likely way this whole
     // instrument could produce a NEW false signal — a completed sync left reading
@@ -649,6 +687,89 @@ export class SyncTimeline {
     this.sink(`[SyncTimeline] mark name=${name}${formatted ? " " + formatted : ""}`);
   }
 
+  /**
+   * BACKLOG-3784: main is about to send `sync:storage-complete`. Stamped so the
+   * renderer's completion ack can be measured against the send, not the sync end.
+   */
+  markStorageCompleteSent(): void {
+    if (this.lastRun) this.lastRun.storageCompleteSentAt = this.now();
+  }
+
+  /**
+   * BACKLOG-3784: the renderer reports the completion UI was shown. One line:
+   * `elapsedMs` from sync start (user-visible duration) and `lagMs` from the
+   * storage-complete send to this ack arriving in main.
+   *
+   * The renderer also sends its own wall-clock stamps (same machine, same clock):
+   * `receivedAt` (its storage-complete handler ran) and `shownAt` (the frame after
+   * the completion state committed). That splits `lagMs` into three legs:
+   *   receivedLagMs = receivedAt - send   -> event delivery / renderer busy before it
+   *   renderMs      = shownAt - receivedAt -> renderer work to show it
+   *   ackLagMs      = arrival - shownAt     -> main busy before it read the ack
+   * Timings only. Recorded once per run; later acks are ignored.
+   */
+  markCompletionShown(ack: { receivedAt?: number; shownAt?: number } = {}): void {
+    const run = this.lastRun;
+    if (!run || run.completionShownAt !== null) return;
+    const at = this.now();
+    run.completionShownAt = at;
+    const isStamp = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+    const sent = run.storageCompleteSentAt;
+    const fields: TimelineMeta = {
+      elapsedMs: at - run.startedAt,
+      ...(sent !== null ? { lagMs: at - sent } : {}),
+      ...(sent !== null && isStamp(ack.receivedAt)
+        ? { receivedLagMs: Math.round(ack.receivedAt) - sent }
+        : {}),
+      ...(isStamp(ack.receivedAt) && isStamp(ack.shownAt)
+        ? { renderMs: Math.round(ack.shownAt) - Math.round(ack.receivedAt) }
+        : {}),
+      ...(isStamp(ack.shownAt) ? { ackLagMs: at - Math.round(ack.shownAt) } : {}),
+      outcome: run.outcome,
+    };
+    this.sink(`[SyncTimeline] completion-shown ${formatFields(fields)}`);
+  }
+
+  /**
+   * BACKLOG-3784: RENDERER HEARTBEAT. While an iPhone sync is showing, the renderer
+   * ticks once a second. Silent while healthy; when ticks resume after a gap longer
+   * than `RENDERER_GAP_MS`, ONE line brackets the freeze to the second:
+   * `[SyncTimeline] renderer-gap gapMs=<n> phase=<p> hidden=<bool>`.
+   * `first` marks a new sync's first tick, so the idle time between syncs is never
+   * reported as a gap. `hidden` is the renderer's own visibility: Chromium throttles
+   * timers in a hidden window, so a gap with hidden=true may be throttling, not a hang.
+   */
+  noteRendererTick(tick: { first?: boolean; hidden?: boolean } = {}): void {
+    const at = this.now();
+    const previous = this.lastRendererTickAt;
+    this.lastRendererTickAt = at;
+    if (tick.first || previous === null) return;
+    const gapMs = at - previous;
+    if (gapMs <= RENDERER_GAP_MS) return;
+    this.sink(
+      `[SyncTimeline] renderer-gap gapMs=${gapMs} phase=${this.currentPhase() ?? "none"} hidden=${tick.hidden === true}`,
+    );
+  }
+
+  /** BACKLOG-3784: snapshot of the most recently ended run, or null. */
+  lastRunSnapshot(): LastSyncRun | null {
+    return this.lastRun ? { ...this.lastRun } : null;
+  }
+
+  /**
+   * BACKLOG-3784: the phase a sync is in right now, for freeze telemetry. The open
+   * phase name if a sync is running; "post-sync" within `postSyncWindowMs` of the
+   * last run ending; otherwise null. Phase names only — no user data.
+   */
+  currentPhase(postSyncWindowMs = 10 * 60_000): string | null {
+    if (this.syncStartedAt !== null) {
+      const open = this.phaseRecords[this.phaseRecords.length - 1];
+      return open && open.endedAt === null ? open.phase : "running";
+    }
+    if (this.lastRun && this.now() - this.lastRun.endedAt <= postSyncWindowMs) return "post-sync";
+    return null;
+  }
+
   /** Every phase of the current (or just-finished) sync, in order. */
   records(): SyncPhaseRecord[] {
     return this.phaseRecords.map((r) => ({ ...r, counts: { ...r.counts } }));
@@ -657,6 +778,8 @@ export class SyncTimeline {
   /** Drop all state without emitting. */
   reset(): void {
     this.stopHeartbeat();
+    this.lastRun = null;
+    this.lastRendererTickAt = null;
     this.phaseRecords = [];
     this.syncStartedAt = null;
     this.runId = null;

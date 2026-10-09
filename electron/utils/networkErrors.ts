@@ -21,6 +21,8 @@ const NETWORK_ERROR_CODES: ReadonlyArray<string> = [
   "ENETDOWN",
   "EHOSTUNREACH",
   "EPIPE",
+  // axios code for a transport failure with no response (BACKLOG-3799)
+  "ERR_NETWORK",
 ];
 
 /**
@@ -39,6 +41,39 @@ const NETWORK_ERROR_MESSAGES: ReadonlyArray<string> = [
   "connection timed out",
   "network is unreachable",
 ];
+
+/** Chromium network-stack failures surface as "net::ERR_*" (BACKLOG-3799). */
+const CHROMIUM_NET_ERROR = /net::err_[a-z0-9_]+/i;
+const MAX_CAUSE_DEPTH = 4;
+
+/**
+ * True when the error, or anything on its `cause` chain, is a Chromium
+ * `net::ERR_*` transport failure (what Electron `net.fetch` rejects with,
+ * wrapped by axios / gaxios). `net::ERR_ABORTED` is a cancellation, not a
+ * network failure, and is excluded. Certificate failures (`net::ERR_CERT_*`)
+ * are included only when `includeCert` is set: they classify as network for
+ * the UI but will not heal on retry.
+ */
+export function isChromiumNetError(
+  error: unknown,
+  includeCert = true,
+): boolean {
+  let current: unknown = error;
+  for (let depth = 0; current && depth <= MAX_CAUSE_DEPTH; depth++) {
+    const message = (current as { message?: unknown }).message;
+    if (typeof message === "string") {
+      const match = message.match(CHROMIUM_NET_ERROR);
+      if (match) {
+        const name = match[0].toLowerCase();
+        if (name !== "net::err_aborted" && (includeCert || !name.startsWith("net::err_cert_"))) {
+          return true;
+        }
+      }
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
 
 /**
  * Determines if an error is caused by a network connectivity issue.
@@ -66,6 +101,8 @@ const NETWORK_ERROR_MESSAGES: ReadonlyArray<string> = [
  */
 export function isNetworkError(error: unknown): boolean {
   if (!error) return false;
+
+  if (isChromiumNetError(error)) return true;
 
   // Check error code (Node.js system errors)
   const errorCode = (error as { code?: string }).code;
