@@ -267,4 +267,31 @@ describe("quit during linkMessages (BACKLOG-3785)", () => {
     expect(handler({ preventDefault: jest.fn() })).toBe(false);
     endStuck();
   });
+
+  it("a second quit during the wait is held, starts no second wait, and the single max-wait still ends it", async () => {
+    jest.useFakeTimers();
+    const onTimeout = jest.fn();
+    const { app, handler } = makeQuitHandler(60_000, onTimeout);
+    const endStuck = beginLink();
+    const e1 = { preventDefault: jest.fn() };
+    const e2 = { preventDefault: jest.fn() };
+
+    expect(handler(e1)).toBe(true);
+    jest.advanceTimersByTime(30_000);
+    // The user presses Quit again 30 s into the wait.
+    expect(handler(e2)).toBe(true);
+    expect(e2.preventDefault).toHaveBeenCalledTimes(1);
+    expect(app.quit).not.toHaveBeenCalled();
+
+    // Bound is measured from the FIRST quit (not restarted by the second).
+    jest.advanceTimersByTime(29_999);
+    await flush();
+    expect(app.quit).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(1);
+    await flush();
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(app.quit).toHaveBeenCalledTimes(1);
+    expect(handler({ preventDefault: jest.fn() })).toBe(false);
+    endStuck();
+  });
 });
