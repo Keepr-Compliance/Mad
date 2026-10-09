@@ -265,6 +265,17 @@ const PICKER_MESSAGE_COLUMNS = `
       m.transaction_id, m.message_type,
       m.associated_message_type, m.associated_message_guid, m.created_at`;
 
+/** The fields `PICKER_MESSAGE_COLUMNS` returns (plus the joined thread name) — and no others. */
+export type PickerMessage = Pick<
+  Message,
+  | "id" | "user_id" | "external_id" | "channel" | "direction" | "subject"
+  | "body_html" | "body_text" | "participants" | "participants_flat"
+  | "thread_id" | "sent_at" | "received_at" | "has_attachments"
+  | "transaction_id" | "message_type"
+  | "associated_message_type" | "associated_message_guid" | "created_at"
+  | "thread_display_name"
+>;
+
 /**
  * Get unlinked messages for a specific contact (phone number)
  * Used after user selects a contact in the contact-first UI
@@ -273,7 +284,7 @@ const PICKER_MESSAGE_COLUMNS = `
  * ALL messages from those threads. This ensures group chats are fully captured
  * even when individual messages have different handles.
  */
-export function getMessagesByContact(userId: string, contact: string): Message[] {
+export function getMessagesByContact(userId: string, contact: string): PickerMessage[] {
   const db = ensureDb();
 
   // Step 1: Find all thread_ids where the contact appears in any message
@@ -311,7 +322,7 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
         )
       ORDER BY m.sent_at DESC
     `;
-    const rows = db.prepare(fallbackSql).all(userId, contact, contact) as Message[];
+    const rows = db.prepare(fallbackSql).all(userId, contact, contact) as PickerMessage[];
     return rows.filter((m) => !isReactionRow(m));
   }
 
@@ -325,7 +336,7 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
       AND m.thread_id IN (${placeholders})
     ORDER BY m.sent_at DESC
   `;
-  const rows = db.prepare(messagesSql).all(userId, ...threadIds) as Message[];
+  const rows = db.prepare(messagesSql).all(userId, ...threadIds) as PickerMessage[];
   return rows.filter((m) => !isReactionRow(m));
 }
 

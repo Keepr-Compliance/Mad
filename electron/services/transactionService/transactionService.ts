@@ -96,6 +96,7 @@ import type {
   AssignContactResult,
 } from "./types";
 import { beginLink } from "../../utils/linkInFlight";
+import type { PickerMessage } from "../db/messageDbService";
 
 /**
  * BACKLOG-3785: how many messages `linkMessages` writes per transaction before
@@ -2075,7 +2076,10 @@ class TransactionService {
   /**
    * Get unlinked messages for a specific contact
    */
-  async getMessagesByContact(userId: string, contact: string): Promise<Message[]> {
+  async getMessagesByContact(
+    userId: string,
+    contact: string,
+  ): Promise<PickerMessage[]> {
     const messages = await databaseService.getMessagesByContact(userId, contact);
 
     await logService.info(
