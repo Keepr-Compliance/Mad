@@ -78,14 +78,10 @@ import {
 } from "../../types/ipc/window-api-at-rest";
 import { getAtRestFiles, getDataKeyService } from "./dataKeyService";
 import {
-  ALGORITHM_ID,
   AtRestIntegrityError,
-  FORMAT_VERSION,
-  HEADER_BYTES,
   KENC_TMP_SUFFIX,
   MAGIC,
-  MAX_CHUNK_BYTES,
-  layoutFor,
+  probeHeaderFromHandle,
   type FileCrypto,
 } from "./fileCrypto";
 import { getMarkerStore, SCOPE_EMAIL_ATTACHMENTS, SCOPE_MESSAGE_ATTACHMENTS, type MarkerStore } from "./markers";
@@ -155,33 +151,18 @@ interface WalkResult {
 }
 
 /**
- * Marker present AND full-header structural check fails (C-S3a). Such a file is not
- * plaintext we can safely encrypt: re-encrypting would wrap the damage in a valid
- * container and bury it for good. TODO(S1 merged): call S1's exported header check
- * instead of this local copy of the structural rules.
+ * Marker present AND S1's full-header structural check fails (C-S3a). Such a file is
+ * not plaintext we can safely encrypt: re-encrypting would wrap the damage in a valid
+ * container and bury it for good. The structural rules live in one place —
+ * fileCrypto's probeHeaderFromHandle — and both reads here come from one open handle.
  */
-export function looksLikeDamagedKeprenc(buf: Buffer, fileSize: number): boolean {
-  if (buf.length < MAGIC.length || !buf.subarray(0, MAGIC.length).equals(MAGIC)) return false;
-  if (buf.length < HEADER_BYTES) return true;
-  if (buf[7] !== FORMAT_VERSION || buf[8] !== ALGORITHM_ID) return true;
-  for (const i of [9, 10, 11]) if (buf[i] !== 0) return true;
-  for (let i = 48; i < HEADER_BYTES; i++) if (buf[i] !== 0) return true;
-  const chunkSize = buf.readUInt32BE(44);
-  if (chunkSize < 1 || chunkSize > MAX_CHUNK_BYTES) return true;
-  try {
-    layoutFor(fileSize, chunkSize);
-  } catch {
-    return true;
-  }
-  return false;
-}
-
-async function isDamagedKeprenc(file: string, size: number): Promise<boolean> {
+export async function looksLikeDamagedKeprenc(file: string): Promise<boolean> {
   const handle = await fs.promises.open(file, "r");
   try {
-    const buf = Buffer.alloc(HEADER_BYTES);
-    const { bytesRead } = await handle.read(buf, 0, HEADER_BYTES, 0);
-    return looksLikeDamagedKeprenc(buf.subarray(0, bytesRead), size);
+    const head = Buffer.alloc(MAGIC.length);
+    const { bytesRead } = await handle.read(head, 0, MAGIC.length, 0);
+    if (bytesRead < MAGIC.length || !head.equals(MAGIC)) return false;
+    return !(await probeHeaderFromHandle(handle)).encrypted;
   } finally {
     await handle.close();
   }
@@ -292,7 +273,7 @@ export function createAtRestMigration(deps: MigrationDeps): AtRestMigration {
           if (!st.isFile()) continue;
           result.regular++;
           // Checked before isEncrypted: a damaged-header file may read as either.
-          if (await isDamagedKeprenc(full, st.size)) {
+          if (await looksLikeDamagedKeprenc(full)) {
             result.damaged++;
             continue;
           }

@@ -19,19 +19,14 @@
 import fs from "fs";
 import path from "path";
 
+import { SCOPE_EMAIL_ATTACHMENTS, SCOPE_MESSAGE_ATTACHMENTS } from "./markers";
+
 export class ContainmentError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ContainmentError";
   }
 }
-
-/**
- * Scope keys, named exactly as S3 (BACKLOG-3816 migration) exports them from
- * markers.ts. Kept here until the second of S2/S3 to merge switches to that one export.
- */
-export const SCOPE_MESSAGE_ATTACHMENTS = "message-attachments" as const;
-export const SCOPE_EMAIL_ATTACHMENTS = "email-attachments" as const;
 
 /** The attachment roots under userData, and the at-rest scope key each one migrates under. */
 export const ATTACHMENT_ROOTS = [
