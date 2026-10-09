@@ -135,3 +135,16 @@ describe("N: safeOpenName", () => {
     expect(out.endsWith(".jpeg")).toBe(true);
   });
 });
+
+describe("S: scope keys are the strings the migration marker uses", () => {
+  it("exact values", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const c = require("../containment");
+    expect(c.SCOPE_MESSAGE_ATTACHMENTS).toBe("message-attachments");
+    expect(c.SCOPE_EMAIL_ATTACHMENTS).toBe("email-attachments");
+    expect(c.ATTACHMENT_ROOTS.map((r: { scope: string }) => r.scope)).toEqual([
+      "message-attachments",
+      "email-attachments",
+    ]);
+  });
+});

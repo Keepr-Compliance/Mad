@@ -26,10 +26,17 @@ export class ContainmentError extends Error {
   }
 }
 
+/**
+ * Scope keys, named exactly as S3 (BACKLOG-3816 migration) exports them from
+ * markers.ts. Kept here until the second of S2/S3 to merge switches to that one export.
+ */
+export const SCOPE_MESSAGE_ATTACHMENTS = "message-attachments" as const;
+export const SCOPE_EMAIL_ATTACHMENTS = "email-attachments" as const;
+
 /** The attachment roots under userData, and the at-rest scope key each one migrates under. */
 export const ATTACHMENT_ROOTS = [
-  { dir: "message-attachments", scope: "message-attachments" },
-  { dir: "attachments", scope: "email-attachments" },
+  { dir: "message-attachments", scope: SCOPE_MESSAGE_ATTACHMENTS },
+  { dir: "attachments", scope: SCOPE_EMAIL_ATTACHMENTS },
 ] as const;
 
 export type AttachmentScope = (typeof ATTACHMENT_ROOTS)[number]["scope"];
