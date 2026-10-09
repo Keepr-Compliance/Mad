@@ -76,6 +76,18 @@ protocol.registerSchemesAsPrivileged([
       stream: true,
     },
   },
+  // BACKLOG-3816: encrypted attachments are served to the renderer through this
+  // scheme (decrypted in the main process). The handler is registered in whenReady.
+  {
+    scheme: 'keepr-attachment',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: false,
+      stream: true,
+    },
+  },
 ]);
 
 // ==========================================
@@ -199,6 +211,7 @@ import supabaseService from "./services/supabaseService";
 import { deepLinkSessionErrorToPayload } from "./services/supabaseNetError";
 import databaseService from "./services/databaseService";
 import { initializationBroadcaster } from "./services/initializationBroadcaster";
+import { atRestStartup } from "./services/atRest/startup";
 import sessionService from "./services/sessionService";
 import submissionService from "./services/submissionService";
 import {
@@ -1066,12 +1079,12 @@ function setupContentSecurityPolicy(): void {
           // NOTE: 'unsafe-inline' required for CSS-in-JS and dynamic styling.
           // This is also needed in production for the same reason.
           "style-src 'self' 'unsafe-inline'",
-          "img-src 'self' data: cid: https:",
+          "img-src 'self' data: cid: https: keepr-attachment:",
           "font-src 'self' data:",
           // Tightened: Specific port 5173 for Vite dev server + whitelisted external domains
           // Port 5173 is Vite's default dev server port (see vite.config.js and package.json)
           `connect-src 'self' http://localhost:5173 ws://localhost:5173 ${allowedConnectDomains}`,
-          "media-src 'self'",
+          "media-src 'self' keepr-attachment:",
           "object-src 'none'",
           "base-uri 'self'",
           "form-action 'self'",
@@ -1084,11 +1097,11 @@ function setupContentSecurityPolicy(): void {
           "script-src 'self'",
           // NOTE: 'unsafe-inline' required for CSS-in-JS and dynamic styling
           "style-src 'self' 'unsafe-inline'",
-          "img-src 'self' data: cid: https:",
+          "img-src 'self' data: cid: https: keepr-attachment:",
           "font-src 'self' data:",
           // Tightened: Only whitelisted external domains (no https: wildcard)
           `connect-src 'self' ${allowedConnectDomains}`,
-          "media-src 'self'",
+          "media-src 'self' keepr-attachment:",
           "object-src 'none'",
           "base-uri 'self'",
           "form-action 'self'",
@@ -1697,6 +1710,15 @@ app.whenReady().then(async () => {
     });
     log.info('[Protocol] app:// protocol handler registered for production');
   }
+
+  // BACKLOG-3816: keepr-attachment:// placeholder. Registered in every mode (dev
+  // included) so the scheme always resolves; it answers 404 until the reader slice
+  // (S2) replaces this body with the decrypting handler.
+  protocol.handle('keepr-attachment', () => new Response('Not Found', { status: 404 }));
+
+  // BACKLOG-3816: at-rest encryption background jobs. Runs once, after the local
+  // database is open (DB init is renderer-triggered, after this point).
+  atRestStartup.scheduleAfterDbReady(() => databaseService.isInitialized());
 
   // Set up Content Security Policy
   setupContentSecurityPolicy();
