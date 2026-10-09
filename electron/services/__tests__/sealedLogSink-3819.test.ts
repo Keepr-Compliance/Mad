@@ -13,7 +13,7 @@ import path from "path";
 
 import { SealedLogSink } from "../sealedLogSink";
 import { runLogMaintenance, trimSealedLogAsync } from "../logScrub";
-import { isSealedLog, openSealedLog, sealLogText } from "../atRest/sealedLog";
+import { isSealedLog, openSealedLog, sealLogText, replaceWithSealedRecordsAsync } from "../atRest/sealedLog";
 
 const KEY = { keyId: "33".repeat(16), key: Buffer.alloc(32, 3) };
 const keyFor = (id: string) => (id === KEY.keyId ? KEY.key : null);
@@ -208,6 +208,46 @@ describe("BACKLOG-3819 quit and memory bound during the deferred trim", () => {
     expect(text).toContain("AFTER will-quit");
     expect(text).toContain("stale 0");
     expect(tmpFiles()).toEqual([]);
+  });
+
+  it("a quit during the reseal pass (temp file already written) also leaves the original and no temp file", async () => {
+    const sink = staleSink();
+    sink.pause();
+    let fired = false;
+    const trim = trimSealedLogAsync(main, Date.now(), KEY, {
+      sliceMs: 0,
+      shouldAbort: () => sink.isClosing,
+      yieldFn: async () => {
+        if (!fired && tmpFiles().length > 0) {
+          fired = true;
+          sink.write(main, line("HELD during reseal"));
+          sink.flushAtExit();
+          sink.write(main, line("AFTER will-quit"));
+        }
+        await new Promise((r) => setImmediate(r));
+      },
+    });
+    expect(await trim).toBe("unchanged");
+    expect(fired).toBe(true);
+    const text = decrypted();
+    expect(text).toContain("HELD during reseal");
+    expect(text).toContain("AFTER will-quit");
+    expect(tmpFiles()).toEqual([]);
+  });
+
+  it("an abort that turns true only after the last yield is still honoured before the rename", async () => {
+    const sink = staleSink();
+    const before = fs.readFileSync(main);
+    let checks = 0;
+    const r = await replaceWithSealedRecordsAsync(main, [Buffer.from("a\n"), Buffer.from("b\n")], KEY, {
+      shouldYield: () => checks === 0,
+      yieldFn: async () => undefined,
+      shouldAbort: () => ++checks >= 2,
+    });
+    expect(r).toBe("aborted");
+    expect(fs.readFileSync(main).equals(before)).toBe(true);
+    expect(tmpFiles()).toEqual([]);
+    expect(sink.state).toBe("sealed");
   });
 
   it("held lines over the memory cap spill to the unsealed file, in order, and none are lost", () => {
