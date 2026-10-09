@@ -75,6 +75,17 @@ jest.mock("fs/promises", () => ({
   unlink: jest.fn().mockResolvedValue(undefined),
 }));
 
+// BACKLOG-3816 S2: attachment copies now go through the at-rest reader
+// (decryptToFile). This suite is about WHICH files are exported and WHERE, so the
+// reader is routed to this file's copyFile mock; decrypt-on-read is proven in
+// electron/services/atRest/__tests__/attachmentReaders.test.ts.
+jest.mock("../atRest/attachmentReader", () => ({
+  decryptStoredAttachmentTo: (src: string, dest: string) =>
+    (jest.requireMock("fs/promises") as { copyFile: (a: string, b: string) => Promise<void> }).copyFile(src, dest),
+  readStoredAttachment: jest.fn(async () => Buffer.alloc(0)),
+  statStoredAttachment: jest.fn(async () => null),
+}));
+
 jest.mock("../logService", () => ({
   __esModule: true,
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn(), log: jest.fn() },

@@ -152,7 +152,8 @@ import {
 } from "../../utils/diskSpace";
 import { readLocalSnapshotCount } from "../../utils/localSnapshots";
 import { DISK_SPACE_THRESHOLDS } from "../diagnostics/diskSpaceDiagnostics";
-import { isAtRestWriteRefused, readAttachmentBytes, sealFileFrom } from "../atRest/attachmentWriter";
+import { isAtRestWriteRefused, sealFileFrom } from "../atRest/attachmentWriter";
+import { readStoredAttachment } from "../atRest/attachmentReader";
 
 /**
  * macOS Messages Import Service
@@ -2693,8 +2694,9 @@ class MacOSMessagesImportService {
       if (!fs.existsSync(storagePath)) {
         return null;
       }
-      // BACKLOG-3816: stored attachments are KEPRENC ciphertext (pre-migration plaintext passes through).
-      const buffer = await readAttachmentBytes(storagePath);
+      // BACKLOG-3816: the shared attachment reader — structural detection on one handle,
+      // pre-migration plaintext passes through until the scope is marked done.
+      const buffer = await readStoredAttachment(storagePath);
       return buffer.toString("base64");
     } catch (error) {
       logService.warn(

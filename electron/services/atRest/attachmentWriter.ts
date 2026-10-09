@@ -137,14 +137,3 @@ export async function hashSourceFile(sourcePath: string): Promise<{ sha256: stri
 export async function sourceFileSize(sourcePath: string): Promise<number> {
   return (await fs.promises.stat(sourcePath)).size;
 }
-
-/**
- * Decrypt a STORED attachment fully into memory (all-or-nothing). A reader, so it
- * is NOT blocked by a remembered write refusal. Classification is structural
- * (fileCrypto "Detection"): a pre-migration plaintext file — including one whose
- * content starts with "KEPRENC" — is returned as-is; a real container is decrypted
- * and throws on a failed tag or a key that is not held.
- */
-export function readAttachmentBytes(storagePath: string, files: FileCrypto = getAtRestFiles()): Promise<Buffer> {
-  return files.readAllDecrypted(storagePath);
-}
