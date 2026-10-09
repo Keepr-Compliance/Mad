@@ -1,6 +1,6 @@
 {
   "name": "keepr",
-  "version": "2.39.0",
+  "version": "2.40.0-beta.2",
   "description": "Keepr - every text and email from a real estate transaction in one audit-ready package",
   "main": "electron/main.js",
   "engines": {
