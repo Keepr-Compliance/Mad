@@ -39,7 +39,7 @@
 import { hostLogger } from "../../capabilities/loggerProvider";
 import { DataKeyUnavailableError, getDataKeyService } from "./dataKeyService";
 import { runConfiguredLogMaintenance } from "../logScrub";
-import { getLogSink } from "../sealedLogSink";
+import { getLogSink, isLogSealingEnabled } from "../sealedLogSink";
 import type { AtRestKey } from "./fileCrypto";
 
 export interface AtRestJobContext {
@@ -192,6 +192,17 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
       // plaintext, merge main.unsealed.log) runs BEFORE the sink starts sealing,
       // and nothing awaits between the two, so no line lands mid-replacement.
       const sink = getLogSink();
+      if (!isLogSealingEnabled()) {
+        // Dev build (BACKLOG-3819, dc27e73c): logs stay redacted plaintext. No key,
+        // so maintenance only retains + redacts and never seals; the sink is unused.
+        const plain = runConfiguredLogMaintenance(Date.now(), { key: null });
+        if (!plain) return ctx.log("warn", "[AtRest] logs: no log directory registered; skipped");
+        return ctx.log(
+          plain.errors.length ? "warn" : "info",
+          `[AtRest] logs: sealing off (dev build); rewritten ${plain.rewritten.length}, ` +
+            `deleted ${plain.deleted.length}, errors ${plain.errors.length}`,
+        );
+      }
       let key: AtRestKey | null = null;
       try {
         key = await getDataKeyService().currentKey();

@@ -328,6 +328,23 @@ export function mergeUnsealedLog(file: string, now: number, key: AtRestKey): str
   return target;
 }
 
+/**
+ * Dev builds write plaintext logs (BACKLOG-3819, dc27e73c). A live log that an
+ * earlier build sealed must not have plaintext appended behind its KEPRLOG
+ * header — that would make everything after the header unreadable. Move it
+ * aside as an archive (`main.sealed-<time>.old.log`): readers still decrypt it,
+ * and it expires by mtime like any archive. Returns the new path, or null when
+ * the file is missing or not sealed.
+ */
+export function setAsideSealedLiveLog(file: string, now: number = Date.now()): string | null {
+  if (!isSealedLogFile(file)) return null;
+  const p = path.parse(file);
+  const stamp = new Date(now).toISOString().replace(/[-:]/g, "").replace(/\..*$/, "");
+  const aside = path.join(p.dir, `${p.name}.sealed-${stamp}.old${p.ext}`);
+  fs.renameSync(file, aside);
+  return aside;
+}
+
 let resolveLogDirectory: (() => string) | null = null;
 
 /** Called by the Electron shell: where electron-log writes its files. */

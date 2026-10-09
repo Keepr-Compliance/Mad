@@ -205,6 +205,21 @@ export class SealedLogSink {
 }
 
 let sink: SealedLogSink | null = null;
+let sealingEnabled = true;
+
+/**
+ * Whether this process seals its logs at rest. Set once, first thing, by
+ * bootstrap/installAppDataPaths.ts from `logsSealedAtRest` (packaged = sealed,
+ * dev = redacted plaintext). The at-rest "logs" job reads it, so the file
+ * transport and the job can never disagree.
+ */
+export function setLogSealingEnabled(enabled: boolean): void {
+  sealingEnabled = enabled;
+}
+
+export function isLogSealingEnabled(): boolean {
+  return sealingEnabled;
+}
 
 /** The process-wide sink the electron-log transport writes through. */
 export function getLogSink(): SealedLogSink {
@@ -215,4 +230,5 @@ export function getLogSink(): SealedLogSink {
 /** Tests only. */
 export function resetLogSinkForTests(next: SealedLogSink | null = null): void {
   sink = next;
+  sealingEnabled = true;
 }

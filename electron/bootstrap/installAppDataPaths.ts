@@ -17,8 +17,7 @@ import path from "path";
 import { applyAppDataPaths, buildConsoleNotice } from "./appDataPaths";
 import { installLogRedactionHook } from "../config/logFileConfig";
 import { setLogDirectoryResolver } from "../services/logScrub";
-import { installSealedFileTransport } from "../config/sealedLogTransport";
-import { getLogSink } from "../services/sealedLogSink";
+import { installLogSealing, prepareDevLogFile } from "./installLogSealing";
 
 // BACKLOG-3819: redact customer emails and phone numbers from every log line.
 // Installed here, the first import in main.ts, because modules imported after
@@ -26,16 +25,22 @@ import { getLogSink } from "../services/sealedLogSink";
 // during import — main.ts's own `applyLogFileConfig` line runs too late for
 // those writes. Unconditional: dev and packaged builds both redact.
 installLogRedactionHook(log);
-// BACKLOG-3819: log files are encrypted at rest. The file transport is replaced
-// HERE, before any module can write, so no line ever reaches main.log as
-// plaintext. Until the data key opens (atRest/startup.ts "logs" job, after the
-// database opens) lines are held in memory; see services/sealedLogSink.ts for
-// the plaintext window. If the process ends first, the held lines are written,
-// redacted, to main.unsealed.log and sealed at the next launch.
-installSealedFileTransport(log as unknown as { transports: Record<string, unknown> }, getLogSink());
-process.on("exit", () => getLogSink().flushAtExit());
-// Also on a normal quit, before Electron tears the process down. Idempotent.
-if (typeof app?.on === "function") app.on("will-quit", () => getLogSink().flushAtExit());
+// BACKLOG-3819: in the installed (packaged) app, log files are encrypted at
+// rest. The file transport is replaced HERE, before any module can write, so no
+// line ever reaches main.log as plaintext. Until the data key opens
+// (atRest/startup.ts "logs" job, after the database opens) lines are held in
+// memory; see services/sealedLogSink.ts for the plaintext window. If the process
+// ends first, the held lines are written, redacted, to main.unsealed.log and
+// sealed at the next launch. Dev (unpackaged) builds keep electron-log's own
+// transport: redacted plaintext (founder decision dc27e73c).
+const logsSealed = installLogSealing(log as unknown as { transports: Record<string, unknown> }, {
+  isPackaged: app?.isPackaged === true,
+  onExit: (flush) => {
+    process.on("exit", flush);
+    // Also on a normal quit, before Electron tears the process down. Idempotent.
+    if (typeof app?.on === "function") app.on("will-quit", flush);
+  },
+});
 // Where the at-rest startup job (atRest/startup.ts "logs") applies retention and
 // the one-time scrub. Resolved when the job runs, after any path override below.
 setLogDirectoryResolver(() => path.dirname(log.transports.file.getFile().path));
@@ -61,3 +66,8 @@ if (applied) {
   // eslint-disable-next-line no-console
   console.warn(buildConsoleNotice(applied));
 }
+
+// BACKLOG-3819: dev writes plaintext. A live log sealed by an earlier build is
+// moved aside (still readable by the decrypting readers) before anything appends
+// plaintext behind its header. After the path override above, before any write.
+if (!logsSealed) prepareDevLogFile(log as unknown as { transports: Record<string, unknown> });

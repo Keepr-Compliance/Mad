@@ -29,7 +29,7 @@ jest.mock("../dataKeyService", () => {
 });
 
 import { AtRestStartup, registerDefaultJobs } from "../startup";
-import { getLogSink, resetLogSinkForTests, SealedLogSink } from "../../sealedLogSink";
+import { getLogSink, resetLogSinkForTests, SealedLogSink, setLogSealingEnabled } from "../../sealedLogSink";
 import { setLogDirectoryResolver } from "../../logScrub";
 import { isSealedLog, openSealedLog } from "../sealedLog";
 
@@ -76,5 +76,17 @@ describe("BACKLOG-3819 at-rest logs job", () => {
     expect(getLogSink().state).toBe("plaintext");
     expect(fs.existsSync(main)).toBe(false);
     expect(fs.readFileSync(path.join(dir, "main.unsealed.log"), "utf8")).toContain("held a***@example.com");
+  });
+
+  it("dev build (sealing off): plaintext main.log stays plaintext, redacted; nothing is sealed", async () => {
+    keyMode = "ok";
+    setLogSealingEnabled(false);
+    fs.writeFileSync(main, "[2099-01-01 00:00:00.000] [info] dev amy@example.com\n");
+    await runLogsJob();
+    const raw = fs.readFileSync(main);
+    expect(isSealedLog(raw)).toBe(false);
+    expect(raw.toString("utf8")).toContain("dev a***@example.com");
+    expect(raw.toString("utf8")).not.toContain("amy@example.com");
+    expect(getLogSink().state).toBe("pending");
   });
 });
