@@ -26,7 +26,10 @@
  * the chunk index. Each chunk's AAD is header || u64 index || u8 isFinal, so:
  *
  *   - a flipped byte anywhere in a chunk          -> that chunk's tag fails
- *   - a flipped header byte                       -> every tag fails
+ *   - a flipped keyId / salt header byte          -> every tag fails
+ *   - a flipped version / algorithm / reserved /  -> the header no longer parses, so
+ *     chunkSize byte                                 the file is NOT classified as
+ *                                                    KEPRENC (see "Detection" below)
  *   - two chunks swapped                          -> the index in the AAD differs
  *   - the file cut at a chunk boundary            -> the new last chunk was sealed
  *                                                    with isFinal = 0, its tag fails
@@ -47,11 +50,45 @@
  * verified. A Range read that ends before the final chunk does not read the final
  * chunk, so it cannot see a truncation — only damage inside the range it read.
  *
+ * ## Detection — "is this file KEPRENC?" (BACKLOG-3816 S1 fix-up)
+ *
+ * The seven magic bytes alone decide nothing: anyone can send an attachment whose
+ * content starts with "KEPRENC". A file is classified as KEPRENC only when it is
+ * STRUCTURALLY a container ({@link probeHeader}):
+ *
+ *   - it is at least 60 bytes and bytes 0..6 are exactly "KEPRENC";
+ *   - version == 1, algorithm == 1, bytes 9..11 and 48..59 are zero (v1 has no
+ *     flags field; every non-key byte outside keyId/salt/chunkSize must be zero);
+ *   - chunkSize is in [1, MAX_CHUNK_BYTES] (readers honour the header's value);
+ *   - the file size is exactly 60 + n·16 + plaintextSize for the n chunks the
+ *     layout implies ({@link layoutFor}; v1 has no length field — the size IS the
+ *     length check).
+ *
+ * Anything else is plaintext (pre-migration, or a Keepr-unrelated file such as an
+ * iPhone backup or ~/Library/Messages attachment) and is passed through unchanged —
+ * unless the caller says the file MUST be encrypted (`requireEncrypted`, set by the
+ * readers of a scope whose migration is `done`), in which case it is refused.
+ *
+ * A file that IS structurally a container is never served as plaintext. If a chunk
+ * then fails authentication it is tampered/truncated/wrong-key ciphertext and the
+ * read throws AtRestIntegrityError — authentication failure is always an error, in
+ * every mode. (Rejected alternative: "auth fails -> plaintext unless the scope is
+ * done". That would serve tampered ciphertext as content, and this module is
+ * path-agnostic: the scope decision belongs to the caller, via requireEncrypted.)
+ *
+ * No key is needed to classify: isEncrypted / statPlaintext / the ciphertext
+ * evidence scan (no key store) all use the same structural check.
+ *
  * ## Residual
  *
- * `isEncrypted` is a magic check. A plaintext file whose first seven bytes happen to
- * be "KEPRENC" reads as encrypted and is then refused at header validation; it is
- * never served as if it were plaintext.
+ * - A deliberately forged plaintext that is a fully valid v1 header plus a body of
+ *   exactly the right length is classified as KEPRENC and then refused on read
+ *   (its tags cannot verify without our key). It is never served as plaintext, and
+ *   no real file format has this shape; the sender would have to aim for it.
+ * - In default (pre-migration) mode, real ciphertext whose version/algorithm/
+ *   reserved/chunkSize bytes were altered, or that was truncated to an impossible
+ *   size, no longer parses and is passed through as its (ciphertext) bytes rather
+ *   than refused. Nothing secret is revealed; under requireEncrypted it is refused.
  */
 import crypto from "crypto";
 import fs from "fs";
@@ -341,17 +378,51 @@ async function readExactly(
   return buf;
 }
 
-async function readMagic(filePath: string): Promise<{ encrypted: boolean; size: number }> {
+export interface HeaderProbe {
+  /** true only when the file is structurally a KEPRENC v1 container (see "Detection"). */
+  encrypted: boolean;
+  /** Plaintext size: header arithmetic for a container, the file size otherwise. */
+  size: number;
+}
+
+/**
+ * Structural classification on an ALREADY-OPEN handle — no key needed. The caller
+ * owns the handle (BACKLOG-3816 S2: the decision and the bytes read afterwards come
+ * from the same open). A file that is not a valid container is `encrypted:false`.
+ */
+export async function probeHeaderFromHandle(
+  handle: fs.promises.FileHandle,
+): Promise<HeaderProbe> {
+  const { size } = await handle.stat();
+  if (size < HEADER_BYTES) return { encrypted: false, size };
+  const head = Buffer.alloc(HEADER_BYTES);
+  const { bytesRead } = await handle.read(head, 0, HEADER_BYTES, 0);
+  if (bytesRead !== HEADER_BYTES) return { encrypted: false, size };
+  try {
+    const header = parseHeader(head);
+    return { encrypted: true, size: layoutFor(size, header.chunkSize).plaintextSize };
+  } catch (error) {
+    if (error instanceof AtRestFormatError) return { encrypted: false, size };
+    throw error;
+  }
+}
+
+/**
+ * Structural classification by path. Throws only when the file cannot be
+ * opened/read (e.g. ENOENT); a file that is not a valid container is `encrypted:false`.
+ */
+export async function probeHeader(filePath: string): Promise<HeaderProbe> {
   const handle = await fs.promises.open(filePath, "r");
   try {
-    const { size } = await handle.stat();
-    if (size < MAGIC.length) return { encrypted: false, size };
-    const head = Buffer.alloc(MAGIC.length);
-    await handle.read(head, 0, MAGIC.length, 0);
-    return { encrypted: head.equals(MAGIC), size };
+    return await probeHeaderFromHandle(handle);
   } finally {
     await handle.close();
   }
+}
+
+/** {@link probeHeader}, as a boolean. The ciphertext-evidence scan uses this. */
+export async function isStructurallyEncrypted(filePath: string): Promise<boolean> {
+  return (await probeHeader(filePath)).encrypted;
 }
 
 export interface DecryptStreamOptions {
@@ -406,9 +477,29 @@ export interface FileCrypto {
   encryptFileInPlace(filePath: string): Promise<EncryptResult & { alreadyEncrypted: boolean }>;
   openDecryptStream(filePath: string, opts?: DecryptStreamOptions): Promise<DecryptStreamResult>;
   /** All-or-nothing: returns nothing unless every chunk verified. */
-  readAllDecrypted(filePath: string): Promise<Buffer>;
+  readAllDecrypted(filePath: string, opts?: ReadOptions): Promise<Buffer>;
   /** All-or-nothing: `destPath` appears only after every chunk verified. Plaintext sources are copied. */
-  decryptToFile(srcPath: string, destPath: string): Promise<{ size: number; encrypted: boolean }>;
+  decryptToFile(
+    srcPath: string,
+    destPath: string,
+    opts?: ReadOptions,
+  ): Promise<{ size: number; encrypted: boolean }>;
+  /**
+   * BACKLOG-3816 S2: the same reads bound to a handle the CALLER opened, so a size
+   * check and the read refer to the same file (no path re-resolve between them).
+   * The caller keeps ownership of the handle; these never close it.
+   */
+  statPlaintextFromHandle(handle: fs.promises.FileHandle): Promise<{ encrypted: boolean; size: number }>;
+  readAllDecryptedFromHandle(handle: fs.promises.FileHandle, opts?: ReadOptions): Promise<Buffer>;
+}
+
+/** BACKLOG-3816 S2: `requireEncrypted` for the whole-file readers (same meaning as on openDecryptStream). */
+export interface ReadOptions {
+  requireEncrypted?: boolean;
+}
+
+function refusePlaintext(): never {
+  throw new AtRestFormatError("file is not encrypted and the caller requires an encrypted file");
 }
 
 export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions = {}): FileCrypto {
@@ -417,29 +508,48 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
     throw new AtRestFormatError(`chunk size ${writeChunkSize} is out of range`);
   }
 
-  async function openEncrypted(filePath: string): Promise<{
+  interface OpenedFile {
     handle: fs.promises.FileHandle;
     header: ParsedHeader;
     layout: Layout;
     fileKey: Buffer;
-  }> {
+    /** false = the caller owns the handle; chunkPlaintexts must not close it. */
+    ownsHandle: boolean;
+  }
+
+  async function openEncryptedHandle(
+    handle: fs.promises.FileHandle,
+    ownsHandle: boolean,
+  ): Promise<OpenedFile> {
+    const { size } = await handle.stat();
+    if (size < HEADER_BYTES) throw new AtRestFormatError("file is shorter than a KEPRENC header");
+    const header = parseHeader(await readExactly(handle, HEADER_BYTES, 0));
+    const layout = layoutFor(size, header.chunkSize);
+    const dataKey = await keys.keyFor(header.keyId);
+    return { handle, header, layout, fileKey: deriveFileKey(dataKey, header.salt), ownsHandle };
+  }
+
+  async function openEncrypted(filePath: string): Promise<OpenedFile> {
     const handle = await fs.promises.open(filePath, "r");
     try {
-      const { size } = await handle.stat();
-      if (size < HEADER_BYTES) throw new AtRestFormatError("file is shorter than a KEPRENC header");
-      const header = parseHeader(await readExactly(handle, HEADER_BYTES, 0));
-      const layout = layoutFor(size, header.chunkSize);
-      const dataKey = await keys.keyFor(header.keyId);
-      return { handle, header, layout, fileKey: deriveFileKey(dataKey, header.salt) };
+      return await openEncryptedHandle(handle, true);
     } catch (error) {
       await handle.close().catch(() => undefined);
       throw error;
     }
   }
 
+  async function readAllFrom(opened: OpenedFile): Promise<Buffer> {
+    const parts: Buffer[] = [];
+    for await (const { plaintext } of chunkPlaintexts(opened, 0, opened.layout.chunkCount - 1)) {
+      parts.push(plaintext);
+    }
+    return Buffer.concat(parts);
+  }
+
   /** Yields verified plaintext for chunks first..last. Closes the handle when done or abandoned. */
   async function* chunkPlaintexts(
-    opened: Awaited<ReturnType<typeof openEncrypted>>,
+    opened: OpenedFile,
     first: number,
     last: number,
   ): AsyncGenerator<{ index: number; plaintext: Buffer }> {
@@ -456,7 +566,7 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
         yield { index, plaintext: openChunk(fileKey, header.raw, index, isFinal, sealed) };
       }
     } finally {
-      await handle.close().catch(() => undefined);
+      if (opened.ownsHandle) await handle.close().catch(() => undefined);
     }
   }
 
@@ -525,16 +635,14 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
 
   const api: FileCrypto = {
     async isEncrypted(filePath) {
-      return (await readMagic(filePath)).encrypted;
+      return (await probeHeader(filePath)).encrypted;
     },
 
     async statPlaintext(filePath) {
-      const { encrypted, size } = await readMagic(filePath);
-      if (!encrypted) return { encrypted: false, size };
+      // BACKLOG-3816 S2: one open; the structural check and the header read use the same handle.
       const handle = await fs.promises.open(filePath, "r");
       try {
-        const header = parseHeader(await readExactly(handle, HEADER_BYTES, 0));
-        return { encrypted: true, size: layoutFor(size, header.chunkSize).plaintextSize };
+        return await api.statPlaintextFromHandle(handle);
       } finally {
         await handle.close();
       }
@@ -555,10 +663,9 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
     },
 
     async encryptFileInPlace(filePath) {
-      const before = await readMagic(filePath);
+      const before = await probeHeader(filePath);
       if (before.encrypted) {
-        const { size } = await api.statPlaintext(filePath);
-        return { alreadyEncrypted: true, plaintextSize: size, sha256: "" };
+        return { alreadyEncrypted: true, plaintextSize: before.size, sha256: "" };
       }
       const statBefore = await fs.promises.stat(filePath);
       const tmp = tmpPathFor(filePath);
@@ -583,19 +690,28 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
     },
 
     async openDecryptStream(filePath, opts = {}) {
-      const magic = await readMagic(filePath);
-      if (!magic.encrypted) {
-        if (opts.requireEncrypted) {
-          throw new AtRestFormatError("file is not encrypted and the caller requires an encrypted file");
+      // BACKLOG-3816 S2: ONE open. The encrypted/plaintext decision and every byte
+      // read come from the same handle, so a file replaced between the check and
+      // the read (the migration's rename) cannot hand back the other version's bytes.
+      const handle = await fs.promises.open(filePath, "r");
+      let opened: OpenedFile;
+      try {
+        const magic = await probeHeaderFromHandle(handle);
+        if (!magic.encrypted) {
+          if (opts.requireEncrypted) refusePlaintext();
+          const { start, end } = resolveRange(opts, magic.size);
+          if (end < start) {
+            await handle.close();
+            return { stream: Readable.from([]), encrypted: false, size: magic.size, start, end };
+          }
+          const stream = handle.createReadStream({ start, end, autoClose: true });
+          return { stream, encrypted: false, size: magic.size, start, end };
         }
-        const { start, end } = resolveRange(opts, magic.size);
-        const stream =
-          end < start
-            ? Readable.from([])
-            : fs.createReadStream(filePath, { start, end });
-        return { stream, encrypted: false, size: magic.size, start, end };
+        opened = await openEncryptedHandle(handle, true);
+      } catch (error) {
+        await handle.close().catch(() => undefined);
+        throw error;
       }
-      const opened = await openEncrypted(filePath);
       const size = opened.layout.plaintextSize;
       let range: { start: number; end: number };
       try {
@@ -620,24 +736,43 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
       return { stream: Readable.from(sliced()), encrypted: true, size, start, end };
     },
 
-    async readAllDecrypted(filePath) {
-      const magic = await readMagic(filePath);
-      if (!magic.encrypted) return fs.promises.readFile(filePath);
-      const opened = await openEncrypted(filePath);
-      const parts: Buffer[] = [];
-      for await (const { plaintext } of chunkPlaintexts(opened, 0, opened.layout.chunkCount - 1)) {
-        parts.push(plaintext);
+    async readAllDecrypted(filePath, opts = {}) {
+      // BACKLOG-3816 S2: one open; decision and bytes from the same handle.
+      const handle = await fs.promises.open(filePath, "r");
+      try {
+        return await api.readAllDecryptedFromHandle(handle, opts);
+      } finally {
+        await handle.close().catch(() => undefined);
       }
-      return Buffer.concat(parts);
     },
 
-    async decryptToFile(srcPath, destPath) {
-      const { stream, encrypted, size } = await api.openDecryptStream(srcPath);
+    async statPlaintextFromHandle(handle) {
+      return probeHeaderFromHandle(handle);
+    },
+
+    async readAllDecryptedFromHandle(handle, opts = {}) {
+      const magic = await probeHeaderFromHandle(handle);
+      if (!magic.encrypted) {
+        if (opts.requireEncrypted) refusePlaintext();
+        return readExactly(handle, magic.size, 0);
+      }
+      return readAllFrom(await openEncryptedHandle(handle, false));
+    },
+
+    async decryptToFile(srcPath, destPath, opts = {}) {
+      // BACKLOG-3816 S2: the destination is prepared BEFORE the source is opened. A
+      // stream opened first and then orphaned by a mkdir/open failure is never
+      // closed (an encrypted stream's generator has not started, so its finally
+      // never runs); every failure below this point owns only the temp handle.
       await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
       const tmp = tmpPathFor(destPath);
-      let handle: fs.promises.FileHandle | null = null;
+      let handle: fs.promises.FileHandle | null = await fs.promises.open(tmp, "wx", 0o600);
+      let stream: Readable | null = null;
       try {
-        handle = await fs.promises.open(tmp, "wx", 0o600);
+        const opened = await api.openDecryptStream(srcPath, {
+          requireEncrypted: opts.requireEncrypted,
+        });
+        stream = opened.stream;
         for await (const piece of stream) {
           await handle.write(piece as Buffer);
         }
@@ -645,9 +780,9 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
         await handle.close();
         handle = null;
         await renameWithRetry(tmp, destPath);
-        return { size, encrypted };
+        return { size: opened.size, encrypted: opened.encrypted };
       } catch (error) {
-        stream.destroy();
+        stream?.destroy();
         await handle?.close().catch(() => undefined);
         await fs.promises.unlink(tmp).catch(() => undefined);
         throw error;

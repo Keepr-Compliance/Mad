@@ -26,6 +26,7 @@ import { dbTransaction } from "../services/db/core/dbConnection";
 import databaseService from "../services/databaseService";
 import logService from "../services/logService";
 import { RcsExtensionBridge } from "../services/rcsExtensionBridge";
+import { sealBufferToFile } from "../services/atRest/attachmentWriter";
 import type { RcsJobSnapshot } from "../services/rcsImportJob";
 import { rcsImageFilename, type RcsMediaDeps } from "../services/rcsImportMedia";
 import { rcsChatHash, rcsExternalId, storeCacheChatSync, type RcsCacheChatDeps } from "../services/rcsImportStore";
@@ -161,7 +162,8 @@ const deps: RcsCacheChatDeps = {
   recordThreadName: (userId, threadId, name) => databaseService.recordRcsThreadName(userId, threadId, name),
 };
 
-const mediaDeps: RcsMediaDeps = {
+/** Exported for the BACKLOG-3816 writer controls. */
+export const mediaDeps: RcsMediaDeps = {
   attachmentsDir: () => path.join(app.getPath("userData"), "message-attachments"),
   getMessageIdMap: (userId) => databaseService.getMessageIdMap(userId),
   getExistingAttachmentRecords: () => databaseService.getExistingAttachmentRecords(),
@@ -176,7 +178,10 @@ const mediaDeps: RcsMediaDeps = {
       return false;
     }
   },
-  writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
+  // BACKLOG-3816: RCS images are stored as KEPRENC ciphertext.
+  writeSealed: async (filePath, data) => {
+    await sealBufferToFile(filePath, data);
+  },
   mkdir: async (dir) => {
     await fs.promises.mkdir(dir, { recursive: true });
   },
@@ -197,8 +202,9 @@ function cacheStaging(): RcsCacheStaging {
     mkdir: async (dir) => {
       await fs.promises.mkdir(dir, { recursive: true });
     },
-    writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
+    writeSealed: mediaDeps.writeSealed,
     exists: mediaDeps.fileExists,
+    // Moves staged CIPHERTEXT into message-attachments (rename; copy across volumes).
     move: async (from, to) => {
       try {
         await fs.promises.rename(from, to);

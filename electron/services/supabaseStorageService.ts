@@ -17,11 +17,11 @@
  * @see supabase/migrations/20260122_b2b_broker_portal.sql for bucket setup
  */
 
-import * as fs from "fs";
 import mime from "mime-types";
 import * as Sentry from "@sentry/electron/main";
 import supabaseService from "./supabaseService";
 import logService from "./logService";
+import { readStoredAttachment } from "./atRest/attachmentReader";
 // BACKLOG-3403: shared with the submission pre-flight and manifest.
 import {
   MAX_ATTACHMENT_FILE_SIZE,
@@ -155,7 +155,8 @@ class SupabaseStorageService {
       // between a separate stat() and readFile()
       let fileBuffer: Buffer;
       try {
-        fileBuffer = await fs.promises.readFile(absolutePath);
+        // BACKLOG-3816 S2: the broker receives the PLAINTEXT, decrypted on read.
+        fileBuffer = await readStoredAttachment(absolutePath);
       } catch (err: unknown) {
         if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ENOENT") {
           const error = `File not found: ${absolutePath}`;

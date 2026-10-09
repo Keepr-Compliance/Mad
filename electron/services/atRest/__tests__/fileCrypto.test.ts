@@ -9,6 +9,9 @@
  *       → refused, and no plaintext of the damaged chunk is emitted.
  *   F2  every Range read equals the same slice of the plaintext (swept, not sampled).
  *   M3  encryptFileInPlace verifies the encrypted copy BEFORE it replaces the source.
+ *   D   (S1 fix-up) detection is structural, not the 7-byte magic: plaintext that
+ *       starts with "KEPRENC" is plaintext; a real container is never plaintext —
+ *       wrong key or tampering is an error in every mode and is never rewritten.
  */
 import crypto from "crypto";
 import fs from "fs";
@@ -22,7 +25,9 @@ import {
   HEADER_BYTES,
   TAG_BYTES,
   KENC_TMP_SUFFIX,
+  MAGIC,
   createFileCrypto,
+  isStructurallyEncrypted,
   layoutFor,
   type KeyResolver,
 } from "../fileCrypto";
@@ -97,9 +102,15 @@ describe("KEPRENC round trip", () => {
   it("the empty file still carries a final-chunk tag", async () => {
     const file = await encryptBytes(Buffer.alloc(0));
     expect(fs.statSync(file).size).toBe(HEADER_BYTES + TAG_BYTES);
-    // Cut the tag: the file is now malformed, not "empty".
+    // Cut the tag: the file is now malformed, not "empty". BACKLOG-3816 S1 fix-up:
+    // malformed = not structurally a container, so a scope that requires
+    // encryption refuses it, and the default (pre-migration) reader passes its
+    // bytes through as-is rather than inventing an empty plaintext.
     fs.truncateSync(file, HEADER_BYTES);
-    await expect(createFileCrypto(resolver()).readAllDecrypted(file)).rejects.toBeInstanceOf(AtRestFormatError);
+    const fc = createFileCrypto(resolver());
+    expect(await fc.isEncrypted(file)).toBe(false);
+    await expect(fc.openDecryptStream(file, { requireEncrypted: true })).rejects.toBeInstanceOf(AtRestFormatError);
+    expect((await fc.readAllDecrypted(file)).length).toBe(HEADER_BYTES);
   });
 
   it("passes plaintext files through, flagged encrypted:false", async () => {
@@ -202,12 +213,19 @@ describe("F1 — damage is refused before its plaintext is emitted", () => {
     expect(data.length).toBe(0);
   });
 
-  it("a header claiming an oversized chunk is refused before any read", async () => {
+  it("a header claiming an oversized chunk is never decrypted: refused under requireEncrypted, raw bytes otherwise", async () => {
     const file = await encryptBytes(plaintext);
     const buf = fs.readFileSync(file);
     buf.writeUInt32BE(0x7fffffff, 44);
     fs.writeFileSync(file, buf);
-    await expect(createFileCrypto(resolver()).openDecryptStream(file)).rejects.toBeInstanceOf(AtRestFormatError);
+    const fc = createFileCrypto(resolver());
+    // BACKLOG-3816 S1 fix-up: an impossible header is not a container (see
+    // fileCrypto "Detection"). No 2 GiB chunk allocation either way.
+    expect(await fc.isEncrypted(file)).toBe(false);
+    await expect(fc.openDecryptStream(file, { requireEncrypted: true })).rejects.toBeInstanceOf(AtRestFormatError);
+    const opened = await fc.openDecryptStream(file);
+    expect(opened.encrypted).toBe(false);
+    expect((await collect(opened.stream)).data.equals(buf)).toBe(true);
   });
 
   it("decryptToFile writes nothing at the destination when a chunk fails", async () => {
@@ -375,5 +393,106 @@ describe("requireEncrypted — opt-in refusal of plaintext pass-through", () => 
     const r = await createFileCrypto(resolver()).openDecryptStream(file, { requireEncrypted: true });
     expect(r.encrypted).toBe(true);
     expect((await collect(r.stream)).data.toString()).toBe("sealed text");
+  });
+});
+
+describe("D — detection is structural, not the 7-byte magic (BACKLOG-3816 S1 fix-up)", () => {
+  /** A sender-chosen plaintext: a well-formed v1 header + a body the layout cannot produce. */
+  function nearMissHeader(bodyBytes: number, chunkSize = 1024 * 1024): Buffer {
+    const h = Buffer.alloc(HEADER_BYTES, 0);
+    MAGIC.copy(h, 0);
+    h[7] = 1;
+    h[8] = 1;
+    crypto.randomBytes(32).copy(h, 12);
+    h.writeUInt32BE(chunkSize, 44);
+    return Buffer.concat([h, crypto.randomBytes(bodyBytes)]);
+  }
+  const forged: Array<[string, () => Buffer]> = [
+    ["magic + random", () => Buffer.concat([MAGIC, crypto.randomBytes(500)])],
+    ["magic + bad version", () => Buffer.concat([MAGIC, Buffer.from([9, 1]), crypto.randomBytes(500)])],
+    ["valid header, body shorter than a tag", () => nearMissHeader(5)],
+    // 1 MiB chunk, 2 MiB + 17 body: chunk 1 full, tail (17 - 16 - 16 < 0) impossible
+    ["valid header, tail shorter than its tag", () => nearMissHeader(2 * (1024 * 1024 + TAG_BYTES) + 10)],
+  ];
+
+  it.each(forged)("plaintext beginning with KEPRENC (%s) is plaintext to every reader", async (_n, make) => {
+    const bytes = make();
+    const file = path.join(dir, "forged.bin");
+    fs.writeFileSync(file, bytes);
+    const fc = createFileCrypto(resolver());
+
+    expect(await isStructurallyEncrypted(file)).toBe(false);
+    expect(await fc.isEncrypted(file)).toBe(false);
+    expect(await fc.statPlaintext(file)).toEqual({ encrypted: false, size: bytes.length });
+    expect((await fc.readAllDecrypted(file)).equals(bytes)).toBe(true);
+    const opened = await fc.openDecryptStream(file);
+    expect(opened.encrypted).toBe(false);
+    expect((await collect(opened.stream)).data.equals(bytes)).toBe(true);
+  });
+
+  it.each(forged)("encryptFileInPlace seals plaintext beginning with KEPRENC (%s) and it round-trips", async (_n, make) => {
+    const bytes = make();
+    const file = path.join(dir, "forged.bin");
+    fs.writeFileSync(file, bytes);
+    const fc = createFileCrypto(resolver());
+
+    const r = await fc.encryptFileInPlace(file);
+
+    expect(r.alreadyEncrypted).toBe(false);
+    expect(await fc.isEncrypted(file)).toBe(true);
+    expect((await fc.readAllDecrypted(file)).equals(bytes)).toBe(true);
+  });
+
+  it("real ciphertext (every size class) is still detected", async () => {
+    for (const n of [0, 1, CHUNK, 3 * CHUNK + 1]) {
+      const file = await encryptBytes(crypto.randomBytes(n), `real-${n}.bin`);
+      expect(await isStructurallyEncrypted(file)).toBe(true);
+    }
+    // and at the production chunk size
+    const big = path.join(dir, "big.bin");
+    await createFileCrypto(resolver()).encryptStreamToFile(Readable.from([crypto.randomBytes(1024 * 1024 + 3)]), big);
+    expect(await isStructurallyEncrypted(big)).toBe(true);
+  });
+
+  it("tampered chunk 0 under requireEncrypted (an encrypted scope) is an integrity error", async () => {
+    const plaintext = crypto.randomBytes(3 * CHUNK);
+    const file = await encryptBytes(plaintext);
+    const buf = fs.readFileSync(file);
+    buf[HEADER_BYTES + 3] ^= 0x01;
+    fs.writeFileSync(file, buf);
+    const fc = createFileCrypto(resolver());
+    const { stream } = await fc.openDecryptStream(file, { requireEncrypted: true });
+    const { data, error } = await collect(stream);
+    expect(error).toBeInstanceOf(AtRestIntegrityError);
+    expect(data.length).toBe(0);
+    // ... and in default mode too: a structurally valid container is never plaintext.
+    await expect(fc.readAllDecrypted(file)).rejects.toBeInstanceOf(AtRestIntegrityError);
+  });
+
+  it("a container sealed under a DIFFERENT data key: readers error, migration leaves it byte-identical", async () => {
+    const otherKeyId = crypto.randomBytes(16).toString("hex");
+    const otherKey = crypto.randomBytes(32);
+    const file = path.join(dir, "other-key.bin");
+    await createFileCrypto(
+      resolver({ currentKey: async () => ({ keyId: otherKeyId, key: otherKey }), keyFor: async () => otherKey }),
+      { chunkSize: CHUNK },
+    ).encryptStreamToFile(Readable.from([crypto.randomBytes(200)]), file);
+    const before = fs.readFileSync(file);
+
+    // (a) key id not held -> the resolver's error; (b) same id, wrong key bytes -> integrity error
+    const unknownId = createFileCrypto(resolver());
+    await expect(unknownId.readAllDecrypted(file)).rejects.toThrow("unknown key");
+    const wrongKey = createFileCrypto(resolver({ keyFor: async () => KEY }));
+    await expect(wrongKey.readAllDecrypted(file)).rejects.toBeInstanceOf(AtRestIntegrityError);
+    await expect(wrongKey.decryptToFile(file, path.join(dir, "out.bin"))).rejects.toBeInstanceOf(AtRestIntegrityError);
+    expect(fs.existsSync(path.join(dir, "out.bin"))).toBe(false);
+
+    // The migration primitive does not re-encrypt it (that would garble it permanently).
+    for (const fc of [unknownId, wrongKey]) {
+      const r = await fc.encryptFileInPlace(file);
+      expect(r.alreadyEncrypted).toBe(true);
+    }
+    expect(fs.readFileSync(file).equals(before)).toBe(true);
+    expect(fs.readdirSync(dir).filter((f) => f.endsWith(KENC_TMP_SUFFIX))).toEqual([]);
   });
 });

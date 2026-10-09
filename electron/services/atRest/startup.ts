@@ -38,6 +38,7 @@
  */
 import { hostLogger } from "../../capabilities/loggerProvider";
 import { DataKeyUnavailableError, getDataKeyService } from "./dataKeyService";
+import { runConfiguredLogMaintenance } from "../logScrub";
 import { runLegacySweep } from "./legacySweep";
 import { SCOPE_EMAIL_ATTACHMENTS, SCOPE_MESSAGE_ATTACHMENTS } from "./markers";
 import { getAtRestMigration } from "./migration";
@@ -184,7 +185,15 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
       }
     },
   });
-  startup.register(placeholder("logs", 10, "S5"));
+  startup.register({
+    id: "logs",
+    order: 10,
+    run: async (ctx) => {
+      const r = runConfiguredLogMaintenance();
+      if (!r) return ctx.log("warn", "[AtRest] logs: no log directory registered; skipped");
+      ctx.log(r.errors.length ? "warn" : "info", `[AtRest] logs: rewritten ${r.rewritten.length}, deleted ${r.deleted.length}, errors ${r.errors.length}`);
+    },
+  });
   startup.register({ id: "temp-sweep", order: 20, run: async () => { await runTempSweep(); } });
   startup.register({ id: "attachments", order: 30, run: async () => { await getAtRestMigration().runScope(SCOPE_MESSAGE_ATTACHMENTS); } });
   startup.register({ id: "email-attachments", order: 40, run: async () => { await getAtRestMigration().runScope(SCOPE_EMAIL_ATTACHMENTS); } });

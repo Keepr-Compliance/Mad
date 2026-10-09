@@ -11,6 +11,7 @@ import "./bootstrap/installAppDataPaths";
 // block that populates SENTRY_DSN moved with it. Both placements are traced in
 // that file's header and pinned by `bootstrap/__tests__/installSentry.test.ts`.
 import "./bootstrap/installSentry";
+import { devToolsPreference, installApplicationMenu } from "./bootstrap/appMenu";
 // BACKLOG-2962: the Electron shell's composition root for native capabilities.
 // Core services depend on the SecretStore *interface*; this is the one place
 // that says the implementation is Electron's safeStorage. It must run before
@@ -1162,6 +1163,7 @@ function createWindow(): void {
     width: WINDOW_CONFIG.DEFAULT_WIDTH,
     height: WINDOW_CONFIG.DEFAULT_HEIGHT,
     webPreferences: {
+      devTools: devToolsPreference(), // BACKLOG-3830
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, "preload.js"),
@@ -1749,6 +1751,7 @@ app.whenReady().then(async () => {
   log.debug(`[PERF] post-healthChecks: ${Date.now() - appStartTime}ms`);
 
   log.debug(`[PERF] pre-createWindow: ${Date.now() - appStartTime}ms`);
+  installApplicationMenu(); // BACKLOG-3830
   createWindow();
   log.debug(`[PERF] post-createWindow: ${Date.now() - appStartTime}ms`);
 
