@@ -99,7 +99,29 @@
 !macro customUnInstall
   ; Skip entirely during an auto-update reinstall.
   ${ifNot} ${isUpdated}
-    ; Skip entirely when the caller asked for a silent uninstall (/S on the
+    ; ALWAYS remove electron-updater's download cache (BACKLOG-3802). It holds
+    ; downloaded installers, not user data, so it goes on Yes, on No, and on a
+    ; caller-requested /S -- which is why it sits BEFORE the /S parse below.
+    ; It MUST stay inside this ${isUpdated} guard: during an auto-update the new
+    ; installer runs from %LOCALAPPDATA%\keepr-updater\pending and calls this
+    ; uninstaller with --updated (include/installUtil.nsh:205-206, :224), so an
+    ; unguarded RMDir would delete the directory the running update lives in.
+    ; Name: app-builder-lib appInfo.js:126-127 (sanitizedName.toLowerCase() +
+    ; "-updater"; package.json name "keepr") -> app-update.yml
+    ; updaterCacheDirName, joined onto %LOCALAPPDATA% by electron-updater
+    ; (AppUpdater.js:545-550, AppAdapter.js getAppCacheDir). Same dir the in-app
+    ; reset removes (electron/services/appCleanupService.ts:250).
+    ; Per-user location even for a per-machine install -- same context swap as
+    ; the data delete below.
+    ${if} $installMode == "all"
+      SetShellVarContext current
+    ${endif}
+    RMDir /r "$LOCALAPPDATA\keepr-updater"
+    ${if} $installMode == "all"
+      SetShellVarContext all
+    ${endif}
+
+    ; Skip the data question when the caller asked for a silent uninstall (/S on the
     ; command line). NOT IfSilent: always true under oneClick (see WHY NOT
     ; IfSilent above). GetOptions sets the error flag when /S is ABSENT, so
     ; clear it first -- a stale error from earlier in the Section must never
@@ -113,7 +135,7 @@
 
     keepr_maybe_prompt:
       ; No /SD on purpose -- see WHY THE MessageBox STILL SHOWS above.
-      MessageBox MB_YESNO|MB_DEFBUTTON2|MB_TOPMOST|MB_SETFOREGROUND "Also delete your Keepr data and saved credentials (emails, transactions, and DPAPI-encrypted secrets)? This cannot be undone." IDYES keepr_delete_data IDNO keepr_skip_data_cleanup
+      MessageBox MB_YESNO|MB_DEFBUTTON2|MB_TOPMOST|MB_SETFOREGROUND "Also delete your Keepr data and saved credentials (emails, transactions, and DPAPI-encrypted secrets)? This cannot be undone.$\r$\n$\r$\nChoose No to keep it in %APPDATA%\keepr and %LOCALAPPDATA%\keepr." IDYES keepr_delete_data IDNO keepr_skip_data_cleanup
       Goto keepr_skip_data_cleanup ; fail-safe: a MessageBox that fails to show falls through to the next line, so keep the data
 
       keepr_delete_data:

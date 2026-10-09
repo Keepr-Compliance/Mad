@@ -781,15 +781,36 @@ export class DeviceDetectionService extends EventEmitter {
    * @returns Promise that resolves to array of device UDIDs
    */
   async listDevices(): Promise<string[]> {
+    return (await this.listDevicesWithOutcome()).udids;
+  }
+
+  /**
+   * BACKLOG-3598: list connected UDIDs, or `null` when idevice_id could not answer.
+   *
+   * `listDevices` resolves `[]` both for "no phone connected" and for "idevice_id
+   * failed", so one failed poll reads as an unplug. This tells them apart: `idevice_id
+   * -l` exits 0 with empty output when no phone is connected (measured on macOS,
+   * Homebrew libimobiledevice 1.4.0; the bundled Windows binary is NOT measured), and
+   * prints "Unable to retrieve device list" with a non-zero exit when it could not get
+   * the list. A spawn error or missing tools is also `null`. If a platform exits
+   * non-zero on an empty list, an unplug there is never confirmed and the backup is
+   * left to the watchdog, as before BACKLOG-3598.
+   */
+  async probeConnectedUdids(): Promise<string[] | null> {
+    const { udids, ok } = await this.listDevicesWithOutcome();
+    return ok ? udids : null;
+  }
+
+  private async listDevicesWithOutcome(): Promise<{ udids: string[]; ok: boolean }> {
     // Mock mode returns fake device
     if (this.mockMode) {
-      return [MOCK_DEVICE.udid];
+      return { udids: [MOCK_DEVICE.udid], ok: true };
     }
 
     // Check if libimobiledevice is available
     const available = await this.checkLibimobiledeviceAvailable();
     if (!available) {
-      return [];
+      return { udids: [], ok: false };
     }
 
     return new Promise((resolve) => {
@@ -818,8 +839,11 @@ export class DeviceDetectionService extends EventEmitter {
               data: { exitCode: code, stderr: stderr.substring(0, 200) },
             });
           }
-          // Non-zero exit with no devices is normal
-          resolve([]);
+          // Treated as "no devices" by `listDevices` (the original comment here called a
+          // non-zero exit with no devices "normal"; on macOS 1.4.0 an empty list exits 0
+          // — see probeConnectedUdids). BACKLOG-3598: not a successful
+          // listing — `probeConnectedUdids` reports it as unknown.
+          resolve({ udids: [], ok: false });
           return;
         }
 
@@ -867,7 +891,7 @@ export class DeviceDetectionService extends EventEmitter {
 
         // Only log device count changes, not every poll
         // The pollDevices() method will log when devices connect/disconnect
-        resolve(validUdids);
+        resolve({ udids: validUdids, ok: true });
       });
 
       proc.on("error", (err) => {
@@ -898,7 +922,7 @@ export class DeviceDetectionService extends EventEmitter {
           }
         }
 
-        resolve([]);
+        resolve({ udids: [], ok: false });
       });
     });
   }

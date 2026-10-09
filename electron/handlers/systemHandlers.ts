@@ -4,8 +4,9 @@
 //          shell operations, support
 // ============================================
 
-import { ipcMain, shell, BrowserWindow } from "electron";
+import { ipcMain, shell, BrowserWindow, app } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
+import fs from "fs";
 import os from "os";
 // These 3 services use require() instead of ES imports because
 // the test mocks (system-handlers.test.ts) don't set __esModule: true.
@@ -36,6 +37,7 @@ import {
   validateString,
 } from "../utils/validation";
 import { redactId } from "../utils/redactSensitive";
+import { thirdPartyNoticesPath } from "../services/thirdPartyNotices";
 import type { User, OAuthProvider } from "../types/models";
 
 // ============================================
@@ -1292,6 +1294,31 @@ export function registerSystemHandlers(): void {
       // Load the URL
       popupWindow.loadURL(validatedUrl);
 
+      return { success: true };
+    }, { module: "System" }),
+  );
+
+  /**
+   * BACKLOG-3803: open the bundled third-party notices (Settings > About).
+   * Takes no arguments: the path is computed here, never supplied by the renderer.
+   */
+  ipcMain.handle(
+    "shell:open-third-party-notices",
+    wrapHandler(async (): Promise<SystemResponse> => {
+      const noticesPath = thirdPartyNoticesPath({
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        appPath: app.getAppPath(),
+      });
+      if (!fs.existsSync(noticesPath)) {
+        log.warn(`[System] Third-party notices not found at ${noticesPath}`);
+        return { success: false, error: "Third-party notices file not found" };
+      }
+      // shell.openPath resolves to "" on success, or an error message.
+      const openError = await shell.openPath(noticesPath);
+      if (openError) {
+        return { success: false, error: openError };
+      }
       return { success: true };
     }, { module: "System" }),
   );

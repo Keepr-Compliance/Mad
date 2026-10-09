@@ -1,4 +1,5 @@
 import { google, gmail_v1, Auth } from "googleapis";
+import { gaxiosNetFetch } from "./mainNetFetch";
 import {
   FetchCancelledError,
   isFetchCancelledError,
@@ -262,11 +263,14 @@ class GmailFetchService {
 
       // Initialize OAuth2 client for Gmail API calls
       // Token refresh is handled by googleAuthService; this client is for API calls only
-      const oauth2Client = new google.auth.OAuth2(
-        process.env.GOOGLE_CLIENT_ID,
-        process.env.GOOGLE_CLIENT_SECRET,
-        process.env.GOOGLE_REDIRECT_URI,
-      );
+      // BACKLOG-3799: token refresh AND Gmail API calls ride Electron net.fetch
+      // (OS certificate store), not gaxios's node-fetch over Node TLS.
+      const oauth2Client = new google.auth.OAuth2({
+        clientId: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        redirectUri: process.env.GOOGLE_REDIRECT_URI,
+        transporterOptions: { fetchImplementation: gaxiosNetFetch },
+      });
 
       // Set credentials
       oauth2Client.setCredentials({

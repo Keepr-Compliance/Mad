@@ -48,6 +48,7 @@ import {
 // it cannot drift between the before and the after measurement.
 import {
   formatEmailPrecacheTimingLine,
+  precacheTimingOutcome,
   type EmailPrecacheMode,
 } from "./emailPrecacheTiming";
 import { getRawDatabase } from "./db/core/dbConnection";
@@ -2073,6 +2074,8 @@ class EmailSyncService {
     // Assigned once the connected tokens are known; stays empty on the
     // no-provider-connected exit, where "none" is exactly right.
     let timedProviders: readonly EmailForceProvider[] = [];
+    // BACKLOG-3799: providers whose pre-cache fetch threw (timing outcome).
+    const failedPrecacheProviders = new Set<EmailForceProvider>();
 
     let forceStaging: EmailForceStaging | null = null;
     let forceSwap: {
@@ -2528,6 +2531,7 @@ class EmailSyncService {
           }
         }, undefined, "OutlookPrecache");
       } catch (outlookError) {
+        failedPrecacheProviders.add("outlook");
         logService.warn("Outlook pre-cache failed", "EmailSyncService", {
           error: outlookError instanceof Error ? outlookError.message : "Unknown",
         });
@@ -2696,6 +2700,7 @@ class EmailSyncService {
           }
         }, undefined, "GmailPrecache");
       } catch (gmailError) {
+        failedPrecacheProviders.add("gmail");
         logService.warn("Gmail pre-cache failed", "EmailSyncService", {
           error: gmailError instanceof Error ? gmailError.message : "Unknown",
         });
@@ -3076,7 +3081,7 @@ class EmailSyncService {
         const dbMs = Math.round(readDbTimeMs() - dbMsAtRunStart);
         const timing = {
           mode: precacheMode,
-          outcome: progressOutcome,
+          outcome: precacheTimingOutcome(progressOutcome, timedProviders, failedPrecacheProviders),
           providers: timedProviders,
           checked: totalFetched,
           written: totalStored,

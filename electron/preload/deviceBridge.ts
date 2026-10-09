@@ -436,17 +436,35 @@ export const syncBridge = {
     callback: (result: {
       messagesStored: number;
       contactsStored: number;
+      contactsSourceOff?: boolean;
       duration: number;
     }) => void
   ) => {
     const listener = (_: IpcRendererEvent, result: {
       messagesStored: number;
       contactsStored: number;
+      contactsSourceOff?: boolean;
       duration: number;
     }) => callback(result);
     ipcRenderer.on("sync:storage-complete", listener);
     return () =>
       ipcRenderer.removeListener("sync:storage-complete", listener);
+  },
+
+  /**
+   * BACKLOG-3784: tells main the sync completion UI was shown. Telemetry only.
+   * @param ack - renderer wall-clock stamps (ms): storage-complete received, completion shown
+   */
+  reportCompletionShown: (ack: { receivedAt: number; shownAt: number }) => {
+    ipcRenderer.send("sync:completion-shown", ack);
+  },
+
+  /**
+   * BACKLOG-3784: renderer heartbeat while an iPhone sync is showing. Telemetry only.
+   * @param tick - first: first tick of this sync; hidden: document is hidden
+   */
+  rendererTick: (tick: { first: boolean; hidden: boolean }) => {
+    ipcRenderer.send("sync:renderer-tick", tick);
   },
 
   /**
