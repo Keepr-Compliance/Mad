@@ -47,6 +47,14 @@ jest.mock("fs/promises", () => ({
   access: jest.fn().mockRejectedValue(new Error("File not found")),
 }));
 
+// BACKLOG-3816: attachments are written through the at-rest writer (KEPRENC
+// ciphertext). Encryption itself is covered by atRest.attachmentWriters-3816.test.ts.
+jest.mock("../atRest/attachmentWriter", () => ({
+  ...jest.requireActual("../atRest/attachmentWriter"),
+  sealBufferToFile: jest.fn().mockResolvedValue({ sha256: "x", plaintextSize: 0 }),
+}));
+
+import { sealBufferToFile } from "../atRest/attachmentWriter";
 import emailAttachmentService, {
   EmailAttachmentMeta,
 } from "../emailAttachmentService";
@@ -501,10 +509,10 @@ describe("EmailAttachmentService", () => {
       );
 
       // Check that file was written
-      expect(fs.writeFile).toHaveBeenCalled();
+      expect(sealBufferToFile).toHaveBeenCalled();
 
       // Reset writeFile mock for second test
-      (fs.writeFile as jest.Mock).mockClear();
+      (sealBufferToFile as jest.Mock).mockClear();
 
       // Mock that file already exists (same content hash)
       const contentHash = crypto
@@ -525,7 +533,7 @@ describe("EmailAttachmentService", () => {
       );
 
       // File should not be written again (deduplicated)
-      expect(fs.writeFile).not.toHaveBeenCalled();
+      expect(sealBufferToFile).not.toHaveBeenCalled();
       // But record should still be created
       expect(result.stored).toBe(1);
     });
@@ -559,7 +567,7 @@ describe("EmailAttachmentService", () => {
       // (path.resolve(path.join(userData, "attachments"))) so the assertion is
       // separator-agnostic and correct on Windows.
       const attachmentsDir = path.resolve(path.join(MOCK_USER_DATA, "attachments"));
-      const writtenPath = (fs.writeFile as jest.Mock).mock.calls[0][0] as string;
+      const writtenPath = (sealBufferToFile as jest.Mock).mock.calls[0][0] as string;
       expect(writtenPath.startsWith(attachmentsDir + path.sep)).toBe(true);
       // Traversal guard (separator-agnostic): the written path stays inside the dir.
       expect(path.relative(attachmentsDir, writtenPath).startsWith("..")).toBe(false);
@@ -593,7 +601,7 @@ describe("EmailAttachmentService", () => {
 
       expect(result.stored).toBe(1);
       const attachmentsDir = path.resolve(path.join(MOCK_USER_DATA, "attachments"));
-      const writtenPath = (fs.writeFile as jest.Mock).mock.calls[0][0] as string;
+      const writtenPath = (sealBufferToFile as jest.Mock).mock.calls[0][0] as string;
       expect(writtenPath.startsWith(attachmentsDir + path.sep)).toBe(true);
       expect(path.relative(attachmentsDir, writtenPath).startsWith("..")).toBe(false);
       expect(writtenPath).not.toContain("\x00");

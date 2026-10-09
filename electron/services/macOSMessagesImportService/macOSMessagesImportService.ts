@@ -152,6 +152,7 @@ import {
 } from "../../utils/diskSpace";
 import { readLocalSnapshotCount } from "../../utils/localSnapshots";
 import { DISK_SPACE_THRESHOLDS } from "../diagnostics/diskSpaceDiagnostics";
+import { isAtRestWriteRefused, readAttachmentBytes, sealFileFrom } from "../atRest/attachmentWriter";
 
 /**
  * macOS Messages Import Service
@@ -1213,7 +1214,8 @@ class MacOSMessagesImportService {
        * value: the useful number is what the disk holds NOW, at the failure, not
        * what it held before the run started.
        */
-      let errorMessage = rawErrorMessage;
+      // BACKLOG-3816: attachments fail closed without the file-data key; say so plainly.
+      let errorMessage = isAtRestWriteRefused(error) ? error.userMessage : rawErrorMessage;
       let refusedForDiskSpace: ImportRefusedForDiskSpace | undefined;
       if (isDiskFullError(error)) {
         const availableBytes = await getAvailableDiskBytes(
@@ -2207,7 +2209,13 @@ class MacOSMessagesImportService {
         // Copy file to app data directory with hash as filename (async)
         const ext = path.extname(filename!);
         const destPath = path.join(attachmentsDir, `${contentHash}${ext}`);
-        await fs.promises.copyFile(sourcePath, destPath);
+        // BACKLOG-3816: store the KEPRENC ciphertext, never a plaintext copy.
+        const sealed = await sealFileFrom(sourcePath, destPath);
+        if (sealed.sha256 !== contentHash) {
+          // The source changed between the hash and the copy: the name would lie.
+          await fs.promises.unlink(destPath).catch(() => undefined);
+          throw new Error("attachment source changed while it was being stored");
+        }
 
         // Insert attachment record
         // TASK-1110: Include external_message_id (macOS message GUID) for stable linking
@@ -2227,6 +2235,9 @@ class MacOSMessagesImportService {
         processed++;
         existingHashes.add(contentHash);
       } catch (error) {
+        // BACKLOG-3816: a refused write (no file-data key) stops the import —
+        // swallowing it here would report success with every attachment skipped.
+        if (isAtRestWriteRefused(error)) throw error;
         // Expected, normal-for-old-messages errors are silent:
         // - FOREIGN KEY: messages that were skipped
         // - ENOENT: attachment files that have been deleted
@@ -2677,12 +2688,13 @@ class MacOSMessagesImportService {
    * Read an attachment file as base64 for display (TASK-1012)
    * Returns null if file doesn't exist
    */
-  getAttachmentAsBase64(storagePath: string): string | null {
+  async getAttachmentAsBase64(storagePath: string): Promise<string | null> {
     try {
       if (!fs.existsSync(storagePath)) {
         return null;
       }
-      const buffer = fs.readFileSync(storagePath);
+      // BACKLOG-3816: stored attachments are KEPRENC ciphertext (pre-migration plaintext passes through).
+      const buffer = await readAttachmentBytes(storagePath);
       return buffer.toString("base64");
     } catch (error) {
       logService.warn(

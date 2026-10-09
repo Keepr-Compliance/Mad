@@ -47,7 +47,7 @@ function makeFake() {
     },
     dbTransaction: (fn) => fn(),
     fileExists: async (p) => files.has(p),
-    writeFile: async (p, data) => {
+    writeSealed: async (p, data) => {
       files.set(p, data);
     },
     mkdir: async () => {},
