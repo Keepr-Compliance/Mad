@@ -51,6 +51,7 @@ export default function UserSearchFilter({
             Search users
           </label>
           <SearchInput
+            className="!text-base md:!text-sm"
             id="user-search"
             type="text"
             placeholder="Search by name or email..."
@@ -65,6 +66,7 @@ export default function UserSearchFilter({
             Filter by role
           </label>
           <Select
+            className="!text-base md:!text-sm"
             id="role-filter"
             value={roleFilter}
             onChange={(e) => onRoleChange(e.target.value)}
@@ -83,6 +85,7 @@ export default function UserSearchFilter({
             Filter by status
           </label>
           <Select
+            className="!text-base md:!text-sm"
             id="status-filter"
             value={statusFilter}
             onChange={(e) => onStatusChange(e.target.value)}

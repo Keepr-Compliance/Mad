@@ -33,7 +33,13 @@
  * BACKLOG-3080 (My Transactions): a floor entry after Support, shown only when
  * the layout's `showMyTransactions` (lib/my-transactions-access.ts) says so.
  * The pages refuse on their own; a hidden entry is not the gate.
+ *
+ * BACKLOG-3798: below md the aside is hidden and the same nav renders in a
+ * slide-out drawer (mobileOpen), always expanded. The drawer is a SIBLING of
+ * the aside, never inside it: the aside is display:none below md.
  */
+
+import { useEffect, useRef } from 'react';
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -49,6 +55,7 @@ import {
   Settings,
   UserCircle,
   Users,
+  X,
 } from 'lucide-react';
 import { AppMark, Wordmark } from '@keepr/ui';
 import { resolveViewerName } from '@/lib/utils/userDisplay';
@@ -126,7 +133,14 @@ export interface SidebarProps {
   showMyTransactions?: boolean;
   /** BACKLOG-3080: not a full-portal user; show the floor bucket only. */
   floorOnly?: boolean;
+  /** BACKLOG-3798: the phone drawer is open (below md). Not rendered when false. */
+  mobileOpen?: boolean;
+  /** BACKLOG-3798: close the phone drawer (link tap, backdrop, Escape, close button). */
+  onMobileClose?: () => void;
 }
+
+const DESKTOP_QUERY = '(min-width: 768px)';
+const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function Sidebar({
   collapsed,
@@ -140,8 +154,61 @@ export function Sidebar({
   checklistsUnavailableLabel = null,
   showMyTransactions = false,
   floorOnly = false,
+  mobileOpen = false,
+  onMobileClose,
 }: SidebarProps) {
   const pathname = usePathname();
+  const drawerRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef(onMobileClose);
+  closeRef.current = onMobileClose;
+
+  // BACKLOG-3798: drawer behaviour while open — focus in, Escape closes, Tab
+  // stays inside, body scroll locked, crossing to md closes.
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const close = () => closeRef.current?.();
+    closeButtonRef.current?.focus();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+        return;
+      }
+      if (e.key !== 'Tab' || !drawerRef.current) return;
+      const items = Array.from(drawerRef.current.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    let mql: MediaQueryList | null = null;
+    const onMedia = (e: MediaQueryListEvent) => {
+      if (e.matches) close();
+    };
+    if (typeof window.matchMedia === 'function') {
+      mql = window.matchMedia(DESKTOP_QUERY);
+      mql.addEventListener?.('change', onMedia);
+    }
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      mql?.removeEventListener?.('change', onMedia);
+    };
+  }, [mobileOpen]);
 
   // BACKLOG-3080: the floor replaces the member and admin buckets entirely.
   const showFloorNav = floorOnly && !isImpersonating;
@@ -166,7 +233,9 @@ export function Sidebar({
   /** '/dashboard' is a prefix of every route, so it matches exactly only. */
   const exactMatchPaths = new Set(['/dashboard']);
 
-  const renderNavItem = (item: NavItem) => {
+  const renderNavItem = (item: NavItem, isCollapsed: boolean, onNavigate?: () => void) => {
+    // The drawer (onNavigate set) gets 44px rows.
+    const tall = onNavigate ? ' min-h-[44px]' : '';
     if (item === checklistsNavItem && showChecklistsGrayed) {
       const GrayedIcon = item.icon;
       return (
@@ -175,12 +244,12 @@ export function Sidebar({
           aria-disabled="true"
           data-testid="checklists-nav-grayed"
           className={`flex cursor-not-allowed items-center rounded-md text-sm font-medium text-gray-500 ${
-            collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
-          }`}
-          title={collapsed ? `${item.label}: ${checklistsUnavailableLabel}` : checklistsUnavailableLabel ?? undefined}
+            isCollapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
+          }${tall}`}
+          title={isCollapsed ? `${item.label}: ${checklistsUnavailableLabel}` : checklistsUnavailableLabel ?? undefined}
         >
           <GrayedIcon className="h-5 w-5 shrink-0" aria-hidden="true" />
-          {!collapsed && (
+          {!isCollapsed && (
             <span className="flex min-w-0 flex-col leading-tight">
               <span>{item.label}</span>
               <span className="mt-0.5 text-xs font-normal text-gray-500">{checklistsUnavailableLabel}</span>
@@ -199,89 +268,157 @@ export function Sidebar({
         key={item.href}
         href={item.href}
         className={`flex items-center rounded-md text-sm font-medium transition-colors ${
-          collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
-        } ${
+          isCollapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
+        }${tall} ${
           isActive
             ? 'bg-gray-800 text-white'
             : 'text-gray-300 hover:bg-gray-800 hover:text-white'
         }`}
-        title={collapsed ? item.label : undefined}
+        title={isCollapsed ? item.label : undefined}
+        onClick={onNavigate}
       >
         <Icon className="h-5 w-5 shrink-0" />
-        {!collapsed && <span>{item.label}</span>}
+        {!isCollapsed && <span>{item.label}</span>}
       </Link>
     );
   };
 
+  const renderNavItems = (isCollapsed: boolean, onNavigate?: () => void) => {
+    const r = (item: NavItem) => renderNavItem(item, isCollapsed, onNavigate);
+    return (
+      <>
+        {showFloorNav && floorItems.map(r)}
+        {showMemberNav && memberNavItems.map(r)}
+        {!showAdminNav && checklistsSlot && r(checklistsNavItem)}
+        {showAdminNav && adminItems.map(r)}
+        {personalNavItems.map(r)}
+      </>
+    );
+  };
+
   return (
-    <aside
-      className={`sticky top-0 z-40 h-screen flex flex-col bg-gray-900 text-white transition-all duration-200 ${
-        collapsed ? 'w-16' : 'w-64'
-      }`}
-    >
-      {/* Logo (toggle lives on the right-edge tab below) */}
-      <div
-        className={`flex items-center border-b border-gray-800 ${
-          collapsed ? 'justify-center px-2 py-5' : 'px-6 py-5'
+    <>
+      <aside
+        data-testid="desktop-sidebar"
+        className={`sticky top-0 z-40 h-screen hidden md:flex flex-col bg-gray-900 text-white transition-all duration-200 ${
+          collapsed ? 'w-16' : 'w-64'
         }`}
       >
-        {collapsed ? (
-          <AppMark size={28} title="Keepr" />
-        ) : (
-          <div className="flex items-center gap-2">
-            <Wordmark className="text-xl font-bold" />
-            <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Broker</span>
-          </div>
-        )}
-      </div>
+        {/* Logo (toggle lives on the right-edge tab below) */}
+        <div
+          className={`flex items-center border-b border-gray-800 ${
+            collapsed ? 'justify-center px-2 py-5' : 'px-6 py-5'
+          }`}
+        >
+          {collapsed ? (
+            <AppMark size={28} title="Keepr" />
+          ) : (
+            <div className="flex items-center gap-2">
+              <Wordmark className="text-xl font-bold" />
+              <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Broker</span>
+            </div>
+          )}
+        </div>
 
-      {/* Expand/Collapse toggle — a small handle protruding past the right edge */}
-      <button
-        onClick={onToggle}
-        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        className="absolute top-8 -right-3 z-10 flex h-7 w-6 items-center justify-center rounded-md border border-gray-800 bg-gray-900 text-gray-400 shadow-sm transition-colors hover:text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-600"
-      >
-        {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-      </button>
+        {/* Expand/Collapse toggle — a small handle protruding past the right edge */}
+        <button
+          onClick={onToggle}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          className="absolute top-8 -right-3 z-10 flex h-7 w-6 items-center justify-center rounded-md border border-gray-800 bg-gray-900 text-gray-400 shadow-sm transition-colors hover:text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-600"
+        >
+          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+        </button>
 
-      {/* Navigation */}
-      <nav className={`flex-1 py-4 space-y-1 overflow-y-auto scrollbar-hide ${collapsed ? 'px-2' : 'px-3'}`}>
-        {showFloorNav && floorItems.map(renderNavItem)}
-        {showMemberNav && memberNavItems.map(renderNavItem)}
-        {!showAdminNav && checklistsSlot && renderNavItem(checklistsNavItem)}
-        {showAdminNav && adminItems.map(renderNavItem)}
-        {personalNavItems.map(renderNavItem)}
-      </nav>
+        {/* Navigation */}
+        <nav className={`flex-1 py-4 space-y-1 overflow-y-auto scrollbar-hide ${collapsed ? 'px-2' : 'px-3'}`}>
+          {renderNavItems(collapsed)}
+        </nav>
 
-      {/* User info + Sign Out */}
-      <div className={`border-t border-gray-800 ${collapsed ? 'px-2 py-4' : 'px-3 py-4'}`}>
-        {!collapsed && (
-          <div className="px-3 py-1.5 mb-2">
-            <div className="flex items-center gap-2.5">
-              <div className="h-8 w-8 rounded-full bg-primary-600 flex items-center justify-center text-white text-sm font-medium shrink-0">
-                {initial}
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm text-gray-300 truncate leading-tight">{name}</p>
-                <p className="text-xs text-gray-500 truncate leading-tight">
-                  {isImpersonating ? displayEmail : formatRole(displayRole)}
-                </p>
+        {/* User info + Sign Out */}
+        <div className={`border-t border-gray-800 ${collapsed ? 'px-2 py-4' : 'px-3 py-4'}`}>
+          {!collapsed && (
+            <div className="px-3 py-1.5 mb-2">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 rounded-full bg-primary-600 flex items-center justify-center text-white text-sm font-medium shrink-0">
+                  {initial}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm text-gray-300 truncate leading-tight">{name}</p>
+                  <p className="text-xs text-gray-500 truncate leading-tight">
+                    {isImpersonating ? displayEmail : formatRole(displayRole)}
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-        <a
-          href="/auth/logout"
-          className={`flex items-center w-full rounded-md text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors ${
-            collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
-          }`}
-          title={collapsed ? 'Sign Out' : undefined}
-        >
-          <LogOut className="h-5 w-5 shrink-0" />
-          {!collapsed && <span>Sign Out</span>}
-        </a>
-      </div>
-    </aside>
+          )}
+          <a
+            href="/auth/logout"
+            className={`flex items-center w-full rounded-md text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors ${
+              collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
+            }`}
+            title={collapsed ? 'Sign Out' : undefined}
+          >
+            <LogOut className="h-5 w-5 shrink-0" />
+            {!collapsed && <span>Sign Out</span>}
+          </a>
+        </div>
+      </aside>
+
+      {/* BACKLOG-3798: phone drawer. Rendered only while open, and outside the
+          aside (which is display:none below md). */}
+      {mobileOpen && (
+        <div className="md:hidden fixed inset-0 z-[60]" data-testid="mobile-nav-overlay">
+          <div className="absolute inset-0 bg-gray-900/55" aria-hidden="true" onClick={onMobileClose} />
+          <aside
+            id="mobile-nav"
+            ref={drawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Main menu"
+            className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-gray-900 text-white shadow-xl"
+          >
+            <div className="flex items-center justify-between border-b border-gray-800 py-2 pl-6 pr-2">
+              <div className="flex items-center gap-2">
+                <Wordmark className="text-xl font-bold" />
+                <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Broker</span>
+              </div>
+              <button
+                ref={closeButtonRef}
+                type="button"
+                onClick={onMobileClose}
+                aria-label="Close menu"
+                className="flex h-11 w-11 items-center justify-center rounded-md text-gray-400 [@media(hover:hover)]:hover:bg-gray-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-600"
+              >
+                <X className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </div>
+            <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">{renderNavItems(false, onMobileClose)}</nav>
+            <div className="border-t border-gray-800 px-3 py-4">
+              <div className="px-3 py-1.5 mb-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="h-8 w-8 rounded-full bg-primary-600 flex items-center justify-center text-white text-sm font-medium shrink-0">
+                    {initial}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm text-gray-300 truncate leading-tight">{name}</p>
+                    <p className="text-xs text-gray-500 truncate leading-tight">
+                      {isImpersonating ? displayEmail : formatRole(displayRole)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <a
+                href="/auth/logout"
+                className="flex min-h-[44px] items-center gap-3 w-full rounded-md px-3 py-2 text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+              >
+                <LogOut className="h-5 w-5 shrink-0" />
+                <span>Sign Out</span>
+              </a>
+            </div>
+          </aside>
+        </div>
+      )}
+    </>
   );
 }

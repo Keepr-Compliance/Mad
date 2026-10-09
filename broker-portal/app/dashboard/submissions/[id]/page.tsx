@@ -351,7 +351,7 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   const commission = readCommission(submission);
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6 pb-24">
+    <div className="max-w-7xl mx-auto space-y-6 pb-52 md:pb-24">
       {/* Back Link */}
       <Link
         href="/dashboard/submissions"
