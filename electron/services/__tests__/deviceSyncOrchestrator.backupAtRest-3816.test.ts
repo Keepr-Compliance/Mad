@@ -644,10 +644,14 @@ describe("C2-DELTA (founder must-fix 2026-10-09) — every end of a C-DELTA sync
 
   it("success: the seal starts right after the parse copy — before persistence ends; completeBackupAtRest adds nothing", async () => {
     const o = newOrchestrator();
+    const finish = jest.spyOn(atRest, "finishSync");
     backupReturns(ok());
     const result = await o.sync({ udid: UDID });
     expect(result.success).toBe(true);
     expect(copySpy).toHaveBeenCalledTimes(1);
+    // The seal starts AFTER the parse copy has been made (parsers read the copy, not the chain).
+    expect(finish).toHaveBeenCalledTimes(1);
+    expect(finish.mock.invocationCallOrder[0]).toBeGreaterThan(copySpy.mock.invocationCallOrder[0]);
     // Persistence (the 'complete' listener) has NOT run completeBackupAtRest, yet:
     await sealedAfter(o);
     const sealPromise = o.lastAtRestSeal;
@@ -780,5 +784,67 @@ describe("progress for passes no sync is watching", () => {
     expect(seen.every((p) => p.phase === "cleanup")).toBe(true);
     expect(seen[seen.length - 1].message).toBe("Securing your iPhone backup… 100%");
     expect(atRest.listenerCount("progress")).toBe(1);
+  });
+});
+
+// SR PROBE (PR #2903): the founder's beta.3 sequence, driven through the REAL disconnect
+// machinery: DeviceDetection emits device-disconnected -> orchestrator confirms with a
+// second listing -> backupService.cancelBackup() -> the child exits with code null ->
+// startBackup resolves a failure -> sync ends with an error. Nothing sets
+// backupInFlight.disconnected by hand.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { deviceDetectionService: detector } = require("../deviceDetectionService");
+
+describe.each(["delta", "full"] as const)("SR probe — disconnect -> cancel -> exit code null (%s)", (strategy) => {
+  it("reseals at once and leaves nothing plaintext", async () => {
+    atRest = new BackupAtRest({
+      backupsRoot: () => backups,
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => userData }),
+      ensureKey: async () => undefined,
+      freeBytes: async () => Number.MAX_SAFE_INTEGER,
+      sleep: async () => undefined,
+      log: () => undefined,
+      strategy: () => strategy,
+    });
+    const o = newOrchestrator();
+    (o as unknown as { disconnectConfirmDelayMs: number }).disconnectConfirmDelayMs = 1;
+    let running = false;
+    let exitWithNull: (() => void) | null = null;
+    (BackupService.prototype.getStatus as unknown as jest.Mock).mockImplementation(() => ({
+      isRunning: running, currentDeviceUdid: running ? UDID : null, progress: null,
+    }));
+    (BackupService.prototype.cancelBackup as unknown as jest.Mock).mockImplementation(() => {
+      exitWithNull?.();
+    });
+    detector.probeConnectedUdids.mockResolvedValue([]);
+    const finish = jest.spyOn(atRest, "finishSync");
+    startBackup.mockImplementation(async () => {
+      running = true;
+      // The phone wrote new files (plaintext) and the index is unsealed.
+      write("cd/" + "c".repeat(40), "a file the phone sent this time");
+      write("ce/" + "e".repeat(40), "another new file");
+      return new Promise<BackupResult>((resolve) => {
+        exitWithNull = () => {
+          running = false;
+          resolve(fail({ errorCode: undefined, error: "Backup failed with code null" } as Partial<BackupResult>));
+        };
+        // Unplug while the transfer runs.
+        setTimeout(() => detector.emit("device-disconnected", { udid: UDID, name: "x" }), 5);
+      });
+    });
+    const t0 = Date.now();
+    const result = await o.sync({ udid: UDID });
+    expect(result.success).toBe(false);
+    expect(BackupService.prototype.cancelBackup).toHaveBeenCalled();
+    // The seal STARTED before sync() returned (finally path), within seconds.
+    expect(finish).toHaveBeenCalledTimes(1);
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(o.lastAtRestSeal).not.toBeNull();
+    await o.lastAtRestSeal;
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    expect(atRest.busyReason(UDID)).toBeNull();
+    expect(await atRest.forcedFullReason(UDID)).toBeNull();
   });
 });

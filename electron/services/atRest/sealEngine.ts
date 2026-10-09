@@ -172,12 +172,13 @@ export function classifyHead(head: Buffer, size: number): "empty" | "plaintext" 
 
 /**
  * rename(temp → file). On Windows a rename cannot replace a READ-ONLY file (EPERM), and
- * a backup keeps the phone's own file modes, so some files arrive read-only. Such a file
- * could never be sealed: every pass left it plaintext and the chain never reached
- * `encrypted` (BACKLOG-3816, founder QA on the PC — MECHANISM INFERRED from 2 of 1,076
- * files staying plaintext; see the handoff). The file's write bit is set and the rename
- * tried once more. A writable target that still refuses is a lock (antivirus), which the
- * caller retries.
+ * a backup keeps the phone's own file modes. When the first rename is refused with EPERM
+ * or EACCES on a file without its write bit, the bit is set and the rename tried once
+ * more; if that rename also fails the original mode is put back, so a file that was not
+ * replaced is left as it was found. Kept as defence in depth: the founder's PC log showed
+ * no failed files in the pass, so read-only files are NOT established as the reason two
+ * files stayed plaintext. A writable target that still refuses is a lock (antivirus),
+ * which the caller retries.
  */
 export function renameOver(tmp: string, target: string): void {
   try {
@@ -193,7 +194,16 @@ export function renameOver(tmp: string, target: string): void {
     }
     if ((mode & 0o200) !== 0) throw error;
     fs.chmodSync(target, 0o600);
-    fs.renameSync(tmp, target);
+    try {
+      fs.renameSync(tmp, target);
+    } catch (second) {
+      try {
+        fs.chmodSync(target, mode & 0o7777);
+      } catch {
+        // best effort: the file is intact either way
+      }
+      throw second;
+    }
   }
 }
 

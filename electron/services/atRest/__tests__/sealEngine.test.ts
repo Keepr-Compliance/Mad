@@ -129,6 +129,21 @@ describe("E9 — a READ-ONLY file (Windows refuses to rename over it)", () => {
     expect(tempsIn(dir)).toEqual([]);
   });
 
+  it("a read-only file whose second rename also fails keeps its original mode (not left writable)", () => {
+    const plain = crypto.randomBytes(50);
+    const p = put("ro2", plain);
+    fs.chmodSync(p, 0o444);
+    const renames = jest.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+    });
+    const r = createSealEngine(engineKey, { chunkSize: CHUNK, retryDelayMs: 0 }).runBatch([p], "seal");
+    expect(r.outcomes).toEqual([{ v: "failed", code: "EPERM" }]);
+    expect(renames.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(fs.statSync(p).mode & 0o777).toBe(0o444);
+    expect(fs.readFileSync(p).equals(plain)).toBe(true);
+    expect(tempsIn(dir)).toEqual([]);
+  });
+
   it("a WRITABLE file that refuses (an antivirus lock) is not chmod'ed; it fails after the retries", () => {
     const p = put("locked", crypto.randomBytes(20));
     const chmod = jest.spyOn(fs, "chmodSync");

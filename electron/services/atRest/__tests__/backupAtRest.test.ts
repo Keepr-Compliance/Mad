@@ -41,6 +41,7 @@ import {
   type BackupUnsealStrategy,
   BACKUP_UNSEAL_STRATEGY,
   isAppleEncryptedChain,
+  idleRecoveryBackoffMs,
 } from "../backupAtRest";
 import { DataKeyUnavailableError } from "../dataKeyService";
 import * as fileCryptoModule from "../fileCrypto";
@@ -1084,6 +1085,57 @@ describe("founder must-fix 2026-10-09: reseal at once, on quit, and while idle",
     expect(await s.recoverIdle()).toEqual({ [UDID]: "encrypted" });
     expect(plaintextLeft()).toEqual([]);
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("idle recovery backs off 5, 10, 20 min … on a chain whose pass keeps ending incomplete; a new sync starts it over", async () => {
+    makeChain();
+    let clock = 1_000_000;
+    const min = 60_000;
+    let attempts = 0;
+    let broken: string | null = null;
+    const s = service({
+      now: () => clock,
+      sealEngineOptions: {
+        retryDelayMs: 0,
+        beforeSeal: (f) => {
+          if (broken && f === broken) {
+            attempts++;
+            throw Object.assign(new Error("i/o"), { code: "EIO" });
+          }
+        },
+      },
+    });
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    broken = write("cd/" + "f".repeat(40), "a file that can never be sealed");
+    (s as unknown as { release: (u: string) => void }).release(UDID); // the sync's seal never ran
+    // Attempt times (minutes after the first): 0, 5, 15, 35 — then the gaps keep doubling.
+    const seen: Array<[number, number]> = [];
+    for (let t = 0; t <= 40; t++) {
+      clock = 1_000_000 + t * min;
+      const before = attempts;
+      const out = await s.recoverIdle();
+      if (attempts > before) {
+        seen.push([t, attempts - before]);
+        expect(out[UDID]).not.toBe("encrypted");
+      }
+    }
+    expect(seen).toEqual([[0, 1], [5, 1], [15, 1], [35, 1]]);
+    expect(idleRecoveryBackoffMs(1)).toBe(5 * min);
+    expect(idleRecoveryBackoffMs(2)).toBe(10 * min);
+    expect(idleRecoveryBackoffMs(20)).toBe(6 * 60 * min); // capped
+    // A new sync starts it over: the next idle pass is not held back.
+    const hold = await s.beginSync(UDID).catch(() => null);
+    expect(hold).not.toBeNull();
+    (s as unknown as { release: (u: string) => void }).release(UDID);
+    const before = attempts;
+    await s.recoverIdle();
+    expect(attempts).toBe(before + 1);
+    void session;
+    broken = null;
+    // Once the file can be sealed the pass completes and the back-off is cleared.
+    clock += 24 * 60 * min;
+    expect((await s.recoverIdle())[UDID]).toBe("encrypted");
   });
 
   it("a seal pass logs its start with the work to do (an interrupted run leaves a trace); counts only, no paths", async () => {

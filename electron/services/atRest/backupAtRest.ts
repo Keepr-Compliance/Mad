@@ -216,6 +216,13 @@ export const PROGRESS_FILE_WEIGHT_BYTES = 256 * 1024;
 export const QUIT_SEAL_BOUND_MS = 15_000;
 /** While the app runs, a chain left `syncing` / `sealing` / `migrating` with no pass on it is resealed this often. */
 export const IDLE_RECOVERY_INTERVAL_MS = 5 * 60_000;
+/** Longest wait between idle recovery passes on a chain whose passes keep ending incomplete. */
+export const IDLE_RECOVERY_BACKOFF_CAP_MS = 6 * 60 * 60_000;
+
+/** Wait before the next idle recovery pass after `failures` consecutive incomplete ones: 5, 10, 20 min … capped at 6 h. */
+export function idleRecoveryBackoffMs(failures: number): number {
+  return Math.min(IDLE_RECOVERY_BACKOFF_CAP_MS, IDLE_RECOVERY_INTERVAL_MS * 2 ** Math.max(0, failures - 1));
+}
 /** While a sync waits for a background pass to pause, its status line is repeated this often. */
 export const PAUSE_REPORT_INTERVAL_MS = 5000;
 /** A seal pass writes a progress line to the log this often. */
@@ -459,6 +466,8 @@ export class BackupAtRest extends EventEmitter {
   private readonly pausable = new Map<string, Int32Array>();
   /** Phones whose background pass was paused for a sync, to be resumed if that sync never unseals. */
   private readonly pausedForSync = new Set<string>();
+  /** Idle recovery: consecutive incomplete passes per phone and when the next one may run. */
+  private readonly idleBackoff = new Map<string, { failures: number; nextAt: number }>();
   /** Phones whose index files a sync unsealed and no seal has closed yet (sealed first on quit). */
   private readonly indexUnsealed = new Set<string>();
 
@@ -1077,6 +1086,7 @@ export class BackupAtRest extends EventEmitter {
     // awaits finds the phone busy (and vice versa). Released by finishSync, or below
     // when no session is handed out.
     this.busy.set(udid, "syncing");
+    this.idleBackoff.delete(udid); // a new sync is new work: the back-off starts over
     let handedOut = false;
     try {
       if (opts.underLock) await opts.underLock();
@@ -1417,12 +1427,32 @@ export class BackupAtRest extends EventEmitter {
       if (!entry.isDirectory() || !UDID_DIR_PATTERN.test(entry.name)) continue;
       const udid = entry.name;
       if (this.busy.has(udid)) continue;
+      const backoff = this.idleBackoff.get(udid);
+      if (backoff && this.now() < backoff.nextAt) continue;
       const marker = await this.readMarker(udid);
-      if (marker !== "syncing" && marker !== "sealing" && marker !== "migrating" && marker !== "unreadable") continue;
+      if (marker !== "syncing" && marker !== "sealing" && marker !== "migrating" && marker !== "unreadable") {
+        this.idleBackoff.delete(udid);
+        continue;
+      }
+      let outcome: string;
       try {
-        outcomes[udid] = await this.migrate(udid);
+        outcome = await this.migrate(udid);
       } catch (error) {
-        outcomes[udid] = `failed:${errCode(error)}`;
+        outcome = `failed:${errCode(error)}`;
+      }
+      outcomes[udid] = outcome;
+      if (outcome === "encrypted" || outcome === "apple") {
+        this.idleBackoff.delete(udid);
+      } else if (outcome !== "busy" && outcome !== "paused") {
+        // A pass that ends incomplete (a file that keeps failing) is not repeated every
+        // 5 minutes forever: 5, 10, 20 … min up to 6 h, until a pass completes or a sync starts.
+        const failures = (backoff?.failures ?? 0) + 1;
+        this.idleBackoff.set(udid, { failures, nextAt: this.now() + idleRecoveryBackoffMs(failures) });
+        this.log("warn", "[BackupAtRest] idle recovery pass incomplete; backing off", {
+          outcome,
+          failures,
+          retryInMs: idleRecoveryBackoffMs(failures),
+        });
       }
     }
     return outcomes;
