@@ -24,6 +24,7 @@ import { rateLimiters } from "../utils/rateLimit";
 import { syncStatusService } from "../services/syncStatusService";
 import supabaseService from "../services/supabaseService";
 import { sendToMainWindow } from "../windowRegistry";
+import { handleBusy } from "../utils/busyIpc";
 
 let orchestrator: DeviceSyncOrchestrator | null = null;
 let currentUserId: string | null = null;
@@ -118,7 +119,7 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
   // Start sync operation
   // Rate limited: 10 second cooldown per device to prevent sync spam.
   // Syncs involve device communication and database writes.
-  ipcMain.handle(
+  handleBusy(
     "sync:start",
     async (
       _,

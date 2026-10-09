@@ -41,6 +41,7 @@ import type {
 import { MESSAGES_IMPORT_CANCEL_CHANNEL } from "../types/ipc/messageChannels";
 
 import { sendToMainWindow } from "../windowRegistry";
+import { handleBusy } from "../utils/busyIpc";
 
 /**
  * Attachment info with base64 data for IPC transfer (TASK-1012)
@@ -146,7 +147,7 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
    * @param forceReimport - If true, delete existing messages first
    * @returns Import result with counts and status
    */
-  ipcMain.handle(
+  handleBusy(
     "messages:import-macos",
     async (
       _event: IpcMainInvokeEvent,

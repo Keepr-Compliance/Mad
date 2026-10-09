@@ -41,6 +41,7 @@ import {
 } from "../services/emailPrecacheProgress";
 
 import { sendToMainWindow } from "../windowRegistry";
+import { handleBusy } from "../utils/busyIpc";
 
 interface ScanOptions {
   onProgress?: (progress: unknown) => void;
@@ -147,7 +148,7 @@ export function registerEmailSyncHandlers(
   // Scan and extract transactions from emails
   // Rate limited: 5 second cooldown per user to prevent scan spam.
   // Scans hit external email APIs (Gmail, Outlook).
-  ipcMain.handle(
+  handleBusy(
     "transactions:scan",
     wrapHandler(async (
       event: IpcMainInvokeEvent,
@@ -271,7 +272,7 @@ export function registerEmailSyncHandlers(
   // Sync emails from email provider (Gmail/Outlook) for a transaction
   // This fetches NEW emails from the provider, stores them, then runs auto-link
   // Rate limited: 10 second cooldown per transaction to prevent sync spam.
-  ipcMain.handle(
+  handleBusy(
     "transactions:sync-and-fetch-emails",
     wrapHandler(async (
       event: IpcMainInvokeEvent,

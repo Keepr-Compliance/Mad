@@ -49,6 +49,7 @@ import {
 } from "../services/exportPlan";
 
 import { sendToMainWindow } from "../windowRegistry";
+import { handleBusy } from "../utils/busyIpc";
 
 interface ExportOptions {
   exportFormat?: string;
@@ -162,7 +163,7 @@ export function registerTransactionExportHandlers(
   _mainWindow: BrowserWindow | null,
 ): void {
   // Export transaction to PDF
-  ipcMain.handle(
+  handleBusy(
     "transactions:export-pdf",
     wrapHandler(async (
       event: IpcMainInvokeEvent,
@@ -294,7 +295,7 @@ export function registerTransactionExportHandlers(
   );
 
   // Enhanced export with options
-  ipcMain.handle(
+  handleBusy(
     "transactions:export-enhanced",
     wrapHandler(async (
       event: IpcMainInvokeEvent,
@@ -446,7 +447,7 @@ export function registerTransactionExportHandlers(
   );
 
   // Export transaction to organized folder structure
-  ipcMain.handle(
+  handleBusy(
     "transactions:export-folder",
     wrapHandler(async (
       event: IpcMainInvokeEvent,

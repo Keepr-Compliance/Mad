@@ -257,6 +257,7 @@ import { runStartupHealthChecks } from "./services/startupHealthCheck";
 import { getInstallMode } from "./services/diagnostics/installMode";
 import { getHostArchitecture } from "./services/diagnostics/hostArchitecture";
 import { WINDOWS_ARM64_ARGV_TOKEN } from "./utils/windowsArm64";
+import sessionSecurityService from "./services/sessionSecurityService";
 import {
   WindowResponsivenessTracker,
   attachResponsivenessTracking,
@@ -1804,6 +1805,9 @@ app.whenReady().then(async () => {
       getPhase: () => syncTimeline.currentPhase(),
     });
 
+    // BACKLOG-3833: a frozen renderer could not report activity; its freeze is not idle time.
+    mainWindow.on("responsive", () => sessionSecurityService.noteRendererResumed());
+
     attachResponsivenessTracking(mainWindow, responsivenessTracker, {
       warn: (line) => {
         console.warn(line);
@@ -1822,6 +1826,7 @@ app.whenReady().then(async () => {
         return response;
       },
       reload: () => {
+        sessionSecurityService.noteRendererResumed();
         mainWindow?.webContents.reload();
       },
       quit: () => {
