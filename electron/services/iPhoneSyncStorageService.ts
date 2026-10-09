@@ -21,7 +21,7 @@ import {
   requestContactLinking,
 } from "./contactLinkingScheduler";
 import { iOSMessagesParser } from "./iosMessagesParser";
-import { hashPlaintext, isAtRestWriteRefused, plaintextSize, sealFileFrom } from "./atRest/attachmentWriter";
+import { hashSourceFile, isAtRestWriteRefused, sealFileFrom, sourceFileSize } from "./atRest/attachmentWriter";
 import { detectMessageType } from "../utils/messageTypeDetector";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
 import type { iOSMessage, iOSConversation, iOSAttachment } from "../types/iosMessages";
@@ -838,11 +838,12 @@ class IPhoneSyncStorageService {
           continue;
         }
 
-        // Check if source file exists. BACKLOG-3816: sizes are PLAINTEXT sizes —
-        // the backup may itself be encrypted at rest (statPlaintext reads the header).
+        // Check if source file exists. BACKLOG-3816: the backup file is read RAW —
+        // it is Apple's plaintext (an Apple-encrypted backup arrives here already
+        // decrypted), never classified by its first bytes (attachmentWriter.ts).
         let sourceSize: number;
         try {
-          sourceSize = await plaintextSize(sourcePath);
+          sourceSize = await sourceFileSize(sourcePath);
           if (sourceSize > MAX_ATTACHMENT_SIZE) {
             log.debug(`[${IPhoneSyncStorageService.SERVICE_NAME}] Skipping oversized attachment: ${sourceSize} bytes`);
             skippedBy.tooLarge++;
@@ -854,9 +855,9 @@ class IPhoneSyncStorageService {
           continue;
         }
 
-        // TASK-1790: streaming hash. BACKLOG-3816: over the DECRYPTED source, so the
-        // dedupe key (and the stored file name) is the SHA-256 of the plaintext.
-        const contentHash = (await hashPlaintext(sourcePath)).sha256;
+        // TASK-1790: streaming hash of the (plaintext) source: the dedupe key and the
+        // stored file name are the SHA-256 of the plaintext (BACKLOG-3816).
+        const contentHash = (await hashSourceFile(sourcePath)).sha256;
 
         // Determine destination path
         const destPath = path.join(attachmentsDir, `${contentHash}${ext}`);

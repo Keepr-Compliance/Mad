@@ -118,6 +118,21 @@ describe("RCS media writer (rcsImportHandlers.mediaDeps)", () => {
     await expectSealed(row.storagePath, plain);
   });
 
+  it("F-R1: an image whose content starts with KEPRENC is stored, sealed, and round-trips", async () => {
+    const plain = Buffer.concat([MAGIC, crypto.randomBytes(4000)]);
+    const result = await storeImage(
+      { conversationId: "conv-1", msgId: "m1", index: 0, mimeType: "image/jpeg", base64: plain.toString("base64") },
+      "user-1",
+      mediaDeps,
+      CHAT,
+    );
+
+    expect(result).toMatchObject({ stored: true, alreadyPresent: false });
+    const row = mockDb.insertAttachment.mock.calls[0][0];
+    expect(row.fileSizeBytes).toBe(plain.length);
+    await expectSealed(row.storagePath, plain);
+  });
+
   it("W1: the staging writer (same deps) writes ciphertext; the commit move keeps it ciphertext", async () => {
     const plain = Buffer.concat([PNG, crypto.randomBytes(4000)]);
     const staged = nodePath.join(userData, "rcs-cache-staging", "job", "slot.png");

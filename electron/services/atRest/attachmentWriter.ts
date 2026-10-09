@@ -16,6 +16,7 @@
  * `getAtRestWriteRefusal()` lets a UI surface (S3) show the state.
  */
 import crypto from "crypto";
+import fs from "fs";
 import { Readable } from "stream";
 import { hostLogger } from "../../capabilities/loggerProvider";
 import { DataKeyUnavailableError, getAtRestFiles } from "./dataKeyService";
@@ -88,52 +89,61 @@ export function sealBufferToFile(
   return guarded(() => files.encryptStreamToFile(Readable.from([data]), destPath));
 }
 
-/**
- * Encrypt the file at `sourcePath` to `destPath`. The source is read through
- * openDecryptStream, so it may itself be plaintext or KEPRENC (an encrypted
- * iPhone backup). Returns the PLAINTEXT size and SHA-256.
+/*
+ * SOURCE files (BACKLOG-3816 S1 fix-up, SR R1).
+ *
+ * A writer's source is never a Keepr file: it is an iPhone backup content file or
+ * a ~/Library/Messages attachment, plaintext as Apple wrote it. Its bytes are read
+ * RAW — never through openDecryptStream and never classified by its first bytes,
+ * because an attachment's content is chosen by whoever sent it and may start with
+ * "KEPRENC". An Apple-encrypted iPhone backup is decrypted upstream by
+ * backupDecryptionService (backupService.ts: `finalBackupPath = decryptedPath`)
+ * before storeAttachments sees a path; that is a plaintext copy too.
+ *
+ * S4 (a Keepr-encrypted kept backup) will decide from the backup's at-rest MARKER
+ * (`readBackupMarker(udid).state`), not from file content, and route those reads
+ * through the decrypting reader explicitly. Until S4 writes that marker no source
+ * is KEPRENC.
  */
+
+/** Encrypt the (raw, plaintext) file at `sourcePath` to `destPath`. Returns the plaintext size and SHA-256. */
 export function sealFileFrom(
   sourcePath: string,
   destPath: string,
   files: FileCrypto = getAtRestFiles(),
 ): Promise<EncryptResult> {
   return guarded(async () => {
-    const { stream } = await files.openDecryptStream(sourcePath);
+    const stream = fs.createReadStream(sourcePath);
     try {
-      return await files.encryptStreamToFile(stream as AsyncIterable<Buffer>, destPath);
+      return await files.encryptStreamToFile(stream, destPath);
     } finally {
       stream.destroy();
     }
   });
 }
 
-/** SHA-256 (hex) and size of a file's PLAINTEXT, whether the file is plaintext or KEPRENC. */
-export function hashPlaintext(
-  sourcePath: string,
-  files: FileCrypto = getAtRestFiles(),
-): Promise<{ sha256: string; size: number }> {
-  return guarded(async () => {
-    const { stream } = await files.openDecryptStream(sourcePath);
-    const hash = crypto.createHash("sha256");
-    let size = 0;
-    for await (const piece of stream as AsyncIterable<Buffer>) {
-      hash.update(piece);
-      size += piece.length;
-    }
-    return { sha256: hash.digest("hex"), size };
-  });
+/** SHA-256 (hex) and size of a SOURCE file's raw bytes. */
+export async function hashSourceFile(sourcePath: string): Promise<{ sha256: string; size: number }> {
+  const hash = crypto.createHash("sha256");
+  let size = 0;
+  for await (const piece of fs.createReadStream(sourcePath) as AsyncIterable<Buffer>) {
+    hash.update(piece);
+    size += piece.length;
+  }
+  return { sha256: hash.digest("hex"), size };
 }
 
-/** Plaintext size of a file (header arithmetic for KEPRENC; stat for plaintext). */
-export function plaintextSize(sourcePath: string, files: FileCrypto = getAtRestFiles()): Promise<number> {
-  return files.statPlaintext(sourcePath).then((s) => s.size);
+/** Size of a SOURCE file (raw stat — never header arithmetic). Throws when it does not exist. */
+export async function sourceFileSize(sourcePath: string): Promise<number> {
+  return (await fs.promises.stat(sourcePath)).size;
 }
 
 /**
- * Decrypt a stored attachment fully into memory (all-or-nothing). A reader, so it
- * is NOT blocked by a remembered write refusal: a pre-migration plaintext file
- * still reads, and a KEPRENC file throws DataKeyUnavailableError on its own.
+ * Decrypt a STORED attachment fully into memory (all-or-nothing). A reader, so it
+ * is NOT blocked by a remembered write refusal. Classification is structural
+ * (fileCrypto "Detection"): a pre-migration plaintext file — including one whose
+ * content starts with "KEPRENC" — is returned as-is; a real container is decrypted
+ * and throws on a failed tag or a key that is not held.
  */
 export function readAttachmentBytes(storagePath: string, files: FileCrypto = getAtRestFiles()): Promise<Buffer> {
   return files.readAllDecrypted(storagePath);

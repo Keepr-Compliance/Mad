@@ -13,9 +13,12 @@
  *   1. `at-rest-state.json` records a scope as `migrating` or `done`.
  *   2. A backup marker in `Backups/.keepr-at-rest/` says `migrating`, `encrypted`
  *      or `syncing`.
- *   3. A KEPRENC header (7-byte magic read) on any file in the attachment scopes
- *      under userData: `message-attachments`, `attachments`, `rcs-cache-staging`,
- *      `logs`. A missing directory counts as empty. Nothing is created.
+ *   3. A structurally valid KEPRENC v1 container ({@link isStructurallyEncrypted}:
+ *      full 60-byte header + a file size consistent with its chunk layout — NOT the
+ *      7-byte magic, which any sender can put at the start of an attachment) on any
+ *      file in the attachment scopes under userData: `message-attachments`,
+ *      `attachments`, `rcs-cache-staging`, `logs`. A missing directory counts as
+ *      empty. Nothing is created. No key is needed (there is no key store here).
  *
  * A state file or marker that exists but cannot be parsed counts as evidence: it
  * cannot rule ciphertext out, and the cost of a wrong "no" is every file lost.
@@ -33,7 +36,7 @@
 import fs from "fs";
 import path from "path";
 
-import { MAGIC } from "./fileCrypto";
+import { isStructurallyEncrypted } from "./fileCrypto";
 
 export const SCANNED_SCOPE_DIRS = ["message-attachments", "attachments", "rcs-cache-staging", "logs"] as const;
 export const MAX_FILES_SCANNED = 200_000;
@@ -98,17 +101,11 @@ async function markerEvidence(userData: string): Promise<string | null> {
   return null;
 }
 
-async function hasMagic(file: string): Promise<boolean> {
-  let handle: fs.promises.FileHandle | null = null;
+async function looksEncrypted(file: string): Promise<boolean> {
   try {
-    handle = await fs.promises.open(file, "r");
-    const head = Buffer.alloc(MAGIC.length);
-    const { bytesRead } = await handle.read(head, 0, MAGIC.length, 0);
-    return bytesRead === MAGIC.length && head.equals(MAGIC);
+    return await isStructurallyEncrypted(file);
   } catch {
-    return false;
-  } finally {
-    await handle?.close().catch(() => undefined);
+    return false; // unreadable file: no evidence either way from its content
   }
 }
 
@@ -134,7 +131,7 @@ async function headerEvidence(userData: string, opts: CiphertextEvidenceOptions)
           return null;
         }
         scanned++;
-        if (await hasMagic(full)) {
+        if (await looksEncrypted(full)) {
           return `an encrypted file already exists under ${path.relative(userData, dir) || "."}`;
         }
       }

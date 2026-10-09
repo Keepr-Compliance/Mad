@@ -13,8 +13,11 @@
  *   W1 after each writer runs, the stored file starts with "KEPRENC", carries no
  *      JPEG/PNG/HEIC/PDF/SQLite magic, does not contain the plaintext, and
  *      decrypts back to it.
- *   W2 the dedupe hash (= the stored file name) is SHA-256 of the PLAINTEXT, also
- *      when the iPhone backup source is itself encrypted.
+ *   W2 the dedupe hash (= the stored file name) is SHA-256 of the PLAINTEXT.
+ *   F  (fix-up, SR R1/R2/A1) an attachment whose CONTENT starts with "KEPRENC" is
+ *      plaintext like any other: writers read sources raw and store it sealed;
+ *      a pre-upgrade plaintext file with that prefix reads back unchanged; a source
+ *      that changes between hash and seal stores nothing.
  *   W3 file-data key unavailable -> nothing plaintext is written, the writer
  *      throws/returns the typed refusal, and the run STOPS (it is not swallowed
  *      into a per-attachment "skipped").
@@ -100,7 +103,9 @@ import { iPhoneSyncStorageService } from "../iPhoneSyncStorageService";
 import macOSMessagesImportService from "../macOSMessagesImportService";
 import emailAttachmentService from "../emailAttachmentService";
 import { getAtRestFiles, getDataKeyService, DATA_KEY_STORE_FILENAME } from "../atRest/dataKeyService";
-import { MAGIC } from "../atRest/fileCrypto";
+import { HEADER_BYTES, MAGIC } from "../atRest/fileCrypto";
+import * as attachmentWriter from "../atRest/attachmentWriter";
+import * as importHelpers from "../macOSMessagesImportService/importHelpers";
 import {
   AtRestWriteRefusedError,
   AT_REST_WRITE_REFUSED_MESSAGE,
@@ -129,6 +134,25 @@ const ALL_MAGICS = [
 function fixture(kind: keyof typeof FORMATS, size = 3000): Buffer {
   return Buffer.concat([FORMATS[kind].magic, crypto.randomBytes(size)]);
 }
+/**
+ * Sender-chosen plaintext that starts with the KEPRENC magic (SR finding 4).
+ *   magic  — "KEPRENC" + random bytes (the SR probe).
+ *   header — a well-formed v1 header (version 1, algorithm 1, zero reserved bytes,
+ *            1 MiB chunk) + 5 bytes: only the file-size/layout rule says it is not
+ *            a container, so a magic-only OR header-only check misclassifies it.
+ */
+const FORGED = {
+  magic: () => Buffer.concat([MAGIC, crypto.randomBytes(3000)]),
+  header: () => {
+    const h = Buffer.alloc(HEADER_BYTES, 0);
+    MAGIC.copy(h, 0);
+    h[7] = 1;
+    h[8] = 1;
+    crypto.randomBytes(32).copy(h, 12);
+    h.writeUInt32BE(1024 * 1024, 44);
+    return Buffer.concat([h, crypto.randomBytes(5)]);
+  },
+};
 const sha256 = (b: Buffer) => crypto.createHash("sha256").update(b).digest("hex");
 
 /** W1: the file on disk is KEPRENC, shows no format magic or plaintext, and round-trips. */
@@ -264,15 +288,11 @@ describe("iPhone sync attachments (iPhoneSyncStorageService.storeAttachments)", 
     }
   });
 
-  it("W2: the dedupe hash is SHA-256 of the plaintext when the BACKUP SOURCE is encrypted", async () => {
+  it("W2: the dedupe hash is SHA-256 of the plaintext; the extension is lower-cased", async () => {
     const plain = fixture("heic");
-    const { backup, byName, messages } = await setUpIphone([
+    const { backup, messages } = await setUpIphone([
       { id: 1, name: "IMG_0100.HEIC", mime: "image/heic", bytes: plain },
     ]);
-    // Seal the backup copy in place (what S4 will do to the kept backup).
-    const src = byName.get("IMG_0100.HEIC")!;
-    await getAtRestFiles().encryptFileInPlace(src);
-    expect(await getAtRestFiles().isEncrypted(src)).toBe(true);
 
     const result = await iphoneStore("user-1", messages, backup);
 
@@ -286,11 +306,10 @@ describe("iPhone sync attachments (iPhoneSyncStorageService.storeAttachments)", 
 
   it("W2: a second message with the same plaintext dedupes onto the first file", async () => {
     const plain = fixture("jpeg");
-    const { backup, byName, messages } = await setUpIphone([
+    const { backup, messages } = await setUpIphone([
       { id: 1, name: "a.jpg", mime: "image/jpeg", bytes: plain },
       { id: 2, name: "b.jpg", mime: "image/jpeg", bytes: plain },
     ]);
-    await getAtRestFiles().encryptFileInPlace(byName.get("b.jpg")!); // same plaintext, different ciphertext
 
     await iphoneStore("user-1", messages, backup);
 
@@ -336,6 +355,45 @@ describe("iPhone sync attachments (iPhoneSyncStorageService.storeAttachments)", 
 
     expect(storeMessages).toHaveBeenCalled();
     expect(result).toMatchObject({ success: false, atRestRefused: true, error: AT_REST_WRITE_REFUSED_MESSAGE });
+    expect(await filesIn(nodePath.join(scratchDir, "message-attachments"))).toEqual([]);
+  });
+});
+
+describe("iPhone sync — forged KEPRENC content and mid-copy changes (fix-up)", () => {
+  it("F-R1: attachments whose content starts with KEPRENC are stored, sealed, and round-trip", async () => {
+    const sources = [
+      { id: 1, name: "IMG_0201.jpg", mime: "image/jpeg", bytes: FORGED.magic() },
+      { id: 2, name: "doc.pdf", mime: "application/pdf", bytes: FORGED.header() },
+    ];
+    const { backup, messages } = await setUpIphone(sources);
+
+    const result = await iphoneStore("user-1", messages, backup);
+
+    expect(result).toMatchObject({ stored: 2, skipped: 0 });
+    const rows = iphoneDb.insertAttachment.mock.calls.map((c) => c[0]);
+    for (const [i, s] of sources.entries()) {
+      expect(rows[i].fileSizeBytes).toBe(s.bytes.length);
+      expect(nodePath.basename(rows[i].storagePath)).toBe(`${sha256(s.bytes)}${nodePath.extname(s.name)}`);
+      await expectSealed(rows[i].storagePath, s.bytes);
+    }
+  });
+
+  it("F-A1: the source changes between hash and seal -> no row, no stored file", async () => {
+    const { backup, byName, messages } = await setUpIphone([
+      { id: 1, name: "a.jpg", mime: "image/jpeg", bytes: fixture("jpeg") },
+    ]);
+    const realHash = attachmentWriter.hashSourceFile;
+    jest.spyOn(attachmentWriter, "hashSourceFile").mockImplementation(async (p: string) => {
+      const h = await realHash(p);
+      await fs.writeFile(byName.get("a.jpg")!, fixture("jpeg")); // swapped after hashing
+      return h;
+    });
+
+    const result = await iphoneStore("user-1", messages, backup);
+
+    expect(result.stored).toBe(0);
+    expect(result.skippedByReason.error).toBe(1);
+    expect(iphoneDb.insertAttachment).not.toHaveBeenCalled();
     expect(await filesIn(nodePath.join(scratchDir, "message-attachments"))).toEqual([]);
   });
 });
@@ -430,6 +488,59 @@ describe("macOS Messages attachments (macOSMessagesImportService.storeAttachment
   });
 });
 
+describe("macOS Messages — forged KEPRENC content and mid-copy changes (fix-up)", () => {
+  it("F-R1: attachments whose content starts with KEPRENC are stored, sealed, and read back", async () => {
+    macSchema();
+    const plain = [FORGED.magic(), FORGED.header()];
+    const rows = [await macRow("f0.jpg", plain[0], "m0"), await macRow("f1.pdf", plain[1], "m1")];
+
+    const result = await macStore("user-1", rows, new Map([["m0", "i0"], ["m1", "i1"]]));
+
+    expect(result.stored).toBe(2);
+    for (const [i, name] of ["f0.jpg", "f1.pdf"].entries()) {
+      const { storage_path } = mockDb
+        .prepare("SELECT storage_path FROM attachments WHERE filename = ?")
+        .get(name) as { storage_path: string };
+      expect(nodePath.basename(storage_path)).toBe(`${sha256(plain[i])}${nodePath.extname(name)}`);
+      await expectSealed(storage_path, plain[i]);
+      const b64 = await macOSMessagesImportService.getAttachmentAsBase64(storage_path);
+      expect(Buffer.from(b64!, "base64").equals(plain[i])).toBe(true);
+    }
+  });
+
+  it.each(Object.keys(FORGED) as Array<keyof typeof FORGED>)(
+    "F-R2: a PRE-UPGRADE plaintext file starting with KEPRENC (%s) reads back unchanged",
+    async (kind) => {
+      const plain = FORGED[kind]();
+      const old = nodePath.join(scratchDir, "message-attachments", `${sha256(plain)}.jpg`);
+      await fs.mkdir(nodePath.dirname(old), { recursive: true });
+      await fs.writeFile(old, plain);
+
+      const b64 = await macOSMessagesImportService.getAttachmentAsBase64(old);
+
+      expect(b64).not.toBeNull();
+      expect(Buffer.from(b64!, "base64").equals(plain)).toBe(true);
+    },
+  );
+
+  it("F-A1: the source changes between hash and seal -> no row, no stored file", async () => {
+    macSchema();
+    const row = await macRow("a.jpg", fixture("jpeg"), "m1");
+    const realHash = importHelpers.generateContentHash;
+    jest.spyOn(importHelpers, "generateContentHash").mockImplementation(async (p: string) => {
+      const h = await realHash(p);
+      await fs.writeFile(row.filename!, fixture("jpeg")); // swapped after hashing
+      return h;
+    });
+
+    const result = await macStore("user-1", [row], new Map([["m1", "i1"]]));
+
+    expect(result.stored).toBe(0);
+    expect((mockDb.prepare("SELECT COUNT(*) c FROM attachments").get() as { c: number }).c).toBe(0);
+    expect(await filesIn(nodePath.join(scratchDir, "message-attachments"))).toEqual([]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Email attachments
 // ---------------------------------------------------------------------------
@@ -465,6 +576,24 @@ describe("email attachments (emailAttachmentService.downloadEmailAttachments)", 
     const dir = nodePath.join(scratchDir, "attachments");
     await expectSealed(nodePath.join(dir, `${sha256(pdf)}.pdf`), pdf);
     await expectSealed(nodePath.join(dir, `${sha256(png)}.png`), png);
+  });
+
+  it("F-R1: email attachments whose content starts with KEPRENC are stored, sealed, and round-trip", async () => {
+    const a = FORGED.magic();
+    const b = FORGED.header();
+    (gmailFetchService.getAttachment as jest.Mock).mockImplementation(async (_m: string, id: string) =>
+      id === "att-a" ? a : b,
+    );
+
+    const result = await emailAttachmentService.downloadEmailAttachments("user-1", "email-1", "gmail-msg-1", "gmail", [
+      meta("a.pdf", "application/pdf", a.length, "att-a"),
+      meta("b.png", "image/png", b.length, "att-b"),
+    ]);
+
+    expect(result).toMatchObject({ success: true, stored: 2, errors: 0 });
+    const dir = nodePath.join(scratchDir, "attachments");
+    await expectSealed(nodePath.join(dir, `${sha256(a)}.pdf`), a);
+    await expectSealed(nodePath.join(dir, `${sha256(b)}.png`), b);
   });
 
   it("W3: key unavailable -> nothing written, the run stops with the typed refusal", async () => {

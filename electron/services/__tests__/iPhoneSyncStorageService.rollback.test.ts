@@ -51,8 +51,8 @@ jest.mock("fs", () => {
 // atRest.attachmentWriters-3816.test.ts).
 jest.mock("../atRest/attachmentWriter", () => ({
   ...jest.requireActual("../atRest/attachmentWriter"),
-  plaintextSize: jest.fn().mockResolvedValue(1024),
-  hashPlaintext: jest.fn().mockResolvedValue({ sha256: "abc123", size: 1024 }),
+  sourceFileSize: jest.fn().mockResolvedValue(1024),
+  hashSourceFile: jest.fn().mockResolvedValue({ sha256: "abc123", size: 1024 }),
   sealFileFrom: jest.fn().mockResolvedValue({ sha256: "abc123", plaintextSize: 1024 }),
 }));
 jest.mock("../databaseService");

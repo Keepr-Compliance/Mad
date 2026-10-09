@@ -40,8 +40,8 @@ jest.mock("fs", () => {
 // atRest.attachmentWriters-3816.test.ts).
 jest.mock("../atRest/attachmentWriter", () => ({
   ...jest.requireActual("../atRest/attachmentWriter"),
-  plaintextSize: jest.fn().mockResolvedValue(1024),
-  hashPlaintext: jest.fn().mockResolvedValue({ sha256: "abc123", size: 1024 }),
+  sourceFileSize: jest.fn().mockResolvedValue(1024),
+  hashSourceFile: jest.fn().mockResolvedValue({ sha256: "abc123", size: 1024 }),
   sealFileFrom: jest.fn().mockResolvedValue({ sha256: "abc123", plaintextSize: 1024 }),
 }));
 jest.mock("../databaseService");
@@ -56,7 +56,7 @@ jest.mock("../../utils/preferenceHelper", () => ({
   isContactSourceEnabled: jest.fn().mockResolvedValue(true),
 }));
 
-import { hashPlaintext, plaintextSize } from "../atRest/attachmentWriter";
+import { hashSourceFile, sourceFileSize } from "../atRest/attachmentWriter";
 import databaseService from "../databaseService";
 import { iOSMessagesParser } from "../iosMessagesParser";
 import {
@@ -203,12 +203,12 @@ describe("BACKLOG-3784: skipped attachments are counted per reason", () => {
       (_backup: string, filename: string) => (filename.includes("rejected") ? null : `/mock/backup/${filename.split("/").pop()}`),
     );
     // BACKLOG-3816: size and hash now come from the at-rest writer (plaintext size/hash).
-    (plaintextSize as jest.Mock).mockImplementation(async (p: string) => {
+    (sourceFileSize as jest.Mock).mockImplementation(async (p: string) => {
       if (p.includes("missing")) throw new Error("ENOENT");
       if (p.includes("big")) return 51 * 1024 * 1024;
       return 10;
     });
-    (hashPlaintext as jest.Mock).mockImplementation(async () => {
+    (hashSourceFile as jest.Mock).mockImplementation(async () => {
       throw new Error("read failed");
     });
 
