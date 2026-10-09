@@ -55,10 +55,27 @@ describe("BACKLOG-3819: the electron-log sink redacts emails and phones", () => 
     return fs.existsSync(f) ? fs.readFileSync(f, "utf8") : "";
   }
 
+  // First import statement's module specifier; independent of CRLF/LF checkouts.
+  function firstImportLine(src: string): string | undefined {
+    return src
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => /^import\s/.test(l));
+  }
+
   it("main.ts imports installAppDataPaths before anything else", () => {
     const main = fs.readFileSync(path.join(__dirname, "../../main.ts"), "utf8");
-    const firstImport = main.split("\n").find((l) => /^import\s/.test(l));
-    expect(firstImport).toBe('import "./bootstrap/installAppDataPaths";');
+    expect(firstImportLine(main)).toBe('import "./bootstrap/installAppDataPaths";');
+  });
+
+  it("the first-import check is line-ending agnostic and still strict", () => {
+    const first = 'import "./bootstrap/installAppDataPaths";';
+    const lf = `// c\n${first}\nimport x from "y";\n`;
+    expect(firstImportLine(lf)).toBe(first);
+    expect(firstImportLine(lf.replace(/\n/g, "\r\n"))).toBe(first);
+    const other = `import x from "y";\r\n${first}\r\n`;
+    expect(firstImportLine(other)).not.toBe(first);
   });
 
   it("the bootstrap registers electron-log's directory for the at-rest 'logs' job", () => {
