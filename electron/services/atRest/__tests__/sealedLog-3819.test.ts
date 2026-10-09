@@ -136,3 +136,42 @@ describe("BACKLOG-3819 sealed log format", () => {
     expect(openSealedLog(raw, keyFor).text).toBe("[2026-10-07 09:00:00.000] [info] old PLAIN line\n" + LINES[0]);
   });
 });
+
+/** Every record's 12-byte nonce, in file order (header, then u32 length || nonce || ...). */
+function nonces(buf: Buffer): string[] {
+  const out: string[] = [];
+  let off = LOG_HEADER_BYTES;
+  while (off + 4 <= buf.length) {
+    const len = buf.readUInt32BE(off);
+    out.push(buf.subarray(off + 4, off + 16).toString("hex"));
+    off += 4 + len;
+  }
+  return out;
+}
+
+describe("BACKLOG-3819 nonce uniqueness under one file key", () => {
+  it("every record in a file has its own nonce, including after a restart appends to the same file", () => {
+    const line = (i: number) => `[2026-10-08 10:00:00.000] [info] line ${i}\n`;
+    const first = new SealedLogAppender({ key: KEY });
+    for (let i = 0; i < 500; i++) first.append(file, line(i));
+    // A new process: fresh appender, same file, same header salt -> same file key.
+    const second = new SealedLogAppender({ key: KEY });
+    for (let i = 500; i < 1000; i++) second.append(file, line(i));
+    const buf = fs.readFileSync(file);
+    const all = nonces(buf);
+    expect(all).toHaveLength(1000);
+    expect(new Set(all).size).toBe(1000);
+    const read = openSealedLog(buf, keyFor);
+    expect(read.problems).toEqual([]);
+    expect(read.records).toBe(1000);
+  });
+
+  it("a whole-file reseal also uses a distinct nonce per record", () => {
+    const text = Array.from({ length: 4000 }, (_, i) => `[2026-10-08 10:00:00.000] [info] ${"x".repeat(60)} ${i}\n`).join("");
+    const buf = sealLogText(text, KEY);
+    const all = nonces(buf);
+    expect(all.length).toBeGreaterThan(1);
+    expect(new Set(all).size).toBe(all.length);
+  });
+});
+

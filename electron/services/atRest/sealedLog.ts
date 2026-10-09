@@ -41,6 +41,18 @@
  * final record; the reader reports it and returns everything before it, and the
  * appender cuts it off before appending again, so at most that one record is lost.
  *
+ * ## Nonces
+ *
+ * Every record gets a fresh random 96-bit nonce (`crypto.randomBytes(12)`). There
+ * is no counter, so nothing has to be persisted across restarts: a process that
+ * appends to an existing file reuses its salt (and so its file key) and keeps
+ * drawing random nonces. The file key is per file (random 16-byte HKDF salt), and
+ * a file is rotated at 8 MB (logFileConfig.ts), so one key seals at most
+ * 8 MB / 32 B (smallest record: 4 length + 12 nonce + 16 tag) = 262,144 records.
+ * Birthday bound for a repeated nonce under one key: n^2 / 2^97 = 4.3e-19 at that
+ * worst case (~56k typical records per 8 MB file: 2e-20). A whole-file reseal
+ * draws a new salt, so a new key and a fresh nonce space.
+ *
  * Pure: fs + crypto only. The key is always passed in — this module never opens
  * secure storage itself.
  */
