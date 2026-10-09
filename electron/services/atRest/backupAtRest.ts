@@ -509,7 +509,9 @@ export class BackupAtRest extends EventEmitter {
 
   /** Resolves when `udid`'s lock is released, or false after `ms`. */
   private waitForRelease(udid: string, ms: number): Promise<boolean> {
-    if (!this.busy.has(udid)) return Promise.resolve(true);
+    // Not held: still hand control back to the event loop (a macrotask, not a microtask),
+    // so a caller looping on this can never pin the main thread, whatever state it is in.
+    if (!this.busy.has(udid)) return new Promise((resolve) => setImmediate(() => resolve(true)));
     return new Promise((resolve) => {
       const onRelease = (released: string) => {
         if (released !== udid) return;
