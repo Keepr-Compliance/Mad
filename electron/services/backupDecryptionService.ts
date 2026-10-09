@@ -34,6 +34,7 @@ import plist from "simple-plist";
 import logService from "./logService";
 import { hostAppPaths } from "../capabilities/appPathsProvider";
 import type { DecryptionResult, ManifestPlist } from "../types/backup";
+import { countManifestFiles, selectManifestReadFiles, type ManifestFileRow } from "./db/iosManifestDbSql";
 
 // Import better-sqlite3-multiple-ciphers for reading the decrypted Manifest.db
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -57,31 +58,16 @@ export const ATTACHMENT_RELATIVE_ROOTS: readonly string[] = [
   "Library/SMS/StickerCache/",
 ];
 
-/** One Manifest.db `Files` row the sync reads. */
-export interface ReadFileRow {
-  fileID: string;
-  domain: string;
-  relativePath: string;
-  file: Buffer;
-}
-
 /**
  * The Manifest.db rows the sync reads — sms.db, AddressBook and every message
  * attachment. Shared by the encrypted-backup parse copy (BACKLOG-3817) and the
- * Keepr-sealed parse copy (BACKLOG-3816 S4-C), so both copy the same set.
- * `manifestDbPath` must be a PLAINTEXT SQLite file.
+ * Keepr-sealed parse copy (BACKLOG-3816 S4-C), so both copy the same set. The SQL
+ * lives in db/iosManifestDbSql.ts. `manifestDbPath` must be a PLAINTEXT SQLite file.
  */
-export function selectReadFileRows(manifestDbPath: string): ReadFileRow[] {
+export function selectReadFileRows(manifestDbPath: string): ManifestFileRow[] {
   const db = new Database(manifestDbPath, { readonly: true });
   try {
-    const attachmentClauses = ATTACHMENT_RELATIVE_ROOTS.map(() => "substr(relativePath, 1, ?) = ?").join(" OR ");
-    const rootParams = ATTACHMENT_RELATIVE_ROOTS.flatMap((root) => [root.length, root]);
-    return db
-      .prepare(
-        `SELECT fileID, domain, relativePath, file FROM Files
-         WHERE flags = 1 AND (fileID IN (?, ?) OR (domain = 'MediaDomain' AND (${attachmentClauses})))`,
-      )
-      .all(SMS_DB_FILE_ID, ADDRESS_BOOK_FILE_ID, ...rootParams) as ReadFileRow[];
+    return selectManifestReadFiles(db, [SMS_DB_FILE_ID, ADDRESS_BOOK_FILE_ID], ATTACHMENT_RELATIVE_ROOTS);
   } finally {
     db.close();
   }
@@ -111,10 +97,36 @@ interface UnlockedBackup {
   classKeys: Map<number, Buffer>;
 }
 
+/** errno codes that mean the parse copy cannot be written at all, not that one file is bad. */
+const FATAL_WRITE_ERROR_CODES: ReadonlySet<string> = new Set(["ENOSPC", "EDQUOT", "EIO", "EROFS"]);
+
+function isFatalWriteError(error: unknown): error is NodeJS.ErrnoException {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return typeof code === "string" && FATAL_WRITE_ERROR_CODES.has(code);
+}
+
+/** User-facing text when the decrypted copy could not be written (disk full or I/O error). */
+export const DECRYPT_DISK_ERROR_MESSAGE =
+  "Not enough free disk space to read this iPhone's encrypted backup. Free up space on this computer and sync again.";
+
+/** The decrypt stopped because the parse copy could not be written. `code` is the errno code. */
+export class BackupDecryptionDiskError extends Error {
+  readonly code: string;
+  constructor(cause: NodeJS.ErrnoException) {
+    super(DECRYPT_DISK_ERROR_MESSAGE);
+    this.name = "BackupDecryptionDiskError";
+    this.code = cause.code ?? "EIO";
+  }
+}
+
 export interface DecryptStats {
   /** Files written to the parse copy. */
   decrypted: number;
-  /** Rows the manifest listed but whose content was not on disk or could not be read. */
+  /**
+   * Attachment rows the manifest listed that could not be decrypted (missing from disk,
+   * bad record, bad key, bad padding). Not silent: the orchestrator records the count on
+   * the sync outcome and the user is told how many could not be read.
+   */
   skipped: number;
 }
 
@@ -271,7 +283,7 @@ export class BackupDecryptionService {
     backupPath: string,
     password: string,
     options: { outputDir?: string } = {},
-  ): Promise<DecryptionResult & { stats?: DecryptStats }> {
+  ): Promise<DecryptionResult & { stats?: DecryptStats; errorCode?: "INSUFFICIENT_SPACE" }> {
     const outputPath = options.outputDir ?? this.newParseCopyDir();
     let unlocked: UnlockedBackup | null = null;
     try {
@@ -298,9 +310,17 @@ export class BackupDecryptionService {
       await logService.error("Decryption failed", BackupDecryptionService.SERVICE_NAME, {
         error: incorrect ? "Incorrect password" : error instanceof Error ? error.message : String(error),
       });
+      const diskError = error instanceof BackupDecryptionDiskError || isFatalWriteError(error);
       return {
         success: false,
-        error: incorrect ? "Incorrect password" : error instanceof Error ? error.message : "Unknown decryption error",
+        error: incorrect
+          ? "Incorrect password"
+          : diskError
+            ? DECRYPT_DISK_ERROR_MESSAGE
+            : error instanceof Error
+              ? error.message
+              : "Unknown decryption error",
+        ...(diskError ? { errorCode: "INSUFFICIENT_SPACE" as const } : {}),
         decryptedPath: null,
       };
     } finally {
@@ -344,8 +364,7 @@ export class BackupDecryptionService {
       await this.decryptManifestDb(backupPath, unlocked, dbPath);
       const db = new Database(dbPath, { readonly: true });
       try {
-        const row = db.prepare("SELECT COUNT(*) AS n FROM Files").get() as { n: number };
-        return row.n > 0;
+        return countManifestFiles(db) > 0;
       } finally {
         db.close();
       }
@@ -457,7 +476,11 @@ export class BackupDecryptionService {
         required.delete(fileId);
       } catch (error) {
         if (fileId === SMS_DB_FILE_ID) throw error;
-        await fs.promises.rm(dest, { force: true });
+        await fs.promises.rm(dest, { force: true }).catch(() => undefined);
+        // A full disk or an I/O fault is not a problem with this one file: every file
+        // after it would fail too, and the sync would report success with attachments
+        // missing. Stop the decrypt instead.
+        if (isFatalWriteError(error)) throw new BackupDecryptionDiskError(error);
         stats.skipped++;
         await logService.warn("Could not decrypt a backup file", BackupDecryptionService.SERVICE_NAME, {
           fileId,

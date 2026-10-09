@@ -38,6 +38,9 @@ jest.mock("../atRest/backupPassword", () => {
       replaceVerified: async (udid: string, password: string) => {
         mockSavedPasswords.set(udid, password);
       },
+      replaceUnreadable: async () => {
+        throw new Error("no unreadable entry in this suite");
+      },
       storePath: () => "",
     }),
   };

@@ -45,6 +45,21 @@ describe("BACKLOG-3816 backup-encryption telemetry", () => {
     expect(JSON.stringify(r)).not.toContain("hunter2-secret");
   });
 
+  it("records what happened to the old unencrypted chain (oldChain), allow-listed", () => {
+    for (const oldChain of ["aside", "deleted-for-space", "kept"]) {
+      expect(buildSyncOutcomeRow(row({ oldChain }), "u").source_metrics).toEqual({ oldChain });
+    }
+    expect(buildSyncOutcomeRow(row({ oldChain: "deleted" }), "u")).not.toHaveProperty("source_metrics");
+  });
+
+  it("BACKLOG-3817 B3: attachments the decrypt could not read are a count on the row", () => {
+    const r = buildSyncOutcomeRow(row({ attachmentsUndecryptable: 3, reasonCode: "DECRYPTION_FAILED" }), "u");
+    expect(r.source_metrics).toEqual({ attachmentsUndecryptable: 3 });
+    expect(r.reason_code).toBe("DECRYPTION_FAILED");
+    expect(buildSyncOutcomeRow(row({ attachmentsUndecryptable: "3" }), "u")).not.toHaveProperty("source_metrics");
+    expect(buildSyncOutcomeRow(row({ attachmentsUndecryptable: -1 }), "u")).not.toHaveProperty("source_metrics");
+  });
+
   it("a source's own metrics (Google Messages) are never replaced", () => {
     const r = buildSyncOutcomeRow(row({ backupPassword: "stored" }, { sourceMetrics: { rcs: 1 } }), "u");
     expect(r.source_metrics).toEqual({ rcs: 1 });

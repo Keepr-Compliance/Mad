@@ -71,6 +71,14 @@ export interface BackupPasswordStore {
    * iTunes). An entry that cannot be unwrapped is never replaced — this throws instead.
    */
   replaceVerified(udid: string, password: string): Promise<void>;
+  /**
+   * Replace an entry that EXISTS but cannot be unwrapped, with a password the caller has
+   * just shown opens this phone's backup (keybag unlocked). The one exception to "never
+   * replaced" (BACKLOG-3817 D-A3): the user typed it and it verified, so nothing is guessed.
+   * Refuses (throws) when the entry is absent or still readable, or the store file itself
+   * cannot be read — other phones' entries are never put at risk.
+   */
+  replaceUnreadable(udid: string, password: string): Promise<void>;
   storePath(): string;
 }
 
@@ -147,7 +155,7 @@ export function createBackupPasswordStore(deps: BackupPasswordStoreDeps): Backup
     udid: string,
     password: string,
     origin: BackupPasswordOrigin,
-    mode: "create" | "replace",
+    mode: "create" | "replace" | "replace-unreadable",
   ): Promise<void> => {
     checkUdid(udid);
     if (!password) throw new Error("Refusing to store an empty backup password");
@@ -163,6 +171,18 @@ export function createBackupPasswordStore(deps: BackupPasswordStoreDeps): Backup
       if (!existing) throw new BackupPasswordUnavailableError("No saved backup password to replace");
       // Throws when the old entry cannot be unwrapped: an unreadable entry is never replaced.
       unwrap(existing);
+    }
+    if (mode === "replace-unreadable") {
+      if (!existing) throw new BackupPasswordUnavailableError("No saved backup password to replace");
+      let readable = true;
+      try {
+        unwrap(existing);
+      } catch {
+        readable = false;
+      }
+      if (readable) {
+        throw new BackupPasswordUnavailableError("The saved backup password is readable; it is not replaced this way");
+      }
     }
     const wrapped = deps.secretStore.encryptString(password).toString("base64");
     store.devices[udid] = { wrapped, origin, createdAt: new Date().toISOString() };
@@ -195,6 +215,9 @@ export function createBackupPasswordStore(deps: BackupPasswordStoreDeps): Backup
     },
     replaceVerified(udid, password) {
       return serialise(() => write(udid, password, "user", "replace"));
+    },
+    replaceUnreadable(udid, password) {
+      return serialise(() => write(udid, password, "user", "replace-unreadable"));
     },
   };
 }

@@ -462,6 +462,17 @@ export interface SyncResult {
   needsCleanup?: boolean;
   /** Unique session ID for ACID rollback on cancel (TASK-2110) */
   sessionId?: string;
+  /**
+   * BACKLOG-3817: message attachments in an encrypted backup that could not be decrypted.
+   * The sync still succeeds; the user is told how many could not be read.
+   */
+  attachmentsUndecryptable?: number;
+  /**
+   * BACKLOG-3817: this run stopped to ask the user for the backup password (none known,
+   * or the one tried did not open the backup). The retry with a password is not a new
+   * sync and must not wait out the sync cooldown.
+   */
+  passwordRequired?: boolean;
 }
 
 /**
@@ -565,7 +576,14 @@ const DISCONNECT_CONFIRM_ATTEMPTS = 3;
  * encryption on the phone is left on.
  */
 export const BACKUP_PASSWORD_UNAVAILABLE_MESSAGE =
-  "Keepr can't unlock the iPhone backup password it saved on this computer, so it can't read this iPhone's encrypted backup. Nothing was changed. Restart Keepr and try again; if this keeps happening, contact support.";
+  "Enter your backup password again. Keepr can't unlock the password it saved for this iPhone on this computer.";
+
+/**
+ * BACKLOG-3817: the password saved for this iPhone no longer opens its backup — the owner
+ * changed it in Finder or iTunes. The saved one is replaced only once the new one works.
+ */
+export const BACKUP_PASSWORD_CHANGED_MESSAGE =
+  "Enter your backup password again. The password Keepr saved for this iPhone no longer opens its backup.";
 
 /**
  * BACKLOG-3598: what the user is told when the phone being backed up is unplugged.
@@ -1566,11 +1584,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         log.warn("[DeviceSyncOrchestrator] Saved backup password unavailable", {
           reason: passwordPlan.reason,
         });
-        syncTimeline.setContext({ endedBy: "backup-encryption", reasonCode: "BACKUP_PASSWORD_UNAVAILABLE" });
+        // Ask for the password instead of stopping for good. The saved entry is left as it
+        // is; it is replaced only after the typed password opens this backup.
+        syncTimeline.setContext({
+          endedBy: "backup-encryption",
+          reasonCode: "BACKUP_PASSWORD_UNAVAILABLE",
+          backupPassword: "unavailable",
+        });
         this.isRunning = false;
-        this.setPhase("error");
-        this.emit("error", { message: BACKUP_PASSWORD_UNAVAILABLE_MESSAGE });
-        return this.errorResult(BACKUP_PASSWORD_UNAVAILABLE_MESSAGE);
+        this.emit("password-required");
+        return this.passwordRequiredResult(BACKUP_PASSWORD_UNAVAILABLE_MESSAGE);
       }
       // BACKLOG-3816 telemetry: where this run's backup password came from. Never the password.
       syncTimeline.setContext({ backupPassword: passwordPlan.kind });
@@ -1735,7 +1758,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
           // BACKLOG-3817: the SAVED password no longer opens this backup (changed in Finder
           // or iTunes). Ask the user; the typed one replaces the saved one once it works.
-          if (backupResult.errorCode === "INCORRECT_PASSWORD" && passwordPlan.kind === "stored") {
+          const askAgain =
+            backupResult.errorCode === "PASSWORD_REQUIRED" || backupResult.errorCode === "INCORRECT_PASSWORD";
+          const savedPasswordChanged =
+            backupResult.errorCode === "INCORRECT_PASSWORD" && passwordPlan.kind === "stored";
+          if (savedPasswordChanged) {
             this.emit("password-required");
           }
 
@@ -1793,6 +1820,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             });
           }
           this.isRunning = false;
+          if (askAgain) {
+            return this.passwordRequiredResult(savedPasswordChanged ? BACKUP_PASSWORD_CHANGED_MESSAGE : error);
+          }
           return this.errorResult(error);
         }
       } finally {
@@ -1820,6 +1850,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
 
       let backupPath = backupResult.backupPath;
+      // BACKLOG-3817: attachments the decrypt could not read. Reported, never silent.
+      let attachmentsUndecryptable = 0;
 
       // BACKLOG-3816: an unencrypted backup moved aside for this phone is deleted only now,
       // after the encrypted backup completed AND its index opens with the saved password.
@@ -1835,7 +1867,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           syncTimeline.setContext({ endedBy: "backup-encryption", reasonCode: "PASSWORD_REQUIRED" });
           this.isRunning = false;
           this.emit("password-required");
-          return this.errorResult("Password required for encrypted backup");
+          return this.passwordRequiredResult("Password required for encrypted backup");
         }
 
         // The user typed a password and it opened this backup: keep it, so the next sync
@@ -1868,12 +1900,18 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         if (!decryptResult.success || !decryptResult.decryptedPath) {
           syncTimeline.setContext({
             endedBy: "backup-encryption",
-            reasonCode: decryptResult.error === "Incorrect password" ? "INCORRECT_PASSWORD" : "DECRYPTION_FAILED",
+            reasonCode:
+              decryptResult.error === "Incorrect password"
+                ? "INCORRECT_PASSWORD"
+                : decryptResult.errorCode === "INSUFFICIENT_SPACE"
+                  ? "INSUFFICIENT_SPACE"
+                  : "DECRYPTION_FAILED",
           });
           this.isRunning = false;
           return this.errorResult(decryptResult.error || "Decryption failed");
         }
 
+        attachmentsUndecryptable = this.recordUndecryptable(decryptResult.stats?.skipped ?? 0);
         backupPath = decryptResult.decryptedPath;
         parseCopyPath = backupPath;
       }
@@ -2055,6 +2093,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         backupPath,  // SPRINT-068: Pass for attachment extraction
         needsCleanup, // SPRINT-068: Caller should cleanup after persistence
         sessionId,   // TASK-2110: For ACID rollback on cancel
+        ...(attachmentsUndecryptable > 0 ? { attachmentsUndecryptable } : {}),
       };
 
       // BACKLOG-3816 S4-C: persistence still reads this chain; it is sealed when
@@ -2472,7 +2511,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   private async rememberUserPassword(udid: string, password: string): Promise<void> {
     try {
       const store = this.passwordStore();
-      const existing = await store.get(udid);
+      let existing: Awaited<ReturnType<BackupPasswordStore["get"]>>;
+      try {
+        existing = await store.get(udid);
+      } catch (error) {
+        if (!(error instanceof BackupPasswordUnavailableError)) throw error;
+        // BACKLOG-3817 D-A3: the saved entry cannot be unlocked on this computer. The typed
+        // password just opened this backup, so it replaces that entry — and only that one.
+        await store.replaceUnreadable(udid, password);
+        return;
+      }
       if (existing.kind === "absent") {
         await store.put(udid, password, "user");
       } else if (existing.password !== password) {
@@ -3088,6 +3136,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       // Check if backup is encrypted and decrypt if needed
       let extractionPath = backupPath;
+      let attachmentsUndecryptable = 0;
       const isEncrypted =
         await this.decryptionService.isBackupEncrypted(backupPath);
 
@@ -3095,13 +3144,19 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         // BACKLOG-3817: the typed password, else the one saved for this phone.
         const plan = await this.resolveBackupPassword(options.udid, options.password);
         if (plan.kind === "unavailable") {
+          syncTimeline.setContext({
+            endedBy: "backup-encryption",
+            reasonCode: "BACKUP_PASSWORD_UNAVAILABLE",
+            backupPassword: "unavailable",
+          });
           this.isRunning = false;
-          return this.errorResult(BACKUP_PASSWORD_UNAVAILABLE_MESSAGE);
+          this.emit("password-required", {});
+          return this.passwordRequiredResult(BACKUP_PASSWORD_UNAVAILABLE_MESSAGE);
         }
         if (plan.kind === "none") {
           this.isRunning = false;
           this.emit("password-required", {});
-          return this.errorResult("Password required for encrypted backup");
+          return this.passwordRequiredResult("Password required for encrypted backup");
         }
         const existingPassword = plan.password;
 
@@ -3120,9 +3175,18 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
         if (!decryptResult.success || !decryptResult.decryptedPath) {
           this.isRunning = false;
+          // BACKLOG-3817: a SAVED password that no longer opens the backup — ask again.
+          if (decryptResult.error === "Incorrect password") {
+            if (plan.kind === "stored") {
+              this.emit("password-required", {});
+              return this.passwordRequiredResult(BACKUP_PASSWORD_CHANGED_MESSAGE);
+            }
+            return this.passwordRequiredResult(decryptResult.error);
+          }
           return this.errorResult(decryptResult.error || "Decryption failed");
         }
 
+        attachmentsUndecryptable = this.recordUndecryptable(decryptResult.stats?.skipped ?? 0);
         extractionPath = decryptResult.decryptedPath;
         if (plan.kind === "provided") {
           await this.rememberUserPassword(options.udid, existingPassword);
@@ -3250,6 +3314,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         error: null,
         duration,
         sessionId,   // TASK-2110: For ACID rollback on cancel
+        ...(attachmentsUndecryptable > 0 ? { attachmentsUndecryptable } : {}),
       };
 
       this.emit("complete", result);
@@ -3274,6 +3339,23 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       return this.errorResult(errorMessage);
     }
+  }
+
+  /**
+   * BACKLOG-3817: record attachments the decrypt could not read on the outcome row, as a
+   * count and a reasonCode, so a partly-read backup is never a silent success.
+   */
+  private recordUndecryptable(count: number): number {
+    if (count > 0) {
+      log.warn("[DeviceSyncOrchestrator] Some attachments in the encrypted backup could not be decrypted", { count });
+      syncTimeline.setContext({ attachmentsUndecryptable: count, reasonCode: "DECRYPTION_FAILED" });
+    }
+    return count;
+  }
+
+  /** BACKLOG-3817: the run stopped to ask for the backup password. See SyncResult.passwordRequired. */
+  private passwordRequiredResult(error: string): SyncResult {
+    return { ...this.errorResult(error), passwordRequired: true };
   }
 
   /**
