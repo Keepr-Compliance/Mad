@@ -1007,6 +1007,39 @@ describe("progress", () => {
     expect(describeBackupAtRestProgress({ udid: UDID, phase: "sealing", done: 900, total: 1000 }).percent).toBe(90);
   });
 
+  it("the securing line carries a time-based estimate once there is one (banner, outside the sync screen)", () => {
+    const base = { udid: UDID, phase: "migrating" as const, done: 10, total: 100, doneUnits: 42, totalUnits: 100 };
+    expect(describeBackupAtRestProgress({ ...base, etaMs: 12 * 60_000 }).message).toBe("Securing your iPhone backup… 42% (about 12 min left)");
+    expect(describeBackupAtRestProgress({ ...base, etaMs: 65 * 60_000 }).message).toBe("Securing your iPhone backup… 42% (about 1 h 5 min left)");
+    expect(describeBackupAtRestProgress({ ...base, etaMs: 20_000 }).message).toBe("Securing your iPhone backup… 42% (less than a minute left)");
+    expect(describeBackupAtRestProgress(base).message).toBe("Securing your iPhone backup… 42%");
+  });
+
+  it("Cancel while waiting for a background pass to pause: the sync ends as cancelled and the pass resumes to the end", async () => {
+    makeChain();
+    const ac = new AbortController();
+    let s: BackupAtRest | null = null;
+    let waiting: Promise<unknown> | null = null;
+    let n = 0;
+    s = service({
+      sealEngineOptions: {
+        beforeSeal: () => {
+          if (++n === 1) {
+            waiting = (s as BackupAtRest).beginSync(UDID, { signal: ac.signal }).catch((e) => e);
+            ac.abort();
+          }
+        },
+      },
+    });
+    expect(await s.migrate(UDID)).toBe("paused");
+    expect(await (waiting as unknown as Promise<unknown>)).toMatchObject({ reason: "cancelled" });
+    for (let i = 0; i < 300 && (plaintextLeft().length > 0 || s.busyReason(UDID)); i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
   it("a seal pass reports units that end exactly at the total, and at most about once a second in between", async () => {
     makeChain();
     const s = service();

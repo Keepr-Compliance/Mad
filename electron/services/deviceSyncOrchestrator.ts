@@ -1649,10 +1649,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           atRestSession = await this.atRest().beginSync(options.udid, {
             onProgress: (p) => this.emitAtRestProgress(p),
             underLock,
+            signal: this.abortController?.signal,
           });
         } catch (error) {
           // A failure of the new-chain step is an ordinary sync error, not a refusal.
           if (!(error instanceof BackupAtRestRefusal)) throw error;
+          if (error.reason === "cancelled") {
+            // Cancelled while a background seal was pausing for it: a cancel, not a failure.
+            this.isRunning = false;
+            return this.errorResult("Sync cancelled by user");
+          }
           return this.refuseForAtRest(error.message, error.reason);
         }
         if (atRestSession.kind === "first" && atRestSession.quarantined) {

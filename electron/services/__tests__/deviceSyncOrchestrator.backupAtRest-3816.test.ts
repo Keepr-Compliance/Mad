@@ -125,6 +125,7 @@ import {
 } from "../atRest/backupAtRest";
 import { createFileCrypto, MAGIC, type KeyResolver } from "../atRest/fileCrypto";
 import { createMarkerStore } from "../atRest/markers";
+import { setBackupIndexKeysForTests } from "../atRest/backupIndexFiles";
 import { syncTimeline } from "../syncTimeline";
 import type { BackupResult } from "../../types/backup";
 
@@ -165,7 +166,9 @@ function plaintextLeft(): string[] {
     for (const e of fsSync.readdirSync(d, { withFileTypes: true })) {
       const f = path.join(d, e.name);
       if (e.isDirectory()) walk(f, false);
-      else if (!(root && e.name.endsWith(".plist"))) {
+      else {
+        // Root plists included: sealed between syncs too (founder QA 2026-10-09).
+        void root;
         const b = fsSync.readFileSync(f);
         if (b.length > 0 && !b.subarray(0, 7).equals(MAGIC)) out.push(f);
       }
@@ -246,7 +249,10 @@ beforeEach(async () => {
     sleep: async () => undefined,
     log: (_l, m, d) => process.env.S4C_DEBUG && process.stderr.write(`${m} ${JSON.stringify(d)}\n`),
     strategy: () => "full",
+    pauseWaitMs: 20,
   });
+  // Sealed root plists are read (checkBackupStatus) with the test key, never the app's key store.
+  setBackupIndexKeysForTests(resolver);
   makeChain();
   expect(await atRest.migrate(UDID)).toBe("encrypted");
 
@@ -259,6 +265,7 @@ beforeEach(async () => {
   jest.spyOn(P, "cancelBackup").mockImplementation(() => undefined);
 });
 afterEach(() => {
+  setBackupIndexKeysForTests(null);
   fsSync.rmSync(userData, { recursive: true, force: true });
   delete process.env.KEEPR_S4C_USERDATA;
 });
@@ -500,18 +507,64 @@ describe("refusals before idevicebackup2", () => {
     expect(plaintextLeft()).toEqual([]);
   });
 
-  it("B: a backup being secured → refused with the founder sentence, never spawned", async () => {
+  it("B (founder decision 2026-10-09): a sync started during the launch migration is NOT refused — the migration pauses, the sync runs, its seal finishes the rest", async () => {
+    // A pre-2.40 chain: plaintext, marker removed, so migrate really seals.
+    await atRest.removeMarker(UDID);
+    fsSync.rmSync(chain, { recursive: true, force: true });
+    makeChain();
     const o = newOrchestrator();
     backupReturns(ok());
-    const busy = (atRest as unknown as { busy: Map<string, string> }).busy;
-    busy.set(UDID, "migrating");
+    const errors: unknown[] = [];
+    o.on("error", (e) => errors.push(e));
+    // A launch migration mid-pass (the real pass/pause mechanics are covered in
+    // backupAtRest.test.ts): it holds the phone and stops when asked.
+    const internals = atRest as unknown as {
+      busy: Map<string, string>;
+      pausable: Map<string, Int32Array>;
+      release: (u: string) => void;
+    };
+    const flag = new Int32Array(new SharedArrayBuffer(4));
+    internals.busy.set(UDID, "migrating");
+    internals.pausable.set(UDID, flag);
+    let pausedAt: number | null = null;
+    const pass = setInterval(() => {
+      if (Atomics.load(flag, 0) === 1 && pausedAt === null) {
+        pausedAt = Date.now();
+        internals.release(UDID);
+      }
+    }, 5);
     const result = await o.sync({ udid: UDID });
-    busy.delete(UDID);
-    expect(result.error).toContain(BACKUP_SECURING_SENTENCE);
-    expect(startBackup).not.toHaveBeenCalled();
+    clearInterval(pass);
+    expect(pausedAt).not.toBeNull();
+    expect(result.success).toBe(true);
+    expect(startBackup).toHaveBeenCalled();
+    expect(errors).toEqual([]);
+    await o.completeBackupAtRest(true);
+    await sealedAfter(o);
   });
 
-  it("B2: a backup being secured is not moved aside or deleted by the new-chain step", async () => {
+  it("B-cancel: Cancel while the sync waits for a background seal to pause is a cancel, not 'Sync Failed', and the seal resumes", async () => {
+    const o = newOrchestrator();
+    backupReturns(ok());
+    const errors: unknown[] = [];
+    o.on("error", (e) => errors.push(e));
+    // A background pass that has not reached its next file boundary yet.
+    const internals = atRest as unknown as { busy: Map<string, string>; pausable: Map<string, Int32Array> };
+    internals.busy.set(UDID, "sealing");
+    internals.pausable.set(UDID, new Int32Array(new SharedArrayBuffer(4)));
+    const syncing = o.sync({ udid: UDID });
+    await new Promise((r) => setTimeout(r, 60));
+    o.cancel();
+    const result = await syncing;
+    expect(result.error).toBe("Sync cancelled by user");
+    expect(result.error).not.toContain(BACKUP_SECURING_SENTENCE);
+    expect(errors).toEqual([]);
+    expect(startBackup).not.toHaveBeenCalled();
+    internals.busy.delete(UDID);
+    internals.pausable.delete(UDID);
+  });
+
+  it("B2: a phone held by something that cannot pause (another sync) is not moved aside or deleted by the new-chain step", async () => {
     const P = BackupService.prototype;
     jest.spyOn(P, "checkEncryptionStatus").mockResolvedValue({ isEncrypted: true, needsPassword: true, status: "on" });
     jest.spyOn(P, "readChainEncryption").mockResolvedValue("plaintext");

@@ -191,6 +191,8 @@ export interface BackupAtRestProgress {
    */
   doneUnits?: number;
   totalUnits?: number;
+  /** Time left, from the pass's own rate so far (time-based; absent until it is meaningful). */
+  etaMs?: number;
 }
 
 /**
@@ -203,6 +205,8 @@ export interface BackupAtRestProgress {
  * PC benchmark gives the Windows figures.
  */
 export const PROGRESS_FILE_WEIGHT_BYTES = 256 * 1024;
+/** While a sync waits for a background pass to pause, its status line is repeated this often. */
+export const PAUSE_REPORT_INTERVAL_MS = 5000;
 /** Progress for a seal pass is emitted at most this often (plus its start and end). */
 export const PROGRESS_INTERVAL_MS = 1000;
 
@@ -225,7 +229,18 @@ export function describeBackupAtRestProgress(p: BackupAtRestProgress): { message
       percent,
     };
   }
-  return { message: `Securing your iPhone backup… ${percent}%`, percent };
+  const eta = p.etaMs !== undefined && percent < 100 ? ` (${describeEta(p.etaMs)})` : "";
+  return { message: `Securing your iPhone backup… ${percent}%${eta}`, percent };
+}
+
+/** "about 12 min left" / "about 1 h 5 min left" / "less than a minute left". */
+export function describeEta(ms: number): string {
+  const min = Math.round(ms / 60_000);
+  if (min < 1) return "less than a minute left";
+  if (min < 60) return `about ${min} min left`;
+  const h = Math.floor(min / 60);
+  const rest = min % 60;
+  return rest === 0 ? `about ${h} h left` : `about ${h} h ${rest} min left`;
 }
 
 export type MarkerReading = BackupAtRestState | "absent" | "unreadable";
@@ -241,7 +256,7 @@ export type BackupSyncSession =
 
 export class BackupAtRestRefusal extends Error {
   constructor(
-    readonly reason: "busy" | "key-unavailable" | "disk-space" | "unreadable",
+    readonly reason: "busy" | "key-unavailable" | "disk-space" | "unreadable" | "cancelled",
     message: string,
   ) {
     super(message);
@@ -279,7 +294,7 @@ export interface BackupAtRestDeps {
   chunkSize?: number;
   /** Test seams for the in-process seal engine (fault injection, retry delay). */
   sealEngineOptions?: SealEngineOptions;
-  /** How long a sync waits for a background seal to pause before it gives up (default 10 min). */
+  /** Test seam: how often a sync waiting for a pause re-checks and repeats its line (default 5 s). */
   pauseWaitMs?: number;
 }
 
@@ -500,7 +515,11 @@ export class BackupAtRest extends EventEmitter {
   private resumeIfPausedForSync(udid: string): void {
     if (!this.pausedForSync.delete(udid)) return;
     setImmediate(() => {
-      this.migrate(udid).catch((error) => {
+      void (async () => {
+        // The paused pass may still be finishing its current file.
+        while (this.busy.has(udid)) await this.waitForRelease(udid, PAUSE_REPORT_INTERVAL_MS);
+        await this.migrate(udid);
+      })().catch((error) => {
         this.log("warn", "[BackupAtRest] could not resume a paused seal; the next launch retries", { code: errCode(error) });
       });
     });
@@ -694,7 +713,13 @@ export class BackupAtRest extends EventEmitter {
       const now = Date.now();
       if (now - lastEmit >= PROGRESS_INTERVAL_MS && done < listed.length) {
         lastEmit = now;
-        notify({ udid, phase, done, total: listed.length, doneUnits, totalUnits });
+        const elapsed = now - started;
+        // An estimate only once there is something to go on (10 s and 1% in).
+        const etaMs =
+          elapsed >= 10_000 && doneUnits >= totalUnits / 100
+            ? Math.round((elapsed * (totalUnits - doneUnits)) / doneUnits)
+            : undefined;
+        notify({ udid, phase, done, total: listed.length, doneUnits, totalUnits, ...(etaMs !== undefined ? { etaMs } : {}) });
       }
     });
     if (result.stopped) report.paused = true;
@@ -928,6 +953,8 @@ export class BackupAtRest extends EventEmitter {
       strategy?: BackupUnsealStrategy;
       onProgress?: (p: BackupAtRestProgress) => void;
       underLock?: () => Promise<void>;
+      /** The sync's cancel: ends a wait for a background pass to pause (reason `cancelled`). */
+      signal?: AbortSignal;
     } = {},
   ): Promise<BackupSyncSession> {
     const chain = this.chainDir(udid);
@@ -935,13 +962,20 @@ export class BackupAtRest extends EventEmitter {
     // way: it stops at the next file boundary and this sync starts. What it did not reach
     // is sealed by this sync's own seal at the end (it seals every plaintext file), or by
     // the next launch. The sync is never refused for it and never waits for the whole seal.
+    // The wait is NOT bounded: a pass stops within one file, and a sync must never fail
+    // because a seal is running (founder decision 2026-10-09). The line repeats while it
+    // waits, and the user's Cancel ends the wait as a cancel, not a failure.
     let pausedOne = false;
     while (this.requestPause(udid)) {
       pausedOne = true;
       opts.onProgress?.({ udid, phase: "pausing", done: 0, total: 0 });
-      // A pass stops within one file; the bound only guards a pass that is stuck in I/O.
-      const released = await this.waitForRelease(udid, this.deps.pauseWaitMs ?? 10 * 60_000);
-      if (!released) break;
+      const released = await this.waitForRelease(udid, this.deps.pauseWaitMs ?? PAUSE_REPORT_INTERVAL_MS);
+      if (opts.signal?.aborted) {
+        this.pausedForSync.add(udid);
+        this.resumeIfPausedForSync(udid);
+        throw new BackupAtRestRefusal("cancelled", "Sync cancelled by user");
+      }
+      if (!released) continue; // still finishing its current file: say so again, keep waiting
     }
     if (pausedOne) this.pausedForSync.add(udid);
     const holder = this.busy.get(udid);
