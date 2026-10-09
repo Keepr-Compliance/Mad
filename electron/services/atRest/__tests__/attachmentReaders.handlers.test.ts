@@ -314,3 +314,20 @@ describe("PH phase switch", () => {
     expect((await invoke("attachments:get-buffer", plainPath)).success).toBe(false);
   });
 });
+
+// KP — an OLD plaintext attachment whose bytes happen to begin with "KEPRENC"
+// must preview as itself. KNOWN RED at this commit: detection is the 7-byte magic
+// (S0). S1's fix-up hardens detection in fileCrypto (full header validation +
+// first-chunk tag). `it.failing` passes while the reader is wrong; once S2 merges
+// S1's hardening this test starts FAILING and must be flipped to `it`.
+describe("KP plaintext that starts with the magic bytes", () => {
+  it.failing("previews a legacy plaintext file beginning with KEPRENC as its own bytes", async () => {
+    const forged = Buffer.concat([Buffer.from("KEPRENC"), crypto.randomBytes(200)]);
+    const p = path.join(userData, "message-attachments", "legacy-kep.bin");
+    fs.writeFileSync(p, forged);
+    const res = await invoke("attachments:get-buffer", p);
+    expect(res.success).toBe(true);
+    expect(Buffer.from(res.data as string, "base64").equals(forged)).toBe(true);
+  });
+});
+

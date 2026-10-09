@@ -324,3 +324,21 @@ describe("PH phase switch for DB-path readers", () => {
     ).toBe("extracted");
   });
 });
+
+// KP — see the note in attachmentReaders.handlers.test.ts. KNOWN RED until S1's
+// hardened detection is merged into S2; then flip `it.failing` to `it`.
+describe("KP export of a legacy plaintext file that starts with the magic bytes", () => {
+  it.failing("exports it byte-identical", async () => {
+    const forged = Buffer.concat([Buffer.from("KEPRENC"), crypto.randomBytes(200)]);
+    const p = path.join(userData, "attachments", "e1", "legacy-kep.pdf");
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, forged);
+    mockAttachmentRows.push({ id: "kp", filename: "legacy-kep.pdf", mime_type: "application/pdf", storage_path: p, file_size_bytes: forged.length });
+    const result = await exportEmailAttachmentsToThreadDirs([emailComm()], exportDir);
+    expect(result.exported).toBe(1);
+    const out = allFiles(exportDir);
+    expect(out).toHaveLength(1);
+    expect(fs.readFileSync(out[0]).equals(forged)).toBe(true);
+  });
+});
+
