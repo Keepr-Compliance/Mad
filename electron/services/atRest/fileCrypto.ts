@@ -386,11 +386,13 @@ export interface HeaderProbe {
 }
 
 /**
- * Structural classification on a handle the caller opened (BACKLOG-3816 S1 detection,
- * S2 single handle) — no key needed. A file that is not a valid container is
- * `encrypted:false`. The caller keeps the handle.
+ * Structural classification on an ALREADY-OPEN handle — no key needed. The caller
+ * owns the handle (BACKLOG-3816 S2: the decision and the bytes read afterwards come
+ * from the same open). A file that is not a valid container is `encrypted:false`.
  */
-async function probeHeaderFromHandle(handle: fs.promises.FileHandle): Promise<HeaderProbe> {
+export async function probeHeaderFromHandle(
+  handle: fs.promises.FileHandle,
+): Promise<HeaderProbe> {
   const { size } = await handle.stat();
   if (size < HEADER_BYTES) return { encrypted: false, size };
   const head = Buffer.alloc(HEADER_BYTES);
@@ -406,7 +408,7 @@ async function probeHeaderFromHandle(handle: fs.promises.FileHandle): Promise<He
 }
 
 /**
- * Structural classification — no key needed. Throws only when the file cannot be
+ * Structural classification by path. Throws only when the file cannot be
  * opened/read (e.g. ENOENT); a file that is not a valid container is `encrypted:false`.
  */
 export async function probeHeader(filePath: string): Promise<HeaderProbe> {
@@ -637,7 +639,7 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
     },
 
     async statPlaintext(filePath) {
-      // BACKLOG-3816 S2: one open; the magic check and the header read use the same handle.
+      // BACKLOG-3816 S2: one open; the structural check and the header read use the same handle.
       const handle = await fs.promises.open(filePath, "r");
       try {
         return await api.statPlaintextFromHandle(handle);

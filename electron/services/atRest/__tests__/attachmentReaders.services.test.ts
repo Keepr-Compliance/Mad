@@ -382,7 +382,7 @@ describe("PH phase switch for DB-path readers", () => {
   });
 });
 
-// KP — see the note in attachmentReaders.handlers.test.ts (S1 detection now merged).
+// KP — see the note in attachmentReaders.handlers.test.ts (structural detection).
 describe("KP export of a legacy plaintext file that starts with the magic bytes", () => {
   it("exports it byte-identical", async () => {
     const forged = Buffer.concat([Buffer.from("KEPRENC"), crypto.randomBytes(200)]);

@@ -316,8 +316,8 @@ describe("PH phase switch", () => {
 });
 
 // KP — an OLD plaintext attachment whose bytes happen to begin with "KEPRENC"
-// must preview as itself. Green since S1's structural detection was merged with
-// S2's single-handle readers (fileCrypto probeHeaderFromHandle).
+// must preview as itself. Detection is structural (S1's full-header probe, on the
+// reader's one handle), so the 7-byte magic alone does not classify a file.
 describe("KP plaintext that starts with the magic bytes", () => {
   it("previews a legacy plaintext file beginning with KEPRENC as its own bytes", async () => {
     const forged = Buffer.concat([Buffer.from("KEPRENC"), crypto.randomBytes(200)]);
