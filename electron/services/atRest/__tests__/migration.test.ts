@@ -295,6 +295,26 @@ describe("M4 — done only after a clean scan", () => {
     expect((await markers.getScope("attachments"))?.state).toBe("done");
   });
 
+  it("a file unreadable only during the final scan keeps the scope migrating (no candidates left, still not done)", async () => {
+    const seeded = await seedMany("message-attachments", 2);
+    const unreadable = [...seeded.keys()][0];
+    const real = createFileCrypto(resolver(), { chunkSize: 64 });
+    const base = wrap(real, () => undefined);
+    const crypto: FileCrypto = {
+      ...base,
+      // Readable for the planning walk; once it has been encrypted, the verification scan cannot read it.
+      async isEncrypted(file: string) {
+        if (file === unreadable && (base.calls.get(file) ?? 0) > 0) throw errno("EACCES");
+        return real.isEncrypted(file);
+      },
+    };
+    const markers = createMarkerStore({ userData: () => root });
+    const m = createAtRestMigration(deps({ crypto, markers }));
+    const r = await m.runScope("attachments");
+    expect(r.outcome).toBe("incomplete");
+    expect((await markers.getScope("attachments"))?.state).toBe("migrating");
+  });
+
   it("an empty or missing scope directory writes no state at all", async () => {
     const markers = createMarkerStore({ userData: () => root });
     const m = createAtRestMigration(deps({ markers }));
