@@ -54,6 +54,24 @@ export function buildPackagedMenuTemplate(
       { role: "selectAll" },
     ],
   });
+  if (isMac) {
+    // Cmd+W lived in the default File menu.
+    template.push({ label: "File", submenu: [{ role: "close" }] });
+  }
+  // View: zoom + fullscreen ONLY. No reload / forceReload / toggleDevTools.
+  template.push({
+    label: "View",
+    submenu: [
+      { role: "resetZoom" },
+      { role: "zoomIn" },
+      // Electron's zoomIn accelerator is CmdOrCtrl+Plus, which needs Shift on
+      // most layouts; this hidden duplicate makes plain CmdOrCtrl+= work too.
+      { role: "zoomIn", accelerator: "CommandOrControl+=", visible: false },
+      { role: "zoomOut" },
+      { type: "separator" },
+      { role: "togglefullscreen" },
+    ],
+  });
   template.push({
     role: "windowMenu",
   });

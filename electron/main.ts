@@ -4,7 +4,6 @@
 // a log path on first write. tsconfig.electron.json emits CommonJS, which
 // preserves statement order, so import position IS execution position here.
 import "./bootstrap/installAppDataPaths";
-import { devToolsPreference, installApplicationMenu } from "./bootstrap/appMenu";
 // BACKLOG-2962: Sentry BEFORE the composition root, so a capability missing at
 // launch reaches Sentry before the app exits. It must stay AFTER the import
 // above (its offline queue path is read from `userData` at init) and BEFORE the
@@ -12,6 +11,7 @@ import { devToolsPreference, installApplicationMenu } from "./bootstrap/appMenu"
 // block that populates SENTRY_DSN moved with it. Both placements are traced in
 // that file's header and pinned by `bootstrap/__tests__/installSentry.test.ts`.
 import "./bootstrap/installSentry";
+import { devToolsPreference, installApplicationMenu } from "./bootstrap/appMenu";
 // BACKLOG-2962: the Electron shell's composition root for native capabilities.
 // Core services depend on the SecretStore *interface*; this is the one place
 // that says the implementation is Electron's safeStorage. It must run before
