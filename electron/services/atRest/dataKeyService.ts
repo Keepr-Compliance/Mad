@@ -15,6 +15,12 @@
  * {@link DataKeyUnavailableError} and writes nothing. Writers then refuse to write
  * plaintext (fail closed) and the condition stays recoverable.
  *
+ * A MISSING store is not always a first launch either. If the store was deleted, or
+ * lost to a power cut before its directory entry reached disk, files sealed under
+ * the old key are still on disk. So before creating, the service looks for evidence
+ * of existing ciphertext ({@link findCiphertextEvidence}) and, if it finds any,
+ * throws DataKeyUnavailableError instead of creating a key that cannot read them.
+ *
  * This is the model in `supportAccess/supportCipher.ts`. It is deliberately NOT the
  * model in `databaseEncryptionService.getEncryptionKey`, which generates a new key
  * when unwrapping fails (BACKLOG-3824).
@@ -35,11 +41,13 @@ import { hostLogger } from "../../capabilities/loggerProvider";
 import {
   DATA_KEY_BYTES,
   createFileCrypto,
+  fsyncDir,
   tmpPathFor,
   type AtRestKey,
   type FileCrypto,
   type KeyResolver,
 } from "./fileCrypto";
+import { findCiphertextEvidence } from "./ciphertextEvidence";
 
 export const DATA_KEY_STORE_FILENAME = "data-key-store.json";
 const STORE_VERSION = 1;
@@ -71,6 +79,12 @@ export interface DataKeyServiceDeps {
   baseDir: () => string;
   secretStore: SecretStore;
   log?: (level: "info" | "warn" | "error", message: string) => void;
+  /**
+   * Asked only when the store is missing, before a key is generated. Returns a
+   * reason when ciphertext may already exist (creation is then refused), or null.
+   * Default: {@link findCiphertextEvidence} over `baseDir()`.
+   */
+  ciphertextEvidence?: () => Promise<string | null>;
 }
 
 export interface DataKeyService extends KeyResolver {
@@ -104,6 +118,10 @@ async function createStoreExclusive(file: string, contents: string): Promise<voi
       if ((error as NodeJS.ErrnoException)?.code === "EEXIST") throw new StoreExistsError();
       throw new DataKeyUnavailableError(`Could not create the file-data key store: ${String(error)}`);
     }
+    // Persist the new directory entry before anything is sealed under this key. Without
+    // it a power cut can leave the store missing on the next launch while ciphertext
+    // exists. (No-op on Windows — see fsyncDir; the evidence check covers that case.)
+    await fsyncDir(path.dirname(file));
   } finally {
     await fs.promises.unlink(tmp).catch(() => undefined);
   }
@@ -113,6 +131,8 @@ export function createDataKeyService(deps: DataKeyServiceDeps): DataKeyService {
   let cached: { current: AtRestKey; byId: Map<string, Buffer> } | null = null;
   let inFlight: Promise<{ current: AtRestKey; byId: Map<string, Buffer> }> | null = null;
   const storePath = () => path.join(deps.baseDir(), DATA_KEY_STORE_FILENAME);
+  const ciphertextEvidence =
+    deps.ciphertextEvidence ?? (() => findCiphertextEvidence(deps.baseDir(), { log: deps.log }));
 
   const unwrap = (entry: StoredKey, label: string): Buffer => {
     let opened: string;
@@ -189,7 +209,23 @@ export function createDataKeyService(deps: DataKeyServiceDeps): DataKeyService {
       return { current: { keyId: parsed.current.keyId, key }, byId };
     }
 
-    // ENOENT — the only path that creates a key.
+    // ENOENT — the only path that creates a key, and only when nothing on disk is
+    // already sealed under a key we no longer have.
+    let evidence: string | null;
+    try {
+      evidence = await ciphertextEvidence();
+    } catch (error) {
+      evidence = `the check for existing encrypted files failed: ${String(error)}`;
+    }
+    if (evidence) {
+      // Another process may have created the store (and sealed files) since our read.
+      const appeared = await fs.promises.stat(file).then(() => true, () => false);
+      if (appeared) throw new StoreExistsError();
+      throw new DataKeyUnavailableError(
+        `The file-data key store is missing but ${evidence}. A new key was NOT created — it could not ` +
+          "read those files. Restore data-key-store.json, or reset the app data to start over.",
+      );
+    }
     const key = crypto.randomBytes(DATA_KEY_BYTES);
     const keyId = keyIdFor(key);
     const store: KeyStoreFile = {

@@ -101,7 +101,15 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
   "electron/services/pdfExportService.ts": { count: 2, reason: `${EXPORT}; 1 call is print-to-PDF temp HTML in os.tmpdir (S6 temp sweep)` },
   "electron/services/ccpaExportService.ts": { count: 1, reason: `${EXPORT} (CCPA data export)` },
   // --- database file management ---------------------------------------------------
-  "electron/services/databaseService.ts": { count: 6, reason: SQLCIPHER },
+  "electron/services/databaseService.ts": {
+    count: 6,
+    reason:
+      `${SQLCIPHER} — 3 calls (restore from backup, pre-schema-migration backup, pre-junction-backfill snapshot). The other 3 are the one-time ` +
+      "plaintext→SQLCipher migration (_migrateToEncryptedDatabase): one copies the PRE-ENCRYPTION PLAINTEXT " +
+      "database to `.backup`, one moves the newly built SQLCipher file into place, one restores the plaintext " +
+      "`.backup` if the migration fails. Allowed as a legacy path: it runs only on a database that is still " +
+      "plaintext, and the plaintext `.backup` is deleted once the migration succeeds",
+  },
   "electron/services/sqliteBackupService.ts": { count: 4, reason: SQLCIPHER },
   "electron/services/databaseEncryptionService.ts": { count: 2, reason: `${SEALED} (DB key store)` },
   // --- already sealed ---------------------------------------------------------------

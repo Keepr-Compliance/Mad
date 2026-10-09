@@ -269,8 +269,17 @@ export async function renameWithRetry(
   }
 }
 
-/** Best-effort fsync of a directory so a completed rename survives power loss. No-op on Windows. */
-async function fsyncDir(dir: string): Promise<void> {
+/**
+ * Best-effort fsync of a directory so a completed rename or link survives power loss.
+ *
+ * No-op on Windows: Node cannot open a directory handle there (`open(dir)` fails with
+ * EISDIR/EPERM), so there is no directory fsync to call. NTFS journals its metadata,
+ * so a completed rename/link is not left half-applied by a crash, but the journal is
+ * flushed lazily — a power cut shortly after can still roll the directory entry back.
+ * Callers that cannot tolerate a lost entry must detect that case on the next launch
+ * (dataKeyService does: a missing key store next to existing ciphertext is refused).
+ */
+export async function fsyncDir(dir: string): Promise<void> {
   if (process.platform === "win32") return;
   let handle: fs.promises.FileHandle | null = null;
   try {
@@ -350,6 +359,12 @@ export interface DecryptStreamOptions {
   start?: number;
   /** Last plaintext byte, INCLUSIVE (same convention as fs.createReadStream). Default size-1. */
   end?: number;
+  /**
+   * true = a file that is not a KEPRENC container is refused (AtRestFormatError)
+   * instead of being passed through as plaintext. For readers of scopes that have
+   * finished migrating. Default false (pre-migration plaintext passes through).
+   */
+  requireEncrypted?: boolean;
 }
 
 export interface DecryptStreamResult {
@@ -570,6 +585,9 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
     async openDecryptStream(filePath, opts = {}) {
       const magic = await readMagic(filePath);
       if (!magic.encrypted) {
+        if (opts.requireEncrypted) {
+          throw new AtRestFormatError("file is not encrypted and the caller requires an encrypted file");
+        }
         const { start, end } = resolveRange(opts, magic.size);
         const stream =
           end < start

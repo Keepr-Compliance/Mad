@@ -203,3 +203,147 @@ describe("K2 — an existing store is never replaced", () => {
     expect(again.key.equals(original.key)).toBe(true);
   });
 });
+
+describe("K3 — a missing store next to existing ciphertext is refused, not recreated", () => {
+  // The store can go missing after files were sealed under it (deleted by hand, a
+  // partial reset, or a power cut before its directory entry reached disk). A new
+  // key then could read none of those files, so creation must refuse.
+  async function sealedFileThenLoseStore(scopeDir: string) {
+    const ss = new FakeSafeStorage();
+    const target = path.join(dir, scopeDir, "sub", "photo.heic");
+    await createFileCrypto(service(ss)).encryptStreamToFile(Readable.from([Buffer.from("image")]), target);
+    fs.unlinkSync(storeFile());
+    return { ss, target };
+  }
+
+  it.each(["message-attachments", "attachments", "rcs-cache-staging", "logs"])(
+    "an encrypted file under %s → DataKeyUnavailableError, no new key",
+    async (scope) => {
+      const { ss } = await sealedFileThenLoseStore(scope);
+      const before = ss.encryptCalls;
+      await expect(service(ss).currentKey()).rejects.toBeInstanceOf(DataKeyUnavailableError);
+      expect(ss.encryptCalls).toBe(before);
+      expect(fs.existsSync(storeFile())).toBe(false);
+    },
+  );
+
+  it("plaintext files only (an upgrading customer) → a key is created", async () => {
+    fs.mkdirSync(path.join(dir, "message-attachments", "x"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "message-attachments", "x", "a.jpg"), "plain image bytes");
+    fs.writeFileSync(path.join(dir, "message-attachments", "x", "tiny"), "KEP"); // shorter than the magic
+    const { key } = await service(new FakeSafeStorage()).currentKey();
+    expect(key.length).toBe(32);
+    expect(fs.existsSync(storeFile())).toBe(true);
+  });
+
+  it("an encrypted file OUTSIDE the scanned scopes does not block creation", async () => {
+    // Pins the scan to its scopes: the root of userData is not walked.
+    const ss = new FakeSafeStorage();
+    await createFileCrypto(service(ss)).encryptStreamToFile(Readable.from([Buffer.from("x")]), path.join(dir, "a.bin"));
+    fs.unlinkSync(storeFile());
+    await expect(service(ss).currentKey()).resolves.toBeDefined();
+  });
+
+  it.each([
+    ["a scope marked done", { version: 1, scopes: { attachments: { state: "done", updatedAt: "x" } } }],
+    ["a scope marked migrating", { version: 1, scopes: { logs: { state: "migrating", updatedAt: "x" } } }],
+  ])("at-rest-state.json with %s → refused", async (_label, state) => {
+    fs.writeFileSync(path.join(dir, "at-rest-state.json"), JSON.stringify(state));
+    await expect(service(new FakeSafeStorage()).currentKey()).rejects.toBeInstanceOf(DataKeyUnavailableError);
+    expect(fs.existsSync(storeFile())).toBe(false);
+  });
+
+  it("at-rest-state.json with only pending scopes → a key is created", async () => {
+    fs.writeFileSync(
+      path.join(dir, "at-rest-state.json"),
+      JSON.stringify({ version: 1, scopes: { attachments: { state: "pending", updatedAt: "x" } } }),
+    );
+    await expect(service(new FakeSafeStorage()).currentKey()).resolves.toBeDefined();
+  });
+
+  it("an unreadable at-rest-state.json → refused (it cannot rule ciphertext out)", async () => {
+    fs.writeFileSync(path.join(dir, "at-rest-state.json"), "{nope");
+    await expect(service(new FakeSafeStorage()).currentKey()).rejects.toBeInstanceOf(DataKeyUnavailableError);
+  });
+
+  it.each(["encrypted", "syncing", "migrating"])("a backup marker saying %s → refused", async (state) => {
+    const markers = path.join(dir, "Backups", ".keepr-at-rest");
+    fs.mkdirSync(markers, { recursive: true });
+    fs.writeFileSync(path.join(markers, "00008030-ABC.json"), JSON.stringify({ udid: "00008030-ABC", state }));
+    await expect(service(new FakeSafeStorage()).currentKey()).rejects.toBeInstanceOf(DataKeyUnavailableError);
+    expect(fs.existsSync(storeFile())).toBe(false);
+  });
+
+  it("a backup marker saying plaintext → a key is created", async () => {
+    const markers = path.join(dir, "Backups", ".keepr-at-rest");
+    fs.mkdirSync(markers, { recursive: true });
+    fs.writeFileSync(path.join(markers, "00008030-ABC.json"), JSON.stringify({ udid: "00008030-ABC", state: "plaintext" }));
+    await expect(service(new FakeSafeStorage()).currentKey()).resolves.toBeDefined();
+  });
+
+  it("the check runs only on the create path: an existing store still opens with ciphertext present", async () => {
+    const ss = new FakeSafeStorage();
+    const first = await service(ss).currentKey();
+    await createFileCrypto(service(ss)).encryptStreamToFile(
+      Readable.from([Buffer.from("x")]),
+      path.join(dir, "attachments", "a.pdf"),
+    );
+    expect((await service(ss).currentKey()).key.equals(first.key)).toBe(true);
+  });
+});
+
+describe("K4 — key creation durability and exclusivity", () => {
+  (process.platform === "win32" ? it.skip : it)(
+    "the store's directory is fsynced after the store is linked into place (POSIX)",
+    async () => {
+      const events: string[] = [];
+      const realOpen = fs.promises.open.bind(fs.promises);
+      const realLink = fs.promises.link.bind(fs.promises);
+      const openSpy = jest.spyOn(fs.promises, "open").mockImplementation(((p: fs.PathLike, flags?: unknown, mode?: unknown) => {
+        if (String(p) === dir && flags === "r") events.push("open-dir");
+        return (realOpen as (...a: unknown[]) => Promise<fs.promises.FileHandle>)(p, flags, mode);
+      }) as typeof fs.promises.open);
+      const linkSpy = jest.spyOn(fs.promises, "link").mockImplementation(async (from, to) => {
+        await realLink(from, to);
+        events.push("link");
+      });
+      try {
+        await service(new FakeSafeStorage()).currentKey();
+      } finally {
+        openSpy.mockRestore();
+        linkSpy.mockRestore();
+      }
+      // The directory is opened for fsync AFTER the link that created the entry.
+      expect(events).toContain("link");
+      expect(events.slice(events.indexOf("link") + 1)).toContain("open-dir");
+    },
+  );
+
+  it("two independent service instances racing to create (real fs) end with ONE key", async () => {
+    // Two instances = two separate in-flight caches, as two processes would have.
+    // Both read ENOENT, then wait at a shared gate inside the create path, then both
+    // try to create. Only link(2)'s EEXIST can make the loser adopt the winner's key.
+    const ss = new FakeSafeStorage();
+    let arrived = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const gated = () =>
+      createDataKeyService({
+        baseDir: () => dir,
+        secretStore: ss,
+        ciphertextEvidence: async () => {
+          if (++arrived === 2) release();
+          await gate;
+          return null;
+        },
+      });
+    const [a, b] = await Promise.all([gated().currentKey(), gated().currentKey()]);
+    expect(arrived).toBe(2);
+    expect(a.keyId).toBe(b.keyId);
+    expect(a.key.equals(b.key)).toBe(true);
+    // The key on disk is the one both returned.
+    const onDisk = await service(ss).currentKey();
+    expect(onDisk.key.equals(a.key)).toBe(true);
+    expect(fs.readdirSync(dir)).toEqual([DATA_KEY_STORE_FILENAME]);
+  });
+});

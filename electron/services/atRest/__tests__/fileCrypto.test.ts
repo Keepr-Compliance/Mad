@@ -298,3 +298,74 @@ describe("M3 — encryptFileInPlace verifies before it replaces the source", () 
     expect(fs.readdirSync(dir)).toEqual(["att.jpg"]);
   });
 });
+
+describe("F3 — every encryption draws a fresh salt (so a fresh per-file key)", () => {
+  // A constant salt gives every file the same AES key with the same chunk-index
+  // nonces: GCM keystream reuse across files. Same key + same plaintext must
+  // therefore never produce the same salt or the same ciphertext.
+  const SALT = [28, 44] as const;
+  const plaintext = crypto.randomBytes(CHUNK * 2 + 9);
+  const saltOf = (file: string) => fs.readFileSync(file).subarray(...SALT);
+  const firstChunkOf = (file: string) => fs.readFileSync(file).subarray(HEADER_BYTES, HEADER_BYTES + CHUNK);
+
+  function expectDistinct(a: string, b: string) {
+    expect(saltOf(a).equals(saltOf(b))).toBe(false);
+    expect(firstChunkOf(a).equals(firstChunkOf(b))).toBe(false);
+  }
+
+  it("encryptStreamToFile: two encryptions of the same plaintext differ in salt and ciphertext", async () => {
+    const a = await encryptBytes(plaintext, "a.bin");
+    const b = await encryptBytes(plaintext, "b.bin");
+    expectDistinct(a, b);
+  });
+
+  it("encryptFileInPlace: two copies of the same plaintext differ in salt and ciphertext", async () => {
+    const fc = createFileCrypto(resolver(), { chunkSize: CHUNK });
+    const a = path.join(dir, "a.txt");
+    const b = path.join(dir, "b.txt");
+    fs.writeFileSync(a, plaintext);
+    fs.writeFileSync(b, plaintext);
+    await fc.encryptFileInPlace(a);
+    await fc.encryptFileInPlace(b);
+    expectDistinct(a, b);
+  });
+
+  it("re-encrypting a file in place (decrypt, then encrypt again) gets a fresh salt", async () => {
+    const fc = createFileCrypto(resolver(), { chunkSize: CHUNK });
+    const file = path.join(dir, "f.txt");
+    fs.writeFileSync(file, plaintext);
+    await fc.encryptFileInPlace(file);
+    const first = path.join(dir, "first.bin");
+    fs.copyFileSync(file, first);
+    await fc.decryptToFile(file, file);
+    expect(fs.readFileSync(file).equals(plaintext)).toBe(true);
+    await fc.encryptFileInPlace(file);
+    expectDistinct(first, file);
+    expect((await fc.readAllDecrypted(file)).equals(plaintext)).toBe(true);
+  });
+});
+
+describe("requireEncrypted — opt-in refusal of plaintext pass-through", () => {
+  it("default: a plaintext file is passed through", async () => {
+    const file = path.join(dir, "plain.txt");
+    fs.writeFileSync(file, "still plaintext");
+    const r = await createFileCrypto(resolver()).openDecryptStream(file);
+    expect(r.encrypted).toBe(false);
+    expect((await collect(r.stream)).data.toString()).toBe("still plaintext");
+  });
+
+  it("requireEncrypted: a plaintext file is refused with AtRestFormatError", async () => {
+    const file = path.join(dir, "plain.txt");
+    fs.writeFileSync(file, "still plaintext");
+    await expect(
+      createFileCrypto(resolver()).openDecryptStream(file, { requireEncrypted: true }),
+    ).rejects.toBeInstanceOf(AtRestFormatError);
+  });
+
+  it("requireEncrypted: an encrypted file still opens", async () => {
+    const file = await encryptBytes(Buffer.from("sealed text"));
+    const r = await createFileCrypto(resolver()).openDecryptStream(file, { requireEncrypted: true });
+    expect(r.encrypted).toBe(true);
+    expect((await collect(r.stream)).data.toString()).toBe("sealed text");
+  });
+});
