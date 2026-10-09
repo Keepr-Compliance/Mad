@@ -503,7 +503,7 @@ describe("C-S3a — damaged KEPRENC header is never re-encrypted", () => {
   it("readers that require ciphertext refuse the damaged file with an error, not raw bytes", async () => {
     const s = await mixedScope();
     await createAtRestMigration(deps({ crypto: s.files, markers: s.markers })).runScope("message-attachments");
-    await expect(s.files.readAllDecrypted(s.damagedA, { requireEncrypted: true })).rejects.toThrow();
-    await expect(s.files.readAllDecrypted(s.damagedB, { requireEncrypted: true })).rejects.toThrow();
+    await expect(s.files.openDecryptStream(s.damagedA, { requireEncrypted: true })).rejects.toThrow();
+    await expect(s.files.openDecryptStream(s.damagedB, { requireEncrypted: true })).rejects.toThrow();
   });
 });
