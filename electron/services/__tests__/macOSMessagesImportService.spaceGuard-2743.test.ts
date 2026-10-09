@@ -314,7 +314,11 @@ describe("BACKLOG-2743 — pre-flight free-space guard", () => {
     expect(result.refusedForSpace).toBeUndefined();
     expect(result.stored).toBe(1);
     // The guard is one statfs call; it must not add anything a user could feel.
-    expect(elapsed).toBeLessThan(1000);
+    // That is asserted structurally. The wall clock covers the whole import, which
+    // since BACKLOG-3816 includes real encrypt + fsync I/O (about 10 ms locally, 1.7 s
+    // seen on a loaded Windows CI runner), so it can only be a hang detector.
+    expect(fsSync.promises.statfs).toHaveBeenCalledTimes(1);
+    expect(elapsed).toBeLessThan(15_000);
   });
 
   it("proceeds when free space is UNKNOWN rather than blocking every import", async () => {
