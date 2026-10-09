@@ -59,7 +59,8 @@ describe("E1 — containers read back exactly (sizes swept across chunk boundari
     expect(r.touchedDirs).toEqual([dir]);
     expect((await probeHeader(p)).encrypted).toBe(true);
     expect((await files.readAllDecrypted(p)).equals(plain)).toBe(true);
-    expect((fs.statSync(p).mode & 0o777).toString(8)).toBe(process.platform === "win32" ? expect.any(String) : "600");
+    // Windows has no POSIX modes (it reports 666 for a writable file): the 0600 check is POSIX-only.
+    if (process.platform !== "win32") expect((fs.statSync(p).mode & 0o777).toString(8)).toBe("600");
     // Idempotent: a second pass leaves it alone.
     expect(engine.runBatch([p], "seal").outcomes).toEqual([{ v: "sealed" }]);
   });
