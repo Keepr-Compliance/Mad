@@ -42,7 +42,6 @@ These are required for the app to function (copied from your `.env.development`)
 | `SUPABASE_SERVICE_KEY` | Supabase service role key |
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
-| `GOOGLE_MAPS_API_KEY` | Google Maps API key |
 | `MICROSOFT_CLIENT_ID` | Microsoft/Azure app client ID |
 | `MICROSOFT_TENANT_ID` | Microsoft/Azure tenant ID |
 | `MICROSOFT_CLIENT_SECRET` | Microsoft/Azure client secret |

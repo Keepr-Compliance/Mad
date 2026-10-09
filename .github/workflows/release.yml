@@ -101,7 +101,6 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
           MICROSOFT_CLIENT_ID: ${{ secrets.MICROSOFT_CLIENT_ID }}
           MICROSOFT_TENANT_ID: ${{ secrets.MICROSOFT_TENANT_ID }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
@@ -112,7 +111,6 @@ jobs:
             echo "SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}"
             echo "GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}"
             echo "GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}"
-            echo "GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}"
             echo "MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID}"
             echo "MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID}"
             echo "BROKER_PORTAL_URL=https://app.keeprcompliance.com"
@@ -147,7 +145,6 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
           MICROSOFT_CLIENT_ID: ${{ secrets.MICROSOFT_CLIENT_ID }}
           MICROSOFT_TENANT_ID: ${{ secrets.MICROSOFT_TENANT_ID }}
         run: |
@@ -160,7 +157,6 @@ jobs:
             echo "SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}"
             echo "GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}"
             echo "GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}"
-            echo "GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}"
             echo "MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID}"
             echo "MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID}"
             echo "BROKER_PORTAL_URL=https://app.keeprcompliance.com"
@@ -278,6 +274,12 @@ jobs:
             node scripts/ci/check-packaged-notices.mjs mac "$app"
           done
 
+      - name: Verify the packages ship no Google Maps key (BACKLOG-3834)
+        run: |
+          for app in release/mac-arm64/Keepr.app release/mac/Keepr.app; do
+            node scripts/ci/check-packaged-secrets.mjs mac "$app"
+          done
+
       - name: Upload macOS Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -368,7 +370,6 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
           MICROSOFT_CLIENT_ID: ${{ secrets.MICROSOFT_CLIENT_ID }}
           MICROSOFT_TENANT_ID: ${{ secrets.MICROSOFT_TENANT_ID }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
@@ -378,7 +379,6 @@ jobs:
             "SUPABASE_ANON_KEY=$env:SUPABASE_ANON_KEY",
             "GOOGLE_CLIENT_ID=$env:GOOGLE_CLIENT_ID",
             "GOOGLE_CLIENT_SECRET=$env:GOOGLE_CLIENT_SECRET",
-            "GOOGLE_MAPS_API_KEY=$env:GOOGLE_MAPS_API_KEY",
             "MICROSOFT_CLIENT_ID=$env:MICROSOFT_CLIENT_ID",
             "MICROSOFT_TENANT_ID=$env:MICROSOFT_TENANT_ID",
             "BROKER_PORTAL_URL=https://app.keeprcompliance.com",
@@ -535,7 +535,6 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
           MICROSOFT_CLIENT_ID: ${{ secrets.MICROSOFT_CLIENT_ID }}
           MICROSOFT_TENANT_ID: ${{ secrets.MICROSOFT_TENANT_ID }}
         run: |
@@ -559,7 +558,6 @@ jobs:
             "SUPABASE_ANON_KEY=$env:SUPABASE_ANON_KEY",
             "GOOGLE_CLIENT_ID=$env:GOOGLE_CLIENT_ID",
             "GOOGLE_CLIENT_SECRET=$env:GOOGLE_CLIENT_SECRET",
-            "GOOGLE_MAPS_API_KEY=$env:GOOGLE_MAPS_API_KEY",
             "MICROSOFT_CLIENT_ID=$env:MICROSOFT_CLIENT_ID",
             "MICROSOFT_TENANT_ID=$env:MICROSOFT_TENANT_ID",
             "BROKER_PORTAL_URL=https://app.keeprcompliance.com",
@@ -684,6 +682,12 @@ jobs:
         shell: pwsh
         run: |
           node scripts/ci/check-packaged-notices.mjs win release/win-unpacked
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Verify the package ships no Google Maps key (BACKLOG-3834)
+        shell: pwsh
+        run: |
+          node scripts/ci/check-packaged-secrets.mjs win release/win-unpacked
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       # BACKLOG-3533. Unpacks the installer, the app archive inside it and the
