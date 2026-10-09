@@ -31,6 +31,7 @@ import {
   BackupAtRest,
   BackupAtRestRefusal,
   describeBackupAtRestProgress,
+  PROGRESS_FILE_WEIGHT_BYTES,
   QUARANTINE_DIR_NAME,
   QUARANTINE_MAX_AGE_MS,
   type BackupAtRestProgress,
@@ -1288,6 +1289,35 @@ describe("progress", () => {
     const last = seen[seen.length - 1];
     expect(last.doneUnits).toBe(last.totalUnits);
     expect(seen.length).toBeLessThanOrEqual(3); // start, end (+1 if a second passed): never per file
+  });
+
+  it("an incremental pass measures only the files it will seal, not the whole chain (BACKLOG-3816)", async () => {
+    makeChain();
+    for (let i = 0; i < 300; i++) write(`${String(i % 100).padStart(2, "0")}/${"a".repeat(30)}${String(i).padStart(10, "0")}`, crypto.randomBytes(200));
+    const s = service();
+    await s.seal(UDID);
+    expect(plaintextLeft()).toEqual([]);
+    // One new file arrives (the sync's delta).
+    const big = 5 * 1024 * 1024;
+    write(`ee/${"e".repeat(40)}`, crypto.randomBytes(big));
+    const seen: BackupAtRestProgress[] = [];
+    await s.seal(UDID, (p) => seen.push(p));
+    const expected = big + PROGRESS_FILE_WEIGHT_BYTES;
+    expect(seen[0]).toMatchObject({ doneUnits: 0, totalUnits: expected });
+    const last = seen[seen.length - 1];
+    expect(last).toMatchObject({ doneUnits: expected, totalUnits: expected });
+    expect(describeBackupAtRestProgress(seen[0]).percent).toBe(0);
+    expect(describeBackupAtRestProgress(last).percent).toBe(100);
+    for (const p of seen) expect(p.doneUnits).toBeLessThanOrEqual(p.totalUnits as number);
+  });
+
+  it("a pass with nothing left to seal reports 100% with no work units", async () => {
+    makeChain();
+    const s = service();
+    await s.seal(UDID);
+    const seen: BackupAtRestProgress[] = [];
+    await s.seal(UDID, (p) => seen.push(p));
+    expect(seen.every((p) => p.totalUnits === 0)).toBe(true);
   });
 
   it("a seal with no caller callback reports through the 'progress' event, start to 100%", async () => {

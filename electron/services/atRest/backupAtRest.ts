@@ -734,7 +734,23 @@ export class BackupAtRest extends EventEmitter {
       return report;
     }
     const notify = this.progressSink(onProgress);
-    const totalUnits = listed.reduce((sum, f) => sum + f.size + PROGRESS_FILE_WEIGHT_BYTES, 0);
+    // The percentage and the ETA measure the work THIS pass will do: files that are not
+    // already sealed. A cheap header probe finds them; after an incremental that is the
+    // sync's few hundred files, not the whole chain (BACKLOG-3816). A fully plaintext
+    // chain (the launch migration) probes to "everything", so it still uses the whole set.
+    const alreadySealed = new Set<string>();
+    await pool(listed, 32, async (f) => {
+      try {
+        // "empty" needs no sealing either (the pass just records it).
+        const cls = await this.classify(f.path, f.size);
+        if (cls === "sealed" || cls === "empty") alreadySealed.add(f.path);
+      } catch {
+        // unreadable now: leave it in the work set; the pass reports it properly
+      }
+    });
+    const unitsOf = (f: ListedFile): number => (alreadySealed.has(f.path) ? 0 : f.size + PROGRESS_FILE_WEIGHT_BYTES);
+    const totalUnits = listed.reduce((sum, f) => sum + unitsOf(f), 0);
+    const workStarted = Date.now(); // the ETA's clock starts after the probe
     let done = 0;
     let doneUnits = 0;
     let lastEmit = Date.now();
@@ -750,7 +766,7 @@ export class BackupAtRest extends EventEmitter {
       outcomes.forEach((o, k) => {
         this.tally(report, o);
         done++;
-        doneUnits += listed[indexes[k]].size + PROGRESS_FILE_WEIGHT_BYTES;
+        doneUnits += unitsOf(listed[indexes[k]]);
       });
       const now = Date.now();
       if (now - lastLog >= PROGRESS_LOG_INTERVAL_MS && done < listed.length) {
@@ -762,12 +778,12 @@ export class BackupAtRest extends EventEmitter {
           sealedNow: report.changed,
           already: report.already,
           failed: report.failed,
-          pct: Math.floor((doneUnits / totalUnits) * 100),
+          pct: totalUnits > 0 ? Math.floor((doneUnits / totalUnits) * 100) : 100,
         });
       }
       if (now - lastEmit >= PROGRESS_INTERVAL_MS && done < listed.length) {
         lastEmit = now;
-        const elapsed = now - started;
+        const elapsed = now - workStarted;
         // An estimate only once there is something to go on (10 s and 1% in).
         const etaMs =
           elapsed >= 10_000 && doneUnits >= totalUnits / 100
