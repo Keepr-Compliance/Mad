@@ -34,6 +34,7 @@ function loadWorker(src: string) {
   const cacheNames = new Set<string>(PRE_EXISTING_CACHES);
   let online = true;
   let claimed = false;
+  let skipWaitingCalls = 0;
 
   const key = (r: FakeRequest | string) => (typeof r === 'string' ? r : r.url);
   const cache = {
@@ -55,7 +56,9 @@ function loadWorker(src: string) {
       addEventListener: (type: string, fn: (event: unknown) => void) => {
         listeners[type] = fn;
       },
-      skipWaiting: () => undefined,
+      skipWaiting: async () => {
+        skipWaitingCalls += 1;
+      },
       clients: {
         claim: async () => {
           claimed = true;
@@ -91,6 +94,7 @@ function loadWorker(src: string) {
     deleted,
     cacheNames,
     claimed: () => claimed,
+    skipWaitingCalls: () => skipWaitingCalls,
     setOnline: (v: boolean) => {
       online = v;
     },
@@ -153,6 +157,10 @@ describe('BACKLOG-3796 service worker', () => {
     expect(worker.deleted.sort()).toEqual([...PRE_EXISTING_CACHES].sort());
     expect(Array.from(worker.cacheNames)).toEqual([]);
     expect(worker.claimed()).toBe(true);
+  });
+
+  it('install calls skipWaiting once, so a new sw.js replaces a waiting old one immediately', () => {
+    expect(worker.skipWaitingCalls()).toBe(1);
   });
 
   it('writes nothing to Cache Storage across install, activate and browsing', () => {
