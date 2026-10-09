@@ -637,31 +637,50 @@ export class BackupAtRest extends EventEmitter {
     opts: { strategy?: BackupUnsealStrategy; onProgress?: (p: BackupAtRestProgress) => void } = {},
   ): Promise<BackupSyncSession> {
     const strategy = opts.strategy ?? this.deps.strategy?.() ?? BACKUP_UNSEAL_STRATEGY;
+    const chain = this.chainDir(udid);
     const holder = this.busy.get(udid);
     if (holder) throw new BackupAtRestRefusal("busy", BACKUP_SECURING_MESSAGE);
-
-    const chain = this.chainDir(udid);
-    const chainExists = await exists(chain);
-    if (chainExists && (await isAppleEncryptedChain(chain))) {
-      await this.recordAppleChain(udid);
-      this.busy.set(udid, "syncing");
-      return { kind: "apple", udid };
-    }
-
-    try {
-      await this.deps.ensureKey();
-    } catch {
-      throw new BackupAtRestRefusal("key-unavailable", BACKUP_AT_REST_KEY_UNAVAILABLE_MESSAGE);
-    }
-
-    if (!chainExists || !(await exists(path.join(chain, "Manifest.db")))) {
-      // First backup (or an unfinished one the 3598 sweep will remove): no marker yet.
-      await this.removeMarker(udid);
-      this.busy.set(udid, "syncing");
-      return { kind: "first", udid };
-    }
-
+    // Claimed in the same tick as the check: a launch migration that starts while this
+    // awaits finds the phone busy (and vice versa). Released by finishSync, or below
+    // when no session is handed out.
     this.busy.set(udid, "syncing");
+    let handedOut = false;
+    try {
+      const chainExists = await exists(chain);
+      if (chainExists && (await isAppleEncryptedChain(chain))) {
+        await this.recordAppleChain(udid);
+        handedOut = true;
+        return { kind: "apple", udid };
+      }
+
+      try {
+        await this.deps.ensureKey();
+      } catch {
+        throw new BackupAtRestRefusal("key-unavailable", BACKUP_AT_REST_KEY_UNAVAILABLE_MESSAGE);
+      }
+
+      if (!chainExists || !(await exists(path.join(chain, "Manifest.db")))) {
+        // First backup (or an unfinished one the 3598 sweep will remove): no marker yet.
+        await this.removeMarker(udid);
+        handedOut = true;
+        return { kind: "first", udid };
+      }
+
+      const session = await this.unsealKeptChain(udid, strategy, opts.onProgress);
+      handedOut = true;
+      return session;
+    } finally {
+      if (!handedOut) this.busy.delete(udid);
+    }
+  }
+
+  /** beginSync for a Keepr-managed chain; the caller holds the lock. */
+  private async unsealKeptChain(
+    udid: string,
+    strategy: BackupUnsealStrategy,
+    onProgress?: (p: BackupAtRestProgress) => void,
+  ): Promise<BackupSyncSession> {
+    const opts = { onProgress };
     try {
       const marker = await this.readMarker(udid);
       if (marker === "syncing" || marker === "unreadable") {
@@ -802,21 +821,21 @@ export class BackupAtRest extends EventEmitter {
 
   /** Seal one chain at launch (migration of a pre-2.40 backup, or crash recovery). */
   async migrate(udid: string, onProgress?: (p: BackupAtRestProgress) => void): Promise<string> {
-    if (this.busy.has(udid)) return "busy";
     const chain = this.chainDir(udid);
-    if (await isAppleEncryptedChain(chain)) {
-      await this.recordAppleChain(udid);
-      return "apple";
-    }
-    const marker = await this.readMarker(udid);
-    if (marker === "encrypted") return "encrypted";
+    if (this.busy.has(udid)) return "busy";
+    this.busy.set(udid, "migrating"); // same tick as the check (see beginSync)
     try {
-      await this.deps.ensureKey();
-    } catch {
-      return "key-unavailable";
-    }
-    this.busy.set(udid, "migrating");
-    try {
+      if (await isAppleEncryptedChain(chain)) {
+        await this.recordAppleChain(udid);
+        return "apple";
+      }
+      const marker = await this.readMarker(udid);
+      if (marker === "encrypted") return "encrypted";
+      try {
+        await this.deps.ensureKey();
+      } catch {
+        return "key-unavailable";
+      }
       const indexed = await exists(path.join(chain, "Manifest.db"));
       if (indexed && marker !== "syncing") await this.setMarker(udid, "migrating");
       return await this.sealAndRecord(udid, "migrating", onProgress);

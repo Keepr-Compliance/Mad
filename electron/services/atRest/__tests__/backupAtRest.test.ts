@@ -128,11 +128,6 @@ function plaintextLeft(): string[] {
   return allContentFiles().filter((f) => fs.statSync(f).size > 0 && !headerOf(f).equals(MAGIC));
 }
 
-async function waitFor(cond: () => boolean): Promise<void> {
-  for (let i = 0; i < 1000 && !cond(); i++) await new Promise((r) => setImmediate(r));
-  if (!cond()) throw new Error("condition never became true");
-}
-
 beforeEach(() => {
   userData = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-s4c-"));
   backups = path.join(userData, "Backups");
@@ -365,13 +360,21 @@ describe("refusals and special chains", () => {
   it("a backup being migrated refuses the sync with the founder sentence", async () => {
     makeChain();
     const s = service();
+    // Started in the same tick: the lock is claimed before migrate's first await.
     const migrating = s.migrate(UDID);
-    await new Promise((r) => setImmediate(r));
-    await waitFor(() => s.busyReason(UDID) === "migrating");
     await expect(s.beginSync(UDID)).rejects.toBeInstanceOf(BackupAtRestRefusal);
     await expect(s.beginSync(UDID)).rejects.toThrow(BACKUP_SECURING_SENTENCE);
     expect(BACKUP_SECURING_MESSAGE).toContain("Syncing your iPhone will be available when this finishes.");
     await migrating;
+  });
+
+  it("a sync that started first makes a launch migration in the same tick stand aside", async () => {
+    makeChain();
+    const s = service();
+    const syncing = s.beginSync(UDID, { strategy: "full" });
+    expect(await s.migrate(UDID)).toBe("busy");
+    await s.finishSync(await syncing);
+    expect(plaintextLeft()).toEqual([]);
   });
 
   it("first backup: no marker before it exists; sealed and marked once Manifest.db is there", async () => {
