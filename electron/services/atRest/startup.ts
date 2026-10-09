@@ -8,7 +8,7 @@
  *   order  id                    owner
  *   ─────  ────────────────────  ─────
  *     0    data-key              S0  — open or create the file-data key
- *    10    logs                  S5  — scrub existing log files
+ *    10    logs                  S5  — retain/scrub/seal log files, then start sealing new lines
  *    20    temp-sweep            S6  — remove stale app-owned temp files
  *    30    attachments           S3  — encrypt message attachments
  *    40    email-attachments     S3  — encrypt email attachments
@@ -39,7 +39,9 @@
 import { hostLogger } from "../../capabilities/loggerProvider";
 import { getBackupAtRest } from "./backupAtRest";
 import { DataKeyUnavailableError, getDataKeyService } from "./dataKeyService";
-import { runConfiguredLogMaintenance } from "../logScrub";
+import { getConfiguredLogDirectory, runConfiguredLogMaintenance, runDeferredLogRetention } from "../logScrub";
+import { getLogSink, isLogSealingEnabled } from "../sealedLogSink";
+import type { AtRestKey } from "./fileCrypto";
 import { runLegacySweep } from "./legacySweep";
 import { SCOPE_EMAIL_ATTACHMENTS, SCOPE_MESSAGE_ATTACHMENTS } from "./markers";
 import { getAtRestMigration } from "./migration";
@@ -158,6 +160,22 @@ export class AtRestStartup {
   }
 }
 
+/** How long after the logs job a deferred log-retention pass runs (window is up by then). */
+export const DEFERRED_LOG_WORK_DELAY_MS = 60_000;
+
+const defaultLogWorkScheduler = (fn: () => Promise<void>): void => {
+  const t = setTimeout(() => {
+    fn().catch(() => undefined);
+  }, DEFERRED_LOG_WORK_DELAY_MS) as { unref?: () => void };
+  if (typeof t.unref === "function") t.unref();
+};
+let scheduleDeferredLogWork: (fn: () => Promise<void>) => void = defaultLogWorkScheduler;
+
+/** Tests only: capture deferred log work instead of running it on a timer. */
+export function setDeferredLogWorkSchedulerForTests(fn: ((work: () => Promise<void>) => void) | null): void {
+  scheduleDeferredLogWork = fn ?? defaultLogWorkScheduler;
+}
+
 /** Registers the data-key job and every slice's launch job. */
 export function registerDefaultJobs(startup: AtRestStartup): void {
   startup.register({
@@ -181,9 +199,74 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
     id: "logs",
     order: 10,
     run: async (ctx) => {
-      const r = runConfiguredLogMaintenance();
+      // BACKLOG-3819: logs are sealed at rest. The data-key job above swallows an
+      // unavailable key, so ask again here. Order matters: maintenance (seal old
+      // plaintext, merge main.unsealed.log) runs BEFORE the sink starts sealing,
+      // and nothing awaits between the two, so no line lands mid-replacement.
+      const sink = getLogSink();
+      if (!isLogSealingEnabled()) {
+        // Dev build (BACKLOG-3819, dc27e73c): logs stay redacted plaintext. No key,
+        // so maintenance only retains + redacts and never seals; the sink is unused.
+        const plain = runConfiguredLogMaintenance(Date.now(), { key: null });
+        if (!plain) return ctx.log("warn", "[AtRest] logs: no log directory registered; skipped");
+        return ctx.log(
+          plain.errors.length ? "warn" : "info",
+          `[AtRest] logs: sealing off (dev build); rewritten ${plain.rewritten.length}, ` +
+            `deleted ${plain.deleted.length}, errors ${plain.errors.length}`,
+        );
+      }
+      let key: AtRestKey | null = null;
+      try {
+        key = await getDataKeyService().currentKey();
+      } catch (error) {
+        if (!(error instanceof DataKeyUnavailableError)) throw error;
+        sink.fallbackToPlaintext(error.message);
+      }
+      let r: ReturnType<typeof runConfiguredLogMaintenance> = null;
+      try {
+        r = runConfiguredLogMaintenance(Date.now(), {
+          key,
+          onReplaced: (f) => sink.forget(f),
+          deferSealedRewrites: true,
+        });
+      } finally {
+        if (key) sink.activate(key);
+      }
       if (!r) return ctx.log("warn", "[AtRest] logs: no log directory registered; skipped");
-      ctx.log(r.errors.length ? "warn" : "info", `[AtRest] logs: rewritten ${r.rewritten.length}, deleted ${r.deleted.length}, errors ${r.errors.length}`);
+      if (r.deferred.length > 0) {
+        // Retention on a sealed file = decrypt + reseal of up to 8 MB. Run it later,
+        // off the launch path, and without blocking: one file at a time, in slices
+        // that yield to the event loop (logScrub.trimSealedLogAsync). The sink holds
+        // new lines in memory meanwhile, so nothing is appended to a file while it
+        // is being replaced; every replaced file is forgotten before writes resume.
+        const deferred = [...r.deferred];
+        const logDir = getConfiguredLogDirectory();
+        scheduleDeferredLogWork(async () => {
+          const current = sink.currentKey;
+          if (!current || !logDir) return;
+          sink.pause();
+          let later: Awaited<ReturnType<typeof runDeferredLogRetention>> | null = null;
+          try {
+            later = await runDeferredLogRetention(logDir, deferred, Date.now(), current, {
+              onReplaced: (f) => sink.forget(f),
+              shouldAbort: () => sink.isClosing,
+            });
+          } finally {
+            sink.resume();
+          }
+          ctx.log(
+            later.errors.length ? "warn" : "info",
+            `[AtRest] logs (deferred retention): rewritten ${later.rewritten.length}, ` +
+              `deleted ${later.deleted.length}, errors ${later.errors.length}`,
+          );
+        });
+      }
+      ctx.log(
+        r.errors.length ? "warn" : "info",
+        `[AtRest] logs: sealing ${key ? "on" : "UNAVAILABLE (redacted plaintext this run)"}; ` +
+          `rewritten ${r.rewritten.length}, sealed ${r.sealed.length}, deleted ${r.deleted.length}, ` +
+          `unreadable ${r.unreadable.length}, deferred ${r.deferred.length}, errors ${r.errors.length}`,
+      );
     },
   });
   startup.register({ id: "temp-sweep", order: 20, run: async () => { await runTempSweep(); } });

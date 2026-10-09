@@ -18,7 +18,9 @@ jest.mock("electron", () => ({
   ipcMain: { handle: jest.fn(), on: mockIpcOn },
   app: {
     getPath: jest.fn().mockReturnValue("/tmp/test-user-data"),
-    isPackaged: false,
+    // Packaged: logs are sealed (dev builds write redacted plaintext — see
+    // config/__tests__/logRedactionDev-3819.test.ts).
+    isPackaged: true,
     getAppPath: jest.fn(),
     quit: jest.fn(),
     on: jest.fn(),
@@ -51,10 +53,15 @@ jest.mock("../../main", () => ({ getAndClearPendingDeepLinkUser: jest.fn() }));
 jest.mock("../../bootstrap/appDataPaths", () => ({
   applyAppDataPaths: () => null,
   buildConsoleNotice: () => "",
+  logsSealedAtRest: ({ isPackaged }: { isPackaged: boolean }) => isPackaged,
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const realLog = require("electron-log/node");
+
+// Logs are sealed at rest (BACKLOG-3819 encryption): a fixed test key, read back
+// through the decrypting reader. Never the keychain.
+const TEST_KEY = { keyId: "cd".repeat(16), key: Buffer.alloc(32, 9) };
 
 describe("BACKLOG-3819: renderer log relay is redacted", () => {
   let dir: string;
@@ -67,6 +74,8 @@ describe("BACKLOG-3819: renderer log relay is redacted", () => {
     realLog.transports.console.level = false;
     require("../../bootstrap/installAppDataPaths");
     // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require("../../services/sealedLogSink").getLogSink().activate(TEST_KEY);
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     require("../systemHandlers").registerSystemHandlers();
     const call = mockIpcOn.mock.calls.find(([channel]) => channel === "log:renderer");
     if (!call) throw new Error("log:renderer listener was not registered");
@@ -77,7 +86,13 @@ describe("BACKLOG-3819: renderer log relay is redacted", () => {
 
   it.each(["info", "warn", "error"])("level %s", (level) => {
     relay({}, level, `[ContactSearch] picked sam.lee@example.com (555) 555-0123 ${level}`);
-    const text = fs.readFileSync(path.join(dir, "main.log"), "utf8");
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { openSealedLog } = require("../../services/atRest/sealedLog");
+    const raw = fs.readFileSync(path.join(dir, "main.log"));
+    expect(raw.includes(Buffer.from("[Renderer] [ContactSearch]"))).toBe(false);
+    const read = openSealedLog(raw, (id: string) => (id === TEST_KEY.keyId ? TEST_KEY.key : null));
+    expect(read.problems).toEqual([]);
+    const text: string = read.text;
     expect(text).toContain(`[Renderer] [ContactSearch] picked s***@example.com ***23 ${level}`);
     expect(text).not.toContain("sam.lee@example.com");
     expect(text).not.toContain("555-0123");
