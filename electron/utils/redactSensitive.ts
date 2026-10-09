@@ -315,12 +315,23 @@ const WEAK_CONTACT_KEYS = new Set(["from", "to", "sender", "recipient", "recipie
  * a boolean prefix (hasPhone, isEmail) and Apple's "iPhone" are excluded.
  */
 const STRONG_KEY_SUFFIX_RE = /(phone|phones|phonenumber|phonenumbers|e164|handle|handles|email|emails|emailaddress|emailaddresses)$/;
-const NOT_CONTACT_KEY_RE = /^(has|is|should|can|did|needs|no|show|use|allow)[a-z]|iphones?$/;
+/**
+ * Boolean/flag prefixes, checked on the ORIGINAL key at a camelCase or snake_case
+ * boundary (hasPhone, is_email, HAS_PHONE) — so userPhone, canonicalPhone and
+ * normalizedHandle, which merely start with the same letters, stay contact keys.
+ */
+const FLAG_PREFIX_RE = /^(?:has|is|should|can|did|needs|no|show|use|allow)(?=[A-Z_])/;
+const FLAG_PREFIX_SNAKE_RE = /^(?:has|is|should|can|did|needs|no|show|use|allow)_/i;
+const IPHONE_KEY_RE = /iphones?$/;
+
+function isNotContactKey(key: string, normalized: string): boolean {
+  return FLAG_PREFIX_RE.test(key) || FLAG_PREFIX_SNAKE_RE.test(key) || IPHONE_KEY_RE.test(normalized);
+}
 
 function contactKeyTier(key: string): "strong" | "weak" | null {
   const k = key.toLowerCase().replace(/_/g, "");
   if (STRONG_CONTACT_KEYS.has(k)) return "strong";
-  if (STRONG_KEY_SUFFIX_RE.test(k) && !NOT_CONTACT_KEY_RE.test(k)) return "strong";
+  if (STRONG_KEY_SUFFIX_RE.test(k) && !isNotContactKey(key, k)) return "strong";
   if (WEAK_CONTACT_KEYS.has(k)) return "weak";
   return null;
 }

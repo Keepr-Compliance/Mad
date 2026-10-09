@@ -242,6 +242,11 @@ describe("BACKLOG-3819 (SR): compound contact key names, case-insensitive", () =
     [`"FROM_HANDLE": "${BARE_A}"`, '"FROM_HANDLE": "***23"'],
     [`"workEmail": "${BARE_A}"`, '"workEmail": "***23"'],
     [`"contact_email": "pat.sample@example.com"`, '"contact_email": "p***@example.com"'],
+    // start with the same letters as a flag prefix, but no word boundary
+    [`"userPhone": "${BARE_A}"`, '"userPhone": "***23"'],
+    [`"canonicalPhone": "${BARE_A}"`, '"canonicalPhone": "***23"'],
+    [`"normalizedHandle": "${BARE_A}"`, '"normalizedHandle": "***23"'],
+    [`"isolatedPhone": "${BARE_A}"`, '"isolatedPhone": "***23"'],
   ];
   it.each(COMPOUND)("%s", (input, expected) => {
     expect(redactLogText(input)).toBe(expected);
@@ -254,6 +259,7 @@ describe("BACKLOG-3819 (SR): compound contact key names, case-insensitive", () =
     `"emailsProcessed": 6013820953`,
     `"phoneType": 6013820953`,
     `"hasPhone": 6013820953, "isEmail": 6013820953, "has_handle": 6013820953`,
+    `"use_handle": 6013820953, "HAS_PHONE": 6013820953, "noEmail": 6013820953, "show_phone": 6013820953`,
     `"handler": 6013820953, "handledCount": 6013820953`,
     `"iPhone": 6013820953, "lastIphone": 6013820953`,
   ];
