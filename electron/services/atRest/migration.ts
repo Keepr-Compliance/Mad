@@ -7,7 +7,7 @@
  *
  *   scope id            directory under userData
  *   ─────────────────   ────────────────────────
- *   attachments         message-attachments   (iPhone / macOS Messages / RCS)
+ *   message-attachments message-attachments   (iPhone / macOS Messages / RCS)
  *   email-attachments   attachments           (Gmail / Outlook)
  *
  * ## Per launch, per scope
@@ -78,13 +78,13 @@ import {
 } from "../../types/ipc/window-api-at-rest";
 import { getAtRestFiles, getDataKeyService } from "./dataKeyService";
 import { AtRestIntegrityError, KENC_TMP_SUFFIX, type FileCrypto } from "./fileCrypto";
-import { getMarkerStore, type MarkerStore } from "./markers";
+import { getMarkerStore, SCOPE_EMAIL_ATTACHMENTS, SCOPE_MESSAGE_ATTACHMENTS, type MarkerStore } from "./markers";
 
-export type MigrationScopeId = "attachments" | "email-attachments";
+export type MigrationScopeId = typeof SCOPE_MESSAGE_ATTACHMENTS | typeof SCOPE_EMAIL_ATTACHMENTS;
 
 export const MIGRATION_SCOPES: ReadonlyArray<{ id: MigrationScopeId; dir: string }> = [
-  { id: "attachments", dir: "message-attachments" },
-  { id: "email-attachments", dir: "attachments" },
+  { id: SCOPE_MESSAGE_ATTACHMENTS, dir: "message-attachments" },
+  { id: SCOPE_EMAIL_ATTACHMENTS, dir: "attachments" },
 ];
 
 /** Free space kept in reserve beyond the file being encrypted. */

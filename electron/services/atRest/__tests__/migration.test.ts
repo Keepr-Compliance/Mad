@@ -155,7 +155,7 @@ describe("M1 — after migration, nothing under either scope is plaintext", () =
     const markers = createMarkerStore({ userData: () => root });
     const m = createAtRestMigration(deps({ crypto: files, markers }));
 
-    const r1 = await m.runScope("attachments");
+    const r1 = await m.runScope("message-attachments");
     const r2 = await m.runScope("email-attachments");
     expect([r1.outcome, r2.outcome]).toEqual(["done", "done"]);
     expect(r1.files + r2.files).toBe(10);
@@ -167,9 +167,21 @@ describe("M1 — after migration, nothing under either scope is plaintext", () =
     for (const dir of ["message-attachments", "attachments"]) {
       for (const f of await filesUnder(dir)) expect(await startsWithMagic(f)).toBe(true);
     }
-    expect((await markers.getScope("attachments"))?.state).toBe("done");
+    expect((await markers.getScope("message-attachments"))?.state).toBe("done");
     expect((await markers.getScope("email-attachments"))?.state).toBe("done");
     expect(m.getStatus()).toMatchObject({ phase: "done", done: 10, total: 10, encryptedThisLaunch: 10 });
+  });
+
+  it("at-rest-state.json carries exactly the scope keys the readers look up, both done", async () => {
+    await seedMany("message-attachments", 2);
+    await seedMany("attachments", 2);
+    const markers = createMarkerStore({ userData: () => root });
+    const m = createAtRestMigration(deps({ crypto: createFileCrypto(resolver(), { chunkSize: 64 }), markers }));
+    await m.runScope("message-attachments");
+    await m.runScope("email-attachments");
+    const onDisk = JSON.parse(await fs.promises.readFile(path.join(root, "at-rest-state.json"), "utf8"));
+    const states = Object.fromEntries(Object.entries(onDisk.scopes).map(([k, v]) => [k, (v as { state: string }).state]));
+    expect(states).toEqual({ "message-attachments": "done", "email-attachments": "done" });
   });
 
   it("logs carry counts only — never a directory or file name", async () => {
@@ -179,7 +191,7 @@ describe("M1 — after migration, nothing under either scope is plaintext", () =
     const m = createAtRestMigration(
       deps({ crypto: wrap(real, (f) => { if (f === first) throw errno("EBUSY"); }) }),
     );
-    await m.runScope("attachments");
+    await m.runScope("message-attachments");
     expect(logs.length).toBeGreaterThan(0);
     for (const line of logs) {
       expect(line).not.toContain(root);
@@ -213,7 +225,7 @@ describe("M2 — killed mid-file, then re-run", () => {
     const emptyOrphan = `${order[0]}.0123456789ab.kenc-tmp`;
     await fs.promises.writeFile(emptyOrphan, Buffer.alloc(0));
     const launch1 = createAtRestMigration(deps({ crypto: killing, markers }));
-    void launch1.runScope("attachments");
+    void launch1.runScope("message-attachments");
     await waitFor(() => killedAt !== null);
     // Give launch 1 a moment to have encrypted the files before the kill.
     await new Promise((r) => setTimeout(r, 50));
@@ -223,11 +235,11 @@ describe("M2 — killed mid-file, then re-run", () => {
     ).filter(Boolean);
     expect(encryptedBeforeKill.length).toBeGreaterThan(0);
     expect(encryptedBeforeKill.length).toBeLessThan(order.length);
-    expect((await markers.getScope("attachments"))?.state).toBe("migrating");
+    expect((await markers.getScope("message-attachments"))?.state).toBe("migrating");
 
     // Launch 2: a fresh migration over the same directory.
     const launch2 = createAtRestMigration(deps({ crypto: real, markers }));
-    const r = await launch2.runScope("attachments");
+    const r = await launch2.runScope("message-attachments");
     expect(r.outcome).toBe("done");
     // Only the files launch 1 did not reach were encrypted this time.
     expect(r.files).toBe(order.length - encryptedBeforeKill.length);
@@ -238,7 +250,7 @@ describe("M2 — killed mid-file, then re-run", () => {
       const once = await real.readAllDecrypted(file);
       expect(once.equals(original)).toBe(true);
     }
-    expect((await markers.getScope("attachments"))?.state).toBe("done");
+    expect((await markers.getScope("message-attachments"))?.state).toBe("done");
     // Orphaned temps are neither candidates nor counted; they are left for S6's sweep untouched.
     const killedFile = killedAt as unknown as string;
     const orphan = `${killedFile}.deadbeefcafe.kenc-tmp`;
@@ -273,10 +285,10 @@ describe("M4 — done only after a clean scan", () => {
     const markers = createMarkerStore({ userData: () => root });
     // Real time: files written a moment ago are inside the settle window.
     const m = createAtRestMigration(deps({ markers, now: () => Date.now() }));
-    const r = await m.runScope("attachments");
+    const r = await m.runScope("message-attachments");
     expect(r.deferred).toBe(2);
     expect(r.outcome).toBe("incomplete");
-    expect((await markers.getScope("attachments"))?.state).toBe("migrating");
+    expect((await markers.getScope("message-attachments"))?.state).toBe("migrating");
   });
 
   it("a skipped file keeps the scope migrating; the next launch finishes it and writes done", async () => {
@@ -287,12 +299,12 @@ describe("M4 — done only after a clean scan", () => {
     const m1 = createAtRestMigration(
       deps({ crypto: wrap(real, (f) => { if (f === locked) throw errno("EPERM"); }), markers }),
     );
-    expect((await m1.runScope("attachments")).outcome).toBe("incomplete");
-    expect((await markers.getScope("attachments"))?.state).toBe("migrating");
+    expect((await m1.runScope("message-attachments")).outcome).toBe("incomplete");
+    expect((await markers.getScope("message-attachments"))?.state).toBe("migrating");
 
     const m2 = createAtRestMigration(deps({ crypto: real, markers }));
-    expect((await m2.runScope("attachments")).outcome).toBe("done");
-    expect((await markers.getScope("attachments"))?.state).toBe("done");
+    expect((await m2.runScope("message-attachments")).outcome).toBe("done");
+    expect((await markers.getScope("message-attachments"))?.state).toBe("done");
   });
 
   it("a file unreadable only during the final scan keeps the scope migrating (no candidates left, still not done)", async () => {
@@ -310,15 +322,15 @@ describe("M4 — done only after a clean scan", () => {
     };
     const markers = createMarkerStore({ userData: () => root });
     const m = createAtRestMigration(deps({ crypto, markers }));
-    const r = await m.runScope("attachments");
+    const r = await m.runScope("message-attachments");
     expect(r.outcome).toBe("incomplete");
-    expect((await markers.getScope("attachments"))?.state).toBe("migrating");
+    expect((await markers.getScope("message-attachments"))?.state).toBe("migrating");
   });
 
   it("an empty or missing scope directory writes no state at all", async () => {
     const markers = createMarkerStore({ userData: () => root });
     const m = createAtRestMigration(deps({ markers }));
-    expect((await m.runScope("attachments")).outcome).toBe("empty");
+    expect((await m.runScope("message-attachments")).outcome).toBe("empty");
     await fs.promises.mkdir(path.join(root, "attachments"));
     expect((await m.runScope("email-attachments")).outcome).toBe("empty");
     expect(await markers.readState()).toEqual({ version: 1, scopes: {} });
@@ -332,7 +344,7 @@ describe("M4 — done only after a clean scan", () => {
     const m = createAtRestMigration(
       deps({ markers, ensureKey: async () => { throw new Error("DataKeyUnavailableError"); } }),
     );
-    expect((await m.runScope("attachments")).outcome).toBe("key-unavailable");
+    expect((await m.runScope("message-attachments")).outcome).toBe("key-unavailable");
     expect((await fs.promises.readFile(file)).equals(original)).toBe(true);
     expect(await markers.readState()).toEqual({ version: 1, scopes: {} });
   });
@@ -347,13 +359,13 @@ describe("M5 — files in use", () => {
     const wrapped = wrap(real, (f) => { if (f === locked) throw errno("EBUSY"); });
     const m = createAtRestMigration(deps({ crypto: wrapped, markers }));
 
-    const r = await m.runScope("attachments");
+    const r = await m.runScope("message-attachments");
     expect(wrapped.calls.get(locked)).toBe(RETRY_ATTEMPTS);
     expect(r.skipped).toBe(1);
     expect(r.files).toBe(3);
     expect(await startsWithMagic(locked)).toBe(false);
     expect((await fs.promises.readFile(locked)).equals(seeded.get(locked) as Buffer)).toBe(true);
-    expect((await markers.getScope("attachments"))?.state).toBe("migrating");
+    expect((await markers.getScope("message-attachments"))?.state).toBe("migrating");
     await m.runScope("email-attachments");
     expect(m.getStatus()).toMatchObject({ phase: "paused", pauseReason: "files-in-use" });
     expect(logs.some((l) => l.includes("skipped a file (EBUSY)"))).toBe(true);
@@ -380,7 +392,7 @@ describe("disk space", () => {
     const m = createAtRestMigration(
       deps({ markers, freeBytes: async () => free, setTimer: (fn) => { timer = fn; } }),
     );
-    const r = await m.runScope("attachments");
+    const r = await m.runScope("message-attachments");
     expect(r.outcome).toBe("paused-disk");
     for (const f of seeded.keys()) expect(await startsWithMagic(f)).toBe(false);
     expect(m.getStatus()).toMatchObject({ phase: "paused", pauseReason: "disk-space", total: 3 });
@@ -388,7 +400,7 @@ describe("disk space", () => {
 
     free = 10 * DISK_HEADROOM_BYTES;
     (timer as unknown as () => void)();
-    await waitFor(() => logs.some((l) => l.includes("migration attachments: outcome=done")));
+    await waitFor(() => logs.some((l) => l.includes("migration message-attachments: outcome=done")));
     await m.runScope("email-attachments");
     expect(m.getStatus().phase).toBe("done");
     for (const f of seeded.keys()) expect(await startsWithMagic(f)).toBe(true);
@@ -400,7 +412,7 @@ describe("status", () => {
   it("broadcasts running with counts, then done; minutes left appears once there is a rate", async () => {
     await seedMany("message-attachments", 3);
     const m = createAtRestMigration(deps());
-    await m.runScope("attachments");
+    await m.runScope("message-attachments");
     // The first scope finishing is not "done" while the second has not run (no flash of the done copy).
     expect(broadcasts.some((s) => s.phase === "done")).toBe(false);
     expect(m.getStatus().phase).toBe("running");
@@ -416,9 +428,9 @@ describe("status", () => {
     await real.encryptFileInPlace(file);
     const markers = createMarkerStore({ userData: () => root });
     const m = createAtRestMigration(deps({ crypto: real, markers }));
-    expect((await m.runScope("attachments")).outcome).toBe("done");
+    expect((await m.runScope("message-attachments")).outcome).toBe("done");
     expect(m.getStatus()).toMatchObject({ phase: "idle", total: 0, encryptedThisLaunch: 0 });
-    expect((await markers.getScope("attachments"))?.state).toBe("done");
+    expect((await markers.getScope("message-attachments"))?.state).toBe("done");
   });
 });
 
