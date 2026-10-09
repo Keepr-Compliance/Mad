@@ -115,7 +115,13 @@ import plist from "simple-plist";
 
 import { BackupService } from "../backupService";
 import { DeviceSyncOrchestrator } from "../deviceSyncOrchestrator";
-import { BackupAtRest, BACKUP_SECURING_SENTENCE, readMarkerAt } from "../atRest/backupAtRest";
+import {
+  BACKUP_AT_REST_QUARANTINED_MESSAGE,
+  BackupAtRest,
+  BACKUP_SECURING_SENTENCE,
+  QUARANTINE_DIR_NAME,
+  readMarkerAt,
+} from "../atRest/backupAtRest";
 import { createFileCrypto, MAGIC, type KeyResolver } from "../atRest/fileCrypto";
 import { createMarkerStore } from "../atRest/markers";
 import { syncTimeline } from "../syncTimeline";
@@ -468,5 +474,69 @@ describe("D — C-DELTA reads a parse copy", () => {
     expect(fsSync.existsSync(result.backupPath!)).toBe(false); // C4: parse copy gone after close
     await o.completeBackupAtRest();
     await sealedAfter(o);
+  });
+});
+
+describe("B2 — an unreadable kept backup no longer ends iPhone sync", () => {
+  it("one flipped byte: the chain is quarantined, the user is told plainly, and a full backup runs", async () => {
+    const sms = path.join(chain, "Manifest.db");
+    const buf = fsSync.readFileSync(sms);
+    buf[60 + 5] ^= 0x01; // inside the first chunk, not the header
+    fsSync.writeFileSync(sms, buf);
+    const o = newOrchestrator();
+    const messages: string[] = [];
+    o.on("progress", (p: { message: string }) => messages.push(p.message));
+    startBackup.mockImplementation(async () => {
+      // A full backup: idevicebackup2 writes a new chain from scratch.
+      expect(fsSync.existsSync(chain)).toBe(false);
+      makeChain();
+      return ok({ isIncremental: false });
+    });
+    const result = await o.sync({ udid: UDID });
+    expect(result.success).toBe(true);
+    expect(startBackup).toHaveBeenCalledTimes(1);
+    expect(messages).toContain(BACKUP_AT_REST_QUARANTINED_MESSAGE);
+    const quarantined = fsSync.readdirSync(path.join(backups, QUARANTINE_DIR_NAME));
+    expect(quarantined).toHaveLength(1);
+    expect(quarantined[0].startsWith(`${UDID}-`)).toBe(true);
+    await o.completeBackupAtRest();
+    await sealedAfter(o);
+  });
+});
+
+describe("lock before the new-chain step", () => {
+  it("a launch migration that arrives while the old chain is being moved aside stands aside", async () => {
+    const P = BackupService.prototype;
+    jest.spyOn(P, "checkEncryptionStatus").mockResolvedValue({ isEncrypted: true, needsPassword: true, status: "on" });
+    jest.spyOn(P, "readChainEncryption").mockResolvedValue("plaintext");
+    let migrationDuringMove: string | null = null;
+    const aside = jest.spyOn(P, "moveChainAside").mockImplementation(async () => {
+      migrationDuringMove = await atRest.migrate(UDID);
+      return "aside";
+    });
+    const o = newOrchestrator();
+    (o as unknown as { needsNewEncryptedChain: () => Promise<boolean> }).needsNewEncryptedChain = async () => true;
+    backupReturns(ok());
+    await o.sync({ udid: UDID, password: "typed" });
+    expect(aside).toHaveBeenCalledTimes(1);
+    expect(migrationDuringMove).toBe("busy");
+    await o.completeBackupAtRest();
+  });
+});
+
+describe("progress for passes no sync is watching", () => {
+  it("the seal after a sync / the launch migration reach the sync status channel", async () => {
+    const o = newOrchestrator();
+    o.watchBackupAtRestProgress();
+    o.watchBackupAtRestProgress(); // idempotent: one subscription
+    const seen: Array<{ phase: string; message: string }> = [];
+    o.on("progress", (p: { phase: string; message: string }) => seen.push(p));
+    // A plaintext file appears; a seal with no caller callback reports through the event.
+    write("dd/" + "d".repeat(40), "new plaintext");
+    await atRest.seal(UDID);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((p) => p.phase === "cleanup")).toBe(true);
+    expect(seen[seen.length - 1].message).toBe("Securing your iPhone backup… 100%");
+    expect(atRest.listenerCount("progress")).toBe(1);
   });
 });

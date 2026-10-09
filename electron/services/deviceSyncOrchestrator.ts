@@ -35,9 +35,9 @@ import {
   type BackupPasswordStore,
 } from "./atRest/backupPassword";
 import {
-  BACKUP_AT_REST_UNREADABLE_MESSAGE,
-  BACKUP_SECURING_MESSAGE,
+  BACKUP_AT_REST_QUARANTINED_MESSAGE,
   BackupAtRestRefusal,
+  describeBackupAtRestProgress,
   getBackupAtRest,
   type BackupAtRest,
   type BackupAtRestProgress,
@@ -627,6 +627,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   backupAtRest: BackupAtRest | null = null;
   /** S4-C: a successful sync's chain, sealed by {@link completeBackupAtRest} after persistence. */
   private pendingAtRestSession: BackupSyncSession | null = null;
+  /** S4-C: set once {@link watchBackupAtRestProgress} has subscribed. */
+  private atRestProgressWatched = false;
   /** S4-C: the seal started by the last sync's end (tests and quit diagnostics await it). */
   lastAtRestSeal: Promise<void> | null = null;
   private messagesParser: iOSMessagesParser;
@@ -1603,31 +1605,31 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // continued (snapshot comparison breaks), so a new one is started.
       const backupPassword = passwordPlan.kind === "none" ? undefined : passwordPlan.password;
 
-      // BACKLOG-3816 S4-C: a backup Keepr is securing (launch migration or the seal after
-      // the previous sync) cannot be moved, unsealed or written to. Checked before the
-      // new-chain step, which moves or deletes the chain.
-      if (!inMockMode() && this.atRest().busyReason(options.udid) !== null) {
-        return this.refuseForAtRest(BACKUP_SECURING_MESSAGE, "busy");
-      }
-
-      if (backupPassword && !inMockMode() && (await this.needsNewEncryptedChain(options.udid))) {
-        await this.prepareNewChain(options.udid);
-      }
-
       // BACKLOG-3816 S4-C: unseal the kept chain for idevicebackup2 (strategy C-FULL /
       // C-DELTA). Refused BEFORE anything is spawned when the data key is unavailable,
-      // the backup is being secured, there is no room, or a sealed file will not open.
+      // the backup is being secured (launch migration or the seal after the previous
+      // sync), there is no room, or a sealed file will not open.
+      // The new-chain step (BACKLOG-3816: move the old chain aside or delete it) runs as
+      // `prepare`, i.e. AFTER the per-phone lock is claimed, so a launch migration cannot
+      // start on a chain this sync is about to move.
       if (!inMockMode()) {
+        const prepare = async () => {
+          if (backupPassword && (await this.needsNewEncryptedChain(options.udid))) {
+            await this.prepareNewChain(options.udid);
+          }
+        };
         try {
           atRestSession = await this.atRest().beginSync(options.udid, {
             onProgress: (p) => this.emitAtRestProgress(p),
+            prepare,
           });
         } catch (error) {
-          const refusal = error instanceof BackupAtRestRefusal ? error : null;
-          return this.refuseForAtRest(
-            refusal?.message ?? BACKUP_AT_REST_UNREADABLE_MESSAGE,
-            refusal?.reason ?? "unreadable",
-          );
+          // A failure of the new-chain step is an ordinary sync error, not a refusal.
+          if (!(error instanceof BackupAtRestRefusal)) throw error;
+          return this.refuseForAtRest(error.message, error.reason);
+        }
+        if (atRestSession.kind === "first" && atRestSession.quarantined) {
+          this.reportQuarantinedBackup(atRestSession.quarantined.reasonCode);
         }
       }
 
@@ -2172,11 +2174,46 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   }
 
   private emitAtRestProgress(p: BackupAtRestProgress): void {
+    const { message, percent } = describeBackupAtRestProgress(p);
+    this.emitProgress({
+      phase: "backup",
+      phaseProgress: percent,
+      overallProgress: 0,
+      message,
+    });
+  }
+
+  /**
+   * BACKLOG-3816 S4-C: forward the seal after a sync and the launch migration — passes
+   * no sync is watching — as `progress` ("Securing your iPhone backup… N%"), so they
+   * reach the renderer through the existing `sync:progress` channel. Called once by
+   * syncHandlers when it wires this orchestrator. Idempotent.
+   */
+  watchBackupAtRestProgress(): void {
+    if (this.atRestProgressWatched) return;
+    const atRest = this.atRest();
+    if (typeof (atRest as { on?: unknown }).on !== "function") return; // a test double with no events
+    this.atRestProgressWatched = true;
+    atRest.on("progress", (p: BackupAtRestProgress) => {
+      const { message, percent } = describeBackupAtRestProgress(p);
+      this.emitProgress({ phase: "cleanup", phaseProgress: percent, overallProgress: percent, message });
+    });
+  }
+
+  /**
+   * B2: the kept backup could not be read and was moved to quarantine; this sync makes a
+   * full backup. Said plainly in the status line, and recorded for the timeline.
+   */
+  private reportQuarantinedBackup(reasonCode: string): void {
+    log.warn("[DeviceSyncOrchestrator] Kept backup was unreadable; quarantined it and making a full backup", {
+      reasonCode,
+    });
+    syncTimeline.setContext({ keptBackup: "quarantined", keptBackupReasonCode: reasonCode });
     this.emitProgress({
       phase: "backup",
       phaseProgress: 0,
       overallProgress: 0,
-      message: `Preparing your saved iPhone backup (${p.done.toLocaleString()} of ${p.total.toLocaleString()} files)...`,
+      message: BACKUP_AT_REST_QUARANTINED_MESSAGE,
     });
   }
 

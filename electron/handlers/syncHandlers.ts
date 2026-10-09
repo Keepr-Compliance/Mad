@@ -404,6 +404,12 @@ function setupEventForwarding(): void {
   orchestrator.on("progress", (progress: SyncProgress) => {
     sendToMainWindow("sync:progress", progress);
   });
+  // BACKLOG-3816 S4-C: the seal after a sync and the launch migration of the kept iPhone
+  // backup report through the same channel ("Securing your iPhone backup… N%").
+  // `typeof` guard: handler suites stub the orchestrator with only what they drive.
+  if (typeof orchestrator.watchBackupAtRestProgress === "function") {
+    orchestrator.watchBackupAtRestProgress();
+  }
 
   // Forward phase changes
   orchestrator.on("phase", (phase: string) => {
@@ -467,6 +473,12 @@ function setupEventForwarding(): void {
   const onSyncComplete = async (result: SyncResult) => {
     try {
       await persistCompletedSync(result);
+    } catch (error) {
+      // An event listener: a rejection here would be unhandled. Persistence reports its
+      // own failures to the renderer; this is only what escaped it (e.g. a closed window).
+      log.error("[SyncHandlers] Completing a sync failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       // `typeof` guard: handler suites stub the orchestrator with only what they drive.
       if (typeof orchestrator?.completeBackupAtRest === "function") {

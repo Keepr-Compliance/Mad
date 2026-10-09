@@ -54,7 +54,7 @@ import {
   FILE_ID_PATTERN,
   selectReadFileRows,
 } from "../backupDecryptionService";
-import { getAtRestFiles, getDataKeyService } from "./dataKeyService";
+import { DataKeyUnavailableError, getAtRestFiles, getDataKeyService } from "./dataKeyService";
 import {
   AtRestIntegrityError,
   KENC_TMP_SUFFIX,
@@ -91,6 +91,25 @@ export const BACKUP_AT_REST_DISK_MESSAGE =
   "There is not enough free disk space to prepare your saved iPhone backup for this sync. Free up some space and try again.";
 export const BACKUP_AT_REST_UNREADABLE_MESSAGE =
   "Part of your saved iPhone backup could not be opened, so this sync was stopped before it changed anything.";
+/** B2: a sealed backup that fails authentication was moved aside; this sync makes a full backup. */
+export const BACKUP_AT_REST_QUARANTINED_MESSAGE =
+  "Keepr couldn't read the saved iPhone backup, so it will make a fresh full backup — this takes longer.";
+
+/**
+ * B2 (founder D10, "quarantine unreadable data 30 days"): a kept chain with sealed files
+ * that cannot be authenticated is moved, still sealed and otherwise untouched, to
+ * `Backups/.quarantine/<udid>-<ms>`, and the sync makes a full backup. Deleted at launch
+ * once older than {@link QUARANTINE_MAX_AGE_MS}. The name keeps it out of the 3598 sweep
+ * and the launch job (neither matches a dot-name).
+ */
+export const QUARANTINE_DIR_NAME = ".quarantine";
+export const QUARANTINE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * Unseal failures that no retry can fix: the file does not authenticate (tampered,
+ * truncated, flipped bit) or its key is not held on this computer. Anything else —
+ * disk space, a lock, an I/O error — keeps refusing, because a later try can succeed.
+ */
+const UNRECOVERABLE_CODES: ReadonlySet<string> = new Set(["INTEGRITY", "KEY_MISSING"]);
 
 /**
  * An unencrypted chain moved out of the way when the owner turned on phone backup
@@ -142,13 +161,31 @@ export interface BackupAtRestProgress {
   total: number;
 }
 
+/**
+ * The status line for a seal/unseal pass, shown through the existing sync status channel
+ * (`sync:progress`). Unsealing happens inside a sync, before the transfer; sealing and
+ * migrating happen after a sync and at launch.
+ */
+export function describeBackupAtRestProgress(p: BackupAtRestProgress): { message: string; percent: number } {
+  const percent = p.total > 0 ? Math.min(100, Math.floor((p.done / p.total) * 100)) : 100;
+  if (p.phase === "unsealing") {
+    return {
+      message: `Preparing your saved iPhone backup (${p.done.toLocaleString()} of ${p.total.toLocaleString()} files)...`,
+      percent,
+    };
+  }
+  return { message: `Securing your iPhone backup… ${percent}%`, percent };
+}
+
 export type MarkerReading = BackupAtRestState | "absent" | "unreadable";
 
 /** What a sync is holding while it runs. Returned by {@link BackupAtRest.beginSync}. */
 export type BackupSyncSession =
   | { kind: "none"; udid: string } // mock mode / nothing to manage
   | { kind: "apple"; udid: string } // owner-encrypted chain: Apple encrypts, Keepr does not seal
-  | { kind: "first"; udid: string } // no chain yet: sealed only once the first backup exists
+  // no chain yet: sealed only once the first backup exists. `quarantined`: the kept chain
+  // could not be read and was moved to Backups/.quarantine (B2) — this sync is a full backup.
+  | { kind: "first"; udid: string; quarantined?: { reasonCode: string } }
   | { kind: "keepr"; udid: string; strategy: BackupUnsealStrategy };
 
 export class BackupAtRestRefusal extends Error {
@@ -176,6 +213,8 @@ export interface BackupAtRestDeps {
   concurrency?: number;
   /** Test seam: the default strategy for {@link BackupAtRest.beginSync}. */
   strategy?: () => BackupUnsealStrategy;
+  /** Test seam: the clock used to name and age quarantined chains. */
+  now?: () => number;
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +270,7 @@ export function markerProtectsChain(reading: MarkerReading): boolean {
 
 function errCode(error: unknown): string {
   if (error instanceof AtRestIntegrityError) return "INTEGRITY";
+  if (error instanceof DataKeyUnavailableError) return "KEY_MISSING";
   const code = (error as NodeJS.ErrnoException)?.code;
   return typeof code === "string" ? code : error instanceof Error ? error.name : "UNKNOWN";
 }
@@ -315,6 +355,15 @@ export class BackupAtRest extends EventEmitter {
   chainDir(udid: string): string {
     if (!UDID_DIR_PATTERN.test(udid)) throw new Error("invalid device id for a backup chain");
     return path.join(this.deps.backupsRoot(), udid);
+  }
+
+  /**
+   * Where a pass reports progress: the caller's callback (a sync shows it in its own
+   * status), or else the `progress` event — the seal after a sync and the launch job
+   * have no caller watching; syncHandlers forwards the event to `sync:progress`.
+   */
+  private progressSink(onProgress?: (p: BackupAtRestProgress) => void): (p: BackupAtRestProgress) => void {
+    return onProgress ?? ((p) => this.emit("progress", p));
   }
 
   /** Why `udid` cannot sync right now, or null. */
@@ -468,11 +517,13 @@ export class BackupAtRest extends EventEmitter {
       return report;
     }
     const files = this.deps.files();
+    const notify = this.progressSink(onProgress);
     let done = 0;
+    if (listed.length > 0) notify({ udid, phase, done: 0, total: listed.length });
     const tick = () => {
       done++;
-      if (onProgress && (done % 500 === 0 || done === listed.length)) {
-        onProgress({ udid, phase, done, total: listed.length });
+      if (done % 500 === 0 || done === listed.length) {
+        notify({ udid, phase, done, total: listed.length });
       }
     };
     await pool(listed, this.concurrency, async (f) => {
@@ -531,7 +582,9 @@ export class BackupAtRest extends EventEmitter {
       return report;
     }
     const files = this.deps.files();
+    const notify = this.progressSink(onProgress);
     let done = 0;
+    if (listed.length > 0) notify({ udid, phase: "unsealing", done: 0, total: listed.length });
     await pool(listed, this.concurrency, async (f) => {
       try {
         const cls = await this.classify(f.path, f.size);
@@ -550,8 +603,8 @@ export class BackupAtRest extends EventEmitter {
         report.failedCodes[code] = (report.failedCodes[code] ?? 0) + 1;
       }
       done++;
-      if (onProgress && (done % 500 === 0 || done === listed.length)) {
-        onProgress({ udid, phase: "unsealing", done, total: listed.length });
+      if (done % 500 === 0 || done === listed.length) {
+        notify({ udid, phase: "unsealing", done, total: listed.length });
       }
     });
     report.ms = Date.now() - started;
@@ -631,10 +684,19 @@ export class BackupAtRest extends EventEmitter {
    * data key cannot be opened (nothing would protect the new files), when there is not
    * enough room to unseal, or when a sealed file cannot be opened. Otherwise unseals per
    * strategy and returns the session the sync must hand to {@link finishSync}.
+   *
+   * `prepare` runs UNDER the per-phone lock, before the chain is looked at: the
+   * orchestrator's new-chain step (move the old chain aside / delete it) goes there, so a
+   * launch migration can never start on a chain that is about to be moved. An error from
+   * `prepare` releases the lock and propagates unchanged (it is not a refusal).
    */
   async beginSync(
     udid: string,
-    opts: { strategy?: BackupUnsealStrategy; onProgress?: (p: BackupAtRestProgress) => void } = {},
+    opts: {
+      strategy?: BackupUnsealStrategy;
+      onProgress?: (p: BackupAtRestProgress) => void;
+      prepare?: () => Promise<void>;
+    } = {},
   ): Promise<BackupSyncSession> {
     const strategy = opts.strategy ?? this.deps.strategy?.() ?? BACKUP_UNSEAL_STRATEGY;
     const chain = this.chainDir(udid);
@@ -646,6 +708,7 @@ export class BackupAtRest extends EventEmitter {
     this.busy.set(udid, "syncing");
     let handedOut = false;
     try {
+      if (opts.prepare) await opts.prepare();
       const chainExists = await exists(chain);
       if (chainExists && (await isAppleEncryptedChain(chain))) {
         await this.recordAppleChain(udid);
@@ -705,6 +768,12 @@ export class BackupAtRest extends EventEmitter {
         ms: report.ms,
       });
       if (report.failed > 0) {
+        const codes = Object.keys(report.failedCodes).sort();
+        if (codes.length > 0 && codes.every((c) => UNRECOVERABLE_CODES.has(c))) {
+          // B2: no retry can open these files. Refusing would end iPhone sync for good;
+          // the backup is a cache of the phone, so move it aside and back up in full.
+          return await this.quarantineChain(udid, codes.join("+"), opts.onProgress);
+        }
         const disk = report.failedCodes.DISK_SPACE !== undefined;
         throw new BackupAtRestRefusal(
           disk ? "disk-space" : "unreadable",
@@ -719,6 +788,67 @@ export class BackupAtRest extends EventEmitter {
       if (error instanceof BackupAtRestRefusal) throw error;
       throw new BackupAtRestRefusal("unreadable", BACKUP_AT_REST_UNREADABLE_MESSAGE);
     }
+  }
+
+  /**
+   * B2: re-seal what the failed unseal opened, then move the chain (still sealed, its
+   * unreadable files untouched) to `Backups/.quarantine/<udid>-<ms>` and drop its marker.
+   * The caller holds the lock and keeps it: the returned session is a first backup.
+   * Throws when the move fails; the caller then re-seals and refuses as before.
+   */
+  private async quarantineChain(
+    udid: string,
+    reasonCode: string,
+    onProgress?: (p: BackupAtRestProgress) => void,
+  ): Promise<BackupSyncSession> {
+    this.busy.set(udid, "sealing");
+    await this.sealAndRecord(udid, "sealing", onProgress);
+    this.busy.set(udid, "syncing");
+    const quarantineRoot = path.join(this.deps.backupsRoot(), QUARANTINE_DIR_NAME);
+    await fs.promises.mkdir(quarantineRoot, { recursive: true, mode: 0o700 });
+    const dest = path.join(quarantineRoot, `${udid}-${this.now()}`);
+    await this.withRetry(async () => {
+      await fs.promises.rename(this.chainDir(udid), dest);
+    });
+    await this.removeMarker(udid);
+    this.log("warn", "[BackupAtRest] moved an unreadable backup to quarantine; this sync makes a full backup", {
+      reasonCode,
+    });
+    return { kind: "first", udid, quarantined: { reasonCode } };
+  }
+
+  /**
+   * Launch: delete quarantined chains older than {@link QUARANTINE_MAX_AGE_MS}, aged by
+   * the time in the folder name (the move keeps the chain's own mtime). Never throws.
+   * Returns how many were deleted.
+   */
+  async purgeQuarantine(): Promise<number> {
+    const root = path.join(this.deps.backupsRoot(), QUARANTINE_DIR_NAME);
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(root, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+    const now = this.now();
+    let removed = 0;
+    for (const entry of entries) {
+      const full = path.join(root, entry.name);
+      try {
+        const stamp = /-(\d{10,})$/.exec(entry.name);
+        const movedAt = stamp ? Number(stamp[1]) : (await fs.promises.lstat(full)).mtimeMs;
+        if (now - movedAt <= QUARANTINE_MAX_AGE_MS) continue;
+        await fs.promises.rm(full, { recursive: true, force: true });
+        removed++;
+      } catch (error) {
+        this.log("warn", "[BackupAtRest] could not delete an expired quarantined backup", { code: errCode(error) });
+      }
+    }
+    return removed;
+  }
+
+  private now(): number {
+    return this.deps.now ? this.deps.now() : Date.now();
   }
 
   /**
@@ -767,6 +897,7 @@ export class BackupAtRest extends EventEmitter {
     } catch {
       return outcomes;
     }
+    outcomes.quarantinePurged = String(await this.purgeQuarantine());
     try {
       outcomes.aside = String(await this.sealAsideChains());
     } catch (error) {

@@ -21,6 +21,7 @@ const orchestratorEvents = Object.assign(new EventEmitter(), {
   completeBackupAtRest: jest.fn(async () => {
     order.push("seal");
   }),
+  watchBackupAtRestProgress: jest.fn(),
   startDeviceDetection: jest.fn(),
   stopDeviceDetection: jest.fn(),
 });
@@ -153,5 +154,20 @@ describe("S4-C: the kept backup is sealed when persistence ends, on every path",
   it("extraction did not succeed (nothing to persist)", async () => {
     await endSync({ success: false });
     expect(order).toEqual(["seal"]);
+  });
+
+  // SR-M7: `sendToMainWindow("sync:complete")` sits OUTSIDE persistCompletedSync's own
+  // try. A throw there must still seal — only the handler's finally guarantees it.
+  it("the completion message to the window throws: still sealed (the handler's finally)", async () => {
+    send.mockImplementation((channel: string) => {
+      if (channel === "sync:complete") throw new Error("window gone");
+    });
+    await endSync({});
+    expect(order).toEqual(["seal"]);
+    expect(orchestratorEvents.completeBackupAtRest).toHaveBeenCalledTimes(1);
+  });
+
+  it("registration subscribes the orchestrator to the at-rest progress (seal after sync, launch migration)", () => {
+    expect(orchestratorEvents.watchBackupAtRestProgress).toHaveBeenCalledTimes(1);
   });
 });

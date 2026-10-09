@@ -27,15 +27,21 @@ import plist from "simple-plist";
 
 import { ADDRESS_BOOK_FILE_ID, SMS_DB_FILE_ID } from "../../backupDecryptionService";
 import {
+  BACKUP_AT_REST_QUARANTINED_MESSAGE,
   BackupAtRest,
   BackupAtRestRefusal,
+  describeBackupAtRestProgress,
+  QUARANTINE_DIR_NAME,
+  QUARANTINE_MAX_AGE_MS,
+  type BackupAtRestProgress,
   BACKUP_SECURING_MESSAGE,
   BACKUP_SECURING_SENTENCE,
   markerProtectsChain,
   readMarkerAt,
   type BackupUnsealStrategy,
 } from "../backupAtRest";
-import { createFileCrypto, MAGIC, type KeyResolver } from "../fileCrypto";
+import { DataKeyUnavailableError } from "../dataKeyService";
+import { createFileCrypto, KENC_TMP_SUFFIX, MAGIC, probeHeader, type KeyResolver } from "../fileCrypto";
 import { createMarkerStore, MARKER_DIR_NAME } from "../markers";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -126,6 +132,20 @@ function headerOf(file: string): Buffer {
 /** Files that hold bytes and do NOT start with the KEPRENC magic. */
 function plaintextLeft(): string[] {
   return allContentFiles().filter((f) => fs.statSync(f).size > 0 && !headerOf(f).equals(MAGIC));
+}
+
+/** Same, for any chain-shaped directory (root plists excluded). */
+function plaintextIn(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string, root: boolean) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f, false);
+      else if (!(root && ["Info.plist", "Status.plist", "Manifest.plist"].includes(e.name))) out.push(f);
+    }
+  };
+  walk(dir, true);
+  return out.filter((f) => fs.statSync(f).size > 0 && !headerOf(f).equals(MAGIC));
 }
 
 beforeEach(() => {
@@ -398,17 +418,22 @@ describe("refusals and special chains", () => {
     expect(await readMarkerAt(backups, UDID)).toBe("absent");
   });
 
-  it("a sealed file that cannot be opened (wrong key) refuses the sync and re-seals what was unsealed", async () => {
+  it("a sealed file that cannot be opened (wrong key) is quarantined sealed, and the sync becomes a full backup (B2)", async () => {
     makeChain();
-    const s = service();
+    const s = service({ now: () => 1_700_000_000_000 });
     await s.migrate(UDID);
     const other = crypto.randomBytes(32);
     const foreign = createFileCrypto({ currentKey: async () => ({ keyId: KEY_ID, key: other }), keyFor: async () => other }, { chunkSize: 64 });
     const bad = path.join(chain, "ee", "e".repeat(40));
     fs.mkdirSync(path.dirname(bad), { recursive: true });
     await foreign.encryptStreamToFile((async function* () { yield Buffer.from("sealed under another key"); })(), bad);
-    await expect(s.beginSync(UDID, { strategy: "full" })).rejects.toMatchObject({ reason: "unreadable" });
-    expect(plaintextLeft()).toEqual([]);
+    const session = await s.beginSync(UDID, { strategy: "full" });
+    expect(session).toEqual({ kind: "first", udid: UDID, quarantined: { reasonCode: "INTEGRITY" } });
+    const moved = path.join(backups, QUARANTINE_DIR_NAME, `${UDID}-1700000000000`);
+    expect(fs.existsSync(chain)).toBe(false);
+    expect(plaintextIn(moved)).toEqual([]);
+    expect(s.busyReason(UDID)).toBe("syncing");
+    await s.finishSync(session);
     expect(s.busyReason(UDID)).toBeNull();
   });
 });
@@ -442,5 +467,196 @@ describe("launch job", () => {
     expect(await s.migrate(UDID)).toBe("encrypted");
     expect(plaintextLeft()).toEqual([]);
     expect(await s.migrate(UDID)).toBe("encrypted");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B2 — a sealed backup that fails authentication does not end iPhone sync
+// ---------------------------------------------------------------------------
+describe("B2: unreadable kept backup → quarantine + full backup", () => {
+  const T0 = 1_760_000_000_000;
+  const smsFile = () => path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+
+  /** Flip one byte INSIDE the first chunk's ciphertext (not the header: a header flip reads as "damaged"). */
+  function flipByteInChunk(file: string): Buffer {
+    const buf = fs.readFileSync(file);
+    buf[60 + 5] ^= 0x01;
+    fs.writeFileSync(file, buf);
+    return buf;
+  }
+
+  async function walkFiles(dir: string): Promise<string[]> {
+    const out: string[] = [];
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const f = path.join(d, e.name);
+        if (e.isDirectory()) walk(f);
+        else out.push(f);
+      }
+    };
+    walk(dir);
+    return out;
+  }
+
+  it("one flipped byte: the chain moves to Backups/.quarantine/<udid>-<ms> sealed and untouched; the sync is a full backup", async () => {
+    makeChain();
+    const s = service({ now: () => T0 });
+    await s.migrate(UDID);
+    const flipped = flipByteInChunk(smsFile());
+    const session = await s.beginSync(UDID, { strategy: "full" });
+
+    expect(session).toEqual({ kind: "first", udid: UDID, quarantined: { reasonCode: "INTEGRITY" } });
+    const moved = path.join(backups, QUARANTINE_DIR_NAME, `${UDID}-${T0}`);
+    expect(fs.existsSync(chain)).toBe(false);
+    expect(fs.existsSync(path.join(moved, "Manifest.db"))).toBe(true);
+    // Sealed: every content file with bytes is a KEPRENC container, no temp left behind.
+    const movedFiles = await walkFiles(moved);
+    expect(movedFiles.filter((f) => f.endsWith(KENC_TMP_SUFFIX))).toEqual([]);
+    expect(plaintextIn(moved)).toEqual([]);
+    for (const f of movedFiles) {
+      if (path.basename(f).endsWith(".plist") || fs.statSync(f).size === 0) continue;
+      expect((await probeHeader(f)).encrypted).toBe(true);
+    }
+    // Untouched: the damaged file is byte-identical to what failed.
+    expect(fs.readFileSync(path.join(moved, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID))).toEqual(flipped);
+    // Marker gone with the chain; the lock is still this sync's until finishSync.
+    expect(await readMarkerAt(backups, UDID)).toBe("absent");
+    expect(s.busyReason(UDID)).toBe("syncing");
+    await s.finishSync(session);
+    expect(s.busyReason(UDID)).toBeNull();
+
+    // The next sync is not blocked: no chain → first backup, no second quarantine.
+    const next = await s.beginSync(UDID, { strategy: "full" });
+    expect(next).toEqual({ kind: "first", udid: UDID });
+    await s.finishSync(next);
+  });
+
+  it("a data key that is no longer held (KEY_MISSING) is quarantined too", async () => {
+    makeChain();
+    await service().migrate(UDID);
+    const gone = createFileCrypto(
+      {
+        currentKey: async () => ({ keyId: KEY_ID, key: KEY }),
+        keyFor: async () => {
+          throw new DataKeyUnavailableError("no key with that id");
+        },
+      },
+      { chunkSize: 64 },
+    );
+    const s = service({ files: () => gone, now: () => T0 });
+    const session = await s.beginSync(UDID, { strategy: "full" });
+    expect(session).toEqual({ kind: "first", udid: UDID, quarantined: { reasonCode: "KEY_MISSING" } });
+    expect(fs.existsSync(path.join(backups, QUARANTINE_DIR_NAME, `${UDID}-${T0}`))).toBe(true);
+    await s.finishSync(session);
+  });
+
+  it("disk space still refuses and keeps the chain in place (a later try can succeed)", async () => {
+    makeChain();
+    await service().migrate(UDID);
+    const s = service({ freeBytes: async () => 10 });
+    await expect(s.beginSync(UDID, { strategy: "full" })).rejects.toMatchObject({ reason: "disk-space" });
+    expect(fs.existsSync(path.join(chain, "Manifest.db"))).toBe(true);
+    expect(fs.existsSync(path.join(backups, QUARANTINE_DIR_NAME))).toBe(false);
+    expect(s.busyReason(UDID)).toBeNull();
+  });
+
+  it("an I/O error alongside an authentication failure still refuses (only unrecoverable-only quarantines)", async () => {
+    makeChain();
+    await service().migrate(UDID);
+    flipByteInChunk(smsFile());
+    const flaky = {
+      ...files,
+      decryptToFile: async (src: string, dest: string, opts?: { requireEncrypted?: boolean }) => {
+        if (src.endsWith(OTHER_ID)) throw Object.assign(new Error("i/o"), { code: "EIO" });
+        return files.decryptToFile(src, dest, opts);
+      },
+    };
+    const s = service({ files: () => flaky });
+    await expect(s.beginSync(UDID, { strategy: "full" })).rejects.toMatchObject({ reason: "unreadable" });
+    expect(fs.existsSync(path.join(chain, "Manifest.db"))).toBe(true);
+    expect(plaintextLeft()).toEqual([]);
+    expect(s.busyReason(UDID)).toBeNull();
+  });
+
+  it("launch deletes quarantined chains older than 30 days and keeps younger ones", async () => {
+    const root = path.join(backups, QUARANTINE_DIR_NAME);
+    const old = path.join(root, `${UDID}-${T0 - QUARANTINE_MAX_AGE_MS - 60_000}`);
+    const young = path.join(root, `${UDID}-${T0 - QUARANTINE_MAX_AGE_MS + 60_000}`);
+    for (const d of [old, young]) {
+      fs.mkdirSync(path.join(d, "ab"), { recursive: true });
+      fs.writeFileSync(path.join(d, "ab", "x"), "sealed bytes");
+    }
+    const outcomes = await service({ now: () => T0 }).runLaunchJob();
+    expect(outcomes.quarantinePurged).toBe("1");
+    expect(fs.existsSync(old)).toBe(false);
+    expect(fs.existsSync(young)).toBe(true);
+  });
+
+  it("the plain sentence the user is shown", () => {
+    expect(BACKUP_AT_REST_QUARANTINED_MESSAGE).toBe(
+      "Keepr couldn't read the saved iPhone backup, so it will make a fresh full backup — this takes longer.",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Should-fix: the lock is claimed before the new-chain step moves the chain
+// ---------------------------------------------------------------------------
+describe("per-phone lock covers the new-chain step (prepare)", () => {
+  it("a launch migration during prepare stands aside; the chain is not moved under it", async () => {
+    makeChain();
+    const s = service();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const begun = s.beginSync(UDID, { strategy: "full", prepare: () => gate });
+    await new Promise((r) => setImmediate(r));
+    expect(await s.migrate(UDID)).toBe("busy");
+    release();
+    const session = await begun;
+    await s.finishSync(session);
+    expect(s.busyReason(UDID)).toBeNull();
+  });
+
+  it("an error in prepare propagates unchanged (not a refusal) and releases the lock", async () => {
+    makeChain();
+    const s = service();
+    const boom = new Error("move failed");
+    await expect(s.beginSync(UDID, { prepare: async () => { throw boom; } })).rejects.toBe(boom);
+    expect(s.busyReason(UDID)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Should-fix: progress for passes no sync is watching
+// ---------------------------------------------------------------------------
+describe("progress", () => {
+  it("a seal with no caller callback reports through the 'progress' event, start to 100%", async () => {
+    makeChain();
+    const s = service();
+    const seen: BackupAtRestProgress[] = [];
+    s.on("progress", (p: BackupAtRestProgress) => seen.push(p));
+    await s.migrate(UDID);
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    expect(seen[0]).toMatchObject({ udid: UDID, phase: "migrating", done: 0 });
+    const last = seen[seen.length - 1];
+    expect(last.done).toBe(last.total);
+    expect(describeBackupAtRestProgress(last).message).toBe("Securing your iPhone backup… 100%");
+  });
+
+  it("a caller callback receives the progress instead of the event (no double reporting)", async () => {
+    makeChain();
+    const s = service();
+    const viaEvent: BackupAtRestProgress[] = [];
+    const viaCallback: BackupAtRestProgress[] = [];
+    s.on("progress", (p: BackupAtRestProgress) => viaEvent.push(p));
+    await s.seal(UDID, (p) => viaCallback.push(p));
+    expect(viaCallback.length).toBeGreaterThan(0);
+    expect(viaEvent).toEqual([]);
+  });
+
+  it("unsealing keeps its file-count wording", () => {
+    expect(describeBackupAtRestProgress({ udid: UDID, phase: "unsealing", done: 500, total: 1000 }).message).toBe(
+      "Preparing your saved iPhone backup (500 of 1,000 files)...",
+    );
   });
 });
