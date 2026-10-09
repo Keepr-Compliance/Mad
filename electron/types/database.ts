@@ -324,6 +324,47 @@ export class SchemaBaselineRefusalError extends DatabaseError {
 }
 
 /**
+ * Why the database key cannot be produced (BACKLOG-3824). Reported to Sentry as
+ * a tag; never accompanied by the underlying error text, a path, or key bytes.
+ */
+export type DbKeyUnavailableReason =
+  /** The store exists and parses, but secure storage would not unwrap the key. */
+  | "unwrap_failed"
+  /** The store exists but is not valid JSON or has no wrapped key. */
+  | "store_corrupt"
+  /** The store exists but could not be read (permissions, I/O). */
+  | "store_unreadable"
+  /** Secure storage is unavailable and an existing key/database is on disk. */
+  | "secure_storage_unavailable"
+  /** No store, but an encrypted mad.db is on disk — a new key could not open it. */
+  | "store_missing";
+
+/**
+ * BACKLOG-3824 — the database key exists (or must exist) but cannot be produced.
+ *
+ * ## Never regenerate
+ *
+ * Every byte of mad.db is sealed under the key in db-key-store.json. Writing a
+ * new key while that store exists — or while an encrypted mad.db exists without
+ * it — orphans the database permanently and silently. So the ONLY path that
+ * creates a key is: the store file does not exist (ENOENT) AND there is no
+ * encrypted mad.db beside it. Everything else throws this error and writes
+ * nothing; the condition stays recoverable (a locked Keychain unlocks, a
+ * restored store file reads again).
+ *
+ * Thrown by `databaseEncryptionService.getEncryptionKey`. Same model as
+ * `atRest/dataKeyService.ts` and `supportAccess/supportCipher.ts`.
+ * The message is the reason code only, so it is safe to send to Sentry.
+ */
+export class DbKeyUnavailableError extends DatabaseError {
+  declare code: "DB_KEY_UNAVAILABLE";
+  constructor(public readonly reason: DbKeyUnavailableReason) {
+    super(`Database key unavailable: ${reason}`, "DB_KEY_UNAVAILABLE");
+    this.name = "DbKeyUnavailableError";
+  }
+}
+
+/**
  * BACKLOG-2999 — the outcome of the post-migration-failure auto-restore
  * attempt. Declared here so `_attemptAutoRestore()`'s return type and
  * `MigrationRecoveryFailedError` share ONE definition: the error is built

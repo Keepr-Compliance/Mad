@@ -21,6 +21,15 @@ const mockMkdirSync = jest.fn();
 const mockOpenSync = jest.fn();
 const mockReadSync = jest.fn();
 const mockCloseSync = jest.fn();
+// BACKLOG-3824: the key store is created exclusively (temp file + link) and the
+// store / mad.db presence checks use lstat and fstat.
+const mockWriteSync = jest.fn();
+const mockFsyncSync = jest.fn();
+const mockLinkSync = jest.fn();
+const mockUnlinkSync = jest.fn();
+const mockLstatSync = jest.fn();
+const mockFstatSync = jest.fn();
+const enoent = () => Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" });
 
 const mockLogInfo = jest.fn().mockResolvedValue(undefined);
 const mockLogDebug = jest.fn().mockResolvedValue(undefined);
@@ -48,6 +57,12 @@ jest.mock("fs", () => ({
   openSync: mockOpenSync,
   readSync: mockReadSync,
   closeSync: mockCloseSync,
+  writeSync: mockWriteSync,
+  fsyncSync: mockFsyncSync,
+  linkSync: mockLinkSync,
+  unlinkSync: mockUnlinkSync,
+  lstatSync: mockLstatSync,
+  fstatSync: mockFstatSync,
 }));
 
 // Mock logService with proper default export structure
@@ -80,6 +95,13 @@ describe("DatabaseEncryptionService", () => {
     // Reset default mock behaviors
     mockGetPath.mockReturnValue("/mock/user/data");
     mockIsEncryptionAvailable.mockReturnValue(true);
+    // Default: an empty profile — no key store, no mad.db.
+    mockLstatSync.mockImplementation(() => {
+      throw enoent();
+    });
+    mockOpenSync.mockImplementation(() => {
+      throw enoent();
+    });
   });
 
   describe("isEncryptionAvailable", () => {
@@ -132,6 +154,14 @@ describe("DatabaseEncryptionService", () => {
     it("should generate and store a new key when no key exists", async () => {
       // No existing key store file
       mockExistsSync.mockReturnValue(false);
+      mockReadFileSync.mockImplementation(() => {
+        throw enoent();
+      });
+      // The temp file opens (fd 7); mad.db does not exist.
+      mockOpenSync.mockImplementation((p: string) => {
+        if (String(p).endsWith(".tmp")) return 7;
+        throw enoent();
+      });
 
       // Mock encryption
       const mockEncryptedBuffer = Buffer.from("encrypted-key-data");
@@ -142,13 +172,19 @@ describe("DatabaseEncryptionService", () => {
       // Key should be a 64-character hex string (32 bytes)
       expect(key).toMatch(/^[0-9a-f]{64}$/);
 
-      // Should have saved the key
-      expect(mockWriteFileSync).toHaveBeenCalled();
+      // Should have saved the key — exclusively: a "wx" temp file linked into
+      // place, never a writeFileSync over the store (BACKLOG-3824).
+      expect(mockOpenSync).toHaveBeenCalledWith(expect.stringMatching(/\.tmp$/), "wx", 0o600);
+      expect(mockLinkSync).toHaveBeenCalledWith(
+        expect.stringMatching(/\.tmp$/),
+        expect.stringMatching(/db-key-store\.json$/),
+      );
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
       expect(mockEncryptString).toHaveBeenCalled();
     });
 
     it("should retrieve existing key from store", async () => {
-      const storedKey = "stored-encryption-key-hex";
+      const storedKey = "a".repeat(64);
       const keyStore = {
         encryptedKey: Buffer.from("encrypted").toString("base64"),
         metadata: {
@@ -169,7 +205,7 @@ describe("DatabaseEncryptionService", () => {
     });
 
     it("should cache the key after first retrieval", async () => {
-      const storedKey = "cached-key-value";
+      const storedKey = "b".repeat(64);
       const keyStore = {
         encryptedKey: Buffer.from("encrypted").toString("base64"),
         metadata: {
@@ -255,40 +291,6 @@ describe("DatabaseEncryptionService", () => {
     });
   });
 
-  describe("rotateKey", () => {
-    beforeEach(async () => {
-      mockIsEncryptionAvailable.mockReturnValue(true);
-      mockGetPath.mockReturnValue("/mock/user/data");
-      await databaseEncryptionService.initialize();
-    });
-
-    it("should generate new key and return both old and new keys", async () => {
-      const oldKey = "old-key-value";
-      const keyStore = {
-        encryptedKey: Buffer.from("encrypted").toString("base64"),
-        metadata: {
-          keyId: "id",
-          createdAt: new Date().toISOString(),
-          version: 1,
-        },
-      };
-
-      mockExistsSync.mockReturnValue(true);
-      mockReadFileSync.mockReturnValue(JSON.stringify(keyStore));
-      mockDecryptString.mockReturnValue(oldKey);
-      mockEncryptString.mockReturnValue(Buffer.from("new-encrypted"));
-
-      databaseEncryptionService.clearCache();
-
-      const result = await databaseEncryptionService.rotateKey();
-
-      expect(result.oldKey).toBe(oldKey);
-      expect(result.newKey).toMatch(/^[0-9a-f]{64}$/);
-      expect(result.oldKey).not.toBe(result.newKey);
-      expect(mockWriteFileSync).toHaveBeenCalled();
-    });
-  });
-
   describe("getKeyMetadata", () => {
     beforeEach(async () => {
       mockGetPath.mockReturnValue("/mock/user/data");
@@ -340,7 +342,7 @@ describe("DatabaseEncryptionService", () => {
 
       mockExistsSync.mockReturnValue(true);
       mockReadFileSync.mockReturnValue(JSON.stringify(keyStore));
-      mockDecryptString.mockReturnValue("cached-key");
+      mockDecryptString.mockReturnValue("c".repeat(64));
 
       // First call to populate cache
       await databaseEncryptionService.getEncryptionKey();
