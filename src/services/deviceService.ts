@@ -133,25 +133,6 @@ export interface DriverInstallResult {
 // ============================================
 
 /**
- * Sync start options
- */
-export interface SyncStartOptions {
-  udid: string;
-  password?: string;
-  forceFullBackup?: boolean;
-}
-
-/**
- * Sync result
- */
-export interface SyncResult {
-  messages: unknown[];
-  contacts: unknown[];
-  conversations: unknown[];
-  duration: number;
-}
-
-/**
  * Sync status
  */
 export interface SyncStatus {
@@ -585,32 +566,6 @@ export const deviceService = {
   // ============================================
   // SYNC METHODS
   // ============================================
-
-  /**
-   * Start iPhone sync
-   */
-  async startSync(options: SyncStartOptions): Promise<ApiResult<SyncResult>> {
-    try {
-      if (!window.api.sync) {
-        return { success: false, error: "Sync API not available" };
-      }
-      const result = await window.api.sync.start(options);
-      if (result.success) {
-        return {
-          success: true,
-          data: {
-            messages: result.messages,
-            contacts: result.contacts,
-            conversations: result.conversations,
-            duration: result.duration,
-          },
-        };
-      }
-      return { success: false, error: result.error || "Sync failed" };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
 
   /**
    * Cancel the current sync

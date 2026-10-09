@@ -222,6 +222,27 @@ export interface WindowApiDrivers {
 }
 
 /**
+ * BACKLOG-3785: the reply to `sync:start` / `sync:process-existing`. Counts and
+ * scalars only. The messages, contacts and conversations never cross IPC in the
+ * reply: persistence reads them in main from the orchestrator's "complete" event.
+ * Returning the arrays cost 179 MB of structured clone for 670k messages and
+ * blocked the renderer for 83.6 s while it was decoded.
+ */
+export interface SyncStartReply {
+  success: boolean;
+  error: string | null;
+  duration: number;
+  messageCount: number;
+  contactCount: number;
+  conversationCount: number;
+  skipped?: boolean;
+  skipReason?: "unchanged" | "force-resync";
+  rateLimited?: boolean;
+  passwordRequired?: boolean;
+  attachmentsUndecryptable?: number;
+}
+
+/**
  * Sync methods (Windows)
  */
 export interface WindowApiSync {
@@ -229,14 +250,7 @@ export interface WindowApiSync {
     udid: string;
     password?: string;
     forceFullBackup?: boolean;
-  }) => Promise<{
-    success: boolean;
-    messages: unknown[];
-    contacts: unknown[];
-    conversations: unknown[];
-    error: string | null;
-    duration: number;
-  }>;
+  }) => Promise<SyncStartReply>;
   cancel: () => Promise<{ success: boolean }>;
   status: () => Promise<{ isRunning: boolean; phase: string }>;
   devices: () => Promise<
