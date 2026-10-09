@@ -233,3 +233,19 @@ describe("BACKLOG-3816 3598 interplay — a valid encrypted chain is never a lef
     expect(fs.existsSync(path.join(userData, "Backups", UDID, "Manifest.db"))).toBe(true);
   });
 });
+
+describe("BACKLOG-3816 removePlaintextChain", () => {
+  it("never removes an encrypted chain; removes a plaintext one", async () => {
+    const service = new BackupService();
+    expect(await service.removePlaintextChain(UDID)).toBe(false);
+    expect(fs.existsSync(path.join(userData, "Backups", UDID, "Manifest.db"))).toBe(true);
+
+    const other = "00008101-00AABBCCDDEEFF00";
+    const plain = path.join(userData, "Backups", other);
+    fs.mkdirSync(plain, { recursive: true });
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    fs.writeFileSync(path.join(plain, "Manifest.plist"), require("bplist-creator")({ IsEncrypted: false }));
+    expect(await service.removePlaintextChain(other)).toBe(true);
+    expect(fs.existsSync(plain)).toBe(false);
+  });
+});

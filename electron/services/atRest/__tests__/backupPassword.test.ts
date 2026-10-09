@@ -137,3 +137,15 @@ describe("replaceVerified", () => {
     await expect(store().replaceVerified(UDID, "new")).rejects.toBeInstanceOf(BackupPasswordUnavailableError);
   });
 });
+
+describe("round trip before anyone relies on a saved password", () => {
+  it("put fails when the saved entry does not read back as the same password", async () => {
+    const lying: SecretStore = {
+      isEncryptionAvailable: () => true,
+      encryptString: (p: string) => ss.encryptString(p),
+      decryptString: (b: Buffer) => `${ss.decryptString(b)}-altered`,
+    };
+    const s2 = createBackupPasswordStore({ baseDir: () => dir, secretStore: lying });
+    await expect(s2.put(UDID, "the-password", "generated")).rejects.toBeInstanceOf(BackupPasswordUnavailableError);
+  });
+});

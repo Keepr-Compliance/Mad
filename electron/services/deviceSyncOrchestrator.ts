@@ -560,10 +560,15 @@ export const BACKUP_PASSWORD_UNAVAILABLE_MESSAGE =
   "Keepr can't unlock the iPhone backup password it saved on this computer, so it can't read this iPhone's encrypted backup. Nothing was changed. Restart Keepr and try again; if this keeps happening, contact support.";
 
 /**
- * BACKLOG-3816 option A, on. Keepr turns on the iPhone's own backup encryption with a
- * password it generates and keeps (founder decision 2026-10-08; no reveal in the UI).
+ * BACKLOG-3816 option A — Keepr turning the iPhone's backup encryption ON with a password
+ * it generates — is PAUSED (OFF). With the password held by one computer's SecretStore, a
+ * second computer syncing the same iPhone (or a replacement PC) meets a password nobody
+ * has seen; the only exit is Reset All Settings. Where the password lives is a founder
+ * decision (server-held per-account / derived from an account secret / one computer per
+ * phone). The flow is built and tested; storage plugs in through BackupPasswordStore
+ * (`backupPasswordStore`). Everything else in S4 runs regardless of this flag.
  */
-export const KEEPR_BACKUP_ENCRYPTION_ENABLED = true;
+export const KEEPR_BACKUP_ENCRYPTION_ENABLED = false;
 
 /** BACKLOG-3816: shown while the phone asks for its passcode to turn encryption on. */
 export const BACKUP_ENCRYPTION_CONFIRM_MESSAGE =
@@ -620,6 +625,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   private decryptionService: BackupDecryptionService;
   /** Test seam; production uses the process-wide store. */
   backupPasswordStore: BackupPasswordStore | null = null;
+  /** BACKLOG-3816: whether option A (Keepr turns encryption on) may run. Test seam. */
+  backupEncryptionEnableAllowed: boolean = KEEPR_BACKUP_ENCRYPTION_ENABLED;
   private messagesParser: iOSMessagesParser;
   private contactsParser: iOSContactsParser;
 
@@ -1582,10 +1589,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // a password Keepr generates and keeps; a plaintext chain is replaced by a new
       // encrypted one.
       let encryptionPlan: EncryptionPlan = { kind: "unchanged" };
-      if (KEEPR_BACKUP_ENCRYPTION_ENABLED && passwordPlan.kind !== "provided" && !inMockMode()) {
+      if (!inMockMode()) {
         encryptionPlan = await this.ensureBackupEncryption(
           options.udid,
-          passwordPlan.kind === "stored" ? passwordPlan.password : undefined,
+          passwordPlan.kind === "stored" || passwordPlan.kind === "provided" ? passwordPlan.password : undefined,
+          passwordPlan.kind === "stored",
         );
         if (encryptionPlan.kind === "failed") {
           syncTimeline.setContext({ endedBy: "backup-encryption", reasonCode: encryptionPlan.reasonCode });
@@ -1602,13 +1610,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             ? undefined
             : passwordPlan.password;
       if (encryptionPlan.kind === "enabled" && encryptionPlan.newChain) {
-        // The old chain stays on disk until the new one verifies, so the new one needs
-        // its full size free — the 1.5x branch, not the in-place 1.1x one.
-        const newChainSpace = await this.checkAvailableDiskSpace(this.estimatedBackupSize * 1.5);
-        if (!newChainSpace.hasEnoughSpace) {
-          log.warn("[DeviceSyncOrchestrator] Low disk space for a new encrypted backup; proceeding.");
-        }
-        await this.backupService.moveChainAside(options.udid);
+        await this.prepareNewChain(options.udid);
       }
 
       // Step 1: Create backup
@@ -2349,7 +2351,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    */
   private async ensureBackupEncryption(
     udid: string,
-    storedPassword: string | undefined,
+    knownPassword: string | undefined,
+    knownIsSaved: boolean,
   ): Promise<EncryptionPlan> {
     let status: BackupEncryptionInfo;
     try {
@@ -2360,10 +2363,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     syncTimeline.setContext({ phoneBackupEncryption: status.status ?? "unknown" });
 
     if (status.status === "on") {
-      if (!storedPassword) return { kind: "unchanged" };
+      // A plaintext chain cannot be continued once the phone encrypts (snapshot
+      // comparison breaks): start a new chain — whoever's password this is.
+      if (!knownPassword) return { kind: "unchanged" };
       const chain = await this.backupService.readChainEncryption(udid);
       return chain === "plaintext"
-        ? { kind: "enabled", password: storedPassword, newChain: true }
+        ? { kind: "enabled", password: knownPassword, newChain: true }
         : { kind: "unchanged" };
     }
     if (status.status !== "off") {
@@ -2373,7 +2378,13 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       return { kind: "unchanged" };
     }
 
-    let password = storedPassword;
+    if (!this.backupEncryptionEnableAllowed) {
+      // Option A paused: the phone's setting is left exactly as it is.
+      return { kind: "unchanged" };
+    }
+    // Retry after an unconfirmed attempt reuses the SAVED password (idempotent); a typed
+    // password is never used to turn encryption on.
+    let password = knownIsSaved ? knownPassword : undefined;
     if (!password) {
       password = generateBackupPassword();
       try {
@@ -2402,6 +2413,31 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     }
     const chain = await this.backupService.readChainEncryption(udid);
     return { kind: "enabled", password, newChain: chain === "plaintext" };
+  }
+
+  /**
+   * BACKLOG-3816: make room for a new encrypted chain. Keeping the old plaintext chain
+   * until the encrypted one verifies needs the whole backup size free AGAIN (~2x on disk).
+   * When that space is there, the old chain is moved aside; when it is not, it is
+   * deleted first — the new chain is a full backup either way, so the old one has no
+   * incremental value. Re-read right before the delete: only a PLAINTEXT chain is removed.
+   */
+  private async prepareNewChain(udid: string): Promise<"aside" | "deleted" | "kept"> {
+    const needed = this.estimatedBackupSize * 1.5;
+    const space = await this.checkAvailableDiskSpace(needed);
+    if (space.hasEnoughSpace) {
+      await this.backupService.moveChainAside(udid);
+      syncTimeline.setContext({ oldChain: "aside" });
+      return "aside";
+    }
+    if ((await this.backupService.readChainEncryption(udid)) !== "plaintext") {
+      syncTimeline.setContext({ oldChain: "kept" });
+      return "kept";
+    }
+    log.warn("[DeviceSyncOrchestrator] Not enough space to keep the old unencrypted backup; removing it before the encrypted one");
+    await this.backupService.removePlaintextChain(udid);
+    syncTimeline.setContext({ oldChain: "deleted-for-space" });
+    return "deleted";
   }
 
   /** BACKLOG-3816: delete a moved-aside plaintext chain once the encrypted one verifies. */

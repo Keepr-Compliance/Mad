@@ -3089,6 +3089,27 @@ export class BackupService extends EventEmitter {
   }
 
   /**
+   * BACKLOG-3816: delete `Backups/<udid>` when — re-read here, right before the delete —
+   * it is an UNENCRYPTED chain. Used only when there is no room to keep it aside while a
+   * new encrypted chain is made. An encrypted or unreadable chain is never removed.
+   */
+  async removePlaintextChain(udid: string): Promise<boolean> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return false;
+    return serialiseLeftoverCleanup(async () => {
+      if ((await this.readChainEncryption(validatedUdid)) !== "plaintext") return false;
+      await fs.rm(path.join(this.getDefaultBackupPath(), validatedUdid), {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 500,
+      });
+      log.info("[BackupService] Removed the previous unencrypted backup to make room for an encrypted one");
+      return true;
+    });
+  }
+
+  /**
    * BACKLOG-3816: delete chains moved aside for `udid`. The CALLER must first have
    * verified the encrypted chain opens with the saved password.
    */
