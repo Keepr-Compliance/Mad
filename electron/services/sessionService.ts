@@ -309,7 +309,12 @@ export class SessionService {
         // the file system, so no session file can be produced on this path.
         return false;
       }
-      await fs.writeFile(this.getSessionFilePath(), fileContent, "utf8");
+      // BACKLOG-3833: write a temp file and rename it over session.json, so a
+      // reader never sees a half-written file (rename is atomic on one volume).
+      const target = this.getSessionFilePath();
+      const temp = `${target}.tmp`;
+      await fs.writeFile(temp, fileContent, "utf8");
+      await fs.rename(temp, target);
       await logService.info("Session saved successfully", "SessionService");
       // BACKLOG-3658: sign-in / refresh — listeners drop cached user state.
       emitSessionChanged({ kind: "saved", userId: data.user?.id ?? null });
@@ -391,6 +396,35 @@ export class SessionService {
       });
       return null;
     }
+  }
+
+  /**
+   * BACKLOG-3833: read the session for the once-a-minute idle check.
+   *
+   * Runs in the same queue as every session.json write, so it never reads a
+   * file mid-write. It NEVER deletes or rewrites the file: an unreadable file,
+   * a failed decrypt or a read error returns `{ status: "unreadable" }` and the
+   * caller tries again on its next tick. Only `loadSession` decides that a
+   * file is corrupt and removes it.
+   */
+  async peekSession(): Promise<
+    | { status: "ok"; session: SessionData }
+    | { status: "none" }
+    | { status: "unreadable" }
+  > {
+    return this.runSerialized(async () => {
+      try {
+        const fileContent = await fs.readFile(this.getSessionFilePath(), "utf8");
+        const result = this.decryptSessionData(fileContent);
+        if (!result) return { status: "unreadable" as const };
+        return { status: "ok" as const, session: result.session };
+      } catch (error: unknown) {
+        if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+          return { status: "none" as const };
+        }
+        return { status: "unreadable" as const };
+      }
+    });
   }
 
   /**

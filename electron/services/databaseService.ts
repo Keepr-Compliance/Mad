@@ -1694,6 +1694,11 @@ class DatabaseService implements IDatabaseService {
     return sessionDb.validateSession(sessionToken);
   }
 
+  /** BACKLOG-3833: read-only lookup for the idle check (no writes). */
+  getSessionTimes(sessionToken: string): sessionDb.SessionTimes | null {
+    return sessionDb.getSessionTimes(sessionToken);
+  }
+
   async deleteSession(sessionToken: string): Promise<void> {
     return sessionDb.deleteSession(sessionToken);
   }

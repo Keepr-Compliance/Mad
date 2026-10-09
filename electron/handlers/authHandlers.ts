@@ -24,6 +24,7 @@ import { registerGoogleAuthHandlers } from "./googleAuthHandlers";
 import { registerMicrosoftAuthHandlers } from "./microsoftAuthHandlers";
 import { registerSessionHandlers } from "./sessionHandlers";
 import { registerSharedAuthHandlers } from "./sharedAuthHandlers";
+import { startSessionIdleEnforcement } from "../services/sessionIdleEnforcer";
 
 /**
  * Initialize database and audit service
@@ -80,6 +81,10 @@ export function registerAuthHandlers(_mainWindow: BrowserWindow | null): void {
 
   // Shared handlers (pending login completion, mailbox disconnect)
   registerSharedAuthHandlers(_mainWindow);
+
+  // BACKLOG-3833: the once-a-minute idle check. Started here, with the auth
+  // channels it belongs to, so the app cannot have one without the other.
+  startSessionIdleEnforcement();
 }
 
 // Re-export for backward compatibility

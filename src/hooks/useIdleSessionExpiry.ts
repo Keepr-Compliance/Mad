@@ -1,9 +1,10 @@
 /**
  * BACKLOG-3833 — when main signs the session out for inactivity, run the
- * normal logout flow so the app returns to the sign-in screen without a reload.
+ * normal logout flow so the app returns to the sign-in screen without a reload,
+ * then show the reason on the sign-in screen.
  */
 import { useEffect, useRef } from "react";
-import { onIdleSessionExpired } from "../services/sessionActivityService";
+import { onIdleSessionExpired, setSignInNotice } from "../services/sessionActivityService";
 import logger from "../utils/logger";
 import { useUserActivityHeartbeat } from "./useUserActivityHeartbeat";
 
@@ -22,13 +23,22 @@ export function useIdleSessionExpiry({
 
   useEffect(() => {
     if (!isAuthenticated) return;
+    // Signed in again: the previous sign-out notice is no longer relevant.
+    setSignInNotice(null);
     let handled = false;
     return onIdleSessionExpired(() => {
       if (handled) return;
       handled = true;
       logger.info("[IdleSession] Main signed the session out for inactivity");
-      window.alert(IDLE_SIGN_OUT_MESSAGE);
-      void onExpiredRef.current();
+      // Leave the signed-in screens FIRST, then show the reason on the
+      // sign-in screen. Never a blocking dialog over client data.
+      void (async () => {
+        try {
+          await onExpiredRef.current();
+        } finally {
+          setSignInNotice(IDLE_SIGN_OUT_MESSAGE);
+        }
+      })();
     });
   }, [isAuthenticated]);
 }

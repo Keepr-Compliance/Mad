@@ -6,6 +6,7 @@
 import { renderHook, act } from "@testing-library/react";
 import { useSessionIdleTimeout, IDLE_SIGN_OUT_MESSAGE } from "../useIdleSessionExpiry";
 import { USER_ACTIVITY_EVENTS } from "../useUserActivityHeartbeat";
+import { getSignInNotice, setSignInNotice } from "../../services/sessionActivityService";
 
 jest.mock("../../utils/logger", () => ({
   __esModule: true,
@@ -87,8 +88,19 @@ describe("useSessionIdleTimeout (BACKLOG-3833)", () => {
     expect(expiredListener).toBeNull();
   });
 
-  it("main's idle sign-out runs the logout flow without a reload", async () => {
+  it.each([["scroll"], ["wheel"]])("%s does not count (fires for programmatic scrolling)", (type) => {
     const onExpired = jest.fn().mockResolvedValue(undefined);
+    renderHook(() => useSessionIdleTimeout({ isAuthenticated: true, onExpired }));
+    window.dispatchEvent(new Event(type));
+    expect(reportUserActivity).not.toHaveBeenCalled();
+  });
+
+  it("main's idle sign-out: leaves the signed-in screens first, then the sign-in screen shows why", async () => {
+    setSignInNotice(null);
+    let noticeWhenLogoutRan: string | null = "unset";
+    const onExpired = jest.fn(async () => {
+      noticeWhenLogoutRan = getSignInNotice();
+    });
     const { unmount } = renderHook(() =>
       useSessionIdleTimeout({ isAuthenticated: true, onExpired }),
     );
@@ -97,9 +109,18 @@ describe("useSessionIdleTimeout (BACKLOG-3833)", () => {
       expiredListener!();
       expiredListener!(); // a duplicate notice signs out once
     });
-    expect(alertSpy).toHaveBeenCalledWith(IDLE_SIGN_OUT_MESSAGE);
+    expect(alertSpy).not.toHaveBeenCalled(); // never a dialog over client data
     expect(onExpired).toHaveBeenCalledTimes(1);
+    expect(noticeWhenLogoutRan).toBeNull(); // notice set only after the logout
+    expect(getSignInNotice()).toBe(IDLE_SIGN_OUT_MESSAGE);
     unmount();
     expect(unsubscribe).toHaveBeenCalled();
+  });
+
+  it("signing in again clears the notice", () => {
+    setSignInNotice(IDLE_SIGN_OUT_MESSAGE);
+    const onExpired = jest.fn().mockResolvedValue(undefined);
+    renderHook(() => useSessionIdleTimeout({ isAuthenticated: true, onExpired }));
+    expect(getSignInNotice()).toBeNull();
   });
 });

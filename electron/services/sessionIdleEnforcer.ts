@@ -8,43 +8,59 @@
  *
  * Validity is checked BEFORE activity is recorded, so input from a user who
  * returns after the idle limit cannot revive an already idle session: it takes
- * the same sign-out path. On sign-out the renderer is told through
- * `session:idle-expired` and runs its normal logout flow.
+ * the same sign-out path.
  *
- * An error never signs anyone out; only an explicit invalid result does.
+ * Sign-out runs the shared main-side logout (`signOutLocalSession`: stop sync,
+ * per-user resets, audit with the real account id, in-memory session, stored
+ * session) and only THEN tells the renderer through `session:idle-expired`.
+ * No renderer is needed: with the window closed the sign-out is complete.
+ *
+ * The check is read-only (BACKLOG-3833 R4/B3): it reads the session file
+ * through `sessionService.peekSession` (queued behind session writes, never
+ * deletes) and the DB row through `getSessionTimes` (no UPDATE). An unreadable
+ * file or any error never signs anyone out; the next tick tries again.
  */
 import databaseService from "./databaseService";
 import sessionService from "./sessionService";
 import sessionSecurityService from "./sessionSecurityService";
 import logService from "./logService";
 import { sendToMainWindow } from "../windowRegistry";
+import { signOutLocalSession } from "../handlers/sessionSignOut";
 
 export const SESSION_IDLE_EXPIRED_CHANNEL = "session:idle-expired";
 export const SESSION_IDLE_CHECK_INTERVAL_MS = 60 * 1000;
 
-export type IdleEnforceResult = "signed-out" | "no-session" | "active" | "expired" | "error";
+export type IdleEnforceResult =
+  | "signed-out"
+  | "no-session"
+  | "active"
+  | "expired"
+  | "unreadable"
+  | "error";
 
 export async function enforceSessionIdle(opts: {
   recordActivity: boolean;
 }): Promise<IdleEnforceResult> {
   try {
     if (!databaseService.isInitialized()) return "no-session";
-    const session = await sessionService.loadSession();
-    if (!session?.sessionToken) return "signed-out";
-    const token = session.sessionToken;
+    const peek = await sessionService.peekSession();
+    if (peek.status === "unreadable") return "unreadable";
+    if (peek.status === "none" || !peek.session.sessionToken) return "signed-out";
+    const token = peek.session.sessionToken;
 
-    const dbSession = await databaseService.validateSession(token);
-    if (!dbSession) return "no-session";
+    const row = databaseService.getSessionTimes(token);
+    if (!row) return "no-session";
 
-    const check = await sessionSecurityService.checkSessionValidity(
-      { created_at: dbSession.created_at, last_accessed_at: dbSession.last_accessed_at },
-      token,
-    );
+    const pastExpiry = new Date(row.expires_at).getTime() < Date.now();
+    const check = pastExpiry
+      ? { valid: false, reason: "expired" as const }
+      : await sessionSecurityService.checkSessionValidity(
+          { created_at: row.created_at, last_accessed_at: row.last_accessed_at },
+          token,
+        );
 
     if (!check.valid) {
-      await databaseService.deleteSession(token);
-      await sessionService.clearSession();
-      sessionSecurityService.cleanupSession(token);
+      await signOutLocalSession({ token, userId: row.user_id, reason: check.reason ?? "idle" });
       await logService.info("Session signed out by idle enforcement", "SessionIdleEnforcer", {
         reason: check.reason,
       });

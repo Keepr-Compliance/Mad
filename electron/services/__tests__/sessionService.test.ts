@@ -34,6 +34,7 @@ jest.mock("electron", () => ({
 // Mock fs promises module
 const mockFs = {
   writeFile: jest.fn(),
+    rename: jest.fn(), // BACKLOG-3833: session.json is written tmp + rename
   readFile: jest.fn(),
   unlink: jest.fn(),
 };
@@ -134,7 +135,7 @@ describe("SessionService", () => {
 
       expect(result).toBe(true);
       expect(mockFs.writeFile).toHaveBeenCalledWith(
-        path.join("/mock/user/data", "session.json"),
+        path.join("/mock/user/data", "session.json.tmp"),
         expect.any(String),
         "utf8",
       );
@@ -797,7 +798,7 @@ describe("SessionService", () => {
 
       // After calling a method, the path should be constructed from app.getPath('userData')
       expect(mockFs.writeFile).toHaveBeenCalledWith(
-        path.join("/mock/user/data", "session.json"),
+        path.join("/mock/user/data", "session.json.tmp"),
         expect.any(String),
         "utf8",
       );

@@ -10,13 +10,9 @@ import { useEffect } from "react";
 import { reportUserActivity } from "../services/sessionActivityService";
 
 export const HEARTBEAT_MIN_INTERVAL_MS = 60_000;
-export const USER_ACTIVITY_EVENTS = [
-  "keydown",
-  "pointerdown",
-  "wheel",
-  "scroll",
-  "touchstart",
-] as const;
+// No "scroll"/"wheel": scroll events also fire for programmatic scrolling and
+// scroll anchoring, which is not a person using the app.
+export const USER_ACTIVITY_EVENTS = ["keydown", "pointerdown", "touchstart"] as const;
 
 export function useUserActivityHeartbeat(isAuthenticated: boolean): void {
   useEffect(() => {

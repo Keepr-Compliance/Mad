@@ -258,7 +258,6 @@ import { getInstallMode } from "./services/diagnostics/installMode";
 import { getHostArchitecture } from "./services/diagnostics/hostArchitecture";
 import { WINDOWS_ARM64_ARGV_TOKEN } from "./utils/windowsArm64";
 import sessionSecurityService from "./services/sessionSecurityService";
-import { startSessionIdleEnforcement } from "./services/sessionIdleEnforcer";
 import {
   WindowResponsivenessTracker,
   attachResponsivenessTracking,
@@ -1853,8 +1852,6 @@ app.whenReady().then(async () => {
 
   // Register existing handler modules
   registerAuthHandlers(mainWindow!);
-  // BACKLOG-3833: sign out an idle session while the window stays open.
-  startSessionIdleEnforcement();
   registerTransactionCrudHandlers(mainWindow!);
   registerTransactionExportHandlers(mainWindow!);
   registerTransactionSearchHandlers();

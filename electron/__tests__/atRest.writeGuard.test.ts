@@ -107,7 +107,7 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
   "electron/services/sqliteBackupService.ts": { count: 4, reason: SQLCIPHER },
   "electron/services/databaseEncryptionService.ts": { count: 2, reason: `${SEALED} (DB key store)` },
   // --- already sealed ---------------------------------------------------------------
-  "electron/services/sessionService.ts": { count: 1, reason: `${SEALED} (session file via encryptSessionData)` },
+  "electron/services/sessionService.ts": { count: 2, reason: `${SEALED} (session file via encryptSessionData, tmp+rename — BACKLOG-3833)` },
   "electron/services/offlinePass/offlinePassStore.ts": { count: 1, reason: SEALED },
   "electron/services/supportAccess/supportCipher.ts": { count: 2, reason: `${SEALED} (wrapped support key, tmp+rename)` },
   "electron/services/supportAccess/supportLogStore.ts": { count: 2, reason: `${SEALED} (framed sealed records + rotation rename)` },
