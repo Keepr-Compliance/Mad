@@ -96,6 +96,31 @@ describe("BACKLOG-3819: the electron-log sink redacts emails and phones", () => 
     expect(err.message).toContain(EMAIL);
   });
 
+  it("L1: an Error's message and stack trace are redacted in file and console", () => {
+    const err = new Error(`lookup failed for erin.q@example.com`);
+    err.stack = `Error: lookup failed for erin.q@example.com\n    at find (/app/contacts.js:10:5) +15555550155\n    at run (/app/x.js:1:1)`;
+    realLog.error("[Main] stack test", err);
+    const text = fileText();
+    expect(text).toContain("lookup failed for e***@example.com");
+    expect(text).toContain("at find (/app/contacts.js:10:5) ***55");
+    expect(text).not.toContain("erin.q@example.com");
+    expect(text).not.toContain("+15555550155");
+    expect(consoleLines.join("\n")).not.toContain("erin.q@example.com");
+  });
+
+  it("L1: a multi-line message is redacted on every line", () => {
+    realLog.warn("[Main] batch:\n  first frank.m@example.com\n  second (555) 555-0131\n  third +44 20 7946 0958");
+    const text = fileText();
+    expect(text).toContain("first f***@example.com\n  second ***31\n  third ***58");
+    expect(consoleLines[consoleLines.length - 1]).toContain("second ***31");
+  });
+
+  it("L1: the console transport receives the redacted text", () => {
+    realLog.info(`[Main] console-only check ${EMAIL} ${PHONE}`);
+    const last = consoleLines[consoleLines.length - 1];
+    expect(last).toContain("console-only check j***@example.com ***42");
+  });
+
   it("L1: a renderer-relayed line (log:renderer → log.info('[Renderer] ...')) is redacted", () => {
     // Same call shape as handlers/systemHandlers.ts `log:renderer`; the real
     // listener is exercised in handlers/__tests__/rendererLogRelay-3819.test.ts.
