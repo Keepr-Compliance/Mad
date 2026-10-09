@@ -15,7 +15,6 @@ import {
 import type { BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import path from "path";
-import fs from "fs";
 import logService from "../services/logService";
 import auditService from "../services/auditService";
 import emailAttachmentService from "../services/emailAttachmentService";
@@ -33,6 +32,20 @@ import { getEmailById } from "../services/db/emailDbService";
 import { auditWindowEnd, auditWindowStartParam } from "../services/exportPlan";
 import { auditPeriodFromRow } from "../services/submissionAuditPeriod";
 import { wrapHandler } from "../utils/wrapHandler";
+import {
+  attachmentUserData,
+  decryptContainedAttachmentTo,
+  readContainedAttachment,
+  resolveRendererAttachment,
+} from "../services/atRest/attachmentReader";
+import { ContainmentError, type ResolvedAttachment } from "../services/atRest/containment";
+import {
+  clearOpenTemp,
+  clearOpenTempSync,
+  nextOpenPath,
+  safeOpenName,
+} from "../services/atRest/openTemp";
+import { findAttachmentFilenameByStoragePath } from "../services/db/attachmentOpenSql";
 import type { Transaction } from "../types/models";
 import {
   ValidationError,
@@ -284,12 +297,66 @@ async function downloadEmailAttachmentsOnDemand(
 }
 
 /**
+ * BACKLOG-3816 S2: a path the renderer sent must be a regular file inside
+ * userData/message-attachments or userData/attachments (realpath, separator-aware).
+ */
+async function resolveForRenderer(storagePath: unknown): Promise<ResolvedAttachment> {
+  if (!storagePath || typeof storagePath !== "string") {
+    throw new ValidationError("Storage path is required", "storagePath");
+  }
+  try {
+    return await resolveRendererAttachment(storagePath);
+  } catch (error) {
+    if (error instanceof ContainmentError) {
+      throw new ValidationError("Invalid attachment path", "storagePath");
+    }
+    throw error;
+  }
+}
+
+/** The sender's file name for the decrypted copy; null when the DB has none. */
+function originalNameFor(storagePath: string): string | null {
+  try {
+    return findAttachmentFilenameByStoragePath(databaseService.getRawDatabase(), storagePath);
+  } catch {
+    return null;
+  }
+}
+
+let openTempCleanupRegistered = false;
+
+/** Decrypted open-copies never outlive the run: removed now (left by a crash) and on quit. */
+function registerOpenTempCleanup(): void {
+  if (openTempCleanupRegistered) return;
+  openTempCleanupRegistered = true;
+  const warn = (error: unknown) =>
+    logService.warn("[AtRest] could not clear decrypted open-copies", "Transactions", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  try {
+    const userData = attachmentUserData();
+    void clearOpenTemp(userData).catch(warn);
+    // Handler tests mock `electron.app` without an event emitter.
+    if (typeof app.on === "function") app.on("will-quit", () => clearOpenTempSync(userData));
+  } catch (error) {
+    warn(error);
+  }
+}
+
+/** Tests only. */
+export function resetOpenTempCleanupForTests(): void {
+  openTempCleanupRegistered = false;
+}
+
+/**
  * Register attachment IPC handlers
  * @param _mainWindow - Main window instance (unused in attachment handlers)
  */
 export function registerAttachmentHandlers(
   _mainWindow: BrowserWindow | null,
 ): void {
+  registerOpenTempCleanup();
+
   // TASK-1776: Get attachments for a specific email (with on-demand download)
   ipcMain.handle(
     "emails:get-attachments",
@@ -400,18 +467,20 @@ export function registerAttachmentHandlers(
       event: IpcMainInvokeEvent,
       storagePath: string,
     ): Promise<TransactionResponse> => {
-      if (!storagePath || typeof storagePath !== "string") {
-        throw new ValidationError("Storage path is required", "storagePath");
-      }
+      const resolved = await resolveForRenderer(storagePath);
+      const normalizedPath = resolved.realPath;
 
-      // Security: Validate path is within app data directory
-      const appDataPath = app.getPath("userData");
-      const normalizedPath = path.normalize(storagePath);
-      if (!normalizedPath.startsWith(appDataPath)) {
-        throw new ValidationError("Invalid attachment path", "storagePath");
-      }
+      // BACKLOG-3816 S2: an external viewer needs plaintext, so decrypt into a
+      // per-run temp dir (removed on quit and at the next launch) and open that.
+      const displayName = safeOpenName(
+        originalNameFor(storagePath),
+        path.basename(normalizedPath),
+        path.extname(normalizedPath),
+      );
+      const openCopy = await nextOpenPath(attachmentUserData(), displayName);
+      await decryptContainedAttachmentTo(resolved, openCopy);
 
-      const result = await shell.openPath(normalizedPath);
+      const result = await shell.openPath(openCopy);
 
       if (result) {
         // shell.openPath returns empty string on success, error message on failure
@@ -448,19 +517,12 @@ export function registerAttachmentHandlers(
       storagePath: string,
       mimeType: string,
     ): Promise<TransactionResponse> => {
-      if (!storagePath || typeof storagePath !== "string") {
-        throw new ValidationError("Storage path is required", "storagePath");
-      }
+      const resolved = await resolveForRenderer(storagePath);
+      const normalizedPath = resolved.realPath;
 
-      // Security: Validate path is within app data directory
-      const appDataPath = app.getPath("userData");
-      const normalizedPath = path.normalize(storagePath);
-      if (!normalizedPath.startsWith(appDataPath)) {
-        throw new ValidationError("Invalid attachment path", "storagePath");
-      }
-
-      // Read file as buffer and convert to base64
-      const buffer = fs.readFileSync(normalizedPath);
+      // BACKLOG-3816 S2: decrypt on read (plaintext passes through until the
+      // scope's migration is done).
+      const buffer = await readContainedAttachment(resolved);
       const base64 = buffer.toString("base64");
       const dataUrl = `data:${mimeType || "application/octet-stream"};base64,${base64}`;
 
@@ -590,19 +652,10 @@ export function registerAttachmentHandlers(
       event: IpcMainInvokeEvent,
       storagePath: string,
     ): Promise<TransactionResponse> => {
-      if (!storagePath || typeof storagePath !== "string") {
-        throw new ValidationError("Storage path is required", "storagePath");
-      }
+      const resolved = await resolveForRenderer(storagePath);
 
-      // Security: Validate path is within app data directory
-      const appDataPath = app.getPath("userData");
-      const normalizedPath = path.normalize(storagePath);
-      if (!normalizedPath.startsWith(appDataPath)) {
-        throw new ValidationError("Invalid attachment path", "storagePath");
-      }
-
-      // Read file as buffer and convert to base64
-      const buffer = fs.readFileSync(normalizedPath);
+      // BACKLOG-3816 S2: decrypt on read.
+      const buffer = await readContainedAttachment(resolved);
       const base64 = buffer.toString("base64");
 
       return {

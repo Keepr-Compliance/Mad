@@ -38,6 +38,7 @@
  */
 import { hostLogger } from "../../capabilities/loggerProvider";
 import { DataKeyUnavailableError, getDataKeyService } from "./dataKeyService";
+import { runConfiguredLogMaintenance } from "../logScrub";
 
 export interface AtRestJobContext {
   log: (level: "info" | "warn" | "error", message: string) => void;
@@ -180,7 +181,15 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
       }
     },
   });
-  startup.register(placeholder("logs", 10, "S5"));
+  startup.register({
+    id: "logs",
+    order: 10,
+    run: async (ctx) => {
+      const r = runConfiguredLogMaintenance();
+      if (!r) return ctx.log("warn", "[AtRest] logs: no log directory registered; skipped");
+      ctx.log(r.errors.length ? "warn" : "info", `[AtRest] logs: rewritten ${r.rewritten.length}, deleted ${r.deleted.length}, errors ${r.errors.length}`);
+    },
+  });
   startup.register(placeholder("temp-sweep", 20, "S6"));
   startup.register(placeholder("attachments", 30, "S3"));
   startup.register(placeholder("email-attachments", 40, "S3"));

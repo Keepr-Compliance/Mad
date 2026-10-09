@@ -74,7 +74,7 @@ const READ_APIS = new Set([
 type Entry = { count: number; reason: string };
 
 const S1 = "PENDING S1 — writes plaintext customer content under userData; S1 routes it through atRest";
-const EXPORT = "user-initiated export to a destination the user chose; plaintext by intent";
+const EXPORT = "user-chosen export — plaintext by design (founder requirement)";
 const SEALED = "content is already sealed (SecretStore / AES-GCM) before it is written";
 const META = "small cache/state file with no customer content";
 const SQLCIPHER = "copies/moves the SQLCipher-encrypted database file (ciphertext)";
@@ -93,11 +93,11 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
   "electron/services/rcsCacheStaging.ts": { count: 1, reason: `${S1} (RCS staged media temp)` },
   "electron/services/backupService.ts": { count: 1, reason: "S4/BACKLOG-3816 — fs.rename of an unencrypted iPhone backup folder aside (Backups/.keepr-replaced-*) until the encrypted chain verifies; moves, never writes content" },
   "electron/services/backupDecryptionService.ts": { count: 2, reason: "S4/BACKLOG-3817 — parse copies of an encrypted iPhone backup, only under userData/at-rest-tmp/ios-<runId>, removed after persistence and swept at launch" },
+  "electron/services/logScrub.ts": { count: 3, reason: "PENDING S5 follow-up (BACKLOG-3819) — in-place rewrite of the redacted desktop log (tmp+rename) and its scrub marker; log ENCRYPTION follows in a BACKLOG-3819 follow-up PR" },
   "electron/services/logService.ts": { count: 2, reason: "PENDING S5 — app log file (redaction + retention, BACKLOG-3819)" },
   "electron/outlookService.ts": { count: 1, reason: "MSAL token cache on the legacy Outlook path; design cut line 2.40.1 (dead MSAL path)" },
   // --- exports the user asked for -----------------------------------------------
-  "electron/services/folderExport/folderExportService.ts": { count: 10, reason: `${EXPORT}; 2 calls are print-to-PDF temp HTML in os.tmpdir (S6 temp sweep)` },
-  "electron/services/folderExport/attachmentHelpers.ts": { count: 1, reason: `${EXPORT} (copies attachments out — S2 makes this decryptToFile)` },
+  "electron/services/folderExport/folderExportService.ts": { count: 9, reason: `${EXPORT}; 2 calls are print-to-PDF temp HTML in os.tmpdir (S6 temp sweep); attachment copies are decryptToFile since S2` },
   "electron/services/enhancedExportService.ts": { count: 5, reason: EXPORT },
   "electron/services/pdfExportService.ts": { count: 2, reason: `${EXPORT}; 1 call is print-to-PDF temp HTML in os.tmpdir (S6 temp sweep)` },
   "electron/services/ccpaExportService.ts": { count: 1, reason: `${EXPORT} (CCPA data export)` },
@@ -132,19 +132,13 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
   "electron/services/rcsExtensionDelivery.ts": { count: 3, reason: "installs the bundled Chrome extension folder; no customer content" },
 };
 
-const S2 = "PENDING S2 — raw read of a stored attachment path; S2 converts to the atRest readers";
 
 /** Raw readers in files that name storage_path/storagePath. Count = read calls + file:// literals. */
 const READER_ALLOWLIST: Record<string, Entry> = {
-  "electron/handlers/attachmentHandlers.ts": { count: 3, reason: `${S2} (preview/open/data-URL handlers)` },
-  "electron/services/attachmentTextExtractionService.ts": { count: 1, reason: `${S2} (text extraction)` },
-  "electron/services/databaseService.ts": { count: 5, reason: `${S2} where it reads attachments; other reads are DB/key files` },
-  "electron/services/folderExport/attachmentHelpers.ts": { count: 1, reason: `${S2} (export copy)` },
-  "electron/services/folderExport/folderExportService.ts": { count: 1, reason: `${S2} (export copy)` },
-  "electron/services/folderExport/textExportHelpers.ts": { count: 2, reason: `${S2} (inline images in text export)` },
+  "electron/handlers/attachmentHandlers.ts": { count: 1, reason: "shell.openPath on the DECRYPTED per-run copy in userData/at-rest-open (S2 R3; removed on quit + next launch). get-data/get-buffer read through atRest/attachmentReader" },
+  "electron/services/databaseService.ts": { count: 5, reason: "DB file backup/restore copies (:853/:1049/:1178/:1209) and schema.sql read (:1108); no attachment reads (checked in S2)" },
   "electron/services/iPhoneSyncStorageService.ts": { count: 2, reason: "reads the SOURCE file in the iPhone backup to hash/copy it; S1 hashes plaintext during encrypt" },
   "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts": { count: 2, reason: "reads the SOURCE file in ~/Library/Messages to hash/copy it; S1 scope" },
-  "electron/services/supabaseStorageService.ts": { count: 1, reason: `${S2} (broker upload)` },
   "electron/services/supportAccess/supabaseSupportTransport.ts": { count: 1, reason: "reads its own ticket map, not an attachment" },
 };
 
