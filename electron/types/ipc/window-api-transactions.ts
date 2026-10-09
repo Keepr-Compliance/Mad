@@ -13,6 +13,7 @@ import type {
 // shape without gaining a dependency on main-process code. One definition
 // rather than a hand-copied mirror that drifts the first time a column moves.
 import type { TransactionContactResult } from "../../services/db/transactionContactDbService";
+import type { PickerMessage } from "../../services/db/messageDbService";
 // The one definition of the pre-cache fetch rounds. TYPE-ONLY, same ruling.
 import type { EmailPrecacheStage } from "./emailPrecacheStage";
 
@@ -749,7 +750,7 @@ export interface WindowApiTransactions {
   /** Gets unlinked messages for a specific contact */
   getMessagesByContact: (userId: string, contact: string) => Promise<{
     success: boolean;
-    messages?: unknown[];
+    messages?: PickerMessage[];
     error?: string;
   }>;
   /** Links messages to a transaction */
