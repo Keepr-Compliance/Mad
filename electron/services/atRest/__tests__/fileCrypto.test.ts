@@ -357,9 +357,17 @@ describe("requireEncrypted — opt-in refusal of plaintext pass-through", () => 
   it("requireEncrypted: a plaintext file is refused with AtRestFormatError", async () => {
     const file = path.join(dir, "plain.txt");
     fs.writeFileSync(file, "still plaintext");
-    await expect(
-      createFileCrypto(resolver()).openDecryptStream(file, { requireEncrypted: true }),
-    ).rejects.toBeInstanceOf(AtRestFormatError);
+    // If it wrongly resolves, drain the pass-through stream so it cannot leak into the next test.
+    const outcome = await createFileCrypto(resolver())
+      .openDecryptStream(file, { requireEncrypted: true })
+      .then(
+        async (r) => {
+          await collect(r.stream);
+          return r;
+        },
+        (error: unknown) => error,
+      );
+    expect(outcome).toBeInstanceOf(AtRestFormatError);
   });
 
   it("requireEncrypted: an encrypted file still opens", async () => {
