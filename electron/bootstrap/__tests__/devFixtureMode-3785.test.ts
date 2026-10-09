@@ -66,13 +66,20 @@ describe("gate (a): SecretStore", () => {
 });
 
 describe("gate (b): local sources", () => {
-  it("address-book discovery returns nothing", async () => {
-    setEnv(true);
+  it("address-book discovery returns nothing even when a book exists", async () => {
+    // A real (empty) book on disk: without the gate, discovery finds it.
+    const fs = require("fs");
+    const os = require("os");
+    const path = require("path");
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "dfx-ab-"));
+    const book = path.join(base, "AddressBook-v22.abcddb");
+    fs.writeFileSync(book, "");
     const { discoverAddressBooks } = require("../../services/addressBookDiscovery");
-    await expect(discoverAddressBooks("/nonexistent-base", "/nonexistent-default")).resolves.toEqual({
-      books: [],
-      usedFallback: false,
-    });
+    const ungated = await discoverAddressBooks(base, book);
+    expect(ungated.books.length).toBeGreaterThan(0);
+    setEnv(true);
+    await expect(discoverAddressBooks(base, book)).resolves.toEqual({ books: [], usedFallback: false });
+    fs.rmSync(base, { recursive: true, force: true });
   });
 
   it("refuseLocalSource logs and refuses only in fixture mode", () => {
