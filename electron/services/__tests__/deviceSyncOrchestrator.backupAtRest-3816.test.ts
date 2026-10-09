@@ -417,6 +417,24 @@ describe("refusals before idevicebackup2", () => {
     expect(result.error).toContain(BACKUP_SECURING_SENTENCE);
     expect(startBackup).not.toHaveBeenCalled();
   });
+
+  it("B2: a backup being secured is not moved aside or deleted by the new-chain step", async () => {
+    const P = BackupService.prototype;
+    jest.spyOn(P, "checkEncryptionStatus").mockResolvedValue({ isEncrypted: true, needsPassword: true, status: "on" });
+    jest.spyOn(P, "readChainEncryption").mockResolvedValue("plaintext");
+    const aside = jest.spyOn(P, "moveChainAside").mockResolvedValue("aside");
+    const del = jest.spyOn(P, "removePlaintextChain").mockResolvedValue(true);
+    const o = newOrchestrator();
+    backupReturns(ok());
+    const busy = (atRest as unknown as { busy: Map<string, string> }).busy;
+    busy.set(UDID, "migrating");
+    const result = await o.sync({ udid: UDID, password: "typed" });
+    busy.delete(UDID);
+    expect(result.error).toContain(BACKUP_SECURING_SENTENCE);
+    expect(aside).not.toHaveBeenCalled();
+    expect(del).not.toHaveBeenCalled();
+    expect(startBackup).not.toHaveBeenCalled();
+  });
 });
 
 describe("D — C-DELTA reads a parse copy", () => {

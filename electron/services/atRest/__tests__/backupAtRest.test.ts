@@ -212,6 +212,29 @@ describe("seal / scan", () => {
   });
 });
 
+describe("`encrypted` only after a clean scan", () => {
+  it("a file that keeps failing (locked) leaves the marker short of encrypted, and the next run finishes it", async () => {
+    makeChain();
+    const smsPath = path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+    const locked = {
+      ...files,
+      encryptFileInPlace: async (p: string) => {
+        if (p === smsPath) throw Object.assign(new Error("locked"), { code: "EACCES" });
+        return files.encryptFileInPlace(p);
+      },
+    };
+    const s = service({ files: () => locked });
+    expect(await s.migrate(UDID)).toBe("incomplete");
+    expect(await readMarkerAt(backups, UDID)).toBe("migrating");
+    const session = await service().beginSync(UDID, { strategy: "full" });
+    const lockedAgain = service({ files: () => locked });
+    await lockedAgain.finishSync(session);
+    expect(await readMarkerAt(backups, UDID)).toBe("syncing");
+    expect(await service().migrate(UDID)).toBe("encrypted");
+    expect(plaintextLeft()).toEqual([]);
+  });
+});
+
 describe("markers and the 3598 classifier input", () => {
   it("readMarkerAt: absent / state / unreadable", async () => {
     expect(await readMarkerAt(backups, UDID)).toBe("absent");
