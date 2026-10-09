@@ -139,6 +139,7 @@ export default function EditRoleModal({
         <div>
           <Label htmlFor="edit-role">New Role</Label>
           <Select
+            className="!text-base md:!text-sm"
             id="edit-role"
             value={selectedRole}
             onChange={(e) => setSelectedRole(e.target.value as Role)}

@@ -234,8 +234,10 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
           <EmptySubmissions filtered={currentStatus !== 'all'} />
         ) : (
           <>
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
+            {/* BACKLOG-3798: below md each row renders as a card (max-md: only;
+                one DOM, so desktop and the row-click tests see the same table). */}
+            <table className="min-w-full divide-y divide-gray-200 max-md:block">
+              <thead className="bg-gray-50 max-md:hidden">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Property
@@ -260,14 +262,14 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="bg-white divide-y divide-gray-200 max-md:block">
                 {displaySubmissions.map((submission) => (
                   <SubmissionRow
                     key={submission.id}
                     href={`/dashboard/submissions/${submission.id}`}
-                    className="hover:bg-gray-50 transition-colors cursor-pointer group"
+                    className="hover:bg-gray-50 transition-colors cursor-pointer group max-md:flex max-md:flex-wrap max-md:items-center max-md:gap-x-3 max-md:gap-y-1 max-md:px-4 max-md:py-3"
                   >
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-6 py-4 whitespace-nowrap max-md:p-0 max-md:w-full max-md:whitespace-normal">
                       <div className="text-sm font-medium text-gray-900">
                         {submission.property_address}
                       </div>
@@ -275,15 +277,15 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                         {submission.property_city}, {submission.property_state}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-6 py-4 whitespace-nowrap max-md:p-0">
                       <span className="capitalize text-sm text-gray-700">
                         {submission.transaction_type}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-md:p-0">
                       {formatCurrency(submission.sale_price || submission.listing_price)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-6 py-4 whitespace-nowrap max-md:p-0">
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(
                           submission.status
@@ -292,17 +294,17 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                         {formatStatus(submission.status)}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-md:p-0">
                       <div className="flex items-center gap-2">
                         <span title="Messages">{submission.message_count} msgs</span>
                         <span className="text-gray-300">|</span>
                         <span title="Attachments">{submission.attachment_count} files</span>
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-md:p-0">
                       {formatRelativeTime(submission.created_at)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium max-md:p-0 max-md:ml-auto">
                       <Link
                         href={`/dashboard/submissions/${submission.id}`}
                         className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-700 font-medium group-hover:underline"

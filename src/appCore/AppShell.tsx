@@ -10,8 +10,7 @@
 
 import React from "react";
 import type { AppStateMachine } from "./state/types";
-import { OfflineBanner } from "./shell";
-import { ResumeSetupBanner } from "../components/setup/ResumeSetupBanner";
+import { ShellBanners } from "./shell";
 import SystemHealthMonitor from "../components/SystemHealthMonitor";
 import { isOnboardingStep } from "./routing";
 import { useSessionValidator } from "../hooks/useSessionValidator";
@@ -37,11 +36,8 @@ export function AppShell({ app, children }: AppShellProps) {
     authProvider,
     isTourActive,
     needsTermsAcceptance,
-    isOnline,
-    isChecking,
     openProfile,
     openSettings,
-    handleRetryConnection,
     handleLogout,
     getPageTitle,
   } = app;
@@ -140,21 +136,7 @@ export function AppShell({ app, children }: AppShellProps) {
         </div>
       )}
 
-      {/* Offline Banner - Show when network is unavailable */}
-      {currentStep !== "login" && (
-        <OfflineBanner
-          isOnline={isOnline}
-          isChecking={isChecking}
-          onRetry={handleRetryConnection}
-        />
-      )}
-
-      {/* Resume Setup Banner (BACKLOG-1709 / BACKLOG-1711) - persistent, floor-aware
-          nudge shown in the main app whenever the user is below the onboarding
-          data-source floor (no email AND no texts source). Self-gates: renders
-          null when the floor is satisfied (incl. texts-only) or dismissed this
-          session. Not shown on the login screen. */}
-      {currentStep !== "login" && <ResumeSetupBanner app={app} />}
+      <ShellBanners app={app} />
 
       {/* System Health Monitor - Show permission/connection errors */}
       {/* BACKLOG-2127: mount whenever on the dashboard, NOT gated on

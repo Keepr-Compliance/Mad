@@ -46,6 +46,13 @@ export interface AtRestStateFile {
 export const MARKER_DIR_NAME = ".keepr-at-rest";
 export const STATE_FILE_NAME = "at-rest-state.json";
 
+/**
+ * Scope keys in at-rest-state.json: the single source of truth for the migration
+ * writer (migration.ts) and every reader (the attachment readers, S2).
+ */
+export const SCOPE_MESSAGE_ATTACHMENTS = "message-attachments";
+export const SCOPE_EMAIL_ATTACHMENTS = "email-attachments";
+
 const BACKUP_STATES: ReadonlySet<string> = new Set(["plaintext", "migrating", "encrypted", "syncing"]);
 const SCOPE_STATES: ReadonlySet<string> = new Set(["pending", "migrating", "done"]);
 
