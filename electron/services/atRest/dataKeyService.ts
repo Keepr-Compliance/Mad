@@ -261,16 +261,35 @@ export function createDataKeyService(deps: DataKeyServiceDeps): DataKeyService {
     // Never overwrite: a rename would replace a store another process created a
     // moment ago, which is regeneration by another name. Link the fsynced temp
     // into place instead — link(2) fails with EEXIST rather than replacing.
-    await createStoreExclusive(file, JSON.stringify(store, null, 2));
+    const written = JSON.stringify(store, null, 2);
+    await createStoreExclusive(file, written);
 
+    // Round-trip verify before the key is used. On failure remove ONLY the store
+    // this call just wrote (byte-compared; never an existing one), so the next
+    // launch is a first run again instead of a permanently unreadable store.
+    const discardOwnStore = async () => {
+      try {
+        if ((await fs.promises.readFile(file, "utf8")) === written) await fs.promises.unlink(file);
+      } catch {
+        /* the refusal stands either way */
+      }
+    };
     let reread: KeyStoreFile;
     try {
       reread = JSON.parse((await fs.promises.readFile(file)).toString("utf8")) as KeyStoreFile;
     } catch (error) {
+      await discardOwnStore();
       throw new DataKeyUnavailableError(`The new file-data key store could not be read back: ${String(error)}`);
     }
-    const verify = unwrap(reread.current, "new");
+    let verify: Buffer;
+    try {
+      verify = unwrap(reread.current, "new");
+    } catch (error) {
+      await discardOwnStore();
+      throw error;
+    }
     if (verify.length !== key.length || !crypto.timingSafeEqual(verify, key)) {
+      await discardOwnStore();
       throw new DataKeyUnavailableError("The new file-data key did not survive a write/read round-trip");
     }
     deps.log?.("info", `[AtRest] data key created (keyId ${keyId})`);

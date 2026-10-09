@@ -185,7 +185,14 @@ describe("(4) unusable store: set aside only when nothing depends on it", () => 
     expect(fs.readFileSync(file(asides()[0]), "utf8")).toBe("{ not json");
   });
 
-  for (const name of ["mad-backup-20260217T143022.db", "mad-pre-junction-backfill.db", "mad.db.encrypted"]) {
+  for (const name of [
+    "mad-backup-20260217T143022.db",
+    "mad-pre-junction-backfill.db",
+    "mad.db.encrypted",
+    "mad.db.backup",
+    "mad.db.safety-restore-copy",
+    "keepr-backup-2026-10-09.db",
+  ]) {
     it(`corrupt store + no mad.db + encrypted ${name} -> refuses, store kept`, async () => {
       breakStore("corrupt");
       writeEncrypted(name);
@@ -224,5 +231,53 @@ describe("(4) unusable store: set aside only when nothing depends on it", () => 
     secrets.available = false;
     expect(await refusedReason(await fresh())).toBe("secure_storage_unavailable");
     expect(asides()).toEqual([]);
+  });
+});
+
+describe("new key is round-trip verified before use", () => {
+  /** Encrypts fine, but what it hands back is not what went in. */
+  class BrokenStore extends FakeSecretStore {
+    constructor(private readonly mode: "throws" | "differs") {
+      super();
+    }
+    decryptString(encrypted: Buffer): string {
+      if (this.mode === "throws") throw new Error("cannot decrypt");
+      return "a".repeat(64);
+    }
+  }
+
+  for (const mode of ["throws", "differs"] as const) {
+    it(`first run, secret store ${mode} on read-back -> key_roundtrip_failed, no store, no database`, async () => {
+      secrets = new BrokenStore(mode);
+      expect(await refusedReason(await fresh())).toBe("key_roundtrip_failed");
+      expect(fs.readdirSync(dir)).toEqual([]);
+    });
+
+    it(`move-aside path, secret store ${mode} on read-back -> only the new store is removed; the aside copy stays`, async () => {
+      breakStore("corrupt");
+      secrets = new BrokenStore(mode);
+      expect(await refusedReason(await fresh())).toBe("key_roundtrip_failed");
+      expect(asides()).toHaveLength(1);
+      expect(fs.readFileSync(file(asides()[0]), "utf8")).toBe("{ not json");
+      expect(fs.existsSync(store())).toBe(false);
+    });
+  }
+
+  it("never deletes a store that is not the one this call wrote", async () => {
+    secrets = new BrokenStore("throws");
+    const other = "{\"someone\":\"else\"}";
+    jest.spyOn(fs, "linkSync").mockImplementation(() => {
+      // simulate another writer replacing the file after we linked it
+      fs.writeFileSync(store(), other);
+    });
+    await refusedReason(await fresh());
+    expect(fs.readFileSync(store(), "utf8")).toBe(other);
+  });
+
+  it("a healthy secret store is unaffected and a retry after failure works", async () => {
+    secrets = new BrokenStore("throws");
+    await refusedReason(await fresh());
+    secrets = new FakeSecretStore();
+    expect(await (await fresh()).getEncryptionKey()).toMatch(/^[0-9a-f]{64}$/);
   });
 });

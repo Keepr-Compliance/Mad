@@ -400,3 +400,14 @@ describe("create on a filesystem without hard links (BACKLOG-3824)", () => {
     expect(fs.existsSync(storeFile())).toBe(false);
   });
 });
+
+describe("a new data key that does not survive read-back (BACKLOG-3824)", () => {
+  it("removes only the store it just wrote, so the next launch is a first run", async () => {
+    const broken = new FakeSafeStorage();
+    broken.failDecrypt = true;
+    await expect(service(broken).currentKey()).rejects.toBeInstanceOf(DataKeyUnavailableError);
+    expect(fs.existsSync(storeFile())).toBe(false);
+    const key = await service(new FakeSafeStorage()).currentKey();
+    expect(key.key).toHaveLength(32);
+  });
+});

@@ -62,6 +62,10 @@ const DB_SIBLING_BACKUP_PATTERNS: RegExp[] = [
   /^mad-pre-junction-backfill\.db$/,
   /^mad\.db\.encrypted$/,
   /^mad\.db\.backup$/,
+  // sqliteBackupService.restoreFromBackup copies mad.db here (sqliteBackupService.ts:272) before overwriting it.
+  /^mad\.db\.safety-restore-copy$/,
+  // Default name of a user-made backup (sqliteBackupService.generateBackupFilename); copied byte-for-byte from mad.db.
+  /^keepr-backup-.*\.db$/,
 ];
 
 /** Another writer created the store between our read and our create. */
@@ -234,7 +238,8 @@ export class DatabaseEncryptionService {
       const keyHex = keyBuffer.toString("hex");
 
       // Encrypt and store the key
-      await this.saveKeyToStore(keyHex);
+      const written = await this.saveKeyToStore(keyHex);
+      await this.verifyNewKeyRoundTrip(keyHex, written);
 
       await logService.info(
         "Generated new database encryption key",
@@ -243,7 +248,7 @@ export class DatabaseEncryptionService {
 
       return keyHex;
     } catch (error) {
-      if (error instanceof KeyStoreExistsError) throw error;
+      if (error instanceof KeyStoreExistsError || error instanceof DbKeyUnavailableError) throw error;
       await logService.error(
         "Failed to generate encryption key",
         "DatabaseEncryptionService",
@@ -254,6 +259,33 @@ export class DatabaseEncryptionService {
       });
       throw error;
     }
+  }
+
+  /**
+   * BACKLOG-3824: before a NEW key is used, unwrap the store just written and
+   * compare it to the in-memory key. A secret store that encrypts but cannot
+   * decrypt would otherwise seal the database under a key that is lost on the
+   * next launch. On mismatch or failure, delete ONLY the store this call created
+   * (checked byte-for-byte against what it wrote, never an existing store) and
+   * refuse with key_roundtrip_failed.
+   */
+  private async verifyNewKeyRoundTrip(key: string, written: string): Promise<void> {
+    let ok = false;
+    try {
+      ok = (await this.getKeyFromStore()) === key;
+    } catch {
+      ok = false;
+    }
+    if (ok) return;
+    try {
+      if (this.keyStorePath && fs.readFileSync(this.keyStorePath, "utf8") === written) {
+        fs.unlinkSync(this.keyStorePath);
+      }
+    } catch {
+      /* the refusal below stands either way */
+    }
+    await this.logKeyFailure("key_roundtrip_failed", "new key did not survive a write/read round-trip");
+    throw new DbKeyUnavailableError("key_roundtrip_failed");
   }
 
   /**
@@ -453,7 +485,7 @@ export class DatabaseEncryptionService {
    * Save encryption key to storage (encrypted with OS keychain)
    * @param {string} key - The encryption key to store
    */
-  private async saveKeyToStore(key: string): Promise<void> {
+  private async saveKeyToStore(key: string): Promise<string> {
     if (!this.keyStorePath) {
       throw new Error("Encryption service not initialized");
     }
@@ -537,6 +569,7 @@ export class DatabaseEncryptionService {
         "DatabaseEncryptionService",
         { keyId: keyStore.metadata.keyId },
       );
+      return JSON.stringify(keyStore, null, 2);
     } catch (error) {
       if (error instanceof KeyStoreExistsError) throw error;
       await logService.error(

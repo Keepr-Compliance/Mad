@@ -337,7 +337,9 @@ export type DbKeyUnavailableReason =
   /** Secure storage is unavailable and an existing key/database is on disk. */
   | "secure_storage_unavailable"
   /** No store, but an encrypted mad.db is on disk — a new key could not open it. */
-  | "store_missing";
+  | "store_missing"
+  /** A newly created key could not be read back from the store it was just saved to. */
+  | "key_roundtrip_failed";
 
 /**
  * BACKLOG-3824 — the database key exists (or must exist) but cannot be produced.

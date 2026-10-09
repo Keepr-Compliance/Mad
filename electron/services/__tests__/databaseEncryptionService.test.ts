@@ -154,18 +154,27 @@ describe("DatabaseEncryptionService", () => {
     it("should generate and store a new key when no key exists", async () => {
       // No existing key store file
       mockExistsSync.mockReturnValue(false);
+      // The store reads back what was just written (the new key is round-trip
+      // verified before use, BACKLOG-3824); before that it does not exist.
+      let written: string | null = null;
+      mockWriteFileSync.mockImplementation((_p: string, data: string) => {
+        written = data;
+      });
       mockReadFileSync.mockImplementation(() => {
+        if (written !== null && mockLinkSync.mock.calls.length > 0) return written;
         throw enoent();
       });
+      let wrapped = "";
+      mockEncryptString.mockImplementation((plain: string) => {
+        wrapped = plain;
+        return Buffer.from("encrypted-key-data");
+      });
+      mockDecryptString.mockImplementation(() => wrapped);
       // The temp file opens (fd 7); mad.db does not exist.
       mockOpenSync.mockImplementation((p: string) => {
         if (String(p).endsWith(".tmp")) return 7;
         throw enoent();
       });
-
-      // Mock encryption
-      const mockEncryptedBuffer = Buffer.from("encrypted-key-data");
-      mockEncryptString.mockReturnValue(mockEncryptedBuffer);
 
       const key = await databaseEncryptionService.getEncryptionKey();
 
