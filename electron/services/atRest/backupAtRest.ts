@@ -167,6 +167,8 @@ export interface ScanReport {
   plaintext: number;
   empty: number;
   damaged: number;
+  /** Stopped at a file boundary for a sync: the counts are partial and prove nothing. */
+  paused?: boolean;
 }
 
 export interface BackupAtRestProgress {
@@ -267,7 +269,7 @@ export interface BackupAtRestDeps {
   chunkSize?: number;
   /** Test seams for the in-process seal engine (fault injection, retry delay). */
   sealEngineOptions?: SealEngineOptions;
-  /** How long a sync waits for a background seal to pause before it gives up (default 120 s). */
+  /** How long a sync waits for a background seal to pause before it gives up (default 10 min). */
   pauseWaitMs?: number;
 }
 
@@ -805,16 +807,17 @@ export class BackupAtRest extends EventEmitter {
 
   /** Header scan: what the chain holds right now. */
   async scan(udid: string): Promise<ScanReport> {
-    return this.scanAt(this.chainDir(udid));
+    return this.scanAt(this.chainDir(udid), this.pausable.get(udid));
   }
 
-  private async scanAt(dir: string): Promise<ScanReport> {
+  private async scanAt(dir: string, pause?: Int32Array): Promise<ScanReport> {
     const result: ScanReport = { sealed: 0, plaintext: 0, empty: 0, damaged: 0 };
     const listed = await this.listFiles(dir, null);
     if (listed.length === 0) return result;
     // Classification needs no key; the workers are started with an empty one.
     const noKey: AtRestKey = { keyId: "0".repeat(32), key: Buffer.alloc(32) };
-    const pass = await this.pass(listed, "classify", noKey, undefined);
+    const pass = await this.pass(listed, "classify", noKey, pause);
+    if (pass.stopped) result.paused = true;
     for (const o of pass.outcomes) {
       if (!o || o.v === "gone") continue;
       if (o.v === "sealed" || o.v === "sealed-now") result.sealed++;
@@ -857,6 +860,10 @@ export class BackupAtRest extends EventEmitter {
     }
     const indexed = await exists(path.join(chain, "Manifest.db"));
     const scan = await this.scan(udid);
+    if (scan.paused) {
+      this.log("info", "[BackupAtRest] paused for a sync (after sealing, during the check)", { phase, sealedNow: report.changed });
+      return "paused";
+    }
     this.lastScanDamaged.set(udid, scan.damaged);
     this.log("info", "[BackupAtRest] sealed", {
       phase,
@@ -916,7 +923,8 @@ export class BackupAtRest extends EventEmitter {
     while (this.requestPause(udid)) {
       pausedOne = true;
       opts.onProgress?.({ udid, phase: "pausing", done: 0, total: 0 });
-      const released = await this.waitForRelease(udid, this.deps.pauseWaitMs ?? 120_000);
+      // A pass stops within one file; the bound only guards a pass that is stuck in I/O.
+      const released = await this.waitForRelease(udid, this.deps.pauseWaitMs ?? 10 * 60_000);
       if (!released) break;
     }
     if (pausedOne) this.pausedForSync.add(udid);
@@ -1249,8 +1257,11 @@ export class BackupAtRest extends EventEmitter {
       const dir = path.join(root, entry.name);
       if (await isAppleEncryptedChain(dir)) continue;
       const label = entry.name.slice(REPLACED_CHAIN_PREFIX.length);
-      const report = await this.sealAt(dir, label);
-      const scan = await this.scanAt(dir);
+      const pause = udid ? this.pausable.get(udid) : undefined;
+      const report = await this.sealAt(dir, label, undefined, "sealing", pause);
+      if (report.paused) break;
+      const scan = await this.scanAt(dir, pause);
+      if (scan.paused) break;
       this.log("info", "[BackupAtRest] sealed a moved-aside backup", {
         files: report.files,
         sealedNow: report.changed,

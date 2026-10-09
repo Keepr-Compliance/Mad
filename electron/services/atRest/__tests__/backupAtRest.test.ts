@@ -42,6 +42,7 @@ import {
   BACKUP_UNSEAL_STRATEGY,
 } from "../backupAtRest";
 import { DataKeyUnavailableError } from "../dataKeyService";
+import * as fileCryptoModule from "../fileCrypto";
 import { createFileCrypto, KENC_TMP_SUFFIX, MAGIC, probeHeader, type KeyResolver } from "../fileCrypto";
 import { createMarkerStore, MARKER_DIR_NAME } from "../markers";
 
@@ -156,6 +157,7 @@ beforeEach(() => {
   chain = path.join(backups, UDID);
 });
 afterEach(() => {
+  jest.restoreAllMocks();
   fs.rmSync(userData, { recursive: true, force: true });
 });
 
@@ -534,7 +536,7 @@ describe("refusals and special chains", () => {
     });
     const migrated = await s.migrate(UDID);
     expect(migrated).toBe("paused");
-    const session = (await syncing) as Awaited<ReturnType<BackupAtRest["beginSync"]>>;
+    const session = (await (syncing as unknown as Promise<unknown>)) as Awaited<ReturnType<BackupAtRest["beginSync"]>>;
     expect(session).toMatchObject({ kind: "keepr", udid: UDID, strategy: "delta" });
     expect(progress[0]).toMatchObject({ phase: "pausing" });
     // The migration stopped before sealing everything: plaintext is still there mid-sync.
@@ -562,7 +564,7 @@ describe("refusals and special chains", () => {
       },
     });
     await s.finishSync(first, undefined, { succeeded: true });
-    const session = (await second) as Awaited<ReturnType<BackupAtRest["beginSync"]>>;
+    const session = (await (second as unknown as Promise<unknown>)) as Awaited<ReturnType<BackupAtRest["beginSync"]>>;
     expect(session.kind).toBe("keepr");
     expect(plaintextLeft().length).toBeGreaterThan(0);
     await service().finishSync(session, undefined, { succeeded: true });
@@ -601,6 +603,51 @@ describe("refusals and special chains", () => {
     expect(plaintextLeft()).toEqual([]);
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
   });
+
+  it("a sync requested during the post-seal CHECK pauses it too; partial counts never write `encrypted`", async () => {
+    makeChain();
+    await service().migrate(UDID);
+    const first = await service().beginSync(UDID, { strategy: "full" });
+    const s = service();
+    const realScan = s.scan.bind(s);
+    let second: Promise<unknown> | null = null;
+    jest.spyOn(s, "scan").mockImplementation(async (u: string) => {
+      second = s.beginSync(UDID); // the pause flag is set synchronously, before the check runs
+      return realScan(u);
+    });
+    await s.finishSync(first, undefined, { succeeded: true });
+    expect(await readMarkerAt(backups, UDID)).toBe("syncing");
+    const session = (await (second as unknown as Promise<unknown>)) as Awaited<ReturnType<BackupAtRest["beginSync"]>>;
+    await service().finishSync(session, undefined, { succeeded: true });
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it.each(["migrating", "syncing"] as const)(
+    "a crash in the middle of a %s pass (part sealed, orphan temps of both kinds): the launch job finishes it",
+    async (state) => {
+      makeChain();
+      // Seal part of it, then "crash": leave a ciphertext temp and a plaintext temp behind.
+      let n = 0;
+      await service({
+        sealEngineOptions: {
+          beforeSeal: () => {
+            if (++n > 2) throw Object.assign(new Error("killed"), { code: "EIO" });
+          },
+        },
+      }).seal(UDID);
+      const sub = path.join(chain, SMS_DB_FILE_ID.slice(0, 2));
+      fs.writeFileSync(path.join(sub, `${SMS_DB_FILE_ID}.aaaaaaaaaaaa${KENC_TMP_SUFFIX}`), "plaintext temp from a killed unseal");
+      fs.writeFileSync(path.join(sub, `${SMS_DB_FILE_ID}.bbbbbbbbbbbb${KENC_TMP_SUFFIX}`), Buffer.concat([MAGIC, Buffer.alloc(80)]));
+      await createMarkerStore({ userData: () => userData }).writeBackupMarker(UDID, state);
+      expect(plaintextLeft().length).toBeGreaterThan(0);
+      const outcomes = await service().runLaunchJob();
+      expect(outcomes[UDID]).toBe("encrypted");
+      expect(plaintextLeft()).toEqual([]);
+      expect(fs.readdirSync(sub).filter((f) => f.endsWith(KENC_TMP_SUFFIX))).toEqual([]);
+      expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    },
+  );
 
   it("a second sync while a sync holds the phone is still refused with the founder sentence (not a pausable pass)", async () => {
     makeChain();
@@ -892,7 +939,56 @@ describe("per-phone lock covers the new-chain step (underLock)", () => {
 // ---------------------------------------------------------------------------
 // Should-fix: progress for passes no sync is watching
 // ---------------------------------------------------------------------------
+describe("durability of the renames (seal throughput: one directory fsync per touched directory)", () => {
+  it("every directory a seal renamed into is fsynced before the marker says encrypted", async () => {
+    makeChain();
+    const order: string[] = [];
+    const realFsyncDir = fileCryptoModule.fsyncDir;
+    jest.spyOn(fileCryptoModule, "fsyncDir").mockImplementation(async (d: string) => {
+      order.push(`dir:${path.relative(chain, d) || "."}`);
+      return realFsyncDir(d);
+    });
+    const store = createMarkerStore({ userData: () => userData });
+    const realWrite = store.writeBackupMarker.bind(store);
+    jest.spyOn(store, "writeBackupMarker").mockImplementation(async (u, state) => {
+      order.push(`marker:${state}`);
+      return realWrite(u, state);
+    });
+    await service({ markers: () => store }).migrate(UDID);
+    const sealedDirs = new Set(
+      fs
+        .readdirSync(chain, { recursive: true })
+        .map(String)
+        .filter((rel) => fs.statSync(path.join(chain, rel)).isFile() && fs.statSync(path.join(chain, rel)).size > 0 && !rel.endsWith(".plist"))
+        .map((rel) => `dir:${path.dirname(rel)}`),
+    );
+    const encryptedAt = order.indexOf("marker:encrypted");
+    expect(encryptedAt).toBeGreaterThan(0);
+    for (const d of sealedDirs) {
+      expect(order.indexOf(d)).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf(d)).toBeLessThan(encryptedAt);
+    }
+  });
+});
+
 describe("progress", () => {
+  it("the percentage is by bytes plus a per-file weight, so a few large files are not 'done' when the many small ones are", () => {
+    const p = { udid: UDID, phase: "sealing" as const, done: 900, total: 1000, doneUnits: 10, totalUnits: 100 };
+    expect(describeBackupAtRestProgress(p).percent).toBe(10);
+    expect(describeBackupAtRestProgress({ udid: UDID, phase: "sealing", done: 900, total: 1000 }).percent).toBe(90);
+  });
+
+  it("a seal pass reports units that end exactly at the total, and at most about once a second in between", async () => {
+    makeChain();
+    const s = service();
+    const seen: BackupAtRestProgress[] = [];
+    await s.seal(UDID, (p) => seen.push(p));
+    expect(seen[0]).toMatchObject({ done: 0, doneUnits: 0 });
+    const last = seen[seen.length - 1];
+    expect(last.doneUnits).toBe(last.totalUnits);
+    expect(seen.length).toBeLessThanOrEqual(3); // start, end (+1 if a second passed): never per file
+  });
+
   it("a seal with no caller callback reports through the 'progress' event, start to 100%", async () => {
     makeChain();
     const s = service();
