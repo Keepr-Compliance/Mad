@@ -20,6 +20,12 @@ M=[
  ('M8 512 file declared 192','app/manifest.ts',"{ src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }","{ src: '/icons/icon-512.png', sizes: '192x192', type: 'image/png', purpose: 'any' }"),
  ('M9 registers in dev','components/pwa/ServiceWorkerRegister.tsx',"if (process.env.NODE_ENV !== 'production') {","if (false) {"),
  ('M10 drops updateViaCache','components/pwa/ServiceWorkerRegister.tsx',"{ scope: '/', updateViaCache: 'none' }","{ scope: '/' }"),
+ # Part 2: root layout + next.config.mjs
+ ('M11 ServiceWorkerRegister not mounted','app/layout.tsx',"        <ServiceWorkerRegister />\n",""),
+ ('M12 themeColor in metadata, not viewport','app/layout.tsx',"  appleWebApp: { capable: true, title: 'Keepr', statusBarStyle: 'black' },\n};\n\n// Next 15: themeColor belongs in the viewport export, not metadata (BACKLOG-3796).\nexport const viewport: Viewport = { themeColor: '#111827' };","  appleWebApp: { capable: true, title: 'Keepr', statusBarStyle: 'black' },\n  themeColor: '#111827',\n} as Metadata;\n\nexport const viewport: Viewport = {};"),
+ ('M13 iOS title is the long page title','app/layout.tsx',"title: 'Keepr', statusBarStyle","title: 'Keepr - Broker Portal', statusBarStyle"),
+ ('M14 CSP manifest-src removed','next.config.mjs',"      \"manifest-src 'self'\",\n",""),
+ ('M15 /sw.js no-cache header removed','next.config.mjs',"        headers: [{ key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' }],","        headers: [],"),
 ]
 sel=sys.argv[1:] 
 for name,f,old,new in M:
