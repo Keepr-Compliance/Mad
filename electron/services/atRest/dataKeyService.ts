@@ -98,6 +98,9 @@ export function keyIdFor(key: Buffer): string {
   return crypto.createHmac("sha256", key).update(KEY_ID_LABEL).digest().subarray(0, 16).toString("hex");
 }
 
+/** link(2) errors that mean "this filesystem has no hard links" (FAT/exFAT, some SMB shares). */
+const LINK_UNSUPPORTED_CODES = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EINVAL"]);
+
 /** The store already exists — another writer won. The caller re-reads it. */
 class StoreExistsError extends Error {}
 
@@ -115,8 +118,26 @@ async function createStoreExclusive(file: string, contents: string): Promise<voi
     try {
       await fs.promises.link(tmp, file);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === "EEXIST") throw new StoreExistsError();
-      throw new DataKeyUnavailableError(`Could not create the file-data key store: ${String(error)}`);
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code === "EEXIST") throw new StoreExistsError();
+      if (!code || !LINK_UNSUPPORTED_CODES.has(code)) {
+        throw new DataKeyUnavailableError(`Could not create the file-data key store: ${String(error)}`);
+      }
+      // No hard links on this filesystem: exclusive create at the real path
+      // ("wx" never replaces an existing store).
+      let final: fs.promises.FileHandle;
+      try {
+        final = await fs.promises.open(file, "wx", 0o600);
+      } catch (createError) {
+        if ((createError as NodeJS.ErrnoException)?.code === "EEXIST") throw new StoreExistsError();
+        throw new DataKeyUnavailableError(`Could not create the file-data key store: ${String(createError)}`);
+      }
+      try {
+        await final.writeFile(contents);
+        await final.sync();
+      } finally {
+        await final.close();
+      }
     }
     // Persist the new directory entry before anything is sealed under this key. Without
     // it a power cut can leave the store missing on the next launch while ciphertext

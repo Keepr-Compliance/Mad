@@ -105,7 +105,7 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
       "plaintext, and the plaintext `.backup` is deleted once the migration succeeds",
   },
   "electron/services/sqliteBackupService.ts": { count: 4, reason: SQLCIPHER },
-  "electron/services/databaseEncryptionService.ts": { count: 1, reason: `${SEALED} (DB key store)` },
+  "electron/services/databaseEncryptionService.ts": { count: 3, reason: `${SEALED} (DB key store)` },
   // --- already sealed ---------------------------------------------------------------
   "electron/services/sessionService.ts": { count: 1, reason: `${SEALED} (session file via encryptSessionData)` },
   "electron/services/offlinePass/offlinePassStore.ts": { count: 1, reason: SEALED },

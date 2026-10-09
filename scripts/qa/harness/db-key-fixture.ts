@@ -38,10 +38,10 @@ export const DB_KEY_ENV = 'KEEPR_QA_DB_KEY';
  *
  * NOTE: this is the exact string SEEDED into the fixture DB and passed to every reader's
  * `PRAGMA key = "x'<key>'"`. Its VALUE must never change independently — the seeder and the readers
- * only agree because they use the IDENTICAL string. (It is not strictly 0-9a-f hex; validity as hex
- * is irrelevant — only seed↔read equality matters. Do not "fix" it to hex.)
+ * only agree because they use the IDENTICAL string. It must stay 64 lowercase hex chars: the app's
+ * key store (databaseEncryptionService) rejects anything else on unwrap (BACKLOG-3824).
  */
-export const DEFAULT_FIXTURE_DB_KEY = 'a11ce0ffee0000fixturefilterdbkey0123456789abcdef0123456789abcdef';
+export const DEFAULT_FIXTURE_DB_KEY = 'a11ce0ffee0000f1c7e0f11e7db0ce000123456789abcdef0123456789abcdef';
 
 /** Expected length of the fixed key (64 chars) — the shape the seeder + readers were validated with. */
 export const FIXTURE_DB_KEY_LENGTH = 64;

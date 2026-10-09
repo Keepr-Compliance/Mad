@@ -44,6 +44,26 @@ const DB_FILENAME = "mad.db";
 /** A raw SQLCipher key as generateNewKey() produces it: 32 bytes, hex. */
 const KEY_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 
+/** link(2) errors that mean "this filesystem has no hard links" (FAT/exFAT, some SMB shares). */
+const LINK_UNSUPPORTED_CODES = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EINVAL"]);
+/** Store failures that may be set aside when nothing on disk depends on the lost key. */
+const SETTABLE_ASIDE_REASONS = new Set<DbKeyUnavailableReason>([
+  "store_unreadable",
+  "store_corrupt",
+  "unwrap_failed",
+]);
+/**
+ * Files beside mad.db that are sealed under the database key: rolling migration
+ * backups (databaseService), the one-time pre-junction snapshot, and the
+ * transient encryption-migration outputs. Every one is opened with the same key.
+ */
+const DB_SIBLING_BACKUP_PATTERNS: RegExp[] = [
+  /^mad-backup-.*\.db$/,
+  /^mad-pre-junction-backfill\.db$/,
+  /^mad\.db\.encrypted$/,
+  /^mad\.db\.backup$/,
+];
+
 /** Another writer created the store between our read and our create. */
 class KeyStoreExistsError extends Error {}
 
@@ -151,7 +171,29 @@ export class DatabaseEncryptionService {
       );
     }
 
-    const existingKey = await this.getKeyFromStore();
+    let existingKey: string | null;
+    try {
+      existingKey = await this.getKeyFromStore();
+    } catch (error) {
+      if (!(error instanceof DbKeyUnavailableError) || !SETTABLE_ASIDE_REASONS.has(error.reason)) {
+        throw error;
+      }
+      // The store exists but yields no key. Lock the user out only if something
+      // on disk is sealed under it; otherwise set the store aside (never delete)
+      // and fall through to first-run creation.
+      const encryptedDb = this.hasEncryptedDatabase();
+      const encryptedBackups = encryptedDb ? false : this.hasEncryptedDatabaseBackups();
+      if (encryptedDb || encryptedBackups) {
+        await logService.error(
+          "Key store unusable and encrypted data exists; refusing to create a new key",
+          "DatabaseEncryptionService",
+          { reason: error.reason, outcome: "refused", encryptedDb, encryptedBackups },
+        );
+        throw error;
+      }
+      await this.moveStoreAside(error.reason);
+      existingKey = null;
+    }
     if (existingKey) {
       this.cachedKey = existingKey;
       return existingKey;
@@ -284,6 +326,77 @@ export class DatabaseEncryptionService {
     );
   }
 
+  /**
+   * BACKLOG-3824: rename the unusable store to db-key-store.unreadable-<timestamp>.json.
+   * Never deletes. If the rename itself fails the original refusal stands.
+   */
+  private async moveStoreAside(reason: DbKeyUnavailableReason): Promise<void> {
+    if (!this.keyStorePath) throw new Error("Encryption service not initialized");
+    const stamp = new Date().toISOString().replace(/[-:.]/g, "");
+    const asidePath = path.join(
+      path.dirname(this.keyStorePath),
+      `db-key-store.unreadable-${stamp}.json`,
+    );
+    try {
+      fs.renameSync(this.keyStorePath, asidePath);
+    } catch (error) {
+      await this.logKeyFailure(reason, error);
+      throw new DbKeyUnavailableError(reason);
+    }
+    await logService.warn(
+      "Key store unusable and nothing is sealed under it; moved it aside and creating a new key",
+      "DatabaseEncryptionService",
+      { reason, outcome: "moved_aside", movedTo: path.basename(asidePath) },
+    );
+  }
+
+  /**
+   * BACKLOG-3824: is there an encrypted database backup/snapshot beside mad.db?
+   * Same header rule as hasEncryptedDatabase(); fails closed (true) on any
+   * directory or file read error other than "does not exist".
+   */
+  private hasEncryptedDatabaseBackups(): boolean {
+    let dir: string;
+    try {
+      dir = this.keyStorePath ? path.dirname(this.keyStorePath) : hostAppPaths.userData();
+    } catch {
+      return false;
+    }
+    let names: string[];
+    try {
+      names = fs.readdirSync(dir);
+    } catch (error) {
+      return (error as NodeJS.ErrnoException)?.code !== "ENOENT";
+    }
+    return names
+      .filter((n) => DB_SIBLING_BACKUP_PATTERNS.some((re) => re.test(n)))
+      .some((n) => this.fileLooksEncrypted(path.join(dir, n)));
+  }
+
+  /** Non-empty file whose header is not plaintext SQLite; unreadable counts as encrypted. */
+  private fileLooksEncrypted(filePath: string): boolean {
+    let fd: number;
+    try {
+      fd = fs.openSync(filePath, "r");
+    } catch (error) {
+      return (error as NodeJS.ErrnoException)?.code !== "ENOENT";
+    }
+    try {
+      if (fs.fstatSync(fd).size === 0) return false;
+      const header = Buffer.alloc(16);
+      const read = fs.readSync(fd, header, 0, 16, 0);
+      return read < 16 || header.toString("utf8", 0, 16) !== SQLITE_PLAINTEXT_HEADER;
+    } catch {
+      return true;
+    } finally {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* the answer matters, not the close */
+      }
+    }
+  }
+
   /** Whether the key store file is present (any type of entry counts). */
   private storeFileExists(): boolean {
     if (!this.keyStorePath) return this.hasKeyStore();
@@ -387,10 +500,29 @@ export class DatabaseEncryptionService {
         try {
           fs.linkSync(tmpPath, this.keyStorePath);
         } catch (error) {
-          if ((error as NodeJS.ErrnoException)?.code === "EEXIST") {
-            throw new KeyStoreExistsError();
+          const code = (error as NodeJS.ErrnoException)?.code;
+          if (code === "EEXIST") throw new KeyStoreExistsError();
+          if (!code || !LINK_UNSUPPORTED_CODES.has(code)) throw error;
+          // No hard links on this filesystem: exclusive create at the real path.
+          // "wx" still never replaces an existing store.
+          try {
+            fs.writeFileSync(this.keyStorePath, JSON.stringify(keyStore, null, 2), {
+              encoding: "utf8",
+              flag: "wx",
+              mode: 0o600,
+            });
+          } catch (createError) {
+            if ((createError as NodeJS.ErrnoException)?.code === "EEXIST") {
+              throw new KeyStoreExistsError();
+            }
+            throw createError;
           }
-          throw error;
+          const finalFd = fs.openSync(this.keyStorePath, "r+");
+          try {
+            fs.fsyncSync(finalFd);
+          } finally {
+            fs.closeSync(finalFd);
+          }
         }
       } finally {
         try {

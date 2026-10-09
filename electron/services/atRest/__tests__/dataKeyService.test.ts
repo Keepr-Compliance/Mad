@@ -366,3 +366,37 @@ describe("K4 — key creation durability and exclusivity", () => {
     expect(fs.readdirSync(dir)).toEqual([DATA_KEY_STORE_FILENAME]);
   });
 });
+
+describe("create on a filesystem without hard links (BACKLOG-3824)", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it.each(["EPERM", "ENOTSUP", "EXDEV", "EOPNOTSUPP"])("link %s falls back to an exclusive create", async (code) => {
+    jest.spyOn(fs.promises, "link").mockRejectedValue(Object.assign(new Error("no links"), { code }));
+    const ss = new FakeSafeStorage();
+    const a = await service(ss).currentKey();
+    expect(a.key.length).toBe(32);
+    expect(fs.readdirSync(dir)).toEqual([DATA_KEY_STORE_FILENAME]);
+    jest.restoreAllMocks();
+    expect((await service(ss).currentKey()).key.equals(a.key)).toBe(true);
+  });
+
+  it("the fallback never replaces a store created by another writer", async () => {
+    const ss = new FakeSafeStorage();
+    const first = await service(ss).currentKey();
+    const bytes = fs.readFileSync(storeFile());
+    fs.unlinkSync(storeFile());
+    jest.spyOn(fs.promises, "link").mockImplementation(async () => {
+      fs.writeFileSync(storeFile(), bytes);
+      throw Object.assign(new Error("no links"), { code: "EPERM" });
+    });
+    const second = await service(ss).currentKey();
+    expect(second.key.equals(first.key)).toBe(true);
+    expect(fs.readFileSync(storeFile()).equals(bytes)).toBe(true);
+  });
+
+  it("a non-link error still fails closed", async () => {
+    jest.spyOn(fs.promises, "link").mockRejectedValue(Object.assign(new Error("io"), { code: "EIO" }));
+    await expect(service(new FakeSafeStorage()).currentKey()).rejects.toBeInstanceOf(DataKeyUnavailableError);
+    expect(fs.existsSync(storeFile())).toBe(false);
+  });
+});

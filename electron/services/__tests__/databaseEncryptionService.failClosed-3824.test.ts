@@ -137,6 +137,7 @@ describe("BACKLOG-3824 database key: never regenerate over an existing store", (
     await provisionKeyStore();
     const before = readStoreBytes();
     const encryptsBefore = secrets.encryptCalls;
+    writeEncryptedDb(); // something is sealed under the key: refuse, do not set aside
 
     secrets.decryptFails = true;
     const svc = newService();
@@ -145,7 +146,7 @@ describe("BACKLOG-3824 database key: never regenerate over an existing store", (
 
     expect(readStoreBytes().equals(before)).toBe(true);
     expect(secrets.encryptCalls).toBe(encryptsBefore);
-    expect(fs.readdirSync(dir).sort()).toEqual([KEY_STORE]);
+    expect(fs.readdirSync(dir).sort()).toEqual([KEY_STORE, "mad.db"]);
   });
 
   it("(b) unwrap yields a value that is not a 32-byte hex key → refuses", async () => {
@@ -155,6 +156,7 @@ describe("BACKLOG-3824 database key: never regenerate over an existing store", (
     store.encryptedKey = Buffer.from("WRAP:", "utf8").toString("base64");
     fs.writeFileSync(path.join(dir, KEY_STORE), JSON.stringify(store));
     const tampered = readStoreBytes();
+    writeEncryptedDb();
 
     const svc = newService();
     await svc.initialize();
@@ -165,6 +167,7 @@ describe("BACKLOG-3824 database key: never regenerate over an existing store", (
   it("(b) retry succeeds once unwrap recovers, and returns the ORIGINAL key", async () => {
     const original = await provisionKeyStore();
     const before = readStoreBytes();
+    writeEncryptedDb();
 
     secrets.decryptFails = true;
     const svc = newService();
@@ -179,6 +182,7 @@ describe("BACKLOG-3824 database key: never regenerate over an existing store", (
   it("(c) store present but not valid JSON → refuses, file kept byte-identical", async () => {
     const garbage = Buffer.from("{ this is not json", "utf8");
     fs.writeFileSync(path.join(dir, KEY_STORE), garbage);
+    writeEncryptedDb();
     const svc = newService();
     await svc.initialize();
     await expectRefused(svc, "store_corrupt");
@@ -190,6 +194,7 @@ describe("BACKLOG-3824 database key: never regenerate over an existing store", (
   it("(c) store present but has no encryptedKey → refuses, file kept byte-identical", async () => {
     const empty = Buffer.from(JSON.stringify({ metadata: { keyId: "x", version: 1 } }), "utf8");
     fs.writeFileSync(path.join(dir, KEY_STORE), empty);
+    writeEncryptedDb();
     const svc = newService();
     await svc.initialize();
     await expectRefused(svc, "store_corrupt");
@@ -199,6 +204,7 @@ describe("BACKLOG-3824 database key: never regenerate over an existing store", (
 
   it("(c) zero-byte store → refuses, file kept", async () => {
     fs.writeFileSync(path.join(dir, KEY_STORE), Buffer.alloc(0));
+    writeEncryptedDb();
     const svc = newService();
     await svc.initialize();
     await expectRefused(svc, "store_corrupt");
