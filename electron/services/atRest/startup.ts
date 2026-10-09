@@ -37,6 +37,7 @@
  * so opening the data key cannot raise an unexplained keychain prompt.
  */
 import { hostLogger } from "../../capabilities/loggerProvider";
+import { getBackupAtRest } from "./backupAtRest";
 import { DataKeyUnavailableError, getDataKeyService } from "./dataKeyService";
 import { runConfiguredLogMaintenance } from "../logScrub";
 import { runLegacySweep } from "./legacySweep";
@@ -157,16 +158,7 @@ export class AtRestStartup {
   }
 }
 
-const placeholder = (id: string, order: number, slice: string): AtRestJob => ({
-  id,
-  order,
-  placeholder: true,
-  run: async () => {
-    throw new Error(`at-rest job "${id}" is a placeholder (${slice})`);
-  },
-});
-
-/** Registers the S0 data-key job and a placeholder for every slice still to land. */
+/** Registers the data-key job and every slice's launch job. */
 export function registerDefaultJobs(startup: AtRestStartup): void {
   startup.register({
     id: "data-key",
@@ -197,7 +189,15 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
   startup.register({ id: "temp-sweep", order: 20, run: async () => { await runTempSweep(); } });
   startup.register({ id: "attachments", order: 30, run: async () => { await getAtRestMigration().runScope(SCOPE_MESSAGE_ATTACHMENTS); } });
   startup.register({ id: "email-attachments", order: 40, run: async () => { await getAtRestMigration().runScope(SCOPE_EMAIL_ATTACHMENTS); } });
-  startup.register(placeholder("backups", 50, "S4"));
+  startup.register({
+    id: "backups",
+    order: 50,
+    run: async (ctx) => {
+      // S4-C: seal kept iPhone backups (pre-2.40 migration; a quit/crash mid-sync).
+      const outcomes = await getBackupAtRest().runLaunchJob();
+      ctx.log("info", `[AtRest] backups: ${Object.values(outcomes).join(", ") || "none"}`);
+    },
+  });
   startup.register({ id: "legacy-sweep", order: 60, run: async () => { await runLegacySweep(); } });
 }
 

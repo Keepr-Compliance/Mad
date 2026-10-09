@@ -85,7 +85,8 @@ const SQLCIPHER = "copies/moves the SQLCipher-encrypted database file (ciphertex
 const WRITER_ALLOWLIST: Record<string, Entry> = {
   // --- plaintext customer content, converted by later slices -------------------
   "electron/handlers/rcsImportHandlers.ts": { count: 4, reason: "S1 done (media + staging write via atRest sealBufferToFile): staging move = rename, cross-volume copyFile fallback, both of KEPRENC ciphertext; plus cp/rename of the bundled extension folder (no customer content)" },
-  "electron/services/backupDecryptionService.ts": { count: 2, reason: "PENDING S4/BACKLOG-3817 — writes decrypted iPhone backup files (option A path)" },
+  "electron/services/backupService.ts": { count: 1, reason: "S4/BACKLOG-3816 — fs.rename of an unencrypted iPhone backup folder aside (Backups/.keepr-replaced-*) until the encrypted chain verifies; moves, never writes content" },
+  "electron/services/backupDecryptionService.ts": { count: 2, reason: "S4/BACKLOG-3817 — parse copies of an encrypted iPhone backup, only under userData/at-rest-tmp/ios-<runId>, removed after persistence and swept at launch" },
   "electron/services/logScrub.ts": { count: 3, reason: "PENDING S5 follow-up (BACKLOG-3819) — in-place rewrite of the redacted desktop log (tmp+rename) and its scrub marker; log ENCRYPTION follows in a BACKLOG-3819 follow-up PR" },
   "electron/services/logService.ts": { count: 2, reason: "PENDING S5 — app log file (redaction + retention, BACKLOG-3819)" },
   "electron/outlookService.ts": { count: 1, reason: "MSAL token cache on the legacy Outlook path; design cut line 2.40.1 (dead MSAL path)" },

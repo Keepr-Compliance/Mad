@@ -142,7 +142,8 @@ export const BackupPasswordModal: React.FC<BackupPasswordModalProps> = ({
           <p className="text-xs text-gray-500 mt-4 text-center">
             This is the password you set when enabling &quot;Encrypt iPhone
             backup&quot; in iTunes or Finder. It&apos;s different from your
-            iPhone passcode.
+            iPhone passcode. Keepr keeps it securely on this computer, so you
+            only enter it once.
           </p>
         </form>
     </ResponsiveModal>
