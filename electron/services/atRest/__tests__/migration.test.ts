@@ -209,6 +209,9 @@ describe("M2 — killed mid-file, then re-run", () => {
         await new Promise<never>(() => undefined);
       }
     });
+    // A second kill shape: the temp was created ('wx') and nothing written yet.
+    const emptyOrphan = `${order[0]}.0123456789ab.kenc-tmp`;
+    await fs.promises.writeFile(emptyOrphan, Buffer.alloc(0));
     const launch1 = createAtRestMigration(deps({ crypto: killing, markers }));
     void launch1.runScope("attachments");
     await waitFor(() => killedAt !== null);
@@ -236,6 +239,13 @@ describe("M2 — killed mid-file, then re-run", () => {
       expect(once.equals(original)).toBe(true);
     }
     expect((await markers.getScope("attachments"))?.state).toBe("done");
+    // Orphaned temps are neither candidates nor counted; they are left for S6's sweep untouched.
+    const killedFile = killedAt as unknown as string;
+    const orphan = `${killedFile}.deadbeefcafe.kenc-tmp`;
+    expect(await startsWithMagic(orphan)).toBe(true);
+    expect((await real.readAllDecrypted(orphan)).equals(seeded.get(killedFile) as Buffer)).toBe(true);
+    expect((await fs.promises.stat(emptyOrphan)).size).toBe(0);
+    expect(r.files + encryptedBeforeKill.length).toBe(order.length);
   });
 });
 
