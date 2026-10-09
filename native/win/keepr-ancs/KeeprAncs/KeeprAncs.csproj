@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    keepr-ancs.exe: Windows-only WinRT console helper (BACKLOG-3839 spike).
+    EnableWindowsTargeting lets the project restore on non-Windows hosts; it only RUNS on Windows 10 2004+.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>keepr-ancs</AssemblyName>
+    <RootNamespace>Keepr.Ancs.App</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\KeeprAncs.Core\KeeprAncs.Core.csproj" />
+  </ItemGroup>
+</Project>

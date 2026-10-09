@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Pure ANCS byte-level parsing. NO WinRT references, so the xunit project can
+    test it on any OS. Only KeeprAncs/ (the console app) touches Windows APIs.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Keepr.Ancs</RootNamespace>
+  </PropertyGroup>
+</Project>
