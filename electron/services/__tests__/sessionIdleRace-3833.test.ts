@@ -44,7 +44,8 @@ jest.mock("../databaseService", () => ({
   __esModule: true,
   default: {
     isInitialized: () => true,
-    getSessionTimes: () => {
+    getSessionTimes: (token: string) => {
+      mockTokensChecked.push(token);
       const now = new Date().toISOString().replace("T", " ").slice(0, 19);
       return {
         user_id: "user-1",
@@ -55,6 +56,7 @@ jest.mock("../databaseService", () => ({
     },
   },
 }));
+const mockTokensChecked: string[] = [];
 const mockSignOut = jest.fn();
 jest.mock("../../handlers/sessionSignOut", () => ({
   signOutLocalSession: (...a: unknown[]) => mockSignOut(...a),
@@ -90,6 +92,7 @@ describe("idle check vs session.json writes (BACKLOG-3833)", () => {
     holdWrites = false;
     releaseWrite = null;
     jest.clearAllMocks();
+    mockTokensChecked.length = 0;
     expect(await sessionService.saveSession(session("token-old") as unknown as SaveArg)).toBe(true);
   });
 
@@ -102,6 +105,8 @@ describe("idle check vs session.json writes (BACKLOG-3833)", () => {
     releaseWrite!();
     expect(await saving).toBe(true);
     expect(await checking).toBe("active");
+    // queued behind the write: the tick checked the token that was being written
+    expect(mockTokensChecked).toEqual(["token-new"]);
     expect(mockSignOut).not.toHaveBeenCalled();
     expect(mockUnlink).not.toHaveBeenCalled();
     const peek = await sessionService.peekSession();
