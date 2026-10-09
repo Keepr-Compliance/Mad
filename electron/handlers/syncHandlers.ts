@@ -5,7 +5,8 @@
  * for iPhone sync operations on Windows.
  */
 
-import { refuseLocalSource } from "../bootstrap/devFixtureMode";
+import { refuseLocalSource, isDevFixtureMode } from "../bootstrap/devFixtureMode";
+import { runDevSyncReplay } from "../bootstrap/devSyncReplay";
 import { ipcMain, BrowserWindow } from "electron";
 import log from "electron-log";
 import { syncTimeline } from "../services/syncTimeline";
@@ -185,6 +186,11 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
         // they abandoned used to be indistinguishable from one they deliberately
         // cancelled. The abandoned run's row now says so.
         orchestrator?.forceReset("restart-while-running");
+      }
+
+      // BACKLOG-3785 repro branch ONLY: dev-fixture replay of a 668k-message sync.
+      if (isDevFixtureMode() && process.env.KEEPR_DEV_FIXTURE_REPLAY === "1") {
+        return runDevSyncReplay(orchestrator!, (m) => log.info(m));
       }
 
       try {
