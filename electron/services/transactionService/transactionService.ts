@@ -2108,7 +2108,10 @@ class TransactionService {
       "Messages linked to transaction",
       "TransactionService.linkMessages",
       {
-        messageIds,
+        // BACKLOG-3785: a count and a short sample, not the whole list. Linking
+        // 55,640 messages wrote 55,640 log lines here.
+        messageCount: messageIds.length,
+        messageIdsSample: messageIds.slice(0, 5),
         transactionId,
         linkedCount,
       },

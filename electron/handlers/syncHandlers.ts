@@ -27,6 +27,35 @@ import { syncStatusService } from "../services/syncStatusService";
 import supabaseService from "../services/supabaseService";
 import { sendToMainWindow } from "../windowRegistry";
 import { backupDecryptionService } from "../services/backupDecryptionService";
+import type { SyncStartReply } from "../types/ipc/window-api-platform";
+
+/**
+ * BACKLOG-3785: what `sync:start` and `sync:process-existing` send back to the renderer.
+ *
+ * The orchestrator's result carries every message, contact and conversation. Returned
+ * as the invoke reply it was structured-cloned to the renderer and decoded on the
+ * renderer's main thread: 179 MB for 670k messages, an 83.6 s frozen window on a Mac.
+ * The renderer reads only `success` and `error`; persistence receives the full result
+ * in main through the orchestrator's "complete" event. So the reply is counts and
+ * scalars only. A new object is built — the result itself is left intact, because the
+ * "complete" listener may still be persisting it.
+ */
+export function toSyncReply(result: SyncResult): SyncStartReply {
+  return {
+    success: result.success,
+    error: result.error,
+    duration: result.duration,
+    messageCount: result.messages?.length ?? 0,
+    contactCount: result.contacts?.length ?? 0,
+    conversationCount: result.conversations?.length ?? 0,
+    ...(result.skipped !== undefined ? { skipped: result.skipped } : {}),
+    ...(result.skipReason !== undefined ? { skipReason: result.skipReason } : {}),
+    ...(result.passwordRequired !== undefined ? { passwordRequired: result.passwordRequired } : {}),
+    ...(result.attachmentsUndecryptable !== undefined
+      ? { attachmentsUndecryptable: result.attachmentsUndecryptable }
+      : {}),
+  };
+}
 
 let orchestrator: DeviceSyncOrchestrator | null = null;
 let currentUserId: string | null = null;
@@ -136,7 +165,7 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
     async (
       _,
       options: { udid: string; password?: string; forceFullBackup?: boolean },
-    ) => {
+    ): Promise<SyncStartReply> => {
       log.info("[SyncHandlers] Starting sync", { udid: options.udid });
 
       // Rate limit check - 10 second cooldown per device
@@ -152,9 +181,9 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
         );
         return {
           success: false,
-          messages: [],
-          contacts: [],
-          conversations: [],
+          messageCount: 0,
+          contactCount: 0,
+          conversationCount: 0,
           error: `Please wait ${seconds} seconds before starting another sync.`,
           duration: 0,
           rateLimited: true,
@@ -176,9 +205,9 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
         });
         return {
           success: false,
-          messages: [],
-          contacts: [],
-          conversations: [],
+          messageCount: 0,
+          contactCount: 0,
+          conversationCount: 0,
           error: errorMsg,
           duration: 0,
         };
@@ -206,7 +235,8 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
         if (result?.passwordRequired) {
           rateLimiters.sync.clearKey(options.udid);
         }
-        return result;
+        // BACKLOG-3785: never the result itself — see toSyncReply.
+        return toSyncReply(result);
       } catch (error) {
         log.error("[SyncHandlers] Sync error", { error });
         // Reset state on error
@@ -216,9 +246,9 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
         syncSessionDeviceName = null;
         return {
           success: false,
-          messages: [],
-          contacts: [],
-          conversations: [],
+          messageCount: 0,
+          contactCount: 0,
+          conversationCount: 0,
           error: error instanceof Error ? error.message : "Unknown error",
           duration: 0,
         };
@@ -303,7 +333,7 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
   // Process existing backup without running new backup (for testing)
   ipcMain.handle(
     "sync:process-existing",
-    async (_, options: { udid: string; password?: string }) => {
+    async (_, options: { udid: string; password?: string }): Promise<SyncStartReply> => {
       log.info("[SyncHandlers] Processing existing backup", { udid: options.udid });
 
       // Capture user ID at sync start to prevent race conditions
@@ -318,9 +348,9 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
         });
         return {
           success: false,
-          messages: [],
-          contacts: [],
-          conversations: [],
+          messageCount: 0,
+          contactCount: 0,
+          conversationCount: 0,
           error: errorMsg,
           duration: 0,
         };
@@ -336,16 +366,16 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
 
       try {
         const result = await orchestrator!.processExistingBackup(options.udid, options.password);
-        return result;
+        return toSyncReply(result);
       } catch (error) {
         log.error("[SyncHandlers] Process existing backup error", { error });
         orchestrator?.forceReset();
         syncSessionUserId = null; // Clear session user ID on error
         return {
           success: false,
-          messages: [],
-          contacts: [],
-          conversations: [],
+          messageCount: 0,
+          contactCount: 0,
+          conversationCount: 0,
           error: error instanceof Error ? error.message : "Unknown error",
           duration: 0,
         };
