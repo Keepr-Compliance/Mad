@@ -382,10 +382,9 @@ describe("PH phase switch for DB-path readers", () => {
   });
 });
 
-// KP — see the note in attachmentReaders.handlers.test.ts. KNOWN RED until S1's
-// hardened detection is merged into S2; then flip `it.failing` to `it`.
+// KP — see the note in attachmentReaders.handlers.test.ts (structural detection).
 describe("KP export of a legacy plaintext file that starts with the magic bytes", () => {
-  it.failing("exports it byte-identical", async () => {
+  it("exports it byte-identical", async () => {
     const forged = Buffer.concat([Buffer.from("KEPRENC"), crypto.randomBytes(200)]);
     const p = path.join(userData, "attachments", "e1", "legacy-kep.pdf");
     fs.mkdirSync(path.dirname(p), { recursive: true });

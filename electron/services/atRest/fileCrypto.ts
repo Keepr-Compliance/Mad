@@ -26,7 +26,10 @@
  * the chunk index. Each chunk's AAD is header || u64 index || u8 isFinal, so:
  *
  *   - a flipped byte anywhere in a chunk          -> that chunk's tag fails
- *   - a flipped header byte                       -> every tag fails
+ *   - a flipped keyId / salt header byte          -> every tag fails
+ *   - a flipped version / algorithm / reserved /  -> the header no longer parses, so
+ *     chunkSize byte                                 the file is NOT classified as
+ *                                                    KEPRENC (see "Detection" below)
  *   - two chunks swapped                          -> the index in the AAD differs
  *   - the file cut at a chunk boundary            -> the new last chunk was sealed
  *                                                    with isFinal = 0, its tag fails
@@ -47,11 +50,45 @@
  * verified. A Range read that ends before the final chunk does not read the final
  * chunk, so it cannot see a truncation — only damage inside the range it read.
  *
+ * ## Detection — "is this file KEPRENC?" (BACKLOG-3816 S1 fix-up)
+ *
+ * The seven magic bytes alone decide nothing: anyone can send an attachment whose
+ * content starts with "KEPRENC". A file is classified as KEPRENC only when it is
+ * STRUCTURALLY a container ({@link probeHeader}):
+ *
+ *   - it is at least 60 bytes and bytes 0..6 are exactly "KEPRENC";
+ *   - version == 1, algorithm == 1, bytes 9..11 and 48..59 are zero (v1 has no
+ *     flags field; every non-key byte outside keyId/salt/chunkSize must be zero);
+ *   - chunkSize is in [1, MAX_CHUNK_BYTES] (readers honour the header's value);
+ *   - the file size is exactly 60 + n·16 + plaintextSize for the n chunks the
+ *     layout implies ({@link layoutFor}; v1 has no length field — the size IS the
+ *     length check).
+ *
+ * Anything else is plaintext (pre-migration, or a Keepr-unrelated file such as an
+ * iPhone backup or ~/Library/Messages attachment) and is passed through unchanged —
+ * unless the caller says the file MUST be encrypted (`requireEncrypted`, set by the
+ * readers of a scope whose migration is `done`), in which case it is refused.
+ *
+ * A file that IS structurally a container is never served as plaintext. If a chunk
+ * then fails authentication it is tampered/truncated/wrong-key ciphertext and the
+ * read throws AtRestIntegrityError — authentication failure is always an error, in
+ * every mode. (Rejected alternative: "auth fails -> plaintext unless the scope is
+ * done". That would serve tampered ciphertext as content, and this module is
+ * path-agnostic: the scope decision belongs to the caller, via requireEncrypted.)
+ *
+ * No key is needed to classify: isEncrypted / statPlaintext / the ciphertext
+ * evidence scan (no key store) all use the same structural check.
+ *
  * ## Residual
  *
- * `isEncrypted` is a magic check. A plaintext file whose first seven bytes happen to
- * be "KEPRENC" reads as encrypted and is then refused at header validation; it is
- * never served as if it were plaintext.
+ * - A deliberately forged plaintext that is a fully valid v1 header plus a body of
+ *   exactly the right length is classified as KEPRENC and then refused on read
+ *   (its tags cannot verify without our key). It is never served as plaintext, and
+ *   no real file format has this shape; the sender would have to aim for it.
+ * - In default (pre-migration) mode, real ciphertext whose version/algorithm/
+ *   reserved/chunkSize bytes were altered, or that was truncated to an impossible
+ *   size, no longer parses and is passed through as its (ciphertext) bytes rather
+ *   than refused. Nothing secret is revealed; under requireEncrypted it is refused.
  */
 import crypto from "crypto";
 import fs from "fs";
@@ -341,23 +378,51 @@ async function readExactly(
   return buf;
 }
 
-async function readMagicFromHandle(
-  handle: fs.promises.FileHandle,
-): Promise<{ encrypted: boolean; size: number }> {
-  const { size } = await handle.stat();
-  if (size < MAGIC.length) return { encrypted: false, size };
-  const head = Buffer.alloc(MAGIC.length);
-  await handle.read(head, 0, MAGIC.length, 0);
-  return { encrypted: head.equals(MAGIC), size };
+export interface HeaderProbe {
+  /** true only when the file is structurally a KEPRENC v1 container (see "Detection"). */
+  encrypted: boolean;
+  /** Plaintext size: header arithmetic for a container, the file size otherwise. */
+  size: number;
 }
 
-async function readMagic(filePath: string): Promise<{ encrypted: boolean; size: number }> {
+/**
+ * Structural classification on an ALREADY-OPEN handle — no key needed. The caller
+ * owns the handle (BACKLOG-3816 S2: the decision and the bytes read afterwards come
+ * from the same open). A file that is not a valid container is `encrypted:false`.
+ */
+export async function probeHeaderFromHandle(
+  handle: fs.promises.FileHandle,
+): Promise<HeaderProbe> {
+  const { size } = await handle.stat();
+  if (size < HEADER_BYTES) return { encrypted: false, size };
+  const head = Buffer.alloc(HEADER_BYTES);
+  const { bytesRead } = await handle.read(head, 0, HEADER_BYTES, 0);
+  if (bytesRead !== HEADER_BYTES) return { encrypted: false, size };
+  try {
+    const header = parseHeader(head);
+    return { encrypted: true, size: layoutFor(size, header.chunkSize).plaintextSize };
+  } catch (error) {
+    if (error instanceof AtRestFormatError) return { encrypted: false, size };
+    throw error;
+  }
+}
+
+/**
+ * Structural classification by path. Throws only when the file cannot be
+ * opened/read (e.g. ENOENT); a file that is not a valid container is `encrypted:false`.
+ */
+export async function probeHeader(filePath: string): Promise<HeaderProbe> {
   const handle = await fs.promises.open(filePath, "r");
   try {
-    return await readMagicFromHandle(handle);
+    return await probeHeaderFromHandle(handle);
   } finally {
     await handle.close();
   }
+}
+
+/** {@link probeHeader}, as a boolean. The ciphertext-evidence scan uses this. */
+export async function isStructurallyEncrypted(filePath: string): Promise<boolean> {
+  return (await probeHeader(filePath)).encrypted;
 }
 
 export interface DecryptStreamOptions {
@@ -570,11 +635,11 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
 
   const api: FileCrypto = {
     async isEncrypted(filePath) {
-      return (await readMagic(filePath)).encrypted;
+      return (await probeHeader(filePath)).encrypted;
     },
 
     async statPlaintext(filePath) {
-      // BACKLOG-3816 S2: one open; the magic check and the header read use the same handle.
+      // BACKLOG-3816 S2: one open; the structural check and the header read use the same handle.
       const handle = await fs.promises.open(filePath, "r");
       try {
         return await api.statPlaintextFromHandle(handle);
@@ -598,10 +663,9 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
     },
 
     async encryptFileInPlace(filePath) {
-      const before = await readMagic(filePath);
+      const before = await probeHeader(filePath);
       if (before.encrypted) {
-        const { size } = await api.statPlaintext(filePath);
-        return { alreadyEncrypted: true, plaintextSize: size, sha256: "" };
+        return { alreadyEncrypted: true, plaintextSize: before.size, sha256: "" };
       }
       const statBefore = await fs.promises.stat(filePath);
       const tmp = tmpPathFor(filePath);
@@ -632,7 +696,7 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
       const handle = await fs.promises.open(filePath, "r");
       let opened: OpenedFile;
       try {
-        const magic = await readMagicFromHandle(handle);
+        const magic = await probeHeaderFromHandle(handle);
         if (!magic.encrypted) {
           if (opts.requireEncrypted) refusePlaintext();
           const { start, end } = resolveRange(opts, magic.size);
@@ -683,14 +747,11 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
     },
 
     async statPlaintextFromHandle(handle) {
-      const { encrypted, size } = await readMagicFromHandle(handle);
-      if (!encrypted) return { encrypted: false, size };
-      const header = parseHeader(await readExactly(handle, HEADER_BYTES, 0));
-      return { encrypted: true, size: layoutFor(size, header.chunkSize).plaintextSize };
+      return probeHeaderFromHandle(handle);
     },
 
     async readAllDecryptedFromHandle(handle, opts = {}) {
-      const magic = await readMagicFromHandle(handle);
+      const magic = await probeHeaderFromHandle(handle);
       if (!magic.encrypted) {
         if (opts.requireEncrypted) refusePlaintext();
         return readExactly(handle, magic.size, 0);

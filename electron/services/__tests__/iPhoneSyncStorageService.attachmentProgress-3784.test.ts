@@ -35,6 +35,15 @@ jest.mock("fs", () => {
     createReadStream: jest.fn(),
   };
 });
+// BACKLOG-3816: the attachment writer is the at-rest module; this suite's fs mock
+// cannot run real encryption, so the writer is stubbed (encryption is covered by
+// atRest.attachmentWriters-3816.test.ts).
+jest.mock("../atRest/attachmentWriter", () => ({
+  ...jest.requireActual("../atRest/attachmentWriter"),
+  sourceFileSize: jest.fn().mockResolvedValue(1024),
+  hashSourceFile: jest.fn().mockResolvedValue({ sha256: "abc123", size: 1024 }),
+  sealFileFrom: jest.fn().mockResolvedValue({ sha256: "abc123", plaintextSize: 1024 }),
+}));
 jest.mock("../databaseService");
 jest.mock("../db/externalContactDbService");
 jest.mock("../iosMessagesParser", () => ({
@@ -47,7 +56,7 @@ jest.mock("../../utils/preferenceHelper", () => ({
   isContactSourceEnabled: jest.fn().mockResolvedValue(true),
 }));
 
-import fs from "fs";
+import { hashSourceFile, sourceFileSize } from "../atRest/attachmentWriter";
 import databaseService from "../databaseService";
 import { iOSMessagesParser } from "../iosMessagesParser";
 import {
@@ -193,12 +202,13 @@ describe("BACKLOG-3784: skipped attachments are counted per reason", () => {
     (iOSMessagesParser.resolveAttachmentPath as jest.Mock).mockImplementation(
       (_backup: string, filename: string) => (filename.includes("rejected") ? null : `/mock/backup/${filename.split("/").pop()}`),
     );
-    (fs.promises.stat as jest.Mock).mockImplementation(async (p: string) => {
+    // BACKLOG-3816: size and hash now come from the at-rest writer (plaintext size/hash).
+    (sourceFileSize as jest.Mock).mockImplementation(async (p: string) => {
       if (p.includes("missing")) throw new Error("ENOENT");
-      if (p.includes("big")) return { size: 51 * 1024 * 1024 };
-      return { size: 10 };
+      if (p.includes("big")) return 51 * 1024 * 1024;
+      return 10;
     });
-    (fs.createReadStream as jest.Mock).mockImplementation(() => {
+    (hashSourceFile as jest.Mock).mockImplementation(async () => {
       throw new Error("read failed");
     });
 

@@ -38,6 +38,7 @@ import type { FileHandle } from "fs/promises";
 import os from "os";
 import path from "path";
 import { setAttachmentReaderDepsForTests } from "../atRest/attachmentReader";
+import { HEADER_BYTES } from "../atRest/fileCrypto";
 import {
   extractTextForAttachment,
   extractTextForAttachmentId,
@@ -355,9 +356,9 @@ describe("BACKLOG-2257 extractTextForAttachment — file-handle lifecycle", () =
 
     expect(outcome).toBe("empty");
     expect(handle.stat).toHaveBeenCalledTimes(1);
-    // over cap → only the 7-byte header probe, never the body
+    // over cap → only the structural header probe (HEADER_BYTES), never the body
     expect(handle.read).toHaveBeenCalledTimes(1);
-    expect(handle.read.mock.calls[0][2]).toBe(7);
+    expect(handle.read.mock.calls[0][2]).toBe(HEADER_BYTES);
     expect(handle.close).toHaveBeenCalledTimes(1); // finally still closes
     expect(mockSetAttachmentTextContent).toHaveBeenCalledWith("h-big", "");
   });
