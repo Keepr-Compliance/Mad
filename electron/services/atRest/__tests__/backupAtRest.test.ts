@@ -74,6 +74,7 @@ function service(overrides: Partial<ConstructorParameters<typeof BackupAtRest>[0
     sleep: async () => undefined,
     log: () => undefined,
     concurrency: 4,
+    chunkSize: 64, // same as `files`: multi-chunk containers
     ...overrides,
   });
 }
@@ -214,16 +215,13 @@ describe("seal / scan", () => {
   it("retries a locked file (EBUSY) and then seals it", async () => {
     makeChain();
     let calls = 0;
-    const flaky = {
-      ...files,
-      encryptFileInPlace: async (p: string) => {
-        calls++;
-        if (calls === 1) throw Object.assign(new Error("busy"), { code: "EBUSY" });
-        return files.encryptFileInPlace(p);
-      },
+    const beforeSeal = () => {
+      calls++;
+      if (calls === 1) throw Object.assign(new Error("busy"), { code: "EBUSY" });
     };
-    const report = await service({ files: () => flaky, concurrency: 1 }).seal(UDID);
+    const report = await service({ sealEngineOptions: { beforeSeal, retryDelayMs: 0 } }).seal(UDID);
     expect(report.failed).toBe(0);
+    expect(calls).toBeGreaterThan(report.changed); // the locked file was tried again
     expect(plaintextLeft()).toEqual([]);
   });
 });
@@ -233,17 +231,16 @@ describe("`encrypted` only after a clean scan", () => {
     makeChain();
     const smsPath = path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
     const locked = {
-      ...files,
-      encryptFileInPlace: async (p: string) => {
+      retryDelayMs: 0,
+      beforeSeal: (p: string) => {
         if (p === smsPath) throw Object.assign(new Error("locked"), { code: "EACCES" });
-        return files.encryptFileInPlace(p);
       },
     };
-    const s = service({ files: () => locked });
+    const s = service({ sealEngineOptions: locked });
     expect(await s.migrate(UDID)).toBe("incomplete");
     expect(await readMarkerAt(backups, UDID)).toBe("migrating");
     const session = await service().beginSync(UDID, { strategy: "full" });
-    const lockedAgain = service({ files: () => locked });
+    const lockedAgain = service({ sealEngineOptions: locked });
     await lockedAgain.finishSync(session);
     expect(await readMarkerAt(backups, UDID)).toBe("syncing");
     expect(await service().migrate(UDID)).toBe("encrypted");
@@ -520,15 +517,99 @@ describe("refusals and special chains", () => {
     expect(plaintextLeft()).toEqual([]);
   });
 
-  it("a backup being migrated refuses the sync with the founder sentence", async () => {
+  it("a sync requested during the launch migration PAUSES it at a file boundary, runs, and its own seal finishes the rest", async () => {
+    makeChain();
+    let sealedBeforePause = 0;
+    let s: BackupAtRest | null = null;
+    // Pause request lands after the first file is sealed (a real migration is mid-way).
+    let syncing: Promise<unknown> | null = null;
+    const progress: BackupAtRestProgress[] = [];
+    s = service({
+      sealEngineOptions: {
+        beforeSeal: () => {
+          sealedBeforePause++;
+          if (sealedBeforePause === 1) syncing = (s as BackupAtRest).beginSync(UDID, { onProgress: (p) => progress.push(p) });
+        },
+      },
+    });
+    const migrated = await s.migrate(UDID);
+    expect(migrated).toBe("paused");
+    const session = (await syncing) as Awaited<ReturnType<BackupAtRest["beginSync"]>>;
+    expect(session).toMatchObject({ kind: "keepr", udid: UDID, strategy: "delta" });
+    expect(progress[0]).toMatchObject({ phase: "pausing" });
+    // The migration stopped before sealing everything: plaintext is still there mid-sync.
+    expect(plaintextLeft().length).toBeGreaterThan(0);
+    expect(await readMarkerAt(backups, UDID)).toBe("syncing");
+    // This sync's seal resumes it: nothing plaintext left, marker encrypted.
+    await s.finishSync(session, undefined, { succeeded: true });
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    expect(s.busyReason(UDID)).toBeNull();
+  });
+
+  it("a sync requested during the seal after the previous sync pauses that seal too (no refusal, no wait for the whole seal)", async () => {
+    makeChain();
+    await service().migrate(UDID);
+    const first = await service().beginSync(UDID, { strategy: "full" }); // everything plaintext again
+    let s: BackupAtRest | null = null;
+    let second: Promise<unknown> | null = null;
+    let n = 0;
+    s = service({
+      sealEngineOptions: {
+        beforeSeal: () => {
+          if (++n === 1) second = (s as BackupAtRest).beginSync(UDID);
+        },
+      },
+    });
+    await s.finishSync(first, undefined, { succeeded: true });
+    const session = (await second) as Awaited<ReturnType<BackupAtRest["beginSync"]>>;
+    expect(session.kind).toBe("keepr");
+    expect(plaintextLeft().length).toBeGreaterThan(0);
+    await service().finishSync(session, undefined, { succeeded: true });
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("a paused migration whose sync is then refused is resumed in the background, not left until the next launch", async () => {
+    makeChain();
+    let s: BackupAtRest | null = null;
+    let refused: Promise<unknown> | null = null;
+    let n = 0;
+    let failNextKey = false;
+    s = service({
+      ensureKey: async () => {
+        if (failNextKey) {
+          failNextKey = false; // only the sync's check fails; the resumed migration's passes
+          throw new DataKeyUnavailableError("gone");
+        }
+      },
+      sealEngineOptions: {
+        beforeSeal: () => {
+          if (++n === 1) {
+            failNextKey = true;
+            refused = (s as BackupAtRest).beginSync(UDID).catch((e) => e);
+          }
+        },
+      },
+    });
+    expect(await s.migrate(UDID)).toBe("paused");
+    expect(await refused).toMatchObject({ reason: "key-unavailable" });
+    // The resume runs on the next turn; wait for the lock to come back.
+    for (let i = 0; i < 200 && (plaintextLeft().length > 0 || s.busyReason(UDID)); i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("a second sync while a sync holds the phone is still refused with the founder sentence (not a pausable pass)", async () => {
     makeChain();
     const s = service();
-    // Started in the same tick: the lock is claimed before migrate's first await.
-    const migrating = s.migrate(UDID);
+    const session = await s.beginSync(UDID, { strategy: "full" });
     await expect(s.beginSync(UDID)).rejects.toBeInstanceOf(BackupAtRestRefusal);
     await expect(s.beginSync(UDID)).rejects.toThrow(BACKUP_SECURING_SENTENCE);
     expect(BACKUP_SECURING_MESSAGE).toContain("Syncing your iPhone will be available when this finishes.");
-    await migrating;
+    await s.finishSync(session);
   });
 
   it("a sync that started first makes a launch migration in the same tick stand aside", async () => {
@@ -592,16 +673,18 @@ describe("launch job", () => {
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
   });
 
-  it("C3: a sync started before the launch job ran seals a 'syncing' chain FIRST", async () => {
+  it("C3 (seal throughput): a sync started before the launch job ran does NOT seal a 'syncing' chain first; its own seal at the end does", async () => {
     makeChain();
     await createMarkerStore({ userData: () => userData }).writeBackupMarker(UDID, "syncing");
     const s = service();
     const sealSpy = jest.spyOn(s, "seal");
-    const unsealSpy = jest.spyOn(s, "unseal");
-    const session = await s.beginSync(UDID, { strategy: "full" });
-    expect(sealSpy).toHaveBeenCalled();
-    expect(sealSpy.mock.invocationCallOrder[0]).toBeLessThan(unsealSpy.mock.invocationCallOrder[0]);
+    const session = await s.beginSync(UDID);
+    expect(sealSpy).not.toHaveBeenCalled();
+    expect(plaintextLeft().length).toBeGreaterThan(0); // a part-sealed chain is fine under C-DELTA
     await s.finishSync(session);
+    expect(sealSpy).toHaveBeenCalled();
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
   });
 
   it("migrates a pre-2.40 plaintext chain and is resumable", async () => {
@@ -727,13 +810,11 @@ describe("B2: unreadable kept backup → quarantine + full backup", () => {
     flipByteInChunk(smsFile());
     // The attachment file opens fine during the unseal but cannot be sealed again (EIO).
     const flaky = {
-      ...files,
-      encryptFileInPlace: async (p: string) => {
+      beforeSeal: (p: string) => {
         if (p.endsWith(OTHER_ID)) throw Object.assign(new Error("i/o"), { code: "EIO" });
-        return files.encryptFileInPlace(p);
       },
     };
-    const s = service({ files: () => flaky, now: () => T0 });
+    const s = service({ sealEngineOptions: flaky, now: () => T0 });
     await expect(s.beginSync(UDID, { strategy: "full" })).rejects.toMatchObject({ reason: "unreadable" });
     const quarantineRoot = path.join(backups, QUARANTINE_DIR_NAME);
     expect(fs.existsSync(quarantineRoot)).toBe(false);

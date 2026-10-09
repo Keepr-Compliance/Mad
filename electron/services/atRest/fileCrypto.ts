@@ -140,7 +140,7 @@ export class AtRestIntegrityError extends Error {
   }
 }
 
-interface ParsedHeader {
+export interface ParsedHeader {
   raw: Buffer;
   keyId: string;
   salt: Buffer;
@@ -154,9 +154,13 @@ interface Layout {
 
 // ---------------------------------------------------------------------------
 // Header
+//
+// The format primitives below are exported for the backup seal engine only
+// (sealEngine.ts, BACKLOG-3816): it seals with synchronous I/O inside worker
+// threads and must produce byte-for-byte the same container as this module.
 // ---------------------------------------------------------------------------
 
-function buildHeader(keyIdHex: string, salt: Buffer, chunkSize: number): Buffer {
+export function buildHeader(keyIdHex: string, salt: Buffer, chunkSize: number): Buffer {
   const keyId = Buffer.from(keyIdHex, "hex");
   if (keyId.length !== KEY_ID_BYTES) {
     throw new AtRestFormatError("key id must be 16 bytes");
@@ -171,7 +175,7 @@ function buildHeader(keyIdHex: string, salt: Buffer, chunkSize: number): Buffer 
   return header;
 }
 
-function parseHeader(raw: Buffer): ParsedHeader {
+export function parseHeader(raw: Buffer): ParsedHeader {
   if (raw.length < HEADER_BYTES || !raw.subarray(0, MAGIC.length).equals(MAGIC)) {
     throw new AtRestFormatError("not a KEPRENC file");
   }
@@ -220,7 +224,7 @@ export function layoutFor(fileSize: number, chunkSize: number): Layout {
   return { chunkCount, plaintextSize: body - chunkCount * TAG_BYTES };
 }
 
-function deriveFileKey(dataKey: Buffer, salt: Buffer): Buffer {
+export function deriveFileKey(dataKey: Buffer, salt: Buffer): Buffer {
   if (dataKey.length !== DATA_KEY_BYTES) {
     throw new AtRestFormatError("data key must be 32 bytes");
   }
@@ -240,7 +244,7 @@ function aadFor(header: Buffer, index: number, isFinal: boolean): Buffer {
   return Buffer.concat([header, tail]);
 }
 
-function sealChunk(
+export function sealChunk(
   fileKey: Buffer,
   header: Buffer,
   index: number,
@@ -254,7 +258,7 @@ function sealChunk(
 }
 
 /** Returns the chunk's plaintext ONLY after its tag verified. */
-function openChunk(
+export function openChunk(
   fileKey: Buffer,
   header: Buffer,
   index: number,
@@ -491,6 +495,12 @@ export interface FileCrypto {
    */
   statPlaintextFromHandle(handle: fs.promises.FileHandle): Promise<{ encrypted: boolean; size: number }>;
   readAllDecryptedFromHandle(handle: fs.promises.FileHandle, opts?: ReadOptions): Promise<Buffer>;
+  /**
+   * BACKLOG-3816: the key new files are sealed with, for the backup seal workers
+   * (sealEngine.ts), which build the same containers with synchronous I/O off the main
+   * thread. Optional so test doubles need not provide it.
+   */
+  sealingKey?(): Promise<AtRestKey>;
 }
 
 /** BACKLOG-3816 S2: `requireEncrypted` for the whole-file readers (same meaning as on openDecryptStream). */
@@ -744,6 +754,10 @@ export function createFileCrypto(keys: KeyResolver, options: FileCryptoOptions =
       } finally {
         await handle.close().catch(() => undefined);
       }
+    },
+
+    async sealingKey() {
+      return keys.currentKey();
     },
 
     async statPlaintextFromHandle(handle) {
