@@ -1,6 +1,6 @@
 # BACKLOG-3843 harness
 
-Controls and mutants for `supabase/migrations/20261010100000_backlog_3843_org_member_client_write_lockdown.sql`.
+Controls and mutants for `supabase/migrations/20261010150116_backlog_3843_org_member_client_write_lockdown.sql`.
 
 Every run is one transaction ending in ROLLBACK; nothing is committed. Layering per control:
 3679 + 3538 + 3843 helpers and fixtures, the 3679 migration, 3538 preconditions, the 3538 migration,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BACKLOG-3843 mutants of 20261010100000_backlog_3843_org_member_client_write_lockdown.sql.
+"""BACKLOG-3843 mutants of 20261010150116_backlog_3843_org_member_client_write_lockdown.sql.
 
 Each mutant is a list of exact-string edits. `apply` raises unless every
 pattern occurs exactly once (checked in order, on the text as already edited),

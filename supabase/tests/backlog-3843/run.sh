@@ -24,7 +24,7 @@ T3679="$REPO/supabase/tests/backlog-3679"
 T3538="$REPO/supabase/tests/backlog-3538"
 MIG3679="$REPO/supabase/migrations/20261003061523_backlog_3679_invite_accept_policy.sql"
 MIG3538="$REPO/supabase/migrations/20261007210000_backlog_3538_invite_accept_hardening.sql"
-MIG="${MIG_OVERRIDE:-$REPO/supabase/migrations/20261010100000_backlog_3843_org_member_client_write_lockdown.sql}"
+MIG="${MIG_OVERRIDE:-$REPO/supabase/migrations/20261010150116_backlog_3843_org_member_client_write_lockdown.sql}"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 psql_in() {
   if [ "$SSH_HOST" = local ]; then docker exec -i "$CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 -X -q -tA -f -
