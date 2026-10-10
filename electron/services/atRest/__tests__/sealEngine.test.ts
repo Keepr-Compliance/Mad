@@ -274,6 +274,31 @@ describe("E8 — real worker threads", () => {
     expect(classify.outcomes.filter((o) => o?.v === "plaintext")).toEqual([]);
   });
 
+  it("a progress listener that throws does not stop the pass: every batch is still handed out and sealed (BACKLOG-3816 PC final check)", async () => {
+    const chain = chainOf(400);
+    const stop = new Int32Array(new SharedArrayBuffer(4));
+    const warnings: string[] = [];
+    let calls = 0;
+    const r = await runPass({
+      files: chain,
+      mode: "seal",
+      key: engineKey,
+      chunkSize: CHUNK,
+      workers: 2,
+      workerScript,
+      stop,
+      log: (_level, message) => warnings.push(message),
+      onBatch: () => {
+        calls++;
+        throw new Error("Render frame was disposed");
+      },
+    });
+    expect(r.stopped).toBe(false);
+    expect(r.outcomes.filter((o) => o === undefined)).toEqual([]);
+    expect(calls).toBeGreaterThan(2);
+    expect(warnings.filter((w) => /progress listener failed/.test(w)).length).toBe(calls);
+  });
+
   it("pauses at a file boundary when the flag is set; what it did not reach stays plaintext and is reported as not reached", async () => {
     const chain = chainOf(400);
     const stop = new Int32Array(new SharedArrayBuffer(4));

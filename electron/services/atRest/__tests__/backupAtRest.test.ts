@@ -1439,6 +1439,34 @@ describe("progress", () => {
       expect(extra.length).toBe(300);
     });
 
+    it("PC final check 2026-10-10: once this sync's files are sealed, 100% is sent ONCE while the walk checks the rest; the marker is encrypted when the walk ends", async () => {
+      sealedChainWithMany();
+      const s = service();
+      await s.seal(UDID);
+      age(allContentFiles());
+      // Every batch emits (a clock that moves 1.5 s per reading), as a 10-minute walk does.
+      let clock = Date.now();
+      const clockSpy = jest.spyOn(Date, "now").mockImplementation(() => (clock += 1500));
+      let seen: BackupAtRestProgress[];
+      try {
+        ({ seen } = await incremental(s, () => {
+          write(`ee/${"e".repeat(40)}`, crypto.randomBytes(BIG));
+        }));
+      } finally {
+        clockSpy.mockRestore();
+      }
+      const percents = seen.map((p) => describeBackupAtRestProgress(p).percent);
+      const fullAt = percents.indexOf(100);
+      expect(fullAt).toBeGreaterThan(0);
+      // The new file is newest, so it is done in the first batches: the rest of the walk
+      // (300+ sealed files) would otherwise repeat "100%" on every batch.
+      expect(seen[fullAt].done).toBeLessThan(seen[fullAt].total);
+      expect(percents.filter((n) => n === 100)).toEqual([100]);
+      expect(seen.length).toBe(fullAt + 1);
+      expect(await s.readMarker(UDID)).toBe("encrypted");
+      expect(plaintextLeft()).toEqual([]);
+    });
+
     it("a sealed file with a new mtime (estimate too high): the total shrinks and the pass ends at 100%", async () => {
       const extra = sealedChainWithMany();
       const s = service();
@@ -1476,17 +1504,12 @@ describe("progress", () => {
       } finally {
         clockSpy.mockRestore();
       }
-      const missed = 1000 + W;
-      const mid = seen.slice(1, -1);
-      expect(mid.length).toBeGreaterThan(5);
       for (const p of seen) expect(p.doneUnits as number).toBeLessThanOrEqual(p.totalUnits as number);
-      // once the missed file has been sealed, the total includes it
-      const afterMissed = mid.filter((p) => (p.doneUnits as number) >= index + missed);
-      expect(afterMissed.length).toBeGreaterThan(0);
-      for (const p of afterMissed) expect(p.totalUnits as number).toBeGreaterThanOrEqual(index + missed);
-      const last = seen[seen.length - 1];
-      expect(last.doneUnits).toBe(index + 1000 + W);
-      expect(last.totalUnits).toBe(last.doneUnits);
+      // Nothing was estimated (index files are sealed by their own step), so the walk is at
+      // 100% from its first tick, and the missed file joins both sides: still 100%, which
+      // is sent once (PC final check 2026-10-10), not on every batch.
+      expect(seen.map((p) => describeBackupAtRestProgress(p).percent)).toEqual([100]);
+      expect(seen[0]).toMatchObject({ doneUnits: index, totalUnits: index });
       expect(plaintextLeft()).toEqual([]);
     });
 

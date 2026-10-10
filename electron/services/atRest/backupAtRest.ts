@@ -824,7 +824,26 @@ export class BackupAtRest extends EventEmitter {
       files: listed.length,
       mb: Math.round(listed.reduce((n, f) => n + f.size, 0) / 1048576),
     });
-    notify({ udid, phase, done: 0, total: listed.length, doneUnits: 0, totalUnits });
+    // A 100% tick is sent once (PC final check 2026-10-10): after a sync the percentage
+    // reaches 100% when the files that sync wrote are sealed, and the walk then checks the
+    // rest of the chain (~575k sealed files, ~10 min on the PC) before the marker can say
+    // `encrypted`. Repeating "100%" through that check kept the banner up for the whole
+    // walk. Ticks resume if the total grows again (a file the estimate missed).
+    let fullSent = false;
+    const tick = (p: BackupAtRestProgress): void => {
+      const full = describeBackupAtRestProgress(p).percent >= 100;
+      if (full && fullSent) return;
+      if (full && p.done < p.total) {
+        this.log("info", "[BackupAtRest] this sync's files are sealed; checking the rest of the backup", {
+          phase,
+          done: p.done,
+          files: p.total,
+        });
+      }
+      fullSent = full;
+      notify(p);
+    };
+    tick({ udid, phase, done: 0, total: listed.length, doneUnits: 0, totalUnits });
     const result = await this.pass(listed, "seal", key, pause, (indexes, outcomes) => {
       outcomes.forEach((o, k) => {
         this.tally(report, o);
@@ -857,7 +876,7 @@ export class BackupAtRest extends EventEmitter {
       }
       if (now - lastEmit >= PROGRESS_INTERVAL_MS && done < listed.length) {
         lastEmit = now;
-        notify({ udid, phase, done, total: listed.length, doneUnits, totalUnits });
+        tick({ udid, phase, done, total: listed.length, doneUnits, totalUnits });
       }
     });
     if (result.stopped) report.paused = true;
@@ -866,7 +885,7 @@ export class BackupAtRest extends EventEmitter {
     // marker can say `encrypted` (see sealEngine.ts: a lost rename leaves the plaintext,
     // never loses it).
     await pool([...result.touchedDirs], 4, (dir) => fsyncDir(dir));
-    if (!result.stopped) notify({ udid, phase, done: listed.length, total: listed.length, doneUnits, totalUnits: doneUnits });
+    if (!result.stopped) tick({ udid, phase, done: listed.length, total: listed.length, doneUnits, totalUnits: doneUnits });
     report.ms = Date.now() - started;
     return report;
   }
