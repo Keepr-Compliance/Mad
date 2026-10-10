@@ -32,7 +32,7 @@ export const MobileTopBar = forwardRef<HTMLButtonElement, MobileTopBarProps>(fun
         aria-label="Open menu"
         aria-expanded={menuOpen}
         aria-controls="mobile-nav"
-        className="flex h-11 w-11 items-center justify-center rounded-md text-gray-300 hover:bg-gray-800 hover:text-white focus:outline-none focus:ring-2 focus:ring-gray-600"
+        className="flex h-11 w-11 items-center justify-center rounded-md text-gray-300 [@media(hover:hover)]:hover:bg-gray-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-600"
       >
         <Menu className="h-6 w-6" aria-hidden="true" />
       </button>

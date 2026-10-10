@@ -35,7 +35,7 @@
  * disagree about the same file.
  */
 
-import * as fs from "fs";
+import { statStoredAttachment } from "./atRest/attachmentReader";
 import type { Attachment, Message } from "../types/models";
 import type { SubmissionAttachment } from "./db/submissionDbService";
 import {
@@ -124,13 +124,12 @@ export interface PreflightResult {
 /** `null` when the file cannot be read (missing, permission). */
 export type StatFile = (absolutePath: string) => Promise<{ size: number } | null>;
 
+/**
+ * BACKLOG-3816 S2: the PLAINTEXT size (from the KEPRENC header for an encrypted
+ * file), which is what the uploader sends and what the 50 MB cap applies to.
+ */
 async function defaultStatFile(absolutePath: string): Promise<{ size: number } | null> {
-  try {
-    const stat = await fs.promises.stat(absolutePath);
-    return stat.isFile() ? { size: stat.size } : null;
-  } catch {
-    return null;
-  }
+  return statStoredAttachment(absolutePath);
 }
 
 /** Replaced in tests through {@link setPreflightStatForTests}. */

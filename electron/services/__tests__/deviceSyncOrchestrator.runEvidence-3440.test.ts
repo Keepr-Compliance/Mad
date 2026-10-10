@@ -29,8 +29,22 @@ const mockCheckBackupStatus = jest.fn();
 const mockCancelBackup = jest.fn();
 const mockStopForQuit = jest.fn();
 
+// BACKLOG-3816 S4-C: the kept backup's at-rest layer is not this suite's subject.
+jest.mock("../atRest/backupAtRest", () => ({
+  ...jest.requireActual("../atRest/backupAtRest"),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+}));
+// BACKLOG-3816 S4-C (B1): no saved-password file I/O; this suite's subject is not the password.
+jest.mock("../atRest/backupPassword", () => ({
+  ...jest.requireActual("../atRest/backupPassword"),
+  getBackupPasswordStore: () =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
+}));
 jest.mock("electron", () => ({
-  app: { isPackaged: false, getPath: jest.fn().mockReturnValue("/tmp") },
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  app: { isPackaged: false, getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()) },
 }));
 
 const logLines: string[] = [];
@@ -286,9 +300,19 @@ describe("BACKLOG-3440: Cancel, Reset and Try-Again are three different acts", (
     const orchestrator = new DeviceSyncOrchestrator();
     syncTimeline.beginSync();
 
-    orchestrator.cancel();
+    orchestrator.cancel("progress-cancel");
 
     expect(syncTimeline.contextSnapshot().endedBy).toBe("user-cancel");
+    expect(syncTimeline.contextSnapshot().reasonCode).toBe("progress-cancel");
+  });
+
+  it("BACKLOG-3816: a cancel no control asked for is NOT `user-cancel`", () => {
+    const orchestrator = new DeviceSyncOrchestrator();
+    syncTimeline.beginSync();
+
+    orchestrator.cancel();
+
+    expect(syncTimeline.contextSnapshot().endedBy).toBe("cancel-unattributed");
   });
 
   it("THE CONTROL — the restart-while-running guard records `restart-while-running`", () => {
@@ -307,7 +331,7 @@ describe("BACKLOG-3440: Cancel, Reset and Try-Again are three different acts", (
     const orchestrator = new DeviceSyncOrchestrator();
 
     syncTimeline.beginSync();
-    orchestrator.cancel();
+    orchestrator.cancel("progress-cancel");
     const cancelled = syncTimeline.contextSnapshot().endedBy;
 
     syncTimeline.beginSync();
@@ -452,5 +476,14 @@ describe("BACKLOG-3598: quitting during a backup is recorded as app-quit, not de
     expect(last).toContain("endedBy=app-quit");
     expect(last).not.toContain("endedBy=device-error");
     expect(last).not.toContain("reasonCode=");
+    // The outcome is a cancel, not an error.
+    expect(last).toContain("outcome=cancelled");
+    expect(last).not.toContain("outcome=error");
   });
+});
+
+// BACKLOG-3816 S4-C (B1): this file's userData is a fresh directory under os.tmpdir().
+afterAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./helpers/testUserData").removeTestUserDataDir();
 });

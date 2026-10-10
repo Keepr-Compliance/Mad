@@ -278,7 +278,7 @@ export const syncBridge = {
    * Cancels an in-progress sync operation
    * @returns Cancellation result
    */
-  cancel: () => ipcRenderer.invoke("sync:cancel"),
+  cancel: (trigger: string) => ipcRenderer.invoke("sync:cancel", trigger),
 
   /**
    * Gets current sync status
@@ -437,6 +437,7 @@ export const syncBridge = {
       messagesStored: number;
       contactsStored: number;
       contactsSourceOff?: boolean;
+      attachmentsUndecryptable?: number;
       duration: number;
     }) => void
   ) => {
@@ -444,6 +445,7 @@ export const syncBridge = {
       messagesStored: number;
       contactsStored: number;
       contactsSourceOff?: boolean;
+      attachmentsUndecryptable?: number;
       duration: number;
     }) => callback(result);
     ipcRenderer.on("sync:storage-complete", listener);
@@ -461,9 +463,10 @@ export const syncBridge = {
 
   /**
    * BACKLOG-3784: renderer heartbeat while an iPhone sync is showing. Telemetry only.
-   * @param tick - first: first tick of this sync; hidden: document is hidden
+   * @param tick - first: first tick of this sync; hidden: document is hidden;
+   *   stopped (BACKLOG-3785): the heartbeat stopped on purpose; screen: the screen NAME shown
    */
-  rendererTick: (tick: { first: boolean; hidden: boolean }) => {
+  rendererTick: (tick: { first: boolean; hidden: boolean; stopped?: boolean; screen?: string }) => {
     ipcRenderer.send("sync:renderer-tick", tick);
   },
 

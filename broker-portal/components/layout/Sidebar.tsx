@@ -388,7 +388,7 @@ export function Sidebar({
                 type="button"
                 onClick={onMobileClose}
                 aria-label="Close menu"
-                className="flex h-11 w-11 items-center justify-center rounded-md text-gray-400 hover:bg-gray-800 hover:text-white focus:outline-none focus:ring-2 focus:ring-gray-600"
+                className="flex h-11 w-11 items-center justify-center rounded-md text-gray-400 [@media(hover:hover)]:hover:bg-gray-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-600"
               >
                 <X className="h-5 w-5" aria-hidden="true" />
               </button>

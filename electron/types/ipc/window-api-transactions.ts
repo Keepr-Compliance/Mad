@@ -13,6 +13,7 @@ import type {
 // shape without gaining a dependency on main-process code. One definition
 // rather than a hand-copied mirror that drifts the first time a column moves.
 import type { TransactionContactResult } from "../../services/db/transactionContactDbService";
+import type { PickerMessage } from "../../services/db/messageDbService";
 // The one definition of the pre-cache fetch rounds. TYPE-ONLY, same ruling.
 import type { EmailPrecacheStage } from "./emailPrecacheStage";
 
@@ -544,6 +545,21 @@ export interface WindowApiTransactions {
     communications?: Communication[];
     error?: string;
   }>;
+  /**
+   * BACKLOG-3785: communications changed since the caller's copy — the rows it
+   * does not hold (`added`) and the ids it holds that are gone (`removedIds`).
+   */
+  getCommunicationsDelta: (
+    transactionId: string,
+    channelFilter: "email" | "text",
+    knownIds: string[],
+  ) => Promise<{
+    success: boolean;
+    added?: Communication[];
+    removedIds?: string[];
+    total?: number;
+    error?: string;
+  }>;
   getWithContacts: (transactionId: string) => Promise<{
     success: boolean;
     transaction?: Transaction;
@@ -734,7 +750,7 @@ export interface WindowApiTransactions {
   /** Gets unlinked messages for a specific contact */
   getMessagesByContact: (userId: string, contact: string) => Promise<{
     success: boolean;
-    messages?: unknown[];
+    messages?: PickerMessage[];
     error?: string;
   }>;
   /** Links messages to a transaction */

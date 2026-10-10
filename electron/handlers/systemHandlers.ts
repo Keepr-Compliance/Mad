@@ -4,6 +4,8 @@
 //          shell operations, support
 // ============================================
 
+import { noteScreenName } from "../services/rendererFreezeProfiler";
+import { devToolsPreference } from "../bootstrap/appMenu";
 import { ipcMain, shell, BrowserWindow, app } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import fs from "fs";
@@ -1284,6 +1286,7 @@ export function registerSystemHandlers(): void {
         width: 800,
         height: 700,
         webPreferences: {
+          devTools: devToolsPreference(), // BACKLOG-3830
           nodeIntegration: false,
           contextIsolation: true,
         },
@@ -1373,6 +1376,15 @@ export function registerSystemHandlers(): void {
       return { success: true };
     }, { module: "System" }),
   );
+
+  // BACKLOG-3785: the screen NAME the renderer shows, for freeze reports (sanitized there).
+  ipcMain.on("telemetry:screen-name", (_event, name: unknown) => {
+    try {
+      noteScreenName(name);
+    } catch {
+      // Telemetry only.
+    }
+  });
 
   // Renderer log relay — pipes renderer console logs to main process log file
   ipcMain.on("log:renderer", (_event, level: string, message: string) => {

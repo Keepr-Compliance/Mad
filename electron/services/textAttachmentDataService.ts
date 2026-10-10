@@ -23,6 +23,7 @@ import {
   type OwnedTextAttachmentRow,
 } from "./db/textAttachmentDataSql";
 import type { TextAttachmentDataResult } from "../types/ipc/common";
+import { readOpenAttachment, statOpenAttachment } from "./atRest/attachmentReader";
 
 /** Largest file served inline. A larger image shows its placeholder instead. */
 export const MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -95,10 +96,14 @@ export async function getTextAttachmentData(
     handle = await fs.open(realFile, "r");
     const stat = await handle.stat();
     if (!stat.isFile()) return { success: false, reason: "missing_file" };
-    if (stat.size > MAX_INLINE_ATTACHMENT_BYTES) {
+    // BACKLOG-3816: stored attachments may be KEPRENC ciphertext. Size and
+    // bytes come from the shared at-rest reader, on this same handle, so the
+    // cap is measured on the plaintext and the renderer gets decrypted bytes.
+    const { size } = await statOpenAttachment(realFile, handle);
+    if (size > MAX_INLINE_ATTACHMENT_BYTES) {
       return { success: false, reason: "too_large" };
     }
-    const buffer = await handle.readFile();
+    const buffer = await readOpenAttachment(realFile, handle);
     return { success: true, data: buffer.toString("base64"), mime_type: row.mime_type };
   } catch {
     return { success: false, reason: "missing_file" };

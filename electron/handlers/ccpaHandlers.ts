@@ -15,6 +15,7 @@ import {
   setCrashReportingEnabled,
   type CrashReportingState,
 } from "../services/crashReportingPreference";
+import { handleBusy } from "../utils/busyIpc";
 
 /**
  * Register CCPA/privacy IPC handlers
@@ -30,7 +31,7 @@ export function registerCcpaHandlers(): void {
    * 4. Write JSON file
    * 5. Return success/failure
    */
-  ipcMain.handle(
+  handleBusy(
     "privacy:export-data",
     wrapHandler(async (event, userId: string): Promise<{ success: boolean; filePath?: string; error?: string }> => {
       logService.info(

@@ -77,7 +77,6 @@ Copy `.env.local.example` to `.env.local` and fill in your values. See `.env.pro
 | `MICROSOFT_TENANT_ID` | No | Azure AD tenant (`common` for multi-tenant) |
 | `GOOGLE_CLIENT_ID` | No | Google OAuth client ID (Gmail integration) |
 | `GOOGLE_CLIENT_SECRET` | No | Google OAuth client secret |
-| `GOOGLE_MAPS_API_KEY` | No | Google Maps/Places API key (address verification) |
 | `SENTRY_DSN` | No | Sentry DSN for error tracking |
 | `SENTRY_AUTH_TOKEN` | No | Sentry auth token (build-time source map upload) |
 

@@ -27,6 +27,7 @@ import { hostAppPaths } from "../capabilities/appPathsProvider";
 import { hostDialog } from "../capabilities/dialogProvider";
 import { hostErrorReporter } from "../capabilities/errorReporterProvider";
 import logService from "./logService";
+import { redactEmail } from "../utils/redactSensitive";
 import {
   setDb,
   setDbPath,
@@ -116,6 +117,7 @@ import type {
 
 import {
   DatabaseError,
+  DbKeyUnavailableError,
   SchemaBaselineRefusalError,
   MigrationRecoveryFailedError,
 } from "../types";
@@ -264,7 +266,9 @@ class DatabaseService implements IDatabaseService {
       fs.mkdirSync(dbDir, { recursive: true });
 
       await databaseEncryptionService.initialize();
-      this.encryptionKey = await databaseEncryptionService.getEncryptionKey();
+      // BACKLOG-3824: resolved BEFORE anything reads, migrates or opens mad.db,
+      // so a key that cannot be produced leaves the database untouched.
+      this.encryptionKey = await this._resolveEncryptionKey(options);
 
       const needsMigration = await this._checkMigrationNeeded();
       if (needsMigration) {
@@ -476,6 +480,18 @@ class DatabaseService implements IDatabaseService {
       await logService.debug("Database initialized successfully with encryption", "DatabaseService");
       return true;
     } catch (error) {
+      if (error instanceof DbKeyUnavailableError) {
+        // BACKLOG-3824 — already logged and reported by _resolveEncryptionKey
+        // (reason tag only). Re-thrown without a second Sentry event. Retryable
+        // is honest here: nothing was written, and a later attempt re-reads the
+        // same key store.
+        initializationBroadcaster.broadcast({
+          stage: "error",
+          error: { message: error.message, retryable: true },
+        });
+        throw error;
+      }
+
       if (error instanceof MigrationRecoveryFailedError) {
         // BACKLOG-2999 — already fully handled by the terminal branch above:
         // handle torn down, dialog awaited, Sentry captured WITH the
@@ -570,6 +586,78 @@ class DatabaseService implements IDatabaseService {
         tags: { service: "database-service", operation: "initialize" },
       });
       throw error;
+    }
+  }
+
+  /**
+   * BACKLOG-3824 — get the database key, and when it exists but cannot be
+   * produced, STOP rather than start on a new key.
+   *
+   * databaseEncryptionService throws {@link DbKeyUnavailableError} instead of
+   * generating a key whenever a key store (or an encrypted mad.db) is already on
+   * disk. At startup (`quitOnUnrecoverableFailure`) the user gets a blocking
+   * dialog with Retry and Quit. Retry asks secure storage again — a Keychain that
+   * was locked, or a DPAPI hiccup, can recover without a restart. Quit exits.
+   * There is deliberately NO reset option here: the data is intact and the key
+   * may come back; offering to wipe it is the one irreversible answer.
+   *
+   * Other callers (the backup restore) just get the error.
+   *
+   * Reported once per call, with the reason code as the only detail — no path,
+   * no underlying error text.
+   */
+  private async _resolveEncryptionKey(options?: {
+    quitOnUnrecoverableFailure?: boolean;
+  }): Promise<string> {
+    let reported = false;
+    for (;;) {
+      try {
+        return await databaseEncryptionService.getEncryptionKey();
+      } catch (error) {
+        if (!(error instanceof DbKeyUnavailableError)) throw error;
+
+        await logService.error(
+          "Database key unavailable; refusing to create a new key",
+          "DatabaseService",
+          { reason: error.reason },
+        );
+        if (!reported) {
+          reported = true;
+          hostErrorReporter.captureException(error, {
+            tags: {
+              service: "database-service",
+              operation: "initialize",
+              db_key_unavailable: error.reason,
+            },
+          });
+        }
+
+        if (!options?.quitOnUnrecoverableFailure) throw error;
+
+        if (!hostAppLifecycle.isReady()) {
+          await hostAppLifecycle.whenReady();
+        }
+        // AWAITED: the user must answer before anything else happens.
+        const { response } = await hostDialog.showMessageBox({
+          type: "error",
+          title: "Keepr can't unlock your data",
+          message: "Keepr can't unlock your data on this computer.",
+          detail:
+            "Restart your computer and try again. If it keeps happening, contact support.",
+          buttons: ["Retry", "Quit"],
+        });
+        if (response === 0) {
+          await logService.info("Retrying database key unlock", "DatabaseService", {
+            reason: error.reason,
+          });
+          continue;
+        }
+
+        // Flush before the exit so the event survives it (BACKLOG-1576 precedent).
+        await hostErrorReporter.flush(2000);
+        hostAppLifecycle.quit();
+        throw error;
+      }
     }
   }
 
@@ -1115,7 +1203,8 @@ class DatabaseService implements IDatabaseService {
       if (tables.length > 0) {
         const user = currentDb.prepare(LOCAL_USER_ID_AND_EMAIL_SQL).get() as { id: string; email?: string } | undefined;
         if (user?.id) {
-          hostErrorReporter.setUser({ id: user.id, email: user.email || undefined });
+          // BACKLOG-3819: redacted, matching main.ts's Sentry.setUser.
+          hostErrorReporter.setUser({ id: user.id, email: user.email ? redactEmail(user.email) : undefined });
           hostErrorReporter.addBreadcrumb({
             category: "database",
             message: "Pre-migration user context set",
@@ -1692,6 +1781,11 @@ class DatabaseService implements IDatabaseService {
     return sessionDb.validateSession(sessionToken);
   }
 
+  /** BACKLOG-3833: read-only lookup for the idle check (no writes). */
+  getSessionTimes(sessionToken: string): sessionDb.SessionTimes | null {
+    return sessionDb.getSessionTimes(sessionToken);
+  }
+
   async deleteSession(sessionToken: string): Promise<void> {
     return sessionDb.deleteSession(sessionToken);
   }
@@ -2185,7 +2279,7 @@ class DatabaseService implements IDatabaseService {
     return messageDb.getMessageContacts(userId);
   }
 
-  async getMessagesByContact(userId: string, contact: string): Promise<Message[]> {
+  async getMessagesByContact(userId: string, contact: string): Promise<messageDb.PickerMessage[]> {
     return messageDb.getMessagesByContact(userId, contact);
   }
 
@@ -2454,8 +2548,9 @@ class DatabaseService implements IDatabaseService {
   // iPHONE SYNC QUERIES (Delegate to syncDbService)
   // ============================================
 
-  getExistingMessageExternalIds(userId: string) {
-    return syncDb.getExistingMessageExternalIds(userId);
+  /** BACKLOG-3868: one page of the iPhone sync's duplicate check. */
+  getMessageExternalIdsPage(userId: string, after: string | null, limit: number) {
+    return syncDb.getMessageExternalIdsPage(userId, after, limit);
   }
 
   batchInsertMessages(
@@ -2469,6 +2564,16 @@ class DatabaseService implements IDatabaseService {
 
   getMessageIdMap(userId: string) {
     return syncDb.getMessageIdMap(userId);
+  }
+
+  /** BACKLOG-3785: one bounded chunk of external id -> internal id. */
+  getMessageIdsByExternalIds(userId: string, externalIds: readonly string[]) {
+    return syncDb.getMessageIdsByExternalIds(userId, externalIds);
+  }
+
+  /** BACKLOG-3785: one bounded chunk of `message_id:filename` records. */
+  getExistingAttachmentRecordsForMessages(messageIds: readonly string[]) {
+    return syncDb.getExistingAttachmentRecordsForMessages(messageIds);
   }
 
   getExistingAttachmentRecords() {

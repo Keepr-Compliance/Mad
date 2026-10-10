@@ -230,6 +230,24 @@ export const authBridge = {
     ipcRenderer.invoke("session:validate-remote"),
 
   /**
+   * BACKLOG-3833: report real user input (keyboard, pointer, wheel, touch).
+   * No arguments: main loads the session itself, checks it is still valid,
+   * and only then records the activity.
+   */
+  reportUserActivity: (): Promise<void> =>
+    ipcRenderer.invoke("session:user-activity"),
+
+  /**
+   * BACKLOG-3833: main signed the session out for inactivity.
+   * @returns unsubscribe
+   */
+  onIdleSessionExpired: (callback: () => void): (() => void) => {
+    const listener = () => callback();
+    ipcRenderer.on("session:idle-expired", listener);
+    return () => ipcRenderer.removeListener("session:idle-expired", listener);
+  },
+
+  /**
    * Get active devices for the current user.
    * Returns list of devices with device name, OS, last active time,
    * and whether each device is the current one.

@@ -27,6 +27,10 @@ export function getDefaultStartDate(now: Date = new Date()): string {
   return `${year}-${String(month).padStart(2, "0")}-${String(dd).padStart(2, "0")}`; // local YYYY-MM-DD
 }
 
+/** BACKLOG-3834: autocomplete request throttling. */
+export const ADDRESS_SUGGEST_DEBOUNCE_MS = 300;
+export const ADDRESS_SUGGEST_MIN_CHARS = 3;
+
 export const initialAddressData: AddressData = {
   property_address: "",
   property_street: "",
@@ -243,15 +247,43 @@ export function useAuditAddressForm({
     populateFormData(editTransaction);
   }, [editTransaction]);
 
+  // BACKLOG-3834: suggestions go through the Maps proxy, so every request is billable
+  // and rate-limited. Debounce, require a minimum length, and drop stale replies.
+  const suggestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suggestSeqRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
+      suggestTimerRef.current = null;
+      suggestSeqRef.current += 1;
+    };
+  }, []);
+
   /**
    * Handle address input change with autocomplete
    */
   const handleAddressChange = useCallback(async (value: string): Promise<void> => {
     setAddressData(prev => ({ ...prev, property_address: value }));
 
-    if (value.length > 3 && window.api?.address?.getSuggestions) {
+    if (suggestTimerRef.current) {
+      clearTimeout(suggestTimerRef.current);
+      suggestTimerRef.current = null;
+    }
+    // Any reply for an earlier input is now stale.
+    const seq = ++suggestSeqRef.current;
+
+    if (value.length < ADDRESS_SUGGEST_MIN_CHARS || !window.api?.address?.getSuggestions) {
+      setShowAddressAutocomplete(false);
+      setAddressSuggestions([]);
+      return;
+    }
+
+    suggestTimerRef.current = setTimeout(async () => {
+      suggestTimerRef.current = null;
       try {
         const result = await window.api.address.getSuggestions(value, sessionToken);
+        if (seq !== suggestSeqRef.current) return; // newer input exists
         if (result.success && result.suggestions && result.suggestions.length > 0) {
           setAddressSuggestions(result.suggestions);
           setShowAddressAutocomplete(true);
@@ -260,14 +292,12 @@ export function useAuditAddressForm({
           setShowAddressAutocomplete(false);
         }
       } catch (fetchError: unknown) {
+        if (seq !== suggestSeqRef.current) return;
         logger.error("[AuditTransaction] Failed to fetch address suggestions:", fetchError);
         setShowAddressAutocomplete(false);
         setAddressSuggestions([]); // BACKLOG-1824: clear stale suggestions on API error
       }
-    } else {
-      setShowAddressAutocomplete(false);
-      setAddressSuggestions([]);
-    }
+    }, ADDRESS_SUGGEST_DEBOUNCE_MS);
   }, [sessionToken]);
 
   /**

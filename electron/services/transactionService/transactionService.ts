@@ -26,8 +26,9 @@ import databaseService from "../databaseService";
 import logService from "../logService";
 import { getContactNames } from "../contactsService";
 import { FIRST_SCAN_LOOKBACK_MONTHS } from "../../constants";
-import { createCommunicationReference } from "../messageMatchingService";
+import { createCommunicationReferenceSync } from "../messageMatchingService";
 import { autoLinkCommunicationsForContact, type AutoLinkResult } from "../autoLinkService";
+import { runFullSweepOnce } from "../autoLinkSweepGuard";
 import emailSyncService from "../emailSyncService";
 import { dbGet, dbAll, dbTransaction } from "../db/core/dbConnection";
 import {
@@ -40,14 +41,18 @@ import {
   TRANSACTION_FIRST_EXPORTED_SQL,
 } from "../db/transactionThreadSql";
 import { isTransactionFrozen } from "../transactionFreezePolicy";
-import { UNFREEZE_OVERRIDE_KEY, updateTransactionSync } from "../db/transactionDbService";
+import {
+  UNFREEZE_OVERRIDE_KEY,
+  getTransactionMessageCountSync,
+  updateTransactionSync,
+} from "../db/transactionDbService";
 // BACKLOG-2547 — the SYNCHRONOUS primitives, imported straight from the db
 // layer. `unlinkMessages` calls these from inside a `dbTransaction` body, where
 // a promise-returning wrapper would be an atomicity hole dressed as a fix: the
 // callback returns, the transaction commits, and the failure arrives later as
 // an unhandled rejection. `unlinkMessageFromTransaction` was always sync — only
 // the `databaseService` facade made it look otherwise.
-import { unlinkMessageFromTransaction } from "../db/messageDbService";
+import { linkMessageToTransaction, unlinkMessageFromTransaction } from "../db/messageDbService";
 import {
   addIgnoredCommunicationSync,
   deleteCommunicationByMessageIdSync,
@@ -91,6 +96,22 @@ import type {
   ReanalysisResult,
   AssignContactResult,
 } from "./types";
+import { beginLink } from "../../utils/linkInFlight";
+import type { PickerMessage } from "../db/messageDbService";
+
+/**
+ * BACKLOG-3785: how many messages `linkMessages` writes per transaction before
+ * yielding the main process. Measured on a 670k-message profile (Mac, 30,703
+ * messages linked into a deal holding 76k): 250 rows per chunk = p50 136 ms,
+ * p95 146 ms, max 273 ms, commit included. Most of a chunk is its COMMIT (the
+ * row statements were ~40 ms of it), so smaller chunks buy little.
+ */
+export const LINK_MESSAGES_CHUNK_SIZE = 250;
+
+/** BACKLOG-3785: let queued IPC, input and paint run between write chunks. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 /**
  * Transaction Service
@@ -1190,23 +1211,35 @@ class TransactionService {
         let totalMessagesLinked = 0;
         let totalQueuedForReview = 0;
 
-        for (const assignment of contact_assignments) {
-          try {
-            const autoLinkResult = await autoLinkCommunicationsForContact({
-              contactId: assignment.contact_id,
-              transactionId,
-              queueAmbiguousInsteadOfLinking: true,
-            });
-            totalEmailsLinked += autoLinkResult.emailsLinked;
-            totalMessagesLinked += autoLinkResult.messagesLinked;
-            totalQueuedForReview += autoLinkResult.queuedForReview ?? 0;
-          } catch (error) {
-            await logService.warn(
-              `Auto-link failed for contact ${assignment.contact_id}: ${error instanceof Error ? error.message : "Unknown"}`,
-              "TransactionService.createAuditedTransaction",
-            );
+        // BACKLOG-3883: this IS the deal's first full sweep. Run through the guard so
+        // the details screen's on-open sync and the create email trigger, which follow
+        // within seconds, skip the same sweep over the same inputs.
+        await runFullSweepOnce(transactionId, async () => {
+          let clean = true;
+          for (const assignment of contact_assignments) {
+            // One event-loop turn per contact: each run is seconds of reads on a large store.
+            await yieldToEventLoop();
+            try {
+              const autoLinkResult = await autoLinkCommunicationsForContact({
+                caller: "create",
+                contactId: assignment.contact_id,
+                transactionId,
+                queueAmbiguousInsteadOfLinking: true,
+              });
+              totalEmailsLinked += autoLinkResult.emailsLinked;
+              totalMessagesLinked += autoLinkResult.messagesLinked;
+              totalQueuedForReview += autoLinkResult.queuedForReview ?? 0;
+              if (autoLinkResult.errors > 0 || autoLinkResult.aborted) clean = false;
+            } catch (error) {
+              clean = false;
+              await logService.warn(
+                `Auto-link failed for contact ${assignment.contact_id}: ${error instanceof Error ? error.message : "Unknown"}`,
+                "TransactionService.createAuditedTransaction",
+              );
+            }
           }
-        }
+          return { clean };
+        }, "create");
 
         if (totalEmailsLinked > 0 || totalMessagesLinked > 0 || totalQueuedForReview > 0) {
           await logService.info(
@@ -1326,6 +1359,7 @@ class TransactionService {
       };
       try {
         autoLink = await autoLinkCommunicationsForContact({
+          caller: "assignContact",
           contactId,
           transactionId,
           queueAmbiguousInsteadOfLinking: true,
@@ -2056,7 +2090,10 @@ class TransactionService {
   /**
    * Get unlinked messages for a specific contact
    */
-  async getMessagesByContact(userId: string, contact: string): Promise<Message[]> {
+  async getMessagesByContact(
+    userId: string,
+    contact: string,
+  ): Promise<PickerMessage[]> {
     const messages = await databaseService.getMessagesByContact(userId, contact);
 
     await logService.info(
@@ -2076,39 +2113,71 @@ class TransactionService {
    * Link messages to a transaction
    */
   async linkMessages(messageIds: string[], transactionId: string): Promise<void> {
-    const transaction = await this.getTransactionDetails(transactionId);
+    // BACKLOG-3785: the transaction ROW only. This used to be
+    // getTransactionDetails(), which also loads every linked communication with
+    // its body — 75k rows on a large deal — to read two columns.
+    const transaction = await databaseService.getTransactionById(transactionId);
     if (!transaction) {
       throw new Error("Transaction not found");
     }
+    const userId = transaction.user_id;
 
     let linkedCount = 0;
 
-    for (const messageId of messageIds) {
-      await databaseService.linkMessageToTransaction(messageId, transactionId);
-
-      const refId = await createCommunicationReference(
-        messageId,
-        transactionId,
-        transaction.user_id,
-        "manual",
-        1.0
-      );
-
-      if (refId) {
-        linkedCount++;
+    // BACKLOG-3785: a quit request waits for this link (see linkInFlight.ts).
+    const endLink = beginLink();
+    try {
+      // BACKLOG-3785: chunked, with an event-loop yield between chunks. Linking
+      // 150 chats (30,703 messages) ran ~4 statements per message back to back
+      // and blocked the main process for 26.9 s — on Windows the window shows
+      // "Not Responding". Each chunk is ONE transaction: a message's pointer and
+      // its junction row now commit together (the BACKLOG-2550 half-link cannot
+      // happen inside a chunk), and message_count moves with the rows it counts.
+      for (let start = 0; start < messageIds.length; start += LINK_MESSAGES_CHUNK_SIZE) {
+        if (start > 0) await yieldToEventLoop();
+        const chunk = messageIds.slice(start, start + LINK_MESSAGES_CHUNK_SIZE);
+        linkedCount += dbTransaction(() => {
+          let chunkLinked = 0;
+          for (const messageId of chunk) {
+            linkMessageToTransaction(messageId, transactionId);
+            const refId = createCommunicationReferenceSync(
+              messageId,
+              transactionId,
+              userId,
+              "manual",
+              1.0
+            );
+            if (refId) chunkLinked++;
+          }
+          if (chunkLinked > 0) {
+            // Re-read inside the transaction: another writer may have moved the
+            // count while this loop yielded.
+            updateTransactionSync(transactionId, {
+              message_count: (getTransactionMessageCountSync(transactionId) ?? 0) + chunkLinked,
+            });
+          }
+          return chunkLinked;
+        });
       }
+      if (linkedCount === 0) {
+        // Unchanged from before: the row was always written once, even when every
+        // message was already linked (it bumps updated_at).
+        updateTransactionSync(transactionId, {
+          message_count: getTransactionMessageCountSync(transactionId) ?? 0,
+        });
+      }
+    } finally {
+      endLink();
     }
-
-    const newCount = (transaction.message_count || 0) + linkedCount;
-    await databaseService.updateTransaction(transactionId, {
-      message_count: newCount,
-    });
 
     await logService.info(
       "Messages linked to transaction",
       "TransactionService.linkMessages",
       {
-        messageIds,
+        // BACKLOG-3785: a count and a short sample, not the whole list. Linking
+        // 55,640 messages wrote 55,640 log lines here.
+        messageCount: messageIds.length,
+        messageIdsSample: messageIds.slice(0, 5),
         transactionId,
         linkedCount,
       },

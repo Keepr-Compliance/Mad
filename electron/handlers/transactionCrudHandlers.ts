@@ -8,6 +8,7 @@ import type { BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import transactionService from "../services/transactionService";
 import { getEarliestCommunicationDate } from "../services/transactionService";
+import { computeCommunicationsDelta } from "../services/transactionService/communicationsDelta";
 import type { AuditedTransactionData } from "../services/transactionService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
@@ -309,6 +310,49 @@ export function registerTransactionCrudHandlers(
         "Transactions",
       );
       return { success: true, transaction: details };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-3785: only what changed since the caller's copy. Same reader as
+  // transactions:get-communications (so the same de-duplication), but the reply
+  // carries the rows the caller does not hold plus the ids it should drop —
+  // not every linked communication again.
+  ipcMain.handle(
+    "transactions:get-communications-delta",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: string,
+      channelFilter: "email" | "text",
+      knownIds: string[],
+    ): Promise<TransactionResponse> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+      if (channelFilter !== "email" && channelFilter !== "text") {
+        throw new ValidationError(
+          "channelFilter must be 'email' or 'text'",
+          "channelFilter",
+        );
+      }
+      if (!Array.isArray(knownIds) || knownIds.some((id) => typeof id !== "string")) {
+        throw new ValidationError("knownIds must be an array of strings", "knownIds");
+      }
+      const t0 = Date.now();
+      const details = await transactionService.getTransactionDetails(
+        validatedTransactionId,
+        channelFilter,
+      );
+      if (!details) {
+        return { success: false, error: "Transaction not found" };
+      }
+      const delta = computeCommunicationsDelta(details.communications ?? [], knownIds);
+      logService.debug(
+        `[PERF] getCommunicationsDelta(${channelFilter}): ${Date.now() - t0}ms, ` +
+          `${delta.added.length} added, ${delta.removedIds.length} removed, ${delta.total} total`,
+        "Transactions",
+      );
+      return { success: true, ...delta };
     }, { module: "Transactions" }),
   );
 
@@ -1108,6 +1152,7 @@ export function registerTransactionCrudHandlers(
           let added = 0;
           for (const op of addOperations) {
             const r = await autoLinkCommunicationsForContact({
+              caller: "addContact",
               contactId: op.contactId,
               transactionId: validatedTransactionId as string,
               // BACKLOG-2791: develop's split — confident emails and every text

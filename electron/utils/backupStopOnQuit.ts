@@ -6,6 +6,7 @@
  * when no backup is running — that quit goes ahead untouched. `stop` never waits
  * longer than its own bound (BackupService.QUIT_STOP_TIMEOUT_MS) and never rejects,
  * but the re-quit is also issued if it does, so a quit can never be swallowed.
+ * A second quit while that wait runs is held too (BACKLOG-3785), not let through.
  */
 export interface QuitEventLike {
   preventDefault(): void;
@@ -24,10 +25,17 @@ export function createBackupStopOnQuit(
   app: QuittableApp,
   stop: () => Promise<unknown> | null,
 ): (event: QuitEventLike) => boolean {
-  let stopped = false;
+  // "idle" -> "waiting" (first deferral) -> "done" (wait ended, re-quit issued).
+  let state: "idle" | "waiting" | "done" = "idle";
   return (event) => {
-    // One deferral per app run: the re-quit must not be deferred again.
-    if (stopped) return false;
+    // The re-quit that ends the wait must not be deferred again.
+    if (state === "done") return false;
+    // A further quit while the single wait is running is held, not let through,
+    // and does not start a second wait. The one wait carries its own max bound.
+    if (state === "waiting") {
+      event.preventDefault();
+      return true;
+    }
     let stopping: Promise<unknown> | null;
     try {
       stopping = stop();
@@ -35,9 +43,12 @@ export function createBackupStopOnQuit(
       stopping = null;
     }
     if (!stopping) return false;
-    stopped = true;
+    state = "waiting";
     event.preventDefault();
-    const requit = () => app.quit();
+    const requit = () => {
+      state = "done";
+      app.quit();
+    };
     stopping.then(requit, requit);
     return true;
   };

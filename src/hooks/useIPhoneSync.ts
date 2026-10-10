@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { getCurrentScreenName } from "../utils/currentScreenName";
 import * as Sentry from "@sentry/electron/renderer";
 import type {
   iOSDevice,
@@ -7,6 +8,7 @@ import type {
   UseIPhoneSyncReturn,
   UserFacingError,
 } from "../types/iphone";
+import type { SyncCancelTrigger } from "../../electron/types/ipc/window-api-platform";
 import logger from '../utils/logger';
 import { syncOrchestrator } from '../services/SyncOrchestratorService';
 import { usePlatform } from '../contexts/PlatformContext';
@@ -14,6 +16,12 @@ import { pickDisplayUnitIndex } from '../utils/transferByteUnit';
 
 /** BACKLOG-3784: renderer heartbeat interval during an iPhone sync. */
 const RENDERER_TICK_MS = 1_000;
+/**
+ * BACKLOG-3816: start of the kept-backup UNSEAL line (describeBackupAtRestProgress in
+ * electron/services/atRest/backupAtRest.ts — the renderer cannot import it; parity is
+ * asserted by useIPhoneSync.test.ts).
+ */
+export const UNSEAL_MESSAGE_PREFIX = "Preparing your saved iPhone backup";
 
 /**
  * BACKLOG-1773: Sync status poll backoff bounds.
@@ -79,12 +87,19 @@ export function formatStorageCompleteMessage(result: {
   messagesStored: number;
   contactsStored: number;
   contactsSourceOff?: boolean;
+  attachmentsUndecryptable?: number;
 }): string {
   const messages = `Saved ${result.messagesStored.toLocaleString()} messages`;
-  if (result.contactsSourceOff) {
-    return `${messages}. Contacts not imported (turned off in Settings)`;
+  const base = result.contactsSourceOff
+    ? `${messages}. Contacts not imported (turned off in Settings)`
+    : `${messages} and ${result.contactsStored} contacts`;
+  // BACKLOG-3817: a partly-read encrypted backup is never reported as a clean success.
+  const failed = result.attachmentsUndecryptable ?? 0;
+  if (failed > 0) {
+    const noun = failed === 1 ? "attachment" : "attachments";
+    return `${base}. ${failed.toLocaleString()} ${noun} could not be read from the encrypted backup — sync again to retry`;
   }
-  return `${messages} and ${result.contactsStored} contacts`;
+  return base;
 }
 
 /**
@@ -351,6 +366,27 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
         const unsub = syncApi.onProgress((syncProgress) => {
           // Ignore progress events after cancel
           if (!syncStateRef.isActive) return;
+          // BACKLOG-3816 S4-C: "cleanup" ticks are the kept iPhone backup being prepared
+          // (unsealed, before the transfer) or secured (after it). While a sync is active
+          // the "Preparing your saved iPhone backup..." line belongs to the sync screen;
+          // once the sync is past the transfer the AtRestMigrationBanner owns the "Securing"
+          // line (it shows cleanup ticks only when NO sync is active), so this hook drops
+          // them there. The bar does not move: the tick's percent is the unseal's, not the sync's.
+          if ((syncProgress.phase as string) === "cleanup") {
+            const current = progressPhaseRef.current;
+            if (current === "extracting" || current === "storing" || current === "complete" || current === "error") return;
+            // BACKLOG-3816 (seal throughput): only the unseal for THIS sync belongs in the sync
+            // screen. A background "Securing your iPhone backup… N%" tick (launch migration,
+            // seal after the last sync) is the banner's — shown here it read as part of the
+            // sync under "Exporting - Keep connected", though sealing needs no phone. A sync
+            // pauses that seal (BackupAtRest.beginSync), so it has no reason to be here.
+            if (!(syncProgress.message ?? "").startsWith(UNSEAL_MESSAGE_PREFIX)) return;
+            const message = syncProgress.message;
+            setProgress((prev) =>
+              prev ? { ...prev, message } : { phase: "backing_up", percent: 0, message },
+            );
+            return;
+          }
           // Map sync progress to BackupProgress format
           let phase: BackupProgress["phase"] = "backing_up";
           if (syncProgress.phase === "backup") {
@@ -539,6 +575,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
             messagesStored: number;
             contactsStored: number;
             contactsSourceOff?: boolean;
+            attachmentsUndecryptable?: number;
             duration: number;
           }) => void
         ) => () => void;
@@ -736,18 +773,31 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   // second. Main is silent while ticks arrive and logs one `renderer-gap` line when
   // they resume after > 3 s, so a renderer freeze is bracketed to the second.
   // Stops when the sync leaves "syncing" (complete, error, cancel, idle).
+  //
+  // BACKLOG-3785: each tick also carries the screen NAME, and the cleanup sends one
+  // `stopped` tick, so main's freeze profiler can tell a heartbeat that stopped on
+  // purpose from a renderer that went silent.
   useEffect(() => {
     if (syncStatus !== "syncing") return;
     const api = window.api?.sync as
-      | { rendererTick?: (tick: { first: boolean; hidden: boolean }) => void }
+      | {
+          rendererTick?: (tick: {
+            first: boolean;
+            hidden: boolean;
+            stopped?: boolean;
+            screen?: string;
+          }) => void;
+        }
       | undefined;
     if (!api?.rendererTick) return;
     let first = true;
-    const tick = () => {
+    const tick = (stopped = false) => {
       try {
         api.rendererTick?.({
           first,
           hidden: typeof document !== "undefined" && document.visibilityState === "hidden",
+          stopped,
+          screen: getCurrentScreenName(),
         });
       } catch {
         // Telemetry only.
@@ -755,8 +805,11 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       first = false;
     };
     tick();
-    const id = setInterval(tick, RENDERER_TICK_MS);
-    return () => clearInterval(id);
+    const id = setInterval(() => tick(), RENDERER_TICK_MS);
+    return () => {
+      clearInterval(id);
+      tick(true);
+    };
   }, [syncStatus]);
 
   // BACKLOG-3784: COMPLETION-SHOWN ACK. Once the completion state has committed,
@@ -1120,14 +1173,15 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   );
 
   // Cancel ongoing sync
-  const cancelSync = useCallback(async () => {
-    logger.info("[useIPhoneSync] Cancelling sync");
+  // BACKLOG-3816: `trigger` names the control that asked; main records it on the run.
+  const cancelSync = useCallback(async (trigger: SyncCancelTrigger) => {
+    logger.info("[useIPhoneSync] Cancelling sync", { trigger });
     syncStateRef.isActive = false;
 
     try {
       const syncApi = window.api?.sync;
       if (syncApi?.cancel) {
-        await syncApi.cancel();
+        await syncApi.cancel(trigger);
       }
     } catch (err) {
       logger.warn("[useIPhoneSync] Cancel error (ignored):", err);

@@ -26,6 +26,7 @@ import type {
 } from "./window-api-services";
 import type { WindowApiChecklists } from "./window-api-checklists";
 import type { WindowApiRcsImport } from "./window-api-rcs-import";
+import type { WindowApiAtRest } from "./window-api-at-rest";
 import type { WindowApiEntitlement } from "./window-api-entitlement";
 import type { WindowApiPayment } from "./window-api-payment";
 import type { WindowApiPairing } from "./window-api-pairing";
@@ -94,6 +95,7 @@ export interface WindowApi extends WindowApiEvents {
   support: WindowApiSupport;
   pairing: WindowApiPairing;
   localSync: WindowApiLocalSync;
+  atRest?: WindowApiAtRest;
 }
 
 // Note: The global Window augmentation (declare global) lives in src/window.d.ts

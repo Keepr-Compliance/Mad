@@ -1,11 +1,26 @@
 /**
  * Address Verification Service
- * Uses Google Places API to verify and autocomplete property addresses
+ *
+ * Address autocomplete, place details and geocoding. BACKLOG-3834: the app no
+ * longer holds a Google key. Every lookup goes through the `maps-proxy` Edge
+ * Function with the signed-in user's session token; the key lives only on the
+ * server. Signed out, offline, rate limited or proxy down → lookups degrade
+ * (no suggestions; details/geocode reject) and manual address entry still works.
  */
 
-import axios from "axios";
-import * as Sentry from "@sentry/electron/main";
 import logService from "./logService";
+import supabaseService from "./supabaseService";
+
+export const MAPS_PROXY_FUNCTION = "maps-proxy";
+export const MAPS_PROXY_TIMEOUT_MS = 8000;
+
+/** Thrown when the proxy cannot answer (signed out, offline, rate limited). */
+export class AddressLookupUnavailableError extends Error {
+  constructor(public readonly reason: string) {
+    super(`Address lookup unavailable: ${reason}`);
+    this.name = "AddressLookupUnavailableError";
+  }
+}
 
 /**
  * Address suggestion from autocomplete
@@ -66,164 +81,226 @@ interface ParsedAddressComponents {
   country_short?: string;
 }
 
+/** Trimmed Google result as returned by the proxy for details/geocode. */
+interface ProxyPlaceResult {
+  formatted_address?: string;
+  address_components?: GoogleAddressComponent[];
+  geometry?: { location?: { lat?: number; lng?: number } | null };
+  place_id?: string;
+}
+
+interface ProxyPrediction {
+  place_id?: string;
+  description?: string;
+  structured_formatting?: { main_text?: string; secondary_text?: string };
+}
+
+interface ProxyResponse {
+  status?: string;
+  predictions?: ProxyPrediction[];
+  result?: ProxyPlaceResult | null;
+  results?: ProxyPlaceResult[];
+}
+
+type ProxyBody =
+  | { op: "autocomplete"; input: string; sessiontoken?: string }
+  | { op: "details"; place_id: string; sessiontoken?: string }
+  | { op: "geocode"; address: string };
+
+async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new AddressLookupUnavailableError("timeout")), ms);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** HTTP status carried by a supabase-js FunctionsHttpError, if any. */
+function httpStatusOf(error: unknown): number | null {
+  const ctx = (error as { context?: { status?: unknown } } | null)?.context;
+  return typeof ctx?.status === "number" ? ctx.status : null;
+}
+
 class AddressVerificationService {
-  private apiKey: string | null = null;
-  private readonly baseUrl = "https://maps.googleapis.com/maps/api";
+  /**
+   * Kept for the `address:initialize` IPC contract. There is no key to load any
+   * more; lookups need only a signed-in Supabase session, checked per call.
+   */
+  initialize(): boolean {
+    logService.debug("[AddressVerification] Using maps-proxy", "AddressVerification");
+    return true;
+  }
 
   /**
-   * Initialize with API key from environment or config
+   * Call the maps-proxy Edge Function as the signed-in user.
+   * @throws AddressLookupUnavailableError when signed out, offline, rate
+   *         limited, or the proxy fails. Never logs the address text.
    */
-  initialize(apiKey?: string): boolean {
-    this.apiKey = apiKey || process.env.GOOGLE_MAPS_API_KEY || null;
-
-    if (!this.apiKey) {
-      logService.warn("[AddressVerification] No Google Maps API key configured", "AddressVerification");
-      Sentry.captureMessage("Google Maps API key missing — address autocomplete disabled", {
-        level: "warning",
-        tags: { service: "address-verification", issue: "missing-api-key" },
-      });
-      return false;
+  private async callProxy(body: ProxyBody): Promise<ProxyResponse> {
+    let client;
+    try {
+      client = supabaseService.getClient();
+    } catch {
+      throw new AddressLookupUnavailableError("not_configured");
     }
 
-    logService.debug("[AddressVerification] Initialized with API key", "AddressVerification");
-    return true;
+    let hasSession = false;
+    try {
+      const { data } = await client.auth.getSession();
+      hasSession = !!data?.session?.access_token;
+    } catch {
+      hasSession = false;
+    }
+    if (!hasSession) {
+      throw new AddressLookupUnavailableError("signed_out");
+    }
+
+    let result: { data: unknown; error: unknown };
+    try {
+      result = await withTimeout(
+        client.functions.invoke(MAPS_PROXY_FUNCTION, { body }),
+        MAPS_PROXY_TIMEOUT_MS,
+      );
+    } catch (error) {
+      const reason = error instanceof AddressLookupUnavailableError ? error.reason : "network";
+      logService.info("[AddressVerification] Proxy unavailable", "AddressVerification", { op: body.op, reason });
+      throw new AddressLookupUnavailableError(reason);
+    }
+
+    if (result.error) {
+      const status = httpStatusOf(result.error);
+      const reason =
+        status === 401 ? "signed_out" : status === 429 ? "rate_limited" : status ? `http_${status}` : "network";
+      logService.info("[AddressVerification] Proxy unavailable", "AddressVerification", { op: body.op, reason });
+      throw new AddressLookupUnavailableError(reason);
+    }
+
+    return (result.data ?? {}) as ProxyResponse;
   }
 
   /**
    * Get address autocomplete suggestions
    * @param input - Partial address input
    * @param sessionToken - Session token for billing optimization
-   * @returns Array of address suggestions
+   * @returns Array of address suggestions; empty when lookups are unavailable
    */
   async getAddressSuggestions(
     input: string,
     sessionToken: string | null = null,
   ): Promise<AddressSuggestion[]> {
-    if (!this.apiKey) {
-      throw new Error("Google Maps API key not configured");
-    }
-
     if (!input || input.length < 3) {
       return [];
     }
 
+    let data: ProxyResponse;
     try {
-      const url = `${this.baseUrl}/place/autocomplete/json`;
-      const params: any = {
-        input: input,
-        key: this.apiKey,
-        types: "address",
-        components: "country:us", // Restrict to US addresses (change as needed)
-      };
-
-      if (sessionToken) {
-        params.sessiontoken = sessionToken;
-      }
-
-      logService.debug("[AddressVerification] Fetching suggestions for:", "AddressVerification", { input });
-
-      const response = await axios.get(url, { params });
-
-      if (
-        response.data.status !== "OK" &&
-        response.data.status !== "ZERO_RESULTS"
-      ) {
-        logService.error(
-          "[AddressVerification] API error:",
-          "AddressVerification",
-          { status: response.data.status, errorMessage: response.data.error_message },
-        );
-        throw new Error(`Google Places API error: ${response.data.status}`);
-      }
-
-      // Transform predictions to our format
-      const suggestions = (response.data.predictions || []).map(
-        (prediction: any) => ({
-          place_id: prediction.place_id,
-          formatted_address: prediction.description,
-          main_text: prediction.structured_formatting?.main_text || "",
-          secondary_text:
-            prediction.structured_formatting?.secondary_text || "",
-        }),
+      data = await this.callProxy(
+        sessionToken
+          ? { op: "autocomplete", input, sessiontoken: sessionToken }
+          : { op: "autocomplete", input },
       );
-
-      logService.debug(
-        `[AddressVerification] Found ${suggestions.length} suggestions`,
-        "AddressVerification",
-      );
-
-      return suggestions;
     } catch (error) {
-      logService.error(
-        "[AddressVerification] Failed to fetch suggestions:",
-        "AddressVerification",
-        { error: (error as Error).message },
-      );
+      if (error instanceof AddressLookupUnavailableError) {
+        // Degraded: no suggestions, the user keeps typing the address by hand.
+        return [];
+      }
       throw error;
     }
+
+    if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+      logService.error("[AddressVerification] API error:", "AddressVerification", { status: data.status });
+      throw new Error(`Google Places API error: ${data.status}`);
+    }
+
+    const suggestions = (data.predictions || []).map((prediction) => ({
+      place_id: prediction.place_id || "",
+      formatted_address: prediction.description || "",
+      main_text: prediction.structured_formatting?.main_text || "",
+      secondary_text: prediction.structured_formatting?.secondary_text || "",
+    }));
+
+    logService.debug(
+      `[AddressVerification] Found ${suggestions.length} suggestions`,
+      "AddressVerification",
+    );
+
+    return suggestions;
   }
 
   /**
    * Get detailed address information for a place ID
    * @param placeId - Google Place ID
    * @returns Detailed address object
+   * @throws AddressLookupUnavailableError when lookups are unavailable
    */
   async getAddressDetails(placeId: string): Promise<AddressDetails> {
-    if (!this.apiKey) {
-      throw new Error("Google Maps API key not configured");
+    const data = await this.callProxy({ op: "details", place_id: placeId });
+
+    if (data.status !== "OK" || !data.result) {
+      logService.error("[AddressVerification] API error:", "AddressVerification", { status: data.status });
+      throw new Error(`Google Places API error: ${data.status}`);
     }
 
+    return this._toAddressDetails(data.result, placeId);
+  }
+
+  /**
+   * Geocode an address string to coordinates
+   * @param address - Full address string
+   * @returns Geocoded address with coordinates
+   * @throws AddressLookupUnavailableError when lookups are unavailable
+   */
+  async geocodeAddress(address: string): Promise<AddressDetails> {
+    const data = await this.callProxy({ op: "geocode", address });
+
+    const result = data.results?.[0];
+    if (data.status !== "OK" || !result) {
+      logService.error("[AddressVerification] Geocoding error:", "AddressVerification", { status: data.status });
+      throw new Error(`Geocoding failed: ${data.status}`);
+    }
+
+    return this._toAddressDetails(result, result.place_id || "");
+  }
+
+  /**
+   * Validate if an address exists and is complete
+   * @param address - Address string to validate
+   * @returns True if address is valid
+   */
+  async validateAddress(address: string): Promise<boolean> {
     try {
-      const url = `${this.baseUrl}/place/details/json`;
-      const params = {
-        place_id: placeId,
-        key: this.apiKey,
-        fields: "address_components,formatted_address,geometry",
-      };
-
-      logService.debug("[AddressVerification] Fetching details for place:", "AddressVerification", { placeId });
-
-      const response = await axios.get(url, { params });
-
-      if (response.data.status !== "OK") {
-        logService.error("[AddressVerification] API error:", "AddressVerification", { status: response.data.status });
-        throw new Error(`Google Places API error: ${response.data.status}`);
-      }
-
-      const result = response.data.result;
-
-      // Parse address components
-      const addressComponents = this._parseAddressComponents(
-        result.address_components,
-      );
-
-      return {
-        formatted_address: result.formatted_address,
-        street_number: addressComponents.street_number,
-        route: addressComponents.route,
-        street:
-          `${addressComponents.street_number || ""} ${addressComponents.route || ""}`.trim(),
-        city:
-          addressComponents.locality ||
-          addressComponents.administrative_area_level_2,
-        state: addressComponents.administrative_area_level_1,
-        state_short: addressComponents.administrative_area_level_1_short,
-        zip: addressComponents.postal_code,
-        country: addressComponents.country,
-        coordinates: {
-          lat: result.geometry?.location?.lat,
-          lng: result.geometry?.location?.lng,
-        },
-        place_id: placeId,
-      };
-    } catch (error) {
-      logService.error(
-        "[AddressVerification] Failed to fetch address details:",
-        "AddressVerification",
-        { error: (error as Error).message },
-      );
-      throw error;
+      const result = await this.geocodeAddress(address);
+      return !!(result.street && result.city && result.state && result.zip);
+    } catch {
+      return false;
     }
+  }
+
+  private _toAddressDetails(result: ProxyPlaceResult, placeId: string): AddressDetails {
+    const addressComponents = this._parseAddressComponents(result.address_components || []);
+    return {
+      formatted_address: result.formatted_address || "",
+      street_number: addressComponents.street_number,
+      route: addressComponents.route,
+      street:
+        `${addressComponents.street_number || ""} ${addressComponents.route || ""}`.trim(),
+      city:
+        addressComponents.locality ||
+        addressComponents.administrative_area_level_2,
+      state: addressComponents.administrative_area_level_1,
+      state_short: addressComponents.administrative_area_level_1_short,
+      zip: addressComponents.postal_code,
+      country: addressComponents.country,
+      coordinates: {
+        lat: result.geometry?.location?.lat as number,
+        lng: result.geometry?.location?.lng as number,
+      },
+      place_id: placeId,
+    };
   }
 
   /**
@@ -264,84 +341,6 @@ class AddressVerificationService {
     });
 
     return parsed;
-  }
-
-  /**
-   * Geocode an address string to coordinates
-   * @param address - Full address string
-   * @returns Geocoded address with coordinates
-   */
-  async geocodeAddress(address: string): Promise<AddressDetails> {
-    if (!this.apiKey) {
-      throw new Error("Google Maps API key not configured");
-    }
-
-    try {
-      const url = `${this.baseUrl}/geocode/json`;
-      const params = {
-        address: address,
-        key: this.apiKey,
-      };
-
-      logService.debug("[AddressVerification] Geocoding address:", "AddressVerification", { address });
-
-      const response = await axios.get(url, { params });
-
-      if (response.data.status !== "OK") {
-        logService.error(
-          "[AddressVerification] Geocoding error:",
-          "AddressVerification",
-          { status: response.data.status },
-        );
-        throw new Error(`Geocoding failed: ${response.data.status}`);
-      }
-
-      const result = response.data.results[0];
-      const addressComponents = this._parseAddressComponents(
-        result.address_components,
-      );
-
-      return {
-        formatted_address: result.formatted_address,
-        street_number: addressComponents.street_number,
-        route: addressComponents.route,
-        street:
-          `${addressComponents.street_number || ""} ${addressComponents.route || ""}`.trim(),
-        city:
-          addressComponents.locality ||
-          addressComponents.administrative_area_level_2,
-        state: addressComponents.administrative_area_level_1,
-        state_short: addressComponents.administrative_area_level_1_short,
-        zip: addressComponents.postal_code,
-        country: addressComponents.country,
-        coordinates: {
-          lat: result.geometry?.location?.lat,
-          lng: result.geometry?.location?.lng,
-        },
-        place_id: result.place_id,
-      };
-    } catch (error) {
-      logService.error(
-        "[AddressVerification] Geocoding failed:",
-        "AddressVerification",
-        { error: (error as Error).message },
-      );
-      throw error;
-    }
-  }
-
-  /**
-   * Validate if an address exists and is complete
-   * @param address - Address string to validate
-   * @returns True if address is valid
-   */
-  async validateAddress(address: string): Promise<boolean> {
-    try {
-      const result = await this.geocodeAddress(address);
-      return !!(result.street && result.city && result.state && result.zip);
-    } catch {
-      return false;
-    }
   }
 }
 

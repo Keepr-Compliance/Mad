@@ -135,6 +135,34 @@ export function TroubleshootingSettings(): React.ReactElement {
     }
   }, [activeMode, reason, otherReason, showFailure]);
 
+  // BACKLOG-3819: logs are encrypted at rest; this saves a readable,
+  // redacted copy for support.
+  const [savingLog, setSavingLog] = useState<boolean>(false);
+  const handleSaveDiagnosticLog = useCallback(async (): Promise<void> => {
+    setSavingLog(true);
+    try {
+      const result = await systemService.saveDiagnosticLog();
+      if (!result.success) {
+        notify.error(result.error ?? "Could not save the diagnostic log.");
+        return;
+      }
+      if (result.data?.canceled) return;
+      const unreadable = result.data?.unreadable ?? [];
+      if (unreadable.length > 0) {
+        notify.warning(
+          `Diagnostic log saved. ${unreadable.length} older log file(s) could not be decrypted on this computer.`,
+        );
+      } else {
+        notify.success("Diagnostic log saved.");
+      }
+    } catch (err) {
+      logger.error("[Troubleshooting] saveDiagnosticLog threw:", err);
+      notify.error("Could not save the diagnostic log.");
+    } finally {
+      setSavingLog(false);
+    }
+  }, [notify]);
+
   const uninstallConfirmSatisfied = useMemo(
     () => confirmWord === UNINSTALL_CONFIRM_WORD,
     [confirmWord],
@@ -150,6 +178,24 @@ export function TroubleshootingSettings(): React.ReactElement {
         Troubleshooting
       </h3>
       <div className="space-y-3">
+        {/* Save diagnostic log (BACKLOG-3819) */}
+        <button
+          type="button"
+          data-testid="troubleshooting-save-diagnostic-log"
+          onClick={() => void handleSaveDiagnosticLog()}
+          disabled={savingLog}
+          className="w-full text-left p-4 bg-gray-50 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors disabled:opacity-60"
+        >
+          <h4 className="text-sm font-medium text-gray-900">
+            {savingLog ? "Saving diagnostic log…" : "Save diagnostic log…"}
+          </h4>
+          <p className="text-xs text-gray-600 mt-1">
+            Keepr&apos;s log is stored encrypted on this device. This saves a
+            readable copy, with email addresses and phone numbers removed, to a
+            file you choose — send that file to support.
+          </p>
+        </button>
+
         {/* Reset app data */}
         <button
           type="button"

@@ -37,6 +37,8 @@ import { getRcsCacheRun } from "./db/rcsCacheRunsDbService";
 import { getChatCoverage, linkedChatHashes } from "./db/rcsChatCoverageDbService";
 import permissionService from "./permissionService";
 import logService from "./logService";
+import { isPoolReady, queryContacts } from "../workers/contactWorkerPool";
+import type { SourceFloorRow } from "./db/wizardMessageScansDb";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
 // BACKLOG-2562: the ONE definition of "is this deal live?" (see the call site).
 import { isLiveTransactionStatus } from "./transactionEligibility";
@@ -69,46 +71,80 @@ export const COVERAGE_TOLERANCE_MS = 24 * 60 * 60 * 1000;
  */
 export function getSourceCoverage(userId: string): SourceCoverage[] {
   try {
-    const floors = new Map<string, { floor: string | null; n: number }>();
-    for (const r of dbAll<{ source: string; floor: string | null; n: number }>(MESSAGES_FLOOR_BY_SOURCE_SQL, [userId])) {
-      floors.set(r.source, { floor: r.floor, n: r.n });
-    }
-    const recorded = new Map<string, { coveredSince: string | null; lastSyncAt: string | null }>();
-    for (const r of dbAll<{ source: string; coveredSince: string | null; lastSyncAt: string | null }>(SOURCE_COVERAGE_ROWS_SQL, [userId])) {
-      recorded.set(r.source, { coveredSince: r.coveredSince, lastSyncAt: r.lastSyncAt });
-    }
-    const deepestMac = getDeepestImportStart(userId);
-    const out: SourceCoverage[] = [];
-    for (const source of TEXT_SOURCES) {
-      const f = floors.get(source);
-      const rec = recorded.get(source);
-      const hasRows = !!f && f.n > 0;
-      if (!hasRows && !rec && !(source === "mac" && deepestMac)) continue;
-      let coveredSince: string | null;
-      let approximate: boolean;
-      let incompleteChats: number | undefined;
-      if (source === "google_messages") {
-        coveredSince = rec?.coveredSince ?? null;
-        approximate = false;
-        // L2: the gap is not hidden — the last full run's not-settled chats.
-        const run = getRcsCacheRun(userId);
-        incompleteChats = run && run.reachedFloor ? run.notSettledChats : 0;
-      } else if (source === "mac") {
-        coveredSince = deepestMac ?? rec?.coveredSince ?? f?.floor ?? null;
-        approximate = !deepestMac && !rec?.coveredSince;
-      } else {
-        coveredSince = rec?.coveredSince ?? f?.floor ?? null;
-        approximate = !rec?.coveredSince;
-      }
-      out.push({ source, coveredSince, lastSyncAt: rec?.lastSyncAt ?? null, approximate, hasRows, ...(incompleteChats ? { incompleteChats } : {}) });
-    }
-    return out;
+    return buildSourceCoverage(userId, dbAll<SourceFloorRow>(MESSAGES_FLOOR_BY_SOURCE_SQL, [userId]));
   } catch (error) {
     logService.warn("[BACKLOG-3663] getSourceCoverage failed (non-fatal)", "AuditCoverage", {
       error: error instanceof Error ? error.message : String(error),
     });
     return [];
   }
+}
+
+/**
+ * BACKLOG-3837 — `getSourceCoverage` with the per-source floor read
+ * (MESSAGES_FLOOR_BY_SOURCE_SQL: json_extract over EVERY text row of the user)
+ * on the contact query worker. It ran on the main thread on every "Continue" in
+ * step 1 of a new transaction, and logged nothing. Pool down, or the worker read
+ * failing: the synchronous read, same answer. Never throws.
+ */
+export async function getSourceCoverageAsync(userId: string): Promise<SourceCoverage[]> {
+  if (!isPoolReady()) return getSourceCoverage(userId);
+  const startedAt = Date.now();
+  let floorRows: SourceFloorRow[];
+  try {
+    floorRows = (await queryContacts("sourceCoverageFloors", userId)) as SourceFloorRow[];
+  } catch (error) {
+    logService.warn("[BACKLOG-3837] source floors on the worker failed; reading on main", "AuditCoverage", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return getSourceCoverage(userId);
+  }
+  logService.info(`[BACKLOG-3837] source coverage floors read on the worker in ${Date.now() - startedAt}ms`, "AuditCoverage");
+  try {
+    return buildSourceCoverage(userId, floorRows);
+  } catch (error) {
+    logService.warn("[BACKLOG-3663] getSourceCoverage failed (non-fatal)", "AuditCoverage", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
+
+function buildSourceCoverage(userId: string, floorRows: readonly SourceFloorRow[]): SourceCoverage[] {
+  const floors = new Map<string, { floor: string | null; n: number }>();
+  for (const r of floorRows) {
+    floors.set(r.source, { floor: r.floor, n: r.n });
+  }
+  const recorded = new Map<string, { coveredSince: string | null; lastSyncAt: string | null }>();
+  for (const r of dbAll<{ source: string; coveredSince: string | null; lastSyncAt: string | null }>(SOURCE_COVERAGE_ROWS_SQL, [userId])) {
+    recorded.set(r.source, { coveredSince: r.coveredSince, lastSyncAt: r.lastSyncAt });
+  }
+  const deepestMac = getDeepestImportStart(userId);
+  const out: SourceCoverage[] = [];
+  for (const source of TEXT_SOURCES) {
+    const f = floors.get(source);
+    const rec = recorded.get(source);
+    const hasRows = !!f && f.n > 0;
+    if (!hasRows && !rec && !(source === "mac" && deepestMac)) continue;
+    let coveredSince: string | null;
+    let approximate: boolean;
+    let incompleteChats: number | undefined;
+    if (source === "google_messages") {
+      coveredSince = rec?.coveredSince ?? null;
+      approximate = false;
+      // L2: the gap is not hidden — the last full run's not-settled chats.
+      const run = getRcsCacheRun(userId);
+      incompleteChats = run && run.reachedFloor ? run.notSettledChats : 0;
+    } else if (source === "mac") {
+      coveredSince = deepestMac ?? rec?.coveredSince ?? f?.floor ?? null;
+      approximate = !deepestMac && !rec?.coveredSince;
+    } else {
+      coveredSince = rec?.coveredSince ?? f?.floor ?? null;
+      approximate = !rec?.coveredSince;
+    }
+    out.push({ source, coveredSince, lastSyncAt: rec?.lastSyncAt ?? null, approximate, hasRows, ...(incompleteChats ? { incompleteChats } : {}) });
+  }
+  return out;
 }
 
 /**
@@ -311,6 +347,8 @@ export async function getAuditCoverage(
     const messagesFloorISO = getMessagesFloorISO(userId);
     const email = getEmailFloor(userId);
     const messagesImporterAvailable = await isMessagesImporterAvailable();
+    // BACKLOG-3837: the per-source floors are read on the contact query worker.
+    const sourceCoverage = await getSourceCoverageAsync(userId);
 
     const needsMessagesImport = isBeforeFloor(proposedStartISO, messagesFloorISO);
     const needsEmailBackfill =
@@ -324,7 +362,7 @@ export async function getAuditCoverage(
       needsEmailBackfill,
       expansionStale: isExpansionStale(userId),
       messagesImporterAvailable,
-      sourceGaps: sourceCoverageGaps(getSourceCoverage(userId), proposedStartISO, null),
+      sourceGaps: sourceCoverageGaps(sourceCoverage, proposedStartISO, null),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

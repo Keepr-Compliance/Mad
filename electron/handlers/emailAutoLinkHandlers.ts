@@ -127,6 +127,7 @@ export function registerEmailAutoLinkHandlers(): void {
       for (const assignment of contactAssignments) {
         try {
           const result = await autoLinkCommunicationsForContact({
+            caller: "manualLink",
             contactId: assignment.contact_id,
             transactionId: validatedTransactionId,
           });
@@ -264,6 +265,7 @@ export function registerEmailAutoLinkHandlers(): void {
       for (const assignment of contactAssignments) {
         try {
           const result = await autoLinkCommunicationsForContact({
+            caller: "manualLink",
             contactId: assignment.contact_id,
             transactionId: validatedTransactionId,
           });
