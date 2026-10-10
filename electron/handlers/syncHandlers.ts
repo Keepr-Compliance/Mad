@@ -648,10 +648,6 @@ function setupEventForwarding(): void {
           sendToMainWindow("sync:storage-error", {
             error: "Sync cancelled — partial data has been cleaned up.",
           });
-          // Still cleanup backup
-          if (result.needsCleanup && result.backupPath && orchestrator) {
-            await orchestrator.cleanupBackup(result.backupPath);
-          }
           return false;
         }
 
@@ -661,9 +657,6 @@ function setupEventForwarding(): void {
           log.error("[SyncHandlers] Attachments not saved: file-data key unavailable");
           syncTimeline.endSync("error");
           sendToMainWindow("sync:storage-error", { error: persistResult.error });
-          if (result.needsCleanup && result.backupPath && orchestrator) {
-            await orchestrator.cleanupBackup(result.backupPath);
-          }
           return false;
         }
 
@@ -677,10 +670,6 @@ function setupEventForwarding(): void {
           duration: persistResult.duration,
         });
 
-        // SPRINT-068: Cleanup backup after persistence is complete
-        if (result.needsCleanup && result.backupPath && orchestrator) {
-          await orchestrator.cleanupBackup(result.backupPath);
-        }
 
         // BACKLOG-2898/2894: the counts each persistence phase produced, read
         // from the SAME persistResult the UI reports, so the timeline and the
@@ -778,10 +767,6 @@ function setupEventForwarding(): void {
         sendToMainWindow("sync:storage-error", {
           error: error instanceof Error ? error.message : "Failed to save messages",
         });
-        // SPRINT-068: Still cleanup backup even if persistence fails
-        if (result.needsCleanup && result.backupPath && orchestrator) {
-          await orchestrator.cleanupBackup(result.backupPath);
-        }
       }
     } else if (!userIdForPersistence) {
       // BACKLOG-1630: This should never be reached now that sync:start blocks without a user ID,
