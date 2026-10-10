@@ -670,9 +670,18 @@ export class BackupAtRest extends EventEmitter {
    * followed (a backup never contains one). Orphaned *.kenc-tmp files — a killed seal
    * leaves ciphertext, a killed unseal leaves PLAINTEXT — are deleted here.
    */
-  private async listFiles(chainDir: string, report: PassReport | null): Promise<ListedFile[]> {
+  private async listFiles(chainDir: string, report: PassReport | null, pause?: Int32Array): Promise<ListedFile[] | null> {
     const out: ListedFile[] = [];
+    // PC final check 2026-10-10: listing ~576k files (one lstat each) took minutes on the
+    // PC, and a sync asking for the phone waited for all of it ("Getting your saved iPhone
+    // backup ready…" for 2.5 min) — the pause flag was only read once the pass started.
+    // It is read before every directory now; null = paused while listing.
+    let paused = false;
     const walk = async (dir: string, atRoot: boolean): Promise<void> => {
+      if (paused || (pause && Atomics.load(pause, 0) === 1)) {
+        paused = true;
+        return;
+      }
       let entries: fs.Dirent[];
       try {
         entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -715,7 +724,7 @@ export class BackupAtRest extends EventEmitter {
       for (const sub of subdirs) await walk(sub, false);
     };
     await walk(chainDir, true);
-    return out;
+    return paused ? null : out;
   }
 
   /** Magic first (one open for the common plaintext case), structural probe only on a magic hit. */
@@ -785,7 +794,13 @@ export class BackupAtRest extends EventEmitter {
     const report = emptyReport();
     // Newest first: what the last sync wrote (and the index files it unsealed) is sealed
     // within seconds, before the walk over the unchanged rest of the chain.
-    const listed = (await this.listFiles(chain, report)).sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
+    const listing = await this.listFiles(chain, report, pause);
+    if (listing === null) {
+      report.paused = true;
+      report.ms = Date.now() - started;
+      return report;
+    }
+    const listed = listing.sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
     report.files = listed.length;
     const largest = listed.reduce((m, f) => Math.max(m, f.size), 0);
     if (!(await this.diskOk(chain, largest))) {
@@ -973,7 +988,7 @@ export class BackupAtRest extends EventEmitter {
         }
       }
     } else {
-      listed = await this.listFiles(chain, report);
+      listed = (await this.listFiles(chain, report)) ?? [];
     }
     report.files = listed.length;
     const largest = listed.reduce((m, f) => Math.max(m, f.size), 0);
@@ -1034,7 +1049,12 @@ export class BackupAtRest extends EventEmitter {
     };
     if (report.failed > 0 || !report.seen) return result;
     const seen = report.seen;
-    const unseen = (await this.listFiles(this.chainDir(udid), null)).filter((f) => !seen.has(f.path));
+    const listing = await this.listFiles(this.chainDir(udid), null, this.pausable.get(udid));
+    if (listing === null) {
+      result.paused = true;
+      return result;
+    }
+    const unseen = listing.filter((f) => !seen.has(f.path));
     if (unseen.length === 0) return result;
     const noKey: AtRestKey = { keyId: "0".repeat(32), key: Buffer.alloc(32) };
     const pass = await this.pass(unseen, "classify", noKey, this.pausable.get(udid));
@@ -1056,7 +1076,11 @@ export class BackupAtRest extends EventEmitter {
 
   private async scanAt(dir: string, pause?: Int32Array): Promise<ScanReport> {
     const result: ScanReport = { sealed: 0, plaintext: 0, empty: 0, damaged: 0 };
-    const listed = await this.listFiles(dir, null);
+    const listed = await this.listFiles(dir, null, pause);
+    if (listed === null) {
+      result.paused = true;
+      return result;
+    }
     if (listed.length === 0) return result;
     // Classification needs no key; the workers are started with an empty one.
     const noKey: AtRestKey = { keyId: "0".repeat(32), key: Buffer.alloc(32) };
@@ -1801,7 +1825,18 @@ export class BackupAtRest extends EventEmitter {
       // A chain a sync or a crash left part plain is RESEALED (`sealing`); a pre-2.40 chain
       // is MIGRATED (`migrating`).
       const recovery = marker === "syncing" || marker === "sealing" || marker === "unreadable";
-      return await this.sealAndRecord(udid, "migrating", onProgress, recovery ? "sealing" : "migrating");
+      if (!recovery) return await this.sealAndRecord(udid, "migrating", onProgress, "migrating");
+      // PC final check 2026-10-10: a recovery after an interrupted sync is a seal, not the
+      // one-time migration, and must not restart the line at 0% over the whole chain. The
+      // estimate is what the interrupted sync wrote (since its `syncing` marker); when that
+      // time is not known (a seal was cut off) nothing is estimated, so the line reads
+      // "finishing up" while the walk checks the chain.
+      if (!this.syncUnsealedAt.has(udid)) {
+        const record = await this.deps.markers().readBackupMarker(udid).catch(() => null);
+        const unsealedAt = record?.state === "syncing" ? Date.parse(record.updatedAt) : NaN;
+        this.syncUnsealedAt.set(udid, Number.isFinite(unsealedAt) ? unsealedAt : Number.POSITIVE_INFINITY);
+      }
+      return await this.sealAndRecord(udid, "sealing", onProgress, "sealing");
     } finally {
       this.release(udid);
     }
