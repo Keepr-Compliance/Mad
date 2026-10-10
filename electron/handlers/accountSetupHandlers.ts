@@ -24,6 +24,12 @@ export interface GetAccountSetupResult {
   setup: AccountSetup;
   emailStepAnswered: boolean;
   contactSourceAnswered: boolean;
+  /**
+   * BACKLOG-3888: the mailbox providers this account has ever connected
+   * (`preferences.emailProviders`), read from the same bag under the same
+   * timeout. Absent when the bag could not be read.
+   */
+  emailProviders?: string[];
   error?: string;
 }
 
@@ -120,11 +126,17 @@ export async function getAccountSetup(): Promise<GetAccountSetupResult> {
     const contactSources = (preferences as { contactSources?: { direct?: unknown } } | undefined)
       ?.contactSources;
 
+    const recordedProviders = (preferences as { emailProviders?: unknown } | undefined)
+      ?.emailProviders;
+
     return {
       success: true,
       setup,
       emailStepAnswered: Boolean(record.emailOnboardingCompletedAt),
       contactSourceAnswered: Boolean(contactSources?.direct),
+      emailProviders: Array.isArray(recordedProviders)
+        ? recordedProviders.filter((v): v is string => typeof v === "string" && v.length > 0)
+        : [],
     };
   } catch (error) {
     const cached = await readCachedFinishedAt();

@@ -21,6 +21,7 @@ import sessionService from "../services/sessionService";
 import { provisionLogin } from "../services/loginProvisioningService";
 import rateLimitService from "../services/rateLimitService";
 import auditService from "../services/auditService";
+import { recordEmailProvider } from "../services/emailProviderRecord";
 import logService from "../services/logService";
 import { importEnabledEmptyContactSources } from "../services/postConnectContactImport";
 import { setSyncUserId } from "./syncHandlers";
@@ -641,6 +642,10 @@ export async function handleMicrosoftConnectMailbox(
           metadata: { provider: "microsoft", email: userInfo.email },
           success: true,
         });
+
+        // BACKLOG-3888: remember that this account chose this mailbox provider
+        // (cloud preferences.emailProviders). Never blocks or fails the connect.
+        void recordEmailProvider(validatedUserId, "microsoft");
 
         // BACKLOG-3394: bring the app forward OURSELVES — see the matching
         // comment in googleAuthHandlers.ts, including why the focus ordering is

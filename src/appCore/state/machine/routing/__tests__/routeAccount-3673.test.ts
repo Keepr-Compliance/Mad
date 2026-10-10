@@ -38,7 +38,12 @@ describe("C1 — readAccountSetup (IPC result -> routing input)", () => {
         emailStepAnswered: true,
         contactSourceAnswered: true,
       }),
-    ).toEqual({ setup: "finished", emailStepAnswered: true, contactSourceAnswered: true });
+    ).toEqual({
+      setup: "finished",
+      emailStepAnswered: true,
+      contactSourceAnswered: true,
+      hasRecordedEmailProvider: false,
+    });
   });
 
   it.each([
@@ -52,6 +57,7 @@ describe("C1 — readAccountSetup (IPC result -> routing input)", () => {
       setup: "unknown",
       emailStepAnswered: false,
       contactSourceAnswered: false,
+      hasRecordedEmailProvider: false,
     });
   });
 
@@ -63,6 +69,25 @@ describe("C1 — readAccountSetup (IPC result -> routing input)", () => {
         emailStepAnswered: "true",
         contactSourceAnswered: 1,
       }),
-    ).toEqual({ setup: "not-finished", emailStepAnswered: false, contactSourceAnswered: false });
+    ).toEqual({
+      setup: "not-finished",
+      emailStepAnswered: false,
+      contactSourceAnswered: false,
+      hasRecordedEmailProvider: false,
+    });
+  });
+});
+
+describe("BACKLOG-3888 — readAccountSetup carries the recorded mailbox providers", () => {
+  const base = { success: true, setup: "finished", emailStepAnswered: true, contactSourceAnswered: true };
+  it.each<[string, unknown, boolean]>([
+    ["one provider", ["outlook"], true],
+    ["two providers", ["outlook", "gmail"], true],
+    ["empty set", [], false],
+    ["only empty strings", [""], false],
+    ["not an array", "outlook", false],
+    ["absent (timeout / cache path)", undefined, false],
+  ])("%s -> %s", (_name, emailProviders, expected) => {
+    expect(readAccountSetup({ ...base, emailProviders }).hasRecordedEmailProvider).toBe(expected);
   });
 });
