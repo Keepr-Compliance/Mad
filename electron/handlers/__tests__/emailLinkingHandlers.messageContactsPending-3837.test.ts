@@ -41,6 +41,9 @@ jest.mock("../../services/db/communicationDbService", () => ({
 jest.mock("../../services/db/messageDerivedContactsCache", () => ({
   joinMessageDerivedRead: jest.fn(() => Promise.resolve([])),
 }));
+jest.mock("../../services/db/messageRosterCache", () => ({
+  joinMessageRosterRead: jest.fn(() => Promise.resolve([])),
+}));
 jest.mock("../../windowRegistry", () => ({ sendToMainWindow: jest.fn(() => true) }));
 
 import transactionService from "../../services/transactionService";
@@ -73,6 +76,7 @@ describe("BACKLOG-3837: get-message-contacts pending state", () => {
     jest.mocked(transactionService.getMessageContactsWithStatus).mockResolvedValue({
       contacts: ROSTER,
       messageDerivedPending: true,
+      rosterPending: false,
     });
     const r = await call(USER);
     expect(r.success).toBe(true);
@@ -82,10 +86,25 @@ describe("BACKLOG-3837: get-message-contacts pending state", () => {
     expect(jest.mocked(sendToMainWindow)).toHaveBeenCalledWith("contacts:message-derived-ready", { userId: USER });
   });
 
+  it("roster pending: an EMPTY answer flagged rosterPending (never a bare empty roster); the window is told when it lands", async () => {
+    jest.mocked(transactionService.getMessageContactsWithStatus).mockResolvedValue({
+      contacts: [],
+      messageDerivedPending: false,
+      rosterPending: true,
+    });
+    const r = await call(USER);
+    expect(r.success).toBe(true);
+    expect(r.contacts).toEqual([]);
+    expect(r.contactsStatus).toEqual({ rosterPending: true });
+    await new Promise((res) => setTimeout(res, 0));
+    expect(jest.mocked(sendToMainWindow)).toHaveBeenCalledWith("contacts:message-derived-ready", { userId: USER });
+  });
+
   it("not pending: no contactsStatus, nothing sent", async () => {
     jest.mocked(transactionService.getMessageContactsWithStatus).mockResolvedValue({
       contacts: ROSTER,
       messageDerivedPending: false,
+      rosterPending: false,
     });
     const r = await call(USER);
     expect("contactsStatus" in r).toBe(false);

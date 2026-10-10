@@ -133,6 +133,23 @@ describe("BACKLOG-3837: Attach Messages while message-derived names are pending"
     await waitFor(() => expect(screen.queryByTestId("names-pending")).not.toBeInTheDocument());
   });
 
+  it("roster pending: 'Loading contacts...' (never the empty state) until the ready event brings the roster", async () => {
+    mockGetMessageContacts
+      .mockResolvedValueOnce({ success: true, contacts: [], contactsStatus: { rosterPending: true } })
+      .mockResolvedValueOnce({ success: true, contacts: [row("+14155550100", "Avery Example")] });
+    render(<AttachMessagesModal {...props} />);
+    await waitFor(() => expect(mockGetMessageContacts).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(readyListener).not.toBeNull());
+    expect(screen.getByText("Loading contacts...")).toBeInTheDocument();
+    expect(screen.queryByText("No contacts with unlinked messages")).not.toBeInTheDocument();
+    await act(async () => {
+      readyListener?.({ userId: USER });
+    });
+    await waitFor(() => expect(screen.getByText("Avery Example")).toBeInTheDocument());
+    expect(screen.queryByText("Loading contacts...")).not.toBeInTheDocument();
+    expect(readyListener).toBeNull();
+  });
+
   it("not pending: an empty roster is a real empty roster (control)", async () => {
     mockGetMessageContacts.mockResolvedValue({ success: true, contacts: [] });
     render(<AttachMessagesModal {...props} />);
