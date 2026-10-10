@@ -132,6 +132,7 @@ describe("BACKLOG-3837: the picker while message-derived people are pending", ()
       .mockResolvedValueOnce({ success: true, contacts: [fromMessages] });
     render(<Picker />);
     await waitFor(() => expect(sorted()).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(readyListener).not.toBeNull()); // the pending effect (listener + backstop) is up
     await act(async () => {
       jest.advanceTimersByTime(15_000);
     });
