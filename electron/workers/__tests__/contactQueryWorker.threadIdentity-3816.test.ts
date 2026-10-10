@@ -206,7 +206,7 @@ maybe("contact query worker: thread identity index off the main thread (BACKLOG-
   // because shutdownPool() returned before the workers had closed the file.
   it("after an awaited shutdownPool no worker is alive and the database file can be moved", async () => {
     const pending = queryOnDedicatedWorker("threadIdentity", USER, 120_000).catch((e) => e);
-    await new Promise((r) => setTimeout(r, 300)); // let the dedicated worker open the file
+    // The worker is registered synchronously and is still starting / opening the file.
     expect(getDedicatedWorkerCountForTests()).toBe(1);
     await shutdownPool();
     expect(getDedicatedWorkerCountForTests()).toBe(0);
