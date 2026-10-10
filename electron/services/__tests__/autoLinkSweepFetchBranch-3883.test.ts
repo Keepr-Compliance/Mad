@@ -64,7 +64,6 @@ const CONTACTS = ["c-ana", "c-ben", "c-cyd"];
 
 let db: DatabaseType;
 let swept: string[] = [];
-let onSweep: ((contactId: string) => void | "throw" | "aborted") | null = null;
 
 function seed(): void {
   db.exec(readFileSync(path.join(__dirname, "../../database/schema.sql"), "utf8"));
@@ -107,10 +106,6 @@ async function createDeal(): Promise<string> {
     })),
   } as unknown as Parameters<typeof transactionService.createAuditedTransaction>[1]);
   return (created as { id: string }).id;
-}
-
-function sorted(ids: string[]): string[] {
-  return [...ids].sort();
 }
 
 

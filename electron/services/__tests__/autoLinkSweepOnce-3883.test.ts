@@ -260,6 +260,7 @@ maybe("BACKLOG-3883 — one full auto-link sweep per deal per input state", () =
       // "top" row is inserted last so the row written to is not the table's MAX(rowid).
       db.prepare("INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, 'other@example.test', 'google', 'o2')").run(USER2);
       db.prepare("INSERT INTO transactions (id, user_id, property_address) VALUES ('t-spare', ?, '99 Spare Road, Testville, WA 98000')").run(USER2);
+      db.prepare("INSERT INTO transactions (id, user_id, property_address) VALUES ('t-spare-bare', ?, '98 Spare Road, Testville, WA 98000')").run(USER2); // no children: its delete cascades nothing
       db.prepare("INSERT INTO contacts (id, user_id, display_name, source) VALUES ('c-spare', ?, 'spare', 'manual')").run(USER2);
       db.prepare("INSERT INTO transaction_contacts (id, transaction_id, contact_id, role) VALUES ('tc-spare', 't-spare', 'c-spare', 'buyer')").run();
       db.prepare("INSERT INTO contacts (id, user_id, display_name, source) VALUES ('c-spare2', ?, 'spare2', 'manual')").run(USER2);
@@ -323,7 +324,7 @@ maybe("BACKLOG-3883 — one full auto-link sweep per deal per input state", () =
       },
       { trigger: "keepr_al_tc_del", op: () => run("DELETE FROM transaction_contacts WHERE id = 'tc-spare'") },
       { trigger: "keepr_al_tc_upd", op: () => run("UPDATE transaction_contacts SET removed_at = '2025-04-01T00:00:00.000Z' WHERE id = 'tc-spare'") }, // party removed / merged
-      { trigger: "keepr_al_txn_del", op: () => run("DELETE FROM transactions WHERE id = 't-spare'") },
+      { trigger: "keepr_al_txn_del", op: () => run("DELETE FROM transactions WHERE id = 't-spare-bare'") },
       {
         trigger: "keepr_al_txn_upd", // window / address change
         op: (txn) => run("UPDATE transactions SET started_at = '2024-06-01T00:00:00.000Z', property_address = '14 Probe Lane, Testville, WA 98000' WHERE id = ?", txn),
