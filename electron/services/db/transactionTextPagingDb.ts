@@ -35,6 +35,7 @@
  * then per page.
  */
 import { sql, type SafeSql } from "./core/sqlText";
+import { joinFragments } from "./core/sqlFragments";
 import { reactionExclusion } from "./reactionExclusion";
 import { dedupeLinkedCommunicationRows } from "./linkedRowDedup";
 import { isThreadlessKey, threadlessTextKey } from "./threadlessTextKey";
@@ -331,8 +332,15 @@ function sortSummaries(list: TextThreadSummary[]): TextThreadSummary[] {
 
 type PageRow = Communication & { sk: string | null; communication_id?: string };
 
+/** One link row of the page, before its full row is built: (link, message, sort key). */
+interface LightRow {
+  communication_id: string;
+  id: string;
+  sk: string | null;
+}
+
 /** Sort: sent_at DESC (NULL last), then id ASC — the order every page is cut in. */
-function cmpRows(x: PageRow, y: PageRow): number {
+function cmpRows(x: { sk: string | null; id: unknown }, y: { sk: string | null; id: unknown }): number {
   if (x.sk !== y.sk) {
     if (x.sk === null) return 1;
     if (y.sk === null) return -1;
@@ -345,13 +353,22 @@ function cmpRows(x: PageRow, y: PageRow): number {
 
 const DAY_MS = 86_400_000;
 
+/** Rows whose full columns were built, per page request (test seam for the build bound). */
+let lastPageBuiltRows = 0;
+export function lastTextPageBuiltRowsForTests(): number {
+  return lastPageBuiltRows;
+}
+
 /**
- * One page of the given conversation(s), newest first, de-duplicated per thread with
- * the full reader's rules. `limit` is capped at {@link MAX_TEXT_PAGE_ROWS}.
+ * One page of the given conversation(s), newest first, de-duplicated across the whole
+ * request with the full reader's rules. `limit` is capped at {@link MAX_TEXT_PAGE_ROWS}.
  *
- * Each thread is read on its own, through idx_messages_thread_sent (thread_id,
- * sent_at), so a page costs about a page of index entries however long the thread is;
- * a merged card's threads are merged here.
+ * Two phases. (1) Pick the page on cheap columns only — (link id, message id,
+ * sent_at). A named thread is read through idx_messages_thread_sent with ORDER/LIMIT,
+ * so a page costs about a page of index entries. A person's thread-less texts have no
+ * index to page on: ONE cheap read per request (id, participants, sent_at) is grouped
+ * per person in memory and paged there (SR). (2) Build the full row (the recipients
+ * json_each, the hidden-text EXISTS) only for the page's rows.
  */
 export function readTransactionTextPage(
   db: Db,
@@ -365,79 +382,90 @@ export function readTransactionTextPage(
   if (keys.length === 0) return { rows: [], nextCursor: null };
   const n = Math.max(1, Math.min(MAX_TEXT_PAGE_ROWS, Math.floor(Number(limit) || MAX_TEXT_PAGE_ROWS)));
   // A sargable superset of the window on sent_at (a day of slack either side covers
-  // any offset); the exact window test above it decides.
+  // any offset); the exact window test decides.
   const lo = w && w.startMs !== null ? new Date(w.startMs - DAY_MS).toISOString() : null;
   const hi = w && w.endMs !== null ? new Date(w.endMs + DAY_MS).toISOString() : null;
-
-  // Two phases in one statement: pick the page's (link, message) pairs on the cheap
-  // columns, then build the full row for those only. Building the row (the
-  // recipients json_each, the hidden-text EXISTS) for every row of a long thread
-  // before the sort made a page cost a read of the whole thread.
-  const read = (key: string, extra: SafeSql, extraParams: unknown[], orderLimit: SafeSql, tailParams: unknown[]): PageRow[] => {
-    // A person's thread-less texts: no index to page on; read them all (with the
-    // cursor predicate) and keep this person's. The caller sorts and cuts.
-    const unthreaded = isThreadlessKey(key);
-    const thread = unthreaded ? NO_THREAD : sql`m.thread_id = ?`;
-    if (unthreaded) {
-      orderLimit = sql``;
-      tailParams = [];
-    }
-    const statement = sql`
-    SELECT ${TEXT_ROW_COLUMNS}
-    FROM (
-      SELECT c.id AS pcid, m.id AS pmid, m.sent_at AS psk
-      ${LINKED_TEXTS_FROM}
-        AND ${thread}
+  const named = keys.filter((k) => !isThreadlessKey(k));
+  const people = new Set(keys.filter(isThreadlessKey));
+  const scope = sql`
         AND ${IN_WINDOW}
         AND (? IS NULL OR m.sent_at IS NULL OR m.sent_at = '' OR m.sent_at >= ?)
-        AND (? IS NULL OR m.sent_at IS NULL OR m.sent_at = '' OR m.sent_at <= ?)
-        AND ${extra}
-      ${orderLimit}
-    ) p
-    JOIN communications c ON c.id = p.pcid
-    JOIN messages m ON m.id = p.pmid
-    LEFT JOIN message_thread_names tn ON (
-      tn.thread_id = m.thread_id AND tn.user_id = m.user_id
-    )`;
-    const params = [transactionId, ...(unthreaded ? [] : [key]), ...windowParams(w), lo, lo, hi, hi, ...extraParams, ...tailParams];
-    const got = (db.prepare(statement).all(...params) as PageRow[]).map((r) => ({ ...r, sk: (r.sent_at as string | null) ?? null }));
-    return unthreaded ? got.filter((r) => threadlessTextKey(r.participants, r.id as string) === key) : got;
+        AND (? IS NULL OR m.sent_at IS NULL OR m.sent_at = '' OR m.sent_at <= ?)`;
+  const scopeParams = (): unknown[] => [...windowParams(w), lo, lo, hi, hi];
+
+  // The requested people's thread-less texts: one cheap read, grouped once.
+  let threadless: LightRow[] | null = null;
+  const threadlessRows = (): LightRow[] => {
+    if (threadless) return threadless;
+    const got = db.prepare(sql`
+      SELECT c.id AS communication_id, m.id AS id, m.sent_at AS sk, m.participants AS participants
+      ${LINKED_TEXTS_FROM}
+        AND ${NO_THREAD}
+        ${scope}`).all(transactionId, ...scopeParams()) as Array<LightRow & { participants: unknown }>;
+    threadless = got
+      .filter((r) => people.has(threadlessTextKey(r.participants, r.id)))
+      .map((r) => ({ communication_id: r.communication_id, id: r.id, sk: r.sk ?? null }))
+      .sort(cmpRows);
+    return threadless;
   };
-  const readAll = (extra: SafeSql, extraParams: unknown[], orderLimit: SafeSql, tailParams: unknown[]): PageRow[] => {
-    const out: PageRow[] = [];
-    for (const k of keys) out.push(...read(k, extra, extraParams, orderLimit, tailParams));
+
+  /**
+   * The light rows matching one predicate, in page order, at most `max` per source
+   * (null = all): the SQL form for named threads, the same test in JS for people.
+   */
+  const pick = (extra: SafeSql, extraParams: unknown[], js: (r: LightRow) => boolean, max: number | null, byId = false): LightRow[] => {
+    const out: LightRow[] = [];
+    const order = byId ? sql`ORDER BY m.id ASC` : sql`ORDER BY m.sent_at DESC, m.id ASC`;
+    for (const key of named) {
+      const statement = sql`
+      SELECT c.id AS communication_id, m.id AS id, m.sent_at AS sk
+      ${LINKED_TEXTS_FROM}
+        AND m.thread_id = ?
+        ${scope}
+        AND ${extra}
+      ${order} ${max === null ? sql`` : sql`LIMIT ?`}`;
+      const params = [transactionId, key, ...scopeParams(), ...extraParams, ...(max === null ? [] : [max])];
+      out.push(...(db.prepare(statement).all(...params) as LightRow[]).map((r) => ({ ...r, sk: r.sk ?? null })));
+    }
+    if (people.size > 0) {
+      const mine = threadlessRows().filter(js);
+      out.push(...(max === null ? mine : mine.slice(0, max)));
+    }
     return out.sort(cmpRows);
   };
-  const byIdAfter = sql`ORDER BY m.id ASC LIMIT ?`;
-  const sameIdAs = (rows: PageRow[]): PageRow[] => {
+
+  const sameIdAs = (rows: LightRow[]): LightRow[] => {
     // Never split one message id (two link rows) across pages.
     if (rows.length === 0) return rows;
     const last = rows[rows.length - 1];
-    const have = new Set(rows.filter((r) => r.id === last.id).map((r) => r.communication_id as string));
+    const have = new Set(rows.filter((r) => r.id === last.id).map((r) => r.communication_id));
     const same = last.sk === null
-      ? readAll(sql`m.sent_at IS NULL AND m.id = ?`, [last.id], sql``, [])
-      : readAll(sql`m.sent_at = ? AND m.id = ?`, [last.sk, last.id], sql``, []);
-    for (const r of same) if (!have.has(r.communication_id as string)) rows.push(r);
+      ? pick(sql`m.sent_at IS NULL AND m.id = ?`, [last.id], (r) => r.sk === null && r.id === last.id, null)
+      : pick(sql`m.sent_at = ? AND m.id = ?`, [last.sk, last.id], (r) => r.sk === last.sk && r.id === last.id, null);
+    for (const r of same) if (!have.has(r.communication_id)) rows.push(r);
     return rows;
   };
+  const done = (rows: LightRow[], next: TextPageCursor | null): TextPage => finish(build(db, rows), next);
 
   // Phase 2: rows with no sent_at, by id.
   if (cursor && cursor.sk === null) {
-    const got = readAll(sql`m.sent_at IS NULL AND (? IS NULL OR m.id > ?)`, [cursor.afterId, cursor.afterId], byIdAfter, [n + 1]);
+    const after = cursor.afterId;
+    const got = pick(sql`m.sent_at IS NULL AND (? IS NULL OR m.id > ?)`, [after, after], (r) => r.sk === null && (after === null || r.id > after), n + 1, true);
     if (got.length > n) {
       const page = sameIdAs(got.slice(0, n));
-      return finish(page, { sk: null, afterId: page[page.length - 1].id as string });
+      return done(page, { sk: null, afterId: page[page.length - 1].id });
     }
-    return finish(got, null);
+    return done(got, null);
   }
 
-  const rows: PageRow[] = [];
+  const rows: LightRow[] = [];
   // Inside an oversized same-timestamp group: continue it by id.
   if (cursor && cursor.afterId !== null) {
-    const inGroup = readAll(sql`m.sent_at = ? AND m.id > ?`, [cursor.sk, cursor.afterId], byIdAfter, [n + 1]);
+    const { sk, afterId } = cursor;
+    const inGroup = pick(sql`m.sent_at = ? AND m.id > ?`, [sk, afterId], (r) => r.sk === sk && r.id > afterId, n + 1, true);
     if (inGroup.length > n) {
       const page = sameIdAs(inGroup.slice(0, n));
-      return finish(page, { sk: cursor.sk, afterId: page[page.length - 1].id as string });
+      return done(page, { sk, afterId: page[page.length - 1].id });
     }
     rows.push(...inGroup);
   }
@@ -445,27 +473,46 @@ export function readTransactionTextPage(
   const room = n - rows.length;
   const below = cursor ? sql`m.sent_at < ?` : sql`m.sent_at IS NOT NULL`;
   const belowParams = cursor ? [cursor.sk] : [];
-  const more = readAll(below, belowParams, sql`ORDER BY m.sent_at DESC, m.id ASC LIMIT ?`, [room + 1]);
+  const cut = cursor ? (cursor.sk as string) : null;
+  const more = pick(below, belowParams, (r) => r.sk !== null && (cut === null || r.sk < cut), room + 1);
   if (more.length > room) {
     const page = more.slice(0, room);
     const lastSk = page[page.length - 1].sk as string;
     const head = page.filter((r) => r.sk !== lastSk);
-    const group = readAll(sql`m.sent_at = ?`, [lastSk], byIdAfter, [MAX_SAME_TIMESTAMP_GROUP + 1]);
+    const group = pick(sql`m.sent_at = ?`, [lastSk], (r) => r.sk === lastSk, MAX_SAME_TIMESTAMP_GROUP + 1, true);
     if (group.length <= MAX_SAME_TIMESTAMP_GROUP) {
       rows.push(...head, ...group);
-      return finish(rows, { sk: lastSk, afterId: null });
+      return done(rows, { sk: lastSk, afterId: null });
     }
     // Oversized group: keep what fits, by id, and continue by id next time.
     const tail = sameIdAs(page.filter((r) => r.sk === lastSk));
     rows.push(...head, ...tail);
-    return finish(rows, { sk: lastSk, afterId: tail[tail.length - 1].id as string });
+    return done(rows, { sk: lastSk, afterId: tail[tail.length - 1].id });
   }
   rows.push(...more);
   // Dated rows are done; rows with no sent_at (if any) come next.
-  const undated = readAll(sql`m.sent_at IS NULL`, [], sql`LIMIT 1`, []);
-  if (undated.length === 0) return finish(rows, null);
+  const undated = pick(sql`m.sent_at IS NULL`, [], (r) => r.sk === null, 1);
+  if (undated.length === 0) return done(rows, null);
   if (rows.length === 0) return readTransactionTextPage(db, transactionId, keys, w, { sk: null, afterId: null }, n);
-  return finish(rows, { sk: null, afterId: null });
+  return done(rows, { sk: null, afterId: null });
+}
+
+/** Build the full rows of the page's (link, message) pairs only, in page order. */
+function build(db: Db, rows: readonly LightRow[]): PageRow[] {
+  lastPageBuiltRows = rows.length;
+  if (rows.length === 0) return [];
+  const pairs = joinFragments(rows.map(() => sql`(?, ?)`), sql`, `);
+  const statement = sql`
+    WITH p(pcid, pmid) AS (VALUES ${pairs})
+    SELECT ${TEXT_ROW_COLUMNS}
+    FROM p
+    JOIN communications c ON c.id = p.pcid
+    JOIN messages m ON m.id = p.pmid
+    LEFT JOIN message_thread_names tn ON (
+      tn.thread_id = m.thread_id AND tn.user_id = m.user_id
+    )`;
+  const full = db.prepare(statement).all(...rows.flatMap((r) => [r.communication_id, r.id])) as PageRow[];
+  return full.map((r) => ({ ...r, sk: (r.sent_at as string | null) ?? null })).sort(cmpRows);
 }
 
 function finish(rows: PageRow[], next: TextPageCursor | null): TextPage {
