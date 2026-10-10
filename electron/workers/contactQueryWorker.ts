@@ -40,6 +40,11 @@ import {
 import { readOneToOneThreadIndexOn } from "../services/db/threadIdentityIndexDb";
 import { runThreadIdentityRequestOn, type ThreadIdentityRequest } from "../services/db/threadIdentityTargetedDb";
 import { readCandidateMessageThreadsOn } from "../services/db/autoLinkSql";
+import {
+  planCommunicationDatesOn,
+  runMessageDerivedQueryOn,
+  runSourceFloorsOn,
+} from "../services/db/wizardMessageScansDb";
 
 type QueryType =
   | "external"
@@ -48,7 +53,11 @@ type QueryType =
   | "emailDerived"
   | "threadIdentity"
   | "threadIdentityTargeted"
-  | "candidateMessageThreads";
+  | "candidateMessageThreads"
+  // BACKLOG-3837: the step-1 Continue scans (wizardMessageScansDb.ts).
+  | "messageDerived"
+  | "commDatesPlan"
+  | "sourceCoverageFloors";
 
 interface InitMessage {
   type: "init";
@@ -288,6 +297,18 @@ parentPort?.on("message", (msg: WorkerMessage) => {
         throw new Error("candidateMessageThreads needs phoneCount and its params");
       }
       rows = readCandidateMessageThreadsOn(db, phoneCount as number, params);
+    } else if (queryMsg.type === "messageDerived") {
+      // BACKLOG-3837: every message of the user, json_extract per row.
+      if (!db) throw new Error("Database not initialized");
+      rows = runMessageDerivedQueryOn(db, queryMsg.userId);
+    } else if (queryMsg.type === "commDatesPlan") {
+      // BACKLOG-3837: the last-message-date backfill PLAN (writes nothing; main applies it).
+      if (!db) throw new Error("Database not initialized");
+      rows = planCommunicationDatesOn(db, queryMsg.userId);
+    } else if (queryMsg.type === "sourceCoverageFloors") {
+      // BACKLOG-3837: the audit coverage check's per-source floors (every text row).
+      if (!db) throw new Error("Database not initialized");
+      rows = runSourceFloorsOn(db, queryMsg.userId);
     } else {
       throw new Error(`Unknown query type: ${queryMsg.type}`);
     }

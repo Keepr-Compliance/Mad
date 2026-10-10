@@ -27,7 +27,11 @@ type QueryType =
   | "emailDerived"
   | "threadIdentity"
   | "threadIdentityTargeted"
-  | "candidateMessageThreads";
+  | "candidateMessageThreads"
+  // BACKLOG-3837: the step-1 Continue scans (wizardMessageScansDb.ts).
+  | "messageDerived"
+  | "commDatesPlan"
+  | "sourceCoverageFloors";
 
 /**
  * Per-type payload carried alongside `{ id, type, userId }` (BACKLOG-1717).

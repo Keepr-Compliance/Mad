@@ -6,7 +6,7 @@
 import crypto from "crypto";
 import type { Contact, NewContact, ContactFilters, Message, Communication, ContactMessageThread } from "../../types";
 import { DatabaseError } from "../../types";
-import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
+import { dbGet, dbAll, dbRun, dbTransaction, ensureDb } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
 import logService from "../logService";
 import { validateFields, type ColumnOf } from "../../utils/sqlFieldWhitelist";
@@ -19,7 +19,12 @@ import { isReactionRow } from "../../utils/reactionUtils";
 // BACKLOG-1933: pure phone-matching helpers only (no transaction-scoped finders).
 import { phonesMatch } from "../messageMatchingService";
 import { getContactNames } from "../contactsService";
-import { queryContacts, isPoolReady } from "../../workers/contactWorkerPool";
+import { queryContacts, isPoolReady, queryOnDedicatedWorker } from "../../workers/contactWorkerPool";
+import {
+  MESSAGE_DERIVED_CONTACTS_SQL,
+  planCommunicationDatesOn,
+  type CommunicationDatePlanRow,
+} from "./wizardMessageScansDb";
 import { ContactSchema, validateResponse } from "../../schemas";
 import { IMPORTED_CONTACT_LAST_COMMUNICATION_SQL } from "./contactRecencySql";
 import { getTextDerivedPeople } from "./rcsChatPeopleDbService";
@@ -252,54 +257,43 @@ export function getMessageDerivedContacts(userId: string): MessageDerivedContact
    */
   const importedNames = namesThatAreTheirOwnIdentity(userId);
 
-  // Extract unique senders from messages (from field in participants JSON)
-  // BACKLOG-313: Only include senders with actual display names (filter out raw emails/phones)
-  // BACKLOG-311: Include COUNT(*) to avoid N+1 queries
-  const statement = sql`
-    SELECT
-      'msg_' || LOWER(json_extract(participants, '$.from')) as id,
-      json_extract(participants, '$.from') as display_name,
-      json_extract(participants, '$.from') as name,
-      CASE
-        WHEN json_extract(participants, '$.from') LIKE '%@%'
-        THEN LOWER(json_extract(participants, '$.from'))
-        ELSE NULL
-      END as email,
-      CASE
-        WHEN json_extract(participants, '$.from') NOT LIKE '%@%'
-        THEN json_extract(participants, '$.from')
-        ELSE NULL
-      END as phone,
-      NULL as company,
-      'messages' as source,
-      0 as is_imported,
-      1 as is_message_derived,
-      MAX(sent_at) as last_communication_at,
-      COUNT(*) as communication_count
-    FROM messages
-    WHERE user_id = ?
-      AND participants IS NOT NULL
-      AND json_extract(participants, '$.from') IS NOT NULL
-      AND json_extract(participants, '$.from') != ''
-      AND json_extract(participants, '$.from') != 'me'
-      -- BACKLOG-313: Filter out entries where "name" is raw phone/email (no display name)
-      AND json_extract(participants, '$.from') NOT LIKE '%@%'
-      AND json_extract(participants, '$.from') NOT LIKE '+%'
-      AND json_extract(participants, '$.from') NOT GLOB '[0-9]*'
-      AND json_extract(participants, '$.from') NOT LIKE 'urn:%'
-      -- BACKLOG-2280: reactions carry a sender but are not real communications.
-      AND ${LOCAL_REACTION_EXCLUSION}
-    GROUP BY LOWER(json_extract(participants, '$.from'))
-    ORDER BY last_communication_at DESC
-    LIMIT 200
-  `;
+  // BACKLOG-3837: the statement moved verbatim to wizardMessageScansDb.ts
+  // (MESSAGE_DERIVED_CONTACTS_SQL) so the contact query worker runs the SAME
+  // text; this synchronous read is now the pool-not-ready fallback.
+  const results = dbAll<MessageDerivedContact>(MESSAGE_DERIVED_CONTACTS_SQL, [userId]);
+  return dropNamesThatAreTheirOwnIdentity(results, importedNames);
+}
 
-  const results = dbAll<MessageDerivedContact>(statement, [userId]);
+/**
+ * BACKLOG-3837 — the same people as `getMessageDerivedContacts`, with the
+ * message scan (json_extract over every message of the user) run on the
+ * contact query worker. The saved-name filter below is applied on the main
+ * thread from the same `namesThatAreTheirOwnIdentity` read, so the two paths
+ * cannot disagree about who appears. Pool down, or the worker read failing:
+ * the synchronous producer, same rows.
+ */
+export async function getMessageDerivedContactsAsync(userId: string): Promise<MessageDerivedContact[]> {
+  if (!isPoolReady()) return getMessageDerivedContacts(userId);
+  let rows: MessageDerivedContact[];
+  try {
+    rows = (await queryContacts("messageDerived", userId)) as MessageDerivedContact[];
+  } catch (error) {
+    void logService.warn("[Contacts] message-derived read on the worker failed; reading on main", "ContactDbService", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return getMessageDerivedContacts(userId);
+  }
+  return dropNamesThatAreTheirOwnIdentity(rows, namesThatAreTheirOwnIdentity(userId));
+}
 
+function dropNamesThatAreTheirOwnIdentity(
+  results: MessageDerivedContact[],
+  importedNames: Set<string>,
+): MessageDerivedContact[] {
   // BACKLOG-2618: ONE filter, and it is the one that can fire. The email and
   // phone branches that stood above it are deleted — see the note at the top of
-  // this function for why they could not have fired and why they were not
-  // repairable.
+  // getMessageDerivedContacts for why they could not have fired and why they
+  // were not repairable.
   return results.filter(contact => {
     if (contact.display_name && importedNames.has(contact.display_name.toLowerCase())) {
       return false;
@@ -846,8 +840,27 @@ function messageDerivedWithTextPeople(userId: string, opts?: TextPeopleOption): 
   return [...mac, ...getTextDerivedPeople(userId)];
 }
 
+/** BACKLOG-3837: `messageDerivedWithTextPeople` with the message scan on the worker. */
+async function messageDerivedWithTextPeopleAsync(
+  userId: string,
+  opts?: TextPeopleOption,
+): Promise<MessageDerivedContact[]> {
+  const mac = await getMessageDerivedContactsAsync(userId);
+  if (!opts?.textPeople) return mac;
+  return [...mac, ...getTextDerivedPeople(userId)];
+}
+
 function messageDerivedAsContacts(userId: string, opts?: TextPeopleOption): Contact[] {
-  return messageDerivedWithTextPeople(userId, opts).map(
+  return toMessageDerivedContactRows(userId, messageDerivedWithTextPeople(userId, opts));
+}
+
+/** BACKLOG-3837: `messageDerivedAsContacts` with the message scan on the worker. */
+async function messageDerivedAsContactsAsync(userId: string, opts?: TextPeopleOption): Promise<Contact[]> {
+  return toMessageDerivedContactRows(userId, await messageDerivedWithTextPeopleAsync(userId, opts));
+}
+
+function toMessageDerivedContactRows(userId: string, people: MessageDerivedContact[]): Contact[] {
+  return people.map(
     (mc) =>
       ({
         id: mc.id,
@@ -939,9 +952,11 @@ export async function getImportedContactsByUserIdAsync(
   // depending on whether the worker pool was warm — the fallback above is the
   // only difference between the two paths, and it must not change WHO appears.
   // BACKLOG-2471 PR F — stamped here too; see the sync producer above.
+  // BACKLOG-3837: the message-derived scan runs on the worker too.
+  const messageDerived = await messageDerivedAsContactsAsync(userId, opts);
   return [
     ...attachReviewState(userId, attachLiveSources(userId, contactsWithArrays)),
-    ...messageDerivedAsContacts(userId, opts),
+    ...messageDerived,
   ].sort(
     (a, b) => {
       const nameA = (a.display_name || a.name || '').toLowerCase();
@@ -1166,34 +1181,75 @@ export function backfillContactPhonesSync(
   return added;
 }
 
+/** BACKLOG-3837: UPDATEs applied per transaction before yielding to the event loop. */
+export const COMM_DATES_APPLY_SLICE = 100;
+/** BACKLOG-3837: the plan reads every text message once; generous, it runs off main. */
+const COMM_DATES_PLAN_TIMEOUT_MS = 10 * 60_000;
+
+/** BACKLOG-3837: one backfill per user at a time; the list's trigger also runs once per session. */
+const commDatesInFlight = new Map<string, Promise<number>>();
+const commDatesStartedThisSession = new Set<string>();
+
+/** Test seam: forget the per-session trigger state. */
+export function resetCommunicationDatesBackfillForTests(): void {
+  commDatesInFlight.clear();
+  commDatesStartedThisSession.clear();
+}
+
+/**
+ * BACKLOG-3837 — the activity list's trigger: start the backfill in the
+ * background (never awaited by the list), at most once per user per session and
+ * never twice at once. A contact set with no matching texts keeps
+ * `last_inbound_at` NULL, which re-armed the old probe on EVERY list read.
+ */
+function startCommunicationDatesBackfill(userId: string): void {
+  if (commDatesStartedThisSession.has(userId)) return;
+  commDatesStartedThisSession.add(userId);
+  backfillContactCommunicationDates(userId).catch((error) => {
+    void logService.warn("Backfill of contact last-message dates failed", "ContactDbService", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
+/**
+ * The PLAN of the backfill: newest text date per imported contact. Read on a
+ * dedicated worker (one-shot scan of every text message, the #2907 pattern);
+ * on the main thread only when no worker can be started.
+ */
+async function planCommunicationDates(userId: string): Promise<CommunicationDatePlanRow[]> {
+  try {
+    return (await queryOnDedicatedWorker("commDatesPlan", userId, COMM_DATES_PLAN_TIMEOUT_MS)) as CommunicationDatePlanRow[];
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    if (code !== "unavailable" && code !== "start_failed") throw error;
+    return planCommunicationDatesOn(ensureDb(), userId);
+  }
+}
+
 /**
  * Backfill last_inbound_at for contacts from their messages.
- * Uses a simpler approach: get max message date per phone, then update contacts.
+ *
+ * BACKLOG-3837: was one `LIKE '%' || key || '%'` join of contact_phones against
+ * every text message, on the main thread (505,889 ms at 200k messages and 1186
+ * contacts, measured). The plan is now read off the main thread with the same
+ * matching rule (wizardMessageScansDb.ts planCommunicationDatesOn), and the
+ * UPDATEs are applied in slices with a yield between them (#2915 pattern).
+ * One run per user at a time: a second caller shares the first one's promise.
  */
-export async function backfillContactCommunicationDates(userId: string): Promise<number> {
-  // Step 1: Get the most recent message date for each normalized phone number
-  // This is the simple GROUP BY approach the user suggested
-  const phoneMessagesSql = sql`
-    SELECT
-      SUBSTR(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(cp.phone_e164, '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), -10) as normalized_phone,
-      cp.contact_id,
-      MAX(m.sent_at) as last_msg_date
-    FROM contact_phones cp
-    JOIN contacts c ON cp.contact_id = c.id AND c.user_id = ? AND c.is_imported = 1
-    JOIN messages m ON (
-      m.user_id = ?
-      AND (m.channel = 'sms' OR m.channel = 'imessage')
-      AND ${reactionExclusion("m")}
-      AND m.participants_flat LIKE '%' || SUBSTR(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(cp.phone_e164, '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), -10) || '%'
-    )
-    WHERE LENGTH(SUBSTR(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(cp.phone_e164, '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), -10)) >= 7
-    GROUP BY cp.contact_id
-  `;
+export function backfillContactCommunicationDates(userId: string): Promise<number> {
+  const running = commDatesInFlight.get(userId);
+  if (running) return running;
+  const run = runCommunicationDatesBackfill(userId).finally(() => {
+    commDatesInFlight.delete(userId);
+  });
+  commDatesInFlight.set(userId, run);
+  return run;
+}
 
-  const phoneMessages = dbAll<{ normalized_phone: string; contact_id: string; last_msg_date: string }>(
-    phoneMessagesSql,
-    [userId, userId]
-  );
+async function runCommunicationDatesBackfill(userId: string): Promise<number> {
+  const startedAt = Date.now();
+  const phoneMessages = await planCommunicationDates(userId);
 
   void logService.info("Backfill: Found phone-message matches", "ContactDbService", {
     matchCount: phoneMessages.length,
@@ -1204,16 +1260,24 @@ export async function backfillContactCommunicationDates(userId: string): Promise
     })),
   });
 
-  // Step 2: Update each contact with their most recent message date
-  let updatedCount = 0;
-  for (const match of phoneMessages) {
-    const updateSql = sql`
+  // Step 2: Update each contact with their most recent message date, a slice
+  // per transaction with a yield between slices.
+  const updateSql = sql`
       UPDATE contacts
       SET last_inbound_at = ?
       WHERE id = ? AND (last_inbound_at IS NULL OR last_inbound_at < ?)
     `;
-    const result = dbRun(updateSql, [match.last_msg_date, match.contact_id, match.last_msg_date]);
-    updatedCount += result.changes;
+  let updatedCount = 0;
+  for (let start = 0; start < phoneMessages.length; start += COMM_DATES_APPLY_SLICE) {
+    if (start > 0) await new Promise<void>((resolve) => setImmediate(resolve));
+    const slice = phoneMessages.slice(start, start + COMM_DATES_APPLY_SLICE);
+    updatedCount += dbTransaction(() => {
+      let changed = 0;
+      for (const match of slice) {
+        changed += dbRun(updateSql, [match.last_msg_date, match.contact_id, match.last_msg_date]).changes;
+      }
+      return changed;
+    });
   }
 
   // Debug: Show final state
@@ -1229,6 +1293,7 @@ export async function backfillContactCommunicationDates(userId: string): Promise
   void logService.info("Backfill complete", "ContactDbService", {
     userId,
     updatedCount,
+    durationMs: Date.now() - startedAt,
     // BACKLOG-3819: no contact names — a contact with no name is displayed by
     // its phone number, so display_name can itself be a bare phone.
     topContactsLastInbound: debugContacts.map(c => c.last_inbound_at),
@@ -1256,9 +1321,13 @@ export async function getContactsSortedByActivity(
     WHERE c.user_id = ? AND c.is_imported = 1 AND c.last_inbound_at IS NOT NULL${ACTIVE_CONTACTS_CLAUSE_C}
   `, [userId]);
 
-  // Only run backfill once - if no contacts have dates yet
+  // Only run backfill once - if no contacts have dates yet.
+  // BACKLOG-3837: in the BACKGROUND. It read every text message against every
+  // phone on the main thread (505 s at 200k messages in the measurement) and
+  // this list waited for it. The list now returns at once without dates; the
+  // dates are there on the next read.
   if (!hasBackfilled || hasBackfilled.count === 0) {
-    await backfillContactCommunicationDates(userId);
+    startCommunicationDatesBackfill(userId);
   }
 
   // Get contacts sorted by last_inbound_at (denormalized field)
@@ -1316,7 +1385,8 @@ ${IMPORTED_CONTACT_ADDRESSES_SQL},
     );
 
     // Get message-derived contacts (already have last_communication_at from their source)
-    const messageDerivedContacts = messageDerivedWithTextPeople(userId, opts);
+    // BACKLOG-3837: the message scan runs on the contact query worker.
+    const messageDerivedContacts = await messageDerivedWithTextPeopleAsync(userId, opts);
 
     const messageDerivedWithActivity: ContactWithActivity[] = messageDerivedContacts.map(mc => ({
       id: mc.id,
