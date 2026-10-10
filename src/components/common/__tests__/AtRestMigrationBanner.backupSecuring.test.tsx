@@ -101,12 +101,31 @@ describe("AtRestMigrationBanner — securing the iPhone backup", () => {
   });
 });
 
+describe("AtRestMigrationBanner — nothing left to seal (BACKLOG-3816, founder 2.40)", () => {
+  it("a hide tick removes the line at once, even while the walk goes on", async () => {
+    render(<AtRestMigrationBanner />);
+    await act(async () => undefined);
+    emit(cleanup(60));
+    expect(screen.getByTestId("at-rest-backup-securing")).toBeInTheDocument();
+    emit({ ...cleanup(100), hidden: true });
+    expect(screen.queryByTestId("at-rest-backup-securing")).toBeNull();
+  });
+
+  it("a hide tick alone never shows a line", async () => {
+    render(<AtRestMigrationBanner />);
+    await act(async () => undefined);
+    emit({ ...cleanup(0), hidden: true });
+    expect(screen.queryByTestId("at-rest-backup-securing")).toBeNull();
+  });
+});
+
 describe("toBackupSecuringProgress", () => {
   it("accepts only cleanup ticks with a message; clamps percent", () => {
     expect(toBackupSecuringProgress(cleanup(5))).toEqual({ message: "Securing your iPhone backup… 5%", percent: 5 });
     expect(toBackupSecuringProgress({ phase: "cleanup", overallProgress: 140, message: "m" })).toEqual({ message: "m", percent: 100 });
     expect(toBackupSecuringProgress({ phase: "cleanup", overallProgress: 5 })).toBeNull();
     expect(toBackupSecuringProgress({ phase: "storing", overallProgress: 5, message: "m" })).toBeNull();
+    expect(toBackupSecuringProgress({ ...cleanup(5), hidden: true })).toEqual({ message: "Securing your iPhone backup… 5%", percent: 5, hidden: true });
     expect(toBackupSecuringProgress(null)).toBeNull();
     expect(toBackupSecuringProgress("cleanup")).toBeNull();
   });

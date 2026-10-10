@@ -38,7 +38,6 @@ import {
   QUARANTINE_MAX_AGE_MS,
   type BackupAtRestProgress,
   BACKUP_SECURING_MESSAGE,
-  BACKUP_FINISHING_MESSAGE,
   BACKUP_SECURING_SENTENCE,
   markerProtectsChain,
   readMarkerAt,
@@ -235,26 +234,30 @@ describe("seal / scan", () => {
 });
 
 describe("sealPassPercent — the quit prompt's percentage (BACKLOG-3816)", () => {
-  it("is null with no pass, the pass's last reported percentage while it runs (whatever sink it reports to), null after", async () => {
+  it("is null with no pass; while files are being sealed it is the pass's last reported percentage (whatever sink it reports to); null for a tick that seals nothing, and after", async () => {
     makeChain();
-    const midPass: Array<number | null> = [];
     let svc!: BackupAtRest;
+    const midPass: Array<number | null> = [];
     const beforeSeal = () => {
       midPass.push(svc.sealPassPercent());
     };
-    const pairs: Array<[number, number | null]> = [];
+    const pairs: Array<[BackupAtRestProgress, number | null]> = [];
     svc = service({ sealEngineOptions: { beforeSeal, retryDelayMs: 0 } });
     expect(svc.sealPassPercent()).toBeNull();
     // The caller's own progress sink (as the launch job and the post-sync seal pass one).
-    await svc.migrate(UDID, (p) => {
-      if (p.phase === "migrating") pairs.push([describeBackupAtRestProgress(p).percent, svc.sealPassPercent()]);
-    });
+    let clock = Date.now();
+    const clockSpy = jest.spyOn(Date, "now").mockImplementation(() => (clock += 1500)); // every batch reports
+    try {
+      await svc.migrate(UDID, (p) => {
+        if (p.phase === "migrating") pairs.push([p, svc.sealPassPercent()]);
+      });
+    } finally {
+      clockSpy.mockRestore();
+    }
     expect(midPass.length).toBeGreaterThan(0);
-    expect(midPass.every((v) => typeof v === "number")).toBe(true);
-    // What the quit prompt reads is what the pass last reported, up to its 100%.
     expect(pairs.length).toBeGreaterThan(1);
-    for (const [reported, read] of pairs) expect(read).toBe(reported);
-    expect(pairs[pairs.length - 1][0]).toBe(100);
+    for (const [p, read] of pairs) expect(read).toBe(p.sealing ? describeBackupAtRestProgress(p).percent : null);
+    expect(pairs.some(([p, read]) => p.sealing === true && typeof read === "number")).toBe(true);
     expect(svc.sealPassPercent()).toBeNull();
   });
 });
@@ -1397,7 +1400,7 @@ describe("progress", () => {
       for (const f of files) fs.utimesSync(f, old, old);
     }
     /** A sync: delta unseal, the "backup tool" writes `during`, then the post-sync seal. */
-    async function incremental(s: BackupAtRest, during: () => void): Promise<{ seen: BackupAtRestProgress[]; opensAtFirst: number; index: number }> {
+    async function incremental(s: BackupAtRest, during: () => void, onTick?: (p: BackupAtRestProgress) => void): Promise<{ seen: BackupAtRestProgress[]; opensAtFirst: number; index: number }> {
       const session = await s.beginSync(UDID, { strategy: "delta" });
       during();
       // The index files are sealed by their own step before the walk (index-first), so
@@ -1411,6 +1414,7 @@ describe("progress", () => {
         await s.finishSync(session, (p) => {
           if (opensAtFirst < 0) opensAtFirst = spy.mock.calls.length;
           seen.push(p);
+          onTick?.(p);
         });
         opens = spy.mock.calls.length;
       } finally {
@@ -1464,12 +1468,14 @@ describe("progress", () => {
       // first batches; the walk over the 300+ sealed files then reads "finishing up".
       const before = described.slice(0, -1);
       expect(before.length).toBeGreaterThan(5);
-      for (const d of before) expect(d.percent).toBeLessThan(100);
-      const finishing = seen.slice(0, -1).filter((p) => p.doneUnits === p.totalUnits && p.done < p.total);
-      expect(finishing.length).toBeGreaterThan(3);
-      for (const p of finishing) {
-        expect(describeBackupAtRestProgress(p)).toEqual({ message: BACKUP_FINISHING_MESSAGE, percent: 99 });
-      }
+      for (const [i, d] of before.entries()) if (seen[i].sealing) expect(d.percent).toBeLessThan(100);
+      // BACKLOG-3816 (founder 2.40): once this sync's file is sealed the walk over the
+      // sealed rest shows NO banner (sealing false), and the banner was up before that.
+      const walking = seen.slice(0, -1).filter((p) => p.doneUnits === p.totalUnits && p.done < p.total);
+      expect(walking.length).toBeGreaterThan(3);
+      for (const p of walking) expect(p.sealing).toBe(false);
+      expect(seen[0].sealing).toBe(true); // the new file is known work from the first tick
+      expect(last.sealing).toBe(false);
       expect(await s.readMarker(UDID)).toBe("encrypted");
       expect(plaintextLeft()).toEqual([]);
     });
@@ -1488,7 +1494,75 @@ describe("progress", () => {
       return seen;
     }
 
-    it("F: recovery after a cut-off seal (marker sealing, new process) is a seal: phase sealing, 'finishing up' until it ends, never 0%", async () => {
+    it("after a sync: the quit prompt and the banner follow the delta only — both off once this sync's file is sealed, while the walk over the sealed rest continues", async () => {
+      sealedChainWithMany();
+      const s = service();
+      await s.seal(UDID);
+      age(allContentFiles());
+      let clock = Date.now();
+      const clockSpy = jest.spyOn(Date, "now").mockImplementation(() => (clock += 1500));
+      const reads: Array<[boolean | undefined, number | null]> = [];
+      try {
+        await incremental(s, () => write(`ee/${"e".repeat(40)}`, crypto.randomBytes(BIG)), (p) => reads.push([p.sealing, s.sealPassPercent()]));
+      } finally {
+        clockSpy.mockRestore();
+      }
+      const walking = reads.filter(([sealing]) => sealing === false);
+      expect(walking.length).toBeGreaterThan(3);
+      for (const [, quit] of walking) expect(quit).toBeNull();
+      expect(reads.some(([sealing, quit]) => sealing === true && typeof quit === "number")).toBe(true);
+    });
+
+    it("SR PROBE: after a sync, before the seal pass's first report (index seal + listing), a quit is still asked about", async () => {
+      sealedChainWithMany();
+      const s = service();
+      await s.seal(UDID);
+      age(allContentFiles());
+      const session = await s.beginSync(UDID, { strategy: "delta" });
+      const newFile = write(`ee/${"e".repeat(40)}`, crypto.randomBytes(BIG));
+      const realReaddir = fs.promises.readdir.bind(fs.promises);
+      const atListing: Array<{ quit: number | null; plain: boolean }> = [];
+      const spy = jest.spyOn(fs.promises, "readdir").mockImplementation(((...args: Parameters<typeof fs.promises.readdir>) => {
+        if (atListing.length === 0) atListing.push({ quit: s.sealPassPercent(), plain: !fs.readFileSync(newFile).subarray(0, MAGIC.length).equals(Buffer.from(MAGIC)) });
+        return (realReaddir as (...a: unknown[]) => unknown)(...args);
+      }) as unknown as typeof fs.promises.readdir);
+      const ticks: BackupAtRestProgress[] = [];
+      try {
+        await s.finishSync(session, (p) => ticks.push(p));
+      } finally {
+        spy.mockRestore();
+      }
+      expect(atListing.length).toBe(1);
+      expect(atListing[0].plain).toBe(true); // this sync's file is still plaintext while the chain is listed
+      expect(ticks.length).toBeGreaterThan(0);
+      expect(atListing[0].quit).not.toBeNull(); // so quitting now must ask
+    });
+
+    it("relaunch over a chain that is already all sealed (a 'sealing' marker after Quit anyway): a verification-only walk shows no banner and no quit prompt", async () => {
+      sealedChainWithMany();
+      await service().seal(UDID);
+      age(allContentFiles());
+      await createMarkerStore({ userData: () => userData }).writeBackupMarker(UDID, "sealing");
+      const s = service();
+      const quit: Array<number | null> = [];
+      let clock = Date.now();
+      const clockSpy = jest.spyOn(Date, "now").mockImplementation(() => (clock += 1500));
+      const seen: BackupAtRestProgress[] = [];
+      try {
+        await s.migrate(UDID, (p) => {
+          seen.push(p);
+          quit.push(s.sealPassPercent());
+        });
+      } finally {
+        clockSpy.mockRestore();
+      }
+      expect(seen.length).toBeGreaterThan(5);
+      expect(seen.every((p) => p.sealing === false)).toBe(true);
+      expect(quit.every((q) => q === null)).toBe(true);
+      expect(await readMarkerAt(backups, UDID)).toBe("encrypted"); // marker semantics unchanged
+    });
+
+    it("F: recovery after a cut-off seal (marker sealing, new process) is a seal: phase sealing; the banner shows only once the walk has found the plaintext file, never at 0%", async () => {
       sealedChainWithMany();
       await service().seal(UDID);
       age(allContentFiles());
@@ -1498,7 +1572,10 @@ describe("progress", () => {
       expect(seen.length).toBeGreaterThan(5);
       expect(seen.every((p) => p.phase === "sealing")).toBe(true);
       const described = seen.map((p) => describeBackupAtRestProgress(p));
-      for (const d of described.slice(0, -1)) expect(d).toEqual({ message: BACKUP_FINISHING_MESSAGE, percent: 99 });
+      expect(seen[0].sealing).toBe(false); // nothing found yet: no banner at 0%
+      expect(seen.some((p) => p.sealing === true)).toBe(true); // plaintext found and sealed: banner
+      for (const p of seen.filter((q) => q.sealing)) expect(p.doneUnits).toBeGreaterThan(0);
+      expect(seen[seen.length - 1].sealing).toBe(false);
       expect(described[described.length - 1].percent).toBe(100);
       expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
       expect(plaintextLeft()).toEqual([]);

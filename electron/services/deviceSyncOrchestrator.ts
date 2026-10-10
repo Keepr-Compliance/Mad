@@ -505,6 +505,8 @@ export interface SyncProgress {
    * `emitProgress`. Call sites do not set it.
    */
   priorBackup?: PriorBackupState;
+  /** `cleanup` ticks: nothing is being sealed, so the "Securing your iPhone backup" line is hidden. */
+  hidden?: boolean;
 }
 
 /**
@@ -2388,7 +2390,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.atRestProgressWatched = true;
     atRest.on("progress", (p: BackupAtRestProgress) => {
       const { message, percent } = describeBackupAtRestProgress(p);
-      this.emitProgress({ phase: "cleanup", phaseProgress: percent, overallProgress: percent, message });
+      // Nothing is being sealed (verification-only walk, or this sync's files are sealed
+      // and the walk goes on): tell the renderer to hide the line rather than show a number.
+      const hidden = (p.phase === "sealing" || p.phase === "migrating") && !p.sealing;
+      this.emitProgress({
+        phase: "cleanup",
+        phaseProgress: percent,
+        overallProgress: percent,
+        message,
+        ...(hidden ? { hidden: true } : {}),
+      });
     });
   }
 
