@@ -6,10 +6,13 @@
  */
 import { ipcMain } from "electron";
 import log from "electron-log";
+import { performance } from "perf_hooks";
 import { currentIpcReplySizePhase, wrapHandleForReplySize } from "../services/ipcReplySize";
 
 wrapHandleForReplySize(ipcMain as unknown as Parameters<typeof wrapHandleForReplySize>[0], {
   phase: () => currentIpcReplySizePhase(),
-  now: () => Date.now(),
+  // Monotonic, and the same clock as installMainLagMonitor (it compares the
+  // IPC start time recorded here with its own ticks).
+  now: () => performance.now(),
   log: (line) => log.info(line),
 });

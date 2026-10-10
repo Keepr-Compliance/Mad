@@ -294,7 +294,14 @@ export function useTransactionDetails(
       }
 
       try {
+        const startedAt = nowMs();
         const contactsResult = await window.api.contacts.getAll(transaction.user_id);
+        // BACKLOG-3884: runs on open only when the deal has suggested contacts;
+        // it reads every contact the user has.
+        logOpenPath(
+          `contacts get-all ms=${Math.round(nowMs() - startedAt)}` +
+            ` contacts=${contactsResult?.contacts?.length ?? 0} suggested=${suggestedContacts.length}`,
+        );
         if (contactsResult.success && contactsResult.contacts) {
           const contactMap = new Map(
             contactsResult.contacts.map((c: Contact) => [c.id, c])
