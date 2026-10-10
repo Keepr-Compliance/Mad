@@ -10,6 +10,7 @@
  */
 
 import { createClient } from '@/lib/supabase/server';
+import { createServiceClient } from '@/lib/supabase/service';
 import type { Role } from '@/lib/types/users';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 
@@ -110,14 +111,20 @@ export async function deactivateUser(input: DeactivateInput): Promise<Deactivate
     }
   }
 
-  // Update status to suspended
-  const { error: updateError } = await supabase
+  // Update status to suspended. license_status is not writable from a user
+  // session (BACKLOG-3843), so the write uses the service client after every
+  // check above has passed on the user's own session. The service client
+  // bypasses RLS, so the write is scoped explicitly to the member AND the
+  // organization the caller was just verified to administer.
+  const service = createServiceClient();
+  const { error: updateError } = await service
     .from('organization_members')
     .update({
       license_status: 'suspended',
       updated_at: new Date().toISOString(),
     })
-    .eq('id', input.memberId);
+    .eq('id', input.memberId)
+    .eq('organization_id', targetMember.organization_id);
 
   if (updateError) {
     console.error('Error deactivating user:', updateError);
