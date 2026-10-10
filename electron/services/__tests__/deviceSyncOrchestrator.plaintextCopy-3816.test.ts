@@ -33,13 +33,13 @@ const logLines: string[] = [];
 
 jest.mock("electron-log", () => ({
   info: (...args: unknown[]) => {
-    logLines.push(args.map(String).join(" "));
+    logLines.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
   },
   warn: (...args: unknown[]) => {
-    logLines.push(args.map(String).join(" "));
+    logLines.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
   },
   error: (...args: unknown[]) => {
-    logLines.push(args.map(String).join(" "));
+    logLines.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
   },
   debug: jest.fn(),
 }));
@@ -91,6 +91,7 @@ jest.mock("../backupService", () => ({
       checkBackupStatus: mockCheckBackupStatus,
       startBackup: mockStartBackup,
       cancelBackup: jest.fn(),
+      getBackupMetadata: jest.fn().mockResolvedValue(null),
       // BACKLOG-3598: leftover cleanup. Inert here; the cleanup itself is proven in
       // deviceSyncOrchestrator.failedSyncCleanup-3598.test.ts against a real folder.
       sweepLeftoverBackups: jest.fn().mockResolvedValue({ removed: 0, bytesFreed: 0, failures: [] }),
@@ -232,6 +233,7 @@ describe("BACKLOG-3816: processExistingBackup removes the plaintext copy on ever
   it("success: the copy is removed", async () => {
     const { o, internals } = encryptedRun();
     const result = await o.processExistingBackup({ udid: UDID, forceResync: true });
+    expect(result.error).toBeNull();
     expect(result.success).toBe(true);
     expect(internals.decryptionService.cleanup).toHaveBeenCalledWith(COPY);
   });
