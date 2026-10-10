@@ -47,9 +47,16 @@ jest.mock("../../contactsService", () => ({
 }));
 
 // Mock contactWorkerPool
+// BACKLOG-3837: the message-derived read runs only on a dedicated worker. Stand-in: the
+// same statement through this suite's dbAll mock.
 jest.mock("../../../workers/contactWorkerPool", () => ({
   queryContacts: jest.fn(),
   isPoolReady: () => false,
+  queryOnDedicatedWorker: jest.fn(async (type: string, userId: string) => {
+    if (type !== "messageDerived") throw new Error(`unexpected dedicated query ${type}`);
+    const { MESSAGE_DERIVED_CONTACTS_SQL } = jest.requireActual("../wizardMessageScansDb");
+    return mockDbAll(MESSAGE_DERIVED_CONTACTS_SQL, [userId]);
+  }),
 }));
 
 // Mock schemas (validateResponse is a pass-through for these tests)

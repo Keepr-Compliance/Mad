@@ -40,14 +40,23 @@ const mockMainWindow = {
 
 // Mock services - inline factories since jest.mock is hoisted
 // Note: getUserById returns the user only for TEST_USER_ID, null for empty/invalid IDs
-jest.mock("../services/databaseService", () => ({
-  __esModule: true,
-  default: {
+jest.mock("../services/databaseService", () => {
+  const db: Record<string, jest.Mock> = {
     getImportedContactsByUserId: jest.fn(),
     getImportedContactsByUserIdAsync: jest.fn(),
     getRemovedContactIdentifiers: jest.fn(() => Promise.resolve([])),
     getUnimportedContactsByUserId: jest.fn(),
     getContactsSortedByActivity: jest.fn(),
+    // BACKLOG-3837: the two list handlers read the list with its pending state;
+    // these route to the mocks above so each case keeps configuring those.
+    getImportedContactsWithStatusAsync: jest.fn(async (...a: unknown[]) => ({
+      contacts: await db.getImportedContactsByUserIdAsync(...a),
+      messageDerivedPending: false,
+    })),
+    getContactsSortedByActivityWithStatus: jest.fn(async (...a: unknown[]) => ({
+      contacts: await db.getContactsSortedByActivity(...a),
+      messageDerivedPending: false,
+    })),
     createContact: jest.fn(),
     createContactsBatch: jest.fn(),
     updateContact: jest.fn(),
@@ -86,8 +95,9 @@ jest.mock("../services/databaseService", () => ({
     getContactNamesByPhones: jest.fn().mockResolvedValue(new Map()),
     getLastMessageDatesForPhones: jest.fn().mockReturnValue(new Map()),
     backfillPhoneLastMessageTable: jest.fn().mockResolvedValue(0),
-  },
-}));
+  };
+  return { __esModule: true, default: db };
+});
 
 jest.mock("../services/contactsService", () => ({
   __esModule: true,

@@ -116,6 +116,14 @@ jest.mock("../logService", () => {
 jest.mock("../../workers/contactWorkerPool", () => ({
   __esModule: true,
   isPoolReady: () => poolReady,
+  // BACKLOG-3837 follow-up: the message-derived read runs ONLY on a dedicated worker,
+  // warm pool or cold — so both forks get the same people from the same runner.
+  queryOnDedicatedWorker: (type: string, userId: string) => {
+    if (type !== "messageDerived") return Promise.reject(new Error(`unexpected dedicated query ${type}`));
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { runMessageDerivedQueryOn } = require("../db/wizardMessageScansDb");
+    return Promise.resolve(runMessageDerivedQueryOn(mockDb!, userId));
+  },
   queryContacts: (type: string, userId: string) => {
     // BACKLOG-3837: the message-derived read moved to the worker too; the fake
     // runs the SAME shared runner the worker runs.
