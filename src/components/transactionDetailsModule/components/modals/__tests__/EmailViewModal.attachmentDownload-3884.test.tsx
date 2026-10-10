@@ -14,7 +14,7 @@
  * Names synthesized.
  */
 import React from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { EmailViewModal } from "../EmailViewModal";
 import type { Communication } from "../../../types";
 
@@ -113,6 +113,41 @@ describe("BACKLOG-3884 — EmailViewModal attachment click downloads first", () 
     expect(await screen.findByTestId("attachment-open-error")).toBeInTheDocument();
     expect(screen.getByTestId("attachment-open-retry")).toBeInTheDocument();
     expect(screen.queryByTestId("attachment-preview-backdrop")).not.toBeInTheDocument();
+  });
+
+  it("C5: a second click on the same email while A downloads joins that download; both rows show Downloading…; the last clicked opens", async () => {
+    const ROW_B = { id: "att-2", filename: "Addendum.pdf", mime_type: "application/pdf", file_size_bytes: 2048, storage_path: null as string | null };
+    api.getEmailAttachments.mockResolvedValue({ success: true, data: [META_ROW, ROW_B] });
+    const d = deferred<unknown>();
+    api.ensureEmailAttachmentDownloaded.mockReturnValue(d.promise);
+    render(<EmailViewModal email={makeEmail()} onClose={() => undefined} onRemoveFromTransaction={() => undefined} />);
+    await screen.findByText("2 attachments");
+    fireEvent.click(screen.getByRole("button", { name: /2 attachments/ }));
+    const a = await screen.findByTestId("attachment-att-1");
+    const b = await screen.findByTestId("attachment-att-2");
+
+    fireEvent.click(a);
+    await within(a).findByText("Downloading…");
+    fireEvent.click(b);
+
+    // One download for the email, and A keeps its label while B waits too.
+    expect(api.ensureEmailAttachmentDownloaded).toHaveBeenCalledTimes(1);
+    expect(within(a).getByText("Downloading…")).toBeInTheDocument();
+    expect(await within(b).findByText("Downloading…")).toBeInTheDocument();
+
+    await act(async () => {
+      d.resolve({
+        success: true,
+        data: [{ ...META_ROW, storage_path: STORED_PATH }, { ...ROW_B, storage_path: "/userData/attachments/b.pdf" }],
+      });
+    });
+
+    // The last clicked (B) opens; nothing is downloading any more.
+    expect(await screen.findByTestId("attachment-preview-backdrop")).toBeInTheDocument();
+    await waitFor(() => expect(api.getAttachmentData).toHaveBeenCalledWith("/userData/attachments/b.pdf", "application/pdf"));
+    expect(api.getAttachmentBuffer).not.toHaveBeenCalled();
+    expect(screen.queryByText("Downloading…")).not.toBeInTheDocument();
+    expect(api.ensureEmailAttachmentDownloaded).toHaveBeenCalledTimes(1);
   });
 
   it("C4: an already-downloaded attachment opens with no download", async () => {

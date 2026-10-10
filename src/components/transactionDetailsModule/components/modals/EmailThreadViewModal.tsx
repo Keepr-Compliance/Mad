@@ -345,7 +345,7 @@ function AttachmentListModal({
   onPreview: (attachment: EmailAttachment) => void;
   onClose: () => void;
   /** BACKLOG-3884: on-demand download state for a clicked row. */
-  openState: Pick<UseAttachmentPreviewResult, "downloadingId" | "message" | "retry">;
+  openState: Pick<UseAttachmentPreviewResult, "downloadingId" | "downloadingIds" | "message" | "retry">;
 }): React.ReactElement {
   const heading = loading
     ? "Attachments"
@@ -392,7 +392,7 @@ function AttachmentListModal({
         <AttachmentOpenError preview={openState} className="mx-2 mb-2 text-xs" />
 
         {attachments.map((attachment) => {
-          const downloading = openState.downloadingId === attachment.id;
+          const downloading = openState.downloadingIds.has(attachment.id);
           return (
           <button
             key={attachment.id}
@@ -445,7 +445,7 @@ function EmailBubble({
   attachmentMessage?: string | null;
   /** BACKLOG-3884: resolves true once the preview is open (after any download). */
   onPreviewAttachment: (attachment: EmailAttachment, emailId: string) => Promise<boolean>;
-  openState: Pick<UseAttachmentPreviewResult, "downloadingId" | "message" | "retry">;
+  openState: Pick<UseAttachmentPreviewResult, "downloadingId" | "downloadingIds" | "message" | "retry">;
   userEmail?: string;
   nameMap?: ReadonlyMap<string, string>;
 }): React.ReactElement {

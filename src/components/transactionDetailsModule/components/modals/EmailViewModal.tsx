@@ -203,7 +203,7 @@ export function EmailViewModal({
   // path the Attachments tab uses (`emails:get-attachments` above downloads
   // only when this email has NO rows yet).
   const attachmentPreview = useAttachmentPreview(reloadAttachments);
-  const { open: openAttachmentPreview, downloadingId } = attachmentPreview;
+  const { open: openAttachmentPreview, downloadingIds } = attachmentPreview;
 
   useEffect(() => {
     if (email?.id && email.has_attachments) {
@@ -401,7 +401,7 @@ export function EmailViewModal({
             {attachmentsExpanded && attachments.length > 0 && (
               <div className="mt-3 flex flex-col sm:flex-row sm:flex-wrap gap-2">
                 {attachments.map((attachment) => {
-                  const downloading = downloadingId === attachment.id;
+                  const downloading = downloadingIds.has(attachment.id);
                   return (
                     <button
                       key={attachment.id}

@@ -25,7 +25,7 @@
  * Render `<AttachmentPreviewHost preview={…} />` once, where the modal should
  * mount; it renders nothing until an attachment is open.
  */
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import { AttachmentPreviewModal } from "../components/modals/AttachmentPreviewModal";
 import type { UnifiedAttachment } from "./useTransactionAllAttachments";
 import logger from "../../../utils/logger";
@@ -71,8 +71,13 @@ export interface UseAttachmentPreviewResult {
   /** The attachment being previewed, or null. */
   preview: PreviewAttachment | null;
   closePreview: () => void;
-  /** The attachment whose on-demand download is in flight, or null. */
+  /** The most recently clicked attachment whose on-demand download is in flight, or null. */
   downloadingId: string | null;
+  /**
+   * BACKLOG-3884: every attachment waiting on an in-flight download. Two rows
+   * of one email share one download, so both can be waiting at once.
+   */
+  downloadingIds: ReadonlySet<string>;
   /** Why the last open could not preview, or null. */
   message: string | null;
   openWithSystem: (storagePath: string) => Promise<void>;
@@ -84,14 +89,23 @@ export interface UseAttachmentPreviewResult {
  */
 export function useAttachmentPreview(refresh?: () => void): UseAttachmentPreviewResult {
   const [preview, setPreview] = useState<PreviewAttachment | null>(null);
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [downloadingList, setDownloadingList] = useState<string[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const failedRef = useRef<OpenableAttachment | null>(null);
+  /**
+   * BACKLOG-3884: one download per email. A second click on a row of an email
+   * whose download is still pending joins that download instead of starting
+   * another (the handler downloads every missing file of the email at once).
+   */
+  const inFlightRef = useRef(new Map<string, ReturnType<typeof window.api.transactions.ensureEmailAttachmentDownloaded>>());
+  /** BACKLOG-3884: the last attachment clicked; only it opens or reports a failure. */
+  const latestRef = useRef<string | null>(null);
 
   const open = useCallback(
     async (attachment: OpenableAttachment): Promise<boolean> => {
       setMessage(null);
       failedRef.current = null;
+      latestRef.current = attachment.id;
 
       // Already downloaded → preview directly.
       if (attachment.storage_path) {
@@ -106,18 +120,30 @@ export function useAttachmentPreview(refresh?: () => void): UseAttachmentPreview
         return true;
       }
 
+      const emailId = attachment.email_id;
+      // A later click superseded this one: it neither opens nor reports.
+      const isLatest = () => latestRef.current === attachment.id;
       const fail = (reason: string): false => {
+        if (!isLatest()) return false;
         failedRef.current = attachment;
         setMessage(reason);
         return false;
       };
 
       // Email metadata-only row → force an on-demand download, then preview.
-      setDownloadingId(attachment.id);
+      setDownloadingList((ids) => (ids.includes(attachment.id) ? ids : [...ids, attachment.id]));
       try {
-        const result = await window.api.transactions.ensureEmailAttachmentDownloaded(
-          attachment.email_id,
-        );
+        let pending = inFlightRef.current.get(emailId);
+        if (!pending) {
+          pending = window.api.transactions.ensureEmailAttachmentDownloaded(emailId);
+          inFlightRef.current.set(emailId, pending);
+          const started = pending;
+          const clear = () => {
+            if (inFlightRef.current.get(emailId) === started) inFlightRef.current.delete(emailId);
+          };
+          started.then(clear, clear);
+        }
+        const result = await pending;
 
         if (result.downloadBlocked || result.offline) {
           return fail(result.reason || ATTACHMENT_DOWNLOAD_FAILED);
@@ -125,6 +151,7 @@ export function useAttachmentPreview(refresh?: () => void): UseAttachmentPreview
 
         const refreshed = (result.data || []).find((r) => r.id === attachment.id);
         if (refreshed?.storage_path) {
+          if (!isLatest()) return false;
           setPreview(toPreview(refreshed));
           refresh?.();
           return true;
@@ -134,7 +161,7 @@ export function useAttachmentPreview(refresh?: () => void): UseAttachmentPreview
         logger.error("On-demand attachment download failed:", err);
         return fail(ATTACHMENT_DOWNLOAD_FAILED);
       } finally {
-        setDownloadingId(null);
+        setDownloadingList((ids) => ids.filter((id) => id !== attachment.id));
       }
     },
     [refresh],
@@ -159,7 +186,10 @@ export function useAttachmentPreview(refresh?: () => void): UseAttachmentPreview
 
   const closePreview = useCallback(() => setPreview(null), []);
 
-  return { open, retry, preview, closePreview, downloadingId, message, openWithSystem };
+  const downloadingIds = useMemo(() => new Set(downloadingList), [downloadingList]);
+  const downloadingId = downloadingList.length > 0 ? downloadingList[downloadingList.length - 1] : null;
+
+  return { open, retry, preview, closePreview, downloadingId, downloadingIds, message, openWithSystem };
 }
 
 /**
