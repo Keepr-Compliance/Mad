@@ -766,7 +766,7 @@ export async function syncReviewQueueForTransaction(opts: {
         });
         linked += r.emailsLinked + r.messagesLinked;
         added += r.queuedForReview ?? 0;
-        if (r.errors > 0) clean = false;
+        if (r.errors > 0 || r.aborted) clean = false;
       } catch (error) {
         clean = false;
         await logService.warn(

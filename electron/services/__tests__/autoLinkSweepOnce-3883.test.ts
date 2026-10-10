@@ -68,7 +68,7 @@ const CONTACTS = ["c-ana", "c-ben", "c-cyd"];
 
 let db: DatabaseType;
 let swept: string[] = [];
-let onSweep: ((contactId: string) => void) | null = null;
+let onSweep: ((contactId: string) => void | "throw" | "aborted") | null = null;
 
 function seed(): void {
   db.exec(readFileSync(path.join(__dirname, "../../database/schema.sql"), "utf8"));
@@ -129,8 +129,10 @@ maybe("BACKLOG-3883 — one full auto-link sweep per deal per input state", () =
     const real = jest.requireActual<typeof autoLinkModule>("../autoLinkService").autoLinkCommunicationsForContact;
     jest.spyOn(autoLinkModule, "autoLinkCommunicationsForContact").mockImplementation(async (opts) => {
       swept.push(opts.contactId);
-      onSweep?.(opts.contactId);
-      return real(opts);
+      const act = onSweep?.(opts.contactId);
+      if (act === "throw") throw new Error("probe failure");
+      const r = await real(opts);
+      return act === "aborted" ? { ...r, aborted: true } : r;
     });
   });
   afterEach(() => {
@@ -224,6 +226,15 @@ maybe("BACKLOG-3883 — one full auto-link sweep per deal per input state", () =
     };
     const txn = await createDeal();
     expect(inserted).toBe(true);
+    swept = [];
+    await reviewStateService.syncReviewQueueForTransaction({ transactionId: txn, reason: "open" });
+    expect(sorted(swept)).toEqual(sorted(CONTACTS));
+  });
+
+  it.each(["throw", "aborted"] as const)("C8 (%s): a creation sweep in which one contact failed is not remembered; the on-open sync sweeps again", async (mode) => {
+    onSweep = (contactId) => (contactId === "c-ben" ? mode : undefined);
+    const txn = await createDeal();
+    onSweep = null;
     swept = [];
     await reviewStateService.syncReviewQueueForTransaction({ transactionId: txn, reason: "open" });
     expect(sorted(swept)).toEqual(sorted(CONTACTS));

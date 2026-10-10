@@ -1228,7 +1228,7 @@ class TransactionService {
               totalEmailsLinked += autoLinkResult.emailsLinked;
               totalMessagesLinked += autoLinkResult.messagesLinked;
               totalQueuedForReview += autoLinkResult.queuedForReview ?? 0;
-              if (autoLinkResult.errors > 0) clean = false;
+              if (autoLinkResult.errors > 0 || autoLinkResult.aborted) clean = false;
             } catch (error) {
               clean = false;
               await logService.warn(

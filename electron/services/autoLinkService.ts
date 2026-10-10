@@ -134,6 +134,12 @@ export interface AutoLinkResult {
   alreadyLinked: number;
   /** Number of errors encountered */
   errors: number;
+  /**
+   * BACKLOG-3883: the run threw before it finished (the counts are partial). Kept apart
+   * from `errors`, whose meaning callers already report; the full-sweep guard reads it
+   * so a failed run is never remembered as having covered the contact.
+   */
+  aborted?: boolean;
   /** BACKLOG-1364: User-facing message when address filter is ON and 0 emails found */
   addressFilterMessage?: string;
   /**
@@ -1244,7 +1250,7 @@ export async function autoLinkCommunicationsForContact(
 
     // BACKLOG-3883: a run that threw is not a clean run; the full-sweep guard must not
     // remember it as having covered this contact.
-    result.errors++;
+    result.aborted = true;
     return result;
   }
 }

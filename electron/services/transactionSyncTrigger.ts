@@ -254,7 +254,7 @@ export async function ensureTransactionEmailsSynced(params: {
               // have; only the address-missing half is queued for approval.
               queueAmbiguousInsteadOfLinking: true,
             });
-            if (r.errors > 0) clean = false;
+            if (r.errors > 0 || r.aborted) clean = false;
           } catch (linkError) {
             clean = false;
             logService.warn("[BACKLOG-1802] auto-link (covered path) failed", "TxnSyncTrigger", {
