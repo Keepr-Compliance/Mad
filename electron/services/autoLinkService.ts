@@ -1429,6 +1429,9 @@ async function loadOneToOneThreadIndex(
   return { ...readOneToOneThreadIndexOn(ensureDb(), userId), source: "main" };
 }
 
+/** Candidates linked per event-loop turn in the attached-thread expansion. */
+export const EXPANSION_LINKS_PER_TURN = 10;
+
 /** A full read of a large store under a sync's disk load took 44 s on the founder's PC. */
 const THREAD_IDENTITY_WORKER_TIMEOUT_MS = 5 * 60_000;
 
@@ -1649,7 +1652,12 @@ export async function expandAttachedThreadsForUser(
       // 4/5/6. Link candidates the way manual attach does — suppression first,
       //        then idempotency guard, then link.
       let linkedForTxn = 0;
+      let handled = 0;
       for (const [messageId, threadId] of candidates) {
+        // Every link is several synchronous writes (~10 ms each measured on a 150k-message
+        // store): give the event loop a turn every few, so a large backfill does not freeze
+        // the app for seconds (BACKLOG-3816 PC final check).
+        if (++handled % EXPANSION_LINKS_PER_TURN === 0) await new Promise<void>((resolve) => setImmediate(resolve));
         // 6. Suppression: a removed thread or a removed individual message stays removed.
         if (threadId && threadId !== "" && ignoredThreadIds.has(threadId)) {
           result.skippedSuppressed++;

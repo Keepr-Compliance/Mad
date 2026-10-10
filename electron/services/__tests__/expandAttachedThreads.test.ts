@@ -57,7 +57,7 @@ jest.mock("../logService", () => {
 });
 
 import { setDb } from "../db/core/dbConnection";
-import { expandAttachedThreadsForUser } from "../autoLinkService";
+import { EXPANSION_LINKS_PER_TURN, expandAttachedThreadsForUser } from "../autoLinkService";
 import * as contactWorkerPool from "../../workers/contactWorkerPool";
 import { readOneToOneThreadIndexOn } from "../db/threadIdentityIndexDb";
 import logService from "../logService";
@@ -550,6 +550,29 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
       const info = logService.info as jest.Mock;
       const scan = info.mock.calls.filter((c) => String(c[0]).startsWith("[BACKLOG-3784] Attached-thread identity scan: rows="));
       expect(scan[scan.length - 1][2]).toMatchObject({ source: "worker", identityRows: 3 });
+    });
+
+    it("a large backfill gives the event loop a turn while it links (not one long synchronous run)", async () => {
+      insertMacMessage({ id: "m-recent-out", threadId: "T1", direction: "outbound", contact: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
+      manualAttach("m-recent-out", TXN_ID);
+      const backfill = 60;
+      for (let i = 0; i < backfill; i++) {
+        insertMacMessage({ id: `m-old-${i}`, threadId: "T1", direction: i % 2 ? "inbound" : "outbound", contact: PHONE_ROMINA, sentAt: "2019-08-01T00:00:00Z", transactionId: null });
+      }
+      // Counts macrotask turns that run while the expansion is in flight.
+      let turns = 0;
+      let running = true;
+      const tick = (): void => {
+        if (!running) return;
+        turns++;
+        setImmediate(tick);
+      };
+      setImmediate(tick);
+      const res = await expandAttachedThreadsForUser(USER_ID);
+      running = false;
+      expect(res.messagesLinked).toBe(backfill);
+      // One turn per transaction + one per EXPANSION_LINKS_PER_TURN candidates.
+      expect(turns).toBeGreaterThanOrEqual(Math.floor(backfill / EXPANSION_LINKS_PER_TURN));
     });
 
     it("worker fails: the index is built on the main thread and the same messages are linked", async () => {
