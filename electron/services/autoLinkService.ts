@@ -364,10 +364,7 @@ async function findCandidateEmailsWithMatch(
     dateRange.end.toISOString(),
   ];
 
-  const results = dbAll<{ id: string; subject: string | null; body_plain: string | null }>(
-    candidateEmailsSql(contactEmails.length),
-    sqlParams
-  );
+  const results = await readCandidateEmails(userId, contactEmails.length, sqlParams);
 
   // No address to check → every candidate is address-unknowable (addressMatched
   // = null); the caller treats these as address_found (nothing to review). With
@@ -381,16 +378,57 @@ async function findCandidateEmailsWithMatch(
   // and name words can appear in either. Also flag emails that clearly name a
   // DIFFERENT candidate deal (disambiguation) so they aren't shown as Needs
   // review here.
-  return results.map((r) => {
+  // BACKLOG-3883: the matcher scans every body on the main thread; give the event
+  // loop a turn every AUTO_LINK_EMAILS_PER_TURN emails.
+  const classified: CandidateEmail[] = [];
+  for (let i = 0; i < results.length; i++) {
+    if (i > 0 && i % AUTO_LINK_EMAILS_PER_TURN === 0) await new Promise<void>((resolve) => setImmediate(resolve));
+    const r = results[i];
     const content = `${r.subject ?? ""} ${r.body_plain ?? ""}`;
-    return {
+    classified.push({
       id: r.id,
       addressMatched: contentContainsAddress(content, normalizedAddress),
       matchesOtherCandidate: otherCandidateAddresses.some((addr) =>
         contentContainsAddress(content, addr)
       ),
-    };
-  });
+    });
+  }
+  return classified;
+}
+
+/** Candidate emails classified / linked per event-loop turn (BACKLOG-3883). */
+export const AUTO_LINK_EMAILS_PER_TURN = 10;
+
+/**
+ * BACKLOG-3883: the candidate-email read runs on a dedicated contact query worker when
+ * the pool is up, like the candidate-thread read below (BACKLOG-3868). With no index the
+ * planner prefers, it walks every email of the user in the deal's window and returns the
+ * matches with their bodies. Same statement, same parameters, same rows. Main thread
+ * only when no worker ran it (pool not up, or `start_failed`).
+ */
+export async function readCandidateEmails(
+  userId: string,
+  addressCount: number,
+  params: Array<string | number>,
+): Promise<Array<{ id: string; subject: string | null; body_plain: string | null }>> {
+  type Row = { id: string; subject: string | null; body_plain: string | null };
+  if (isPoolReady()) {
+    try {
+      return (await queryOnDedicatedWorker("candidateEmails", userId, CANDIDATE_THREADS_WORKER_TIMEOUT_MS, {
+        addressCount,
+        params,
+      })) as Row[];
+    } catch (error) {
+      const code = error instanceof DedicatedWorkerError ? error.code : "failed";
+      if (code !== "start_failed") throw error;
+      await logService.warn(
+        "[BACKLOG-3883] Candidate-email worker could not start; reading on the main thread",
+        "AutoLinkService",
+        { code },
+      );
+    }
+  }
+  return dbAll<Row>(candidateEmailsSql(addressCount), params);
 }
 
 /**
@@ -952,7 +990,10 @@ export async function autoLinkCommunicationsForContact(
     // Lower the link confidence for the ambiguous ones so downstream signals
     // reflect the doubt.
     let disambiguatedAway = 0;
+    let emailsHandled = 0;
     for (const candidate of emailCandidates) {
+      // BACKLOG-3883: each link or queue is several statements; yield every few.
+      if (++emailsHandled % AUTO_LINK_EMAILS_PER_TURN === 0) await new Promise<void>((resolve) => setImmediate(resolve));
       const isConfident =
         candidate.addressMatched === true ||
         candidate.addressMatched === null;
@@ -1201,6 +1242,9 @@ export async function autoLinkCommunicationsForContact(
       "AutoLinkService"
     );
 
+    // BACKLOG-3883: a run that threw is not a clean run; the full-sweep guard must not
+    // remember it as having covered this contact.
+    result.errors++;
     return result;
   }
 }

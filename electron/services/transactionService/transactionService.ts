@@ -28,6 +28,7 @@ import { getContactNames } from "../contactsService";
 import { FIRST_SCAN_LOOKBACK_MONTHS } from "../../constants";
 import { createCommunicationReferenceSync } from "../messageMatchingService";
 import { autoLinkCommunicationsForContact, type AutoLinkResult } from "../autoLinkService";
+import { runFullSweepOnce } from "../autoLinkSweepGuard";
 import emailSyncService from "../emailSyncService";
 import { dbGet, dbAll, dbTransaction } from "../db/core/dbConnection";
 import {
@@ -1210,23 +1211,34 @@ class TransactionService {
         let totalMessagesLinked = 0;
         let totalQueuedForReview = 0;
 
-        for (const assignment of contact_assignments) {
-          try {
-            const autoLinkResult = await autoLinkCommunicationsForContact({
-              contactId: assignment.contact_id,
-              transactionId,
-              queueAmbiguousInsteadOfLinking: true,
-            });
-            totalEmailsLinked += autoLinkResult.emailsLinked;
-            totalMessagesLinked += autoLinkResult.messagesLinked;
-            totalQueuedForReview += autoLinkResult.queuedForReview ?? 0;
-          } catch (error) {
-            await logService.warn(
-              `Auto-link failed for contact ${assignment.contact_id}: ${error instanceof Error ? error.message : "Unknown"}`,
-              "TransactionService.createAuditedTransaction",
-            );
+        // BACKLOG-3883: this IS the deal's first full sweep. Run through the guard so
+        // the details screen's on-open sync and the create email trigger, which follow
+        // within seconds, skip the same sweep over the same inputs.
+        await runFullSweepOnce(transactionId, async () => {
+          let clean = true;
+          for (const assignment of contact_assignments) {
+            // One event-loop turn per contact: each run is seconds of reads on a large store.
+            await yieldToEventLoop();
+            try {
+              const autoLinkResult = await autoLinkCommunicationsForContact({
+                contactId: assignment.contact_id,
+                transactionId,
+                queueAmbiguousInsteadOfLinking: true,
+              });
+              totalEmailsLinked += autoLinkResult.emailsLinked;
+              totalMessagesLinked += autoLinkResult.messagesLinked;
+              totalQueuedForReview += autoLinkResult.queuedForReview ?? 0;
+              if (autoLinkResult.errors > 0) clean = false;
+            } catch (error) {
+              clean = false;
+              await logService.warn(
+                `Auto-link failed for contact ${assignment.contact_id}: ${error instanceof Error ? error.message : "Unknown"}`,
+                "TransactionService.createAuditedTransaction",
+              );
+            }
           }
-        }
+          return { clean };
+        });
 
         if (totalEmailsLinked > 0 || totalMessagesLinked > 0 || totalQueuedForReview > 0) {
           await logService.info(

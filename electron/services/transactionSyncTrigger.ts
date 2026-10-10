@@ -30,6 +30,7 @@ import * as Sentry from "@sentry/electron/main";
 import transactionService from "./transactionService";
 import emailSyncService, { EMAIL_CACHE_FRESHNESS_MS } from "./emailSyncService";
 import { autoLinkCommunicationsForContact } from "./autoLinkService";
+import { runFullSweepOnce, yieldToEventLoop } from "./autoLinkSweepGuard";
 import logService from "./logService";
 import { computeTransactionDateRange, DEFAULT_BUFFER_DAYS } from "../utils/emailDateRange";
 import { getEmailsByContactId } from "./db/contactDbService";
@@ -239,22 +240,31 @@ export async function ensureTransactionEmailsSynced(params: {
       // is one pass bounded by the deal's ingestion watermark
       // (transactions.last_pending_scan_at), so records that already lost are
       // never re-examined — the BACKLOG-2620 convergence requirement.
-      for (const assignment of contactAssignments) {
-        try {
-          await autoLinkCommunicationsForContact({
-            contactId: assignment.contact_id,
-            transactionId,
-            // BACKLOG-2791: confident emails and every text link, as they always
-            // have; only the address-missing half is queued for approval.
-            queueAmbiguousInsteadOfLinking: true,
-          });
-        } catch (linkError) {
-          logService.warn("[BACKLOG-1802] auto-link (covered path) failed", "TxnSyncTrigger", {
-            contactId: assignment.contact_id,
-            error: linkError instanceof Error ? linkError.message : "Unknown",
-          });
+      // BACKLOG-3883: this is a full sweep of the deal; skip it when nothing it reads
+      // changed since the last one (a deal created seconds ago was swept by creation).
+      await runFullSweepOnce(transactionId, async () => {
+        let clean = true;
+        for (const assignment of contactAssignments) {
+          await yieldToEventLoop();
+          try {
+            const r = await autoLinkCommunicationsForContact({
+              contactId: assignment.contact_id,
+              transactionId,
+              // BACKLOG-2791: confident emails and every text link, as they always
+              // have; only the address-missing half is queued for approval.
+              queueAmbiguousInsteadOfLinking: true,
+            });
+            if (r.errors > 0) clean = false;
+          } catch (linkError) {
+            clean = false;
+            logService.warn("[BACKLOG-1802] auto-link (covered path) failed", "TxnSyncTrigger", {
+              contactId: assignment.contact_id,
+              error: linkError instanceof Error ? linkError.message : "Unknown",
+            });
+          }
         }
-      }
+        return { clean };
+      });
       lastSyncAt.set(transactionId, Date.now());
       return { ran: true, reason, skipped: "covered", windowsFetched: 0 };
     }

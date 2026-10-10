@@ -27,7 +27,8 @@ type QueryType =
   | "emailDerived"
   | "threadIdentity"
   | "threadIdentityTargeted"
-  | "candidateMessageThreads";
+  | "candidateMessageThreads"
+  | "candidateEmails";
 
 /**
  * Per-type payload carried alongside `{ id, type, userId }` (BACKLOG-1717).
