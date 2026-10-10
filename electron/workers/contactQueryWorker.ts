@@ -39,7 +39,7 @@ import {
 } from "../services/db/emailDerivedContactsSql";
 import { readOneToOneThreadIndexOn } from "../services/db/threadIdentityIndexDb";
 import { runThreadIdentityRequestOn, type ThreadIdentityRequest } from "../services/db/threadIdentityTargetedDb";
-import { candidateMessageThreadsSql } from "../services/db/autoLinkSql";
+import { readCandidateMessageThreadsOn } from "../services/db/autoLinkSql";
 
 type QueryType =
   | "external"
@@ -287,7 +287,7 @@ parentPort?.on("message", (msg: WorkerMessage) => {
       if (!Number.isInteger(phoneCount) || (phoneCount as number) < 1 || !Array.isArray(params) || params.length !== (phoneCount as number) + 6) {
         throw new Error("candidateMessageThreads needs phoneCount and its params");
       }
-      rows = db.prepare(candidateMessageThreadsSql(phoneCount as number)).all(...params);
+      rows = readCandidateMessageThreadsOn(db, phoneCount as number, params);
     } else {
       throw new Error(`Unknown query type: ${queryMsg.type}`);
     }

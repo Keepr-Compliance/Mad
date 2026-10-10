@@ -206,6 +206,18 @@ export function candidateMessageThreadsSql(phoneCount: number): SafeSql {
   `;
 }
 
+/**
+ * BACKLOG-3868: the candidate read on a caller-supplied connection (the contact query
+ * worker's own connection), so the statement stays in electron/services/db.
+ */
+export function readCandidateMessageThreadsOn(
+  db: { prepare(sql: string): { all(...params: unknown[]): unknown[] } },
+  phoneCount: number,
+  params: unknown[],
+): unknown[] {
+  return db.prepare(candidateMessageThreadsSql(phoneCount)).all(...params);
+}
+
 /** Is this email already linked to this transaction? Bound: email id, transaction id. */
 export const EXISTING_EMAIL_COMMUNICATION_SQL = sql`
     SELECT id, transaction_id FROM communications

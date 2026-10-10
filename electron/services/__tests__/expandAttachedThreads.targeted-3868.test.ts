@@ -452,6 +452,34 @@ maybe("attached-thread expansion, targeted (BACKLOG-3868)", () => {
       expect(after).toContain("c:x1>txn-a");
     });
 
+    it("an attached 1:1 that becomes a group in the same sync as a new 1:1 thread for its old contact links no wrong thread", async () => {
+      const dbs = [newDb(), newDb()];
+      await bothAfter(dbs, (db) => {
+        ins(db, "a1", "ios-chat-1", "iphone", A.iphone);
+        attach(db, "a1", "txn-a");
+      });
+      const [after, expected] = await bothAfter(dbs, (db) => {
+        ins(db, "a2", "ios-chat-1", "iphone", B.iphone); // B speaks in the attached thread: now a group
+        ins(db, "u1", "ios-chat-7", "iphone", A.iphone); // a new 1:1 thread with A
+      });
+      expect(after).toEqual(expected);
+      expect(after).not.toContain("c:u1>txn-a");
+    });
+
+    it("an attached thread with no identity that gains one is a full targeted run (missed link otherwise)", async () => {
+      const dbs = [newDb(), newDb()];
+      await bothAfter(dbs, (db) => {
+        db.prepare("INSERT INTO messages (id, user_id, channel, direction, participants, thread_id, sent_at) VALUES (?, ?, \x27imessage\x27, \x27outbound\x27, ?, ?, \x272025-01-01\x27)").run("a1", USER, JSON.stringify({ from: "me", to: ["me"] }), "ios-chat-1");
+        attach(db, "a1", "txn-a");
+        ins(db, "x1", "ios-chat-9", "iphone", A.iphone); // an older 1:1 thread with A, not grown later
+      });
+      const [after, expected] = await bothAfter(dbs, (db) => {
+        ins(db, "a2", "ios-chat-1", "iphone", A.iphone); // the attached thread now has identity A
+      });
+      expect(after).toEqual(expected);
+      expect(after).toContain("c:x1>txn-a");
+    });
+
     it("a new attach is expanded on the next run", async () => {
       const dbs = [newDb(), newDb()];
       await bothAfter(dbs, (db) => {
