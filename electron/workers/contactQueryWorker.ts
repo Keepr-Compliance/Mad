@@ -40,6 +40,7 @@ import {
 import { readOneToOneThreadIndexOn } from "../services/db/threadIdentityIndexDb";
 import { runThreadIdentityRequestOn, type ThreadIdentityRequest } from "../services/db/threadIdentityTargetedDb";
 import { readCandidateEmailsOn, readCandidateMessageThreadsOn } from "../services/db/autoLinkSql";
+import { readTransactionTextThreadsOn } from "../services/db/transactionTextPagingDb";
 import {
   planCommunicationDatesOn,
   runMessageDerivedQueryOn,
@@ -58,7 +59,9 @@ type QueryType =
   // BACKLOG-3837: the step-1 Continue scans (wizardMessageScansDb.ts).
   | "messageDerived"
   | "commDatesPlan"
-  | "sourceCoverageFloors";
+  | "sourceCoverageFloors"
+  // BACKLOG-3884: the Texts tab's conversation list (every linked text of one deal).
+  | "transactionTextThreads";
 
 interface InitMessage {
   type: "init";
@@ -92,6 +95,10 @@ interface QueryMessageExtras {
   params?: Array<string | number>;
   /** BACKLOG-3883: `candidateEmails` — the statement's address count (bound values in `params`). */
   addressCount?: number;
+  /** BACKLOG-3884: `transactionTextThreads` — the deal and its audit window (epoch ms, null = open). */
+  transactionId?: string;
+  startMs?: number | null;
+  endMs?: number | null;
 }
 
 interface ShutdownMessage {
@@ -321,6 +328,14 @@ parentPort?.on("message", (msg: WorkerMessage) => {
         throw new Error("candidateEmails needs addressCount and its params");
       }
       rows = readCandidateEmailsOn(db, addressCount as number, params);
+    } else if (queryMsg.type === "transactionTextThreads") {
+      // BACKLOG-3884: the Texts tab's conversation list reads every linked text of the deal.
+      if (!db) throw new Error("Database not initialized");
+      const { transactionId, startMs, endMs } = queryMsg as QueryMessage & QueryMessageExtras;
+      if (typeof transactionId !== "string" || transactionId.length === 0) {
+        throw new Error("transactionTextThreads needs a transactionId");
+      }
+      rows = readTransactionTextThreadsOn(db, transactionId, { startMs: startMs ?? null, endMs: endMs ?? null });
     } else {
       throw new Error(`Unknown query type: ${queryMsg.type}`);
     }

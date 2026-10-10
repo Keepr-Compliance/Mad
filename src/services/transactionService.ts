@@ -9,6 +9,8 @@ import type { Transaction } from "@/types";
 import type { SubmissionScopeIpcResult } from "@electron/types/ipc/window-api-transactions";
 import logger from '../utils/logger';
 import type { EnsureMessagesCoverageResult, TextCoverageResult } from "../../electron/types/auditCoverage";
+import type { TextPageCursor, TextThreadSummary, TextWindow } from "../../electron/types/textThreads";
+import type { Communication } from "../../electron/types/models";
 
 /**
  * Valid detection status values
@@ -90,6 +92,12 @@ export function isValidTransactionStatus(status: unknown): status is Transaction
  * Transaction Service class
  * Provides a clean abstraction over window.api.transactions
  */
+/** The preload API (a function so tests that swap `window.api` are honoured). */
+const window_api = () => window.api;
+
+/** BACKLOG-3884: in-flight `getTextCoverage` requests, by question. */
+const textCoverageInFlight = new Map<string, Promise<TextCoverageResult | null>>();
+
 export const transactionService = {
   /**
    * Update a transaction with validated data
@@ -256,7 +264,43 @@ export const transactionService = {
   async getTextCoverage(transactionId: string, userId: string, chosenSource: string | null): Promise<TextCoverageResult | null> {
     const get = window.api?.transactions?.getTextCoverage;
     if (!get) return null;
-    return get(transactionId, userId, chosenSource);
+    // BACKLOG-3884: the notice is mounted in two branches of the Texts tab and
+    // remounts on every loading flip; one request per question in flight.
+    const key = `${transactionId}|${userId}|${chosenSource ?? ""}`;
+    const pending = textCoverageInFlight.get(key);
+    if (pending) return pending;
+    const request = Promise.resolve(get(transactionId, userId, chosenSource)).finally(() => {
+      textCoverageInFlight.delete(key);
+    });
+    textCoverageInFlight.set(key, request);
+    return request;
+  },
+
+  /** BACKLOG-3884: the Texts tab's conversation list (no texts). */
+  async getTextThreads(transactionId: string, window: TextWindow | null): Promise<{ success: boolean; threads?: TextThreadSummary[]; error?: string }> {
+    return window_api().transactions.getTextThreads(transactionId, window);
+  },
+
+  /** BACKLOG-3884: one page of one conversation, newest first. */
+  async getTextThreadPage(
+    transactionId: string,
+    threadKeys: string[],
+    window: TextWindow | null,
+    cursor: TextPageCursor | null,
+    limit: number,
+  ): Promise<{ success: boolean; rows?: Communication[]; nextCursor?: TextPageCursor | null; error?: string }> {
+    return window_api().transactions.getTextThreadPage(transactionId, threadKeys, window, cursor, limit);
+  },
+
+  /** BACKLOG-3884: the conversation a linked text belongs to. */
+  async findTextThread(transactionId: string, messageId: string): Promise<string | null> {
+    const r = await window_api().transactions.findTextThread(transactionId, messageId);
+    return r.success ? (r.threadKey ?? null) : null;
+  },
+
+  /** BACKLOG-3884: remove whole conversations (every linked message, all history). */
+  async unlinkTextThreads(transactionId: string, threadKeys: string[]): Promise<{ success: boolean; removed?: number; messageIds?: string[] | null; error?: string }> {
+    return window_api().transactions.unlinkTextThreads(transactionId, threadKeys);
   },
 
   /** The Texts tab's "Update now" (Mac): a targeted messages import for an explicit start. */

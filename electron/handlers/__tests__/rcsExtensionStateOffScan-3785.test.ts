@@ -299,7 +299,9 @@ maybe("BACKLOG-3785: Google Messages state poll never runs the coverage scan on 
     );
     const onMessages = plan.filter((d) => / m\b| messages\b/.test(d));
     expect(onMessages.length).toBeGreaterThanOrEqual(2);
-    for (const d of onMessages) expect(d).toMatch(/^SEARCH .*USING INDEX idx_messages_thread_id/);
+    // BACKLOG-3884: idx_messages_thread_sent (thread_id, sent_at) is a thread index too;
+    // the planner may pick either. What is pinned is an index search by thread_id.
+    for (const d of onMessages) expect(d).toMatch(/^SEARCH .*USING INDEX idx_messages_thread_(id|sent) \(thread_id/);
     expect(plan.some((d) => /^SCAN (m|messages)\b/.test(d))).toBe(false);
   });
 
