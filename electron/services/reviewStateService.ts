@@ -760,6 +760,7 @@ export async function syncReviewQueueForTransaction(opts: {
       await yieldToEventLoop();
       try {
         const r = await autoLinkCommunicationsForContact({
+          caller: `reviewSync-${reason}`,
           contactId,
           transactionId,
           queueAmbiguousInsteadOfLinking: true,
@@ -783,7 +784,7 @@ export async function syncReviewQueueForTransaction(opts: {
   // sync is about edited contacts and always runs. Everything below — the watermark,
   // `added` re-derived from pending rows, the broadcast — runs either way.
   if (contactIds && contactIds.length > 0) await sweep();
-  else await runFullSweepOnce(transactionId, sweep);
+  else await runFullSweepOnce(transactionId, sweep, `reviewSync-${reason}`);
 
   // `added` is what the user has not been told about yet.
   //

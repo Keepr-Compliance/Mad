@@ -1152,6 +1152,7 @@ export function registerTransactionCrudHandlers(
           let added = 0;
           for (const op of addOperations) {
             const r = await autoLinkCommunicationsForContact({
+              caller: "addContact",
               contactId: op.contactId,
               transactionId: validatedTransactionId as string,
               // BACKLOG-2791: develop's split — confident emails and every text

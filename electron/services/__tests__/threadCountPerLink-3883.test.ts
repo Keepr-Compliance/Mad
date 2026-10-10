@@ -7,7 +7,8 @@
  * statement and grouping run as an oracle, over every link shape and their combinations.
  *
  * Shapes (each a real row shape the writers produce):
- *   thread link -> chat with text messages / mixed channels / only email-channel rows / no rows (twice)
+ *   thread link -> chat with text messages / mixed channels / only email-channel rows / no rows
+ * (Two thread links to one chat on one deal cannot exist: UNIQUE(thread_id, transaction_id).)
  *   message link -> text message with thread / text without thread (participants key) /
  *                   email-channel message / missing message with thread id / missing, no thread id
  * Every subset of up to 3 shapes, with a shared chat id so keys collide across shapes.
@@ -24,6 +25,7 @@ jest.mock("../logService", () => {
   return { __esModule: true, default: { info: noop, warn: noop, error: noop, debug: noop } };
 });
 
+import * as dbConnection from "../db/core/dbConnection";
 import { setDb } from "../db/core/dbConnection";
 import { countTextThreadsForTransaction } from "../db/communicationDbService";
 
@@ -91,7 +93,6 @@ type Shape =
   | "thread-mixed"
   | "thread-email-only"
   | "thread-empty"
-  | "thread-empty-again"
   | "msg-text-thread"
   | "msg-text-nothread"
   | "msg-email"
@@ -104,7 +105,6 @@ const SHAPES: Shape[] = [
   "thread-mixed",
   "thread-email-only",
   "thread-empty",
-  "thread-empty-again",
   "msg-text-thread",
   "msg-text-nothread",
   "msg-email",
@@ -161,8 +161,6 @@ maybe("BACKLOG-3883 — text-thread count reads one row per link, same count", (
       case "thread-mixed": return void thread("chat-mixed");
       case "thread-email-only": return void thread("chat-email-only");
       case "thread-empty": return void thread("chat-nobody");
-      // a second link to the same message-less chat: the old grouping keyed each by its link id
-      case "thread-empty-again": return void thread("chat-nobody");
       case "thread-shared": return void thread("chat-shared");
       case "msg-text-thread": return void message("mt-1", "chat-msg");
       case "msg-text-nothread": return void message("mn-1", null);
@@ -183,6 +181,20 @@ maybe("BACKLOG-3883 — text-thread count reads one row per link, same count", (
     for (const s of shapes) link(txn, s);
     const expected = oracleCount(db, txn);
     expect(await countTextThreadsForTransaction(txn)).toBe(expected);
+  });
+
+  it("reads one row per link however long the chat is (the freeze: one row per message, after every link)", async () => {
+    const ins = db.prepare(
+      `INSERT INTO messages (id, user_id, external_id, channel, direction, participants, participants_flat, thread_id, sent_at, message_type)
+       VALUES (?, ?, ?, 'imessage', 'inbound', '{}', '', 'chat-long', '2025-01-01T00:00:00Z', 'text')`,
+    );
+    for (let i = 0; i < 2000; i++) ins.run(`long-${i}`, USER, `x-long-${i}`);
+    db.prepare("INSERT INTO communications (id, user_id, transaction_id, thread_id, link_source) VALUES ('l-long', ?, 'txn-long', 'chat-long', 'auto')").run(USER);
+    const all = jest.spyOn(dbConnection, "dbAll");
+    expect(await countTextThreadsForTransaction("txn-long")).toBe(1);
+    const rowsRead = all.mock.results.map((r) => (r.value as unknown[]).length);
+    all.mockRestore();
+    expect(rowsRead).toEqual([1]);
   });
 
   it("the shapes are distinguishable: the oracle counts differ across single shapes", () => {

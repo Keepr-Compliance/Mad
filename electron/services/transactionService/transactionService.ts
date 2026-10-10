@@ -1221,6 +1221,7 @@ class TransactionService {
             await yieldToEventLoop();
             try {
               const autoLinkResult = await autoLinkCommunicationsForContact({
+                caller: "create",
                 contactId: assignment.contact_id,
                 transactionId,
                 queueAmbiguousInsteadOfLinking: true,
@@ -1238,7 +1239,7 @@ class TransactionService {
             }
           }
           return { clean };
-        });
+        }, "create");
 
         if (totalEmailsLinked > 0 || totalMessagesLinked > 0 || totalQueuedForReview > 0) {
           await logService.info(
@@ -1358,6 +1359,7 @@ class TransactionService {
       };
       try {
         autoLink = await autoLinkCommunicationsForContact({
+          caller: "assignContact",
           contactId,
           transactionId,
           queueAmbiguousInsteadOfLinking: true,

@@ -26,6 +26,7 @@
  * and the add-contact path. Those run as before.
  */
 import { ensureDb } from "./db/core/dbConnection";
+import logService from "./logService";
 import {
   readAutoLinkInputToken,
   sameAutoLinkInputToken,
@@ -53,9 +54,11 @@ function readToken(): AutoLinkInputToken | null {
 export async function runFullSweepOnce<T extends { clean: boolean }>(
   transactionId: string,
   sweep: () => Promise<T>,
+  caller = "unknown",
 ): Promise<FullSweepOutcome<T>> {
   // Wait, then re-check: another waiter may have started a sweep meanwhile.
   for (let pending = inFlight.get(transactionId); pending; pending = inFlight.get(transactionId)) {
+    void logService.info(`[AutoLink] sweep waiting for one in flight caller=${caller}`, "AutoLinkSweepGuard", { transactionId });
     try {
       await pending;
     } catch {
@@ -66,8 +69,10 @@ export async function runFullSweepOnce<T extends { clean: boolean }>(
   // Synchronous from here to inFlight.set: no other sweep of this deal can start between.
   const token = readToken();
   if (token && sameAutoLinkInputToken(token, lastCleanSweep.get(transactionId))) {
+    void logService.info(`[AutoLink] sweep skipped (inputs unchanged) caller=${caller}`, "AutoLinkSweepGuard", { transactionId });
     return { ran: false, reason: "unchanged" };
   }
+  void logService.info(`[AutoLink] sweep start caller=${caller}`, "AutoLinkSweepGuard", { transactionId, tracked: token !== null });
 
   const running = sweep();
   inFlight.set(transactionId, running);

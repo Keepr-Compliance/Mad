@@ -248,6 +248,7 @@ export async function ensureTransactionEmailsSynced(params: {
           await yieldToEventLoop();
           try {
             const r = await autoLinkCommunicationsForContact({
+              caller: `covered-${reason}`,
               contactId: assignment.contact_id,
               transactionId,
               // BACKLOG-2791: confident emails and every text link, as they always
@@ -264,7 +265,7 @@ export async function ensureTransactionEmailsSynced(params: {
           }
         }
         return { clean };
-      });
+      }, `covered-${reason}`);
       lastSyncAt.set(transactionId, Date.now());
       return { ran: true, reason, skipped: "covered", windowsFetched: 0 };
     }

@@ -1309,6 +1309,7 @@ class EmailSyncService {
     for (const assignment of contactAssignments) {
       try {
         const result = await autoLinkCommunicationsForContact({
+          caller: "postFetch",
           contactId: assignment.contact_id,
           transactionId,
           queueAmbiguousInsteadOfLinking: queueForReviewInsteadOfLinking,
@@ -1433,6 +1434,7 @@ class EmailSyncService {
     for (const assignment of contactAssignments) {
       try {
         const result = await autoLinkCommunicationsForContact({
+          caller: "autoLinkOnly",
           contactId: assignment.contact_id,
           transactionId,
         });
@@ -1880,6 +1882,7 @@ class EmailSyncService {
     // BACKLOG-2791: develop's classification, with the ambiguous half queued on
     // the details-discovery paths. Confident emails and every text still link.
     const autoLinkResult: AutoLinkResult = await autoLinkCommunicationsForContact({
+      caller: "fetchAndAutoLink",
       contactId,
       transactionId,
       queueAmbiguousInsteadOfLinking: queueForReviewInsteadOfLinking,
