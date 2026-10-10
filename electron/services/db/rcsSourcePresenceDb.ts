@@ -18,12 +18,14 @@ import { reactionExclusion } from "./reactionExclusion";
 import logService from "../logService";
 
 /** The floor filters of MESSAGES_FLOOR_BY_SOURCE_SQL, for one Companion row. */
-const COUNTED_COMPANION_ROW = sql`m.user_id = ?
+// The unary `+` keeps the planner off the user_id / sent_at / channel / duplicate_of indexes (each a walk
+// of every text of the user) so it takes the thread_id range — C2 in the 3785 suite.
+const COUNTED_COMPANION_ROW = sql`+m.user_id = ?
            AND CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata, '$.source') END = 'android_wifi_sync'
-           AND m.channel IN ('sms', 'imessage')
-           AND m.duplicate_of IS NULL
+           AND +m.channel IN ('sms', 'imessage')
+           AND +m.duplicate_of IS NULL
            AND ${reactionExclusion("m")}
-           AND m.sent_at IS NOT NULL`;
+           AND +m.sent_at IS NOT NULL`;
 
 /** Three bound parameters: user id, user id, user id. One row: { found: 0 | 1 }. */
 export const COMPANION_TEXTS_EXIST_SQL = sql`SELECT (
