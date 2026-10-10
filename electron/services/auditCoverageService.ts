@@ -22,7 +22,7 @@
 
 import os from "os";
 import * as Sentry from "@sentry/electron/main";
-import { dbGet, dbAll, dbRun } from "./db/core/dbConnection";
+import { dbGet, dbAll, dbRun, ensureDb } from "./db/core/dbConnection";
 import {
   EMAIL_SYNC_FLOOR_SQL,
   MESSAGES_FLOOR_SQL,
@@ -37,7 +37,8 @@ import { getRcsCacheRun } from "./db/rcsCacheRunsDbService";
 import { getChatCoverage, linkedChatHashes } from "./db/rcsChatCoverageDbService";
 import permissionService from "./permissionService";
 import logService from "./logService";
-import { isPoolReady, queryContacts } from "../workers/contactWorkerPool";
+import { DedicatedWorkerError, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
+import { readSourceCoverageInputToken, sourceCoverageTokenKey } from "./db/sourceCoverageInputTracker";
 import type { SourceFloorRow } from "./db/wizardMessageScansDb";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
 // BACKLOG-2562: the ONE definition of "is this deal live?" (see the call site).
@@ -81,32 +82,108 @@ export function getSourceCoverage(userId: string): SourceCoverage[] {
 }
 
 /**
- * BACKLOG-3837 — `getSourceCoverage` with the per-source floor read
- * (MESSAGES_FLOOR_BY_SOURCE_SQL: json_extract over EVERY text row of the user)
- * on the contact query worker. It ran on the main thread on every "Continue" in
- * step 1 of a new transaction, and logged nothing. Pool down, or the worker read
- * failing: the synchronous read, same answer. Never throws.
+ * BACKLOG-3837 follow-up — the per-source floors (MESSAGES_FLOOR_BY_SOURCE_SQL:
+ * json_extract over EVERY text row of the user; 1.9 s at 668k messages warm, ~70 s
+ * cold on the PC) are read ONLY on a dedicated worker, never on the main thread.
+ *
+ * On the PC the read went to the SHARED contact worker with a 30 s timeout; every call
+ * timed out and fell back to the same scan on main, blocking it for 104 s after a sync.
+ * Now:
+ *  - the read runs on a worker of its own (cannot queue behind the shared worker), with
+ *    a long timeout — nothing on main waits for it;
+ *  - a caller waits at most SOURCE_FLOORS_WAIT_MS, then gets `null` ("pending"), and the
+ *    read carries on and fills the cache;
+ *  - one read per user at a time (concurrent callers share it);
+ *  - the answer is cached against a token of the messages writes
+ *    (db/sourceCoverageInputTracker.ts) captured at the START of the read, so a write
+ *    made while it runs makes the next call read again.
+ * No path reads the floors on main: a worker that cannot start, fails, or times out
+ * leaves the answer unknown (`null`), never "covered".
  */
-export async function getSourceCoverageAsync(userId: string): Promise<SourceCoverage[]> {
-  if (!isPoolReady()) return getSourceCoverage(userId);
-  const startedAt = Date.now();
-  let floorRows: SourceFloorRow[];
+export const SOURCE_FLOORS_WAIT_MS = 4_000;
+export const SOURCE_FLOORS_WORKER_TIMEOUT_MS = 10 * 60_000;
+let sourceFloorsWaitMs = SOURCE_FLOORS_WAIT_MS;
+
+const floorsCache = new Map<string, { key: string; rows: SourceFloorRow[] }>();
+const floorsInFlight = new Map<string, Promise<SourceFloorRow[] | null>>();
+
+/** Test-only: the wait budget, and a clean cache between cases. */
+export function setSourceFloorsWaitMsForTests(ms: number | null): void {
+  sourceFloorsWaitMs = ms ?? SOURCE_FLOORS_WAIT_MS;
+}
+export function resetSourceFloorsCacheForTests(): void {
+  floorsCache.clear();
+  floorsInFlight.clear();
+}
+
+function currentFloorsKey(): string | null {
   try {
-    floorRows = (await queryContacts("sourceCoverageFloors", userId)) as SourceFloorRow[];
-  } catch (error) {
-    logService.warn("[BACKLOG-3837] source floors on the worker failed; reading on main", "AuditCoverage", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return getSourceCoverage(userId);
+    const token = readSourceCoverageInputToken(ensureDb());
+    return token ? sourceCoverageTokenKey(token) : null;
+  } catch {
+    return null;
   }
-  logService.info(`[BACKLOG-3837] source coverage floors read on the worker in ${Date.now() - startedAt}ms`, "AuditCoverage");
+}
+
+/** The floors for the current messages state: cached, the running read, or a new one. */
+function readSourceFloors(userId: string): Promise<SourceFloorRow[] | null> {
+  const key = currentFloorsKey();
+  const hit = floorsCache.get(userId);
+  if (key && hit && hit.key === key) return Promise.resolve(hit.rows);
+  const running = floorsInFlight.get(userId);
+  if (running) return running;
+  const startedAt = Date.now();
+  const promise = (async (): Promise<SourceFloorRow[] | null> => {
+    try {
+      const rows = (await queryOnDedicatedWorker(
+        "sourceCoverageFloors",
+        userId,
+        SOURCE_FLOORS_WORKER_TIMEOUT_MS,
+      )) as SourceFloorRow[];
+      logService.info(`[BACKLOG-3837] source coverage floors read on a dedicated worker in ${Date.now() - startedAt}ms`, "AuditCoverage");
+      if (key) floorsCache.set(userId, { key, rows });
+      return rows;
+    } catch (error) {
+      logService.warn("[BACKLOG-3837] source floors read on a dedicated worker failed; coverage reported as pending (nothing read on main)", "AuditCoverage", {
+        code: error instanceof DedicatedWorkerError ? error.code : "failed",
+        error: error instanceof Error ? error.message : String(error),
+        ms: Date.now() - startedAt,
+      });
+      return null;
+    } finally {
+      floorsInFlight.delete(userId);
+    }
+  })();
+  floorsInFlight.set(userId, promise);
+  return promise;
+}
+
+const PENDING = Symbol("pending");
+
+/**
+ * `getSourceCoverage` without the main-thread scan. `null` = not known yet (the read
+ * is still running, or failed): callers report "pending", never "covered". Never throws.
+ */
+export async function getSourceCoverageAsync(userId: string): Promise<SourceCoverage[] | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<typeof PENDING>((resolve) => {
+    timer = setTimeout(() => resolve(PENDING), sourceFloorsWaitMs);
+    timer.unref?.();
+  });
+  const rows = await Promise.race([readSourceFloors(userId), budget]);
+  clearTimeout(timer);
+  if (rows === PENDING) {
+    logService.info(`[BACKLOG-3837] source coverage floors not ready within ${sourceFloorsWaitMs}ms; reported as pending`, "AuditCoverage");
+    return null;
+  }
+  if (rows === null) return null;
   try {
-    return buildSourceCoverage(userId, floorRows);
+    return buildSourceCoverage(userId, rows);
   } catch (error) {
     logService.warn("[BACKLOG-3663] getSourceCoverage failed (non-fatal)", "AuditCoverage", {
       error: error instanceof Error ? error.message : String(error),
     });
-    return [];
+    return null;
   }
 }
 
@@ -157,7 +234,16 @@ function buildSourceCoverage(userId: string, floorRows: readonly SourceFloorRow[
  * only over-warn. Never throws.
  */
 export function getTransactionSourceCoverage(userId: string, transactionId: string): SourceCoverage[] {
-  const coverage = getSourceCoverage(userId);
+  return withLinkedChatCoverage(getSourceCoverage(userId), userId, transactionId);
+}
+
+/** BACKLOG-3837: `getTransactionSourceCoverage` off main; `null` = pending. Never throws. */
+export async function getTransactionSourceCoverageAsync(userId: string, transactionId: string): Promise<SourceCoverage[] | null> {
+  const coverage = await getSourceCoverageAsync(userId);
+  return coverage ? withLinkedChatCoverage(coverage, userId, transactionId) : null;
+}
+
+function withLinkedChatCoverage(coverage: SourceCoverage[], userId: string, transactionId: string): SourceCoverage[] {
   try {
     const gm = coverage.find((c) => c.source === "google_messages");
     if (!gm) return coverage;
@@ -347,7 +433,7 @@ export async function getAuditCoverage(
     const messagesFloorISO = getMessagesFloorISO(userId);
     const email = getEmailFloor(userId);
     const messagesImporterAvailable = await isMessagesImporterAvailable();
-    // BACKLOG-3837: the per-source floors are read on the contact query worker.
+    // BACKLOG-3837: the per-source floors are read on a dedicated worker only; null = pending.
     const sourceCoverage = await getSourceCoverageAsync(userId);
 
     const needsMessagesImport = isBeforeFloor(proposedStartISO, messagesFloorISO);
@@ -362,7 +448,10 @@ export async function getAuditCoverage(
       needsEmailBackfill,
       expansionStale: isExpansionStale(userId),
       messagesImporterAvailable,
-      sourceGaps: sourceCoverageGaps(sourceCoverage, proposedStartISO, null),
+      // Unknown is never reported as "no gaps": pending, and no sourceGaps at all.
+      ...(sourceCoverage
+        ? { sourceGaps: sourceCoverageGaps(sourceCoverage, proposedStartISO, null) }
+        : { sourceCoveragePending: true }),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -461,6 +550,7 @@ export async function checkExportCompleteness(
       !isBeforeFloor(auditStartISO, deepestImportStartISO); // auditStart >= deepest
     const complete =
       !expansionStale && (!needsMessagesImport || importReachesAuditStart);
+    const txSourceCoverage = await getTransactionSourceCoverageAsync(userId, transactionId);
 
     return {
       success: true,
@@ -471,7 +561,10 @@ export async function checkExportCompleteness(
       expansionStale,
       messagesImporterAvailable,
       // BACKLOG-3663: informational only — never changes `complete`.
-      sourceGaps: sourceCoverageGaps(getTransactionSourceCoverage(userId, transactionId), auditStartISO, null),
+      // BACKLOG-3837: read off main; unknown is pending, never "no gaps".
+      ...(txSourceCoverage
+        ? { sourceGaps: sourceCoverageGaps(txSourceCoverage, auditStartISO, null) }
+        : { sourceCoveragePending: true }),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
