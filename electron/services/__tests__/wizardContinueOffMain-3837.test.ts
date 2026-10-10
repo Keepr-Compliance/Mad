@@ -406,4 +406,28 @@ maybe("BACKLOG-3837: step-1 Continue scans run on the contact query worker (real
       spy.mockRestore();
     }
   }, 60_000);
+
+  it("a failed or empty backfill is retried by a later list open (no once-per-session lock)", async () => {
+    const planCalls = (spy: jest.SpyInstance): number => spy.mock.calls.filter((c) => c[0] === "commDatesPlan").length;
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    };
+    const spy = jest
+      .spyOn(pool, "queryOnDedicatedWorker")
+      .mockRejectedValueOnce(Object.assign(new Error("timed out"), { code: "timeout" }))
+      .mockResolvedValueOnce([]);
+    try {
+      await getContactsSortedByActivity(USER, "1 Main St");
+      await settle();
+      expect(planCalls(spy)).toBe(1); // first open: the worker times out
+      await getContactsSortedByActivity(USER, "1 Main St");
+      await settle();
+      expect(planCalls(spy)).toBe(2); // retried; the run finds no texts yet (before the first sync)
+      await getContactsSortedByActivity(USER, "1 Main St");
+      await settle();
+      expect(planCalls(spy)).toBe(3); // still undated -> still retried
+    } finally {
+      spy.mockRestore();
+    }
+  }, 60_000);
 });

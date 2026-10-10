@@ -1186,25 +1186,23 @@ export const COMM_DATES_APPLY_SLICE = 100;
 /** BACKLOG-3837: the plan reads every text message once; generous, it runs off main. */
 const COMM_DATES_PLAN_TIMEOUT_MS = 10 * 60_000;
 
-/** BACKLOG-3837: one backfill per user at a time; the list's trigger also runs once per session. */
+/** BACKLOG-3837: one backfill per user at a time. */
 const commDatesInFlight = new Map<string, Promise<number>>();
-const commDatesStartedThisSession = new Set<string>();
 
 /** Test seam: forget the per-session trigger state. */
 export function resetCommunicationDatesBackfillForTests(): void {
   commDatesInFlight.clear();
-  commDatesStartedThisSession.clear();
 }
 
 /**
  * BACKLOG-3837 — the activity list's trigger: start the backfill in the
- * background (never awaited by the list), at most once per user per session and
- * never twice at once. A contact set with no matching texts keeps
- * `last_inbound_at` NULL, which re-armed the old probe on EVERY list read.
+ * background (never awaited by the list) and never twice at once. The caller
+ * only reaches this while no contact has a date, so a list read after a failed
+ * or timed-out run, or before the first iPhone sync has brought any texts,
+ * retries without a restart (the pre-3837 behaviour). The scan runs on a
+ * worker and is shared while in flight, so a retry costs the main thread nothing.
  */
 function startCommunicationDatesBackfill(userId: string): void {
-  if (commDatesStartedThisSession.has(userId)) return;
-  commDatesStartedThisSession.add(userId);
   backfillContactCommunicationDates(userId).catch((error) => {
     void logService.warn("Backfill of contact last-message dates failed", "ContactDbService", {
       error: error instanceof Error ? error.message : String(error),

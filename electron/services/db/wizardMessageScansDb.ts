@@ -122,31 +122,57 @@ export interface CommunicationDatePlanRow {
   last_msg_date: string;
 }
 
+/** SQLite's LIKE folds the 26 ASCII letters and nothing else; `toLowerCase` folds all of Unicode. */
+function foldAscii(text: string): string {
+  return text.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+}
+
 /**
  * The newest text date per imported contact, matched exactly as the old
- * `participants_flat LIKE '%' || key || '%'` join matched it: a contact's key
- * contained anywhere in the flat, case-insensitively (LIKE's ASCII rule).
+ * `participants_flat LIKE '%' || key || '%'` join matched it.
  *
- * Reads the messages ONCE (grouped by flat) and does the containment test in
- * memory: O(distinct flats x phone keys) instead of O(messages x phone keys).
- * Writes nothing; the main thread applies the plan.
+ * The rule, stated rather than assumed:
+ *   - A key matches a flat that contains it anywhere, folding ASCII A-Z only
+ *     (SQLite LIKE's rule; a non-ASCII capital never matches its lowercase).
+ *   - A key holding `%` or `_` is a LIKE pattern, not a literal. `phone_e164`
+ *     CAN hold them: contact edit stores the typed phone as entered
+ *     (contactHandlers.ts update -> syncContactPhones), and the import paths
+ *     that normalize do not cover that route. Those keys are evaluated by
+ *     SQLite's own LIKE against the distinct flats, so the semantics are the
+ *     engine's, not a re-implementation of them.
  *
- * A key holding LIKE's own wildcards (`%`, `_`) matched differently under LIKE;
- * phone_e164 never carries them, so this is recorded rather than emulated.
+ * Reads the messages ONCE (grouped by flat): O(distinct flats x phone keys)
+ * instead of O(messages x phone keys). Writes nothing; the main thread applies
+ * the plan.
  */
 export function planCommunicationDatesOn(db: MessageScanRunner, userId: string): CommunicationDatePlanRow[] {
   const keys = db.prepare(BACKFILL_CONTACT_PHONE_KEYS_SQL).all(userId) as Array<{ contact_id: string; phone_key: string }>;
   if (keys.length === 0) return [];
   const flats = db.prepare(BACKFILL_TEXT_FLATS_SQL).all(userId) as Array<{ flat: string; last_msg_date: string | null }>;
-  const lowered = keys.map((k) => ({ contactId: k.contact_id, key: k.phone_key.toLowerCase() }));
+  const literalKeys: Array<{ contactId: string; key: string }> = [];
+  const patternKeys: Array<{ contactId: string; key: string }> = [];
+  for (const k of keys) {
+    const bucket = /[%_]/.test(k.phone_key) ? patternKeys : literalKeys;
+    bucket.push({ contactId: k.contact_id, key: bucket === literalKeys ? foldAscii(k.phone_key) : k.phone_key });
+  }
+  const likeStmt = patternKeys.length > 0 ? db.prepare("SELECT ? LIKE '%' || ? || '%' AS hit") : null;
   const newest = new Map<string, string>();
+  const note = (contactId: string, date: string): void => {
+    const seen = newest.get(contactId);
+    if (seen === undefined || date > seen) newest.set(contactId, date);
+  };
   for (const row of flats) {
     if (row.last_msg_date === null || row.last_msg_date === undefined) continue;
-    const flat = String(row.flat).toLowerCase();
-    for (const k of lowered) {
-      if (!flat.includes(k.key)) continue;
-      const seen = newest.get(k.contactId);
-      if (seen === undefined || row.last_msg_date > seen) newest.set(k.contactId, row.last_msg_date);
+    const flat = String(row.flat);
+    const folded = foldAscii(flat);
+    for (const k of literalKeys) {
+      if (folded.includes(k.key)) note(k.contactId, row.last_msg_date);
+    }
+    if (likeStmt) {
+      for (const k of patternKeys) {
+        const hit = (likeStmt.all(flat, k.key)[0] as { hit: number }).hit;
+        if (hit === 1) note(k.contactId, row.last_msg_date);
+      }
     }
   }
   return Array.from(newest, ([contact_id, last_msg_date]) => ({ contact_id, last_msg_date }));
