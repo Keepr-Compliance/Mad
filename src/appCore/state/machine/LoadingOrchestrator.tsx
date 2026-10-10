@@ -27,6 +27,9 @@ import { useAuth } from "../../../contexts";
 import { authService } from "@/services";
 import { fdaFromProbe, unknownFdaFor } from "./fdaState";
 import { readAccountSetup } from "./routing/readAccountSetup";
+import { hasRecordedEmailProviderIn } from "./recordedEmailProviders";
+import { isBrokenTokenError } from "../../../utils/connectionStatus";
+import type { ConnectionErrorType } from "../../../../electron/services/connectionStatusService";
 import type { PlatformInfo, User, UserData } from "./types";
 import logger from "../../../utils/logger";
 
@@ -715,11 +718,14 @@ export function LoadingOrchestrator({
           // Promise.all — sending an otherwise-fine user down the fallback
           // path. Optional-chained and defaulted so a missing bridge simply
           // means "no recorded skip".
-          platform.isMacOS
-            ? Promise.resolve()
-                .then(() => window.api.preferences?.get?.(userId))
-                .catch(() => undefined)
-            : Promise.resolve(undefined),
+          //
+          // BACKLOG-3888: read on EVERY platform now, because the same bag
+          // carries `emailProviders` (the mailbox providers this account has
+          // ever connected). The FDA decline below is still only consulted on
+          // macOS (fdaFromProbe ignores it elsewhere).
+          Promise.resolve()
+            .then(() => window.api.preferences?.get?.(userId))
+            .catch(() => undefined),
         ]);
 
       // Determine phone type.
@@ -743,6 +749,17 @@ export function LoadingOrchestrator({
         (connectionsResult.google?.connected === true ||
           connectionsResult.microsoft?.connected === true);
 
+      // BACKLOG-3888: a mailbox token row exists but is dead (expired /
+      // refresh failed). The SystemHealthMonitor amber "Reconnect" strip owns
+      // that case, so the setup banner stays out of its way.
+      const connectionErrors = connectionsResult as {
+        google?: { error?: { type?: ConnectionErrorType } | null };
+        microsoft?: { error?: { type?: ConnectionErrorType } | null };
+      };
+      const hasBrokenMailboxToken =
+        isBrokenTokenError(connectionErrors.google?.error) ||
+        isBrokenTokenError(connectionErrors.microsoft?.error);
+
       // BACKLOG-3673: the account record. Anything but a well-formed answer is
       // "unknown" (routes to the account-settings error screen). The email-step and contacts answers only
       // seed the setup queue; neither is a routing input, and a connected
@@ -764,6 +781,12 @@ export function LoadingOrchestrator({
         onboardingPrefsResult as { preferences?: { onboarding?: { fdaSkipped?: unknown } } } | undefined
       )?.preferences?.onboarding;
       const recordedDecline = onboardingPrefs?.fdaSkipped === true;
+
+      // BACKLOG-3888: whether this account has ever connected a mailbox
+      // (cloud preferences.emailProviders, written by main on each successful
+      // connect). Only a non-empty array counts; an unreadable bag means
+      // "no record", which keeps texts-only users un-nagged.
+      const hasRecordedEmailProvider = hasRecordedEmailProviderIn(onboardingPrefsResult);
 
       // BACKLOG-3275: the ONE place the Full Disk Access union is derived, from
       // the two inputs that already existed. Neither contract changes — the
@@ -795,6 +818,8 @@ export function LoadingOrchestrator({
         phoneType,
         hasCompletedEmailOnboarding,
         hasEmailConnected,
+        hasRecordedEmailProvider,
+        hasBrokenMailboxToken,
         needsDriverSetup,
         fda,
         setup: accountSetup.setup,

@@ -114,6 +114,18 @@ export interface UserData {
   contactSourceAnswered?: boolean;
   /** True if user has connected an email account */
   hasEmailConnected: boolean;
+  /**
+   * BACKLOG-3888: the account has connected a mailbox at some point
+   * (cloud `user_preferences.preferences.emailProviders` is non-empty). Never
+   * cleared by a disconnect. Absent / false = no record (e.g. texts-only).
+   */
+  hasRecordedEmailProvider?: boolean;
+  /**
+   * BACKLOG-3888: at load, a mailbox token row existed but was dead
+   * (TOKEN_REFRESH_FAILED / TOKEN_EXPIRED / CONNECTION_CHECK_FAILED). The
+   * SystemHealthMonitor amber "Reconnect" strip covers that mailbox.
+   */
+  hasBrokenMailboxToken?: boolean;
   /** True if Windows + iPhone user needs Apple Mobile Device driver */
   needsDriverSetup: boolean;
   /**
@@ -507,6 +519,11 @@ export interface EmailDisconnectedAction {
   type: "EMAIL_DISCONNECTED";
   /** The email provider that was disconnected */
   provider: "google" | "microsoft";
+  /**
+   * BACKLOG-3888: true when another mailbox is still connected after this
+   * disconnect. Omitted = false (the previous behaviour).
+   */
+  anyStillConnected?: boolean;
 }
 
 /**
