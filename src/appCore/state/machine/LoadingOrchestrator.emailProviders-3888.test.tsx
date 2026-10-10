@@ -1,6 +1,9 @@
 /**
- * BACKLOG-3888 — a returning user who chose email gets the setup banner when
- * no mailbox is connected, whatever texts sources they have.
+ * BACKLOG-3888 — the recorded email providers (cloud preferences.emailProviders)
+ * reach renderer state through the bounded account-setup read, on every
+ * platform, and the ResumeSetupBanner keeps its ORIGINAL floor-only rule: a
+ * recorded provider does NOT bring it up for a user with a texts source (the
+ * founder's surface for that case is the amber SystemHealthMonitor strip).
  *
  * End-to-end over the REAL renderer path: LoadingOrchestrator Phase 4 reads
  * the account-setup read (which carries the cloud preferences.emailProviders
@@ -16,7 +19,6 @@
  *   preferences:get        preferenceHandlers.ts:30-49 -> { success: true, preferences } (macOS only)
  *   system:check-all-connections  systemHandlers.ts:1166-1170 -> { success: true, ...checkAllConnections() }
  *     not connected        connectionStatusService.ts:~131 { connected: false, error: { type: "NOT_CONNECTED" } }
- *     refresh failed       connectionStatusService.ts:215-227 { connected: false, email, error: { type: "TOKEN_REFRESH_FAILED", ... } }
  *   user:get-phone-type    userSettingsHandlers.ts:80-83 -> { success: true, phoneType }
  */
 import React from "react";
@@ -46,18 +48,6 @@ jest.mock("../../../contexts/NetworkContext", () => ({
 const NOT_CONNECTED = {
   connected: false,
   error: { type: "NOT_CONNECTED", userMessage: "Outlook is not connected" },
-};
-const CONNECTED = { connected: true, email: "broker@example.com", error: null };
-const REFRESH_FAILED = {
-  connected: false,
-  email: "broker@example.com",
-  error: {
-    type: "TOKEN_REFRESH_FAILED",
-    userMessage: "Your Outlook connection expired. Reconnect to keep capturing email.",
-    action: "Reconnect",
-    actionHandler: "reconnect-microsoft",
-    details: "Failed to refresh authentication token",
-  },
 };
 
 const mockApi = {
@@ -129,9 +119,17 @@ function arrange(opts: {
   mockApi.preferences.get.mockResolvedValue({ success: true, preferences: {} });
 }
 
-function Status() {
+
+function Probe() {
   const { state } = useAppState();
-  return <div data-testid="status">{state.status}</div>;
+  return (
+    <>
+      <div data-testid="status">{state.status}</div>
+      <div data-testid="recorded">
+        {state.status === "ready" ? String(state.userData.hasRecordedEmailProvider === true) : "n/a"}
+      </div>
+    </>
+  );
 }
 
 const app = {
@@ -147,7 +145,7 @@ async function load(platform: Platform): Promise<void> {
         initialState={{ status: "loading", phase: "loading-user-data", user: baseUser, platform } as AppState}
       >
         <LoadingOrchestrator>
-          <Status />
+          <Probe />
           <ResumeSetupBanner app={app} />
         </LoadingOrchestrator>
       </AppStateProvider>
@@ -159,6 +157,7 @@ async function load(platform: Platform): Promise<void> {
   });
 }
 
+const recorded = () => screen.getByTestId("recorded").textContent;
 const banner = () => screen.queryByTestId("resume-setup-banner");
 
 beforeEach(() => {
@@ -168,107 +167,31 @@ beforeEach(() => {
 describe.each<[string, Platform]>([
   ["Windows", windows],
   ["macOS", macOS],
-])("BACKLOG-3888 — chose email, no mailbox (%s)", (_name, platform) => {
-  it.each<["iphone" | "android" | null]>([["iphone"], ["android"], [null]])(
-    "recorded provider + no mailbox + phoneType %s -> banner",
-    async (phoneType) => {
-      arrange({ platform, phoneType, emailProviders: ["outlook"] });
-      await load(platform);
-      expect(banner()).toBeInTheDocument();
-    },
-  );
-
-  it("recorded provider + no mailbox + texts source present -> banner (texts do not hide it)", async () => {
-    arrange({
-      platform,
-      phoneType: "iphone",
-      fdaGranted: true,
-      emailProviders: ["outlook", "gmail"],
-    });
+])("BACKLOG-3888 — recorded providers reach renderer state (%s)", (_name, platform) => {
+  it.each<[string, string[] | "unreadable", string]>([
+    ["one provider", ["outlook"], "true"],
+    ["two providers", ["outlook", "gmail"], "true"],
+    ["empty set", [], "false"],
+    ["unreadable (timeout / cache path)", "unreadable", "false"],
+  ])("%s -> hasRecordedEmailProvider %s", async (_n, emailProviders, expected) => {
+    arrange({ platform, phoneType: "iphone", emailProviders });
     await load(platform);
-    expect(banner()).toBeInTheDocument();
+    expect(recorded()).toBe(expected);
   });
 
-  it("recorded provider + a mailbox connected -> no banner", async () => {
-    arrange({
-      platform,
-      phoneType: "iphone",
-      emailProviders: ["outlook"],
-      microsoft: CONNECTED,
-    });
+  it("ResumeSetupBanner is back to the floor-only rule: recorded provider + no mailbox + texts source -> NO banner", async () => {
+    arrange({ platform, phoneType: "iphone", fdaGranted: true, emailProviders: ["outlook"] });
     await load(platform);
-    expect(banner()).not.toBeInTheDocument();
-  });
-
-  it("two recorded providers, only one connected -> no banner", async () => {
-    arrange({
-      platform,
-      phoneType: "iphone",
-      emailProviders: ["outlook", "gmail"],
-      google: CONNECTED,
-    });
-    await load(platform);
-    expect(banner()).not.toBeInTheDocument();
-  });
-
-  it("NO recorded provider + no mailbox + phoneType iphone -> no banner (texts-only user is not nagged)", async () => {
-    arrange({ platform, phoneType: "iphone", emailProviders: [] });
-    await load(platform);
-    expect(banner()).not.toBeInTheDocument();
-  });
-
-  it("empty recorded set -> no banner", async () => {
-    arrange({ platform, phoneType: "android", emailProviders: [] });
-    await load(platform);
-    expect(banner()).not.toBeInTheDocument();
-  });
-
-  it("bag unreadable (account-setup timeout/cache path) -> no banner (unknown never nags)", async () => {
-    arrange({ platform, phoneType: "iphone", emailProviders: "unreadable" });
-    await load(platform);
-    expect(banner()).not.toBeInTheDocument();
-  });
-
-  it("recorded provider + token expired (amber Reconnect strip owns it) -> no banner", async () => {
-    arrange({
-      platform,
-      phoneType: "iphone",
-      emailProviders: ["outlook"],
-      microsoft: REFRESH_FAILED,
-    });
-    await load(platform);
+    expect(recorded()).toBe("true"); // PRECONDITION: the record did arrive
     expect(banner()).not.toBeInTheDocument();
   });
 });
 
-describe("BACKLOG-3888 — loading", () => {
-  it("no banner while user data is still loading, even with a recorded provider", async () => {
-    arrange({ platform: windows, phoneType: "iphone", emailProviders: ["outlook"] });
-    // Hold the connection check open: the load cannot finish.
-    mockApi.system.checkAllConnections.mockReturnValue(new Promise(() => {}));
-    render(
-      <AuthProvider>
-        <AppStateProvider
-          initialState={{ status: "loading", phase: "loading-user-data", user: baseUser, platform: windows } as AppState}
-        >
-          <LoadingOrchestrator>
-            <Status />
-            <ResumeSetupBanner app={app} />
-          </LoadingOrchestrator>
-        </AppStateProvider>
-      </AuthProvider>,
-    );
-    await waitFor(() => expect(mockApi.system.checkAllConnections).toHaveBeenCalled());
-    await waitFor(() => expect(mockApi.user.getAccountSetup).toHaveBeenCalled());
-    // Still loading: the orchestrator shows its loading screen, not the app.
-    expect(screen.queryByTestId("status")).toBeNull();
-    expect(banner()).not.toBeInTheDocument();
-  });
-
+describe("BACKLOG-3888 — startup is not held by the preferences read", () => {
   it("Windows: a hung preferences read does not hold startup (the bag arrives via the bounded account-setup read)", async () => {
     arrange({ platform: windows, phoneType: "iphone", emailProviders: ["outlook"] });
     mockApi.preferences.get.mockReturnValue(new Promise(() => {}));
     await load(windows);
-    expect(banner()).toBeInTheDocument();
+    expect(recorded()).toBe("true");
   });
 });

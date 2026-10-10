@@ -386,38 +386,3 @@ export function selectSetupIncomplete(state: AppState): boolean {
   const { userData, platform } = state;
   return !hasMinimumDataSourceForUser(userData, platform);
 }
-
-// =============================================================================
-// CHOSEN-EMAIL-NOT-CONNECTED SELECTOR (BACKLOG-3888)
-// =============================================================================
-
-/**
- * Whether a user in the main app chose email at some point (cloud
- * `preferences.emailProviders` is non-empty — see recordedEmailProviders.ts)
- * and has NO mailbox connected now.
- *
- * Independent of texts sources on purpose: a phone type or Full Disk Access
- * does not stand in for the mailbox the user chose. Users with no recorded
- * provider (texts-only, or accounts that never connected a mailbox) are never
- * reported, so this adds no nag for them.
- *
- * Any connected mailbox satisfies it: a user with two recorded providers and
- * one still connected is not reported (per-source nudges are BACKLOG 2.41).
- *
- * Not reported while a mailbox token is dead (hasBrokenMailboxToken): the
- * SystemHealthMonitor amber "Reconnect" strip already covers that mailbox.
- *
- * Returns false for every non-`ready` state, so nothing shows while the
- * connection state and preferences are still loading.
- */
-export function selectChosenEmailNotConnected(state: AppState): boolean {
-  if (state.status !== "ready") {
-    return false;
-  }
-  return (
-    state.userData.hasRecordedEmailProvider === true &&
-    state.userData.hasEmailConnected !== true &&
-    // The amber "connection expired → Reconnect" strip owns a dead token.
-    state.userData.hasBrokenMailboxToken !== true
-  );
-}

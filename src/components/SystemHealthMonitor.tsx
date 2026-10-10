@@ -12,6 +12,7 @@ import { systemService, authService } from '../services';
 import { identityOf } from '../utils/healthIssueIdentity';
 import logger from '../utils/logger';
 import { openEmailSettings } from '../utils/openEmailSettings';
+import { useEmailConnectionListener } from '../utils/emailConnectionEvents';
 import { FdaHelpSheet } from './permissions/FdaHelpSheet';
 
 interface SystemHealthMonitorProps {
@@ -164,6 +165,16 @@ function SystemHealthMonitor({
     };
   }, [checkSystemHealth]);
 
+  // BACKLOG-3888: re-check as soon as a mailbox connects, so a "connect" row
+  // disappears at once instead of at the next 2-minute poll.
+  const handleEmailConnectionChanged = useCallback(
+    (detail: { connected: boolean }) => {
+      if (detail.connected) void checkSystemHealth();
+    },
+    [checkSystemHealth],
+  );
+  useEmailConnectionListener(handleEmailConnectionChanged);
+
   const handleDismiss = (issueIdentity: string | null) => {
     // A row with no derivable identity is not dismissable — see identityOf.
     if (issueIdentity === null) return;
@@ -189,6 +200,15 @@ function SystemHealthMonitor({
         setShowFdaExplainer(true);
         break;
 
+      // BACKLOG-3888: a recorded provider with no mailbox connected. Both
+      // providers recorded -> land on the sources block (both Connect buttons).
+      case "connect-email":
+        if (onOpenSettings) {
+          openEmailSettings(onOpenSettings, "emails-block-sources");
+          handleDismiss(issueIdentity);
+        }
+        break;
+
       case "connect-google":
       case "reconnect-google":
       case "connect-microsoft":
@@ -198,7 +218,16 @@ function SystemHealthMonitor({
         if (onOpenSettings) {
           // Navigate to Settings + highlight email connections (shared with the
           // SyncStatusIndicator reconnect CTA so both land in the same place).
-          openEmailSettings(onOpenSettings);
+          // BACKLOG-3888: a "connect" row lands on that provider's Connect
+          // button; reconnect rows keep landing on the section.
+          openEmailSettings(
+            onOpenSettings,
+            issue.actionHandler === "connect-microsoft"
+              ? "email-connection-microsoft-connect"
+              : issue.actionHandler === "connect-google"
+                ? "email-connection-google-connect"
+                : undefined,
+          );
           handleDismiss(issueIdentity);
         } else {
           // Fallback: Try OAuth directly if Settings callback not available
