@@ -233,6 +233,31 @@ describe("seal / scan", () => {
   });
 });
 
+describe("sealPassPercent — the quit prompt's percentage (BACKLOG-3816)", () => {
+  it("is null with no pass, the pass's last reported percentage while it runs (whatever sink it reports to), null after", async () => {
+    makeChain();
+    const midPass: Array<number | null> = [];
+    let svc!: BackupAtRest;
+    const beforeSeal = () => {
+      midPass.push(svc.sealPassPercent());
+    };
+    const pairs: Array<[number, number | null]> = [];
+    svc = service({ sealEngineOptions: { beforeSeal, retryDelayMs: 0 } });
+    expect(svc.sealPassPercent()).toBeNull();
+    // The caller's own progress sink (as the launch job and the post-sync seal pass one).
+    await svc.migrate(UDID, (p) => {
+      if (p.phase === "migrating") pairs.push([describeBackupAtRestProgress(p).percent, svc.sealPassPercent()]);
+    });
+    expect(midPass.length).toBeGreaterThan(0);
+    expect(midPass.every((v) => typeof v === "number")).toBe(true);
+    // What the quit prompt reads is what the pass last reported, up to its 100%.
+    expect(pairs.length).toBeGreaterThan(1);
+    for (const [reported, read] of pairs) expect(read).toBe(reported);
+    expect(pairs[pairs.length - 1][0]).toBe(100);
+    expect(svc.sealPassPercent()).toBeNull();
+  });
+});
+
 describe("`encrypted` only after a clean scan", () => {
   it("a file that keeps failing (locked) leaves the marker short of encrypted, and the next run finishes it", async () => {
     makeChain();

@@ -21,6 +21,7 @@ import { getMainWindow } from "../windowRegistry";
 import { stopBackupForQuit } from "./syncHandlers";
 import { getBackupAtRest } from "../services/atRest/backupAtRest";
 import { waitForLinksToFinish } from "../utils/linkInFlight";
+import { noteSystemQuit } from "../utils/sealQuitPrompt";
 
 /**
  * BACKLOG-3785: on Windows `quitAndInstall` launches the installer BEFORE the quit,
@@ -178,6 +179,9 @@ export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
     // TASK-2330: Track when user triggers install so Sentry breadcrumb trail
     // shows the full lifecycle: check -> available -> downloaded -> install
     Sentry.addBreadcrumb({ category: "auto-updater", message: "User triggered install-update", level: "info" });
+    // BACKLOG-3816: Restart to update does not ask about securing the iPhone backup;
+    // waitForQuitBlockers seals the index files first.
+    noteSystemQuit("update");
 
     // Ensure app relaunches after update
     // Parameters: isSilent, isForceRunAfter
@@ -191,6 +195,8 @@ export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
         liveWindow.removeAllListeners("close");
         liveWindow.close();
       }
+      // Re-armed here: the wait above can outlast the reset window.
+      noteSystemQuit("update");
       autoUpdater.quitAndInstall(false, true);
     }));
   });

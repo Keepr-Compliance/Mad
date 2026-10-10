@@ -476,6 +476,8 @@ type BusyReason = "migrating" | "syncing" | "sealing";
 
 export class BackupAtRest extends EventEmitter {
   private readonly busy = new Map<string, BusyReason>();
+  /** The last progress each phone's pass reported (cleared when its lock is released). */
+  private readonly lastProgress = new Map<string, BackupAtRestProgress>();
   private readonly log: LogFn;
   /** Damaged-file count from the last scan after a seal, per phone. */
   private readonly lastScanDamaged = new Map<string, number>();
@@ -535,12 +537,18 @@ export class BackupAtRest extends EventEmitter {
    * have no caller watching; syncHandlers forwards the event to `sync:progress`.
    */
   private progressSink(onProgress?: (p: BackupAtRestProgress) => void): (p: BackupAtRestProgress) => void {
-    return onProgress ?? ((p) => this.emit("progress", p));
+    const forward = onProgress ?? ((p: BackupAtRestProgress) => this.emit("progress", p));
+    return (p) => {
+      // Kept for the quit prompt (see sealPassPercent), whichever sink the pass reports to.
+      this.lastProgress.set(p.udid, p);
+      forward(p);
+    };
   }
 
   /** Release the per-phone lock and wake a sync waiting for it. */
   private release(udid: string): void {
     this.busy.delete(udid);
+    this.lastProgress.delete(udid);
     this.pausable.delete(udid);
     this.emit("released", udid);
   }
@@ -601,6 +609,24 @@ export class BackupAtRest extends EventEmitter {
   /** Any phone whose backup is being migrated or sealed (for status displays). */
   activeWork(): Array<{ udid: string; reason: BusyReason }> {
     return [...this.busy.entries()].map(([udid, reason]) => ({ udid, reason }));
+  }
+
+  /**
+   * Quit prompt (BACKLOG-3816): the percentage of a running seal pass — the post-sync
+   * seal, a recovery reseal or a launch migration — or null when none is running. A
+   * phone that is `syncing` (the transfer) does not count. More than one pass: the
+   * lowest percentage. A pass that has not reported yet counts as 0.
+   */
+  sealPassPercent(): number | null {
+    let lowest: number | null = null;
+    for (const [udid, reason] of this.busy) {
+      if (reason !== "sealing" && reason !== "migrating") continue;
+      const last = this.lastProgress.get(udid);
+      const percent =
+        last && (last.phase === "sealing" || last.phase === "migrating") ? describeBackupAtRestProgress(last).percent : 0;
+      lowest = lowest === null ? percent : Math.min(lowest, percent);
+    }
+    return lowest;
   }
 
   async readMarker(udid: string): Promise<MarkerReading> {
