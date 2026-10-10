@@ -137,6 +137,12 @@ export const BACKUP_SECURING_SENTENCE = "Syncing your iPhone will be available w
 export const BACKUP_SECURING_MESSAGE = `Keepr is securing your saved iPhone backup. ${BACKUP_SECURING_SENTENCE}`;
 /** Shown in the sync while a background seal stops at a file boundary (seconds at most). */
 export const BACKUP_PAUSING_MESSAGE = "Getting your saved iPhone backup ready for this sync...";
+/**
+ * PC final check 2026-10-10: after a sync the files it wrote are sealed within seconds,
+ * then the pass checks the rest of the backup (~575k sealed files, ~8 min on the PC)
+ * before it can record `encrypted`. That stretch read "100%". It now reads this, at 99%.
+ */
+export const BACKUP_FINISHING_MESSAGE = "Securing your iPhone backup… finishing up";
 export const BACKUP_AT_REST_KEY_UNAVAILABLE_MESSAGE =
   "Keepr cannot open its encryption key on this computer, so it will not copy your iPhone backup unprotected. Restart Keepr and try again.";
 export const BACKUP_AT_REST_DISK_MESSAGE =
@@ -288,6 +294,11 @@ export function describeBackupAtRestProgress(p: BackupAtRestProgress): { message
       message: `Preparing your saved iPhone backup (${p.done.toLocaleString()} of ${p.total.toLocaleString()} files)...`,
       percent,
     };
+  }
+  // 100% only when the pass has handed out every file (PC final check 2026-10-10): the
+  // estimate's work can be done while the walk still checks the rest of the backup.
+  if (percent >= 100 && p.done < p.total) {
+    return { message: BACKUP_FINISHING_MESSAGE, percent: 99 };
   }
   // Percentage only (founder decision 2026-10-09): the time-left estimate sat at
   // "about 4 min left" from 8% to 56% on the PC and is not shown.
@@ -659,9 +670,18 @@ export class BackupAtRest extends EventEmitter {
    * followed (a backup never contains one). Orphaned *.kenc-tmp files — a killed seal
    * leaves ciphertext, a killed unseal leaves PLAINTEXT — are deleted here.
    */
-  private async listFiles(chainDir: string, report: PassReport | null): Promise<ListedFile[]> {
+  private async listFiles(chainDir: string, report: PassReport | null, pause?: Int32Array): Promise<ListedFile[] | null> {
     const out: ListedFile[] = [];
+    // PC final check 2026-10-10: listing ~576k files (one lstat each) took minutes on the
+    // PC, and a sync asking for the phone waited for all of it ("Getting your saved iPhone
+    // backup ready…" for 2.5 min) — the pause flag was only read once the pass started.
+    // It is read before every directory now; null = paused while listing.
+    let paused = false;
     const walk = async (dir: string, atRoot: boolean): Promise<void> => {
+      if (paused || (pause && Atomics.load(pause, 0) === 1)) {
+        paused = true;
+        return;
+      }
       let entries: fs.Dirent[];
       try {
         entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -704,7 +724,7 @@ export class BackupAtRest extends EventEmitter {
       for (const sub of subdirs) await walk(sub, false);
     };
     await walk(chainDir, true);
-    return out;
+    return paused ? null : out;
   }
 
   /** Magic first (one open for the common plaintext case), structural probe only on a magic hit. */
@@ -774,7 +794,13 @@ export class BackupAtRest extends EventEmitter {
     const report = emptyReport();
     // Newest first: what the last sync wrote (and the index files it unsealed) is sealed
     // within seconds, before the walk over the unchanged rest of the chain.
-    const listed = (await this.listFiles(chain, report)).sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
+    const listing = await this.listFiles(chain, report, pause);
+    if (listing === null) {
+      report.paused = true;
+      report.ms = Date.now() - started;
+      return report;
+    }
+    const listed = listing.sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
     report.files = listed.length;
     const largest = listed.reduce((m, f) => Math.max(m, f.size), 0);
     if (!(await this.diskOk(chain, largest))) {
@@ -824,7 +850,21 @@ export class BackupAtRest extends EventEmitter {
       files: listed.length,
       mb: Math.round(listed.reduce((n, f) => n + f.size, 0) / 1048576),
     });
-    notify({ udid, phase, done: 0, total: listed.length, doneUnits: 0, totalUnits });
+    // Once the estimated work is done while the walk goes on, the line reads "finishing
+    // up" (describeBackupAtRestProgress); logged once so the PC log shows where it starts.
+    let finishingLogged = false;
+    const tick = (p: BackupAtRestProgress): void => {
+      if (!finishingLogged && p.done < p.total && p.doneUnits !== undefined && p.doneUnits === p.totalUnits) {
+        finishingLogged = true;
+        this.log("info", "[BackupAtRest] this sync's files are sealed; checking the rest of the backup", {
+          phase,
+          done: p.done,
+          files: p.total,
+        });
+      }
+      notify(p);
+    };
+    tick({ udid, phase, done: 0, total: listed.length, doneUnits: 0, totalUnits });
     const result = await this.pass(listed, "seal", key, pause, (indexes, outcomes) => {
       outcomes.forEach((o, k) => {
         this.tally(report, o);
@@ -857,16 +897,19 @@ export class BackupAtRest extends EventEmitter {
       }
       if (now - lastEmit >= PROGRESS_INTERVAL_MS && done < listed.length) {
         lastEmit = now;
-        notify({ udid, phase, done, total: listed.length, doneUnits, totalUnits });
+        tick({ udid, phase, done, total: listed.length, doneUnits, totalUnits });
       }
     });
     if (result.stopped) report.paused = true;
+    if ((this.deps.workers ?? 0) > 0 && result.workersUsed === 0) {
+      this.log("warn", "[BackupAtRest] the seal pass ran on the main thread (no seal worker started)", { phase, files: listed.length });
+    }
     report.seen = new Set(listed.filter((_, i) => result.outcomes[i] !== undefined).map((f) => f.path));
     // One directory fsync per touched directory makes the renames durable before any
     // marker can say `encrypted` (see sealEngine.ts: a lost rename leaves the plaintext,
     // never loses it).
     await pool([...result.touchedDirs], 4, (dir) => fsyncDir(dir));
-    if (!result.stopped) notify({ udid, phase, done: listed.length, total: listed.length, doneUnits, totalUnits: doneUnits });
+    if (!result.stopped) tick({ udid, phase, done: listed.length, total: listed.length, doneUnits, totalUnits: doneUnits });
     report.ms = Date.now() - started;
     return report;
   }
@@ -945,7 +988,7 @@ export class BackupAtRest extends EventEmitter {
         }
       }
     } else {
-      listed = await this.listFiles(chain, report);
+      listed = (await this.listFiles(chain, report)) ?? [];
     }
     report.files = listed.length;
     const largest = listed.reduce((m, f) => Math.max(m, f.size), 0);
@@ -1006,7 +1049,12 @@ export class BackupAtRest extends EventEmitter {
     };
     if (report.failed > 0 || !report.seen) return result;
     const seen = report.seen;
-    const unseen = (await this.listFiles(this.chainDir(udid), null)).filter((f) => !seen.has(f.path));
+    const listing = await this.listFiles(this.chainDir(udid), null, this.pausable.get(udid));
+    if (listing === null) {
+      result.paused = true;
+      return result;
+    }
+    const unseen = listing.filter((f) => !seen.has(f.path));
     if (unseen.length === 0) return result;
     const noKey: AtRestKey = { keyId: "0".repeat(32), key: Buffer.alloc(32) };
     const pass = await this.pass(unseen, "classify", noKey, this.pausable.get(udid));
@@ -1028,7 +1076,11 @@ export class BackupAtRest extends EventEmitter {
 
   private async scanAt(dir: string, pause?: Int32Array): Promise<ScanReport> {
     const result: ScanReport = { sealed: 0, plaintext: 0, empty: 0, damaged: 0 };
-    const listed = await this.listFiles(dir, null);
+    const listed = await this.listFiles(dir, null, pause);
+    if (listed === null) {
+      result.paused = true;
+      return result;
+    }
     if (listed.length === 0) return result;
     // Classification needs no key; the workers are started with an empty one.
     const noKey: AtRestKey = { keyId: "0".repeat(32), key: Buffer.alloc(32) };
@@ -1571,9 +1623,13 @@ export class BackupAtRest extends EventEmitter {
     if (pending.length === 0) return report;
     const key = await this.sealKey();
     const touched = new Set<string>();
+    // PC final check 2026-10-10 (a long main-process freeze after a sync): 0 here means the
+    // index files (Manifest.db ~1 GB) were sealed IN-PROCESS, on the main thread.
+    let workersUsed = 0;
     for (let attempt = 0; pending.length > 0; attempt++) {
       const batch = pending;
       const result = await this.pass(batch, "seal", key, undefined);
+      workersUsed = Math.max(workersUsed, result.workersUsed);
       for (const d of result.touchedDirs) touched.add(d);
       const again: ListedFile[] = [];
       const lastTry = attempt >= INDEX_SEAL_RETRY_DELAYS_MS.length;
@@ -1607,6 +1663,7 @@ export class BackupAtRest extends EventEmitter {
         failed: report.failed,
         failedCodes: report.failedCodes,
         ms: report.ms,
+        workersUsed,
       });
     }
     return report;
@@ -1768,7 +1825,18 @@ export class BackupAtRest extends EventEmitter {
       // A chain a sync or a crash left part plain is RESEALED (`sealing`); a pre-2.40 chain
       // is MIGRATED (`migrating`).
       const recovery = marker === "syncing" || marker === "sealing" || marker === "unreadable";
-      return await this.sealAndRecord(udid, "migrating", onProgress, recovery ? "sealing" : "migrating");
+      if (!recovery) return await this.sealAndRecord(udid, "migrating", onProgress, "migrating");
+      // PC final check 2026-10-10: a recovery after an interrupted sync is a seal, not the
+      // one-time migration, and must not restart the line at 0% over the whole chain. The
+      // estimate is what the interrupted sync wrote (since its `syncing` marker); when that
+      // time is not known (a seal was cut off) nothing is estimated, so the line reads
+      // "finishing up" while the walk checks the chain.
+      if (!this.syncUnsealedAt.has(udid)) {
+        const record = await this.deps.markers().readBackupMarker(udid).catch(() => null);
+        const unsealedAt = record?.state === "syncing" ? Date.parse(record.updatedAt) : NaN;
+        this.syncUnsealedAt.set(udid, Number.isFinite(unsealedAt) ? unsealedAt : Number.POSITIVE_INFINITY);
+      }
+      return await this.sealAndRecord(udid, "sealing", onProgress, "sealing");
     } finally {
       this.release(udid);
     }

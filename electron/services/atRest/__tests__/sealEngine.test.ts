@@ -18,6 +18,14 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { build } from "esbuild";
+import plist from "simple-plist";
+
+jest.mock("../../logService", () => ({
+  __esModule: true,
+  default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+}));
+import { BackupAtRest } from "../backupAtRest";
+import { createMarkerStore } from "../markers";
 
 import * as fileCryptoModule from "../fileCrypto";
 import { createFileCrypto, KENC_TMP_SUFFIX, probeHeader, type KeyResolver } from "../fileCrypto";
@@ -272,6 +280,60 @@ describe("E8 — real worker threads", () => {
     }
     const classify = await runPass({ files: chain, mode: "classify", key: engineKey, workers: 2, workerScript, stop });
     expect(classify.outcomes.filter((o) => o?.v === "plaintext")).toEqual([]);
+  });
+
+  it("the index-first step seals a large Manifest.db in a worker, not on the main thread (PC final check 2026-10-10)", async () => {
+    const backups = path.join(dir, "Backups");
+    const udid = "00008110-000A1B2C3D4E5F60";
+    const chainDir = path.join(backups, udid);
+    fs.mkdirSync(chainDir, { recursive: true });
+    fs.writeFileSync(path.join(chainDir, "Manifest.plist"), plist.stringify({ IsEncrypted: false }));
+    const manifest = crypto.randomBytes(1024 * 1024);
+    fs.writeFileSync(path.join(chainDir, "Manifest.db"), manifest);
+    const lines: Array<[string, Record<string, unknown> | undefined]> = [];
+    const svc = new BackupAtRest({
+      backupsRoot: () => backups,
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => dir }),
+      ensureKey: async () => undefined,
+      freeBytes: async () => Number.MAX_SAFE_INTEGER,
+      log: (_level, message, data) => lines.push([message, data]),
+      workers: 2,
+      workerScript,
+      chunkSize: CHUNK,
+      sealKey: async () => engineKey,
+    });
+    const report = await svc.sealIndexFiles(udid);
+    expect(report.changed).toBe(2);
+    const sealed = lines.find(([m]) => m === "[BackupAtRest] index files sealed");
+    expect(sealed?.[1]).toMatchObject({ sealedNow: 2, workersUsed: expect.any(Number) });
+    expect(sealed?.[1]?.workersUsed as number).toBeGreaterThan(0);
+    expect((await files.readAllDecrypted(path.join(chainDir, "Manifest.db"))).equals(manifest)).toBe(true);
+  });
+
+  it("a progress listener that throws does not stop the pass: every batch is still handed out and sealed (BACKLOG-3816 PC final check)", async () => {
+    const chain = chainOf(400);
+    const stop = new Int32Array(new SharedArrayBuffer(4));
+    const warnings: string[] = [];
+    let calls = 0;
+    const r = await runPass({
+      files: chain,
+      mode: "seal",
+      key: engineKey,
+      chunkSize: CHUNK,
+      workers: 2,
+      workerScript,
+      stop,
+      log: (_level, message) => warnings.push(message),
+      onBatch: () => {
+        calls++;
+        throw new Error("Render frame was disposed");
+      },
+    });
+    expect(r.stopped).toBe(false);
+    expect(r.outcomes.filter((o) => o === undefined)).toEqual([]);
+    expect(calls).toBeGreaterThan(2);
+    expect(warnings.filter((w) => /progress listener failed/.test(w)).length).toBe(calls);
   });
 
   it("pauses at a file boundary when the flag is set; what it did not reach stays plaintext and is reported as not reached", async () => {

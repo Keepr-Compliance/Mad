@@ -99,7 +99,16 @@ export async function runPass(opts: PassOptions): Promise<PassResult> {
     });
     for (const d of result.touchedDirs) touchedDirs.add(d);
     if (result.stopped) anyStopped = true;
-    opts.onBatch?.(indexes.slice(0, result.outcomes.length), result.outcomes);
+    // A throwing listener (progress forwarding to a window that is going away) must not
+    // stop the pass: inside a worker's message handler it would skip sendNext, and the
+    // pass would wait forever with the lock held and the marker at `sealing`.
+    try {
+      opts.onBatch?.(indexes.slice(0, result.outcomes.length), result.outcomes);
+    } catch (error) {
+      opts.log?.("warn", "[BackupAtRest] a progress listener failed; the pass continues", {
+        code: (error as NodeJS.ErrnoException)?.code ?? (error as Error)?.name ?? String(error),
+      });
+    }
   };
 
   const held: { engine: ReturnType<typeof createSealEngine> | null } = { engine: null };

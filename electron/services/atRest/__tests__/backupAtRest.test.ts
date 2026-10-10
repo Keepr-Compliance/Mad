@@ -38,6 +38,7 @@ import {
   QUARANTINE_MAX_AGE_MS,
   type BackupAtRestProgress,
   BACKUP_SECURING_MESSAGE,
+  BACKUP_FINISHING_MESSAGE,
   BACKUP_SECURING_SENTENCE,
   markerProtectsChain,
   readMarkerAt,
@@ -1437,6 +1438,118 @@ describe("progress", () => {
       expect(opensAtFirst).toBeLessThan(10); // fixed setup reads only (plists); a pre-pass would open all 300+ files
       expect(plaintextLeft()).toEqual([]);
       expect(extra.length).toBe(300);
+    });
+
+    it("PC final check 2026-10-10: the line never reads 100% while the walk still checks the rest of the backup; 100% only when the pass ends, then the marker is encrypted", async () => {
+      sealedChainWithMany();
+      const s = service();
+      await s.seal(UDID);
+      age(allContentFiles());
+      // Every batch emits (a clock that moves 1.5 s per reading), as a 10-minute walk does.
+      let clock = Date.now();
+      const clockSpy = jest.spyOn(Date, "now").mockImplementation(() => (clock += 1500));
+      let seen: BackupAtRestProgress[];
+      try {
+        ({ seen } = await incremental(s, () => {
+          write(`ee/${"e".repeat(40)}`, crypto.randomBytes(BIG));
+        }));
+      } finally {
+        clockSpy.mockRestore();
+      }
+      const described = seen.map((p) => describeBackupAtRestProgress(p));
+      const last = seen[seen.length - 1];
+      expect(last.done).toBe(last.total);
+      expect(described[described.length - 1]).toEqual({ message: "Securing your iPhone backup… 100%", percent: 100 });
+      // Before the end: never 100%. The new file is newest, so its bytes are done in the
+      // first batches; the walk over the 300+ sealed files then reads "finishing up".
+      const before = described.slice(0, -1);
+      expect(before.length).toBeGreaterThan(5);
+      for (const d of before) expect(d.percent).toBeLessThan(100);
+      const finishing = seen.slice(0, -1).filter((p) => p.doneUnits === p.totalUnits && p.done < p.total);
+      expect(finishing.length).toBeGreaterThan(3);
+      for (const p of finishing) {
+        expect(describeBackupAtRestProgress(p)).toEqual({ message: BACKUP_FINISHING_MESSAGE, percent: 99 });
+      }
+      expect(await s.readMarker(UDID)).toBe("encrypted");
+      expect(plaintextLeft()).toEqual([]);
+    });
+
+    // PC final check 2026-10-10 (F): the launch recovery after an interrupted sync read
+    // "migrating" and restarted the line at 0% over the whole chain.
+    async function recoveryTicks(s: BackupAtRest): Promise<BackupAtRestProgress[]> {
+      let clock = Date.now();
+      const clockSpy = jest.spyOn(Date, "now").mockImplementation(() => (clock += 1500));
+      const seen: BackupAtRestProgress[] = [];
+      try {
+        await s.migrate(UDID, (p) => seen.push(p));
+      } finally {
+        clockSpy.mockRestore();
+      }
+      return seen;
+    }
+
+    it("F: recovery after a cut-off seal (marker sealing, new process) is a seal: phase sealing, 'finishing up' until it ends, never 0%", async () => {
+      sealedChainWithMany();
+      await service().seal(UDID);
+      age(allContentFiles());
+      write(`ee/${"e".repeat(40)}`, crypto.randomBytes(1000)); // left plaintext by the cut-off seal
+      await createMarkerStore({ userData: () => userData }).writeBackupMarker(UDID, "sealing");
+      const seen = await recoveryTicks(service()); // a new process: nothing in memory
+      expect(seen.length).toBeGreaterThan(5);
+      expect(seen.every((p) => p.phase === "sealing")).toBe(true);
+      const described = seen.map((p) => describeBackupAtRestProgress(p));
+      for (const d of described.slice(0, -1)) expect(d).toEqual({ message: BACKUP_FINISHING_MESSAGE, percent: 99 });
+      expect(described[described.length - 1].percent).toBe(100);
+      expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+      expect(plaintextLeft()).toEqual([]);
+    });
+
+    it("F: recovery after a sync cut off during the transfer (marker syncing): the estimate is what that sync wrote, phase sealing", async () => {
+      sealedChainWithMany();
+      await service().seal(UDID);
+      age(allContentFiles());
+      await createMarkerStore({ userData: () => userData }).writeBackupMarker(UDID, "syncing");
+      const marker = await createMarkerStore({ userData: () => userData }).readBackupMarker(UDID);
+      const written = write(`ee/${"e".repeat(40)}`, crypto.randomBytes(BIG));
+      const after = new Date(Date.parse(marker!.updatedAt) + 1000);
+      fs.utimesSync(written, after, after);
+      const seen = await recoveryTicks(service());
+      expect(seen.every((p) => p.phase === "sealing")).toBe(true);
+      expect(seen[0]).toMatchObject({ doneUnits: 0, totalUnits: BIG + W }); // that sync's file, not the chain
+      expect(describeBackupAtRestProgress(seen[seen.length - 1]).percent).toBe(100);
+      expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    });
+
+    it("a pre-2.40 chain (no marker) is still a migration: phase migrating", async () => {
+      sealedChainWithMany();
+      const seen: BackupAtRestProgress[] = [];
+      await service().migrate(UDID, (p) => seen.push(p));
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.every((p) => p.phase === "migrating")).toBe(true);
+    });
+
+    it("E: a sync asking for the phone while the pass is still LISTING the chain pauses it there, not after the whole listing", async () => {
+      sealedChainWithMany();
+      await service().seal(UDID);
+      await createMarkerStore({ userData: () => userData }).writeBackupMarker(UDID, "sealing");
+      const s = service();
+      const real = fs.promises.readdir.bind(fs.promises);
+      let calls = 0;
+      const spy = jest.spyOn(fs.promises, "readdir").mockImplementation(((dir: fs.PathLike, opts?: unknown) => {
+        calls++;
+        if (calls === 3) expect(s.requestPause(UDID)).toBe(true);
+        return (real as (d: fs.PathLike, o?: unknown) => Promise<unknown>)(dir, opts);
+      }) as typeof fs.promises.readdir);
+      let outcome: string;
+      try {
+        outcome = await s.migrate(UDID);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(outcome).toBe("paused");
+      // 100 content directories + root: the listing stopped right after the request.
+      expect(calls).toBeLessThanOrEqual(4);
+      expect(await readMarkerAt(backups, UDID)).toBe("sealing");
     });
 
     it("a sealed file with a new mtime (estimate too high): the total shrinks and the pass ends at 100%", async () => {

@@ -9,7 +9,7 @@
  */
 
 import { hostErrorReporter } from "../capabilities/errorReporterProvider";
-import { dbAll, dbGet, dbRun } from "./db/core/dbConnection";
+import { dbAll, dbGet, dbRun, ensureDb } from "./db/core/dbConnection";
 import {
   AUTOLINK_CONTACT_EMAILS_SQL,
   AUTOLINK_CONTACT_PHONES_SQL,
@@ -22,7 +22,6 @@ import {
   LIVE_TRANSACTION_COUNT_FOR_CONTACT_SQL,
   LOCAL_USER_EMAIL_SQL,
   OTHER_CANDIDATE_TRANSACTION_ADDRESSES_SQL,
-  THREAD_DIRECTION_PARTICIPANTS_SQL,
   TRANSACTION_AUTOLINK_WINDOW_SQL,
   UNLINKED_SIBLINGS_IN_THREAD_SQL,
   candidateEmailsSql,
@@ -44,7 +43,8 @@ import {
   getIgnoredCommunicationIdsForTransaction,
 } from "./db/communicationDbService";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
-import { handleToIdentityToken } from "../utils/handleIdentity";
+import { readOneToOneThreadIndexOn, type ThreadIdentityIndex } from "./db/threadIdentityIndexDb";
+import { DedicatedWorkerError, isPoolReady, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
 import {
   normalizeAddress,
   contentContainsAddress,
@@ -1397,54 +1397,59 @@ export interface ExpandAttachedThreadsResult {
 // message's DIRECTION to decide which end of it names the contact.
 // ---------------------------------------------------------------------------
 
-/**
- * Compute the DIRECTION-AWARE set of external (non-user) identity tokens for a
- * thread from its messages' `participants` JSON.
- *
- * - inbound  → take `from` only (the contact; `to` is the user's own handle)
- * - outbound → take `to`   only (the contact; `from` is the user's own handle)
- * - always   → take `chat_members` (authoritative group signal — present only when
- *              the chat has >1 member, so it never pollutes a genuine 1:1 and
- *              always inflates a group to >1 identity).
- *
- * A genuine 1:1 thread therefore resolves to EXACTLY ONE token; a group resolves
- * to >1 (the C1 gate) even if only one member has spoken in our data.
- */
-function computeThreadIdentitySet(
-  rows: Array<{ direction: string | null; participants: string | null }>,
-): Set<string> {
-  const tokens = new Set<string>();
-  for (const row of rows) {
-    if (!row.participants) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(row.participants);
-    } catch {
-      continue; // skip invalid JSON (mirrors renderer)
-    }
-    if (!parsed || typeof parsed !== "object") continue;
-    const p = parsed as { from?: unknown; to?: unknown; chat_members?: unknown };
+// computeThreadIdentitySet moved to electron/utils/threadIdentity.ts (BACKLOG-3816 PC
+// final check): the contact query worker builds the same index off the main thread.
 
-    if (Array.isArray(p.chat_members)) {
-      for (const m of p.chat_members) {
-        const t = handleToIdentityToken(String(m));
-        if (t) tokens.add(t);
+/**
+ * The 1:1 thread identity index for `userId` — on a dedicated contact query worker when
+ * the pool is up, else on this thread (BACKLOG-3816 PC final check, 2026-10-10: on the main thread
+ * the read of every text message plus the JSON parse of each blocked the app for 11-13 s
+ * after every transaction update and ~57 s after a sync).
+ *
+ * Main-thread build only when no worker ever ran the read: the pool is not up, or the
+ * worker could not be started (`start_failed`). After a timeout, a restore/close/quit that
+ * stopped the worker, or a failed query, this returns null and the caller SKIPS — redoing the
+ * full read here would be the freeze this exists to avoid (or touch the database mid-restore).
+ * Skipping loses nothing: expansion is idempotent and every sync / transaction update /
+ * re-sync triggers it again.
+ */
+async function loadOneToOneThreadIndex(
+  userId: string,
+): Promise<(ThreadIdentityIndex & { source: "worker" | "main" }) | null> {
+  if (isPoolReady()) {
+    try {
+      // A worker of its own: on the shared contact worker this read made contact list
+      // reads queue behind it and time out (30 s) for as long as it ran.
+      const data = await queryOnDedicatedWorker("threadIdentity", userId, THREAD_IDENTITY_WORKER_TIMEOUT_MS);
+      const index = data[0] as ThreadIdentityIndex | undefined;
+      if (index && Array.isArray(index.oneToOne)) return { ...index, source: "worker" };
+      throw new Error("worker returned no thread identity index");
+    } catch (error) {
+      const code = error instanceof DedicatedWorkerError ? error.code : "failed";
+      const detail = { code, error: error instanceof Error ? error.message : String(error) };
+      if (code !== "start_failed") {
+        await logService.warn(
+          `[BACKLOG-3816] Thread identity index on the worker failed (${code}); skipping this expansion, the next trigger retries`,
+          "AutoLinkService",
+          detail,
+        );
+        return null;
       }
-    }
-    if (row.direction === "inbound" && typeof p.from === "string") {
-      const t = handleToIdentityToken(p.from);
-      if (t) tokens.add(t);
-    }
-    if (row.direction === "outbound" && p.to !== null && p.to !== undefined) {
-      const toList = Array.isArray(p.to) ? p.to : [p.to];
-      for (const raw of toList) {
-        const t = handleToIdentityToken(String(raw));
-        if (t) tokens.add(t);
-      }
+      await logService.warn(
+        `[BACKLOG-3816] Thread identity worker could not start; building the index on the main thread`,
+        "AutoLinkService",
+        detail,
+      );
     }
   }
-  return tokens;
+  return { ...readOneToOneThreadIndexOn(ensureDb(), userId), source: "main" };
 }
+
+/** Candidates linked per event-loop turn in the attached-thread expansion. */
+export const EXPANSION_LINKS_PER_TURN = 10;
+
+/** A full read of a large store under a sync's disk load took 44 s on the founder's PC. */
+const THREAD_IDENTITY_WORKER_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * BACKLOG-2285: Expand attached conversations to pick up backfilled/older
@@ -1503,7 +1508,38 @@ function computeThreadIdentitySet(
  * @param userId - The user whose attached conversations to expand
  * @returns Counts for observable verification (BACKLOG-1875)
  */
-export async function expandAttachedThreadsForUser(
+export function expandAttachedThreadsForUser(userId: string): Promise<ExpandAttachedThreadsResult> {
+  const running = expansionByUser.get(userId);
+  if (running) {
+    // One expansion (and so one full identity read) per user at a time. A caller arriving
+    // meanwhile started after the running read's snapshot, so ask for ONE more run after it
+    // — however many arrive, never more than one running plus one queued.
+    running.rerun = true;
+    return running.promise;
+  }
+  const entry: { rerun: boolean; promise: Promise<ExpandAttachedThreadsResult> } = {
+    rerun: false,
+    promise: Promise.resolve(null as unknown as ExpandAttachedThreadsResult),
+  };
+  expansionByUser.set(userId, entry);
+  entry.promise = (async () => {
+    try {
+      let last = await expandAttachedThreadsForUserOnce(userId);
+      while (entry.rerun) {
+        entry.rerun = false;
+        last = await expandAttachedThreadsForUserOnce(userId);
+      }
+      return last;
+    } finally {
+      expansionByUser.delete(userId);
+    }
+  })();
+  return entry.promise;
+}
+
+const expansionByUser = new Map<string, { rerun: boolean; promise: Promise<ExpandAttachedThreadsResult> }>();
+
+async function expandAttachedThreadsForUserOnce(
   userId: string
 ): Promise<ExpandAttachedThreadsResult> {
   const startTime = Date.now();
@@ -1559,51 +1595,41 @@ export async function expandAttachedThreadsForUser(
     // 1:1-vs-group classification sees the whole conversation. Built here (after the
     // pairs early-return) so it only runs when there is attached work to expand.
     const identityScanStartedAt = Date.now();
-    const identityRows = dbAll<{
-      thread_id: string;
-      direction: string | null;
-      participants: string | null;
-    }>(
-      THREAD_DIRECTION_PARTICIPANTS_SQL,
-      [userId],
-    );
-    // BACKLOG-3784: this scan reads every text message of the user on the main
-    // thread; time it on its own. Counts only.
+    // BACKLOG-3816 PC final check: the read of every text message and the identity
+    // computation run on the contact query worker (main-thread fallback when it is not up).
+    const identityIndex = await loadOneToOneThreadIndex(userId);
+    if (!identityIndex) {
+      result.durationMs = Date.now() - startTime;
+      return result;
+    }
+    // BACKLOG-3784: time the scan on its own. Counts only.
     const identityScanMs = Date.now() - identityScanStartedAt;
     await logService.info(
-      `[BACKLOG-3784] Attached-thread identity scan: rows=${identityRows.length} durationMs=${identityScanMs}`,
+      `[BACKLOG-3784] Attached-thread identity scan: rows=${identityIndex.rows} source=${identityIndex.source} durationMs=${identityScanMs}`,
       "AutoLinkService",
-      { pairsExamined: pairs.length, identityRows: identityRows.length, scanMs: identityScanMs }
+      {
+        pairsExamined: pairs.length,
+        identityRows: identityIndex.rows,
+        source: identityIndex.source,
+        scanMs: identityScanMs,
+      }
     );
-    const rowsByThread = new Map<
-      string,
-      Array<{ direction: string | null; participants: string | null }>
-    >();
-    for (const r of identityRows) {
-      let arr = rowsByThread.get(r.thread_id);
-      if (!arr) {
-        arr = [];
-        rowsByThread.set(r.thread_id, arr);
-      }
-      arr.push({ direction: r.direction, participants: r.participants });
-    }
-    const threadIdentity = new Map<string, Set<string>>();
+    // thread -> its one token, for threads that are themselves 1:1 (size === 1); a
+    // group or an identity-less thread is absent, exactly as `idSet.size === 1` was.
+    const oneToOneToken = new Map<string, string>(identityIndex.oneToOne);
     const oneToOneThreadsByToken = new Map<string, Set<string>>();
-    for (const [tid, rws] of rowsByThread) {
-      const idSet = computeThreadIdentitySet(rws);
-      threadIdentity.set(tid, idSet);
-      if (idSet.size === 1) {
-        const token = [...idSet][0];
-        let s = oneToOneThreadsByToken.get(token);
-        if (!s) {
-          s = new Set<string>();
-          oneToOneThreadsByToken.set(token, s);
-        }
-        s.add(tid);
+    for (const [tid, token] of identityIndex.oneToOne) {
+      let s = oneToOneThreadsByToken.get(token);
+      if (!s) {
+        s = new Set<string>();
+        oneToOneThreadsByToken.set(token, s);
       }
+      s.add(tid);
     }
 
     for (const [transactionId, attachedThreadIds] of threadsByTxn) {
+      // One transaction per event-loop turn (the per-transaction reads are synchronous).
+      await new Promise<void>((resolve) => setImmediate(resolve));
       // 6. Suppression sets for THIS transaction — identical to the ones
       //    autoLinkCommunicationsForContact honors. A conversation/message the
       //    user removed stays removed.
@@ -1640,8 +1666,8 @@ export async function expandAttachedThreadsForUser(
       const pooledTokens = new Set<string>();
       for (const threadId of attachedThreadIds) {
         if (ignoredThreadIds.has(threadId)) continue;
-        const idSet = threadIdentity.get(threadId);
-        if (idSet && idSet.size === 1) pooledTokens.add([...idSet][0]);
+        const token = oneToOneToken.get(threadId);
+        if (token !== undefined) pooledTokens.add(token);
       }
 
       if (pooledTokens.size > 0) {
@@ -1677,7 +1703,12 @@ export async function expandAttachedThreadsForUser(
       // 4/5/6. Link candidates the way manual attach does — suppression first,
       //        then idempotency guard, then link.
       let linkedForTxn = 0;
+      let handled = 0;
       for (const [messageId, threadId] of candidates) {
+        // Every link is several synchronous writes (~10 ms each measured on a 150k-message
+        // store): give the event loop a turn every few, so a large backfill does not freeze
+        // the app for seconds (BACKLOG-3816 PC final check).
+        if (++handled % EXPANSION_LINKS_PER_TURN === 0) await new Promise<void>((resolve) => setImmediate(resolve));
         // 6. Suppression: a removed thread or a removed individual message stays removed.
         if (threadId && threadId !== "" && ignoredThreadIds.has(threadId)) {
           result.skippedSuppressed++;
