@@ -547,6 +547,16 @@ function setupEventForwarding(): void {
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
+      // BACKLOG-3816: the plaintext parse copy goes on EVERY end of persistence - the
+      // branches below each remove it, but "no user", "skipped" and an exception that
+      // escaped persistCompletedSync did not. Idempotent.
+      try {
+        if (result.needsCleanup && result.backupPath && typeof orchestrator?.cleanupBackup === "function") {
+          await orchestrator.cleanupBackup(result.backupPath);
+        }
+      } catch {
+        // cleanupBackup logs and never throws; the next sweep removes a leftover.
+      }
       // `typeof` guard: handler suites stub the orchestrator with only what they drive.
       if (typeof orchestrator?.completeBackupAtRest === "function") {
         await orchestrator.completeBackupAtRest(succeeded);
@@ -823,6 +833,10 @@ export function stopBackupForQuit(): Promise<unknown> | null {
  * Cleanup sync handlers
  */
 export function cleanupSyncHandlers(): void {
+  // BACKLOG-3816: a quit mid-parse or mid-persistence must not leave plaintext on disk.
+  if (typeof orchestrator?.discardParseCopiesForQuit === "function") {
+    orchestrator.discardParseCopiesForQuit();
+  }
   if (orchestrator) {
     orchestrator.stopDeviceDetection();
     orchestrator.removeAllListeners();
