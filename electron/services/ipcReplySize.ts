@@ -23,6 +23,16 @@
  */
 
 export const LARGE_REPLY_BYTES = 1024 * 1024;
+/**
+ * BACKLOG-3884: a handler that takes this long logs one line at ANY time, sync
+ * or not, so a main-side stall on a user action names its channel:
+ *
+ *   [IpcSlowHandler] channel=<name> durationMs=<ms> approxBytes=<n>
+ *
+ * Duration is wall time from invoke to reply, so it includes awaited work as
+ * well as synchronous work.
+ */
+export const SLOW_HANDLER_MS = 1_000;
 export const REPLY_SIZE_CAP_BYTES = 512 * 1024 * 1024;
 
 type PhaseSource = () => string | null;
@@ -112,6 +122,17 @@ export function wrapHandleForReplySize(target: HandleTarget, deps: ReplySizeDeps
       const started = deps.now();
       const result = await listener(event, ...args);
       const durationMs = deps.now() - started;
+      try {
+        if (durationMs >= SLOW_HANDLER_MS) {
+          const bytes = approxSerializedBytes(result);
+          deps.log(
+            `[IpcSlowHandler] channel=${channel} durationMs=${durationMs}` +
+              ` approxBytes=${bytes > REPLY_SIZE_CAP_BYTES ? `${REPLY_SIZE_CAP_BYTES}+` : bytes}`,
+          );
+        }
+      } catch {
+        // Telemetry only: never affects the reply.
+      }
       try {
         const phase = deps.phase();
         if (phase !== null) {

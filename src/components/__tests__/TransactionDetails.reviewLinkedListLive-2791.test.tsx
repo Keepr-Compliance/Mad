@@ -242,7 +242,7 @@ beforeEach(() => {
 /** Wait out the initial details load, then switch tabs. */
 async function openTab(name: RegExp): Promise<void> {
   await waitFor(() =>
-    expect(window.api.transactions.getAllAttachments as jest.Mock).toHaveBeenCalled(),
+    expect(window.api.transactions.getDetails as jest.Mock).toHaveBeenCalled(),
   );
   const tab = await screen.findByRole("button", { name });
   await act(async () => {

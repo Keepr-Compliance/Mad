@@ -190,7 +190,7 @@ describe("TransactionDetails — undo toast on removal (BACKLOG-2501)", () => {
     render(
       <TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />,
     );
-    await waitFor(() => expect(getAllAttachments).toHaveBeenCalled());
+    await waitFor(() => expect(window.api.transactions.getDetails as jest.Mock).toHaveBeenCalled());
 
     await saveVia("save-removing-one");
 
@@ -214,7 +214,7 @@ describe("TransactionDetails — undo toast on removal (BACKLOG-2501)", () => {
     render(
       <TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />,
     );
-    await waitFor(() => expect(getAllAttachments).toHaveBeenCalled());
+    await waitFor(() => expect(window.api.transactions.getDetails as jest.Mock).toHaveBeenCalled());
 
     await saveVia("save-removing-one");
     await waitFor(() => {
@@ -240,7 +240,7 @@ describe("TransactionDetails — undo toast on removal (BACKLOG-2501)", () => {
     render(
       <TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />,
     );
-    await waitFor(() => expect(getAllAttachments).toHaveBeenCalled());
+    await waitFor(() => expect(window.api.transactions.getDetails as jest.Mock).toHaveBeenCalled());
 
     await saveVia("save-removing-two");
 
@@ -267,7 +267,7 @@ describe("TransactionDetails — undo toast on removal (BACKLOG-2501)", () => {
     render(
       <TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />,
     );
-    await waitFor(() => expect(getAllAttachments).toHaveBeenCalled());
+    await waitFor(() => expect(window.api.transactions.getDetails as jest.Mock).toHaveBeenCalled());
 
     await saveVia("save-removing-none");
 
