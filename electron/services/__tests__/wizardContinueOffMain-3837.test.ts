@@ -59,6 +59,7 @@ import { getAuditCoverage, getSourceCoverage, getSourceCoverageAsync } from "../
 import {
   backfillContactCommunicationDates,
   getContactsSortedByActivity,
+  getImportedContactsByUserIdAsync,
   getMessageDerivedContacts,
   getMessageDerivedContactsAsync,
   resetCommunicationDatesBackfillForTests,
@@ -308,6 +309,18 @@ maybe("BACKLOG-3837: step-1 Continue scans run on the contact query worker (real
     expect(names(viaWorker)).toEqual(["Alex Rivera", "Jordan Lee", "Sam Okafor"]);
     // "Person 3" is a saved contact with no crosswalk row: its name is all it is, so its twin is dropped.
     expect(viaWorker).toEqual(onMain);
+  }, 300_000);
+
+  it("contacts:get-all producer: the message-derived scan is not run on main either", async () => {
+    recording = true;
+    const all = await getImportedContactsByUserIdAsync(USER);
+    recording = false;
+    expect(scansOnMain()).toEqual([]);
+    expect(all.filter((c) => c.is_message_derived).map((c) => c.display_name).sort()).toEqual([
+      "Alex Rivera",
+      "Jordan Lee",
+      "Sam Okafor",
+    ]);
   }, 300_000);
 
   (ORACLE ? it : it.skip)("the backfill plan matches the old LIKE join contact for contact", async () => {
