@@ -14,9 +14,9 @@
  *
  *   A1  get-data: session user in users_local -> row exists, user_id = session user
  *   A2  open:     same
- *   A3  no session: row under the attachment's transaction owner
- *   A4  no resolvable user: no row, no throw, success, WARN logged
- *   A5  a session user absent from users_local is not used (falls to transaction owner)
+ *   A3  no session: no row, success, WARN
+ *   A4  attachment with no linked transaction and no session: no row, success, WARN
+ *   A5  a session user absent from users_local: no row, success, WARN (no owner fallback)
  */
 import crypto from "crypto";
 import fs from "fs";
@@ -219,16 +219,20 @@ describe("DATA_ACCESS row lands under a real user", () => {
     expect(rows[0].metadata).toContain("attachment_open");
   });
 
-  it("A3 no session: the attachment's transaction owner", async () => {
+  it("A3 no session: no row, no failure, a WARN (no owner fallback)", async () => {
     mockSession = null;
-    await invoke("attachments:get-data", encPath, "image/jpeg");
-    expect(auditRows().map((r) => r.user_id)).toEqual([TXN_OWNER]);
+    const res = await invoke("attachments:get-data", encPath, "image/jpeg");
+    expect(res.success).toBe(true);
+    expect(auditRows()).toHaveLength(0);
+    expect(logService.warn).toHaveBeenCalledWith(expect.stringContaining("not audited"), "Transactions");
   });
 
-  it("A5 a session user missing from users_local is not used", async () => {
+  it("A5 a session user missing from users_local: no row, a WARN, never the transaction owner", async () => {
     mockSession = { user: { id: "not-a-local-user" } };
-    await invoke("attachments:open", encPath);
-    expect(auditRows().map((r) => r.user_id)).toEqual([TXN_OWNER]);
+    const res = await invoke("attachments:open", encPath);
+    expect(res.success).toBe(true);
+    expect(auditRows()).toHaveLength(0);
+    expect(logService.warn).toHaveBeenCalledWith(expect.stringContaining("not audited"), "Transactions");
   });
 
   it("A4 nothing resolves: no row, no failure, a WARN", async () => {

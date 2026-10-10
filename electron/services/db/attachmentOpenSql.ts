@@ -16,32 +16,16 @@ export function findAttachmentFilenameByStoragePath(
 }
 
 /**
- * BACKLOG-2819: the id an attachment-access audit row is written under. audit_logs.user_id
- * is a foreign key to users_local(id), so only an id that exists there can be used.
- *
- * Preference order: the signed-in session user, then the owner of a transaction the
- * attachment is linked to. Returns null when neither is a users_local row.
+ * BACKLOG-2819: the id an attachment-access audit row is written under.
+ * audit_logs.user_id is a foreign key to users_local(id), so only the signed-in
+ * session user, confirmed present there, is used. Returns null otherwise.
+ * There is deliberately no owner lookup from the attachment: stored files are
+ * content-hashed and shared across accounts on one install, so it could name the wrong person.
  */
 export function resolveAttachmentAuditUserId(
   db: DatabaseType,
-  storagePath: string,
   sessionUserId: string | null | undefined,
 ): string | null {
-  const exists = db.prepare(`SELECT 1 FROM users_local WHERE id = ?`);
-  if (sessionUserId && exists.get(sessionUserId)) return sessionUserId;
-
-  const row = db
-    .prepare(
-      `SELECT t.user_id AS user_id
-         FROM attachments a
-         JOIN communications c
-           ON (a.email_id IS NOT NULL AND c.email_id = a.email_id)
-           OR (a.message_id IS NOT NULL AND c.message_id = a.message_id)
-         JOIN transactions t ON t.id = c.transaction_id
-         JOIN users_local u ON u.id = t.user_id
-        WHERE a.storage_path = ?
-        LIMIT 1`,
-    )
-    .get(storagePath) as { user_id: string } | undefined;
-  return row?.user_id ?? null;
+  if (!sessionUserId) return null;
+  return db.prepare(`SELECT 1 FROM users_local WHERE id = ?`).get(sessionUserId) ? sessionUserId : null;
 }

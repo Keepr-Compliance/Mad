@@ -336,7 +336,6 @@ async function auditAttachmentAccess(
   const session = await sessionService.loadSession().catch(() => null);
   const userId = resolveAttachmentAuditUserId(
     databaseService.getRawDatabase(),
-    storagePath,
     session?.user?.id,
   );
   if (!userId) {
