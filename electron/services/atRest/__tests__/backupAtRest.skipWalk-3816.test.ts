@@ -380,6 +380,18 @@ describe("every abnormal condition still walks (the planted old file gets sealed
     expect(logged.some((l) => l.data?.reasonCode === "INDEX_MTIME_OLD")).toBe(true);
   });
 
+  it("Manifest.db is gone after the sync: no delta seal; the full path removes the marker (unindexed)", async () => {
+    const logged: Logged[] = [];
+    const s = service({}, logged);
+    const planted = await provenChain(s);
+    await expectWalk(s, planted, logged, async (session) => {
+      fs.rmSync(path.join(chain, "Manifest.db"));
+      await s.finishSync(session, undefined, { toolOk: true, cleanEnd: true });
+    });
+    expect(logged.some((l) => l.data?.reasonCode === "NO_INDEX")).toBe(true);
+    expect(await s.readMarker(UDID)).toBe("absent");
+  });
+
   it("a quit during the delta seal: the seal pauses, the marker stays `sealing`, the next launch walks", async () => {
     const logged: Logged[] = [];
     const s = service({}, logged);

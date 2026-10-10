@@ -1292,7 +1292,9 @@ export class BackupAtRest extends EventEmitter {
       found++;
       if (st.mtimeMs < since - SYNC_MTIME_SLACK_MS) return { ok: false, reasonCode: "INDEX_MTIME_OLD", file: rel };
     }
-    return found === 0 ? { ok: false, reasonCode: "NO_INDEX" } : { ok: true };
+    // No Manifest.db: not an indexed chain; the full path decides (it removes the marker).
+    if (found === 0 || !(await exists(path.join(this.chainDir(udid), "Manifest.db")))) return { ok: false, reasonCode: "NO_INDEX" };
+    return { ok: true };
   }
 
   private async sealDeltaOnly(
