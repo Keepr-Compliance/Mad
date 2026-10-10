@@ -64,8 +64,9 @@ export const NO_THREAD = sql`(m.thread_id IS NULL OR m.thread_id = '')`;
 /** The sort key the pages run on (full reader: ORDER BY sent_at DESC). */
 const SORT_KEY = sql`COALESCE(m.sent_at, '')`;
 /** Epoch ms of the timestamp the renderer classifies on (sent_at || received_at; none = 0). */
-// Exact integer milliseconds (julianday arithmetic is off by fractions of a ms, which
-// moves a text sitting exactly on a window edge).
+// Integer milliseconds from the stored text (the renderer compares Date.getTime()
+// integers). The julianday form gave the same answers on the fixture's edge rows;
+// this one has no floating-point step at all.
 const TS_TEXT = sql`COALESCE(NULLIF(m.sent_at, ''), NULLIF(m.received_at, ''))`;
 const TS_MS = sql`COALESCE(CAST(strftime('%s', ${TS_TEXT}) AS INTEGER) * 1000 + CAST(substr(strftime('%f', ${TS_TEXT}), 4, 3) AS INTEGER), 0)`;
 /** Window predicate; bound: startMs, startMs, endMs, endMs (NULL = open). */
