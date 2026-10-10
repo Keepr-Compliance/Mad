@@ -343,10 +343,101 @@ export function queryContacts(
 }
 
 /**
+ * Short-lived workers started by {@link queryOnDedicatedWorker}. Tracked so a database
+ * restore (drain) and app quit stop them: each holds its own read-only connection.
+ */
+const dedicatedWorkers = new Set<Worker>();
+
+/**
+ * Run ONE query on a worker of its own, started for it and stopped after (BACKLOG-3816
+ * PC final check, 2026-10-10). For long reads — the attached-thread identity index read
+ * every text message of the user and took up to 44 s on the founder's PC — that must not
+ * hold the shared worker: contact list reads queue behind it there and time out at 30 s.
+ * Same compiled script and the same init message as the pool; needs the pool to have
+ * been initialized (it supplies the database path and key). Rejects, never hangs:
+ * `timeoutMs` bounds start-up plus the query.
+ */
+export function queryOnDedicatedWorker(
+  type: QueryType,
+  userId: string,
+  timeoutMs: number = 30_000,
+): Promise<unknown[]> {
+  return new Promise<unknown[]>((resolve, reject) => {
+    if (exclusiveHold || shuttingDown || !lastDbPath || !lastEncryptionKey) {
+      reject(new Error("Dedicated contact worker unavailable"));
+      return;
+    }
+    let w: Worker;
+    try {
+      w = new Worker(getWorkerPath());
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    dedicatedWorkers.add(w);
+    const id = crypto.randomUUID();
+    let settled = false;
+    const finish = (error: Error | null, data?: unknown[]): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // Graceful first (the worker closes its connection and exits), terminate as backstop.
+      try {
+        w.postMessage({ type: "shutdown" });
+      } catch {
+        // already gone
+      }
+      const kill = setTimeout(() => void w.terminate().catch(() => undefined), 2_000);
+      kill.unref?.();
+      w.once("exit", () => clearTimeout(kill));
+      if (error) reject(error);
+      else resolve(data ?? []);
+    };
+    const timer = setTimeout(
+      () => finish(new Error(`Dedicated contact query timed out after ${timeoutMs}ms (type: ${type})`)),
+      timeoutMs,
+    );
+    w.on("message", (msg: { type?: string; id?: string; success?: boolean; data?: unknown[]; error?: string }) => {
+      if (msg.type === "ready") {
+        w.postMessage({ id, type, userId });
+        return;
+      }
+      if (msg.type === "error") {
+        finish(new Error(msg.error || "Dedicated contact worker could not open the database"));
+        return;
+      }
+      if (msg.id !== id) return;
+      if (msg.success && msg.data) finish(null, msg.data);
+      else finish(new Error(msg.error || "Unknown worker error"));
+    });
+    w.on("error", (error) => finish(error));
+    w.on("exit", (code) => {
+      dedicatedWorkers.delete(w);
+      finish(new Error(`Dedicated contact worker exited with code ${code}`));
+    });
+    w.postMessage({ type: "init", dbPath: lastDbPath, encryptionKey: lastEncryptionKey });
+  });
+}
+
+/** Stop every dedicated worker; resolves when each has exited. Never throws. */
+function stopDedicatedWorkers(): Promise<void> {
+  return Promise.all(
+    [...dedicatedWorkers].map(
+      (w) =>
+        new Promise<void>((resolve) => {
+          w.once("exit", () => resolve());
+          w.terminate().catch(() => resolve());
+        }),
+    ),
+  ).then(() => undefined);
+}
+
+/**
  * Shutdown the worker pool. Called on app quit.
  */
 export function shutdownPool(): void {
   shuttingDown = true;
+  void stopDedicatedWorkers();
   if (worker) {
     try {
       worker.postMessage({ type: "shutdown" });
@@ -422,6 +513,8 @@ export async function drainPoolForExclusiveAccess(
     shuttingDown = true;
     ready = false;
     inflightQueries.clear();
+    // BACKLOG-3816: a dedicated worker holds its own connection to the file being replaced.
+    await stopDedicatedWorkers();
     for (const [id, pending] of pendingQueries) {
       clearTimeout(pending.timeout);
       pending.reject(new Error("Worker pool draining for database restore"));

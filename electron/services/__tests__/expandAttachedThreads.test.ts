@@ -503,7 +503,7 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
   // message and the identity computation blocked the main process for 11-13 s after every
   // transaction update. With the contact query worker up, the main connection never runs
   // that read, and the result is the same as the main-thread build.
-  describe("(3816) identity index on the contact query worker", () => {
+  describe("(3816) identity index on a dedicated contact query worker", () => {
     function seedCrossAndGroup(): void {
       insertMacMessage({ id: "m-recent-out", threadId: "T1", direction: "outbound", contact: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
       manualAttach("m-recent-out", TXN_ID);
@@ -525,7 +525,8 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
       seedCrossAndGroup();
       const workerConnection = { prepare: db.prepare.bind(db) };
       const ready = jest.spyOn(contactWorkerPool, "isPoolReady").mockReturnValue(true);
-      const query = jest.spyOn(contactWorkerPool, "queryContacts").mockImplementation(
+      const shared = jest.spyOn(contactWorkerPool, "queryContacts");
+      const query = jest.spyOn(contactWorkerPool, "queryOnDedicatedWorker").mockImplementation(
         (type, userId) =>
           new Promise((resolve) => setImmediate(() => resolve(type === "threadIdentity" ? [readOneToOneThreadIndexOn(workerConnection, userId)] : []))),
       );
@@ -540,6 +541,8 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
 
       expect(ready).toHaveBeenCalled();
       expect(query).toHaveBeenCalledWith("threadIdentity", USER_ID, expect.any(Number));
+      // Never on the shared contact worker: contact list reads would queue behind it.
+      expect(shared).not.toHaveBeenCalled();
       expect(mainSql.length).toBeGreaterThan(0); // the spy is live
       expect(mainSql.filter((t) => /SELECT thread_id, direction, participants/.test(t))).toEqual([]);
       expect(res.messagesLinked).toBe(1);
@@ -552,7 +555,7 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
     it("worker fails: the index is built on the main thread and the same messages are linked", async () => {
       seedCrossAndGroup();
       jest.spyOn(contactWorkerPool, "isPoolReady").mockReturnValue(true);
-      jest.spyOn(contactWorkerPool, "queryContacts").mockRejectedValue(new Error("Worker pool not initialized"));
+      jest.spyOn(contactWorkerPool, "queryOnDedicatedWorker").mockRejectedValue(new Error("Dedicated contact worker unavailable"));
 
       const res = await expandAttachedThreadsForUser(USER_ID);
 

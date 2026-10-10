@@ -44,7 +44,7 @@ import {
 } from "./db/communicationDbService";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
 import { readOneToOneThreadIndexOn, type ThreadIdentityIndex } from "./db/threadIdentityIndexDb";
-import { isPoolReady, queryContacts } from "../workers/contactWorkerPool";
+import { isPoolReady, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
 import {
   normalizeAddress,
   contentContainsAddress,
@@ -1401,8 +1401,8 @@ export interface ExpandAttachedThreadsResult {
 // final check): the contact query worker builds the same index off the main thread.
 
 /**
- * The 1:1 thread identity index for `userId` — on the contact query worker when it is
- * up, else on this thread (BACKLOG-3816 PC final check, 2026-10-10: on the main thread
+ * The 1:1 thread identity index for `userId` — on a dedicated contact query worker when
+ * the pool is up, else on this thread (BACKLOG-3816 PC final check, 2026-10-10: on the main thread
  * the read of every text message plus the JSON parse of each blocked the app for 11-13 s
  * after every transaction update and ~57 s after a sync). A worker that fails falls
  * back here, so expansion never silently skips cross-thread backfill.
@@ -1412,7 +1412,9 @@ async function loadOneToOneThreadIndex(
 ): Promise<ThreadIdentityIndex & { source: "worker" | "main" }> {
   if (isPoolReady()) {
     try {
-      const data = await queryContacts("threadIdentity", userId, THREAD_IDENTITY_WORKER_TIMEOUT_MS);
+      // A worker of its own: on the shared contact worker this read made contact list
+      // reads queue behind it and time out (30 s) for as long as it ran.
+      const data = await queryOnDedicatedWorker("threadIdentity", userId, THREAD_IDENTITY_WORKER_TIMEOUT_MS);
       const index = data[0] as ThreadIdentityIndex | undefined;
       if (index && Array.isArray(index.oneToOne)) return { ...index, source: "worker" };
       throw new Error("worker returned no thread identity index");
