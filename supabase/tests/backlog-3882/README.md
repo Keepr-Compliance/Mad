@@ -1,6 +1,6 @@
 # BACKLOG-3882 database controls
 
-Runs `20261010170000_backlog_3882_tenant_from_identity.sql` against a test
+Runs `20261010165424_backlog_3882_tenant_from_identity.sql` against a test
 database (the NAS `supabase_db_keepr-test` container, production schema, ledger
 head `20261004232511`). One transaction per control, always ending in
 `ROLLBACK`. Fixtures are synthetic users, `auth.identities` rows and
