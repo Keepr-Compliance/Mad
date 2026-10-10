@@ -116,6 +116,15 @@ export function readMessageDerivedRows(userId: string): Promise<MessageDerivedCo
   return promise;
 }
 
+/**
+ * The read already running for this user, or null. Joins it; never starts one (a list
+ * that answered "pending" after a FAILED read must not spawn a second worker just to be
+ * told when it lands — the renderer's own backstop re-read retries a failed read).
+ */
+export function joinMessageDerivedRead(userId: string): Promise<MessageDerivedContactRow[] | null> | null {
+  return inFlight.get(userId) ?? null;
+}
+
 const PENDING = Symbol("pending");
 
 /**

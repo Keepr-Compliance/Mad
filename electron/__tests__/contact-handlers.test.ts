@@ -211,7 +211,7 @@ jest.mock("../services/db/contactDbService", () => ({
 // but a promise-returning callback is refused, as better-sqlite3 refuses it.
 // BACKLOG-3837: a pending list joins the dedicated read and, when it lands, tells the window.
 jest.mock("../services/db/messageDerivedContactsCache", () => ({
-  readMessageDerivedRows: jest.fn(() => Promise.resolve([])),
+  joinMessageDerivedRead: jest.fn(() => Promise.resolve([])),
 }));
 jest.mock("../windowRegistry", () => ({
   ...jest.requireActual("../windowRegistry"),

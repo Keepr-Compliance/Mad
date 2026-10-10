@@ -259,7 +259,9 @@ export function getMessageDerivedContacts(userId: string): MessageDerivedContact
 
   // BACKLOG-3837: the statement moved verbatim to wizardMessageScansDb.ts
   // (MESSAGE_DERIVED_CONTACTS_SQL) so the contact query worker runs the SAME
-  // text; this synchronous read is now the pool-not-ready fallback.
+  // text. This synchronous read is NOT a fallback for the lists (they never scan
+  // on main, see getMessageDerivedContactsAsync); its callers are the sync
+  // getImportedContactsByUserId (transactionService) and test controls.
   const results = dbAll<MessageDerivedContact>(MESSAGE_DERIVED_CONTACTS_SQL, [userId]);
   return dropNamesThatAreTheirOwnIdentity(results, importedNames);
 }

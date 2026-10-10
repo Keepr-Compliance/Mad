@@ -156,10 +156,14 @@ import { isContactSourceEnabled, isTextPeopleEnabled } from "../utils/preference
  * BACKLOG-3837: a contact list was answered without its message-derived people
  * (the dedicated read was not ready). When that read lands, tell the renderer
  * so the open picker re-reads (a cache hit) and fills them in. Joins the read
- * already running; nothing is read on main; a failed read sends nothing.
+ * already running and never starts one (a failed read is not running: nothing
+ * to wait for, and the renderer's 15 s backstop retries it); nothing is read
+ * on main; a failed read sends nothing.
  */
 function notifyWhenMessageDerivedReady(userId: string): void {
-  void readMessageDerivedRows(userId)
+  const running = joinMessageDerivedRead(userId);
+  if (!running) return;
+  void running
     .then((rows) => {
       if (rows) sendToMainWindow("contacts:message-derived-ready", { userId });
     })
@@ -199,7 +203,7 @@ import type {
 } from "../types/handlerTypes";
 
 import { sendToMainWindow } from "../windowRegistry";
-import { readMessageDerivedRows } from "../services/db/messageDerivedContactsCache";
+import { joinMessageDerivedRead } from "../services/db/messageDerivedContactsCache";
 
 // Type definitions
 interface ContactResponse {
