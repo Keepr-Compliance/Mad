@@ -1026,10 +1026,11 @@ describe("useIPhoneSync", () => {
       const { result } = renderHook(() => useIPhoneSync());
 
       await act(async () => {
-        await result.current.cancelSync();
+        await result.current.cancelSync("progress-cancel");
       });
 
-      expect(syncApi.cancel).toHaveBeenCalled();
+      // BACKLOG-3816: the trigger reaches the IPC, so main can attribute the cancel.
+      expect(syncApi.cancel).toHaveBeenCalledWith("progress-cancel");
       // BACKLOG-2333: cancel resets to the clean "idle" state (no distinct
       // "cancelled" terminal state) so the modal renders the normal start screen.
       expect(result.current.syncStatus).toBe("idle");
@@ -1071,7 +1072,7 @@ describe("useIPhoneSync", () => {
       expect(result.current.syncStatus).toBe("error");
 
       await act(async () => {
-        await result.current.cancelSync();
+        await result.current.cancelSync("progress-cancel");
       });
 
       // IPhoneSyncFlow's `view` resolves to its `connection` default only when
@@ -1091,7 +1092,7 @@ describe("useIPhoneSync", () => {
 
       // Should not throw
       await act(async () => {
-        await result.current.cancelSync();
+        await result.current.cancelSync("progress-cancel");
       });
 
       // BACKLOG-2333: still reset to clean idle even if the cancel IPC rejects.
@@ -1110,7 +1111,7 @@ describe("useIPhoneSync", () => {
       syncStateRef.isActive = true;
 
       await act(async () => {
-        await result.current.cancelSync();
+        await result.current.cancelSync("progress-cancel");
       });
 
       expect(result.current.syncStatus).toBe("idle");
@@ -1134,7 +1135,7 @@ describe("useIPhoneSync", () => {
       syncStateRef.isActive = true;
 
       await act(async () => {
-        await result.current.cancelSync();
+        await result.current.cancelSync("progress-cancel");
       });
 
       act(() => {
@@ -1159,7 +1160,7 @@ describe("useIPhoneSync", () => {
       syncStateRef.isActive = true;
 
       await act(async () => {
-        await result.current.cancelSync();
+        await result.current.cancelSync("progress-cancel");
       });
 
       expect(result.current.syncStatus).toBe("idle");
@@ -1788,7 +1789,7 @@ describe("useIPhoneSync", () => {
       expect(unit(hook)).toBe(MB);
 
       await act(async () => {
-        await hook.result.current.cancelSync();
+        await hook.result.current.cancelSync("progress-cancel");
       });
       expect(hook.result.current.progress).toBeNull();
 

@@ -20,7 +20,14 @@ import path from "path";
 import crypto from "crypto";
 import logService from "../services/logService";
 
-type QueryType = "external" | "imported" | "backfill" | "emailDerived" | "threadIdentity";
+type QueryType =
+  | "external"
+  | "imported"
+  | "backfill"
+  | "emailDerived"
+  | "threadIdentity"
+  | "threadIdentityTargeted"
+  | "candidateMessageThreads";
 
 /**
  * Per-type payload carried alongside `{ id, type, userId }` (BACKLOG-1717).
@@ -389,6 +396,8 @@ export function queryOnDedicatedWorker(
   type: QueryType,
   userId: string,
   timeoutMs: number = 30_000,
+  /** BACKLOG-3868: extra fields of the query message (e.g. `request` for threadIdentityTargeted). */
+  extras?: Record<string, unknown>,
 ): Promise<unknown[]> {
   return new Promise<unknown[]>((resolve, reject) => {
     if (exclusiveHold || shuttingDown || !lastDbPath || !lastEncryptionKey) {
@@ -430,7 +439,7 @@ export function queryOnDedicatedWorker(
     w.on("message", (msg: { type?: string; id?: string; success?: boolean; data?: unknown[]; error?: string }) => {
       if (msg.type === "ready") {
         started = true;
-        w.postMessage({ id, type, userId });
+        w.postMessage({ ...extras, id, type, userId });
         return;
       }
       if (msg.type === "error") {

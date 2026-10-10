@@ -37,6 +37,8 @@ import {
   shutdownPool,
 } from "../contactWorkerPool";
 import { readOneToOneThreadIndexOn, type ThreadIdentityIndex } from "../../services/db/threadIdentityIndexDb";
+import { runThreadIdentityRequestOn, type TargetedThreadIdentity } from "../../services/db/threadIdentityTargetedDb";
+import { candidateMessageThreadsSql } from "../../services/db/autoLinkSql";
 
 const DRIVER = nodePath.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers");
 const KEY_HEX = "3816".repeat(16);
@@ -155,6 +157,71 @@ maybe("contact query worker: thread identity index off the main thread (BACKLOG-
     expect(onMain.value.rows).toBe(MESSAGES);
     expect(onWorker.value.oneToOne.length).toBe(THREADS - THREADS / 10);
     expect(new Map(onWorker.value.oneToOne)).toEqual(new Map(onMain.value.oneToOne));
+  }, 180_000);
+
+  // BACKLOG-3868: the targeted read the expansion now asks for, on the same real worker.
+  it("targeted read on the dedicated worker: same identities as the full index, a small fraction of the rows", async () => {
+    const attachedThreadIds = ["T1", "T2", "T10"]; // T10 is a group
+    const request = { kind: "targeted" as const, attachedThreadIds };
+    const onWorker = await maxStallDuring(
+      async () =>
+        (await queryOnDedicatedWorker("threadIdentityTargeted", USER, 120_000, { request }))[0] as TargetedThreadIdentity,
+    );
+    const db = open(true);
+    let full: ThreadIdentityIndex;
+    let onMain: TargetedThreadIdentity;
+    try {
+      full = readOneToOneThreadIndexOn(db, USER);
+      onMain = runThreadIdentityRequestOn(db, USER, request) as TargetedThreadIdentity;
+    } finally {
+      db.close();
+    }
+    const fullToken = new Map(full.oneToOne);
+    const pooled = new Set(attachedThreadIds.map((t) => fullToken.get(t)).filter((t): t is string => !!t));
+    expect(pooled.size).toBe(2);
+    const expected = new Map(full.oneToOne.filter(([, token]) => pooled.has(token)));
+    expect(new Map(onWorker.value.oneToOne)).toEqual(expected);
+    expect(new Map(onWorker.value.attached)).toEqual(new Map(attachedThreadIds.map((t) => [t, fullToken.get(t) ?? null])));
+    expect(onWorker.value).toEqual(onMain);
+    expect(onWorker.value.rows).toBeLessThan(MESSAGES / 100);
+    process.stderr.write(
+      `[3868] targeted read over ${MESSAGES} msgs: rows=${onWorker.value.rows} supersetThreads=${onWorker.value.supersetThreads} ` +
+        `dedicated worker maxEventLoopDelay=${onWorker.maxMs}ms\n`,
+    );
+  }, 180_000);
+
+  // BACKLOG-3868: the auto-link candidate read (create / add contact / post-sync auto-link).
+  it("candidate-thread read on the dedicated worker returns the main-thread rows", async () => {
+    // The fixture table has only the identity columns; add the ones the statement reads.
+    const w = open();
+    try {
+      for (const col of ["participants_flat TEXT", "transaction_id TEXT", "sent_at TEXT", "associated_message_type INTEGER", "message_type TEXT"]) {
+        try {
+          w.exec(`ALTER TABLE messages ADD COLUMN ${col}`);
+        } catch {
+          /* added by an earlier run */
+        }
+      }
+      w.exec("CREATE TABLE IF NOT EXISTS communications (thread_id TEXT, transaction_id TEXT)");
+      w.exec("CREATE TABLE IF NOT EXISTS ignored_communications (thread_id TEXT, transaction_id TEXT)");
+      w.exec("UPDATE messages SET participants_flat = replace(replace(participants, '\"', ''), '+', ''), sent_at = '2025-01-01' WHERE participants_flat IS NULL");
+    } finally {
+      w.close();
+    }
+    const params = [USER, "txn-x", "txn-x", "txn-x", "%2015550101%", "2000-01-01T00:00:00.000Z", "2100-01-01T00:00:00.000Z"];
+    const onWorker = await maxStallDuring(async () =>
+      queryOnDedicatedWorker("candidateMessageThreads", USER, 120_000, { phoneCount: 1, params }),
+    );
+    const r = open(true);
+    let onMain: unknown[];
+    try {
+      onMain = r.prepare(candidateMessageThreadsSql(1)).all(...params);
+    } finally {
+      r.close();
+    }
+    expect(onMain.length).toBeGreaterThan(0);
+    expect(onWorker.value).toEqual(onMain);
+    process.stderr.write(`[3868] candidate read over ${MESSAGES} msgs on the worker: maxEventLoopDelay=${onWorker.maxMs}ms\n`);
   }, 180_000);
 
   it("a contact read on the shared pool issued during the identity read is answered first, not queued behind it", async () => {

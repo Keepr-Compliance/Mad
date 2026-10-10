@@ -57,9 +57,13 @@ jest.mock("../logService", () => {
 });
 
 import { setDb } from "../db/core/dbConnection";
-import { EXPANSION_LINKS_PER_TURN, expandAttachedThreadsForUser } from "../autoLinkService";
+import {
+  EXPANSION_LINKS_PER_TURN,
+  expandAttachedThreadsForUser,
+  resetExpansionWatermarksForTests,
+} from "../autoLinkService";
 import * as contactWorkerPool from "../../workers/contactWorkerPool";
-import { readOneToOneThreadIndexOn } from "../db/threadIdentityIndexDb";
+import { runThreadIdentityRequestOn, type ThreadIdentityRequest } from "../db/threadIdentityTargetedDb";
 import logService from "../logService";
 
 const USER_ID = "user-2285";
@@ -252,6 +256,7 @@ function linkedMessageIds(transactionId: string): Set<string> {
 }
 
 beforeEach(() => {
+  resetExpansionWatermarksForTests();
   db = new Database(":memory:") as DatabaseType;
   db.pragma("foreign_keys = ON");
   createSchema(db);
@@ -527,8 +532,16 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
       const ready = jest.spyOn(contactWorkerPool, "isPoolReady").mockReturnValue(true);
       const shared = jest.spyOn(contactWorkerPool, "queryContacts");
       const query = jest.spyOn(contactWorkerPool, "queryOnDedicatedWorker").mockImplementation(
-        (type, userId) =>
-          new Promise((resolve) => setImmediate(() => resolve(type === "threadIdentity" ? [readOneToOneThreadIndexOn(workerConnection, userId)] : []))),
+        (type, userId, _timeout, extras) =>
+          new Promise((resolve) =>
+            setImmediate(() =>
+              resolve(
+                type === "threadIdentityTargeted"
+                  ? [runThreadIdentityRequestOn(workerConnection, userId, (extras as { request: ThreadIdentityRequest }).request)]
+                  : [],
+              ),
+            ),
+          ),
       );
       const mainSql: string[] = [];
       const realPrepare = db.prepare.bind(db);
@@ -540,7 +553,9 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
       const res = await expandAttachedThreadsForUser(USER_ID);
 
       expect(ready).toHaveBeenCalled();
-      expect(query).toHaveBeenCalledWith("threadIdentity", USER_ID, expect.any(Number));
+      expect(query).toHaveBeenCalledWith("threadIdentityTargeted", USER_ID, expect.any(Number), {
+        request: { kind: "targeted", attachedThreadIds: ["T1"] },
+      });
       // Never on the shared contact worker: contact list reads would queue behind it.
       expect(shared).not.toHaveBeenCalled();
       expect(mainSql.length).toBeGreaterThan(0); // the spy is live
@@ -549,7 +564,8 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
       expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent-out", "m-cross-in"]));
       const info = logService.info as jest.Mock;
       const scan = info.mock.calls.filter((c) => String(c[0]).startsWith("[BACKLOG-3784] Attached-thread identity scan: rows="));
-      expect(scan[scan.length - 1][2]).toMatchObject({ source: "worker", identityRows: 3 });
+      // BACKLOG-3868: T1 (1 row) + 3 thread ids kept by the superset filter + T2 and T-group (1 row each).
+      expect(scan[scan.length - 1][2]).toMatchObject({ source: "worker", identityRows: 6, mode: "targeted" });
     });
 
     it("a large backfill gives the event loop a turn while it links (not one long synchronous run)", async () => {
@@ -626,13 +642,13 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
         let active = 0;
         let maxActive = 0;
         const query = jest.spyOn(contactWorkerPool, "queryOnDedicatedWorker").mockImplementation(
-          (_type, userId) =>
+          (_type, userId, _timeout, extras) =>
             new Promise((resolve) => {
               active++;
               maxActive = Math.max(maxActive, active);
               releases.push(() => {
                 active--;
-                resolve([readOneToOneThreadIndexOn(workerConnection, userId)]);
+                resolve([runThreadIdentityRequestOn(workerConnection, userId, (extras as { request: ThreadIdentityRequest }).request)]);
               });
             }),
         );
@@ -643,6 +659,9 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
 
         const calls = Array.from({ length: callers }, () => expandAttachedThreadsForUser(USER_ID));
         await waitFor(() => query.mock.calls.length === 1);
+        // BACKLOG-3868: a rerun with nothing new is skipped without a worker read, so give
+        // the rerun something to read: a message arrives in the attached thread meanwhile.
+        insertMacMessage({ id: "m-arrived-1", threadId: "T1", direction: "inbound", contact: PHONE_ROMINA, sentAt: "2026-06-02T00:00:00Z", transactionId: null });
         await new Promise((r) => setTimeout(r, 50));
         expect(query).toHaveBeenCalledTimes(1); // the others joined, none started a read
         releases[0]();
@@ -655,7 +674,9 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
         expect(query).toHaveBeenCalledTimes(2);
         expect(maxActive).toBe(1);
         expect(results.every((r) => r === results[0])).toBe(true);
+        expect((query.mock.calls[1][3] as { request: ThreadIdentityRequest }).request).toEqual({ kind: "since", afterRowid: 3 });
         // A later call is a fresh run, not stuck behind a finished one.
+        insertMacMessage({ id: "m-arrived-2", threadId: "T1", direction: "inbound", contact: PHONE_ROMINA, sentAt: "2026-06-03T00:00:00Z", transactionId: null });
         const later = expandAttachedThreadsForUser(USER_ID);
         await waitFor(() => query.mock.calls.length === 3);
         releases[2]();
@@ -796,6 +817,7 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
     expect(scan[0][2]).toEqual({
       pairsExamined: res.pairsExamined,
       identityRows: expect.any(Number),
+      mode: "targeted",
       source: "main",
       scanMs: expect.any(Number),
     });

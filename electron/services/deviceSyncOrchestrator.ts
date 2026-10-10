@@ -27,7 +27,8 @@ import {
 } from "./deviceDetectionService";
 import { BackupService } from "./backupService";
 import type { LeftoverRemoval } from "./backupService";
-import type { PriorBackupState } from "../types/ipc/window-api-platform";
+import type { PriorBackupState, SyncCancelTrigger } from "../types/ipc/window-api-platform";
+import { isSyncCancelTrigger } from "./syncCancelTrigger";
 import { BackupDecryptionService } from "./backupDecryptionService";
 import {
   getBackupPasswordStore,
@@ -636,6 +637,40 @@ const NOT_A_TOOL_FAILURE_CODES: ReadonlySet<string> = new Set([
   "BACKUP_PASSWORD_UNAVAILABLE",
 ]);
 
+/** BACKLOG-3816: returned by `raceCancel` when the sync was cancelled first. */
+const PREFLIGHT_CANCELLED = Symbol("preflight-cancelled");
+const PROCESSING_CANCELLED = "Processing cancelled by user";
+
+/**
+ * BACKLOG-3816: settle with the step's value, or with PREFLIGHT_CANCELLED as soon as
+ * the sync is cancelled. Used only for read-only pre-flight steps: the step itself
+ * may keep running, but nothing waits for it. A step that rejects after a cancel is
+ * swallowed (no unhandled rejection).
+ */
+function raceCancel<T>(signal: AbortSignal, step: Promise<T>): Promise<T | typeof PREFLIGHT_CANCELLED> {
+  if (signal.aborted) {
+    step.catch(() => undefined);
+    return Promise.resolve(PREFLIGHT_CANCELLED);
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      step.catch(() => undefined);
+      resolve(PREFLIGHT_CANCELLED);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    step.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
 export class DeviceSyncOrchestrator extends EventEmitter {
   private deviceService: DeviceDetectionService;
   private backupService: BackupService;
@@ -859,6 +894,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     let forceFullNext: string | undefined;
     // G3: the backup tool finished (resets the consecutive tool-failure count).
     let backupToolOk = false;
+    // BACKLOG-3816: the backup's size walk was deferred and reports on its own.
+    let deferredSizePending = false;
     if (this.isRunning) {
       return this.errorResult("Sync already in progress");
     }
@@ -895,11 +932,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.priorBackup = "unknown";
     this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
+    // BACKLOG-3816: this frame's own cancel token. Read from here on, never through
+    // `this.abortController`, which a later frame replaces.
+    const preflightSignal = this.abortController.signal;
     this.startTime = Date.now();
     this.estimatedBackupSize = 0;
 
     // BACKLOG-2898: open the phase timeline for this run.
     syncTimeline.beginSync({ platform: process.platform });
+    // BACKLOG-3816: the deferred size walk reports into this run only.
+    const timelineRunId = syncTimeline.currentRunId?.() ?? null;
 
     // BACKLOG-2914 (FIX 4): the HOST half of the outcome row's environment.
     //
@@ -928,6 +970,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // left behind (including ones left by builds before this one). BEFORE the disk
       // check, so a leftover cannot fail the very check that would reclaim its space.
       await this.sweepLeftoverBackups();
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "leftover-sweep");
 
       // TASK-2276: Pre-sync checks with user-facing error messages
       // Check disk space using the diagnostic utility (enriched errors for UI)
@@ -936,6 +979,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       while (!diskCheck.sufficient && (await this.deleteOldestQuarantined())) {
         diskCheck = await checkDiskSpaceForOperation("sync");
       }
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "disk-check");
       if (!diskCheck.sufficient) {
         const userError = formatDiskSpaceError(diskCheck.availableMB, diskCheck.requiredMB);
         log.warn("[DeviceSyncOrchestrator] Pre-sync disk space check failed", {
@@ -952,6 +996,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       let serviceRunning = true;
       if (process.platform === "win32") {
         const driverStatus = await checkAppleDrivers();
+        if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "driver-check");
         driversInstalled = driverStatus.isInstalled;
         serviceRunning = driverStatus.serviceRunning;
         if (!driverStatus.isInstalled) {
@@ -1032,7 +1077,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       });
 
       // Check if there's an existing backup (could be complete or interrupted)
-      const backupStatus = await this.backupService.checkBackupStatus(options.udid);
+      // BACKLOG-3816: on a large backup this walk takes minutes (576k files on the PC,
+      // ~135 s). It stops at the next file on cancel, and the sync does not wait for it.
+      const backupStatus = await raceCancel(
+        preflightSignal,
+        this.backupService.checkBackupStatus(options.udid, { signal: preflightSignal, useRecordedSize: true }),
+      );
+      if (backupStatus === PREFLIGHT_CANCELLED) {
+        return this.endCancelledPreflight(preflightSignal, "backup-status");
+      }
       // BACKLOG-2907 + BACKLOG-2917: record what this check actually established.
       //
       // #2413 wrote `backupStatus?.exists === true ? "exists" : "unknown"` and
@@ -1276,7 +1329,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           });
 
           // Brief pause to let user see this message
-          await new Promise(resolve => setTimeout(resolve, 1500));
+          await raceCancel(preflightSignal, new Promise(resolve => setTimeout(resolve, 1500)));
 
           this.emitProgress({
             phase: "backup",
@@ -1393,6 +1446,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           message: "Preparing first sync (this may take a while)...",
         });
       }
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "prior-backup");
 
       // BACKLOG-2899: Refuse up front when free space is ALREADY below the
       // reserve the mid-transfer monitor defends. Same constant, same semantic:
@@ -1413,6 +1467,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         await this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES),
         () => this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES),
       );
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "reserve-check");
       // BACKLOG-2914 (FIX 4): host disk, from the reading the guard already took.
       if (!reserveCheck.unavailable) {
         syncTimeline.setContext({
@@ -1445,7 +1500,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       }
 
       // Step 1: Get device storage info to estimate backup size
-      const storageInfo = await this.deviceService.getDeviceStorageInfo(options.udid);
+      const storageInfoOrCancel = await raceCancel(
+        preflightSignal,
+        this.deviceService.getDeviceStorageInfo(options.udid),
+      );
+      if (storageInfoOrCancel === PREFLIGHT_CANCELLED) {
+        return this.endCancelledPreflight(preflightSignal, "storage-query");
+      }
+      const storageInfo = storageInfoOrCancel;
       // BACKLOG-2914 (FIX 4): what the phone itself is carrying. Already fetched for
       // the estimate; recorded rather than discarded.
       if (storageInfo) {
@@ -1570,6 +1632,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       const headroom = estimate.source === "existing-backup" ? 1.1 : 1.5;
       const requiredSpace = this.estimatedBackupSize * headroom;
       const diskSpaceCheck = await this.checkAvailableDiskSpace(requiredSpace);
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "estimate-disk-check");
 
       if (!diskSpaceCheck.hasEnoughSpace) {
         // THE RESIDUAL, NAMED. A KNOWN estimate that does not fit still only warns and
@@ -1592,7 +1655,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           message: `Low disk space (${availableGB} GB free). Backup may fail — consider freeing up space.`,
         });
         // Brief pause so user can see the warning
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await raceCancel(preflightSignal, new Promise(resolve => setTimeout(resolve, 3000)));
       } else {
         log.info(`[DeviceSyncOrchestrator] Disk space check passed: ${Math.round(diskSpaceCheck.availableSpace / 1024 / 1024 / 1024)} GB available`);
       }
@@ -1608,11 +1671,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // BACKLOG-3817: a parse copy left by a crash or a killed quit holds plaintext. No
       // other sync can be running here (isRunning), so every copy is stale.
       await this.sweepParseCopies();
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "parse-copy-sweep");
 
       // BACKLOG-3817: the password for an encrypted backup — the one the user just typed,
       // else the one saved for this phone. A saved password that cannot be unlocked stops
       // the sync: it is never replaced and encryption is never turned off to get past it.
       const passwordPlan = await this.resolveBackupPassword(options.udid, options.password);
+      // BACKLOG-3816: the last check before the at-rest pause is requested. A cancelled
+      // sync never asks a background seal to pause.
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "password");
       if (passwordPlan.kind === "unavailable") {
         log.warn("[DeviceSyncOrchestrator] Saved backup password unavailable", {
           reason: passwordPlan.reason,
@@ -1653,7 +1720,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           atRestSession = await this.atRest().beginSync(options.udid, {
             onProgress: (p) => this.emitAtRestProgress(p),
             underLock,
-            signal: this.abortController?.signal,
+            signal: preflightSignal,
           });
         } catch (error) {
           // A failure of the new-chain step is an ordinary sync error, not a refusal.
@@ -1690,6 +1757,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             udid: options.udid,
             password: backupPassword,
             forceFullBackup: options.forceFullBackup,
+            deferSizeMeasurement: true,
           });
         } catch (toolError) {
           if (
@@ -1770,6 +1838,25 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           return this.errorResult(BACKUP_DEVICE_DISCONNECTED_MESSAGE);
         }
 
+        // BACKLOG-3816: the finished backup's size is measured while the sync goes on
+        // (parse copy, seal, parse, store) instead of before it. Its figure reaches this
+        // run's row and the backup phase when the walk ends, if the run is still open.
+        const deferredSize = this.backupService.takeDeferredSizeMeasurement?.(options.udid) ?? null;
+        if (deferredSize) {
+          deferredSizePending = true;
+          const backupPhase = this.backupTimelinePhase;
+          void deferredSize.then((reading) => {
+            if (timelineRunId === null || syncTimeline.currentRunId?.() !== timelineRunId) return;
+            syncTimeline.setContext(
+              reading.measured ? { backupBytes: reading.bytes } : { backupBytesUnmeasured: true },
+            );
+            syncTimeline.annotate(
+              backupPhase,
+              reading.measured ? { bytes: reading.bytes } : { bytesUnmeasured: true },
+            );
+          });
+        }
+
         if (this.abortController?.signal.aborted) {
           // BACKLOG-3598: a cancelled first sync leaves nothing behind.
           await this.removeUnfinishedBackup(options.udid, mayRemoveUnfinishedBackup);
@@ -1797,9 +1884,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
               ? "inferred"
               : "device-reported",
           wasEncrypted: !!backupResult.isEncrypted,
-          ...(backupResult.backupSize === null
-            ? { backupBytesUnmeasured: true }
-            : { backupBytes: backupResult.backupSize }),
+          // BACKLOG-3816: a deferred walk sets the size itself when it ends.
+          ...(deferredSize
+            ? {}
+            : backupResult.backupSize === null
+              ? { backupBytesUnmeasured: true }
+              : { backupBytes: backupResult.backupSize }),
         });
 
         backupToolOk = backupResult.success && !!backupResult.backupPath;
@@ -1899,9 +1989,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // be annotated `bytes: 0`, which reads in the timeline — and in the aggregate
       // BACKLOG-2894 will build — as a run that transferred nothing.
       syncTimeline.annotate(this.backupTimelinePhase, {
-        ...(backupResult.backupSize === null
-          ? { bytesUnmeasured: true }
-          : { bytes: backupResult.backupSize }),
+        // BACKLOG-3816: a deferred walk annotates the size when it ends.
+        ...(deferredSizePending
+          ? {}
+          : backupResult.backupSize === null
+            ? { bytesUnmeasured: true }
+            : { bytes: backupResult.backupSize }),
         incremental: backupResult.isIncremental,
         encrypted: !!backupResult.isEncrypted,
       });
@@ -2168,7 +2261,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         atRestHandedOff = true;
       }
 
+      // BACKLOG-3816: with no listener nothing persists and nothing will call
+      // cleanupBackup, so the plaintext parse copy would wait for the next sweep.
+      const nobodyCleansUp = needsCleanup && this.listenerCount("complete") === 0;
       this.emit("complete", result);
+      if (nobodyCleansUp) await this.discardParseCopy(parseCopyPath);
       return result;
     } catch (error) {
       const errorMessage =
@@ -2501,16 +2598,28 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   }
 
   /**
-   * Cancel the current sync operation
+   * Cancel the current sync operation.
+   *
+   * BACKLOG-3816: `trigger` names the on-screen control that asked for it. Only a named
+   * control records `ended_by=user-cancel` (with the control as `reason_code`). A cancel
+   * with no trigger — or one that is not a known control — records
+   * `ended_by=cancel-unattributed`, so a cancel nobody can account for never reads as
+   * the user's.
    */
-  cancel(): void {
-    log.info("[DeviceSyncOrchestrator] Cancelling sync");
+  cancel(trigger?: SyncCancelTrigger | null): void {
+    const known = isSyncCancelTrigger(trigger) ? trigger : null;
+    log.info("[DeviceSyncOrchestrator] Cancelling sync", { trigger: known ?? "unattributed" });
     // BACKLOG-3440: THE USER PRESSED CANCEL, and until now the row could not say so.
     // `outcome = cancelled` has only ever meant "the abort signal was set", and
     // `forceReset()` sets it too — so "I cancelled it" and "it hung, so I hit Try Again"
     // produced identical rows. Recorded here, at the act itself, rather than inferred
     // later from a string that both paths produce.
-    syncTimeline.noteEndedBy("user-cancel");
+    if (known) {
+      syncTimeline.setContext({ reasonCode: known });
+      syncTimeline.noteEndedBy("user-cancel");
+    } else {
+      syncTimeline.noteEndedBy("cancel-unattributed");
+    }
     this.abortController?.abort();
     // Don't null the controller -- sync() checks signal.aborted at checkpoints
     // and the next sync()/processExistingBackup() call creates a fresh controller.
@@ -2535,6 +2644,25 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       syncTimeline.noteEndedBy("app-quit");
     }
     return stopping;
+  }
+
+  /**
+   * BACKLOG-3816: the app is quitting - remove every decrypted parse copy now, synchronously
+   * (a quit gives no time for an await). A copy that cannot be removed (a Windows lock) is
+   * logged and swept at the next launch. Never throws.
+   */
+  discardParseCopiesForQuit(): void {
+    try {
+      if (typeof this.decryptionService.sweepParseCopiesSync !== "function") return;
+      const { removed, failed } = this.decryptionService.sweepParseCopiesSync();
+      if (removed > 0 || failed > 0) {
+        log.info("[DeviceSyncOrchestrator] Quit: decrypted parse copies removed", { removed, failed });
+      }
+    } catch (error) {
+      log.warn("[DeviceSyncOrchestrator] Quit: parse-copy removal failed; the next launch sweeps it", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -2689,8 +2817,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     if (!parseCopyPath) return;
     try {
       await this.decryptionService.cleanup(parseCopyPath);
-    } catch {
-      // cleanup() logs and never throws; belt and braces.
+    } catch (error) {
+      // cleanup() logs and never throws. If it does, say so: the copy is plaintext and
+      // is removed by the next sweep (next sync, or launch) - never silently ignored.
+      log.warn("[DeviceSyncOrchestrator] Removing a decrypted parse copy failed; the next sweep removes it", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -3172,10 +3304,17 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.priorBackup = "unknown";
     this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
+    // BACKLOG-3816: this frame's own cancel token (see sync()).
+    const preflightSignal = this.abortController.signal;
     this.startTime = Date.now();
 
     // TASK-2110: Generate session ID for ACID rollback on cancel
     const sessionId = crypto.randomUUID();
+
+    // BACKLOG-3816: the decrypted (plaintext) copy this run made, if any. The `finally`
+    // below removes it on EVERY exit - success, cancel, error, throw - so no path has to
+    // remember to. Set the moment decryptBackup hands the path back.
+    let decryptedCopyPath: string | null = null;
 
     try {
       // Get backup path - construct from app's userData folder
@@ -3193,9 +3332,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       });
 
       // Check if backup exists
-      const backupStatus = await this.backupService.checkBackupStatus(
-        options.udid
+      // BACKLOG-3816: the size walk stops on cancel, and nothing waits for it.
+      const backupStatus = await raceCancel(
+        preflightSignal,
+        this.backupService.checkBackupStatus(options.udid, { signal: preflightSignal, useRecordedSize: true }),
       );
+      if (backupStatus === PREFLIGHT_CANCELLED) {
+        return this.endCancelledPreflight(preflightSignal, "backup-status", PROCESSING_CANCELLED);
+      }
       // BACKLOG-2917: "no backup found" and "we could not find out" are different
       // answers and now produce different errors. The old predicate reported a failed
       // check to the user as a confident "No existing backup found for this device",
@@ -3241,6 +3385,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // TASK-908: Check if backup should be processed or skipped
       if (!options.forceResync) {
         const shouldProcess = await this.shouldProcessBackup(backupPath);
+        if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "change-detection", PROCESSING_CANCELLED);
         if (!shouldProcess) {
           this.isRunning = false;
           this.setPhase("complete");
@@ -3273,10 +3418,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       let attachmentsUndecryptable = 0;
       const isEncrypted =
         await this.decryptionService.isBackupEncrypted(backupPath);
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "encryption-check", PROCESSING_CANCELLED);
 
       if (isEncrypted) {
         // BACKLOG-3817: the typed password, else the one saved for this phone.
         const plan = await this.resolveBackupPassword(options.udid, options.password);
+        if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "password", PROCESSING_CANCELLED);
         if (plan.kind === "unavailable") {
           syncTimeline.setContext({
             endedBy: "backup-encryption",
@@ -3302,6 +3449,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           message: "Decrypting backup...",
         });
 
+        // A copy a crash or a failed removal left behind goes now, not at the next launch.
+        await this.sweepParseCopies();
+
         const decryptResult = await this.decryptionService.decryptBackup(
           backupPath,
           existingPassword
@@ -3322,6 +3472,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
         attachmentsUndecryptable = this.recordUndecryptable(decryptResult.stats?.skipped ?? 0);
         extractionPath = decryptResult.decryptedPath;
+        decryptedCopyPath = extractionPath;
+        if (preflightSignal.aborted) {
+          // The decrypted copy is plaintext: removed before the frame ends.
+          await this.discardParseCopy(extractionPath);
+          return this.endCancelledPreflight(preflightSignal, "decrypt", PROCESSING_CANCELLED);
+        }
         if (plan.kind === "provided") {
           await this.rememberUserPassword(options.udid, existingPassword);
         }
@@ -3336,6 +3492,10 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         message: "Reading contacts...",
       });
 
+      if (preflightSignal.aborted) {
+        if (extractionPath !== backupPath) await this.discardParseCopy(extractionPath);
+        return this.endCancelledPreflight(preflightSignal, "before-parse", PROCESSING_CANCELLED);
+      }
       await this.contactsParser.open(extractionPath);
       const contacts = this.contactsParser.getAllContacts();
 
@@ -3472,6 +3632,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       this.emit("error", error);
 
       return this.errorResult(errorMessage);
+    } finally {
+      // BACKLOG-3816: whatever ended this run - a parser throw after decryption, a cancel,
+      // a return nobody remembered to clean up before - the plaintext copy goes now.
+      // Idempotent: a path an earlier branch already removed is a quiet no-op.
+      await this.discardParseCopy(decryptedCopyPath);
     }
   }
 
@@ -3495,6 +3660,31 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   /**
    * Create an error result
    */
+  /**
+   * BACKLOG-3816: a cancel noticed during pre-flight ends the frame at once. The run
+   * row closes now (at the cancel, not after the remaining checks). If a newer frame
+   * already owns the orchestrator, this frame touches nothing shared.
+   */
+  private endCancelledPreflight(
+    signal: AbortSignal,
+    step: string,
+    message: string = "Sync cancelled by user",
+  ): SyncResult {
+    log.info("[DeviceSyncOrchestrator] Sync cancelled during pre-flight; stopping", { step });
+    if (this.abortController?.signal !== signal) {
+      return {
+        success: false,
+        messages: [],
+        contacts: [],
+        conversations: [],
+        error: message,
+        duration: Date.now() - this.startTime,
+      };
+    }
+    this.isRunning = false;
+    return this.errorResult(message);
+  }
+
   private errorResult(error: string): SyncResult {
     // BACKLOG-2898: close the timeline on every failure and cancel path.
     // The guard distinguishes the ONE reentrant caller ("Sync already in
