@@ -144,6 +144,8 @@ const LOOKUP_CHUNK = 500;
  * slice of the pre-filter loop; the caller yields between them.
  */
 const DEDUPE_PAGE = 5000;
+/** BACKLOG-3868: contacts per upsert transaction in storeContacts. */
+const CONTACT_UPSERT_SLICE = 500;
 
 // Input validation constants
 const MAX_MESSAGE_TEXT_LENGTH = 100000; // 100KB - truncate extremely long messages
@@ -775,7 +777,19 @@ class IPhoneSyncStorageService {
 
     // Use the externalContactDbService to upsert contacts
     // This handles deduplication via UNIQUE(user_id, source, external_record_id)
-    const stored = externalContactDb.upsertFromiPhone(userId, iPhoneContacts, sessionId);
+    // BACKLOG-3868: in CONTACT_UPSERT_SLICE-sized calls (each its own transaction)
+    // with a yield between them; one call for every contact blocked main ~0.5 s per
+    // 10k contacts on an encrypted store. Same rows: the upsert is keyed on
+    // (user_id, source, external_record_id), and the sessionId rollback is unchanged.
+    let stored = 0;
+    for (let start = 0; start < iPhoneContacts.length; start += CONTACT_UPSERT_SLICE) {
+      stored += externalContactDb.upsertFromiPhone(
+        userId,
+        iPhoneContacts.slice(start, start + CONTACT_UPSERT_SLICE),
+        sessionId,
+      );
+      if (start + CONTACT_UPSERT_SLICE < iPhoneContacts.length) await yieldToEventLoop();
+    }
 
     // Report completion
     onProgress?.(contacts.length, contacts.length);
