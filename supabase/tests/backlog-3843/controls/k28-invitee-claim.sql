@@ -11,6 +11,11 @@ DO $$ DECLARE m text; r record; before_s text; BEGIN
     $q$update public.organization_members set user_id='{u_a}', license_status='active', joined_at='2020-01-01', invitation_token=null where id='{inv_susp}'$q$, true);
   PERFORM pg_temp.check('k28 claim of an unclaimed SUSPENDED row refused (42501)', pg_temp.is42501(m), m);
   PERFORM pg_temp.check('k28 suspended row unchanged', pg_temp.snap(pg_temp.id('inv_susp')) = before_s);
+  before_s := pg_temp.snap(pg_temp.id('inv_a'));
+  m := pg_temp.as_user(pg_temp.ua(), 'invitee-3679@example.test',
+    $q$update public.organization_members set user_id='{u_a}', license_status='active', invitation_token=null, role='admin' where id='{inv_a}'$q$, true);
+  PERFORM pg_temp.check('k28 full claim that also sets role=admin refused (42501)', pg_temp.is42501(m), m);
+  PERFORM pg_temp.check('k28 pending invite unchanged after role-escalating claim', pg_temp.snap(pg_temp.id('inv_a')) = before_s);
   m := pg_temp.as_user(pg_temp.ua(), 'invitee-3679@example.test',
     $q$update public.organization_members set user_id='{u_a}', license_status='active', joined_at='2020-01-01', invitation_token=null where id='{inv_a}'$q$, true);
   PERFORM pg_temp.check('k28 claim of a pending invite succeeds', m = 'OK rows=1', m);

@@ -72,6 +72,9 @@ MUTANTS = {
     "n20-insert-allows-joined-at": ("kill", [("       OR NEW.joined_at IS NOT NULL\n", "")], "k29-member-insert"),
     "n21-insert-any-provenance": ("kill", [("       OR NEW.provisioned_by IS DISTINCT FROM 'invite'\n", ""),
                                            ("       OR NEW.scim_synced_at IS NOT NULL\n", "")], "k29-member-insert"),
+    "n23-invitee-may-change-role": ("kill", [("v_free text[] := ARRAY['user_id', 'joined_at', 'license_status', 'invitation_token', 'updated_at'];",
+                                              "v_free text[] := ARRAY['user_id', 'joined_at', 'license_status', 'invitation_token', 'updated_at', 'role'];")],
+                                    "k28-invitee-claim"),
     "n22-joined-at-not-pinned": ("kill", [("  NEW.joined_at := now();\n", "")], "k28-invitee-claim k11-accept-pins-joined-at"),
 }
 
