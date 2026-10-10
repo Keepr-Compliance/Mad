@@ -857,6 +857,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // Set when the backup tool itself failed (not a cancel, quit, disconnect, disk guard
     // or password failure): the sealing step then makes the next sync of a C-DELTA phone C-FULL.
     let forceFullNext: string | undefined;
+    // G3: the backup tool finished (resets the consecutive tool-failure count).
+    let backupToolOk = false;
     if (this.isRunning) {
       return this.errorResult("Sync already in progress");
     }
@@ -1800,6 +1802,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             : { backupBytes: backupResult.backupSize }),
         });
 
+        backupToolOk = backupResult.success && !!backupResult.backupPath;
         if (!backupResult.success || !backupResult.backupPath) {
           const error = backupResult.error || "Backup failed";
 
@@ -1988,7 +1991,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         // So the chain is sealed NOW, in the background (worker threads), while contacts
         // and messages are parsed and stored — not after persistence. What the phone
         // just wrote and the unsealed index files are sealed first (newest first).
-        this.lastAtRestSeal = this.atRest().finishSync(atRestSession);
+        this.lastAtRestSeal = this.atRest().finishSync(atRestSession, undefined, { toolOk: true });
         atRestSealStarted = true;
       }
 
@@ -2201,7 +2204,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           // G4: give the phone back, in case the quit does not happen after all.
           this.atRest().releaseForQuit(atRestSession);
         } else {
-          this.lastAtRestSeal = this.atRest().finishSync(atRestSession, undefined, { forceFullNext });
+          this.lastAtRestSeal = this.atRest().finishSync(atRestSession, undefined, { forceFullNext, toolOk: backupToolOk });
         }
       }
     }
@@ -2221,7 +2224,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       this.atRest().releaseForQuit(session);
       return;
     }
-    this.lastAtRestSeal = this.atRest().finishSync(session, undefined, { succeeded });
+    this.lastAtRestSeal = this.atRest().finishSync(session, undefined, { succeeded, toolOk: true });
     await this.lastAtRestSeal;
   }
 

@@ -42,6 +42,11 @@ export interface BackupMarker {
    */
   nextStrategy?: "full";
   reasonCode?: string;
+  /**
+   * Consecutive C-DELTA syncs whose backup tool failed (G3, founder decision 2026-10-09):
+   * the second one in a row forces C-FULL. Reset by a sync whose tool succeeded.
+   */
+  toolFailures?: number;
 }
 
 export interface ScopeEntry {
@@ -92,6 +97,8 @@ export interface MarkerStore {
   writeBackupMarker(udid: string, state: BackupAtRestState): Promise<BackupMarker>;
   /** Records (reasonCode) or clears (null) "the next sync is C-FULL" on an existing marker. No marker = no-op. */
   setNextStrategy(udid: string, reasonCode: string | null): Promise<void>;
+  /** Sets the consecutive tool-failure count (0 removes it) on an existing marker. No marker = no-op. */
+  setToolFailures(udid: string, count: number): Promise<void>;
   readState(): Promise<AtRestStateFile>;
   getScope(scope: string): Promise<ScopeEntry | null>;
   setScope(scope: string, state: ScopeAtRestState, progress?: Record<string, number>): Promise<void>;
@@ -134,11 +141,14 @@ export function createMarkerStore(deps: MarkerStoreDeps): MarkerStore {
 
     async writeBackupMarker(udid, state) {
       if (!BACKUP_STATES.has(state)) throw new Error(`unknown backup state ${state}`);
-      let kept: Pick<BackupMarker, "nextStrategy" | "reasonCode"> = {};
+      let kept: Pick<BackupMarker, "nextStrategy" | "reasonCode" | "toolFailures"> = {};
       try {
         const existing = await store.readBackupMarker(udid);
         if (existing?.nextStrategy === "full") {
           kept = { nextStrategy: "full", ...(existing.reasonCode ? { reasonCode: existing.reasonCode } : {}) };
+        }
+        if (typeof existing?.toolFailures === "number" && existing.toolFailures > 0) {
+          kept = { ...kept, toolFailures: existing.toolFailures };
         }
       } catch {
         // an unreadable marker is being replaced; there is nothing to keep
@@ -159,6 +169,15 @@ export function createMarkerStore(deps: MarkerStoreDeps): MarkerStore {
         updatedAt: now().toISOString(),
         ...(reasonCode ? { nextStrategy: "full" as const, reasonCode } : {}),
       };
+      await writeFileAtomic(backupMarkerPath(udid), JSON.stringify(marker, null, 2));
+    },
+
+    async setToolFailures(udid, count) {
+      const existing = await store.readBackupMarker(udid);
+      if (!existing) return;
+      const { toolFailures: _t, ...rest } = existing;
+      void _t;
+      const marker: BackupMarker = { ...rest, updatedAt: now().toISOString(), ...(count > 0 ? { toolFailures: count } : {}) };
       await writeFileAtomic(backupMarkerPath(udid), JSON.stringify(marker, null, 2));
     },
 

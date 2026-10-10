@@ -98,6 +98,11 @@ export const BACKUP_UNSEAL_STRATEGY: BackupUnsealStrategy = "delta";
 export const FORCE_FULL_REASON_DELTA_DAMAGED = "DELTA_DAMAGED";
 /** The backup tool itself failed during a delta sync (it may have needed a sealed file). */
 export const FORCE_FULL_REASON_DELTA_TOOL_FAILED = "DELTA_TOOL_FAILED";
+/**
+ * G3 (founder decision 2026-10-09): one tool failure retries C-DELTA; this many in a row
+ * force C-FULL. A damaged sealed file found by the seal (DELTA_DAMAGED) still forces it at once.
+ */
+export const DELTA_TOOL_FAILURES_BEFORE_FULL = 2;
 
 /** Files C-DELTA unseals before `idevicebackup2` runs: the index and the root plists. */
 export const DELTA_UNSEAL_FILES: readonly string[] = ["Manifest.db", ...BACKUP_ROOT_PLISTS];
@@ -1358,7 +1363,11 @@ export class BackupAtRest extends EventEmitter {
   async finishSync(
     session: BackupSyncSession,
     onProgress?: (p: BackupAtRestProgress) => void,
-    opts: { forceFullNext?: string; succeeded?: boolean } = {},
+    /**
+     * `toolOk`: the backup tool finished this sync (resets the consecutive tool-failure
+     * count, G3). `succeeded`: persistence stored it too (clears a C-FULL flag).
+     */
+    opts: { forceFullNext?: string; succeeded?: boolean; toolOk?: boolean } = {},
   ): Promise<void> {
     if (session.kind === "none") return;
     // This sync's seal also seals whatever a paused background pass did not reach.
@@ -1376,14 +1385,28 @@ export class BackupAtRest extends EventEmitter {
       // next sync of this phone unseals everything, and a clean C-FULL sync clears it.
       if (session.kind === "keepr") {
         const damaged = this.lastScanDamaged.get(session.udid) ?? 0;
+        if (opts.toolOk || opts.succeeded) await this.deps.markers().setToolFailures(session.udid, 0);
         if (session.strategy === "delta" && opts.forceFullNext) {
           // The backup tool itself failed. It may have needed a sealed file, and a failure
-          // that damages nothing would otherwise repeat on every sync.
-          await this.deps.markers().setNextStrategy(session.udid, opts.forceFullNext);
-          this.log("warn", "[BackupAtRest] a delta sync failed in the backup tool; the next sync unseals everything", {
-            reasonCode: opts.forceFullNext,
-            damaged,
-          });
+          // that damages nothing would otherwise repeat on every sync — but one failure is
+          // more often the phone or the cable, so only the second in a row escalates (G3).
+          const failures = ((await this.deps.markers().readBackupMarker(session.udid))?.toolFailures ?? 0) + 1;
+          if (failures >= DELTA_TOOL_FAILURES_BEFORE_FULL) {
+            await this.deps.markers().setNextStrategy(session.udid, opts.forceFullNext);
+            await this.deps.markers().setToolFailures(session.udid, 0);
+            this.log("warn", "[BackupAtRest] a delta sync failed in the backup tool again; the next sync unseals everything", {
+              reasonCode: opts.forceFullNext,
+              failures,
+              damaged,
+            });
+          } else {
+            await this.deps.markers().setToolFailures(session.udid, failures);
+            this.log("warn", "[BackupAtRest] a delta sync failed in the backup tool; the next sync tries C-DELTA again", {
+              reasonCode: opts.forceFullNext,
+              failures,
+              damaged,
+            });
+          }
         } else if (session.strategy === "delta" && damaged > 0) {
           await this.deps.markers().setNextStrategy(session.udid, FORCE_FULL_REASON_DELTA_DAMAGED);
           this.log("warn", "[BackupAtRest] a delta sync left damaged files; the next sync unseals everything", {

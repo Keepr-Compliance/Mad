@@ -331,13 +331,21 @@ describe("default strategy is C-DELTA (Step 0b)", () => {
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
   });
 
+  /** G3: two C-DELTA syncs in a row whose backup tool failed. */
+  async function toolFailsTwice(s: BackupAtRest): Promise<void> {
+    for (let i = 0; i < 2; i++) {
+      const session = await s.beginSync(UDID);
+      expect(session).toMatchObject({ kind: "keepr", strategy: "delta" });
+      await s.finishSync(session, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    }
+  }
+
   describe("R1: the force-full flag clears only when the forced C-FULL sync SUCCEEDED", () => {
     async function forcedFull() {
       makeChain();
       const s = service();
       await s.migrate(UDID);
-      const first = await s.beginSync(UDID);
-      await s.finishSync(first, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+      await toolFailsTwice(s);
       expect(await s.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
       const forced = await s.beginSync(UDID);
       expect(forced).toMatchObject({ kind: "keepr", strategy: "full" });
@@ -364,17 +372,54 @@ describe("default strategy is C-DELTA (Step 0b)", () => {
     });
   });
 
-  it("D1: a delta sync whose backup tool failed forces C-FULL even though no file is damaged; a restart still reads it", async () => {
+  it("G3: ONE delta sync whose backup tool failed -> the next sync is still C-DELTA (count kept across a restart)", async () => {
     makeChain();
     const s = service();
     await s.migrate(UDID);
     const session = await s.beginSync(UDID);
-    // The tool read a still-sealed file and exited non-zero: nothing is damaged.
     await s.finishSync(session, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    expect(await s.forcedFullReason(UDID)).toBeNull();
+    const marker = JSON.parse(fs.readFileSync(path.join(backups, MARKER_DIR_NAME, `${UDID}.json`), "utf8"));
+    expect(marker.toolFailures).toBe(1);
+    expect(await service().beginSync(UDID)).toMatchObject({ kind: "keepr", strategy: "delta" });
+  });
+
+  it("G3 / D1: TWO in a row force C-FULL even though no file is damaged; a restart still reads it", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    // The tool read a still-sealed file and exited non-zero, twice: nothing is damaged.
+    await toolFailsTwice(s);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
     expect(await s.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
-    const afterRestart = service();
-    expect(await afterRestart.beginSync(UDID)).toMatchObject({ kind: "keepr", strategy: "full" });
+    expect(await service().beginSync(UDID)).toMatchObject({ kind: "keepr", strategy: "full" });
+  });
+
+  it("G3: a sync whose tool succeeded in between resets the count: fail, succeed, fail -> still C-DELTA", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    let session = await s.beginSync(UDID);
+    await s.finishSync(session, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    session = await s.beginSync(UDID);
+    await s.finishSync(session, undefined, { toolOk: true });
+    session = await s.beginSync(UDID);
+    await s.finishSync(session, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    expect(await s.forcedFullReason(UDID)).toBeNull();
+    expect(await s.beginSync(UDID)).toMatchObject({ strategy: "delta" });
+  });
+
+  it("G3: a damaged sealed file found by the seal still forces C-FULL at once (DELTA_DAMAGED)", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    // The tool truncated a still-sealed file: header magic kept, structure broken.
+    const victim = path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+    fs.writeFileSync(victim, fs.readFileSync(victim).subarray(0, 30));
+    await s.finishSync(session, undefined, { toolOk: true });
+    expect(await s.forcedFullReason(UDID)).toBe("DELTA_DAMAGED");
   });
 
   it("D1: a sync that was already C-FULL does not record a tool failure (nothing was left sealed)", async () => {
@@ -390,8 +435,7 @@ describe("default strategy is C-DELTA (Step 0b)", () => {
     makeChain();
     const s = service();
     await s.migrate(UDID);
-    const first = await s.beginSync(UDID);
-    await s.finishSync(first, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    await toolFailsTwice(s);
     // The forced C-FULL sync starts (marker `syncing`, plaintext on disk) and the app dies before finishSync.
     const crashed = service();
     await crashed.beginSync(UDID);

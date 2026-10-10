@@ -363,7 +363,7 @@ describe("C2 — the chain is sealed on every end path after the unseal", () => 
   });
 });
 
-describe("D1 — a failed C-DELTA backup tool forces C-FULL for the next sync; nothing else does", () => {
+describe("D1 / G3 — two C-DELTA backup-tool failures in a row force C-FULL for the next sync; nothing else does", () => {
   const smsPath = () => path.join(chain, "3d", SMS_ID);
   const smsSealed = () => fsSync.readFileSync(smsPath()).subarray(0, 7).equals(MAGIC);
 
@@ -399,30 +399,35 @@ describe("D1 — a failed C-DELTA backup tool forces C-FULL for the next sync; n
     return sealedAtStart === false;
   }
 
-  it("the backup tool errors (non-zero exit, nothing damaged) -> the next sync is C-FULL, reason DELTA_TOOL_FAILED", async () => {
+  /** One sync whose backup tool fails the given way. */
+  async function toolFails(how: "result" | "no-code" | "throw"): Promise<void> {
     const o = newOrchestrator(false);
-    backupReturns(fail({ errorCode: "BACKUP_FILE_MISSING", error: "The iPhone could not find a file the backup needed." } as Partial<BackupResult>));
+    if (how === "throw") startBackup.mockRejectedValue(new Error("spawn failed"));
+    else if (how === "no-code") backupReturns(fail({ errorCode: undefined, error: "idevicebackup2 exited with code 1" } as Partial<BackupResult>));
+    else backupReturns(fail({ errorCode: "BACKUP_FILE_MISSING", error: "The iPhone could not find a file the backup needed." } as Partial<BackupResult>));
     expect((await o.sync({ udid: UDID })).success).toBe(false);
     await sealedAfter(o);
+  }
+
+  it("G3: ONE tool error (nothing damaged) -> the next sync is still C-DELTA", async () => {
+    await toolFails("result");
+    expect(await atRest.forcedFullReason(UDID)).toBeNull();
+    expect(await nextSyncUnsealedContent()).toBe(false);
+  });
+
+  it.each(["result", "no-code", "throw"] as const)("G3: TWO tool errors in a row (%s) -> the next sync is C-FULL, reason DELTA_TOOL_FAILED", async (how) => {
+    await toolFails(how);
+    await toolFails(how);
     expect(await atRest.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
     expect(await nextSyncUnsealedContent()).toBe(true);
   });
 
-  it("a tool error with no error code -> the next sync is C-FULL", async () => {
-    const o = newOrchestrator(false);
-    backupReturns(fail({ errorCode: undefined, error: "idevicebackup2 exited with code 1" } as Partial<BackupResult>));
-    await o.sync({ udid: UDID });
-    await o.lastAtRestSeal;
-    expect(await atRest.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
-  });
-
-  it("the backup call throws -> the next sync is C-FULL", async () => {
-    const o = newOrchestrator(false);
-    startBackup.mockRejectedValue(new Error("spawn failed"));
-    expect((await o.sync({ udid: UDID })).success).toBe(false);
-    await o.lastAtRestSeal;
-    expect(await atRest.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
-    expect(await nextSyncUnsealedContent()).toBe(true);
+  it("G3: a successful sync in between resets the count (fail, succeed, fail -> still C-DELTA)", async () => {
+    await toolFails("result");
+    expect(await nextSyncUnsealedContent()).toBe(false); // this one succeeds (ok())
+    await toolFails("result");
+    expect(await atRest.forcedFullReason(UDID)).toBeNull();
+    expect(await nextSyncUnsealedContent()).toBe(false);
   });
 
   it.each([
