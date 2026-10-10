@@ -113,6 +113,15 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+/** A roster entry of the Attach Messages picker, with its resolved name. */
+export type MessageContactWithName = {
+  contact: string;
+  contactName: string | null;
+  messageCount: number;
+  lastMessageAt: string;
+  threadNames: string[];
+};
+
 /**
  * Transaction Service
  * Orchestrates the entire transaction extraction workflow
@@ -1939,7 +1948,21 @@ class TransactionService {
   /**
    * Get distinct contacts with unlinked message counts
    */
-  async getMessageContacts(userId: string): Promise<{ contact: string; contactName: string | null; messageCount: number; lastMessageAt: string; threadNames: string[] }[]> {
+  async getMessageContacts(userId: string): Promise<MessageContactWithName[]> {
+    return (await this.getMessageContactsWithStatus(userId)).contacts;
+  }
+
+  /**
+   * BACKLOG-3837: `getMessageContacts` with the pending state of the app-contacts
+   * name map. That map includes the people found in messages, which are read only
+   * on a dedicated worker (messageDerivedContactsCache.ts) — never on main. While
+   * that read is not ready the roster is returned complete, names resolved from
+   * everything else, with `messageDerivedPending: true`.
+   */
+  async getMessageContactsWithStatus(userId: string): Promise<{
+    contacts: MessageContactWithName[];
+    messageDerivedPending: boolean;
+  }> {
     const contacts = await databaseService.getMessageContacts(userId);
 
     let contactNameMap: Record<string, string> = {};
@@ -1961,7 +1984,7 @@ class TransactionService {
     }
 
     // BACKLOG-1547: Also merge names from app's own contacts + contact_phones table
-    const appContactNames = await this._getContactNameMapFromAppContacts(userId);
+    const { map: appContactNames, messageDerivedPending } = await this._getContactNameMapFromAppContacts(userId);
     for (const [key, value] of Object.entries(appContactNames)) {
       if (!contactNameMap[key]) {
         contactNameMap[key] = value;
@@ -2001,7 +2024,7 @@ class TransactionService {
       },
     );
 
-    return enrichedContacts;
+    return { contacts: enrichedContacts, messageDerivedPending };
   }
 
   /**
@@ -2034,9 +2057,16 @@ class TransactionService {
    * This catches contacts that were imported/synced into the app but might not be
    * in macOS Contacts or external_contacts.
    */
-  private async _getContactNameMapFromAppContacts(userId: string): Promise<Record<string, string>> {
+  private async _getContactNameMapFromAppContacts(
+    userId: string,
+  ): Promise<{ map: Record<string, string>; messageDerivedPending: boolean }> {
     try {
-      const contacts = await databaseService.getImportedContactsByUserId(userId);
+      // BACKLOG-3837: was the SYNC getImportedContactsByUserId, which ran the
+      // message-derived scan (every message of the user) on the main thread every
+      // time Attach Messages opened. Now the message-derived half comes from the
+      // dedicated-worker cache; pending = it is not in this map yet.
+      const { contacts, messageDerivedPending } =
+        await databaseService.getImportedContactsWithStatusAsync(userId);
       const map: Record<string, string> = {};
 
       for (const contact of contacts) {
@@ -2076,14 +2106,14 @@ class TransactionService {
         }
       }
 
-      return map;
+      return { map, messageDerivedPending };
     } catch (err) {
       logService.warn(
         "Failed to load contact names from app contacts table",
         "TransactionService._getContactNameMapFromAppContacts",
         { error: err instanceof Error ? err.message : String(err) },
       );
-      return {};
+      return { map: {}, messageDerivedPending: false };
     }
   }
 

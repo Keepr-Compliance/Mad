@@ -20,6 +20,7 @@ import gmailFetchService from "../services/gmailFetchService";
 import outlookFetchService from "../services/outlookFetchService";
 import emailSyncService from "../services/emailSyncService";
 import { wrapHandler } from "../utils/wrapHandler";
+import { notifyWhenMessageDerivedReady } from "../services/messageDerivedReadyNotice";
 import type { TransactionResponse } from "../types/handlerTypes";
 import {
   ValidationError,
@@ -485,11 +486,17 @@ export function registerEmailLinkingHandlers(): void {
         throw new ValidationError("User ID validation failed", "userId");
       }
 
-      const contacts = await transactionService.getMessageContacts(validatedUserId);
+      // BACKLOG-3837: the name map's message-derived half is read only on a
+      // dedicated worker; while it is not ready the roster is returned complete,
+      // flagged pending, and the window is told when the names land.
+      const { contacts, messageDerivedPending } =
+        await transactionService.getMessageContactsWithStatus(validatedUserId);
+      if (messageDerivedPending) notifyWhenMessageDerivedReady(validatedUserId);
 
       return {
         success: true,
         contacts,
+        ...(messageDerivedPending ? { contactsStatus: { messageDerivedPending: true } } : {}),
       };
     }, { module: "Transactions" }),
   );

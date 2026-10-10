@@ -115,6 +115,11 @@ export function AttachMessagesModal({
   // Contacts list state
   const [contacts, setContacts] = useState<ContactInfo[]>([]);
   const [loadingContacts, setLoadingContacts] = useState(true);
+  // BACKLOG-3837: names from the people found in messages are read off the main
+  // thread; until they land the roster shows with what is resolved, and re-reads
+  // silently on `contacts:message-derived-ready` (and every 15 s meanwhile).
+  const [namesPending, setNamesPending] = useState(false);
+  const [rosterReloads, setRosterReloads] = useState(0);
   // All contacts for name resolution (includes contacts without unlinked messages)
   const [allContacts, setAllContacts] = useState<Array<{ phone: string; name: string }>>([]);
   // BACKLOG-2263: names resolved for the message handles themselves (phones AND
@@ -145,9 +150,13 @@ export function AttachMessagesModal({
   // PERF FIX (TASK-1112): Defer data load to allow loading UI to render first
   // This prevents UI freeze by ensuring the spinner is visible before any heavy operations
   useEffect(() => {
+    // A BACKLOG-3837 re-read (names landed) is silent: the roster stays on screen.
+    const silent = rosterReloads > 0;
     // Ensure loading state is set synchronously before any async work
-    setLoadingContacts(true);
-    setError(null);
+    if (!silent) {
+      setLoadingContacts(true);
+      setError(null);
+    }
 
     // Use setTimeout to defer the actual data fetch
     // This allows the loading spinner to render before the main thread is blocked
@@ -160,14 +169,20 @@ export function AttachMessagesModal({
               success: boolean;
               contacts?: ContactInfo[];
               error?: string;
+              contactsStatus?: { messageDerivedPending?: boolean };
             }>,
             // Get all contacts for name resolution
             window.api.contacts.getAll(userId) as Promise<{
               success: boolean;
               contacts?: Array<{ id: string; name?: string; phone?: string }>;
               error?: string;
+              contactsStatus?: { messageDerivedPending?: boolean };
             }>,
           ]);
+          setNamesPending(
+            messageContactsResult.contactsStatus?.messageDerivedPending === true ||
+              allContactsResult.contactsStatus?.messageDerivedPending === true,
+          );
 
           if (messageContactsResult.success && messageContactsResult.contacts) {
             setContacts(messageContactsResult.contacts);
@@ -237,7 +252,7 @@ export function AttachMessagesModal({
             setAllContacts(phoneLookup);
           }
         } catch (err) {
-          setError(err instanceof Error ? err.message : "Failed to load contacts");
+          if (!silent) setError(err instanceof Error ? err.message : "Failed to load contacts");
         } finally {
           setLoadingContacts(false);
         }
@@ -247,7 +262,25 @@ export function AttachMessagesModal({
 
     // Cleanup on unmount
     return () => clearTimeout(timeoutId);
-  }, [userId]);
+  }, [userId, rosterReloads]);
+
+  // BACKLOG-3837: while names are pending, re-read when main says they landed,
+  // and every 15 s as a backstop (a failed read sends no event).
+  useEffect(() => {
+    if (!namesPending) return;
+    const reload = () => setRosterReloads((n) => n + 1);
+    const unsubscribe = window.api?.contacts?.onMessageDerivedReady?.((payload) => {
+      if (!payload || payload.userId === userId) reload();
+    });
+    const backstop = setInterval(reload, 15_000);
+    return () => {
+      clearInterval(backstop);
+      unsubscribe?.();
+    };
+  }, [namesPending, userId]);
+
+  // An empty roster while names are pending is "loading", never "no contacts" (BACKLOG-3832).
+  const showContactsLoading = loadingContacts || (namesPending && contacts.length === 0);
 
   // Load threads when contact is selected
   // PERF FIX (TASK-1112): Defer data load to allow loading UI to render first
@@ -694,17 +727,17 @@ export function AttachMessagesModal({
         {/* Content */}
         <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden p-2 sm:p-4">
           {/* Loading */}
-          {(loadingContacts || loadingThreads) && (
+          {(showContactsLoading || loadingThreads) && (
             <div className="text-center py-12">
               <div className="w-8 h-8 border-4 border-green-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
               <p className="text-gray-500 mt-4">
-                {loadingContacts ? "Loading contacts..." : "Loading chats..."}
+                {showContactsLoading ? "Loading contacts..." : "Loading chats..."}
               </p>
             </div>
           )}
 
           {/* Error */}
-          {error && !loadingContacts && !loadingThreads && (
+          {error && !showContactsLoading && !loadingThreads && (
             <div className="text-center py-12">
               <svg className="w-16 h-16 text-red-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -714,8 +747,13 @@ export function AttachMessagesModal({
           )}
 
           {/* Contacts List */}
-          {view === "contacts" && !loadingContacts && !error && (
+          {view === "contacts" && !showContactsLoading && !error && (
             <>
+              {namesPending && (
+                <p className="text-xs text-gray-500 mb-2" data-testid="names-pending">
+                  Loading names from your messages...
+                </p>
+              )}
               {filteredContacts.length === 0 ? (
                 <div className="text-center py-12">
                   <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

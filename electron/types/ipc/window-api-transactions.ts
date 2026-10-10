@@ -781,6 +781,12 @@ export interface WindowApiTransactions {
     success: boolean;
     contacts?: unknown[];
     error?: string;
+    /**
+     * BACKLOG-3837: names from the people found in messages are not resolved yet
+     * (read off the main thread). The roster itself is complete;
+     * `contacts.onMessageDerivedReady` fires when the names land.
+     */
+    contactsStatus?: { messageDerivedPending?: boolean };
   }>;
   /** Gets unlinked messages for a specific contact */
   getMessagesByContact: (userId: string, contact: string) => Promise<{
