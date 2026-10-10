@@ -142,6 +142,10 @@ describe("seal quit prompt (BACKLOG-3816)", () => {
     // The index seal (which pauses the running pass) never ran.
     expect(h.indexSeal).not.toHaveBeenCalled();
     expect(h.cleanup).not.toHaveBeenCalled();
+    // Nothing that stops a running sync ran either (PC final check 2026-10-10): the backup
+    // stop and the link wait come after the prompt and only on Quit anyway.
+    expect(h.backupStop).not.toHaveBeenCalled();
+    expect(h.order).toEqual(["prompt"]);
     h.setSealing(55);
     h.app.quit();
     expect(h.asks).toHaveLength(2);
