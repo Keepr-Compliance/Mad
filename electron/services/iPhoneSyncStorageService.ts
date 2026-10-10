@@ -641,17 +641,25 @@ class IPhoneSyncStorageService {
       });
     }
 
-    // Batch insert all prepared messages through the service layer
-    if (messagesToInsert.length > 0) {
+    // Batch insert all prepared messages through the service layer.
+    // BACKLOG-3868: one BATCH_SIZE slice per call (each its own transaction, as
+    // before) with a yield to the event loop between slices. The db function ran
+    // every slice back to back: 10k new messages blocked main ~0.4 s, 100k ~15 s.
+    // Cancel: checked before every slice; slices already committed stay, and the
+    // caller's rollbackSession(sessionId) removes them (unchanged).
+    const batchSize = IPhoneSyncStorageService.BATCH_SIZE;
+    for (let start = 0; start < messagesToInsert.length; start += batchSize) {
+      if (cancelSignal?.cancelled) break;
       const result = databaseService.batchInsertMessages(
-        messagesToInsert,
-        IPhoneSyncStorageService.BATCH_SIZE,
+        messagesToInsert.slice(start, start + batchSize),
+        batchSize,
         sessionId,
         cancelSignal
       );
-      stored = result.stored;
+      stored += result.stored;
       // Add DB-level skips (UNIQUE constraint) to our pre-filter skips
       skipped += result.skipped;
+      await yieldToEventLoop();
     }
 
     // Report final progress
