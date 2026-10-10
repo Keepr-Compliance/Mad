@@ -12,7 +12,7 @@ import { useAppStateMachine } from "../appCore";
 import { useAuditTransaction } from "../hooks/useAuditTransaction";
 import { OfflineNotice } from "./common/OfflineNotice";
 import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
-import { AuditCoveragePrompt } from "./transactionDetailsModule/components/AuditCoveragePrompt";
+import { AuditCoveragePrompt, sourceLinesFromCoverage } from "./transactionDetailsModule/components/AuditCoveragePrompt";
 import { dialogTextSource } from "./transactionDetailsModule/components/TextCoverageNotice";
 import { useImportSource } from "../hooks/useImportSource";
 import { usePlatform } from "../contexts/PlatformContext";
@@ -65,6 +65,8 @@ function AuditTransactionModal({
     notice?: string | null;
     // BACKLOG-3663: other sources that do not reach this range (soft lines).
     sourceGaps?: SourceCoverageGap[];
+    // BACKLOG-3837: the per-source floors are still being read (not "no gaps").
+    sourceCoveragePending?: boolean;
     proposedStartISO?: string | null;
   } | null>(null);
   const originalStartedAt = editTransaction?.started_at ?? null;
@@ -144,7 +146,7 @@ function AuditTransactionModal({
     setCoveragePrompt({
       hasGap,
       importerAvailable: !!coverage?.messagesImporterAvailable,
-      sourceGaps: coverage?.sourceGaps ?? [],
+      ...sourceLinesFromCoverage(coverage),
       proposedStartISO: proposed ?? null,
     });
   }, [
@@ -428,6 +430,7 @@ function AuditTransactionModal({
             onSkip={proceedAfterPrompt}
             onCancel={() => setCoveragePrompt(null)}
             sourceGaps={coveragePrompt.sourceGaps}
+            sourceCoveragePending={coveragePrompt.sourceCoveragePending}
             proposedStartISO={coveragePrompt.proposedStartISO}
             chosenSource={dialogTextSource(importSource, isMacOS)}
           />

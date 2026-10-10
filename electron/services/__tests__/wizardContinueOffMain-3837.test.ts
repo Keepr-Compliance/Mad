@@ -55,7 +55,7 @@ jest.mock("../contactsService", () => ({ getContactNames: () => new Map() }));
 import * as pool from "../../workers/contactWorkerPool";
 import { initializePool, isPoolReady, setContactWorkerPathForTests, shutdownPool } from "../../workers/contactWorkerPool";
 import { setDb } from "../db/core/dbConnection";
-import { getAuditCoverage, getSourceCoverage, getSourceCoverageAsync } from "../auditCoverageService";
+import { getAuditCoverage, getSourceCoverage, getSourceCoverageAsync, setSourceFloorsWaitMsForTests } from "../auditCoverageService";
 import {
   backfillContactCommunicationDates,
   getContactsSortedByActivity,
@@ -281,6 +281,7 @@ maybe("BACKLOG-3837: step-1 Continue scans run on the contact query worker (real
 
   it("coverage check: the per-source floors are read on the worker, same answer as the main-thread read", async () => {
     expect(isPoolReady()).toBe(true);
+    setSourceFloorsWaitMsForTests(600_000); // follow-up: a slow read reports pending; here it must finish
     recording = true;
     const { value: result, maxMs } = await maxStallDuring(() => getAuditCoverage(USER, AUDIT_START));
     const worker = await getSourceCoverageAsync(USER);
@@ -292,6 +293,7 @@ maybe("BACKLOG-3837: step-1 Continue scans run on the contact query worker (real
     expect(onMain.map((c) => c.source).sort()).toEqual(["google_messages", "iphone"]);
     expect(worker).toEqual(onMain);
     expect(result.success).toBe(true);
+    setSourceFloorsWaitMsForTests(null);
     process.stderr.write(
       `[3837] coverage check over ${MESSAGES} msgs: maxEventLoopDelay=${maxMs}ms (main-thread control ${mainMs}ms) sources=${onMain.map((c) => c.source).join(",")}\n`,
     );
