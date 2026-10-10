@@ -266,6 +266,12 @@ export function parseFileRecord(blob: Buffer): FileRecord {
 export class BackupDecryptionService {
   private static readonly SERVICE_NAME = "BackupDecryptionService";
   private readonly tmpRoot: () => string;
+  /**
+   * BACKLOG-3816: parse copies handed out and not yet removed by {@link cleanup}. The
+   * orchestrator's isRunning goes false BEFORE persistence reads the copy, so "no sync is
+   * running" does not mean "no copy is in use". Sweeps skip these; the quit sweep does not.
+   */
+  private readonly inUse = new Set<string>();
 
   constructor(deps: BackupDecryptionDeps = {}) {
     this.tmpRoot = deps.tmpRoot ?? (() => path.join(hostAppPaths.userData(), AT_REST_TMP_DIRNAME));
@@ -273,7 +279,9 @@ export class BackupDecryptionService {
 
   /** A fresh, empty parse-copy directory path (not yet created). */
   newParseCopyDir(): string {
-    return path.join(this.tmpRoot(), `${IOS_PARSE_COPY_PREFIX}${crypto.randomUUID()}`);
+    const dir = path.join(this.tmpRoot(), `${IOS_PARSE_COPY_PREFIX}${crypto.randomUUID()}`);
+    this.inUse.add(path.resolve(dir));
+    return dir;
   }
 
   /**
@@ -286,6 +294,7 @@ export class BackupDecryptionService {
     options: { outputDir?: string } = {},
   ): Promise<DecryptionResult & { stats?: DecryptStats; errorCode?: "INSUFFICIENT_SPACE" }> {
     const outputPath = options.outputDir ?? this.newParseCopyDir();
+    this.inUse.add(path.resolve(outputPath));
     let unlocked: UnlockedBackup | null = null;
     try {
       await logService.info("Starting backup decryption", BackupDecryptionService.SERVICE_NAME);
@@ -501,6 +510,16 @@ export class BackupDecryptionService {
    * service, and it must never reach a backup.
    */
   async cleanup(decryptedPath: string): Promise<boolean> {
+    try {
+      return await this.removeParseCopy(decryptedPath);
+    } finally {
+      // Released after the attempt, success or not: a copy that could not be removed
+      // (a Windows lock) must be sweepable, not protected forever.
+      this.inUse.delete(path.resolve(decryptedPath));
+    }
+  }
+
+  private async removeParseCopy(decryptedPath: string): Promise<boolean> {
     const root = path.resolve(this.tmpRoot());
     const target = path.resolve(decryptedPath);
     if (path.dirname(target) !== root || !path.basename(target).startsWith(IOS_PARSE_COPY_PREFIX)) {
@@ -564,7 +583,10 @@ export class BackupDecryptionService {
     let removed = 0;
     for (const entry of entries) {
       if (!entry.isDirectory() || !entry.name.startsWith(IOS_PARSE_COPY_PREFIX)) continue;
-      if (await this.cleanup(path.join(this.tmpRoot(), entry.name))) removed++;
+      const target = path.join(this.tmpRoot(), entry.name);
+      // BACKLOG-3816: a finished sync may still be persisting from this copy.
+      if (this.inUse.has(path.resolve(target))) continue;
+      if (await this.cleanup(target)) removed++;
     }
     return removed;
   }
