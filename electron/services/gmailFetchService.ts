@@ -252,9 +252,13 @@ class GmailFetchService {
         await databaseService.getOAuthToken(userId, "google", "mailbox");
 
       if (!tokenRecord) {
-        throw new Error(
-          "No Gmail OAuth token found. User needs to connect Gmail first.",
-        );
+        // BACKLOG-3867: no Gmail mailbox connected is a normal state, not a
+        // failure. Callers treat `false` as "skip Gmail"; only a connected
+        // mailbox whose setup fails reaches the error path below.
+        this.gmail = null;
+        this.oauth2Client = null;
+        logService.debug("No Gmail mailbox connected; skipping", "GmailFetch");
+        return false;
       }
 
       // Session-only OAuth: tokens stored unencrypted in encrypted database
@@ -307,7 +311,9 @@ class GmailFetchService {
       logService.debug("Initialized successfully", "GmailFetch");
       return true;
     } catch (error) {
-      logService.error("Initialization failed", "GmailFetch", { error });
+      logService.error("Initialization failed", "GmailFetch", {
+        errorClass: error instanceof Error ? error.name : typeof error,
+      });
       Sentry.captureException(error, {
         tags: { service: "gmail-fetch", operation: "initialize" },
       });
