@@ -28,6 +28,14 @@ jest.mock("../../services/db/userDbService", () => ({
 }));
 
 jest.mock("../../services/db/core/dbConnection", () => ({ dbRun: jest.fn() }));
+// BACKLOG-3792 (2.41): license:get waits for the database first; it is ready here.
+jest.mock("../../services/databaseService", () => ({
+  __esModule: true,
+  default: { isInitialized: jest.fn().mockReturnValue(true) },
+}));
+jest.mock("../../services/initializationBroadcaster", () => ({
+  initializationBroadcaster: { whenDbReady: jest.fn() },
+}));
 
 const mockInfo = jest.fn();
 jest.mock("../../services/logService", () => ({

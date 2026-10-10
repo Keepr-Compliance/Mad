@@ -514,8 +514,12 @@ describe("macOS Messages attachments (macOSMessagesImportService.storeAttachment
   });
 });
 
+// BACKLOG-3763 (2.41): the batch reply is metadata only; the viewer fetches each
+// image through messages:get-attachment-data. That path's decrypt is covered in
+// electron/handlers/__tests__/messageAttachments.lazyLoad-3763.test.ts
+// ("serves the plaintext of an attachment stored as KEPRENC ciphertext").
 describe("reader: messages:get-attachments-batch (the text-thread viewer, ConversationViewModal)", () => {
-  it("returns the decrypted base64 of an ENCRYPTED stored attachment through the IPC handler", async () => {
+  it("returns metadata only, no file bytes, for an ENCRYPTED stored attachment", async () => {
     macSchema();
     const plain = fixture("jpeg");
     const row = await macRow("view.jpg", plain, "m1");
@@ -536,10 +540,11 @@ describe("reader: messages:get-attachments-batch (the text-thread viewer, Conver
     const call = ipcMain.handle.mock.calls.find((c) => c[0] === "messages:get-attachments-batch");
     expect(call).toBeDefined();
 
-    const out = (await call![1]({}, [stored.message_id])) as Record<string, Array<{ data: string | null }>>;
+    const out = (await call![1]({}, [stored.message_id])) as Record<string, Array<Record<string, unknown>>>;
 
     expect(out[stored.message_id]).toHaveLength(1);
-    expect(Buffer.from(out[stored.message_id][0].data!, "base64").equals(plain)).toBe(true);
+    expect(out[stored.message_id][0]).not.toHaveProperty("data");
+    expect(out[stored.message_id][0].message_id).toBe(stored.message_id);
   });
 });
 
