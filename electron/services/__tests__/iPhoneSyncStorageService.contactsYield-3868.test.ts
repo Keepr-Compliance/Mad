@@ -30,7 +30,7 @@ jest.mock("../../utils/preferenceHelper", () => ({
 
 import { setDb } from "../db/core/dbConnection";
 import { iPhoneSyncStorageService } from "../iPhoneSyncStorageService";
-import type { iOSContact } from "../../types/iosMessages";
+import type { iOSContact } from "../../types/iosContacts";
 
 const USER = "user-3868-contacts";
 const SIZES = [2000, 10000];
