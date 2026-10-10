@@ -27,7 +27,8 @@ import {
 } from "./deviceDetectionService";
 import { BackupService } from "./backupService";
 import type { LeftoverRemoval } from "./backupService";
-import type { PriorBackupState } from "../types/ipc/window-api-platform";
+import type { PriorBackupState, SyncCancelTrigger } from "../types/ipc/window-api-platform";
+import { isSyncCancelTrigger } from "./syncCancelTrigger";
 import { BackupDecryptionService } from "./backupDecryptionService";
 import {
   getBackupPasswordStore,
@@ -2501,16 +2502,28 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   }
 
   /**
-   * Cancel the current sync operation
+   * Cancel the current sync operation.
+   *
+   * BACKLOG-3816: `trigger` names the on-screen control that asked for it. Only a named
+   * control records `ended_by=user-cancel` (with the control as `reason_code`). A cancel
+   * with no trigger — or one that is not a known control — records
+   * `ended_by=cancel-unattributed`, so a cancel nobody can account for never reads as
+   * the user's.
    */
-  cancel(): void {
-    log.info("[DeviceSyncOrchestrator] Cancelling sync");
+  cancel(trigger?: SyncCancelTrigger | null): void {
+    const known = isSyncCancelTrigger(trigger) ? trigger : null;
+    log.info("[DeviceSyncOrchestrator] Cancelling sync", { trigger: known ?? "unattributed" });
     // BACKLOG-3440: THE USER PRESSED CANCEL, and until now the row could not say so.
     // `outcome = cancelled` has only ever meant "the abort signal was set", and
     // `forceReset()` sets it too — so "I cancelled it" and "it hung, so I hit Try Again"
     // produced identical rows. Recorded here, at the act itself, rather than inferred
     // later from a string that both paths produce.
-    syncTimeline.noteEndedBy("user-cancel");
+    if (known) {
+      syncTimeline.setContext({ reasonCode: known });
+      syncTimeline.noteEndedBy("user-cancel");
+    } else {
+      syncTimeline.noteEndedBy("cancel-unattributed");
+    }
     this.abortController?.abort();
     // Don't null the controller -- sync() checks signal.aborted at checkpoints
     // and the next sync()/processExistingBackup() call creates a fresh controller.

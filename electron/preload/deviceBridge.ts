@@ -278,7 +278,7 @@ export const syncBridge = {
    * Cancels an in-progress sync operation
    * @returns Cancellation result
    */
-  cancel: () => ipcRenderer.invoke("sync:cancel"),
+  cancel: (trigger: string) => ipcRenderer.invoke("sync:cancel", trigger),
 
   /**
    * Gets current sync status

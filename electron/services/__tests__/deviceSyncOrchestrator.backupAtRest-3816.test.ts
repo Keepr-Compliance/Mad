@@ -603,6 +603,58 @@ describe("refusals before idevicebackup2", () => {
     internals.pausable.delete(UDID);
   });
 
+  // BACKLOG-3816 (phantom cancel, PC 2026-10-10 03:38:42Z-03:41:12Z): the run that ended
+  // `user-cancel` was in exactly this wait — a sync paused behind the post-unplug seal
+  // pass, phases []. Its terminal row may say `user-cancel` only when a named control
+  // asked; a cancel that arrives without one says `cancel-unattributed`.
+  describe("phantom cancel: the row names the control that ended the wait", () => {
+    async function cancelDuringPauseWait(trigger?: string): Promise<{ error: string | undefined; row: { outcome: string; fields: Record<string, unknown> } }> {
+      const rows: Array<{ outcome: string; fields: Record<string, unknown> }> = [];
+      const tl = syncTimeline as unknown as { reporter: (row: unknown) => void };
+      const original = tl.reporter;
+      tl.reporter = (row) => rows.push(row as { outcome: string; fields: Record<string, unknown> });
+      try {
+        const o = newOrchestrator();
+        backupReturns(ok());
+        const internals = atRest as unknown as { busy: Map<string, string>; pausable: Map<string, Int32Array> };
+        internals.busy.set(UDID, "sealing");
+        internals.pausable.set(UDID, new Int32Array(new SharedArrayBuffer(4)));
+        const syncing = o.sync({ udid: UDID });
+        await new Promise((r) => setTimeout(r, 60));
+        (o.cancel as (t?: unknown) => void)(trigger);
+        const result = await syncing;
+        internals.busy.delete(UDID);
+        internals.pausable.delete(UDID);
+        expect(startBackup).not.toHaveBeenCalled();
+        expect(rows).toHaveLength(1);
+        return { error: result.error ?? undefined, row: rows[0] };
+      } finally {
+        tl.reporter = original;
+      }
+    }
+
+    it("a Cancel click (progress-cancel) records ended_by=user-cancel with the control as reason_code", async () => {
+      const { error, row } = await cancelDuringPauseWait("progress-cancel");
+      expect(error).toBe("Sync cancelled by user");
+      expect(row.outcome).toBe("cancelled");
+      expect(row.fields.endedBy).toBe("user-cancel");
+      expect(row.fields.reasonCode).toBe("progress-cancel");
+    });
+
+    it("a cancel with no trigger records ended_by=cancel-unattributed, never user-cancel", async () => {
+      const { row } = await cancelDuringPauseWait(undefined);
+      expect(row.outcome).toBe("cancelled");
+      expect(row.fields.endedBy).toBe("cancel-unattributed");
+      expect(row.fields.reasonCode).toBeUndefined();
+    });
+
+    it("a cancel with an unknown trigger records ended_by=cancel-unattributed", async () => {
+      const { row } = await cancelDuringPauseWait("window-close");
+      expect(row.fields.endedBy).toBe("cancel-unattributed");
+      expect(row.fields.reasonCode).toBeUndefined();
+    });
+  });
+
   it("B2: a phone held by something that cannot pause (another sync) is not moved aside or deleted by the new-chain step", async () => {
     const P = BackupService.prototype;
     jest.spyOn(P, "checkEncryptionStatus").mockResolvedValue({ isEncrypted: true, needsPassword: true, status: "on" });
