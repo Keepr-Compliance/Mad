@@ -63,10 +63,49 @@ interface LicenseResponse {
  * Get license data from the current session user
  * Falls back to database lookup if session doesn't have license fields
  */
+/**
+ * BACKLOG-3884: per-step timing of a license read, logged once per call as
+ *   [License] timing totalMs=<n> loadSessionMs=<n> membershipMs=<n|-> dbMs=<n|->
+ * The renderer re-reads the license on window focus (LicenseContext, 60 s
+ * throttle), and the session read here is one source of the "Session loaded"
+ * line seen when a transaction is opened. All steps are awaited (file read, a
+ * Supabase round trip, one local row), so they wait without holding main; the
+ * line shows how long the answer took. ms only.
+ */
+interface LicenseTiming {
+  loadSessionMs?: number;
+  membershipMs?: number;
+  dbMs?: number;
+}
+
+function formatLicenseTiming(totalMs: number, t: LicenseTiming): string {
+  const f = (v: number | undefined) => (v === undefined ? "-" : String(v));
+  return (
+    `[License] timing totalMs=${totalMs} loadSessionMs=${f(t.loadSessionMs)}` +
+    ` membershipMs=${f(t.membershipMs)} dbMs=${f(t.dbMs)}`
+  );
+}
+
 async function getLicenseData(): Promise<LicenseResponse> {
+  const timing: LicenseTiming = {};
+  const startedAt = Date.now();
+  try {
+    return await readLicenseData(timing);
+  } finally {
+    try {
+      void logService.info(formatLicenseTiming(Date.now() - startedAt, timing), "License");
+    } catch {
+      // Telemetry only.
+    }
+  }
+}
+
+async function readLicenseData(timing: LicenseTiming): Promise<LicenseResponse> {
   try {
     // First try to get license from session
+    let stepAt = Date.now();
     const session = await sessionService.loadSession();
+    timing.loadSessionMs = Date.now() - stepAt;
 
     if (!session || !session.user) {
       logService.debug("[License] No active session", "License");
@@ -87,7 +126,9 @@ async function getLicenseData(): Promise<LicenseResponse> {
 
     // Check Supabase for organization membership (source of truth for team license)
     // This takes precedence over local database
+    stepAt = Date.now();
     const orgMembership = await supabaseService.getActiveOrganizationMembership(user.id);
+    timing.membershipMs = Date.now() - stepAt;
 
     // BACKLOG-3476: the strict feature reader caches this same lookup. If the
     // organization changed, this is where the app first sees it.
@@ -120,7 +161,9 @@ async function getLicenseData(): Promise<LicenseResponse> {
       });
 
       // Get AI addon status from local database (local setting)
+      stepAt = Date.now();
       const dbUser = await getUserById(user.id);
+      timing.dbMs = Date.now() - stepAt;
       const aiEnabled = dbUser?.ai_detection_enabled || false;
 
       return {
@@ -142,7 +185,9 @@ async function getLicenseData(): Promise<LicenseResponse> {
       { userId: user.id }
     );
 
+    stepAt = Date.now();
     const dbUser = await getUserById(user.id);
+    timing.dbMs = Date.now() - stepAt;
     if (dbUser) {
       logService.debug("[License] License found in database", "License", {
         license_type: dbUser.license_type,

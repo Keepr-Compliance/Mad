@@ -25,6 +25,9 @@ import "./bootstrap/installMainNetAxios";
 // BACKLOG-3785: measure ipcMain.handle replies during a sync. Must patch
 // ipcMain.handle before ANY handler registers, so it stays above every handler import.
 import "./bootstrap/installIpcReplySizeLog";
+// BACKLOG-3884: log when the main event loop is blocked for 1 s or more, naming
+// the last IPC channel started. Reads the activity the import above records.
+import "./bootstrap/installMainLagMonitor";
 import {
   app,
   BrowserWindow,
