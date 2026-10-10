@@ -272,7 +272,8 @@ interface EmailSettingsProps {
   userId: string;
   initialPreferences: PreferencesResult['preferences'];
   onEmailConnected?: (email: string, provider: "google" | "microsoft") => void;
-  onEmailDisconnected?: (provider: "google" | "microsoft") => void;
+  /** BACKLOG-3888: second argument = the other mailbox is still connected. */
+  onEmailDisconnected?: (provider: "google" | "microsoft", anyStillConnected?: boolean) => void;
   /** Report connection status changes to parent (for Contacts section) */
   onConnectionStatusChange?: (google: boolean, microsoft: boolean) => void;
 }
@@ -435,9 +436,9 @@ export function EmailSettings({
     try {
       const result = await authService.googleDisconnectMailbox(userId);
       if (result.success) {
-        await checkConnections();
+        const after = await checkConnections();
         if (onEmailDisconnected) {
-          onEmailDisconnected("google");
+          onEmailDisconnected("google", after?.microsoft?.connected === true);
         }
         emitEmailConnectionChanged({ connected: false, provider: "google" });
       }
@@ -453,9 +454,9 @@ export function EmailSettings({
     try {
       const result = await authService.microsoftDisconnectMailbox(userId);
       if (result.success) {
-        await checkConnections();
+        const after = await checkConnections();
         if (onEmailDisconnected) {
-          onEmailDisconnected("microsoft");
+          onEmailDisconnected("microsoft", after?.google?.connected === true);
         }
         emitEmailConnectionChanged({ connected: false, provider: "microsoft" });
       }

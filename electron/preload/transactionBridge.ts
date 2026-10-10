@@ -125,8 +125,8 @@ export const transactionBridge = {
    * @param transactionId - Transaction ID to retrieve
    * @returns Transaction details
    */
-  getDetails: (transactionId: string) =>
-    ipcRenderer.invoke("transactions:get-details", transactionId),
+  getDetails: (transactionId: string, channelFilter?: "email") =>
+    ipcRenderer.invoke("transactions:get-details", transactionId, channelFilter),
 
   /**
    * PERF: Lightweight overview — contacts only, no communications.
@@ -153,6 +153,30 @@ export const transactionBridge = {
     knownIds: string[],
   ) =>
     ipcRenderer.invoke("transactions:get-communications-delta", transactionId, channelFilter, knownIds),
+
+  /**
+   * BACKLOG-3884: the Texts tab's conversation list (counts in the audit window
+   * and overall, header rows) — not the texts themselves.
+   */
+  getTextThreads: (transactionId: string, window: { startMs: number | null; endMs: number | null } | null) =>
+    ipcRenderer.invoke("transactions:get-text-threads", transactionId, window),
+
+  /** BACKLOG-3884: one page of one conversation (or a merged card's threads), newest first. */
+  getTextThreadPage: (
+    transactionId: string,
+    threadKeys: string[],
+    window: { startMs: number | null; endMs: number | null } | null,
+    cursor: { sk: string | null; afterId: string | null } | null,
+    limit: number,
+  ) => ipcRenderer.invoke("transactions:get-text-thread-page", transactionId, threadKeys, window, cursor, limit),
+
+  /** BACKLOG-3884: the conversation a linked text belongs to (search highlight). */
+  findTextThread: (transactionId: string, messageId: string) =>
+    ipcRenderer.invoke("transactions:find-text-thread", transactionId, messageId),
+
+  /** BACKLOG-3884: remove whole conversations (every linked message, all history). */
+  unlinkTextThreads: (transactionId: string, threadKeys: string[]) =>
+    ipcRenderer.invoke("transactions:unlink-text-threads", transactionId, threadKeys),
 
   /**
    * Gets transaction with all associated contacts

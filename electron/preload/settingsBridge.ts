@@ -101,6 +101,8 @@ export const userBridge = {
     setup: "finished" | "not-finished" | "unknown";
     emailStepAnswered: boolean;
     contactSourceAnswered: boolean;
+    /** BACKLOG-3888: recorded mailbox providers ("outlook" / "gmail"). */
+    emailProviders?: string[];
     error?: string;
   }> => ipcRenderer.invoke("user:get-account-setup"),
 

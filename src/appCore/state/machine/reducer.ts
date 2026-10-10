@@ -621,6 +621,9 @@ export function appStateReducer(
           userData: {
             ...state.userData,
             hasEmailConnected: true,
+            // BACKLOG-3888: main has just recorded the provider in the cloud
+            // set; mirror it so a later disconnect this session is noticed.
+            hasRecordedEmailProvider: true,
           },
         };
       }
@@ -638,7 +641,10 @@ export function appStateReducer(
           ...state,
           userData: {
             ...state.userData,
-            hasEmailConnected: false,
+            // BACKLOG-3888: disconnecting ONE of two mailboxes leaves the
+            // user connected. Callers that know the remaining state pass it;
+            // without it, the previous behaviour (false) is kept.
+            hasEmailConnected: action.anyStillConnected === true,
           },
         };
       }

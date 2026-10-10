@@ -65,6 +65,12 @@ if (typeof window !== 'undefined') {
       delete: jest.fn(),
       scan: jest.fn(),
       getDetails: jest.fn(),
+      // BACKLOG-3884: the Texts tab's conversation list and pages. Default = a deal
+      // with no linked texts; suites about the Texts tab set their own.
+      getTextThreads: jest.fn().mockResolvedValue({ success: true, threads: [] }),
+      getTextThreadPage: jest.fn().mockResolvedValue({ success: true, rows: [], nextCursor: null }),
+      findTextThread: jest.fn().mockResolvedValue({ success: true, threadKey: null }),
+      unlinkTextThreads: jest.fn().mockResolvedValue({ success: true, removed: 0, messageIds: [] }),
       assignContact: jest.fn(),
       removeContact: jest.fn(),
       exportEnhanced: jest.fn(),

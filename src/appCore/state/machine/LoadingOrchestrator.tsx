@@ -795,6 +795,11 @@ export function LoadingOrchestrator({
         phoneType,
         hasCompletedEmailOnboarding,
         hasEmailConnected,
+        // BACKLOG-3888: whether this account has ever connected a mailbox
+        // (cloud preferences.emailProviders), carried by the account-setup
+        // read under its 8 s timeout. Unreadable = no record, so texts-only
+        // users are never nagged.
+        hasRecordedEmailProvider: accountSetup.hasRecordedEmailProvider,
         needsDriverSetup,
         fda,
         setup: accountSetup.setup,
