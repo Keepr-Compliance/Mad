@@ -25,6 +25,12 @@ export function sealQuitPromptHeading(percent: number): string {
   return `Securing your iPhone backup (${percent}%)`;
 }
 
+/**
+ * A shutdown / update signal that no quit follows within this long (a shutdown another
+ * app cancelled, an update install that failed) stops suppressing the prompt.
+ */
+export const SYSTEM_QUIT_RESET_MS = 30_000;
+
 /** Why a quit is not the user's: the prompt is never shown for these. */
 export type SystemQuitReason = "os-shutdown" | "update";
 
@@ -38,6 +44,8 @@ export interface SealQuitPromptDeps {
    */
   ask: (percent: number, signal: AbortSignal) => Promise<"keep" | "quit">;
   log?: (message: string, meta?: Record<string, unknown>) => void;
+  /** Defaults to {@link SYSTEM_QUIT_RESET_MS}. */
+  systemQuitResetMs?: number;
 }
 
 export interface SealQuitPrompt {
@@ -55,6 +63,7 @@ export function createSealQuitPrompt(deps: SealQuitPromptDeps): SealQuitPrompt {
   let state: "idle" | "asking" | "proceed" = "idle";
   let systemQuit: SystemQuitReason | null = null;
   let open: AbortController | null = null;
+  let resetTimer: ReturnType<typeof setTimeout> | null = null;
 
   const proceed = (why: string) => {
     state = "proceed";
@@ -65,11 +74,28 @@ export function createSealQuitPrompt(deps: SealQuitPromptDeps): SealQuitPrompt {
   return {
     noteSystemQuit(reason) {
       systemQuit = reason;
+      // Still running this long after the signal: the shutdown was cancelled or the
+      // install failed, so a later user quit asks again. A quit that DID follow has
+      // already moved to "proceed", which this does not undo.
+      if (resetTimer) clearTimeout(resetTimer);
+      resetTimer = setTimeout(() => {
+        resetTimer = null;
+        if (state === "proceed") return;
+        systemQuit = null;
+        deps.log?.("[Quit] no quit followed the shutdown/update signal; the securing prompt is back on", { reason });
+      }, deps.systemQuitResetMs ?? SYSTEM_QUIT_RESET_MS);
+      resetTimer.unref?.();
       // A shutdown that arrives while the dialog is open must not wait on the user.
       open?.abort();
     },
     check(event) {
-      if (state === "proceed" || systemQuit) return false;
+      if (state === "proceed") return false;
+      if (systemQuit) {
+        // This quit is the OS's / the updater's: sticky for its re-quits, so the
+        // reset above cannot bring the prompt back in the middle of it.
+        state = "proceed";
+        return false;
+      }
       if (state === "asking") {
         event.preventDefault();
         return true;

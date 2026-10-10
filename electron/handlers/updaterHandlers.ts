@@ -195,6 +195,8 @@ export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
         liveWindow.removeAllListeners("close");
         liveWindow.close();
       }
+      // Re-armed here: the wait above can outlast the reset window.
+      noteSystemQuit("update");
       autoUpdater.quitAndInstall(false, true);
     }));
   });

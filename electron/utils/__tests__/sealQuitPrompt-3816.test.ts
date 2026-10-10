@@ -17,6 +17,7 @@ import {
   resetSealQuitPromptForTests,
   sealQuitPromptHeading,
   SEAL_QUIT_PROMPT_DETAIL,
+  SYSTEM_QUIT_RESET_MS,
   type SealQuitPrompt,
 } from "../sealQuitPrompt";
 
@@ -218,6 +219,51 @@ describe("seal quit prompt (BACKLOG-3816)", () => {
     await flush();
     expect(h.exited()).toBe(true);
     expect(h.indexSeal).toHaveBeenCalledTimes(1);
+  });
+
+  it("a shutdown/update signal with no quit after it stops suppressing the prompt after 30 s", () => {
+    jest.useFakeTimers();
+    try {
+      const h = harness({ sealing: 20 });
+      noteSystemQuit("os-shutdown"); // a shutdown another app then cancelled
+      jest.advanceTimersByTime(SYSTEM_QUIT_RESET_MS - 1);
+      h.app.quit();
+      // Inside the window: still treated as the OS's quit.
+      expect(h.asks).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("after the 30 s reset a user quit asks again (cancelled shutdown / failed update)", () => {
+    jest.useFakeTimers();
+    try {
+      const h = harness({ sealing: 20 });
+      noteSystemQuit("update");
+      jest.advanceTimersByTime(SYSTEM_QUIT_RESET_MS);
+      h.app.quit();
+      expect(h.asks).toHaveLength(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("the reset does not bring the prompt back in the middle of a system quit's re-quits", async () => {
+    jest.useFakeTimers();
+    try {
+      const h = harness({ sealing: 20 });
+      let release!: () => void;
+      h.backupStop.mockImplementationOnce(() => new Promise<void>((r) => (release = r)));
+      noteSystemQuit("os-shutdown");
+      h.app.quit(); // deferred by the backup stop
+      jest.advanceTimersByTime(SYSTEM_QUIT_RESET_MS + 1000);
+      release();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(h.asks).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("a dialog that fails does not swallow the quit", async () => {

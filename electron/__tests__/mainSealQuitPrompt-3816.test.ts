@@ -47,4 +47,13 @@ describe("main.ts seal quit prompt wiring (BACKLOG-3816)", () => {
     expect(note).toBeGreaterThan(0);
     expect(wait).toBeGreaterThan(note);
   });
+
+  it("Restart to update re-marks the quit right before quitAndInstall (the wait can outlast the 30 s reset)", () => {
+    const handler = UPDATER.slice(UPDATER.indexOf('ipcMain.on("install-update"'));
+    const install = handler.indexOf("autoUpdater.quitAndInstall(");
+    const lastNote = handler.lastIndexOf('noteSystemQuit("update");', install);
+    const wait = handler.indexOf("waitForQuitBlockers()");
+    expect(lastNote).toBeGreaterThan(wait);
+    expect(install).toBeGreaterThan(lastNote);
+  });
 });
