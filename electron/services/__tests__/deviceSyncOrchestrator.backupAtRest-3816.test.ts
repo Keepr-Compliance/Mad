@@ -694,6 +694,21 @@ describe("C2-DELTA (founder must-fix 2026-10-09) — every end of a C-DELTA sync
     await o.cleanupBackup(result.backupPath!);
   });
 
+  it("G3: the early seal after the parse copy resets the consecutive tool-failure count", async () => {
+    await createMarkerStore({ userData: () => userData }).setToolFailures(UDID, 1);
+    const o = newOrchestrator();
+    const finish = jest.spyOn(atRest, "finishSync");
+    backupReturns(ok());
+    const result = await o.sync({ udid: UDID });
+    expect(result.success).toBe(true);
+    expect(finish).toHaveBeenCalledTimes(1);
+    await sealedAfter(o);
+    const marker = JSON.parse(fsSync.readFileSync(path.join(backups, ".keepr-at-rest", `${UDID}.json`), "utf8"));
+    expect(marker.toolFailures).toBeUndefined();
+    await o.completeBackupAtRest(true);
+    await o.cleanupBackup(result.backupPath!);
+  });
+
   it("disconnect (the tool exits, the phone is gone)", async () => {
     const o = newOrchestrator();
     backupReturns((orc) => {
