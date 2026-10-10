@@ -120,8 +120,13 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
   const pendingRetriesRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadRef = useRef<() => Promise<void>>(async () => undefined);
-  useEffect(() => () => {
-    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
   }, []);
 
   const load = useCallback(async () => {
@@ -140,7 +145,7 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
       if (r && r.success && r.pending) {
         // BACKLOG-3884: the floors are still being read off the main thread. Unknown
         // is not "covered": keep what is shown and ask again shortly (bounded).
-        if (pendingRetriesRef.current < PENDING_RETRIES) {
+        if (mountedRef.current && pendingRetriesRef.current < PENDING_RETRIES) {
           pendingRetriesRef.current += 1;
           if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
           retryTimerRef.current = setTimeout(() => void loadRef.current(), PENDING_RETRY_MS);

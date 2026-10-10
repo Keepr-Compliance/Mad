@@ -19,9 +19,12 @@
 import * as nodePath from "path";
 import * as nodeFs from "fs";
 import * as os from "os";
+import { threadlessTextKey } from "../../db/threadlessTextKey";
 
 export const USER = "u-3884";
 export const TXN = "t-3884";
+/** A second deal sharing thr-a (thread link) and one thr-b text, plus its own thread thr-z. */
+export const TXN2 = "t-3884-other";
 /** Audit window (local calendar days are the renderer's business; ms here are UTC). */
 export const WINDOW_START_ISO = "2026-03-01T00:00:00.000Z";
 export const WINDOW_END_ISO = "2026-06-30T23:59:59.999Z";
@@ -31,12 +34,22 @@ export interface TextPagingFixture {
   db: any;
   dir: string;
   threadIds: string[];
-  /** Every id the deduplicated reader returns for the deal's texts (reactions included). */
+  /** Every id the EXPORT reader returns for the deal's texts (global dedup, reactions included). */
   expectedAll: Set<string>;
+  /** Union over conversations of what each conversation's pages return (all history). */
+  expectedUnion: Set<string>;
   /** Same, inside the window. */
   expectedInWindow: Set<string>;
-  /** Per thread key: expected ids (all history). */
+  /** Per conversation key: what its pages return (all history). */
   expectedByThread: Map<string, Set<string>>;
+  /** Per conversation key: what its pages return inside the window. */
+  expectedInWindowByThread: Map<string, Set<string>>;
+  /** Per conversation key: every message id linked to THIS deal (all copies, all history). */
+  linkedIdsByThread: Map<string, Set<string>>;
+  /** Conversation keys: the named threads plus one per person with thread-less texts. */
+  conversationKeys: string[];
+  /** The cross-thread duplicate pair: the unhidden copy (thr-b) and the hidden copy (thr-c). */
+  crossDup: { visible: string; hidden: string };
   /** Per thread key: non-reaction expected counts {total, inWindow}. */
   realCounts: Map<string, { total: number; inWindow: number }>;
   /** The thread with the most in-window rows. */
@@ -89,21 +102,36 @@ export function buildTextPagingFixture(
   const histEnd = Date.parse("2026-09-30T00:00:00.000Z");
 
   const expectedAll = new Set<string>();
+  const expectedUnion = new Set<string>();
   const expectedInWindow = new Set<string>();
   const expectedByThread = new Map<string, Set<string>>();
+  const expectedInWindowByThread = new Map<string, Set<string>>();
+  const linkedIdsByThread = new Map<string, Set<string>>();
   const realCounts = new Map<string, { total: number; inWindow: number }>();
-  for (const t of threadIds) {
-    expectedByThread.set(t, new Set());
-    realCounts.set(t, { total: 0, inWindow: 0 });
-  }
-  expectedByThread.set("__unthreaded__", new Set());
-  realCounts.set("__unthreaded__", { total: 0, inWindow: 0 });
+  const ensure = (k: string): void => {
+    if (expectedByThread.has(k)) return;
+    expectedByThread.set(k, new Set());
+    expectedInWindowByThread.set(k, new Set());
+    linkedIdsByThread.set(k, new Set());
+    realCounts.set(k, { total: 0, inWindow: 0 });
+  };
+  for (const t of threadIds) ensure(t);
+  const linked = (id: string, thread: string): void => {
+    ensure(thread);
+    linkedIdsByThread.get(thread)!.add(id);
+  };
 
-  const expect = (id: string, thread: string, ts: number, real: boolean): void => {
-    expectedAll.add(id);
+  /** A row the pages of `thread` return; `exported` false = the export's global dedup drops it. */
+  const expect = (id: string, thread: string, ts: number, real: boolean, exported = true): void => {
+    ensure(thread);
+    if (exported) expectedAll.add(id);
+    expectedUnion.add(id);
     expectedByThread.get(thread)!.add(id);
     const inWin = ts >= start && ts <= end;
-    if (inWin) expectedInWindow.add(id);
+    if (inWin) {
+      expectedInWindow.add(id);
+      expectedInWindowByThread.get(thread)!.add(id);
+    }
     if (real) {
       const c = realCounts.get(thread)!;
       c.total += 1;
@@ -112,6 +140,8 @@ export function buildTextPagingFixture(
   };
 
   let seq = 0;
+  let crossVisible = "";
+  let crossHidden = "";
   let bigOldest: { id: string; ts: number } | null = null;
   db.transaction(() => {
     for (const t of threadIds) {
@@ -146,6 +176,7 @@ export function buildTextPagingFixture(
         participants, reaction ? 2000 : null, reaction ? lastGuid : null, `ext-${id}`, JSON.stringify({ source: "iphone_sync" }),
       );
       if (!reaction) lastGuid = `ext-${id}`;
+      linked(id, thread);
       // Intra-thread content duplicate (another import of the same text), every 97th
       // real row; the duplicate copy is hidden, so it is the copy the dedup keeps.
       if (!reaction && i % 97 === 5) {
@@ -155,6 +186,7 @@ export function buildTextPagingFixture(
           `ext-${dup}`, JSON.stringify({ source: "iphone_sync" }),
         );
         insHidden.run(TXN, dup, `ext-${dup}`, USER);
+        linked(dup, thread);
         expect(dup, thread, ts, true);
       } else {
         expect(id, thread, ts, !reaction);
@@ -167,23 +199,82 @@ export function buildTextPagingFixture(
         insComm.run(`comm-pm-${id}`, USER, TXN, id, null);
       }
     }
-    // One threadless message, linked per message.
-    const loose = `m${seq++}`;
-    const looseIso = new Date(start + 86400000).toISOString();
-    const lp = JSON.stringify({ from: handles[1], to: [me] });
-    insMsg.run(loose, USER, "sms", "inbound", "a threadless text", looseIso, looseIso, null, lp, lp, null, null, `ext-${loose}`, null);
-    insComm.run(`comm-pm-${loose}`, USER, TXN, loose, null);
-    expect(loose, "__unthreaded__", start + 86400000, true);
+    // Window edges (SR): texts exactly on the first and the last instant of the
+    // window are in it; one millisecond outside either edge is not. And a text with
+    // no sent_at whose received_at is in the window.
+    const edge = (iso: string | null, received: string, body: string): void => {
+      const id = `m${seq++}`;
+      const p = JSON.stringify({ from: handles[0], to: [me] });
+      insMsg.run(id, USER, "imessage", "inbound", body, iso, received, "thr-a", p, p, null, null, `ext-${id}`, JSON.stringify({ source: "iphone_sync" }));
+      linked(id, "thr-a");
+      expect(id, "thr-a", Date.parse(iso ?? received), true);
+    };
+    edge(new Date(start).toISOString(), new Date(start).toISOString(), "edge: first instant");
+    edge(new Date(end).toISOString(), new Date(end).toISOString(), "edge: last instant");
+    edge(new Date(start - 1).toISOString(), new Date(start - 1).toISOString(), "edge: 1 ms before");
+    edge(new Date(end + 1).toISOString(), new Date(end + 1).toISOString(), "edge: 1 ms after");
+    edge(null, new Date(start + 5 * 86400000).toISOString(), "no sent_at, received in window");
+
+    // A cross-thread duplicate (SR B3): the same text in thr-b and thr-c (one person's
+    // SMS and iMessage threads, which the tab merges into one card); the thr-c copy is
+    // hidden. Each thread's own pages show its copy; the merged card and the export
+    // show it once, the hidden copy.
+    const crossIso = new Date(start + 10 * 86400000).toISOString();
+    crossVisible = `m${seq++}`;
+    crossHidden = `m${seq++}`;
+    const pb = JSON.stringify({ from: handles[1], to: [me] });
+    insMsg.run(crossVisible, USER, "sms", "inbound", "same text in two threads", crossIso, crossIso, "thr-b", pb, pb, null, null, `ext-${crossVisible}`, null);
+    insMsg.run(crossHidden, USER, "imessage", "inbound", "same text in two threads", crossIso, crossIso, "thr-c", pb, pb, null, null, `ext-${crossHidden}`, null);
+    insHidden.run(TXN, crossHidden, `ext-${crossHidden}`, USER);
+    linked(crossVisible, "thr-b");
+    linked(crossHidden, "thr-c");
+    expect(crossVisible, "thr-b", start + 10 * 86400000, true, false);
+    expect(crossHidden, "thr-c", start + 10 * 86400000, true, true);
+
+    // Thread-less texts of two different people, linked per message (SR B4): one
+    // conversation per person, as the tab always grouped them.
+    const looseText = (from: string, body: string, ts: number): void => {
+      const id = `m${seq++}`;
+      const iso = new Date(ts).toISOString();
+      const lp = JSON.stringify({ from, to: [me] });
+      insMsg.run(id, USER, "sms", "inbound", body, iso, iso, null, lp, lp, null, null, `ext-${id}`, null);
+      insComm.run(`comm-pm-${id}`, USER, TXN, id, null);
+      const key = threadlessTextKey(lp, id);
+      linked(id, key);
+      expect(id, key, ts, true);
+    };
+    looseText(handles[1], "a threadless text", start + 86400000);
+    looseText(handles[1], "another threadless text", start + 2 * 86400000);
+    looseText(handles[2], "someone else's threadless text", start + 3 * 86400000);
+
+    // A second deal: links thr-a by thread, one thr-b text by message, and its own
+    // thread thr-z. None of it may be collected for THIS deal.
+    db.prepare(
+      "INSERT INTO transactions (id, user_id, property_address, transaction_type, status, started_at, closed_at) VALUES (?, ?, '2 Other St', 'sale', 'active', ?, ?)",
+    ).run(TXN2, USER, "2026-01-01", "2026-12-31");
+    insComm.run("comm-t2-thr-a", USER, TXN2, null, "thr-a");
+    const zIso = new Date(start + 86400000).toISOString();
+    const pz = JSON.stringify({ from: handles[5], to: [me] });
+    const z = `m${seq++}`;
+    insMsg.run(z, USER, "sms", "inbound", "only on the other deal", zIso, zIso, "thr-z", pz, pz, null, null, `ext-${z}`, null);
+    insComm.run("comm-t2-thr-z", USER, TXN2, null, "thr-z");
+    const someB = [...linkedIdsByThread.get("thr-b")!][0];
+    insComm.run(`comm-t2-pm-${someB}`, USER, TXN2, someB, null);
   })();
 
-  const big = [...realCounts.entries()].filter(([k]) => k !== "__unthreaded__").sort((a, b) => b[1].inWindow - a[1].inWindow)[0][0];
+  const big = [...realCounts.entries()].filter(([k]) => threadIds.includes(k)).sort((a, b) => b[1].inWindow - a[1].inWindow)[0][0];
   return {
     db,
     dir,
     threadIds,
     expectedAll,
+    expectedUnion,
     expectedInWindow,
     expectedByThread,
+    expectedInWindowByThread,
+    linkedIdsByThread,
+    conversationKeys: [...expectedByThread.keys()],
+    crossDup: { visible: crossVisible, hidden: crossHidden },
     realCounts,
     bigThread: big,
     bigThreadOldestInWindowId: bigOldest ? (bigOldest as { id: string }).id : "",

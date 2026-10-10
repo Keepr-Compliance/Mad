@@ -63,13 +63,19 @@ export function useTextThreads(
   const startKey = start instanceof Date ? start.toISOString() : (start ?? null);
   const endKey = end instanceof Date ? end.toISOString() : (end ?? null);
   const seqRef = useRef(0);
+  // SR B1: every read asks for the window as it is NOW. A caller holding an older
+  // render's refresh (the Edit dates save callback) must not ask for the old dates.
+  const windowRef = useRef<TextWindow | null>(null);
+  windowRef.current = auditWindowMs(startKey, endKey);
+  const loadedRef = useRef(false);
 
   const fetchThreads = useCallback(async (loud: boolean): Promise<void> => {
+    loadedRef.current = true;
     const seq = ++seqRef.current;
     if (loud) setLoading(true);
     const startedAt = nowMs();
     try {
-      const r = await transactionService.getTextThreads(transactionId, auditWindowMs(startKey, endKey));
+      const r = await transactionService.getTextThreads(transactionId, windowRef.current);
       if (seq !== seqRef.current) return;
       if (r.success) {
         const list = r.threads ?? [];
@@ -87,13 +93,24 @@ export function useTextThreads(
     } finally {
       if (seq === seqRef.current && loud) setLoading(false);
     }
-  }, [transactionId, startKey, endKey]);
+  }, [transactionId]);
 
-  // A different deal or new dates: the old list is not this one.
+  // A different deal: the old list is not this one, and nothing is loaded yet.
   useEffect(() => {
+    loadedRef.current = false;
     setThreads(null);
     setError(null);
-  }, [transactionId, startKey, endKey]);
+  }, [transactionId]);
+
+  // SR B1: new audit dates change every count. A list already shown is re-read
+  // with the new window, in place (no spinner, no empty list in between).
+  const lastWindowRef = useRef(`${startKey ?? ""}|${endKey ?? ""}`);
+  useEffect(() => {
+    const key = `${startKey ?? ""}|${endKey ?? ""}`;
+    if (key === lastWindowRef.current) return;
+    lastWindowRef.current = key;
+    if (loadedRef.current) void fetchThreads(false);
+  }, [startKey, endKey, fetchThreads]);
 
   const load = useCallback(() => fetchThreads(true), [fetchThreads]);
   const refresh = useCallback(() => fetchThreads(false), [fetchThreads]);

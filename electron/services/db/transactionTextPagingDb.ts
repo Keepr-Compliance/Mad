@@ -21,8 +21,14 @@
  * page therefore never ends inside a group of rows sharing one sent_at: the last
  * group is completed by a second read, and the same de-duplication applied to the
  * page equals applying it to the whole conversation. The scope of de-duplication is
- * ONE THREAD (counts are per thread too); a content duplicate in two different
- * threads is kept in both, where the full reader keeps one.
+ * the REQUEST: a merged contact card asks for all its threads at once, so a text in
+ * two of them shows once and the hidden copy wins (SR B3). Counts are per thread, so a
+ * merged card's count can exceed what it shows by its cross-thread duplicates; two
+ * separate cards each keep their copy (the full reader keeps one).
+ *
+ * THREAD-LESS TEXTS (SR B4) are grouped per person, by the participant-set key the
+ * tab has always used (threadlessTextKey.ts); they are read without the thread index
+ * and filtered in JS, so they cost a read of the deal's thread-less texts.
  *
  * A same-timestamp group larger than {@link MAX_SAME_TIMESTAMP_GROUP} rows is split
  * by id instead (so no reply is unbounded); de-duplication inside such a group is
@@ -31,10 +37,9 @@
 import { sql, type SafeSql } from "./core/sqlText";
 import { reactionExclusion } from "./reactionExclusion";
 import { dedupeLinkedCommunicationRows } from "./linkedRowDedup";
+import { isThreadlessKey, threadlessTextKey } from "./threadlessTextKey";
+export { THREADLESS_KEY_PREFIX, isThreadlessKey, threadlessTextKey } from "./threadlessTextKey";
 import type { Communication } from "../../types";
-
-/** Thread key for linked texts that carry no thread_id. */
-export const UNTHREADED_TEXT_KEY = "__unthreaded__";
 
 /** Rows per page the main process will return, whatever the caller asks for. */
 export const MAX_TEXT_PAGE_ROWS = 200;
@@ -52,12 +57,17 @@ export type TextDb = { prepare(sql: SafeSql): { all(...params: unknown[]): unkno
 type Db = TextDb;
 
 const TEXT_CHANNELS = sql`('sms', 'imessage', 'text')`;
-/** The thread key: thread_id, or one bucket for threadless texts. */
-export const THREAD_KEY = sql`COALESCE(NULLIF(m.thread_id, ''), '__unthreaded__')`;
+/** Linked texts with a thread_id (the indexed path). */
+const HAS_THREAD = sql`(m.thread_id IS NOT NULL AND m.thread_id <> '')`;
+/** Linked texts without one (grouped per person in JS). */
+export const NO_THREAD = sql`(m.thread_id IS NULL OR m.thread_id = '')`;
 /** The sort key the pages run on (full reader: ORDER BY sent_at DESC). */
 const SORT_KEY = sql`COALESCE(m.sent_at, '')`;
 /** Epoch ms of the timestamp the renderer classifies on (sent_at || received_at; none = 0). */
-const TS_MS = sql`COALESCE((julianday(COALESCE(NULLIF(m.sent_at, ''), NULLIF(m.received_at, ''))) - 2440587.5) * 86400000.0, 0)`;
+// Exact integer milliseconds (julianday arithmetic is off by fractions of a ms, which
+// moves a text sitting exactly on a window edge).
+const TS_TEXT = sql`COALESCE(NULLIF(m.sent_at, ''), NULLIF(m.received_at, ''))`;
+const TS_MS = sql`COALESCE(CAST(strftime('%s', ${TS_TEXT}) AS INTEGER) * 1000 + CAST(substr(strftime('%f', ${TS_TEXT}), 4, 3) AS INTEGER), 0)`;
 /** Window predicate; bound: startMs, startMs, endMs, endMs (NULL = open). */
 const IN_WINDOW = sql`((? IS NULL OR ${TS_MS} >= ?) AND (? IS NULL OR ${TS_MS} <= ?))`;
 
@@ -124,10 +134,11 @@ const TEXT_ROW_COLUMNS = sql`
 /**
  * The de-duplication key the JS dedup uses, as SQL: content for a non-empty
  * sms/imessage body, the message id otherwise. COUNT(DISTINCT key) per thread is the
- * number of rows the dedup keeps.
+ * number of rows the dedup keeps. The trim set is JavaScript's String.prototype.trim
+ * whitespace, so a whitespace-only body is "empty" on both sides (SR).
  */
 const DEDUP_KEY = sql`CASE
-      WHEN m.channel IN ('sms', 'imessage') AND length(trim(COALESCE(m.body_text, ''))) > 0
+      WHEN m.channel IN ('sms', 'imessage') AND length(trim(COALESCE(m.body_text, ''), ' ' || char(9, 10, 11, 12, 13, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279))) > 0
         THEN 'c:' || COALESCE(m.body_text, '') || '|' || COALESCE(m.sent_at, '')
       ELSE 'i:' || m.id
     END`;
@@ -138,12 +149,13 @@ const DEDUP_KEY = sql`CASE
 export function transactionTextThreadsSql(): SafeSql {
   const real = reactionExclusion("m");
   return sql`
-    SELECT ${THREAD_KEY} AS thread_key,
+    SELECT m.thread_id AS thread_key,
            COUNT(DISTINCT CASE WHEN ${real} THEN ${DEDUP_KEY} END) AS total_count,
            COUNT(DISTINCT CASE WHEN ${real} AND ${IN_WINDOW} THEN ${DEDUP_KEY} END) AS in_window_count,
            MAX(CASE WHEN ${real} THEN m.sent_at END) AS last_sent_at,
            MAX(CASE WHEN ${real} AND ${IN_WINDOW} THEN m.sent_at END) AS last_in_window_sent_at
     ${LINKED_TEXTS_FROM}
+      AND ${HAS_THREAD}
     GROUP BY thread_key`;
 }
 
@@ -153,7 +165,7 @@ export function transactionTextThreadsSql(): SafeSql {
  */
 export function transactionTextThreadSamplesSql(): SafeSql {
   return sql`
-    SELECT ${THREAD_KEY} AS thread_key,
+    SELECT m.thread_id AS thread_key,
            MAX(${SORT_KEY}) AS sk,
            m.id AS id,
            m.thread_id AS thread_id,
@@ -166,8 +178,87 @@ export function transactionTextThreadSamplesSql(): SafeSql {
            m.received_at AS received_at,
            tn.display_name AS thread_display_name
     ${LINKED_TEXTS_FROM}
+      AND ${HAS_THREAD}
       AND ${reactionExclusion("m")}
     GROUP BY thread_key, m.participants, m.direction`;
+}
+
+/**
+ * Thread-less linked texts, the columns the per-person grouping, the counts and the
+ * header rows need. Bound: window (4), transaction id.
+ */
+export function transactionThreadlessTextsSql(): SafeSql {
+  return sql`
+    SELECT m.id AS id,
+           m.thread_id AS thread_id,
+           m.channel AS channel,
+           m.channel AS communication_type,
+           m.participants AS participants,
+           m.direction AS direction,
+           json_extract(m.participants, '$.from') AS sender,
+           m.body_text AS body_text,
+           m.sent_at AS sent_at,
+           m.received_at AS received_at,
+           m.associated_message_type AS associated_message_type,
+           tn.display_name AS thread_display_name,
+           CASE WHEN ${IN_WINDOW} THEN 1 ELSE 0 END AS in_window
+    ${LINKED_TEXTS_FROM}
+      AND ${NO_THREAD}`;
+}
+
+type ThreadlessRow = Communication & { in_window: number; body_text: string | null };
+
+const isRealRow = (r: { associated_message_type?: number | null }): boolean =>
+  !(typeof r.associated_message_type === "number" && r.associated_message_type >= 2000 && r.associated_message_type <= 3005);
+
+/** The JS dedup's key for one row (linkedRowDedup.ts): content for a non-empty text body, else id. */
+function dedupKeyOf(r: { id: unknown; channel?: unknown; body_text?: unknown; sent_at?: unknown }): string {
+  const body = typeof r.body_text === "string" ? r.body_text : "";
+  const text = r.channel === "sms" || r.channel === "imessage";
+  return text && body.trim().length > 0 ? `c:${body}|${(r.sent_at as string | null) || ""}` : `i:${r.id as string}`;
+}
+
+/** Pure: thread-less rows -> one summary per person (threadlessTextKey). */
+export function buildThreadlessSummaries(rows: readonly ThreadlessRow[]): TextThreadSummary[] {
+  const groups = new Map<string, ThreadlessRow[]>();
+  for (const r of rows) {
+    const k = threadlessTextKey(r.participants, r.id as string);
+    const g = groups.get(k);
+    if (g) g.push(r);
+    else groups.set(k, [r]);
+  }
+  const out: TextThreadSummary[] = [];
+  for (const [key, g] of groups) {
+    const real = g.filter(isRealRow);
+    const all = new Set(real.map(dedupKeyOf));
+    if (all.size === 0) continue;
+    const inWin = real.filter((r) => r.in_window === 1);
+    const newest = (list: ThreadlessRow[]): string | null =>
+      list.reduce<string | null>((m, r) => {
+        const s = (r.sent_at as string | null) ?? null;
+        return s !== null && (m === null || s > m) ? s : m;
+      }, null);
+    const seen = new Set<string>();
+    const samples = [...real]
+      .sort((a, b) => (((a.sent_at as string) ?? "") < ((b.sent_at as string) ?? "") ? 1 : -1))
+      .filter((r) => {
+        const k = `${String(r.participants)}|${String(r.direction)}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .slice(0, MAX_THREAD_SAMPLES)
+      .map(({ in_window: _w, body_text: _b, ...rest }) => rest as Communication);
+    out.push({
+      threadId: key,
+      totalCount: all.size,
+      inWindowCount: new Set(inWin.map(dedupKeyOf)).size,
+      lastSentAt: newest(real),
+      lastInWindowSentAt: newest(inWin),
+      samples,
+    });
+  }
+  return out;
 }
 
 function windowParams(w: TextWindow | null): unknown[] {
@@ -199,7 +290,8 @@ export function readTransactionTextThreadsOn(
 ): TextThreadSummary[] {
   const counts = db.prepare(transactionTextThreadsSql()).all(...transactionTextThreadsParams(transactionId, w)) as ThreadCountRow[];
   const samples = db.prepare(transactionTextThreadSamplesSql()).all(transactionId) as SampleRow[];
-  return buildTextThreadSummaries(counts, samples);
+  const threadless = db.prepare(transactionThreadlessTextsSql()).all(...windowParams(w), transactionId) as ThreadlessRow[];
+  return sortSummaries([...buildTextThreadSummaries(counts, samples), ...buildThreadlessSummaries(threadless)]);
 }
 
 /** Pure: counts + sample rows -> summaries, newest conversation first. */
@@ -229,8 +321,11 @@ export function buildTextThreadSummaries(
       samples: rows,
     });
   }
-  out.sort((a, b) => ((a.lastSentAt ?? "") < (b.lastSentAt ?? "") ? 1 : (a.lastSentAt ?? "") > (b.lastSentAt ?? "") ? -1 : 0));
-  return out;
+  return sortSummaries(out);
+}
+
+function sortSummaries(list: TextThreadSummary[]): TextThreadSummary[] {
+  return list.sort((a, b) => ((a.lastSentAt ?? "") < (b.lastSentAt ?? "") ? 1 : (a.lastSentAt ?? "") > (b.lastSentAt ?? "") ? -1 : 0));
 }
 
 type PageRow = Communication & { sk: string | null; communication_id?: string };
@@ -278,8 +373,14 @@ export function readTransactionTextPage(
   // recipients json_each, the hidden-text EXISTS) for every row of a long thread
   // before the sort made a page cost a read of the whole thread.
   const read = (key: string, extra: SafeSql, extraParams: unknown[], orderLimit: SafeSql, tailParams: unknown[]): PageRow[] => {
-    const unthreaded = key === UNTHREADED_TEXT_KEY;
-    const thread = unthreaded ? sql`(m.thread_id IS NULL OR m.thread_id = '')` : sql`m.thread_id = ?`;
+    // A person's thread-less texts: no index to page on; read them all (with the
+    // cursor predicate) and keep this person's. The caller sorts and cuts.
+    const unthreaded = isThreadlessKey(key);
+    const thread = unthreaded ? NO_THREAD : sql`m.thread_id = ?`;
+    if (unthreaded) {
+      orderLimit = sql``;
+      tailParams = [];
+    }
     const statement = sql`
     SELECT ${TEXT_ROW_COLUMNS}
     FROM (
@@ -287,8 +388,8 @@ export function readTransactionTextPage(
       ${LINKED_TEXTS_FROM}
         AND ${thread}
         AND ${IN_WINDOW}
-        AND (? IS NULL OR m.sent_at IS NULL OR m.sent_at >= ?)
-        AND (? IS NULL OR m.sent_at IS NULL OR m.sent_at <= ?)
+        AND (? IS NULL OR m.sent_at IS NULL OR m.sent_at = '' OR m.sent_at >= ?)
+        AND (? IS NULL OR m.sent_at IS NULL OR m.sent_at = '' OR m.sent_at <= ?)
         AND ${extra}
       ${orderLimit}
     ) p
@@ -298,7 +399,8 @@ export function readTransactionTextPage(
       tn.thread_id = m.thread_id AND tn.user_id = m.user_id
     )`;
     const params = [transactionId, ...(unthreaded ? [] : [key]), ...windowParams(w), lo, lo, hi, hi, ...extraParams, ...tailParams];
-    return (db.prepare(statement).all(...params) as PageRow[]).map((r) => ({ ...r, sk: (r.sent_at as string | null) ?? null }));
+    const got = (db.prepare(statement).all(...params) as PageRow[]).map((r) => ({ ...r, sk: (r.sent_at as string | null) ?? null }));
+    return unthreaded ? got.filter((r) => threadlessTextKey(r.participants, r.id as string) === key) : got;
   };
   const readAll = (extra: SafeSql, extraParams: unknown[], orderLimit: SafeSql, tailParams: unknown[]): PageRow[] => {
     const out: PageRow[] = [];
@@ -366,25 +468,11 @@ export function readTransactionTextPage(
 }
 
 function finish(rows: PageRow[], next: TextPageCursor | null): TextPage {
-  // De-duplicate per thread, in the order the page is sorted in.
-  const byThread = new Map<string, Communication[]>();
-  const order: string[] = [];
-  for (const r of rows) {
-    const key = (r.thread_id as string | null) || UNTHREADED_TEXT_KEY;
-    let list = byThread.get(key);
-    if (!list) {
-      list = [];
-      byThread.set(key, list);
-      order.push(key);
-    }
-    const { sk: _sk, ...rest } = r;
-    list.push(rest as Communication);
-  }
-  const kept = new Set<Communication>();
-  for (const key of order) for (const r of dedupeLinkedCommunicationRows(byThread.get(key) ?? [])) kept.add(r);
-  const out: Communication[] = [];
-  for (const key of order) for (const r of byThread.get(key) ?? []) if (kept.has(r)) out.push(r);
-  // Keep the page newest-first across threads.
+  // De-duplicate the whole page (every thread of the request together, SR B3), in
+  // the order the page is sorted in: a text in two threads of a merged card shows
+  // once, and the hidden copy wins.
+  const page = rows.map(({ sk: _sk, ...rest }) => rest as Communication);
+  const out = dedupeLinkedCommunicationRows(page);
   out.sort((a, b) => {
     const sa = (a.sent_at as string | null) ?? "";
     const sb = (b.sent_at as string | null) ?? "";
@@ -392,4 +480,3 @@ function finish(rows: PageRow[], next: TextPageCursor | null): TextPage {
   });
   return { rows: out, nextCursor: next };
 }
-

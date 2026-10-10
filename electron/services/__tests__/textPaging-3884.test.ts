@@ -42,7 +42,9 @@ import {
   type TextPageCursor,
   type TextWindow,
 } from "../db/transactionTextPagingDb";
-import { buildTextPagingFixture, TXN, WINDOW_END_ISO, WINDOW_START_ISO, type TextPagingFixture } from "./helpers/textPagingFixture3884";
+import { linkedTextMessageIdsForThreads } from "../db/transactionTextPagingMainDb";
+import { THREADLESS_KEY_PREFIX } from "../db/threadlessTextKey";
+import { buildTextPagingFixture, TXN, TXN2, WINDOW_END_ISO, WINDOW_START_ISO, type TextPagingFixture } from "./helpers/textPagingFixture3884";
 import { resolveExportPlan } from "../exportPlan";
 import { build } from "esbuild";
 import { initializePool, isPoolReady, setContactWorkerPathForTests, shutdownPool } from "../../workers/contactWorkerPool";
@@ -107,7 +109,7 @@ function walk(f: TextPagingFixture, threads: string[], w: TextWindow | null, lim
   return { ids, pages, maxRows, maxBytes, firstPageMs, firstPageBytes, totalMs: Date.now() - t0 };
 }
 
-function expectSameSet(actual: string[], expected: Set<string>, label: string): void {
+function expectSameSet(actual: string[], expected: Set<string>, label: string, mayBeEmpty = false): void {
   const dupes = actual.length - new Set(actual).size;
   expect({ label, dupes }).toEqual({ label, dupes: 0 });
   const a = new Set(actual);
@@ -115,7 +117,7 @@ function expectSameSet(actual: string[], expected: Set<string>, label: string): 
   const extra = [...a].filter((id) => !expected.has(id));
   expect({ label, missing: missing.slice(0, 5), missingCount: missing.length }).toEqual({ label, missing: [], missingCount: 0 });
   expect({ label, extra: extra.slice(0, 5), extraCount: extra.length }).toEqual({ label, extra: [], extraCount: 0 });
-  expect(a.size).toBeGreaterThan(0);
+  if (!mayBeEmpty) expect(a.size).toBeGreaterThan(0);
 }
 
 (Database ? describe : describe.skip)("BACKLOG-3884 Texts tab: conversation list + pages", () => {
@@ -164,7 +166,7 @@ function expectSameSet(actual: string[], expected: Set<string>, label: string): 
   });
 
   it("C1 bounds every reply, whatever limit is asked for", () => {
-    for (const t of [...f.threadIds, "__unthreaded__"]) {
+    for (const t of f.conversationKeys) {
       const huge = walk(f, [t], null, 1_000_000);
       expect(huge.maxRows).toBeLessThanOrEqual(MAX_TEXT_PAGE_ROWS + MAX_SAME_TIMESTAMP_GROUP);
       expect(huge.maxBytes).toBeLessThanOrEqual(REPLY_BOUND_BYTES);
@@ -182,23 +184,29 @@ function expectSameSet(actual: string[], expected: Set<string>, label: string): 
     // read of the thread per page, so the small sizes run on the window below).
     for (const limit of [13, MAX_TEXT_PAGE_ROWS]) {
       const all: string[] = [];
-      for (const t of [...f.threadIds, "__unthreaded__"]) {
+      for (const t of f.conversationKeys) {
         const a = walk(f, [t], null, limit);
         expectSameSet(a.ids, f.expectedByThread.get(t)!, `thread ${t} limit ${limit}`);
         all.push(...a.ids);
       }
-      expectSameSet(all, f.expectedAll, `all history limit ${limit}`);
+      expectSameSet(all, f.expectedUnion, `all history limit ${limit}`);
     }
     for (const limit of [2, 3, 7, 50, MAX_TEXT_PAGE_ROWS]) {
       const win: string[] = [];
-      for (const t of [...f.threadIds, "__unthreaded__"]) win.push(...walk(f, [t], WINDOW, limit).ids);
+      for (const t of f.conversationKeys) {
+        const w = walk(f, [t], WINDOW, limit).ids;
+        expectSameSet(w, f.expectedInWindowByThread.get(t)!, `window thread ${t} limit ${limit}`, true);
+        win.push(...w);
+      }
       expectSameSet(win, f.expectedInWindow, `window limit ${limit}`);
     }
   });
 
   it("C2b a merged card (several threads in one request) pages every id once", () => {
-    const pair = [f.threadIds[1], f.threadIds[2]];
+    const pair = ["thr-b", "thr-c"];
     const expected = new Set([...f.expectedByThread.get(pair[0])!, ...f.expectedByThread.get(pair[1])!]);
+    // The text in both threads shows once on the merged card: the hidden copy.
+    expected.delete(f.crossDup.visible);
     expectSameSet(walk(f, pair, null, 7).ids, expected, "merged pair");
   });
 
@@ -211,11 +219,13 @@ function expectSameSet(actual: string[], expected: Set<string>, label: string): 
     );
     const exported = new Set(plan.communications.map((r) => r.id as string));
     const shown: string[] = [];
-    for (const t of [...f.threadIds, "__unthreaded__"]) shown.push(...walk(f, [t], WINDOW, MAX_TEXT_PAGE_ROWS).ids);
+    for (const t of f.conversationKeys) shown.push(...walk(f, [t], WINDOW, MAX_TEXT_PAGE_ROWS).ids);
     const hiddenOrReaction = new Set(
       full.filter((r) => (r as { hidden_from_export?: number }).hidden_from_export || isReaction(r as never)).map((r) => r.id as string),
     );
-    const missingFromExport = shown.filter((id) => !hiddenOrReaction.has(id) && !exported.has(id));
+    // The per-thread walks show the thr-b copy of the cross-thread duplicate; the export
+    // keeps the hidden thr-c copy instead (and so does the merged card, C2b/B3).
+    const missingFromExport = shown.filter((id) => id !== f.crossDup.visible && !hiddenOrReaction.has(id) && !exported.has(id));
     expect({ missingFromExport: missingFromExport.slice(0, 5), n: missingFromExport.length }).toEqual({ missingFromExport: [], n: 0 });
     expect(shown.length).toBeGreaterThan(0);
   });
@@ -232,7 +242,7 @@ function expectSameSet(actual: string[], expected: Set<string>, label: string): 
   it("conversation counts equal what the pages return", () => {
     const list = readTransactionTextThreadsOn(f.db, TXN, WINDOW);
     const keys = new Set(list.map((t) => t.threadId));
-    expect(keys).toEqual(new Set([...f.threadIds, "__unthreaded__"]));
+    expect(keys).toEqual(new Set(f.conversationKeys));
     for (const t of list) {
       expect({ t: t.threadId, total: t.totalCount, inWindow: t.inWindowCount }).toEqual({
         t: t.threadId,
@@ -283,4 +293,41 @@ function expectSameSet(actual: string[], expected: Set<string>, label: string): 
       f.db.prepare = realPrepare;
     }
   }, 300_000);
+
+  it("B3 a merged card shows a text that is in two of its threads once, and the hidden copy wins", () => {
+    const rows: Array<{ id: string; body_text?: unknown; hidden_from_export?: unknown }> = [];
+    let cursor: TextPageCursor | null = null;
+    do {
+      const page = readTransactionTextPage(f.db, TXN, ["thr-b", "thr-c"], WINDOW, cursor, 7);
+      rows.push(...(page.rows as never[]));
+      cursor = page.nextCursor;
+    } while (cursor);
+    const copies = rows.filter((r) => r.body_text === "same text in two threads");
+    expect(copies.map((r) => r.id)).toEqual([f.crossDup.hidden]);
+    expect(copies[0].hidden_from_export).toBe(1);
+  });
+
+  it("B4 thread-less texts are one conversation per person, each paging only its own texts", () => {
+    const people = f.conversationKeys.filter((k) => k.startsWith(THREADLESS_KEY_PREFIX));
+    expect(people).toHaveLength(2);
+    const list = readTransactionTextThreadsOn(f.db, TXN, null);
+    expect(list.filter((t) => t.threadId.startsWith(THREADLESS_KEY_PREFIX)).map((t) => [t.threadId, t.totalCount]).sort()).toEqual(
+      people.map((k) => [k, f.realCounts.get(k)!.total]).sort(),
+    );
+    for (const k of people) expectSameSet(walk(f, [k], null, 1).ids, f.expectedByThread.get(k)!, `threadless ${k}`);
+  });
+
+  it("B2 Remove collects exactly this deal's linked texts of the conversation (all copies), nothing of another deal", () => {
+    for (const k of f.conversationKeys) {
+      expectSameSet(linkedTextMessageIdsForThreads(TXN, [k]), f.linkedIdsByThread.get(k)!, `remove ${k}`);
+    }
+    // thr-z is linked only to the other deal; nothing of it is collected here.
+    expect(linkedTextMessageIdsForThreads(TXN, ["thr-z"])).toEqual([]);
+    // Removing one person's thread-less texts never collects the other person's.
+    const people = f.conversationKeys.filter((k) => k.startsWith(THREADLESS_KEY_PREFIX));
+    const first = new Set(linkedTextMessageIdsForThreads(TXN, [people[0]]));
+    for (const id of f.linkedIdsByThread.get(people[1])!) expect(first.has(id)).toBe(false);
+    // The other deal collects its own.
+    expect(linkedTextMessageIdsForThreads(TXN2, ["thr-z"])).toHaveLength(1);
+  });
 });

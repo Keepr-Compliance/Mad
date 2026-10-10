@@ -5,7 +5,7 @@
  */
 import { sql, type SafeSql } from "./core/sqlText";
 import { dbAll, dbGet } from "./core/dbConnection";
-import { LINKED_TEXTS_FROM, THREAD_KEY, UNTHREADED_TEXT_KEY, type TextDb } from "./transactionTextPagingDb";
+import { LINKED_TEXTS_FROM, NO_THREAD, isThreadlessKey, threadlessTextKey, type TextDb } from "./transactionTextPagingDb";
 
 /** The main connection, through the conduit (slow-statement logging included). */
 export const mainTextDb: TextDb = {
@@ -19,23 +19,32 @@ export const mainTextDb: TextDb = {
  */
 export function linkedTextMessageIdsForThreads(transactionId: string, threadKeys: readonly string[]): string[] {
   const ids = new Set<string>();
-  for (const key of new Set(threadKeys)) {
-    const unthreaded = key === UNTHREADED_TEXT_KEY;
-    const thread = unthreaded ? sql`(m.thread_id IS NULL OR m.thread_id = '')` : sql`m.thread_id = ?`;
+  const keys = [...new Set(threadKeys)];
+  for (const key of keys.filter((k) => !isThreadlessKey(k))) {
     const rows = dbAll<{ id: string }>(
-      sql`SELECT DISTINCT m.id AS id ${LINKED_TEXTS_FROM} AND ${thread}`,
-      [transactionId, ...(unthreaded ? [] : [key])],
+      sql`SELECT DISTINCT m.id AS id ${LINKED_TEXTS_FROM} AND m.thread_id = ?`,
+      [transactionId, key],
     );
     for (const r of rows) ids.add(r.id);
+  }
+  // A person's thread-less texts (SR B4): only that person's, never the bucket.
+  const threadless = new Set(keys.filter(isThreadlessKey));
+  if (threadless.size > 0) {
+    const rows = dbAll<{ id: string; participants: string | null }>(
+      sql`SELECT DISTINCT m.id AS id, m.participants AS participants ${LINKED_TEXTS_FROM} AND ${NO_THREAD}`,
+      [transactionId],
+    );
+    for (const r of rows) if (threadless.has(threadlessTextKey(r.participants, r.id))) ids.add(r.id);
   }
   return [...ids];
 }
 
 /** The conversation a linked text belongs to (search highlight), or null. */
 export function linkedTextThreadKey(transactionId: string, messageId: string): string | null {
-  const row = dbGet<{ k: string }>(
-    sql`SELECT ${THREAD_KEY} AS k ${LINKED_TEXTS_FROM} AND m.id = ? LIMIT 1`,
+  const row = dbGet<{ thread_id: string | null; participants: string | null; id: string }>(
+    sql`SELECT m.thread_id AS thread_id, m.participants AS participants, m.id AS id ${LINKED_TEXTS_FROM} AND m.id = ? LIMIT 1`,
     [transactionId, messageId],
   );
-  return row?.k ?? null;
+  if (!row) return null;
+  return row.thread_id ? row.thread_id : threadlessTextKey(row.participants, row.id);
 }

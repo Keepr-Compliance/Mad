@@ -189,4 +189,23 @@ describe("TransactionMessagesTab — paged conversations (BACKLOG-3884)", () => 
       expect(document.querySelector('[data-thread-id="thread-busy"]')?.className ?? "").toContain("ring-4"),
     );
   });
+
+  it("thread-less texts of two people are two cards; removing one removes only that person's (SR B4)", async () => {
+    const p1 = { ...textThreadSummary({ threadId: "__nothread__:participants-2065550101", phone: "+12065550101", lastSentAt: "2026-04-02T10:00:00.000Z", totalCount: 2 }) };
+    const p2 = { ...textThreadSummary({ threadId: "__nothread__:participants-2065550102", phone: "+12065550102", lastSentAt: "2026-04-01T10:00:00.000Z", totalCount: 1 }) };
+    for (const t of [p1, p2]) t.samples = t.samples.map((r) => ({ ...r, thread_id: null }));
+    renderTab({ threads: [p1, p2] });
+    await waitFor(() => expect(screen.getAllByTestId("message-thread-card")).toHaveLength(2));
+    const card = document.querySelector('[data-thread-id="__nothread__:participants-2065550102"]') as HTMLElement;
+    expect(card).not.toBeNull();
+    await act(async () => {
+      await userEvent.click(card.querySelector('[data-testid="unlink-thread-button"]') as HTMLElement);
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByTestId("unlink-confirm-button"));
+    });
+    await waitFor(() =>
+      expect(t().unlinkTextThreads).toHaveBeenCalledWith(TXN, ["__nothread__:participants-2065550102"]),
+    );
+  });
 });

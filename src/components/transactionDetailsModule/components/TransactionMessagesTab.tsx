@@ -521,7 +521,9 @@ export function TransactionMessagesTab({
       }
       const movedIds = result.messageIds ?? null;
       onShowSuccess?.(
-        successMessage,
+        movedIds === null
+          ? `${successMessage}. Undo is not available for a conversation this large; restore it from Show removed.`
+          : successMessage,
         movedIds && movedIds.length > 0
           ? { action: { label: "Undo", onClick: () => void undoRemoveMessages(movedIds) } }
           : undefined,
