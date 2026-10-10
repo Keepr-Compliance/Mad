@@ -265,4 +265,14 @@ describe("BACKLOG-3888 — chose email, no mailbox connected", () => {
     renderStrict(<ResumeSetupBanner app={makeApp()} />);
     expect(screen.queryByTestId("resume-setup-banner")).not.toBeInTheDocument();
   });
+
+  it("disconnecting the only mailbox while its token was dead -> banner without a restart", () => {
+    const deadToken: ReadyState = {
+      ...choseEmailReady,
+      userData: { ...choseEmailReady.userData, hasEmailConnected: false, hasBrokenMailboxToken: true },
+    };
+    mockState = appStateReducer(deadToken, { type: "EMAIL_DISCONNECTED", provider: "microsoft" });
+    renderStrict(<ResumeSetupBanner app={makeApp()} />);
+    expect(screen.getByTestId("resume-setup-banner")).toBeInTheDocument();
+  });
 });

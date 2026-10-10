@@ -7,6 +7,9 @@
  * electron/services/emailProviderRecord.ts). It is never cleared on
  * disconnect, so it answers "did this user choose email?" on any computer.
  *
+ * It reaches the renderer through `user:get-account-setup`
+ * (accountSetupHandlers.ts), which reads the same bag under the 8 s timeout.
+ *
  * @module appCore/state/machine/recordedEmailProviders
  */
 
@@ -14,14 +17,10 @@
 export const EMAIL_PROVIDERS_PREFERENCE_KEY = "emailProviders";
 
 /**
- * True when a `preferences:get` result records at least one email provider.
- * Anything malformed, absent or failed reads as false (no record).
+ * True when `value` (the `emailProviders` field of the account-setup read)
+ * records at least one provider. Anything malformed or absent reads as false.
  */
-export function hasRecordedEmailProviderIn(prefsResult: unknown): boolean {
-  if (!prefsResult || typeof prefsResult !== "object") return false;
-  const preferences = (prefsResult as { preferences?: unknown }).preferences;
-  if (!preferences || typeof preferences !== "object") return false;
-  const value = (preferences as Record<string, unknown>)[EMAIL_PROVIDERS_PREFERENCE_KEY];
+export function hasRecordedEmailProvider(value: unknown): boolean {
   return (
     Array.isArray(value) &&
     value.some((entry) => typeof entry === "string" && entry.length > 0)

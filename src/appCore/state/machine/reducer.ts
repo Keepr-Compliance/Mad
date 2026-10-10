@@ -647,6 +647,9 @@ export function appStateReducer(
             // user connected. Callers that know the remaining state pass it;
             // without it, the previous behaviour (false) is kept.
             hasEmailConnected: action.anyStillConnected === true,
+            // BACKLOG-3888: with no mailbox left, a dead token seen at load no
+            // longer exists, so the amber-strip guard must not hide the banner.
+            ...(action.anyStillConnected === true ? {} : { hasBrokenMailboxToken: false }),
           },
         };
       }

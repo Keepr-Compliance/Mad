@@ -3,17 +3,20 @@
  * no mailbox is connected, whatever texts sources they have.
  *
  * End-to-end over the REAL renderer path: LoadingOrchestrator Phase 4 reads
- * the cloud preferences bag (preferences:get) and the connection check, the
+ * the account-setup read (which carries the cloud preferences.emailProviders
+ * under its 8 s bound) and the connection check, the
  * reducer builds `ready`, and the REAL ResumeSetupBanner decides from that
  * state. Only window.api is simulated.
  *
  * FIXTURE PROVENANCE (transcribed, not invented):
- *   preferences:get        preferenceHandlers.ts:30-49 -> { success: true, preferences }
+ *   user:get-account-setup accountSetupHandlers.ts getAccountSetup -> { success, setup, emailStepAnswered,
+ *                          contactSourceAnswered, emailProviders } (emailProviders absent on the
+ *                          timeout/cache path)
  *   emailProviders value   electron/services/emailProviderRecord.ts (["outlook"], ["outlook","gmail"])
+ *   preferences:get        preferenceHandlers.ts:30-49 -> { success: true, preferences } (macOS only)
  *   system:check-all-connections  systemHandlers.ts:1166-1170 -> { success: true, ...checkAllConnections() }
  *     not connected        connectionStatusService.ts:~131 { connected: false, error: { type: "NOT_CONNECTED" } }
  *     refresh failed       connectionStatusService.ts:215-227 { connected: false, email, error: { type: "TOKEN_REFRESH_FAILED", ... } }
- *   user:get-account-setup readAccountSetup.ts -> { success, setup, emailStepAnswered, contactSourceAnswered }
  *   user:get-phone-type    userSettingsHandlers.ts:80-83 -> { success: true, phoneType }
  */
 import React from "react";
@@ -67,12 +70,7 @@ const mockApi = {
     getPhoneType: jest.fn(),
     syncPhoneTypeFromCloud: jest.fn(async () => ({ success: true })),
     getPhoneTypeCloud: jest.fn(async () => ({ success: true })),
-    getAccountSetup: jest.fn(async () => ({
-      success: true,
-      setup: "finished",
-      emailStepAnswered: true,
-      contactSourceAnswered: true,
-    })),
+    getAccountSetup: jest.fn(),
   },
   preferences: { get: jest.fn() },
   drivers: { checkApple: jest.fn() },
@@ -93,7 +91,8 @@ type Platform = typeof macOS;
 function arrange(opts: {
   platform: Platform;
   phoneType: "iphone" | "android" | null;
-  preferences: Record<string, unknown> | "reject";
+  /** Recorded providers in the bag, or "unreadable" (timeout / cache path). */
+  emailProviders: string[] | "unreadable";
   microsoft?: unknown;
   google?: unknown;
   fdaGranted?: boolean;
@@ -119,11 +118,15 @@ function arrange(opts: {
     hasPermission: opts.fdaGranted === true,
     fullDiskAccess: opts.fdaGranted === true,
   });
-  if (opts.preferences === "reject") {
-    mockApi.preferences.get.mockRejectedValue(new Error("supabase unreachable"));
-  } else {
-    mockApi.preferences.get.mockResolvedValue({ success: true, preferences: opts.preferences });
-  }
+  mockApi.user.getAccountSetup.mockResolvedValue({
+    success: true,
+    setup: "finished",
+    emailStepAnswered: true,
+    contactSourceAnswered: true,
+    ...(opts.emailProviders === "unreadable" ? {} : { emailProviders: opts.emailProviders }),
+  });
+  // The FDA-decline read (macOS only). It does not carry emailProviders.
+  mockApi.preferences.get.mockResolvedValue({ success: true, preferences: {} });
 }
 
 function Status() {
@@ -169,10 +172,9 @@ describe.each<[string, Platform]>([
   it.each<["iphone" | "android" | null]>([["iphone"], ["android"], [null]])(
     "recorded provider + no mailbox + phoneType %s -> banner",
     async (phoneType) => {
-      arrange({ platform, phoneType, preferences: { emailProviders: ["outlook"] } });
+      arrange({ platform, phoneType, emailProviders: ["outlook"] });
       await load(platform);
       expect(banner()).toBeInTheDocument();
-      expect(mockApi.preferences.get).toHaveBeenCalledWith(baseUser.id);
     },
   );
 
@@ -181,7 +183,7 @@ describe.each<[string, Platform]>([
       platform,
       phoneType: "iphone",
       fdaGranted: true,
-      preferences: { emailProviders: ["outlook", "gmail"] },
+      emailProviders: ["outlook", "gmail"],
     });
     await load(platform);
     expect(banner()).toBeInTheDocument();
@@ -191,7 +193,7 @@ describe.each<[string, Platform]>([
     arrange({
       platform,
       phoneType: "iphone",
-      preferences: { emailProviders: ["outlook"] },
+      emailProviders: ["outlook"],
       microsoft: CONNECTED,
     });
     await load(platform);
@@ -202,7 +204,7 @@ describe.each<[string, Platform]>([
     arrange({
       platform,
       phoneType: "iphone",
-      preferences: { emailProviders: ["outlook", "gmail"] },
+      emailProviders: ["outlook", "gmail"],
       google: CONNECTED,
     });
     await load(platform);
@@ -210,19 +212,19 @@ describe.each<[string, Platform]>([
   });
 
   it("NO recorded provider + no mailbox + phoneType iphone -> no banner (texts-only user is not nagged)", async () => {
-    arrange({ platform, phoneType: "iphone", preferences: {} });
+    arrange({ platform, phoneType: "iphone", emailProviders: [] });
     await load(platform);
     expect(banner()).not.toBeInTheDocument();
   });
 
   it("empty recorded set -> no banner", async () => {
-    arrange({ platform, phoneType: "android", preferences: { emailProviders: [] } });
+    arrange({ platform, phoneType: "android", emailProviders: [] });
     await load(platform);
     expect(banner()).not.toBeInTheDocument();
   });
 
-  it("preferences unreadable -> no banner (unknown never nags)", async () => {
-    arrange({ platform, phoneType: "iphone", preferences: "reject" });
+  it("bag unreadable (account-setup timeout/cache path) -> no banner (unknown never nags)", async () => {
+    arrange({ platform, phoneType: "iphone", emailProviders: "unreadable" });
     await load(platform);
     expect(banner()).not.toBeInTheDocument();
   });
@@ -231,7 +233,7 @@ describe.each<[string, Platform]>([
     arrange({
       platform,
       phoneType: "iphone",
-      preferences: { emailProviders: ["outlook"] },
+      emailProviders: ["outlook"],
       microsoft: REFRESH_FAILED,
     });
     await load(platform);
@@ -241,7 +243,7 @@ describe.each<[string, Platform]>([
 
 describe("BACKLOG-3888 — loading", () => {
   it("no banner while user data is still loading, even with a recorded provider", async () => {
-    arrange({ platform: windows, phoneType: "iphone", preferences: { emailProviders: ["outlook"] } });
+    arrange({ platform: windows, phoneType: "iphone", emailProviders: ["outlook"] });
     // Hold the connection check open: the load cannot finish.
     mockApi.system.checkAllConnections.mockReturnValue(new Promise(() => {}));
     render(
@@ -256,7 +258,17 @@ describe("BACKLOG-3888 — loading", () => {
         </AppStateProvider>
       </AuthProvider>,
     );
-    await waitFor(() => expect(mockApi.preferences.get).toHaveBeenCalled());
+    await waitFor(() => expect(mockApi.system.checkAllConnections).toHaveBeenCalled());
+    await waitFor(() => expect(mockApi.user.getAccountSetup).toHaveBeenCalled());
+    // Still loading: the orchestrator shows its loading screen, not the app.
+    expect(screen.queryByTestId("status")).toBeNull();
     expect(banner()).not.toBeInTheDocument();
+  });
+
+  it("Windows: a hung preferences read does not hold startup (the bag arrives via the bounded account-setup read)", async () => {
+    arrange({ platform: windows, phoneType: "iphone", emailProviders: ["outlook"] });
+    mockApi.preferences.get.mockReturnValue(new Promise(() => {}));
+    await load(windows);
+    expect(banner()).toBeInTheDocument();
   });
 });

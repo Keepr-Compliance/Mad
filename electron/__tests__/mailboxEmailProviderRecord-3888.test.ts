@@ -149,7 +149,10 @@ jest.mock("../services/sessionSecurityService", () => ({
 
 jest.mock("../services/auditService", () => ({
   __esModule: true,
-  default: { initialize: jest.fn(), log: jest.fn().mockResolvedValue(undefined) },
+  default: {
+    initialize: jest.fn(),
+    log: jest.fn().mockResolvedValue(undefined),
+  },
 }));
 
 jest.mock("../services/logService", () => ({
@@ -178,8 +181,12 @@ import googleAuthService from "../services/googleAuthService";
 import microsoftAuthService from "../services/microsoftAuthService";
 import supabaseService from "../services/supabaseService";
 
-const mockDatabaseService = databaseService as jest.Mocked<typeof databaseService>;
-const mockGoogleAuthService = googleAuthService as jest.Mocked<typeof googleAuthService>;
+const mockDatabaseService = databaseService as jest.Mocked<
+  typeof databaseService
+>;
+const mockGoogleAuthService = googleAuthService as jest.Mocked<
+  typeof googleAuthService
+>;
 const mockMicrosoftAuthService = microsoftAuthService as jest.Mocked<
   typeof microsoftAuthService
 >;
@@ -233,9 +240,11 @@ describe("BACKLOG-3888: recording the connected email provider", () => {
 
   beforeAll(() => {
     registeredHandlers = createIpcHandlerRegistry();
-    mockIpcHandle.mockImplementation((channel: string, handler: RegisteredIpcHandler) => {
-      registeredHandlers.set(channel, handler);
-    });
+    mockIpcHandle.mockImplementation(
+      (channel: string, handler: RegisteredIpcHandler) => {
+        registeredHandlers.set(channel, handler);
+      },
+    );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     setMainWindow(mockMainWindow as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -249,7 +258,9 @@ describe("BACKLOG-3888: recording the connected email provider", () => {
       fixture({ id: TEST_USER_ID, email: "broker@example.com" }),
     );
     mockDatabaseService.saveOAuthToken.mockResolvedValue("oauth-token-row-id");
-    mockSupabase.getPreferences.mockImplementation(async () => prefsRow.preferences);
+    mockSupabase.getPreferences.mockImplementation(
+      async () => prefsRow.preferences,
+    );
     mockSupabase.syncPreferences.mockImplementation(async (_u, prefs) => {
       prefsRow.preferences = JSON.parse(JSON.stringify(prefs));
     });
@@ -284,7 +295,12 @@ describe("BACKLOG-3888: recording the connected email provider", () => {
       }),
     );
     mockMicrosoftAuthService.exchangeCodeForTokens.mockResolvedValue(
-      fixture({ access_token: "ms-access", refresh_token: "ms-refresh", expires_in: 3600, scope: "Mail.Read" }),
+      fixture({
+        access_token: "ms-access",
+        refresh_token: "ms-refresh",
+        expires_in: 3600,
+        scope: "Mail.Read",
+      }),
     );
     mockMicrosoftAuthService.getUserInfo.mockResolvedValue(
       fixture({ id: "m1", email: "broker@example.net" }),
@@ -298,7 +314,9 @@ describe("BACKLOG-3888: recording the connected email provider", () => {
     expect(result.success).toBe(true);
     await waitForSend(mockSend, `${provider}:mailbox-connected`);
     await settle();
-    return mockSend.mock.calls.find((c) => c[0] === `${provider}:mailbox-connected`)?.[1];
+    return mockSend.mock.calls.find(
+      (c) => c[0] === `${provider}:mailbox-connected`,
+    )?.[1];
   }
 
   it('Outlook connect writes ["outlook"]; then Gmail -> ["outlook","gmail"]; a duplicate leaves it unchanged', async () => {
@@ -317,25 +335,41 @@ describe("BACKLOG-3888: recording the connected email provider", () => {
   it.each<["google" | "microsoft"]>([["google"], ["microsoft"]])(
     "%s: a preferences save failure does not break the connect",
     async (provider) => {
-      mockSupabase.getPreferences.mockRejectedValue(new Error("supabase unreachable"));
+      mockSupabase.getPreferences.mockRejectedValue(
+        new Error("supabase unreachable"),
+      );
       const payload = (await connect(provider)) as { success?: boolean };
       expect(payload?.success).toBe(true);
       expect(mockSupabase.syncPreferences).not.toHaveBeenCalled();
 
       mockSupabase.getPreferences.mockResolvedValue({});
-      mockSupabase.syncPreferences.mockRejectedValue(new Error("upsert failed"));
+      mockSupabase.syncPreferences.mockRejectedValue(
+        new Error("upsert failed"),
+      );
       const again = (await connect(provider)) as { success?: boolean };
       expect(again?.success).toBe(true);
     },
   );
 
-  it("a FAILED connect (token save failed) records nothing", async () => {
-    mockDatabaseService.saveOAuthToken.mockRejectedValue(new Error("disk full"));
-    const handler = registeredHandlers.get("auth:google:connect-mailbox");
-    await handler(mockEvent, TEST_USER_ID);
-    await waitForSend(mockSend, "google:mailbox-connected");
-    await settle();
-    expect(mockSupabase.getPreferences).not.toHaveBeenCalled();
-    expect(mockSupabase.syncPreferences).not.toHaveBeenCalled();
-  });
+  it.each<["google" | "microsoft"]>([["google"], ["microsoft"]])(
+    "%s: a FAILED connect (token save failed) records nothing",
+    async (provider) => {
+      mockDatabaseService.saveOAuthToken.mockRejectedValue(
+        new Error("disk full"),
+      );
+      const handler = registeredHandlers.get(
+        `auth:${provider}:connect-mailbox`,
+      );
+      await handler(mockEvent, TEST_USER_ID);
+      await waitForSend(mockSend, `${provider}:mailbox-connected`);
+      expect(
+        mockSend.mock.calls.find(
+          (c) => c[0] === `${provider}:mailbox-connected`,
+        )?.[1]?.success,
+      ).toBe(false);
+      await settle();
+      expect(mockSupabase.getPreferences).not.toHaveBeenCalled();
+      expect(mockSupabase.syncPreferences).not.toHaveBeenCalled();
+    },
+  );
 });

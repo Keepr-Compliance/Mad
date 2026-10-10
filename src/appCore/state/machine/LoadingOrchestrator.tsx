@@ -27,7 +27,6 @@ import { useAuth } from "../../../contexts";
 import { authService } from "@/services";
 import { fdaFromProbe, unknownFdaFor } from "./fdaState";
 import { readAccountSetup } from "./routing/readAccountSetup";
-import { hasRecordedEmailProviderIn } from "./recordedEmailProviders";
 import { isBrokenTokenError } from "../../../utils/connectionStatus";
 import type { ConnectionErrorType } from "../../../../electron/services/connectionStatusService";
 import type { PlatformInfo, User, UserData } from "./types";
@@ -718,14 +717,11 @@ export function LoadingOrchestrator({
           // Promise.all — sending an otherwise-fine user down the fallback
           // path. Optional-chained and defaulted so a missing bridge simply
           // means "no recorded skip".
-          //
-          // BACKLOG-3888: read on EVERY platform now, because the same bag
-          // carries `emailProviders` (the mailbox providers this account has
-          // ever connected). The FDA decline below is still only consulted on
-          // macOS (fdaFromProbe ignores it elsewhere).
-          Promise.resolve()
-            .then(() => window.api.preferences?.get?.(userId))
-            .catch(() => undefined),
+          platform.isMacOS
+            ? Promise.resolve()
+                .then(() => window.api.preferences?.get?.(userId))
+                .catch(() => undefined)
+            : Promise.resolve(undefined),
         ]);
 
       // Determine phone type.
@@ -782,12 +778,6 @@ export function LoadingOrchestrator({
       )?.preferences?.onboarding;
       const recordedDecline = onboardingPrefs?.fdaSkipped === true;
 
-      // BACKLOG-3888: whether this account has ever connected a mailbox
-      // (cloud preferences.emailProviders, written by main on each successful
-      // connect). Only a non-empty array counts; an unreadable bag means
-      // "no record", which keeps texts-only users un-nagged.
-      const hasRecordedEmailProvider = hasRecordedEmailProviderIn(onboardingPrefsResult);
-
       // BACKLOG-3275: the ONE place the Full Disk Access union is derived, from
       // the two inputs that already existed. Neither contract changes — the
       // probe is still the `check-permissions` IPC call, the decline is still
@@ -818,7 +808,11 @@ export function LoadingOrchestrator({
         phoneType,
         hasCompletedEmailOnboarding,
         hasEmailConnected,
-        hasRecordedEmailProvider,
+        // BACKLOG-3888: whether this account has ever connected a mailbox
+        // (cloud preferences.emailProviders), carried by the account-setup
+        // read under its 8 s timeout. Unreadable = no record, so texts-only
+        // users are never nagged.
+        hasRecordedEmailProvider: accountSetup.hasRecordedEmailProvider,
         hasBrokenMailboxToken,
         needsDriverSetup,
         fda,
