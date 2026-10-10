@@ -31,7 +31,9 @@ import {
   BACKUP_AT_REST_QUARANTINED_MESSAGE,
   BackupAtRest,
   BackupAtRestRefusal,
+  DELTA_UNSEAL_FILES,
   describeBackupAtRestProgress,
+  PROGRESS_FILE_WEIGHT_BYTES,
   QUARANTINE_DIR_NAME,
   QUARANTINE_MAX_AGE_MS,
   type BackupAtRestProgress,
@@ -1336,6 +1338,150 @@ describe("progress", () => {
     const last = seen[seen.length - 1];
     expect(last.doneUnits).toBe(last.totalUnits);
     expect(seen.length).toBeLessThanOrEqual(3); // start, end (+1 if a second passed): never per file
+  });
+
+  describe("seal progress measures this pass's work (BACKLOG-3816)", () => {
+    const BIG = 5 * 1024 * 1024;
+    const W = PROGRESS_FILE_WEIGHT_BYTES;
+
+    function sealedChainWithMany(): string[] {
+      makeChain();
+      const extra: string[] = [];
+      for (let i = 0; i < 300; i++) {
+        extra.push(write(`${String(i % 100).padStart(2, "0")}/${"a".repeat(30)}${String(i).padStart(10, "0")}`, crypto.randomBytes(200)));
+      }
+      return extra;
+    }
+    function age(files: string[]): void {
+      const old = new Date(Date.now() - 2 * 3600_000);
+      for (const f of files) fs.utimesSync(f, old, old);
+    }
+    /** A sync: delta unseal, the "backup tool" writes `during`, then the post-sync seal. */
+    async function incremental(s: BackupAtRest, during: () => void): Promise<{ seen: BackupAtRestProgress[]; opensAtFirst: number; index: number }> {
+      const session = await s.beginSync(UDID, { strategy: "delta" });
+      during();
+      const index = indexUnits(); // the index files, unsealed, as the pass will find them
+      const seen: BackupAtRestProgress[] = [];
+      let opens = 0;
+      let opensAtFirst = -1;
+      const spy = jest.spyOn(fs.promises, "open");
+      try {
+        await s.finishSync(session, (p) => {
+          if (opensAtFirst < 0) opensAtFirst = spy.mock.calls.length;
+          seen.push(p);
+        });
+        opens = spy.mock.calls.length;
+      } finally {
+        spy.mockRestore();
+      }
+      expect(opens).toBeGreaterThan(0); // the spy is live: the engine opens files
+      return { seen, opensAtFirst, index };
+    }
+    const indexUnits = (): number =>
+      DELTA_UNSEAL_FILES.reduce((n, rel) => n + fs.statSync(path.join(chain, rel)).size + W, 0);
+
+    it("one new file among many sealed ones: 0% to 100% over that file's bytes, no open of the unchanged files before the first report", async () => {
+      const extra = sealedChainWithMany();
+      const s = service();
+      await s.seal(UDID);
+      age(allContentFiles());
+      const { seen, opensAtFirst, index } = await incremental(s, () => {
+        write(`ee/${"e".repeat(40)}`, crypto.randomBytes(BIG));
+      });
+      const expected = index + BIG + W;
+      expect(seen[0]).toMatchObject({ doneUnits: 0, totalUnits: expected });
+      expect(describeBackupAtRestProgress(seen[0]).percent).toBe(0);
+      const last = seen[seen.length - 1];
+      expect(last).toMatchObject({ doneUnits: expected, totalUnits: expected });
+      expect(describeBackupAtRestProgress(last).percent).toBe(100);
+      for (const p of seen) expect(p.doneUnits as number).toBeLessThanOrEqual(p.totalUnits as number);
+      expect(opensAtFirst).toBeLessThan(10); // fixed setup reads only (plists); a pre-pass would open all 300+ files
+      expect(plaintextLeft()).toEqual([]);
+      expect(extra.length).toBe(300);
+    });
+
+    it("a sealed file with a new mtime (estimate too high): the total shrinks and the pass ends at 100%", async () => {
+      const extra = sealedChainWithMany();
+      const s = service();
+      await s.seal(UDID);
+      age(allContentFiles());
+      const { seen, index } = await incremental(s, () => {
+        const now = new Date();
+        fs.utimesSync(extra[0], now, now);
+      });
+      expect(seen[0].totalUnits as number).toBeGreaterThan(index);
+      const last = seen[seen.length - 1];
+      expect(last.totalUnits).toBe(index);
+      expect(last.doneUnits).toBe(last.totalUnits);
+    });
+
+    it("a plaintext file with an old mtime (estimate too low): still sealed, counted, done never above total", async () => {
+      sealedChainWithMany();
+      const s = service();
+      await s.seal(UDID);
+      age(allContentFiles());
+      // A clock that moves 1.5 s per reading makes every batch emit, so updates exist
+      // MID-pass (the real throttle is one per second). The missed file is older than the
+      // estimate's cut but newer than the sealed files, so it is handled early and files
+      // still follow it.
+      let clock = Date.now();
+      const clockSpy = jest.spyOn(Date, "now").mockImplementation(() => (clock += 1500));
+      let seen: BackupAtRestProgress[];
+      let index: number;
+      try {
+        ({ seen, index } = await incremental(s, () => {
+          const f = write(`dd/${"d".repeat(40)}`, crypto.randomBytes(1000));
+          const hourAgo = new Date(clock - 3600_000);
+          fs.utimesSync(f, hourAgo, hourAgo);
+        }));
+      } finally {
+        clockSpy.mockRestore();
+      }
+      const missed = 1000 + W;
+      const mid = seen.slice(1, -1);
+      expect(mid.length).toBeGreaterThan(5);
+      for (const p of seen) expect(p.doneUnits as number).toBeLessThanOrEqual(p.totalUnits as number);
+      // once the missed file has been sealed, the total includes it
+      const afterMissed = mid.filter((p) => (p.doneUnits as number) >= index + missed);
+      expect(afterMissed.length).toBeGreaterThan(0);
+      for (const p of afterMissed) expect(p.totalUnits as number).toBeGreaterThanOrEqual(index + missed);
+      const last = seen[seen.length - 1];
+      expect(last.doneUnits).toBe(index + 1000 + W);
+      expect(last.totalUnits).toBe(last.doneUnits);
+      expect(plaintextLeft()).toEqual([]);
+    });
+
+    it("state unknown (no sync in this process): the estimate is the whole chain", async () => {
+      sealedChainWithMany();
+      const s = service();
+      await s.seal(UDID);
+      age(allContentFiles());
+      const seen: BackupAtRestProgress[] = [];
+      await s.seal(UDID, (p) => seen.push(p));
+      const whole = allContentFiles().reduce((n, f) => n + fs.statSync(f).size + W, 0);
+      expect(seen[0].totalUnits).toBe(whole);
+      // everything was sealed already: the verdicts take the total down to nothing
+      const last = seen[seen.length - 1];
+      expect(last).toMatchObject({ doneUnits: 0, totalUnits: 0 });
+      expect(describeBackupAtRestProgress(last).percent).toBe(100);
+    });
+
+    it("a sync requested during the post-sync pass pauses it at the next file", async () => {
+      sealedChainWithMany();
+      let s: BackupAtRest | null = null;
+      let n = 0;
+      let waiting: Promise<unknown> | null = null;
+      s = service({
+        sealEngineOptions: {
+          beforeSeal: () => {
+            if (++n === 1) waiting = (s as BackupAtRest).beginSync(UDID, { strategy: "delta" }).catch((e) => e);
+          },
+        },
+      });
+      expect(await s.migrate(UDID)).toBe("paused");
+      const next = (await (waiting as unknown as Promise<unknown>)) as { kind?: string };
+      expect(next.kind).toBe("keepr");
+    });
   });
 
   it("a seal with no caller callback reports through the 'progress' event, start to 100%", async () => {
