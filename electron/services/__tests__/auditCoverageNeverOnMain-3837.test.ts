@@ -220,8 +220,11 @@ maybe("BACKLOG-3837: the coverage check never scans on main (real worker, encryp
     expect(result.sourceGaps?.map((g) => `${g.source}:${g.kind}`).sort()).toEqual(["google_messages:never", "iphone:later"]);
 
     const viaWorker = await getSourceCoverageAsync(USER);
-    recording = false;
+    expect(scanOnMain()).toBe(false);
+    // Positive control for the detector: the old main-thread read IS seen.
     const { value: onMain, maxMs: mainMs } = await maxStallDuring(async () => getSourceCoverage(USER));
+    expect(scanOnMain()).toBe(true);
+    recording = false;
     expect(onMain.map((c) => c.source).sort()).toEqual(["google_messages", "iphone"]);
     expect(viaWorker).toEqual(onMain);
     process.stderr.write(

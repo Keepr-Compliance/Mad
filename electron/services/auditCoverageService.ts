@@ -37,7 +37,7 @@ import { getRcsCacheRun } from "./db/rcsCacheRunsDbService";
 import { getChatCoverage, linkedChatHashes } from "./db/rcsChatCoverageDbService";
 import permissionService from "./permissionService";
 import logService from "./logService";
-import { DedicatedWorkerError, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
+import { queryOnDedicatedWorker } from "../workers/contactWorkerPool";
 import { readSourceCoverageInputToken, sourceCoverageTokenKey } from "./db/sourceCoverageInputTracker";
 import type { SourceFloorRow } from "./db/wizardMessageScansDb";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
@@ -145,7 +145,7 @@ function readSourceFloors(userId: string): Promise<SourceFloorRow[] | null> {
       return rows;
     } catch (error) {
       logService.warn("[BACKLOG-3837] source floors read on a dedicated worker failed; coverage reported as pending (nothing read on main)", "AuditCoverage", {
-        code: error instanceof DedicatedWorkerError ? error.code : "failed",
+        code: typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : "failed",
         error: error instanceof Error ? error.message : String(error),
         ms: Date.now() - startedAt,
       });
