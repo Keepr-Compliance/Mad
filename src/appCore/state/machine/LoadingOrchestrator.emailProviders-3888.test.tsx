@@ -169,11 +169,11 @@ describe.each<[string, Platform]>([
   ["macOS", macOS],
 ])("BACKLOG-3888 — recorded providers reach renderer state (%s)", (_name, platform) => {
   it.each<[string, string[] | "unreadable", string]>([
-    ["one provider", ["outlook"], "true"],
-    ["two providers", ["outlook", "gmail"], "true"],
-    ["empty set", [], "false"],
-    ["unreadable (timeout / cache path)", "unreadable", "false"],
-  ])("%s -> hasRecordedEmailProvider %s", async (_n, emailProviders, expected) => {
+    ["one provider -> recorded", ["outlook"], "true"],
+    ["two providers -> recorded", ["outlook", "gmail"], "true"],
+    ["empty set -> not recorded", [], "false"],
+    ["unreadable (timeout / cache path) -> not recorded", "unreadable", "false"],
+  ])("%s", async (_n, emailProviders, expected) => {
     arrange({ platform, phoneType: "iphone", emailProviders });
     await load(platform);
     expect(recorded()).toBe(expected);
