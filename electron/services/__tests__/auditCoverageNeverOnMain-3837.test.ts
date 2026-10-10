@@ -337,4 +337,4 @@ maybe("BACKLOG-3837: the coverage check never scans on main (real worker, encryp
 });
 
 /** Long enough for a real dedicated read of the fixture on a slow runner. */
-const SHARED_POOL_BUDGET_MS = 600_000;
+const SHARED_POOL_BUDGET_MS = 120_000;
