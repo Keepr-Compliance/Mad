@@ -480,6 +480,11 @@ export class SyncTimeline {
   }
 
   /** What the outcome row will carry. Exposed for tests and for support dumps. */
+  /** BACKLOG-3816: the open run's id, or null between runs. */
+  currentRunId(): string | null {
+    return this.runId;
+  }
+
   contextSnapshot(): TimelineMeta {
     return { ...this.context };
   }

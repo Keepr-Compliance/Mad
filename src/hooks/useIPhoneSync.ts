@@ -8,6 +8,7 @@ import type {
   UseIPhoneSyncReturn,
   UserFacingError,
 } from "../types/iphone";
+import type { SyncCancelTrigger } from "../../electron/types/ipc/window-api-platform";
 import logger from '../utils/logger';
 import { syncOrchestrator } from '../services/SyncOrchestratorService';
 import { usePlatform } from '../contexts/PlatformContext';
@@ -1172,14 +1173,15 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   );
 
   // Cancel ongoing sync
-  const cancelSync = useCallback(async () => {
-    logger.info("[useIPhoneSync] Cancelling sync");
+  // BACKLOG-3816: `trigger` names the control that asked; main records it on the run.
+  const cancelSync = useCallback(async (trigger: SyncCancelTrigger) => {
+    logger.info("[useIPhoneSync] Cancelling sync", { trigger });
     syncStateRef.isActive = false;
 
     try {
       const syncApi = window.api?.sync;
       if (syncApi?.cancel) {
-        await syncApi.cancel();
+        await syncApi.cancel(trigger);
       }
     } catch (err) {
       logger.warn("[useIPhoneSync] Cancel error (ignored):", err);

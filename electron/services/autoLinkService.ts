@@ -43,7 +43,20 @@ import {
   getIgnoredCommunicationIdsForTransaction,
 } from "./db/communicationDbService";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
-import { readOneToOneThreadIndexOn, type ThreadIdentityIndex } from "./db/threadIdentityIndexDb";
+import { readOneToOneThreadIndexOn } from "./db/threadIdentityIndexDb";
+import {
+  readMaxMessageRowidOn,
+  runThreadIdentityRequestOn,
+  type TargetedThreadIdentity,
+  type ThreadIdentityRequest,
+  type ThreadIdentityResponse,
+  type ThreadsSinceIdentity,
+} from "./db/threadIdentityTargetedDb";
+import {
+  readExpansionChangeSnapshot,
+  sameSnapshot,
+  type ExpansionChangeSnapshot,
+} from "./db/expansionChangeTracker";
 import { DedicatedWorkerError, isPoolReady, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
 import {
   normalizeAddress,
@@ -476,8 +489,48 @@ async function findMessagesByContactPhones(
   // This is the primary defense — prevents suppressed threads from even being returned.
   // The JS-level filter in autoLinkForContact is the backup layer.
 
-  const results = dbAll<MessageWithThread>(candidateMessageThreadsSql(phoneNumbers.length), params);
-  return results;
+  return readCandidateMessageThreads(userId, phoneNumbers.length, params);
+}
+
+/** Thread links per event-loop turn in autoLinkCommunicationsForContact (BACKLOG-3868). */
+export const AUTO_LINK_THREADS_PER_TURN = 4;
+
+/** The candidate read can take seconds on a large store under load; bound it generously. */
+const CANDIDATE_THREADS_WORKER_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * BACKLOG-3868: run the candidate-thread read on a dedicated contact query worker when the
+ * pool is up. `participants_flat LIKE '%digits%'` cannot use an index, so the statement
+ * reads every text of the user inside the deal's window — measured 0.6 s per contact on
+ * a 671k-message store on a Mac, the 20 s "Not Responding" when the founder's PC created a
+ * deal whose contacts hold 108 chats. Same statement, same parameters, same rows.
+ *
+ * Main thread only when no worker ran it (pool not up, or `start_failed`), as for the
+ * identity read. Any other worker failure throws: the callers already catch per contact
+ * and log "Auto-link failed", and redoing the scan here would be the freeze.
+ */
+export async function readCandidateMessageThreads(
+  userId: string,
+  phoneCount: number,
+  params: Array<string | number>,
+): Promise<MessageWithThread[]> {
+  if (isPoolReady()) {
+    try {
+      return (await queryOnDedicatedWorker("candidateMessageThreads", userId, CANDIDATE_THREADS_WORKER_TIMEOUT_MS, {
+        phoneCount,
+        params,
+      })) as MessageWithThread[];
+    } catch (error) {
+      const code = error instanceof DedicatedWorkerError ? error.code : "failed";
+      if (code !== "start_failed") throw error;
+      await logService.warn(
+        "[BACKLOG-3868] Candidate-thread worker could not start; reading on the main thread",
+        "AutoLinkService",
+        { code },
+      );
+    }
+  }
+  return dbAll<MessageWithThread>(candidateMessageThreadsSql(phoneCount), params);
 }
 
 /**
@@ -995,7 +1048,12 @@ export async function autoLinkCommunicationsForContact(
     );
 
     // Link each unique thread once
+    let threadsHandled = 0;
     for (const threadId of threadIds) {
+      // BACKLOG-3868: every thread link recounts the deal's text threads over all its
+      // linked messages (~6.5 ms per link at 108 chats on a Mac; the awaits below are
+      // microtasks over synchronous reads), so give the event loop a turn every few.
+      if (++threadsHandled % AUTO_LINK_THREADS_PER_TURN === 0) await new Promise<void>((resolve) => setImmediate(resolve));
       try {
         // Check if thread is already linked to avoid duplicates
         const alreadyLinked = await isThreadLinkedToTransaction(
@@ -1379,6 +1437,14 @@ export interface ExpandAttachedThreadsResult {
   errors: number;
   /** Duration in milliseconds */
   durationMs: number;
+  /**
+   * BACKLOG-3868: how much this run read. `skipped` read no message row; `incremental`
+   * read only threads that received messages since the last run; `targeted` read the
+   * attached threads and the threads that can hold their contacts.
+   */
+  mode?: "skipped" | "incremental" | "targeted";
+  /** BACKLOG-3868: message rows materialised to decide this run (not counting the link writes). */
+  messageRowsRead: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1401,48 +1467,101 @@ export interface ExpandAttachedThreadsResult {
 // final check): the contact query worker builds the same index off the main thread.
 
 /**
- * The 1:1 thread identity index for `userId` — on a dedicated contact query worker when
- * the pool is up, else on this thread (BACKLOG-3816 PC final check, 2026-10-10: on the main thread
- * the read of every text message plus the JSON parse of each blocked the app for 11-13 s
- * after every transaction update and ~57 s after a sync).
+ * The thread identities one expansion run needs (BACKLOG-3868) — on a dedicated contact
+ * query worker when the pool is up, else on this thread.
  *
- * Main-thread build only when no worker ever ran the read: the pool is not up, or the
- * worker could not be started (`start_failed`). After a timeout, a restore/close/quit that
- * stopped the worker, or a failed query, this returns null and the caller SKIPS — redoing the
- * full read here would be the freeze this exists to avoid (or touch the database mid-restore).
- * Skipping loses nothing: expansion is idempotent and every sync / transaction update /
- * re-sync triggers it again.
+ * BACKLOG-3816 moved the read of EVERY text message off the main thread; 3868 makes the
+ * read itself targeted (see threadIdentityTargetedDb.ts): the attached threads, the
+ * threads that can hold one of their contacts, or the threads that grew since the last
+ * run. Same fallback policy as 3816: main thread only when no worker ever ran the read
+ * (pool not up, or `start_failed`); after a timeout, a restore/close/quit stop or a failed
+ * query this returns null and the caller SKIPS (the next trigger runs a full pass, because
+ * a skipped run stores no watermark).
  */
-async function loadOneToOneThreadIndex(
+async function loadThreadIdentity<R extends ThreadIdentityResponse>(
   userId: string,
-): Promise<(ThreadIdentityIndex & { source: "worker" | "main" }) | null> {
+  request: ThreadIdentityRequest,
+): Promise<(R & { source: "worker" | "main" }) | null> {
   if (isPoolReady()) {
     try {
-      // A worker of its own: on the shared contact worker this read made contact list
+      // A worker of its own: on the shared contact worker a long read made contact list
       // reads queue behind it and time out (30 s) for as long as it ran.
-      const data = await queryOnDedicatedWorker("threadIdentity", userId, THREAD_IDENTITY_WORKER_TIMEOUT_MS);
-      const index = data[0] as ThreadIdentityIndex | undefined;
-      if (index && Array.isArray(index.oneToOne)) return { ...index, source: "worker" };
-      throw new Error("worker returned no thread identity index");
+      const data = await queryOnDedicatedWorker(
+        "threadIdentityTargeted",
+        userId,
+        THREAD_IDENTITY_WORKER_TIMEOUT_MS,
+        { request },
+      );
+      const response = data[0] as R | undefined;
+      if (response && typeof response.rows === "number") return { ...response, source: "worker" };
+      throw new Error("worker returned no thread identity response");
     } catch (error) {
       const code = error instanceof DedicatedWorkerError ? error.code : "failed";
       const detail = { code, error: error instanceof Error ? error.message : String(error) };
       if (code !== "start_failed") {
         await logService.warn(
-          `[BACKLOG-3816] Thread identity index on the worker failed (${code}); skipping this expansion, the next trigger retries`,
+          `[BACKLOG-3816] Thread identity read on the worker failed (${code}); skipping this expansion, the next trigger retries`,
           "AutoLinkService",
           detail,
         );
         return null;
       }
       await logService.warn(
-        `[BACKLOG-3816] Thread identity worker could not start; building the index on the main thread`,
+        `[BACKLOG-3816] Thread identity worker could not start; reading on the main thread`,
         "AutoLinkService",
         detail,
       );
     }
   }
-  return { ...readOneToOneThreadIndexOn(ensureDb(), userId), source: "main" };
+  return { ...(runThreadIdentityRequestOn(ensureDb(), userId, request) as R), source: "main" };
+}
+
+/**
+ * BACKLOG-3868: what the last COMPLETED expansion of a user saw. A run whose change
+ * snapshot and newest message rowid both match is skipped without reading a message row;
+ * a run where only new messages arrived looks at just the threads that grew.
+ */
+interface ExpansionWatermark {
+  snapshot: ExpansionChangeSnapshot;
+  maxRowid: number;
+  pairsExamined: number;
+  /** attached thread ids per transaction (LINKED_THREAD_PAIRS_SQL) */
+  threadsByTxn: Map<string, Set<string>>;
+  /** every attached thread -> its 1:1 token or null */
+  attachedToken: Map<string, string | null>;
+}
+
+const expansionWatermarkByUser = new Map<string, ExpansionWatermark>();
+
+function storeWatermark(
+  userId: string,
+  snapshot: ExpansionChangeSnapshot | null,
+  maxRowid: number,
+  pairsExamined: number,
+  threadsByTxn: Map<string, Set<string>>,
+  attachedToken: Map<string, string | null>,
+): void {
+  if (fullIndexOracleForTests) return; // the oracle leaves the shipped runs' watermark alone
+  if (!snapshot) {
+    expansionWatermarkByUser.delete(userId);
+    return;
+  }
+  expansionWatermarkByUser.set(userId, { snapshot, maxRowid, pairsExamined, threadsByTxn, attachedToken });
+}
+
+/** Test-only: forget every watermark (as an app restart does). */
+export function resetExpansionWatermarksForTests(): void {
+  expansionWatermarkByUser.clear();
+}
+
+/**
+ * Test-only (BACKLOG-3868 equivalence oracle): run the pre-3868 algorithm — the identity
+ * of EVERY text thread of the user, every attached thread's siblings, no skip, no
+ * watermark — so a test can compare its links with the targeted runs.
+ */
+let fullIndexOracleForTests = false;
+export function setFullIndexOracleForTests(on: boolean): void {
+  fullIndexOracleForTests = on;
 }
 
 /** Candidates linked per event-loop turn in the attached-thread expansion. */
@@ -1539,6 +1658,23 @@ export function expandAttachedThreadsForUser(userId: string): Promise<ExpandAtta
 
 const expansionByUser = new Map<string, { rerun: boolean; promise: Promise<ExpandAttachedThreadsResult> }>();
 
+/** The pre-3868 read (every text thread of the user), shaped as a targeted response. Test oracle only. */
+function oracleFullIndex(
+  userId: string,
+  attachedThreads: Set<string>,
+): TargetedThreadIdentity & { source: "main" } {
+  const full = readOneToOneThreadIndexOn(ensureDb(), userId);
+  const token = new Map(full.oneToOne);
+  return {
+    attached: [...attachedThreads].map((tid): [string, string | null] => [tid, token.get(tid) ?? null]),
+    oneToOne: full.oneToOne,
+    rows: full.rows,
+    supersetThreads: 0,
+    fullIndex: true,
+    source: "main",
+  };
+}
+
 async function expandAttachedThreadsForUserOnce(
   userId: string
 ): Promise<ExpandAttachedThreadsResult> {
@@ -1550,82 +1686,158 @@ async function expandAttachedThreadsForUserOnce(
     skippedAlreadyLinked: 0,
     errors: 0,
     durationMs: 0,
+    messageRowsRead: 0,
   };
 
   try {
-    // 1. Enumerate every MANUALLY attached (transaction, thread) TEXT pair.
-    //    Scoped to per-message links (c.message_id IS NOT NULL): thread-level
-    //    (auto-link) attaches already surface their whole thread via the
-    //    c.thread_id join in getTransactionMessages, so expanding them would only
-    //    convert thread-links into per-message rows and break thread-level unlink
-    //    (BACKLOG-2285 SR review, I1). This also keeps the candidate lookup on an
-    //    indexed thread_id equality (no LIKE scan).
-    const pairs = dbAll<{ transaction_id: string; thread_id: string }>(LINKED_THREAD_PAIRS_SQL, [userId]);
-    result.pairsExamined = pairs.length;
+    // BACKLOG-3868: decide how much this run must read, before reading any message row.
+    //   skipped     nothing the expansion depends on changed since the last completed run
+    //   incremental only new messages arrived: look at the threads that grew
+    //   targeted    anything else (first run, attach, unlink, delete, suppression change)
+    const db = ensureDb();
+    const snapshotAtStart = readExpansionChangeSnapshot(db);
+    const maxRowidAtStart = readMaxMessageRowidOn(db, userId);
+    const previous = expansionWatermarkByUser.get(userId);
+    const unchanged = !fullIndexOracleForTests && !!previous && sameSnapshot(previous.snapshot, snapshotAtStart);
 
-    if (pairs.length === 0) {
+    if (unchanged && previous && (previous.maxRowid === maxRowidAtStart || previous.threadsByTxn.size === 0)) {
+      result.mode = "skipped";
+      result.pairsExamined = previous.pairsExamined;
+      previous.maxRowid = maxRowidAtStart;
       result.durationMs = Date.now() - startTime;
-      // BACKLOG-3784: log this path too. Without it, a missing "expansion complete"
-      // line could mean "nothing attached" or "never finished". Counts only.
       await logService.info(
-        `[BACKLOG-3784] Attached-thread expansion skipped: 0 attached pairs durationMs=${result.durationMs}`,
+        `[BACKLOG-3868] Attached-thread expansion skipped: nothing changed since the last run (pairs=${result.pairsExamined}) durationMs=${result.durationMs}`,
         "AutoLinkService",
-        { pairsExamined: 0, durationMs: result.durationMs }
+        { pairsExamined: result.pairsExamined, durationMs: result.durationMs, mode: result.mode },
       );
       return result;
     }
 
-    // Group attached thread_ids by transaction so suppression sets load once each.
-    const threadsByTxn = new Map<string, Set<string>>();
-    for (const p of pairs) {
-      let set = threadsByTxn.get(p.transaction_id);
-      if (!set) {
-        set = new Set<string>();
-        threadsByTxn.set(p.transaction_id, set);
-      }
-      set.add(p.thread_id);
-    }
-
-    // BACKLOG-2287: Build a thread -> direction-aware external-identity map for ALL
-    // of the user's text threads, then index the 1:1 threads (identity size === 1)
-    // by identity token. Cross-thread expansion matches on THIS map (equality on the
-    // full token — never a per-message participants_flat LIKE), which both avoids an
-    // unindexable leading-% full scan and neutralizes the short-token substring risk.
-    // Identity is computed from ALL of a thread's messages (linked or not) so the
-    // 1:1-vs-group classification sees the whole conversation. Built here (after the
-    // pairs early-return) so it only runs when there is attached work to expand.
-    const identityScanStartedAt = Date.now();
-    // BACKLOG-3816 PC final check: the read of every text message and the identity
-    // computation run on the contact query worker (main-thread fallback when it is not up).
-    const identityIndex = await loadOneToOneThreadIndex(userId);
-    if (!identityIndex) {
-      result.durationMs = Date.now() - startTime;
-      return result;
-    }
-    // BACKLOG-3784: time the scan on its own. Counts only.
-    const identityScanMs = Date.now() - identityScanStartedAt;
-    await logService.info(
-      `[BACKLOG-3784] Attached-thread identity scan: rows=${identityIndex.rows} source=${identityIndex.source} durationMs=${identityScanMs}`,
-      "AutoLinkService",
-      {
-        pairsExamined: pairs.length,
-        identityRows: identityIndex.rows,
-        source: identityIndex.source,
-        scanMs: identityScanMs,
-      }
-    );
-    // thread -> its one token, for threads that are themselves 1:1 (size === 1); a
-    // group or an identity-less thread is absent, exactly as `idSet.size === 1` was.
-    const oneToOneToken = new Map<string, string>(identityIndex.oneToOne);
+    let threadsByTxn: Map<string, Set<string>>;
+    let attachedToken: Map<string, string | null>;
+    // token -> threads that are themselves 1:1 for it, among the threads this run looks at
     const oneToOneThreadsByToken = new Map<string, Set<string>>();
-    for (const [tid, token] of identityIndex.oneToOne) {
+    // attached threads whose siblings this run looks for (null = every attached thread)
+    let siblingScope: Set<string> | null = null;
+    const identityScanStartedAt = Date.now();
+    let identitySource: "worker" | "main" = "main";
+
+    const addOneToOne = (tid: string, token: string): void => {
       let s = oneToOneThreadsByToken.get(token);
       if (!s) {
         s = new Set<string>();
         oneToOneThreadsByToken.set(token, s);
       }
       s.add(tid);
+    };
+
+    let incremental: ThreadsSinceIdentity | null = null;
+    if (unchanged && previous) {
+      const since = await loadThreadIdentity<ThreadsSinceIdentity>(userId, {
+        kind: "since",
+        afterRowid: previous.maxRowid,
+      });
+      if (!since) {
+        result.durationMs = Date.now() - startTime;
+        return result;
+      }
+      identitySource = since.source;
+      result.messageRowsRead += since.rows;
+      // An attached thread whose own identity changed changes what is pooled: full pass.
+      const pooledChanged = since.threads.some(
+        ([tid, token]) => previous.attachedToken.has(tid) && previous.attachedToken.get(tid) !== token,
+      );
+      if (!pooledChanged) incremental = since;
     }
+
+    if (incremental && previous) {
+      result.mode = "incremental";
+      threadsByTxn = previous.threadsByTxn;
+      attachedToken = previous.attachedToken;
+      result.pairsExamined = previous.pairsExamined;
+      siblingScope = new Set<string>();
+      for (const [tid, token] of incremental.threads) {
+        if (attachedToken.has(tid)) siblingScope.add(tid);
+        if (token !== null) addOneToOne(tid, token);
+      }
+    } else {
+      result.mode = "targeted";
+      // 1. Enumerate every MANUALLY attached (transaction, thread) TEXT pair.
+      //    Scoped to per-message links (c.message_id IS NOT NULL): thread-level
+      //    (auto-link) attaches already surface their whole thread via the
+      //    c.thread_id join in getTransactionMessages, so expanding them would only
+      //    convert thread-links into per-message rows and break thread-level unlink
+      //    (BACKLOG-2285 SR review, I1). This also keeps the candidate lookup on an
+      //    indexed thread_id equality (no LIKE scan).
+      const pairs = dbAll<{ transaction_id: string; thread_id: string }>(LINKED_THREAD_PAIRS_SQL, [userId]);
+      result.pairsExamined = pairs.length;
+
+      if (pairs.length === 0) {
+        result.durationMs = Date.now() - startTime;
+        storeWatermark(userId, snapshotAtStart, maxRowidAtStart, 0, new Map(), new Map());
+        // BACKLOG-3784: log this path too. Without it, a missing "expansion complete"
+        // line could mean "nothing attached" or "never finished". Counts only.
+        await logService.info(
+          `[BACKLOG-3784] Attached-thread expansion skipped: 0 attached pairs durationMs=${result.durationMs}`,
+          "AutoLinkService",
+          { pairsExamined: 0, durationMs: result.durationMs }
+        );
+        return result;
+      }
+
+      // Group attached thread_ids by transaction so suppression sets load once each.
+      threadsByTxn = new Map<string, Set<string>>();
+      for (const p of pairs) {
+        let set = threadsByTxn.get(p.transaction_id);
+        if (!set) {
+          set = new Set<string>();
+          threadsByTxn.set(p.transaction_id, set);
+        }
+        set.add(p.thread_id);
+      }
+
+      // BACKLOG-2287: cross-thread expansion matches threads by their direction-aware
+      // 1:1 identity (equality on the full token — never a per-message participants_flat
+      // LIKE). Identity is computed from ALL of a thread's messages (linked or not) so
+      // the 1:1-vs-group classification sees the whole conversation.
+      // BACKLOG-3868: only the attached threads and the threads that can hold one of
+      // their contacts are read (on the contact query worker when it is up).
+      const allAttached = new Set<string>();
+      for (const set of threadsByTxn.values()) for (const tid of set) allAttached.add(tid);
+      const targeted = fullIndexOracleForTests
+        ? oracleFullIndex(userId, allAttached)
+        : await loadThreadIdentity<TargetedThreadIdentity>(userId, {
+            kind: "targeted",
+            attachedThreadIds: [...allAttached],
+          });
+      if (!targeted) {
+        result.durationMs = Date.now() - startTime;
+        return result;
+      }
+      identitySource = targeted.source;
+      result.messageRowsRead += targeted.rows;
+      attachedToken = new Map(targeted.attached);
+      for (const [tid, token] of targeted.oneToOne) addOneToOne(tid, token);
+    }
+
+    // BACKLOG-3784: time the identity read on its own. Counts only.
+    const identityScanMs = Date.now() - identityScanStartedAt;
+    await logService.info(
+      `[BACKLOG-3784] Attached-thread identity scan: rows=${result.messageRowsRead} mode=${result.mode} source=${identitySource} durationMs=${identityScanMs}`,
+      "AutoLinkService",
+      {
+        pairsExamined: result.pairsExamined,
+        identityRows: result.messageRowsRead,
+        mode: result.mode,
+        source: identitySource,
+        scanMs: identityScanMs,
+      }
+    );
+    // Pairs this run creates (a cross-thread link makes its thread attached to the deal),
+    // so the stored watermark matches what a fresh pairs read would return.
+    const newPairs: Array<[string, string, string | null]> = [];
+    const oneToOneTokenOf = new Map<string, string>();
+    for (const [token, tids] of oneToOneThreadsByToken) for (const tid of tids) oneToOneTokenOf.set(tid, token);
 
     for (const [transactionId, attachedThreadIds] of threadsByTxn) {
       // One transaction per event-loop turn (the per-transaction reads are synchronous).
@@ -1643,6 +1855,9 @@ async function expandAttachedThreadsForUserOnce(
         // A fully-removed thread never appears here (its junction row is gone),
         // but guard defensively so a removed conversation is never resurrected.
         if (ignoredThreadIds.has(threadId)) continue;
+        // BACKLOG-3868 incremental run: only attached threads that received messages
+        // can have new siblings (every older sibling was linked by an earlier run).
+        if (siblingScope && !siblingScope.has(threadId)) continue;
 
         // 2. Sibling expansion: unlinked messages sharing this thread_id, NO date
         //    floor (the date floor is exactly what hid the backfill).
@@ -1666,8 +1881,8 @@ async function expandAttachedThreadsForUserOnce(
       const pooledTokens = new Set<string>();
       for (const threadId of attachedThreadIds) {
         if (ignoredThreadIds.has(threadId)) continue;
-        const token = oneToOneToken.get(threadId);
-        if (token !== undefined) pooledTokens.add(token);
+        const token = attachedToken.get(threadId);
+        if (token !== undefined && token !== null) pooledTokens.add(token);
       }
 
       if (pooledTokens.size > 0) {
@@ -1741,6 +1956,9 @@ async function expandAttachedThreadsForUserOnce(
           if (refId) {
             result.messagesLinked++;
             linkedForTxn++;
+            if (threadId && !attachedThreadIds.has(threadId)) {
+              newPairs.push([transactionId, threadId, oneToOneTokenOf.get(threadId) ?? null]);
+            }
           } else {
             // Lost the idempotency race — the unique-index backstop rejected it.
             result.skippedAlreadyLinked++;
@@ -1765,6 +1983,40 @@ async function expandAttachedThreadsForUserOnce(
     }
 
     result.durationMs = Date.now() - startTime;
+
+    // BACKLOG-3868: remember what this run saw, so the next run can skip or look only
+    // at what grew. Only when the run completed cleanly and nothing but its own links
+    // changed meanwhile; otherwise the next run is a full targeted pass.
+    const snapshotAtEnd = result.errors === 0 ? readExpansionChangeSnapshot(db) : null;
+    const onlyOwnWrites =
+      !!snapshotAtStart &&
+      !!snapshotAtEnd &&
+      snapshotAtEnd.epoch === snapshotAtStart.epoch &&
+      snapshotAtEnd.msg === snapshotAtStart.msg &&
+      snapshotAtEnd.commOther === snapshotAtStart.commOther &&
+      snapshotAtEnd.ign === snapshotAtStart.ign &&
+      snapshotAtEnd.commIns - snapshotAtStart.commIns === result.messagesLinked;
+    if (onlyOwnWrites && snapshotAtEnd) {
+      const nextThreadsByTxn = new Map<string, Set<string>>();
+      for (const [txn, set] of threadsByTxn) nextThreadsByTxn.set(txn, new Set(set));
+      const nextAttachedToken = new Map(attachedToken);
+      let pairsExamined = result.pairsExamined;
+      for (const [txn, tid, token] of newPairs) {
+        let set = nextThreadsByTxn.get(txn);
+        if (!set) {
+          set = new Set<string>();
+          nextThreadsByTxn.set(txn, set);
+        }
+        if (!set.has(tid)) {
+          set.add(tid);
+          pairsExamined++;
+        }
+        nextAttachedToken.set(tid, token);
+      }
+      storeWatermark(userId, snapshotAtEnd, maxRowidAtStart, pairsExamined, nextThreadsByTxn, nextAttachedToken);
+    } else {
+      storeWatermark(userId, null, 0, 0, new Map(), new Map());
+    }
 
     // 7. Observable verification (BACKLOG-1875): one INFO summary line with counts.
     await logService.info(
@@ -1803,6 +2055,8 @@ async function expandAttachedThreadsForUserOnce(
     return result;
   } catch (error) {
     result.durationMs = Date.now() - startTime;
+    // BACKLOG-3868: a run that failed part-way leaves no watermark: the next run is full.
+    storeWatermark(userId, null, 0, 0, new Map(), new Map());
     await logService.error(
       `[BACKLOG-2285] Attached-thread expansion failed: ${
         error instanceof Error ? error.message : "Unknown"

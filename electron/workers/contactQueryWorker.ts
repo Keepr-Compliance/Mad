@@ -38,8 +38,17 @@ import {
   type EmailDerivedProvider,
 } from "../services/db/emailDerivedContactsSql";
 import { readOneToOneThreadIndexOn } from "../services/db/threadIdentityIndexDb";
+import { runThreadIdentityRequestOn, type ThreadIdentityRequest } from "../services/db/threadIdentityTargetedDb";
+import { readCandidateMessageThreadsOn } from "../services/db/autoLinkSql";
 
-type QueryType = "external" | "imported" | "backfill" | "emailDerived" | "threadIdentity";
+type QueryType =
+  | "external"
+  | "imported"
+  | "backfill"
+  | "emailDerived"
+  | "threadIdentity"
+  | "threadIdentityTargeted"
+  | "candidateMessageThreads";
 
 interface InitMessage {
   type: "init";
@@ -63,6 +72,14 @@ interface QueryMessage {
    * Only the `emailDerived` query reads it.
    */
   providers?: string[];
+}
+
+interface QueryMessageExtras {
+  /** BACKLOG-3868: what `threadIdentityTargeted` reads (attached threads, or threads grown after a rowid). */
+  request?: ThreadIdentityRequest;
+  /** BACKLOG-3868: `candidateMessageThreads` — the statement's phone count and its bound values, in order. */
+  phoneCount?: number;
+  params?: Array<string | number>;
 }
 
 interface ShutdownMessage {
@@ -256,6 +273,21 @@ parentPort?.on("message", (msg: WorkerMessage) => {
       // BACKLOG-3816 PC final check: every text message of the user, off the main thread.
       if (!db) throw new Error("Database not initialized");
       rows = [readOneToOneThreadIndexOn(db, queryMsg.userId)];
+    } else if (queryMsg.type === "threadIdentityTargeted") {
+      // BACKLOG-3868: only the threads the expansion needs, not every text message.
+      if (!db) throw new Error("Database not initialized");
+      const request = (queryMsg as QueryMessage & QueryMessageExtras).request;
+      if (!request) throw new Error("threadIdentityTargeted needs a request");
+      rows = [runThreadIdentityRequestOn(db, queryMsg.userId, request)];
+    } else if (queryMsg.type === "candidateMessageThreads") {
+      // BACKLOG-3868: the auto-link candidate read scans the user's texts in the deal's
+      // window (participants_flat LIKE cannot use an index); off the main thread.
+      if (!db) throw new Error("Database not initialized");
+      const { phoneCount, params } = queryMsg as QueryMessage & QueryMessageExtras;
+      if (!Number.isInteger(phoneCount) || (phoneCount as number) < 1 || !Array.isArray(params) || params.length !== (phoneCount as number) + 6) {
+        throw new Error("candidateMessageThreads needs phoneCount and its params");
+      }
+      rows = readCandidateMessageThreadsOn(db, phoneCount as number, params);
     } else {
       throw new Error(`Unknown query type: ${queryMsg.type}`);
     }
