@@ -1,7 +1,8 @@
 -- Migration: personal organizations for licensed users who hold no membership (BACKLOG-3858)
 --
 -- For every user with a public.licenses row and NO public.organization_members
--- row (any status), calls public._ensure_personal_organization_for(user_id) —
+-- row (any status), except suspended users (licences.status = 'suspended' or
+-- users.status = 'suspended'), calls public._ensure_personal_organization_for(user_id) —
 -- the same function the desktop reaches through ensure_personal_organization()
 -- on sign-in. The function itself is not changed.
 --
@@ -15,7 +16,8 @@
 --     was reviewed against, or the file raises before writing;
 --   * any call returning a status other than 'created' raises (whole file
 --     rolls back), listing user id and status;
---   * after the loop no licensed user may be left without a membership.
+--   * after the loop no licensed, non-suspended user may be left without a
+--     membership.
 --
 -- Tested by supabase/tests/backlog-3858/.
 
@@ -33,8 +35,6 @@ COMMENT ON TABLE public.backlog_3858_personal_org_backfill IS
 
 DO $m3858$
 DECLARE
-  -- Licence statuses left out of the cohort. Empty: every licence row counts.
-  v_excluded_licence_statuses text[] := ARRAY[]::text[];
   v_expected_fp text := 'bcfe51daa44bb65ceb7c120a44d5eec2';
   v_fp      text;
   r         record;
@@ -47,10 +47,11 @@ BEGIN
 
   IF NOT EXISTS (
     SELECT 1 FROM public.licenses l
-     WHERE NOT (l.status = ANY (v_excluded_licence_statuses))
+     WHERE l.status IS DISTINCT FROM 'suspended'
+       AND NOT EXISTS (SELECT 1 FROM public.users u WHERE u.id = l.user_id AND u.status = 'suspended')
        AND NOT EXISTS (SELECT 1 FROM public.organization_members m WHERE m.user_id = l.user_id)
   ) THEN
-    RAISE NOTICE 'BACKLOG-3858: no licensed user without a membership; nothing to do';
+    RAISE NOTICE 'BACKLOG-3858: no licensed, non-suspended user without a membership; nothing to do';
     RETURN;
   END IF;
 
@@ -65,7 +66,8 @@ BEGIN
   FOR r IN
     SELECT l.user_id
       FROM public.licenses l
-     WHERE NOT (l.status = ANY (v_excluded_licence_statuses))
+     WHERE l.status IS DISTINCT FROM 'suspended'
+       AND NOT EXISTS (SELECT 1 FROM public.users u WHERE u.id = l.user_id AND u.status = 'suspended')
        AND NOT EXISTS (SELECT 1 FROM public.organization_members m WHERE m.user_id = l.user_id)
      ORDER BY l.user_id
   LOOP
@@ -85,10 +87,11 @@ BEGIN
 
   SELECT count(*) INTO v_left
     FROM public.licenses l
-   WHERE NOT (l.status = ANY (v_excluded_licence_statuses))
+   WHERE l.status IS DISTINCT FROM 'suspended'
+     AND NOT EXISTS (SELECT 1 FROM public.users u WHERE u.id = l.user_id AND u.status = 'suspended')
      AND NOT EXISTS (SELECT 1 FROM public.organization_members m WHERE m.user_id = l.user_id);
   IF v_left > 0 THEN
-    RAISE EXCEPTION 'BACKLOG-3858: % licensed user(s) still without a membership', v_left;
+    RAISE EXCEPTION 'BACKLOG-3858: % licensed, non-suspended user(s) still without a membership', v_left;
   END IF;
 
   RAISE NOTICE 'BACKLOG-3858: created % personal organization(s)', v_created;

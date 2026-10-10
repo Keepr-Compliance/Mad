@@ -6,11 +6,11 @@
 -- for each new plan row. The bookkeeping table is closed to client roles.
 SELECT pg_temp.check('k6 checklist_seed_templates rows incl. fixture (info)', true,
   (SELECT count(*)::text FROM public.checklist_seed_templates));
-SELECT pg_temp.check('k6 checklist_templates created = seed count x 5 (and > 0)',
+SELECT pg_temp.check('k6 checklist_templates created = seed count x 4 (and > 0)',
   (SELECT count(*) FROM public.checklist_seed_templates) > 0 AND
   (SELECT count(*) FROM jsonb_array_elements(pg_temp.snapshot('after1')->'checklist_templates'))
   - (SELECT count(*) FROM jsonb_array_elements(pg_temp.snapshot('pre')->'checklist_templates'))
-  = 5 * (SELECT count(*) FROM public.checklist_seed_templates));
+  = 4 * (SELECT count(*) FROM public.checklist_seed_templates));
 SELECT pg_temp.check('k6 bookkeeping table: RLS on, no client grants',
   (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.backlog_3858_personal_org_backfill'::regclass)
   AND NOT has_table_privilege('anon', 'public.backlog_3858_personal_org_backfill', 'SELECT')

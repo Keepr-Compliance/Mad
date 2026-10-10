@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """BACKLOG-3858 mutants of the migration ("mig") and of rollback-3858.sql ("rb").
 
-Each mutant is a list of exact-string replacements. `apply` raises unless every
-pattern occurs exactly once, so a mutant that did not apply is never counted.
+Each mutant is a list of exact-string replacements (old, new[, count]). `apply`
+raises unless every pattern occurs exactly `count` times (default 1), so a
+mutant that did not apply is never counted.
 
 usage: mutants.py list                      -> name|file|target controls
        mutants.py apply <name> <src> <out>
@@ -17,7 +18,7 @@ LOOP_FILTER = (
 )
 POSTCHECK = (
     "  IF v_left > 0 THEN\n"
-    "    RAISE EXCEPTION 'BACKLOG-3858: % licensed user(s) still without a membership', v_left;\n"
+    "    RAISE EXCEPTION 'BACKLOG-3858: % licensed, non-suspended user(s) still without a membership', v_left;\n"
     "  END IF;\n"
 )
 BAD_RAISE = (
@@ -31,6 +32,8 @@ PRECHECK = (
     "      v_fp, v_expected_fp;\n"
     "  END IF;\n"
 )
+LIC_EXCL = "WHERE l.status IS DISTINCT FROM 'suspended'"
+USR_EXCL = "AND NOT EXISTS (SELECT 1 FROM public.users u WHERE u.id = l.user_id AND u.status = 'suspended')"
 CALL = "    v := public._ensure_personal_organization_for(r.user_id);\n"
 HANDROLLED = (
     "    INSERT INTO public.organizations (name, slug, max_seats, personal_owner_user_id)\n"
@@ -63,7 +66,11 @@ MUTANTS = {
     "m06-no-precheck": ("mig", [(PRECHECK, "")], "k5a"),
     "m07-no-early-return": ("mig", [("nothing to do';\n    RETURN;\n", "nothing to do';\n")], "k5b"),
     "m08-not-recorded": ("mig", [(RECORD, "")], "k1 k4b"),
-    "m09-exclude-suspended": ("mig", [("ARRAY[]::text[];\n  v_expected_fp", "ARRAY['suspended']::text[];\n  v_expected_fp")], "k1"),
+    # Suspended exclusion (founder rule): each predicate appears in all three
+    # cohort queries; the mutants remove it from all three (count 3).
+    "m09a-drop-suspended-exclusion": ("mig", [(LIC_EXCL, "WHERE true", 3), (USR_EXCL, "", 3)], "k8"),
+    "m09b-licence-status-only": ("mig", [(USR_EXCL, "", 3)], "k8"),
+    "m09c-users-status-only": ("mig", [(LIC_EXCL, "WHERE true", 3)], "k8"),
     # Most likely wrong loop: log unexpected statuses and carry on.
     "m10-lenient-statuses": ("mig", [(BAD_RAISE, "")], "k7"),
     "r01-rollback-deletes-all-personal": ("rb", [(RB_DELETE, "   WHERE o.personal_owner_user_id IS NOT NULL;\n")], "k4b"),
@@ -74,9 +81,11 @@ MUTANTS = {
 def apply(name, src_path, out_path):
     src = open(src_path).read()
     out = src
-    for old, new in MUTANTS[name][1]:
+    for edit in MUTANTS[name][1]:
+        old, new = edit[0], edit[1]
+        want = edit[2] if len(edit) > 2 else 1
         n = out.count(old)
-        if n != 1:
+        if n != want:
             raise SystemExit(f"mutant {name}: pattern occurs {n} times: {old[:60]!r}")
         out = out.replace(old, new)
     if out == src:

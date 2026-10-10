@@ -6,7 +6,7 @@
 --        sort_order 10, description 'Free trial with basic features'.
 --   * cohort mix: licences without any organization_members row, grouped by
 --     license_type / licences.status / users.status -> individual/active/active,
---     individual/suspended/suspended, team/active/active; one cohort user has an
+--     individual/suspended/suspended (excluded), team/active/active; one has an
 --     EXPIRED unclaimed invite (user_id NULL, invited_email = their address).
 --   * licence rows: 'individual' max_devices 2, transaction_limit 99999 (as in
 --     the BACKLOG-3856 fixtures).
@@ -22,14 +22,17 @@ SELECT pg_temp.id(n), n || '-3858@example.test', 'email', n || '3858' FROM pg_te
 ON CONFLICT (id) DO NOTHING;
 UPDATE public.users SET status = 'active', suspended_at = NULL, suspension_reason = NULL
  WHERE id IN (SELECT pg_temp.id(n) FROM pg_temp.users() n);
+-- s_user: admin-suspended user with an active licence row; s_lic: active user
+-- whose licence row is suspended (prod has one user with both; the founder's
+-- rule, BACKLOG-3858, excludes either).
 UPDATE public.users
    SET status = 'suspended', suspended_at = now() - interval '3 days', suspension_reason = 'fixture reason'
- WHERE id = pg_temp.id('c_susp');
+ WHERE id = pg_temp.id('s_user');
 
 INSERT INTO public.licenses (user_id, license_key, license_type, status, max_devices, transaction_limit)
 SELECT pg_temp.id(n), 'FX3858-' || n,
        CASE WHEN n = 'c_team' THEN 'team' ELSE 'individual' END,
-       CASE WHEN n = 'c_susp' THEN 'suspended' ELSE 'active' END,
+       CASE WHEN n = 's_lic' THEN 'suspended' ELSE 'active' END,
        CASE WHEN n = 'c_team' THEN 10 ELSE 2 END, 99999
   FROM pg_temp.users() n WHERE n <> 'u_nolic';
 
@@ -54,7 +57,8 @@ SELECT pg_temp.check('pre: desktop path creates d_desk personal org', r = 'OK cr
 SELECT pg_temp.check('pre: venue has the production function body', pg_temp.fp() = 'bcfe51daa44bb65ceb7c120a44d5eec2', pg_temp.fp());
 SELECT pg_temp.check('pre: every fixture cohort user lacks a membership',
   (SELECT count(*) FROM pg_temp.cohort() n
-    WHERE NOT EXISTS (SELECT 1 FROM public.organization_members m WHERE m.user_id = pg_temp.id(n))) = 5);
+    WHERE NOT EXISTS (SELECT 1 FROM public.organization_members m WHERE m.user_id = pg_temp.id(n))) = 4
+  AND NOT EXISTS (SELECT 1 FROM public.organization_members m WHERE m.user_id IN (pg_temp.id('s_lic'), pg_temp.id('s_user'))));
 SELECT pg_temp.check('pre: no cohort outside the fixtures',
   NOT EXISTS (SELECT 1 FROM public.licenses l
                WHERE l.user_id NOT IN (SELECT pg_temp.id(n) FROM pg_temp.users() n)

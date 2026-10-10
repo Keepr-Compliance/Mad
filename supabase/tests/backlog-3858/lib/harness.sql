@@ -2,11 +2,13 @@
 -- Fixture ids are derived from names (no id literals in this directory).
 CREATE FUNCTION pg_temp.id(p_name text) RETURNS uuid LANGUAGE sql IMMUTABLE AS $f$
   SELECT md5('backlog-3858:' || p_name)::uuid $f$;
--- c_*: in the cohort (licence, no membership). m_*: licensed, already a member
+-- c_*: in the cohort (licence, no membership). s_lic / s_user: licence, no
+-- membership, but suspended (licences.status / users.status) -> excluded.
+-- m_*: licensed, already a member
 -- of the brokerage b_org. d_desk: licensed, personal org made by the desktop
 -- path in fixtures. u_nolic: no licence, no membership.
 CREATE FUNCTION pg_temp.id_names() RETURNS SETOF text LANGUAGE sql IMMUTABLE AS $f$
-  SELECT unnest(ARRAY['c_ind1','c_ind2','c_team','c_susp','c_expinv',
+  SELECT unnest(ARRAY['c_ind1','c_ind2','c_team','c_expinv','s_lic','s_user',
                       'm_active','m_pending','m_susp','d_desk','u_nolic','b_org']) $f$;
 CREATE FUNCTION pg_temp.users() RETURNS SETOF text LANGUAGE sql IMMUTABLE AS $f$
   SELECT n FROM pg_temp.id_names() n WHERE n <> 'b_org' $f$;

@@ -22,6 +22,6 @@ SELECT pg_temp.check('k3 brokerage org row and its rows (incl. expired invite) u
     WHERE x->>'organization_id' = pg_temp.id('b_org')::text)
   AND (SELECT o FROM jsonb_array_elements(pg_temp.snapshot('pre')->'organizations') o WHERE o->>'id' = pg_temp.id('b_org')::text)
     = (SELECT o FROM jsonb_array_elements(pg_temp.snapshot('after1')->'organizations') o WHERE o->>'id' = pg_temp.id('b_org')::text));
-SELECT pg_temp.check('k3 only the five cohort orgs are new',
+SELECT pg_temp.check('k3 only the four cohort orgs are new',
   (SELECT count(*) FROM jsonb_array_elements(pg_temp.snapshot('after1')->'organizations')) -
-  (SELECT count(*) FROM jsonb_array_elements(pg_temp.snapshot('pre')->'organizations')) = 5);
+  (SELECT count(*) FROM jsonb_array_elements(pg_temp.snapshot('pre')->'organizations')) = 4);

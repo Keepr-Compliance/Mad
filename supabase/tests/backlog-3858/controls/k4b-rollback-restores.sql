@@ -1,7 +1,7 @@
 -- harness: rollback
 -- harness: pre-apply: INSERT INTO public.checklist_seed_templates (seed_key, name, sort_order, items) VALUES ('fixture_3858', 'Fixture 3858', 1, '[{"title":"one"},{"title":"two","is_required":true}]'::jsonb);
 -- k4b: rollback-3858.sql returns every table it can touch to the pre-run state:
--- the five created orgs (and their member / plan rows) gone, the desktop-made
+-- the four created orgs (and their member / plan rows) gone, the desktop-made
 -- personal org of d_desk and the brokerage kept, bookkeeping table dropped.
 -- One fixture seed template makes the run create checklist templates and
 -- items, so the cascade on those is covered too.
