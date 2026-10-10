@@ -118,10 +118,11 @@ maybe("contact query worker: thread identity index off the main thread (BACKLOG-
     await initializePool(dbPath, KEY_HEX);
   }, 180_000);
 
-  afterAll(() => {
-    shutdownPool();
+  afterAll(async () => {
+    await shutdownPool();
     setContactWorkerPathForTests(null);
-    nodeFs.rmSync(dir, { recursive: true, force: true });
+    // Windows can hold a file briefly after a handle closes (antivirus, indexer): retry.
+    nodeFs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   async function maxStallDuring<T>(work: () => Promise<T>): Promise<{ value: T; maxMs: number }> {
@@ -199,5 +200,20 @@ maybe("contact query worker: thread identity index off the main thread (BACKLOG-
     expect(err).toBeInstanceOf(DedicatedWorkerError);
     expect(err.code).toBe("timeout");
     await expectNoLiveDedicatedWorker();
+  }, 60_000);
+
+  // MUST stay last: it shuts the pool down. A Windows run failed EBUSY unlinking mad.db
+  // because shutdownPool() returned before the workers had closed the file.
+  it("after an awaited shutdownPool no worker is alive and the database file can be moved", async () => {
+    const pending = queryOnDedicatedWorker("threadIdentity", USER, 120_000).catch((e) => e);
+    await new Promise((r) => setTimeout(r, 300)); // let the dedicated worker open the file
+    expect(getDedicatedWorkerCountForTests()).toBe(1);
+    await shutdownPool();
+    expect(getDedicatedWorkerCountForTests()).toBe(0);
+    expect(isPoolReady()).toBe(false);
+    const moved = nodePath.join(dir, "mad.moved.db");
+    nodeFs.renameSync(dbPath, moved);
+    expect(nodeFs.existsSync(moved)).toBe(true);
+    expect(await pending).toBeInstanceOf(DedicatedWorkerError);
   }, 60_000);
 });
