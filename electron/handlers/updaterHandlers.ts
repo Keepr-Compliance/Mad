@@ -19,6 +19,7 @@ import {
 
 import { getMainWindow } from "../windowRegistry";
 import { stopBackupForQuit } from "./syncHandlers";
+import { getBackupAtRest } from "../services/atRest/backupAtRest";
 import { waitForLinksToFinish } from "../utils/linkInFlight";
 
 /**
@@ -26,15 +27,25 @@ import { waitForLinksToFinish } from "../utils/linkInFlight";
  * and the installer force-kills the app about 2.6 s later, so the before-quit
  * deferral cannot help. Wait here, first, for in-flight links (60 s bound) and stop
  * a running iPhone backup (its own bound, BACKLOG-3598). Never rejects.
+ *
+ * BACKLOG-3816 (audit G5): then, once the backup has stopped, seal the kept backup's
+ * index files that a sync unsealed (`sealIndexForQuit`, its own 15 s bound) — the same
+ * step the before-quit deferral runs, which the Windows installer's kill can cut off.
  */
 export function waitForQuitBlockers(): Promise<unknown> {
   const waits: Array<Promise<unknown>> = [];
+  let backup: Promise<unknown> | null = null;
   try {
-    const backup = stopBackupForQuit();
-    if (backup) waits.push(backup.catch(() => undefined));
+    backup = stopBackupForQuit();
   } catch {
     /* a failing stop must not block the install */
   }
+  waits.push(
+    Promise.resolve(backup)
+      .catch(() => undefined)
+      .then(() => getBackupAtRest().sealIndexForQuit() ?? undefined)
+      .catch(() => undefined),
+  );
   const links = waitForLinksToFinish(undefined, () =>
     console.warn("[Updater] link still running after the max wait; installing anyway"),
   );
