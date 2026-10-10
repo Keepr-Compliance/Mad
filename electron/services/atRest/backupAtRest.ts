@@ -880,6 +880,9 @@ export class BackupAtRest extends EventEmitter {
       }
     });
     if (result.stopped) report.paused = true;
+    if ((this.deps.workers ?? 0) > 0 && result.workersUsed === 0) {
+      this.log("warn", "[BackupAtRest] the seal pass ran on the main thread (no seal worker started)", { phase, files: listed.length });
+    }
     report.seen = new Set(listed.filter((_, i) => result.outcomes[i] !== undefined).map((f) => f.path));
     // One directory fsync per touched directory makes the renames durable before any
     // marker can say `encrypted` (see sealEngine.ts: a lost rename leaves the plaintext,
@@ -1590,9 +1593,13 @@ export class BackupAtRest extends EventEmitter {
     if (pending.length === 0) return report;
     const key = await this.sealKey();
     const touched = new Set<string>();
+    // PC final check 2026-10-10 (a long main-process freeze after a sync): 0 here means the
+    // index files (Manifest.db ~1 GB) were sealed IN-PROCESS, on the main thread.
+    let workersUsed = 0;
     for (let attempt = 0; pending.length > 0; attempt++) {
       const batch = pending;
       const result = await this.pass(batch, "seal", key, undefined);
+      workersUsed = Math.max(workersUsed, result.workersUsed);
       for (const d of result.touchedDirs) touched.add(d);
       const again: ListedFile[] = [];
       const lastTry = attempt >= INDEX_SEAL_RETRY_DELAYS_MS.length;
@@ -1626,6 +1633,7 @@ export class BackupAtRest extends EventEmitter {
         failed: report.failed,
         failedCodes: report.failedCodes,
         ms: report.ms,
+        workersUsed,
       });
     }
     return report;
