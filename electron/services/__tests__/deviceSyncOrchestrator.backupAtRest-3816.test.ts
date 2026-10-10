@@ -632,7 +632,7 @@ describe("D — C-DELTA reads a parse copy", () => {
     const copySpy = jest.spyOn(atRest, "buildParseCopy").mockImplementation(async (_udid, out) => {
       fsSync.mkdirSync(path.join(out, "3d"), { recursive: true });
       fsSync.writeFileSync(path.join(out, "3d", SMS_ID), "decrypted sms copy");
-      return { copied: 1, missing: 0 };
+      return { copied: 1, missing: 0, unreadable: 0 };
     });
     const o = newOrchestrator();
     backupReturns(ok());
@@ -667,7 +667,7 @@ describe("C2-DELTA (founder must-fix 2026-10-09) — every end of a C-DELTA sync
     copySpy = jest.spyOn(atRest, "buildParseCopy").mockImplementation(async (_udid, out) => {
       fsSync.mkdirSync(path.join(out, "3d"), { recursive: true });
       fsSync.writeFileSync(path.join(out, "3d", SMS_ID), "decrypted sms copy");
-      return { copied: 1, missing: 0 };
+      return { copied: 1, missing: 0, unreadable: 0 };
     });
   });
 
