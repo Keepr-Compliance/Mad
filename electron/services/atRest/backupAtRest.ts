@@ -533,6 +533,12 @@ export class BackupAtRest extends EventEmitter {
    */
   private readonly walkSkipEligible = new Set<string>();
   /**
+   * Plaintext files the sync's parse copy read whose mtime is older than the sync's unseal
+   * time: not this sync's delta and not an unsealed index file, so a delta-only seal would
+   * leave them plaintext. Counted per phone; any > 0 forces the full walk at the sync's end.
+   */
+  private readonly oldPlaintextSeen = new Map<string, number>();
+  /**
    * BACKLOG-3816: the post-sync seal's listing of the chain (one `lstat` per file) also
    * gives the backup's total size, handed here once, so the sync does not walk the chain
    * a second time to measure it. Set by finishSync for its own seal only.
@@ -1196,7 +1202,12 @@ export class BackupAtRest extends EventEmitter {
     // NOT pausable: a sync asking for this phone waits for these few files (seconds, plus
     // the bounded lock retries) and only the walk below gives way to it.
     // Read before the index seal below rewrites them (see sealDeltaOnly).
-    const indexMtimes = opts.allowWalkSkip ? await this.indexMtimeCheck(udid) : null;
+    let indexMtimes = opts.allowWalkSkip ? await this.indexMtimeCheck(udid) : null;
+    const oldPlaintext = this.oldPlaintextSeen.get(udid) ?? 0;
+    this.oldPlaintextSeen.delete(udid);
+    if (indexMtimes?.ok && oldPlaintext > 0) {
+      indexMtimes = { ok: false, reasonCode: "OLD_PLAINTEXT_SEEN", count: oldPlaintext };
+    }
     const indexReport = await this.sealIndexFiles(udid);
     if (opts.allowWalkSkip && indexMtimes) {
       const delta = await this.sealDeltaOnly(udid, indexReport, indexMtimes, onProgress);
@@ -1291,7 +1302,7 @@ export class BackupAtRest extends EventEmitter {
    * one present must carry an mtime at or after the unseal time; an older one means the
    * mtime basis cannot be trusted for this sync. Read BEFORE the index seal rewrites them.
    */
-  private async indexMtimeCheck(udid: string): Promise<{ ok: true } | { ok: false; reasonCode: string; file?: string }> {
+  private async indexMtimeCheck(udid: string): Promise<{ ok: true } | { ok: false; reasonCode: string; file?: string; count?: number }> {
     const since = this.syncUnsealedAt.get(udid);
     if (since === undefined || !Number.isFinite(since)) return { ok: false, reasonCode: "NO_UNSEAL_TIME" };
     let found = 0;
@@ -1313,7 +1324,7 @@ export class BackupAtRest extends EventEmitter {
   private async sealDeltaOnly(
     udid: string,
     indexReport: PassReport,
-    indexMtimes: { ok: true } | { ok: false; reasonCode: string; file?: string },
+    indexMtimes: { ok: true } | { ok: false; reasonCode: string; file?: string; count?: number },
     onProgress?: (p: BackupAtRestProgress) => void,
   ): Promise<"encrypted" | "paused" | "walk"> {
     const walk = (reasonCode: string, data: Record<string, unknown> = {}): "walk" => {
@@ -1324,7 +1335,12 @@ export class BackupAtRest extends EventEmitter {
     const since = this.syncUnsealedAt.get(udid);
     const sinceMono = this.syncUnsealedMono.get(udid);
     if (since === undefined || !Number.isFinite(since) || sinceMono === undefined) return walk("NO_UNSEAL_TIME");
-    if (!indexMtimes.ok) return walk(indexMtimes.reasonCode, indexMtimes.file ? { file: indexMtimes.file } : {});
+    if (!indexMtimes.ok) {
+      return walk(indexMtimes.reasonCode, {
+        ...(indexMtimes.file ? { file: indexMtimes.file } : {}),
+        ...(indexMtimes.count !== undefined ? { count: indexMtimes.count } : {}),
+      });
+    }
     if (indexReport.failed > 0 || indexReport.damaged > 0) return walk("INDEX_SEAL_FAILED", { failedCodes: indexReport.failedCodes });
     // A wall clock that went BACK during the sync would give new files an mtime before
     // `since`. (Forward, or a sleep, only makes new files look newer: harmless.)
@@ -1471,6 +1487,7 @@ export class BackupAtRest extends EventEmitter {
    */
   private async recordWalkSkipEligibility(udid: string, strategy: BackupUnsealStrategy): Promise<void> {
     this.walkSkipEligible.delete(udid);
+    this.oldPlaintextSeen.delete(udid);
     if (strategy !== "delta") return;
     const record = await this.deps.markers().readBackupMarker(udid).catch(() => null);
     if (
@@ -2086,6 +2103,11 @@ export class BackupAtRest extends EventEmitter {
     // at it, so rethrowing failed EVERY sync. It is skipped and counted instead, and the
     // next sync is forced to C-FULL: that unseal finds it and quarantines the chain (B2).
     const unreadable: string[] = [];
+    // A plaintext file older than this sync's unseal time is neither this sync's delta nor
+    // an index file Keepr unsealed: record it so the sync's end walks the whole chain.
+    const since = this.syncUnsealedAt.get(udid);
+    const indexNames = new Set<string>(DELTA_UNSEAL_FILES);
+    let oldPlaintext = 0;
     try {
       await files.decryptToFile(path.join(chain, "Manifest.db"), manifestCopy);
       const rows = selectReadFileRows(manifestCopy);
@@ -2098,8 +2120,12 @@ export class BackupAtRest extends EventEmitter {
         const src = path.join(chain, fileId.slice(0, 2), fileId);
         const dest = path.join(outDir, fileId.slice(0, 2), fileId);
         try {
-          await files.decryptToFile(src, dest);
+          const read = await files.decryptToFile(src, dest);
           copied++;
+          if (!read.encrypted && since !== undefined && Number.isFinite(since) && !indexNames.has(`${fileId.slice(0, 2)}/${fileId}`)) {
+            const st = await fs.promises.lstat(src).catch(() => null);
+            if (st && st.mtimeMs < since - SYNC_MTIME_SLACK_MS) oldPlaintext++;
+          }
         } catch (error) {
           if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
             missing++;
@@ -2116,6 +2142,7 @@ export class BackupAtRest extends EventEmitter {
     } finally {
       await fs.promises.rm(manifestCopy, { force: true });
     }
+    if (oldPlaintext > 0) this.oldPlaintextSeen.set(udid, oldPlaintext);
     if (unreadable.length > 0) {
       const core = unreadable.some((id) => id === SMS_DB_FILE_ID || id === ADDRESS_BOOK_FILE_ID);
       await this.deps.markers().setNextStrategy(udid, FORCE_FULL_REASON_DELTA_DAMAGED);
