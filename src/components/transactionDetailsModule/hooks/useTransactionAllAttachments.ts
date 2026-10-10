@@ -98,7 +98,7 @@ export function useTransactionAllAttachments(
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadAttachments = useCallback(async (): Promise<void> => {
+  const fetchAttachments = useCallback(async (): Promise<void> => {
     // BACKLOG-3884: not shown yet -> nothing to refresh; the first enabled load
     // reads the current state.
     if (!enabledRef.current) return;
@@ -163,10 +163,38 @@ export function useTransactionAllAttachments(
     }
   }, [transactionId, auditStart, auditEnd, windowStart, windowEnd]);
 
+  // BACKLOG-3884: one read at a time. A refresh while a read is in flight does
+  // not start a second, parallel read (each one runs on main); it marks ONE
+  // trailing read that starts when the current one ends, so N overlapping
+  // refreshes cost one extra read, and a write made before the refresh is
+  // always read. Joining the in-flight read instead could return data read
+  // before that write.
+  const inFlightRef = useRef<Promise<void> | null>(null);
+  const trailingRef = useRef<Promise<void> | null>(null);
+  const fetchRef = useRef(fetchAttachments);
+  fetchRef.current = fetchAttachments;
+  const loadAttachments = useCallback((): Promise<void> => {
+    if (inFlightRef.current) {
+      if (!trailingRef.current) {
+        trailingRef.current = inFlightRef.current.then(() => {
+          trailingRef.current = null;
+          return loadAttachments();
+        });
+      }
+      return trailingRef.current;
+    }
+    const run = fetchRef.current().finally(() => {
+      if (inFlightRef.current === run) inFlightRef.current = null;
+    });
+    inFlightRef.current = run;
+    return run;
+  }, []);
+
+  // `fetchAttachments` changes with the transaction / dates: reload then.
   useEffect(() => {
     if (!enabled) return;
     loadAttachments();
-  }, [loadAttachments, enabled]);
+  }, [loadAttachments, fetchAttachments, enabled]);
 
   return {
     attachments,
