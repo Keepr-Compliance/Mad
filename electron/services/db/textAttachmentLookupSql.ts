@@ -12,8 +12,11 @@
  *   - the submit matched `message_id` only.
  *
  * So a row whose `message_id` points at a message that no longer exists was
- * shown in the conversation and never sent. All three now call this function,
- * which copies the Messages-view rule:
+ * shown in the conversation and never sent. The Messages view and the submit
+ * call this function; the transaction Attachments tab calls
+ * `selectTextAttachmentsForTransaction` below (BACKLOG-3884), which applies the
+ * same rule from the attachments side (allAttachmentsOffScan-3884.test.ts holds
+ * the two equal). The Messages-view rule:
  *
  *   1. rows whose `message_id` is one of the given ids;
  *   2. for each given id with no row in (1): rows whose `external_message_id`

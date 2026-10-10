@@ -63,9 +63,9 @@ export interface AttachmentWindow {
   closedAt?: string | null;
   /**
    * BACKLOG-3884: load only once this is true. The reader runs synchronously on
-   * main and materializes every linked text to find the ones with attachments
-   * (~0.6 s for 105k linked texts, twice per open), so TransactionDetails
-   * enables it only when a tab that shows attachments is opened. While false,
+   * main (two reads per load; reads from the attachments side, tens of ms on a
+   * 668k-text database), so TransactionDetails enables it only when a tab that
+   * shows attachments is opened. While false,
    * nothing is fetched and `refresh` is a no-op: the first enabled load reads
    * the current state anyway. Default true (load on mount, as before).
    */
