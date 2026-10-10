@@ -1657,6 +1657,9 @@ describe("PC unplug retest 2026-10-09: the index files are sealed FIRST at every
     expect(tries).toBe(LOCKED_TRIES + 1);
     const named = logs.find((l) => l.m === "[BackupAtRest] could not seal an index file");
     expect(named?.d).toEqual(expect.objectContaining({ file: "Manifest.db", code: "EPERM" }));
+    // The pass line agrees with itself: no failure left, so no leftover failure codes.
+    const sealedLine = logs.find((l) => l.m === "[BackupAtRest] sealed" && l.d?.phase === "sealing");
+    expect(sealedLine?.d).toEqual(expect.objectContaining({ failed: 0, failedCodes: {}, lateIndexSealed: 1, plaintextLeft: 0 }));
     expect(JSON.stringify(logs)).not.toContain(chain); // names, never paths
     expect(headerOf(manifest()).equals(MAGIC)).toBe(true);
     expect(plaintextLeft()).toEqual([]);

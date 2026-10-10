@@ -1094,10 +1094,14 @@ export class BackupAtRest extends EventEmitter {
     // (minutes on a large chain), instead of the idle recovery's full walk 5 min later.
     // A file still plaintext after the pass is one the pass failed on, so each one sealed
     // here is one failure fewer.
+    let lateIndexSealed = 0;
     if (report.failed > 0) {
       const late = await this.sealIndexFiles(udid, { onlyPlaintext: true });
       if (late.changed > 0) {
+        lateIndexSealed = late.changed;
         report.failed = Math.max(0, report.failed - late.changed);
+        // Every failure was an index file sealed just now: the walk's codes no longer apply.
+        if (report.failed === 0) report.failedCodes = {};
         this.log("info", "[BackupAtRest] sealed index files the pass could not", { sealedNow: late.changed });
       }
     }
@@ -1117,6 +1121,7 @@ export class BackupAtRest extends EventEmitter {
       damaged: report.damaged,
       failed: report.failed,
       failedCodes: report.failedCodes,
+      ...(lateIndexSealed > 0 ? { lateIndexSealed } : {}),
       tempsRemoved: report.tempsRemoved,
       ms: report.ms,
       plaintextLeft: scan.plaintext,
