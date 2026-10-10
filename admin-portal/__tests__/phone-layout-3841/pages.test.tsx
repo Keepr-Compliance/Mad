@@ -197,10 +197,16 @@ afterEach(cleanup);
 const tokens = (el: Element | null | undefined) => (el?.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
 const has = (el: Element | null | undefined, ...t: string[]) => expect(tokens(el)).toEqual(expect.arrayContaining(t));
 
+// The table is a next/dynamic (React.lazy) chunk, so the first render in this file pays a cold
+// module import/transform; on the Windows runner that exceeded waitFor's 1000ms default.
+const TABLE_LOAD_TIMEOUT = 10_000;
 async function tableLoaded(container: HTMLElement) {
-  await waitFor(() => {
-    if (!container.querySelector('table tbody tr')) throw new Error('table not loaded');
-  });
+  await waitFor(
+    () => {
+      if (!container.querySelector('table tbody tr')) throw new Error('table not loaded');
+    },
+    { timeout: TABLE_LOAD_TIMEOUT }
+  );
 }
 
 describe('C10 wide tables scroll inside their card instead of clipping', () => {
@@ -246,7 +252,7 @@ describe('C11 page restores: phone token present, desktop tokens kept', () => {
     const filterRow = container.querySelector('.mb-4.items-start');
     has(filterRow, 'flex', 'items-start', 'justify-between', 'gap-4', 'max-md:flex-col', 'max-md:gap-3');
     has(filterRow!.lastElementChild, 'flex', 'items-center', 'gap-2', 'max-md:flex-wrap');
-  });
+  }, 20_000);
 
   it('my tickets filter row', async () => {
     const { container } = render(<MyTicketsPage />);
@@ -254,7 +260,7 @@ describe('C11 page restores: phone token present, desktop tokens kept', () => {
     const filterRow = container.querySelector('.mb-4.items-start');
     has(filterRow, 'flex', 'items-start', 'justify-between', 'gap-4', 'max-md:flex-col', 'max-md:gap-3');
     has(filterRow!.lastElementChild, 'flex', 'items-center', 'gap-2', 'max-md:flex-wrap');
-  });
+  }, 20_000);
 
   it('ticket detail: title row, tap targets, note actions visible on touch, reply actions', async () => {
     render(<TicketDetailPage />);
