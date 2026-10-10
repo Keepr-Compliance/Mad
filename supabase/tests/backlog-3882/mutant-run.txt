@@ -6,8 +6,8 @@ PASS|c0 it_admin body md5 is production's|want b0541c6347baf9457cf949f5ec5be1e5 
 PASS|c0 google body md5 is production's|want 621ee65d5283a0224ee05826e5f16eb5 got 621ee65d5283a0224ee05826e5f16eb5
 PASS|c0 it_admin grants are production's|want public=true anon=true authenticated=true service_role=true got public=true anon=true authenticated=true service_role=true
 PASS|c0 google grants are production's|want public=true anon=true authenticated=true service_role=true got public=true anon=true authenticated=true service_role=true
-PASS|c0 unfixed: other-tenant caller is accepted|want ~^OK .*"success": true got OK {"role": "agent", "success": true, "user_id": "{u_x}", "organization_id": "{org_b}"}
-PASS|c0 unfixed: other-tenant caller got a membership in org_b|want agent got agent
+PASS|c0 baseline: caller with a different tenant gets success|want ~^OK .*"success": true got OK {"role": "agent", "success": true, "user_id": "{u_x}", "organization_id": "{org_b}"}
+PASS|c0 baseline: caller has role agent in org_b|want agent got agent
 == c1-other-tenant-existing-org.sql
 PASS|c1 refused with 42501|want ~^ERR 42501 tenant does not match got ERR 42501 tenant does not match the signed-in identity
 PASS|c1 no membership in org_b|want <none> got <none>

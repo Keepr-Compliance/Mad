@@ -1,5 +1,5 @@
--- The caller's user metadata says tenant t_b (as auth.updateUser({data}) can
--- write it); the identity still says t_x. Metadata must not be trusted.
+-- The caller's user metadata says tenant t_b; the identity says t_x.
+-- Only the identity is used.
 UPDATE auth.users SET raw_user_meta_data = jsonb_set(raw_user_meta_data, '{custom_claims,tid}', to_jsonb(pg_temp.tid('t_b')))
  WHERE id = pg_temp.id('u_x');
 SELECT pg_temp.want('c3 fixture: metadata tid is t_b',

@@ -18,7 +18,7 @@ way PostgREST sets it.
 
 | Control | Checks |
 |---|---|
-| c0 | before the migration: both bodies' md5 and EXECUTE grants equal production; the unfixed body lets a caller from another tenant join an existing org |
+| c0 | before the migration: both bodies' md5 and EXECUTE grants equal production; body behaviour equals production's (success and role for a caller whose tenant differs from the org's) |
 | c1 | caller's identity tenant differs from `p_tenant_id`, org exists: 42501, no membership, no `public.users` row |
 | c2 | same, no org exists: 42501, no org created |
 | c3 | user metadata tenant altered to the requested one, identity unchanged: 42501 |
