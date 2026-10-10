@@ -331,9 +331,13 @@ export function queryContacts(
 
   // Store for deduplication, clean up when resolved/rejected
   inflightQueries.set(dedupKey, promise);
-  promise.finally(() => {
-    inflightQueries.delete(dedupKey);
-  });
+  // The caller handles the rejection; the `.finally` copy must not become an unhandled
+  // rejection of its own (BACKLOG-3816: it crashed a jest run on a failed query).
+  promise
+    .finally(() => {
+      inflightQueries.delete(dedupKey);
+    })
+    .catch(() => undefined);
 
   return promise;
 }
