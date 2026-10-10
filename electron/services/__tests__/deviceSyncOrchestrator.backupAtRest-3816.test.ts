@@ -848,3 +848,64 @@ describe.each(["delta", "full"] as const)("SR probe — disconnect -> cancel -> 
     expect(await atRest.forcedFullReason(UDID)).toBeNull();
   });
 });
+
+// PC unplug retest 2026-10-09 (founder's local2 log): after the unplug the seal walked all
+// 576k files newest first; Try Again paused it before it reached Manifest.db, which stayed
+// plaintext. Same real disconnect wiring as the SR probe above, then Try Again at once.
+describe("PC unplug retest — the index is sealed first at the error end; Try Again pauses only the walk", () => {
+  it("disconnect → Manifest.db + plists sealed before any content file → immediate Try Again (also unplugged) → its end leaves nothing plaintext", async () => {
+    const order: string[] = [];
+    atRest = new BackupAtRest({
+      backupsRoot: () => backups,
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => userData }),
+      ensureKey: async () => undefined,
+      freeBytes: async () => Number.MAX_SAFE_INTEGER,
+      sleep: async () => undefined,
+      log: () => undefined,
+      strategy: () => "delta",
+      pauseWaitMs: 20,
+      sealEngineOptions: { beforeSeal: (p) => order.push(p) },
+    });
+    let running = false;
+    let exitWithNull: (() => void) | null = null;
+    (BackupService.prototype.getStatus as unknown as jest.Mock).mockImplementation(() => ({
+      isRunning: running, currentDeviceUdid: running ? UDID : null, progress: null,
+    }));
+    (BackupService.prototype.cancelBackup as unknown as jest.Mock).mockImplementation(() => exitWithNull?.());
+    detector.probeConnectedUdids.mockResolvedValue([]);
+    let n = 0;
+    startBackup.mockImplementation(async () => {
+      running = true;
+      n++;
+      // The index is unsealed (C-DELTA) and the phone sends files newer than it.
+      expect(fsSync.readFileSync(path.join(chain, "Manifest.db")).subarray(0, 7).equals(MAGIC)).toBe(false);
+      const later = new Date(Date.now() + 60_000 * n);
+      for (const d of ["c", "e"]) {
+        write(`${d}${n}/${d.repeat(40)}`, `sent in sync ${n}`);
+        fsSync.utimesSync(path.join(chain, `${d}${n}/${d.repeat(40)}`), later, later);
+      }
+      return new Promise<BackupResult>((resolve) => {
+        exitWithNull = () => {
+          running = false;
+          resolve(fail({ errorCode: undefined, error: "Backup failed with code null" } as Partial<BackupResult>));
+        };
+        setTimeout(() => detector.emit("device-disconnected", { udid: UDID, name: "x" }), 5);
+      });
+    });
+    const o = newOrchestrator();
+    (o as unknown as { disconnectConfirmDelayMs: number }).disconnectConfirmDelayMs = 1;
+    order.length = 0;
+    expect((await o.sync({ udid: UDID })).success).toBe(false);
+    const firstSeal = o.lastAtRestSeal;
+    // Try Again at once: the first end's walk gives way; the index was sealed already.
+    expect((await o.sync({ udid: UDID })).success).toBe(false);
+    await firstSeal;
+    const root = (p: string) => path.dirname(p) === chain;
+    const firstContent = order.findIndex((p) => !root(p));
+    expect(order.slice(0, firstContent).map((p) => path.basename(p)).sort()).toEqual(
+      ["Info.plist", "Manifest.db", "Manifest.plist", "Status.plist"],
+    );
+    await sealedAfter(o);
+  });
+});

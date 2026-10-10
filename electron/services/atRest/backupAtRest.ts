@@ -99,6 +99,30 @@ export const FORCE_FULL_REASON_DELTA_TOOL_FAILED = "DELTA_TOOL_FAILED";
 /** Files C-DELTA unseals before `idevicebackup2` runs: the index and the root plists. */
 export const DELTA_UNSEAL_FILES: readonly string[] = ["Manifest.db", ...BACKUP_ROOT_PLISTS];
 
+/**
+ * The index files sealed FIRST, in their own small pass, at the end of every sync (and
+ * by every reseal), before the walk over the content files (BACKLOG-3816, PC unplug
+ * retest 2026-10-09: the 1 GB Manifest.db was still plaintext minutes after the
+ * disconnect while the files the phone sent were sealed). SQLite's side files are
+ * included when present; C-DELTA never unseals them.
+ */
+export const INDEX_SEAL_FILES: readonly string[] = [
+  "Manifest.db",
+  "Manifest.db-wal",
+  "Manifest.db-shm",
+  "Manifest.db-journal",
+  ...BACKUP_ROOT_PLISTS,
+];
+
+/**
+ * Waits between attempts to seal an index file that is locked (antivirus, indexer) or
+ * changed while it was read: about 7.75 s in all, on top of the seal engine's own three
+ * quick attempts. Bounded by attempts, not by a clock, so a slow seal of a 1 GB
+ * Manifest.db is never cut off. The idle recovery (5 min) is no longer the next try.
+ */
+export const INDEX_SEAL_RETRY_DELAYS_MS: readonly number[] = [250, 500, 1000, 2000, 4000];
+const INDEX_RETRYABLE_CODES: ReadonlySet<string> = new Set(["EBUSY", "EPERM", "EACCES", "INTEGRITY"]);
+
 /** The founder-approved sentence for the "securing your backup" phase (and only it). */
 export const BACKUP_SECURING_SENTENCE = "Syncing your iPhone will be available when this finishes.";
 export const BACKUP_SECURING_MESSAGE = `Keepr is securing your saved iPhone backup. ${BACKUP_SECURING_SENTENCE}`;
@@ -987,6 +1011,11 @@ export class BackupAtRest extends EventEmitter {
     // Says what is happening (status and UI read it) and protects the chain meanwhile.
     // A first backup (no Manifest.db yet) gets no marker, so 3598 can still remove it.
     if (await exists(path.join(chain, "Manifest.db"))) await this.setMarker(udid, markerWhile);
+    // The index files first, whatever their age (PC 2026-10-09: the walk below, newest
+    // first over all 576k files, was paused by Try Again before it reached Manifest.db).
+    // NOT pausable: a sync asking for this phone waits for these few files (seconds, plus
+    // the bounded lock retries) and only the walk below gives way to it.
+    await this.sealIndexFiles(udid);
     const report = await this.seal(udid, onProgress, phase);
     if (report.paused) {
       // A sync asked for this phone. The marker stays as it is (migrating / syncing), so
@@ -995,9 +1024,22 @@ export class BackupAtRest extends EventEmitter {
         phase,
         files: report.files,
         sealedNow: report.changed,
+        failed: report.failed,
+        failedCodes: report.failedCodes,
         ms: report.ms,
       });
       return "paused";
+    }
+    // An index file that was still locked: one more round now that the walk is over
+    // (minutes on a large chain), instead of the idle recovery's full walk 5 min later.
+    // A file still plaintext after the pass is one the pass failed on, so each one sealed
+    // here is one failure fewer.
+    if (report.failed > 0) {
+      const late = await this.sealIndexFiles(udid, { onlyPlaintext: true });
+      if (late.changed > 0) {
+        report.failed = Math.max(0, report.failed - late.changed);
+        this.log("info", "[BackupAtRest] sealed index files the pass could not", { sealedNow: late.changed });
+      }
     }
     const indexed = await exists(path.join(chain, "Manifest.db"));
     const scan = await this.checkAfterSeal(udid, report);
@@ -1396,26 +1438,72 @@ export class BackupAtRest extends EventEmitter {
     return Promise.race([work, bound]).finally(() => clearTimeout(timer));
   }
 
-  /** Seal only Manifest.db and the root plists of `udid` (no scan, no marker change). */
-  async sealIndexFiles(udid: string): Promise<PassReport> {
+  /**
+   * Seal only the index files of `udid` ({@link INDEX_SEAL_FILES}: Manifest.db, its SQLite
+   * side files if present, and the root plists). No scan, no marker change. A file that
+   * is locked or changed while read is tried again after {@link INDEX_SEAL_RETRY_DELAYS_MS}.
+   * Never paused by a sync waiting for the phone: the step is short and must complete.
+   * `onlyPlaintext`: leave out files already sealed (a cheap header check first).
+   */
+  async sealIndexFiles(udid: string, opts: { onlyPlaintext?: boolean } = {}): Promise<PassReport> {
     const started = Date.now();
     const report = emptyReport();
     const chain = this.chainDir(udid);
     if (await isAppleEncryptedChain(chain, this.readPlist)) return report;
-    const listed: ListedFile[] = [];
-    for (const rel of DELTA_UNSEAL_FILES) {
+    let pending: ListedFile[] = [];
+    for (const rel of INDEX_SEAL_FILES) {
+      const full = path.join(chain, rel);
       try {
-        listed.push({ path: path.join(chain, rel), size: (await fs.promises.lstat(path.join(chain, rel))).size });
+        const st = await fs.promises.lstat(full);
+        if (!st.isFile()) continue;
+        if (opts.onlyPlaintext && (await this.classify(full, st.size)) !== "plaintext") continue;
+        pending.push({ path: full, size: st.size });
       } catch {
-        // absent: nothing to seal
+        // absent (or gone meanwhile): nothing to seal
       }
     }
-    report.files = listed.length;
-    if (listed.length === 0) return report;
+    report.files = pending.length;
+    if (pending.length === 0) return report;
     const key = await this.sealKey();
-    const result = await this.pass(listed, "seal", key, undefined, (_i, outcomes) => outcomes.forEach((o) => this.tally(report, o)));
-    await pool([...result.touchedDirs], 4, (dir) => fsyncDir(dir));
+    const touched = new Set<string>();
+    for (let attempt = 0; pending.length > 0; attempt++) {
+      const batch = pending;
+      const result = await this.pass(batch, "seal", key, undefined);
+      for (const d of result.touchedDirs) touched.add(d);
+      const again: ListedFile[] = [];
+      const lastTry = attempt >= INDEX_SEAL_RETRY_DELAYS_MS.length;
+      batch.forEach((f, i) => {
+        const o = result.outcomes[i] ?? { v: "failed" as const, code: "UNKNOWN" };
+        if (o.v === "failed" && !lastTry && INDEX_RETRYABLE_CODES.has(o.code ?? "")) again.push(f);
+        else {
+          this.tally(report, o);
+          if (o.v === "failed") {
+            this.log("warn", "[BackupAtRest] could not seal an index file", {
+              file: path.basename(f.path),
+              code: o.code,
+              attempts: attempt + 1,
+            });
+          }
+        }
+      });
+      pending = again;
+      if (pending.length === 0) break;
+      this.log("info", "[BackupAtRest] an index file is locked; trying again shortly", {
+        files: pending.map((f) => path.basename(f.path)),
+        attempt: attempt + 1,
+      });
+      await this.sleep(INDEX_SEAL_RETRY_DELAYS_MS[attempt]);
+    }
+    await pool([...touched], 4, (dir) => fsyncDir(dir));
     report.ms = Date.now() - started;
+    if (report.changed > 0 || report.failed > 0) {
+      this.log("info", "[BackupAtRest] index files sealed", {
+        sealedNow: report.changed,
+        failed: report.failed,
+        failedCodes: report.failedCodes,
+        ms: report.ms,
+      });
+    }
     return report;
   }
 
