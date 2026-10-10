@@ -637,6 +637,39 @@ const NOT_A_TOOL_FAILURE_CODES: ReadonlySet<string> = new Set([
   "BACKUP_PASSWORD_UNAVAILABLE",
 ]);
 
+/** BACKLOG-3816: returned by `raceCancel` when the sync was cancelled first. */
+const PREFLIGHT_CANCELLED = Symbol("preflight-cancelled");
+
+/**
+ * BACKLOG-3816: settle with the step's value, or with PREFLIGHT_CANCELLED as soon as
+ * the sync is cancelled. Used only for read-only pre-flight steps: the step itself
+ * may keep running, but nothing waits for it. A step that rejects after a cancel is
+ * swallowed (no unhandled rejection).
+ */
+function raceCancel<T>(signal: AbortSignal, step: Promise<T>): Promise<T | typeof PREFLIGHT_CANCELLED> {
+  if (signal.aborted) {
+    step.catch(() => undefined);
+    return Promise.resolve(PREFLIGHT_CANCELLED);
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      step.catch(() => undefined);
+      resolve(PREFLIGHT_CANCELLED);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    step.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
 export class DeviceSyncOrchestrator extends EventEmitter {
   private deviceService: DeviceDetectionService;
   private backupService: BackupService;
@@ -896,6 +929,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.priorBackup = "unknown";
     this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
+    // BACKLOG-3816: this frame's own cancel token. Read from here on, never through
+    // `this.abortController`, which a later frame replaces.
+    const preflightSignal = this.abortController.signal;
     this.startTime = Date.now();
     this.estimatedBackupSize = 0;
 
@@ -929,6 +965,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // left behind (including ones left by builds before this one). BEFORE the disk
       // check, so a leftover cannot fail the very check that would reclaim its space.
       await this.sweepLeftoverBackups();
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "leftover-sweep");
 
       // TASK-2276: Pre-sync checks with user-facing error messages
       // Check disk space using the diagnostic utility (enriched errors for UI)
@@ -937,6 +974,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       while (!diskCheck.sufficient && (await this.deleteOldestQuarantined())) {
         diskCheck = await checkDiskSpaceForOperation("sync");
       }
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "disk-check");
       if (!diskCheck.sufficient) {
         const userError = formatDiskSpaceError(diskCheck.availableMB, diskCheck.requiredMB);
         log.warn("[DeviceSyncOrchestrator] Pre-sync disk space check failed", {
@@ -953,6 +991,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       let serviceRunning = true;
       if (process.platform === "win32") {
         const driverStatus = await checkAppleDrivers();
+        if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "driver-check");
         driversInstalled = driverStatus.isInstalled;
         serviceRunning = driverStatus.serviceRunning;
         if (!driverStatus.isInstalled) {
@@ -1033,7 +1072,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       });
 
       // Check if there's an existing backup (could be complete or interrupted)
-      const backupStatus = await this.backupService.checkBackupStatus(options.udid);
+      // BACKLOG-3816: on a large backup this walk takes minutes (576k files on the PC,
+      // ~135 s). It stops at the next file on cancel, and the sync does not wait for it.
+      const backupStatus = await raceCancel(
+        preflightSignal,
+        this.backupService.checkBackupStatus(options.udid, { signal: preflightSignal }),
+      );
+      if (backupStatus === PREFLIGHT_CANCELLED) {
+        return this.endCancelledPreflight(preflightSignal, "backup-status");
+      }
       // BACKLOG-2907 + BACKLOG-2917: record what this check actually established.
       //
       // #2413 wrote `backupStatus?.exists === true ? "exists" : "unknown"` and
@@ -1277,7 +1324,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           });
 
           // Brief pause to let user see this message
-          await new Promise(resolve => setTimeout(resolve, 1500));
+          await raceCancel(preflightSignal, new Promise(resolve => setTimeout(resolve, 1500)));
 
           this.emitProgress({
             phase: "backup",
@@ -1394,6 +1441,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           message: "Preparing first sync (this may take a while)...",
         });
       }
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "prior-backup");
 
       // BACKLOG-2899: Refuse up front when free space is ALREADY below the
       // reserve the mid-transfer monitor defends. Same constant, same semantic:
@@ -1414,6 +1462,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         await this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES),
         () => this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES),
       );
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "reserve-check");
       // BACKLOG-2914 (FIX 4): host disk, from the reading the guard already took.
       if (!reserveCheck.unavailable) {
         syncTimeline.setContext({
@@ -1446,7 +1495,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       }
 
       // Step 1: Get device storage info to estimate backup size
-      const storageInfo = await this.deviceService.getDeviceStorageInfo(options.udid);
+      const storageInfoOrCancel = await raceCancel(
+        preflightSignal,
+        this.deviceService.getDeviceStorageInfo(options.udid),
+      );
+      if (storageInfoOrCancel === PREFLIGHT_CANCELLED) {
+        return this.endCancelledPreflight(preflightSignal, "storage-query");
+      }
+      const storageInfo = storageInfoOrCancel;
       // BACKLOG-2914 (FIX 4): what the phone itself is carrying. Already fetched for
       // the estimate; recorded rather than discarded.
       if (storageInfo) {
@@ -1571,6 +1627,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       const headroom = estimate.source === "existing-backup" ? 1.1 : 1.5;
       const requiredSpace = this.estimatedBackupSize * headroom;
       const diskSpaceCheck = await this.checkAvailableDiskSpace(requiredSpace);
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "estimate-disk-check");
 
       if (!diskSpaceCheck.hasEnoughSpace) {
         // THE RESIDUAL, NAMED. A KNOWN estimate that does not fit still only warns and
@@ -1593,7 +1650,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           message: `Low disk space (${availableGB} GB free). Backup may fail — consider freeing up space.`,
         });
         // Brief pause so user can see the warning
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await raceCancel(preflightSignal, new Promise(resolve => setTimeout(resolve, 3000)));
       } else {
         log.info(`[DeviceSyncOrchestrator] Disk space check passed: ${Math.round(diskSpaceCheck.availableSpace / 1024 / 1024 / 1024)} GB available`);
       }
@@ -1609,11 +1666,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // BACKLOG-3817: a parse copy left by a crash or a killed quit holds plaintext. No
       // other sync can be running here (isRunning), so every copy is stale.
       await this.sweepParseCopies();
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "parse-copy-sweep");
 
       // BACKLOG-3817: the password for an encrypted backup — the one the user just typed,
       // else the one saved for this phone. A saved password that cannot be unlocked stops
       // the sync: it is never replaced and encryption is never turned off to get past it.
       const passwordPlan = await this.resolveBackupPassword(options.udid, options.password);
+      // BACKLOG-3816: the last check before the at-rest pause is requested. A cancelled
+      // sync never asks a background seal to pause.
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "password");
       if (passwordPlan.kind === "unavailable") {
         log.warn("[DeviceSyncOrchestrator] Saved backup password unavailable", {
           reason: passwordPlan.reason,
@@ -1654,7 +1715,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           atRestSession = await this.atRest().beginSync(options.udid, {
             onProgress: (p) => this.emitAtRestProgress(p),
             underLock,
-            signal: this.abortController?.signal,
+            signal: preflightSignal,
           });
         } catch (error) {
           // A failure of the new-chain step is an ordinary sync error, not a refusal.
@@ -3508,6 +3569,27 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   /**
    * Create an error result
    */
+  /**
+   * BACKLOG-3816: a cancel noticed during pre-flight ends the frame at once. The run
+   * row closes now (at the cancel, not after the remaining checks). If a newer frame
+   * already owns the orchestrator, this frame touches nothing shared.
+   */
+  private endCancelledPreflight(signal: AbortSignal, step: string): SyncResult {
+    log.info("[DeviceSyncOrchestrator] Sync cancelled during pre-flight; stopping", { step });
+    if (this.abortController?.signal !== signal) {
+      return {
+        success: false,
+        messages: [],
+        contacts: [],
+        conversations: [],
+        error: "Sync cancelled by user",
+        duration: Date.now() - this.startTime,
+      };
+    }
+    this.isRunning = false;
+    return this.errorResult("Sync cancelled by user");
+  }
+
   private errorResult(error: string): SyncResult {
     // BACKLOG-2898: close the timeline on every failure and cancel path.
     // The guard distinguishes the ONE reentrant caller ("Sync already in

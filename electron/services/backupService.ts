@@ -2445,8 +2445,10 @@ export class BackupService extends EventEmitter {
    * not exist genuinely holds 0 bytes, and a file that vanished between `readdir` and
    * `stat` is a normal race in a directory the device is still writing to.
    */
-  private async measureBackupSize(backupPath: string): Promise<BackupSizeReading> {
+  private async measureBackupSize(backupPath: string, signal?: AbortSignal): Promise<BackupSizeReading> {
     try {
+      // BACKLOG-3816: a cancelled sync stops the walk at the next entry.
+      if (signal?.aborted) return { measured: false, reason: "cancelled" };
       let totalSize = 0;
       // Atomic: attempt readdir directly, handle ENOENT if path disappeared
       let files: import("fs").Dirent[];
@@ -2460,9 +2462,10 @@ export class BackupService extends EventEmitter {
       }
 
       for (const file of files) {
+        if (signal?.aborted) return { measured: false, reason: "cancelled" };
         const filePath = path.join(backupPath, file.name);
         if (file.isDirectory()) {
-          const subtree = await this.measureBackupSize(filePath);
+          const subtree = await this.measureBackupSize(filePath, signal);
           // The defect this replaces: an unmeasurable subtree used to contribute 0
           // and the parent reported a short total as if it were a measurement.
           if (!subtree.measured) {
@@ -2527,7 +2530,7 @@ export class BackupService extends EventEmitter {
    * @param udid Device UDID
    * @returns Which of the three states was established, never a collapsed `null`
    */
-  async checkBackupStatus(udid: string): Promise<BackupStatusReport> {
+  async checkBackupStatus(udid: string, opts: { signal?: AbortSignal } = {}): Promise<BackupStatusReport> {
     // BACKLOG-1123: Validate UDID before using in path operations
     const validatedUdid = validateDeviceUdid(udid);
     const backupPath = this.getDefaultBackupPath();
@@ -2547,7 +2550,7 @@ export class BackupService extends EventEmitter {
         throw err;
       }
 
-      const size = await this.measureBackupSize(deviceBackupPath);
+      const size = await this.measureBackupSize(deviceBackupPath, opts.signal);
 
       // Check for key files atomically by attempting to access them directly
       const manifestPath = path.join(deviceBackupPath, "Manifest.db");
