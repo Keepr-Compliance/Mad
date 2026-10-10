@@ -67,4 +67,41 @@ describe("useAttachmentPreview (BACKLOG-3476)", () => {
     expect(result.current.preview).toBeNull();
     expect(result.current.message).toBe(ATTACHMENT_DOWNLOAD_FAILED);
   });
+
+  it("BACKLOG-3884: open resolves false on failure; retry re-runs the same download and resolves true", async () => {
+    tx()
+      .ensureEmailAttachmentDownloaded.mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce({ success: true, data: [{ ...row({}), storage_path: "/data/scan.pdf" }] });
+    const { result } = renderHook(() => useAttachmentPreview());
+    let first: boolean | undefined;
+    await act(async () => {
+      first = await result.current.open(row({}));
+    });
+    expect(first).toBe(false);
+    expect(result.current.message).toBe(ATTACHMENT_DOWNLOAD_FAILED);
+
+    let second: boolean | undefined;
+    await act(async () => {
+      second = await result.current.retry();
+    });
+    expect(second).toBe(true);
+    expect(tx().ensureEmailAttachmentDownloaded).toHaveBeenNthCalledWith(2, "e1");
+    expect(result.current.preview?.storage_path).toBe("/data/scan.pdf");
+    expect(result.current.message).toBeNull();
+  });
+
+  it("BACKLOG-3884: an email view row (email_id, no source) is downloaded first", async () => {
+    tx().ensureEmailAttachmentDownloaded.mockResolvedValue({
+      success: true,
+      data: [{ ...row({}), storage_path: "/data/scan.pdf" }],
+    });
+    const { result } = renderHook(() => useAttachmentPreview());
+    await act(async () => {
+      await result.current.open({
+        id: "a1", filename: "scan.pdf", mime_type: "application/pdf", file_size_bytes: 100, storage_path: null, email_id: "e1",
+      });
+    });
+    expect(tx().ensureEmailAttachmentDownloaded).toHaveBeenCalledWith("e1");
+    expect(result.current.preview?.storage_path).toBe("/data/scan.pdf");
+  });
 });
