@@ -207,6 +207,8 @@ export interface BackupAtRestProgress {
  * PC benchmark gives the Windows figures.
  */
 export const PROGRESS_FILE_WEIGHT_BYTES = 256 * 1024;
+/** File times are compared with the unseal time this loosely (coarse file-system timestamps). */
+export const SYNC_MTIME_SLACK_MS = 2000;
 /**
  * Quit (BACKLOG-3816): how long a quit waits while the unsealed index files (Manifest.db,
  * up to ~1 GB, and the three root plists) are sealed. Measured: a 1 GB file seals in
@@ -470,6 +472,13 @@ export class BackupAtRest extends EventEmitter {
   private readonly idleBackoff = new Map<string, { failures: number; nextAt: number }>();
   /** Phones whose index files a sync unsealed and no seal has closed yet (sealed first on quit). */
   private readonly indexUnsealed = new Set<string>();
+  /**
+   * When each phone's chain was unsealed for the current sync (C-DELTA only), in memory:
+   * the post-sync seal counts files written since then as its work. Taken BEFORE the
+   * `syncing` marker is written, and not read from the marker, because `sealAndRecord`
+   * overwrites the marker's time before it seals. Absent = state unknown = whole chain.
+   */
+  private readonly syncUnsealedAt = new Map<string, number>();
 
   constructor(private readonly deps: BackupAtRestDeps) {
     super();
@@ -734,7 +743,19 @@ export class BackupAtRest extends EventEmitter {
       return report;
     }
     const notify = this.progressSink(onProgress);
-    const totalUnits = listed.reduce((sum, f) => sum + f.size + PROGRESS_FILE_WEIGHT_BYTES, 0);
+    // The percentage and the ETA measure the work THIS pass will do, with ZERO extra opens
+    // (BACKLOG-3816): the estimate comes from the listing's mtimes, then the seal workers'
+    // own per-file verdicts correct it as they run. Every file is still handed to the
+    // pass; the estimate is only a denominator.
+    //   - after a sync, the files written since the chain was unsealed for it, plus the
+    //     index files C-DELTA unsealed;
+    //   - anywhere the state is unknown (launch migration, recovery, a new process) the
+    //     whole chain.
+    const since = phase === "sealing" ? this.syncUnsealedAt.get(udid) : undefined;
+    const indexPaths = new Set(DELTA_UNSEAL_FILES.map((rel) => path.join(chain, rel)));
+    const counted = listed.map((f) => since === undefined || indexPaths.has(f.path) || (f.mtimeMs ?? Infinity) >= since - SYNC_MTIME_SLACK_MS);
+    const unitsOf = (f: ListedFile): number => f.size + PROGRESS_FILE_WEIGHT_BYTES;
+    let totalUnits = listed.reduce((sum, f, i) => sum + (counted[i] ? unitsOf(f) : 0), 0);
     let done = 0;
     let doneUnits = 0;
     let lastEmit = Date.now();
@@ -750,7 +771,18 @@ export class BackupAtRest extends EventEmitter {
       outcomes.forEach((o, k) => {
         this.tally(report, o);
         done++;
-        doneUnits += listed[indexes[k]].size + PROGRESS_FILE_WEIGHT_BYTES;
+        // Correct the estimate from the verdict: a file with nothing to seal leaves the
+        // total; a file that needed work the estimate missed joins both sides.
+        const i = indexes[k];
+        const units = unitsOf(listed[i]);
+        const nothingToSeal = o.v === "sealed" || o.v === "empty" || o.v === "gone" || o.v === "damaged";
+        if (nothingToSeal) {
+          if (counted[i]) totalUnits -= units;
+        } else {
+          if (!counted[i]) totalUnits += units;
+          doneUnits += units;
+        }
+        counted[i] = false; // resolved: never adjusted again
       });
       const now = Date.now();
       if (now - lastLog >= PROGRESS_LOG_INTERVAL_MS && done < listed.length) {
@@ -762,7 +794,7 @@ export class BackupAtRest extends EventEmitter {
           sealedNow: report.changed,
           already: report.already,
           failed: report.failed,
-          pct: Math.floor((doneUnits / totalUnits) * 100),
+          pct: totalUnits > 0 ? Math.floor((doneUnits / totalUnits) * 100) : 100,
         });
       }
       if (now - lastEmit >= PROGRESS_INTERVAL_MS && done < listed.length) {
@@ -782,7 +814,7 @@ export class BackupAtRest extends EventEmitter {
     // marker can say `encrypted` (see sealEngine.ts: a lost rename leaves the plaintext,
     // never loses it).
     await pool([...result.touchedDirs], 4, (dir) => fsyncDir(dir));
-    if (!result.stopped) notify({ udid, phase, done: listed.length, total: listed.length, doneUnits: totalUnits, totalUnits });
+    if (!result.stopped) notify({ udid, phase, done: listed.length, total: listed.length, doneUnits, totalUnits: doneUnits });
     report.ms = Date.now() - started;
     return report;
   }
@@ -1026,6 +1058,7 @@ export class BackupAtRest extends EventEmitter {
     if (scan.plaintext === 0) {
       await this.setMarker(udid, "encrypted");
       this.indexUnsealed.delete(udid);
+      this.syncUnsealedAt.delete(udid);
       return "encrypted";
     }
     await this.setMarker(udid, markerWhile);
@@ -1152,6 +1185,8 @@ export class BackupAtRest extends EventEmitter {
       // the seal at the end of this sync seals every plaintext file it finds. The launch
       // job still seals such a chain when no sync comes first.
       // From the first unsealed byte on, the marker says `syncing`.
+      if (strategy === "full") this.syncUnsealedAt.delete(udid);
+      else this.syncUnsealedAt.set(udid, Date.now());
       await this.setMarker(udid, "syncing");
       this.indexUnsealed.add(udid);
       const report =
@@ -1218,6 +1253,7 @@ export class BackupAtRest extends EventEmitter {
     });
     await this.removeMarker(udid);
     this.indexUnsealed.delete(udid);
+    this.syncUnsealedAt.delete(udid);
     this.log("warn", "[BackupAtRest] moved an unreadable backup to quarantine; this sync makes a full backup", {
       reasonCode,
     });
