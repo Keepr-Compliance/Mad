@@ -61,7 +61,7 @@ beforeEach(() => {
 });
 
 async function renderAndExpand() {
-  render(<EmailViewModal email={makeEmail()} onClose={() => undefined} />);
+  render(<EmailViewModal email={makeEmail()} onClose={() => undefined} onRemoveFromTransaction={() => undefined} />);
   await screen.findByText("1 attachment");
   fireEvent.click(screen.getByRole("button", { name: /1 attachment/ }));
   return screen.findByTestId("attachment-att-1");
