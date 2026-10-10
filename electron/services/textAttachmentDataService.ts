@@ -35,6 +35,13 @@ import {
 /** Largest file served inline (decrypted size). A larger image shows its placeholder instead. */
 export const MAX_INLINE_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
+let maxInlineBytes = MAX_INLINE_ATTACHMENT_BYTES;
+
+/** Tests only: a small cap keeps encrypted fixtures tiny. Pass `null` to restore the default. */
+export function setMaxInlineAttachmentBytesForTests(bytes: number | null): void {
+  maxInlineBytes = bytes ?? MAX_INLINE_ATTACHMENT_BYTES;
+}
+
 /** Attachment ids are UUIDs; anything with a path character is refused unread. */
 const ATTACHMENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -88,7 +95,7 @@ export async function getTextAttachmentData(
     const stat = await handle.stat();
     if (!stat.isFile()) return { success: false, reason: "missing_file" };
     const { size } = await statOpenAttachment(resolved.realPath, handle);
-    if (size > MAX_INLINE_ATTACHMENT_BYTES) {
+    if (size > maxInlineBytes) {
       return { success: false, reason: "too_large" };
     }
     const buffer = await readOpenAttachment(resolved.realPath, handle);

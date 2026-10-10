@@ -122,7 +122,10 @@ jest.mock("../../services/importPlanInputs", () => ({
 }));
 
 import { registerMessageImportHandlers } from "../messageImportHandlers";
-import { MAX_INLINE_ATTACHMENT_BYTES } from "../../services/textAttachmentDataService";
+import {
+  MAX_INLINE_ATTACHMENT_BYTES,
+  setMaxInlineAttachmentBytesForTests,
+} from "../../services/textAttachmentDataService";
 import { Readable } from "stream";
 import crypto from "crypto";
 import { setAttachmentReaderDepsForTests } from "../../services/atRest/attachmentReader";
@@ -469,6 +472,7 @@ describe("messages:get-attachment-data (BACKLOG-3763)", () => {
   });
 
   it("refuses a file over the size cap, and serves one exactly at it", async () => {
+    expect(MAX_INLINE_ATTACHMENT_BYTES).toBe(25 * 1024 * 1024);
     seedMessage("msg-3763-big", USER_A, "guid-3763-big");
     const big: SeededAttachment = {
       id: "att3763-big",
@@ -532,16 +536,18 @@ describe("messages:get-attachment-data (BACKLOG-3763)", () => {
         return key;
       },
     };
-    // 4 KiB chunks, each followed by a 16-byte tag: 64 KiB under the cap in
-    // plaintext puts the file on disk just over the cap (~6.4k chunks, fast).
-    const files = createFileCrypto(resolver, { chunkSize: 4096 });
+    // A 4 KiB cap for this test only. 16-byte chunks each carry a 16-byte tag, so
+    // 4000 bytes of plaintext (under the cap) is ~8 KB on disk (over it).
+    const cap = 4096;
+    setMaxInlineAttachmentBytesForTests(cap);
+    const files = createFileCrypto(resolver, { chunkSize: 16 });
     setAttachmentReaderDepsForTests({
       files: () => files,
       markers: () => createMarkerStore({ userData: () => userData }),
       userData: () => userData,
     });
     try {
-      const plain = Buffer.alloc(MAX_INLINE_ATTACHMENT_BYTES - 64 * 1024, 0x42);
+      const plain = Buffer.alloc(4000, 0x42);
       seedMessage("msg-3763-encbig", USER_A, "guid-3763-encbig");
       const att: SeededAttachment = {
         id: "att3763-encbig",
@@ -554,16 +560,17 @@ describe("messages:get-attachment-data (BACKLOG-3763)", () => {
       mkdirSync(path.dirname(att.storage_path), { recursive: true });
       await files.encryptStreamToFile(Readable.from([plain]), att.storage_path);
       const onDisk = statSync(att.storage_path).size;
-      expect(onDisk).toBeGreaterThan(MAX_INLINE_ATTACHMENT_BYTES);
-      expect(plain.length).toBeLessThan(MAX_INLINE_ATTACHMENT_BYTES);
+      expect(onDisk).toBeGreaterThan(cap);
+      expect(plain.length).toBeLessThan(cap);
       seedAttachment(att);
       const result = await call(att.id);
       expect(result.success).toBe(true);
       expect(Buffer.from(result.data!, "base64").equals(plain)).toBe(true);
     } finally {
       setAttachmentReaderDepsForTests(null);
+      setMaxInlineAttachmentBytesForTests(null);
     }
-  }, 60000);
+  });
 
   it("serves the plaintext of an attachment stored as KEPRENC ciphertext (BACKLOG-3816)", async () => {
     const key = crypto.randomBytes(32);
