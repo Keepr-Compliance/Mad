@@ -58,6 +58,7 @@ import {
   type ExpansionChangeSnapshot,
 } from "./db/expansionChangeTracker";
 import { DedicatedWorkerError, isPoolReady, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
+import { warmSourceCoverage } from "./sourceCoverageFloors";
 import {
   normalizeAddress,
   contentContainsAddress,
@@ -1368,6 +1369,13 @@ const AUTO_LINK_DEBOUNCE_MS = 2000; // 2 seconds
 export async function autoLinkNewMessagesForUser(
   userId: string
 ): Promise<AutoLinkNewMessagesResult> {
+  // BACKLOG-3837: every sync / import end comes through here — warm the audit coverage
+  // floors on a dedicated worker (fire-and-forget, off main). Never blocks the link.
+  try {
+    warmSourceCoverage(userId);
+  } catch {
+    // best effort
+  }
   const startTime = Date.now();
   const result: AutoLinkNewMessagesResult = {
     pairsProcessed: 0,

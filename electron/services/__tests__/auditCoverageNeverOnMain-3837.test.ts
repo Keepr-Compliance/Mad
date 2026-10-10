@@ -54,6 +54,7 @@ import {
   setSourceFloorsWaitMsForTests,
 } from "../auditCoverageService";
 import { MESSAGES_FLOOR_BY_SOURCE_SQL } from "../db/auditCoverageSql";
+import { autoLinkNewMessagesForUser } from "../autoLinkService";
 import type { DedicatedQueryFailure } from "../../workers/contactWorkerPool";
 
 const DRIVER = nodePath.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers");
@@ -337,7 +338,33 @@ maybe("BACKLOG-3837: the coverage check never scans on main (real worker, encryp
     expect(afterDelete).toEqual(first);
     expect(scanOnMain()).toBe(false);
   }, 900_000);
+
+  it("a sync end warms the cache: the first Continue within the 4 s window gets real gaps, not pending", async () => {
+    setSourceFloorsWaitMsForTests(null); // the production budget (4 s)
+    // A read slower than the budget, as on the PC after a sync (cold, contended).
+    const realQuery = pool.queryOnDedicatedWorker; // captured before the spy replaces it
+    const spy = jest.spyOn(pool, "queryOnDedicatedWorker").mockImplementation(async (type, userId, timeoutMs, extras) => {
+      if (type === "sourceCoverageFloors") await new Promise((r) => setTimeout(r, SLOW_READ_MS));
+      return realQuery(type, userId, timeoutMs, extras);
+    });
+    // The sync wrote messages (new token), then reached the post-sync auto-link.
+    main.prepare(addMessageSql).run(...iphoneRow("m-synced", new Date(FIRST_SENT_MS + MESSAGES * 60_000).toISOString()));
+    await autoLinkNewMessagesForUser(USER);
+    await new Promise((r) => setTimeout(r, SLOW_READ_MS + 1_000)); // the user fills in step 1
+    const t0 = Date.now();
+    const result = await getAuditCoverage(USER, AUDIT_START);
+    const ms = Date.now() - t0;
+    expect(result.sourceCoveragePending).toBeUndefined();
+    expect(result.sourceGaps?.map((g) => `${g.source}:${g.kind}`).sort()).toEqual(["google_messages:never", "iphone:later"]);
+    expect(floorsCalls(spy)).toBe(1); // the warm read; Continue was a cache hit
+    expect(ms).toBeLessThan(4_000);
+    expect(scanOnMain()).toBe(false);
+    main.prepare("DELETE FROM messages WHERE id = 'm-synced'").run();
+  }, 120_000);
 });
+
+/** Slower than the 4 s Continue budget. */
+const SLOW_READ_MS = 5_000;
 
 /** Long enough for a real dedicated read of the fixture on a slow runner. */
 const SHARED_POOL_BUDGET_MS = 120_000;

@@ -22,7 +22,7 @@
 
 import os from "os";
 import * as Sentry from "@sentry/electron/main";
-import { dbGet, dbAll, dbRun, ensureDb } from "./db/core/dbConnection";
+import { dbGet, dbAll, dbRun } from "./db/core/dbConnection";
 import {
   EMAIL_SYNC_FLOOR_SQL,
   MESSAGES_FLOOR_SQL,
@@ -37,8 +37,15 @@ import { getRcsCacheRun } from "./db/rcsCacheRunsDbService";
 import { getChatCoverage, linkedChatHashes } from "./db/rcsChatCoverageDbService";
 import permissionService from "./permissionService";
 import logService from "./logService";
-import { queryOnDedicatedWorker } from "../workers/contactWorkerPool";
-import { readSourceCoverageInputToken, sourceCoverageTokenKey } from "./db/sourceCoverageInputTracker";
+import { getSourceFloorsWaitMs, readSourceFloors } from "./sourceCoverageFloors";
+// Test helpers and the warm entry point live with the cache (Electron-free module).
+export {
+  SOURCE_FLOORS_WAIT_MS,
+  SOURCE_FLOORS_WORKER_TIMEOUT_MS,
+  resetSourceFloorsCacheForTests,
+  setSourceFloorsWaitMsForTests,
+  warmSourceCoverage,
+} from "./sourceCoverageFloors";
 import type { SourceFloorRow } from "./db/wizardMessageScansDb";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
 // BACKLOG-2562: the ONE definition of "is this deal live?" (see the call site).
@@ -100,64 +107,6 @@ export function getSourceCoverage(userId: string): SourceCoverage[] {
  * No path reads the floors on main: a worker that cannot start, fails, or times out
  * leaves the answer unknown (`null`), never "covered".
  */
-export const SOURCE_FLOORS_WAIT_MS = 4_000;
-export const SOURCE_FLOORS_WORKER_TIMEOUT_MS = 10 * 60_000;
-let sourceFloorsWaitMs = SOURCE_FLOORS_WAIT_MS;
-
-const floorsCache = new Map<string, { key: string; rows: SourceFloorRow[] }>();
-const floorsInFlight = new Map<string, Promise<SourceFloorRow[] | null>>();
-
-/** Test-only: the wait budget, and a clean cache between cases. */
-export function setSourceFloorsWaitMsForTests(ms: number | null): void {
-  sourceFloorsWaitMs = ms ?? SOURCE_FLOORS_WAIT_MS;
-}
-export function resetSourceFloorsCacheForTests(): void {
-  floorsCache.clear();
-  floorsInFlight.clear();
-}
-
-function currentFloorsKey(): string | null {
-  try {
-    const token = readSourceCoverageInputToken(ensureDb());
-    return token ? sourceCoverageTokenKey(token) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** The floors for the current messages state: cached, the running read, or a new one. */
-function readSourceFloors(userId: string): Promise<SourceFloorRow[] | null> {
-  const key = currentFloorsKey();
-  const hit = floorsCache.get(userId);
-  if (key && hit && hit.key === key) return Promise.resolve(hit.rows);
-  const running = floorsInFlight.get(userId);
-  if (running) return running;
-  const startedAt = Date.now();
-  const promise = (async (): Promise<SourceFloorRow[] | null> => {
-    try {
-      const rows = (await queryOnDedicatedWorker(
-        "sourceCoverageFloors",
-        userId,
-        SOURCE_FLOORS_WORKER_TIMEOUT_MS,
-      )) as SourceFloorRow[];
-      logService.info(`[BACKLOG-3837] source coverage floors read on a dedicated worker in ${Date.now() - startedAt}ms`, "AuditCoverage");
-      if (key) floorsCache.set(userId, { key, rows });
-      return rows;
-    } catch (error) {
-      logService.warn("[BACKLOG-3837] source floors read on a dedicated worker failed; coverage reported as pending (nothing read on main)", "AuditCoverage", {
-        code: typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : "failed",
-        error: error instanceof Error ? error.message : String(error),
-        ms: Date.now() - startedAt,
-      });
-      return null;
-    } finally {
-      floorsInFlight.delete(userId);
-    }
-  })();
-  floorsInFlight.set(userId, promise);
-  return promise;
-}
-
 const PENDING = Symbol("pending");
 
 /**
@@ -167,13 +116,13 @@ const PENDING = Symbol("pending");
 export async function getSourceCoverageAsync(userId: string): Promise<SourceCoverage[] | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const budget = new Promise<typeof PENDING>((resolve) => {
-    timer = setTimeout(() => resolve(PENDING), sourceFloorsWaitMs);
+    timer = setTimeout(() => resolve(PENDING), getSourceFloorsWaitMs());
     timer.unref?.();
   });
   const rows = await Promise.race([readSourceFloors(userId), budget]);
   clearTimeout(timer);
   if (rows === PENDING) {
-    logService.info(`[BACKLOG-3837] source coverage floors not ready within ${sourceFloorsWaitMs}ms; reported as pending`, "AuditCoverage");
+    logService.info(`[BACKLOG-3837] source coverage floors not ready within ${getSourceFloorsWaitMs()}ms; reported as pending`, "AuditCoverage");
     return null;
   }
   if (rows === null) return null;
