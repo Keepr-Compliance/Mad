@@ -33,6 +33,7 @@ import {
   ipcMain,
   protocol,
   net,
+  powerMonitor,
 } from "electron";
 import path from "path";
 import log from "electron-log";
@@ -43,7 +44,16 @@ import {
   getAppliedAppDataPaths,
 } from "./bootstrap/appDataPaths";
 import { getStartupFailure } from "./bootstrap/startupFailure";
-import { setMainWindow } from "./windowRegistry";
+import { getMainWindow, setMainWindow } from "./windowRegistry";
+import {
+  createSealQuitPrompt,
+  installSealQuitPrompt,
+  noteSystemQuit,
+  SEAL_QUIT_KEEP_RUNNING,
+  SEAL_QUIT_PROMPT_DETAIL,
+  SEAL_QUIT_QUIT_ANYWAY,
+  sealQuitPromptHeading,
+} from "./utils/sealQuitPrompt";
 import { redactEmail, redactId } from "./utils/redactSensitive";
 
 // ==========================================
@@ -1166,6 +1176,38 @@ function setupPermissionHandlers(): void {
   );
 }
 
+/**
+ * BACKLOG-3816: the quit prompt while the kept iPhone backup is being secured. Checked
+ * first in before-quit and, on Windows, in the main window's close.
+ */
+const sealQuitPrompt = installSealQuitPrompt(
+  createSealQuitPrompt({
+    app,
+    sealPercent: () => getBackupAtRest().sealPassPercent(),
+    ask: async (percent, signal) => {
+      const heading = sealQuitPromptHeading(percent);
+      // macOS shows no title in a message box, so the heading is the message there too.
+      const options: Electron.MessageBoxOptions = {
+        type: "warning",
+        buttons: [SEAL_QUIT_KEEP_RUNNING, SEAL_QUIT_QUIT_ANYWAY],
+        defaultId: 0,
+        cancelId: 0,
+        title: heading,
+        message: heading,
+        detail: SEAL_QUIT_PROMPT_DETAIL,
+        signal,
+      };
+      const parent = getMainWindow();
+      const { response } =
+        parent && !parent.isDestroyed()
+          ? await dialog.showMessageBox(parent, options)
+          : await dialog.showMessageBox(options);
+      return response === 1 ? "quit" : "keep";
+    },
+    log: (message, meta) => log.info(message, meta),
+  }),
+);
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: WINDOW_CONFIG.DEFAULT_WIDTH,
@@ -1197,6 +1239,18 @@ function createWindow(): void {
   // goes to the destroyed first window and is dropped in silence. THE SOLE
   // WRITER: `windowRecreation-3454.test.ts` fails if this call leaves.
   setMainWindow(mainWindow);
+
+  // BACKLOG-3816: Windows ends the session through the window; not the user's quit.
+  mainWindow.on("query-session-end", () => noteSystemQuit("os-shutdown"));
+  mainWindow.on("session-end", () => noteSystemQuit("os-shutdown"));
+  // BACKLOG-3816: on Windows closing the window quits the app. Ask here, while the
+  // window is still open, so "Keep running" leaves it open (in before-quit it is gone).
+  if (process.platform !== "darwin") {
+    mainWindow.on("close", (e) => {
+      if (submissionService.isSubmitting) return; // the submission dialog asks instead
+      sealQuitPrompt.check(e);
+    });
+  }
 
   // Prevent closing while a submission is uploading
   mainWindow.on("close", (e) => {
@@ -1528,6 +1582,10 @@ app.whenReady().then(async () => {
   // capability that is missing, and `createWindow()` would open a window.
   if (getStartupFailure()) return;
   log.debug(`[PERF] app.whenReady: ${Date.now() - appStartTime}ms`);
+
+  // BACKLOG-3816: an OS shutdown / restart / logout (macOS, Linux) is not the user's
+  // quit — the "securing your iPhone backup" quit prompt is not shown for it.
+  powerMonitor.on("shutdown", () => noteSystemQuit("os-shutdown"));
 
   // BACKLOG-2709: on the FIRST launch against a new development directory, say
   // so before the window appears. The app is about to open an empty database on
@@ -2054,6 +2112,9 @@ const deferQuitForLink = createBackupStopOnQuit(app, () =>
 const deferQuitForBackupSeal = createBackupStopOnQuit(app, () => getBackupAtRest().sealIndexForQuit());
 
 app.on("before-quit", (event) => {
+  // BACKLOG-3816: first, a user quit while the iPhone backup is being secured asks.
+  // "Keep running" cancels it here, before the deferrals below pause anything.
+  if (sealQuitPrompt.check(event)) return;
   // BACKLOG-3598: must run before cleanupSyncHandlers() drops the orchestrator. When a
   // backup is running this defers the quit and returns; the rest of this handler then
   // runs once, on the re-quit.
