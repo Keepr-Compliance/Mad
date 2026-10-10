@@ -193,7 +193,7 @@ describe("TransactionMessagesTab — paged conversations (BACKLOG-3884)", () => 
   it("thread-less texts of two people are two cards; removing one removes only that person's (SR B4)", async () => {
     const p1 = { ...textThreadSummary({ threadId: "__nothread__:participants-2065550101", phone: "+12065550101", lastSentAt: "2026-04-02T10:00:00.000Z", totalCount: 2 }) };
     const p2 = { ...textThreadSummary({ threadId: "__nothread__:participants-2065550102", phone: "+12065550102", lastSentAt: "2026-04-01T10:00:00.000Z", totalCount: 1 }) };
-    for (const t of [p1, p2]) t.samples = t.samples.map((r) => ({ ...r, thread_id: null }));
+    for (const t of [p1, p2]) t.samples = t.samples.map((r) => ({ ...r, thread_id: null }) as unknown as typeof r);
     renderTab({ threads: [p1, p2] });
     await waitFor(() => expect(screen.getAllByTestId("message-thread-card")).toHaveLength(2));
     const card = document.querySelector('[data-thread-id="__nothread__:participants-2065550102"]') as HTMLElement;
