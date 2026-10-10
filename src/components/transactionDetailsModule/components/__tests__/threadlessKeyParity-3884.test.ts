@@ -12,6 +12,7 @@ const corpus: Array<{ id: string; participants: unknown }> = [
   { id: "a", participants: JSON.stringify({ from: "+12065550101", to: ["me"] }) },
   { id: "b", participants: JSON.stringify({ from: "me", to: ["+1 (206) 555-0101"] }) },
   { id: "c", participants: JSON.stringify({ from: "2065550101", to: "me" }) },
+  { id: "m", participants: JSON.stringify({ from: "(206) 555-0101", to: ["me"] }) }, // exactly 10 digits, punctuated
   { id: "d", participants: JSON.stringify({ from: "555-0101", to: ["me"] }) }, // 7 digits: kept as text
   { id: "e", participants: JSON.stringify({ from: "Agent@Example.TEST ", to: ["me"] }) },
   { id: "f", participants: JSON.stringify({ from: "me", to: ["+12065550102", "+12065550103"] }) },
@@ -30,7 +31,7 @@ describe("thread-less conversation key: main equals the tab (BACKLOG-3884)", () 
     const tabKeyOf = new Map<string, string>();
     for (const [key, msgs] of tab) for (const m of msgs) tabKeyOf.set(m.id as string, key);
     for (const c of corpus) expect({ id: c.id, key: threadlessGroupKey(c.participants, c.id) }).toEqual({ id: c.id, key: tabKeyOf.get(c.id) });
-    // The corpus really separates people: a, b, c are one person; f, g are one group; h, i, j fall back to their own ids.
+    // The corpus really separates people: a, b, c, m are one person; f, g are one group; h, i, j fall back to their own ids.
     expect(new Set(corpus.map((c) => threadlessGroupKey(c.participants, c.id))).size).toBe(9);
   });
 });
