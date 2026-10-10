@@ -124,6 +124,27 @@ describe("BACKLOG-3837: the picker while message-derived people are pending", ()
     expect(screen.getByText("Bianca Okafor")).toBeInTheDocument();
   });
 
+  it("a silent re-read that is STILL pending keeps the loading state and keeps re-reading", async () => {
+    jest.useFakeTimers();
+    sorted()
+      .mockResolvedValueOnce({ success: true, contacts: [], contactsStatus: PENDING })
+      .mockResolvedValueOnce({ success: true, contacts: [], contactsStatus: PENDING })
+      .mockResolvedValueOnce({ success: true, contacts: [fromMessages] });
+    render(<Picker />);
+    await waitFor(() => expect(sorted()).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      jest.advanceTimersByTime(15_000);
+    });
+    await waitFor(() => expect(sorted()).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId("loading-state")).toBeInTheDocument();
+    expect(screen.queryByText("No contacts available")).not.toBeInTheDocument();
+    await act(async () => {
+      jest.advanceTimersByTime(15_000);
+    });
+    await waitFor(() => expect(screen.getAllByText("Jordan Lee")[0]).toBeInTheDocument());
+    expect(sorted()).toHaveBeenCalledTimes(3);
+  });
+
   it("a ready event for another user is ignored", async () => {
     sorted().mockResolvedValue({ success: true, contacts: [saved], contactsStatus: PENDING });
     render(<Picker />);
