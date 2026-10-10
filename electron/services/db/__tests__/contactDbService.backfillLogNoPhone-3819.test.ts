@@ -18,6 +18,7 @@ const PHONE_A = "5555550123";
 const PHONE_B = "5555550145";
 
 const mockDbAll = jest.fn();
+const mockPlan = jest.fn();
 jest.mock("../core/dbConnection", () => ({
   ensureDb: () => null,
   dbAll: (...args: unknown[]) => mockDbAll(...args),
@@ -36,6 +37,9 @@ jest.mock("../../contactsService", () => ({ getContactNames: () => new Map() }))
 jest.mock("../../../workers/contactWorkerPool", () => ({
   queryContacts: jest.fn(),
   isPoolReady: () => false,
+  // BACKLOG-3837: the match plan is read on a dedicated worker. Shape transcribed
+  // from its producer, wizardMessageScansDb.ts planCommunicationDatesOn.
+  queryOnDedicatedWorker: (...args: unknown[]) => mockPlan(...args),
 }));
 
 import logService from "../../logService";
@@ -44,16 +48,17 @@ import { backfillContactCommunicationDates } from "../contactDbService";
 describe("BACKLOG-3819: backfillContactCommunicationDates logs no phone numbers", () => {
   beforeEach(() => {
     mockDbAll.mockReset();
-    // 1st query: phone→message matches. 2nd: the "top contacts" debug read,
-    // where an unnamed contact's display_name is its number.
-    mockDbAll
-      .mockReturnValueOnce([
-        { normalized_phone: PHONE_A, contact_id: "c0ffee01-contact-3819-a", last_msg_date: "2026-10-01T12:00:00.000Z" },
-        { normalized_phone: PHONE_B, contact_id: "c0ffee02-contact-3819-b", last_msg_date: "2026-10-02T12:00:00.000Z" },
-      ])
-      .mockReturnValueOnce([
-        { display_name: PHONE_B, last_inbound_at: "2026-10-02T12:00:00.000Z" },
-      ]);
+    mockPlan.mockReset();
+    // The match plan (BACKLOG-3837: read on a worker; it carries no phone).
+    mockPlan.mockResolvedValueOnce([
+      { contact_id: "c0ffee01-contact-3819-a", last_msg_date: "2026-10-01T12:00:00.000Z" },
+      { contact_id: "c0ffee02-contact-3819-b", last_msg_date: "2026-10-02T12:00:00.000Z" },
+    ]);
+    // The "top contacts" debug read, where an unnamed contact's display_name is
+    // its number.
+    mockDbAll.mockReturnValueOnce([
+      { display_name: PHONE_B, last_inbound_at: "2026-10-02T12:00:00.000Z" },
+    ]);
     (logService.info as jest.Mock).mockClear();
   });
 
