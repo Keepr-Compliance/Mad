@@ -288,14 +288,34 @@ maybe("BACKLOG-3837: contact lists never scan messages on main (real worker, enc
     const shared = jest.spyOn(pool, "queryContacts").mockImplementation((type, userId, timeoutMs, payload) =>
       type === "imported" ? realQuery(type, userId, timeoutMs, payload) : new Promise<unknown[]>(() => undefined),
     );
-    const sorted = await getContactsSortedByActivityWithStatus(USER);
+    const { value: sorted, maxMs: sortedMs, ms: sortedWall } = await maxStallDuring(() => getContactsSortedByActivityWithStatus(USER));
     expect(sorted.messageDerivedPending).toBe(false);
     expect(idsOf(sorted.contacts, "msg_")).toEqual(SENDER_IDS);
-    const all = await getImportedContactsWithStatusAsync(USER);
+    const { value: all, maxMs: allMs, ms: allWall } = await maxStallDuring(() => getImportedContactsWithStatusAsync(USER));
     expect(all.messageDerivedPending).toBe(false);
+    process.stderr.write(
+      `[3837d] ${MESSAGES} msgs, SHARED pool held: get-sorted-by-activity producer maxEventLoopDelay=${sortedMs}ms (wall ${sortedWall}ms, cold dedicated read), ` +
+        `get-all producer maxEventLoopDelay=${allMs}ms (wall ${allWall}ms)\n`,
+    );
     expect(idsOf(all.contacts, "msg_")).toEqual(SENDER_IDS);
     expect(shared.mock.calls.filter((c) => c[0] === "messageDerived")).toHaveLength(0);
     expect(scanOnMain()).toBe(false);
+  }, 900_000);
+
+  it("production budget, cold cache, SHARED pool held: the list answers within the budget (pending if the read is slower); main stall printed", async () => {
+    setMessageDerivedWaitMsForTests(null);
+    const realQuery = pool.queryContacts;
+    jest.spyOn(pool, "queryContacts").mockImplementation((type, userId, timeoutMs, payload) =>
+      type === "imported" ? realQuery(type, userId, timeoutMs, payload) : new Promise<unknown[]>(() => undefined),
+    );
+    const { value: r, maxMs, ms } = await maxStallDuring(() => getContactsSortedByActivityWithStatus(USER));
+    expect(ms).toBeLessThan(3_000 + 2_000);
+    expect(idsOf(r.contacts, "saved-")).toEqual(SAVED_IDS);
+    expect(scanOnMain()).toBe(false);
+    process.stderr.write(
+      `[3837d] ${MESSAGES} msgs, production 3 s budget, cold: get-sorted-by-activity answered in ${ms}ms, pending=${r.messageDerivedPending}, maxEventLoopDelay=${maxMs}ms\n`,
+    );
+    await new Promise((res) => setTimeout(res, 50));
   }, 900_000);
 
   it("three concurrent lists start ONE read; a later list with no relevant write reads nothing", async () => {
