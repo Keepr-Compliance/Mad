@@ -5,12 +5,17 @@
  * Click to expand for full email details.
  * TASK-1782: Added attachment display per email in thread view.
  */
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import DOMPurify from "dompurify";
 import { ResponsiveModal } from "../../../common/ResponsiveModal";
 import type { Communication } from "../../types";
 import type { EmailThread } from "../EmailThreadCard";
-import { AttachmentPreviewModal } from "./AttachmentPreviewModal";
+import {
+  AttachmentOpenError,
+  AttachmentPreviewHost,
+  useAttachmentPreview,
+  type UseAttachmentPreviewResult,
+} from "../../hooks/useAttachmentPreview";
 import { formatFileSize } from "../../../../utils/formatUtils";
 import { getEmailAvatarInitial } from "../../../../utils/avatarUtils";
 import { resolveDisplayName, formatParticipantListLine } from "../../../../utils/emailParticipantUtils";
@@ -331,6 +336,7 @@ function AttachmentListModal({
   senderName,
   onPreview,
   onClose,
+  openState,
 }: {
   attachments: EmailAttachment[];
   loading: boolean;
@@ -338,6 +344,8 @@ function AttachmentListModal({
   senderName: string;
   onPreview: (attachment: EmailAttachment) => void;
   onClose: () => void;
+  /** BACKLOG-3884: on-demand download state for a clicked row. */
+  openState: Pick<UseAttachmentPreviewResult, "downloadingId" | "message" | "retry">;
 }): React.ReactElement {
   const heading = loading
     ? "Attachments"
@@ -381,24 +389,35 @@ function AttachmentListModal({
           </p>
         )}
 
-        {attachments.map((attachment) => (
+        <AttachmentOpenError preview={openState} className="mx-2 mb-2 text-xs" />
+
+        {attachments.map((attachment) => {
+          const downloading = openState.downloadingId === attachment.id;
+          return (
           <button
             key={attachment.id}
             type="button"
             onClick={() => onPreview(attachment)}
-            className="flex items-center gap-2 w-full px-2 py-2 rounded-lg text-xs transition-colors hover:bg-gray-100 text-gray-700"
+            disabled={downloading}
+            aria-busy={downloading || undefined}
+            className="flex items-center gap-2 w-full px-2 py-2 rounded-lg text-xs transition-colors hover:bg-gray-100 text-gray-700 disabled:opacity-60 disabled:cursor-wait"
             title={`Preview ${attachment.filename}`}
             data-testid={`thread-attachment-${attachment.id}`}
           >
             {getFileTypeIcon(attachment.mime_type)}
             <span className="truncate flex-1 text-left">{attachment.filename}</span>
-            {attachment.file_size_bytes && (
-              <span className="text-gray-500 flex-shrink-0">
-                {formatFileSize(attachment.file_size_bytes)}
-              </span>
+            {downloading ? (
+              <span className="text-blue-600 flex-shrink-0">Downloading…</span>
+            ) : (
+              attachment.file_size_bytes && (
+                <span className="text-gray-500 flex-shrink-0">
+                  {formatFileSize(attachment.file_size_bytes)}
+                </span>
+              )
             )}
           </button>
-        ))}
+          );
+        })}
       </div>
     </ResponsiveModal>
   );
@@ -415,6 +434,7 @@ function EmailBubble({
   loadingAttachments,
   attachmentMessage,
   onPreviewAttachment,
+  openState,
   userEmail,
   nameMap,
 }: {
@@ -423,7 +443,9 @@ function EmailBubble({
   attachments: EmailAttachment[];
   loadingAttachments: boolean;
   attachmentMessage?: string | null;
-  onPreviewAttachment: (attachment: EmailAttachment) => void;
+  /** BACKLOG-3884: resolves true once the preview is open (after any download). */
+  onPreviewAttachment: (attachment: EmailAttachment, emailId: string) => Promise<boolean>;
+  openState: Pick<UseAttachmentPreviewResult, "downloadingId" | "message" | "retry">;
   userEmail?: string;
   nameMap?: ReadonlyMap<string, string>;
 }): React.ReactElement {
@@ -642,10 +664,14 @@ function EmailBubble({
           message={attachmentMessage}
           senderName={senderName}
           onPreview={(attachment) => {
-            setShowAttachments(false);
-            onPreviewAttachment(attachment);
+            // BACKLOG-3884: the list stays up while a metadata-only row downloads
+            // ("Downloading…", or the error + Retry) and closes once the preview opens.
+            void onPreviewAttachment(attachment, email.id).then((opened) => {
+              if (opened) setShowAttachments(false);
+            });
           }}
           onClose={() => setShowAttachments(false)}
+          openState={openState}
         />
       )}
     </div>
@@ -665,7 +691,35 @@ export function EmailThreadViewModal({
   const [loadingAttachmentIds, setLoadingAttachmentIds] = useState<Set<string>>(new Set());
   // BACKLOG-1369: Per-email attachment download status messages
   const [attachmentMessagesByEmail, setAttachmentMessagesByEmail] = useState<Map<string, string>>(new Map());
-  const [previewAttachment, setPreviewAttachment] = useState<EmailAttachment | null>(null);
+
+  // BACKLOG-3884: clicks go through the Attachments tab's path — a metadata-only
+  // row downloads first (`emails:get-attachments` below downloads only for an
+  // email with NO rows). After a download, re-read that email's list.
+  const lastOpenedEmailIdRef = useRef<string | null>(null);
+  const refreshOpenedEmail = useCallback(() => {
+    const emailId = lastOpenedEmailIdRef.current;
+    const transactionsApi = window.api?.transactions;
+    if (!emailId || !transactionsApi?.getEmailAttachments) return;
+    transactionsApi
+      .getEmailAttachments(emailId)
+      .then((result: { success: boolean; data?: EmailAttachment[] }) => {
+        if (result.success && result.data) {
+          setAttachmentsByEmail((prev) => new Map(prev).set(emailId, result.data!));
+        }
+      })
+      .catch((err: Error) => {
+        logger.error(`Failed to refresh attachments for email ${emailId}:`, err);
+      });
+  }, []);
+  const attachmentPreview = useAttachmentPreview(refreshOpenedEmail);
+  const { open: openAttachmentPreview } = attachmentPreview;
+  const handlePreviewAttachment = useCallback(
+    (attachment: EmailAttachment, emailId: string): Promise<boolean> => {
+      lastOpenedEmailIdRef.current = emailId;
+      return openAttachmentPreview({ ...attachment, email_id: emailId });
+    },
+    [openAttachmentPreview],
+  );
 
   // TASK-1782: Fetch attachments for emails that have them
   useEffect(() => {
@@ -713,20 +767,6 @@ export function EmailThreadViewModal({
     });
   }, [thread.emails]);
 
-  // TASK-1782: Handle opening an attachment with system viewer
-  const handleOpenAttachment = useCallback(async (storagePath: string) => {
-    try {
-      const transactionsApi = window.api?.transactions;
-      if (transactionsApi?.openAttachment) {
-        const result = await transactionsApi.openAttachment(storagePath);
-        if (!result.success) {
-          logger.error("Failed to open attachment:", result.error);
-        }
-      }
-    } catch (err) {
-      logger.error("Error opening attachment:", err);
-    }
-  }, []);
 
   return (
     <ResponsiveModal onClose={onClose} zIndex="z-[80]" panelBg="bg-gray-50" panelClassName="max-w-xl sm:max-h-[85vh] sm:overflow-hidden" testId="thread-modal-backdrop">
@@ -785,7 +825,8 @@ export function EmailThreadViewModal({
               attachments={attachmentsByEmail.get(email.id) || []}
               loadingAttachments={loadingAttachmentIds.has(email.id)}
               attachmentMessage={attachmentMessagesByEmail.get(email.id)}
-              onPreviewAttachment={setPreviewAttachment}
+              onPreviewAttachment={handlePreviewAttachment}
+              openState={attachmentPreview}
               userEmail={userEmail}
               nameMap={nameMap}
             />
@@ -808,16 +849,8 @@ export function EmailThreadViewModal({
           unwires the last remaining exit fails rather than trapping the reader.
         */}
 
-      {/* TASK-1782: Attachment Preview Modal */}
-      {previewAttachment && (
-        <AttachmentPreviewModal
-          attachment={previewAttachment}
-          onClose={() => setPreviewAttachment(null)}
-          onOpenWithSystem={(storagePath) => {
-            handleOpenAttachment(storagePath);
-          }}
-        />
-      )}
+      {/* TASK-1782 / BACKLOG-3884: Attachment Preview Modal */}
+      <AttachmentPreviewHost preview={attachmentPreview} />
     </ResponsiveModal>
   );
 }
