@@ -1410,6 +1410,24 @@ export class BackupAtRest extends EventEmitter {
     }
   }
 
+  /**
+   * G4 (BACKLOG-3816 audit): a sync stopped for a quit does not seal (the quit seals the
+   * index; the next launch seals the rest). It must still give the phone back: if the
+   * quit then does not happen (an update that fails to install, a cancelled quit), a
+   * held lock refused every later sync with "Keepr is securing your saved iPhone
+   * backup…" and kept idle recovery away until a restart. The marker stays `syncing`, so
+   * idle recovery, the next sync's own end, or the next launch seals the chain. The index
+   * stays listed for the quit seal. Never throws.
+   */
+  releaseForQuit(session: BackupSyncSession): void {
+    if (session.kind === "none") return;
+    this.pausedForSync.delete(session.udid);
+    this.release(session.udid);
+    this.log("info", "[BackupAtRest] sync stopped for a quit; the phone is released, the seal is left to the quit and the launch", {
+      session: session.kind,
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Quit and idle recovery
   // -------------------------------------------------------------------------

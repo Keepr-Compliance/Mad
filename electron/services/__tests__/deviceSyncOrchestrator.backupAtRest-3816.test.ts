@@ -493,6 +493,35 @@ describe("Q — a quit does not seal; the marker says syncing for the next launc
     expect(await readMarkerAt(backups, UDID)).toBe("syncing");
     expect(plaintextLeft().length).toBeGreaterThan(0);
   });
+
+  it("G4: the quit does not happen after all (update failed to install): the phone is not left locked; Try Again runs and its end seals everything", async () => {
+    const o = newOrchestrator();
+    backupReturns((orc) => {
+      Object.assign(orc, { stoppedForQuit: true });
+      return fail();
+    }, o);
+    await o.sync({ udid: UDID });
+    expect(atRest.busyReason(UDID)).toBeNull();
+    backupReturns(fail());
+    const again = await o.sync({ udid: UDID });
+    expect(again.error).not.toContain(BACKUP_SECURING_SENTENCE);
+    expect(startBackup).toHaveBeenCalledTimes(2);
+    await sealedAfter(o);
+  });
+
+  it("G4: a successful sync handed to persistence, then a quit that does not happen: completeBackupAtRest gives the phone back", async () => {
+    const o = newOrchestrator();
+    backupReturns((orc) => {
+      Object.assign(orc, { stoppedForQuit: true });
+      return ok();
+    }, o);
+    const result = await o.sync({ udid: UDID });
+    expect(result.success).toBe(true);
+    expect(atRest.busyReason(UDID)).toBe("syncing"); // persistence still reads the chain
+    await o.completeBackupAtRest(true);
+    expect(atRest.busyReason(UDID)).toBeNull();
+    expect(await readMarkerAt(backups, UDID)).toBe("syncing"); // the launch / idle recovery seals
+  });
 });
 
 describe("refusals before idevicebackup2", () => {

@@ -2198,6 +2198,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       if (atRestSession && !atRestHandedOff && !atRestSealStarted) {
         if (this.stoppedForQuit) {
           log.info("[DeviceSyncOrchestrator] App quitting; the kept backup is sealed at next launch");
+          // G4: give the phone back, in case the quit does not happen after all.
+          this.atRest().releaseForQuit(atRestSession);
         } else {
           this.lastAtRestSeal = this.atRest().finishSync(atRestSession, undefined, { forceFullNext });
         }
@@ -2213,7 +2215,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     const session = this.pendingAtRestSession;
     this.pendingAtRestSession = null;
     if (!session) return;
-    if (this.stoppedForQuit) return; // next launch seals (marker `syncing`)
+    if (this.stoppedForQuit) {
+      // Next launch seals (marker `syncing`). G4: the phone is given back now, in case
+      // the quit does not happen after all.
+      this.atRest().releaseForQuit(session);
+      return;
+    }
     this.lastAtRestSeal = this.atRest().finishSync(session, undefined, { succeeded });
     await this.lastAtRestSeal;
   }
