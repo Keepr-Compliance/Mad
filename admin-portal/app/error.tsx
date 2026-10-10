@@ -21,7 +21,7 @@ export default function Error({
   }, [error]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+    <main className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="max-w-md w-full text-center space-y-6">
         <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-red-100">
           <svg
@@ -67,6 +67,6 @@ export default function Error({
           </a>
         </div>
       </div>
-    </div>
+    </main>
   );
 }
