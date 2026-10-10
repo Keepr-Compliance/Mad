@@ -27,6 +27,7 @@ import plist from "simple-plist";
 
 import { ADDRESS_BOOK_FILE_ID, SMS_DB_FILE_ID } from "../../backupDecryptionService";
 import {
+  BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE,
   BACKUP_AT_REST_QUARANTINED_MESSAGE,
   BackupAtRest,
   BackupAtRestRefusal,
@@ -1588,5 +1589,67 @@ describe("audit G1-part: a failed seal of an index file is retried within ~30 s,
     expect(slept.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(30_000);
     expect(headerOf(manifest).equals(MAGIC)).toBe(true);
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+});
+
+describe("audit G2: under C-DELTA a damaged sealed file the sync reads no longer fails every sync", () => {
+  /** Flip one byte in the sealed body (the header still parses: classify says `sealed`). */
+  function flipBody(file: string): void {
+    const b = fs.readFileSync(file);
+    b[b.length - 20] ^= 0xff;
+    fs.writeFileSync(file, b);
+  }
+  const smsPath = () => path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+  const attPath = () => path.join(chain, ATTACHMENT_ID.slice(0, 2), ATTACHMENT_ID);
+
+  it("sms.db does not authenticate: this sync says Try Again; the next sync is C-FULL, quarantines the backup and makes a full one", async () => {
+    makeChain();
+    const s = service();
+    expect(await s.migrate(UDID)).toBe("encrypted");
+    flipBody(smsPath());
+    const first = await s.beginSync(UDID);
+    expect(first).toEqual(expect.objectContaining({ kind: "keepr", strategy: "delta" }));
+    const out = path.join(userData, "parse-1");
+    await expect(s.buildParseCopy(UDID, out)).rejects.toThrow(BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE);
+    await s.finishSync(first);
+    expect(await s.forcedFullReason(UDID)).toBe("DELTA_DAMAGED");
+    // Try Again: recovered, not the same failure again.
+    const second = await s.beginSync(UDID);
+    expect(second.kind).toBe("first");
+    expect(second.kind === "first" && second.quarantined?.reasonCode).toBe("INTEGRITY");
+    expect(fs.readdirSync(path.join(backups, QUARANTINE_DIR_NAME))).toHaveLength(1);
+    await s.finishSync(second);
+  });
+
+  it("an attachment does not authenticate: skipped and counted, the sync goes on, and the next sync is C-FULL", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    flipBody(attPath());
+    const session = await s.beginSync(UDID);
+    const out = path.join(userData, "parse-2");
+    const copy = await s.buildParseCopy(UDID, out);
+    expect(copy).toEqual(expect.objectContaining({ unreadable: 1 }));
+    expect(copy.copied).toBeGreaterThanOrEqual(2); // sms.db + AddressBook
+    expect(fs.existsSync(path.join(out, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID))).toBe(true);
+    expect(fs.existsSync(path.join(out, ATTACHMENT_ID.slice(0, 2), ATTACHMENT_ID))).toBe(false);
+    await s.finishSync(session);
+    expect(await s.forcedFullReason(UDID)).toBe("DELTA_DAMAGED");
+  });
+
+  it("a lock (not damage) is still an error: no force-full for something a retry can fix", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    const real = files.decryptToFile.bind(files);
+    jest.spyOn(files, "decryptToFile").mockImplementation(async (src, dest) => {
+      if (src === attPath()) throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      return real(src, dest);
+    });
+    await expect(s.buildParseCopy(UDID, path.join(userData, "parse-3"))).rejects.toThrow("busy");
+    jest.restoreAllMocks();
+    await s.finishSync(session);
+    expect(await s.forcedFullReason(UDID)).toBeNull();
   });
 });

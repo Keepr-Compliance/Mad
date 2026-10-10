@@ -46,7 +46,8 @@
  *
  * ## Logs
  *
- * Counts and errno codes only — never a path or file name.
+ * Counts and errno codes only — never a path or file name, except the fixed names of the
+ * index files ("Manifest.db", "Info.plist" …), which say nothing about the phone.
  */
 import { EventEmitter } from "events";
 import fs from "fs";
@@ -56,8 +57,10 @@ import plist from "simple-plist";
 import { hostAppPaths } from "../../capabilities/appPathsProvider";
 import { hostLogger } from "../../capabilities/loggerProvider";
 import {
+  ADDRESS_BOOK_FILE_ID,
   FILE_ID_PATTERN,
   selectReadFileRows,
+  SMS_DB_FILE_ID,
 } from "../backupDecryptionService";
 import { DataKeyUnavailableError, getAtRestFiles, getDataKeyService } from "./dataKeyService";
 import {
@@ -136,6 +139,13 @@ export const BACKUP_AT_REST_DISK_MESSAGE =
 export const BACKUP_AT_REST_UNREADABLE_MESSAGE =
   "Part of your saved iPhone backup could not be opened, so this sync was stopped before it changed anything.";
 /** B2: a sealed backup that fails authentication was moved aside; this sync makes a full backup. */
+/**
+ * G2: a sealed file this C-DELTA sync must read (the messages or contacts database) does
+ * not open. The next sync unseals everything (C-FULL), finds it, moves the backup to
+ * quarantine and makes a fresh full backup (B2) — so Try Again recovers.
+ */
+export const BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE =
+  "Part of your saved iPhone backup could not be opened. Select Try Again: Keepr will make a fresh full backup, which takes longer.";
 export const BACKUP_AT_REST_QUARANTINED_MESSAGE =
   "Keepr couldn't read the saved iPhone backup, so it will make a fresh full backup — this takes longer.";
 
@@ -1681,13 +1691,21 @@ export class BackupAtRest extends EventEmitter {
    * `outDir` must be a fresh parse-copy directory (decryptionService.newParseCopyDir()),
    * so the existing cleanup and launch sweep own its lifetime.
    */
-  async buildParseCopy(udid: string, outDir: string): Promise<{ copied: number; missing: number }> {
+  async buildParseCopy(
+    udid: string,
+    outDir: string,
+  ): Promise<{ copied: number; missing: number; unreadable: number }> {
     const chain = this.chainDir(udid);
     const files = this.deps.files();
     await fs.promises.mkdir(outDir, { recursive: true, mode: 0o700 });
     const manifestCopy = path.join(outDir, "Manifest.db");
     let copied = 0;
     let missing = 0;
+    // G2 (BACKLOG-3816 audit): a sealed file that does not authenticate (or whose key is
+    // not held) cannot be fixed by retrying, and under C-DELTA no unseal step ever looks
+    // at it, so rethrowing failed EVERY sync. It is skipped and counted instead, and the
+    // next sync is forced to C-FULL: that unseal finds it and quarantines the chain (B2).
+    const unreadable: string[] = [];
     try {
       await files.decryptToFile(path.join(chain, "Manifest.db"), manifestCopy);
       const rows = selectReadFileRows(manifestCopy);
@@ -1707,13 +1725,29 @@ export class BackupAtRest extends EventEmitter {
             missing++;
             return;
           }
+          if (UNRECOVERABLE_CODES.has(errCode(error))) {
+            unreadable.push(fileId);
+            await fs.promises.rm(dest, { force: true }).catch(() => undefined);
+            return;
+          }
           throw error;
         }
       });
     } finally {
       await fs.promises.rm(manifestCopy, { force: true });
     }
-    return { copied, missing };
+    if (unreadable.length > 0) {
+      const core = unreadable.some((id) => id === SMS_DB_FILE_ID || id === ADDRESS_BOOK_FILE_ID);
+      await this.deps.markers().setNextStrategy(udid, FORCE_FULL_REASON_DELTA_DAMAGED);
+      this.log("warn", "[BackupAtRest] a sealed file this sync reads could not be opened; the next sync unseals everything", {
+        reasonCode: FORCE_FULL_REASON_DELTA_DAMAGED,
+        unreadable: unreadable.length,
+        messagesOrContacts: core,
+      });
+      // Without the messages or contacts database this sync has nothing to import.
+      if (core) throw new BackupAtRestRefusal("unreadable", BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE);
+    }
+    return { copied, missing, unreadable: unreadable.length };
   }
 }
 
