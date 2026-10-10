@@ -37,11 +37,16 @@ for html in "$OUT"/*.html; do
   node "$HERE/measure.cjs" "$html" "$OUT/$name.css" $WIDTHS > "$OUT/$name.json"
   echo "measured $name"
 done
-
 if [ -f "$OUT/drawer-open.json" ]; then
   T="$(mktemp -d)"; mkdir -p "$T/a" "$T/b"
   cp "$OUT/shell-expanded.json" "$T/a/x.json"; cp "$OUT/drawer-open.json" "$T/b/x.json"
   echo "drawer-open vs shell-expanded at 768 1024 1280:"
   node "$HERE/compare.cjs" "$T/a" "$T/b" 768 1024 1280 || true
   rm -rf "$T"
+fi
+# The dumps hold rendered UI text; the repo's fixture-PII scan reads ignored
+# files too and flags lines like "Sign Out" beside a number. Keep only the
+# JSON measurements unless KEEP_DUMPS=1.
+if [ "${KEEP_DUMPS:-0}" != "1" ]; then
+  rm -f "$OUT"/*.html "$OUT"/*.css
 fi
