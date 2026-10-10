@@ -53,6 +53,7 @@ const CONTACTS: Array<[string, string[], number?, string?]> = [
   ["mail", ["+Alice@Exa"]], // email-handle flat, mixed case key
   ["wild", ["+AB%12345"]], // wildcard AND ASCII capitals in one key
   ["nodate", ["+17185550117"]], // matched only by an empty flat's neighbour: no match
+  ["unilow", ["+äbc7654321"]], // lowercase non-ASCII key vs uppercase non-ASCII flat: no match
 ];
 // [flat, sent_at, channel, amt, user]
 const MSGS: Array<[string | null, unknown, string, number | null, string?]> = [
@@ -87,6 +88,7 @@ const MSGS: Array<[string | null, unknown, string, number | null, string?]> = [
   ["Alice@Example.com", "2024-01-25T00:00:00.000Z", "imessage", null],
   ["abxx12345", "2024-01-26T00:00:00.000Z", "sms", null], // '%' matches 'xx'; case-insensitive
   ["ABxx12345", "2024-01-27T00:00:00.000Z", "sms", null],
+  ["ÄBC7654321", "2024-01-26T00:00:00.000Z", "sms", null], // toLowerCase would fold Ä to ä and match "unilow"
 ];
 
 let Database: any = null;
@@ -127,7 +129,7 @@ try {
     // Non-vacuous: the oracle itself matches the quirky keys, and rejects the ones it must.
     expect(o.size).toBeGreaterThan(5);
     for (const id of ["under", "pct", "wild", "mail", "k7", "cc", "intl"]) expect(o.has(id)).toBe(true);
-    for (const id of ["k6", "uni", "fmt", "react", "rcs", "notimp", "other", "nodate"]) expect(o.has(id)).toBe(false);
+    for (const id of ["k6", "uni", "fmt", "react", "rcs", "notimp", "other", "nodate", "unilow"]) expect(o.has(id)).toBe(false);
     expect(diffs).toEqual([]);
   });
 });
