@@ -3,8 +3,9 @@
  *
  * Linking 150 chats into a deal with 76k texts used to re-download every linked
  * text through `transactions:get-communications` (107 MB) and freeze the
- * window. The attach refresh now sends the ids already shown to
- * `getCommunicationsDelta` and merges `{ added, removedIds }`.
+ * window. BACKLOG-3785 made the refresh a delta; BACKLOG-3884 removed the held
+ * texts altogether: the tab shows a conversation list (`getTextThreads`) and pages
+ * each conversation on open, so an attach re-reads the list and nothing else.
  *
  * The attach modal itself is replaced by a stub that calls `onAttached` the way
  * the real one does after a successful link (`AttachMessagesModal.tsx`
@@ -20,6 +21,7 @@ import "@testing-library/jest-dom";
 import { NotificationProvider } from "../../contexts/NotificationContext";
 import TransactionDetails from "../TransactionDetails";
 import type { Transaction } from "../../../electron/types/models";
+import { textThreadSummary } from "./helpers/textThreadSummary3884";
 
 const render = (ui: Parameters<typeof rtlRender>[0]) =>
   rtlRender(ui, { wrapper: NotificationProvider });
@@ -129,6 +131,8 @@ const textRow = (id: string, phone: string, thread: string, sentAt: string) => (
 });
 
 const existing = textRow("msg-old", "+12065550142", "thread-old", "2024-02-01T10:00:00Z");
+const oldThread = textThreadSummary({ threadId: "thread-old", phone: "+12065550142", lastSentAt: "2024-02-01T10:00:00Z", sampleId: "msg-old" });
+const newThread = textThreadSummary({ threadId: "thread-new", phone: "+12065550143", lastSentAt: "2024-02-03T10:00:00Z", sampleId: "msg-new" });
 const added = textRow("msg-new", "+12065550143", "thread-new", "2024-02-03T10:00:00Z");
 
 beforeEach(() => {
@@ -147,38 +151,44 @@ beforeEach(() => {
     removedIds: [],
     total: 2,
   });
+  // BACKLOG-3884: the Texts tab reads the conversation list; after the attach the
+  // list has the new conversation.
+  window.api.transactions.getTextThreads = jest
+    .fn()
+    .mockResolvedValueOnce({ success: true, threads: [oldThread] })
+    .mockResolvedValue({ success: true, threads: [newThread, oldThread] });
   jest.mocked(window.api.contacts.getAll).mockResolvedValue({ success: true, contacts: [] });
 });
 
-describe("Attach Messages refresh (BACKLOG-3785)", () => {
-  it("merges the delta and does not re-download every linked text", async () => {
+const textCalls = (): unknown[][] =>
+  jest.mocked(window.api.transactions.getCommunications).mock.calls.filter((c) => c[1] === "text");
+
+describe("Attach Messages refresh (BACKLOG-3785, paged by BACKLOG-3884)", () => {
+  it("re-reads the conversation list and never re-downloads the linked texts", async () => {
     const user = userEvent.setup();
     render(
       <TransactionDetails transaction={transaction} onClose={jest.fn()} userId="user-456" initialTab="messages" />,
     );
 
     await waitFor(() => expect(screen.getByText(/1 conversation\b/)).toBeInTheDocument());
-    expect(window.api.transactions.getCommunications).toHaveBeenCalledTimes(1);
+    expect(window.api.transactions.getTextThreads).toHaveBeenCalledTimes(1);
 
     await user.click(screen.getAllByTestId("attach-messages-button")[0]);
     await user.click(await screen.findByTestId("stub-attach"));
 
     await waitFor(() => expect(screen.getByText(/2 conversations\b/)).toBeInTheDocument());
-    expect(window.api.transactions.getCommunicationsDelta).toHaveBeenCalledTimes(1);
-    expect(window.api.transactions.getCommunicationsDelta).toHaveBeenCalledWith(
-      "txn-3785",
-      "text",
-      ["msg-old"],
-    );
-    // The whole-list reload is NOT issued after attach.
-    expect(window.api.transactions.getCommunications).toHaveBeenCalledTimes(1);
+    expect(window.api.transactions.getTextThreads).toHaveBeenCalledTimes(2);
+    // Neither the whole text set nor a delta of it is read any more.
+    expect(textCalls()).toHaveLength(0);
+    expect(window.api.transactions.getCommunicationsDelta).not.toHaveBeenCalled();
   });
 
-  it("falls back to the full reload when the delta call fails", async () => {
-    jest.mocked(window.api.transactions.getCommunicationsDelta).mockResolvedValue({
-      success: false,
-      error: "boom",
-    });
+  it("a failed list re-read keeps the list shown and still reads no texts", async () => {
+    jest
+      .mocked(window.api.transactions.getTextThreads)
+      .mockReset()
+      .mockResolvedValueOnce({ success: true, threads: [oldThread] })
+      .mockResolvedValue({ success: false, error: "boom" });
     const user = userEvent.setup();
     render(
       <TransactionDetails transaction={transaction} onClose={jest.fn()} userId="user-456" initialTab="messages" />,
@@ -188,6 +198,7 @@ describe("Attach Messages refresh (BACKLOG-3785)", () => {
     await user.click(screen.getAllByTestId("attach-messages-button")[0]);
     await user.click(await screen.findByTestId("stub-attach"));
 
-    await waitFor(() => expect(window.api.transactions.getCommunications).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(window.api.transactions.getTextThreads).toHaveBeenCalledTimes(2));
+    expect(textCalls()).toHaveLength(0);
   });
 });

@@ -1592,6 +1592,9 @@ CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at);
 CREATE INDEX IF NOT EXISTS idx_messages_sync_session ON messages(user_id, sync_session_id);
 
 CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id);
+-- BACKLOG-3884: the Texts tab pages one conversation newest-first; without this a
+-- page read every row of the thread to sort it.
+CREATE INDEX IF NOT EXISTS idx_messages_thread_sent ON messages(thread_id, sent_at);
 
 CREATE INDEX IF NOT EXISTS idx_messages_transaction_id ON messages(transaction_id);
 
