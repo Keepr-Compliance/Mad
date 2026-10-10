@@ -1407,19 +1407,24 @@ describe("PC unplug retest 2026-10-09: the index files are sealed FIRST at every
 
   it("a lock that outlasts every quick retry: the walk goes on, the index gets one more round after it, the file is named in the log", async () => {
     const logs: Array<{ m: string; d?: Record<string, unknown> }> = [];
-    let walkDone = false;
+    let armed = false;
+    let tries = 0;
+    // Locked through the index step (1 + 5 rounds × the engine's 3 tries = 18) and the
+    // walk's own 3 tries; free for the round after the walk.
+    const LOCKED_TRIES = 21;
     const s = service({
       log: (_l, m, d) => logs.push({ m, d }),
       sealEngineOptions: {
         retryDelayMs: 0,
         beforeSeal: (p) => {
-          if (p === manifest() && !walkDone) throw Object.assign(new Error("locked"), { code: "EPERM" });
-          if (p !== manifest() && !isIndex(p)) walkDone = true; // the lock ends once the walk is under way
+          if (armed && p === manifest() && ++tries <= LOCKED_TRIES) throw Object.assign(new Error("locked"), { code: "EPERM" });
         },
       },
     });
     const { session } = await unpluggedMidSync(s);
+    armed = true;
     await s.finishSync(session);
+    expect(tries).toBe(LOCKED_TRIES + 1);
     const named = logs.find((l) => l.m === "[BackupAtRest] could not seal an index file");
     expect(named?.d).toEqual(expect.objectContaining({ file: "Manifest.db", code: "EPERM" }));
     expect(JSON.stringify(logs)).not.toContain(chain); // names, never paths
