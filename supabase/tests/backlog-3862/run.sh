@@ -20,7 +20,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-MIG="$REPO/supabase/migrations/20261010130000_backlog_3862_flat_1499.sql"
+MIG="$REPO/supabase/migrations/20261010145757_backlog_3862_flat_1499.sql"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 psql_in() {

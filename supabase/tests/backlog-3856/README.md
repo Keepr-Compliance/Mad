@@ -1,6 +1,6 @@
 # BACKLOG-3856 harness
 
-Controls and mutants for `supabase/migrations/20261010110000_backlog_3856_suspended_user_licence.sql`:
+Controls and mutants for `supabase/migrations/20261010145724_backlog_3856_suspended_user_licence.sql`:
 `create_active_individual_license` creates the licence row with status `suspended` when
 `public.users.status = 'suspended'`; existing rows, the identity guard and the grants are unchanged.
 
