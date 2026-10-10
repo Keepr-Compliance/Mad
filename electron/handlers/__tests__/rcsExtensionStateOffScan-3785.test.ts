@@ -173,7 +173,7 @@ maybe("BACKLOG-3785: Google Messages state poll never runs the coverage scan on 
   let main: DatabaseType;
   let prepared: string[] = [];
   let recording = false;
-  let addMessage: ReturnType<DatabaseType["prepare"]>;
+  let addMessage: import("better-sqlite3").Statement<unknown[]>;
 
   const oldCompanion = (u: string): boolean => getSourceCoverage(u).some((c) => c.source === "android_companion");
   const oldGoogleCoveredSince = (u: string): string | null =>
@@ -205,7 +205,7 @@ maybe("BACKLOG-3785: Google Messages state poll never runs the coverage scan on 
     const users = [USER, "u-comp", "u-legacy", "u-cov", "u-filtered", "u-none", "u-gm"];
     const addUser = main.prepare("INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, ?, 'google', ?)");
     for (const u of users) addUser.run(u, `${u}@example.test`, `oauth-${u}`);
-    addMessage = main.prepare(
+    addMessage = main.prepare<unknown[]>(
       `INSERT INTO messages (id, user_id, channel, external_id, direction, body_text, participants, participants_flat,
          thread_id, sent_at, metadata, associated_message_type, duplicate_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
