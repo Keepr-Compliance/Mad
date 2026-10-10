@@ -184,7 +184,13 @@ function isValidGuid(guid: string | null | undefined): boolean {
 class IPhoneSyncStorageService {
   private static readonly SERVICE_NAME = "IPhoneSyncStorageService";
   // Smaller batch size for better responsiveness
-  private static readonly BATCH_SIZE = 500;
+  /**
+   * BACKLOG-3868: rows per insert transaction in storeMessages (was 500). A
+   * 500-row batch took 12 ms at the start of a 100k insert into an encrypted
+   * store and up to 250 ms by the end (the messages indexes outgrow the page
+   * cache), so the transaction/yield granularity is 100.
+   */
+  private static readonly INSERT_SLICE = 100;
   // Yield every N batches to let event loop breathe
   private static readonly YIELD_INTERVAL = 2;
 
@@ -642,12 +648,12 @@ class IPhoneSyncStorageService {
     }
 
     // Batch insert all prepared messages through the service layer.
-    // BACKLOG-3868: one BATCH_SIZE slice per call (each its own transaction, as
+    // BACKLOG-3868: one INSERT_SLICE slice per call (each its own transaction, as
     // before) with a yield to the event loop between slices. The db function ran
     // every slice back to back: 10k new messages blocked main ~0.4 s, 100k ~15 s.
     // Cancel: checked before every slice; slices already committed stay, and the
     // caller's rollbackSession(sessionId) removes them (unchanged).
-    const batchSize = IPhoneSyncStorageService.BATCH_SIZE;
+    const batchSize = IPhoneSyncStorageService.INSERT_SLICE;
     for (let start = 0; start < messagesToInsert.length; start += batchSize) {
       if (cancelSignal?.cancelled) break;
       const result = databaseService.batchInsertMessages(

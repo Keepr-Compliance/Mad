@@ -2,7 +2,7 @@
  * @jest-environment node
  *
  * BACKLOG-3868 - the message insert step of the iPhone sync (storeMessages ->
- * batchInsertMessages) must yield to the event loop between 500-row batches, keep
+ * batchInsertMessages) must yield to the event loop between 100-row slices, keep
  * each batch in its own transaction, and stop at a cancel between batches.
  *
  * Before: every batch ran back to back with no yield. SR measured, arm64 Mac,
@@ -38,6 +38,7 @@ jest.mock("../../utils/preferenceHelper", () => ({
 // One entry per batchInsertMessages call (the rows it was handed), and a hook
 // that runs after each call so a test can cancel "between batches".
 const insertCalls: Array<Array<{ externalId: string }>> = [];
+const insertMs: number[] = [];
 let mockAfterInsert: ((callNumber: number) => void) | null = null;
 
 jest.mock("../databaseService", () => {
@@ -51,7 +52,9 @@ jest.mock("../databaseService", () => {
           if (name === "batchInsertMessages") {
             return (rows: Array<{ externalId: string }>, ...rest: unknown[]) => {
               insertCalls.push(rows);
+              const t0 = process.hrtime.bigint();
               const out = sync.batchInsertMessages(rows, ...rest);
+              insertMs.push(Number(process.hrtime.bigint() - t0) / 1e6);
               mockAfterInsert?.(insertCalls.length);
               return out;
             };
@@ -69,7 +72,7 @@ import { iPhoneSyncStorageService } from "../iPhoneSyncStorageService";
 import type { iOSMessage } from "../../types/iosMessages";
 
 const USER = "user-3868-insert";
-const BATCH = 500;
+const BATCH = 100; // INSERT_SLICE
 const SIZES = (process.env.KEEPR_INSERT_3868_SIZES || "10000,100000").split(",").map(Number);
 
 function loadDriver(): (new (file: string) => DatabaseType) | null {
@@ -163,6 +166,7 @@ maybe("BACKLOG-3868: iPhone sync message insert yields between batches (real dri
     db = openEncrypted();
     setDb(db);
     insertCalls.length = 0;
+    insertMs.length = 0;
     mockAfterInsert = null;
   });
 
@@ -188,7 +192,7 @@ maybe("BACKLOG-3868: iPhone sync message insert yields between batches (real dri
     const yields = immediate.mock.calls.length;
     immediate.mockRestore();
     process.stderr.write(
-      `[3868-insert] ${n} new messages: wall=${wallMs}ms maxEventLoopDelay=${maxBlockMs}ms batches=${insertCalls.length} setImmediate=${yields}\n`,
+      `[3868-insert] ${n} new messages: wall=${wallMs}ms maxEventLoopDelay=${maxBlockMs}ms batches=${insertCalls.length} maxBatchMs=${Math.round(Math.max(...insertMs))} firstMs=${Math.round(insertMs[0])} midMs=${Math.round(insertMs[Math.floor(insertMs.length / 2)])} lastMs=${Math.round(insertMs[insertMs.length - 1])} setImmediate=${yields}\n`,
     );
 
     // Same rows: every message stored exactly once, none skipped.
@@ -196,7 +200,7 @@ maybe("BACKLOG-3868: iPhone sync message insert yields between batches (real dri
     const expected = Array.from({ length: n }, (_, i) => guidFor(i)).sort();
     expect(storedExternalIds(db)).toEqual(expected);
 
-    // One call per 500-row batch, in order, each at most BATCH rows.
+    // One call per slice, in order, each at most BATCH rows.
     expect(insertCalls).toHaveLength(Math.ceil(n / BATCH));
     expect(insertCalls.every((rows) => rows.length <= BATCH)).toBe(true);
     expect(insertCalls.flat().map((r) => r.externalId)).toEqual(messages.map((m) => m.guid));
@@ -210,7 +214,7 @@ maybe("BACKLOG-3868: iPhone sync message insert yields between batches (real dri
   }, 300_000);
 
   it("a cancel between batches stops cleanly: committed batches stay, no further batch is attempted", async () => {
-    const n = 2000; // 4 batches
+    const n = 400; // 4 slices
     const messages: iOSMessage[] = [];
     for (let i = 0; i < n; i++) messages.push(makeMessage(i));
     const cancelSignal = { cancelled: false };
