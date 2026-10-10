@@ -21,8 +21,9 @@
  *      so anything written while that sweep ran makes the next one run.
  *   3. Otherwise run, and remember the start token only if the sweep reports clean.
  *
- * Not used by the callers whose whole point is new input: the post-fetch pass in
- * emailSyncService, autoLinkNewMessagesForUser after an import, the contact-change sync
+ * Also used by the fetch branch's post-fetch and phone-only passes in emailSyncService
+ * on the create/open path. Not used by the callers whose whole point is new input:
+ * autoLinkNewMessagesForUser after an import, the contact-change sync
  * and the add-contact path. Those run as before.
  */
 import { ensureDb } from "./db/core/dbConnection";
@@ -33,6 +34,9 @@ import {
   type AutoLinkInputToken,
 } from "./db/autoLinkInputTracker";
 
+/** Longest a caller waits for an in-flight sweep of the same deal before proceeding. */
+const IN_FLIGHT_WAIT_TIMEOUT_MS = 60_000;
+let inFlightWaitTimeoutMs = IN_FLIGHT_WAIT_TIMEOUT_MS;
 const inFlight = new Map<string, Promise<unknown>>();
 const lastCleanSweep = new Map<string, AutoLinkInputToken>();
 
@@ -56,13 +60,23 @@ export async function runFullSweepOnce<T extends { clean: boolean }>(
   sweep: () => Promise<T>,
   caller = "unknown",
 ): Promise<FullSweepOutcome<T>> {
-  // Wait, then re-check: another waiter may have started a sweep meanwhile.
+  // Wait, then re-check: another waiter may have started a sweep meanwhile. The wait is
+  // bounded: a sweep that never settles must not hang this caller forever.
+  const deadline = Date.now() + inFlightWaitTimeoutMs;
   for (let pending = inFlight.get(transactionId); pending; pending = inFlight.get(transactionId)) {
+    const remaining = deadline - Date.now();
     void logService.info(`[AutoLink] sweep waiting for one in flight caller=${caller}`, "AutoLinkSweepGuard", { transactionId });
-    try {
-      await pending;
-    } catch {
-      // the other sweep's failure is its caller's to report
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = await Promise.race([
+      pending.then(() => false, () => false), // the other sweep's failure is its caller's to report
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(true), Math.max(0, remaining));
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (timedOut) {
+      void logService.warn(`[AutoLink] sweep in flight did not finish in ${inFlightWaitTimeoutMs} ms; proceeding caller=${caller}`, "AutoLinkSweepGuard", { transactionId });
+      break;
     }
   }
 
@@ -98,4 +112,10 @@ export function yieldToEventLoop(): Promise<void> {
 export function __resetFullSweepGuardForTests(): void {
   inFlight.clear();
   lastCleanSweep.clear();
+  inFlightWaitTimeoutMs = IN_FLIGHT_WAIT_TIMEOUT_MS;
+}
+
+/** Test seam. */
+export function __setInFlightWaitTimeoutForTests(ms: number): void {
+  inFlightWaitTimeoutMs = ms;
 }
