@@ -175,7 +175,7 @@ maybe("BACKLOG-3868: iPhone sync message insert yields between batches (real dri
     nodeFs.rmSync(DB_DIR, { recursive: true, force: true });
   });
 
-  it.each(SIZES)("%i new messages into an empty encrypted store: same rows, a yield per batch, bounded stall", async (n) => {
+  it.each(SIZES)("%i new messages into an empty encrypted store: same rows, a yield per batch", async (n) => {
     const messages: iOSMessage[] = [];
     for (let i = 0; i < n; i++) messages.push(makeMessage(i));
     const immediate = jest.spyOn(global, "setImmediate");
