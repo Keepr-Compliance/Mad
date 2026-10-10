@@ -42,7 +42,7 @@ function makeClient(results: unknown[], userId: string | null) {
         ops.push(['single']);
         return result();
       };
-      builder.then = (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) => result().then(ok, bad);
+      builder.then = (ok: (_v: unknown) => unknown, bad?: (_e: unknown) => unknown) => result().then(ok, bad);
       return builder;
     },
   };
