@@ -521,6 +521,38 @@ export class BackupDecryptionService {
     }
   }
 
+  /**
+   * Synchronous sweep for app quit, where no await can finish. Same root and prefix guard
+   * as {@link cleanup}. A removal that fails (a Windows lock) is logged and left for the
+   * launch sweep; it is counted, never ignored. Never throws.
+   */
+  sweepParseCopiesSync(): { removed: number; failed: number } {
+    const root = path.resolve(this.tmpRoot());
+    let names: string[];
+    try {
+      names = fs.readdirSync(root);
+    } catch {
+      return { removed: 0, failed: 0 };
+    }
+    let removed = 0;
+    let failed = 0;
+    for (const name of names) {
+      if (!name.startsWith(IOS_PARSE_COPY_PREFIX)) continue;
+      const target = path.join(root, name);
+      try {
+        if (!fs.lstatSync(target).isDirectory()) continue;
+        fs.rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+        removed++;
+      } catch (error) {
+        failed++;
+        void logService.warn("Failed to remove a decrypted copy at quit; the next launch removes it", BackupDecryptionService.SERVICE_NAME, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return { removed, failed };
+  }
+
   /** Remove every parse copy (launch, or before a new sync). Returns how many were removed. */
   async sweepParseCopies(): Promise<number> {
     let entries: fs.Dirent[];

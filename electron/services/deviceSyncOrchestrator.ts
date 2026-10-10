@@ -2261,7 +2261,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         atRestHandedOff = true;
       }
 
+      // BACKLOG-3816: with no listener nothing persists and nothing will call
+      // cleanupBackup, so the plaintext parse copy would wait for the next sweep.
+      const nobodyCleansUp = needsCleanup && this.listenerCount("complete") === 0;
       this.emit("complete", result);
+      if (nobodyCleansUp) await this.discardParseCopy(parseCopyPath);
       return result;
     } catch (error) {
       const errorMessage =
@@ -2643,6 +2647,25 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   }
 
   /**
+   * BACKLOG-3816: the app is quitting - remove every decrypted parse copy now, synchronously
+   * (a quit gives no time for an await). A copy that cannot be removed (a Windows lock) is
+   * logged and swept at the next launch. Never throws.
+   */
+  discardParseCopiesForQuit(): void {
+    try {
+      if (typeof this.decryptionService.sweepParseCopiesSync !== "function") return;
+      const { removed, failed } = this.decryptionService.sweepParseCopiesSync();
+      if (removed > 0 || failed > 0) {
+        log.info("[DeviceSyncOrchestrator] Quit: decrypted parse copies removed", { removed, failed });
+      }
+    } catch (error) {
+      log.warn("[DeviceSyncOrchestrator] Quit: parse-copy removal failed; the next launch sweeps it", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
    * Get current sync status
    */
   getStatus(): { isRunning: boolean; phase: SyncPhase; removingUnfinishedBackup: boolean } {
@@ -2794,8 +2817,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     if (!parseCopyPath) return;
     try {
       await this.decryptionService.cleanup(parseCopyPath);
-    } catch {
-      // cleanup() logs and never throws; belt and braces.
+    } catch (error) {
+      // cleanup() logs and never throws. If it does, say so: the copy is plaintext and
+      // is removed by the next sweep (next sync, or launch) - never silently ignored.
+      log.warn("[DeviceSyncOrchestrator] Removing a decrypted parse copy failed; the next sweep removes it", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -3284,6 +3311,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // TASK-2110: Generate session ID for ACID rollback on cancel
     const sessionId = crypto.randomUUID();
 
+    // BACKLOG-3816: the decrypted (plaintext) copy this run made, if any. The `finally`
+    // below removes it on EVERY exit - success, cancel, error, throw - so no path has to
+    // remember to. Set the moment decryptBackup hands the path back.
+    let decryptedCopyPath: string | null = null;
+
     try {
       // Get backup path - construct from app's userData folder
       const { app } = await import("electron");
@@ -3417,6 +3449,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           message: "Decrypting backup...",
         });
 
+        // A copy a crash or a failed removal left behind goes now, not at the next launch.
+        await this.sweepParseCopies();
+
         const decryptResult = await this.decryptionService.decryptBackup(
           backupPath,
           existingPassword
@@ -3437,6 +3472,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
         attachmentsUndecryptable = this.recordUndecryptable(decryptResult.stats?.skipped ?? 0);
         extractionPath = decryptResult.decryptedPath;
+        decryptedCopyPath = extractionPath;
         if (preflightSignal.aborted) {
           // The decrypted copy is plaintext: removed before the frame ends.
           await this.discardParseCopy(extractionPath);
@@ -3596,6 +3632,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       this.emit("error", error);
 
       return this.errorResult(errorMessage);
+    } finally {
+      // BACKLOG-3816: whatever ended this run - a parser throw after decryption, a cancel,
+      // a return nobody remembered to clean up before - the plaintext copy goes now.
+      // Idempotent: a path an earlier branch already removed is a quiet no-op.
+      await this.discardParseCopy(decryptedCopyPath);
     }
   }
 
