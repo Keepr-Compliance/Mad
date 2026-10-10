@@ -32,8 +32,8 @@ monitor.start();
 void app
   .whenReady()
   .then(() => {
-    powerMonitor.on("suspend", () => monitor.resetBaseline());
-    powerMonitor.on("resume", () => monitor.resetBaseline());
+    powerMonitor.on("suspend", () => monitor.suspend());
+    powerMonitor.on("resume", () => monitor.resume());
   })
   .catch(() => {
     // Telemetry only.

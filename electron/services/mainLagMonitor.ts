@@ -49,8 +49,12 @@ export interface MainLagMonitor {
   stop: () => void;
   /** Run one check now (what the timer runs). Exposed for tests. */
   tick: () => void;
-  /** Forget the last tick, e.g. after the machine wakes from sleep. */
+  /** Forget the last tick. */
   resetBaseline: () => void;
+  /** Machine is going to sleep: ticks do nothing until `resume()`. */
+  suspend: () => void;
+  /** Machine woke: the next tick only sets a new baseline, it never reports a lag. */
+  resume: () => void;
 }
 
 export function createMainLagMonitor(deps: MainLagDeps): MainLagMonitor {
@@ -65,9 +69,14 @@ export function createMainLagMonitor(deps: MainLagDeps): MainLagMonitor {
   let lastLoggedAt = -Infinity;
   let suppressed = 0;
   let handle: unknown = null;
+  let suspended = false;
 
   const tick = (): void => {
     try {
+      if (suspended) {
+        last = null;
+        return;
+      }
       const now = deps.now();
       const prev = last;
       last = now;
@@ -111,6 +120,14 @@ export function createMainLagMonitor(deps: MainLagDeps): MainLagMonitor {
     },
     tick,
     resetBaseline() {
+      last = null;
+    },
+    suspend() {
+      suspended = true;
+      last = null;
+    },
+    resume() {
+      suspended = false;
       last = null;
     },
   };
