@@ -1,4 +1,4 @@
-FILES|migration 20261010120000_backlog_3857_no_trial_license_type.sql md5=557e542da51faa1afa837c7fa4b51960|rollback md5=1bbd790fc5e6cee127f76f4e2b93f89a
+FILES|migration 20261010120000_backlog_3857_no_trial_license_type.sql md5=147d9d57807e3f37c34b5e96eb776293|rollback md5=d29eb8f3efe7bf9eadd09929864c1a4d
 VENUE|PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 13.2.0, 64-bit | ledger max=20261004232511 rows=104
 -- baseline: every control against the unmutated migration
 == c0-baseline.sql
@@ -7,6 +7,12 @@ PASS|c0 license_type CHECK is the production one|want CHECK ((license_type = ANY
 PASS|c0 defaults are the production ones|want license_type='trial'::text; trial_expires_at=(now() + '14 days'::interval); trial_started_at=now(); trial_status='active'::text got license_type='trial'::text; trial_expires_at=(now() + '14 days'::interval); trial_started_at=now(); trial_status='active'::text
 PASS|c0 admin_update_license body md5 is the production one|want 7e27a1d38e49eec91def8d2cc584bf3e got 7e27a1d38e49eec91def8d2cc584bf3e
 PASS|c0 admin_update_license ACL/secdef/search_path are the production ones|want {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public} got {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public}
+== c10-anon-refused.sql
+PASS|fixtures: admin holds an internal role; two licenses|
+PASS|c10 anon -> 42501|want ~^ERR 42501  got ERR 42501 permission denied for function admin_update_license
+PASS|c10 authenticated holds EXECUTE|want true got true
+PASS|c10 service_role holds EXECUTE|want true got true
+PASS|c10 PUBLIC has no EXECUTE (anon inherits nothing)|want 0 got 0
 == c2-rpc-refuses-trial.sql
 PASS|fixtures: admin holds an internal role; two licenses|
 PASS|c2 {license_type: trial} -> 22023|want ~^ERR 22023 license_type trial is no longer accepted$ got ERR 22023 license_type trial is no longer accepted
@@ -47,20 +53,20 @@ PASS|fixtures: admin holds an internal role; two licenses|
 PASS|c7 CHECK after two applies|want CHECK ((license_type = ANY (ARRAY['individual'::text, 'team'::text]))) got CHECK ((license_type = ANY (ARRAY['individual'::text, 'team'::text])))
 PASS|c7 defaults after two applies|want license_type='individual'::text; trial_expires_at=<none>; trial_started_at=<none>; trial_status=<none> got license_type='individual'::text; trial_expires_at=<none>; trial_started_at=<none>; trial_status=<none>
 PASS|c7 function body after two applies|want ab793576ab168fec56e30d428cfc0514 got ab793576ab168fec56e30d428cfc0514
-PASS|c7 ACL/secdef/search_path unchanged|want {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public} got {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public}
+PASS|c7 ACL: no PUBLIC/anon, secdef/search_path unchanged|want {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public} got {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public}
 == c8-rollback.sql
 PASS|fixtures: admin holds an internal role; two licenses|
 PASS|c8 CHECK restored|want CHECK ((license_type = ANY (ARRAY['trial'::text, 'individual'::text, 'team'::text]))) got CHECK ((license_type = ANY (ARRAY['trial'::text, 'individual'::text, 'team'::text])))
 PASS|c8 defaults restored|want license_type='trial'::text; trial_expires_at=(now() + '14 days'::interval); trial_started_at=now(); trial_status='active'::text got license_type='trial'::text; trial_expires_at=(now() + '14 days'::interval); trial_started_at=now(); trial_status='active'::text
 PASS|c8 function body restored (production md5)|want 7e27a1d38e49eec91def8d2cc584bf3e got 7e27a1d38e49eec91def8d2cc584bf3e
-PASS|c8 ACL/secdef/search_path unchanged|want {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public} got {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public}
+PASS|c8 ACL stays revoked (no PUBLIC/anon), secdef/search_path unchanged|want {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public} got {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public}
 PASS|c8 trial accepted again by the RPC (old behaviour)|want OK rows=1 got OK rows=1
 == c9-drift-aborts.sql
 PASS|fixtures: admin holds an internal role; two licenses|
 PASS|c9 migration refused the drifted body|want ~^3857 pre-check: admin_update_license body differs got 3857 pre-check: admin_update_license body differs from the expected one (md5 9c21c7fc72b2caa746517e8bae8bde53)
 PASS|c9 CHECK unchanged|want CHECK ((license_type = ANY (ARRAY['trial'::text, 'individual'::text, 'team'::text]))) got CHECK ((license_type = ANY (ARRAY['trial'::text, 'individual'::text, 'team'::text])))
 PASS|c9 defaults unchanged|want license_type='trial'::text; trial_expires_at=(now() + '14 days'::interval); trial_started_at=now(); trial_status='active'::text got license_type='trial'::text; trial_expires_at=(now() + '14 days'::interval); trial_started_at=now(); trial_status='active'::text
-CONTROLS: pass=9 fail=0 error=0
+CONTROLS: pass=10 fail=0 error=0
 == m01-no-rpc-guard  MUTATION APPLIED: <   IF p_changes->>'license_type' = 'trial' THEN <     RAISE EXCEPTION 'license_type trial is no longer accepted' USING ERRCODE = '22023'; 
 FAIL|c2 {license_type: trial} -> 22023|want ~^ERR 22023 license_type trial is no longer accepted$ got ERR 23514 new row for relation "licenses" violates check constraint "licenses_license_type_check"
 FAIL|c2 {status, license_type: trial} -> 22023 (mixed change refused whole)|want ~^ERR 22023  got ERR 23514 new row for relation "licenses" violates check constraint "licenses_license_type_check"
@@ -83,11 +89,11 @@ FAIL|c4 trial_status IS NULL|active
 FAIL|c4 catalog defaults|want license_type='individual'::text; trial_expires_at=<none>; trial_started_at=<none>; trial_status=<none> got license_type='individual'::text; trial_expires_at=<none>; trial_started_at=<none>; trial_status='active'::text
 KILLED|m03b-trial_status-default-kept
 == m03c-trial_started_at-default-kept  MUTATION APPLIED: < ALTER TABLE public.licenses ALTER COLUMN trial_started_at DROP DEFAULT; 
-FAIL|c4 trial_started_at IS NULL|2026-10-10 08:02:51.733928+00
+FAIL|c4 trial_started_at IS NULL|2026-10-10 08:12:04.389318+00
 FAIL|c4 catalog defaults|want license_type='individual'::text; trial_expires_at=<none>; trial_started_at=<none>; trial_status=<none> got license_type='individual'::text; trial_expires_at=<none>; trial_started_at=now(); trial_status=<none>
 KILLED|m03c-trial_started_at-default-kept
 == m03d-trial_expires_at-default-kept  MUTATION APPLIED: < ALTER TABLE public.licenses ALTER COLUMN trial_expires_at DROP DEFAULT; 
-FAIL|c4 trial_expires_at IS NULL|2026-10-24 08:02:52.064634+00
+FAIL|c4 trial_expires_at IS NULL|2026-10-24 08:12:04.731139+00
 FAIL|c4 catalog defaults|want license_type='individual'::text; trial_expires_at=<none>; trial_started_at=<none>; trial_status=<none> got license_type='individual'::text; trial_expires_at=(now() + '14 days'::interval); trial_started_at=<none>; trial_status=<none>
 KILLED|m03d-trial_expires_at-default-kept
 == m04a-guard-refuses-any-type-change  MUTATION APPLIED: <   IF p_changes->>'license_type' = 'trial' THEN >   IF p_changes ? 'license_type' THEN 
@@ -110,9 +116,19 @@ KILLED|m06a-not-rerunnable-constraint
 == m06b-precheck-rejects-applied-body  MUTATION APPLIED: <   IF v_md5 IS NULL OR v_md5 NOT IN ('7e27a1d38e49eec91def8d2cc584bf3e', 'ab793576ab168fec56e30d428cfc0514') THEN >   IF v_md5 IS NULL OR v_md5 NOT IN ('7e27a1d38e49eec91def8d2cc584bf3e') THEN 
 FAIL|apply-twice: second apply raised|P0001 3857 pre-check: admin_update_license body differs from the expected one (md5 ab793576ab168fec56e30d428cfc0514)
 KILLED|m06b-precheck-rejects-applied-body
-== m06c-acl-changed  MUTATION APPLIED: > REVOKE EXECUTE ON FUNCTION public.admin_update_license(uuid, jsonb) FROM anon; 
-FAIL|c7 ACL/secdef/search_path unchanged|want {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public} got {=X/postgres,postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public}
+== m06c-acl-changed  MUTATION APPLIED: > REVOKE EXECUTE ON FUNCTION public.admin_update_license(uuid, jsonb) FROM authenticated; 
+FAIL|c7 ACL: no PUBLIC/anon, secdef/search_path unchanged|want {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public} got {postgres=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public}
 KILLED|m06c-acl-changed
+== m08a-no-revoke  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.admin_update_license(uuid, jsonb) FROM PUBLIC, anon; 
+FAIL|c7 ACL: no PUBLIC/anon, secdef/search_path unchanged|want {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public} got {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public}
+FAIL|c10 anon -> 42501|want ~^ERR 42501  got ERR P0001 Unauthorized
+FAIL|c10 PUBLIC has no EXECUTE (anon inherits nothing)|want 0 got 1
+KILLED|m08a-no-revoke
+== m08b-revoke-anon-only  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.admin_update_license(uuid, jsonb) FROM PUBLIC, anon; > REVOKE EXECUTE ON FUNCTION public.admin_update_license(uuid, jsonb) FROM anon; 
+FAIL|c7 ACL: no PUBLIC/anon, secdef/search_path unchanged|want {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public} got {=X/postgres,postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public}
+FAIL|c10 anon -> 42501|want ~^ERR 42501  got ERR P0001 Unauthorized
+FAIL|c10 PUBLIC has no EXECUTE (anon inherits nothing)|want 0 got 1
+KILLED|m08b-revoke-anon-only
 == m07-precheck-ignores-body  MUTATION APPLIED: <   IF v_md5 IS NULL OR v_md5 NOT IN ('7e27a1d38e49eec91def8d2cc584bf3e', 'ab793576ab168fec56e30d428cfc0514') THEN >   IF false AND v_md5 NOT IN ('7e27a1d38e49eec91def8d2cc584bf3e', 'ab793576ab168fec56e30d428cfc0514') THEN 
 FAIL|c9 migration refused the drifted body|want ~^3857 pre-check: admin_update_license body differs got <no error>
 FAIL|c9 CHECK unchanged|want CHECK ((license_type = ANY (ARRAY['trial'::text, 'individual'::text, 'team'::text]))) got CHECK ((license_type = ANY (ARRAY['individual'::text, 'team'::text])))
@@ -125,8 +141,11 @@ KILLED|r01-rollback-keeps-new-check
 == r02-rollback-forgets-trial_status-default  MUTATION APPLIED: < ALTER TABLE public.licenses ALTER COLUMN trial_status SET DEFAULT 'active'::text; 
 FAIL|c8 defaults restored|want license_type='trial'::text; trial_expires_at=(now() + '14 days'::interval); trial_started_at=now(); trial_status='active'::text got license_type='trial'::text; trial_expires_at=(now() + '14 days'::interval); trial_started_at=now(); trial_status=<none>
 KILLED|r02-rollback-forgets-trial_status-default
+== r04-rollback-grants-anon  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.admin_update_license(uuid, jsonb) FROM PUBLIC, anon; > REVOKE EXECUTE ON FUNCTION public.admin_update_license(uuid, jsonb) FROM PUBLIC; 
+FAIL|c8 ACL stays revoked (no PUBLIC/anon), secdef/search_path unchanged|want {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public} got {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres,anon=X/postgres} secdef=true cfg={search_path=public}
+KILLED|r04-rollback-grants-anon
 == r03-rollback-keeps-guard  MUTATION APPLIED: >   IF p_changes->>'license_type' = 'trial' THEN >     RAISE EXCEPTION 'license_type trial is no longer accepted' USING ERRCODE = '22023'; 
 FAIL|c8 function body restored (production md5)|want 7e27a1d38e49eec91def8d2cc584bf3e got ab793576ab168fec56e30d428cfc0514
 FAIL|c8 trial accepted again by the RPC (old behaviour)|want OK rows=1 got ERR 22023 license_type trial is no longer accepted
 KILLED|r03-rollback-keeps-guard
-MUTANTS: killed=16 survived=0 invalid=0
+MUTANTS: killed=19 survived=0 invalid=0
