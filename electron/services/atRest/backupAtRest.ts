@@ -137,6 +137,12 @@ export const BACKUP_SECURING_SENTENCE = "Syncing your iPhone will be available w
 export const BACKUP_SECURING_MESSAGE = `Keepr is securing your saved iPhone backup. ${BACKUP_SECURING_SENTENCE}`;
 /** Shown in the sync while a background seal stops at a file boundary (seconds at most). */
 export const BACKUP_PAUSING_MESSAGE = "Getting your saved iPhone backup ready for this sync...";
+/**
+ * PC final check 2026-10-10: after a sync the files it wrote are sealed within seconds,
+ * then the pass checks the rest of the backup (~575k sealed files, ~8 min on the PC)
+ * before it can record `encrypted`. That stretch read "100%". It now reads this, at 99%.
+ */
+export const BACKUP_FINISHING_MESSAGE = "Securing your iPhone backup… finishing up";
 export const BACKUP_AT_REST_KEY_UNAVAILABLE_MESSAGE =
   "Keepr cannot open its encryption key on this computer, so it will not copy your iPhone backup unprotected. Restart Keepr and try again.";
 export const BACKUP_AT_REST_DISK_MESSAGE =
@@ -288,6 +294,11 @@ export function describeBackupAtRestProgress(p: BackupAtRestProgress): { message
       message: `Preparing your saved iPhone backup (${p.done.toLocaleString()} of ${p.total.toLocaleString()} files)...`,
       percent,
     };
+  }
+  // 100% only when the pass has handed out every file (PC final check 2026-10-10): the
+  // estimate's work can be done while the walk still checks the rest of the backup.
+  if (percent >= 100 && p.done < p.total) {
+    return { message: BACKUP_FINISHING_MESSAGE, percent: 99 };
   }
   // Percentage only (founder decision 2026-10-09): the time-left estimate sat at
   // "about 4 min left" from 8% to 56% on the PC and is not shown.
@@ -824,23 +835,18 @@ export class BackupAtRest extends EventEmitter {
       files: listed.length,
       mb: Math.round(listed.reduce((n, f) => n + f.size, 0) / 1048576),
     });
-    // A 100% tick is sent once (PC final check 2026-10-10): after a sync the percentage
-    // reaches 100% when the files that sync wrote are sealed, and the walk then checks the
-    // rest of the chain (~575k sealed files, ~10 min on the PC) before the marker can say
-    // `encrypted`. Repeating "100%" through that check kept the banner up for the whole
-    // walk. Ticks resume if the total grows again (a file the estimate missed).
-    let fullSent = false;
+    // Once the estimated work is done while the walk goes on, the line reads "finishing
+    // up" (describeBackupAtRestProgress); logged once so the PC log shows where it starts.
+    let finishingLogged = false;
     const tick = (p: BackupAtRestProgress): void => {
-      const full = describeBackupAtRestProgress(p).percent >= 100;
-      if (full && fullSent) return;
-      if (full && p.done < p.total) {
+      if (!finishingLogged && p.done < p.total && p.doneUnits !== undefined && p.doneUnits === p.totalUnits) {
+        finishingLogged = true;
         this.log("info", "[BackupAtRest] this sync's files are sealed; checking the rest of the backup", {
           phase,
           done: p.done,
           files: p.total,
         });
       }
-      fullSent = full;
       notify(p);
     };
     tick({ udid, phase, done: 0, total: listed.length, doneUnits: 0, totalUnits });

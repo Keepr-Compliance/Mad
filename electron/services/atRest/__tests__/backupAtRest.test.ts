@@ -38,6 +38,7 @@ import {
   QUARANTINE_MAX_AGE_MS,
   type BackupAtRestProgress,
   BACKUP_SECURING_MESSAGE,
+  BACKUP_FINISHING_MESSAGE,
   BACKUP_SECURING_SENTENCE,
   markerProtectsChain,
   readMarkerAt,
@@ -1439,7 +1440,7 @@ describe("progress", () => {
       expect(extra.length).toBe(300);
     });
 
-    it("PC final check 2026-10-10: once this sync's files are sealed, 100% is sent ONCE while the walk checks the rest; the marker is encrypted when the walk ends", async () => {
+    it("PC final check 2026-10-10: the line never reads 100% while the walk still checks the rest of the backup; 100% only when the pass ends, then the marker is encrypted", async () => {
       sealedChainWithMany();
       const s = service();
       await s.seal(UDID);
@@ -1455,14 +1456,20 @@ describe("progress", () => {
       } finally {
         clockSpy.mockRestore();
       }
-      const percents = seen.map((p) => describeBackupAtRestProgress(p).percent);
-      const fullAt = percents.indexOf(100);
-      expect(fullAt).toBeGreaterThan(0);
-      // The new file is newest, so it is done in the first batches: the rest of the walk
-      // (300+ sealed files) would otherwise repeat "100%" on every batch.
-      expect(seen[fullAt].done).toBeLessThan(seen[fullAt].total);
-      expect(percents.filter((n) => n === 100)).toEqual([100]);
-      expect(seen.length).toBe(fullAt + 1);
+      const described = seen.map((p) => describeBackupAtRestProgress(p));
+      const last = seen[seen.length - 1];
+      expect(last.done).toBe(last.total);
+      expect(described[described.length - 1]).toEqual({ message: "Securing your iPhone backup… 100%", percent: 100 });
+      // Before the end: never 100%. The new file is newest, so its bytes are done in the
+      // first batches; the walk over the 300+ sealed files then reads "finishing up".
+      const before = described.slice(0, -1);
+      expect(before.length).toBeGreaterThan(5);
+      for (const d of before) expect(d.percent).toBeLessThan(100);
+      const finishing = seen.slice(0, -1).filter((p) => p.doneUnits === p.totalUnits && p.done < p.total);
+      expect(finishing.length).toBeGreaterThan(3);
+      for (const p of finishing) {
+        expect(describeBackupAtRestProgress(p)).toEqual({ message: BACKUP_FINISHING_MESSAGE, percent: 99 });
+      }
       expect(await s.readMarker(UDID)).toBe("encrypted");
       expect(plaintextLeft()).toEqual([]);
     });
@@ -1504,12 +1511,17 @@ describe("progress", () => {
       } finally {
         clockSpy.mockRestore();
       }
+      const missed = 1000 + W;
+      const mid = seen.slice(1, -1);
+      expect(mid.length).toBeGreaterThan(5);
       for (const p of seen) expect(p.doneUnits as number).toBeLessThanOrEqual(p.totalUnits as number);
-      // Nothing was estimated (index files are sealed by their own step), so the walk is at
-      // 100% from its first tick, and the missed file joins both sides: still 100%, which
-      // is sent once (PC final check 2026-10-10), not on every batch.
-      expect(seen.map((p) => describeBackupAtRestProgress(p).percent)).toEqual([100]);
-      expect(seen[0]).toMatchObject({ doneUnits: index, totalUnits: index });
+      // once the missed file has been sealed, the total includes it
+      const afterMissed = mid.filter((p) => (p.doneUnits as number) >= index + missed);
+      expect(afterMissed.length).toBeGreaterThan(0);
+      for (const p of afterMissed) expect(p.totalUnits as number).toBeGreaterThanOrEqual(index + missed);
+      const last = seen[seen.length - 1];
+      expect(last.doneUnits).toBe(index + 1000 + W);
+      expect(last.totalUnits).toBe(last.doneUnits);
       expect(plaintextLeft()).toEqual([]);
     });
 
