@@ -26,7 +26,7 @@ export default function RootLayout({
       <body className={inter.className}>
         <AuthProvider>
           <PermissionsProvider>
-            <main className="min-h-screen">{children}</main>
+            <div className="min-h-screen">{children}</div>
           </PermissionsProvider>
         </AuthProvider>
       </body>

@@ -94,7 +94,7 @@ export function OrganizationsTable({ organizations, canEdit }: OrganizationsTabl
   return (
     <div className="space-y-4">
       {/* Search bar + Create button */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 max-md:flex-wrap">
         <SearchInput
           containerClassName="flex-1"
           placeholder="Filter by name or slug..."
@@ -113,7 +113,7 @@ export function OrganizationsTable({ organizations, canEdit }: OrganizationsTabl
       </div>
 
       {/* Table */}
-      <TableContainer>
+      <TableContainer scrollX>
         <Table>
           <TableHead>
             <tr>
