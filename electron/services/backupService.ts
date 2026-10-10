@@ -98,6 +98,8 @@ import {
   forgetBackupSize,
   readRecordedBackupSize,
   recordBackupSize,
+  createDeferredBackupSize,
+  type DeferredBackupSize,
 } from "./backupSizeRecord";
 
 function exactUdidOrNull(name: string): string | null {
@@ -809,7 +811,7 @@ export function classifyBackupFailure(
 export class BackupService extends EventEmitter {
   private currentProcess: ChildProcess | null = null;
   /** BACKLOG-3816: the size walk of the last finished backup, when deferred. */
-  private deferredSize: { udid: string; reading: Promise<BackupSizeReading> } | null = null;
+  private deferredSize: { udid: string; size: DeferredBackupSize } | null = null;
   private isRunning: boolean = false;
   private currentDeviceUdid: string | null = null;
   private startTime: number = 0;
@@ -1504,9 +1506,18 @@ export class BackupService extends EventEmitter {
             return sizeReading;
           };
           if (options.deferSizeMeasurement) {
+            // Nothing runs yet: the orchestrator either supplies the total from the
+            // post-sync seal's listing (one walk, not two) or asks for the walk.
+            const sizeFile = this.backupSizeRecordFile();
             this.deferredSize = {
               udid: validatedUdid,
-              reading: this.measureAndRecord(recordFor, deviceBackupPath).then(logSize),
+              size: createDeferredBackupSize({
+                measure: () => this.measureAndRecord(recordFor, deviceBackupPath),
+                record: async (bytes) => {
+                  if (recordFor !== null) await recordBackupSize(sizeFile, recordFor, bytes);
+                },
+                onReading: logSize,
+              }),
             };
           } else {
             const sizeReading = logSize(await this.measureAndRecord(recordFor, deviceBackupPath));
@@ -2474,11 +2485,11 @@ export class BackupService extends EventEmitter {
    * BACKLOG-3816: the deferred size walk of `udid`'s last finished backup (see
    * `BackupOptions.deferSizeMeasurement`), handed out once. Null when none is pending.
    */
-  takeDeferredSizeMeasurement(udid: string): Promise<BackupSizeReading> | null {
+  takeDeferredSizeMeasurement(udid: string): DeferredBackupSize | null {
     const pending = this.deferredSize;
     if (!pending || pending.udid !== udid) return null;
     this.deferredSize = null;
-    return pending.reading;
+    return pending.size;
   }
 
   /**

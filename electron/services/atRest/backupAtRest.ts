@@ -356,6 +356,10 @@ export interface BackupAtRestDeps {
   sealEngineOptions?: SealEngineOptions;
   /** Test seam: how often a sync waiting for a pause re-checks and repeats its line (default 5 s). */
   pauseWaitMs?: number;
+  /** The running app's version, recorded on a chain proven sealed (the app singleton: app.getVersion(); absent = "unknown"). */
+  appVersion?: () => string;
+  /** Test seam: a monotonic clock in ms (default performance.now()), to notice the wall clock moving back. */
+  monotonicNow?: () => number;
 }
 
 // ---------------------------------------------------------------------------
@@ -519,6 +523,21 @@ export class BackupAtRest extends EventEmitter {
    * overwrites the marker's time before it seals. Absent = state unknown = whole chain.
    */
   private readonly syncUnsealedAt = new Map<string, number>();
+  /** {@link syncUnsealedAt} on the monotonic clock: a wall clock set back during the sync is noticed. */
+  private readonly syncUnsealedMono = new Map<string, number>();
+  /**
+   * Phones whose chain was PROVEN fully sealed (marker `encrypted`, verified by this app
+   * version, no pending flags) when the current C-DELTA sync started. Only for these may a
+   * clean end seal just the sync's delta and skip the verification walk (founder decision
+   * 2026-10-10). In memory on purpose: a crash loses it, and the recovery walks.
+   */
+  private readonly walkSkipEligible = new Set<string>();
+  /**
+   * BACKLOG-3816: the post-sync seal's listing of the chain (one `lstat` per file) also
+   * gives the backup's total size, handed here once, so the sync does not walk the chain
+   * a second time to measure it. Set by finishSync for its own seal only.
+   */
+  private readonly chainListedSink = new Map<string, (bytes: number) => void>();
 
   constructor(private readonly deps: BackupAtRestDeps) {
     super();
@@ -653,8 +672,20 @@ export class BackupAtRest extends EventEmitter {
     return readMarkerAt(this.deps.backupsRoot(), udid);
   }
 
-  private async setMarker(udid: string, state: BackupAtRestState): Promise<void> {
-    await this.deps.markers().writeBackupMarker(udid, state);
+  private async setMarker(udid: string, state: BackupAtRestState, verifiedBy?: string): Promise<void> {
+    await this.deps.markers().writeBackupMarker(udid, state, verifiedBy ? { verifiedBy } : undefined);
+  }
+
+  private appVersion(): string {
+    try {
+      return this.deps.appVersion?.() || "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  private monotonicNow(): number {
+    return this.deps.monotonicNow ? this.deps.monotonicNow() : performance.now();
   }
 
   async removeMarker(udid: string): Promise<void> {
@@ -798,6 +829,8 @@ export class BackupAtRest extends EventEmitter {
     onProgress?: (p: BackupAtRestProgress) => void,
     phase: "sealing" | "migrating" = "sealing",
     pause?: Int32Array,
+    /** Hand the pass only the files written since the sync's unseal (see {@link sealDeltaOnly}). */
+    opts: { deltaOnly?: boolean } = {},
   ): Promise<PassReport> {
     const started = Date.now();
     const report = emptyReport();
@@ -809,7 +842,24 @@ export class BackupAtRest extends EventEmitter {
       report.ms = Date.now() - started;
       return report;
     }
-    const listed = listing.sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
+    const sink = chain === this.chainDir(udid) ? this.chainListedSink.get(udid) : undefined;
+    if (sink) {
+      this.chainListedSink.delete(udid);
+      try {
+        sink(listing.reduce((sum, f) => sum + f.size, 0));
+      } catch (error) {
+        this.log("warn", "[BackupAtRest] the backup size could not be handed on", { code: errCode(error) });
+      }
+    }
+    const since = phase === "sealing" ? this.syncUnsealedAt.get(udid) : undefined;
+    const indexPaths = new Set(INDEX_SEAL_FILES.map((rel) => path.join(chain, rel)));
+    const inDelta = (f: ListedFile): boolean =>
+      since !== undefined && (f.mtimeMs ?? Infinity) >= since - SYNC_MTIME_SLACK_MS;
+    let listed = listing.sort((a, b) => (b.mtimeMs ?? 0) - (a.mtimeMs ?? 0));
+    if (opts.deltaOnly) {
+      if (since === undefined) throw new Error("a delta-only seal needs the sync's unseal time");
+      listed = listed.filter((f) => inDelta(f) || indexPaths.has(f.path));
+    }
     report.files = listed.length;
     const largest = listed.reduce((m, f) => Math.max(m, f.size), 0);
     if (!(await this.diskOk(chain, largest))) {
@@ -842,11 +892,7 @@ export class BackupAtRest extends EventEmitter {
     //     (if that step could not, the walk's verdict adds them back);
     //   - anywhere the state is unknown (launch migration, recovery, a new process) the
     //     whole chain.
-    const since = phase === "sealing" ? this.syncUnsealedAt.get(udid) : undefined;
-    const indexPaths = new Set(INDEX_SEAL_FILES.map((rel) => path.join(chain, rel)));
-    const counted = listed.map(
-      (f) => since === undefined || (!indexPaths.has(f.path) && (f.mtimeMs ?? Infinity) >= since - SYNC_MTIME_SLACK_MS),
-    );
+    const counted = listed.map((f) => since === undefined || (!indexPaths.has(f.path) && inDelta(f)));
     const unitsOf = (f: ListedFile): number => f.size + PROGRESS_FILE_WEIGHT_BYTES;
     let totalUnits = listed.reduce((sum, f, i) => sum + (counted[i] ? unitsOf(f) : 0), 0);
     let done = 0;
@@ -1128,6 +1174,8 @@ export class BackupAtRest extends EventEmitter {
     onProgress?: (p: BackupAtRestProgress) => void,
     /** Marker while the seal runs and if it does not finish (indexed chains only). */
     markerWhile: "sealing" | "migrating" = phase === "migrating" ? "migrating" : "sealing",
+    /** finishSync of a clean C-DELTA sync on a proven-sealed chain: seal the delta only (see {@link sealDeltaOnly}). */
+    opts: { allowWalkSkip?: boolean } = {},
   ): Promise<"encrypted" | "incomplete" | "absent" | "apple" | "unindexed" | "paused"> {
     const chain = this.chainDir(udid);
     // Per scan: an early return below must not leave the previous scan's count behind.
@@ -1147,7 +1195,13 @@ export class BackupAtRest extends EventEmitter {
     // first over all 576k files, was paused by Try Again before it reached Manifest.db).
     // NOT pausable: a sync asking for this phone waits for these few files (seconds, plus
     // the bounded lock retries) and only the walk below gives way to it.
-    await this.sealIndexFiles(udid);
+    // Read before the index seal below rewrites them (see sealDeltaOnly).
+    const indexMtimes = opts.allowWalkSkip ? await this.indexMtimeCheck(udid) : null;
+    const indexReport = await this.sealIndexFiles(udid);
+    if (opts.allowWalkSkip && indexMtimes) {
+      const delta = await this.sealDeltaOnly(udid, indexReport, indexMtimes, onProgress);
+      if (delta !== "walk") return delta;
+    }
     const report = await this.seal(udid, onProgress, phase);
     if (report.paused) {
       // A sync asked for this phone. The marker stays as it is (migrating / syncing), so
@@ -1203,13 +1257,106 @@ export class BackupAtRest extends EventEmitter {
       return "unindexed";
     }
     if (scan.plaintext === 0) {
-      await this.setMarker(udid, "encrypted");
+      // Every file was checked: this version has proven the chain sealed (verifiedBy).
+      await this.setMarker(udid, "encrypted", this.appVersion());
       this.indexUnsealed.delete(udid);
       this.syncUnsealedAt.delete(udid);
+      this.syncUnsealedMono.delete(udid);
       return "encrypted";
     }
     await this.setMarker(udid, markerWhile);
     return "incomplete";
+  }
+
+  /**
+   * Founder decision 2026-10-10 (BACKLOG-3816): after a NORMAL sync of a chain that was
+   * proven fully sealed when the sync started, seal only what this sync can have left
+   * plaintext — files with an mtime at or after the unseal time, plus the index files
+   * (already sealed by the caller) — and write `encrypted` at once. No header check of
+   * the ~576k unchanged files, no second listing.
+   *
+   * Why the delta is complete: the backup tool never sets a file time (idevicebackup2
+   * writes with fopen/fwrite; its MoveFiles/MoveItems use rename(), which keeps the
+   * source's mtime; CopyItem writes a fresh file). Before the sync every file was sealed
+   * (that is what `verifiedBy` proves); the unseal rewrote the index files (fresh mtime, after the recorded
+   * time). So a file with an older mtime is one that was sealed before the sync — moved
+   * or not, it is ciphertext. The residual is the wall clock itself: a clock set back
+   * during the sync is checked against the monotonic clock and the index files' mtimes.
+   *
+   * Returns "walk" (and logs why) whenever any precondition fails: the caller then runs
+   * the full walk exactly as before.
+   */
+  /**
+   * The unseal rewrote the index files and the tool writes them on every backup, so each
+   * one present must carry an mtime at or after the unseal time; an older one means the
+   * mtime basis cannot be trusted for this sync. Read BEFORE the index seal rewrites them.
+   */
+  private async indexMtimeCheck(udid: string): Promise<{ ok: true } | { ok: false; reasonCode: string; file?: string }> {
+    const since = this.syncUnsealedAt.get(udid);
+    if (since === undefined || !Number.isFinite(since)) return { ok: false, reasonCode: "NO_UNSEAL_TIME" };
+    let found = 0;
+    for (const rel of DELTA_UNSEAL_FILES) {
+      let st: fs.Stats;
+      try {
+        st = await fs.promises.lstat(path.join(this.chainDir(udid), rel));
+      } catch {
+        continue;
+      }
+      found++;
+      if (st.mtimeMs < since - SYNC_MTIME_SLACK_MS) return { ok: false, reasonCode: "INDEX_MTIME_OLD", file: rel };
+    }
+    // No Manifest.db: not an indexed chain; the full path decides (it removes the marker).
+    if (found === 0 || !(await exists(path.join(this.chainDir(udid), "Manifest.db")))) return { ok: false, reasonCode: "NO_INDEX" };
+    return { ok: true };
+  }
+
+  private async sealDeltaOnly(
+    udid: string,
+    indexReport: PassReport,
+    indexMtimes: { ok: true } | { ok: false; reasonCode: string; file?: string },
+    onProgress?: (p: BackupAtRestProgress) => void,
+  ): Promise<"encrypted" | "paused" | "walk"> {
+    const walk = (reasonCode: string, data: Record<string, unknown> = {}): "walk" => {
+      this.log("info", "[BackupAtRest] checking the whole backup after this sync", { reasonCode, ...data });
+      return "walk";
+    };
+    const chain = this.chainDir(udid);
+    const since = this.syncUnsealedAt.get(udid);
+    const sinceMono = this.syncUnsealedMono.get(udid);
+    if (since === undefined || !Number.isFinite(since) || sinceMono === undefined) return walk("NO_UNSEAL_TIME");
+    if (!indexMtimes.ok) return walk(indexMtimes.reasonCode, indexMtimes.file ? { file: indexMtimes.file } : {});
+    if (indexReport.failed > 0 || indexReport.damaged > 0) return walk("INDEX_SEAL_FAILED", { failedCodes: indexReport.failedCodes });
+    // A wall clock that went BACK during the sync would give new files an mtime before
+    // `since`. (Forward, or a sleep, only makes new files look newer: harmless.)
+    const wallElapsed = this.now() - since;
+    const monoElapsed = this.monotonicNow() - sinceMono;
+    if (wallElapsed < monoElapsed - SYNC_MTIME_SLACK_MS) return walk("CLOCK_CHANGED", { wallElapsed, monoElapsed });
+    const report = await this.sealAt(chain, udid, onProgress, "sealing", this.pausable.get(udid), { deltaOnly: true });
+    if (report.paused) {
+      this.log("info", "[BackupAtRest] paused for a sync", { phase: "sealing", mode: "delta", files: report.files, sealedNow: report.changed });
+      return "paused";
+    }
+    if (report.failed > 0) return walk("DELTA_SEAL_FAILED", { failed: report.failed, failedCodes: report.failedCodes });
+    if (report.damaged > 0) return walk("DELTA_DAMAGED", { damaged: report.damaged });
+    this.lastScanDamaged.set(udid, 0);
+    this.log("info", "[BackupAtRest] sealed", {
+      phase: "sealing",
+      mode: "delta",
+      files: report.files,
+      sealedNow: report.changed,
+      already: report.already,
+      empty: report.empty,
+      damaged: 0,
+      failed: 0,
+      tempsRemoved: report.tempsRemoved,
+      ms: report.ms,
+      plaintextLeft: 0,
+    });
+    await this.setMarker(udid, "encrypted", this.appVersion());
+    this.indexUnsealed.delete(udid);
+    this.syncUnsealedAt.delete(udid);
+    this.syncUnsealedMono.delete(udid);
+    return "encrypted";
   }
 
   // -------------------------------------------------------------------------
@@ -1316,6 +1463,27 @@ export class BackupAtRest extends EventEmitter {
     }
   }
 
+  /**
+   * A clean end of this sync may seal only its delta (no walk) when, right now, the chain
+   * is PROVEN fully sealed: marker `encrypted`, verified by this app version (a full walk
+   * or a clean delta seal on top of one), no forced C-FULL, no tool failure pending, and
+   * this sync is C-DELTA. Anything else (or a marker that cannot be read) walks.
+   */
+  private async recordWalkSkipEligibility(udid: string, strategy: BackupUnsealStrategy): Promise<void> {
+    this.walkSkipEligible.delete(udid);
+    if (strategy !== "delta") return;
+    const record = await this.deps.markers().readBackupMarker(udid).catch(() => null);
+    if (
+      record?.state === "encrypted" &&
+      !record.nextStrategy &&
+      !record.reasonCode &&
+      !record.toolFailures &&
+      record.verifiedBy === this.appVersion()
+    ) {
+      this.walkSkipEligible.add(udid);
+    }
+  }
+
   /** beginSync for a Keepr-managed chain; the caller holds the lock. */
   private async unsealKeptChain(
     udid: string,
@@ -1332,8 +1500,16 @@ export class BackupAtRest extends EventEmitter {
       // the seal at the end of this sync seals every plaintext file it finds. The launch
       // job still seals such a chain when no sync comes first.
       // From the first unsealed byte on, the marker says `syncing`.
-      if (strategy === "full") this.syncUnsealedAt.delete(udid);
-      else this.syncUnsealedAt.set(udid, Date.now());
+      // Founder decision 2026-10-10: whether this sync may skip the verification walk is
+      // decided by the state the chain is in NOW, before the first byte is unsealed.
+      await this.recordWalkSkipEligibility(udid, strategy);
+      if (strategy === "full") {
+        this.syncUnsealedAt.delete(udid);
+        this.syncUnsealedMono.delete(udid);
+      } else {
+        this.syncUnsealedAt.set(udid, Date.now());
+        this.syncUnsealedMono.set(udid, this.monotonicNow());
+      }
       await this.setMarker(udid, "syncing");
       this.indexUnsealed.add(udid);
       const report =
@@ -1492,18 +1668,38 @@ export class BackupAtRest extends EventEmitter {
      * `toolOk`: the backup tool finished this sync (resets the consecutive tool-failure
      * count, G3). `succeeded`: persistence stored it too (clears a C-FULL flag).
      */
-    opts: { forceFullNext?: string; succeeded?: boolean; toolOk?: boolean } = {},
+    opts: {
+      forceFullNext?: string;
+      succeeded?: boolean;
+      toolOk?: boolean;
+      cleanEnd?: boolean;
+      /** Receives the chain's total size from this seal's listing, if it lists the chain (see chainListedSink). */
+      onChainListed?: (bytes: number) => void;
+    } = {},
   ): Promise<void> {
     if (session.kind === "none") return;
     // This sync's seal also seals whatever a paused background pass did not reach.
     this.pausedForSync.delete(session.udid);
+    // Founder decision 2026-10-10: after a NORMAL sync (`cleanEnd`: the backup tool
+    // finished and its output was read — only the orchestrator's C-DELTA success path
+    // says so) of a chain proven sealed when the sync started, only what this sync
+    // wrote is sealed and the walk over the rest is skipped. Unplug, cancel, error,
+    // C-FULL, a quarantine and a quit never pass `cleanEnd`, so they walk as before.
+    const allowWalkSkip =
+      session.kind === "keepr" &&
+      session.strategy === "delta" &&
+      opts.cleanEnd === true &&
+      !opts.forceFullNext &&
+      this.walkSkipEligible.has(session.udid);
+    this.walkSkipEligible.delete(session.udid);
+    if (opts.onChainListed) this.chainListedSink.set(session.udid, opts.onChainListed);
     try {
       this.busy.set(session.udid, "sealing");
       // The next sync may pause this seal at a file boundary (see beginSync).
       this.pausable.set(session.udid, new Int32Array(new SharedArrayBuffer(4)));
       // An Apple-encrypted chain is detected inside and only recorded; a phone that
       // turned encryption OFF produced a plaintext chain, which is sealed.
-      const outcome = await this.sealAndRecord(session.udid, "sealing", onProgress);
+      const outcome = await this.sealAndRecord(session.udid, "sealing", onProgress, undefined, { allowWalkSkip });
       // Safety net for C-DELTA. Reading a still-sealed file leaves no trace, so that is not
       // detectable; what IS detectable is damage: a file that carries the sealed header but
       // does not parse (an incremental that rewrote or truncated sealed content). Then the
@@ -1554,6 +1750,7 @@ export class BackupAtRest extends EventEmitter {
         code: errCode(error),
       });
     } finally {
+      this.chainListedSink.delete(session.udid);
       this.release(session.udid);
     }
   }
@@ -1570,6 +1767,7 @@ export class BackupAtRest extends EventEmitter {
   releaseForQuit(session: BackupSyncSession): void {
     if (session.kind === "none") return;
     this.pausedForSync.delete(session.udid);
+    this.walkSkipEligible.delete(session.udid);
     this.release(session.udid);
     this.log("info", "[BackupAtRest] sync stopped for a quit; the phone is released, the seal is left to the quit and the launch", {
       session: session.kind,
@@ -1953,6 +2151,9 @@ export function getBackupAtRest(): BackupAtRest {
       },
       // BACKLOG-3816: seal off the main thread (sealWorker.js beside sealPool.js).
       workers: defaultSealWorkers(),
+      // Loaded here, not at the top: this module also runs outside Electron (the seal benchmark).
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      appVersion: () => (require("electron") as typeof import("electron")).app.getVersion(),
     });
   }
   return instance;

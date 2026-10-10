@@ -32,6 +32,7 @@ jest.mock("@sentry/electron/main", () => ({
 import { BackupService } from "../backupService";
 import {
   BACKUP_SIZE_RECORD_FILE,
+  createDeferredBackupSize,
   backupSizeRecordKey,
   forgetBackupSize,
   readRecordedBackupSize,
@@ -156,5 +157,32 @@ describe("BACKLOG-3816: backupSizeRecord", () => {
       .mockResolvedValue({ measured: false, reason: "EACCES" });
     await (svc as unknown as { measureAndRecord: (u: string, p: string) => Promise<unknown> }).measureAndRecord(UDID, chain);
     expect(await readRecordedBackupSize(recordFile, UDID)).toBeNull();
+  });
+});
+
+describe("BACKLOG-3816: one post-sync size measurement (createDeferredBackupSize)", () => {
+  it("nothing runs until asked; a supplied total is recorded and the walk never runs", async () => {
+    const measure = jest.fn(async () => ({ measured: true as const, bytes: 1 }));
+    const record = jest.fn(async () => undefined);
+    const size = createDeferredBackupSize({ measure, record });
+    await new Promise((r) => setImmediate(r));
+    expect(measure).not.toHaveBeenCalled();
+    size.supply(4096);
+    size.measure();
+    expect(await size.reading).toEqual({ measured: true, bytes: 4096 });
+    expect(record).toHaveBeenCalledWith(4096);
+    expect(measure).not.toHaveBeenCalled();
+  });
+
+  it("no supply: measure walks once; a late supply is ignored", async () => {
+    const measure = jest.fn(async () => ({ measured: true as const, bytes: 77 }));
+    const record = jest.fn(async () => undefined);
+    const size = createDeferredBackupSize({ measure, record });
+    size.measure();
+    size.measure();
+    size.supply(5);
+    expect(await size.reading).toEqual({ measured: true, bytes: 77 });
+    expect(measure).toHaveBeenCalledTimes(1);
+    expect(record).not.toHaveBeenCalled();
   });
 });

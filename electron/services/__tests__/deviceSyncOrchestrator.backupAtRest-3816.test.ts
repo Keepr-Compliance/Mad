@@ -127,7 +127,8 @@ import { createFileCrypto, MAGIC, type KeyResolver } from "../atRest/fileCrypto"
 import { createMarkerStore } from "../atRest/markers";
 import { setBackupIndexKeysForTests } from "../atRest/backupIndexFiles";
 import { syncTimeline } from "../syncTimeline";
-import type { BackupResult } from "../../types/backup";
+import type { BackupResult, BackupSizeReading } from "../../types/backup";
+import { createDeferredBackupSize } from "../backupSizeRecord";
 
 const KEY = crypto.randomBytes(32);
 const resolver: KeyResolver = {
@@ -293,7 +294,7 @@ describe("C2 — the chain is sealed on every end path after the unseal", () => 
     const walk = new Promise<{ measured: true; bytes: number }>((r) => (finishWalk = r));
     const take = jest
       .spyOn(BackupService.prototype, "takeDeferredSizeMeasurement")
-      .mockImplementation((udid) => (udid === UDID ? walk : null));
+      .mockImplementation((udid) => (udid === UDID ? createDeferredBackupSize({ measure: () => walk, record: async () => undefined }) : null));
     const result = await o.sync({ udid: UDID });
     // Returned while the walk is still running.
     expect(result.success).toBe(true);
@@ -941,6 +942,139 @@ describe("C2-DELTA (founder must-fix 2026-10-09) — every end of a C-DELTA sync
     expect((await o.sync({ udid: UDID })).error).toMatch(/parser exploded/);
     await sealedAfter(o);
     expect(finish).toHaveBeenCalledTimes(1);
+  });
+
+  // Founder decision 2026-10-10: the verification walk is skipped only after a NORMAL end.
+  // The planted plaintext file (old mtime, outside the delta) is reached only by the walk.
+  describe("verification walk skipped only after a normal end (BACKLOG-3816)", () => {
+    function plantOld(): string {
+      write(`7f/${"7".repeat(40)}`, "old plaintext, outside the delta");
+      const planted = path.join(chain, "7f", "7".repeat(40));
+      const old = new Date(Date.now() - 2 * 3600_000);
+      fsSync.utimesSync(planted, old, old);
+      return planted;
+    }
+    const sealedNow = (f: string) => fsSync.readFileSync(f).subarray(0, 7).equals(MAGIC);
+
+    it("success: finishSync is told the end was clean; only the delta is sealed (planted file untouched), marker encrypted", async () => {
+      const planted = plantOld();
+      const o = newOrchestrator();
+      const finish = jest.spyOn(atRest, "finishSync");
+      backupReturns(ok());
+      const result = await o.sync({ udid: UDID });
+      expect(result.success).toBe(true);
+      expect(finish).toHaveBeenCalledTimes(1);
+      expect(finish.mock.calls[0][2]).toMatchObject({ cleanEnd: true });
+      await o.lastAtRestSeal;
+      expect(sealedNow(planted)).toBe(false);
+      expect(plaintextLeft()).toEqual([planted]);
+      expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+      await o.completeBackupAtRest(true);
+      await o.cleanupBackup(result.backupPath!);
+    });
+
+    it.each([
+      ["disconnect", (orc: DeviceSyncOrchestrator) => {
+        (orc as unknown as { backupInFlight: { disconnected: boolean } }).backupInFlight.disconnected = true;
+        return fail();
+      }],
+      ["cancel", (orc: DeviceSyncOrchestrator) => {
+        orc.cancel();
+        return fail();
+      }],
+      ["tool error", () => fail({ errorCode: "DEVICE_LOCKED", error: "locked" } as Partial<BackupResult>)],
+    ])("%s: no cleanEnd, the walk runs (planted file sealed)", async (_name, end) => {
+      const planted = plantOld();
+      const o = newOrchestrator();
+      const finish = jest.spyOn(atRest, "finishSync");
+      backupReturns(end, o);
+      expect((await o.sync({ udid: UDID })).success).toBe(false);
+      await sealedAfter(o);
+      for (const call of finish.mock.calls) expect(call[2]?.cleanEnd).toBeUndefined();
+      expect(sealedNow(planted)).toBe(true);
+    });
+
+    /** The real size walk (BackupService.measureBackupSize) on the chain, behind the deferred handle. */
+    function realDeferredSize(o: DeviceSyncOrchestrator, onRecord: (bytes: number) => void, onTaken: () => void = () => undefined) {
+      const svc = (o as unknown as { backupService: { measureBackupSize(p: string): Promise<BackupSizeReading> } }).backupService;
+      const measure = jest.fn(() => svc.measureBackupSize(chain));
+      jest
+        .spyOn(BackupService.prototype, "takeDeferredSizeMeasurement")
+        .mockImplementation((udid) => {
+          onTaken();
+          return udid === UDID ? createDeferredBackupSize({ measure, record: async (b) => onRecord(b) }) : null;
+        });
+      return measure;
+    }
+    function realTotal(): number {
+      let total = 0;
+      const walk = (d: string) => {
+        for (const e of fsSync.readdirSync(d, { withFileTypes: true })) {
+          const f = path.join(d, e.name);
+          if (e.isDirectory()) walk(f);
+          else total += fsSync.statSync(f).size;
+        }
+      };
+      walk(chain);
+      return total;
+    }
+
+    it("normal sync: ONE walk of the backup — the seal's listing — and its total is the saved size", async () => {
+      const o = newOrchestrator();
+      const recorded: Array<{ bytes: number; real: number }> = [];
+      // record is called the moment the listing hands its total on, before anything is sealed.
+      // Counted from the moment the backup tool has finished (the size is taken then): the
+      // pre-flight before the backup is not post-sync work.
+      let counting = false;
+      const measure = realDeferredSize(o, (bytes) => recorded.push({ bytes, real: realTotal() }), () => (counting = true));
+      backupReturns(ok());
+      const realReaddir = fsSync.promises.readdir.bind(fsSync.promises);
+      let chainWalks = 0;
+      jest.spyOn(fsSync.promises, "readdir").mockImplementation(((...args: Parameters<typeof fsSync.promises.readdir>) => {
+        if (counting && args[0] === chain) chainWalks++;
+        return (realReaddir as (...a: unknown[]) => unknown)(...args);
+      }) as unknown as typeof fsSync.promises.readdir);
+      const result = await o.sync({ udid: UDID });
+      expect(result.success).toBe(true);
+      await o.lastAtRestSeal;
+      await o.completeBackupAtRest(true);
+      await new Promise((r) => setImmediate(r));
+      expect(chainWalks).toBe(1);
+      expect(measure).not.toHaveBeenCalled();
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0].bytes).toBeGreaterThan(0);
+      expect(recorded[0].bytes).toBe(recorded[0].real);
+      expect(syncTimeline.contextSnapshot().backupBytes).toBe(recorded[0].bytes);
+      await o.cleanupBackup(result.backupPath!);
+    });
+
+    it("C-FULL (its seal waits for persistence): no listing comes in time, so #2910's own walk supplies the size, once", async () => {
+      await createMarkerStore({ userData: () => userData }).setNextStrategy(UDID, "DELTA_DAMAGED");
+      const o = newOrchestrator();
+      const recorded: number[] = [];
+      const measure = realDeferredSize(o, (bytes) => recorded.push(bytes));
+      backupReturns(ok());
+      const result = await o.sync({ udid: UDID });
+      expect(result.success).toBe(true);
+      await o.completeBackupAtRest(true);
+      await o.lastAtRestSeal;
+      await new Promise((r) => setImmediate(r));
+      expect(measure).toHaveBeenCalledTimes(1);
+      expect(recorded).toEqual([]); // supplied by nothing: the walk recorded it
+      expect(syncTimeline.contextSnapshot().backupBytes).toBeGreaterThan(0);
+      await o.cleanupBackup(result.backupPath!);
+    });
+
+    it("a throw after the parse copy (parser explodes): the seal had already started as a clean end of the backup tool; the chain is complete", async () => {
+      const o = newOrchestrator();
+      parserBehaviour = "throw";
+      backupReturns(ok());
+      const finish = jest.spyOn(atRest, "finishSync");
+      expect((await o.sync({ udid: UDID })).error).toMatch(/parser exploded/);
+      await sealedAfter(o);
+      expect(finish).toHaveBeenCalledTimes(1);
+      expect(finish.mock.calls[0][2]).toMatchObject({ cleanEnd: true });
+    });
   });
 });
 

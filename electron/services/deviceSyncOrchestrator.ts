@@ -27,6 +27,7 @@ import {
 } from "./deviceDetectionService";
 import { BackupService } from "./backupService";
 import type { LeftoverRemoval } from "./backupService";
+import type { DeferredBackupSize } from "./backupSizeRecord";
 import type { PriorBackupState, SyncCancelTrigger } from "../types/ipc/window-api-platform";
 import { isSyncCancelTrigger } from "./syncCancelTrigger";
 import { BackupDecryptionService } from "./backupDecryptionService";
@@ -683,6 +684,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   backupAtRest: BackupAtRest | null = null;
   /** S4-C: a successful sync's chain, sealed by {@link completeBackupAtRest} after persistence. */
   private pendingAtRestSession: BackupSyncSession | null = null;
+  /**
+   * BACKLOG-3816: the finished backup's size, waiting for the post-sync seal's listing
+   * (C-DELTA: the seal lists every file of the chain anyway). Whoever seals hands it on
+   * ({@link finishSyncWithSize}); anything that ends without that listing measures it.
+   */
+  private pendingBackupSize: DeferredBackupSize | null = null;
   /** S4-C: set once {@link watchBackupAtRestProgress} has subscribed. */
   private atRestProgressWatched = false;
   /** S4-C: the seal started by the last sync's end (tests and quit diagnostics await it). */
@@ -1846,8 +1853,17 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         const deferredSize = this.backupService.takeDeferredSizeMeasurement?.(options.udid) ?? null;
         if (deferredSize) {
           deferredSizePending = true;
+          // C-DELTA (Keepr-sealed chain): the seal right after the parse copy lists every
+          // file; its total is the size, so no separate walk runs. Every other case (C-FULL
+          // — its seal waits for persistence —, an Apple-encrypted or first backup) walks now.
+          if (atRestSession?.kind === "keepr" && atRestSession.strategy === "delta" && !backupResult.isEncrypted) {
+            this.measurePendingBackupSize();
+            this.pendingBackupSize = deferredSize;
+          } else {
+            deferredSize.measure();
+          }
           const backupPhase = this.backupTimelinePhase;
-          void deferredSize.then((reading) => {
+          void deferredSize.reading.then((reading) => {
             if (timelineRunId === null || syncTimeline.currentRunId?.() !== timelineRunId) return;
             syncTimeline.setContext(
               reading.measured ? { backupBytes: reading.bytes } : { backupBytesUnmeasured: true },
@@ -2086,7 +2102,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         // So the chain is sealed NOW, in the background (worker threads), while contacts
         // and messages are parsed and stored — not after persistence. What the phone
         // just wrote and the unsealed index files are sealed first (newest first).
-        this.lastAtRestSeal = this.atRest().finishSync(atRestSession, undefined, { toolOk: true });
+        // `cleanEnd`: the backup tool finished and its output is read, so this is a normal
+        // end — a chain proven sealed before the sync seals only this sync's delta and
+        // skips the verification walk (founder decision 2026-10-10). The finally below
+        // (unplug, cancel, error) never passes it.
+        this.lastAtRestSeal = this.finishSyncWithSize(atRestSession, { toolOk: true, cleanEnd: true });
         atRestSealStarted = true;
       }
 
@@ -2303,10 +2323,33 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           // G4: give the phone back, in case the quit does not happen after all.
           this.atRest().releaseForQuit(atRestSession);
         } else {
-          this.lastAtRestSeal = this.atRest().finishSync(atRestSession, undefined, { forceFullNext, toolOk: backupToolOk });
+          this.lastAtRestSeal = this.finishSyncWithSize(atRestSession, { forceFullNext, toolOk: backupToolOk });
         }
       }
+      // A size still waiting here gets no listing from this sync (quit, or the seal had
+      // already been started without it): walk.
+      this.measurePendingBackupSize();
     }
+  }
+
+  /** finishSync, handing the seal's listing total to a waiting backup size (one walk, not two). */
+  private finishSyncWithSize(
+    session: BackupSyncSession,
+    opts: { forceFullNext?: string; toolOk?: boolean; cleanEnd?: boolean },
+  ): Promise<void> {
+    const size = this.pendingBackupSize;
+    this.pendingBackupSize = null;
+    if (!size) return this.atRest().finishSync(session, undefined, opts);
+    // A seal that did not list the chain (paused first, Apple-encrypted) leaves it unsupplied: walk.
+    return this.atRest()
+      .finishSync(session, undefined, { ...opts, onChainListed: (bytes) => size.supply(bytes) })
+      .finally(() => size.measure());
+  }
+
+  private measurePendingBackupSize(): void {
+    const size = this.pendingBackupSize;
+    this.pendingBackupSize = null;
+    size?.measure();
   }
 
   /**
