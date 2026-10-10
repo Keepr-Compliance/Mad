@@ -25,6 +25,7 @@
 export const MAIN_LAG_THRESHOLD_MS = 1_000;
 export const MAIN_LAG_INTERVAL_MS = 100;
 export const MAIN_LAG_MIN_LOG_GAP_MS = 5_000;
+export const MAIN_LAG_AUTO_RESUME_TICKS = 50;
 
 export interface MainLagContext {
   lastChannel: string | null;
@@ -70,11 +71,23 @@ export function createMainLagMonitor(deps: MainLagDeps): MainLagMonitor {
   let suppressed = 0;
   let handle: unknown = null;
   let suspended = false;
+  // While suspended: ticks that arrive on schedule mean the machine is awake,
+  // so a suspend that never got its resume event clears itself.
+  let suspTickAt: number | null = null;
+  let onScheduleTicks = 0;
 
   const tick = (): void => {
     try {
       if (suspended) {
+        const t = deps.now();
+        const onSchedule = suspTickAt === null || t - suspTickAt <= intervalMs * 1.5;
+        suspTickAt = t;
+        onScheduleTicks = onSchedule ? onScheduleTicks + 1 : 1;
         last = null;
+        if (onScheduleTicks < MAIN_LAG_AUTO_RESUME_TICKS) return;
+        suspended = false;
+        last = t;
+        deps.log("[MainLag] resumed without a resume event");
         return;
       }
       const now = deps.now();
@@ -124,6 +137,8 @@ export function createMainLagMonitor(deps: MainLagDeps): MainLagMonitor {
     },
     suspend() {
       suspended = true;
+      suspTickAt = null;
+      onScheduleTicks = 0;
       last = null;
     },
     resume() {

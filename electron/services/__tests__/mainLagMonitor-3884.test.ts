@@ -178,4 +178,23 @@ describe("BACKLOG-3884: [MainLag] threshold, rate limit and context (injected cl
     advance(100);
     expect(lines).toEqual([]);
   });
+
+  it("a suspend with no resume event clears itself after 50 on-schedule ticks", () => {
+    const { lines, advance, monitor } = setup();
+    monitor.suspend();
+    for (let i = 0; i < 50; i += 1) advance(100);
+    expect(lines).toEqual(["[MainLag] resumed without a resume event"]);
+    advance(100 + 1300); // a real block after the auto-resume
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toMatch(/^\[MainLag\] durationMs=1300 /);
+  });
+
+  it("an off-schedule tick restarts the auto-resume count", () => {
+    const { lines, advance, monitor } = setup();
+    monitor.suspend();
+    for (let i = 0; i < 40; i += 1) advance(100);
+    advance(60_000); // wake gap
+    for (let i = 0; i < 40; i += 1) advance(100);
+    expect(lines).toEqual([]);
+  });
 });
