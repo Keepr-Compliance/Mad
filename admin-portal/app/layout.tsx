@@ -9,6 +9,8 @@ import '@keepr/ui/src/styles/theme.css';
 import { AuthProvider } from '@/components/providers/AuthProvider';
 import { PermissionsProvider } from '@/components/providers/PermissionsProvider';
 import { ServiceWorkerRegister } from '@/components/pwa/ServiceWorkerRegister';
+import { OfflineBanner } from '@/components/pwa/OfflineBanner';
+import { NavigationProgress } from '@/components/pwa/NavigationProgress';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -30,6 +32,8 @@ export default function RootLayout({
     <html lang="en">
       <body className={inter.className}>
         <ServiceWorkerRegister />
+        <NavigationProgress />
+        <OfflineBanner />
         <AuthProvider>
           <PermissionsProvider>
             <div className="min-h-screen">{children}</div>

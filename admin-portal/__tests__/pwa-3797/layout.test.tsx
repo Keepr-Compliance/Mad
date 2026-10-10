@@ -23,6 +23,8 @@ vi.mock('@/components/providers/PermissionsProvider', () => ({
 import RootLayout, { metadata, viewport } from '@/app/layout';
 import { ServiceWorkerRegister } from '@/components/pwa/ServiceWorkerRegister';
 import { AuthProvider } from '@/components/providers/AuthProvider';
+import { NavigationProgress } from '@/components/pwa/NavigationProgress';
+import { OfflineBanner } from '@/components/pwa/OfflineBanner';
 
 type El = React.ReactElement<{ children?: React.ReactNode; className?: string }>;
 
@@ -41,10 +43,10 @@ async function renderBody(): Promise<El> {
 }
 
 describe('BACKLOG-3797 admin root layout', () => {
-  it('mounts ServiceWorkerRegister as the first child of <body>, before AuthProvider', async () => {
+  it('mounts ServiceWorkerRegister, NavigationProgress and OfflineBanner in <body>, before AuthProvider', async () => {
     const body = await renderBody();
     const kids = childrenOf(body);
-    expect(kids.map((k) => k.type)).toEqual([ServiceWorkerRegister, AuthProvider]);
+    expect(kids.map((k) => k.type)).toEqual([ServiceWorkerRegister, NavigationProgress, OfflineBanner, AuthProvider]);
   });
 
   it('declares iOS standalone metadata with the home-screen title "Keepr Admin"', () => {
