@@ -104,3 +104,57 @@ export function forgetBackupSize(file: string, udid: string): Promise<void> {
     await writeAll(file, all);
   });
 }
+
+/**
+ * BACKLOG-3816: the finished backup's size, measured once, after the sync. The post-sync
+ * seal already lists every file of the chain (one `lstat` each) to find what to seal; it
+ * {@link DeferredBackupSize.supply supplies} that listing's total, so no second walk runs.
+ * Where no such listing comes (C-FULL, an Apple-encrypted backup, a quit, a seal that
+ * paused before listing), {@link DeferredBackupSize.measure measure} runs the walk. The
+ * first of the two wins; the other is a no-op.
+ */
+export interface DeferredBackupSize {
+  /** Settles once with what was supplied or measured. */
+  readonly reading: Promise<import("../types/backup").BackupSizeReading>;
+  /** A listing of this backup made elsewhere: its total is the size (recorded, no walk). */
+  supply(bytes: number): void;
+  /** No listing will come: walk the backup now. */
+  measure(): void;
+}
+
+export function createDeferredBackupSize(deps: {
+  /** The walk (and its record), run only if nothing is supplied first. */
+  measure: () => Promise<import("../types/backup").BackupSizeReading>;
+  /** Records a supplied total. */
+  record: (bytes: number) => Promise<void>;
+  /** Called with the reading before it settles (logging). */
+  onReading?: (r: import("../types/backup").BackupSizeReading) => void;
+}): DeferredBackupSize {
+  let started = false;
+  let settle!: (r: import("../types/backup").BackupSizeReading) => void;
+  const reading = new Promise<import("../types/backup").BackupSizeReading>((resolve) => (settle = resolve));
+  const finish = (r: import("../types/backup").BackupSizeReading) => {
+    deps.onReading?.(r);
+    settle(r);
+  };
+  return {
+    reading,
+    supply(bytes) {
+      if (started) return;
+      started = true;
+      const r = { measured: true as const, bytes };
+      void deps
+        .record(bytes)
+        .catch(() => undefined)
+        .then(() => finish(r));
+    },
+    measure() {
+      if (started) return;
+      started = true;
+      void deps
+        .measure()
+        .catch((error: unknown) => ({ measured: false as const, reason: error instanceof Error ? error.message : String(error) }))
+        .then(finish);
+    },
+  };
+}

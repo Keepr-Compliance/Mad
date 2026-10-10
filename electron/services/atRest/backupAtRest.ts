@@ -533,6 +533,12 @@ export class BackupAtRest extends EventEmitter {
    * 2026-10-10). In memory on purpose: a crash loses it, and the recovery walks.
    */
   private readonly walkSkipEligible = new Set<string>();
+  /**
+   * BACKLOG-3816: the post-sync seal's listing of the chain (one `lstat` per file) also
+   * gives the backup's total size, handed here once, so the sync does not walk the chain
+   * a second time to measure it. Set by finishSync for its own seal only.
+   */
+  private readonly chainListedSink = new Map<string, (bytes: number) => void>();
 
   constructor(private readonly deps: BackupAtRestDeps) {
     super();
@@ -837,6 +843,15 @@ export class BackupAtRest extends EventEmitter {
       report.paused = true;
       report.ms = Date.now() - started;
       return report;
+    }
+    const sink = chain === this.chainDir(udid) ? this.chainListedSink.get(udid) : undefined;
+    if (sink) {
+      this.chainListedSink.delete(udid);
+      try {
+        sink(listing.reduce((sum, f) => sum + f.size, 0));
+      } catch (error) {
+        this.log("warn", "[BackupAtRest] the backup size could not be handed on", { code: errCode(error) });
+      }
     }
     const since = phase === "sealing" ? this.syncUnsealedAt.get(udid) : undefined;
     const indexPaths = new Set(INDEX_SEAL_FILES.map((rel) => path.join(chain, rel)));
@@ -1655,7 +1670,14 @@ export class BackupAtRest extends EventEmitter {
      * `toolOk`: the backup tool finished this sync (resets the consecutive tool-failure
      * count, G3). `succeeded`: persistence stored it too (clears a C-FULL flag).
      */
-    opts: { forceFullNext?: string; succeeded?: boolean; toolOk?: boolean; cleanEnd?: boolean } = {},
+    opts: {
+      forceFullNext?: string;
+      succeeded?: boolean;
+      toolOk?: boolean;
+      cleanEnd?: boolean;
+      /** Receives the chain's total size from this seal's listing, if it lists the chain (see chainListedSink). */
+      onChainListed?: (bytes: number) => void;
+    } = {},
   ): Promise<void> {
     if (session.kind === "none") return;
     // This sync's seal also seals whatever a paused background pass did not reach.
@@ -1672,6 +1694,7 @@ export class BackupAtRest extends EventEmitter {
       !opts.forceFullNext &&
       this.walkSkipEligible.has(session.udid);
     this.walkSkipEligible.delete(session.udid);
+    if (opts.onChainListed) this.chainListedSink.set(session.udid, opts.onChainListed);
     try {
       this.busy.set(session.udid, "sealing");
       // The next sync may pause this seal at a file boundary (see beginSync).
@@ -1729,6 +1752,7 @@ export class BackupAtRest extends EventEmitter {
         code: errCode(error),
       });
     } finally {
+      this.chainListedSink.delete(session.udid);
       this.release(session.udid);
     }
   }
