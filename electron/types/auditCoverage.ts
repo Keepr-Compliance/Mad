@@ -71,6 +71,11 @@ export interface TextCoverageResult {
   success: boolean;
   auditStartISO: string | null;
   gaps: SourceCoverageGap[];
+  /**
+   * BACKLOG-3884: the per-source floors are not known yet (read still running on its
+   * worker, or it failed). `gaps` is empty and means nothing; ask again later.
+   */
+  pending?: boolean;
   error?: string;
 }
 

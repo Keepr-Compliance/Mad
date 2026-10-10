@@ -27,8 +27,49 @@ import {
 import {
   getAuditCoverage,
   checkExportCompleteness,
-  getTransactionTextCoverage,
 } from "../services/auditCoverageService";
+import { getTransactionTextCoverageAsync } from "../services/textCoverageAsync";
+import {
+  findTextThread,
+  getTransactionTextPage,
+  getTransactionTextThreads,
+  unlinkTextThreads,
+} from "../services/transactionTextThreadsService";
+import type { TextPageCursor, TextWindow } from "../services/db/transactionTextPagingDb";
+
+/** BACKLOG-3884: the audit window the Texts tab sends (epoch ms, null = open). */
+function validateTextWindow(value: unknown): TextWindow | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object") throw new ValidationError("window must be an object or null", "window");
+  const v = value as { startMs?: unknown; endMs?: unknown };
+  const ms = (x: unknown, field: string): number | null => {
+    if (x === null || x === undefined) return null;
+    if (typeof x !== "number" || !Number.isFinite(x)) throw new ValidationError(`${field} must be a number or null`, field);
+    return x;
+  };
+  return { startMs: ms(v.startMs, "startMs"), endMs: ms(v.endMs, "endMs") };
+}
+
+/** BACKLOG-3884: conversation keys (thread ids). */
+function validateThreadKeys(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 200) {
+    throw new ValidationError("threadKeys must be a non-empty array (max 200)", "threadKeys");
+  }
+  if (value.some((k) => typeof k !== "string" || k.length === 0 || k.length > 500)) {
+    throw new ValidationError("threadKeys must be non-empty strings", "threadKeys");
+  }
+  return value as string[];
+}
+
+/** BACKLOG-3884: a page cursor as returned by get-text-thread-page. */
+function validateTextCursor(value: unknown): TextPageCursor | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object") throw new ValidationError("cursor must be an object or null", "cursor");
+  const v = value as { sk?: unknown; afterId?: unknown };
+  const okStr = (x: unknown): boolean => x === null || (typeof x === "string" && x.length <= 500);
+  if (!okStr(v.sk) || !okStr(v.afterId)) throw new ValidationError("cursor is malformed", "cursor");
+  return { sk: (v.sk as string | null) ?? null, afterId: (v.afterId as string | null) ?? null };
+}
 import type { TextCoverageResult, TextSource } from "../types/auditCoverage";
 import type { ImportProgressCallback } from "../services/macOSMessagesImportService";
 import type {
@@ -234,6 +275,7 @@ export function registerTransactionCrudHandlers(
     wrapHandler(async (
       event: IpcMainInvokeEvent,
       transactionId: string,
+      channelFilter?: unknown,
     ): Promise<TransactionResponse> => {
       // Validate input
       const validatedTransactionId = validateTransactionId(transactionId);
@@ -243,10 +285,16 @@ export function registerTransactionCrudHandlers(
           "transactionId",
         );
       }
+      // BACKLOG-3884: the details screen asks for its emails only; its texts come
+      // through the paged Texts-tab reads. Omitted = every communication, as before.
+      if (channelFilter !== undefined && channelFilter !== null && channelFilter !== "email") {
+        throw new ValidationError("channelFilter must be 'email' when given", "channelFilter");
+      }
 
       const t0 = Date.now();
       const details = await transactionService.getTransactionDetails(
         validatedTransactionId,
+        channelFilter === "email" ? "email" : undefined,
       );
       const t1 = Date.now();
 
@@ -353,6 +401,77 @@ export function registerTransactionCrudHandlers(
         "Transactions",
       );
       return { success: true, ...delta };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-3884: the Texts tab reads a conversation list and pages of one
+  // conversation, never every linked text at once.
+  ipcMain.handle(
+    "transactions:get-text-threads",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: string,
+      window: unknown,
+    ) => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+      const threads = await getTransactionTextThreads(validatedTransactionId, validateTextWindow(window));
+      return { success: true, threads };
+    }, { module: "Transactions" }),
+  );
+
+  ipcMain.handle(
+    "transactions:get-text-thread-page",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: string,
+      threadKeys: unknown,
+      window: unknown,
+      cursor: unknown,
+      limit: unknown,
+    ) => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+      const t0 = Date.now();
+      const page = getTransactionTextPage(
+        validatedTransactionId,
+        validateThreadKeys(threadKeys),
+        validateTextWindow(window),
+        validateTextCursor(cursor),
+        typeof limit === "number" && Number.isFinite(limit) ? limit : 0,
+      );
+      logService.debug(`[PERF] getTextThreadPage: ${Date.now() - t0}ms, ${page.rows.length} rows`, "Transactions");
+      return { success: true, ...page };
+    }, { module: "Transactions" }),
+  );
+
+  ipcMain.handle(
+    "transactions:find-text-thread",
+    wrapHandler(async (_event: IpcMainInvokeEvent, transactionId: string, messageId: unknown) => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+      if (typeof messageId !== "string" || messageId.length === 0 || messageId.length > 200) {
+        throw new ValidationError("messageId must be a non-empty string", "messageId");
+      }
+      return { success: true, threadKey: findTextThread(validatedTransactionId, messageId) };
+    }, { module: "Transactions" }),
+  );
+
+  ipcMain.handle(
+    "transactions:unlink-text-threads",
+    wrapHandler(async (_event: IpcMainInvokeEvent, transactionId: string, threadKeys: unknown) => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+      const result = await unlinkTextThreads(validatedTransactionId, validateThreadKeys(threadKeys));
+      return { success: true, ...result };
     }, { module: "Transactions" }),
   );
 
@@ -713,7 +832,8 @@ export function registerTransactionCrudHandlers(
       }
       const known: readonly string[] = ["iphone", "mac", "android_companion", "google_messages"];
       const chosen = typeof chosenSource === "string" && known.includes(chosenSource) ? (chosenSource as TextSource) : null;
-      return getTransactionTextCoverage(validatedTransactionId, validatedUserId as string, chosen);
+      // BACKLOG-3884: off main (the floors read runs on a worker, cached per user).
+      return getTransactionTextCoverageAsync(validatedTransactionId, validatedUserId as string, chosen);
     }, { module: "Transactions" }),
   );
 

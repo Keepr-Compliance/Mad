@@ -107,7 +107,10 @@ export function useTransactionDetails(
   const loadDetails = useCallback(async (): Promise<void> => {
     try {
       setLoading(true);
-      const result = await window.api.transactions.getDetails(transaction.id);
+      // BACKLOG-3884: emails only. The texts are paged by the Texts tab
+      // (useTextThreads); asking for every communication here re-sent every
+      // linked text (183k rows on the PC) after each sync or contact edit.
+      const result = await window.api.transactions.getDetails(transaction.id, "email");
 
       if (result.success && result.transaction) {
         setCommunications(result.transaction.communications || []);
