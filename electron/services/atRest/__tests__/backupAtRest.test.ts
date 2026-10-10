@@ -27,6 +27,7 @@ import plist from "simple-plist";
 
 import { ADDRESS_BOOK_FILE_ID, SMS_DB_FILE_ID } from "../../backupDecryptionService";
 import {
+  BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE,
   BACKUP_AT_REST_QUARANTINED_MESSAGE,
   BackupAtRest,
   BackupAtRestRefusal,
@@ -332,13 +333,21 @@ describe("default strategy is C-DELTA (Step 0b)", () => {
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
   });
 
+  /** G3: two C-DELTA syncs in a row whose backup tool failed. */
+  async function toolFailsTwice(s: BackupAtRest): Promise<void> {
+    for (let i = 0; i < 2; i++) {
+      const session = await s.beginSync(UDID);
+      expect(session).toMatchObject({ kind: "keepr", strategy: "delta" });
+      await s.finishSync(session, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    }
+  }
+
   describe("R1: the force-full flag clears only when the forced C-FULL sync SUCCEEDED", () => {
     async function forcedFull() {
       makeChain();
       const s = service();
       await s.migrate(UDID);
-      const first = await s.beginSync(UDID);
-      await s.finishSync(first, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+      await toolFailsTwice(s);
       expect(await s.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
       const forced = await s.beginSync(UDID);
       expect(forced).toMatchObject({ kind: "keepr", strategy: "full" });
@@ -365,17 +374,54 @@ describe("default strategy is C-DELTA (Step 0b)", () => {
     });
   });
 
-  it("D1: a delta sync whose backup tool failed forces C-FULL even though no file is damaged; a restart still reads it", async () => {
+  it("G3: ONE delta sync whose backup tool failed -> the next sync is still C-DELTA (count kept across a restart)", async () => {
     makeChain();
     const s = service();
     await s.migrate(UDID);
     const session = await s.beginSync(UDID);
-    // The tool read a still-sealed file and exited non-zero: nothing is damaged.
     await s.finishSync(session, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+    expect(await s.forcedFullReason(UDID)).toBeNull();
+    const marker = JSON.parse(fs.readFileSync(path.join(backups, MARKER_DIR_NAME, `${UDID}.json`), "utf8"));
+    expect(marker.toolFailures).toBe(1);
+    expect(await service().beginSync(UDID)).toMatchObject({ kind: "keepr", strategy: "delta" });
+  });
+
+  it("G3 / D1: TWO in a row force C-FULL even though no file is damaged; a restart still reads it", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    // The tool read a still-sealed file and exited non-zero, twice: nothing is damaged.
+    await toolFailsTwice(s);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
     expect(await s.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
-    const afterRestart = service();
-    expect(await afterRestart.beginSync(UDID)).toMatchObject({ kind: "keepr", strategy: "full" });
+    expect(await service().beginSync(UDID)).toMatchObject({ kind: "keepr", strategy: "full" });
+  });
+
+  it("G3: a sync whose tool succeeded in between resets the count: fail, succeed, fail -> still C-DELTA", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    let session = await s.beginSync(UDID);
+    await s.finishSync(session, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    session = await s.beginSync(UDID);
+    await s.finishSync(session, undefined, { toolOk: true });
+    session = await s.beginSync(UDID);
+    await s.finishSync(session, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    expect(await s.forcedFullReason(UDID)).toBeNull();
+    expect(await s.beginSync(UDID)).toMatchObject({ strategy: "delta" });
+  });
+
+  it("G3: a damaged sealed file found by the seal still forces C-FULL at once (DELTA_DAMAGED)", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    // The tool truncated a still-sealed file: header magic kept, structure broken.
+    const victim = path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+    fs.writeFileSync(victim, fs.readFileSync(victim).subarray(0, 30));
+    await s.finishSync(session, undefined, { toolOk: true });
+    expect(await s.forcedFullReason(UDID)).toBe("DELTA_DAMAGED");
   });
 
   it("D1: a sync that was already C-FULL does not record a tool failure (nothing was left sealed)", async () => {
@@ -391,8 +437,7 @@ describe("default strategy is C-DELTA (Step 0b)", () => {
     makeChain();
     const s = service();
     await s.migrate(UDID);
-    const first = await s.beginSync(UDID);
-    await s.finishSync(first, undefined, { forceFullNext: "DELTA_TOOL_FAILED" });
+    await toolFailsTwice(s);
     // The forced C-FULL sync starts (marker `syncing`, plaintext on disk) and the app dies before finishSync.
     const crashed = service();
     await crashed.beginSync(UDID);
@@ -641,7 +686,9 @@ describe("refusals and special chains", () => {
     let late: string | null = null;
     const s = service({
       sealEngineOptions: {
-        beforeSeal: () => {
+        beforeSeal: (p) => {
+          // The index files are sealed in their own step before the walk lists the chain.
+          if (path.dirname(p) === chain) return;
           // Appears after the pass listed the chain (the pass never sees it).
           late ??= write("ee/" + "e".repeat(40), "written after the listing");
         },
@@ -664,7 +711,8 @@ describe("refusals and special chains", () => {
       return real(...a);
     };
     expect(await s.migrate(UDID)).toBe("encrypted");
-    expect(modes).toEqual(["seal"]); // no classify pass over the chain afterwards
+    // The index files' own step, then the walk; no classify pass over the chain afterwards.
+    expect(modes).toEqual(["seal", "seal"]);
   });
 
   it("a sync requested during the check pauses it too; partial counts never write `encrypted`", async () => {
@@ -676,8 +724,8 @@ describe("refusals and special chains", () => {
     let wrote = false;
     s = service({
       sealEngineOptions: {
-        beforeSeal: () => {
-          if (wrote) return;
+        beforeSeal: (p) => {
+          if (wrote || path.dirname(p) === chain) return; // index files: sealed before the walk lists
           wrote = true;
           write("ee/" + "e".repeat(40), "appears after the listing: the check must open it");
         },
@@ -1248,12 +1296,26 @@ describe("progress", () => {
     expect(describeBackupAtRestProgress({ udid: UDID, phase: "sealing", done: 900, total: 1000 }).percent).toBe(90);
   });
 
-  it("the securing line carries a time-based estimate once there is one (banner, outside the sync screen)", () => {
+  it("the securing line is the percentage only — no time-left estimate (founder decision 2026-10-09)", async () => {
     const base = { udid: UDID, phase: "migrating" as const, done: 10, total: 100, doneUnits: 42, totalUnits: 100 };
-    expect(describeBackupAtRestProgress({ ...base, etaMs: 12 * 60_000 }).message).toBe("Securing your iPhone backup… 42% (about 12 min left)");
-    expect(describeBackupAtRestProgress({ ...base, etaMs: 65 * 60_000 }).message).toBe("Securing your iPhone backup… 42% (about 1 h 5 min left)");
-    expect(describeBackupAtRestProgress({ ...base, etaMs: 20_000 }).message).toBe("Securing your iPhone backup… 42% (less than a minute left)");
     expect(describeBackupAtRestProgress(base).message).toBe("Securing your iPhone backup… 42%");
+    // Every line a real pass emits, mid-pass ones included (1 ms apart, interval forced to 0).
+    makeChain();
+    const events: BackupAtRestProgress[] = [];
+    const realNow = Date.now;
+    let t = realNow();
+    jest.spyOn(Date, "now").mockImplementation(() => (t += 60_000));
+    try {
+      await service().seal(UDID, (p) => events.push(p));
+    } finally {
+      jest.restoreAllMocks();
+    }
+    const sealing = events.filter((e) => e.phase === "sealing");
+    expect(sealing.length).toBeGreaterThan(2); // start, mid-pass, end
+    for (const e of sealing) {
+      expect(Object.keys(e)).not.toContain("etaMs");
+      expect(describeBackupAtRestProgress(e).message).toMatch(/^Securing your iPhone backup… \d{1,3}%$/);
+    }
   });
 
   it("Cancel while waiting for a background pass to pause: the sync ends as cancelled and the pass resumes to the end", async () => {
@@ -1312,7 +1374,9 @@ describe("progress", () => {
     async function incremental(s: BackupAtRest, during: () => void): Promise<{ seen: BackupAtRestProgress[]; opensAtFirst: number; index: number }> {
       const session = await s.beginSync(UDID, { strategy: "delta" });
       during();
-      const index = indexUnits(); // the index files, unsealed, as the pass will find them
+      // The index files are sealed by their own step before the walk (index-first), so
+      // the walk's estimate holds only what the tool wrote.
+      const index = 0;
       const seen: BackupAtRestProgress[] = [];
       let opens = 0;
       let opensAtFirst = -1;
@@ -1329,8 +1393,6 @@ describe("progress", () => {
       expect(opens).toBeGreaterThan(0); // the spy is live: the engine opens files
       return { seen, opensAtFirst, index };
     }
-    const indexUnits = (): number =>
-      DELTA_UNSEAL_FILES.reduce((n, rel) => n + fs.statSync(path.join(chain, rel)).size + W, 0);
 
     it("one new file among many sealed ones: 0% to 100% over that file's bytes, no open of the unchanged files before the first report", async () => {
       const extra = sealedChainWithMany();
@@ -1464,5 +1526,337 @@ describe("progress", () => {
     expect(describeBackupAtRestProgress({ udid: UDID, phase: "unsealing", done: 500, total: 1000 }).message).toBe(
       "Preparing your saved iPhone backup (500 of 1,000 files)...",
     );
+  });
+});
+
+describe("PC unplug retest 2026-10-09: the index files are sealed FIRST at every end of a sync", () => {
+  const INDEX = ["Manifest.db", "Info.plist", "Status.plist", "Manifest.plist"];
+  const isIndex = (p: string) => INDEX.includes(path.basename(p)) && path.dirname(p) === chain;
+  const manifest = () => path.join(chain, "Manifest.db");
+
+  /** The founder's state: a sealed chain, a C-DELTA sync unsealed the (large) index, the phone sent new files, then the cable came out. */
+  async function unpluggedMidSync(s: BackupAtRest) {
+    makeChain();
+    // A large index (the PC's is 1.02 GB): many chunks, the biggest file in the chain.
+    const db = new Database(manifest());
+    db.exec("CREATE TABLE Pad (b BLOB)");
+    const ins = db.prepare("INSERT INTO Pad VALUES (?)");
+    for (let i = 0; i < 64; i++) ins.run(crypto.randomBytes(4096));
+    db.close();
+    const old = new Date(Date.now() - 86_400_000);
+    for (const f of allContentFiles()) fs.utimesSync(f, old, old);
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID); // unseals Manifest.db + the plists
+    expect(headerOf(manifest()).equals(MAGIC)).toBe(false);
+    // The phone's new files are newer than the unseal (newest first would take them first).
+    const later = new Date(Date.now() + 60_000);
+    const sent = ["c1", "c2", "c3"].map((d) => write(`${d}/${d.repeat(20)}`, `sent this time ${d}`));
+    for (const f of sent) fs.utimesSync(f, later, later);
+    return { session, sent };
+  }
+
+  it("disconnect: Manifest.db and the plists are sealed before any content file, then the marker reaches `encrypted`", async () => {
+    const order: string[] = [];
+    const s = service({ sealEngineOptions: { beforeSeal: (p) => order.push(p) } });
+    const { session, sent } = await unpluggedMidSync(s);
+    order.length = 0;
+    await s.finishSync(session);
+    const firstContent = order.findIndex((p) => !isIndex(p));
+    const indexSealed = order.filter(isIndex);
+    expect(indexSealed.map((p) => path.basename(p)).sort()).toEqual([...INDEX].sort());
+    expect(firstContent).toBeGreaterThanOrEqual(INDEX.length);
+    for (const p of indexSealed) expect(order.indexOf(p)).toBeLessThan(firstContent);
+    expect(order[0]).toBe(manifest());
+    for (const f of sent) expect(headerOf(f).equals(MAGIC)).toBe(true);
+    expect(headerOf(manifest()).equals(MAGIC)).toBe(true);
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("a lock on Manifest.db for ~2 s (antivirus) is waited out in seconds, before the content files, not left to the 5-min idle recovery", async () => {
+    let clock = 0; // advanced only by the service's own waits
+    const slept: number[] = [];
+    const order: string[] = [];
+    let lockedTries = 0;
+    const s = service({
+      sleep: async (ms) => {
+        slept.push(ms);
+        clock += ms;
+      },
+      sealEngineOptions: {
+        retryDelayMs: 0,
+        beforeSeal: (p) => {
+          if (p === manifest() && clock < 2000) {
+            lockedTries++;
+            throw Object.assign(new Error("resource busy or locked"), { code: "EBUSY" });
+          }
+          order.push(p);
+        },
+      },
+    });
+    const { session } = await unpluggedMidSync(s);
+    order.length = 0;
+    lockedTries = 0;
+    clock = 0;
+    await s.finishSync(session);
+    expect(lockedTries).toBeGreaterThan(3); // more than the engine's own three quick tries
+    expect(clock).toBeGreaterThanOrEqual(2000);
+    expect(slept.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(30_000); // seconds, bounded
+    // Sealed before the walk over the content files began.
+    const firstContent = order.findIndex((p) => !isIndex(p));
+    expect(order.indexOf(manifest())).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf(manifest())).toBeLessThan(firstContent);
+    expect(headerOf(manifest()).equals(MAGIC)).toBe(true);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("a lock that outlasts every quick retry: the walk goes on, the index gets one more round after it, the file is named in the log", async () => {
+    const logs: Array<{ m: string; d?: Record<string, unknown> }> = [];
+    let armed = false;
+    let tries = 0;
+    // Locked through the index step (1 + 5 rounds × the engine's 3 tries = 18) and the
+    // walk's own 3 tries; free for the round after the walk.
+    const LOCKED_TRIES = 21;
+    const s = service({
+      log: (_l, m, d) => logs.push({ m, d }),
+      sealEngineOptions: {
+        retryDelayMs: 0,
+        beforeSeal: (p) => {
+          if (armed && p === manifest() && ++tries <= LOCKED_TRIES) throw Object.assign(new Error("locked"), { code: "EPERM" });
+        },
+      },
+    });
+    const { session } = await unpluggedMidSync(s);
+    armed = true;
+    await s.finishSync(session);
+    expect(tries).toBe(LOCKED_TRIES + 1);
+    const named = logs.find((l) => l.m === "[BackupAtRest] could not seal an index file");
+    expect(named?.d).toEqual(expect.objectContaining({ file: "Manifest.db", code: "EPERM" }));
+    // The pass line agrees with itself: no failure left, so no leftover failure codes.
+    const sealedLine = logs.find((l) => l.m === "[BackupAtRest] sealed" && l.d?.phase === "sealing");
+    expect(sealedLine?.d).toEqual(expect.objectContaining({ failed: 0, failedCodes: {}, lateIndexSealed: 1, plaintextLeft: 0 }));
+    expect(JSON.stringify(logs)).not.toContain(chain); // names, never paths
+    expect(headerOf(manifest()).equals(MAGIC)).toBe(true);
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("Try Again within seconds, repeatedly: each end seals the index before the next sync unseals it; nothing stays plaintext", async () => {
+    const events: string[] = [];
+    const s = service({ sealEngineOptions: { beforeSeal: (p) => p === manifest() && events.push("seal") } });
+    const decrypt = files.decryptToFile.bind(files);
+    jest.spyOn(files, "decryptToFile").mockImplementation(async (src, dest) => {
+      if (src === manifest() && dest === manifest()) events.push("unseal");
+      return decrypt(src, dest);
+    });
+    let { session } = await unpluggedMidSync(s);
+    events.length = 0;
+    for (let retry = 0; retry < 3; retry++) {
+      // The sync ends (not awaited, as in the orchestrator) and Try Again starts at once.
+      const ending = s.finishSync(session);
+      const next = await s.beginSync(UDID);
+      await ending;
+      expect(next.kind).toBe("keepr");
+      session = next;
+      write(`d${retry}/${String(retry).repeat(40)}`, "the retry's own new file");
+    }
+    await s.finishSync(session);
+    expect(events).toEqual(["seal", "unseal", "seal", "unseal", "seal", "unseal", "seal"]);
+    expect(headerOf(manifest()).equals(MAGIC)).toBe(true);
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("a sync that finds Manifest.db already plaintext (left so by an older build) unseals the rest and its end seals it", async () => {
+    const s = service();
+    const { session } = await unpluggedMidSync(s);
+    // The old build's end never sealed it: no seal, the lock dropped.
+    (s as unknown as { release: (u: string) => void }).release(UDID);
+    void session;
+    expect(headerOf(manifest()).equals(MAGIC)).toBe(false);
+    const next = await s.beginSync(UDID);
+    expect(next.kind).toBe("keepr");
+    await s.finishSync(next);
+    expect(headerOf(manifest()).equals(MAGIC)).toBe(true);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+});
+
+describe("PC diagnostic log 2026-10-09: Try Again pauses only the walk, never the index seal", () => {
+  const manifest = () => path.join(chain, "Manifest.db");
+  const isRoot = (p: string) => path.dirname(p) === chain;
+  let armed = false; // the hooks act only once the sync has ended (not during the setup's own seal)
+  beforeEach(() => {
+    armed = false;
+  });
+
+  async function endedWithError(s: BackupAtRest) {
+    makeChain();
+    const old = new Date(Date.now() - 86_400_000);
+    for (const f of allContentFiles()) fs.utimesSync(f, old, old); // an unseal keeping the old mtime: sorted last
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    for (const d of ["c1", "c2"]) write(`${d}/${d.repeat(20)}`, "sent this time");
+    return session;
+  }
+
+  it("error end → index sealed before the walk → Try Again while the walk runs pauses it → Manifest.db is KEPRENC at the pause; the retry's end seals the rest", async () => {
+    let s: BackupAtRest | null = null;
+    let retry: Promise<Awaited<ReturnType<BackupAtRest["beginSync"]>>> | null = null;
+    let atPause: { manifestSealed: boolean; plistsSealed: boolean } | null = null;
+    s = service({
+      sealEngineOptions: {
+        beforeSeal: (p) => {
+          if (!armed || isRoot(p) || retry) return;
+          // The walk has reached its first content file: Try Again now.
+          atPause = {
+            manifestSealed: headerOf(manifest()).equals(MAGIC),
+            plistsSealed: ["Info.plist", "Status.plist", "Manifest.plist"].every((n) => headerOf(path.join(chain, n)).equals(MAGIC)),
+          };
+          retry = (s as BackupAtRest).beginSync(UDID);
+        },
+      },
+    });
+    const session = await endedWithError(s);
+    armed = true;
+    const logs: string[] = [];
+    (s as unknown as { log: (l: string, m: string) => void }).log = (_l, m) => logs.push(m);
+    await s.finishSync(session);
+    expect(atPause).toEqual({ manifestSealed: true, plistsSealed: true });
+    expect(logs).toContain("[BackupAtRest] paused for a sync");
+    const next = await (retry as unknown as Promise<Awaited<ReturnType<BackupAtRest["beginSync"]>>>);
+    expect(next.kind).toBe("keepr");
+    await s.finishSync(next);
+    expect(headerOf(manifest()).equals(MAGIC)).toBe(true);
+    expect(plaintextLeft()).toEqual([]);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+
+  it("Try Again while Manifest.db is locked: the sync waits for the bounded retries; the index is sealed before it is unsealed again", async () => {
+    let tries = 0;
+    const events: string[] = [];
+    let s: BackupAtRest | null = null;
+    let retry: Promise<unknown> | null = null;
+    s = service({
+      sealEngineOptions: {
+        retryDelayMs: 0,
+        beforeSeal: (p) => {
+          if (!armed || p !== manifest()) return;
+          if (++tries === 1) retry = (s as BackupAtRest).beginSync(UDID); // asks for the phone mid-lock
+          if (tries <= 5) throw Object.assign(new Error("locked"), { code: "EBUSY" });
+          events.push("seal");
+        },
+      },
+    });
+    const session = await endedWithError(s);
+    armed = true;
+    const decrypt = files.decryptToFile.bind(files);
+    jest.spyOn(files, "decryptToFile").mockImplementation(async (src, dest) => {
+      if (src === manifest()) events.push("unseal");
+      return decrypt(src, dest);
+    });
+    await s.finishSync(session);
+    await retry;
+    expect(events).toEqual(["seal", "unseal"]);
+  });
+});
+
+describe("audit G1-part: a failed seal of an index file is retried within ~30 s, not left to the 5-min idle recovery", () => {
+  it("a lock on Manifest.db lasting 20 s: sealed by the index step's own retries (five tries over ~30 s), before the walk; the marker reaches `encrypted`", async () => {
+    let clock = 0;
+    let armed = false;
+    const slept: number[] = [];
+    const order: string[] = [];
+    const manifest = path.join(chain, "Manifest.db");
+    const s = service({
+      sleep: async (ms) => {
+        slept.push(ms);
+        clock += ms;
+      },
+      sealEngineOptions: {
+        retryDelayMs: 0,
+        beforeSeal: (p) => {
+          if (armed && p === manifest && clock < 20_000) throw Object.assign(new Error("locked"), { code: "EBUSY" });
+          if (armed) order.push(p);
+        },
+      },
+    });
+    makeChain();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    write("c1/" + "c".repeat(40), "sent this time");
+    armed = true;
+    await s.finishSync(session);
+    // Sealed in the index step, not by the walk or a later round.
+    const firstContent = order.findIndex((p) => path.dirname(p) !== chain);
+    expect(order.indexOf(manifest)).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf(manifest)).toBeLessThan(firstContent);
+    expect(clock).toBeGreaterThanOrEqual(20_000);
+    expect(slept.length).toBeLessThanOrEqual(5);
+    expect(slept.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(30_000);
+    expect(headerOf(manifest).equals(MAGIC)).toBe(true);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+  });
+});
+
+describe("audit G2: under C-DELTA a damaged sealed file the sync reads no longer fails every sync", () => {
+  /** Flip one byte in the sealed body (the header still parses: classify says `sealed`). */
+  function flipBody(file: string): void {
+    const b = fs.readFileSync(file);
+    b[b.length - 20] ^= 0xff;
+    fs.writeFileSync(file, b);
+  }
+  const smsPath = () => path.join(chain, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID);
+  const attPath = () => path.join(chain, ATTACHMENT_ID.slice(0, 2), ATTACHMENT_ID);
+
+  it("sms.db does not authenticate: this sync says Try Again; the next sync is C-FULL, quarantines the backup and makes a full one", async () => {
+    makeChain();
+    const s = service();
+    expect(await s.migrate(UDID)).toBe("encrypted");
+    flipBody(smsPath());
+    const first = await s.beginSync(UDID);
+    expect(first).toEqual(expect.objectContaining({ kind: "keepr", strategy: "delta" }));
+    const out = path.join(userData, "parse-1");
+    await expect(s.buildParseCopy(UDID, out)).rejects.toThrow(BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE);
+    await s.finishSync(first);
+    expect(await s.forcedFullReason(UDID)).toBe("DELTA_DAMAGED");
+    // Try Again: recovered, not the same failure again.
+    const second = await s.beginSync(UDID);
+    expect(second.kind).toBe("first");
+    expect(second.kind === "first" && second.quarantined?.reasonCode).toBe("INTEGRITY");
+    expect(fs.readdirSync(path.join(backups, QUARANTINE_DIR_NAME))).toHaveLength(1);
+    await s.finishSync(second);
+  });
+
+  it("an attachment does not authenticate: skipped and counted, the sync goes on, and the next sync is C-FULL", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    flipBody(attPath());
+    const session = await s.beginSync(UDID);
+    const out = path.join(userData, "parse-2");
+    const copy = await s.buildParseCopy(UDID, out);
+    expect(copy).toEqual(expect.objectContaining({ unreadable: 1 }));
+    expect(copy.copied).toBeGreaterThanOrEqual(2); // sms.db + AddressBook
+    expect(fs.existsSync(path.join(out, SMS_DB_FILE_ID.slice(0, 2), SMS_DB_FILE_ID))).toBe(true);
+    expect(fs.existsSync(path.join(out, ATTACHMENT_ID.slice(0, 2), ATTACHMENT_ID))).toBe(false);
+    await s.finishSync(session);
+    expect(await s.forcedFullReason(UDID)).toBe("DELTA_DAMAGED");
+  });
+
+  it("a lock (not damage) is still an error: no force-full for something a retry can fix", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    const real = files.decryptToFile.bind(files);
+    jest.spyOn(files, "decryptToFile").mockImplementation(async (src, dest) => {
+      if (src === attPath()) throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      return real(src, dest);
+    });
+    await expect(s.buildParseCopy(UDID, path.join(userData, "parse-3"))).rejects.toThrow("busy");
+    jest.restoreAllMocks();
+    await s.finishSync(session);
+    expect(await s.forcedFullReason(UDID)).toBeNull();
   });
 });

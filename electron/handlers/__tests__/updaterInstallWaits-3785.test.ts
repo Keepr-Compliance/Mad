@@ -30,6 +30,10 @@ jest.mock("../../services/failureLogService", () => ({ __esModule: true, default
 jest.mock("../../services/updaterFailureStore", () => ({ getRecentUpdaterFailure: jest.fn() }));
 jest.mock("../../windowRegistry", () => ({ getMainWindow: () => null }));
 jest.mock("../syncHandlers", () => ({ stopBackupForQuit: () => stopBackupForQuit() }));
+const sealIndexForQuit = jest.fn();
+jest.mock("../../services/atRest/backupAtRest", () => ({
+  getBackupAtRest: () => ({ sealIndexForQuit: () => sealIndexForQuit() }),
+}));
 
 import { registerUpdaterHandlers } from "../updaterHandlers";
 import { beginLink } from "../../utils/linkInFlight";
@@ -43,6 +47,7 @@ beforeAll(() => registerUpdaterHandlers({} as never));
 beforeEach(() => {
   quitAndInstall.mockClear();
   stopBackupForQuit.mockReset().mockReturnValue(null);
+  sealIndexForQuit.mockReset().mockReturnValue(null);
 });
 
 describe("install-update waits before quitAndInstall (BACKLOG-3785)", () => {
@@ -75,6 +80,50 @@ describe("install-update waits before quitAndInstall (BACKLOG-3785)", () => {
 
   it("a backup stop that rejects still installs", async () => {
     stopBackupForQuit.mockReturnValue(Promise.reject(new Error("boom")));
+    handlers["install-update"]();
+    await flush();
+    expect(quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("install-update seals the unsealed index files before quitAndInstall (BACKLOG-3816 audit G5)", () => {
+  it("after the backup has stopped, the index seal runs and the install waits for it", async () => {
+    const events: string[] = [];
+    let stopped!: () => void;
+    let sealed!: () => void;
+    stopBackupForQuit.mockReturnValue(new Promise<void>((r) => (stopped = r)).then(() => void events.push("stopped")));
+    sealIndexForQuit.mockImplementation(() => {
+      events.push("seal");
+      return new Promise<void>((r) => (sealed = r));
+    });
+    handlers["install-update"]();
+    await flush();
+    expect(sealIndexForQuit).not.toHaveBeenCalled(); // not while idevicebackup2 may still write
+    stopped();
+    await flush();
+    expect(events).toEqual(["stopped", "seal"]);
+    expect(quitAndInstall).not.toHaveBeenCalled();
+    sealed();
+    await flush();
+    expect(quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("no backup running: the index seal still runs before the install", async () => {
+    let sealed!: () => void;
+    sealIndexForQuit.mockImplementation(() => new Promise<void>((r) => (sealed = r)));
+    handlers["install-update"]();
+    await flush();
+    expect(sealIndexForQuit).toHaveBeenCalledTimes(1);
+    expect(quitAndInstall).not.toHaveBeenCalled();
+    sealed();
+    await flush();
+    expect(quitAndInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("a seal that throws still installs", async () => {
+    sealIndexForQuit.mockImplementation(() => {
+      throw new Error("boom");
+    });
     handlers["install-update"]();
     await flush();
     expect(quitAndInstall).toHaveBeenCalledTimes(1);

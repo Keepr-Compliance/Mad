@@ -363,7 +363,7 @@ describe("C2 — the chain is sealed on every end path after the unseal", () => 
   });
 });
 
-describe("D1 — a failed C-DELTA backup tool forces C-FULL for the next sync; nothing else does", () => {
+describe("D1 / G3 — two C-DELTA backup-tool failures in a row force C-FULL for the next sync; nothing else does", () => {
   const smsPath = () => path.join(chain, "3d", SMS_ID);
   const smsSealed = () => fsSync.readFileSync(smsPath()).subarray(0, 7).equals(MAGIC);
 
@@ -399,30 +399,35 @@ describe("D1 — a failed C-DELTA backup tool forces C-FULL for the next sync; n
     return sealedAtStart === false;
   }
 
-  it("the backup tool errors (non-zero exit, nothing damaged) -> the next sync is C-FULL, reason DELTA_TOOL_FAILED", async () => {
+  /** One sync whose backup tool fails the given way. */
+  async function toolFails(how: "result" | "no-code" | "throw"): Promise<void> {
     const o = newOrchestrator(false);
-    backupReturns(fail({ errorCode: "BACKUP_FILE_MISSING", error: "The iPhone could not find a file the backup needed." } as Partial<BackupResult>));
+    if (how === "throw") startBackup.mockRejectedValue(new Error("spawn failed"));
+    else if (how === "no-code") backupReturns(fail({ errorCode: undefined, error: "idevicebackup2 exited with code 1" } as Partial<BackupResult>));
+    else backupReturns(fail({ errorCode: "BACKUP_FILE_MISSING", error: "The iPhone could not find a file the backup needed." } as Partial<BackupResult>));
     expect((await o.sync({ udid: UDID })).success).toBe(false);
     await sealedAfter(o);
+  }
+
+  it("G3: ONE tool error (nothing damaged) -> the next sync is still C-DELTA", async () => {
+    await toolFails("result");
+    expect(await atRest.forcedFullReason(UDID)).toBeNull();
+    expect(await nextSyncUnsealedContent()).toBe(false);
+  });
+
+  it.each(["result", "no-code", "throw"] as const)("G3: TWO tool errors in a row (%s) -> the next sync is C-FULL, reason DELTA_TOOL_FAILED", async (how) => {
+    await toolFails(how);
+    await toolFails(how);
     expect(await atRest.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
     expect(await nextSyncUnsealedContent()).toBe(true);
   });
 
-  it("a tool error with no error code -> the next sync is C-FULL", async () => {
-    const o = newOrchestrator(false);
-    backupReturns(fail({ errorCode: undefined, error: "idevicebackup2 exited with code 1" } as Partial<BackupResult>));
-    await o.sync({ udid: UDID });
-    await o.lastAtRestSeal;
-    expect(await atRest.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
-  });
-
-  it("the backup call throws -> the next sync is C-FULL", async () => {
-    const o = newOrchestrator(false);
-    startBackup.mockRejectedValue(new Error("spawn failed"));
-    expect((await o.sync({ udid: UDID })).success).toBe(false);
-    await o.lastAtRestSeal;
-    expect(await atRest.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
-    expect(await nextSyncUnsealedContent()).toBe(true);
+  it("G3: a successful sync in between resets the count (fail, succeed, fail -> still C-DELTA)", async () => {
+    await toolFails("result");
+    expect(await nextSyncUnsealedContent()).toBe(false); // this one succeeds (ok())
+    await toolFails("result");
+    expect(await atRest.forcedFullReason(UDID)).toBeNull();
+    expect(await nextSyncUnsealedContent()).toBe(false);
   });
 
   it.each([
@@ -492,6 +497,35 @@ describe("Q — a quit does not seal; the marker says syncing for the next launc
     expect(o.lastAtRestSeal).toBeNull();
     expect(await readMarkerAt(backups, UDID)).toBe("syncing");
     expect(plaintextLeft().length).toBeGreaterThan(0);
+  });
+
+  it("G4: the quit does not happen after all (update failed to install): the phone is not left locked; Try Again runs and its end seals everything", async () => {
+    const o = newOrchestrator();
+    backupReturns((orc) => {
+      Object.assign(orc, { stoppedForQuit: true });
+      return fail();
+    }, o);
+    await o.sync({ udid: UDID });
+    expect(atRest.busyReason(UDID)).toBeNull();
+    backupReturns(fail());
+    const again = await o.sync({ udid: UDID });
+    expect(again.error).not.toContain(BACKUP_SECURING_SENTENCE);
+    expect(startBackup).toHaveBeenCalledTimes(2);
+    await sealedAfter(o);
+  });
+
+  it("G4: a successful sync handed to persistence, then a quit that does not happen: completeBackupAtRest gives the phone back", async () => {
+    const o = newOrchestrator();
+    backupReturns((orc) => {
+      Object.assign(orc, { stoppedForQuit: true });
+      return ok();
+    }, o);
+    const result = await o.sync({ udid: UDID });
+    expect(result.success).toBe(true);
+    expect(atRest.busyReason(UDID)).toBe("syncing"); // persistence still reads the chain
+    await o.completeBackupAtRest(true);
+    expect(atRest.busyReason(UDID)).toBeNull();
+    expect(await readMarkerAt(backups, UDID)).toBe("syncing"); // the launch / idle recovery seals
   });
 });
 
@@ -603,7 +637,7 @@ describe("D — C-DELTA reads a parse copy", () => {
     const copySpy = jest.spyOn(atRest, "buildParseCopy").mockImplementation(async (_udid, out) => {
       fsSync.mkdirSync(path.join(out, "3d"), { recursive: true });
       fsSync.writeFileSync(path.join(out, "3d", SMS_ID), "decrypted sms copy");
-      return { copied: 1, missing: 0 };
+      return { copied: 1, missing: 0, unreadable: 0 };
     });
     const o = newOrchestrator();
     backupReturns(ok());
@@ -638,7 +672,7 @@ describe("C2-DELTA (founder must-fix 2026-10-09) — every end of a C-DELTA sync
     copySpy = jest.spyOn(atRest, "buildParseCopy").mockImplementation(async (_udid, out) => {
       fsSync.mkdirSync(path.join(out, "3d"), { recursive: true });
       fsSync.writeFileSync(path.join(out, "3d", SMS_ID), "decrypted sms copy");
-      return { copied: 1, missing: 0 };
+      return { copied: 1, missing: 0, unreadable: 0 };
     });
   });
 
@@ -657,6 +691,21 @@ describe("C2-DELTA (founder must-fix 2026-10-09) — every end of a C-DELTA sync
     const sealPromise = o.lastAtRestSeal;
     await o.completeBackupAtRest(true);
     expect(o.lastAtRestSeal).toBe(sealPromise); // no second seal was started
+    await o.cleanupBackup(result.backupPath!);
+  });
+
+  it("G3: the early seal after the parse copy resets the consecutive tool-failure count", async () => {
+    await createMarkerStore({ userData: () => userData }).setToolFailures(UDID, 1);
+    const o = newOrchestrator();
+    const finish = jest.spyOn(atRest, "finishSync");
+    backupReturns(ok());
+    const result = await o.sync({ udid: UDID });
+    expect(result.success).toBe(true);
+    expect(finish).toHaveBeenCalledTimes(1);
+    await sealedAfter(o);
+    const marker = JSON.parse(fsSync.readFileSync(path.join(backups, ".keepr-at-rest", `${UDID}.json`), "utf8"));
+    expect(marker.toolFailures).toBeUndefined();
+    await o.completeBackupAtRest(true);
     await o.cleanupBackup(result.backupPath!);
   });
 
@@ -846,5 +895,66 @@ describe.each(["delta", "full"] as const)("SR probe — disconnect -> cancel -> 
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
     expect(atRest.busyReason(UDID)).toBeNull();
     expect(await atRest.forcedFullReason(UDID)).toBeNull();
+  });
+});
+
+// PC unplug retest 2026-10-09 (founder's local2 log): after the unplug the seal walked all
+// 576k files newest first; Try Again paused it before it reached Manifest.db, which stayed
+// plaintext. Same real disconnect wiring as the SR probe above, then Try Again at once.
+describe("PC unplug retest — the index is sealed first at the error end; Try Again pauses only the walk", () => {
+  it("disconnect → Manifest.db + plists sealed before any content file → immediate Try Again (also unplugged) → its end leaves nothing plaintext", async () => {
+    const order: string[] = [];
+    atRest = new BackupAtRest({
+      backupsRoot: () => backups,
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => userData }),
+      ensureKey: async () => undefined,
+      freeBytes: async () => Number.MAX_SAFE_INTEGER,
+      sleep: async () => undefined,
+      log: () => undefined,
+      strategy: () => "delta",
+      pauseWaitMs: 20,
+      sealEngineOptions: { beforeSeal: (p) => order.push(p) },
+    });
+    let running = false;
+    let exitWithNull: (() => void) | null = null;
+    (BackupService.prototype.getStatus as unknown as jest.Mock).mockImplementation(() => ({
+      isRunning: running, currentDeviceUdid: running ? UDID : null, progress: null,
+    }));
+    (BackupService.prototype.cancelBackup as unknown as jest.Mock).mockImplementation(() => exitWithNull?.());
+    detector.probeConnectedUdids.mockResolvedValue([]);
+    let n = 0;
+    startBackup.mockImplementation(async () => {
+      running = true;
+      n++;
+      // The index is unsealed (C-DELTA) and the phone sends files newer than it.
+      expect(fsSync.readFileSync(path.join(chain, "Manifest.db")).subarray(0, 7).equals(MAGIC)).toBe(false);
+      const later = new Date(Date.now() + 60_000 * n);
+      for (const d of ["c", "e"]) {
+        write(`${d}${n}/${d.repeat(40)}`, `sent in sync ${n}`);
+        fsSync.utimesSync(path.join(chain, `${d}${n}/${d.repeat(40)}`), later, later);
+      }
+      return new Promise<BackupResult>((resolve) => {
+        exitWithNull = () => {
+          running = false;
+          resolve(fail({ errorCode: undefined, error: "Backup failed with code null" } as Partial<BackupResult>));
+        };
+        setTimeout(() => detector.emit("device-disconnected", { udid: UDID, name: "x" }), 5);
+      });
+    });
+    const o = newOrchestrator();
+    (o as unknown as { disconnectConfirmDelayMs: number }).disconnectConfirmDelayMs = 1;
+    order.length = 0;
+    expect((await o.sync({ udid: UDID })).success).toBe(false);
+    const firstSeal = o.lastAtRestSeal;
+    // Try Again at once: the first end's walk gives way; the index was sealed already.
+    expect((await o.sync({ udid: UDID })).success).toBe(false);
+    await firstSeal;
+    const root = (p: string) => path.dirname(p) === chain;
+    const firstContent = order.findIndex((p) => !root(p));
+    expect(order.slice(0, firstContent).map((p) => path.basename(p)).sort()).toEqual(
+      ["Info.plist", "Manifest.db", "Manifest.plist", "Status.plist"],
+    );
+    await sealedAfter(o);
   });
 });
