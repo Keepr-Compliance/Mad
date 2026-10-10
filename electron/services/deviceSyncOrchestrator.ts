@@ -639,6 +639,7 @@ const NOT_A_TOOL_FAILURE_CODES: ReadonlySet<string> = new Set([
 
 /** BACKLOG-3816: returned by `raceCancel` when the sync was cancelled first. */
 const PREFLIGHT_CANCELLED = Symbol("preflight-cancelled");
+const PROCESSING_CANCELLED = "Processing cancelled by user";
 
 /**
  * BACKLOG-3816: settle with the step's value, or with PREFLIGHT_CANCELLED as soon as
@@ -3246,6 +3247,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.priorBackup = "unknown";
     this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
+    // BACKLOG-3816: this frame's own cancel token (see sync()).
+    const preflightSignal = this.abortController.signal;
     this.startTime = Date.now();
 
     // TASK-2110: Generate session ID for ACID rollback on cancel
@@ -3267,9 +3270,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       });
 
       // Check if backup exists
-      const backupStatus = await this.backupService.checkBackupStatus(
-        options.udid
+      // BACKLOG-3816: the size walk stops on cancel, and nothing waits for it.
+      const backupStatus = await raceCancel(
+        preflightSignal,
+        this.backupService.checkBackupStatus(options.udid, { signal: preflightSignal }),
       );
+      if (backupStatus === PREFLIGHT_CANCELLED) {
+        return this.endCancelledPreflight(preflightSignal, "backup-status", PROCESSING_CANCELLED);
+      }
       // BACKLOG-2917: "no backup found" and "we could not find out" are different
       // answers and now produce different errors. The old predicate reported a failed
       // check to the user as a confident "No existing backup found for this device",
@@ -3315,6 +3323,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // TASK-908: Check if backup should be processed or skipped
       if (!options.forceResync) {
         const shouldProcess = await this.shouldProcessBackup(backupPath);
+        if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "change-detection", PROCESSING_CANCELLED);
         if (!shouldProcess) {
           this.isRunning = false;
           this.setPhase("complete");
@@ -3347,10 +3356,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       let attachmentsUndecryptable = 0;
       const isEncrypted =
         await this.decryptionService.isBackupEncrypted(backupPath);
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "encryption-check", PROCESSING_CANCELLED);
 
       if (isEncrypted) {
         // BACKLOG-3817: the typed password, else the one saved for this phone.
         const plan = await this.resolveBackupPassword(options.udid, options.password);
+        if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "password", PROCESSING_CANCELLED);
         if (plan.kind === "unavailable") {
           syncTimeline.setContext({
             endedBy: "backup-encryption",
@@ -3396,6 +3407,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
         attachmentsUndecryptable = this.recordUndecryptable(decryptResult.stats?.skipped ?? 0);
         extractionPath = decryptResult.decryptedPath;
+        if (preflightSignal.aborted) {
+          // The decrypted copy is plaintext: removed before the frame ends.
+          await this.discardParseCopy(extractionPath);
+          return this.endCancelledPreflight(preflightSignal, "decrypt", PROCESSING_CANCELLED);
+        }
         if (plan.kind === "provided") {
           await this.rememberUserPassword(options.udid, existingPassword);
         }
@@ -3410,6 +3426,10 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         message: "Reading contacts...",
       });
 
+      if (preflightSignal.aborted) {
+        if (extractionPath !== backupPath) await this.discardParseCopy(extractionPath);
+        return this.endCancelledPreflight(preflightSignal, "before-parse", PROCESSING_CANCELLED);
+      }
       await this.contactsParser.open(extractionPath);
       const contacts = this.contactsParser.getAllContacts();
 
@@ -3574,7 +3594,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * row closes now (at the cancel, not after the remaining checks). If a newer frame
    * already owns the orchestrator, this frame touches nothing shared.
    */
-  private endCancelledPreflight(signal: AbortSignal, step: string): SyncResult {
+  private endCancelledPreflight(
+    signal: AbortSignal,
+    step: string,
+    message: string = "Sync cancelled by user",
+  ): SyncResult {
     log.info("[DeviceSyncOrchestrator] Sync cancelled during pre-flight; stopping", { step });
     if (this.abortController?.signal !== signal) {
       return {
@@ -3582,12 +3606,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         messages: [],
         contacts: [],
         conversations: [],
-        error: "Sync cancelled by user",
+        error: message,
         duration: Date.now() - this.startTime,
       };
     }
     this.isRunning = false;
-    return this.errorResult("Sync cancelled by user");
+    return this.errorResult(message);
   }
 
   private errorResult(error: string): SyncResult {
