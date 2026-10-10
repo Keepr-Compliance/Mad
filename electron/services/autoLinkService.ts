@@ -90,6 +90,12 @@ import { supportTrace } from "./supportAccess/trace";
 export interface AutoLinkOptions {
   /** Contact ID to link communications for */
   contactId: string;
+  /**
+   * BACKLOG-3883: which caller asked, logged with every run ("create", "reviewSync-open",
+   * "covered-create", "postFetch", "postImport", ...). The PC log could not say which
+   * callers re-ran a new deal's contacts; this answers it from the next log.
+   */
+  caller?: string;
   /** Transaction ID to link communications to */
   transactionId: string;
   /** Optional date range (if not provided, uses transaction dates or 6 months) */
@@ -134,6 +140,12 @@ export interface AutoLinkResult {
   alreadyLinked: number;
   /** Number of errors encountered */
   errors: number;
+  /**
+   * BACKLOG-3883: the run threw before it finished (the counts are partial). Kept apart
+   * from `errors`, whose meaning callers already report; the full-sweep guard reads it
+   * so a failed run is never remembered as having covered the contact.
+   */
+  aborted?: boolean;
   /** BACKLOG-1364: User-facing message when address filter is ON and 0 emails found */
   addressFilterMessage?: string;
   /**
@@ -304,7 +316,8 @@ async function findCandidateEmailsWithMatch(
   transactionId: string,
   dateRange: { start: Date; end: Date },
   normalizedAddress: NormalizedAddress | null,
-  otherCandidateAddresses: NormalizedAddress[] = []
+  otherCandidateAddresses: NormalizedAddress[] = [],
+  phases?: AutoLinkPhases
 ): Promise<CandidateEmail[]> {
   if (emails.length === 0) {
     return [];
@@ -364,10 +377,9 @@ async function findCandidateEmailsWithMatch(
     dateRange.end.toISOString(),
   ];
 
-  const results = dbAll<{ id: string; subject: string | null; body_plain: string | null }>(
-    candidateEmailsSql(contactEmails.length),
-    sqlParams
-  );
+  const readStart = performance.now();
+  const results = await readCandidateEmails(userId, contactEmails.length, sqlParams);
+  if (phases) phases.emailReadMs = Math.round(performance.now() - readStart);
 
   // No address to check → every candidate is address-unknowable (addressMatched
   // = null); the caller treats these as address_found (nothing to review). With
@@ -381,16 +393,78 @@ async function findCandidateEmailsWithMatch(
   // and name words can appear in either. Also flag emails that clearly name a
   // DIFFERENT candidate deal (disambiguation) so they aren't shown as Needs
   // review here.
-  return results.map((r) => {
+  // BACKLOG-3883: the matcher scans every body on the main thread; give the event
+  // loop a turn every AUTO_LINK_EMAILS_PER_TURN emails.
+  const classified: CandidateEmail[] = [];
+  for (let i = 0; i < results.length; i++) {
+    if (i > 0 && i % AUTO_LINK_EMAILS_PER_TURN === 0) await new Promise<void>((resolve) => setImmediate(resolve));
+    const r = results[i];
     const content = `${r.subject ?? ""} ${r.body_plain ?? ""}`;
-    return {
+    const t0 = performance.now();
+    classified.push({
       id: r.id,
       addressMatched: contentContainsAddress(content, normalizedAddress),
       matchesOtherCandidate: otherCandidateAddresses.some((addr) =>
         contentContainsAddress(content, addr)
       ),
-    };
-  });
+    });
+    if (phases) phases.emailMatchMs += performance.now() - t0;
+  }
+  return classified;
+}
+
+/**
+ * BACKLOG-3883: per-phase timing of one contact's run, logged once per contact (counts
+ * and milliseconds only). `*ReadMs` of a read that ran on a worker is the wait, not
+ * main-process time; `mainMs` is the sum of the phases that run on the main process.
+ */
+interface AutoLinkPhases {
+  setupMs: number;
+  emailReadMs: number;
+  emailMatchMs: number;
+  threadReadMs: number;
+  suppressionMs: number;
+  emailLinkMs: number;
+  threadLinkMs: number;
+}
+
+function newPhases(): AutoLinkPhases {
+  return { setupMs: 0, emailReadMs: 0, emailMatchMs: 0, threadReadMs: 0, suppressionMs: 0, emailLinkMs: 0, threadLinkMs: 0 };
+}
+
+/** Candidate emails classified / linked per event-loop turn (BACKLOG-3883). */
+export const AUTO_LINK_EMAILS_PER_TURN = 10;
+
+/**
+ * BACKLOG-3883: the candidate-email read runs on a dedicated contact query worker when
+ * the pool is up, like the candidate-thread read below (BACKLOG-3868). With no index the
+ * planner prefers, it walks every email of the user in the deal's window and returns the
+ * matches with their bodies. Same statement, same parameters, same rows. Main thread
+ * only when no worker ran it (pool not up, or `start_failed`).
+ */
+export async function readCandidateEmails(
+  userId: string,
+  addressCount: number,
+  params: Array<string | number>,
+): Promise<Array<{ id: string; subject: string | null; body_plain: string | null }>> {
+  type Row = { id: string; subject: string | null; body_plain: string | null };
+  if (isPoolReady()) {
+    try {
+      return (await queryOnDedicatedWorker("candidateEmails", userId, CANDIDATE_THREADS_WORKER_TIMEOUT_MS, {
+        addressCount,
+        params,
+      })) as Row[];
+    } catch (error) {
+      const code = error instanceof DedicatedWorkerError ? error.code : "failed";
+      if (code !== "start_failed") throw error;
+      await logService.warn(
+        "[BACKLOG-3883] Candidate-email worker could not start; reading on the main thread",
+        "AutoLinkService",
+        { code },
+      );
+    }
+  }
+  return dbAll<Row>(candidateEmailsSql(addressCount), params);
 }
 
 /**
@@ -671,6 +745,13 @@ export async function autoLinkCommunicationsForContact(
   };
 
   const startTime = Date.now();
+  const phases = newPhases();
+  let phaseStart = performance.now();
+  const lap = (key: keyof AutoLinkPhases): void => {
+    const now = performance.now();
+    phases[key] += now - phaseStart;
+    phaseStart = now;
+  };
 
   try {
     // 1. Get contact info (emails and phone numbers)
@@ -791,6 +872,7 @@ export async function autoLinkCommunicationsForContact(
       `Auto-linking communications for contact ${contactId} to transaction ${transactionId}`,
       "AutoLinkService",
       {
+        caller: options.caller ?? "unknown",
         emails: contactInfo.emails.length,
         phones: contactInfo.phoneNumbers.length,
         normalizedAddress: txnNormalizedAddress?.full ?? null,
@@ -834,14 +916,17 @@ export async function autoLinkCommunicationsForContact(
           .map((a) => normalizeAddress(a))
           .filter((a): a is NormalizedAddress => a !== null);
 
+    lap("setupMs");
     let emailCandidates = await findCandidateEmailsWithMatch(
       userId,
       contactInfo.emails,
       transactionId,
       dateRange,
       txnNormalizedAddress,
-      otherCandidateAddresses
+      otherCandidateAddresses,
+      phases
     );
+    phaseStart = performance.now();
 
     // BACKLOG-1340: Breadcrumb for auto-link matching results
     const needsReviewCount = emailCandidates.filter(
@@ -875,6 +960,7 @@ export async function autoLinkCommunicationsForContact(
     // from messages — it should NOT prevent linking messages for known contacts.
     // TASK-2087: Address filtering removed from text messages — only applies to emails.
     let messagesWithThreads: MessageWithThread[] = [];
+    phaseStart = performance.now();
     if (contactInfo.phoneNumbers.length > 0) {
       messagesWithThreads = await findMessagesByContactPhones(
         userId,
@@ -893,6 +979,7 @@ export async function autoLinkCommunicationsForContact(
       );
     }
 
+    lap("threadReadMs");
     // 5b. BACKLOG-1560: Filter out emails and threads that the user previously unlinked.
     // This prevents deleted conversations from reappearing after re-sync.
     const ignoredEmailIds = await getIgnoredEmailIdsForTransaction(transactionId);
@@ -951,8 +1038,12 @@ export async function autoLinkCommunicationsForContact(
     //                                                    (Needs review)
     // Lower the link confidence for the ambiguous ones so downstream signals
     // reflect the doubt.
+    lap("suppressionMs");
     let disambiguatedAway = 0;
+    let emailsHandled = 0;
     for (const candidate of emailCandidates) {
+      // BACKLOG-3883: each link or queue is several statements; yield every few.
+      if (++emailsHandled % AUTO_LINK_EMAILS_PER_TURN === 0) await new Promise<void>((resolve) => setImmediate(resolve));
       const isConfident =
         candidate.addressMatched === true ||
         candidate.addressMatched === null;
@@ -1023,6 +1114,7 @@ export async function autoLinkCommunicationsForContact(
       );
     }
 
+    lap("emailLinkMs");
     // 7. Link text messages to transaction at THREAD level
     // TASK-1115: Group messages by thread_id and link once per thread
     const threadIds = new Set<string>();
@@ -1088,7 +1180,27 @@ export async function autoLinkCommunicationsForContact(
       }
     }
 
+    lap("threadLinkMs");
     const duration = Date.now() - startTime;
+
+    // BACKLOG-3883: where one contact's run spends its time — counts and ms only.
+    await logService.info("[BACKLOG-3883] auto-link phases", "AutoLinkService", {
+      caller: options.caller ?? "unknown",
+      totalMs: duration,
+      setupMs: Math.round(phases.setupMs),
+      emailReadMs: Math.round(phases.emailReadMs),
+      emailMatchMs: Math.round(phases.emailMatchMs),
+      threadReadMs: Math.round(phases.threadReadMs),
+      suppressionMs: Math.round(phases.suppressionMs),
+      emailLinkMs: Math.round(phases.emailLinkMs),
+      threadLinkMs: Math.round(phases.threadLinkMs),
+      emailCandidates: emailCandidates.length,
+      threadCandidates: threadIds.size,
+      emailsLinked: result.emailsLinked,
+      queuedForReview: result.queuedForReview ?? 0,
+      threadsLinked: result.messagesLinked,
+      candidateReadsOnWorker: isPoolReady(),
+    });
 
     // BACKLOG-1340: Comprehensive result breadcrumb
     hostErrorReporter.addBreadcrumb({
@@ -1201,6 +1313,9 @@ export async function autoLinkCommunicationsForContact(
       "AutoLinkService"
     );
 
+    // BACKLOG-3883: a run that threw is not a clean run; the full-sweep guard must not
+    // remember it as having covered this contact.
+    result.aborted = true;
     return result;
   }
 }
@@ -1303,6 +1418,7 @@ export async function autoLinkNewMessagesForUser(
     for (const pair of pairs) {
       try {
         const linkResult = await autoLinkCommunicationsForContact({
+          caller: "postImport",
           contactId: pair.contact_id,
           transactionId: pair.transaction_id,
         });

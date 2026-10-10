@@ -1278,24 +1278,53 @@ function countTextThreadsForTransactionInternal(transactionId: string): number {
   // BACKLOG-506: Since communications is now a pure junction table, we ONLY check
   // m.channel from the messages table. Thread-based links (c.thread_id) are always
   // for text messages by design.
+  //
+  // BACKLOG-3883: one row per LINK, not one row per message. A thread link used to be
+  // joined to every message of its thread and each row handed to JS, only for every one
+  // of them to produce the same key (the thread id). This runs after every link, so
+  // linking a party's long chats read every message of every chat already linked, again
+  // and again, on the main process: 0.68 s for 4 links at 668k texts on a Mac, and the
+  // seconds-long freeze when the founder's PC created a deal. The rows below produce the
+  // same keys:
+  //   - a thread link whose thread has a text message  -> key = the thread id
+  //   - a thread link whose thread has no message at all -> key from the link id
+  //     (the old LEFT JOIN found no row: thread_id NULL, participants NULL)
+  //   - a thread link whose thread has only non-text messages -> no row (filtered)
+  //   - a message link -> unchanged: its one message, or the link when it is gone
   const statement = sql`
     SELECT
-      COALESCE(m.id, c.id) as id,
-      m.thread_id as thread_id,
-      m.participants as participants
+      c.id AS id,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM messages m
+        WHERE m.thread_id = c.thread_id AND m.channel IN ('text', 'sms', 'imessage')
+      ) THEN c.thread_id END AS thread_id,
+      NULL AS participants
     FROM communications c
-    LEFT JOIN messages m ON (
-      (c.message_id IS NOT NULL AND c.message_id = m.id)
-      OR
-      (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id)
-    )
     WHERE c.transaction_id = ?
+      AND c.message_id IS NULL
+      AND c.thread_id IS NOT NULL
+      AND (
+        EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m.thread_id = c.thread_id AND m.channel IN ('text', 'sms', 'imessage')
+        )
+        OR NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = c.thread_id)
+      )
+    UNION ALL
+    SELECT
+      COALESCE(m.id, c.id) AS id,
+      m.thread_id AS thread_id,
+      m.participants AS participants
+    FROM communications c
+    LEFT JOIN messages m ON m.id = c.message_id
+    WHERE c.transaction_id = ?
+      AND c.message_id IS NOT NULL
       AND (m.channel IN ('text', 'sms', 'imessage') OR (m.id IS NULL AND c.thread_id IS NOT NULL))
   `;
 
   const messages = dbAll<{ id: string; thread_id: string | null; participants: string | null }>(
     statement,
-    [transactionId]
+    [transactionId, transactionId]
   );
 
   // Group messages by thread using the same logic as frontend

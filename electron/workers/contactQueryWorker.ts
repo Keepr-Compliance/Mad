@@ -39,7 +39,7 @@ import {
 } from "../services/db/emailDerivedContactsSql";
 import { readOneToOneThreadIndexOn } from "../services/db/threadIdentityIndexDb";
 import { runThreadIdentityRequestOn, type ThreadIdentityRequest } from "../services/db/threadIdentityTargetedDb";
-import { readCandidateMessageThreadsOn } from "../services/db/autoLinkSql";
+import { readCandidateEmailsOn, readCandidateMessageThreadsOn } from "../services/db/autoLinkSql";
 
 type QueryType =
   | "external"
@@ -48,7 +48,8 @@ type QueryType =
   | "emailDerived"
   | "threadIdentity"
   | "threadIdentityTargeted"
-  | "candidateMessageThreads";
+  | "candidateMessageThreads"
+  | "candidateEmails";
 
 interface InitMessage {
   type: "init";
@@ -80,6 +81,8 @@ interface QueryMessageExtras {
   /** BACKLOG-3868: `candidateMessageThreads` — the statement's phone count and its bound values, in order. */
   phoneCount?: number;
   params?: Array<string | number>;
+  /** BACKLOG-3883: `candidateEmails` — the statement's address count (bound values in `params`). */
+  addressCount?: number;
 }
 
 interface ShutdownMessage {
@@ -288,6 +291,15 @@ parentPort?.on("message", (msg: WorkerMessage) => {
         throw new Error("candidateMessageThreads needs phoneCount and its params");
       }
       rows = readCandidateMessageThreadsOn(db, phoneCount as number, params);
+    } else if (queryMsg.type === "candidateEmails") {
+      // BACKLOG-3883: the auto-link candidate-email read (every email of the user in the
+      // deal's window, joined to its participants, bodies included); off the main thread.
+      if (!db) throw new Error("Database not initialized");
+      const { addressCount, params } = queryMsg as QueryMessage & QueryMessageExtras;
+      if (!Number.isInteger(addressCount) || (addressCount as number) < 1 || !Array.isArray(params) || params.length !== (addressCount as number) + 4) {
+        throw new Error("candidateEmails needs addressCount and its params");
+      }
+      rows = readCandidateEmailsOn(db, addressCount as number, params);
     } else {
       throw new Error(`Unknown query type: ${queryMsg.type}`);
     }
