@@ -152,6 +152,24 @@ import { isContactSourceEnabled, isTextPeopleEnabled } from "../utils/preference
  * on — by default on for an Android: Google Messages user (C1, founder
  * decision b), off otherwise; an explicit off stays off. A failed read → off.
  */
+/**
+ * BACKLOG-3837: a contact list was answered without its message-derived people
+ * (the dedicated read was not ready). When that read lands, tell the renderer
+ * so the open picker re-reads (a cache hit) and fills them in. Joins the read
+ * already running and never starts one (a failed read is not running: nothing
+ * to wait for, and the renderer's 15 s backstop retries it); nothing is read
+ * on main; a failed read sends nothing.
+ */
+function notifyWhenMessageDerivedReady(userId: string): void {
+  const running = joinMessageDerivedRead(userId);
+  if (!running) return;
+  void running
+    .then((rows) => {
+      if (rows) sendToMainWindow("contacts:message-derived-ready", { userId });
+    })
+    .catch(() => undefined);
+}
+
 async function textPeopleEnabled(userId: string): Promise<boolean> {
   try {
     return await isTextPeopleEnabled(userId);
@@ -185,6 +203,7 @@ import type {
 } from "../types/handlerTypes";
 
 import { sendToMainWindow } from "../windowRegistry";
+import { joinMessageDerivedRead } from "../services/db/messageDerivedContactsCache";
 
 // Type definitions
 interface ContactResponse {
@@ -1197,8 +1216,11 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         // FK fix (live): people found in texts are NOT saved contacts — they
         // are offered in the address-book half (contacts:get-available), so
         // picking one imports it first. Never in the saved lists.
-        const importedContacts =
-          await databaseService.getImportedContactsByUserIdAsync(validatedUserId);
+        // BACKLOG-3837: the message-derived half is read only on a dedicated
+        // worker; while it is not ready the saved contacts come back alone,
+        // flagged pending (never an empty list standing for "not loaded").
+        const { contacts: importedContacts, messageDerivedPending } =
+          await databaseService.getImportedContactsWithStatusAsync(validatedUserId);
 
         logService.debug(
           `[PERF] contacts.getAll: ${Date.now() - t0}ms, ${importedContacts.length} contacts`,
@@ -1218,9 +1240,11 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
           logService.warn(`Background backfill failed: ${err}`, "Contacts");
         });
 
+        if (messageDerivedPending) notifyWhenMessageDerivedReady(validatedUserId);
         return {
           success: true,
           contacts: importedContacts,
+          ...(messageDerivedPending ? { contactsStatus: { messageDerivedPending: true } } : {}),
         };
       } catch (error) {
         logService.error("Get contacts failed", "Contacts", {
@@ -2909,21 +2933,26 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
             })
           : undefined;
 
-        // Get only imported contacts sorted by activity
-        const importedContacts =
-          await databaseService.getContactsSortedByActivity(
+        // Get only imported contacts sorted by activity.
+        // BACKLOG-3837: the message-derived half is read only on a dedicated
+        // worker; while it is not ready the saved contacts come back alone,
+        // flagged pending (never an empty list standing for "not loaded").
+        const { contacts: importedContacts, messageDerivedPending } =
+          await databaseService.getContactsSortedByActivityWithStatus(
             validatedUserId,
             validatedAddress ?? undefined,
           );
 
         logService.info(
-          `[Main] Returning ${importedContacts.length} imported contacts sorted by activity`,
+          `[Main] Returning ${importedContacts.length} imported contacts sorted by activity${messageDerivedPending ? " (message-derived pending)" : ""}`,
           "Contacts",
         );
 
+        if (messageDerivedPending) notifyWhenMessageDerivedReady(validatedUserId);
         return {
           success: true,
           contacts: importedContacts,
+          ...(messageDerivedPending ? { contactsStatus: { messageDerivedPending: true } } : {}),
         };
       } catch (error) {
         logService.error("[Main] Get sorted contacts failed:", "Contacts", {

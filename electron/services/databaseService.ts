@@ -1845,6 +1845,14 @@ class DatabaseService implements IDatabaseService {
     return contactDb.getImportedContactsByUserIdAsync(userId, undefined, opts);
   }
 
+  /** BACKLOG-3837: the get-all list with `messageDerivedPending` (message-derived people not in yet). */
+  async getImportedContactsWithStatusAsync(
+    userId: string,
+    opts?: contactDb.TextPeopleOption,
+  ): Promise<contactDb.ContactListWithStatus> {
+    return contactDb.getImportedContactsWithStatusAsync(userId, undefined, opts);
+  }
+
   async getUnimportedContactsByUserId(userId: string): Promise<Contact[]> {
     return contactDb.getUnimportedContactsByUserId(userId);
   }
@@ -1898,6 +1906,15 @@ class DatabaseService implements IDatabaseService {
     opts?: contactDb.TextPeopleOption,
   ): Promise<contactDb.ContactWithActivity[]> {
     return contactDb.getContactsSortedByActivity(userId, propertyAddress, opts);
+  }
+
+  /** BACKLOG-3837: the activity list with `messageDerivedPending` (message-derived people not in yet). */
+  async getContactsSortedByActivityWithStatus(
+    userId: string,
+    propertyAddress?: string,
+    opts?: contactDb.TextPeopleOption,
+  ): Promise<contactDb.ContactListWithStatus<contactDb.ContactWithActivity>> {
+    return contactDb.getContactsSortedByActivityWithStatus(userId, propertyAddress, opts);
   }
 
   async backfillContactCommunicationDates(userId: string): Promise<number> {
