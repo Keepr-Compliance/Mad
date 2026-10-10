@@ -300,9 +300,19 @@ describe("BACKLOG-3440: Cancel, Reset and Try-Again are three different acts", (
     const orchestrator = new DeviceSyncOrchestrator();
     syncTimeline.beginSync();
 
-    orchestrator.cancel();
+    orchestrator.cancel("progress-cancel");
 
     expect(syncTimeline.contextSnapshot().endedBy).toBe("user-cancel");
+    expect(syncTimeline.contextSnapshot().reasonCode).toBe("progress-cancel");
+  });
+
+  it("BACKLOG-3816: a cancel no control asked for is NOT `user-cancel`", () => {
+    const orchestrator = new DeviceSyncOrchestrator();
+    syncTimeline.beginSync();
+
+    orchestrator.cancel();
+
+    expect(syncTimeline.contextSnapshot().endedBy).toBe("cancel-unattributed");
   });
 
   it("THE CONTROL — the restart-while-running guard records `restart-while-running`", () => {
@@ -321,7 +331,7 @@ describe("BACKLOG-3440: Cancel, Reset and Try-Again are three different acts", (
     const orchestrator = new DeviceSyncOrchestrator();
 
     syncTimeline.beginSync();
-    orchestrator.cancel();
+    orchestrator.cancel("progress-cancel");
     const cancelled = syncTimeline.contextSnapshot().endedBy;
 
     syncTimeline.beginSync();

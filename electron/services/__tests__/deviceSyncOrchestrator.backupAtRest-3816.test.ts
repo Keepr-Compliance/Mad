@@ -286,6 +286,28 @@ describe("C2 — the chain is sealed on every end path after the unseal", () => 
     await sealedAfter(o);
   });
 
+  it("BACKLOG-3816: the sync does not wait for the finished backup's size walk; the size reaches the run when it ends", async () => {
+    const o = newOrchestrator();
+    backupReturns(ok({ backupSize: null } as Partial<BackupResult>));
+    let finishWalk!: (r: { measured: true; bytes: number }) => void;
+    const walk = new Promise<{ measured: true; bytes: number }>((r) => (finishWalk = r));
+    const take = jest
+      .spyOn(BackupService.prototype, "takeDeferredSizeMeasurement")
+      .mockImplementation((udid) => (udid === UDID ? walk : null));
+    const result = await o.sync({ udid: UDID });
+    // Returned while the walk is still running.
+    expect(result.success).toBe(true);
+    expect(startBackup).toHaveBeenCalledWith(expect.objectContaining({ deferSizeMeasurement: true }));
+    expect(take).toHaveBeenCalledWith(UDID);
+    expect(syncTimeline.contextSnapshot().backupBytes).toBeUndefined();
+    expect(syncTimeline.contextSnapshot().backupBytesUnmeasured).toBeUndefined();
+    finishWalk({ measured: true, bytes: 4242 });
+    await new Promise((r) => setImmediate(r));
+    expect(syncTimeline.contextSnapshot().backupBytes).toBe(4242);
+    await o.completeBackupAtRest();
+    await sealedAfter(o);
+  });
+
   it("success with no persistence listener: sealed at once", async () => {
     const o = newOrchestrator(false);
     backupReturns(ok());
@@ -601,6 +623,179 @@ describe("refusals before idevicebackup2", () => {
     expect(startBackup).not.toHaveBeenCalled();
     internals.busy.delete(UDID);
     internals.pausable.delete(UDID);
+  });
+
+  // BACKLOG-3816 (phantom cancel, PC 2026-10-10 03:38:42Z-03:41:12Z): the run that ended
+  // `user-cancel` was in exactly this wait — a sync paused behind the post-unplug seal
+  // pass, phases []. Its terminal row may say `user-cancel` only when a named control
+  // asked; a cancel that arrives without one says `cancel-unattributed`.
+  describe("phantom cancel: the row names the control that ended the wait", () => {
+    async function cancelDuringPauseWait(trigger?: string): Promise<{ error: string | undefined; row: { outcome: string; fields: Record<string, unknown> } }> {
+      const rows: Array<{ outcome: string; fields: Record<string, unknown> }> = [];
+      const tl = syncTimeline as unknown as { reporter: (row: unknown) => void };
+      const original = tl.reporter;
+      tl.reporter = (row) => rows.push(row as { outcome: string; fields: Record<string, unknown> });
+      try {
+        const o = newOrchestrator();
+        backupReturns(ok());
+        const internals = atRest as unknown as { busy: Map<string, string>; pausable: Map<string, Int32Array> };
+        internals.busy.set(UDID, "sealing");
+        internals.pausable.set(UDID, new Int32Array(new SharedArrayBuffer(4)));
+        const syncing = o.sync({ udid: UDID });
+        await new Promise((r) => setTimeout(r, 60));
+        (o.cancel as (t?: unknown) => void)(trigger);
+        const result = await syncing;
+        internals.busy.delete(UDID);
+        internals.pausable.delete(UDID);
+        expect(startBackup).not.toHaveBeenCalled();
+        expect(rows).toHaveLength(1);
+        return { error: result.error ?? undefined, row: rows[0] };
+      } finally {
+        tl.reporter = original;
+      }
+    }
+
+    it("a Cancel click (progress-cancel) records ended_by=user-cancel with the control as reason_code", async () => {
+      const { error, row } = await cancelDuringPauseWait("progress-cancel");
+      expect(error).toBe("Sync cancelled by user");
+      expect(row.outcome).toBe("cancelled");
+      expect(row.fields.endedBy).toBe("user-cancel");
+      expect(row.fields.reasonCode).toBe("progress-cancel");
+    });
+
+    it("a cancel with no trigger records ended_by=cancel-unattributed, never user-cancel", async () => {
+      const { row } = await cancelDuringPauseWait(undefined);
+      expect(row.outcome).toBe("cancelled");
+      expect(row.fields.endedBy).toBe("cancel-unattributed");
+      expect(row.fields.reasonCode).toBeUndefined();
+    });
+
+    it("a cancel with an unknown trigger records ended_by=cancel-unattributed", async () => {
+      const { row } = await cancelDuringPauseWait("window-close");
+      expect(row.fields.endedBy).toBe("cancel-unattributed");
+      expect(row.fields.reasonCode).toBeUndefined();
+    });
+  });
+
+  // BACKLOG-3816 (PC 2026-10-10): the founder cancelled at 20:39:30, 48 s into
+  // "Initializing sync…", while checkBackupStatus walked the 576k-file chain. The sync
+  // kept going for ~100 s (backup status, disk, storage query, estimate), then asked
+  // the background seal to pause, and only then ended. A cancel during pre-flight must
+  // end the sync at once, run no further step and never request the at-rest pause.
+  describe("pre-flight honours a cancel at once", () => {
+    function hang<T>(): Promise<T> {
+      return new Promise<T>(() => undefined);
+    }
+
+    async function cancelDuring(step: "backup-status" | "storage-query") {
+      const rows: Array<{ outcome: string; elapsedMs: number; fields: Record<string, unknown> }> = [];
+      const tl = syncTimeline as unknown as { reporter: (row: unknown) => void };
+      const original = tl.reporter;
+      tl.reporter = (row) => rows.push(row as { outcome: string; elapsedMs: number; fields: Record<string, unknown> });
+      const internals = atRest as unknown as { busy: Map<string, string>; pausable: Map<string, Int32Array> };
+      const flag = new Int32Array(new SharedArrayBuffer(4));
+      try {
+        const o = newOrchestrator();
+        backupReturns(ok());
+        // A background seal is running on the phone, as on the PC.
+        internals.busy.set(UDID, "sealing");
+        internals.pausable.set(UDID, flag);
+        let reached!: () => void;
+        const atStep = new Promise<void>((r) => (reached = r));
+        const P = BackupService.prototype;
+        const status = jest.spyOn(P, "checkBackupStatus");
+        const deviceService = (o as unknown as { deviceService: { getDeviceStorageInfo: (u: string) => Promise<unknown> } }).deviceService;
+        const storage = jest.spyOn(deviceService, "getDeviceStorageInfo");
+        if (step === "backup-status") {
+          status.mockImplementation(() => {
+            reached();
+            return hang();
+          });
+        } else {
+          // Once: `getDeviceStorageInfo` is the module mock's own jest.fn, which
+          // restoreAllMocks does not reset.
+          storage.mockImplementationOnce(() => {
+            reached();
+            return hang();
+          });
+        }
+        const diskCheck = jest.spyOn(o as unknown as { checkAvailableDiskSpace: (n: number) => Promise<unknown> }, "checkAvailableDiskSpace");
+        const beginAtRest = jest.spyOn(atRest, "beginSync");
+        const syncing = o.sync({ udid: UDID });
+        await atStep;
+        const callsBefore = { disk: diskCheck.mock.calls.length, storage: storage.mock.calls.length };
+        const cancelledAt = Date.now();
+        o.cancel("progress-cancel");
+        const result = await syncing;
+        const tookMs = Date.now() - cancelledAt;
+        return { result, tookMs, rows, diskCheck, storage, callsBefore, beginAtRest, flag };
+      } finally {
+        tl.reporter = original;
+        internals.busy.delete(UDID);
+        internals.pausable.delete(UDID);
+      }
+    }
+
+    it.each(["backup-status", "storage-query"] as const)(
+      "cancel during %s: ends within 1 s, no later step runs, the seal is never asked to pause",
+      async (step) => {
+        const r = await cancelDuring(step);
+        expect(r.result.success).toBe(false);
+        expect(r.result.error).toBe("Sync cancelled by user");
+        expect(r.tookMs).toBeLessThan(1000);
+        // Nothing after the cancel: no further disk check, no storage query, no at-rest pause.
+        expect(r.diskCheck.mock.calls.length).toBe(r.callsBefore.disk);
+        expect(r.storage.mock.calls.length).toBe(r.callsBefore.storage);
+        expect(r.beginAtRest).not.toHaveBeenCalled();
+        expect(Atomics.load(r.flag, 0)).toBe(0);
+        expect(startBackup).not.toHaveBeenCalled();
+        // The run row is closed at the cancel, as the user's.
+        expect(r.rows).toHaveLength(1);
+        expect(r.rows[0].outcome).toBe("cancelled");
+        expect(r.rows[0].fields.endedBy).toBe("user-cancel");
+      },
+    );
+
+    it("cancel during a step that cannot be interrupted (password lookup): the sync stops when it returns and never asks the seal to pause", async () => {
+      const internals = atRest as unknown as { busy: Map<string, string>; pausable: Map<string, Int32Array> };
+      const flag = new Int32Array(new SharedArrayBuffer(4));
+      internals.busy.set(UDID, "sealing");
+      internals.pausable.set(UDID, flag);
+      try {
+        const o = newOrchestrator();
+        backupReturns(ok());
+        let release!: () => void;
+        let reached!: () => void;
+        const atStep = new Promise<void>((r) => (reached = r));
+        jest
+          .spyOn(o as unknown as { resolveBackupPassword: () => Promise<unknown> }, "resolveBackupPassword")
+          .mockImplementation(() => {
+            reached();
+            return new Promise((r) => (release = () => r({ kind: "none" })));
+          });
+        const beginAtRest = jest.spyOn(atRest, "beginSync");
+        const syncing = o.sync({ udid: UDID });
+        const first = await Promise.race([atStep.then(() => "step"), syncing.then((r) => r)]);
+        expect(first).toBe("step");
+        o.cancel("progress-cancel");
+        release();
+        const result = await syncing;
+        expect(result.error).toBe("Sync cancelled by user");
+        expect(beginAtRest).not.toHaveBeenCalled();
+        expect(Atomics.load(flag, 0)).toBe(0);
+        expect(startBackup).not.toHaveBeenCalled();
+      } finally {
+        internals.busy.delete(UDID);
+        internals.pausable.delete(UDID);
+      }
+    });
+
+    it("the backup-size walk stops on a cancelled signal (no full walk behind the user's back)", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const report = await new BackupService().checkBackupStatus(UDID, { signal: controller.signal });
+      expect(report).toMatchObject({ state: "present", size: { measured: false, reason: "cancelled" } });
+    });
   });
 
   it("B2: a phone held by something that cannot pause (another sync) is not moved aside or deleted by the new-chain step", async () => {

@@ -1296,7 +1296,7 @@ describe("deviceService", () => {
       it("should cancel sync successfully", async () => {
         mockSyncCancel.mockResolvedValue({ success: true });
 
-        const result = await deviceService.cancelSync();
+        const result = await deviceService.cancelSync("progress-cancel");
 
         expect(result.success).toBe(true);
       });
@@ -1304,7 +1304,7 @@ describe("deviceService", () => {
       it("should catch and return error when API throws exception", async () => {
         mockSyncCancel.mockRejectedValue(new Error("Cancel failed"));
 
-        const result = await deviceService.cancelSync();
+        const result = await deviceService.cancelSync("progress-cancel");
 
         expect(result.success).toBe(false);
         expect(result.error).toBe("Cancel failed");
@@ -1313,7 +1313,7 @@ describe("deviceService", () => {
       it("should return error when sync API is not available", async () => {
         removeApiDomain("sync");
 
-        const result = await deviceService.cancelSync();
+        const result = await deviceService.cancelSync("progress-cancel");
 
         expect(result.success).toBe(false);
         expect(result.error).toBe("Sync API not available");

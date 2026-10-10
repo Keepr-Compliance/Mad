@@ -18,6 +18,7 @@ import {
   SyncProgress,
   SyncResult,
 } from "../services/deviceSyncOrchestrator";
+import { isSyncCancelTrigger } from "../services/syncCancelTrigger";
 import { iPhoneSyncStorageService, attachmentSkipFields } from "../services/iPhoneSyncStorageService";
 import { autoLinkNewMessagesForUser, expandAttachedThreadsForUser } from "../services/autoLinkService";
 import sessionService from "../services/sessionService";
@@ -25,7 +26,7 @@ import type { iOSDevice } from "../types/device";
 import { rateLimiters } from "../utils/rateLimit";
 import { syncStatusService } from "../services/syncStatusService";
 import supabaseService from "../services/supabaseService";
-import { sendToMainWindow } from "../windowRegistry";
+import { getMainWindow, sendToMainWindow } from "../windowRegistry";
 import { handleBusy } from "../utils/busyIpc";
 import { backupDecryptionService } from "../services/backupDecryptionService";
 import type { SyncStartReply } from "../types/ipc/window-api-platform";
@@ -258,9 +259,25 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
   );
 
   // Cancel sync operation
-  ipcMain.handle("sync:cancel", () => {
-    log.info("[SyncHandlers] Cancelling sync");
-    orchestrator?.cancel();
+  // BACKLOG-3816: the renderer names the control that asked (`SyncCancelTrigger`). The
+  // trigger and the sending window are logged here, so every cancel in the log says
+  // where it came from; an unnamed one is recorded as unattributed, not as the user's.
+  ipcMain.handle("sync:cancel", (event: { sender?: { id?: number } } | undefined, trigger?: unknown) => {
+    const known = isSyncCancelTrigger(trigger) ? trigger : null;
+    const senderId = event?.sender?.id;
+    let mainId: number | undefined;
+    try {
+      mainId = getMainWindow()?.webContents?.id;
+    } catch {
+      mainId = undefined;
+    }
+    const logFields = {
+      trigger: known ?? (trigger === undefined ? "none" : "unknown"),
+      fromMainWindow: senderId !== undefined && mainId !== undefined ? senderId === mainId : "unknown",
+    };
+    if (known) log.info("[SyncHandlers] Cancelling sync", logFields);
+    else log.warn("[SyncHandlers] Cancelling sync with no known trigger", logFields);
+    orchestrator?.cancel(known);
     // TASK-2110: Signal persistence phase to stop and roll back
     persistCancelSignal.cancelled = true;
     return { success: true };

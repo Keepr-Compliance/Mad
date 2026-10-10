@@ -243,6 +243,18 @@ export interface SyncStartReply {
 }
 
 /**
+ * BACKLOG-3816: which on-screen control asked the iPhone sync to stop. Every caller
+ * of `sync.cancel` names one, so a cancelled run's row says which button ended it.
+ * A cancel that arrives without one is recorded as `cancel-unattributed`, never as
+ * `user-cancel`.
+ */
+export type SyncCancelTrigger =
+  | "progress-cancel"
+  | "error-close"
+  | "try-again-no-device"
+  | "password-cancel";
+
+/**
  * Sync methods (Windows)
  */
 export interface WindowApiSync {
@@ -251,7 +263,7 @@ export interface WindowApiSync {
     password?: string;
     forceFullBackup?: boolean;
   }) => Promise<SyncStartReply>;
-  cancel: () => Promise<{ success: boolean }>;
+  cancel: (trigger: SyncCancelTrigger) => Promise<{ success: boolean }>;
   status: () => Promise<{ isRunning: boolean; phase: string }>;
   devices: () => Promise<
     Array<{
