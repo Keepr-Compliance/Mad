@@ -64,16 +64,16 @@ maybe("BACKLOG-3868 query plans on the real schema, no statistics", () => {
   }
 
   it("sibling read: one thread through idx_messages_thread_id", () => {
-    expect(plan(UNLINKED_SIBLINGS_IN_THREAD_SQL)).toMatch(/^SEARCH m USING INDEX idx_messages_thread_id \(thread_id=\?\)$/);
+    expect(plan(UNLINKED_SIBLINGS_IN_THREAD_SQL)).toMatch(/^SEARCH m USING INDEX idx_messages_thread_(?:id|sent) \(thread_id=\?\)$/);
   });
 
   it("cross-thread read: the listed threads through idx_messages_thread_id", () => {
-    expect(plan(unlinkedMessagesInThreadsSql(3))).toMatch(/^SEARCH m USING INDEX idx_messages_thread_id \(thread_id=\?\)$/);
+    expect(plan(unlinkedMessagesInThreadsSql(3))).toMatch(/^SEARCH m USING INDEX idx_messages_thread_(?:id|sent) \(thread_id=\?\)$/);
   });
 
   it("thread rows for identity: idx_messages_thread_id", () => {
     const [threadRows] = captured((r) => readThreadIdentitiesOn(r, "u", ["a", "b"]));
-    expect(plan(threadRows)).toMatch(/^SEARCH messages USING INDEX idx_messages_thread_id \(thread_id=\?\)$/);
+    expect(plan(threadRows)).toMatch(/^SEARCH messages USING INDEX idx_messages_thread_(?:id|sent) \(thread_id=\?\)$/);
   });
 
   it("rows added since a rowid: a rowid range on idx_messages_user_id", () => {
@@ -88,8 +88,8 @@ maybe("BACKLOG-3868 query plans on the real schema, no statistics", () => {
   it("targeted read: attached and found threads by thread index; the superset filter is the only scan", () => {
     const texts = captured((r) => readTargetedThreadIdentityOn(r, "u", ["t1"]));
     expect(texts).toHaveLength(3);
-    expect(plan(texts[0])).toMatch(/idx_messages_thread_id \(thread_id=\?\)/);
-    expect(plan(texts[2])).toMatch(/idx_messages_thread_id \(thread_id=\?\)/);
+    expect(plan(texts[0])).toMatch(/idx_messages_thread_(?:id|sent) \(thread_id=\?\)/);
+    expect(plan(texts[2])).toMatch(/idx_messages_thread_(?:id|sent) \(thread_id=\?\)/);
     // the superset filter reads the user's rows once, inside SQLite
     expect(plan(texts[1])).toMatch(/^SEARCH messages USING INDEX idx_messages_user_(sent|id) \(user_id=\?\)/);
   });

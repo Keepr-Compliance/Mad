@@ -1,3 +1,4 @@
+import type { TextPageCursor, TextThreadSummary, TextWindow } from "../textThreads";
 /**
  * WindowApi Transactions sub-interface
  * Transaction CRUD, linking, export, and submission methods
@@ -497,6 +498,8 @@ export interface WindowApiTransactions {
   ) => Promise<{ success: boolean; cancelled?: boolean; error?: string }>;
   getDetails: (
     transactionId: string,
+    /** BACKLOG-3884: "email" = emails only (the texts are paged separately). */
+    channelFilter?: "email",
   ) => Promise<{
     success: boolean;
     transaction?: Transaction & {
@@ -558,6 +561,38 @@ export interface WindowApiTransactions {
     added?: Communication[];
     removedIds?: string[];
     total?: number;
+    error?: string;
+  }>;
+  /** BACKLOG-3884: the Texts tab's conversation list. */
+  getTextThreads: (transactionId: string, window: TextWindow | null) => Promise<{
+    success: boolean;
+    threads?: TextThreadSummary[];
+    error?: string;
+  }>;
+  /** BACKLOG-3884: one page of one conversation, newest first. */
+  getTextThreadPage: (
+    transactionId: string,
+    threadKeys: string[],
+    window: TextWindow | null,
+    cursor: TextPageCursor | null,
+    limit: number,
+  ) => Promise<{
+    success: boolean;
+    rows?: Communication[];
+    nextCursor?: TextPageCursor | null;
+    error?: string;
+  }>;
+  /** BACKLOG-3884: the conversation a linked text belongs to. */
+  findTextThread: (transactionId: string, messageId: string) => Promise<{
+    success: boolean;
+    threadKey?: string | null;
+    error?: string;
+  }>;
+  /** BACKLOG-3884: remove whole conversations; `messageIds` null when too many for Undo. */
+  unlinkTextThreads: (transactionId: string, threadKeys: string[]) => Promise<{
+    success: boolean;
+    removed?: number;
+    messageIds?: string[] | null;
     error?: string;
   }>;
   getWithContacts: (transactionId: string) => Promise<{
