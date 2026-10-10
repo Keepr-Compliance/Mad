@@ -147,6 +147,8 @@ describe(MIGRATION_NAME, () => {
   });
 });
 
+const BACKFILL_3858_NAME = '20261010210000_backlog_3858_personal_orgs_for_licensed_users.sql';
+
 describe('BACKLOG-3364 backfill stays parked', () => {
   it('exists under supabase/parked/backlog-3364/', () => {
     expect(existsSync(BACKFILL)).toBe(true);
@@ -157,6 +159,11 @@ describe('BACKLOG-3364 backfill stays parked', () => {
       const sql = stripComments(readFileSync(join(MIGRATIONS_DIR, f), 'utf8'));
       if (f === MIGRATION_NAME) {
         expect(sql).not.toMatch(/\bFOR\s+\w+\s+IN\b/i);
+        continue;
+      }
+      // BACKLOG-3858: the one reviewed backfill. Tested by supabase/tests/backlog-3858/.
+      if (f === BACKFILL_3858_NAME) {
+        expect(sql).toMatch(/v_expected_fp text := '[0-9a-f]{32}'/);
         continue;
       }
       expect(sql).not.toMatch(/_ensure_personal_organization_for/);
