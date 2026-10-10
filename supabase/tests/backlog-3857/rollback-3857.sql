@@ -1,6 +1,6 @@
 -- BACKLOG-3857 rollback: restores the license_type CHECK, the four column
 -- defaults and the admin_update_license body as they were before
--- 20261010120000_backlog_3857_no_trial_license_type.sql.
+-- 20261010145745_backlog_3857_no_trial_license_type.sql.
 
 BEGIN;
 

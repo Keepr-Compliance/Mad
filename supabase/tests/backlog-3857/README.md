@@ -1,6 +1,6 @@
 # BACKLOG-3857 database controls
 
-Runs `20261010120000_backlog_3857_no_trial_license_type.sql` against a test
+Runs `20261010145745_backlog_3857_no_trial_license_type.sql` against a test
 database (the NAS `supabase_db_keepr-test` container, at the production schema:
 ledger head `20261004232511`). One transaction per control, always ending in
 `ROLLBACK`. Nothing is committed. Fixtures are synthetic rows created inside
