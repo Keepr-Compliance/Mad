@@ -87,3 +87,64 @@ describe("useTransactionAllAttachments — overlapping refreshes (BACKLOG-3884)"
     expect(getAllAttachments).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * SR review of #2941 (BACKLOG-3884): two plausible wrong versions passed the
+ * cases above — a trailing marker never cleared (a refresh during the trailing
+ * read is lost), and a fetch reference never updated (a deal switch during a read
+ * ends on the old deal's rows).
+ */
+describe("useTransactionAllAttachments — trailing read and deal switch (BACKLOG-3884)", () => {
+  type P = { args: unknown[]; resolve: (v: unknown) => void };
+  let pending: P[];
+
+  beforeEach(() => {
+    pending = [];
+    getAllAttachments.mockReset();
+    getAllAttachments.mockImplementation(
+      (...args: unknown[]) => new Promise((resolve) => pending.push({ args, resolve })),
+    );
+  });
+
+  const finish = async (fn: (p: P) => unknown[]): Promise<void> => {
+    await act(async () => {
+      while (pending.length) {
+        const p = pending.shift()!;
+        p.resolve({ success: true, data: fn(p) });
+      }
+      await Promise.resolve();
+    });
+  };
+
+  it("a deal switch during a read ends on the new deal's rows", async () => {
+    const { result, rerender } = renderHook(({ id }) => useTransactionAllAttachments(id), {
+      initialProps: { id: "tx-A" },
+    });
+    rerender({ id: "tx-B" });
+    for (let i = 0; i < 4; i++) await finish((p) => [{ id: `a-${p.args[0]}` }]);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.attachments.map((a) => a.id)).toEqual(["a-tx-B"]);
+    expect(getAllAttachments.mock.calls.map((c) => c[0])).toEqual(["tx-A", "tx-B"]);
+  });
+
+  it("a refresh during the TRAILING read gets its own trailing read", async () => {
+    let n = 0;
+    const { result } = renderHook(() => useTransactionAllAttachments("tx-A"));
+    act(() => {
+      void result.current.refresh();
+    });
+    await finish(() => [{ id: `r${n++}` }]);
+    await waitFor(() => expect(getAllAttachments).toHaveBeenCalledTimes(2));
+    let last: Promise<void> = Promise.resolve();
+    act(() => {
+      last = result.current.refresh();
+    });
+    await finish(() => [{ id: `r${n++}` }]);
+    await waitFor(() => expect(getAllAttachments).toHaveBeenCalledTimes(3));
+    await finish(() => [{ id: `r${n++}` }]);
+    await act(async () => {
+      await last;
+    });
+    expect(result.current.attachments.map((a) => a.id)).toEqual(["r2"]);
+  });
+});
