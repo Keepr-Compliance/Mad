@@ -480,23 +480,32 @@ function stopDedicatedWorkers(): Promise<void> {
 
 /**
  * Shutdown the worker pool. Called on app quit.
+ *
+ * Returns a promise that resolves once the pool worker AND every dedicated worker has
+ * exited (each closes its database connection first on the graceful path). App quit
+ * ignores it; anything that needs the database file released (a Windows file delete
+ * or rename) must await it. The state reset below is synchronous either way.
  */
-export function shutdownPool(): void {
+export function shutdownPool(): Promise<void> {
   shuttingDown = true;
-  void stopDedicatedWorkers();
+  const dedicatedStopped = stopDedicatedWorkers();
+  let poolStopped: Promise<void> = Promise.resolve();
   if (worker) {
-    try {
-      worker.postMessage({ type: "shutdown" });
-    } catch {
-      // Worker may already be terminated
-    }
-    // Give it a moment to clean up, then force terminate
-    setTimeout(() => {
-      if (worker) {
-        worker.terminate();
-        worker = null;
+    const w = worker;
+    poolStopped = new Promise<void>((resolve) => {
+      w.once("exit", () => resolve());
+      try {
+        w.postMessage({ type: "shutdown" });
+      } catch {
+        // Worker may already be terminated
+        resolve();
       }
-    }, 500);
+      // Give it a moment to clean up, then force terminate
+      setTimeout(() => {
+        if (worker === w) worker = null;
+        w.terminate().then(() => resolve(), () => resolve());
+      }, 500);
+    });
   }
   ready = false;
   initPromise = null;
@@ -508,6 +517,7 @@ export function shutdownPool(): void {
     pending.reject(new Error("Worker pool shutting down"));
     pendingQueries.delete(id);
   }
+  return Promise.all([dedicatedStopped, poolStopped]).then(() => undefined);
 }
 
 /**
