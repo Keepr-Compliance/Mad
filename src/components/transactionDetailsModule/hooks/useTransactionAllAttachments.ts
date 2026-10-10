@@ -7,7 +7,7 @@
  * IPC handler, so it does not depend on the Emails/Texts communications being
  * pre-loaded.
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import logger from "../../../utils/logger";
 
 /**
@@ -61,6 +61,15 @@ interface UseTransactionAllAttachmentsResult {
 export interface AttachmentWindow {
   startedAt?: string | null;
   closedAt?: string | null;
+  /**
+   * BACKLOG-3884: load only once this is true. The reader runs synchronously on
+   * main and materializes every linked text to find the ones with attachments
+   * (~0.6 s for 105k linked texts, twice per open), so TransactionDetails
+   * enables it only when a tab that shows attachments is opened. While false,
+   * nothing is fetched and `refresh` is a no-op: the first enabled load reads
+   * the current state anyway. Default true (load on mount, as before).
+   */
+  enabled?: boolean;
 }
 
 /**
@@ -83,10 +92,16 @@ export function useTransactionAllAttachments(
   const [inWindowIds, setInWindowIds] = useState<Set<string> | null>(null);
   const windowStart = scope?.startedAt || undefined;
   const windowEnd = scope?.closedAt || undefined;
+  const enabled = scope?.enabled ?? true;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadAttachments = useCallback(async (): Promise<void> => {
+    // BACKLOG-3884: not shown yet -> nothing to refresh; the first enabled load
+    // reads the current state.
+    if (!enabledRef.current) return;
     if (!transactionId) {
       setAttachments([]);
       setInWindowIds(null);
@@ -98,6 +113,7 @@ export function useTransactionAllAttachments(
     setError(null);
 
     try {
+      const startedAt = Date.now();
       const hasWindow = Boolean(windowStart || windowEnd);
       const [result, windowed] = await Promise.all([
         window.api.transactions.getAllAttachments(
@@ -114,6 +130,11 @@ export function useTransactionAllAttachments(
           : Promise.resolve(null),
       ]);
 
+      // BACKLOG-3884: duration and row count only.
+      logger.info(
+        `[TxnOpen] attachments fetched ms=${Date.now() - startedAt}` +
+          ` rows=${Array.isArray(result?.data) ? result.data.length : 0} windowed=${hasWindow}`,
+      );
       if (result.success && result.data) {
         if (windowed && !(windowed.success && windowed.data)) {
           setError(windowed.error || "Failed to load attachments");
@@ -143,8 +164,9 @@ export function useTransactionAllAttachments(
   }, [transactionId, auditStart, auditEnd, windowStart, windowEnd]);
 
   useEffect(() => {
+    if (!enabled) return;
     loadAttachments();
-  }, [loadAttachments]);
+  }, [loadAttachments, enabled]);
 
   return {
     attachments,

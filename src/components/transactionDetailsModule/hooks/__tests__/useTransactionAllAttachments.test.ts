@@ -123,3 +123,31 @@ describe("useTransactionAllAttachments", () => {
     });
   });
 });
+
+describe("useTransactionAllAttachments — enabled (BACKLOG-3884)", () => {
+  beforeEach(() => {
+    getAllAttachments.mockReset();
+    getAllAttachments.mockResolvedValue({ success: true, data: [] });
+  });
+
+  it("fetches nothing while disabled, refresh() is a no-op, and enabling loads", async () => {
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useTransactionAllAttachments("txn-1", undefined, undefined, { enabled }),
+      { initialProps: { enabled: false } },
+    );
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(getAllAttachments).toHaveBeenCalledTimes(0);
+
+    rerender({ enabled: true });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(getAllAttachments).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(getAllAttachments).toHaveBeenCalledTimes(2);
+  });
+});

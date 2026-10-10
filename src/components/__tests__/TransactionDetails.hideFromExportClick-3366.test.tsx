@@ -223,7 +223,7 @@ function bubble(id: string): HTMLElement {
 async function openLinkedConversation(): Promise<void> {
   render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
   await waitFor(() =>
-    expect(window.api.transactions.getAllAttachments as jest.Mock).toHaveBeenCalled(),
+    expect(window.api.transactions.getDetails as jest.Mock).toHaveBeenCalled(),
   );
   await act(async () => {
     await userEvent.click(await screen.findByRole("button", { name: /Texts/i }));
