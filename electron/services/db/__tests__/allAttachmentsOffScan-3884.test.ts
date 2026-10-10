@@ -274,6 +274,17 @@ function seed(db: TestDb): void {
     // Hidden from export (not read by this reader; present anyway).
     db.prepare("INSERT INTO transaction_hidden_texts (transaction_id, message_id, message_external_id, hidden_by) VALUES (?, ?, ?, ?)")
       .run(TX, "m-5", "g-m-5", U1);
+    // Window edges: hits exactly at the reader's inclusive end (auditWindowEnd of a
+    // window below) and 1 ms after it; exactly at a window start.
+    const endEdge = auditWindowEnd(new Date(at(1999)))!.getTime();
+    for (const [id, ms] of [["m-edge-end", endEdge], ["m-edge-after", endEdge + 1], ["m-edge-start", Date.parse(at(39))]] as const) {
+      text(id, U1, "thr-0", 0);
+      db.prepare("UPDATE messages SET sent_at = ? WHERE id = ?").run(new Date(ms).toISOString(), id);
+      att(`a-${id}`, id, null, `g-${id}`, 0);
+    }
+    // An UNLINKED email's attachment carrying a linked text's Apple id (m-9 has no
+    // direct row): never listed, as text or as email.
+    att("a-unlinked-email-with-text-id", null, "e-2", "g-m-9", 11);
     // Removed: a thread the user unlinked (ignored row, no communications row).
     text("m-removed", U1, "thr-removed", 30);
     att("a-removed", "m-removed", null, "g-m-removed", 30);
@@ -320,7 +331,7 @@ describe("BACKLOG-3884: all-attachments reader, equality with the old reader", (
     for (const id of ["a-fallback-deleted", "a-fallback-other", "a-fallback-own-linked", "a-u2-msg-linked", "a-shared-apple", "at-7", "ae-0"]) {
       expect(old).toContain(id);
     }
-    for (const id of ["a-u2-in-thr0", "a-fallback-blocked", "a-removed", "ae-1"]) {
+    for (const id of ["a-u2-in-thr0", "a-fallback-blocked", "a-removed", "ae-1", "a-unlinked-email-with-text-id"]) {
       expect(old).not.toContain(id);
     }
     // an email attachment carrying a text's Apple id is listed as the email's, never a text's
@@ -346,6 +357,13 @@ describe("BACKLOG-3884: all-attachments reader, equality with the old reader", (
       expect(new Set(sizes).size).toBeGreaterThan(2);
     });
   }
+
+  it("window edges are inclusive on both ends", () => {
+    const ids = getTransactionAllAttachments(TX, new Date(at(39)), new Date(at(1999))).map((r) => r.id);
+    expect(ids).toContain("a-m-edge-end");
+    expect(ids).toContain("a-m-edge-start");
+    expect(ids).not.toContain("a-m-edge-after");
+  });
 
   it("cross-user Apple id: full list keeps the own message, a window excluding it resolves to the other user's linked text", () => {
     const full = getTransactionAllAttachments(TX).find((r) => r.id === "a-shared-apple");
