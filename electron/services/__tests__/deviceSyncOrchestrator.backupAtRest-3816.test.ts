@@ -942,6 +942,68 @@ describe("C2-DELTA (founder must-fix 2026-10-09) — every end of a C-DELTA sync
     await sealedAfter(o);
     expect(finish).toHaveBeenCalledTimes(1);
   });
+
+  // Founder decision 2026-10-10: the verification walk is skipped only after a NORMAL end.
+  // The planted plaintext file (old mtime, outside the delta) is reached only by the walk.
+  describe("verification walk skipped only after a normal end (BACKLOG-3816)", () => {
+    function plantOld(): string {
+      write(`7f/${"7".repeat(40)}`, "old plaintext, outside the delta");
+      const planted = path.join(chain, "7f", "7".repeat(40));
+      const old = new Date(Date.now() - 2 * 3600_000);
+      fsSync.utimesSync(planted, old, old);
+      return planted;
+    }
+    const sealedNow = (f: string) => fsSync.readFileSync(f).subarray(0, 7).equals(MAGIC);
+
+    it("success: finishSync is told the end was clean; only the delta is sealed (planted file untouched), marker encrypted", async () => {
+      const planted = plantOld();
+      const o = newOrchestrator();
+      const finish = jest.spyOn(atRest, "finishSync");
+      backupReturns(ok());
+      const result = await o.sync({ udid: UDID });
+      expect(result.success).toBe(true);
+      expect(finish).toHaveBeenCalledTimes(1);
+      expect(finish.mock.calls[0][2]).toMatchObject({ cleanEnd: true });
+      await o.lastAtRestSeal;
+      expect(sealedNow(planted)).toBe(false);
+      expect(plaintextLeft()).toEqual([planted]);
+      expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
+      await o.completeBackupAtRest(true);
+      await o.cleanupBackup(result.backupPath!);
+    });
+
+    it.each([
+      ["disconnect", (orc: DeviceSyncOrchestrator) => {
+        (orc as unknown as { backupInFlight: { disconnected: boolean } }).backupInFlight.disconnected = true;
+        return fail();
+      }],
+      ["cancel", (orc: DeviceSyncOrchestrator) => {
+        orc.cancel();
+        return fail();
+      }],
+      ["tool error", () => fail({ errorCode: "DEVICE_LOCKED", error: "locked" } as Partial<BackupResult>)],
+    ])("%s: no cleanEnd, the walk runs (planted file sealed)", async (_name, end) => {
+      const planted = plantOld();
+      const o = newOrchestrator();
+      const finish = jest.spyOn(atRest, "finishSync");
+      backupReturns(end, o);
+      expect((await o.sync({ udid: UDID })).success).toBe(false);
+      await sealedAfter(o);
+      for (const call of finish.mock.calls) expect(call[2]?.cleanEnd).toBeUndefined();
+      expect(sealedNow(planted)).toBe(true);
+    });
+
+    it("a throw after the parse copy (parser explodes): the seal had already started as a clean end of the backup tool; the chain is complete", async () => {
+      const o = newOrchestrator();
+      parserBehaviour = "throw";
+      backupReturns(ok());
+      const finish = jest.spyOn(atRest, "finishSync");
+      expect((await o.sync({ udid: UDID })).error).toMatch(/parser exploded/);
+      await sealedAfter(o);
+      expect(finish).toHaveBeenCalledTimes(1);
+      expect(finish.mock.calls[0][2]).toMatchObject({ cleanEnd: true });
+    });
+  });
 });
 
 describe("B2 — an unreadable kept backup no longer ends iPhone sync", () => {

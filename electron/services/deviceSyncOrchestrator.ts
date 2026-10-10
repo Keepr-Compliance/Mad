@@ -2086,7 +2086,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         // So the chain is sealed NOW, in the background (worker threads), while contacts
         // and messages are parsed and stored — not after persistence. What the phone
         // just wrote and the unsealed index files are sealed first (newest first).
-        this.lastAtRestSeal = this.atRest().finishSync(atRestSession, undefined, { toolOk: true });
+        // `cleanEnd`: the backup tool finished and its output is read, so this is a normal
+        // end — a chain proven sealed before the sync seals only this sync's delta and
+        // skips the verification walk (founder decision 2026-10-10). The finally below
+        // (unplug, cancel, error) never passes it.
+        this.lastAtRestSeal = this.atRest().finishSync(atRestSession, undefined, { toolOk: true, cleanEnd: true });
         atRestSealStarted = true;
       }
 

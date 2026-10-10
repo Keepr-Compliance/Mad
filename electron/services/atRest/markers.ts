@@ -47,6 +47,14 @@ export interface BackupMarker {
    * the second one in a row forces C-FULL. Reset by a sync whose tool succeeded.
    */
   toolFailures?: number;
+  /**
+   * The app version that last PROVED this chain fully sealed — a full verification walk
+   * that found zero plaintext, or a clean delta seal on top of such a proof (founder
+   * decision 2026-10-10, BACKLOG-3816). Written only together with `encrypted` and
+   * dropped by every other state write, so a sync, a crash, a seal failure or an
+   * update (a different version) makes the next sync walk the whole chain again.
+   */
+  verifiedBy?: string;
 }
 
 export interface ScopeEntry {
@@ -93,8 +101,11 @@ export interface MarkerStore {
   stateFilePath(): string;
   /** null = no marker yet. A marker that exists but cannot be parsed throws — never read it as "plaintext". */
   readBackupMarker(udid: string): Promise<BackupMarker | null>;
-  /** Writes the state; keeps `nextStrategy`/`reasonCode` already recorded for the phone. */
-  writeBackupMarker(udid: string, state: BackupAtRestState): Promise<BackupMarker>;
+  /**
+   * Writes the state; keeps `nextStrategy`/`reasonCode`/`toolFailures` already recorded for
+   * the phone. `verifiedBy` is never kept: it is written only when passed (with `encrypted`).
+   */
+  writeBackupMarker(udid: string, state: BackupAtRestState, opts?: { verifiedBy?: string }): Promise<BackupMarker>;
   /** Records (reasonCode) or clears (null) "the next sync is C-FULL" on an existing marker. No marker = no-op. */
   setNextStrategy(udid: string, reasonCode: string | null): Promise<void>;
   /** Sets the consecutive tool-failure count (0 removes it) on an existing marker. No marker = no-op. */
@@ -139,7 +150,7 @@ export function createMarkerStore(deps: MarkerStoreDeps): MarkerStore {
       return parsed;
     },
 
-    async writeBackupMarker(udid, state) {
+    async writeBackupMarker(udid, state, opts) {
       if (!BACKUP_STATES.has(state)) throw new Error(`unknown backup state ${state}`);
       let kept: Pick<BackupMarker, "nextStrategy" | "reasonCode" | "toolFailures"> = {};
       try {
@@ -153,7 +164,8 @@ export function createMarkerStore(deps: MarkerStoreDeps): MarkerStore {
       } catch {
         // an unreadable marker is being replaced; there is nothing to keep
       }
-      const marker: BackupMarker = { udid, state, updatedAt: now().toISOString(), ...kept };
+      const verified = state === "encrypted" && opts?.verifiedBy ? { verifiedBy: opts.verifiedBy } : {};
+      const marker: BackupMarker = { udid, state, updatedAt: now().toISOString(), ...kept, ...verified };
       await writeFileAtomic(backupMarkerPath(udid), JSON.stringify(marker, null, 2));
       return marker;
     },
