@@ -53,7 +53,7 @@ interface SettingsComponentProps {
   userId: string;
   onLogout?: () => Promise<void>;
   onEmailConnected?: (email: string, provider: "google" | "microsoft") => void;
-  onEmailDisconnected?: (provider: "google" | "microsoft") => void;
+  onEmailDisconnected?: (provider: "google" | "microsoft", anyStillConnected?: boolean) => void;
   /** Settings › Google Messages' Link / Relink: the Sync Android modal at its link step. */
   onLinkGoogleMessages?: () => void;
 }

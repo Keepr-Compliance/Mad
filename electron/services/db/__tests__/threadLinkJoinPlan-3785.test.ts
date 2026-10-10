@@ -105,14 +105,18 @@ describe("thread-link join plan without sqlite_stat1 (BACKLOG-3785)", () => {
   it("the texts reader searches messages by thread, never by user", async () => {
     await getCommunicationsWithMessages(TX, "text");
     const plan = threadJoinPlan();
-    expect(plan.some((d) => d.includes("idx_messages_thread_id"))).toBe(true);
+    // BACKLOG-3884: idx_messages_thread_sent (thread_id, sent_at) is also a thread index;
+    // the planner may pick either. What matters is that the search is by thread.
+    expect(plan.some((d) => /idx_messages_thread_(id|sent) \(thread_id=\?/.test(d))).toBe(true);
     expect(plan.filter((d) => /SEARCH m USING INDEX \w+ \(user_id=\?/.test(d))).toEqual([]);
   });
 
   it("the attachments reader searches messages by thread, never by user", () => {
     getTransactionAllAttachments(TX);
     const plan = threadJoinPlan();
-    expect(plan.some((d) => d.includes("idx_messages_thread_id"))).toBe(true);
+    // BACKLOG-3884: idx_messages_thread_sent (thread_id, sent_at) is also a thread index;
+    // the planner may pick either. What matters is that the search is by thread.
+    expect(plan.some((d) => /idx_messages_thread_(id|sent) \(thread_id=\?/.test(d))).toBe(true);
     expect(plan.filter((d) => /SEARCH m USING INDEX \w+ \(user_id=\?/.test(d))).toEqual([]);
   });
 });

@@ -8,7 +8,7 @@
  * oldest stored text) as a soft note. Never blocks anything.
  */
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { settingsService } from "../../../services/settingsService";
 import { effectiveImportSource } from "../../../services/importSourcePolicy";
 import { isMacOS } from "../../../utils/platform";
@@ -104,6 +104,10 @@ export function gapLine(gap: SourceCoverageGap, auditStartISO: string | null): s
   return `${label}: texts only from ${day(gap.coveredSince)}${approx}${auditStartISO ? `; this transaction starts ${day(auditStartISO)}` : ""}.`;
 }
 
+/** BACKLOG-3884: re-asks while the coverage floors are still being read. */
+const PENDING_RETRY_MS = 4000;
+const PENDING_RETRIES = 5;
+
 interface TextCoverageNoticeProps {
   transactionId: string;
   userId: string;
@@ -113,6 +117,17 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
   const [gaps, setGaps] = useState<SourceCoverageGap[]>([]);
   const [auditStart, setAuditStart] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
+  const pendingRetriesRef = useRef(0);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadRef = useRef<() => Promise<void>>(async () => undefined);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, []);
 
   const load = useCallback(async () => {
     let chosen: TextSource | null = null;
@@ -127,7 +142,18 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
     try {
       // SR: through the service, never window.api from the component.
       const r = await transactionService.getTextCoverage(transactionId, userId, chosen);
+      if (r && r.success && r.pending) {
+        // BACKLOG-3884: the floors are still being read off the main thread. Unknown
+        // is not "covered": keep what is shown and ask again shortly (bounded).
+        if (mountedRef.current && pendingRetriesRef.current < PENDING_RETRIES) {
+          pendingRetriesRef.current += 1;
+          if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+          retryTimerRef.current = setTimeout(() => void loadRef.current(), PENDING_RETRY_MS);
+        }
+        return;
+      }
       if (r && r.success) {
+        pendingRetriesRef.current = 0;
         setGaps(r.gaps);
         setAuditStart(r.auditStartISO);
       }
@@ -135,6 +161,7 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
       // A coverage read failing never shows anything.
     }
   }, [transactionId, userId]);
+  loadRef.current = load;
 
   useEffect(() => {
     void load();

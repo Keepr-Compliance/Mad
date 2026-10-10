@@ -71,6 +71,11 @@ export interface TextCoverageResult {
   success: boolean;
   auditStartISO: string | null;
   gaps: SourceCoverageGap[];
+  /**
+   * BACKLOG-3884: the per-source floors are not known yet (read still running on its
+   * worker, or it failed). `gaps` is empty and means nothing; ask again later.
+   */
+  pending?: boolean;
   error?: string;
 }
 
@@ -102,6 +107,11 @@ export interface AuditCoverageResult {
   messagesImporterAvailable: boolean;
   /** BACKLOG-3663: per-source gaps for the proposed start (soft; the Mac rule above is unchanged). */
   sourceGaps?: SourceCoverageGap[];
+  /**
+   * BACKLOG-3837: the per-source floors are not known yet (read off main, still running
+   * or failed). `sourceGaps` is then ABSENT — unknown is never reported as "no gaps".
+   */
+  sourceCoveragePending?: boolean;
   error?: string;
 }
 
@@ -118,6 +128,8 @@ export interface ExportCompletenessResult {
   messagesImporterAvailable: boolean;
   /** BACKLOG-3663: per-source gaps (informational; never changes `complete`). */
   sourceGaps?: SourceCoverageGap[];
+  /** BACKLOG-3837: as AuditCoverageResult.sourceCoveragePending (never changes `complete`). */
+  sourceCoveragePending?: boolean;
   error?: string;
 }
 

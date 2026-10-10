@@ -172,7 +172,7 @@ export function UserResultsTable({ users, query, isLoading, error }: UserResults
 
   // Table wrapper (shared by loading and results states)
   return (
-    <TableContainer>
+    <TableContainer scrollX>
       <Table>
         <TableHead>
           <Tr>

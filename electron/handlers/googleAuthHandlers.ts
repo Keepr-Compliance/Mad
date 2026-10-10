@@ -21,6 +21,7 @@ import sessionService from "../services/sessionService";
 import { provisionLogin } from "../services/loginProvisioningService";
 import rateLimitService from "../services/rateLimitService";
 import auditService from "../services/auditService";
+import { recordEmailProvider } from "../services/emailProviderRecord";
 import logService from "../services/logService";
 import { importEnabledEmptyContactSources } from "../services/postConnectContactImport";
 
@@ -763,6 +764,10 @@ export async function handleGoogleConnectMailbox(
           metadata: { provider: "google", email: userInfo.email },
           success: true,
         });
+
+        // BACKLOG-3888: remember that this account chose this mailbox provider
+        // (cloud preferences.emailProviders). Never blocks or fails the connect.
+        void recordEmailProvider(validatedUserId, "google");
 
         // BACKLOG-3394: bring the app forward OURSELVES. The user is looking at
         // a browser tab; before this the served page asked them to click

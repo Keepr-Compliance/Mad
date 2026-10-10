@@ -11,11 +11,14 @@
  */
 
 import type { AccountSetup } from "./routeAccount";
+import { hasRecordedEmailProvider } from "../recordedEmailProviders";
 
 export interface AccountSetupReading {
   setup: AccountSetup;
   emailStepAnswered: boolean;
   contactSourceAnswered: boolean;
+  /** BACKLOG-3888: the account has connected a mailbox at some point. */
+  hasRecordedEmailProvider: boolean;
 }
 
 const SETUP_VALUES: ReadonlySet<string> = new Set(["finished", "not-finished", "unknown"]);
@@ -27,16 +30,23 @@ export function readAccountSetup(result: unknown): AccountSetupReading {
         setup?: unknown;
         emailStepAnswered?: unknown;
         contactSourceAnswered?: unknown;
+        emailProviders?: unknown;
       }
     | undefined;
 
   if (!r || r.success !== true || typeof r.setup !== "string" || !SETUP_VALUES.has(r.setup)) {
-    return { setup: "unknown", emailStepAnswered: false, contactSourceAnswered: false };
+    return {
+      setup: "unknown",
+      emailStepAnswered: false,
+      contactSourceAnswered: false,
+      hasRecordedEmailProvider: false,
+    };
   }
 
   return {
     setup: r.setup as AccountSetup,
     emailStepAnswered: r.emailStepAnswered === true,
     contactSourceAnswered: r.contactSourceAnswered === true,
+    hasRecordedEmailProvider: hasRecordedEmailProvider(r.emailProviders),
   };
 }

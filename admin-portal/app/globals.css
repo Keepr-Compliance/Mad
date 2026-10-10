@@ -59,3 +59,17 @@ body {
     display: none;
   }
 }
+
+/*
+ * BACKLOG-3841: below md, text fields render at 16px so iOS Safari does not
+ * zoom the page when one is focused. Same media query Tailwind emits for
+ * max-md:, so md and up are unchanged. !important is needed because bare
+ * select/textarea selectors lose to utility classes such as .text-sm.
+ */
+@media not all and (min-width: 768px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='file']):not([type='range']):not([type='color']):not([type='hidden']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
