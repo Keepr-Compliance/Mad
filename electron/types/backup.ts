@@ -236,6 +236,13 @@ export interface BackupOptions {
   /** Skip application data to reduce backup size. Default: true */
   /** Password for encrypted backup (TASK-007) */
   password?: string;
+  /**
+   * BACKLOG-3816: measure the finished backup's size AFTER returning instead of before.
+   * The result then carries `backupSize: null`; the reading is collected with
+   * `takeDeferredSizeMeasurement(udid)`. Used by the sync so its end is not held up by
+   * a walk of every file in the backup.
+   */
+  deferSizeMeasurement?: boolean;
 }
 
 /**

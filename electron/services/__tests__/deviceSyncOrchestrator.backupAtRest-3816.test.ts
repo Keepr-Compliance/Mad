@@ -286,6 +286,28 @@ describe("C2 — the chain is sealed on every end path after the unseal", () => 
     await sealedAfter(o);
   });
 
+  it("BACKLOG-3816: the sync does not wait for the finished backup's size walk; the size reaches the run when it ends", async () => {
+    const o = newOrchestrator();
+    backupReturns(ok({ backupSize: null } as Partial<BackupResult>));
+    let finishWalk!: (r: { measured: true; bytes: number }) => void;
+    const walk = new Promise<{ measured: true; bytes: number }>((r) => (finishWalk = r));
+    const take = jest
+      .spyOn(BackupService.prototype, "takeDeferredSizeMeasurement")
+      .mockImplementation((udid) => (udid === UDID ? walk : null));
+    const result = await o.sync({ udid: UDID });
+    // Returned while the walk is still running.
+    expect(result.success).toBe(true);
+    expect(startBackup).toHaveBeenCalledWith(expect.objectContaining({ deferSizeMeasurement: true }));
+    expect(take).toHaveBeenCalledWith(UDID);
+    expect(syncTimeline.contextSnapshot().backupBytes).toBeUndefined();
+    expect(syncTimeline.contextSnapshot().backupBytesUnmeasured).toBeUndefined();
+    finishWalk({ measured: true, bytes: 4242 });
+    await new Promise((r) => setImmediate(r));
+    expect(syncTimeline.contextSnapshot().backupBytes).toBe(4242);
+    await o.completeBackupAtRest();
+    await sealedAfter(o);
+  });
+
   it("success with no persistence listener: sealed at once", async () => {
     const o = newOrchestrator(false);
     backupReturns(ok());

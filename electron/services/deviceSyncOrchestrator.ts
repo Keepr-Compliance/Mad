@@ -894,6 +894,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     let forceFullNext: string | undefined;
     // G3: the backup tool finished (resets the consecutive tool-failure count).
     let backupToolOk = false;
+    // BACKLOG-3816: the backup's size walk was deferred and reports on its own.
+    let deferredSizePending = false;
     if (this.isRunning) {
       return this.errorResult("Sync already in progress");
     }
@@ -938,6 +940,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
     // BACKLOG-2898: open the phase timeline for this run.
     syncTimeline.beginSync({ platform: process.platform });
+    // BACKLOG-3816: the deferred size walk reports into this run only.
+    const timelineRunId = syncTimeline.currentRunId?.() ?? null;
 
     // BACKLOG-2914 (FIX 4): the HOST half of the outcome row's environment.
     //
@@ -1077,7 +1081,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // ~135 s). It stops at the next file on cancel, and the sync does not wait for it.
       const backupStatus = await raceCancel(
         preflightSignal,
-        this.backupService.checkBackupStatus(options.udid, { signal: preflightSignal }),
+        this.backupService.checkBackupStatus(options.udid, { signal: preflightSignal, useRecordedSize: true }),
       );
       if (backupStatus === PREFLIGHT_CANCELLED) {
         return this.endCancelledPreflight(preflightSignal, "backup-status");
@@ -1753,6 +1757,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             udid: options.udid,
             password: backupPassword,
             forceFullBackup: options.forceFullBackup,
+            deferSizeMeasurement: true,
           });
         } catch (toolError) {
           if (
@@ -1833,6 +1838,25 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           return this.errorResult(BACKUP_DEVICE_DISCONNECTED_MESSAGE);
         }
 
+        // BACKLOG-3816: the finished backup's size is measured while the sync goes on
+        // (parse copy, seal, parse, store) instead of before it. Its figure reaches this
+        // run's row and the backup phase when the walk ends, if the run is still open.
+        const deferredSize = this.backupService.takeDeferredSizeMeasurement?.(options.udid) ?? null;
+        if (deferredSize) {
+          deferredSizePending = true;
+          const backupPhase = this.backupTimelinePhase;
+          void deferredSize.then((reading) => {
+            if (timelineRunId === null || syncTimeline.currentRunId?.() !== timelineRunId) return;
+            syncTimeline.setContext(
+              reading.measured ? { backupBytes: reading.bytes } : { backupBytesUnmeasured: true },
+            );
+            syncTimeline.annotate(
+              backupPhase,
+              reading.measured ? { bytes: reading.bytes } : { bytesUnmeasured: true },
+            );
+          });
+        }
+
         if (this.abortController?.signal.aborted) {
           // BACKLOG-3598: a cancelled first sync leaves nothing behind.
           await this.removeUnfinishedBackup(options.udid, mayRemoveUnfinishedBackup);
@@ -1860,9 +1884,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
               ? "inferred"
               : "device-reported",
           wasEncrypted: !!backupResult.isEncrypted,
-          ...(backupResult.backupSize === null
-            ? { backupBytesUnmeasured: true }
-            : { backupBytes: backupResult.backupSize }),
+          // BACKLOG-3816: a deferred walk sets the size itself when it ends.
+          ...(deferredSize
+            ? {}
+            : backupResult.backupSize === null
+              ? { backupBytesUnmeasured: true }
+              : { backupBytes: backupResult.backupSize }),
         });
 
         backupToolOk = backupResult.success && !!backupResult.backupPath;
@@ -1962,9 +1989,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // be annotated `bytes: 0`, which reads in the timeline — and in the aggregate
       // BACKLOG-2894 will build — as a run that transferred nothing.
       syncTimeline.annotate(this.backupTimelinePhase, {
-        ...(backupResult.backupSize === null
-          ? { bytesUnmeasured: true }
-          : { bytes: backupResult.backupSize }),
+        // BACKLOG-3816: a deferred walk annotates the size when it ends.
+        ...(deferredSizePending
+          ? {}
+          : backupResult.backupSize === null
+            ? { bytesUnmeasured: true }
+            : { bytes: backupResult.backupSize }),
         incremental: backupResult.isIncremental,
         encrypted: !!backupResult.isEncrypted,
       });
@@ -3273,7 +3303,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // BACKLOG-3816: the size walk stops on cancel, and nothing waits for it.
       const backupStatus = await raceCancel(
         preflightSignal,
-        this.backupService.checkBackupStatus(options.udid, { signal: preflightSignal }),
+        this.backupService.checkBackupStatus(options.udid, { signal: preflightSignal, useRecordedSize: true }),
       );
       if (backupStatus === PREFLIGHT_CANCELLED) {
         return this.endCancelledPreflight(preflightSignal, "backup-status", PROCESSING_CANCELLED);
