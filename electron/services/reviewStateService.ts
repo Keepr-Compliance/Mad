@@ -100,6 +100,7 @@ import {
 } from "./db/communicationDbService";
 import { linkEmailToTransaction } from "./autoLinkService";
 import logService from "./logService";
+import { runFullSweepOnce, yieldToEventLoop } from "./autoLinkSweepGuard";
 // BACKLOG-2818: the published lifecycle definition. The discriminator is a
 // persisted-data contract, so it is named here rather than spelled out at each
 // of the three sites (a read, a SQL predicate and a write) that have to agree.
@@ -752,22 +753,38 @@ export async function syncReviewQueueForTransaction(opts: {
 
   let linked = 0;
   let added = 0;
-  for (const contactId of assignedContacts) {
-    try {
-      const r = await autoLinkCommunicationsForContact({
-        contactId,
-        transactionId,
-        queueAmbiguousInsteadOfLinking: true,
-      });
-      linked += r.emailsLinked + r.messagesLinked;
-      added += r.queuedForReview ?? 0;
-    } catch (error) {
-      await logService.warn(
-        `[BACKLOG-2791] discovery failed for contact ${contactId}: ${error instanceof Error ? error.message : "Unknown"}`,
-        MODULE,
-      );
+  const sweep = async (): Promise<{ clean: boolean }> => {
+    let clean = true;
+    for (const contactId of assignedContacts) {
+      // BACKLOG-3883: one event-loop turn per contact.
+      await yieldToEventLoop();
+      try {
+        const r = await autoLinkCommunicationsForContact({
+          caller: `reviewSync-${reason}`,
+          contactId,
+          transactionId,
+          queueAmbiguousInsteadOfLinking: true,
+        });
+        linked += r.emailsLinked + r.messagesLinked;
+        added += r.queuedForReview ?? 0;
+        if (r.errors > 0 || r.aborted) clean = false;
+      } catch (error) {
+        clean = false;
+        await logService.warn(
+          `[BACKLOG-2791] discovery failed for contact ${contactId}: ${error instanceof Error ? error.message : "Unknown"}`,
+          MODULE,
+        );
+      }
     }
-  }
+    return { clean };
+  };
+  // BACKLOG-3883: an unscoped sync is the deal's FULL sweep. Skip it when nothing it
+  // reads changed since the last full sweep (creation runs one seconds before the
+  // details screen's on-open sync), and wait out one already running. A contact-scoped
+  // sync is about edited contacts and always runs. Everything below — the watermark,
+  // `added` re-derived from pending rows, the broadcast — runs either way.
+  if (contactIds && contactIds.length > 0) await sweep();
+  else await runFullSweepOnce(transactionId, sweep, `reviewSync-${reason}`);
 
   // `added` is what the user has not been told about yet.
   //

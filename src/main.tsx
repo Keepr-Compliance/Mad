@@ -10,6 +10,7 @@ import {
   LoadingOrchestrator,
 } from "./appCore/state/machine";
 import { clearCorruptedSession } from "./utils/clearCorruptedSession";
+import { installRendererStallLogger } from "./utils/rendererStallLogger";
 import "./index.css";
 
 // Initialize Sentry in the renderer process (TASK-1967)
@@ -31,6 +32,9 @@ Sentry.init({
     return event;
   },
 });
+
+// BACKLOG-3884: log every renderer main-thread stall of >= 1 s to main.log.
+installRendererStallLogger();
 
 // BACKLOG-1632: Clear corrupted Supabase session data from localStorage
 // before the SDK can attempt to parse it. Reports to Sentry if corruption found.

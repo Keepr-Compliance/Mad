@@ -28,6 +28,7 @@ type QueryType =
   | "threadIdentity"
   | "threadIdentityTargeted"
   | "candidateMessageThreads"
+  | "candidateEmails"
   // BACKLOG-3837: the step-1 Continue scans (wizardMessageScansDb.ts).
   | "messageDerived"
   | "commDatesPlan"

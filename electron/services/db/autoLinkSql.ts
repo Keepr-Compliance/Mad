@@ -218,6 +218,18 @@ export function readCandidateMessageThreadsOn(
   return db.prepare(candidateMessageThreadsSql(phoneCount)).all(...params);
 }
 
+/**
+ * BACKLOG-3883: the candidate-email read on a caller-supplied connection (the contact
+ * query worker's own connection). Same statement and parameters as on the main thread.
+ */
+export function readCandidateEmailsOn(
+  db: { prepare(sql: string): { all(...params: unknown[]): unknown[] } },
+  addressCount: number,
+  params: unknown[],
+): unknown[] {
+  return db.prepare(candidateEmailsSql(addressCount)).all(...params);
+}
+
 /** Is this email already linked to this transaction? Bound: email id, transaction id. */
 export const EXISTING_EMAIL_COMMUNICATION_SQL = sql`
     SELECT id, transaction_id FROM communications

@@ -49,7 +49,8 @@ describe("communicationDbService", () => {
         expect(result).toBe(0);
         expect(mockDbAll).toHaveBeenCalledWith(
           expect.stringContaining("FROM communications c"),
-          [TEST_TRANSACTION_ID]
+          // BACKLOG-3883: the transaction id binds both arms (thread links, message links)
+          [TEST_TRANSACTION_ID, TEST_TRANSACTION_ID]
         );
       });
 
@@ -294,7 +295,7 @@ describe("communicationDbService", () => {
       // Verify the count was queried
       expect(mockDbAll).toHaveBeenCalledWith(
         expect.any(String),
-        [TEST_TRANSACTION_ID]
+        [TEST_TRANSACTION_ID, TEST_TRANSACTION_ID]
       );
 
       // Verify the transaction was updated with the correct count
