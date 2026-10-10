@@ -137,12 +137,6 @@ export const BACKUP_SECURING_SENTENCE = "Syncing your iPhone will be available w
 export const BACKUP_SECURING_MESSAGE = `Keepr is securing your saved iPhone backup. ${BACKUP_SECURING_SENTENCE}`;
 /** Shown in the sync while a background seal stops at a file boundary (seconds at most). */
 export const BACKUP_PAUSING_MESSAGE = "Getting your saved iPhone backup ready for this sync...";
-/**
- * PC final check 2026-10-10: after a sync the files it wrote are sealed within seconds,
- * then the pass checks the rest of the backup (~575k sealed files, ~8 min on the PC)
- * before it can record `encrypted`. That stretch read "100%". It now reads this, at 99%.
- */
-export const BACKUP_FINISHING_MESSAGE = "Securing your iPhone backup… finishing up";
 export const BACKUP_AT_REST_KEY_UNAVAILABLE_MESSAGE =
   "Keepr cannot open its encryption key on this computer, so it will not copy your iPhone backup unprotected. Restart Keepr and try again.";
 export const BACKUP_AT_REST_DISK_MESSAGE =
@@ -239,6 +233,13 @@ export interface BackupAtRestProgress {
    */
   doneUnits?: number;
   totalUnits?: number;
+  /**
+   * `sealing` / `migrating` only (BACKLOG-3816, founder 2.40): true while files are
+   * actually being sealed — a known unsealed delta not yet done, or a walk that has found
+   * a file needing work. False for a verification-only walk, and once this sync's files
+   * are sealed while the walk goes on. The banner and the quit prompt show only when true.
+   */
+  sealing?: boolean;
 }
 
 /**
@@ -275,6 +276,8 @@ export const PAUSE_REPORT_INTERVAL_MS = 5000;
 export const PROGRESS_LOG_INTERVAL_MS = 60_000;
 /** Progress for a seal pass is emitted at most this often (plus its start and end). */
 export const PROGRESS_INTERVAL_MS = 1000;
+/** A walk with no known delta shows the securing line this long after it last sealed a file. */
+export const SEALING_HOLD_MS = 5000;
 
 /**
  * The status line for a seal/unseal pass, shown through the existing sync status channel
@@ -294,11 +297,6 @@ export function describeBackupAtRestProgress(p: BackupAtRestProgress): { message
       message: `Preparing your saved iPhone backup (${p.done.toLocaleString()} of ${p.total.toLocaleString()} files)...`,
       percent,
     };
-  }
-  // 100% only when the pass has handed out every file (PC final check 2026-10-10): the
-  // estimate's work can be done while the walk still checks the rest of the backup.
-  if (percent >= 100 && p.done < p.total) {
-    return { message: BACKUP_FINISHING_MESSAGE, percent: 99 };
   }
   // Percentage only (founder decision 2026-10-09): the time-left estimate sat at
   // "about 4 min left" from 8% to 56% on the PC and is not shown.
@@ -626,15 +624,18 @@ export class BackupAtRest extends EventEmitter {
    * Quit prompt (BACKLOG-3816): the percentage of a running seal pass — the post-sync
    * seal, a recovery reseal or a launch migration — or null when none is running. A
    * phone that is `syncing` (the transfer) does not count. More than one pass: the
-   * lowest percentage. A pass that has not reported yet counts as 0.
+   * lowest percentage. A pass with nothing being sealed (a verification-only walk, or no
+   * report yet) does not count: quitting then is harmless.
    */
   sealPassPercent(): number | null {
     let lowest: number | null = null;
     for (const [udid, reason] of this.busy) {
       if (reason !== "sealing" && reason !== "migrating") continue;
       const last = this.lastProgress.get(udid);
-      const percent =
-        last && (last.phase === "sealing" || last.phase === "migrating") ? describeBackupAtRestProgress(last).percent : 0;
+      // Only files actually being sealed count: a verification-only walk (or a pass that
+      // has not reported yet) is harmless to quit in the middle of.
+      if (!last || (last.phase !== "sealing" && last.phase !== "migrating") || !last.sealing) continue;
+      const percent = describeBackupAtRestProgress(last).percent;
       lowest = lowest === null ? percent : Math.min(lowest, percent);
     }
     return lowest;
@@ -853,7 +854,17 @@ export class BackupAtRest extends EventEmitter {
     // Once the estimated work is done while the walk goes on, the line reads "finishing
     // up" (describeBackupAtRestProgress); logged once so the PC log shows where it starts.
     let finishingLogged = false;
-    const tick = (p: BackupAtRestProgress): void => {
+    // When a file that needed work was last handed back (a walk with no known delta).
+    let lastWorkAt = -Infinity;
+    const tick = (raw: BackupAtRestProgress, final = false): void => {
+      // Files are being sealed only (a) after a sync: while the known delta is not done;
+      // (b) within SEALING_HOLD_MS of the walk handing back a file that needed work the
+      // estimate did not expect (any file, when there is no known delta: launch, recovery,
+      // new process). A verification-only walk shows nothing.
+      const sealing =
+        !final &&
+        ((since !== undefined && (raw.doneUnits ?? 0) < (raw.totalUnits ?? 0)) || Date.now() - lastWorkAt < SEALING_HOLD_MS);
+      const p = { ...raw, sealing };
       if (!finishingLogged && p.done < p.total && p.doneUnits !== undefined && p.doneUnits === p.totalUnits) {
         finishingLogged = true;
         this.log("info", "[BackupAtRest] this sync's files are sealed; checking the rest of the backup", {
@@ -877,6 +888,7 @@ export class BackupAtRest extends EventEmitter {
         if (nothingToSeal) {
           if (counted[i]) totalUnits -= units;
         } else {
+          if (since === undefined || !counted[i]) lastWorkAt = Date.now();
           if (!counted[i]) totalUnits += units;
           doneUnits += units;
         }
@@ -909,7 +921,7 @@ export class BackupAtRest extends EventEmitter {
     // marker can say `encrypted` (see sealEngine.ts: a lost rename leaves the plaintext,
     // never loses it).
     await pool([...result.touchedDirs], 4, (dir) => fsyncDir(dir));
-    if (!result.stopped) tick({ udid, phase, done: listed.length, total: listed.length, doneUnits, totalUnits: doneUnits });
+    if (!result.stopped) tick({ udid, phase, done: listed.length, total: listed.length, doneUnits, totalUnits: doneUnits }, true);
     report.ms = Date.now() - started;
     return report;
   }

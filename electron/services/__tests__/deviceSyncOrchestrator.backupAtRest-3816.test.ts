@@ -824,14 +824,23 @@ describe("progress for passes no sync is watching", () => {
     const o = newOrchestrator();
     o.watchBackupAtRestProgress();
     o.watchBackupAtRestProgress(); // idempotent: one subscription
-    const seen: Array<{ phase: string; message: string }> = [];
-    o.on("progress", (p: { phase: string; message: string }) => seen.push(p));
+    const seen: Array<{ phase: string; message: string; hidden?: boolean }> = [];
+    o.on("progress", (p: { phase: string; message: string; hidden?: boolean }) => seen.push(p));
     // A plaintext file appears; a seal with no caller callback reports through the event.
     write("dd/" + "d".repeat(40), "new plaintext");
-    await atRest.seal(UDID);
+    let clock = Date.now();
+    const clockSpy = jest.spyOn(Date, "now").mockImplementation(() => (clock += 1500)); // every batch reports
+    try {
+      await atRest.seal(UDID);
+    } finally {
+      clockSpy.mockRestore();
+    }
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((p) => p.phase === "cleanup")).toBe(true);
-    expect(seen[seen.length - 1].message).toBe("Securing your iPhone backup… 100%");
+    // BACKLOG-3816 (founder 2.40): the pass ends with a hide tick, not a "100%" line; a
+    // walk that found plaintext showed the line before that.
+    expect(seen[seen.length - 1]).toMatchObject({ message: "Securing your iPhone backup… 100%", hidden: true });
+    expect(seen.some((p) => p.hidden === undefined && /Securing your iPhone backup… \d+%/.test(p.message))).toBe(true);
     expect(atRest.listenerCount("progress")).toBe(1);
   });
 });

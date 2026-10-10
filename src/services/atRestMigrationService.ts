@@ -17,6 +17,8 @@ function api() {
 export interface BackupSecuringProgress {
   message: string;
   percent: number;
+  /** Nothing is being sealed (a verification-only walk): the line is hidden. */
+  hidden?: boolean;
 }
 
 /**
@@ -25,10 +27,10 @@ export interface BackupSecuringProgress {
  */
 export function toBackupSecuringProgress(raw: unknown): BackupSecuringProgress | null {
   if (!raw || typeof raw !== "object") return null;
-  const p = raw as { phase?: unknown; message?: unknown; overallProgress?: unknown };
+  const p = raw as { phase?: unknown; message?: unknown; overallProgress?: unknown; hidden?: unknown };
   if (p.phase !== "cleanup" || typeof p.message !== "string" || p.message.length === 0) return null;
   const n = typeof p.overallProgress === "number" && Number.isFinite(p.overallProgress) ? p.overallProgress : 0;
-  return { message: p.message, percent: Math.max(0, Math.min(100, n)) };
+  return { message: p.message, percent: Math.max(0, Math.min(100, n)), ...(p.hidden === true ? { hidden: true } : {}) };
 }
 
 export const atRestMigrationService = {
