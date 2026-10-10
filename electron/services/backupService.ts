@@ -1675,7 +1675,9 @@ export class BackupService extends EventEmitter {
           filesTransferred: 0,
           totalFiles: null,
           // BACKLOG-2917 — see the decrypting-phase progress above.
-          bytesTransferred: backupSize ?? 0,
+          // BACKLOG-3816: with the size walk deferred there is no total yet; keep the
+          // last transfer figure rather than showing 0.
+          bytesTransferred: backupSize ?? this.lastProgress?.bytesTransferred ?? 0,
           totalBytes: backupSize,
           estimatedTimeRemaining: 0,
         };

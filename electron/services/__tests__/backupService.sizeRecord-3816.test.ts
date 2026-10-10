@@ -30,7 +30,13 @@ jest.mock("@sentry/electron/main", () => ({
 }));
 
 import { BackupService } from "../backupService";
-import { BACKUP_SIZE_RECORD_FILE, backupSizeRecordKey } from "../backupSizeRecord";
+import {
+  BACKUP_SIZE_RECORD_FILE,
+  backupSizeRecordKey,
+  forgetBackupSize,
+  readRecordedBackupSize,
+  recordBackupSize,
+} from "../backupSizeRecord";
 
 const UDID = "00008030-0011223344556677";
 
@@ -119,5 +125,36 @@ describe("BACKLOG-3816: pre-flight backup size from the recorded measurement", (
     c.abort();
     await svc.checkBackupStatus(UDID, { useRecordedSize: true, signal: c.signal });
     expect(JSON.parse(fsSync.readFileSync(recordFile, "utf8"))).toEqual({});
+  });
+});
+
+describe("BACKLOG-3816: backupSizeRecord", () => {
+  it("record -> read; forget -> null", async () => {
+    await recordBackupSize(recordFile, UDID, 1234);
+    expect(await readRecordedBackupSize(recordFile, UDID)).toBe(1234);
+    await forgetBackupSize(recordFile, UDID);
+    expect(await readRecordedBackupSize(recordFile, UDID)).toBeNull();
+  });
+
+  it("a zero or negative total removes the entry instead of recording it", async () => {
+    await recordBackupSize(recordFile, UDID, 1234);
+    await recordBackupSize(recordFile, UDID, 0);
+    expect(await readRecordedBackupSize(recordFile, UDID)).toBeNull();
+  });
+
+  it("two phones recorded concurrently: neither entry is lost", async () => {
+    await Promise.all([recordBackupSize(recordFile, "PHONE-A", 10), recordBackupSize(recordFile, "PHONE-B", 20)]);
+    expect(await readRecordedBackupSize(recordFile, "PHONE-A")).toBe(10);
+    expect(await readRecordedBackupSize(recordFile, "PHONE-B")).toBe(20);
+  });
+
+  it("a walk that could not measure (not a cancel) clears the record", async () => {
+    await recordBackupSize(recordFile, UDID, 1234);
+    const svc = new BackupService();
+    jest
+      .spyOn(svc as unknown as { measureBackupSize: () => Promise<unknown> }, "measureBackupSize")
+      .mockResolvedValue({ measured: false, reason: "EACCES" });
+    await (svc as unknown as { measureAndRecord: (u: string, p: string) => Promise<unknown> }).measureAndRecord(UDID, chain);
+    expect(await readRecordedBackupSize(recordFile, UDID)).toBeNull();
   });
 });
