@@ -375,6 +375,10 @@ describe("BACKLOG-3884: plan and row counts (no sqlite_stat1)", () => {
     const threadSearches = plans.filter((d) => /idx_messages_thread_(id|sent) \(thread_id=\?/.test(d));
     expect(threadSearches.length).toBeGreaterThan(0);
     expect(threadSearches.filter((d) => !d.includes("COVERING INDEX"))).toEqual([]);
+    // Driven by thread, then the attachment-owner list is a membership test. If the
+    // planner drives from that list instead it plans `(thread_id=? AND rowid=?)`:
+    // every thread probed for every attachment (4 s at 668k texts).
+    expect(threadSearches.filter((d) => !/\(thread_id=\?\)$/.test(d))).toEqual([]);
 
     // The old reader handed every linked text to JS; this one hands the text
     // attachments (twice: own-message map + Apple-id pairs) and the hits.
