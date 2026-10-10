@@ -73,14 +73,14 @@ describe("[TxnOpen] email-name map", () => {
     const api = window.api.contacts as unknown as Record<string, jest.Mock>;
     api.getEmailNameMap = jest.fn().mockResolvedValue({
       success: true,
-      nameMap: { "secret1@example.com": "Secret One", "secret2@example.com": "Secret Two" },
+      nameMap: { "secret1@example.com": "secret-alpha", "secret2@example.com": "secret-beta" },
     });
     const { result } = renderHook(() => useContactNameMap("user-namemap-3884"));
     await waitFor(() => expect(result.current.size).toBe(2));
     expect(txnLines("email-name map")).toEqual([
       expect.stringMatching(/^\[TxnOpen\] email-name map ms=\d+ entries=2$/),
     ]);
-    expect(lines().join("\n")).not.toMatch(/example\.com|Secret/);
+    expect(lines().join("\n")).not.toMatch(/example\.com|secret/);
   });
 });
 
