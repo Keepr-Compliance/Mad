@@ -116,11 +116,12 @@ export const INDEX_SEAL_FILES: readonly string[] = [
 
 /**
  * Waits between attempts to seal an index file that is locked (antivirus, indexer) or
- * changed while it was read: about 7.75 s in all, on top of the seal engine's own three
- * quick attempts. Bounded by attempts, not by a clock, so a slow seal of a 1 GB
- * Manifest.db is never cut off. The idle recovery (5 min) is no longer the next try.
+ * changed while it was read: five more tries over about 30 s, each on top of the seal
+ * engine's own three quick attempts. Bounded by attempts, not by a clock, so a slow seal
+ * of a 1 GB Manifest.db is never cut off. The idle recovery (5 min, backing off to 6 h)
+ * is no longer the next try; a sync waiting for the phone waits for these at most.
  */
-export const INDEX_SEAL_RETRY_DELAYS_MS: readonly number[] = [250, 500, 1000, 2000, 4000];
+export const INDEX_SEAL_RETRY_DELAYS_MS: readonly number[] = [1000, 2000, 4000, 8000, 15000];
 const INDEX_RETRYABLE_CODES: ReadonlySet<string> = new Set(["EBUSY", "EPERM", "EACCES", "INTEGRITY"]);
 
 /** The founder-approved sentence for the "securing your backup" phase (and only it). */

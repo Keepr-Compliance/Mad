@@ -1396,7 +1396,7 @@ describe("PC unplug retest 2026-10-09: the index files are sealed FIRST at every
     await s.finishSync(session);
     expect(lockedTries).toBeGreaterThan(3); // more than the engine's own three quick tries
     expect(clock).toBeGreaterThanOrEqual(2000);
-    expect(slept.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(8000); // seconds, bounded
+    expect(slept.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(30_000); // seconds, bounded
     // Sealed before the walk over the content files began.
     const firstContent = order.findIndex((p) => !isIndex(p));
     expect(order.indexOf(manifest())).toBeGreaterThanOrEqual(0);
@@ -1550,5 +1550,43 @@ describe("PC diagnostic log 2026-10-09: Try Again pauses only the walk, never th
     await s.finishSync(session);
     await retry;
     expect(events).toEqual(["seal", "unseal"]);
+  });
+});
+
+describe("audit G1-part: a failed seal of an index file is retried within ~30 s, not left to the 5-min idle recovery", () => {
+  it("a lock on Manifest.db lasting 20 s: sealed by the index step's own retries (five tries over ~30 s), before the walk; the marker reaches `encrypted`", async () => {
+    let clock = 0;
+    let armed = false;
+    const slept: number[] = [];
+    const order: string[] = [];
+    const manifest = path.join(chain, "Manifest.db");
+    const s = service({
+      sleep: async (ms) => {
+        slept.push(ms);
+        clock += ms;
+      },
+      sealEngineOptions: {
+        retryDelayMs: 0,
+        beforeSeal: (p) => {
+          if (armed && p === manifest && clock < 20_000) throw Object.assign(new Error("locked"), { code: "EBUSY" });
+          if (armed) order.push(p);
+        },
+      },
+    });
+    makeChain();
+    await s.migrate(UDID);
+    const session = await s.beginSync(UDID);
+    write("c1/" + "c".repeat(40), "sent this time");
+    armed = true;
+    await s.finishSync(session);
+    // Sealed in the index step, not by the walk or a later round.
+    const firstContent = order.findIndex((p) => path.dirname(p) !== chain);
+    expect(order.indexOf(manifest)).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf(manifest)).toBeLessThan(firstContent);
+    expect(clock).toBeGreaterThanOrEqual(20_000);
+    expect(slept.length).toBeLessThanOrEqual(5);
+    expect(slept.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(30_000);
+    expect(headerOf(manifest).equals(MAGIC)).toBe(true);
+    expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
   });
 });
