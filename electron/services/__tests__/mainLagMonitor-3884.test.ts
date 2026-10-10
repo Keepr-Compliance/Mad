@@ -163,8 +163,18 @@ describe("BACKLOG-3884: [MainLag] threshold, rate limit and context (injected cl
     const { lines, advance, monitor } = setup();
     advance(100);
     monitor.suspend();
+    advance(100); // pre-sleep tick: must not become a baseline
     advance(60_000); // woke, resume event not yet delivered
     monitor.resume();
+    advance(100);
+    expect(lines).toEqual([]);
+  });
+
+  it("resume without a prior suspend still drops the old baseline", () => {
+    const { lines, advance, monitor } = setup();
+    advance(100);
+    monitor.resume();
+    advance(60_000); // first tick after resume: baseline only
     advance(100);
     expect(lines).toEqual([]);
   });
