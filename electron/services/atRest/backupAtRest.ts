@@ -49,7 +49,6 @@
  * Counts and errno codes only — never a path or file name, except the fixed names of the
  * index files ("Manifest.db", "Info.plist" …), which say nothing about the phone.
  */
-import { app } from "electron";
 import { EventEmitter } from "events";
 import fs from "fs";
 import path from "path";
@@ -357,7 +356,7 @@ export interface BackupAtRestDeps {
   sealEngineOptions?: SealEngineOptions;
   /** Test seam: how often a sync waiting for a pause re-checks and repeats its line (default 5 s). */
   pauseWaitMs?: number;
-  /** The running app's version, recorded on a chain proven sealed (default: Electron's app.getVersion()). */
+  /** The running app's version, recorded on a chain proven sealed (the app singleton: app.getVersion(); absent = "unknown"). */
   appVersion?: () => string;
   /** Test seam: a monotonic clock in ms (default performance.now()), to notice the wall clock moving back. */
   monotonicNow?: () => number;
@@ -678,9 +677,8 @@ export class BackupAtRest extends EventEmitter {
   }
 
   private appVersion(): string {
-    if (this.deps.appVersion) return this.deps.appVersion();
     try {
-      return app?.getVersion?.() || "unknown";
+      return this.deps.appVersion?.() || "unknown";
     } catch {
       return "unknown";
     }
@@ -2153,6 +2151,9 @@ export function getBackupAtRest(): BackupAtRest {
       },
       // BACKLOG-3816: seal off the main thread (sealWorker.js beside sealPool.js).
       workers: defaultSealWorkers(),
+      // Loaded here, not at the top: this module also runs outside Electron (the seal benchmark).
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      appVersion: () => (require("electron") as typeof import("electron")).app.getVersion(),
     });
   }
   return instance;
