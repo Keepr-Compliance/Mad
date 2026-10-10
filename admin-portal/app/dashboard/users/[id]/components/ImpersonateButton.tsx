@@ -68,7 +68,7 @@ export function ImpersonateButton({ userId, userName, isOwnProfile }: Impersonat
           type="button"
           onClick={openDialog}
           disabled={isOwnProfile}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors max-md:min-h-[44px] ${
             isOwnProfile
               ? 'text-gray-400 bg-gray-100 cursor-not-allowed'
               : 'text-purple-700 bg-purple-50 hover:bg-purple-100'
