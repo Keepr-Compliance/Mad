@@ -9,6 +9,7 @@
 import crypto from "crypto";
 import Database from "better-sqlite3-multiple-ciphers";
 import path from "path";
+import { performance } from "perf_hooks";
 import log from "electron-log";
 import { extractTextFromAttributedBody } from "../utils/messageParser";
 
@@ -19,9 +20,18 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-// Async processing constants
-const CHAT_YIELD_INTERVAL = 50; // Yield every N chats processed
-const MESSAGE_YIELD_INTERVAL = 500; // Yield every N messages processed
+/**
+ * BACKLOG-3785: longest stretch of parsing work (ms) between two event-loop yields.
+ *
+ * The yield used to be counted: every 50 chats and every 500 messages INSIDE one
+ * chat. The sync loads chats one after another, and a chat with fewer than 500
+ * messages never yielded, so a run of small chats was one continuous block of the
+ * main thread (generated 668k-message sms.db: 2,866 small chats in a row = 4.3 s
+ * on an arm64 Mac; the PC logged 15.7 s). The budget is now time-based and spans
+ * chats: whichever call is running yields once this much time has passed since
+ * the last yield.
+ */
+export const PARSE_YIELD_BUDGET_MS = 25;
 import {
   iOSMessage,
   iOSAttachment,
@@ -70,6 +80,22 @@ export class iOSMessagesParser {
   private db: Database.Database | null = null;
   private backupPath: string = "";
   private hasAudioTranscriptColumn: boolean | null = null;
+  /** BACKLOG-3785: when this parser last let the event loop run (performance.now()). */
+  private lastYieldAt = performance.now();
+
+  /**
+   * BACKLOG-3785: true once PARSE_YIELD_BUDGET_MS have passed since the last yield
+   * (then the caller awaits yieldNow()). Shared by every async read of this parser, so the budget holds
+   * across chats, not just inside one.
+   */
+  private yieldDue(): boolean {
+    return performance.now() - this.lastYieldAt >= PARSE_YIELD_BUDGET_MS;
+  }
+
+  private async yieldNow(): Promise<void> {
+    await yieldToEventLoop();
+    this.lastYieldAt = performance.now();
+  }
 
   // The sms.db hash in iOS backups (SHA-1 of domain + path)
   static readonly SMS_DB_HASH = "3d0d7e5fb2ce288813306e4d4636395e047a3d28";
@@ -499,11 +525,9 @@ export class iOSMessagesParser {
           // Continue with next chat
         }
 
-        // Yield to event loop periodically
-        if ((i + 1) % CHAT_YIELD_INTERVAL === 0) {
-          onProgress?.(i + 1, chats.length);
-          await yieldToEventLoop();
-        }
+        // Progress every 50 chats; yield whenever the time budget is spent (BACKLOG-3785).
+        if ((i + 1) % 50 === 0) onProgress?.(i + 1, chats.length);
+        if (this.yieldDue()) await this.yieldNow();
       }
 
       // Final progress callback
@@ -607,6 +631,10 @@ export class iOSMessagesParser {
     this.ensureOpen();
 
     try {
+      // BACKLOG-3785: callers load chat after chat; the budget carries over from the
+      // previous chat, so a run of small chats yields too.
+      if (this.yieldDue()) await this.yieldNow();
+
       // Page bounds BIND as clamped integers; the clamp and the bind are
       // computed together in db/ so they cannot drift apart.
       const rows = await selectChatMessages<RawMessageRow>(
@@ -640,10 +668,8 @@ export class iOSMessagesParser {
 
         messages.push(this.mapMessage(row, parsedText));
 
-        // Yield to event loop periodically
-        if ((i + 1) % MESSAGE_YIELD_INTERVAL === 0) {
-          await yieldToEventLoop();
-        }
+        // Yield whenever the time budget is spent (BACKLOG-3785).
+        if (this.yieldDue()) await this.yieldNow();
       }
 
       return messages;
