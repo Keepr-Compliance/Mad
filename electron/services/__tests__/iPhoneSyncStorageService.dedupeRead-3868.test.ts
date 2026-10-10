@@ -237,9 +237,12 @@ maybe("BACKLOG-3868: iPhone sync duplicate check (real driver, encrypted)", () =
     expect(again).toEqual({ stored: 0, skipped: messages.length });
     expect(insertAttempts.flat()).toHaveLength(0);
 
-    // Stall bound, BACKLOG-3785 form: 250 ms or a quarter of the run, whichever
-    // is larger. A single synchronous read of every id is most of the run.
-    expect(maxBlockMs).toBeLessThan(Math.max(250, wallMs * 0.25));
+    // Stall bound: 100 ms or a fifth of the run, whichever is larger. Measured on
+    // an arm64 Mac at 400k: 13-23 ms of ~500 ms with the change; a single read of
+    // every id 278 ms, no yield between pages 266 ms, no yield in the pre-filter
+    // loop 177 ms. The relative term keeps a slower runner from failing correct
+    // code; the unyielded variants stall a third or more of the run on any machine.
+    expect(maxBlockMs).toBeLessThan(Math.max(100, wallMs * 0.2));
   }, 300_000);
 });
 
