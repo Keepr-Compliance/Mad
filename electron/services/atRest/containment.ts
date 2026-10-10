@@ -12,9 +12,6 @@
  * Here both the candidate and the root are resolved with realpath (links and
  * junctions followed to their real target), compared with a separator-aware,
  * case-insensitive-on-Windows check, and the target must be a regular file.
- *
- * NOTE (2.41 merge): BACKLOG-3763's textAttachmentDataService (#2857, not in 2.40)
- * carries its own containment helper; at merge time it should switch to this one.
  */
 import fs from "fs";
 import path from "path";

@@ -30,7 +30,7 @@
  * 50 x 2 MB conversation and prints the reply size.
  */
 
-import { readFileSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from "fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync, statSync } from "fs";
 import os from "os";
 import path from "path";
 import { execFileSync } from "child_process";
@@ -502,6 +502,68 @@ describe("messages:get-attachment-data (BACKLOG-3763)", () => {
     });
     expect(await call("att3763-missing")).toEqual({ success: false, reason: "missing_file" });
   });
+
+  it("refuses a file under userData that is outside the attachment folders (shared containment, BACKLOG-3816)", async () => {
+    // Inside userData, so the old "inside the app data directory" check let it through.
+    const stray = path.join(userData, "not-attachments", "mad-copy.jpg");
+    seedMessage("msg-3763-ud", USER_A, "guid-3763-ud");
+    seedAttachment(
+      {
+        id: "att3763-ud",
+        message_id: "msg-3763-ud",
+        filename: "mad-copy.jpg",
+        mime_type: "image/jpeg",
+        file_size_bytes: 6,
+        storage_path: stray,
+      },
+      { bytes: Buffer.from("stray!") },
+    );
+    expect(readFileSync(stray).toString()).toBe("stray!");
+    expect(await call("att3763-ud")).toEqual({ success: false, reason: "outside_app_data" });
+  });
+
+  it("applies the size cap to the DECRYPTED size, not the larger encrypted file (BACKLOG-3816)", async () => {
+    const key = crypto.randomBytes(32);
+    const keyId = crypto.randomBytes(16).toString("hex");
+    const resolver: KeyResolver = {
+      currentKey: async () => ({ keyId, key }),
+      keyFor: async (id) => {
+        if (id !== keyId) throw new Error("unknown key");
+        return key;
+      },
+    };
+    // 4 KiB chunks, each followed by a 16-byte tag: 64 KiB under the cap in
+    // plaintext puts the file on disk just over the cap (~6.4k chunks, fast).
+    const files = createFileCrypto(resolver, { chunkSize: 4096 });
+    setAttachmentReaderDepsForTests({
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => userData }),
+      userData: () => userData,
+    });
+    try {
+      const plain = Buffer.alloc(MAX_INLINE_ATTACHMENT_BYTES - 64 * 1024, 0x42);
+      seedMessage("msg-3763-encbig", USER_A, "guid-3763-encbig");
+      const att: SeededAttachment = {
+        id: "att3763-encbig",
+        message_id: "msg-3763-encbig",
+        filename: "encbig.jpg",
+        mime_type: "image/jpeg",
+        file_size_bytes: plain.length,
+        storage_path: path.join(userData, "message-attachments", "encbig.jpg"),
+      };
+      mkdirSync(path.dirname(att.storage_path), { recursive: true });
+      await files.encryptStreamToFile(Readable.from([plain]), att.storage_path);
+      const onDisk = statSync(att.storage_path).size;
+      expect(onDisk).toBeGreaterThan(MAX_INLINE_ATTACHMENT_BYTES);
+      expect(plain.length).toBeLessThan(MAX_INLINE_ATTACHMENT_BYTES);
+      seedAttachment(att);
+      const result = await call(att.id);
+      expect(result.success).toBe(true);
+      expect(Buffer.from(result.data!, "base64").equals(plain)).toBe(true);
+    } finally {
+      setAttachmentReaderDepsForTests(null);
+    }
+  }, 60000);
 
   it("serves the plaintext of an attachment stored as KEPRENC ciphertext (BACKLOG-3816)", async () => {
     const key = crypto.randomBytes(32);
