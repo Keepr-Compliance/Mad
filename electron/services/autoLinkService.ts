@@ -44,7 +44,7 @@ import {
 } from "./db/communicationDbService";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
 import { readOneToOneThreadIndexOn, type ThreadIdentityIndex } from "./db/threadIdentityIndexDb";
-import { isPoolReady, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
+import { DedicatedWorkerError, isPoolReady, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
 import {
   normalizeAddress,
   contentContainsAddress,
@@ -1404,12 +1404,18 @@ export interface ExpandAttachedThreadsResult {
  * The 1:1 thread identity index for `userId` — on a dedicated contact query worker when
  * the pool is up, else on this thread (BACKLOG-3816 PC final check, 2026-10-10: on the main thread
  * the read of every text message plus the JSON parse of each blocked the app for 11-13 s
- * after every transaction update and ~57 s after a sync). A worker that fails falls
- * back here, so expansion never silently skips cross-thread backfill.
+ * after every transaction update and ~57 s after a sync).
+ *
+ * Main-thread build only when no worker ever ran the read: the pool is not up, or the
+ * worker could not be started (`start_failed`). After a timeout, a restore/close/quit that
+ * stopped the worker, or a failed query, this returns null and the caller SKIPS — redoing the
+ * full read here would be the freeze this exists to avoid (or touch the database mid-restore).
+ * Skipping loses nothing: expansion is idempotent and every sync / transaction update /
+ * re-sync triggers it again.
  */
 async function loadOneToOneThreadIndex(
   userId: string,
-): Promise<ThreadIdentityIndex & { source: "worker" | "main" }> {
+): Promise<(ThreadIdentityIndex & { source: "worker" | "main" }) | null> {
   if (isPoolReady()) {
     try {
       // A worker of its own: on the shared contact worker this read made contact list
@@ -1419,10 +1425,20 @@ async function loadOneToOneThreadIndex(
       if (index && Array.isArray(index.oneToOne)) return { ...index, source: "worker" };
       throw new Error("worker returned no thread identity index");
     } catch (error) {
+      const code = error instanceof DedicatedWorkerError ? error.code : "failed";
+      const detail = { code, error: error instanceof Error ? error.message : String(error) };
+      if (code !== "start_failed") {
+        await logService.warn(
+          `[BACKLOG-3816] Thread identity index on the worker failed (${code}); skipping this expansion, the next trigger retries`,
+          "AutoLinkService",
+          detail,
+        );
+        return null;
+      }
       await logService.warn(
-        `[BACKLOG-3816] Thread identity index on the worker failed; building it on the main thread`,
+        `[BACKLOG-3816] Thread identity worker could not start; building the index on the main thread`,
         "AutoLinkService",
-        { error: error instanceof Error ? error.message : String(error) },
+        detail,
       );
     }
   }
@@ -1492,7 +1508,38 @@ const THREAD_IDENTITY_WORKER_TIMEOUT_MS = 5 * 60_000;
  * @param userId - The user whose attached conversations to expand
  * @returns Counts for observable verification (BACKLOG-1875)
  */
-export async function expandAttachedThreadsForUser(
+export function expandAttachedThreadsForUser(userId: string): Promise<ExpandAttachedThreadsResult> {
+  const running = expansionByUser.get(userId);
+  if (running) {
+    // One expansion (and so one full identity read) per user at a time. A caller arriving
+    // meanwhile started after the running read's snapshot, so ask for ONE more run after it
+    // — however many arrive, never more than one running plus one queued.
+    running.rerun = true;
+    return running.promise;
+  }
+  const entry: { rerun: boolean; promise: Promise<ExpandAttachedThreadsResult> } = {
+    rerun: false,
+    promise: Promise.resolve(null as unknown as ExpandAttachedThreadsResult),
+  };
+  expansionByUser.set(userId, entry);
+  entry.promise = (async () => {
+    try {
+      let last = await expandAttachedThreadsForUserOnce(userId);
+      while (entry.rerun) {
+        entry.rerun = false;
+        last = await expandAttachedThreadsForUserOnce(userId);
+      }
+      return last;
+    } finally {
+      expansionByUser.delete(userId);
+    }
+  })();
+  return entry.promise;
+}
+
+const expansionByUser = new Map<string, { rerun: boolean; promise: Promise<ExpandAttachedThreadsResult> }>();
+
+async function expandAttachedThreadsForUserOnce(
   userId: string
 ): Promise<ExpandAttachedThreadsResult> {
   const startTime = Date.now();
@@ -1551,6 +1598,10 @@ export async function expandAttachedThreadsForUser(
     // BACKLOG-3816 PC final check: the read of every text message and the identity
     // computation run on the contact query worker (main-thread fallback when it is not up).
     const identityIndex = await loadOneToOneThreadIndex(userId);
+    if (!identityIndex) {
+      result.durationMs = Date.now() - startTime;
+      return result;
+    }
     // BACKLOG-3784: time the scan on its own. Counts only.
     const identityScanMs = Date.now() - identityScanStartedAt;
     await logService.info(

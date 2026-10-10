@@ -347,6 +347,34 @@ export function queryContacts(
  * restore (drain) and app quit stop them: each holds its own read-only connection.
  */
 const dedicatedWorkers = new Set<Worker>();
+/** Dedicated workers stopped on purpose by a database restore / close / app quit. */
+const stoppedDedicatedWorkers = new WeakSet<Worker>();
+
+/**
+ * Why a dedicated query failed (BACKLOG-3816 fix round). The caller decides on this:
+ * only `start_failed` (no worker ever ran the query) is safe to retry on the main thread.
+ *  - unavailable: pool in a restore / shutting down / not initialised
+ *  - start_failed: the worker could not be created, could not open the database, or died before it was ready
+ *  - timeout: `timeoutMs` elapsed
+ *  - stopped: stopped by a restore / close / quit while running
+ *  - failed: the worker was up and the query or the thread failed
+ */
+export type DedicatedQueryFailure = "unavailable" | "start_failed" | "timeout" | "stopped" | "failed";
+
+export class DedicatedWorkerError extends Error {
+  constructor(
+    message: string,
+    readonly code: DedicatedQueryFailure,
+  ) {
+    super(message);
+    this.name = "DedicatedWorkerError";
+  }
+}
+
+/** Test-only: dedicated workers still alive (started and not yet exited). */
+export function getDedicatedWorkerCountForTests(): number {
+  return dedicatedWorkers.size;
+}
 
 /**
  * Run ONE query on a worker of its own, started for it and stopped after (BACKLOG-3816
@@ -364,19 +392,20 @@ export function queryOnDedicatedWorker(
 ): Promise<unknown[]> {
   return new Promise<unknown[]>((resolve, reject) => {
     if (exclusiveHold || shuttingDown || !lastDbPath || !lastEncryptionKey) {
-      reject(new Error("Dedicated contact worker unavailable"));
+      reject(new DedicatedWorkerError("Dedicated contact worker unavailable", "unavailable"));
       return;
     }
     let w: Worker;
     try {
       w = new Worker(getWorkerPath());
     } catch (error) {
-      reject(error instanceof Error ? error : new Error(String(error)));
+      reject(new DedicatedWorkerError(error instanceof Error ? error.message : String(error), "start_failed"));
       return;
     }
     dedicatedWorkers.add(w);
     const id = crypto.randomUUID();
     let settled = false;
+    let started = false;
     const finish = (error: Error | null, data?: unknown[]): void => {
       if (settled) return;
       settled = true;
@@ -394,26 +423,33 @@ export function queryOnDedicatedWorker(
       else resolve(data ?? []);
     };
     const timer = setTimeout(
-      () => finish(new Error(`Dedicated contact query timed out after ${timeoutMs}ms (type: ${type})`)),
+      () =>
+        finish(new DedicatedWorkerError(`Dedicated contact query timed out after ${timeoutMs}ms (type: ${type})`, "timeout")),
       timeoutMs,
     );
     w.on("message", (msg: { type?: string; id?: string; success?: boolean; data?: unknown[]; error?: string }) => {
       if (msg.type === "ready") {
+        started = true;
         w.postMessage({ id, type, userId });
         return;
       }
       if (msg.type === "error") {
-        finish(new Error(msg.error || "Dedicated contact worker could not open the database"));
+        finish(new DedicatedWorkerError(msg.error || "Dedicated contact worker could not open the database", started ? "failed" : "start_failed"));
         return;
       }
       if (msg.id !== id) return;
       if (msg.success && msg.data) finish(null, msg.data);
-      else finish(new Error(msg.error || "Unknown worker error"));
+      else finish(new DedicatedWorkerError(msg.error || "Unknown worker error", "failed"));
     });
-    w.on("error", (error) => finish(error));
+    w.on("error", (error) => finish(new DedicatedWorkerError(error.message, started ? "failed" : "start_failed")));
     w.on("exit", (code) => {
       dedicatedWorkers.delete(w);
-      finish(new Error(`Dedicated contact worker exited with code ${code}`));
+      finish(
+        new DedicatedWorkerError(
+          `Dedicated contact worker exited with code ${code}`,
+          stoppedDedicatedWorkers.has(w) ? "stopped" : started ? "failed" : "start_failed",
+        ),
+      );
     });
     w.postMessage({ type: "init", dbPath: lastDbPath, encryptionKey: lastEncryptionKey });
   });
@@ -425,6 +461,7 @@ function stopDedicatedWorkers(): Promise<void> {
     [...dedicatedWorkers].map(
       (w) =>
         new Promise<void>((resolve) => {
+          stoppedDedicatedWorkers.add(w);
           w.once("exit", () => resolve());
           w.terminate().catch(() => resolve());
         }),

@@ -575,15 +575,92 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
       expect(turns).toBeGreaterThanOrEqual(Math.floor(backfill / EXPANSION_LINKS_PER_TURN));
     });
 
-    it("worker fails: the index is built on the main thread and the same messages are linked", async () => {
+    it("worker could not start: the index is built on the main thread and the same messages are linked", async () => {
       seedCrossAndGroup();
       jest.spyOn(contactWorkerPool, "isPoolReady").mockReturnValue(true);
-      jest.spyOn(contactWorkerPool, "queryOnDedicatedWorker").mockRejectedValue(new Error("Dedicated contact worker unavailable"));
+      jest
+        .spyOn(contactWorkerPool, "queryOnDedicatedWorker")
+        .mockRejectedValue(new contactWorkerPool.DedicatedWorkerError("cannot start", "start_failed"));
 
       const res = await expandAttachedThreadsForUser(USER_ID);
 
       expect(res.messagesLinked).toBe(1);
       expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent-out", "m-cross-in"]));
+    });
+
+    // After a timeout, or a worker stopped by a restore / close / quit, or a failed query, the
+    // full read is NOT redone on the main thread: log and skip, the next trigger retries.
+    it.each(["timeout", "stopped", "failed", "unavailable"] as const)(
+      "worker %s: no main-thread identity read, expansion skipped and logged",
+      async (code) => {
+        seedCrossAndGroup();
+        jest.spyOn(contactWorkerPool, "isPoolReady").mockReturnValue(true);
+        jest.spyOn(contactWorkerPool, "queryOnDedicatedWorker").mockRejectedValue(new contactWorkerPool.DedicatedWorkerError(`x ${code}`, code));
+        const mainSql: string[] = [];
+        const realPrepare = db.prepare.bind(db);
+        jest.spyOn(db, "prepare").mockImplementation(((text: string) => {
+          mainSql.push(text);
+          return realPrepare(text);
+        }) as typeof db.prepare);
+        (logService.warn as jest.Mock).mockClear();
+
+        const res = await expandAttachedThreadsForUser(USER_ID);
+
+        expect(mainSql.length).toBeGreaterThan(0); // the spy is live
+        expect(mainSql.filter((t) => /SELECT thread_id, direction, participants/.test(t))).toEqual([]);
+        expect(res.messagesLinked).toBe(0);
+        expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent-out"]));
+        const warns = (logService.warn as jest.Mock).mock.calls.filter((c) => String(c[0]).includes("skipping this expansion"));
+        expect(warns).toHaveLength(1);
+        expect(warns[0][2]).toMatchObject({ code });
+      },
+    );
+
+    // One identity read in flight per user; callers arriving meanwhile coalesce into ONE rerun.
+    describe.each([2, 3])("%i concurrent calls for one user", (callers) => {
+      it("run the worker read once at a time, then exactly one rerun", async () => {
+        seedCrossAndGroup();
+        jest.spyOn(contactWorkerPool, "isPoolReady").mockReturnValue(true);
+        const workerConnection = { prepare: db.prepare.bind(db) };
+        const releases: Array<() => void> = [];
+        let active = 0;
+        let maxActive = 0;
+        const query = jest.spyOn(contactWorkerPool, "queryOnDedicatedWorker").mockImplementation(
+          (_type, userId) =>
+            new Promise((resolve) => {
+              active++;
+              maxActive = Math.max(maxActive, active);
+              releases.push(() => {
+                active--;
+                resolve([readOneToOneThreadIndexOn(workerConnection, userId)]);
+              });
+            }),
+        );
+        const waitFor = async (cond: () => boolean): Promise<void> => {
+          for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 5));
+          expect(cond()).toBe(true);
+        };
+
+        const calls = Array.from({ length: callers }, () => expandAttachedThreadsForUser(USER_ID));
+        await waitFor(() => query.mock.calls.length === 1);
+        await new Promise((r) => setTimeout(r, 50));
+        expect(query).toHaveBeenCalledTimes(1); // the others joined, none started a read
+        releases[0]();
+        await waitFor(() => query.mock.calls.length === 2); // the one rerun
+        await new Promise((r) => setTimeout(r, 50));
+        expect(query).toHaveBeenCalledTimes(2);
+        releases[1]();
+        const results = await Promise.all(calls);
+
+        expect(query).toHaveBeenCalledTimes(2);
+        expect(maxActive).toBe(1);
+        expect(results.every((r) => r === results[0])).toBe(true);
+        // A later call is a fresh run, not stuck behind a finished one.
+        const later = expandAttachedThreadsForUser(USER_ID);
+        await waitFor(() => query.mock.calls.length === 3);
+        releases[2]();
+        await later;
+      });
     });
   });
 

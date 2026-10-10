@@ -30,6 +30,8 @@ import {
   initializePool,
   isPoolReady,
   queryContacts,
+  DedicatedWorkerError,
+  getDedicatedWorkerCountForTests,
   queryOnDedicatedWorker,
   setContactWorkerPathForTests,
   shutdownPool,
@@ -171,4 +173,31 @@ maybe("contact query worker: thread identity index off the main thread (BACKLOG-
     expect((shortData[0] as ThreadIdentityIndex).rows).toBe(0);
     expect(order).toEqual(["contact read", "identity"]);
   }, 180_000);
+  // BACKLOG-3816 fix round: the short-lived worker must be GONE after the query — it holds
+  // an open connection to the encrypted database and the key. Waits for the exit event.
+  async function expectNoLiveDedicatedWorker(): Promise<void> {
+    for (let i = 0; i < 400 && getDedicatedWorkerCountForTests() > 0; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(getDedicatedWorkerCountForTests()).toBe(0);
+  }
+
+  it("the dedicated worker exits after a successful query", async () => {
+    await queryOnDedicatedWorker("threadIdentity", "user-without-messages", 120_000);
+    await expectNoLiveDedicatedWorker();
+  }, 60_000);
+
+  it("the dedicated worker exits after a failed query", async () => {
+    await expect(
+      queryOnDedicatedWorker("no-such-query" as unknown as Parameters<typeof queryOnDedicatedWorker>[0], USER, 120_000),
+    ).rejects.toMatchObject({ code: "failed" });
+    await expectNoLiveDedicatedWorker();
+  }, 60_000);
+
+  it("the dedicated worker exits after a timeout", async () => {
+    const err = await queryOnDedicatedWorker("threadIdentity", USER, 1).catch((e) => e);
+    expect(err).toBeInstanceOf(DedicatedWorkerError);
+    expect(err.code).toBe("timeout");
+    await expectNoLiveDedicatedWorker();
+  }, 60_000);
 });
