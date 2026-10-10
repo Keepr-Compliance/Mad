@@ -67,4 +67,7 @@ BEGIN
 END;
 $fn$;
 
+-- The revoke from PUBLIC and anon stays in force after a rollback.
+REVOKE EXECUTE ON FUNCTION public.admin_update_license(uuid, jsonb) FROM PUBLIC, anon;
+
 COMMIT;

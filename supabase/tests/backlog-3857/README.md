@@ -25,6 +25,7 @@ SSH_HOST=<nas ssh alias> PG_CONTAINER=supabase_db_keepr-test \
 | c6 | with a `'trial'` row present, the migration aborts on its own pre-check and changes nothing |
 | c7 | applying twice: same end state; ACL / SECURITY DEFINER / search_path unchanged |
 | c8 | rollback restores the CHECK, the defaults and the production body (md5) |
+| c10 | `anon` calling `admin_update_license` gets 42501; authenticated and service_role keep EXECUTE; PUBLIC has none |
 | c9 | an `admin_update_license` body that is neither production's nor this migration's makes the migration abort |
 
 `rollback-3857.sql` is the rollback; c8 runs it.

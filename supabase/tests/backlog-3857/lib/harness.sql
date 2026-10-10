@@ -109,6 +109,9 @@ CREATE FUNCTION pg_temp.new_md5()  RETURNS text LANGUAGE sql IMMUTABLE AS $f$ SE
 CREATE FUNCTION pg_temp.prod_acl() RETURNS text LANGUAGE sql IMMUTABLE AS $f$
   SELECT '{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public}' $f$;
 
+CREATE FUNCTION pg_temp.new_acl() RETURNS text LANGUAGE sql IMMUTABLE AS $f$
+  SELECT '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} secdef=true cfg={search_path=public}' $f$;
+
 -- harness: drift. Changes one literal in admin_update_license's body.
 CREATE FUNCTION pg_temp.drift_admin_update_license() RETURNS void LANGUAGE plpgsql AS $f$
 DECLARE d text := pg_get_functiondef('public.admin_update_license(uuid,jsonb)'::regprocedure);

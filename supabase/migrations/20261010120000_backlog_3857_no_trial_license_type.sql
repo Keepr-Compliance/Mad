@@ -7,8 +7,10 @@
 --    trial_expires_at have no default (NULL).
 -- 4. admin_update_license refuses license_type 'trial' with SQLSTATE 22023.
 --    The function body is the production body (md5 7e27a1d38e49eec91def8d2cc584bf3e)
---    with only that guard added. Signature, SECURITY DEFINER, search_path and
---    privileges are unchanged (CREATE OR REPLACE keeps the ACL).
+--    with only that guard added. Signature, SECURITY DEFINER and search_path
+--    are unchanged.
+-- 5. EXECUTE on admin_update_license is revoked from PUBLIC and anon; the
+--    postgres, authenticated and service_role grants are kept.
 --
 -- create_trial_license is not changed.
 -- Re-running this file is a no-op. Rollback: supabase/tests/backlog-3857/rollback-3857.sql
@@ -93,3 +95,5 @@ BEGIN
   RETURN jsonb_build_object('success', true, 'old_values', v_old_values, 'new_values', p_changes);
 END;
 $fn$;
+
+REVOKE EXECUTE ON FUNCTION public.admin_update_license(uuid, jsonb) FROM PUBLIC, anon;
