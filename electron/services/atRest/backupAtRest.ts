@@ -233,8 +233,6 @@ export interface BackupAtRestProgress {
    */
   doneUnits?: number;
   totalUnits?: number;
-  /** Time left, from the pass's own rate so far (time-based; absent until it is meaningful). */
-  etaMs?: number;
 }
 
 /**
@@ -291,18 +289,9 @@ export function describeBackupAtRestProgress(p: BackupAtRestProgress): { message
       percent,
     };
   }
-  const eta = p.etaMs !== undefined && percent < 100 ? ` (${describeEta(p.etaMs)})` : "";
-  return { message: `Securing your iPhone backup… ${percent}%${eta}`, percent };
-}
-
-/** "about 12 min left" / "about 1 h 5 min left" / "less than a minute left". */
-export function describeEta(ms: number): string {
-  const min = Math.round(ms / 60_000);
-  if (min < 1) return "less than a minute left";
-  if (min < 60) return `about ${min} min left`;
-  const h = Math.floor(min / 60);
-  const rest = min % 60;
-  return rest === 0 ? `about ${h} h left` : `about ${h} h ${rest} min left`;
+  // Percentage only (founder decision 2026-10-09): the time-left estimate sat at
+  // "about 4 min left" from 8% to 56% on the PC and is not shown.
+  return { message: `Securing your iPhone backup… ${percent}%`, percent };
 }
 
 export type MarkerReading = BackupAtRestState | "absent" | "unreadable";
@@ -787,13 +776,16 @@ export class BackupAtRest extends EventEmitter {
     // (BACKLOG-3816): the estimate comes from the listing's mtimes, then the seal workers'
     // own per-file verdicts correct it as they run. Every file is still handed to the
     // pass; the estimate is only a denominator.
-    //   - after a sync, the files written since the chain was unsealed for it, plus the
-    //     index files C-DELTA unsealed;
+    //   - after a sync, the files written since the chain was unsealed for it — not the
+    //     index files: sealAndRecord seals those in their own step just before this walk
+    //     (if that step could not, the walk's verdict adds them back);
     //   - anywhere the state is unknown (launch migration, recovery, a new process) the
     //     whole chain.
     const since = phase === "sealing" ? this.syncUnsealedAt.get(udid) : undefined;
-    const indexPaths = new Set(DELTA_UNSEAL_FILES.map((rel) => path.join(chain, rel)));
-    const counted = listed.map((f) => since === undefined || indexPaths.has(f.path) || (f.mtimeMs ?? Infinity) >= since - SYNC_MTIME_SLACK_MS);
+    const indexPaths = new Set(INDEX_SEAL_FILES.map((rel) => path.join(chain, rel)));
+    const counted = listed.map(
+      (f) => since === undefined || (!indexPaths.has(f.path) && (f.mtimeMs ?? Infinity) >= since - SYNC_MTIME_SLACK_MS),
+    );
     const unitsOf = (f: ListedFile): number => f.size + PROGRESS_FILE_WEIGHT_BYTES;
     let totalUnits = listed.reduce((sum, f, i) => sum + (counted[i] ? unitsOf(f) : 0), 0);
     let done = 0;
@@ -839,13 +831,7 @@ export class BackupAtRest extends EventEmitter {
       }
       if (now - lastEmit >= PROGRESS_INTERVAL_MS && done < listed.length) {
         lastEmit = now;
-        const elapsed = now - started;
-        // An estimate only once there is something to go on (10 s and 1% in).
-        const etaMs =
-          elapsed >= 10_000 && doneUnits >= totalUnits / 100
-            ? Math.round((elapsed * (totalUnits - doneUnits)) / doneUnits)
-            : undefined;
-        notify({ udid, phase, done, total: listed.length, doneUnits, totalUnits, ...(etaMs !== undefined ? { etaMs } : {}) });
+        notify({ udid, phase, done, total: listed.length, doneUnits, totalUnits });
       }
     });
     if (result.stopped) report.paused = true;

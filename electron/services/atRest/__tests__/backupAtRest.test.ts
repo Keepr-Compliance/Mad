@@ -1296,12 +1296,26 @@ describe("progress", () => {
     expect(describeBackupAtRestProgress({ udid: UDID, phase: "sealing", done: 900, total: 1000 }).percent).toBe(90);
   });
 
-  it("the securing line carries a time-based estimate once there is one (banner, outside the sync screen)", () => {
+  it("the securing line is the percentage only — no time-left estimate (founder decision 2026-10-09)", async () => {
     const base = { udid: UDID, phase: "migrating" as const, done: 10, total: 100, doneUnits: 42, totalUnits: 100 };
-    expect(describeBackupAtRestProgress({ ...base, etaMs: 12 * 60_000 }).message).toBe("Securing your iPhone backup… 42% (about 12 min left)");
-    expect(describeBackupAtRestProgress({ ...base, etaMs: 65 * 60_000 }).message).toBe("Securing your iPhone backup… 42% (about 1 h 5 min left)");
-    expect(describeBackupAtRestProgress({ ...base, etaMs: 20_000 }).message).toBe("Securing your iPhone backup… 42% (less than a minute left)");
     expect(describeBackupAtRestProgress(base).message).toBe("Securing your iPhone backup… 42%");
+    // Every line a real pass emits, mid-pass ones included (1 ms apart, interval forced to 0).
+    makeChain();
+    const events: BackupAtRestProgress[] = [];
+    const realNow = Date.now;
+    let t = realNow();
+    jest.spyOn(Date, "now").mockImplementation(() => (t += 60_000));
+    try {
+      await service().seal(UDID, (p) => events.push(p));
+    } finally {
+      jest.restoreAllMocks();
+    }
+    const sealing = events.filter((e) => e.phase === "sealing");
+    expect(sealing.length).toBeGreaterThan(2); // start, mid-pass, end
+    for (const e of sealing) {
+      expect(Object.keys(e)).not.toContain("etaMs");
+      expect(describeBackupAtRestProgress(e).message).toMatch(/^Securing your iPhone backup… \d{1,3}%$/);
+    }
   });
 
   it("Cancel while waiting for a background pass to pause: the sync ends as cancelled and the pass resumes to the end", async () => {
@@ -1360,7 +1374,9 @@ describe("progress", () => {
     async function incremental(s: BackupAtRest, during: () => void): Promise<{ seen: BackupAtRestProgress[]; opensAtFirst: number; index: number }> {
       const session = await s.beginSync(UDID, { strategy: "delta" });
       during();
-      const index = indexUnits(); // the index files, unsealed, as the pass will find them
+      // The index files are sealed by their own step before the walk (index-first), so
+      // the walk's estimate holds only what the tool wrote.
+      const index = 0;
       const seen: BackupAtRestProgress[] = [];
       let opens = 0;
       let opensAtFirst = -1;
@@ -1377,8 +1393,6 @@ describe("progress", () => {
       expect(opens).toBeGreaterThan(0); // the spy is live: the engine opens files
       return { seen, opensAtFirst, index };
     }
-    const indexUnits = (): number =>
-      DELTA_UNSEAL_FILES.reduce((n, rel) => n + fs.statSync(path.join(chain, rel)).size + W, 0);
 
     it("one new file among many sealed ones: 0% to 100% over that file's bytes, no open of the unchanged files before the first report", async () => {
       const extra = sealedChainWithMany();
