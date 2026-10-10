@@ -37,8 +37,9 @@ import {
   runEmailDerivedQueryOn,
   type EmailDerivedProvider,
 } from "../services/db/emailDerivedContactsSql";
+import { readOneToOneThreadIndexOn } from "../services/db/threadIdentityIndexDb";
 
-type QueryType = "external" | "imported" | "backfill" | "emailDerived";
+type QueryType = "external" | "imported" | "backfill" | "emailDerived" | "threadIdentity";
 
 interface InitMessage {
   type: "init";
@@ -251,6 +252,10 @@ parentPort?.on("message", (msg: WorkerMessage) => {
       rows = runBackfillQuery(queryMsg.userId);
     } else if (queryMsg.type === "emailDerived") {
       rows = runEmailDerivedQuery(queryMsg.userId, queryMsg.providers);
+    } else if (queryMsg.type === "threadIdentity") {
+      // BACKLOG-3816 PC final check: every text message of the user, off the main thread.
+      if (!db) throw new Error("Database not initialized");
+      rows = [readOneToOneThreadIndexOn(db, queryMsg.userId)];
     } else {
       throw new Error(`Unknown query type: ${queryMsg.type}`);
     }

@@ -20,7 +20,7 @@ import path from "path";
 import crypto from "crypto";
 import logService from "../services/logService";
 
-type QueryType = "external" | "imported" | "backfill" | "emailDerived";
+type QueryType = "external" | "imported" | "backfill" | "emailDerived" | "threadIdentity";
 
 /**
  * Per-type payload carried alongside `{ id, type, userId }` (BACKLOG-1717).
@@ -114,8 +114,15 @@ const pendingQueries = new Map<string, PendingQuery>();
 // Deduplication: in-flight queries by "userId:type" key
 const inflightQueries = new Map<string, Promise<unknown[]>>();
 
+let workerPathOverride: string | null = null;
+
 function getWorkerPath(): string {
-  return path.join(__dirname, 'contactQueryWorker.js');
+  return workerPathOverride ?? path.join(__dirname, 'contactQueryWorker.js');
+}
+
+/** Test seam: a compiled worker script (the TS source has no .js beside it). */
+export function setContactWorkerPathForTests(p: string | null): void {
+  workerPathOverride = p;
 }
 
 function handleWorkerMessage(msg: { type?: string; id?: string; success?: boolean; data?: unknown[]; error?: string }): void {

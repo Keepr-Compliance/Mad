@@ -58,6 +58,8 @@ jest.mock("../logService", () => {
 
 import { setDb } from "../db/core/dbConnection";
 import { expandAttachedThreadsForUser } from "../autoLinkService";
+import * as contactWorkerPool from "../../workers/contactWorkerPool";
+import { readOneToOneThreadIndexOn } from "../db/threadIdentityIndexDb";
 import logService from "../logService";
 
 const USER_ID = "user-2285";
@@ -497,6 +499,68 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
 
   // (cross/suppression) — a same-contact constituent thread the user REMOVED for this
   // transaction stays removed (suppression applies to constituents, not just the target).
+  // (3816/worker) — BACKLOG-3816 PC final check (2026-10-10): the read of every text
+  // message and the identity computation blocked the main process for 11-13 s after every
+  // transaction update. With the contact query worker up, the main connection never runs
+  // that read, and the result is the same as the main-thread build.
+  describe("(3816) identity index on the contact query worker", () => {
+    function seedCrossAndGroup(): void {
+      insertMacMessage({ id: "m-recent-out", threadId: "T1", direction: "outbound", contact: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
+      manualAttach("m-recent-out", TXN_ID);
+      insertMacMessage({ id: "m-cross-in", threadId: "T2", direction: "inbound", contact: PHONE_ROMINA, sentAt: "2019-08-01T00:00:00Z", transactionId: null });
+      insertMacMessage({
+        id: "m-group-1",
+        threadId: "T-group",
+        direction: "inbound",
+        contact: PHONE_ROMINA,
+        chatMembers: [PHONE_ROMINA, PHONE_OTHER],
+        sentAt: "2026-03-01T00:00:00Z",
+        transactionId: null,
+      });
+    }
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it("worker up: the main connection never reads every text message; same links as the main-thread build", async () => {
+      seedCrossAndGroup();
+      const workerConnection = { prepare: db.prepare.bind(db) };
+      const ready = jest.spyOn(contactWorkerPool, "isPoolReady").mockReturnValue(true);
+      const query = jest.spyOn(contactWorkerPool, "queryContacts").mockImplementation(
+        (type, userId) =>
+          new Promise((resolve) => setImmediate(() => resolve(type === "threadIdentity" ? [readOneToOneThreadIndexOn(workerConnection, userId)] : []))),
+      );
+      const mainSql: string[] = [];
+      const realPrepare = db.prepare.bind(db);
+      jest.spyOn(db, "prepare").mockImplementation(((text: string) => {
+        mainSql.push(text);
+        return realPrepare(text);
+      }) as typeof db.prepare);
+
+      const res = await expandAttachedThreadsForUser(USER_ID);
+
+      expect(ready).toHaveBeenCalled();
+      expect(query).toHaveBeenCalledWith("threadIdentity", USER_ID, expect.any(Number));
+      expect(mainSql.length).toBeGreaterThan(0); // the spy is live
+      expect(mainSql.filter((t) => /SELECT thread_id, direction, participants/.test(t))).toEqual([]);
+      expect(res.messagesLinked).toBe(1);
+      expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent-out", "m-cross-in"]));
+      const info = logService.info as jest.Mock;
+      const scan = info.mock.calls.filter((c) => String(c[0]).startsWith("[BACKLOG-3784] Attached-thread identity scan: rows="));
+      expect(scan[scan.length - 1][2]).toMatchObject({ source: "worker", identityRows: 3 });
+    });
+
+    it("worker fails: the index is built on the main thread and the same messages are linked", async () => {
+      seedCrossAndGroup();
+      jest.spyOn(contactWorkerPool, "isPoolReady").mockReturnValue(true);
+      jest.spyOn(contactWorkerPool, "queryContacts").mockRejectedValue(new Error("Worker pool not initialized"));
+
+      const res = await expandAttachedThreadsForUser(USER_ID);
+
+      expect(res.messagesLinked).toBe(1);
+      expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent-out", "m-cross-in"]));
+    });
+  });
+
   it("(cross/suppression) does NOT cross-link a constituent thread the user removed", async () => {
     insertMessage({ id: "m-recent", threadId: "T1", phone: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
     manualAttach("m-recent", TXN_ID);
@@ -626,7 +690,12 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
     expect(res.pairsExamined).toBeGreaterThan(0);
     const scan = info.mock.calls.filter((c) => String(c[0]).startsWith("[BACKLOG-3784] Attached-thread identity scan: rows="));
     expect(scan).toHaveLength(1);
-    expect(scan[0][2]).toEqual({ pairsExamined: res.pairsExamined, identityRows: expect.any(Number), scanMs: expect.any(Number) });
+    expect(scan[0][2]).toEqual({
+      pairsExamined: res.pairsExamined,
+      identityRows: expect.any(Number),
+      source: "main",
+      scanMs: expect.any(Number),
+    });
   });
 
   // (f) — unrelated contact is not linked
