@@ -47,7 +47,7 @@ export function useBackupSecuringProgress(): BackupSecuringProgress | null {
     () =>
       atRestMigrationService.subscribeBackupSecuring((p) => {
         if (syncStateRef.isActive) return;
-        setProgress(p);
+        setProgress(p.hidden ? null : p);
       }),
     [],
   );

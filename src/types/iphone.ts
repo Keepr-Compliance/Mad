@@ -6,7 +6,7 @@
 // BACKLOG-2907: the prior-backup signal is produced in the main process and
 // crosses IPC, so its type lives with the other IPC surface types. Type-only
 // import — erased at build, same pattern as `src/window.d.ts`.
-import type { PriorBackupState } from "../../electron/types/ipc/window-api-platform";
+import type { PriorBackupState, SyncCancelTrigger } from "../../electron/types/ipc/window-api-platform";
 
 export type { PriorBackupState };
 
@@ -212,7 +212,8 @@ export interface UseIPhoneSyncReturn {
   recoverInstallDriver: () => Promise<void>;
   startSync: () => Promise<void>;
   submitPassword: (password: string) => void;
-  cancelSync: () => Promise<void>;
+  /** BACKLOG-3816: `trigger` names the on-screen control that asked for the cancel. */
+  cancelSync: (trigger: SyncCancelTrigger) => Promise<void>;
   /** Reset state after user acknowledges sync completion */
   dismissSync: () => void;
   /**

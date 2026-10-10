@@ -92,6 +92,15 @@ function errnoCode(err: unknown): string | undefined {
 // Single source in the at-rest module (S4-C seals moved-aside chains by this prefix).
 export { REPLACED_CHAIN_PREFIX } from "./atRest/backupAtRest";
 import { REPLACED_CHAIN_PREFIX, markerProtectsChain, readMarkerAt } from "./atRest/backupAtRest";
+import { openBackupIndexBytes } from "./atRest/backupIndexFiles";
+import {
+  BACKUP_SIZE_RECORD_FILE,
+  forgetBackupSize,
+  readRecordedBackupSize,
+  recordBackupSize,
+  createDeferredBackupSize,
+  type DeferredBackupSize,
+} from "./backupSizeRecord";
 
 function exactUdidOrNull(name: string): string | null {
   try {
@@ -801,6 +810,8 @@ export function classifyBackupFailure(
  */
 export class BackupService extends EventEmitter {
   private currentProcess: ChildProcess | null = null;
+  /** BACKLOG-3816: the size walk of the last finished backup, when deferred. */
+  private deferredSize: { udid: string; size: DeferredBackupSize } | null = null;
   private isRunning: boolean = false;
   private currentDeviceUdid: string | null = null;
   private startTime: number = 0;
@@ -1476,18 +1487,41 @@ export class BackupService extends EventEmitter {
         const finalBackupPath = deviceBackupPath;
 
         if (success) {
-          const sizeReading = await this.measureBackupSize(deviceBackupPath);
-          backupSize = sizeReading.measured ? sizeReading.bytes : null;
-          if (sizeReading.measured) {
-            log.info(
-              `[BackupService] Backup completed successfully in ${duration}ms, size: ${sizeReading.bytes} bytes`,
-            );
+          // BACKLOG-3816: the measurement is recorded for the next sync's pre-flight
+          // (default backup folder only). With `deferSizeMeasurement` it runs after this
+          // result is returned, so the sync does not wait for a walk of every file.
+          const recordFor = options.outputDir ? null : validatedUdid;
+          const logSize = (sizeReading: BackupSizeReading): BackupSizeReading => {
+            if (sizeReading.measured) {
+              log.info(
+                `[BackupService] Backup completed successfully in ${duration}ms, size: ${sizeReading.bytes} bytes`,
+              );
+            } else {
+              // Refuse to print a reassuring number we do not have. This is the
+              // `checkAvailableDiskSpace` rule: never log a 0 GB "reading".
+              log.error(
+                `[BackupService] Backup completed successfully in ${duration}ms, but its size could not be measured (${sizeReading.reason})`,
+              );
+            }
+            return sizeReading;
+          };
+          if (options.deferSizeMeasurement) {
+            // Nothing runs yet: the orchestrator either supplies the total from the
+            // post-sync seal's listing (one walk, not two) or asks for the walk.
+            const sizeFile = this.backupSizeRecordFile();
+            this.deferredSize = {
+              udid: validatedUdid,
+              size: createDeferredBackupSize({
+                measure: () => this.measureAndRecord(recordFor, deviceBackupPath),
+                record: async (bytes) => {
+                  if (recordFor !== null) await recordBackupSize(sizeFile, recordFor, bytes);
+                },
+                onReading: logSize,
+              }),
+            };
           } else {
-            // Refuse to print a reassuring number we do not have. This is the
-            // `checkAvailableDiskSpace` rule: never log a 0 GB "reading".
-            log.error(
-              `[BackupService] Backup completed successfully in ${duration}ms, but its size could not be measured (${sizeReading.reason})`,
-            );
+            const sizeReading = logSize(await this.measureAndRecord(recordFor, deviceBackupPath));
+            backupSize = sizeReading.measured ? sizeReading.bytes : null;
           }
 
           // Check ACTUAL encryption status from backup on disk (not just device setting)
@@ -1597,6 +1631,9 @@ export class BackupService extends EventEmitter {
         let errorCode: BackupErrorCode | undefined;
         let failureCause: BackupFailureCause | undefined;
         if (!success) {
+          // BACKLOG-3816: a stopped or failed backup may have written part of a backup;
+          // the recorded size no longer describes the folder.
+          if (!options.outputDir) void forgetBackupSize(this.backupSizeRecordFile(), validatedUdid);
           if (this.quitRequested) {
             errorMessage = BACKUP_STOPPED_FOR_QUIT_MESSAGE;
             errorCode = "BACKUP_CANCELLED";
@@ -1649,7 +1686,9 @@ export class BackupService extends EventEmitter {
           filesTransferred: 0,
           totalFiles: null,
           // BACKLOG-2917 — see the decrypting-phase progress above.
-          bytesTransferred: backupSize ?? 0,
+          // BACKLOG-3816: with the size walk deferred there is no total yet; keep the
+          // last transfer figure rather than showing 0.
+          bytesTransferred: backupSize ?? this.lastProgress?.bytesTransferred ?? 0,
           totalBytes: backupSize,
           estimatedTimeRemaining: 0,
         };
@@ -2419,6 +2458,40 @@ export class BackupService extends EventEmitter {
     return path.join(app.getPath("userData"), "Backups");
   }
 
+  /** BACKLOG-3816: `<userData>/backup-sizes.json` (see backupSizeRecord.ts). */
+  private backupSizeRecordFile(): string {
+    return path.join(path.dirname(this.getDefaultBackupPath()), BACKUP_SIZE_RECORD_FILE);
+  }
+
+  /**
+   * BACKLOG-3816: walk the backup and keep the result for the next pre-flight. A walk
+   * that could not measure (other than a cancel) clears the record. `udid` null: do not
+   * record (a backup outside the default folder).
+   */
+  private async measureAndRecord(
+    udid: string | null,
+    backupPath: string,
+    signal?: AbortSignal,
+  ): Promise<BackupSizeReading> {
+    const reading = await this.measureBackupSize(backupPath, signal);
+    if (udid !== null) {
+      if (reading.measured) await recordBackupSize(this.backupSizeRecordFile(), udid, reading.bytes);
+      else if (reading.reason !== "cancelled") await forgetBackupSize(this.backupSizeRecordFile(), udid);
+    }
+    return reading;
+  }
+
+  /**
+   * BACKLOG-3816: the deferred size walk of `udid`'s last finished backup (see
+   * `BackupOptions.deferSizeMeasurement`), handed out once. Null when none is pending.
+   */
+  takeDeferredSizeMeasurement(udid: string): DeferredBackupSize | null {
+    const pending = this.deferredSize;
+    if (!pending || pending.udid !== udid) return null;
+    this.deferredSize = null;
+    return pending.size;
+  }
+
   /**
    * Measure the total size of a backup directory.
    * BACKLOG-1086: Use atomic readdir instead of check-then-read (TOCTOU fix).
@@ -2444,8 +2517,10 @@ export class BackupService extends EventEmitter {
    * not exist genuinely holds 0 bytes, and a file that vanished between `readdir` and
    * `stat` is a normal race in a directory the device is still writing to.
    */
-  private async measureBackupSize(backupPath: string): Promise<BackupSizeReading> {
+  private async measureBackupSize(backupPath: string, signal?: AbortSignal): Promise<BackupSizeReading> {
     try {
+      // BACKLOG-3816: a cancelled sync stops the walk at the next entry.
+      if (signal?.aborted) return { measured: false, reason: "cancelled" };
       let totalSize = 0;
       // Atomic: attempt readdir directly, handle ENOENT if path disappeared
       let files: import("fs").Dirent[];
@@ -2459,9 +2534,10 @@ export class BackupService extends EventEmitter {
       }
 
       for (const file of files) {
+        if (signal?.aborted) return { measured: false, reason: "cancelled" };
         const filePath = path.join(backupPath, file.name);
         if (file.isDirectory()) {
-          const subtree = await this.measureBackupSize(filePath);
+          const subtree = await this.measureBackupSize(filePath, signal);
           // The defect this replaces: an unmeasurable subtree used to contribute 0
           // and the parent reported a short total as if it were a measurement.
           if (!subtree.measured) {
@@ -2526,7 +2602,17 @@ export class BackupService extends EventEmitter {
    * @param udid Device UDID
    * @returns Which of the three states was established, never a collapsed `null`
    */
-  async checkBackupStatus(udid: string): Promise<BackupStatusReport> {
+  async checkBackupStatus(
+    udid: string,
+    opts: {
+      signal?: AbortSignal;
+      /**
+       * BACKLOG-3816: use the size recorded by the last measurement instead of walking
+       * the backup; walk (and record) only when there is no usable record.
+       */
+      useRecordedSize?: boolean;
+    } = {},
+  ): Promise<BackupStatusReport> {
     // BACKLOG-1123: Validate UDID before using in path operations
     const validatedUdid = validateDeviceUdid(udid);
     const backupPath = this.getDefaultBackupPath();
@@ -2546,7 +2632,20 @@ export class BackupService extends EventEmitter {
         throw err;
       }
 
-      const size = await this.measureBackupSize(deviceBackupPath);
+      let size: BackupSizeReading;
+      let sizeSource: "recorded" | "measured";
+      const recorded = opts.useRecordedSize
+        ? await readRecordedBackupSize(this.backupSizeRecordFile(), validatedUdid)
+        : null;
+      if (recorded !== null) {
+        size = { measured: true, bytes: recorded };
+        sizeSource = "recorded";
+      } else {
+        size = opts.useRecordedSize
+          ? await this.measureAndRecord(validatedUdid, deviceBackupPath, opts.signal)
+          : await this.measureBackupSize(deviceBackupPath, opts.signal);
+        sizeSource = "measured";
+      }
 
       // Check for key files atomically by attempting to access them directly
       const manifestPath = path.join(deviceBackupPath, "Manifest.db");
@@ -2581,6 +2680,7 @@ export class BackupService extends EventEmitter {
         // BACKLOG-2917: log what was established, not a number stood in for it.
         sizeBytes: size.measured ? size.bytes : "unmeasured",
         sizeUnmeasuredReason: size.measured ? undefined : size.reason,
+        sizeSource,
       });
 
       return {
@@ -2643,7 +2743,8 @@ export class BackupService extends EventEmitter {
   ): Promise<"finished" | "unfinished" | "absent"> {
     let raw: Buffer;
     try {
-      raw = await fs.readFile(statusPlistPath);
+      // BACKLOG-3816: sealed between syncs; decrypted in memory (plaintext passes through).
+      raw = await openBackupIndexBytes(await fs.readFile(statusPlistPath));
     } catch (readErr: unknown) {
       if (readErr && typeof readErr === "object" && "code" in readErr && (readErr as { code: string }).code === "ENOENT") {
         return "absent";
@@ -2815,7 +2916,8 @@ export class BackupService extends EventEmitter {
       // Atomic: read directly, handle ENOENT instead of check-then-act (TOCTOU)
       const infoPlistPath = path.join(backupPath, "Info.plist");
       try {
-        const content = await fs.readFile(infoPlistPath, "utf8");
+        // BACKLOG-3816: sealed between syncs; decrypted in memory (plaintext passes through).
+        const content = (await openBackupIndexBytes(await fs.readFile(infoPlistPath))).toString("utf8");
         const deviceNameMatch = content.match(
           /<key>Device Name<\/key>\s*<string>([^<]+)<\/string>/,
         );

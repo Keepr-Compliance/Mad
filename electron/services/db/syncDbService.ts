@@ -80,20 +80,26 @@ import {
 // ============================================
 
 /**
- * Get existing message external_ids for a user (for deduplication).
+ * BACKLOG-3868: one page of the user's stored message external_ids, in
+ * external_id order, strictly after `after` (null = from the start). The iPhone
+ * sync's duplicate check reads every page and yields between them; this replaces
+ * one synchronous read of every id. Keyset paging over the covering
+ * idx_messages_user_external_id, so each page is a range read, and the pages
+ * together are exactly `WHERE user_id = ? AND external_id IS NOT NULL`.
  */
-export function getExistingMessageExternalIds(userId: string): Set<string> {
+export const MESSAGE_EXTERNAL_IDS_FIRST_PAGE_SQL =
+  `SELECT external_id FROM messages WHERE user_id = ? AND external_id IS NOT NULL ORDER BY external_id LIMIT ?`;
+export const MESSAGE_EXTERNAL_IDS_NEXT_PAGE_SQL =
+  `SELECT external_id FROM messages WHERE user_id = ? AND external_id IS NOT NULL AND external_id > ? ORDER BY external_id LIMIT ?`;
+
+export function getMessageExternalIdsPage(userId: string, after: string | null, limit: number): string[] {
   const db = ensureDb();
-  const rows = db
-    .prepare(
-      `SELECT external_id FROM messages WHERE user_id = ? AND external_id IS NOT NULL`
-    )
-    .all(userId) as { external_id: string }[];
-  const ids = new Set<string>();
-  for (const row of rows) {
-    ids.add(row.external_id);
-  }
-  return ids;
+  const rows = (
+    after === null
+      ? db.prepare(MESSAGE_EXTERNAL_IDS_FIRST_PAGE_SQL).all(userId, limit)
+      : db.prepare(MESSAGE_EXTERNAL_IDS_NEXT_PAGE_SQL).all(userId, after, limit)
+  ) as { external_id: string }[];
+  return rows.map((row) => row.external_id);
 }
 
 /**

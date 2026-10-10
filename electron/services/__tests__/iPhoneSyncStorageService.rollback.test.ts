@@ -170,7 +170,7 @@ beforeEach(() => {
   jest.clearAllMocks();
 
   // Default mock implementations for database service
-  mockDbService.getExistingMessageExternalIds.mockReturnValue(new Set<string>());
+  mockDbService.getMessageExternalIdsPage.mockReturnValue([]);
   mockDbService.batchInsertMessages.mockReturnValue({ stored: 0, skipped: 0 });
   mockDbService.deleteAttachmentsBySessionId.mockReturnValue({
     deleted: 0,
@@ -340,7 +340,7 @@ describe("cancel signal timing", () => {
     expect(result.attachmentsStored).toBe(0);
 
     // No DB operations should have been called at all
-    expect(mockDbService.getExistingMessageExternalIds).not.toHaveBeenCalled();
+    expect(mockDbService.getMessageExternalIdsPage).not.toHaveBeenCalled();
     expect(mockDbService.batchInsertMessages).not.toHaveBeenCalled();
 
     // No rollback needed since nothing was stored
@@ -653,7 +653,7 @@ describe("error-path behavior (exception handling)", () => {
     const conversations = [makeConversation(1, messages)];
 
     // Simulate an exception during message storage
-    mockDbService.getExistingMessageExternalIds.mockImplementation(() => {
+    mockDbService.getMessageExternalIdsPage.mockImplementation(() => {
       throw new Error("Database corruption");
     });
 
@@ -738,7 +738,7 @@ describe("error-path behavior (exception handling)", () => {
     const conversations = [makeConversation(1, messages)];
 
     // Throw a non-Error object
-    mockDbService.getExistingMessageExternalIds.mockImplementation(() => {
+    mockDbService.getMessageExternalIdsPage.mockImplementation(() => {
       throw "string error"; // eslint-disable-line no-throw-literal
     });
 

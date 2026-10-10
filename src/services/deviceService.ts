@@ -9,6 +9,7 @@
  */
 
 import { type ApiResult, getErrorMessage } from "./index";
+import type { SyncCancelTrigger } from "../../electron/types/ipc/window-api-platform";
 
 // ============================================
 // DEVICE TYPES
@@ -570,12 +571,12 @@ export const deviceService = {
   /**
    * Cancel the current sync
    */
-  async cancelSync(): Promise<ApiResult> {
+  async cancelSync(trigger: SyncCancelTrigger): Promise<ApiResult> {
     try {
       if (!window.api.sync) {
         return { success: false, error: "Sync API not available" };
       }
-      const result = await window.api.sync.cancel();
+      const result = await window.api.sync.cancel(trigger);
       return { success: result.success };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };

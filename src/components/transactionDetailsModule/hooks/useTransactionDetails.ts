@@ -13,6 +13,8 @@ import type {
 import { isTextMessage, isEmailMessage } from "@/utils/channelHelpers";
 import logger from '../../../utils/logger';
 import { mergeCommunicationsDelta } from "../utils/communicationsDelta";
+import { estimateRowsBytes, logAfterNextPaint, logOpenPath, nowMs } from "@/utils/openPathTiming";
+import { setRendererStallPhase } from "@/utils/rendererStallLogger";
 
 interface UseTransactionDetailsResult {
   // Data
@@ -127,11 +129,21 @@ export function useTransactionDetails(
   const loadCommunications = useCallback(async (channelFilter: "email" | "text"): Promise<void> => {
     try {
       setLoading(true);
+      // BACKLOG-3884: name this load if the renderer stalls during it.
+      const phase = `transaction-${channelFilter}-load`;
+      setRendererStallPhase(phase);
+      const startedAt = nowMs();
       // getCommunications returns { success, transaction: { communications, contact_assignments } }
       const result = await window.api.transactions.getCommunications(transaction.id, channelFilter) as {
         success: boolean;
         transaction?: { communications?: Communication[]; contact_assignments?: ContactAssignment[] };
       };
+      const rows = result?.transaction?.communications ?? [];
+      logOpenPath(
+        `communications fetched channel=${channelFilter} ms=${Math.round(nowMs() - startedAt)}` +
+          ` rows=${rows.length} approxBytes=${estimateRowsBytes(rows)}`,
+      );
+      logAfterNextPaint(`communications painted channel=${channelFilter}`, startedAt, phase);
 
       if (result.success && result.transaction) {
         // Merge with existing communications (don't overwrite other channel)
@@ -215,7 +227,12 @@ export function useTransactionDetails(
   const loadOverview = useCallback(async (): Promise<void> => {
     try {
       setLoading(true);
+      const startedAt = nowMs();
       const result = await window.api.transactions.getOverview(transaction.id);
+      logOpenPath(
+        `overview received ms=${Math.round(nowMs() - startedAt)}` +
+          ` contacts=${result?.transaction?.contact_assignments?.length ?? 0}`,
+      );
 
       if (result.success && result.transaction) {
         setContactAssignments(
@@ -277,7 +294,14 @@ export function useTransactionDetails(
       }
 
       try {
+        const startedAt = nowMs();
         const contactsResult = await window.api.contacts.getAll(transaction.user_id);
+        // BACKLOG-3884: runs on open only when the deal has suggested contacts;
+        // it reads every contact the user has.
+        logOpenPath(
+          `contacts get-all ms=${Math.round(nowMs() - startedAt)}` +
+            ` contacts=${contactsResult?.contacts?.length ?? 0} suggested=${suggestedContacts.length}`,
+        );
         if (contactsResult.success && contactsResult.contacts) {
           const contactMap = new Map(
             contactsResult.contacts.map((c: Contact) => [c.id, c])

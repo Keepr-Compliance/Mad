@@ -24,7 +24,12 @@ import path from "path";
 import { hostAppPaths } from "../../capabilities/appPathsProvider";
 import { writeFileAtomic } from "./fileCrypto";
 
-export type BackupAtRestState = "plaintext" | "migrating" | "encrypted" | "syncing" | "apple-encrypted";
+/**
+ * `sealing` (BACKLOG-3816): a seal is running (or was cut off) on a chain that a sync or a
+ * crash left part plain — after a sync, and the launch/idle recovery of a `syncing` chain.
+ * Protects the chain like `syncing`; the next launch finishes it.
+ */
+export type BackupAtRestState = "plaintext" | "migrating" | "encrypted" | "syncing" | "sealing" | "apple-encrypted";
 export type ScopeAtRestState = "pending" | "migrating" | "done";
 
 export interface BackupMarker {
@@ -37,6 +42,19 @@ export interface BackupMarker {
    */
   nextStrategy?: "full";
   reasonCode?: string;
+  /**
+   * Consecutive C-DELTA syncs whose backup tool failed (G3, founder decision 2026-10-09):
+   * the second one in a row forces C-FULL. Reset by a sync whose tool succeeded.
+   */
+  toolFailures?: number;
+  /**
+   * The app version that last PROVED this chain fully sealed — a full verification walk
+   * that found zero plaintext, or a clean delta seal on top of such a proof (founder
+   * decision 2026-10-10, BACKLOG-3816). Written only together with `encrypted` and
+   * dropped by every other state write, so a sync, a crash, a seal failure or an
+   * update (a different version) makes the next sync walk the whole chain again.
+   */
+  verifiedBy?: string;
 }
 
 export interface ScopeEntry {
@@ -61,7 +79,7 @@ export const STATE_FILE_NAME = "at-rest-state.json";
 export const SCOPE_MESSAGE_ATTACHMENTS = "message-attachments";
 export const SCOPE_EMAIL_ATTACHMENTS = "email-attachments";
 
-const BACKUP_STATES: ReadonlySet<string> = new Set(["plaintext", "migrating", "encrypted", "syncing", "apple-encrypted"]);
+const BACKUP_STATES: ReadonlySet<string> = new Set(["plaintext", "migrating", "encrypted", "syncing", "sealing", "apple-encrypted"]);
 const SCOPE_STATES: ReadonlySet<string> = new Set(["pending", "migrating", "done"]);
 
 /** A udid is a device identifier: hex and dashes only. Anything else could escape the marker dir. */
@@ -83,10 +101,15 @@ export interface MarkerStore {
   stateFilePath(): string;
   /** null = no marker yet. A marker that exists but cannot be parsed throws — never read it as "plaintext". */
   readBackupMarker(udid: string): Promise<BackupMarker | null>;
-  /** Writes the state; keeps `nextStrategy`/`reasonCode` already recorded for the phone. */
-  writeBackupMarker(udid: string, state: BackupAtRestState): Promise<BackupMarker>;
+  /**
+   * Writes the state; keeps `nextStrategy`/`reasonCode`/`toolFailures` already recorded for
+   * the phone. `verifiedBy` is never kept: it is written only when passed (with `encrypted`).
+   */
+  writeBackupMarker(udid: string, state: BackupAtRestState, opts?: { verifiedBy?: string }): Promise<BackupMarker>;
   /** Records (reasonCode) or clears (null) "the next sync is C-FULL" on an existing marker. No marker = no-op. */
   setNextStrategy(udid: string, reasonCode: string | null): Promise<void>;
+  /** Sets the consecutive tool-failure count (0 removes it) on an existing marker. No marker = no-op. */
+  setToolFailures(udid: string, count: number): Promise<void>;
   readState(): Promise<AtRestStateFile>;
   getScope(scope: string): Promise<ScopeEntry | null>;
   setScope(scope: string, state: ScopeAtRestState, progress?: Record<string, number>): Promise<void>;
@@ -127,18 +150,22 @@ export function createMarkerStore(deps: MarkerStoreDeps): MarkerStore {
       return parsed;
     },
 
-    async writeBackupMarker(udid, state) {
+    async writeBackupMarker(udid, state, opts) {
       if (!BACKUP_STATES.has(state)) throw new Error(`unknown backup state ${state}`);
-      let kept: Pick<BackupMarker, "nextStrategy" | "reasonCode"> = {};
+      let kept: Pick<BackupMarker, "nextStrategy" | "reasonCode" | "toolFailures"> = {};
       try {
         const existing = await store.readBackupMarker(udid);
         if (existing?.nextStrategy === "full") {
           kept = { nextStrategy: "full", ...(existing.reasonCode ? { reasonCode: existing.reasonCode } : {}) };
         }
+        if (typeof existing?.toolFailures === "number" && existing.toolFailures > 0) {
+          kept = { ...kept, toolFailures: existing.toolFailures };
+        }
       } catch {
         // an unreadable marker is being replaced; there is nothing to keep
       }
-      const marker: BackupMarker = { udid, state, updatedAt: now().toISOString(), ...kept };
+      const verified = state === "encrypted" && opts?.verifiedBy ? { verifiedBy: opts.verifiedBy } : {};
+      const marker: BackupMarker = { udid, state, updatedAt: now().toISOString(), ...kept, ...verified };
       await writeFileAtomic(backupMarkerPath(udid), JSON.stringify(marker, null, 2));
       return marker;
     },
@@ -154,6 +181,15 @@ export function createMarkerStore(deps: MarkerStoreDeps): MarkerStore {
         updatedAt: now().toISOString(),
         ...(reasonCode ? { nextStrategy: "full" as const, reasonCode } : {}),
       };
+      await writeFileAtomic(backupMarkerPath(udid), JSON.stringify(marker, null, 2));
+    },
+
+    async setToolFailures(udid, count) {
+      const existing = await store.readBackupMarker(udid);
+      if (!existing) return;
+      const { toolFailures: _t, ...rest } = existing;
+      void _t;
+      const marker: BackupMarker = { ...rest, updatedAt: now().toISOString(), ...(count > 0 ? { toolFailures: count } : {}) };
       await writeFileAtomic(backupMarkerPath(udid), JSON.stringify(marker, null, 2));
     },
 

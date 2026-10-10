@@ -828,7 +828,10 @@ function runOpportunisticLinking(userId: string): number {
  * pass.
  */
 async function runLinkingPassWithBackfill(userId: string): Promise<void> {
+  const startedAt = Date.now();
   const linksCreated = runOpportunisticLinking(userId);
+  // BACKLOG-3837: timing only, counts and milliseconds — no names, numbers or ids.
+  logService.info(`[Contacts] linking pass: ${linksCreated} link(s) created in ${Date.now() - startedAt} ms`, "Contacts");
   if (linksCreated === 0) return;
 
   backfilledUsers.delete(userId);

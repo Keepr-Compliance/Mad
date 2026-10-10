@@ -14,6 +14,7 @@
  *    on a value it just read, rather than on a render-stale prop.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { logOpenPath, nowMs } from "../../../utils/openPathTiming";
 import { logger } from "../../../utils/logger";
 import type { ReviewItemDto, ReviewStateResult } from "../../../../electron/types/ipc/window-api-transactions";
 import { groupReviewItemsByThread } from "../utils/reviewThreads";
@@ -88,6 +89,8 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
   // refresh changes identity every render and re-subscribes the event listener).
   const stateRef = useRef<ReviewStateResult>(EMPTY);
   const hasLoadedRef = useRef(false);
+  // BACKLOG-3884: [TxnOpen] timing for the first review-state read per transaction.
+  const openTimedForRef = useRef<string | null>(null);
 
   const activeId = useRef<string | null>(transactionId);
   useEffect(() => {
@@ -105,8 +108,16 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
     if (!transactionId) return EMPTY;
     setIsLoading(true);
     try {
+      const startedAt = nowMs();
       const next = await window.api.transactions.getReviewState(transactionId);
       const safe: ReviewStateResult = next ?? EMPTY;
+      if (openTimedForRef.current !== transactionId) {
+        openTimedForRef.current = transactionId;
+        logOpenPath(
+          `review state read ms=${Math.round(nowMs() - startedAt)}` +
+            ` count=${safe.count ?? 0} items=${safe.items?.length ?? 0}`,
+        );
+      }
       stateRef.current = safe;
       hasLoadedRef.current = true;
       setChangeToken((t) => t + 1);
@@ -134,12 +145,19 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
     async (reason: "open" | "contact-change", contactIds?: string[]): Promise<number> => {
       if (!transactionId) return 0;
       try {
+        const startedAt = nowMs();
         const result = await window.api.transactions.syncReviewQueue(
           transactionId,
           reason,
           contactIds,
         );
         const added = result?.added ?? 0;
+        // BACKLOG-3884: renderer-side wall time, so it includes any wait for
+        // main before the handler ran.
+        logOpenPath(
+          `review sync ms=${Math.round(nowMs() - startedAt)} reason=${reason}` +
+            ` added=${added} linked=${result?.linked ?? 0}`,
+        );
         // MAX, not overwrite — and this is load-bearing under StrictMode.
         //
         // StrictMode is ON (src/main.tsx), so the on-open effect fires TWICE per

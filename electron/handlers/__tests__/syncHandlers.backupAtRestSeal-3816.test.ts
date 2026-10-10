@@ -152,12 +152,14 @@ describe("S4-C: the kept backup is sealed when persistence ends, on every path",
 
   it("no user for persistence", async () => {
     await endSync({ user: false });
-    expect(order).toEqual(["seal"]);
+    // BACKLOG-3816: the plaintext parse copy is removed here too, then the seal.
+    expect(order).toEqual(["cleanup", "seal"]);
   });
 
   it("extraction did not succeed (nothing to persist)", async () => {
     await endSync({ success: false });
-    expect(order).toEqual(["seal"]);
+    // BACKLOG-3816: the plaintext parse copy is removed here too, then the seal.
+    expect(order).toEqual(["cleanup", "seal"]);
   });
 
   // SR-M7: `sendToMainWindow("sync:complete")` sits OUTSIDE persistCompletedSync's own
@@ -167,7 +169,8 @@ describe("S4-C: the kept backup is sealed when persistence ends, on every path",
       if (channel === "sync:complete") throw new Error("window gone");
     });
     await endSync({});
-    expect(order).toEqual(["seal"]);
+    // BACKLOG-3816: the plaintext parse copy is removed here too, then the seal.
+    expect(order).toEqual(["cleanup", "seal"]);
     expect(orchestratorEvents.completeBackupAtRest).toHaveBeenCalledTimes(1);
   });
 

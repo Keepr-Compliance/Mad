@@ -139,6 +139,14 @@ function yieldToEventLoop(): Promise<void> {
  */
 const LOOKUP_CHUNK = 500;
 
+/**
+ * BACKLOG-3868: ids per page of the message duplicate check, and messages per
+ * slice of the pre-filter loop; the caller yields between them.
+ */
+const DEDUPE_PAGE = 5000;
+/** BACKLOG-3868: contacts per upsert transaction in storeContacts. */
+const CONTACT_UPSERT_SLICE = 500;
+
 // Input validation constants
 const MAX_MESSAGE_TEXT_LENGTH = 100000; // 100KB - truncate extremely long messages
 const MAX_HANDLE_LENGTH = 500; // Phone numbers, emails, etc.
@@ -178,7 +186,13 @@ function isValidGuid(guid: string | null | undefined): boolean {
 class IPhoneSyncStorageService {
   private static readonly SERVICE_NAME = "IPhoneSyncStorageService";
   // Smaller batch size for better responsiveness
-  private static readonly BATCH_SIZE = 500;
+  /**
+   * BACKLOG-3868: rows per insert transaction in storeMessages (was 500). A
+   * 500-row batch took 12 ms at the start of a 100k insert into an encrypted
+   * store and up to 250 ms by the end (the messages indexes outgrow the page
+   * cache), so the transaction/yield granularity is 100.
+   */
+  private static readonly INSERT_SLICE = 100;
   // Yield every N batches to let event loop breathe
   private static readonly YIELD_INTERVAL = 2;
 
@@ -480,8 +494,8 @@ class IPhoneSyncStorageService {
    * Store messages to the database with bulk insert
    * Uses async yielding to prevent blocking
    *
-   * OPTIMIZED: Pre-loads all existing external_ids into a Set for O(1) lookup
-   * instead of O(n) database queries per message
+   * Duplicate check: the user's stored external_ids are read into a Set in
+   * bounded pages, yielding between them (BACKLOG-3868), then looked up per message.
    */
   private async storeMessages(
     userId: string,
@@ -506,10 +520,22 @@ class IPhoneSyncStorageService {
     let stored = 0;
     let skipped = 0;
 
-    // OPTIMIZATION: Load ALL existing external_ids into a Set (one query instead of 626k)
-    // This gives us O(1) lookup instead of O(n) database queries
+    // BACKLOG-3868: the user's stored external_ids, read in keyset pages with a
+    // yield between them. This used to be one synchronous read of every id —
+    // ~0.5-0.8 s of blocked main on a ~670k-message store, several times that on a
+    // low-end PC. Same set of ids; a per-guid lookup instead (IN chunks) was
+    // measured at ~8x the wall time on 671k rows, because every sync carries the
+    // phone's whole history.
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Loading existing message IDs for deduplication...`);
-    const existingIds = databaseService.getExistingMessageExternalIds(userId);
+    const existingIds = new Set<string>();
+    let after: string | null = null;
+    for (;;) {
+      const page: string[] = databaseService.getMessageExternalIdsPage(userId, after, DEDUPE_PAGE) ?? [];
+      for (const id of page) existingIds.add(id);
+      await yieldToEventLoop();
+      if (page.length < DEDUPE_PAGE) break;
+      after = page[page.length - 1];
+    }
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Found ${existingIds.size} existing messages`);
 
     // Pre-filter and prepare messages for batch insert
@@ -531,7 +557,11 @@ class IPhoneSyncStorageService {
 
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Processing ${messages.length} messages`);
 
-    for (const msg of messages) {
+    for (let index = 0; index < messages.length; index++) {
+      const msg = messages[index];
+      // BACKLOG-3868: every sync carries the phone's whole history; yield so this
+      // loop is not one long block on a large one.
+      if (index > 0 && index % DEDUPE_PAGE === 0) await yieldToEventLoop();
       // Validate GUID before using it
       if (!isValidGuid(msg.guid)) {
         log.warn(`[${IPhoneSyncStorageService.SERVICE_NAME}] Skipping message with invalid GUID`, {
@@ -619,17 +649,25 @@ class IPhoneSyncStorageService {
       });
     }
 
-    // Batch insert all prepared messages through the service layer
-    if (messagesToInsert.length > 0) {
+    // Batch insert all prepared messages through the service layer.
+    // BACKLOG-3868: one INSERT_SLICE slice per call (each its own transaction, as
+    // before) with a yield to the event loop between slices. The db function ran
+    // every slice back to back: 10k new messages blocked main ~0.4 s, 100k ~15 s.
+    // Cancel: checked before every slice; slices already committed stay, and the
+    // caller's rollbackSession(sessionId) removes them (unchanged).
+    const batchSize = IPhoneSyncStorageService.INSERT_SLICE;
+    for (let start = 0; start < messagesToInsert.length; start += batchSize) {
+      if (cancelSignal?.cancelled) break;
       const result = databaseService.batchInsertMessages(
-        messagesToInsert,
-        IPhoneSyncStorageService.BATCH_SIZE,
+        messagesToInsert.slice(start, start + batchSize),
+        batchSize,
         sessionId,
         cancelSignal
       );
-      stored = result.stored;
+      stored += result.stored;
       // Add DB-level skips (UNIQUE constraint) to our pre-filter skips
       skipped += result.skipped;
+      await yieldToEventLoop();
     }
 
     // Report final progress
@@ -739,7 +777,19 @@ class IPhoneSyncStorageService {
 
     // Use the externalContactDbService to upsert contacts
     // This handles deduplication via UNIQUE(user_id, source, external_record_id)
-    const stored = externalContactDb.upsertFromiPhone(userId, iPhoneContacts, sessionId);
+    // BACKLOG-3868: in CONTACT_UPSERT_SLICE-sized calls (each its own transaction)
+    // with a yield between them; one call for every contact blocked main ~0.5 s per
+    // 10k contacts on an encrypted store. Same rows: the upsert is keyed on
+    // (user_id, source, external_record_id), and the sessionId rollback is unchanged.
+    let stored = 0;
+    for (let start = 0; start < iPhoneContacts.length; start += CONTACT_UPSERT_SLICE) {
+      stored += externalContactDb.upsertFromiPhone(
+        userId,
+        iPhoneContacts.slice(start, start + CONTACT_UPSERT_SLICE),
+        sessionId,
+      );
+      if (start + CONTACT_UPSERT_SLICE < iPhoneContacts.length) await yieldToEventLoop();
+    }
 
     // Report completion
     onProgress?.(contacts.length, contacts.length);

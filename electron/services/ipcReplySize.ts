@@ -23,6 +23,16 @@
  */
 
 export const LARGE_REPLY_BYTES = 1024 * 1024;
+/**
+ * BACKLOG-3884: a handler that takes this long logs one line at ANY time, sync
+ * or not, so a main-side stall on a user action names its channel:
+ *
+ *   [IpcSlowHandler] channel=<name> durationMs=<ms> approxBytes=<n>
+ *
+ * Duration is wall time from invoke to reply, so it includes awaited work as
+ * well as synchronous work.
+ */
+export const SLOW_HANDLER_MS = 1_000;
 export const REPLY_SIZE_CAP_BYTES = 512 * 1024 * 1024;
 
 type PhaseSource = () => string | null;
@@ -102,6 +112,62 @@ export interface ReplySizeDeps {
 
 const WRAPPED = Symbol.for("keepr.ipcReplySizeWrapped");
 
+/**
+ * BACKLOG-3884 follow-up: what main was last asked to do over IPC. Written at
+ * the START of every wrapped `ipcMain.handle` call, so a main-thread block that
+ * begins inside a handler is attributed to the channel that was running. Read
+ * by the main event-loop lag monitor and by the "Session loaded" line.
+ * `ipcMain.on` listeners are not tracked (handle only). Channel names only.
+ */
+let lastIpcChannel: string | null = null;
+let lastIpcStartedAt = 0;
+const inFlight = new Map<string, number>();
+
+export interface IpcActivitySnapshot {
+  lastChannel: string | null;
+  lastStartedAt: number;
+  /** Channels with a handler still running, at most `max`, most-recent-first order not guaranteed. */
+  inFlight: string[];
+}
+
+export function ipcActivitySnapshot(max = 5): IpcActivitySnapshot {
+  const names: string[] = [];
+  for (const [channel, count] of inFlight) {
+    if (count <= 0) continue;
+    names.push(count > 1 ? `${channel}x${count}` : channel);
+    if (names.length >= max) break;
+  }
+  return { lastChannel: lastIpcChannel, lastStartedAt: lastIpcStartedAt, inFlight: names };
+}
+
+/** The last IPC channel a handler started for, or null. */
+export function lastIpcChannelStarted(): string | null {
+  return lastIpcChannel;
+}
+
+function noteIpcStart(channel: string, at: number): void {
+  lastIpcChannel = channel;
+  lastIpcStartedAt = at;
+  inFlight.set(channel, (inFlight.get(channel) ?? 0) + 1);
+}
+
+function noteIpcEnd(channel: string): void {
+  const n = (inFlight.get(channel) ?? 1) - 1;
+  if (n <= 0) inFlight.delete(channel);
+  else inFlight.set(channel, n);
+}
+
+/** Test seam: forget recorded IPC activity. */
+export function resetIpcActivityForTests(): void {
+  lastIpcChannel = null;
+  lastIpcStartedAt = 0;
+  inFlight.clear();
+}
+
+function formatBytes(bytes: number): string {
+  return bytes > REPLY_SIZE_CAP_BYTES ? `${REPLY_SIZE_CAP_BYTES}+` : String(bytes);
+}
+
 /** Patch `target.handle` so every registered handler's reply is measured during a sync. Idempotent. */
 export function wrapHandleForReplySize(target: HandleTarget, deps: ReplySizeDeps): void {
   const marked = target as HandleTarget & { [WRAPPED]?: true };
@@ -110,24 +176,58 @@ export function wrapHandleForReplySize(target: HandleTarget, deps: ReplySizeDeps
   target.handle = (channel, listener) =>
     original(channel, async (event: unknown, ...args: unknown[]) => {
       const started = deps.now();
-      const result = await listener(event, ...args);
-      const durationMs = deps.now() - started;
       try {
-        const phase = deps.phase();
-        if (phase !== null) {
-          const bytes = approxSerializedBytes(result);
-          if (bytes >= LARGE_REPLY_BYTES) {
-            const capped = bytes > REPLY_SIZE_CAP_BYTES;
+        noteIpcStart(channel, started);
+      } catch {
+        // Telemetry only.
+      }
+      let result: unknown;
+      let threw = false;
+      try {
+        result = await listener(event, ...args);
+        return result;
+      } catch (error) {
+        threw = true;
+        throw error;
+      } finally {
+        try {
+          noteIpcEnd(channel);
+        } catch {
+          // Telemetry only.
+        }
+        // Measured at most once per reply, shared by both lines below.
+        let bytes: number | null = null;
+        const measure = (): number => {
+          if (bytes === null) bytes = approxSerializedBytes(result);
+          return bytes;
+        };
+        const durationMs = Math.round(deps.now() - started);
+        try {
+          if (durationMs >= SLOW_HANDLER_MS) {
             deps.log(
-              `[IpcReplySize] channel=${channel} approxBytes=${capped ? `${REPLY_SIZE_CAP_BYTES}+` : bytes}` +
-                ` durationMs=${durationMs} phase=${phase}`,
+              threw
+                ? `[IpcSlowHandler] channel=${channel} durationMs=${durationMs} threw=1`
+                : `[IpcSlowHandler] channel=${channel} durationMs=${durationMs} approxBytes=${formatBytes(measure())}`,
             );
           }
+        } catch {
+          // Telemetry only: never affects the reply.
         }
-      } catch {
-        // Telemetry only: never affects the reply.
+        try {
+          const phase = threw ? null : deps.phase();
+          if (phase !== null) {
+            const size = measure();
+            if (size >= LARGE_REPLY_BYTES) {
+              deps.log(
+                `[IpcReplySize] channel=${channel} approxBytes=${formatBytes(size)}` +
+                  ` durationMs=${durationMs} phase=${phase}`,
+              );
+            }
+          }
+        } catch {
+          // Telemetry only: never affects the reply.
+        }
       }
-      return result;
     });
   marked[WRAPPED] = true;
 }

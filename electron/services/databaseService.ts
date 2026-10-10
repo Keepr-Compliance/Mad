@@ -2548,8 +2548,9 @@ class DatabaseService implements IDatabaseService {
   // iPHONE SYNC QUERIES (Delegate to syncDbService)
   // ============================================
 
-  getExistingMessageExternalIds(userId: string) {
-    return syncDb.getExistingMessageExternalIds(userId);
+  /** BACKLOG-3868: one page of the iPhone sync's duplicate check. */
+  getMessageExternalIdsPage(userId: string, after: string | null, limit: number) {
+    return syncDb.getMessageExternalIdsPage(userId, after, limit);
   }
 
   batchInsertMessages(

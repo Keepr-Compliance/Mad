@@ -18,6 +18,7 @@ import {
   SyncProgress,
   SyncResult,
 } from "../services/deviceSyncOrchestrator";
+import { isSyncCancelTrigger } from "../services/syncCancelTrigger";
 import { iPhoneSyncStorageService, attachmentSkipFields } from "../services/iPhoneSyncStorageService";
 import { autoLinkNewMessagesForUser, expandAttachedThreadsForUser } from "../services/autoLinkService";
 import sessionService from "../services/sessionService";
@@ -25,7 +26,7 @@ import type { iOSDevice } from "../types/device";
 import { rateLimiters } from "../utils/rateLimit";
 import { syncStatusService } from "../services/syncStatusService";
 import supabaseService from "../services/supabaseService";
-import { sendToMainWindow } from "../windowRegistry";
+import { getMainWindow, sendToMainWindow } from "../windowRegistry";
 import { handleBusy } from "../utils/busyIpc";
 import { backupDecryptionService } from "../services/backupDecryptionService";
 import type { SyncStartReply } from "../types/ipc/window-api-platform";
@@ -258,9 +259,25 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
   );
 
   // Cancel sync operation
-  ipcMain.handle("sync:cancel", () => {
-    log.info("[SyncHandlers] Cancelling sync");
-    orchestrator?.cancel();
+  // BACKLOG-3816: the renderer names the control that asked (`SyncCancelTrigger`). The
+  // trigger and the sending window are logged here, so every cancel in the log says
+  // where it came from; an unnamed one is recorded as unattributed, not as the user's.
+  ipcMain.handle("sync:cancel", (event: { sender?: { id?: number } } | undefined, trigger?: unknown) => {
+    const known = isSyncCancelTrigger(trigger) ? trigger : null;
+    const senderId = event?.sender?.id;
+    let mainId: number | undefined;
+    try {
+      mainId = getMainWindow()?.webContents?.id;
+    } catch {
+      mainId = undefined;
+    }
+    const logFields = {
+      trigger: known ?? (trigger === undefined ? "none" : "unknown"),
+      fromMainWindow: senderId !== undefined && mainId !== undefined ? senderId === mainId : "unknown",
+    };
+    if (known) log.info("[SyncHandlers] Cancelling sync", logFields);
+    else log.warn("[SyncHandlers] Cancelling sync with no known trigger", logFields);
+    orchestrator?.cancel(known);
     // TASK-2110: Signal persistence phase to stop and roll back
     persistCancelSignal.cancelled = true;
     return { success: true };
@@ -530,6 +547,16 @@ function setupEventForwarding(): void {
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
+      // BACKLOG-3816: the plaintext parse copy goes on EVERY end of persistence - the
+      // branches below each remove it, but "no user", "skipped" and an exception that
+      // escaped persistCompletedSync did not. Idempotent.
+      try {
+        if (result.needsCleanup && result.backupPath && typeof orchestrator?.cleanupBackup === "function") {
+          await orchestrator.cleanupBackup(result.backupPath);
+        }
+      } catch {
+        // cleanupBackup logs and never throws; the next sweep removes a leftover.
+      }
       // `typeof` guard: handler suites stub the orchestrator with only what they drive.
       if (typeof orchestrator?.completeBackupAtRest === "function") {
         await orchestrator.completeBackupAtRest(succeeded);
@@ -621,10 +648,6 @@ function setupEventForwarding(): void {
           sendToMainWindow("sync:storage-error", {
             error: "Sync cancelled — partial data has been cleaned up.",
           });
-          // Still cleanup backup
-          if (result.needsCleanup && result.backupPath && orchestrator) {
-            await orchestrator.cleanupBackup(result.backupPath);
-          }
           return false;
         }
 
@@ -634,9 +657,6 @@ function setupEventForwarding(): void {
           log.error("[SyncHandlers] Attachments not saved: file-data key unavailable");
           syncTimeline.endSync("error");
           sendToMainWindow("sync:storage-error", { error: persistResult.error });
-          if (result.needsCleanup && result.backupPath && orchestrator) {
-            await orchestrator.cleanupBackup(result.backupPath);
-          }
           return false;
         }
 
@@ -650,10 +670,6 @@ function setupEventForwarding(): void {
           duration: persistResult.duration,
         });
 
-        // SPRINT-068: Cleanup backup after persistence is complete
-        if (result.needsCleanup && result.backupPath && orchestrator) {
-          await orchestrator.cleanupBackup(result.backupPath);
-        }
 
         // BACKLOG-2898/2894: the counts each persistence phase produced, read
         // from the SAME persistResult the UI reports, so the timeline and the
@@ -751,10 +767,6 @@ function setupEventForwarding(): void {
         sendToMainWindow("sync:storage-error", {
           error: error instanceof Error ? error.message : "Failed to save messages",
         });
-        // SPRINT-068: Still cleanup backup even if persistence fails
-        if (result.needsCleanup && result.backupPath && orchestrator) {
-          await orchestrator.cleanupBackup(result.backupPath);
-        }
       }
     } else if (!userIdForPersistence) {
       // BACKLOG-1630: This should never be reached now that sync:start blocks without a user ID,
@@ -806,6 +818,10 @@ export function stopBackupForQuit(): Promise<unknown> | null {
  * Cleanup sync handlers
  */
 export function cleanupSyncHandlers(): void {
+  // BACKLOG-3816: a quit mid-parse or mid-persistence must not leave plaintext on disk.
+  if (typeof orchestrator?.discardParseCopiesForQuit === "function") {
+    orchestrator.discardParseCopiesForQuit();
+  }
   if (orchestrator) {
     orchestrator.stopDeviceDetection();
     orchestrator.removeAllListeners();

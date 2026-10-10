@@ -8,6 +8,7 @@ import type {
   UseIPhoneSyncReturn,
   UserFacingError,
 } from "../types/iphone";
+import type { SyncCancelTrigger } from "../../electron/types/ipc/window-api-platform";
 import logger from '../utils/logger';
 import { syncOrchestrator } from '../services/SyncOrchestratorService';
 import { usePlatform } from '../contexts/PlatformContext';
@@ -15,6 +16,12 @@ import { pickDisplayUnitIndex } from '../utils/transferByteUnit';
 
 /** BACKLOG-3784: renderer heartbeat interval during an iPhone sync. */
 const RENDERER_TICK_MS = 1_000;
+/**
+ * BACKLOG-3816: start of the kept-backup UNSEAL line (describeBackupAtRestProgress in
+ * electron/services/atRest/backupAtRest.ts — the renderer cannot import it; parity is
+ * asserted by useIPhoneSync.test.ts).
+ */
+export const UNSEAL_MESSAGE_PREFIX = "Preparing your saved iPhone backup";
 
 /**
  * BACKLOG-1773: Sync status poll backoff bounds.
@@ -368,6 +375,12 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           if ((syncProgress.phase as string) === "cleanup") {
             const current = progressPhaseRef.current;
             if (current === "extracting" || current === "storing" || current === "complete" || current === "error") return;
+            // BACKLOG-3816 (seal throughput): only the unseal for THIS sync belongs in the sync
+            // screen. A background "Securing your iPhone backup… N%" tick (launch migration,
+            // seal after the last sync) is the banner's — shown here it read as part of the
+            // sync under "Exporting - Keep connected", though sealing needs no phone. A sync
+            // pauses that seal (BackupAtRest.beginSync), so it has no reason to be here.
+            if (!(syncProgress.message ?? "").startsWith(UNSEAL_MESSAGE_PREFIX)) return;
             const message = syncProgress.message;
             setProgress((prev) =>
               prev ? { ...prev, message } : { phase: "backing_up", percent: 0, message },
@@ -1160,14 +1173,15 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   );
 
   // Cancel ongoing sync
-  const cancelSync = useCallback(async () => {
-    logger.info("[useIPhoneSync] Cancelling sync");
+  // BACKLOG-3816: `trigger` names the control that asked; main records it on the run.
+  const cancelSync = useCallback(async (trigger: SyncCancelTrigger) => {
+    logger.info("[useIPhoneSync] Cancelling sync", { trigger });
     syncStateRef.isActive = false;
 
     try {
       const syncApi = window.api?.sync;
       if (syncApi?.cancel) {
-        await syncApi.cancel();
+        await syncApi.cancel(trigger);
       }
     } catch (err) {
       logger.warn("[useIPhoneSync] Cancel error (ignored):", err);

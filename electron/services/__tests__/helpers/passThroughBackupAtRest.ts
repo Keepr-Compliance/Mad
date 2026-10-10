@@ -18,7 +18,8 @@ export const passThroughBackupAtRest = {
     return { kind: "none" as const, udid };
   },
   finishSync: async () => undefined,
-  buildParseCopy: async () => ({ copied: 0, missing: 0 }),
+  releaseForQuit: () => undefined,
+  buildParseCopy: async () => ({ copied: 0, missing: 0, unreadable: 0 }),
   on: () => undefined,
 };
 

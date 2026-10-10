@@ -279,6 +279,8 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
       // S4-C: seal kept iPhone backups (pre-2.40 migration; a quit/crash mid-sync).
       const outcomes = await getBackupAtRest().runLaunchJob();
       ctx.log("info", `[AtRest] backups: ${Object.values(outcomes).join(", ") || "none"}`);
+      // BACKLOG-3816: a seal cut short while the app runs is retried without a restart.
+      getBackupAtRest().startIdleRecovery();
     },
   });
   startup.register({ id: "legacy-sweep", order: 60, run: async () => { await runLegacySweep(); } });

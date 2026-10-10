@@ -10,6 +10,8 @@
  * - Various modal dialogs
  */
 import React, { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
+import { logAfterNextPaint, logOpenPath, nowMs } from "../utils/openPathTiming";
+import { getRendererStallPhase, setRendererStallPhase } from "../utils/rendererStallLogger";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import type { Transaction } from "@/types";
 import { transactionService } from '../services';
@@ -129,6 +131,21 @@ function TransactionDetails({
     setTransaction(transactionProp);
   }, [transactionProp]);
 
+  // BACKLOG-3884: open-path timing in main.log — mount -> first paint, and
+  // mount -> the Overview contacts painted. A renderer stall in between is
+  // attributed to phase "transaction-open".
+  const mountedAtRef = useRef<number>(nowMs());
+  const overviewPaintLoggedRef = useRef(false);
+  useEffect(() => {
+    setRendererStallPhase("transaction-open");
+    logOpenPath(`details mount tab=${initialTab}`);
+    logAfterNextPaint("details first paint", mountedAtRef.current);
+    // once per open (initialTab is the tab it opened on)
+    return () => {
+      if (getRendererStallPhase() === "transaction-open") setRendererStallPhase(null);
+    };
+  }, []);
+
   // BACKLOG-1762: address -> contact display_name map, resolves From/To names
   // from Contacts when the email header carries no name.
   const emailNameMap = useContactNameMap(userId ?? transaction?.user_id);
@@ -158,6 +175,12 @@ function TransactionDetails({
     updateSuggestedContacts,
     removeCommunicationsByIds,
   } = useTransactionDetails(transaction);
+
+  useEffect(() => {
+    if (loading || overviewPaintLoggedRef.current) return;
+    overviewPaintLoggedRef.current = true;
+    logAfterNextPaint("overview painted", mountedAtRef.current, "transaction-open");
+  }, [loading]);
 
   // Tab state hook - use initialTab prop
   const { activeTab, setActiveTab } = useTransactionTabs(initialTab);
@@ -306,6 +329,14 @@ function TransactionDetails({
     error: messagesError,
   } = useTransactionMessages(transaction, communications);
 
+  // BACKLOG-3884: sticky "a tab that shows attachments has been opened".
+  // Idempotent render-time write: it only ever flips false -> true.
+  const attachmentsWantedRef = useRef(false);
+  if (activeTab === "attachments" || activeTab === "checklist") {
+    attachmentsWantedRef.current = true;
+  }
+  const attachmentsWanted = attachmentsWantedRef.current;
+
   // BACKLOG-322 Phase A: unified attachments hook — loads ALL attachments (email
   // + text/iMessage) for the transaction via a dedicated IPC query, independent
   // of which communications channels have been loaded. No audit-date window is
@@ -321,6 +352,11 @@ function TransactionDetails({
   } = useTransactionAllAttachments(transaction.id, undefined, undefined, {
     startedAt: transaction.started_at,
     closedAt: transaction.closed_at,
+    // BACKLOG-3884: only the Attachments and Checklist tabs read these, and the
+    // reader blocks main for ~0.8 s per open on a large deal. Load the first
+    // time either tab is shown, then keep it loaded (and refreshable) for the
+    // rest of this open.
+    enabled: attachmentsWanted,
   });
 
   // Refresh messages by reloading text communications from the parent state.

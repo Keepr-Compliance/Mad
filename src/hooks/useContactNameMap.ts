@@ -16,6 +16,7 @@
  */
 import { useEffect, useState } from "react";
 import logger from "../utils/logger";
+import { logOpenPath, nowMs } from "../utils/openPathTiming";
 
 // userId -> resolved map. Shared across all hook instances for the session.
 const cache = new Map<string, ReadonlyMap<string, string>>();
@@ -28,7 +29,14 @@ async function fetchNameMap(userId: string): Promise<ReadonlyMap<string, string>
   const contactsApi = window.api?.contacts;
   if (!contactsApi?.getEmailNameMap) return EMPTY_MAP;
 
+  const startedAt = nowMs();
   const result = await contactsApi.getEmailNameMap(userId);
+  // BACKLOG-3884: one real fetch per session (cached after), usually on the
+  // first transaction opened. ms and entry count only.
+  logOpenPath(
+    `email-name map ms=${Math.round(nowMs() - startedAt)}` +
+      ` entries=${result?.nameMap ? Object.keys(result.nameMap).length : 0}`,
+  );
   if (!result?.success || !result.nameMap) return EMPTY_MAP;
 
   const map = new Map<string, string>();

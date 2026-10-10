@@ -8,6 +8,7 @@ import type { User, OAuthProvider, Subscription } from "../types/models";
 import logService from "./logService";
 import { emitSessionChanged } from "./authEvents";
 import { renameWithRetry } from "./atRest/fileCrypto";
+import { lastIpcChannelStarted } from "./ipcReplySize";
 
 // ============================================
 // TYPES & INTERFACES
@@ -344,6 +345,7 @@ export class SessionService {
    * @returns Session data or null if not found/expired/corrupted
    */
   async loadSession(): Promise<SessionData | null> {
+    const loadStartedAt = Date.now();
     try {
       const fileContent = await fs.readFile(this.getSessionFilePath(), "utf8");
       const result = this.decryptSessionData(fileContent);
@@ -390,7 +392,14 @@ export class SessionService {
         );
       }
 
-      await logService.info("Session loaded successfully", "SessionService");
+      // BACKLOG-3884: ten callers log this same line. `during` names the last
+      // IPC channel whose handler started (usually the caller, e.g.
+      // license:get on a window-focus license refresh); `ms` is the file read
+      // and decrypt. Channel name and ms only.
+      await logService.info(
+        `Session loaded successfully ms=${Date.now() - loadStartedAt} during=${lastIpcChannelStarted() ?? "none"}`,
+        "SessionService",
+      );
       return session;
     } catch (error: unknown) {
       if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
