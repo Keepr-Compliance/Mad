@@ -25,6 +25,7 @@ import gmailFetchService from "../services/gmailFetchService";
 import outlookFetchService from "../services/outlookFetchService";
 import featureGateService from "../services/featureGateService";
 import supabaseService from "../services/supabaseService";
+import sessionService from "../services/sessionService";
 import { getEmailById } from "../services/db/emailDbService";
 // BACKLOG-2781: this handler's counts are meant to match what the submission
 // service uploads, so it must use the SAME closing-day bound the export
@@ -45,7 +46,7 @@ import {
   nextOpenPath,
   safeOpenName,
 } from "../services/atRest/openTemp";
-import { findAttachmentFilenameByStoragePath } from "../services/db/attachmentOpenSql";
+import { findAttachmentFilenameByStoragePath, resolveAttachmentAuditUserId } from "../services/db/attachmentOpenSql";
 import type { Transaction } from "../types/models";
 import {
   ValidationError,
@@ -323,6 +324,35 @@ function originalNameFor(storagePath: string): string | null {
   }
 }
 
+/**
+ * BACKLOG-2819: write the DATA_ACCESS audit row under the real acting user.
+ * audit_logs.user_id is a FK to users_local, so a placeholder id fails every insert.
+ * With no resolvable user the write is skipped with a WARN, never made under a made-up id.
+ */
+async function auditAttachmentAccess(
+  storagePath: string,
+  entry: { resourceId: string; metadata: Record<string, unknown> },
+): Promise<void> {
+  const session = await sessionService.loadSession().catch(() => null);
+  const userId = resolveAttachmentAuditUserId(
+    databaseService.getRawDatabase(),
+    storagePath,
+    session?.user?.id,
+  );
+  if (!userId) {
+    logService.warn("[Audit] No acting user resolved; attachment access not audited", "Transactions");
+    return;
+  }
+  await auditService.log({
+    userId,
+    action: "DATA_ACCESS",
+    resourceType: "COMMUNICATION",
+    resourceId: entry.resourceId,
+    success: true,
+    metadata: entry.metadata,
+  });
+}
+
 let openTempCleanupRegistered = false;
 
 /** Decrypted open-copies never outlive the run: removed now (left by a crash) and on quit. */
@@ -492,12 +522,8 @@ export function registerAttachmentHandlers(
 
       // Audit log attachment open
       try {
-        await auditService.log({
-          userId: "system",
-          action: "DATA_ACCESS",
-          resourceType: "COMMUNICATION",
+        await auditAttachmentAccess(storagePath, {
           resourceId: path.basename(normalizedPath),
-          success: true,
           metadata: { operation: "attachment_open", fileName: path.basename(normalizedPath) },
         });
       } catch (auditError) {
@@ -528,12 +554,8 @@ export function registerAttachmentHandlers(
 
       // Audit log attachment data access
       try {
-        await auditService.log({
-          userId: "system",
-          action: "DATA_ACCESS",
-          resourceType: "COMMUNICATION",
+        await auditAttachmentAccess(storagePath, {
           resourceId: path.basename(normalizedPath),
-          success: true,
           metadata: { operation: "attachment_get_data", fileName: path.basename(normalizedPath), mimeType },
         });
       } catch (auditError) {
