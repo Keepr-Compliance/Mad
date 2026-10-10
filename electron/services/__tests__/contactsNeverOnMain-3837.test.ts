@@ -58,6 +58,7 @@ import {
 } from "../db/contactDbService";
 import { BACKFILL_TEXT_FLATS_SQL, MESSAGE_DERIVED_CONTACTS_SQL } from "../db/wizardMessageScansDb";
 import {
+  joinMessageDerivedRead,
   resetMessageDerivedCacheForTests,
   setMessageDerivedWaitMsForTests,
 } from "../db/messageDerivedContactsCache";
@@ -67,7 +68,8 @@ const DRIVER = nodePath.join(__dirname, "..", "..", "..", "node_modules", "bette
 const KEY_HEX = "3837".repeat(16);
 const USER = "user-3837d";
 const MESSAGES = Number(process.env.KEEPR_3837_MESSAGES || 20_000);
-const SAVED = 40;
+/** The PC has ~1186 saved contacts; the saved-contacts statement is what still runs on main. */
+const SAVED = Number(process.env.KEEPR_3837_CONTACTS || 40);
 const SENDERS = ["Alex Rivera", "Jordan Lee", "Casey Morgan", "Taylor Quinn", "Morgan Blake", "Drew Ellis"];
 const FIRST_SENT_MS = 1_600_000_000_000;
 
@@ -210,6 +212,9 @@ maybe("BACKLOG-3837: contact lists never scan messages on main (real worker, enc
     recording = false;
     jest.restoreAllMocks();
     setMessageDerivedWaitMsForTests(null);
+    // A case that went red mid-way must not leave its rows for the next one (mutation runs).
+    main.prepare("DELETE FROM messages WHERE id IN ('m-new', 'm-synced')").run();
+    main.prepare("DELETE FROM contacts WHERE id = 'saved-casey'").run();
   });
 
   afterAll(async () => {
@@ -266,6 +271,8 @@ maybe("BACKLOG-3837: contact lists never scan messages on main (real worker, enc
       expect(scanOnMain()).toBe(false);
       expect(all.messageDerivedPending).toBe(true);
       expect(idsOf(all.contacts, "saved-")).toEqual(SAVED_IDS);
+      // The ready notice joins a running read only: after a failure there is none to join.
+      expect(joinMessageDerivedRead(USER)).toBeNull();
     },
     60_000,
   );

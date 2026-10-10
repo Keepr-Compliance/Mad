@@ -36,6 +36,12 @@
  * `parity: warm and cold pool return the same people` is therefore a
  * reproduction of a state he has been in, not a synthetic edge case.
  *
+ * BACKLOG-3837 follow-up: the cold-pool fork no longer reaches the sync
+ * producer. Warm or cold, the message-derived half comes from the same
+ * dedicated-worker runner (faked below), so this now proves the two forks
+ * cannot differ in who appears; only the imported half still forks (worker vs
+ * main, the same shared statement).
+ *
  * ===========================================================================
  * ASSERTIONS ARE EXACT ID SETS
  * ===========================================================================
