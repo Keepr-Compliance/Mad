@@ -786,7 +786,8 @@ export interface WindowApiTransactions {
      * (read off the main thread). The roster itself is complete;
      * `contacts.onMessageDerivedReady` fires when the names land.
      */
-    contactsStatus?: { messageDerivedPending?: boolean };
+    /** BACKLOG-3837: `rosterPending` = the roster itself is not read yet; `contacts` is empty. */
+    contactsStatus?: { messageDerivedPending?: boolean; rosterPending?: boolean };
   }>;
   /** Gets unlinked messages for a specific contact */
   getMessagesByContact: (userId: string, contact: string) => Promise<{

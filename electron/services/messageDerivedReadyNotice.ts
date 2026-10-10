@@ -14,7 +14,15 @@ import { joinMessageDerivedRead } from "./db/messageDerivedContactsCache";
 export const MESSAGE_DERIVED_READY_CHANNEL = "contacts:message-derived-ready";
 
 export function notifyWhenMessageDerivedReady(userId: string): void {
-  const running = joinMessageDerivedRead(userId);
+  notifyWhenReadLands(userId, joinMessageDerivedRead(userId));
+}
+
+/**
+ * The same notice for any pending off-main read the renderer re-reads on (the Attach
+ * Messages roster uses it too: the modal re-reads both on this one channel). `running`
+ * is a read already in flight, or null (nothing to wait for: nothing sent).
+ */
+export function notifyWhenReadLands(userId: string, running: Promise<unknown[] | null> | null): void {
   if (!running) return;
   void running
     .then((rows) => {

@@ -20,7 +20,8 @@ import gmailFetchService from "../services/gmailFetchService";
 import outlookFetchService from "../services/outlookFetchService";
 import emailSyncService from "../services/emailSyncService";
 import { wrapHandler } from "../utils/wrapHandler";
-import { notifyWhenMessageDerivedReady } from "../services/messageDerivedReadyNotice";
+import { notifyWhenMessageDerivedReady, notifyWhenReadLands } from "../services/messageDerivedReadyNotice";
+import { joinMessageRosterRead } from "../services/db/messageRosterCache";
 import type { TransactionResponse } from "../types/handlerTypes";
 import {
   ValidationError,
@@ -489,14 +490,22 @@ export function registerEmailLinkingHandlers(): void {
       // BACKLOG-3837: the name map's message-derived half is read only on a
       // dedicated worker; while it is not ready the roster is returned complete,
       // flagged pending, and the window is told when the names land.
-      const { contacts, messageDerivedPending } =
+      // BACKLOG-3837: the roster itself is read only on a dedicated worker too;
+      // while it is not ready the answer is EMPTY and flagged rosterPending — the
+      // modal shows "Loading contacts...", never "no contacts".
+      const { contacts, messageDerivedPending, rosterPending } =
         await transactionService.getMessageContactsWithStatus(validatedUserId);
       if (messageDerivedPending) notifyWhenMessageDerivedReady(validatedUserId);
+      if (rosterPending) notifyWhenReadLands(validatedUserId, joinMessageRosterRead(validatedUserId));
 
+      const contactsStatus = {
+        ...(messageDerivedPending ? { messageDerivedPending: true } : {}),
+        ...(rosterPending ? { rosterPending: true } : {}),
+      };
       return {
         success: true,
         contacts,
-        ...(messageDerivedPending ? { contactsStatus: { messageDerivedPending: true } } : {}),
+        ...(messageDerivedPending || rosterPending ? { contactsStatus } : {}),
       };
     }, { module: "Transactions" }),
   );

@@ -119,6 +119,9 @@ export function AttachMessagesModal({
   // thread; until they land the roster shows with what is resolved, and re-reads
   // silently on `contacts:message-derived-ready` (and every 15 s meanwhile).
   const [namesPending, setNamesPending] = useState(false);
+  // BACKLOG-3837: the roster itself is read off the main thread too; until it lands the
+  // answer is empty and this is set — "Loading contacts...", never "no contacts".
+  const [rosterPending, setRosterPending] = useState(false);
   const [rosterReloads, setRosterReloads] = useState(0);
   // All contacts for name resolution (includes contacts without unlinked messages)
   const [allContacts, setAllContacts] = useState<Array<{ phone: string; name: string }>>([]);
@@ -169,7 +172,7 @@ export function AttachMessagesModal({
               success: boolean;
               contacts?: ContactInfo[];
               error?: string;
-              contactsStatus?: { messageDerivedPending?: boolean };
+              contactsStatus?: { messageDerivedPending?: boolean; rosterPending?: boolean };
             }>,
             // Get all contacts for name resolution
             window.api.contacts.getAll(userId) as Promise<{
@@ -183,6 +186,7 @@ export function AttachMessagesModal({
             messageContactsResult.contactsStatus?.messageDerivedPending === true ||
               allContactsResult.contactsStatus?.messageDerivedPending === true,
           );
+          setRosterPending(messageContactsResult.contactsStatus?.rosterPending === true);
 
           if (messageContactsResult.success && messageContactsResult.contacts) {
             setContacts(messageContactsResult.contacts);
@@ -264,10 +268,10 @@ export function AttachMessagesModal({
     return () => clearTimeout(timeoutId);
   }, [userId, rosterReloads]);
 
-  // BACKLOG-3837: while names are pending, re-read when main says they landed,
+  // BACKLOG-3837: while the roster or its names are pending, re-read when main says the read landed,
   // and every 15 s as a backstop (a failed read sends no event).
   useEffect(() => {
-    if (!namesPending) return;
+    if (!namesPending && !rosterPending) return;
     const reload = () => setRosterReloads((n) => n + 1);
     const unsubscribe = window.api?.contacts?.onMessageDerivedReady?.((payload) => {
       if (!payload || payload.userId === userId) reload();
@@ -277,10 +281,11 @@ export function AttachMessagesModal({
       clearInterval(backstop);
       unsubscribe?.();
     };
-  }, [namesPending, userId]);
+  }, [namesPending, rosterPending, userId]);
 
   // An empty roster while names are pending is "loading", never "no contacts" (BACKLOG-3832).
-  const showContactsLoading = loadingContacts || (namesPending && contacts.length === 0);
+  const showContactsLoading =
+    loadingContacts || rosterPending || (namesPending && contacts.length === 0);
 
   // Load threads when contact is selected
   // PERF FIX (TASK-1112): Defer data load to allow loading UI to render first

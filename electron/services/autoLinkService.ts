@@ -60,6 +60,7 @@ import {
 import { DedicatedWorkerError, isPoolReady, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
 import { warmSourceCoverage } from "./sourceCoverageFloors";
 import { warmMessageDerivedContacts } from "./db/messageDerivedContactsCache";
+import { warmMessageRoster } from "./db/messageRosterCache";
 import {
   normalizeAddress,
   contentContainsAddress,
@@ -1376,6 +1377,7 @@ export async function autoLinkNewMessagesForUser(
   try {
     warmSourceCoverage(userId);
     warmMessageDerivedContacts(userId);
+    warmMessageRoster(userId);
   } catch {
     // best effort
   }

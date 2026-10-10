@@ -22,6 +22,7 @@ import type {
 import gmailFetchService from "../gmailFetchService";
 import outlookFetchService from "../outlookFetchService";
 import transactionExtractorService from "../transactionExtractorService";
+import { readMessageRosterWithinBudget } from "../db/messageRosterCache";
 import databaseService from "../databaseService";
 import logService from "../logService";
 import { getContactNames } from "../contactsService";
@@ -1962,8 +1963,19 @@ class TransactionService {
   async getMessageContactsWithStatus(userId: string): Promise<{
     contacts: MessageContactWithName[];
     messageDerivedPending: boolean;
+    /** BACKLOG-3837: the roster itself is not read yet (dedicated worker); `contacts` is empty. */
+    rosterPending: boolean;
   }> {
-    const contacts = await databaseService.getMessageContacts(userId);
+    // BACKLOG-3837: the roster (every unlinked text of the user) is read only on a
+    // dedicated worker, cached per user; started first so it runs while the names load.
+    const rosterRead = readMessageRosterWithinBudget(userId);
+    const namesRead = this._getContactNameMapFromAppContacts(userId);
+    const roster = await rosterRead;
+    if (roster === null) {
+      const { messageDerivedPending } = await namesRead;
+      return { contacts: [], messageDerivedPending, rosterPending: true };
+    }
+    const contacts = roster;
 
     let contactNameMap: Record<string, string> = {};
 
@@ -1984,7 +1996,7 @@ class TransactionService {
     }
 
     // BACKLOG-1547: Also merge names from app's own contacts + contact_phones table
-    const { map: appContactNames, messageDerivedPending } = await this._getContactNameMapFromAppContacts(userId);
+    const { map: appContactNames, messageDerivedPending } = await namesRead;
     for (const [key, value] of Object.entries(appContactNames)) {
       if (!contactNameMap[key]) {
         contactNameMap[key] = value;
@@ -2024,7 +2036,7 @@ class TransactionService {
       },
     );
 
-    return { contacts: enrichedContacts, messageDerivedPending };
+    return { contacts: enrichedContacts, messageDerivedPending, rosterPending: false };
   }
 
   /**
