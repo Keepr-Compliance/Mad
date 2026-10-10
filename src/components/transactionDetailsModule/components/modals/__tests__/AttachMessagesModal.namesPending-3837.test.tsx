@@ -69,6 +69,9 @@ const row = (contact: string, contactName: string | null) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Reset, not just clear: a case that went red must not leave queued Once answers behind.
+  mockGetMessageContacts.mockReset();
+  mockGetAllContacts.mockReset();
   readyListener = null;
   mockGetAllContacts.mockResolvedValue({ success: true, contacts: [] });
   mockResolveHandles.mockResolvedValue({ success: true, names: {} });
