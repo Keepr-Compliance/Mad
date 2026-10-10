@@ -1513,6 +1513,31 @@ describe("progress", () => {
       expect(reads.some(([sealing, quit]) => sealing === true && typeof quit === "number")).toBe(true);
     });
 
+    it("SR PROBE: after a sync, before the seal pass's first report (index seal + listing), a quit is still asked about", async () => {
+      sealedChainWithMany();
+      const s = service();
+      await s.seal(UDID);
+      age(allContentFiles());
+      const session = await s.beginSync(UDID, { strategy: "delta" });
+      const newFile = write(`ee/${"e".repeat(40)}`, crypto.randomBytes(BIG));
+      const realReaddir = fs.promises.readdir.bind(fs.promises);
+      const atListing: Array<{ quit: number | null; plain: boolean }> = [];
+      const spy = jest.spyOn(fs.promises, "readdir").mockImplementation(((...args: Parameters<typeof fs.promises.readdir>) => {
+        if (atListing.length === 0) atListing.push({ quit: s.sealPassPercent(), plain: !fs.readFileSync(newFile).subarray(0, MAGIC.length).equals(Buffer.from(MAGIC)) });
+        return (realReaddir as (...a: unknown[]) => unknown)(...args);
+      }) as unknown as typeof fs.promises.readdir);
+      const ticks: BackupAtRestProgress[] = [];
+      try {
+        await s.finishSync(session, (p) => ticks.push(p));
+      } finally {
+        spy.mockRestore();
+      }
+      expect(atListing.length).toBe(1);
+      expect(atListing[0].plain).toBe(true); // this sync's file is still plaintext while the chain is listed
+      expect(ticks.length).toBeGreaterThan(0);
+      expect(atListing[0].quit).not.toBeNull(); // so quitting now must ask
+    });
+
     it("relaunch over a chain that is already all sealed (a 'sealing' marker after Quit anyway): a verification-only walk shows no banner and no quit prompt", async () => {
       sealedChainWithMany();
       await service().seal(UDID);

@@ -632,6 +632,14 @@ export class BackupAtRest extends EventEmitter {
     for (const [udid, reason] of this.busy) {
       if (reason !== "sealing" && reason !== "migrating") continue;
       const last = this.lastProgress.get(udid);
+      // From a sync's end until the pass's first sealing report (index seal + whole-chain
+      // listing) this sync's new files, and the index until sealed, are plaintext: count
+      // the pass as 0% so a quit asks. indexUnsealed is only set by a sync.
+      const reported = last && (last.phase === "sealing" || last.phase === "migrating");
+      if (!reported && reason === "sealing" && this.indexUnsealed.has(udid)) {
+        lowest = 0;
+        continue;
+      }
       // Only files actually being sealed count: a verification-only walk (or a pass that
       // has not reported yet) is harmless to quit in the middle of.
       if (!last || (last.phase !== "sealing" && last.phase !== "migrating") || !last.sealing) continue;
