@@ -329,7 +329,9 @@ describe("BACKLOG-2791 — approving moves the tab's LINKED list, live", () => {
     // reads the text channel once, so "was text ever read?" is true no matter
     // what happens next — an assertion that cannot separate pass from fail. The
     // question is whether the approval caused ANOTHER read.
-    const textReadsBefore = getCommunications.mock.calls.filter((c) => c[1] === "text").length;
+    // BACKLOG-3884: the Texts tab reads its conversation list, not the texts.
+    const getTextThreads = window.api.transactions.getTextThreads as jest.Mock;
+    const textReadsBefore = getTextThreads.mock.calls.length;
     expect(textReadsBefore).toBeGreaterThan(0);
 
     await act(async () => {
@@ -339,11 +341,7 @@ describe("BACKLOG-2791 — approving moves the tab's LINKED list, live", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("needs-review-section")).not.toBeInTheDocument(),
     );
-    await waitFor(() =>
-      expect(
-        getCommunications.mock.calls.filter((c) => c[1] === "text").length,
-      ).toBeGreaterThan(textReadsBefore),
-    );
+    await waitFor(() => expect(getTextThreads.mock.calls.length).toBeGreaterThan(textReadsBefore));
   });
 
   /**

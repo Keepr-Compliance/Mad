@@ -10,6 +10,7 @@ import { ChecklistCheckbox } from "./checklist/ChecklistCheckbox";
 import { normalizePhoneForLookup } from "../../../utils/phoneNormalization";
 import { getContactAvatarInitial } from "../../../utils/avatarUtils";
 import type { HideFromExportState } from "../../../hooks/useHideFromExportState";
+import { useTextThreadPages, type TextWindow } from "../hooks/useTextThreads";
 
 /**
  * Union type for messages - can be from messages table or communications table
@@ -87,7 +88,25 @@ export interface MessageThreadCardProps {
   onSetHiddenFromExport?: (messageId: string, hide: boolean) => void | Promise<void>;
   /** BACKLOG-3366: whether hiding is allowed, forwarded to the modal. */
   hideFromExportState?: HideFromExportState;
+  /**
+   * BACKLOG-3884: the Texts tab's linked cards hold only a few header rows
+   * (`messages`); the conversation is read a page at a time when it is opened.
+   * `threadKeys` are the threads this card shows (several when merged by contact).
+   */
+  paged?: {
+    transactionId: string;
+    threadKeys: string[];
+    /** The audit window the modal starts in; null = the deal has no dates. */
+    auditWindow: TextWindow | null;
+    /** Non-reaction texts in the window and in all history. */
+    inWindowCount: number;
+    totalCount: number;
+    /** Bumped when the deal's texts change: an open conversation re-reads. */
+    version: number;
+  };
 }
+
+const NO_KEYS: string[] = [];
 
 /**
  * BACKLOG-2814: the group conversation's user-visible name (Apple's
@@ -281,8 +300,19 @@ export function MessageThreadCard({
   isHighlighted = false,
   onSetHiddenFromExport,
   hideFromExportState,
+  paged,
 }: MessageThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
+  // BACKLOG-3884: the modal's before/after toggle decides the pager's scope.
+  const [showOutOfRange, setShowOutOfRange] = useState(false);
+  const pagedWindow = paged && paged.auditWindow && !showOutOfRange ? paged.auditWindow : null;
+  const pages = useTextThreadPages(
+    paged?.transactionId,
+    paged?.threadKeys ?? NO_KEYS,
+    pagedWindow,
+    !!paged && showModal,
+    paged?.version ?? 0,
+  );
 
   // BACKLOG-1719: selection UX only applies to active cards, never to removed ones.
   const showSelection = selectionMode && !isRemoved;
@@ -479,15 +509,29 @@ export function MessageThreadCard({
         <ConversationViewModal
           /* BACKLOG-2295: the modal receives the FULL (uncropped) thread so its
              own audit toggle is independent of the Texts-tab toggle. */
-          messages={fullMessages ?? messages}
+          messages={paged ? pages.messages : (fullMessages ?? messages)}
           contactName={contactName}
           phoneNumber={phoneNumber}
           contactNames={contactNames}
           auditStartDate={auditStartDate}
           auditEndDate={auditEndDate}
-          onClose={() => setShowModal(false)}
+          onClose={() => {
+            setShowModal(false);
+            setShowOutOfRange(false);
+          }}
           onSetHiddenFromExport={onSetHiddenFromExport}
           hideFromExportState={hideFromExportState}
+          pagination={
+            paged
+              ? {
+                  hasMore: pages.hasMore,
+                  loading: pages.loading,
+                  loadMore: () => void pages.loadMore(),
+                  totalCount: pagedWindow ? paged.inWindowCount : paged.totalCount,
+                }
+              : undefined
+          }
+          onShowOutOfRangeChange={paged ? setShowOutOfRange : undefined}
         />
       )}
     </>
