@@ -13,6 +13,7 @@ import logger from '../utils/logger';
 import { syncOrchestrator } from '../services/SyncOrchestratorService';
 import { usePlatform } from '../contexts/PlatformContext';
 import { pickDisplayUnitIndex } from '../utils/transferByteUnit';
+import { SYNC_RETRY_COOLDOWN_CODES, SYNC_RETRY_COOLDOWN_MS } from '../utils/syncRetryCooldown';
 
 /** BACKLOG-3784: renderer heartbeat interval during an iPhone sync. */
 const RENDERER_TICK_MS = 1_000;
@@ -22,6 +23,13 @@ const RENDERER_TICK_MS = 1_000;
  * asserted by useIPhoneSync.test.ts).
  */
 export const UNSEAL_MESSAGE_PREFIX = "Preparing your saved iPhone backup";
+
+/**
+ * BACKLOG-3816: shown on the sync error screen when Try Again is refused because the
+ * previous sync (or its cleanup) is still running in the main process.
+ */
+export const SYNC_STILL_FINISHING_MESSAGE =
+  "Your last sync is still finishing. Wait a moment, then select Try Again.";
 
 /**
  * BACKLOG-1773: Sync status poll backoff bounds.
@@ -163,6 +171,19 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const [installDriverStatus, setInstallDriverStatus] =
     useState<"idle" | "installing" | "error">("idle");
   const [installDriverError, setInstallDriverError] = useState<string | null>(null);
+  // BACKLOG-3816: Sync / Try Again is being prepared (not yet handed to main, not refused).
+  const [isStarting, setIsStarting] = useState(false);
+  // BACKLOG-3816: the hold after a dropped connection / refused backup service. Not reset by
+  // cancelSync or dismissSync: Close calls cancelSync, and reopening must not skip the hold.
+  const [retryAvailableAt, setRetryAvailableAt] = useState<number | null>(null);
+  const armRetryCooldown = useCallback(() => {
+    setRetryAvailableAt(Date.now() + SYNC_RETRY_COOLDOWN_MS);
+  }, []);
+  // BACKLOG-3816: the latest syncStatus for event handlers registered once (no stale closure).
+  const syncStatusRef = useRef<SyncStatus>("idle");
+  useEffect(() => {
+    syncStatusRef.current = syncStatus;
+  }, [syncStatus]);
 
   // Track cleanup functions
   const cleanupRef = useRef<(() => void)[]>([]);
@@ -289,7 +310,10 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       };
       setIsConnected(true);
       setDevice(mappedDevice);
-      setError(null);
+      // BACKLOG-3816: a cable wiggle is disconnect-then-reconnect. The reconnect lands while
+      // the sync error screen is up, and clearing here left "Sync Failed" with no reason.
+      // The failure's message belongs to the failed sync; Try Again / Close clear it.
+      if (syncStatusRef.current !== "error") setError(null);
       // BACKLOG-1582: Clear trust state on successful connection
       setNeedsTrust(false);
       setNeedsTrustUdid(null);
@@ -343,6 +367,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
               // Only show error if still in backup phase (device required)
               if (currentPhase === "backing_up" || currentPhase === "preparing") {
                 setError("Device disconnected during sync");
+                // BACKLOG-3816: the phone's backup service is still winding down.
+                armRetryCooldown();
                 // Defer orchestrator notification to avoid setState-during-render
                 queueMicrotask(() => {
                   syncOrchestrator.completeExternalSync('iphone', {
@@ -553,6 +579,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           } else {
             setSyncStatus("error");
             setError(result.error || "Sync failed");
+            // BACKLOG-3816: the dashboard indicator must not keep the "syncing" look.
+            syncOrchestrator.completeExternalSync('iphone', { status: 'error', error: result.error || "Sync failed" });
           }
           setAppleEncryptedBackup(false);
         });
@@ -644,7 +672,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           };
           setIsConnected(true);
           setDevice(mappedDevice);
-          setError(null);
+          // BACKLOG-3816: see handleDeviceConnected — keep a failed sync's message.
+          if (syncStatusRef.current !== "error") setError(null);
         });
         cleanups.push(unsub);
       }
@@ -661,6 +690,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
               // Only show error if still in backup phase (device required)
               if (currentPhase === "backing_up" || currentPhase === "preparing") {
                 setError("Device disconnected during sync");
+                armRetryCooldown();
                 return "error";
               }
               // In extracting/storing phases, disconnect is fine
@@ -759,7 +789,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       }
       cleanups.forEach((cleanup) => cleanup());
     };
-  }, [enabled]);
+  }, [enabled, armRetryCooldown]);
 
   // BACKLOG-3784: RENDERER HEARTBEAT. While a sync is in progress, tick main once a
   // second. Main is silent while ticks arrive and logs one `renderer-gap` line when
@@ -951,8 +981,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   }, [syncStatus]);
 
   // Start sync operation
-  const startSync = useCallback(async () => {
-    // TASK-2109: Block new syncs if a deferred logout is pending
+  const startSyncInner = useCallback(async () => {
+
     if (syncStateRef.deferredLogout) {
       logger.warn("[useIPhoneSync] Sync blocked - deferred logout pending");
       setError("Session expired. Please sign in again.");
@@ -1036,6 +1066,11 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           logger.warn("[useIPhoneSync] Sync blocked - another operation running:", status.currentOperation);
           setSyncLocked(true);
           setLockReason(status.currentOperation);
+          // BACKLOG-3816: on the error screen the lock banner never shows (the failed sync's
+          // progress is still set), so this refusal used to change nothing on screen. Say why.
+          if (syncStatusRef.current === "error") {
+            setError(SYNC_STILL_FINISHING_MESSAGE);
+          }
           return;
         }
       } catch (err) {
@@ -1045,6 +1080,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     }
 
     setSyncStatus("syncing");
+    setIsStarting(false); // BACKLOG-3816: handed to main; the progress screen takes over.
     setError(null);
     setUserError(null); // TASK-2276: Clear structured error on new sync
     setAppleEncryptedBackup(false);
@@ -1054,8 +1090,36 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       message: "Preparing to sync...",
     });
 
+    // BACKLOG-3816: whether THIS request owns the dashboard row. If an earlier sync's row
+    // is still running, registerExternalSync keeps it and this request must not end it.
+    const ownsIndicatorRow = !syncOrchestrator
+      .getState()
+      .queue.some((item) => item.type === 'iphone' && item.external && item.status === 'running');
     // TASK-2119: Register with orchestrator so iPhone appears in unified sync UI
     syncOrchestrator.registerExternalSync('iphone');
+
+    // BACKLOG-3816: every failed reply ends here. Before, none of these told the
+    // orchestrator, and main's device-error return (where SERVICE_UNAVAILABLE lands) emits
+    // no sync:error, so the dashboard row stayed "running" — the "syncing" look.
+    const failStart = (message: string, errorCode?: string) => {
+      setSyncStatus("error");
+      setError(message);
+      if (errorCode && SYNC_RETRY_COOLDOWN_CODES.has(errorCode)) armRetryCooldown();
+      if (ownsIndicatorRow) {
+        // BACKLOG-3885 (#2945) owns the "Last sync stopped" card: a lost connection is that
+        // stopped state, not a fault. If the renderer's own disconnect handler already ended
+        // the row as stopped, this later reply must not overwrite that with a plain error.
+        const row = syncOrchestrator
+          .getState()
+          .queue.find((item) => item.type === 'iphone' && item.external && item.status === 'error');
+        const errorKind = errorCode === "CONNECTION_LOST" ? 'device_disconnected' as const : row?.errorKind;
+        syncOrchestrator.completeExternalSync('iphone', {
+          status: 'error',
+          error: row?.errorKind ? row.error : message,
+          ...(errorKind ? { errorKind } : {}),
+        });
+      }
+    };
 
     try {
       logger.info("[useIPhoneSync] Starting sync for device:", device.udid);
@@ -1067,8 +1131,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
 
       if (!result) {
         logger.error("[useIPhoneSync] Sync returned null result");
-        setSyncStatus("error");
-        setError("Sync service returned no result");
+        failStart("Sync service returned no result");
         return;
       }
 
@@ -1086,10 +1149,9 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           logger.info("[useIPhoneSync] iPhone backups are Apple-encrypted; showing the turn-off steps");
           setAppleEncryptedBackup(true);
         } else {
-          logger.error("[useIPhoneSync] Sync failed:", result.error);
+          logger.error("[useIPhoneSync] Sync failed:", result.error, { errorCode: result.errorCode });
         }
-        setSyncStatus("error");
-        setError(result.error);
+        failStart(result.error, result.errorCode);
       }
     } catch (err) {
       const errorMessage =
@@ -1099,10 +1161,25 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
         return;
       }
       logger.error("[useIPhoneSync] Sync error:", errorMessage);
-      setSyncStatus("error");
-      setError(errorMessage);
+      failStart(errorMessage);
     }
-  }, [device, isWindows]);
+  }, [device, isWindows, armRetryCooldown]);
+
+  const startSync = useCallback(async () => {
+    // BACKLOG-3816: the buttons are disabled during the hold; this is the backstop.
+    if (retryAvailableAt !== null && Date.now() < retryAvailableAt) {
+      logger.info("[useIPhoneSync] Sync not started - waiting for the iPhone to finish the last session");
+      return;
+    }
+    // BACKLOG-3816: "Getting ready…" from the click until the request is handed to main or
+    // refused. Cleared below when it is handed over, and by the finally on every early return.
+    setIsStarting(true);
+    try {
+      await startSyncInner();
+    } finally {
+      setIsStarting(false);
+    }
+  }, [retryAvailableAt, startSyncInner]);
 
   // Cancel ongoing sync
   // BACKLOG-3816: `trigger` names the control that asked; main records it on the run.
@@ -1280,6 +1357,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     installDriverStatus,
     installDriverError,
     recoverInstallDriver,
+    isStarting,
+    retryAvailableAt,
     startSync,
     cancelSync,
     dismissSync,

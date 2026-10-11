@@ -6,6 +6,16 @@ import { SyncLockBanner } from "../sync/SyncLockBanner";
 import logger from "../../utils/logger";
 import { isWindowsArm64 } from "../../utils/platform";
 import { SyncStepChangeLog } from "../../utils/syncStepLog";
+import { useRetryCountdown } from "../../utils/syncRetryCooldown";
+import { RetryCooldownNotice, SyncStartButtonContent } from "./SyncStartButtonContent";
+
+/**
+ * BACKLOG-3816: the error screen never shows "Sync Failed" alone. The hook keeps a failed
+ * sync's message across a reconnect; this covers any path that still reaches the screen
+ * without one.
+ */
+export const SYNC_FAILED_NO_REASON_MESSAGE =
+  "The sync stopped before it finished. Check that your iPhone is connected and unlocked, then select Try Again.";
 
 interface IPhoneSyncFlowProps {
   /**
@@ -59,7 +69,10 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     cancelSync,
     dismissSync,
     checkSyncStatus,
+    isStarting,
+    retryAvailableAt,
   } = useIPhoneSyncContext();
+  const retrySecondsLeft = useRetryCountdown(retryAvailableAt);
 
   // Determine if we're actively syncing
   const isSyncing = syncStatus === "syncing";
@@ -146,6 +159,8 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           isInstallingDriver={installDriverStatus === "installing"}
           driverInstallError={installDriverError}
           isWindowsArm64={isWindowsArm64()}
+          isStarting={isStarting}
+          retryAvailableAt={retryAvailableAt}
         />
       )}
 
@@ -296,9 +311,9 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
             </svg>
           </div>
           <h3 className="text-xl font-semibold text-gray-800">Sync Failed</h3>
-          {error && (
-            <p className="text-red-500 mt-2 max-w-sm">{error}</p>
-          )}
+          <p className="text-red-500 mt-2 max-w-sm" data-testid="sync-error-message">
+            {error || SYNC_FAILED_NO_REASON_MESSAGE}
+          </p>
           <div className="flex gap-3 mt-6">
             <button
               onClick={() => { logger.info("[IPhoneSyncFlow] Error Close clicked"); void cancelSync("error-close"); onClose?.(); }}
@@ -333,11 +348,13 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
                   void cancelSync("try-again-no-device");
                 }
               }}
-              className="px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-all"
+              disabled={isStarting || retrySecondsLeft > 0}
+              className="px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Try Again
+              <SyncStartButtonContent isStarting={isStarting} label="Try Again" />
             </button>
           </div>
+          <RetryCooldownNotice secondsLeft={retrySecondsLeft} />
         </div>
       )}
 
