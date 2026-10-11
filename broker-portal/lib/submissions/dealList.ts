@@ -21,6 +21,47 @@
 
 export const LINK_COLUMNS = 'id, parent_submission_id, status, created_at';
 
+/**
+ * The broker Submissions list's link read — BACKLOG-3904. Adds what search and
+ * the agent filter match on. Broker list only: My Transactions keeps
+ * LINK_COLUMNS. Matched on the HEAD (the producer re-reads the address on
+ * every version, so an older version's address can differ).
+ */
+export const BROKER_LINK_COLUMNS = `${LINK_COLUMNS}, submitted_by, property_address, property_city`;
+
+export interface BrokerChainLink extends ChainLink {
+  submitted_by: string | null;
+  property_address: string | null;
+  property_city: string | null;
+}
+
+/** Longest search text acted on; the rest is ignored. */
+export const MAX_SEARCH_LENGTH = 100;
+
+/** A submitter's name and email, as resolveUserIdentities returns them. */
+export interface Identity {
+  name: string;
+  email: string | null;
+}
+
+/**
+ * Whether a deal head matches a search: case-insensitive substring of the
+ * address, the city, or (when identities were looked up) the submitter's name
+ * or email. An empty search matches every deal.
+ */
+export function headMatchesSearch(
+  head: BrokerChainLink,
+  search: string,
+  identities: ReadonlyMap<string, Identity> | null
+): boolean {
+  const q = search.trim().toLowerCase();
+  if (q === '') return true;
+  const who = head.submitted_by && identities ? identities.get(head.submitted_by) : undefined;
+  return [head.property_address, head.property_city, who?.name, who?.email].some(
+    (field) => typeof field === 'string' && field.toLowerCase().includes(q)
+  );
+}
+
 /** PostgREST caps an unranged read at max_rows (supabase/config.toml: 1000). */
 export const READ_BLOCK = 1000;
 
@@ -58,7 +99,7 @@ interface ReadResult {
 }
 
 /** The head of every chain among the given rows, in the order given. */
-export function selectDealHeads(rows: ChainLink[]): ChainLink[] {
+export function selectDealHeads<L extends ChainLink>(rows: L[]): L[] {
   const landed = rows.filter((r) => r.status !== 'uploading');
   const superseded = new Set<string>();
   for (const r of landed) {
@@ -85,28 +126,44 @@ export interface DealPage<T> {
   error: unknown | null;
 }
 
-export async function loadDealPage<T extends { id: string }>(args: {
-  /** Chain links of every visible row, scoped as the list is, WITHOUT the status filter. */
-  readLinks: (_from: number, _to: number) => PromiseLike<ReadResult>;
+/**
+ * Read 1: the head of every deal visible to `readLinks` (unfiltered, unsorted).
+ * `error` is set when a block read failed.
+ */
+export async function readDealHeads<L extends ChainLink = ChainLink>(
+  readLinks: (_from: number, _to: number) => PromiseLike<ReadResult>
+): Promise<{ heads: L[]; error: unknown | null }> {
+  const links: L[] = [];
+  for (let block = 0; block < MAX_BLOCKS; block++) {
+    const from = block * READ_BLOCK;
+    const { data, error } = await readLinks(from, from + READ_BLOCK - 1);
+    if (error) return { heads: [], error };
+    const got = (data ?? []) as L[];
+    links.push(...got);
+    if (got.length < READ_BLOCK) break;
+  }
+  return { heads: selectDealHeads(links), error: null };
+}
+
+/**
+ * Read 2: filter the heads (status on the head, plus any `match`), sort newest
+ * first, count, clamp the page, and read that page's full rows. Every filter
+ * applies BEFORE the count and the slice.
+ */
+export async function pageOfHeads<T extends { id: string }, L extends ChainLink = ChainLink>(args: {
+  heads: L[];
   /** Full rows for these ids, scoped as the list is. Never called with []. */
   readRows: (_ids: string[]) => PromiseLike<ReadResult>;
   /** A status filter, matched on the head (see headMatchesFilter); null keeps every deal. */
   status: string | null;
+  /** Any further per-head filter (search, agent). */
+  match?: (_head: L) => boolean;
   page: number;
   pageSize: number;
 }): Promise<DealPage<T>> {
-  const links: ChainLink[] = [];
-  for (let block = 0; block < MAX_BLOCKS; block++) {
-    const from = block * READ_BLOCK;
-    const { data, error } = await args.readLinks(from, from + READ_BLOCK - 1);
-    if (error) return { rows: [], total: 0, page: 1, totalPages: 1, error };
-    const got = (data ?? []) as ChainLink[];
-    links.push(...got);
-    if (got.length < READ_BLOCK) break;
-  }
-
-  const heads = selectDealHeads(links)
-    .filter((h) => headMatchesFilter(h.status, args.status))
+  const match = args.match ?? (() => true);
+  const heads = args.heads
+    .filter((h) => headMatchesFilter(h.status, args.status) && match(h))
     .sort(compareNewestFirst);
 
   const total = heads.length;
@@ -123,4 +180,19 @@ export async function loadDealPage<T extends { id: string }>(args: {
   const byId = new Map(((data ?? []) as T[]).map((r) => [r.id, r]));
   const rows = pageIds.map((id) => byId.get(id)).filter((r): r is T => r !== undefined);
   return { rows, total, page, totalPages, error: null };
+}
+
+export async function loadDealPage<T extends { id: string }>(args: {
+  /** Chain links of every visible row, scoped as the list is, WITHOUT the status filter. */
+  readLinks: (_from: number, _to: number) => PromiseLike<ReadResult>;
+  /** Full rows for these ids, scoped as the list is. Never called with []. */
+  readRows: (_ids: string[]) => PromiseLike<ReadResult>;
+  /** A status filter, matched on the head (see headMatchesFilter); null keeps every deal. */
+  status: string | null;
+  page: number;
+  pageSize: number;
+}): Promise<DealPage<T>> {
+  const { heads, error } = await readDealHeads(args.readLinks);
+  if (error) return { rows: [], total: 0, page: 1, totalPages: 1, error };
+  return pageOfHeads<T>({ ...args, heads });
 }
