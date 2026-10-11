@@ -1,0 +1,21 @@
+{
+  "_doc": "BACKLOG-3845 paid_through parity corpus. Read by the SQL harness (control k03, via _override_effective and the three resolvers) and by tests/offline-pass/paidThroughParity-3845.test.ts (parsePaidThrough). 'override' is the override object exactly as stored; 'entitled' is the expected answer at a time between 2021 and 2098. Every date-time that is effective or expired carries an explicit offset.",
+  "cases": [
+    { "name": "absent",              "override": { "enabled": true },                                            "entitled": true },
+    { "name": "json-null",           "override": { "enabled": true, "paid_through": null },                      "entitled": true },
+    { "name": "future-z",            "override": { "enabled": true, "paid_through": "2098-01-01T00:00:00Z" },    "entitled": true },
+    { "name": "future-to_jsonb",     "override": { "enabled": true, "paid_through": "2098-01-01T02:00:00.123456+00:00", "source": "stripe" }, "entitled": true },
+    { "name": "future-offset",       "override": { "enabled": true, "paid_through": "2098-06-30T23:59:59-07:00" }, "entitled": true },
+    { "name": "past-z",              "override": { "enabled": true, "paid_through": "2020-01-01T00:00:00Z" },    "entitled": false },
+    { "name": "past-to_jsonb",       "override": { "enabled": true, "paid_through": "2020-01-01T02:00:00.123456+00:00", "source": "stripe" }, "entitled": false },
+    { "name": "soon",                "override": { "enabled": true, "paid_through": "soon" },                    "entitled": false },
+    { "name": "empty-string",        "override": { "enabled": true, "paid_through": "" },                        "entitled": false },
+    { "name": "number",              "override": { "enabled": true, "paid_through": 12345 },                     "entitled": false },
+    { "name": "boolean",             "override": { "enabled": true, "paid_through": true },                      "entitled": false },
+    { "name": "object",              "override": { "enabled": true, "paid_through": {} },                        "entitled": false },
+    { "name": "bad-month-day",       "override": { "enabled": true, "paid_through": "2026-13-45T00:00:00Z" },    "entitled": false },
+    { "name": "garbage-after-T",     "override": { "enabled": true, "paid_through": "2026-01-01Tgarbage" },      "entitled": false },
+    { "name": "date-only",           "override": { "enabled": true, "paid_through": "2098-01-01" },              "entitled": false },
+    { "name": "space-separator",     "override": { "enabled": true, "paid_through": "2098-01-01 00:00:00+00" },  "entitled": false }
+  ]
+}
