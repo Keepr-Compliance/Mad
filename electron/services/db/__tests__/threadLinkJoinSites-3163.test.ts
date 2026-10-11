@@ -263,7 +263,10 @@ const SITES: Site[] = [
   {
     name: "attachmentAuditStatsSql text attachment count",
     alias: "m",
-    threadIndex: MSG_THREAD,
+    // The window bounds must stay on the thread index: a one-month window over a
+    // heavy deal otherwise reads every text of each linked thread (measured at PC
+    // scale: 14-25 ms with the bounds in the index, ~1.1 s without).
+    threadIndex: /idx_messages_thread_sent \(thread_id=\? AND sent_at>\? AND sent_at<\?\)/,
     sql: () => { let t = ""; prepareTextAttachmentCount({ prepare: (x: string) => { t = x; return null as never; } } as never, { hasStart: true, hasEnd: true }); return t; },
     run: () => {
       const db = { prepare: (x: string) => realDb!.prepare(fix(x)) };
