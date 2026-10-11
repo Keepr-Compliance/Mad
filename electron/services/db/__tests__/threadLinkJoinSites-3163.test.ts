@@ -26,6 +26,7 @@
 import { readFileSync } from "fs";
 import path from "path";
 import { openTestDb, type TestDb } from "../../__tests__/helpers/syncSqliteDriver";
+import { ALL_TEXT_IDS } from "../../__tests__/helpers/selectedTextIds";
 
 let realDb: TestDb | null = null;
 type Variant = "shipped" | "oldSql" | "noUserFilter";
@@ -186,12 +187,11 @@ const ATTACH_IDS = (): string[] => {
 };
 function captureSubmissionSql(): string {
   prepared.length = 0;
-  getTransactionMessages(TX, null, null, new Set());
+  getTransactionMessages(TX, null, null, ALL_TEXT_IDS);
   const s = prepared.find((x) => /c\.thread_id = m\.thread_id/.test(x));
   if (!s) throw new Error("submission SQL not captured");
   return s;
 }
-const allMessageIds = () => new Set((realDb!.prepare("SELECT id FROM messages").all() as Array<{ id: string }>).map((r) => r.id));
 
 const SITES: Site[] = [
   {
@@ -199,7 +199,7 @@ const SITES: Site[] = [
     alias: "m",
     threadIndex: MSG_THREAD,
     sql: captureSubmissionSql,
-    run: () => getTransactionMessages(TX, new Date("2026-01-01T00:00:00Z"), new Date("2026-12-31T00:00:00Z"), allMessageIds()).map((m) => m.id),
+    run: () => getTransactionMessages(TX, new Date("2026-01-01T00:00:00Z"), new Date("2026-12-31T00:00:00Z"), ALL_TEXT_IDS).map((m) => m.id),
   },
   {
     name: "transactionSearch buildTextQuery (deal search)",
