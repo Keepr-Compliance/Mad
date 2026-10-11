@@ -91,6 +91,12 @@ describe('Drawer', () => {
     }
   });
 
+  it('is modal: page content behind it is hidden from assistive tech while open', () => {
+    render(<Harness />);
+    expect(screen.queryByRole('button', { name: 'Open menu' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open menu', hidden: true })).toBeInTheDocument();
+  });
+
   it('R4: closes when the viewport crosses to the desktop breakpoint', () => {
     render(<Harness />);
     const desktop = listeners.filter((l) => l.query === '(min-width: 768px)');

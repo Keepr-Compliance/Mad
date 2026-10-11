@@ -6,9 +6,12 @@ import { BottomSheet } from './bottom-sheet';
 function Harness() {
   const [open, setOpen] = React.useState(true);
   return (
+    <>
+    <button type="button">Page behind</button>
     <BottomSheet open={open} onOpenChange={setOpen} title="Filters" primaryAction={<button type="button">Apply</button>}>
       <p>Body</p>
     </BottomSheet>
+    </>
   );
 }
 
@@ -16,6 +19,11 @@ describe('BottomSheet', () => {
   it('is a modal dialog named by its title', () => {
     render(<Harness />);
     expect(screen.getByRole('dialog', { name: 'Filters' })).toBeInTheDocument();
+  });
+
+  it('is modal: the page behind is hidden from assistive tech while open', () => {
+    render(<Harness />);
+    expect(screen.queryByRole('button', { name: 'Page behind' })).toBeNull();
   });
 
   it('closes on Escape and on the Close button', async () => {
