@@ -348,6 +348,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
                   syncOrchestrator.completeExternalSync('iphone', {
                     status: 'error',
                     error: 'Device disconnected during sync',
+                    errorKind: 'device_disconnected',
                   });
                 });
                 return "error";

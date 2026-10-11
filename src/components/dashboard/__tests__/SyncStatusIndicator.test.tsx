@@ -43,6 +43,7 @@ const createSyncItem = (
   external?: boolean,
   phase?: string,
   reconnectProvider?: 'microsoft' | 'google',
+  errorKind?: 'device_disconnected',
 ): SyncItem => ({
   type,
   status,
@@ -51,6 +52,7 @@ const createSyncItem = (
   external,
   phase,
   reconnectProvider,
+  errorKind,
 });
 
 // Helper to create orchestrator state
@@ -351,6 +353,67 @@ describe("SyncStatusIndicator", () => {
       expect(screen.getByText("Auth token expired")).toBeInTheDocument();
       expect(screen.queryByText("Sync Complete")).not.toBeInTheDocument();
       expect(screen.queryByText("All data synced successfully")).not.toBeInTheDocument();
+    });
+
+    describe("iPhone unplugged mid-sync (BACKLOG-3885)", () => {
+      const finish = (running: SyncItem[], done: SyncItem[]) => {
+        mockIsAllowed.mockImplementation((key: string) => key !== "ai_detection");
+        mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(running, true, 25));
+        const { rerender } = render(<SyncStatusIndicator />);
+        mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(done, false, 50));
+        rerender(<SyncStatusIndicator />);
+        return rerender;
+      };
+
+      it("a disconnect shows the stopped copy and NO support-ticket line", () => {
+        const disc = createSyncItem('iphone', 'error', 0, 'Device disconnected during sync', true, undefined, undefined, 'device_disconnected');
+        finish([createSyncItem('iphone', 'running', 40, undefined, true)], [disc]);
+
+        expect(screen.getByTestId("sync-status-complete")).toBeInTheDocument();
+        expect(screen.getByText("Last sync stopped")).toBeInTheDocument();
+        expect(screen.getByText("Your iPhone was disconnected. Reconnect it and sync again.")).toBeInTheDocument();
+        expect(screen.queryByText("Sync Completed with Errors")).not.toBeInTheDocument();
+        expect(screen.queryByText(/submit a support ticket/)).not.toBeInTheDocument();
+        expect(screen.queryByText("Device disconnected during sync")).not.toBeInTheDocument();
+      });
+
+      it("another iPhone error keeps the old copy and the support line", () => {
+        const other = createSyncItem('iphone', 'error', 0, 'Backup failed', true);
+        finish([createSyncItem('iphone', 'running', 40, undefined, true)], [other]);
+
+        expect(screen.getByText("Sync Completed with Errors")).toBeInTheDocument();
+        expect(screen.getByText("Backup failed")).toBeInTheDocument();
+        expect(screen.getByText(/submit a support ticket/)).toBeInTheDocument();
+        expect(screen.queryByText("Last sync stopped")).not.toBeInTheDocument();
+      });
+
+      it("a disconnect alongside a different error keeps the old copy and the support line", () => {
+        const disc = createSyncItem('iphone', 'error', 0, 'Device disconnected during sync', true, undefined, undefined, 'device_disconnected');
+        finish(
+          [createSyncItem('iphone', 'running', 40, undefined, true), createSyncItem('emails', 'running', 50)],
+          [disc, createSyncItem('emails', 'error', 0, 'Auth token expired')],
+        );
+
+        expect(screen.getByText("Sync Completed with Errors")).toBeInTheDocument();
+        expect(screen.getByText(/submit a support ticket/)).toBeInTheDocument();
+        expect(screen.queryByText("Last sync stopped")).not.toBeInTheDocument();
+      });
+
+      it("the next successful sync clears it", () => {
+        const disc = createSyncItem('iphone', 'error', 0, 'Device disconnected during sync', true, undefined, undefined, 'device_disconnected');
+        const rerender = finish([createSyncItem('iphone', 'running', 40, undefined, true)], [disc]);
+        expect(screen.getByText("Last sync stopped")).toBeInTheDocument();
+
+        // New sync starts, then completes cleanly.
+        mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState([createSyncItem('iphone', 'running', 10, undefined, true)], true, 10));
+        rerender(<SyncStatusIndicator />);
+        mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState([createSyncItem('iphone', 'complete', 100, undefined, true)], false, 100));
+        rerender(<SyncStatusIndicator />);
+
+        expect(screen.queryByText("Last sync stopped")).not.toBeInTheDocument();
+        expect(screen.queryByText("Sync Completed with Errors")).not.toBeInTheDocument();
+        expect(screen.getByText("Sync Complete")).toBeInTheDocument();
+      });
     });
 
     it("shows the provider-specific reconnect message for a dead email token (BACKLOG-2127)", () => {

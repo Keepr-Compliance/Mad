@@ -189,7 +189,15 @@ export interface SyncItem {
    * — consumers must NOT parse `error` text to decide whether to show it.
    */
   reconnectProvider?: ReconnectProvider;
+  /**
+   * BACKLOG-3885: typed reason for an error that is not a fault. The iPhone was
+   * unplugged mid-transfer, so the run stopped. Drives the "Last sync stopped"
+   * completion card (no support-ticket line). Consumers must NOT parse `error`.
+   */
+  errorKind?: SyncErrorKind;
 }
+
+export type SyncErrorKind = 'device_disconnected';
 
 export interface SyncOrchestratorState {
   isRunning: boolean;
@@ -1212,7 +1220,7 @@ class SyncOrchestratorServiceClass {
    * Mark an external sync as complete or error.
    * After completion, recalculates isRunning from remaining queue items.
    */
-  completeExternalSync(type: SyncType, result: { status: 'complete' | 'error'; error?: string; summary?: string }): void {
+  completeExternalSync(type: SyncType, result: { status: 'complete' | 'error'; error?: string; errorKind?: SyncErrorKind; summary?: string }): void {
     const existing = this.state.queue.find((item) => item.type === type && item.external);
     if (!existing) return;
 
@@ -1222,6 +1230,7 @@ class SyncOrchestratorServiceClass {
       status: result.status,
       progress: result.status === 'complete' ? 100 : existing.progress,
       error: result.error,
+      errorKind: result.errorKind,
       phase: undefined,
       ...(result.summary ? { summary: result.summary } : {}),
     });
