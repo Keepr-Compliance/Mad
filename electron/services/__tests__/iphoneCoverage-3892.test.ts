@@ -26,7 +26,13 @@ import type { Database as DatabaseType } from "better-sqlite3";
 
 const DRIVER = nodePath.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers");
 
-jest.mock("electron", () => ({ app: { getPath: jest.fn().mockReturnValue("/tmp/keepr-3892-coverage") } }));
+// A fresh userData directory per run (atRest.testIsolation): never a fixed shared path.
+jest.mock("electron", () => ({
+  app: {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()),
+  },
+}));
 jest.mock("electron-log", () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
 jest.mock("@sentry/electron/main", () => ({ addBreadcrumb: jest.fn(), captureException: jest.fn(), captureMessage: jest.fn() }));
 jest.mock("../logService", () => {
@@ -62,6 +68,9 @@ import { checkExportCompleteness, getAuditCoverage, getSourceCoverage, getTransa
 import { handleKeys, type ChatFloorPlan } from "../iphoneChatFloors";
 import type { SyncResult } from "../deviceSyncOrchestrator";
 import type { iOSMessage, iOSConversation } from "../../types/iosMessages";
+import { removeTestUserDataDir } from "./helpers/testUserData";
+
+afterAll(() => removeTestUserDataDir());
 
 function loadDriver(): (new (file: string) => DatabaseType) | null {
   try {
