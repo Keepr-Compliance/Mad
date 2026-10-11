@@ -15,13 +15,24 @@ import { NextResponse } from 'next/server';
 
 // ---- Mocks ---------------------------------------------------------------
 
+import { BillingDb, eqValue, type Row } from '../../../helpers/billingDb';
+
 const mockGetUser = jest.fn();
 const mockRpc = jest.fn();
 const mockFrom = jest.fn();
 const mockCheckoutCreate = jest.fn();
+const mockCheckoutExpire = jest.fn();
+const mockCheckoutRetrieve = jest.fn();
 const mockConstructEvent = jest.fn();
 const mockCustomersCreate = jest.fn();
 const mockPaymentIntentsCreate = jest.fn();
+const mockPaymentIntentsRetrieve = jest.fn();
+const mockCaptureMessage = jest.fn();
+
+jest.mock('@sentry/nextjs', () => ({
+  captureMessage: (...a: unknown[]) => mockCaptureMessage(...a),
+  captureException: jest.fn(),
+}));
 
 jest.mock('@supabase/supabase-js', () => ({
   createClient: () => ({ auth: { getUser: mockGetUser } }),
@@ -43,9 +54,9 @@ class StripeInvalidRequestErrorMock extends StripeErrorMock {}
 
 jest.mock('stripe', () => {
   const StripeMock = jest.fn().mockImplementation(() => ({
-    checkout: { sessions: { create: mockCheckoutCreate } },
+    checkout: { sessions: { create: mockCheckoutCreate, expire: mockCheckoutExpire, retrieve: mockCheckoutRetrieve } },
     customers: { create: mockCustomersCreate },
-    paymentIntents: { create: mockPaymentIntentsCreate },
+    paymentIntents: { create: mockPaymentIntentsCreate, retrieve: mockPaymentIntentsRetrieve },
     webhooks: { constructEvent: mockConstructEvent },
   }));
   // Preserve the error classes shape used by the charge route.
@@ -66,6 +77,52 @@ function bearer(token: string): Request {
   });
 }
 
+// Synthetic ids. The test customer stands in for the P0-a TEST customer
+// (scratchpad p0a-fixtures, customer objects); the live one is a placeholder
+// never sent to Stripe (plan v3 RC9 C-9 fixture rule).
+const TEST_CUSTOMER = 'cus_FX3845test';
+const LIVE_CUSTOMER = 'cus_LIVE_PLACEHOLDER';
+
+function customerRow(mode: 'test' | 'live', over: Row = {}): Row {
+  return {
+    user_id: 'USER-1',
+    stripe_customer_id: mode === 'test' ? TEST_CUSTOMER : LIVE_CUSTOMER,
+    default_payment_method_id: mode === 'test' ? 'pm_FX3845test' : 'pm_FX3845live',
+    created_at: '2026-10-01T00:00:00+00:00',
+    updated_at: '2026-10-01T00:00:00+00:00',
+    stripe_mode: mode,
+    ...over,
+  };
+}
+
+/** USER-1's personal organization; is_test decides whether test mode serves them. */
+function personalOrg(isTest: boolean): Row {
+  return { id: 'ORG-P1', personal_owner_user_id: 'USER-1', is_test: isTest };
+}
+
+let db: BillingDb;
+function useDb(seed: Record<string, Row[]>): BillingDb {
+  db = new BillingDb(seed);
+  mockFrom.mockImplementation(db.from);
+  return db;
+}
+
+function quoteRpc(cents = 1499) {
+  mockRpc.mockImplementation((fn: string) => {
+    if (fn === 'get_next_unlock_quote') {
+      return Promise.resolve({
+        data: [{ next_unit_index: 1, unit_price_cents: cents, currency: 'usd', pricing_tier_id: 'TIER-1' }],
+        error: null,
+      });
+    }
+    return Promise.resolve({ data: null, error: null });
+  });
+}
+
+function signedIn() {
+  mockGetUser.mockResolvedValue({ data: { user: { id: 'USER-1', email: 'u@example.com' } }, error: null });
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   process.env.STRIPE_SECRET_KEY = 'sk_test_dummy';
@@ -73,6 +130,7 @@ beforeEach(() => {
   process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://x.supabase.co';
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'anon_dummy';
   process.env.NEXT_PUBLIC_APP_URL = 'https://app.keeprcompliance.com';
+  useDb({ organizations: [personalOrg(true)] });
 });
 
 // ---- R5: auth ------------------------------------------------------------
@@ -103,30 +161,10 @@ describe('R5 auth — desktop Bearer JWT verification', () => {
 
 describe('Quote integrity + C-A metadata propagation', () => {
   function wireHappyCheckout(quoteCents: number) {
-    mockGetUser.mockResolvedValue({
-      data: { user: { id: 'USER-1', email: 'u@example.com' } },
-      error: null,
-    });
-    // service.rpc('get_next_unlock_quote') -> row
-    mockRpc.mockImplementation((fn: string) => {
-      if (fn === 'get_next_unlock_quote') {
-        return Promise.resolve({
-          data: [{ next_unit_index: 1, unit_price_cents: quoteCents, currency: 'usd', pricing_tier_id: 'TIER-1' }],
-          error: null,
-        });
-      }
-      return Promise.resolve({ data: null, error: null });
-    });
-    // service.from(...) chainable: stripe_customers select -> existing customer; insert -> ok
-    mockFrom.mockImplementation((table: string) => {
-      if (table === 'stripe_customers') {
-        return {
-          select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { stripe_customer_id: 'cus_1' }, error: null }) }) }),
-        };
-      }
-      // payment_intents insert
-      return { insert: () => Promise.resolve({ error: null }) };
-    });
+    signedIn();
+    quoteRpc(quoteCents);
+    // is_test user with an existing test customer (test-mode key).
+    useDb({ organizations: [personalOrg(true)], stripe_customers: [customerRow('test')] });
     mockCheckoutCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe/x', payment_intent: 'pi_1' });
   }
 
@@ -174,53 +212,22 @@ describe('POST /api/payments/charge — off-session outcomes (BACKLOG-2088)', ()
     });
   }
 
-  // Records the `stripe_customers` update(s) so we can assert the stale-cache clear.
+  // The stripe_customers update(s) and payment_intents insert count, read
+  // back from the recording fake.
   let customerUpdates: Array<Record<string, unknown>>;
   let paymentIntentInserts: number;
+  function readBack(): void {
+    customerUpdates = db.callsTo('stripe_customers', 'update').map((c) => c.payload as Record<string, unknown>);
+    paymentIntentInserts = db.callsTo('payment_intents', 'insert').length;
+  }
 
   function wireChargeContext(opts: { savedPm?: string | null } = {}): void {
     const savedPm = opts.savedPm === undefined ? 'pm_saved_1' : opts.savedPm;
-    customerUpdates = [];
-    paymentIntentInserts = 0;
-
-    mockGetUser.mockResolvedValue({
-      data: { user: { id: 'USER-1', email: 'u@example.com' } },
-      error: null,
-    });
-    mockRpc.mockImplementation((fn: string) => {
-      if (fn === 'get_next_unlock_quote') {
-        return Promise.resolve({
-          data: [{ next_unit_index: 1, unit_price_cents: 1499, currency: 'usd', pricing_tier_id: 'TIER-1' }],
-          error: null,
-        });
-      }
-      return Promise.resolve({ data: null, error: null });
-    });
-    mockFrom.mockImplementation((table: string) => {
-      if (table === 'stripe_customers') {
-        return {
-          select: () => ({
-            eq: () => ({
-              maybeSingle: () =>
-                Promise.resolve({
-                  data: { stripe_customer_id: 'cus_1', default_payment_method_id: savedPm },
-                  error: null,
-                }),
-            }),
-          }),
-          update: (patch: Record<string, unknown>) => {
-            customerUpdates.push(patch);
-            return { eq: () => Promise.resolve({ error: null }) };
-          },
-        };
-      }
-      // payment_intents insert
-      return {
-        insert: () => {
-          paymentIntentInserts += 1;
-          return Promise.resolve({ error: null });
-        },
-      };
+    signedIn();
+    quoteRpc(1499);
+    useDb({
+      organizations: [personalOrg(true)],
+      stripe_customers: [customerRow('test', { default_payment_method_id: savedPm })],
     });
   }
 
@@ -240,6 +247,7 @@ describe('POST /api/payments/charge — off-session outcomes (BACKLOG-2088)', ()
     const res = await POST(chargeReq());
     expect(res.status).toBe(200);
     expect(await (res as NextResponse).json()).toMatchObject({ succeeded: true, payment_intent_id: 'pi_ok' });
+    readBack();
     expect(paymentIntentInserts).toBe(1);
   });
 
@@ -271,6 +279,7 @@ describe('POST /api/payments/charge — off-session outcomes (BACKLOG-2088)', ()
     expect(json.succeeded).toBeUndefined();
 
     // The stale saved-card cache is cleared so the next attempt routes to Checkout.
+    readBack();
     expect(customerUpdates).toContainEqual({ default_payment_method_id: null });
     // No PI row is written for a charge that never created a PaymentIntent.
     expect(paymentIntentInserts).toBe(0);
@@ -291,6 +300,7 @@ describe('POST /api/payments/charge — off-session outcomes (BACKLOG-2088)', ()
     expect(json).toMatchObject({ declined: true });
     expect(json.succeeded).toBeUndefined();
     // No "created" PI row for an unpaid intent.
+    readBack();
     expect(paymentIntentInserts).toBe(0);
   });
 });
@@ -325,6 +335,7 @@ describe('Webhook signature verification', () => {
     mockConstructEvent.mockReturnValue({
       id: 'evt_1',
       type: 'payment_intent.succeeded',
+      livemode: false,
       data: {
         object: {
           id: 'pi_1',
@@ -334,10 +345,6 @@ describe('Webhook signature verification', () => {
       },
     });
     mockRpc.mockResolvedValue({ data: { unlocked: true, already_fulfilled: false, balance_after: 0 }, error: null });
-    mockFrom.mockImplementation(() => ({
-      update: () => ({ eq: () => ({ in: () => Promise.resolve({ error: null }) }) }),
-      insert: () => Promise.resolve({ error: null }),
-    }));
 
     const { POST } = await import('@/app/api/payments/webhook/route');
     const req = new Request('https://x/api/payments/webhook', {
@@ -359,11 +366,9 @@ describe('Webhook signature verification', () => {
     mockConstructEvent.mockReturnValue({
       id: 'evt_2',
       type: 'checkout.session.completed',
-      data: { object: { id: 'cs_1', customer: 'cus_1', payment_intent: null, metadata: { user_id: 'USER-1' } } },
+      livemode: false,
+      data: { object: { id: 'cs_1', customer: TEST_CUSTOMER, payment_intent: null, metadata: { user_id: 'USER-1' } } },
     });
-    mockFrom.mockImplementation(() => ({
-      update: () => ({ eq: () => ({ in: () => Promise.resolve({ error: null }) }) }),
-    }));
     const { POST } = await import('@/app/api/payments/webhook/route');
     const req = new Request('https://x/api/payments/webhook', {
       method: 'POST',
@@ -384,6 +389,7 @@ describe('Webhook charge.dispute.created → account suspension', () => {
     mockConstructEvent.mockReturnValue({
       id: 'evt_dispute_1',
       type: 'charge.dispute.created',
+      livemode: false,
       data: {
         object: {
           id: 'dp_123',
@@ -393,23 +399,11 @@ describe('Webhook charge.dispute.created → account suspension', () => {
         },
       },
     });
-    // service.from('payment_intents').select().eq().maybeSingle() → the stored row
-    // that maps this PI to a user (identity comes from OUR row, never dispute md).
-    mockFrom.mockImplementation((table: string) => {
-      if (table === 'payment_intents') {
-        return {
-          select: () => ({
-            eq: () => ({
-              maybeSingle: () =>
-                Promise.resolve({
-                  data: { user_id: 'USER-DISPUTED', local_transaction_id: 'TX-DISPUTED' },
-                  error: null,
-                }),
-            }),
-          }),
-        };
-      }
-      return { update: () => ({ eq: () => ({ in: () => Promise.resolve({ error: null }) }) }) };
+    // The stored row that maps this PI to a user (identity comes from OUR row, never dispute md).
+    useDb({
+      payment_intents: [
+        { id: 'PIROW-1', user_id: 'USER-DISPUTED', local_transaction_id: 'TX-DISPUTED', stripe_payment_intent_id: 'pi_disputed', stripe_mode: 'test' },
+      ],
     });
     mockRpc.mockResolvedValue({
       data: { already_suspended: false, user_id: 'USER-DISPUTED' },
@@ -445,13 +439,10 @@ describe('Webhook charge.dispute.created → account suspension', () => {
     mockConstructEvent.mockReturnValue({
       id: 'evt_dispute_2',
       type: 'charge.dispute.created',
+      livemode: false,
       data: { object: { id: 'dp_orphan', payment_intent: 'pi_unknown', amount: 500, created: 1 } },
     });
-    mockFrom.mockImplementation(() => ({
-      select: () => ({
-        eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }),
-      }),
-    }));
+    useDb({ payment_intents: [] });
 
     const { POST } = await import('@/app/api/payments/webhook/route');
     const req = new Request('https://x/api/payments/webhook', {
@@ -470,18 +461,12 @@ describe('Webhook charge.dispute.created → account suspension', () => {
     mockConstructEvent.mockReturnValue({
       id: 'evt_dispute_read_err',
       type: 'charge.dispute.created',
+      livemode: false,
       data: { object: { id: 'dp_readfail', payment_intent: 'pi_readfail', amount: 700, created: 3 } },
     });
-    mockFrom.mockImplementation(() => ({
-      select: () => ({
-        eq: () => ({
-          // data:null AND error set = a real DB/PostgREST failure, distinct from
-          // the benign {data:null, error:null} genuinely-no-row case above.
-          maybeSingle: () =>
-            Promise.resolve({ data: null, error: { message: 'postgrest 503' } }),
-        }),
-      }),
-    }));
+    // data:null AND error set = a real DB/PostgREST failure, distinct from
+    // the benign {data:null, error:null} genuinely-no-row case above.
+    useDb({ payment_intents: [] }).failNext['payment_intents.select'] = { code: 'PGRST000', message: 'postgrest 503' };
 
     const { POST } = await import('@/app/api/payments/webhook/route');
     const req = new Request('https://x/api/payments/webhook', {
@@ -500,16 +485,10 @@ describe('Webhook charge.dispute.created → account suspension', () => {
     mockConstructEvent.mockReturnValue({
       id: 'evt_dispute_3',
       type: 'charge.dispute.created',
+      livemode: false,
       data: { object: { id: 'dp_err', payment_intent: 'pi_x', amount: 999, created: 2 } },
     });
-    mockFrom.mockImplementation(() => ({
-      select: () => ({
-        eq: () => ({
-          maybeSingle: () =>
-            Promise.resolve({ data: { user_id: 'U', local_transaction_id: 'T' }, error: null }),
-        }),
-      }),
-    }));
+    useDb({ payment_intents: [{ id: 'PIROW-3', user_id: 'U', local_transaction_id: 'T', stripe_payment_intent_id: 'pi_x', stripe_mode: 'test' }] });
     mockRpc.mockResolvedValue({ data: null, error: { message: 'db down' } });
 
     const { POST } = await import('@/app/api/payments/webhook/route');
@@ -532,5 +511,258 @@ describe('Reconciliation cron auth', () => {
     const req = new Request('https://x/api/cron/payment-reconcile', { headers: { authorization: 'Bearer wrong' } });
     const res = await GET(req);
     expect(res.status).toBe(401);
+  });
+});
+
+// ---- BACKLOG-3845: Stripe-mode separation --------------------------------
+
+describe('BACKLOG-3845 mode guard before any Stripe call (SR req. 10)', () => {
+  it('test key + personal org not is_test → 403, no customer, no session', async () => {
+    signedIn();
+    quoteRpc();
+    useDb({ organizations: [personalOrg(false)], stripe_customers: [] });
+    const { POST } = await import('@/app/api/payments/checkout-session/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(403);
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+    expect(mockCheckoutCreate).not.toHaveBeenCalled();
+  });
+
+  it('test key + no personal org → 403 (fails closed)', async () => {
+    signedIn();
+    quoteRpc();
+    useDb({ organizations: [], stripe_customers: [] });
+    const { POST } = await import('@/app/api/payments/checkout-session/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(403);
+    expect(mockCheckoutCreate).not.toHaveBeenCalled();
+  });
+
+  it('charge: test key + non-test user → 403, no PaymentIntent', async () => {
+    signedIn();
+    quoteRpc();
+    useDb({ organizations: [personalOrg(false)], stripe_customers: [customerRow('test')] });
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(403);
+    expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
+  });
+
+  it('live key → no is_test read; a non-test user checks out', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_live_dummy';
+    signedIn();
+    quoteRpc();
+    useDb({ organizations: [personalOrg(false)], stripe_customers: [customerRow('live')] });
+    mockCheckoutCreate.mockResolvedValue({ id: 'cs_live_1', url: 'https://checkout.stripe/live', payment_intent: null });
+    const { POST } = await import('@/app/api/payments/checkout-session/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(200);
+    expect(db.callsTo('organizations')).toHaveLength(0);
+  });
+});
+
+describe('BACKLOG-3845 C-9: a user with a test and a live customer row', () => {
+  function seedBoth(isTest = true) {
+    signedIn();
+    quoteRpc();
+    return useDb({ organizations: [personalOrg(isTest)], stripe_customers: [customerRow('test'), customerRow('live')] });
+  }
+
+  it('checkout (test key) uses the test customer and filters by mode', async () => {
+    seedBoth();
+    mockCheckoutCreate.mockResolvedValue({ id: 'cs_t', url: 'https://checkout.stripe/t', payment_intent: null });
+    const { POST } = await import('@/app/api/payments/checkout-session/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(200);
+    expect(mockCheckoutCreate.mock.calls[0][0].customer).toBe(TEST_CUSTOMER);
+    expect(eqValue(db.callsTo('stripe_customers', 'select')[0], 'stripe_mode')).toBe('test');
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+  });
+
+  it('checkout (live key) uses the live customer', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_live_dummy';
+    seedBoth(false);
+    mockCheckoutCreate.mockResolvedValue({ id: 'cs_l', url: 'https://checkout.stripe/l', payment_intent: null });
+    const { POST } = await import('@/app/api/payments/checkout-session/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(200);
+    expect(mockCheckoutCreate.mock.calls[0][0].customer).toBe(LIVE_CUSTOMER);
+  });
+
+  it('checkout (live key) with only a test row creates a live customer and leaves the test row alone', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_live_dummy';
+    signedIn();
+    quoteRpc();
+    useDb({ organizations: [personalOrg(false)], stripe_customers: [customerRow('test')] });
+    mockCustomersCreate.mockResolvedValue({ id: 'cus_FX3845new' });
+    mockCheckoutCreate.mockResolvedValue({ id: 'cs_l2', url: 'https://checkout.stripe/l2', payment_intent: null });
+    const { POST } = await import('@/app/api/payments/checkout-session/route');
+    await POST(bearer('valid'));
+    expect(mockCustomersCreate).toHaveBeenCalledTimes(1);
+    expect(mockCheckoutCreate.mock.calls[0][0].customer).toBe('cus_FX3845new');
+    expect(db.rows('stripe_customers')).toEqual([
+      customerRow('test'),
+      { user_id: 'USER-1', stripe_customer_id: 'cus_FX3845new', stripe_mode: 'live' },
+    ]);
+  });
+
+  it('charge (live key) charges the live customer and saved card', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_live_dummy';
+    seedBoth(false);
+    mockPaymentIntentsCreate.mockResolvedValue({ id: 'pi_live_ok', status: 'succeeded' });
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(200);
+    expect(mockPaymentIntentsCreate.mock.calls[0][0]).toMatchObject({ customer: LIVE_CUSTOMER, payment_method: 'pm_FX3845live' });
+  });
+
+  it('charge (test key) charges the test customer and saved card', async () => {
+    seedBoth();
+    mockPaymentIntentsCreate.mockResolvedValue({ id: 'pi_test_ok', status: 'succeeded' });
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(200);
+    expect(mockPaymentIntentsCreate.mock.calls[0][0]).toMatchObject({ customer: TEST_CUSTOMER, payment_method: 'pm_FX3845test' });
+  });
+
+  it('charge card-clear (live key) clears only the live row', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_live_dummy';
+    seedBoth(false);
+    const err = new StripeInvalidRequestErrorMock('No such PaymentMethod');
+    err.code = 'resource_missing';
+    mockPaymentIntentsCreate.mockRejectedValue(err);
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(402);
+    expect(db.rows('stripe_customers')).toEqual([
+      customerRow('test'),
+      customerRow('live', { default_payment_method_id: null }),
+    ]);
+  });
+
+  it('webhook checkout.session.completed (test event, test key) saves the card on the test row only', async () => {
+    seedBoth();
+    mockConstructEvent.mockReturnValue({
+      id: 'evt_cs_t',
+      type: 'checkout.session.completed',
+      livemode: false,
+      data: { object: { id: 'cs_t9', customer: TEST_CUSTOMER, payment_intent: 'pi_t9', metadata: { user_id: 'USER-1' } } },
+    });
+    mockPaymentIntentsRetrieve.mockResolvedValue({ id: 'pi_t9', payment_method: 'pm_FX3845new' });
+    const { POST } = await import('@/app/api/payments/webhook/route');
+    const res = await POST(new Request('https://x/api/payments/webhook', { method: 'POST', headers: { 'stripe-signature': 'ok' }, body: 'raw' }));
+    expect(res.status).toBe(200);
+    const [testRow, liveRow] = db.rows('stripe_customers');
+    expect(testRow.default_payment_method_id).toBe('pm_FX3845new');
+    expect(liveRow).toEqual(customerRow('live'));
+  });
+});
+
+describe('BACKLOG-3845 every payment_intents insert carries stripe_mode; failures are not silent', () => {
+  it('checkout insert carries the key mode', async () => {
+    signedIn();
+    quoteRpc();
+    useDb({ organizations: [personalOrg(true)], stripe_customers: [customerRow('test')] });
+    mockCheckoutCreate.mockResolvedValue({ id: 'cs_m', url: 'https://checkout.stripe/m', payment_intent: null });
+    const { POST } = await import('@/app/api/payments/checkout-session/route');
+    await POST(bearer('valid'));
+    expect(db.callsTo('payment_intents', 'insert')[0].payload).toMatchObject({ stripe_checkout_session_id: 'cs_m', stripe_mode: 'test' });
+  });
+
+  it('checkout insert failure → session expired, 500, no checkout URL (SR req. 8)', async () => {
+    signedIn();
+    quoteRpc();
+    useDb({ organizations: [personalOrg(true)], stripe_customers: [customerRow('test')] }).failNext['payment_intents.insert'] = {
+      code: '23502',
+      message: 'null value in column violates not-null constraint',
+    };
+    mockCheckoutCreate.mockResolvedValue({ id: 'cs_fail', url: 'https://checkout.stripe/fail', payment_intent: null });
+    const { POST } = await import('@/app/api/payments/checkout-session/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(await (res as NextResponse).json())).not.toContain('checkout.stripe/fail');
+    expect(mockCheckoutExpire).toHaveBeenCalledWith('cs_fail');
+    expect(mockCaptureMessage).toHaveBeenCalledWith('payment_intents insert failed at checkout', expect.anything());
+  });
+
+  it('charge inserts carry the key mode (live)', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_live_dummy';
+    signedIn();
+    quoteRpc();
+    useDb({ organizations: [personalOrg(false)], stripe_customers: [customerRow('live')] });
+    mockPaymentIntentsCreate.mockResolvedValue({ id: 'pi_m', status: 'succeeded' });
+    const { POST } = await import('@/app/api/payments/charge/route');
+    await POST(bearer('valid'));
+    expect(db.callsTo('payment_intents', 'insert')[0].payload).toMatchObject({ stripe_payment_intent_id: 'pi_m', stripe_mode: 'live' });
+  });
+
+  it('charge insert failure after a successful charge → still succeeded, reported (SR req. 8)', async () => {
+    signedIn();
+    quoteRpc();
+    useDb({ organizations: [personalOrg(true)], stripe_customers: [customerRow('test')] }).failNext['payment_intents.insert'] = {
+      code: '42703',
+      message: 'column does not exist',
+    };
+    mockPaymentIntentsCreate.mockResolvedValue({ id: 'pi_after', status: 'succeeded' });
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(200);
+    expect(mockCaptureMessage).toHaveBeenCalledWith('payment_intents insert failed at charge', expect.anything());
+  });
+});
+
+describe('BACKLOG-3845 E0: webhook drops events from the other mode', () => {
+  function liveEventOnTestKey() {
+    mockConstructEvent.mockReturnValue({
+      id: 'evt_wrong_mode',
+      type: 'payment_intent.succeeded',
+      livemode: true,
+      data: { object: { id: 'pi_w', amount: 1499, metadata: { user_id: 'USER-1', local_transaction_id: 'TX-1', quoted_unit_price_cents: '1499' } } },
+    });
+  }
+
+  it('live event on a test key → 200, nothing written, no fulfillment', async () => {
+    liveEventOnTestKey();
+    const { POST } = await import('@/app/api/payments/webhook/route');
+    const res = await POST(new Request('https://x/api/payments/webhook', { method: 'POST', headers: { 'stripe-signature': 'ok' }, body: 'raw' }));
+    expect(res.status).toBe(200);
+    expect(await (res as NextResponse).json()).toMatchObject({ ignored: 'mode_mismatch' });
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(db.calls).toHaveLength(0);
+    expect(mockCaptureMessage).toHaveBeenCalledWith('Stripe webhook event mode does not match key mode', expect.anything());
+  });
+
+  it('test event on a live key → 200, nothing written', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_live_dummy';
+    mockConstructEvent.mockReturnValue({
+      id: 'evt_test_on_live',
+      type: 'checkout.session.completed',
+      livemode: false,
+      data: { object: { id: 'cs_x', customer: TEST_CUSTOMER, payment_intent: null, metadata: { user_id: 'USER-1' } } },
+    });
+    const { POST } = await import('@/app/api/payments/webhook/route');
+    const res = await POST(new Request('https://x/api/payments/webhook', { method: 'POST', headers: { 'stripe-signature': 'ok' }, body: 'raw' }));
+    expect(res.status).toBe(200);
+    expect(db.calls).toHaveLength(0);
+  });
+});
+
+describe('BACKLOG-3845 RC8: reconcile sweeps only the key mode', () => {
+  it('live key → only live rows are read and retrieved from Stripe', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_live_dummy';
+    process.env.CRON_SECRET = 'secret';
+    const old = '2026-10-01T00:00:00.000Z';
+    useDb({
+      payment_intents: [
+        { id: 'R-LIVE', user_id: 'USER-1', local_transaction_id: 'TX-L', quoted_unit_price_cents: 1499, pricing_tier_id: 'TIER-1', stripe_payment_intent_id: 'pi_live_stuck', stripe_checkout_session_id: null, status: 'succeeded', updated_at: old, stripe_mode: 'live' },
+        { id: 'R-TEST', user_id: 'USER-1', local_transaction_id: 'TX-T', quoted_unit_price_cents: 1499, pricing_tier_id: 'TIER-1', stripe_payment_intent_id: 'pi_test_stuck', stripe_checkout_session_id: null, status: 'succeeded', updated_at: old, stripe_mode: 'test' },
+      ],
+    });
+    mockPaymentIntentsRetrieve.mockResolvedValue({ status: 'requires_payment_method' });
+    const { GET } = await import('@/app/api/cron/payment-reconcile/route');
+    const res = await GET(new Request('https://x/api/cron/payment-reconcile', { headers: { authorization: 'Bearer secret' } }));
+    expect(res.status).toBe(200);
+    expect(await (res as NextResponse).json()).toMatchObject({ scanned: 1 });
+    expect(mockPaymentIntentsRetrieve.mock.calls.map((c) => c[0])).toEqual(['pi_live_stuck']);
   });
 });
