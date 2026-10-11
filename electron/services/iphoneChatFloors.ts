@@ -9,20 +9,21 @@
  * The plan is built in syncHandlers (iphoneChatFloorPlan.ts) and handed to the
  * orchestrator in SyncOptions.floorPlan; the orchestrator reads no preferences.
  *
- * GATED: IPHONE_PARSE_FLOORS_ENABLED is false until S2 (coverage) lands. With it
- * off no plan is built and the sync reads every chat in full, exactly as before.
- * S1 must not reach a tester without S2 (SR plan review, D1-D6).
+ * GATED: IPHONE_PARSE_FLOORS_ENABLED. ON since S2 (BACKLOG-3892), which records
+ * per-phone coverage from the floors a run applied (iphoneCoverageService) so a
+ * floored sync can never read as "covered" off MIN(sent_at). With it off no plan is
+ * built and the sync reads every chat in full.
  */
 import { toE164 } from "../utils/phoneNormalization";
 import { appleDateKeptByFloor, floorBinds } from "./db/appleSmsDbSql";
 import type { iOSConversation, iOSMessage } from "../types/iosMessages";
 
 /**
- * BACKLOG-3892: S2 flips this to true, together with the coverage rows that stop
- * an iPhone source from reading "covered" off MIN(sent_at). Until then a floored
- * sync could report false coverage, so the floor stays off.
+ * BACKLOG-3892 S2: on. The coverage rows (SR D1-D6) and the gate-flip conditions
+ * (SR C1-C4: preferences failure = no floor, coverage from the applied floor,
+ * undated rows kept, D1-D6) are in place.
  */
-export const IPHONE_PARSE_FLOORS_ENABLED = false;
+export const IPHONE_PARSE_FLOORS_ENABLED = true;
 
 /** Where the run's floors came from (timeline; counts only). */
 export type FloorSource = "none" | "all-time" | "settings" | "settings+deals";

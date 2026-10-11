@@ -235,7 +235,7 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
       try {
         // BACKLOG-3881: only the fields the orchestrator reads — a password a stale
         // renderer might still send is never passed on.
-        // BACKLOG-3892 S1: the per-chat parse floors (undefined while gated off until S2).
+        // BACKLOG-3892: the per-chat parse floors (undefined = every chat read in full).
         const floorPlan = await floorPlanForSync(syncSessionUserId);
         const result = await orchestrator!.sync({
           udid: options.udid,
