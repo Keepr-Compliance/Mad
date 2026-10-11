@@ -153,6 +153,7 @@ describe("BACKLOG-3785: the sync reply carries counts, never the arrays", () => 
         skipReason: "unchanged",
         appleEncryptedBackup: true,
         attachmentsUndecryptable: 3,
+        errorCode: "SERVICE_UNAVAILABLE",
       }),
     );
     const reply = await invoke("sync:start", { udid: UDID });
@@ -167,6 +168,7 @@ describe("BACKLOG-3785: the sync reply carries counts, never the arrays", () => 
       skipReason: "unchanged",
       appleEncryptedBackup: true,
       attachmentsUndecryptable: 3,
+      errorCode: "SERVICE_UNAVAILABLE",
     });
   });
 

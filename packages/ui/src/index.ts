@@ -86,3 +86,6 @@ export {
   SelectScrollUpButton,
   SelectScrollDownButton,
 } from './components/select';
+
+// Phone kit (BACKLOG-3895) — phone-width components; see DESIGN-SYSTEM.md "Phone".
+export * from './components/phone';

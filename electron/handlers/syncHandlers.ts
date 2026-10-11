@@ -54,6 +54,7 @@ export function toSyncReply(result: SyncResult): SyncStartReply {
     ...(result.skipped !== undefined ? { skipped: result.skipped } : {}),
     ...(result.skipReason !== undefined ? { skipReason: result.skipReason } : {}),
     ...(result.appleEncryptedBackup !== undefined ? { appleEncryptedBackup: result.appleEncryptedBackup } : {}),
+    ...(result.errorCode !== undefined ? { errorCode: result.errorCode } : {}),
     ...(result.attachmentsUndecryptable !== undefined
       ? { attachmentsUndecryptable: result.attachmentsUndecryptable }
       : {}),
