@@ -622,23 +622,32 @@ function isEncryptionReasonCode(code: string | undefined): boolean {
 }
 
 /**
- * BACKLOG-3816 S4-C: error codes for a backup that stopped for a reason other than the
- * backup tool failing on the kept files: password, device, link, disk or input problems.
- * A delta sync that ends in one of these does not force the next sync to C-FULL.
+ * BACKLOG-3816 G3 / BACKLOG-3814: which backup-tool failures count towards "two in a row
+ * -> the next sync unseals everything (C-FULL)".
+ *
+ * G3 exists because under C-DELTA the tool may need a file that is still sealed, and a
+ * failure that damages nothing would then repeat on every sync. So only a failure that
+ * could come from the tool reading the kept files counts:
+ *  - BACKUP_FILE_MISSING (MBErrorDomain/4): the phone could not get a file it needed;
+ *  - UNKNOWN_ERROR: the device reported an unmapped code, or nothing at all said why;
+ *  - no code at all: the tool exited without a classified reason.
+ * The last two are what a tool tripping over a sealed file would look like, so they count.
+ *
+ * Everything with a NAMED non-file cause does not count: service unavailable (the
+ * phone's handshake; the 2.40.0-rc.1 PC tripped G3 with a held start + an unplug + one of
+ * these), connection lost / unplug, watchdog timeout, locked phone, cancel, quit,
+ * password, disk space, bad input, an Apple-encrypted backup. Before BACKLOG-3814 this
+ * was a deny-list, so every new code counted by default; it is an allow-list now so a
+ * new code does not.
  */
-const NOT_A_TOOL_FAILURE_CODES: ReadonlySet<string> = new Set([
-  "PASSWORD_REQUIRED",
-  "INCORRECT_PASSWORD",
-  "DEVICE_NOT_FOUND",
-  "DEVICE_LOCKED",
-  "BACKUP_CANCELLED",
-  "CONNECTION_LOST",
-  "INSUFFICIENT_SPACE",
-  "DECRYPTION_FAILED",
-  "INVALID_UDID",
-  "BACKUP_PASSWORD_UNAVAILABLE",
-  "APPLE_ENCRYPTED_BACKUP",
+const DELTA_PLAUSIBLE_TOOL_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "BACKUP_FILE_MISSING",
+  "UNKNOWN_ERROR",
 ]);
+
+function mayBeDeltaToolFailure(errorCode: string | undefined): boolean {
+  return errorCode === undefined || DELTA_PLAUSIBLE_TOOL_FAILURE_CODES.has(errorCode);
+}
 
 /** BACKLOG-3816: returned by `raceCancel` when the sync was cancelled first. */
 const PREFLIGHT_CANCELLED = Symbol("preflight-cancelled");
@@ -1776,16 +1785,10 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           ) {
             backupResult = { ...backupResult, error: TOOL_START_HOLD_FAILED_MESSAGE };
           }
-        } catch (toolError) {
-          if (
-            !this.abortController?.signal.aborted &&
-            !this.stoppedForQuit &&
-            !this.diskSpaceAborted &&
-            !backupInFlightToken.disconnected
-          ) {
-            forceFullNext = FORCE_FULL_REASON_DELTA_TOOL_FAILED;
-          }
-          throw toolError;
+          // BACKLOG-3814: a THROW from startBackup is not counted towards G3 any more. It
+          // happens before the tool runs (a second backup, the backup folder) or after it
+          // finished (reading the unsealed root plists) — never the tool failing on a
+          // sealed file (see DELTA_PLAUSIBLE_TOOL_FAILURE_CODES).
         } finally {
           this.stopDiskSpaceMonitor();
         }
@@ -1950,13 +1953,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           }
           // The backup tool itself failed (the abort, quit, disconnect and disk-guard exits
           // all returned above). Whether the next sync unseals everything is decided at seal time.
-          // BACKLOG-3814: a service-unavailable failure after a held tool start is the
-          // computer's scan, not the tool failing on the kept files, so it does not count
-          // towards the G3 escalation to a full unseal.
-          const heldStartFailure = heldToolStart && backupResult.errorCode === "SERVICE_UNAVAILABLE";
+          // BACKLOG-3814: only a failure that could come from the kept files counts
+          // (see DELTA_PLAUSIBLE_TOOL_FAILURE_CODES); a held start's service-unavailable
+          // failure never does.
           if (
-            !heldStartFailure &&
-            !(backupResult.errorCode && NOT_A_TOOL_FAILURE_CODES.has(backupResult.errorCode)) &&
+            mayBeDeltaToolFailure(backupResult.errorCode) &&
             !/disk space|no space|ENOSPC|not enough space/i.test(error)
           ) {
             forceFullNext = FORCE_FULL_REASON_DELTA_TOOL_FAILED;
