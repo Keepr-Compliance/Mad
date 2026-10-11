@@ -42,6 +42,14 @@ export interface iOSConversation {
   messages: iOSMessage[];
   lastMessage: Date;
   isGroupChat: boolean;
+  /**
+   * BACKLOG-3892 S1: the chat's newest `message.date` exactly as sms.db stores it
+   * (BigInt; seconds before iOS 11, nanoseconds after). The parse floor compares
+   * this, never `lastMessage` (which assumes nanoseconds). Set by getConversationsAsync.
+   */
+  lastDateRaw?: bigint | number | null;
+  /** BACKLOG-3892 S1 (D5): the participants read failed, so `participants` is incomplete. */
+  participantsReadFailed?: boolean;
 }
 
 /**
