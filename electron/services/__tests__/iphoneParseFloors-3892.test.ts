@@ -128,9 +128,12 @@ maybe("BACKLOG-3892 S1: iPhone parse floors (real sms.db)", () => {
   });
 
   it("floor edge at 1 ns: the nanosecond bound is exact (bound as a BigInt)", async () => {
+    // An odd-millisecond floor: its nanosecond value is not a multiple of 128, so a
+    // Number bind (a double at ~8e17) would round it by 64 ns.
+    const odd = F + 1;
     const r = await run(
-      [{ id: 1, identifier: OTHER_PHONE, members: [OTHER_PHONE], messages: [{ date: ns(F) - 1n }, { date: ns(F) }, { date: ns(F) + 1n }] }],
-      plan({ settings: F }),
+      [{ id: 1, identifier: OTHER_PHONE, members: [OTHER_PHONE], messages: [{ date: ns(odd) - 1n }, { date: ns(odd) }, { date: ns(odd) + 1n }] }],
+      plan({ settings: odd }),
     );
     expect(r.byChat.get(1)).toEqual(["G-1-1", "G-1-2"]);
   });
