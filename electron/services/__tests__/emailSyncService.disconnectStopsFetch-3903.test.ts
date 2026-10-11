@@ -63,12 +63,16 @@ jest.mock("../outlookFetchService", () => ({
   },
 }));
 
+const mockGmailInit = jest.fn();
+const mockGmailSearch = jest.fn();
+const mockGmailSearchAll = jest.fn();
 jest.mock("../gmailFetchService", () => ({
   __esModule: true,
   default: {
-    initialize: jest.fn().mockResolvedValue(false),
-    searchEmails: jest.fn().mockResolvedValue([]),
-    searchAllLabels: jest.fn().mockResolvedValue([]),
+    initialize: (...a: unknown[]) => mockGmailInit(...a),
+    searchEmails: (...a: unknown[]) => mockGmailSearch(...a),
+    searchAllLabels: (...a: unknown[]) => mockGmailSearchAll(...a),
+    getAttachments: jest.fn().mockResolvedValue([]),
   },
 }));
 
@@ -181,6 +185,38 @@ const SECOND_MAILBOX = {
 /** The connected Outlook mailbox row, as `getOAuthToken` will return it. */
 let outlookTokenRow: typeof OUTLOOK_TOKEN | typeof SECOND_MAILBOX | null = OUTLOOK_TOKEN;
 
+const GMAIL_TOKEN = {
+  id: "acct-gmail",
+  access_token: "gt",
+  connected_email_address: "me@gmail.example.com",
+};
+
+const SECOND_GMAIL = {
+  id: "acct-gmail-second",
+  access_token: "gt-2",
+  connected_email_address: "second@gmail.example.com",
+};
+
+/** The connected Gmail mailbox row, as `getOAuthToken` will return it. */
+let gmailTokenRow: typeof GMAIL_TOKEN | typeof SECOND_GMAIL | null = null;
+
+const gmailRows = (): Array<{ external_id: string; account_id: string | null }> =>
+  db
+    .prepare(`SELECT external_id, account_id FROM emails WHERE user_id = ? AND source = 'gmail' ORDER BY external_id`)
+    .all(USER) as Array<{ external_id: string; account_id: string | null }>;
+
+/** Pressing Disconnect on the Gmail mailbox, in the handler's order. */
+function disconnectGmail(): void {
+  invalidateMailboxFetches("google");
+  gmailTokenRow = null;
+}
+
+/** Disconnect the first Gmail mailbox, then connect a different one. */
+function disconnectGmailThenConnectSecond(): void {
+  disconnectGmail();
+  gmailTokenRow = SECOND_GMAIL;
+}
+
 /** What pressing Disconnect does, in the order the handler does it. */
 function disconnectOutlook(): void {
   invalidateMailboxFetches("microsoft");
@@ -230,13 +266,25 @@ beforeEach(() => {
     `INSERT INTO oauth_tokens (id, user_id, provider, purpose, connected_email_address)
      VALUES ('acct-second', ?, 'microsoft', 'authentication', 'second@example.com')`,
   ).run(USER);
+  db.prepare(
+    `INSERT INTO oauth_tokens (id, user_id, provider, purpose, connected_email_address)
+     VALUES ('acct-gmail', ?, 'google', 'mailbox', 'me@gmail.example.com')`,
+  ).run(USER);
+  db.prepare(
+    `INSERT INTO oauth_tokens (id, user_id, provider, purpose, connected_email_address)
+     VALUES ('acct-gmail-second', ?, 'google', 'authentication', 'second@gmail.example.com')`,
+  ).run(USER);
 
   outlookTokenRow = OUTLOOK_TOKEN;
   foldersWalked = 0;
   onFolderFetched = () => {};
+  gmailTokenRow = null;
   mockGetOAuthToken.mockImplementation(async (_u: string, provider: string) =>
-    provider === "microsoft" ? outlookTokenRow : null,
+    provider === "microsoft" ? outlookTokenRow : provider === "google" ? gmailTokenRow : null,
   );
+  mockGmailInit.mockResolvedValue(false);
+  mockGmailSearch.mockResolvedValue([]);
+  mockGmailSearchAll.mockResolvedValue([]);
   mockOutlookInit.mockResolvedValue(true);
   mockOutlookSearch.mockResolvedValue([]);
   mockOutlookSearchAll.mockImplementation(walkFolders);
@@ -360,5 +408,73 @@ describe("BACKLOG-3903 — disconnecting a mailbox stops its in-flight fetch", (
     };
     await emailSyncService.precacheEmails(USER);
     expect(outlookRows()).toHaveLength(FULL_MAILBOX);
+  });
+});
+
+/**
+ * The same cases for Gmail. The write step works out which provider's counter
+ * to read from the batch's provider; these fail if a Gmail batch reads the
+ * Microsoft counter. Only Gmail is connected here.
+ */
+describe("BACKLOG-3903 — disconnecting a Gmail mailbox stops its in-flight fetch", () => {
+  beforeEach(() => {
+    outlookTokenRow = null;
+    gmailTokenRow = GMAIL_TOKEN;
+    mockGmailInit.mockResolvedValue(true);
+    mockGmailSearch.mockResolvedValue([]);
+    mockGmailSearchAll.mockImplementation(walkFolders);
+  });
+
+  /** Baseline: the fixture imports the whole Gmail mailbox when nobody disconnects. */
+  it("imports the whole Gmail mailbox when nobody disconnects", async () => {
+    await emailSyncService.precacheEmails(USER);
+    const rows = gmailRows();
+    expect(rows).toHaveLength(FULL_MAILBOX);
+    expect(rows.every((r) => r.account_id === "acct-gmail")).toBe(true);
+    expect(foldersWalked).toBe(FOLDER_COUNT);
+  });
+
+  it("writes nothing from the Gmail mailbox when it is disconnected mid-fetch", async () => {
+    onFolderFetched = (folder) => {
+      if (folder === 1) disconnectGmail();
+    };
+    const result = await emailSyncService.precacheEmails(USER);
+
+    expect(foldersWalked).toBeGreaterThanOrEqual(2);
+    expect(gmailRows()).toEqual([]);
+    expect(result.stored).toBe(0);
+    expect(result.cancelled).toBeUndefined();
+    expect(result.providerError).toBeUndefined();
+  });
+
+  it("writes none of the first Gmail mailbox's emails after a different one is connected", async () => {
+    onFolderFetched = (folder) => {
+      if (folder === 1) disconnectGmailThenConnectSecond();
+    };
+    await emailSyncService.precacheEmails(USER);
+    expect(gmailRows()).toEqual([]);
+  });
+
+  /** A later Gmail round that starts after the disconnect, ignoring the signal. */
+  it("writes nothing from a later Gmail round that started after the disconnect", async () => {
+    mockGmailSearch.mockImplementation(async () => {
+      disconnectGmailThenConnectSecond();
+      return [providerEmail(100), providerEmail(101)];
+    });
+    mockGmailSearchAll.mockImplementation(walkFoldersIgnoringSignal);
+
+    await emailSyncService.precacheEmails(USER);
+
+    expect(foldersWalked).toBe(0);
+    expect(gmailRows()).toEqual([]);
+  });
+
+  /** A disconnect of Outlook leaves the Gmail import alone. */
+  it("keeps importing Gmail when Outlook is disconnected", async () => {
+    onFolderFetched = (folder) => {
+      if (folder === 1) invalidateMailboxFetches("microsoft");
+    };
+    await emailSyncService.precacheEmails(USER);
+    expect(gmailRows()).toHaveLength(FULL_MAILBOX);
   });
 });
