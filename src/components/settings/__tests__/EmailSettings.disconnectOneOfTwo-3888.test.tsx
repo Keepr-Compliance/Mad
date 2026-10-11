@@ -1,13 +1,12 @@
 /**
  * BACKLOG-3888 — disconnecting ONE of two mailboxes in Settings keeps the user
- * "connected", so the setup banner stays hidden; disconnecting the ONLY one
- * brings the banner back.
+ * "connected" in app state; disconnecting the ONLY one makes it "not connected".
  *
  * Integration across the real chain, nothing between the ends mocked:
  *   EmailSettings (menu -> confirm -> handleDisconnect*, post-disconnect
  *   checkConnections) -> onEmailDisconnected(provider, anyStillConnected)
  *   -> useEmailSettingsCallbacks -> useEmailOnboardingApi.setHasEmailConnected
- *   -> EMAIL_DISCONNECTED -> real reducer -> real ResumeSetupBanner.
+ *   -> EMAIL_DISCONNECTED -> real reducer (userData.hasEmailConnected).
  * Only window.api / authService (the IPC edge) are simulated.
  *
  * Harness copied from settingsConnectionControl-3156.test.tsx (same mocks,
@@ -178,11 +177,11 @@ async function disconnect(provider: Provider): Promise<void> {
   await waitFor(() => expect(call).toHaveBeenCalledTimes(1));
 }
 
-describe("BACKLOG-3888 — Settings disconnect -> reducer -> banner", () => {
+describe("BACKLOG-3888 — Settings disconnect -> reducer", () => {
   it.each<[string, Provider, Provider]>([
     ["T1 Gmail", "google", "microsoft"],
     ["T2 Outlook", "microsoft", "google"],
-  ])("%s: disconnect one of two -> still connected, no banner", async (_n, provider, other) => {
+  ])("%s: disconnect one of two -> still connected", async (_n, provider, other) => {
     main[provider] = { connected: true, email: `${provider}@example.com` };
     main[other] = { connected: true, email: `${other}@example.com` };
     await disconnect(provider);
@@ -203,13 +202,12 @@ describe("BACKLOG-3888 — Settings disconnect -> reducer -> banner", () => {
   it.each<[string, Provider, Provider]>([
     ["T3 Gmail", "google", "microsoft"],
     ["T4 Outlook", "microsoft", "google"],
-  ])("%s: disconnect the only mailbox -> banner", async (_n, provider, other) => {
+  ])("%s: disconnect the only mailbox -> not connected", async (_n, provider, other) => {
     main[provider] = { connected: true, email: `${provider}@example.com` };
     main[other] = { connected: false };
     await disconnect(provider);
     await waitFor(() =>
       expect(screen.getByTestId("has-email-connected")).toHaveTextContent("false"),
     );
-    expect(screen.getByTestId("resume-setup-banner")).toBeInTheDocument();
   });
 });

@@ -371,6 +371,21 @@ export const contactBridge = {
     };
   },
 
+  /**
+   * BACKLOG-3837: a contact list was answered with `contactsStatus.messageDerivedPending`
+   * and the people found in messages are now ready; re-read the list to show them.
+   * @returns Cleanup function to remove listener
+   */
+  onMessageDerivedReady: (callback: (payload: { userId: string }) => void): (() => void) => {
+    const handler = (_event: unknown, payload: { userId: string }) => {
+      callback(payload);
+    };
+    ipcRenderer.on("contacts:message-derived-ready", handler);
+    return () => {
+      ipcRenderer.removeListener("contacts:message-derived-ready", handler);
+    };
+  },
+
   // =========================================================================
   // BACKLOG-2410 — review queue + provenance
   // =========================================================================

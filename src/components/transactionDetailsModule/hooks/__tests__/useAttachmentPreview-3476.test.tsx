@@ -67,4 +67,74 @@ describe("useAttachmentPreview (BACKLOG-3476)", () => {
     expect(result.current.preview).toBeNull();
     expect(result.current.message).toBe(ATTACHMENT_DOWNLOAD_FAILED);
   });
+
+  it("BACKLOG-3884: open resolves false on failure; retry re-runs the same download and resolves true", async () => {
+    tx()
+      .ensureEmailAttachmentDownloaded.mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce({ success: true, data: [{ ...row({}), storage_path: "/data/scan.pdf" }] });
+    const { result } = renderHook(() => useAttachmentPreview());
+    let first: boolean | undefined;
+    await act(async () => {
+      first = await result.current.open(row({}));
+    });
+    expect(first).toBe(false);
+    expect(result.current.message).toBe(ATTACHMENT_DOWNLOAD_FAILED);
+
+    let second: boolean | undefined;
+    await act(async () => {
+      second = await result.current.retry();
+    });
+    expect(second).toBe(true);
+    expect(tx().ensureEmailAttachmentDownloaded).toHaveBeenNthCalledWith(2, "e1");
+    expect(result.current.preview?.storage_path).toBe("/data/scan.pdf");
+    expect(result.current.message).toBeNull();
+  });
+
+  it("BACKLOG-3884: two rows of one email share one download; only the last clicked opens, refresh runs once", async () => {
+    let resolve!: (v: unknown) => void;
+    tx().ensureEmailAttachmentDownloaded.mockReturnValue(new Promise((r) => { resolve = r; }));
+    const refresh = jest.fn();
+    const { result } = renderHook(() => useAttachmentPreview(refresh));
+    let pA!: Promise<boolean>;
+    let pB!: Promise<boolean>;
+    act(() => {
+      pA = result.current.open(row({ id: "a1" }));
+    });
+    act(() => {
+      pB = result.current.open(row({ id: "a2", filename: "b.pdf" }));
+    });
+    expect(tx().ensureEmailAttachmentDownloaded).toHaveBeenCalledTimes(1);
+    expect([...result.current.downloadingIds].sort()).toEqual(["a1", "a2"]);
+
+    let opened: boolean[] = [];
+    await act(async () => {
+      resolve({
+        success: true,
+        data: [
+          { ...row({ id: "a1" }), storage_path: "/data/a.pdf" },
+          { ...row({ id: "a2", filename: "b.pdf" }), storage_path: "/data/b.pdf" },
+        ],
+      });
+      opened = await Promise.all([pA, pB]);
+    });
+    expect(opened).toEqual([false, true]);
+    expect(result.current.preview?.storage_path).toBe("/data/b.pdf");
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(result.current.downloadingIds.size).toBe(0);
+  });
+
+  it("BACKLOG-3884: an email view row (email_id, no source) is downloaded first", async () => {
+    tx().ensureEmailAttachmentDownloaded.mockResolvedValue({
+      success: true,
+      data: [{ ...row({}), storage_path: "/data/scan.pdf" }],
+    });
+    const { result } = renderHook(() => useAttachmentPreview());
+    await act(async () => {
+      await result.current.open({
+        id: "a1", filename: "scan.pdf", mime_type: "application/pdf", file_size_bytes: 100, storage_path: null, email_id: "e1",
+      });
+    });
+    expect(tx().ensureEmailAttachmentDownloaded).toHaveBeenCalledWith("e1");
+    expect(result.current.preview?.storage_path).toBe("/data/scan.pdf");
+  });
 });

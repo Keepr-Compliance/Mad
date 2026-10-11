@@ -8,6 +8,8 @@ import './globals.css';
 import '@keepr/ui/src/styles/theme.css';
 import { AuthProvider } from '@/components/providers/AuthProvider';
 import { ServiceWorkerRegister } from '@/components/pwa/ServiceWorkerRegister';
+import { NavigationProgress } from '@/components/pwa/NavigationProgress';
+import { OfflineBanner } from '@/components/pwa/OfflineBanner';
 import { ImpersonationProvider } from '@/components/providers/ImpersonationProvider';
 import { getImpersonationSession } from '@/lib/impersonation';
 
@@ -42,6 +44,8 @@ export default async function RootLayout({
     <html lang="en">
       <body className={inter.className}>
         <ServiceWorkerRegister />
+        <NavigationProgress />
+        <OfflineBanner />
         <AuthProvider>
           <ImpersonationProvider session={clientSession}>
             <main className="min-h-screen">{children}</main>

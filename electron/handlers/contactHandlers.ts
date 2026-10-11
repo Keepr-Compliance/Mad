@@ -185,6 +185,7 @@ import type {
 } from "../types/handlerTypes";
 
 import { sendToMainWindow } from "../windowRegistry";
+import { notifyWhenMessageDerivedReady } from "../services/messageDerivedReadyNotice";
 
 // Type definitions
 interface ContactResponse {
@@ -1197,8 +1198,11 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         // FK fix (live): people found in texts are NOT saved contacts — they
         // are offered in the address-book half (contacts:get-available), so
         // picking one imports it first. Never in the saved lists.
-        const importedContacts =
-          await databaseService.getImportedContactsByUserIdAsync(validatedUserId);
+        // BACKLOG-3837: the message-derived half is read only on a dedicated
+        // worker; while it is not ready the saved contacts come back alone,
+        // flagged pending (never an empty list standing for "not loaded").
+        const { contacts: importedContacts, messageDerivedPending } =
+          await databaseService.getImportedContactsWithStatusAsync(validatedUserId);
 
         logService.debug(
           `[PERF] contacts.getAll: ${Date.now() - t0}ms, ${importedContacts.length} contacts`,
@@ -1218,9 +1222,11 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
           logService.warn(`Background backfill failed: ${err}`, "Contacts");
         });
 
+        if (messageDerivedPending) notifyWhenMessageDerivedReady(validatedUserId);
         return {
           success: true,
           contacts: importedContacts,
+          ...(messageDerivedPending ? { contactsStatus: { messageDerivedPending: true } } : {}),
         };
       } catch (error) {
         logService.error("Get contacts failed", "Contacts", {
@@ -2909,21 +2915,26 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
             })
           : undefined;
 
-        // Get only imported contacts sorted by activity
-        const importedContacts =
-          await databaseService.getContactsSortedByActivity(
+        // Get only imported contacts sorted by activity.
+        // BACKLOG-3837: the message-derived half is read only on a dedicated
+        // worker; while it is not ready the saved contacts come back alone,
+        // flagged pending (never an empty list standing for "not loaded").
+        const { contacts: importedContacts, messageDerivedPending } =
+          await databaseService.getContactsSortedByActivityWithStatus(
             validatedUserId,
             validatedAddress ?? undefined,
           );
 
         logService.info(
-          `[Main] Returning ${importedContacts.length} imported contacts sorted by activity`,
+          `[Main] Returning ${importedContacts.length} imported contacts sorted by activity${messageDerivedPending ? " (message-derived pending)" : ""}`,
           "Contacts",
         );
 
+        if (messageDerivedPending) notifyWhenMessageDerivedReady(validatedUserId);
         return {
           success: true,
           contacts: importedContacts,
+          ...(messageDerivedPending ? { contactsStatus: { messageDerivedPending: true } } : {}),
         };
       } catch (error) {
         logService.error("[Main] Get sorted contacts failed:", "Contacts", {

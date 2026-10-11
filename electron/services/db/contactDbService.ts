@@ -6,7 +6,7 @@
 import crypto from "crypto";
 import type { Contact, NewContact, ContactFilters, Message, Communication, ContactMessageThread } from "../../types";
 import { DatabaseError } from "../../types";
-import { dbGet, dbAll, dbRun, dbTransaction, ensureDb } from "./core/dbConnection";
+import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
 import logService from "../logService";
 import { validateFields, type ColumnOf } from "../../utils/sqlFieldWhitelist";
@@ -22,12 +22,12 @@ import { getContactNames } from "../contactsService";
 import { queryContacts, isPoolReady, queryOnDedicatedWorker } from "../../workers/contactWorkerPool";
 import {
   MESSAGE_DERIVED_CONTACTS_SQL,
-  planCommunicationDatesOn,
   type CommunicationDatePlanRow,
 } from "./wizardMessageScansDb";
 import { ContactSchema, validateResponse } from "../../schemas";
 import { IMPORTED_CONTACT_LAST_COMMUNICATION_SQL } from "./contactRecencySql";
 import { getTextDerivedPeople } from "./rcsChatPeopleDbService";
+import { readMessageDerivedRowsWithinBudget } from "./messageDerivedContactsCache";
 import {
   IMPORTED_CONTACT_ADDRESSES_SQL,
   IMPORTED_CONTACTS_SELECT_SQL,
@@ -259,31 +259,30 @@ export function getMessageDerivedContacts(userId: string): MessageDerivedContact
 
   // BACKLOG-3837: the statement moved verbatim to wizardMessageScansDb.ts
   // (MESSAGE_DERIVED_CONTACTS_SQL) so the contact query worker runs the SAME
-  // text; this synchronous read is now the pool-not-ready fallback.
+  // text. This synchronous read is NOT a fallback for the lists (they never scan
+  // on main, see getMessageDerivedContactsAsync); its callers are the sync
+  // getImportedContactsByUserId (transactionService) and test controls.
   const results = dbAll<MessageDerivedContact>(MESSAGE_DERIVED_CONTACTS_SQL, [userId]);
   return dropNamesThatAreTheirOwnIdentity(results, importedNames);
 }
 
 /**
  * BACKLOG-3837 — the same people as `getMessageDerivedContacts`, with the
- * message scan (json_extract over every message of the user) run on the
- * contact query worker. The saved-name filter below is applied on the main
- * thread from the same `namesThatAreTheirOwnIdentity` read, so the two paths
- * cannot disagree about who appears. Pool down, or the worker read failing:
- * the synchronous producer, same rows.
+ * message scan (json_extract over every message of the user) run ONLY on a
+ * dedicated worker, cached per user (messageDerivedContactsCache.ts). The
+ * saved-name filter below is applied on the main thread from the same
+ * `namesThatAreTheirOwnIdentity` read at every call, so the two paths cannot
+ * disagree about who appears and a contacts write is reflected at once.
+ *
+ * `null` = PENDING: the read is not ready within the wait budget, or failed.
+ * There is NO main-thread fallback (founder rule, 3837 follow-up: the PC ran
+ * this scan on main for ~25 s after the shared worker timed out). Callers
+ * return the saved contacts without these people and say so.
  */
-export async function getMessageDerivedContactsAsync(userId: string): Promise<MessageDerivedContact[]> {
-  if (!isPoolReady()) return getMessageDerivedContacts(userId);
-  let rows: MessageDerivedContact[];
-  try {
-    rows = (await queryContacts("messageDerived", userId)) as MessageDerivedContact[];
-  } catch (error) {
-    void logService.warn("[Contacts] message-derived read on the worker failed; reading on main", "ContactDbService", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return getMessageDerivedContacts(userId);
-  }
-  return dropNamesThatAreTheirOwnIdentity(rows, namesThatAreTheirOwnIdentity(userId));
+export async function getMessageDerivedContactsAsync(userId: string): Promise<MessageDerivedContact[] | null> {
+  const rows = await readMessageDerivedRowsWithinBudget(userId);
+  if (rows === null) return null;
+  return dropNamesThatAreTheirOwnIdentity(rows as MessageDerivedContact[], namesThatAreTheirOwnIdentity(userId));
 }
 
 function dropNamesThatAreTheirOwnIdentity(
@@ -840,23 +839,33 @@ function messageDerivedWithTextPeople(userId: string, opts?: TextPeopleOption): 
   return [...mac, ...getTextDerivedPeople(userId)];
 }
 
-/** BACKLOG-3837: `messageDerivedWithTextPeople` with the message scan on the worker. */
+/**
+ * BACKLOG-3837: `messageDerivedWithTextPeople` with the message scan on a
+ * dedicated worker. `pending` = the message-derived people are not in `people`
+ * yet (see getMessageDerivedContactsAsync).
+ */
 async function messageDerivedWithTextPeopleAsync(
   userId: string,
   opts?: TextPeopleOption,
-): Promise<MessageDerivedContact[]> {
+): Promise<{ people: MessageDerivedContact[]; pending: boolean }> {
   const mac = await getMessageDerivedContactsAsync(userId);
-  if (!opts?.textPeople) return mac;
-  return [...mac, ...getTextDerivedPeople(userId)];
+  const pending = mac === null;
+  const people = mac ?? [];
+  if (!opts?.textPeople) return { people, pending };
+  return { people: [...people, ...getTextDerivedPeople(userId)], pending };
 }
 
 function messageDerivedAsContacts(userId: string, opts?: TextPeopleOption): Contact[] {
   return toMessageDerivedContactRows(userId, messageDerivedWithTextPeople(userId, opts));
 }
 
-/** BACKLOG-3837: `messageDerivedAsContacts` with the message scan on the worker. */
-async function messageDerivedAsContactsAsync(userId: string, opts?: TextPeopleOption): Promise<Contact[]> {
-  return toMessageDerivedContactRows(userId, await messageDerivedWithTextPeopleAsync(userId, opts));
+/** BACKLOG-3837: `messageDerivedAsContacts` with the message scan on a dedicated worker. */
+async function messageDerivedAsContactsAsync(
+  userId: string,
+  opts?: TextPeopleOption,
+): Promise<{ contacts: Contact[]; pending: boolean }> {
+  const { people, pending } = await messageDerivedWithTextPeopleAsync(userId, opts);
+  return { contacts: toMessageDerivedContactRows(userId, people), pending };
 }
 
 function toMessageDerivedContactRows(userId: string, people: MessageDerivedContact[]): Contact[] {
@@ -927,13 +936,35 @@ export async function getImportedContactsByUserIdAsync(
   timeoutMs: number = 30_000,
   opts?: TextPeopleOption,
 ): Promise<Contact[]> {
-  if (!isPoolReady()) {
-    // Fallback to sync version if pool not initialized
-    return getImportedContactsByUserId(userId, opts);
-  }
+  return (await getImportedContactsWithStatusAsync(userId, timeoutMs, opts)).contacts;
+}
 
-  // Run imported contacts SQL in persistent worker thread
-  const rawRows = await queryContacts('imported', userId, timeoutMs) as Array<Contact & { all_emails_json?: string; all_phones_json?: string }>;
+/**
+ * Result of a contact list read whose message-derived half may not be ready.
+ * `messageDerivedPending` = the people found in messages are NOT in `contacts`
+ * yet (the dedicated read is still running, or failed); the saved contacts are
+ * all there. Never "no contacts" standing in for "not loaded" (BACKLOG-3832).
+ */
+export interface ContactListWithStatus<T extends Contact = Contact> {
+  contacts: T[];
+  messageDerivedPending: boolean;
+}
+
+/**
+ * BACKLOG-3837: `getImportedContactsByUserIdAsync` with the pending state.
+ * The message-derived scan never runs on main: with the pool down, the
+ * imported statement runs on main as before (no messages scan) and the
+ * message-derived half goes through the dedicated worker like every other call.
+ */
+export async function getImportedContactsWithStatusAsync(
+  userId: string,
+  timeoutMs: number = 30_000,
+  opts?: TextPeopleOption,
+): Promise<ContactListWithStatus> {
+  // Run imported contacts SQL in persistent worker thread (on main when the pool is not up)
+  const rawRows = isPoolReady()
+    ? ((await queryContacts('imported', userId, timeoutMs)) as Array<Contact & { all_emails_json?: string; all_phones_json?: string }>)
+    : dbAll<Contact & { all_emails_json?: string; all_phones_json?: string }>(IMPORTED_CONTACTS_SELECT_SQL, [userId]);
 
   // Post-process: parse JSON arrays (fast, no DB access). BACKLOG-2514: the
   // same shared parse the main-thread producer uses.
@@ -952,11 +983,11 @@ export async function getImportedContactsByUserIdAsync(
   // depending on whether the worker pool was warm — the fallback above is the
   // only difference between the two paths, and it must not change WHO appears.
   // BACKLOG-2471 PR F — stamped here too; see the sync producer above.
-  // BACKLOG-3837: the message-derived scan runs on the worker too.
+  // BACKLOG-3837: the message-derived scan runs on a dedicated worker only.
   const messageDerived = await messageDerivedAsContactsAsync(userId, opts);
-  return [
+  const contacts = [
     ...attachReviewState(userId, attachLiveSources(userId, contactsWithArrays)),
-    ...messageDerived,
+    ...messageDerived.contacts,
   ].sort(
     (a, b) => {
       const nameA = (a.display_name || a.name || '').toLowerCase();
@@ -964,6 +995,7 @@ export async function getImportedContactsByUserIdAsync(
       return nameA.localeCompare(nameB);
     },
   );
+  return { contacts, messageDerivedPending: messageDerived.pending };
 }
 
 /**
@@ -1211,18 +1243,13 @@ function startCommunicationDatesBackfill(userId: string): void {
 }
 
 /**
- * The PLAN of the backfill: newest text date per imported contact. Read on a
- * dedicated worker (one-shot scan of every text message, the #2907 pattern);
- * on the main thread only when no worker can be started.
+ * The PLAN of the backfill: newest text date per imported contact. Read ONLY on
+ * a dedicated worker (one-shot scan of every text message, the #2907 pattern).
+ * BACKLOG-3837 follow-up: no main-thread fallback — a worker that cannot start
+ * fails the run (logged by the caller); the next list open retries it.
  */
 async function planCommunicationDates(userId: string): Promise<CommunicationDatePlanRow[]> {
-  try {
-    return (await queryOnDedicatedWorker("commDatesPlan", userId, COMM_DATES_PLAN_TIMEOUT_MS)) as CommunicationDatePlanRow[];
-  } catch (error) {
-    const code = (error as { code?: string }).code;
-    if (code !== "unavailable" && code !== "start_failed") throw error;
-    return planCommunicationDatesOn(ensureDb(), userId);
-  }
+  return (await queryOnDedicatedWorker("commDatesPlan", userId, COMM_DATES_PLAN_TIMEOUT_MS)) as CommunicationDatePlanRow[];
 }
 
 /**
@@ -1309,6 +1336,19 @@ export async function getContactsSortedByActivity(
   _propertyAddress?: string,
   opts?: TextPeopleOption,
 ): Promise<ContactWithActivity[]> {
+  return (await getContactsSortedByActivityWithStatus(userId, _propertyAddress, opts)).contacts;
+}
+
+/**
+ * BACKLOG-3837: `getContactsSortedByActivity` with the pending state. While the
+ * message-derived read is not ready the saved contacts are returned (in their
+ * own activity order) with `messageDerivedPending: true` — never an empty list.
+ */
+export async function getContactsSortedByActivityWithStatus(
+  userId: string,
+  _propertyAddress?: string,
+  opts?: TextPeopleOption,
+): Promise<ContactListWithStatus<ContactWithActivity>> {
   // Check if backfill has ever run (single lightweight query)
   // BACKLOG-2365: removed contacts excluded so the probe matches the population
   // the backfill and the list below actually operate on. Without this, a user
@@ -1383,8 +1423,9 @@ ${IMPORTED_CONTACT_ADDRESSES_SQL},
     );
 
     // Get message-derived contacts (already have last_communication_at from their source)
-    // BACKLOG-3837: the message scan runs on the contact query worker.
-    const messageDerivedContacts = await messageDerivedWithTextPeopleAsync(userId, opts);
+    // BACKLOG-3837: the message scan runs on a dedicated worker only; pending = not in yet.
+    const { people: messageDerivedContacts, pending: messageDerivedPending } =
+      await messageDerivedWithTextPeopleAsync(userId, opts);
 
     const messageDerivedWithActivity: ContactWithActivity[] = messageDerivedContacts.map(mc => ({
       id: mc.id,
@@ -1419,7 +1460,7 @@ ${IMPORTED_CONTACT_ADDRESSES_SQL},
     // list. Now: combine, then sort by last_communication_at DESC with NULLS-LAST
     // and display_name ASC tie-break.
     const combined = [...importedWithSources, ...messageDerivedWithActivity];
-    return combined.sort((a, b) => {
+    const contacts = combined.sort((a, b) => {
       // NULLS-LAST: treat null/undefined as oldest so DESC pushes them to the end.
       const aTs = a.last_communication_at ? new Date(a.last_communication_at).getTime() : 0;
       const bTs = b.last_communication_at ? new Date(b.last_communication_at).getTime() : 0;
@@ -1431,6 +1472,7 @@ ${IMPORTED_CONTACT_ADDRESSES_SQL},
       const bName = (b.display_name || "").toLowerCase();
       return aName.localeCompare(bName);
     });
+    return { contacts, messageDerivedPending };
   } catch (error) {
     void logService.error("Error getting sorted contacts", "ContactDbService", {
       error: (error as Error).message,

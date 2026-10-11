@@ -308,7 +308,8 @@ maybe("BACKLOG-3837: step-1 Continue scans run on the contact query worker (real
     const { value: onMain, maxMs: mainMs } = await maxStallDuring(async () => getMessageDerivedContacts(USER));
     process.stderr.write(`[3837] message-derived over ${MESSAGES} msgs: main-thread control maxEventLoopDelay=${mainMs}ms\n`);
     const names = (rows: Array<{ display_name: string }>) => rows.map((r) => r.display_name).sort();
-    expect(names(viaWorker)).toEqual(["Alex Rivera", "Jordan Lee", "Sam Okafor"]);
+    expect(viaWorker).not.toBeNull(); // null = pending (BACKLOG-3837 follow-up: no main fallback)
+    expect(names(viaWorker ?? [])).toEqual(["Alex Rivera", "Jordan Lee", "Sam Okafor"]);
     // "Person 3" is a saved contact with no crosswalk row: its name is all it is, so its twin is dropped.
     expect(viaWorker).toEqual(onMain);
   }, 300_000);
