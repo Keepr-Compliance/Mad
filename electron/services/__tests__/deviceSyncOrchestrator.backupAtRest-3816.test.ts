@@ -113,7 +113,7 @@ jest.mock("../iosContactsParser", () => ({
 
 import plist from "simple-plist";
 
-import { BackupService } from "../backupService";
+import { BackupService, classifyBackupFailure } from "../backupService";
 import { DeviceSyncOrchestrator } from "../deviceSyncOrchestrator";
 import {
   BACKUP_AT_REST_QUARANTINED_MESSAGE,
@@ -421,11 +421,34 @@ describe("D1 / G3 — two C-DELTA backup-tool failures in a row force C-FULL for
     return sealedAtStart === false;
   }
 
+  /**
+   * BACKLOG-3814: the UNKNOWN_ERROR shapes, produced by the REAL classifier (not hand-built).
+   * - unmapped device code: idevicebackup2's stdout failure summary (the transcribed 208
+   *   block in backupService.ts, code and description substituted — the same substitution
+   *   backupService.failureCause-2913 uses for MBErrorDomain/56), exit 200 = (-56) & 0xFF;
+   * - no reason: exit 255 with nothing the classifier recognises.
+   * The old "no-code" case (errorCode undefined) is gone: no failure path of startBackup
+   * returns a failure without an errorCode.
+   */
+  function classified(exitCode: number, stdout: string, stderr: string): BackupResult {
+    const c = classifyBackupFailure(exitCode, stdout, stderr);
+    expect(c.errorCode).toBe("UNKNOWN_ERROR");
+    return fail({ errorCode: c.errorCode, error: c.message, failureCause: c.cause } as Partial<BackupResult>);
+  }
+  const UNMAPPED_DEVICE_CODE_STDOUT = [
+    "Requesting backup from device...",
+    "Incremental backup mode.",
+    "ErrorCode 56: Unable to write to the backup (MBErrorDomain/56)",
+    "Received 0 files from device.",
+    "Backup Failed (Error Code 56).",
+  ].join("\n");
+
   /** One sync whose backup tool fails the given way. */
-  async function toolFails(how: "result" | "no-code" | "throw"): Promise<void> {
+  async function toolFails(how: "result" | "unmapped-device-code" | "no-reason" | "throw"): Promise<void> {
     const o = newOrchestrator(false);
     if (how === "throw") startBackup.mockRejectedValue(new Error("spawn failed"));
-    else if (how === "no-code") backupReturns(fail({ errorCode: undefined, error: "idevicebackup2 exited with code 1" } as Partial<BackupResult>));
+    else if (how === "unmapped-device-code") backupReturns(classified(200, UNMAPPED_DEVICE_CODE_STDOUT, ""));
+    else if (how === "no-reason") backupReturns(classified(255, "", ""));
     else backupReturns(fail({ errorCode: "BACKUP_FILE_MISSING", error: "The iPhone could not find a file the backup needed." } as Partial<BackupResult>));
     expect((await o.sync({ udid: UDID })).success).toBe(false);
     await sealedAfter(o);
@@ -439,7 +462,7 @@ describe("D1 / G3 — two C-DELTA backup-tool failures in a row force C-FULL for
 
   // BACKLOG-3814: "throw" left this list — a throw from startBackup is never the tool
   // failing on a sealed file. It is pinned as NOT counting below.
-  it.each(["result", "no-code"] as const)("G3: TWO tool errors in a row (%s) -> the next sync is C-FULL, reason DELTA_TOOL_FAILED", async (how) => {
+  it.each(["result", "unmapped-device-code", "no-reason"] as const)("G3: TWO tool errors in a row (%s) -> the next sync is C-FULL, reason DELTA_TOOL_FAILED", async (how) => {
     await toolFails(how);
     await toolFails(how);
     expect(await atRest.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
@@ -487,6 +510,9 @@ describe("D1 / G3 — two C-DELTA backup-tool failures in a row force C-FULL for
     ["connection lost (as a tool result, no unplug seen)", () => fail({ errorCode: "CONNECTION_LOST" } as Partial<BackupResult>)],
     ["watchdog timeout", () => fail({ errorCode: "BACKUP_TIMEOUT", error: "Backup process became unresponsive and was terminated" } as Partial<BackupResult>)],
     ["phone locked", () => fail({ errorCode: "DEVICE_LOCKED", error: "iPhone is locked." } as Partial<BackupResult>)],
+    // BACKLOG-3881: APPLE_ENCRYPTED_BACKUP is the run's reason code, never a backup result's
+    // errorCode; backupService reports the Apple-encrypted case as this result (backupService.ts).
+    ["an Apple-encrypted backup (APPLE_ENCRYPTED_BACKUP stop)", () => fail({ errorCode: "PASSWORD_REQUIRED", error: "This iPhone's backups are encrypted by Apple" } as Partial<BackupResult>)],
   ])("BACKLOG-3814: a counted failure, then %s -> still C-DELTA", async (_name, second) => {
     await toolFails("result");
     const o = newOrchestrator(false);
