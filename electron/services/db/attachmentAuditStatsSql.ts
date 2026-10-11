@@ -114,7 +114,7 @@ const textStatsSql = (projection: string, w: AuditWindowShape): string => `
         INNER JOIN communications c ON (
           (c.message_id IS NOT NULL AND c.message_id = m.id)
           OR
-          (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id AND m.user_id = c.user_id)
+          (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id AND +m.user_id = c.user_id)
         )
         INNER JOIN attachments a ON (
           a.message_id = m.id

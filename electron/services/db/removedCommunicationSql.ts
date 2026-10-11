@@ -55,7 +55,7 @@ export const REMOVED_MESSAGES_SQL = sql`
           tn.display_name as thread_display_name
         FROM ignored_communications ic
         LEFT JOIN messages m ON (
-          (ic.thread_id IS NOT NULL AND ic.thread_id != '' AND m.thread_id = ic.thread_id AND m.user_id = ic.user_id)
+          (ic.thread_id IS NOT NULL AND ic.thread_id != '' AND m.thread_id = ic.thread_id AND +m.user_id = ic.user_id)
           OR (ic.original_communication_id IS NOT NULL AND m.id = ic.original_communication_id)
         )
         -- BACKLOG-2814: (user_id, thread_id) is the table's PK; joining on
