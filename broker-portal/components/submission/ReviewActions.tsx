@@ -277,7 +277,7 @@ export function ReviewActions({
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50" onClick={handleCancel} />
 
         {/* Confirmation panel */}
-        <div className="fixed bottom-0 left-0 right-0 z-50">
+        <div ref={barRef} className="fixed bottom-0 left-0 right-0 z-50">
           <div className="bg-white border-t border-gray-200 shadow-xl rounded-t-lg">
             <div className="max-w-2xl mx-auto px-6 py-6">
               <div className="flex items-center gap-3 mb-4">

@@ -41,6 +41,7 @@ const nextConfig = {
       "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.sentry.io https://vercel.live https://*.pusher.com wss://*.pusher.com",
       "frame-src 'self' https://vercel.live",
       "worker-src 'self' blob:",
+      "manifest-src 'self'",
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",
@@ -67,6 +68,12 @@ const nextConfig = {
             value: 'strict-origin-when-cross-origin',
           },
         ],
+      },
+      // Service worker must never be served from HTTP cache, so updates ship
+      // on the next navigation (BACKLOG-3797).
+      {
+        source: '/sw.js',
+        headers: [{ key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' }],
       },
     ];
   },

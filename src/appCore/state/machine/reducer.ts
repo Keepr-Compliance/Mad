@@ -624,8 +624,6 @@ export function appStateReducer(
             // BACKLOG-3888: main has just recorded the provider in the cloud
             // set; mirror it so a later disconnect this session is noticed.
             hasRecordedEmailProvider: true,
-            // A fresh connect replaces any dead token seen at load.
-            hasBrokenMailboxToken: false,
           },
         };
       }
@@ -647,9 +645,6 @@ export function appStateReducer(
             // user connected. Callers that know the remaining state pass it;
             // without it, the previous behaviour (false) is kept.
             hasEmailConnected: action.anyStillConnected === true,
-            // BACKLOG-3888: with no mailbox left, a dead token seen at load no
-            // longer exists, so the amber-strip guard must not hide the banner.
-            ...(action.anyStillConnected === true ? {} : { hasBrokenMailboxToken: false }),
           },
         };
       }

@@ -41,6 +41,7 @@ import { readOneToOneThreadIndexOn } from "../services/db/threadIdentityIndexDb"
 import { runThreadIdentityRequestOn, type ThreadIdentityRequest } from "../services/db/threadIdentityTargetedDb";
 import { readCandidateEmailsOn, readCandidateMessageThreadsOn } from "../services/db/autoLinkSql";
 import { readTransactionTextThreadsOn } from "../services/db/transactionTextPagingDb";
+import { runMessageRosterOn } from "../services/db/messageRosterDb";
 import {
   planCommunicationDatesOn,
   runMessageDerivedQueryOn,
@@ -61,7 +62,9 @@ type QueryType =
   | "commDatesPlan"
   | "sourceCoverageFloors"
   // BACKLOG-3884: the Texts tab's conversation list (every linked text of one deal).
-  | "transactionTextThreads";
+  | "transactionTextThreads"
+  // BACKLOG-3837: the Attach Messages roster (every unlinked text of the user).
+  | "messageRoster";
 
 interface InitMessage {
   type: "init";
@@ -311,6 +314,10 @@ parentPort?.on("message", (msg: WorkerMessage) => {
       // BACKLOG-3837: every message of the user, json_extract per row.
       if (!db) throw new Error("Database not initialized");
       rows = runMessageDerivedQueryOn(db, queryMsg.userId);
+    } else if (queryMsg.type === "messageRoster") {
+      // BACKLOG-3837: the Attach Messages roster (messageRosterDb.ts), off the main thread.
+      if (!db) throw new Error("Database not initialized");
+      rows = runMessageRosterOn(db, queryMsg.userId);
     } else if (queryMsg.type === "commDatesPlan") {
       // BACKLOG-3837: the last-message-date backfill PLAN (writes nothing; main applies it).
       if (!db) throw new Error("Database not initialized");
