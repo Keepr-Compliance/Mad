@@ -10,11 +10,6 @@
  * floor (a mailbox OR a texts source — macOS Full Disk Access, iPhone, or
  * Android) is NEVER surfaced: texts-only is a valid, non-degraded completion.
  *
- * BACKLOG-3888 widens this ONE case: a user who chose email
- * ({@link selectChosenEmailNotConnected} — a provider is recorded in the cloud
- * preferences) and has no mailbox connected is shown the same banner, whatever
- * texts sources they have.
- *
  * Resume re-enters onboarding at the email-connect step via the existing
  * `START_EMAIL_SETUP` machine action (`app.goToEmailOnboarding`). Dismissal is
  * session-only (backed by the existing `showSetupPromptDismissed` UI flag, which
@@ -24,10 +19,7 @@
  */
 
 import { useOptionalMachineState } from "../../appCore/state/machine";
-import {
-  selectChosenEmailNotConnected,
-  selectSetupIncomplete,
-} from "../../appCore/state/machine/selectors";
+import { selectSetupIncomplete } from "../../appCore/state/machine/selectors";
 import type { AppStateMachine } from "../../appCore/state/types";
 
 export interface UseResumeSetupResult {
@@ -59,16 +51,7 @@ export function useResumeSetup(app: AppStateMachine): UseResumeSetupResult {
     ? selectSetupIncomplete(machineState.state)
     : false;
 
-  // BACKLOG-3888: also nudge a user who chose email (a provider is recorded
-  // in the cloud preferences) and has no mailbox connected now — whatever
-  // texts sources they have. Users with no recorded provider are unaffected.
-  // Non-ready states return false, so nothing flashes while loading.
-  const chosenEmailNotConnected = machineState
-    ? selectChosenEmailNotConnected(machineState.state)
-    : false;
-
-  const show =
-    (floorUnmet || chosenEmailNotConnected) && !app.showSetupPromptDismissed;
+  const show = floorUnmet && !app.showSetupPromptDismissed;
 
   return {
     show,

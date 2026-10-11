@@ -28,13 +28,19 @@ import {
 } from "../utils/validation";
 import type { HealthIssue } from "../types/ipc/healthIssue";
 import type { ConnectionError } from "../services/connectionStatusService";
+import {
+  mailboxNotConnectedIssue,
+  readRecordedEmailProviders,
+} from "../services/mailboxNotConnectedIssue";
 
 /**
  * BACKLOG-3230 — the broken-token types the health banner speaks for.
  *
  * `NOT_CONNECTED` is deliberately absent: a provider that was never connected is
  * the setup prompt's job, not a health error, and it is the only connection error
- * whose action is `connect-*` rather than `reconnect-*`.
+ * whose action is `connect-*` rather than `reconnect-*`. BACKLOG-3888 adds one
+ * exception OUTSIDE this set: a user with a recorded email provider and no
+ * mailbox connected (see mailboxNotConnectedIssue.ts).
  *
  * Hoisted to module scope so `isBrokenTokenError` below can be the ONE place
  * where the runtime check and the type agree.
@@ -516,9 +522,11 @@ export function registerDiagnosticHandlers(): void {
               ["microsoft", allConnections.microsoft],
             ]
           : [];
+        let brokenTokenRaised = false;
         for (const [providerName, status] of providerStatuses) {
           const connError = status?.error;
           if (isBrokenTokenError(connError)) {
+            brokenTokenRaised = true;
             // BACKLOG-2142: when a prior successful email sync exists, add a
             // "No email captured since <date>" subtitle to the reconnect banner.
             // Display-only — composed here so the discriminator stays `type` and
@@ -544,6 +552,21 @@ export function registerDiagnosticHandlers(): void {
               ...(sinceMessage ? { message: sinceMessage } : {}),
             });
           }
+        }
+
+        // BACKLOG-3888: the ONE NOT_CONNECTED exception. A user who has
+        // connected a mailbox before (cloud preferences.emailProviders) and has
+        // NO mailbox connected now gets an amber "connect" row. Never while a
+        // broken-token row is already speaking for a mailbox, never when any
+        // mailbox is connected, and never for a user with no record.
+        const anyMailboxConnected = providerStatuses.some(
+          ([, status]) => (status as { connected?: unknown } | undefined)?.connected === true,
+        );
+        if (validatedUserId && allConnections && !anyMailboxConnected && !brokenTokenRaised) {
+          const notConnected = mailboxNotConnectedIssue(
+            await readRecordedEmailProviders(validatedUserId),
+          );
+          if (notConnected) issues.push(notConnected);
         }
 
         // Backward-compat `connection` field: the single login-provider status.

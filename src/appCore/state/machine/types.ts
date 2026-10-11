@@ -120,12 +120,6 @@ export interface UserData {
    * cleared by a disconnect. Absent / false = no record (e.g. texts-only).
    */
   hasRecordedEmailProvider?: boolean;
-  /**
-   * BACKLOG-3888: at load, a mailbox token row existed but was dead
-   * (TOKEN_REFRESH_FAILED / TOKEN_EXPIRED / CONNECTION_CHECK_FAILED). The
-   * SystemHealthMonitor amber "Reconnect" strip covers that mailbox.
-   */
-  hasBrokenMailboxToken?: boolean;
   /** True if Windows + iPhone user needs Apple Mobile Device driver */
   needsDriverSetup: boolean;
   /**

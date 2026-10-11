@@ -33,7 +33,9 @@ type QueryType =
   | "messageDerived"
   | "commDatesPlan"
   | "sourceCoverageFloors"
-  | "transactionTextThreads";
+  | "transactionTextThreads"
+  // BACKLOG-3837: the Attach Messages roster.
+  | "messageRoster";
 
 /**
  * Per-type payload carried alongside `{ id, type, userId }` (BACKLOG-1717).
