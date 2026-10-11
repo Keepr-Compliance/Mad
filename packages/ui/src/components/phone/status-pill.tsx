@@ -48,7 +48,7 @@ export function PriorityPill({ hue, children, className }: StatusPillProps) {
     <span
       data-slot="priority-pill"
       className={cn(
-        'inline-flex items-center whitespace-nowrap rounded-full border border-current/20 px-2 py-0.5 text-xs font-medium',
+        'inline-flex items-center whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-medium',
         badgeHueClasses(hue),
         className
       )}
