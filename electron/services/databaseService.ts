@@ -2570,6 +2570,16 @@ class DatabaseService implements IDatabaseService {
     return syncDb.getMessageExternalIdsPage(userId, after, limit);
   }
 
+  /** BACKLOG-3892 S7: one page of the duplicate check, bounded below by sent_at. */
+  getMessageExternalIdsSincePage(
+    userId: string,
+    sinceIso: string,
+    after: syncDb.ExternalIdsSinceKey | null,
+    limit: number,
+  ) {
+    return syncDb.getMessageExternalIdsSincePage(userId, sinceIso, after, limit);
+  }
+
   batchInsertMessages(
     messages: Parameters<typeof syncDb.batchInsertMessages>[0],
     batchSize: number,
