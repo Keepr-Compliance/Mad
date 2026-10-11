@@ -72,6 +72,17 @@ jest.mock("../core/dbConnection", () => ({
   dbRun: (sql: string, params: unknown[] = []) => db.prepare(sql).run(...params),
 }));
 
+// BACKLOG-3837: the message-derived read runs only on a dedicated worker. Stand-in: the
+// worker's own runner on this test's database.
+jest.mock("../../../workers/contactWorkerPool", () => ({
+  ...jest.requireActual("../../../workers/contactWorkerPool"),
+  queryOnDedicatedWorker: jest.fn(async (type: string, userId: string) => {
+    if (type !== "messageDerived") throw new Error(`unexpected dedicated query ${type}`);
+    const { runMessageDerivedQueryOn } = jest.requireActual("../wizardMessageScansDb");
+    return runMessageDerivedQueryOn(db, userId);
+  }),
+}));
+
 import {
   getMessageDerivedContacts,
   getImportedContactsByUserId,
