@@ -154,11 +154,14 @@ export async function readChatWithFloor(
   report: ParseFloorReport,
 ): Promise<"read" | "skipped"> {
   const floor = chatParseFloor(parser, plan, conv);
+  conv.appliedFloorMs = floor;
   if (floor === null) {
     conv.messages = await parser.getMessagesAsync(conv.chatId);
     return "read";
   }
-  if (!appleDateKeptByFloor(conv.lastDateRaw, floorBinds(floor))) {
+  // S2 (SR C3): a chat holding undated texts is read with its floor (the SQL keeps
+  // undated rows), never skipped on its newest DATED text alone.
+  if (!(conv.undatedCount && conv.undatedCount > 0) && !appleDateKeptByFloor(conv.lastDateRaw, floorBinds(floor))) {
     conv.messages = [];
     report.chatsSkippedOld++;
     report.messagesBelowFloor += parser.getMessageCount(conv.chatId);

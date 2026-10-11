@@ -972,6 +972,54 @@ CREATE TABLE IF NOT EXISTS message_source_coverage (
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
 
+-- BACKLOG-3892 S2: iPhone text coverage, PER PHONE (udid). An iPhone sync reads
+-- only the texts lookback (plus deal chats back to the deal start), so the oldest
+-- stored iPhone text no longer says how far back the phone was read; these rows
+-- do. Written by iPhone sync persistence, in one transaction at its commit point,
+-- only for a run with no failed sms.db read, from the floors the run APPLIED.
+-- One interval per phone: [covered_since, last_sync_at]. A run reading [F, T]
+-- merges with the prior interval only when last_sync_at >= F; otherwise
+-- covered_since restarts at F. last_sync_at = when the run started (before its
+-- backup). approximate = the interval was seeded from stored texts (an upgrader's
+-- first sync after this change). The phone with the latest last_sync_at is the
+-- user's current phone. No row = iPhone coverage unknown ("never").
+CREATE TABLE IF NOT EXISTS iphone_device_coverage (
+  user_id TEXT NOT NULL,
+  udid TEXT NOT NULL,
+  covered_since DATETIME NOT NULL,
+  last_sync_at DATETIME NOT NULL,
+  approximate INTEGER NOT NULL DEFAULT 0,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, udid),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3892 S2: one iPhone chat (sms.db chat ROWID, per phone: a replacement
+-- phone reuses ROWIDs) read further back than the lookback, to covered_since,
+-- by the run that started at scanned_at.
+CREATE TABLE IF NOT EXISTS iphone_chat_coverage (
+  user_id TEXT NOT NULL,
+  udid TEXT NOT NULL,
+  chat_rowid INTEGER NOT NULL,
+  covered_since DATETIME NOT NULL,
+  scanned_at DATETIME NOT NULL,
+  PRIMARY KEY (user_id, udid, chat_rowid),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3892 S2: one deal contact's handle (iphoneChatFloors.handleKeys: E.164,
+-- last 10 digits, or lowercased email) whose chats were read back to covered_since
+-- by the run that started at scanned_at — written even when the handle has no chat.
+CREATE TABLE IF NOT EXISTS iphone_handle_coverage (
+  user_id TEXT NOT NULL,
+  udid TEXT NOT NULL,
+  handle_key TEXT NOT NULL,
+  covered_since DATETIME NOT NULL,
+  scanned_at DATETIME NOT NULL,
+  PRIMARY KEY (user_id, udid, handle_key),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS message_thread_names (
   user_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")

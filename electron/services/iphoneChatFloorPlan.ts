@@ -9,7 +9,9 @@
  *    the export gate's start and tolerance (SR D7a/c), per handle and per linked chat.
  *
  * FAIL SAFE: any failure returns undefined (no floor at all), never a plan missing
- * its deal floors — that would cut deal chats short without a trace.
+ * its deal floors — that would cut deal chats short without a trace. That
+ * includes a preferences read failure (S2, SR C1): the resolver throws for this
+ * caller instead of falling back to the 1.5-month default.
  */
 import { resolveImportPlanForUser } from "./importPlanInputs";
 import { settingsStartISO } from "./rcsCacheService";
@@ -37,7 +39,7 @@ function keepEarliest<K>(into: Map<K, number>, key: K, ms: number): void {
 /** The plan for one user's iPhone sync, or undefined = read every chat in full. */
 export async function buildChatFloorPlan(userId: string, now: Date = new Date()): Promise<ChatFloorPlan | undefined> {
   try {
-    const plan = await resolveImportPlanForUser({ userId, mode: "delta" }, now);
+    const plan = await resolveImportPlanForUser({ userId, mode: "delta", failOnPreferencesError: true }, now);
     const startISO = settingsStartISO(plan);
     const start = startISO ? Date.parse(startISO) : NaN;
     if (!startISO) {

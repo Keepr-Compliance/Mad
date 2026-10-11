@@ -44,6 +44,21 @@ export function dialogTextSource(effective: string | null, onMac: boolean): Text
   return chosen === "mac" && !onMac ? null : chosen;
 }
 
+/**
+ * The user's stored import source as a coverage source (the Texts tab's rule; also
+ * the export gate's, BACKLOG-3892 S2). null when it cannot be read. Never throws.
+ */
+export async function readChosenTextSource(userId: string): Promise<TextSource | null> {
+  try {
+    const prefs = await settingsService.getPreferences(userId);
+    const stored = prefs.success ? prefs.data?.messages?.source : null;
+    // BACKLOG-3749: a value this build does not know → the platform default.
+    return chosenTextSource(stored ? effectiveImportSource(stored, isMacOS()) : null);
+  } catch {
+    return null;
+  }
+}
+
 export function chosenTextSource(pref: string | undefined | null): TextSource | null {
   switch (pref) {
     case "macos-native":
@@ -130,15 +145,7 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
   }, []);
 
   const load = useCallback(async () => {
-    let chosen: TextSource | null = null;
-    try {
-      const prefs = await settingsService.getPreferences(userId);
-      const stored = prefs.success ? prefs.data?.messages?.source : null;
-      // BACKLOG-3749: a value this build does not know → the platform default.
-      chosen = chosenTextSource(stored ? effectiveImportSource(stored, isMacOS()) : null);
-    } catch {
-      chosen = null;
-    }
+    const chosen = await readChosenTextSource(userId);
     try {
       // SR: through the service, never window.api from the component.
       const r = await transactionService.getTextCoverage(transactionId, userId, chosen);

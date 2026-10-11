@@ -506,8 +506,10 @@ export class iOSMessagesParser {
           // Get last message date, read as a BigInt (BACKLOG-3892 S1): the parse
           // floor compares it exactly, in the unit it is stored in.
           const lastMessageRow = lastDateStmt.get(chat.ROWID) as
-            | { last_date: bigint | number | null }
+            | { last_date: bigint | number | null; undated?: bigint | number | null }
             | undefined;
+          // BACKLOG-3892 S2 (SR C3): undated rows this chat holds.
+          const undatedCount = Number(lastMessageRow?.undated ?? 0) || 0;
           const lastDate = lastMessageRow?.last_date ?? null;
           const lastDateRaw = lastDate === null ? null : String(lastDate);
 
@@ -534,6 +536,7 @@ export class iOSMessagesParser {
             lastMessage: lastMessageDate,
             isGroupChat,
             lastDateRaw,
+            ...(undatedCount > 0 ? { undatedCount } : {}),
             ...(read === null ? { participantsReadFailed: true } : {}),
           });
         } catch (chatError) {

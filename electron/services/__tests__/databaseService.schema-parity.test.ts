@@ -592,6 +592,59 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     what: "SQLite's automatic index for rcs_pending_media's primary key / unique constraint.",
     why: "BACKLOG-3619: the Google Messages import's local tables (cache, staging, pairing, consent, people, coverage). All `IF NOT EXISTS` in schema.sql AND folded into versioned migration v74 (migrationV74Sql.ts); databaseService.migration-v74.test.ts holds the two identical.",
     ref: "BACKLOG-3619",
+  },  {
+    key: "TABLE:iphone_device_coverage",
+    what: "New table iphone_device_coverage.",
+    why:
+      "BACKLOG-3892 S2: iPhone text coverage per phone (udid) — the device interval, per-chat and per-handle rows that replace MIN(sent_at) " +
+      "as the iPhone 'covered since' once sync reads only the lookback. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch, so existing " +
+      "databases get the tables on the next start (the BACKLOG-3884 index precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_iphone_device_coverage_1",
+    what: "SQLite's automatic index for iphone_device_coverage's primary key.",
+    why:
+      "BACKLOG-3892 S2: iPhone text coverage per phone (udid) — the device interval, per-chat and per-handle rows that replace MIN(sent_at) " +
+      "as the iPhone 'covered since' once sync reads only the lookback. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch, so existing " +
+      "databases get the tables on the next start (the BACKLOG-3884 index precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
+  {
+    key: "TABLE:iphone_chat_coverage",
+    what: "New table iphone_chat_coverage.",
+    why:
+      "BACKLOG-3892 S2: iPhone text coverage per phone (udid) — the device interval, per-chat and per-handle rows that replace MIN(sent_at) " +
+      "as the iPhone 'covered since' once sync reads only the lookback. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch, so existing " +
+      "databases get the tables on the next start (the BACKLOG-3884 index precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_iphone_chat_coverage_1",
+    what: "SQLite's automatic index for iphone_chat_coverage's primary key.",
+    why:
+      "BACKLOG-3892 S2: iPhone text coverage per phone (udid) — the device interval, per-chat and per-handle rows that replace MIN(sent_at) " +
+      "as the iPhone 'covered since' once sync reads only the lookback. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch, so existing " +
+      "databases get the tables on the next start (the BACKLOG-3884 index precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
+  {
+    key: "TABLE:iphone_handle_coverage",
+    what: "New table iphone_handle_coverage.",
+    why:
+      "BACKLOG-3892 S2: iPhone text coverage per phone (udid) — the device interval, per-chat and per-handle rows that replace MIN(sent_at) " +
+      "as the iPhone 'covered since' once sync reads only the lookback. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch, so existing " +
+      "databases get the tables on the next start (the BACKLOG-3884 index precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_iphone_handle_coverage_1",
+    what: "SQLite's automatic index for iphone_handle_coverage's primary key.",
+    why:
+      "BACKLOG-3892 S2: iPhone text coverage per phone (udid) — the device interval, per-chat and per-handle rows that replace MIN(sent_at) " +
+      "as the iPhone 'covered since' once sync reads only the lookback. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch, so existing " +
+      "databases get the tables on the next start (the BACKLOG-3884 index precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
   },
 ];
 

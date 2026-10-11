@@ -11,6 +11,7 @@ import { isPaywallLockedError } from "../services/entitlementService";
 import { ExportUnlockPrompt } from "./paywall/ExportUnlockPrompt";
 import { formatLastExported } from "../utils/formatUtils";
 import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
+import { readChosenTextSource } from "./transactionDetailsModule/components/TextCoverageNotice";
 import {
   TransactionDatesFields,
   saveConfirmedTransactionDates,
@@ -86,6 +87,12 @@ function ExportModal({
   const [completenessGate, setCompletenessGate] = useState<{
     auditStartISO: string | null;
     importerAvailable: boolean;
+    /**
+     * BACKLOG-3892 S2 (SR D3b): the gap is this deal's iPhone texts. Only an
+     * iPhone sync can fill it, so the gate says so and never offers "Update now"
+     * (the Mac import), which could not clear it.
+     */
+    iphone?: { coveredSince: string | null };
   } | null>(null);
 
   // Feature gate check
@@ -339,8 +346,18 @@ function ExportModal({
     // importing. Now we OBSERVE completeness before proceeding, and only prompt
     // when the audit start actually predates the imported message history.
     if (userId) {
-      const completeness = await checkExportCompleteness(transaction.id);
-      if (completeness && !completeness.complete && completeness.needsMessagesImport) {
+      // BACKLOG-3892 S2: for an iPhone user, completeness is the deal's iPhone coverage.
+      const chosen = await readChosenTextSource(userId);
+      const completeness = await checkExportCompleteness(transaction.id, chosen);
+      if (completeness && !completeness.complete && completeness.iphoneGap) {
+        setCompletenessGate({
+          auditStartISO: completeness.auditStartISO,
+          importerAvailable: false,
+          iphone: { coveredSince: completeness.iphoneCoveredSince ?? null },
+        });
+        return;
+      }
+      if (completeness && !completeness.complete && completeness.needsMessagesImport && completeness.iphoneGap === undefined) {
         setCompletenessGate({
           auditStartISO: completeness.auditStartISO,
           importerAvailable: completeness.messagesImporterAvailable,
@@ -976,15 +993,23 @@ function ExportModal({
                   </svg>
                 </div>
                 <h3 className="text-lg font-bold text-gray-900">
-                  Your audit period extends earlier than the imported message history
+                  {completenessGate.iphone
+                    ? "Your iPhone texts don't reach the start of this audit period yet"
+                    : "Your audit period extends earlier than the imported message history"}
                 </h3>
               </div>
 
+              {completenessGate.iphone ? (
+                <p className="text-sm text-gray-700 mb-3" data-testid="export-gate-iphone">
+                  {iphoneGateLine(completenessGate.iphone.coveredSince, completenessGate.auditStartISO)}
+                </p>
+              ) : (
               <p className="text-sm text-gray-700 mb-3">
                 {completenessGate.importerAvailable
                   ? "Older messages haven't been imported for this date range yet. Import them now so this audit is complete, or export anyway."
                   : "Older messages for this date range can only be imported on a Mac with Full Disk Access. You can export anyway, but earlier texts won't be included on this device."}
               </p>
+              )}
 
               {coverageImporting && (
                 <div className="mb-4" data-testid="export-gate-progress">
@@ -1038,6 +1063,24 @@ function ExportModal({
         )}
     </ResponsiveModal>
   );
+}
+
+/**
+ * BACKLOG-3892 S2 (SR D3b): the export gate's iPhone line — how far back this deal's
+ * iPhone texts were read, and the one action that reads further: Sync iPhone (the
+ * next sync reads this deal's chats back to its start).
+ */
+export function iphoneGateLine(coveredSince: string | null, auditStartISO: string | null): string {
+  const day = (iso: string | null): string => {
+    const t = iso ? Date.parse(iso) : NaN;
+    return Number.isFinite(t) ? new Date(t).toLocaleDateString() : "";
+  };
+  const since = day(coveredSince);
+  const start = day(auditStartISO);
+  const have = since
+    ? `Keepr has this deal's iPhone texts from ${since}.`
+    : "Keepr hasn't read this deal's iPhone texts back yet.";
+  return `${have} Connect your iPhone and click Sync iPhone on the dashboard: the next sync reads this deal's texts back${start ? ` to ${start}` : ""}. You can also export anyway without the earlier texts.`;
 }
 
 export default ExportModal;

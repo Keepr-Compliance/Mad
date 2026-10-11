@@ -493,6 +493,23 @@ export interface SyncResult {
   chatReadFailures?: number;
   /** BACKLOG-3892 S1: what the parse floors did (counts only); absent when no floor plan. */
   parseFloors?: ParseFloorReport;
+  /**
+   * BACKLOG-3892 S2: what persistence needs to record iPhone coverage. Set ONLY by
+   * sync() (a fresh backup of one phone); absent on every other path, which then
+   * records no coverage.
+   *  - udid: the phone this run read (coverage is per phone, SR D4/D6);
+   *  - startedAtMs: when the run started, before the backup was taken — never later
+   *    than the snapshot, so it is a safe end for the covered interval;
+   *  - floorPlan: the plan the run APPLIED (SR C2), absent = every chat read in full;
+   *  - chatFloors: per chat ROWID, the floor actually applied (null = read in full),
+   *    including chats skipped as too old.
+   */
+  coverageRun?: {
+    udid: string;
+    startedAtMs: number;
+    floorPlan?: ChatFloorPlan;
+    chatFloors: ReadonlyArray<readonly [number, number | null]>;
+  };
 }
 
 /**
@@ -2101,6 +2118,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           }
         : undefined;
       const skippedChats = new Set<number>();
+      // BACKLOG-3892 S2 (SR C2): the floor each chat was actually read to.
+      const appliedChatFloors: Array<readonly [number, number | null]> = [];
       let loadedCount = 0;
       for (const conv of conversations) {
         if (this.abortController?.signal.aborted) {
@@ -2111,6 +2130,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           if ((await readChatWithFloor(this.messagesParser, floorPlan, conv, floorReport)) === "skipped") {
             skippedChats.add(conv.chatId);
           }
+          appliedChatFloors.push([conv.chatId, conv.appliedFloorMs ?? null]);
         } else {
           conv.messages = await this.messagesParser.getMessagesAsync(conv.chatId);
         }
@@ -2233,6 +2253,13 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         sessionId,   // TASK-2110: For ACID rollback on cancel
         chatReadFailures, // BACKLOG-3892 S1 (D5)
         ...(floorReport ? { parseFloors: floorReport } : {}),
+        // BACKLOG-3892 S2: what persistence records iPhone coverage from.
+        coverageRun: {
+          udid: options.udid,
+          startedAtMs: this.startTime,
+          ...(floorPlan ? { floorPlan } : {}),
+          chatFloors: appliedChatFloors,
+        },
       };
 
       // BACKLOG-3816 S4-C: persistence still reads this chain; it is sealed when

@@ -27,6 +27,7 @@ import { isContactSourceEnabled } from "../utils/preferenceHelper";
 import type { iOSMessage, iOSConversation, iOSAttachment } from "../types/iosMessages";
 import type { iOSContact } from "../types/iosContacts";
 import type { SyncResult } from "./deviceSyncOrchestrator";
+import { readIphoneCoverageSeed, recordIphoneSyncCoverage, type CoverageInterval } from "./iphoneCoverageService";
 
 // Attachment storage constants
 const ATTACHMENTS_DIR = "message-attachments";
@@ -261,6 +262,19 @@ class IPhoneSyncStorageService {
         return this.cancelledResult(Date.now() - startTime);
       }
 
+      // BACKLOG-3892 S2 (SR D4): the upgrader seed is the stored iPhone texts as they
+      // were BEFORE this run's inserts. Read only when coverage can be recorded.
+      let coverageSeed: CoverageInterval | null = null;
+      if (result.coverageRun && result.chatReadFailures === 0) {
+        try {
+          coverageSeed = readIphoneCoverageSeed(userId);
+        } catch (seedError) {
+          log.warn(`[${IPhoneSyncStorageService.SERVICE_NAME}] iPhone coverage seed read failed (no seed)`, {
+            error: seedError instanceof Error ? seedError.message : String(seedError),
+          });
+        }
+      }
+
       // Store messages first (larger dataset)
       const messageResult = await this.storeMessages(
         userId,
@@ -349,6 +363,24 @@ class IPhoneSyncStorageService {
       // are permanent and Phase 2 may safely consider them.
       if (contactResult.stored > 0) {
         requestContactLinking(userId);
+      }
+
+      // BACKLOG-3892 S2 (SR D5): iPhone coverage advances only here — past every
+      // cancel/failure branch — in one transaction, and never for a run with a failed
+      // sms.db read. A failure to record leaves coverage where it was (it can only
+      // under-claim) and does not fail the sync.
+      try {
+        const coverageSkip = recordIphoneSyncCoverage(userId, result, coverageSeed);
+        if (coverageSkip) {
+          log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] iPhone coverage not advanced`, {
+            reason: coverageSkip,
+            chatReadFailures: result.chatReadFailures,
+          });
+        }
+      } catch (coverageError) {
+        log.warn(`[${IPhoneSyncStorageService.SERVICE_NAME}] iPhone coverage not recorded`, {
+          error: coverageError instanceof Error ? coverageError.message : String(coverageError),
+        });
       }
 
       log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Persistence complete`, {
