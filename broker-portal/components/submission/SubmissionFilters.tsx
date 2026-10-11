@@ -275,6 +275,7 @@ export function SubmissionPhoneFilters({
                       name="submissions-agent"
                       value={a.id}
                       checked={checked}
+                      aria-label={a.label}
                       onChange={() => setPendingAgent(value)}
                       className="h-5 w-5 accent-primary-600"
                     />
