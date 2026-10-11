@@ -925,6 +925,26 @@ describe('SyncOrchestratorService', () => {
       expect(state.queue[0].error).toBe('Device disconnected');
     });
 
+    it('keeps the typed errorKind on the completed external sync record (BACKLOG-3885)', () => {
+      syncOrchestrator.registerExternalSync('iphone');
+
+      syncOrchestrator.completeExternalSync('iphone', {
+        status: 'error',
+        error: 'Device disconnected during sync',
+        errorKind: 'device_disconnected',
+      });
+
+      const item = syncOrchestrator.getState().queue[0];
+      expect(item.status).toBe('error');
+      expect(item.errorKind).toBe('device_disconnected');
+    });
+
+    it('leaves errorKind unset for other errors and for completion (BACKLOG-3885)', () => {
+      syncOrchestrator.registerExternalSync('iphone');
+      syncOrchestrator.completeExternalSync('iphone', { status: 'error', error: 'Backup failed' });
+      expect(syncOrchestrator.getState().queue[0].errorKind).toBeUndefined();
+    });
+
     it('should NOT cancel external syncs when cancel() is called', () => {
       syncOrchestrator.registerExternalSync('iphone');
       expect(syncOrchestrator.getState().isRunning).toBe(true);

@@ -5,6 +5,7 @@
 
 import { renderHook, act } from "@testing-library/react";
 import { useIPhoneSync, syncStateRef, UNSEAL_MESSAGE_PREFIX } from "../useIPhoneSync";
+import { syncOrchestrator } from "../../services/SyncOrchestratorService";
 
 // BACKLOG-1919: useIPhoneSync now sources platform via usePlatform() (renderer-
 // safe, IPC-backed) instead of `process.platform` (undefined in the sandboxed
@@ -1268,6 +1269,38 @@ describe("useIPhoneSync", () => {
 
       expect(result.current.syncStatus).toBe("error");
       expect(result.current.error).toBe("Device disconnected during sync");
+    });
+
+    it("BACKLOG-3885: tells the orchestrator the stop was a device disconnect (typed errorKind)", async () => {
+      const syncApi = setupSyncApiMock();
+      (window as any).api = { sync: syncApi, backup: { checkStatus: jest.fn().mockResolvedValue({ success: true }) } };
+      const completeSpy = jest.spyOn(syncOrchestrator, "completeExternalSync").mockImplementation(() => undefined);
+      // The hook defers the orchestrator call with queueMicrotask, which the
+      // suite's fake timers hold back.
+      jest.useRealTimers();
+
+      const { result } = renderHook(() => useIPhoneSync());
+      await act(async () => {
+        deviceConnectedCallback?.(mockDevice);
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await result.current.startSync();
+      });
+      act(() => {
+        syncProgressCallback?.({ phase: "backup", overallProgress: 50 });
+      });
+      await act(async () => {
+        deviceDisconnectedCallback?.();
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+      });
+
+      expect(completeSpy).toHaveBeenCalledWith("iphone", {
+        status: "error",
+        error: "Device disconnected during sync",
+        errorKind: "device_disconnected",
+      });
+      completeSpy.mockRestore();
     });
 
     it("should not set error when disconnected during safe phase", async () => {
