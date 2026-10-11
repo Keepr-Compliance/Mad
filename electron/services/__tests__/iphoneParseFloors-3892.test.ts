@@ -171,6 +171,41 @@ maybe("BACKLOG-3892 S1: iPhone parse floors (real sms.db)", () => {
     expect(r.byChat.get(1)).toEqual(["G-1-0", "G-1-1", "G-1-3"]);
   });
 
+  it("S2 (SR C3): undated texts of a chat whose newest DATED text is below its floor are kept, not skipped with it", async () => {
+    const r = await run(
+      [
+        { id: 1, identifier: OTHER_PHONE, members: [OTHER_PHONE], messages: [{ date: 0 }, { date: null }, { date: ns(F - DAY) }] },
+        { id: 2, identifier: "+12025550104", members: ["+12025550104"], messages: [{ date: ns(F - DAY) }] },
+      ],
+      plan({ settings: F }),
+    );
+    expect(r.skipped).toEqual([2]);
+    expect(r.byChat.get(1)).toEqual(["G-1-0", "G-1-1"]);
+    expect(r.report).toMatchObject({ chatsSkippedOld: 1, messagesBelowFloor: 2 });
+  });
+
+  it("S2 (SR C2): each chat records the floor it was ACTUALLY read to (skipped chats included; group = earliest)", async () => {
+    writeSmsDbFromSpec(Driver!, tmp, [
+      { id: 1, identifier: DEAL_PHONE, members: [DEAL_PHONE], messages: [{ date: ns(F + DAY) }] },
+      { id: 2, identifier: OTHER_PHONE, members: [OTHER_PHONE], messages: [{ date: ns(F - DAY) }] },
+      { id: 3, identifier: "chat-g", members: [DEAL_PHONE_2, OTHER_PHONE], messages: [{ date: ns(F + DAY), from: OTHER_PHONE }] },
+    ]);
+    const p = plan({ settings: F, handles: { [DEAL_PHONE]: D, [DEAL_PHONE_2]: D2 } });
+    const parser = new iOSMessagesParser();
+    parser.open(tmp);
+    const report: ParseFloorReport = { floorSource: "none", settingsFloorMs: null, chatsSkippedOld: 0, chatsWidened: 0, messagesBelowFloor: 0 };
+    const applied = new Map<number, number | null | undefined>();
+    try {
+      for (const conv of await parser.getConversationsAsync()) {
+        await readChatWithFloor(parser, p, conv, report);
+        applied.set(conv.chatId, conv.appliedFloorMs);
+      }
+    } finally {
+      parser.close();
+    }
+    expect([...applied.entries()].sort((a, b) => a[0] - b[0])).toEqual([[1, D], [2, F], [3, D2]]);
+  });
+
   it("a deal contact's chat is read back to the deal floor while another chat stops at the settings floor", async () => {
     const dates = [ns(D - 1), ns(D), ns(D + DAY), ns(F - 1), ns(F)];
     const r = await run(

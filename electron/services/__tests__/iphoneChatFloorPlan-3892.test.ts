@@ -137,6 +137,14 @@ maybe("BACKLOG-3892 S1: iPhone floor plan (real schema)", () => {
     ]);
   });
 
+  it("S2 (SR C1): a preferences read failure → undefined (no floor), never the 1.5-month default", async () => {
+    mockGetPreferences.mockRejectedValue(new Error("offline"));
+    expect(await buildChatFloorPlan(USER, NOW)).toBeUndefined();
+    // Positive control: the same failure still resolves the defaults for every other caller.
+    const { resolveImportPlanForUser } = await import("../importPlanInputs");
+    await expect(resolveImportPlanForUser({ userId: USER, mode: "delta" }, NOW)).resolves.toBeDefined();
+  });
+
   it("a failing deal read → undefined (no floor at all), never a plan without its deal floors", async () => {
     db.exec("DROP TABLE contact_emails");
     expect(await buildChatFloorPlan(USER, NOW)).toBeUndefined();

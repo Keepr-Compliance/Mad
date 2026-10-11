@@ -242,6 +242,12 @@ describe("BACKLOG-3892 S1: the sync's parse loop under SyncOptions.floorPlan", (
     expect(r.messages.map((m) => m.guid)).toEqual(["G-10"]);
     expect(r.parseFloors).toEqual({ floorSource: "settings", settingsFloorMs: F, chatsSkippedOld: 1, chatsWidened: 0, messagesBelowFloor: 4 + 3 });
     expect(r.chatReadFailures).toBe(3);
+    // S2 (SR C2): coverage is recorded from the plan this run APPLIED and the floor
+    // each chat was actually read to (the skipped chat included), for this phone.
+    expect(r.coverageRun?.udid).toBe(UDID);
+    expect(r.coverageRun?.floorPlan).toBe(plan);
+    expect(r.coverageRun?.chatFloors).toEqual([[1, F], [2, F]]);
+    expect(Number.isFinite(r.coverageRun?.startedAtMs)).toBe(true);
   });
 
   it("without a plan: every chat read in full, as before", async () => {
@@ -251,5 +257,8 @@ describe("BACKLOG-3892 S1: the sync's parse loop under SyncOptions.floorPlan", (
     expect(r.conversations.map((c) => c.chatId).sort()).toEqual([1, 2]);
     expect(r.parseFloors).toBeUndefined();
     expect(r.chatReadFailures).toBe(3);
+    // S2: a full read records no plan (= everything the phone holds).
+    expect(r.coverageRun?.floorPlan).toBeUndefined();
+    expect(r.coverageRun?.chatFloors).toEqual([]);
   });
 });
