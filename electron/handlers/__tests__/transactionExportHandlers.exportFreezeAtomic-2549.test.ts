@@ -83,6 +83,7 @@ import fs from "fs";
 import path from "path";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+const mockShellOpenPath = jest.fn();
 
 jest.mock("electron", () => ({
   ipcMain: {
@@ -93,6 +94,7 @@ jest.mock("electron", () => ({
   },
   BrowserWindow: class {},
   app: { getPath: jest.fn(() => "/tmp"), getVersion: jest.fn(() => "0.0.0-test") },
+  shell: { openPath: (...a: unknown[]) => mockShellOpenPath(...a) },
 }));
 
 jest.mock("@sentry/electron/main", () => ({
@@ -485,6 +487,30 @@ describe("BACKLOG-3808 — a finished export is registered as openable", () => {
       realPath: dir,
       kind: "dir",
     });
+  });
+
+  it("export-pdf to a renderer-chosen path: open-folder refuses that path", async () => {
+    seed({ frozen: false });
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { registerConversationHandlers } = require("../conversationHandlers");
+    if (!handlers.has("open-folder")) registerConversationHandlers({} as never);
+    mockShellOpenPath.mockReset();
+    mockShellOpenPath.mockResolvedValue("");
+
+    const chosen = path.join(outDir, "chosen.pdf");
+    fs.writeFileSync(chosen, "%PDF");
+    (folderExportService.exportTransactionToCombinedPDF as jest.Mock).mockResolvedValueOnce(chosen);
+
+    const handler = handlers.get("transactions:export-pdf");
+    if (!handler) throw new Error("handler not registered: transactions:export-pdf");
+    const result = (await handler({} as never, TXN, chosen)) as { success: boolean; path?: string };
+    expect(result).toMatchObject({ success: true, path: chosen });
+
+    const openFolder = handlers.get("open-folder");
+    if (!openFolder) throw new Error("handler not registered: open-folder");
+    const opened = (await openFolder({} as never, chosen)) as { success: boolean; error?: string };
+    expect(opened.success).toBe(false);
+    expect(mockShellOpenPath).not.toHaveBeenCalled();
   });
 
   it("a path no export returned is not openable", async () => {

@@ -288,8 +288,7 @@ export function registerTransactionExportHandlers(
         path: generatedPath,
       });
 
-      // BACKLOG-3808: the renderer may later ask to open this export.
-      await rememberOpenablePath(generatedPath);
+      // BACKLOG-3808: deliberately NOT recorded as openable (see pm_comments).
 
       return {
         success: true,
