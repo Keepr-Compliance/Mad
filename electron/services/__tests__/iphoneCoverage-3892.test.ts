@@ -234,6 +234,18 @@ maybe("BACKLOG-3892 S2: iPhone coverage (real schema, real persistence)", () => 
     expect(iphoneStoredTextSpan(USER)).toBeUndefined();
   });
 
+  // SR R3 control: the second local user's id sorts AFTER the caller's, so an unordered
+  // `SELECT id FROM users_local LIMIT 1` returns the caller. Only the one-user guard
+  // refuses here; the is-the-caller check cannot (it passes).
+  it("R3: a second local user whose id sorts after the caller's still means no seed", () => {
+    storedText("ios-chat-1", "2024-01-01T00:00:00.000Z");
+    expect(iphoneStoredTextSpan(USER)).toMatchObject({ n: 1, floor: "2024-01-01T00:00:00.000Z" });
+    db.prepare("INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES ('zzz-other', 'z3892@example.test', 'google', 'o-zzz')").run();
+    expect("zzz-other" > USER).toBe(true);
+    expect(db.prepare("SELECT id FROM users_local LIMIT 1").get()).toEqual({ id: USER });
+    expect(iphoneStoredTextSpan(USER)).toBeUndefined();
+  });
+
   it("D4 seed: a STALE upgrader (newest stored text before F) is not seeded covered, even though this run inserts newer texts", async () => {
     storedText("ios-chat-1", "2024-01-01T00:00:00.000Z");
     storedText("ios-chat-1", "2026-01-01T00:00:00.000Z");
