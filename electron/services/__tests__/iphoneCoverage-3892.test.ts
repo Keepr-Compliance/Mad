@@ -153,7 +153,7 @@ function result(opts: {
 
 async function persist(r: SyncResult, cancel?: { cancelled: boolean }): Promise<void> {
   const out = await iPhoneSyncStorageService.persistSyncResult(USER, r, undefined, undefined, r.sessionId, cancel);
-  if (!cancel?.cancelled) expect(out.success).toBe(true);
+  if (!cancel) expect(out.success).toBe(true);
 }
 
 function deviceRows(): Array<{ udid: string; covered_since: string; last_sync_at: string; approximate: number }> {
@@ -235,7 +235,12 @@ maybe("BACKLOG-3892 S2: iPhone coverage (real schema, real persistence)", () => 
     const p = plan({ settings: F, handles: { [P1]: DEAL_FLOOR } });
     await persist(result({ floorPlan: p, chatFloors: [[3, DEAL_FLOOR]], failures: 1 }));
     await persist(result({ floorPlan: p, chatFloors: [[3, DEAL_FLOOR]], failures: undefined }));
-    await persist(result({ floorPlan: p, chatFloors: [[3, DEAL_FLOOR]], texts: [[3, T1 - DAY]] }), { cancelled: true });
+    // Cancelled AFTER its messages were inserted (the first check passes): rolled back.
+    let checks = 0;
+    const cancelLate = { get cancelled() { checks += 1; return checks > 1; } };
+    await persist(result({ floorPlan: p, chatFloors: [[3, DEAL_FLOOR]], texts: [[3, T1 - DAY]] }), cancelLate);
+    expect(checks).toBeGreaterThan(1);
+    expect(countRows("messages")).toBe(0);
     await persist(result({ floorPlan: p, noRun: true }));
     expect(countRows("iphone_device_coverage") + countRows("iphone_handle_coverage") + countRows("iphone_chat_coverage")).toBe(0);
     // Positive control: the same run with zero failures records all three kinds.
