@@ -176,3 +176,88 @@ export function buildLargeSmsDb(
     guids: () => Array.from({ length: opts.total }, (_, i) => `G-3785-${i + 1}`),
   };
 }
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3892 S1: a small sms.db with explicit chats, people and raw dates
+// ---------------------------------------------------------------------------
+
+export interface SmsChatSpec {
+  /** chat.ROWID */
+  id: number;
+  /** chat.chat_identifier: the other person's handle for 1:1, "chat…" for a group. */
+  identifier: string;
+  /** Current members (chat_handle_join). */
+  members: string[];
+  /** Raw `message.date` (seconds or nanoseconds, as Apple stores it) and sender (null = me). */
+  messages: Array<{ date: number | bigint | null; from?: string | null }>;
+}
+
+export interface SmsDbSpecOptions {
+  /** Leave out `chat_handle_join`: every participants read fails. */
+  omitChatHandleJoin?: boolean;
+  /** Leave out `message.date_read`: every message read fails (the chat list still works). */
+  omitDateRead?: boolean;
+}
+
+/**
+ * Write an sms.db with exactly these chats into an iOS-backup layout under `dir`.
+ * Message guids are `G-<chatId>-<index>` (index in the spec's order).
+ */
+export function writeSmsDbFromSpec(
+  Database: new (file: string) => DatabaseType,
+  dir: string,
+  chats: readonly SmsChatSpec[],
+  opts: SmsDbSpecOptions = {},
+): string {
+  const sub = nodePath.join(dir, SMS_DB_HASH.substring(0, 2));
+  nodeFs.mkdirSync(sub, { recursive: true });
+  const file = nodePath.join(sub, SMS_DB_HASH);
+  if (nodeFs.existsSync(file)) nodeFs.unlinkSync(file);
+  const db = new Database(file);
+  let schema = SCHEMA;
+  if (opts.omitChatHandleJoin) {
+    schema = schema.replace("CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER, UNIQUE(chat_id, handle_id));", "");
+  }
+  if (opts.omitDateRead) schema = schema.replace("date_read INTEGER, ", "");
+  db.exec(schema);
+  const handleIds = new Map<string, number>();
+  const handleOf = (h: string): number => {
+    let id = handleIds.get(h);
+    if (id === undefined) {
+      id = handleIds.size + 1;
+      handleIds.set(h, id);
+      db.prepare("INSERT INTO handle (ROWID, id, service) VALUES (?, ?, 'iMessage')").run(id, h);
+    }
+    return id;
+  };
+  let rowid = 0;
+  for (const chat of chats) {
+    db.prepare("INSERT INTO chat (ROWID, guid, style, chat_identifier, display_name) VALUES (?, ?, 45, ?, NULL)").run(
+      chat.id,
+      `iMessage;-;${chat.identifier}`,
+      chat.identifier,
+    );
+    if (!opts.omitChatHandleJoin) {
+      for (const m of chat.members) db.prepare("INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (?, ?)").run(chat.id, handleOf(m));
+    }
+    chat.messages.forEach((m, i) => {
+      rowid++;
+      const from = m.from ?? null;
+      const cols = opts.omitDateRead
+        ? "(ROWID, guid, text, handle_id, is_from_me, date, date_delivered, service)"
+        : "(ROWID, guid, text, handle_id, is_from_me, date, date_read, date_delivered, service)";
+      const vals = opts.omitDateRead ? "(?, ?, ?, ?, ?, ?, NULL, 'iMessage')" : "(?, ?, ?, ?, ?, ?, NULL, NULL, 'iMessage')";
+      db.prepare(`INSERT INTO message ${cols} VALUES ${vals}`).run(
+        rowid,
+        `G-${chat.id}-${i}`,
+        `text ${i}`,
+        from ? handleOf(from) : 0,
+        from ? 0 : 1,
+        m.date,
+      );
+      db.prepare("INSERT INTO chat_message_join (chat_id, message_id, message_date) VALUES (?, ?, ?)").run(chat.id, rowid, m.date ?? 0);
+    });
+  }
+  db.close();
+  return file;
+}
