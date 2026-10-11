@@ -53,13 +53,6 @@ jest.mock("../atRest/backupAtRest", () => ({
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
 }));
-// BACKLOG-3816 S4-C (B1): no saved-password file I/O; this suite's subject is not the password.
-jest.mock("../atRest/backupPassword", () => ({
-  ...jest.requireActual("../atRest/backupPassword"),
-  getBackupPasswordStore: () =>
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
-}));
 jest.mock("electron", () => ({
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   app: { isPackaged: false, getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()) },

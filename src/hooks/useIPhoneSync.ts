@@ -116,7 +116,7 @@ export function setDeferredLogoutCallback(cb: (() => Promise<void>) | null): voi
  * This hook provides:
  * - Device connection monitoring via sync API
  * - Full sync flow (backup → decrypt → parse)
- * - Password prompt handling for encrypted backups
+ * - Apple-encrypted backups: stop with the turn-it-off steps (BACKLOG-3881; no password)
  * - Progress tracking across all phases
  * - Error state management
  *
@@ -146,8 +146,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const [error, setError] = useState<string | null>(null);
   // TASK-2276: Structured error for rich UI display
   const [userError, setUserError] = useState<UserFacingError | null>(null);
-  const [needsPassword, setNeedsPassword] = useState(false);
-  const [pendingPassword, setPendingPassword] = useState<string | null>(null);
+  // BACKLOG-3881: the last sync stopped because this iPhone's backups are Apple-encrypted.
+  const [appleEncryptedBackup, setAppleEncryptedBackup] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [isWaitingForPasscode, setIsWaitingForPasscode] = useState(false);
   // TASK-910: Sync lock state
@@ -441,7 +441,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
             // A zero does not decide it: a sync whose first completed file is
             // 1 GiB+ should read GB. It lives here, on the sync's state, so it
             // survives the modal unmounting on minimize. Every new sync replaces
-            // the progress object (startSync, submitPassword, cancelSync,
+            // the progress object (startSync, cancelSync,
             // dismissSync), and that replacement is the reset.
             displayUnitIndex:
               prev?.displayUnitIndex ??
@@ -452,15 +452,6 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
 
           // TASK-2119: Update orchestrator with progress
           syncOrchestrator.updateExternalSync('iphone', { progress: percent, phase });
-        });
-        cleanups.push(unsub);
-      }
-
-      // Password required event
-      if (syncApi.onPasswordRequired) {
-        const unsub = syncApi.onPasswordRequired(() => {
-          logger.debug("[useIPhoneSync] Password required for encrypted backup");
-          setNeedsPassword(true);
         });
         cleanups.push(unsub);
       }
@@ -562,7 +553,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
             setSyncStatus("error");
             setError(result.error || "Sync failed");
           }
-          setNeedsPassword(false);
+          setAppleEncryptedBackup(false);
         });
         cleanups.push(unsub);
       }
@@ -1055,7 +1046,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     setSyncStatus("syncing");
     setError(null);
     setUserError(null); // TASK-2276: Clear structured error on new sync
-    setNeedsPassword(false);
+    setAppleEncryptedBackup(false);
     setProgress({
       phase: "preparing",
       percent: 0,
@@ -1068,15 +1059,10 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     try {
       logger.info("[useIPhoneSync] Starting sync for device:", device.udid);
 
-      // If we have a pending password, include it
       const result = await syncApi.start({
         udid: device.udid,
-        password: pendingPassword ?? undefined,
         forceFullBackup: false,
       });
-
-      // Clear pending password after use
-      setPendingPassword(null);
 
       if (!result) {
         logger.error("[useIPhoneSync] Sync returned null result");
@@ -1093,7 +1079,14 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           logger.info("[useIPhoneSync] Sync was cancelled, ignoring error result");
           return;
         }
-        logger.error("[useIPhoneSync] Sync failed:", result.error);
+        // BACKLOG-3881: Apple-encrypted backups are not supported. The flow shows the
+        // turn-it-off steps; nothing retries until the user presses Sync again.
+        if (result.appleEncryptedBackup) {
+          logger.info("[useIPhoneSync] iPhone backups are Apple-encrypted; showing the turn-off steps");
+          setAppleEncryptedBackup(true);
+        } else {
+          logger.error("[useIPhoneSync] Sync failed:", result.error);
+        }
         setSyncStatus("error");
         setError(result.error);
       }
@@ -1108,69 +1101,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       setSyncStatus("error");
       setError(errorMessage);
     }
-  }, [device, pendingPassword, isWindows]);
-
-  // Submit password for encrypted backups
-  const submitPassword = useCallback(
-    async (password: string) => {
-      if (!device) {
-        logger.error(
-          "[useIPhoneSync] Cannot submit password: No device connected"
-        );
-        setError("No device connected");
-        return;
-      }
-
-      logger.info("[useIPhoneSync] Password submitted, retrying sync");
-      setError(null);
-      setPendingPassword(password);
-      setNeedsPassword(false);
-
-      // Retry sync with password
-      const syncApi = window.api?.sync;
-      if (!syncApi?.start) {
-        setError("Sync service not available");
-        return;
-      }
-
-      setProgress({
-        phase: "preparing",
-        percent: 0,
-        message: "Verifying password...",
-      });
-
-      try {
-        const result = await syncApi.start({
-          udid: device.udid,
-          password: password,
-        });
-
-        // Clear pending password
-        setPendingPassword(null);
-
-        if (!result?.success && result?.error) {
-          if (
-            result.error.includes("password") ||
-            result.error.includes("decrypt")
-          ) {
-            setNeedsPassword(true);
-            setError("Incorrect password. Please try again.");
-          } else {
-            setSyncStatus("error");
-            setError(result.error);
-          }
-        }
-      } catch (err) {
-        const errorMessage =
-          err instanceof Error ? err.message : "An unexpected error occurred";
-        logger.error("[useIPhoneSync] Password submit error:", errorMessage);
-        setNeedsPassword(true);
-        setError(errorMessage);
-        setPendingPassword(null);
-      }
-    },
-    [device]
-  );
+  }, [device, isWindows]);
 
   // Cancel ongoing sync
   // BACKLOG-3816: `trigger` names the control that asked; main records it on the run.
@@ -1194,10 +1125,9 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     // their guards and land on this clean idle state (never "complete").
     setSyncStatus("idle");
     setProgress(null);
-    setNeedsPassword(false);
+    setAppleEncryptedBackup(false);
     setError(null);
     setUserError(null); // TASK-2276: Clear structured error on cancel
-    setPendingPassword(null);
     setSyncLocked(false);
     setLockReason(null);
 
@@ -1333,7 +1263,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     progress,
     error,
     userError, // TASK-2276: Structured error for rich UI display
-    needsPassword,
+    appleEncryptedBackup,
     lastSyncTime,
     isWaitingForPasscode,
     // TASK-910: Sync lock state
@@ -1350,7 +1280,6 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     installDriverError,
     recoverInstallDriver,
     startSync,
-    submitPassword,
     cancelSync,
     dismissSync,
     checkSyncStatus,

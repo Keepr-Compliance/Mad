@@ -17,13 +17,6 @@ jest.mock("../atRest/backupAtRest", () => ({
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
 }));
-// BACKLOG-3816 S4-C (B1): no saved-password file I/O; this suite's subject is not the password.
-jest.mock("../atRest/backupPassword", () => ({
-  ...jest.requireActual("../atRest/backupPassword"),
-  getBackupPasswordStore: () =>
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
-}));
 jest.mock("electron", () => ({
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   app: { isPackaged: false, getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()) },
@@ -161,7 +154,6 @@ const COMPLETE = {
 interface Internals {
   decryptionService: { isBackupEncrypted: jest.Mock; decryptBackup: jest.Mock };
   contactsParser: { open: jest.Mock };
-  resolveBackupPassword: (...a: unknown[]) => Promise<unknown>;
   discardParseCopy: (p: string | null) => Promise<void>;
 }
 
@@ -216,21 +208,4 @@ describe("BACKLOG-3816: processExistingBackup honours a cancel during pre-flight
     expect(internals.contactsParser.open).not.toHaveBeenCalled();
   });
 
-  it("cancel during decryption: the decrypted copy is removed and nothing is parsed", async () => {
-    const { o, internals } = setup();
-    internals.decryptionService.isBackupEncrypted.mockResolvedValue(true);
-    jest.spyOn(internals, "resolveBackupPassword").mockResolvedValue({ kind: "stored", password: "pw" });
-    const discard = jest.spyOn(internals, "discardParseCopy").mockResolvedValue(undefined);
-    const decrypt = deferred<unknown>();
-    internals.decryptionService.decryptBackup.mockImplementation(() => decrypt.promise);
-    const running = o.processExistingBackup({ udid: UDID, forceResync: true });
-    await new Promise((r) => setTimeout(r, 10));
-    expect(internals.decryptionService.decryptBackup).toHaveBeenCalled();
-    o.cancel("progress-cancel");
-    decrypt.resolve({ success: true, decryptedPath: "/tmp/keepr-decrypted-3816", stats: { skipped: 0 } });
-    const result = await running;
-    expect(result.error).toBe("Processing cancelled by user");
-    expect(discard).toHaveBeenCalledWith("/tmp/keepr-decrypted-3816");
-    expect(internals.contactsParser.open).not.toHaveBeenCalled();
-  });
 });

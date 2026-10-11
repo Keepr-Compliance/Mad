@@ -102,10 +102,6 @@ interface ElectronAPI {
       success: boolean;
       error?: string;
     }>;
-    submitPassword: (options: { udid: string; password: string }) => Promise<{
-      success: boolean;
-      error?: string;
-    }>;
     cancel: () => Promise<void>;
     onProgress: (
       callback: (progress: BackupProgress) => void,

@@ -13,39 +13,12 @@
  * - check-disk-space
  */
 
-// BACKLOG-3817: keep saved backup passwords in memory. The process-wide store writes
-// under hostAppPaths.userData(), which in jest is a shared directory — a password saved by
-// one test would be found by the next run.
-const mockSavedPasswords = new Map<string, string>();
 // BACKLOG-3816 S4-C: the kept backup's at-rest layer is not this suite's subject.
 jest.mock("../atRest/backupAtRest", () => ({
   ...jest.requireActual("../atRest/backupAtRest"),
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
 }));
-jest.mock("../atRest/backupPassword", () => {
-  const actual = jest.requireActual("../atRest/backupPassword");
-  return {
-    ...actual,
-    getBackupPasswordStore: () => ({
-      get: async (udid: string) =>
-        mockSavedPasswords.has(udid)
-          ? { kind: "found", password: mockSavedPasswords.get(udid), origin: "user" }
-          : { kind: "absent" },
-      put: async (udid: string, password: string) => {
-        mockSavedPasswords.set(udid, password);
-      },
-      replaceVerified: async (udid: string, password: string) => {
-        mockSavedPasswords.set(udid, password);
-      },
-      replaceUnreadable: async () => {
-        throw new Error("no unreadable entry in this suite");
-      },
-      storePath: () => "",
-    }),
-  };
-});
-beforeEach(() => mockSavedPasswords.clear());
 
 import { EventEmitter } from "events";
 
@@ -116,7 +89,7 @@ class MockBackupService extends EventEmitter {
     };
   }
 
-  async startBackup(_options: { udid: string; password?: string; forceFullBackup?: boolean }) {
+  async startBackup(_options: { udid: string; forceFullBackup?: boolean }) {
     // Emit progress events
     this.emit("progress", {
       phase: "preparing",
@@ -607,26 +580,15 @@ skipInCI("DeviceSyncOrchestrator", () => {
   });
 
   describe("encrypted backup handling", () => {
-    it("should require password for encrypted backups", async () => {
+    // BACKLOG-3881: Apple-encrypted backups are not supported; no password is taken.
+    it("stops with the turn-it-off message for an encrypted backup", async () => {
       mockBackupService.setMockBehavior(true, true);
 
       const result = await orchestrator.sync({ udid: "mock-udid" });
 
-      // Without password, should fail for encrypted backup
       expect(result.success).toBe(false);
-      expect(result.error).toContain("Password required");
-    });
-
-    it("should accept password for encrypted backup", async () => {
-      mockBackupService.setMockBehavior(true, true);
-
-      const result = await orchestrator.sync({
-        udid: "mock-udid",
-        password: "test-password",
-      });
-
-      // With password, should succeed
-      expect(result.success).toBe(true);
+      expect(result.appleEncryptedBackup).toBe(true);
+      expect(result.error).toContain("Encrypt local backup");
     });
   });
 

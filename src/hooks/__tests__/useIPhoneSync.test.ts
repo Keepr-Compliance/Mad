@@ -38,7 +38,6 @@ describe("useIPhoneSync", () => {
   let deviceConnectedCallback: ((device: unknown) => void) | null = null;
   let deviceDisconnectedCallback: (() => void) | null = null;
   let syncProgressCallback: ((progress: unknown) => void) | null = null;
-  let passwordRequiredCallback: (() => void) | null = null;
   let syncErrorCallback: ((err: { message: string }) => void) | null = null;
   let syncCompleteCallback: ((data: unknown) => void) | null = null;
   let waitingForPasscodeCallback: (() => void) | null = null;
@@ -75,10 +74,6 @@ describe("useIPhoneSync", () => {
       }),
       onProgress: jest.fn((cb) => {
         syncProgressCallback = cb;
-        return jest.fn();
-      }),
-      onPasswordRequired: jest.fn((cb) => {
-        passwordRequiredCallback = cb;
         return jest.fn();
       }),
       onError: jest.fn((cb) => {
@@ -123,7 +118,6 @@ describe("useIPhoneSync", () => {
     deviceConnectedCallback = null;
     deviceDisconnectedCallback = null;
     syncProgressCallback = null;
-    passwordRequiredCallback = null;
     syncErrorCallback = null;
     syncCompleteCallback = null;
     waitingForPasscodeCallback = null;
@@ -172,14 +166,15 @@ describe("useIPhoneSync", () => {
       expect(result.current.syncStatus).toBe("idle");
       expect(result.current.progress).toBeNull();
       expect(result.current.error).toBeNull();
-      expect(result.current.needsPassword).toBe(false);
+      expect(result.current.appleEncryptedBackup).toBe(false);
     });
 
     it("should provide all required hook methods", () => {
       const { result } = renderHook(() => useIPhoneSync());
 
       expect(typeof result.current.startSync).toBe("function");
-      expect(typeof result.current.submitPassword).toBe("function");
+      // BACKLOG-3881: no password entry point remains.
+      expect((result.current as unknown as Record<string, unknown>).submitPassword).toBeUndefined();
       expect(typeof result.current.cancelSync).toBe("function");
     });
 
@@ -247,15 +242,6 @@ describe("useIPhoneSync", () => {
       );
     });
 
-    it("should log error when submitting password without device", async () => {
-      const { result } = renderHook(() => useIPhoneSync());
-
-      await result.current.submitPassword("test-password");
-
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("[ERROR] [useIPhoneSync] Cannot submit password: No device connected"),
-      );
-    });
   });
 
   describe("sync API path", () => {
@@ -642,40 +628,68 @@ describe("useIPhoneSync", () => {
     });
   });
 
-  describe("password handling", () => {
-    it("should set needsPassword when password required event fires", () => {
+  // BACKLOG-3881: Keepr does not read Apple-encrypted backups. The result flag shows the
+  // turn-it-off steps; no password is sent and nothing retries on its own.
+  describe("Apple-encrypted backup", () => {
+    const MESSAGE = "Your iPhone backups are password-protected by Apple.";
+
+    async function connectedHook(start: jest.Mock) {
       const syncApi = setupSyncApiMock();
-      (window as any).api = { sync: syncApi };
+      syncApi.start = start;
+      (window as any).api = { sync: syncApi, backup: { checkStatus: jest.fn().mockResolvedValue({ success: true }) } };
+      const hook = renderHook(() => useIPhoneSync());
+      await act(async () => {
+        deviceConnectedCallback?.(mockDevice);
+        await Promise.resolve();
+      });
+      return { hook, syncApi };
+    }
 
-      const { result } = renderHook(() => useIPhoneSync());
+    it("a flagged result sets appleEncryptedBackup and the error, sends no password, and does not retry", async () => {
+      const start = jest.fn().mockResolvedValue({ success: false, error: MESSAGE, appleEncryptedBackup: true });
+      const { hook } = await connectedHook(start);
 
-      act(() => {
-        passwordRequiredCallback?.();
+      await act(async () => {
+        await hook.result.current.startSync();
+      });
+      // Let any follow-up work the hook might schedule run before counting calls.
+      await act(async () => {
+        jest.advanceTimersByTime(60_000);
+        await Promise.resolve();
       });
 
-      expect(result.current.needsPassword).toBe(true);
+      expect(hook.result.current.appleEncryptedBackup).toBe(true);
+      expect(hook.result.current.syncStatus).toBe("error");
+      expect(hook.result.current.error).toBe(MESSAGE);
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(start.mock.calls[0][0]).toEqual({ udid: mockDevice.udid, forceFullBackup: false });
     });
 
-    it("should clear needsPassword on successful sync complete", async () => {
-      const syncApi = setupSyncApiMock();
-      (window as any).api = { sync: syncApi };
+    it("the next Sync clears the flag before it runs", async () => {
+      const start = jest
+        .fn()
+        .mockResolvedValueOnce({ success: false, error: MESSAGE, appleEncryptedBackup: true })
+        .mockResolvedValueOnce({ success: true });
+      const { hook } = await connectedHook(start);
 
-      const { result } = renderHook(() => useIPhoneSync());
-
-      act(() => {
-        passwordRequiredCallback?.();
+      await act(async () => {
+        await hook.result.current.startSync();
       });
-
-      expect(result.current.needsPassword).toBe(true);
-
-      // BACKLOG-2328: completion events only fire during an active sync; model that
-      // so the guarded onComplete handler runs.
-      syncStateRef.isActive = true;
-      act(() => {
-        syncCompleteCallback?.({ success: true, messageCount: 100 });
+      expect(hook.result.current.appleEncryptedBackup).toBe(true);
+      await act(async () => {
+        await hook.result.current.startSync();
       });
+      expect(hook.result.current.appleEncryptedBackup).toBe(false);
+    });
 
-      expect(result.current.needsPassword).toBe(false);
+    it("an ordinary failure is not reported as an encrypted backup", async () => {
+      const start = jest.fn().mockResolvedValue({ success: false, error: "lost" });
+      const { hook } = await connectedHook(start);
+      await act(async () => {
+        await hook.result.current.startSync();
+      });
+      expect(hook.result.current.syncStatus).toBe("error");
+      expect(hook.result.current.appleEncryptedBackup).toBe(false);
     });
   });
 
@@ -860,7 +874,6 @@ describe("useIPhoneSync", () => {
 
       expect(syncApi.start).toHaveBeenCalledWith({
         udid: mockDevice.udid,
-        password: undefined,
         forceFullBackup: false,
       });
       expect(result.current.syncStatus).toBe("syncing");
@@ -955,69 +968,6 @@ describe("useIPhoneSync", () => {
     });
   });
 
-  describe("submitPassword", () => {
-    it("should retry sync with password", async () => {
-      const syncApi = setupSyncApiMock();
-      (window as any).api = { sync: syncApi, backup: { checkStatus: jest.fn().mockResolvedValue({ success: true }) } };
-
-      const { result } = renderHook(() => useIPhoneSync());
-
-      await act(async () => {
-        deviceConnectedCallback?.(mockDevice);
-        await Promise.resolve();
-      });
-
-      await act(async () => {
-        await result.current.submitPassword("my-secret-password");
-      });
-
-      expect(syncApi.start).toHaveBeenCalledWith({
-        udid: mockDevice.udid,
-        password: "my-secret-password",
-      });
-    });
-
-    it("should handle incorrect password error", async () => {
-      const syncApi = setupSyncApiMock();
-      syncApi.start.mockResolvedValue({ success: false, error: "Invalid password" });
-      (window as any).api = { sync: syncApi, backup: { checkStatus: jest.fn().mockResolvedValue({ success: true }) } };
-
-      const { result } = renderHook(() => useIPhoneSync());
-
-      await act(async () => {
-        deviceConnectedCallback?.(mockDevice);
-        await Promise.resolve();
-      });
-
-      await act(async () => {
-        await result.current.submitPassword("wrong-password");
-      });
-
-      expect(result.current.needsPassword).toBe(true);
-      expect(result.current.error).toBe("Incorrect password. Please try again.");
-    });
-
-    it("should handle password submit exception", async () => {
-      const syncApi = setupSyncApiMock();
-      syncApi.start.mockRejectedValue(new Error("Decryption failed"));
-      (window as any).api = { sync: syncApi, backup: { checkStatus: jest.fn().mockResolvedValue({ success: true }) } };
-
-      const { result } = renderHook(() => useIPhoneSync());
-
-      await act(async () => {
-        deviceConnectedCallback?.(mockDevice);
-        await Promise.resolve();
-      });
-
-      await act(async () => {
-        await result.current.submitPassword("test");
-      });
-
-      expect(result.current.needsPassword).toBe(true);
-      expect(result.current.error).toBe("Decryption failed");
-    });
-  });
-
   describe("cancelSync", () => {
     it("should cancel ongoing sync", async () => {
       const syncApi = setupSyncApiMock();
@@ -1035,7 +985,7 @@ describe("useIPhoneSync", () => {
       // "cancelled" terminal state) so the modal renders the normal start screen.
       expect(result.current.syncStatus).toBe("idle");
       expect(result.current.progress).toBeNull();
-      expect(result.current.needsPassword).toBe(false);
+      expect(result.current.appleEncryptedBackup).toBe(false);
       expect(result.current.error).toBeNull();
     });
 
@@ -1671,7 +1621,7 @@ describe("useIPhoneSync", () => {
    *   zero does not decide -> deciding before bytes move (pins a GB sync to MB)
    *   passcode events      -> a same-sync progress writer that drops the unit
    *   Cancel / Continue /
-   *   Try Again / password -> a unit that bleeds into the NEXT sync
+   *   Try Again -> a unit that bleeds into the NEXT sync
    */
   describe("BACKLOG-3416: the transferred-bytes unit is decided once per sync", () => {
     const KiB = 1024;
@@ -1837,18 +1787,5 @@ describe("useIPhoneSync", () => {
       expect(unit(hook)).toBe(GB);
     });
 
-    it("a password retry is a new transfer and picks its own unit", async () => {
-      const hook = await connectDevice();
-      await startSync(hook);
-      transfer(8 * KiB);
-      expect(unit(hook)).toBe(MB);
-
-      await act(async () => {
-        await hook.result.current.submitPassword("backup-password");
-      });
-
-      transfer(2 * GiB);
-      expect(unit(hook)).toBe(GB);
-    });
   });
 });

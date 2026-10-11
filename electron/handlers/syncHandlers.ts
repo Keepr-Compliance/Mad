@@ -52,7 +52,7 @@ export function toSyncReply(result: SyncResult): SyncStartReply {
     conversationCount: result.conversations?.length ?? 0,
     ...(result.skipped !== undefined ? { skipped: result.skipped } : {}),
     ...(result.skipReason !== undefined ? { skipReason: result.skipReason } : {}),
-    ...(result.passwordRequired !== undefined ? { passwordRequired: result.passwordRequired } : {}),
+    ...(result.appleEncryptedBackup !== undefined ? { appleEncryptedBackup: result.appleEncryptedBackup } : {}),
     ...(result.attachmentsUndecryptable !== undefined
       ? { attachmentsUndecryptable: result.attachmentsUndecryptable }
       : {}),
@@ -166,7 +166,7 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
     "sync:start",
     async (
       _,
-      options: { udid: string; password?: string; forceFullBackup?: boolean },
+      options: { udid: string; forceFullBackup?: boolean },
     ): Promise<SyncStartReply> => {
       log.info("[SyncHandlers] Starting sync", { udid: options.udid });
 
@@ -231,10 +231,12 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
       }
 
       try {
-        const result = await orchestrator!.sync(options);
-        // BACKLOG-3817: a run that stopped to ask for the backup password did no work. The
-        // user's retry with the password must not be refused by the cooldown above.
-        if (result?.passwordRequired) {
+        // BACKLOG-3881: only the fields the orchestrator reads — a password a stale
+        // renderer might still send is never passed on.
+        const result = await orchestrator!.sync({ udid: options.udid, forceFullBackup: options.forceFullBackup });
+        // BACKLOG-3881: a run stopped by an Apple-encrypted backup did no work. The user's
+        // Sync after turning encryption off must not be refused by the cooldown above.
+        if (result?.appleEncryptedBackup) {
           rateLimiters.sync.clearKey(options.udid);
         }
         // BACKLOG-3785: never the result itself — see toSyncReply.
@@ -351,7 +353,7 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
   // Process existing backup without running new backup (for testing)
   ipcMain.handle(
     "sync:process-existing",
-    async (_, options: { udid: string; password?: string }): Promise<SyncStartReply> => {
+    async (_, options: { udid: string }): Promise<SyncStartReply> => {
       log.info("[SyncHandlers] Processing existing backup", { udid: options.udid });
 
       // Capture user ID at sync start to prevent race conditions
@@ -383,7 +385,7 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
       }
 
       try {
-        const result = await orchestrator!.processExistingBackup(options.udid, options.password);
+        const result = await orchestrator!.processExistingBackup(options.udid);
         return toSyncReply(result);
       } catch (error) {
         log.error("[SyncHandlers] Process existing backup error", { error });
@@ -499,12 +501,6 @@ function setupEventForwarding(): void {
       udid: device.udid,
     });
     sendToMainWindow("sync:device-disconnected", device);
-  });
-
-  // Forward password required event
-  orchestrator.on("password-required", () => {
-    log.info("[SyncHandlers] Password required for encrypted backup");
-    sendToMainWindow("sync:password-required", {});
   });
 
   // BACKLOG-2911 (FIX 3): both channel names are historical. They mean "the device has

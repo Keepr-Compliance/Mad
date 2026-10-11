@@ -115,38 +115,14 @@ describe("BACKLOG-3817 startBackup with an encrypted backup", () => {
     expect((await new BackupService().checkEncryptionStatus(UDID)).status).toBe("unknown");
   });
 
-  it("right password: success, the REAL backup path, nothing decrypted beside it, password nowhere in argv or logs", async () => {
-    phone("true");
-    const before = listing();
-    const result = await new BackupService().startBackup({ udid: UDID, password: PASSWORD });
-    expect(result.success).toBe(true);
-    expect(result.isEncrypted).toBe(true);
-    expect(result.backupPath).toBe(backupDir());
-    expect(listing()).toEqual(before);
-    expect(fs.existsSync(path.join(backupDir(), "decrypted"))).toBe(false);
-
-    const argv = JSON.stringify(mockSpawn.mock.calls.map((c) => c[1]));
-    expect(argv).not.toContain(PASSWORD);
-    expect(logged.join("\n")).not.toContain(PASSWORD);
-  });
-
-  it("wrong password: INCORRECT_PASSWORD, nothing written", async () => {
-    phone("true");
-    const before = listing();
-    const result = await new BackupService().startBackup({ udid: UDID, password: "not it" });
-    expect(result.success).toBe(false);
-    expect(result.errorCode).toBe("INCORRECT_PASSWORD");
-    expect(listing()).toEqual(before);
-  });
-
-  it("no password on a phone that encrypts: PASSWORD_REQUIRED before any backup runs", async () => {
+  it("BACKLOG-3881: a phone that encrypts is refused before any backup runs, and no password is asked for", async () => {
     phone("true");
     const service = new BackupService();
     const asked = jest.fn();
     service.on("password-required", asked);
     const result = await service.startBackup({ udid: UDID });
     expect(result.errorCode).toBe("PASSWORD_REQUIRED");
-    expect(asked).toHaveBeenCalled();
+    expect(asked).not.toHaveBeenCalled();
     expect(mockSpawn.mock.calls.every((c) => !String(c[0]).includes("idevicebackup2"))).toBe(true);
   });
 });

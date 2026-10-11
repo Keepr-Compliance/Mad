@@ -117,7 +117,6 @@ import { BackupService } from "../backupService";
 import { DeviceSyncOrchestrator } from "../deviceSyncOrchestrator";
 import {
   BACKUP_AT_REST_QUARANTINED_MESSAGE,
-  BACKUP_AT_REST_UNREADABLE_MESSAGE,
   BackupAtRest,
   BACKUP_SECURING_SENTENCE,
   QUARANTINE_DIR_NAME,
@@ -203,12 +202,6 @@ function newOrchestrator(listen = true): DeviceSyncOrchestrator {
   o.on("error", () => {});
   if (listen) o.on("complete", () => {});
   o.backupAtRest = atRest;
-  o.backupPasswordStore = {
-    get: async () => ({ kind: "absent" as const }),
-    put: async () => undefined,
-    replaceVerified: async () => undefined,
-    storePath: () => "",
-  } as never;
   currentOrchestrator = o;
   return o;
 }
@@ -362,10 +355,10 @@ describe("C2 — the chain is sealed on every end path after the unseal", () => 
     await sealedAfter(o);
   });
 
-  it("password required (the phone started encrypting, no password)", async () => {
+  it("BACKLOG-3881: the backup landed Apple-encrypted (the phone started encrypting)", async () => {
     const o = newOrchestrator();
     backupReturns(ok({ isEncrypted: true }));
-    expect((await o.sync({ udid: UDID })).error).toMatch(/Password required/);
+    expect((await o.sync({ udid: UDID })).error).toMatch(/Encrypt local backup/);
     await sealedAfter(o);
   });
 
@@ -757,7 +750,7 @@ describe("refusals before idevicebackup2", () => {
       },
     );
 
-    it("cancel during a step that cannot be interrupted (password lookup): the sync stops when it returns and never asks the seal to pause", async () => {
+    it("cancel during a step that cannot be interrupted (the phone's encryption setting): the sync stops when it returns and never asks the seal to pause", async () => {
       const internals = atRest as unknown as { busy: Map<string, string>; pausable: Map<string, Int32Array> };
       const flag = new Int32Array(new SharedArrayBuffer(4));
       internals.busy.set(UDID, "sealing");
@@ -769,10 +762,10 @@ describe("refusals before idevicebackup2", () => {
         let reached!: () => void;
         const atStep = new Promise<void>((r) => (reached = r));
         jest
-          .spyOn(o as unknown as { resolveBackupPassword: () => Promise<unknown> }, "resolveBackupPassword")
+          .spyOn(o as unknown as { readPhoneBackupEncryption: () => Promise<unknown> }, "readPhoneBackupEncryption")
           .mockImplementation(() => {
             reached();
-            return new Promise((r) => (release = () => r({ kind: "none" })));
+            return new Promise((r) => (release = () => r("off")));
           });
         const beginAtRest = jest.spyOn(atRest, "beginSync");
         const syncing = o.sync({ udid: UDID });
@@ -799,23 +792,6 @@ describe("refusals before idevicebackup2", () => {
     });
   });
 
-  it("B2: a phone held by something that cannot pause (another sync) is not moved aside or deleted by the new-chain step", async () => {
-    const P = BackupService.prototype;
-    jest.spyOn(P, "checkEncryptionStatus").mockResolvedValue({ isEncrypted: true, needsPassword: true, status: "on" });
-    jest.spyOn(P, "readChainEncryption").mockResolvedValue("plaintext");
-    const aside = jest.spyOn(P, "moveChainAside").mockResolvedValue("aside");
-    const del = jest.spyOn(P, "removePlaintextChain").mockResolvedValue(true);
-    const o = newOrchestrator();
-    backupReturns(ok());
-    const busy = (atRest as unknown as { busy: Map<string, string> }).busy;
-    busy.set(UDID, "migrating");
-    const result = await o.sync({ udid: UDID, password: "typed" });
-    busy.delete(UDID);
-    expect(result.error).toContain(BACKUP_SECURING_SENTENCE);
-    expect(aside).not.toHaveBeenCalled();
-    expect(del).not.toHaveBeenCalled();
-    expect(startBackup).not.toHaveBeenCalled();
-  });
 });
 
 describe("D — C-DELTA reads a parse copy", () => {
@@ -1102,49 +1078,6 @@ describe("B2 — an unreadable kept backup no longer ends iPhone sync", () => {
     expect(quarantined[0].startsWith(`${UDID}-`)).toBe(true);
     await o.completeBackupAtRest();
     await sealedAfter(o);
-  });
-});
-
-describe("lock before the new-chain step", () => {
-  it("a launch migration that arrives while the old chain is being moved aside stands aside", async () => {
-    const P = BackupService.prototype;
-    jest.spyOn(P, "checkEncryptionStatus").mockResolvedValue({ isEncrypted: true, needsPassword: true, status: "on" });
-    jest.spyOn(P, "readChainEncryption").mockResolvedValue("plaintext");
-    let migrationDuringMove: string | null = null;
-    const aside = jest.spyOn(P, "moveChainAside").mockImplementation(async () => {
-      migrationDuringMove = await atRest.migrate(UDID);
-      return "aside";
-    });
-    const o = newOrchestrator();
-    (o as unknown as { needsNewEncryptedChain: () => Promise<boolean> }).needsNewEncryptedChain = async () => true;
-    backupReturns(ok());
-    await o.sync({ udid: UDID, password: "typed" });
-    expect(aside).toHaveBeenCalledTimes(1);
-    expect(migrationDuringMove).toBe("busy");
-    await o.completeBackupAtRest();
-  });
-});
-
-describe("an error in the new-chain step is an ordinary sync error, not an at-rest refusal", () => {
-  it("moveChainAside throwing under the lock surfaces its own message and releases the lock", async () => {
-    const P = BackupService.prototype;
-    jest.spyOn(P, "checkEncryptionStatus").mockResolvedValue({ isEncrypted: true, needsPassword: true, status: "on" });
-    jest.spyOn(P, "readChainEncryption").mockResolvedValue("plaintext");
-    jest.spyOn(P, "moveChainAside").mockRejectedValue(new Error("rename blew up"));
-    const o = newOrchestrator();
-    (o as unknown as { needsNewEncryptedChain: () => Promise<boolean> }).needsNewEncryptedChain = async () => true;
-    backupReturns(ok());
-    const emitted: unknown[] = [];
-    o.on("error", (e: unknown) => emitted.push(e));
-    const result = await o.sync({ udid: UDID, password: "typed" });
-    expect(result.success).toBe(false);
-    expect(result.error).toBe("rename blew up");
-    // An ordinary failure emits the Error itself; an at-rest refusal emits { message }.
-    expect(emitted).toHaveLength(1);
-    expect(emitted[0]).toBeInstanceOf(Error);
-    expect(result.error).not.toBe(BACKUP_AT_REST_UNREADABLE_MESSAGE);
-    expect(startBackup).not.toHaveBeenCalled();
-    expect(atRest.busyReason(UDID)).toBeNull();
   });
 });
 

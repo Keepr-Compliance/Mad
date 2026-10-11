@@ -8,7 +8,6 @@ const SYNC_CANCEL_TRIGGERS: Record<SyncCancelTrigger, true> = {
   "progress-cancel": true,
   "error-close": true,
   "try-again-no-device": true,
-  "password-cancel": true,
 };
 
 export function isSyncCancelTrigger(value: unknown): value is SyncCancelTrigger {

@@ -800,7 +800,7 @@ export function classifyBackupFailure(
  * - 'progress': BackupProgress - Progress updates during backup
  * - 'error': Error - Error events
  * - 'complete': BackupResult - When backup completes
- * - 'password-required': { udid: string } - When encrypted backup needs password (TASK-007)
+ * (BACKLOG-3881: no 'password-required' event — Keepr does not read Apple-encrypted backups)
  * - 'waiting-for-passcode': void - The device has not started sending files yet. The
  *   name is historical (BACKLOG-2911 FIX 3): a passcode prompt is ONE possible cause,
  *   alongside device-side indexing and a stalled process, and nothing here can tell
@@ -1174,14 +1174,13 @@ export class BackupService extends EventEmitter {
     // Note: checkEncryptionStatus also validates UDID, but we already validated above
     const encryptionInfo = await this.checkEncryptionStatus(validatedUdid);
 
-    if (encryptionInfo.isEncrypted && !options.password) {
-      // Emit event to signal UI should prompt for password
-      this.emit("password-required", { udid: options.udid });
-
+    // BACKLOG-3881: Keepr does not read Apple-encrypted backups and never takes a password.
+    // A phone with "Encrypt local backup" on is refused before anything is transferred.
+    if (encryptionInfo.isEncrypted) {
       return {
         success: false,
         backupPath: null,
-        error: "Backup password required",
+        error: "This iPhone's backups are encrypted by Apple",
         errorCode: "PASSWORD_REQUIRED",
         duration: 0,
         deviceUdid: options.udid,
@@ -1539,16 +1538,16 @@ export class BackupService extends EventEmitter {
             encryptionInfo.needsPassword = actuallyEncrypted;
           }
 
-          // Handle encrypted backup - need password to proceed
-          if (actuallyEncrypted && !options.password) {
-            // Backup is encrypted but no password provided - need to ask user
-            log.info("[BackupService] Backup is encrypted but no password provided, requesting password");
-            this.emit("password-required", { udid: options.udid });
+          // BACKLOG-3881: the backup landed Apple-encrypted (the phone's setting could not
+          // be read first). Keepr never decrypts it; the caller tells the user to turn the
+          // setting off.
+          if (actuallyEncrypted) {
+            log.info("[BackupService] Backup is Apple-encrypted; Keepr does not read encrypted backups");
 
             const result: BackupResult = {
               success: false,
               backupPath: deviceBackupPath,
-              error: "Backup password required",
+              error: "This iPhone's backups are encrypted by Apple",
               errorCode: "PASSWORD_REQUIRED",
               duration: Date.now() - this.startTime,
               deviceUdid: options.udid,
@@ -1560,35 +1559,6 @@ export class BackupService extends EventEmitter {
             this.emit("complete", result);
             resolve(result);
             return;
-          }
-
-          // BACKLOG-3817: an encrypted backup is NOT decrypted here. It used to be — into
-          // `Backups/<udid>/decrypted`, plaintext beside the backup — and the orchestrator then
-          // tried to decrypt that folder a second time. Here the password is only checked
-          // against the backup's keybag; the orchestrator decrypts once, into a parse copy
-          // outside the backup, and `backupPath` stays the real backup.
-          if (actuallyEncrypted && options.password) {
-            const passwordOk = await backupDecryptionService.verifyPassword(
-              deviceBackupPath,
-              options.password,
-            );
-            if (!passwordOk) {
-              const result: BackupResult = {
-                success: false,
-                backupPath: deviceBackupPath,
-                error: "Incorrect password",
-                errorCode: "INCORRECT_PASSWORD",
-                duration: Date.now() - this.startTime,
-                deviceUdid: options.udid,
-                isIncremental: this.resolveIsIncremental(previousBackupExists, options),
-                deviceReportedBackupMode: this.deviceReportedBackupMode,
-                backupSize,
-                isEncrypted: true,
-              };
-              this.emit("complete", result);
-              resolve(result);
-              return;
-            }
           }
         } else if (this.quitRequested) {
           // BACKLOG-3598: we killed this process because the app is closing. Not a failure.
@@ -3227,16 +3197,6 @@ export class BackupService extends EventEmitter {
     } catch {
       return false;
     }
-  }
-
-  /**
-   * Verify a backup password without performing full backup (TASK-007)
-   */
-  async verifyBackupPassword(
-    backupPath: string,
-    password: string,
-  ): Promise<boolean> {
-    return backupDecryptionService.verifyPassword(backupPath, password);
   }
 
   /**

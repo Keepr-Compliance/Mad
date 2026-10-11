@@ -130,15 +130,6 @@ export interface DeviceInfoProps {
   device: iOSDevice;
 }
 
-export interface BackupPasswordModalProps {
-  isOpen: boolean;
-  deviceName: string;
-  onSubmit: (password: string) => void;
-  onCancel: () => void;
-  error?: string;
-  isLoading?: boolean;
-}
-
 export interface SyncProgressProps {
   progress: BackupProgress;
   onCancel?: () => void;
@@ -175,7 +166,8 @@ export interface UseIPhoneSyncReturn {
   error: string | null;
   /** TASK-2276: Structured error for rich UI display (title + description + suggestion) */
   userError: UserFacingError | null;
-  needsPassword: boolean;
+  /** BACKLOG-3881: the last sync stopped because this iPhone's backups are Apple-encrypted. */
+  appleEncryptedBackup: boolean;
   /** Last sync time for this device (from backup status) */
   lastSyncTime: Date | null;
   /** Whether the sync is waiting for the user to enter their iPhone passcode */
@@ -211,7 +203,6 @@ export interface UseIPhoneSyncReturn {
    */
   recoverInstallDriver: () => Promise<void>;
   startSync: () => Promise<void>;
-  submitPassword: (password: string) => void;
   /** BACKLOG-3816: `trigger` names the on-screen control that asked for the cancel. */
   cancelSync: (trigger: SyncCancelTrigger) => Promise<void>;
   /** Reset state after user acknowledges sync completion */

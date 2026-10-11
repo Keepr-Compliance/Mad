@@ -154,13 +154,6 @@ jest.mock("../backupService", () => ({
 // BACKLOG-3817: the orchestrator reads the saved backup password before the backup starts.
 // The real store does file I/O, which fake timers do not drive, so the monitor's first
 // reading landed outside the first 60s window on some runs.
-// BACKLOG-3816 S4-C (B1): no saved-password file I/O; this suite's subject is not the password.
-jest.mock("../atRest/backupPassword", () => ({
-  ...jest.requireActual("../atRest/backupPassword"),
-  getBackupPasswordStore: () =>
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
-}));
 
 jest.mock("../backupDecryptionService", () => ({
   BackupDecryptionService: jest.fn().mockImplementation(() => ({
