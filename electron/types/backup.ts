@@ -101,6 +101,22 @@ export interface BackupResult {
    * description are kept apart rather than pre-joined into a string.
    */
   failureCause?: BackupFailureCause;
+
+  /**
+   * BACKLOG-3814: how the backup tool started. Present only where the platform
+   * handles a held start (Windows). See electron/services/toolStartHold.ts.
+   */
+  toolStart?: ToolStartObservation;
+}
+
+/** BACKLOG-3814: spawn requested -> first output byte (or exit, if none). */
+export interface ToolStartObservation {
+  /** Milliseconds from just before `spawn()` to the first stdout/stderr byte, or to exit. */
+  delayMs: number;
+  /** `delayMs` reached the held-start threshold. */
+  delayed: boolean;
+  /** No run of this tool was recorded under the running app version. */
+  firstRunThisVersion: boolean;
 }
 
 /**
