@@ -50,6 +50,7 @@ import {
 
 import { sendToMainWindow } from "../windowRegistry";
 import { handleBusy } from "../utils/busyIpc";
+import { rememberOpenablePath } from "../services/openablePaths";
 
 interface ExportOptions {
   exportFormat?: string;
@@ -287,6 +288,9 @@ export function registerTransactionExportHandlers(
         path: generatedPath,
       });
 
+      // BACKLOG-3808: the renderer may later ask to open this export.
+      await rememberOpenablePath(generatedPath);
+
       return {
         success: true,
         path: generatedPath,
@@ -438,6 +442,9 @@ export function registerTransactionExportHandlers(
         format: sanitizedOptions.exportFormat || "pdf",
         path: exportPath,
       });
+
+      // BACKLOG-3808: the renderer may later ask to open this export.
+      await rememberOpenablePath(exportPath);
 
       return {
         success: true,
@@ -632,6 +639,9 @@ export function registerTransactionExportHandlers(
         transactionId: validatedTransactionId,
         path: exportPath,
       });
+
+      // BACKLOG-3808: the renderer may later ask to open this export.
+      await rememberOpenablePath(exportPath);
 
       return {
         success: true,

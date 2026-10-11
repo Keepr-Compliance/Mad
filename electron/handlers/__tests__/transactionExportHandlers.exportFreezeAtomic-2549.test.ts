@@ -165,6 +165,12 @@ import { setDb } from "../../services/db/core/dbConnection";
 import { FROZEN_IDENTITY_FIELDS } from "../../services/transactionFreezePolicy";
 import transactionService from "../../services/transactionService";
 import { registerTransactionExportHandlers } from "../transactionExportHandlers";
+import enhancedExportService from "../../services/enhancedExportService";
+import folderExportService from "../../services/folderExportService";
+import {
+  resolveOpenablePath,
+  clearOpenablePathsForTests,
+} from "../../services/openablePaths";
 
 const SCHEMA = fs.readFileSync(
   path.join(__dirname, "..", "..", "database", "schema.sql"),
@@ -421,6 +427,70 @@ describe("BACKLOG-2549 — export status and the freeze stamp flip together", ()
       await invoke(channel, options);
 
       expect(stampSpy).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3808 — the "Open Audit" button opens exactly what the export wrote.
+// The export handlers register their output; open-folder accepts only that.
+// ---------------------------------------------------------------------------
+describe("BACKLOG-3808 — a finished export is registered as openable", () => {
+  let outDir: string;
+
+  beforeEach(() => {
+    clearOpenablePathsForTests();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const realOs = require("os") as typeof import("os");
+    outDir = fs.realpathSync(fs.mkdtempSync(path.join(realOs.tmpdir(), "keepr-3808-exp-")));
+  });
+
+  afterEach(() => {
+    fs.rmSync(outDir, { recursive: true, force: true });
+  });
+
+  it("enhanced export: the returned file can be opened", async () => {
+    seed({ frozen: false });
+    const file = path.join(outDir, "Audit.xlsx");
+    fs.writeFileSync(file, "x");
+    (enhancedExportService.exportTransaction as jest.Mock).mockResolvedValueOnce(file);
+
+    const result = (await invoke("transactions:export-enhanced", CHANNELS[0].options)) as {
+      success: boolean;
+      path?: string;
+    };
+
+    expect(result).toMatchObject({ success: true, path: file });
+    await expect(resolveOpenablePath(result.path)).resolves.toEqual({
+      ok: true,
+      realPath: file,
+      kind: "file",
+    });
+  });
+
+  it("folder export: the returned folder can be opened", async () => {
+    seed({ frozen: false });
+    const dir = path.join(outDir, "Audit folder");
+    fs.mkdirSync(dir);
+    (folderExportService.exportTransactionToFolder as jest.Mock).mockResolvedValueOnce(dir);
+
+    const result = (await invoke("transactions:export-folder", CHANNELS[1].options)) as {
+      success: boolean;
+      path?: string;
+    };
+
+    expect(result).toMatchObject({ success: true, path: dir });
+    await expect(resolveOpenablePath(result.path)).resolves.toEqual({
+      ok: true,
+      realPath: dir,
+      kind: "dir",
+    });
+  });
+
+  it("a path no export returned is not openable", async () => {
+    await expect(resolveOpenablePath(outDir)).resolves.toEqual({
+      ok: false,
+      reason: "not_registered",
     });
   });
 });

@@ -1301,24 +1301,39 @@ describe("System Handlers", () => {
       });
     });
 
+    // BACKLOG-3808: only a location the main process wrote is revealed.
     describe("system:show-in-folder", () => {
-      beforeEach(() => {
+      const realFs = jest.requireActual("fs") as typeof import("fs");
+      const realOs = jest.requireActual("os") as typeof import("os");
+      const realPathMod = jest.requireActual("path") as typeof import("path");
+      const openable = jest.requireActual("../services/openablePaths") as typeof import("../services/openablePaths");
+      let tmp: string;
+      let exportFile: string;
+      let spacedFile: string;
+
+      beforeEach(async () => {
         mockShellShowItemInFolder.mockReset();
+        openable.clearOpenablePathsForTests();
+        tmp = realFs.realpathSync(realFs.mkdtempSync(realPathMod.join(realOs.tmpdir(), "keepr-3808-sif-")));
+        exportFile = realPathMod.join(tmp, "export.pdf");
+        realFs.writeFileSync(exportFile, "%PDF");
+        spacedFile = realPathMod.join(tmp, "My Documents", "export file.pdf");
+        realFs.mkdirSync(realPathMod.dirname(spacedFile));
+        realFs.writeFileSync(spacedFile, "%PDF");
+        await openable.rememberOpenablePath(exportFile);
+        await openable.rememberOpenablePath(spacedFile);
       });
 
-      it("should show file in folder successfully", async () => {
-        mockShellShowItemInFolder.mockReturnValue(undefined);
+      afterEach(() => {
+        realFs.rmSync(tmp, { recursive: true, force: true });
+      });
 
+      it("should show a file the app exported", async () => {
         const handler = registeredHandlers.get("system:show-in-folder");
-        const result = await handler(
-          mockEvent,
-          "/Users/test/Documents/export.pdf",
-        );
+        const result = await handler(mockEvent, exportFile);
 
         expect(result.success).toBe(true);
-        expect(mockShellShowItemInFolder).toHaveBeenCalledWith(
-          "/Users/test/Documents/export.pdf",
-        );
+        expect(mockShellShowItemInFolder).toHaveBeenCalledWith(exportFile);
       });
 
       it("should handle empty file path", async () => {
@@ -1330,34 +1345,31 @@ describe("System Handlers", () => {
         expect(mockShellShowItemInFolder).not.toHaveBeenCalled();
       });
 
-      it("should handle Windows-style paths", async () => {
-        mockShellShowItemInFolder.mockReturnValue(undefined);
-
+      it("should refuse a path the app did not write", async () => {
+        const other = realPathMod.join(tmp, "other.pdf");
+        realFs.writeFileSync(other, "x");
         const handler = registeredHandlers.get("system:show-in-folder");
-        const result = await handler(
-          mockEvent,
-          "C:\\Users\\test\\Documents\\export.pdf",
-        );
+        const result = await handler(mockEvent, other);
 
-        expect(result.success).toBe(true);
-        expect(mockShellShowItemInFolder).toHaveBeenCalledWith(
-          "C:\\Users\\test\\Documents\\export.pdf",
-        );
+        expect(result.success).toBe(false);
+        expect(result.error).toBe(openable.OPEN_REFUSED_MESSAGE);
+        expect(mockShellShowItemInFolder).not.toHaveBeenCalled();
+      });
+
+      it("should refuse a path that does not exist", async () => {
+        const handler = registeredHandlers.get("system:show-in-folder");
+        const result = await handler(mockEvent, "C:\\Users\\test\\Documents\\export.pdf");
+
+        expect(result.success).toBe(false);
+        expect(mockShellShowItemInFolder).not.toHaveBeenCalled();
       });
 
       it("should handle paths with spaces", async () => {
-        mockShellShowItemInFolder.mockReturnValue(undefined);
-
         const handler = registeredHandlers.get("system:show-in-folder");
-        const result = await handler(
-          mockEvent,
-          "/Users/test/My Documents/export file.pdf",
-        );
+        const result = await handler(mockEvent, spacedFile);
 
         expect(result.success).toBe(true);
-        expect(mockShellShowItemInFolder).toHaveBeenCalledWith(
-          "/Users/test/My Documents/export file.pdf",
-        );
+        expect(mockShellShowItemInFolder).toHaveBeenCalledWith(spacedFile);
       });
     });
   });
