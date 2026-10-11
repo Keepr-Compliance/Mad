@@ -365,16 +365,26 @@ export async function deleteCommunication(communicationId: string): Promise<void
  * Delete communication by message_id
  * Used when unlinking messages from a transaction - removes the communications table reference
  */
-export function deleteCommunicationByMessageIdSync(messageId: string): void {
+export function deleteCommunicationByMessageIdSync(
+  messageId: string,
+  transactionId?: string,
+): void {
+  // BACKLOG-3890: one message can be linked to several deals
+  // (idx_comm_msg_txn is unique on (message_id, transaction_id)). When the
+  // caller names a deal, touch only that deal's row; with no deal, keep the
+  // all-deal delete.
+  const scope = transactionId ? sql` AND transaction_id = ?` : sql``;
+  const params = transactionId ? [messageId, transactionId] : [messageId];
+
   // BACKLOG-506 (TASK-1307): Get the transaction ID before deleting.
   // Check if the message is a text type to update thread count.
   const comm = dbGet<{ transaction_id: string | null }>(
-    sql`SELECT transaction_id FROM communications WHERE message_id = ?`,
-    [messageId]
+    sql`SELECT transaction_id FROM communications WHERE message_id = ?${scope}`,
+    params
   );
 
-  const statement = sql`DELETE FROM communications WHERE message_id = ?`;
-  dbRun(statement, [messageId]);
+  const statement = sql`DELETE FROM communications WHERE message_id = ?${scope}`;
+  dbRun(statement, params);
 
   // BACKLOG-396: Update thread count if this was a text message linked to a transaction
   if (comm?.transaction_id) {
@@ -398,8 +408,11 @@ export function deleteCommunicationByMessageIdSync(messageId: string): void {
  * argument to `Promise.resolve`, so the throw escapes the body synchronously
  * and SQLite rolls back. It fails closed where `async` fails open.
  */
-export function deleteCommunicationByMessageId(messageId: string): Promise<void> {
-  return Promise.resolve(deleteCommunicationByMessageIdSync(messageId));
+export function deleteCommunicationByMessageId(
+  messageId: string,
+  transactionId?: string,
+): Promise<void> {
+  return Promise.resolve(deleteCommunicationByMessageIdSync(messageId, transactionId));
 }
 
 
