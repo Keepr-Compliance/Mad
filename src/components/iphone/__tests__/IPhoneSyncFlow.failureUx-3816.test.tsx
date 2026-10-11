@@ -441,6 +441,26 @@ describe("(D) dashboard indicator", () => {
     expect(screen.getByTestId("sync-error-message")).toHaveTextContent(SERVICE_UNAVAILABLE.error);
   });
 
+  it("a refusal while an earlier sync's row is still running does not end that row", async () => {
+    render(<Harness showFlow />);
+    await connect();
+    fireEvent.click(screen.getByRole("button", { name: /Sync Messages & Contacts/ }));
+    await flush();
+    expect(iphoneRow()?.status).toBe("running");
+    const firstStart = resolveStart;
+    // A second request while the first is in flight; main refuses it.
+    await act(async () => {
+      void currentHook!.startSync();
+    });
+    await flush();
+    expect(resolveStart).not.toBe(firstStart);
+    await act(async () => {
+      resolveStart!({ success: false, error: "Sync already in progress", messageCount: 0, contactCount: 0, conversationCount: 0, duration: 0 });
+    });
+    await flush();
+    expect(iphoneRow()?.status).toBe("running");
+  });
+
   it("SERVICE_UNAVAILABLE is a plain failure on the dashboard, not BACKLOG-3885's stopped state", async () => {
     render(<Harness showFlow />);
     await connect();
