@@ -32,7 +32,7 @@ export function OfflineBanner() {
     <div
       role="status"
       aria-live="polite"
-      className="fixed inset-x-0 bottom-0 z-[60] flex justify-center px-4 pointer-events-none"
+      className="fixed inset-x-0 bottom-[var(--review-bar-h,0px)] z-[60] flex justify-center px-4 pointer-events-none"
       style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)' }}
     >
       <p className="rounded-lg bg-gray-900 px-4 py-2 text-sm text-white shadow-lg">

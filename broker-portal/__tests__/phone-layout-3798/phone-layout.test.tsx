@@ -123,6 +123,20 @@ describe('review bar', () => {
     }
   });
 
+  it('B1 the Confirm Rejection panel keeps --review-bar-h set while it is open', () => {
+    const rect = jest.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ height: 220 } as DOMRect);
+    try {
+      render(<ReviewActions submission={OPEN_SUBMISSION} showChecklistHint />);
+      fireEvent.click(screen.getByRole('button', { name: /^Reject$/ }));
+      fireEvent.change(screen.getByPlaceholderText(/Explain why/), { target: { value: 'Missing signed disclosure pages' } });
+      fireEvent.click(screen.getByRole('button', { name: /Reject Submission/ }));
+      expect(screen.getByText('Confirm Rejection')).toBeInTheDocument();
+      expect(document.documentElement.style.getPropertyValue('--review-bar-h')).toBe('220px');
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
   it('C8 the bar publishes --review-bar-h on <html> and removes it on unmount', () => {
     const observed: Element[] = [];
     const RO = jest.fn().mockImplementation(() => ({

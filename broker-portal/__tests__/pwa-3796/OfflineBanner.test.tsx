@@ -43,6 +43,14 @@ describe('BACKLOG-3893 OfflineBanner', () => {
     expect(status.getAttribute('aria-live')).toBe('polite');
   });
 
+  it('B1 sits above the review bar: bottom follows --review-bar-h, 0px when no bar', () => {
+    onLine = false;
+    render(<OfflineBanner />);
+    const status = screen.getByRole('status');
+    expect(status.className.split(/\s+/)).toContain('bottom-[var(--review-bar-h,0px)]');
+    expect(status.className.split(/\s+/)).not.toContain('bottom-0');
+  });
+
   it('shows on the offline event and hides on the online event', () => {
     const { container } = render(<OfflineBanner />);
     expect(screen.queryByRole('status')).toBeNull();
