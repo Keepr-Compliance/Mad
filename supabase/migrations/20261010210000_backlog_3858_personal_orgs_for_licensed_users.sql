@@ -31,7 +31,7 @@ ALTER TABLE public.backlog_3858_personal_org_backfill ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.backlog_3858_personal_org_backfill FROM PUBLIC, anon, authenticated;
 
 COMMENT ON TABLE public.backlog_3858_personal_org_backfill IS
-  'BACKLOG-3858: personal organizations created by migration 20261010210000. Read only by supabase/tests/backlog-3858/rollback-3858.sql.';
+  'BACKLOG-3858: personal organizations created by the BACKLOG-3858 migration. Read only by supabase/tests/backlog-3858/rollback-3858.sql.';
 
 DO $m3858$
 DECLARE

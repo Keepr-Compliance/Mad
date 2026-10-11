@@ -22,7 +22,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-MIG="${MIG_OVERRIDE:-$REPO/supabase/migrations/20261010210000_backlog_3858_personal_orgs_for_licensed_users.sql}"
+MIG="${MIG_OVERRIDE:-$(ls "$REPO"/supabase/migrations/*_backlog_3858_personal_orgs_for_licensed_users.sql | head -1)}"
 RB="${RB_OVERRIDE:-$HERE/rollback-3858.sql}"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 psql_in() {

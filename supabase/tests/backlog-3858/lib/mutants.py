@@ -75,6 +75,10 @@ MUTANTS = {
     "m10-lenient-statuses": ("mig", [(BAD_RAISE, "")], "k7"),
     "r01-rollback-deletes-all-personal": ("rb", [(RB_DELETE, "   WHERE o.personal_owner_user_id IS NOT NULL;\n")], "k4b"),
     "r02-rollback-no-overrides-guard": ("rb", [(RB_OVERRIDES_COND, "                        AND false)\n")], "k4c"),
+    # Rollback must refuse on user data (SR review R1): each new guard on its own.
+    "r03-rollback-no-fk-table-guard": ("rb", [("    IF v_n > 0 THEN\n", "    IF false THEN\n")], "k4d"),
+    "r04-rollback-no-template-guard": ("rb", [("AND (t.seed_key IS NULL OR", "AND false AND (t.seed_key IS NULL OR")], "k4d"),
+    "r05-rollback-no-item-guard": ("rb", [("AND (i.updated_at > i.created_at OR", "AND false AND (i.updated_at > i.created_at OR")], "k4e"),
 }
 
 

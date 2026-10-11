@@ -147,7 +147,8 @@ describe(MIGRATION_NAME, () => {
   });
 });
 
-const BACKFILL_3858_NAME = '20261010210000_backlog_3858_personal_orgs_for_licensed_users.sql';
+// Matched by suffix: the version prefix is whatever apply_migration records.
+const BACKFILL_3858_SUFFIX = '_backlog_3858_personal_orgs_for_licensed_users.sql';
 
 describe('BACKLOG-3364 backfill stays parked', () => {
   it('exists under supabase/parked/backlog-3364/', () => {
@@ -162,8 +163,9 @@ describe('BACKLOG-3364 backfill stays parked', () => {
         continue;
       }
       // BACKLOG-3858: the one reviewed backfill. Tested by supabase/tests/backlog-3858/.
-      if (f === BACKFILL_3858_NAME) {
+      if (f.endsWith(BACKFILL_3858_SUFFIX)) {
         expect(sql).toMatch(/v_expected_fp text := '[0-9a-f]{32}'/);
+        expect(sql).toMatch(/IF v_fp IS DISTINCT FROM v_expected_fp THEN\s+RAISE EXCEPTION/);
         continue;
       }
       expect(sql).not.toMatch(/_ensure_personal_organization_for/);

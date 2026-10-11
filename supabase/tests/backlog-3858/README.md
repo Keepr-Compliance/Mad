@@ -1,7 +1,7 @@
 # BACKLOG-3858 harness
 
 Controls and mutants for
-`supabase/migrations/20261010210000_backlog_3858_personal_orgs_for_licensed_users.sql`
+`supabase/migrations/<version>_backlog_3858_personal_orgs_for_licensed_users.sql`
 (every licensed, non-suspended user with no `organization_members` row gets a personal organization from
 `public._ensure_personal_organization_for`) and for `rollback-3858.sql`.
 
@@ -24,6 +24,8 @@ SSH_HOST=<ssh alias> PG_CONTAINER=<container> bash run.sh mutants
 | k4a | a second apply raises nothing and writes nothing |
 | k4b | rollback returns organizations, members, plan rows, checklist templates and items to the pre-run state; the desktop-made org is kept; bookkeeping table dropped |
 | k4c | rollback refuses, writing nothing, when a recorded org's plan row gained feature_overrides |
+| k4d | rollback refuses, deleting nothing, when a created org holds a user-written checklist template or a transaction submission |
+| k4e | rollback refuses when a seeded checklist item was edited after seeding |
 | k5a | non-empty cohort + changed function body -> the file raises before writing |
 | k5b | empty cohort + changed function body -> no-op (a database reset never fails here) |
 | k6 | checklist seeding fires once per new plan row; bookkeeping table has RLS and no client grants |
@@ -31,5 +33,5 @@ SSH_HOST=<ssh alias> PG_CONTAINER=<container> bash run.sh mutants
 | k8 | users suspended by licence status or by user status get no membership, no org, no bookkeeping row |
 
 Mutants (`lib/mutants.py`, each pattern must match exactly once): m01-m10 (m09a-c) on the migration,
-r01-r02 on the rollback; every one must be KILLED.
+r01-r05 on the rollback; every one must be KILLED.
 Output: `CONTROLS: pass=X fail=Y error=Z`, `MUTANTS: killed=X survived=Y invalid=Z`.
