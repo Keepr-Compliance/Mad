@@ -96,6 +96,9 @@ describe('isModeAllowedForUser (SR req. 10)', () => {
   const org = (isTest: boolean | null) => ({ id: 'O1', personal_owner_user_id: 'U1', is_test: isTest });
   it.each([
     ['live, non-test user', 'live', [org(false)], true],
+    ['live, is_test user', 'live', [org(true)], false],
+    ['live, no personal org', 'live', [], true],
+    ['live, is_test null', 'live', [org(null)], true],
     ['test, is_test user', 'test', [org(true)], true],
     ['test, non-test user', 'test', [org(false)], false],
     ['test, no personal org', 'test', [], false],
@@ -103,6 +106,12 @@ describe('isModeAllowedForUser (SR req. 10)', () => {
   ] as const)('%s → %s', async (_l, mode, orgs, want) => {
     const db = new BillingDb({ organizations: [...orgs] });
     expect(await isModeAllowedForUser(svc(db), 'U1', mode)).toBe(want);
+  });
+
+  it('live, read error → refused', async () => {
+    const db = new BillingDb({ organizations: [org(false)] });
+    db.failNext['organizations.select'] = { code: 'PGRST000', message: 'down' };
+    expect(await isModeAllowedForUser(svc(db), 'U1', 'live')).toBe(false);
   });
 
   it('test, read error → refused', async () => {

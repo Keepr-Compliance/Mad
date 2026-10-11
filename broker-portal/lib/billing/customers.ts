@@ -108,16 +108,16 @@ export async function setDefaultPaymentMethod(
 }
 
 /**
- * Mode guard. Live: always allowed here (the grant RPC refuses live for is_test
- * users). Test: allowed only when the user's personal organization is is_test;
- * no personal organization, or a read error, refuses (fails closed).
+ * Mode guard (plan 2.6). Live: refused when the user's personal organization is
+ * is_test; no personal organization, or is_test false/null, stays allowed.
+ * Test: allowed only when the personal organization is is_test; no personal
+ * organization refuses. A read error refuses in both modes (fails closed).
  */
 export async function isModeAllowedForUser(
   service: ServiceClient,
   userId: string,
   mode: StripeMode
 ): Promise<boolean> {
-  if (mode === 'live') return true;
   const { data, error } = await service
     .from('organizations')
     .select('is_test')
@@ -127,5 +127,6 @@ export async function isModeAllowedForUser(
     console.error('[billing/customers] is_test read failed:', error.message);
     return false;
   }
-  return (data as { is_test?: boolean } | null)?.is_test === true;
+  const isTest = (data as { is_test?: boolean } | null)?.is_test === true;
+  return mode === 'live' ? !isTest : isTest;
 }
