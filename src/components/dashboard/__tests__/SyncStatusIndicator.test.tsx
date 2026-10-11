@@ -399,6 +399,21 @@ describe("SyncStatusIndicator", () => {
         expect(screen.queryByText("Last sync stopped")).not.toBeInTheDocument();
       });
 
+      it("an earlier run's other error does not leak into a later disconnect", () => {
+        const other = createSyncItem('iphone', 'error', 0, 'Backup failed', true);
+        const rerender = finish([createSyncItem('iphone', 'running', 40, undefined, true)], [other]);
+        expect(screen.getByText("Sync Completed with Errors")).toBeInTheDocument();
+
+        const disc = createSyncItem('iphone', 'error', 0, 'Device disconnected during sync', true, undefined, undefined, 'device_disconnected');
+        mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState([createSyncItem('iphone', 'running', 10, undefined, true)], true, 10));
+        rerender(<SyncStatusIndicator />);
+        mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState([disc], false, 10));
+        rerender(<SyncStatusIndicator />);
+
+        expect(screen.getByText("Last sync stopped")).toBeInTheDocument();
+        expect(screen.queryByText(/submit a support ticket/)).not.toBeInTheDocument();
+      });
+
       it("the next successful sync clears it", () => {
         const disc = createSyncItem('iphone', 'error', 0, 'Device disconnected during sync', true, undefined, undefined, 'device_disconnected');
         const rerender = finish([createSyncItem('iphone', 'running', 40, undefined, true)], [disc]);
