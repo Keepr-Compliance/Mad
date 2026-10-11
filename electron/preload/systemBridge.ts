@@ -296,6 +296,8 @@ export const systemBridge = {
    * @param errorDetails - Optional error details to include
    * @returns Result
    */
+  saveDiagnosticLog: () => ipcRenderer.invoke("system:save-diagnostic-log"),
+
   contactSupport: (errorDetails?: string) =>
     ipcRenderer.invoke("system:contact-support", errorDetails),
 

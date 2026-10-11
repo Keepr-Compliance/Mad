@@ -11,6 +11,7 @@ import "./bootstrap/installAppDataPaths";
 // block that populates SENTRY_DSN moved with it. Both placements are traced in
 // that file's header and pinned by `bootstrap/__tests__/installSentry.test.ts`.
 import "./bootstrap/installSentry";
+import { devToolsPreference, installApplicationMenu } from "./bootstrap/appMenu";
 // BACKLOG-2962: the Electron shell's composition root for native capabilities.
 // Core services depend on the SecretStore *interface*; this is the one place
 // that says the implementation is Electron's safeStorage. It must run before
@@ -21,6 +22,12 @@ import "./bootstrap/installNativeCapabilities";
 // store), so TLS-inspecting antivirus / proxies do not break Outlook, Gmail
 // token calls or address verification. Before any handler is registered.
 import "./bootstrap/installMainNetAxios";
+// BACKLOG-3785: measure ipcMain.handle replies during a sync. Must patch
+// ipcMain.handle before ANY handler registers, so it stays above every handler import.
+import "./bootstrap/installIpcReplySizeLog";
+// BACKLOG-3884: log when the main event loop is blocked for 1 s or more, naming
+// the last IPC channel started. Reads the activity the import above records.
+import "./bootstrap/installMainLagMonitor";
 import {
   app,
   BrowserWindow,
@@ -29,6 +36,7 @@ import {
   ipcMain,
   protocol,
   net,
+  powerMonitor,
 } from "electron";
 import path from "path";
 import log from "electron-log";
@@ -39,7 +47,16 @@ import {
   getAppliedAppDataPaths,
 } from "./bootstrap/appDataPaths";
 import { getStartupFailure } from "./bootstrap/startupFailure";
-import { setMainWindow } from "./windowRegistry";
+import { getMainWindow, setMainWindow } from "./windowRegistry";
+import {
+  createSealQuitPrompt,
+  installSealQuitPrompt,
+  noteSystemQuit,
+  SEAL_QUIT_KEEP_RUNNING,
+  SEAL_QUIT_PROMPT_DETAIL,
+  SEAL_QUIT_QUIT_ANYWAY,
+  sealQuitPromptHeading,
+} from "./utils/sealQuitPrompt";
 import { redactEmail, redactId } from "./utils/redactSensitive";
 
 // ==========================================
@@ -71,6 +88,18 @@ protocol.registerSchemesAsPrivileged([
     privileges: {
       standard: true,      // Enables relative URL resolution (href="./style.css")
       secure: true,        // Treated as secure context (like https://)
+      supportFetchAPI: true,
+      corsEnabled: false,
+      stream: true,
+    },
+  },
+  // BACKLOG-3816: encrypted attachments are served to the renderer through this
+  // scheme (decrypted in the main process). The handler is registered in whenReady.
+  {
+    scheme: 'keepr-attachment',
+    privileges: {
+      standard: true,
+      secure: true,
       supportFetchAPI: true,
       corsEnabled: false,
       stream: true,
@@ -177,6 +206,7 @@ import {
   stopBackupForQuit,
 } from "./handlers/syncHandlers";
 import { createBackupStopOnQuit } from "./utils/backupStopOnQuit";
+import { waitForLinksToFinish } from "./utils/linkInFlight";
 import { registerDriverHandlers } from "./handlers/driverHandlers";
 import { registerLLMHandlers } from "./handlers/llmHandlers";
 import { registerLicenseHandlers } from "./handlers/licenseHandlers";
@@ -199,6 +229,9 @@ import supabaseService from "./services/supabaseService";
 import { deepLinkSessionErrorToPayload } from "./services/supabaseNetError";
 import databaseService from "./services/databaseService";
 import { initializationBroadcaster } from "./services/initializationBroadcaster";
+import { atRestStartup } from "./services/atRest/startup";
+import { getBackupAtRest } from "./services/atRest/backupAtRest";
+import { registerAtRestHandlers } from "./handlers/atRestHandlers";
 import sessionService from "./services/sessionService";
 import submissionService from "./services/submissionService";
 import {
@@ -221,6 +254,7 @@ import {
   registerAppCleanupHandlers,
   registerBackupRestoreHandlers,
   registerCcpaHandlers,
+  registerDiagnosticLogHandlers,
   registerFailureLogHandlers,
 } from "./handlers";
 
@@ -242,10 +276,12 @@ import { runStartupHealthChecks } from "./services/startupHealthCheck";
 import { getInstallMode } from "./services/diagnostics/installMode";
 import { getHostArchitecture } from "./services/diagnostics/hostArchitecture";
 import { WINDOWS_ARM64_ARGV_TOKEN } from "./utils/windowsArm64";
+import sessionSecurityService from "./services/sessionSecurityService";
 import {
   WindowResponsivenessTracker,
   attachResponsivenessTracking,
 } from "./services/windowResponsivenessTracker";
+import { createWindowFreezeReporter, currentScreenName } from "./services/rendererFreezeProfiler";
 import { syncTimeline } from "./services/syncTimeline";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
@@ -1066,12 +1102,12 @@ function setupContentSecurityPolicy(): void {
           // NOTE: 'unsafe-inline' required for CSS-in-JS and dynamic styling.
           // This is also needed in production for the same reason.
           "style-src 'self' 'unsafe-inline'",
-          "img-src 'self' data: cid: https:",
+          "img-src 'self' data: cid: https: keepr-attachment:",
           "font-src 'self' data:",
           // Tightened: Specific port 5173 for Vite dev server + whitelisted external domains
           // Port 5173 is Vite's default dev server port (see vite.config.js and package.json)
           `connect-src 'self' http://localhost:5173 ws://localhost:5173 ${allowedConnectDomains}`,
-          "media-src 'self'",
+          "media-src 'self' keepr-attachment:",
           "object-src 'none'",
           "base-uri 'self'",
           "form-action 'self'",
@@ -1084,11 +1120,11 @@ function setupContentSecurityPolicy(): void {
           "script-src 'self'",
           // NOTE: 'unsafe-inline' required for CSS-in-JS and dynamic styling
           "style-src 'self' 'unsafe-inline'",
-          "img-src 'self' data: cid: https:",
+          "img-src 'self' data: cid: https: keepr-attachment:",
           "font-src 'self' data:",
           // Tightened: Only whitelisted external domains (no https: wildcard)
           `connect-src 'self' ${allowedConnectDomains}`,
-          "media-src 'self'",
+          "media-src 'self' keepr-attachment:",
           "object-src 'none'",
           "base-uri 'self'",
           "form-action 'self'",
@@ -1143,11 +1179,44 @@ function setupPermissionHandlers(): void {
   );
 }
 
+/**
+ * BACKLOG-3816: the quit prompt while the kept iPhone backup is being secured. Checked
+ * first in before-quit and, on Windows, in the main window's close.
+ */
+const sealQuitPrompt = installSealQuitPrompt(
+  createSealQuitPrompt({
+    app,
+    sealPercent: () => getBackupAtRest().sealPassPercent(),
+    ask: async (percent, signal) => {
+      const heading = sealQuitPromptHeading(percent);
+      // macOS shows no title in a message box, so the heading is the message there too.
+      const options: Electron.MessageBoxOptions = {
+        type: "warning",
+        buttons: [SEAL_QUIT_KEEP_RUNNING, SEAL_QUIT_QUIT_ANYWAY],
+        defaultId: 0,
+        cancelId: 0,
+        title: heading,
+        message: heading,
+        detail: SEAL_QUIT_PROMPT_DETAIL,
+        signal,
+      };
+      const parent = getMainWindow();
+      const { response } =
+        parent && !parent.isDestroyed()
+          ? await dialog.showMessageBox(parent, options)
+          : await dialog.showMessageBox(options);
+      return response === 1 ? "quit" : "keep";
+    },
+    log: (message, meta) => log.info(message, meta),
+  }),
+);
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: WINDOW_CONFIG.DEFAULT_WIDTH,
     height: WINDOW_CONFIG.DEFAULT_HEIGHT,
     webPreferences: {
+      devTools: devToolsPreference(), // BACKLOG-3830
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, "preload.js"),
@@ -1173,6 +1242,18 @@ function createWindow(): void {
   // goes to the destroyed first window and is dropped in silence. THE SOLE
   // WRITER: `windowRecreation-3454.test.ts` fails if this call leaves.
   setMainWindow(mainWindow);
+
+  // BACKLOG-3816: Windows ends the session through the window; not the user's quit.
+  mainWindow.on("query-session-end", () => noteSystemQuit("os-shutdown"));
+  mainWindow.on("session-end", () => noteSystemQuit("os-shutdown"));
+  // BACKLOG-3816: on Windows closing the window quits the app. Ask here, while the
+  // window is still open, so "Keep running" leaves it open (in before-quit it is gone).
+  if (process.platform !== "darwin") {
+    mainWindow.on("close", (e) => {
+      if (submissionService.isSubmitting) return; // the submission dialog asks instead
+      sealQuitPrompt.check(e);
+    });
+  }
 
   // Prevent closing while a submission is uploading
   mainWindow.on("close", (e) => {
@@ -1505,6 +1586,10 @@ app.whenReady().then(async () => {
   if (getStartupFailure()) return;
   log.debug(`[PERF] app.whenReady: ${Date.now() - appStartTime}ms`);
 
+  // BACKLOG-3816: an OS shutdown / restart / logout (macOS, Linux) is not the user's
+  // quit — the "securing your iPhone backup" quit prompt is not shown for it.
+  powerMonitor.on("shutdown", () => noteSystemQuit("os-shutdown"));
+
   // BACKLOG-2709: on the FIRST launch against a new development directory, say
   // so before the window appears. The app is about to open an empty database on
   // a machine where the real one still exists, and a silently blank contact
@@ -1698,6 +1783,15 @@ app.whenReady().then(async () => {
     log.info('[Protocol] app:// protocol handler registered for production');
   }
 
+  // BACKLOG-3816: keepr-attachment:// placeholder. Registered in every mode (dev
+  // included) so the scheme always resolves; it answers 404 until the reader slice
+  // (S2) replaces this body with the decrypting handler.
+  protocol.handle('keepr-attachment', () => new Response('Not Found', { status: 404 }));
+
+  // BACKLOG-3816: at-rest encryption background jobs. Runs once, after the local
+  // database is open (DB init is renderer-triggered, after this point).
+  atRestStartup.scheduleAfterDbReady(() => databaseService.isInitialized());
+
   // Set up Content Security Policy
   setupContentSecurityPolicy();
 
@@ -1726,6 +1820,7 @@ app.whenReady().then(async () => {
   log.debug(`[PERF] post-healthChecks: ${Date.now() - appStartTime}ms`);
 
   log.debug(`[PERF] pre-createWindow: ${Date.now() - appStartTime}ms`);
+  installApplicationMenu(); // BACKLOG-3830
   createWindow();
   log.debug(`[PERF] post-createWindow: ${Date.now() - appStartTime}ms`);
 
@@ -1776,6 +1871,10 @@ app.whenReady().then(async () => {
         Sentry.captureMessage(message, context);
       },
       getPhase: () => syncTimeline.currentPhase(),
+      // BACKLOG-3884: the screen name on the freeze line (any duration).
+      getScreen: () => currentScreenName(),
+      // BACKLOG-3785: any freeze >= 10 s, sync or not, sends `renderer_freeze` (no frames).
+      onFreeze: createWindowFreezeReporter(),
     });
 
     attachResponsivenessTracking(mainWindow, responsivenessTracker, {
@@ -1796,6 +1895,7 @@ app.whenReady().then(async () => {
         return response;
       },
       reload: () => {
+        sessionSecurityService.noteUserReload();
         mainWindow?.webContents.reload();
       },
       quit: () => {
@@ -1838,6 +1938,7 @@ app.whenReady().then(async () => {
   // BACKLOG-3619: RCS import from the Chrome extension. The loopback bridge
   // never throws; a taken port leaves it "unavailable" and the app runs on.
   registerRcsImportHandlers();
+  registerAtRestHandlers();
   void startRcsExtensionBridge();
   registerAttachmentHandlers(mainWindow!);
   registerContactHandlers(mainWindow!);
@@ -1882,6 +1983,7 @@ app.whenReady().then(async () => {
   registerAppCleanupHandlers();
   registerBackupRestoreHandlers();
   registerCcpaHandlers();
+  registerDiagnosticLogHandlers();
   registerFailureLogHandlers();
   registerSupportTicketHandlers();
   registerSupportAccessHandlers();
@@ -2001,11 +2103,29 @@ app.on("window-all-closed", () => {
 // BACKLOG-3598: a quit during an iPhone backup first stops idevicebackup2 (bounded).
 const deferQuitForBackupStop = createBackupStopOnQuit(app, stopBackupForQuit);
 
+// BACKLOG-3785: a quit while chats are being attached waits (bounded) for the link to
+// finish instead of exiting between two write chunks.
+const deferQuitForLink = createBackupStopOnQuit(app, () =>
+  waitForLinksToFinish(undefined, () =>
+    console.warn("[Quit] link still running after the max wait; quitting anyway"),
+  ),
+);
+
+// BACKLOG-3816: a quit while the kept iPhone backup's index files are unsealed (a sync,
+// or a seal still running) seals Manifest.db and the root plists first (bounded); the
+// launch job seals the rest. Runs after the backup process has been stopped.
+const deferQuitForBackupSeal = createBackupStopOnQuit(app, () => getBackupAtRest().sealIndexForQuit());
+
 app.on("before-quit", (event) => {
+  // BACKLOG-3816: first, a user quit while the iPhone backup is being secured asks.
+  // "Keep running" cancels it here, before the deferrals below pause anything.
+  if (sealQuitPrompt.check(event)) return;
   // BACKLOG-3598: must run before cleanupSyncHandlers() drops the orchestrator. When a
   // backup is running this defers the quit and returns; the rest of this handler then
   // runs once, on the re-quit.
   if (deferQuitForBackupStop(event)) return;
+  if (deferQuitForLink(event)) return;
+  if (deferQuitForBackupSeal(event)) return;
   // TASK-1956: Shutdown persistent contact worker pool
   try {
     const { shutdownPool } = require("./workers/contactWorkerPool");

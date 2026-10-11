@@ -27,6 +27,8 @@ import { useAuth } from "../../../contexts";
 import { authService } from "@/services";
 import { fdaFromProbe, unknownFdaFor } from "./fdaState";
 import { readAccountSetup } from "./routing/readAccountSetup";
+import { isBrokenTokenError } from "../../../utils/connectionStatus";
+import type { ConnectionErrorType } from "../../../../electron/services/connectionStatusService";
 import type { PlatformInfo, User, UserData } from "./types";
 import logger from "../../../utils/logger";
 
@@ -743,6 +745,17 @@ export function LoadingOrchestrator({
         (connectionsResult.google?.connected === true ||
           connectionsResult.microsoft?.connected === true);
 
+      // BACKLOG-3888: a mailbox token row exists but is dead (expired /
+      // refresh failed). The SystemHealthMonitor amber "Reconnect" strip owns
+      // that case, so the setup banner stays out of its way.
+      const connectionErrors = connectionsResult as {
+        google?: { error?: { type?: ConnectionErrorType } | null };
+        microsoft?: { error?: { type?: ConnectionErrorType } | null };
+      };
+      const hasBrokenMailboxToken =
+        isBrokenTokenError(connectionErrors.google?.error) ||
+        isBrokenTokenError(connectionErrors.microsoft?.error);
+
       // BACKLOG-3673: the account record. Anything but a well-formed answer is
       // "unknown" (routes to the account-settings error screen). The email-step and contacts answers only
       // seed the setup queue; neither is a routing input, and a connected
@@ -795,6 +808,12 @@ export function LoadingOrchestrator({
         phoneType,
         hasCompletedEmailOnboarding,
         hasEmailConnected,
+        // BACKLOG-3888: whether this account has ever connected a mailbox
+        // (cloud preferences.emailProviders), carried by the account-setup
+        // read under its 8 s timeout. Unreadable = no record, so texts-only
+        // users are never nagged.
+        hasRecordedEmailProvider: accountSetup.hasRecordedEmailProvider,
+        hasBrokenMailboxToken,
         needsDriverSetup,
         fda,
         setup: accountSetup.setup,

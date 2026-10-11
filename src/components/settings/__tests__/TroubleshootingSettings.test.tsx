@@ -28,9 +28,11 @@ jest.mock("../../../services", () => ({
 }));
 
 const mockContactSupport = jest.fn();
+const mockSaveDiagnosticLog = jest.fn();
 jest.mock("../../../services/systemService", () => ({
   systemService: {
     contactSupport: (...args: unknown[]) => mockContactSupport(...args),
+    saveDiagnosticLog: (...args: unknown[]) => mockSaveDiagnosticLog(...args),
   },
 }));
 
@@ -241,5 +243,34 @@ describe("TroubleshootingSettings (BACKLOG-2112)", () => {
     );
     expect(screen.getByText("Keepr is closing…")).toBeInTheDocument();
     expect(mockNotifyError).not.toHaveBeenCalled();
+  });
+});
+
+describe("TroubleshootingSettings — Save diagnostic log (BACKLOG-3819)", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it("calls the save service and confirms success", async () => {
+    mockSaveDiagnosticLog.mockResolvedValue({ success: true, data: { filePath: "/tmp/x.txt", unreadable: [] } });
+    render(
+      <StrictMode>
+        <TroubleshootingSettings />
+      </StrictMode>,
+    );
+    fireEvent.click(screen.getByTestId("troubleshooting-save-diagnostic-log"));
+    await waitFor(() => expect(mockNotifySuccess).toHaveBeenCalledWith("Diagnostic log saved."));
+    expect(mockSaveDiagnosticLog).toHaveBeenCalledTimes(1);
+  });
+
+  it("a cancelled save dialog shows nothing; a failure shows an error", async () => {
+    mockSaveDiagnosticLog.mockResolvedValueOnce({ success: true, data: { canceled: true } });
+    render(<TroubleshootingSettings />);
+    fireEvent.click(screen.getByTestId("troubleshooting-save-diagnostic-log"));
+    await waitFor(() => expect(mockSaveDiagnosticLog).toHaveBeenCalledTimes(1));
+    expect(mockNotifySuccess).not.toHaveBeenCalled();
+    expect(mockNotifyError).not.toHaveBeenCalled();
+
+    mockSaveDiagnosticLog.mockResolvedValueOnce({ success: false, error: "disk full" });
+    fireEvent.click(screen.getByTestId("troubleshooting-save-diagnostic-log"));
+    await waitFor(() => expect(mockNotifyError).toHaveBeenCalledWith("disk full"));
   });
 });

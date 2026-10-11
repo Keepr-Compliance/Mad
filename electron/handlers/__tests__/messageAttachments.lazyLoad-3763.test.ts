@@ -30,7 +30,7 @@
  * 50 x 2 MB conversation and prints the reply size.
  */
 
-import { readFileSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from "fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync, statSync } from "fs";
 import os from "os";
 import path from "path";
 import { execFileSync } from "child_process";
@@ -122,7 +122,15 @@ jest.mock("../../services/importPlanInputs", () => ({
 }));
 
 import { registerMessageImportHandlers } from "../messageImportHandlers";
-import { MAX_INLINE_ATTACHMENT_BYTES } from "../../services/textAttachmentDataService";
+import {
+  MAX_INLINE_ATTACHMENT_BYTES,
+  setMaxInlineAttachmentBytesForTests,
+} from "../../services/textAttachmentDataService";
+import { Readable } from "stream";
+import crypto from "crypto";
+import { setAttachmentReaderDepsForTests } from "../../services/atRest/attachmentReader";
+import { createFileCrypto, MAGIC, type KeyResolver } from "../../services/atRest/fileCrypto";
+import { createMarkerStore } from "../../services/atRest/markers";
 
 const USER_A = "3763a000-0000-4000-8000-00000000000a"; // pii-allow-uuid: invented, not from any live row
 const USER_B = "3763b000-0000-4000-8000-00000000000b"; // pii-allow-uuid: invented, not from any live row
@@ -464,6 +472,7 @@ describe("messages:get-attachment-data (BACKLOG-3763)", () => {
   });
 
   it("refuses a file over the size cap, and serves one exactly at it", async () => {
+    expect(MAX_INLINE_ATTACHMENT_BYTES).toBe(25 * 1024 * 1024);
     seedMessage("msg-3763-big", USER_A, "guid-3763-big");
     const big: SeededAttachment = {
       id: "att3763-big",
@@ -496,5 +505,111 @@ describe("messages:get-attachment-data (BACKLOG-3763)", () => {
       storage_path: path.join(userData, "message-attachments", "never-written.jpg"),
     });
     expect(await call("att3763-missing")).toEqual({ success: false, reason: "missing_file" });
+  });
+
+  it("refuses a file under userData that is outside the attachment folders (shared containment, BACKLOG-3816)", async () => {
+    // Inside userData, so the old "inside the app data directory" check let it through.
+    const stray = path.join(userData, "not-attachments", "mad-copy.jpg");
+    seedMessage("msg-3763-ud", USER_A, "guid-3763-ud");
+    seedAttachment(
+      {
+        id: "att3763-ud",
+        message_id: "msg-3763-ud",
+        filename: "mad-copy.jpg",
+        mime_type: "image/jpeg",
+        file_size_bytes: 6,
+        storage_path: stray,
+      },
+      { bytes: Buffer.from("stray!") },
+    );
+    expect(readFileSync(stray).toString()).toBe("stray!");
+    expect(await call("att3763-ud")).toEqual({ success: false, reason: "outside_app_data" });
+  });
+
+  it("applies the size cap to the DECRYPTED size, not the larger encrypted file (BACKLOG-3816)", async () => {
+    const key = crypto.randomBytes(32);
+    const keyId = crypto.randomBytes(16).toString("hex");
+    const resolver: KeyResolver = {
+      currentKey: async () => ({ keyId, key }),
+      keyFor: async (id) => {
+        if (id !== keyId) throw new Error("unknown key");
+        return key;
+      },
+    };
+    // A 4 KiB cap for this test only. 16-byte chunks each carry a 16-byte tag, so
+    // 4000 bytes of plaintext (under the cap) is ~8 KB on disk (over it).
+    const cap = 4096;
+    setMaxInlineAttachmentBytesForTests(cap);
+    const files = createFileCrypto(resolver, { chunkSize: 16 });
+    setAttachmentReaderDepsForTests({
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => userData }),
+      userData: () => userData,
+    });
+    try {
+      const plain = Buffer.alloc(4000, 0x42);
+      seedMessage("msg-3763-encbig", USER_A, "guid-3763-encbig");
+      const att: SeededAttachment = {
+        id: "att3763-encbig",
+        message_id: "msg-3763-encbig",
+        filename: "encbig.jpg",
+        mime_type: "image/jpeg",
+        file_size_bytes: plain.length,
+        storage_path: path.join(userData, "message-attachments", "encbig.jpg"),
+      };
+      mkdirSync(path.dirname(att.storage_path), { recursive: true });
+      await files.encryptStreamToFile(Readable.from([plain]), att.storage_path);
+      const onDisk = statSync(att.storage_path).size;
+      expect(onDisk).toBeGreaterThan(cap);
+      expect(plain.length).toBeLessThan(cap);
+      seedAttachment(att);
+      const result = await call(att.id);
+      expect(result.success).toBe(true);
+      expect(Buffer.from(result.data!, "base64").equals(plain)).toBe(true);
+    } finally {
+      setAttachmentReaderDepsForTests(null);
+      setMaxInlineAttachmentBytesForTests(null);
+    }
+  });
+
+  it("serves the plaintext of an attachment stored as KEPRENC ciphertext (BACKLOG-3816)", async () => {
+    const key = crypto.randomBytes(32);
+    const keyId = crypto.randomBytes(16).toString("hex");
+    const resolver: KeyResolver = {
+      currentKey: async () => ({ keyId, key }),
+      keyFor: async (id) => {
+        if (id !== keyId) throw new Error("unknown key");
+        return key;
+      },
+    };
+    const files = createFileCrypto(resolver, { chunkSize: 64 });
+    setAttachmentReaderDepsForTests({
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => userData }),
+      userData: () => userData,
+    });
+    try {
+      const plain = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), crypto.randomBytes(300)]);
+      seedMessage("msg-3763-enc", USER_A, "guid-3763-enc");
+      const att: SeededAttachment = {
+        id: "att3763-enc",
+        message_id: "msg-3763-enc",
+        filename: "enc.jpg",
+        mime_type: "image/jpeg",
+        file_size_bytes: plain.length,
+        storage_path: path.join(userData, "message-attachments", "enc.jpg"),
+      };
+      mkdirSync(path.dirname(att.storage_path), { recursive: true });
+      await files.encryptStreamToFile(Readable.from([plain]), att.storage_path);
+      expect(readFileSync(att.storage_path).subarray(0, MAGIC.length).equals(MAGIC)).toBe(true);
+      seedAttachment(att);
+      expect(await call(att.id)).toEqual({
+        success: true,
+        data: plain.toString("base64"),
+        mime_type: "image/jpeg",
+      });
+    } finally {
+      setAttachmentReaderDepsForTests(null);
+    }
   });
 });

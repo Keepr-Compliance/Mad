@@ -21,6 +21,7 @@ import {
   requestContactLinking,
 } from "./contactLinkingScheduler";
 import { iOSMessagesParser } from "./iosMessagesParser";
+import { hashSourceFile, isAtRestWriteRefused, sealFileFrom, sourceFileSize } from "./atRest/attachmentWriter";
 import { detectMessageType } from "../utils/messageTypeDetector";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
 import type { iOSMessage, iOSConversation, iOSAttachment } from "../types/iosMessages";
@@ -63,6 +64,11 @@ export interface PersistResult {
   attachmentsSkippedByReason?: AttachmentSkipCounts;
   duration: number;
   error?: string;
+  /**
+   * BACKLOG-3816: attachments were not saved because the file-data key is
+   * unavailable (writes fail closed). `error` then carries the user-facing message.
+   */
+  atRestRefused?: boolean;
 }
 
 /**
@@ -126,6 +132,21 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+/**
+ * BACKLOG-3785: ids per lookup query in the attachment setup. Bounded so one query
+ * (and the main-thread time it takes) stays small; the caller yields between them.
+ * Well under SQLite's host-parameter limit.
+ */
+const LOOKUP_CHUNK = 500;
+
+/**
+ * BACKLOG-3868: ids per page of the message duplicate check, and messages per
+ * slice of the pre-filter loop; the caller yields between them.
+ */
+const DEDUPE_PAGE = 5000;
+/** BACKLOG-3868: contacts per upsert transaction in storeContacts. */
+const CONTACT_UPSERT_SLICE = 500;
+
 // Input validation constants
 const MAX_MESSAGE_TEXT_LENGTH = 100000; // 100KB - truncate extremely long messages
 const MAX_HANDLE_LENGTH = 500; // Phone numbers, emails, etc.
@@ -165,7 +186,13 @@ function isValidGuid(guid: string | null | undefined): boolean {
 class IPhoneSyncStorageService {
   private static readonly SERVICE_NAME = "IPhoneSyncStorageService";
   // Smaller batch size for better responsiveness
-  private static readonly BATCH_SIZE = 500;
+  /**
+   * BACKLOG-3868: rows per insert transaction in storeMessages (was 500). A
+   * 500-row batch took 12 ms at the start of a 100k insert into an encrypted
+   * store and up to 250 ms by the end (the messages indexes outgrow the page
+   * cache), so the transaction/yield granularity is 100.
+   */
+  private static readonly INSERT_SLICE = 100;
   // Yield every N batches to let event loop breathe
   private static readonly YIELD_INTERVAL = 2;
 
@@ -362,7 +389,12 @@ class IPhoneSyncStorageService {
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const refused = isAtRestWriteRefused(error);
+      const errorMessage = refused
+        ? error.userMessage
+        : error instanceof Error
+          ? error.message
+          : "Unknown error";
 
       log.error(`[${IPhoneSyncStorageService.SERVICE_NAME}] Persistence failed`, {
         error: errorMessage,
@@ -379,6 +411,7 @@ class IPhoneSyncStorageService {
         attachmentsSkipped: 0,
         duration,
         error: errorMessage,
+        ...(refused ? { atRestRefused: true } : {}),
       };
     } finally {
       // BACKLOG-2474: release on EVERY exit — success, cancel and throw alike.
@@ -461,8 +494,8 @@ class IPhoneSyncStorageService {
    * Store messages to the database with bulk insert
    * Uses async yielding to prevent blocking
    *
-   * OPTIMIZED: Pre-loads all existing external_ids into a Set for O(1) lookup
-   * instead of O(n) database queries per message
+   * Duplicate check: the user's stored external_ids are read into a Set in
+   * bounded pages, yielding between them (BACKLOG-3868), then looked up per message.
    */
   private async storeMessages(
     userId: string,
@@ -487,10 +520,22 @@ class IPhoneSyncStorageService {
     let stored = 0;
     let skipped = 0;
 
-    // OPTIMIZATION: Load ALL existing external_ids into a Set (one query instead of 626k)
-    // This gives us O(1) lookup instead of O(n) database queries
+    // BACKLOG-3868: the user's stored external_ids, read in keyset pages with a
+    // yield between them. This used to be one synchronous read of every id —
+    // ~0.5-0.8 s of blocked main on a ~670k-message store, several times that on a
+    // low-end PC. Same set of ids; a per-guid lookup instead (IN chunks) was
+    // measured at ~8x the wall time on 671k rows, because every sync carries the
+    // phone's whole history.
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Loading existing message IDs for deduplication...`);
-    const existingIds = databaseService.getExistingMessageExternalIds(userId);
+    const existingIds = new Set<string>();
+    let after: string | null = null;
+    for (;;) {
+      const page: string[] = databaseService.getMessageExternalIdsPage(userId, after, DEDUPE_PAGE) ?? [];
+      for (const id of page) existingIds.add(id);
+      await yieldToEventLoop();
+      if (page.length < DEDUPE_PAGE) break;
+      after = page[page.length - 1];
+    }
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Found ${existingIds.size} existing messages`);
 
     // Pre-filter and prepare messages for batch insert
@@ -512,7 +557,11 @@ class IPhoneSyncStorageService {
 
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Processing ${messages.length} messages`);
 
-    for (const msg of messages) {
+    for (let index = 0; index < messages.length; index++) {
+      const msg = messages[index];
+      // BACKLOG-3868: every sync carries the phone's whole history; yield so this
+      // loop is not one long block on a large one.
+      if (index > 0 && index % DEDUPE_PAGE === 0) await yieldToEventLoop();
       // Validate GUID before using it
       if (!isValidGuid(msg.guid)) {
         log.warn(`[${IPhoneSyncStorageService.SERVICE_NAME}] Skipping message with invalid GUID`, {
@@ -600,17 +649,25 @@ class IPhoneSyncStorageService {
       });
     }
 
-    // Batch insert all prepared messages through the service layer
-    if (messagesToInsert.length > 0) {
+    // Batch insert all prepared messages through the service layer.
+    // BACKLOG-3868: one INSERT_SLICE slice per call (each its own transaction, as
+    // before) with a yield to the event loop between slices. The db function ran
+    // every slice back to back: 10k new messages blocked main ~0.4 s, 100k ~15 s.
+    // Cancel: checked before every slice; slices already committed stay, and the
+    // caller's rollbackSession(sessionId) removes them (unchanged).
+    const batchSize = IPhoneSyncStorageService.INSERT_SLICE;
+    for (let start = 0; start < messagesToInsert.length; start += batchSize) {
+      if (cancelSignal?.cancelled) break;
       const result = databaseService.batchInsertMessages(
-        messagesToInsert,
-        IPhoneSyncStorageService.BATCH_SIZE,
+        messagesToInsert.slice(start, start + batchSize),
+        batchSize,
         sessionId,
         cancelSignal
       );
-      stored = result.stored;
+      stored += result.stored;
       // Add DB-level skips (UNIQUE constraint) to our pre-filter skips
       skipped += result.skipped;
+      await yieldToEventLoop();
     }
 
     // Report final progress
@@ -720,7 +777,19 @@ class IPhoneSyncStorageService {
 
     // Use the externalContactDbService to upsert contacts
     // This handles deduplication via UNIQUE(user_id, source, external_record_id)
-    const stored = externalContactDb.upsertFromiPhone(userId, iPhoneContacts, sessionId);
+    // BACKLOG-3868: in CONTACT_UPSERT_SLICE-sized calls (each its own transaction)
+    // with a yield between them; one call for every contact blocked main ~0.5 s per
+    // 10k contacts on an encrypted store. Same rows: the upsert is keyed on
+    // (user_id, source, external_record_id), and the sessionId rollback is unchanged.
+    let stored = 0;
+    for (let start = 0; start < iPhoneContacts.length; start += CONTACT_UPSERT_SLICE) {
+      stored += externalContactDb.upsertFromiPhone(
+        userId,
+        iPhoneContacts.slice(start, start + CONTACT_UPSERT_SLICE),
+        sessionId,
+      );
+      if (start + CONTACT_UPSERT_SLICE < iPhoneContacts.length) await yieldToEventLoop();
+    }
 
     // Report completion
     onProgress?.(contacts.length, contacts.length);
@@ -768,8 +837,17 @@ class IPhoneSyncStorageService {
     // Create attachments directory if it doesn't exist
     await fs.promises.mkdir(attachmentsDir, { recursive: true });
 
-    // Load existing message IDs for linking
-    const messageIdMap = databaseService.getMessageIdMap(userId);
+    // BACKLOG-3785: resolve internal ids for THIS sync's attachment-bearing messages
+    // only, in bounded chunks, yielding between chunks. This used to load every
+    // message row of the user (getMessageIdMap) and every attachment record in one
+    // synchronous pass — ~33-40 s of blocked main on a ~670k-message store.
+    const messageIdMap = new Map<string, string>();
+    const guids = [...new Set(attachmentsToStore.map((a) => a.messageGuid))];
+    for (let start = 0; start < guids.length; start += LOOKUP_CHUNK) {
+      const chunk = databaseService.getMessageIdsByExternalIds(userId, guids.slice(start, start + LOOKUP_CHUNK));
+      for (const [guid, id] of chunk ?? []) messageIdMap.set(guid, id);
+      await yieldToEventLoop();
+    }
 
     // Load existing attachment hashes for deduplication
     const existingHashes = new Set<string>();
@@ -778,9 +856,20 @@ class IPhoneSyncStorageService {
       const filename = path.basename(row.storage_path, path.extname(row.storage_path));
       existingHashes.add(filename);
     }
+    await yieldToEventLoop();
 
-    // Load existing attachment records (message_id + filename)
-    const existingRecords = databaseService.getExistingAttachmentRecords();
+    // Existing attachment records (message_id + filename) for the resolved messages
+    // only — same chunk-and-yield as above (BACKLOG-3785).
+    const existingRecords = new Set<string>();
+    const resolvedIds = [...new Set(messageIdMap.values())];
+    for (let start = 0; start < resolvedIds.length; start += LOOKUP_CHUNK) {
+      const chunk = databaseService.getExistingAttachmentRecordsForMessages(resolvedIds.slice(start, start + LOOKUP_CHUNK));
+      for (const record of chunk ?? []) existingRecords.add(record);
+      await yieldToEventLoop();
+    }
+
+    // BACKLOG-3785: progress cadence — ~2% of the run, rounded up to a multiple of 100.
+    const progressEvery = Math.max(1, Math.ceil(attachmentsToStore.length / 50 / 100)) * 100;
 
     let stored = 0;
     // BACKLOG-3784: one counter per reason; `skipped` is their sum.
@@ -826,11 +915,14 @@ class IPhoneSyncStorageService {
           continue;
         }
 
-        // Check if source file exists
+        // Check if source file exists. BACKLOG-3816: the backup file is read RAW —
+        // it is Apple's plaintext (an Apple-encrypted backup arrives here already
+        // decrypted), never classified by its first bytes (attachmentWriter.ts).
+        let sourceSize: number;
         try {
-          const stats = await fs.promises.stat(sourcePath);
-          if (stats.size > MAX_ATTACHMENT_SIZE) {
-            log.debug(`[${IPhoneSyncStorageService.SERVICE_NAME}] Skipping oversized attachment: ${stats.size} bytes`);
+          sourceSize = await sourceFileSize(sourcePath);
+          if (sourceSize > MAX_ATTACHMENT_SIZE) {
+            log.debug(`[${IPhoneSyncStorageService.SERVICE_NAME}] Skipping oversized attachment: ${sourceSize} bytes`);
             skippedBy.tooLarge++;
             continue;
           }
@@ -840,19 +932,21 @@ class IPhoneSyncStorageService {
           continue;
         }
 
-        // TASK-1790: Use streaming hash instead of loading entire file into memory
-        // This prevents memory issues with large files (up to 50MB)
-        const contentHash = await this.computeFileHashStreaming(sourcePath);
+        // TASK-1790: streaming hash of the (plaintext) source: the dedupe key and the
+        // stored file name are the SHA-256 of the plaintext (BACKLOG-3816).
+        const contentHash = (await hashSourceFile(sourcePath)).sha256;
 
         // Determine destination path
         const destPath = path.join(attachmentsDir, `${contentHash}${ext}`);
 
-        // Get file size for record
-        const stats = await fs.promises.stat(sourcePath);
-
-        // Copy file if not already stored (use copyFile instead of read/write)
+        // BACKLOG-3816: store the KEPRENC ciphertext, never a plaintext copy.
         if (!existingHashes.has(contentHash)) {
-          await fs.promises.copyFile(sourcePath, destPath);
+          const sealed = await sealFileFrom(sourcePath, destPath);
+          if (sealed.sha256 !== contentHash) {
+            // The source changed between the hash and the copy: the name would lie.
+            await fs.promises.unlink(destPath).catch(() => undefined);
+            throw new Error("attachment source changed while it was being stored");
+          }
           existingHashes.add(contentHash);
         }
 
@@ -863,7 +957,7 @@ class IPhoneSyncStorageService {
           externalMessageId: messageGuid,
           filename,
           mimeType: attachment.mimeType || this.getMimeType(ext),
-          fileSizeBytes: stats.size,
+          fileSizeBytes: sourceSize,
           storagePath: destPath,
           sessionId,
         });
@@ -871,6 +965,9 @@ class IPhoneSyncStorageService {
         existingRecords.add(`${internalMessageId}:${filename}`);
         stored++;
       } catch (error) {
+        // BACKLOG-3816: a refused write (no file-data key) stops the whole run —
+        // swallowing it here would report success with every attachment "skipped".
+        if (isAtRestWriteRefused(error)) throw error;
         log.debug(`[${IPhoneSyncStorageService.SERVICE_NAME}] Failed to store attachment`, {
           filename: attachment.filename,
           error: error instanceof Error ? error.message : String(error),
@@ -888,8 +985,15 @@ class IPhoneSyncStorageService {
         // attachments — every skip above `continue`s, and before this a run of
         // already-stored attachments (an incremental sync) never reported progress
         // and never yielded the event loop. Same throttle as before.
-        if ((i + 1) % 100 === 0 || i === attachmentsToStore.length - 1) {
-          onProgress?.(i + 1, attachmentsToStore.length);
+        //
+        // BACKLOG-3785: still YIELD every 100th item, but REPORT only every ~2%
+        // (a multiple of 100, at least 100) and the last — ~50 events per run
+        // instead of one per 100 items.
+        const isLast = i === attachmentsToStore.length - 1;
+        if ((i + 1) % 100 === 0 || isLast) {
+          if ((i + 1) % progressEvery === 0 || isLast) {
+            onProgress?.(i + 1, attachmentsToStore.length);
+          }
           await yieldToEventLoop();
         }
       }
@@ -905,20 +1009,6 @@ class IPhoneSyncStorageService {
     });
 
     return { stored, skipped, skippedByReason: skippedBy };
-  }
-
-  /**
-   * Compute SHA-256 hash of a file using streaming (TASK-1790)
-   * Prevents loading entire file into memory for large files
-   */
-  private computeFileHashStreaming(filePath: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const hash = crypto.createHash("sha256");
-      const stream = fs.createReadStream(filePath);
-      stream.on("data", (chunk) => hash.update(chunk));
-      stream.on("end", () => resolve(hash.digest("hex")));
-      stream.on("error", reject);
-    });
   }
 
   /**

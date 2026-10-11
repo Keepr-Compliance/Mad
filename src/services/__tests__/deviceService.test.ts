@@ -32,7 +32,6 @@ import type {
   BackupResult,
   BackupListEntry,
   AppleDriverStatus,
-  SyncResult,
   SyncStatus,
 } from "../deviceService";
 
@@ -232,13 +231,6 @@ const mockAppleDriverStatus: AppleDriverStatus = {
   version: "12.0.0.0",
   serviceRunning: true,
   error: null,
-};
-
-const mockSyncResult: SyncResult = {
-  messages: [{ id: "msg1" }, { id: "msg2" }],
-  contacts: [{ id: "contact1" }],
-  conversations: [{ id: "conv1" }],
-  duration: 60,
 };
 
 const mockSyncStatusData: SyncStatus = {
@@ -1300,85 +1292,11 @@ describe("deviceService", () => {
   // ============================================
 
   describe("Sync Methods", () => {
-    describe("startSync", () => {
-      const syncOptions = { udid: "device-udid-123" };
-
-      it("should start sync and return result on success", async () => {
-        mockSyncStart.mockResolvedValue({
-          success: true,
-          ...mockSyncResult,
-        });
-
-        const result = await deviceService.startSync(syncOptions);
-
-        expect(result.success).toBe(true);
-        expect(result.data).toEqual(mockSyncResult);
-        expect(mockSyncStart).toHaveBeenCalledWith(syncOptions);
-      });
-
-      it("should pass all options to API", async () => {
-        const fullOptions = {
-          udid: "device-udid-123",
-          password: "backup-password",
-          forceFullBackup: true,
-        };
-        mockSyncStart.mockResolvedValue({
-          success: true,
-          ...mockSyncResult,
-        });
-
-        await deviceService.startSync(fullOptions);
-
-        expect(mockSyncStart).toHaveBeenCalledWith(fullOptions);
-      });
-
-      it("should return error when API returns failure", async () => {
-        mockSyncStart.mockResolvedValue({
-          success: false,
-          error: "Device locked",
-        });
-
-        const result = await deviceService.startSync(syncOptions);
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Device locked");
-      });
-
-      it("should return 'Sync failed' when error is undefined", async () => {
-        mockSyncStart.mockResolvedValue({
-          success: false,
-        });
-
-        const result = await deviceService.startSync(syncOptions);
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Sync failed");
-      });
-
-      it("should catch and return error when API throws exception", async () => {
-        mockSyncStart.mockRejectedValue(new Error("Sync error"));
-
-        const result = await deviceService.startSync(syncOptions);
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Sync error");
-      });
-
-      it("should return error when sync API is not available", async () => {
-        removeApiDomain("sync");
-
-        const result = await deviceService.startSync(syncOptions);
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Sync API not available");
-      });
-    });
-
     describe("cancelSync", () => {
       it("should cancel sync successfully", async () => {
         mockSyncCancel.mockResolvedValue({ success: true });
 
-        const result = await deviceService.cancelSync();
+        const result = await deviceService.cancelSync("progress-cancel");
 
         expect(result.success).toBe(true);
       });
@@ -1386,7 +1304,7 @@ describe("deviceService", () => {
       it("should catch and return error when API throws exception", async () => {
         mockSyncCancel.mockRejectedValue(new Error("Cancel failed"));
 
-        const result = await deviceService.cancelSync();
+        const result = await deviceService.cancelSync("progress-cancel");
 
         expect(result.success).toBe(false);
         expect(result.error).toBe("Cancel failed");
@@ -1395,7 +1313,7 @@ describe("deviceService", () => {
       it("should return error when sync API is not available", async () => {
         removeApiDomain("sync");
 
-        const result = await deviceService.cancelSync();
+        const result = await deviceService.cancelSync("progress-cancel");
 
         expect(result.success).toBe(false);
         expect(result.error).toBe("Sync API not available");

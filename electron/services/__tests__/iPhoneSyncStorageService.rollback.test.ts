@@ -46,6 +46,15 @@ jest.mock("fs", () => {
   };
 });
 
+// BACKLOG-3816: the attachment writer is the at-rest module; this suite's fs mock
+// cannot run real encryption, so the writer is stubbed (encryption is covered by
+// atRest.attachmentWriters-3816.test.ts).
+jest.mock("../atRest/attachmentWriter", () => ({
+  ...jest.requireActual("../atRest/attachmentWriter"),
+  sourceFileSize: jest.fn().mockResolvedValue(1024),
+  hashSourceFile: jest.fn().mockResolvedValue({ sha256: "abc123", size: 1024 }),
+  sealFileFrom: jest.fn().mockResolvedValue({ sha256: "abc123", plaintextSize: 1024 }),
+}));
 jest.mock("../databaseService");
 jest.mock("../db/externalContactDbService");
 jest.mock("../iosMessagesParser", () => ({
@@ -71,6 +80,20 @@ import type { iOSContact } from "../../types/iosContacts";
 
 // Type the mocks
 const mockDbService = databaseService as jest.Mocked<typeof databaseService>;
+
+// BACKLOG-3785: storeAttachments resolves ids and existing records per chunk of the
+// ids it is given. These stubs answer from a fixed table, filtered by the request,
+// the way the real scoped queries do.
+function stubIdLookup(db: { getMessageIdsByExternalIds: jest.Mock }, table: Map<string, string>): void {
+  db.getMessageIdsByExternalIds.mockImplementation((_userId: string, ids: readonly string[]) =>
+    new Map(ids.filter((g) => table.has(g)).map((g) => [g, table.get(g)!] as [string, string])),
+  );
+}
+function stubRecords(db: { getExistingAttachmentRecordsForMessages: jest.Mock }, records: Set<string>): void {
+  db.getExistingAttachmentRecordsForMessages.mockImplementation((ids: readonly string[]) =>
+    new Set([...records].filter((r) => ids.includes(r.slice(0, r.indexOf(":"))))),
+  );
+}
 const mockExternalContactDb = externalContactDb as jest.Mocked<typeof externalContactDb>;
 const mockFsPromises = fs.promises as jest.Mocked<typeof fs.promises>;
 
@@ -147,7 +170,7 @@ beforeEach(() => {
   jest.clearAllMocks();
 
   // Default mock implementations for database service
-  mockDbService.getExistingMessageExternalIds.mockReturnValue(new Set<string>());
+  mockDbService.getMessageExternalIdsPage.mockReturnValue([]);
   mockDbService.batchInsertMessages.mockReturnValue({ stored: 0, skipped: 0 });
   mockDbService.deleteAttachmentsBySessionId.mockReturnValue({
     deleted: 0,
@@ -317,7 +340,7 @@ describe("cancel signal timing", () => {
     expect(result.attachmentsStored).toBe(0);
 
     // No DB operations should have been called at all
-    expect(mockDbService.getExistingMessageExternalIds).not.toHaveBeenCalled();
+    expect(mockDbService.getMessageExternalIdsPage).not.toHaveBeenCalled();
     expect(mockDbService.batchInsertMessages).not.toHaveBeenCalled();
 
     // No rollback needed since nothing was stored
@@ -630,7 +653,7 @@ describe("error-path behavior (exception handling)", () => {
     const conversations = [makeConversation(1, messages)];
 
     // Simulate an exception during message storage
-    mockDbService.getExistingMessageExternalIds.mockImplementation(() => {
+    mockDbService.getMessageExternalIdsPage.mockImplementation(() => {
       throw new Error("Database corruption");
     });
 
@@ -715,7 +738,7 @@ describe("error-path behavior (exception handling)", () => {
     const conversations = [makeConversation(1, messages)];
 
     // Throw a non-Error object
-    mockDbService.getExistingMessageExternalIds.mockImplementation(() => {
+    mockDbService.getMessageExternalIdsPage.mockImplementation(() => {
       throw "string error"; // eslint-disable-line no-throw-literal
     });
 
@@ -908,9 +931,9 @@ describe("cancel during attachments phase", () => {
     mockExternalContactDb.upsertFromiPhone.mockReturnValue(0);
 
     // Attachment storage needs additional mocks
-    mockDbService.getMessageIdMap.mockReturnValue(new Map([["guid-1", "internal-id-1"]]));
+    stubIdLookup(mockDbService as unknown as { getMessageIdsByExternalIds: jest.Mock }, new Map([["guid-1", "internal-id-1"]]));
     mockDbService.getAttachmentStoragePaths.mockReturnValue([]);
-    mockDbService.getExistingAttachmentRecords.mockReturnValue(new Set());
+    stubRecords(mockDbService as unknown as { getExistingAttachmentRecordsForMessages: jest.Mock }, new Set());
     mockDbService.insertAttachment.mockImplementation(() => {
       // Cancel triggers during attachment storage
       cancelSignal.cancelled = true;

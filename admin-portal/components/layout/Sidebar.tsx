@@ -6,17 +6,23 @@
  * Left sidebar with navigation items.
  * Items are permission-gated based on the user's RBAC role.
  * Settings-related items are grouped under a collapsible section.
+ *
+ * BACKLOG-3841: below md the aside is hidden and the same nav renders in a
+ * slide-out drawer (mobileOpen), always expanded. The drawer is a SIBLING of
+ * the aside, never inside it, and goes through the same permission gate
+ * (renderNavItem) and section checks (canSee*) as the aside.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { LayoutDashboard, BarChart3, Users, Building2, CreditCard, Headphones, Inbox, UserCheck, Settings, LogOut, ChevronLeft, FileText, ChevronDown, ChevronRight, Shield, KanbanSquare, ListChecks, FolderKanban, Calendar, Filter, FileBarChart2 } from 'lucide-react';
+import { LayoutDashboard, BarChart3, Users, Building2, CreditCard, Headphones, Inbox, UserCheck, Settings, LogOut, ChevronLeft, FileText, ChevronDown, ChevronRight, Shield, KanbanSquare, ListChecks, FolderKanban, Calendar, Filter, FileBarChart2, X } from 'lucide-react';
 import { AppMark, Wordmark } from '@keepr/ui';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
 import type { PermissionKey } from '@/lib/permissions';
 import { PERMISSIONS } from '@/lib/permissions';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 
 interface NavItem {
   label: string;
@@ -84,9 +90,17 @@ const settingsSectionPermissions: PermissionKey[] = [
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
+  /** BACKLOG-3841: phone drawer open (below md). */
+  mobileOpen?: boolean;
+  /** BACKLOG-3841: close the phone drawer (Escape, backdrop, close button, any link). */
+  onMobileClose?: () => void;
 }
 
-export function Sidebar({ collapsed, onToggle }: SidebarProps) {
+const DESKTOP_QUERY = '(min-width: 768px)';
+
+type GroupKind = 'support' | 'pm' | 'settings';
+
+export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose }: SidebarProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { user, signOut } = useAuth();
@@ -137,10 +151,50 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const canSeeSupport = loading || supportSectionPermissions.some((p) => hasPermission(p));
   const canSeePm = loading || pmSectionPermissions.some((p) => hasPermission(p));
 
+  // BACKLOG-3841: drawer behaviour while open. useFocusTrap moves focus to the
+  // first control (Close menu), keeps Tab inside and restores focus on close.
+  const drawerRef = useRef<HTMLElement>(null);
+  const closeRef = useRef(onMobileClose);
+  closeRef.current = onMobileClose;
+  useFocusTrap(drawerRef, mobileOpen);
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const close = () => closeRef.current?.();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    let mql: MediaQueryList | null = null;
+    const onMedia = (e: MediaQueryListEvent) => {
+      if (e.matches) close();
+    };
+    if (typeof window.matchMedia === 'function') {
+      mql = window.matchMedia(DESKTOP_QUERY);
+      mql.addEventListener?.('change', onMedia);
+    }
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      mql?.removeEventListener?.('change', onMedia);
+    };
+  }, [mobileOpen]);
+
   /** Paths that should use exact-match only (prefix of other routes) */
   const exactMatchPaths = new Set(['/dashboard', '/dashboard/analytics', '/dashboard/support', '/dashboard/pm']);
 
-  const renderNavItem = (item: NavItem, isSubItem = false) => {
+  /**
+   * One nav link. `isCollapsed` is the aside's collapsed state, or false in the
+   * drawer; `onNavigate` is set only in the drawer (closes it on tap).
+   */
+  const renderNavItem = (item: NavItem, isSubItem = false, isCollapsed = collapsed, onNavigate?: () => void) => {
     // While permissions are loading, show all items to prevent flash
     if (!loading && !hasPermission(item.permission)) return null;
 
@@ -164,23 +218,94 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       <Link
         key={item.href}
         href={item.href}
+        onClick={onNavigate}
         className={`flex items-center rounded-md text-sm font-medium transition-colors ${
-          collapsed ? 'justify-center px-2 py-2' : isSubItem ? 'gap-3 pl-9 pr-3 py-2' : 'gap-3 px-3 py-2'
+          isCollapsed ? 'justify-center px-2 py-2' : isSubItem ? 'gap-3 pl-9 pr-3 py-2' : 'gap-3 px-3 py-2'
         } ${
           isActive
             ? 'bg-gray-800 text-white'
             : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-        }`}
-        title={collapsed ? item.label : undefined}
+        }${onNavigate ? ' min-h-[44px]' : ''}`}
+        title={isCollapsed ? item.label : undefined}
       >
         <Icon className={`shrink-0 ${isSubItem ? 'h-4 w-4' : 'h-5 w-5'}`} />
-        {!collapsed && <span>{item.label}</span>}
+        {!isCollapsed && <span>{item.label}</span>}
       </Link>
     );
   };
 
+  const groups: Record<GroupKind, {
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    visible: boolean;
+    active: boolean;
+    expanded: boolean;
+    setExpanded: (v: boolean) => void;
+    items: NavItem[];
+  }> = {
+    support: { label: 'Support', icon: Headphones, visible: canSeeSupport, active: isSupportActive, expanded: supportExpanded, setExpanded: setSupportExpanded, items: supportSubItems },
+    pm: { label: 'Projects', icon: KanbanSquare, visible: canSeePm, active: isPmActive, expanded: pmExpanded, setExpanded: setPmExpanded, items: pmSubItems },
+    settings: { label: 'Settings', icon: Settings, visible: canSeeSettings, active: isSettingsActive, expanded: settingsExpanded, setExpanded: setSettingsExpanded, items: settingsSubItems },
+  };
+
+  /**
+   * One collapsible group (Support / Projects / Settings). In the collapsed
+   * aside the header button expands the sidebar; otherwise (expanded aside,
+   * and always in the drawer) it toggles its own sub-items.
+   */
+  const renderGroup = (kind: GroupKind, isCollapsed: boolean, onNavigate?: () => void) => {
+    const g = groups[kind];
+    if (!g.visible) return null;
+    const Icon = g.icon;
+    return (
+      <div>
+        <button
+          onClick={() => {
+            if (isCollapsed) {
+              // When collapsed, expand the sidebar instead of toggling sub-items
+              onToggle();
+              g.setExpanded(true);
+            } else {
+              g.setExpanded(!g.expanded);
+            }
+          }}
+          className={`flex items-center w-full rounded-md text-sm font-medium transition-colors ${
+            isCollapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
+          } ${
+            g.active
+              ? 'bg-gray-800 text-white'
+              : 'text-gray-300 hover:bg-gray-800 hover:text-white'
+          }${onNavigate ? ' min-h-[44px]' : ''}`}
+          title={isCollapsed ? g.label : undefined}
+        >
+          <Icon className="h-5 w-5 shrink-0" />
+          {!isCollapsed && (
+            <>
+              <span className="flex-1 text-left">{g.label}</span>
+              {g.expanded
+                ? <ChevronDown className="h-4 w-4 shrink-0" />
+                : <ChevronRight className="h-4 w-4 shrink-0" />
+              }
+            </>
+          )}
+        </button>
+
+        {/* Sub-items (only visible when expanded and sidebar not collapsed) */}
+        {g.expanded && !isCollapsed && (
+          <div className="mt-1 space-y-1">
+            {g.items.map((item) => renderNavItem(item, true, isCollapsed, onNavigate))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
-    <aside className={`sticky top-0 h-screen flex flex-col bg-gray-900 text-white transition-all duration-200 ${collapsed ? 'w-16' : 'w-64'}`}>
+    <>
+    <aside
+      data-testid="desktop-sidebar"
+      className={`sticky top-0 h-screen hidden md:flex flex-col bg-gray-900 text-white transition-all duration-200 ${collapsed ? 'w-16' : 'w-64'}`}
+    >
       {/* Logo (toggle lives on the right-edge tab below) */}
       <div className={`flex items-center border-b border-gray-800 ${collapsed ? 'justify-center px-2 py-5' : 'px-6 py-5'}`}>
         {collapsed ? (
@@ -208,130 +333,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         {/* Main nav items */}
         {mainNavItems.map((item) => renderNavItem(item))}
 
-        {/* Collapsible Support section */}
-        {canSeeSupport && (
-          <div>
-            <button
-              onClick={() => {
-                if (collapsed) {
-                  onToggle();
-                  setSupportExpanded(true);
-                } else {
-                  setSupportExpanded(!supportExpanded);
-                }
-              }}
-              className={`flex items-center w-full rounded-md text-sm font-medium transition-colors ${
-                collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
-              } ${
-                isSupportActive
-                  ? 'bg-gray-800 text-white'
-                  : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-              }`}
-              title={collapsed ? 'Support' : undefined}
-            >
-              <Headphones className="h-5 w-5 shrink-0" />
-              {!collapsed && (
-                <>
-                  <span className="flex-1 text-left">Support</span>
-                  {supportExpanded
-                    ? <ChevronDown className="h-4 w-4 shrink-0" />
-                    : <ChevronRight className="h-4 w-4 shrink-0" />
-                  }
-                </>
-              )}
-            </button>
-
-            {supportExpanded && !collapsed && (
-              <div className="mt-1 space-y-1">
-                {supportSubItems.map((item) => renderNavItem(item, true))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Collapsible Projects section */}
-        {canSeePm && (
-          <div>
-            <button
-              onClick={() => {
-                if (collapsed) {
-                  onToggle();
-                  setPmExpanded(true);
-                } else {
-                  setPmExpanded(!pmExpanded);
-                }
-              }}
-              className={`flex items-center w-full rounded-md text-sm font-medium transition-colors ${
-                collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
-              } ${
-                isPmActive
-                  ? 'bg-gray-800 text-white'
-                  : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-              }`}
-              title={collapsed ? 'Projects' : undefined}
-            >
-              <KanbanSquare className="h-5 w-5 shrink-0" />
-              {!collapsed && (
-                <>
-                  <span className="flex-1 text-left">Projects</span>
-                  {pmExpanded
-                    ? <ChevronDown className="h-4 w-4 shrink-0" />
-                    : <ChevronRight className="h-4 w-4 shrink-0" />
-                  }
-                </>
-              )}
-            </button>
-
-            {pmExpanded && !collapsed && (
-              <div className="mt-1 space-y-1">
-                {pmSubItems.map((item) => renderNavItem(item, true))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Collapsible Settings section */}
-        {canSeeSettings && (
-          <div>
-            <button
-              onClick={() => {
-                if (collapsed) {
-                  // When collapsed, expand the sidebar instead of toggling sub-items
-                  onToggle();
-                  setSettingsExpanded(true);
-                } else {
-                  setSettingsExpanded(!settingsExpanded);
-                }
-              }}
-              className={`flex items-center w-full rounded-md text-sm font-medium transition-colors ${
-                collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
-              } ${
-                isSettingsActive
-                  ? 'bg-gray-800 text-white'
-                  : 'text-gray-300 hover:bg-gray-800 hover:text-white'
-              }`}
-              title={collapsed ? 'Settings' : undefined}
-            >
-              <Settings className="h-5 w-5 shrink-0" />
-              {!collapsed && (
-                <>
-                  <span className="flex-1 text-left">Settings</span>
-                  {settingsExpanded
-                    ? <ChevronDown className="h-4 w-4 shrink-0" />
-                    : <ChevronRight className="h-4 w-4 shrink-0" />
-                  }
-                </>
-              )}
-            </button>
-
-            {/* Sub-items (only visible when expanded and sidebar not collapsed) */}
-            {settingsExpanded && !collapsed && (
-              <div className="mt-1 space-y-1">
-                {settingsSubItems.map((item) => renderNavItem(item, true))}
-              </div>
-            )}
-          </div>
-        )}
+        {/* Collapsible Support / Projects / Settings sections */}
+        {renderGroup('support', collapsed)}
+        {renderGroup('pm', collapsed)}
+        {renderGroup('settings', collapsed)}
       </nav>
 
       {/* User info + Role badge + Sign Out */}
@@ -368,5 +373,70 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </button>
       </div>
     </aside>
+
+      {/* BACKLOG-3841: phone drawer. Rendered only while open, and outside the
+          aside (which is display:none below md). Always expanded. */}
+      {mobileOpen && (
+        <div className="md:hidden fixed inset-0 z-[60]" data-testid="mobile-nav-overlay">
+          <div className="absolute inset-0 bg-gray-900/55" aria-hidden="true" onClick={onMobileClose} />
+          <aside
+            id="mobile-nav"
+            ref={drawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Main menu"
+            className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-gray-900 text-white shadow-xl"
+          >
+            <div className="flex items-center justify-between border-b border-gray-800 py-2 pl-6 pr-2">
+              <div className="flex items-center gap-2">
+                <Wordmark className="text-xl font-bold" />
+                <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Admin</span>
+              </div>
+              <button
+                type="button"
+                onClick={onMobileClose}
+                aria-label="Close menu"
+                className="flex h-11 w-11 items-center justify-center rounded-md text-gray-400 [@media(hover:hover)]:hover:bg-gray-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-600"
+              >
+                <X className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </div>
+            <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+              {mainNavItems.map((item) => renderNavItem(item, false, false, onMobileClose))}
+              {renderGroup('support', false, onMobileClose)}
+              {renderGroup('pm', false, onMobileClose)}
+              {renderGroup('settings', false, onMobileClose)}
+            </nav>
+            <div className="border-t border-gray-800 px-3 py-4">
+              <div className="px-3 py-1.5 mb-2">
+                <div className="flex items-center gap-2.5">
+                  {avatarUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={avatarUrl} alt={displayName} className="h-8 w-8 rounded-full shrink-0" />
+                  ) : (
+                    <div className="h-8 w-8 rounded-full bg-primary-600 flex items-center justify-center text-white text-sm font-medium shrink-0">
+                      {displayName.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-sm text-gray-300 truncate leading-tight">{displayName}</p>
+                    {roleName && (
+                      <p className="text-xs text-gray-500 truncate leading-tight">{roleName}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={signOut}
+                className="flex min-h-[44px] items-center gap-3 w-full rounded-md px-3 py-2 text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+              >
+                <LogOut className="h-5 w-5 shrink-0" />
+                <span>Sign Out</span>
+              </button>
+            </div>
+          </aside>
+        </div>
+      )}
+    </>
   );
 }

@@ -1,3 +1,7 @@
+import { inspect } from "util";
+import type { Hook, LogMessage } from "electron-log";
+import { redactLogText, redactValueForKey } from "../utils/redactSensitive";
+
 /**
  * BACKLOG-2898 — explicit capacity for the support log.
  *
@@ -68,4 +72,94 @@ export interface ConfigurableFileTransport {
 export function applyLogFileConfig(transport: ConfigurableFileTransport): void {
   transport.level = LOG_FILE_LEVEL;
   transport.maxSize = LOG_FILE_MAX_SIZE_BYTES;
+}
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3819 — redact customer emails and phone numbers at the log sink.
+//
+// electron-log runs every hook in `logger.hooks` on each message, once per
+// transport, BEFORE the transport formats it
+// (node_modules/electron-log/src/core/Logger.js:177). One hook therefore covers
+// the file AND console transports, every module that imports `electron-log`,
+// `logService` (backed by electron-log via capabilities/electron/electronLogger),
+// and renderer lines relayed through `log:renderer` (handlers/systemHandlers.ts),
+// which arrive as a plain `log.info("[Renderer] ...")`.
+//
+// It is installed by bootstrap/installAppDataPaths.ts, the first import in
+// main.ts, because several modules log during import — long before main.ts
+// reaches `applyLogFileConfig`.
+// ---------------------------------------------------------------------------
+
+
+/** Minimal shape of a logger this module can attach the hook to. */
+export interface HookableLogger {
+  hooks: Hook[];
+}
+
+const MAX_DEPTH = 8;
+
+/**
+ * Return a redacted COPY of one log argument. Strings are redacted; arrays,
+ * plain objects and Errors are copied with their strings redacted. The caller's
+ * objects are never mutated. Cycles and very deep values are cut off rather
+ * than walked forever.
+ */
+export function redactLogValue(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
+  if (typeof value === "string") return redactLogText(value);
+  if (value === null || typeof value !== "object") return value;
+  if (seen.has(value)) return "[Circular]";
+  if (depth >= MAX_DEPTH) return "[Truncated]";
+  seen.add(value);
+  try {
+    if (value instanceof Error) {
+      const copy = new Error(redactLogText(value.message));
+      copy.name = value.name;
+      copy.stack = value.stack ? redactLogText(value.stack) : copy.stack;
+      for (const key of Object.keys(value)) {
+        (copy as unknown as Record<string, unknown>)[key] = redactLogValue(
+          (value as unknown as Record<string, unknown>)[key],
+          depth + 1,
+          seen,
+        );
+      }
+      return copy;
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => redactLogValue(item, depth + 1, seen));
+    }
+    if (value instanceof Date || Buffer.isBuffer(value) || ArrayBuffer.isView(value)) {
+      return value;
+    }
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) {
+      // Map, Set, URL and other class instances: their content is not in own
+      // enumerable properties, so redact the printed form instead.
+      return redactLogText(inspect(value, { depth: 4 }));
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      // A bare phone under a contact-like key (`{ phone: "5555550123" }`) has no
+      // separators for the text rules to see once the key is gone (BACKLOG-3819).
+      out[key] = redactLogValue(redactValueForKey(key, item), depth + 1, seen);
+    }
+    return out;
+  } finally {
+    seen.delete(value);
+  }
+}
+
+/** The hook itself: redact every argument of a message. */
+export const redactLogHook: Hook = (message: LogMessage) => {
+  if (!message || !Array.isArray(message.data)) return message;
+  return { ...message, data: message.data.map((item) => redactLogValue(item)) };
+};
+
+/**
+ * Attach {@link redactLogHook} to a logger, once. Safe to call repeatedly.
+ * It is placed LAST so it sees the output of any hook added before it.
+ */
+export function installLogRedactionHook(logger: HookableLogger): void {
+  if (!logger.hooks.includes(redactLogHook)) {
+    logger.hooks.push(redactLogHook);
+  }
 }

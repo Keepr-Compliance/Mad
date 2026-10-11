@@ -101,6 +101,8 @@ export const userBridge = {
     setup: "finished" | "not-finished" | "unknown";
     emailStepAnswered: boolean;
     contactSourceAnswered: boolean;
+    /** BACKLOG-3888: recorded mailbox providers ("outlook" / "gmail"). */
+    emailProviders?: string[];
     error?: string;
   }> => ipcRenderer.invoke("user:get-account-setup"),
 
@@ -159,6 +161,10 @@ export const notificationBridge = {
 export const logBridge = {
   send: (level: string, message: string): void => {
     ipcRenderer.send("log:renderer", level, message);
+  },
+  /** BACKLOG-3785: the screen NAME now shown (freeze telemetry). Names only. */
+  reportScreen: (name: string): void => {
+    ipcRenderer.send("telemetry:screen-name", name);
   },
 };
 

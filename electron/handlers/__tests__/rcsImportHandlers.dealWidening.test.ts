@@ -51,9 +51,17 @@ jest.mock("../../capabilities/windowsProvider", () => ({ hostWindows: { broadcas
 jest.mock("../../windowRegistry", () => ({ getMainWindow: () => null }));
 jest.mock("../../utils/bringAppToFront", () => ({ bringAppToFront: jest.fn(), bringAppToFrontOrFlash: jest.fn() }));
 jest.mock("../../services/autoLinkService", () => ({ autoLinkNewMessagesForUser: jest.fn() }));
+// BACKLOG-3837: the per-source floors are read only on a dedicated worker. Stand-in: the
+// worker's own runner (runSourceFloorsOn) on this test's database.
+jest.mock("../../workers/contactWorkerPool", () => ({
+  ...jest.requireActual("../../workers/contactWorkerPool"),
+  queryOnDedicatedWorker: jest.fn(),
+}));
 jest.mock("../../services/sessionService", () => ({ __esModule: true, default: { loadSession: async () => null } }));
 
 import { setDb } from "../../services/db/core/dbConnection";
+import { queryOnDedicatedWorker } from "../../workers/contactWorkerPool";
+import { runSourceFloorsOn } from "../../services/db/wizardMessageScansDb";
 import { rcsStagingDbOps } from "../../services/db/syncDbService";
 import { RcsCacheStaging, type RcsStagingFs } from "../../services/rcsCacheStaging";
 import { peopleFrom, rcsChatHash, type RcsIncomingChat } from "../../services/rcsImportStore";
@@ -154,7 +162,7 @@ beforeEach(() => {
     stagingRoot: nodePath.join(tmp, "staging"),
     attachmentsDir: nodePath.join(tmp, "attachments"),
     mkdir: async (d) => void (await fs.promises.mkdir(d, { recursive: true })),
-    writeFile: (p, data) => fs.promises.writeFile(p, data),
+    writeSealed: (p, data) => fs.promises.writeFile(p, data),
     exists: async (p) => fs.existsSync(p),
     move: (from, to) => fs.promises.rename(from, to),
     unlink: async (p) => void (await fs.promises.unlink(p).catch(() => undefined)),
@@ -167,6 +175,11 @@ beforeEach(() => {
   db.pragma("foreign_keys = ON");
   db.prepare("INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, 'agent-widen@example.test', 'google', 'oauth-widen')").run(USER);
   setDb(db);
+  const floorsDb = db;
+  jest.mocked(queryOnDedicatedWorker).mockImplementation(async (type, userId) => {
+    if (type !== "sourceCoverageFloors") throw new Error(`unexpected dedicated query ${type}`);
+    return runSourceFloorsOn(floorsDb, userId);
+  });
   staging = new RcsCacheStaging(rcsStagingDbOps(), files);
   deal("t-jan", JANUARY_ISO, "active", DEAL_NUM);
   deal("t-dead", "2025-01-01T00:00:00.000Z", "rejected", REJECTED_NUM);

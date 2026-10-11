@@ -12,6 +12,9 @@ import type {
 } from "../types";
 import { isTextMessage, isEmailMessage } from "@/utils/channelHelpers";
 import logger from '../../../utils/logger';
+import { mergeCommunicationsDelta } from "../utils/communicationsDelta";
+import { estimateRowsBytes, logAfterNextPaint, logOpenPath, nowMs } from "@/utils/openPathTiming";
+import { setRendererStallPhase } from "@/utils/rendererStallLogger";
 
 interface UseTransactionDetailsResult {
   // Data
@@ -35,6 +38,13 @@ interface UseTransactionDetailsResult {
    * contact path — a spinner here would collapse the expanded removed section.
    */
   refreshContactsSilently: () => Promise<void>;
+  /**
+   * BACKLOG-3785: bring one channel up to date by fetching only what changed
+   * (rows not held + ids gone) instead of every linked communication. No
+   * loading flag. Resolves false when it could not apply a delta (nothing held
+   * yet, or the call failed) so the caller can fall back to a full load.
+   */
+  applyCommunicationsDelta: (channelFilter: "email" | "text") => Promise<boolean>;
   setCommunications: React.Dispatch<React.SetStateAction<Communication[]>>;
   setResolvedSuggestions: React.Dispatch<React.SetStateAction<ResolvedSuggestedContact[]>>;
   updateSuggestedContacts: (remainingSuggestions: SuggestedContact[]) => Promise<void>;
@@ -97,7 +107,10 @@ export function useTransactionDetails(
   const loadDetails = useCallback(async (): Promise<void> => {
     try {
       setLoading(true);
-      const result = await window.api.transactions.getDetails(transaction.id);
+      // BACKLOG-3884: emails only. The texts are paged by the Texts tab
+      // (useTextThreads); asking for every communication here re-sent every
+      // linked text (183k rows on the PC) after each sync or contact edit.
+      const result = await window.api.transactions.getDetails(transaction.id, "email");
 
       if (result.success && result.transaction) {
         setCommunications(result.transaction.communications || []);
@@ -119,11 +132,21 @@ export function useTransactionDetails(
   const loadCommunications = useCallback(async (channelFilter: "email" | "text"): Promise<void> => {
     try {
       setLoading(true);
+      // BACKLOG-3884: name this load if the renderer stalls during it.
+      const phase = `transaction-${channelFilter}-load`;
+      setRendererStallPhase(phase);
+      const startedAt = nowMs();
       // getCommunications returns { success, transaction: { communications, contact_assignments } }
       const result = await window.api.transactions.getCommunications(transaction.id, channelFilter) as {
         success: boolean;
         transaction?: { communications?: Communication[]; contact_assignments?: ContactAssignment[] };
       };
+      const rows = result?.transaction?.communications ?? [];
+      logOpenPath(
+        `communications fetched channel=${channelFilter} ms=${Math.round(nowMs() - startedAt)}` +
+          ` rows=${rows.length} approxBytes=${estimateRowsBytes(rows)}`,
+      );
+      logAfterNextPaint(`communications painted channel=${channelFilter}`, startedAt, phase);
 
       if (result.success && result.transaction) {
         // Merge with existing communications (don't overwrite other channel)
@@ -173,13 +196,46 @@ export function useTransactionDetails(
   }, [transaction.id]);
 
   /**
+   * BACKLOG-3785: after Attach Messages on a large deal the full reload above
+   * re-downloaded every linked text (107 MB for 106k texts) and froze the
+   * window. Send the ids already held; receive only the difference. The main
+   * process computes it from the SAME reader as the full reload, so the merged
+   * list matches a reload.
+   */
+  const applyCommunicationsDelta = useCallback(async (channelFilter: "email" | "text"): Promise<boolean> => {
+    const isChannel = channelFilter === "text" ? isTextMessage : isEmailMessage;
+    const knownIds = communicationsRef.current.filter(isChannel).map((c) => c.id);
+    if (knownIds.length === 0) return false;
+    try {
+      const result = await window.api.transactions.getCommunicationsDelta(
+        transaction.id,
+        channelFilter,
+        knownIds,
+      );
+      if (!result.success) return false;
+      const added = (result.added ?? []) as Communication[];
+      const removedIds = result.removedIds ?? [];
+      setCommunications((prev) => mergeCommunicationsDelta(prev, isChannel, added, removedIds));
+      return true;
+    } catch (err) {
+      logger.error(`Failed to apply ${channelFilter} communications delta:`, err);
+      return false;
+    }
+  }, [transaction.id]);
+
+  /**
    * PERF: Load lightweight overview (contacts only, no communications).
    * Used for initial render of overview tab — avoids expensive 3-way JOIN.
    */
   const loadOverview = useCallback(async (): Promise<void> => {
     try {
       setLoading(true);
+      const startedAt = nowMs();
       const result = await window.api.transactions.getOverview(transaction.id);
+      logOpenPath(
+        `overview received ms=${Math.round(nowMs() - startedAt)}` +
+          ` contacts=${result?.transaction?.contact_assignments?.length ?? 0}`,
+      );
 
       if (result.success && result.transaction) {
         setContactAssignments(
@@ -241,7 +297,14 @@ export function useTransactionDetails(
       }
 
       try {
+        const startedAt = nowMs();
         const contactsResult = await window.api.contacts.getAll(transaction.user_id);
+        // BACKLOG-3884: runs on open only when the deal has suggested contacts;
+        // it reads every contact the user has.
+        logOpenPath(
+          `contacts get-all ms=${Math.round(nowMs() - startedAt)}` +
+            ` contacts=${contactsResult?.contacts?.length ?? 0} suggested=${suggestedContacts.length}`,
+        );
         if (contactsResult.success && contactsResult.contacts) {
           const contactMap = new Map(
             contactsResult.contacts.map((c: Contact) => [c.id, c])
@@ -319,6 +382,7 @@ export function useTransactionDetails(
     loadCommunications,
     refreshCommunicationsSilently,
     refreshContactsSilently,
+    applyCommunicationsDelta,
     setCommunications,
     setResolvedSuggestions,
     updateSuggestedContacts,

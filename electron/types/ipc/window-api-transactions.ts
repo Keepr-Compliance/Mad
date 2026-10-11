@@ -1,3 +1,4 @@
+import type { TextPageCursor, TextThreadSummary, TextWindow } from "../textThreads";
 /**
  * WindowApi Transactions sub-interface
  * Transaction CRUD, linking, export, and submission methods
@@ -13,6 +14,7 @@ import type {
 // shape without gaining a dependency on main-process code. One definition
 // rather than a hand-copied mirror that drifts the first time a column moves.
 import type { TransactionContactResult } from "../../services/db/transactionContactDbService";
+import type { PickerMessage } from "../../services/db/messageDbService";
 // The one definition of the pre-cache fetch rounds. TYPE-ONLY, same ruling.
 import type { EmailPrecacheStage } from "./emailPrecacheStage";
 
@@ -496,6 +498,8 @@ export interface WindowApiTransactions {
   ) => Promise<{ success: boolean; cancelled?: boolean; error?: string }>;
   getDetails: (
     transactionId: string,
+    /** BACKLOG-3884: "email" = emails only (the texts are paged separately). */
+    channelFilter?: "email",
   ) => Promise<{
     success: boolean;
     transaction?: Transaction & {
@@ -542,6 +546,53 @@ export interface WindowApiTransactions {
   getCommunications: (transactionId: string, channelFilter?: "email" | "text") => Promise<{
     success: boolean;
     communications?: Communication[];
+    error?: string;
+  }>;
+  /**
+   * BACKLOG-3785: communications changed since the caller's copy — the rows it
+   * does not hold (`added`) and the ids it holds that are gone (`removedIds`).
+   */
+  getCommunicationsDelta: (
+    transactionId: string,
+    channelFilter: "email" | "text",
+    knownIds: string[],
+  ) => Promise<{
+    success: boolean;
+    added?: Communication[];
+    removedIds?: string[];
+    total?: number;
+    error?: string;
+  }>;
+  /** BACKLOG-3884: the Texts tab's conversation list. */
+  getTextThreads: (transactionId: string, window: TextWindow | null) => Promise<{
+    success: boolean;
+    threads?: TextThreadSummary[];
+    error?: string;
+  }>;
+  /** BACKLOG-3884: one page of one conversation, newest first. */
+  getTextThreadPage: (
+    transactionId: string,
+    threadKeys: string[],
+    window: TextWindow | null,
+    cursor: TextPageCursor | null,
+    limit: number,
+  ) => Promise<{
+    success: boolean;
+    rows?: Communication[];
+    nextCursor?: TextPageCursor | null;
+    error?: string;
+  }>;
+  /** BACKLOG-3884: the conversation a linked text belongs to. */
+  findTextThread: (transactionId: string, messageId: string) => Promise<{
+    success: boolean;
+    threadKey?: string | null;
+    error?: string;
+  }>;
+  /** BACKLOG-3884: remove whole conversations; `messageIds` null when too many for Undo. */
+  unlinkTextThreads: (transactionId: string, threadKeys: string[]) => Promise<{
+    success: boolean;
+    removed?: number;
+    messageIds?: string[] | null;
     error?: string;
   }>;
   getWithContacts: (transactionId: string) => Promise<{
@@ -734,7 +785,7 @@ export interface WindowApiTransactions {
   /** Gets unlinked messages for a specific contact */
   getMessagesByContact: (userId: string, contact: string) => Promise<{
     success: boolean;
-    messages?: unknown[];
+    messages?: PickerMessage[];
     error?: string;
   }>;
   /** Links messages to a transaction */

@@ -25,6 +25,7 @@ import {
 } from "./db/emailSyncSql";
 import logService from "./logService";
 import { autoLinkCommunicationsForContact } from "./autoLinkService";
+import { runFullSweepOnce } from "./autoLinkSweepGuard";
 import type { AutoLinkResult } from "./autoLinkService";
 // BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
 // granted a support window covering the email-sync scope.
@@ -1306,9 +1307,15 @@ class EmailSyncService {
     // is that the ambiguous half is queued for review instead of being linked
     // with an address_missing flag.
     let totalQueuedForReview = 0;
+    // BACKLOG-3883: on the create/open path this is a full sweep of the deal, so it is
+    // skipped when nothing it reads changed since the last one. Mail stored by the fetch
+    // above moves the input token, so a fetch that stored something still sweeps.
+    const postFetchSweep = async (): Promise<{ clean: boolean }> => {
+    let clean = true;
     for (const assignment of contactAssignments) {
       try {
         const result = await autoLinkCommunicationsForContact({
+          caller: "postFetch",
           contactId: assignment.contact_id,
           transactionId,
           queueAmbiguousInsteadOfLinking: queueForReviewInsteadOfLinking,
@@ -1319,7 +1326,9 @@ class EmailSyncService {
         totalAlreadyLinked += result.alreadyLinked;
         totalQueuedForReview += result.queuedForReview ?? 0;
         totalErrors += result.errors;
+        if (result.errors > 0 || result.aborted) clean = false;
       } catch (error) {
+        clean = false;
         totalErrors++;
         logService.warn(
           `Auto-link failed for contact ${assignment.contact_id}`,
@@ -1329,6 +1338,13 @@ class EmailSyncService {
           }
         );
       }
+    }
+    return { clean };
+    };
+    if (queueForReviewInsteadOfLinking) {
+      await runFullSweepOnce(transactionId, postFetchSweep, "postFetch");
+    } else {
+      await postFetchSweep();
     }
 
     Sentry.addBreadcrumb({
@@ -1430,16 +1446,23 @@ class EmailSyncService {
     // address filtering from messages entirely, so every matching thread links,
     // exactly as it does on develop. The earlier revision queued them, which is
     // what emptied the linked count on phone-only deals.
+    // BACKLOG-3883: on the create/open path (queueForReviewInsteadOfLinking) this is a
+    // full sweep of the deal; skipped when no input it reads changed since the last one.
+    const onlySweep = async (): Promise<{ clean: boolean }> => {
+    let clean = true;
     for (const assignment of contactAssignments) {
       try {
         const result = await autoLinkCommunicationsForContact({
+          caller: "autoLinkOnly",
           contactId: assignment.contact_id,
           transactionId,
         });
         totalMessagesLinked += result.messagesLinked;
         totalAlreadyLinked += result.alreadyLinked;
         totalErrors += result.errors;
+        if (result.errors > 0 || result.aborted) clean = false;
       } catch (error) {
+        clean = false;
         totalErrors++;
         logService.warn(
           `Auto-link failed for contact ${assignment.contact_id}`,
@@ -1447,6 +1470,13 @@ class EmailSyncService {
           { error: error instanceof Error ? error.message : "Unknown" }
         );
       }
+    }
+    return { clean };
+    };
+    if (queueForReviewInsteadOfLinking) {
+      await runFullSweepOnce(transactionId, onlySweep, "autoLinkOnly");
+    } else {
+      await onlySweep();
     }
 
     return {
@@ -1880,6 +1910,7 @@ class EmailSyncService {
     // BACKLOG-2791: develop's classification, with the ambiguous half queued on
     // the details-discovery paths. Confident emails and every text still link.
     const autoLinkResult: AutoLinkResult = await autoLinkCommunicationsForContact({
+      caller: "fetchAndAutoLink",
       contactId,
       transactionId,
       queueAmbiguousInsteadOfLinking: queueForReviewInsteadOfLinking,

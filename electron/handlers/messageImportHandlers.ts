@@ -43,6 +43,7 @@ import { getTextAttachmentData } from "../services/textAttachmentDataService";
 import type { MessageAttachmentMeta, TextAttachmentDataResult } from "../types/ipc/common";
 
 import { sendToMainWindow } from "../windowRegistry";
+import { handleBusy } from "../utils/busyIpc";
 
 /**
  * Attachment info with base64 data for IPC transfer (TASK-1012)
@@ -148,7 +149,7 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
    * @param forceReimport - If true, delete existing messages first
    * @returns Import result with counts and status
    */
-  ipcMain.handle(
+  handleBusy(
     "messages:import-macos",
     async (
       _event: IpcMainInvokeEvent,
@@ -520,16 +521,18 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
     ): Promise<MessageAttachmentInfo[]> => {
       try {
         const attachments = macOSMessagesImportService.getAttachmentsByMessageId(messageId);
-        return attachments.map((att) => ({
-          id: att.id,
-          message_id: att.message_id,
-          filename: att.filename,
-          mime_type: att.mime_type,
-          file_size_bytes: att.file_size_bytes,
-          data: att.storage_path
-            ? macOSMessagesImportService.getAttachmentAsBase64(att.storage_path)
-            : null,
-        }));
+        return await Promise.all(
+          attachments.map(async (att) => ({
+            id: att.id,
+            message_id: att.message_id,
+            filename: att.filename,
+            mime_type: att.mime_type,
+            file_size_bytes: att.file_size_bytes,
+            data: att.storage_path
+              ? await macOSMessagesImportService.getAttachmentAsBase64(att.storage_path)
+              : null,
+          })),
+        );
       } catch (error) {
         logService.error(
           `Failed to get attachments: ${error instanceof Error ? error.message : "Unknown"}`,

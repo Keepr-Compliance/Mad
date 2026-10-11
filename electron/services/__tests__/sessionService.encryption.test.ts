@@ -36,6 +36,7 @@ jest.mock("electron", () => ({
 // Mock fs promises module
 const mockFs = {
   writeFile: jest.fn(),
+    rename: jest.fn(), // BACKLOG-3833: session.json is written tmp + rename
   readFile: jest.fn(),
   unlink: jest.fn(),
 };

@@ -111,6 +111,7 @@ describe("C10 — user:get-account-setup", () => {
       setup: "not-finished",
       emailStepAnswered: false,
       contactSourceAnswered: false,
+      emailProviders: [],
     });
   });
 
@@ -128,6 +129,7 @@ describe("C10 — user:get-account-setup", () => {
       setup: "finished",
       emailStepAnswered: true,
       contactSourceAnswered: true,
+      emailProviders: [],
     });
     expect(mockUpdateSession).toHaveBeenCalledWith({ accountSetupFinishedAt: TS });
   });
@@ -264,5 +266,53 @@ describe("C10 — user:complete-account-setup", () => {
     const r = await completeSetup();
     expect(r.success).toBe(false);
     expect(mockCompleteAccountSetup).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// BACKLOG-3888: the recorded mailbox providers ride the same bounded read
+// =============================================================================
+describe("BACKLOG-3888 — emailProviders from the account-setup read", () => {
+  beforeEach(() => {
+    mockGetAccountSetupRecord.mockResolvedValue({
+      found: true,
+      onboardingCompletedAt: TS,
+      emailOnboardingCompletedAt: TS,
+    });
+  });
+
+  it("returns the recorded set from preferences.emailProviders", async () => {
+    mockGetPreferences.mockResolvedValue({ emailProviders: ["outlook", "gmail"], phone_type: "iphone" });
+    const r = (await getSetup()) as { emailProviders?: string[] };
+    expect(r.emailProviders).toEqual(["outlook", "gmail"]);
+  });
+
+  it("drops malformed entries; a non-array is an empty set", async () => {
+    mockGetPreferences.mockResolvedValue({ emailProviders: ["outlook", 7, ""] });
+    expect(((await getSetup()) as { emailProviders?: string[] }).emailProviders).toEqual(["outlook"]);
+    mockGetPreferences.mockResolvedValue({ emailProviders: "outlook" });
+    expect(((await getSetup()) as { emailProviders?: string[] }).emailProviders).toEqual([]);
+  });
+
+  it("a hung preferences read does not hold startup past the existing bound", async () => {
+    jest.useFakeTimers();
+    try {
+      mockGetPreferences.mockReturnValue(new Promise(() => {}));
+      mockLoadSession.mockResolvedValue({ user: { id: SESSION_USER }, accountSetupFinishedAt: TS });
+      let settled = false;
+      const pending = getSetup().then((r) => {
+        settled = true;
+        return r;
+      });
+      await jest.advanceTimersByTimeAsync(ACCOUNT_SETUP_READ_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await jest.advanceTimersByTimeAsync(2);
+      expect(settled).toBe(true);
+      const r = (await pending) as { setup: string; emailProviders?: string[] };
+      expect(r.setup).toBe("finished");
+      expect(r.emailProviders).toBeUndefined();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

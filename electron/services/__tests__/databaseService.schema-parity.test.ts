@@ -118,6 +118,17 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
       "is not declared separately and cannot be omitted.",
     ref: "BACKLOG-3366",
   },
+  {
+    key: "INDEX:idx_messages_thread_sent",
+    what: "Index on messages (thread_id, sent_at).",
+    why:
+      "BACKLOG-3884: the Texts tab pages one linked conversation newest-first. " +
+      "With only idx_messages_thread_id every page read and sorted every row of " +
+      "the thread (a whole phone history on the PC). IF NOT EXISTS, so " +
+      "schema.sql's exec on every open creates it on fresh and existing " +
+      "databases; no migration entry.",
+    ref: "BACKLOG-3884",
+  },
 
   // -------------------------------------------------------------------------
   // BACKLOG-3475 — transaction checklists (local half). Four new tables, four

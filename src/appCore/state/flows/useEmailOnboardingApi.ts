@@ -44,11 +44,14 @@ interface UseEmailOnboardingApiReturn {
    * @param connected - Whether email is connected
    * @param email - The connected email address (required for state machine)
    * @param provider - The email provider (required for state machine)
+   * @param anyStillConnected - On a disconnect: another mailbox is still
+   *   connected (BACKLOG-3888). Omitted = none.
    */
   setHasEmailConnected: (
     connected: boolean,
     email?: string,
-    provider?: "google" | "microsoft"
+    provider?: "google" | "microsoft",
+    anyStillConnected?: boolean
   ) => void;
   completeEmailOnboarding: () => Promise<void>;
 }
@@ -104,7 +107,8 @@ export function useEmailOnboardingApi({
     (
       connected: boolean,
       email?: string,
-      provider?: "google" | "microsoft"
+      provider?: "google" | "microsoft",
+      anyStillConnected?: boolean
     ) => {
       if (connected && email && provider) {
         // BACKLOG-3673: connecting a mailbox DURING SETUP answers the email
@@ -144,6 +148,7 @@ export function useEmailOnboardingApi({
         dispatch({
           type: "EMAIL_DISCONNECTED",
           provider,
+          ...(anyStillConnected === true ? { anyStillConnected: true } : {}),
         });
       }
       // If missing provider info, no-op (state machine is source of truth)

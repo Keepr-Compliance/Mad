@@ -116,7 +116,14 @@ jest.mock("../logService", () => {
 jest.mock("../../workers/contactWorkerPool", () => ({
   __esModule: true,
   isPoolReady: () => poolReady,
-  queryContacts: (_type: string, userId: string) => {
+  queryContacts: (type: string, userId: string) => {
+    // BACKLOG-3837: the message-derived read moved to the worker too; the fake
+    // runs the SAME shared runner the worker runs.
+    if (type === "messageDerived") {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { runMessageDerivedQueryOn } = require("../db/wizardMessageScansDb");
+      return Promise.resolve(runMessageDerivedQueryOn(mockDb!, userId));
+    }
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { IMPORTED_CONTACTS_SELECT_SQL } = require("../db/contactProjectionSql");
     return Promise.resolve(mockDb!.prepare(IMPORTED_CONTACTS_SELECT_SQL).all(userId));

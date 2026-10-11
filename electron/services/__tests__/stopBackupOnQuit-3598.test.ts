@@ -23,7 +23,21 @@ jest.mock("child_process", () => ({
 }));
 
 jest.mock("electron", () => ({
-  app: { isPackaged: false, getPath: jest.fn(() => "/tmp/keepr-3598-quit") },
+  // BACKLOG-3816 S4-C (B1): a fresh userData per file, never a fixed shared path.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  app: { isPackaged: false, getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()) },
+}));
+// B1: the kept backup's at-rest layer and the saved-password store are not this suite's subject.
+jest.mock("../atRest/backupAtRest", () => ({
+  ...jest.requireActual("../atRest/backupAtRest"),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+}));
+jest.mock("../atRest/backupPassword", () => ({
+  ...jest.requireActual("../atRest/backupPassword"),
+  getBackupPasswordStore: () =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
 }));
 jest.mock("electron-log", () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
 jest.mock("@sentry/electron/main", () => ({
@@ -290,6 +304,49 @@ describe("BACKLOG-3598: before-quit wiring (createBackupStopOnQuit)", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
+  it("a second quit while the backup is being stopped is held; stop is not asked twice (BACKLOG-3785)", async () => {
+    const app = makeApp();
+    let release!: () => void;
+    const stop = jest.fn(() => new Promise<void>((r) => (release = r)));
+    const check = createBackupStopOnQuit(app, stop);
+
+    expect(check(makeEvent())).toBe(true);
+    const second = makeEvent();
+    expect(check(second)).toBe(true);
+    expect(second.preventDefault).toHaveBeenCalledTimes(1);
+    expect(app.quit).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledTimes(1);
+
+    release();
+    await flush();
+    expect(app.quit).toHaveBeenCalledTimes(1);
+    expect(check(makeEvent())).toBe(false);
+  });
+
+  it("re-entrant re-quit: before-quit fires synchronously inside app.quit() and is not deferred (BACKLOG-3785)", async () => {
+    // Real Electron emits before-quit synchronously from app.quit().
+    let release!: () => void;
+    const stop = jest.fn(() => new Promise<void>((r) => (release = r)));
+    const reentrant: Array<{ deferred: boolean; prevented: number }> = [];
+    let check!: ReturnType<typeof createBackupStopOnQuit>;
+    const app = {
+      quit: jest.fn(() => {
+        const event = makeEvent();
+        const deferred = check(event);
+        reentrant.push({ deferred, prevented: event.preventDefault.mock.calls.length });
+      }),
+    };
+    check = createBackupStopOnQuit(app, stop);
+
+    expect(check(makeEvent())).toBe(true);
+    release();
+    await flush();
+
+    expect(app.quit).toHaveBeenCalledTimes(1);
+    expect(reentrant).toEqual([{ deferred: false, prevented: 0 }]);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
   it("a stop that rejects still quits", async () => {
     const app = makeApp();
     const check = createBackupStopOnQuit(app, () => Promise.reject(new Error("boom")));
@@ -307,4 +364,9 @@ describe("BACKLOG-3598: before-quit wiring (createBackupStopOnQuit)", () => {
     expect(check(event)).toBe(false);
     expect(event.preventDefault).not.toHaveBeenCalled();
   });
+});
+
+afterAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./helpers/testUserData").removeTestUserDataDir();
 });
