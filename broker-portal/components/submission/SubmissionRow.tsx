@@ -10,6 +10,7 @@
 
 import { useRouter } from 'next/navigation';
 import type { MouseEvent, ReactNode } from 'react';
+import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
 
 /** Clicks that start on one of these keep that element's own action. */
 const INTERACTIVE = 'a, button, input, select, textarea, label, [role="button"]';
@@ -35,6 +36,9 @@ export function SubmissionRow({ href, className, children }: SubmissionRowProps)
       window.open(href, '_blank', 'noopener');
       return;
     }
+    // Top loading bar: router.push is invisible to the anchor-click listener
+    // (BACKLOG-3893).
+    startNavigationProgress();
     router.push(href);
   };
 
