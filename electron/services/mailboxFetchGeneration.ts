@@ -98,15 +98,3 @@ export function openMailboxFetchScope(
     },
   };
 }
-
-/** Thrown by the write step when its mailbox was disconnected mid-fetch. */
-export class MailboxDisconnectedError extends Error {
-  constructor(provider: MailboxProvider) {
-    super(`Mailbox disconnected during fetch (${provider})`);
-    this.name = "MailboxDisconnectedError";
-  }
-}
-
-export function isMailboxDisconnectedError(error: unknown): boolean {
-  return error instanceof MailboxDisconnectedError;
-}
