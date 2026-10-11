@@ -548,7 +548,7 @@ describe('BACKLOG-3845 mode guard before any Stripe call (SR req. 10)', () => {
     expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
   });
 
-  it('live key → no is_test read; a non-test user checks out', async () => {
+  it('live key → is_test is read; a non-test user checks out', async () => {
     process.env.STRIPE_SECRET_KEY = 'sk_live_dummy';
     signedIn();
     quoteRpc();
@@ -557,7 +557,33 @@ describe('BACKLOG-3845 mode guard before any Stripe call (SR req. 10)', () => {
     const { POST } = await import('@/app/api/payments/checkout-session/route');
     const res = await POST(bearer('valid'));
     expect(res.status).toBe(200);
-    expect(db.callsTo('organizations')).toHaveLength(0);
+    const orgReads = db.callsTo('organizations', 'select');
+    expect(orgReads).toHaveLength(1);
+    expect(eqValue(orgReads[0], 'personal_owner_user_id')).toBe('USER-1');
+    expect(mockCheckoutCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('live key + is_test user → 403, no customer, no session', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_live_dummy';
+    signedIn();
+    quoteRpc();
+    useDb({ organizations: [personalOrg(true)], stripe_customers: [] });
+    const { POST } = await import('@/app/api/payments/checkout-session/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(403);
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+    expect(mockCheckoutCreate).not.toHaveBeenCalled();
+  });
+
+  it('charge: live key + is_test user → 403, no PaymentIntent', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_live_dummy';
+    signedIn();
+    quoteRpc();
+    useDb({ organizations: [personalOrg(true)], stripe_customers: [customerRow('live')] });
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(403);
+    expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
   });
 });
 
