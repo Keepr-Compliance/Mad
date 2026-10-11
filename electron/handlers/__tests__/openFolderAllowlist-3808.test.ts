@@ -80,7 +80,7 @@ beforeEach(async () => {
   mockOpenPath.mockReset();
   mockOpenPath.mockResolvedValue("");
   mockWarn.mockReset();
-  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "keepr-3808-")));
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "keepr-3808-")));
   exportDir = path.join(root, "downloads", "Audit 123 Main St");
   fs.mkdirSync(exportDir, { recursive: true });
   fs.writeFileSync(path.join(exportDir, "inside.txt"), "x");

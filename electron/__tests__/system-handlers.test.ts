@@ -1314,7 +1314,7 @@ describe("System Handlers", () => {
       beforeEach(async () => {
         mockShellShowItemInFolder.mockReset();
         openable.clearOpenablePathsForTests();
-        tmp = realFs.realpathSync(realFs.mkdtempSync(realPathMod.join(realOs.tmpdir(), "keepr-3808-sif-")));
+        tmp = realFs.realpathSync.native(realFs.mkdtempSync(realPathMod.join(realOs.tmpdir(), "keepr-3808-sif-")));
         exportFile = realPathMod.join(tmp, "export.pdf");
         realFs.writeFileSync(exportFile, "%PDF");
         spacedFile = realPathMod.join(tmp, "My Documents", "export file.pdf");

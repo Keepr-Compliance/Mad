@@ -444,7 +444,7 @@ describe("BACKLOG-3808 — a finished export is registered as openable", () => {
     clearOpenablePathsForTests();
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const realOs = require("os") as typeof import("os");
-    outDir = fs.realpathSync(fs.mkdtempSync(path.join(realOs.tmpdir(), "keepr-3808-exp-")));
+    outDir = fs.realpathSync.native(fs.mkdtempSync(path.join(realOs.tmpdir(), "keepr-3808-exp-")));
   });
 
   afterEach(() => {
