@@ -1,8 +1,9 @@
 /**
  * Stripe SDK singleton + desktop-caller auth helper (BACKLOG-2005a).
  *
- * TEST MODE at launch: STRIPE_SECRET_KEY holds a test-mode key until the account
- * is activated (BACKLOG-2017). All code reads the key from env; nothing is hardcoded.
+ * STRIPE_SECRET_KEY decides the mode: production runs a live key, previews a
+ * test key. lib/billing/mode.ts derives the mode from it (BACKLOG-3845); all
+ * code reads the key from env; nothing is hardcoded.
  *
  * The charge endpoints are called by the desktop app (Electron main process) with
  * the user's Supabase access token as a Bearer header. R5 (SR): verify the JWT

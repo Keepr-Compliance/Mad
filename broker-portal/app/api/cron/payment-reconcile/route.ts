@@ -12,6 +12,7 @@
 
 import { NextResponse } from 'next/server';
 import { getStripe } from '@/lib/stripe';
+import { currentStripeMode } from '@/lib/billing/mode';
 import { createServiceClient } from '@/lib/supabase/service';
 import { fulfillPaidUnlock, emitPaymentSucceeded } from '@/lib/payments/fulfillment';
 import { dispatchReceiptEmail } from '@/lib/payments/receipt';
@@ -33,11 +34,15 @@ export async function GET(req: Request): Promise<Response> {
   const service = createServiceClient();
   const stripe = getStripe();
   const cutoff = new Date(Date.now() - GRACE_MINUTES * 60_000).toISOString();
+  // BACKLOG-3845 (RC8): only this key's mode — the other mode's PaymentIntents
+  // do not exist for this key, and retrieving them fails.
+  const mode = currentStripeMode();
 
   const { data: stuck, error } = await service
     .from('payment_intents')
     .select('id, user_id, local_transaction_id, quoted_unit_price_cents, pricing_tier_id, stripe_payment_intent_id, stripe_checkout_session_id')
     .eq('status', 'succeeded')
+    .eq('stripe_mode', mode)
     .lt('updated_at', cutoff)
     .limit(BATCH_LIMIT);
 

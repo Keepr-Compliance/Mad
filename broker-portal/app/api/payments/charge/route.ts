@@ -9,9 +9,16 @@
 
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import * as Sentry from '@sentry/nextjs';
 import { getStripe, verifyBearerUser, CURRENCY, UNLOCK_PRODUCT_NAME } from '@/lib/stripe';
 import { createServiceClient } from '@/lib/supabase/service';
 import { getNextUnlockQuote } from '@/lib/payments/fulfillment';
+import { currentStripeMode, type StripeMode } from '@/lib/billing/mode';
+import {
+  clearDefaultPaymentMethod,
+  getStripeCustomer,
+  isModeAllowedForUser,
+} from '@/lib/billing/customers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,6 +46,12 @@ export async function POST(req: Request): Promise<Response> {
 
   const service = createServiceClient();
   const stripe = getStripe();
+  const mode = currentStripeMode();
+
+  // BACKLOG-3845: a test-mode deployment serves only is_test users (before any Stripe call).
+  if (!(await isModeAllowedForUser(service, user.userId, mode))) {
+    return NextResponse.json({ error: 'payments unavailable for this account' }, { status: 403 });
+  }
 
   // Re-quote server-side (never trust a client price; handles the tier-crossed race).
   const quote = await getNextUnlockQuote(service, user.userId);
@@ -46,11 +59,14 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: 'no active price' }, { status: 500 });
   }
 
-  const { data: customer } = await service
-    .from('stripe_customers')
-    .select('stripe_customer_id, default_payment_method_id')
-    .eq('user_id', user.userId)
-    .maybeSingle();
+  // This mode's customer only (RC9): a test customer is never charged in live mode.
+  let customer: Awaited<ReturnType<typeof getStripeCustomer>> = null;
+  try {
+    customer = await getStripeCustomer(service, user.userId, mode);
+  } catch (err) {
+    console.error('[payments/charge] customer lookup failed:', (err as Error).message);
+    return NextResponse.json({ error: 'charge failed' }, { status: 500 });
+  }
 
   if (!customer?.stripe_customer_id || !customer.default_payment_method_id) {
     // No saved card -> the desktop must run the first-unlock Checkout flow.
@@ -83,12 +99,12 @@ export async function POST(req: Request): Promise<Response> {
       }
     );
   } catch (err) {
-    return handleChargeError(err, service, user.userId, localTransactionId, quote.unitPriceCents, quote.pricingTierId);
+    return handleChargeError(err, service, user.userId, localTransactionId, quote.unitPriceCents, quote.pricingTierId, mode);
   }
 
   if (pi.status === 'requires_action') {
     // SCA/3DS: hand the client a hosted confirmation URL.
-    await service.from('payment_intents').insert({
+    await recordPaymentIntent(service, mode, {
       user_id: user.userId,
       local_transaction_id: localTransactionId,
       stripe_payment_intent_id: pi.id,
@@ -123,7 +139,7 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  await service.from('payment_intents').insert({
+  await recordPaymentIntent(service, mode, {
     user_id: user.userId,
     local_transaction_id: localTransactionId,
     stripe_payment_intent_id: pi.id,
@@ -146,12 +162,13 @@ async function handleChargeError(
   userId: string,
   localTransactionId: string,
   quotedCents: number,
-  pricingTierId: string
+  pricingTierId: string,
+  mode: StripeMode
 ): Promise<Response> {
   if (err instanceof Stripe.errors.StripeCardError) {
     const pi = err.payment_intent;
     if (err.code === 'authentication_required' && pi) {
-      await service.from('payment_intents').insert({
+      await recordPaymentIntent(service, mode, {
         user_id: userId,
         local_transaction_id: localTransactionId,
         stripe_payment_intent_id: pi.id,
@@ -183,10 +200,8 @@ async function handleChargeError(
   if (isInvalidPaymentMethodError(err)) {
     // Best-effort cache clear; never let this failure mask the user-facing response.
     try {
-      await service
-        .from('stripe_customers')
-        .update({ default_payment_method_id: null })
-        .eq('user_id', userId);
+      // This mode's row only (RC9).
+      await clearDefaultPaymentMethod(service, userId, mode);
     } catch (clearErr) {
       console.error(
         '[payments/charge] failed to clear stale default_payment_method_id:',
@@ -206,6 +221,39 @@ async function handleChargeError(
 
   console.error('[payments/charge] unexpected error:', (err as Error).message);
   return NextResponse.json({ error: 'charge failed' }, { status: 500 });
+}
+
+/**
+ * Record a payment_intents row in this mode. The charge has already been made
+ * when this runs, so a failed insert is logged and reported, never surfaced as
+ * a failed payment (the webhook and the reconcile sweep still see the PI).
+ */
+async function recordPaymentIntent(
+  service: ReturnType<typeof createServiceClient>,
+  mode: StripeMode,
+  row: {
+    user_id: string;
+    local_transaction_id: string;
+    stripe_payment_intent_id: string;
+    quoted_unit_price_cents: number;
+    pricing_tier_id: string;
+    status: 'created' | 'requires_action';
+  }
+): Promise<void> {
+  const { error } = await service.from('payment_intents').insert({ ...row, stripe_mode: mode });
+  if (error) {
+    console.error('[payments/charge] payment_intents insert failed:', error.code, error.message);
+    Sentry.captureMessage('payment_intents insert failed at charge', {
+      level: 'error',
+      tags: { billing_stage: 'charge_insert', stripe_mode: mode },
+      extra: {
+        user_id: row.user_id,
+        stripe_payment_intent_id: row.stripe_payment_intent_id,
+        status: row.status,
+        code: error.code,
+      },
+    });
+  }
 }
 
 /**
