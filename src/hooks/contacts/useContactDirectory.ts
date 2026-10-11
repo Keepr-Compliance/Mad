@@ -193,6 +193,17 @@ export function useContactDirectory({
   const [externalContactsLoading, setExternalContactsLoading] = useState(false);
 
   /**
+   * BACKLOG-3832: whether each half's FIRST read has ended (rows, an error, or the
+   * address book's null result). Until it has, the half reports LOADING — an empty
+   * array that was never read is "not loaded yet", not "no contacts". Without this,
+   * a lazily loaded picker (the new-transaction wizard, Add Contacts) painted
+   * "No contacts available" for the frame between the step appearing and the
+   * effect that starts the read.
+   */
+  const [contactsSettled, setContactsSettled] = useState(false);
+  const [externalSettled, setExternalSettled] = useState(false);
+
+  /**
    * Initial-load de-dup ONLY. See the file docblock: `refreshBothLists`
    * bypasses these rather than clearing them.
    *
@@ -298,7 +309,10 @@ export function useContactDirectory({
       );
     } finally {
       contactsInFlightRef.current = false;
-      if (isMountedRef.current) setContactsLoading(false);
+      if (isMountedRef.current) {
+        setContactsLoading(false);
+        setContactsSettled(true);
+      }
     }
   }, [userId, propertyAddress]);
 
@@ -308,6 +322,7 @@ export function useContactDirectory({
 
     setContacts(loaded);
     contactsLoadedRef.current = true;
+    setContactsSettled(true);
     // Returned as well as stored: see the interface doc above.
     return loaded;
   }, [fetchSavedContacts]);
@@ -337,7 +352,10 @@ export function useContactDirectory({
       // open retries rather than leaving this half permanently empty.
     } finally {
       externalInFlightRef.current = false;
-      if (isMountedRef.current) setExternalContactsLoading(false);
+      if (isMountedRef.current) {
+        setExternalContactsLoading(false);
+        setExternalSettled(true);
+      }
     }
   }, [fetchExternalContacts]);
 
@@ -381,6 +399,8 @@ export function useContactDirectory({
       // ---------------------------------------------------------------
       contactsLoadedRef.current = true;
       externalLoadedRef.current = true;
+      setContactsSettled(true);
+      setExternalSettled(true);
     } else {
       // Deliberately no partial commit: see the interface doc. The screen keeps
       // the state it had, which is stale but consistent, and the next load
@@ -400,11 +420,12 @@ export function useContactDirectory({
 
   return {
     contacts,
-    contactsLoading,
+    // BACKLOG-3832: loading until the first read has ended — see `contactsSettled`.
+    contactsLoading: contactsLoading || !contactsSettled,
     contactsError,
     setContacts,
     externalContacts,
-    externalContactsLoading,
+    externalContactsLoading: externalContactsLoading || !externalSettled,
     loadContacts,
     silentLoadContacts,
     refreshBothLists,
