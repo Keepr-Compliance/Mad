@@ -347,7 +347,7 @@ describe("BACKLOG-3814 C4: cancel, unplug or quit during the wait -> no retry", 
   });
 
   it("Try Again during the wait is refused (the first backup's frame still holds the phone)", async () => {
-    let second: Promise<{ error?: string }> | null = null;
+    let second: ReturnType<DeviceSyncOrchestrator["sync"]> | null = null;
     const { result } = await syncWithDuringWait((o) => {
       second = o.sync({ udid: UDID });
     });
