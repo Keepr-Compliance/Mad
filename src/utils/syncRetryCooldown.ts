@@ -19,7 +19,7 @@ export const SYNC_RETRY_COOLDOWN_CODES: ReadonlySet<string> = new Set([
 
 /** Whole seconds left before the buttons come back; 0 once `now >= retryAvailableAt`. */
 export function retrySecondsLeft(retryAvailableAt: number | null | undefined, now: number): number {
-  if (retryAvailableAt == null) return 0;
+  if (retryAvailableAt === null || retryAvailableAt === undefined) return 0;
   const ms = retryAvailableAt - now;
   return ms > 0 ? Math.ceil(ms / 1000) : 0;
 }
@@ -42,7 +42,7 @@ export function useRetryCountdown(retryAvailableAt: number | null | undefined): 
   const secondsLeft = retrySecondsLeft(retryAvailableAt, Date.now());
 
   useEffect(() => {
-    if (retryAvailableAt == null || Date.now() >= retryAvailableAt) return;
+    if (retryAvailableAt === null || retryAvailableAt === undefined || Date.now() >= retryAvailableAt) return;
     const id = setInterval(() => {
       setTick((n) => n + 1);
       if (Date.now() >= retryAvailableAt) clearInterval(id);
