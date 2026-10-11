@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react';
  * covers the phone top bar. The service worker's offline screen is only for a
  * full page load that fails with no network.
  */
-export function OfflineBanner(): JSX.Element | null {
+export function OfflineBanner() {
   const [offline, setOffline] = useState(false);
 
   useEffect(() => {

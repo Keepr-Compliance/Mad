@@ -52,7 +52,7 @@ export function shouldStartFor(event: MouseEvent, current: Location): boolean {
   return url.pathname + url.search !== current.pathname + current.search;
 }
 
-export function NavigationProgress(): JSX.Element | null {
+export function NavigationProgress() {
   const pathname = usePathname();
   const [state, setState] = useState<'idle' | 'loading' | 'done'>('idle');
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
