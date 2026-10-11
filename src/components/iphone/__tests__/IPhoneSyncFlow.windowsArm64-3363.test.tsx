@@ -19,7 +19,7 @@ const baseContext: UseIPhoneSyncReturn = {
   progress: null,
   error: null,
   userError: null,
-  needsPassword: false,
+  appleEncryptedBackup: false,
   lastSyncTime: null,
   isWaitingForPasscode: false,
   syncLocked: false,
@@ -32,7 +32,6 @@ const baseContext: UseIPhoneSyncReturn = {
   installDriverError: null,
   recoverInstallDriver: jest.fn(),
   startSync: jest.fn(),
-  submitPassword: jest.fn(),
   cancelSync: jest.fn(),
   dismissSync: jest.fn(),
   checkSyncStatus: jest.fn(),
@@ -44,7 +43,6 @@ jest.mock("../../../contexts/IPhoneSyncContext", () => ({
   useIPhoneSyncContext: () => mockContextValue,
 }));
 jest.mock("../SyncProgress", () => ({ SyncProgress: () => <div>Progress</div> }));
-jest.mock("../BackupPasswordModal", () => ({ BackupPasswordModal: () => null }));
 jest.mock("../../sync/SyncLockBanner", () => ({ SyncLockBanner: () => <div>Locked</div> }));
 
 function setArmFlag(value: boolean | undefined) {

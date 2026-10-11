@@ -80,7 +80,7 @@ describe("BACKLOG-3816: sync:cancel names its trigger", () => {
   const cancel = (sender: number | undefined, trigger?: unknown) =>
     handlers.get("sync:cancel")?.(sender === undefined ? {} : { sender: { id: sender } }, trigger);
 
-  it.each(["progress-cancel", "error-close", "try-again-no-device", "password-cancel"])(
+  it.each(["progress-cancel", "error-close", "try-again-no-device"])(
     "a known control (%s) reaches the orchestrator and is logged with its window",
     async (trigger) => {
       await cancel(MAIN_ID, trigger);

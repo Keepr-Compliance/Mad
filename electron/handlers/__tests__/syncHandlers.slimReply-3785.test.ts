@@ -151,7 +151,7 @@ describe("BACKLOG-3785: the sync reply carries counts, never the arrays", () => 
         duration: 77,
         skipped: true,
         skipReason: "unchanged",
-        passwordRequired: true,
+        appleEncryptedBackup: true,
         attachmentsUndecryptable: 3,
       }),
     );
@@ -165,7 +165,7 @@ describe("BACKLOG-3785: the sync reply carries counts, never the arrays", () => 
       conversationCount: 2000,
       skipped: true,
       skipReason: "unchanged",
-      passwordRequired: true,
+      appleEncryptedBackup: true,
       attachmentsUndecryptable: 3,
     });
   });

@@ -1,10 +1,8 @@
 /**
- * BACKLOG-3817 B2 — the 10 s per-phone sync cooldown must not refuse the password the
- * user types right after a sync stopped to ask for it.
- *
- * The orchestrator marks such a run `passwordRequired: true`; `sync:start` then clears
- * the cooldown for that phone. A run that did real work (or failed for another reason)
- * keeps the cooldown.
+ * BACKLOG-3881 — the per-phone sync cooldown must not refuse the user's next Sync after a
+ * run stopped because the iPhone's backups are Apple-encrypted (that run transferred
+ * nothing). And `sync:start` never passes a password on, whatever the renderer sends.
+ * A run that did real work (or failed for another reason) keeps the cooldown.
  */
 
 import { EventEmitter } from "events";
@@ -70,7 +68,7 @@ async function start(options: { udid: string; password?: string }) {
   return (await handler({}, options)) as { success: boolean; error: string | null; rateLimited?: boolean };
 }
 
-describe("BACKLOG-3817 B2: sync cooldown vs. the backup password prompt", () => {
+describe("BACKLOG-3881: sync cooldown vs. an Apple-encrypted backup", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     handlers.clear();
@@ -79,31 +77,28 @@ describe("BACKLOG-3817 B2: sync cooldown vs. the backup password prompt", () => 
   });
   afterEach(() => cleanupSyncHandlers());
 
-  it("a run that stopped to ask for the password: the retry with the password, inside 10 s, is allowed", async () => {
+  it("a run stopped by an Apple-encrypted backup: the next Sync, inside the cooldown, is allowed", async () => {
     mockSync
-      .mockResolvedValueOnce(failed({ error: "Backup password required", passwordRequired: true }))
+      .mockResolvedValueOnce(failed({ error: "Your iPhone backups are password-protected by Apple.", appleEncryptedBackup: true }))
       .mockResolvedValueOnce({ ...failed(), success: true, error: null });
     await start({ udid: UDID });
-    const retry = await start({ udid: UDID, password: "typed-quickly" });
-    expect(retry.rateLimited).toBeUndefined();
+    const next = await start({ udid: UDID });
+    expect(next.rateLimited).toBeUndefined();
     expect(mockSync).toHaveBeenCalledTimes(2);
-    expect(mockSync.mock.calls[1][0]).toEqual({ udid: UDID, password: "typed-quickly" });
   });
 
-  it("a wrong password typed, then another one inside 10 s, is allowed", async () => {
-    mockSync
-      .mockResolvedValueOnce(failed({ error: "Incorrect password", passwordRequired: true }))
-      .mockResolvedValueOnce({ ...failed(), success: true, error: null });
-    await start({ udid: UDID, password: "typo" });
-    const retry = await start({ udid: UDID, password: "right" });
-    expect(retry.rateLimited).toBeUndefined();
-    expect(mockSync).toHaveBeenCalledTimes(2);
+  it("a password sent by an old renderer never reaches the orchestrator", async () => {
+    mockSync.mockResolvedValue({ ...failed(), success: true, error: null });
+    await start({ udid: UDID, password: "left-over" });
+    expect(mockSync).toHaveBeenCalledTimes(1);
+    expect(mockSync.mock.calls[0][0]).not.toHaveProperty("password");
+    expect(mockSync.mock.calls[0][0].udid).toBe(UDID);
   });
 
   it("a run that failed for any other reason keeps the cooldown", async () => {
     mockSync.mockResolvedValue(failed({ error: "lost" }));
-    await start({ udid: UDID, password: "pw" });
-    const second = await start({ udid: UDID, password: "pw" });
+    await start({ udid: UDID });
+    const second = await start({ udid: UDID });
     expect(second.rateLimited).toBe(true);
     expect(second.error).toMatch(/^Please wait \d+ seconds/);
     expect(mockSync).toHaveBeenCalledTimes(1);

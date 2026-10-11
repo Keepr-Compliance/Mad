@@ -1,12 +1,10 @@
 /**
- * BACKLOG-3816: the decrypted (plaintext) copy processExistingBackup makes is removed on
- * EVERY exit - a parser throw after decryption, a cancel, success - not left for the next
- * sweep. The real decryptionService.cleanup is the observable; discardParseCopy is NOT
- * stubbed. Mocks transcribed from deviceSyncOrchestrator.processCancel-3816.test.ts.
+ * BACKLOG-3816: parse copies (plaintext) are swept synchronously on app quit.
+ * (BACKLOG-3881 removed processExistingBackup's decrypt step, and with it the tests of the
+ * decrypted copy it made.) Mocks transcribed from deviceSyncOrchestrator.processCancel-3816.test.ts.
  */
 import { EventEmitter } from "events";
 
-const UDID = "00008030-0011223344556677";
 
 const mockStartBackup = jest.fn();
 const mockCheckBackupStatus = jest.fn();
@@ -16,13 +14,6 @@ jest.mock("../atRest/backupAtRest", () => ({
   ...jest.requireActual("../atRest/backupAtRest"),
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
-}));
-// BACKLOG-3816 S4-C (B1): no saved-password file I/O; this suite's subject is not the password.
-jest.mock("../atRest/backupPassword", () => ({
-  ...jest.requireActual("../atRest/backupPassword"),
-  getBackupPasswordStore: () =>
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
 }));
 jest.mock("electron", () => ({
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -150,20 +141,10 @@ jest.mock("../iosContactsParser", () => ({
 
 import { DeviceSyncOrchestrator } from "../deviceSyncOrchestrator";
 
-const COMPLETE = {
-  state: "present" as const,
-  isComplete: true,
-  isInterrupted: false,
-  snapshotState: "finished" as const,
-  size: { measured: true as const, bytes: 1024 },
-  lastModified: new Date("2026-10-09T00:00:00Z"),
-};
-
 interface Internals {
   decryptionService: { isBackupEncrypted: jest.Mock; decryptBackup: jest.Mock; cleanup: jest.Mock; sweepParseCopiesSync?: jest.Mock };
   contactsParser: { open: jest.Mock };
   messagesParser: { open: jest.Mock; getConversationsAsync: jest.Mock };
-  resolveBackupPassword: (...a: unknown[]) => Promise<unknown>;
   discardParseCopy: (p: string | null) => Promise<void>;
 }
 
@@ -173,80 +154,6 @@ function setup() {
   const internals = o as unknown as Internals;
   return { o, internals };
 }
-
-function deferred<T>() {
-  let resolve!: (v: T) => void;
-  const promise = new Promise<T>((r) => (resolve = r));
-  return { promise, resolve };
-}
-
-
-const COPY = "/tmp/keepr-decrypted-3816-copy";
-
-function encryptedRun() {
-  const { o, internals } = setup();
-  internals.decryptionService.isBackupEncrypted.mockResolvedValue(true);
-  jest.spyOn(internals, "resolveBackupPassword").mockResolvedValue({ kind: "stored", password: "pw" });
-  internals.decryptionService.decryptBackup.mockResolvedValue({
-    success: true,
-    decryptedPath: COPY,
-    stats: { skipped: 0 },
-  });
-  internals.decryptionService.cleanup.mockReset().mockResolvedValue(true);
-  return { o, internals };
-}
-
-describe("BACKLOG-3816: processExistingBackup removes the plaintext copy on every exit", () => {
-  beforeEach(() => {
-    mockCheckBackupStatus.mockReset().mockResolvedValue(COMPLETE);
-  });
-
-  it("a throw AFTER decryption (contacts parser): the copy is removed", async () => {
-    const { o, internals } = encryptedRun();
-    internals.contactsParser.open.mockRejectedValueOnce(new Error("parser blew up"));
-    const result = await o.processExistingBackup({ udid: UDID, forceResync: true });
-    expect(result.success).toBe(false);
-    expect(result.error).toContain("parser blew up");
-    expect(internals.decryptionService.cleanup).toHaveBeenCalledWith(COPY);
-  });
-
-  it("a throw AFTER decryption (messages parser): the copy is removed", async () => {
-    const { o, internals } = encryptedRun();
-    internals.messagesParser.getConversationsAsync.mockRejectedValueOnce(new Error("sms.db unreadable"));
-    const result = await o.processExistingBackup({ udid: UDID, forceResync: true });
-    expect(result.success).toBe(false);
-    expect(internals.decryptionService.cleanup).toHaveBeenCalledWith(COPY);
-  });
-
-  it("cancel right after decryption: the copy is removed, nothing is parsed", async () => {
-    const { o, internals } = encryptedRun();
-    internals.decryptionService.decryptBackup.mockImplementationOnce(async () => {
-      o.cancel("progress-cancel");
-      return { success: true, decryptedPath: COPY, stats: { skipped: 0 } };
-    });
-    const result = await o.processExistingBackup({ udid: UDID, forceResync: true });
-    expect(result.error).toBe("Processing cancelled by user");
-    expect(internals.decryptionService.cleanup).toHaveBeenCalledWith(COPY);
-    expect(internals.contactsParser.open).not.toHaveBeenCalled();
-  });
-
-  it("success: the copy is removed", async () => {
-    const { o, internals } = encryptedRun();
-    const result = await o.processExistingBackup({ udid: UDID, forceResync: true });
-    expect(result.error).toBeNull();
-    expect(result.success).toBe(true);
-    expect(internals.decryptionService.cleanup).toHaveBeenCalledWith(COPY);
-  });
-
-  it("a removal that throws is logged, never silently ignored", async () => {
-    const { o, internals } = encryptedRun();
-    internals.decryptionService.cleanup.mockRejectedValue(new Error("EPERM: file in use"));
-    internals.contactsParser.open.mockRejectedValueOnce(new Error("parser blew up"));
-    logLines.length = 0;
-    await o.processExistingBackup({ udid: UDID, forceResync: true });
-    expect(logLines.some((l) => l.includes("Removing a decrypted parse copy failed") && l.includes("EPERM"))).toBe(true);
-  });
-});
 
 describe("BACKLOG-3816: app quit removes parse copies synchronously", () => {
   it("discardParseCopiesForQuit asks the service for a synchronous sweep", () => {

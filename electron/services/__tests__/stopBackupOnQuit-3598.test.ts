@@ -33,12 +33,6 @@ jest.mock("../atRest/backupAtRest", () => ({
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
 }));
-jest.mock("../atRest/backupPassword", () => ({
-  ...jest.requireActual("../atRest/backupPassword"),
-  getBackupPasswordStore: () =>
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
-}));
 jest.mock("electron-log", () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
 jest.mock("@sentry/electron/main", () => ({
   addBreadcrumb: jest.fn(),

@@ -271,19 +271,6 @@ export const eventBridge = {
     return () => ipcRenderer.removeListener("backup:progress", listener);
   },
 
-  /**
-   * Listens for backup password required events
-   * @param callback - Callback function when password is needed
-   * @returns Cleanup function to remove listener
-   */
-  onBackupPasswordRequired: (callback: (data: { udid: string }) => void) => {
-    const listener = (_: IpcRendererEvent, data: { udid: string }) =>
-      callback(data);
-    ipcRenderer.on("backup:password-required", listener);
-    return () =>
-      ipcRenderer.removeListener("backup:password-required", listener);
-  },
-
   // ==========================================
   // DEEP LINK AUTH EVENTS (TASK-1500)
   // ==========================================

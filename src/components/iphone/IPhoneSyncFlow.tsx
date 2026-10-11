@@ -2,7 +2,6 @@ import React, { useEffect, useRef } from "react";
 import { useIPhoneSyncContext } from "../../contexts/IPhoneSyncContext";
 import { ConnectionStatus } from "./ConnectionStatus";
 import { SyncProgress } from "./SyncProgress";
-import { BackupPasswordModal } from "./BackupPasswordModal";
 import { SyncLockBanner } from "../sync/SyncLockBanner";
 import logger from "../../utils/logger";
 import { isWindowsArm64 } from "../../utils/platform";
@@ -33,7 +32,7 @@ interface IPhoneSyncFlowProps {
  * 1. Device connection status
  * 2. Sync initiation
  * 3. Progress tracking
- * 4. Password handling for encrypted backups
+ * 4. Apple-encrypted backups: the turn-it-off steps (BACKLOG-3881; Keepr takes no password)
  * 5. Success/Error states
  *
  * This component ties together the useIPhoneSync hook with
@@ -46,7 +45,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     syncStatus,
     progress,
     error,
-    needsPassword,
+    appleEncryptedBackup,
     lastSyncTime,
     isWaitingForPasscode,
     syncLocked,
@@ -57,7 +56,6 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     installDriverError,
     recoverInstallDriver,
     startSync,
-    submitPassword,
     cancelSync,
     dismissSync,
     checkSyncStatus,
@@ -72,15 +70,17 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
   // switch-style resolution with a `connection` DEFAULT makes the render
   // provably total — no (syncStatus, progress, syncLocked) combination can fall
   // through to a blank container (the blank-white-on-reopen regression). Exactly
-  // one primary view is chosen; the password modal is a separate overlay handled
-  // below. Order = precedence, matching the prior top-to-bottom JSX (progress
+  // one primary view is chosen. Order = precedence, matching the prior top-to-bottom JSX (progress
   // before success), which also removes a latent complete+syncLocked+progress
   // double-render. Cancel now resets to "idle", so it resolves to `connection`.
-  const view: "lockBanner" | "progress" | "success" | "error" | "connection" =
+  // BACKLOG-3881: an Apple-encrypted backup is its own view (the turn-it-off steps),
+  // never the generic "Sync Failed" and never a password box.
+  const view: "lockBanner" | "progress" | "success" | "appleEncrypted" | "error" | "connection" =
     (syncLocked && !isSyncing && !progress) ? "lockBanner" :
     ((isSyncing || (syncLocked && progress)) && !isError) ? "progress" :
     (isComplete && progress) ? "success" :
-    (isError && !needsPassword) ? "error" :
+    (isError && appleEncryptedBackup) ? "appleEncrypted" :
+    isError ? "error" :
     "connection";
 
   useEffect(() => {
@@ -103,18 +103,18 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
   // can never drift from what actually renders.
   const stepLog = useRef(new SyncStepChangeLog());
   useEffect(() => {
-    logger.debug(`[IPhoneSyncFlow] Rendering: ${view}`, { syncStatus, syncLocked, hasProgress: !!progress, isConnected, needsPassword });
+    logger.debug(`[IPhoneSyncFlow] Rendering: ${view}`, { syncStatus, syncLocked, hasProgress: !!progress, isConnected, appleEncryptedBackup });
 
     const stepLine = stepLog.current.next({
       view,
       phase: progress?.phase ?? null,
       message: progress?.message ?? null,
-      detail: { syncStatus, syncLocked, isConnected, needsPassword },
+      detail: { syncStatus, syncLocked, isConnected, appleEncryptedBackup },
     });
     if (stepLine) {
       logger.info(`[IPhoneSyncFlow] ${stepLine}`);
     }
-  }, [view, syncStatus, syncLocked, progress, isConnected, needsPassword]);
+  }, [view, syncStatus, syncLocked, progress, isConnected, appleEncryptedBackup]);
 
   // BACKLOG-3416: TASK-2116's auto-close effect lived here and was removed with
   // the `onSyncStarted` prop it fired. See the prop doc above for why. Nothing
@@ -221,6 +221,62 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
         </div>
       )}
 
+      {/* BACKLOG-3881: Apple-encrypted backups are not supported. The steps to turn
+          "Encrypt local backup" off, then Sync again. No password is asked for. */}
+      {view === "appleEncrypted" && (
+        <div className="flex flex-col items-center justify-center p-8 text-center" data-testid="apple-encrypted-backup">
+          <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center mb-4">
+            <svg
+              className="w-8 h-8 text-amber-600"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+              />
+            </svg>
+          </div>
+          <h3 className="text-xl font-semibold text-gray-800">Your iPhone backups are password-protected by Apple</h3>
+          <p className="text-gray-600 mt-2 max-w-sm">Keepr can&apos;t read password-protected backups.</p>
+          <div className="mt-4 max-w-sm text-left">
+            <p className="text-sm font-medium text-gray-800">To continue:</p>
+            <ol className="list-decimal list-inside text-sm text-gray-700 mt-1 space-y-1">
+              <li>Open Finder (Mac) or Apple Devices (Windows) and select your iPhone.</li>
+              <li>Untick <span className="font-medium">Encrypt local backup</span> and enter that password when asked.</li>
+              <li>Come back and press Sync again.</li>
+            </ol>
+          </div>
+          <p className="text-xs text-gray-500 mt-4 max-w-sm">
+            Your data stays protected: Keepr encrypts its own copy of your messages.
+          </p>
+          <div className="flex gap-3 mt-6">
+            <button
+              onClick={() => { logger.info("[IPhoneSyncFlow] Apple-encrypted Close clicked"); void cancelSync("error-close"); onClose?.(); }}
+              className="px-6 py-3 bg-gray-100 text-gray-700 font-medium rounded-lg hover:bg-gray-200 transition-colors"
+            >
+              Close
+            </button>
+            <button
+              onClick={() => {
+                logger.info("[IPhoneSyncFlow] Apple-encrypted Sync again clicked");
+                if (isConnected) {
+                  startSync();
+                } else {
+                  void cancelSync("try-again-no-device");
+                }
+              }}
+              className="px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-all"
+            >
+              Sync Again
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Error State */}
       {view === "error" && (
         <div className="flex flex-col items-center justify-center p-8 text-center">
@@ -285,20 +341,6 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
         </div>
       )}
 
-      {/* Password Modal - Shown when encrypted backup detected */}
-      <BackupPasswordModal
-        isOpen={needsPassword}
-        deviceName={device?.name || "iPhone"}
-        onSubmit={submitPassword}
-        onCancel={() => {
-          // BACKLOG-3816: the one cancel that was not logged. The modal also calls this
-          // on Escape and on a backdrop click (ResponsiveModal onClose).
-          logger.info("[IPhoneSyncFlow] Password modal cancel clicked");
-          void cancelSync("password-cancel");
-        }}
-        error={error || undefined}
-        isLoading={isSyncing && !needsPassword}
-      />
     </div>
   );
 };

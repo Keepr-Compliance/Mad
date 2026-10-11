@@ -74,15 +74,6 @@ export interface BackupStartOptions {
 }
 
 /**
- * Backup with password options
- */
-export interface BackupWithPasswordOptions {
-  udid: string;
-  password: string;
-  outputPath?: string;
-}
-
-/**
  * Backup result
  */
 export interface BackupResult {
@@ -308,26 +299,6 @@ export const deviceService = {
   },
 
   /**
-   * Start a backup with encryption password
-   */
-  async startBackupWithPassword(
-    options: BackupWithPasswordOptions
-  ): Promise<ApiResult<{ backupPath?: string }>> {
-    try {
-      if (!window.api.backup) {
-        return { success: false, error: "Backup API not available" };
-      }
-      const result = await window.api.backup.startWithPassword(options);
-      if (result.success) {
-        return { success: true, data: { backupPath: result.backupPath } };
-      }
-      return { success: false, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
    * Cancel the current backup
    */
   async cancelBackup(): Promise<ApiResult> {
@@ -406,27 +377,6 @@ export const deviceService = {
             needsPassword: result.needsPassword,
           },
         };
-      }
-      return { success: false, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
-   * Verify backup password
-   */
-  async verifyBackupPassword(
-    backupPath: string,
-    password: string
-  ): Promise<ApiResult<{ valid?: boolean }>> {
-    try {
-      if (!window.api.backup) {
-        return { success: false, error: "Backup API not available" };
-      }
-      const result = await window.api.backup.verifyPassword(backupPath, password);
-      if (result.success) {
-        return { success: true, data: { valid: result.valid } };
       }
       return { success: false, error: result.error };
     } catch (error) {
@@ -681,16 +631,6 @@ export const deviceService = {
       return () => {};
     }
     return window.api.sync.onDeviceDisconnected(callback);
-  },
-
-  /**
-   * Subscribe to password required events
-   */
-  onPasswordRequired(callback: () => void): () => void {
-    if (!window.api.sync) {
-      return () => {};
-    }
-    return window.api.sync.onPasswordRequired(callback);
   },
 
   /**

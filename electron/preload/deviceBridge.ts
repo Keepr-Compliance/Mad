@@ -167,24 +167,6 @@ export const backupBridge = {
     ipcRenderer.invoke("backup:check-encryption", udid),
 
   /**
-   * Start a backup with password (for encrypted backups)
-   * @param options - Backup options including password
-   */
-  startWithPassword: (options: {
-    udid: string;
-    password: string;
-    outputPath?: string;
-  }) => ipcRenderer.invoke("backup:start-with-password", options),
-
-  /**
-   * Verify a backup password without starting backup
-   * @param backupPath - Path to the backup
-   * @param password - Password to verify
-   */
-  verifyPassword: (backupPath: string, password: string) =>
-    ipcRenderer.invoke("backup:verify-password", backupPath, password),
-
-  /**
    * Check if an existing backup is encrypted
    * @param backupPath - Path to the backup
    */
@@ -270,7 +252,6 @@ export const syncBridge = {
    */
   start: (options: {
     udid: string;
-    password?: string;
     forceFullBackup?: boolean;
   }) => ipcRenderer.invoke("sync:start", options),
 
@@ -318,7 +299,7 @@ export const syncBridge = {
    * @param options - Processing options
    * @returns Processing result
    */
-  processExisting: (options: { udid: string; password?: string }) =>
+  processExisting: (options: { udid: string }) =>
     ipcRenderer.invoke("sync:process-existing", options),
 
   /**
@@ -366,18 +347,6 @@ export const syncBridge = {
     ipcRenderer.on("sync:device-disconnected", listener);
     return () =>
       ipcRenderer.removeListener("sync:device-disconnected", listener);
-  },
-
-  /**
-   * Subscribes to password required events (encrypted backup)
-   * @param callback - Callback when password is needed
-   * @returns Cleanup function to remove listener
-   */
-  onPasswordRequired: (callback: () => void) => {
-    const listener = () => callback();
-    ipcRenderer.on("sync:password-required", listener);
-    return () =>
-      ipcRenderer.removeListener("sync:password-required", listener);
   },
 
   /**

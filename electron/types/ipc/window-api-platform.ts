@@ -129,16 +129,6 @@ export interface WindowApiBackup {
      */
     backupSize: number | null;
   }>;
-  startWithPassword: (options: {
-    udid: string;
-    password: string;
-    outputPath?: string;
-  }) => Promise<{
-    success: boolean;
-    backupPath?: string;
-    error?: string;
-    errorCode?: string;
-  }>;
   cancel: () => Promise<{ success: boolean }>;
   list: () => Promise<
     Array<{
@@ -168,10 +158,6 @@ export interface WindowApiBackup {
     needsPassword?: boolean;
     error?: string;
   }>;
-  verifyPassword: (
-    backupPath: string,
-    password: string,
-  ) => Promise<{ success: boolean; valid?: boolean; error?: string }>;
   isEncrypted: (
     backupPath: string,
   ) => Promise<{ success: boolean; isEncrypted?: boolean; error?: string }>;
@@ -238,7 +224,8 @@ export interface SyncStartReply {
   skipped?: boolean;
   skipReason?: "unchanged" | "force-resync";
   rateLimited?: boolean;
-  passwordRequired?: boolean;
+  /** BACKLOG-3881: stopped because the iPhone's backups are Apple-encrypted. */
+  appleEncryptedBackup?: boolean;
   attachmentsUndecryptable?: number;
 }
 
@@ -251,8 +238,7 @@ export interface SyncStartReply {
 export type SyncCancelTrigger =
   | "progress-cancel"
   | "error-close"
-  | "try-again-no-device"
-  | "password-cancel";
+  | "try-again-no-device";
 
 /**
  * Sync methods (Windows)
@@ -260,7 +246,6 @@ export type SyncCancelTrigger =
 export interface WindowApiSync {
   start: (options: {
     udid: string;
-    password?: string;
     forceFullBackup?: boolean;
   }) => Promise<SyncStartReply>;
   cancel: (trigger: SyncCancelTrigger) => Promise<{ success: boolean }>;
@@ -290,7 +275,6 @@ export interface WindowApiSync {
   onPhase: (callback: (phase: string) => void) => () => void;
   onDeviceConnected: (callback: (device: unknown) => void) => () => void;
   onDeviceDisconnected: (callback: (device: unknown) => void) => () => void;
-  onPasswordRequired: (callback: () => void) => () => void;
   onError: (callback: (error: { message: string }) => void) => () => void;
   onComplete: (callback: (result: unknown) => void) => () => void;
   onWaitingForPasscode: (callback: () => void) => () => void;
