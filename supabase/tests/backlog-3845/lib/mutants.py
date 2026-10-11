@@ -59,6 +59,19 @@ TRG_SC = ("CREATE TRIGGER guard_stripe_mode_is_test\n"
 TRG_BS = ("CREATE TRIGGER guard_stripe_mode_is_test\n"
           "  BEFORE INSERT OR UPDATE OF stripe_mode, user_id, organization_id ON public.billing_subscriptions\n"
           "  FOR EACH ROW EXECUTE FUNCTION public._guard_stripe_mode_is_test();\n")
+TRG_PI = ("CREATE TRIGGER guard_stripe_mode_is_test\n"
+          "  BEFORE INSERT OR UPDATE OF stripe_mode, user_id ON public.payment_intents\n"
+          "  FOR EACH ROW EXECUTE FUNCTION public._guard_stripe_mode_is_test();\n")
+TRG_OB = ("CREATE TRIGGER guard_stripe_mode_is_test\n"
+          "  BEFORE INSERT OR UPDATE OF stripe_mode, user_id, organization_id ON public.billing_outbox\n"
+          "  FOR EACH ROW EXECUTE FUNCTION public._guard_stripe_mode_is_test();\n")
+
+
+def insert_only(trg):
+    return trg.replace("BEFORE INSERT OR UPDATE OF stripe_mode, user_id, organization_id", "BEFORE INSERT").replace(
+        "BEFORE INSERT OR UPDATE OF stripe_mode, user_id", "BEFORE INSERT")
+
+
 ORG_FIRST = ("  IF v_org_id IS NOT NULL THEN\n"
              "    SELECT o.is_test INTO v_is_test FROM public.organizations o WHERE o.id = v_org_id;\n"
              "  ELSIF v_user_id IS NOT NULL THEN\n")
@@ -102,6 +115,16 @@ MUTANTS = {
     "m08a-no-trigger-stripe-customers": ("mig", [(TRG_SC, "")], "k09"),
     "m08b-no-trigger-subscriptions": ("mig", [(TRG_BS, "")], "k09"),
     "m08c-trigger-ignores-row-org": ("mig", [(ORG_FIRST, "  IF false THEN\n    NULL;\n  ELSIF v_user_id IS NOT NULL THEN\n")], "k09"),
+    # -- R1: each table's trigger cut to BEFORE INSERT (the UPDATE path unguarded)
+    "m08d-sc-trigger-insert-only": ("mig", [(TRG_SC, insert_only(TRG_SC))], "k09"),
+    "m08e-pi-trigger-insert-only": ("mig", [(TRG_PI, insert_only(TRG_PI))], "k09"),
+    "m08f-bs-trigger-insert-only": ("mig", [(TRG_BS, insert_only(TRG_BS))], "k09"),
+    "m08g-ob-trigger-insert-only": ("mig", [(TRG_OB, insert_only(TRG_OB))], "k09"),
+    # -- R1: one column dropped from the UPDATE OF list
+    "m08h-bs-trigger-no-org-column": ("mig", [(TRG_BS, TRG_BS.replace(", organization_id", ""))], "k09"),
+    "m08i-ob-trigger-no-org-column": ("mig", [(TRG_OB, TRG_OB.replace(", organization_id", ""))], "k09"),
+    "m08j-pi-trigger-no-user-column": ("mig", [(TRG_PI, TRG_PI.replace("stripe_mode, user_id", "stripe_mode"))], "k09"),
+    "m08k-sc-trigger-no-mode-column": ("mig", [(TRG_SC, TRG_SC.replace("stripe_mode, user_id", "user_id"))], "k09"),
     # -- grant / revoke RPC checks (each on its own)
     "m09-grant-no-test-check": ("mig", [(GRANT_TEST_CHECK, "")], "k07"),
     "m10-grant-no-live-check": ("mig", [(GRANT_LIVE_CHECK, "")], "k07"),

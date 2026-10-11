@@ -24,8 +24,6 @@
 -- Harness: supabase/tests/backlog-3845/ (controls + mutants, every run rolled back).
 -- Rollback: supabase/tests/backlog-3845/rollback-3845.sql.
 
-BEGIN;
-
 -- ---------------------------------------------------------------------------
 -- 0. Preconditions: the venue has the resolver bodies this file was written
 --    against (production md5s, 2026-10-11), or this migration's own bodies
@@ -717,5 +715,3 @@ BEGIN
 END
 $fn$;
 REVOKE EXECUTE ON FUNCTION public.revoke_unlimited_from_subscription(uuid, text) FROM PUBLIC, anon, authenticated;
-
-COMMIT;
