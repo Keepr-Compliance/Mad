@@ -25,6 +25,7 @@ import { InlinePriorityPicker } from './InlinePriorityPicker';
 import { InlineAssigneePicker } from './InlineAssigneePicker';
 import type { AssignableUser } from './InlineAssigneePicker';
 import { StatusBadge, PriorityBadge, TypeBadge, formatDate } from './TaskTableHeader';
+import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
 
 // ---------------------------------------------------------------------------
 // Inline Dropdown: Type
@@ -226,6 +227,7 @@ export function TaskTableRow({
       onClick={(e: React.MouseEvent<HTMLTableRowElement>) => {
         const target = e.target as HTMLElement;
         if (target.closest('a') || target.closest('input') || target.closest('button') || target.closest('[data-inline-edit]') || target.closest('[data-drag-handle]')) return;
+        startNavigationProgress();
         router.push(itemUrl);
       }}
       className={`hover:bg-gray-50 cursor-pointer transition-colors ${isDragging ? 'opacity-50' : ''}`}
