@@ -398,9 +398,15 @@ class OutlookFetchService {
         await databaseService.getOAuthToken(userId, "microsoft", "mailbox");
 
       if (!tokenRecord) {
-        throw new Error(
-          "No Outlook OAuth token found. User needs to connect Outlook first.",
-        );
+        // BACKLOG-3879: no Outlook mailbox connected is a normal state, not a
+        // failure (same decision as Gmail, BACKLOG-3867): only "no active
+        // mailbox token row" skips. A present-but-expired token still
+        // proceeds, so the reconnect flow is unchanged. Callers treat `false`
+        // as "skip Outlook".
+        this.accessToken = "";
+        this.refreshToken = null;
+        logService.debug("No Outlook mailbox connected; skipping", "OutlookFetch");
+        return false;
       }
 
       // Session-only OAuth: tokens stored unencrypted in encrypted database

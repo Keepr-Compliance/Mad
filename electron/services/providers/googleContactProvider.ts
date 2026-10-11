@@ -77,12 +77,10 @@ export class GoogleContactProvider implements ContactSyncProvider {
       // sync path. Flagging the no-token case therefore prompted every user who
       // has never connected a Google mailbox, on every sync, forever.
       //
-      // `OutlookContactProvider` already behaves this way, BY ACCIDENT and not
-      // by design: `outlookFetchService.initialize()` THROWS on a missing token
-      // rather than returning false, so its `canSync` catch returns a bare
-      // `{ ready: false, error }` and the `reconnectRequired: true` on its
-      // `!initialized` path is unreachable. The accident is correct — do not
-      // "fix" it into setting the flag.
+      // `OutlookContactProvider.canSync` behaves the same way: BACKLOG-3879
+      // made `outlookFetchService.initialize()` return false (not throw) when
+      // no mailbox is connected, and canSync maps that to a bare
+      // `{ ready: false, error }` with no `reconnectRequired`. Do not set it.
       //
       // What remains flagged below is the state the flag is FOR: a mailbox that
       // IS connected but whose grant cannot read contacts.
