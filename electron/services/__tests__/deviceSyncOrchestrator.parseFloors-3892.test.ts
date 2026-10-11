@@ -219,7 +219,7 @@ function conv(chatId: number, lastMs: number) {
     messages: [],
     lastMessage: new Date(lastMs),
     isGroupChat: false,
-    lastDateRaw: ns(lastMs),
+    lastDateRaw: String(ns(lastMs)),
   };
 }
 const msg = (id: number) => ({ id, guid: `G-${id}`, text: "t", handle: "", isFromMe: true, date: new Date(F + DAY), dateRead: null, dateDelivered: null, service: "iMessage", attachments: [] });

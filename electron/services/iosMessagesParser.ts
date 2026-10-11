@@ -508,10 +508,11 @@ export class iOSMessagesParser {
           const lastMessageRow = lastDateStmt.get(chat.ROWID) as
             | { last_date: bigint | number | null }
             | undefined;
-          const lastDateRaw = lastMessageRow?.last_date ?? null;
+          const lastDate = lastMessageRow?.last_date ?? null;
+          const lastDateRaw = lastDate === null ? null : String(lastDate);
 
           const lastMessageDate = convertAppleTimestamp(
-            lastDateRaw === null ? null : Number(lastDateRaw) || null,
+            lastDate === null ? null : Number(lastDate) || null,
           );
 
           // Skip chats with no messages

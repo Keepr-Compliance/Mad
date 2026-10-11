@@ -237,9 +237,12 @@ export function floorBinds(sinceMs: number): { ns: bigint; sec: number } {
  * The SQL bound's rule in TypeScript, exact on a BigInt `message.date`: true when
  * the row is kept by a floor with these binds (undated rows are kept).
  */
-export function appleDateKeptByFloor(raw: number | bigint | null | undefined, binds: { ns: bigint; sec: number }): boolean {
+export function appleDateKeptByFloor(raw: string | number | bigint | null | undefined, binds: { ns: bigint; sec: number }): boolean {
   if (raw === null || raw === undefined) return true;
-  const n = typeof raw === "bigint" ? raw : Number.isFinite(raw) ? BigInt(Math.trunc(raw)) : null;
+  let n: bigint | null;
+  if (typeof raw === "bigint") n = raw;
+  else if (typeof raw === "string") n = /^-?\d+$/.test(raw) ? BigInt(raw) : null;
+  else n = Number.isFinite(raw) ? BigInt(Math.trunc(raw)) : null;
   if (n === null || n <= 0n) return true;
   if (n >= binds.ns) return true;
   return n < BigInt(APPLE_SECONDS_DATE_MAX) && n >= BigInt(binds.sec);
