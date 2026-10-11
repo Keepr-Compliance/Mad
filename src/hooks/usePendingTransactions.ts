@@ -27,6 +27,10 @@ export function usePendingTransactions(): UsePendingTransactionsResult {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // BACKLOG-3832: the fetch runs in a mount effect, so the first paint came before
+  // it and showed "No pending transactions to review". Until the first read ends,
+  // a signed-in user's list is loading, not empty.
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   const fetchTransactions = useCallback(async () => {
     if (!currentUser?.id) {
@@ -51,6 +55,7 @@ export function usePendingTransactions(): UsePendingTransactionsResult {
       setTransactions([]);
     } finally {
       setIsLoading(false);
+      setHasLoaded(true);
     }
   }, [currentUser?.id]);
 
@@ -68,7 +73,7 @@ export function usePendingTransactions(): UsePendingTransactionsResult {
 
   return {
     pendingTransactions,
-    isLoading,
+    isLoading: isLoading || (!!currentUser?.id && !hasLoaded),
     error,
     refetch: fetchTransactions,
   };
