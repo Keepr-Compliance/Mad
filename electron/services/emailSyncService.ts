@@ -639,11 +639,6 @@ async function fetchStoreAndDedup(params: {
 
   const emails = await fetchFn();
 
-  // BACKLOG-3903: the fetch can take minutes, and a disconnect during it must
-  // not be followed by a write. Checked again immediately before the insert
-  // transaction, after the last `await` that precedes it.
-  if (disconnectedSinceFetchStarted("after-fetch")) return nothingWritten;
-
   // Dedup against previously seen IDs
   const newEmails = emails.filter((e) => {
     if (seenIds.has(e.id)) return false;
@@ -968,6 +963,10 @@ async function fetchStoreAndDedup(params: {
         }
       });
 
+      // BACKLOG-3903: THE gate. The fetch above can take minutes; a disconnect
+      // during it must not be followed by a write. Placed after the last
+      // `await` before the insert transaction, which is synchronous, so no
+      // disconnect can land between this check and the write.
       if (disconnectedSinceFetchStarted("before-write")) return nothingWritten;
       runTransaction();
 
