@@ -296,6 +296,8 @@ describe("BACKLOG-3598: a failed first sync removes its unfinished backup", () =
     expect(result.success).toBe(false);
     // The sync's own error reaches the user unchanged.
     expect(result.error).toBe("The connection to your iPhone was lost.");
+    // BACKLOG-3816: the classified cause reaches the reply (the renderer's retry hold).
+    expect(result.errorCode).toBe("CONNECTION_LOST");
     expect(exists(UDID)).toBe(false);
     const row = outcomeRow();
     expect(row).toContain("leftoverCleanup=removed");
@@ -588,6 +590,8 @@ describe("BACKLOG-3598: unplugging the phone being backed up stops the backup", 
     expect(cancelBackupSpy).toHaveBeenCalledTimes(1);
     expect(result.success).toBe(false);
     expect(result.error).toBe(BACKUP_DEVICE_DISCONNECTED_MESSAGE);
+    // BACKLOG-3816: an unplug is a lost connection for the renderer's retry hold.
+    expect(result.errorCode).toBe("CONNECTION_LOST");
     // The lock the renderer reads (`syncStatusService`: orchestrator isRunning).
     expect(orchestrator.getStatus().isRunning).toBe(false);
     // 3598 cleanup ran on this exit.

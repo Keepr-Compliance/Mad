@@ -70,6 +70,7 @@ import type {
   BackupSnapshotState,
   BackupStatusReport,
   BackupEncryptionInfo,
+  BackupErrorCode,
 } from "../types/backup";
 
 /**
@@ -478,6 +479,12 @@ export interface SyncResult {
    * sync cooldown.
    */
   appleEncryptedBackup?: boolean;
+  /**
+   * BACKLOG-3816: the classified cause of a failed backup, when one is known
+   * (`BackupResult.errorCode`; a device disconnect is `CONNECTION_LOST`). The renderer
+   * uses it to hold Try Again while the phone's backup service winds down.
+   */
+  errorCode?: BackupErrorCode;
 }
 
 /**
@@ -1855,7 +1862,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           this.isRunning = false;
           this.setPhase("error");
           this.emit("error", { message: BACKUP_DEVICE_DISCONNECTED_MESSAGE });
-          return this.errorResult(BACKUP_DEVICE_DISCONNECTED_MESSAGE);
+          return this.errorResult(BACKUP_DEVICE_DISCONNECTED_MESSAGE, "CONNECTION_LOST");
         }
 
         // BACKLOG-3816: the finished backup's size is measured while the sync goes on
@@ -1999,7 +2006,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           if (appleEncrypted) {
             return this.stopForAppleEncryptedBackup();
           }
-          return this.errorResult(error);
+          return this.errorResult(error, backupResult.errorCode);
         }
       } finally {
         if (this.backupInFlight === backupInFlightToken) {
@@ -3563,7 +3570,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     return this.errorResult(message);
   }
 
-  private errorResult(error: string): SyncResult {
+  private errorResult(error: string, errorCode?: BackupErrorCode): SyncResult {
     // BACKLOG-2898: close the timeline on every failure and cancel path.
     // The guard distinguishes the ONE reentrant caller ("Sync already in
     // progress", reached while isRunning is still true for the OTHER sync)
@@ -3582,6 +3589,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       conversations: [],
       error,
       duration: Date.now() - this.startTime,
+      ...(errorCode ? { errorCode } : {}),
     };
   }
 }

@@ -227,6 +227,11 @@ export interface SyncStartReply {
   /** BACKLOG-3881: stopped because the iPhone's backups are Apple-encrypted. */
   appleEncryptedBackup?: boolean;
   attachmentsUndecryptable?: number;
+  /**
+   * BACKLOG-3816: the classified cause of a failed backup (`BackupErrorCode`), when
+   * known. `CONNECTION_LOST` / `SERVICE_UNAVAILABLE` hold Try Again for 30 s.
+   */
+  errorCode?: string;
 }
 
 /**
