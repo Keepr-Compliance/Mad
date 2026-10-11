@@ -37,9 +37,14 @@
  * BACKLOG-3798: below md the aside is hidden and the same nav renders in a
  * slide-out drawer (mobileOpen), always expanded. The drawer is a SIBLING of
  * the aside, never inside it: the aside is display:none below md.
+ *
+ * BACKLOG-3896: the drawer is the @keepr/ui kit Drawer (Radix Dialog, portaled
+ * to body). The kit owns focus trap, Escape, scroll lock, backdrop, focus
+ * return, close-on-link-tap and close-at-md. Nav items, RBAC, checklists gating
+ * and Sign Out stay here, passed in as children / footer.
  */
 
-import { useEffect, useRef } from 'react';
+import type { RefObject } from 'react';
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -55,9 +60,8 @@ import {
   Settings,
   UserCircle,
   Users,
-  X,
 } from 'lucide-react';
-import { AppMark, Wordmark } from '@keepr/ui';
+import { AppMark, Drawer, Wordmark } from '@keepr/ui';
 import { resolveViewerName } from '@/lib/utils/userDisplay';
 
 interface NavItem {
@@ -137,10 +141,9 @@ export interface SidebarProps {
   mobileOpen?: boolean;
   /** BACKLOG-3798: close the phone drawer (link tap, backdrop, Escape, close button). */
   onMobileClose?: () => void;
+  /** BACKLOG-3896: focused when the phone drawer closes (the shell's menu button). */
+  mobileReturnFocusRef?: RefObject<HTMLElement | null>;
 }
-
-const DESKTOP_QUERY = '(min-width: 768px)';
-const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function Sidebar({
   collapsed,
@@ -156,60 +159,9 @@ export function Sidebar({
   floorOnly = false,
   mobileOpen = false,
   onMobileClose,
+  mobileReturnFocusRef,
 }: SidebarProps) {
   const pathname = usePathname();
-  const drawerRef = useRef<HTMLElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const closeRef = useRef(onMobileClose);
-  closeRef.current = onMobileClose;
-
-  // BACKLOG-3798: drawer behaviour while open — focus in, Escape closes, Tab
-  // stays inside, body scroll locked, crossing to md closes.
-  useEffect(() => {
-    if (!mobileOpen) return;
-    const close = () => closeRef.current?.();
-    closeButtonRef.current?.focus();
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        close();
-        return;
-      }
-      if (e.key !== 'Tab' || !drawerRef.current) return;
-      const items = Array.from(drawerRef.current.querySelectorAll<HTMLElement>(FOCUSABLE));
-      if (items.length === 0) return;
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-
-    let mql: MediaQueryList | null = null;
-    const onMedia = (e: MediaQueryListEvent) => {
-      if (e.matches) close();
-    };
-    if (typeof window.matchMedia === 'function') {
-      mql = window.matchMedia(DESKTOP_QUERY);
-      mql.addEventListener?.('change', onMedia);
-    }
-
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.body.style.overflow = previousOverflow;
-      mql?.removeEventListener?.('change', onMedia);
-    };
-  }, [mobileOpen]);
-
   // BACKLOG-3080: the floor replaces the member and admin buckets entirely.
   const showFloorNav = floorOnly && !isImpersonating;
 
@@ -233,9 +185,10 @@ export function Sidebar({
   /** '/dashboard' is a prefix of every route, so it matches exactly only. */
   const exactMatchPaths = new Set(['/dashboard']);
 
-  const renderNavItem = (item: NavItem, isCollapsed: boolean, onNavigate?: () => void) => {
-    // The drawer (onNavigate set) gets 44px rows.
-    const tall = onNavigate ? ' min-h-[44px]' : '';
+  const renderNavItem = (item: NavItem, isCollapsed: boolean, variant: 'rail' | 'drawer') => {
+    // The drawer gets 44px rows. It closes itself on any link tap (kit Drawer),
+    // so drawer links carry no onClick.
+    const tall = variant === 'drawer' ? ' min-h-[44px]' : '';
     if (item === checklistsNavItem && showChecklistsGrayed) {
       const GrayedIcon = item.icon;
       return (
@@ -275,7 +228,6 @@ export function Sidebar({
             : 'text-gray-300 hover:bg-gray-800 hover:text-white'
         }`}
         title={isCollapsed ? item.label : undefined}
-        onClick={onNavigate}
       >
         <Icon className="h-5 w-5 shrink-0" />
         {!isCollapsed && <span>{item.label}</span>}
@@ -283,8 +235,8 @@ export function Sidebar({
     );
   };
 
-  const renderNavItems = (isCollapsed: boolean, onNavigate?: () => void) => {
-    const r = (item: NavItem) => renderNavItem(item, isCollapsed, onNavigate);
+  const renderNavItems = (isCollapsed: boolean, variant: 'rail' | 'drawer' = 'rail') => {
+    const r = (item: NavItem) => renderNavItem(item, isCollapsed, variant);
     return (
       <>
         {showFloorNav && floorItems.map(r)}
@@ -365,60 +317,49 @@ export function Sidebar({
         </div>
       </aside>
 
-      {/* BACKLOG-3798: phone drawer. Rendered only while open, and outside the
-          aside (which is display:none below md). */}
-      {mobileOpen && (
-        <div className="md:hidden fixed inset-0 z-[60]" data-testid="mobile-nav-overlay">
-          <div className="absolute inset-0 bg-gray-900/55" aria-hidden="true" onClick={onMobileClose} />
-          <aside
-            id="mobile-nav"
-            ref={drawerRef}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Main menu"
-            className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-gray-900 text-white shadow-xl"
-          >
-            <div className="flex items-center justify-between border-b border-gray-800 py-2 pl-6 pr-2">
-              <div className="flex items-center gap-2">
-                <Wordmark className="text-xl font-bold" />
-                <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Broker</span>
-              </div>
-              <button
-                ref={closeButtonRef}
-                type="button"
-                onClick={onMobileClose}
-                aria-label="Close menu"
-                className="flex h-11 w-11 items-center justify-center rounded-md text-gray-400 [@media(hover:hover)]:hover:bg-gray-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-600"
-              >
-                <X className="h-5 w-5" aria-hidden="true" />
-              </button>
-            </div>
-            <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">{renderNavItems(false, onMobileClose)}</nav>
-            <div className="border-t border-gray-800 px-3 py-4">
-              <div className="px-3 py-1.5 mb-2">
-                <div className="flex items-center gap-2.5">
-                  <div className="h-8 w-8 rounded-full bg-primary-600 flex items-center justify-center text-white text-sm font-medium shrink-0">
-                    {initial}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm text-gray-300 truncate leading-tight">{name}</p>
-                    <p className="text-xs text-gray-500 truncate leading-tight">
-                      {isImpersonating ? displayEmail : formatRole(displayRole)}
-                    </p>
-                  </div>
+      {/* BACKLOG-3798 / BACKLOG-3896: phone drawer (kit Drawer, portaled to body,
+          so never inside the aside, which is display:none below md). The kit
+          wraps children in the nav and footer in the bordered block: pass the
+          inner content only. */}
+      <Drawer
+        open={mobileOpen}
+        onOpenChange={(open) => {
+          if (!open) onMobileClose?.();
+        }}
+        returnFocusRef={mobileReturnFocusRef}
+        header={
+          <>
+            <Wordmark className="text-xl font-bold" />
+            <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Broker</span>
+          </>
+        }
+        footer={
+          <>
+            <div className="px-3 py-1.5 mb-2">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 rounded-full bg-primary-600 flex items-center justify-center text-white text-sm font-medium shrink-0">
+                  {initial}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm text-gray-300 truncate leading-tight">{name}</p>
+                  <p className="text-xs text-gray-500 truncate leading-tight">
+                    {isImpersonating ? displayEmail : formatRole(displayRole)}
+                  </p>
                 </div>
               </div>
-              <a
-                href="/auth/logout"
-                className="flex min-h-[44px] items-center gap-3 w-full rounded-md px-3 py-2 text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
-              >
-                <LogOut className="h-5 w-5 shrink-0" />
-                <span>Sign Out</span>
-              </a>
             </div>
-          </aside>
-        </div>
-      )}
+            <a
+              href="/auth/logout"
+              className="flex min-h-[44px] items-center gap-3 w-full rounded-md px-3 py-2 text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+            >
+              <LogOut className="h-5 w-5 shrink-0" />
+              <span>Sign Out</span>
+            </a>
+          </>
+        }
+      >
+        {renderNavItems(false, 'drawer')}
+      </Drawer>
     </>
   );
 }
