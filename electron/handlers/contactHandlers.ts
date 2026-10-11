@@ -152,24 +152,6 @@ import { isContactSourceEnabled, isTextPeopleEnabled } from "../utils/preference
  * on — by default on for an Android: Google Messages user (C1, founder
  * decision b), off otherwise; an explicit off stays off. A failed read → off.
  */
-/**
- * BACKLOG-3837: a contact list was answered without its message-derived people
- * (the dedicated read was not ready). When that read lands, tell the renderer
- * so the open picker re-reads (a cache hit) and fills them in. Joins the read
- * already running and never starts one (a failed read is not running: nothing
- * to wait for, and the renderer's 15 s backstop retries it); nothing is read
- * on main; a failed read sends nothing.
- */
-function notifyWhenMessageDerivedReady(userId: string): void {
-  const running = joinMessageDerivedRead(userId);
-  if (!running) return;
-  void running
-    .then((rows) => {
-      if (rows) sendToMainWindow("contacts:message-derived-ready", { userId });
-    })
-    .catch(() => undefined);
-}
-
 async function textPeopleEnabled(userId: string): Promise<boolean> {
   try {
     return await isTextPeopleEnabled(userId);
@@ -203,7 +185,7 @@ import type {
 } from "../types/handlerTypes";
 
 import { sendToMainWindow } from "../windowRegistry";
-import { joinMessageDerivedRead } from "../services/db/messageDerivedContactsCache";
+import { notifyWhenMessageDerivedReady } from "../services/messageDerivedReadyNotice";
 
 // Type definitions
 interface ContactResponse {
