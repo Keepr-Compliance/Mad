@@ -584,6 +584,23 @@ describe("AttachmentPreviewModal", () => {
       expect(mockOnOpenWithSystem).toHaveBeenCalledWith("/path/to/file.pdf");
     });
 
+    it.each([
+      ["DOCX", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+      ["PDF", "application/pdf"],
+      ["image", "image/png"],
+    ])("BACKLOG-3884: a %s with no storage_path says it is not downloaded instead of an empty body", (_label, mime) => {
+      render(
+        <AttachmentPreviewModal
+          attachment={createMockAttachment({ mime_type: mime, storage_path: null })}
+          onClose={mockOnClose}
+          onOpenWithSystem={mockOnOpenWithSystem}
+        />
+      );
+
+      expect(screen.getByTestId("non-image-fallback")).toBeInTheDocument();
+      expect(screen.getByText("Attachment not downloaded")).toBeInTheDocument();
+    });
+
     it("should NOT show Open button when storage_path is null", () => {
       render(
         <AttachmentPreviewModal

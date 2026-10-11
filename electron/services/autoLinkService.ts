@@ -59,6 +59,8 @@ import {
 } from "./db/expansionChangeTracker";
 import { DedicatedWorkerError, isPoolReady, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
 import { warmSourceCoverage } from "./sourceCoverageFloors";
+import { warmMessageDerivedContacts } from "./db/messageDerivedContactsCache";
+import { warmMessageRoster } from "./db/messageRosterCache";
 import {
   normalizeAddress,
   contentContainsAddress,
@@ -1371,8 +1373,11 @@ export async function autoLinkNewMessagesForUser(
 ): Promise<AutoLinkNewMessagesResult> {
   // BACKLOG-3837: every sync / import end comes through here — warm the audit coverage
   // floors on a dedicated worker (fire-and-forget, off main). Never blocks the link.
+  // The contact picker's message-derived people likewise (dedicated worker, cached).
   try {
     warmSourceCoverage(userId);
+    warmMessageDerivedContacts(userId);
+    warmMessageRoster(userId);
   } catch {
     // best effort
   }

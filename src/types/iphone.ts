@@ -124,6 +124,10 @@ export interface ConnectionStatusProps {
    * precedence over every other view (including driverMissing).
    */
   isWindowsArm64?: boolean;
+  /** BACKLOG-3816: the sync request is being prepared — the button shows "Getting ready…". */
+  isStarting?: boolean;
+  /** BACKLOG-3816: epoch ms until which the Sync button stays disabled (hold after a failure). */
+  retryAvailableAt?: number | null;
 }
 
 export interface DeviceInfoProps {
@@ -202,6 +206,18 @@ export interface UseIPhoneSyncReturn {
    * state and clears `driverMissing` so device enumeration/sync can proceed.
    */
   recoverInstallDriver: () => Promise<void>;
+  /**
+   * BACKLOG-3816: a Sync / Try Again request is being prepared and has not yet been
+   * handed to the main process or refused. The buttons show "Getting ready…".
+   */
+  isStarting: boolean;
+  /**
+   * BACKLOG-3816: epoch ms until which Sync / Try Again stay disabled, because the
+   * last sync ended with the connection dropping or the phone's backup service
+   * refusing (`CONNECTION_LOST`, `SERVICE_UNAVAILABLE`, or a disconnect). `null` = no hold.
+   * Lives in the hook (App-root provider), so it survives closing and reopening the modal.
+   */
+  retryAvailableAt: number | null;
   startSync: () => Promise<void>;
   /** BACKLOG-3816: `trigger` names the on-screen control that asked for the cancel. */
   cancelSync: (trigger: SyncCancelTrigger) => Promise<void>;

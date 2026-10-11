@@ -166,3 +166,52 @@ focus:ring-primary-500 disabled:opacity-50 transition-colors` (keep provider bra
   when touching a file, replace hand-rolled buttons/cards/badges/tables with the primitives
   and normalize `blue-*` accents to `primary-*`. Do not mass-migrate in unrelated PRs.
 - **New UI in either portal**: use the primitives; do not hand-roll new button/card/badge/input styles.
+
+## Phone
+
+Rules for phone-width layouts, plus the shared phone kit in `@keepr/ui` (BACKLOG-3895).
+Everything here applies **below `md` (768px)**; desktop layouts at `md` and up are unchanged.
+
+**Rules already shipped in the portals**
+
+- **Breakpoint**: phone = below `md`. Phone-only chrome carries `md:hidden`; the desktop sidebar is hidden below `md`.
+- **Touch targets**: at least 44px (`h-11 w-11` / `min-h-11`); tappable detail rows 48px (`min-h-12`).
+- **Hover**: only behind `[@media(hover:hover)]:hover:*`, so a tap does not leave a stuck hover state. Focus rings use `focus-visible:` only.
+- **Text fields**: 16px below `md` so iOS Safari does not zoom on focus (admin `globals.css`, BACKLOG-3841). Kit `SearchField` is `text-base` at every width.
+- **Drawer**: overlay `fixed inset-0 z-[60]` with `bg-gray-900/55`, panel `w-72 max-w-[85vw] bg-gray-900`, `id="mobile-nav"`. Closes on Escape, backdrop tap, route change (app shell) and crossing to `md`; focus returns to the menu button. The kit `Drawer` adds: any link tap inside it closes it, including a tap on the page already open.
+- **Pills**: the Badge hue formula (`badgeHueClasses`). Status → hue mapping stays per app (testing = `yellow`).
+- **Errors** render inline via `<Alert>`; a toast is for confirmations only ("Saved", "Reply sent").
+
+**Bottom edge stacking**
+
+Three things can claim the bottom edge. Each offsets itself by the ones below it:
+
+| Layer | z | Bottom offset |
+|---|---|---|
+| `StickyActionBar` | `z-40` | `0`; pads itself `calc(env(safe-area-inset-bottom,0px) + 12px)` and publishes its full height as `--keepr-action-bar-h` on `<html>` while mounted |
+| Offline banner | `z-[60]` | `var(--keepr-action-bar-h, 0px)`; publishes its own height as `--keepr-offline-banner-h` (applies when the banner moves into the kit) |
+| `Toast` | `z-[70]` | `calc(var(--keepr-action-bar-h, env(safe-area-inset-bottom,0px)) + var(--keepr-offline-banner-h, 0px) + 12px)` |
+
+Content that scrolls under the bar takes `stickyActionBarSpacerClass` so its last row stays visible.
+The toast's `role="status"` region stays mounted while closed; opening inserts the text into it.
+
+**Safe areas**: always write `env(safe-area-inset-*, 0px)` with the fallback. Insets read 0 until the
+portal layouts set `viewport-fit=cover`; the kit components already pad for them. Full-height
+panels use `fixed inset-y-0` (never `h-screen`/`100vh`); sheets cap at `max-h-[90vh]` with
+`supports-[height:100dvh]:max-h-[90dvh]`.
+
+**Phone kit** — import from `@keepr/ui`. Every file is a client component (`'use client'`).
+No kit component imports `next`: apps pass router facts in (`open`/`onOpenChange`, `renderLink`).
+
+| Component | Use |
+|---|---|
+| `MobileTopBar` | Phone top bar: 44px menu button (ref forwards to it) + wordmark + qualifier. |
+| `Drawer` | Slide-out nav on Radix Dialog. App supplies nav items, footer (user + sign out) and `returnFocusRef`. |
+| `BottomSheet` | Modal sheet for filters and quick edits; scrolling body, pinned primary action. |
+| `SegmentedTabs` | Tab mode (`role=tablist`, roving tabindex, arrows/Home/End, `panelId`) or link mode (all items have `href`: `<nav>` + `aria-current="page"`). |
+| `ListCard` | One row of a phone list; the whole card is one link or button. `meta`/`secondary` must be non-interactive. |
+| `StatusPill`, `PriorityPill` | Pills from `badgeHueClasses`; always render the word. |
+| `DetailSection`, `DetailRow` | Grouped label/value rows; a row with `onClick`/`href` becomes a 48px button/link with a chevron. |
+| `StickyActionBar` | 1–2 actions pinned to the bottom (phone only); `variant` `light`/`dark`. |
+| `Toast` | Confirmation toast; closes after `duration` (4s default). |
+| `SearchField`, `FilterButton` | 16px search input; filter button with an active-count badge (hidden at 0) that opens a `BottomSheet`. |

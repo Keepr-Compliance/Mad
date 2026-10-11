@@ -11,8 +11,10 @@
  *                                      (was a LIKE '%digits%' join, O(messages x phones))
  *   - runSourceFloorsOn              — the audit-window coverage check
  *                                      (MESSAGES_FLOOR_BY_SOURCE_SQL)
- * They now run on the contact query worker; the main thread runs them only when
- * the worker is not up.
+ * They run only on a dedicated worker (BACKLOG-3837 follow-up: no main-thread
+ * fallback; messageDerivedContactsCache.ts, sourceCoverageFloors.ts, and the
+ * dates backfill plan in contactDbService.ts). The synchronous runners remain for
+ * the worker itself and as test controls.
  */
 import { sql } from "./core/sqlText";
 import { LOCAL_REACTION_EXCLUSION, reactionExclusion } from "./reactionExclusion";
