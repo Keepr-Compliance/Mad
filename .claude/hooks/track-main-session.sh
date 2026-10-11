@@ -122,6 +122,17 @@ fi
 BACKLOG_ITEM_ID=$(uuid_or_empty "$BACKLOG_ITEM_ID")
 SPRINT_ID=$(uuid_or_empty "$SPRINT_ID")
 
+# BACKLOG-3778: fall back to THIS SESSION's own sprint marker. Written by
+# register-agent.sh whenever this coordinator spawns an agent whose brief
+# names a BACKLOG item -- keyed by session_id, so (unlike .current-task)
+# it cannot be overwritten by a sibling session sharing this project dir.
+if [ -z "$SPRINT_ID" ]; then
+  MAIN_SPRINT_FILE="${HOME}/.claude/metrics/main-sprint/${SESSION_ID}"
+  if [ -f "$MAIN_SPRINT_FILE" ]; then
+    SPRINT_ID=$(uuid_or_empty "$(cat "$MAIN_SPRINT_FILE" 2>/dev/null)")
+  fi
+fi
+
 AGENT_ID="main:${SESSION_ID}:${CURRENT_LINES}"
 
 PAYLOAD=$(jq -n \
