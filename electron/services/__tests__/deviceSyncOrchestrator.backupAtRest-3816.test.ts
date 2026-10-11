@@ -129,6 +129,12 @@ import { setBackupIndexKeysForTests } from "../atRest/backupIndexFiles";
 import { syncTimeline } from "../syncTimeline";
 import type { BackupResult, BackupSizeReading } from "../../types/backup";
 import { createDeferredBackupSize } from "../backupSizeRecord";
+import { heldStartFailure } from "./helpers/toolStartHoldFixture";
+
+function probeConnected(): jest.Mock {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("../deviceDetectionService").deviceDetectionService.probeConnectedUdids;
+}
 
 const KEY = crypto.randomBytes(32);
 const resolver: KeyResolver = {
@@ -438,7 +444,9 @@ describe("D1 / G3 — two C-DELTA backup-tool failures in a row force C-FULL for
     expect(await nextSyncUnsealedContent()).toBe(false);
   });
 
-  it.each(["result", "no-code", "throw"] as const)("G3: TWO tool errors in a row (%s) -> the next sync is C-FULL, reason DELTA_TOOL_FAILED", async (how) => {
+  // BACKLOG-3814: "throw" left this list — a throw from startBackup is never the tool
+  // failing on a sealed file. It is pinned as NOT counting below.
+  it.each(["result", "no-code"] as const)("G3: TWO tool errors in a row (%s) -> the next sync is C-FULL, reason DELTA_TOOL_FAILED", async (how) => {
     await toolFails(how);
     await toolFails(how);
     expect(await atRest.forcedFullReason(UDID)).toBe("DELTA_TOOL_FAILED");
@@ -472,6 +480,83 @@ describe("D1 / G3 — two C-DELTA backup-tool failures in a row force C-FULL for
     backupReturns(ending, o);
     await o.sync({ udid: UDID });
     await o.lastAtRestSeal;
+    expect(await atRest.forcedFullReason(UDID)).toBeNull();
+    expect(await nextSyncUnsealedContent()).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------------
+  // BACKLOG-3814: only a failure that could come from the kept files counts towards G3.
+  // Each case runs AFTER one counted failure, so a wrongly counted second one trips C-FULL.
+  // ---------------------------------------------------------------------------------
+  it.each([
+    ["service unavailable (phone-side handshake)", () => fail({ errorCode: "SERVICE_UNAVAILABLE", error: "Your iPhone's backup service did not respond." } as Partial<BackupResult>)],
+    ["service unavailable after a held tool start (retry also refused)", () => heldStartFailure(UDID)],
+    ["connection lost (as a tool result, no unplug seen)", () => fail({ errorCode: "CONNECTION_LOST" } as Partial<BackupResult>)],
+    ["watchdog timeout", () => fail({ errorCode: "BACKUP_TIMEOUT", error: "Backup process became unresponsive and was terminated" } as Partial<BackupResult>)],
+    ["phone locked", () => fail({ errorCode: "DEVICE_LOCKED", error: "iPhone is locked." } as Partial<BackupResult>)],
+  ])("BACKLOG-3814: a counted failure, then %s -> still C-DELTA", async (_name, second) => {
+    await toolFails("result");
+    const o = newOrchestrator(false);
+    backupReturns(second());
+    expect((await o.sync({ udid: UDID })).success).toBe(false);
+    await o.lastAtRestSeal;
+    expect(await atRest.forcedFullReason(UDID)).toBeNull();
+    expect(await nextSyncUnsealedContent()).toBe(false);
+  });
+
+  it("BACKLOG-3814: a counted failure, then a throw from startBackup -> still C-DELTA", async () => {
+    await toolFails("result");
+    await toolFails("throw");
+    expect(await atRest.forcedFullReason(UDID)).toBeNull();
+    expect(await nextSyncUnsealedContent()).toBe(false);
+  });
+
+  it("BACKLOG-3814: THE PC SEQUENCE (held start, unplug, service unavailable) -> still C-DELTA", async () => {
+    // 1. the held start, retry also refused
+    let o = newOrchestrator(false);
+    Object.assign(o, { toolHoldRetryEnabled: true, toolHoldRetryDelayMs: 1 });
+    probeConnected().mockResolvedValue([UDID]);
+    backupReturns(() => heldStartFailure(UDID));
+    await o.sync({ udid: UDID });
+    await o.lastAtRestSeal;
+    // 2. the phone unplugged mid-backup
+    o = newOrchestrator(false);
+    backupReturns((orc) => {
+      (orc as unknown as { backupInFlight: { disconnected: boolean } }).backupInFlight.disconnected = true;
+      return fail({ errorCode: undefined, error: "stopped" } as Partial<BackupResult>);
+    }, o);
+    await o.sync({ udid: UDID });
+    await o.lastAtRestSeal;
+    // 3. service unavailable, no held start
+    o = newOrchestrator(false);
+    backupReturns(fail({ errorCode: "SERVICE_UNAVAILABLE", error: "Your iPhone's backup service did not respond." } as Partial<BackupResult>));
+    await o.sync({ udid: UDID });
+    await o.lastAtRestSeal;
+
+    expect(await atRest.forcedFullReason(UDID)).toBeNull();
+    expect(await nextSyncUnsealedContent()).toBe(false);
+  });
+
+  it("BACKLOG-3814: a held start whose ONE retry succeeds resets the count (counted failure, held+retry ok, counted failure -> still C-DELTA)", async () => {
+    await toolFails("result");
+    // An app restart, as nextSyncUnsealedContent does.
+    atRest = freshAtRest();
+    const o = newOrchestrator(false);
+    Object.assign(o, { toolHoldRetryEnabled: true, toolHoldRetryDelayMs: 1 });
+    probeConnected().mockResolvedValue([UDID]);
+    let call = 0;
+    startBackup.mockImplementation(async () => {
+      call++;
+      if (call === 1) return heldStartFailure(UDID);
+      write("cd/" + "c".repeat(40), "a file the phone sent this time");
+      return ok();
+    });
+    // The backup itself succeeds on the retry. (This harness mocks SQLite, so the parse copy
+    // after it throws — as it does in nextSyncUnsealedContent; `toolOk` is already set.)
+    await o.sync({ udid: UDID });
+    expect(call).toBe(2);
+    await o.lastAtRestSeal;
+    await toolFails("result");
     expect(await atRest.forcedFullReason(UDID)).toBeNull();
     expect(await nextSyncUnsealedContent()).toBe(false);
   });
