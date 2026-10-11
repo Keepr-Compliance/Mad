@@ -189,7 +189,8 @@ async function failASync(failure: Failure) {
 const tryAgainButton = () => screen.getByRole("button", { name: /Try Again|Getting ready/ });
 
 beforeEach(() => {
-  jest.useFakeTimers();
+  // queueMicrotask stays real: the hook defers its orchestrator call on disconnect with it.
+  jest.useFakeTimers({ doNotFake: ["queueMicrotask"] });
   jest.setSystemTime(new Date("2026-10-11T02:31:00Z"));
   syncStateRef.isActive = false;
   syncStateRef.deferredLogout = false;
@@ -438,5 +439,43 @@ describe("(D) dashboard indicator", () => {
     expect(iphoneRow()?.status).toBe("error");
     expect(syncOrchestrator.getState().isRunning).toBe(false);
     expect(screen.getByTestId("sync-error-message")).toHaveTextContent(SERVICE_UNAVAILABLE.error);
+  });
+
+  it("SERVICE_UNAVAILABLE is a plain failure on the dashboard, not BACKLOG-3885's stopped state", async () => {
+    render(<Harness showFlow />);
+    await connect();
+    await failASync(SERVICE_UNAVAILABLE);
+    expect(iphoneRow()?.status).toBe("error");
+    expect(iphoneRow()?.errorKind).toBeUndefined();
+  });
+
+  it("a CONNECTION_LOST reply ends the row in BACKLOG-3885's stopped state", async () => {
+    render(<Harness showFlow />);
+    await connect();
+    await failASync(CONNECTION_LOST);
+    expect(iphoneRow()?.status).toBe("error");
+    expect(iphoneRow()?.errorKind).toBe("device_disconnected");
+    expect(syncOrchestrator.getState().isRunning).toBe(false);
+  });
+
+  it("renderer disconnect first, then a reply with no connection code: the stopped state is kept", async () => {
+    render(<Harness showFlow />);
+    await connect();
+    fireEvent.click(screen.getByRole("button", { name: /Sync Messages & Contacts/ }));
+    await flush();
+    await act(async () => {
+      cbs.progress({ phase: "backup", overallProgress: 5, message: "Backing up..." });
+    });
+    await act(async () => {
+      cbs.disconnected(DEVICE);
+    });
+    await flush();
+    expect(iphoneRow()?.errorKind).toBe("device_disconnected");
+    await act(async () => {
+      resolveStart!({ success: false, error: DEVICE_LOCKED.error, errorCode: DEVICE_LOCKED.errorCode, messageCount: 0, contactCount: 0, conversationCount: 0, duration: 1 });
+    });
+    await flush();
+    expect(iphoneRow()?.status).toBe("error");
+    expect(iphoneRow()?.errorKind).toBe("device_disconnected");
   });
 });

@@ -59,6 +59,8 @@ const baseSync: UseIPhoneSyncReturn = {
   dismissSync: jest.fn(),
   checkSyncStatus: jest.fn(),
   requestTrust: jest.fn(),
+  isStarting: false,
+  retryAvailableAt: null,
 };
 
 let mockContextValue: UseIPhoneSyncReturn = { ...baseSync };

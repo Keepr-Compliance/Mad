@@ -1106,7 +1106,18 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       setError(message);
       if (errorCode && SYNC_RETRY_COOLDOWN_CODES.has(errorCode)) armRetryCooldown();
       if (ownsIndicatorRow) {
-        syncOrchestrator.completeExternalSync('iphone', { status: 'error', error: message });
+        // BACKLOG-3885 (#2945) owns the "Last sync stopped" card: a lost connection is that
+        // stopped state, not a fault. If the renderer's own disconnect handler already ended
+        // the row as stopped, this later reply must not overwrite that with a plain error.
+        const row = syncOrchestrator
+          .getState()
+          .queue.find((item) => item.type === 'iphone' && item.external && item.status === 'error');
+        const errorKind = errorCode === "CONNECTION_LOST" ? 'device_disconnected' as const : row?.errorKind;
+        syncOrchestrator.completeExternalSync('iphone', {
+          status: 'error',
+          error: row?.errorKind ? row.error : message,
+          ...(errorKind ? { errorKind } : {}),
+        });
       }
     };
 
