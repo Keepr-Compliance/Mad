@@ -360,8 +360,11 @@ export function AttachmentPreviewModal({
 
   // Render content based on file type
   const renderContent = () => {
+    // BACKLOG-3884: no bytes → the "not downloaded" fallback below for every
+    // type. The image/PDF/DOCX loaders need a path, so without this guard they
+    // rendered an empty body.
     // Image preview
-    if (isImage) {
+    if (isImage && hasStoragePath) {
       if (imageLoading) {
         return (
           <div className="text-center py-12" data-testid="image-loading">
@@ -402,12 +405,12 @@ export function AttachmentPreviewModal({
     }
 
     // PDF preview
-    if (isPdf) {
+    if (isPdf && hasStoragePath) {
       return renderPdfPreview();
     }
 
     // DOCX preview
-    if (isDocx) {
+    if (isDocx && hasStoragePath) {
       return renderDocxPreview();
     }
 

@@ -98,6 +98,8 @@ const makeErrorState = (isConnected: boolean): UseIPhoneSyncReturn => ({
   dismissSync: jest.fn(),
   checkSyncStatus: jest.fn(),
   requestTrust: jest.fn(),
+  isStarting: false,
+  retryAvailableAt: null,
 });
 
 const CONNECT_STEP_COPY =

@@ -76,8 +76,8 @@ beforeEach(() => {
   prepared.length = 0;
 });
 
-function threadJoinPlan(): string[] {
-  const statements = prepared.filter((s) => /c\.thread_id\s*=\s*m\.thread_id/.test(s));
+function threadJoinPlan(pattern: RegExp = /c\.thread_id\s*=\s*m\.thread_id/): string[] {
+  const statements = prepared.filter((s) => pattern.test(s));
   expect(statements.length).toBeGreaterThan(0);
   return statements.flatMap((sqlText) => {
     // `?` also appears inside SQL comments, so find the bound-parameter count
@@ -113,10 +113,11 @@ describe("thread-link join plan without sqlite_stat1 (BACKLOG-3785)", () => {
 
   it("the attachments reader searches messages by thread, never by user", () => {
     getTransactionAllAttachments(TX);
-    const plan = threadJoinPlan();
-    // BACKLOG-3884: idx_messages_thread_sent (thread_id, sent_at) is also a thread index;
-    // the planner may pick either. What matters is that the search is by thread.
-    expect(plan.some((d) => /idx_messages_thread_(id|sent) \(thread_id=\?/.test(d))).toBe(true);
-    expect(plan.filter((d) => /SEARCH m USING INDEX \w+ \(user_id=\?/.test(d))).toEqual([]);
+    // BACKLOG-3884: the reader's thread arm joins `tm.thread_id = c.thread_id`
+    // (index only) and reads a message row only for an attachment hit; the full
+    // plan control is allAttachmentsOffScan-3884.test.ts.
+    const plan = threadJoinPlan(/tm\.thread_id\s*=\s*c\.thread_id/);
+    expect(plan.some((d) => /SEARCH tm USING COVERING INDEX idx_messages_thread_(id|sent) \(thread_id=\?/.test(d))).toBe(true);
+    expect(plan.filter((d) => /SEARCH \w+ USING (COVERING )?INDEX \w+ \(user_id=\?/.test(d))).toEqual([]);
   });
 });

@@ -3,6 +3,8 @@ import type { ConnectionStatusProps } from "../../types/iphone";
 import { TrustComputerHint } from "./TrustComputerHint";
 import { WindowsArm64Unsupported } from "./WindowsArm64Unsupported";
 import logger from "../../utils/logger";
+import { useRetryCountdown } from "../../utils/syncRetryCooldown";
+import { RetryCooldownNotice, SyncStartButtonContent } from "./SyncStartButtonContent";
 
 /**
  * ConnectionStatus Component
@@ -43,7 +45,11 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   isInstallingDriver = false,
   driverInstallError = null,
   isWindowsArm64 = false,
+  isStarting = false,
+  retryAvailableAt = null,
 }) => {
+  // BACKLOG-3816: hold after a dropped connection / refused backup service.
+  const retrySecondsLeft = useRetryCountdown(retryAvailableAt);
   useEffect(() => {
     logger.info("[ConnectionStatus] Mounted", { isConnected, device: device?.name, lastSyncTime });
     return () => logger.info("[ConnectionStatus] Unmounted");
@@ -195,10 +201,15 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
 
       <button
         onClick={() => { logger.info("[ConnectionStatus] Sync iPhone clicked"); onSyncClick(); }}
-        className="mt-6 px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-all shadow-md hover:shadow-lg"
+        disabled={isStarting || retrySecondsLeft > 0}
+        className="mt-6 px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-all shadow-md hover:shadow-lg disabled:opacity-60 disabled:cursor-not-allowed"
       >
-        {lastSyncTime ? "Sync New Data" : "Sync Messages & Contacts"}
+        <SyncStartButtonContent
+          isStarting={isStarting}
+          label={lastSyncTime ? "Sync New Data" : "Sync Messages & Contacts"}
+        />
       </button>
+      <RetryCooldownNotice secondsLeft={retrySecondsLeft} />
 
       {/* Sync time note - different message for first vs subsequent syncs */}
       <div className="mt-4 flex items-start gap-2 text-left max-w-sm">

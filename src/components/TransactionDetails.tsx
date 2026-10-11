@@ -1412,6 +1412,20 @@ function TransactionDetails({
           showChecklist={showChecklist}
         />
 
+        {/* BACKLOG-3832: the on-open discovery sweep can take seconds on a deal
+            with many contacts, and the "N found" popup waits for it. Say that
+            Keepr is looking; nothing is blocked while it does. */}
+        {reviewQueue.isSyncing && (
+          <div
+            className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 bg-blue-50 border-b border-blue-100"
+            role="status"
+            data-testid="review-discovery-status"
+          >
+            <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            Finding messages and emails&hellip;
+          </div>
+        )}
+
         <OfflineNotice />
 
         {/* Content */}
