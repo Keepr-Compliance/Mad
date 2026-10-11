@@ -61,6 +61,14 @@ jest.mock("fs", () => {
   };
 });
 
+// The record is written through the at-rest atomic writer; here it lands in `files`.
+jest.mock("../atRest/fileCrypto", () => ({
+  ...jest.requireActual("../atRest/fileCrypto"),
+  writeFileAtomic: jest.fn(async (p: string, d: string) => {
+    files.set(p, String(d));
+  }),
+}));
+
 jest.mock("child_process", () => ({
   spawn: (...args: unknown[]) => mockSpawn(...args),
 }));

@@ -21,6 +21,7 @@
 import { promises as fs } from "fs";
 import { app } from "electron";
 import log from "electron-log";
+import { writeFileAtomic } from "./atRest/fileCrypto";
 import type { BackupResult } from "../types/backup";
 
 /**
@@ -80,7 +81,11 @@ export async function isFirstToolRunForVersion(
   }
 }
 
-/** Records that `tool` has run under `version`. Never throws. */
+/**
+ * Records that `tool` has run under `version`. Never throws. Written through the at-rest
+ * layer's atomic writer for small metadata files (temp, fsync, rename with retries), so
+ * an interrupted write never leaves a torn record (BACKLOG-3816 write guard).
+ */
 export async function recordToolRunForVersion(
   file: string,
   tool: string,
@@ -95,7 +100,7 @@ export async function recordToolRunForVersion(
       // absent or unreadable: start a new record
     }
     record[tool] = version;
-    await fs.writeFile(file, JSON.stringify(record), "utf8");
+    await writeFileAtomic(file, JSON.stringify(record));
   } catch (error) {
     log.warn("[Backup] Could not record the tool's run for this version", {
       error: error instanceof Error ? error.message : String(error),
