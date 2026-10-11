@@ -43,10 +43,12 @@ export class OutlookContactProvider implements ContactSyncProvider {
     try {
       const initialized = await outlookFetchService.initialize(userId);
       if (!initialized) {
+        // BACKLOG-3879: `initialize()` returns false only when no Outlook
+        // mailbox is connected. "Never connected" is not "reconnect me"
+        // (BACKLOG-3203), so no `reconnectRequired` here.
         return {
           ready: false,
-          reconnectRequired: true,
-          error: 'Failed to initialize Outlook service. Please reconnect your Microsoft mailbox.',
+          error: 'No Outlook OAuth token found. User needs to connect Outlook first.',
         };
       }
       return { ready: true };
