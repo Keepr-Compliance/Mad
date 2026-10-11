@@ -34,6 +34,7 @@ import {
   BackupSizeReading,
   BackupStatusReport,
   BackupFailureCause,
+  ToolStartObservation,
 } from "../types/backup";
 import { validateDeviceUdid, ValidationError } from "../utils/validation";
 
@@ -101,6 +102,16 @@ import {
   createDeferredBackupSize,
   type DeferredBackupSize,
 } from "./backupSizeRecord";
+import {
+  IDEVICE_TOOL_RUNS_FILE,
+  TOOL_START_DELAYED_MS,
+  TOOL_START_HOLD_STATUS_MESSAGE,
+  TOOL_START_NOTICE_MS,
+  currentAppVersion,
+  isFirstToolRunForVersion,
+  logToolStartDelay,
+  recordToolRunForVersion,
+} from "./toolStartHold";
 
 function exactUdidOrNull(name: string): string | null {
   try {
@@ -830,6 +841,13 @@ export class BackupService extends EventEmitter {
   private hasEmittedPasscodeWaiting: boolean = false;
   private backupCommandStartTime: number = 0;
   /**
+   * BACKLOG-3814: handle a backup tool held at start by security software (see
+   * toolStartHold.ts). Windows only; a test seam. macOS keeps today's behaviour.
+   */
+  toolHoldHandling: boolean = process.platform === "win32";
+  /** BACKLOG-3814: shows the "may be checking" status when no byte has arrived. */
+  private toolStartNoticeTimer: NodeJS.Timeout | null = null;
+  /**
    * BACKLOG-2911 (FIX 3): how long with no file progress before the UI is told the
    * device has not started sending yet.
    *
@@ -1062,6 +1080,8 @@ export class BackupService extends EventEmitter {
         // BACKLOG-3817: WillEncrypt lives in the com.apple.mobile.backup domain
         // (idevicebackup2.c reads it with lockdownd_get_value(..., "com.apple.mobile.backup",
         // "WillEncrypt")). Queried without the domain it is not found, which read as "off".
+        // BACKLOG-3814: timed from before spawn(), which a security scan can hold.
+        const spawnRequestedAt = Date.now();
         const proc = spawn(ideviceinfo, [
           "-u",
           validatedUdid,
@@ -1082,6 +1102,8 @@ export class BackupService extends EventEmitter {
         });
 
         proc.on("close", (code) => {
+          const ranMs = Date.now() - spawnRequestedAt;
+          if (ranMs >= TOOL_START_DELAYED_MS) logToolStartDelay("ideviceinfo", ranMs);
           const value = output.trim().toLowerCase();
           // An absent key (encryption never configured) prints nothing and exits 0.
           if (code === 0 && (value === "true" || value === "false" || value === "")) {
@@ -1221,6 +1243,13 @@ export class BackupService extends EventEmitter {
     log.info("[BackupService] Starting backup with args:", args);
     log.info("[BackupService] Backup path:", backupPath);
 
+    // BACKLOG-3814: has idevicebackup2 run under this app version before?
+    const toolHoldHandling = this.toolHoldHandling;
+    const appVersion = toolHoldHandling ? currentAppVersion() : null;
+    const firstRunThisVersion =
+      appVersion !== null &&
+      (await isFirstToolRunForVersion(this.toolRunsRecordFile(), "idevicebackup2", appVersion));
+
     return new Promise((resolve) => {
       this.isRunning = true;
       this.currentDeviceUdid = options.udid;
@@ -1272,6 +1301,17 @@ export class BackupService extends EventEmitter {
       this.manifestUploadPhase = false;
       this.manifestUploadSize = null;
 
+      // BACKLOG-3814: taken BEFORE spawn(). On the held Windows run spawn() itself did
+      // not return for ~16.6 s; measured from its return, that hold is invisible.
+      const spawnRequestedAt = Date.now();
+      let firstOutputAt: number | null = null;
+      // The 5 s device-wait prompt was held because nothing at all had arrived yet.
+      let passcodePromptHeld = false;
+      if (this.toolStartNoticeTimer) {
+        clearTimeout(this.toolStartNoticeTimer);
+        this.toolStartNoticeTimer = null;
+      }
+
       this.currentProcess = spawn(idevicebackup2, args, {
         stdio: ["pipe", "pipe", "pipe"],
       });
@@ -1287,7 +1327,16 @@ export class BackupService extends EventEmitter {
 
       // Start timer to detect if we're waiting for passcode
       // If no file transfer progress after 5 seconds, assume waiting for user passcode
+      const armPasscodeWaitingTimer = () => {
       this.passcodeWaitingTimer = setTimeout(() => {
+        this.passcodeWaitingTimer = null;
+        // BACKLOG-3814: not one byte from the tool yet means the tool is not running
+        // yet, so nothing is being asked of the phone. Hold the prompt; the first byte
+        // re-arms it (see noteToolOutput).
+        if (toolHoldHandling && firstOutputAt === null) {
+          passcodePromptHeld = true;
+          return;
+        }
         if (!this.hasReceivedFileProgress && !this.hasEmittedPasscodeWaiting) {
           this.hasEmittedPasscodeWaiting = true;
           const waitTime = ((Date.now() - this.backupCommandStartTime) / 1000).toFixed(1);
@@ -1300,6 +1349,48 @@ export class BackupService extends EventEmitter {
           this.emit("waiting-for-passcode");
         }
       }, BackupService.PASSCODE_WAIT_DETECTION_MS);
+      };
+      armPasscodeWaitingTimer();
+
+      // BACKLOG-3814: no byte at all after TOOL_START_NOTICE_MS -> say what is likely.
+      if (toolHoldHandling) {
+        this.toolStartNoticeTimer = setTimeout(() => {
+          this.toolStartNoticeTimer = null;
+          if (firstOutputAt !== null || !this.isRunning) return;
+          this.lastProgress = {
+            ...(this.lastProgress ?? {
+              percentComplete: 0,
+              currentFile: null,
+              filesTransferred: 0,
+              totalFiles: null,
+              bytesTransferred: 0,
+              totalBytes: null,
+              estimatedTimeRemaining: null,
+            }),
+            phase: "preparing",
+            message: TOOL_START_HOLD_STATUS_MESSAGE,
+          };
+          this.emit("progress", this.lastProgress);
+        }, TOOL_START_NOTICE_MS);
+      }
+
+      /** BACKLOG-3814: the first byte on either stream ends the start measurement. */
+      const noteToolOutput = () => {
+        if (firstOutputAt !== null) return;
+        firstOutputAt = Date.now();
+        if (this.toolStartNoticeTimer) {
+          clearTimeout(this.toolStartNoticeTimer);
+          this.toolStartNoticeTimer = null;
+        }
+        const delayMs = firstOutputAt - spawnRequestedAt;
+        if (delayMs >= TOOL_START_DELAYED_MS) logToolStartDelay("idevicebackup2", delayMs);
+        if (passcodePromptHeld && !this.hasReceivedFileProgress) {
+          // The device-wait clock starts now that the tool is actually running.
+          passcodePromptHeld = false;
+          this.backupCommandStartTime = firstOutputAt;
+          armPasscodeWaitingTimer();
+        }
+      };
 
       let stdoutBuffer = "";
       let stderrBuffer = "";
@@ -1309,6 +1400,7 @@ export class BackupService extends EventEmitter {
       let diskFullDetected = false;
 
       this.currentProcess.stdout?.on("data", (data: Buffer) => {
+        noteToolOutput();
         const output = data.toString();
         stdoutBuffer += output;
         // BACKLOG-2899: stdoutBuffer accumulated for the whole run and was never
@@ -1373,6 +1465,7 @@ export class BackupService extends EventEmitter {
       });
 
       this.currentProcess.stderr?.on("data", (data: Buffer) => {
+        noteToolOutput();
         const output = data.toString();
         stderrBuffer += output;
         // BACKLOG-1628: Cap stderrBuffer to prevent unbounded memory growth.
@@ -1449,6 +1542,28 @@ export class BackupService extends EventEmitter {
         if (this.passcodeWaitingTimer) {
           clearTimeout(this.passcodeWaitingTimer);
           this.passcodeWaitingTimer = null;
+        }
+        if (this.toolStartNoticeTimer) {
+          clearTimeout(this.toolStartNoticeTimer);
+          this.toolStartNoticeTimer = null;
+        }
+
+        // BACKLOG-3814: how the tool started. No byte at all: measured to the exit.
+        let toolStart: ToolStartObservation | undefined;
+        if (toolHoldHandling) {
+          const startDelayMs = (firstOutputAt ?? Date.now()) - spawnRequestedAt;
+          if (firstOutputAt === null && startDelayMs >= TOOL_START_DELAYED_MS) {
+            logToolStartDelay("idevicebackup2", startDelayMs);
+          }
+          toolStart = {
+            delayMs: startDelayMs,
+            delayed: startDelayMs >= TOOL_START_DELAYED_MS,
+            firstRunThisVersion,
+          };
+          // The tool ran (it printed something), so its first run under this version is over.
+          if (firstOutputAt !== null && appVersion !== null && firstRunThisVersion) {
+            void recordToolRunForVersion(this.toolRunsRecordFile(), "idevicebackup2", appVersion);
+          }
         }
 
         // BACKLOG-1582: Clear watchdog
@@ -1671,6 +1786,7 @@ export class BackupService extends EventEmitter {
           error: errorMessage,
           ...(errorCode ? { errorCode } : {}),
           ...(failureCause ? { failureCause } : {}),
+          ...(toolStart ? { toolStart } : {}),
           duration: Date.now() - this.startTime,
           deviceUdid: options.udid,
           isIncremental: this.resolveIsIncremental(previousBackupExists, options),
@@ -2456,6 +2572,11 @@ export class BackupService extends EventEmitter {
    */
   private getDefaultBackupPath(): string {
     return path.join(app.getPath("userData"), "Backups");
+  }
+
+  /** BACKLOG-3814: `<userData>/idevice-tool-runs.json` (see toolStartHold.ts). */
+  private toolRunsRecordFile(): string {
+    return path.join(path.dirname(this.getDefaultBackupPath()), IDEVICE_TOOL_RUNS_FILE);
   }
 
   /** BACKLOG-3816: `<userData>/backup-sizes.json` (see backupSizeRecord.ts). */
