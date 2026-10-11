@@ -58,7 +58,7 @@ interface ElectronAPI {
   ) => () => void;
 
   // File System
-  openFolder: (folderPath: string) => Promise<{ success: boolean }>;
+  openFolder: (folderPath: string) => Promise<{ success: boolean; error?: string }>;
 
   // Auto-Update Event Listeners
   onUpdateAvailable: (callback: (info: unknown) => void) => () => void;

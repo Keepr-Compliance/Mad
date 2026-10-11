@@ -406,9 +406,15 @@ function ExportModal({
   };
 
   // Handle opening the exported file in Finder
-  const handleOpenInFinder = () => {
-    if (exportedPath) {
-      window.api.shell.openFolder(exportedPath);
+  const handleOpenInFinder = async () => {
+    if (!exportedPath) return;
+    try {
+      const result = await window.api.shell.openFolder(exportedPath);
+      if (result && !result.success) {
+        logger.warn("Could not open the export location:", result.error);
+      }
+    } catch (err) {
+      logger.error("Failed to open the export location:", err);
     }
   };
 

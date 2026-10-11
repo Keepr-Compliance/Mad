@@ -254,7 +254,7 @@ export interface WindowApiAddress {
 export interface WindowApiShell {
   openExternal: (url: string) => Promise<void>;
   openPopup: (url: string, title?: string) => Promise<{ success: boolean }>;
-  openFolder: (folderPath: string) => Promise<{ success: boolean }>;
+  openFolder: (folderPath: string) => Promise<{ success: boolean; error?: string }>;
   /** BACKLOG-3803: open the bundled third-party notices file. */
   openThirdPartyNotices: () => Promise<{ success: boolean; error?: string }>;
 }

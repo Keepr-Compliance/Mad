@@ -40,6 +40,10 @@ import {
 } from "../utils/validation";
 import { redactId } from "../utils/redactSensitive";
 import { thirdPartyNoticesPath } from "../services/thirdPartyNotices";
+import {
+  resolveOpenablePath,
+  OPEN_REFUSED_MESSAGE,
+} from "../services/openablePaths";
 import type { User, OAuthProvider } from "../types/models";
 
 // ============================================
@@ -1348,7 +1352,15 @@ export function registerSystemHandlers(): void {
         };
       }
 
-      shell.showItemInFolder(validatedPath);
+      // BACKLOG-3808: reveal only a location the main process itself wrote.
+      const resolved = await resolveOpenablePath(validatedPath);
+      if (!resolved.ok) {
+        logService.warn("show-in-folder refused", "System", {
+          reason: resolved.reason,
+        });
+        return { success: false, error: OPEN_REFUSED_MESSAGE };
+      }
+      shell.showItemInFolder(resolved.realPath);
       return { success: true };
     }, { module: "System" }),
   );
