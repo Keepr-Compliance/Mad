@@ -114,12 +114,16 @@ maybe("BACKLOG-3837: the coverage check never scans on main (real worker, encryp
 
   const addMessageSql = `INSERT INTO messages (id, user_id, channel, external_id, direction, body_text, participants, participants_flat,
          thread_id, sent_at, metadata, associated_message_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  // BACKLOG-3892 S2: these rows were iPhone texts. The iPhone's "covered since" no
+  // longer comes from the oldest stored text (SR D1: it comes from the phone's own
+  // coverage row), so the floor-bearing source in this worker-cache suite is the
+  // Android companion, whose coverage is still its oldest text. Same rows otherwise.
   function iphoneRow(id: string, sentAt: string): unknown[] {
     const handle = "+12005550123";
     return [
       id, USER, "imessage", `g-${id}`, "inbound", `body ${id}`,
       JSON.stringify({ from: handle, to: ["me"] }), handle.replace(/\D/g, ""), "ios-chat-1", sentAt,
-      JSON.stringify({ source: "iphone_sync", originalId: 1, dateRead: null, dateDelivered: null, attachmentCount: 0 }),
+      JSON.stringify({ source: "android_wifi_sync", originalId: 1, dateRead: null, dateDelivered: null, attachmentCount: 0 }),
       null,
     ];
   }
@@ -151,7 +155,7 @@ maybe("BACKLOG-3837: the coverage check never scans on main (real worker, encryp
           add.run(
             `m${i}`, USER, "imessage", `g${i}`, "inbound", "Liked a message",
             JSON.stringify({ from: "+19975550160", to: ["me"] }), "19975550160", "ios-chat-r", sentAt,
-            JSON.stringify({ source: "iphone_sync", originalId: i, dateRead: null, dateDelivered: null, attachmentCount: 0 }),
+            JSON.stringify({ source: "android_wifi_sync", originalId: i, dateRead: null, dateDelivered: null, attachmentCount: 0 }),
             2000,
           );
           continue;
@@ -218,7 +222,7 @@ maybe("BACKLOG-3837: the coverage check never scans on main (real worker, encryp
     expect(result.success).toBe(true);
     expect(result.sourceCoveragePending).toBeUndefined();
     expect(result.needsMessagesImport).toBe(true);
-    expect(result.sourceGaps?.map((g) => `${g.source}:${g.kind}`).sort()).toEqual(["google_messages:never", "iphone:later"]);
+    expect(result.sourceGaps?.map((g) => `${g.source}:${g.kind}`).sort()).toEqual(["android_companion:later", "google_messages:never"]);
 
     const viaWorker = await getSourceCoverageAsync(USER);
     expect(scanOnMain()).toBe(false);
@@ -226,7 +230,7 @@ maybe("BACKLOG-3837: the coverage check never scans on main (real worker, encryp
     const { value: onMain, maxMs: mainMs } = await maxStallDuring(async () => getSourceCoverage(USER));
     expect(scanOnMain()).toBe(true);
     recording = false;
-    expect(onMain.map((c) => c.source).sort()).toEqual(["google_messages", "iphone"]);
+    expect(onMain.map((c) => c.source).sort()).toEqual(["android_companion", "google_messages"]);
     expect(viaWorker).toEqual(onMain);
     process.stderr.write(
       `[3837c] getAuditCoverage over ${MESSAGES} msgs: maxEventLoopDelay=${maxMs}ms (main-thread scan control ${mainMs}ms)\n`,
@@ -307,7 +311,7 @@ maybe("BACKLOG-3837: the coverage check never scans on main (real worker, encryp
     const first = await getSourceCoverageAsync(USER);
     expect(floorsCalls(spy)).toBe(1);
     const iphoneSince = (cov: Awaited<ReturnType<typeof getSourceCoverageAsync>>): string | null | undefined =>
-      cov?.find((c) => c.source === "iphone")?.coveredSince;
+      cov?.find((c) => c.source === "android_companion")?.coveredSince;
     expect(iphoneSince(first)).toBe(new Date(FIRST_SENT_MS + 60_000).toISOString());
 
     // Insert an OLDER iPhone text: the next read sees the new floor.
@@ -317,7 +321,7 @@ maybe("BACKLOG-3837: the coverage check never scans on main (real worker, encryp
     expect(floorsCalls(spy)).toBe(2);
     expect(iphoneSince(afterInsert)).toBe(older);
     const r = await getAuditCoverage(USER, AUDIT_START);
-    expect(r.sourceGaps?.find((g) => g.source === "iphone")).toBeUndefined(); // now covered
+    expect(r.sourceGaps?.find((g) => g.source === "android_companion")).toBeUndefined(); // now covered
     expect(floorsCalls(spy)).toBe(2);
 
     // Re-source it (metadata): read again, the floor moves back.
@@ -355,7 +359,7 @@ maybe("BACKLOG-3837: the coverage check never scans on main (real worker, encryp
     const result = await getAuditCoverage(USER, AUDIT_START);
     const ms = Date.now() - t0;
     expect(result.sourceCoveragePending).toBeUndefined();
-    expect(result.sourceGaps?.map((g) => `${g.source}:${g.kind}`).sort()).toEqual(["google_messages:never", "iphone:later"]);
+    expect(result.sourceGaps?.map((g) => `${g.source}:${g.kind}`).sort()).toEqual(["android_companion:later", "google_messages:never"]);
     expect(floorsCalls(spy)).toBe(1); // the warm read; Continue was a cache hit
     expect(ms).toBeLessThan(4_000);
     expect(scanOnMain()).toBe(false);
