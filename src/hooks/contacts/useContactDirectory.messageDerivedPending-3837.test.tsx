@@ -52,8 +52,23 @@ const PENDING = { messageDerivedPending: true };
 
 let readyListener: ((p: { userId: string }) => void) | null = null;
 
+/**
+ * As the wizard loads (useAuditContactAssignment.ts): neither half on mount, both
+ * through `triggerLazyLoad` when step 2 shows. On 2.41 an address-book half that was
+ * never read reports loading (BACKLOG-3832), so the harness must read it as the
+ * wizard does.
+ */
 function Picker(): React.ReactElement {
-  const dir = useContactDirectory({ userId: USER_ID, propertyAddress: ADDRESS, autoLoadExternal: false });
+  const dir = useContactDirectory({
+    userId: USER_ID,
+    propertyAddress: ADDRESS,
+    autoLoadSaved: false,
+    autoLoadExternal: false,
+  });
+  const { triggerLazyLoad } = dir;
+  React.useEffect(() => {
+    triggerLazyLoad();
+  }, [triggerLazyLoad]);
   return (
     <ContactSearchList
       contacts={dir.contacts}
@@ -69,6 +84,10 @@ beforeEach(() => {
   readyListener = null;
   localStorage.clear();
   jest.mocked(window.api.contacts.getSortedByActivity).mockReset();
+  jest
+    .mocked(window.api.contacts.getAvailable)
+    .mockReset()
+    .mockResolvedValue({ success: true, contacts: [] } as never);
   (window.api.contacts as unknown as Record<string, unknown>).onMessageDerivedReady = jest.fn(
     (cb: (p: { userId: string }) => void) => {
       readyListener = cb;
