@@ -246,6 +246,13 @@ maybe("BACKLOG-3892 S2: iPhone coverage (real schema, real persistence)", () => 
     expect(iphoneStoredTextSpan(USER)).toBeUndefined();
   });
 
+  // SR R3 (MR3c): a one-user database whose only row is NOT the caller gets no seed.
+  it("R3: a single local user who is not the caller means no seed", () => {
+    storedText("ios-chat-1", "2024-01-01T00:00:00.000Z");
+    expect(iphoneStoredTextSpan("someone-else")).toBeUndefined();
+    expect(iphoneStoredTextSpan(USER)).toMatchObject({ n: 1 });
+  });
+
   it("D4 seed: a STALE upgrader (newest stored text before F) is not seeded covered, even though this run inserts newer texts", async () => {
     storedText("ios-chat-1", "2024-01-01T00:00:00.000Z");
     storedText("ios-chat-1", "2026-01-01T00:00:00.000Z");
