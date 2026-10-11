@@ -155,25 +155,33 @@ const reviewPage = (
   </div>
 );
 
+// BACKLOG-3896: the shell dumps are WHOLE-BODY dumps. A Radix drawer portals to
+// document.body, outside the render container; a container dump would silently
+// drop it and leave the phone drawer unmeasured. Run on both sides of a
+// comparison (base and branch) so the harness change cancels out.
+const bodyDump = () => document.body.innerHTML;
+
 it('shell-expanded / shell-collapsed / shell-drawer / support-dialog', async () => {
-  const { container, getByRole, queryByRole } = render(shell(reviewPage));
-  dump('shell-expanded', container.innerHTML);
+  const { getByRole } = render(shell(reviewPage));
+  dump('shell-expanded', bodyDump());
 
   fireEvent.click(getByRole('button', { name: 'Collapse sidebar' }));
-  dump('shell-collapsed', container.innerHTML);
+  dump('shell-collapsed', bodyDump());
   fireEvent.click(getByRole('button', { name: 'Expand sidebar' }));
 
-  const open = queryByRole('button', { name: 'Open menu' });
-  if (open) {
-    fireEvent.click(open);
-    dump('shell-drawer', container.innerHTML);
-    fireEvent.click(getByRole('button', { name: 'Close menu' }));
-  }
+  fireEvent.click(getByRole('button', { name: 'Open menu' }));
+  await act(async () => {});
+  // The drawer must be in the dump, or shell-drawer measures nothing.
+  if (!document.getElementById('mobile-nav')) throw new Error('shell-drawer: #mobile-nav not in document.body');
+  dump('shell-drawer', bodyDump());
+  fireEvent.click(getByRole('button', { name: 'Close menu' }));
+  await act(async () => {});
+  if (document.getElementById('mobile-nav')) throw new Error('shell-drawer: #mobile-nav still open after Close');
 
   await act(async () => {
     fireEvent.click(getByRole('button', { name: 'Contact Support' }));
   });
-  dump('support-dialog', container.innerHTML);
+  dump('support-dialog', bodyDump());
 });
 
 const MEMBERS = [1, 2, 3].map((i) => ({
