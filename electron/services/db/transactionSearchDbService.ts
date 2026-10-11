@@ -541,7 +541,7 @@ export function buildTextQuery(
         UNION
         SELECT m2.id
         FROM messages m2
-        JOIN communications comm2 ON comm2.thread_id = m2.thread_id AND m2.user_id = comm2.user_id
+        JOIN communications comm2 ON comm2.thread_id = m2.thread_id AND +m2.user_id = comm2.user_id
         WHERE comm2.transaction_id = ?
           AND comm2.message_id IS NULL
           AND comm2.email_id IS NULL
@@ -615,7 +615,7 @@ export function buildTextThreadNameQuery(
         UNION
         SELECT m2.id
         FROM messages m2
-        JOIN communications comm2 ON comm2.thread_id = m2.thread_id AND m2.user_id = comm2.user_id
+        JOIN communications comm2 ON comm2.thread_id = m2.thread_id AND +m2.user_id = comm2.user_id
         WHERE comm2.transaction_id = ?
           AND comm2.message_id IS NULL
           AND comm2.email_id IS NULL
@@ -704,7 +704,7 @@ const GLOBAL_THREAD_LINKAGE_EXISTS = `(
           SELECT 1
           FROM communications comm3
           JOIN transactions t ON t.id = comm3.transaction_id
-          WHERE comm3.thread_id = m.thread_id AND comm3.user_id = m.user_id
+          WHERE comm3.thread_id = m.thread_id AND +comm3.user_id = m.user_id
             AND comm3.message_id IS NULL
             AND comm3.email_id IS NULL
         )
@@ -796,7 +796,7 @@ export function buildThreadNameAttributionQuery(
         SELECT comm3.transaction_id AS transaction_id, comm3.linked_at AS linked_at,
                comm3.id AS comm_id
         FROM messages m3
-        JOIN communications comm3 ON comm3.thread_id = m3.thread_id AND m3.user_id = comm3.user_id
+        JOIN communications comm3 ON comm3.thread_id = m3.thread_id AND m3.user_id = +comm3.user_id
         WHERE m3.id = ?
           AND comm3.message_id IS NULL
           AND comm3.email_id IS NULL
@@ -843,7 +843,7 @@ export function buildUnattachedTextThreadNameQuery(
       )
       AND NOT EXISTS (
         SELECT 1 FROM communications comm3
-        WHERE comm3.thread_id = m.thread_id AND comm3.user_id = m.user_id
+        WHERE comm3.thread_id = m.thread_id AND +comm3.user_id = m.user_id
           AND comm3.message_id IS NULL
           AND comm3.email_id IS NULL
       )
@@ -1502,7 +1502,7 @@ export function buildGlobalTextQuery(
           SELECT m3.id AS msg_id, comm3.transaction_id AS transaction_id,
                  comm3.linked_at AS linked_at, comm3.id AS comm_id
           FROM messages m3
-          JOIN communications comm3 ON comm3.thread_id = m3.thread_id AND m3.user_id = comm3.user_id
+          JOIN communications comm3 ON comm3.thread_id = m3.thread_id AND +m3.user_id = comm3.user_id
           WHERE comm3.message_id IS NULL
             AND comm3.email_id IS NULL
             AND comm3.thread_id IS NOT NULL
@@ -1583,7 +1583,7 @@ export function buildUnattachedTextQuery(
       )
       AND NOT EXISTS (
         SELECT 1 FROM communications comm3
-        WHERE comm3.thread_id = m.thread_id AND comm3.user_id = m.user_id
+        WHERE comm3.thread_id = m.thread_id AND +comm3.user_id = m.user_id
           AND comm3.message_id IS NULL
           AND comm3.email_id IS NULL
       )

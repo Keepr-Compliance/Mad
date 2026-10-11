@@ -81,9 +81,14 @@ export const EMAILS_MISSING_ATTACHMENTS_FOR_USER_SQL = `
  * The audit-window clauses, one per bound. Kept as private constants rather
  * than built inline so the two counter families cannot drift from each other.
  * `m.` is the messages alias, `e.` the emails alias.
+ *
+ * BACKLOG-3163: the text bounds are written `+m.sent_at`. With planner
+ * statistics present (Settings → optimize database runs ANALYZE), SQLite
+ * otherwise drives `messages` by idx_messages_sent_at — every text in the
+ * window, once per link — instead of by thread. The plus keeps the filter.
  */
-const TEXT_WINDOW_START = " AND m.sent_at >= ?";
-const TEXT_WINDOW_END = " AND m.sent_at <= ?";
+const TEXT_WINDOW_START = " AND +m.sent_at >= ?";
+const TEXT_WINDOW_END = " AND +m.sent_at <= ?";
 const EMAIL_WINDOW_START = " AND e.sent_at >= ?";
 const EMAIL_WINDOW_END = " AND e.sent_at <= ?";
 
@@ -114,7 +119,7 @@ const textStatsSql = (projection: string, w: AuditWindowShape): string => `
         INNER JOIN communications c ON (
           (c.message_id IS NOT NULL AND c.message_id = m.id)
           OR
-          (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id AND m.user_id = c.user_id)
+          (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id AND +m.user_id = c.user_id)
         )
         INNER JOIN attachments a ON (
           a.message_id = m.id

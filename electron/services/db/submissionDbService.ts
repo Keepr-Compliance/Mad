@@ -97,7 +97,7 @@ export function getTransactionMessages(
       -- (getCommunicationsWithMessages): an email link that carries a thread
       -- id is not a text link, and only the linking user's copy of a thread.
       (c.message_id IS NULL AND c.email_id IS NULL AND c.thread_id IS NOT NULL
-       AND c.thread_id = m.thread_id AND m.user_id = c.user_id)
+       AND c.thread_id = m.thread_id AND +m.user_id = c.user_id)
     )
     WHERE c.transaction_id = ?
   `;
