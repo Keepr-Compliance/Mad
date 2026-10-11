@@ -18,6 +18,18 @@ import { usePathname } from 'next/navigation';
 export const SAFETY_MS = 8000;
 const URL_CHECK_MS = 100;
 
+export const NAV_START_EVENT = 'keepr:nav-start';
+
+/**
+ * Start the top bar for a programmatic navigation (router.push from a row
+ * tap), which the anchor-click listener cannot see. Safe to call anywhere on
+ * the client; does nothing if the bar is not mounted.
+ */
+export function startNavigationProgress(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(NAV_START_EVENT));
+}
+
 const KEYFRAMES =
   '@keyframes keepr-nav-progress{from{width:15%}to{width:85%}}';
 
@@ -57,8 +69,7 @@ export function NavigationProgress(): JSX.Element | null {
   };
 
   useEffect(() => {
-    const onClick = (event: MouseEvent) => {
-      if (!shouldStartFor(event, window.location)) return;
+    const start = () => {
       clearTimers();
       setState('loading');
       const startHref = window.location.href;
@@ -69,12 +80,18 @@ export function NavigationProgress(): JSX.Element | null {
       };
       timers.current.push(setTimeout(poll, URL_CHECK_MS));
     };
+    const onClick = (event: MouseEvent) => {
+      if (!shouldStartFor(event, window.location)) return;
+      start();
+    };
+    window.addEventListener(NAV_START_EVENT, start);
     // Bubble phase on document: runs after Link's own onClick, so
     // event.defaultPrevented reflects anything that cancelled the click.
     document.addEventListener('click', onClick);
     window.addEventListener('popstate', finish);
     return () => {
       document.removeEventListener('click', onClick);
+      window.removeEventListener(NAV_START_EVENT, start);
       window.removeEventListener('popstate', finish);
       clearTimers();
     };

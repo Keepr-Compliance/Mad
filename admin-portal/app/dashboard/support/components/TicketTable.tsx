@@ -18,6 +18,7 @@ import { STATUS_LABELS, PRIORITY_LABELS, STATUS_COLORS, PRIORITY_COLORS } from '
 import type { ColumnKey } from './ColumnSelector';
 import { DEFAULT_VISIBLE_COLUMNS } from './ColumnSelector';
 import { InlineStatusEdit, InlinePriorityEdit, InlineAssigneeEdit, InlineCategoryEdit } from './InlineTicketEdit';
+import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
 
 interface TicketTableProps {
   tickets: SupportTicket[];
@@ -322,7 +323,10 @@ export function TicketTable({
             {tickets.map((ticket) => (
               <Fragment key={ticket.id}>
                 <tr
-                  onClick={() => router.push(`/dashboard/support/${ticket.id}`)}
+                  onClick={() => {
+                    startNavigationProgress();
+                    router.push(`/dashboard/support/${ticket.id}`);
+                  }}
                   className={`hover:bg-gray-50 cursor-pointer transition-colors ${selectionEnabled && selectedIds!.has(ticket.id) ? 'bg-primary-50' : ''}`}
                 >
                   {selectionEnabled && (

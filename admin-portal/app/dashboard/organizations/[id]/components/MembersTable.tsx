@@ -17,6 +17,7 @@ import {
 } from '@keepr/design-system';
 import { suspendUser, unsuspendUser } from '@/lib/admin-queries';
 import { formatDate } from '@/lib/format';
+import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
 type MemberLicenseStatus = 'pending' | 'active' | 'expired' | 'suspended';
 
 export interface MemberRow {
@@ -162,6 +163,7 @@ function RowActionMenu({
               onClick={(e) => {
                 e.stopPropagation();
                 setOpen(false);
+                startNavigationProgress();
                 router.push(`/dashboard/users/${member.user_id}`);
               }}
               className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
@@ -531,7 +533,10 @@ export function MembersTable({ members }: MembersTableProps) {
               <Tr
                 key={member.user_id}
                 clickable
-                onClick={() => router.push(`/dashboard/users/${member.user_id}`)}
+                onClick={() => {
+                  startNavigationProgress();
+                  router.push(`/dashboard/users/${member.user_id}`);
+                }}
                 className={selected.has(member.user_id) ? 'bg-primary-50/50' : ''}
               >
                 <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
