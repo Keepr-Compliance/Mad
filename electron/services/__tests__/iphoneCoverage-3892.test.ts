@@ -57,6 +57,7 @@ jest.mock("../sourceCoverageFloors", () => {
 import { setDb } from "../db/core/dbConnection";
 import { iPhoneSyncStorageService } from "../iPhoneSyncStorageService";
 import { mergeRunInterval, getIphoneDealCoverage } from "../iphoneCoverageService";
+import { iphoneStoredTextSpan } from "../db/iphoneCoverageDbService";
 import { checkExportCompleteness, getAuditCoverage, getSourceCoverage, getTransactionTextCoverage } from "../auditCoverageService";
 import { handleKeys, type ChatFloorPlan } from "../iphoneChatFloors";
 import type { SyncResult } from "../deviceSyncOrchestrator";
@@ -213,6 +214,26 @@ maybe("BACKLOG-3892 S2: iPhone coverage (real schema, real persistence)", () => 
     expect(deviceRows()).toEqual([{ udid: PHONE_A, covered_since: "2024-01-01T00:00:00.000Z", last_sync_at: iso(T1), approximate: 1 }]);
   });
 
+  it("R3: the seed span is answered from the covering index — no SCAN of messages — and only for a single-user database", () => {
+    for (let i = 0; i < 3000; i++) storedText(`ios-chat-${i % 50}`, new Date(Date.UTC(2024, 0, 1) + i * 3_600_000).toISOString());
+    storedText("sms-thread-1", "2020-01-01T00:00:00.000Z"); // not an iPhone thread: outside the range
+    db.exec("ANALYZE");
+    const seen: string[] = [];
+    const real = db.prepare.bind(db);
+    const spy = jest.spyOn(db, "prepare").mockImplementation(((text: string) => { seen.push(text); return real(text); }) as never);
+    const span = iphoneStoredTextSpan(USER);
+    spy.mockRestore();
+    expect(span).toMatchObject({ n: 3000, floor: "2024-01-01T00:00:00.000Z" });
+    const stmt = seen.find((t) => /MIN\(sent_at\)/.test(t));
+    expect(stmt).toBeDefined();
+    const plan = (real(`EXPLAIN QUERY PLAN ${stmt}`).all() as Array<{ detail: string }>).map((r) => r.detail).join(" | ");
+    expect(plan).toMatch(/COVERING INDEX idx_messages_thread_sent/);
+    expect(plan).not.toMatch(/SCAN/);
+    // Without a user_id term the index cannot tell users apart: a second local user = no seed.
+    db.prepare("INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES ('other', 'o3892@example.test', 'google', 'o-other')").run();
+    expect(iphoneStoredTextSpan(USER)).toBeUndefined();
+  });
+
   it("D4 seed: a STALE upgrader (newest stored text before F) is not seeded covered, even though this run inserts newer texts", async () => {
     storedText("ios-chat-1", "2024-01-01T00:00:00.000Z");
     storedText("ios-chat-1", "2026-01-01T00:00:00.000Z");
@@ -306,6 +327,28 @@ maybe("BACKLOG-3892 S2: iPhone coverage (real schema, real persistence)", () => 
     const later = Date.UTC(2027, 3, 1);
     await persist(result({ startedAtMs: later + 45 * DAY, floorPlan: plan({ settings: later }) }));
     expect(getIphoneDealCoverage(USER, "t1")?.coveredSince).toBe(iso(later));
+    expect(iphoneGapOf("t1")).toMatchObject({ kind: "later" });
+  });
+
+  it("D2/D4 (SR R2): a person's / chat's row does not merge across an unread gap — the scan must reach the new floor", async () => {
+    deal("t1", DEAL_START);
+    contactOnDeal("t1", "c1", P1);
+    linkThread("t1", "ios-chat-4");
+    // Run 1 read P1 and chat 4 back to the deal floor (row = [DEAL_FLOOR, T1]).
+    await persist(result({ floorPlan: plan({ settings: F, handles: { [P1]: DEAL_FLOOR } }), chatFloors: [[4, DEAL_FLOOR]] }));
+    // Months later the phone's interval restarted at `later`; this run read P1 / chat 4 only
+    // from `f`, which is AFTER run 1's scan (T1): texts in (T1, f) were never read.
+    const later = Date.UTC(2027, 3, 1);
+    const f = later - 10 * DAY;
+    expect(f).toBeGreaterThan(T1);
+    await persist(result({ startedAtMs: later + 45 * DAY, floorPlan: plan({ settings: later, handles: { [P1]: f } }), chatFloors: [[4, f]] }));
+    // The rows restart at f — they must not claim DEAL_FLOOR across the gap.
+    expect(db.prepare("SELECT covered_since FROM iphone_chat_coverage WHERE chat_rowid = 4").all()).toEqual([{ covered_since: iso(f) }]);
+    const handleSince = (db.prepare("SELECT covered_since FROM iphone_handle_coverage").all() as Array<{ covered_since: string }>).map((r) => r.covered_since);
+    expect(handleSince.length).toBeGreaterThan(0);
+    expect(new Set(handleSince)).toEqual(new Set([iso(f)]));
+    // And the deal reads covered only back to f (still a gap: it starts before f).
+    expect(getIphoneDealCoverage(USER, "t1")?.coveredSince).toBe(iso(f));
     expect(iphoneGapOf("t1")).toMatchObject({ kind: "later" });
   });
 

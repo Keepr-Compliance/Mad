@@ -85,16 +85,25 @@ export function upsertIphoneHandle(userId: string, udid: string, handleKey: stri
 
 /**
  * The one-time upgrader seed (SR D4): the oldest and newest stored iPhone text
- * (`ios-chat-<ROWID>` threads). The thread range reads idx_messages_thread_sent;
- * the caller reads it BEFORE the run's inserts.
+ * (`ios-chat-<ROWID>` threads). The caller reads it BEFORE the run's inserts.
+ *
+ * BACKLOG-3892 R3: no `user_id` term on purpose. With it the planner on a large table picks
+ * a full SCAN of messages (every table page, on the main thread); without it the range is
+ * answered from idx_messages_thread_sent alone (COVERING INDEX, index pages only). `user_id`
+ * is not in that index, so the result is only this user's when the database holds one user:
+ * with more than one local user no seed is returned (no seed = under-claim, the safe side).
  */
 export function iphoneStoredTextSpan(userId: string): { floor: string | null; last: string | null; n: number } | undefined {
+  const users = dbGet<{ n: number }>(sql`SELECT COUNT(*) AS n FROM (SELECT 1 FROM users_local LIMIT 2)`, []);
+  if (!users || users.n !== 1) return undefined;
+  const only = dbGet<{ id: string }>(sql`SELECT id FROM users_local LIMIT 1`, []);
+  if (!only || only.id !== userId) return undefined;
   return dbGet<{ floor: string | null; last: string | null; n: number }>(
     sql`SELECT MIN(sent_at) AS floor, MAX(sent_at) AS last, COUNT(*) AS n
           FROM messages
          WHERE thread_id >= 'ios-chat-' AND thread_id < 'ios-chat.'
-           AND user_id = ? AND sent_at IS NOT NULL`,
-    [userId],
+           AND sent_at IS NOT NULL`,
+    [],
   );
 }
 
