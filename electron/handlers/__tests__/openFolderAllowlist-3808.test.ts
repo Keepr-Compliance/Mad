@@ -141,6 +141,12 @@ describe("open-folder (BACKLOG-3808)", () => {
     expectRefused(await openFolder(link), "not_registered");
   });
 
+  it("refuses a registered export path that was swapped for a symlink pointing outside", async () => {
+    fs.rmSync(exportDir, { recursive: true });
+    fs.symlinkSync(outsideDir, exportDir);
+    expectRefused(await openFolder(exportDir), "not_registered");
+  });
+
   it("refuses '..' traversal out of a registered export", async () => {
     expectRefused(await openFolder(path.join(exportDir, "..", "..", "elsewhere")), "not_registered");
   });
