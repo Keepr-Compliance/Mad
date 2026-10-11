@@ -37,6 +37,10 @@ jest.mock("../../utils/preferenceHelper", () => ({
 // and every stored id the duplicate check READ.
 const insertAttempts: Array<Array<{ externalId: string }>> = [];
 const idsRead: string[] = [];
+// The sent_at bound each since-page read was called with, and every guid the
+// exact lookup (undated texts) was asked about.
+const sinceBounds: string[] = [];
+const exactLookups: string[] = [];
 
 jest.mock("../databaseService", () => {
   const sync = jest.requireActual("../db/syncDbService");
@@ -61,9 +65,16 @@ jest.mock("../databaseService", () => {
           }
           if (name === "getMessageExternalIdsSincePage") {
             return (...args: unknown[]) => {
+              sinceBounds.push(args[1] as string);
               const page = sync.getMessageExternalIdsSincePage(...args) as { ids: string[] };
               idsRead.push(...page.ids);
               return page;
+            };
+          }
+          if (name === "getMessageIdsByExternalIds") {
+            return (userId: string, ids: string[]) => {
+              exactLookups.push(...ids);
+              return sync.getMessageIdsByExternalIds(userId, ids);
             };
           }
           const fn = sync[name];
@@ -146,6 +157,8 @@ maybe("BACKLOG-3892 S7: duplicate check bounded by this sync's earliest text (re
     setDb(db);
     insertAttempts.length = 0;
     idsRead.length = 0;
+    sinceBounds.length = 0;
+    exactLookups.length = 0;
     row = 0;
   });
   afterEach(() => db.close());
@@ -209,6 +222,59 @@ maybe("BACKLOG-3892 S7: duplicate check bounded by this sync's earliest text (re
     await storeMessages(USER, [bad], []);
     expect(idsRead.sort()).toEqual([guidFor("old"), guidFor("x")].sort());
     expect(insertAttempts.flat()).toHaveLength(0);
+  });
+
+  it("an undated text (date <= 0) does not pull the bound to 1969; undated texts are still deduplicated exactly", async () => {
+    // Old history the bounded read must not touch.
+    for (let i = 0; i < 50; i++) store(`old-${i}`, Date.UTC(2024, 0, 1) + i * DAY);
+    // An undated text already stored at the epoch (what new Date(0).toISOString() writes),
+    // and one stored by another writer with a different sent_at below the bound.
+    store("undated-stored", 0);
+    store("undated-other", Date.UTC(2023, 5, 1));
+    // In-window texts already stored.
+    for (let i = 0; i < 5; i++) store(`w-${i}`, F + i * DAY);
+
+    const earliestReal = F;
+    const messages = [
+      ...Array.from({ length: 5 }, (_, i) => msg(`w-${i}`, F + i * DAY)),
+      msg("undated-stored", 0),
+      msg("undated-other", -5_000),
+      msg("undated-new", 0),
+      msg("dated-new", F + 9 * DAY),
+    ];
+    expect(dedupeSinceIso(messages)).toBe(new Date(earliestReal - DAY).toISOString());
+
+    const result = await storeMessages(USER, messages, []);
+
+    // Bounded read at (earliest real date − 24 h), never 1969.
+    expect(sinceBounds).toEqual([new Date(earliestReal - DAY).toISOString()]);
+    expect(idsRead.sort()).toEqual(Array.from({ length: 5 }, (_, i) => guidFor(`w-${i}`)).sort());
+    // The undated guids were looked up exactly; the two stored ones are skipped.
+    expect(exactLookups.sort()).toEqual([guidFor("undated-stored"), guidFor("undated-other"), guidFor("undated-new")].sort());
+    expect(insertAttempts.flat().map((r) => r.externalId).sort()).toEqual([guidFor("undated-new"), guidFor("dated-new")].sort());
+    expect(result).toEqual({ stored: 2, skipped: 7 });
+  });
+
+  it("texts grouped by chat: a LATER chat holding the overall earliest text sets the bound", async () => {
+    // Chat A (handed over first) starts at F + 20 d; chat B (second) starts at its deal floor, well below.
+    const chatBFirst = DEAL_FLOOR + 2 * DAY;
+    store("b-0", chatBFirst);
+    store("b-1", chatBFirst + DAY);
+    store("a-0", F + 20 * DAY);
+    const messages = [
+      msg("a-0", F + 20 * DAY),
+      msg("a-new", F + 21 * DAY),
+      msg("b-0", chatBFirst),
+      msg("b-1", chatBFirst + DAY),
+      msg("b-new", chatBFirst + 2 * DAY),
+    ];
+    expect(dedupeSinceIso(messages)).toBe(new Date(chatBFirst - DAY).toISOString());
+
+    const result = await storeMessages(USER, messages, []);
+
+    expect(sinceBounds).toEqual([new Date(chatBFirst - DAY).toISOString()]);
+    expect(insertAttempts.flat().map((r) => r.externalId)).toEqual([guidFor("a-new"), guidFor("b-new")]);
+    expect(result).toEqual({ stored: 2, skipped: 3 });
   });
 
   it("both page reads are range reads on idx_messages_user_sent with no sort step (no ANALYZE, as in production)", () => {

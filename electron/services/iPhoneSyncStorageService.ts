@@ -154,16 +154,30 @@ const DEDUPE_PAGE = 5000;
 const DEDUPE_SENT_AT_MARGIN_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * BACKLOG-3892 S7: true when a text has no usable date. The parser maps an
+ * undated text (Apple date 0/NULL) to new Date(0), so a time <= 0 means
+ * "undated", not "sent in 1970"; an invalid Date is undated too.
+ */
+export function isUndatedText(m: { date: Date }): boolean {
+  const t = m.date instanceof Date ? m.date.getTime() : NaN;
+  return !Number.isFinite(t) || t <= 0;
+}
+
+/**
  * BACKLOG-3892 S7: the lower sent_at bound of the duplicate check = this sync's
- * earliest text minus the margin; null (read every stored id) when no message
- * carries a valid date. A stored copy of any message in this sync has the same
- * sent_at, so it is at or after the bound.
+ * earliest DATED text minus the margin; null (read every stored id) when no
+ * message carries a valid date. A stored copy of any dated message in this sync
+ * has the same sent_at, so it is at or after the bound. Undated texts
+ * (isUndatedText) are left out of the minimum — one of them would otherwise pull
+ * the bound back to 1969 and turn every sync into a full read — and are checked
+ * by an exact guid lookup instead (storeMessages).
  */
 export function dedupeSinceIso(messages: ReadonlyArray<{ date: Date }>): string | null {
   let min = Infinity;
   for (const m of messages) {
-    const t = m.date instanceof Date ? m.date.getTime() : NaN;
-    if (Number.isFinite(t) && t < min) min = t;
+    if (isUndatedText(m)) continue;
+    const t = m.date.getTime();
+    if (t < min) min = t;
   }
   if (!Number.isFinite(min)) return null;
   const bound = min - DEDUPE_SENT_AT_MARGIN_MS;
@@ -601,6 +615,16 @@ class IPhoneSyncStorageService {
         await yieldToEventLoop();
         if (page.ids.length < DEDUPE_PAGE || page.next === null) break;
         afterKey = page.next;
+      }
+      // Undated texts were left out of the bound, so a stored copy of one can sit
+      // below it (its sent_at is the epoch, or whatever another writer stored).
+      // Look their guids up exactly, in bounded chunks — not by sent_at — so they
+      // are still skipped rather than re-attempted.
+      const undatedGuids = [...new Set(messages.filter(isUndatedText).map((m) => m.guid).filter(isValidGuid))];
+      for (let start = 0; start < undatedGuids.length; start += LOOKUP_CHUNK) {
+        const found = databaseService.getMessageIdsByExternalIds(userId, undatedGuids.slice(start, start + LOOKUP_CHUNK));
+        for (const guid of found?.keys() ?? []) existingIds.add(guid);
+        await yieldToEventLoop();
       }
     } else {
       let after: string | null = null;
