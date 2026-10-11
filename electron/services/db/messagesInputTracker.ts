@@ -25,6 +25,8 @@ export interface MessagesInputToken {
 
 export interface MessagesTriggerSpec {
   name: string;
+  /** The table the trigger is on; `messages` when omitted. */
+  table?: string;
   drop: SafeSql;
   ddl: SafeSql;
 }
@@ -44,7 +46,7 @@ const MAX_ROWID_SQL = sql`SELECT COALESCE(MAX(rowid), 0) AS m FROM main.messages
 function triggersIntact(db: DatabaseType, spec: MessagesInputTrackerSpec): boolean {
   const installed = db.prepare(spec.installedTriggersSql).all() as Array<{ name: string; tbl_name: string }>;
   const byName = new Map(installed.map((t) => [t.name, t.tbl_name]));
-  return spec.triggers.every((t) => byName.get(t.name) === "messages");
+  return spec.triggers.every((t) => byName.get(t.name) === (t.table ?? "messages"));
 }
 
 function readGens(db: DatabaseType, spec: MessagesInputTrackerSpec): { epoch: number; writes: number } | null {
