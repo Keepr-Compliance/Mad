@@ -145,6 +145,46 @@ const LOOKUP_CHUNK = 500;
  * slice of the pre-filter loop; the caller yields between them.
  */
 const DEDUPE_PAGE = 5000;
+/**
+ * BACKLOG-3892 S7: margin below this sync's earliest text for the duplicate
+ * check's sent_at bound. Both writers of an iMessage guid (this service and the
+ * Mac importer) derive sent_at from the same Apple date, so the margin only has
+ * to absorb format differences after the date part.
+ */
+const DEDUPE_SENT_AT_MARGIN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * BACKLOG-3892 S7: true when a text has no usable date. The parser maps an
+ * undated text (Apple date 0/NULL) to new Date(0), so a time <= 0 means
+ * "undated", not "sent in 1970"; an invalid Date is undated too.
+ */
+export function isUndatedText(m: { date: Date }): boolean {
+  const t = m.date instanceof Date ? m.date.getTime() : NaN;
+  return !Number.isFinite(t) || t <= 0;
+}
+
+/**
+ * BACKLOG-3892 S7: the lower sent_at bound of the duplicate check = this sync's
+ * earliest DATED text minus the margin; null (read every stored id) when no
+ * message carries a valid date. A stored copy of any dated message in this sync
+ * has the same sent_at, so it is at or after the bound. Undated texts
+ * (isUndatedText) are left out of the minimum — one of them would otherwise pull
+ * the bound back to 1969 and turn every sync into a full read — and are checked
+ * by an exact guid lookup instead (storeMessages).
+ */
+export function dedupeSinceIso(messages: ReadonlyArray<{ date: Date }>): string | null {
+  let min = Infinity;
+  for (const m of messages) {
+    if (isUndatedText(m)) continue;
+    const t = m.date.getTime();
+    if (t < min) min = t;
+  }
+  if (!Number.isFinite(min)) return null;
+  const bound = min - DEDUPE_SENT_AT_MARGIN_MS;
+  // Outside Date's range there is no ISO form: fall back to the full read.
+  if (!Number.isFinite(new Date(bound).getTime())) return null;
+  return new Date(bound).toISOString();
+}
 /** BACKLOG-3868: contacts per upsert transaction in storeContacts. */
 const CONTACT_UPSERT_SLICE = 500;
 
@@ -559,14 +599,42 @@ class IPhoneSyncStorageService {
     // measured at ~8x the wall time on 671k rows, because every sync carries the
     // phone's whole history.
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Loading existing message IDs for deduplication...`);
+    //
+    // BACKLOG-3892 S7: bounded below by this sync's earliest text (dedupeSinceIso).
+    // With parse floors a sync hands over only texts at/after its floors, so the
+    // stored history older than that can never match and is not read. The
+    // INSERT OR IGNORE on (user_id, external_id) stays the backstop.
     const existingIds = new Set<string>();
-    let after: string | null = null;
-    for (;;) {
-      const page: string[] = databaseService.getMessageExternalIdsPage(userId, after, DEDUPE_PAGE) ?? [];
-      for (const id of page) existingIds.add(id);
-      await yieldToEventLoop();
-      if (page.length < DEDUPE_PAGE) break;
-      after = page[page.length - 1];
+    const sinceIso = dedupeSinceIso(messages);
+    if (sinceIso !== null) {
+      let afterKey: { sentAt: string; rowid: number } | null = null;
+      for (;;) {
+        const page: { ids: string[]; next: { sentAt: string; rowid: number } | null } =
+          databaseService.getMessageExternalIdsSincePage(userId, sinceIso, afterKey, DEDUPE_PAGE) ?? { ids: [], next: null };
+        for (const id of page.ids) existingIds.add(id);
+        await yieldToEventLoop();
+        if (page.ids.length < DEDUPE_PAGE || page.next === null) break;
+        afterKey = page.next;
+      }
+      // Undated texts were left out of the bound, so a stored copy of one can sit
+      // below it (its sent_at is the epoch, or whatever another writer stored).
+      // Look their guids up exactly, in bounded chunks — not by sent_at — so they
+      // are still skipped rather than re-attempted.
+      const undatedGuids = [...new Set(messages.filter(isUndatedText).map((m) => m.guid).filter(isValidGuid))];
+      for (let start = 0; start < undatedGuids.length; start += LOOKUP_CHUNK) {
+        const found = databaseService.getMessageIdsByExternalIds(userId, undatedGuids.slice(start, start + LOOKUP_CHUNK));
+        for (const guid of found?.keys() ?? []) existingIds.add(guid);
+        await yieldToEventLoop();
+      }
+    } else {
+      let after: string | null = null;
+      for (;;) {
+        const page: string[] = databaseService.getMessageExternalIdsPage(userId, after, DEDUPE_PAGE) ?? [];
+        for (const id of page) existingIds.add(id);
+        await yieldToEventLoop();
+        if (page.length < DEDUPE_PAGE) break;
+        after = page[page.length - 1];
+      }
     }
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Found ${existingIds.size} existing messages`);
 
