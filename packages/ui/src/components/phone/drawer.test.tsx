@@ -82,6 +82,15 @@ describe('Drawer', () => {
     expect(document.activeElement).toBe(menu);
   });
 
+  it('Tab stays inside the drawer (focus trap)', async () => {
+    render(<Harness />);
+    const dialog = screen.getByRole('dialog');
+    for (let i = 0; i < 6; i += 1) {
+      await userEvent.tab();
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    }
+  });
+
   it('R4: closes when the viewport crosses to the desktop breakpoint', () => {
     render(<Harness />);
     const desktop = listeners.filter((l) => l.query === '(min-width: 768px)');
