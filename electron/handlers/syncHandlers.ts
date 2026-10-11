@@ -29,6 +29,7 @@ import supabaseService from "../services/supabaseService";
 import { getMainWindow, sendToMainWindow } from "../windowRegistry";
 import { handleBusy } from "../utils/busyIpc";
 import { backupDecryptionService } from "../services/backupDecryptionService";
+import { floorPlanForSync } from "../services/iphoneChatFloorPlan";
 import type { SyncStartReply } from "../types/ipc/window-api-platform";
 
 /**
@@ -234,7 +235,13 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
       try {
         // BACKLOG-3881: only the fields the orchestrator reads — a password a stale
         // renderer might still send is never passed on.
-        const result = await orchestrator!.sync({ udid: options.udid, forceFullBackup: options.forceFullBackup });
+        // BACKLOG-3892 S1: the per-chat parse floors (undefined while gated off until S2).
+        const floorPlan = await floorPlanForSync(syncSessionUserId);
+        const result = await orchestrator!.sync({
+          udid: options.udid,
+          forceFullBackup: options.forceFullBackup,
+          ...(floorPlan ? { floorPlan } : {}),
+        });
         // BACKLOG-3881: a run stopped by an Apple-encrypted backup did no work. The user's
         // Sync after turning encryption off must not be refused by the cooldown above.
         if (result?.appleEncryptedBackup) {
