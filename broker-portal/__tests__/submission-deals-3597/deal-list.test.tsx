@@ -244,8 +244,14 @@ describe('broker Submissions list: one row per deal', () => {
   it('D9: two reads of transaction_submissions per render beyond the org lookup, none per row', async () => {
     await renderList();
     const reads = mockEmulator.state.selects.filter((s) => s.table === 'transaction_submissions');
-    // getAllowedOrgIds, the chain links, the page rows.
-    expect(reads.map((r) => r.columns)).toEqual(['organization_id', 'id, parent_submission_id, status, created_at', '*']);
+    // getAllowedOrgIds, the chain links, the page rows. BACKLOG-3904: the
+    // broker list's link read also carries what search and the agent filter
+    // match on (BROKER_LINK_COLUMNS); My Transactions keeps LINK_COLUMNS.
+    expect(reads.map((r) => r.columns)).toEqual([
+      'organization_id',
+      'id, parent_submission_id, status, created_at, submitted_by, property_address, property_city',
+      '*',
+    ]);
     expect(mockEmulator.state.writes).toEqual([]);
   });
 });

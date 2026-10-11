@@ -11,7 +11,28 @@ import { getOrgFeatures, isFeatureEnabled } from '@/lib/feature-gate';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { redirect } from 'next/navigation';
 import { requireFullPortalAccess } from '@/lib/auth/portalAccess';
-import { LINK_COLUMNS, loadDealPage } from '@/lib/submissions/dealList';
+import {
+  BROKER_LINK_COLUMNS,
+  headMatchesSearch,
+  pageOfHeads,
+  readDealHeads,
+  type BrokerChainLink,
+  type Identity,
+} from '@/lib/submissions/dealList';
+import { resolveUserIdentities } from '@/lib/submissions/names';
+import {
+  buildListUrl,
+  hasActiveFilters,
+  parseAgentParam,
+  parseSearchParam,
+  type ListFilters,
+} from '@/lib/submissions/listUrl';
+import {
+  SubmissionDesktopFilters,
+  SubmissionPhoneFilters,
+  type AgentOption,
+  type FacetCount,
+} from '@/components/submission/SubmissionFilters';
 
 interface Submission {
   id: string;
@@ -30,7 +51,7 @@ interface Submission {
 }
 
 interface PageProps {
-  searchParams: Promise<{ status?: string; search?: string; page?: string }>;
+  searchParams: Promise<{ status?: string; search?: string; agent?: string; page?: string }>;
 }
 
 const PAGE_SIZE = 25;
@@ -93,24 +114,66 @@ async function getAllowedOrgIds(
   return featureResults.filter((r) => r.hasAccess).map((r) => r.id);
 }
 
+interface SubmissionList {
+  submissions: Submission[];
+  totalCount: number;
+  page: number;
+  totalPages: number;
+  /** Every submitter among the in-scope deals (BACKLOG-3904). */
+  agents: AgentOption[];
+  /** Deals matching the search, counted per (head status, submitter). */
+  facets: FacetCount[];
+}
+
+const EMPTY_LIST: SubmissionList = { submissions: [], totalCount: 0, page: 1, totalPages: 1, agents: [], facets: [] };
+
+/**
+ * BACKLOG-3904: the agent filter's options are the submitters of the deals
+ * this list already shows — never a read of users or organization_members,
+ * which reach wider than the list's scope. Labels come from `identities`
+ * (ids already in scope); null (support session, or the lookup failed) gives
+ * neutral numbered labels so nobody is mislabelled a former member.
+ */
+function agentOptions(heads: BrokerChainLink[], identities: ReadonlyMap<string, Identity> | null): AgentOption[] {
+  const ids = Array.from(new Set(heads.map((h) => h.submitted_by).filter((id): id is string => !!id))).sort();
+  if (identities === null) return ids.map((id, i) => ({ id, label: `Agent ${i + 1}` }));
+  return ids
+    .map((id) => ({ id, label: identities.get(id)?.name ?? 'Former member' }))
+    .sort((a, b) => a.label.localeCompare(b.label) || (a.id < b.id ? -1 : 1));
+}
+
+function facetCounts(heads: BrokerChainLink[]): FacetCount[] {
+  const byKey = new Map<string, FacetCount>();
+  for (const h of heads) {
+    const status = h.status ?? '';
+    const key = `${status}|${h.submitted_by ?? ''}`;
+    const entry = byKey.get(key);
+    if (entry) entry.count += 1;
+    else byKey.set(key, { status, agent: h.submitted_by, count: 1 });
+  }
+  return Array.from(byKey.values());
+}
+
 /**
  * BACKLOG-3597: one row per deal — the latest version of each resubmission
  * chain (lib/submissions/dealList.ts). Count, status filter and pagination all
- * apply to deals.
+ * apply to deals. BACKLOG-3904: search and the agent filter match the same
+ * heads, before the count and the page.
  */
 async function getSubmissions(
   client: SupabaseClient,
-  status?: string,
+  filters: ListFilters,
   page: number = 1,
   orgId?: string,
   allowedOrgIds?: string[] | null,
-): Promise<{ submissions: Submission[]; totalCount: number; page: number; totalPages: number }> {
+  isImpersonating: boolean = false,
+): Promise<SubmissionList> {
   const restrictToOrgs = allowedOrgIds !== null && allowedOrgIds !== undefined && !orgId;
 
   // TASK-2158: Filter to only orgs with broker_portal_access enabled
   if (restrictToOrgs && allowedOrgIds.length === 0) {
     // No orgs have access — return empty immediately
-    return { submissions: [], totalCount: 0, page: 1, totalPages: 1 };
+    return EMPTY_LIST;
   }
 
   /** The list's scope, identical for both reads. */
@@ -125,17 +188,38 @@ async function getSubmissions(
     return query;
   }
 
-  const result = await loadDealPage<Submission>({
-    readLinks: (from, to) => scoped(LINK_COLUMNS).order('id').range(from, to),
+  const read = await readDealHeads<BrokerChainLink>((from, to) =>
+    scoped(BROKER_LINK_COLUMNS).order('id').range(from, to)
+  );
+  if (read.error) {
+    console.error('Error fetching submissions:', read.error);
+    return EMPTY_LIST;
+  }
+  const heads = read.heads;
+
+  // Names only for submitters already in scope. A support session looks up no
+  // names at all (users is ID-scoped to the target there — BACKLOG-3477), so
+  // name/email search is off and address search still works.
+  const identities = isImpersonating
+    ? null
+    : await resolveUserIdentities(client, heads.map((h) => h.submitted_by));
+
+  const searched = filters.search
+    ? heads.filter((h) => headMatchesSearch(h, filters.search, identities))
+    : heads;
+
+  const result = await pageOfHeads<Submission, BrokerChainLink>({
+    heads: searched,
     readRows: (ids) => scoped('*').in('id', ids),
-    status: status && status !== 'all' ? status : null,
+    status: filters.status !== 'all' ? filters.status : null,
+    match: filters.agent ? (h) => h.submitted_by === filters.agent : undefined,
     page,
     pageSize: PAGE_SIZE,
   });
 
   if (result.error) {
     console.error('Error fetching submissions:', result.error);
-    return { submissions: [], totalCount: 0, page: 1, totalPages: 1 };
+    return EMPTY_LIST;
   }
 
   return {
@@ -143,24 +227,21 @@ async function getSubmissions(
     totalCount: result.total,
     page: result.page,
     totalPages: result.totalPages,
+    agents: agentOptions(heads, identities),
+    facets: facetCounts(searched),
   };
 }
 
-/**
- * Build the base URL for pagination links, preserving current filters
- * but excluding the page parameter.
- */
-function buildBaseUrl(currentStatus: string): string {
-  if (currentStatus === 'all') {
-    return '/dashboard/submissions';
-  }
-  return `/dashboard/submissions?status=${currentStatus}`;
-}
-
 export default async function SubmissionsPage({ searchParams }: PageProps) {
-  const { status, page: pageParam } = await searchParams;
+  const { status, page: pageParam, agent: agentParam, search: searchParam } = await searchParams;
   const currentPage = Math.max(1, Number(pageParam) || 1);
   const currentStatus = status || 'all';
+  // BACKLOG-3904: a non-uuid agent is ignored; search is trimmed and capped.
+  const filters: ListFilters = {
+    status: currentStatus,
+    agent: parseAgentParam(agentParam),
+    search: parseSearchParam(searchParam),
+  };
   // BACKLOG-3597: the "submitted" filter now covers submitted AND resubmitted
   // deals (STATUSES labels it "Pending"), so the caption uses that tab label
   // instead of formatStatus, which still reports a single submission's own
@@ -187,9 +268,16 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
     totalCount,
     page: effectivePage,
     totalPages,
-  } = await getSubmissions(client, status, currentPage, orgId, allowedOrgIds);
+    agents,
+    facets,
+  } = await getSubmissions(client, filters, currentPage, orgId, allowedOrgIds, !!impersonation);
 
-  const baseUrl = buildBaseUrl(currentStatus);
+  // Pagination keeps every filter (BACKLOG-3904).
+  const baseUrl = buildListUrl(filters);
+  // R1: the selected agent's label comes only from the in-scope options.
+  const selectedAgentLabel = filters.agent
+    ? agents.find((a) => a.id === filters.agent)?.label ?? 'Unknown agent'
+    : 'All agents';
 
   return (
     <SubmissionListClient>
@@ -206,15 +294,16 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
       />
 
       <div className="space-y-6">
-      {/* Status Filters - clicking a filter resets to page 1 (no page param) */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+      {/* Status Filters - clicking a filter resets to page 1 (no page param).
+          BACKLOG-3904: desktop only; below md the phone filters replace them. */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 max-md:hidden">
         <div className="flex flex-wrap gap-2">
           {STATUSES.map(({ value, label }) => {
             const isActive = currentStatus === value;
             return (
               <Link
                 key={value}
-                href={value === 'all' ? '/dashboard/submissions' : `/dashboard/submissions?status=${value}`}
+                href={buildListUrl({ ...filters, status: value })}
                 className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
                   isActive
                     ? 'bg-primary-600 text-white'
@@ -226,12 +315,22 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
             );
           })}
         </div>
+        <SubmissionDesktopFilters filters={filters} agents={agents} />
       </div>
+
+      <SubmissionPhoneFilters
+        filters={filters}
+        statuses={STATUSES}
+        agents={agents}
+        facets={facets}
+        total={totalCount}
+        selectedAgentLabel={selectedAgentLabel}
+      />
 
       {/* Submissions Table */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         {displaySubmissions.length === 0 ? (
-          <EmptySubmissions filtered={currentStatus !== 'all'} />
+          <EmptySubmissions filtered={hasActiveFilters(filters)} />
         ) : (
           <>
             {/* BACKLOG-3798: below md each row renders as a card (max-md: only;
