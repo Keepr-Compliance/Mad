@@ -215,3 +215,4 @@ No kit component imports `next`: apps pass router facts in (`open`/`onOpenChange
 | `StickyActionBar` | 1–2 actions pinned to the bottom (phone only); `variant` `light`/`dark`. |
 | `Toast` | Confirmation toast; closes after `duration` (4s default). |
 | `SearchField`, `FilterButton` | 16px search input; filter button with an active-count badge (hidden at 0) that opens a `BottomSheet`. |
+| `FilterSelectButton` | Two-line filter control (small label over the current value, e.g. Status / Pending) that opens a `BottomSheet`; 44px, highlighted when `active`. Use when each filter's value must stay visible; `FilterButton` when one icon stands for all filters. |
