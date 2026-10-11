@@ -69,6 +69,23 @@ interface ConversationViewModalProps {
    * export is never gated. Defaults to "blocked".
    */
   hideFromExportState?: HideFromExportState;
+  /**
+   * BACKLOG-3884: the conversation arrives a page at a time (the linked cards on
+   * the Texts tab). `messages` holds the pages loaded so far; the list ends with
+   * "Load earlier messages" while more exist, and the header counts against
+   * `totalCount` (texts in what is shown: the window, or all history when the
+   * toggle is on), so nothing is cut off silently. Absent = the whole thread is
+   * in `messages`, as before.
+   */
+  pagination?: {
+    hasMore: boolean;
+    loading: boolean;
+    loadMore: () => void;
+    /** Non-reaction texts in the current scope (window, or all history when the toggle is on). */
+    totalCount: number;
+  };
+  /** BACKLOG-3884: told when the before/after toggle changes (the pager re-reads its scope). */
+  onShowOutOfRangeChange?: (show: boolean) => void;
 }
 
 // normalizePhoneForLookup and getSenderPhone imported from src/utils/phoneNormalization.ts (TASK-2027)
@@ -251,6 +268,8 @@ export function ConversationViewModal({
   onSeeTransaction,
   onSetHiddenFromExport,
   hideFromExportState = "blocked",
+  pagination,
+  onShowOutOfRangeChange,
 }: ConversationViewModalProps): React.ReactElement {
   // BACKLOG-2280: split reaction rows out of the bubble list and key them to
   // their parent message guid. Reactions render as pills under their parent, not
@@ -289,7 +308,14 @@ export function ConversationViewModal({
   // old default-ON filter). The toggle is INDEPENDENT of the Texts-tab toggle —
   // the modal now always receives the full, uncropped thread (see fullMessages in
   // MessageThreadCard / TransactionMessagesTab).
-  const [showOutOfRange, setShowOutOfRange] = useState<boolean>(false);
+  const [showOutOfRange, setShowOutOfRangeState] = useState<boolean>(false);
+  const setShowOutOfRange = React.useCallback(
+    (show: boolean) => {
+      setShowOutOfRangeState(show);
+      onShowOutOfRangeChange?.(show);
+    },
+    [onShowOutOfRangeChange],
+  );
 
   // BACKLOG-3366: the text whose hide/unhide request is in flight, so its pill
   // cannot be clicked twice.
@@ -463,10 +489,22 @@ export function ConversationViewModal({
             <h4 className="text-white font-semibold">
               {isGroupChat ? getGroupChatTitle() : (contactName || phoneNumber)}
             </h4>
-            <p className="text-green-100 text-xs">
-              {visibleMessages.length} message{visibleMessages.length !== 1 ? "s" : ""}
-              {hasAuditDates && visibleMessages.length !== sortedMessages.length && (
-                <span className="ml-1">of {sortedMessages.length}</span>
+            <p className="text-green-100 text-xs" data-testid="conversation-count">
+              {pagination ? (
+                // BACKLOG-3884: loaded so far, of everything in scope.
+                <>
+                  {visibleMessages.length} message{visibleMessages.length !== 1 ? "s" : ""}
+                  {pagination.totalCount > visibleMessages.length && (
+                    <span className="ml-1">of {pagination.totalCount}</span>
+                  )}
+                </>
+              ) : (
+                <>
+                  {visibleMessages.length} message{visibleMessages.length !== 1 ? "s" : ""}
+                  {hasAuditDates && visibleMessages.length !== sortedMessages.length && (
+                    <span className="ml-1">of {sortedMessages.length}</span>
+                  )}
+                </>
               )}
             </p>
           </div>
@@ -778,6 +816,20 @@ export function ConversationViewModal({
               </div>
             );
           })}
+          {/* BACKLOG-3884: older texts load on request; never cut off silently. */}
+          {pagination && (pagination.hasMore || pagination.loading) && (
+            <div className="flex justify-center pt-1">
+              <button
+                type="button"
+                onClick={() => pagination.loadMore()}
+                disabled={pagination.loading}
+                className="text-sm font-medium text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                data-testid="load-earlier-messages"
+              >
+                {pagination.loading ? "Loading..." : "Load earlier messages"}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* BACKLOG-2295: exclusion legend — only while out-of-range messages are

@@ -88,6 +88,11 @@ async function ensureSessionPersistedBeforeRelaunch(): Promise<void> {
         access_token: authSession.accessToken,
         refresh_token: authSession.refreshToken,
       },
+      // BACKLOG-3673: this is a full replace mid-session, not a sign-in -- keep
+      // the offline cache of the account's "setup finished" record.
+      ...(existing?.accountSetupFinishedAt
+        ? { accountSetupFinishedAt: existing.accountSetupFinishedAt }
+        : {}),
     });
     logService.info(
       "[Relaunch] Last-resort session flush succeeded before FDA relaunch",

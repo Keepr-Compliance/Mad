@@ -53,7 +53,13 @@ describe("resetFeatureGateOnLogout (BACKLOG-3476)", () => {
       const next = source.indexOf("\nasync function ", start + 1);
       return source.slice(start, next < 0 ? undefined : next);
     };
-    for (const name of ["handleLogout", "handleForceLogout", "handleSignOutAllDevices"]) {
+    // BACKLOG-3833: handleLogout goes through the shared signOutLocalSession
+    // (also used by idle expiry), which must make the call itself.
+    expect(bodyOf("handleLogout").includes("signOutLocalSession(")).toBe(true);
+    const shared = fs.readFileSync(path.join(__dirname, "..", "sessionSignOut.ts"), "utf8");
+    const sharedBody = shared.slice(shared.indexOf("export async function signOutLocalSession("));
+    expect(sharedBody.includes("resetFeatureGateOnLogout()")).toBe(true);
+    for (const name of ["handleForceLogout", "handleSignOutAllDevices"]) {
       expect({ name, calls: bodyOf(name).includes("resetFeatureGateOnLogout();") }).toEqual({
         name,
         calls: true,

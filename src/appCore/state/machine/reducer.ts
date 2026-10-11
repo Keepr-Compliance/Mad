@@ -9,7 +9,7 @@
  */
 
 import { fdaBlocksOnboarding, unknownFdaFor, wasFdaAnswered } from "./fdaState";
-import { hasMinimumDataSourceForUser } from "./selectors/userDataSelectors";
+import { routeAccount } from "./routing/routeAccount";
 import type {
   AppState,
   AppAction,
@@ -63,27 +63,33 @@ type AppActionWithContext = Exclude<AppAction, { type: "USER_DATA_LOADED" }> | U
 // ============================================
 
 /**
- * Determines the next onboarding step based on completed steps,
- * platform info, and user data.
+ * Legacy step label for the onboarding state (BACKLOG-3673).
+ *
+ * The setup QUEUE decides which step is visible; this label only has to stay
+ * an onboarding route so AppRouter keeps OnboardingFlow mounted. It is NEVER a
+ * signal that setup is finished: it never returns null. When every listed step
+ * is done it returns the last one in its own list. The only way out of setup
+ * is ONBOARDING_QUEUE_DONE.
  *
  * Step order:
  * 1. phone-type - Always first (select iPhone/Android)
  * 2. secure-storage - macOS only (keychain explanation)
  * 3. email-connect - Email connection/onboarding
- * 4. permissions - macOS only (Full Disk Access)
- * 5. apple-driver - Windows + iPhone only (driver setup)
+ * 4. permissions - macOS only, while Full Disk Access still blocks setup
+ *
+ * BACKLOG-3673: the Windows + iPhone `apple-driver` branch is removed. The
+ * driver is device state and never decides where an account lands.
  *
  * @param completed - Array of already completed steps
  * @param platform - Platform information
- * @param userData - User preferences and completion state
- * @returns The next step to show, or null if all complete
+ * @param userData - Only `fda` is read: it decides whether `permissions` is listed
+ * @returns The first uncompleted step, or the last listed step when all are done
  */
 export function getNextOnboardingStep(
   completed: OnboardingStep[],
   platform: PlatformInfo,
-  userData: UserData
-): OnboardingStep | null {
-  // Define step order with conditional inclusion
+  userData: Pick<UserData, "fda">
+): OnboardingStep {
   const steps: OnboardingStep[] = [];
 
   // 1. Phone type selection is always first
@@ -98,18 +104,10 @@ export function getNextOnboardingStep(
   steps.push("email-connect");
 
   // 4. macOS permissions (if not already granted)
-  // BACKLOG-3275: the `platform.isMacOS` guard is now carried by the union —
-  // `fdaBlocksOnboarding("not-applicable")` is false, which is exactly what the
-  // guard short-circuited to on Windows.
+  // BACKLOG-3275: `fdaBlocksOnboarding("not-applicable")` is false, which is
+  // exactly what an `isMacOS` guard would short-circuit to on Windows.
   if (fdaBlocksOnboarding(userData.fda)) {
     steps.push("permissions");
-  }
-
-  // 5. Windows + iPhone driver setup (if needed)
-  // Use userData.phoneType instead of platform.hasIPhone to check user's actual selection
-  // (fixes TASK-1180: platform.hasIPhone may not be updated yet when step completes)
-  if (platform.isWindows && userData.phoneType === "iphone" && userData.needsDriverSetup) {
-    steps.push("apple-driver");
   }
 
   // Find first uncompleted step
@@ -119,77 +117,7 @@ export function getNextOnboardingStep(
     }
   }
 
-  return null; // All steps complete
-}
-
-/**
- * Checks if onboarding is complete based on user data.
- * Onboarding is complete when the user has selected phone type and
- * platform-specific requirements are met.
- *
- * Email onboarding is optional for returning users - they can skip it
- * and connect email later from the dashboard.
- */
-function isOnboardingComplete(userData: UserData, platform: PlatformInfo, _isNewUser: boolean = false): boolean {
-  // Must have phone type selected
-  if (!userData.phoneType) {
-    return false;
-  }
-
-  // Email onboarding is required for ALL users (new and returning)
-  // This ensures the email-connect step is shown if not completed
-  // BUG FIX: Previously only checked for new users, causing returning users
-  // to skip the email step entirely
-  if (!userData.hasCompletedEmailOnboarding) {
-    return false;
-  }
-
-  // macOS must have permissions — OR have already declined them, with a data
-  // source that does not depend on them.
-  //
-  // BACKLOG-3212: before this, `!hasPermissions` alone forced every macOS user
-  // who declined Full Disk Access back into onboarding on EVERY launch. That
-  // made BACKLOG-1842's "Skip for now" unrepeatable in practice: the skip lived
-  // in a React useState Set and died with the process, and this check re-routed
-  // the user regardless. A user who cannot grant FDA at all (managed Mac) was
-  // onboarded forever.
-  //
-  // `fdaSkipped` is deliberately NOT folded into `hasPermissions`: skipping
-  // does not grant access to the local Messages database, and anything gating
-  // on that capability must keep reading `hasPermissions`.
-  //
-  // The `hasEmailConnected` conjunct is what keeps the BACKLOG-1821
-  // data-source floor intact. `hasCompletedEmailOnboarding` is also true for a
-  // user who SKIPPED email, so releasing on `fdaSkipped` alone would drop a
-  // user who skipped both email and FDA onto the dashboard with zero data
-  // sources — the floor would never fire again. A connected mailbox is
-  // strictly narrower than the floor's own accepted sources
-  // (dataSourceFloor.getSatisfyingSource: email, FDA, iPhone driver, Android),
-  // so this can never release someone the floor would have held. Users whose
-  // only source is Android or an iPhone driver still enter onboarding, but the
-  // queue now seeds `permissions` as answered, the floor passes, and the queue
-  // completes without re-asking.
-  //
-  // BACKLOG-3275: `fdaBlocksOnboarding` carries the platform check (it is false
-  // for "not-applicable"). The `hasEmailConnected` conjunct deliberately stays
-  // HERE rather than moving into that helper: it reads a second field, so it is
-  // not a projection of the Full Disk Access union and cannot be exhaustively
-  // checked on it.
-  if (fdaBlocksOnboarding(userData.fda)) {
-    const declinedWithAnotherSource =
-      userData.fda === "declined" && hasMinimumDataSourceForUser(userData, platform);
-    if (!declinedWithAnotherSource) {
-      return false;
-    }
-  }
-
-  // Windows + iPhone must not need driver setup
-  // Use userData.phoneType instead of platform.hasIPhone to check user's actual selection
-  if (platform.isWindows && userData.phoneType === "iphone" && userData.needsDriverSetup) {
-    return false;
-  }
-
-  return true;
+  return steps[steps.length - 1];
 }
 
 // ============================================
@@ -357,29 +285,10 @@ export function appStateReducer(
         };
       }
 
-      if (action.isNewUser) {
-        // New user - start onboarding immediately
-        // For new users, we don't need to load user data first
-        const firstStep = getNextOnboardingStep([], action.platform, {
-          phoneType: null,
-          hasCompletedEmailOnboarding: false,
-          hasEmailConnected: false,
-          needsDriverSetup: true, // Assume needed until checked
-          fda: unknownFdaFor(action.platform),
-        });
-
-        return {
-          status: "onboarding",
-          step: firstStep || "phone-type", // Default to phone-type if null
-          user: action.user,
-          platform: action.platform,
-          completedSteps: [],
-          deferredDbInit,
-        };
-      }
-
-      // Returning user - need to load their data
-      // Preserve deferredDbInit for returning users on fresh macOS installs
+      // BACKLOG-3673: every signed-in account loads its data, new or not.
+      // `isNewUser` means "terms are not current" -- AuthContext shows the terms
+      // screen from it. It never decides where the account lands; that is
+      // routeAccount, in USER_DATA_LOADED.
       return {
         status: "loading",
         phase: "loading-user-data",
@@ -400,27 +309,7 @@ export function appStateReducer(
       // Preserve deferredDbInit flag from unauthenticated state
       const deferredDbInit = state.deferredDbInit;
 
-      if (action.isNewUser) {
-        // New user - start onboarding immediately
-        const firstStep = getNextOnboardingStep([], action.platform, {
-          phoneType: null,
-          hasCompletedEmailOnboarding: false,
-          hasEmailConnected: false,
-          needsDriverSetup: true, // Assume needed until checked
-          fda: unknownFdaFor(action.platform),
-        });
-
-        return {
-          status: "onboarding",
-          step: firstStep || "phone-type", // Default to phone-type if null
-          user: action.user,
-          platform: action.platform,
-          completedSteps: [],
-          deferredDbInit,
-        };
-      }
-
-      // Returning user - need to load their data
+      // BACKLOG-3673: every signed-in account loads its data (see AUTH_LOADED).
       // Store user/platform in loading state for Phase 4 to use
       // Preserve deferredDbInit for returning users on fresh macOS installs
       return {
@@ -463,11 +352,26 @@ export function appStateReducer(
         };
       }
 
-      // Determine if onboarding is complete
-      // USER_DATA_LOADED is only called for returning users, so isNewUser = false
-      // This allows returning users to skip email onboarding and go to dashboard
-      if (isOnboardingComplete(data, platform, false)) {
-        // All onboarding complete - go to ready state
+      // BACKLOG-3673: the ONE routing decision. Only the per-account record
+      // decides; device state and the email-step answer do not.
+      const destination = routeAccount({ setup: data.setup }).destination;
+
+      // The record could not be read: show the account-settings error screen
+      // (Retry re-runs this phase via previousState; Sign out leaves). Never
+      // setup, never the dashboard.
+      if (destination === "unavailable") {
+        return {
+          status: "error",
+          error: {
+            code: "ACCOUNT_SETUP_UNAVAILABLE",
+            message: "The account setup record could not be read",
+          },
+          recoverable: true,
+          previousState: state,
+        };
+      }
+
+      if (destination === "dashboard") {
         return {
           status: "ready",
           user,
@@ -520,7 +424,7 @@ export function appStateReducer(
 
       return {
         status: "onboarding",
-        step: nextStep || "phone-type", // Fallback shouldn't happen
+        step: nextStep,
         user,
         platform,
         completedSteps,
@@ -545,6 +449,12 @@ export function appStateReducer(
         // "What phone do you use?" again. Record only what was loaded; `null`
         // stays unset and is never defaulted from the platform.
         selectedPhoneType: data.phoneType ?? undefined,
+        // BACKLOG-3673: answers the account already gave, on any computer. The
+        // setup queue seeds these steps as answered (OnboardingFlow).
+        accountAnswers: {
+          contactSource: data.contactSourceAnswered === true,
+          emailStep: data.hasCompletedEmailOnboarding === true,
+        },
         // Preserve deferredDbInit for first-time macOS installs (even for returning users)
         deferredDbInit,
       };
@@ -587,54 +497,19 @@ export function appStateReducer(
         }
       }
 
-      // Determine user data state based on completed steps
+      // BACKLOG-3673: completing a step NEVER leaves setup. The queue decides
+      // when setup is done and says so with ONBOARDING_QUEUE_DONE, after the
+      // per-account record has been written (OnboardingFlow.handleComplete).
+      // Before this, a null "next step" here returned `ready`, which let
+      // Windows users and FDA-granted Mac users reach the dashboard from the
+      // email step: data-sync and the data-source floor never ran, and the
+      // record was never written.
       //
-      // BACKLOG-3276: only a recorded selection counts. This used to fall back
-      // to `platform.hasIPhone ? "iphone" : "android"`, but every production
-      // producer of PlatformInfo sets hasIPhone to false, so the fallback wrote
-      // "android" for any user without a recorded selection, including iPhone
-      // users. An unanswered phone type stays null.
-      const phoneTypeForUserData: "iphone" | "android" | null = completedSteps.includes("phone-type")
-        ? (selectedPhoneType ?? null)
-        : null;
-
-      const userData: UserData = {
-        phoneType: phoneTypeForUserData,
-        hasCompletedEmailOnboarding: completedSteps.includes("email-connect"),
-        hasEmailConnected: state.hasEmailConnected ?? false,
-        needsDriverSetup:
-          state.platform.isWindows &&
-          selectedPhoneType === "iphone" &&
-          !completedSteps.includes("apple-driver"),
-        // BACKLOG-3275: carried through, never derived from `completedSteps`.
-        //
-        // This line used to read `completedSteps.includes("permissions")`. A
-        // user who DECLINED Full Disk Access has that entry — correctly, it
-        // means "asked and answered" — so completing any other step reported
-        // the capability as granted, and dropped the record of the decline in
-        // the same transition.
-        //
-        // Navigation does not decide capability. Only the permission probe and
-        // the user's own recorded answer do, and both reach this state before
-        // the transition.
+      // `fda` is still passed: it decides whether `permissions` is listed
+      // (BACKLOG-3275: carried through, never derived from completedSteps).
+      const nextStep = getNextOnboardingStep(completedSteps, state.platform, {
         fda: state.fda ?? unknownFdaFor(state.platform),
-      };
-
-      const nextStep = getNextOnboardingStep(
-        completedSteps,
-        state.platform,
-        userData
-      );
-
-      if (!nextStep) {
-        // All onboarding complete - transition to ready
-        return {
-          status: "ready",
-          user: state.user,
-          platform: state.platform,
-          userData,
-        };
-      }
+      });
 
       // Continue to next step
       return {
@@ -693,19 +568,6 @@ export function appStateReducer(
       };
     }
 
-    case "ONBOARDING_SKIP": {
-      if (state.status !== "onboarding") {
-        return state;
-      }
-
-      // Skipping is treated the same as completing for navigation
-      // The actual skip behavior (what data gets stored) is handled by orchestrator
-      return appStateReducer(state, {
-        type: "ONBOARDING_STEP_COMPLETE",
-        step: action.step,
-      });
-    }
-
     case "ONBOARDING_QUEUE_DONE": {
       // Queue-driven completion: the onboarding queue reports all steps are done.
       // Transition to ready state with userData derived from onboarding state.
@@ -722,6 +584,10 @@ export function appStateReducer(
         hasEmailConnected: state.hasEmailConnected ?? false,
         needsDriverSetup: false,
         fda: state.fda ?? unknownFdaFor(state.platform),
+        // BACKLOG-3673: OnboardingFlow.handleComplete has already asked main to
+        // write users.onboarding_completed_at before dispatching this.
+        setup: "finished",
+        contactSourceAnswered: true,
       };
 
       return {
@@ -739,8 +605,8 @@ export function appStateReducer(
           ...state,
           hasEmailConnected: true,
         };
-        // Recursively call reducer to complete the step and potentially transition to ready
-        // This ensures the flow advances after email OAuth completes
+        // Recursively call reducer to complete the step. BACKLOG-3673: that
+        // can no longer leave setup; the queue moves on to its next step.
         return appStateReducer(updatedState, {
           type: "ONBOARDING_STEP_COMPLETE",
           step: "email-connect",
@@ -755,6 +621,9 @@ export function appStateReducer(
           userData: {
             ...state.userData,
             hasEmailConnected: true,
+            // BACKLOG-3888: main has just recorded the provider in the cloud
+            // set; mirror it so a later disconnect this session is noticed.
+            hasRecordedEmailProvider: true,
           },
         };
       }
@@ -772,7 +641,10 @@ export function appStateReducer(
           ...state,
           userData: {
             ...state.userData,
-            hasEmailConnected: false,
+            // BACKLOG-3888: disconnecting ONE of two mailboxes leaves the
+            // user connected. Callers that know the remaining state pass it;
+            // without it, the previous behaviour (false) is kept.
+            hasEmailConnected: action.anyStillConnected === true,
           },
         };
       }
@@ -835,6 +707,12 @@ export function appStateReducer(
         // now carries both the capability and the recorded answer, so neither
         // can be dropped while the other survives.
         fda: state.userData.fda,
+        // BACKLOG-3673: the contacts answer is not asked again. The email step
+        // is deliberately NOT seeded -- connecting it is why this was opened.
+        accountAnswers: {
+          contactSource: state.userData.contactSourceAnswered === true,
+          emailStep: false,
+        },
       };
     }
 

@@ -56,6 +56,7 @@ import { dbGet, dbAll, dbRun } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
 import { validateFields, type ColumnOf } from "../../utils/sqlFieldWhitelist";
 import { isTextMessage } from "../../utils/channelHelpers";
+import { dedupeLinkedCommunicationRows } from "./linkedRowDedup";
 import { dbTimestampNow } from "../../utils/dbTimestamp";
 import logService from "../logService";
 import { placeholderList } from "./core/sqlFragments";
@@ -930,8 +931,15 @@ export async function getCommunicationsWithMessages(
       -- reactions) come back once per user. c.user_id is the user who made the
       -- link. It must be here, BEFORE the dedup: filtering afterwards can drop
       -- the survivor whose own copy the dedup already discarded.
+      -- BACKLOG-3785: +m.user_id, not m.user_id. The unary plus keeps the
+      -- filter and stops SQLite from driving this branch by user_id. With no
+      -- sqlite_stat1 (the normal state: ANALYZE runs only from maintenance)
+      -- the planner chose idx_messages_user_sent (user_id=?) and scanned EVERY
+      -- message of the user for EVERY communications row: 175 rows took 51.8 s
+      -- on a 670k-message profile. With the plus it searches
+      -- idx_messages_thread_id: 7 ms, same rows.
       (c.message_id IS NULL AND c.email_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id
-       AND m.user_id = c.user_id)
+       AND +m.user_id = c.user_id)
     )
     LEFT JOIN emails e ON (
       -- BACKLOG-506: Email linking - join only when email_id is set and matches
@@ -970,71 +978,9 @@ export async function getCommunicationsWithMessages(
 
   const results = dbAll<Communication>(statement, params);
 
-  // Deduplicate by message ID first
-  const seenIds = new Set<string>();
-  const dedupedById = results.filter(r => {
-    if (seenIds.has(r.id)) return false;
-    seenIds.add(r.id);
-    return true;
-  });
-
-  // Content-based deduplication for text messages
-  // Catches cases where same content exists with different IDs
-  const isTextRow = (r: Communication): boolean => {
-    const channel = (r as { channel?: string }).channel;
-    const commType = (r as { communication_type?: string }).communication_type;
-    return channel === 'sms' || channel === 'imessage' ||
-           commType === 'sms' || commType === 'imessage';
-  };
-  const contentKeyOf = (r: Communication): string =>
-    `${(r as { body_text?: string }).body_text || ''}|${(r as { sent_at?: string }).sent_at || ''}`;
-  const isHiddenRow = (r: Communication): boolean =>
-    !!(r as { hidden_from_export?: 0 | 1 }).hidden_from_export;
-
-  // BACKLOG-3366: WITHIN A CONTENT GROUP, A HIDDEN COPY WINS.
-  //
-  // Which duplicate survives the first-wins rule below is decided by row order,
-  // and two duplicates share `sent_at` by definition, so the tie is broken by
-  // insertion order of the `communications` and `messages` rows (measured in
-  // the SR plan review). Removing and restoring a conversation re-inserts its
-  // link rows, so the copy a user hid can stop being the survivor later — and
-  // then the UNHIDDEN copy is what the export reads. Keeping the hidden copy
-  // also keeps the gray bubble and the stored row on the same id, so Unhide on
-  // that bubble deletes the row it is looking at.
-  const hiddenContent = new Set<string>();
-  for (const r of dedupedById) {
-    if (!isTextRow(r) || !isHiddenRow(r)) continue;
-    if (((r as { body_text?: string }).body_text || '').trim().length === 0) continue;
-    hiddenContent.add(contentKeyOf(r));
-  }
-
-  const seenContent = new Set<string>();
-  const deduped = dedupedById.filter(r => {
-    if (!isTextRow(r)) return true;
-
-    const bodyText = (r as { body_text?: string }).body_text || '';
-
-    // BACKLOG-2280 (I2): content-dedup keys on `bodyText|sentAt`, but MANY distinct
-    // rows now share an empty body — reactions (empty by design) AND caption-less
-    // media (empty since BACKLOG-2262). Two empty-body rows at the same second are
-    // DIFFERENT messages, so keying them on content would wrongly collapse them
-    // (e.g. two reactions in the same second, or a reaction that coincides with a
-    // caption-less photo). Empty-body rows are already de-duplicated by id above;
-    // exempt them from content-dedup entirely.
-    if (bodyText.trim().length === 0) return true;
-
-    const contentKey = contentKeyOf(r);
-
-    if (seenContent.has(contentKey)) return false;
-    // BACKLOG-3366: a group that contains a hidden copy keeps the first HIDDEN
-    // copy, so an unhidden duplicate is dropped even when it comes first.
-    if (hiddenContent.has(contentKey) && !isHiddenRow(r)) return false;
-    seenContent.add(contentKey);
-    return true;
-  });
-
-  return deduped;
+  return dedupeLinkedCommunicationRows(results);
 }
+
 
 /**
  * Check if a message is already linked to a transaction
@@ -1271,24 +1217,53 @@ function countTextThreadsForTransactionInternal(transactionId: string): number {
   // BACKLOG-506: Since communications is now a pure junction table, we ONLY check
   // m.channel from the messages table. Thread-based links (c.thread_id) are always
   // for text messages by design.
+  //
+  // BACKLOG-3883: one row per LINK, not one row per message. A thread link used to be
+  // joined to every message of its thread and each row handed to JS, only for every one
+  // of them to produce the same key (the thread id). This runs after every link, so
+  // linking a party's long chats read every message of every chat already linked, again
+  // and again, on the main process: 0.68 s for 4 links at 668k texts on a Mac, and the
+  // seconds-long freeze when the founder's PC created a deal. The rows below produce the
+  // same keys:
+  //   - a thread link whose thread has a text message  -> key = the thread id
+  //   - a thread link whose thread has no message at all -> key from the link id
+  //     (the old LEFT JOIN found no row: thread_id NULL, participants NULL)
+  //   - a thread link whose thread has only non-text messages -> no row (filtered)
+  //   - a message link -> unchanged: its one message, or the link when it is gone
   const statement = sql`
     SELECT
-      COALESCE(m.id, c.id) as id,
-      m.thread_id as thread_id,
-      m.participants as participants
+      c.id AS id,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM messages m
+        WHERE m.thread_id = c.thread_id AND m.channel IN ('text', 'sms', 'imessage')
+      ) THEN c.thread_id END AS thread_id,
+      NULL AS participants
     FROM communications c
-    LEFT JOIN messages m ON (
-      (c.message_id IS NOT NULL AND c.message_id = m.id)
-      OR
-      (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id)
-    )
     WHERE c.transaction_id = ?
+      AND c.message_id IS NULL
+      AND c.thread_id IS NOT NULL
+      AND (
+        EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m.thread_id = c.thread_id AND m.channel IN ('text', 'sms', 'imessage')
+        )
+        OR NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = c.thread_id)
+      )
+    UNION ALL
+    SELECT
+      COALESCE(m.id, c.id) AS id,
+      m.thread_id AS thread_id,
+      m.participants AS participants
+    FROM communications c
+    LEFT JOIN messages m ON m.id = c.message_id
+    WHERE c.transaction_id = ?
+      AND c.message_id IS NOT NULL
       AND (m.channel IN ('text', 'sms', 'imessage') OR (m.id IS NULL AND c.thread_id IS NOT NULL))
   `;
 
   const messages = dbAll<{ id: string; thread_id: string | null; participants: string | null }>(
     statement,
-    [transactionId]
+    [transactionId, transactionId]
   );
 
   // Group messages by thread using the same logic as frontend

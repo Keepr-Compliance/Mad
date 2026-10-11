@@ -76,8 +76,6 @@
  */
 
 import path from "path";
-import fs from "fs";
-import os from "os";
 import type { Database as DatabaseType } from "better-sqlite3";
 
 // Bypass the jest moduleNameMapper that rewrites better-sqlite3-multiple-ciphers

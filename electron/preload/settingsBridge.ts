@@ -91,6 +91,42 @@ export const userBridge = {
     userId: string
   ): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke("user:sync-phone-type-from-cloud", userId),
+
+  /**
+   * BACKLOG-3673: the per-account "setup finished" record for the session user.
+   * Takes no user id on purpose: main reads the signed-in session's id.
+   */
+  getAccountSetup: (): Promise<{
+    success: boolean;
+    setup: "finished" | "not-finished" | "unknown";
+    emailStepAnswered: boolean;
+    contactSourceAnswered: boolean;
+    /** BACKLOG-3888: recorded mailbox providers ("outlook" / "gmail"). */
+    emailProviders?: string[];
+    error?: string;
+  }> => ipcRenderer.invoke("user:get-account-setup"),
+
+  /**
+   * BACKLOG-3673: record that setup finished (write-once) for the session user.
+   */
+  completeAccountSetup: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("user:complete-account-setup"),
+
+  /**
+   * BACKLOG-3674: has the session user's account dismissed the dashboard tour?
+   * Takes no user id on purpose: main reads the signed-in session's id.
+   */
+  getTourState: (): Promise<{
+    success: boolean;
+    tour: "dismissed" | "not-dismissed" | "unknown";
+    error?: string;
+  }> => ipcRenderer.invoke("user:get-tour-state"),
+
+  /**
+   * BACKLOG-3674: record that the session user's account dismissed the tour.
+   */
+  dismissTour: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("user:dismiss-tour"),
 };
 
 /**
@@ -126,6 +162,10 @@ export const logBridge = {
   send: (level: string, message: string): void => {
     ipcRenderer.send("log:renderer", level, message);
   },
+  /** BACKLOG-3785: the screen NAME now shown (freeze telemetry). Names only. */
+  reportScreen: (name: string): void => {
+    ipcRenderer.send("telemetry:screen-name", name);
+  },
 };
 
 /**
@@ -157,4 +197,12 @@ export const shellBridge = {
    */
   openFolder: (folderPath: string) =>
     ipcRenderer.invoke("open-folder", folderPath),
+
+  /**
+   * Opens the bundled third-party notices file (BACKLOG-3803).
+   * No arguments: the main process decides which file to open.
+   * @returns Open result
+   */
+  openThirdPartyNotices: () =>
+    ipcRenderer.invoke("shell:open-third-party-notices"),
 };

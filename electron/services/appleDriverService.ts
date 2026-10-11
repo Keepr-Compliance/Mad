@@ -7,14 +7,17 @@
  * The drivers are bundled with the app but only installed with user consent.
  */
 
+// BACKLOG-3806: every Apple installer is checked before Windows runs it.
+import { powershellPath, verifyAppleSignature } from "./appleInstallerSignature";
 import { exec, execFile, spawn } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import fs from "fs";
-import https from "https";
 import { app } from "electron";
 import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
+import { isWindowsArm64 } from "../utils/windowsArm64";
+import { mainNetFetch } from "./mainNetFetch";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -73,6 +76,7 @@ export type DriverFailureReason =
   | "network_error"
   | "extraction_failed"
   | "msi_not_found"
+  | "signature_invalid"
   | "user_cancelled"
   | "unknown";
 
@@ -308,20 +312,11 @@ async function checkAppleMobileDeviceService(): Promise<boolean> {
 
 /**
  * Get path to bundled Apple driver MSI
- * Checks both bundled resources and previously downloaded drivers
+ * Checks the copy shipped with the app first, then previously downloaded
+ * drivers (BACKLOG-3806: bundled first). Whichever is chosen is
+ * signature-checked before it is installed.
  */
 export function getBundledDriverPath(): string | null {
-  // First, check for previously downloaded drivers
-  const downloadedPath = getDownloadedDriverPath();
-  if (downloadedPath) {
-    log.info(
-      "[AppleDriverService] Using downloaded driver at:",
-      downloadedPath,
-    );
-    return downloadedPath;
-  }
-
-  // Then check bundled resources
   const isDev = !app.isPackaged;
 
   let basePath: string;
@@ -341,6 +336,16 @@ export function getBundledDriverPath(): string | null {
   const altPath = path.join(basePath, "AppleMobileDeviceSupport.msi");
   if (fs.existsSync(altPath)) {
     return altPath;
+  }
+
+  // Then previously downloaded drivers
+  const downloadedPath = getDownloadedDriverPath();
+  if (downloadedPath) {
+    log.info(
+      "[AppleDriverService] Using downloaded driver at:",
+      downloadedPath,
+    );
+    return downloadedPath;
   }
 
   log.warn("[AppleDriverService] No driver MSI found (bundled or downloaded)");
@@ -365,6 +370,27 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
     return {
       success: false,
       error: "Driver installation only supported on Windows",
+      rebootRequired: false,
+    };
+  }
+
+  // BACKLOG-3363: Apple's driver is x64-only and cannot load on Windows on ARM.
+  // Refuse before any installer runs. Not a driver failure, so nothing is
+  // reported to Sentry and no install breadcrumb is emitted. The renderer
+  // never offers Install on these PCs; this is the main-process backstop.
+  if (
+    isWindowsArm64(
+      process.platform,
+      process.arch,
+      app?.runningUnderARM64Translation,
+    )
+  ) {
+    log.info(
+      "[AppleDriverService] Windows on ARM: Apple driver install not supported, skipping",
+    );
+    return {
+      success: false,
+      error: "iPhone USB sync isn't supported on this PC",
       rebootRequired: false,
     };
   }
@@ -394,19 +420,61 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
 
   log.info("[AppleDriverService] Installing Apple drivers from:", msiPath);
 
-  Sentry.addBreadcrumb({
-    category: "driver.install",
-    message: "Running MSI installer",
-    level: "info",
-    data: { msiPathAvailable: true },
-  });
+  // BACKLOG-3806: install from a private copy, and check the signature of
+  // that exact copy - the same path is then handed to msiexec.
+  let stagingDir: string | null = null;
+  let installPath: string;
+  try {
+    const staged = stageInstallerCopy(msiPath);
+    stagingDir = staged.dir;
+    installPath = staged.file;
+  } catch (error) {
+    // Node fs errors embed full paths (including the Windows user name), so
+    // nothing from the error is logged to Sentry or returned to the user.
+    log.error("[AppleDriverService] Could not prepare installer copy:", error);
+    Sentry.addBreadcrumb({
+      category: "driver.install",
+      message: STAGING_FAILURE_MESSAGE,
+      level: "error",
+    });
+    const stagingFailure: DriverInstallResult = {
+      success: false,
+      error: STAGING_FAILURE_MESSAGE,
+      rebootRequired: false,
+    };
+    reportInstallFailure(stagingFailure, msiPath);
+    return stagingFailure;
+  }
 
   try {
+
+    const signature = await verifyAppleSignature(installPath);
+    if (!signature.ok) {
+      log.error(
+        "[AppleDriverService] Refusing to install: installer is not validly signed by Apple",
+        { reason: signature.reason, status: signature.status, subject: signature.subject },
+      );
+      const refused: DriverInstallResult = {
+        success: false,
+        error: SIGNATURE_REFUSAL_MESSAGE,
+        rebootRequired: false,
+      };
+      reportSignatureRefusal("install", signature);
+      return refused;
+    }
+
+    Sentry.addBreadcrumb({
+      category: "driver.install",
+      message: "Running MSI installer",
+      level: "info",
+      data: { msiPathAvailable: true },
+    });
+
     // Run MSI installer silently
     // /qn = quiet, no UI
     // /norestart = don't restart automatically
     // REBOOT=ReallySuppress = suppress reboot prompts
-    const result = await runMsiInstaller(msiPath);
+    const result = await runMsiInstaller(installPath);
 
     if (result.success) {
       log.info("[AppleDriverService] Installer reported success, verifying...");
@@ -480,43 +548,84 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
     };
     reportInstallFailure(errorResult, msiPath);
     return errorResult;
+  } finally {
+    if (stagingDir) removeDirQuietly(stagingDir);
   }
+}
+
+/** Fixed text for a failure to copy the installer (BACKLOG-3806); never includes error text or paths. */
+export const STAGING_FAILURE_MESSAGE = "Could not prepare the installer copy.";
+
+/** Shown when an installer fails the Apple signature check (BACKLOG-3806). */
+export const SIGNATURE_REFUSAL_MESSAGE =
+  "The Apple driver installer could not be verified as signed by Apple, so it was not installed. Please install iTunes from the Microsoft Store instead.";
+
+/**
+ * Copy the installer into a new, randomly named directory Keepr has just
+ * created. The copy is what gets checked and installed.
+ */
+function stageInstallerCopy(sourcePath: string): { dir: string; file: string } {
+  const dir = fs.mkdtempSync(path.join(app.getPath("temp"), "keepr-amds-"));
+  const file = path.join(dir, path.basename(sourcePath));
+  try {
+    fs.copyFileSync(sourcePath, file);
+  } catch (error) {
+    removeDirQuietly(dir);
+    throw error;
+  }
+  return { dir, file };
+}
+
+function removeDirQuietly(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (error) {
+    log.warn("[AppleDriverService] Could not remove temporary installer copy:", error);
+  }
+}
+
+function reportSignatureRefusal(
+  phase: "install" | "download" | "extract",
+  check: { reason: string; status: string | null; subject: string | null },
+): void {
+  if (process.platform !== "win32") return;
+  Sentry.captureMessage("Apple driver installer failed signature check", {
+    level: "error",
+    tags: {
+      component: "apple_driver",
+      platform: "win32",
+      failureReason: "signature_invalid",
+    },
+    extra: {
+      phase,
+      reason: check.reason,
+      status: check.status,
+      subject: check.subject,
+    },
+  });
 }
 
 /**
  * Run MSI installer with elevated privileges using PowerShell
  * This triggers the UAC prompt for admin elevation
  *
- * SECURITY AUDIT (TASK-601):
- * This function uses spawn("powershell", ...) with msiPath embedded in the command.
- *
- * RISK ANALYSIS:
- * - msiPath comes from getBundledDriverPath() which returns paths from:
- *   1. getDownloadedDriverPath() - paths within app.getPath("userData")
- *   2. Bundled resources (process.resourcesPath or __dirname)
- * - The path is NOT user-controlled - it's constructed internally from known directories
- * - The path is validated by fs.existsSync() before being used
- *
- * CONCLUSION: SAFE - No user-controlled input flows into the spawn command.
- * The msiPath is always from trusted internal sources (bundled resources or app's
- * userData directory with fixed subdirectory structure).
- *
- * DEFENSE-IN-DEPTH: The path is quoted in the PowerShell command to handle
- * paths with spaces, and msiexec.exe is the target executable (a known Windows binary).
+ * The MSI path reaches PowerShell only through an environment variable, never
+ * as command text, and has been signature-checked by the caller (BACKLOG-3806).
  */
+/** Environment variable that carries the MSI path to PowerShell. */
+export const MSI_PATH_ENV = "KEEPR_MSI_PATH";
+
 function runMsiInstaller(msiPath: string): Promise<DriverInstallResult> {
   return new Promise((resolve) => {
-    // Build msiexec arguments
-    // SECURITY: msiPath is from trusted internal sources (bundled or userData)
-    const msiArgs = `/i "${msiPath}" /qn /norestart REBOOT=ReallySuppress`;
-
     // Use PowerShell Start-Process with -Verb RunAs to trigger UAC elevation
     // -Wait ensures we wait for the installation to complete
     // -PassThru returns the process object so we can get the exit code
     // Wrap in try-catch to properly handle UAC decline (which throws an exception)
     const psCommand = `
       try {
-        $process = Start-Process -FilePath "msiexec.exe" -ArgumentList '${msiArgs}' -Verb RunAs -Wait -PassThru -ErrorAction Stop
+        $msiexec = Join-Path $env:SystemRoot 'System32\\msiexec.exe'
+        $msiArgs = '/i "' + $env:${MSI_PATH_ENV} + '" /qn /norestart REBOOT=ReallySuppress'
+        $process = Start-Process -FilePath $msiexec -ArgumentList $msiArgs -Verb RunAs -Wait -PassThru -ErrorAction Stop
         exit $process.ExitCode
       } catch {
         # UAC declined or other error starting the elevated process
@@ -526,11 +635,16 @@ function runMsiInstaller(msiPath: string): Promise<DriverInstallResult> {
     `.trim();
 
     log.info("[AppleDriverService] Running elevated installer via PowerShell");
-    log.info("[AppleDriverService] msiexec args:", msiArgs);
+    log.info("[AppleDriverService] msiexec package:", msiPath);
 
-    const installer = spawn("powershell", ["-Command", psCommand], {
-      shell: false,
-    });
+    const installer = spawn(
+      powershellPath(),
+      ["-NoProfile", "-NonInteractive", "-Command", psCommand],
+      {
+        shell: false,
+        env: { ...process.env, [MSI_PATH_ENV]: msiPath },
+      },
+    );
 
     let stderr = "";
     let stdout = "";
@@ -627,63 +741,48 @@ async function startAppleMobileDeviceService(): Promise<void> {
 }
 
 /**
- * Download a file from URL to destination
+ * Download a file from URL to destination.
+ *
+ * BACKLOG-3799: over Electron net.fetch (Chromium TLS + OS certificate
+ * store), not Node's `https`, so a TLS-inspecting antivirus does not break
+ * the driver download. Redirects are followed by the transport.
  */
-function downloadFile(
+async function downloadFile(
   url: string,
   destPath: string,
   onProgress?: (percent: number) => void,
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(destPath);
+  const response = await mainNetFetch(url, { redirect: "follow" });
+  if (response.status !== 200 || !response.body) {
+    throw new Error(`Failed to download: HTTP ${response.status}`);
+  }
 
-    const request = https.get(url, (response) => {
-      // Handle redirects
-      if (response.statusCode === 301 || response.statusCode === 302) {
-        const redirectUrl = response.headers.location;
-        if (redirectUrl) {
-          file.close();
-          fs.unlinkSync(destPath);
-          downloadFile(redirectUrl, destPath, onProgress)
-            .then(resolve)
-            .catch(reject);
-          return;
-        }
+  const totalSize = parseInt(response.headers.get("content-length") || "0", 10);
+  let downloadedSize = 0;
+  const file = fs.createWriteStream(destPath);
+  const reader = response.body.getReader();
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      downloadedSize += value.length;
+      if (!file.write(value)) {
+        await new Promise<void>((resolve) => file.once("drain", resolve));
       }
-
-      if (response.statusCode !== 200) {
-        reject(new Error(`Failed to download: HTTP ${response.statusCode}`));
-        return;
+      if (onProgress && totalSize > 0) {
+        onProgress(Math.round((downloadedSize / totalSize) * 100));
       }
-
-      const totalSize = parseInt(response.headers["content-length"] || "0", 10);
-      let downloadedSize = 0;
-
-      response.on("data", (chunk) => {
-        downloadedSize += chunk.length;
-        if (onProgress && totalSize > 0) {
-          onProgress(Math.round((downloadedSize / totalSize) * 100));
-        }
-      });
-
-      response.pipe(file);
-
-      file.on("finish", () => {
-        file.close();
-        resolve();
-      });
+    }
+    await new Promise<void>((resolve, reject) => {
+      file.once("error", reject);
+      file.end(() => resolve());
     });
-
-    request.on("error", (err) => {
-      fs.unlink(destPath, () => {}); // Delete partial file
-      reject(err);
-    });
-
-    file.on("error", (err) => {
-      fs.unlink(destPath, () => {}); // Delete partial file
-      reject(err);
-    });
-  });
+  } catch (err) {
+    file.destroy();
+    fs.unlink(destPath, () => {}); // Delete partial file
+    throw err;
+  }
 }
 
 /**
@@ -782,7 +881,11 @@ function findFilesRecursive(
  */
 function validateShellPath(p: string): string {
   // Only allow alphanumeric, path separators, dots, hyphens, underscores, spaces
-  if (/[`$|;&<>(){}!\[\]'"\\*?~#]/.test(p)) {
+  // A backslash is the path separator on Windows (traversal is checked below),
+  // so it is only rejected where it is not one.
+  const unsafe =
+    path.sep === "\\" ? /[`$|;&<>(){}!\[\]'"*?~#]/ : /[`$|;&<>(){}!\[\]'"\\*?~#]/;
+  if (unsafe.test(p)) {
     throw new Error(`Unsafe characters in path: ${p}`);
   }
   // Reject path traversal sequences (.. as a path component)
@@ -954,6 +1057,25 @@ export async function downloadAppleDrivers(
       onProgress?.({ phase: "downloading", percent }),
     );
 
+    // BACKLOG-3806: check the downloaded installer before anything opens or
+    // runs it; an unverified file is deleted, never extracted.
+    if (process.platform === "win32") {
+      const installerCheck = await verifyAppleSignature(installerPath);
+      if (!installerCheck.ok) {
+        log.error(
+          "[AppleDriverService] Downloaded installer is not validly signed by Apple; deleting it",
+          { reason: installerCheck.reason, status: installerCheck.status, subject: installerCheck.subject },
+        );
+        try {
+          fs.unlinkSync(installerPath);
+        } catch {
+          // Ignore cleanup errors
+        }
+        reportSignatureRefusal("download", installerCheck);
+        return { success: false, error: SIGNATURE_REFUSAL_MESSAGE };
+      }
+    }
+
     log.info("[AppleDriverService] Download complete, extracting...");
     onProgress?.({ phase: "extracting", percent: 0 });
 
@@ -986,6 +1108,21 @@ export async function downloadAppleDrivers(
         error:
           "Could not extract Apple drivers from installer. Please install iTunes manually.",
       };
+    }
+
+    // BACKLOG-3806: the extracted MSI is checked too; a failure removes
+    // everything extracted so it is never picked up later.
+    if (process.platform === "win32") {
+      const msiCheck = await verifyAppleSignature(msiPath);
+      if (!msiCheck.ok) {
+        log.error(
+          "[AppleDriverService] Extracted MSI is not validly signed by Apple; deleting extracted files",
+          { reason: msiCheck.reason, status: msiCheck.status, subject: msiCheck.subject },
+        );
+        removeDirQuietly(extractDir);
+        reportSignatureRefusal("extract", msiCheck);
+        return { success: false, error: SIGNATURE_REFUSAL_MESSAGE };
+      }
     }
 
     onProgress?.({ phase: "complete", percent: 100 });

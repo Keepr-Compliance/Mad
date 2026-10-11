@@ -36,6 +36,7 @@ import TransactionList from "../TransactionList";
 import type { Transaction } from "../../../electron/types/models";
 import {
   envelopeOf,
+  fixtureAttachments,
   fixtureChecklist,
 } from "../transactionDetailsModule/components/checklist/__tests__/checklistFixture";
 
@@ -431,6 +432,40 @@ describe("BACKLOG-3595: broker-added checklist appears in an open transaction", 
       await new Promise((r) => setTimeout(r, 300));
     });
     expect(count()).toBe(before);
+  });
+
+  /**
+   * BACKLOG-3764 (SR PR review pm_comments e1199f9f on BACKLOG-3764): the
+   * Checklist tab gets the FULL attachment list, never only the ones inside the
+   * deal's dates. Main asks about out-of-dates evidence at link time; a picker
+   * fed the in-window list would hide it instead of asking.
+   * Wrong build this catches: `attachments={attachments.filter((a) =>
+   * attachmentsInWindowIds.has(a.id))}` on the Checklist tab.
+   */
+  it("BACKLOG-3764: the link picker offers an attachment outside the deal's dates", async () => {
+    const all = fixtureAttachments();
+    const [inside, outside] = [all[0], all[1]];
+    serverRows.set(TXN_A, {
+      ...txn(TXN_A, ADDR_A, "submitted"),
+      started_at: "2026-09-01",
+      closed_at: "2026-09-30",
+    } as unknown as Transaction);
+    // The windowed read (dates passed) returns only `inside`; the full read returns both.
+    api().transactions.getAllAttachments.mockImplementation(
+      async (_id: string, start?: string, end?: string) => ({
+        success: true,
+        data: start || end ? [inside] : [inside, outside],
+      }),
+    );
+    await openDetails(ADDR_A);
+    await openChecklistTab();
+    const item = AGENT.items[0];
+    fireEvent.click(modal().getByTestId(`checklist-open-picker-${item.id}`));
+    await screen.findByTestId("checklist-picker-attachments");
+    // PRECONDITION: the windowed read happened, so in-window ids exist to filter by.
+    expect(api().transactions.getAllAttachments.mock.calls.some((c: unknown[]) => c[1] || c[2])).toBe(true);
+    await waitFor(() => expect(screen.getByTestId(`checklist-picker-attachment-${inside.id}`)).toBeInTheDocument());
+    expect(screen.getByTestId(`checklist-picker-attachment-${outside.id}`)).toBeInTheDocument();
   });
 
   it("C6: the checklists-changed listener is removed when the details close", async () => {

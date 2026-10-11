@@ -315,12 +315,30 @@ export interface ResolvedLog {
   path?: string;
 }
 
+/**
+ * BACKLOG-3819: the desktop log is encrypted at rest (header "KEPRLOG"). A CLI
+ * cannot decrypt it — the data key is wrapped by the OS keychain and opens only
+ * inside the signed app — and scanning ciphertext would report 0 leaks / 0
+ * markers, a green that means nothing. Such a file is skipped. To scan a real
+ * log, save one from the app (Settings > Troubleshooting > Save diagnostic log)
+ * and list that file in `logPaths`.
+ */
+export function isSealedLogBuffer(buf: Buffer): boolean {
+  return buf.length >= 7 && buf.subarray(0, 7).toString('latin1') === 'KEPRLOG';
+}
+
 function readRealLog(bundle: EdgeExpectationBundle): ResolvedLog | null {
   const cfg = bundle.scenario.edgeCases?.logScan;
   for (const p of cfg?.logPaths ?? []) {
     const abs = expandPath(p);
     try {
-      if (fs.existsSync(abs)) return { text: fs.readFileSync(abs, 'utf8'), source: 'real-log', path: abs };
+      if (!fs.existsSync(abs)) continue;
+      const buf = fs.readFileSync(abs);
+      if (isSealedLogBuffer(buf)) {
+        console.warn(`[edge-case] ${abs} is encrypted; skipped. Use Settings > Troubleshooting > Save diagnostic log.`);
+        continue;
+      }
+      return { text: buf.toString('utf8'), source: 'real-log', path: abs };
     } catch {
       /* try next */
     }

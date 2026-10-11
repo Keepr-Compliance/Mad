@@ -266,9 +266,9 @@ describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
       const msg = BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE;
       // Presence first: indexOf returns -1 for an absent token, and -1 < n passes.
       expect(msg).toContain("try syncing again");
-      expect(msg).toContain("plug the iPhone straight into this Mac");
+      expect(msg).toContain("plug the iPhone straight into this computer");
       expect(msg.indexOf("try syncing again")).toBeGreaterThanOrEqual(0);
-      expect(msg.indexOf("plug the iPhone straight into this Mac")).toBeGreaterThan(
+      expect(msg.indexOf("plug the iPhone straight into this computer")).toBeGreaterThan(
         msg.indexOf("try syncing again"),
       );
     });

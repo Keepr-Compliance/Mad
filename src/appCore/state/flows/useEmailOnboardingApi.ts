@@ -19,7 +19,7 @@
  * TASK-1612: Migrated to use authService instead of direct window.api calls.
  */
 
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { authService } from "@/services";
 import {
   useOptionalMachineState,
@@ -44,11 +44,14 @@ interface UseEmailOnboardingApiReturn {
    * @param connected - Whether email is connected
    * @param email - The connected email address (required for state machine)
    * @param provider - The email provider (required for state machine)
+   * @param anyStillConnected - On a disconnect: another mailbox is still
+   *   connected (BACKLOG-3888). Omitted = none.
    */
   setHasEmailConnected: (
     connected: boolean,
     email?: string,
-    provider?: "google" | "microsoft"
+    provider?: "google" | "microsoft",
+    anyStillConnected?: boolean
   ) => void;
   completeEmailOnboarding: () => Promise<void>;
 }
@@ -66,6 +69,15 @@ export function useEmailOnboardingApi({
   }
 
   const { state, dispatch } = machineState;
+
+  // BACKLOG-3673: latest state for callbacks that must keep a stable identity.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  // BACKLOG-3673 (closes BACKLOG-3338's missing writer): the account's answer
+  // to the email step is recorded ONCE per run, by whichever path answers it
+  // first -- connecting a mailbox during setup, or skipping.
+  const emailAnswerRecordedRef = useRef(false);
 
   // Derive hasCompletedEmailOnboarding from state machine
   const hasCompletedEmailOnboarding = selectHasCompletedEmailOnboarding(state);
@@ -95,9 +107,36 @@ export function useEmailOnboardingApi({
     (
       connected: boolean,
       email?: string,
-      provider?: "google" | "microsoft"
+      provider?: "google" | "microsoft",
+      anyStillConnected?: boolean
     ) => {
       if (connected && email && provider) {
+        // BACKLOG-3673: connecting a mailbox DURING SETUP answers the email
+        // step. Before this, only Skip recorded that answer on the server, so
+        // an account that connected was asked the email step again on every
+        // new computer. Fire-and-log: the answer only seeds a later resume.
+        const current = stateRef.current;
+        if (current.status === "onboarding" && !emailAnswerRecordedRef.current) {
+          emailAnswerRecordedRef.current = true;
+          const answeringUserId = current.user.id;
+          void authService
+            .completeEmailOnboarding(answeringUserId)
+            .then((result) => {
+              if (!result.success) {
+                logger.warn(
+                  "[useEmailOnboardingApi] Recording the email-step answer failed:",
+                  result.error
+                );
+              }
+            })
+            .catch((error: unknown) => {
+              logger.warn(
+                "[useEmailOnboardingApi] Recording the email-step answer failed:",
+                error
+              );
+            });
+        }
+
         // Dispatch EMAIL_CONNECTED to update state machine
         dispatch({
           type: "EMAIL_CONNECTED",
@@ -109,6 +148,7 @@ export function useEmailOnboardingApi({
         dispatch({
           type: "EMAIL_DISCONNECTED",
           provider,
+          ...(anyStillConnected === true ? { anyStillConnected: true } : {}),
         });
       }
       // If missing provider info, no-op (state machine is source of truth)
@@ -127,6 +167,7 @@ export function useEmailOnboardingApi({
     if (!currentUserId) return;
 
     try {
+      emailAnswerRecordedRef.current = true;
       const result = await authService.completeEmailOnboarding(currentUserId);
       if (!result.success) {
         logger.warn(

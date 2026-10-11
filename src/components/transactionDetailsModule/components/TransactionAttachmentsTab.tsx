@@ -16,7 +16,7 @@
  * on demand (reconciling the metadata row in place — BACKLOG-1870), then the
  * refreshed row is previewed.
  */
-import React, { useMemo, useState, useCallback } from "react";
+import React, { useMemo, useState } from "react";
 import { AttachmentCard } from "./AttachmentCard";
 import { GroupedMultiSelect, type OptionGroup } from "../../shared/GroupedMultiSelect";
 import type { UnifiedAttachment } from "../hooks/useTransactionAllAttachments";
@@ -294,10 +294,21 @@ export function TransactionAttachmentsTab({
       {/* Download error banner */}
       {downloadMessage && (
         <div
-          className="mb-4 p-3 bg-amber-50 border border-amber-100 rounded-lg text-sm text-amber-700"
+          className="mb-4 p-3 bg-amber-50 border border-amber-100 rounded-lg text-sm text-amber-700 flex items-center justify-between gap-3"
           data-testid="attachments-download-message"
+          role="alert"
         >
-          {downloadMessage}
+          <span>{downloadMessage}</span>
+          {/* BACKLOG-3884: retry the same download */}
+          <button
+            type="button"
+            onClick={() => void attachmentPreview.retry()}
+            disabled={downloadingId !== null}
+            className="flex-shrink-0 px-3 py-1 text-sm font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 rounded-md disabled:opacity-60"
+            data-testid="attachment-open-retry"
+          >
+            Retry
+          </button>
         </div>
       )}
 

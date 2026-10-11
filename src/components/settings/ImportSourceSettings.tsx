@@ -26,7 +26,8 @@ import type { ImportSource, UserPreferences } from "../../services/settingsServi
 import { settingsService } from '../../services';
 import logger from '../../utils/logger';
 import { IMPORT_SOURCE_LABELS, shownImportSource } from "./importSourceLabels";
-import { effectiveImportSource } from "../../services/importSourcePolicy";
+import { loadChosenImportSource } from "../../services/importSourcePolicy";
+import { WindowsArm64Unsupported } from "../iphone/WindowsArm64Unsupported";
 
 // Re-export type for consumers
 export type { ImportSource } from "../../services/settingsService";
@@ -42,8 +43,12 @@ interface ImportSourceSettingsProps {
  * Allows switching between macOS native import, iPhone sync, and Google Messages.
  */
 export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSettingsProps) {
-  const { isMacOS } = usePlatform();
-  const [source, setSource] = useState<ImportSource>(isMacOS ? "macos-native" : "iphone-sync");
+  const { isMacOS, isWindowsArm64 } = usePlatform();
+  // BACKLOG-3418: `null` = the user has chosen no source, so no radio is
+  // checked (Windows/Linux). Clicking "iPhone Sync" is then a real change that
+  // saves the choice and turns iPhone checking on — before, it was pre-checked
+  // and clicking it did nothing.
+  const [source, setSource] = useState<ImportSource | null>(isMacOS ? "macos-native" : null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -55,18 +60,18 @@ export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSet
       setLoading(true);
       try {
         const result = await window.api.preferences.get(userId);
-        const prefs = result.preferences as UserPreferences | undefined;
-        if (result.success && prefs?.messages?.source) {
-          // BACKLOG-3749: a value this build does not know → the platform default.
-          setSource(shownImportSource(effectiveImportSource(prefs.messages.source, isMacOS)));
-        } else {
-          // BACKLOG-1458: No saved preference — default based on phoneType
-          const phoneResult = await settingsService.getPhoneType(userId);
-          if (phoneResult.success && phoneResult.data === 'android') {
-            setSource('android-messages-web');
-          }
-          // Otherwise keep the platform-based default (macos-native or iphone-sync)
-        }
+        const prefs = result.success
+          ? (result.preferences as UserPreferences | undefined)
+          : undefined;
+        // BACKLOG-1458 / BACKLOG-3418: the one shared derivation
+        // (importSourcePolicy `chosenImportSource`), so this radio, Settings,
+        // the Dashboard button and iPhone detection agree.
+        const chosen = await loadChosenImportSource(
+          prefs as Parameters<typeof loadChosenImportSource>[0],
+          isMacOS,
+          () => settingsService.getPhoneType(userId),
+        );
+        setSource(chosen ? shownImportSource(chosen) : null);
       } catch (error) {
         logger.error("[ImportSourceSettings] Failed to load preference:", error);
       } finally {
@@ -234,7 +239,13 @@ export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSet
           </div>
 
           {/* Show iPhone instructions when that source is selected */}
-          {source === "iphone-sync" && (
+          {/* BACKLOG-3363: Windows on ARM — no connect/Trust steps; they can't work. */}
+          {source === "iphone-sync" && isWindowsArm64 && (
+            <div className="mt-3">
+              <WindowsArm64Unsupported variant="compact" />
+            </div>
+          )}
+          {source === "iphone-sync" && !isWindowsArm64 && (
             <div className="mt-3 p-3 bg-blue-50 rounded text-xs text-blue-700">
               <p className="font-medium mb-1">To use iPhone Sync:</p>
               <ol className="list-decimal list-inside space-y-1">

@@ -11,6 +11,7 @@ import { User, SubscriptionTier, Subscription } from "../types/models";
 import type { AuditLogEntry } from "./auditService";
 import logService from "./logService";
 import sessionService from "./sessionService";
+import { supabaseNetFetch } from "./supabaseNetFetch";
 
 /**
  * User data for sync operations
@@ -207,6 +208,9 @@ class SupabaseService {
           removeItem: (key: string) => { this._memoryStorage.delete(key); },
         },
       },
+      // BACKLOG-3768: every request (auth, token refresh, PostgREST, functions,
+      // storage) goes through Electron's network stack, not Node's fetch.
+      global: { fetch: supabaseNetFetch },
     });
 
     // TASK-2040: Listen for auth state changes to keep local session cache
@@ -892,6 +896,14 @@ class SupabaseService {
           privacy_policy_accepted_at: oldUser.privacy_policy_accepted_at,
           privacy_policy_version_accepted: oldUser.privacy_policy_version_accepted,
           email_onboarding_completed_at: oldUser.email_onboarding_completed_at,
+          // BACKLOG-3673: the "setup finished" record moves with the row.
+          onboarding_completed_at: oldUser.onboarding_completed_at ?? null,
+          // BACKLOG-3674: the tour record moves with the row -- but only when the
+          // read row carried the column. Before the migration is applied the
+          // column does not exist, and naming it in the insert would fail it.
+          ...(oldUser.tour_dismissed_at !== undefined
+            ? { tour_dismissed_at: oldUser.tour_dismissed_at }
+            : {}),
           login_count: (oldUser as unknown as Record<string, unknown>).login_count as number || 0,
           last_login_at: new Date().toISOString(),
           signup_source: (oldUser as unknown as Record<string, unknown>).signup_source as string || "desktop_app",
@@ -1044,6 +1056,117 @@ class SupabaseService {
       });
       throw error;
     }
+  }
+
+  /**
+   * BACKLOG-3673: read the per-account "setup finished" record and the
+   * email-step answer from the cloud `users` row.
+   * @param userId - MUST be the session's auth user id (see getAuthUserId)
+   * @returns `found: false` when there is no row (no error) -- the caller treats
+   *          that as "not finished"
+   */
+  async getAccountSetupRecord(userId: string): Promise<{
+    found: boolean;
+    onboardingCompletedAt: string | null;
+    emailOnboardingCompletedAt: string | null;
+  }> {
+    const client = this._ensureClient();
+    const { data, error } = await client
+      .from("users")
+      .select("onboarding_completed_at, email_onboarding_completed_at")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (error) throw error;
+    const row = data as
+      | { onboarding_completed_at: string | null; email_onboarding_completed_at: string | null }
+      | null;
+    return {
+      found: row !== null,
+      onboardingCompletedAt: row?.onboarding_completed_at ?? null,
+      emailOnboardingCompletedAt: row?.email_onboarding_completed_at ?? null,
+    };
+  }
+
+  /**
+   * BACKLOG-3673: write the per-account "setup finished" record. Write-once: it
+   * only sets an EMPTY value (a DB trigger also refuses to change a set one).
+   * Resolves when the value is set afterwards (written now, or already set).
+   * Throws when 0 rows were updated and the value is still empty or there is
+   * no row -- the caller reports that as a failure and caches nothing.
+   * @param userId - MUST be the session's auth user id (see getAuthUserId)
+   */
+  async completeAccountSetup(userId: string): Promise<void> {
+    const client = this._ensureClient();
+    const { data, error } = await client
+      .from("users")
+      .update({ onboarding_completed_at: new Date().toISOString() })
+      .eq("id", userId)
+      .is("onboarding_completed_at", null)
+      .select("id");
+
+    if (error) throw error;
+    if (Array.isArray(data) && data.length > 0) return;
+
+    // 0 rows updated: either the value was already set (a write-once hit -- the
+    // account is finished) or there is no writable row for this id. Only the
+    // first is success; re-read to tell them apart.
+    const record = await this.getAccountSetupRecord(userId);
+    if (record.onboardingCompletedAt) return;
+    throw new Error(
+      record.found
+        ? "Setup-finished record not written: 0 rows updated and the value is still empty"
+        : "Setup-finished record not written: no users row for the session user",
+    );
+  }
+
+  /**
+   * BACKLOG-3674: read the per-account "dashboard tour dismissed" record.
+   * Its own query on purpose: it is never folded into getAccountSetupRecord, so
+   * a missing column can only ever mean "no tour", never "setup not finished".
+   * @param userId - MUST be the session's auth user id (see getAuthUserId)
+   * @returns `found: false` when there is no row (no error)
+   */
+  async getTourDismissedAt(userId: string): Promise<{ found: boolean; tourDismissedAt: string | null }> {
+    const client = this._ensureClient();
+    const { data, error } = await client
+      .from("users")
+      .select("tour_dismissed_at")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (error) throw error;
+    const row = data as { tour_dismissed_at: string | null } | null;
+    return { found: row !== null, tourDismissedAt: row?.tour_dismissed_at ?? null };
+  }
+
+  /**
+   * BACKLOG-3674: record that the account dismissed the dashboard tour. Only
+   * sets an EMPTY value, so the first timestamp is kept. Resolves when the value
+   * is set afterwards (written now, or already set). Throws when 0 rows were
+   * updated and the value is still empty or there is no row.
+   * @param userId - MUST be the session's auth user id (see getAuthUserId)
+   */
+  async dismissTour(userId: string): Promise<void> {
+    const client = this._ensureClient();
+    const { data, error } = await client
+      .from("users")
+      .update({ tour_dismissed_at: new Date().toISOString() })
+      .eq("id", userId)
+      .is("tour_dismissed_at", null)
+      .select("id");
+
+    if (error) throw error;
+    if (Array.isArray(data) && data.length > 0) return;
+
+    // 0 rows updated: already set (success) or no writable row (failure).
+    const record = await this.getTourDismissedAt(userId);
+    if (record.tourDismissedAt) return;
+    throw new Error(
+      record.found
+        ? "Tour-dismissed record not written: 0 rows updated and the value is still empty"
+        : "Tour-dismissed record not written: no users row for the session user",
+    );
   }
 
   /**

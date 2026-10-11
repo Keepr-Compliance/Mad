@@ -15,6 +15,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import logger from "../../utils/logger";
 import { safeErrorMessage } from "../../utils/formatUtils";
+import { isWindowsArm64 } from "../../utils/platform";
+import { WindowsArm64Unsupported } from "../iphone/WindowsArm64Unsupported";
 
 // ---------------------------------------------------------------------------
 // Types — mirrors WindowApiDrivers return shapes (no duplicate of AppleDriverStatus)
@@ -149,6 +151,12 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
   // Render helpers
   // ------------------------------------------------------------------
   const isInstalling = installProgress.phase === "downloading" || installProgress.phase === "installing";
+
+  // BACKLOG-3363: Windows on ARM — the driver can never work here; no Install
+  // or Repair is offered.
+  if (isWindowsArm64()) {
+    return <WindowsArm64Unsupported variant="compact" />;
+  }
 
   return (
     <div className={`space-y-4 ${disabled ? "opacity-50" : ""}`}>

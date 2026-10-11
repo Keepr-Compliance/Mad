@@ -76,6 +76,7 @@ const createReadyState = (
     hasEmailConnected: true,
     needsDriverSetup: false,
     fda: "granted",
+    setup: "finished",
   },
 });
 

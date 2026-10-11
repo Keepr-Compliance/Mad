@@ -9,7 +9,8 @@
  *   -> transactionService.hideTextFromExport / unhideTextFromExport
  *   -> window.api.transactions.* (the IPC boundary, mocked here)
  *   -> TransactionDetails.handleHiddenFromExportChanged
- *   -> refreshCommunicationsSilently("text") -> the modal's `messages` prop
+ *   -> (BACKLOG-3884) the conversation list re-read -> the open card re-reads
+ *      its pages (`getTextThreadPage`) -> the modal's `messages` prop
  * So this mounts the REAL TransactionDetails (harness copied from
  * TransactionDetails.reviewLinkedListLive-2791.test.tsx) and mocks only the
  * bridge and the entitlement hook.
@@ -38,6 +39,7 @@ import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { NotificationProvider } from "../../contexts/NotificationContext";
 import TransactionDetails from "../TransactionDetails";
+import { textThreadSummary } from "./helpers/textThreadSummary3884";
 import type { Transaction } from "../../types";
 
 const render = (
@@ -153,15 +155,18 @@ const linkedTexts = () => [
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 let getCommunications: jest.Mock;
+let getTextThreadPage: jest.Mock;
 let hideTextFromExport: jest.Mock;
 let unhideTextFromExport: jest.Mock;
 
 beforeAll(() => {
   getCommunications = jest.fn();
+  getTextThreadPage = jest.fn();
   hideTextFromExport = jest.fn();
   unhideTextFromExport = jest.fn();
   const t = window.api.transactions as any;
   t.getCommunications = getCommunications;
+  t.getTextThreadPage = getTextThreadPage;
   t.hideTextFromExport = hideTextFromExport;
   t.unhideTextFromExport = unhideTextFromExport;
   t.getReviewState = jest.fn();
@@ -191,6 +196,15 @@ beforeEach(() => {
     success: true,
     transaction: { communications: channel === "text" ? linkedTexts() : [], contact_assignments: [] },
   }));
+  // BACKLOG-3884: the Texts tab lists the conversation, and the open card reads
+  // its texts a page at a time — the same rows the shared read projects.
+  (window.api.transactions.getTextThreads as jest.Mock).mockResolvedValue({
+    success: true,
+    threads: [
+      textThreadSummary({ threadId: "macos-chat-3366", phone: "+15555550142", lastSentAt: "2026-06-02T10:00:00.000Z", totalCount: 2, sampleId: Y }),
+    ],
+  });
+  getTextThreadPage.mockImplementation(async () => ({ success: true, rows: linkedTexts().reverse(), nextCursor: null }));
   hideTextFromExport.mockImplementation(async (_txn: string, messageId: string) => {
     hiddenInDb.add(messageId);
     return { success: true, hidden: true };
@@ -207,7 +221,7 @@ beforeEach(() => {
 });
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-const textReads = () => getCommunications.mock.calls.filter((c) => c[1] === "text").length;
+const textReads = () => getTextThreadPage.mock.calls.length;
 
 /** The pill for one text. Re-queried every time: a refetch re-renders it. */
 const pill = (id: string) => screen.getByTestId(`hide-from-export-${id}`);
@@ -223,7 +237,7 @@ function bubble(id: string): HTMLElement {
 async function openLinkedConversation(): Promise<void> {
   render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
   await waitFor(() =>
-    expect(window.api.transactions.getAllAttachments as jest.Mock).toHaveBeenCalled(),
+    expect(window.api.transactions.getDetails as jest.Mock).toHaveBeenCalled(),
   );
   await act(async () => {
     await userEvent.click(await screen.findByRole("button", { name: /Texts/i }));

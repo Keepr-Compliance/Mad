@@ -81,13 +81,21 @@ const mockStartBackup = jest.fn();
 const mockCancelBackup = jest.fn();
 const mockCheckBackupStatus = jest.fn();
 const mockDeleteBackup = jest.fn();
+const mockRemoveLeftoverBackup = jest.fn();
 const mockDecryptionCleanup = jest.fn();
 const mockGetDeviceStorageInfo = jest.fn();
 
+// BACKLOG-3816 S4-C: the kept backup's at-rest layer is not this suite's subject.
+jest.mock("../atRest/backupAtRest", () => ({
+  ...jest.requireActual("../atRest/backupAtRest"),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+}));
 jest.mock("electron", () => ({
   app: {
     isPackaged: false,
-    getPath: jest.fn().mockReturnValue("/tmp"),
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()),
   },
 }));
 
@@ -133,8 +141,25 @@ jest.mock("../backupService", () => ({
     checkBackupStatus: (...args: unknown[]) => mockCheckBackupStatus(...args),
     startBackup: (...args: unknown[]) => mockStartBackup(...args),
     cancelBackup: (...args: unknown[]) => mockCancelBackup(...args),
+    // BACKLOG-3598: leftover cleanup. The removal itself is proven in
+    // deviceSyncOrchestrator.failedSyncCleanup-3598.test.ts against a real folder;
+    // here only whether the guard's exit asks for it.
+    sweepLeftoverBackups: jest.fn().mockResolvedValue({ removed: 0, bytesFreed: 0, failures: [] }),
+    classifyBackupFolder: jest.fn().mockResolvedValue("leftover"),
+    removeLeftoverBackup: (...args: unknown[]) => mockRemoveLeftoverBackup(...args),
     deleteBackup: (...args: unknown[]) => mockDeleteBackup(...args),
   })),
+}));
+
+// BACKLOG-3817: the orchestrator reads the saved backup password before the backup starts.
+// The real store does file I/O, which fake timers do not drive, so the monitor's first
+// reading landed outside the first 60s window on some runs.
+// BACKLOG-3816 S4-C (B1): no saved-password file I/O; this suite's subject is not the password.
+jest.mock("../atRest/backupPassword", () => ({
+  ...jest.requireActual("../atRest/backupPassword"),
+  getBackupPasswordStore: () =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
 }));
 
 jest.mock("../backupDecryptionService", () => ({
@@ -340,6 +365,7 @@ describe("BACKLOG-2899 — sync disk guard", () => {
     // which was also what a THROWN check returned — so this suite could not have told
     // the difference between the guard's first-sync path and its failure path.
     mockCheckBackupStatus.mockResolvedValue({ state: "absent" });
+    mockRemoveLeftoverBackup.mockResolvedValue({ outcome: "removed", bytes: 3 * GB });
     mockGetDeviceStorageInfo.mockResolvedValue({
       totalCapacity: 128 * GB,
       availableSpace: 113 * GB,
@@ -380,7 +406,14 @@ describe("BACKLOG-2899 — sync disk guard", () => {
       expect(result.error).toMatch(/disk space/i);
     });
 
-    it("leaves the partial backup resumable rather than deleting it", async () => {
+    // BACKLOG-3598 INVERTED this test. It used to assert the partial was KEPT
+    // ("leaves the partial backup resumable rather than deleting it"). The founder's
+    // rule is now that a failed sync leaves `Backups/<udid>` as it found it: this
+    // sync started from NO backup (`state: "absent"` above), so its unfinished
+    // first backup is removed. A first-sync partial has no Manifest.db and is
+    // refused as a prior backup by `isUsablePriorBackup`, so keeping it bought no
+    // resume — only the disk space the guard had just stopped to protect.
+    it("removes the unfinished first backup when the guard stops a first sync", async () => {
       const disk = installDisk({
         initialFree: 10 * GB,
         drainBytesPerSec: FIXTURE_DRAIN_BYTES_PER_SEC,
@@ -390,12 +423,16 @@ describe("BACKLOG-2899 — sync disk guard", () => {
         succeedAfterMs: BACKUP_DURATION_MS,
       });
 
-      await runSync(orchestrator, 1_600_000);
+      const result = await runSync(orchestrator, 1_600_000);
 
-      // `Backups/<udid>` must survive: checkBackupStatus reports it on the next
-      // run (exists / isCorrupted). Note this asserts the partial is KEPT, not
-      // that the next run continues from it — BACKLOG-2911 measured the next
-      // sync starting from zero despite the "will attempt to resume" log line.
+      // The user is told what happened to the space, not that it was kept.
+      expect(result.error).toMatch(/unfinished backup was removed/i);
+      expect(result.error).not.toMatch(/kept on disk/i);
+
+      // Asserted on the NEW removal method — the old `deleteBackup` is never
+      // called by the sync path, so asserting on it would pass either way.
+      expect(mockRemoveLeftoverBackup).toHaveBeenCalledTimes(1);
+      expect(mockRemoveLeftoverBackup).toHaveBeenCalledWith(TEST_UDID);
       expect(mockDeleteBackup).not.toHaveBeenCalled();
       expect(mockDecryptionCleanup).not.toHaveBeenCalled();
     });
@@ -426,6 +463,51 @@ describe("BACKLOG-2899 — sync disk guard", () => {
 
       const result = await runSync(orchestrator, 700_000);
 
+      expect(mockStartBackup).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/space/i);
+    });
+
+    // S4-C (founder decision): a quarantined, unreadable backup never blocks the fresh full backup.
+    function withQuarantine(copies: number, freedPerCopy: number) {
+      let remaining = copies;
+      let freed = 0;
+      const deleteOldestQuarantined = jest.fn(async () => {
+        if (remaining === 0) return false;
+        remaining -= 1;
+        freed += freedPerCopy;
+        return true;
+      });
+      orchestrator.backupAtRest = {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        ...require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+        deleteOldestQuarantined,
+      } as never;
+      mockCheckDiskSpace.mockImplementation(async () => ({
+        diskPath: "C:",
+        free: RESERVE_BYTES - 1 + freed,
+        size: TOTAL_DISK_BYTES,
+      }));
+      return deleteOldestQuarantined;
+    }
+
+    it("deletes the oldest quarantined copy and starts when that makes room", async () => {
+      const deleteOldest = withQuarantine(3, 1);
+      installBackup({ markBackupStarted: () => {}, succeedAfterMs: 1000 });
+
+      await runSync(orchestrator, 700_000);
+
+      expect(deleteOldest).toHaveBeenCalledTimes(1); // stops as soon as the guard is satisfied
+      expect(mockStartBackup).toHaveBeenCalled();
+    });
+
+    it("keeps deleting oldest-first until the guard clears, and refuses only when none is left", async () => {
+      const deleteOldest = withQuarantine(2, 0);
+      installBackup({ markBackupStarted: () => {}, succeedAfterMs: 1000 });
+
+      const result = await runSync(orchestrator, 700_000);
+
+      expect(deleteOldest).toHaveBeenCalledTimes(3); // 2 deleted, third call reports none left
       expect(mockStartBackup).not.toHaveBeenCalled();
       expect(result.success).toBe(false);
       expect(result.error).toMatch(/space/i);
@@ -601,4 +683,10 @@ describe("BACKLOG-2899 — sync disk guard", () => {
       expect(result.success).toBe(true);
     });
   });
+});
+
+// BACKLOG-3816 S4-C (B1): this file's userData is a fresh directory under os.tmpdir().
+afterAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./helpers/testUserData").removeTestUserDataDir();
 });

@@ -68,6 +68,12 @@ import logService from "./logService";
 import { downloadMissingEmailAttachments as downloadMissingEmailAttachmentsShared } from "./emailAttachmentDownload";
 import { snapshotSubmissionChecklists } from "./submissionChecklistSnapshot";
 import {
+  findChecklistLinkGaps,
+  gapMemberKeys,
+  type ChecklistLinkGap,
+} from "./submissionChecklistLinkGaps";
+import { getChecklistsForTransaction } from "./db/checklistDbService";
+import {
   notifyChecklistsChanged,
   retryOwedReviewChecklistPull,
   beginResubmitChecklistGuard,
@@ -142,11 +148,25 @@ export interface SubmissionResult {
    *               The 3600 reasons take precedence when both apply.
    */
   checklistsNotSent?: ChecklistsNotSentReason;
+  /**
+   * BACKLOG-3764: on `preflightChanged`, the checklist evidence this
+   * submission would not send, to confirm again.
+   */
+  checklistLinkGaps?: ChecklistLinkGap[];
+  /**
+   * BACKLOG-3764: set only on a SUCCESSFUL submission when checklist evidence
+   * was dropped that the pre-flight did not list (a defect, reported to
+   * Sentry). The agent is told.
+   */
+  checklistLinksNotAttached?: boolean;
 }
 
 /** BACKLOG-3403: what the agent confirmed on the pre-flight warning. */
 export interface SubmitOptions {
-  /** `NotIncludedItem.key`s the agent chose to leave out. */
+  /**
+   * `NotIncludedItem.key`s the agent chose to leave out. BACKLOG-3764: and
+   * `ChecklistLinkGap.key`s.
+   */
   acceptedExclusionKeys?: string[];
 }
 
@@ -154,6 +174,8 @@ export interface SubmitOptions {
 export interface SubmissionPreflightResult {
   success: boolean;
   notIncluded: NotIncludedItem[];
+  /** BACKLOG-3764: checklist evidence this submission would not send. */
+  checklistLinkGaps?: ChecklistLinkGap[];
   error?: string;
 }
 
@@ -629,7 +651,11 @@ class SubmissionService {
   ): Promise<SubmissionPreflightResult> {
     try {
       const gathered = await this.gatherForSubmission(transactionId);
-      return { success: true, notIncluded: gathered.preflight.notIncluded };
+      return {
+        success: true,
+        notIncluded: gathered.preflight.notIncluded,
+        checklistLinkGaps: gathered.checklistLinkGaps,
+      };
     } catch (error) {
       logService.warn(
         `[Submission] Pre-flight failed: ${error instanceof Error ? error.message : "Unknown error"}`,
@@ -737,6 +763,9 @@ class SubmissionService {
     partyNames: HandleNameResolution;
     currentUserId: string;
     preflight: Awaited<ReturnType<typeof runSubmissionPreflight>>;
+    checklistLinkGaps: ChecklistLinkGap[];
+    sentEmailIds: Set<string>;
+    sentAttachmentIds: Set<string>;
   }> {
     const transaction = await this.loadTransaction(transactionId);
     // BACKLOG-3683: the same reader the scope preview uses.
@@ -815,7 +844,55 @@ class SubmissionService {
       );
     }
 
-    return { transaction, messages, emails, partyNames, currentUserId, preflight };
+    // BACKLOG-3764: checklist evidence that would not be sent, against the
+    // dates on the row — which the date step saved before this ran
+    // (SubmitForReviewModal `proceed` awaits the save, then submits).
+    const sentEmailIds = new Set(emailIds);
+    const sentAttachmentIds = new Set(preflight.sendable.map((a) => a.id));
+    // A failed local read fails the submit the same way a failed checklist
+    // copy does (BACKLOG-3600): nothing is sent, and the agent is told why.
+    let localChecklists: Awaited<ReturnType<typeof getChecklistsForTransaction>>;
+    try {
+      localChecklists = await getChecklistsForTransaction(transactionId);
+    } catch (error) {
+      logService.warn(
+        `[Submission] Checklists could not be read before submit: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "SubmissionService",
+        { transactionId }
+      );
+      throw new ChecklistsNotSentError();
+    }
+    const checklistLinkGaps = findChecklistLinkGaps({
+      checklists: localChecklists,
+      sentEmailIds,
+      sentAttachmentIds,
+      notIncluded: preflight.notIncluded,
+      startedAt: transaction.started_at ?? null,
+      closedAt: transaction.closed_at ?? null,
+    });
+    if (checklistLinkGaps.length > 0) {
+      // Counts only: the list itself holds names.
+      logService.warn(
+        `[Submission] ${checklistLinkGaps.length} checklist links would not be sent`,
+        "SubmissionService",
+        {
+          transactionId,
+          outsideAuditDates: checklistLinkGaps.filter((g) => g.reason === "outside_audit_dates").length,
+        }
+      );
+    }
+
+    return {
+      transaction,
+      messages,
+      emails,
+      partyNames,
+      currentUserId,
+      preflight,
+      checklistLinkGaps,
+      sentEmailIds,
+      sentAttachmentIds,
+    };
   }
 
   /** The other party of a text, as the agent knows them. Display only. */
@@ -888,6 +965,8 @@ class SubmissionService {
     /** Known once the manifest is built / the snapshot ran (C3). */
     let cloudIdByLocalOuter = new Map<string, string>();
     let checklistsNotSentOuter: ChecklistsNotSentReason | undefined;
+    /** BACKLOG-3764: the snapshot's backstop fired. */
+    let checklistLinksNotAttached = false;
     let manifestPaths: string[] = [];
     let manifestCounts: ManifestCounts | null = null;
     let refusal: FinalizeRefusalCounts | null = null;
@@ -929,9 +1008,13 @@ class SubmissionService {
       // The agent confirmed a list; if it is no longer the same list, ask
       // again before anything is written.
       const accepted = new Set(submitOptions?.acceptedExclusionKeys ?? []);
-      if (notIncluded.some((item) => !accepted.has(item.key))) {
+      const checklistLinkGaps = gathered.checklistLinkGaps;
+      if (
+        notIncluded.some((item) => !accepted.has(item.key)) ||
+        checklistLinkGaps.some((gap) => !accepted.has(gap.key))
+      ) {
         logService.warn(
-          `[Submission] Not sent: ${notIncluded.filter((i) => !accepted.has(i.key)).length} attachments that cannot be sent were not confirmed by the agent`,
+          `[Submission] Not sent: ${notIncluded.filter((i) => !accepted.has(i.key)).length} attachments and ${checklistLinkGaps.filter((g) => !accepted.has(g.key)).length} checklist links that would not be sent were not confirmed by the agent`,
           "SubmissionService",
           { transactionId }
         );
@@ -939,9 +1022,16 @@ class SubmissionService {
           submitOptions?.acceptedExclusionKeys === undefined
             ? PREFLIGHT_NOT_REVIEWED_ERROR
             : PREFLIGHT_CHANGED_ERROR,
-          { preflightChanged: true, notIncluded }
+          { preflightChanged: true, notIncluded, checklistLinkGaps }
         );
       }
+      // BACKLOG-3764: what the snapshot may send, and what the agent confirmed
+      // it would not.
+      const snapshotSent = {
+        emailIds: gathered.sentEmailIds,
+        attachmentIds: gathered.sentAttachmentIds,
+        acceptedMembers: gapMemberKeys(checklistLinkGaps),
+      };
       throwIfCancelled(signal);
 
       orgId = await this.getUserOrganizationId();
@@ -1169,7 +1259,8 @@ class SubmissionService {
           const outcome = await snapshotSubmissionChecklists(
             client,
             submissionId,
-            transactionId
+            transactionId,
+            snapshotSent
           );
           if (outcome.status === "failed") {
             if (outcome.kind === "transient") {
@@ -1178,6 +1269,7 @@ class SubmissionService {
             return { checklists: null, checklistsNotSent: outcome.kind };
           }
           if (outcome.status === "none") return { checklists: 0, checklistsNotSent: undefined };
+          if (outcome.linksNotAttached) checklistLinksNotAttached = true;
           return {
             checklists: outcome.counts ? outcome.counts.checklists : null,
             checklistsNotSent: undefined,
@@ -1333,6 +1425,7 @@ class SubmissionService {
         flaggedWithoutAttachments,
         notIncluded,
         ...(checklistsNotSent ? { checklistsNotSent } : {}),
+        ...(checklistLinksNotAttached ? { checklistLinksNotAttached } : {}),
       };
     } catch (error) {
       return await this.handleSubmitFailure({
@@ -1350,6 +1443,7 @@ class SubmissionService {
         notIncluded,
         cloudIdByLocal: cloudIdByLocalOuter,
         checklistsNotSent: checklistsNotSentOuter,
+        checklistLinksNotAttached,
         attemptStarted,
         isResubmit,
         onProgress,
@@ -1381,6 +1475,7 @@ class SubmissionService {
     notIncluded: NotIncludedItem[];
     cloudIdByLocal: Map<string, string>;
     checklistsNotSent: ChecklistsNotSentReason | undefined;
+    checklistLinksNotAttached: boolean;
     attemptStarted: boolean;
     isResubmit: boolean;
     onProgress?: (progress: SubmissionProgress) => void;
@@ -1455,6 +1550,7 @@ class SubmissionService {
           ).size,
           notIncluded: ctx.notIncluded,
           ...(ctx.checklistsNotSent ? { checklistsNotSent: ctx.checklistsNotSent } : {}),
+          ...(ctx.checklistLinksNotAttached ? { checklistLinksNotAttached: true } : {}),
         };
       }
       if (abandoned.outcome === "unknown") {

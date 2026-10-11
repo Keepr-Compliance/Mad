@@ -15,6 +15,7 @@ import { AppStateProvider } from "./AppStateContext";
 
 import { AuthProvider } from "../../../contexts/AuthContext";
 import type { AppState } from "./types";
+import { accountSetupNotFinished } from "./__tests__/testUtils";
 
 // ============================================
 // MOCK SETUP
@@ -51,7 +52,6 @@ const mockApi = {
   auth: {
     getCurrentUser: jest.fn(),
     preValidateSession: jest.fn(),
-    checkEmailOnboarding: jest.fn(),
   },
   system: {
     hasEncryptionKeyStore: jest.fn(),
@@ -63,8 +63,31 @@ const mockApi = {
   },
   user: {
     getPhoneType: jest.fn(),
+    getAccountSetup: jest.fn(),
   },
 };
+
+/**
+ * BACKLOG-3673: every signed-in account now passes through Phase 4. A brand-new
+ * account's Phase 4 reads resolve to "nothing recorded" and its record is empty,
+ * so it lands in setup. Shapes transcribed from the handlers' return values.
+ */
+function mockNewAccountPhase4() {
+  mockApi.system.getInitStage.mockResolvedValue({ stage: "complete" });
+  mockApi.user.getPhoneType.mockResolvedValue({ success: true, phoneType: null });
+  mockApi.user.getAccountSetup.mockResolvedValue({
+    success: true,
+    setup: "not-finished",
+    emailStepAnswered: false,
+    contactSourceAnswered: false,
+  });
+  mockApi.system.checkAllConnections.mockResolvedValue({
+    success: true,
+    google: { connected: false },
+    microsoft: { connected: false },
+  });
+  mockApi.system.checkPermissions.mockResolvedValue({ hasPermission: false, fullDiskAccess: false });
+}
 
 // Setup global window.api mock
 beforeAll(() => {
@@ -93,7 +116,7 @@ beforeEach(() => {
   // Phase 4 (loading-user-data) data reads — default to never-resolving so
   // tests that don't care about this phase aren't affected.
   mockApi.user.getPhoneType.mockReturnValue(new Promise(() => {}));
-  mockApi.auth.checkEmailOnboarding.mockReturnValue(new Promise(() => {}));
+  mockApi.user.getAccountSetup.mockReturnValue(new Promise(() => {}));
   mockApi.system.checkAllConnections.mockReturnValue(new Promise(() => {}));
   mockApi.system.checkPermissions.mockReturnValue(new Promise(() => {}));
 });
@@ -139,6 +162,7 @@ describe("LoadingOrchestrator", () => {
           hasEmailConnected: true,
           needsDriverSetup: false,
           fda: "granted",
+          setup: "finished",
         },
       };
 
@@ -554,6 +578,7 @@ describe("LoadingOrchestrator phase transitions", () => {
       available: true,
     });
 
+    mockNewAccountPhase4();
     let callCount = 0;
     mockApi.auth.getCurrentUser.mockImplementation(() => {
       callCount += 1;
@@ -690,6 +715,7 @@ describe("LoadingOrchestrator phase transitions", () => {
       user: { id: "user-1", email: "test@test.com" },
       isNewUser: true,
     });
+    mockNewAccountPhase4();
 
     render(
       <TestWrapper>
@@ -697,6 +723,11 @@ describe("LoadingOrchestrator phase transitions", () => {
       </TestWrapper>
     );
 
+    // BACKLOG-3673: the new account loads its data (Phase 4) and its empty
+    // record routes it into setup.
+    await waitFor(() => {
+      expect(mockApi.user.getAccountSetup).toHaveBeenCalled();
+    });
     // Once in onboarding, the children should be visible (not loading)
     await waitFor(
       () => {
@@ -990,7 +1021,10 @@ describe("LoadingOrchestrator Phase 4 — db-ready gate (BACKLOG-2171)", () => {
 
   function mockFastFallbacks() {
     mockApi.user.getPhoneType.mockResolvedValue({ success: false, phoneType: null });
-    mockApi.auth.checkEmailOnboarding.mockResolvedValue({ success: false, completed: false });
+    // BACKLOG-3673: "unknown" now shows the account-settings error screen
+    // (no children). These tests are about the db-ready gate's timing, so the
+    // record is the empty one (-> setup, children rendered), as before.
+    mockApi.user.getAccountSetup.mockResolvedValue(accountSetupNotFinished());
     mockApi.system.checkAllConnections.mockResolvedValue({
       success: false,
       google: { connected: false },

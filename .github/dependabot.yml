@@ -102,6 +102,26 @@ updates:
       - "dependencies"
       - "broker-portal"
 
+  # ─── Vendored @noble bundle in the Chrome extension (BACKLOG-3762) ──────
+  # chrome-extension/vendor/noble-p256.js bundles these packages; the manifest
+  # only declares their versions so alerts and updates name them. A bump here
+  # alone turns tests/chrome-extension/vendorManifest-3762.test.ts red: the
+  # bundle must be rebuilt and SBOM.json updated in the same PR. Majors are
+  # tracked as a planned upgrade (BACKLOG-3777).
+  - package-ecosystem: "npm"
+    directory: "/vendor-manifests/chrome-extension-noble"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "23:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 2
+    ignore:
+      - dependency-name: "@noble/*"
+        update-types: ["version-update:semver-major"]
+    labels:
+      - "dependencies"
+
   # ─── GitHub Actions ─────────────────────────────────────────────────────
   - package-ecosystem: "github-actions"
     directory: "/"

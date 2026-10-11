@@ -24,6 +24,10 @@
  * `AuthContext.tsx:89` (via `authService.ts:221`), `SupportWidget.tsx:64`, `:99`,
  * `DeviceLimitScreen.tsx:24`, `:59`. `auth:validate-session` has no renderer
  * caller.
+ *
+ * BACKLOG-3833: also `sessionIdleEnforcer.ts` — IPC `session:user-activity`
+ * (renderer input heartbeat, `useUserActivityHeartbeat` mounted in AppShell)
+ * and a once-a-minute main-side check that signs an idle session out.
  */
 
 import logService from "./logService";
@@ -61,6 +65,63 @@ class SessionSecurityService {
 
   // Track last activity time per session (in-memory)
   private lastActivityMap: Map<string, number> = new Map();
+
+  /**
+   * BACKLOG-3833 — busy registry. A user-started long operation (device sync,
+   * Mac Messages import, email sync/scan, export) holds a token while it runs.
+   * While any live token exists the session is not idle; when the last one ends
+   * the idle clock restarts from that moment (`idleFloor`).
+   */
+  static readonly BUSY_MAX_MS = 6 * 60 * 60 * 1000; // a leaked token stops counting after 6 h
+  private busyTokens: Map<number, { label: string; startedAt: number }> = new Map();
+  private nextBusyId = 1;
+  /** Earliest moment idle time may be measured from (set by busy end / user Reload). */
+  private idleFloor = 0;
+
+  /** Mark a long user-started operation as running. Pair with `endBusy` in a `finally`. */
+  beginBusy(label: string): number {
+    const id = this.nextBusyId++;
+    this.busyTokens.set(id, { label, startedAt: Date.now() });
+    return id;
+  }
+
+  /** End an operation; the idle clock restarts now. Unknown/repeated tokens are ignored. */
+  endBusy(token: number): void {
+    if (this.busyTokens.delete(token)) {
+      this.idleFloor = Math.max(this.idleFloor, Date.now());
+    }
+  }
+
+  /** Run `fn` as a busy operation; the token always ends. */
+  async runBusy<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    const token = this.beginBusy(label);
+    try {
+      return await fn();
+    } finally {
+      this.endBusy(token);
+    }
+  }
+
+  /**
+   * The user clicked Reload on the unresponsive-window prompt: a user action,
+   * so the idle clock restarts. (Deliberately NOT called on the window
+   * "responsive" event: a freeze can end while nobody is at the machine.)
+   */
+  noteUserReload(): void {
+    this.idleFloor = Math.max(this.idleFloor, Date.now());
+  }
+
+  /** True while a non-expired busy token exists. Tokens past BUSY_MAX_MS are dropped. */
+  private isBusy(now: number): boolean {
+    for (const [id, t] of this.busyTokens) {
+      if (now - t.startedAt > SessionSecurityService.BUSY_MAX_MS) {
+        this.busyTokens.delete(id);
+        // The cap is when this token stopped counting; idle runs from there.
+        this.idleFloor = Math.max(this.idleFloor, t.startedAt + SessionSecurityService.BUSY_MAX_MS);
+      }
+    }
+    return this.busyTokens.size > 0;
+  }
 
   /**
    * Record user activity for a session
@@ -127,7 +188,11 @@ class SessionSecurityService {
 
     // Check idle timeout (30 minutes of inactivity)
     if (sessionToken) {
-      const lastActivity = this.lastActivityMap.get(sessionToken);
+      if (this.isBusy(now) && this.lastActivityMap.has(sessionToken)) {
+        this.lastActivityMap.set(sessionToken, now);
+      }
+      const recorded = this.lastActivityMap.get(sessionToken);
+      const lastActivity = recorded ? Math.max(recorded, this.idleFloor) : undefined;
 
       if (lastActivity) {
         const idleTime = now - lastActivity;
@@ -194,10 +259,14 @@ class SessionSecurityService {
    * @returns Remaining idle time in seconds, or 0 if expired
    */
   getRemainingIdleTime(sessionToken: string): number {
-    const lastActivity = this.lastActivityMap.get(sessionToken);
-    if (!lastActivity) {
+    const recorded = this.lastActivityMap.get(sessionToken);
+    if (!recorded) {
       return Math.round(this.IDLE_TIMEOUT_MS / 1000); // Full idle time if not tracked
     }
+    if (this.isBusy(Date.now())) {
+      return Math.round(this.IDLE_TIMEOUT_MS / 1000);
+    }
+    const lastActivity = Math.max(recorded, this.idleFloor);
 
     const expiresAt = lastActivity + this.IDLE_TIMEOUT_MS;
     const remaining = expiresAt - Date.now();
@@ -219,6 +288,8 @@ class SessionSecurityService {
    */
   clearAllActivity(): void {
     this.lastActivityMap.clear();
+    this.busyTokens.clear();
+    this.idleFloor = 0;
   }
 }
 

@@ -272,7 +272,8 @@ interface EmailSettingsProps {
   userId: string;
   initialPreferences: PreferencesResult['preferences'];
   onEmailConnected?: (email: string, provider: "google" | "microsoft") => void;
-  onEmailDisconnected?: (provider: "google" | "microsoft") => void;
+  /** BACKLOG-3888: second argument = the other mailbox is still connected. */
+  onEmailDisconnected?: (provider: "google" | "microsoft", anyStillConnected?: boolean) => void;
   /** Report connection status changes to parent (for Contacts section) */
   onConnectionStatusChange?: (google: boolean, microsoft: boolean) => void;
 }
@@ -435,9 +436,9 @@ export function EmailSettings({
     try {
       const result = await authService.googleDisconnectMailbox(userId);
       if (result.success) {
-        await checkConnections();
+        const after = await checkConnections();
         if (onEmailDisconnected) {
-          onEmailDisconnected("google");
+          onEmailDisconnected("google", after?.microsoft?.connected === true);
         }
         emitEmailConnectionChanged({ connected: false, provider: "google" });
       }
@@ -453,9 +454,9 @@ export function EmailSettings({
     try {
       const result = await authService.microsoftDisconnectMailbox(userId);
       if (result.success) {
-        await checkConnections();
+        const after = await checkConnections();
         if (onEmailDisconnected) {
-          onEmailDisconnected("microsoft");
+          onEmailDisconnected("microsoft", after?.google?.connected === true);
         }
         emitEmailConnectionChanged({ connected: false, provider: "microsoft" });
       }
@@ -656,7 +657,7 @@ export function EmailSettings({
         <div className="space-y-2">
         {/* Gmail Connection */}
         <div className={`p-3 rounded border ${
-          connections.google?.error && !connections.google?.connected && connections.google.error.type !== "NOT_CONNECTED"
+          connections.google?.error && (!connections.google?.connected || connections.google.error.type === "PROVIDER_UNREACHABLE") && connections.google.error.type !== "NOT_CONNECTED"
             ? "bg-yellow-50 border-yellow-200"
             : "bg-white border-gray-200"
         }`}>
@@ -690,7 +691,7 @@ export function EmailSettings({
               {typeof connections.google.email === 'string' ? connections.google.email : String(connections.google.email)}
             </p>
           )}
-          {connections.google?.error && !connections.google?.connected && connections.google.error.type !== "NOT_CONNECTED" && (
+          {connections.google?.error && (!connections.google?.connected || connections.google.error.type === "PROVIDER_UNREACHABLE") && connections.google.error.type !== "NOT_CONNECTED" && (
             <div className="mb-3 p-2 bg-yellow-100 rounded text-xs">
               <p className="text-yellow-800 font-medium">
                 {typeof connections.google.error.userMessage === 'string' ? connections.google.error.userMessage : String(connections.google.error.userMessage)}
@@ -706,7 +707,7 @@ export function EmailSettings({
 
         {/* Outlook Connection */}
         <div className={`p-3 rounded border ${
-          connections.microsoft?.error && !connections.microsoft?.connected && connections.microsoft.error.type !== "NOT_CONNECTED"
+          connections.microsoft?.error && (!connections.microsoft?.connected || connections.microsoft.error.type === "PROVIDER_UNREACHABLE") && connections.microsoft.error.type !== "NOT_CONNECTED"
             ? "bg-yellow-50 border-yellow-200"
             : "bg-white border-gray-200"
         }`}>
@@ -739,7 +740,7 @@ export function EmailSettings({
               {typeof connections.microsoft.email === 'string' ? connections.microsoft.email : String(connections.microsoft.email)}
             </p>
           )}
-          {connections.microsoft?.error && !connections.microsoft?.connected && connections.microsoft.error.type !== "NOT_CONNECTED" && (
+          {connections.microsoft?.error && (!connections.microsoft?.connected || connections.microsoft.error.type === "PROVIDER_UNREACHABLE") && connections.microsoft.error.type !== "NOT_CONNECTED" && (
             <div className="mb-3 p-2 bg-yellow-100 rounded text-xs">
               <p className="text-yellow-800 font-medium">
                 {typeof connections.microsoft.error.userMessage === 'string' ? connections.microsoft.error.userMessage : String(connections.microsoft.error.userMessage)}

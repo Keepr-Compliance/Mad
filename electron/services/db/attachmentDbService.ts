@@ -12,7 +12,7 @@ import { ensureDb, dbTransaction } from "./core/dbConnection";
 // second, windowed fetch to mark which of them fall inside the audit window
 // (BACKLOG-3730). That windowed fetch uses this bound.
 import { auditWindowEnd } from "../exportPlan";
-import { selectTextAttachmentsForMessages } from "./textAttachmentLookupSql";
+import { selectTextAttachmentsForTransaction } from "./textAttachmentLookupSql";
 
 // ============================================
 // ATTACHMENT CRUD OPERATIONS
@@ -586,9 +586,9 @@ export interface TransactionAttachmentRow {
  * Linkage mirrors the per-tab display queries:
  *  - Email: `communications.email_id = emails.id`.
  *  - Text : the transaction's texts (communications message_id OR thread_id),
- *    then the shared lookup `selectTextAttachmentsForMessages` — the rule the
- *    Messages view and the submit use (BACKLOG-3731). `message_id` on a text
- *    row is the text it resolved to.
+ *    under the rule the Messages view and the submit use (BACKLOG-3731), read
+ *    by `selectTextAttachmentsForTransaction` without collecting every linked
+ *    text (BACKLOG-3884). `message_id` on a text row is the text it resolved to.
  *
  * The optional audit window filters on the owning email/message `sent_at`. Callers
  * that want the same "everything linked" view the Emails/Texts tabs show should
@@ -641,38 +641,18 @@ export function getTransactionAllAttachments(
     )
     .all(transactionId, ...emailFilter.params) as RawRow[];
 
-  // ---- Text attachments (BACKLOG-3731: the shared Messages-view lookup) ---
-  // The window's texts, with the columns the tab shows, then the one lookup
-  // the Messages view and the submit use: direct message_id rows, plus the
-  // Apple-id fallback for texts with no direct row. Read-only.
-  const textFilter = buildDateFilter("m.sent_at");
-  const textMessages = db
-    .prepare(
-      `SELECT DISTINCT
-         m.id                AS id,
-         m.sent_at           AS source_date,
-         m.direction         AS direction,
-         m.participants_flat AS context_sender
-       FROM messages m
-       INNER JOIN communications c ON (
-         (c.message_id IS NOT NULL AND c.message_id = m.id)
-         OR
-         (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id AND m.user_id = c.user_id)
-       )
-       WHERE c.transaction_id = ?
-         ${textFilter.clause}`
-    )
-    .all(transactionId, ...textFilter.params) as {
-    id: string;
-    source_date: string | null;
-    direction: string | null;
-    context_sender: string | null;
-  }[];
-  const textMessageById = new Map(textMessages.map((m) => [m.id, m]));
-  const textRows: RawRow[] = selectTextAttachmentsForMessages<
+  // ---- Text attachments (BACKLOG-3731 rule; BACKLOG-3884 reader) ---------
+  // The Messages-view rule (direct message_id rows, plus the Apple-id fallback
+  // for texts with no direct row), read from the attachments side so the
+  // transaction's linked texts are never all collected (105k on one PC).
+  // Read-only.
+  const textWindowEnd = auditWindowEnd(auditEndDate);
+  const textRows: RawRow[] = selectTextAttachmentsForTransaction<
     RawRow & { id: string; message_id: string | null }
-  >(db, textMessages.map((m) => m.id)).map(({ row, resolved_message_id }) => {
-    const m = textMessageById.get(resolved_message_id);
+  >(db, transactionId, {
+    start: auditStartDate ? auditStartDate.toISOString() : null,
+    end: textWindowEnd ? textWindowEnd.toISOString() : null,
+  }).map(({ row, resolved_message_id }) => {
     return {
       id: row.id,
       filename: row.filename,
@@ -682,10 +662,10 @@ export function getTransactionAllAttachments(
       created_at: row.created_at,
       email_id: row.email_id,
       message_id: resolved_message_id,
-      source_date: m?.source_date ?? null,
-      direction: m?.direction ?? null,
+      source_date: row.owner_sent_at ?? null,
+      direction: row.owner_direction ?? null,
       context_subject: null,
-      context_sender: m?.context_sender ?? null,
+      context_sender: row.owner_participants_flat ?? null,
     } as RawRow;
   });
 

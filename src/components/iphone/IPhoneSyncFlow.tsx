@@ -5,6 +5,7 @@ import { SyncProgress } from "./SyncProgress";
 import { BackupPasswordModal } from "./BackupPasswordModal";
 import { SyncLockBanner } from "../sync/SyncLockBanner";
 import logger from "../../utils/logger";
+import { isWindowsArm64 } from "../../utils/platform";
 import { SyncStepChangeLog } from "../../utils/syncStepLog";
 
 interface IPhoneSyncFlowProps {
@@ -144,6 +145,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           onInstallDriver={recoverInstallDriver}
           isInstallingDriver={installDriverStatus === "installing"}
           driverInstallError={installDriverError}
+          isWindowsArm64={isWindowsArm64()}
         />
       )}
 
@@ -155,7 +157,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           // BACKLOG-2333: Cancel resets to the clean idle start screen (no
           // separate "Sync Cancelled" screen). The modal stays open on the
           // ConnectionStatus view, as if freshly opened.
-          onCancel={() => { logger.info("[IPhoneSyncFlow] Cancel clicked"); void cancelSync(); }}
+          onCancel={() => { logger.info("[IPhoneSyncFlow] Cancel clicked"); void cancelSync("progress-cancel"); }}
           isWaitingForPasscode={isWaitingForPasscode}
         />
       )}
@@ -243,7 +245,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           )}
           <div className="flex gap-3 mt-6">
             <button
-              onClick={() => { logger.info("[IPhoneSyncFlow] Error Close clicked"); cancelSync(); onClose?.(); }}
+              onClick={() => { logger.info("[IPhoneSyncFlow] Error Close clicked"); void cancelSync("error-close"); onClose?.(); }}
               className="px-6 py-3 bg-gray-100 text-gray-700 font-medium rounded-lg hover:bg-gray-200 transition-colors"
             >
               Close
@@ -272,7 +274,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
                   startSync();
                 } else {
                   logger.info("[IPhoneSyncFlow] Try Again with no device — returning to the connect step");
-                  void cancelSync();
+                  void cancelSync("try-again-no-device");
                 }
               }}
               className="px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-all"
@@ -288,7 +290,12 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
         isOpen={needsPassword}
         deviceName={device?.name || "iPhone"}
         onSubmit={submitPassword}
-        onCancel={cancelSync}
+        onCancel={() => {
+          // BACKLOG-3816: the one cancel that was not logged. The modal also calls this
+          // on Escape and on a backdrop click (ResponsiveModal onClose).
+          logger.info("[IPhoneSyncFlow] Password modal cancel clicked");
+          void cancelSync("password-cancel");
+        }}
         error={error || undefined}
         isLoading={isSyncing && !needsPassword}
       />

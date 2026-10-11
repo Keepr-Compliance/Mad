@@ -1443,6 +1443,96 @@ describe("Settings", () => {
     });
   });
 
+  // BACKLOG-3418 Q3 (founder 2026-10-07, pm_comments 66f5b114): a Windows user
+  // who chose no phone and no source sees NO source selected, and the iPhone
+  // Sync (USB) toggle stays disabled. Settings, the source radio, the Dashboard
+  // button and detection all read one rule (importSourcePolicy
+  // `chosenImportSource`, SR C-1). Fixtures: `preferences:get` returns the
+  // Supabase `preferences` jsonb (which carries `phone_type`); `user:get-phone-type`
+  // returns `{ success, phoneType }` from users_local.
+  describe("BACKLOG-3418: the chosen source on Windows (Q3)", () => {
+    const checkedSources = (container: HTMLElement) =>
+      Array.from(
+        container.querySelectorAll<HTMLInputElement>('#settings-messages input[type="radio"]'),
+      )
+        .filter((r) => r.checked)
+        .map((r) => r.value);
+    let platformBefore: string;
+
+    beforeEach(() => {
+      const sys = window.api.system as unknown as { platform: string };
+      platformBefore = sys.platform;
+      sys.platform = "win32";
+    });
+    afterEach(() => {
+      (window.api.system as unknown as { platform: string }).platform = platformBefore;
+      // window.api is built once per file (tests/setup.js): restore the default.
+      jest
+        .mocked(window.api.user.getPhoneType)
+        .mockResolvedValue({ success: true, phoneType: null } as Awaited<
+          ReturnType<typeof window.api.user.getPhoneType>
+        >);
+    });
+
+    const servePhoneType = (phoneType: "iphone" | "android" | null) =>
+      jest
+        .mocked(window.api.user.getPhoneType)
+        .mockResolvedValue({ success: true, phoneType } as Awaited<
+          ReturnType<typeof window.api.user.getPhoneType>
+        >);
+
+    it("no source and no phone type: no radio checked, the USB toggle disabled", async () => {
+      servePhoneType(null);
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      // Barrier: both readers consulted the phone type (the "nothing" is an
+      // answer, not a read that has not finished).
+      await waitFor(() =>
+        expect(jest.mocked(window.api.user.getPhoneType).mock.calls.length).toBeGreaterThanOrEqual(2),
+      );
+      // Anti-vacuity: the radios rendered (Windows: iPhone Sync + Google Messages).
+      await waitFor(() =>
+        expect(
+          container.querySelectorAll('#settings-messages input[type="radio"]').length,
+        ).toBe(2),
+      );
+      await waitFor(() =>
+        expect(screen.queryByText(/available when your import source is set to iphone/i)).toBeInTheDocument(),
+      );
+      expect(checkedSources(container)).toEqual([]);
+      expect(screen.getByRole("switch", { name: /enable iphone sync over usb/i })).toBeDisabled();
+    });
+
+    it.each([
+      ["a local iPhone phone type", {}, "iphone" as const],
+      ["only a cloud phone_type of iphone", { phone_type: "iphone" }, null],
+    ])(
+      "no source, %s: iPhone Sync checked and the USB toggle enabled (the 4 production users)",
+      async (_label, extra, local) => {
+        jest.mocked(window.api.preferences.get).mockResolvedValue({
+          success: true,
+          preferences: { export: { defaultFormat: "combined-pdf" }, ...extra },
+        });
+        servePhoneType(local);
+        const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+        await waitFor(() => expect(checkedSources(container)).toEqual(["iphone-sync"]));
+        await waitFor(() =>
+          expect(screen.getByRole("switch", { name: /enable iphone sync over usb/i })).not.toBeDisabled(),
+        );
+      },
+    );
+
+    it("macOS unchanged: no source, no phone type -> macOS Messages checked, USB toggle disabled", async () => {
+      (window.api.system as unknown as { platform: string }).platform = "darwin";
+      servePhoneType(null);
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      await waitFor(() => expect(checkedSources(container)).toEqual(["macos-native"]));
+      expect(screen.getByRole("switch", { name: /enable iphone sync over usb/i })).toBeDisabled();
+    });
+  });
+
   // BACKLOG-3423: the source radio must re-gate iPhone USB detection live.
   // These render Settings inside the REAL IPhoneSyncProvider — the tests above
   // deliberately do not, and so exercise the provider-less fallback. Without the

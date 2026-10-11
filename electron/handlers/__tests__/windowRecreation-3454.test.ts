@@ -52,7 +52,7 @@ const deviceEvents = new EventEmitter();
 const orchestratorEvents = new EventEmitter();
 
 jest.mock("electron", () => ({
-  ipcMain: { handle: jest.fn(), removeHandler: jest.fn() },
+  ipcMain: { handle: jest.fn(), removeHandler: jest.fn(), on: jest.fn(), removeAllListeners: jest.fn() },
   BrowserWindow: jest.fn(),
 }));
 

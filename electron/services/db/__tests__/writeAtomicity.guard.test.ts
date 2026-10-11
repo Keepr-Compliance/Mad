@@ -480,8 +480,12 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // is the forced-crash suite `transactionService.unlinkAtomicity-2547.test.ts`.
   "electron/services/iPhoneSyncStorageService.ts::rollbackSession":
     "BACKLOG-2552 — a half-rolled-back sync session: attachment rows deleted while their parent message rows remain, or messages gone while contacts survive. The rollback that exists to guarantee an atomic cancel is itself non-atomic.",
-  "electron/services/transactionService/transactionService.ts::linkMessages":
-    "BACKLOG-2550 — junction rows written with messages.transaction_id still NULL, so the message is re-offered as unlinked; or the inverse, the pointer set with no junction row, so the message is invisible to every junction reader. Transient, not permanent: INSERT OR IGNORE plus the unique indexes make a re-run idempotent.",
+  // --- BACKLOG-2550: DISCHARGED by BACKLOG-3785 — `transactionService.ts::linkMessages` ---
+  // The entry that was here is deleted: linkMessages now writes in chunks, each
+  // chunk ONE `dbTransaction`, so a message's pointer and its junction row
+  // always commit together. A crash between chunks leaves earlier chunks fully
+  // linked and later ones untouched — no half-linked message. Measured: with
+  // the entry present the guard reports linkMessages as fixed-but-still-listed.
 
 
   // ==========================================================================
@@ -639,6 +643,9 @@ function captureBody(lines: string[], startLine: number): string {
  * block. If the paren closes with no block, the handler was registered BY NAME
  * and the identifier is resolved to its declaration in the same file.
  */
+const HANDLER_REGISTRATION = /(?:ipcMain\.handle|\bhandleBusy)\s*\(/;
+const HANDLER_REGISTRATION_START = /(?:ipcMain\.handle|\bhandleBusy)\(/;
+
 function captureHandlerUnit(
   lines: string[],
   startLine: number
@@ -649,7 +656,9 @@ function captureHandlerUnit(
   let sawBrace = false;
   const buf: string[] = [];
   let flat = "";
-  const startCol = lines[startLine].indexOf("ipcMain.handle(");
+  // BACKLOG-3833: `handleBusy(` is `ipcMain.handle(` plus a busy-registry wrapper
+  // (electron/utils/busyIpc.ts); it registers the same handler, so it is the same unit.
+  const startCol = Math.max(0, lines[startLine].search(HANDLER_REGISTRATION_START));
   for (let i = startLine; i < lines.length; i++) {
     const line = lines[i];
     buf.push(line);
@@ -662,7 +671,7 @@ function captureHandlerUnit(
       } else if (ch === ")") {
         paren--;
         if (sawParen && paren <= 0 && !sawBrace) {
-          const m = /ipcMain\.handle\(\s*["'`]([^"'`]+)["'`]\s*,\s*([A-Za-z0-9_.]+)\s*\)/.exec(flat);
+          const m = /(?:ipcMain\.handle|\bhandleBusy)\(\s*["'`]([^"'`]+)["'`]\s*,\s*([A-Za-z0-9_.]+)\s*\)/.exec(flat);
           return { body: null, channel: m ? m[1] : null, refName: m ? m[2] : null };
         }
       } else if (ch === "{") {
@@ -671,7 +680,7 @@ function captureHandlerUnit(
       } else if (ch === "}") {
         brace--;
         if (sawBrace && brace <= 0) {
-          const m = /ipcMain\.handle\(\s*["'`]([^"'`]+)/.exec(flat);
+          const m = /(?:ipcMain\.handle|\bhandleBusy)\(\s*["'`]([^"'`]+)/.exec(flat);
           return { body: buf.join("\n"), channel: m ? m[1] : null, refName: null };
         }
       }
@@ -1076,7 +1085,7 @@ function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[]
 
   const found: Fn[] = [];
   for (let i = 0; i < lines.length; i++) {
-    if (/ipcMain\.handle\s*\(/.test(lines[i])) {
+    if (HANDLER_REGISTRATION.test(lines[i])) {
       const handler = captureHandlerUnit(lines, i);
       if (handler.body) {
         found.push({
@@ -1108,7 +1117,7 @@ function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[]
 
   const registrars = new Set(
     found
-      .filter((u) => !u.name.startsWith("ipc:") && /ipcMain\.handle\s*\(/.test(u.body))
+      .filter((u) => !u.name.startsWith("ipc:") && HANDLER_REGISTRATION.test(u.body))
       .map((u) => `${u.file}:${u.line}`)
   );
   const seen = new Set<string>();

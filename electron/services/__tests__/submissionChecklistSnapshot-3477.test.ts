@@ -105,7 +105,11 @@ import supabaseService from "../supabaseService";
 import supabaseStorageService from "../supabaseStorageService";
 import databaseService from "../databaseService";
 import logService from "../logService";
-import { addChecklistLink, selectChecklistTemplate } from "../db/checklistDbService";
+import {
+  addChecklistLink,
+  selectChecklistTemplate,
+  setChecklistLinkIncludeOutsideDates,
+} from "../db/checklistDbService";
 import {
   SNAPSHOT_RETRY,
   SNAPSHOT_RPC,
@@ -609,13 +613,21 @@ beforeEach(() => {
 async function submitConfirmed() {
   const preflight = await submissionService.preflightSubmission(TX);
   return submissionService.submitTransaction(TX, undefined, {
-    acceptedExclusionKeys: preflight.notIncluded.map((i) => i.key),
+    // BACKLOG-3764: and the checklist evidence it lists (att-nobytes's link).
+    acceptedExclusionKeys: [
+      ...preflight.notIncluded.map((i) => i.key),
+      ...(preflight.checklistLinkGaps ?? []).map((g) => g.key),
+    ],
   });
 }
 async function resubmitConfirmed() {
   const preflight = await submissionService.preflightSubmission(TX);
   return submissionService.resubmitTransaction(TX, undefined, {
-    acceptedExclusionKeys: preflight.notIncluded.map((i) => i.key),
+    // BACKLOG-3764: and the checklist evidence it lists (att-nobytes's link).
+    acceptedExclusionKeys: [
+      ...preflight.notIncluded.map((i) => i.key),
+      ...(preflight.checklistLinkGaps ?? []).map((g) => g.key),
+    ],
   });
 }
 
@@ -1472,5 +1484,205 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     expect(second.success).toBe(true);
     expect("checklistsNotSent" in second).toBe(false);
     expect(fake.uploadingAtChecklistRead).toEqual([]);
+  });
+});
+
+// ============================================================================
+// BACKLOG-3764 — checklist links to evidence dated outside the audit dates.
+// SR plan ruling pm_comments a0241e2d on BACKLOG-3764: controls C1, C2, C3,
+// C6, C7, C8, C9, C10 (C4 picker, C5 boundary sweep and C11 upgrade path live
+// in their own files). Same harness: real schema, real checklist service, real
+// readers, the cloud function emulated as transcribed above.
+// ============================================================================
+describe("BACKLOG-3764 — out-of-dates checklist evidence is asked about, never dropped silently", () => {
+  /** The date step's real writer (main side of `saveConfirmedTransactionDates`). */
+  const transactionDb = jest.requireActual("../db/transactionDbService") as typeof import("../db/transactionDbService");
+  const setDates = (started: string, closed: string) =>
+    transactionDb.updateTransaction(TX, { started_at: started, closed_at: closed, closing_date_verified: 1 } as never);
+
+  const itemId = (title: string) =>
+    (db.prepare(`SELECT id FROM transaction_checklist_items WHERE title = ?`).get(title) as { id: string }).id;
+  const linkRows = () => db.prepare(`SELECT id, include_outside_dates FROM transaction_checklist_links ORDER BY id`).all();
+  const memberCount = () =>
+    (db.prepare(`SELECT count(*) AS n FROM transaction_checklist_link_members`).get() as { n: number }).n;
+  const uploadedEmails = () =>
+    fake.tables.submission_messages.filter((m) => m.channel === "email").map((m) => m.local_message_id as string).sort();
+  const uploadedAttachments = () =>
+    fake.tables.submission_attachments.map((a) => a.local_attachment_id as string).sort();
+  /** Every cloud link member, as `label:local id`. */
+  const cloudLinkMembers = () => {
+    const links = new Map(fake.tables.submission_checklist_links.map((l) => [l.id, l.label]));
+    const msgs = new Map(fake.tables.submission_messages.map((m) => [m.id, m.local_message_id]));
+    const atts = new Map(fake.tables.submission_attachments.map((a) => [a.id, a.local_attachment_id]));
+    return fake.tables.submission_checklist_link_members
+      .map((m) => `${links.get(m.link_id as string)}:${
+        m.submission_message_id ? msgs.get(m.submission_message_id as string) : atts.get(m.submission_attachment_id as string)
+      }`)
+      .sort();
+  };
+
+  /** Submit, confirming exactly what the pre-flight lists (files and links). */
+  async function submitAcceptingPreflight() {
+    const preflight = await submissionService.preflightSubmission(TX);
+    const result = await submissionService.submitTransaction(TX, undefined, {
+      acceptedExclusionKeys: [
+        ...preflight.notIncluded.map((i) => i.key),
+        ...(preflight.checklistLinkGaps ?? []).map((g) => g.key),
+      ],
+    });
+    return { preflight, result };
+  }
+
+  beforeEach(async () => {
+    // An email AFTER the closing date, with two files, on the same deal.
+    run(
+      `INSERT INTO emails (id, user_id, external_id, source, account_id, subject, sender, recipients, sent_at, has_attachments)
+       VALUES ('e-late', ?, 'ext-e-late', 'gmail', 'acct', 'Late repair invoice', 'l@example.com', 'a@example.test', '2026-04-10T15:00:00.000Z', 1),
+              ('e-late2', ?, 'ext-e-late2', 'gmail', 'acct', 'Late HOA letter', 'l@example.com', 'a@example.test', '2026-04-11T15:00:00.000Z', 0)`,
+      USER, USER,
+    );
+    run(`INSERT INTO communications (id, user_id, transaction_id, email_id, link_source) VALUES ('c-late', ?, ?, 'e-late', 'manual'), ('c-late2', ?, ?, 'e-late2', 'manual')`, USER, TX, USER, TX);
+    run(
+      `INSERT INTO attachments (id, email_id, filename, mime_type, storage_path, created_at) VALUES
+         ('att-late', 'e-late', 'invoice.pdf', 'application/pdf', '/attachments/aa01.pdf', '2026-04-10T15:00:00Z'),
+         ('att-late-2', 'e-late', 'photos.pdf', 'application/pdf', '/attachments/aa02.pdf', '2026-04-10T15:00:01Z')`,
+    );
+    await seedChecklists();
+    // Dates as the date step saves them (date-only), March.
+    await setDates("2026-03-01", "2026-03-31");
+  });
+
+  it("C9: an out-of-dates link without a yes is refused as outside_dates and writes NOTHING", async () => {
+    const linksBefore = linkRows();
+    const membersBefore = memberCount();
+    const r = await addChecklistLink({ itemId: itemId("Earnest money receipt"), kind: "email", targetIds: ["e-late"] });
+    expect(r).toEqual({
+      status: "outside_dates",
+      outside: [{ id: "e-late", sentAt: "2026-04-10T15:00:00.000Z" }],
+      auditStart: "2026-03-01",
+      auditEnd: "2026-03-31",
+    });
+    expect(linkRows()).toEqual(linksBefore);
+    expect(memberCount()).toBe(membersBefore);
+  });
+
+  it("C3 + C10: a yes is stored on the link, and the email AND its files are sent and attached", async () => {
+    const r = await addChecklistLink({
+      itemId: itemId("Earnest money receipt"),
+      kind: "email",
+      targetIds: ["e-late"],
+      includeOutsideDates: true,
+    });
+    expect(r.status).toBe("added");
+    const { result } = await submitAcceptingPreflight();
+    expect(result.success).toBe(true);
+    expect(uploadedEmails()).toEqual(["e-fwd", "e-inspection", "e-late", "e-offer"]);
+    // C10: the flagged email's files come with it.
+    expect(uploadedAttachments()).toEqual(["att-fwd", "att-late", "att-late-2", "att-offer"]);
+    expect(cloudLinkMembers()).toContain("Late repair invoice:e-late");
+    expect(result.checklistLinksNotAttached).toBeUndefined();
+  });
+
+  it("C6: after a yes on one link, a second out-of-dates link on the SAME item is still asked about", async () => {
+    const item = itemId("Earnest money receipt");
+    const first = await addChecklistLink({ itemId: item, kind: "email", targetIds: ["e-late"], includeOutsideDates: true });
+    expect(first.status).toBe("added");
+    const second = await addChecklistLink({ itemId: item, kind: "email", targetIds: ["e-late2"] });
+    expect(second.status).toBe("outside_dates");
+  });
+
+  it("C2 (+C1): a link made in the dates, pushed outside by the date step, is NOT sent without a yes, and is listed", async () => {
+    // e-fwd (sent 2 Mar) is linked while inside; the date step then ends the deal on 1 Mar.
+    await setDates("2026-03-01", "2026-03-01");
+    const { preflight, result } = await submitAcceptingPreflight();
+    const outside = (preflight.checklistLinkGaps ?? []).filter((g) => g.reason === "outside_audit_dates");
+    expect(outside.map((g) => [g.itemTitle, g.missingIds])).toEqual([
+      ["Earnest money receipt", ["att-fwd"]],
+      ["Inspection scheduled", ["e-inspection"]],
+    ]);
+    expect(result.success).toBe(true);
+    // C2: nothing outside the dates was sent without a yes.
+    expect(uploadedEmails()).toEqual(["e-offer"]);
+    expect(uploadedAttachments()).toEqual(["att-offer"]);
+    // C1: nothing the agent was not told about was dropped.
+    expect(fake.rpcCalls).toHaveLength(1);
+    expect(result.checklistLinksNotAttached).toBeUndefined();
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it("pre-flight Include it: the answer is stored on that link, the question goes, and the email is sent", async () => {
+    await setDates("2026-03-01", "2026-03-01");
+    const first = await submissionService.preflightSubmission(TX);
+    const gap = (first.checklistLinkGaps ?? []).find((g) => g.itemTitle === "Inspection scheduled")!;
+    expect(gap.reason).toBe("outside_audit_dates");
+    // Another deal's id is refused: only a link on THIS transaction changes.
+    expect(await setChecklistLinkIncludeOutsideDates("txn-other", gap.linkId)).toBe(false);
+    expect(await setChecklistLinkIncludeOutsideDates(TX, gap.linkId)).toBe(true);
+    const { preflight, result } = await submitAcceptingPreflight();
+    expect((preflight.checklistLinkGaps ?? []).map((g) => g.itemTitle)).not.toContain("Inspection scheduled");
+    expect(result.success).toBe(true);
+    expect(uploadedEmails()).toEqual(["e-inspection", "e-offer"]);
+    expect(cloudLinkMembers()).toContain("Inspection booked:e-inspection");
+  });
+
+  it("a yes on ANOTHER deal's checklist does not send that email with this deal", async () => {
+    // The other deal has dates too, so its yes is a real stored answer (a
+    // link made with no question stores none).
+    run(`INSERT INTO transactions (id, user_id, property_address, started_at, closed_at) VALUES ('txn-other', ?, '9 Other St', '2026-03-01', '2026-03-31')`, USER);
+    run(`INSERT INTO communications (id, user_id, transaction_id, email_id, link_source) VALUES ('c-late-other', ?, 'txn-other', 'e-late', 'manual')`, USER);
+    const other = await selectChecklistTemplate({
+      transactionId: "txn-other",
+      templateId: TPL_PURCHASE,
+      templateName: "Residential Purchase",
+      items: [{ title: "Other deal item", isRequired: true, sortOrder: 0 }],
+    });
+    expect(other.status).toBe("added");
+    const r = await addChecklistLink({ itemId: itemId("Other deal item"), kind: "email", targetIds: ["e-late"], includeOutsideDates: true });
+    expect(r.status).toBe("added");
+    expect(db.prepare(`SELECT count(*) AS n FROM transaction_checklist_links WHERE include_outside_dates = 1`).get()).toEqual({ n: 1 });
+    const { result } = await submitAcceptingPreflight();
+    expect(result.success).toBe(true);
+    expect(uploadedEmails()).not.toContain("e-late");
+    expect(uploadedAttachments()).not.toContain("att-late");
+  });
+
+  it("an unconfirmed link gap refuses the submit and returns the list again (nothing sent)", async () => {
+    await setDates("2026-03-01", "2026-03-01");
+    const preflight = await submissionService.preflightSubmission(TX);
+    const result = await submissionService.submitTransaction(TX, undefined, {
+      acceptedExclusionKeys: preflight.notIncluded.map((i) => i.key),
+    });
+    expect(result.success).toBe(false);
+    expect(result.preflightChanged).toBe(true);
+    expect((result.checklistLinkGaps ?? []).length).toBeGreaterThan(0);
+    expect(fake.tables.transaction_submissions).toHaveLength(0);
+  });
+
+  it("C7: the date-step summary counts a flagged out-of-dates email (scope == what is sent)", async () => {
+    await addChecklistLink({ itemId: itemId("Earnest money receipt"), kind: "email", targetIds: ["e-late"], includeOutsideDates: true });
+    const scope = await submissionService.getSubmissionScope(TX, { started_at: "2026-03-01", closed_at: "2026-03-31" });
+    expect(scope.inWindow?.emails).toBe(4);
+    expect(scope.inWindow?.emailAttachments).toBe(4);
+  });
+
+  it("C8: evidence the cloud drops that was never listed is reported and the agent is told", async () => {
+    // The cloud loses e-offer's uploaded file before the copy runs: a drop the
+    // pre-flight could not have known about.
+    const realRpc = fake.rpc.bind(fake);
+    fake.rpc = ((fn: string, args: Row) => {
+      if (fn === SNAPSHOT_RPC) {
+        fake.tables.submission_attachments = fake.tables.submission_attachments.filter(
+          (a) => a.local_attachment_id !== "att-offer",
+        );
+      }
+      return realRpc(fn, args);
+    }) as typeof fake.rpc;
+    const { result } = await submitAcceptingPreflight();
+    expect(result.success).toBe(true);
+    expect(result.checklistLinksNotAttached).toBe(true);
+    expect(Sentry.captureException).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Checklist evidence was not attached at submission" }),
+      expect.objectContaining({ tags: expect.objectContaining({ code: "links_not_attached" }) }),
+    );
   });
 });

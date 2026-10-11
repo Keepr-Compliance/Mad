@@ -49,6 +49,11 @@ jest.mock("../supabaseService", () => ({
       auth: { getSession: mockGetSession },
     }),
     getAuthSession: mockGetAuthSession,
+    // BACKLOG-3675: the no-row branch and unlockWithCredit now read the
+    // account's organization membership. "none" is the definite "no
+    // membership" answer the real method returns for an empty result, so
+    // every case in this suite stays a non-entitled account.
+    getActiveOrganizationMembershipOutcome: jest.fn(async () => ({ status: "none" })),
   },
 }));
 

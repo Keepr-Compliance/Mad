@@ -8,9 +8,10 @@
  * to show the keychain explanation screen before completing the login.
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import type { User, Subscription } from "../../electron/types/models";
 import logger from '../utils/logger';
+import { getSignInNotice, subscribeSignInNotice } from "../services/sessionActivityService";
 import { AppMark } from "./common/AppMark";
 
 // TASK-2044: Login retry configuration
@@ -134,6 +135,8 @@ const Login = ({
   const [loading, setLoading] = useState(false);
   const [provider, setProvider] = useState<"google" | "microsoft" | "browser" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // BACKLOG-3833: why the user is here (e.g. signed out for inactivity)
+  const signInNotice = useSyncExternalStore(subscribeSignInNotice, getSignInNotice);
   // TASK-1507: Track when browser auth is in progress
   const [browserAuthInProgress, setBrowserAuthInProgress] = useState(false);
 
@@ -225,6 +228,17 @@ const Login = ({
   const handleDeepLinkError = useCallback((data: { error: string; code: string }) => {
     logger.error(`[Login] Deep link auth error (attempt ${retryAttempt + 1}):`, data);
     clearRetryTimers();
+
+    // BACKLOG-3768: a network/TLS failure in main. Show main's message (it
+    // names the cause) AND the Try Again button. Not auto-retried.
+    if (data.code === "CONNECTION_FAILED") {
+      setBrowserAuthInProgress(false);
+      setLoading(false);
+      setIsRetrying(false);
+      setRetriesExhausted(true);
+      setError(data.error || "Can't connect to Keepr. Check your network, then try again.");
+      return;
+    }
 
     // Check if this is a non-retryable error
     const isNonRetryable = LOGIN_RETRY_CONFIG.nonRetryableCodes.includes(
@@ -498,6 +512,17 @@ const Login = ({
             Desktop
           </p>
         </div>
+
+        {/* BACKLOG-3833: sign-out reason */}
+        {signInNotice && !error && (
+          <div
+            role="status"
+            data-testid="sign-in-notice"
+            className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg"
+          >
+            <p className="text-sm text-blue-800">{signInNotice}</p>
+          </div>
+        )}
 
         {/* Error Message -- TASK-2044: includes "Try again" button when retries exhausted */}
         {error && (

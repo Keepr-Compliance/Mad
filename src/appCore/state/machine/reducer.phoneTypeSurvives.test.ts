@@ -49,6 +49,7 @@ function returningMidOnboarding(phoneType: Phone | null, platform: PlatformInfo)
     hasEmailConnected: false,
     needsDriverSetup: false,
     fda: platform.isMacOS ? "not-asked" : "not-applicable",
+    setup: "not-finished",
   };
 }
 
@@ -61,6 +62,7 @@ function readyWith(phoneType: Phone, platform: PlatformInfo): AppState {
       hasEmailConnected: false,
       needsDriverSetup: false,
       fda: platform.isMacOS ? "granted" : "not-applicable",
+      setup: "finished",
     },
     platform
   );
@@ -73,11 +75,24 @@ function readyWith(phoneType: Phone, platform: PlatformInfo): AppState {
  * the only route that can produce it: a queue completion with no selection.
  * FDA_GRANTED on macOS so the email exit below is not held by `permissions`.
  */
-function readyNeverAnswered(platform: PlatformInfo): AppState {
+function newAccountInSetup(platform: PlatformInfo): AppState {
+  // BACKLOG-3673: a sign-in loads the account (LOGIN_SUCCESS -> loading-user-data);
+  // a brand-new account's record is not finished, so USER_DATA_LOADED -> setup.
   let s = appStateReducer({ status: "unauthenticated" }, {
     type: "LOGIN_SUCCESS", user, platform, isNewUser: true,
   });
+  s = appStateReducer(s, {
+    type: "USER_DATA_LOADED",
+    data: returningMidOnboarding(null, platform),
+    user,
+    platform,
+  });
   if (s.status !== "onboarding") throw new Error("fixture: expected onboarding");
+  return s;
+}
+
+function readyNeverAnswered(platform: PlatformInfo): AppState {
+  let s = newAccountInSetup(platform);
   if (platform.isMacOS) s = appStateReducer(s, { type: "FDA_GRANTED" });
   s = appStateReducer(s, { type: "ONBOARDING_QUEUE_DONE" });
   if (s.status !== "ready" || s.userData.phoneType !== null) {
@@ -207,12 +222,15 @@ describe("[SR-C] never answered: completing permissions does not invent a phone 
   // permissions, so no user completes permissions without an answer. It guards
   // reducer.ts ONBOARDING_STEP_COMPLETE, which must record null, never a
   // platform default.
-  it("macOS new user -> FDA_GRANTED -> ONBOARDING_STEP_COMPLETE(permissions) -> phoneType null", () => {
-    let s: AppState = appStateReducer({ status: "unauthenticated" }, {
-      type: "LOGIN_SUCCESS", user, platform: macOS, isNewUser: true,
-    });
+  it("macOS new user -> FDA_GRANTED -> ONBOARDING_STEP_COMPLETE(permissions) -> queue exit -> phoneType null", () => {
+    let s: AppState = newAccountInSetup(macOS);
     s = appStateReducer(s, { type: "FDA_GRANTED" });
-    const out = appStateReducer(s, { type: "ONBOARDING_STEP_COMPLETE", step: "permissions" });
+    s = appStateReducer(s, { type: "ONBOARDING_STEP_COMPLETE", step: "permissions" });
+    // BACKLOG-3673: completing permissions never leaves setup.
+    expect(s.status).toBe("onboarding");
+    if (s.status !== "onboarding") return;
+    expect(s.selectedPhoneType).toBeUndefined();
+    const out = appStateReducer(s, { type: "ONBOARDING_QUEUE_DONE" });
     expect(out.status).toBe("ready");
     if (out.status !== "ready") return;
     expect(out.userData.phoneType).toBeNull();

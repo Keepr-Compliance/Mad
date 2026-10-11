@@ -27,12 +27,15 @@
  *     surfaced into context — tracked as a follow-up (see BACKLOG-1821 notes).
  *
  * This is a pure function of context (mirrors the queue's pure-function design in
- * buildQueue.ts). It performs NO IPC / no window.api access.
+ * buildQueue.ts). It performs NO IPC. The one exception is BACKLOG-3363's
+ * Windows-on-ARM flag, a synchronous constant read from the preload bridge as
+ * a default parameter (callers/tests may pass it explicitly).
  *
  * @module onboarding/queue/dataSourceFloor
  */
 
 import type { OnboardingContext } from "../types";
+import { isWindowsArm64 as readIsWindowsArm64 } from "../../../utils/platform";
 
 /**
  * Discriminates WHICH source satisfies the floor (or none). Returned by
@@ -74,7 +77,10 @@ function isMacOsFamily(context: OnboardingContext): boolean {
  * @param context - The current onboarding context
  * @returns the satisfying {@link DataSourceKind}, or `null` if the floor is unmet
  */
-export function getSatisfyingSource(context: OnboardingContext): DataSourceKind {
+export function getSatisfyingSource(
+  context: OnboardingContext,
+  isWindowsArm64: boolean = readIsWindowsArm64(),
+): DataSourceKind {
   // 1. Connected mailbox — the primary, platform-agnostic source.
   if (context.emailConnected === true) {
     return "email";
@@ -88,7 +94,13 @@ export function getSatisfyingSource(context: OnboardingContext): DataSourceKind 
   // 3. iPhone: the Apple driver is the texts capability on Windows (and a
   //    secondary path on macOS). driverSetupComplete === true means installed;
   //    an explicitly *skipped* driver (driverSkipped) does NOT satisfy the floor.
-  if (context.phoneType === "iphone" && context.driverSetupComplete === true) {
+  //    BACKLOG-3363: never on Windows on ARM — the x64 driver may be installed
+  //    but can never load there, so it is not a working texts source.
+  if (
+    context.phoneType === "iphone" &&
+    context.driverSetupComplete === true &&
+    !isWindowsArm64
+  ) {
     return "texts-iphone-driver";
   }
 
@@ -111,6 +123,9 @@ export function getSatisfyingSource(context: OnboardingContext): DataSourceKind 
  * @param context - The current onboarding context
  * @returns true if at least one data source satisfies the floor
  */
-export function hasMinimumDataSource(context: OnboardingContext): boolean {
-  return getSatisfyingSource(context) !== null;
+export function hasMinimumDataSource(
+  context: OnboardingContext,
+  isWindowsArm64: boolean = readIsWindowsArm64(),
+): boolean {
+  return getSatisfyingSource(context, isWindowsArm64) !== null;
 }

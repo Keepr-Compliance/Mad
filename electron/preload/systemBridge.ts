@@ -4,6 +4,7 @@
  */
 
 import { ipcRenderer } from "electron";
+import { argvHasWindowsArm64Token } from "../utils/windowsArm64";
 
 // Declared by esbuild at build time: true for dev, false for production
 declare const __DEV__: boolean;
@@ -72,6 +73,13 @@ export const systemBridge = {
    * Current platform identifier from Node.js process.platform
    */
   platform: process.platform,
+
+  /**
+   * BACKLOG-3363: true on a Windows on ARM PC (iPhone USB sync unsupported).
+   * Synchronous — main passes it via webPreferences.additionalArguments — so
+   * the first render already knows and never flashes the connect/Trust UI.
+   */
+  isWindowsArm64: argvHasWindowsArm64Token(process.argv),
 
   /**
    * Gets application info (version, name, etc.)
@@ -288,6 +296,8 @@ export const systemBridge = {
    * @param errorDetails - Optional error details to include
    * @returns Result
    */
+  saveDiagnosticLog: () => ipcRenderer.invoke("system:save-diagnostic-log"),
+
   contactSupport: (errorDetails?: string) =>
     ipcRenderer.invoke("system:contact-support", errorDetails),
 

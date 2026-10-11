@@ -55,6 +55,114 @@ function describeError(error: unknown): string {
 }
 
 /**
+ * BACKLOG-3598: does a backup index file exist? ENOENT is the ONLY "no".
+ *
+ * Any other failure (EPERM, EBUSY, EACCES — a locked file on Windows) throws, because
+ * "could not look" is not "not there". Callers that decide whether to DELETE a backup
+ * read this, and a lock read as "missing" would delete a usable backup.
+ */
+async function indexFileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.stat(filePath);
+    return true;
+  } catch (err: unknown) {
+    if (errnoCode(err) === "ENOENT") return false;
+    throw err;
+  }
+}
+
+/** The errno-style code of a caught value, or `undefined` if it carries none. */
+function errnoCode(err: unknown): string | undefined {
+  if (err && typeof err === "object" && "code" in err) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+  }
+  return undefined;
+}
+
+/**
+ * BACKLOG-3598 (SR R3): the udid, if `name` validates to EXACTLY itself; else null.
+ * `validateDeviceUdid` trims, so a folder named `" <udid>"` validates — and would be
+ * acted on at a different path than the one that was listed.
+ */
+/**
+ * BACKLOG-3816: prefix of a plaintext chain moved aside for an encrypted one. Starts
+ * with "." so it is never a valid udid and the 3598 sweep never classifies it.
+ */
+// Single source in the at-rest module (S4-C seals moved-aside chains by this prefix).
+export { REPLACED_CHAIN_PREFIX } from "./atRest/backupAtRest";
+import { REPLACED_CHAIN_PREFIX, markerProtectsChain, readMarkerAt } from "./atRest/backupAtRest";
+import { openBackupIndexBytes } from "./atRest/backupIndexFiles";
+import {
+  BACKUP_SIZE_RECORD_FILE,
+  forgetBackupSize,
+  readRecordedBackupSize,
+  recordBackupSize,
+  createDeferredBackupSize,
+  type DeferredBackupSize,
+} from "./backupSizeRecord";
+
+function exactUdidOrNull(name: string): string | null {
+  try {
+    return validateDeviceUdid(name) === name ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * BACKLOG-3598 (SR R2): every leftover-backup removal in the process runs through
+ * this one chain, so two callers never delete in the same tree at the same time.
+ * Module-level on purpose: the sync orchestrator and the IPC handlers each own a
+ * separate `BackupService` instance, and an instance field would not serialise them.
+ * A second caller waits its turn; each removal re-reads the folder right before it
+ * deletes, so waiting cannot turn a stale reading into a delete.
+ */
+let leftoverCleanupChain: Promise<unknown> = Promise.resolve();
+
+function serialiseLeftoverCleanup<T>(work: () => Promise<T>): Promise<T> {
+  const run = leftoverCleanupChain.then(work, work);
+  leftoverCleanupChain = run.catch(() => undefined);
+  return run;
+}
+
+/**
+ * BACKLOG-3598: what is in `Backups/<udid>`, for the purpose of deciding whether it
+ * may be deleted.
+ *
+ * - `absent`   — ENOENT on the folder. Nothing to delete.
+ * - `leftover` — the folder exists and `Manifest.db` is ENOENT. An unfinished first
+ *                backup: the device has no index to diff against, so nothing in it
+ *                can be reused (it is also refused by `isUsablePriorBackup`).
+ * - `indexed`  — `Manifest.db` is present. Never deleted by the cleanup, whether or
+ *                not `Info.plist` is present: idevicebackup2 removes and rewrites
+ *                `Info.plist` at the start of every backup run, so a run killed in
+ *                that window leaves a real backup without one.
+ * - `unknown`  — a read failed (EPERM/EBUSY/...). Never deleted.
+ *
+ * BACKLOG-3816 S4-C: an at-rest marker of migrating / encrypted / syncing /
+ * apple-encrypted makes the folder `indexed` regardless of its files; an unreadable
+ * marker makes it `unknown`.
+ */
+export type BackupFolderClass = "absent" | "leftover" | "indexed" | "unknown";
+
+/** BACKLOG-3598: the result of one attempt to remove a leftover backup folder. */
+export type LeftoverRemoval =
+  | { outcome: "removed"; bytes: number | null }
+  | { outcome: "kept"; folder: Exclude<BackupFolderClass, "leftover"> }
+  | { outcome: "failed"; errorCode: string };
+
+/** BACKLOG-3598: what a sweep of `Backups/` did. */
+export interface LeftoverSweep {
+  /** Folders removed. */
+  removed: number;
+  /** Bytes freed by measured removals. Folders whose size could not be read add 0. */
+  bytesFreed: number;
+  /** One errno code per folder that could not be removed. */
+  failures: string[];
+}
+
+/**
  * BACKLOG-2899: how idevicebackup2 reports that the HOST disk is full.
  *
  * TRANSCRIBED, in two steps, because BACKLOG-2870 is the precedent for a
@@ -157,10 +265,13 @@ export const MB_ERROR_FILE_MISSING = 4;
  * `/disk space|no space|ENOSPC|not enough space/i` Sentry tag still fires. That
  * coupling is asserted by a test rather than left to be rediscovered.
  */
+export const BACKUP_STOPPED_FOR_QUIT_MESSAGE =
+  "Backup stopped because Keepr was closed.";
+
 export const BACKUP_HOST_DISK_FULL_MESSAGE =
-  "Not enough free disk space on this Mac to back up your iPhone. " +
-  "Your Mac may report far more space than this: macOS counts space held by local " +
-  "Time Machine snapshots as free, and a backup cannot use it. Deleting files often " +
+  "Not enough free disk space on this computer to back up your iPhone. " +
+  "Your computer may report far more space than this: it can count space held by local " +
+  "snapshots as free, and a backup cannot use it. Deleting files often " +
   "frees nothing while those snapshots are holding them.";
 
 /** BACKLOG-2913: correct for MBErrorDomain/208, and now shown only for it. */
@@ -182,7 +293,7 @@ export const BACKUP_DEVICE_LOCKED_MESSAGE =
  */
 export const BACKUP_CONNECTION_LOST_MESSAGE =
   "The connection to your iPhone dropped during the backup. Try a different cable, " +
-  "plug the iPhone straight into this Mac without a hub or dock, then sync again. " +
+  "plug the iPhone straight into this computer without a hub or dock, then sync again. " +
   "If it keeps dropping, restart your iPhone.";
 
 /**
@@ -208,7 +319,7 @@ export const BACKUP_CONNECTION_LOST_MESSAGE =
 export const BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE =
   "The connection to your iPhone dropped during the backup. This is often " +
   "temporary — try syncing again. If it keeps happening, plug the iPhone " +
-  "straight into this Mac without a hub, and check that neither device is going " +
+  "straight into this computer without a hub, and check that neither device is going " +
   "to sleep.";
 
 /**
@@ -223,7 +334,7 @@ export const BACKUP_SERVICE_UNAVAILABLE_MESSAGE =
 
 /** BACKLOG-2913: MBErrorDomain/4 — the device could not find a file it needed. */
 export const BACKUP_FILE_MISSING_MESSAGE =
-  "Part of the existing backup on this Mac is missing or unreadable, so your iPhone " +
+  "Part of the existing backup on this computer is missing or unreadable, so your iPhone " +
   "could not continue it. Starting a fresh backup should clear this.";
 
 /**
@@ -289,6 +400,137 @@ const DL_ERROR_DESCRIPTION = /<key>ErrorDescription<\/key>\s*<string>([\s\S]*?)<
 const CONNECTION_DROPPED_PATTERN = /usbmuxd_send returned -\d+ \(Broken pipe\)/i;
 const SERVICE_VERSION_EXCHANGE_PATTERN =
   /version exchange failed|Could not perform backup protocol version exchange/i;
+
+/**
+ * BACKLOG-3790: what of idevicebackup2's output may be WRITTEN to a log or Sentry.
+ *
+ * Under `-d`, libimobiledevice's `debug_plist` prints every plist it exchanges with
+ * the device to stderr: a trace header (`... printing 433 bytes plist:`) followed by
+ * bare XML lines with no prefix — `<key>PasswordProtected</key>`,
+ * `<key>fm-activation-locked</key>`, `<string>com.…</string>`, `<data>` + base64.
+ * Those lines carry device properties and the user's installed-app bundle IDs. They
+ * are never an error in themselves, yet trigger words inside key names
+ * (`password`, `locked`) logged them at warn as "stderr (error pattern)".
+ *
+ * This decides what is LOGGED only. The raw stderr/stdout buffers are untouched —
+ * `parseDeviceBackupError` reads the DLMessageProcessMessage plist out of them.
+ */
+export interface IdeviceOutputLogFilterState {
+  /** Inside a `<?xml` / `<plist` dump that has not yet reached `</plist>`. */
+  inPlist: boolean;
+}
+
+export function createIdeviceOutputLogFilterState(): IdeviceOutputLogFilterState {
+  return { inPlist: false };
+}
+
+/** Any libimobiledevice trace line, Windows (`16:06:22 D:\...\idevice.c:652 f():`)
+ * or macOS (`22:44:38.022 property_list_service.c:253 f():`). A plist dump never
+ * contains one, so it ends a dump that lost its `</plist>`. */
+const IDEVICE_TRACE_LINE = /^\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+\S+:\d+\s+\w+\(\):/;
+/** idevicebackup2's own error lines. Also end an unterminated dump. */
+const IDEVICE_ERROR_LINE = /^ERROR:/i;
+const PLIST_DUMP_START = /^<(?:\?xml\b|!DOCTYPE\s+plist\b|plist\b)/i;
+const PLIST_DUMP_END = /<\/plist>\s*$/i;
+/** A `<data>` base64 continuation line. */
+const BASE64_LINE = /^[A-Za-z0-9+/]{16,}={0,2}$/;
+/** libimobiledevice debug.c packet-dump row: `0000: 3c 3f 78 ...   | <?xml ...`. */
+const HEX_DUMP_ROW = /^[0-9a-f]{4}: /i;
+/** Any angle bracket: a whole tag, or the fragment of one left by a mid-line cut. */
+const MARKUP_FRAGMENT = /[<>]/;
+/**
+ * A reverse-DNS identifier (app bundle ID): three or more dot-separated labels,
+ * the first alphabetic. `com.apple.*` is kept — Apple's service names
+ * (`com.apple.mobilebackup2`) are what make a genuine error line diagnosable, and
+ * they identify nothing about the user. File names (`idevice.c`, `Manifest.db`)
+ * have one dot and are untouched.
+ */
+const REVERSE_DNS_ID =
+  /(?<![\w.-])(?!com\.apple\.)[a-z]{2,15}(?:\.[a-z0-9][a-z0-9_-]*){2,}(?![\w-])/gi;
+const FILE_NAME_SUFFIX = /\.(?:plist|bak|db|sqlite|log|txt|json|xml|tmp)$/i;
+export const REDACTED_APP_ID = "[app-id]";
+
+/**
+ * BACKLOG-3598: per-read / per-write transport trace lines that `-d` prints thousands of
+ * times per backup (`SSL_read 32768, received 32768`). Not an error. Real errors,
+ * warnings and `received 0` style failures are not matched.
+ */
+export const TRACE_NOISE_LINE =
+  /\bSSL_(?:read|write)\s+\d+|\bservice_send\b|\b(?:idevice_connection_receive_timeout|internal_plist_receive_timeout|np_get_notification)\b|\b\w+_(?:un)?lock\(\):\s*(?:Locked|Unlocked)\b/;
+
+/** BACKLOG-3598: how many stderr lines the failure log keeps. */
+export const FAILURE_STDERR_LOG_MAX_LINES = 50;
+
+/**
+ * Decide whether one output line may be logged. Returns `null` to suppress it, or
+ * the line with any third-party bundle ID redacted.
+ */
+export function filterIdeviceOutputLineForLog(
+  line: string,
+  state: IdeviceOutputLogFilterState,
+): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  if (HEX_DUMP_ROW.test(trimmed)) return null;
+
+  if (IDEVICE_TRACE_LINE.test(trimmed) || IDEVICE_ERROR_LINE.test(trimmed)) {
+    state.inPlist = false;
+  } else if (PLIST_DUMP_START.test(trimmed)) {
+    state.inPlist = !PLIST_DUMP_END.test(trimmed);
+    return null;
+  } else if (state.inPlist) {
+    if (PLIST_DUMP_END.test(trimmed)) state.inPlist = false;
+    return null;
+  } else if (BASE64_LINE.test(trimmed)) {
+    // Plist markup with no visible start — a dump whose head was cut off by the
+    // 64 KB buffer cap or a chunk boundary.
+    return null;
+  }
+
+  // Any line carrying an angle bracket is plist markup or the tail of it (a
+  // mid-line cut leaves `key>PasswordProtected</key>`). Genuine error lines don't.
+  if (MARKUP_FRAGMENT.test(trimmed)) return null;
+
+  // File names such as `Status.plist.bak` also have three labels; keep them.
+  return trimmed.replace(REVERSE_DNS_ID, (m) =>
+    FILE_NAME_SUFFIX.test(m) ? m : REDACTED_APP_ID,
+  );
+}
+
+/** Apply the line filter to a whole block of output (a buffer or a chunk). */
+export function redactIdeviceOutputForLog(
+  text: string,
+  options: { headTruncated?: boolean; dropTraceNoise?: boolean; maxLines?: number } = {},
+): {
+  text: string;
+  suppressedLines: number;
+} {
+  const state = createIdeviceOutputLogFilterState();
+  const kept: string[] = [];
+  let suppressedLines = 0;
+  let first = true;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    // A buffer that hit the cap starts mid-line: its first line is a fragment.
+    if (first && options.headTruncated) {
+      first = false;
+      suppressedLines++;
+      continue;
+    }
+    first = false;
+    const loggable = filterIdeviceOutputLineForLog(line, state);
+    if (loggable === null) suppressedLines++;
+    else if (options.dropTraceNoise && TRACE_NOISE_LINE.test(loggable)) suppressedLines++;
+    else kept.push(loggable);
+  }
+  const max = options.maxLines;
+  if (max !== undefined && kept.length > max) {
+    suppressedLines += kept.length - max;
+    kept.splice(0, kept.length - max);
+  }
+  return { text: kept.join("\n"), suppressedLines };
+}
 
 /** Minimal XML entity decoding for a plist string value. */
 function decodePlistString(value: string): string {
@@ -542,7 +784,7 @@ export function classifyBackupFailure(
 
   return {
     message:
-      "The backup stopped and neither this Mac nor your iPhone reported a reason" +
+      "The backup stopped and neither this computer nor your iPhone reported a reason" +
       (exitCode === null ? "" : ` (exit code ${exitCode})`) +
       ". Please try again with your iPhone unlocked and plugged in directly. If it " +
       "keeps happening, send this message to support.",
@@ -568,6 +810,8 @@ export function classifyBackupFailure(
  */
 export class BackupService extends EventEmitter {
   private currentProcess: ChildProcess | null = null;
+  /** BACKLOG-3816: the size walk of the last finished backup, when deferred. */
+  private deferredSize: { udid: string; size: DeferredBackupSize } | null = null;
   private isRunning: boolean = false;
   private currentDeviceUdid: string | null = null;
   private startTime: number = 0;
@@ -609,6 +853,9 @@ export class BackupService extends EventEmitter {
    */
   private static readonly PASSCODE_WAIT_DETECTION_MS = 5000;
 
+  /** BACKLOG-3598: longest a quit waits for idevicebackup2 to exit before force-killing it. */
+  static readonly QUIT_STOP_TIMEOUT_MS = 3000;
+
   // BACKLOG-1582: Watchdog timer to detect zombie idevicebackup2 processes.
   //
   // BACKLOG-2911 (FIX 2): THE WATCHDOG COULD NOT FIRE, AND THIS PAIR OF FIELDS IS WHY.
@@ -642,6 +889,12 @@ export class BackupService extends EventEmitter {
   private lastMeaningfulActivityAt: number = 0;
   private watchdogInterval: NodeJS.Timeout | null = null;
   private watchdogFired: boolean = false;
+
+  /**
+   * BACKLOG-3598: set by `stopForQuit`. A backup that ends after this is true ended
+   * because the app closed, not because of a device or tool fault.
+   */
+  private quitRequested: boolean = false;
   private static readonly WATCHDOG_CHECK_INTERVAL_MS = 30_000; // Check every 30s
 
   /**
@@ -754,6 +1007,12 @@ export class BackupService extends EventEmitter {
 
   /** Fingerprints of stderr lines already sent to Sentry this run. */
   private breadcrumbedStderrLines: Set<string> = new Set();
+
+  /** BACKLOG-3790: plist-dump state for the stderr stream, reset per run. */
+  private stderrLogFilterState: IdeviceOutputLogFilterState =
+    createIdeviceOutputLogFilterState();
+  /** BACKLOG-3790: stderr lines kept out of the log this run (plist / app IDs). */
+  private suppressedStderrLineCount = 0;
   private manifestUploadPhase: boolean = false;
   private manifestUploadSize: string | null = null;
 
@@ -792,6 +1051,7 @@ export class BackupService extends EventEmitter {
    * treated as untrusted input.
    */
   async checkEncryptionStatus(udid: string): Promise<BackupEncryptionInfo> {
+    const unknown: BackupEncryptionInfo = { isEncrypted: false, needsPassword: false, status: "unknown" };
     try {
       // SECURITY: Validate UDID before spawning process
       // This prevents command injection via malicious UDID values
@@ -799,7 +1059,17 @@ export class BackupService extends EventEmitter {
       const ideviceinfo = getCommand("ideviceinfo");
 
       return new Promise((resolve) => {
-        const proc = spawn(ideviceinfo, ["-u", validatedUdid, "-k", "WillEncrypt"]);
+        // BACKLOG-3817: WillEncrypt lives in the com.apple.mobile.backup domain
+        // (idevicebackup2.c reads it with lockdownd_get_value(..., "com.apple.mobile.backup",
+        // "WillEncrypt")). Queried without the domain it is not found, which read as "off".
+        const proc = spawn(ideviceinfo, [
+          "-u",
+          validatedUdid,
+          "-q",
+          "com.apple.mobile.backup",
+          "-k",
+          "WillEncrypt",
+        ]);
         let output = "";
         let errorOutput = "";
 
@@ -812,42 +1082,33 @@ export class BackupService extends EventEmitter {
         });
 
         proc.on("close", (code) => {
-          if (code === 0) {
-            const willEncrypt = output.trim().toLowerCase() === "true";
-            log.info("[BackupService] Device encryption status:", {
-              willEncrypt,
-              rawOutput: output.trim(),
-            });
+          const value = output.trim().toLowerCase();
+          // An absent key (encryption never configured) prints nothing and exits 0.
+          if (code === 0 && (value === "true" || value === "false" || value === "")) {
+            const willEncrypt = value === "true";
+            log.info("[BackupService] Device encryption status:", { willEncrypt });
             resolve({
               isEncrypted: willEncrypt,
               needsPassword: willEncrypt,
+              status: willEncrypt ? "on" : "off",
             });
           } else {
             log.warn(
               "[BackupService] Could not determine encryption status:",
-              errorOutput,
+              errorOutput.slice(0, 200),
             );
-            resolve({
-              isEncrypted: false,
-              needsPassword: false,
-            });
+            resolve(unknown);
           }
         });
 
         proc.on("error", (error) => {
           log.error("[BackupService] Error checking encryption status:", error);
-          resolve({
-            isEncrypted: false,
-            needsPassword: false,
-          });
+          resolve(unknown);
         });
       });
     } catch (error) {
       log.error("[BackupService] Exception checking encryption status:", error);
-      return {
-        isEncrypted: false,
-        needsPassword: false,
-      };
+      return unknown;
     }
   }
 
@@ -996,6 +1257,7 @@ export class BackupService extends EventEmitter {
       // BACKLOG-1582: Reset watchdog state
       // BACKLOG-2911 (FIX 2): one timestamp, advanced only by meaningful activity.
       this.watchdogFired = false;
+      this.quitRequested = false;
       this.lastMeaningfulActivityAt = Date.now();
       this.deviceReportedBackupMode = null;
       this.clearWatchdog();
@@ -1004,6 +1266,9 @@ export class BackupService extends EventEmitter {
       this.stderrLineBuffer = "";
       // BACKLOG-2898: breadcrumb dedupe is per backup run
       this.breadcrumbedStderrLines.clear();
+      // BACKLOG-3790: a plist dump cut off by the last run must not swallow this one's lines
+      this.stderrLogFilterState = createIdeviceOutputLogFilterState();
+      this.suppressedStderrLineCount = 0;
       this.manifestUploadPhase = false;
       this.manifestUploadSize = null;
 
@@ -1038,6 +1303,7 @@ export class BackupService extends EventEmitter {
 
       let stdoutBuffer = "";
       let stderrBuffer = "";
+      let stderrHeadTruncated = false;
       // BACKLOG-2899: set when idevicebackup2 reports it could not write to the
       // local disk. See isIdevicebackup2DiskFullOutput for the transcription.
       let diskFullDetected = false;
@@ -1071,7 +1337,11 @@ export class BackupService extends EventEmitter {
         // Progress bars look like: [====] XX% (X.X MB/Y.Y MB)
         const isProgressBar = /\[=*\s*\]\s*\d+%/.test(output);
         if (!isProgressBar && output.trim()) {
-          log.info("[BackupService] stdout:", output.trim());
+          // BACKLOG-3790: never write plist markup or app bundle IDs to the log.
+          const loggableStdout = redactIdeviceOutputForLog(output).text;
+          if (loggableStdout) {
+            log.info("[BackupService] stdout:", loggableStdout);
+          }
         }
 
         const progress = this.parseProgress(output);
@@ -1109,6 +1379,7 @@ export class BackupService extends EventEmitter {
         // With -d flag, stderr can exceed 50 MB during a long backup.
         if (stderrBuffer.length > 65536) {
           stderrBuffer = stderrBuffer.slice(-65536);
+          stderrHeadTruncated = true;
         }
 
         // BACKLOG-2911 (FIX 2): stderr is NOT evidence of life on its own. `-d` makes
@@ -1164,6 +1435,13 @@ export class BackupService extends EventEmitter {
       const onProcessClose = async (code: number | null) => {
         const duration = Date.now() - this.startTime;
         this.isRunning = false;
+
+        // BACKLOG-3790: how much stderr was kept out of the log, so its absence is visible.
+        if (this.suppressedStderrLineCount > 0) {
+          log.debug(
+            `[BackupService] ${this.suppressedStderrLineCount} stderr line(s) not logged (plist dump / app identifiers)`,
+          );
+        }
         this.currentProcess = null;
         this.currentDeviceUdid = null;
 
@@ -1206,21 +1484,44 @@ export class BackupService extends EventEmitter {
         // torn backup wrote nothing — a claim this code cannot support, since
         // idevicebackup2 leaves whatever it transferred on disk.
         let backupSize: number | null = null;
-        let finalBackupPath = deviceBackupPath;
+        const finalBackupPath = deviceBackupPath;
 
         if (success) {
-          const sizeReading = await this.measureBackupSize(deviceBackupPath);
-          backupSize = sizeReading.measured ? sizeReading.bytes : null;
-          if (sizeReading.measured) {
-            log.info(
-              `[BackupService] Backup completed successfully in ${duration}ms, size: ${sizeReading.bytes} bytes`,
-            );
+          // BACKLOG-3816: the measurement is recorded for the next sync's pre-flight
+          // (default backup folder only). With `deferSizeMeasurement` it runs after this
+          // result is returned, so the sync does not wait for a walk of every file.
+          const recordFor = options.outputDir ? null : validatedUdid;
+          const logSize = (sizeReading: BackupSizeReading): BackupSizeReading => {
+            if (sizeReading.measured) {
+              log.info(
+                `[BackupService] Backup completed successfully in ${duration}ms, size: ${sizeReading.bytes} bytes`,
+              );
+            } else {
+              // Refuse to print a reassuring number we do not have. This is the
+              // `checkAvailableDiskSpace` rule: never log a 0 GB "reading".
+              log.error(
+                `[BackupService] Backup completed successfully in ${duration}ms, but its size could not be measured (${sizeReading.reason})`,
+              );
+            }
+            return sizeReading;
+          };
+          if (options.deferSizeMeasurement) {
+            // Nothing runs yet: the orchestrator either supplies the total from the
+            // post-sync seal's listing (one walk, not two) or asks for the walk.
+            const sizeFile = this.backupSizeRecordFile();
+            this.deferredSize = {
+              udid: validatedUdid,
+              size: createDeferredBackupSize({
+                measure: () => this.measureAndRecord(recordFor, deviceBackupPath),
+                record: async (bytes) => {
+                  if (recordFor !== null) await recordBackupSize(sizeFile, recordFor, bytes);
+                },
+                onReading: logSize,
+              }),
+            };
           } else {
-            // Refuse to print a reassuring number we do not have. This is the
-            // `checkAvailableDiskSpace` rule: never log a 0 GB "reading".
-            log.error(
-              `[BackupService] Backup completed successfully in ${duration}ms, but its size could not be measured (${sizeReading.reason})`,
-            );
+            const sizeReading = logSize(await this.measureAndRecord(recordFor, deviceBackupPath));
+            backupSize = sizeReading.measured ? sizeReading.bytes : null;
           }
 
           // Check ACTUAL encryption status from backup on disk (not just device setting)
@@ -1261,44 +1562,26 @@ export class BackupService extends EventEmitter {
             return;
           }
 
-          // Handle encrypted backup decryption (TASK-007)
+          // BACKLOG-3817: an encrypted backup is NOT decrypted here. It used to be — into
+          // `Backups/<udid>/decrypted`, plaintext beside the backup — and the orchestrator then
+          // tried to decrypt that folder a second time. Here the password is only checked
+          // against the backup's keybag; the orchestrator decrypts once, into a parse copy
+          // outside the backup, and `backupPath` stays the real backup.
           if (actuallyEncrypted && options.password) {
-            this.lastProgress = {
-              phase: "decrypting",
-              percentComplete: 95,
-              currentFile: null,
-              filesTransferred: 0,
-              totalFiles: null,
-              // BACKLOG-2917: `totalBytes` is already nullable and carries the
-              // unknown honestly. `bytesTransferred` is a progress-bar input typed
-              // `number`; 0 there means "no bar movement to report", which is the
-              // truth when the size is unmeasured, and it is paired with a null
-              // total so nothing downstream can compute a false percentage from it.
-              bytesTransferred: backupSize ?? 0,
-              totalBytes: backupSize,
-              estimatedTimeRemaining: 30,
-            };
-            this.emit("progress", this.lastProgress);
-
-            const decryptionResult =
-              await backupDecryptionService.decryptBackup(
-                deviceBackupPath,
-                options.password,
-              );
-
-            if (!decryptionResult.success) {
+            const passwordOk = await backupDecryptionService.verifyPassword(
+              deviceBackupPath,
+              options.password,
+            );
+            if (!passwordOk) {
               const result: BackupResult = {
                 success: false,
                 backupPath: deviceBackupPath,
-                error: decryptionResult.error || "Decryption failed",
-                errorCode:
-                  decryptionResult.error === "Incorrect password"
-                    ? "INCORRECT_PASSWORD"
-                    : "DECRYPTION_FAILED",
+                error: "Incorrect password",
+                errorCode: "INCORRECT_PASSWORD",
                 duration: Date.now() - this.startTime,
                 deviceUdid: options.udid,
                 isIncremental: this.resolveIsIncremental(previousBackupExists, options),
-              deviceReportedBackupMode: this.deviceReportedBackupMode,
+                deviceReportedBackupMode: this.deviceReportedBackupMode,
                 backupSize,
                 isEncrypted: true,
               };
@@ -1306,13 +1589,26 @@ export class BackupService extends EventEmitter {
               resolve(result);
               return;
             }
-
-            // Update path to decrypted location
-            finalBackupPath = decryptionResult.decryptedPath!;
           }
+        } else if (this.quitRequested) {
+          // BACKLOG-3598: we killed this process because the app is closing. Not a failure.
+          log.info(`[BackupService] Backup stopped for app quit (exit code ${code})`);
         } else {
           log.error(`[BackupService] Backup failed with code ${code}`);
-          log.error("[BackupService] stderr:", stderrBuffer);
+          // BACKLOG-3790: the tail of stderr, without plist dumps or app bundle IDs.
+          // The raw buffer still feeds classifyFailure below.
+          // BACKLOG-3598: and without the -d per-read trace lines, capped to the last lines.
+          const loggableStderr = redactIdeviceOutputForLog(stderrBuffer, {
+            headTruncated: stderrHeadTruncated,
+            dropTraceNoise: true,
+            maxLines: FAILURE_STDERR_LOG_MAX_LINES,
+          });
+          log.error("[BackupService] stderr:", loggableStderr.text);
+          if (loggableStderr.suppressedLines > 0) {
+            log.debug(
+              `[BackupService] ${loggableStderr.suppressedLines} line(s) of the failure stderr not logged (plist dump / app identifiers)`,
+            );
+          }
 
           // BACKLOG-1354: Breadcrumb with full context when backup exits with unexpected code
           Sentry.addBreadcrumb({
@@ -1321,7 +1617,7 @@ export class BackupService extends EventEmitter {
             level: "warning",
             data: {
               exitCode: code,
-              stderr: stderrBuffer.trim().substring(0, 500),
+              stderr: loggableStderr.text.substring(0, 500),
               udid: options.udid.substring(0, 8) + "...",
               duration: `${duration}ms`,
               isIncremental: this.resolveIsIncremental(previousBackupExists, options),
@@ -1335,7 +1631,13 @@ export class BackupService extends EventEmitter {
         let errorCode: BackupErrorCode | undefined;
         let failureCause: BackupFailureCause | undefined;
         if (!success) {
-          if (diskFullDetected) {
+          // BACKLOG-3816: a stopped or failed backup may have written part of a backup;
+          // the recorded size no longer describes the folder.
+          if (!options.outputDir) void forgetBackupSize(this.backupSizeRecordFile(), validatedUdid);
+          if (this.quitRequested) {
+            errorMessage = BACKUP_STOPPED_FOR_QUIT_MESSAGE;
+            errorCode = "BACKUP_CANCELLED";
+          } else if (diskFullDetected) {
             // BACKLOG-2899: the host disk filled mid-transfer, which idevicebackup2
             // absorbs in silence — it never checks its own fwrite/fclose, so this
             // can arrive alongside exit code 0 and "Backup Successful."
@@ -1384,7 +1686,9 @@ export class BackupService extends EventEmitter {
           filesTransferred: 0,
           totalFiles: null,
           // BACKLOG-2917 — see the decrypting-phase progress above.
-          bytesTransferred: backupSize ?? 0,
+          // BACKLOG-3816: with the size walk deferred there is no total yet; keep the
+          // last transfer figure rather than showing 0.
+          bytesTransferred: backupSize ?? this.lastProgress?.bytesTransferred ?? 0,
           totalBytes: backupSize,
           estimatedTimeRemaining: 0,
         };
@@ -1408,13 +1712,17 @@ export class BackupService extends EventEmitter {
     // BACKLOG-1582: Clear watchdog on cancel
     this.clearWatchdog();
 
-    if (this.currentProcess) {
-      this.currentProcess.kill("SIGTERM");
+    const proc = this.currentProcess;
+    if (proc) {
+      proc.kill("SIGTERM");
 
-      // Give it a moment, then force kill if needed
+      // Give it a moment, then force kill if needed. BACKLOG-3598: only the process
+      // this cancel was for. `currentProcess` is cleared when that process closes, and
+      // after a disconnect the user can start a new backup within 5 s — the timer must
+      // not kill that one.
       setTimeout(() => {
-        if (this.currentProcess) {
-          this.currentProcess.kill("SIGKILL");
+        if (this.currentProcess === proc) {
+          proc.kill("SIGKILL");
         }
       }, 5000);
     }
@@ -1566,6 +1874,73 @@ export class BackupService extends EventEmitter {
   }
 
   /**
+   * BACKLOG-3598: stop idevicebackup2 because the app is quitting.
+   *
+   * The child is spawned without `detached`, and Node does not kill an undetached child
+   * when the parent exits, so without this a quit left the backup running. Asks the
+   * process to stop, waits up to `timeoutMs` for it to exit, then force-kills it (on
+   * Windows the whole tree, with taskkill). Returns null when no backup process is alive.
+   * Never rejects and never waits longer than `timeoutMs`. Records nothing: the run's
+   * own close handler reports the outcome, if the app is still alive to hear it. The unfinished folder is left for the leftover
+   * sweep at the start of the next sync.
+   */
+  stopForQuit(
+    timeoutMs: number = BackupService.QUIT_STOP_TIMEOUT_MS,
+  ): Promise<"exited" | "killed"> | null {
+    const proc = this.currentProcess;
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
+      // Nothing to stop: return synchronously so the quit is not deferred at all.
+      return null;
+    }
+
+    this.clearWatchdog();
+    this.quitRequested = true;
+    this.isRunning = false;
+    log.info(`[BackupService] App quitting; stopping backup process (PID: ${proc.pid})`);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const finish = (how: "exited" | "killed") => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        proc.removeListener("exit", onExit);
+        resolve(how);
+      };
+      const onExit = () => finish("exited");
+      proc.once("exit", onExit);
+
+      timer = setTimeout(() => {
+        log.warn(
+          `[BackupService] Backup process did not exit within ${timeoutMs} ms of quit; force-killing`,
+        );
+        finish("killed");
+        try {
+          if (process.platform === "win32" && proc.pid !== undefined) {
+            spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
+              stdio: "ignore",
+              windowsHide: true,
+            }).on("error", () => {
+              /* best effort: the app is exiting */
+            });
+          } else {
+            proc.kill("SIGKILL");
+          }
+        } catch {
+          /* already gone */
+        }
+      }, timeoutMs);
+
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        finish("exited");
+      }
+    });
+  }
+
+  /**
    * BACKLOG-2898: classify ONE stderr line as a real error signal, benign
    * libimobiledevice debug chatter, or something unrecognised.
    *
@@ -1574,8 +1949,16 @@ export class BackupService extends EventEmitter {
    * regex.
    */
   private classifyStderrLine(line: string): void {
-    const trimmed = line.trim();
-    if (!trimmed) return;
+    if (!line.trim()) return;
+
+    // BACKLOG-3790: plist dumps (device properties, installed-app bundle IDs) are
+    // never logged, and a bundle ID on any other line is redacted. What survives is
+    // the only text that may reach the warn below or a Sentry breadcrumb.
+    const trimmed = filterIdeviceOutputLineForLog(line, this.stderrLogFilterState);
+    if (trimmed === null) {
+      this.suppressedStderrLineCount++;
+      return;
+    }
 
     // A libimobiledevice MUTEX trace: `np_lock(): Locked`, `np_unlock():
     // Unlocked`, `afc_lock(): Locked`. The word "Locked" here is a pthread
@@ -2075,6 +2458,40 @@ export class BackupService extends EventEmitter {
     return path.join(app.getPath("userData"), "Backups");
   }
 
+  /** BACKLOG-3816: `<userData>/backup-sizes.json` (see backupSizeRecord.ts). */
+  private backupSizeRecordFile(): string {
+    return path.join(path.dirname(this.getDefaultBackupPath()), BACKUP_SIZE_RECORD_FILE);
+  }
+
+  /**
+   * BACKLOG-3816: walk the backup and keep the result for the next pre-flight. A walk
+   * that could not measure (other than a cancel) clears the record. `udid` null: do not
+   * record (a backup outside the default folder).
+   */
+  private async measureAndRecord(
+    udid: string | null,
+    backupPath: string,
+    signal?: AbortSignal,
+  ): Promise<BackupSizeReading> {
+    const reading = await this.measureBackupSize(backupPath, signal);
+    if (udid !== null) {
+      if (reading.measured) await recordBackupSize(this.backupSizeRecordFile(), udid, reading.bytes);
+      else if (reading.reason !== "cancelled") await forgetBackupSize(this.backupSizeRecordFile(), udid);
+    }
+    return reading;
+  }
+
+  /**
+   * BACKLOG-3816: the deferred size walk of `udid`'s last finished backup (see
+   * `BackupOptions.deferSizeMeasurement`), handed out once. Null when none is pending.
+   */
+  takeDeferredSizeMeasurement(udid: string): DeferredBackupSize | null {
+    const pending = this.deferredSize;
+    if (!pending || pending.udid !== udid) return null;
+    this.deferredSize = null;
+    return pending.size;
+  }
+
   /**
    * Measure the total size of a backup directory.
    * BACKLOG-1086: Use atomic readdir instead of check-then-read (TOCTOU fix).
@@ -2100,8 +2517,10 @@ export class BackupService extends EventEmitter {
    * not exist genuinely holds 0 bytes, and a file that vanished between `readdir` and
    * `stat` is a normal race in a directory the device is still writing to.
    */
-  private async measureBackupSize(backupPath: string): Promise<BackupSizeReading> {
+  private async measureBackupSize(backupPath: string, signal?: AbortSignal): Promise<BackupSizeReading> {
     try {
+      // BACKLOG-3816: a cancelled sync stops the walk at the next entry.
+      if (signal?.aborted) return { measured: false, reason: "cancelled" };
       let totalSize = 0;
       // Atomic: attempt readdir directly, handle ENOENT if path disappeared
       let files: import("fs").Dirent[];
@@ -2115,9 +2534,10 @@ export class BackupService extends EventEmitter {
       }
 
       for (const file of files) {
+        if (signal?.aborted) return { measured: false, reason: "cancelled" };
         const filePath = path.join(backupPath, file.name);
         if (file.isDirectory()) {
-          const subtree = await this.measureBackupSize(filePath);
+          const subtree = await this.measureBackupSize(filePath, signal);
           // The defect this replaces: an unmeasurable subtree used to contribute 0
           // and the parent reported a short total as if it were a measurement.
           if (!subtree.measured) {
@@ -2182,7 +2602,17 @@ export class BackupService extends EventEmitter {
    * @param udid Device UDID
    * @returns Which of the three states was established, never a collapsed `null`
    */
-  async checkBackupStatus(udid: string): Promise<BackupStatusReport> {
+  async checkBackupStatus(
+    udid: string,
+    opts: {
+      signal?: AbortSignal;
+      /**
+       * BACKLOG-3816: use the size recorded by the last measurement instead of walking
+       * the backup; walk (and record) only when there is no usable record.
+       */
+      useRecordedSize?: boolean;
+    } = {},
+  ): Promise<BackupStatusReport> {
     // BACKLOG-1123: Validate UDID before using in path operations
     const validatedUdid = validateDeviceUdid(udid);
     const backupPath = this.getDefaultBackupPath();
@@ -2202,21 +2632,35 @@ export class BackupService extends EventEmitter {
         throw err;
       }
 
-      const size = await this.measureBackupSize(deviceBackupPath);
+      let size: BackupSizeReading;
+      let sizeSource: "recorded" | "measured";
+      const recorded = opts.useRecordedSize
+        ? await readRecordedBackupSize(this.backupSizeRecordFile(), validatedUdid)
+        : null;
+      if (recorded !== null) {
+        size = { measured: true, bytes: recorded };
+        sizeSource = "recorded";
+      } else {
+        size = opts.useRecordedSize
+          ? await this.measureAndRecord(validatedUdid, deviceBackupPath, opts.signal)
+          : await this.measureBackupSize(deviceBackupPath, opts.signal);
+        sizeSource = "measured";
+      }
 
       // Check for key files atomically by attempting to access them directly
       const manifestPath = path.join(deviceBackupPath, "Manifest.db");
       const infoPlistPath = path.join(deviceBackupPath, "Info.plist");
       const statusPlistPath = path.join(deviceBackupPath, "Status.plist");
 
-      // Use fs.stat directly instead of fs.access to avoid TOCTOU race condition
-      const fileExists = async (p: string): Promise<boolean> => {
-        try { await fs.stat(p); return true; } catch { return false; }
-      };
-
+      // BACKLOG-3598: STRICT. Only ENOENT means "this index file is missing". The
+      // catch-all this replaced turned EPERM/EBUSY on a locked `Manifest.db` (a
+      // Windows virus scanner, a still-closing idevicebackup2) into "absent", and a
+      // usable backup into "not complete". That read now decides whether a failed
+      // sync deletes the folder, so a lock must surface as `unknown` (the catch
+      // below), never as a missing manifest.
       const [hasManifest, hasInfoPlist] = await Promise.all([
-        fileExists(manifestPath),
-        fileExists(infoPlistPath),
+        indexFileExists(manifestPath),
+        indexFileExists(infoPlistPath),
       ]);
 
       // A complete backup should have Manifest.db and Info.plist
@@ -2236,6 +2680,7 @@ export class BackupService extends EventEmitter {
         // BACKLOG-2917: log what was established, not a number stood in for it.
         sizeBytes: size.measured ? size.bytes : "unmeasured",
         sizeUnmeasuredReason: size.measured ? undefined : size.reason,
+        sizeSource,
       });
 
       return {
@@ -2298,7 +2743,8 @@ export class BackupService extends EventEmitter {
   ): Promise<"finished" | "unfinished" | "absent"> {
     let raw: Buffer;
     try {
-      raw = await fs.readFile(statusPlistPath);
+      // BACKLOG-3816: sealed between syncs; decrypted in memory (plaintext passes through).
+      raw = await openBackupIndexBytes(await fs.readFile(statusPlistPath));
     } catch (readErr: unknown) {
       if (readErr && typeof readErr === "object" && "code" in readErr && (readErr as { code: string }).code === "ENOENT") {
         return "absent";
@@ -2424,6 +2870,9 @@ export class BackupService extends EventEmitter {
       }
 
       for (const entry of entries) {
+        // Dot-folders are not devices: `.quarantine` (S4-C), `.keepr-at-rest` markers,
+        // `.keepr-replaced-*` chains moved aside.
+        if (entry.name.startsWith(".")) continue;
         if (entry.isDirectory()) {
           const deviceBackupPath = path.join(backupPath, entry.name);
           const info = await this.getBackupInfo(deviceBackupPath, entry.name);
@@ -2467,7 +2916,8 @@ export class BackupService extends EventEmitter {
       // Atomic: read directly, handle ENOENT instead of check-then-act (TOCTOU)
       const infoPlistPath = path.join(backupPath, "Info.plist");
       try {
-        const content = await fs.readFile(infoPlistPath, "utf8");
+        // BACKLOG-3816: sealed between syncs; decrypted in memory (plaintext passes through).
+        const content = (await openBackupIndexBytes(await fs.readFile(infoPlistPath))).toString("utf8");
         const deviceNameMatch = content.match(
           /<key>Device Name<\/key>\s*<string>([^<]+)<\/string>/,
         );
@@ -2501,6 +2951,123 @@ export class BackupService extends EventEmitter {
       log.error("[BackupService] Error getting backup info:", error);
       return null;
     }
+  }
+
+  /**
+   * BACKLOG-3598: classify `Backups/<udid>` for the leftover cleanup. See
+   * `BackupFolderClass`. A udid that does not validate to exactly itself is
+   * `unknown` (never deleted) rather than a thrown error.
+   */
+  async classifyBackupFolder(udid: string): Promise<BackupFolderClass> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return "unknown";
+    return this.classifyFolderAt(path.join(this.getDefaultBackupPath(), validatedUdid));
+  }
+
+  private async classifyFolderAt(folder: string): Promise<BackupFolderClass> {
+    try {
+      // lstat: a symlink is not a backup folder this app wrote, so it is never
+      // classified as a leftover.
+      const stats = await fs.lstat(folder);
+      if (!stats.isDirectory()) return "unknown";
+      // BACKLOG-3816 S4-C: a chain Keepr sealed (or is sealing / has unsealed for a
+      // sync), or a recorded phone-encrypted chain, is never a leftover — whatever its
+      // files look like. An unreadable marker cannot rule that out: keep the folder.
+      const marker = await readMarkerAt(path.dirname(folder), path.basename(folder));
+      if (marker === "unreadable") return "unknown";
+      if (markerProtectsChain(marker)) return "indexed";
+      return (await indexFileExists(path.join(folder, "Manifest.db")))
+        ? "indexed"
+        : "leftover";
+    } catch (err: unknown) {
+      if (errnoCode(err) === "ENOENT") return "absent";
+      log.warn("[BackupService] Could not classify backup folder; leaving it alone:", describeError(err));
+      return "unknown";
+    }
+  }
+
+  /**
+   * BACKLOG-3598: delete `Backups/<udid>` if, and only if, it is a leftover — an
+   * unfinished backup with no `Manifest.db`.
+   *
+   * The folder is re-read immediately before the delete, inside the process-wide
+   * cleanup chain, so a caller's earlier reading can never be what authorises it. The
+   * path is built here from the app's own backup root and a validated udid; no caller
+   * path is accepted. Never throws: a failed delete (a locked file on Windows) is
+   * returned as `failed` with its errno code, logged and reported, and the folder is
+   * retried by the next sweep.
+   */
+  async removeLeftoverBackup(udid: string): Promise<LeftoverRemoval> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return { outcome: "kept", folder: "unknown" };
+    const folder = path.join(this.getDefaultBackupPath(), validatedUdid);
+
+    return serialiseLeftoverCleanup(async (): Promise<LeftoverRemoval> => {
+      const before = await this.classifyFolderAt(folder);
+      if (before !== "leftover") return { outcome: "kept", folder: before };
+
+      const size = await this.measureBackupSize(folder);
+      try {
+        // Node retries EBUSY/EPERM/ENOTEMPTY/EMFILE itself when maxRetries is set.
+        await fs.rm(folder, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
+      } catch (err: unknown) {
+        const errorCode = errnoCode(err) ?? "UNKNOWN";
+        log.warn("[BackupService] Could not remove an unfinished backup; will retry on the next sync:", errorCode);
+        Sentry.captureException(err, {
+          tags: { service: "backup", operation: "leftoverCleanup" },
+          extra: { errorCode },
+        });
+        return { outcome: "failed", errorCode };
+      }
+
+      const bytes = size.measured ? size.bytes : null;
+      log.info("[BackupService] Removed an unfinished backup", {
+        bytesFreed: bytes ?? "unmeasured",
+      });
+      Sentry.addBreadcrumb({
+        category: "backup",
+        message: "Removed an unfinished backup",
+        data: { bytesFreed: bytes ?? "unmeasured" },
+      });
+      return { outcome: "removed", bytes };
+    });
+  }
+
+  /**
+   * BACKLOG-3598: remove every leftover backup folder under `Backups/`.
+   *
+   * Only direct children whose name is exactly a valid udid are considered (SR R3:
+   * `validateDeviceUdid` trims, so `" <udid>"` would otherwise be read and deleted at
+   * the trimmed path). Everything else is left untouched. `onRemoving` is called before
+   * each removal so the caller can tell the user why the sync is pausing.
+   */
+  async sweepLeftoverBackups(onRemoving?: () => void): Promise<LeftoverSweep> {
+    const result: LeftoverSweep = { removed: 0, bytesFreed: 0, failures: [] };
+    let entries: import("fs").Dirent[];
+    try {
+      entries = await fs.readdir(this.getDefaultBackupPath(), { withFileTypes: true });
+    } catch (err: unknown) {
+      if (errnoCode(err) !== "ENOENT") {
+        log.warn("[BackupService] Could not list backups for leftover cleanup:", describeError(err));
+      }
+      return result;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (exactUdidOrNull(entry.name) === null) continue;
+      if ((await this.classifyBackupFolder(entry.name)) !== "leftover") continue;
+
+      onRemoving?.();
+      const removal = await this.removeLeftoverBackup(entry.name);
+      if (removal.outcome === "removed") {
+        result.removed += 1;
+        result.bytesFreed += removal.bytes ?? 0;
+      } else if (removal.outcome === "failed") {
+        result.failures.push(removal.errorCode);
+      }
+    }
+    return result;
   }
 
   /**
@@ -2568,6 +3135,98 @@ export class BackupService extends EventEmitter {
   async cleanupDecryptedFiles(backupPath: string): Promise<void> {
     const decryptedPath = path.join(backupPath, "decrypted");
     await backupDecryptionService.cleanup(decryptedPath);
+  }
+
+  /**
+   * BACKLOG-3816: is `Backups/<udid>` an encrypted chain, a plaintext one, or neither?
+   * Read from Manifest.plist `IsEncrypted` (device metadata, plain in both kinds).
+   */
+  async readChainEncryption(udid: string): Promise<"encrypted" | "plaintext" | "absent" | "unknown"> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return "unknown";
+    const manifest = path.join(this.getDefaultBackupPath(), validatedUdid, "Manifest.plist");
+    try {
+      await fs.stat(manifest);
+    } catch (err: unknown) {
+      return errnoCode(err) === "ENOENT" ? "absent" : "unknown";
+    }
+    try {
+      return (await backupDecryptionService.isBackupEncrypted(path.dirname(manifest))) ? "encrypted" : "plaintext";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  /**
+   * BACKLOG-3816: move a PLAINTEXT chain out of the way so the first encrypted backup
+   * starts a new chain (a password change breaks snapshot comparison). The old chain is
+   * kept, under a name the 3598 sweep never touches, until the new one is verified.
+   */
+  async moveChainAside(udid: string): Promise<string | null> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return null;
+    const from = path.join(this.getDefaultBackupPath(), validatedUdid);
+    const to = path.join(this.getDefaultBackupPath(), `${REPLACED_CHAIN_PREFIX}${validatedUdid}-${Date.now()}`);
+    await fs.rename(from, to);
+    log.info("[BackupService] Kept the previous unencrypted backup aside until the encrypted one is verified");
+    return to;
+  }
+
+  /**
+   * BACKLOG-3816: delete `Backups/<udid>` when — re-read here, right before the delete —
+   * it is an UNENCRYPTED chain. Used only when there is no room to keep it aside while a
+   * new encrypted chain is made. An encrypted or unreadable chain is never removed.
+   */
+  async removePlaintextChain(udid: string): Promise<boolean> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return false;
+    return serialiseLeftoverCleanup(async () => {
+      if ((await this.readChainEncryption(validatedUdid)) !== "plaintext") return false;
+      await fs.rm(path.join(this.getDefaultBackupPath(), validatedUdid), {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 500,
+      });
+      log.info("[BackupService] Removed the previous unencrypted backup to make room for an encrypted one");
+      return true;
+    });
+  }
+
+  /**
+   * BACKLOG-3816: delete chains moved aside for `udid`. The CALLER must first have
+   * verified the encrypted chain opens with the saved password.
+   */
+  async removeReplacedChains(udid: string): Promise<number> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return 0;
+    const root = this.getDefaultBackupPath();
+    let entries: import("fs").Dirent[];
+    try {
+      entries = await fs.readdir(root, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+    let removed = 0;
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith(`${REPLACED_CHAIN_PREFIX}${validatedUdid}-`)) continue;
+      await fs.rm(path.join(root, entry.name), { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
+      removed++;
+    }
+    if (removed > 0) log.info("[BackupService] Removed the previous unencrypted backup", { removed });
+    return removed;
+  }
+
+  /** BACKLOG-3816: whether a moved-aside chain for `udid` is waiting for removal. */
+  async hasReplacedChain(udid: string): Promise<boolean> {
+    const validatedUdid = exactUdidOrNull(udid);
+    if (validatedUdid === null) return false;
+    try {
+      const entries = await fs.readdir(this.getDefaultBackupPath());
+      return entries.some((name) => name.startsWith(`${REPLACED_CHAIN_PREFIX}${validatedUdid}-`));
+    } catch {
+      return false;
+    }
   }
 
   /**

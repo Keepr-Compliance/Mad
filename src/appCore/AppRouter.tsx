@@ -14,6 +14,7 @@ import { UpgradeScreen, type UpgradeReason } from "../components/license/Upgrade
 import type { AppStateMachine } from "./state/types";
 import { useImportSource } from "../hooks/useImportSource";
 import { useOpenLinkScreen } from "../hooks/useOpenLinkScreen";
+import { useReportCurrentScreenName } from "../utils/currentScreenName";
 import {
   USE_NEW_ONBOARDING,
   isOnboardingStep,
@@ -72,6 +73,7 @@ export function AppRouter({ app }: AppRouterProps) {
   const importSource = useImportSource(currentUser?.id, app.modalState.showSettings);
   // C1: keepr://link opens the link screen (Settings › Google Messages).
   useOpenLinkScreen(openAndroidSync);
+  useReportCurrentScreenName(currentStep, app.modalState as unknown as Record<string, unknown>);
 
   // New onboarding architecture (when enabled)
   if (USE_NEW_ONBOARDING && isOnboardingStep(currentStep)) {

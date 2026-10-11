@@ -20,7 +20,22 @@ import path from "path";
 import crypto from "crypto";
 import logService from "../services/logService";
 
-type QueryType = "external" | "imported" | "backfill" | "emailDerived";
+type QueryType =
+  | "external"
+  | "imported"
+  | "backfill"
+  | "emailDerived"
+  | "threadIdentity"
+  | "threadIdentityTargeted"
+  | "candidateMessageThreads"
+  | "candidateEmails"
+  // BACKLOG-3837: the step-1 Continue scans (wizardMessageScansDb.ts).
+  | "messageDerived"
+  | "commDatesPlan"
+  | "sourceCoverageFloors"
+  | "transactionTextThreads"
+  // BACKLOG-3837: the Attach Messages roster.
+  | "messageRoster";
 
 /**
  * Per-type payload carried alongside `{ id, type, userId }` (BACKLOG-1717).
@@ -114,8 +129,15 @@ const pendingQueries = new Map<string, PendingQuery>();
 // Deduplication: in-flight queries by "userId:type" key
 const inflightQueries = new Map<string, Promise<unknown[]>>();
 
+let workerPathOverride: string | null = null;
+
 function getWorkerPath(): string {
-  return path.join(__dirname, 'contactQueryWorker.js');
+  return workerPathOverride ?? path.join(__dirname, 'contactQueryWorker.js');
+}
+
+/** Test seam: a compiled worker script (the TS source has no .js beside it). */
+export function setContactWorkerPathForTests(p: string | null): void {
+  workerPathOverride = p;
 }
 
 function handleWorkerMessage(msg: { type?: string; id?: string; success?: boolean; data?: unknown[]; error?: string }): void {
@@ -324,31 +346,174 @@ export function queryContacts(
 
   // Store for deduplication, clean up when resolved/rejected
   inflightQueries.set(dedupKey, promise);
-  promise.finally(() => {
-    inflightQueries.delete(dedupKey);
-  });
+  // The caller handles the rejection; the `.finally` copy must not become an unhandled
+  // rejection of its own (BACKLOG-3816: it crashed a jest run on a failed query).
+  promise
+    .finally(() => {
+      inflightQueries.delete(dedupKey);
+    })
+    .catch(() => undefined);
 
   return promise;
 }
 
 /**
- * Shutdown the worker pool. Called on app quit.
+ * Short-lived workers started by {@link queryOnDedicatedWorker}. Tracked so a database
+ * restore (drain) and app quit stop them: each holds its own read-only connection.
  */
-export function shutdownPool(): void {
-  shuttingDown = true;
-  if (worker) {
-    try {
-      worker.postMessage({ type: "shutdown" });
-    } catch {
-      // Worker may already be terminated
+const dedicatedWorkers = new Set<Worker>();
+/** Dedicated workers stopped on purpose by a database restore / close / app quit. */
+const stoppedDedicatedWorkers = new WeakSet<Worker>();
+
+/**
+ * Why a dedicated query failed (BACKLOG-3816 fix round). The caller decides on this:
+ * only `start_failed` (no worker ever ran the query) is safe to retry on the main thread.
+ *  - unavailable: pool in a restore / shutting down / not initialised
+ *  - start_failed: the worker could not be created, could not open the database, or died before it was ready
+ *  - timeout: `timeoutMs` elapsed
+ *  - stopped: stopped by a restore / close / quit while running
+ *  - failed: the worker was up and the query or the thread failed
+ */
+export type DedicatedQueryFailure = "unavailable" | "start_failed" | "timeout" | "stopped" | "failed";
+
+export class DedicatedWorkerError extends Error {
+  constructor(
+    message: string,
+    readonly code: DedicatedQueryFailure,
+  ) {
+    super(message);
+    this.name = "DedicatedWorkerError";
+  }
+}
+
+/** Test-only: dedicated workers still alive (started and not yet exited). */
+export function getDedicatedWorkerCountForTests(): number {
+  return dedicatedWorkers.size;
+}
+
+/**
+ * Run ONE query on a worker of its own, started for it and stopped after (BACKLOG-3816
+ * PC final check, 2026-10-10). For long reads — the attached-thread identity index read
+ * every text message of the user and took up to 44 s on the founder's PC — that must not
+ * hold the shared worker: contact list reads queue behind it there and time out at 30 s.
+ * Same compiled script and the same init message as the pool; needs the pool to have
+ * been initialized (it supplies the database path and key). Rejects, never hangs:
+ * `timeoutMs` bounds start-up plus the query.
+ */
+export function queryOnDedicatedWorker(
+  type: QueryType,
+  userId: string,
+  timeoutMs: number = 30_000,
+  /** BACKLOG-3868: extra fields of the query message (e.g. `request` for threadIdentityTargeted). */
+  extras?: Record<string, unknown>,
+): Promise<unknown[]> {
+  return new Promise<unknown[]>((resolve, reject) => {
+    if (exclusiveHold || shuttingDown || !lastDbPath || !lastEncryptionKey) {
+      reject(new DedicatedWorkerError("Dedicated contact worker unavailable", "unavailable"));
+      return;
     }
-    // Give it a moment to clean up, then force terminate
-    setTimeout(() => {
-      if (worker) {
-        worker.terminate();
-        worker = null;
+    let w: Worker;
+    try {
+      w = new Worker(getWorkerPath());
+    } catch (error) {
+      reject(new DedicatedWorkerError(error instanceof Error ? error.message : String(error), "start_failed"));
+      return;
+    }
+    dedicatedWorkers.add(w);
+    const id = crypto.randomUUID();
+    let settled = false;
+    let started = false;
+    const finish = (error: Error | null, data?: unknown[]): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // Graceful first (the worker closes its connection and exits), terminate as backstop.
+      try {
+        w.postMessage({ type: "shutdown" });
+      } catch {
+        // already gone
       }
-    }, 500);
+      const kill = setTimeout(() => void w.terminate().catch(() => undefined), 2_000);
+      kill.unref?.();
+      w.once("exit", () => clearTimeout(kill));
+      if (error) reject(error);
+      else resolve(data ?? []);
+    };
+    const timer = setTimeout(
+      () =>
+        finish(new DedicatedWorkerError(`Dedicated contact query timed out after ${timeoutMs}ms (type: ${type})`, "timeout")),
+      timeoutMs,
+    );
+    w.on("message", (msg: { type?: string; id?: string; success?: boolean; data?: unknown[]; error?: string }) => {
+      if (msg.type === "ready") {
+        started = true;
+        w.postMessage({ ...extras, id, type, userId });
+        return;
+      }
+      if (msg.type === "error") {
+        finish(new DedicatedWorkerError(msg.error || "Dedicated contact worker could not open the database", started ? "failed" : "start_failed"));
+        return;
+      }
+      if (msg.id !== id) return;
+      if (msg.success && msg.data) finish(null, msg.data);
+      else finish(new DedicatedWorkerError(msg.error || "Unknown worker error", "failed"));
+    });
+    w.on("error", (error) => finish(new DedicatedWorkerError(error.message, started ? "failed" : "start_failed")));
+    w.on("exit", (code) => {
+      dedicatedWorkers.delete(w);
+      finish(
+        new DedicatedWorkerError(
+          `Dedicated contact worker exited with code ${code}`,
+          stoppedDedicatedWorkers.has(w) ? "stopped" : started ? "failed" : "start_failed",
+        ),
+      );
+    });
+    w.postMessage({ type: "init", dbPath: lastDbPath, encryptionKey: lastEncryptionKey });
+  });
+}
+
+/** Stop every dedicated worker; resolves when each has exited. Never throws. */
+function stopDedicatedWorkers(): Promise<void> {
+  return Promise.all(
+    [...dedicatedWorkers].map(
+      (w) =>
+        new Promise<void>((resolve) => {
+          stoppedDedicatedWorkers.add(w);
+          w.once("exit", () => resolve());
+          w.terminate().catch(() => resolve());
+        }),
+    ),
+  ).then(() => undefined);
+}
+
+/**
+ * Shutdown the worker pool. Called on app quit.
+ *
+ * Returns a promise that resolves once the pool worker AND every dedicated worker has
+ * exited (each closes its database connection first on the graceful path). App quit
+ * ignores it; anything that needs the database file released (a Windows file delete
+ * or rename) must await it. The state reset below is synchronous either way.
+ */
+export function shutdownPool(): Promise<void> {
+  shuttingDown = true;
+  const dedicatedStopped = stopDedicatedWorkers();
+  let poolStopped: Promise<void> = Promise.resolve();
+  if (worker) {
+    const w = worker;
+    poolStopped = new Promise<void>((resolve) => {
+      w.once("exit", () => resolve());
+      try {
+        w.postMessage({ type: "shutdown" });
+      } catch {
+        // Worker may already be terminated
+        resolve();
+      }
+      // Give it a moment to clean up, then force terminate
+      setTimeout(() => {
+        if (worker === w) worker = null;
+        w.terminate().then(() => resolve(), () => resolve());
+      }, 500);
+    });
   }
   ready = false;
   initPromise = null;
@@ -360,6 +525,7 @@ export function shutdownPool(): void {
     pending.reject(new Error("Worker pool shutting down"));
     pendingQueries.delete(id);
   }
+  return Promise.all([dedicatedStopped, poolStopped]).then(() => undefined);
 }
 
 /**
@@ -411,6 +577,8 @@ export async function drainPoolForExclusiveAccess(
     shuttingDown = true;
     ready = false;
     inflightQueries.clear();
+    // BACKLOG-3816: a dedicated worker holds its own connection to the file being replaced.
+    await stopDedicatedWorkers();
     for (const [id, pending] of pendingQueries) {
       clearTimeout(pending.timeout);
       pending.reject(new Error("Worker pool draining for database restore"));

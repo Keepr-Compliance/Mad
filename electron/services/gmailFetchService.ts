@@ -1,4 +1,5 @@
 import { google, gmail_v1, Auth } from "googleapis";
+import { gaxiosNetFetch } from "./mainNetFetch";
 import {
   FetchCancelledError,
   isFetchCancelledError,
@@ -251,9 +252,13 @@ class GmailFetchService {
         await databaseService.getOAuthToken(userId, "google", "mailbox");
 
       if (!tokenRecord) {
-        throw new Error(
-          "No Gmail OAuth token found. User needs to connect Gmail first.",
-        );
+        // BACKLOG-3867: no Gmail mailbox connected is a normal state, not a
+        // failure. Callers treat `false` as "skip Gmail"; only a connected
+        // mailbox whose setup fails reaches the error path below.
+        this.gmail = null;
+        this.oauth2Client = null;
+        logService.debug("No Gmail mailbox connected; skipping", "GmailFetch");
+        return false;
       }
 
       // Session-only OAuth: tokens stored unencrypted in encrypted database
@@ -262,11 +267,14 @@ class GmailFetchService {
 
       // Initialize OAuth2 client for Gmail API calls
       // Token refresh is handled by googleAuthService; this client is for API calls only
-      const oauth2Client = new google.auth.OAuth2(
-        process.env.GOOGLE_CLIENT_ID,
-        process.env.GOOGLE_CLIENT_SECRET,
-        process.env.GOOGLE_REDIRECT_URI,
-      );
+      // BACKLOG-3799: token refresh AND Gmail API calls ride Electron net.fetch
+      // (OS certificate store), not gaxios's node-fetch over Node TLS.
+      const oauth2Client = new google.auth.OAuth2({
+        clientId: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        redirectUri: process.env.GOOGLE_REDIRECT_URI,
+        transporterOptions: { fetchImplementation: gaxiosNetFetch },
+      });
 
       // Set credentials
       oauth2Client.setCredentials({
@@ -303,7 +311,9 @@ class GmailFetchService {
       logService.debug("Initialized successfully", "GmailFetch");
       return true;
     } catch (error) {
-      logService.error("Initialization failed", "GmailFetch", { error });
+      logService.error("Initialization failed", "GmailFetch", {
+        errorClass: error instanceof Error ? error.name : typeof error,
+      });
       Sentry.captureException(error, {
         tags: { service: "gmail-fetch", operation: "initialize" },
       });

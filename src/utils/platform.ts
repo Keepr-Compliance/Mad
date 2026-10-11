@@ -76,6 +76,15 @@ export function isLinux(): boolean {
 }
 
 /**
+ * BACKLOG-3363: true on a Windows on ARM PC (e.g. Snapdragon), where iPhone
+ * USB sync can never work. Read synchronously from the preload bridge (main
+ * passes it via argv), so the first render already knows. Absent → false.
+ */
+export function isWindowsArm64(): boolean {
+  return window.api?.system?.isWindowsArm64 === true;
+}
+
+/**
  * Returns true if running inside Electron (desktop app).
  * Checks for the presence of the Electron IPC bridge (window.api).
  * Returns false in browser environments (Android WebView, mobile browsers, etc.)

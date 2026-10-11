@@ -130,14 +130,6 @@ export const authBridge = {
     ipcRenderer.invoke("auth:complete-email-onboarding", userId),
 
   /**
-   * Checks if user has completed email onboarding
-   * @param userId - User ID to check
-   * @returns Onboarding status
-   */
-  checkEmailOnboarding: (userId: string) =>
-    ipcRenderer.invoke("auth:check-email-onboarding", userId),
-
-  /**
    * Completes a pending login after keychain/database setup
    * Called when OAuth succeeded but database wasn't initialized yet
    * @param oauthData - The pending OAuth data from login-pending event
@@ -236,6 +228,24 @@ export const authBridge = {
    */
   validateRemoteSession: (): Promise<{ valid: boolean }> =>
     ipcRenderer.invoke("session:validate-remote"),
+
+  /**
+   * BACKLOG-3833: report real user input (keyboard, pointer, wheel, touch).
+   * No arguments: main loads the session itself, checks it is still valid,
+   * and only then records the activity.
+   */
+  reportUserActivity: (): Promise<void> =>
+    ipcRenderer.invoke("session:user-activity"),
+
+  /**
+   * BACKLOG-3833: main signed the session out for inactivity.
+   * @returns unsubscribe
+   */
+  onIdleSessionExpired: (callback: () => void): (() => void) => {
+    const listener = () => callback();
+    ipcRenderer.on("session:idle-expired", listener);
+    return () => ipcRenderer.removeListener("session:idle-expired", listener);
+  },
 
   /**
    * Get active devices for the current user.

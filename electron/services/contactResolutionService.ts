@@ -515,8 +515,6 @@ export async function resolveEmailNames(
   const resolution: HandleNameResolution = { names: {}, matches: {} };
   if (emails.length === 0) return resolution;
 
-  const result = resolution.names;
-
   try {
     const lowerEmails = emails.map((e) => e.toLowerCase());
 

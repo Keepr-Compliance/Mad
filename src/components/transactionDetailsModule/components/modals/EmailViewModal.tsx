@@ -8,7 +8,11 @@ import React, { useState, useCallback, useMemo, useEffect } from "react";
 import DOMPurify from "dompurify";
 import { ResponsiveModal } from "../../../common/ResponsiveModal";
 import type { Communication } from "../../types";
-import { AttachmentPreviewModal } from "./AttachmentPreviewModal";
+import {
+  AttachmentOpenError,
+  AttachmentPreviewHost,
+  useAttachmentPreview,
+} from "../../hooks/useAttachmentPreview";
 import { formatFileSize } from "../../../../utils/formatUtils";
 import { formatParticipantLine, formatParticipantListLine } from "../../../../utils/emailParticipantUtils";
 import logger from '../../../../utils/logger';
@@ -190,13 +194,20 @@ export function EmailViewModal({
   const [attachmentsExpanded, setAttachmentsExpanded] = useState(false);
   // BACKLOG-1369: Attachment download status
   const [attachmentMessage, setAttachmentMessage] = useState<string | null>(null);
-  // TASK-1778: Preview modal state
-  const [previewAttachment, setPreviewAttachment] = useState<EmailAttachment | null>(null);
-
   // TASK-1776 + BACKLOG-1369: Fetch/download attachments when email loads (on-demand)
+  // BACKLOG-3884: also re-run (quietly) after a click downloads a row, so the
+  // list carries the stored path.
+  const [attachmentsReload, setAttachmentsReload] = useState(0);
+  const reloadAttachments = useCallback(() => setAttachmentsReload((n) => n + 1), []);
+  // BACKLOG-3884: a click on a metadata-only row downloads it first — the same
+  // path the Attachments tab uses (`emails:get-attachments` above downloads
+  // only when this email has NO rows yet).
+  const attachmentPreview = useAttachmentPreview(reloadAttachments);
+  const { open: openAttachmentPreview, downloadingIds } = attachmentPreview;
+
   useEffect(() => {
     if (email?.id && email.has_attachments) {
-      setLoadingAttachments(true);
+      if (attachmentsReload === 0) setLoadingAttachments(true);
       setAttachmentMessage(null);
       window.api.transactions
         .getEmailAttachments(email.id)
@@ -216,24 +227,7 @@ export function EmailViewModal({
           setLoadingAttachments(false);
         });
     }
-  }, [email?.id, email?.has_attachments]);
-
-  // TASK-1776: Handle opening an attachment
-  const handleOpenAttachment = useCallback(async (attachment: EmailAttachment) => {
-    if (!attachment.storage_path) {
-      logger.warn("Attachment has no storage path:", attachment.filename);
-      return;
-    }
-
-    try {
-      const result = await window.api.transactions.openAttachment(attachment.storage_path);
-      if (!result.success) {
-        logger.error("Failed to open attachment:", result.error);
-      }
-    } catch (err) {
-      logger.error("Error opening attachment:", err);
-    }
-  }, []);
+  }, [email?.id, email?.has_attachments, attachmentsReload]);
 
   // Sanitize HTML content when in HTML mode
   const sanitizedHtml = useMemo(() => {
@@ -406,25 +400,35 @@ export function EmailViewModal({
 
             {attachmentsExpanded && attachments.length > 0 && (
               <div className="mt-3 flex flex-col sm:flex-row sm:flex-wrap gap-2">
-                {attachments.map((attachment) => (
-                  <button
-                    key={attachment.id}
-                    onClick={() => setPreviewAttachment(attachment)}
-                    className="flex items-center gap-2 px-3 py-2.5 sm:py-2 rounded-lg text-sm transition-colors bg-gray-100 hover:bg-gray-200 text-gray-700"
-                    title={`Preview ${attachment.filename}`}
-                    data-testid={`attachment-${attachment.id}`}
-                  >
-                    {getFileTypeIcon(attachment.mime_type)}
-                    <span className="truncate max-w-[200px] sm:max-w-[150px]">{attachment.filename}</span>
-                    {attachment.file_size_bytes && (
-                      <span className="text-gray-500 text-xs flex-shrink-0">
-                        {formatFileSize(attachment.file_size_bytes)}
-                      </span>
-                    )}
-                  </button>
-                ))}
+                {attachments.map((attachment) => {
+                  const downloading = downloadingIds.has(attachment.id);
+                  return (
+                    <button
+                      key={attachment.id}
+                      onClick={() => void openAttachmentPreview({ ...attachment, email_id: email.id })}
+                      disabled={downloading}
+                      aria-busy={downloading || undefined}
+                      className="flex items-center gap-2 px-3 py-2.5 sm:py-2 rounded-lg text-sm transition-colors bg-gray-100 hover:bg-gray-200 text-gray-700 disabled:opacity-60 disabled:cursor-wait"
+                      title={`Preview ${attachment.filename}`}
+                      data-testid={`attachment-${attachment.id}`}
+                    >
+                      {getFileTypeIcon(attachment.mime_type)}
+                      <span className="truncate max-w-[200px] sm:max-w-[150px]">{attachment.filename}</span>
+                      {downloading ? (
+                        <span className="text-blue-600 text-xs flex-shrink-0">Downloading…</span>
+                      ) : (
+                        attachment.file_size_bytes && (
+                          <span className="text-gray-500 text-xs flex-shrink-0">
+                            {formatFileSize(attachment.file_size_bytes)}
+                          </span>
+                        )
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
+            <AttachmentOpenError preview={attachmentPreview} className="mt-3" />
           </div>
         )}
 
@@ -510,16 +514,8 @@ export function EmailViewModal({
           </div>
         </div>
 
-      {/* TASK-1778: Attachment Preview Modal */}
-      {previewAttachment && (
-        <AttachmentPreviewModal
-          attachment={previewAttachment}
-          onClose={() => setPreviewAttachment(null)}
-          onOpenWithSystem={(storagePath) => {
-            handleOpenAttachment({ storage_path: storagePath } as EmailAttachment);
-          }}
-        />
-      )}
+      {/* TASK-1778 / BACKLOG-3884: Attachment Preview Modal */}
+      <AttachmentPreviewHost preview={attachmentPreview} />
     </ResponsiveModal>
   );
 }

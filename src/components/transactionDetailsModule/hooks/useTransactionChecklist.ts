@@ -31,6 +31,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { checklistService } from "../../../services/checklistService";
 import type { ApiResult } from "../../../services";
 import logger from "../../../utils/logger";
+import { logOpenPath, nowMs } from "../../../utils/openPathTiming";
 import type {
   AddChecklistLinkResult,
   ChecklistLinkKind,
@@ -47,6 +48,8 @@ export type ChecklistLoadState =
 export interface ChecklistLinkRequest {
   kind: ChecklistLinkKind;
   targetIds: string[];
+  /** BACKLOG-3764: the agent answered "Include it" to the outside-the-dates question. */
+  includeOutsideDates?: boolean;
 }
 
 export interface ChecklistLinkOutcome {
@@ -124,10 +127,20 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
    *     post-save re-read overtaken by a background refresh still lands.
    *   - A failure is stored only by the newest `get`.
    */
+  const openTimedForRef = useRef<string | null>(null);
   const load = useCallback(
     async (forId: string, options?: { keepOnError?: boolean }): Promise<void> => {
       const seq = ++requestSeqRef.current;
+      const startedAt = nowMs();
       const result = await checklistService.get(forId);
+      // BACKLOG-3884: the first read per transaction is part of opening it.
+      if (openTimedForRef.current !== forId) {
+        openTimedForRef.current = forId;
+        logOpenPath(
+          `checklist read ms=${Math.round(nowMs() - startedAt)}` +
+            ` ok=${result.success ? 1 : 0} checklists=${result.data?.checklists?.length ?? 0}`,
+        );
+      }
       if (forId !== currentIdRef.current || seq <= appliedSeqRef.current) return;
       if (result.success && result.data) {
         appliedSeqRef.current = seq;
@@ -214,7 +227,12 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
         // Sequential: each group is all-or-nothing in main, and a partial
         // failure has to be attributable to the row that caused it.
         for (const request of requests) {
-          const result = await checklistService.addLink(itemId, request.kind, request.targetIds);
+          const result = await checklistService.addLink(
+            itemId,
+            request.kind,
+            request.targetIds,
+            request.includeOutsideDates,
+          );
           outcomes.push({ request, result });
         }
         return outcomes;

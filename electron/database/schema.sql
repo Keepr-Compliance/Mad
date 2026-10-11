@@ -1592,6 +1592,9 @@ CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at);
 CREATE INDEX IF NOT EXISTS idx_messages_sync_session ON messages(user_id, sync_session_id);
 
 CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id);
+-- BACKLOG-3884: the Texts tab pages one conversation newest-first; without this a
+-- page read every row of the thread to sort it.
+CREATE INDEX IF NOT EXISTS idx_messages_thread_sent ON messages(thread_id, sent_at);
 
 CREATE INDEX IF NOT EXISTS idx_messages_transaction_id ON messages(transaction_id);
 
@@ -1854,6 +1857,10 @@ CREATE TABLE IF NOT EXISTS transaction_checklist_links (
   label      TEXT NOT NULL CHECK (length(trim(label)) >= 1),
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  -- BACKLOG-3764 (migration v75 adds it to existing databases): 1 when the
+  -- agent chose to send this group although its evidence is dated outside the
+  -- deal's audit dates. No index/trigger/view may name it here (see v75).
+  include_outside_dates INTEGER NOT NULL DEFAULT 0,
   UNIQUE (id, kind),
   FOREIGN KEY (item_id) REFERENCES transaction_checklist_items(id) ON DELETE CASCADE
 );

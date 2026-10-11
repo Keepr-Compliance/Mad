@@ -37,8 +37,34 @@ import {
   runEmailDerivedQueryOn,
   type EmailDerivedProvider,
 } from "../services/db/emailDerivedContactsSql";
+import { readOneToOneThreadIndexOn } from "../services/db/threadIdentityIndexDb";
+import { runThreadIdentityRequestOn, type ThreadIdentityRequest } from "../services/db/threadIdentityTargetedDb";
+import { readCandidateEmailsOn, readCandidateMessageThreadsOn } from "../services/db/autoLinkSql";
+import { readTransactionTextThreadsOn } from "../services/db/transactionTextPagingDb";
+import { runMessageRosterOn } from "../services/db/messageRosterDb";
+import {
+  planCommunicationDatesOn,
+  runMessageDerivedQueryOn,
+  runSourceFloorsOn,
+} from "../services/db/wizardMessageScansDb";
 
-type QueryType = "external" | "imported" | "backfill" | "emailDerived";
+type QueryType =
+  | "external"
+  | "imported"
+  | "backfill"
+  | "emailDerived"
+  | "threadIdentity"
+  | "threadIdentityTargeted"
+  | "candidateMessageThreads"
+  | "candidateEmails"
+  // BACKLOG-3837: the step-1 Continue scans (wizardMessageScansDb.ts).
+  | "messageDerived"
+  | "commDatesPlan"
+  | "sourceCoverageFloors"
+  // BACKLOG-3884: the Texts tab's conversation list (every linked text of one deal).
+  | "transactionTextThreads"
+  // BACKLOG-3837: the Attach Messages roster (every unlinked text of the user).
+  | "messageRoster";
 
 interface InitMessage {
   type: "init";
@@ -62,6 +88,20 @@ interface QueryMessage {
    * Only the `emailDerived` query reads it.
    */
   providers?: string[];
+}
+
+interface QueryMessageExtras {
+  /** BACKLOG-3868: what `threadIdentityTargeted` reads (attached threads, or threads grown after a rowid). */
+  request?: ThreadIdentityRequest;
+  /** BACKLOG-3868: `candidateMessageThreads` — the statement's phone count and its bound values, in order. */
+  phoneCount?: number;
+  params?: Array<string | number>;
+  /** BACKLOG-3883: `candidateEmails` — the statement's address count (bound values in `params`). */
+  addressCount?: number;
+  /** BACKLOG-3884: `transactionTextThreads` — the deal and its audit window (epoch ms, null = open). */
+  transactionId?: string;
+  startMs?: number | null;
+  endMs?: number | null;
 }
 
 interface ShutdownMessage {
@@ -251,6 +291,58 @@ parentPort?.on("message", (msg: WorkerMessage) => {
       rows = runBackfillQuery(queryMsg.userId);
     } else if (queryMsg.type === "emailDerived") {
       rows = runEmailDerivedQuery(queryMsg.userId, queryMsg.providers);
+    } else if (queryMsg.type === "threadIdentity") {
+      // BACKLOG-3816 PC final check: every text message of the user, off the main thread.
+      if (!db) throw new Error("Database not initialized");
+      rows = [readOneToOneThreadIndexOn(db, queryMsg.userId)];
+    } else if (queryMsg.type === "threadIdentityTargeted") {
+      // BACKLOG-3868: only the threads the expansion needs, not every text message.
+      if (!db) throw new Error("Database not initialized");
+      const request = (queryMsg as QueryMessage & QueryMessageExtras).request;
+      if (!request) throw new Error("threadIdentityTargeted needs a request");
+      rows = [runThreadIdentityRequestOn(db, queryMsg.userId, request)];
+    } else if (queryMsg.type === "candidateMessageThreads") {
+      // BACKLOG-3868: the auto-link candidate read scans the user's texts in the deal's
+      // window (participants_flat LIKE cannot use an index); off the main thread.
+      if (!db) throw new Error("Database not initialized");
+      const { phoneCount, params } = queryMsg as QueryMessage & QueryMessageExtras;
+      if (!Number.isInteger(phoneCount) || (phoneCount as number) < 1 || !Array.isArray(params) || params.length !== (phoneCount as number) + 6) {
+        throw new Error("candidateMessageThreads needs phoneCount and its params");
+      }
+      rows = readCandidateMessageThreadsOn(db, phoneCount as number, params);
+    } else if (queryMsg.type === "messageDerived") {
+      // BACKLOG-3837: every message of the user, json_extract per row.
+      if (!db) throw new Error("Database not initialized");
+      rows = runMessageDerivedQueryOn(db, queryMsg.userId);
+    } else if (queryMsg.type === "messageRoster") {
+      // BACKLOG-3837: the Attach Messages roster (messageRosterDb.ts), off the main thread.
+      if (!db) throw new Error("Database not initialized");
+      rows = runMessageRosterOn(db, queryMsg.userId);
+    } else if (queryMsg.type === "commDatesPlan") {
+      // BACKLOG-3837: the last-message-date backfill PLAN (writes nothing; main applies it).
+      if (!db) throw new Error("Database not initialized");
+      rows = planCommunicationDatesOn(db, queryMsg.userId);
+    } else if (queryMsg.type === "sourceCoverageFloors") {
+      // BACKLOG-3837: the audit coverage check's per-source floors (every text row).
+      if (!db) throw new Error("Database not initialized");
+      rows = runSourceFloorsOn(db, queryMsg.userId);
+    } else if (queryMsg.type === "candidateEmails") {
+      // BACKLOG-3883: the auto-link candidate-email read (every email of the user in the
+      // deal's window, joined to its participants, bodies included); off the main thread.
+      if (!db) throw new Error("Database not initialized");
+      const { addressCount, params } = queryMsg as QueryMessage & QueryMessageExtras;
+      if (!Number.isInteger(addressCount) || (addressCount as number) < 1 || !Array.isArray(params) || params.length !== (addressCount as number) + 4) {
+        throw new Error("candidateEmails needs addressCount and its params");
+      }
+      rows = readCandidateEmailsOn(db, addressCount as number, params);
+    } else if (queryMsg.type === "transactionTextThreads") {
+      // BACKLOG-3884: the Texts tab's conversation list reads every linked text of the deal.
+      if (!db) throw new Error("Database not initialized");
+      const { transactionId, startMs, endMs } = queryMsg as QueryMessage & QueryMessageExtras;
+      if (typeof transactionId !== "string" || transactionId.length === 0) {
+        throw new Error("transactionTextThreads needs a transactionId");
+      }
+      rows = readTransactionTextThreadsOn(db, transactionId, { startMs: startMs ?? null, endMs: endMs ?? null });
     } else {
       throw new Error(`Unknown query type: ${queryMsg.type}`);
     }

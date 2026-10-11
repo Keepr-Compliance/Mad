@@ -10,9 +10,11 @@ import type { User } from "../types/models";
 // Import services
 import databaseService from "../services/databaseService";
 import { initializationBroadcaster } from "../services/initializationBroadcaster";
+import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import supabaseService from "../services/supabaseService";
 import sessionService from "../services/sessionService";
 import sessionSecurityService from "../services/sessionSecurityService";
+import { enforceSessionIdle } from "../services/sessionIdleEnforcer";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
 import { setSyncUserId } from "./syncHandlers";
@@ -37,105 +39,44 @@ import {
   CURRENT_PRIVACY_POLICY_VERSION,
 } from "../constants/legalVersions";
 
-/**
- * BACKLOG-1840: stop the additive-only shadow delta poller on every logout path so
- * it can't keep ticking (and polling with the now-stale user id) after sign-out.
- * The poller is only ever started while signed in (see maybeStartShadowDeltaSync);
- * stop() is a no-op when it was never started. Fire-and-forget + fail-closed via
- * dynamic import (mirrors the start wiring) — must NEVER throw into a logout path.
- */
-export function stopShadowDeltaSyncOnLogout(): void {
-  void import("../services/shadowDeltaSyncService")
-    .then((m) => m.default.stop())
-    .catch((err) => {
-      logService.warn(
-        "[SessionHandlers] Shadow delta sync stop failed (non-fatal)",
-        "SessionHandlers",
-        { error: err instanceof Error ? err.message : "Unknown" },
-      );
-    });
-}
+// BACKLOG-3833: the logout cleanup helpers live in ./sessionSignOut so the
+// idle enforcer can run the same sign-out without importing this module.
+export {
+  stopShadowDeltaSyncOnLogout,
+  resetContactLinkingOnLogout,
+  resetFeatureGateOnLogout,
+  resetChecklistTemplatesOnLogout,
+} from "./sessionSignOut";
+import {
+  stopShadowDeltaSyncOnLogout,
+  resetContactLinkingOnLogout,
+  resetFeatureGateOnLogout,
+  resetChecklistTemplatesOnLogout,
+  signOutLocalSession,
+  wasSignedOutHere,
+} from "./sessionSignOut";
 
 /**
- * BACKLOG-2474: drop ALREADY-QUEUED contact-linking work and the per-session
- * gates that go with it, on every logout path.
- *
- * Both are keyed by user id, so leaving them is not merely untidy: a pass left
- * queued for the user who just signed out would run against their data and then
- * notify a window that is now showing someone else, and the one-shot reconcile
- * gate would make the NEXT user look already-reconciled when they are not.
- *
- * WHAT THIS DOES NOT DO: it does not stop work being scheduled AFTER it runs. A
- * background sync still in flight at logout can write to `external_contacts`
- * and signal the scheduler, and that pass will execute for the signed-out user.
- * This is a one-shot cleanup, not a latch.
- *
- * That residue is left alone deliberately. Every query in the pass is
- * `WHERE user_id = ?`-scoped, so it cannot touch another user's rows; the
- * notify is `isDestroyed()`-guarded and lands on a channel whose only consumer
- * re-reads a count for the user it is currently rendering. A latch would add a
- * second piece of session state that could be left set — silently disabling
- * matching for the next user — which is a worse failure than a redundant pass.
- *
- * Dynamic import and fail-closed, mirroring the poller stop above — this must
- * NEVER throw into a logout path, and a static import would drag the whole
- * contact-handler dependency tree into every consumer of this module.
+ * BACKLOG-3833: renderer input heartbeat. The renderer already sends at most
+ * one per minute; main enforces the same limit per window so a renderer cannot
+ * turn this into a stream of file reads. A dropped beat costs nothing: the idle
+ * limit is 30 minutes and the next beat a minute later counts.
  */
-export function resetContactLinkingOnLogout(): void {
-  void import("./contactHandlers")
-    .then((m) => m.resetContactSessionState())
-    .catch((err) => {
-      logService.warn(
-        "[SessionHandlers] Contact linking session reset failed (non-fatal)",
-        "SessionHandlers",
-        { error: err instanceof Error ? err.message : "Unknown" },
-      );
-    });
+export const USER_ACTIVITY_MIN_INTERVAL_MS = 60 * 1000;
+const lastActivityBeatBySender = new Map<number, number>();
+
+export async function handleUserActivity(event: IpcMainInvokeEvent): Promise<void> {
+  const senderId = event?.sender?.id ?? -1;
+  const now = Date.now();
+  const last = lastActivityBeatBySender.get(senderId);
+  if (last !== undefined && now - last < USER_ACTIVITY_MIN_INTERVAL_MS) return;
+  lastActivityBeatBySender.set(senderId, now);
+  await enforceSessionIdle({ recordActivity: true });
 }
 
-/**
- * BACKLOG-3476: drop the feature-gate answers — the plan map AND the strict
- * reader's cached membership — on every logout path. Both belong to the
- * account that just signed out.
- *
- * In-memory only (`invalidateCache`, not `clearCache`): the persisted copy is
- * the offline fallback, keyed by organization, and deleting it is not what
- * signing out has ever done.
- *
- * Dynamic import and fail-closed, mirroring the two resets above — this must
- * NEVER throw into a logout path.
- */
-export function resetFeatureGateOnLogout(): void {
-  void import("../services/featureGateService")
-    .then((m) => m.default.invalidateCache())
-    .catch((err) => {
-      logService.warn(
-        "[SessionHandlers] Feature gate cache reset failed (non-fatal)",
-        "SessionHandlers",
-        { error: err instanceof Error ? err.message : "Unknown" },
-      );
-    });
-}
-
-/**
- * BACKLOG-3618: drop the checklist template listing — memory AND file — on
- * every logout path. A listing now holds the signed-in user's own checklists,
- * so it belongs to that user; the next person on this profile must not be
- * shown it. The cache is also keyed on the user, so this is the second line.
- *
- * Dynamic import and fail-closed, mirroring the resets above — this must
- * NEVER throw into a logout path.
- */
-export function resetChecklistTemplatesOnLogout(): void {
-  void import("../services/checklistTemplateService")
-    .then((m) => m.default.invalidate())
-    .catch((err) => {
-      logService.warn(
-        "[SessionHandlers] Checklist template cache reset failed (non-fatal)",
-        "SessionHandlers",
-        { error: err instanceof Error ? err.message : "Unknown" },
-      );
-    });
+/** Test seam: forget the per-window heartbeat times. */
+export function resetUserActivityThrottleForTests(): void {
+  lastActivityBeatBySender.clear();
 }
 
 // Type definitions
@@ -333,26 +274,17 @@ async function handleLogout(
     // record the ACCOUNT id.
     const userId = session?.user_id || "unknown";
 
-    await databaseService.deleteSession(validatedSessionToken);
-    await sessionService.clearSession();
-    sessionSecurityService.cleanupSession(validatedSessionToken);
+    // BACKLOG-3833: main already signed this session out for inactivity and
+    // wrote its audit entry. The renderer's follow-up logout only needs the
+    // stored session gone (it already is); do not log a second LOGOUT.
+    if (!session && wasSignedOutHere(validatedSessionToken)) {
+      await sessionService.clearSession();
+      return { success: true };
+    }
 
-    setSyncUserId(null);
-    Sentry.setUser(null);
-    stopShadowDeltaSyncOnLogout();
-
-    resetContactLinkingOnLogout();
-    resetFeatureGateOnLogout();
-    resetChecklistTemplatesOnLogout();
-
-    await auditService.log({
-      userId,
-      sessionId: validatedSessionToken,
-      action: "LOGOUT",
-      resourceType: "SESSION",
-      resourceId: validatedSessionToken,
-      success: true,
-    });
+    // BACKLOG-3833: same sign-out as idle expiry (stop sync, resets, audit,
+    // in-memory session, stored session).
+    await signOutLocalSession({ token: validatedSessionToken, userId, reason: "user" });
 
     await logService.info("User logged out successfully", "AuthHandlers", {
       userId,
@@ -571,151 +503,6 @@ async function handleCompleteEmailOnboarding(
     }
     return {
       success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    };
-  }
-}
-
-/**
- * Check email onboarding status
- *
- * ONE QUESTION: has this user answered the email-onboarding step? It is NOT
- * "is a mailbox connected right now" — that is `system:check-all-connections`,
- * which the renderer already asks separately (LoadingOrchestrator.tsx:684).
- *
- * TWO PIECES OF EVIDENCE, either of which settles it:
- *   - a valid mailbox token — they answered by connecting one;
- *   - the persisted flag — they answered by connecting OR by skipping (both
- *     paths call completeEmailOnboarding: useEmailHandlers.ts:84 and :122).
- *
- * BACKLOG-3293: this handler used to return the token alone and discard the
- * flag, so a user who answered the step but holds no token (a deliberate skip,
- * or a session-only token that was never persisted) was routed back into
- * onboarding on EVERY relaunch, permanently. The product had already settled
- * that question the other way one layer up — userDataSelectors.ts:300-328
- * ("MUST NOT be treated as incomplete") and useResumeSetup.ts:9-11
- * ("texts-only is a valid, non-degraded completion") — so this was a third,
- * stricter private copy of a rule the data-source floor already owns.
- *
- * TASK-1039 still applies and its auto-correct below stays: a token with the
- * flag unset repairs the DATABASE — it writes the row, never the local
- * `onboardingCompleted`, which is a `const` with no assignments. The four
- * tests over this handler pin the complete flag x token truth table, so any
- * implementation that passes all four is exactly the OR above.
- *
- * Connection HEALTH (never connected vs. token expired) is NOT answerable
- * here and must not be guessed: nothing persists the user's decline today
- * (`emailSkipped` is process memory, OnboardingFlow.tsx:206). That is
- * BACKLOG-3244's subject, not this handler's.
- */
-async function handleCheckEmailOnboarding(
-  _event: IpcMainInvokeEvent,
-  userId: string
-): Promise<{
-  success: boolean;
-  completed: boolean;
-  error?: string;
-  transient?: boolean;
-  retryable?: boolean;
-}> {
-  try {
-    // BACKLOG-1842 (resume-at-step fix round, startup-resilience follow-up):
-    // this handler reads databaseService.getOAuthToken/hasCompletedEmailOnboarding,
-    // which throw "Database is not initialized" when called before DB init
-    // completes. Live trace evidence (main.log 2026-07-20 21:55:38.859) caught
-    // this firing unguarded during a fast relaunch/sign-in — it recovered
-    // silently (caller has its own fallback), but per BACKLOG-2149's
-    // established pattern, await the shared db-ready signal instead of racing
-    // straight into a hard DB error.
-    if (!databaseService.isInitialized()) {
-      const dbReady = await initializationBroadcaster.whenDbReady();
-      if (!dbReady.ready) {
-        await logService.warn(
-          "check-email-onboarding: DB still not ready",
-          "AuthHandlers",
-          { timedOut: dbReady.timedOut, error: dbReady.error?.message }
-        );
-        return {
-          success: false,
-          completed: false,
-          transient: true,
-          retryable: true,
-          error: "Database is starting up",
-        };
-      }
-    }
-
-    const validatedUserId = validateUserId(userId)!;
-
-    // Check for valid mailbox token FIRST, regardless of flag
-    // This is the source of truth for whether email is actually connected
-    const googleToken = await databaseService.getOAuthToken(
-      validatedUserId,
-      "google",
-      "mailbox"
-    );
-    const microsoftToken = await databaseService.getOAuthToken(
-      validatedUserId,
-      "microsoft",
-      "mailbox"
-    );
-    const hasValidMailboxToken = !!(googleToken || microsoftToken);
-
-    // Check the flag for comparison/logging
-    const onboardingCompleted =
-      await databaseService.hasCompletedEmailOnboarding(validatedUserId);
-
-    // Auto-correct inconsistent state: token exists but flag is false
-    if (hasValidMailboxToken && !onboardingCompleted) {
-      await logService.info(
-        "Auto-correcting inconsistent email onboarding state: token exists but flag was false",
-        "AuthHandlers",
-        { userId: validatedUserId.substring(0, 8) + "..." }
-      );
-      await databaseService.completeEmailOnboarding(validatedUserId);
-    }
-
-    // Also handle the reverse: flag is true but no token
-    if (onboardingCompleted && !hasValidMailboxToken) {
-      await logService.info(
-        "Email onboarding flag is true but no valid mailbox token found",
-        "AuthHandlers",
-        { userId: validatedUserId.substring(0, 8) + "..." }
-      );
-    }
-
-    // BACKLOG-3293: "has this user answered?" — and either fact answers it.
-    // The persisted flag is evidence, not a thing to be overruled by a missing
-    // token. See the docblock for why this is an OR and not a bare flag.
-    const completed = onboardingCompleted || hasValidMailboxToken;
-
-    await logService.info("Email onboarding check", "AuthHandlers", {
-      userId: validatedUserId.substring(0, 8) + "...",
-      completed,
-      onboardingCompleted,
-      hasValidMailboxToken,
-    });
-
-    return { success: true, completed };
-  } catch (error) {
-    await logService.error(
-      "Check email onboarding status failed",
-      "AuthHandlers",
-      { error: error instanceof Error ? error.message : "Unknown error" }
-    );
-    Sentry.captureException(error, {
-      tags: { service: "session-handlers", operation: "handleCheckEmailOnboarding" },
-    });
-    if (error instanceof ValidationError) {
-      return {
-        success: false,
-        completed: false,
-        error: `Validation error: ${error.message}`,
-      };
-    }
-    return {
-      success: false,
-      completed: false,
       error: error instanceof Error ? error.message : "Unknown error",
     };
   }
@@ -969,6 +756,10 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
     // The Supabase SDK uses persistSession: false, so on app restart the SDK has no session.
     // This causes RLS policy failures (auth.uid() = null) when accepting T&C.
     // We manually restore the session from stored tokens.
+    // BACKLOG-3768: set when the restore below failed on the network. The SDK
+    // then holds no session, so a getUser() would return AuthSessionMissingError
+    // (a 400, not retryable) and wrongly clear the saved sign-in.
+    let restoreFailedOnNetwork = false;
     if (session.supabaseTokens) {
       try {
         const { error: setSessionError } = await supabaseService.getClient().auth.setSession({
@@ -976,7 +767,16 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
           refresh_token: session.supabaseTokens.refresh_token,
         });
 
-        if (setSessionError) {
+        if (setSessionError && isAuthRetryableFetchError(setSessionError)) {
+          // BACKLOG-3768: network/TLS failure or 5xx -- not a rejection. Keep
+          // the saved tokens and proceed; the SDK retries on its next call.
+          restoreFailedOnNetwork = true;
+          await logService.warn(
+            "Supabase session restoration failed on the network, keeping session",
+            "SessionHandlers",
+            { status: setSessionError.status, error: setSessionError.message }
+          );
+        } else if (setSessionError) {
           await logService.warn(
             "Supabase session restoration failed",
             "SessionHandlers",
@@ -1020,13 +820,21 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
     // Prevents showing authenticated UI when session was revoked remotely
     // This closes the gap where setSession() succeeds (tokens parse OK)
     // but the server has actually revoked the user/token
-    if (session.supabaseTokens) {
+    if (session.supabaseTokens && !restoreFailedOnNetwork) {
       try {
         const { data: userData, error: getUserError } = await supabaseService
           .getClient()
           .auth.getUser();
 
-        if (getUserError || !userData.user) {
+        if (getUserError && isAuthRetryableFetchError(getUserError)) {
+          // BACKLOG-3768: the server could not be reached -- proceed, same as
+          // the thrown-error path below.
+          await logService.warn(
+            "Server-side session validation failed on the network, proceeding",
+            "SessionHandlers",
+            { status: getUserError.status, error: getUserError.message }
+          );
+        } else if (getUserError || !userData.user) {
           // Session is invalid on the server (user deleted, token revoked)
           await logService.info(
             "Supabase session invalid on server, forcing re-login",
@@ -1040,12 +848,12 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
           sessionSecurityService.cleanupSession(session.sessionToken);
 
           return { success: false, error: "Session no longer valid" };
+        } else {
+          await logService.info(
+            "Supabase session validated server-side",
+            "SessionHandlers"
+          );
         }
-
-        await logService.info(
-          "Supabase session validated server-side",
-          "SessionHandlers"
-        );
       } catch (validationError) {
         // Network error during validation -- proceed optimistically
         // The user may be offline, and we don't want to block them
@@ -1655,9 +1463,10 @@ export function registerSessionHandlers(): void {
   ipcMain.handle("auth:accept-terms", wrapHandler(handleAcceptTerms, { module: "SessionHandlers" }));
   ipcMain.handle("auth:accept-terms-to-supabase", wrapHandler(handleAcceptTermsToSupabase, { module: "SessionHandlers" }));
   ipcMain.handle("auth:complete-email-onboarding", wrapHandler(handleCompleteEmailOnboarding, { module: "SessionHandlers" }));
-  ipcMain.handle("auth:check-email-onboarding", wrapHandler(handleCheckEmailOnboarding, { module: "SessionHandlers" }));
   ipcMain.handle("auth:validate-session", wrapHandler(handleValidateSession, { module: "SessionHandlers" }));
   ipcMain.handle("auth:get-current-user", wrapHandler(handleGetCurrentUser, { module: "SessionHandlers" }));
+  // BACKLOG-3833: renderer input heartbeat (no arguments; main loads the session itself).
+  ipcMain.handle("session:user-activity", handleUserActivity);
   // TASK-1507: Open browser for Supabase OAuth with deep-link callback
   ipcMain.handle("auth:open-in-browser", wrapHandler(handleOpenAuthInBrowser, { module: "SessionHandlers" }));
   // TASK-2062: Remote session validation (polls Supabase auth.getUser)

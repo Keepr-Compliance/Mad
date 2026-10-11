@@ -25,7 +25,7 @@ import { settingsService } from '../services';
 import logger from '../utils/logger';
 import type { ImportSource } from '../services/settingsService';
 import { shownImportSource } from './settings/importSourceLabels';
-import { effectiveImportSource } from '../services/importSourcePolicy';
+import { loadChosenImportSource } from '../services/importSourcePolicy';
 import type { PreferencesResult } from './settings/types';
 
 const SETTINGS_TABS = [
@@ -53,7 +53,7 @@ interface SettingsComponentProps {
   userId: string;
   onLogout?: () => Promise<void>;
   onEmailConnected?: (email: string, provider: "google" | "microsoft") => void;
-  onEmailDisconnected?: (provider: "google" | "microsoft") => void;
+  onEmailDisconnected?: (provider: "google" | "microsoft", anyStillConnected?: boolean) => void;
   /** Settings › Google Messages' Link / Relink: the Sync Android modal at its link step. */
   onLinkGoogleMessages?: () => void;
 }
@@ -115,23 +115,17 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
           setPreferences(prefs);
 
           // BACKLOG-1458: Derive active import source from preferences + phoneType
-          // The messages.source field is stored in preferences but not in PreferencesResult type
-          const messagesPrefs = (prefs as Record<string, unknown>).messages as
-            | { source?: ImportSource }
-            | undefined;
-          if (messagesPrefs?.source) {
-            // SR C6: a stored "android-companion" shows as Google Messages.
-            // BACKLOG-3749: a value this build does not know → the platform default.
-            setActiveImportSource(shownImportSource(effectiveImportSource(messagesPrefs.source, isMacOS)));
-          } else {
-            // No saved source — check phoneType for default
-            const phoneResult = await settingsService.getPhoneType(userId);
-            if (phoneResult.success && phoneResult.data === 'android') {
-              setActiveImportSource('android-messages-web');
-            } else {
-              setActiveImportSource(isMacOS ? 'macos-native' : 'iphone-sync');
-            }
-          }
+          // BACKLOG-3418: through the one shared derivation, so this section,
+          // the source radio, the Dashboard button and iPhone detection agree.
+          // A Windows/Linux user who chose nothing gets `null`: no source shown,
+          // and the iPhone Sync (USB) toggle stays disabled.
+          // SR C6: a stored "android-companion" shows as Google Messages.
+          const chosen = await loadChosenImportSource(
+            prefs as Parameters<typeof loadChosenImportSource>[0],
+            isMacOS,
+            () => settingsService.getPhoneType(userId),
+          );
+          setActiveImportSource(chosen ? shownImportSource(chosen) : null);
         } else if (!result.success) {
           logger.error("[Settings] Failed to load preferences:", result.error);
         }

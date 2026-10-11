@@ -96,7 +96,14 @@ export interface WindowApiChecklists {
     itemId: string;
     kind: ChecklistLinkKind;
     targetIds: string[];
+    /** BACKLOG-3764: the agent's "Include it" to the outside-the-dates question. */
+    includeOutsideDates?: boolean;
   }) => Promise<{ success: boolean; result?: AddChecklistLinkResult; error?: string }>;
+  /** BACKLOG-3764: "Include it" for an existing group, from the submit pre-flight. */
+  includeLinkOutsideDates: (args: {
+    transactionId: string;
+    linkId: string;
+  }) => Promise<ChecklistWriteResult>;
   /** Remove one evidence group. */
   removeLink: (args: { linkId: string }) => Promise<ChecklistWriteResult>;
   /** Take one checklist off a transaction. Never gated. */

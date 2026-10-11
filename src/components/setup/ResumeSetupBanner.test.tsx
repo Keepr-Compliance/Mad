@@ -54,6 +54,7 @@ const zeroSourceReady: ReadyState = {
     hasEmailConnected: false,
     needsDriverSetup: false,
     fda: "not-asked",
+    setup: "finished",
   },
 };
 

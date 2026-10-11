@@ -20,6 +20,7 @@ import {
   TableEmptyRow,
 } from '@keepr/design-system';
 import { getUserDisplayName, type AdminSearchUser } from '@/lib/admin-queries';
+import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
 
 interface UserResultsTableProps {
   users: AdminSearchUser[] | null;
@@ -172,7 +173,7 @@ export function UserResultsTable({ users, query, isLoading, error }: UserResults
 
   // Table wrapper (shared by loading and results states)
   return (
-    <TableContainer>
+    <TableContainer scrollX>
       <Table>
         <TableHead>
           <Tr>
@@ -203,7 +204,10 @@ export function UserResultsTable({ users, query, isLoading, error }: UserResults
             users.map((user) => (
               <Tr
                 key={user.id}
-                onClick={() => router.push(`/dashboard/users/${user.id}`)}
+                onClick={() => {
+                  startNavigationProgress();
+                  router.push(`/dashboard/users/${user.id}`);
+                }}
                 clickable
               >
                 <Td emphasis="primary">

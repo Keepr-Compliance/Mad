@@ -13,6 +13,40 @@
  * - check-disk-space
  */
 
+// BACKLOG-3817: keep saved backup passwords in memory. The process-wide store writes
+// under hostAppPaths.userData(), which in jest is a shared directory — a password saved by
+// one test would be found by the next run.
+const mockSavedPasswords = new Map<string, string>();
+// BACKLOG-3816 S4-C: the kept backup's at-rest layer is not this suite's subject.
+jest.mock("../atRest/backupAtRest", () => ({
+  ...jest.requireActual("../atRest/backupAtRest"),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+}));
+jest.mock("../atRest/backupPassword", () => {
+  const actual = jest.requireActual("../atRest/backupPassword");
+  return {
+    ...actual,
+    getBackupPasswordStore: () => ({
+      get: async (udid: string) =>
+        mockSavedPasswords.has(udid)
+          ? { kind: "found", password: mockSavedPasswords.get(udid), origin: "user" }
+          : { kind: "absent" },
+      put: async (udid: string, password: string) => {
+        mockSavedPasswords.set(udid, password);
+      },
+      replaceVerified: async (udid: string, password: string) => {
+        mockSavedPasswords.set(udid, password);
+      },
+      replaceUnreadable: async () => {
+        throw new Error("no unreadable entry in this suite");
+      },
+      storePath: () => "",
+    }),
+  };
+});
+beforeEach(() => mockSavedPasswords.clear());
+
 import { EventEmitter } from "events";
 
 // Mock data for tests
@@ -129,6 +163,20 @@ class MockBackupService extends EventEmitter {
 
   cancelBackup() {
     // No-op for mock
+  }
+
+  // BACKLOG-3598: leftover cleanup. Inert here; proven in
+  // deviceSyncOrchestrator.failedSyncCleanup-3598.test.ts against a real folder.
+  async sweepLeftoverBackups() {
+    return { removed: 0, bytesFreed: 0, failures: [] };
+  }
+
+  async classifyBackupFolder(_udid: string) {
+    return "absent" as const;
+  }
+
+  async removeLeftoverBackup(_udid: string) {
+    return { outcome: "kept" as const, folder: "absent" as const };
   }
 }
 
@@ -270,7 +318,8 @@ jest.mock("better-sqlite3-multiple-ciphers", () => {
 jest.mock("electron", () => ({
   app: {
     isPackaged: false,
-    getPath: jest.fn().mockReturnValue("/tmp"),
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()),
   },
 }));
 
@@ -789,4 +838,10 @@ describe("DeviceSyncOrchestrator Skip Logic (TASK-908)", () => {
       expect(mockResult.skipReason).toBe("unchanged");
     });
   });
+});
+
+// BACKLOG-3816 S4-C (B1): this file's userData is a fresh directory under os.tmpdir().
+afterAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./helpers/testUserData").removeTestUserDataDir();
 });

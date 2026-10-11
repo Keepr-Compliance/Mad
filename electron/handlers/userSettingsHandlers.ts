@@ -17,11 +17,19 @@ import {
   validateUserId,
 } from "../utils/validation";
 import { ensureUserInLocalDb } from "./systemHandlers";
+import { registerAccountSetupHandlers } from "./accountSetupHandlers";
+import { registerTourStateHandlers } from "./tourStateHandlers";
 
 /**
  * Register all user settings IPC handlers
  */
 export function registerUserSettingsHandlers(): void {
+  // BACKLOG-3673: the per-account "setup finished" record. Registered here so
+  // electron/main.ts needs no change.
+  registerAccountSetupHandlers();
+  // BACKLOG-3674: the per-account "tour dismissed" record.
+  registerTourStateHandlers();
+
   // ===== USER PHONE TYPE PREFERENCES =====
 
   /**

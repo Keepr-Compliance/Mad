@@ -1,0 +1,11 @@
+{
+  "name": "keepr-chrome-extension-vendored-noble",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dependency manifest for the @noble code bundled in chrome-extension/vendor/noble-p256.js. Not installed or built; it exists so GitHub's dependency graph and Dependabot see the vendored versions. See README.md.",
+  "license": "MIT",
+  "dependencies": {
+    "@noble/curves": "1.9.7",
+    "@noble/hashes": "1.8.0"
+  }
+}

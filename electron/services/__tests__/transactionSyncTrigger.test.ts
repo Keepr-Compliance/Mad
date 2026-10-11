@@ -246,6 +246,7 @@ describe("ensureTransactionEmailsSynced", () => {
     // develop's classification runs again — confident emails and every text
     // link — and only the address-missing half is queued for approval.
     expect(mockAutoLink).toHaveBeenCalledWith({
+      caller: "covered-open",
       contactId: "c1",
       transactionId: "tx-1",
       queueAmbiguousInsteadOfLinking: true,

@@ -48,7 +48,6 @@ if (typeof window !== 'undefined') {
       microsoftConnectMailbox: jest.fn().mockResolvedValue({ success: true }),
       googleDisconnectMailbox: jest.fn().mockResolvedValue({ success: true }),
       microsoftDisconnectMailbox: jest.fn().mockResolvedValue({ success: true }),
-      checkEmailOnboarding: jest.fn().mockResolvedValue({ success: true, completed: false }),
       completeEmailOnboarding: jest.fn().mockResolvedValue({ success: true }),
       completePendingLogin: jest.fn().mockResolvedValue({ success: true }),
       // Pre-DB mailbox connection methods
@@ -66,6 +65,12 @@ if (typeof window !== 'undefined') {
       delete: jest.fn(),
       scan: jest.fn(),
       getDetails: jest.fn(),
+      // BACKLOG-3884: the Texts tab's conversation list and pages. Default = a deal
+      // with no linked texts; suites about the Texts tab set their own.
+      getTextThreads: jest.fn().mockResolvedValue({ success: true, threads: [] }),
+      getTextThreadPage: jest.fn().mockResolvedValue({ success: true, rows: [], nextCursor: null }),
+      findTextThread: jest.fn().mockResolvedValue({ success: true, threadKey: null }),
+      unlinkTextThreads: jest.fn().mockResolvedValue({ success: true, removed: 0, messageIds: [] }),
       assignContact: jest.fn(),
       removeContact: jest.fn(),
       exportEnhanced: jest.fn(),
@@ -265,10 +270,23 @@ if (typeof window !== 'undefined') {
       // TASK-1600: Cloud phone type storage (Supabase)
       getPhoneTypeCloud: jest.fn().mockResolvedValue({ success: true, phoneType: null }),
       setPhoneTypeCloud: jest.fn().mockResolvedValue({ success: true }),
+      // BACKLOG-3673: the per-account "setup finished" record (session user).
+      getAccountSetup: jest.fn().mockResolvedValue({
+        success: true,
+        setup: "not-finished",
+        emailStepAnswered: false,
+        contactSourceAnswered: false,
+      }),
+      completeAccountSetup: jest.fn().mockResolvedValue({ success: true }),
+      // BACKLOG-3674: the per-account "tour dismissed" record (session user).
+      // Default "not-dismissed" keeps the dashboard tour starting as before.
+      getTourState: jest.fn().mockResolvedValue({ success: true, tour: "not-dismissed" }),
+      dismissTour: jest.fn().mockResolvedValue({ success: true }),
     },
     shell: {
       openExternal: jest.fn(),
       openFolder: jest.fn(),
+      openThirdPartyNotices: jest.fn().mockResolvedValue({ success: true }),
     },
     // iMessage conversations (macOS) - migrated from window.electron
     messages: {

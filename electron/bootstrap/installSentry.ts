@@ -49,8 +49,10 @@
  * THE INIT OPTIONS ARE A TRANSCRIPTION
  * ------------------------------------
  * The `Sentry.init` call below is byte-for-byte the one removed from
- * `main.ts`, comments included. `installSentry.test.ts` pins the option keys
- * and their values on both `app.isPackaged` branches so the move cannot drift.
+ * `main.ts`, comments included — except two BACKLOG-3801 changes: `enabled`
+ * also requires the user's "Send crash reports" choice, and `transport` wraps
+ * the network transport in that switch. `installSentry.test.ts` pins the option
+ * keys and their values on both `app.isPackaged` branches so the move cannot drift.
  * `Sentry.setContext("auto-updater", …)` stays in `main.ts`: it is not an init
  * input, it annotates later events, and nothing this early emits one that
  * needs it.
@@ -73,6 +75,12 @@ import dotenv from "dotenv";
 import * as Sentry from "@sentry/electron/main";
 import { scrubUpdaterEventPII } from "../services/updateDiagnostics";
 import { scrubRcsEventPII } from "../services/rcsSentryScrub";
+import { scrubHttpBreadcrumb } from "../services/httpBreadcrumbScrub";
+import {
+  gateBaseTransport,
+  isCrashReportingEnabled,
+  loadCrashReportingPreference,
+} from "../services/crashReportingPreference";
 
 // Load environment files based on whether app is packaged or in development
 if (app.isPackaged) {
@@ -86,12 +94,23 @@ if (app.isPackaged) {
   dotenv.config({ path: path.join(__dirname, "../../.env.local") });
 }
 
+// BACKLOG-3801: the user's "Send crash reports" choice, read synchronously
+// before init (userData is already repointed by installAppDataPaths). OFF at
+// launch → Sentry starts disabled (no integrations, no native crash handler).
+// The transport gate below also covers a switch turned OFF mid-session and
+// the offline queue an earlier run left on disk, which `enabled: false` alone
+// does not: the transport is built and flushed whenever a DSN is set.
+const crashReportingAtLaunch = loadCrashReportingPreference(app.getPath("userData"));
+
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
   environment: app.isPackaged ? "production" : "development",
   release: app.getVersion(),
   // Don't send events in development unless DSN is explicitly set
-  enabled: app.isPackaged || !!process.env.SENTRY_DSN,
+  enabled: (app.isPackaged || !!process.env.SENTRY_DSN) && crashReportingAtLaunch,
+  // BACKLOG-3801: the single network egress for main AND renderer envelopes
+  // (renderer envelopes arrive over IPC and leave through this transport).
+  transport: Sentry.makeElectronOfflineTransport(gateBaseTransport(Sentry.makeElectronTransport)),
   // BACKLOG-1903: scrub signed-URL tokens + local paths from the exception
   // VALUE (and top-level message) of auto-updater events before they leave
   // the process. Sentry derives the issue title/exception value from the
@@ -105,8 +124,13 @@ Sentry.init({
   // "google-messages"): phone numbers, emails, quoted text — see
   // scrubRcsEventPII. The updater scrub runs first, unchanged; an RCS event
   // whose scrub throws is dropped (its text may hold a number or a message).
+  // BACKLOG-3768: HTTP breadcrumbs keep origin + path only (no query string).
+  beforeBreadcrumb(breadcrumb) {
+    return scrubHttpBreadcrumb(breadcrumb);
+  },
   beforeSend(event) {
-    let scrubbed = event;
+    if (!isCrashReportingEnabled()) return null;
+    let scrubbed: typeof event;
     try {
       scrubbed = scrubUpdaterEventPII(event);
     } catch (scrubError) {

@@ -7,6 +7,8 @@ import * as Sentry from "@sentry/electron/main";
 import type { User, OAuthProvider, Subscription } from "../types/models";
 import logService from "./logService";
 import { emitSessionChanged } from "./authEvents";
+import { renameWithRetry } from "./atRest/fileCrypto";
+import { lastIpcChannelStarted } from "./ipcReplySize";
 
 // ============================================
 // TYPES & INTERFACES
@@ -29,6 +31,10 @@ interface SessionData {
   // TASK-2086: Timestamp of last successful server-side auth validation (SOC 2 CC6.1)
   // Used for offline grace period -- if missing, treated as "never validated"
   lastServerValidatedAt?: number;
+  // BACKLOG-3673: offline cache of the server record users.onboarding_completed_at.
+  // The server decides; this is read only when the server cannot be reached.
+  // Deleted with the session file on sign-out / expiry.
+  accountSetupFinishedAt?: string;
 }
 
 /**
@@ -305,7 +311,20 @@ export class SessionService {
         // the file system, so no session file can be produced on this path.
         return false;
       }
-      await fs.writeFile(this.getSessionFilePath(), fileContent, "utf8");
+      // BACKLOG-3833: write a temp file and rename it over session.json, so a
+      // reader never sees a half-written file (rename is atomic on one volume).
+      const target = this.getSessionFilePath();
+      const temp = `${target}.tmp`;
+      await fs.writeFile(temp, fileContent, "utf8");
+      try {
+        // Retries the transient EBUSY/EPERM/EACCES locks Windows scanners take
+        // on a just-closed file.
+        await renameWithRetry(temp, target);
+      } catch (renameError) {
+        // Keep the existing session.json untouched and leave no sealed temp file.
+        await fs.unlink(temp).catch(() => undefined);
+        throw renameError;
+      }
       await logService.info("Session saved successfully", "SessionService");
       // BACKLOG-3658: sign-in / refresh — listeners drop cached user state.
       emitSessionChanged({ kind: "saved", userId: data.user?.id ?? null });
@@ -326,6 +345,7 @@ export class SessionService {
    * @returns Session data or null if not found/expired/corrupted
    */
   async loadSession(): Promise<SessionData | null> {
+    const loadStartedAt = Date.now();
     try {
       const fileContent = await fs.readFile(this.getSessionFilePath(), "utf8");
       const result = this.decryptSessionData(fileContent);
@@ -372,7 +392,14 @@ export class SessionService {
         );
       }
 
-      await logService.info("Session loaded successfully", "SessionService");
+      // BACKLOG-3884: ten callers log this same line. `during` names the last
+      // IPC channel whose handler started (usually the caller, e.g.
+      // license:get on a window-focus license refresh); `ms` is the file read
+      // and decrypt. Channel name and ms only.
+      await logService.info(
+        `Session loaded successfully ms=${Date.now() - loadStartedAt} during=${lastIpcChannelStarted() ?? "none"}`,
+        "SessionService",
+      );
       return session;
     } catch (error: unknown) {
       if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -390,10 +417,44 @@ export class SessionService {
   }
 
   /**
+   * BACKLOG-3833: read the session for the once-a-minute idle check.
+   *
+   * Runs in the same queue as every session.json write, so it never reads a
+   * file mid-write. It NEVER deletes or rewrites the file: an unreadable file,
+   * a failed decrypt or a read error returns `{ status: "unreadable" }` and the
+   * caller tries again on its next tick. Only `loadSession` decides that a
+   * file is corrupt and removes it.
+   */
+  async peekSession(): Promise<
+    | { status: "ok"; session: SessionData }
+    | { status: "none" }
+    | { status: "unreadable" }
+  > {
+    return this.runSerialized(async () => {
+      try {
+        const fileContent = await fs.readFile(this.getSessionFilePath(), "utf8");
+        const result = this.decryptSessionData(fileContent);
+        if (!result) return { status: "unreadable" as const };
+        return { status: "ok" as const, session: result.session };
+      } catch (error: unknown) {
+        if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+          return { status: "none" as const };
+        }
+        return { status: "unreadable" as const };
+      }
+    });
+  }
+
+  /**
    * Clear session data
    */
   async clearSession(): Promise<boolean> {
     return this.runSerialized(() => this._clearSessionInternal());
+  }
+
+  /** A leftover temp file from an interrupted or failed save holds a sealed token. */
+  private async removeSessionTemp(): Promise<void> {
+    await fs.unlink(`${this.getSessionFilePath()}.tmp`).catch(() => undefined);
   }
 
   /** Internal, NON-serialized clear. Only call from inside a runSerialized() critical section
@@ -401,12 +462,14 @@ export class SessionService {
   private async _clearSessionInternal(): Promise<boolean> {
     try {
       await fs.unlink(this.getSessionFilePath());
+      await this.removeSessionTemp();
       await logService.info("Session cleared successfully", "SessionService");
       emitSessionChanged({ kind: "cleared", userId: null });
       return true;
     } catch (error: unknown) {
       if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
         // File doesn't exist, that's fine
+        await this.removeSessionTemp();
         emitSessionChanged({ kind: "cleared", userId: null });
         return true;
       }

@@ -42,21 +42,27 @@ const UDID = "00008030-0011223344556677";
 const GB = 1024 * 1024 * 1024;
 /** What `getDeviceStorageInfo` reports below. Drives the device-storage estimate. */
 const DEVICE_STORAGE_ESTIMATE = 50 * GB;
-/**
- * Free space chosen so BOTH headroom branches warn, and the warning's "~N GB
- * recommended" therefore reports which multiplier ran:
- *   1.1 x 50 GB = 55.0 GB      1.5 x 50 GB = 75.0 GB
- * It is above SYNC_DISK_RESERVE_BYTES (2 GB) so the up-front refusal does not fire
- * first and mask the branch under test.
- */
-const FREE_SPACE = 10 * GB;
 
 const mockStartBackup = jest.fn();
 const mockCheckBackupStatus = jest.fn();
 const logLines: string[] = [];
 
+// BACKLOG-3816 S4-C: the kept backup's at-rest layer is not this suite's subject.
+jest.mock("../atRest/backupAtRest", () => ({
+  ...jest.requireActual("../atRest/backupAtRest"),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+}));
+// BACKLOG-3816 S4-C (B1): no saved-password file I/O; this suite's subject is not the password.
+jest.mock("../atRest/backupPassword", () => ({
+  ...jest.requireActual("../atRest/backupPassword"),
+  getBackupPasswordStore: () =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("./helpers/passThroughBackupAtRest").passThroughBackupPasswordStore,
+}));
 jest.mock("electron", () => ({
-  app: { isPackaged: false, getPath: jest.fn().mockReturnValue("/tmp") },
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  app: { isPackaged: false, getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()) },
 }));
 
 // The timeline's default sink is `log.info`, so capturing info gives us the marks.
@@ -89,6 +95,12 @@ jest.mock("better-sqlite3-multiple-ciphers", () =>
 jest.mock("check-disk-space", () =>
   jest.fn().mockImplementation(async () => ({
     diskPath: "C:",
+    // 10 GB free, chosen so BOTH headroom branches warn, and the warning's "~N GB
+    // recommended" therefore reports which multiplier ran:
+    //   1.1 x 50 GB = 55.0 GB      1.5 x 50 GB = 75.0 GB
+    // It is above SYNC_DISK_RESERVE_BYTES (2 GB) so the up-front refusal does not
+    // fire first and mask the branch under test. Inline because a hoisted
+    // jest.mock factory cannot read module constants.
     free: 10 * 1024 * 1024 * 1024,
     size: 1000 * 1024 * 1024 * 1024,
   })),
@@ -121,6 +133,11 @@ jest.mock("../backupService", () => ({
       checkBackupStatus: mockCheckBackupStatus,
       startBackup: mockStartBackup,
       cancelBackup: jest.fn(),
+      // BACKLOG-3598: leftover cleanup. Inert here; the cleanup itself is proven in
+      // deviceSyncOrchestrator.failedSyncCleanup-3598.test.ts against a real folder.
+      sweepLeftoverBackups: jest.fn().mockResolvedValue({ removed: 0, bytesFreed: 0, failures: [] }),
+      classifyBackupFolder: jest.fn().mockResolvedValue("absent"),
+      removeLeftoverBackup: jest.fn().mockResolvedValue({ outcome: "kept", folder: "absent" }),
     });
   }),
 }));
@@ -436,4 +453,10 @@ describe("BACKLOG-2917: processExistingBackup separates 'none' from 'could not t
     expect(result.success).toBe(false);
     expect(result.error).toBe("No existing backup found for this device");
   });
+});
+
+// BACKLOG-3816 S4-C (B1): this file's userData is a fresh directory under os.tmpdir().
+afterAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./helpers/testUserData").removeTestUserDataDir();
 });

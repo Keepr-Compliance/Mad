@@ -290,6 +290,27 @@ export async function createCommunicationReference(
   linkSource: "auto" | "manual" | "scan" = "auto",
   linkConfidence: number = 0.9
 ): Promise<string | null> {
+  return createCommunicationReferenceSync(
+    messageId,
+    transactionId,
+    userId,
+    linkSource,
+    linkConfidence
+  );
+}
+
+/**
+ * BACKLOG-3785: the synchronous body of `createCommunicationReference`, so a
+ * caller can run it inside a `dbTransaction` (whose body must be synchronous).
+ * Same statements, same skips, same return values.
+ */
+export function createCommunicationReferenceSync(
+  messageId: string,
+  transactionId: string,
+  userId: string,
+  linkSource: "auto" | "manual" | "scan" = "auto",
+  linkConfidence: number = 0.9
+): string | null {
   const id = crypto.randomUUID();
 
   // First check if this link already exists
@@ -306,7 +327,7 @@ export async function createCommunicationReference(
   );
 
   if (!msgExists) {
-    logService.warn(
+    void logService.warn(
       `Message ${messageId} not found when creating communication reference`,
       "MessageMatchingService"
     );

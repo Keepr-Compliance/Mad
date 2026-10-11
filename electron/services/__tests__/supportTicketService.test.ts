@@ -112,6 +112,7 @@ jest.mock("../connectionStatusService", () => ({
 jest.mock("../deviceDetectionService", () => ({
   deviceDetectionService: {
     collectIphoneSyncDiagnostics: jest.fn().mockResolvedValue({
+      iphoneCheckingOn: true,
       libimobiledeviceAvailable: true,
       libimobiledeviceInPath: true,
       connectedDeviceCount: 0,
@@ -418,6 +419,7 @@ describe("supportTicketService", () => {
       // Windows: device visible to PnP but idevice_id -l returns 0 →
       // libimobiledevice available but no device detected → driver missing.
       deviceDetectionService.collectIphoneSyncDiagnostics.mockResolvedValueOnce({
+        iphoneCheckingOn: true,
         libimobiledeviceAvailable: true,
         libimobiledeviceInPath: true,
         connectedDeviceCount: 0,
@@ -447,6 +449,7 @@ describe("supportTicketService", () => {
     it("should surface trust_state when a device is present-but-unusable", async () => {
       const { deviceDetectionService } = require("../deviceDetectionService");
       deviceDetectionService.collectIphoneSyncDiagnostics.mockResolvedValueOnce({
+        iphoneCheckingOn: true,
         libimobiledeviceAvailable: true,
         libimobiledeviceInPath: true,
         connectedDeviceCount: 1,
@@ -466,6 +469,7 @@ describe("supportTicketService", () => {
     it("should reflect macOS libimobiledevice availability and device count", async () => {
       const { deviceDetectionService } = require("../deviceDetectionService");
       deviceDetectionService.collectIphoneSyncDiagnostics.mockResolvedValueOnce({
+        iphoneCheckingOn: true,
         libimobiledeviceAvailable: true,
         libimobiledeviceInPath: true,
         connectedDeviceCount: 2,
@@ -622,6 +626,7 @@ describe("supportTicketService", () => {
         uptime_seconds: 3600,
         iphone_sync: {
           phone_type: "iphone",
+          iphone_checking_on: true,
           libimobiledevice_available: true,
           libimobiledevice_in_path: true,
           connected_device_count: 0,

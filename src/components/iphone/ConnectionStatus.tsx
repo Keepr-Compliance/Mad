@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
 import type { ConnectionStatusProps } from "../../types/iphone";
 import { TrustComputerHint } from "./TrustComputerHint";
+import { WindowsArm64Unsupported } from "./WindowsArm64Unsupported";
 import logger from "../../utils/logger";
 
 /**
@@ -41,11 +42,17 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   onInstallDriver,
   isInstallingDriver = false,
   driverInstallError = null,
+  isWindowsArm64 = false,
 }) => {
   useEffect(() => {
     logger.info("[ConnectionStatus] Mounted", { isConnected, device: device?.name, lastSyncTime });
     return () => logger.info("[ConnectionStatus] Unmounted");
   }, []);
+  // BACKLOG-3363: on Windows on ARM no iPhone can be detected or synced. This
+  // view wins over driverMissing, the connect prompt and the Trust hint.
+  if (isWindowsArm64) {
+    return <WindowsArm64Unsupported />;
+  }
   if (!isConnected) {
     // BACKLOG-1919: Driver-absent recovery view. When no device is detected AND
     // the Apple Mobile Device Support driver is missing (Windows), replace the

@@ -11,6 +11,14 @@
  *                 refunded_at IS NULL. (We then mirror it into the offline cache.)
  *     • OFFLINE — a cache row (itself only ever written from a prior confirmed
  *                 server read) exists for (user, tx).
+ *     • UNLIMITED (BACKLOG-3675) — no unlock row, and a LIVE read says the
+ *                 account's organization has `unlimited_transactions` enabled
+ *                 (exactly `true`); or, only when that live answer is
+ *                 unavailable (offline / read error), a stored offline pass
+ *                 that verifies for this user (signature, kid, 48 h window,
+ *                 paid-period cap, clock checks). A definite live "no"
+ *                 always wins and deletes the pass. Neither path writes the
+ *                 unlock cache, and neither reads feature-cache.json.
  *   Loading, error, not-authenticated, offline-with-no-cache, and refunded all
  *   resolve LOCKED. There is NO path where missing information reveals content.
  *
@@ -35,8 +43,80 @@ import type {
   UnlockResult,
   ExportEntitlementDecision,
 } from "../types/entitlement";
+import { verifyOfflinePass } from "./offlinePass/offlinePassVerifier";
+import {
+  readOfflinePass,
+  storeOfflinePass,
+  deleteOfflinePass,
+} from "./offlinePass/offlinePassStore";
+import { OFFLINE_PASS_PUBLIC_KEYS } from "../constants/offlinePassKeys";
 
 const MODULE = "EntitlementService";
+
+// ── Unlimited transactions (BACKLOG-3675) ─────────────────────────────────
+/** Plan feature key. Must equal the key the migration inserts. */
+export const UNLIMITED_TRANSACTIONS_FEATURE_KEY = "unlimited_transactions";
+/** Edge Function that signs the offline pass. */
+export const OFFLINE_PASS_ISSUER_FUNCTION = "issue-offline-pass";
+/** How long a definite live answer is reused on the export path. */
+const ENTITLEMENT_MEMO_TTL_MS = 60_000;
+/** Upper bound on one live entitlement read. Timeout ⇒ "error". */
+const ENTITLEMENT_READ_TIMEOUT_MS = 5_000;
+const OFFLINE_PASS_ISSUE_TIMEOUT_MS = 10_000;
+/** Minimum gap between pass refresh attempts triggered by exports. */
+const OFFLINE_PASS_REFRESH_MIN_GAP_MS = 10 * 60_000;
+const OFFLINE_PASS_REFRESHER_FIRST_DELAY_MS = 20_000;
+const OFFLINE_PASS_REFRESHER_INTERVAL_MS = 30 * 60_000;
+
+/**
+ * The live answer to "does this account have unlimited transactions?".
+ *   entitled      — membership found and get_org_features says enabled === true
+ *   not_entitled  — a definite "no" (no membership, not_authorized, key absent
+ *                   or not exactly `true`). Beats and deletes the offline pass.
+ *   error         — the question could not be answered (network, timeout,
+ *                   unexpected shape). Only then may the offline pass apply.
+ */
+export type LiveUnlimitedEntitlement = "entitled" | "not_entitled" | "error";
+
+class EntitlementReadTimeoutError extends Error {
+  constructor() {
+    super("entitlement read timed out");
+    this.name = "EntitlementReadTimeoutError";
+  }
+}
+
+async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new EntitlementReadTimeoutError()), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Read `get_org_features`'s answer for the unlimited key. */
+function readUnlimitedFromOrgFeatures(data: unknown): LiveUnlimitedEntitlement {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return "error";
+  const record = data as Record<string, unknown>;
+  if (record.error !== undefined && record.error !== null) {
+    // `{error: "not_authorized", features: []}` is the function's definite refusal.
+    return record.error === "not_authorized" ? "not_entitled" : "error";
+  }
+  const features = record.features;
+  if (!features || typeof features !== "object" || Array.isArray(features)) return "error";
+  const entry = (features as Record<string, unknown>)[UNLIMITED_TRANSACTIONS_FEATURE_KEY];
+  if (!entry || typeof entry !== "object") return "not_entitled";
+  return (entry as Record<string, unknown>).enabled === true ? "entitled" : "not_entitled";
+}
+
+function nowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
 
 /**
  * Is the machine online? Uses Electron's net module. Defensive: if the check
@@ -53,6 +133,196 @@ function isOnline(): boolean {
 }
 
 class EntitlementService {
+  /** userId → last definite live answer (never persisted). */
+  private entitlementMemo = new Map<string, { answer: "entitled" | "not_entitled"; at: number }>();
+  /** userId → last time an export-triggered pass refresh was attempted. */
+  private passRefreshAttemptAt = new Map<string, number>();
+  private refresherStarted = false;
+
+  /**
+   * Live read of the unlimited-transactions entitlement (BACKLOG-3675).
+   * Membership → get_org_features. Bounded by a timeout; any failure is
+   * "error", never "entitled". A definite "no" deletes the offline pass.
+   *
+   * @param useMemo true on the export path (60 s memo of definite answers);
+   *                false on the debit path and the refresher.
+   */
+  private async readLiveUnlimitedEntitlement(
+    userId: string,
+    useMemo: boolean,
+  ): Promise<LiveUnlimitedEntitlement> {
+    if (useMemo) {
+      const memo = this.entitlementMemo.get(userId);
+      if (memo && Date.now() - memo.at < ENTITLEMENT_MEMO_TTL_MS) {
+        return memo.answer;
+      }
+    }
+
+    let answer: LiveUnlimitedEntitlement;
+    try {
+      answer = await withTimeout(this.queryUnlimitedEntitlement(userId), ENTITLEMENT_READ_TIMEOUT_MS);
+    } catch (error) {
+      logService.warn("[Entitlement] Unlimited entitlement read failed", MODULE, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      answer = "error";
+    }
+
+    if (answer === "error") {
+      this.entitlementMemo.delete(userId);
+      return answer;
+    }
+    this.entitlementMemo.set(userId, { answer, at: Date.now() });
+    if (answer === "not_entitled") {
+      await deleteOfflinePass();
+    }
+    return answer;
+  }
+
+  private async queryUnlimitedEntitlement(userId: string): Promise<LiveUnlimitedEntitlement> {
+    const membership = await supabaseService.getActiveOrganizationMembershipOutcome(userId);
+    if (membership.status === "none") return "not_entitled";
+    if (membership.status !== "member") return "error";
+
+    const client = supabaseService.getClient();
+    const { data, error } = await client.rpc("get_org_features", {
+      p_org_id: membership.organization_id,
+    });
+    if (error) return "error";
+    return readUnlimitedFromOrgFeatures(data);
+  }
+
+  /**
+   * Is there a stored offline pass that verifies for this user right now?
+   * Consulted ONLY when the live answer is unavailable (offline or a read
+   * error) — never after a definite live "no".
+   */
+  private async hasValidOfflinePass(userId: string): Promise<boolean> {
+    try {
+      const nowSec = nowSeconds();
+      const stored = await readOfflinePass(nowSec);
+      if (!stored) return false;
+      const verdict = verifyOfflinePass({
+        token: stored.token,
+        nowSec,
+        keys: OFFLINE_PASS_PUBLIC_KEYS,
+        userId,
+        highWaterSec: stored.highWaterSec,
+      });
+      if (!verdict.ok) {
+        logService.info("[Entitlement] Offline pass not accepted", MODULE, {
+          reason: verdict.reason,
+        });
+        return false;
+      }
+      return true;
+    } catch (error) {
+      logService.warn("[Entitlement] Offline pass check failed", MODULE, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Ask the issuer for a fresh pass and store it if it verifies for the
+   * current user. Called only after a live "entitled" answer. Never throws.
+   */
+  private async fetchAndStoreOfflinePass(userId: string): Promise<void> {
+    try {
+      const client = supabaseService.getClient();
+      const { data, error } = await withTimeout(
+        client.functions.invoke(OFFLINE_PASS_ISSUER_FUNCTION, { body: {} }),
+        OFFLINE_PASS_ISSUE_TIMEOUT_MS,
+      );
+      if (error) {
+        logService.info("[Entitlement] Offline pass issuer unavailable", MODULE, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return; // keep whatever is stored
+      }
+      const body = (data ?? {}) as { pass?: unknown; reason?: unknown };
+      if (typeof body.pass !== "string") {
+        if (body.reason === "not_entitled" || body.reason === "paid_period_ended") {
+          await deleteOfflinePass();
+        }
+        return;
+      }
+      const verdict = verifyOfflinePass({
+        token: body.pass,
+        nowSec: nowSeconds(),
+        keys: OFFLINE_PASS_PUBLIC_KEYS,
+        userId,
+        // A fresh pass is checked against the device clock only; storing it
+        // resets the high-water mark to the pass's issue time.
+        highWaterSec: 0,
+      });
+      if (!verdict.ok) {
+        logService.warn("[Entitlement] Issued offline pass rejected", MODULE, {
+          reason: verdict.reason,
+        });
+        return;
+      }
+      const stored = await storeOfflinePass(body.pass, verdict.payload.iat);
+      if (stored) {
+        logService.info("[Entitlement] Offline pass stored", MODULE, {
+          kid: verdict.kid,
+          exp: verdict.payload.exp,
+        });
+      }
+    } catch (error) {
+      logService.warn("[Entitlement] Offline pass refresh failed", MODULE, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Export-path refresh, throttled to one attempt per user per 10 minutes. */
+  private maybeRefreshOfflinePass(userId: string): void {
+    const last = this.passRefreshAttemptAt.get(userId);
+    if (last !== undefined && Date.now() - last < OFFLINE_PASS_REFRESH_MIN_GAP_MS) return;
+    this.passRefreshAttemptAt.set(userId, Date.now());
+    void this.fetchAndStoreOfflinePass(userId);
+  }
+
+  /**
+   * One refresher tick: offline or signed out → nothing; live "entitled" →
+   * fetch and store a pass; live "no" → the pass is deleted (by the read);
+   * error → keep whatever is stored. Never throws.
+   */
+  async runOfflinePassRefreshTick(): Promise<void> {
+    try {
+      if (!isOnline()) return;
+      const userId = await this.getUserId();
+      if (!userId) return;
+      const live = await this.readLiveUnlimitedEntitlement(userId, false);
+      if (live !== "entitled") return;
+      this.passRefreshAttemptAt.set(userId, Date.now());
+      await this.fetchAndStoreOfflinePass(userId);
+    } catch (error) {
+      logService.warn("[Entitlement] Offline pass refresher tick failed", MODULE, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Start the background pass refresher (first tick after 20 s, then every
+   * 30 min). Main process only; idempotent; disabled under jest.
+   */
+  startOfflinePassRefresher(): void {
+    if (this.refresherStarted || process.env.NODE_ENV === "test") return;
+    this.refresherStarted = true;
+    const first = setTimeout(() => {
+      void this.runOfflinePassRefreshTick();
+    }, OFFLINE_PASS_REFRESHER_FIRST_DELAY_MS);
+    first.unref?.();
+    const interval = setInterval(() => {
+      void this.runOfflinePassRefreshTick();
+    }, OFFLINE_PASS_REFRESHER_INTERVAL_MS);
+    interval.unref?.();
+  }
+
   /**
    * Resolve the current user's id from the live Supabase auth session.
    * @returns userId or null (null ⇒ cannot verify ownership ⇒ LOCKED).
@@ -148,7 +418,13 @@ class EntitlementService {
    */
   async getUnlockStatus(
     localTransactionId: string,
-  ): Promise<{ status: UnlockStatus; fromCache: boolean; lockReason?: EntitlementStatus["lockReason"] }> {
+  ): Promise<{
+    status: UnlockStatus;
+    fromCache: boolean;
+    lockReason?: EntitlementStatus["lockReason"];
+    /** Diagnostic only: unlocked by the offline pass (BACKLOG-3675). */
+    fromPass?: boolean;
+  }> {
     const userId = await this.getUserId();
     if (!userId) {
       return { status: "locked", fromCache: false, lockReason: "not_authenticated" };
@@ -160,10 +436,14 @@ class EntitlementService {
 
       if (server === null) {
         // Read FAILED despite being "online" — fall back to a prior confirmed
-        // cache mirror (reading an already-purchased deal), else LOCKED.
+        // cache mirror (reading an already-purchased deal), else a valid
+        // offline pass (BACKLOG-3675; no live entitlement read here), else LOCKED.
         const cached = await getCachedUnlock(localTransactionId, userId);
         if (cached) {
           return { status: "unlocked", fromCache: true };
+        }
+        if (await this.hasValidOfflinePass(userId)) {
+          return { status: "unlocked", fromCache: false, fromPass: true };
         }
         return { status: "locked", fromCache: false, lockReason: "error" };
       }
@@ -193,13 +473,30 @@ class EntitlementService {
       } catch {
         /* best-effort */
       }
+
+      // BACKLOG-3675: no unlock row — does the account have unlimited
+      // transactions? Asked only here, after a definite row "no" (the session
+      // is already attached by readServerUnlock). Nothing is written to the
+      // unlock cache on this path.
+      const live = await this.readLiveUnlimitedEntitlement(userId, true);
+      if (live === "entitled") {
+        this.maybeRefreshOfflinePass(userId);
+        return { status: "unlocked", fromCache: false };
+      }
+      if (live === "error" && (await this.hasValidOfflinePass(userId))) {
+        return { status: "unlocked", fromCache: false, fromPass: true };
+      }
       return { status: "locked", fromCache: false, lockReason: "no_unlock" };
     }
 
-    // OFFLINE: a prior confirmed cache mirror is the ONLY way to be unlocked.
+    // OFFLINE: a prior confirmed cache mirror, else a valid offline pass
+    // (BACKLOG-3675), are the only ways to be unlocked.
     const cached = await getCachedUnlock(localTransactionId, userId);
     if (cached) {
       return { status: "unlocked", fromCache: true };
+    }
+    if (await this.hasValidOfflinePass(userId)) {
+      return { status: "unlocked", fromCache: false, fromPass: true };
     }
     return { status: "locked", fromCache: false, lockReason: "offline_uncached" };
   }
@@ -371,6 +668,20 @@ class EntitlementService {
     const userId = await this.getUserId();
     if (!userId) {
       return { success: false, status: "locked", error: "not_authenticated" };
+    }
+
+    // BACKLOG-3675: never spend a credit for an account with unlimited
+    // transactions. Fresh live read (memo bypassed). Only a definite "no"
+    // reaches the debit below.
+    const live = await this.readLiveUnlimitedEntitlement(userId, false);
+    if (live === "entitled") {
+      return { success: true, status: "unlocked" };
+    }
+    if (live === "error") {
+      if (await this.hasValidOfflinePass(userId)) {
+        return { success: true, status: "unlocked" };
+      }
+      return { success: false, status: "locked", error: "entitlement_unverified" };
     }
 
     try {

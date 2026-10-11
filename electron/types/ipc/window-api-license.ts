@@ -161,6 +161,16 @@ export interface WindowApiDatabaseBackup {
   }>;
 }
 
+/** BACKLOG-3801: crash reporting switch state returned over IPC */
+export interface CrashReportingResult {
+  success: boolean;
+  /** The saved choice */
+  enabled?: boolean;
+  /** Whether this session started with crash reporting on */
+  wasEnabledAtLaunch?: boolean;
+  error?: string;
+}
+
 /**
  * Privacy / CCPA Data Export API (TASK-2053)
  */
@@ -171,6 +181,10 @@ export interface WindowApiPrivacy {
     filePath?: string;
     error?: string;
   }>;
+  /** BACKLOG-3801: read the "Send crash reports" switch */
+  getCrashReporting?: () => Promise<CrashReportingResult>;
+  /** BACKLOG-3801: turn crash reporting on or off */
+  setCrashReporting?: (enabled: boolean) => Promise<CrashReportingResult>;
   /** Listen for export progress updates */
   onExportProgress: (callback: (progress: {
     category: string;

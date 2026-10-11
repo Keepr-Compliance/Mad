@@ -10,6 +10,8 @@ import { createHash } from "crypto";
 import { promisify } from "util";
 import { EventEmitter } from "events";
 import log from "electron-log";
+import { app } from "electron";
+import { isWindowsArm64 } from "../utils/windowsArm64";
 import * as Sentry from "@sentry/electron/main";
 import { iOSDevice, DeviceStorageInfo } from "../types/device";
 import { getCommand, canUseLibimobiledevice } from "./libimobiledeviceService";
@@ -124,6 +126,11 @@ export interface UsbRestrictionResult {
  * (support ticket #64).
  */
 export interface IphoneSyncDiagnostic {
+  /**
+   * BACKLOG-3418: whether iPhone checking was on, i.e. whether the probes below
+   * ran at all. False → every other field is its default and nothing was spawned.
+   */
+  iphoneCheckingOn: boolean;
   /** libimobiledevice CLI tools available (idevice_id --version succeeds). */
   libimobiledeviceAvailable: boolean;
   /** libimobiledevice reachable on PATH/bundled — mirrors availability; kept as a distinct signal for macOS. */
@@ -175,6 +182,16 @@ export class DeviceDetectionService extends EventEmitter {
   private currentPollIntervalMs: number = MIN_POLL_INTERVAL_MS;
   /** BACKLOG-1627: Track trust-pending devices with last-attempt timestamp for back-off */
   private trustPendingDevices: Map<string, number> = new Map();
+  /**
+   * BACKLOG-3418: true while the app has asked for iPhone detection — set by
+   * `start()` (after the Windows-on-ARM early return) and cleared by `stop()`.
+   * The renderer's IPhoneSyncProvider is the only start/stop authority, and it
+   * starts detection only for an account with iPhone checking on, so this flag
+   * IS that account state, without a second copy of the renderer's rule here.
+   * Support diagnostics read it so the iPhone helper is not run for accounts
+   * with iPhone checking off (founder, 2026-10-07).
+   */
+  private detectionRequested: boolean = false;
 
   constructor() {
     super();
@@ -236,10 +253,26 @@ export class DeviceDetectionService extends EventEmitter {
    * @param intervalMs Polling interval in milliseconds (minimum 2000)
    */
   start(intervalMs: number = 2000): void {
+    // BACKLOG-3363: on Windows on ARM no iPhone can ever be detected (Apple's
+    // x64 driver cannot load), so never spawn idevice_id or poll.
+    if (
+      isWindowsArm64(
+        process.platform,
+        process.arch,
+        app?.runningUnderARM64Translation,
+      )
+    ) {
+      log.info(
+        "[DeviceDetection] Windows on ARM: iPhone USB sync not supported, not polling",
+      );
+      return;
+    }
+
     if (this.pollInterval) {
       log.warn("[DeviceDetection] Already running, stopping first");
       this.stop();
     }
+    this.detectionRequested = true;
 
     const actualInterval = Math.max(intervalMs, MIN_POLL_INTERVAL_MS);
     this.currentPollIntervalMs = actualInterval;
@@ -260,6 +293,7 @@ export class DeviceDetectionService extends EventEmitter {
    * Stops polling for devices.
    */
   stop(): void {
+    this.detectionRequested = false;
     if (this.pollInterval) {
       log.info("[DeviceDetection] Stopping device polling");
       clearInterval(this.pollInterval);
@@ -520,14 +554,25 @@ export class DeviceDetectionService extends EventEmitter {
   async collectIphoneSyncDiagnostics(): Promise<IphoneSyncDiagnostic> {
     const isWindows = process.platform === "win32";
 
+    // BACKLOG-3418 (founder, 2026-10-07): run the iPhone helper (`idevice_id
+    // --version` / `-l`, and `ideviceinfo` for trust) only when iPhone checking
+    // is on for the account. Gated HERE, in main, so both callers are covered —
+    // the support ticket (support:collect-diagnostics) and the support-access
+    // report queue — and so the answer does not depend on a renderer component
+    // sitting inside IPhoneSyncProvider. The Windows USB/PnP probe below is
+    // not the iPhone helper and still runs.
+    const iphoneCheckingOn = this.detectionRequested;
+
     // libimobiledevice availability (fresh check).
     let libimobiledeviceAvailable = false;
-    try {
-      // Reset cache so we reflect current reality (e.g. iTunes installed mid-session).
-      this.libimobiledeviceAvailable = null;
-      libimobiledeviceAvailable = await this.checkLibimobiledeviceAvailable();
-    } catch {
-      libimobiledeviceAvailable = false;
+    if (iphoneCheckingOn) {
+      try {
+        // Reset cache so we reflect current reality (e.g. iTunes installed mid-session).
+        this.libimobiledeviceAvailable = null;
+        libimobiledeviceAvailable = await this.checkLibimobiledeviceAvailable();
+      } catch {
+        libimobiledeviceAvailable = false;
+      }
     }
 
     // Device enumeration count (idevice_id -l).
@@ -560,7 +605,8 @@ export class DeviceDetectionService extends EventEmitter {
       : deviceDetected;
 
     // driverMissingSuspected: physically mounted but libimobiledevice can't see it.
-    const driverMissingSuspected = deviceMounted && !deviceDetected;
+    // Only meaningful when libimobiledevice was asked (BACKLOG-3418).
+    const driverMissingSuspected = iphoneCheckingOn && deviceMounted && !deviceDetected;
 
     // Trust/lock state: only meaningful when a device is present-but-unusable.
     // Probe the first enumerated device; getDeviceInfo rejects with the stderr
@@ -577,6 +623,7 @@ export class DeviceDetectionService extends EventEmitter {
     }
 
     return {
+      iphoneCheckingOn,
       libimobiledeviceAvailable,
       // On non-Windows, availability == on-PATH/bundled reachability.
       libimobiledeviceInPath: libimobiledeviceAvailable,
@@ -734,15 +781,36 @@ export class DeviceDetectionService extends EventEmitter {
    * @returns Promise that resolves to array of device UDIDs
    */
   async listDevices(): Promise<string[]> {
+    return (await this.listDevicesWithOutcome()).udids;
+  }
+
+  /**
+   * BACKLOG-3598: list connected UDIDs, or `null` when idevice_id could not answer.
+   *
+   * `listDevices` resolves `[]` both for "no phone connected" and for "idevice_id
+   * failed", so one failed poll reads as an unplug. This tells them apart: `idevice_id
+   * -l` exits 0 with empty output when no phone is connected (measured on macOS,
+   * Homebrew libimobiledevice 1.4.0; the bundled Windows binary is NOT measured), and
+   * prints "Unable to retrieve device list" with a non-zero exit when it could not get
+   * the list. A spawn error or missing tools is also `null`. If a platform exits
+   * non-zero on an empty list, an unplug there is never confirmed and the backup is
+   * left to the watchdog, as before BACKLOG-3598.
+   */
+  async probeConnectedUdids(): Promise<string[] | null> {
+    const { udids, ok } = await this.listDevicesWithOutcome();
+    return ok ? udids : null;
+  }
+
+  private async listDevicesWithOutcome(): Promise<{ udids: string[]; ok: boolean }> {
     // Mock mode returns fake device
     if (this.mockMode) {
-      return [MOCK_DEVICE.udid];
+      return { udids: [MOCK_DEVICE.udid], ok: true };
     }
 
     // Check if libimobiledevice is available
     const available = await this.checkLibimobiledeviceAvailable();
     if (!available) {
-      return [];
+      return { udids: [], ok: false };
     }
 
     return new Promise((resolve) => {
@@ -771,8 +839,11 @@ export class DeviceDetectionService extends EventEmitter {
               data: { exitCode: code, stderr: stderr.substring(0, 200) },
             });
           }
-          // Non-zero exit with no devices is normal
-          resolve([]);
+          // Treated as "no devices" by `listDevices` (the original comment here called a
+          // non-zero exit with no devices "normal"; on macOS 1.4.0 an empty list exits 0
+          // — see probeConnectedUdids). BACKLOG-3598: not a successful
+          // listing — `probeConnectedUdids` reports it as unknown.
+          resolve({ udids: [], ok: false });
           return;
         }
 
@@ -820,7 +891,7 @@ export class DeviceDetectionService extends EventEmitter {
 
         // Only log device count changes, not every poll
         // The pollDevices() method will log when devices connect/disconnect
-        resolve(validUdids);
+        resolve({ udids: validUdids, ok: true });
       });
 
       proc.on("error", (err) => {
@@ -851,7 +922,7 @@ export class DeviceDetectionService extends EventEmitter {
           }
         }
 
-        resolve([]);
+        resolve({ udids: [], ok: false });
       });
     });
   }
@@ -1031,29 +1102,29 @@ export class DeviceDetectionService extends EventEmitter {
    * resolves to a safe default.
    */
   private async checkCorporateUsbRestrictions(): Promise<UsbRestrictionResult> {
-    let usbDriverStatus: UsbRestrictionResult["appleUsbDriverService"] =
-      "not_found";
+    let usbDriverStatus: UsbRestrictionResult["appleUsbDriverService"];
     let pnpDeviceFound = false;
     let pnpStatus = "unknown";
 
+    // Check Apple Mobile Device USB Driver service status. Its catch takes
+    // every failure, so it needs no outer guard and always assigns a status.
     try {
-      // Check Apple Mobile Device USB Driver service status
-      try {
-        const { stdout: scOutput } = await execAsync(
-          'sc query "Apple Mobile Device USB Driver"',
-          { timeout: 5000 },
-        );
-        if (scOutput.includes("RUNNING")) {
-          usbDriverStatus = "running";
-        } else if (scOutput.includes("STOPPED")) {
-          usbDriverStatus = "stopped";
-        } else {
-          usbDriverStatus = "other";
-        }
-      } catch {
-        usbDriverStatus = "not_found";
+      const { stdout: scOutput } = await execAsync(
+        'sc query "Apple Mobile Device USB Driver"',
+        { timeout: 5000 },
+      );
+      if (scOutput.includes("RUNNING")) {
+        usbDriverStatus = "running";
+      } else if (scOutput.includes("STOPPED")) {
+        usbDriverStatus = "stopped";
+      } else {
+        usbDriverStatus = "other";
       }
+    } catch {
+      usbDriverStatus = "not_found";
+    }
 
+    try {
       // Check if Windows PnP sees any Apple/iPhone USB device.
       // BACKLOG-1918: `wmic` is removed on Windows 11 24H2+ (build 26200+), so it
       // throws ENOENT/"not recognized" there and this probe always came back

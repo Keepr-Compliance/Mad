@@ -118,6 +118,17 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
       "is not declared separately and cannot be omitted.",
     ref: "BACKLOG-3366",
   },
+  {
+    key: "INDEX:idx_messages_thread_sent",
+    what: "Index on messages (thread_id, sent_at).",
+    why:
+      "BACKLOG-3884: the Texts tab pages one linked conversation newest-first. " +
+      "With only idx_messages_thread_id every page read and sorted every row of " +
+      "the thread (a whole phone history on the PC). IF NOT EXISTS, so " +
+      "schema.sql's exec on every open creates it on fresh and existing " +
+      "databases; no migration entry.",
+    ref: "BACKLOG-3884",
+  },
 
   // -------------------------------------------------------------------------
   // BACKLOG-3475 — transaction checklists (local half). Four new tables, four
@@ -166,7 +177,11 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     why:
       "BACKLOG-3475: the group id is the stable key a submission snapshot maps " +
       "through. UNIQUE (id, kind) exists so a member can carry a composite FK " +
-      "and cannot disagree with its group's kind.",
+      "and cannot disagree with its group's kind. BACKLOG-3764 adds " +
+      "include_outside_dates (INTEGER NOT NULL DEFAULT 0; migration v75 adds it to " +
+      "existing databases). The table is already a whole-table divergence here, so " +
+      "the fingerprint emits no separate COLUMN key for it; v75's own upgrade test " +
+      "(databaseService.migration-v75.test.ts) is the guard for the column.",
     ref: "BACKLOG-3475",
   },
   {

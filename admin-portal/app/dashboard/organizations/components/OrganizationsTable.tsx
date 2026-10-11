@@ -24,6 +24,7 @@ import {
   Tr,
 } from '@keepr/design-system';
 import { formatDate } from '@/lib/format';
+import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
 import { CreateOrganizationDialog } from './CreateOrganizationDialog';
 
 export interface OrganizationRow {
@@ -94,7 +95,7 @@ export function OrganizationsTable({ organizations, canEdit }: OrganizationsTabl
   return (
     <div className="space-y-4">
       {/* Search bar + Create button */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 max-md:flex-wrap">
         <SearchInput
           containerClassName="flex-1"
           placeholder="Filter by name or slug..."
@@ -113,7 +114,7 @@ export function OrganizationsTable({ organizations, canEdit }: OrganizationsTabl
       </div>
 
       {/* Table */}
-      <TableContainer>
+      <TableContainer scrollX>
         <Table>
           <TableHead>
             <tr>
@@ -131,7 +132,10 @@ export function OrganizationsTable({ organizations, canEdit }: OrganizationsTabl
                 <Tr
                   key={org.id}
                   clickable
-                  onClick={() => router.push(`/dashboard/organizations/${org.id}`)}
+                  onClick={() => {
+                    startNavigationProgress();
+                    router.push(`/dashboard/organizations/${org.id}`);
+                  }}
                 >
                   <Td>
                     <div className="flex items-center gap-3">

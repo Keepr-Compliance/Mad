@@ -165,7 +165,7 @@ Data / caches / logs (removed on **reset** and **uninstall**):
 | Path | Notes |
 |------|-------|
 | `~/Library/Application Support/keepr` | Primary app data (`userData` + `sessionData`). |
-| `~/Library/Logs/keepr` | App logs. |
+| `~/Library/Logs/keepr` | App logs. Encrypted at rest since 2.40 (BACKLOG-3819) — do not ask users to send these files; ask for **Settings → Troubleshooting → Save diagnostic log…** instead, which saves a readable, redacted copy. |
 | `~/Library/Caches/keepr` | Cache (existence-checked). |
 | `~/Library/Caches/keepr-updater` | Auto-updater download cache (existence-checked). |
 
@@ -197,7 +197,7 @@ Data / caches (removed on **reset** and **uninstall**):
 
 | Path | Notes |
 |------|-------|
-| `%APPDATA%\keepr` | Primary app data (`userData` + logs live under here). |
+| `%APPDATA%\keepr` | Primary app data (`userData` + logs live under here; logs are encrypted — use **Save diagnostic log…** for a readable copy). |
 | `%LOCALAPPDATA%\keepr` | Local app data (existence-checked). |
 | `%LOCALAPPDATA%\keepr-updater` | electron-updater download cache — can hold a full installer (existence-checked). |
 

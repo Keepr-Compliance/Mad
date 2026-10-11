@@ -15,6 +15,9 @@ import type {
 } from "../types";
 import logger from '../../../utils/logger';
 import { reportOnboardingFailure } from '../sentryOnboarding';
+import type { SkipConfig, StepNavigationConfig } from "../types/config";
+import { isWindowsArm64 } from "../../../utils/platform";
+import { WindowsArm64Unsupported } from "../../iphone/WindowsArm64Unsupported";
 
 // =============================================================================
 // TYPES
@@ -74,27 +77,45 @@ function getDriversAPI(): DriversAPI | null {
 /**
  * Step metadata - Windows only, skippable
  */
+const NAVIGATION: StepNavigationConfig = {
+  showBack: true,
+  continueLabel: "Continue",
+  hideContinue: false,
+};
+
+// BACKLOG-3363: on Windows on ARM the step's own Continue button (which
+// dispatches DRIVER_SKIPPED) is the only way forward — the shell's Continue
+// would only navigate and never record the skip.
+const NAVIGATION_WINDOWS_ARM64: StepNavigationConfig = {
+  showBack: true,
+  hideContinue: true,
+};
+
+const SKIP: SkipConfig = {
+  enabled: true,
+  label: "Skip for now",
+  description: "You can install iTunes later to sync iPhone messages",
+  // BACKLOG-1919: This step only renders for iPhone users, and skipping it is
+  // the root cause of users landing on "Connect Your iPhone" with no driver
+  // and no recovery path. Require an explicit confirmation so the skip isn't
+  // the path of least resistance — but keep it possible.
+  requireConfirm: true,
+  confirmWarning:
+    "Without Apple Mobile Device Support, your iPhone can't be detected and sync won't work. You can install it later from Settings, or install it now.",
+  confirmLabel: "Skip anyway",
+};
+
 export const meta: OnboardingStepMeta = {
   id: "apple-driver",
   progressLabel: "Install Tools",
   platforms: ["windows"], // NOT macOS
-  navigation: {
-    showBack: true,
-    continueLabel: "Continue",
-    hideContinue: false,
+  // BACKLOG-3363: getters, read at render time — on Windows on ARM there is no
+  // install to skip, so no "Skip anyway" warning and no shell Continue.
+  get navigation(): StepNavigationConfig {
+    return isWindowsArm64() ? NAVIGATION_WINDOWS_ARM64 : NAVIGATION;
   },
-  skip: {
-    enabled: true,
-    label: "Skip for now",
-    description: "You can install iTunes later to sync iPhone messages",
-    // BACKLOG-1919: This step only renders for iPhone users, and skipping it is
-    // the root cause of users landing on "Connect Your iPhone" with no driver
-    // and no recovery path. Require an explicit confirmation so the skip isn't
-    // the path of least resistance — but keep it possible.
-    requireConfirm: true,
-    confirmWarning:
-      "Without Apple Mobile Device Support, your iPhone can't be detected and sync won't work. You can install it later from Settings, or install it now.",
-    confirmLabel: "Skip anyway",
+  get skip(): SkipConfig | undefined {
+    return isWindowsArm64() ? undefined : SKIP;
   },
   // Only show for iPhone users who need driver setup (skip if already installed)
   shouldShow: (context) => context.phoneType === "iphone" && !context.driverSetupComplete,
@@ -119,7 +140,43 @@ export const meta: OnboardingStepMeta = {
  * - Download links (bundled installer or Microsoft Store)
  * - Installation progress and results
  */
-function AppleDriverStepContent({
+/**
+ * BACKLOG-3363: Windows on ARM — the Apple driver can never work, so show the
+ * unsupported message with a single Continue that takes the existing skip path
+ * (DRIVER_SKIPPED, never DRIVER_SETUP_COMPLETE — nothing was installed).
+ */
+function WindowsArm64DriverStepContent({
+  onAction,
+}: OnboardingStepContentProps): React.ReactElement {
+  return (
+    <>
+      <WindowsArm64Unsupported />
+      <div className="flex justify-center">
+        <button
+          type="button"
+          onClick={() => {
+            logger.info("[AppleDriverStep] Windows on ARM: Continue (driver skipped)");
+            onAction({ type: "DRIVER_SKIPPED" });
+          }}
+          className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white font-medium rounded-lg hover:from-blue-600 hover:to-purple-700 transition-all shadow-md hover:shadow-lg"
+        >
+          Continue
+        </button>
+      </div>
+    </>
+  );
+}
+
+function AppleDriverStepContent(
+  props: OnboardingStepContentProps,
+): React.ReactElement {
+  if (isWindowsArm64()) {
+    return <WindowsArm64DriverStepContent {...props} />;
+  }
+  return <AppleDriverInstallContent {...props} />;
+}
+
+function AppleDriverInstallContent({
   onAction,
 }: OnboardingStepContentProps): React.ReactElement {
   const [status, setStatus] = useState<InstallStatus>("checking");

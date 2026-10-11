@@ -76,6 +76,7 @@ const readyStateEmailConnected: ReadyState = {
     hasEmailConnected: true,
     needsDriverSetup: false,
     fda: "granted",
+    setup: "finished",
   },
 };
 
@@ -89,6 +90,7 @@ const readyStateEmailNotConnected: ReadyState = {
     hasEmailConnected: false,
     needsDriverSetup: false,
     fda: "granted",
+    setup: "finished",
   },
 };
 

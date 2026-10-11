@@ -4,7 +4,7 @@
  */
 
 import { renderHook, act } from "@testing-library/react";
-import { useIPhoneSync, syncStateRef } from "../useIPhoneSync";
+import { useIPhoneSync, syncStateRef, UNSEAL_MESSAGE_PREFIX } from "../useIPhoneSync";
 
 // BACKLOG-1919: useIPhoneSync now sources platform via usePlatform() (renderer-
 // safe, IPC-backed) instead of `process.platform` (undefined in the sandboxed
@@ -457,6 +457,83 @@ describe("useIPhoneSync", () => {
       });
 
       expect(result.current.progress?.priorBackup).toBeUndefined();
+    });
+
+    // BACKLOG-3816 S4-C: the unseal ("Preparing your saved iPhone backup...") arrives as a
+    // phase:"cleanup" tick before the transfer. During a sync it must show in the sync
+    // screen without moving the bar; after the transfer the banner owns it (no double line).
+    describe("cleanup ticks (kept-backup unseal / seal)", () => {
+      const PREPARING = "Preparing your saved iPhone backup (3 of 10 files)...";
+
+      it("before the transfer: the message shows in the sync UI and the bar does not move", () => {
+        const syncApi = setupSyncApiMock();
+        (window as any).api = { sync: syncApi };
+        const { result } = renderHook(() => useIPhoneSync());
+        syncStateRef.isActive = true;
+
+        act(() => {
+          syncProgressCallback?.({ phase: "backup", overallProgress: 25, message: "Backing up..." });
+        });
+        act(() => {
+          syncProgressCallback?.({ phase: "cleanup", overallProgress: 30, message: PREPARING });
+        });
+
+        expect(result.current.progress).toMatchObject({ phase: "backing_up", percent: 25, message: PREPARING });
+      });
+
+      it("the first tick of a sync (no progress yet) still shows the message", () => {
+        const syncApi = setupSyncApiMock();
+        (window as any).api = { sync: syncApi };
+        const { result } = renderHook(() => useIPhoneSync());
+        syncStateRef.isActive = true;
+
+        act(() => {
+          syncProgressCallback?.({ phase: "cleanup", overallProgress: 30, message: PREPARING });
+        });
+
+        expect(result.current.progress).toMatchObject({ phase: "backing_up", percent: 0, message: PREPARING });
+      });
+
+      it("a BACKGROUND seal tick during the transfer is dropped (founder QA: it read as the sync under 'Exporting - Keep connected')", () => {
+        const syncApi = setupSyncApiMock();
+        (window as any).api = { sync: syncApi };
+        const { result } = renderHook(() => useIPhoneSync());
+        syncStateRef.isActive = true;
+
+        act(() => {
+          syncProgressCallback?.({ phase: "backup", overallProgress: 25, message: "Backing up..." });
+        });
+        act(() => {
+          syncProgressCallback?.({ phase: "cleanup", overallProgress: 12, message: "Securing your iPhone backup… 12%" });
+        });
+
+        expect(result.current.progress).toMatchObject({ phase: "backing_up", percent: 25, message: "Backing up..." });
+      });
+
+      it("the unseal prefix matches what the main process writes", () => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { describeBackupAtRestProgress } = require("../../../electron/services/atRest/backupAtRest");
+        const line = describeBackupAtRestProgress({ udid: "u", phase: "unsealing", done: 1, total: 2 }).message;
+        expect(line.startsWith(UNSEAL_MESSAGE_PREFIX)).toBe(true);
+        const sealing = describeBackupAtRestProgress({ udid: "u", phase: "sealing", done: 1, total: 2 }).message;
+        expect(sealing.startsWith(UNSEAL_MESSAGE_PREFIX)).toBe(false);
+      });
+
+      it("after the transfer (extracting): dropped, so the banner is the only place it shows", () => {
+        const syncApi = setupSyncApiMock();
+        (window as any).api = { sync: syncApi };
+        const { result } = renderHook(() => useIPhoneSync());
+        syncStateRef.isActive = true;
+
+        act(() => {
+          syncProgressCallback?.({ phase: "parsing_messages", overallProgress: 60, message: "Reading messages" });
+        });
+        act(() => {
+          syncProgressCallback?.({ phase: "cleanup", overallProgress: 40, message: "Securing your iPhone backup… 40%" });
+        });
+
+        expect(result.current.progress).toMatchObject({ phase: "extracting", percent: 60, message: "Reading messages" });
+      });
     });
 
     it("should map decrypting phase to extracting", () => {
@@ -949,10 +1026,11 @@ describe("useIPhoneSync", () => {
       const { result } = renderHook(() => useIPhoneSync());
 
       await act(async () => {
-        await result.current.cancelSync();
+        await result.current.cancelSync("progress-cancel");
       });
 
-      expect(syncApi.cancel).toHaveBeenCalled();
+      // BACKLOG-3816: the trigger reaches the IPC, so main can attribute the cancel.
+      expect(syncApi.cancel).toHaveBeenCalledWith("progress-cancel");
       // BACKLOG-2333: cancel resets to the clean "idle" state (no distinct
       // "cancelled" terminal state) so the modal renders the normal start screen.
       expect(result.current.syncStatus).toBe("idle");
@@ -994,7 +1072,7 @@ describe("useIPhoneSync", () => {
       expect(result.current.syncStatus).toBe("error");
 
       await act(async () => {
-        await result.current.cancelSync();
+        await result.current.cancelSync("progress-cancel");
       });
 
       // IPhoneSyncFlow's `view` resolves to its `connection` default only when
@@ -1014,7 +1092,7 @@ describe("useIPhoneSync", () => {
 
       // Should not throw
       await act(async () => {
-        await result.current.cancelSync();
+        await result.current.cancelSync("progress-cancel");
       });
 
       // BACKLOG-2333: still reset to clean idle even if the cancel IPC rejects.
@@ -1033,7 +1111,7 @@ describe("useIPhoneSync", () => {
       syncStateRef.isActive = true;
 
       await act(async () => {
-        await result.current.cancelSync();
+        await result.current.cancelSync("progress-cancel");
       });
 
       expect(result.current.syncStatus).toBe("idle");
@@ -1057,7 +1135,7 @@ describe("useIPhoneSync", () => {
       syncStateRef.isActive = true;
 
       await act(async () => {
-        await result.current.cancelSync();
+        await result.current.cancelSync("progress-cancel");
       });
 
       act(() => {
@@ -1082,7 +1160,7 @@ describe("useIPhoneSync", () => {
       syncStateRef.isActive = true;
 
       await act(async () => {
-        await result.current.cancelSync();
+        await result.current.cancelSync("progress-cancel");
       });
 
       expect(result.current.syncStatus).toBe("idle");
@@ -1463,6 +1541,23 @@ describe("useIPhoneSync", () => {
       // once usePlatform() correctly reports Windows.
     });
 
+    // BACKLOG-3363: on Windows on ARM the driver can never work — never check
+    // for it and never offer the recovery install.
+    it("Windows on ARM: no driver check, driverMissing stays false", async () => {
+      setMockPlatform("windows");
+      Object.assign(mockPlatform, { isWindowsArm64: true });
+      const { checkApple } = setupDriverMocks({ isInstalledSeq: [false] });
+
+      const { result } = renderHook(() => useIPhoneSync(true));
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(checkApple).not.toHaveBeenCalled();
+      expect(result.current.driverMissing).toBe(false);
+    });
+
     // BACKLOG-1919 (scope b): startSync's first-sync recovery nudge. Before
     // running full diagnostics, on Windows with no device connected, if the
     // Apple driver is absent it must surface DRIVER_ABSENT_GUIDANCE instead of
@@ -1694,7 +1789,7 @@ describe("useIPhoneSync", () => {
       expect(unit(hook)).toBe(MB);
 
       await act(async () => {
-        await hook.result.current.cancelSync();
+        await hook.result.current.cancelSync("progress-cancel");
       });
       expect(hook.result.current.progress).toBeNull();
 

@@ -16,6 +16,7 @@ import * as Sentry from "@sentry/electron/main";
 import axios, { AxiosError } from "axios";
 import crypto from "crypto";
 import http from "http";
+import { isTransientRefreshFailure } from "./oauthRefreshFailure";
 import url from "url";
 import databaseService from "./databaseService";
 import logService from "./logService";
@@ -391,7 +392,7 @@ class GoogleAuthService {
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Connected</title>
+    <title>Finish in Keepr</title>
   </head>
   <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
     <div style="text-align: center; background: white; padding: 2rem 2rem; border-radius: 1rem; box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-width: 380px; margin: 1.5rem; box-sizing: border-box;">
@@ -400,9 +401,9 @@ class GoogleAuthService {
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
         </svg>
       </div>
-      <h1 style="color: #1a202c; font-size: 1.875rem; font-weight: 700; margin: 0 0 1rem 0;">Connected</h1>
-      <p id="status-message" style="color: #4a5568; font-size: 1rem; margin: 0 0 1.5rem 0; line-height: 1.5;">Your Google account is connected to Keepr.</p>
-      <p id="close-message" style="color: #718096; font-size: 0.875rem; margin: 0;">You can close this tab — Keepr has already picked this up.</p>
+      <h1 style="color: #1a202c; font-size: 1.875rem; font-weight: 700; margin: 0 0 1rem 0;">Finish in Keepr</h1>
+      <p id="status-message" style="color: #4a5568; font-size: 1rem; margin: 0 0 1.5rem 0; line-height: 1.5;">Sign-in complete. Keepr is now finishing the connection to your Google account. The Keepr window shows whether it worked.</p>
+      <p id="close-message" style="color: #718096; font-size: 0.875rem; margin: 0;">You can close this tab.</p>
     </div>
   </body>
 </html>`;
@@ -705,7 +706,7 @@ class GoogleAuthService {
    */
   async refreshAccessToken(
     userId: string,
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; unreachable?: boolean }> {
     try {
       logService.info("[GoogleAuth] Refreshing access token for user:", "GoogleAuth", { userId });
 
@@ -750,6 +751,8 @@ class GoogleAuthService {
       return {
         success: false,
         error: error instanceof Error ? error.message : "Unknown error",
+        // BACKLOG-3799: network / TLS / 5xx — the grant is still good.
+        unreachable: isTransientRefreshFailure(error),
       };
     }
   }

@@ -26,6 +26,7 @@ import { dbTransaction } from "../services/db/core/dbConnection";
 import databaseService from "../services/databaseService";
 import logService from "../services/logService";
 import { RcsExtensionBridge } from "../services/rcsExtensionBridge";
+import { sealBufferToFile } from "../services/atRest/attachmentWriter";
 import type { RcsJobSnapshot } from "../services/rcsImportJob";
 import { rcsImageFilename, type RcsMediaDeps } from "../services/rcsImportMedia";
 import { rcsChatHash, rcsExternalId, storeCacheChatSync, type RcsCacheChatDeps } from "../services/rcsImportStore";
@@ -57,7 +58,9 @@ import {
   recordChatCoverage,
 } from "../services/db/rcsChatCoverageDbService";
 import { RCS_DEAL_CHATS_MAX } from "../services/rcsImportJob";
-import { forgetSourceCoverage, getSourceCoverage, recordSourceCoverage } from "../services/auditCoverageService";
+import { forgetSourceCoverage, recordSourceCoverage } from "../services/auditCoverageService";
+// BACKLOG-3785: index-bounded reads in place of the full per-source coverage scan.
+import { hasCompanionTexts, recordedCoveredSince } from "../services/db/rcsSourcePresenceDb";
 import {
   CHROME_EXTENSIONS_ADDRESS,
   chromeCandidates,
@@ -161,7 +164,8 @@ const deps: RcsCacheChatDeps = {
   recordThreadName: (userId, threadId, name) => databaseService.recordRcsThreadName(userId, threadId, name),
 };
 
-const mediaDeps: RcsMediaDeps = {
+/** Exported for the BACKLOG-3816 writer controls. */
+export const mediaDeps: RcsMediaDeps = {
   attachmentsDir: () => path.join(app.getPath("userData"), "message-attachments"),
   getMessageIdMap: (userId) => databaseService.getMessageIdMap(userId),
   getExistingAttachmentRecords: () => databaseService.getExistingAttachmentRecords(),
@@ -176,7 +180,10 @@ const mediaDeps: RcsMediaDeps = {
       return false;
     }
   },
-  writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
+  // BACKLOG-3816: RCS images are stored as KEPRENC ciphertext.
+  writeSealed: async (filePath, data) => {
+    await sealBufferToFile(filePath, data);
+  },
   mkdir: async (dir) => {
     await fs.promises.mkdir(dir, { recursive: true });
   },
@@ -197,8 +204,9 @@ function cacheStaging(): RcsCacheStaging {
     mkdir: async (dir) => {
       await fs.promises.mkdir(dir, { recursive: true });
     },
-    writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
+    writeSealed: mediaDeps.writeSealed,
     exists: mediaDeps.fileExists,
+    // Moves staged CIPHERTEXT into message-attachments (rename; copy across volumes).
     move: async (from, to) => {
       try {
         await fs.promises.rename(from, to);
@@ -854,7 +862,7 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   const plan = await resolveImportPlanForUser({ userId: decision.userId, mode: "delta" });
   // L2: no coverage recorded yet → backfill it from the previous run's floor,
   // only when that run was a full read with a normal list stop that reached it.
-  let coveredSince = getSourceCoverage(decision.userId).find((c) => c.source === "google_messages")?.coveredSince ?? null;
+  let coveredSince = recordedCoveredSince(decision.userId, "google_messages");
   if (!coveredSince) {
     const backfill = backfillCoverageFrom(getRcsCacheRun(decision.userId));
     if (backfill) {
@@ -1513,7 +1521,8 @@ export function registerRcsImportHandlers(): void {
           pairingSaved: userId ? pairingAuth.isPaired(userId) : false,
           linkNotHere: userId ? pairingAuth.linkNotHere(userId) : false,
           // SR (C6 review): the Android Companion's texts exist (Force re-import names it only then).
-          companionData: userId ? getSourceCoverage(userId).some((c) => c.source === "android_companion") : false,
+          // BACKLOG-3785: polled every 3 s — an index-bounded read, never the per-source scan.
+          companionData: userId ? hasCompanionTexts(userId) : false,
           // SR: the pairing code shown was used up by wrong attempts.
         },
       };

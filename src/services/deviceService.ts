@@ -9,6 +9,7 @@
  */
 
 import { type ApiResult, getErrorMessage } from "./index";
+import type { SyncCancelTrigger } from "../../electron/types/ipc/window-api-platform";
 
 // ============================================
 // DEVICE TYPES
@@ -131,25 +132,6 @@ export interface DriverInstallResult {
 // ============================================
 // SYNC TYPES
 // ============================================
-
-/**
- * Sync start options
- */
-export interface SyncStartOptions {
-  udid: string;
-  password?: string;
-  forceFullBackup?: boolean;
-}
-
-/**
- * Sync result
- */
-export interface SyncResult {
-  messages: unknown[];
-  contacts: unknown[];
-  conversations: unknown[];
-  duration: number;
-}
 
 /**
  * Sync status
@@ -587,40 +569,14 @@ export const deviceService = {
   // ============================================
 
   /**
-   * Start iPhone sync
-   */
-  async startSync(options: SyncStartOptions): Promise<ApiResult<SyncResult>> {
-    try {
-      if (!window.api.sync) {
-        return { success: false, error: "Sync API not available" };
-      }
-      const result = await window.api.sync.start(options);
-      if (result.success) {
-        return {
-          success: true,
-          data: {
-            messages: result.messages,
-            contacts: result.contacts,
-            conversations: result.conversations,
-            duration: result.duration,
-          },
-        };
-      }
-      return { success: false, error: result.error || "Sync failed" };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
    * Cancel the current sync
    */
-  async cancelSync(): Promise<ApiResult> {
+  async cancelSync(trigger: SyncCancelTrigger): Promise<ApiResult> {
     try {
       if (!window.api.sync) {
         return { success: false, error: "Sync API not available" };
       }
-      const result = await window.api.sync.cancel();
+      const result = await window.api.sync.cancel(trigger);
       return { success: result.success };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
