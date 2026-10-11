@@ -32,8 +32,8 @@ let realDb: TestDb | null = null;
 type Variant = "shipped" | "oldSql" | "noUserFilter";
 let variant: Variant = "shipped";
 
-/** The SQL as it was before BACKLOG-3163 / 3785: no unary plus on a user_id or sent_at. */
-const toOldSql = (s: string): string => s.replace(/\+(\w+)\.(user_id|sent_at)/g, "$1.$2");
+/** The SQL as it was before BACKLOG-3163 / 3785: no unary plus on a user_id. */
+const toOldSql = (s: string): string => s.replace(/\+(\w+)\.user_id/g, "$1.user_id");
 /** Drop the thread arm's user scope entirely (non-vacuity control). */
 const toNoUserFilter = (s: string): string =>
   s.replace(
@@ -113,7 +113,10 @@ function seed(db: TestDb): void {
   // Filler: many unlinked texts per user, so a by-user search is visibly wide.
   for (let i = 0; i < 4000; i++) {
     insM.run(`f${i}`, i % 2 ? "u1" : "u2", i % 3 ? "imessage" : "sms", "inbound", `ft${i % 200}`,
-      `2026-0${1 + (i % 9)}-1${i % 9}T10:00:00.000Z`, `filler hello ${i}`, `555000${i % 97}`, `fx${i}`,
+      // Distinct times, as real texts have: the PC-scale generator's spacing
+      // (stall-audit gen.js). With repeated times ANALYZE makes sent_at look
+      // unselective and the after-ANALYZE plans stop resembling production.
+      new Date(Date.UTC(2026, 0, 1) + (i % 300) * 86400000 + i * 1000).toISOString(), `filler hello ${i}`, `555000${i % 97}`, `fx${i}`,
       i % 200 < 40 ? GROUP : null);
   }
   // Linked threads: both users hold a copy of every message.
