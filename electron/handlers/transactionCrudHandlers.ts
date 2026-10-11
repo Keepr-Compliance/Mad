@@ -71,6 +71,12 @@ function validateTextCursor(value: unknown): TextPageCursor | null {
   return { sk: (v.sk as string | null) ?? null, afterId: (v.afterId as string | null) ?? null };
 }
 import type { TextCoverageResult, TextSource } from "../types/auditCoverage";
+
+/** BACKLOG-3663/3892: a renderer-sent import source, or null when it is not one we know. */
+function toTextSource(value: unknown): TextSource | null {
+  const known: readonly string[] = ["iphone", "mac", "android_companion", "google_messages"];
+  return typeof value === "string" && known.includes(value) ? (value as TextSource) : null;
+}
 import type { ImportProgressCallback } from "../services/macOSMessagesImportService";
 import type {
   AuditCoverageResult,
@@ -795,12 +801,14 @@ export function registerTransactionCrudHandlers(
       _event: IpcMainInvokeEvent,
       userId: string,
       proposedStartISO: string,
+      chosenSource?: string | null,
     ): Promise<AuditCoverageResult> => {
       const validatedUserId = validateUserId(userId);
       if (!validatedUserId) {
         throw new ValidationError("User ID validation failed", "userId");
       }
-      return getAuditCoverage(validatedUserId as string, proposedStartISO);
+      // BACKLOG-3892 S2: the user's import source (an unknown value is ignored).
+      return getAuditCoverage(validatedUserId as string, proposedStartISO, toTextSource(chosenSource));
     }, { module: "Transactions" }),
   );
 
@@ -830,8 +838,7 @@ export function registerTransactionCrudHandlers(
       if (!validatedUserId) {
         throw new ValidationError("User ID validation failed", "userId");
       }
-      const known: readonly string[] = ["iphone", "mac", "android_companion", "google_messages"];
-      const chosen = typeof chosenSource === "string" && known.includes(chosenSource) ? (chosenSource as TextSource) : null;
+      const chosen = toTextSource(chosenSource);
       // BACKLOG-3884: off main (the floors read runs on a worker, cached per user).
       return getTransactionTextCoverageAsync(validatedTransactionId, validatedUserId as string, chosen);
     }, { module: "Transactions" }),
@@ -843,6 +850,7 @@ export function registerTransactionCrudHandlers(
       _event: IpcMainInvokeEvent,
       transactionId: string,
       userId: string,
+      chosenSource?: string | null,
     ): Promise<ExportCompletenessResult> => {
       const validatedTransactionId = validateTransactionId(transactionId);
       if (!validatedTransactionId) {
@@ -852,7 +860,7 @@ export function registerTransactionCrudHandlers(
       if (!validatedUserId) {
         throw new ValidationError("User ID validation failed", "userId");
       }
-      return checkExportCompleteness(validatedTransactionId, validatedUserId as string);
+      return checkExportCompleteness(validatedTransactionId, validatedUserId as string, toTextSource(chosenSource));
     }, { module: "Transactions" }),
   );
 

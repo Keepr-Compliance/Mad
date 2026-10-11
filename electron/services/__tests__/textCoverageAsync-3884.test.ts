@@ -59,11 +59,16 @@ try {
   let workerReads = 0;
   let msgSeq = 0;
 
+  // BACKLOG-3892 S2 (SR D1): iPhone coverage now comes only from the phone's own
+  // coverage row, never from the oldest stored text, so iPhone texts no longer carry a
+  // worker floor. The floor-bearing source here is the Android companion, which is
+  // still read from its oldest text on the worker. Same purpose: the floors read runs
+  // on the worker, never on main.
   const addText = (sentAt: string): void => {
     const id = `m${msgSeq++}`;
     db.prepare(
       `INSERT INTO messages (id, user_id, channel, direction, body_text, sent_at, thread_id, participants, metadata)
-       VALUES (?, ?, 'imessage', 'inbound', 'hi', ?, 't1', '{"from":"+12065550150","to":["me"]}', '{"source":"iphone_sync"}')`,
+       VALUES (?, ?, 'imessage', 'inbound', 'hi', ?, 't1', '{"from":"+12065550150","to":["me"]}', '{"source":"android_wifi_sync"}')`,
     ).run(id, USER, sentAt);
   };
 
@@ -89,8 +94,8 @@ try {
     jest.spyOn(pool, "queryOnDedicatedWorker").mockImplementation(async (type: string) => {
       if (type !== "sourceCoverageFloors") throw new Error(`unexpected worker query ${type}`);
       workerReads += 1;
-      // The iPhone history reaches back only to 2026-05-01, after the audit start.
-      return [{ source: "iphone", floor: "2026-05-01T10:00:00.000Z", n: 1 }];
+      // The companion history reaches back only to 2026-05-01, after the audit start.
+      return [{ source: "android_companion", floor: "2026-05-01T10:00:00.000Z", n: 1 }];
     });
   });
 
@@ -106,20 +111,20 @@ try {
   });
 
   it("answers from the worker, never scans on main, and reports the gap", async () => {
-    const r = await getTransactionTextCoverageAsync(TXN, USER, "iphone");
+    const r = await getTransactionTextCoverageAsync(TXN, USER, "android_companion");
     expect(r.success).toBe(true);
     expect(r.pending).toBeUndefined();
-    expect(r.gaps.map((g) => `${g.source}:${g.kind}`)).toEqual(["iphone:later"]);
+    expect(r.gaps.map((g) => `${g.source}:${g.kind}`)).toEqual(["android_companion:later"]);
     expect(workerReads).toBe(1);
     expect(floorsPreparedOnMain).toBe(0);
   });
 
   it("C4 the second ask is served from the cache; a messages write makes the next ask read again", async () => {
-    await getTransactionTextCoverageAsync(TXN, USER, "iphone");
-    await getTransactionTextCoverageAsync(TXN, USER, "iphone");
+    await getTransactionTextCoverageAsync(TXN, USER, "android_companion");
+    await getTransactionTextCoverageAsync(TXN, USER, "android_companion");
     expect(workerReads).toBe(1);
     addText("2026-02-01T10:00:00.000Z");
-    await getTransactionTextCoverageAsync(TXN, USER, "iphone");
+    await getTransactionTextCoverageAsync(TXN, USER, "android_companion");
     expect(workerReads).toBe(2);
     expect(floorsPreparedOnMain).toBe(0);
   });
@@ -129,7 +134,7 @@ try {
       workerReads += 1;
       throw new pool.DedicatedWorkerError("no worker", "start_failed");
     });
-    const r = await getTransactionTextCoverageAsync(TXN, USER, "iphone");
+    const r = await getTransactionTextCoverageAsync(TXN, USER, "android_companion");
     expect(r).toEqual(expect.objectContaining({ success: true, pending: true, gaps: [] }));
     expect(floorsPreparedOnMain).toBe(0);
   });

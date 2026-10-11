@@ -75,8 +75,12 @@ export const ALL_CHATS_SQL = `
 /**
  * The most recent message date in a chat — how a conversation list sorts.
  */
+// BACKLOG-3892 S2 (SR C3): `undated` counts rows with no date (NULL / <= 0) in the
+// same scan. MAX ignores NULL and 0 sorts low, so a chat whose newest DATED text is
+// below its floor may still hold undated texts; the parse floor must not skip it.
 export const CHAT_LAST_MESSAGE_DATE_SQL = `
-            SELECT MAX(message.date) as last_date
+            SELECT MAX(message.date) as last_date,
+                   SUM(CASE WHEN message.date IS NULL OR message.date <= 0 THEN 1 ELSE 0 END) as undated
             FROM message
             JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
             WHERE chat_message_join.chat_id = ?

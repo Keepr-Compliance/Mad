@@ -1254,6 +1254,8 @@ export interface WindowApiTransactions {
   getAuditCoverage: (
     userId: string,
     proposedStartISO: string,
+    /** BACKLOG-3892 S2: the user's import source (TextSource), checked even with no texts. */
+    chosenSource?: string | null,
   ) => Promise<AuditCoverageResult>;
 
   /**
@@ -1263,6 +1265,8 @@ export interface WindowApiTransactions {
   checkExportCompleteness: (
     transactionId: string,
     userId: string,
+    /** BACKLOG-3892 S2: the user's import source; "iphone" decides completeness by the deal's iPhone coverage. */
+    chosenSource?: string | null,
   ) => Promise<ExportCompletenessResult>;
   /** BACKLOG-3663: per-source text coverage for one transaction (the Texts tab). */
   getTextCoverage?: (

@@ -10,7 +10,7 @@
  *  - deal floor = computeTransactionDateRange(deal).start − 24 h, by phone AND
  *    email, earliest deal wins, rejected deals and removed contacts ignored;
  *  - a thread linked to a live deal (`ios-chat-<ROWID>`) carries that deal's floor;
- *  - any failure → undefined (no floor at all); gated off → no plan.
+ *  - any failure → undefined (no floor at all); the gate is on since S2 → sync:start gets the plan.
  *
  * Run under Electron:
  *   ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js --bail=0 --runTestsByPath <this file>
@@ -137,14 +137,24 @@ maybe("BACKLOG-3892 S1: iPhone floor plan (real schema)", () => {
     ]);
   });
 
+  it("S2 (SR C1): a preferences read failure → undefined (no floor), never the 1.5-month default", async () => {
+    mockGetPreferences.mockRejectedValue(new Error("offline"));
+    expect(await buildChatFloorPlan(USER, NOW)).toBeUndefined();
+    // Positive control: the same failure still resolves the defaults for every other caller.
+    const { resolveImportPlanForUser } = await import("../importPlanInputs");
+    await expect(resolveImportPlanForUser({ userId: USER, mode: "delta" }, NOW)).resolves.toBeDefined();
+  });
+
   it("a failing deal read → undefined (no floor at all), never a plan without its deal floors", async () => {
     db.exec("DROP TABLE contact_emails");
     expect(await buildChatFloorPlan(USER, NOW)).toBeUndefined();
   });
 
-  it("gated off until S2: the shipped flag is false and sync:start gets no plan", async () => {
-    expect(IPHONE_PARSE_FLOORS_ENABLED).toBe(false);
-    expect(await floorPlanForSync(USER)).toBeUndefined();
-    expect(mockGetPreferences).not.toHaveBeenCalled();
+  it("gate on since S2: the shipped flag is true and sync:start gets the plan", async () => {
+    expect(IPHONE_PARSE_FLOORS_ENABLED).toBe(true);
+    const p = await floorPlanForSync(USER);
+    expect(p).toBeDefined();
+    expect(p!.settingsFloorMs).not.toBeNull();
+    expect(mockGetPreferences).toHaveBeenCalledTimes(1);
   });
 });
