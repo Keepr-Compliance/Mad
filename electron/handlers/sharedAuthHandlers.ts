@@ -42,6 +42,7 @@ import {
 } from "../constants/legalVersions";
 
 import { sendToMainWindow } from "../windowRegistry";
+import { invalidateMailboxFetches } from "../services/mailboxFetchGeneration";
 
 // Type definitions
 interface AuthResponse {
@@ -478,6 +479,12 @@ export async function handleDisconnectMailbox(
         error: "No user found in database. Please log in first.",
       };
     }
+
+    // BACKLOG-3903: stop every in-flight fetch for this provider's mailbox
+    // FIRST — before the revoke and the token delete — so nothing it has
+    // fetched, or fetches from here on, is written after the user pressed
+    // Disconnect. Synchronous, so no write can slip in between.
+    invalidateMailboxFetches(provider);
 
     let revokeOutcome: MailboxRevokeOutcome;
     let revokeReason: MailboxRevokeReason | undefined;
