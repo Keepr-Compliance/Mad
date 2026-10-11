@@ -127,6 +127,14 @@ maybe("BACKLOG-3892 S1: iPhone parse floors (real sms.db)", () => {
     expect(r.readFailures).toBe(0);
   });
 
+  it("floor edge at 1 ns: the nanosecond bound is exact (bound as a BigInt)", async () => {
+    const r = await run(
+      [{ id: 1, identifier: OTHER_PHONE, members: [OTHER_PHONE], messages: [{ date: ns(F) - 1n }, { date: ns(F) }, { date: ns(F) + 1n }] }],
+      plan({ settings: F }),
+    );
+    expect(r.byChat.get(1)).toEqual(["G-1-1", "G-1-2"]);
+  });
+
   it('"All time" (settings floor null) reads every text, as with no plan at all', async () => {
     const chats: SmsChatSpec[] = [
       { id: 1, identifier: OTHER_PHONE, members: [OTHER_PHONE], messages: [{ date: ns(Date.UTC(2017, 0, 1)) }, { date: ns(F + DAY) }] },
