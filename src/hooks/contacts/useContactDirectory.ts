@@ -65,6 +65,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ExtendedContact } from "../../types/components";
 import logger from "../../utils/logger";
 
+/** BACKLOG-3837: backstop re-read interval while message-derived people are pending. */
+export const MESSAGE_DERIVED_RETRY_MS = 15_000;
+
 export interface UseContactDirectoryOptions {
   userId: string;
   /**
@@ -104,8 +107,19 @@ export interface UseContactDirectoryOptions {
 export interface UseContactDirectoryResult {
   /** The SAVED half — contacts in the database. */
   contacts: ExtendedContact[];
+  /**
+   * Also true while the saved half is EMPTY and its message-derived people are
+   * still pending (BACKLOG-3837): an empty list then means "not loaded yet",
+   * and must not render as "No contacts available" (BACKLOG-3832).
+   */
   contactsLoading: boolean;
   contactsError: string | null;
+  /**
+   * BACKLOG-3837: the saved half was answered WITHOUT the people found in
+   * messages (main reads them off the main thread; not ready yet). The hook
+   * re-reads silently when main says they are ready, and every 15 s meanwhile.
+   */
+  messageDerivedPending: boolean;
   /**
    * Escape hatch for a container that must edit the saved half WITHOUT a round
    * trip. Exactly one caller: `useContactList`'s optimistic remove, which drops
@@ -191,6 +205,7 @@ export function useContactDirectory({
 
   const [externalContacts, setExternalContacts] = useState<ExtendedContact[]>([]);
   const [externalContactsLoading, setExternalContactsLoading] = useState(false);
+  const [messageDerivedPending, setMessageDerivedPending] = useState(false);
 
   /**
    * BACKLOG-3832: whether each half's FIRST read has ended (rows, an error, or the
@@ -242,14 +257,20 @@ export function useContactDirectory({
    * failed address-book read indistinguishable from an address book with nothing
    * left to import — and committing THAT clears every row.
    */
-  const fetchSavedContacts = useCallback(async (): Promise<
-    ExtendedContact[] | null
-  > => {
+  const fetchSavedResult = useCallback(async (): Promise<{
+    contacts: ExtendedContact[];
+    pending: boolean;
+  } | null> => {
     try {
       const result = propertyAddress
         ? await window.api.contacts.getSortedByActivity(userId, propertyAddress)
         : await window.api.contacts.getAll(userId);
-      if (result.success) return (result.contacts || []) as ExtendedContact[];
+      if (result.success) {
+        return {
+          contacts: (result.contacts || []) as ExtendedContact[],
+          pending: result.contactsStatus?.messageDerivedPending === true,
+        };
+      }
       // Don't set error on a silent read - keep existing state
     } catch (err) {
       logger.error("Silent refresh failed:", err);
@@ -290,6 +311,9 @@ export function useContactDirectory({
 
       if (result.success) {
         setContacts((result.contacts || []) as ExtendedContact[]);
+        setMessageDerivedPending(
+          result.contactsStatus?.messageDerivedPending === true,
+        );
         contactsLoadedRef.current = true;
       } else {
         setContactsError(result.error || "Failed to load contacts");
@@ -317,15 +341,37 @@ export function useContactDirectory({
   }, [userId, propertyAddress]);
 
   const silentLoadContacts = useCallback(async (): Promise<ExtendedContact[]> => {
-    const loaded = await fetchSavedContacts();
+    const loaded = await fetchSavedResult();
     if (!isMountedRef.current || loaded === null) return [];
 
-    setContacts(loaded);
+    setContacts(loaded.contacts);
+    setMessageDerivedPending(loaded.pending);
     contactsLoadedRef.current = true;
     setContactsSettled(true);
     // Returned as well as stored: see the interface doc above.
-    return loaded;
-  }, [fetchSavedContacts]);
+    return loaded.contacts;
+  }, [fetchSavedResult]);
+
+  /**
+   * BACKLOG-3837: while the saved half is pending its message-derived people,
+   * re-read it silently when main says they are ready — and every 15 s as a
+   * backstop (a failed read sends no event; the next read starts a new one).
+   */
+  useEffect(() => {
+    if (!messageDerivedPending) return;
+    const unsubscribe = window.api?.contacts?.onMessageDerivedReady?.(
+      (payload) => {
+        if (!payload || payload.userId === userId) void silentLoadContacts();
+      },
+    );
+    const backstop = setInterval(() => {
+      void silentLoadContacts();
+    }, MESSAGE_DERIVED_RETRY_MS);
+    return () => {
+      clearInterval(backstop);
+      unsubscribe?.();
+    };
+  }, [messageDerivedPending, userId, silentLoadContacts]);
 
   /**
    * The INITIAL address-book load, with its spinner.
@@ -386,17 +432,19 @@ export function useContactDirectory({
   }, [autoLoadExternal, loadExternalContacts]);
 
   const refreshBothLists = useCallback(async (): Promise<ExtendedContact[]> => {
-    const [saved, external] = await Promise.all([
-      fetchSavedContacts(),
+    const [savedResult, external] = await Promise.all([
+      fetchSavedResult(),
       fetchExternalContacts(),
     ]);
     if (!isMountedRef.current) return [];
+    const saved = savedResult?.contacts ?? null;
 
     if (saved !== null && external !== null) {
       // ----- ONE COMMIT. Nothing may go between these two lines. -----
       setContacts(saved);
       setExternalContacts(external);
       // ---------------------------------------------------------------
+      setMessageDerivedPending(savedResult?.pending === true);
       contactsLoadedRef.current = true;
       externalLoadedRef.current = true;
       setContactsSettled(true);
@@ -416,13 +464,17 @@ export function useContactDirectory({
 
     // The CARD, not the list: the fetched rows whenever they were fetched.
     return saved ?? [];
-  }, [fetchSavedContacts, fetchExternalContacts]);
+  }, [fetchSavedResult, fetchExternalContacts]);
 
   return {
     contacts,
     // BACKLOG-3832: loading until the first read has ended — see `contactsSettled`.
-    contactsLoading: contactsLoading || !contactsSettled,
+    // BACKLOG-3837: an empty saved half whose message-derived people are still
+    // pending is "loading", never "no contacts".
+    contactsLoading:
+      contactsLoading || !contactsSettled || (messageDerivedPending && contacts.length === 0),
     contactsError,
+    messageDerivedPending,
     setContacts,
     externalContacts,
     externalContactsLoading: externalContactsLoading || !externalSettled,

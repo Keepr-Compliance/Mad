@@ -123,6 +123,8 @@ jest.mock("../services/databaseService", () => {
     __esModule: true,
     default: {
       getImportedContactsByUserIdAsync: jest.fn(() => Promise.resolve([])),
+      // BACKLOG-3837: the get-all handler reads the list with its pending state.
+      getImportedContactsWithStatusAsync: jest.fn(() => Promise.resolve({ contacts: [], messageDerivedPending: false })),
       getRemovedContactIdentifiers: jest.fn(() => Promise.resolve([])),
       getImportedContactsByUserId: jest.fn(() => Promise.resolve([])),
       getUnimportedContactsByUserId: jest.fn(() => Promise.resolve([])),
