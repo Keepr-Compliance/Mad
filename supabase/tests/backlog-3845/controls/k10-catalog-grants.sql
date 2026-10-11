@@ -40,6 +40,9 @@ BEGIN
           NOT has_table_privilege('anon', t, priv) AND NOT has_table_privilege('authenticated', t, priv));
       END LOOP;
       PERFORM pg_temp.check('catalog: ' || n || ' no SELECT for anon', NOT has_table_privilege('anon', t, 'SELECT'));
+      PERFORM pg_temp.check('catalog: ' || n || ' service_role can read and write',
+        has_table_privilege('service_role', t, 'SELECT') AND has_table_privilege('service_role', t, 'INSERT')
+        AND has_table_privilege('service_role', t, 'UPDATE') AND has_table_privilege('service_role', t, 'DELETE'));
       PERFORM pg_temp.check('catalog: ' || n || ' SELECT for authenticated = ' || (cls = 'own_select_table')::text,
         has_table_privilege('authenticated', t, 'SELECT') = (cls = 'own_select_table'));
       PERFORM pg_temp.check('catalog: ' || n || ' policies',

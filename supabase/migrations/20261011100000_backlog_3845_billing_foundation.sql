@@ -507,6 +507,7 @@ CREATE INDEX IF NOT EXISTS billing_subscriptions_user_id_idx ON public.billing_s
 ALTER TABLE public.billing_subscriptions ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.billing_subscriptions FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.billing_subscriptions TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.billing_subscriptions TO service_role;
 
 DROP POLICY IF EXISTS billing_subscriptions_select_own ON public.billing_subscriptions;
 CREATE POLICY billing_subscriptions_select_own ON public.billing_subscriptions
@@ -546,6 +547,7 @@ CREATE INDEX IF NOT EXISTS billing_outbox_pending_idx
 
 ALTER TABLE public.billing_outbox ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.billing_outbox FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.billing_outbox TO service_role;
 
 DROP TRIGGER IF EXISTS guard_stripe_mode_is_test ON public.billing_outbox;
 CREATE TRIGGER guard_stripe_mode_is_test
