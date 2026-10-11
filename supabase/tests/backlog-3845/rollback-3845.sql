@@ -1,5 +1,5 @@
 -- BACKLOG-3845 rollback. Restores the pre-3845 state of every object
--- 20261011100000_backlog_3845_billing_foundation.sql creates or changes.
+-- 20261011230913_backlog_3845_billing_foundation.sql creates or changes.
 -- Run by hand on founder go, in one transaction. Tested by the harness
 -- (control k30-rollback), which also proves the refusals below.
 --

@@ -1,6 +1,6 @@
 # BACKLOG-3845 harness
 
-Controls and mutants for `supabase/migrations/20261011100000_backlog_3845_billing_foundation.sql`
+Controls and mutants for `supabase/migrations/20261011230913_backlog_3845_billing_foundation.sql`
 and `rollback-3845.sql`.
 
 Every run is one transaction ending in ROLLBACK; nothing is committed. Order: PG 16+ check,

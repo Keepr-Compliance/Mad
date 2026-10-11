@@ -12,7 +12,7 @@
  * Shapes (transcribed, not invented):
  *   - stripe_customers columns: production information_schema.columns
  *     (user_id, stripe_customer_id, default_payment_method_id, created_at,
- *     updated_at) + stripe_mode from 20261011100000; PK (user_id, stripe_mode).
+ *     updated_at) + stripe_mode from 20261011230913; PK (user_id, stripe_mode).
  *   - payment_intents columns: production information_schema.columns + stripe_mode.
  *   - maybeSingle() over more than one row: supabase-js / PostgREST answer
  *     { data: null, error: { code: 'PGRST116', ... } } (postgrest-js

@@ -4,7 +4,7 @@
 
 /**
  * BACKLOG-3845 — parity between the SQL paid_through rule
- * (public._override_effective, migration 20261011100000) and the offline pass
+ * (public._override_effective, migration 20261011230913) and the offline pass
  * issuer's parsePaidThrough (supabase/functions/_shared/offlinePassClaims.ts).
  *
  * Both read ONE corpus file, supabase/tests/backlog-3845/corpus/paid_through.json.

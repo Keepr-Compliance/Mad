@@ -22,7 +22,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-MIG="${MIG_OVERRIDE:-$REPO/supabase/migrations/20261011100000_backlog_3845_billing_foundation.sql}"
+MIG="${MIG_OVERRIDE:-$REPO/supabase/migrations/20261011230913_backlog_3845_billing_foundation.sql}"
 RB="${RB_OVERRIDE:-$HERE/rollback-3845.sql}"
 CORPUS="$HERE/corpus/paid_through.json"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
@@ -33,7 +33,7 @@ psql_in() {
 
 # Every public function / table the (unmutated) migration creates.
 OBJECTS="$(grep -oE 'CREATE (OR REPLACE )?FUNCTION public\.[a-z_0-9]+|CREATE TABLE IF NOT EXISTS public\.[a-z_0-9]+' \
-  "$REPO/supabase/migrations/20261011100000_backlog_3845_billing_foundation.sql" | sed 's/.*public\.//' | sort -u | paste -sd, -)"
+  "$REPO/supabase/migrations/20261011230913_backlog_3845_billing_foundation.sql" | sed 's/.*public\.//' | sort -u | paste -sd, -)"
 
 step() { # $1 step name, $2 file (BEGIN/COMMIT lines stripped)
   echo "SELECT pg_temp.run_step('$1', \$h3845\$"
