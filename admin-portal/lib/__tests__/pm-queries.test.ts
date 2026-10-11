@@ -212,6 +212,30 @@ describe('getSprintMetrics wiring', () => {
     expect(viaItemPages[0].to - viaItemPages[0].from + 1).toBe(SERVER_MAX_PAGE_SIZE);
   });
 
+  it('pages past the 1000-row cap when the rows arrive through query (b), not (a) -- SR N1 (BACKLOG-3778)', async () => {
+    // On SPRINT-174 the bulk of rows are main-session metrics with a stored
+    // sprint_id and no backlog item join -- i.e. they come back from query
+    // (b) (viaStored), not query (a). The sibling 1,064-row test above only
+    // ever exercises (a)'s paging; this one reproduces the real shape.
+    const rows = Array.from({ length: 1064 }, (_, i) =>
+      row({
+        id: `m-${String(i).padStart(5, '0')}`,
+        recorded_at: new Date(Date.UTC(2026, 9, 1) + i * 1000).toISOString(),
+        backlog_item_id: null,
+        sprint_id: SPRINT_A,
+        pm_backlog_items: null,
+      })
+    );
+    const { client, rangeCalls } = makeStubClient({ viaItem: [], viaStored: rows });
+
+    const result = await getSprintMetrics(SPRINT_A, client);
+
+    expect(result).toHaveLength(1064);
+    expect(result.map((r) => r.id).sort()).toEqual(rows.map((r) => r.id).sort());
+    const viaStoredPages = rangeCalls.filter((c) => c.query === 'viaStored');
+    expect(viaStoredPages.length).toBeGreaterThan(1);
+  });
+
   it('sorts the unioned result by recorded_at ascending', async () => {
     const later = row({
       id: 'm-later',
