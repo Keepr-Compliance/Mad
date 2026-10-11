@@ -169,7 +169,7 @@ const liveRowIds = (): Set<string> =>
     ),
   );
 
-import { invalidateMailboxFetches } from "../mailboxFetchGeneration";
+import { currentMailboxGeneration, invalidateMailboxFetches } from "../mailboxFetchGeneration";
 
 const outlookRows = (): Array<{ external_id: string; account_id: string | null }> =>
   db
@@ -423,6 +423,15 @@ describe("BACKLOG-3903 — disconnecting a Gmail mailbox stops its in-flight fet
     mockGmailInit.mockResolvedValue(true);
     mockGmailSearch.mockResolvedValue([]);
     mockGmailSearchAll.mockImplementation(walkFolders);
+    // The counters are module state and the Outlook cases above bump Microsoft's.
+    // Start both at the same value, so a Gmail batch that read the wrong counter
+    // is not refused by the mismatch alone — it must be caught by a disconnect.
+    while (currentMailboxGeneration("google") < currentMailboxGeneration("microsoft")) {
+      invalidateMailboxFetches("google");
+    }
+    while (currentMailboxGeneration("microsoft") < currentMailboxGeneration("google")) {
+      invalidateMailboxFetches("microsoft");
+    }
   });
 
   /** Baseline: the fixture imports the whole Gmail mailbox when nobody disconnects. */
