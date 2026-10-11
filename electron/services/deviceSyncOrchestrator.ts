@@ -30,6 +30,12 @@ import type { LeftoverRemoval } from "./backupService";
 import type { DeferredBackupSize } from "./backupSizeRecord";
 import type { PriorBackupState, SyncCancelTrigger } from "../types/ipc/window-api-platform";
 import { isSyncCancelTrigger } from "./syncCancelTrigger";
+import {
+  TOOL_HOLD_RETRY_DELAY_MS,
+  TOOL_START_HOLD_FAILED_MESSAGE,
+  TOOL_START_HOLD_STATUS_MESSAGE,
+  shouldRetryAfterToolStartHold,
+} from "./toolStartHold";
 import { BackupDecryptionService } from "./backupDecryptionService";
 import {
   BACKUP_AT_REST_QUARANTINED_MESSAGE,
@@ -623,23 +629,32 @@ function isEncryptionReasonCode(code: string | undefined): boolean {
 }
 
 /**
- * BACKLOG-3816 S4-C: error codes for a backup that stopped for a reason other than the
- * backup tool failing on the kept files: password, device, link, disk or input problems.
- * A delta sync that ends in one of these does not force the next sync to C-FULL.
+ * BACKLOG-3816 G3 / BACKLOG-3814: which backup-tool failures count towards "two in a row
+ * -> the next sync unseals everything (C-FULL)".
+ *
+ * G3 exists because under C-DELTA the tool may need a file that is still sealed, and a
+ * failure that damages nothing would then repeat on every sync. So only a failure that
+ * could come from the tool reading the kept files counts:
+ *  - BACKUP_FILE_MISSING (MBErrorDomain/4): the phone could not get a file it needed;
+ *  - UNKNOWN_ERROR: the device reported an unmapped code, or nothing at all said why;
+ *  - no code at all: the tool exited without a classified reason.
+ * The last two are what a tool tripping over a sealed file would look like, so they count.
+ *
+ * Everything with a NAMED non-file cause does not count: service unavailable (the
+ * phone's handshake; the 2.40.0-rc.1 PC tripped G3 with a held start + an unplug + one of
+ * these), connection lost / unplug, watchdog timeout, locked phone, cancel, quit,
+ * password, disk space, bad input, an Apple-encrypted backup. Before BACKLOG-3814 this
+ * was a deny-list, so every new code counted by default; it is an allow-list now so a
+ * new code does not.
  */
-const NOT_A_TOOL_FAILURE_CODES: ReadonlySet<string> = new Set([
-  "PASSWORD_REQUIRED",
-  "INCORRECT_PASSWORD",
-  "DEVICE_NOT_FOUND",
-  "DEVICE_LOCKED",
-  "BACKUP_CANCELLED",
-  "CONNECTION_LOST",
-  "INSUFFICIENT_SPACE",
-  "DECRYPTION_FAILED",
-  "INVALID_UDID",
-  "BACKUP_PASSWORD_UNAVAILABLE",
-  "APPLE_ENCRYPTED_BACKUP",
+const DELTA_PLAUSIBLE_TOOL_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "BACKUP_FILE_MISSING",
+  "UNKNOWN_ERROR",
 ]);
+
+function mayBeDeltaToolFailure(errorCode: string | undefined): boolean {
+  return errorCode === undefined || DELTA_PLAUSIBLE_TOOL_FAILURE_CODES.has(errorCode);
+}
 
 /** BACKLOG-3816: returned by `raceCancel` when the sync was cancelled first. */
 const PREFLIGHT_CANCELLED = Symbol("preflight-cancelled");
@@ -740,6 +755,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * writing into `Backups/<udid>`; a new frame must not sweep that folder.
    */
   private backupInFlight: BackupInFlight | null = null;
+
+  /**
+   * BACKLOG-3814: the single automatic retry after a backup tool start held by a
+   * security scan. Windows only (test seam), like the detection in backupService.
+   */
+  toolHoldRetryEnabled: boolean = process.platform === "win32";
+  /** BACKLOG-3814: wait before that retry. Tests shorten this. */
+  toolHoldRetryDelayMs: number = TOOL_HOLD_RETRY_DELAY_MS;
+  /** BACKLOG-3814: set while that wait runs; a quit aborts it. */
+  private toolHoldRetryWait: AbortController | null = null;
 
   /**
    * BACKLOG-3598 (SR B2): wait before the second listing that confirms an unplug. The
@@ -898,6 +923,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     let forceFullNext: string | undefined;
     // G3: the backup tool finished (resets the consecutive tool-failure count).
     let backupToolOk = false;
+    // BACKLOG-3814: a backup tool start was held during this sync.
+    let heldToolStart = false;
     // BACKLOG-3816: the backup's size walk was deferred and reports on its own.
     let deferredSizePending = false;
     if (this.isRunning) {
@@ -1728,21 +1755,47 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       try {
         this.startDiskSpaceMonitor();
         try {
-          backupResult = await this.backupService.startBackup({
+          const backupOptions = {
             udid: options.udid,
             forceFullBackup: options.forceFullBackup,
             deferSizeMeasurement: true,
-          });
-        } catch (toolError) {
+          };
+          backupResult = await this.backupService.startBackup(backupOptions);
+          // BACKLOG-3814: a backup tool held at start (security scan on its first run
+          // after an update) and then refused by the phone's backup service gets ONE
+          // more try, after a wait, in this same frame: the at-rest session opened above
+          // and `backupInFlightToken` both carry over, so nothing is unsealed twice and
+          // Try Again stays refused while it runs. Never a second retry.
+          heldToolStart = backupResult.toolStart?.delayed === true;
           if (
-            !this.abortController?.signal.aborted &&
-            !this.stoppedForQuit &&
-            !this.diskSpaceAborted &&
-            !backupInFlightToken.disconnected
+            this.toolHoldRetryEnabled &&
+            shouldRetryAfterToolStartHold(backupResult) &&
+            (await this.waitBeforeToolHoldRetry(options.udid, preflightSignal, backupInFlightToken))
           ) {
-            forceFullNext = FORCE_FULL_REASON_DELTA_TOOL_FAILED;
+            log.info("[DeviceSyncOrchestrator] Retrying the backup once after a held tool start", {
+              delayMs: backupResult.toolStart?.delayMs,
+              delayed: heldToolStart,
+              firstRunThisVersion: backupResult.toolStart?.firstRunThisVersion,
+            });
+            backupResult = await this.backupService.startBackup(backupOptions);
+            heldToolStart = heldToolStart || backupResult.toolStart?.delayed === true;
+            log.info("[DeviceSyncOrchestrator] Backup retry after a held tool start finished", {
+              success: backupResult.success,
+              errorCode: backupResult.errorCode ?? null,
+            });
           }
-          throw toolError;
+          if (
+            this.toolHoldRetryEnabled &&
+            heldToolStart &&
+            !backupResult.success &&
+            backupResult.errorCode === "SERVICE_UNAVAILABLE"
+          ) {
+            backupResult = { ...backupResult, error: TOOL_START_HOLD_FAILED_MESSAGE };
+          }
+          // BACKLOG-3814: a THROW from startBackup is not counted towards G3 any more. It
+          // happens before the tool runs (a second backup, the backup folder) or after it
+          // finished (reading the unsealed root plists) — never the tool failing on a
+          // sealed file (see DELTA_PLAUSIBLE_TOOL_FAILURE_CODES).
         } finally {
           this.stopDiskSpaceMonitor();
         }
@@ -1907,8 +1960,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           }
           // The backup tool itself failed (the abort, quit, disconnect and disk-guard exits
           // all returned above). Whether the next sync unseals everything is decided at seal time.
+          // BACKLOG-3814: only a failure that could come from the kept files counts
+          // (see DELTA_PLAUSIBLE_TOOL_FAILURE_CODES); a held start's service-unavailable
+          // failure never does.
           if (
-            !(backupResult.errorCode && NOT_A_TOOL_FAILURE_CODES.has(backupResult.errorCode)) &&
+            mayBeDeltaToolFailure(backupResult.errorCode) &&
             !/disk space|no space|ENOSPC|not enough space/i.test(error)
           ) {
             forceFullNext = FORCE_FULL_REASON_DELTA_TOOL_FAILED;
@@ -2553,6 +2609,58 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   }
 
   /**
+   * BACKLOG-3814: the wait before the single held-start retry. Resolves true only when
+   * the retry may run: not cancelled, not quitting, no disk-guard stop, and the phone
+   * still listed. `idevice_id` failing to answer (null) is "unknown", not "gone".
+   */
+  private async waitBeforeToolHoldRetry(
+    udid: string,
+    signal: AbortSignal,
+    inFlight: BackupInFlight,
+  ): Promise<boolean> {
+    this.emitProgress({
+      phase: "backup",
+      phaseProgress: 0,
+      overallProgress: 0,
+      message: TOOL_START_HOLD_STATUS_MESSAGE,
+    });
+    const waitAbort = new AbortController();
+    this.toolHoldRetryWait = waitAbort;
+    try {
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          signal.removeEventListener("abort", done);
+          waitAbort.signal.removeEventListener("abort", done);
+          resolve();
+        };
+        const timer = setTimeout(done, this.toolHoldRetryDelayMs);
+        signal.addEventListener("abort", done, { once: true });
+        waitAbort.signal.addEventListener("abort", done, { once: true });
+      });
+    } finally {
+      this.toolHoldRetryWait = null;
+    }
+    const stopped = () =>
+      signal.aborted || waitAbort.signal.aborted || this.stoppedForQuit || this.diskSpaceAborted || inFlight.disconnected;
+    if (stopped()) return false;
+    let udids: string[] | null;
+    try {
+      udids = await this.deviceService.probeConnectedUdids();
+    } catch {
+      udids = null;
+    }
+    if (stopped()) return false;
+    if (udids !== null && !udids.includes(udid)) {
+      log.warn("[DeviceSyncOrchestrator] Phone no longer listed; no retry after the held tool start");
+      inFlight.disconnected = true;
+      syncTimeline.noteEndedBy("device-disconnect");
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Cancel the current sync operation.
    *
    * BACKLOG-3816: `trigger` names the on-screen control that asked for it. Only a named
@@ -2591,6 +2699,13 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * Null when no backup process is alive.
    */
   stopBackupForQuit(timeoutMs?: number): Promise<"exited" | "killed"> | null {
+    // BACKLOG-3814: quitting during the wait before a held-start retry. No process is
+    // alive, so the quit goes ahead at once; the retry must not start.
+    if (this.toolHoldRetryWait) {
+      this.stoppedForQuit = true;
+      syncTimeline.noteEndedBy("app-quit");
+      this.toolHoldRetryWait.abort();
+    }
     const stopping = this.backupService.stopForQuit(timeoutMs);
     if (stopping) {
       // Set before the child exits, so the sync's failure path (which runs when the
