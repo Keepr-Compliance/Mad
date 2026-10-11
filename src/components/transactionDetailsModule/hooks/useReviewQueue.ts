@@ -39,6 +39,12 @@ export interface UseReviewQueueResult {
    */
   threadCount: number;
   isLoading: boolean;
+  /**
+   * BACKLOG-3832: a discovery sweep this screen started (`runSync`) is still
+   * running. On a deal with many contacts it takes seconds before the
+   * "N found" popup can appear; this drives the status row that says so.
+   */
+  isSyncing: boolean;
   /** Items added by the most recent sync — drives the popup (0 = silent). */
   lastAdded: number;
   /** Items LINKED outright by the most recent sync — the popup's "L". */
@@ -79,6 +85,11 @@ const EMPTY: ReviewStateResult = { items: [], count: 0 };
 export function useReviewQueue(transactionId: string | null): UseReviewQueueResult {
   const [state, setState] = useState<ReviewStateResult>(EMPTY);
   const [isLoading, setIsLoading] = useState(false);
+  // BACKLOG-3832: sweeps in flight for the CURRENT deal. A count, not a boolean:
+  // StrictMode runs the on-open sweep twice, and the first to finish must not
+  // clear the indicator while the second is still running.
+  const syncsInFlightRef = useRef(0);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [lastAdded, setLastAdded] = useState(0);
   const [lastLinked, setLastLinked] = useState(0);
   const [changeToken, setChangeToken] = useState(0);
@@ -144,6 +155,8 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
   const runSync = useCallback(
     async (reason: "open" | "contact-change", contactIds?: string[]): Promise<number> => {
       if (!transactionId) return 0;
+      syncsInFlightRef.current += 1;
+      setIsSyncing(true);
       try {
         const startedAt = nowMs();
         const result = await window.api.transactions.syncReviewQueue(
@@ -185,6 +198,9 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
         // the single most reassuring thing this UI can say.
         logger.error("Review queue sync failed", error);
         return 0;
+      } finally {
+        syncsInFlightRef.current = Math.max(0, syncsInFlightRef.current - 1);
+        if (syncsInFlightRef.current === 0) setIsSyncing(false);
       }
     },
     [transactionId, refresh],
@@ -258,6 +274,7 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
     count: state.count,
     threadCount: groupReviewItemsByThread(state.items).length,
     isLoading,
+    isSyncing,
     lastAdded,
     lastLinked,
     lastFound: lastAdded + lastLinked,
