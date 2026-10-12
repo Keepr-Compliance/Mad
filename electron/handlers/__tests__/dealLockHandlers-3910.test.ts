@@ -11,6 +11,9 @@
  *        refused on a locked deal.
  *   C-e  approving or rejecting a Needs Review item (review:approve,
  *        review:reject) is refused on a locked deal.
+ *   C-f  (slice d, founder 2026-10-12) editing the deal's details through
+ *        transactions:update, audit dates included, is refused on a locked deal.
+ *        Checklists: checklistDealLock-3910d.test.ts.
  *   C-c  the same edits go through on an open deal. Every submission status is
  *        swept, so the boundary (needs_changes / rejected reopen) is covered.
  *
@@ -53,6 +56,7 @@ jest.mock("../../services/transactionService", () => ({
     unlinkMessages: jest.fn(() => Promise.resolve()),
     linkMessages: jest.fn(() => Promise.resolve()),
     getTransactionDetails: jest.fn(() => Promise.resolve(null)),
+    updateTransaction: jest.fn(() => Promise.resolve()),
   },
   getEarliestCommunicationDate: jest.fn(),
 }));
@@ -139,6 +143,20 @@ interface Edit {
 }
 
 const EDITS: Edit[] = [
+  {
+    name: "change the audit start date (transactions:update)",
+    channel: "transactions:update",
+    args: [DEAL, { started_at: "2026-01-15" }],
+    refusedEdit: "edit-deal-details",
+    downstream: () => jest.mocked(transactionService.updateTransaction) as unknown as jest.Mock,
+  },
+  {
+    name: "change another deal field (transactions:update, address)",
+    channel: "transactions:update",
+    args: [DEAL, { property_address: "6 Control Street" }],
+    refusedEdit: "edit-deal-details",
+    downstream: () => jest.mocked(transactionService.updateTransaction) as unknown as jest.Mock,
+  },
   {
     name: "hide a text from export (hide-text-from-export)",
     channel: "transactions:hide-text-from-export",

@@ -6,6 +6,7 @@
 // ============================================
 
 import { dealLockReason } from "../services/transactionEligibility";
+import { refuseIfDealLocked } from "../services/dealLockState";
 import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import transactionService from "../services/transactionService";
@@ -249,6 +250,10 @@ export function registerEmailAutoLinkHandlers(): void {
           "transactionId",
         );
       }
+
+      // BACKLOG-3910d: the setting is a deal detail, so a locked deal refuses it.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId, "edit-deal-details");
+      if (lockedRefusal) return lockedRefusal;
 
       // Update the skip_address_filter column
       await transactionService.updateTransaction(validatedTransactionId, {

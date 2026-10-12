@@ -19,6 +19,8 @@ import { triggerTransactionSyncInBackground, isAutoSyncInFlight } from "../servi
 import {
   refuseIfDealLocked,
   refuseIfAnyDealLocked,
+  refuseUpdateIfDealLocked,
+  refuseStatusChangeIfDealLocked,
   getCommunicationTransactionId,
 } from "../services/dealLockState";
 import { isAuditWindowExtended } from "../utils/emailDateRange";
@@ -529,6 +531,12 @@ export function registerTransactionCrudHandlers(
           "transactionId",
         );
       }
+      // BACKLOG-3910 (slice d, founder 2026-10-12): a locked deal is read-only,
+      // every field included (audit dates, address, price, status).
+      // Founder 2026-10-12: the one allowance is closing an APPROVED deal (status only).
+      const lockedRefusal = refuseUpdateIfDealLocked(validatedTransactionId, updates);
+      if (lockedRefusal) return lockedRefusal;
+
       const sanitizedUpdates = sanitizeObject(updates || {});
       const validatedUpdates = validateTransactionData(
         sanitizedUpdates,
@@ -1646,8 +1654,15 @@ export function registerTransactionCrudHandlers(
       // Update each transaction
       let updatedCount = 0;
       const errors: string[] = [];
+      // BACKLOG-3910d: locked deals are skipped one by one (an approved deal
+      // may still be set to closed) and reported, never silently.
+      const refusedIds: string[] = [];
 
       for (const transactionId of validatedIds) {
+        if (refuseStatusChangeIfDealLocked(transactionId, status)) {
+          refusedIds.push(transactionId);
+          continue;
+        }
         try {
           // Get transaction before update for audit logging
           const existingTransaction =
@@ -1688,9 +1703,15 @@ export function registerTransactionCrudHandlers(
       });
 
       return {
-        success: errors.length === 0,
+        success: errors.length === 0 && refusedIds.length === 0,
         updatedCount,
         errors: errors.length > 0 ? errors : undefined,
+        ...(refusedIds.length > 0
+          ? {
+              refusedIds,
+              error: `${refusedIds.length} locked deal${refusedIds.length > 1 ? "s were" : " was"} not changed. A deal with your broker, or a sealed deal, can't be changed (an approved deal can still be closed).`,
+            }
+          : {}),
       };
     }, { module: "Transactions" }),
   );

@@ -18,6 +18,10 @@ import {
   DEAL_LOCK_NOTICE_COPY,
   DEAL_LOCK_SYNC_TOOLTIP,
 } from "../../utils/dealLock";
+import {
+  envelopeOf,
+  fixtureDetail,
+} from "../transactionDetailsModule/components/checklist/__tests__/checklistFixture";
 
 const render = (ui: Parameters<typeof rtlRender>[0]) =>
   rtlRender(ui, { wrapper: NotificationProvider });
@@ -209,6 +213,8 @@ describe("C-c (UI): Edit contacts and Attach follow the read-only lock, per subm
 
     const edit = await screen.findByTestId("edit-contacts-button");
     expectLock(edit);
+    // Slice d (founder 2026-10-12): Edit Summary (deal details, audit dates) too.
+    expectLock(await screen.findByTestId("edit-summary-button"));
 
     (await screen.findByText("Emails")).click();
     const attachEmails = await screen.findAllByTestId("attach-emails-button");
@@ -352,5 +358,44 @@ describe("C-d (UI): Needs Review and Removed restore follow the lock, per submis
     expectLock(approveAll);
     const rejectAll = Array.from(screenEl.querySelectorAll("button")).find((b) => b.textContent === "Reject all") as HTMLElement;
     expectLock(rejectAll);
+  });
+});
+
+/**
+ * BACKLOG-3910 (slice d, founder 2026-10-12): the lock reaches the Checklist
+ * tab from the deal screen. Component behaviour is in
+ * checklist/__tests__/TransactionChecklistTab.dealLock-3910d.test.tsx; this
+ * proves TransactionDetails passes the lock in, for every status.
+ */
+describe("C-g (UI): the Checklist tab follows the lock, per submission status", () => {
+  it.each(CASES)("%s -> %s", async (status, reason) => {
+    const t = txn(status);
+    (window.api.transactions as unknown as { getOverview: jest.Mock }).getOverview = jest
+      .fn()
+      .mockResolvedValue({ success: true, transaction: { contact_assignments: contactAssignments } });
+    jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
+      success: true,
+      transaction: { ...t, communications: [], contact_assignments: contactAssignments },
+    } as never);
+    (window.api.featureGate.strictState as jest.Mock).mockResolvedValue("allowed");
+    (window.api.checklists as unknown as { get: jest.Mock }).get.mockResolvedValue({
+      success: true,
+      checklists: envelopeOf([fixtureDetail()]),
+    });
+
+    render(<TransactionDetails transaction={t} onClose={jest.fn()} userId="user-456" initialTab="checklist" />);
+
+    const add = await screen.findByTestId("checklist-add");
+    const tick = (await screen.findAllByRole("checkbox"))[0];
+    if (reason) {
+      expect(add).toBeDisabled();
+      expect(add).toHaveAttribute("title", DEAL_LOCK_EDIT_TOOLTIP[reason]);
+      expect(tick).toBeDisabled();
+      expect(screen.getByTestId("checklist-locked-notice")).toBeInTheDocument();
+    } else {
+      expect(add).toBeEnabled();
+      expect(tick).toBeEnabled();
+      expect(screen.queryByTestId("checklist-locked-notice")).toBeNull();
+    }
   });
 });

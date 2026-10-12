@@ -6,12 +6,12 @@
  * `DEAL_LOCK_REASON_BY_STATUS` IN `electron/services/transactionEligibility.ts`.
  * ===========================================================================
  *
- * BACKLOG-3910 (slice b). The main process asks this to decide whether any
- * automatic path may add a link or a Needs Review item to a deal, and whether
- * the user may add a contact or attach emails or texts by hand (founder
- * 2026-10-11: a locked deal is read-only for both). The deal screen asks it to
- * decide whether to show the locked notice and disable Sync, Edit contacts and
- * Attach.
+ * BACKLOG-3910. The main process asks this to decide whether any automatic
+ * path may add a link or a Needs Review item to a deal, and whether the user
+ * may change the deal at all: contacts, emails and texts (slice b, founder
+ * 2026-10-11), checklists and deal details (slice d, founder 2026-10-12). A
+ * locked deal is fully read-only. The deal screen asks it to decide whether to
+ * show the locked notice and disable every control that writes.
  * Nothing under `electron/` may import from `src/` (`rootDir`), and the
  * renderer cannot value-import from `electron/`, so the rule is written twice.
  * `src/utils/__tests__/dealLock.parity.test.ts` imports both and fails when
@@ -57,22 +57,22 @@ export function dealLockReason(
 
 /**
  * What the deal screen says, per reason. Every clause is checked against the
- * code: no automatic path adds to a locked deal (main-process gates), the
- * add-contact and manual attach handlers refuse a locked deal
- * (`refuseIfDealLocked`), and "submitted" ends when the broker returns the deal
- * (needs_changes / rejected map to open above).
+ * code: no automatic path adds to a locked deal (main-process gates), every
+ * user edit handler (contacts, emails, texts, Needs Review, checklists, deal
+ * details) refuses a locked deal (`refuseIfDealLocked`), and "submitted" ends
+ * when the broker returns the deal (needs_changes / rejected map to open above).
  *
  * The "sealed" sentence names approval because approval is its only producer
  * in 2.41. BACKLOG-2229 must rewrite it when Complete starts sealing deals.
  */
 export const DEAL_LOCK_NOTICE_COPY: Readonly<Record<DealLockReason, string>> = {
   submitted:
-    "This deal is with your broker for review, so it is read-only. You can't add contacts or attach emails or texts until it's returned to you.",
+    "This deal is with your broker for review, so it is read-only. You can't change its details, contacts, emails, texts or checklists until it's returned to you.",
   sealed:
-    "Your broker approved this deal, so it is sealed and read-only. Contacts, emails and texts can no longer be added to it.",
+    "Your broker approved this deal, so it is sealed and read-only. Its details, contacts, emails, texts and checklists can no longer be changed.",
 };
 
-/** Tooltip on the deal's disabled Edit contacts and Attach buttons. */
+/** Tooltip on the deal's disabled edit controls (contacts, attach, checklists, details). */
 export const DEAL_LOCK_EDIT_TOOLTIP: Readonly<Record<DealLockReason, string>> = {
   submitted: "Read-only while your broker reviews this deal.",
   sealed: "Read-only because this deal is sealed.",

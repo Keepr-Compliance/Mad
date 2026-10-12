@@ -817,6 +817,14 @@ function TransactionDetails({
       // Refresh transaction data
       loadDetails();
       onTransactionUpdated?.();
+      // BACKLOG-3910d: re-read the row so the lock notice and disabled controls
+      // show now, not after the deal is reopened.
+      void transactionService
+        .getDetails(transaction.id)
+        .then((refreshed) => {
+          if (refreshed.success && refreshed.data) setTransaction(refreshed.data);
+        })
+        .catch((err) => logger.error("Failed to refresh transaction after submit:", err));
     },
     onError: (error) => {
       showError(`Submission failed: ${error}`);
@@ -1629,6 +1637,7 @@ function TransactionDetails({
               onShowSuccess={showSuccess}
               onShowError={showError}
               nameMap={emailNameMap}
+              lockedTooltip={editLockedTooltip}
             />
           )}
         </div>
