@@ -287,6 +287,8 @@ export function useBulkActions(
           await onComplete();
         } else {
           showError(result.error || "Failed to update transactions");
+          // BACKLOG-3910d: some deals may have changed before others were refused.
+          if (result.updatedCount) await onComplete();
         }
       } catch (err) {
         showError((err as Error).message);

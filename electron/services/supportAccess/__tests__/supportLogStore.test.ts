@@ -97,11 +97,13 @@ describe("SupportLogStore", () => {
   it("stops growing at the cap even though the window never closes", async () => {
     const total = 32 * 1024;
     const store = makeStore({ segment: 4 * 1024, total });
-    const payload = "x".repeat(512);
+    const payload = "x".repeat(1536);
 
-    // 2000 writes of ~512 bytes is roughly 1 MB of intent against a 32 KB cap.
+    // 300 writes of ~1.5 KB is roughly 460 KB of intent against a 32 KB cap
+    // (~14x). BACKLOG-3915: was 2000 x 512 B — the same claim at ~6x the fs
+    // calls, which ran past the 30 s timeout on a loaded Windows runner.
     // The clock never moves, so time can play no part in stopping it.
-    for (let i = 0; i < 2000; i += 1) {
+    for (let i = 0; i < 300; i += 1) {
       await store.write("message-import", "bulk", { i, payload });
     }
     expect(now).toBe(T0);

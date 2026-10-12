@@ -49,9 +49,12 @@ const NOT_ENTERED_WARNING = {
 export function CommissionFields({
   commission,
   route,
+  lockedTooltip,
 }: {
   commission: CommissionForm;
   route: keyof typeof NOT_ENTERED_WARNING;
+  /** BACKLOG-3910 (slice d): set on a locked deal; every input is disabled. */
+  lockedTooltip?: string;
 }): React.ReactElement {
   const { inputs, parsed } = commission;
   const parsedOk = parsed.ok;
@@ -114,6 +117,8 @@ export function CommissionFields({
                 max="100"
                 value={inputs.offeredText}
                 onChange={(e) => commission.setOfferedText(e.target.value)}
+                disabled={!!lockedTooltip}
+                title={lockedTooltip}
                 className={`${INPUT_CLASS} pr-7`}
               />
               <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-gray-500 pointer-events-none">%</span>
@@ -131,6 +136,8 @@ export function CommissionFields({
                 max="100"
                 value={inputs.actualText}
                 onChange={(e) => commission.setActualText(e.target.value)}
+                disabled={!!lockedTooltip}
+                title={lockedTooltip}
                 className={`${INPUT_CLASS} pr-7`}
               />
               <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-gray-500 pointer-events-none">%</span>
@@ -171,6 +178,8 @@ export function CommissionFields({
               maxLength={COMMISSION_REASON_MAX_LENGTH}
               value={inputs.reasonText}
               onChange={(e) => commission.setReasonText(e.target.value)}
+              disabled={!!lockedTooltip}
+              title={lockedTooltip}
               placeholder="e.g. Reduced to close the deal"
               className={INPUT_CLASS}
             />

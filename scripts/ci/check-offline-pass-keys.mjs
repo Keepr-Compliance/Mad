@@ -42,8 +42,34 @@ try {
 const match = source.match(/OFFLINE_PASS_PUBLIC_KEYS[^=]*=\s*Object\.freeze\(\{([\s\S]*?)\}\)/);
 if (!match) fail(`no OFFLINE_PASS_PUBLIC_KEYS = Object.freeze({...}) found in ${file}`);
 
-// Drop comments so a commented-out example key does not count.
-const body = match[1].replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+// Drop comments so a commented-out example key does not count. Comments are
+// only recognised OUTSIDE string literals: a base64 key can contain "//"
+// (about 1 in 100 random Ed25519 keys), which is not a comment.
+function stripComments(text) {
+  let out = "";
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      out += ch;
+      if (ch === "\\" && i + 1 < text.length) out += text[++i];
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'" || ch === "`") {
+      quote = ch;
+      out += ch;
+    } else if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      if (i < text.length) out += "\n";
+    } else if (ch === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end === -1 ? text.length : end + 1;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+const body = stripComments(match[1]);
 const entries = [...body.matchAll(/["']?([A-Za-z0-9_-]+)["']?\s*:\s*["']([^"']*)["']/g)].map((m) => ({
   kid: m[1],
   value: m[2],

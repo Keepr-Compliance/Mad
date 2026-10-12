@@ -70,6 +70,14 @@ let userData: string;
 let backups: string;
 let chain: string;
 
+/**
+ * BACKLOG-3915: the progress tests below seal 300+ files each, and on a loaded
+ * Windows runner the per-file data fsync took them past the 30 s timeout. Their
+ * claims are about progress units, ticks and the banner, not durability, so they
+ * run with the data fsync off. Every other test keeps it.
+ */
+let dataFsync = true;
+
 function service(overrides: Partial<ConstructorParameters<typeof BackupAtRest>[0]> = {}): BackupAtRest {
   return new BackupAtRest({
     backupsRoot: () => backups,
@@ -81,6 +89,7 @@ function service(overrides: Partial<ConstructorParameters<typeof BackupAtRest>[0
     log: () => undefined,
     concurrency: 4,
     chunkSize: 64, // same as `files`: multi-chunk containers
+    sealEngineOptions: dataFsync ? undefined : { skipDataFsyncForMeasurement: true },
     ...overrides,
   });
 }
@@ -1373,17 +1382,37 @@ describe("progress", () => {
   });
 
   it("a seal pass reports units that end exactly at the total, and at most about once a second in between", async () => {
+    // BACKLOG-3915: the throttle reads Date.now(). With a live clock the bound
+    // depended on how long the pass took (4 reports on a slow Windows runner).
+    // The clock is held still, so no second passes and exactly start + end are
+    // reported — over 300+ files in several batches, so an emitter that reports
+    // per file or per batch is caught. (Every batch reporting once a second has
+    // passed is covered below with a clock that moves 1.5 s per reading.)
     makeChain();
-    const s = service();
+    for (let i = 0; i < 300; i++) write(`${String(i % 100).padStart(2, "0")}/${"b".repeat(30)}${String(i).padStart(10, "0")}`, crypto.randomBytes(200));
+    const s = service({ sealEngineOptions: { skipDataFsyncForMeasurement: true } });
     const seen: BackupAtRestProgress[] = [];
-    await s.seal(UDID, (p) => seen.push(p));
+    const frozen = Date.now();
+    const clockSpy = jest.spyOn(Date, "now").mockReturnValue(frozen);
+    try {
+      await s.seal(UDID, (p) => seen.push(p));
+    } finally {
+      clockSpy.mockRestore();
+    }
     expect(seen[0]).toMatchObject({ done: 0, doneUnits: 0 });
     const last = seen[seen.length - 1];
     expect(last.doneUnits).toBe(last.totalUnits);
-    expect(seen.length).toBeLessThanOrEqual(3); // start, end (+1 if a second passed): never per file
+    expect(last.done).toBeGreaterThan(300);
+    expect(seen.length).toBe(2); // start, end: never per file or per batch within a second
   });
 
   describe("seal progress measures this pass's work (BACKLOG-3816)", () => {
+    beforeAll(() => {
+      dataFsync = false;
+    });
+    afterAll(() => {
+      dataFsync = true;
+    });
     const BIG = 5 * 1024 * 1024;
     const W = PROGRESS_FILE_WEIGHT_BYTES;
 

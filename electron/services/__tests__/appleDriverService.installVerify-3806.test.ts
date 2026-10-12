@@ -81,8 +81,12 @@ const mockFs = {
 };
 jest.mock("fs", () => mockFs);
 
-// Download transport: Node https today; Electron net.fetch once BACKLOG-3799
-// lands. Both are stubbed so this file holds under either merge order.
+// Download transport: Electron net.fetch through ../mainNetFetch (BACKLOG-3799);
+// Node https is still stubbed for completeness. mainNetFetch exists now, so it is
+// mocked as a real module. With `{ virtual: true }` the mock did not apply when a
+// sibling appleDriverService suite ran first in the same worker, and the real
+// transport ran (BACKLOG-3915; reproduced with --runInBand, 3 failures; jest's
+// exact resolution path for this is untraced).
 jest.mock("https", () => ({
   get: jest.fn((_url: string, cb: (res: unknown) => void) => {
     const res = new EventEmitter() as EventEmitter & Record<string, unknown>;
@@ -102,7 +106,6 @@ jest.mock(
       body: { getReader: () => ({ read: async () => ({ done: true }) }) },
     })),
   }),
-  { virtual: true },
 );
 
 import {
