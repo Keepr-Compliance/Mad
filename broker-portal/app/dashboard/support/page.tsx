@@ -13,6 +13,7 @@ import { Plus } from 'lucide-react';
 import { PageHeader } from '@keepr/design-system';
 import { AlertBanner, Button } from '@keepr/ui';
 import { TicketList } from '@/app/support/components/TicketList';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 
 function SuccessBanner() {
   const searchParams = useSearchParams();
@@ -31,7 +32,9 @@ export default function DashboardSupportPage() {
   return (
     <div className="max-w-7xl mx-auto">
       <PageHeader
-        title="Support"
+        phoneHideTitle
+        phoneHideSubtitle
+        title={PAGE_TITLES.support}
         subtitle="View and track your support requests"
         actions={
           <Button onClick={() => window.dispatchEvent(new Event('open-support-widget'))}>

@@ -22,6 +22,7 @@ import { getDataClient } from '@/lib/impersonation-guards';
 import { PageHeader } from '@keepr/design-system';
 import { AlertBanner } from '@keepr/ui';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 
 interface AccessCheckResult {
   allowed: true;
@@ -221,7 +222,9 @@ export default async function UsersPage() {
 
         {/* Header */}
         <PageHeader
-          title="Users Management"
+          phoneHideTitle
+          phoneHideSubtitle
+          title={PAGE_TITLES.users}
           subtitle="Manage your organization's team members"
         />
 
@@ -250,7 +253,9 @@ export default async function UsersPage() {
     <div className="max-w-7xl mx-auto space-y-6">
       {/* Header */}
       <PageHeader
-        title="Users Management"
+        phoneHideTitle
+        phoneHideSubtitle
+        title={PAGE_TITLES.users}
         subtitle="Manage your organization's team members"
       />
 

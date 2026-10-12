@@ -23,4 +23,30 @@ describe('MobileTopBar', () => {
     const tokens = screen.getByRole('button', { name: 'Open menu' }).className.split(/\s+/);
     expect(tokens.filter((t) => t.startsWith('hover:'))).toEqual([]);
   });
+
+  it('without a title the wordmark and qualifier render and no title node exists', () => {
+    render(<MobileTopBar qualifier="Broker" menuOpen={false} onOpenMenu={() => {}} />);
+    expect(screen.getByText('Broker')).toBeInTheDocument();
+    expect(screen.queryByTestId('mobile-top-bar-title')).toBeNull();
+  });
+
+  it('a title replaces the wordmark and qualifier; leading still wins over it', () => {
+    const { rerender } = render(
+      <MobileTopBar qualifier="Broker" title="Users" menuOpen={false} onOpenMenu={() => {}} />
+    );
+    expect(screen.getByTestId('mobile-top-bar-title')).toHaveTextContent('Users');
+    expect(screen.queryByText('Broker')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open menu' })).toBeInTheDocument();
+    rerender(
+      <MobileTopBar
+        qualifier="Broker"
+        title="Users"
+        leading={<span>Custom</span>}
+        menuOpen={false}
+        onOpenMenu={() => {}}
+      />
+    );
+    expect(screen.getByText('Custom')).toBeInTheDocument();
+    expect(screen.queryByTestId('mobile-top-bar-title')).toBeNull();
+  });
 });
