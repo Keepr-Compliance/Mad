@@ -349,8 +349,8 @@ it('messages / attachments / checklist', () => {
 
 it('submissions-list', async () => {
   const rows: Row[] = [
-    { ...submissionRow({ id: 's1', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'submitted', parentSubmissionId: null, createdAt: '2026-09-02T00:00:00Z', address: '1234 Invented Boulevard Northwest' }), version: 1 },
-    { ...submissionRow({ id: 's2', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'approved', parentSubmissionId: null, createdAt: '2026-09-01T00:00:00Z', address: '34 Fictional Road' }), version: 1 },
+    { ...submissionRow({ id: 's1', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'submitted', parentSubmissionId: null, createdAt: '2026-09-02T00:00:00Z', address: '1234 Invented Boulevard Northwest, Fixture City, CA 90000, USA' }), version: 1 },
+    { ...submissionRow({ id: 's2', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'approved', parentSubmissionId: null, createdAt: '2026-09-01T00:00:00Z', address: '34 Fictional Road, Unit 2, Fixture City, CA 90000, USA' }), version: 1 },
   ];
   mockEmulator.reset();
   mockEmulator.set({ rows: { transaction_submissions: rows } });

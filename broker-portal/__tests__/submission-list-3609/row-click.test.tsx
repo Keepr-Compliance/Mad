@@ -7,7 +7,8 @@
  * __tests__/helpers/submissionRows.ts; every id is invented.
  *
  * jsdom has no layout, so "click anywhere on the row" is exercised by clicking
- * cells that hold no link (the Property and Price cells).
+ * cells that hold no link (the city line under the street, and the Price cell).
+ * The street is the row's link (its one keyboard stop and accessible name).
  */
 
 import { render, fireEvent, screen } from '@testing-library/react';
@@ -93,6 +94,11 @@ async function renderList() {
   return render(element);
 }
 
+/** The city line of a fixture row: not inside the street link. */
+function cityLineOf(address: string): HTMLElement {
+  return rowOf(address).querySelector('td div:nth-child(2)') as HTMLElement;
+}
+
 function rowOf(address: string): HTMLTableRowElement {
   return screen.getByText(address).closest('tr') as HTMLTableRowElement;
 }
@@ -100,7 +106,7 @@ function rowOf(address: string): HTMLTableRowElement {
 describe('Submissions list: clicking a row opens that submission', () => {
   it('R1: clicking a non-link cell navigates to that row\'s submission', async () => {
     await renderList();
-    fireEvent.click(screen.getByText('12 Invented Lane'));
+    fireEvent.click(cityLineOf('12 Invented Lane'));
     expect(mockPush).toHaveBeenCalledTimes(1);
     expect(mockPush).toHaveBeenCalledWith(`/dashboard/submissions/${S1}`);
 
@@ -111,9 +117,10 @@ describe('Submissions list: clicking a row opens that submission', () => {
     expect(mockPush).toHaveBeenCalledWith(`/dashboard/submissions/${S2}`);
   });
 
-  it('R2: clicking the Review link inside a row keeps the link\'s own action (no second navigation)', async () => {
+  it('R2: clicking the street link inside a row keeps the link\'s own action (no second navigation)', async () => {
     await renderList();
     const review = rowOf('12 Invented Lane').querySelector('a') as HTMLAnchorElement;
+    expect(review).toHaveAccessibleName('12 Invented Lane');
     expect(review).toHaveAttribute('href', `/dashboard/submissions/${S1}`);
     fireEvent.click(review);
     expect(mockPush).not.toHaveBeenCalled();
@@ -122,12 +129,12 @@ describe('Submissions list: clicking a row opens that submission', () => {
 
   it('R3: cmd/ctrl-click on a row opens it in a new tab, like the dashboard link', async () => {
     await renderList();
-    fireEvent.click(screen.getByText('12 Invented Lane'), { metaKey: true });
+    fireEvent.click(cityLineOf('12 Invented Lane'), { metaKey: true });
     expect(openSpy).toHaveBeenCalledWith(`/dashboard/submissions/${S1}`, '_blank', 'noopener');
     expect(mockPush).not.toHaveBeenCalled();
   });
 
-  it('R4: keyboard — each row has exactly one tab stop, the Review link to that submission', async () => {
+  it('R4: keyboard — each row has exactly one tab stop, the street link to that submission', async () => {
     await renderList();
     const user = userEvent.setup();
     const links = [
@@ -150,7 +157,7 @@ describe('Submissions list: clicking a row opens that submission', () => {
 
   it('R5: selecting text in a row does not navigate', async () => {
     await renderList();
-    const cell = screen.getByText('12 Invented Lane');
+    const cell = cityLineOf('12 Invented Lane');
     const range = document.createRange();
     range.selectNodeContents(cell);
     window.getSelection()!.addRange(range);

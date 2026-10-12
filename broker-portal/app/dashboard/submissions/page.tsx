@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { ChevronRight } from 'lucide-react';
 import { PageHeader } from '@keepr/design-system';
 import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 import { formatCurrency, formatRelativeTime, getStatusColor, formatStatus } from '@/lib/utils';
@@ -21,6 +20,7 @@ import {
   type BrokerChainLink,
   type Identity,
 } from '@/lib/submissions/dealList';
+import { formatUsAddress } from '@/lib/submissions/formatUsAddress';
 import { resolveUserIdentities } from '@/lib/submissions/names';
 import {
   buildListUrl,
@@ -39,6 +39,7 @@ import {
 interface Submission {
   id: string;
   organization_id: string;
+  submitted_by?: string | null;
   property_address: string;
   property_city: string | null;
   property_state: string | null;
@@ -50,6 +51,11 @@ interface Submission {
   attachment_count: number;
   created_at: string;
   reviewed_at: string | null;
+}
+
+function capitalize(text: string | null | undefined): string {
+  const t = (text ?? '').trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
 interface PageProps {
@@ -231,6 +237,8 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
     facets,
   } = await getSubmissions(client, filters, currentPage, orgId, allowedOrgIds, !!impersonation);
 
+  const agentLabels = new Map(agents.map((a) => [a.id, a.label]));
+
   // Pagination keeps every filter (BACKLOG-3904).
   const baseUrl = buildListUrl(filters);
   // R1: the selected agent's label comes only from the in-scope options.
@@ -315,40 +323,47 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                     Status
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Docs
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Submitted
-                  </th>
-                  <th className="relative px-6 py-3">
-                    <span className="sr-only">Actions</span>
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200 max-md:block">
-                {displaySubmissions.map((submission) => (
+              <tbody className="bg-white divide-y divide-gray-200 max-md:flex max-md:flex-col max-md:gap-2 max-md:divide-y-0 max-md:bg-gray-50 max-md:p-3">
+                {displaySubmissions.map((submission) => {
+                  const href = `/dashboard/submissions/${submission.id}`;
+                  const { street, cityLine } = formatUsAddress(
+                    submission.property_address,
+                    submission.property_city,
+                    submission.property_state
+                  );
+                  const agent = submission.submitted_by ? agentLabels.get(submission.submitted_by) : undefined;
+                  return (
                   <SubmissionRow
                     key={submission.id}
-                    href={`/dashboard/submissions/${submission.id}`}
-                    className="hover:bg-gray-50 transition-colors cursor-pointer group max-md:flex max-md:flex-wrap max-md:items-center max-md:gap-x-3 max-md:gap-y-1 max-md:px-4 max-md:py-3"
+                    href={href}
+                    className="hover:bg-gray-50 transition-colors cursor-pointer group max-md:grid max-md:grid-cols-[minmax(0,1fr)_auto] max-md:grid-rows-[auto_auto_1fr_auto] max-md:gap-x-3 max-md:rounded-[10px] max-md:border max-md:border-gray-200 max-md:bg-white max-md:p-3"
                   >
-                    <td className="px-6 py-4 whitespace-nowrap max-md:p-0 max-md:w-full max-md:whitespace-normal">
-                      <div className="text-sm font-medium text-gray-900">
-                        {submission.property_address}
+                    {/* The street is the row's keyboard stop and accessible name (the row itself is
+                        a <tr>, which cannot be a link); the row click covers pointer users. */}
+                    <td className="px-6 py-4 whitespace-nowrap max-md:p-0 max-md:whitespace-normal max-md:col-start-1 max-md:row-start-1 max-md:row-span-3 max-md:min-w-0">
+                      <div className="text-sm font-medium text-gray-900 max-md:text-[15px] max-md:font-semibold max-md:leading-[1.3]">
+                        <Link
+                          href={href}
+                          className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1"
+                        >
+                          {street}
+                        </Link>
                       </div>
-                      <div className="text-sm text-gray-500">
-                        {submission.property_city}, {submission.property_state}
-                      </div>
+                      {cityLine && <div className="text-sm text-gray-500 max-md:mt-[3px] max-md:text-[13px]">{cityLine}</div>}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap max-md:p-0">
+                    <td className="px-6 py-4 whitespace-nowrap max-md:hidden">
                       <span className="capitalize text-sm text-gray-700">
                         {submission.transaction_type}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-md:p-0">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-md:p-0 max-md:col-start-2 max-md:row-start-2 max-md:justify-self-end max-md:mt-[3px] max-md:text-[13px] max-md:font-semibold max-md:text-gray-900">
                       {formatCurrency(submission.sale_price || submission.listing_price)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap max-md:p-0">
+                    <td className="px-6 py-4 whitespace-nowrap max-md:p-0 max-md:col-start-2 max-md:row-start-1 max-md:justify-self-end max-md:self-start">
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(
                           submission.status
@@ -357,27 +372,18 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                         {formatStatus(submission.status)}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-md:p-0">
-                      <div className="flex items-center gap-2">
-                        <span title="Messages">{submission.message_count} msgs</span>
-                        <span className="text-gray-300">|</span>
-                        <span title="Attachments">{submission.attachment_count} files</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-md:p-0">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-md:hidden">
                       {formatRelativeTime(submission.created_at)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium max-md:p-0 max-md:ml-auto">
-                      <Link
-                        href={`/dashboard/submissions/${submission.id}`}
-                        className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-700 font-medium group-hover:underline"
-                      >
-                        Review
-                        <ChevronRight className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
-                      </Link>
+                    {/* Phone only: agent · type · date on one line (the desktop columns carry type and date). */}
+                    <td className="hidden max-md:block max-md:col-start-1 max-md:row-start-4 max-md:mt-[3px] max-md:min-w-0 max-md:truncate max-md:text-xs max-md:text-gray-500">
+                      {[agent, capitalize(submission.transaction_type), formatRelativeTime(submission.created_at)]
+                        .filter(Boolean)
+                        .join(' · ')}
                     </td>
                   </SubmissionRow>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
 
