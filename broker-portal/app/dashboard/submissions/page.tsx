@@ -1,21 +1,47 @@
 import Link from 'next/link';
-import { ChevronRight } from 'lucide-react';
 import { PageHeader } from '@keepr/design-system';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 import { formatCurrency, formatRelativeTime, getStatusColor, formatStatus } from '@/lib/utils';
 import { SubmissionListClient } from '@/components/submission/SubmissionListClient';
 import { EmptySubmissions } from '@/components/ui/EmptyState';
 import { SubmissionPagination } from '@/components/submission/SubmissionPagination';
 import { SubmissionRow } from '@/components/submission/SubmissionRow';
+import { SubmissionCard } from '@/components/submission/SubmissionCard';
 import { getDataClient, getTargetOrganizationId } from '@/lib/impersonation-guards';
-import { getOrgFeatures, isFeatureEnabled } from '@/lib/feature-gate';
+import { getAllowedOrgIds } from '@/lib/submissions/allowedOrgs';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { redirect } from 'next/navigation';
 import { requireFullPortalAccess } from '@/lib/auth/portalAccess';
-import { LINK_COLUMNS, loadDealPage } from '@/lib/submissions/dealList';
+import {
+  BROKER_LINK_COLUMNS,
+  PENDING_REVIEW_FILTER,
+  headMatchesSearch,
+  pageOfHeads,
+  readDealHeads,
+  type BrokerChainLink,
+  type Identity,
+} from '@/lib/submissions/dealList';
+import { formatUsAddress } from '@/lib/submissions/formatUsAddress';
+import { resolveUserIdentities } from '@/lib/submissions/names';
+import {
+  buildListUrl,
+  hasActiveFilters,
+  parseAgentParam,
+  parseSearchParam,
+  type ListFilters,
+} from '@/lib/submissions/listUrl';
+import { compareHeads, parseSortParam } from '@/lib/submissions/listSort';
+import {
+  SubmissionDesktopFilters,
+  SubmissionPhoneFilters,
+  type AgentOption,
+  type FacetCount,
+} from '@/components/submission/SubmissionFilters';
 
 interface Submission {
   id: string;
   organization_id: string;
+  submitted_by?: string | null;
   property_address: string;
   property_city: string | null;
   property_state: string | null;
@@ -30,7 +56,7 @@ interface Submission {
 }
 
 interface PageProps {
-  searchParams: Promise<{ status?: string; search?: string; page?: string }>;
+  searchParams: Promise<{ status?: string; search?: string; agent?: string; page?: string; sort?: string }>;
 }
 
 const PAGE_SIZE = 25;
@@ -38,79 +64,76 @@ const PAGE_SIZE = 25;
 const STATUSES = [
   { value: 'all', label: 'All' },
   { value: 'submitted', label: 'Pending' },
+  { value: 'new', label: 'New' },
+  { value: 'resubmitted', label: 'Resubmitted' },
   { value: 'under_review', label: 'Under Review' },
   { value: 'needs_changes', label: 'Needs Changes' },
   { value: 'approved', label: 'Approved' },
   { value: 'rejected', label: 'Rejected' },
 ];
 
+interface SubmissionList {
+  submissions: Submission[];
+  totalCount: number;
+  page: number;
+  totalPages: number;
+  /** Every deal head in the list's scope, before search and filters (Y). */
+  scopeTotal: number;
+  /** Every submitter among the in-scope deals (BACKLOG-3904). */
+  agents: AgentOption[];
+  /** Deals matching the search, counted per (head status, submitter). */
+  facets: FacetCount[];
+}
+
+const EMPTY_LIST: SubmissionList = { submissions: [], totalCount: 0, page: 1, totalPages: 1, scopeTotal: 0, agents: [], facets: [] };
+
 /**
- * TASK-2158: Get the set of org IDs that have broker_portal_access enabled.
- *
- * Fetches distinct organization IDs from the submissions visible to this broker,
- * then checks each org's features to filter out those without broker_portal_access.
- *
- * During impersonation (single org), skips the distinct query and checks just that org.
+ * BACKLOG-3904: the agent filter's options are the submitters of the deals
+ * this list already shows — never a read of users or organization_members,
+ * which reach wider than the list's scope. Labels come from `identities`
+ * (ids already in scope); null (support session, or the lookup failed) gives
+ * neutral numbered labels so nobody is mislabelled a former member.
  */
-async function getAllowedOrgIds(
-  client: SupabaseClient,
-  orgId?: string,
-): Promise<string[] | null> {
-  // During impersonation, check the single org
-  if (orgId) {
-    const features = await getOrgFeatures(orgId);
-    const hasAccess = isFeatureEnabled(features, 'broker_portal_access');
-    return hasAccess ? [orgId] : [];
+function agentOptions(heads: BrokerChainLink[], identities: ReadonlyMap<string, Identity> | null): AgentOption[] {
+  const ids = Array.from(new Set(heads.map((h) => h.submitted_by).filter((id): id is string => !!id))).sort();
+  if (identities === null) return ids.map((id, i) => ({ id, label: `Agent ${i + 1}` }));
+  return ids
+    .map((id) => ({ id, label: identities.get(id)?.name ?? 'Former member' }))
+    .sort((a, b) => a.label.localeCompare(b.label) || (a.id < b.id ? -1 : 1));
+}
+
+function facetCounts(heads: BrokerChainLink[]): FacetCount[] {
+  const byKey = new Map<string, FacetCount>();
+  for (const h of heads) {
+    const status = h.status ?? '';
+    const key = `${status}|${h.submitted_by ?? ''}`;
+    const entry = byKey.get(key);
+    if (entry) entry.count += 1;
+    else byKey.set(key, { status, agent: h.submitted_by, count: 1 });
   }
-
-  // Normal broker session: get distinct org IDs from visible submissions
-  const { data: orgRows, error } = await client
-    .from('transaction_submissions')
-    .select('organization_id')
-    .neq('status', 'uploading');
-
-  if (error || !orgRows) {
-    console.error('Error fetching submission org IDs:', error);
-    // Fail-open: return null to skip filtering
-    return null;
-  }
-
-  // Deduplicate org IDs
-  const uniqueOrgIds = Array.from(new Set(orgRows.map((r: { organization_id: string }) => r.organization_id)));
-
-  if (uniqueOrgIds.length === 0) {
-    return [];
-  }
-
-  // Check broker_portal_access for each org in parallel
-  const featureResults = await Promise.all(
-    uniqueOrgIds.map(async (id) => {
-      const features = await getOrgFeatures(id);
-      return { id, hasAccess: isFeatureEnabled(features, 'broker_portal_access') };
-    })
-  );
-
-  return featureResults.filter((r) => r.hasAccess).map((r) => r.id);
+  return Array.from(byKey.values());
 }
 
 /**
  * BACKLOG-3597: one row per deal — the latest version of each resubmission
  * chain (lib/submissions/dealList.ts). Count, status filter and pagination all
- * apply to deals.
+ * apply to deals. BACKLOG-3904: search and the agent filter match the same
+ * heads, before the count and the page.
  */
 async function getSubmissions(
   client: SupabaseClient,
-  status?: string,
+  filters: ListFilters,
   page: number = 1,
   orgId?: string,
   allowedOrgIds?: string[] | null,
-): Promise<{ submissions: Submission[]; totalCount: number; page: number; totalPages: number }> {
+  isImpersonating: boolean = false,
+): Promise<SubmissionList> {
   const restrictToOrgs = allowedOrgIds !== null && allowedOrgIds !== undefined && !orgId;
 
   // TASK-2158: Filter to only orgs with broker_portal_access enabled
   if (restrictToOrgs && allowedOrgIds.length === 0) {
     // No orgs have access — return empty immediately
-    return { submissions: [], totalCount: 0, page: 1, totalPages: 1 };
+    return EMPTY_LIST;
   }
 
   /** The list's scope, identical for both reads. */
@@ -125,17 +148,39 @@ async function getSubmissions(
     return query;
   }
 
-  const result = await loadDealPage<Submission>({
-    readLinks: (from, to) => scoped(LINK_COLUMNS).order('id').range(from, to),
+  const read = await readDealHeads<BrokerChainLink>((from, to) =>
+    scoped(BROKER_LINK_COLUMNS).order('id').range(from, to)
+  );
+  if (read.error) {
+    console.error('Error fetching submissions:', read.error);
+    return EMPTY_LIST;
+  }
+  const heads = read.heads;
+
+  // Names only for submitters already in scope. A support session looks up no
+  // names at all (users is ID-scoped to the target there — BACKLOG-3477), so
+  // name/email search is off and address search still works.
+  const identities = isImpersonating
+    ? null
+    : await resolveUserIdentities(client, heads.map((h) => h.submitted_by));
+
+  const searched = filters.search
+    ? heads.filter((h) => headMatchesSearch(h, filters.search, identities))
+    : heads;
+
+  const result = await pageOfHeads<Submission, BrokerChainLink>({
+    heads: searched,
     readRows: (ids) => scoped('*').in('id', ids),
-    status: status && status !== 'all' ? status : null,
+    status: filters.status !== 'all' ? filters.status : null,
+    match: filters.agent ? (h) => h.submitted_by === filters.agent : undefined,
+    compare: compareHeads(filters.sort ?? 'newest'),
     page,
     pageSize: PAGE_SIZE,
   });
 
   if (result.error) {
     console.error('Error fetching submissions:', result.error);
-    return { submissions: [], totalCount: 0, page: 1, totalPages: 1 };
+    return EMPTY_LIST;
   }
 
   return {
@@ -143,29 +188,34 @@ async function getSubmissions(
     totalCount: result.total,
     page: result.page,
     totalPages: result.totalPages,
+    scopeTotal: heads.length,
+    agents: agentOptions(heads, identities),
+    facets: facetCounts(searched),
   };
 }
 
-/**
- * Build the base URL for pagination links, preserving current filters
- * but excluding the page parameter.
- */
-function buildBaseUrl(currentStatus: string): string {
-  if (currentStatus === 'all') {
-    return '/dashboard/submissions';
-  }
-  return `/dashboard/submissions?status=${currentStatus}`;
-}
-
 export default async function SubmissionsPage({ searchParams }: PageProps) {
-  const { status, page: pageParam } = await searchParams;
+  const { status, page: pageParam, agent: agentParam, search: searchParam, sort: sortParam } = await searchParams;
   const currentPage = Math.max(1, Number(pageParam) || 1);
   const currentStatus = status || 'all';
+  // BACKLOG-3904: a non-uuid agent is ignored; search is trimmed and capped.
+  const filters: ListFilters = {
+    status: currentStatus,
+    agent: parseAgentParam(agentParam),
+    search: parseSearchParam(searchParam),
+    sort: parseSortParam(sortParam),
+  };
   // BACKLOG-3597: the "submitted" filter now covers submitted AND resubmitted
   // deals (STATUSES labels it "Pending"), so the caption uses that tab label
   // instead of formatStatus, which still reports a single submission's own
   // "Submitted" status elsewhere on this page.
-  const currentStatusLabel = STATUSES.find((s) => s.value === currentStatus)?.label ?? formatStatus(currentStatus);
+  // `pending` (the dashboard card's set: submitted + under_review) is not a
+  // standing tab; it shows, active, only while it is the filter.
+  const statusOptions =
+    currentStatus === PENDING_REVIEW_FILTER
+      ? [STATUSES[0], { value: PENDING_REVIEW_FILTER, label: 'Pending Review' }, ...STATUSES.slice(1)]
+      : STATUSES;
+  const currentStatusLabel = statusOptions.find((s) => s.value === currentStatus)?.label ?? formatStatus(currentStatus);
 
   const { client, impersonation, organizationId } = await getDataClient();
 
@@ -187,57 +237,88 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
     totalCount,
     page: effectivePage,
     totalPages,
-  } = await getSubmissions(client, status, currentPage, orgId, allowedOrgIds);
+    scopeTotal,
+    agents,
+    facets,
+  } = await getSubmissions(client, filters, currentPage, orgId, allowedOrgIds, !!impersonation);
 
-  const baseUrl = buildBaseUrl(currentStatus);
+  const agentLabels = new Map(agents.map((a) => [a.id, a.label]));
+
+  // Pagination keeps every filter (BACKLOG-3904).
+  const baseUrl = buildListUrl(filters);
+  // R1: the selected agent's label comes only from the in-scope options.
+  const selectedAgentLabel = filters.agent
+    ? agents.find((a) => a.id === filters.agent)?.label ?? 'Unknown agent'
+    : 'All agents';
 
   return (
     <SubmissionListClient>
     <div className="max-w-7xl mx-auto">
       {/* Header */}
       <PageHeader
-        title="Submissions"
+        phoneHideTitle
+        phoneHideSubtitle
+        title={PAGE_TITLES.submissions}
+        className="max-md:mb-0"
         subtitle={
-          <>
+          <span className="max-md:hidden">
             {totalCount} submission{totalCount !== 1 ? 's' : ''}
             {currentStatus !== 'all' && ` with status "${currentStatusLabel}"`}
-          </>
+          </span>
         }
       />
 
-      <div className="space-y-6">
-      {/* Status Filters - clicking a filter resets to page 1 (no page param) */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-        <div className="flex flex-wrap gap-2">
-          {STATUSES.map(({ value, label }) => {
-            const isActive = currentStatus === value;
-            return (
-              <Link
-                key={value}
-                href={value === 'all' ? '/dashboard/submissions' : `/dashboard/submissions?status=${value}`}
-                className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
-                  isActive
-                    ? 'bg-primary-600 text-white'
-                    : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                {label}
-              </Link>
-            );
-          })}
-        </div>
+      {/* Below md the desktop filter box is display:none but still a sibling, so
+          space-y would put a margin above the phone filters; cancel it so the gap
+          under the top bar equals the dashboard's (16px, main padding only). */}
+      <div className="space-y-6 max-md:space-y-3 max-md:[&>:nth-child(2)]:!mt-0">
+      {/* BACKLOG-3904: desktop only, the same search + filters card as Users Management;
+          below md the phone filters replace it. */}
+      <div className="max-md:hidden">
+        <SubmissionDesktopFilters
+          filters={filters}
+          statuses={statusOptions}
+          agents={agents}
+          matchingCount={totalCount}
+          scopeTotal={scopeTotal}
+        />
       </div>
 
+      <SubmissionPhoneFilters
+        filters={filters}
+        statuses={statusOptions}
+        agents={agents}
+        facets={facets}
+        selectedAgentLabel={selectedAgentLabel}
+        matchingCount={totalCount}
+        scopeTotal={scopeTotal}
+      />
+
       {/* Submissions Table */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+      {/* Below md the row cards sit straight on the page background (no frame), so their
+          left and right edges are the search field's; the frame stays from md up. */}
+      <div
+        className={`bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden${
+          displaySubmissions.length > 0 ? ' max-md:overflow-visible max-md:rounded-none max-md:border-0 max-md:bg-transparent max-md:shadow-none' : ''
+        }`}
+      >
         {displaySubmissions.length === 0 ? (
-          <EmptySubmissions filtered={currentStatus !== 'all'} />
+          <EmptySubmissions filtered={hasActiveFilters(filters)} />
         ) : (
           <>
-            {/* BACKLOG-3798: below md each row renders as a card (max-md: only;
-                one DOM, so desktop and the row-click tests see the same table). */}
-            <table className="min-w-full divide-y divide-gray-200 max-md:block">
-              <thead className="bg-gray-50 max-md:hidden">
+            {/* BACKLOG-3798/3904: below md the list is the shared SubmissionCard (also used by the
+                dashboard's Recent Submissions); the table is the md+ view. */}
+            <div className="flex flex-col gap-2 md:hidden" data-slot="submission-cards">
+              {displaySubmissions.map((submission) => (
+                <SubmissionCard
+                  key={submission.id}
+                  submission={submission}
+                  agent={submission.submitted_by ? agentLabels.get(submission.submitted_by) : undefined}
+                />
+              ))}
+            </div>
+            <table className="min-w-full divide-y divide-gray-200 max-md:hidden">
+              <thead className="bg-gray-50">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Property
@@ -252,40 +333,46 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                     Status
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Docs
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Submitted
-                  </th>
-                  <th className="relative px-6 py-3">
-                    <span className="sr-only">Actions</span>
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200 max-md:block">
-                {displaySubmissions.map((submission) => (
+              <tbody className="bg-white divide-y divide-gray-200">
+                {displaySubmissions.map((submission) => {
+                  const href = `/dashboard/submissions/${submission.id}`;
+                  const { street, cityLine } = formatUsAddress(
+                    submission.property_address,
+                    submission.property_city,
+                    submission.property_state
+                  );
+                  return (
                   <SubmissionRow
                     key={submission.id}
-                    href={`/dashboard/submissions/${submission.id}`}
-                    className="hover:bg-gray-50 transition-colors cursor-pointer group max-md:flex max-md:flex-wrap max-md:items-center max-md:gap-x-3 max-md:gap-y-1 max-md:px-4 max-md:py-3"
+                    href={href}
+                    className="hover:bg-gray-50 transition-colors cursor-pointer group"
                   >
-                    <td className="px-6 py-4 whitespace-nowrap max-md:p-0 max-md:w-full max-md:whitespace-normal">
+                    {/* The street is the row's keyboard stop and accessible name (the row itself is
+                        a <tr>, which cannot be a link); the row click covers pointer users. */}
+                    <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">
-                        {submission.property_address}
+                        <Link
+                          href={href}
+                          className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1"
+                        >
+                          {street}
+                        </Link>
                       </div>
-                      <div className="text-sm text-gray-500">
-                        {submission.property_city}, {submission.property_state}
-                      </div>
+                      {cityLine && <div className="text-sm text-gray-500">{cityLine}</div>}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap max-md:p-0">
+                    <td className="px-6 py-4 whitespace-nowrap">
                       <span className="capitalize text-sm text-gray-700">
                         {submission.transaction_type}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-md:p-0">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatCurrency(submission.sale_price || submission.listing_price)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap max-md:p-0">
+                    <td className="px-6 py-4 whitespace-nowrap">
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(
                           submission.status
@@ -294,27 +381,12 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                         {formatStatus(submission.status)}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-md:p-0">
-                      <div className="flex items-center gap-2">
-                        <span title="Messages">{submission.message_count} msgs</span>
-                        <span className="text-gray-300">|</span>
-                        <span title="Attachments">{submission.attachment_count} files</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-md:p-0">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatRelativeTime(submission.created_at)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium max-md:p-0 max-md:ml-auto">
-                      <Link
-                        href={`/dashboard/submissions/${submission.id}`}
-                        className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-700 font-medium group-hover:underline"
-                      >
-                        Review
-                        <ChevronRight className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
-                      </Link>
-                    </td>
                   </SubmissionRow>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
 

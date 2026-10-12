@@ -91,7 +91,13 @@ jest.mock('@/lib/feature-gate', () => {
     ),
   };
 });
-jest.mock('@/lib/auth/portalAccess', () => ({ requireFullPortalAccess: jest.fn(async () => ({ ok: true })) }));
+jest.mock('@/lib/auth/portalAccess', () => ({
+  requireFullPortalAccess: jest.fn(async () => ({ ok: true })),
+  getPortalAccess: jest.fn(async () => ({
+    user: { email: 'alex@example.test', user_metadata: {} },
+    access: { kind: 'full', role: 'broker' },
+  })),
+}));
 jest.mock('@/components/submission/SubmissionListClient', () => ({
   SubmissionListClient: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
@@ -106,6 +112,7 @@ import { PageHeader } from '@keepr/design-system';
 import UserListClient from '@/components/users/UserListClient';
 import UserDetailsCard, { type MemberDetailsData } from '@/components/users/UserDetailsCard';
 import SubmissionsPage from '@/app/dashboard/submissions/page';
+import DashboardPage from '@/app/dashboard/page';
 
 const DIR = process.env.DUMP_DIR as string;
 const dump = (name: string, html: string) => writeFileSync(join(DIR, `${name}.html`), html);
@@ -342,8 +349,8 @@ it('messages / attachments / checklist', () => {
 
 it('submissions-list', async () => {
   const rows: Row[] = [
-    { ...submissionRow({ id: 's1', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'submitted', parentSubmissionId: null, createdAt: '2026-09-02T00:00:00Z', address: '1234 Invented Boulevard Northwest' }), version: 1 },
-    { ...submissionRow({ id: 's2', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'approved', parentSubmissionId: null, createdAt: '2026-09-01T00:00:00Z', address: '34 Fictional Road' }), version: 1 },
+    { ...submissionRow({ id: 's1', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'submitted', parentSubmissionId: null, createdAt: '2026-09-02T00:00:00Z', address: '1234 Invented Boulevard Northwest, Fixture City, CA 90000, USA' }), version: 1 },
+    { ...submissionRow({ id: 's2', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'approved', parentSubmissionId: null, createdAt: '2026-09-01T00:00:00Z', address: '34 Fictional Road, Unit 2, Fixture City, CA 90000, USA' }), version: 1 },
   ];
   mockEmulator.reset();
   mockEmulator.set({ rows: { transaction_submissions: rows } });
@@ -367,7 +374,8 @@ it('title-* (page title in the top bar)', () => {
     ['title-mytx', '/dashboard/my-transactions', <PageHeader key="h" title="My Transactions" subtitle="3 submissions" {...PH_TITLE_ONLY} />],
     ['title-dashboard', '/dashboard', <PageHeader key="h" title="Welcome, Alex" subtitle="Overview of transaction submissions" {...PH} />],
     ['title-detail', '/dashboard/users/u1', <h1 key="h" className="text-xl font-bold text-gray-900">Agent Number1</h1>],
-    ['title-submissions', '/dashboard/submissions', <h1 key="h" className="text-2xl font-bold text-gray-900">Submissions</h1>],
+    ['title-submissions', '/dashboard/submissions', <PageHeader key="h" title="Submissions" subtitle="2 submissions" className="max-md:mb-3" {...PH} />],
+    ['title-submission-detail', '/dashboard/submissions/s1', <h1 key="h" className="text-2xl font-bold text-gray-900">1234 Invented Boulevard Northwest</h1>],
   ];
   for (const [name, p, header] of cases) {
     mockPath = p;
@@ -384,4 +392,96 @@ it('title-* (page title in the top bar)', () => {
     unmount();
   }
   mockPath = '/dashboard/submissions/sub-1';
+});
+
+// BACKLOG-3904 fix-up: the dashboard's four stat cards, from the REAL page. Runs
+// unchanged on the base (cards were plain boxes) and on the branch (links).
+it('dashboard-cards', async () => {
+  const mk = (id: string, status: string, parent: string | null, createdAt: string): Row => ({
+    ...submissionRow({ id, organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status, parentSubmissionId: parent, createdAt }),
+    version: 1,
+  });
+  mockEmulator.reset();
+  mockEmulator.set({
+    rows: {
+      transaction_submissions: [
+        mk('s1', 'submitted', null, '2026-09-03T00:00:00Z'),
+        mk('s2', 'under_review', null, '2026-09-03T01:00:00Z'),
+        mk('s3', 'needs_changes', null, '2026-09-03T02:00:00Z'),
+        mk('s4', 'approved', null, '2026-09-03T03:00:00Z'),
+        mk('s5', 'approved', null, '2026-09-03T04:00:00Z'),
+        mk('s6', 'rejected', null, '2026-09-03T05:00:00Z'),
+      ],
+    },
+  });
+  const { container } = render(await DashboardPage());
+  dump('dashboard-cards', container.innerHTML);
+});
+
+// BACKLOG-3904 fix-up: the real dashboard and submissions pages inside the real
+// shell (whole-body dumps), to measure the gap from the phone top bar to the
+// first content (stat cards / search field) and the Clear filters row.
+async function gapDump(name: string, path: string, element: React.ReactNode) {
+  mockPath = path;
+  const { unmount } = render(shell(element));
+  dump(name, document.body.innerHTML);
+  unmount();
+}
+
+it('gap-* (top bar to first content)', async () => {
+  const mk = (id: string, status: string, createdAt: string): Row => ({
+    ...submissionRow({ id, organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status, parentSubmissionId: null, createdAt, address: '34 Fictional Road' }),
+    version: 1,
+  });
+  mockEmulator.reset();
+  mockEmulator.set({
+    rows: {
+      transaction_submissions: [
+        mk('s1', 'submitted', '2026-09-03T00:00:00Z'),
+        mk('s2', 'approved', '2026-09-03T01:00:00Z'),
+      ],
+    },
+  });
+  await gapDump('gap-dashboard', '/dashboard', await DashboardPage());
+  await gapDump('gap-submissions', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({}) }));
+  await gapDump('gap-submissions-filtered', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ status: 'approved' }) }));
+});
+
+// BACKLOG-3904 fix-up: the Users page composition (page.tsx: PageHeader + UserListClient)
+// inside the real shell, unfiltered and with a search typed, to measure the
+// controls block and the gap under the top bar. Phone only (matchMedia true).
+async function usersGapDump(name: string, search: string | null) {
+  mockPath = '/dashboard/users';
+  setMatchMedia(true);
+  const { unmount } = render(
+    shell(
+      <div className="max-w-7xl mx-auto space-y-6 max-md:space-y-3 max-md:[&>:nth-child(2)]:!mt-0">
+        <PageHeader
+          phoneHideTitle
+          phoneHideSubtitle
+          title="Users Management"
+          subtitle="Manage your organization's team members"
+          className="max-md:mb-0"
+        />
+        <UserListClient
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          initialMembers={MEMBERS as any}
+          currentUserId="u0"
+          currentUserRole="admin"
+          organizationId="org-1"
+        />
+      </div>
+    )
+  );
+  if (search !== null) {
+    const input = (document.querySelector('#user-search-phone') ?? document.querySelector('#user-search')) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: search } });
+  }
+  dump(name, document.body.innerHTML);
+  unmount();
+}
+
+it('gap-users*', async () => {
+  await usersGapDump('gap-users', null);
+  await usersGapDump('gap-users-filtered', 'Number1');
 });

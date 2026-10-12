@@ -1,9 +1,8 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import { Clock, XCircle, CheckCircle2, Files, Inbox } from 'lucide-react';
+import { Inbox, RefreshCw, Eye, XCircle } from 'lucide-react';
 import {
   PageHeader,
-  StatCard,
   EmptyState,
   Card,
   CardHeader,
@@ -19,50 +18,40 @@ import {
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
 import { FloorDashboard } from './components/FloorDashboard';
+import { DashboardStatCards } from '@/components/dashboard/DashboardStatCards';
+import { buildStatCards, type StatCardData } from '@/lib/dashboard/statCards';
+import { getAllowedOrgIds } from '@/lib/submissions/allowedOrgs';
+import { LINK_COLUMNS, readDealHeads } from '@/lib/submissions/dealList';
+import { resolveUserIdentities } from '@/lib/submissions/names';
+import { SubmissionCard } from '@/components/submission/SubmissionCard';
 
-interface SubmissionStats {
-  total: number;
-  submitted: number;
-  under_review: number;
-  needs_changes: number;
-  approved: number;
-  rejected: number;
-}
+/**
+ * BACKLOG-3904: the stat cards count deals - the head of every resubmission
+ * chain - in the Submissions list's own scope (same org gate, same
+ * uploading exclusion), so each linked card's number is the size of the list it
+ * opens. See lib/dashboard/statCards.ts.
+ */
+async function getStatCards(client: SupabaseClient, orgId?: string): Promise<StatCardData[]> {
+  const allowedOrgIds = await getAllowedOrgIds(client, orgId);
+  const restrictToOrgs = allowedOrgIds !== null && !orgId;
+  if (restrictToOrgs && allowedOrgIds.length === 0) return buildStatCards([]);
 
-async function getStats(client: SupabaseClient, orgId?: string): Promise<SubmissionStats> {
-  // Get all submissions for the user's organization (exclude incomplete uploads)
-  let query = client
-    .from('transaction_submissions')
-    .select('status')
-    .neq('status', 'uploading');
+  const read = await readDealHeads((from, to) => {
+    let query = client
+      .from('transaction_submissions')
+      .select(LINK_COLUMNS)
+      .neq('status', 'uploading');
+    // During impersonation, filter by organization
+    if (orgId) query = query.eq('organization_id', orgId);
+    if (restrictToOrgs) query = query.in('organization_id', allowedOrgIds);
+    return query.order('id').range(from, to);
+  });
 
-  // During impersonation, filter by organization
-  if (orgId) {
-    query = query.eq('organization_id', orgId);
+  if (read.error) {
+    console.error('Error fetching stats:', read.error);
+    return buildStatCards([]);
   }
-
-  const { data, error } = await query;
-
-  if (error || !data) {
-    console.error('Error fetching stats:', error);
-    return {
-      total: 0,
-      submitted: 0,
-      under_review: 0,
-      needs_changes: 0,
-      approved: 0,
-      rejected: 0,
-    };
-  }
-
-  return {
-    total: data.length,
-    submitted: data.filter(s => s.status === 'submitted').length,
-    under_review: data.filter(s => s.status === 'under_review').length,
-    needs_changes: data.filter(s => s.status === 'needs_changes').length,
-    approved: data.filter(s => s.status === 'approved').length,
-    rejected: data.filter(s => s.status === 'rejected').length,
-  };
+  return buildStatCards(read.heads);
 }
 
 async function getRecentSubmissions(client: SupabaseClient, orgId?: string) {
@@ -123,10 +112,15 @@ export default async function DashboardPage() {
   // BACKLOG-908: Use deduped helper for org ID resolution
   const orgId = getTargetOrganizationId(organizationId);
 
-  const [stats, recentSubmissions] = await Promise.all([
-    getStats(client, orgId),
+  const [statCards, recentSubmissions] = await Promise.all([
+    getStatCards(client, orgId),
     getRecentSubmissions(client, orgId),
   ]);
+  // The phone cards name the agent, as the Submissions list does. A support
+  // session looks up no names (users is ID-scoped to the target there).
+  const agentNames = impersonation
+    ? null
+    : await resolveUserIdentities(client, recentSubmissions.map((s) => s.submitted_by));
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -134,36 +128,27 @@ export default async function DashboardPage() {
 
       <div className="space-y-6">
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard
-            label="Pending Review"
-            value={stats.submitted + stats.under_review}
-            icon={<Clock className="h-5 w-5" />}
-            hue="blue"
-          />
-          <StatCard
-            label="Needs Changes"
-            value={stats.needs_changes}
-            icon={<XCircle className="h-5 w-5" />}
-            hue="orange"
-          />
-          <StatCard
-            label="Approved"
-            value={stats.approved}
-            icon={<CheckCircle2 className="h-5 w-5" />}
-            hue="green"
-          />
-          <StatCard
-            label="Total Submissions"
-            value={stats.total}
-            icon={<Files className="h-5 w-5" />}
-            hue="gray"
-          />
-        </div>
+        <DashboardStatCards
+          cards={statCards}
+          icons={{
+            new: <Inbox className="h-5 w-5" />,
+            resubmitted: <RefreshCw className="h-5 w-5" />,
+            under_review: <Eye className="h-5 w-5" />,
+            needs_changes: <XCircle className="h-5 w-5" />,
+          }}
+        />
 
         {/* Recent Submissions */}
-        <Card padding="none">
+        <Card
+          padding="none"
+          className={
+            recentSubmissions.length > 0
+              ? 'max-md:rounded-none max-md:border-0 max-md:bg-transparent max-md:shadow-none'
+              : undefined
+          }
+        >
           <CardHeader
+            className="max-md:px-0 max-md:pt-0 max-md:pb-3 max-md:border-b-0"
             action={
               <Link
                 href="/dashboard/submissions"
@@ -183,7 +168,17 @@ export default async function DashboardPage() {
               title="No submissions yet"
             />
           ) : (
-            <ul className="divide-y divide-gray-200">
+            <>
+            <div className="flex flex-col gap-2 md:hidden" data-slot="submission-cards">
+              {recentSubmissions.map((submission) => (
+                <SubmissionCard
+                  key={submission.id}
+                  submission={submission}
+                  agent={submission.submitted_by ? agentNames?.get(submission.submitted_by)?.name : undefined}
+                />
+              ))}
+            </div>
+            <ul className="divide-y divide-gray-200 max-md:hidden">
               {recentSubmissions.map((submission) => (
                 <li key={submission.id}>
                   <Link
@@ -216,6 +211,7 @@ export default async function DashboardPage() {
                 </li>
               ))}
             </ul>
+            </>
           )}
         </Card>
       </div>

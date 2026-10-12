@@ -64,8 +64,9 @@ const EXPECTED: Record<string, string> = {
   '/dashboard/checklists/c-1': 'Checklist',
   '/dashboard/my-transactions': 'My Transactions',
   '/dashboard/my-transactions/m-1': 'Transaction',
+  '/dashboard/submissions': 'Submissions',
+  '/dashboard/submissions/s-1': 'Submission',
 };
-const SUBMISSIONS = ['/dashboard/submissions', '/dashboard/submissions/s-1'];
 
 function pageRoutes(dir = DASH, rel = ''): string[] {
   const out: string[] = [];
@@ -87,15 +88,17 @@ function renderShell(p: string) {
 }
 
 describe('phone top bar title (BACKLOG-3896)', () => {
-  it('sweep: every dashboard page.tsx outside submissions resolves a title', () => {
-    const routes = pageRoutes().filter((r) => !r.startsWith('/submissions'));
-    expect(routes.length).toBeGreaterThanOrEqual(12);
+  it('sweep: every dashboard page.tsx resolves a title', () => {
+    const routes = pageRoutes();
+    expect(routes.length).toBeGreaterThanOrEqual(14);
+    expect(routes).toContain('/submissions');
+    expect(routes).toContain('/submissions/[id]');
     for (const r of routes) {
       const url = toUrl(r);
       expect({ url, title: getPhoneTitle(url) }).toEqual({ url, title: expect.any(String) });
     }
     // and the hand-written table covers every one of them
-    const covered = new Set(Object.keys(EXPECTED).map((u) => u.replace(/\/(u|t|c|m)-1$/, '/x-1')));
+    const covered = new Set(Object.keys(EXPECTED).map((u) => u.replace(/\/(u|t|c|m|s)-1$/, '/x-1')));
     for (const r of routes) expect(covered.has(toUrl(r))).toBe(true);
   });
 
@@ -103,12 +106,6 @@ describe('phone top bar title (BACKLOG-3896)', () => {
     renderShell(url);
     expect(screen.getByTestId('mobile-top-bar-title')).toHaveTextContent(title);
     expect(screen.getByTestId('mobile-top-bar')).not.toHaveTextContent('Broker');
-  });
-
-  it.each(SUBMISSIONS)('%s keeps the wordmark top bar (owned by PR #2961)', (url) => {
-    renderShell(url);
-    expect(screen.queryByTestId('mobile-top-bar-title')).toBeNull();
-    expect(screen.getByTestId('mobile-top-bar')).toHaveTextContent('Broker');
   });
 
   it('the top-bar title is not a heading: the page keeps exactly one h1', () => {
@@ -162,9 +159,9 @@ describe('page headings below md (BACKLOG-3896)', () => {
     expect(screen.getByText('S').getAttribute('class')).toBe('mt-1 text-sm text-gray-500');
   });
 
-  it('sweep: every PageHeader in the broker dashboard pages (outside submissions) opts in, with PAGE_TITLES', () => {
+  it('sweep: every PageHeader in the broker dashboard pages opts in, with PAGE_TITLES', () => {
     const files = [
-      ...pageRoutes().filter((r) => !r.startsWith('/submissions')).map((r) => path.join(DASH, r, 'page.tsx')),
+      ...pageRoutes().map((r) => path.join(DASH, r, 'page.tsx')),
       path.join(DASH, 'settings/OrgSettingsClient.tsx'),
       path.join(DASH, 'settings/scim/ScimSettingsClient.tsx'),
       path.join(DASH, 'account/AccountClient.tsx'),
@@ -182,11 +179,12 @@ describe('page headings below md (BACKLOG-3896)', () => {
         expect(/(?<![A-Za-z])title="/.test(tag)).toBe(false); // titles come from PAGE_TITLES or a computed greeting
       }
     }
-    expect(headers).toBeGreaterThanOrEqual(13);
+    expect(headers).toBeGreaterThanOrEqual(14);
   });
 
-  it('no submissions file was touched by this change', () => {
-    const src = fs.readFileSync(path.join(DASH, 'submissions/page.tsx'), 'utf8');
+  it('submissions detail page keeps its visible property-address h1 (no PageHeader, no phoneHide)', () => {
+    const src = fs.readFileSync(path.join(DASH, 'submissions/[id]/page.tsx'), 'utf8');
+    expect(src).toMatch(/<h1 className="text-2xl font-bold text-gray-900">\{submission\.property_address\}<\/h1>/);
     expect(src).not.toMatch(/phoneHide/);
   });
 });

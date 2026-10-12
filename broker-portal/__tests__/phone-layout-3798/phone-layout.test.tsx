@@ -348,7 +348,8 @@ describe('BACKLOG-3896 kit drawer', () => {
     expect(drawer).toEqual(rail);
   });
 
-  it('C15 the top bar shows the Broker qualifier', () => {
+  it('C15 the top bar shows the Broker qualifier (on a route with no phone title)', () => {
+    mockPath = '/dashboard/unmapped-route';
     renderShell();
     expect(within(screen.getByTestId('mobile-top-bar')).getByText('Broker')).toBeInTheDocument();
   });
