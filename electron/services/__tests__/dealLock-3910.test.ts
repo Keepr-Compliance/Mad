@@ -51,6 +51,7 @@ jest.mock("../logService", () => {
 
 import { setDb } from "../db/core/dbConnection";
 import {
+  autoLinkCommunicationsForContact,
   autoLinkNewMessagesForUser,
   expandAttachedThreadsForUser,
   linkEmailToTransaction,
@@ -192,6 +193,36 @@ describe("C-R3a: deal-open sweep", () => {
     await syncReviewQueueForTransaction({ transactionId: A, reason: "open" });
 
     expect(reached(A)).toEqual([`review:${EMAIL}`, `thread:${TEXT_THREAD}`]);
+  });
+});
+
+// ===========================================================================
+// C-R3a2 — the per-contact pass says WHY it added nothing (callers report it:
+// the add-contact result, assignContact). Without this the primary gate is
+// invisible: the writer backstops alone keep the deal empty.
+// ===========================================================================
+describe("C-R3a2: the per-contact pass reports the lock", () => {
+  it.each([
+    ["submitted", "submitted"],
+    ["under_review", "submitted"],
+    ["resubmitted", "submitted"],
+    ["approved", "sealed"],
+  ])("%s -> skippedLocked %s, nothing added", async (status, reason) => {
+    seed(status);
+
+    const r = await autoLinkCommunicationsForContact({ contactId: CONTACT, transactionId: A });
+
+    expect([r.skippedLocked, r.emailsLinked, r.messagesLinked, r.errors]).toEqual([reason, 0, 0, 0]);
+    expect(reached(A)).toEqual([]);
+  });
+
+  it("REVERSE: an open deal has no skippedLocked and gets the email and text", async () => {
+    seed("not_submitted");
+
+    const r = await autoLinkCommunicationsForContact({ contactId: CONTACT, transactionId: A });
+
+    expect(r.skippedLocked).toBeUndefined();
+    expect(reached(A)).toEqual([`email:${EMAIL}`, `thread:${TEXT_THREAD}`]);
   });
 });
 
