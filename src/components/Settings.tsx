@@ -91,6 +91,10 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
 
   // BACKLOG-1458: Track active import source for adaptive Messages section
   const [activeImportSource, setActiveImportSource] = useState<ImportSource | null>(null);
+  // BACKLOG-3892: the texts lookback picker lives in the macOS panel's Import
+  // Preferences only while that panel is the live source (it renders nothing
+  // off a Mac, and is absent or greyed for the other sources).
+  const lookbackInImportPreferences = isMacOS && activeImportSource === 'macos-native';
 
   const activeTabId = useScrollSpy(visibleTabIds, scrollContainerRef, 48, !loadingPreferences);
 
@@ -219,9 +223,12 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
               <div className="space-y-4">
                 <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} />
                 {/* BACKLOG-3892 S3: ONE "How far back to import texts" picker for
-                    every source, on Mac and Windows — outside the per-source
-                    branch below, which no longer has a picker of its own. */}
-                <TextsLookbackSettings userId={userId} />
+                    every source, on Mac and Windows. Founder QA 2026-10-12: on a
+                    Mac with macOS Messages as the source it sits inside that
+                    panel's Import Preferences, under "Maximum messages";
+                    everywhere else it is this standalone card. Exactly one
+                    renders. */}
+                {!lookbackInImportPreferences && <TextsLookbackSettings userId={userId} />}
                 {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below.
                     SR C6 (founder): the Android Companion panel is no longer mounted. */}
                 {activeImportSource === 'android-messages-web' ? (
@@ -237,6 +244,9 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                   <MacOSMessagesImportSettings
                     userId={userId}
                     enabled={activeImportSource === 'macos-native'}
+                    lookbackPicker={
+                      lookbackInImportPreferences ? <TextsLookbackSettings userId={userId} embedded /> : undefined
+                    }
                     disabledReason={
                       activeImportSource === 'iphone-sync'
                         ? 'Your message source is set to iPhone — switch to macOS above to import from Messages.'

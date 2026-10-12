@@ -1810,7 +1810,26 @@ describe("Settings", () => {
       const section = container.querySelector<HTMLElement>("#settings-messages")!;
       const target = section.querySelector<HTMLElement>("#settings-texts-lookback");
       expect(target).not.toBeNull();
-      expect(within(target!).getByText("How far back to import texts")).toBeInTheDocument();
+      // BACKLOG-3892 (founder QA 2026-10-12): on a Mac with macOS Messages as
+      // the source the picker is a row of Import Preferences, directly under
+      // "Maximum messages"; every other case keeps the standalone card.
+      const prefs = section.querySelector<HTMLElement>('[data-testid="messages-block-preferences"]');
+      if (platform === "darwin" && source === "macos-native") {
+        expect(prefs).not.toBeNull();
+        expect(`picker inside Import Preferences: ${prefs!.contains(target!)}`).toBe(
+          "picker inside Import Preferences: true",
+        );
+        const maxRow = within(prefs!).getByText("Maximum messages").parentElement!;
+        expect(`picker is the row right after Maximum messages: ${maxRow.nextElementSibling === target}`).toBe(
+          "picker is the row right after Maximum messages: true",
+        );
+        expect(within(target!).queryByText("How far back to import texts")).toBeNull();
+      } else {
+        expect(`picker inside Import Preferences: ${prefs?.contains(target!) ?? false}`).toBe(
+          "picker inside Import Preferences: false",
+        );
+        expect(within(target!).getByText("How far back to import texts")).toBeInTheDocument();
+      }
       // Exactly one months picker in the Messages section — the per-panel ones are gone.
       expect(within(section).getAllByRole("combobox", { name: "Import messages from" })).toHaveLength(1);
 
