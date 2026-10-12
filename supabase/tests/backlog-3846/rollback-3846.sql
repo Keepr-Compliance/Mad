@@ -1,4 +1,4 @@
--- Rollback of 20261012100000_backlog_3846_unsuspend_regrant_and_audit_actor.sql.
+-- Rollback of 20261012152626_backlog_3846_unsuspend_regrant_and_audit_actor.sql.
 -- Restores the pre-3846 trigger set on licenses and the production
 -- log_admin_action (body and EXECUTE grants as read on 2026-10-12).
 -- Refuses while a NULL-actor audit row exists: NOT NULL cannot come back

@@ -19,7 +19,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 L3845="$REPO/supabase/tests/backlog-3845/lib"
 MIG3845="$REPO/supabase/migrations/20261011230913_backlog_3845_billing_foundation.sql"
-MIG="${MIG_OVERRIDE:-$REPO/supabase/migrations/20261012100000_backlog_3846_unsuspend_regrant_and_audit_actor.sql}"
+MIG="${MIG_OVERRIDE:-$REPO/supabase/migrations/20261012152626_backlog_3846_unsuspend_regrant_and_audit_actor.sql}"
 RB="$HERE/rollback-3846.sql"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 psql_in() {

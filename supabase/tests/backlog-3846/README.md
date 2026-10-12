@@ -1,6 +1,6 @@
 # BACKLOG-3846 harness
 
-Controls and mutants for `supabase/migrations/20261012100000_backlog_3846_unsuspend_regrant_and_audit_actor.sql`
+Controls and mutants for `supabase/migrations/20261012152626_backlog_3846_unsuspend_regrant_and_audit_actor.sql`
 and `rollback-3846.sql`. Every run is one transaction ending in ROLLBACK.
 
 Order per run: the 3845 helpers and fixtures (`../backlog-3845/lib`), the 3845 migration (idempotent)
