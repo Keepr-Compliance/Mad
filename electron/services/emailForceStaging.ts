@@ -421,11 +421,12 @@ export function pairStagedWithProtected(
     for (const k of byExternal.get(s.external_id) ?? []) {
       const sameSource = s.source !== null && s.source === k.source;
       // Same account + same provider id is ONE identity by the partial unique
-      // index, so it pairs whatever the Message-ID says: refusing it would
-      // leave the copy unpaired and its insert would hit that index and roll
-      // the whole re-cache back (measured on the 3475 fixture, whose kept row
-      // carries a different Message-ID). Across accounts the Message-ID must
-      // agree where both carry one (SR S2).
+      // index `idx_emails_account_external` (account_id, external_id), so it
+      // pairs whatever the Message-ID says: refusing it would leave the copy
+      // unpaired, its insert would hit that index, and the whole re-cache
+      // would roll back — on every later run too, because nothing rewrites a
+      // stored Message-ID. Across accounts the Message-ID must agree where
+      // both carry one (SR S2).
       const sameAccount = s.account_id !== null && s.account_id === k.account_id;
       const headersAgree =
         sameAccount ||

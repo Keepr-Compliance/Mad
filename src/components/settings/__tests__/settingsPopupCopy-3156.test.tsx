@@ -278,16 +278,17 @@ describe("BACKLOG-3156 stage B — the Emails popup", () => {
     expect(ordinary.body).toMatch(/stay linked|nothing is unlinked|does not unlink/i);
   });
 
-  it("says the force run unlinks and loses review decisions", async () => {
+  it("says the force run removes the rest and keeps attached emails attached", async () => {
     renderEmails();
     const [, force] = entriesOf(await openPopup("emails"));
 
-    // Both are true at source: the swap deletes the force set with an ordinary
-    // DELETE so every ON DELETE CASCADE fires — the transaction-link table AND
-    // its pending-review sibling (`electron/services/emailForceStaging.ts`,
-    // `deleteLiveForceSet`). The confirmation dialog says the same.
-    expect(force.body).toMatch(/unlinks your emails from their transactions/i);
-    expect(force.body).toMatch(/review decisions/i);
+    // BACKLOG-3910a: true at source — emails tied to a deal are kept and
+    // refreshed in place (`electron/services/emailForceStaging.ts`); every
+    // other email of the user is removed. The confirmation dialog says the same.
+    expect(force.body).toMatch(/removes the rest/i);
+    expect(force.body).toMatch(/Emails attached to deals stay attached/i);
+    expect(force.body).not.toMatch(/unlink/i);
+    expect(force.body).not.toMatch(/review decisions/i);
   });
 
   it("states the rule and does not name the providers it reaches", async () => {

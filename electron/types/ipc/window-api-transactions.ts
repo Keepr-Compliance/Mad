@@ -964,8 +964,26 @@ export interface WindowApiTransactions {
     forceSwap?: {
       emailsDeleted: number;
       emailsInserted: number;
+      /** BACKLOG-3910a: kept rows on no locked deal, updated in place (same id). */
+      emailsRefreshed: number;
+      /** BACKLOG-3910a: kept rows on a locked deal, left exactly as they were. */
+      emailsKeptLocked: number;
+      /** BACKLOG-3910a: kept rows no fresh copy arrived for. */
+      emailsKeptNoCopy: number;
       participantsInserted: number;
       providers: Array<"gmail" | "outlook">;
+    };
+    /**
+     * BACKLOG-3910a: a force run in which a connected mailbox did not finish
+     * applies nothing. Arrives only with `success: false`; one entry per
+     * unfinished mailbox, so the renderer can name it and the next step.
+     */
+    forceNotApplied?: {
+      mailboxes: Array<{
+        provider: "gmail" | "outlook";
+        mailbox: string;
+        tokenExpired: boolean;
+      }>;
     };
     /**
      * BACKLOG-2856: the user stopped the run. Arrives with `success: false` and
