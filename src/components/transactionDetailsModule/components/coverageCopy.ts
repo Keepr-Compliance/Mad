@@ -30,6 +30,15 @@ export function coverageDay(iso: string | null | undefined, now: Date = new Date
   });
 }
 
+/**
+ * BACKLOG-3892 E (founder-approved 2026-10-11, f240c29a): the Google Messages done screen
+ * when a deal chat came back short of the date its deal needs. null without a date.
+ */
+export function googleMessagesOnlyBackToLine(iso: string | null | undefined, now: Date = new Date()): string | null {
+  const when = coverageDay(iso, now);
+  return when ? `Google Messages on the web only returned texts back to ${when}.` : null;
+}
+
 /** W3b (approved): the start is limited by the current phone's oldest text, and there was another phone. */
 export function previousPhoneLine(gap: SourceCoverageGap, now: Date = new Date()): string | null {
   if (gap.source !== "iphone" || !gap.cappedByPhone || !gap.previousPhone) return null;

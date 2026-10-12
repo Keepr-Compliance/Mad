@@ -399,8 +399,14 @@ export function GoogleMessagesSyncFlow({
           </div>
           {/* What Keepr SAVED (not what the page sent). */}
           <div className="p-3 rounded-[10px] border border-[#E5E7EB] text-[14px] text-[#1F2937]" role="status" data-testid="gm-done-summary">
-            {(doneLines ?? ["Keepr is saving what it copied. This takes a moment."]).join(" ")}
+            {(doneLines ? doneLines.slice(0, 1) : ["Keepr is saving what it copied. This takes a moment."]).join(" ")}
           </div>
+          {/* BACKLOG-3892 E: a deal chat came back short of the date its deal needs. */}
+          {doneLines?.slice(1).map((line) => (
+            <p key={line} className="text-[13px] text-[#92400E]" role="status" data-testid="gm-done-only-back-to">
+              {line}
+            </p>
+          ))}
           {doneLines && <p className="text-[13px] text-[#4B5563]">Added to your transactions by phone number.</p>}
           <button type="button" className={primary} onClick={onClose}>
             Done

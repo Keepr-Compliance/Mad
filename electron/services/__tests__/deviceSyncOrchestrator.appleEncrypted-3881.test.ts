@@ -10,6 +10,7 @@
  *  A3  the phone reports encryption OFF: the normal sync, with no password anywhere.
  *  A4  a stale renderer that still sends a password: it never reaches the backup.
  */
+import * as Sentry from "@sentry/electron/main";
 import fsSync from "fs";
 import os from "os";
 import path from "path";
@@ -190,6 +191,7 @@ afterAll(() => {
 
 beforeEach(() => {
   jest.restoreAllMocks();
+  (Sentry.captureMessage as jest.Mock).mockClear();
   logLines.length = 0;
   syncTimeline.reset();
   const P = BackupService.prototype;
@@ -213,6 +215,17 @@ function expectAppleEncryptedStop(r: Awaited<ReturnType<DeviceSyncOrchestrator["
   expect(r.error).toBe(APPLE_ENCRYPTED_BACKUP_MESSAGE);
   expect(outcomeRow()).toContain("reasonCode=APPLE_ENCRYPTED_BACKUP");
   expect(outcomeRow()).toContain("endedBy=backup-encryption");
+  // BACKLOG-3892 E: one Sentry backup-problem event per stop, reason only.
+  expect((Sentry.captureMessage as jest.Mock).mock.calls.filter((c) => c[0] === "iPhone backup problem")).toEqual([
+    [
+      "iPhone backup problem",
+      {
+        level: "warning",
+        tags: { component: "iphone_backup", reason: "apple-encrypted" },
+        fingerprint: ["iphone-backup-problem", "apple-encrypted"],
+      },
+    ],
+  ]);
 }
 
 describe("A1 the phone has Encrypt local backup on", () => {
@@ -241,6 +254,7 @@ describe("A1 the phone has Encrypt local backup on", () => {
     phone("on");
     const o = newOrchestrator();
     expectAppleEncryptedStop(await o.sync({ udid: UDID }));
+    (Sentry.captureMessage as jest.Mock).mockClear(); // one event per press
     expectAppleEncryptedStop(await o.sync({ udid: UDID }));
     expect(spies.startBackup).not.toHaveBeenCalled();
     expect(spies.checkEncryptionStatus).toHaveBeenCalledTimes(2);
@@ -272,6 +286,7 @@ describe("A2 the setting could not be read and the backup lands encrypted", () =
     expect(r.success).toBe(false);
     expect(r.appleEncryptedBackup).toBeUndefined();
     expect(r.error).toBe("lost");
+    expect((Sentry.captureMessage as jest.Mock).mock.calls.filter((c) => c[0] === "iPhone backup problem")).toEqual([]);
   });
 });
 
