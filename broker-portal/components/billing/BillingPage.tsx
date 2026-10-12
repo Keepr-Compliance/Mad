@@ -48,7 +48,7 @@ export function BillingPage({ caps, orgBillingSetUp, personal }: BillingPageProp
   const render = (block: BillingBlock) => {
     switch (block) {
       case 'plan':
-        return <PlanBlock key={block} line={planLine(caps, orgBillingSetUp)} personal={personal} primaryAction={caps.primaryAction} />;
+        return <PlanBlock key={block} line={planLine(caps, orgBillingSetUp)} personal={personal} />;
       case 'choose_plan':
         return <ChoosePlanBlock key={block} prices={personal?.prices} />;
       case 'seats':

@@ -34,7 +34,6 @@ export type BillingBlock = 'plan' | 'choose_plan' | 'seats' | 'credits' | 'payme
 export type AgentPlanState = 'none' | 'active' | 'cancel_pending' | 'payment_failed' | 'support_grant';
 
 export type BillingPrimaryAction =
-  | 'subscribe' // reserved: no situation yields it today; Subscribe lives on the Agent card (block 2)
   | 'cancel_plan'
   | 'keep_plan'
   | 'update_card'

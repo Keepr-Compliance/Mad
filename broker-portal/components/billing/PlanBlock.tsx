@@ -1,22 +1,13 @@
 import Link from 'next/link';
 import { BillingBlock } from './BillingBlock';
-import { CancelPlanButton, CheckoutReturn, KeepPlanButton, SubscribeButton } from './AgentPlanControls';
+import { CancelPlanButton, CheckoutReturn, KeepPlanButton } from './AgentPlanControls';
 import type { PersonalPlanData } from './BillingPage';
-import type { BillingPrimaryAction } from '@/lib/billing/capabilities';
 
 /** "Your plan". Organization pages show the plan name only (3844). */
-export function PlanBlock({
-  line,
-  personal,
-  primaryAction,
-}: {
-  line: string;
-  personal?: PersonalPlanData;
-  primaryAction?: BillingPrimaryAction | null;
-}) {
+export function PlanBlock({ line, personal }: { line: string; personal?: PersonalPlanData }) {
   return (
     <BillingBlock id="plan" title="Your plan">
-      {personal ? <PersonalPlan p={personal} primaryAction={primaryAction ?? null} /> : <p className="mt-2 text-sm text-gray-600">{line}</p>}
+      {personal ? <PersonalPlan p={personal} /> : <p className="mt-2 text-sm text-gray-600">{line}</p>}
     </BillingBlock>
   );
 }
@@ -38,7 +29,7 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PersonalPlan({ p, primaryAction }: { p: PersonalPlanData; primaryAction: BillingPrimaryAction | null }) {
+function PersonalPlan({ p }: { p: PersonalPlanData }) {
   const month = p.prices.month;
   const priceLine = month ? `${month.display} / month` : null;
   const until = formatDay(p.currentPeriodEnd);
@@ -99,7 +90,6 @@ function PersonalPlan({ p, primaryAction }: { p: PersonalPlanData; primaryAction
           {p.checkout === 'cancelled' ? (
             <p role="status" className="text-sm text-gray-600">Checkout was cancelled. Nothing was charged.</p>
           ) : null}
-          {month && primaryAction === 'subscribe' ? <SubscribeButton label={`Subscribe — ${month.display}/month`} /> : null}
         </div>
       );
   }
