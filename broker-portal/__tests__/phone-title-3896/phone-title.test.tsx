@@ -3,7 +3,7 @@
  * hidden below md. jsdom loads no CSS: these assert the class contract; the
  * rendered geometry is measured by scripts/phone-layout-3798/run.sh.
  */
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import React from 'react';
 import fs from 'fs';
@@ -106,6 +106,19 @@ describe('phone top bar title (BACKLOG-3896)', () => {
     renderShell(url);
     expect(screen.getByTestId('mobile-top-bar-title')).toHaveTextContent(title);
     expect(screen.getByTestId('mobile-top-bar')).not.toHaveTextContent('Broker');
+  });
+
+  it('the top-bar title is not a heading: the page keeps exactly one h1', () => {
+    mockPath = '/dashboard/users';
+    render(
+      <DashboardShell isImpersonating={false} displayEmail="a@example.test">
+        <PageHeader title="Users Management" subtitle="Manage" phoneHideTitle phoneHideSubtitle />
+      </DashboardShell>
+    );
+    const bar = screen.getByTestId('mobile-top-bar');
+    expect(screen.getByTestId('mobile-top-bar-title')).toHaveTextContent('Users Management');
+    expect(within(bar).queryAllByRole('heading')).toHaveLength(0);
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
   });
 
   it('non-dashboard or empty paths give no title', () => {
