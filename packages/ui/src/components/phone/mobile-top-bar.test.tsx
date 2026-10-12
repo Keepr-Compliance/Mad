@@ -30,6 +30,12 @@ describe('MobileTopBar', () => {
     expect(screen.queryByTestId('mobile-top-bar-title')).toBeNull();
   });
 
+  it('the title is not a heading (the page owns the single h1)', () => {
+    render(<MobileTopBar qualifier="Broker" title="Users" menuOpen={false} onOpenMenu={() => {}} />);
+    expect(screen.getByTestId('mobile-top-bar-title')).toHaveTextContent('Users');
+    expect(screen.queryAllByRole('heading')).toHaveLength(0);
+  });
+
   it('a title replaces the wordmark and qualifier; leading still wins over it', () => {
     const { rerender } = render(
       <MobileTopBar qualifier="Broker" title="Users" menuOpen={false} onOpenMenu={() => {}} />
