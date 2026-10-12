@@ -16,7 +16,11 @@ describe('parses the stored shape', () => {
     ['zip+4', '1400 Demo Ct, Brookfield, FL 33029-1234, USA', 'Brookfield', 'FL', { street: '1400 Demo Ct', cityLine: 'Brookfield, FL 33029-1234' }],
     ['no zip', '1400 Demo Ct, Brookfield, FL, USA', 'Brookfield', 'FL', { street: '1400 Demo Ct', cityLine: 'Brookfield, FL' }],
     ['city case differs', '7 Sample St, riverton, FL 33023, USA', 'Riverton', 'FL', { street: '7 Sample St', cityLine: 'Riverton, FL 33023' }],
-    ['state column wins', '7 Sample St, Riverton, fl 33023, USA', 'Riverton', 'FL', { street: '7 Sample St', cityLine: 'Riverton, FL 33023' }],
+    ['2-letter state in the address, same in the column', '7 Sample St, Riverton, FL 33023, USA', 'Riverton', 'FL', { street: '7 Sample St', cityLine: 'Riverton, FL 33023' }],
+    ['address tail is upper-cased', '7 Sample St, Riverton, fl 33023, USA', 'Riverton', 'FL', { street: '7 Sample St', cityLine: 'Riverton, FL 33023' }],
+    ['column holds the full name: the address state wins', '7 Sample St, Riverton, TX 78701, USA', 'Riverton', 'TEXAS', { street: '7 Sample St', cityLine: 'Riverton, TX 78701' }],
+    ['column full name, mixed case', '7 Sample St, Riverton, TX 78701, USA', 'Riverton', 'Texas', { street: '7 Sample St', cityLine: 'Riverton, TX 78701' }],
+    ['column disagrees with the address: the address wins', '7 Sample St, Riverton, TX 78701, USA', 'Riverton', 'FL', { street: '7 Sample St', cityLine: 'Riverton, TX 78701' }],
     ['state column missing', '7 Sample St, Riverton, FL 33023, USA', 'Riverton', '', { street: '7 Sample St', cityLine: 'Riverton, FL 33023' }],
   ];
   it.each(cases)('%s', (_n, address, city, state, expected) => {
@@ -38,6 +42,10 @@ describe('falls back to the whole address and the existing city, state', () => {
     ['two segments that look like city + state (no street)', 'Eastgate, FL 33027, USA', 'Eastgate', 'FL', { street: 'Eastgate, FL 33027, USA', cityLine: 'Eastgate, FL' }],
     ['non-US (no state/zip tail)', '12 Fictional Street, Toronto, Ontario M5V 2T6, Canada', 'Toronto', 'ON', { street: '12 Fictional Street, Toronto, Ontario M5V 2T6, Canada', cityLine: 'Toronto, ON' }],
     ['city column missing', '33 Example Rd, Riverton, FL 33023, USA', null, 'FL', { street: '33 Example Rd, Riverton, FL 33023, USA', cityLine: 'FL' }],
+    ['full state name, no parsable address: mapped to the code', '1234 Invented Boulevard', 'Eastgate', 'TEXAS', { street: '1234 Invented Boulevard', cityLine: 'Eastgate, TX' }],
+    ['full state name, mixed case', '1234 Invented Boulevard', 'Eastgate', 'New Mexico', { street: '1234 Invented Boulevard', cityLine: 'Eastgate, NM' }],
+    ['2-letter state kept as stored', '1234 Invented Boulevard', 'Eastgate', 'FL', { street: '1234 Invented Boulevard', cityLine: 'Eastgate, FL' }],
+    ['unknown state text kept as stored', '1234 Invented Boulevard', 'Eastgate', 'Narnia', { street: '1234 Invented Boulevard', cityLine: 'Eastgate, Narnia' }],
     ['city column differs', '33 Example Rd, Riverton, FL 33023, USA', 'Eastgate', 'FL', { street: '33 Example Rd, Riverton, FL 33023, USA', cityLine: 'Eastgate, FL' }],
     ['city and state both missing', '1234 Invented Boulevard', null, null, { street: '1234 Invented Boulevard', cityLine: null }],
     ['address missing', null, 'Eastgate', 'FL', { street: 'Eastgate, FL', cityLine: null }],

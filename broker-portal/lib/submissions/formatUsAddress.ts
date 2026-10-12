@@ -24,7 +24,27 @@ function clean(value: string | null | undefined): string {
   return text === 'undefined' || text === 'null' ? '' : text;
 }
 
-function fallback(address: string, city: string, state: string): AddressLines {
+const STATE_CODES: Record<string, string> = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',
+  colorado: 'CO', connecticut: 'CT', delaware: 'DE', 'district of columbia': 'DC',
+  florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID', illinois: 'IL',
+  indiana: 'IN', iowa: 'IA', kansas: 'KS', kentucky: 'KY', louisiana: 'LA',
+  maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI', minnesota: 'MN',
+  mississippi: 'MS', missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV',
+  'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',
+  'north carolina': 'NC', 'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK',
+  oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
+  'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT',
+  virginia: 'VA', washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY',
+};
+
+/** A full US state name ("Texas", "TEXAS") becomes its USPS code; anything else is kept as stored. */
+function stateCode(state: string): string {
+  return STATE_CODES[state.toLowerCase()] ?? state;
+}
+
+function fallback(address: string, city: string, rawState: string): AddressLines {
+  const state = stateCode(rawState);
   const cityLine = [city, state].filter(Boolean).join(', ');
   return { street: address || cityLine || NO_ADDRESS, cityLine: address && cityLine ? cityLine : null };
 }
@@ -53,6 +73,6 @@ export function formatUsAddress(
   // Everything before the city is the street, so "Unit 2" stays on line 1.
   const street = segments.slice(0, -2).join(', ');
   const zip = tail[2] ?? '';
-  const cityLine = `${city}, ${(state || tail[1]).toUpperCase()}${zip ? ` ${zip}` : ''}`;
+  const cityLine = `${city}, ${tail[1].toUpperCase()}${zip ? ` ${zip}` : ''}`;
   return { street, cityLine };
 }
