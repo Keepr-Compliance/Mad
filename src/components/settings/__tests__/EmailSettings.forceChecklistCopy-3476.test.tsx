@@ -1,11 +1,12 @@
 /**
  * BACKLOG-3476 — the force re-cache warning names checklist links.
  *
- * A force re-cache deletes and re-downloads the cached emails and their
- * attachments; checklist links to them cascade away. Once the Checklist tab can
- * create links, the confirmation has to say so — unconditionally, because the
- * dialog is global Settings and a checklist can exist on a machine whose plan
- * no longer includes checklists.
+ * The confirmation is global Settings and a checklist can exist on a machine
+ * whose plan no longer includes checklists, so the checklist sentence is
+ * unconditional.
+ *
+ * BACKLOG-3910a: a force run no longer removes those links — an email (or one
+ * of its attachments) on a checklist item is kept. The sentence now says so.
  *
  * Harness copied from EmailSettings.cancelStrip-2856.test.tsx.
  */
@@ -54,21 +55,19 @@ beforeEach(() => {
 });
 
 describe("BACKLOG-3476 — force re-cache warning", () => {
-  it("says checklist links to those emails and attachments are removed too", async () => {
+  it("says emails on a checklist item are kept", async () => {
     const user = userEvent.setup();
     render(<EmailSettings userId="user-1" initialPreferences={undefined as never} />);
     await waitFor(() => expect(screen.getByTestId("force-recache-emails")).toBeInTheDocument());
 
     await user.click(screen.getByTestId("force-recache-emails"));
 
-    const confirm = await screen.findByTestId("force-recache-confirm");
-    const dialog = confirm.closest("div.bg-white") ?? document.body;
-    expect(dialog).toHaveTextContent(
-      /Links from checklist items to those emails and their attachments are removed too\./,
-    );
+    const body = await screen.findByTestId("force-recache-dialog-body");
+    expect(body).toHaveTextContent(/Emails attached to a deal or a checklist item, .* are kept/);
+    expect(body).not.toHaveTextContent(/removed too/);
     // SR F1: the dialog states the window it keeps. Mutation: line missing → red.
     expect(screen.getByTestId("force-window-line")).toHaveTextContent(
-      "Keeps emails from the last 1.5 months; older emails are removed from this computer.",
+      "Keeps emails from the last 1.5 months; older emails are removed from this computer unless they are attached to a deal.",
     );
   });
 });

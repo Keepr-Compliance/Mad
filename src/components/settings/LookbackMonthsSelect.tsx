@@ -47,7 +47,8 @@ export function lastMonthsPhrase(months: number): string {
 export function forceWindowLine(months: number | null, what: "texts" | "emails"): string {
   if (months === null) return `Keeps all your ${what}.`;
   return what === "emails"
-    ? `Keeps emails from ${lastMonthsPhrase(months)}; older emails are removed from this computer.`
+    ? // BACKLOG-3910a: emails tied to a deal are kept whatever their age.
+      `Keeps emails from ${lastMonthsPhrase(months)}; older emails are removed from this computer unless they are attached to a deal.`
     : `Keeps texts from ${lastMonthsPhrase(months)}; older texts not in an audit period are removed.`;
 }
 

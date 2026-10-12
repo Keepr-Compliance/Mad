@@ -129,3 +129,12 @@ export function dealLockReason(
   }
   return DEAL_LOCK_REASON_BY_STATUS[submissionStatus as SubmissionStatus];
 }
+
+/**
+ * BACKLOG-3910a: every submission status that locks a deal, DERIVED from
+ * `DEAL_LOCK_REASON_BY_STATUS` so there is one list and no second spelling.
+ * Bound into the email Force Re-cache's frozen-set SQL.
+ */
+export const LOCKED_SUBMISSION_STATUSES: readonly SubmissionStatus[] = (
+  Object.keys(DEAL_LOCK_REASON_BY_STATUS) as SubmissionStatus[]
+).filter((status) => DEAL_LOCK_REASON_BY_STATUS[status] !== null);

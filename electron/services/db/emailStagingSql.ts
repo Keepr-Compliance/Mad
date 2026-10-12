@@ -5,7 +5,9 @@
  * `electron/services/emailForceStaging.ts`, which is the stage-and-swap for
  * Force Re-cache (BACKLOG-2856): the rebuild writes into EPHEMERAL staging
  * tables while live `emails` stays readable, and ONE transaction at the end
- * deletes the force set from live and inserts the staged rows.
+ * applies them. BACKLOG-3910a: that transaction removes the unprotected live
+ * rows, refreshes the protected ones in place from their fresh copy, and
+ * inserts the rest.
  *
  * ## Why so much of this is execution rather than constants
  *
@@ -37,6 +39,7 @@ import {
   emailTableDdl,
   type StagingTableName,
 } from "./stagingDdlSql";
+import { computeParticipantHash, type ParticipantRole } from "../../utils/emailAddress";
 
 /**
  * Staging tables left behind by a previous run, found by prefix.
@@ -114,55 +117,215 @@ export function mirrorStagingIndexes(
   }
 }
 
-/** Ids of staged emails from one provider — the rows a narrowing drops. */
-export function selectStagedIdsBySource(
+/** A staged email's identity, as the swap's pairing step reads it. */
+export interface StagedEmailIdentity {
+  readonly id: string;
+  readonly external_id: string | null;
+  readonly message_id_header: string | null;
+  readonly account_id: string | null;
+  readonly source: string | null;
+  readonly thread_id: string | null;
+}
+
+/** Every staged email's identity — the fresh copies the swap pairs. */
+export function selectStagedIdentities(
   db: DatabaseType,
   stagingEmails: StagingTableName,
-  source: string,
-): Array<{ id: string }> {
+): StagedEmailIdentity[] {
   return db
-    .prepare(`SELECT id FROM "${stagingEmails}" WHERE source = ?`)
-    .all(source) as Array<{ id: string }>;
+    .prepare(
+      `SELECT id, external_id, message_id_header, account_id, source, thread_id
+         FROM "${stagingEmails}" ORDER BY id`,
+    )
+    .all() as StagedEmailIdentity[];
 }
 
 /**
- * Drop one provider's staged rows, participants FIRST, in ONE transaction.
+ * Throw away staged copies (and their staged participants) — the fresh copy
+ * of an email on a LOCKED deal is never applied (BACKLOG-3910a).
  *
- * Order is load-bearing: the participants reference the staged email rows, so
- * deleting emails first leaves the participant delete's subquery finding
- * nothing, and its rows orphaned.
- *
- * ## The transaction is a FIX, not a formality
- *
- * These two deletes ran unwrapped before this move, and
- * `restrictForceSetToRebuiltProviders`'s caller holds no transaction either —
- * verified at `emailSyncService.ts:2362`. So a crash between them left a
- * dropped provider's EMAIL rows staged while its PARTICIPANT rows were gone,
- * and the swap then inserted that half-narrowed set into live.
- *
- * The defect predates BACKLOG-2989; grouping the pair into one function is what
- * made `writeAtomicity.guard.test.ts` (BACKLOG-2530) able to see it, and the
- * guard flagged it on the first run. Silencing it by adding an entry to the
- * known list would have preserved a real bug to keep a refactor tidy.
- *
- * Nested-safe: better-sqlite3 runs an inner `transaction()` as a SAVEPOINT, so
- * this is correct whether or not a caller later wraps it.
+ * Participants FIRST: they reference the staged email rows. One transaction
+ * (a SAVEPOINT when nested inside the swap), so no half-discarded state exists.
  */
-export function deleteStagedProviderRows(
+export function discardStagedEmails(
   db: DatabaseType,
   stagingEmails: StagingTableName,
   stagingParticipants: StagingTableName,
-  source: string,
+  stagedIds: readonly string[],
 ): void {
+  if (stagedIds.length === 0) return;
   const deleteParticipants = db.prepare(
-    `DELETE FROM "${stagingParticipants}" WHERE email_id IN ` +
-      `(SELECT id FROM "${stagingEmails}" WHERE source = ?)`,
+    `DELETE FROM "${stagingParticipants}" WHERE email_id = ?`,
   );
-  const deleteEmails = db.prepare(`DELETE FROM "${stagingEmails}" WHERE source = ?`);
-  db.transaction((provider: string) => {
-    deleteParticipants.run(provider);
-    deleteEmails.run(provider);
-  })(source);
+  const deleteEmail = db.prepare(`DELETE FROM "${stagingEmails}" WHERE id = ?`);
+  db.transaction((ids: readonly string[]) => {
+    for (const id of ids) {
+      deleteParticipants.run(id);
+      deleteEmail.run(id);
+    }
+  })(stagedIds);
+}
+
+/**
+ * Is an (account_id, provider id / Message-ID) identity already held by a live
+ * email OTHER than `liveId`? The refresh writes a fresh copy's identity onto a
+ * kept row only when it is free, so an identity clash can never fail the swap
+ * on the partial unique indexes.
+ *
+ * NULL account_id never clashes: SQLite treats NULL as distinct in a UNIQUE
+ * index, which is exactly the index this check stands in front of.
+ */
+export function liveEmailIdentityTaken(
+  db: DatabaseType,
+  liveId: string,
+  identity: {
+    accountId: string | null;
+    externalId: string | null;
+    messageIdHeader: string | null;
+  },
+): boolean {
+  if (identity.accountId === null) return false;
+  const byExternal =
+    identity.externalId !== null &&
+    db
+      .prepare(`SELECT 1 FROM emails WHERE account_id = ? AND external_id = ? AND id <> ? LIMIT 1`)
+      .get(identity.accountId, identity.externalId, liveId) !== undefined;
+  const byHeader =
+    identity.messageIdHeader !== null &&
+    db
+      .prepare(
+        `SELECT 1 FROM emails WHERE account_id = ? AND message_id_header = ? AND id <> ? LIMIT 1`,
+      )
+      .get(identity.accountId, identity.messageIdHeader, liveId) !== undefined;
+  return byExternal || byHeader;
+}
+
+/** Filenames of a live email's attachment rows (SR S3 dedupe on account change). */
+export function selectEmailAttachmentFilenames(db: DatabaseType, emailId: string): string[] {
+  return (
+    db.prepare(`SELECT filename FROM attachments WHERE email_id = ?`).all(emailId) as Array<{
+      filename: string;
+    }>
+  ).map((r) => r.filename);
+}
+
+/**
+ * Columns of a kept email the refresh never overwrites: its own identity in
+ * this database and the provenance of its first download.
+ */
+const REFRESH_KEEPS_COLUMNS = new Set([
+  "id",
+  "user_id",
+  "created_at",
+  "updated_at",
+  "classification",
+  "ingest_source",
+  "validated_at",
+]);
+
+/** Identity columns, written only when `liveEmailIdentityTaken` says they are free. */
+const REFRESH_IDENTITY_COLUMNS = new Set([
+  "external_id",
+  "account_id",
+  "message_id_header",
+  "source",
+]);
+
+/**
+ * Refresh one KEPT live email from its fresh staged copy, IN PLACE
+ * (BACKLOG-3910a).
+ *
+ * An UPDATE on the same id, never remove+insert or INSERT OR REPLACE: both of
+ * those fire the ON DELETE CASCADEs and would take the deal's links with them.
+ * `emails` has no UPDATE trigger, so this statement touches nothing else.
+ *
+ * The column list is read from the live table (minus the kept columns), so a
+ * migration-added column is carried — same reasoning as `insertStagedEmails`.
+ *
+ * Participants are REPLACED with the staged ones, re-keyed to the live id with
+ * the hash RECOMPUTED: the hash includes the email id, so a copied staged hash
+ * would be wrong. When the thread id changed, the deal links that carry it are
+ * moved with it (SR R2). Finally the staged copy is dropped.
+ *
+ * One transaction — a SAVEPOINT inside the swap — so a throw anywhere here
+ * propagates and the swap rolls back whole.
+ */
+export function refreshLiveEmailFromStaged(
+  db: DatabaseType,
+  stagingEmails: StagingTableName,
+  stagingParticipants: StagingTableName,
+  args: {
+    liveId: string;
+    stagedId: string;
+    writeIdentity: boolean;
+    previousThreadId: string | null;
+  },
+): void {
+  const columns = (db.prepare(`PRAGMA table_info(emails)`).all() as Array<{ name: string }>)
+    .map((c) => c.name)
+    .filter((name) => !REFRESH_KEEPS_COLUMNS.has(name))
+    .filter((name) => args.writeIdentity || !REFRESH_IDENTITY_COLUMNS.has(name));
+  const quoted = columns.map((c) => `"${c}"`).join(", ");
+
+  db.transaction(() => {
+    const updated = db
+      .prepare(
+        `UPDATE emails SET (${quoted}) = (SELECT ${quoted} FROM "${stagingEmails}" WHERE id = ?),
+                updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?`,
+      )
+      .run(args.stagedId, args.liveId).changes;
+    if (updated !== 1) {
+      throw new Error(`Refresh in place matched ${updated} live rows for one kept email`);
+    }
+
+    db.prepare(`DELETE FROM email_participants WHERE email_id = ?`).run(args.liveId);
+    const staged = db
+      .prepare(
+        `SELECT role, position, email_address, display_name, resolved_contact_id
+           FROM "${stagingParticipants}" WHERE email_id = ?`,
+      )
+      .all(args.stagedId) as Array<{
+      role: ParticipantRole;
+      position: number;
+      email_address: string;
+      display_name: string | null;
+      resolved_contact_id: string | null;
+    }>;
+    const insertParticipant = db.prepare(
+      `INSERT INTO email_participants
+         (email_id, role, position, participant_hash, email_address, display_name, resolved_contact_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const p of staged) {
+      insertParticipant.run(
+        args.liveId,
+        p.role,
+        p.position,
+        computeParticipantHash(args.liveId, p.role, p.position, p.email_address),
+        p.email_address,
+        p.display_name,
+        p.resolved_contact_id,
+      );
+    }
+
+    const thread = db.prepare(`SELECT thread_id FROM emails WHERE id = ?`).get(args.liveId) as {
+      thread_id: string | null;
+    };
+    if (thread.thread_id !== args.previousThreadId) {
+      db.prepare(`UPDATE communications SET thread_id = ? WHERE email_id = ?`).run(
+        thread.thread_id,
+        args.liveId,
+      );
+      db.prepare(`UPDATE ignored_communications SET email_thread_id = ? WHERE email_id = ?`).run(
+        thread.thread_id,
+        args.liveId,
+      );
+    }
+
+    db.prepare(`DELETE FROM "${stagingParticipants}" WHERE email_id = ?`).run(args.stagedId);
+    db.prepare(`DELETE FROM "${stagingEmails}" WHERE id = ?`).run(args.stagedId);
+  })();
 }
 
 /**

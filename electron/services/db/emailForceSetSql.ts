@@ -1,36 +1,30 @@
 /**
- * The email force-set predicate — BACKLOG-2989 commit A2.
+ * The email force-set SQL — BACKLOG-2989 commit A2, rewritten by BACKLOG-3910a.
  *
- * Moved out of `electron/services/emailForceStaging.ts`. This is the ORIGIN of
- * the SQL, not a relocation of a signature: `EmailForceSetPredicate` used to
- * carry `sql` and `survivingSql` as fields, so a predicate built in one service
- * travelled as TEXT into a read view, a DELETE and a UNION source. That type is
- * gone. `EmailForceSet` carries DATA — who, which providers, from when — and
- * every statement is built here.
+ * `EmailForceSet` carries DATA (whose mail) and every statement is built here.
  *
  * ## The rule, and why the builders below are allowed
  *
  * A `db/` export may not EXECUTE SQL text it received as a parameter.
  *
  * `emailForceReadView` takes a `columns` string and returns text; it executes
- * nothing, and its caller keeps its own verb, so every execution stays an
- * enumerated call site. `deleteLiveForceSet` DOES execute — and takes no SQL,
- * only an `EmailForceSet`. Neither has the forbidden combination.
+ * nothing, and its caller keeps its own verb. The functions that DO execute
+ * take no SQL — only the set, ids and bound values.
  *
- * ## What the predicate means, kept from the original
+ * ## What a force re-cache replaces (BACKLOG-3910a, founder rules 2026-10-11)
  *
- * Allow-list rather than deny-list, for the same reason as BACKLOG-2796: listing
- * the sources to SPARE re-plants the bug the moment somebody adds a third one.
- * An unrecognised row survives by default, which is the only defensible default
- * for a predicate whose failure mode is deleting the user's mail.
+ * EVERY email of the user, whatever its account, provider, age, provider id
+ * or sent date — EXCEPT the protected ones. Protected = the email is tied to
+ * a deal by any of four links: a transaction link, a rejected suggestion, an
+ * email-kind checklist member, or an attachment-kind checklist member on one
+ * of its attachments. Protected rows are never removed; the swap pairs them
+ * with their fresh copy instead (see `emailForceStaging.ts`).
  *
- * `sent_at >= ?` bounds the set by the user's cache window: rows older than the
- * window are outside what the run re-downloads, so they are scoped OUT rather
- * than trimmed off the back of the corpus.
+ * Suggestions still waiting for review are deliberately NOT a protecting tie.
  *
- * Parameters are POSITIONAL because every caller splices this into a query that
- * already binds positionally. `params` travels with the SQL so the two cannot
- * drift apart.
+ * The older scope (`external_id IS NOT NULL AND source IN (…) AND sent_at >=
+ * window`) is gone: it existed to spare rows a run could not re-download, and
+ * under the new rule those rows are removed unless protected.
  */
 
 import type { Database as DatabaseType } from "better-sqlite3";
@@ -42,164 +36,136 @@ import type { StagingTableName } from "./stagingDdlSql";
 
 export type EmailForceProvider = "gmail" | "outlook";
 
-const ALLOWED_PROVIDERS: readonly EmailForceProvider[] = ["gmail", "outlook"];
-
 /**
  * A force set, as DATA. No SQL crosses this type.
- *
- * The predicate is derived from it on demand — which is what stops a caller
- * holding a SQL string whose bound parameters live somewhere else.
  */
 export interface EmailForceSet {
   readonly userId: string;
-  readonly providers: readonly EmailForceProvider[];
-  readonly cacheSinceIso: string;
 }
 
 /**
- * Refuses a set that cannot be turned into a safe predicate.
+ * INTERNAL. "This email is tied to a deal", one EXISTS arm per link table,
+ * correlated on `e.id` (every caller aliases `emails` as `e`).
  *
- * Throws rather than filtering: a provider this code does not recognise means
- * the caller's model and this module's have diverged, and the failure mode of
- * guessing is deleting mail the run cannot rebuild.
+ * Written as EXISTS per arm rather than `id IN (SELECT email_id …)` on
+ * purpose (SR S1). `attachments.email_id` is NULL for text attachments, and
+ * `id NOT IN (a list holding one NULL)` is NULL for EVERY row — so a NOT IN
+ * removal would silently remove nothing while the run reported success.
+ * EXISTS cannot evaluate to NULL.
  */
-export function assertRebuildableProviders(
-  providers: readonly EmailForceProvider[],
-): void {
-  for (const provider of providers) {
-    if (!ALLOWED_PROVIDERS.includes(provider)) {
-      throw new Error(
-        `Refusing to build an email force set for unknown source "${provider}"`,
-      );
-    }
-  }
-  if (providers.length === 0) {
-    throw new Error("Refusing to build an email force set with no rebuildable provider");
-  }
-}
-
-interface ForceSetPredicate {
-  readonly sql: SafeSql;
-  readonly survivingSql: SafeSql;
-  readonly params: readonly string[];
+function protectedPredicate(): SafeSql {
+  return sql`(EXISTS (SELECT 1 FROM communications c WHERE c.email_id = e.id)
+    OR EXISTS (SELECT 1 FROM ignored_communications i WHERE i.email_id = e.id)
+    OR EXISTS (SELECT 1 FROM transaction_checklist_link_members m WHERE m.email_id = e.id)
+    OR EXISTS (SELECT 1 FROM attachments a
+                 JOIN transaction_checklist_link_members am ON am.attachment_id = a.id
+                WHERE a.email_id = e.id))`;
 }
 
 /**
- * INTERNAL. The predicate, built fresh from the set each time it is needed.
- *
- * Not exported: a caller holding this object is exactly the SQL-carrier shape
- * this commit removes.
+ * INTERNAL. "This email is part of a LOCKED deal's record" (frozen): linked to
+ * the deal, or a checklist member (email-kind, or attachment-kind on one of its
+ * attachments) on a checklist of the deal. A rejected suggestion on a locked
+ * deal keeps the email but does not freeze it (SR R3(b)).
  */
-function predicateFor(set: EmailForceSet): ForceSetPredicate {
-  assertRebuildableProviders(set.providers);
-
-  // BACKLOG-3102 PR 2. This used to be
-  //   `set.providers.map((p) => `'${p}'`).join(", ")`
-  // spliced into the text as quoted literals, which is why the three consumers
-  // in `emailSyncSql.ts` needed `unsafeSql` — the tag refuses a `string`, and it
-  // is right to. The providers are now BOUND, so the only thing crossing into
-  // the text is the placeholder list, which is SQL.
-  //
-  // `placeholderList`'s default separator is `", "`, so `IN (?, ?)` occupies the
-  // same bytes `IN ('gmail', 'outlook')` did apart from the tokens themselves.
-  //
-  // `emails.source` is `TEXT CHECK (source IN ('gmail','outlook'))` — TEXT
-  // affinity — and a bound JS string binds as TEXT, so the comparison is the one
-  // the quoted literal made. That is asserted by EXECUTION against the real
-  // driver in `emailForceSetSql.test.ts`, not by this comment.
-  const predicateSql = sql`user_id = ? AND external_id IS NOT NULL AND source IN (${placeholderList(set.providers.length)}) AND sent_at >= ?`;
-
-  return {
-    sql: predicateSql,
-    // NULL-safe by hand. `source` is nullable past its CHECK constraint and
-    // `sent_at` is nullable outright, so the force predicate CAN evaluate to
-    // NULL. For such a row a plain `NOT (…)` is NULL — the row would survive
-    // the DELETE (correct: a DELETE removes a row only when its WHERE is TRUE)
-    // and then drop out of the rebuild's survivor read (wrong), which is
-    // exactly how a surviving row stops being deduplicated against and gets
-    // staged a second time. COALESCE spells out what "survived" means: the
-    // force set was not TRUE.
-    survivingSql: sql`COALESCE(${predicateSql}, 0) = 0`,
-    // POSITIONAL, and the order is the order the placeholders appear in:
-    // `user_id = ?`, then `source IN (?, ?)`, then `sent_at >= ?`. Binding the
-    // providers inserts them BETWEEN the two parameters that were already here,
-    // so every caller that spreads `params` ahead of its own keeps working —
-    // and a caller that hard-coded two would break loudly rather than silently
-    // bind the wrong column.
-    params: [set.userId, ...set.providers, set.cacheSinceIso],
-  };
+function frozenPredicate(statusCount: number): SafeSql {
+  const statuses = placeholderList(statusCount);
+  return sql`(EXISTS (SELECT 1 FROM communications c
+                 JOIN transactions t ON t.id = c.transaction_id
+                WHERE c.email_id = e.id AND t.submission_status IN (${statuses}))
+    OR EXISTS (SELECT 1 FROM transaction_checklist_link_members m
+                 JOIN transaction_checklist_links l ON l.id = m.link_id
+                 JOIN transaction_checklist_items it ON it.id = l.item_id
+                 JOIN transaction_checklists ck ON ck.id = it.checklist_id
+                 JOIN transactions t ON t.id = ck.transaction_id
+                WHERE m.email_id = e.id AND t.submission_status IN (${statuses}))
+    OR EXISTS (SELECT 1 FROM attachments a
+                 JOIN transaction_checklist_link_members m ON m.attachment_id = a.id
+                 JOIN transaction_checklist_links l ON l.id = m.link_id
+                 JOIN transaction_checklist_items it ON it.id = l.item_id
+                 JOIN transaction_checklists ck ON ck.id = it.checklist_id
+                 JOIN transactions t ON t.id = ck.transaction_id
+                WHERE a.email_id = e.id AND t.submission_status IN (${statuses})))`;
 }
 
 /**
- * The read source for a run with a rebuild in flight: live rows the force set
- * LEAVES ALONE, unioned with what this run has staged so far.
+ * The read source for a run with a rebuild in flight: every OTHER user's live
+ * rows, unioned with what this run has staged so far.
  *
- * A pure text builder — it executes nothing, so its callers keep their verbs
- * and the gate keeps seeing them.
+ * The user's own live rows are hidden for the whole run, so every message the
+ * run fetches is staged fresh and the swap decides, per row, whether it
+ * replaces, refreshes or is discarded. Consequence: the BACKLOG-1769
+ * resurrection repair cannot fire on a force run (no live row of the user is
+ * visible to match); it stays for the incremental sync.
  *
- * `stagingTable` is `StagingTableName`, not `string`. An earlier revision took a
- * plain string and asserted in this very docstring that it "is checked at
- * construction" — a comment, not a constraint, and exactly the shape
- * guardrail (ii) exists to reject. The compiler now refuses an unchecked name
- * on the one surface where a runtime-generated identifier reaches SQL.
- *
- * ## Duplicated with `macOSMessagesImportService/forceStaging.ts:forceReadView`
- *
- * DELIBERATE, and not yet collapsible. The two are not the same function: this
- * one builds its predicate INSIDE `db/` from an `EmailForceSet`, while
- * `forceReadView` RECEIVES a predicate as text (`SURVIVING_MESSAGES`, authored
- * in `services/`). Moving that one into `db/` unchanged would freeze a
- * predicate-as-text signature into the layer — importing the design this commit
- * exists to eliminate. They converge when BACKLOG-2990 builds its predicate
- * from data too; the collapse is in 2990's scope, with this shape as the target.
+ * A pure text builder — it executes nothing. `stagingTable` is
+ * `StagingTableName`, so an unchecked name is a compile error.
  */
 export function emailForceReadView(
   set: EmailForceSet,
   stagingTable: StagingTableName,
   columns: SafeSql,
 ): { sql: SafeSql; params: readonly string[] } {
-  const predicate = predicateFor(set);
   return {
-    // `columns` is `SafeSql`, not `string` — every call site passes a literal
-    // column list, so the tag holds with no loss of expressiveness, and a column
-    // name arriving from anywhere else is now a compile error.
-    //
-    // `stagingTableSql` emits `"<name>"` — the same characters the old
-    // `` `"${stagingTable}"` `` emitted. It is what takes the last escape out of
-    // this file's consumers: the brand alone could not, because a template
-    // literal destroys it (`emailSyncSql.ts:22-28` records that happening).
-    sql: sql`(SELECT ${columns} FROM emails WHERE ${predicate.survivingSql} UNION ALL SELECT ${columns} FROM ${stagingTableSql(stagingTable)})`,
-    params: predicate.params,
+    // `user_id` is NOT NULL, so `<>` needs no NULL handling.
+    sql: sql`(SELECT ${columns} FROM emails WHERE user_id <> ? UNION ALL SELECT ${columns} FROM ${stagingTableSql(stagingTable)})`,
+    params: [set.userId],
   };
 }
 
+/** A protected live email, as the swap's pairing step reads it. */
+export interface ProtectedLiveEmail {
+  readonly id: string;
+  readonly external_id: string | null;
+  readonly message_id_header: string | null;
+  readonly account_id: string | null;
+  readonly source: string | null;
+  readonly thread_id: string | null;
+  readonly created_at: string | null;
+  /** 1 when the email is part of a locked deal's record. */
+  readonly frozen: number;
+}
+
 /**
- * Delete the force set from live `emails`.
+ * Every protected email of the user, with its frozen flag. Read INSIDE the
+ * swap transaction, so nothing can link or unlink between this read and the
+ * removal.
  *
- * The one statement in this module that executes, and it takes no SQL — only
- * the set. Moved here because it consumed `forceSet.sql` directly, so it could
- * not stay behind once the predicate stopped travelling as text.
+ * `lockedStatuses` is passed in rather than imported: `db/` does not import
+ * from `services/`. The caller passes `LOCKED_SUBMISSION_STATUSES`.
+ */
+export function selectProtectedLiveEmails(
+  db: DatabaseType,
+  set: EmailForceSet,
+  lockedStatuses: readonly string[],
+): ProtectedLiveEmail[] {
+  if (lockedStatuses.length === 0) {
+    throw new Error("Refusing to read the frozen set with no locked status");
+  }
+  const frozen = frozenPredicate(lockedStatuses.length);
+  // The frozen predicate appears three times with the same list, so the
+  // statuses are bound three times, in placeholder order.
+  const params = [...lockedStatuses, ...lockedStatuses, ...lockedStatuses, set.userId];
+  return db
+    .prepare(
+      `SELECT e.id, e.external_id, e.message_id_header, e.account_id, e.source, e.thread_id,
+              e.created_at, CASE WHEN ${frozen} THEN 1 ELSE 0 END AS frozen
+         FROM emails e
+        WHERE e.user_id = ? AND ${protectedPredicate()}`,
+    )
+    .all(...params) as ProtectedLiveEmail[];
+}
+
+/**
+ * Remove every UNPROTECTED live email of the user — any account, provider,
+ * age, provider id or sent date (founder rule 1).
  *
- * The FK cascades this fires are the POINT, not an obstacle: deleting the force
- * set with an ordinary DELETE is what makes link loss happen exactly as it does
- * for a messages force re-import, which is the parity the founder asked for.
- *
- * ## BACKLOG-3102 PR 2 changed this statement, and it deletes the user's mail
- *
- * It shares `predicateFor` with the read view, so binding the provider list
- * changed the DELETE too: `source IN ('gmail', 'outlook')` became
- * `source IN (?, ?)` and the bound parameters went from two to two-plus-N.
- * Unavoidable, and correct — duplicating the predicate to spare this path would
- * mean the read and the DELETE could drift, which is the one divergence that
- * loses mail.
- *
- * Because it is the user's mail, the equivalence is proven by EXECUTION on the
- * real driver over every provider combination the producer can emit, comparing
- * the ID SETS removed rather than the counts. Text comparison would not be
- * evidence here.
+ * An ordinary DELETE: every ON DELETE CASCADE fires for the removed rows
+ * (participants, attachments, the pending-review sibling). Protected rows are
+ * not touched, so their links never cascade.
  */
 export function deleteLiveForceSet(db: DatabaseType, set: EmailForceSet): number {
-  const predicate = predicateFor(set);
-  return db.prepare(`DELETE FROM emails WHERE ${predicate.sql}`).run(...predicate.params)
-    .changes;
+  return db
+    .prepare(`DELETE FROM emails AS e WHERE e.user_id = ? AND NOT ${protectedPredicate()}`)
+    .run(set.userId).changes;
 }
