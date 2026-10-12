@@ -12,6 +12,7 @@
 
 import { getDealLockReason } from "./dealLockState";
 import * as Sentry from "@sentry/electron/main";
+import { app } from "electron";
 import {
   UPDATE_EMAIL_IDENTITY_SQL,
   clearSyncCursor,
@@ -54,6 +55,8 @@ import {
   type EmailPrecacheMode,
 } from "./emailPrecacheTiming";
 import { getRawDatabase } from "./db/core/dbConnection";
+import { selectForceRemovableAttachmentPaths } from "./db/emailForceSetSql";
+import { removeOrphanedAttachmentFiles } from "./emailForceOrphanFiles";
 // BACKLOG-2960 — imported from `dbTiming`, not `dbConnection`, on purpose: the
 // pre-cache suites `jest.mock` `dbConnection` with a hand-written partial, so a
 // new export there would arrive `undefined` and render `dbMs=NaN`. The pure
@@ -3135,6 +3138,20 @@ class EmailSyncService {
       }
 
       const db = getRawDatabase();
+
+      // BACKLOG-3913: the stored files of the attachments this swap is about to
+      // cascade-remove. Read here, synchronously, with no await between this
+      // line and the swap call below, so it is exactly the set the swap removes.
+      // Best-effort: a failed read only means no files are reclaimed this run.
+      let orphanFileCandidates: string[] = [];
+      try {
+        orphanFileCandidates = selectForceRemovableAttachmentPaths(db, forceStaging.forceSet);
+      } catch (collectError) {
+        logService.warn("Email force re-cache: could not list attachment files to reclaim", "EmailSyncService", {
+          error: collectError instanceof Error ? collectError.message : String(collectError),
+        });
+      }
+
       // The swap either happens completely or not at all, so a throw here means
       // the user's mail is exactly as it was. Reported as a structured error
       // rather than allowed to propagate: the caller cannot distinguish a thrown
@@ -3195,6 +3212,29 @@ class EmailSyncService {
         level: "info",
         data: forceSwap,
       });
+
+      // BACKLOG-3913: the swap has committed. Remove the files its removed
+      // attachment rows left behind — only those no row still references.
+      // Unreachable on a failed, not-applied or cancelled run: each of those
+      // returns above. Never throws.
+      if (orphanFileCandidates.length > 0) {
+        try {
+          const reclaimed = await removeOrphanedAttachmentFiles(
+            db,
+            orphanFileCandidates,
+            app.getPath("userData"),
+          );
+          logService.info("Email force re-cache: orphaned attachment files reclaimed", "EmailSyncService", {
+            userId,
+            candidates: orphanFileCandidates.length,
+            ...reclaimed,
+          });
+        } catch (cleanupError) {
+          logService.warn("Email force re-cache: attachment file cleanup failed", "EmailSyncService", {
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          });
+        }
+      }
     }
 
     // The terminal event is emitted once, from the `finally` — not here — so
