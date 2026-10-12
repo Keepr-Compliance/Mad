@@ -9,6 +9,7 @@
  */
 
 import fs from "fs/promises";
+import { existsSync } from "fs";
 import crypto from "crypto";
 import path from "path";
 
@@ -40,6 +41,11 @@ jest.mock("electron", () => {
     },
   };
 });
+// BACKLOG-3913: the dedup branch checks the file is really on disk (sync).
+jest.mock("fs", () => ({
+  ...jest.requireActual("fs"),
+  existsSync: jest.fn().mockReturnValue(false),
+}));
 jest.mock("fs/promises", () => ({
   mkdir: jest.fn().mockResolvedValue(undefined),
   writeFile: jest.fn().mockResolvedValue(undefined),
@@ -515,6 +521,7 @@ describe("EmailAttachmentService", () => {
       (sealBufferToFile as jest.Mock).mockClear();
 
       // Mock that file already exists (same content hash)
+      (existsSync as jest.Mock).mockReturnValue(true);
       const contentHash = crypto
         .createHash("sha256")
         .update(mockAttachmentData)

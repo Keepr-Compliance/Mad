@@ -196,7 +196,11 @@ export function selectForceRemovableAttachmentPaths(db: DatabaseType, set: Email
   ).map((r) => r.storage_path);
 }
 
-/** BACKLOG-3913. Does ANY attachment row, of any user or kind, still reference this file? */
+/**
+ * BACKLOG-3913. Does ANY attachment row, of any user or kind, still reference this file?
+ * Case-insensitive: the extension keeps the sender's case (`<hash>.PDF` vs `<hash>.pdf`)
+ * and on APFS/NTFS both names are one file.
+ */
 export function isAttachmentStoragePathReferenced(db: DatabaseType, storagePath: string): boolean {
-  return db.prepare(`SELECT 1 FROM attachments WHERE storage_path = ? LIMIT 1`).get(storagePath) !== undefined;
+  return db.prepare(`SELECT 1 FROM attachments WHERE storage_path = ? COLLATE NOCASE LIMIT 1`).get(storagePath) !== undefined;
 }

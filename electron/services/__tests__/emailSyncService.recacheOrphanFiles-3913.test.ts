@@ -17,6 +17,8 @@
  *   O2 protected email's file kept -> guarded TWICE: the candidate set excludes
  *      protected emails AND the reference check keeps any referenced file. Either
  *      mutation alone stays green; both together -> red.
+ *   O7 case-variant extension      -> drop COLLATE NOCASE from the reference check -> red
+ *   O8 download vs cleanup race    -> drop the existsSync term in the dedup branch -> red
  *   O6 failed / not-applied swap   -> the rows were never removed, so the
  *      reference check also keeps their files. Running the cleanup on the failed
  *      swap alone stays green; with the reference check dropped -> red (O6a).
@@ -57,7 +59,31 @@ jest.mock("../databaseService", () => ({
       (
         jest.requireActual("../db/attachmentDbService") as typeof import("../db/attachmentDbService")
       ).upsertEmailAttachmentMetadata(...(a as [never])),
+    // The REAL download-side writers (control O8 runs emailAttachmentService).
+    getAttachmentStoragePaths: () =>
+      (jest.requireActual("../db/attachmentDbService") as typeof import("../db/attachmentDbService")).getAttachmentStoragePaths(),
+    findEmailAttachmentRow: (...a: unknown[]) =>
+      (jest.requireActual("../db/attachmentDbService") as typeof import("../db/attachmentDbService")).findEmailAttachmentRow(...(a as [never, never, never])),
+    createAttachmentRecord: (...a: unknown[]) =>
+      (jest.requireActual("../db/attachmentDbService") as typeof import("../db/attachmentDbService")).createAttachmentRecord(...(a as [never])),
+    setEmailAttachmentStorage: (...a: unknown[]) =>
+      (jest.requireActual("../db/attachmentDbService") as typeof import("../db/attachmentDbService")).setEmailAttachmentStorage(...(a as [never, never, never, never])),
+    getAttachmentsByEmailId: () => [],
   },
+}));
+
+// O8: the at-rest sealer is replaced by a plain write (encryption is covered by
+// atRest.attachmentWriters-3816); the text extractor is not under test.
+jest.mock("../atRest/attachmentWriter", () => ({
+  ...jest.requireActual("../atRest/attachmentWriter"),
+  sealBufferToFile: async (dest: string, data: Buffer) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("fs").writeFileSync(dest, data);
+    return { sha256: "x", plaintextSize: data.length };
+  },
+}));
+jest.mock("../attachmentTextExtractionService", () => ({
+  extractTextForAttachment: jest.fn().mockResolvedValue(undefined),
 }));
 
 const mockOutlookInit = jest.fn();
@@ -76,12 +102,14 @@ jest.mock("../outlookFetchService", () => ({
 const mockGmailInit = jest.fn();
 const mockGmailSearch = jest.fn();
 const mockGmailSearchAll = jest.fn();
+const mockGmailGetAttachment = jest.fn();
 jest.mock("../gmailFetchService", () => ({
   __esModule: true,
   default: {
     initialize: (...a: unknown[]) => mockGmailInit(...a),
     searchEmails: (...a: unknown[]) => mockGmailSearch(...a),
     searchAllLabels: (...a: unknown[]) => mockGmailSearchAll(...a),
+    getAttachment: (...a: unknown[]) => mockGmailGetAttachment(...a),
   },
 }));
 
@@ -127,6 +155,9 @@ import emailSyncService from "../emailSyncService";
 import { emailForceSwapSteps } from "../emailForceStaging";
 import { computeParticipantHash } from "../../utils/emailAddress";
 import * as os from "os";
+import * as crypto from "crypto";
+import emailAttachmentService from "../emailAttachmentService";
+import * as orphanFiles from "../emailForceOrphanFiles";
 import { V71_CREATE_PROVIDER_INDEX_SQL } from "../db/migrationV71Sql";
 
 const SCHEMA = nodePath.join(__dirname, "..", "..", "database", "schema.sql");
@@ -272,7 +303,14 @@ beforeEach(() => {
   mockGmailSearchAll.mockResolvedValue([]);
 });
 
+// Pass-through spy: records whether the cleanup was called at all (O6a/O6b).
+let cleanupSpy: jest.SpyInstance;
+beforeEach(() => {
+  cleanupSpy = jest.spyOn(orphanFiles, "removeOrphanedAttachmentFiles");
+});
+
 afterEach(() => {
+  cleanupSpy.mockRestore();
   db.close();
   fs.rmSync(mockUserData, { recursive: true, force: true });
 });
@@ -451,6 +489,8 @@ describe("BACKLOG-3913 — Force Re-cache reclaims the files of removed attachme
     expect(result.error).toMatch(/left unchanged/i);
     expect(emailIdSet()).toEqual(["kept", "removed"]);
     expect(exists(orphan)).toBe(true);
+    // Ordering control: the cleanup is never even called on a failed swap.
+    expect(cleanupSpy).not.toHaveBeenCalled();
   });
 
   it("O6b: a not-applied run (a mailbox did not finish) touches no file", async () => {
@@ -467,5 +507,62 @@ describe("BACKLOG-3913 — Force Re-cache reclaims the files of removed attachme
     expect(result.forceNotApplied?.mailboxes.map((m) => m.provider)).toEqual(["outlook"]);
     expect(emailIdSet()).toEqual(["kept", "removed"]);
     expect(exists(orphan)).toBe(true);
+    expect(cleanupSpy).not.toHaveBeenCalled();
+  });
+
+  it("O7: a kept row whose extension differs only in case keeps the file the removed row pointed at", async () => {
+    // SR probe. The extension keeps the sender's case, so one content hash can have
+    // a `.pdf` row and a `.PDF` row; on a case-insensitive filesystem that is ONE
+    // file. Probe transcribed from the review: removed `ffff.pdf`, kept `ffff.PDF`.
+    seedScene();
+    const file = storedFile("ffff.pdf");
+    const keptName = nodePath.join(mockUserData, "attachments", "ffff.PDF");
+    attach("att-removed", "removed", file);
+    attach("att-kept", "kept", keptName);
+
+    const result = await emailSyncService.precacheEmails(USER, undefined, { force: true });
+
+    expect(result.forceSwap).toMatchObject({ emailsDeleted: 1 });
+    expect(all(`SELECT id FROM attachments`)).toEqual([{ id: "att-kept" }]);
+    expect(exists(file)).toBe(true);
+    expect(exists(keptName)).toBe(true);
+  });
+
+  it("O8: a download whose hash set was loaded before the swap re-writes the file the cleanup removed", async () => {
+    seedScene();
+    const data = Buffer.from("the same document in two emails");
+    const hash = crypto.createHash("sha256").update(data).digest("hex");
+    const file = storedFile(`${hash}.pdf`);
+    attach("att-removed", "removed", file);
+
+    // The provider fetch of the download is held open until the swap is done.
+    let release!: (b: Buffer) => void;
+    let fetchStarted!: () => void;
+    const started = new Promise<void>((r) => (fetchStarted = r));
+    mockGmailGetAttachment.mockImplementation(
+      () =>
+        new Promise<Buffer>((r) => {
+          release = r;
+          fetchStarted();
+        }),
+    );
+    const download = emailAttachmentService.downloadEmailAttachments(USER, "kept", "ext-1", "gmail", [
+      { filename: "doc.pdf", mimeType: "application/pdf", size: data.length, partId: "1", attachmentId: "g-1" },
+    ]);
+    await started; // existingHashes already holds `hash` (via att-removed)
+
+    const result = await emailSyncService.precacheEmails(USER, undefined, { force: true });
+    expect(result.forceSwap).toMatchObject({ emailsDeleted: 1 });
+    expect(exists(file)).toBe(false); // the cleanup did remove it
+
+    release(data);
+    const downloaded = await download;
+
+    expect(downloaded.stored).toBe(1);
+    const row = db.prepare(`SELECT storage_path FROM attachments WHERE email_id = 'kept'`).get() as {
+      storage_path: string;
+    };
+    expect(row.storage_path).toBe(file);
+    expect(exists(row.storage_path)).toBe(true);
   });
 });
