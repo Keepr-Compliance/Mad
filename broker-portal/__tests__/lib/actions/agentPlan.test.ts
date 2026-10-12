@@ -308,6 +308,18 @@ describe('Subscribe: refused before any Stripe call', () => {
     expect(stripeOps()).toEqual([]);
   });
 
+  // SR (PR #2986) should-fix: a sweep over every mirror row that has a plan, not one sample.
+  it.each([
+    ['trialing [EDITED status of sub-C-keep]', () => mirrorRow(C_KEEP, { status: 'trialing' })],
+    ['cancel_pending (captured sub-C-cancel-at-period-end)', () => mirrorRow(C_PENDING)],
+    ['past_due [EDITED status of sub-C-keep]', () => mirrorRow(C_KEEP, { status: 'past_due' })],
+    ['unpaid [EDITED status of sub-C-keep]', () => mirrorRow(C_KEEP, { status: 'unpaid' })],
+  ])('C-CAPS-SRV sweep: mirror row %s -> refused "not available right now", zero Stripe calls', async (_n, row) => {
+    seed({ billing_subscriptions: [row()] });
+    expect(await subscribe()).toEqual({ error: 'That change is not available for your plan right now. Refresh the page.' });
+    expect(stripeOps()).toEqual([]);
+  });
+
   it.each([
     ['prod shape {enabled:true}', { enabled: true }],
     ['{enabled:false}', { enabled: false }],
