@@ -133,8 +133,12 @@ jest.mock("../services/exportGate", () => ({
 // suite does not open. Every deal here is open; the gate itself is covered by
 // electron/handlers/__tests__/dealLockHandlers-3910.test.ts.
 jest.mock("../services/dealLockState", () => ({
+  ...jest.requireActual("../services/dealLockState"),
   getDealLockReason: () => null,
   refuseIfDealLocked: () => null,
+  refuseIfAnyDealLocked: () => null,
+  refuseUpdateIfDealLocked: () => null,
+  refuseStatusChangeIfDealLocked: () => null,
 }));
 
 jest.mock("../services/databaseService", () => ({
