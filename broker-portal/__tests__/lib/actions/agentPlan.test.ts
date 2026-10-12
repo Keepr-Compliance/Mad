@@ -473,6 +473,28 @@ describe('Subscribe: what Stripe already has', () => {
     expect(calls('invoices.voidInvoice')).toHaveLength(1);
   });
 
+  it('C-QA3-PAID: the session completes (paid) between our listing and our expire -> "already have a plan", no session, nothing cancelled', async () => {
+    const { Q, CS } = givenCheckoutMadeIncomplete();
+    // [COMPOSED] the paid subscription: the captured sub-Q-incomplete with status active.
+    const paid = { ...clone(Q), status: 'active' };
+    // [COMPOSED] the second listing: the captured by-customer listing with its one item paid.
+    const listed = fxq('subs-by-customer-Q-incomplete');
+    expect(listed.data.map((s: Obj) => [s.id, s.status])).toEqual([[Q.id, 'incomplete']]);
+    mockStripeImpl['subscriptions.list'] = lists([[listed], [{ ...listed, data: [paid] }]]);
+    // Stripe refuses the expire: the session is no longer open. The captured refusal
+    // (cs-Q-expire-refused-not-open) names `expired`; for a paid session it would name `complete`.
+    mockStripeImpl['checkout.sessions.expire'] = async () => {
+      throw stripeErr('cs-Q-expire-refused-not-open');
+    };
+    serve(Q.id, paid);
+    expect(await subscribe()).toEqual({ error: 'You already have a plan. Refresh the page to see it.' });
+    expect(calls('checkout.sessions.expire')).toEqual([[CS.id]]);
+    expect(calls('subscriptions.list')).toHaveLength(2);
+    expect(calls('checkout.sessions.create')).toEqual([]);
+    expect(calls('subscriptions.cancel')).toEqual([]);
+    expect(calls('invoices.voidInvoice')).toEqual([]);
+  });
+
   it('C-NOREUSE (R2): after ending an incomplete, the open same-interval session is expired, not reused', async () => {
     mockStripeImpl['subscriptions.list'] = lists([[fx('subs-L1-A-incomplete')]]);
     serve(A.id, A_AFTER);
