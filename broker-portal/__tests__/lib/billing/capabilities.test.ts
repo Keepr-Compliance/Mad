@@ -65,7 +65,7 @@ const P_PAYG: BillingCapabilities = {
   canManageLicenses: false,
   canAddSeats: false,
   showManageUsersLink: false,
-  primaryAction: 'subscribe',
+  primaryAction: null,
 };
 // Row 2: Agent plan active.
 const P_ACTIVE: BillingCapabilities = {
