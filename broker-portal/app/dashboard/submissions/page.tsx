@@ -267,28 +267,16 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
           space-y would put a margin above the phone filters; cancel it so the gap
           under the top bar equals the dashboard's (16px, main padding only). */}
       <div className="space-y-6 max-md:space-y-3 max-md:[&>:nth-child(2)]:!mt-0">
-      {/* Status Filters - clicking a filter resets to page 1 (no page param).
-          BACKLOG-3904: desktop only; below md the phone filters replace them. */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 max-md:hidden">
-        <div className="flex flex-wrap gap-2">
-          {statusOptions.map(({ value, label }) => {
-            const isActive = currentStatus === value;
-            return (
-              <Link
-                key={value}
-                href={buildListUrl({ ...filters, status: value })}
-                className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
-                  isActive
-                    ? 'bg-primary-600 text-white'
-                    : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                {label}
-              </Link>
-            );
-          })}
-        </div>
-        <SubmissionDesktopFilters filters={filters} agents={agents} />
+      {/* BACKLOG-3904: desktop only, the same search + filters card as Users Management;
+          below md the phone filters replace it. */}
+      <div className="max-md:hidden">
+        <SubmissionDesktopFilters
+          filters={filters}
+          statuses={statusOptions}
+          agents={agents}
+          matchingCount={totalCount}
+          scopeTotal={scopeTotal}
+        />
       </div>
 
       <SubmissionPhoneFilters

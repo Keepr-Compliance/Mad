@@ -25,6 +25,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import '@testing-library/jest-dom';
 import React from 'react';
 import { FIXTURE_BROKERAGE_ORG_ID, createPostgrestEmulator, type Row } from '../helpers/postgrestEmulator';
+import UserSearchFilter from '@/components/users/UserSearchFilter';
 import { submissionRow, userNameRow } from '../helpers/submissionRows';
 import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../fixtures/orgFeatures';
 
@@ -158,6 +159,10 @@ async function renderList(params: { status?: string; page?: string; agent?: stri
   return render(element);
 }
 
+/** The phone block's own controls (jsdom renders the desktop card too; CSS hides it). */
+const phoneBar = () => within(document.querySelector('[data-slot=phone-filter-bar]') as HTMLElement);
+const desktopLine = () => document.querySelector('[data-slot=submissions-results-desktop]');
+
 function listedIds(container: HTMLElement): string[] {
   return Array.from(container.querySelectorAll('tbody a[href^="/dashboard/submissions/"]')).map(
     (a) => (a.getAttribute('href') as string).split('/').pop() as string
@@ -165,7 +170,7 @@ function listedIds(container: HTMLElement): string[] {
 }
 
 function agentSelectOptions(): string[] {
-  const select = screen.getByLabelText('Submitted by') as HTMLSelectElement;
+  const select = screen.getByLabelText('Filter by agent') as HTMLSelectElement;
   return Array.from(select.options).map((o) => o.textContent ?? '');
 }
 
@@ -184,7 +189,7 @@ beforeEach(() => {
 describe('C1 org boundary: agents and search never reach outside the list scope', () => {
   it('agent options are exactly the in-scope submitters (no out-of-scope agent, no non-submitter)', async () => {
     const { container } = await renderList();
-    expect(agentSelectOptions()).toEqual(['All agents', NAME_A, NAME_B]);
+    expect(agentSelectOptions()).toEqual(['All Agents', NAME_A, NAME_B]);
     expectNoOutOfScopeText(container);
   });
 
@@ -245,7 +250,7 @@ describe('agent filter', () => {
     const { container } = await renderList({ agent: AGENT_B });
     expect(listedIds(container)).toEqual([B1]);
     expect(screen.getByRole('button', { name: `Agent: ${NAME_B}` })).toBeInTheDocument();
-    expect((screen.getByLabelText('Submitted by') as HTMLSelectElement).value).toBe(AGENT_B);
+    expect((screen.getByLabelText('Filter by agent') as HTMLSelectElement).value).toBe(AGENT_B);
   });
 
   it('C6: a non-uuid agent value is ignored (list unchanged)', async () => {
@@ -276,11 +281,10 @@ describe('C5 links keep every filter (URLSearchParams)', () => {
     expect(url.searchParams.get('page')).toBe('2');
   });
 
-  it('R7: desktop status tabs keep their text and carry agent + search, with no page', async () => {
-    const { container } = await renderList({ agent: AGENT_A, search: 'a&b', page: '1' });
-    const pending = Array.from(container.querySelectorAll('a')).find((a) => a.textContent === 'Pending') as HTMLAnchorElement;
-    expect(pending).toBeDefined();
-    const url = new URL(pending.getAttribute('href') as string, 'http://x');
+  it('R7: the desktop status select carries agent + search into the URL, with no page', async () => {
+    await renderList({ agent: AGENT_A, search: 'a&b', page: '1' });
+    fireEvent.change(screen.getByLabelText('Filter by status'), { target: { value: 'submitted' } });
+    const url = new URL(mockPush.mock.calls[0][0] as string, 'http://x');
     expect(url.searchParams.get('status')).toBe('submitted');
     expect(url.searchParams.get('agent')).toBe(AGENT_A);
     expect(url.searchParams.get('search')).toBe('a&b');
@@ -294,7 +298,7 @@ describe('R2 names in a support session and on a failed lookup', () => {
     given(ROWS, { impersonating: ORG, noAccess: [], users: [userNameRow(AGENT_A, NAME_A, 'alpha@fixture.example.test')] });
     const { container } = await renderList();
     expect(container).not.toHaveTextContent('Former member');
-    expect(agentSelectOptions()).toEqual(['All agents', 'Agent 1', 'Agent 2']);
+    expect(agentSelectOptions()).toEqual(['All Agents', 'Agent 1', 'Agent 2']);
     expect(mockEmulator.state.selects.filter((s) => s.table === 'users')).toEqual([]);
     expect(listedIds((await renderList({ search: 'cedar' })).container)).toEqual([B1]);
   });
@@ -303,13 +307,13 @@ describe('R2 names in a support session and on a failed lookup', () => {
     given(ROWS, { usersLookupFails: true });
     const { container } = await renderList();
     expect(container).not.toHaveTextContent('Former member');
-    expect(agentSelectOptions()).toEqual(['All agents', 'Agent 1', 'Agent 2']);
+    expect(agentSelectOptions()).toEqual(['All Agents', 'Agent 1', 'Agent 2']);
   });
 
   it('a submitter missing from users (left the org) is "Former member" in a normal session', async () => {
     given(ROWS, { users: [userNameRow(AGENT_A, NAME_A, 'alpha@fixture.example.test')] });
     await renderList();
-    expect(agentSelectOptions()).toEqual(['All agents', NAME_A, 'Former member']);
+    expect(agentSelectOptions()).toEqual(['All Agents', NAME_A, 'Former member']);
   });
 });
 
@@ -320,24 +324,25 @@ describe('status=pending (the dashboard Pending Review card)', () => {
     expect(listedIds((await renderList({ status: 'submitted' })).container)).toEqual([A2_V2, A1]);
   });
 
-  it('shows as an active "Pending Review" chip and phone control only while selected', async () => {
-    const { container } = await renderList({ status: 'pending' });
-    const chip = Array.from(container.querySelectorAll('a')).find((x) => x.textContent === 'Pending Review');
-    expect(chip).toBeDefined();
-    expect(chip!.className).toContain('bg-primary-600');
+  it('shows as the selected "Pending Review" status option and phone control only while selected', async () => {
+    await renderList({ status: 'pending' });
+    const select = screen.getByLabelText('Filter by status') as HTMLSelectElement;
+    expect(select.value).toBe('pending');
+    expect(Array.from(select.options).map((o) => o.textContent)).toContain('Pending Review');
     expect(screen.getByRole('button', { name: 'Status: Pending Review' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Status: Pending Review' }));
     expect(within(screen.getByRole('dialog', { name: 'Status' })).getByRole('button', { name: 'Pending Review · 2' })).toBeInTheDocument();
     cleanup();
-    const plain = await renderList();
-    expect(Array.from(plain.container.querySelectorAll('a')).some((x) => x.textContent === 'Pending Review')).toBe(false);
+    await renderList();
+    const plain = screen.getByLabelText('Filter by status') as HTMLSelectElement;
+    expect(Array.from(plain.options).some((o) => o.textContent === 'Pending Review')).toBe(false);
   });
 });
 
 describe('phone spacing (measured in scripts/phone-layout-3798/gap.cjs)', () => {
   it('Clear filters keeps a 44px tap target inside a 44px results row', async () => {
     await renderList({ status: 'approved' });
-    const btn = screen.getByRole('button', { name: 'Clear filters' });
+    const btn = phoneBar().getByRole('button', { name: 'Clear filters' });
     expect(btn.className.split(' ')).toContain('min-h-11');
     const row = btn.closest('[data-slot=phone-results-row]') as HTMLElement;
     expect(row.className.split(' ')).toContain('h-11');
@@ -416,7 +421,7 @@ describe('C4 + C7 phone filter sheets (one per filter)', () => {
 
   it('Clear filters drops status and agent and keeps the search', async () => {
     await renderList({ status: 'submitted', agent: AGENT_A, search: 'mill' });
-    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    fireEvent.click(phoneBar().getByRole('button', { name: 'Clear filters' }));
     expect(mockPush).toHaveBeenCalledWith('/dashboard/submissions?search=mill');
   });
 });
@@ -500,7 +505,7 @@ describe('phone search as you type', () => {
 describe('phone search X (clear search only)', () => {
   const phoneSearch = () => screen.getByPlaceholderText('Search address or agent') as HTMLInputElement;
   const clearX = () => screen.queryByRole('button', { name: 'Clear search' });
-  const clearFilters = () => screen.queryByRole('button', { name: 'Clear filters' });
+  const clearFilters = () => phoneBar().queryByRole('button', { name: 'Clear filters' });
 
   it('no X on an empty field; the X appears with text; typing alone never shows "Clear filters"', async () => {
     await renderList();
@@ -650,7 +655,7 @@ describe('phone results row: "Showing X of Y submissions"', () => {
 
   it('Clear filters sits in the row and drops status and agent, keeping the search', async () => {
     await renderList({ status: 'submitted', agent: AGENT_A, search: 'mill' });
-    const btn = screen.getByRole('button', { name: 'Clear filters' });
+    const btn = phoneBar().getByRole('button', { name: 'Clear filters' });
     expect(btn.closest('[data-slot=phone-results-row]')).not.toBeNull();
     fireEvent.click(btn);
     expect(mockPush).toHaveBeenCalledWith('/dashboard/submissions?search=mill');
@@ -669,5 +674,103 @@ describe('phone list edges (no wrapper frame below md)', () => {
     expect(cards.parentElement).toBe(frame);
     expect(cards.className.split(' ')).toContain('md:hidden');
     expect(container.querySelector('table')!.className.split(' ')).toContain('max-md:hidden');
+  });
+});
+
+describe('desktop search + filters (the Users Management card, shared)', () => {
+  const statusSelect = () => screen.getByLabelText('Filter by status') as HTMLSelectElement;
+  const agentSelect = () => screen.getByLabelText('Filter by agent') as HTMLSelectElement;
+  const desktopSearch = () => screen.getByPlaceholderText('Search address, city, agent name or email') as HTMLInputElement;
+
+  it('is the shared ListFilterCard: same card, ids and classes as Users, no status chips', async () => {
+    const { container } = await renderList();
+    const search = container.querySelector('#submissions-search-desktop') as HTMLElement;
+    const card = search.closest('div.flex.flex-col') as HTMLElement;
+    expect(card.className).toBe('flex flex-col gap-4 sm:flex-row sm:items-center');
+    expect(card.parentElement!.outerHTML).toContain('rounded-lg'); // Card
+    expect(statusSelect().closest('div')!.className).toBe('sm:w-40');
+    expect(agentSelect().closest('div')!.className).toBe('sm:w-40');
+    expect(Array.from(container.querySelectorAll('a')).some((x) => x.textContent === 'Under Review')).toBe(false);
+  });
+
+  it('every status is an option, in order, with the Users-style "All Statuses"', async () => {
+    await renderList();
+    expect(Array.from(statusSelect().options).map((o) => [o.value, o.textContent])).toEqual([
+      ['all', 'All Statuses'],
+      ['submitted', 'Pending'],
+      ['under_review', 'Under Review'],
+      ['needs_changes', 'Needs Changes'],
+      ['approved', 'Approved'],
+      ['rejected', 'Rejected'],
+    ]);
+  });
+
+  it('Pending Review is an option while it is the filter', async () => {
+    await renderList({ status: 'pending' });
+    expect(Array.from(statusSelect().options).map((o) => o.value)).toContain('pending');
+    expect(statusSelect().value).toBe('pending');
+  });
+
+  it('selecting a status or an agent changes the URL and keeps the other filters', async () => {
+    await renderList({ agent: AGENT_A, search: 'mill' });
+    fireEvent.change(statusSelect(), { target: { value: 'approved' } });
+    expect(mockPush).toHaveBeenLastCalledWith(`/dashboard/submissions?status=approved&agent=${AGENT_A}&search=mill`);
+    fireEvent.change(agentSelect(), { target: { value: AGENT_B } });
+    expect(mockPush).toHaveBeenLastCalledWith(`/dashboard/submissions?agent=${AGENT_B}&search=mill`);
+    fireEvent.change(agentSelect(), { target: { value: '' } });
+    expect(mockPush).toHaveBeenLastCalledWith('/dashboard/submissions?search=mill');
+  });
+
+  it('search: debounced 250 ms, trimmed, Enter sends at once', async () => {
+    jest.useFakeTimers();
+    try {
+      await renderList({ status: 'approved' });
+      fireEvent.change(desktopSearch(), { target: { value: ' oak ' } });
+      expect(mockReplace).not.toHaveBeenCalled();
+      act(() => { jest.advanceTimersByTime(250); });
+      expect(mockReplace).toHaveBeenLastCalledWith('/dashboard/submissions?status=approved&search=oak');
+      fireEvent.change(desktopSearch(), { target: { value: 'elm' } });
+      fireEvent.keyDown(desktopSearch(), { key: 'Enter' });
+      expect(mockReplace).toHaveBeenLastCalledWith('/dashboard/submissions?status=approved&search=elm');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('the results line shows for a search or a filter; none when unfiltered', async () => {
+    await renderList();
+    expect(desktopLine()).toBeNull();
+    cleanup();
+    await renderList({ search: 'road' });
+    expect(desktopLine()).toHaveTextContent('Showing 1 of 3 submissions');
+    cleanup();
+    await renderList({ status: 'submitted' });
+    expect(desktopLine()).toHaveTextContent('Showing 2 of 3 submissions');
+  });
+
+  it('Clear filters shows only for status/agent, and keeps the search', async () => {
+    await renderList({ search: 'road' });
+    expect(within(desktopLine() as HTMLElement).queryByRole('button', { name: 'Clear filters' })).toBeNull();
+    cleanup();
+    await renderList({ status: 'submitted', agent: AGENT_A, search: 'mill' });
+    fireEvent.click(within(desktopLine() as HTMLElement).getByRole('button', { name: 'Clear filters' }));
+    expect(mockPush).toHaveBeenLastCalledWith('/dashboard/submissions?search=mill');
+  });
+});
+
+describe('the shared card is used on both pages', () => {
+  it('Users and Submissions render the same card and row classes from ListFilterCard', async () => {
+    const users = render(
+      <UserSearchFilter searchQuery="" onSearchChange={() => {}} roleFilter="all" onRoleChange={() => {}} statusFilter="all" onStatusChange={() => {}} />
+    );
+    const shape = (root: HTMLElement) => {
+      const row = root.querySelector('select')!.closest('div.flex.flex-col') as HTMLElement;
+      return [row.parentElement!.className, row.className, row.querySelectorAll('select').length, row.querySelector('input')!.className];
+    };
+    const usersShape = shape(users.container);
+    cleanup();
+    const subs = await renderList();
+    const subsShape = shape(subs.container);
+    expect(subsShape).toEqual(usersShape);
   });
 });

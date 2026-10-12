@@ -18,7 +18,7 @@
  *     for a while under a landed parent.
  */
 
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import React from 'react';
 import { FIXTURE_BROKERAGE_ORG_ID, createPostgrestEmulator, type Row } from '../helpers/postgrestEmulator';
@@ -176,10 +176,11 @@ describe('broker Submissions list: one row per deal', () => {
     // The caption reads "Pending", not the raw filter value's own formatStatus
     // label ("Submitted") — BACKLOG-3597.
     expect(pending.container).toHaveTextContent('2 submissions with status "Pending"');
-    // The tab's label is still "Pending".
-    expect(pending.container.querySelector('a[href="/dashboard/submissions?status=submitted"]')).toHaveTextContent(
-      /^Pending$/
+    // The status select's label is still "Pending".
+    const option = Array.from((screen.getByLabelText('Filter by status') as HTMLSelectElement).options).find(
+      (o) => o.value === 'submitted'
     );
+    expect(option).toHaveTextContent(/^Pending$/);
     // Every other tab is unchanged: an exact match on the head's status.
     expect(listedIds((await renderList({ status: 'needs_changes' })).container)).toEqual([P_NC, V2]);
     expect(listedIds((await renderList({ status: 'approved' })).container)).toEqual([P_AP]);

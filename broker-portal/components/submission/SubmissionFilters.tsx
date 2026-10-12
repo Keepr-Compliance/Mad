@@ -3,8 +3,8 @@
 /**
  * Broker Submissions search and filters — BACKLOG-3904.
  *
- * Desktop (md and up): a search box and a "Submitted by" select under the
- * status tabs. Phone (below md): a search field and two two-line filter
+ * Desktop (md and up): the shared ListFilterCard (search, Status, Agent) as on
+ * Users Management. Phone (below md): a search field and two two-line filter
  * controls (Status / Agent), each opening its own bottom sheet, and "Clear filters".
  *
  * The URL is the only state (?status=&agent=&search=): every change navigates,
@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { BottomSheet, PhoneClearFilters, PhoneFilterBar, PhoneResultsRow, SearchField } from '@keepr/ui';
+import ListFilterCard from '@/components/ui/ListFilterCard';
 import { headMatchesFilter } from '@/lib/submissions/dealList';
 import { buildListUrl, hasActiveFilters, parseSearchParam, type ListFilters } from '@/lib/submissions/listUrl';
 
@@ -113,49 +114,89 @@ function withSelected(agents: AgentOption[], selected: string | null): AgentOpti
   return [...agents, { id: selected, label: 'Unknown agent' }];
 }
 
-const inputClass =
-  'block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500';
+/** The options, plus the current status when it is not among them (an unknown ?status= value). */
+function withSelectedStatus(statuses: StatusOption[], selected: string): StatusOption[] {
+  if (statuses.some((s) => s.value === selected)) return statuses;
+  return [...statuses, { value: selected, label: selected }];
+}
 
+/**
+ * Desktop (md and up): the Users Management filter card (shared ListFilterCard)
+ * with Status and Agent selects, then the results line. The URL is the state.
+ */
 export function SubmissionDesktopFilters({
   filters,
+  statuses,
   agents,
+  matchingCount,
+  scopeTotal,
 }: {
   filters: ListFilters;
+  statuses: StatusOption[];
   agents: AgentOption[];
+  /** Deals matching the filters (X). */
+  matchingCount: number;
+  /** Every deal in the list's scope, unfiltered (Y). */
+  scopeTotal: number;
 }) {
   const router = useRouter();
   const { search, onChange, onSubmit } = useSearchUrl(filters);
+  // Same rule as the phone row: the line shows for a search or a filter; Clear
+  // filters only for status/agent and keeps the search text.
+  const filtered = hasActiveFilters(filters);
+  const hasChipFilters = filters.status !== 'all' || filters.agent !== null;
 
   return (
-    <form role="search" onSubmit={onSubmit} className="mt-4 flex flex-wrap gap-2">
-      <label htmlFor="submissions-search-desktop" className="sr-only">
-        Search submissions
-      </label>
-      <input
-        id="submissions-search-desktop"
-        type="search"
-        value={search}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="Search address, city, agent name or email"
-        className={`${inputClass} flex-1 min-w-[16rem]`}
+    <div className="space-y-4">
+      <ListFilterCard
+        search={{
+          id: 'submissions-search-desktop',
+          label: 'Search submissions',
+          placeholder: 'Search address, city, agent name or email',
+          value: search,
+          onChange,
+          onSubmit: () => onSubmit(),
+        }}
+        filters={[
+          {
+            id: 'submissions-status-desktop',
+            label: 'Filter by status',
+            value: filters.status,
+            onChange: (status) => router.push(buildListUrl({ ...filters, status })),
+            options: withSelectedStatus(statuses, filters.status).map((s) => ({
+              value: s.value,
+              label: s.value === 'all' ? 'All Statuses' : s.label,
+            })),
+          },
+          {
+            id: 'submissions-agent-desktop',
+            label: 'Filter by agent',
+            value: filters.agent ?? '',
+            onChange: (agent) => router.push(buildListUrl({ ...filters, agent: agent || null })),
+            options: [
+              { value: '', label: 'All Agents' },
+              ...withSelected(agents, filters.agent).map((a) => ({ value: a.id, label: a.label })),
+            ],
+          },
+        ]}
       />
-      <label htmlFor="submissions-agent-desktop" className="sr-only">
-        Submitted by
-      </label>
-      <select
-        id="submissions-agent-desktop"
-        value={filters.agent ?? ''}
-        onChange={(e) => router.push(buildListUrl({ ...filters, agent: e.target.value || null }))}
-        className={`${inputClass} w-auto min-w-[12rem]`}
-      >
-        <option value="">All agents</option>
-        {withSelected(agents, filters.agent).map((a) => (
-          <option key={a.id} value={a.id}>
-            {a.label}
-          </option>
-        ))}
-      </select>
-    </form>
+      {filtered ? (
+        <div className="flex items-center gap-3 text-sm text-gray-500" data-slot="submissions-results-desktop">
+          <span>
+            Showing {matchingCount} of {scopeTotal} submission{scopeTotal !== 1 ? 's' : ''}
+          </span>
+          {hasChipFilters ? (
+            <button
+              type="button"
+              onClick={() => router.push(buildListUrl({ status: 'all', agent: null, search: filters.search }))}
+              className="font-medium text-primary-700 hover:text-primary-800 hover:underline"
+            >
+              Clear filters
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
