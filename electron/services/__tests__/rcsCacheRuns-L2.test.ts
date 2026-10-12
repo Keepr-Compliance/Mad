@@ -62,7 +62,9 @@ describe("the last cache run (L2)", () => {
     recordRcsCacheRun(USER, RUN);
     const gm = getSourceCoverage(USER).find((c) => c.source === "google_messages");
     expect(gm).toMatchObject({ coveredSince: RUN.floorISO, incompleteChats: 3 });
-    expect(sourceCoverageGaps(getSourceCoverage(USER), "2026-08-01T00:00:00.000Z", "google_messages")).toEqual([
+    // BACKLOG-3892 W1: "now" = the run's finish, so the end check (newer texts) stays out of
+    // this start-side assertion; the end check is pinned in iphoneCoverage-W-3892.test.ts.
+    expect(sourceCoverageGaps(getSourceCoverage(USER), "2026-08-01T00:00:00.000Z", "google_messages", null, Date.parse(RUN.finishedAt))).toEqual([
       { source: "google_messages", coveredSince: RUN.floorISO, approximate: false, kind: "incomplete", incompleteChats: 3 },
     ]);
     // A run that did not reach its floor says nothing about completeness.
