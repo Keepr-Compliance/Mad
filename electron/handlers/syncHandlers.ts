@@ -333,6 +333,12 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
     return { success: true };
   });
 
+  // BACKLOG-3892 S5 (SR S3): a texts force re-import refuses while a backfill runs, as
+  // the backfill refuses while a force re-import runs. `typeof`: handler suites stub it.
+  if (typeof macOSMessagesImportService.setReprocessBlocker === "function") {
+    macOSMessagesImportService.setReprocessBlocker(() => (iphoneBackfill.runningFor() ? "iphone-backfill" : null));
+  }
+
   // BACKLOG-3892 S5: "Get older texts" from the kept iPhone backup (S6 is the UI).
   ipcMain.handle("sync:backfill-availability", async (_, transactionId: unknown): Promise<BackfillAvailability> => {
     const txId = validateTransactionId(transactionId) as string;
@@ -621,10 +627,13 @@ function setupEventForwarding(): void {
         // cleanupBackup logs and never throws; the next sweep removes a leftover.
       }
       // `typeof` guard: handler suites stub the orchestrator with only what they drive.
-      if (typeof orchestrator?.completeBackupAtRest === "function") {
-        await orchestrator.completeBackupAtRest(succeeded);
+      try {
+        if (typeof orchestrator?.completeBackupAtRest === "function") {
+          await orchestrator.completeBackupAtRest(succeeded);
+        }
+      } finally {
+        syncPersisting = false;
       }
-      syncPersisting = false;
     }
   };
 
@@ -882,6 +891,11 @@ export function stopBackupForQuit(): Promise<unknown> | null {
  * Cleanup sync handlers
  */
 export function cleanupSyncHandlers(): void {
+  // BACKLOG-3892 S5: stop a running backfill BEFORE the parse-copy sweep, so its copy
+  // takes no new file after the sweep. A file already in flight (at most the copy's
+  // concurrency) can still land after it: the engine's own cleanup clears it if the
+  // process lives on, otherwise the next launch sweep does.
+  iphoneBackfill.cancel();
   // BACKLOG-3816: a quit mid-parse or mid-persistence must not leave plaintext on disk.
   if (typeof orchestrator?.discardParseCopiesForQuit === "function") {
     orchestrator.discardParseCopiesForQuit();
@@ -911,7 +925,6 @@ export function cleanupSyncHandlers(): void {
   ipcMain.removeHandler("sync:backfill-availability");
   ipcMain.removeHandler("sync:backfill-older");
   ipcMain.removeHandler("sync:backfill-cancel");
-  iphoneBackfill.cancel();
   syncPersisting = false;
   ipcMain.removeAllListeners("sync:completion-shown");
   ipcMain.removeAllListeners("sync:renderer-tick");

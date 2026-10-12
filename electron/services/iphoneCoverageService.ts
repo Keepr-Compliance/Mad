@@ -400,7 +400,7 @@ export interface IphoneBackfillTarget {
 export interface IphoneBackfillPlan {
   /** The deal's iPhone covered-since now; null = no phone row (unknown). */
   coveredSinceMs: number | null;
-  /** Phones that would move it earlier, newest last sync first. */
+  /** The current phone, when reading its kept backup would move it earlier (else empty). */
   targets: IphoneBackfillTarget[];
 }
 
@@ -421,7 +421,11 @@ export function planIphoneBackfill(userId: string, transactionId: string, dealFl
   const now = leastDealMember(phones.current, phones.others, members);
   const coveredSinceMs = now ? now.m.sinceMs : phones.current.sinceMs;
   if (!now) return { coveredSinceMs, targets: [] };
-  const all = [phones.current, ...[...phones.others].sort((a, b) => b.endMs - a.endMs)];
+  // 2.41: the CURRENT phone only. Stored texts are keyed `ios-chat-<ROWID>` and ROWIDs
+  // are per phone, so an older phone's chat would share a thread id with an unrelated
+  // current-phone chat (coordinator 1183f4d2; older-phone backfill is a follow-up).
+  // Texts before the current phone's oldest are "on your previous iPhone or its backup".
+  const all = [phones.current];
   const keys = [...new Set(members.handles.flatMap((h) => h.keys))];
   const targets: IphoneBackfillTarget[] = [];
   for (const p of all) {

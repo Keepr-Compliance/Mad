@@ -152,6 +152,12 @@ interface Running {
   abort: AbortController;
   persistCancel: { cancelled: boolean };
   session: BackupReadSession | null;
+  /**
+   * The texts are saved (persistence returned success). From here the run always
+   * finishes — coverage and linking — so a late Cancel can never leave saved texts
+   * unlinked (SR S1). cancel() is a no-op once this is set.
+   */
+  committed: boolean;
 }
 
 export class IphoneBackfillService {
@@ -167,10 +173,12 @@ export class IphoneBackfillService {
   /**
    * Stop the running backfill (the user's Cancel, or a sync that is starting): the copy
    * stops at the next file, the read stops at the next chat, persistence rolls back.
+   * Once the texts are saved the run is past its commit point and finishes (coverage,
+   * linking): false = nothing was stopped.
    */
   cancel(): boolean {
     const r = this.running;
-    if (!r) return false;
+    if (!r || r.committed) return false;
     r.abort.abort();
     r.persistCancel.cancelled = true;
     if (r.session) Atomics.store(r.session.stop, 0, 1);
@@ -188,7 +196,6 @@ export class IphoneBackfillService {
       const t = pick.target;
       return {
         available: true,
-        udid: t.udid,
         floorMs: t.floorMs,
         ceilingMs: t.ceilingMs,
         cappedByPhone: t.cappedByPhone,
@@ -200,7 +207,7 @@ export class IphoneBackfillService {
     }
   }
 
-  /** The first phone (newest last sync first) that can fill the gap and whose backup is here. */
+  /** The current phone, when it can fill the gap and its kept backup is here (2.41: current phone only). */
   private pickTarget(userId: string, transactionId: string): { target: IphoneBackfillTarget } | { reason: BackfillReason } {
     const deal = liveDealBackfillRow(userId, transactionId);
     if (!deal) return { reason: "no-deal" };
@@ -236,6 +243,7 @@ export class IphoneBackfillService {
       abort: new AbortController(),
       persistCancel: { cancelled: false },
       session: null,
+      committed: false,
     };
     this.running = run;
     const progress = (phase: BackfillPhase, percent: number): void => {
@@ -325,11 +333,16 @@ export class IphoneBackfillService {
         );
         if (!persisted.success) {
           if (run.persistCancel.cancelled) return this.fail("cancelled");
-          return { success: false, reason: "error", messagesStored: 0, coverageRecorded: false, ...(persisted.error ? { message: persisted.error } : {}) };
+          // The detail stays in main: the renderer gets a code, never this text.
+          log.error("[IphoneBackfill] saving the texts failed", { error: persisted.error ?? null });
+          return { success: false, reason: "error", messagesStored: 0, coverageRecorded: false };
         }
         stored = persisted.messagesStored;
+      } else if (run.abort.signal.aborted) {
+        return this.fail("cancelled");
       }
-      if (run.abort.signal.aborted) return this.fail("cancelled");
+      // Past the commit point: a Cancel from here on stops nothing (coverage and linking run).
+      run.committed = true;
 
       // 5. Coverage: only for a run with no failed read.
       let coverageRecorded = false;

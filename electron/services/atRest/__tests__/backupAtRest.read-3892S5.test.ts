@@ -265,4 +265,50 @@ describe("BACKLOG-3892 S5: beginRead / buildParseCopy(only, stop)", () => {
     expect(s.busyReason(UDID)).toBe("syncing");
     await s.finishSync(sync);
   });
+
+  it("R3c: a copy that fails stops writing when it throws — nothing lands in the parse copy afterwards", async () => {
+    makeChain();
+    const s = service({ concurrency: 2 });
+    await s.migrate(UDID);
+    const real = files.decryptToFile.bind(files);
+    jest.spyOn(files, "decryptToFile").mockImplementation(async (src: string, dest: string) => {
+      if (path.basename(src) === SMS_DB_FILE_ID) throw Object.assign(new Error("I/O error"), { code: "EIO" });
+      if (path.basename(src) !== "Manifest.db") await new Promise((r) => setTimeout(r, 120));
+      return real(src, dest);
+    });
+    const out = copyDir("r3c");
+    const listing = (): string[] => {
+      const found: string[] = [];
+      const walk = (d: string) => {
+        if (!fs.existsSync(d)) return;
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          const f = path.join(d, e.name);
+          if (e.isDirectory()) walk(f);
+          else found.push(path.relative(out, f));
+        }
+      };
+      walk(out);
+      return found.sort();
+    };
+    const err = await s.buildParseCopy(UDID, out).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect((err as NodeJS.ErrnoException)?.code).toBe("EIO");
+    const atThrow = listing();
+    await new Promise((r) => setTimeout(r, 600));
+    expect(listing()).toEqual(atThrow);
+  });
+
+  it("S2: the quit stops a backfill read even when it is the only work (nothing to seal; the quit is not deferred)", async () => {
+    makeChain();
+    const s = service();
+    await s.migrate(UDID);
+    const start = await s.beginRead(UDID);
+    if (!start.ok) throw new Error("refused");
+    expect(Atomics.load(start.session.stop, 0)).toBe(0);
+    expect(s.sealIndexForQuit()).toBeNull();
+    expect(Atomics.load(start.session.stop, 0)).toBe(1);
+    s.endRead(start.session);
+  });
 });

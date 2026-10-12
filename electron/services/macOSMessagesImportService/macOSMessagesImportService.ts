@@ -177,6 +177,37 @@ class MacOSMessagesImportService {
   isForceReimportInProgress(): boolean {
     return this.forceReimportInProgress;
   }
+
+  /**
+   * BACKLOG-3892 S5 (SR S3): other work a force re-import may not overlap — the iPhone
+   * "Get older texts" backfill. Set by syncHandlers (this module cannot import it).
+   * Returns what is running, or null. The backfill refuses during a force re-import; a
+   * force re-import refuses during a backfill (the same direction both ways).
+   */
+  private reprocessBlocker: () => string | null = () => null;
+
+  setReprocessBlocker(blocker: () => string | null): void {
+    this.reprocessBlocker = blocker;
+  }
+
+  /** The refusal a force re-import gets while a backfill runs (a plain failure, not a coalesce: nothing re-imported). */
+  private reprocessBlockedResult(blockedBy: string): MacOSImportResult {
+    logService.warn(
+      "Force reimport refused: other work is running",
+      MacOSMessagesImportService.SERVICE_NAME,
+      { blockedBy }
+    );
+    return {
+      success: false,
+      messagesImported: 0,
+      messagesSkipped: 0,
+      attachmentsImported: 0,
+      attachmentsUpdated: 0,
+      attachmentsSkipped: 0,
+      duration: 0,
+      error: "Older iPhone texts are being added. Try the re-import again when that finishes.",
+    };
+  }
   /**
    * BACKLOG-2776: when a cancel arrived with no import in flight, the epoch ms
    * at which it arrived. Null once consumed or expired.
@@ -253,6 +284,13 @@ class MacOSMessagesImportService {
       };
     }
 
+    // BACKLOG-3892 S5: a force re-import never overlaps an iPhone backfill (checked
+    // before it cancels anything).
+    if (forceReimport) {
+      const blockedBy = this.reprocessBlocker();
+      if (blockedBy) return this.reprocessBlockedResult(blockedBy);
+    }
+
     // Force reimport takes priority - cancel any running import
     if (forceReimport && this.isImporting) {
       logService.warn(
@@ -303,6 +341,12 @@ class MacOSMessagesImportService {
         error: "Import already in progress",
         alreadyInProgress: true,
       };
+    }
+
+    // BACKLOG-3892 S5: again after the wait above, a backfill may have started in it.
+    if (forceReimport) {
+      const blockedBy = this.reprocessBlocker();
+      if (blockedBy) return this.reprocessBlockedResult(blockedBy);
     }
 
     this.isImporting = true;

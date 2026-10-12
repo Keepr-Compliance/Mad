@@ -51,6 +51,7 @@ jest.mock("../sourceCoverageFloors", () => {
   return { ...actual, readSourceFloors: async (userId: string) => dbAll(MESSAGES_FLOOR_BY_SOURCE_SQL, [userId]) };
 });
 
+import log from "electron-log";
 import { setDb } from "../db/core/dbConnection";
 import { iPhoneSyncStorageService } from "../iPhoneSyncStorageService";
 import { getIphoneDealCoverage } from "../iphoneCoverageService";
@@ -108,7 +109,7 @@ const files = createFileCrypto(resolver, { chunkSize: 64 });
 let db: DatabaseType;
 let root: string;
 let backups: string;
-let chain: string;
+let chainDir: string;
 let tmpRoot: string;
 
 const ATT_IN = "Library/SMS/Attachments/ab/01/IN_1.jpg";
@@ -154,7 +155,8 @@ function writeSmsDb(file: string, texts: Text[], opts: { noMembers?: boolean } =
 }
 
 /** A kept chain shaped like idevicebackup2 output (backupAtRest.test.ts makeChain), holding `texts`. */
-function makeChain(texts: Text[], opts: { noMembers?: boolean } = {}): void {
+function makeChain(texts: Text[], opts: { noMembers?: boolean; dir?: string } = {}): void {
+  const chain = opts.dir ?? chainDir;
   nodeFs.mkdirSync(chain, { recursive: true });
   nodeFs.writeFileSync(nodePath.join(chain, "Info.plist"), plist.stringify({ "Device Name": "Test" }));
   nodeFs.writeFileSync(nodePath.join(chain, "Status.plist"), plist.stringify({ SnapshotState: "finished" }));
@@ -213,14 +215,17 @@ function engine(overrides: Partial<BackfillDeps> = {}): IphoneBackfillService {
 }
 
 /** The sync before the backfill: read [F, T1] on this phone (no deal yet), so the phone's interval is [F, T1]. */
-async function priorSync(opts: { oldestTextMs?: number | null } = {}): Promise<void> {
-  const floorPlan: ChatFloorPlan = { settingsFloorMs: F, handleFloors: new Map(), linkedChatFloors: new Map() };
+async function priorSync(
+  opts: { oldestTextMs?: number | null; udid?: string; startedAtMs?: number; settingsFloorMs?: number; handleFloors?: Map<string, number> } = {},
+): Promise<void> {
+  const floorPlan: ChatFloorPlan = { settingsFloorMs: opts.settingsFloorMs ?? F, handleFloors: opts.handleFloors ?? new Map(), linkedChatFloors: new Map() };
+  const udid = opts.udid ?? UDID;
   const r = {
-    success: true, messages: [], contacts: [], conversations: [], error: null, duration: 0, sessionId: "s-prior",
+    success: true, messages: [], contacts: [], conversations: [], error: null, duration: 0, sessionId: `s-prior-${udid}`,
     chatReadFailures: 0,
-    coverageRun: { udid: UDID, startedAtMs: T1, floorPlan, chatFloors: [], ...("oldestTextMs" in opts ? { oldestTextMs: opts.oldestTextMs } : {}) },
+    coverageRun: { udid, startedAtMs: opts.startedAtMs ?? T1, floorPlan, chatFloors: [], ...("oldestTextMs" in opts ? { oldestTextMs: opts.oldestTextMs } : {}) },
   } as unknown as SyncResult;
-  expect((await iPhoneSyncStorageService.persistSyncResult(USER, r, undefined, undefined, "s-prior")).success).toBe(true);
+  expect((await iPhoneSyncStorageService.persistSyncResult(USER, r, undefined, undefined, `s-prior-${udid}`)).success).toBe(true);
 }
 
 function deal(id: string, startedAt: string, submission = "not_submitted"): void {
@@ -266,7 +271,7 @@ beforeEach(() => {
   setDb(db as never);
   root = nodeFs.mkdtempSync(nodePath.join(os.tmpdir(), "keepr-s5-"));
   backups = nodePath.join(root, "Backups");
-  chain = nodePath.join(backups, UDID);
+  chainDir = nodePath.join(backups, UDID);
   tmpRoot = nodePath.join(root, "at-rest-tmp");
   rest = atRest();
   reportProblem = jest.fn();
@@ -311,7 +316,9 @@ maybe("BACKLOG-3892 S5: backfill from the kept backup (real parts)", () => {
     const copies = jest.spyOn(rest, "buildParseCopy");
     const svc = engine();
     const avail = svc.availability(USER, "t1");
-    expect(avail).toMatchObject({ available: true, udid: UDID, floorMs: DEAL_FLOOR, ceilingMs: F, cappedByPhone: false });
+    expect(avail).toMatchObject({ available: true, floorMs: DEAL_FLOOR, ceilingMs: F, cappedByPhone: false });
+    // S4: which phone is read is main's business; the renderer is not told.
+    expect(avail).not.toHaveProperty("udid");
 
     const r = await svc.backfill(USER, "t1");
     expect(r).toMatchObject({ success: true, messagesStored: 3, coverageRecorded: true, coveredSinceAfter: iso(DEAL_FLOOR) });
@@ -472,5 +479,110 @@ maybe("BACKLOG-3892 S5: backfill from the kept backup (real parts)", () => {
     expect(busy.availability(USER, "t1")).toMatchObject({ available: false, reason: "busy" });
     expect(await busy.backfill(USER, "t1")).toMatchObject({ success: false, reason: "busy" });
     expect(stored()).toEqual([]);
+  });
+
+  it("R1: a saving failure returns the code 'error' and no message; the detail is logged in main only", async () => {
+    makeChain(TEXTS);
+    await priorSync();
+    deal("t1", DEAL_START);
+    const detail = "SQLITE_FULL at /Users/someone/Library/Application Support/keepr/at-rest-tmp/ios-x/3d/3d0d7e5fb2ce288813306e4d4636395e047a3d28";
+    const svc = engine({ persist: async () => ({ success: false, error: detail }) as never });
+    const r = await svc.backfill(USER, "t1");
+    expect(r).toEqual({ success: false, reason: "error", messagesStored: 0, coverageRecorded: false });
+    expect(r).not.toHaveProperty("message");
+    expect(JSON.stringify(r)).not.toContain("at-rest-tmp");
+    expect(JSON.stringify((log.error as jest.Mock).mock.calls)).toContain(detail);
+    expect(parseCopies()).toEqual([]);
+  });
+
+  it("S1: a Cancel arriving after the texts are saved stops nothing: coverage is recorded and the texts are linked", async () => {
+    makeChain(TEXTS);
+    await priorSync();
+    deal("t1", DEAL_START);
+    let lateCancel: boolean | undefined;
+    const svc: IphoneBackfillService = engine({
+      persist: async (u, r, p, prog, sid, c) => {
+        const saved = await iPhoneSyncStorageService.persistSyncResult(u, r, p, prog, sid, c);
+        svc.cancel(); // the user's Cancel, just after the save committed
+        return saved;
+      },
+    });
+    const r = await svc.backfill(USER, "t1", (p) => {
+      if (p.phase === "linking" && lateCancel === undefined) lateCancel = svc.cancel();
+    });
+    expect(r).toMatchObject({ success: true, messagesStored: 3, coverageRecorded: true });
+    expect(stored().sort()).toEqual(["g-1-in-a", "g-1-in-b", "g-3-in"]);
+    expect(autoLink).toHaveBeenCalledWith(USER);
+    expect(startGap("t1")).toBeUndefined();
+    // Once the run knows the save committed, a Cancel is a no-op and says so.
+    expect(lateCancel).toBe(false);
+    expect(parseCopies()).toEqual([]);
+  });
+
+  it("R2: the current phone only — an older phone's kept backup (chat ROWIDs that collide) is never read, stored or linked", async () => {
+    const OLD = "00008030-00AA11BB22CC33DD";
+    const oldChain = nodePath.join(backups, OLD);
+    // The older phone: last synced before the current one, covering [2026-03-01, 2026-09-01];
+    // its chat 1 / chat 3 carry the same ROWIDs as the current phone's.
+    makeChain(
+      [
+        [1, "old-1-in", IN_RANGE_1],
+        [3, "old-3-in", IN_RANGE_2],
+      ],
+      { dir: oldChain },
+    );
+    await priorSync({ udid: OLD, startedAtMs: Date.UTC(2026, 8, 1), settingsFloorMs: Date.UTC(2026, 2, 1) });
+    // The current phone holds nothing older than its own coverage start.
+    makeChain(TEXTS);
+    await priorSync({ oldestTextMs: F });
+    deal("t1", DEAL_START);
+    expect(startGap("t1")).toBeDefined();
+    const copies = jest.spyOn(rest, "buildParseCopy");
+    const svc = engine();
+    expect(svc.availability(USER, "t1")).toEqual({ available: false, reason: "nothing-older" });
+    expect(await svc.backfill(USER, "t1")).toMatchObject({ success: false, reason: "nothing-older", messagesStored: 0 });
+    expect(copies).not.toHaveBeenCalled();
+    expect(stored()).toEqual([]);
+    expect(autoLink).not.toHaveBeenCalled();
+    expect(rest.busyReason(OLD)).toBeNull();
+    expect(parseCopies()).toEqual([]);
+  });
+
+  it("R3a: another user's deal is 'no-deal' and nothing is read", async () => {
+    makeChain(TEXTS);
+    await priorSync();
+    const OTHER = "user-3892-s5-other";
+    db.prepare("INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, 'u3892s5b@example.test', 'google', 'o-3892s5b')").run(OTHER);
+    db.prepare("INSERT INTO transactions (id, user_id, property_address, status, started_at, submission_status) VALUES ('tB', ?, 'tB Test St', 'active', ?, 'not_submitted')").run(OTHER, DEAL_START);
+    db.prepare("INSERT INTO contacts (id, user_id, display_name) VALUES ('c1', ?, 'Pat')").run(USER);
+    db.prepare("INSERT INTO contact_phones (id, contact_id, phone_e164) VALUES ('p-c1', 'c1', ?)").run(P1);
+    db.prepare("INSERT INTO transaction_contacts (id, transaction_id, contact_id) VALUES ('tB-c1', 'tB', 'c1')").run();
+    const copies = jest.spyOn(rest, "buildParseCopy");
+    const svc = engine();
+    expect(svc.availability(USER, "tB")).toEqual({ available: false, reason: "no-deal" });
+    expect(await svc.backfill(USER, "tB")).toMatchObject({ success: false, reason: "no-deal", messagesStored: 0 });
+    expect(copies).not.toHaveBeenCalled();
+    expect(stored()).toEqual([]);
+  });
+
+  it("R3b: the read ceiling is the LATEST start over the deal's people (two people, different coverage)", async () => {
+    // P1's own row reaches back to G (an earlier deal's floor); P9 has only the phone's
+    // start F. The least covered person is P9, so [floor, F) must be read for P9.
+    const G = Date.UTC(2026, 0, 15);
+    const MID = Date.UTC(2026, 4, 1); // in [G, F): only a ceiling of F reads it
+    makeChain([...TEXTS, [2, "g-2-mid", MID]]);
+    await priorSync({ handleFloors: new Map(handleKeys(P1).map((k) => [k, G])) });
+    for (const k of handleKeys(P1)) expect(handleRow(k)?.coveredSince).toBe(iso(G));
+    deal("t1", DEAL_START);
+    db.prepare("INSERT INTO contacts (id, user_id, display_name) VALUES ('c9', ?, 'Sam')").run(USER);
+    db.prepare("INSERT INTO contact_phones (id, contact_id, phone_e164) VALUES ('p-c9', 'c9', ?)").run(P9);
+    db.prepare("INSERT INTO transaction_contacts (id, transaction_id, contact_id) VALUES ('t1-c9', 't1', 'c9')").run();
+    const svc = engine();
+    expect(svc.availability(USER, "t1")).toMatchObject({ available: true, floorMs: DEAL_FLOOR, ceilingMs: F });
+    const r = await svc.backfill(USER, "t1");
+    expect(r).toMatchObject({ success: true, coverageRecorded: true });
+    expect(stored()).toContain("g-2-mid");
+    for (const k of handleKeys(P9)) expect(handleRow(k)?.coveredSince).toBe(iso(DEAL_FLOOR));
+    expect(startGap("t1")).toBeUndefined();
   });
 });
