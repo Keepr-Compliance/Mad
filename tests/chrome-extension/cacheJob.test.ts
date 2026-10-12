@@ -1325,7 +1325,15 @@ describe("Sync failed · Try again (C5)", () => {
   it("the tab closed during a Sync is reported to Keepr as page_gone", () => {
     const src = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8");
     expect(src).toContain('root.addEventListener("pagehide", function () {');
-    expect(src).toContain('body: { code: "page_gone", message: PAGE_GONE_MESSAGE, metrics: currentRunMetrics() },');
+    // BACKLOG-3924: the listener sends what pageHideReport decides.
+    expect(src).toContain("var report = pageHideReport({");
+    const hide = (job as unknown as { pageHideReport: (s: Record<string, unknown>) => { path: string; body: Record<string, unknown> } | null }).pageHideReport;
+    const JOB_ID = "11111111-2222-4333-8444-555555555555"; // pii-allow-uuid: invented, not from any live row
+    expect(hide({ jobId: JOB_ID, running: true, waitingForSignIn: false, metrics: { a: 1 } })).toEqual({
+      path: `/job/${JOB_ID}/error`, body: { code: "page_gone", message: job.PAGE_GONE_MESSAGE, metrics: { a: 1 } },
+    });
+    expect(hide({ jobId: null, running: true })).toBeNull();
+    expect(hide({ jobId: JOB_ID, running: false })).toBeNull();
   });
 });
 

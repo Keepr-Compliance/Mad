@@ -63,6 +63,7 @@ import {
   parseNotReached,
   participantKey,
   RCS_JOB_MAX_CHATS,
+  RCS_SIGN_IN_WAIT_CAP_MS,
   RcsJobRegistry,
   type RcsCacheSaved,
   type RcsImportJob,
@@ -1190,7 +1191,8 @@ export class RcsExtensionBridge {
       }
       this.armUnclaimedTimer(job);
       this.emitJob(job.snapshot());
-      sendJson(res, 200, { ok: true });
+      // How long Keepr's own limit still allows (the page ends its wait just before).
+      sendJson(res, 200, { ok: true, waitLeftMs: Math.max(0, job.createdAtMs + RCS_SIGN_IN_WAIT_CAP_MS - this.jobs.nowMs()) });
       return;
     }
 
