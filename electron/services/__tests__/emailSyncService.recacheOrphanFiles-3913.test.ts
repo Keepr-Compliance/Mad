@@ -399,7 +399,6 @@ describe("BACKLOG-3913 — Force Re-cache reclaims the files of removed attachme
     seedEmail({ id: "removed-2", externalId: "ext-8", source: "outlook", sentAt: "2026-03-08T10:00:00Z" });
     attach("att-removed-2", "removed-2", second);
     const realUnlink = fs.unlinkSync;
-    const realFirst = fs.realpathSync(first);
     // The CJS module object itself: a namespace import is a copy, and spying on
     // it would not reach the module under test.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -407,7 +406,9 @@ describe("BACKLOG-3913 — Force Re-cache reclaims the files of removed attachme
     const unlinkCalls: string[] = [];
     const spy = jest.spyOn(fsModule, "unlinkSync").mockImplementation((p: fs.PathLike) => {
       unlinkCalls.push(String(p));
-      if (String(p) === realFirst) throw Object.assign(new Error("EBUSY: resource busy"), { code: "EBUSY" });
+      // The FIRST unlink fails, whichever file it is: candidate order is not
+      // defined, and the claim is that the files after a failure still go.
+      if (unlinkCalls.length === 1) throw Object.assign(new Error("EBUSY: resource busy"), { code: "EBUSY" });
       return realUnlink(p);
     });
 
@@ -419,12 +420,13 @@ describe("BACKLOG-3913 — Force Re-cache reclaims the files of removed attachme
     }
 
     // The failure really was hit (mockRestore clears the spy's own record).
-    expect(unlinkCalls).toContain(realFirst);
+    expect(unlinkCalls).toHaveLength(2);
     expect(result.error).toBeUndefined();
     expect(result.forceSwap).toMatchObject({ emailsDeleted: 2, emailsRefreshed: 1 });
-    expect(exists(first)).toBe(true);
-    // The failure on one file does not stop the next.
-    expect(exists(second)).toBe(false);
+    // The failed file stays; the failure does not stop the next one.
+    const failed = unlinkCalls[0];
+    expect([first, second].filter((f) => exists(f))).toHaveLength(1);
+    expect(exists(failed)).toBe(true);
   });
 
   it("O6a: a swap that throws touches no file", async () => {
