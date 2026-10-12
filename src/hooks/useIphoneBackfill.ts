@@ -11,8 +11,20 @@ import { iphoneBackfillService } from "../services/iphoneBackfillService";
 import type {
   BackfillAvailability,
   BackfillPhase,
+  BackfillReason,
   BackfillResult,
 } from "../../electron/types/iphoneBackfill";
+
+/**
+ * Refusals that mean "the gap this run was offered for is no longer there / no longer
+ * fillable" (the deal got locked, the gap closed, nothing older exists). Said with NO
+ * sentence: the surface re-checks coverage and the button goes away.
+ */
+export const STALE_OFFER_REASONS: ReadonlySet<BackfillReason> = new Set<BackfillReason>([
+  "locked",
+  "no-gap",
+  "nothing-older",
+]);
 
 export interface UseIphoneBackfillOptions {
   /** Ask availability only while the deal's iPhone start gap is shown. */
@@ -21,6 +33,8 @@ export interface UseIphoneBackfillOptions {
   refreshKey?: string | number;
   /** A run stored texts / ended successfully: re-check coverage, reload texts. */
   onSuccess?: (result: BackfillResult) => void | Promise<void>;
+  /** A run was refused as locked / no-gap / nothing-older: re-check coverage (never export). */
+  onRefused?: (result: BackfillResult) => void | Promise<void>;
 }
 
 export interface UseIphoneBackfillState {
@@ -34,7 +48,7 @@ export interface UseIphoneBackfillState {
 }
 
 export function useIphoneBackfill(transactionId: string, options: UseIphoneBackfillOptions): UseIphoneBackfillState {
-  const { enabled, refreshKey, onSuccess } = options;
+  const { enabled, refreshKey, onSuccess, onRefused } = options;
   const [availability, setAvailability] = useState<BackfillAvailability | null>(null);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ phase: BackfillPhase; percent: number } | null>(null);
@@ -43,6 +57,8 @@ export function useIphoneBackfill(transactionId: string, options: UseIphoneBackf
   const runningRef = useRef(false);
   const onSuccessRef = useRef(onSuccess);
   onSuccessRef.current = onSuccess;
+  const onRefusedRef = useRef(onRefused);
+  onRefusedRef.current = onRefused;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -94,6 +110,13 @@ export function useIphoneBackfill(transactionId: string, options: UseIphoneBackf
         await onSuccessRef.current?.(r);
       } catch {
         // A failed re-check never hides the result line.
+      }
+    }
+    if (!r.success && r.reason && STALE_OFFER_REASONS.has(r.reason)) {
+      try {
+        await onRefusedRef.current?.(r);
+      } catch {
+        // A failed re-check never throws into the click.
       }
     }
     // Offer it again only if it can still fill a gap.

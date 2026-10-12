@@ -453,17 +453,10 @@ function ExportModal({
   // BACKLOG-3892 S6: "Get older texts" read the deal's older texts from the kept iPhone
   // backup. Re-check WITH the source the gate was opened for (the W2 rule); complete and
   // no newer gap -> export (as "Update now" does), otherwise the gate shows what is left.
-  const handleGateBackfilled = async () => {
-    const recheck = gateSource
-      ? await checkExportCompleteness(transaction.id, gateSource)
-      : await checkExportCompleteness(transaction.id);
-    if (!recheck) return;
+  type Recheck = NonNullable<Awaited<ReturnType<typeof checkExportCompleteness>>>;
+  // Re-render the gate from a fresh result. NEVER exports.
+  const renderGateFrom = (recheck: Recheck) => {
     const endGap = recheck.textEndGap;
-    if (recheck.complete && !endGap) {
-      setCompletenessGate(null);
-      await proceedWithExport();
-      return;
-    }
     if (!recheck.complete && recheck.iphoneGap) {
       setCompletenessGate({
         auditStartISO: recheck.auditStartISO,
@@ -480,7 +473,37 @@ function ExportModal({
         endGap,
         startShown: false,
       });
+      return;
     }
+    // Not complete, no iPhone start gap, no newer gap (e.g. a stale expansion): show the
+    // generic gate from the fresh result rather than exporting (unlike handleExport).
+    if (!recheck.complete) {
+      setCompletenessGate({
+        auditStartISO: recheck.auditStartISO,
+        importerAvailable: recheck.messagesImporterAvailable,
+      });
+    }
+  };
+
+  const handleGateBackfilled = async () => {
+    const recheck = gateSource
+      ? await checkExportCompleteness(transaction.id, gateSource)
+      : await checkExportCompleteness(transaction.id);
+    if (!recheck) return;
+    if (recheck.complete && !recheck.textEndGap) {
+      setCompletenessGate(null);
+      await proceedWithExport();
+      return;
+    }
+    renderGateFrom(recheck);
+  };
+
+  // The run was refused as locked / no-gap / nothing-older: re-check and re-render only.
+  const handleGateRefused = async () => {
+    const recheck = gateSource
+      ? await checkExportCompleteness(transaction.id, gateSource)
+      : await checkExportCompleteness(transaction.id);
+    if (recheck) renderGateFrom(recheck);
   };
 
   // "Export anyway" — the user makes an explicit, informed decision to export
@@ -1109,7 +1132,7 @@ function ExportModal({
               {/* BACKLOG-3892 S6: fill the iPhone start gap from the kept backup. */}
               {completenessGate.iphone && (
                 <div className="text-sm text-gray-700 mb-3 empty:hidden" data-testid="export-gate-get-older-texts">
-                  <GetOlderTexts transactionId={transaction.id} onSuccess={handleGateBackfilled} />
+                  <GetOlderTexts transactionId={transaction.id} onSuccess={handleGateBackfilled} onRefused={handleGateRefused} />
                 </div>
               )}
 

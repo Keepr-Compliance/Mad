@@ -120,3 +120,108 @@ it("still a gap after the run -> the gate stays with the re-read line, no export
   expect(screen.getByTestId("export-gate-iphone")).toHaveTextContent(/from May 1\./);
   expect(exportEnhancedMock).not.toHaveBeenCalled();
 });
+
+// ---- fix round (SR review 4335711f): the paths that must NOT export -------------------
+
+const okRun: BackfillResult = {
+  success: true,
+  messagesStored: 40,
+  coverageRecorded: true,
+  coveredSinceAfter: "2025-12-31T00:00:00.000Z",
+  cappedByPhone: false,
+};
+
+async function runBackfillWith(recheckResult: unknown): Promise<void> {
+  completenessMock.mockResolvedValueOnce(gapResult);
+  backfillOlder.mockResolvedValue(okRun);
+  await openGate();
+  await waitFor(() => expect(backfillAvailability).toHaveBeenCalledWith(TX));
+  completenessMock.mockClear();
+  completenessMock.mockResolvedValue(recheckResult);
+  await act(async () => {
+    fireEvent.click(await screen.findByTestId("get-older-texts-button"));
+  });
+  await waitFor(() => expect(completenessMock).toHaveBeenCalledWith(TX, "user-1", "iphone"));
+}
+
+it("R1: start gap closed but a NEWER-texts gap remains -> no export, the newer line is shown", async () => {
+  // Shape transcribed from auditCoverageService.ts:668-693 (complete from iphone.gap only;
+  // textEndGap set independently from iphone.endGap).
+  await runBackfillWith({
+    ...gapResult,
+    complete: true,
+    iphoneGap: false,
+    iphoneCoveredSince: "2025-12-31T00:00:00.000Z",
+    textEndGap: { source: "iphone", kind: "newer", coveredSince: "2025-12-31T00:00:00.000Z", approximate: false, lastSyncAt: "2026-01-10T00:00:00.000Z", requiredEndISO: "2026-03-01T00:00:00.000Z" },
+  });
+  expect(await screen.findByTestId("export-gate-end")).toBeInTheDocument();
+  expect(exportEnhancedMock).not.toHaveBeenCalled();
+});
+
+it("S-a: the re-check fails (null) -> no export, the gate stays", async () => {
+  await runBackfillWith(null);
+  await act(async () => {});
+  expect(exportEnhancedMock).not.toHaveBeenCalled();
+  expect(screen.getByTestId("export-completeness-gate")).toBeInTheDocument();
+});
+
+it("S-c: stale expansion (not complete, no iPhone gap, no newer gap) -> gate re-rendered, no export", async () => {
+  // The shape handleExport falls through on (expansionStale true, iphoneGap false).
+  await runBackfillWith({
+    ...gapResult,
+    complete: false,
+    iphoneGap: false,
+    expansionStale: true,
+    iphoneCoveredSince: "2025-12-31T00:00:00.000Z",
+  });
+  await act(async () => {});
+  expect(exportEnhancedMock).not.toHaveBeenCalled();
+  expect(screen.getByTestId("export-completeness-gate")).toBeInTheDocument();
+  // re-rendered from the fresh result: the stale iPhone start line is gone
+  expect(screen.queryByTestId("export-gate-iphone")).toBeNull();
+});
+
+it("S-b: the gate closes mid-run (Export anyway) -> the finished run does not export a second time", async () => {
+  completenessMock.mockResolvedValueOnce(gapResult);
+  let finish: (r: BackfillResult) => void = () => undefined;
+  backfillOlder.mockImplementation(() => new Promise<BackfillResult>((res) => (finish = res)));
+  await openGate();
+  await waitFor(() => expect(backfillAvailability).toHaveBeenCalledWith(TX));
+  await act(async () => {
+    fireEvent.click(await screen.findByTestId("get-older-texts-button"));
+  });
+  await screen.findByTestId("get-older-texts-progress");
+  await act(async () => {
+    fireEvent.click(screen.getByTestId("export-gate-export-anyway"));
+  });
+  await waitFor(() => expect(exportEnhancedMock).toHaveBeenCalledTimes(1));
+  completenessMock.mockClear();
+  completenessMock.mockResolvedValue({ ...gapResult, complete: true, iphoneGap: false });
+  await act(async () => finish(okRun));
+  await act(async () => {});
+  expect(completenessMock).not.toHaveBeenCalled();
+  expect(exportEnhancedMock).toHaveBeenCalledTimes(1);
+});
+
+it.each(["locked", "no-gap", "nothing-older"] as const)(
+  "run refused as %s -> no sentence, no export, coverage re-checked, no button",
+  async (reason) => {
+    completenessMock.mockResolvedValueOnce(gapResult);
+    backfillOlder.mockResolvedValue({ success: false, reason, messagesStored: 0, coverageRecorded: false });
+    await openGate();
+    await waitFor(() => expect(backfillAvailability).toHaveBeenCalledWith(TX));
+    completenessMock.mockClear();
+    // coverage still shows the start gap (e.g. locked): the gate re-renders, never exports
+    completenessMock.mockResolvedValue(gapResult);
+    // availability, re-asked, still says available — the button must go because of the refusal
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId("get-older-texts-button"));
+    });
+    await waitFor(() => expect(completenessMock).toHaveBeenCalledWith(TX, "user-1", "iphone"));
+    await act(async () => {});
+    expect(exportEnhancedMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Try again later/)).toBeNull();
+    expect(screen.queryByTestId("get-older-texts-result")).toBeNull();
+    expect(screen.queryByTestId("get-older-texts-button")).toBeNull();
+  },
+);

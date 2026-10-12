@@ -210,7 +210,9 @@ const APPROVED_MESSAGE_REASONS: ReadonlySet<BackfillReason> = new Set<BackfillRe
  * Never S5's `message` for any other reason (a reason "error" can carry raw error text).
  */
 export function getOlderTextsRefusalLine(reason: BackfillReason | undefined, message: string | undefined): string | null {
-  if (reason === "cancelled") return null;
+  // cancelled: the user's own Cancel. locked / no-gap / nothing-older: the offer was stale
+  // (coordinator ruling) — no sentence; the surface re-checks coverage and the button goes.
+  if (reason === "cancelled" || reason === "locked" || reason === "no-gap" || reason === "nothing-older") return null;
   if (reason && APPROVED_MESSAGE_REASONS.has(reason)) return message && message.trim() ? message : GET_OLDER_TEXTS_FAILED;
   return GET_OLDER_TEXTS_FAILED;
 }

@@ -228,3 +228,30 @@ describe("C4: refusal lines", () => {
     expect(getTextCoverage.mock.calls.length).toBe(coverageCalls);
   });
 });
+
+describe("C5: a stale offer at run time says nothing and the button goes", () => {
+  it.each(["locked", "no-gap", "nothing-older"] as const)(
+    "%s -> no sentence, coverage re-read, no button (availability still says available)",
+    async (reason) => {
+      backfillOlder.mockResolvedValue({ success: false, reason, messagesStored: 0, coverageRecorded: false });
+      await renderNotice();
+      const coverageCalls = getTextCoverage.mock.calls.length;
+      fireEvent.click(await screen.findByTestId("get-older-texts-button"));
+      await waitFor(() => expect(getTextCoverage.mock.calls.length).toBeGreaterThan(coverageCalls));
+      expect(getTextCoverage).toHaveBeenLastCalledWith(TX, "user-1", "iphone");
+      await act(async () => {});
+      expect(screen.queryByTestId("get-older-texts-result")).toBeNull();
+      expect(screen.queryByText(/Try again later/)).toBeNull();
+      expect(screen.queryByTestId("get-older-texts-button")).toBeNull();
+    },
+  );
+
+  it("cancelled -> nothing shown and the button is offered again", async () => {
+    backfillOlder.mockResolvedValue({ success: false, reason: "cancelled", messagesStored: 0, coverageRecorded: false });
+    await renderNotice();
+    fireEvent.click(await screen.findByTestId("get-older-texts-button"));
+    await act(async () => {});
+    expect(screen.queryByTestId("get-older-texts-result")).toBeNull();
+    expect(await screen.findByTestId("get-older-texts-button")).toBeInTheDocument();
+  });
+});

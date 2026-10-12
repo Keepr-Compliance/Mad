@@ -205,7 +205,7 @@ export function TextCoverageNotice({ transactionId, userId, onTextsAdded }: Text
             {coverageLine(g, auditStart, ACTION[g.source])}
             {/* BACKLOG-3892 S6: the iPhone start gap can be filled from the kept backup. */}
             {g.source === "iphone" && g.kind === "later" && (
-              <GetOlderTexts transactionId={transactionId} refreshKey={g.coveredSince ?? ""} onSuccess={afterBackfill} />
+              <GetOlderTexts transactionId={transactionId} refreshKey={g.coveredSince ?? ""} onSuccess={afterBackfill} onRefused={load} />
             )}
             {/* One "Update Mac messages" button, on the last Mac line (an import heals both ends). */}
             {g.source === "mac" && !gaps.slice(i + 1).some((n) => n.source === "mac") && (

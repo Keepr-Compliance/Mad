@@ -7,7 +7,7 @@
  * useIphoneBackfill -> iphoneBackfillService. Every line comes from coverageCopy.ts.
  */
 import React from "react";
-import { useIphoneBackfill } from "../../../hooks/useIphoneBackfill";
+import { STALE_OFFER_REASONS, useIphoneBackfill } from "../../../hooks/useIphoneBackfill";
 import type { BackfillReason, BackfillResult } from "../../../../electron/types/iphoneBackfill";
 import {
   GET_OLDER_TEXTS_LABEL,
@@ -26,13 +26,16 @@ export interface GetOlderTextsProps {
   refreshKey?: string | number;
   /** A run ended successfully: re-check coverage with the chosen source, reload texts. */
   onSuccess?: (result: BackfillResult) => void | Promise<void>;
+  /** A run was refused as locked / no-gap / nothing-older: re-check coverage, hide the button. */
+  onRefused?: (result: BackfillResult) => void | Promise<void>;
 }
 
-export function GetOlderTexts({ transactionId, refreshKey, onSuccess }: GetOlderTextsProps): React.ReactElement | null {
+export function GetOlderTexts({ transactionId, refreshKey, onSuccess, onRefused }: GetOlderTextsProps): React.ReactElement | null {
   const { availability, running, progress, result, start, cancel } = useIphoneBackfill(transactionId, {
     enabled: true,
     refreshKey,
     onSuccess,
+    onRefused,
   });
 
   if (running) {
@@ -85,7 +88,8 @@ export function GetOlderTexts({ transactionId, refreshKey, onSuccess }: GetOlder
   // A run refused because the backup itself is unusable: availability can still say
   // `available` (the files are there), but trying again cannot help — no button.
   const backupUnusable = !!result && !result.success && !!result.reason && BACKUP_UNUSABLE.has(result.reason);
-  const offered = availability?.available === true && !backupUnusable;
+  const staleOffer = !!result && !result.success && !!result.reason && STALE_OFFER_REASONS.has(result.reason);
+  const offered = availability?.available === true && !backupUnusable && !staleOffer;
 
   if (!resultLine && !unavailableLine && !offered) return null;
   return (
