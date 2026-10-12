@@ -9,10 +9,10 @@
  *   last Sync. (No consent line: users accept Keepr's terms at sign-up; the
  *   first Sync records the consent for audit.)
  * - How far back a Sync copies: one line stating the window. The months
- *   control itself is Settings → Messages → "How far back to import texts"
- *   (BACKLOG-3892 S3, TextsLookbackSettings), shared by every text source;
- *   this panel reads the same value (`messageImport.filters`, the key the
- *   cache Sync's floor reads).
+ *   control is the shared TextsLookbackSettings picker (BACKLOG-3892 S3),
+ *   which Settings passes in as `lookbackPicker` and this panel renders as the
+ *   first row of its Import Preferences block (BACKLOG-3156 stage F); the
+ *   value is `messageImport.filters`, the key the cache Sync's floor reads.
  * - Auto-delete (BACKLOG-3658 P3b): REMOVED from the screen "for now"
  *   (founder, 2026-10-04); the purge is dormant (RCS_AUTO_DELETE_ENABLED).
  * - Force re-import: Android's SHARED reset (BACKLOG-3657) — every text
@@ -77,9 +77,15 @@ interface GoogleMessagesSettingsProps {
   published?: boolean;
   /** Test seam: the "Checking the browser…" window (default LINK_CHECK_MS). */
   linkCheckMs?: number;
+  /**
+   * BACKLOG-3156 stage F: the shared "Import messages from" picker, rendered as
+   * the first row of Import Preferences. Settings supplies it while this panel
+   * is mounted (Google Messages is the live source), so exactly one renders.
+   */
+  lookbackPicker?: React.ReactNode;
 }
 
-export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = EXTENSION_PUBLISHED, linkCheckMs = LINK_CHECK_MS }: GoogleMessagesSettingsProps) {
+export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = EXTENSION_PUBLISHED, linkCheckMs = LINK_CHECK_MS, lookbackPicker }: GoogleMessagesSettingsProps) {
   const [state, setState] = useState<RcsExtensionState | null>(null);
   // BACKLOG-3892 S3: the shared "How far back to import texts" value.
   const { months: lookbackMonths } = useTextsLookback(userId);
@@ -207,8 +213,8 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
         )}
       </div>
 
-      {/* BACKLOG-3892 S3: the months control moved to the shared "How far
-          back to import texts" picker above; this line states its value. */}
+      {/* BACKLOG-3892 S3: this line states the shared months value; the
+          picker itself is the first row of Import Preferences below. */}
       <div className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-lookback">
         <p className="text-xs text-blue-600" data-testid="gm-lookback-line">
           {lookbackMonths === null ? "Copying all your texts" : `Copying texts from ${lastMonthsPhrase(lookbackMonths)}`}
@@ -280,73 +286,171 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
         </div>
       </div>
 
-      {/* Founder (2026-10-02): one line + "See hidden list" (a read-only modal), never a list
-          that fills the page. 0 → no line. */}
-      <div className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-not-synced">
-        {excluded.length > 0 && (
-          <div className="text-sm font-medium text-gray-900" data-testid="gm-not-synced-line">
-            {excluded.length} chat{excluded.length === 1 ? "" : "s"} not synced ·{" "}
-            <button
-              type="button"
-              className="text-indigo-700 hover:text-indigo-900 font-medium"
-              onClick={() => setManageOpen(true)}
-            >
-              See hidden list
-            </button>
-          </div>
-        )}
-        <p className="text-xs text-gray-600 mt-1">
-          Switch a chat off with the eye on its row in Google Messages. New messages from it won&rsquo;t be synced;
-          texts already in Keepr stay.
+      {/* BACKLOG-3156 stage F: ONE Import Preferences block in the shared
+          settings shape — the label is the card's first child, every setting
+          below it is a row (no card inside the card). Founder's order:
+          Import messages from, the per-chat eye note, consent, photos, videos. */}
+      <div
+        data-testid="gm-block-preferences"
+        className="p-4 bg-gray-50 rounded-lg border border-gray-200"
+      >
+        <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+          Import Preferences
         </p>
-      </div>
+        {lookbackPicker}
 
-      {/* SR C7 (founder): the consent given before the first Sync, withdrawn
-          here — the next Sync asks again. Shown only while it is current. */}
-      {state?.optedIn === true && (
-        <div className="p-4 bg-white rounded-lg border border-gray-200 flex items-center justify-between gap-3" data-testid="gm-consent">
-          {withdrawAsk ? (
-            <>
-              <span className="text-sm text-gray-900" role="alert" data-testid="gm-consent-ask">
-                {WITHDRAW_ASK}
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded"
-                  onClick={() => {
-                    setWithdrawAsk(false);
-                    void withdrawConsent();
-                  }}
-                  data-testid="gm-consent-withdraw-yes"
-                >
-                  Withdraw
-                </button>
-                <button
-                  type="button"
-                  className="px-3 py-1.5 bg-white hover:bg-gray-100 text-gray-700 text-sm font-medium rounded border border-gray-300"
-                  onClick={() => setWithdrawAsk(false)}
-                  data-testid="gm-consent-withdraw-cancel"
-                >
-                  Cancel
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <span className="text-sm text-gray-900">You agreed to copy your texts into Keepr.</span>
+        {/* Founder (2026-10-02): one line + "See hidden list" (a read-only modal), never a list
+            that fills the page. 0 → no line. */}
+        <div className="mt-3" data-testid="gm-not-synced">
+          {excluded.length > 0 && (
+            <div className="text-sm font-medium text-gray-900" data-testid="gm-not-synced-line">
+              {excluded.length} chat{excluded.length === 1 ? "" : "s"} not synced ·{" "}
               <button
                 type="button"
-                className="text-sm text-indigo-700 hover:text-indigo-900 font-medium"
-                onClick={() => setWithdrawAsk(true)}
-                data-testid="gm-consent-withdraw"
+                className="text-indigo-700 hover:text-indigo-900 font-medium"
+                onClick={() => setManageOpen(true)}
               >
-                Withdraw consent
+                See hidden list
               </button>
-            </>
+            </div>
           )}
+          <p className="text-xs text-gray-600 mt-1">
+            Switch a chat off with the eye on its row in Google Messages. New messages from it won&rsquo;t be synced;
+            texts already in Keepr stay.
+          </p>
         </div>
-      )}
+
+        {/* SR C7 (founder): the consent given before the first Sync, withdrawn
+            here — the next Sync asks again. Shown only while it is current. */}
+        {state?.optedIn === true && (
+          <div className="mt-3 flex items-center justify-between gap-3" data-testid="gm-consent">
+            {withdrawAsk ? (
+              <>
+                <span className="text-sm text-gray-900" role="alert" data-testid="gm-consent-ask">
+                  {WITHDRAW_ASK}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded"
+                    onClick={() => {
+                      setWithdrawAsk(false);
+                      void withdrawConsent();
+                    }}
+                    data-testid="gm-consent-withdraw-yes"
+                  >
+                    Withdraw
+                  </button>
+                  <button
+                    type="button"
+                    className="px-3 py-1.5 bg-white hover:bg-gray-100 text-gray-700 text-sm font-medium rounded border border-gray-300"
+                    onClick={() => setWithdrawAsk(false)}
+                    data-testid="gm-consent-withdraw-cancel"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <span className="text-sm text-gray-900">You agreed to copy your texts into Keepr.</span>
+                <button
+                  type="button"
+                  className="text-sm text-indigo-700 hover:text-indigo-900 font-medium"
+                  onClick={() => setWithdrawAsk(true)}
+                  data-testid="gm-consent-withdraw"
+                >
+                  Withdraw consent
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Founder (J flow): the beta (unpacked) install of the extension.
+            Founder (2026-10-04): HIDDEN until the extension is in the Chrome
+            Web Store — until then every account gets the beta (forced), so a
+            switch that cannot be changed is not shown. */}
+        {published && (
+          <label className="mt-3 flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-0.5 w-5 h-5"
+              checked={betaInstall}
+              onChange={(e) => void changeBetaInstall(e.target.checked)}
+              data-testid="gm-beta-install"
+            />
+            <span>
+              <span className="block text-sm font-medium text-gray-900">Beta extension install</span>
+            </span>
+          </label>
+        )}
+
+        {/* BACKLOG-3658 P3b — "Delete chats not linked to a transaction after
+            90 days": REMOVED from the screen "for now" (founder, 2026-10-04).
+            The purge is dormant: RCS_AUTO_DELETE_ENABLED (rcsImportHandlers) is
+            off, so a stored ON value does nothing. */}
+
+        {/* SR M: media from chats with no transaction contact. Photos ON, videos OFF by default. */}
+        <label className="mt-3 flex items-start gap-3 cursor-pointer" data-testid="gm-photos-row">
+          <input
+            type="checkbox"
+            className="mt-0.5 w-5 h-5"
+            checked={state?.media ? state.media.photosAllChats : true}
+            onChange={(e) => void setMedia({ photosAllChats: e.target.checked })}
+            data-testid="gm-photos-all"
+          />
+          <span>
+            <span className="block text-sm font-medium text-gray-900">Download photos from all chats</span>
+            <span className="block text-xs text-gray-600">
+              On: photos are saved for every chat in the period. Off: only for chats with a transaction contact.
+            </span>
+          </span>
+        </label>
+        <label className="mt-3 flex items-start gap-3 cursor-pointer" data-testid="gm-videos-row">
+          <input
+            type="checkbox"
+            className="mt-0.5 w-5 h-5"
+            checked={!!state?.media?.videosAllChats}
+            onChange={(e) => {
+              if (e.target.checked) setVideoConfirm(true);
+              else void setMedia({ videosAllChats: false });
+            }}
+            data-testid="gm-videos-all"
+          />
+          <span>
+            <span className="block text-sm font-medium text-gray-900">Download videos from all chats</span>
+            <span className="block text-xs text-gray-600">
+              Off by default. Videos take much more space than photos.
+            </span>
+          </span>
+        </label>
+        {videoConfirm && (
+          <div className="mt-3 p-3 bg-amber-50 border border-amber-300 rounded" role="alert" data-testid="gm-videos-confirm">
+            <p className="text-xs text-amber-800" data-testid="gm-videos-estimate">{videoEstimateText(state?.media?.lastVideosSeen)}</p>
+            <div className="flex gap-2 mt-2">
+              <button
+                type="button"
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded"
+                onClick={() => {
+                  setVideoConfirm(false);
+                  void setMedia({ videosAllChats: true });
+                }}
+              >
+                Turn on videos
+              </button>
+              <button
+                type="button"
+                className="px-3 py-1.5 bg-white hover:bg-gray-100 text-gray-700 text-xs font-medium rounded border border-gray-300"
+                onClick={() => setVideoConfirm(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {manageOpen && (
         <NotSyncedChatsModal
           chats={excluded}
@@ -354,88 +458,6 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
         />
       )}
 
-      {/* Founder (J flow): the beta (unpacked) install of the extension.
-          Founder (2026-10-04): HIDDEN until the extension is in the Chrome
-          Web Store — until then every account gets the beta (forced), so a
-          switch that cannot be changed is not shown. */}
-      {published && (
-        <label className="flex items-start gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">
-          <input
-            type="checkbox"
-            className="mt-0.5 w-5 h-5"
-            checked={betaInstall}
-            onChange={(e) => void changeBetaInstall(e.target.checked)}
-            data-testid="gm-beta-install"
-          />
-          <span>
-            <span className="block text-sm font-medium text-gray-900">Beta extension install</span>
-          </span>
-        </label>
-      )}
-
-      {/* BACKLOG-3658 P3b — "Delete chats not linked to a transaction after
-          90 days": REMOVED from the screen "for now" (founder, 2026-10-04).
-          The purge is dormant: RCS_AUTO_DELETE_ENABLED (rcsImportHandlers) is
-          off, so a stored ON value does nothing. */}
-
-      {/* SR M: media from chats with no transaction contact. Photos ON, videos OFF by default. */}
-      <label className="flex items-start gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">
-        <input
-          type="checkbox"
-          className="mt-0.5 w-5 h-5"
-          checked={state?.media ? state.media.photosAllChats : true}
-          onChange={(e) => void setMedia({ photosAllChats: e.target.checked })}
-          data-testid="gm-photos-all"
-        />
-        <span>
-          <span className="block text-sm font-medium text-gray-900">Download photos from all chats</span>
-          <span className="block text-xs text-gray-600">
-            On: photos are saved for every chat in the period. Off: only for chats with a transaction contact.
-          </span>
-        </span>
-      </label>
-      <label className="flex items-start gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">
-        <input
-          type="checkbox"
-          className="mt-0.5 w-5 h-5"
-          checked={!!state?.media?.videosAllChats}
-          onChange={(e) => {
-            if (e.target.checked) setVideoConfirm(true);
-            else void setMedia({ videosAllChats: false });
-          }}
-          data-testid="gm-videos-all"
-        />
-        <span>
-          <span className="block text-sm font-medium text-gray-900">Download videos from all chats</span>
-          <span className="block text-xs text-gray-600">
-            Off by default. Videos take much more space than photos.
-          </span>
-        </span>
-      </label>
-      {videoConfirm && (
-        <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg" role="alert" data-testid="gm-videos-confirm">
-          <p className="text-xs text-amber-800" data-testid="gm-videos-estimate">{videoEstimateText(state?.media?.lastVideosSeen)}</p>
-          <div className="flex gap-2 mt-2">
-            <button
-              type="button"
-              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded"
-              onClick={() => {
-                setVideoConfirm(false);
-                void setMedia({ videosAllChats: true });
-              }}
-            >
-              Turn on videos
-            </button>
-            <button
-              type="button"
-              className="px-3 py-1.5 bg-white hover:bg-gray-100 text-gray-700 text-xs font-medium rounded border border-gray-300"
-              onClick={() => setVideoConfirm(false)}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
 
       {result && (
         <div
@@ -446,7 +468,7 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
         </div>
       )}
 
-      <div>
+      <div data-testid="gm-block-actions">
         <button
           type="button"
           onClick={() => setShowForceWarning(true)}

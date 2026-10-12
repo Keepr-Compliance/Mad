@@ -91,10 +91,19 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
 
   // BACKLOG-1458: Track active import source for adaptive Messages section
   const [activeImportSource, setActiveImportSource] = useState<ImportSource | null>(null);
-  // BACKLOG-3892: the texts lookback picker lives in the macOS panel's Import
-  // Preferences only while that panel is the live source (it renders nothing
-  // off a Mac, and is absent or greyed for the other sources).
-  const lookbackInImportPreferences = isMacOS && activeImportSource === 'macos-native';
+  // BACKLOG-3892 / BACKLOG-3156 stage F: the texts lookback picker is a row of
+  // the LIVE source panel's Import Preferences — macOS Messages (Mac only; it
+  // renders nothing off a Mac), Google Messages, or iPhone. Anything else (no
+  // source chosen on Windows, a stored macos-native off a Mac) keeps the
+  // standalone card. Exactly one picker renders.
+  const lookbackHome: 'macos' | 'google' | 'iphone' | 'standalone' =
+    isMacOS && activeImportSource === 'macos-native'
+      ? 'macos'
+      : activeImportSource === 'android-messages-web'
+        ? 'google'
+        : activeImportSource === 'iphone-sync'
+          ? 'iphone'
+          : 'standalone';
 
   const activeTabId = useScrollSpy(visibleTabIds, scrollContainerRef, 48, !loadingPreferences);
 
@@ -216,19 +225,21 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
               onConnectionStatusChange={handleConnectionStatusChange}
             />
 
+            {/* BACKLOG-3156 stage F: one lookback value for the Messages AND
+                iPhone Sync sections — the picker can sit in either. */}
+            <TextsLookbackProvider userId={userId}>
             {/* Messages Import — adapts per active import source (BACKLOG-1458) */}
             <div id="settings-messages" className="mb-8">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Messages</h3>
-              <TextsLookbackProvider userId={userId}>
               <div className="space-y-4">
                 <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} />
                 {/* BACKLOG-3892 S3: ONE "How far back to import texts" picker for
-                    every source, on Mac and Windows. Founder QA 2026-10-12: on a
-                    Mac with macOS Messages as the source it sits inside that
-                    panel's Import Preferences, under "Maximum messages";
-                    everywhere else it is this standalone card. Exactly one
-                    renders. */}
-                {!lookbackInImportPreferences && <TextsLookbackSettings userId={userId} />}
+                    every source, on Mac and Windows. Founder QA 2026-10-12 /
+                    BACKLOG-3156 stage F: it sits inside the live source panel's
+                    Import Preferences (macOS Messages, Google Messages, iPhone);
+                    only with no such panel is it this standalone card. Exactly
+                    one renders. */}
+                {lookbackHome === 'standalone' && <TextsLookbackSettings userId={userId} />}
                 {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below.
                     SR C6 (founder): the Android Companion panel is no longer mounted. */}
                 {activeImportSource === 'android-messages-web' ? (
@@ -236,7 +247,13 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                      extension): its status and its own reset. The source picker
                      above shows it selected — so a Mac that skips its Messages
                      (BACKLOG-1467) says why (BACKLOG-3749). */
-                  <GoogleMessagesSettings userId={userId} onOpenSyncAndroid={onLinkGoogleMessages} />
+                  <GoogleMessagesSettings
+                    userId={userId}
+                    onOpenSyncAndroid={onLinkGoogleMessages}
+                    lookbackPicker={
+                      lookbackHome === 'google' ? <TextsLookbackSettings userId={userId} embedded /> : undefined
+                    }
+                  />
                 ) : (
                   /* BACKLOG-2335: the macOS panel is live only for macos-native
                      (an unknown stored value reads as that on a Mac, 3749);
@@ -245,7 +262,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                     userId={userId}
                     enabled={activeImportSource === 'macos-native'}
                     lookbackPicker={
-                      lookbackInImportPreferences ? <TextsLookbackSettings userId={userId} embedded /> : undefined
+                      lookbackHome === 'macos' ? <TextsLookbackSettings userId={userId} embedded /> : undefined
                     }
                     disabledReason={
                       activeImportSource === 'iphone-sync'
@@ -255,7 +272,6 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                   />
                 )}
               </div>
-              </TextsLookbackProvider>
             </div>
 
             {/* iPhone Sync — merged USB toggle + (Windows) Apple driver tools (BACKLOG-1937).
@@ -278,13 +294,19 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                   )}
                   <div className="space-y-4">
                     {/* BACKLOG-1706: iPhone-over-USB detection opt-in (off by default on macOS) */}
-                    <IphoneSyncSettings disabled={!iphoneSourceActive} />
+                    <IphoneSyncSettings
+                      disabled={!iphoneSourceActive}
+                      lookbackPicker={
+                        lookbackHome === 'iphone' ? <TextsLookbackSettings userId={userId} embedded /> : undefined
+                      }
+                    />
                     {/* Apple Mobile Device driver tools — Windows only (TASK-2277) */}
                     {isWindows && <SyncToolsSettings disabled={!iphoneSourceActive} />}
                   </div>
                 </div>
               );
             })()}
+            </TextsLookbackProvider>
 
             <ContactsSettings
               userId={userId}
