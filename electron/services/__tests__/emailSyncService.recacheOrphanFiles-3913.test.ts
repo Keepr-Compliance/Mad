@@ -10,12 +10,16 @@
  * `emailSyncService.forceRecacheKeepsDeals-3910a.test.ts`.
  *
  * CONTROLS (each mutation run in the failing direction; results on BACKLOG-3913):
- *   O1 orphan unlinked             -> remove the cleanup call -> red
- *   O2 protected email's file kept -> collect paths of ALL the user's emails -> red
+ *   O1 orphan unlinked             -> remove the cleanup call -> red (O1, O5)
  *   O3 shared file kept            -> drop the reference check -> red
  *   O4 out-of-root path refused    -> skip containment, unlink the stored path -> red
- *   O5 unlink failure tolerated    -> let the unlink error propagate -> red
- *   O6 failed / not-applied swap   -> run the cleanup on those paths -> red
+ *   O5 unlink failure tolerated    -> rethrow per file -> red; rethrow to the run -> red
+ *   O2 protected email's file kept -> guarded TWICE: the candidate set excludes
+ *      protected emails AND the reference check keeps any referenced file. Either
+ *      mutation alone stays green; both together -> red.
+ *   O6 failed / not-applied swap   -> the rows were never removed, so the
+ *      reference check also keeps their files. Running the cleanup on the failed
+ *      swap alone stays green; with the reference check dropped -> red (O6a).
  */
 
 import * as nodePath from "path";
