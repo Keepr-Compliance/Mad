@@ -8,7 +8,7 @@
  */
 import React from "react";
 import { useIphoneBackfill } from "../../../hooks/useIphoneBackfill";
-import type { BackfillResult } from "../../../../electron/types/iphoneBackfill";
+import type { BackfillReason, BackfillResult } from "../../../../electron/types/iphoneBackfill";
 import {
   GET_OLDER_TEXTS_LABEL,
   GET_OLDER_TEXTS_PHASE,
@@ -17,6 +17,8 @@ import {
   getOlderTextsRefusalLine,
   getOlderTextsUnavailableLine,
 } from "./coverageCopy";
+
+const BACKUP_UNUSABLE: ReadonlySet<BackfillReason> = new Set<BackfillReason>(["missing", "damaged", "key-missing"]);
 
 export interface GetOlderTextsProps {
   transactionId: string;
@@ -80,7 +82,10 @@ export function GetOlderTexts({ transactionId, refreshKey, onSuccess }: GetOlder
     !result && availability && !availability.available
       ? getOlderTextsUnavailableLine(availability.reason, availability.message)
       : null;
-  const offered = availability?.available === true;
+  // A run refused because the backup itself is unusable: availability can still say
+  // `available` (the files are there), but trying again cannot help — no button.
+  const backupUnusable = !!result && !result.success && !!result.reason && BACKUP_UNUSABLE.has(result.reason);
+  const offered = availability?.available === true && !backupUnusable;
 
   if (!resultLine && !unavailableLine && !offered) return null;
   return (

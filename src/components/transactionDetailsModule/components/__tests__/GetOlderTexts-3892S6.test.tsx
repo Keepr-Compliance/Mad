@@ -217,6 +217,13 @@ describe("C4: refusal lines", () => {
     fireEvent.click(await screen.findByTestId("get-older-texts-button"));
     expect(await screen.findByTestId("get-older-texts-result")).toHaveTextContent(expected);
     expect(screen.queryByText(/SqliteError/)).toBeNull();
+    // an unusable backup is not offered again (availability still says available here)
+    await act(async () => {});
+    if ([DAMAGED, KEY_MISSING, MISSING].includes(expected)) {
+      expect(screen.queryByTestId("get-older-texts-button")).toBeNull();
+    } else {
+      expect(screen.getByTestId("get-older-texts-button")).toBeInTheDocument();
+    }
     // a refusal is not a success: coverage is not re-read for it
     expect(getTextCoverage.mock.calls.length).toBe(coverageCalls);
   });
