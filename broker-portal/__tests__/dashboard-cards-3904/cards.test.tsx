@@ -138,23 +138,24 @@ describe('cards on the real dashboard', () => {
     const hrefs = Object.fromEntries(
       screen.getAllByRole('link').map((a) => [a.getAttribute('aria-label'), a.getAttribute('href')])
     );
+    expect(hrefs['Pending Review: 3, view submissions']).toBe('/dashboard/submissions?status=pending');
     expect(hrefs['Needs Changes: 2, view submissions']).toBe('/dashboard/submissions?status=needs_changes');
     expect(hrefs['Approved: 2, view submissions']).toBe('/dashboard/submissions?status=approved');
     expect(hrefs['Total Submissions: 9, view submissions']).toBe('/dashboard/submissions');
   });
 
-  it('Pending Review is not a link and counts submitted + under_review deals', async () => {
+  it('Pending Review is a link and counts submitted + under_review deals', async () => {
     await renderDashboard();
-    expect(screen.queryByRole('link', { name: /Pending Review/ })).toBeNull();
+    const link = screen.getByRole('link', { name: 'Pending Review: 3, view submissions' });
     const label = screen.getByText((_, el) => el?.hasAttribute('data-stat-label') === true && el.textContent === 'Pending Review');
-    expect(label.closest('a')).toBeNull();
+    expect(label.closest('a')).toBe(link);
     expect(within(label.parentElement as HTMLElement).getByText('3')).toBeInTheDocument();
   });
 
   it('every linked card opens exactly the deals its number counts (ID sets, not counts)', async () => {
     const { container } = await renderDashboard();
     const linked = Array.from(container.querySelectorAll('a[aria-label$="view submissions"]'));
-    expect(linked).toHaveLength(3);
+    expect(linked).toHaveLength(4);
     for (const a of linked) {
       const def = STAT_CARDS.find((d) => a.getAttribute('aria-label')!.startsWith(d.label))!;
       const list = await pageOfHeads<{ id: string }, ChainLink>({
@@ -170,14 +171,17 @@ describe('cards on the real dashboard', () => {
     }
   });
 
-  it('why Pending is unlinked: the nearest filter selects a different set', () => {
+  it('Pending Review: list set == card set as IDs, and it differs from the nearest older filters', () => {
     const pending = cardDealIds(HEADS, STAT_CARDS.find((d) => d.key === 'pending')!).sort();
+    const viaPending = HEADS.filter((h) => headMatchesFilter(h.status, 'pending')).map((h) => h.id).sort();
     const viaSubmittedFilter = HEADS.filter((h) => headMatchesFilter(h.status, 'submitted')).map((h) => h.id).sort();
     const viaUnderReview = HEADS.filter((h) => headMatchesFilter(h.status, 'under_review')).map((h) => h.id).sort();
-    expect(viaSubmittedFilter).toEqual(['c2-v2', 's1', 's2']);
-    expect(viaSubmittedFilter).not.toEqual(pending);
-    expect(viaUnderReview).not.toEqual(pending);
     expect(pending).toEqual(['s1', 's2', 'u1']);
+    expect(viaPending).toEqual(pending);
+    // existing values keep their meaning; resubmitted (c2-v2) is in `submitted` only
+    expect(viaSubmittedFilter).toEqual(['c2-v2', 's1', 's2']);
+    expect(viaUnderReview).toEqual(['u1']);
+    expect(viaPending).not.toContain('c2-v2');
   });
 
   it('hrefs carry no agent, search or page: a link cannot widen or narrow scope', async () => {
@@ -265,7 +269,8 @@ describe('compact phone card (below md)', () => {
   });
 
   it('keeps the desktop (md and up) classes exactly as before', () => {
-    const { container } = render(<DashboardStatCards cards={cards} icons={icons} />);
+    // plain (unlinked) box: the link affordance classes are asserted separately
+    const { container } = render(<DashboardStatCards cards={cards.map((c) => ({ ...c, href: null }))} icons={icons} />);
     const box = cardBoxes(container)[0];
     expect(plain(box.className)).toEqual(
       expect.arrayContaining(['bg-white', 'rounded-lg', 'border', 'border-gray-200', 'p-5', 'flex', 'items-center', 'gap-4'])
@@ -279,11 +284,13 @@ describe('compact phone card (below md)', () => {
     expect(plain(text.querySelector('[data-stat-value]')!.parentElement!.className)).toEqual(['flex', 'items-baseline', 'gap-2']);
   });
 
-  it('keeps the unlinked Pending card a plain box and the aria labels', () => {
-    const { container } = render(<DashboardStatCards cards={cards} icons={icons} />);
-    expect(cardBoxes(container)[0].tagName).toBe('DIV');
+  it('a card without an href is a plain box; linked cards keep the aria labels', () => {
+    const plainCards = cards.map((c) => (c.key === 'total' ? { ...c, href: null } : c));
+    const { container } = render(<DashboardStatCards cards={plainCards} icons={icons} />);
+    expect(cardBoxes(container)[3].tagName).toBe('DIV');
+    expect(cardBoxes(container)[0].tagName).toBe('A');
     expect(screen.getAllByRole('link').map((a) => a.getAttribute('aria-label'))).toEqual([
-      ...cards.filter((c) => c.href).map((c) => `${c.label}: ${c.value}, view submissions`),
+      ...plainCards.filter((c) => c.href).map((c) => `${c.label}: ${c.value}, view submissions`),
     ]);
   });
 });

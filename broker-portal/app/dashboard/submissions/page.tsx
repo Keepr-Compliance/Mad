@@ -14,6 +14,7 @@ import { redirect } from 'next/navigation';
 import { requireFullPortalAccess } from '@/lib/auth/portalAccess';
 import {
   BROKER_LINK_COLUMNS,
+  PENDING_REVIEW_FILTER,
   headMatchesSearch,
   pageOfHeads,
   readDealHeads,
@@ -198,7 +199,13 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
   // deals (STATUSES labels it "Pending"), so the caption uses that tab label
   // instead of formatStatus, which still reports a single submission's own
   // "Submitted" status elsewhere on this page.
-  const currentStatusLabel = STATUSES.find((s) => s.value === currentStatus)?.label ?? formatStatus(currentStatus);
+  // `pending` (the dashboard card's set: submitted + under_review) is not a
+  // standing tab; it shows, active, only while it is the filter.
+  const statusOptions =
+    currentStatus === PENDING_REVIEW_FILTER
+      ? [STATUSES[0], { value: PENDING_REVIEW_FILTER, label: 'Pending Review' }, ...STATUSES.slice(1)]
+      : STATUSES;
+  const currentStatusLabel = statusOptions.find((s) => s.value === currentStatus)?.label ?? formatStatus(currentStatus);
 
   const { client, impersonation, organizationId } = await getDataClient();
 
@@ -253,7 +260,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
           BACKLOG-3904: desktop only; below md the phone filters replace them. */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 max-md:hidden">
         <div className="flex flex-wrap gap-2">
-          {STATUSES.map(({ value, label }) => {
+          {statusOptions.map(({ value, label }) => {
             const isActive = currentStatus === value;
             return (
               <Link
@@ -275,7 +282,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
 
       <SubmissionPhoneFilters
         filters={filters}
-        statuses={STATUSES}
+        statuses={statusOptions}
         agents={agents}
         facets={facets}
         selectedAgentLabel={selectedAgentLabel}

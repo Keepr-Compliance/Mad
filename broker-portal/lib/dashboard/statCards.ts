@@ -8,6 +8,7 @@
  * `filter: undefined` and is not linked.
  */
 
+import { PENDING_REVIEW_FILTER, PENDING_REVIEW_STATUSES } from '@/lib/submissions/dealList';
 import { buildListUrl } from '@/lib/submissions/listUrl';
 
 export type StatCardKey = 'pending' | 'needs_changes' | 'approved' | 'total';
@@ -23,13 +24,13 @@ export interface StatCardDef {
    *
    * Pending Review counts submitted + under_review. The list's "Pending" value
    * (`submitted`) selects submitted + resubmitted and "Under Review" selects
-   * under_review alone, so neither - nor any one value - selects that set.
+   * under_review alone, so Pending Review has its own value, `pending`.
    */
   filter: string | undefined;
 }
 
 export const STAT_CARDS: readonly StatCardDef[] = [
-  { key: 'pending', label: 'Pending Review', statuses: ['submitted', 'under_review'], filter: undefined },
+  { key: 'pending', label: 'Pending Review', statuses: PENDING_REVIEW_STATUSES, filter: PENDING_REVIEW_FILTER },
   { key: 'needs_changes', label: 'Needs Changes', statuses: ['needs_changes'], filter: 'needs_changes' },
   { key: 'approved', label: 'Approved', statuses: ['approved'], filter: 'approved' },
   { key: 'total', label: 'Total Submissions', statuses: null, filter: 'all' },

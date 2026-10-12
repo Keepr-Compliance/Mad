@@ -21,7 +21,7 @@
  *     seeding users with the target's row only.
  */
 
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import React from 'react';
 import { FIXTURE_BROKERAGE_ORG_ID, createPostgrestEmulator, type Row } from '../helpers/postgrestEmulator';
@@ -310,6 +310,27 @@ describe('R2 names in a support session and on a failed lookup', () => {
     given(ROWS, { users: [userNameRow(AGENT_A, NAME_A, 'alpha@fixture.example.test')] });
     await renderList();
     expect(agentSelectOptions()).toEqual(['All agents', NAME_A, 'Former member']);
+  });
+});
+
+describe('status=pending (the dashboard Pending Review card)', () => {
+  it('lists submitted + under_review heads only; resubmitted stays under `submitted`', async () => {
+    expect(listedIds((await renderList({ status: 'pending' })).container)).toEqual([A1]);
+    cleanup();
+    expect(listedIds((await renderList({ status: 'submitted' })).container)).toEqual([A2_V2, A1]);
+  });
+
+  it('shows as an active "Pending Review" chip and phone control only while selected', async () => {
+    const { container } = await renderList({ status: 'pending' });
+    const chip = Array.from(container.querySelectorAll('a')).find((x) => x.textContent === 'Pending Review');
+    expect(chip).toBeDefined();
+    expect(chip!.className).toContain('bg-primary-600');
+    expect(screen.getByRole('button', { name: 'Status: Pending Review' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Status: Pending Review' }));
+    expect(within(screen.getByRole('dialog', { name: 'Status' })).getByRole('button', { name: 'Pending Review · 1' })).toBeInTheDocument();
+    cleanup();
+    const plain = await renderList();
+    expect(Array.from(plain.container.querySelectorAll('a')).some((x) => x.textContent === 'Pending Review')).toBe(false);
   });
 });
 

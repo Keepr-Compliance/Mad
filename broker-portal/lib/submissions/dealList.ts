@@ -90,9 +90,18 @@ const MAX_BLOCKS = 100;
 export const PENDING_FILTER = 'submitted';
 export const PENDING_STATUSES: readonly string[] = ['submitted', 'resubmitted'];
 
+/**
+ * The dashboard's "Pending Review" card (BACKLOG-3904): deals whose head is
+ * submitted or under_review (no resubmitted). The list's `status=pending`
+ * selects exactly this set; the card and the list read this one constant.
+ */
+export const PENDING_REVIEW_FILTER = 'pending';
+export const PENDING_REVIEW_STATUSES: readonly string[] = ['submitted', 'under_review'];
+
 /** Whether a head's status matches a list's status filter (null = every deal). */
 export function headMatchesFilter(headStatus: string | null, filter: string | null): boolean {
   if (filter === null) return true;
+  if (filter === PENDING_REVIEW_FILTER) return headStatus !== null && PENDING_REVIEW_STATUSES.includes(headStatus);
   if (filter === PENDING_FILTER) return headStatus !== null && PENDING_STATUSES.includes(headStatus);
   return headStatus === filter;
 }
