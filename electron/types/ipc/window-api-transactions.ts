@@ -620,7 +620,12 @@ export interface WindowApiTransactions {
   update: (
     transactionId: string,
     data: Record<string, unknown>,
-  ) => Promise<{ success: boolean; error?: string }>;
+  ) => Promise<{
+    success: boolean;
+    error?: string;
+    /** BACKLOG-3910d: set when the deal is locked and the main process refused. */
+    dealLocked?: "submitted" | "sealed";
+  }>;
   delete: (
     transactionId: string,
   ) => Promise<{ success: boolean; error?: string }>;

@@ -59,6 +59,13 @@ function ExportModal({
   // not offered (the main process refuses any write to a locked deal).
   const lockReason = dealLockReason(transaction.submission_status);
   const datesLockedTooltip = lockReason ? DEAL_LOCK_EDIT_TOOLTIP[lockReason] : undefined;
+  // BACKLOG-3910d: the prop can be older than the row (a submit on this screen
+  // changes the row, not the prop). When main refuses the date save as locked,
+  // this holds the reason it gave; the export goes ahead with the saved dates.
+  const [refusedLock, setRefusedLock] = useState<"submitted" | "sealed" | null>(null);
+  const effectiveLock = lockReason ?? refusedLock;
+  // Founder 2026-10-12: only an approved (sealed) deal can still be closed.
+  const closeOffered = !effectiveLock || effectiveLock === "sealed";
 
   const [contentType, setContentType] = useState<"both" | "emails" | "texts">("both");
   const [attachmentType, setAttachmentType] = useState<"all" | "email" | "text" | "none">("all");
@@ -342,7 +349,10 @@ function ExportModal({
       const updateResult = commission.update
         ? await saveConfirmedTransactionDates(transaction.id, dates, commission.update)
         : await saveConfirmedTransactionDates(transaction.id, dates);
-      if (!updateResult.success) {
+      if (updateResult.dealLocked) {
+        // Locked since the prop was read: export with the saved dates.
+        setRefusedLock(updateResult.dealLocked);
+      } else if (!updateResult.success) {
         setError(`Failed to save dates: ${updateResult.error}`);
         setStep(1);
         return;
@@ -481,7 +491,7 @@ function ExportModal({
   // "Done" on the success screen. If the transaction can still be closed, surface
   // the "mark as closed?" prompt (step 4); otherwise finish the flow.
   const handleDismissSuccess = () => {
-    if (transaction.status === "closed" || datesLockedTooltip) {
+    if (transaction.status === "closed" || !closeOffered) {
       onExportComplete({ success: true, path: exportedPath });
     } else {
       setStep(4);
@@ -928,6 +938,11 @@ function ExportModal({
               <h4 className="text-lg font-semibold text-gray-900 mb-2">
                 Export Complete!
               </h4>
+              {refusedLock && (
+                <p className="text-sm text-gray-500 mb-2">
+                  This deal is locked, so the export used the dates already saved.
+                </p>
+              )}
               <p className="text-sm text-gray-600 mb-6">
                 Your {exportFormat === "folder" ? "Audit Package" : exportFormat === "combined-pdf" ? "Combined PDF" : "export"} has been saved successfully.
               </p>

@@ -112,11 +112,88 @@ describe("BACKLOG-3910 slice d: Export on a locked deal saves nothing and still 
     }
 
     await click(/^done$/i);
-    if (reason) {
+    if (reason === "submitted") {
       expect(screen.queryByText(/mark this transaction as closed/i)).toBeNull();
       expect(onExportComplete).toHaveBeenCalledWith({ success: true, path: "/out/audit" });
     } else {
+      // Open deals and approved (sealed) deals can be closed (founder 2026-10-12).
       expect(await screen.findByText(/mark this transaction as closed/i)).toBeInTheDocument();
     }
+  });
+});
+
+// R1 (SR review, PR 2978): the `transaction` prop can still read "open" after a
+// submit on the same screen. Main then refuses the date save. The refusal below
+// is transcribed from the handler's refuseIfDealLocked
+// (electron/services/dealLockState.ts): { success:false, error, dealLocked, refusedEdit }.
+describe("BACKLOG-3910 R1: the prop says open, main says locked", () => {
+  const REFUSAL = {
+    success: false,
+    error: "This deal is with your broker for review, so it can't be changed until it's returned to you.",
+    dealLocked: "submitted",
+    refusedEdit: "edit-deal-details",
+  };
+
+  it("still exports with the saved dates and offers no close prompt", async () => {
+    updateMock.mockResolvedValue(REFUSAL);
+    const onExportComplete = jest.fn();
+    render(
+      <ExportModal
+        transaction={txn("not_submitted")}
+        userId="user-3910d"
+        onClose={jest.fn()}
+        onExportComplete={onExportComplete}
+      />,
+    );
+    await click(/next/i);
+    await click(/^export$/i);
+    await waitFor(() => expect(exportEnhancedMock).toHaveBeenCalledTimes(1));
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/failed to save dates/i)).toBeNull();
+    expect(screen.getByText(/used the dates already saved/i)).toBeInTheDocument();
+
+    await click(/^done$/i);
+    expect(screen.queryByText(/mark this transaction as closed/i)).toBeNull();
+    expect(onExportComplete).toHaveBeenCalledWith({ success: true, path: "/out/audit" });
+  });
+
+  it("a plain save failure (no dealLocked) still stops the export", async () => {
+    updateMock.mockResolvedValue({ success: false, error: "disk full" });
+    render(
+      <ExportModal
+        transaction={txn("not_submitted")}
+        userId="user-3910d"
+        onClose={jest.fn()}
+        onExportComplete={jest.fn()}
+      />,
+    );
+    await click(/next/i);
+    await click(/^export$/i);
+    expect(await screen.findByText(/failed to save dates: disk full/i)).toBeInTheDocument();
+    expect(exportEnhancedMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("BACKLOG-3910 close prompt: approved only", () => {
+  it("prop open, main refuses as sealed (approved): export runs and the close prompt is offered", async () => {
+    updateMock.mockResolvedValue({
+      success: false,
+      error: "This deal is sealed, so it can't be changed.",
+      dealLocked: "sealed",
+      refusedEdit: "edit-deal-details",
+    });
+    render(
+      <ExportModal
+        transaction={txn("not_submitted")}
+        userId="user-3910d"
+        onClose={jest.fn()}
+        onExportComplete={jest.fn()}
+      />,
+    );
+    await click(/next/i);
+    await click(/^export$/i);
+    await waitFor(() => expect(exportEnhancedMock).toHaveBeenCalledTimes(1));
+    await click(/^done$/i);
+    expect(await screen.findByText(/mark this transaction as closed/i)).toBeInTheDocument();
   });
 });
