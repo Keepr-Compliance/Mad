@@ -95,6 +95,22 @@ it("iPhone start + end: the approved lines, the person named, both in the gate",
   expect(exportEnhancedMock).not.toHaveBeenCalled();
 });
 
+it("Mac chosen with a start gap and an end gap: the end line is in the start-gap gate (R3)", async () => {
+  setSource("macos-native");
+  completenessMock.mockResolvedValue({
+    ...covered,
+    complete: false,
+    needsMessagesImport: true,
+    auditStartISO: at(2026, 1, 5),
+    messagesFloorISO: at(2026, 8, 25),
+    textEndGap: endGap("mac"),
+  });
+  await driveToExport();
+  expect(await screen.findByTestId("export-gate-end")).toHaveTextContent("Mac Messages were last imported Feb 20");
+  expect(screen.getByTestId("export-gate-update-now")).toBeTruthy();
+  expect(exportEnhancedMock).not.toHaveBeenCalled();
+});
+
 it("an END gap alone opens the gate (complete is true); Export anyway exports", async () => {
   setSource("android-messages-web");
   completenessMock.mockResolvedValue({ ...covered, textEndGap: endGap("google_messages") });

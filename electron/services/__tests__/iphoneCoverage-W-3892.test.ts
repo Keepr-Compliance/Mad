@@ -351,6 +351,19 @@ maybe("BACKLOG-3892 W: real schema", () => {
       expect(startGap("between")).toMatchObject({ kind: "later", coveredSince: iso(B_FLOOR) });
     });
 
+    it("contiguity boundary: phone A ending one day before phone B starts does not join; ending the day B starts does (R1)", async () => {
+      deal("t1", "2024-06-01");
+      // Phone B reads [2025-05-01, now]. Phone A read [2024-01-01, B_FLOOR - 1 day]: a day-long hole.
+      await persist(result({ udid: PHONE_A, startedAtMs: B_FLOOR - DAY, floorPlan: plan({ settings: A_FLOOR }) }));
+      await persist(result({ udid: PHONE_B, startedAtMs: NOW - 3_600_000, floorPlan: plan({ settings: B_FLOOR }) }));
+      expect(startGap("t1")).toMatchObject({ kind: "later", coveredSince: iso(B_FLOOR) });
+      expect(getIphoneDealCoverage(USER, "t1")?.coveredSince).toBe(iso(B_FLOOR));
+      // Phone A's last sync moves to exactly B's start: it reaches B, the intervals join.
+      await persist(result({ udid: PHONE_A, startedAtMs: B_FLOOR, floorPlan: plan({ settings: A_FLOOR }) }));
+      expect(startGap("t1")).toBeUndefined();
+      expect(getIphoneDealCoverage(USER, "t1")?.coveredSince).toBe(iso(A_FLOOR));
+    });
+
     it("contiguous phones: a deal phone A covered stays covered after phone B's first sync", async () => {
       // Phone A read [2024-01-01, 2025-06-01]; phone B reads [2025-05-01, now].
       await persist(result({ udid: PHONE_A, startedAtMs: Date.UTC(2025, 5, 1), floorPlan: plan({ settings: A_FLOOR }) }));
@@ -397,6 +410,18 @@ maybe("BACKLOG-3892 W: real schema", () => {
       expect(startGap("t1")).toMatchObject({ kind: "later", coveredSince: iso(oldest), cappedByPhone: iso(oldest), previousPhone: true, who: "Dana Reyes" });
       const exp = await checkExportCompleteness("t1", USER, "iphone");
       expect(exp).toMatchObject({ complete: false, iphoneGap: true, textStartGap: expect.objectContaining({ cappedByPhone: iso(oldest) }) });
+    });
+
+    it("an older phone is capped at its own oldest text too: joined coverage starts there, not at its settings floor (R2)", async () => {
+      const jan = Date.UTC(2025, 0, 1);
+      const mar = Date.UTC(2025, 2, 1);
+      const jun = Date.UTC(2025, 5, 1);
+      deal("t1", "2025-02-01");
+      // Phone A: since Jan, but its oldest text is Mar; last sync Jun. Phone B (current): since Jun.
+      await persist(result({ udid: PHONE_A, startedAtMs: jun, floorPlan: plan({ settings: jan }), oldestTextMs: mar }));
+      await persist(result({ udid: PHONE_B, startedAtMs: NOW - 3_600_000, floorPlan: plan({ settings: jun }) }));
+      expect(getIphoneDealCoverage(USER, "t1")?.coveredSince).toBe(iso(mar));
+      expect(startGap("t1")).toMatchObject({ kind: "later", coveredSince: iso(mar) });
     });
 
     it("a single phone whose oldest text limits the start: capped, no previous phone", async () => {

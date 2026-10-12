@@ -9,6 +9,7 @@
  *   R1 the run not stored / not read back                      → "stored and read back"
  *   R2 the not-settled count hidden from the coverage          → "may be incomplete"
  *   R3 Force re-import leaving the run (and its count) behind   → "cleared"
+ *   R4 the backfill recording "now" instead of the run's finish → "backfill records the previous run's finish"
  */
 
 import * as nodePath from "path";
@@ -28,6 +29,7 @@ jest.mock("../permissionService", () => ({ __esModule: true, default: {} }));
 import { setDb } from "../db/core/dbConnection";
 import { clearRcsCacheRun, getRcsCacheRun, recordRcsCacheRun } from "../db/rcsCacheRunsDbService";
 import { getSourceCoverage, recordSourceCoverage, sourceCoverageGaps } from "../auditCoverageService";
+import { backfillCoverageRecord } from "../rcsCacheService";
 
 const PRODUCTION_SCHEMA = nodePath.join(__dirname, "..", "..", "database", "schema.sql");
 const USER = "user-l2";
@@ -77,4 +79,14 @@ describe("the last cache run (L2)", () => {
     clearRcsCacheRun(USER);
     expect(getRcsCacheRun(USER)).toBeNull();
   });
+});
+
+it("backfill records the previous run's finish as the last sync, not the time of the next Sync (R4)", () => {
+  recordRcsCacheRun(USER, RUN);
+  const backfill = backfillCoverageRecord(getRcsCacheRun(USER));
+  expect(backfill).toEqual({ coveredSince: RUN.floorISO, lastSyncAt: RUN.finishedAt });
+  recordSourceCoverage(USER, "google_messages", backfill!.coveredSince, backfill!.lastSyncAt);
+  expect(getSourceCoverage(USER).find((c) => c.source === "google_messages")).toMatchObject({ coveredSince: RUN.floorISO, lastSyncAt: RUN.finishedAt });
+  // A run that backfills nothing records nothing.
+  expect(backfillCoverageRecord({ ...RUN, fullRead: false })).toBeNull();
 });
