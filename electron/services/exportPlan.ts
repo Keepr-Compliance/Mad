@@ -248,9 +248,9 @@ function communicationDate(comm: Communication): Date {
  *   `attachmentDbService` (both LATENT — their renderer callers pass no window)
  * - auto-link candidate matching: `messageMatchingService` (was a literal
  *   `"T23:59:59.999Z"` string concat — UTC-midnight semantics)
- * - email fetch / import-cap protection window: `utils/emailDateRange.ts`
- *   `computeTransactionDateRange`, whose 30-day buffer now advances from this
- *   bound (was start-of-day+30)
+ * - email fetch / auto-link / import-cap protection window:
+ *   `utils/emailDateRange.ts` `computeTransactionDateRange`, which ends at this
+ *   bound exactly (its 30-day post-closing buffer was removed by BACKLOG-3910)
  * - the Texts tab and ConversationViewModal use `isTimestampInAuditPeriod` in
  *   `src/utils/dateRangeUtils.ts`. The renderer CANNOT value-import from
  *   `electron/`, so that is a MIRROR of this rule, not a derivation of it, and

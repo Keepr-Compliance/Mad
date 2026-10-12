@@ -235,7 +235,7 @@ describe("ensureTransactionEmailsSynced", () => {
    */
   it("COVERED window: no fetch, and auto-link runs with the ambiguous half queued", async () => {
     mockGetSyncState.mockReturnValue({
-      newest_cached_at: "2028-06-01T00:00:00.000Z", // covers reqEnd Jan 30 2028 (closed_at Dec 31 2027 + 30d)
+      newest_cached_at: "2028-06-01T00:00:00.000Z", // covers reqEnd = end of Dec 31 2027 (closed_at; no buffer, BACKLOG-3910)
       oldest_cached_at: "2025-01-01T00:00:00.000Z",
     });
     const result = await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason: "open" });
@@ -404,7 +404,7 @@ describe("triggerTransactionSyncInBackground (BACKLOG-1832)", () => {
 // BACKLOG-1862: open-trigger past-window policy
 // ---------------------------------------------------------------------------
 describe("BACKLOG-1862: open-trigger past-window policy", () => {
-  // Birchwood scenario: closed Apr 30 2026, reqEnd = May 30 2026 (37 days in the past on 2026-07-06).
+  // Birchwood scenario: closed Apr 30 2026, reqEnd = end of Apr 30 2026 (closed_at; no buffer since BACKLOG-3910).
   const pastWindowTxn = {
     id: "tx-1",
     user_id: "user-1",
