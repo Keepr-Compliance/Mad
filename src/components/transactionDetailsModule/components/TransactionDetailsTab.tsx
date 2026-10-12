@@ -715,6 +715,7 @@ export function TransactionDetailsTab({
           transactionId={transaction.id}
           transactionType={(transaction.transaction_type as TransactionType) || "other"}
           onRestoreComplete={onContactRestoreComplete}
+          restoreLockedTooltip={editLockedTooltip}
           onShowSuccess={onShowSuccess}
           onShowError={onShowError}
           isOpen={removedContactsOpen}

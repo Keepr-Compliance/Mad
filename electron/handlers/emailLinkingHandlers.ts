@@ -20,7 +20,11 @@ import gmailFetchService from "../services/gmailFetchService";
 import outlookFetchService from "../services/outlookFetchService";
 import emailSyncService from "../services/emailSyncService";
 import { wrapHandler } from "../utils/wrapHandler";
-import { refuseIfDealLocked } from "../services/dealLockState";
+import {
+  refuseIfDealLocked,
+  refuseIfAnyDealLocked,
+  getMessageTransactionIds,
+} from "../services/dealLockState";
 import { notifyWhenMessageDerivedReady, notifyWhenReadLands } from "../services/messageDerivedReadyNotice";
 import { joinMessageRosterRead } from "../services/db/messageRosterCache";
 import type { TransactionResponse } from "../types/handlerTypes";
@@ -624,6 +628,14 @@ export function registerEmailLinkingHandlers(): void {
           throw new ValidationError(`Invalid message ID: ${id}`, "messageIds");
         }
       }
+
+      // BACKLOG-3910: a locked deal (submitted or sealed) is fully read-only.
+      // The service unlinks from the passed deal, else each message's own deal.
+      const lockedRefusal = refuseIfAnyDealLocked(
+        transactionId ? [transactionId] : getMessageTransactionIds(messageIds),
+        "remove-texts",
+      );
+      if (lockedRefusal) return lockedRefusal;
 
       // TASK-1116: Pass transactionId for thread-based unlinking
       await transactionService.unlinkMessages(messageIds, transactionId);

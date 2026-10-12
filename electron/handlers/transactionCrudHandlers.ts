@@ -16,7 +16,11 @@ import emailSyncService from "../services/emailSyncService";
 // BACKLOG-1802: automatic per-transaction email sync on create/open/date-change.
 // BACKLOG-1832: isAutoSyncInFlight supports mount-time spinner state query.
 import { triggerTransactionSyncInBackground, isAutoSyncInFlight } from "../services/transactionSyncTrigger";
-import { refuseIfDealLocked } from "../services/dealLockState";
+import {
+  refuseIfDealLocked,
+  refuseIfAnyDealLocked,
+  getCommunicationTransactionId,
+} from "../services/dealLockState";
 import { isAuditWindowExtended } from "../utils/emailDateRange";
 // BACKLOG-2292: automatic audit-window MESSAGES sync (the messages twin) + the
 // coverage-detection reads that drive the date-selection popup and export gate.
@@ -477,6 +481,9 @@ export function registerTransactionCrudHandlers(
       if (!validatedTransactionId) {
         throw new ValidationError("Transaction ID validation failed", "transactionId");
       }
+      // BACKLOG-3910: a locked deal (submitted or sealed) is fully read-only.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId, "remove-texts");
+      if (lockedRefusal) return lockedRefusal;
       const result = await unlinkTextThreads(validatedTransactionId, validateThreadKeys(threadKeys));
       return { success: true, ...result };
     }, { module: "Transactions" }),
@@ -1053,6 +1060,10 @@ export function registerTransactionCrudHandlers(
       }
       const validatedContactId = validateContactId(contactId);
 
+      // BACKLOG-3910: a locked deal (submitted or sealed) is fully read-only.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId as string, "remove-contact");
+      if (lockedRefusal) return lockedRefusal;
+
       await transactionService.removeContactFromTransaction(
         validatedTransactionId as string,
         validatedContactId as string,
@@ -1240,10 +1251,14 @@ export function registerTransactionCrudHandlers(
         };
       });
 
-      // BACKLOG-3910: a batch that adds any contact is refused whole on a
+      // BACKLOG-3910: a batch is refused whole on a
       // locked deal (submitted or sealed), so nothing in it is half-applied.
-      if (validatedOperations.some((op) => op.action === "add")) {
-        const lockedRefusal = refuseIfDealLocked(validatedTransactionId as string, "add-contact");
+      // A remove-only batch is refused too: a locked deal is read-only.
+      {
+        const lockedRefusal = refuseIfDealLocked(
+          validatedTransactionId as string,
+          validatedOperations.some((op) => op.action === "add") ? "add-contact" : "remove-contact",
+        );
         if (lockedRefusal) return lockedRefusal;
       }
 
@@ -1408,6 +1423,13 @@ export function registerTransactionCrudHandlers(
           error: "Invalid communication ID",
         };
       }
+
+      // BACKLOG-3910: a locked deal (submitted or sealed) is fully read-only.
+      const lockedRefusal = refuseIfAnyDealLocked(
+        [getCommunicationTransactionId(communicationId.trim())],
+        "remove-emails",
+      );
+      if (lockedRefusal) return lockedRefusal;
 
       // BACKLOG-1778: capture the removed communication ids (clicked row +
       // thread siblings) so the renderer can drop exactly those rows in place

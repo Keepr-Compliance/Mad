@@ -51,6 +51,8 @@ export interface MessageThreadCardProps {
   onConfirm?: (threadId: string) => void;
   /** Whether the confirm action is in flight. */
   isConfirming?: boolean;
+  /** BACKLOG-3910: locked deal — approve and reject are disabled and show this text. */
+  actionsLockedTooltip?: string;
   /** Map of phone number -> contact name for resolving senders */
   contactNames?: Record<string, string>;
   /** Audit period start date for filtering (TASK-1157) */
@@ -61,6 +63,8 @@ export interface MessageThreadCardProps {
   isRemoved?: boolean;
   /** Callback when restore button is clicked (only shown when isRemoved) */
   onRestore?: (threadId: string) => void;
+  /** BACKLOG-3910: locked deal — the Restore button is disabled and shows this text. */
+  restoreLockedTooltip?: string;
   /** Whether restore is in progress */
   isRestoring?: boolean;
   /**
@@ -288,11 +292,13 @@ export function MessageThreadCard({
   onUnlink,
   onConfirm,
   isConfirming,
+  actionsLockedTooltip,
   contactNames = {},
   auditStartDate,
   auditEndDate,
   isRemoved = false,
   onRestore,
+  restoreLockedTooltip,
   isRestoring = false,
   selectionMode = false,
   isSelected = false,
@@ -443,10 +449,10 @@ export function MessageThreadCard({
             {!showSelection && onConfirm && (
               <button
                 onClick={(e) => { e.stopPropagation(); onConfirm(threadId); }}
-                disabled={isConfirming}
+                disabled={isConfirming || !!actionsLockedTooltip}
                 className="text-gray-400 hover:text-green-600 hover:bg-green-50 rounded p-1 transition-all disabled:opacity-50"
                 data-testid="confirm-thread-button"
-                title="Keep this conversation on the transaction"
+                title={actionsLockedTooltip ?? "Keep this conversation on the transaction"}
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -457,10 +463,10 @@ export function MessageThreadCard({
             {showSelection ? null : isRemoved && onRestore ? (
               <button
                 onClick={() => onRestore(threadId)}
-                disabled={isRestoring}
+                disabled={isRestoring || !!restoreLockedTooltip}
                 className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-green-600 hover:text-green-800 hover:bg-green-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="restore-removed-message"
-                title="Restore this conversation to the transaction"
+                title={restoreLockedTooltip ?? "Restore this conversation to the transaction"}
               >
                 {isRestoring ? (
                   <>
@@ -479,8 +485,9 @@ export function MessageThreadCard({
             ) : onUnlink ? (
               <button
                 onClick={() => onUnlink(threadId)}
-                className="text-gray-400 hover:text-red-600 hover:bg-red-50 rounded p-1 transition-all"
-                title="Remove from transaction"
+                disabled={!!actionsLockedTooltip}
+                className="text-gray-400 hover:text-red-600 hover:bg-red-50 rounded p-1 transition-all disabled:opacity-50"
+                title={actionsLockedTooltip ?? "Remove from transaction"}
                 data-testid="unlink-thread-button"
               >
                 {/* BACKLOG-1793: trash icon (matches EmailThreadCard) instead of

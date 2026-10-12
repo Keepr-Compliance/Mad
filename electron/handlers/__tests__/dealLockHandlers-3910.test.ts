@@ -6,6 +6,11 @@
  *        restore-contact) is refused on a locked deal.
  *   C-b  attaching emails or texts by hand (link-emails, link-messages, and the
  *        restore-removed-* re-attach paths) is refused on a locked deal.
+ *   C-d  removing contacts, emails or texts (remove-contact, a remove-only
+ *        batch, unlink-communication, unlink-messages, unlink-text-threads) is
+ *        refused on a locked deal.
+ *   C-e  approving or rejecting a Needs Review item (review:approve,
+ *        review:reject) is refused on a locked deal.
  *   C-c  the same edits go through on an open deal. Every submission status is
  *        swept, so the boundary (needs_changes / rejected reopen) is covered.
  *
@@ -43,6 +48,9 @@ jest.mock("../../services/transactionService", () => ({
   default: {
     assignContactToTransaction: jest.fn(() => Promise.resolve({})),
     batchUpdateContactAssignments: jest.fn(() => Promise.resolve()),
+    removeContactFromTransaction: jest.fn(() => Promise.resolve()),
+    unlinkCommunication: jest.fn(() => Promise.resolve({ unlinkedIds: [] })),
+    unlinkMessages: jest.fn(() => Promise.resolve()),
     linkMessages: jest.fn(() => Promise.resolve()),
     getTransactionDetails: jest.fn(() => Promise.resolve(null)),
   },
@@ -65,7 +73,15 @@ jest.mock("../../services/autoLinkService", () => ({
     Promise.resolve({ emailsLinked: 0, messagesLinked: 0, queuedForReview: 0 }),
   ),
 }));
+jest.mock("../../services/transactionTextThreadsService", () => ({
+  unlinkTextThreads: jest.fn(() => Promise.resolve({ removed: 0, messageIds: [] })),
+}));
 jest.mock("../../services/reviewStateService", () => ({
+  approveReviewItems: jest.fn(() => Promise.resolve({ approved: 1 })),
+  rejectReviewItems: jest.fn(() => Promise.resolve({ rejected: 1 })),
+  getReviewItemTransactionIds: jest.fn(() => ["3910b000-0000-4000-8000-000000000001"]), // pii-allow-uuid: invented test id
+  getReviewState: jest.fn(),
+  syncReviewQueueForTransaction: jest.fn(),
   countReviewItems: jest.fn(() => 0),
   restoreRejectedToQueue: jest.fn(() => Promise.resolve(0)),
   notifyReviewStateChanged: jest.fn(),
@@ -87,9 +103,13 @@ import transactionService from "../../services/transactionService";
 import databaseService from "../../services/databaseService";
 import { registerTransactionCrudHandlers } from "../transactionCrudHandlers";
 import { registerEmailLinkingHandlers } from "../emailLinkingHandlers";
+import { registerReviewQueueHandlers } from "../reviewQueueHandlers";
+import { approveReviewItems, rejectReviewItems } from "../../services/reviewStateService";
+import { unlinkTextThreads } from "../../services/transactionTextThreadsService";
 
 const DEAL = "3910b000-0000-4000-8000-000000000001"; // pii-allow-uuid: invented test id
 const CONTACT = "3910b000-0000-4000-8000-000000000002"; // pii-allow-uuid: invented test id
+const COMM = "3910b000-0000-4000-8000-000000000004"; // pii-allow-uuid: invented test id
 const EMAIL = "3910b000-0000-4000-8000-000000000003"; // pii-allow-uuid: invented test id
 
 /** Every value of the schema's submission_status CHECK list. */
@@ -159,11 +179,68 @@ const EDITS: Edit[] = [
     refusedEdit: "attach-emails",
     downstream: () => jest.mocked(transactionService.getTransactionDetails) as unknown as jest.Mock,
   },
+  {
+    name: "remove contact (remove-contact)",
+    channel: "transactions:remove-contact",
+    args: [DEAL, CONTACT],
+    refusedEdit: "remove-contact",
+    downstream: () => jest.mocked(transactionService.removeContactFromTransaction) as unknown as jest.Mock,
+  },
+  {
+    name: "remove contact (batchUpdateContacts, remove only)",
+    channel: "transactions:batchUpdateContacts",
+    args: [DEAL, [{ action: "remove", contactId: CONTACT }]],
+    refusedEdit: "remove-contact",
+    downstream: () => jest.mocked(transactionService.batchUpdateContactAssignments) as unknown as jest.Mock,
+  },
+  {
+    name: "remove an email (unlink-communication)",
+    channel: "transactions:unlink-communication",
+    args: [COMM],
+    refusedEdit: "remove-emails",
+    downstream: () => jest.mocked(transactionService.unlinkCommunication) as unknown as jest.Mock,
+  },
+  {
+    name: "remove texts (unlink-messages, deal passed)",
+    channel: "transactions:unlink-messages",
+    args: [["msg-1"], DEAL],
+    refusedEdit: "remove-texts",
+    downstream: () => jest.mocked(transactionService.unlinkMessages) as unknown as jest.Mock,
+  },
+  {
+    name: "remove texts (unlink-messages, deal found from the message)",
+    channel: "transactions:unlink-messages",
+    args: [["msg-1"]],
+    refusedEdit: "remove-texts",
+    downstream: () => jest.mocked(transactionService.unlinkMessages) as unknown as jest.Mock,
+  },
+  {
+    name: "remove text threads (unlink-text-threads)",
+    channel: "transactions:unlink-text-threads",
+    args: [DEAL, ["thread-1"]],
+    refusedEdit: "remove-texts",
+    downstream: () => jest.mocked(unlinkTextThreads) as unknown as jest.Mock,
+  },
+  {
+    name: "approve a Needs Review item (review:approve)",
+    channel: "review:approve",
+    args: [["pending:item-1"]],
+    refusedEdit: "approve-review",
+    downstream: () => jest.mocked(approveReviewItems) as unknown as jest.Mock,
+  },
+  {
+    name: "reject a Needs Review item (review:reject)",
+    channel: "review:reject",
+    args: [["pending:item-1"]],
+    refusedEdit: "reject-review",
+    downstream: () => jest.mocked(rejectReviewItems) as unknown as jest.Mock,
+  },
 ];
 
 beforeAll(() => {
   registerTransactionCrudHandlers(null);
   registerEmailLinkingHandlers();
+  registerReviewQueueHandlers();
 });
 
 beforeEach(() => {
@@ -171,7 +248,12 @@ beforeEach(() => {
 });
 
 function setStatus(status: string | null): void {
-  jest.mocked(dbGet).mockReturnValue(status === null ? undefined : { submission_status: status });
+  // The deal-lookup queries (communication -> deal, message -> deal) answer with the deal;
+  // the status query answers with the status under test.
+  jest.mocked(dbGet).mockImplementation(((query: string) => {
+    if (/FROM communications|FROM messages/.test(String(query))) return { transaction_id: DEAL };
+    return status === null ? undefined : { submission_status: status };
+  }) as never);
 }
 
 async function invoke(edit: Edit): Promise<Res> {
@@ -215,14 +297,6 @@ describe("BACKLOG-3910: a locked deal refuses user edits in the main process", (
       }
     });
   }
-
-  it("a remove-only batch on a locked deal is not an add, so it still runs", async () => {
-    setStatus("submitted");
-    const fn = handlers.get("transactions:batchUpdateContacts")!;
-    const res = (await fn({} as unknown, DEAL, [{ action: "remove", contactId: CONTACT }])) as Res;
-    expect(res.dealLocked).toBeUndefined();
-    expect(transactionService.batchUpdateContactAssignments).toHaveBeenCalled();
-  });
 
   it("restore-removed-message on a locked deal is refused before anything is read", async () => {
     setStatus("approved");

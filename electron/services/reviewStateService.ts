@@ -1038,6 +1038,19 @@ async function resolveLegacyTwins(
  * confirm (match_reason → user_confirmed). Both leave the item out of
  * getReviewState afterwards, which is what "uniform state transitions" means.
  */
+/**
+ * BACKLOG-3910: the deals these review items belong to, so the handler can
+ * refuse approve/reject on a locked deal before anything is written.
+ */
+export function getReviewItemTransactionIds(itemIds: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const id of itemIds) {
+    const item = loadItem(id);
+    if (item) out.push(item.transaction_id);
+  }
+  return out;
+}
+
 export async function approveReviewItems(itemIds: string[]): Promise<{ approved: number }> {
   let approved = 0;
   let touched: string | null = null;

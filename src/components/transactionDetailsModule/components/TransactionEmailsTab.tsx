@@ -611,6 +611,7 @@ export function TransactionEmailsTab({
         {transactionId && (
           <RemovedEmailsSection
             transactionId={transactionId}
+            restoreLockedTooltip={editLockedTooltip}
             onRestoreComplete={onRestoreComplete}
             onShowSuccess={onShowSuccess}
             onShowError={onShowError}
@@ -844,6 +845,7 @@ export function TransactionEmailsTab({
       {transactionId && (
         <RemovedEmailsSection
           transactionId={transactionId}
+          restoreLockedTooltip={editLockedTooltip}
           onRestoreComplete={onRestoreComplete}
           onShowSuccess={onShowSuccess}
           onShowError={onShowError}

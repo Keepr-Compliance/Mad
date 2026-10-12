@@ -1503,6 +1503,7 @@ function TransactionDetails({
                   kind="email"
                   onApprove={handleApproveReview}
                   onReject={handleRejectReview}
+                  actionsLockedTooltip={editLockedTooltip}
                   onViewEmail={setViewingEmail}
                   nameMap={emailNameMap}
                 />
@@ -1561,6 +1562,7 @@ function TransactionDetails({
                   kind="text"
                   onApprove={handleApproveReview}
                   onReject={handleRejectReview}
+                  actionsLockedTooltip={editLockedTooltip}
                   auditStartDate={transaction.started_at}
                   auditEndDate={transaction.closed_at}
                 />
@@ -1781,6 +1783,7 @@ function TransactionDetails({
           isLoading={reviewQueue.isLoading}
           onApprove={handleApproveReview}
           onReject={handleRejectReview}
+          actionsLockedTooltip={editLockedTooltip}
           onClose={() => setShowNeedsReview(false)}
           /* Same props the tabs pass their cards, so the screen behaves
              identically — including click-to-preview. Text names resolve here

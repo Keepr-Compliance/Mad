@@ -1111,6 +1111,7 @@ export function TransactionMessagesTab({
         {transactionId && (
           <RemovedMessagesSection
             transactionId={transactionId}
+            restoreLockedTooltip={editLockedTooltip}
             userId={userId}
             contactNames={contactNames}
             onMessagesChanged={onMessagesChanged}
@@ -1371,6 +1372,7 @@ export function TransactionMessagesTab({
       {transactionId && (
         <RemovedMessagesSection
           transactionId={transactionId}
+          restoreLockedTooltip={editLockedTooltip}
           userId={userId}
           contactNames={contactNames}
           onMessagesChanged={onMessagesChanged}
