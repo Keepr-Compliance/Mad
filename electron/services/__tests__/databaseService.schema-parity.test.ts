@@ -120,13 +120,22 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
   },
   {
     key: "TABLE:pending_review_match_reasons",
-    what: "New table recording why an email is in Needs Review ('address' | 'contact').",
+    what: "New table recording why an email is in Needs Review ('address' | 'contact' | 'folder').",
     why:
       "BACKLOG-3925: Needs Review gains address-only matches from the local email " +
       "cache, and each row shows why it is there. Keyed by (transaction_id, email_id) " +
       "so the reason survives reject -> restore. A new table is fully IF NOT EXISTS, " +
       "so schema.sql's exec on every open creates it on fresh and upgraded databases " +
       "alike; no migration entry is needed.",
+    ref: "BACKLOG-3925",
+  },
+  {
+    key: "INDEX:idx_pending_review_match_reasons_email",
+    what: "Index on pending_review_match_reasons (email_id).",
+    why:
+      "BACKLOG-3925: the email foreign key's check on every email delete looks rows " +
+      "up by email_id; without the index it scans the table once per deleted email. " +
+      "IF NOT EXISTS, created by schema.sql's exec on every open.",
     ref: "BACKLOG-3925",
   },
   {

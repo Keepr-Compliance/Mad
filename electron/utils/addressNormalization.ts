@@ -329,6 +329,19 @@ export function addressRouteStreetNumbers(normalizedAddress: NormalizedAddress):
   return parts.length > 1 ? parts : [normalizedAddress.streetNumber];
 }
 
+/**
+ * BACKLOG-3925: the word the address route's SQL prefilter looks for (lowercased
+ * substring of subject or body) — the first word of addressRouteNameWords. Empty (the
+ * check is off) when that word has spelling variants ("highway" / "hwy") or is not
+ * plain ASCII (SQLite's lower() folds ASCII only), so the prefilter never drops a row
+ * the matcher would accept.
+ */
+export function addressRoutePrefilterWord(normalizedAddress: NormalizedAddress): string {
+  const first = addressRouteNameWords(normalizedAddress)[0] ?? "";
+  if (CANON_VARIANTS[first] || !/^[a-z0-9]+$/.test(first)) return "";
+  return first;
+}
+
 interface AdjToken {
   text: string;
   /** The text between the previous token and this one. */

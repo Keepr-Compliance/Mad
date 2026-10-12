@@ -202,6 +202,62 @@ describe("BACKLOG-3925 discovery on the deal-open sweep", () => {
     expect(r).toMatchObject({ queued: 2, matched: 2 });
   });
 
+  it("the SQL prefilter needs the number AND the first street-name word (fix round 2)", async () => {
+    seedBase();
+    seedCorpus();
+    // Number present, street name absent from subject and body: never a candidate.
+    insertEmail("e-other-street", STRANGER, "1428 Elm St", "Showing at 1428 Elm St.");
+    // Name present only as part of a longer word still passes the prefilter (a superset);
+    // the matcher then refuses it.
+    insertEmail("e-maplewood", STRANGER, "1428 Maplewood Dr", "Showing.");
+
+    const r = await queueAddressMatchesForTransaction(A);
+
+    // Candidates, enumerated: e-addr, e-unit, e-number-inside (11428 / 14280 Maple Ave),
+    // e-maplewood. Not e-other-street (no "maple"), not e-name-only (no "1428"), not the
+    // contact's own emails, not e-old (outside the window).
+    expect(r).toMatchObject({ candidates: 4, matched: 2, queued: 2 });
+    expect(pending(A)).toEqual(["e-addr:address", "e-unit:address"]);
+  });
+
+  it("a deal with a unit in its address still gets its address matches (fix round 2)", async () => {
+    seedBase("not_submitted", "1428 Maple Ave Unit 4, Springfield");
+    seedCorpus();
+
+    await queueAddressMatchesForTransaction(A);
+
+    expect(pending(A)).toEqual(["e-addr:address", "e-unit:address"]);
+  });
+
+  it("SR gap 1: reasons are read per deal — address on A, contact on B, B shows contact", async () => {
+    seedBase();
+    seedCorpus();
+    await queueEmailForReview(A, "e-addr", USER, "address");
+    await queueEmailForReview(B, "e-addr", USER, "contact");
+
+    const onB = getReviewState(B).items.filter((i) => i.email_id === "e-addr").map((i) => i.matchReason);
+    const onA = getReviewState(A).items.filter((i) => i.email_id === "e-addr").map((i) => i.matchReason);
+    expect(onB).toEqual(["contact"]);
+    expect(onA).toEqual(["address"]);
+  });
+
+  it("SR gap 2: a contact taken off the deal stops shielding their emails from the address route", async () => {
+    seedBase();
+    seedCorpus();
+
+    // On the deal: the contact's email naming the address belongs to the contact route.
+    await queueAddressMatchesForTransaction(A);
+    expect(pending(A)).not.toContain("e-contact-addr:address");
+
+    db.prepare(`UPDATE transaction_contacts SET removed_at = CURRENT_TIMESTAMP WHERE transaction_id = ? AND contact_id = ?`).run(
+      A,
+      CONTACT,
+    );
+    await queueAddressMatchesForTransaction(A);
+
+    expect(pending(A)).toEqual(["e-addr:address", "e-contact-addr:address", "e-unit:address"]);
+  });
+
   it("a deal with no street number gets no address pass", async () => {
     seedBase("not_submitted", "Maple Ave, Springfield");
     seedCorpus();

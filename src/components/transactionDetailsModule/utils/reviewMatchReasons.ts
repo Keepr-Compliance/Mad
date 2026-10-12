@@ -6,10 +6,10 @@
  * the section is structured around the two kinds that exist today. Row order is the
  * tab order (after "All") AND the precedence order (folder > address > contact) —
  * a mirror of REVIEW_MATCH_REASON_PRECEDENCE in electron/types/ipc/reviewMatchReason.ts,
- * which the renderer cannot value-import; reviewMatchReasons.parity.test.ts pins the
- * two lists equal.
+ * which the renderer cannot value-import; reviewMatchTabs-3925.test.tsx pins the two
+ * lists equal.
  *
- * Wording is DRAFT (founder open question on BACKLOG-3925) — built with mock v3's text.
+ * Wording is mock v3's text, approved by the founder on BACKLOG-3925 (2026-10-12).
  * Pill classes are mock v3's: blue = TransactionToolbar.tsx's blue pill, purple for
  * contact.
  */

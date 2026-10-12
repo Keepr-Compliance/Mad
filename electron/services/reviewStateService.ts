@@ -71,6 +71,7 @@ import { hostWindows } from "../capabilities/windowsProvider";
 import { dbGet, dbAll, dbRun } from "./db/core/dbConnection";
 import {
   ADDRESS_MATCH_CANDIDATE_EMAILS_SQL,
+  ADDRESS_MATCH_CANDIDATE_PARAM_COUNT,
   ADDRESS_MISSING_COMMUNICATIONS_BY_TRANSACTION_SQL,
   ADDRESS_MISSING_COMMUNICATION_BY_ID_SQL,
   DELETE_ADDRESS_MISSING_COMMUNICATION_SQL,
@@ -118,7 +119,14 @@ import {
 } from "../types/ipc/reviewMatchReason";
 import { TRANSACTION_AUTOLINK_WINDOW_SQL } from "./db/autoLinkSql";
 import { getCachedEmailSentAtBounds } from "./db/emailCacheWindow";
-import { normalizeAddress, contentContainsAddressAdjacent } from "../utils/addressNormalization";
+import {
+  normalizeAddress,
+  contentContainsAddressAdjacent,
+  addressRoutePrefilterWord,
+  addressRouteStreetNumbers,
+  type NormalizedAddress,
+} from "../utils/addressNormalization";
+import { DedicatedWorkerError, isPoolReady, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
 
 const MODULE = "ReviewStateService";
@@ -747,6 +755,74 @@ function recordMatchReason(transactionId: string, emailId: string, incoming: Rev
 /** Emails classified per event-loop turn by the address pass. */
 const ADDRESS_MATCH_EMAILS_PER_TURN = 10;
 
+/** The candidate read can take seconds on a large store under load; bound it generously. */
+const ADDRESS_MATCH_WORKER_TIMEOUT_MS = 5 * 60_000;
+
+type AddressCandidateRow = { id: string; subject: string | null; body_plain: string | null };
+
+/** Bound values of ADDRESS_MATCH_CANDIDATE_EMAILS_SQL, in order. */
+function addressMatchCandidateParams(
+  userId: string,
+  start: string,
+  end: string,
+  address: NormalizedAddress,
+  transactionId: string,
+): Array<string | number> {
+  // A ranged deal number ("12-14") is looked for by its first number; the matcher
+  // accepts either end.
+  const num = addressRouteStreetNumbers(address)[0];
+  const word = addressRoutePrefilterWord(address);
+  const params = [userId, start, end, num, num, word, word, transactionId, transactionId, transactionId, transactionId];
+  if (params.length !== ADDRESS_MATCH_CANDIDATE_PARAM_COUNT) throw new Error("address-match params out of step with the SQL");
+  return params;
+}
+
+/**
+ * BACKLOG-3925: run the address-match candidate read on a dedicated contact query
+ * worker when the pool is up (BACKLOG-3868 / 3883 pattern). instr over every body of
+ * the user in the deal's window cannot use an index — measured 0.3 s at 20k and 1 s at
+ * 60k cached emails as ONE synchronous block on a Mac. Same statement, same parameters,
+ * same rows. Main thread only when no worker ran it (pool not up, or `start_failed`);
+ * any other worker failure throws, and the sweep marks itself not clean.
+ */
+export async function readAddressMatchCandidates(
+  userId: string,
+  params: Array<string | number>,
+): Promise<AddressCandidateRow[]> {
+  if (isPoolReady()) {
+    try {
+      return (await queryOnDedicatedWorker("addressMatchCandidates", userId, ADDRESS_MATCH_WORKER_TIMEOUT_MS, {
+        params,
+      })) as AddressCandidateRow[];
+    } catch (error) {
+      const code = error instanceof DedicatedWorkerError ? error.code : "failed";
+      if (code !== "start_failed") throw error;
+      await logService.warn(
+        "[BACKLOG-3925] Address-match candidate worker could not start; reading on the main thread",
+        MODULE,
+        { code },
+      );
+    }
+  }
+  return dbAll<AddressCandidateRow>(ADDRESS_MATCH_CANDIDATE_EMAILS_SQL, params);
+}
+
+/** Test/probe-only: the candidate statement's parameters for a deal, or null. */
+export function addressMatchCandidateParamsForTests(transactionId: string): Array<string | number> | null {
+  const txn = dbGet<{
+    user_id: string;
+    started_at: string | null;
+    created_at: string | null;
+    closed_at: string | null;
+    property_address: string | null;
+    property_street: string | null;
+  }>(TRANSACTION_AUTOLINK_WINDOW_SQL, [transactionId]);
+  const address = txn ? normalizeAddress(txn.property_address || txn.property_street || null) : null;
+  if (!txn || !address) return null;
+  const range = computeTransactionDateRange({ started_at: txn.started_at, created_at: txn.created_at, closed_at: txn.closed_at });
+  return addressMatchCandidateParams(txn.user_id, range.start.toISOString(), range.end.toISOString(), address, transactionId);
+}
+
 export interface AddressMatchPassResult {
   /** Newly queued with reason "address". */
   queued: number;
@@ -801,19 +877,9 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
   const start = range.start.toISOString();
   const end = range.end.toISOString();
 
-  const rows = dbAll<{ id: string; subject: string | null; body_plain: string | null }>(
-    ADDRESS_MATCH_CANDIDATE_EMAILS_SQL,
-    [
-      txn.user_id,
-      start,
-      end,
-      address.streetNumber,
-      address.streetNumber,
-      transactionId,
-      transactionId,
-      transactionId,
-      transactionId,
-    ],
+  const rows = await readAddressMatchCandidates(
+    txn.user_id,
+    addressMatchCandidateParams(txn.user_id, start, end, address, transactionId),
   );
 
   let matched = 0;

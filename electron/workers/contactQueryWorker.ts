@@ -41,6 +41,7 @@ import { readOneToOneThreadIndexOn } from "../services/db/threadIdentityIndexDb"
 import { runThreadIdentityRequestOn, type ThreadIdentityRequest } from "../services/db/threadIdentityTargetedDb";
 import { readCandidateEmailsOn, readCandidateMessageThreadsOn } from "../services/db/autoLinkSql";
 import { readTransactionTextThreadsOn } from "../services/db/transactionTextPagingDb";
+import { ADDRESS_MATCH_CANDIDATE_PARAM_COUNT, readAddressMatchCandidatesOn } from "../services/db/reviewStateSql";
 import { runMessageRosterOn } from "../services/db/messageRosterDb";
 import {
   planCommunicationDatesOn,
@@ -64,7 +65,9 @@ type QueryType =
   // BACKLOG-3884: the Texts tab's conversation list (every linked text of one deal).
   | "transactionTextThreads"
   // BACKLOG-3837: the Attach Messages roster (every unlinked text of the user).
-  | "messageRoster";
+  | "messageRoster"
+  // BACKLOG-3925: the address-only Needs Review candidates (bodies scanned with instr).
+  | "addressMatchCandidates";
 
 interface InitMessage {
   type: "init";
@@ -335,6 +338,15 @@ parentPort?.on("message", (msg: WorkerMessage) => {
         throw new Error("candidateEmails needs addressCount and its params");
       }
       rows = readCandidateEmailsOn(db, addressCount as number, params);
+    } else if (queryMsg.type === "addressMatchCandidates") {
+      // BACKLOG-3925: the address-only review candidates (instr over every body of the
+      // user in the deal's window cannot use an index); off the main thread.
+      if (!db) throw new Error("Database not initialized");
+      const { params } = queryMsg as QueryMessage & QueryMessageExtras;
+      if (!Array.isArray(params) || params.length !== ADDRESS_MATCH_CANDIDATE_PARAM_COUNT) {
+        throw new Error("addressMatchCandidates needs its params");
+      }
+      rows = readAddressMatchCandidatesOn(db, params);
     } else if (queryMsg.type === "transactionTextThreads") {
       // BACKLOG-3884: the Texts tab's conversation list reads every linked text of the deal.
       if (!db) throw new Error("Database not initialized");

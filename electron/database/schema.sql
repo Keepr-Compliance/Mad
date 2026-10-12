@@ -1202,6 +1202,9 @@ CREATE TABLE IF NOT EXISTS pending_review_match_reasons (
   FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
   FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
 );
+-- The foreign-key check on every email delete looks rows up by email_id; without this
+-- index it scans the table once per deleted email.
+CREATE INDEX IF NOT EXISTS idx_pending_review_match_reasons_email ON pending_review_match_reasons(email_id);
 
 CREATE TABLE IF NOT EXISTS phone_last_message (
   phone_normalized TEXT NOT NULL,
