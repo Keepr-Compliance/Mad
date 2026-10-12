@@ -166,7 +166,7 @@ maybe("BACKLOG-3925 address pass on the main thread (probe)", () => {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const svc = require("../../services/reviewStateService");
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const sqlMod = require("../../services/db/reviewStateSql");
+        const sqlMod = require("../../services/db/addressMatchCandidatesDb");
         for (const [id] of DEALS) {
           const sqlAlone = timeSqlAlone(db, sqlMod, id);
           const first = await blockDuring(() => svc.queueAddressMatchesForTransaction(id));

@@ -70,8 +70,6 @@ import crypto from "crypto";
 import { hostWindows } from "../capabilities/windowsProvider";
 import { dbGet, dbAll, dbRun } from "./db/core/dbConnection";
 import {
-  ADDRESS_MATCH_CANDIDATE_EMAILS_SQL,
-  ADDRESS_MATCH_CANDIDATE_PARAM_COUNT,
   ADDRESS_MISSING_COMMUNICATIONS_BY_TRANSACTION_SQL,
   ADDRESS_MISSING_COMMUNICATION_BY_ID_SQL,
   DELETE_ADDRESS_MISSING_COMMUNICATION_SQL,
@@ -120,6 +118,8 @@ import {
 import { TRANSACTION_AUTOLINK_WINDOW_SQL } from "./db/autoLinkSql";
 import { getCachedEmailSentAtBounds } from "./db/emailCacheWindow";
 import {
+  ADDRESS_MATCH_CANDIDATE_EMAILS_SQL,
+  ADDRESS_MATCH_CANDIDATE_PARAM_COUNT,
   isAddressMatchRow,
   type AddressCandidateRow,
   type AddressMatchClassification,

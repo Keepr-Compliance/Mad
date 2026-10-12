@@ -27,8 +27,11 @@ jest.mock("../logService", () => {
 
 import { setDb } from "../db/core/dbConnection";
 import * as contactWorkerPool from "../../workers/contactWorkerPool";
-import { ADDRESS_MATCH_CANDIDATE_EMAILS_SQL, readAddressMatchCandidatesOn } from "../db/reviewStateSql";
-import { classifyAddressMatchCandidatesOn } from "../db/addressMatchCandidatesDb";
+import {
+  ADDRESS_MATCH_CANDIDATE_EMAILS_SQL,
+  classifyAddressMatchCandidatesOn,
+  readAddressMatchCandidatesOn,
+} from "../db/addressMatchCandidatesDb";
 import { normalizeAddress } from "../../utils/addressNormalization";
 import {
   addressMatchCandidateParamsForTests,

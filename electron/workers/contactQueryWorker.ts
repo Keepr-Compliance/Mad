@@ -41,8 +41,7 @@ import { readOneToOneThreadIndexOn } from "../services/db/threadIdentityIndexDb"
 import { runThreadIdentityRequestOn, type ThreadIdentityRequest } from "../services/db/threadIdentityTargetedDb";
 import { readCandidateEmailsOn, readCandidateMessageThreadsOn } from "../services/db/autoLinkSql";
 import { readTransactionTextThreadsOn } from "../services/db/transactionTextPagingDb";
-import { ADDRESS_MATCH_CANDIDATE_PARAM_COUNT } from "../services/db/reviewStateSql";
-import { classifyAddressMatchCandidatesOn } from "../services/db/addressMatchCandidatesDb";
+import { ADDRESS_MATCH_CANDIDATE_PARAM_COUNT, classifyAddressMatchCandidatesOn } from "../services/db/addressMatchCandidatesDb";
 import type { NormalizedAddress } from "../utils/addressNormalization";
 import { runMessageRosterOn } from "../services/db/messageRosterDb";
 import {
