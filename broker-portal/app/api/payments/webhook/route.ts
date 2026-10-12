@@ -11,7 +11,10 @@
 
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import * as Sentry from '@sentry/nextjs';
 import { getStripe } from '@/lib/stripe';
+import { currentStripeMode, eventStripeMode } from '@/lib/billing/mode';
+import { setDefaultPaymentMethod } from '@/lib/billing/customers';
 import { createServiceClient } from '@/lib/supabase/service';
 import {
   fulfillPaidUnlock,
@@ -53,6 +56,21 @@ export async function POST(req: Request): Promise<Response> {
     // Signature verification failed -> tampered/invalid. No ledger write.
     console.error('[payments/webhook] signature verification failed:', (err as Error).message);
     return NextResponse.json({ error: 'invalid signature' }, { status: 400 });
+  }
+
+  // BACKLOG-3845 (plan v3.2 E0): an event from the other Stripe mode is not
+  // processed. 200 so Stripe stops retrying; reported so a misrouted endpoint is seen.
+  const keyMode = currentStripeMode();
+  if (eventStripeMode(event) !== keyMode) {
+    console.error(
+      `[payments/webhook] ${event.type} ${event.id} livemode=${event.livemode} does not match key mode ${keyMode}; ignored`
+    );
+    Sentry.captureMessage('Stripe webhook event mode does not match key mode', {
+      level: 'warning',
+      tags: { billing_stage: 'webhook_mode', stripe_mode: keyMode },
+      extra: { event_id: event.id, event_type: event.type, livemode: event.livemode },
+    });
+    return NextResponse.json({ received: true, ignored: 'mode_mismatch' }, { status: 200 });
   }
 
   const service = createServiceClient();
@@ -170,10 +188,8 @@ async function handleCheckoutSessionCompleted(
       const pi = await getStripe().paymentIntents.retrieve(piId);
       pmId = typeof pi.payment_method === 'string' ? pi.payment_method : pi.payment_method?.id ?? null;
     }
-    await service
-      .from('stripe_customers')
-      .update({ default_payment_method_id: pmId, updated_at: new Date().toISOString() })
-      .eq('user_id', md.user_id);
+    // The event's mode row only (RC9); the mode check in POST guarantees it is the key's mode.
+    await setDefaultPaymentMethod(service, md.user_id, eventStripeMode(event), pmId);
   }
 
   // Advance the intent (fulfillment still happens on payment_intent.succeeded).

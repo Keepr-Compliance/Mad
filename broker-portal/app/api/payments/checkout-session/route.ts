@@ -12,9 +12,12 @@
  */
 
 import { NextResponse } from 'next/server';
+import * as Sentry from '@sentry/nextjs';
 import { getStripe, verifyBearerUser, CURRENCY, UNLOCK_PRODUCT_NAME, paymentCallbackUrl } from '@/lib/stripe';
 import { createServiceClient } from '@/lib/supabase/service';
 import { getNextUnlockQuote } from '@/lib/payments/fulfillment';
+import { currentStripeMode } from '@/lib/billing/mode';
+import { ensureStripeCustomer, isModeAllowedForUser } from '@/lib/billing/customers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,6 +45,13 @@ export async function POST(req: Request): Promise<Response> {
 
   const service = createServiceClient();
   const stripe = getStripe();
+  const mode = currentStripeMode();
+
+  // BACKLOG-3845: a test-mode deployment serves only is_test users. Before any
+  // Stripe call, so a refused user leaves no customer or session behind.
+  if (!(await isModeAllowedForUser(service, user.userId, mode))) {
+    return NextResponse.json({ error: 'payments unavailable for this account' }, { status: 403 });
+  }
 
   // Server-side quote (never client-supplied).
   const quote = await getNextUnlockQuote(service, user.userId);
@@ -49,8 +59,8 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: 'no active price' }, { status: 500 });
   }
 
-  // Ensure a Stripe Customer + stripe_customers row.
-  const customerId = await ensureStripeCustomer(service, stripe, user.userId, user.email);
+  // Ensure a Stripe Customer + stripe_customers row for this mode.
+  const customerId = await ensureStripeCustomer(service, stripe, user.userId, user.email, mode);
 
   const portalBase = process.env.NEXT_PUBLIC_APP_URL || 'https://app.keeprcompliance.com';
   const unlockMetadata: Record<string, string> = {
@@ -93,7 +103,7 @@ export async function POST(req: Request): Promise<Response> {
     }
   );
 
-  await service.from('payment_intents').insert({
+  const { error: insertError } = await service.from('payment_intents').insert({
     user_id: user.userId,
     local_transaction_id: localTransactionId,
     stripe_checkout_session_id: session.id,
@@ -102,7 +112,24 @@ export async function POST(req: Request): Promise<Response> {
     quoted_unit_price_cents: quote.unitPriceCents,
     pricing_tier_id: quote.pricingTierId,
     status: 'created',
+    stripe_mode: mode,
   });
+  if (insertError) {
+    // No money has moved yet. Without this row the payment could not be
+    // reconciled, so the session is expired and its URL never returned.
+    console.error('[payments/checkout-session] payment_intents insert failed:', insertError.code, insertError.message);
+    Sentry.captureMessage('payment_intents insert failed at checkout', {
+      level: 'error',
+      tags: { billing_stage: 'checkout_insert', stripe_mode: mode },
+      extra: { user_id: user.userId, checkout_session_id: session.id, code: insertError.code },
+    });
+    try {
+      await stripe.checkout.sessions.expire(session.id);
+    } catch (expireErr) {
+      console.error('[payments/checkout-session] session expire failed:', (expireErr as Error).message);
+    }
+    return NextResponse.json({ error: 'checkout could not be recorded' }, { status: 500 });
+  }
 
   // The desktop opens session.url externally; the success page deep-links back via
   // paymentCallbackUrl(session.id). Return the URL (and the callback for clarity).
@@ -110,28 +137,4 @@ export async function POST(req: Request): Promise<Response> {
     checkout_url: session.url,
     deep_link: paymentCallbackUrl(session.id),
   });
-}
-
-async function ensureStripeCustomer(
-  service: ReturnType<typeof createServiceClient>,
-  stripe: ReturnType<typeof getStripe>,
-  userId: string,
-  email: string | null
-): Promise<string> {
-  const { data: existing } = await service
-    .from('stripe_customers')
-    .select('stripe_customer_id')
-    .eq('user_id', userId)
-    .maybeSingle();
-  if (existing?.stripe_customer_id) return existing.stripe_customer_id;
-
-  const customer = await stripe.customers.create({
-    email: email ?? undefined,
-    metadata: { user_id: userId },
-  });
-  await service.from('stripe_customers').insert({
-    user_id: userId,
-    stripe_customer_id: customer.id,
-  });
-  return customer.id;
 }
