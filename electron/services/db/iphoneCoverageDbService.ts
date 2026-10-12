@@ -9,6 +9,7 @@
  */
 import { dbAll, dbGet, dbRun } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
+import { LIVE_TRANSACTION_SQL_PREDICATE, withLiveTransactionParam } from "./core/transactionEligibilitySql";
 
 export interface IphoneDeviceCoverageRow {
   udid: string;
@@ -169,4 +170,21 @@ export function transactionLinkedIosChats(userId: string, transactionId: string)
     if (Number.isInteger(id)) out.push(id);
   }
   return out;
+}
+
+/**
+ * BACKLOG-3892 S5: one live deal's dates and lock state, for the backfill. undefined =
+ * no such live deal for this user (rejected, not this user's, or not there).
+ */
+export function liveDealBackfillRow(
+  userId: string,
+  transactionId: string,
+): { started_at: string | null; created_at: string | null; closed_at: string | null; submission_status: string | null } | undefined {
+  return dbGet(
+    sql`SELECT t.started_at, t.created_at, t.closed_at, t.submission_status
+          FROM transactions t
+         WHERE t.id = ? AND t.user_id = ?
+           AND ${LIVE_TRANSACTION_SQL_PREDICATE}`,
+    withLiveTransactionParam([transactionId, userId]),
+  );
 }

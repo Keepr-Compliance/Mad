@@ -709,6 +709,7 @@ export class iOSMessagesParser {
    * @param offset Optional offset for pagination
    * @param sinceMs BACKLOG-3892 S1: only messages dated at or after this (epoch ms,
    *   inclusive; undated rows kept). Absent = every message.
+   * @param untilMs BACKLOG-3892 S5: only DATED messages before this (epoch ms, exclusive).
    *
    * A failed read still returns [] (callers rely on it) but is counted in
    * readFailures (D5).
@@ -718,6 +719,7 @@ export class iOSMessagesParser {
     limit?: number,
     offset?: number,
     sinceMs?: number,
+    untilMs?: number,
   ): Promise<iOSMessage[]> {
     this.ensureOpen();
 
@@ -732,7 +734,12 @@ export class iOSMessagesParser {
         this.db!,
         this.checkAudioTranscriptColumn(),
         chatId,
-        sinceMs === undefined ? { limit, offset } : { limit, offset, sinceMs },
+        {
+          limit,
+          offset,
+          ...(sinceMs === undefined ? {} : { sinceMs }),
+          ...(untilMs === undefined ? {} : { untilMs }),
+        },
       );
 
       const messages: iOSMessage[] = [];

@@ -172,6 +172,11 @@ class MacOSMessagesImportService {
   private forceReimportInProgress = false;
   /** Max import duration before auto-reset (10 minutes) */
   private static readonly MAX_IMPORT_DURATION_MS = 10 * 60 * 1000;
+
+  /** BACKLOG-3892 S5: a texts force re-import is running (the iPhone backfill waits for it). */
+  isForceReimportInProgress(): boolean {
+    return this.forceReimportInProgress;
+  }
   /**
    * BACKLOG-2776: when a cancel arrived with no import in flight, the epoch ms
    * at which it arrived. Null once consumed or expired.
