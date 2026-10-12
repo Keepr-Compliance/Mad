@@ -91,7 +91,13 @@ jest.mock('@/lib/feature-gate', () => {
     ),
   };
 });
-jest.mock('@/lib/auth/portalAccess', () => ({ requireFullPortalAccess: jest.fn(async () => ({ ok: true })) }));
+jest.mock('@/lib/auth/portalAccess', () => ({
+  requireFullPortalAccess: jest.fn(async () => ({ ok: true })),
+  getPortalAccess: jest.fn(async () => ({
+    user: { email: 'alex@example.test', user_metadata: {} },
+    access: { kind: 'full', role: 'broker' },
+  })),
+}));
 jest.mock('@/components/submission/SubmissionListClient', () => ({
   SubmissionListClient: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
@@ -106,6 +112,7 @@ import { PageHeader } from '@keepr/design-system';
 import UserListClient from '@/components/users/UserListClient';
 import UserDetailsCard, { type MemberDetailsData } from '@/components/users/UserDetailsCard';
 import SubmissionsPage from '@/app/dashboard/submissions/page';
+import DashboardPage from '@/app/dashboard/page';
 
 const DIR = process.env.DUMP_DIR as string;
 const dump = (name: string, html: string) => writeFileSync(join(DIR, `${name}.html`), html);
@@ -385,4 +392,28 @@ it('title-* (page title in the top bar)', () => {
     unmount();
   }
   mockPath = '/dashboard/submissions/sub-1';
+});
+
+// BACKLOG-3904 fix-up: the dashboard's four stat cards, from the REAL page. Runs
+// unchanged on the base (cards were plain boxes) and on the branch (links).
+it('dashboard-cards', async () => {
+  const mk = (id: string, status: string, parent: string | null, createdAt: string): Row => ({
+    ...submissionRow({ id, organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status, parentSubmissionId: parent, createdAt }),
+    version: 1,
+  });
+  mockEmulator.reset();
+  mockEmulator.set({
+    rows: {
+      transaction_submissions: [
+        mk('s1', 'submitted', null, '2026-09-03T00:00:00Z'),
+        mk('s2', 'under_review', null, '2026-09-03T01:00:00Z'),
+        mk('s3', 'needs_changes', null, '2026-09-03T02:00:00Z'),
+        mk('s4', 'approved', null, '2026-09-03T03:00:00Z'),
+        mk('s5', 'approved', null, '2026-09-03T04:00:00Z'),
+        mk('s6', 'rejected', null, '2026-09-03T05:00:00Z'),
+      ],
+    },
+  });
+  const { container } = render(await DashboardPage());
+  dump('dashboard-cards', container.innerHTML);
 });
