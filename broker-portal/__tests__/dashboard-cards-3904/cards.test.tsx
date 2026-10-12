@@ -184,7 +184,7 @@ describe('cards on the real dashboard', () => {
     for (const l of labels) expect(l).toMatch(/: 0, view submissions$/);
   });
 
-  it('BACKLOG-3906: Recent Submissions lists only orgs with portal access (the no-access org's rows come first in the fixture)', async () => {
+  it('BACKLOG-3906: Recent Submissions lists only orgs with portal access (the no-access org comes first in the fixture)', async () => {
     const { container } = await renderDashboard();
     const ids = recentIds(container);
     expect(ids.length).toBeGreaterThan(0);
