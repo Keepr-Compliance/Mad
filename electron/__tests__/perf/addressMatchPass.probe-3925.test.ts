@@ -18,6 +18,7 @@
  * KEEPR_PERF_3925_POOL=1 starts the real contact query worker pool first (the shipped
  * configuration); without it the pass reads on the main thread (pool not up).
  * KEEPR_PERF_3925_SIZES=20000,60000 (default) picks the store sizes.
+ * KEEPR_PERF_3925_NAMES=0 keeps the street-name words out of the filler text.
  *
  * Run (Electron's node, real driver):
  *   KEEPR_PERF_3925=1 KEEPR_PERF_3925_POOL=1 ELECTRON_RUN_AS_NODE=1 npx electron \
@@ -77,7 +78,11 @@ const FILLER = [
   "The buyers want 7 days for the appraisal and the lender needs 30 more.",
   "We offered $7,000 over asking and they countered at 12,500 above list.",
   "Please sign pages 3 through 12 and return them by Friday at 4.",
-  "The park near the school is lovely and the oak trees are 100 years old.",
+  // KEEPR_PERF_3925_NAMES=0: no street-name word in the filler, so the name-word
+  // prefilter can narrow the candidates (default: every body contains "park" and "oak").
+  process.env.KEEPR_PERF_3925_NAMES === "0"
+    ? "The garden near the school is lovely and the elm trees are 100 years old."
+    : "The park near the school is lovely and the oak trees are 100 years old.",
   "Escrow opens on the 14th, earnest money of 2% is due within 3 business days.",
   "Here is the HOA packet, 47 pages, plus the CC&Rs and the 2025 budget.",
   "Our title officer is out until the 21st; her backup can help with item 7.",
