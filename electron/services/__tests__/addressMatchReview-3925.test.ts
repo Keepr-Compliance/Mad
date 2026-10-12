@@ -256,7 +256,9 @@ describe("C6 — already decided or already waiting is not queued again", () => 
     expect(item?.matchReason).toBe("address");
 
     await rejectReviewItems([item!.id]);
-    await queueAddressMatchesForTransaction(A);
+    // matched 0: the rejection is excluded in SQL, not merely refused at the write
+    // (queueEmailForReview's own rejected check is a second layer behind it).
+    expect(await queueAddressMatchesForTransaction(A)).toMatchObject({ queued: 0, matched: 0 });
     expect(pending(A)).toEqual(["e-unit:address"]);
 
     const ignored = db
