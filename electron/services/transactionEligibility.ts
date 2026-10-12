@@ -79,8 +79,9 @@ export function isLiveTransactionStatus(status: string | null | undefined): bool
 //
 // One answer to "may Keepr add anything to this deal on its own?", read from
 // `transactions.submission_status`. A locked deal gets no automatic links and
-// no new Needs Review items from any path; the user can still attach things
-// by hand. Two reasons, because the founder wants one locked state with two
+// no new Needs Review items from any path, and the add-contact and manual
+// attach handlers refuse it (`refuseIfDealLocked` in dealLockState.ts;
+// founder 2026-10-11). Two reasons, because the founder wants one locked state with two
 // meanings:
 //
 //   "submitted"  the deal is with the broker. Locked while the broker reviews;

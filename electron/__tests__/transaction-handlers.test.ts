@@ -51,6 +51,14 @@ jest.mock("../services/transactionService", () => ({
   },
 }));
 
+// BACKLOG-3910: the lock gate reads submission_status from the real DB, which this
+// suite does not open. Every deal here is open; the gate itself is covered by
+// electron/handlers/__tests__/dealLockHandlers-3910.test.ts.
+jest.mock("../services/dealLockState", () => ({
+  getDealLockReason: () => null,
+  refuseIfDealLocked: () => null,
+}));
+
 jest.mock("../services/auditService", () => ({
   __esModule: true,
   default: {

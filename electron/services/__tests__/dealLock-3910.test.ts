@@ -359,7 +359,7 @@ describe("C-R3e/C-R3f: automatic writers refuse a locked deal; manual writes sti
     expect(reached(A)).toEqual([]);
   });
 
-  it("a manual email link and a manual text link still land on a locked deal", async () => {
+  it("service layer: a \"manual\" email link and text link (review approve) still land on a locked deal; the user-edit refusal is at the handler", async () => {
     seed("submitted");
 
     expect(await linkEmailToTransaction(EMAIL, A, "manual")).toBe("linked");

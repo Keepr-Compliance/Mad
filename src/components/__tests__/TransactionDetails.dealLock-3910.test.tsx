@@ -13,7 +13,11 @@ import "@testing-library/jest-dom";
 import { NotificationProvider } from "../../contexts/NotificationContext";
 import TransactionDetails from "../TransactionDetails";
 import type { Transaction } from "../../../electron/types/models";
-import { DEAL_LOCK_NOTICE_COPY, DEAL_LOCK_SYNC_TOOLTIP } from "../../utils/dealLock";
+import {
+  DEAL_LOCK_EDIT_TOOLTIP,
+  DEAL_LOCK_NOTICE_COPY,
+  DEAL_LOCK_SYNC_TOOLTIP,
+} from "../../utils/dealLock";
 
 const render = (ui: Parameters<typeof rtlRender>[0]) =>
   rtlRender(ui, { wrapper: NotificationProvider });
@@ -170,5 +174,57 @@ describe("C-R3g': the Emails and Texts tabs' Sync buttons follow the same lock",
     const textSync = await screen.findAllByTestId("sync-messages-button");
     for (const b of textSync) await waitFor(() => expect(b).toBeEnabled());
     expect(screen.queryByTitle(DEAL_LOCK_SYNC_TOOLTIP.submitted)).toBeNull();
+  });
+});
+
+/**
+ * BACKLOG-3910 fix-up (founder 2026-10-11): a locked deal is read-only. Edit
+ * contacts and both Attach buttons are disabled with the reason's tooltip on a
+ * locked deal, and enabled on an open one. Every status is swept, so the
+ * needs_changes / rejected boundary is covered. The main-process handlers
+ * refuse as well (electron/handlers/__tests__/dealLockHandlers-3910.test.ts).
+ */
+describe("C-c (UI): Edit contacts and Attach follow the read-only lock, per submission status", () => {
+  it.each(CASES)("%s -> %s", async (status, reason) => {
+    const t = txn(status);
+    (window.api.transactions as unknown as { getOverview: jest.Mock }).getOverview = jest
+      .fn()
+      .mockResolvedValue({ success: true, transaction: { contact_assignments: contactAssignments } });
+    jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
+      success: true,
+      transaction: { ...t, communications: [], contact_assignments: contactAssignments },
+    } as never);
+    // The Attach buttons render only with a user id (TransactionEmailsTab / MessagesTab).
+    render(<TransactionDetails transaction={t} onClose={jest.fn()} userId="user-456" />);
+
+    const expectLock = (b: HTMLElement) => {
+      if (reason) {
+        expect(b).toBeDisabled();
+        expect(b).toHaveAttribute("title", DEAL_LOCK_EDIT_TOOLTIP[reason]);
+      } else {
+        expect(b).toBeEnabled();
+        expect(b.getAttribute("title") ?? "").not.toMatch(/Read-only/);
+      }
+    };
+
+    const edit = await screen.findByTestId("edit-contacts-button");
+    expectLock(edit);
+
+    (await screen.findByText("Emails")).click();
+    const attachEmails = await screen.findAllByTestId("attach-emails-button");
+    expect(attachEmails.length).toBeGreaterThan(0);
+    attachEmails.forEach(expectLock);
+
+    (await screen.findByText("Texts")).click();
+    const attachTexts = await screen.findAllByTestId("attach-messages-button");
+    expect(attachTexts.length).toBeGreaterThan(0);
+    attachTexts.forEach(expectLock);
+  });
+
+  it("the notice no longer says manual attaching still works, and says read-only", () => {
+    for (const text of Object.values(DEAL_LOCK_NOTICE_COPY)) {
+      expect(text).not.toMatch(/attach them yourself/i);
+      expect(text).toMatch(/read-only/);
+    }
   });
 });

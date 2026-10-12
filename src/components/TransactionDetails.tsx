@@ -59,7 +59,7 @@ import { useResolvedContactNames } from "./transactionDetailsModule/hooks/useRes
 import { useCompleteTransaction } from "./transactionDetailsModule/hooks/useCompleteTransaction";
 import { useDealLock } from "./transactionDetailsModule/hooks/useDealLock";
 import { DealLockNotice } from "./transactionDetailsModule/components/DealLockNotice";
-import { DEAL_LOCK_SYNC_TOOLTIP } from "../utils/dealLock";
+import { DEAL_LOCK_EDIT_TOOLTIP, DEAL_LOCK_SYNC_TOOLTIP } from "../utils/dealLock";
 import { NeedsReviewScreen } from "./transactionDetailsModule/components/NeedsReviewScreen";
 import { ReviewPromptDialog } from "./transactionDetailsModule/components/ReviewPromptDialog";
 import { ChecklistWarningDialog } from "./transactionDetailsModule/components/ChecklistWarningDialog";
@@ -443,6 +443,9 @@ function TransactionDetails({
   // so its Sync buttons are disabled with this tooltip and one notice explains why.
   const dealLock = useDealLock(transaction);
   const syncLockedTooltip = dealLock.reason ? DEAL_LOCK_SYNC_TOOLTIP[dealLock.reason] : undefined;
+  // BACKLOG-3910 (founder 2026-10-11): a locked deal is read-only, so Edit contacts
+  // and Attach are disabled too. The main-process handlers refuse as well.
+  const editLockedTooltip = dealLock.reason ? DEAL_LOCK_EDIT_TOOLTIP[dealLock.reason] : undefined;
   const [syncingMessages, setSyncingMessages] = useState<boolean>(false);
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
 
@@ -1465,6 +1468,7 @@ function TransactionDetails({
               syncingCommunications={syncingCommunications}
               globalSyncRunning={globalSyncRunning}
               syncLockedTooltip={syncLockedTooltip}
+              editLockedTooltip={editLockedTooltip}
               isOnline={isOnline}
               onContactUpdated={loadDetails}
               onNavigateToTab={handleNavigateToTab}
@@ -1514,6 +1518,7 @@ function TransactionDetails({
               syncingCommunications={syncingCommunications}
               globalSyncRunning={globalSyncRunning}
               syncLockedTooltip={syncLockedTooltip}
+              editLockedTooltip={editLockedTooltip}
               isOnline={isOnline}
               hasContacts={contactAssignments.length > 0}
               userId={userId}
@@ -1586,6 +1591,7 @@ function TransactionDetails({
               syncingMessages={syncingMessages}
               globalSyncRunning={globalSyncRunning}
               syncLockedTooltip={syncLockedTooltip}
+              editLockedTooltip={editLockedTooltip}
               messagesSyncInFlight={messagesSyncInFlight}
               isOnline={isOnline}
               hasContacts={contactAssignments.length > 0}

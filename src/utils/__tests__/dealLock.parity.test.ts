@@ -64,8 +64,11 @@ describe("dealLock parity (canonical vs renderer mirror)", () => {
     );
     expect([...reasons].sort()).toEqual(["sealed", "submitted"]);
     for (const r of reasons) {
-      expect(mirror.DEAL_LOCK_NOTICE_COPY[r]).toEqual(expect.stringContaining("You can still attach them yourself."));
+      // BACKLOG-3910 (founder 2026-10-11): a locked deal is read-only, manual attach included.
+      expect(mirror.DEAL_LOCK_NOTICE_COPY[r]).toEqual(expect.stringContaining("read-only"));
+      expect(mirror.DEAL_LOCK_NOTICE_COPY[r]).not.toMatch(/attach them yourself/i);
       expect(mirror.DEAL_LOCK_SYNC_TOOLTIP[r]).toEqual(expect.any(String));
+      expect(mirror.DEAL_LOCK_EDIT_TOOLTIP[r]).toEqual(expect.stringContaining("Read-only"));
     }
   });
 });

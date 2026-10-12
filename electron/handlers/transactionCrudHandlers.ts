@@ -16,6 +16,7 @@ import emailSyncService from "../services/emailSyncService";
 // BACKLOG-1802: automatic per-transaction email sync on create/open/date-change.
 // BACKLOG-1832: isAutoSyncInFlight supports mount-time spinner state query.
 import { triggerTransactionSyncInBackground, isAutoSyncInFlight } from "../services/transactionSyncTrigger";
+import { refuseIfDealLocked } from "../services/dealLockState";
 import { isAuditWindowExtended } from "../utils/emailDateRange";
 // BACKLOG-2292: automatic audit-window MESSAGES sync (the messages twin) + the
 // coverage-detection reads that drive the date-selection popup and export gate.
@@ -998,6 +999,10 @@ export function registerTransactionCrudHandlers(
       const validatedNotes =
         notes && typeof notes === "string" ? notes.trim() : null;
 
+      // BACKLOG-3910: no contact may be added to a locked deal (submitted or sealed).
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId as string, "add-contact");
+      if (lockedRefusal) return lockedRefusal;
+
       // TASK-1031: assignContactToTransaction now auto-links communications
       // for the newly added contact
       const result = await transactionService.assignContactToTransaction(
@@ -1118,6 +1123,10 @@ export function registerTransactionCrudHandlers(
         throw new ValidationError("Contact ID validation failed", "contactId");
       }
 
+      // BACKLOG-3910: putting a removed party back is adding a contact.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId as string, "add-contact");
+      if (lockedRefusal) return lockedRefusal;
+
       const restored = await databaseService.restoreContactToTransaction(
         validatedTransactionId as string,
         validatedContactId as string,
@@ -1230,6 +1239,13 @@ export function registerTransactionCrudHandlers(
           notes: op.notes?.trim(),
         };
       });
+
+      // BACKLOG-3910: a batch that adds any contact is refused whole on a
+      // locked deal (submitted or sealed), so nothing in it is half-applied.
+      if (validatedOperations.some((op) => op.action === "add")) {
+        const lockedRefusal = refuseIfDealLocked(validatedTransactionId as string, "add-contact");
+        if (lockedRefusal) return lockedRefusal;
+      }
 
       await transactionService.batchUpdateContactAssignments(
         validatedTransactionId as string,

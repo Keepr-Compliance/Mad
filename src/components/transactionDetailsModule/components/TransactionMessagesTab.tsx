@@ -107,6 +107,11 @@ interface TransactionMessagesTabProps {
    */
   syncLockedTooltip?: string;
   /**
+   * BACKLOG-3910: set when the deal is locked (with the broker, or sealed). The deal
+   * is read-only: Attach is disabled and this is its tooltip.
+   */
+  editLockedTooltip?: string;
+  /**
    * BACKLOG-2294: true while a BACKGROUND messages sync/import is in flight
    * (audit-date-change auto-import, create auto-import, or the 2293 re-sync
    * expansion). Drives the SAME active affordance as a user-initiated sync so
@@ -165,6 +170,7 @@ export function TransactionMessagesTab({
   syncingMessages = false,
   globalSyncRunning = false,
   syncLockedTooltip,
+  editLockedTooltip,
   messagesSyncInFlight = false,
   isOnline = true,
   hasContacts = false,
@@ -339,8 +345,10 @@ export function TransactionMessagesTab({
 
   // Handle attach button click
   const handleAttachClick = useCallback(() => {
+    // BACKLOG-3910: a locked deal is read-only (the main process refuses too).
+    if (editLockedTooltip) return;
     setShowAttachModal(true);
-  }, []);
+  }, [editLockedTooltip]);
 
   // BACKLOG-2390: Undo a just-completed attach. Removes the EXACT message ids that
   // were linked via the symmetric `unlinkMessages` IPC (the same call the remove
@@ -1075,7 +1083,9 @@ export function TransactionMessagesTab({
             {userId && transactionId && (
               <button
                 onClick={handleAttachClick}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                disabled={!!editLockedTooltip}
+                title={editLockedTooltip}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="attach-messages-button"
               >
                 <svg
@@ -1152,7 +1162,9 @@ export function TransactionMessagesTab({
           {userId && transactionId && (
             <button
               onClick={handleAttachClick}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors"
+              disabled={!!editLockedTooltip}
+              title={editLockedTooltip}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               data-testid="attach-messages-button"
             >
               <svg
