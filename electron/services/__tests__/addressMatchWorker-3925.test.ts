@@ -7,8 +7,9 @@
  * the auto-link candidate reads. Measured before the move: one synchronous block of
  * 0.3 s at 20k and 1 s at 60k cached emails (probe: perf/addressMatchPass.probe-3925).
  *
- * Dispatch only: pool up -> the worker runs the statement with the pass's own inputs and
- * the main connection never prepares it; `start_failed` -> the main thread reads, same
+ * Dispatch: pool up -> the worker runs the statement with the pass's own inputs, and
+ * classifies there (only matched ids come back), and the main connection never prepares
+ * it; `start_failed` -> the main thread reads, same
  * rows; any other worker failure -> the pass throws and the sweep is not clean.
  *
  * Run: ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js --runTestsByPath <this file>
@@ -27,6 +28,8 @@ jest.mock("../logService", () => {
 import { setDb } from "../db/core/dbConnection";
 import * as contactWorkerPool from "../../workers/contactWorkerPool";
 import { ADDRESS_MATCH_CANDIDATE_EMAILS_SQL, readAddressMatchCandidatesOn } from "../db/reviewStateSql";
+import { classifyAddressMatchCandidatesOn } from "../db/addressMatchCandidatesDb";
+import { normalizeAddress } from "../../utils/addressNormalization";
 import {
   addressMatchCandidateParamsForTests,
   queueAddressMatchesForTransaction,
@@ -84,12 +87,16 @@ maybe("BACKLOG-3925 — the address-match candidate read runs off the main threa
     return texts;
   }
 
-  it("pool up: the worker runs it with the pass's inputs; the main connection never does", async () => {
+  it("pool up: the worker reads and classifies with the pass's inputs; the main connection never reads", async () => {
     const params = addressMatchCandidateParamsForTests(TXN) as Array<string | number>;
+    const address = normalizeAddress("1428 Maple Ave, Springfield");
     const rows = readAddressMatchCandidatesOn(db, params);
     expect((rows as Array<{ id: string }>).map((r) => r.id).sort()).toEqual(["e-match", "e-near"]);
+    // What the worker returns: the classification, run here on the same statement.
+    const classified = classifyAddressMatchCandidatesOn(db, params, address!);
+    expect(classified).toEqual({ candidates: 2, matchedIds: ["e-match"] });
     jest.spyOn(contactWorkerPool, "isPoolReady").mockReturnValue(true);
-    const query = jest.spyOn(contactWorkerPool, "queryOnDedicatedWorker").mockResolvedValue(rows);
+    const query = jest.spyOn(contactWorkerPool, "queryOnDedicatedWorker").mockResolvedValue([classified]);
     const texts = spyPrepare();
 
     const r = await queueAddressMatchesForTransaction(TXN);
@@ -97,7 +104,10 @@ maybe("BACKLOG-3925 — the address-match candidate read runs off the main threa
     // The window is open-ended (no close date), so its end is "now" at each call.
     const expectedParams: unknown[] = [...params];
     expectedParams[2] = expect.any(String);
-    expect(query).toHaveBeenCalledWith("addressMatchCandidates", USER, expect.any(Number), { params: expectedParams });
+    expect(query).toHaveBeenCalledWith("addressMatchCandidates", USER, expect.any(Number), {
+      params: expectedParams,
+      address,
+    });
     expect(texts.filter((t) => t === CANDIDATE_SQL)).toEqual([]);
     expect(r).toMatchObject({ candidates: 2, matched: 1, queued: 1 });
   });

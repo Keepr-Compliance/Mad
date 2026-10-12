@@ -120,8 +120,12 @@ import {
 import { TRANSACTION_AUTOLINK_WINDOW_SQL } from "./db/autoLinkSql";
 import { getCachedEmailSentAtBounds } from "./db/emailCacheWindow";
 import {
+  isAddressMatchRow,
+  type AddressCandidateRow,
+  type AddressMatchClassification,
+} from "./db/addressMatchCandidatesDb";
+import {
   normalizeAddress,
-  contentContainsAddressAdjacent,
   addressRoutePrefilterWord,
   addressRouteStreetNumbers,
   type NormalizedAddress,
@@ -758,7 +762,6 @@ const ADDRESS_MATCH_EMAILS_PER_TURN = 10;
 /** The candidate read can take seconds on a large store under load; bound it generously. */
 const ADDRESS_MATCH_WORKER_TIMEOUT_MS = 5 * 60_000;
 
-type AddressCandidateRow = { id: string; subject: string | null; body_plain: string | null };
 
 /** Bound values of ADDRESS_MATCH_CANDIDATE_EMAILS_SQL, in order. */
 function addressMatchCandidateParams(
@@ -778,22 +781,29 @@ function addressMatchCandidateParams(
 }
 
 /**
- * BACKLOG-3925: run the address-match candidate read on a dedicated contact query
- * worker when the pool is up (BACKLOG-3868 / 3883 pattern). instr over every body of
- * the user in the deal's window cannot use an index — measured 0.3 s at 20k and 1 s at
- * 60k cached emails as ONE synchronous block on a Mac. Same statement, same parameters,
- * same rows. Main thread only when no worker ran it (pool not up, or `start_failed`);
- * any other worker failure throws, and the sweep marks itself not clean.
+ * BACKLOG-3925: read AND classify the address-match candidates on a dedicated contact
+ * query worker when the pool is up (BACKLOG-3868 / 3883 pattern). instr over every body
+ * of the user in the deal's window cannot use an index — measured 0.3 s at 20k and 1 s
+ * at 60k cached emails as ONE synchronous block on a Mac. Classifying on the worker
+ * means only matched ids come back: returning the bodies made the copy into the main
+ * thread a ~100 ms block of its own at 60k (probe: perf/addressMatchPass.probe-3925).
+ *
+ * Main thread only when no worker ran it (pool not up, or `start_failed`): same
+ * statement and parameters, classified in slices with a yield between them. Any other
+ * worker failure throws, and the sweep marks itself not clean.
  */
-export async function readAddressMatchCandidates(
+export async function readAddressMatches(
   userId: string,
   params: Array<string | number>,
-): Promise<AddressCandidateRow[]> {
+  address: NormalizedAddress,
+): Promise<AddressMatchClassification> {
   if (isPoolReady()) {
     try {
-      return (await queryOnDedicatedWorker("addressMatchCandidates", userId, ADDRESS_MATCH_WORKER_TIMEOUT_MS, {
+      const [result] = (await queryOnDedicatedWorker("addressMatchCandidates", userId, ADDRESS_MATCH_WORKER_TIMEOUT_MS, {
         params,
-      })) as AddressCandidateRow[];
+        address,
+      })) as AddressMatchClassification[];
+      return result;
     } catch (error) {
       const code = error instanceof DedicatedWorkerError ? error.code : "failed";
       if (code !== "start_failed") throw error;
@@ -804,7 +814,13 @@ export async function readAddressMatchCandidates(
       );
     }
   }
-  return dbAll<AddressCandidateRow>(ADDRESS_MATCH_CANDIDATE_EMAILS_SQL, params);
+  const rows = dbAll<AddressCandidateRow>(ADDRESS_MATCH_CANDIDATE_EMAILS_SQL, params);
+  const matchedIds: string[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    if (i > 0 && i % ADDRESS_MATCH_EMAILS_PER_TURN === 0) await yieldToEventLoop();
+    if (isAddressMatchRow(rows[i], address)) matchedIds.push(rows[i].id);
+  }
+  return { candidates: rows.length, matchedIds };
 }
 
 /** Test/probe-only: the candidate statement's parameters for a deal, or null. */
@@ -877,26 +893,17 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
   const start = range.start.toISOString();
   const end = range.end.toISOString();
 
-  const rows = await readAddressMatchCandidates(
+  const { candidates, matchedIds } = await readAddressMatches(
     txn.user_id,
     addressMatchCandidateParams(txn.user_id, start, end, address, transactionId),
+    address,
   );
 
-  let matched = 0;
+  const matched = matchedIds.length;
   let queued = 0;
-  for (let i = 0; i < rows.length; i++) {
+  for (let i = 0; i < matchedIds.length; i++) {
     if (i > 0 && i % ADDRESS_MATCH_EMAILS_PER_TURN === 0) await yieldToEventLoop();
-    const r = rows[i];
-    // Subject and body are judged separately so a number ending one cannot join a name
-    // starting the other.
-    if (
-      !contentContainsAddressAdjacent(r.subject, address) &&
-      !contentContainsAddressAdjacent(r.body_plain, address)
-    ) {
-      continue;
-    }
-    matched++;
-    if (await queueEmailForReview(transactionId, r.id, txn.user_id, "address")) queued++;
+    if (await queueEmailForReview(transactionId, matchedIds[i], txn.user_id, "address")) queued++;
   }
 
   const bounds = getCachedEmailSentAtBounds(txn.user_id);
@@ -907,13 +914,13 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
 
   await logService.info("[BACKLOG-3925] address-only discovery", MODULE, {
     transactionId,
-    candidates: rows.length,
+    candidates,
     matched,
     queued,
     uncoveredDays,
   });
 
-  return { queued, candidates: rows.length, matched };
+  return { queued, candidates, matched };
 }
 
 /**
