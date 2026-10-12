@@ -30,6 +30,8 @@ export interface DashboardShellProps {
   showMyTransactions?: boolean;
   /** BACKLOG-3080: not a full-portal user; the Sidebar shows the floor only. */
   floorOnly?: boolean;
+  /** BACKLOG-3844: lib/billing/capabilities.ts billingNavVisible, via the layout. */
+  showBilling?: boolean;
 }
 
 export function DashboardShell({
@@ -43,6 +45,7 @@ export function DashboardShell({
   checklistsUnavailableLabel,
   showMyTransactions,
   floorOnly,
+  showBilling,
 }: DashboardShellProps) {
   const [collapsed, setCollapsed] = useState(false);
   // BACKLOG-3798: the phone drawer (below md). Separate from `collapsed`, which
@@ -85,6 +88,7 @@ export function DashboardShell({
         checklistsUnavailableLabel={checklistsUnavailableLabel}
         showMyTransactions={showMyTransactions}
         floorOnly={floorOnly}
+        showBilling={showBilling}
         mobileOpen={menuOpen}
         onMobileClose={() => {
           setMenuOpen(false);

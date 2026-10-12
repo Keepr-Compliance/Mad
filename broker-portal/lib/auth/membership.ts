@@ -235,6 +235,15 @@ export const OWN_GATE_PATHS = ['/dashboard/checklists'] as const;
  */
 export const MY_TRANSACTIONS_PATHS = ['/dashboard/my-transactions'] as const;
 
+/**
+ * Billing (BACKLOG-3844): passed through for the OWNER of a personal
+ * organization only. A brokerage agent never gets it (their brokerage pays).
+ * Full-portal users are admitted above. The flag and the rest of the rule are
+ * NOT read here; app/dashboard/billing/page.tsx refuses on its own, and that
+ * refusal is the gate.
+ */
+export const BILLING_PATHS = ['/dashboard/billing'] as const;
+
 /** `path` is `base` itself or a sub-path of it. Never a bare prefix match. */
 function isUnder(path: string, base: string): boolean {
   return path === base || path.startsWith(`${base}/`);
@@ -259,6 +268,11 @@ export function mayOpenDashboardPath(access: PortalAccess, pathname: string): bo
   }
   if (access.kind === 'floor' && access.via === 'brokerage') {
     for (const base of MY_TRANSACTIONS_PATHS) {
+      if (isUnder(pathname, base)) return true;
+    }
+  }
+  if (access.kind === 'floor' && access.via === 'personal_owner') {
+    for (const base of BILLING_PATHS) {
       if (isUnder(pathname, base)) return true;
     }
   }
