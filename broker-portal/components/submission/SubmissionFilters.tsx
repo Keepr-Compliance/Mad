@@ -12,11 +12,23 @@
  * the server page; nothing is looked up from the client.
  */
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentProps, type FormEvent, type ReactNode } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { BottomSheet, PhoneClearFilters, PhoneFilterBar, PhoneResultsRow, PhoneSortButton, SearchField } from '@keepr/ui';
+import {
+  BottomSheet,
+  FilterSelectButton,
+  PhoneClearFilters,
+  PhoneFilterBar,
+  PhoneResultsRow,
+  PhoneSortButton,
+  SearchField,
+  SegmentedTabs,
+} from '@keepr/ui';
 import ListFilterCard from '@/components/ui/ListFilterCard';
 import { headMatchesFilter } from '@/lib/submissions/dealList';
+import { BOARD_LANES, DEFAULT_LANE, boardLaneFor, type BoardLane } from '@/lib/submissions/boardLanes';
+import { getStatusColor } from '@/lib/utils';
 import { DEFAULT_SORT, SORT_OPTIONS, sortLabel, type SortKey } from '@/lib/submissions/listSort';
 import { buildListUrl, hasActiveFilters, parseSearchParam, type ListFilters } from '@/lib/submissions/listUrl';
 
@@ -96,7 +108,7 @@ function useSearchUrl(filters: ListFilters) {
   };
 }
 
-function countFacets(facets: FacetCount[], status: string, agent: string | null): number {
+export function countFacets(facets: FacetCount[], status: string, agent: string | null): number {
   const filter = status === 'all' ? null : status;
   let n = 0;
   for (const f of facets) {
@@ -264,7 +276,164 @@ export function SubmissionPhoneFilters({
   // field clears the text, so typing alone never offers it.
   const hasChipFilters = filters.status !== 'all' || filters.agent !== null;
 
+  const sheets = (
+    <>
+      <BottomSheet open={sortOpen} onOpenChange={setSortOpen} title="Sort by">
+          <fieldset className="divide-y divide-gray-100 overflow-hidden rounded-lg border border-gray-200">
+            <legend className="sr-only">Sort by</legend>
+            {SORT_OPTIONS.map((o) => {
+              const checked = currentSort === o.value;
+              return (
+                <label
+                  key={o.value}
+                  className={`flex min-h-12 items-center gap-3 px-3 text-base text-gray-900 ${checked ? 'bg-primary-50' : 'bg-white'}`}
+                >
+                  <input
+                    type="radio"
+                    name="submissions-sort"
+                    value={o.value}
+                    checked={checked}
+                    aria-label={o.label}
+                    onChange={() => {
+                      setSortOpen(false);
+                      router.push(buildListUrl({ ...filters, sort: o.value }));
+                    }}
+                    className="h-5 w-5 accent-primary-600"
+                  />
+                  <span className="flex-1">{o.label}</span>
+                </label>
+              );
+            })}
+          </fieldset>
+        </BottomSheet>
+        <BottomSheet
+          open={sheet !== null}
+          onOpenChange={(o) => !o && setSheet(null)}
+          title={sheet === 'agent' ? 'Agent' : 'Status'}
+          headerAction={
+            <button
+              type="button"
+              onClick={() => (sheet === 'agent' ? setPendingAgent(null) : setPendingStatus('all'))}
+              className="min-h-11 px-2 text-sm font-semibold text-primary-700"
+            >
+              Clear
+            </button>
+          }
+          primaryAction={
+            <button
+              type="button"
+              onClick={apply}
+              className="flex min-h-12 w-full items-center justify-center rounded-lg bg-primary-600 text-base font-semibold text-white"
+            >
+              Show {plural(shown)}
+            </button>
+          }
+        >
+          {sheet === 'status' ? (
+            <div className="flex flex-wrap gap-2">
+              {statuses.map((s) => {
+                const on = pendingStatus === s.value;
+                return (
+                  <button
+                    key={s.value}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => setPendingStatus(s.value)}
+                    className={`min-h-9 rounded-full border px-3.5 text-sm font-semibold ${
+                      on ? 'border-primary-600 bg-primary-50 text-primary-800' : 'border-gray-300 bg-white text-gray-700'
+                    }`}
+                  >
+                    {s.label} · {countFacets(facets, s.value, filters.agent)}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+          {sheet === 'agent' ? (
+            <fieldset className="space-y-2">
+              <legend className="sr-only">Agent</legend>
+              <SearchField label="Find an agent" placeholder="Find an agent" value={agentQuery} onChange={setAgentQuery} />
+              <div className="divide-y divide-gray-100 overflow-hidden rounded-lg border border-gray-200">
+                {[{ id: '', label: 'All agents' }, ...visibleOptions].map((a) => {
+                  const value = a.id || null;
+                  const checked = pendingAgent === value;
+                  return (
+                    <label
+                      key={a.id || 'all'}
+                      className={`flex min-h-12 items-center gap-3 px-3 text-base text-gray-900 ${checked ? 'bg-primary-50' : 'bg-white'}`}
+                    >
+                      <input
+                        type="radio"
+                        name="submissions-agent"
+                        value={a.id}
+                        checked={checked}
+                        aria-label={a.label}
+                        onChange={() => setPendingAgent(value)}
+                        className="h-5 w-5 accent-primary-600"
+                      />
+                      <span className="flex-1 truncate">{a.label}</span>
+                      <span className="text-sm text-gray-500">{countFacets(facets, filters.status, value)}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </fieldset>
+          ) : null}
+        </BottomSheet>
+    </>
+  );
+
+  const board = filters.view === 'board';
+  const viewToggle = (
+    <SegmentedTabs
+      ariaLabel="View"
+      value={board ? 'board' : 'list'}
+      className="mb-2 w-fit"
+      items={[
+        // The list opens unfiltered by status; the board opens the list's status
+        // as a lane when it is one, else New. Search, agent and sort carry over.
+        { value: 'list', label: 'List', href: buildListUrl({ ...filters, status: 'all', view: undefined }) },
+        { value: 'board', label: 'Board', href: buildListUrl({ ...filters, status: boardLaneFor(filters.status), view: 'board' }) },
+      ]}
+      renderLink={({ href, className, children, ...rest }) => (
+        <Link href={href} className={className} aria-current={rest['aria-current']}>
+          {children}
+        </Link>
+      )}
+    />
+  );
+
+  if (board) {
+    return (
+      <SubmissionPhoneBoard
+        filters={filters}
+        facets={facets}
+        toggle={viewToggle}
+        search={{ value: search, onChange, onSubmit }}
+        agent={{
+          label: 'Agent',
+          value: selectedAgentLabel,
+          active: filters.agent !== null,
+          expanded: sheet === 'agent',
+          onClick: () => openSheet('agent'),
+        }}
+        sort={
+          <PhoneSortButton
+            label={`Sort: ${sortLabel(currentSort)}`}
+            active={currentSort !== DEFAULT_SORT}
+            expanded={sortOpen}
+            onClick={() => setSortOpen(true)}
+          />
+        }
+      >
+        {sheets}
+      </SubmissionPhoneBoard>
+    );
+  }
+
   return (
+    <div className="md:hidden" data-slot="phone-list-filters">
+    {viewToggle}
     <PhoneFilterBar
       className="md:hidden"
       search={{
@@ -316,108 +485,116 @@ export function SubmissionPhoneFilters({
         ) : null
       }
     >
-      <BottomSheet open={sortOpen} onOpenChange={setSortOpen} title="Sort by">
-        <fieldset className="divide-y divide-gray-100 overflow-hidden rounded-lg border border-gray-200">
-          <legend className="sr-only">Sort by</legend>
-          {SORT_OPTIONS.map((o) => {
-            const checked = currentSort === o.value;
-            return (
-              <label
-                key={o.value}
-                className={`flex min-h-12 items-center gap-3 px-3 text-base text-gray-900 ${checked ? 'bg-primary-50' : 'bg-white'}`}
-              >
-                <input
-                  type="radio"
-                  name="submissions-sort"
-                  value={o.value}
-                  checked={checked}
-                  aria-label={o.label}
-                  onChange={() => {
-                    setSortOpen(false);
-                    router.push(buildListUrl({ ...filters, sort: o.value }));
-                  }}
-                  className="h-5 w-5 accent-primary-600"
-                />
-                <span className="flex-1">{o.label}</span>
-              </label>
-            );
-          })}
-        </fieldset>
-      </BottomSheet>
-      <BottomSheet
-        open={sheet !== null}
-        onOpenChange={(o) => !o && setSheet(null)}
-        title={sheet === 'agent' ? 'Agent' : 'Status'}
-        headerAction={
-          <button
-            type="button"
-            onClick={() => (sheet === 'agent' ? setPendingAgent(null) : setPendingStatus('all'))}
-            className="min-h-11 px-2 text-sm font-semibold text-primary-700"
-          >
-            Clear
-          </button>
-        }
-        primaryAction={
-          <button
-            type="button"
-            onClick={apply}
-            className="flex min-h-12 w-full items-center justify-center rounded-lg bg-primary-600 text-base font-semibold text-white"
-          >
-            Show {plural(shown)}
-          </button>
-        }
-      >
-        {sheet === 'status' ? (
-          <div className="flex flex-wrap gap-2">
-            {statuses.map((s) => {
-              const on = pendingStatus === s.value;
-              return (
-                <button
-                  key={s.value}
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => setPendingStatus(s.value)}
-                  className={`min-h-9 rounded-full border px-3.5 text-sm font-semibold ${
-                    on ? 'border-primary-600 bg-primary-50 text-primary-800' : 'border-gray-300 bg-white text-gray-700'
-                  }`}
-                >
-                  {s.label} · {countFacets(facets, s.value, filters.agent)}
-                </button>
-              );
-            })}
-          </div>
-        ) : null}
-        {sheet === 'agent' ? (
-          <fieldset className="space-y-2">
-            <legend className="sr-only">Agent</legend>
-            <SearchField label="Find an agent" placeholder="Find an agent" value={agentQuery} onChange={setAgentQuery} />
-            <div className="divide-y divide-gray-100 overflow-hidden rounded-lg border border-gray-200">
-              {[{ id: '', label: 'All agents' }, ...visibleOptions].map((a) => {
-                const value = a.id || null;
-                const checked = pendingAgent === value;
-                return (
-                  <label
-                    key={a.id || 'all'}
-                    className={`flex min-h-12 items-center gap-3 px-3 text-base text-gray-900 ${checked ? 'bg-primary-50' : 'bg-white'}`}
-                  >
-                    <input
-                      type="radio"
-                      name="submissions-agent"
-                      value={a.id}
-                      checked={checked}
-                      aria-label={a.label}
-                      onChange={() => setPendingAgent(value)}
-                      className="h-5 w-5 accent-primary-600"
-                    />
-                    <span className="flex-1 truncate">{a.label}</span>
-                    <span className="text-sm text-gray-500">{countFacets(facets, filters.status, value)}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </fieldset>
-        ) : null}
-      </BottomSheet>
+      {sheets}
     </PhoneFilterBar>
+    </div>
+  );
+}
+
+/**
+ * The phone status board — BACKLOG-3914. Read-only: one lane at a time, picked
+ * from a 2x2 grid of lane buttons with their counts (New, Resubmitted, Under
+ * Review, Needs Changes); "Show approved and rejected" adds two more. A lane is
+ * the list's status filter, so the cards under it are the list's own
+ * SubmissionCards and a tap opens the submission. No Status control (the lanes
+ * are the statuses); search, Agent and Sort apply as on the list.
+ *
+ * Counts come from `facets` (deals matching the search, per status and agent)
+ * with the applied agent, so a lane's count is the size of the list its status
+ * value selects. Phone only: the root is display:none from md up.
+ */
+function SubmissionPhoneBoard({
+  filters,
+  facets,
+  toggle,
+  search,
+  agent,
+  sort,
+  children,
+}: {
+  filters: ListFilters;
+  facets: FacetCount[];
+  toggle: ReactNode;
+  search: { value: string; onChange: (_value: string) => void; onSubmit: (_e?: FormEvent) => void };
+  agent: ComponentProps<typeof FilterSelectButton>;
+  sort: ReactNode;
+  children?: ReactNode;
+}) {
+  const router = useRouter();
+  const lane = boardLaneFor(filters.status);
+  const laneIsClosed = BOARD_LANES.some((l) => l.value === lane && l.closed);
+  const [showClosed, setShowClosed] = useState(laneIsClosed);
+  const lanes = BOARD_LANES.filter((l) => !l.closed || showClosed || l.value === lane);
+
+  function laneHref(l: BoardLane) {
+    return buildListUrl({ ...filters, status: l.value, view: 'board' });
+  }
+
+  return (
+    <div className="md:hidden" data-slot="phone-board">
+      {toggle}
+      <form
+        role="search"
+        onSubmit={(e) => {
+          e.preventDefault();
+          search.onSubmit();
+        }}
+      >
+        <SearchField
+          label="Search submissions"
+          placeholder="Search address or agent"
+          value={search.value}
+          onChange={search.onChange}
+          onClear={() => search.onChange('')}
+        />
+      </form>
+      <div className="mt-2 grid grid-cols-[minmax(0,1fr)_2.75rem] gap-2">
+        <FilterSelectButton {...agent} />
+        {sort}
+      </div>
+      <nav aria-label="Status columns" className="mt-2 grid grid-cols-2 gap-2" data-slot="board-lanes">
+        {lanes.map((l) => {
+          const count = countFacets(facets, l.value, filters.agent);
+          const current = l.value === lane;
+          return (
+            <Link
+              key={l.value}
+              href={laneHref(l)}
+              aria-current={current ? 'page' : undefined}
+              aria-label={`${l.label}: ${count}`}
+              data-lane={l.value}
+              data-count={count}
+              className={`flex min-h-11 items-center justify-between gap-2 rounded-[10px] border px-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 ${
+                current ? 'border-primary-600 bg-primary-50 text-primary-800' : 'border-gray-200 bg-white text-gray-900'
+              }`}
+            >
+              <span className="min-w-0 truncate">{l.label}</span>
+              <span
+                className={`shrink-0 rounded-full px-2 text-xs font-bold tabular-nums ${getStatusColor(l.colorStatus)}`}
+                aria-hidden="true"
+              >
+                {count}
+              </span>
+            </Link>
+          );
+        })}
+      </nav>
+      <button
+        type="button"
+        onClick={() => {
+          const next = !showClosed;
+          setShowClosed(next);
+          // Hiding the closed lanes while one is open goes back to New.
+          if (!next && laneIsClosed) {
+            router.push(buildListUrl({ ...filters, status: DEFAULT_LANE, view: 'board' }));
+          }
+        }}
+        aria-expanded={showClosed}
+        className="min-h-11 text-sm font-semibold text-primary-700"
+      >
+        {showClosed ? 'Hide approved and rejected' : 'Show approved and rejected'}
+      </button>
+      {children}
+    </div>
   );
 }

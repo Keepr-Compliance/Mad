@@ -28,9 +28,11 @@ import {
   hasActiveFilters,
   parseAgentParam,
   parseSearchParam,
+  parseViewParam,
   type ListFilters,
 } from '@/lib/submissions/listUrl';
 import { compareHeads, parseSortParam } from '@/lib/submissions/listSort';
+import { boardLaneFor } from '@/lib/submissions/boardLanes';
 import {
   SubmissionDesktopFilters,
   SubmissionPhoneFilters,
@@ -56,7 +58,7 @@ interface Submission {
 }
 
 interface PageProps {
-  searchParams: Promise<{ status?: string; search?: string; agent?: string; page?: string; sort?: string }>;
+  searchParams: Promise<{ status?: string; search?: string; agent?: string; page?: string; sort?: string; view?: string }>;
 }
 
 const PAGE_SIZE = 25;
@@ -195,15 +197,20 @@ async function getSubmissions(
 }
 
 export default async function SubmissionsPage({ searchParams }: PageProps) {
-  const { status, page: pageParam, agent: agentParam, search: searchParam, sort: sortParam } = await searchParams;
+  const { status, page: pageParam, agent: agentParam, search: searchParam, sort: sortParam, view: viewParam } =
+    await searchParams;
   const currentPage = Math.max(1, Number(pageParam) || 1);
-  const currentStatus = status || 'all';
+  // BACKLOG-3914: the phone board is this list with the status set to one lane
+  // (New when the status names no lane), so its cards and counts are the list's.
+  const view = parseViewParam(viewParam);
+  const currentStatus = view === 'board' ? boardLaneFor(status) : status || 'all';
   // BACKLOG-3904: a non-uuid agent is ignored; search is trimmed and capped.
   const filters: ListFilters = {
     status: currentStatus,
     agent: parseAgentParam(agentParam),
     search: parseSearchParam(searchParam),
     sort: parseSortParam(sortParam),
+    ...(view === 'board' ? { view } : {}),
   };
   // BACKLOG-3597: the "submitted" filter now covers submitted AND resubmitted
   // deals (STATUSES labels it "Pending"), so the caption uses that tab label
@@ -299,11 +306,23 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
           left and right edges are the search field's; the frame stays from md up. */}
       <div
         className={`bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden${
-          displaySubmissions.length > 0 ? ' max-md:overflow-visible max-md:rounded-none max-md:border-0 max-md:bg-transparent max-md:shadow-none' : ''
+          displaySubmissions.length > 0 || view === 'board' ? ' max-md:overflow-visible max-md:rounded-none max-md:border-0 max-md:bg-transparent max-md:shadow-none' : ''
         }`}
       >
         {displaySubmissions.length === 0 ? (
-          <EmptySubmissions filtered={hasActiveFilters(filters)} />
+          view === 'board' ? (
+            <>
+              {/* BACKLOG-3914: an empty board lane on the phone, as in the mockup. */}
+              <p className="py-4 text-center text-sm text-gray-500 md:hidden" data-slot="board-lane-empty">
+                Nothing here
+              </p>
+              <div className="max-md:hidden">
+                <EmptySubmissions filtered={hasActiveFilters(filters)} />
+              </div>
+            </>
+          ) : (
+            <EmptySubmissions filtered={hasActiveFilters(filters)} />
+          )
         ) : (
           <>
             {/* BACKLOG-3798/3904: below md the list is the shared SubmissionCard (also used by the

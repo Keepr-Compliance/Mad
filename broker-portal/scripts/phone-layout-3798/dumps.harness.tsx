@@ -447,6 +447,23 @@ it('gap-* (top bar to first content)', async () => {
   await gapDump('gap-submissions-filtered', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ status: 'approved' }) }));
 });
 
+// BACKLOG-3914: the phone status board (view=board) inside the real shell, one
+// deal in the New lane and an empty lane. Phone layout only; desktop never links here.
+it('board-* (phone status board)', async () => {
+  const mk = (id: string, status: string, createdAt: string): Row => ({
+    ...submissionRow({ id, organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status, parentSubmissionId: null, createdAt, address: '34 Fictional Road, Fixture City, CA 90000, USA' }),
+    version: 1,
+  });
+  mockEmulator.reset();
+  mockEmulator.set({
+    rows: {
+      transaction_submissions: [mk('s1', 'submitted', '2026-09-03T00:00:00Z'), mk('s2', 'needs_changes', '2026-09-03T01:00:00Z')],
+    },
+  });
+  await gapDump('board-new', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ view: 'board' }) }));
+  await gapDump('board-empty', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ view: 'board', status: 'under_review' }) }));
+});
+
 // BACKLOG-3904 fix-up: the Users page composition (page.tsx: PageHeader + UserListClient)
 // inside the real shell, unfiltered and with a search typed, to measure the
 // controls block and the gap under the top bar. Phone only (matchMedia true).
