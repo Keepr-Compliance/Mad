@@ -169,3 +169,38 @@ export function deleteLiveForceSet(db: DatabaseType, set: EmailForceSet): number
     .prepare(`DELETE FROM emails AS e WHERE e.user_id = ? AND NOT ${protectedPredicate()}`)
     .run(set.userId).changes;
 }
+
+/**
+ * BACKLOG-3913. The stored files of the attachments the next
+ * `deleteLiveForceSet` will cascade-remove: every distinct non-NULL
+ * `storage_path` on an UNPROTECTED email of the user.
+ *
+ * The same `protectedPredicate()` as the removal, so "which emails go" has one
+ * definition. A path here is a CANDIDATE only: files are content-addressed, so
+ * the same path may also sit on a kept row (or another user's row). The caller
+ * re-checks that no attachment row still references it before touching it.
+ *
+ * Read immediately before the swap, with no `await` between this read and the
+ * swap, so the set it returns is the set the swap removes.
+ */
+export function selectForceRemovableAttachmentPaths(db: DatabaseType, set: EmailForceSet): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT DISTINCT att.storage_path AS storage_path
+           FROM attachments att
+           JOIN emails e ON e.id = att.email_id
+          WHERE e.user_id = ? AND att.storage_path IS NOT NULL AND NOT ${protectedPredicate()}`,
+      )
+      .all(set.userId) as Array<{ storage_path: string }>
+  ).map((r) => r.storage_path);
+}
+
+/**
+ * BACKLOG-3913. Does ANY attachment row, of any user or kind, still reference this file?
+ * Case-insensitive: the extension keeps the sender's case (`<hash>.PDF` vs `<hash>.pdf`)
+ * and on APFS/NTFS both names are one file.
+ */
+export function isAttachmentStoragePathReferenced(db: DatabaseType, storagePath: string): boolean {
+  return db.prepare(`SELECT 1 FROM attachments WHERE storage_path = ? COLLATE NOCASE LIMIT 1`).get(storagePath) !== undefined;
+}
