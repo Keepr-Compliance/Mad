@@ -198,17 +198,18 @@ describe('support session', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('O7: target org without broker_portal_access -> nothing listed', async () => {
+  it('O7: target org without broker_portal_access -> still listed (support sessions do not apply the check; BACKLOG-3922)', async () => {
     given({ impersonating: ORG_NO_ACCESS });
     const { container } = await renderList();
-    expect(linkedIds(container)).toEqual([]);
-    expect(screen.getByText('No submissions yet')).toBeInTheDocument();
+    expect(linkedIds(container)).toEqual([NO_ACCESS]);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('O8: target org\'s feature read fails -> nothing listed, error shown', async () => {
+  it('O8: the feature lookup answers not_authenticated (the real support-session shape) -> submissions still load, no error', async () => {
     given({ impersonating: ORG, featureReadFails: [ORG] });
     const { container } = await renderList();
-    expect(linkedIds(container)).toEqual([]);
-    expectLoadError();
+    expect(linkedIds(container)).toEqual([IN_ORG]);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText(ERROR_TEXT)).not.toBeInTheDocument();
   });
 });

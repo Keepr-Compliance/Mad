@@ -31,21 +31,21 @@ function portalAccess(features: OrgFeatures): boolean | null {
  * Fetches distinct organization IDs from the submissions visible to this broker,
  * then checks each org's features to filter out those without broker_portal_access.
  *
- * During impersonation (single org), skips the distinct query and checks just that org.
+ * During impersonation (single org), skips the distinct query and the feature
+ * check and returns just that org.
  *
- * BACKLOG-3906: any failed read (the org list, or any org's features) returns
- * `ok: false`; it never widens the list.
+ * BACKLOG-3906: in broker sessions any failed read (the org list, or any org's
+ * features) returns `ok: false`; it never widens the list.
  */
 export async function getAllowedOrgIds(
   client: SupabaseClient,
   orgId?: string,
 ): Promise<AllowedOrgIds> {
-  // During impersonation, check the single org
-  if (orgId) {
-    const hasAccess = portalAccess(await getOrgFeatures(orgId));
-    if (hasAccess === null) return { ok: false };
-    return { ok: true, orgIds: hasAccess ? [orgId] : [] };
-  }
+  // Support sessions do not apply the broker_portal_access check: they carry
+  // no Supabase login, so the feature lookup always answers not_authenticated
+  // and cannot tell access from no access. Same rule as
+  // lib/org-settings-access.ts (impersonationFeatureView). Full fix: BACKLOG-3922.
+  if (orgId) return { ok: true, orgIds: [orgId] };
 
   // Normal broker session: get distinct org IDs from visible submissions
   const { data: orgRows, error } = await client

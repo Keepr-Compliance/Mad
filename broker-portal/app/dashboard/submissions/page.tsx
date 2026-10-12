@@ -168,7 +168,7 @@ async function getSubmissions(
   if (allowedOrgIds === null) return { ...EMPTY_LIST, loadError: true };
   const inOrgs = allowedOrgIds;
 
-  // TASK-2158: Filter to only orgs with broker_portal_access enabled (support sessions too)
+  // TASK-2158: Filter to only orgs with broker_portal_access enabled (broker sessions; see allowedOrgs.ts)
   if (allowedOrgIds.length === 0) {
     // No orgs have access — return empty immediately
     return { ...EMPTY_LIST, board: filters.view === 'board' ? EMPTY_BOARD(!!filters.closed) : null };

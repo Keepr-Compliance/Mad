@@ -134,6 +134,13 @@ function statusOf(href: string): string {
   return new URL(href, 'http://x').searchParams.get('status') ?? 'all';
 }
 
+/** Submission ids linked from the Recent Submissions card (detail links only, not the card hrefs). */
+function recentIds(container: HTMLElement): string[] {
+  return Array.from(new Set(Array.from(container.querySelectorAll('a[href^="/dashboard/submissions/"]')).map(
+    (a) => (a.getAttribute('href') as string).split('/').pop() as string
+  ))).sort();
+}
+
 async function renderDashboard() {
   mockAuthFrom.mockImplementation(() => {
     const result = { data: [brokerageMembership('broker')], error: null };
@@ -175,6 +182,20 @@ describe('cards on the real dashboard', () => {
       .filter((l): l is string => !!l && l.endsWith('view submissions'));
     expect(labels).toHaveLength(4);
     for (const l of labels) expect(l).toMatch(/: 0, view submissions$/);
+  });
+
+  it('BACKLOG-3906: Recent Submissions lists only orgs with portal access (the no-access org holds the newest rows)', async () => {
+    const { container } = await renderDashboard();
+    const ids = recentIds(container);
+    expect(ids.length).toBeGreaterThan(0);
+    for (const id of ids) expect(id).not.toMatch(/^x-/);
+  });
+
+  it('BACKLOG-3906: Recent Submissions lists nothing when an org\'s feature read fails', async () => {
+    mockFeatureReadFails = [ORG];
+    const { container } = await renderDashboard();
+    expect(recentIds(container)).toEqual([]);
+    expect(screen.getByText('No submissions yet')).toBeInTheDocument();
   });
 
   it('shows the deal counts and the hrefs', async () => {
