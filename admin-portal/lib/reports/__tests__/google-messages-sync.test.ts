@@ -192,7 +192,11 @@ describe('the query (R5–R7)', () => {
     await getIphoneSyncRuns(client, WEEK);
     expect(argsOf(calls, 'eq')).toEqual([['source', 'iphone-backup']]);
     expect(argsOf(calls, 'not')).toEqual([]);
-    expect(String(argsOf(calls, 'select')[0][0])).not.toContain('source_metrics');
+    // BACKLOG-3892 E: the iPhone report now reads source_metrics (the kept-backup facts);
+    // the Google Messages-only columns stay out.
+    const selected = String(argsOf(calls, 'select')[0][0]);
+    for (const gmOnly of ['run_kind', 'extension_version', 'chrome_version']) expect(selected).not.toContain(gmOnly);
+    expect(selected).toContain('source_metrics');
   });
 
   it('packagedOnly: false includes dev builds', async () => {
