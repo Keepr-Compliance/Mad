@@ -246,7 +246,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
         phoneHideTitle
         phoneHideSubtitle
         title={PAGE_TITLES.submissions}
-        className="max-md:mb-3"
+        className="max-md:mb-0"
         subtitle={
           <span className="max-md:hidden">
             {totalCount} submission{totalCount !== 1 ? 's' : ''}
@@ -255,7 +255,10 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
         }
       />
 
-      <div className="space-y-6 max-md:space-y-3">
+      {/* Below md the desktop filter box is display:none but still a sibling, so
+          space-y would put a margin above the phone filters; cancel it so the gap
+          under the top bar equals the dashboard's (16px, main padding only). */}
+      <div className="space-y-6 max-md:space-y-3 max-md:[&>:nth-child(2)]:!mt-0">
       {/* Status Filters - clicking a filter resets to page 1 (no page param).
           BACKLOG-3904: desktop only; below md the phone filters replace them. */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 max-md:hidden">

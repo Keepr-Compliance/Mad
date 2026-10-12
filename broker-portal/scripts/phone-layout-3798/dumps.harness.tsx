@@ -417,3 +417,32 @@ it('dashboard-cards', async () => {
   const { container } = render(await DashboardPage());
   dump('dashboard-cards', container.innerHTML);
 });
+
+// BACKLOG-3904 fix-up: the real dashboard and submissions pages inside the real
+// shell (whole-body dumps), to measure the gap from the phone top bar to the
+// first content (stat cards / search field) and the Clear filters row.
+async function gapDump(name: string, path: string, element: React.ReactNode) {
+  mockPath = path;
+  const { unmount } = render(shell(element));
+  dump(name, document.body.innerHTML);
+  unmount();
+}
+
+it('gap-* (top bar to first content)', async () => {
+  const mk = (id: string, status: string, createdAt: string): Row => ({
+    ...submissionRow({ id, organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status, parentSubmissionId: null, createdAt, address: '34 Fictional Road' }),
+    version: 1,
+  });
+  mockEmulator.reset();
+  mockEmulator.set({
+    rows: {
+      transaction_submissions: [
+        mk('s1', 'submitted', '2026-09-03T00:00:00Z'),
+        mk('s2', 'approved', '2026-09-03T01:00:00Z'),
+      ],
+    },
+  });
+  await gapDump('gap-dashboard', '/dashboard', await DashboardPage());
+  await gapDump('gap-submissions', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({}) }));
+  await gapDump('gap-submissions-filtered', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ status: 'approved' }) }));
+});

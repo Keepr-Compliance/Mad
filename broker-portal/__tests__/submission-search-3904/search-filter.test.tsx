@@ -334,6 +334,22 @@ describe('status=pending (the dashboard Pending Review card)', () => {
   });
 });
 
+describe('phone spacing (measured in scripts/phone-layout-3798/gap.cjs)', () => {
+  it('Clear filters keeps a 44px tap target and drops its surrounding margins', async () => {
+    await renderList({ status: 'approved' });
+    const btn = screen.getByRole('button', { name: 'Clear filters' });
+    expect(btn.className.split(' ')).toContain('min-h-11');
+    expect(btn.parentElement!.className.split(' ')).toEqual(expect.arrayContaining(['!mt-0', '!-mb-3']));
+  });
+
+  it('the page header adds no phone margin and the hidden desktop box adds no margin above the search', async () => {
+    const { container } = await renderList();
+    const wrap = container.querySelector('.space-y-6') as HTMLElement;
+    expect(wrap.className).toContain('max-md:[&>:nth-child(2)]:!mt-0');
+    expect((wrap.previousElementSibling as HTMLElement).className).not.toContain('max-md:mb-3');
+  });
+});
+
 describe('C4 + C7 phone filter sheets (one per filter)', () => {
   async function openStatus() {
     fireEvent.click(screen.getByRole('button', { name: 'Status: All' }));

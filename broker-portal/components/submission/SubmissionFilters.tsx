@@ -238,11 +238,11 @@ export function SubmissionPhoneFilters({
         />
       </div>
       {filtered ? (
-        <div className="flex justify-end">
+        <div className="flex justify-end !mt-0 !-mb-3">
           <button
             type="button"
             onClick={() => router.push(buildListUrl({ status: 'all', agent: null, search: '' }))}
-            className="min-h-9 px-1 text-sm font-semibold text-primary-700"
+            className="min-h-11 px-1 text-sm font-semibold text-primary-700"
           >
             Clear filters
           </button>
