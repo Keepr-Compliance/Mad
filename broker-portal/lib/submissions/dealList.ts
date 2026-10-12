@@ -47,10 +47,13 @@ export interface Identity {
 /**
  * Whether a deal head matches a search: the search is split on whitespace and
  * EVERY word must match the address, the city, or (when identities were looked
- * up) the submitter's name or email, case-insensitively. A word of digits
- * matches where a word of the field starts ("33" finds "33 Oak Lane", not
- * "133 Elm Street"); any other word is a substring. An empty search matches
- * every deal.
+ * up) the submitter's name or email, case-insensitively. Any other word is a
+ * substring. A word of digits is a house number: in the address it must start
+ * the address ("33" finds "33 Oak Lane, ..." and "330 Cedar Ln, ...", not
+ * "133 Elm Street" and not a zip code - property_address holds the whole
+ * formatted address, "<n> <street>, <city>, <ST> <zip>, USA"); in the city,
+ * name and email it matches where a word starts. An empty search matches every
+ * deal.
  */
 export function headMatchesSearch(
   head: BrokerChainLink,
@@ -60,12 +63,14 @@ export function headMatchesSearch(
   const words = search.toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length === 0) return true;
   const who = head.submitted_by && identities ? identities.get(head.submitted_by) : undefined;
-  const fields = [head.property_address, head.property_city, who?.name, who?.email]
+  const address = (head.property_address ?? '').trim().toLowerCase();
+  const others = [head.property_city, who?.name, who?.email]
     .filter((f): f is string => typeof f === 'string')
     .map((f) => f.toLowerCase());
-  return words.every((w) =>
-    fields.some((f) => (/^\d+$/.test(w) ? new RegExp(`(^|[^a-z0-9])${w}`).test(f) : f.includes(w)))
-  );
+  return words.every((w) => {
+    if (!/^\d+$/.test(w)) return address.includes(w) || others.some((f) => f.includes(w));
+    return address.startsWith(w) || others.some((f) => new RegExp(`(^|[^a-z0-9])${w}`).test(f));
+  });
 }
 
 /** PostgREST caps an unranged read at max_rows (supabase/config.toml: 1000). */

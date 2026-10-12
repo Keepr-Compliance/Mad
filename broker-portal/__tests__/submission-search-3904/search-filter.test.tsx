@@ -515,16 +515,16 @@ describe('search matching: a number is a house number, not a zip code', () => {
     expect(listedIds(container)).toEqual([HOUSE_33, HOUSE_330]);
   });
 
-  it('"33 v" still finds the one 33 deal whose address has a v', async () => {
+  it('"33 vin" still finds the one 33 deal on Vine St', async () => {
     given([...fullRows, sub('00000000-0000-4000-8000-000000390426', AGENT_A, '33 Vine St, Pinecrest, FL 33156, USA', 'submitted', '2026-08-01T00:00:00Z')]); // pii-allow-uuid: invented fixture id
-    const { container } = await renderList({ search: '33 v' });
+    const { container } = await renderList({ search: '33 vin' });
     expect(listedIds(container)).toEqual(['00000000-0000-4000-8000-000000390426']); // pii-allow-uuid: invented fixture id
   });
 
   it('a number still matches inside a name or email (only the address is anchored)', async () => {
     given([
       sub(HOUSE_57_ZIP_39, AGENT_B, '57 Oak Rd, Hillview, MS 39428, USA', 'submitted', '2026-09-02T00:00:00Z'),
-    ], { users: [userNameRow(AGENT_B, NAME_B, 'bravo7@fixture.example.test')] });
+    ], { users: [userNameRow(AGENT_B, NAME_B, 'agent.7@fixture.example.test')] });
     const { container } = await renderList({ search: '7' });
     expect(listedIds(container)).toEqual([HOUSE_57_ZIP_39]);
   });
