@@ -316,9 +316,9 @@ describe('phone only, read-only', () => {
     expect(new URL(toBoard, 'http://x').searchParams.get('status')).toBe('under_review');
     expect(new URL(toBoard, 'http://x').searchParams.get('agent')).toBe(AGENT_B);
     list.unmount();
-    const b = await renderList({ view: 'board', status: 'under_review', agent: AGENT_B });
+    const b = await renderList({ view: 'board', status: 'under_review', agent: AGENT_B, sort: 'oldest' });
     const toList = b.container.querySelector('nav[aria-label="View"] a:nth-child(1)')!.getAttribute('href')!;
-    expect(toList).toBe(`/dashboard/submissions?agent=${AGENT_B}`);
+    expect(toList).toBe(`/dashboard/submissions?agent=${AGENT_B}&sort=oldest`);
   });
 
   it('cards cannot be dragged and nothing on the board changes a status', async () => {
