@@ -216,8 +216,9 @@ export interface EmailForceStaging {
   readonly forceSet: EmailForceSet;
   /**
    * Resurrection remaps (BACKLOG-1769) that target rows in the REAL `emails`
-   * table rather than in staging — i.e. SURVIVORS, since a force-set row is no
-   * longer visible to the dedup read and comes back as a plain staged insert.
+   * table rather than in staging. BACKLOG-3910a: the read view hides every live
+   * row of this user, so on a force run nothing can match and this stays empty;
+   * the path is kept for the shape it shares with the incremental sync.
    * Buffered and applied as the swap's last step, mirroring
    * `forceStaging.messageIdRepairs`: today that UPDATE would run inside the
    * transaction and become visible only at COMMIT, and buffering reproduces

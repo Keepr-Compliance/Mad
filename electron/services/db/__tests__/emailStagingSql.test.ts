@@ -35,6 +35,7 @@ import {
   createStagingTable,
   discardStagedEmails,
   dropStagingTable,
+  liveEmailIdentityTaken,
   insertStagedEmails,
   insertStagedParticipants,
   mirrorStagingIndexes,
@@ -313,6 +314,32 @@ describe("refreshLiveEmailFromStaged — the kept row is updated IN PLACE (BACKL
       account_id: null,
       body_plain: "new body",
     });
+  });
+});
+
+describe("liveEmailIdentityTaken — the refresh's identity guard", () => {
+  /**
+   * No end-to-end control exists for this guard: SR S4 asked for a fixture the
+   * code can produce, and none was found (C7 dropped). These pin the guard's
+   * own answers. MUTATION: drop the `id <> ?` term -> the "own row" case reads
+   * taken, red.
+   */
+  beforeEach(() => {
+    db.prepare(
+      `INSERT INTO emails (id, user_id, external_id, account_id, message_id_header) VALUES ('a', ?, 'x1', 'acct', '<m1>')`,
+    ).run(USER);
+  });
+  const taken = (liveId: string, accountId: string | null, externalId: string | null, header: string | null) =>
+    liveEmailIdentityTaken(db as never, liveId, { accountId, externalId, messageIdHeader: header });
+
+  it("reads another row's (account, provider id) or (account, Message-ID) as taken", () => {
+    expect(taken("b", "acct", "x1", null)).toBe(true);
+    expect(taken("b", "acct", null, "<m1>")).toBe(true);
+  });
+  it("never counts the row's own identity, another account, or a NULL account", () => {
+    expect(taken("a", "acct", "x1", "<m1>")).toBe(false);
+    expect(taken("b", "other", "x1", "<m1>")).toBe(false);
+    expect(taken("b", null, "x1", "<m1>")).toBe(false);
   });
 });
 
