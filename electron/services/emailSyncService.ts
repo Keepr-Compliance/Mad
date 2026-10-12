@@ -1401,6 +1401,20 @@ class EmailSyncService {
         );
       }
     }
+    // BACKLOG-3925: address-only matches from the local cache, after the contact
+    // pass, on the queueing (deal surface) path only.
+    if (queueForReviewInsteadOfLinking) {
+      try {
+        const { queueAddressMatchesForTransaction } = await import("./reviewStateService");
+        totalQueuedForReview += (await queueAddressMatchesForTransaction(transactionId)).queued;
+      } catch (error) {
+        clean = false;
+        totalErrors++;
+        logService.warn("[BACKLOG-3925] address-only discovery failed", "Transactions", {
+          error: error instanceof Error ? error.message : "Unknown",
+        });
+      }
+    }
     return { clean };
     };
     if (queueForReviewInsteadOfLinking) {

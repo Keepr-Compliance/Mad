@@ -195,3 +195,86 @@ export const DELETE_PENDING_REVIEW_SQL = sql`DELETE FROM pending_review_communic
 
 /** Remove one approved link. One bound parameter. */
 export const DELETE_COMMUNICATION_SQL = sql`DELETE FROM communications WHERE id = ?`;
+
+/* ------------------------------------------------------------------ *
+ * BACKLOG-3925 — why an email is in Needs Review, and address-only discovery
+ * ------------------------------------------------------------------ */
+
+/**
+ * Every stored reason on one transaction. One bound parameter. A queued email with no
+ * row here reads as "contact" (everything queued before BACKLOG-3925).
+ */
+export const MATCH_REASONS_BY_TRANSACTION_SQL = sql`SELECT email_id, reason
+       FROM pending_review_match_reasons
+      WHERE transaction_id = ?`;
+
+/** The stored reason for one (transaction, email). Two bound parameters. */
+export const MATCH_REASON_BY_EMAIL_SQL = sql`SELECT reason FROM pending_review_match_reasons WHERE transaction_id = ? AND email_id = ?`;
+
+/**
+ * Record (or replace) the reason for one (transaction, email). Three bound parameters:
+ * transaction id, email id, reason. The caller has already applied the precedence rule
+ * (`strongerReviewMatchReason`), so this writes what it is given.
+ */
+export const UPSERT_MATCH_REASON_SQL = sql`INSERT INTO pending_review_match_reasons (transaction_id, email_id, reason)
+     VALUES (?, ?, ?)
+     ON CONFLICT (transaction_id, email_id)
+     DO UPDATE SET reason = excluded.reason, updated_at = CURRENT_TIMESTAMP`;
+
+/**
+ * How many ADDRESS-reason items are outstanding on one transaction — the noise cap's
+ * input. One bound parameter.
+ */
+export const ADDRESS_MATCH_PENDING_COUNT_SQL = sql`SELECT COUNT(*) AS n
+       FROM pending_review_communications p
+       JOIN pending_review_match_reasons r
+         ON r.transaction_id = p.transaction_id AND r.email_id = p.email_id
+      WHERE p.transaction_id = ?
+        AND r.reason = 'address'`;
+
+/**
+ * Address-only discovery candidates: the user's cached emails inside the deal's
+ * window whose subject or plain body contains the street NUMBER. A superset — the
+ * decision is `contentContainsAddress` in JS (number + street-name words, word
+ * boundaries, Ave/Avenue variants), exactly as the contact route decides.
+ *
+ * Excluded here, all for THIS transaction:
+ *   - already linked (`communications`)
+ *   - already rejected (`ignored_communications`)
+ *   - already waiting in Needs Review (`pending_review_communications`)
+ *   - any participant is an email address of a contact on the deal. Those belong to
+ *     the contact route, which links the ones naming the address and queues the rest.
+ *
+ * Newest first, so a capped pass keeps the most recent mail. Bound, in order: user id,
+ * window start, window end, street number (subject), street number (body), then the
+ * transaction id four times.
+ */
+export const ADDRESS_MATCH_CANDIDATE_EMAILS_SQL = sql`SELECT e.id, e.subject, e.body_plain
+       FROM emails e
+      WHERE e.user_id = ?
+        AND e.sent_at >= ?
+        AND e.sent_at <= ?
+        AND (instr(e.subject, ?) > 0 OR instr(e.body_plain, ?) > 0)
+        AND NOT EXISTS (
+          SELECT 1 FROM communications c
+           WHERE c.transaction_id = ? AND c.email_id = e.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM ignored_communications ic
+           WHERE ic.transaction_id = ? AND ic.email_id = e.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM pending_review_communications p
+           WHERE p.transaction_id = ? AND p.email_id = e.id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+            FROM email_participants ep
+            JOIN contact_emails ce ON lower(trim(ce.email)) = ep.email_address
+            JOIN transaction_contacts tc
+              ON tc.contact_id = ce.contact_id
+             AND tc.transaction_id = ?
+             AND tc.removed_at IS NULL
+           WHERE ep.email_id = e.id
+        )
+      ORDER BY e.sent_at DESC`;

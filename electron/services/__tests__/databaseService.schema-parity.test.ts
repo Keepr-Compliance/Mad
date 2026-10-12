@@ -119,6 +119,25 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     ref: "BACKLOG-3366",
   },
   {
+    key: "TABLE:pending_review_match_reasons",
+    what: "New table recording why an email is in Needs Review ('address' | 'contact').",
+    why:
+      "BACKLOG-3925: Needs Review gains address-only matches from the local email " +
+      "cache, and each row shows why it is there. Keyed by (transaction_id, email_id) " +
+      "so the reason survives reject -> restore. A new table is fully IF NOT EXISTS, " +
+      "so schema.sql's exec on every open creates it on fresh and upgraded databases " +
+      "alike; no migration entry is needed.",
+    ref: "BACKLOG-3925",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_pending_review_match_reasons_1",
+    what: "SQLite's automatic index for the (transaction_id, email_id) primary key.",
+    why:
+      "BACKLOG-3925: produced by the composite PRIMARY KEY on the new table; it " +
+      "is not declared separately and cannot be omitted.",
+    ref: "BACKLOG-3925",
+  },
+  {
     key: "INDEX:idx_messages_thread_sent",
     what: "Index on messages (thread_id, sent_at).",
     why:

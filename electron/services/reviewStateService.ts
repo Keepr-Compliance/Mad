@@ -70,6 +70,8 @@ import crypto from "crypto";
 import { hostWindows } from "../capabilities/windowsProvider";
 import { dbGet, dbAll, dbRun } from "./db/core/dbConnection";
 import {
+  ADDRESS_MATCH_CANDIDATE_EMAILS_SQL,
+  ADDRESS_MATCH_PENDING_COUNT_SQL,
   ADDRESS_MISSING_COMMUNICATIONS_BY_TRANSACTION_SQL,
   ADDRESS_MISSING_COMMUNICATION_BY_ID_SQL,
   DELETE_ADDRESS_MISSING_COMMUNICATION_SQL,
@@ -81,6 +83,9 @@ import {
   IGNORED_COMMUNICATION_BY_ID_SQL,
   IGNORED_SIBLINGS_IN_THREAD_SQL,
   INSERT_PENDING_REVIEW_EMAIL_SQL,
+  MATCH_REASONS_BY_TRANSACTION_SQL,
+  MATCH_REASON_BY_EMAIL_SQL,
+  UPSERT_MATCH_REASON_SQL,
   INSERT_PENDING_REVIEW_WITH_THREAD_SQL,
   PENDING_REVIEW_BY_EMAIL_SQL,
   PENDING_REVIEW_BY_ID_SQL,
@@ -106,6 +111,16 @@ import { runFullSweepOnce, yieldToEventLoop } from "./autoLinkSweepGuard";
 // persisted-data contract, so it is named here rather than spelled out at each
 // of the three sites (a read, a SQL predicate and a write) that have to agree.
 import { REVIEW_REJECTION_REASON } from "../types/ipc/communicationLifecycle";
+import {
+  DEFAULT_REVIEW_MATCH_REASON,
+  strongerReviewMatchReason,
+  toReviewMatchReason,
+  type ReviewMatchReason,
+} from "../types/ipc/reviewMatchReason";
+import { TRANSACTION_AUTOLINK_WINDOW_SQL } from "./db/autoLinkSql";
+import { getCachedEmailSentAtBounds } from "./db/emailCacheWindow";
+import { normalizeAddress, contentContainsAddress } from "../utils/addressNormalization";
+import { computeTransactionDateRange } from "../utils/emailDateRange";
 
 const MODULE = "ReviewStateService";
 
@@ -246,6 +261,11 @@ export interface ReviewItem {
   email_id: string | null;
   thread_id: string | null;
   found_at: string;
+  /**
+   * BACKLOG-3925: why the item is in Needs Review. "contact" for texts, legacy rows
+   * and every queued email with no stored reason.
+   */
+  matchReason: ReviewMatchReason;
   display: ReviewItemDisplay;
 }
 
@@ -322,6 +342,7 @@ function decodeId(id: string): { origin: ReviewOrigin; rowId: string } | null {
  * second read path is what `reviewStateService.singleReadPath` fails on.
  */
 export function getReviewState(transactionId: string): ReviewState {
+  const reasons = readMatchReasons(transactionId);
   const pending = dbAll<{
     id: string;
     transaction_id: string;
@@ -340,6 +361,7 @@ export function getReviewState(transactionId: string): ReviewState {
     email_id: r.email_id,
     thread_id: r.thread_id,
     found_at: r.found_at,
+    matchReason: (r.email_id && reasons.get(r.email_id)) || DEFAULT_REVIEW_MATCH_REASON,
     display: r.email_id ? emailDisplay(r.email_id) : threadDisplay(r.thread_id),
   }));
 
@@ -364,6 +386,7 @@ export function getReviewState(transactionId: string): ReviewState {
     email_id: r.email_id,
     thread_id: r.thread_id,
     found_at: r.linked_at,
+    matchReason: DEFAULT_REVIEW_MATCH_REASON,
     display: emailDisplay(r.email_id),
   }));
 
@@ -662,6 +685,8 @@ export async function queueEmailForReview(
   transactionId: string,
   emailId: string,
   userId: string,
+  /** BACKLOG-3925: why it is queued. The contact route's callers omit it. */
+  reason: ReviewMatchReason = "contact",
 ): Promise<boolean> {
   // BACKLOG-3910: backstop. Nothing new is queued for review on a locked deal
   // (with the broker, or sealed), whoever the caller is. Restoring a rejected
@@ -680,7 +705,160 @@ export async function queueEmailForReview(
     INSERT_PENDING_REVIEW_EMAIL_SQL,
     [crypto.randomUUID(), userId, transactionId, emailId],
   );
+  // BACKLOG-3925: record why — also when the row already existed, so a stronger
+  // reason (folder > address > contact) found later replaces a weaker one.
+  recordMatchReason(transactionId, emailId, reason);
   return (res.changes ?? 0) > 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * BACKLOG-3925 — match reasons and address-only discovery
+ * ------------------------------------------------------------------ */
+
+/** email id -> stored reason, for one transaction. */
+function readMatchReasons(transactionId: string): Map<string, ReviewMatchReason> {
+  const out = new Map<string, ReviewMatchReason>();
+  for (const r of dbAll<{ email_id: string; reason: string }>(MATCH_REASONS_BY_TRANSACTION_SQL, [transactionId])) {
+    out.set(r.email_id, toReviewMatchReason(r.reason));
+  }
+  return out;
+}
+
+function readMatchReason(transactionId: string, emailId: string): ReviewMatchReason {
+  const row = dbGet<{ reason: string }>(MATCH_REASON_BY_EMAIL_SQL, [transactionId, emailId]);
+  return toReviewMatchReason(row?.reason);
+}
+
+/** Store `incoming` unless a stronger reason is already stored (precedence rule). */
+function recordMatchReason(transactionId: string, emailId: string, incoming: ReviewMatchReason): void {
+  const row = dbGet<{ reason: string }>(MATCH_REASON_BY_EMAIL_SQL, [transactionId, emailId]);
+  const existing = row ? toReviewMatchReason(row.reason) : null;
+  const winner = strongerReviewMatchReason(existing, incoming);
+  if (winner === existing) return;
+  dbRun(UPSERT_MATCH_REASON_SQL, [transactionId, emailId, winner]);
+}
+
+/**
+ * Noise guard: at most this many ADDRESS-reason items outstanding per deal. A pass
+ * queues up to (cap - outstanding), newest first. An unparseable address or one with
+ * no street number never reaches discovery (normalizeAddress returns null).
+ */
+export const ADDRESS_MATCH_CAP_PER_DEAL = 50;
+
+/** Emails classified per event-loop turn by the address pass. */
+const ADDRESS_MATCH_EMAILS_PER_TURN = 10;
+
+export interface AddressMatchPassResult {
+  /** Newly queued with reason "address". */
+  queued: number;
+  /** Rows the number prefilter returned. */
+  candidates: number;
+  /** Candidates that passed contentContainsAddress. */
+  matched: number;
+  /** True when the cap stopped the pass before every match was queued. */
+  capped: boolean;
+  /** Why nothing ran, when nothing ran. */
+  skipped?: "missing" | "locked" | "no-address";
+}
+
+/**
+ * Address-only discovery (BACKLOG-3925): queue the deal's cached emails that name its
+ * street number AND street name but involve no contact on the deal.
+ *
+ * Searches the LOCAL email cache only — no provider call (founder rule, 2026-10-12).
+ * When the cache starts after the window does, only the cached part is searched; the
+ * gap is logged, nothing is shown.
+ *
+ * Run AFTER the contact pass of the same sweep: the contact route owns every email
+ * that has a deal contact on it, and the SQL excludes those outright.
+ */
+export async function queueAddressMatchesForTransaction(transactionId: string): Promise<AddressMatchPassResult> {
+  const none = (skipped: AddressMatchPassResult["skipped"]): AddressMatchPassResult => ({
+    queued: 0,
+    candidates: 0,
+    matched: 0,
+    capped: false,
+    skipped,
+  });
+
+  // BACKLOG-3910: a locked deal queues nothing, and reads nothing to find out.
+  if (getDealLockReason(transactionId)) return none("locked");
+
+  const txn = dbGet<{
+    user_id: string;
+    started_at: string | null;
+    created_at: string | null;
+    closed_at: string | null;
+    property_address: string | null;
+    property_street: string | null;
+  }>(TRANSACTION_AUTOLINK_WINDOW_SQL, [transactionId]);
+  if (!txn) return none("missing");
+
+  const address = normalizeAddress(txn.property_address || txn.property_street || null);
+  if (!address) return none("no-address");
+
+  const range = computeTransactionDateRange({
+    started_at: txn.started_at,
+    created_at: txn.created_at,
+    closed_at: txn.closed_at,
+  });
+  const start = range.start.toISOString();
+  const end = range.end.toISOString();
+
+  const outstanding =
+    dbGet<{ n: number }>(ADDRESS_MATCH_PENDING_COUNT_SQL, [transactionId])?.n ?? 0;
+  let room = Math.max(0, ADDRESS_MATCH_CAP_PER_DEAL - outstanding);
+
+  const rows = dbAll<{ id: string; subject: string | null; body_plain: string | null }>(
+    ADDRESS_MATCH_CANDIDATE_EMAILS_SQL,
+    [
+      txn.user_id,
+      start,
+      end,
+      address.streetNumber,
+      address.streetNumber,
+      transactionId,
+      transactionId,
+      transactionId,
+      transactionId,
+    ],
+  );
+
+  let matched = 0;
+  let queued = 0;
+  let capped = false;
+  for (let i = 0; i < rows.length; i++) {
+    if (i > 0 && i % ADDRESS_MATCH_EMAILS_PER_TURN === 0) await yieldToEventLoop();
+    const r = rows[i];
+    if (!contentContainsAddress(`${r.subject ?? ""} ${r.body_plain ?? ""}`, address)) continue;
+    matched++;
+    if (room <= 0) {
+      capped = true;
+      continue;
+    }
+    if (await queueEmailForReview(transactionId, r.id, txn.user_id, "address")) {
+      queued++;
+      room--;
+    }
+  }
+
+  const bounds = getCachedEmailSentAtBounds(txn.user_id);
+  const uncoveredDays =
+    bounds.oldest && bounds.oldest > start
+      ? Math.ceil((Date.parse(bounds.oldest) - Date.parse(start)) / 86_400_000)
+      : 0;
+
+  await logService.info("[BACKLOG-3925] address-only discovery", MODULE, {
+    transactionId,
+    candidates: rows.length,
+    matched,
+    queued,
+    capped,
+    outstandingBefore: outstanding,
+    uncoveredDays,
+  });
+
+  return { queued, candidates: rows.length, matched, capped };
 }
 
 /**
@@ -781,6 +959,17 @@ export async function syncReviewQueueForTransaction(opts: {
           MODULE,
         );
       }
+    }
+    // BACKLOG-3925: address-only matches, after the contact pass so the contact
+    // route has already taken every email with a deal contact on it.
+    try {
+      added += (await queueAddressMatchesForTransaction(transactionId)).queued;
+    } catch (error) {
+      clean = false;
+      await logService.warn(
+        `[BACKLOG-3925] address-only discovery failed: ${error instanceof Error ? error.message : "Unknown"}`,
+        MODULE,
+      );
     }
     return { clean };
   };
@@ -963,6 +1152,7 @@ function loadItem(id: string): ReviewItem | undefined {
       email_id: r.email_id,
       thread_id: r.thread_id,
       found_at: r.found_at,
+      matchReason: r.email_id ? readMatchReason(r.transaction_id, r.email_id) : DEFAULT_REVIEW_MATCH_REASON,
       display: r.email_id ? emailDisplay(r.email_id) : threadDisplay(r.thread_id),
     };
   }
@@ -987,6 +1177,7 @@ function loadItem(id: string): ReviewItem | undefined {
     email_id: r.email_id,
     thread_id: r.thread_id,
     found_at: r.linked_at,
+    matchReason: DEFAULT_REVIEW_MATCH_REASON,
     display: emailDisplay(r.email_id),
   };
 }

@@ -1188,6 +1188,21 @@ CREATE TABLE IF NOT EXISTS pending_review_communications (
   )
 );
 
+-- BACKLOG-3925: WHY an email is in Needs Review ('address' | 'contact'; 'folder' is
+-- planned, BACKLOG-3926). Keyed by (deal, email), not by the queue row, so the reason
+-- survives reject -> restore (which queues a NEW row). No row = 'contact'.
+-- A new table, so this file's exec on every open creates it on fresh and existing
+-- databases alike; no migration entry.
+CREATE TABLE IF NOT EXISTS pending_review_match_reasons (
+  transaction_id TEXT NOT NULL,
+  email_id TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK (reason IN ('address', 'contact')),
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (transaction_id, email_id),
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS phone_last_message (
   phone_normalized TEXT NOT NULL,
   user_id TEXT NOT NULL,
