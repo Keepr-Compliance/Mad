@@ -255,6 +255,21 @@ describe("BACKLOG-3924: waiting for sign-in", () => {
     expect(p.shown[0][2]!.signIn).toBe(true);
   });
 
+  // S1 (SR): a Keepr that restarted mid-wait answers 404 {error:"no_job"} (it no
+  // longer knows the job). That is NOT an older Keepr (404 not_found is): the
+  // page must not show the old card and post a /error to a Keepr that lost the job.
+  // Mutation: sendWaiting reading any 404 as old_keepr → red.
+  it("S1: a 404 no_job on /waiting (Keepr restarted mid-wait) is Keepr lost, not an older Keepr", async () => {
+    const p = page([{ at: 0, path: "/web/welcome", html: WELCOME }], {
+      waiting: () => ({ ok: false, status: 404, body: { error: "no_job" } }),
+    });
+    const out = await job.runJob(JOB, p.env);
+    expect(out.outcome).toBe("keepr_lost");
+    expect(p.paths()).not.toContain("/error");
+    expect(p.paths()).not.toContain("/claim");
+    expect(p.shown.map((c) => c[0])).not.toContain("Sign in to Google Messages");
+  });
+
   it("C10: Stop in Keepr during the wait (410) → no claim, no /error, the cancelled card", async () => {
     const p = page([
       { at: 0, path: "/web/welcome", html: WELCOME },
