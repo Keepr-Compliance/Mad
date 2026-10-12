@@ -14,6 +14,7 @@ import { usePathname } from 'next/navigation';
 import { ImpersonationBanner } from '@/components/ImpersonationBanner';
 import { MobileTopBar } from '@keepr/ui';
 import { Sidebar } from '@/components/layout/Sidebar';
+import { getPhoneTitle } from '@/lib/dashboard-page-titles';
 import { SupportWidget } from '@/app/dashboard/components/SupportWidget';
 
 export interface DashboardShellProps {
@@ -95,6 +96,7 @@ export function DashboardShell({
         <MobileTopBar
           ref={menuButtonRef}
           qualifier="Broker"
+          title={getPhoneTitle(pathname)}
           menuOpen={menuOpen}
           onOpenMenu={() => setMenuOpen(true)}
         />

@@ -18,7 +18,7 @@ export default function DashboardLoading() {
       className="max-w-7xl mx-auto"
     >
       {/* Header Skeleton (mirrors PageHeader) */}
-      <div className="mb-6">
+      <div className="mb-6 max-md:hidden">
         <Skeleton className="h-8 w-48 mb-2" />
         <Skeleton className="h-4 w-72 max-w-full" />
       </div>

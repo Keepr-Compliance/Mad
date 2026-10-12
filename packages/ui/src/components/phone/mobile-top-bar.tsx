@@ -19,6 +19,11 @@ export interface MobileTopBarProps {
   onOpenMenu: () => void;
   /** id of the drawer the button controls. */
   menuControlsId?: string;
+  /**
+   * Current page title. When set (and `leading` is not), it replaces the
+   * wordmark + qualifier block. Without it the bar renders as before.
+   */
+  title?: string;
   /** Replaces the wordmark + qualifier block. */
   leading?: React.ReactNode;
   /** Right-aligned slot (e.g. an avatar button). */
@@ -28,7 +33,7 @@ export interface MobileTopBarProps {
 
 export const MobileTopBar = React.forwardRef<HTMLButtonElement, MobileTopBarProps>(
   function MobileTopBar(
-    { qualifier, menuOpen, onOpenMenu, menuControlsId = 'mobile-nav', leading, trailing, className },
+    { qualifier, menuOpen, onOpenMenu, menuControlsId = 'mobile-nav', title, leading, trailing, className },
     ref
   ) {
     return (
@@ -51,14 +56,22 @@ export const MobileTopBar = React.forwardRef<HTMLButtonElement, MobileTopBarProp
           >
             <Menu className="h-6 w-6" aria-hidden="true" />
           </button>
-          {leading ?? (
+          {leading ??
+            (title ? (
+              <span
+                data-testid="mobile-top-bar-title"
+                className="min-w-0 truncate text-base font-semibold text-white"
+              >
+                {title}
+              </span>
+            ) : (
             <>
               <Wordmark className="text-xl font-bold" />
               <span className="text-xs font-medium uppercase tracking-wider text-gray-400">
                 {qualifier}
               </span>
             </>
-          )}
+            ))}
           {trailing ? <div className="ml-auto flex items-center">{trailing}</div> : null}
         </div>
       </header>

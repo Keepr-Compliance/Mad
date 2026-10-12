@@ -12,7 +12,7 @@ export default function UsersLoading() {
     <div className="max-w-7xl mx-auto space-y-6">
       {/* Header Skeleton */}
       <div className="flex justify-between items-center">
-        <div>
+        <div className="max-md:hidden">
           <Skeleton className="h-8 w-48 mb-2" />
           <Skeleton className="h-4 w-64" />
         </div>

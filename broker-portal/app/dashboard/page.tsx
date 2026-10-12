@@ -130,7 +130,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="max-w-7xl mx-auto">
-      <PageHeader title={headerTitle} subtitle="Overview of transaction submissions" />
+      <PageHeader phoneHideTitle phoneHideSubtitle title={headerTitle} subtitle="Overview of transaction submissions" />
 
       <div className="space-y-6">
         {/* Stats Grid */}
