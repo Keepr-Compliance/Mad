@@ -35,7 +35,8 @@ import {
   type ImportPhaseDisplay,
 } from "../../utils/importPhaseDisplay";
 import { FdaHelpSheet } from "../permissions/FdaHelpSheet";
-import { LookbackMonthsSelect, forceWindowLine, lastMonthsPhrase, lookbackOptionLabel } from "./LookbackMonthsSelect";
+import { forceWindowLine, lastMonthsPhrase, lookbackOptionLabel } from "./LookbackMonthsSelect";
+import { useTextsLookback } from "./textsLookback";
 import { usePlatform } from "../../contexts/PlatformContext";
 import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
 import { settingsService, systemService } from '../../services';
@@ -49,9 +50,7 @@ import { parseLocalCalendarDay } from '../../utils/dateRangeUtils';
 // This panel's preference KEY is unchanged: `messageImport.filters`, which is
 // what the main process imports with.
 import {
-  DEFAULT_LOOKBACK_MONTHS,
   DEFAULT_MAX_MESSAGES,
-  resolveStoredLookbackMonths,
   resolveStoredMaxMessages,
 } from './messageImportPreferences';
 
@@ -290,9 +289,12 @@ export function MacOSMessagesImportSettings({
   const cancelRequested = messagesItem?.cancelRequested === true;
 
   // TASK-1952: Import filter state
-  const [lookbackMonths, setLookbackMonths] = useState<number | null>(
-    DEFAULT_LOOKBACK_MONTHS
-  );
+  // BACKLOG-3892 S3: the lookback is the SHARED "How far back to import texts"
+  // value (TextsLookbackSettings, under the source selection). This panel no
+  // longer holds its own copy: a local copy is what left the estimate and the
+  // window label describing the old window after the shared picker changed.
+  const textsLookback = useTextsLookback(userId);
+  const lookbackMonths = textsLookback.months;
   const [maxMessages, setMaxMessages] = useState<number | null>(
     DEFAULT_MAX_MESSAGES
   );
@@ -491,7 +493,8 @@ export function MacOSMessagesImportSettings({
    */
   const [prefsSettled, setPrefsSettled] = useState(false);
   const [windowSettled, setWindowSettled] = useState(false);
-  const estimateInputsReady = prefsSettled && windowSettled;
+  // BACKLOG-3892 S3: the shared lookback is a third async input.
+  const estimateInputsReady = prefsSettled && windowSettled && textsLookback.settled;
 
   // BACKLOG-2743: "Import without attachments" — the escape hatch that makes a
   // refusal actionable. Message text is a small fraction of attachment size, so
@@ -894,7 +897,7 @@ export function MacOSMessagesImportSettings({
           // the message cap writes `{ maxMessages: N }` and the preferences
           // deep-merge leaves `lookbackMonths` absent. Only an explicit `null`
           // (what this dropdown writes for "All time") means unbounded.
-          setLookbackMonths(resolveStoredLookbackMonths(messageImport.filters));
+          // BACKLOG-3892 S3: the lookback itself is read by useTextsLookback.
           // BACKLOG-2749: an ABSENT key is "no preference", not "Unlimited" —
           // the same distinction BACKLOG-2561 drew for the lookback and
           // BACKLOG-2733 drew inside the resolver. `?? null` showed
@@ -937,39 +940,42 @@ export function MacOSMessagesImportSettings({
    * it even with the `catch` removed. Both are handled here; testing only the
    * throw would leave the reachable one open.
    */
-  const handleLookbackChange = async (value: string): Promise<boolean> => {
-    const months = value === "all" ? null : Number(value);
-    const previous = lookbackMonths;
-    setLookbackMonths(months);
+  const handleLookbackChange = (value: string): Promise<boolean> =>
+    // BACKLOG-3892 S3: through the shared value, so the shared picker shows what
+    // the dialog saved. It saves, reverts on failure, and reports whether the
+    // save landed; the effect below refreshes the window label.
+    textsLookback.change(value);
+
+  /**
+   * BACKLOG-3892 S3: the lookback can now change from OUTSIDE this panel (the
+   * shared picker). Whatever changed it, the last result no longer describes
+   * the window and the effective-window label must be re-read (BACKLOG-2286:
+   * the pref is a floor the audit period can widen past). The first settled
+   * value is the stored one, already covered by the mount load.
+   */
+  const seenLookbackRef = useRef<{ months: number | null } | null>(null);
+  useEffect(() => {
+    if (!isMacOS || !textsLookback.settled) return;
+    if (seenLookbackRef.current === null) {
+      seenLookbackRef.current = { months: lookbackMonths };
+      return;
+    }
+    if (seenLookbackRef.current.months === lookbackMonths) return;
+    seenLookbackRef.current = { months: lookbackMonths };
     setLastResult(null);
+  }, [isMacOS, textsLookback.settled, lookbackMonths]);
 
-    let saved = false;
-    try {
-      const result = await settingsService.updatePreferences(userId, {
-        messageImport: {
-          filters: {
-            lookbackMonths: months,
-          },
-        },
-      });
-      saved = result?.success !== false;
-    } catch {
-      saved = false;
-    }
-
-    if (!saved) {
-      // The setting did not save, so the panel must not display it as though it
-      // had: a dropdown reading "Last 12 months" over a stored "All time" is
-      // the same lie in a smaller font, and the estimate would then describe a
-      // window no run would use.
-      setLookbackMonths(previous);
-    }
-
-    // BACKLOG-2286: Refresh the effective window (the pref is a floor the audit
-    // period can widen past) after the save lands so the label stays truthful.
+  // The effective window is read from the STORE (main), so it can only be
+  // re-read once the save has landed — reading on the optimistic value change
+  // beats the write and keeps the old label. One read per landed save.
+  const seenSaveCountRef = useRef(textsLookback.saveCount);
+  useEffect(() => {
+    if (seenSaveCountRef.current === textsLookback.saveCount) return;
+    seenSaveCountRef.current = textsLookback.saveCount;
+    if (!isMacOS) return;
     loadEffectiveWindow();
-    return saved;
-  };
+    // loadEffectiveWindow is a plain per-render function; re-run on the save only.
+  }, [isMacOS, textsLookback.saveCount]);
 
   // TASK-1952: Save max messages filter
   const handleMaxMessagesChange = async (value: string) => {
@@ -1999,16 +2005,9 @@ export function MacOSMessagesImportSettings({
         Import messages from the macOS Messages app to enable linking with your
         transactions.
       </p>
-        {/* Date Range Filter */}
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-gray-600">Import messages from</span>
-          <LookbackMonthsSelect
-            value={lookbackMonths}
-            onChange={(v) => handleLookbackChange(v)}
-            disabled={controlsDisabled}
-          />
-        </div>
-
+        {/* BACKLOG-3892 S3: the date range is the shared "How far back to
+            import texts" picker under the source selection; the line below
+            still states it. */}
         {/* Message Count Cap */}
         <div className="flex items-center justify-between">
           <span className="text-xs text-gray-600">Maximum messages</span>

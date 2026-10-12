@@ -43,9 +43,6 @@ export function extensionInstalled(state: RcsExtensionState | null): boolean {
   return !!state?.extensionVersion;
 }
 
-/** Settings → Messages → Google Messages' months control (scroll target of "Change"). */
-export const GM_LOOKBACK_TARGET = "settings-gm-lookback";
-
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 /**

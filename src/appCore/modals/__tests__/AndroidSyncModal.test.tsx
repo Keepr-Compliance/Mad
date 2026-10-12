@@ -51,7 +51,8 @@ describe("AndroidSyncModal", () => {
     render(<AndroidSyncModal userId="user-1" onClose={onClose} onOpenSettings={onOpenSettings} />);
     fireEvent.click(screen.getByTestId("gm-change-stub"));
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(onOpenSettings).toHaveBeenCalledWith("settings-gm-lookback");
+    // BACKLOG-3892 S3: the shared "How far back to import texts" picker.
+    expect(onOpenSettings).toHaveBeenCalledWith("settings-texts-lookback");
   });
 
   it("renders the wizard flush inside a scrollable body", () => {

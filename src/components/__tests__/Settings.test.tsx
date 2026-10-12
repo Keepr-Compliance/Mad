@@ -1765,4 +1765,66 @@ describe("Settings", () => {
       expect(doneButton).not.toBeDisabled();
     });
   });
+
+  /**
+   * BACKLOG-3892 S3 — C1 + C4. ONE "How far back to import texts" picker under
+   * the source selection, for every source on Mac AND Windows, outside the
+   * per-source panels. The likely wrong build is mounting it inside the macOS
+   * panel, which renders nothing off a Mac (`if (!isMacOS) return null`) — so the
+   * Windows rows are the ones that matter. Each row: the picker is present once,
+   * is the deep-link target (#settings-texts-lookback, C4), and saves
+   * `messageImport.filters.lookbackMonths` — the key all three sources read.
+   */
+  describe("BACKLOG-3892 S3: the shared texts lookback picker (C1, C4)", () => {
+    let platformBefore: string;
+    beforeEach(() => {
+      platformBefore = (window.api.system as unknown as { platform: string }).platform;
+    });
+    afterEach(() => {
+      (window.api.system as unknown as { platform: string }).platform = platformBefore;
+    });
+
+    it.each([
+      ["darwin", "macos-native"],
+      ["darwin", "iphone-sync"],
+      ["darwin", "android-messages-web"],
+      ["win32", "iphone-sync"],
+      ["win32", "android-messages-web"],
+    ])("%s, source %s: one picker under the source selection, saving messageImport.filters", async (platform, source) => {
+      (window.api.system as unknown as { platform: string }).platform = platform;
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: { source },
+          messageImport: { filters: { lookbackMonths: 6 } },
+        },
+      });
+
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      // Anti-vacuity: the per-source branch for THIS source rendered.
+      if (source === "android-messages-web") {
+        expect(await screen.findByTestId("google-messages-settings")).toBeInTheDocument();
+      }
+      const section = container.querySelector<HTMLElement>("#settings-messages")!;
+      const target = section.querySelector<HTMLElement>("#settings-texts-lookback");
+      expect(target).not.toBeNull();
+      expect(within(target!).getByText("How far back to import texts")).toBeInTheDocument();
+      // Exactly one months picker in the Messages section — the per-panel ones are gone.
+      expect(within(section).getAllByRole("combobox", { name: "Import messages from" })).toHaveLength(1);
+
+      const select = within(target!).getByRole("combobox", { name: "Import messages from" }) as HTMLSelectElement;
+      await waitFor(() => expect(select).not.toBeDisabled());
+      expect(select.value).toBe("6");
+
+      await userEvent.selectOptions(select, "3");
+      await waitFor(() =>
+        expect(window.api.preferences.update).toHaveBeenCalledWith(mockUserId, {
+          messageImport: { filters: { lookbackMonths: 3 } },
+        }),
+      );
+      expect(select.value).toBe("3");
+    });
+  });
 });
