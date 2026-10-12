@@ -30,6 +30,10 @@ jest.mock("../../../../contexts", () => ({
   useAuth: () => ({ currentUser: { id: "user-1", email: "me@example.com" } }),
 }));
 
+jest.mock("../../../../hooks/useHideFromExportState", () => ({
+  useHideFromExportState: () => "allowed",
+}));
+
 const LOCK = DEAL_LOCK_EDIT_TOOLTIP.submitted;
 const REFUSAL = "This deal is with your broker for review, so it can't be changed until it's returned to you.";
 
@@ -148,6 +152,33 @@ describe("L3 Conversation view Hide / Unhide", () => {
       expect(screen.getByTestId("hide-from-export-m1")).toHaveAttribute("title", LOCK);
     });
   }
+});
+
+describe("L3b Texts tab hands the lock to the conversation view it opens", () => {
+  it("open = Hide enabled, locked = Hide disabled with the tooltip", async () => {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    (window.api as any).messages = {
+      ...(window.api as any).messages,
+      getMessageAttachmentsBatch: jest.fn().mockResolvedValue({}),
+    };
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    const props = { messages: TEXTS, loading: false, error: null, userId: "user-1", transactionId: "txn-1" };
+    for (const locked of [false, true]) {
+      const { unmount } = render(
+        <TransactionMessagesTab {...props} editLockedTooltip={locked ? LOCK : undefined} />,
+      );
+      await waitFor(() => expect(screen.getAllByTestId("message-thread-card")).toHaveLength(1));
+      await userEvent.click(screen.getByTestId("toggle-thread-button"));
+      const hide = await screen.findByTestId("hide-from-export-msg-1");
+      if (locked) {
+        expect(hide).toBeDisabled();
+        expect(hide).toHaveAttribute("title", LOCK);
+      } else {
+        expect(hide).toBeEnabled();
+      }
+      unmount();
+    }
+  });
 });
 
 describe("L4 bulk email remove when the main process refuses", () => {
