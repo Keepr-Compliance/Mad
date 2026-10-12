@@ -1912,13 +1912,14 @@ describe("Settings", () => {
           Array.from(
             container
               .querySelector(sel)!
-              .querySelectorAll("select, input[type=checkbox], input[type=radio], [role=switch]"),
+              .querySelectorAll("select, textarea, input:not([type=hidden]), [role=switch], [role=checkbox], [role=radio], button[aria-pressed]"),
           ),
         )
         .filter((control) => {
           if (home === null && target!.contains(control)) return false;
+          const want = control.matches("input[type=radio], [role=radio]") ? "Sources" : "Import Preferences";
           for (let node = control.parentElement; node; node = node.parentElement) {
-            if (isLabelledBlock(node)) return false;
+            if (isLabelledBlock(node)) return (node.firstElementChild?.textContent ?? "").trim() !== want;
           }
           return true;
         })
