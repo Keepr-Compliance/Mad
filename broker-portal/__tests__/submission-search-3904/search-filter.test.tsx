@@ -459,6 +459,59 @@ describe('phone search as you type', () => {
   });
 });
 
+describe('phone search X (clear search only)', () => {
+  const phoneSearch = () => screen.getByPlaceholderText('Search address or agent') as HTMLInputElement;
+  const clearX = () => screen.queryByRole('button', { name: 'Clear search' });
+  const clearFilters = () => screen.queryByRole('button', { name: 'Clear filters' });
+
+  it('no X on an empty field; the X appears with text; typing alone never shows "Clear filters"', async () => {
+    await renderList();
+    expect(clearX()).toBeNull();
+    fireEvent.change(phoneSearch(), { target: { value: 'oak' } });
+    expect(clearX()).toBeInTheDocument();
+    expect(clearFilters()).toBeNull();
+  });
+
+  it('a URL with only a search shows the X but not "Clear filters"', async () => {
+    await renderList({ search: 'mill' });
+    expect(clearX()).toBeInTheDocument();
+    expect(clearFilters()).toBeNull();
+  });
+
+  it('"Clear filters" shows for a status or agent filter, with or without search text', async () => {
+    const a = await renderList({ status: 'submitted' });
+    expect(clearFilters()).toBeInTheDocument();
+    a.unmount();
+    const b = await renderList({ agent: AGENT_A, search: 'mill' });
+    expect(clearFilters()).toBeInTheDocument();
+    b.unmount();
+  });
+
+  it('the X clears only the search: replace with status and agent kept, focus back on the input', async () => {
+    mockReplace.mockClear();
+    await renderList({ status: 'submitted', agent: AGENT_A, search: 'mill' });
+    fireEvent.click(clearX() as HTMLElement);
+    expect(phoneSearch().value).toBe('');
+    expect(mockReplace).toHaveBeenCalledTimes(1);
+    const url = new URL(mockReplace.mock.calls[0][0] as string, 'http://x');
+    expect(Object.fromEntries(url.searchParams)).toEqual({ status: 'submitted', agent: AGENT_A });
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(phoneSearch()).toHaveFocus();
+    expect(clearX()).toBeNull();
+  });
+
+  it('clearing restores the list (server page for the cleared URL lists every deal)', async () => {
+    const { container, rerender } = await renderList({ search: 'birch' });
+    expect(listedIds(container)).toEqual([A1]);
+    fireEvent.click(clearX() as HTMLElement);
+    await act(async () => {
+      rerender(await SubmissionsPage({ searchParams: Promise.resolve({}) }));
+    });
+    expect(listedIds(container)).toEqual([A2_V2, A1, B1]);
+    expect(phoneSearch().value).toBe('');
+  });
+});
+
 describe('search matching: numbers and words', () => {
   const ID_33 = '00000000-0000-4000-8000-000000390411'; // pii-allow-uuid: invented fixture id
   const ID_133 = '00000000-0000-4000-8000-000000390412'; // pii-allow-uuid: invented fixture id

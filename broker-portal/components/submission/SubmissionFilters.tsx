@@ -16,7 +16,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { BottomSheet, FilterSelectButton, SearchField } from '@keepr/ui';
 import { headMatchesFilter } from '@/lib/submissions/dealList';
-import { buildListUrl, hasActiveFilters, parseSearchParam, type ListFilters } from '@/lib/submissions/listUrl';
+import { buildListUrl, parseSearchParam, type ListFilters } from '@/lib/submissions/listUrl';
 
 export interface AgentOption {
   id: string;
@@ -207,7 +207,8 @@ export function SubmissionPhoneFilters({
     sheet === 'status'
       ? countFacets(facets, pendingStatus, filters.agent)
       : countFacets(facets, filters.status, pendingAgent);
-  const filtered = hasActiveFilters(filters);
+  // Search text has its own X inside the field; this button is for the two filters.
+  const filtered = filters.status !== 'all' || filters.agent !== null;
 
   return (
     <div className="space-y-2 md:hidden">
@@ -217,6 +218,7 @@ export function SubmissionPhoneFilters({
           placeholder="Search address or agent"
           value={search}
           onChange={onChange}
+          onClear={() => onChange('')}
         />
       </form>
       <div className="grid grid-cols-2 gap-2">
