@@ -16,6 +16,8 @@ import { rcsImportService } from "../../../services/rcsImportService";
 import { transactionService } from "../../../services/transactionService";
 import type { SourceCoverageGap, TextSource } from "../../../../electron/types/auditCoverage";
 import { coverageLine, gapKey, gapLine, googleMessagesGapLine, googleMessagesOlderLine } from "./coverageCopy";
+import { GetOlderTexts } from "./GetOlderTexts";
+import type { BackfillResult } from "../../../../electron/types/iphoneBackfill";
 
 // BACKLOG-3892 W: the lines live in coverageCopy.ts; re-exported for existing callers.
 export { gapLine, googleMessagesGapLine, googleMessagesOlderLine };
@@ -92,9 +94,11 @@ const PENDING_RETRIES = 5;
 interface TextCoverageNoticeProps {
   transactionId: string;
   userId: string;
+  /** BACKLOG-3892 S6: "Get older texts" stored texts — reload the tab's texts. */
+  onTextsAdded?: () => void | Promise<void>;
 }
 
-export function TextCoverageNotice({ transactionId, userId }: TextCoverageNoticeProps) {
+export function TextCoverageNotice({ transactionId, userId, onTextsAdded }: TextCoverageNoticeProps) {
   const [gaps, setGaps] = useState<SourceCoverageGap[]>([]);
   const [auditStart, setAuditStart] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
@@ -158,6 +162,18 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
     }
   }, [auditStart, load, transactionId, userId]);
 
+  // BACKLOG-3892 S6: after "Get older texts", re-read coverage (with the chosen source,
+  // inside load) so the warning updates, and reload the texts it stored.
+  const onTextsAddedRef = useRef(onTextsAdded);
+  onTextsAddedRef.current = onTextsAdded;
+  const afterBackfill = useCallback(
+    async (r: BackfillResult) => {
+      await load();
+      if (r.messagesStored > 0) await onTextsAddedRef.current?.();
+    },
+    [load],
+  );
+
   if (gaps.length === 0) return null;
   const older = googleMessagesOlderLine(gaps);
   if (older) {
@@ -187,6 +203,10 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
         {gaps.map((g, i) => (
           <li key={gapKey(g)} data-testid={`coverage-gap-${gapKey(g)}`}>
             {coverageLine(g, auditStart, ACTION[g.source])}
+            {/* BACKLOG-3892 S6: the iPhone start gap can be filled from the kept backup. */}
+            {g.source === "iphone" && g.kind === "later" && (
+              <GetOlderTexts transactionId={transactionId} refreshKey={g.coveredSince ?? ""} onSuccess={afterBackfill} />
+            )}
             {/* One "Update Mac messages" button, on the last Mac line (an import heals both ends). */}
             {g.source === "mac" && !gaps.slice(i + 1).some((n) => n.source === "mac") && (
               <button

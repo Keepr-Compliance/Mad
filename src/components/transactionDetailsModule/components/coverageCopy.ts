@@ -16,6 +16,7 @@
  * Messages format (googleMessagesGapLine).
  */
 import type { SourceCoverageGap, TextSource } from "../../../../electron/types/auditCoverage";
+import type { BackfillPhase, BackfillReason } from "../../../../electron/types/iphoneBackfill";
 
 /** "Sep 2" (this year) or "Sep 2, 2024"; "" for a missing or invalid date. */
 export function coverageDay(iso: string | null | undefined, now: Date = new Date()): string {
@@ -166,4 +167,60 @@ export function coverageLine(gap: SourceCoverageGap, auditStartISO: string | nul
     googleMessagesGapLine(gap, now) ??
     `${gapLine(gap, auditStartISO)} ${action}`
   );
+}
+
+/* -------------------------------------------------------------------------------------
+ * BACKLOG-3892 S6 — "Get older texts" (read the deal's older texts from the iPhone backup
+ * kept on this computer).
+ *
+ * DRAFT — NOT FOUNDER-APPROVED. Every sentence in this block is awaiting the founder
+ * (OPEN QUESTION on BACKLOG-3892, pm_comments f7d39c03). Do not reuse elsewhere until
+ * that row is ANSWERED; change the wording here only.
+ *
+ * The approved backup sentences ("...is damaged.", "...cannot decrypt...", "...no longer
+ * on this computer.") are NOT here: they come from the main process (S5's `message`,
+ * backupProblem.ts), because the renderer cannot import from electron/.
+ * ----------------------------------------------------------------------------------- */
+
+/** DRAFT: the button. */
+export const GET_OLDER_TEXTS_LABEL = "Get older texts";
+/** DRAFT: the line while it runs. */
+export const GET_OLDER_TEXTS_RUNNING = "Fetching older texts from your saved iPhone backup…";
+/** DRAFT: the step under it. */
+export const GET_OLDER_TEXTS_PHASE: Record<BackfillPhase, string> = {
+  copying: "Copying backup",
+  reading: "Reading texts",
+  saving: "Saving texts",
+  linking: "Linking to deals",
+};
+/** DRAFT: the line when it is done. */
+export function getOlderTextsDoneLine(messagesStored: number): string {
+  if (messagesStored <= 0) return "Your saved iPhone backup has no older texts for this deal.";
+  return `Added ${messagesStored} older text${messagesStored === 1 ? "" : "s"} from your saved iPhone backup.`;
+}
+/** DRAFT: a failure with no approved sentence. */
+export const GET_OLDER_TEXTS_FAILED = "Keepr couldn't get older texts. Try again later.";
+
+/** The reasons whose `message` (from S5) is a founder-approved sentence. */
+const APPROVED_MESSAGE_REASONS: ReadonlySet<BackfillReason> = new Set<BackfillReason>(["missing", "damaged", "key-missing"]);
+
+/**
+ * The line for a backfill that did not run or stopped: the approved backup sentence for
+ * missing / damaged / key-missing; nothing for a cancel; otherwise the DRAFT failure line.
+ * Never S5's `message` for any other reason (a reason "error" can carry raw error text).
+ */
+export function getOlderTextsRefusalLine(reason: BackfillReason | undefined, message: string | undefined): string | null {
+  if (reason === "cancelled") return null;
+  if (reason && APPROVED_MESSAGE_REASONS.has(reason)) return message && message.trim() ? message : GET_OLDER_TEXTS_FAILED;
+  return GET_OLDER_TEXTS_FAILED;
+}
+
+/**
+ * The line shown INSTEAD of the button when availability says no: only an approved
+ * backup sentence (founder OPEN QUESTION (5): "no longer on this computer" is shown);
+ * every other reason (locked, no gap, nothing older, busy, ...) shows nothing.
+ */
+export function getOlderTextsUnavailableLine(reason: BackfillReason | undefined, message: string | undefined): string | null {
+  if (!reason || !APPROVED_MESSAGE_REASONS.has(reason)) return null;
+  return message && message.trim() ? message : null;
 }

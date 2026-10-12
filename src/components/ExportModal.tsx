@@ -14,6 +14,7 @@ import { dealLockReason, DEAL_LOCK_EDIT_TOOLTIP } from "../utils/dealLock";
 import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
 import { readChosenTextSource } from "./transactionDetailsModule/components/TextCoverageNotice";
 import { coverageDay, endLine, iphoneStartWithAction } from "./transactionDetailsModule/components/coverageCopy";
+import { GetOlderTexts } from "./transactionDetailsModule/components/GetOlderTexts";
 import type { SourceCoverageGap, TextSource } from "../../electron/types/auditCoverage";
 import {
   TransactionDatesFields,
@@ -447,6 +448,39 @@ function ExportModal({
       // Only newer texts are still missing: no start gap to explain.
       ...(recheck?.textEndGap && recheck.complete ? { startShown: false } : {}),
     });
+  };
+
+  // BACKLOG-3892 S6: "Get older texts" read the deal's older texts from the kept iPhone
+  // backup. Re-check WITH the source the gate was opened for (the W2 rule); complete and
+  // no newer gap -> export (as "Update now" does), otherwise the gate shows what is left.
+  const handleGateBackfilled = async () => {
+    const recheck = gateSource
+      ? await checkExportCompleteness(transaction.id, gateSource)
+      : await checkExportCompleteness(transaction.id);
+    if (!recheck) return;
+    const endGap = recheck.textEndGap;
+    if (recheck.complete && !endGap) {
+      setCompletenessGate(null);
+      await proceedWithExport();
+      return;
+    }
+    if (!recheck.complete && recheck.iphoneGap) {
+      setCompletenessGate({
+        auditStartISO: recheck.auditStartISO,
+        importerAvailable: false,
+        iphone: { coveredSince: recheck.iphoneCoveredSince ?? null, startGap: recheck.textStartGap },
+        ...(endGap ? { endGap } : {}),
+      });
+      return;
+    }
+    if (endGap) {
+      setCompletenessGate({
+        auditStartISO: recheck.auditStartISO,
+        importerAvailable: endGap.source === "mac" && recheck.messagesImporterAvailable,
+        endGap,
+        startShown: false,
+      });
+    }
   };
 
   // "Export anyway" — the user makes an explicit, informed decision to export
@@ -1071,6 +1105,13 @@ function ExportModal({
                   : "Older messages for this date range can only be imported on a Mac with Full Disk Access. You can export anyway, but earlier texts won't be included on this device."}
               </p>
               ) : null}
+
+              {/* BACKLOG-3892 S6: fill the iPhone start gap from the kept backup. */}
+              {completenessGate.iphone && (
+                <div className="text-sm text-gray-700 mb-3 empty:hidden" data-testid="export-gate-get-older-texts">
+                  <GetOlderTexts transactionId={transaction.id} onSuccess={handleGateBackfilled} />
+                </div>
+              )}
 
               {/* BACKLOG-3892 W1: newer texts may be missing (the source's last sync). */}
               {completenessGate.endGap && (
