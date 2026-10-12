@@ -862,6 +862,31 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
 }
 
 /**
+ * The address pass as every FULL SWEEP of a deal runs it (BACKLOG-3925): the on-open
+ * review sync, deal creation, the create/open trigger's covered path, and the
+ * post-fetch / phone-only passes of the Sync Emails path. They share one
+ * `runFullSweepOnce` guard per deal, so whichever of them runs first is the one whose
+ * sweep is remembered — the pass has to be in ALL of them, or a deal swept first by
+ * creation would never get address matches until something else changed.
+ *
+ * Never throws: a failed pass marks the sweep not clean (so it is retried) and is logged.
+ */
+export async function runAddressMatchPassInSweep(
+  transactionId: string,
+  caller: string,
+): Promise<{ queued: number; clean: boolean }> {
+  try {
+    return { queued: (await queueAddressMatchesForTransaction(transactionId)).queued, clean: true };
+  } catch (error) {
+    await logService.warn(
+      `[BACKLOG-3925] address-only discovery failed (${caller}): ${error instanceof Error ? error.message : "Unknown"}`,
+      MODULE,
+    );
+    return { queued: 0, clean: false };
+  }
+}
+
+/**
  * Is this email awaiting a human decision on this transaction? (BACKLOG-2880)
  *
  * The one question a WRITER needs to ask the review store, and it lives here
@@ -962,15 +987,9 @@ export async function syncReviewQueueForTransaction(opts: {
     }
     // BACKLOG-3925: address-only matches, after the contact pass so the contact
     // route has already taken every email with a deal contact on it.
-    try {
-      added += (await queueAddressMatchesForTransaction(transactionId)).queued;
-    } catch (error) {
-      clean = false;
-      await logService.warn(
-        `[BACKLOG-3925] address-only discovery failed: ${error instanceof Error ? error.message : "Unknown"}`,
-        MODULE,
-      );
-    }
+    const addressPass = await runAddressMatchPassInSweep(transactionId, `reviewSync-${reason}`);
+    added += addressPass.queued;
+    if (!addressPass.clean) clean = false;
     return { clean };
   };
   // BACKLOG-3883: an unscoped sync is the deal's FULL sweep. Skip it when nothing it
