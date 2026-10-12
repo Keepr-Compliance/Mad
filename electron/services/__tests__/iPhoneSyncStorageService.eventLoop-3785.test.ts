@@ -11,8 +11,12 @@
  *
  * This suite runs the REAL sqlite driver against the REAL `schema.sql`, seeds a
  * synthetic 200k-message store whose 20k attachments are already stored (the
- * incremental-sync case), runs `storeAttachments`, and measures the longest
- * event-loop stall with `monitorEventLoopDelay`. Real driver: run under Electron —
+ * incremental-sync case), runs `storeAttachments`, and checks the STRUCTURE that keeps
+ * main responsive: bounded id/record lookups, never the whole-table reads, with an
+ * event-loop turn between every two lookups and at least every 100 attachments
+ * (BACKLOG-3915 — this used to assert the max of `monitorEventLoopDelay`, a tail
+ * statistic that one GC or scheduler stall on a CI runner pushed over the bound; the
+ * max is still printed, for information only). Real driver: run under Electron —
  *   ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js --bail=0 <this file>
  * Under plain node the binary cannot load and the suite is skipped with a warning.
  */
@@ -45,17 +49,26 @@ jest.mock("../../utils/preferenceHelper", () => ({
 }));
 // The storage service reaches the db layer only through databaseService. Route
 // every call storeAttachments can make to the REAL db modules, so production SQL runs.
+// BACKLOG-3915: each read is also recorded in `mockEvents` (with its batch size), so
+// the test can check what runs between two event-loop turns.
+type MockEvent = { kind: "yield" } | { kind: "read"; fn: string; size: number };
+const mockEvents: MockEvent[] = [];
 jest.mock("../databaseService", () => {
   const sync = jest.requireActual("../db/syncDbService");
   const attachments = jest.requireActual("../db/attachmentDbService");
+  const read = (fn: string, size: number) => mockEvents.push({ kind: "read", fn, size });
   return {
     __esModule: true,
     default: {
-      getMessageIdMap: (userId: string) => sync.getMessageIdMap(userId),
-      getMessageIdsByExternalIds: (userId: string, ids: string[]) => sync.getMessageIdsByExternalIds(userId, ids),
-      getExistingAttachmentRecords: () => sync.getExistingAttachmentRecords(),
-      getExistingAttachmentRecordsForMessages: (ids: string[]) => sync.getExistingAttachmentRecordsForMessages(ids),
-      getAttachmentStoragePaths: () => attachments.getAttachmentStoragePaths(),
+      getMessageIdMap: (userId: string) => (read("getMessageIdMap", Infinity), sync.getMessageIdMap(userId)),
+      getMessageIdsByExternalIds: (userId: string, ids: string[]) => (
+        read("getMessageIdsByExternalIds", ids.length), sync.getMessageIdsByExternalIds(userId, ids)
+      ),
+      getExistingAttachmentRecords: () => (read("getExistingAttachmentRecords", Infinity), sync.getExistingAttachmentRecords()),
+      getExistingAttachmentRecordsForMessages: (ids: string[]) => (
+        read("getExistingAttachmentRecordsForMessages", ids.length), sync.getExistingAttachmentRecordsForMessages(ids)
+      ),
+      getAttachmentStoragePaths: () => (read("getAttachmentStoragePaths", 0), attachments.getAttachmentStoragePaths()),
       insertAttachment: (params: unknown) => sync.insertAttachment(params),
     },
   };
@@ -176,6 +189,13 @@ maybe("BACKLOG-3785: storeAttachments setup keeps the main event loop responsive
     histogram.enable();
     // The histogram records nothing until its timer has fired once.
     await new Promise((resolve) => setTimeout(resolve, 50));
+    // Event-loop turns the service gives, recorded where they happen.
+    const realSetImmediate = global.setImmediate;
+    const yieldSpy = jest.spyOn(global, "setImmediate").mockImplementation(((fn: (...a: unknown[]) => void, ...a: unknown[]) => {
+      if (/iPhoneSyncStorageService\.ts/.test(new Error().stack ?? "")) mockEvents.push({ kind: "yield" });
+      return realSetImmediate(fn, ...a);
+    }) as typeof setImmediate);
+    mockEvents.length = 0;
     const started = Date.now();
     const result = await (
       iPhoneSyncStorageService as unknown as {
@@ -186,6 +206,7 @@ maybe("BACKLOG-3785: storeAttachments setup keeps the main event loop responsive
         ) => Promise<{ stored: number; skipped: number; skippedByReason: Record<string, number> }>;
       }
     ).storeAttachments(USER, messages, "/backup-3785");
+    yieldSpy.mockRestore();
     await new Promise((resolve) => setTimeout(resolve, 50));
     histogram.disable();
     const maxBlockMs = Math.round(histogram.max / 1e6);
@@ -193,16 +214,30 @@ maybe("BACKLOG-3785: storeAttachments setup keeps the main event loop responsive
     // tests/setup.js silences console; the measurement is the point, so stderr.
     process.stderr.write(
       `[3785] storeAttachments ${MESSAGES} msgs / ${MESSAGES / WITH_ATTACHMENT_EVERY} atts: ` +
-        `wall=${wallMs}ms maxEventLoopDelay=${maxBlockMs}ms\n`,
+        `wall=${wallMs}ms maxEventLoopDelay=${maxBlockMs}ms (info only) ` +
+        `reads=${mockEvents.filter((e) => e.kind === "read").length} yields=${mockEvents.filter((e) => e.kind === "yield").length}\n`,
     );
 
     expect(result.stored).toBe(0);
     expect(result.skippedByReason.alreadyStored).toBe(MESSAGES / WITH_ATTACHMENT_EVERY);
     expect(result.skipped).toBe(MESSAGES / WITH_ATTACHMENT_EVERY);
-    // Measured on an arm64 Mac: 24 ms with the yields, 344 ms with them removed,
-    // 639 ms before this change. A slower CI runner stretches both, so the bound
-    // is 250 ms OR a quarter of the run, whichever is larger: without yields the
-    // longest stall is most of the run (344 of 413 ms), so it still fails.
-    expect(maxBlockMs).toBeLessThan(Math.max(250, wallMs * 0.25));
+
+    const reads = mockEvents.filter((e): e is Extract<MockEvent, { kind: "read" }> => e.kind === "read");
+    // Never the whole-table reads this change removed.
+    expect(reads.filter((r) => r.fn === "getMessageIdMap" || r.fn === "getExistingAttachmentRecords")).toEqual([]);
+    // Lookups are bounded batches (LOOKUP_CHUNK = 500), covering all 20k ids each way.
+    const ATTS = MESSAGES / WITH_ATTACHMENT_EVERY;
+    for (const fn of ["getMessageIdsByExternalIds", "getExistingAttachmentRecordsForMessages"]) {
+      const sizes = reads.filter((r) => r.fn === fn).map((r) => r.size);
+      expect(Math.max(...sizes)).toBeLessThanOrEqual(500);
+      expect(sizes.reduce((a, b) => a + b, 0)).toBe(ATTS);
+    }
+    // An event-loop turn between every two reads: no two lookups in one synchronous run.
+    const back2back = mockEvents.flatMap((e, i) => (e.kind === "read" && mockEvents[i + 1]?.kind === "read" ? [i] : []));
+    expect(back2back).toEqual([]);
+    // And at least one turn per 100 attachments in the per-attachment loop, after the reads.
+    const lastRead = mockEvents.map((e) => e.kind).lastIndexOf("read");
+    const loopYields = mockEvents.slice(lastRead + 1).filter((e) => e.kind === "yield").length;
+    expect(loopYields).toBeGreaterThanOrEqual(ATTS / 100);
   }, 180_000);
 });
