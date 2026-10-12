@@ -19,7 +19,9 @@
  * READ: the current phone = the latest last_sync_at. A deal's iPhone coverage is
  * its least covered member (contact handle or linked chat); a member with no valid
  * row counts as the phone's interval (the settings floor), so its gap shows until a
- * sync widens it (SR D2).
+ * sync widens it (SR D2). BACKLOG-3892 W: each member is read across EVERY phone,
+ * earlier phones joining only where contiguous (W3), never before a phone's own
+ * oldest text (W3b, iphone_device_span), and the least covered person is named (W4).
  */
 import { dbTransaction } from "./db/core/dbConnection";
 import {
