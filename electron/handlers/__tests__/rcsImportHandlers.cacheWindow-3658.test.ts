@@ -346,7 +346,7 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
     mockCoverageWrites.length = 0;
     mockLastRun = { floorISO: "2026-06-01T00:00:00.000Z", fullRead: true, listStop: "stable", reachedFloor: true, notSettledChats: 0, finishedAt: "2026-09-30T00:00:00.000Z" };
     expect((await start()).success).toBe(true);
-    expect(mockCoverageWrites).toEqual([["user-1", "google_messages", "2026-06-01T00:00:00.000Z", expect.any(String)]]);
+    expect(mockCoverageWrites).toEqual([["user-1", "google_messages", "2026-06-01T00:00:00.000Z", "2026-09-30T00:00:00.000Z"]]);
     mockCoverageWrites.length = 0;
     mockLastRun = { floorISO: "2026-06-01T00:00:00.000Z", fullRead: true, listStop: "max_time", reachedFloor: true, notSettledChats: 0, finishedAt: "2026-09-30T00:00:00.000Z" };
     expect((await start()).success).toBe(true);
