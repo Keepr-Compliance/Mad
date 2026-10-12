@@ -225,3 +225,42 @@ it.each(["locked", "no-gap", "nothing-older"] as const)(
     expect(screen.queryByTestId("get-older-texts-button")).toBeNull();
   },
 );
+
+// ---- every path to exportEnhanced is behind the gate (security review, 2026-10-12) -----
+// BACKLOG-3910d: a refused date save (locked) must NOT skip the coverage gate.
+describe("locked deal: the coverage gate still runs", () => {
+  const REFUSAL = {
+    success: false,
+    error: "This deal is with your broker for review, so it can't be changed until it's returned to you.",
+    dealLocked: "submitted",
+    refusedEdit: "edit-deal-details",
+  };
+
+  async function goToExport(tx: Transaction): Promise<void> {
+    render(<ExportModal transaction={tx} userId="user-1" onClose={jest.fn()} onExportComplete={jest.fn()} />);
+    const nextButtons = await screen.findAllByRole("button", { name: /next/i });
+    await act(async () => {
+      fireEvent.click(nextButtons[0]);
+    });
+    const exportButtons = await screen.findAllByRole("button", { name: /^export$/i });
+    await act(async () => {
+      fireEvent.click(exportButtons[0]);
+    });
+  }
+
+  it("the save is refused as locked at run time + an iPhone start gap -> gate shown, no export", async () => {
+    updateMock.mockResolvedValue(REFUSAL);
+    completenessMock.mockResolvedValue(gapResult);
+    await goToExport(transaction);
+    await screen.findByTestId("export-completeness-gate");
+    expect(exportEnhancedMock).not.toHaveBeenCalled();
+  });
+
+  it("the deal reads locked from the start (save skipped) + a gap -> gate shown, no export", async () => {
+    completenessMock.mockResolvedValue(gapResult);
+    await goToExport({ ...transaction, submission_status: "submitted" } as unknown as Transaction);
+    await screen.findByTestId("export-completeness-gate");
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(exportEnhancedMock).not.toHaveBeenCalled();
+  });
+});
