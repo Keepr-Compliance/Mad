@@ -128,6 +128,14 @@ export interface ExportCompletenessResult {
   messagesImporterAvailable: boolean;
   /** BACKLOG-3663: per-source gaps (informational; never changes `complete`). */
   sourceGaps?: SourceCoverageGap[];
+  /**
+   * BACKLOG-3892 S2: set only when the user's source is iPhone. true = this deal's
+   * iPhone texts do not reach its audit start (or it is not known how far they go);
+   * `complete` is then false. Only an iPhone sync can clear it — never the Mac import.
+   */
+  iphoneGap?: boolean;
+  /** BACKLOG-3892 S2: how far back this deal's iPhone texts were read (ISO), or null. */
+  iphoneCoveredSince?: string | null;
   /** BACKLOG-3837: as AuditCoverageResult.sourceCoveragePending (never changes `complete`). */
   sourceCoveragePending?: boolean;
   error?: string;

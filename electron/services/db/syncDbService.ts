@@ -103,6 +103,45 @@ export function getMessageExternalIdsPage(userId: string, after: string | null, 
 }
 
 /**
+ * BACKLOG-3892 S7: one page of the user's stored message external_ids SENT AT OR
+ * AFTER `sinceIso`, in (sent_at, rowid) order, strictly after the `after` key
+ * (null = from the start). Keyset paging over idx_messages_user_sent, so the read
+ * covers only the window a sync can still hand over, not the user's whole history.
+ */
+export const MESSAGE_EXTERNAL_IDS_SINCE_FIRST_PAGE_SQL =
+  `SELECT rowid AS rid, sent_at, external_id FROM messages
+   WHERE user_id = ? AND sent_at >= ? AND external_id IS NOT NULL
+   ORDER BY sent_at, rowid LIMIT ?`;
+export const MESSAGE_EXTERNAL_IDS_SINCE_NEXT_PAGE_SQL =
+  `SELECT rowid AS rid, sent_at, external_id FROM messages
+   WHERE user_id = ? AND sent_at >= ? AND external_id IS NOT NULL AND (sent_at, rowid) > (?, ?)
+   ORDER BY sent_at, rowid LIMIT ?`;
+
+export interface ExternalIdsSinceKey {
+  sentAt: string;
+  rowid: number;
+}
+
+export function getMessageExternalIdsSincePage(
+  userId: string,
+  sinceIso: string,
+  after: ExternalIdsSinceKey | null,
+  limit: number,
+): { ids: string[]; next: ExternalIdsSinceKey | null } {
+  const db = ensureDb();
+  const rows = (
+    after === null
+      ? db.prepare(MESSAGE_EXTERNAL_IDS_SINCE_FIRST_PAGE_SQL).all(userId, sinceIso, limit)
+      : db.prepare(MESSAGE_EXTERNAL_IDS_SINCE_NEXT_PAGE_SQL).all(userId, sinceIso, after.sentAt, after.rowid, limit)
+  ) as { rid: number; sent_at: string; external_id: string }[];
+  const last = rows[rows.length - 1];
+  return {
+    ids: rows.map((row) => row.external_id),
+    next: last ? { sentAt: last.sent_at, rowid: last.rid } : null,
+  };
+}
+
+/**
  * Batch insert messages using a prepared statement within a transaction.
  * Returns count of inserted and skipped messages.
  */

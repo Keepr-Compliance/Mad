@@ -126,8 +126,18 @@ function AuditTransactionModal({
       return;
     }
 
-    const coverage = await checkCoverage(proposed);
-    const hasGap = !!coverage && (coverage.needsMessagesImport || coverage.needsEmailBackfill);
+    // BACKLOG-3892 S2 (SR D3a): the user's own source is checked even with no texts.
+    const chosen = dialogTextSource(importSource, isMacOS);
+    const coverage = await checkCoverage(proposed, chosen);
+    // For an iPhone user the texts half of the gap is the iPhone coverage (the
+    // global oldest-text floor no longer says how far the phone was read), and the
+    // Mac "Update now" is never offered: it cannot fill an iPhone gap. The iPhone
+    // line tells the user to Sync iPhone, which reads the deal's chats back.
+    const iphoneUser = chosen === "iphone";
+    const iphoneGap = iphoneUser && !!coverage?.sourceGaps?.some((g) => g.source === "iphone");
+    const hasGap = !!coverage && (iphoneUser
+      ? iphoneGap || coverage.needsEmailBackfill
+      : coverage.needsMessagesImport || coverage.needsEmailBackfill);
     // Compare date-parts to avoid a spurious "changed" from ISO-vs-YYYY-MM-DD
     // formatting differences. Require a KNOWN original start — otherwise a
     // defaulted date on a transaction that never had one isn't a real "change".
@@ -145,7 +155,7 @@ function AuditTransactionModal({
     }
     setCoveragePrompt({
       hasGap,
-      importerAvailable: !!coverage?.messagesImporterAvailable,
+      importerAvailable: !iphoneUser && !!coverage?.messagesImporterAvailable,
       ...sourceLinesFromCoverage(coverage),
       proposedStartISO: proposed ?? null,
     });
@@ -158,6 +168,8 @@ function AuditTransactionModal({
     originalStartedAt,
     checkCoverage,
     handleNextStep,
+    importSource,
+    isMacOS,
   ]);
 
   const proceedAfterPrompt = useCallback((): void => {
