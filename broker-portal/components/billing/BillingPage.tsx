@@ -28,6 +28,8 @@ export interface PersonalPlanData {
   prices: { month?: PlanPrice; year?: PlanPrice };
   checkout: 'success' | 'cancelled' | null;
   sessionId: string | null;
+  /** The last Checkout payment did not go through (an `incomplete` subscription). */
+  paymentIncomplete?: boolean;
 }
 
 export interface BillingPageProps {

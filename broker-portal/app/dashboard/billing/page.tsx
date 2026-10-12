@@ -91,6 +91,7 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
     prices: await agentPrices(),
     checkout: checkout === 'success' || checkout === 'cancelled' ? checkout : null,
     sessionId: one(sp.session_id),
+    paymentIncomplete: view.paymentIncomplete,
   };
   return <BillingPage caps={personalCaps} orgBillingSetUp={SITUATION_3844.orgBillingSetUp} personal={personal} />;
 }

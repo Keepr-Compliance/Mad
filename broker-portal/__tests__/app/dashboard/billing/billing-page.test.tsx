@@ -112,7 +112,8 @@ jest.mock('next/navigation', () => ({
 
 import fs from 'fs';
 import path from 'path';
-import { render, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
+import { confirmAgentCheckout } from '@/lib/actions/agentPlan';
 import { BillingDb, eqValue } from '../../../helpers/billingDb';
 import { mirrorState } from '@/lib/billing/sync';
 import BillingRoute from '@/app/dashboard/billing/page';
@@ -496,6 +497,51 @@ describe('3847: personal plan blocks', () => {
   it('back from Checkout before the webhook -> "Finishing your subscription…"; cancelled -> nothing charged', async () => {
     expect((await text({ checkout: 'success', session_id: 'cs_test_x' })).text).toContain('Finishing your subscription');
     expect((await text({ checkout: 'cancelled' })).text).toContain('Nothing was charged.');
+  });
+
+  // Founder decision (BACKLOG-3847, 2026-10-12): an incomplete subscription is a payment that did not go through.
+  const INCOMPLETE_NOTE = "Your last payment didn't go through. You haven't been charged. Subscribe again to try another card.";
+  const CONFIRMING = 'Your payment is being confirmed';
+
+  it('C-INC-NOTE: an incomplete mirror row -> "Your last payment didn\'t go through", never "being confirmed"; Subscribe still offered', async () => {
+    expect(fx3847('sub-A-incomplete').status).toBe('incomplete');
+    seedSub('sub-A-incomplete');
+    const r = await text();
+    expect(r.text).toContain(INCOMPLETE_NOTE);
+    expect(r.text).not.toContain(CONFIRMING);
+    expect(r.text).toContain('Solo, pay as you go');
+    expect(r.titles).toContain('Choose a plan');
+    expect(r.buttons.some((b) => b.startsWith('Subscribe'))).toBe(true);
+  });
+
+  it('C-INC-NOTE control: no incomplete row -> no note', async () => {
+    seedSub('sub-A-incomplete', { status: 'incomplete_expired' }); // [EDITED status] the row after the session expired
+    expect((await text()).text).not.toContain(INCOMPLETE_NOTE);
+  });
+
+  async function returnFails(): Promise<string> {
+    (confirmAgentCheckout as jest.Mock).mockResolvedValueOnce({ error: 'refused' });
+    given([personalMembership()]);
+    const { container, unmount } = render(
+      await BillingRoute({ searchParams: Promise.resolve({ checkout: 'success', session_id: 'cs_test_x' }) })
+    );
+    await screen.findByText((t) => t.includes(CONFIRMING) || t.includes(INCOMPLETE_NOTE));
+    const out = container.textContent ?? '';
+    unmount();
+    return out;
+  }
+
+  it('C-INC-NOTE (return): back from Checkout, confirm refused, subscription incomplete -> the new note, not "being confirmed"', async () => {
+    seedSub('sub-A-incomplete');
+    const t = await returnFails();
+    expect(t).toContain(INCOMPLETE_NOTE);
+    expect(t).not.toContain(CONFIRMING);
+  });
+
+  it('C-INC-NOTE (return) control: confirm refused, no incomplete row -> "being confirmed" is unchanged', async () => {
+    const t = await returnFails();
+    expect(t).toContain(CONFIRMING);
+    expect(t).not.toContain(INCOMPLETE_NOTE);
   });
 
   it('the plan reads are keyed to the signed-in user and the deployment mode', async () => {
