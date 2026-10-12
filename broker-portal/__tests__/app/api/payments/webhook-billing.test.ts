@@ -411,7 +411,7 @@ describe('customer.subscription.* (C-3, C-ORD, C-PF)', () => {
   });
 
   it.each(['unpaid', 'incomplete_expired'])(
-    'a subscription.updated that leaves the subscription %s -> revoked [EDITED: sub status set to %s]',
+    'a subscription.updated that leaves the subscription %s -> revoked [EDITED: sub status]',
     async (status) => {
       seed2d(null);
       serve({ ...SUB_2D, status });
