@@ -7,6 +7,7 @@ import {
   contentContainsAddress,
   contentContainsAddressAdjacent,
   addressRouteNameWords,
+  addressRoutePrefilterWord,
 } from "../addressNormalization";
 
 const addr = (a: string) => {
@@ -141,6 +142,15 @@ describe("SR fix round 2 — suffix runs, periods, units, ranges", () => {
     expect(addressRouteNameWords(addr("1428 Maple Ave Apt 4B"))).toEqual(["maple"]);
     expect(addressRouteNameWords(addr("1234 Avenue of the Americas"))).toEqual(["of", "the", "americas"]);
     expect(addressRouteNameWords(addr("10 St Charles Ave"))).toEqual(["charles"]);
+  });
+
+  it("the SQL prefilter word is the first route word, or off when a literal search could miss", () => {
+    expect(addressRoutePrefilterWord(addr("1428 Maple Ave Unit 4"))).toBe("maple");
+    expect(addressRoutePrefilterWord(addr("10 St Charles Ave"))).toBe("charles");
+    // the name is only suffix/directional words: "east" is also written "e"
+    expect(addressRoutePrefilterWord(addr("500 East West Hwy"))).toBe("");
+    // SQLite lower() folds ASCII only, so a non-ASCII word is not searched for
+    expect(addressRoutePrefilterWord(addr("12 Ñandú Rd"))).toBe("");
   });
 
   it("the contact route's normaliser is unchanged: it still carries the unit", () => {
