@@ -108,6 +108,57 @@ export async function setDefaultPaymentMethod(
 }
 
 /**
+ * The user whose stored customer row in this mode is `customerId`, or null.
+ * BACKLOG-3846: an Agent subscription is one whose Stripe customer has a
+ * stripe_customers row; the user comes from that row, never from Stripe
+ * metadata. Throws on a read error (the webhook retries).
+ */
+export async function getUserByStripeCustomer(
+  service: ServiceClient,
+  customerId: string,
+  mode: StripeMode
+): Promise<string | null> {
+  const { data, error } = await service
+    .from('stripe_customers')
+    .select('user_id')
+    .eq('stripe_customer_id', customerId)
+    .eq('stripe_mode', mode)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`stripe_customers read by customer failed: ${error.message}`);
+  }
+  return (data as { user_id?: string } | null)?.user_id ?? null;
+}
+
+export interface PersonalOrganization {
+  id: string;
+  isTest: boolean;
+}
+
+/**
+ * The user's personal organization, or null. Throws on a read error, so a
+ * webhook retries instead of reading a transient failure as "not allowed".
+ */
+export async function getPersonalOrganization(
+  service: ServiceClient,
+  userId: string
+): Promise<PersonalOrganization | null> {
+  const { data, error } = await service
+    .from('organizations')
+    .select('id, is_test')
+    .eq('personal_owner_user_id', userId)
+    .maybeSingle();
+  if (error) throw new Error(`personal organization read failed: ${error.message}`);
+  const row = data as { id?: string; is_test?: boolean | null } | null;
+  return row?.id ? { id: row.id, isTest: row.is_test === true } : null;
+}
+
+/** The mode-guard rule of isModeAllowedForUser, on an is_test flag already read (no personal org = false). */
+export function modeAllowsTestFlag(mode: StripeMode, isTest: boolean): boolean {
+  return mode === 'live' ? !isTest : isTest;
+}
+
+/**
  * Mode guard (plan 2.6). Live: refused when the user's personal organization is
  * is_test; no personal organization, or is_test false/null, stays allowed.
  * Test: allowed only when the personal organization is is_test; no personal
@@ -128,5 +179,5 @@ export async function isModeAllowedForUser(
     return false;
   }
   const isTest = (data as { is_test?: boolean } | null)?.is_test === true;
-  return mode === 'live' ? !isTest : isTest;
+  return modeAllowsTestFlag(mode, isTest);
 }

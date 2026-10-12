@@ -28,6 +28,9 @@ const mockCustomersCreate = jest.fn();
 const mockPaymentIntentsCreate = jest.fn();
 const mockPaymentIntentsRetrieve = jest.fn();
 const mockCaptureMessage = jest.fn();
+const mockDisputesRetrieve = jest.fn();
+const mockChargesRetrieve = jest.fn();
+const mockRefundsRetrieve = jest.fn();
 
 jest.mock('@sentry/nextjs', () => ({
   captureMessage: (...a: unknown[]) => mockCaptureMessage(...a),
@@ -57,6 +60,9 @@ jest.mock('stripe', () => {
     checkout: { sessions: { create: mockCheckoutCreate, expire: mockCheckoutExpire, retrieve: mockCheckoutRetrieve } },
     customers: { create: mockCustomersCreate },
     paymentIntents: { create: mockPaymentIntentsCreate, retrieve: mockPaymentIntentsRetrieve },
+    disputes: { retrieve: mockDisputesRetrieve },
+    charges: { retrieve: mockChargesRetrieve },
+    refunds: { retrieve: mockRefundsRetrieve },
     webhooks: { constructEvent: mockConstructEvent },
   }));
   // Preserve the error classes shape used by the charge route.
@@ -123,8 +129,33 @@ function signedIn() {
   mockGetUser.mockResolvedValue({ data: { user: { id: 'USER-1', email: 'u@example.com' } }, error: null });
 }
 
+/**
+ * BACKLOG-3846 E0: the webhook re-fetches every object by id. These suites
+ * feed one synthetic object per event, so by default a re-fetch returns that
+ * same object (the event under test's data.object) when the ids match; any
+ * other id comes back as a bare object with no invoice. The re-fetch-vs-payload
+ * behaviour itself is covered in webhook-billing.test.ts on TEST fixtures.
+ */
+function refetchFromPayload(extra: Record<string, unknown> = {}) {
+  return async (id: string) => {
+    let ev: { data?: { object?: { id?: string } } } | undefined;
+    try {
+      ev = mockConstructEvent.getMockImplementation()?.();
+    } catch {
+      ev = undefined;
+    }
+    const o = ev?.data?.object;
+    return o && o.id === id ? { ...extra, ...o } : { id, ...extra };
+  };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
+  mockCheckoutRetrieve.mockImplementation(refetchFromPayload({ mode: 'payment' }));
+  mockPaymentIntentsRetrieve.mockImplementation(refetchFromPayload({ invoice: null }));
+  mockDisputesRetrieve.mockImplementation(refetchFromPayload());
+  mockChargesRetrieve.mockImplementation(refetchFromPayload({ invoice: null }));
+  mockRefundsRetrieve.mockImplementation(refetchFromPayload());
   process.env.STRIPE_SECRET_KEY = 'sk_test_dummy';
   process.env.STRIPE_WEBHOOK_SIGNING_SECRET = 'whsec_dummy';
   process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://x.supabase.co';
@@ -435,7 +466,7 @@ describe('Webhook charge.dispute.created → account suspension', () => {
     );
   });
 
-  it('does NOT suspend when no payment_intents row maps the disputed PI (200, no RPC)', async () => {
+  it('does NOT suspend when no payment_intents row maps the disputed PI and the PI has no invoice (200, no RPC)', async () => {
     mockConstructEvent.mockReturnValue({
       id: 'evt_dispute_2',
       type: 'charge.dispute.created',
@@ -681,6 +712,24 @@ describe('BACKLOG-3845 C-9: a user with a test and a live customer row', () => {
     const [testRow, liveRow] = db.rows('stripe_customers');
     expect(testRow.default_payment_method_id).toBe('pm_FX3845new');
     expect(liveRow).toEqual(customerRow('live'));
+  });
+});
+
+describe('BACKLOG-3846 W-1b: the card save needs the session user', () => {
+  it('payment-mode session without metadata.user_id -> no card save, 200', async () => {
+    useDb({ organizations: [personalOrg(true)], stripe_customers: [customerRow('test')] });
+    mockConstructEvent.mockReturnValue({
+      id: 'evt_cs_nouser',
+      type: 'checkout.session.completed',
+      livemode: false,
+      data: { object: { id: 'cs_nouser', mode: 'payment', customer: TEST_CUSTOMER, payment_intent: 'pi_nouser', metadata: {} } },
+    });
+    mockPaymentIntentsRetrieve.mockResolvedValue({ id: 'pi_nouser', payment_method: 'pm_FX3846new', invoice: null });
+    const { POST } = await import('@/app/api/payments/webhook/route');
+    const res = await POST(new Request('https://x/api/payments/webhook', { method: 'POST', headers: { 'stripe-signature': 'ok' }, body: 'raw' }));
+    expect(res.status).toBe(200);
+    expect(db.callsTo('stripe_customers', 'update')).toEqual([]);
+    expect(db.rows('stripe_customers')).toEqual([customerRow('test')]);
   });
 });
 
