@@ -8,10 +8,10 @@
  * `filter: undefined` and is not linked.
  */
 
-import { PENDING_REVIEW_FILTER, PENDING_REVIEW_STATUSES } from '@/lib/submissions/dealList';
+import { NEW_FILTER } from '@/lib/submissions/dealList';
 import { buildListUrl } from '@/lib/submissions/listUrl';
 
-export type StatCardKey = 'pending' | 'needs_changes' | 'approved' | 'total';
+export type StatCardKey = 'new' | 'resubmitted' | 'under_review' | 'needs_changes';
 
 export interface StatCardDef {
   key: StatCardKey;
@@ -22,18 +22,17 @@ export interface StatCardDef {
    * The list's `status` value that selects exactly this card's deals; 'all' for
    * every deal; undefined when no filter does (the card is not linked).
    *
-   * Pending Review counts submitted + under_review. The list's "Pending" value
-   * (`submitted`) selects submitted + resubmitted and "Under Review" selects
-   * under_review alone, so Pending Review has its own value, `pending`.
+   * New counts `submitted` heads only, which the list's `submitted` value
+   * (submitted + resubmitted) does not select, so New has its own value, `new`.
    */
   filter: string | undefined;
 }
 
 export const STAT_CARDS: readonly StatCardDef[] = [
-  { key: 'pending', label: 'Pending Review', statuses: PENDING_REVIEW_STATUSES, filter: PENDING_REVIEW_FILTER },
+  { key: 'new', label: 'New', statuses: ['submitted'], filter: NEW_FILTER },
+  { key: 'resubmitted', label: 'Resubmitted', statuses: ['resubmitted'], filter: 'resubmitted' },
+  { key: 'under_review', label: 'Under Review', statuses: ['under_review'], filter: 'under_review' },
   { key: 'needs_changes', label: 'Needs Changes', statuses: ['needs_changes'], filter: 'needs_changes' },
-  { key: 'approved', label: 'Approved', statuses: ['approved'], filter: 'approved' },
-  { key: 'total', label: 'Total Submissions', statuses: null, filter: 'all' },
 ];
 
 /** The ids of the deals a card counts, from the deal heads. */

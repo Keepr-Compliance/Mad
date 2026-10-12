@@ -91,16 +91,25 @@ export const PENDING_FILTER = 'submitted';
 export const PENDING_STATUSES: readonly string[] = ['submitted', 'resubmitted'];
 
 /**
- * The dashboard's "Pending Review" card (BACKLOG-3904): deals whose head is
- * submitted, resubmitted or under_review. The list's `status=pending`
- * selects exactly this set; the card and the list read this one constant.
+ * The list's `status=pending` value (BACKLOG-3904): deals whose head is
+ * submitted, resubmitted or under_review. No dashboard card links to it now; it
+ * stays a working list filter.
  */
 export const PENDING_REVIEW_FILTER = 'pending';
 export const PENDING_REVIEW_STATUSES: readonly string[] = ['submitted', 'resubmitted', 'under_review'];
 
+/**
+ * The dashboard's "New" card (BACKLOG-3904): deals whose head is `submitted`
+ * and nothing else. `submitted` on the list keeps its combined meaning
+ * (submitted + resubmitted), which the Pending tabs depend on, so this has its
+ * own value, `new`.
+ */
+export const NEW_FILTER = 'new';
+
 /** Whether a head's status matches a list's status filter (null = every deal). */
 export function headMatchesFilter(headStatus: string | null, filter: string | null): boolean {
   if (filter === null) return true;
+  if (filter === NEW_FILTER) return headStatus === 'submitted';
   if (filter === PENDING_REVIEW_FILTER) return headStatus !== null && PENDING_REVIEW_STATUSES.includes(headStatus);
   if (filter === PENDING_FILTER) return headStatus !== null && PENDING_STATUSES.includes(headStatus);
   return headStatus === filter;

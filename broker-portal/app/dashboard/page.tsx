@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import { Clock, XCircle, CheckCircle2, Files, Inbox } from 'lucide-react';
+import { Inbox, RefreshCw, Eye, XCircle } from 'lucide-react';
 import {
   PageHeader,
   EmptyState,
@@ -131,10 +131,10 @@ export default async function DashboardPage() {
         <DashboardStatCards
           cards={statCards}
           icons={{
-            pending: <Clock className="h-5 w-5" />,
+            new: <Inbox className="h-5 w-5" />,
+            resubmitted: <RefreshCw className="h-5 w-5" />,
+            under_review: <Eye className="h-5 w-5" />,
             needs_changes: <XCircle className="h-5 w-5" />,
-            approved: <CheckCircle2 className="h-5 w-5" />,
-            total: <Files className="h-5 w-5" />,
           }}
         />
 

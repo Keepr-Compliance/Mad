@@ -317,7 +317,7 @@ describe('R2 names in a support session and on a failed lookup', () => {
   });
 });
 
-describe('status=pending (the dashboard Pending Review card)', () => {
+describe('status=pending (a list filter; no dashboard card links to it)', () => {
   it('lists submitted + resubmitted + under_review heads; `submitted` is unchanged', async () => {
     expect(listedIds((await renderList({ status: 'pending' })).container)).toEqual([A2_V2, A1]);
     cleanup();
@@ -698,6 +698,8 @@ describe('desktop search + filters (the Users Management card, shared)', () => {
     expect(Array.from(statusSelect().options).map((o) => [o.value, o.textContent])).toEqual([
       ['all', 'All Statuses'],
       ['submitted', 'Pending'],
+      ['new', 'New'],
+      ['resubmitted', 'Resubmitted'],
       ['under_review', 'Under Review'],
       ['needs_changes', 'Needs Changes'],
       ['approved', 'Approved'],

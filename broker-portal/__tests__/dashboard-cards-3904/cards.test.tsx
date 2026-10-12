@@ -138,18 +138,10 @@ describe('cards on the real dashboard', () => {
     const hrefs = Object.fromEntries(
       screen.getAllByRole('link').map((a) => [a.getAttribute('aria-label'), a.getAttribute('href')])
     );
-    expect(hrefs['Pending Review: 4, view submissions']).toBe('/dashboard/submissions?status=pending');
+    expect(hrefs['New: 2, view submissions']).toBe('/dashboard/submissions?status=new');
+    expect(hrefs['Resubmitted: 1, view submissions']).toBe('/dashboard/submissions?status=resubmitted');
+    expect(hrefs['Under Review: 1, view submissions']).toBe('/dashboard/submissions?status=under_review');
     expect(hrefs['Needs Changes: 2, view submissions']).toBe('/dashboard/submissions?status=needs_changes');
-    expect(hrefs['Approved: 2, view submissions']).toBe('/dashboard/submissions?status=approved');
-    expect(hrefs['Total Submissions: 9, view submissions']).toBe('/dashboard/submissions');
-  });
-
-  it('Pending Review is a link and counts submitted + resubmitted + under_review deals', async () => {
-    await renderDashboard();
-    const link = screen.getByRole('link', { name: 'Pending Review: 4, view submissions' });
-    const label = screen.getByText((_, el) => el?.hasAttribute('data-stat-label') === true && el.textContent === 'Pending Review');
-    expect(label.closest('a')).toBe(link);
-    expect(within(label.parentElement as HTMLElement).getByText('4')).toBeInTheDocument();
   });
 
   it('every linked card opens exactly the deals its number counts (ID sets, not counts)', async () => {
@@ -171,17 +163,25 @@ describe('cards on the real dashboard', () => {
     }
   });
 
-  it('Pending Review: list set == card set as IDs, and it differs from the nearest older filters', () => {
-    const pending = cardDealIds(HEADS, STAT_CARDS.find((d) => d.key === 'pending')!).sort();
-    const viaPending = HEADS.filter((h) => headMatchesFilter(h.status, 'pending')).map((h) => h.id).sort();
-    const viaSubmittedFilter = HEADS.filter((h) => headMatchesFilter(h.status, 'submitted')).map((h) => h.id).sort();
-    const viaUnderReview = HEADS.filter((h) => headMatchesFilter(h.status, 'under_review')).map((h) => h.id).sort();
-    expect(pending).toEqual(['c2-v2', 's1', 's2', 'u1']);
-    expect(viaPending).toEqual(pending);
-    // existing values keep their meaning; resubmitted (c2-v2) is in `submitted` and now in `pending`
-    expect(viaSubmittedFilter).toEqual(['c2-v2', 's1', 's2']);
-    expect(viaUnderReview).toEqual(['u1']);
-    expect(viaPending).toContain('c2-v2');
+  it('each card: list set == card set as IDs, from the card key alone', () => {
+    const expected: Record<string, string[]> = {
+      new: ['s1', 's2'],
+      resubmitted: ['c2-v2'],
+      under_review: ['u1'],
+      needs_changes: ['c1-v2', 'n1'],
+    };
+    for (const def of STAT_CARDS) {
+      const viaList = HEADS.filter((h) => headMatchesFilter(h.status, def.filter!)).map((h) => h.id).sort();
+      expect(cardDealIds(HEADS, def).sort()).toEqual(expected[def.key]);
+      expect(viaList).toEqual(expected[def.key]);
+    }
+  });
+
+  it('existing list values keep their meaning: submitted = submitted + resubmitted, pending still works', () => {
+    const ids = (f: string) => HEADS.filter((h) => headMatchesFilter(h.status, f)).map((h) => h.id).sort();
+    expect(ids('submitted')).toEqual(['c2-v2', 's1', 's2']);
+    expect(ids('pending')).toEqual(['c2-v2', 's1', 's2', 'u1']);
+    expect(ids('new')).not.toContain('c2-v2');
   });
 
   it('hrefs carry no agent, search or page: a link cannot widen or narrow scope', async () => {
@@ -195,7 +195,7 @@ describe('cards on the real dashboard', () => {
 
 describe('card markup', () => {
   const cards = buildStatCards(HEADS);
-  const icons = { pending: <i />, needs_changes: <i />, approved: <i />, total: <i /> };
+  const icons = { new: <i />, resubmitted: <i />, under_review: <i />, needs_changes: <i /> };
 
   it('is a 2x2 grid below md and 2 / 4 columns from md / lg, unchanged gaps', () => {
     const { container } = render(<DashboardStatCards cards={cards} icons={icons} />);
@@ -219,7 +219,7 @@ describe('card markup', () => {
 
   it('starts the navigation bar on a plain tap, not on a new-tab click', () => {
     render(<DashboardStatCards cards={cards} icons={icons} />);
-    const link = screen.getByRole('link', { name: /^Approved/ });
+    const link = screen.getByRole('link', { name: /^New/ });
     // React handles clicks at the root; stopping default there keeps jsdom from navigating.
     document.addEventListener('click', (e) => e.preventDefault());
     fireEvent.click(link, { metaKey: true });
@@ -231,12 +231,12 @@ describe('card markup', () => {
 
 describe('compact phone card (below md)', () => {
   const cards = buildStatCards(HEADS);
-  const icons = { pending: <i data-icon />, needs_changes: <i data-icon />, approved: <i data-icon />, total: <i data-icon /> };
+  const icons = { new: <i data-icon />, resubmitted: <i data-icon />, under_review: <i data-icon />, needs_changes: <i data-icon /> };
   const WORDS: Record<string, string[]> = {
-    'Pending Review': ['Pending', 'Review'],
+    New: ['New'],
+    Resubmitted: ['Resubmitted'],
+    'Under Review': ['Under', 'Review'],
     'Needs Changes': ['Needs', 'Changes'],
-    Approved: ['Approved'],
-    'Total Submissions': ['Total', 'Submissions'],
   };
   const cardBoxes = (c: HTMLElement) => Array.from(c.firstElementChild!.children) as HTMLElement[];
   const plain = (cls: string) => cls.split(/\s+/).filter((t) => !t.startsWith('max-md:'));
@@ -285,7 +285,7 @@ describe('compact phone card (below md)', () => {
   });
 
   it('a card without an href is a plain box; linked cards keep the aria labels', () => {
-    const plainCards = cards.map((c) => (c.key === 'total' ? { ...c, href: null } : c));
+    const plainCards = cards.map((c) => (c.key === 'needs_changes' ? { ...c, href: null } : c));
     const { container } = render(<DashboardStatCards cards={plainCards} icons={icons} />);
     expect(cardBoxes(container)[3].tagName).toBe('DIV');
     expect(cardBoxes(container)[0].tagName).toBe('A');

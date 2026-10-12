@@ -63,6 +63,8 @@ const PAGE_SIZE = 25;
 const STATUSES = [
   { value: 'all', label: 'All' },
   { value: 'submitted', label: 'Pending' },
+  { value: 'new', label: 'New' },
+  { value: 'resubmitted', label: 'Resubmitted' },
   { value: 'under_review', label: 'Under Review' },
   { value: 'needs_changes', label: 'Needs Changes' },
   { value: 'approved', label: 'Approved' },

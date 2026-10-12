@@ -15,20 +15,20 @@ import { Fragment, type ReactNode } from 'react';
 import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
 import type { StatCardData, StatCardKey } from '@/lib/dashboard/statCards';
 
-type Hue = 'blue' | 'green' | 'gray' | 'orange';
+type Hue = 'blue' | 'purple' | 'yellow' | 'orange';
 
 const TILE: Record<Hue, string> = {
   blue: 'text-blue-600 bg-blue-50',
-  green: 'text-green-600 bg-green-50',
-  gray: 'text-gray-600 bg-gray-50',
+  purple: 'text-purple-600 bg-purple-50',
+  yellow: 'text-yellow-600 bg-yellow-50',
   orange: 'text-orange-600 bg-orange-50',
 };
 
 const HUE: Record<StatCardKey, Hue> = {
-  pending: 'blue',
+  new: 'blue',
+  resubmitted: 'purple',
+  under_review: 'yellow',
   needs_changes: 'orange',
-  approved: 'green',
-  total: 'gray',
 };
 
 const BOX =
