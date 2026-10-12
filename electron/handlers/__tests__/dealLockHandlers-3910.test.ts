@@ -96,6 +96,7 @@ jest.mock("../../services/db/communicationDbService", () => ({
   createCommunication: jest.fn(), removeIgnoredCommunication: jest.fn(),
   confirmEmailLinksByEmailIds: jest.fn(),
 }));
+jest.mock("./../featureGateHandlers", () => ({ isHideFromExportAllowed: jest.fn(() => Promise.resolve(true)) }));
 jest.mock("../../windowRegistry", () => ({ sendToMainWindow: jest.fn(() => true) }));
 
 import { dbGet } from "../../services/db/core/dbConnection";
@@ -103,6 +104,7 @@ import transactionService from "../../services/transactionService";
 import databaseService from "../../services/databaseService";
 import { registerTransactionCrudHandlers } from "../transactionCrudHandlers";
 import { registerEmailLinkingHandlers } from "../emailLinkingHandlers";
+import { registerHiddenTextHandlers } from "../hiddenTextHandlers";
 import { registerReviewQueueHandlers } from "../reviewQueueHandlers";
 import { approveReviewItems, rejectReviewItems } from "../../services/reviewStateService";
 import { unlinkTextThreads } from "../../services/transactionTextThreadsService";
@@ -137,6 +139,20 @@ interface Edit {
 }
 
 const EDITS: Edit[] = [
+  {
+    name: "hide a text from export (hide-text-from-export)",
+    channel: "transactions:hide-text-from-export",
+    args: [DEAL, "msg-1"],
+    refusedEdit: "hide-text",
+    downstream: () => jest.mocked(databaseService.getTransactionById) as unknown as jest.Mock,
+  },
+  {
+    name: "unhide a text from export (unhide-text-from-export)",
+    channel: "transactions:unhide-text-from-export",
+    args: [DEAL, "msg-1"],
+    refusedEdit: "unhide-text",
+    downstream: () => jest.mocked(databaseService.getTransactionById) as unknown as jest.Mock,
+  },
   {
     name: "add contact (assign-contact)",
     channel: "transactions:assign-contact",
@@ -241,6 +257,7 @@ beforeAll(() => {
   registerTransactionCrudHandlers(null);
   registerEmailLinkingHandlers();
   registerReviewQueueHandlers();
+  registerHiddenTextHandlers();
 });
 
 beforeEach(() => {
@@ -308,7 +325,7 @@ describe("BACKLOG-3910: a locked deal refuses user edits in the main process", (
 
   it("a deal with no row (NULL status) is open", async () => {
     setStatus(null);
-    const res = await invoke(EDITS[0]);
+    const res = await invoke(EDITS.find((e) => e.refusedEdit === "add-contact")!);
     expect(res.dealLocked).toBeUndefined();
     expect(transactionService.assignContactToTransaction).toHaveBeenCalled();
   });

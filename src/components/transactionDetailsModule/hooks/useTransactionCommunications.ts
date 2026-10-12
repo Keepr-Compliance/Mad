@@ -64,7 +64,9 @@ export function useTransactionCommunications(): UseTransactionCommunicationsResu
           onSuccess({ unlinkedIds: result.unlinkedIds });
         } else {
           logger.error("Failed to unlink communication:", result.error);
-          onError(GENERIC_UNLINK_ERROR);
+          // BACKLOG-3910: a refusal (locked deal) carries its own reason; retrying
+          // would never work, so show it instead of "please try again".
+          onError(result.dealLocked && result.error ? result.error : GENERIC_UNLINK_ERROR);
         }
       } catch (err) {
         logger.error("Failed to unlink communication:", err);

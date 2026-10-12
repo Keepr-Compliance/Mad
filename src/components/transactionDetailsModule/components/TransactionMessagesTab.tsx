@@ -1246,12 +1246,14 @@ export function TransactionMessagesTab({
       <div className="flex items-center gap-2 mb-4">
         <button
           onClick={handleToggleSelectionMode}
-          className={`flex items-center gap-1.5 px-3 h-10 text-sm font-medium rounded-lg transition-colors flex-shrink-0 ${
+          className={`flex items-center gap-1.5 px-3 h-10 text-sm font-medium rounded-lg transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${
             selectionMode
               ? "bg-blue-500 text-white hover:bg-blue-600"
               : "bg-gray-200 text-gray-700 hover:bg-gray-300"
           }`}
           data-testid="select-messages-button"
+          disabled={!!editLockedTooltip}
+          title={editLockedTooltip}
         >
           <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
@@ -1322,6 +1324,7 @@ export function TransactionMessagesTab({
                  removed list and the review queue below never receive it. */
               onSetHiddenFromExport={transactionId ? handleSetHiddenFromExport : undefined}
               hideFromExportState={hideFromExportState}
+              actionsLockedTooltip={editLockedTooltip}
               paged={
                 pagedMode && transactionId
                   ? {

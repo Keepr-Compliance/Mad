@@ -36,7 +36,9 @@ export type DealLockedEdit =
   | "attach-texts"
   | "remove-texts"
   | "approve-review"
-  | "reject-review";
+  | "reject-review"
+  | "hide-text"
+  | "unhide-text";
 
 const REFUSAL_TEXT: Readonly<Record<DealLockReason, string>> = {
   submitted: "This deal is with your broker for review, so it can't be changed until it's returned to you.",

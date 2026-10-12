@@ -528,6 +528,7 @@ export function MessageThreadCard({
           }}
           onSetHiddenFromExport={onSetHiddenFromExport}
           hideFromExportState={hideFromExportState}
+          hideLockedTooltip={actionsLockedTooltip}
           pagination={
             paged
               ? {
