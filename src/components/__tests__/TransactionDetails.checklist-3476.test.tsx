@@ -204,7 +204,7 @@ describe("C-R — the active tab falls back to Overview when the Checklist tab g
     fireEvent.click(await screen.findByTestId(`checklist-remove-${id}`));
     fireEvent.click(await screen.findByTestId(`checklist-remove-confirm-${id}`));
     await waitFor(() => expect(screen.queryByTestId("tab-checklist")).not.toBeInTheDocument());
-    expect(screen.getByText("Overview").className).toContain("border-green-500");
+    await waitFor(() => expect(screen.getByText("Overview").className).toContain("border-green-500"));
     expect(screen.queryByTestId("overview-checklist")).not.toBeInTheDocument();
   });
 });
