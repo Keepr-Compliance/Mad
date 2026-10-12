@@ -446,3 +446,42 @@ it('gap-* (top bar to first content)', async () => {
   await gapDump('gap-submissions', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({}) }));
   await gapDump('gap-submissions-filtered', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ status: 'approved' }) }));
 });
+
+// BACKLOG-3904 fix-up: the Users page composition (page.tsx: PageHeader + UserListClient)
+// inside the real shell, unfiltered and with a search typed, to measure the
+// controls block and the gap under the top bar. Phone only (matchMedia true).
+async function usersGapDump(name: string, search: string | null) {
+  mockPath = '/dashboard/users';
+  setMatchMedia(true);
+  const { unmount } = render(
+    shell(
+      <div className="max-w-7xl mx-auto space-y-6 max-md:space-y-3 max-md:[&>:nth-child(2)]:!mt-0">
+        <PageHeader
+          phoneHideTitle
+          phoneHideSubtitle
+          title="Users Management"
+          subtitle="Manage your organization's team members"
+          className="max-md:mb-0"
+        />
+        <UserListClient
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          initialMembers={MEMBERS as any}
+          currentUserId="u0"
+          currentUserRole="admin"
+          organizationId="org-1"
+        />
+      </div>
+    )
+  );
+  if (search !== null) {
+    const input = (document.querySelector('#user-search-phone') ?? document.querySelector('#user-search')) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: search } });
+  }
+  dump(name, document.body.innerHTML);
+  unmount();
+}
+
+it('gap-users*', async () => {
+  await usersGapDump('gap-users', null);
+  await usersGapDump('gap-users-filtered', 'Number1');
+});

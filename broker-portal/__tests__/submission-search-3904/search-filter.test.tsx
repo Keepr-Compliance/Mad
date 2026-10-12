@@ -314,8 +314,8 @@ describe('R2 names in a support session and on a failed lookup', () => {
 });
 
 describe('status=pending (the dashboard Pending Review card)', () => {
-  it('lists submitted + under_review heads only; resubmitted stays under `submitted`', async () => {
-    expect(listedIds((await renderList({ status: 'pending' })).container)).toEqual([A1]);
+  it('lists submitted + resubmitted + under_review heads; `submitted` is unchanged', async () => {
+    expect(listedIds((await renderList({ status: 'pending' })).container)).toEqual([A2_V2, A1]);
     cleanup();
     expect(listedIds((await renderList({ status: 'submitted' })).container)).toEqual([A2_V2, A1]);
   });
@@ -327,7 +327,7 @@ describe('status=pending (the dashboard Pending Review card)', () => {
     expect(chip!.className).toContain('bg-primary-600');
     expect(screen.getByRole('button', { name: 'Status: Pending Review' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Status: Pending Review' }));
-    expect(within(screen.getByRole('dialog', { name: 'Status' })).getByRole('button', { name: 'Pending Review · 1' })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog', { name: 'Status' })).getByRole('button', { name: 'Pending Review · 2' })).toBeInTheDocument();
     cleanup();
     const plain = await renderList();
     expect(Array.from(plain.container.querySelectorAll('a')).some((x) => x.textContent === 'Pending Review')).toBe(false);
@@ -335,11 +335,12 @@ describe('status=pending (the dashboard Pending Review card)', () => {
 });
 
 describe('phone spacing (measured in scripts/phone-layout-3798/gap.cjs)', () => {
-  it('Clear filters keeps a 44px tap target and drops its surrounding margins', async () => {
+  it('Clear filters keeps a 44px tap target inside a 44px results row', async () => {
     await renderList({ status: 'approved' });
     const btn = screen.getByRole('button', { name: 'Clear filters' });
     expect(btn.className.split(' ')).toContain('min-h-11');
-    expect(btn.parentElement!.className.split(' ')).toEqual(expect.arrayContaining(['!mt-0', '!-mb-3']));
+    const row = btn.closest('[data-slot=phone-results-row]') as HTMLElement;
+    expect(row.className.split(' ')).toContain('h-11');
   });
 
   it('the page header adds no phone margin and the hidden desktop box adds no margin above the search', async () => {
@@ -509,10 +510,10 @@ describe('phone search X (clear search only)', () => {
     expect(clearFilters()).toBeNull();
   });
 
-  it('a URL with only a search shows the X but not "Clear filters"', async () => {
+  it('a URL with only a search shows the X and the results row with "Clear filters"', async () => {
     await renderList({ search: 'mill' });
     expect(clearX()).toBeInTheDocument();
-    expect(clearFilters()).toBeNull();
+    expect(clearFilters()).toBeInTheDocument();
   });
 
   it('"Clear filters" shows for a status or agent filter, with or without search text', async () => {
@@ -620,3 +621,52 @@ describe('search matching: a number is a house number, not a zip code', () => {
   });
 });
 
+
+describe('phone results row: "Showing X of Y submissions"', () => {
+  const rowText = () => document.querySelector('[data-slot=phone-results-row]')?.textContent ?? null;
+
+  it('no row at all when nothing is filtered', async () => {
+    await renderList();
+    expect(document.querySelector('[data-slot=phone-results-row]')).toBeNull();
+  });
+
+  it('X = rendered rows (deal heads), Y = every deal head in scope, counted before the filter', async () => {
+    const { container } = await renderList({ status: 'approved' });
+    expect(listedIds(container)).toEqual([B1]);
+    // 5 raw rows, 4 chains, 3 in scope (X1 is another org's): Y = 3.
+    expect(rowText()).toContain('Showing 1 of 3 submissions');
+    cleanup();
+    const both = await renderList({ search: 'road' });
+    expect(listedIds(both.container)).toHaveLength(1);
+    expect(rowText()).toContain('Showing 1 of 3 submissions');
+  });
+
+  it('X counts deals, not raw rows (a resubmitted chain is one deal)', async () => {
+    const { container } = await renderList({ status: 'submitted' });
+    expect(listedIds(container)).toEqual([A2_V2, A1]);
+    expect(rowText()).toContain('Showing 2 of 3 submissions');
+  });
+
+  it('Clear filters sits in the row and drops status, agent and search', async () => {
+    await renderList({ status: 'submitted', agent: AGENT_A, search: 'mill' });
+    const btn = screen.getByRole('button', { name: 'Clear filters' });
+    expect(btn.closest('[data-slot=phone-results-row]')).not.toBeNull();
+    fireEvent.click(btn);
+    expect(mockPush).toHaveBeenCalledWith('/dashboard/submissions');
+  });
+});
+
+describe('phone list edges (no wrapper frame below md)', () => {
+  it('the list frame and the card tray drop their border, padding and background on phones; desktop keeps them', async () => {
+    const { container } = await renderList();
+    const frame = container.querySelector('table')!.parentElement as HTMLElement;
+    const frameCls = frame.className.split(' ');
+    for (const c of ['bg-white', 'border', 'shadow-sm', 'rounded-lg', 'overflow-hidden']) expect(frameCls).toContain(c);
+    for (const c of ['max-md:border-0', 'max-md:bg-transparent', 'max-md:shadow-none', 'max-md:rounded-none', 'max-md:overflow-visible'])
+      expect(frameCls).toContain(c);
+    const tbody = container.querySelector('tbody')!.className.split(' ');
+    expect(tbody).toContain('max-md:p-0');
+    expect(tbody).not.toContain('max-md:p-3');
+    expect(tbody).toContain('max-md:bg-transparent');
+  });
+});

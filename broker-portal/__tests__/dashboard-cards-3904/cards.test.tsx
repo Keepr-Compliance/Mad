@@ -138,18 +138,18 @@ describe('cards on the real dashboard', () => {
     const hrefs = Object.fromEntries(
       screen.getAllByRole('link').map((a) => [a.getAttribute('aria-label'), a.getAttribute('href')])
     );
-    expect(hrefs['Pending Review: 3, view submissions']).toBe('/dashboard/submissions?status=pending');
+    expect(hrefs['Pending Review: 4, view submissions']).toBe('/dashboard/submissions?status=pending');
     expect(hrefs['Needs Changes: 2, view submissions']).toBe('/dashboard/submissions?status=needs_changes');
     expect(hrefs['Approved: 2, view submissions']).toBe('/dashboard/submissions?status=approved');
     expect(hrefs['Total Submissions: 9, view submissions']).toBe('/dashboard/submissions');
   });
 
-  it('Pending Review is a link and counts submitted + under_review deals', async () => {
+  it('Pending Review is a link and counts submitted + resubmitted + under_review deals', async () => {
     await renderDashboard();
-    const link = screen.getByRole('link', { name: 'Pending Review: 3, view submissions' });
+    const link = screen.getByRole('link', { name: 'Pending Review: 4, view submissions' });
     const label = screen.getByText((_, el) => el?.hasAttribute('data-stat-label') === true && el.textContent === 'Pending Review');
     expect(label.closest('a')).toBe(link);
-    expect(within(label.parentElement as HTMLElement).getByText('3')).toBeInTheDocument();
+    expect(within(label.parentElement as HTMLElement).getByText('4')).toBeInTheDocument();
   });
 
   it('every linked card opens exactly the deals its number counts (ID sets, not counts)', async () => {
@@ -176,12 +176,12 @@ describe('cards on the real dashboard', () => {
     const viaPending = HEADS.filter((h) => headMatchesFilter(h.status, 'pending')).map((h) => h.id).sort();
     const viaSubmittedFilter = HEADS.filter((h) => headMatchesFilter(h.status, 'submitted')).map((h) => h.id).sort();
     const viaUnderReview = HEADS.filter((h) => headMatchesFilter(h.status, 'under_review')).map((h) => h.id).sort();
-    expect(pending).toEqual(['s1', 's2', 'u1']);
+    expect(pending).toEqual(['c2-v2', 's1', 's2', 'u1']);
     expect(viaPending).toEqual(pending);
-    // existing values keep their meaning; resubmitted (c2-v2) is in `submitted` only
+    // existing values keep their meaning; resubmitted (c2-v2) is in `submitted` and now in `pending`
     expect(viaSubmittedFilter).toEqual(['c2-v2', 's1', 's2']);
     expect(viaUnderReview).toEqual(['u1']);
-    expect(viaPending).not.toContain('c2-v2');
+    expect(viaPending).toContain('c2-v2');
   });
 
   it('hrefs carry no agent, search or page: a link cannot widen or narrow scope', async () => {

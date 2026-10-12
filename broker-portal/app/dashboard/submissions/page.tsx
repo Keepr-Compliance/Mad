@@ -78,13 +78,15 @@ interface SubmissionList {
   totalCount: number;
   page: number;
   totalPages: number;
+  /** Every deal head in the list's scope, before search and filters (Y). */
+  scopeTotal: number;
   /** Every submitter among the in-scope deals (BACKLOG-3904). */
   agents: AgentOption[];
   /** Deals matching the search, counted per (head status, submitter). */
   facets: FacetCount[];
 }
 
-const EMPTY_LIST: SubmissionList = { submissions: [], totalCount: 0, page: 1, totalPages: 1, agents: [], facets: [] };
+const EMPTY_LIST: SubmissionList = { submissions: [], totalCount: 0, page: 1, totalPages: 1, scopeTotal: 0, agents: [], facets: [] };
 
 /**
  * BACKLOG-3904: the agent filter's options are the submitters of the deals
@@ -186,6 +188,7 @@ async function getSubmissions(
     totalCount: result.total,
     page: result.page,
     totalPages: result.totalPages,
+    scopeTotal: heads.length,
     agents: agentOptions(heads, identities),
     facets: facetCounts(searched),
   };
@@ -233,6 +236,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
     totalCount,
     page: effectivePage,
     totalPages,
+    scopeTotal,
     agents,
     facets,
   } = await getSubmissions(client, filters, currentPage, orgId, allowedOrgIds, !!impersonation);
@@ -297,10 +301,18 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
         agents={agents}
         facets={facets}
         selectedAgentLabel={selectedAgentLabel}
+        matchingCount={totalCount}
+        scopeTotal={scopeTotal}
       />
 
       {/* Submissions Table */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+      {/* Below md the row cards sit straight on the page background (no frame), so their
+          left and right edges are the search field's; the frame stays from md up. */}
+      <div
+        className={`bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden${
+          displaySubmissions.length > 0 ? ' max-md:overflow-visible max-md:rounded-none max-md:border-0 max-md:bg-transparent max-md:shadow-none' : ''
+        }`}
+      >
         {displaySubmissions.length === 0 ? (
           <EmptySubmissions filtered={hasActiveFilters(filters)} />
         ) : (
@@ -327,7 +339,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200 max-md:flex max-md:flex-col max-md:gap-2 max-md:divide-y-0 max-md:bg-gray-50 max-md:p-3">
+              <tbody className="bg-white divide-y divide-gray-200 max-md:flex max-md:flex-col max-md:gap-2 max-md:divide-y-0 max-md:bg-transparent max-md:p-0">
                 {displaySubmissions.map((submission) => {
                   const href = `/dashboard/submissions/${submission.id}`;
                   const { street, cityLine } = formatUsAddress(

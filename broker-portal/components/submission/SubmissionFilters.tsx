@@ -14,9 +14,9 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { BottomSheet, FilterSelectButton, SearchField } from '@keepr/ui';
+import { BottomSheet, PhoneClearFilters, PhoneFilterBar, PhoneResultsRow, SearchField } from '@keepr/ui';
 import { headMatchesFilter } from '@/lib/submissions/dealList';
-import { buildListUrl, parseSearchParam, type ListFilters } from '@/lib/submissions/listUrl';
+import { buildListUrl, hasActiveFilters, parseSearchParam, type ListFilters } from '@/lib/submissions/listUrl';
 
 export interface AgentOption {
   id: string;
@@ -87,8 +87,8 @@ function useSearchUrl(filters: ListFilters) {
       typed.current = value;
       setSearch(value);
     },
-    onSubmit(e: FormEvent) {
-      e.preventDefault();
+    onSubmit(e?: FormEvent) {
+      e?.preventDefault();
       send(search);
     },
   };
@@ -165,12 +165,18 @@ export function SubmissionPhoneFilters({
   agents,
   facets,
   selectedAgentLabel,
+  matchingCount,
+  scopeTotal,
 }: {
   filters: ListFilters;
   statuses: StatusOption[];
   agents: AgentOption[];
   facets: FacetCount[];
   selectedAgentLabel: string;
+  /** Deals matching the filters (X): the list's total, not this page's rows. */
+  matchingCount: number;
+  /** Every deal in the list's scope, unfiltered (Y): the dashboard Total card's set. */
+  scopeTotal: number;
 }) {
   const router = useRouter();
   const { search, onChange, onSubmit } = useSearchUrl(filters);
@@ -207,48 +213,52 @@ export function SubmissionPhoneFilters({
     sheet === 'status'
       ? countFacets(facets, pendingStatus, filters.agent)
       : countFacets(facets, filters.status, pendingAgent);
-  // Search text has its own X inside the field; this button is for the two filters.
-  const filtered = filters.status !== 'all' || filters.agent !== null;
+  // BACKLOG-3904: "Showing X of Y submissions" + Clear filters, only while
+  // a filter or the search is applied (the URL's, not the half-typed text).
+  const filtered = hasActiveFilters(filters);
 
   return (
-    <div className="space-y-2 md:hidden">
-      <form role="search" onSubmit={onSubmit}>
-        <SearchField
-          label="Search submissions"
-          placeholder="Search address or agent"
-          value={search}
-          onChange={onChange}
-          onClear={() => onChange('')}
-        />
-      </form>
-      <div className="grid grid-cols-2 gap-2">
-        <FilterSelectButton
-          label="Status"
-          value={statusLabel}
-          active={filters.status !== 'all'}
-          expanded={sheet === 'status'}
-          onClick={() => openSheet('status')}
-        />
-        <FilterSelectButton
-          label="Agent"
-          value={selectedAgentLabel}
-          active={filters.agent !== null}
-          expanded={sheet === 'agent'}
-          onClick={() => openSheet('agent')}
-        />
-      </div>
-      {filtered ? (
-        <div className="flex justify-end !mt-0 !-mb-3">
-          <button
-            type="button"
-            onClick={() => router.push(buildListUrl({ status: 'all', agent: null, search: '' }))}
-            className="min-h-11 px-1 text-sm font-semibold text-primary-700"
-          >
-            Clear filters
-          </button>
-        </div>
-      ) : null}
-
+    <PhoneFilterBar
+      className="md:hidden"
+      search={{
+        label: 'Search submissions',
+        placeholder: 'Search address or agent',
+        value: search,
+        onChange,
+        onClear: () => onChange(''),
+        onSubmit: () => onSubmit(),
+      }}
+      filters={[
+        {
+          label: 'Status',
+          value: statusLabel,
+          active: filters.status !== 'all',
+          expanded: sheet === 'status',
+          onClick: () => openSheet('status'),
+        },
+        {
+          label: 'Agent',
+          value: selectedAgentLabel,
+          active: filters.agent !== null,
+          expanded: sheet === 'agent',
+          onClick: () => openSheet('agent'),
+        },
+      ]}
+      results={
+        filtered ? (
+          <PhoneResultsRow
+            shown={matchingCount}
+            total={scopeTotal}
+            noun="submission"
+            action={
+              <PhoneClearFilters
+                onClick={() => router.push(buildListUrl({ status: 'all', agent: null, search: '' }))}
+              />
+            }
+          />
+        ) : null
+      }
+    >
       <BottomSheet
         open={sheet !== null}
         onOpenChange={(o) => !o && setSheet(null)}
@@ -323,6 +333,6 @@ export function SubmissionPhoneFilters({
           </fieldset>
         ) : null}
       </BottomSheet>
-    </div>
+    </PhoneFilterBar>
   );
 }
