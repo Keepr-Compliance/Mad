@@ -203,6 +203,27 @@ describe("BACKLOG-3892 E: Google Messages returned a deal chat only back to a da
     expect(r.onlyBackToMs).toBeUndefined();
     expect(cacheSavedFromCommit(r)).not.toHaveProperty("onlyBackTo");
   });
+  it("two deal chats came back short: the LATER oldest saved text wins; a text older than its chat's floor is not counted", async () => {
+    // conv-b's deal starts in March: its Feb 1 text is below that floor (not saved), so
+    // its oldest saved text is Sep 20. conv-a's is Feb 1. The line names Sep 20.
+    deal("t-mar", "2026-03-01T00:00:00.000Z", "active", OTHER_NUM);
+    const chatFloors = track();
+    expect(cacheChatFloorFor(JOB, USER, "conv-a", pplA.numbers)).toBe(JANUARY);
+    expect(cacheChatFloorFor(JOB, USER, "conv-b", pplB.numbers)).toBe(Date.parse("2026-03-01T00:00:00.000Z"));
+    staging.stageChat(JOB, USER, chat("conv-a", false), pplA, HASH_A);
+    noteCacheChatRead(JOB, pplA.numbers, false);
+    staging.stageChat(JOB, USER, chat("conv-b", false), pplB, HASH_B);
+    noteCacheChatRead(JOB, pplB.numbers, false);
+    takeCacheChats(JOB);
+    const r = await commitCacheStaging(JOB, USER, { floorMs: SETTINGS_FLOOR, cap: null, protectedSpans: [], chatFloorsMs: chatFloors }, { fullRead: true, floorISO: SETTINGS_FLOOR_ISO }, {
+      complete: true,
+      startedAt: "2026-10-01T00:00:00.000Z",
+      snapshot: { state: "finished", jobId: JOB, listStop: "since", progress: { notChecked: 0 }, notReached: [] },
+    });
+    expect(threadRows(HASH_B)).toEqual(["2026-09-20T10:00:00.000Z"]);
+    expect(r.onlyBackToMs).toBe(Date.parse("2026-09-20T10:00:00.000Z"));
+  });
+
   it("only a chat with no deal came back short: no date (its floor is the months setting)", async () => {
     const r = await syncBoth(true, false);
     expect(r.onlyBackToMs).toBeUndefined();
