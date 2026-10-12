@@ -309,6 +309,21 @@ describe('C5: BILLING_ENABLED', () => {
     }
   });
 
+  it('NEXT_PUBLIC_BILLING_ENABLED alone does not open the page: 404, nothing read', async () => {
+    const old = process.env.NEXT_PUBLIC_BILLING_ENABLED;
+    try {
+      process.env.NEXT_PUBLIC_BILLING_ENABLED = 'true';
+      delete process.env.BILLING_ENABLED;
+      given([brokerageMembership('admin')]);
+      expect(await run()).toEqual({ notFound: true });
+      expect(mockEmulator.state.selects).toEqual([]);
+      expect(mockServiceTables).toEqual([]);
+    } finally {
+      if (old === undefined) delete process.env.NEXT_PUBLIC_BILLING_ENABLED;
+      else process.env.NEXT_PUBLIC_BILLING_ENABLED = old;
+    }
+  });
+
   it('flag off beats a support session: 404 before the session is read', async () => {
     process.env.BILLING_ENABLED = 'false';
     given([brokerageMembership('admin')]);

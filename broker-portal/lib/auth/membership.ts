@@ -240,7 +240,7 @@ export const MY_TRANSACTIONS_PATHS = ['/dashboard/my-transactions'] as const;
  * organization only. A brokerage agent never gets it (their brokerage pays).
  * Full-portal users are admitted above. The flag and the rest of the rule are
  * NOT read here; app/dashboard/billing/page.tsx refuses on its own, and that
- * refusal is the gate (middleware lets any impersonation cookie through).
+ * refusal is the gate.
  */
 export const BILLING_PATHS = ['/dashboard/billing'] as const;
 

@@ -1,9 +1,8 @@
 /**
  * Billing route — BACKLOG-3844.
  *
- * THIS PAGE IS THE GATE. Middleware lets every request that carries an
- * impersonation cookie through without reading membership, and the sidebar
- * entry is presentation only, so each refusal below is load-bearing:
+ * THIS PAGE IS THE GATE. It decides on its own who may see billing; the
+ * sidebar entry is presentation only, so each refusal below is load-bearing:
  *
  *   1. Flag off (lib/billing/flag.ts)            -> 404, for everyone.
  *   2. A support / impersonation session         -> 404. Billing is never shown
