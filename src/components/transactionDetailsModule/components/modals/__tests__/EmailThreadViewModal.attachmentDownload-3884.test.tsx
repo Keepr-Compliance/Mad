@@ -64,7 +64,11 @@ async function openList() {
   render(
     <EmailThreadViewModal thread={makeThread()} onClose={() => undefined} userEmail="me@example.test" />,
   );
-  fireEvent.click(await screen.findByTestId(`attachment-pill-${EMAIL_ID}`));
+  // The pill is disabled until this email's attachments load, and React drops
+  // a click on a disabled button: wait for it to be enabled (BACKLOG-3915).
+  const pill = await screen.findByTestId(`attachment-pill-${EMAIL_ID}`);
+  await waitFor(() => expect(pill).toBeEnabled());
+  fireEvent.click(pill);
   const list = await screen.findByTestId("thread-attachment-list-backdrop");
   return { list, row: await within(list).findByTestId("thread-attachment-att-1") };
 }

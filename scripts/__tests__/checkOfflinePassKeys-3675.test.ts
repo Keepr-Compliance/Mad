@@ -58,6 +58,28 @@ describe("BACKLOG-3675 check-offline-pass-keys", () => {
     expect(run(["--file", fixture(`  // k1: "${spki()}",`)]).status).toBe(1);
   });
 
+  // BACKLOG-3915: a valid key whose base64 contains "//". The old comment
+  // stripper cut the string at the "//" and the gate failed on a good key.
+  const KEY_WITH_DOUBLE_SLASH = "MCowBQYDK2VwAyEAHvfSG6XZ6K3tNV+o740i//wFcgHfWuCo8B2sDBtMOTo=";
+
+  it("passes with a valid key that contains '//' (BACKLOG-3915)", () => {
+    const r = run(["--file", fixture(`  k1: "${KEY_WITH_DOUBLE_SLASH}",`)]);
+    expect(r.stderr).toBe("");
+    expect(r.stdout).toMatch(/OK — 1 key\(s\): k1/);
+    expect(r.status).toBe(0);
+  });
+
+  it("still ignores a real // comment and a /* */ comment beside a key containing '//'", () => {
+    const body = [
+      `  k1: "${KEY_WITH_DOUBLE_SLASH}", // the "current" key`,
+      `  // k2: "${spki()}",`,
+      `  /* k3: "${spki()}", */`,
+    ].join("\n");
+    const r = run(["--file", fixture(body)]);
+    expect(r.stdout).toMatch(/OK — 1 key\(s\): k1$/m);
+    expect(r.status).toBe(0);
+  });
+
   it("fails on a value that is not a public key", () => {
     expect(run(["--file", fixture(`  k1: "bm90IGEga2V5",`)]).status).toBe(1);
   });
