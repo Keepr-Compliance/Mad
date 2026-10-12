@@ -1,0 +1,132 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "cs_test_a192wz4pONHzXNFsBSwwnyihFOAywqa2PEcQjTwNy26QYBBCQIfgKRAtSj",
+      "object": "checkout.session",
+      "adaptive_pricing": {
+        "enabled": true
+      },
+      "after_expiration": null,
+      "allow_promotion_codes": null,
+      "allowed_payment_method_types": [
+        "card"
+      ],
+      "amount_subtotal": 1999,
+      "amount_total": 1999,
+      "automatic_tax": {
+        "enabled": false,
+        "liability": null,
+        "provider": null,
+        "status": null
+      },
+      "billing_address_collection": null,
+      "branding_settings": {
+        "background_color": "#ffffff",
+        "border_style": "rounded",
+        "button_color": "#0074d4",
+        "display_name": "Keepr sandbox",
+        "font_family": "default",
+        "icon": null,
+        "logo": null
+      },
+      "cancel_url": "<stripped>",
+      "client_reference_id": null,
+      "client_secret": null,
+      "collected_information": {
+        "business_name": null,
+        "individual_name": null,
+        "shipping_details": null
+      },
+      "consent": null,
+      "consent_collection": null,
+      "created": 1791843598,
+      "currency": "usd",
+      "currency_conversion": null,
+      "custom_fields": [],
+      "custom_text": {
+        "after_submit": null,
+        "shipping_address": null,
+        "submit": null,
+        "terms_of_service_acceptance": null
+      },
+      "customer": "cus_VQgXaqEk9u2nCF",
+      "customer_account": null,
+      "customer_creation": null,
+      "customer_details": {
+        "address": null,
+        "business_name": null,
+        "email": "agent-3847@fixture.example.test",
+        "individual_name": null,
+        "name": null,
+        "phone": null,
+        "tax_exempt": "none",
+        "tax_ids": null
+      },
+      "customer_email": null,
+      "discounts": [],
+      "expires_at": 1791929998,
+      "integration_identifier": null,
+      "invoice": "in_1UPraPBg3cyTef3dQxsh53s5",
+      "invoice_creation": null,
+      "livemode": false,
+      "locale": null,
+      "managed_payments": {
+        "enabled": false
+      },
+      "metadata": {
+        "interval": "month",
+        "kind": "agent",
+        "organization_id": "ORG-P3847",
+        "price_id": "price_1UPpA2Bg3cyTef3dgOBirPOh",
+        "user_id": "USER-3847"
+      },
+      "mode": "subscription",
+      "origin_context": null,
+      "payment_intent": null,
+      "payment_link": null,
+      "payment_method_collection": "always",
+      "payment_method_configuration_details": null,
+      "payment_method_options": {
+        "card": {
+          "request_three_d_secure": "automatic"
+        }
+      },
+      "payment_method_types": [
+        "card"
+      ],
+      "payment_status": "unpaid",
+      "permissions": null,
+      "phone_number_collection": {
+        "enabled": false
+      },
+      "recovered_from": null,
+      "saved_payment_method_options": {
+        "allow_redisplay_filters": [
+          "always"
+        ],
+        "payment_method_remove": "disabled",
+        "payment_method_save": null
+      },
+      "setup_intent": null,
+      "shipping_address_collection": null,
+      "shipping_cost": null,
+      "shipping_details": null,
+      "shipping_options": [],
+      "status": "open",
+      "submit_type": null,
+      "subscription": "sub_1UPraPBg3cyTef3d6COJxoLy",
+      "success_url": "<stripped>",
+      "total_details": {
+        "amount_discount": 0,
+        "amount_shipping": 0,
+        "amount_tax": 0
+      },
+      "ui_mode": "hosted",
+      "url": "<stripped>",
+      "wallet_options": null
+    }
+  ],
+  "has_more": false,
+  "url": "/v1/checkout/sessions"
+}

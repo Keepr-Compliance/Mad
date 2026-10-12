@@ -6,9 +6,11 @@
  *
  *   6. The customer's subscriptions, every page (R3):
  *        any live one              -> refuse "You already have a plan";
- *        any `incomplete` one      -> void its unpaid invoice (R1). A void that
- *                                     Stripe refuses means it was paid meanwhile:
- *                                     re-list and refuse.
+ *        any `incomplete` one      -> end it (R1, voidIncompleteSubscription):
+ *                                     expire the open session that holds its
+ *                                     invoice first, then void. A refusal that
+ *                                     means it was paid meanwhile: re-list and
+ *                                     refuse.
  *   7. The customer's Checkout sessions, every page, Agent ones only (R3, Q6):
  *        an open one for the same interval and price is reused, unless step 6
  *        just ended a half-made subscription (R2: that session may be the one
@@ -19,7 +21,7 @@
 
 import type Stripe from 'stripe';
 import type { StripeMode } from './mode';
-import { voidIncompleteSubscription } from './sync';
+import { listAll, voidIncompleteSubscription } from './sync';
 import {
   LIVE_SUBSCRIPTION_STATUSES,
   agentIdempotencyKey,
@@ -31,19 +33,7 @@ import {
 export const ALREADY_HAVE_PLAN = 'You already have a plan. Refresh the page to see it.';
 export const TRY_AGAIN = 'Checkout could not be started. Please try again in a minute.';
 
-/** Every item of a Stripe list, following has_more / starting_after. */
-export async function listAll<T extends { id: string }>(
-  page: (_startingAfter: string | undefined) => Promise<Stripe.ApiList<T>>
-): Promise<T[]> {
-  const out: T[] = [];
-  let after: string | undefined;
-  for (;;) {
-    const res = await page(after);
-    out.push(...res.data);
-    if (!res.has_more || res.data.length === 0) return out;
-    after = res.data[res.data.length - 1].id;
-  }
-}
+export { listAll };
 
 function listSubscriptions(stripe: Stripe, customer: string): Promise<Stripe.Subscription[]> {
   return listAll((after) =>
