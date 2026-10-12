@@ -1785,6 +1785,47 @@ describe("Settings", () => {
     });
 
     /**
+     * BACKLOG-3156 stage F: the iPhone picker sits in a different section from
+     * the Messages panels, and must still share their ONE value. Observable
+     * through the (greyed) macOS panel, which re-reads its effective window
+     * once per save that lands on the shared value. A second, private copy of
+     * the value under the iPhone section would save the same key but never
+     * tell the macOS panel.
+     */
+    it("darwin, source iphone-sync: a change in the iPhone picker reaches the macOS panel", async () => {
+      (window.api.system as unknown as { platform: string }).platform = "darwin";
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: { source: "iphone-sync" },
+          messageImport: { filters: { lookbackMonths: 6 } },
+        },
+      });
+      jest.mocked(window.api.preferences.update).mockResolvedValue({ success: true });
+
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const block = await screen.findByTestId("iphone-block-preferences");
+      await screen.findByTestId("macos-messages-import");
+      const select = await within(block).findByRole("combobox", { name: "Import messages from" });
+      await waitFor(() => expect(select).not.toBeDisabled());
+
+      const windowReads = window.api.messages.getEffectiveImportWindow as jest.Mock;
+      const before = windowReads.mock.calls.length;
+      await userEvent.selectOptions(select, "3");
+      await waitFor(() =>
+        expect(window.api.preferences.update).toHaveBeenCalledWith(mockUserId, {
+          messageImport: { filters: { lookbackMonths: 3 } },
+        }),
+      );
+      await waitFor(() =>
+        expect(`macOS panel re-read its window after the iPhone change: ${windowReads.mock.calls.length > before}`).toBe(
+          "macOS panel re-read its window after the iPhone change: true",
+        ),
+      );
+    });
+
+    /**
      * BACKLOG-3156 stage F: the picker is a row of the LIVE source panel's
      * Import Preferences — macOS Messages (Mac), Google Messages, iPhone. Only
      * with no such panel (Windows with no source, or a stored macos-native off
