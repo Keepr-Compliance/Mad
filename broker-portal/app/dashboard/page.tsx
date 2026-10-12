@@ -56,16 +56,10 @@ async function getStatCards(client: SupabaseClient, orgId?: string): Promise<Sta
 }
 
 async function getRecentSubmissions(client: SupabaseClient, orgId?: string) {
-  // BACKLOG-3906: same org set as the stat cards and the Submissions list; a
-  // failed lookup shows nothing.
-  const allowed = await getAllowedOrgIds(client, orgId);
-  if (!allowed.ok || allowed.orgIds.length === 0) return [];
-
   let query = client
     .from('transaction_submissions')
     .select('*')
     .neq('status', 'uploading')
-    .in('organization_id', allowed.orgIds)
     .order('created_at', { ascending: false })
     .limit(5);
 

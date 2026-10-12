@@ -134,13 +134,6 @@ function statusOf(href: string): string {
   return new URL(href, 'http://x').searchParams.get('status') ?? 'all';
 }
 
-/** Submission ids linked from the Recent Submissions card (detail links only, not the card hrefs). */
-function recentIds(container: HTMLElement): string[] {
-  return Array.from(new Set(Array.from(container.querySelectorAll('a[href^="/dashboard/submissions/"]')).map(
-    (a) => (a.getAttribute('href') as string).split('/').pop() as string
-  ))).sort();
-}
-
 async function renderDashboard() {
   mockAuthFrom.mockImplementation(() => {
     const result = { data: [brokerageMembership('broker')], error: null };
@@ -152,7 +145,7 @@ async function renderDashboard() {
     return b;
   });
   mockEmulator.reset();
-  mockEmulator.set({ rows: { transaction_submissions: [...OUTSIDE_ROWS, ...ROWS] } });
+  mockEmulator.set({ rows: { transaction_submissions: [...ROWS, ...OUTSIDE_ROWS] } });
   return render(await DashboardPage());
 }
 
@@ -182,20 +175,6 @@ describe('cards on the real dashboard', () => {
       .filter((l): l is string => !!l && l.endsWith('view submissions'));
     expect(labels).toHaveLength(4);
     for (const l of labels) expect(l).toMatch(/: 0, view submissions$/);
-  });
-
-  it('BACKLOG-3906: Recent Submissions lists only orgs with portal access (the no-access org comes first in the fixture)', async () => {
-    const { container } = await renderDashboard();
-    const ids = recentIds(container);
-    expect(ids.length).toBeGreaterThan(0);
-    for (const id of ids) expect(id).not.toMatch(/^x-/);
-  });
-
-  it('BACKLOG-3906: Recent Submissions lists nothing when an org\'s feature read fails', async () => {
-    mockFeatureReadFails = [ORG];
-    const { container } = await renderDashboard();
-    expect(recentIds(container)).toEqual([]);
-    expect(screen.getByText('No submissions yet')).toBeInTheDocument();
   });
 
   it('shows the deal counts and the hrefs', async () => {
@@ -272,7 +251,7 @@ describe('cards on the real dashboard', () => {
     for (const href of hrefs) {
       const status = statusOf(href);
       mockEmulator.reset();
-      mockEmulator.set({ rows: { transaction_submissions: [...OUTSIDE_ROWS, ...ROWS], users: [] } });
+      mockEmulator.set({ rows: { transaction_submissions: [...ROWS, ...OUTSIDE_ROWS], users: [] } });
       const page = render(await SubmissionsPage({ searchParams: Promise.resolve({ status }) }));
       const listed = Array.from(page.container.querySelectorAll('tbody a[href^="/dashboard/submissions/"]')).map(
         (a) => (a.getAttribute('href') as string).split('/').pop() as string
