@@ -75,7 +75,7 @@ describe("BACKLOG-3925 Emails-tab Needs Review section: no tabs, every item, pil
     renderSection();
     expect(screen.queryByTestId("needs-review-filter")).toBeNull();
     expect(screen.getByTestId("needs-review-count").textContent).toBe("(3)");
-    expect(subjects().map((s) => s.replace(/(Contact match · no address|Address matched)$/, ""))).toEqual([
+    expect(subjects().map((s) => s.split(/Contact match|Address matched/)[0])).toEqual([
       "Updated payoff statement",
       "Showing feedback for 1428 Maple Ave",
       "Neighbor fence survey",
