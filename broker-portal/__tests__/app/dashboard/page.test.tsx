@@ -58,7 +58,7 @@ import { brokerageMembership } from '../../helpers/postgrestEmulator';
  *  builder itself is awaitable (the page awaits the chain, not a terminal). */
 function queryBuilder(result: unknown) {
   const builder: Record<string, unknown> = {};
-  for (const method of ['select', 'neq', 'eq', 'order', 'limit', 'in', 'gt']) {
+  for (const method of ['select', 'neq', 'eq', 'order', 'limit', 'in', 'gt', 'range']) {
     builder[method] = jest.fn(() => builder);
   }
   builder.maybeSingle = jest.fn(async () => result);
