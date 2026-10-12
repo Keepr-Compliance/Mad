@@ -3,7 +3,6 @@ import Link from 'next/link';
 import { Clock, XCircle, CheckCircle2, Files, Inbox } from 'lucide-react';
 import {
   PageHeader,
-  StatCard,
   EmptyState,
   Card,
   CardHeader,
@@ -19,50 +18,38 @@ import {
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
 import { FloorDashboard } from './components/FloorDashboard';
+import { DashboardStatCards } from '@/components/dashboard/DashboardStatCards';
+import { buildStatCards, type StatCardData } from '@/lib/dashboard/statCards';
+import { getAllowedOrgIds } from '@/lib/submissions/allowedOrgs';
+import { LINK_COLUMNS, readDealHeads } from '@/lib/submissions/dealList';
 
-interface SubmissionStats {
-  total: number;
-  submitted: number;
-  under_review: number;
-  needs_changes: number;
-  approved: number;
-  rejected: number;
-}
+/**
+ * BACKLOG-3904: the stat cards count deals - the head of every resubmission
+ * chain - in the Submissions list's own scope (same org gate, same
+ * uploading exclusion), so each linked card's number is the size of the list it
+ * opens. See lib/dashboard/statCards.ts.
+ */
+async function getStatCards(client: SupabaseClient, orgId?: string): Promise<StatCardData[]> {
+  const allowedOrgIds = await getAllowedOrgIds(client, orgId);
+  const restrictToOrgs = allowedOrgIds !== null && !orgId;
+  if (restrictToOrgs && allowedOrgIds.length === 0) return buildStatCards([]);
 
-async function getStats(client: SupabaseClient, orgId?: string): Promise<SubmissionStats> {
-  // Get all submissions for the user's organization (exclude incomplete uploads)
-  let query = client
-    .from('transaction_submissions')
-    .select('status')
-    .neq('status', 'uploading');
+  const read = await readDealHeads((from, to) => {
+    let query = client
+      .from('transaction_submissions')
+      .select(LINK_COLUMNS)
+      .neq('status', 'uploading');
+    // During impersonation, filter by organization
+    if (orgId) query = query.eq('organization_id', orgId);
+    if (restrictToOrgs) query = query.in('organization_id', allowedOrgIds);
+    return query.order('id').range(from, to);
+  });
 
-  // During impersonation, filter by organization
-  if (orgId) {
-    query = query.eq('organization_id', orgId);
+  if (read.error) {
+    console.error('Error fetching stats:', read.error);
+    return buildStatCards([]);
   }
-
-  const { data, error } = await query;
-
-  if (error || !data) {
-    console.error('Error fetching stats:', error);
-    return {
-      total: 0,
-      submitted: 0,
-      under_review: 0,
-      needs_changes: 0,
-      approved: 0,
-      rejected: 0,
-    };
-  }
-
-  return {
-    total: data.length,
-    submitted: data.filter(s => s.status === 'submitted').length,
-    under_review: data.filter(s => s.status === 'under_review').length,
-    needs_changes: data.filter(s => s.status === 'needs_changes').length,
-    approved: data.filter(s => s.status === 'approved').length,
-    rejected: data.filter(s => s.status === 'rejected').length,
-  };
+  return buildStatCards(read.heads);
 }
 
 async function getRecentSubmissions(client: SupabaseClient, orgId?: string) {
@@ -123,8 +110,8 @@ export default async function DashboardPage() {
   // BACKLOG-908: Use deduped helper for org ID resolution
   const orgId = getTargetOrganizationId(organizationId);
 
-  const [stats, recentSubmissions] = await Promise.all([
-    getStats(client, orgId),
+  const [statCards, recentSubmissions] = await Promise.all([
+    getStatCards(client, orgId),
     getRecentSubmissions(client, orgId),
   ]);
 
@@ -134,32 +121,15 @@ export default async function DashboardPage() {
 
       <div className="space-y-6">
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard
-            label="Pending Review"
-            value={stats.submitted + stats.under_review}
-            icon={<Clock className="h-5 w-5" />}
-            hue="blue"
-          />
-          <StatCard
-            label="Needs Changes"
-            value={stats.needs_changes}
-            icon={<XCircle className="h-5 w-5" />}
-            hue="orange"
-          />
-          <StatCard
-            label="Approved"
-            value={stats.approved}
-            icon={<CheckCircle2 className="h-5 w-5" />}
-            hue="green"
-          />
-          <StatCard
-            label="Total Submissions"
-            value={stats.total}
-            icon={<Files className="h-5 w-5" />}
-            hue="gray"
-          />
-        </div>
+        <DashboardStatCards
+          cards={statCards}
+          icons={{
+            pending: <Clock className="h-5 w-5" />,
+            needs_changes: <XCircle className="h-5 w-5" />,
+            approved: <CheckCircle2 className="h-5 w-5" />,
+            total: <Files className="h-5 w-5" />,
+          }}
+        />
 
         {/* Recent Submissions */}
         <Card padding="none">

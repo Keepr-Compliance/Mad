@@ -8,7 +8,7 @@ import { EmptySubmissions } from '@/components/ui/EmptyState';
 import { SubmissionPagination } from '@/components/submission/SubmissionPagination';
 import { SubmissionRow } from '@/components/submission/SubmissionRow';
 import { getDataClient, getTargetOrganizationId } from '@/lib/impersonation-guards';
-import { getOrgFeatures, isFeatureEnabled } from '@/lib/feature-gate';
+import { getAllowedOrgIds } from '@/lib/submissions/allowedOrgs';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { redirect } from 'next/navigation';
 import { requireFullPortalAccess } from '@/lib/auth/portalAccess';
@@ -65,55 +65,6 @@ const STATUSES = [
   { value: 'approved', label: 'Approved' },
   { value: 'rejected', label: 'Rejected' },
 ];
-
-/**
- * TASK-2158: Get the set of org IDs that have broker_portal_access enabled.
- *
- * Fetches distinct organization IDs from the submissions visible to this broker,
- * then checks each org's features to filter out those without broker_portal_access.
- *
- * During impersonation (single org), skips the distinct query and checks just that org.
- */
-async function getAllowedOrgIds(
-  client: SupabaseClient,
-  orgId?: string,
-): Promise<string[] | null> {
-  // During impersonation, check the single org
-  if (orgId) {
-    const features = await getOrgFeatures(orgId);
-    const hasAccess = isFeatureEnabled(features, 'broker_portal_access');
-    return hasAccess ? [orgId] : [];
-  }
-
-  // Normal broker session: get distinct org IDs from visible submissions
-  const { data: orgRows, error } = await client
-    .from('transaction_submissions')
-    .select('organization_id')
-    .neq('status', 'uploading');
-
-  if (error || !orgRows) {
-    console.error('Error fetching submission org IDs:', error);
-    // Fail-open: return null to skip filtering
-    return null;
-  }
-
-  // Deduplicate org IDs
-  const uniqueOrgIds = Array.from(new Set(orgRows.map((r: { organization_id: string }) => r.organization_id)));
-
-  if (uniqueOrgIds.length === 0) {
-    return [];
-  }
-
-  // Check broker_portal_access for each org in parallel
-  const featureResults = await Promise.all(
-    uniqueOrgIds.map(async (id) => {
-      const features = await getOrgFeatures(id);
-      return { id, hasAccess: isFeatureEnabled(features, 'broker_portal_access') };
-    })
-  );
-
-  return featureResults.filter((r) => r.hasAccess).map((r) => r.id);
-}
 
 interface SubmissionList {
   submissions: Submission[];
