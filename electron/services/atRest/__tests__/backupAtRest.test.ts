@@ -850,7 +850,7 @@ describe("refusals and special chains", () => {
     fs.mkdirSync(path.dirname(bad), { recursive: true });
     await foreign.encryptStreamToFile((async function* () { yield Buffer.from("sealed under another key"); })(), bad);
     const session = await s.beginSync(UDID, { strategy: "full" });
-    expect(session).toEqual({ kind: "first", udid: UDID, quarantined: { reasonCode: "INTEGRITY" } });
+    expect(session).toEqual({ kind: "first", udid: UDID, quarantined: { reasonCode: "INTEGRITY", kind: "damaged" } });
     const moved = path.join(backups, QUARANTINE_DIR_NAME, `${UDID}-1700000000000`);
     expect(fs.existsSync(chain)).toBe(false);
     expect(plaintextIn(moved)).toEqual([]);
@@ -929,7 +929,7 @@ describe("B2: unreadable kept backup → quarantine + full backup", () => {
     const flipped = flipByteInChunk(smsFile());
     const session = await s.beginSync(UDID, { strategy: "full" });
 
-    expect(session).toEqual({ kind: "first", udid: UDID, quarantined: { reasonCode: "INTEGRITY" } });
+    expect(session).toEqual({ kind: "first", udid: UDID, quarantined: { reasonCode: "INTEGRITY", kind: "damaged" } });
     const moved = path.join(backups, QUARANTINE_DIR_NAME, `${UDID}-${T0}`);
     expect(fs.existsSync(chain)).toBe(false);
     expect(fs.existsSync(path.join(moved, "Manifest.db"))).toBe(true);
@@ -969,7 +969,7 @@ describe("B2: unreadable kept backup → quarantine + full backup", () => {
     );
     const s = service({ files: () => gone, now: () => T0 });
     const session = await s.beginSync(UDID, { strategy: "full" });
-    expect(session).toEqual({ kind: "first", udid: UDID, quarantined: { reasonCode: "KEY_MISSING" } });
+    expect(session).toEqual({ kind: "first", udid: UDID, quarantined: { reasonCode: "KEY_MISSING", kind: "key-missing" } });
     expect(fs.existsSync(path.join(backups, QUARANTINE_DIR_NAME, `${UDID}-${T0}`))).toBe(true);
     await s.finishSync(session);
   });
@@ -2032,7 +2032,17 @@ describe("audit G2: under C-DELTA a damaged sealed file the sync reads no longer
     const first = await s.beginSync(UDID);
     expect(first).toEqual(expect.objectContaining({ kind: "keepr", strategy: "delta" }));
     const out = path.join(userData, "parse-1");
-    await expect(s.buildParseCopy(UDID, out)).rejects.toThrow(BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE);
+    // BACKLOG-3892 E: a file that fails authentication is "damaged" (founder wording).
+    const refusal = await s.buildParseCopy(UDID, out).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(refusal).toBeInstanceOf(BackupAtRestRefusal);
+    expect((refusal as BackupAtRestRefusal).message).toBe(
+      "Your saved iPhone backup is damaged. Select Try Again: Keepr will make a fresh full backup, which takes longer.",
+    );
+    expect((refusal as BackupAtRestRefusal).reason).toBe("unreadable");
+    expect((refusal as BackupAtRestRefusal).problem).toBe("damaged");
     await s.finishSync(first);
     expect(await s.forcedFullReason(UDID)).toBe("DELTA_DAMAGED");
     // Try Again: recovered, not the same failure again.
@@ -2041,6 +2051,34 @@ describe("audit G2: under C-DELTA a damaged sealed file the sync reads no longer
     expect(second.kind === "first" && second.quarantined?.reasonCode).toBe("INTEGRITY");
     expect(fs.readdirSync(path.join(backups, QUARANTINE_DIR_NAME))).toHaveLength(1);
     await s.finishSync(second);
+  });
+
+  it("BACKLOG-3892 E: sms.db whose key this computer does not hold (KEY_MISSING only) keeps the old Try Again message, not \"damaged\"", async () => {
+    makeChain();
+    expect(await service().migrate(UDID)).toBe("encrypted");
+    const keyGone = createFileCrypto(
+      {
+        currentKey: async () => ({ keyId: KEY_ID, key: KEY }),
+        keyFor: async () => {
+          throw new DataKeyUnavailableError("no key with that id");
+        },
+      },
+      { chunkSize: 64 },
+    );
+    const s = service();
+    const first = await s.beginSync(UDID);
+    expect(first).toEqual(expect.objectContaining({ kind: "keepr", strategy: "delta" }));
+    // Only the parse copy reads with the lost key (the unseal above used the real one).
+    const reading = service({ files: () => keyGone });
+    const out = path.join(userData, "parse-km");
+    const refusal = await reading.buildParseCopy(UDID, out).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(refusal).toBeInstanceOf(BackupAtRestRefusal);
+    expect((refusal as BackupAtRestRefusal).message).toBe(BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE);
+    expect((refusal as BackupAtRestRefusal).problem).toBe("key-missing");
+    await s.finishSync(first);
   });
 
   it("an attachment does not authenticate: skipped and counted, the sync goes on, and the next sync is C-FULL", async () => {

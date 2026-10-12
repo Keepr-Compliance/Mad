@@ -201,6 +201,12 @@ export interface CacheCommitResult {
   stopped?: boolean;
   /** 3671 P3: every chat was saved but the run's own records (hooks.runDone) were not. */
   runRecordFailed?: boolean;
+  /**
+   * BACKLOG-3892 E: a deal chat this run asked to read back to its deal floor came back
+   * short (the page did not reach the floor): the latest of those chats' oldest saved
+   * text, ms. Set by the caller (rcsImportHandlers.commitCacheStaging).
+   */
+  onlyBackToMs?: number;
 }
 
 /** 3671 P3: what the caller adds to a per-chat commit. */
@@ -208,7 +214,7 @@ export interface CacheCommitHooks {
   /** Re-checked per chat at commit time: a chat switched to Don't sync since is skipped. */
   chatExcluded?: (userId: string, chatHash: string, conversationId: string) => boolean;
   /** INSIDE each chat's transaction, after its rows (its coverage, its read record). */
-  perChat?: (chat: { chatHash: string; conversationId: string; meta: StagedChatMeta | null }) => void;
+  perChat?: (chat: { chatHash: string; conversationId: string; meta: StagedChatMeta | null; oldestKeptMs?: number | null }) => void;
   /** In one last transaction, ONLY when the run is complete and every chat was saved. */
   runDone?: (result: CacheCommitResult) => void;
   log?: (message: string) => void;
@@ -278,6 +284,16 @@ export function selectForCommit(keys: readonly StagedMessageKey[], limits: Cache
     kept.add(keyOf(k.chatHash, k.msgId));
   }
   return { kept, staged: keys.length, droppedByDate, droppedByCap };
+}
+
+/** BACKLOG-3892 E: the oldest dated message in a chat's kept messages, ms (null: none dated). */
+export function oldestSentMs(messages: ReadonlyArray<{ sentAt: string }>): number | null {
+  let oldest: number | null = null;
+  for (const m of messages) {
+    const t = Date.parse(m.sentAt);
+    if (Number.isFinite(t) && (oldest === null || t < oldest)) oldest = t;
+  }
+  return oldest;
 }
 
 /** A staged message's reply to the page: the /chat contract, nothing stored yet. */
@@ -546,7 +562,12 @@ export class RcsCacheStaging {
                 writer.markMessageHasAttachments(messageId);
               }
             }
-            h.perChat?.({ chatHash: row.chatHash, conversationId: row.conversationId, meta: meta.get(row.chatHash) ?? null });
+            h.perChat?.({
+              chatHash: row.chatHash,
+              conversationId: row.conversationId,
+              meta: meta.get(row.chatHash) ?? null,
+              oldestKeptMs: oldestSentMs(messages),
+            });
             return r;
           });
           // Committed: this chat's files are referenced now; its journal is done with.

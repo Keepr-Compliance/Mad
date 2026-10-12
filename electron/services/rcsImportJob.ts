@@ -173,6 +173,8 @@ export interface RcsCacheSaved {
   newReactions?: number;
   /** Storyboard A10/A11: photos in Keepr for this Sync (stored + already there). */
   photos?: number;
+  /** BACKLOG-3892 E: Google Messages returned a deal chat's texts only back to this date (ISO). */
+  onlyBackTo?: string;
 }
 
 /** What the page receives when it claims a job: no names, no numbers. */

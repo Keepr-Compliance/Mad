@@ -47,6 +47,13 @@ import {
   type BackupAtRestProgress,
   type BackupSyncSession,
 } from "./atRest/backupAtRest";
+import {
+  BACKUP_DAMAGED_QUARANTINED_MESSAGE,
+  BACKUP_DAMAGED_REASON,
+  backupProblemForRefusal,
+  type UnreadableKind,
+} from "./atRest/backupProblem";
+import { reportBackupProblem } from "./atRest/backupProblemReport";
 import { iOSMessagesParser } from "./iosMessagesParser";
 import { iOSContactsParser } from "./iosContactsParser";
 import {
@@ -1770,10 +1777,10 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             this.isRunning = false;
             return this.errorResult("Sync cancelled by user");
           }
-          return this.refuseForAtRest(error.message, error.reason);
+          return this.refuseForAtRest(error.message, error.reason, error.problem);
         }
         if (atRestSession.kind === "first" && atRestSession.quarantined) {
-          this.reportQuarantinedBackup(atRestSession.quarantined.reasonCode);
+          this.reportQuarantinedBackup(atRestSession.quarantined);
         }
       }
 
@@ -2348,6 +2355,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       log.error("[DeviceSyncOrchestrator] Sync failed", { error: errorMessage });
+      // BACKLOG-3892 E: a C-DELTA parse copy refused by the at-rest layer (the messages or
+      // contacts database could not be opened) is recorded like every other at-rest refusal.
+      if (error instanceof BackupAtRestRefusal) {
+        syncTimeline.setContext({
+          endedBy: "backup-at-rest",
+          reasonCode: error.problem === "damaged" ? BACKUP_DAMAGED_REASON : error.reason,
+        });
+        const sentryReason = backupProblemForRefusal(error.reason, error.problem);
+        if (sentryReason) reportBackupProblem(sentryReason);
+      }
       Sentry.captureException(error, {
         tags: { service: "sync-orchestrator", operation: "sync" },
       });
@@ -2456,9 +2473,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   }
 
   /** S4-C: a sync refused by the at-rest layer, before anything was spawned. */
-  private refuseForAtRest(message: string, reason: string): SyncResult {
+  private refuseForAtRest(message: string, reason: string, problem?: UnreadableKind): SyncResult {
     log.warn("[DeviceSyncOrchestrator] Sync refused by the backup at-rest layer", { reason });
-    syncTimeline.setContext({ endedBy: "backup-at-rest", reasonCode: reason });
+    syncTimeline.setContext({ endedBy: "backup-at-rest", reasonCode: problem === "damaged" ? BACKUP_DAMAGED_REASON : reason });
+    // BACKLOG-3892 E: one Sentry event per backup problem (not for busy / cancelled).
+    const sentryReason = backupProblemForRefusal(reason, problem);
+    if (sentryReason) reportBackupProblem(sentryReason);
     this.isRunning = false;
     this.setPhase("error");
     this.emit("error", { message });
@@ -2505,16 +2525,21 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * B2: the kept backup could not be read and was moved to quarantine; this sync makes a
    * full backup. Said plainly in the status line, and recorded for the timeline.
    */
-  private reportQuarantinedBackup(reasonCode: string): void {
+  private reportQuarantinedBackup(quarantined: { reasonCode: string; kind: UnreadableKind }): void {
+    const { reasonCode, kind } = quarantined;
     log.warn("[DeviceSyncOrchestrator] Kept backup was unreadable; quarantined it and making a full backup", {
       reasonCode,
     });
-    syncTimeline.setContext({ keptBackup: "quarantined", keptBackupReasonCode: reasonCode });
+    // BACKLOG-3892 E: `keptBackupReason` reaches sync_outcomes.source_metrics (admin report).
+    syncTimeline.setContext({ keptBackup: "quarantined", keptBackupReasonCode: reasonCode, keptBackupReason: kind });
+    reportBackupProblem(kind);
     this.emitProgress({
       phase: "backup",
       phaseProgress: 0,
       overallProgress: 0,
-      message: BACKUP_AT_REST_QUARANTINED_MESSAGE,
+      // A file that fails authentication is damaged (founder wording); a key this
+      // computer does not hold keeps the message it had.
+      message: kind === "damaged" ? BACKUP_DAMAGED_QUARANTINED_MESSAGE : BACKUP_AT_REST_QUARANTINED_MESSAGE,
     });
   }
 
@@ -3636,6 +3661,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    */
   private stopForAppleEncryptedBackup(): SyncResult {
     syncTimeline.setContext({ endedBy: "backup-encryption", reasonCode: APPLE_ENCRYPTED_BACKUP_REASON });
+    reportBackupProblem("apple-encrypted");
     this.isRunning = false;
     return { ...this.errorResult(APPLE_ENCRYPTED_BACKUP_MESSAGE), appleEncryptedBackup: true };
   }

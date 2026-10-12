@@ -67,6 +67,7 @@ import { RcsCacheStaging, type RcsStagingFs } from "../../services/rcsCacheStagi
 import { peopleFrom, rcsChatHash, type RcsIncomingChat } from "../../services/rcsImportStore";
 import { getChatCoverage, recordChatCoverage } from "../../services/db/rcsChatCoverageDbService";
 import { checkExportCompleteness, getSourceCoverage, getTransactionTextCoverage, recordSourceCoverage } from "../../services/auditCoverageService";
+import { cacheSavedFromCommit } from "../../services/rcsCacheService";
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const {
@@ -136,7 +137,7 @@ const threadRows = (hash: string) =>
     .map((r) => r.sent_at);
 
 /** Stage both chats as the page sent them, then commit like commitCacheJob. */
-async function syncBoth(reachedA: boolean, reachedB: boolean): Promise<void> {
+async function syncBoth(reachedA: boolean, reachedB: boolean): Promise<Awaited<ReturnType<typeof commitCacheStaging>>> {
   const chatFloors = track();
   expect(cacheChatFloorFor(JOB, USER, "conv-a", pplA.numbers)).toBe(JANUARY);
   expect(cacheChatFloorFor(JOB, USER, "conv-b", pplB.numbers)).toBeNull();
@@ -147,7 +148,7 @@ async function syncBoth(reachedA: boolean, reachedB: boolean): Promise<void> {
   const limits = { floorMs: SETTINGS_FLOOR, cap: null, protectedSpans: [], chatFloorsMs: chatFloors };
   takeCacheChats(JOB);
   // 3671 P3: chat by chat, the chat floors and reached flags from the staging.
-  await commitCacheStaging(JOB, USER, limits, { fullRead: true, floorISO: SETTINGS_FLOOR_ISO }, {
+  return commitCacheStaging(JOB, USER, limits, { fullRead: true, floorISO: SETTINGS_FLOOR_ISO }, {
     complete: true,
     startedAt: "2026-10-01T00:00:00.000Z",
     snapshot: { state: "finished", jobId: JOB, listStop: "since", progress: { notChecked: 0 }, notReached: [] },
@@ -189,6 +190,23 @@ afterEach(() => {
   takeCacheChats(JOB);
   db?.close();
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+describe("BACKLOG-3892 E: Google Messages returned a deal chat only back to a date", () => {
+  it("the deal chat came back short: the date is its oldest SAVED text (Feb 1), not the deal floor (Jan 10)", async () => {
+    const r = await syncBoth(false, true);
+    expect(r.onlyBackToMs).toBe(Date.parse("2026-02-01T10:00:00.000Z"));
+    expect(cacheSavedFromCommit(r).onlyBackTo).toBe("2026-02-01T10:00:00.000Z");
+  });
+  it("the deal chat reached its floor: no date", async () => {
+    const r = await syncBoth(true, true);
+    expect(r.onlyBackToMs).toBeUndefined();
+    expect(cacheSavedFromCommit(r)).not.toHaveProperty("onlyBackTo");
+  });
+  it("only a chat with no deal came back short: no date (its floor is the months setting)", async () => {
+    const r = await syncBoth(true, false);
+    expect(r.onlyBackToMs).toBeUndefined();
+  });
 });
 
 describe("per-chat widening for deals (SR 2026-10-02)", () => {

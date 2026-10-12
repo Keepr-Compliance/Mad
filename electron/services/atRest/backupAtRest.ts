@@ -76,6 +76,7 @@ import { BACKUP_ROOT_PLISTS, openBackupIndexBytes } from "./backupIndexFiles";
 import { createMarkerStore, MARKER_DIR_NAME, type BackupAtRestState, type MarkerStore } from "./markers";
 import type { FileOutcome, SealEngineOptions, SealMode } from "./sealEngine";
 import { defaultSealWorkers, runPass, type PassFile } from "./sealPool";
+import { BACKUP_DAMAGED_RETRY_MESSAGE, unreadableKind, type UnreadableKind } from "./backupProblem";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -311,13 +312,15 @@ export type BackupSyncSession =
   | { kind: "apple"; udid: string } // owner-encrypted chain: Apple encrypts, Keepr does not seal
   // no chain yet: sealed only once the first backup exists. `quarantined`: the kept chain
   // could not be read and was moved to Backups/.quarantine (B2) — this sync is a full backup.
-  | { kind: "first"; udid: string; quarantined?: { reasonCode: string } }
+  | { kind: "first"; udid: string; quarantined?: { reasonCode: string; kind: UnreadableKind } }
   | { kind: "keepr"; udid: string; strategy: BackupUnsealStrategy };
 
 export class BackupAtRestRefusal extends Error {
   constructor(
     readonly reason: "busy" | "key-unavailable" | "disk-space" | "unreadable" | "cancelled",
     message: string,
+    /** BACKLOG-3892 E: an `unreadable` refusal that no retry can fix, and why. */
+    readonly problem?: UnreadableKind,
   ) {
     super(message);
     this.name = "BackupAtRestRefusal";
@@ -1597,7 +1600,7 @@ export class BackupAtRest extends EventEmitter {
     this.log("warn", "[BackupAtRest] moved an unreadable backup to quarantine; this sync makes a full backup", {
       reasonCode,
     });
-    return { kind: "first", udid, quarantined: { reasonCode } };
+    return { kind: "first", udid, quarantined: { reasonCode, kind: unreadableKind(reasonCode.split("+")) } };
   }
 
   /**
@@ -2103,6 +2106,7 @@ export class BackupAtRest extends EventEmitter {
     // at it, so rethrowing failed EVERY sync. It is skipped and counted instead, and the
     // next sync is forced to C-FULL: that unseal finds it and quarantines the chain (B2).
     const unreadable: string[] = [];
+    const unreadableCodes = new Set<string>();
     // A plaintext file older than this sync's unseal time is neither this sync's delta nor
     // an index file Keepr unsealed: record it so the sync's end walks the whole chain.
     const since = this.syncUnsealedAt.get(udid);
@@ -2133,6 +2137,7 @@ export class BackupAtRest extends EventEmitter {
           }
           if (UNRECOVERABLE_CODES.has(errCode(error))) {
             unreadable.push(fileId);
+            unreadableCodes.add(errCode(error));
             await fs.promises.rm(dest, { force: true }).catch(() => undefined);
             return;
           }
@@ -2152,7 +2157,16 @@ export class BackupAtRest extends EventEmitter {
         messagesOrContacts: core,
       });
       // Without the messages or contacts database this sync has nothing to import.
-      if (core) throw new BackupAtRestRefusal("unreadable", BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE);
+      if (core) {
+        // BACKLOG-3892 E: a file that fails authentication is damaged; a key this computer
+        // does not hold keeps the message it had.
+        const kind = unreadableKind([...unreadableCodes]);
+        throw new BackupAtRestRefusal(
+          "unreadable",
+          kind === "damaged" ? BACKUP_DAMAGED_RETRY_MESSAGE : BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE,
+          kind,
+        );
+      }
     }
     return { copied, missing, unreadable: unreadable.length };
   }
