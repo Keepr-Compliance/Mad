@@ -116,10 +116,10 @@ describe("C12 — the plan state the container reads reaches the Outlook emails 
 
     await waitFor(() => {
       expect(screen.getByRole("switch", { name: SWITCH_NAME })).toBeDisabled();
+      expect(screen.getByRole("switch", { name: SWITCH_NAME })).toHaveAttribute("title", "Not available on your current plan");
     });
     const sw = screen.getByRole("switch", { name: SWITCH_NAME });
     expect(sw).toHaveAttribute("aria-checked", "false");
-    expect(sw).toHaveAttribute("title", "Not available on your current plan");
     // BACKLOG-1717: TWO rows now carry this label — Outlook and Gmail are one
     // paid feature on one plan key, so they grey together. Before this item
     // only the Outlook row did, which read as "Gmail is included".
