@@ -264,6 +264,35 @@ describe('invoice.paid grant (C-G1, E0-C, C-ID)', () => {
     expect((await deliver(ev)).status).toBe(200);
     expect(grants()).toEqual([]);
   });
+
+  it('a replayed invoice.paid for an OLDER period -> no grant [EDITED: sub current_period_end moved one period on]', async () => {
+    const ev = renewal2a();
+    // Same edit as the older-period refund test below: the subscription has since renewed.
+    serve({ ...SUB_2A, current_period_end: 1799520475 });
+    expect(INV_2A.lines.data.find((l: Obj) => l.type === 'subscription').period.end).toBeLessThan(1799520475);
+    expect((await deliver(ev)).status).toBe(200);
+    expect(grants()).toEqual([]);
+  });
+
+  it('invoice.paid while the subscription is past_due -> no grant [EDITED: sub status set to past_due]', async () => {
+    const ev = renewal2a();
+    serve({ ...SUB_2A, status: 'past_due' });
+    expect((await deliver(ev)).status).toBe(200);
+    expect(grants()).toEqual([]);
+  });
+
+  it('grant-side other-open-subscription check: another open row for the user -> no grant [SEEDED: mirror drift, a state the one-open index forbids]', async () => {
+    const ev = renewal2a();
+    useDb({
+      stripe_customers: [customerRow(CUS_2A)],
+      billing_subscriptions: [
+        subRow(SUB_2A.id, CUS_2A),
+        subRow('sub_OTHER_OPEN', 'cus_OTHER', { status: 'past_due' }),
+      ],
+    });
+    expect((await deliver(ev)).status).toBe(200);
+    expect(grants()).toEqual([]);
+  });
 });
 
 describe('invoice.paid gates on real fixtures (C-3b, C-D3, C-D2, C-D2b)', () => {
@@ -380,6 +409,16 @@ describe('customer.subscription.* (C-3, C-ORD, C-PF)', () => {
     expect(revokes()).toHaveLength(2);
     expect(grants()).toEqual([]);
   });
+
+  it.each(['unpaid', 'incomplete_expired'])(
+    'a subscription.updated that leaves the subscription %s -> revoked [EDITED: sub status set to %s]',
+    async (status) => {
+      seed2d(null);
+      serve({ ...SUB_2D, status });
+      expect((await deliver(fx('ev-2d-sub.updated-past_due'))).status).toBe(200);
+      expect(revokes()).toEqual([{ p_user_id: USER, p_mode: 'test' }]);
+    }
+  );
 
   it('C-PF2: payment_failed whose invoice is now paid -> no revoke [COMPOSED: 2d event, 2a paid invoice re-fetch]', async () => {
     useDb({ stripe_customers: [customerRow(SUB_2D.customer)] });

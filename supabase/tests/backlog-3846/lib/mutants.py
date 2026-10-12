@@ -47,6 +47,8 @@ MUTANTS = {
     # BACKLOG-3136 fix incomplete.
     'keep-not-null': ([("ALTER TABLE public.admin_audit_logs ALTER COLUMN actor_id DROP NOT NULL;\n", "")], 'k01 k02 k03'),
     'keep-anon-execute': ([("REVOKE EXECUTE ON FUNCTION public.log_admin_action(text, text, text, jsonb, inet, text) FROM PUBLIC, anon;\n", "")], 'k02 k03'),
+    # The role check lets the anon role through (a SECURITY DEFINER chain reached from an anon request).
+    'role-check-allows-anon': ([(ROLE_CHECK, ROLE_CHECK.replace("<> 'service_role'", "NOT IN ('service_role', 'anon')"))], 'k02'),
     'no-role-check': ([(ROLE_CHECK, "")], 'k02'),
     'no-drift-guard': ([("  IF md5(v_src) <> 'df1ef32e483bab95212c7525be8c5fb2' AND v_src NOT LIKE '%BACKLOG-3136%' THEN",
                          "  IF false THEN")], 'k06'),

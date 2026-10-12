@@ -2,10 +2,14 @@
 SELECT pg_temp.check('anon -> refused', r LIKE 'ERR 42501 %', r)
   FROM (SELECT pg_temp.as_role('anon', NULL, 'SELECT public.log_admin_action(''fx.anon'', ''user'', ''x'')::text') r) s;
 -- Reached through a SECURITY DEFINER chain (runs as the owner) from an anon request:
--- EXECUTE is not the guard there, the role check is.
+-- EXECUTE is not the guard there, the role check is. pg_temp.as_role would overwrite the
+-- claims with the role it switches to, so the owner role is kept (pg_temp.try) and the anon
+-- claims are set here and cleared after.
+SELECT set_config('request.jwt.claims', '{"role":"anon"}', true);
 SELECT pg_temp.check('owner role with anon claims -> refused', r LIKE 'ERR 42501 %', r)
-  FROM (SELECT pg_temp.as_role('postgres', NULL, 'SELECT public.log_admin_action(''fx.chain'', ''user'', ''x'')::text') r) s
- WHERE set_config('request.jwt.claims', '{"role":"anon"}', true) IS NOT NULL;
+  FROM (SELECT pg_temp.try('SELECT public.log_admin_action(''fx.chain'', ''user'', ''x'')::text') r) s;
+SELECT pg_temp.check('owner role with anon claims: claims really were anon', current_setting('request.jwt.claims', true) = '{"role":"anon"}');
+SELECT set_config('request.jwt.claims', '', true);
 SELECT pg_temp.check('no actorless row from anon', NOT EXISTS (SELECT 1 FROM public.admin_audit_logs WHERE action IN ('fx.anon', 'fx.chain')));
 SELECT pg_temp.check('signed-in user -> accepted', r LIKE 'OK %', r)
   FROM (SELECT pg_temp.admin('SELECT public.log_admin_action(''fx.user'', ''user'', ''x'')::text') r) s;
