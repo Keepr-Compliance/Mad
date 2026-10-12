@@ -28,9 +28,13 @@ import {
   hasActiveFilters,
   parseAgentParam,
   parseSearchParam,
+  parseViewParam,
   type ListFilters,
 } from '@/lib/submissions/listUrl';
 import { compareHeads, parseSortParam } from '@/lib/submissions/listSort';
+import { CLOSED_LANES, OPEN_LANES, laneSets } from '@/lib/submissions/boardLanes';
+import { SubmissionBoard, type BoardLaneData } from '@/components/submission/SubmissionBoard';
+import { SubmissionViewToggle } from '@/components/submission/SubmissionViewToggle';
 import {
   SubmissionDesktopFilters,
   SubmissionPhoneFilters,
@@ -56,7 +60,15 @@ interface Submission {
 }
 
 interface PageProps {
-  searchParams: Promise<{ status?: string; search?: string; agent?: string; page?: string; sort?: string }>;
+  searchParams: Promise<{
+    status?: string;
+    search?: string;
+    agent?: string;
+    page?: string;
+    sort?: string;
+    view?: string;
+    closed?: string;
+  }>;
 }
 
 const PAGE_SIZE = 25;
@@ -83,9 +95,31 @@ interface SubmissionList {
   agents: AgentOption[];
   /** Deals matching the search, counted per (head status, submitter). */
   facets: FacetCount[];
+  /** BACKLOG-3914: the desktop board's lanes (view=board only). */
+  board: BoardData | null;
 }
 
-const EMPTY_LIST: SubmissionList = { submissions: [], totalCount: 0, page: 1, totalPages: 1, scopeTotal: 0, agents: [], facets: [] };
+interface BoardData {
+  lanes: Array<Omit<BoardLaneData, 'viewAllHref'>>;
+  /** Approved + Rejected deals under the search and agent (for "Show approved and rejected (N)"). */
+  closedCount: number;
+}
+
+const EMPTY_LIST: SubmissionList = {
+  submissions: [],
+  totalCount: 0,
+  page: 1,
+  totalPages: 1,
+  scopeTotal: 0,
+  agents: [],
+  facets: [],
+  board: null,
+};
+
+const EMPTY_BOARD = (closed: boolean): BoardData => ({
+  lanes: (closed ? [...OPEN_LANES, ...CLOSED_LANES] : OPEN_LANES).map((lane) => ({ lane, total: 0, cards: [] })),
+  closedCount: 0,
+});
 
 /**
  * BACKLOG-3904: the agent filter's options are the submitters of the deals
@@ -133,7 +167,7 @@ async function getSubmissions(
   // TASK-2158: Filter to only orgs with broker_portal_access enabled
   if (restrictToOrgs && allowedOrgIds.length === 0) {
     // No orgs have access — return empty immediately
-    return EMPTY_LIST;
+    return { ...EMPTY_LIST, board: filters.view === 'board' ? EMPTY_BOARD(!!filters.closed) : null };
   }
 
   /** The list's scope, identical for both reads. */
@@ -153,7 +187,7 @@ async function getSubmissions(
   );
   if (read.error) {
     console.error('Error fetching submissions:', read.error);
-    return EMPTY_LIST;
+    return { ...EMPTY_LIST, board: filters.view === 'board' ? EMPTY_BOARD(!!filters.closed) : null };
   }
   const heads = read.heads;
 
@@ -168,12 +202,15 @@ async function getSubmissions(
     ? heads.filter((h) => headMatchesSearch(h, filters.search, identities))
     : heads;
 
+  const agentMatch = filters.agent ? (h: BrokerChainLink) => h.submitted_by === filters.agent : undefined;
+  const compare = compareHeads(filters.sort ?? 'newest');
+
   const result = await pageOfHeads<Submission, BrokerChainLink>({
     heads: searched,
     readRows: (ids) => scoped('*').in('id', ids),
     status: filters.status !== 'all' ? filters.status : null,
-    match: filters.agent ? (h) => h.submitted_by === filters.agent : undefined,
-    compare: compareHeads(filters.sort ?? 'newest'),
+    match: agentMatch,
+    compare,
     page,
     pageSize: PAGE_SIZE,
   });
@@ -181,6 +218,42 @@ async function getSubmissions(
   if (result.error) {
     console.error('Error fetching submissions:', result.error);
     return EMPTY_LIST;
+  }
+
+  // BACKLOG-3914: the board's lanes are the same searched heads with the same
+  // agent filter and sort, so each lane count is the list filtered to that lane
+  // (and, for the open lanes, the dashboard card). The status filter does not apply.
+  let board: BoardData | null = null;
+  if (filters.view === 'board') {
+    const lanes = laneSets(
+      searched,
+      filters.closed ? [...OPEN_LANES, ...CLOSED_LANES] : OPEN_LANES,
+      agentMatch ?? (() => true),
+      compare,
+    );
+    const closedCount = laneSets(searched, CLOSED_LANES, agentMatch ?? (() => true), compare, 0).reduce(
+      (n, l) => n + l.total,
+      0,
+    );
+    const ids = lanes.flatMap((l) => l.ids);
+    let byId = new Map<string, Submission>();
+    if (ids.length > 0) {
+      const rows = await scoped('*').in('id', ids);
+      if (rows.error) {
+        console.error('Error fetching submissions:', rows.error);
+        board = EMPTY_BOARD(!!filters.closed);
+      } else {
+        byId = new Map(((rows.data ?? []) as unknown as Submission[]).map((r) => [r.id, r]));
+      }
+    }
+    board ??= {
+      lanes: lanes.map((l) => ({
+        lane: l.lane,
+        total: l.total,
+        cards: l.ids.map((id) => byId.get(id)).filter((r): r is Submission => r !== undefined),
+      })),
+      closedCount,
+    };
   }
 
   return {
@@ -191,11 +264,23 @@ async function getSubmissions(
     scopeTotal: heads.length,
     agents: agentOptions(heads, identities),
     facets: facetCounts(searched),
+    board,
   };
 }
 
 export default async function SubmissionsPage({ searchParams }: PageProps) {
-  const { status, page: pageParam, agent: agentParam, search: searchParam, sort: sortParam } = await searchParams;
+  const {
+    status,
+    page: pageParam,
+    agent: agentParam,
+    search: searchParam,
+    sort: sortParam,
+    view: viewParam,
+    closed: closedParam,
+  } = await searchParams;
+  // BACKLOG-3914: view=board is the desktop status board (md and up). Below md
+  // the page is the list whatever the URL says, with the URL's status.
+  const view = parseViewParam(viewParam);
   const currentPage = Math.max(1, Number(pageParam) || 1);
   const currentStatus = status || 'all';
   // BACKLOG-3904: a non-uuid agent is ignored; search is trimmed and capped.
@@ -204,6 +289,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
     agent: parseAgentParam(agentParam),
     search: parseSearchParam(searchParam),
     sort: parseSortParam(sortParam),
+    ...(view === 'board' ? { view, closed: closedParam === '1' } : {}),
   };
   // BACKLOG-3597: the "submitted" filter now covers submitted AND resubmitted
   // deals (STATUSES labels it "Pending"), so the caption uses that tab label
@@ -240,6 +326,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
     scopeTotal,
     agents,
     facets,
+    board,
   } = await getSubmissions(client, filters, currentPage, orgId, allowedOrgIds, !!impersonation);
 
   const agentLabels = new Map(agents.map((a) => [a.id, a.label]));
@@ -250,6 +337,18 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
   const selectedAgentLabel = filters.agent
     ? agents.find((a) => a.id === filters.agent)?.label ?? 'Unknown agent'
     : 'All agents';
+
+  // BACKLOG-3914: List <-> Board keep search, agent and sort. The board has no
+  // status filter, so entering it drops the status and returning lists All.
+  const listHref = buildListUrl({ status: view === 'board' ? 'all' : filters.status, agent: filters.agent, search: filters.search, sort: filters.sort });
+  const boardHref = buildListUrl({ status: 'all', agent: filters.agent, search: filters.search, sort: filters.sort, view: 'board' });
+  const boardLanes: BoardLaneData[] | null = board
+    ? board.lanes.map((l) => ({
+        ...l,
+        viewAllHref: buildListUrl({ status: l.lane.value, agent: filters.agent, search: filters.search, sort: filters.sort }),
+      }))
+    : null;
+  const boardCount = boardLanes ? boardLanes.reduce((n, l) => n + l.total, 0) : 0;
 
   return (
     <SubmissionListClient>
@@ -262,9 +361,22 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
         className="max-md:mb-0"
         subtitle={
           <span className="max-md:hidden">
-            {totalCount} submission{totalCount !== 1 ? 's' : ''}
-            {currentStatus !== 'all' && ` with status "${currentStatusLabel}"`}
+            {board ? (
+              <>
+                {boardCount} submission{boardCount !== 1 ? 's' : ''}
+              </>
+            ) : (
+              <>
+                {totalCount} submission{totalCount !== 1 ? 's' : ''}
+                {currentStatus !== 'all' && ` with status "${currentStatusLabel}"`}
+              </>
+            )}
           </span>
+        }
+        actions={
+          <div className="max-md:hidden" data-slot="submissions-view-toggle">
+            <SubmissionViewToggle view={view} listHref={listHref} boardHref={boardHref} />
+          </div>
         }
       />
 
@@ -279,7 +391,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
           filters={filters}
           statuses={statusOptions}
           agents={agents}
-          matchingCount={totalCount}
+          matchingCount={board ? boardCount : totalCount}
           scopeTotal={scopeTotal}
         />
       </div>
@@ -297,10 +409,11 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
       {/* Submissions Table */}
       {/* Below md the row cards sit straight on the page background (no frame), so their
           left and right edges are the search field's; the frame stays from md up. */}
+      {/* BACKLOG-3914: on the board, the list below is the phone's only (md:hidden). */}
       <div
         className={`bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden${
           displaySubmissions.length > 0 ? ' max-md:overflow-visible max-md:rounded-none max-md:border-0 max-md:bg-transparent max-md:shadow-none' : ''
-        }`}
+        }${board ? ' md:hidden' : ''}`}
       >
         {displaySubmissions.length === 0 ? (
           <EmptySubmissions filtered={hasActiveFilters(filters)} />
@@ -401,6 +514,17 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
           </>
         )}
       </div>
+      {boardLanes ? (
+        <div className="max-md:hidden">
+          <SubmissionBoard
+            lanes={boardLanes}
+            closedShown={!!filters.closed}
+            closedCount={board?.closedCount ?? 0}
+            toggleClosedHref={buildListUrl({ ...filters, status: 'all', closed: !filters.closed })}
+            agentLabels={agentLabels}
+          />
+        </div>
+      ) : null}
       </div>
     </div>
     </SubmissionListClient>

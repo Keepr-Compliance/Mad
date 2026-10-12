@@ -447,6 +447,28 @@ it('gap-* (top bar to first content)', async () => {
   await gapDump('gap-submissions-filtered', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ status: 'approved' }) }));
 });
 
+// BACKLOG-3914: the desktop status board (view=board) inside the real shell: deals in
+// two open lanes, one long enough for nothing, and the closed lanes shown. Below md the
+// board is display:none and the page is the list.
+it('board-* (desktop status board)', async () => {
+  const mk = (id: string, status: string, createdAt: string): Row => ({
+    ...submissionRow({ id, organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status, parentSubmissionId: null, createdAt, address: '34 Fictional Road, Fixture City, CA 90000, USA' }),
+    version: 1,
+  });
+  mockEmulator.reset();
+  mockEmulator.set({
+    rows: {
+      transaction_submissions: [
+        mk('s1', 'submitted', '2026-09-03T00:00:00Z'),
+        mk('s2', 'needs_changes', '2026-09-03T01:00:00Z'),
+        mk('s3', 'approved', '2026-09-03T02:00:00Z'),
+      ],
+    },
+  });
+  await gapDump('board-desktop', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ view: 'board' }) }));
+  await gapDump('board-desktop-closed', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ view: 'board', closed: '1' }) }));
+});
+
 // BACKLOG-3904 fix-up: the Users page composition (page.tsx: PageHeader + UserListClient)
 // inside the real shell, unfiltered and with a search typed, to measure the
 // controls block and the gap under the top bar. Phone only (matchMedia true).

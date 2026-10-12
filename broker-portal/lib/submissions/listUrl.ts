@@ -18,6 +18,20 @@ export interface ListFilters {
   search: string;
   /** Omitted means the default (newest first). */
   sort?: SortKey;
+  /**
+   * BACKLOG-3914: 'board' is the desktop status board (md and up). Omitted
+   * means the list. The status filter does not apply to the board.
+   */
+  view?: ListView;
+  /** BACKLOG-3914: the board also shows the Approved and Rejected lanes. Board only. */
+  closed?: boolean;
+}
+
+export type ListView = 'list' | 'board';
+
+/** 'board' only for the exact value; anything else is the list. */
+export function parseViewParam(value: string | undefined | null): ListView {
+  return value === 'board' ? 'board' : 'list';
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -40,6 +54,10 @@ export function buildListUrl(filters: ListFilters, page = 1): string {
   if (filters.agent) params.set('agent', filters.agent);
   if (filters.search) params.set('search', filters.search);
   if (filters.sort && filters.sort !== DEFAULT_SORT) params.set('sort', filters.sort);
+  if (filters.view === 'board') {
+    params.set('view', 'board');
+    if (filters.closed) params.set('closed', '1');
+  }
   if (page > 1) params.set('page', String(page));
   const query = params.toString();
   return query ? `${SUBMISSIONS_PATH}?${query}` : SUBMISSIONS_PATH;

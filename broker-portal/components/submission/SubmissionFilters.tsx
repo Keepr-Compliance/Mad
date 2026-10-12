@@ -132,6 +132,7 @@ export function SubmissionDesktopFilters({
   matchingCount,
   scopeTotal,
 }: {
+  /** filters.view === 'board' (BACKLOG-3914): no Status select; the lanes are the statuses. */
   filters: ListFilters;
   statuses: StatusOption[];
   agents: AgentOption[];
@@ -144,8 +145,22 @@ export function SubmissionDesktopFilters({
   const { search, onChange, onSubmit } = useSearchUrl(filters);
   // Same rule as the phone row: the line shows for a search or a filter; Clear
   // filters only for status/agent and keeps the search text.
-  const filtered = hasActiveFilters(filters);
-  const hasChipFilters = filters.status !== 'all' || filters.agent !== null;
+  const onBoard = filters.view === 'board';
+  const filtered = onBoard ? filters.agent !== null || filters.search !== '' : hasActiveFilters(filters);
+  const hasChipFilters = (!onBoard && filters.status !== 'all') || filters.agent !== null;
+
+  const statusFilter = {
+    id: 'submissions-status-desktop',
+    label: 'Filter by status',
+    value: filters.status,
+    // BACKLOG-3914: a status change always shows the list (drops view=board).
+    onChange: (status: string) =>
+      router.push(buildListUrl({ ...filters, status, view: undefined, closed: undefined })),
+    options: withSelectedStatus(statuses, filters.status).map((s) => ({
+      value: s.value,
+      label: s.value === 'all' ? 'All Statuses' : s.label,
+    })),
+  };
 
   return (
     <div className="space-y-4">
@@ -159,16 +174,7 @@ export function SubmissionDesktopFilters({
           onSubmit: () => onSubmit(),
         }}
         filters={[
-          {
-            id: 'submissions-status-desktop',
-            label: 'Filter by status',
-            value: filters.status,
-            onChange: (status) => router.push(buildListUrl({ ...filters, status })),
-            options: withSelectedStatus(statuses, filters.status).map((s) => ({
-              value: s.value,
-              label: s.value === 'all' ? 'All Statuses' : s.label,
-            })),
-          },
+          ...(onBoard ? [] : [statusFilter]),
           {
             id: 'submissions-agent-desktop',
             label: 'Filter by agent',
@@ -189,7 +195,12 @@ export function SubmissionDesktopFilters({
           {hasChipFilters ? (
             <button
               type="button"
-              onClick={() => router.push(buildListUrl({ status: 'all', agent: null, search: filters.search, sort: filters.sort }))}
+              onClick={() =>
+                router.push(
+                  // On the board Clear keeps the board (and its closed lanes); it only clears the agent.
+                  buildListUrl({ status: 'all', agent: null, search: filters.search, sort: filters.sort, view: filters.view, closed: filters.closed })
+                )
+              }
               className="font-medium text-primary-700 hover:text-primary-800 hover:underline"
             >
               Clear filters
@@ -241,7 +252,8 @@ export function SubmissionPhoneFilters({
   function apply() {
     const which = sheet;
     setSheet(null);
-    if (which === 'status') router.push(buildListUrl({ ...filters, status: pendingStatus }));
+    // BACKLOG-3914: a status change always shows the list (drops view=board).
+    if (which === 'status') router.push(buildListUrl({ ...filters, status: pendingStatus, view: undefined, closed: undefined }));
     if (which === 'agent') router.push(buildListUrl({ ...filters, agent: pendingAgent }));
   }
 
