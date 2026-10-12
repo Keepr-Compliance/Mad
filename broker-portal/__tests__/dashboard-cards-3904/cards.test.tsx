@@ -30,6 +30,8 @@ const mockEmulator = createPostgrestEmulator();
 const mockAuthFrom = jest.fn();
 const mockStartProgress = jest.fn();
 let mockNoAccessOrgs: string[] = [];
+/** BACKLOG-3906: orgs whose feature read fails (getOrgFeatures' fallback, feature-gate.ts failOpenDefault). */
+let mockFeatureReadFails: string[] = [];
 
 jest.mock('next/link', () => ({
   __esModule: true,
@@ -70,7 +72,9 @@ jest.mock('@/lib/feature-gate', () => {
   return {
     ...actual,
     getOrgFeatures: jest.fn(async (orgId: string) =>
-      withFeature({ ...ORG_WITHOUT_PLAN_FEATURES, org_id: orgId }, 'broker_portal_access', !mockNoAccessOrgs.includes(orgId))
+      mockFeatureReadFails.includes(orgId)
+        ? { org_id: orgId, plan_name: 'unknown', plan_tier: 'unknown', features: {} }
+        : withFeature({ ...ORG_WITHOUT_PLAN_FEATURES, org_id: orgId }, 'broker_portal_access', !mockNoAccessOrgs.includes(orgId))
     ),
   };
 });
@@ -148,6 +152,7 @@ async function renderDashboard() {
 beforeEach(() => {
   jest.clearAllMocks();
   mockNoAccessOrgs = [ORG_NO_ACCESS];
+  mockFeatureReadFails = [];
 });
 
 describe('fixture sanity (so the controls below can fail)', () => {
@@ -161,6 +166,17 @@ describe('fixture sanity (so the controls below can fail)', () => {
 });
 
 describe('cards on the real dashboard', () => {
+  it('BACKLOG-3906: a failed feature read for any org counts nothing', async () => {
+    mockFeatureReadFails = [ORG];
+    await renderDashboard();
+    const labels = screen
+      .getAllByRole('link')
+      .map((a) => a.getAttribute('aria-label'))
+      .filter((l): l is string => !!l && l.endsWith('view submissions'));
+    expect(labels).toHaveLength(4);
+    for (const l of labels) expect(l).toMatch(/: 0, view submissions$/);
+  });
+
   it('shows the deal counts and the hrefs', async () => {
     await renderDashboard();
     const hrefs = Object.fromEntries(

@@ -97,6 +97,8 @@ interface SubmissionList {
   facets: FacetCount[];
   /** BACKLOG-3914: the desktop board's lanes (view=board only). */
   board: BoardData | null;
+  /** BACKLOG-3906: the allowed-org lookup failed, so nothing is listed. */
+  loadError?: boolean;
 }
 
 interface BoardData {
@@ -159,13 +161,15 @@ async function getSubmissions(
   filters: ListFilters,
   page: number = 1,
   orgId?: string,
-  allowedOrgIds?: string[] | null,
+  allowedOrgIds: string[] | null = null,
   isImpersonating: boolean = false,
 ): Promise<SubmissionList> {
-  const restrictToOrgs = allowedOrgIds !== null && allowedOrgIds !== undefined && !orgId;
+  // BACKLOG-3906: null = the allowed-org lookup failed; list nothing.
+  if (allowedOrgIds === null) return { ...EMPTY_LIST, loadError: true };
+  const inOrgs = allowedOrgIds;
 
-  // TASK-2158: Filter to only orgs with broker_portal_access enabled
-  if (restrictToOrgs && allowedOrgIds.length === 0) {
+  // TASK-2158: Filter to only orgs with broker_portal_access enabled (support sessions too)
+  if (allowedOrgIds.length === 0) {
     // No orgs have access — return empty immediately
     return { ...EMPTY_LIST, board: filters.view === 'board' ? EMPTY_BOARD(!!filters.closed) : null };
   }
@@ -178,7 +182,7 @@ async function getSubmissions(
       .neq('status', 'uploading'); // Hide incomplete uploads (two-phase commit)
     // During impersonation, filter by organization
     if (orgId) query = query.eq('organization_id', orgId);
-    if (restrictToOrgs) query = query.in('organization_id', allowedOrgIds);
+    query = query.in('organization_id', inOrgs);
     return query;
   }
 
@@ -315,7 +319,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
   const orgId = getTargetOrganizationId(organizationId);
 
   // TASK-2158: Resolve which orgs have broker_portal_access enabled
-  const allowedOrgIds = await getAllowedOrgIds(client, orgId);
+  const allowed = await getAllowedOrgIds(client, orgId);
 
   // A requested page past the end shows the last page (clamped in getSubmissions).
   const {
@@ -327,7 +331,8 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
     agents,
     facets,
     board,
-  } = await getSubmissions(client, filters, currentPage, orgId, allowedOrgIds, !!impersonation);
+    loadError,
+  } = await getSubmissions(client, filters, currentPage, orgId, allowed.ok ? allowed.orgIds : null, !!impersonation);
 
   const agentLabels = new Map(agents.map((a) => [a.id, a.label]));
 
@@ -415,7 +420,11 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
           displaySubmissions.length > 0 ? ' max-md:overflow-visible max-md:rounded-none max-md:border-0 max-md:bg-transparent max-md:shadow-none' : ''
         }${board ? ' md:hidden' : ''}`}
       >
-        {displaySubmissions.length === 0 ? (
+        {loadError ? (
+          <p role="alert" className="p-6 text-sm text-red-600">
+            Submissions could not be loaded. Reload the page to try again.
+          </p>
+        ) : displaySubmissions.length === 0 ? (
           <EmptySubmissions filtered={hasActiveFilters(filters)} />
         ) : (
           <>
