@@ -280,7 +280,9 @@ export function getIphoneUserCoverage(userId: string): IphoneDealCoverage | null
   const { current, others } = phones;
   const base = { udid: current.udid, lastSyncAt: iso(current.endMs), approximate: current.approximate };
   if (!Number.isFinite(current.sinceMs)) {
-    return { ...base, coveredSince: iso(current.sinceMs), who: null, cappedByPhone: null, previousPhone: others.length > 0 };
+    // An unreadable stored date: hand back the row's own value (as before W), never iso(NaN).
+    const raw = iphoneDeviceRows(userId).find((d) => d.udid === current.udid)?.coveredSince ?? "";
+    return { ...base, coveredSince: raw, who: null, cappedByPhone: null, previousPhone: others.length > 0 };
   }
   const m = acrossPhones(current, others, (p) => p.sinceMs);
   return {

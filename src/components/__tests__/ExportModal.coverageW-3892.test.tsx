@@ -130,6 +130,20 @@ it("Mac end gap: Update now runs the import and rechecks for the Mac source (W2)
   expect(completenessMock).toHaveBeenNthCalledWith(2, TX, "user-1", "mac");
 });
 
+it("Mac end gap: Update now that did not run re-surfaces the gate, never a silent export", async () => {
+  setSource("macos-native");
+  completenessMock.mockResolvedValue({ ...covered, textEndGap: endGap("mac") });
+  ensureMock.mockResolvedValue({ success: true, ran: false, importRan: false, reason: "already-running", imported: 0, messagesFloorISO: at(2025, 1, 1) });
+  await driveToExport();
+  await screen.findByTestId("export-gate-end");
+  await act(async () => {
+    fireEvent.click(screen.getByTestId("export-gate-update-now"));
+  });
+  await waitFor(() => expect(completenessMock).toHaveBeenCalledTimes(2));
+  expect(await screen.findByTestId("export-gate-end")).toHaveTextContent("Mac Messages were last imported Feb 20");
+  expect(exportEnhancedMock).not.toHaveBeenCalled();
+});
+
 describe("W5: Windows", () => {
   const sys = window.api.system as unknown as { platform: string };
   let before: string;

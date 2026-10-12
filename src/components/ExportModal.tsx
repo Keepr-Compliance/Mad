@@ -408,7 +408,9 @@ function ExportModal({
     setCompletenessGate(null);
     // Proceed when complete now OR a real device import ran (we scanned back to
     // the audit start — a floor still above it means nothing older exists).
-    if ((recheck && recheck.complete) || outcome.importRan) {
+    // BACKLOG-3892 W1: "complete" says nothing about newer texts — an end gap that is
+    // still there after an import that did not run re-surfaces the choice.
+    if ((recheck && recheck.complete && !recheck.textEndGap) || outcome.importRan) {
       await proceedWithExport();
       return;
     }
