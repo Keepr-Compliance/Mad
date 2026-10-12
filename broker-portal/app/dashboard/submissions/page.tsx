@@ -285,15 +285,16 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
       {/* Header */}
       <PageHeader
         title="Submissions"
+        className="max-md:mb-3"
         subtitle={
-          <>
+          <span className="max-md:hidden">
             {totalCount} submission{totalCount !== 1 ? 's' : ''}
             {currentStatus !== 'all' && ` with status "${currentStatusLabel}"`}
-          </>
+          </span>
         }
       />
 
-      <div className="space-y-6">
+      <div className="space-y-6 max-md:space-y-3">
       {/* Status Filters - clicking a filter resets to page 1 (no page param).
           BACKLOG-3904: desktop only; below md the phone filters replace them. */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 max-md:hidden">
@@ -323,7 +324,6 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
         statuses={STATUSES}
         agents={agents}
         facets={facets}
-        total={totalCount}
         selectedAgentLabel={selectedAgentLabel}
       />
 

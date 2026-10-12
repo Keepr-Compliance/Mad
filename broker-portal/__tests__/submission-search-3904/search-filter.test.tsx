@@ -313,34 +313,65 @@ describe('R2 names in a support session and on a failed lookup', () => {
   });
 });
 
-describe('C4 + C7 phone filter sheet', () => {
-  async function openSheet() {
+describe('C4 + C7 phone filter sheets (one per filter)', () => {
+  async function openStatus() {
     fireEvent.click(screen.getByRole('button', { name: 'Status: All' }));
-    return screen.getByRole('dialog', { name: 'Filters' });
+    return screen.getByRole('dialog', { name: 'Status' });
   }
+  async function openAgent() {
+    fireEvent.click(screen.getByRole('button', { name: 'Agent: All agents' }));
+    return screen.getByRole('dialog', { name: 'Agent' });
+  }
+
+  it('Status opens a status-only sheet', async () => {
+    await renderList();
+    const sheet = await openStatus();
+    expect(within(sheet).getByRole('button', { name: 'Pending · 2' })).toBeInTheDocument();
+    expect(within(sheet).queryByLabelText(NAME_A)).toBeNull();
+    expect(within(sheet).queryByPlaceholderText('Find an agent')).toBeNull();
+  });
+
+  it('Agent opens an agent-only sheet with its own search', async () => {
+    await renderList();
+    const sheet = await openAgent();
+    expect(within(sheet).getByLabelText(NAME_A)).toBeInTheDocument();
+    expect(within(sheet).queryByRole('button', { name: /^Pending/ })).toBeNull();
+    fireEvent.change(within(sheet).getByPlaceholderText('Find an agent'), { target: { value: 'brav' } });
+    expect(within(sheet).queryByLabelText(NAME_A)).toBeNull();
+    expect(within(sheet).getByLabelText(NAME_B)).toBeInTheDocument();
+  });
 
   it('C4: counts are of deals (a 2-version deal counts once)', async () => {
     await renderList();
-    const sheet = await openSheet();
-    const alpha = within(sheet).getByLabelText(NAME_A).closest('label') as HTMLElement;
+    const agent = await openAgent();
+    const alpha = within(agent).getByLabelText(NAME_A).closest('label') as HTMLElement;
     expect(alpha).toHaveTextContent(new RegExp(`${NAME_A}\\s*2$`));
-    expect(within(sheet).getByRole('button', { name: 'All · 3' })).toBeInTheDocument();
-    expect(within(sheet).getByRole('button', { name: 'Pending · 2' })).toBeInTheDocument();
+    fireEvent.click(within(agent).getByRole('button', { name: 'Close' }));
+    const status = await openStatus();
+    expect(within(status).getByRole('button', { name: 'All · 3' })).toBeInTheDocument();
   });
 
-  it('C7: Show N follows the pending selection; applying navigates; Clear all resets', async () => {
+  it('C7: Status Show N follows the pending status; applying navigates with that filter only; Clear resets', async () => {
     await renderList({ search: 'road' });
-    const sheet = await openSheet();
+    const sheet = await openStatus();
     // search "road" leaves A2 (Mill Road, resubmitted) only.
     expect(within(sheet).getByRole('button', { name: 'Show 1 submission' })).toBeInTheDocument();
     fireEvent.click(within(sheet).getByRole('button', { name: 'Approved · 0' }));
     expect(within(sheet).getByRole('button', { name: 'Show 0 submissions' })).toBeInTheDocument();
-    fireEvent.click(within(sheet).getByRole('button', { name: 'Clear all' }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Clear' }));
     expect(within(sheet).getByRole('button', { name: 'Show 1 submission' })).toBeInTheDocument();
     fireEvent.click(within(sheet).getByRole('button', { name: 'Pending · 1' }));
-    fireEvent.click(within(sheet).getByLabelText(NAME_A));
     fireEvent.click(within(sheet).getByRole('button', { name: 'Show 1 submission' }));
     expect(mockPush).toHaveBeenCalledTimes(1);
+    const url = new URL(mockPush.mock.calls[0][0] as string, 'http://x');
+    expect(Object.fromEntries(url.searchParams)).toEqual({ status: 'submitted', search: 'road' });
+  });
+
+  it('C7: Agent sheet applies the agent only, keeping status and search', async () => {
+    await renderList({ status: 'submitted', search: 'road' });
+    const sheet = await openAgent();
+    fireEvent.click(within(sheet).getByLabelText(NAME_A));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Show 1 submission' }));
     const url = new URL(mockPush.mock.calls[0][0] as string, 'http://x');
     expect(Object.fromEntries(url.searchParams)).toEqual({ status: 'submitted', agent: AGENT_A, search: 'road' });
   });
@@ -350,21 +381,103 @@ describe('C4 + C7 phone filter sheet', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     expect(mockPush).toHaveBeenCalledWith('/dashboard/submissions');
   });
+});
 
-  it('typing in the phone search replaces the URL after a pause, keeping the other filters', async () => {
-    jest.useFakeTimers();
-    try {
-      await renderList({ agent: AGENT_A });
-      fireEvent.change(screen.getByPlaceholderText('Search address or agent'), { target: { value: ' Oak & Elm ' } });
-      expect(mockReplace).not.toHaveBeenCalled();
-      act(() => {
-        jest.advanceTimersByTime(300);
-      });
-      expect(mockReplace).toHaveBeenCalledTimes(1);
-      const url = new URL(mockReplace.mock.calls[0][0] as string, 'http://x');
-      expect(Object.fromEntries(url.searchParams)).toEqual({ agent: AGENT_A, search: 'Oak & Elm' });
-    } finally {
-      jest.useRealTimers();
-    }
+describe('phone density: no count line', () => {
+  it('the phone block has no "N submissions" text and the header count is hidden below md', async () => {
+    const { container } = await renderList();
+    const phone = container.querySelector('div.md\\:hidden') as HTMLElement;
+    expect(phone).not.toBeNull();
+    expect(phone.textContent ?? '').not.toMatch(/\d+ submissions?/);
+    const header = Array.from(container.querySelectorAll('span.max-md\\:hidden')).find((e) =>
+      /\d+ submissions?/.test(e.textContent ?? '')
+    );
+    expect(header).toBeDefined();
+  });
+});
+
+describe('phone search as you type', () => {
+  const phoneSearch = () => screen.getByPlaceholderText('Search address or agent') as HTMLInputElement;
+  const type = (v: string) => fireEvent.change(phoneSearch(), { target: { value: v } });
+  const tick = (ms: number) =>
+    act(() => {
+      jest.advanceTimersByTime(ms);
+    });
+  const sentSearch = (call: number) =>
+    new URL(mockReplace.mock.calls[call][0] as string, 'http://x').searchParams.get('search');
+
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('typing replaces the URL after 250 ms, trimmed and collapsed, keeping the other filters', async () => {
+    await renderList({ agent: AGENT_A });
+    type('  Oak   &  Elm ');
+    tick(249);
+    expect(mockReplace).not.toHaveBeenCalled();
+    tick(1);
+    expect(mockReplace).toHaveBeenCalledTimes(1);
+    const url = new URL(mockReplace.mock.calls[0][0] as string, 'http://x');
+    expect(Object.fromEntries(url.searchParams)).toEqual({ agent: AGENT_A, search: 'Oak & Elm' });
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('runs from one character: "3" then "33" then "33 " sends 3 and 33, nothing for the space', async () => {
+    await renderList();
+    type('3');
+    tick(250);
+    type('33');
+    tick(250);
+    type('33 ');
+    tick(500);
+    expect(mockReplace).toHaveBeenCalledTimes(2);
+    expect(sentSearch(0)).toBe('3');
+    expect(sentSearch(1)).toBe('33');
+  });
+
+  it('a space typed while the request is in flight survives the URL echo', async () => {
+    const { rerender } = await renderList();
+    type('33');
+    tick(250);
+    type('33 ');
+    // the server answers for "33": the page re-renders with search=33
+    const echoed = await SubmissionsPage({ searchParams: Promise.resolve({ search: '33' }) });
+    await act(async () => {
+      rerender(echoed);
+    });
+    expect(phoneSearch().value).toBe('33 ');
+  });
+
+  it('Enter submits at once; clearing sends at once', async () => {
+    await renderList({ search: 'mill' });
+    type('oak');
+    fireEvent.submit(phoneSearch().closest('form') as HTMLFormElement);
+    expect(mockReplace).toHaveBeenCalledTimes(1);
+    expect(sentSearch(0)).toBe('oak');
+    type('');
+    expect(mockReplace).toHaveBeenCalledTimes(2);
+    expect(sentSearch(1)).toBeNull(); // an empty search is omitted from the URL
+  });
+});
+
+describe('search matching: numbers and words', () => {
+  const ID_33 = '00000000-0000-4000-8000-000000390411'; // pii-allow-uuid: invented fixture id
+  const ID_133 = '00000000-0000-4000-8000-000000390412'; // pii-allow-uuid: invented fixture id
+  const ID_7 = '00000000-0000-4000-8000-000000390413'; // pii-allow-uuid: invented fixture id
+  const addrRows = [
+    sub(ID_33, AGENT_A, '33 Oak Lane', 'submitted', '2026-09-03T00:00:00Z'),
+    sub(ID_133, AGENT_A, '133 Elm Street', 'submitted', '2026-09-02T00:00:00Z'),
+    sub(ID_7, AGENT_B, '7 Oak Lane', 'submitted', '2026-09-01T00:00:00Z'),
+  ];
+
+  it('"33" finds "33 Oak Lane" and not "133 Elm Street"', async () => {
+    given(addrRows);
+    const { container } = await renderList({ search: '33' });
+    expect(listedIds(container)).toEqual([ID_33]);
+  });
+
+  it('every word must match, in any order: "oak 33" finds 33 Oak Lane only', async () => {
+    given(addrRows);
+    const { container } = await renderList({ search: 'oak 33' });
+    expect(listedIds(container)).toEqual([ID_33]);
   });
 });

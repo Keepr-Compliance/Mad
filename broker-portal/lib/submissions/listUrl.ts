@@ -26,9 +26,9 @@ export function parseAgentParam(value: string | undefined | null): string | null
   return UUID.test(v) ? v.toLowerCase() : null;
 }
 
-/** Trimmed and capped at MAX_SEARCH_LENGTH. */
+/** Whitespace collapsed to single spaces, trimmed, capped at MAX_SEARCH_LENGTH. */
 export function parseSearchParam(value: string | undefined | null): string {
-  return (value ?? '').trim().slice(0, MAX_SEARCH_LENGTH);
+  return (value ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_SEARCH_LENGTH);
 }
 
 export function buildListUrl(filters: ListFilters, page = 1): string {

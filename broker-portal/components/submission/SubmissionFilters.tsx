@@ -4,8 +4,8 @@
  * Broker Submissions search and filters — BACKLOG-3904.
  *
  * Desktop (md and up): a search box and a "Submitted by" select under the
- * status tabs. Phone (below md): a search field, two two-line filter controls
- * (Status / Agent) that open one bottom sheet, a count and "Clear filters".
+ * status tabs. Phone (below md): a search field and two two-line filter
+ * controls (Status / Agent), each opening its own bottom sheet, and "Clear filters".
  *
  * The URL is the only state (?status=&agent=&search=): every change navigates,
  * so back and refresh keep the filters. Everything shown here is passed in by
@@ -35,7 +35,64 @@ interface StatusOption {
   label: string;
 }
 
-const SEARCH_DEBOUNCE_MS = 300;
+const SEARCH_DEBOUNCE_MS = 250;
+
+/**
+ * Search-as-you-type bound to the URL (BACKLOG-3904). Typed text navigates
+ * (replace, so no history entry per key) after SEARCH_DEBOUNCE_MS; Enter and
+ * clearing navigate at once. Text that normalises to what the URL already holds
+ * (trailing space, doubled spaces) sends nothing. The URL only overwrites the
+ * typed text when it changed for another reason (Clear filters, back button) -
+ * never with its own echo, which would drop a space typed while the request was
+ * in flight.
+ */
+function useSearchUrl(filters: ListFilters) {
+  const router = useRouter();
+  const [search, setSearch] = useState(filters.search);
+  const typed = useRef(filters.search);
+  const lastSent = useRef(filters.search);
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+
+  useEffect(() => {
+    lastSent.current = filters.search;
+    if (parseSearchParam(typed.current) !== filters.search) {
+      typed.current = filters.search;
+      setSearch(filters.search);
+    }
+  }, [filters.search]);
+
+  function send(text: string) {
+    const next = parseSearchParam(text);
+    if (next === lastSent.current) return;
+    lastSent.current = next;
+    router.replace(buildListUrl({ ...filtersRef.current, search: next }));
+  }
+
+  useEffect(() => {
+    const next = parseSearchParam(search);
+    if (next === lastSent.current) return;
+    if (next === '') {
+      send(search);
+      return;
+    }
+    const timer = setTimeout(() => send(search), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
+  return {
+    search,
+    onChange(value: string) {
+      typed.current = value;
+      setSearch(value);
+    },
+    onSubmit(e: FormEvent) {
+      e.preventDefault();
+      send(search);
+    },
+  };
+}
 
 function countFacets(facets: FacetCount[], status: string, agent: string | null): number {
   const filter = status === 'all' ? null : status;
@@ -67,13 +124,7 @@ export function SubmissionDesktopFilters({
   agents: AgentOption[];
 }) {
   const router = useRouter();
-  const [search, setSearch] = useState(filters.search);
-  useEffect(() => setSearch(filters.search), [filters.search]);
-
-  function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    router.push(buildListUrl({ ...filters, search: parseSearchParam(search) }));
-  }
+  const { search, onChange, onSubmit } = useSearchUrl(filters);
 
   return (
     <form role="search" onSubmit={onSubmit} className="mt-4 flex flex-wrap gap-2">
@@ -84,7 +135,7 @@ export function SubmissionDesktopFilters({
         id="submissions-search-desktop"
         type="search"
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        onChange={(e) => onChange(e.target.value)}
         placeholder="Search address, city, agent name or email"
         className={`${inputClass} flex-1 min-w-[16rem]`}
       />
@@ -113,51 +164,35 @@ export function SubmissionPhoneFilters({
   statuses,
   agents,
   facets,
-  total,
   selectedAgentLabel,
 }: {
   filters: ListFilters;
   statuses: StatusOption[];
   agents: AgentOption[];
   facets: FacetCount[];
-  total: number;
   selectedAgentLabel: string;
 }) {
   const router = useRouter();
+  const { search, onChange, onSubmit } = useSearchUrl(filters);
 
-  // Search: typed text replaces the URL after a pause (no history entry per key).
-  const [search, setSearch] = useState(filters.search);
-  const lastSent = useRef(filters.search);
-  useEffect(() => {
-    lastSent.current = filters.search;
-    setSearch(filters.search);
-  }, [filters.search]);
-  useEffect(() => {
-    const next = parseSearchParam(search);
-    if (next === lastSent.current) return;
-    const timer = setTimeout(() => {
-      lastSent.current = next;
-      router.replace(buildListUrl({ ...filters, search: next }));
-    }, SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [search, filters, router]);
-
-  // Sheet: a pending selection, applied by "Show N".
-  const [open, setOpen] = useState(false);
+  // One sheet at a time, each for its own filter, applied by "Show N".
+  const [sheet, setSheet] = useState<'status' | 'agent' | null>(null);
   const [pendingStatus, setPendingStatus] = useState(filters.status);
   const [pendingAgent, setPendingAgent] = useState<string | null>(filters.agent);
   const [agentQuery, setAgentQuery] = useState('');
 
-  function openSheet() {
+  function openSheet(which: 'status' | 'agent') {
     setPendingStatus(filters.status);
     setPendingAgent(filters.agent);
     setAgentQuery('');
-    setOpen(true);
+    setSheet(which);
   }
 
   function apply() {
-    setOpen(false);
-    router.push(buildListUrl({ ...filters, status: pendingStatus, agent: pendingAgent }));
+    const which = sheet;
+    setSheet(null);
+    if (which === 'status') router.push(buildListUrl({ ...filters, status: pendingStatus }));
+    if (which === 'agent') router.push(buildListUrl({ ...filters, agent: pendingAgent }));
   }
 
   const options = useMemo(() => withSelected(agents, filters.agent), [agents, filters.agent]);
@@ -167,60 +202,62 @@ export function SubmissionPhoneFilters({
   }, [options, agentQuery]);
 
   const statusLabel = statuses.find((s) => s.value === filters.status)?.label ?? filters.status;
-  const shown = countFacets(facets, pendingStatus, pendingAgent);
+  // Each sheet counts with the OTHER filter at its applied value.
+  const shown =
+    sheet === 'status'
+      ? countFacets(facets, pendingStatus, filters.agent)
+      : countFacets(facets, filters.status, pendingAgent);
   const filtered = hasActiveFilters(filters);
 
   return (
-    <div className="space-y-2.5 md:hidden">
-      <SearchField
-        label="Search submissions"
-        placeholder="Search address or agent"
-        value={search}
-        onChange={setSearch}
-      />
+    <div className="space-y-2 md:hidden">
+      <form role="search" onSubmit={onSubmit}>
+        <SearchField
+          label="Search submissions"
+          placeholder="Search address or agent"
+          value={search}
+          onChange={onChange}
+        />
+      </form>
       <div className="grid grid-cols-2 gap-2">
         <FilterSelectButton
           label="Status"
           value={statusLabel}
           active={filters.status !== 'all'}
-          expanded={open}
-          onClick={openSheet}
+          expanded={sheet === 'status'}
+          onClick={() => openSheet('status')}
         />
         <FilterSelectButton
           label="Agent"
           value={selectedAgentLabel}
           active={filters.agent !== null}
-          expanded={open}
-          onClick={openSheet}
+          expanded={sheet === 'agent'}
+          onClick={() => openSheet('agent')}
         />
       </div>
-      <div className="flex min-h-9 items-center justify-between text-sm text-gray-600">
-        <span>{plural(total)}</span>
-        {filtered ? (
+      {filtered ? (
+        <div className="flex justify-end">
           <button
             type="button"
             onClick={() => router.push(buildListUrl({ status: 'all', agent: null, search: '' }))}
-            className="min-h-9 px-1 font-semibold text-primary-700"
+            className="min-h-9 px-1 text-sm font-semibold text-primary-700"
           >
             Clear filters
           </button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
       <BottomSheet
-        open={open}
-        onOpenChange={setOpen}
-        title="Filters"
+        open={sheet !== null}
+        onOpenChange={(o) => !o && setSheet(null)}
+        title={sheet === 'agent' ? 'Agent' : 'Status'}
         headerAction={
           <button
             type="button"
-            onClick={() => {
-              setPendingStatus('all');
-              setPendingAgent(null);
-            }}
+            onClick={() => (sheet === 'agent' ? setPendingAgent(null) : setPendingStatus('all'))}
             className="min-h-11 px-2 text-sm font-semibold text-primary-700"
           >
-            Clear all
+            Clear
           </button>
         }
         primaryAction={
@@ -233,33 +270,29 @@ export function SubmissionPhoneFilters({
           </button>
         }
       >
-        <div className="space-y-5">
-          <section aria-labelledby="sheet-status-heading" className="space-y-2">
-            <h3 id="sheet-status-heading" className="text-xs font-bold uppercase tracking-wide text-gray-600">
-              Status
-            </h3>
-            <div className="flex flex-wrap gap-2">
-              {statuses.map((s) => {
-                const on = pendingStatus === s.value;
-                return (
-                  <button
-                    key={s.value}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() => setPendingStatus(s.value)}
-                    className={`min-h-9 rounded-full border px-3.5 text-sm font-semibold ${
-                      on ? 'border-primary-600 bg-primary-50 text-primary-800' : 'border-gray-300 bg-white text-gray-700'
-                    }`}
-                  >
-                    {s.label} · {countFacets(facets, s.value, pendingAgent)}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-
+        {sheet === 'status' ? (
+          <div className="flex flex-wrap gap-2">
+            {statuses.map((s) => {
+              const on = pendingStatus === s.value;
+              return (
+                <button
+                  key={s.value}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => setPendingStatus(s.value)}
+                  className={`min-h-9 rounded-full border px-3.5 text-sm font-semibold ${
+                    on ? 'border-primary-600 bg-primary-50 text-primary-800' : 'border-gray-300 bg-white text-gray-700'
+                  }`}
+                >
+                  {s.label} · {countFacets(facets, s.value, filters.agent)}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+        {sheet === 'agent' ? (
           <fieldset className="space-y-2">
-            <legend className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-600">Submitted by</legend>
+            <legend className="sr-only">Agent</legend>
             <SearchField label="Find an agent" placeholder="Find an agent" value={agentQuery} onChange={setAgentQuery} />
             <div className="divide-y divide-gray-100 overflow-hidden rounded-lg border border-gray-200">
               {[{ id: '', label: 'All agents' }, ...visibleOptions].map((a) => {
@@ -280,13 +313,13 @@ export function SubmissionPhoneFilters({
                       className="h-5 w-5 accent-primary-600"
                     />
                     <span className="flex-1 truncate">{a.label}</span>
-                    <span className="text-sm text-gray-500">{countFacets(facets, pendingStatus, value)}</span>
+                    <span className="text-sm text-gray-500">{countFacets(facets, filters.status, value)}</span>
                   </label>
                 );
               })}
             </div>
           </fieldset>
-        </div>
+        ) : null}
       </BottomSheet>
     </div>
   );
