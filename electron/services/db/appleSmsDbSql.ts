@@ -212,6 +212,12 @@ export interface MessagePage {
    * inclusive). Absent = every message (today's read).
    */
   readonly sinceMs?: number;
+  /**
+   * BACKLOG-3892 S5 (backfill): keep only DATED messages before this instant (epoch ms,
+   * exclusive). The exact complement of a `sinceMs` floor at the same instant, in both
+   * date eras; undated rows are NOT kept (a floored sync already read them).
+   */
+  readonly untilMs?: number;
 }
 
 /** Apple epoch (2001-01-01T00:00:00Z) in Unix epoch milliseconds. */
@@ -269,6 +275,15 @@ const SINCE_CLAUSE = ` AND (message.date IS NULL OR message.date <= 0 OR message
           OR (message.date < ${APPLE_SECONDS_DATE_MAX} AND message.date >= ?))`;
 
 /**
+ * BACKLOG-3892 S5: the ceiling (exclusive): dated rows only, each era below the same
+ * binds a floor at that instant keeps at or above (floorBinds), so floor and ceiling
+ * at one instant split the dated rows exactly, with no row read twice or missed.
+ */
+const UNTIL_CLAUSE = ` AND message.date > 0
+          AND ((message.date >= ${APPLE_SECONDS_DATE_MAX} AND message.date < ?)
+            OR (message.date < ${APPLE_SECONDS_DATE_MAX} AND message.date < ?))`;
+
+/**
  * Messages in one chat, oldest first.
  *
  * Three statement shapes and no more — no page, a limit, or a limit with an
@@ -300,6 +315,12 @@ export function selectChatMessages<T>(
     params.push(b.ns, b.sec);
     since = SINCE_CLAUSE;
   }
+  let until = "";
+  if (page.untilMs !== undefined && Number.isFinite(page.untilMs)) {
+    const b = floorBinds(page.untilMs);
+    params.push(b.ns, b.sec);
+    until = UNTIL_CLAUSE;
+  }
   if (limit !== undefined) params.push(limit);
   if (offset !== undefined) params.push(offset);
 
@@ -311,7 +332,7 @@ export function selectChatMessages<T>(
           ${messageSelectColumns(hasAudioTranscript)}
         FROM message
         JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
-        WHERE chat_message_join.chat_id = ?${since}
+        WHERE chat_message_join.chat_id = ?${since}${until}
         ORDER BY message.date ASC
       ` + clause,
       )

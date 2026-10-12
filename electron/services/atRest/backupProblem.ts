@@ -31,6 +31,12 @@ export const BACKUP_KEY_MISSING_RETRY_MESSAGE = `${BACKUP_KEY_MISSING_SENTENCE} 
 
 export const BACKUP_DAMAGED_REASON = "BACKUP_DAMAGED";
 
+/**
+ * BACKLOG-3892 S5: the saved backup is gone (founder-approved 2026-10-12, pm_comments
+ * 7845fbe4). Shown by the backfill only: during a sync a missing backup means a full one.
+ */
+export const BACKUP_MISSING_SENTENCE = "Your saved iPhone backup is no longer on this computer.";
+
 /** Why a kept file could not be opened, when no retry can fix it. */
 export type UnreadableKind = "damaged" | "key-missing";
 
@@ -46,7 +52,9 @@ export type BackupProblemReason =
   | "key-unavailable"
   | "disk-space"
   | "unreadable"
-  | "apple-encrypted";
+  | "apple-encrypted"
+  // BACKLOG-3892 S5: the saved backup is no longer on this computer (backfill only).
+  | "missing";
 
 const REASONS: ReadonlySet<string> = new Set<BackupProblemReason>([
   "damaged",
@@ -55,6 +63,7 @@ const REASONS: ReadonlySet<string> = new Set<BackupProblemReason>([
   "disk-space",
   "unreadable",
   "apple-encrypted",
+  "missing",
 ]);
 
 /**

@@ -26,7 +26,8 @@ import {
 import { handleKeys, IPHONE_PARSE_FLOORS_ENABLED, type ChatFloorPlan } from "./iphoneChatFloors";
 import logService from "./logService";
 
-function dealFloorMs(row: DealDates): number | null {
+/** A deal's floor: its audit start − 24 h (also the S5 backfill floor). */
+export function dealFloorMs(row: DealDates): number | null {
   const ms = computeTransactionDateRange(row).start.getTime();
   return Number.isFinite(ms) ? ms - COVERAGE_TOLERANCE_MS : null;
 }

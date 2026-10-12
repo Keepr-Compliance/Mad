@@ -467,6 +467,52 @@ async function pool<T>(items: readonly T[], limit: number, work: (item: T) => Pr
   await Promise.all(workers);
 }
 
+/**
+ * BACKLOG-3892 S5: like {@link pool}, but after the first failure no worker takes another
+ * item, and it settles only when every worker has finished the item it holds. So when it
+ * throws, nothing is still writing: a caller that then clears the output directory leaves
+ * no file behind (a parse copy holds plaintext).
+ */
+async function poolStopOnError<T>(items: readonly T[], limit: number, work: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  let failed = false;
+  let firstError: unknown;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (!failed) {
+      const i = next++;
+      if (i >= items.length) return;
+      try {
+        await work(items[i]);
+      } catch (error) {
+        if (!failed) firstError = error;
+        failed = true;
+      }
+    }
+  });
+  await Promise.all(workers);
+  if (failed) throw firstError;
+}
+
+/**
+ * BACKLOG-3892 S5: a read of the kept chain with no sync (the "Get older texts" backfill).
+ * Holds the phone's lock while it copies; a sync that starts stops it at the next file.
+ */
+export interface BackupReadSession {
+  udid: string;
+  /** Set to 1 when a sync (or the quit) wants the phone: the copy stops at the next file. */
+  readonly stop: Int32Array;
+}
+
+/** Why {@link BackupAtRest.beginRead} cannot read the kept chain. */
+export type BackupReadRefusalReason = "busy" | "missing" | "apple-encrypted" | "key-unavailable";
+
+export type BackupReadStart =
+  | { ok: true; session: BackupReadSession }
+  | { ok: false; reason: BackupReadRefusalReason };
+
+/** The stop of a read (BACKLOG-3892 S5): a sync or the quit wants the phone. Internal; never shown. */
+export const BACKUP_READ_STOPPED = "Reading the saved iPhone backup was stopped";
+
 interface ListedFile {
   path: string;
   size: number;
@@ -478,10 +524,12 @@ interface ListedFile {
 // The service
 // ---------------------------------------------------------------------------
 
-type BusyReason = "migrating" | "syncing" | "sealing";
+type BusyReason = "migrating" | "syncing" | "sealing" | "reading";
 
 export class BackupAtRest extends EventEmitter {
   private readonly busy = new Map<string, BusyReason>();
+  /** BACKLOG-3892 S5: the stop flag of each phone's read session (busy = "reading"). */
+  private readonly readers = new Map<string, Int32Array>();
   /** The last progress each phone's pass reported (cleared when its lock is released). */
   private readonly lastProgress = new Map<string, BackupAtRestProgress>();
   private readonly log: LogFn;
@@ -1373,6 +1421,49 @@ export class BackupAtRest extends EventEmitter {
   // -------------------------------------------------------------------------
 
   /**
+   * BACKLOG-3892 S5: claim the phone to READ its kept chain (no sync, no device). Nothing
+   * is unsealed and the marker is never written: {@link buildParseCopy} decrypts what it
+   * reads straight into a parse copy. Refused while anything else holds the phone (a
+   * sync, a seal pass, a launch migration, another read). Every `ok` start must be ended
+   * with {@link endRead}.
+   */
+  async beginRead(udid: string): Promise<BackupReadStart> {
+    const chain = this.chainDir(udid);
+    if (this.busy.has(udid)) return { ok: false, reason: "busy" };
+    // Claimed in the same tick as the check (see beginSync).
+    this.busy.set(udid, "reading");
+    const stop = new Int32Array(new SharedArrayBuffer(4));
+    this.readers.set(udid, stop);
+    let handedOut = false;
+    try {
+      if (!(await exists(chain)) || !(await exists(path.join(chain, "Manifest.db")))) {
+        return { ok: false, reason: "missing" };
+      }
+      if (await isAppleEncryptedChain(chain, this.readPlist)) return { ok: false, reason: "apple-encrypted" };
+      try {
+        await this.deps.ensureKey();
+      } catch {
+        return { ok: false, reason: "key-unavailable" };
+      }
+      handedOut = true;
+      return { ok: true, session: { udid, stop } };
+    } finally {
+      if (!handedOut) this.endReadFor(udid, stop);
+    }
+  }
+
+  /** End a {@link beginRead} session. Idempotent; never throws. */
+  endRead(session: BackupReadSession): void {
+    this.endReadFor(session.udid, session.stop);
+  }
+
+  private endReadFor(udid: string, stop: Int32Array): void {
+    if (this.readers.get(udid) !== stop) return;
+    this.readers.delete(udid);
+    if (this.busy.get(udid) === "reading") this.release(udid);
+  }
+
+  /**
    * Called by the sync BEFORE `idevicebackup2` runs. Refuses (throws
    * {@link BackupAtRestRefusal}) when the backup is being migrated or sealed, when the
    * data key cannot be opened (nothing would protect the new files), when there is not
@@ -1402,6 +1493,19 @@ export class BackupAtRest extends EventEmitter {
     // The wait is NOT bounded: a pass stops within one file, and a sync must never fail
     // because a seal is running (founder decision 2026-10-09). The line repeats while it
     // waits, and the user's Cancel ends the wait as a cancel, not a failure.
+    // BACKLOG-3892 S5: a backfill reading the kept chain gives way to a sync at once: it
+    // stops at the next file and releases. Not a background pass (pausedForSync is not
+    // set), so a sync refused afterwards never "resumes" anything.
+    while (this.readers.has(udid)) {
+      if (!this.busy.has(udid)) {
+        this.readers.delete(udid);
+        break;
+      }
+      Atomics.store(this.readers.get(udid)!, 0, 1);
+      opts.onProgress?.({ udid, phase: "pausing", done: 0, total: 0 });
+      await this.waitForRelease(udid, this.deps.pauseWaitMs ?? PAUSE_REPORT_INTERVAL_MS);
+      if (opts.signal?.aborted) throw new BackupAtRestRefusal("cancelled", "Sync cancelled by user");
+    }
     let pausedOne = false;
     while (this.requestPause(udid)) {
       if (!this.busy.has(udid)) {
@@ -1796,6 +1900,9 @@ export class BackupAtRest extends EventEmitter {
    * (the quit is not deferred).
    */
   sealIndexForQuit(boundMs: number = QUIT_SEAL_BOUND_MS): Promise<void> | null {
+    // BACKLOG-3892 S5: a backfill read stops too, even when it is the only work (a
+    // synchronous flag: its copy stops at the next file; the quit is not deferred for it).
+    for (const flag of this.readers.values()) Atomics.store(flag, 0, 1);
     const udids = new Set<string>([...this.indexUnsealed, ...this.pausable.keys()]);
     if (udids.size === 0) return null;
     const work = (async () => {
@@ -2084,6 +2191,12 @@ export class BackupAtRest extends EventEmitter {
   async buildParseCopy(
     udid: string,
     outDir: string,
+    /**
+     * BACKLOG-3892 S5 (backfill): `only` = copy just these fileIDs (lowercase); `stop` =
+     * a read session's flag, checked before every file (throws `cancelled`). Absent = the
+     * sync's copy, unchanged.
+     */
+    opts: { only?: ReadonlySet<string>; stop?: Int32Array } = {},
   ): Promise<{ copied: number; missing: number; unreadable: number }> {
     const chain = this.chainDir(udid);
     const files = this.deps.files();
@@ -2104,8 +2217,13 @@ export class BackupAtRest extends EventEmitter {
     let oldPlaintext = 0;
     try {
       await files.decryptToFile(path.join(chain, "Manifest.db"), manifestCopy);
-      const rows = selectReadFileRows(manifestCopy);
-      await pool(rows, this.concurrency, async (row) => {
+      const all = selectReadFileRows(manifestCopy);
+      const only = opts.only;
+      const rows = only ? all.filter((row) => only.has(String(row.fileID).toLowerCase())) : all;
+      await poolStopOnError(rows, this.concurrency, async (row) => {
+        if (opts.stop && Atomics.load(opts.stop, 0) === 1) {
+          throw new BackupAtRestRefusal("cancelled", BACKUP_READ_STOPPED);
+        }
         const fileId = String(row.fileID).toLowerCase();
         if (!FILE_ID_PATTERN.test(fileId)) {
           missing++;

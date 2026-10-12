@@ -2,6 +2,7 @@
  * WindowApi Platform sub-interfaces
  * Device detection, backup, drivers, and sync (primarily Windows)
  */
+import type { BackfillAvailability, BackfillProgress, BackfillResult } from "../iphoneBackfill";
 
 /**
  * BACKLOG-2907: what the host knows about a prior backup for this device.
@@ -284,4 +285,9 @@ export interface WindowApiSync {
   onComplete: (callback: (result: unknown) => void) => () => void;
   onWaitingForPasscode: (callback: () => void) => () => void;
   onPasscodeEntered: (callback: () => void) => () => void;
+  /** BACKLOG-3892 S5: "Get older texts" from the iPhone backup kept on this computer. */
+  backfillAvailability?: (transactionId: string) => Promise<BackfillAvailability>;
+  backfillOlder?: (transactionId: string) => Promise<BackfillResult>;
+  cancelBackfill?: () => Promise<{ success: boolean }>;
+  onBackfillProgress?: (callback: (progress: BackfillProgress) => void) => () => void;
 }
