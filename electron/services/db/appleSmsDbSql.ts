@@ -87,6 +87,14 @@ export const CHAT_LAST_MESSAGE_DATE_SQL = `
           `;
 
 /**
+ * BACKLOG-3892 W3b: the oldest dated text on the phone (NULL / <= 0 = undated, skipped).
+ * Mixed units (seconds before iOS 11, nanoseconds after) sort with every seconds row
+ * below every nanosecond row, and a seconds row is from an older iOS, so MIN is the
+ * oldest either way; appleDateToMs converts it.
+ */
+export const OLDEST_MESSAGE_DATE_SQL = `SELECT MIN(date) AS oldest FROM message WHERE date > 0`;
+
+/**
  * The handles participating in a chat.
  * 
  * `DISTINCT` because the join table can carry the same handle more than once for

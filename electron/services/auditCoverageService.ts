@@ -48,7 +48,7 @@ export {
 } from "./sourceCoverageFloors";
 import type { SourceFloorRow } from "./db/wizardMessageScansDb";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
-import { getCurrentIphoneCoverage, getIphoneDealCoverage, type IphoneDeviceCoverage } from "./iphoneCoverageService";
+import { getIphoneDealCoverage, getIphoneUserCoverage, type IphoneDealCoverage } from "./iphoneCoverageService";
 // BACKLOG-2562: the ONE definition of "is this deal live?" (see the call site).
 import { isLiveTransactionStatus } from "./transactionEligibility";
 import {
@@ -141,10 +141,13 @@ export async function getSourceCoverageAsync(userId: string): Promise<SourceCove
   }
 }
 
-/** The current phone's row; a read failure is "unknown" (null), never covered. */
-function readCurrentIphone(userId: string): IphoneDeviceCoverage | null {
+/**
+ * The user's iPhone coverage (current phone joined with earlier phones, capped at each
+ * phone's oldest text — BACKLOG-3892 W3/W3b); a read failure is "unknown" (null).
+ */
+function readCurrentIphone(userId: string): IphoneDealCoverage | null {
   try {
-    return getCurrentIphoneCoverage(userId);
+    return getIphoneUserCoverage(userId);
   } catch (error) {
     logService.warn("[BACKLOG-3892] iPhone coverage read failed (treated as unknown)", "AuditCoverage", {
       error: error instanceof Error ? error.message : String(error),
@@ -186,7 +189,14 @@ function buildSourceCoverage(userId: string, floorRows: readonly SourceFloorRow[
     } else if (source === "iphone") {
       coveredSince = iphone?.coveredSince ?? null;
       approximate = iphone?.approximate ?? false;
-      out.push({ source, coveredSince, lastSyncAt: iphone?.lastSyncAt ?? null, approximate, hasRows });
+      out.push({
+        source,
+        coveredSince,
+        lastSyncAt: iphone?.lastSyncAt ?? null,
+        approximate,
+        hasRows,
+        ...(iphone ? { who: null, cappedByPhone: iphone.cappedByPhone, previousPhone: iphone.previousPhone } : {}),
+      });
       continue;
     } else {
       coveredSince = rec?.coveredSince ?? f?.floor ?? null;
@@ -224,7 +234,7 @@ export async function getTransactionSourceCoverageAsync(userId: string, transact
 function withIphoneDealCoverage(coverage: SourceCoverage[], userId: string, transactionId: string): SourceCoverage[] {
   const ip = coverage.find((c) => c.source === "iphone");
   if (!ip) return coverage;
-  let deal: IphoneDeviceCoverage | null;
+  let deal: IphoneDealCoverage | null;
   try {
     deal = getIphoneDealCoverage(userId, transactionId);
   } catch (error) {
@@ -234,16 +244,35 @@ function withIphoneDealCoverage(coverage: SourceCoverage[], userId: string, tran
     deal = null;
   }
   const coveredSince = deal?.coveredSince ?? null;
-  return coverage.map((c) => (c === ip ? { ...c, coveredSince, approximate: deal?.approximate ?? false } : c));
+  return coverage.map((c) =>
+    c === ip
+      ? {
+          ...c,
+          coveredSince,
+          approximate: deal?.approximate ?? false,
+          lastSyncAt: deal?.lastSyncAt ?? c.lastSyncAt,
+          who: deal?.who ?? null,
+          cappedByPhone: deal?.cappedByPhone ?? null,
+          previousPhone: deal?.previousPhone ?? false,
+        }
+      : c,
+  );
 }
 
 /**
  * BACKLOG-3892 S2 (SR D3b): whether one deal's iPhone texts reach its audit start.
  * Unknown (no phone row, or a read failure) is a gap, never covered.
+ * BACKLOG-3892 W: also the start gap itself (with the person, W4) and the end gap (W1).
  */
-export function iphoneDealGap(userId: string, transactionId: string, auditStartISO: string | null): { gap: boolean; coveredSince: string | null } {
+export function iphoneDealGap(
+  userId: string,
+  transactionId: string,
+  auditStartISO: string | null,
+  auditEndISO: string | null = null,
+  nowMs: number = Date.now(),
+): { gap: boolean; coveredSince: string | null; startGap?: SourceCoverageGap; endGap?: SourceCoverageGap } {
   if (!auditStartISO) return { gap: false, coveredSince: null };
-  let deal: IphoneDeviceCoverage | null = null;
+  let deal: IphoneDealCoverage | null = null;
   try {
     deal = getIphoneDealCoverage(userId, transactionId);
   } catch (error) {
@@ -253,11 +282,24 @@ export function iphoneDealGap(userId: string, transactionId: string, auditStartI
   }
   const coveredSince = deal?.coveredSince ?? null;
   const gaps = sourceCoverageGaps(
-    [{ source: "iphone", coveredSince, lastSyncAt: deal?.lastSyncAt ?? null, approximate: deal?.approximate ?? false, hasRows: true }],
+    [{
+      source: "iphone",
+      coveredSince,
+      lastSyncAt: deal?.lastSyncAt ?? null,
+      approximate: deal?.approximate ?? false,
+      hasRows: true,
+      who: deal?.who ?? null,
+      cappedByPhone: deal?.cappedByPhone ?? null,
+      previousPhone: deal?.previousPhone ?? false,
+    }],
     auditStartISO,
     "iphone",
+    auditEndISO,
+    nowMs,
   );
-  return { gap: gaps.length > 0, coveredSince };
+  const startGap = gaps.find((g) => g.kind !== "newer");
+  const endGap = gaps.find((g) => g.kind === "newer");
+  return { gap: !!startGap, coveredSince, ...(startGap ? { startGap } : {}), ...(endGap ? { endGap } : {}) };
 }
 
 function withLinkedChatCoverage(coverage: SourceCoverage[], userId: string, transactionId: string): SourceCoverage[] {
@@ -289,35 +331,64 @@ function withLinkedChatCoverage(coverage: SourceCoverage[], userId: string, tran
   }
 }
 
+/** BACKLOG-3892 W1: the sources with an end-of-sync marker (the companion has none). */
+const END_CHECKED: ReadonlySet<TextSource> = new Set<TextSource>(["iphone", "mac", "google_messages"]);
+
 /**
- * Which sources do not reach back to the audit start — only the CHOSEN source
- * and sources the user has texts from (SR). A source with no full read yet is
- * "never"; one whose floor is more than a day after the start is "later".
+ * Which sources do not reach back to the audit start. BACKLOG-3892 W2: only the CHOSEN
+ * source when there is one (a source the user switched away from is not theirs to
+ * sync); only when no source is chosen, the sources the user has texts from (SR).
+ * A source with no full read yet is "never"; one whose floor is more than a day after
+ * the start is "later".
+ *
+ * BACKLOG-3892 W1 (founder 976520e8, f240c29a): the END check — a source whose last
+ * sync is more than a day before min(audit end, now) gets a second gap, "newer"
+ * (newer texts may be missing). No end check for a source with no start coverage (it
+ * is "never" already), with no sync marker (unknown), or without one (the companion).
  */
 export function sourceCoverageGaps(
   coverage: readonly SourceCoverage[],
   auditStartISO: string | null,
   chosen: TextSource | null,
+  auditEndISO: string | null = null,
+  nowMs: number = Date.now(),
 ): SourceCoverageGap[] {
   if (!auditStartISO) return [];
   const start = Date.parse(auditStartISO);
   if (!Number.isFinite(start)) return [];
+  const endMs = auditEndISO ? Date.parse(auditEndISO) : NaN;
+  const requiredEnd = Number.isFinite(endMs) ? Math.min(endMs, nowMs) : nowMs;
   const bySource = new Map(coverage.map((c) => [c.source, c]));
-  const relevant = new Set<TextSource>(coverage.filter((c) => c.hasRows).map((c) => c.source));
-  if (chosen) relevant.add(chosen);
+  const relevant = chosen
+    ? new Set<TextSource>([chosen])
+    : new Set<TextSource>(coverage.filter((c) => c.hasRows).map((c) => c.source));
   const gaps: SourceCoverageGap[] = [];
   for (const source of TEXT_SOURCES) {
     if (!relevant.has(source)) continue;
     const c = bySource.get(source);
+    const person = source === "iphone" && c
+      ? { who: c.who ?? null, cappedByPhone: c.cappedByPhone ?? null, previousPhone: c.previousPhone ?? false }
+      : {};
     if (!c || !c.coveredSince) {
-      gaps.push({ source, coveredSince: null, approximate: c?.approximate ?? false, kind: "never" });
+      gaps.push({ source, coveredSince: null, approximate: c?.approximate ?? false, kind: "never", ...person });
       continue;
     }
     const since = Date.parse(c.coveredSince);
     if (Number.isFinite(since) && since - start > COVERAGE_TOLERANCE_MS) {
-      gaps.push({ source, coveredSince: c.coveredSince, approximate: c.approximate, kind: "later" });
+      gaps.push({ source, coveredSince: c.coveredSince, approximate: c.approximate, kind: "later", ...person });
     } else if ((c.incompleteChats ?? 0) > 0) {
       gaps.push({ source, coveredSince: c.coveredSince, approximate: c.approximate, kind: "incomplete", incompleteChats: c.incompleteChats });
+    }
+    const last = c.lastSyncAt ? Date.parse(c.lastSyncAt) : NaN;
+    if (END_CHECKED.has(source) && Number.isFinite(last) && last < requiredEnd - COVERAGE_TOLERANCE_MS) {
+      gaps.push({
+        source,
+        coveredSince: c.coveredSince,
+        approximate: c.approximate,
+        kind: "newer",
+        lastSyncAt: c.lastSyncAt,
+        requiredEndISO: new Date(requiredEnd).toISOString(),
+      });
     }
   }
   return gaps;
@@ -345,8 +416,13 @@ export function getTransactionTextCoverage(
       [transactionId, userId],
     );
     if (!txn || !isLiveTransactionStatus(txn.status)) return { success: true, auditStartISO: null, gaps: [] };
-    const auditStartISO = computeTransactionDateRange(txn).start.toISOString();
-    return { success: true, auditStartISO, gaps: sourceCoverageGaps(getTransactionSourceCoverage(userId, transactionId), auditStartISO, chosen) };
+    const range = computeTransactionDateRange(txn);
+    const auditStartISO = range.start.toISOString();
+    return {
+      success: true,
+      auditStartISO,
+      gaps: sourceCoverageGaps(getTransactionSourceCoverage(userId, transactionId), auditStartISO, chosen, range.end.toISOString()),
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { success: false, auditStartISO: null, gaps: [], error: message };
@@ -448,6 +524,8 @@ export async function getAuditCoverage(
   // BACKLOG-3892 S2 (SR D3a): the user's import source, so a chosen source with no
   // texts yet is still checked (as get-text-coverage does).
   chosen: TextSource | null = null,
+  // BACKLOG-3892 W1: the proposed audit end (null = open: today), for the end check.
+  proposedEndISO: string | null = null,
 ): Promise<AuditCoverageResult> {
   try {
     const messagesFloorISO = getMessagesFloorISO(userId);
@@ -470,7 +548,17 @@ export async function getAuditCoverage(
       messagesImporterAvailable,
       // Unknown is never reported as "no gaps": pending, and no sourceGaps at all.
       ...(sourceCoverage
-        ? { sourceGaps: sourceCoverageGaps(sourceCoverage, proposedStartISO, chosen) }
+        ? {
+            sourceGaps: sourceCoverageGaps(
+              sourceCoverage,
+              proposedStartISO,
+              chosen,
+              // The End Date as the export reads it (local end of that day); open = today.
+              proposedEndISO
+                ? computeTransactionDateRange({ started_at: proposedStartISO, closed_at: proposedEndISO }).end.toISOString()
+                : null,
+            ),
+          }
         : { sourceCoveragePending: true }),
     };
   } catch (error) {
@@ -548,9 +636,9 @@ export async function checkExportCompleteness(
       };
     }
 
-    const auditStartISO = txn
-      ? computeTransactionDateRange(txn).start.toISOString()
-      : null;
+    const range = txn ? computeTransactionDateRange(txn) : null;
+    const auditStartISO = range ? range.start.toISOString() : null;
+    const auditEndISO = range ? range.end.toISOString() : null;
 
     // Raw gap: the audit start predates the imported floor (floor non-null).
     const needsMessagesImport = isBeforeFloor(auditStartISO, messagesFloorISO);
@@ -576,11 +664,20 @@ export async function checkExportCompleteness(
     // global oldest-text floor says (after S1 it is no longer how far the phone was
     // read). Only "Sync iPhone" can clear an iPhone gap (the next sync reads the
     // deal's chats back to its start); the Mac "Update now" cannot.
-    const iphone = chosen === "iphone" ? iphoneDealGap(userId, transactionId, auditStartISO) : null;
+    const iphone = chosen === "iphone" ? iphoneDealGap(userId, transactionId, auditStartISO, auditEndISO) : null;
     const complete = iphone
       ? !expansionStale && !iphone.gap
       : !expansionStale && (!needsMessagesImport || importReachesAuditStart);
     const txSourceCoverage = await getTransactionSourceCoverageAsync(userId, transactionId);
+    // BACKLOG-3892 W2: the chosen source only (the hasRows set when none is chosen).
+    const sourceGaps = txSourceCoverage
+      ? sourceCoverageGaps(txSourceCoverage, auditStartISO, chosen, auditEndISO)
+      : null;
+    // BACKLOG-3892 W: the chosen source's own start and end lines. iPhone: from the
+    // deal's iPhone coverage (synchronous, never pending); others: from sourceGaps.
+    const ownGaps = chosen && chosen !== "iphone" ? (sourceGaps ?? []).filter((g) => g.source === chosen) : [];
+    const textStartGap = iphone ? iphone.startGap : ownGaps.find((g) => g.kind !== "newer");
+    const textEndGap = iphone ? iphone.endGap : ownGaps.find((g) => g.kind === "newer");
 
     return {
       success: true,
@@ -591,11 +688,12 @@ export async function checkExportCompleteness(
       expansionStale,
       messagesImporterAvailable,
       ...(iphone ? { iphoneGap: iphone.gap, iphoneCoveredSince: iphone.coveredSince } : {}),
+      ...(textStartGap ? { textStartGap } : {}),
+      // BACKLOG-3892 W1: opens the export gate; never changes `complete`.
+      ...(textEndGap ? { textEndGap } : {}),
       // BACKLOG-3663: informational only — never changes `complete`.
       // BACKLOG-3837: read off main; unknown is pending, never "no gaps".
-      ...(txSourceCoverage
-        ? { sourceGaps: sourceCoverageGaps(txSourceCoverage, auditStartISO, null) }
-        : { sourceCoveragePending: true }),
+      ...(sourceGaps ? { sourceGaps } : { sourceCoveragePending: true }),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

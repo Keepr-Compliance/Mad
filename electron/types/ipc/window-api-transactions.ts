@@ -1276,6 +1276,8 @@ export interface WindowApiTransactions {
     proposedStartISO: string,
     /** BACKLOG-3892 S2: the user's import source (TextSource), checked even with no texts. */
     chosenSource?: string | null,
+    /** BACKLOG-3892 W1: the proposed audit end (the End Date as entered); null/absent = open (today). */
+    proposedEndISO?: string | null,
   ) => Promise<AuditCoverageResult>;
 
   /**

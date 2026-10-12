@@ -810,13 +810,16 @@ export function registerTransactionCrudHandlers(
       userId: string,
       proposedStartISO: string,
       chosenSource?: string | null,
+      proposedEndISO?: string | null,
     ): Promise<AuditCoverageResult> => {
       const validatedUserId = validateUserId(userId);
       if (!validatedUserId) {
         throw new ValidationError("User ID validation failed", "userId");
       }
       // BACKLOG-3892 S2: the user's import source (an unknown value is ignored).
-      return getAuditCoverage(validatedUserId as string, proposedStartISO, toTextSource(chosenSource));
+      // BACKLOG-3892 W1: the proposed end, for the end check (a non-string is ignored).
+      const end = typeof proposedEndISO === "string" && proposedEndISO.length > 0 ? proposedEndISO : null;
+      return getAuditCoverage(validatedUserId as string, proposedStartISO, toTextSource(chosenSource), end);
     }, { module: "Transactions" }),
   );
 

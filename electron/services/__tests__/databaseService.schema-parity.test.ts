@@ -646,6 +646,22 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
       "databases get the tables on the next start (the BACKLOG-3884 index precedent). Additive only: no existing table changes.",
     ref: "BACKLOG-3892",
   },
+  {
+    key: "TABLE:iphone_device_span",
+    what: "New table iphone_device_span.",
+    why:
+      "BACKLOG-3892 W3b: the oldest text each phone holds (sms.db MIN date), recorded at sync, so a new phone's coverage never starts before " +
+      "its own oldest text. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch (the S2 precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_iphone_device_span_1",
+    what: "SQLite's automatic index for iphone_device_span's primary key.",
+    why:
+      "BACKLOG-3892 W3b: the oldest text each phone holds (sms.db MIN date), recorded at sync, so a new phone's coverage never starts before " +
+      "its own oldest text. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch (the S2 precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
 ];
 
 const ALLOWED_KEYS = new Set(ALLOWED_EVOLUTION.map((d) => d.key));

@@ -44,6 +44,7 @@ import type { MessageAttachmentMeta, TextAttachmentDataResult } from "../types/i
 
 import { sendToMainWindow } from "../windowRegistry";
 import { handleBusy } from "../utils/busyIpc";
+import { recordMacImportRun } from "../services/macImportMarker";
 
 /**
  * Attachment info with base64 data for IPC transfer (TASK-1012)
@@ -253,6 +254,8 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
         );
 
         if (result.success) {
+          // BACKLOG-3892 W1: when this completed run started = Mac's "last synced".
+          recordMacImportRun(validUserId, importStartTime ?? Date.now());
           Sentry.addBreadcrumb({
             category: 'sync',
             message: 'macOS Messages import completed',
