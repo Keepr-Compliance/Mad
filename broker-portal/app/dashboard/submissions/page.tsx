@@ -6,6 +6,7 @@ import { SubmissionListClient } from '@/components/submission/SubmissionListClie
 import { EmptySubmissions } from '@/components/ui/EmptyState';
 import { SubmissionPagination } from '@/components/submission/SubmissionPagination';
 import { SubmissionRow } from '@/components/submission/SubmissionRow';
+import { SubmissionCard } from '@/components/submission/SubmissionCard';
 import { getDataClient, getTargetOrganizationId } from '@/lib/impersonation-guards';
 import { getAllowedOrgIds } from '@/lib/submissions/allowedOrgs';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -51,11 +52,6 @@ interface Submission {
   attachment_count: number;
   created_at: string;
   reviewed_at: string | null;
-}
-
-function capitalize(text: string | null | undefined): string {
-  const t = (text ?? '').trim();
-  return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
 interface PageProps {
@@ -317,10 +313,19 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
           <EmptySubmissions filtered={hasActiveFilters(filters)} />
         ) : (
           <>
-            {/* BACKLOG-3798: below md each row renders as a card (max-md: only;
-                one DOM, so desktop and the row-click tests see the same table). */}
-            <table className="min-w-full divide-y divide-gray-200 max-md:block">
-              <thead className="bg-gray-50 max-md:hidden">
+            {/* BACKLOG-3798/3904: below md the list is the shared SubmissionCard (also used by the
+                dashboard's Recent Submissions); the table is the md+ view. */}
+            <div className="flex flex-col gap-2 md:hidden" data-slot="submission-cards">
+              {displaySubmissions.map((submission) => (
+                <SubmissionCard
+                  key={submission.id}
+                  submission={submission}
+                  agent={submission.submitted_by ? agentLabels.get(submission.submitted_by) : undefined}
+                />
+              ))}
+            </div>
+            <table className="min-w-full divide-y divide-gray-200 max-md:hidden">
+              <thead className="bg-gray-50">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Property
@@ -339,7 +344,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200 max-md:flex max-md:flex-col max-md:gap-2 max-md:divide-y-0 max-md:bg-transparent max-md:p-0">
+              <tbody className="bg-white divide-y divide-gray-200">
                 {displaySubmissions.map((submission) => {
                   const href = `/dashboard/submissions/${submission.id}`;
                   const { street, cityLine } = formatUsAddress(
@@ -347,17 +352,16 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                     submission.property_city,
                     submission.property_state
                   );
-                  const agent = submission.submitted_by ? agentLabels.get(submission.submitted_by) : undefined;
                   return (
                   <SubmissionRow
                     key={submission.id}
                     href={href}
-                    className="hover:bg-gray-50 transition-colors cursor-pointer group max-md:grid max-md:grid-cols-[minmax(0,1fr)_auto] max-md:grid-rows-[auto_auto_1fr_auto] max-md:gap-x-3 max-md:rounded-[10px] max-md:border max-md:border-gray-200 max-md:bg-white max-md:p-3"
+                    className="hover:bg-gray-50 transition-colors cursor-pointer group"
                   >
                     {/* The street is the row's keyboard stop and accessible name (the row itself is
                         a <tr>, which cannot be a link); the row click covers pointer users. */}
-                    <td className="px-6 py-4 whitespace-nowrap max-md:p-0 max-md:whitespace-normal max-md:col-start-1 max-md:row-start-1 max-md:row-span-3 max-md:min-w-0">
-                      <div className="text-sm font-medium text-gray-900 max-md:text-[15px] max-md:font-semibold max-md:leading-[1.3]">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm font-medium text-gray-900">
                         <Link
                           href={href}
                           className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1"
@@ -365,17 +369,17 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                           {street}
                         </Link>
                       </div>
-                      {cityLine && <div className="text-sm text-gray-500 max-md:mt-[3px] max-md:text-[13px]">{cityLine}</div>}
+                      {cityLine && <div className="text-sm text-gray-500">{cityLine}</div>}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap max-md:hidden">
+                    <td className="px-6 py-4 whitespace-nowrap">
                       <span className="capitalize text-sm text-gray-700">
                         {submission.transaction_type}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-md:p-0 max-md:col-start-2 max-md:row-start-2 max-md:justify-self-end max-md:mt-[3px] max-md:text-[13px] max-md:font-semibold max-md:text-gray-900">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatCurrency(submission.sale_price || submission.listing_price)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap max-md:p-0 max-md:col-start-2 max-md:row-start-1 max-md:justify-self-end max-md:self-start">
+                    <td className="px-6 py-4 whitespace-nowrap">
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(
                           submission.status
@@ -384,14 +388,8 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                         {formatStatus(submission.status)}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-md:hidden">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {formatRelativeTime(submission.created_at)}
-                    </td>
-                    {/* Phone only: agent · type · date on one line (the desktop columns carry type and date). */}
-                    <td className="hidden max-md:block max-md:col-start-1 max-md:row-start-4 max-md:mt-[3px] max-md:min-w-0 max-md:truncate max-md:text-xs max-md:text-gray-500">
-                      {[agent, capitalize(submission.transaction_type), formatRelativeTime(submission.created_at)]
-                        .filter(Boolean)
-                        .join(' · ')}
                     </td>
                   </SubmissionRow>
                   );

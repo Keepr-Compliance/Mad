@@ -112,6 +112,7 @@ export default function UserListClient({
 
   const hasFilters =
     searchQuery !== '' || roleFilter !== 'all' || statusFilter !== 'all';
+  const hasChipFilters = roleFilter !== 'all' || statusFilter !== 'all';
   const canManage =
     !readOnly && (currentUserRole === 'admin' || currentUserRole === 'it_admin');
 
@@ -212,9 +213,8 @@ export default function UserListClient({
         shown={filteredMembers.length}
         total={initialMembers.length}
         countFor={countFor}
-        hasFilters={hasFilters}
+        hasFilters={hasChipFilters}
         onClearAll={() => {
-          setSearchQuery('');
           setRoleFilter('all');
           setStatusFilter('all');
         }}

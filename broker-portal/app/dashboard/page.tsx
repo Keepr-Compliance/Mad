@@ -22,6 +22,8 @@ import { DashboardStatCards } from '@/components/dashboard/DashboardStatCards';
 import { buildStatCards, type StatCardData } from '@/lib/dashboard/statCards';
 import { getAllowedOrgIds } from '@/lib/submissions/allowedOrgs';
 import { LINK_COLUMNS, readDealHeads } from '@/lib/submissions/dealList';
+import { resolveUserIdentities } from '@/lib/submissions/names';
+import { SubmissionCard } from '@/components/submission/SubmissionCard';
 
 /**
  * BACKLOG-3904: the stat cards count deals - the head of every resubmission
@@ -114,6 +116,11 @@ export default async function DashboardPage() {
     getStatCards(client, orgId),
     getRecentSubmissions(client, orgId),
   ]);
+  // The phone cards name the agent, as the Submissions list does. A support
+  // session looks up no names (users is ID-scoped to the target there).
+  const agentNames = impersonation
+    ? null
+    : await resolveUserIdentities(client, recentSubmissions.map((s) => s.submitted_by));
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -132,8 +139,16 @@ export default async function DashboardPage() {
         />
 
         {/* Recent Submissions */}
-        <Card padding="none">
+        <Card
+          padding="none"
+          className={
+            recentSubmissions.length > 0
+              ? 'max-md:rounded-none max-md:border-0 max-md:bg-transparent max-md:shadow-none'
+              : undefined
+          }
+        >
           <CardHeader
+            className="max-md:px-0 max-md:pt-0 max-md:pb-3 max-md:border-b-0"
             action={
               <Link
                 href="/dashboard/submissions"
@@ -153,7 +168,17 @@ export default async function DashboardPage() {
               title="No submissions yet"
             />
           ) : (
-            <ul className="divide-y divide-gray-200">
+            <>
+            <div className="flex flex-col gap-2 md:hidden" data-slot="submission-cards">
+              {recentSubmissions.map((submission) => (
+                <SubmissionCard
+                  key={submission.id}
+                  submission={submission}
+                  agent={submission.submitted_by ? agentNames?.get(submission.submitted_by)?.name : undefined}
+                />
+              ))}
+            </div>
+            <ul className="divide-y divide-gray-200 max-md:hidden">
               {recentSubmissions.map((submission) => (
                 <li key={submission.id}>
                   <Link
@@ -186,6 +211,7 @@ export default async function DashboardPage() {
                 </li>
               ))}
             </ul>
+            </>
           )}
         </Card>
       </div>

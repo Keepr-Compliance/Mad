@@ -11,7 +11,7 @@
  * The street is the row's link (its one keyboard stop and accessible name).
  */
 
-import { render, fireEvent, screen } from '@testing-library/react';
+import { render, fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 import React from 'react';
@@ -100,7 +100,7 @@ function cityLineOf(address: string): HTMLElement {
 }
 
 function rowOf(address: string): HTMLTableRowElement {
-  return screen.getByText(address).closest('tr') as HTMLTableRowElement;
+  return within(document.querySelector('table') as HTMLElement).getByText(address).closest('tr') as HTMLTableRowElement;
 }
 
 describe('Submissions list: clicking a row opens that submission', () => {

@@ -4,7 +4,7 @@
  * Addresses are invented, in the stored shape "<street>, <city>, <ST> <zip>, USA".
  */
 
-import { render, fireEvent, screen } from '@testing-library/react';
+import { render, fireEvent, screen, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import React from 'react';
 import { FIXTURE_BROKERAGE_ORG_ID, createPostgrestEmulator, type Row } from '../helpers/postgrestEmulator';
@@ -81,7 +81,7 @@ async function renderList() {
   return render(await SubmissionsPage({ searchParams: Promise.resolve({}) }));
 }
 
-const rowOf = (text: string) => screen.getByText(text).closest('tr') as HTMLTableRowElement;
+const rowOf = (text: string) => within(document.querySelector('table') as HTMLElement).getByText(text).closest('tr') as HTMLTableRowElement;
 
 describe('desktop columns', () => {
   it('has no Docs or Review/Actions column, and no msgs/files counts', async () => {
@@ -123,24 +123,39 @@ describe('desktop columns', () => {
   });
 });
 
-describe('phone card', () => {
-  it('puts the status pill over the price in the right column', async () => {
+describe('phone card (the shared SubmissionCard)', () => {
+  const cardOf = (text: string) =>
+    within(document.querySelector('[data-slot=submission-cards]') as HTMLElement).getByText(text).closest('a') as HTMLAnchorElement;
+
+  it('is one link to the submission, with street, city line, status over price, and agent - type - date', async () => {
     await renderList();
-    const cells = Array.from(rowOf('33 Example Rd').querySelectorAll('td'));
-    const status = cells.find((td) => td.textContent === 'Submitted') as HTMLElement;
-    const price = cells.find((td) => /^\$|^—|^-/.test(td.textContent ?? '')) ?? cells[2];
-    expect(status.className).toMatch(/max-md:col-start-2/);
-    expect(status.className).toMatch(/max-md:row-start-1/);
-    expect(price.className).toMatch(/max-md:col-start-2/);
-    expect(price.className).toMatch(/max-md:row-start-2/);
+    const card = cardOf('33 Example Rd');
+    expect(card).toHaveAttribute('href', `/dashboard/submissions/${S1}`);
+    expect(card.textContent).toContain('Fixture City, CA 90000');
+    expect(card.textContent).not.toMatch(/USA/);
+    const cells = Array.from(card.children) as HTMLElement[];
+    const status = cells.find((c) => c.textContent === 'Submitted') as HTMLElement;
+    expect(status.className).toMatch(/col-start-2/);
+    expect(status.className).toMatch(/row-start-1/);
+    const price = cells.find((c) => /^\$|^-/.test(c.textContent ?? '')) as HTMLElement;
+    expect(price.className).toMatch(/col-start-2/);
+    expect(price.className).toMatch(/row-start-2/);
+    const meta = cells[cells.length - 1];
+    expect(meta.textContent).toMatch(/^.+ · .+ · .+$/);
   });
 
-  it('shows "agent · type · date" as one phone-only line, hiding the desktop type and date cells', async () => {
+  it('has a focus ring and applies hover only where a pointer can hover', async () => {
     await renderList();
-    const cells = Array.from(rowOf('33 Example Rd').querySelectorAll('td'));
-    const meta = cells.find((td) => td.className.includes('hidden max-md:block')) as HTMLElement;
-    expect(meta.textContent).toMatch(/^.+ · .+ · .+$/);
-    expect(cells[1].className).toMatch(/max-md:hidden/);
-    expect(cells[4].className).toMatch(/max-md:hidden/);
+    const cls = cardOf('33 Example Rd').className;
+    expect(cls).toMatch(/focus-visible:ring-2/);
+    expect(cls).toContain('[@media(hover:hover)]:hover:bg-gray-50');
+    expect(cls.split(' ')).not.toContain('hover:bg-gray-50');
+  });
+
+  it('renders one card per row, and the cards list is phone only', async () => {
+    await renderList();
+    const list = document.querySelector('[data-slot=submission-cards]') as HTMLElement;
+    expect(list.className.split(' ')).toContain('md:hidden');
+    expect(list.querySelectorAll('[data-slot=submission-card]')).toHaveLength(3);
   });
 });

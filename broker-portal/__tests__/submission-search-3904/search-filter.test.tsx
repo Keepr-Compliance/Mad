@@ -414,10 +414,10 @@ describe('C4 + C7 phone filter sheets (one per filter)', () => {
     expect(Object.fromEntries(url.searchParams)).toEqual({ status: 'submitted', agent: AGENT_A, search: 'road' });
   });
 
-  it('Clear filters drops every filter', async () => {
+  it('Clear filters drops status and agent and keeps the search', async () => {
     await renderList({ status: 'submitted', agent: AGENT_A, search: 'mill' });
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
-    expect(mockPush).toHaveBeenCalledWith('/dashboard/submissions');
+    expect(mockPush).toHaveBeenCalledWith('/dashboard/submissions?search=mill');
   });
 });
 
@@ -510,10 +510,11 @@ describe('phone search X (clear search only)', () => {
     expect(clearFilters()).toBeNull();
   });
 
-  it('a URL with only a search shows the X and the results row with "Clear filters"', async () => {
+  it('a URL with only a search shows the X and the results row, but no "Clear filters"', async () => {
     await renderList({ search: 'mill' });
     expect(clearX()).toBeInTheDocument();
-    expect(clearFilters()).toBeInTheDocument();
+    expect(document.querySelector('[data-slot=phone-results-row]')).not.toBeNull();
+    expect(clearFilters()).toBeNull();
   });
 
   it('"Clear filters" shows for a status or agent filter, with or without search text', async () => {
@@ -647,12 +648,12 @@ describe('phone results row: "Showing X of Y submissions"', () => {
     expect(rowText()).toContain('Showing 2 of 3 submissions');
   });
 
-  it('Clear filters sits in the row and drops status, agent and search', async () => {
+  it('Clear filters sits in the row and drops status and agent, keeping the search', async () => {
     await renderList({ status: 'submitted', agent: AGENT_A, search: 'mill' });
     const btn = screen.getByRole('button', { name: 'Clear filters' });
     expect(btn.closest('[data-slot=phone-results-row]')).not.toBeNull();
     fireEvent.click(btn);
-    expect(mockPush).toHaveBeenCalledWith('/dashboard/submissions');
+    expect(mockPush).toHaveBeenCalledWith('/dashboard/submissions?search=mill');
   });
 });
 
@@ -664,9 +665,9 @@ describe('phone list edges (no wrapper frame below md)', () => {
     for (const c of ['bg-white', 'border', 'shadow-sm', 'rounded-lg', 'overflow-hidden']) expect(frameCls).toContain(c);
     for (const c of ['max-md:border-0', 'max-md:bg-transparent', 'max-md:shadow-none', 'max-md:rounded-none', 'max-md:overflow-visible'])
       expect(frameCls).toContain(c);
-    const tbody = container.querySelector('tbody')!.className.split(' ');
-    expect(tbody).toContain('max-md:p-0');
-    expect(tbody).not.toContain('max-md:p-3');
-    expect(tbody).toContain('max-md:bg-transparent');
+    const cards = container.querySelector('[data-slot=submission-cards]') as HTMLElement;
+    expect(cards.parentElement).toBe(frame);
+    expect(cards.className.split(' ')).toContain('md:hidden');
+    expect(container.querySelector('table')!.className.split(' ')).toContain('max-md:hidden');
   });
 });

@@ -105,7 +105,7 @@ describe('Users phone bar', () => {
     expect(screen.getByRole('button', { name: 'Role: Agent' })).toBeInTheDocument();
   });
 
-  it('Clear filters appears with an active filter or search, and resets all three', () => {
+  it('Clear filters appears with a role or status filter and resets those two, leaving the search text', () => {
     renderList();
     fireEvent.change(phoneSearch(), { target: { value: 'ann' } });
     fireEvent.click(screen.getByRole('button', { name: 'Role: All Roles' }));
@@ -115,16 +115,16 @@ describe('Users phone bar', () => {
     expect(clear.className).toContain('min-h-11');
     expect(phoneRow().className).toContain('h-11');
     fireEvent.click(clear);
-    expect(phoneSearch().value).toBe('');
-    expect(phoneRow()).toHaveTextContent('Showing 4 of 4 users');
-    expect(renderedRows()).toBe(4);
+    expect(phoneSearch().value).toBe('ann');
+    expect(screen.getByRole('button', { name: 'Role: All Roles' })).toBeInTheDocument();
     expect(within(phoneRow()).queryByRole('button', { name: 'Clear filters' })).toBeNull();
   });
 
-  it('search alone also shows Clear filters', () => {
+  it('search alone does not show Clear filters; the row still shows', () => {
     renderList();
     fireEvent.change(phoneSearch(), { target: { value: 'ann' } });
-    expect(within(phoneRow()).getByRole('button', { name: 'Clear filters' })).toBeInTheDocument();
+    expect(within(phoneRow()).queryByRole('button', { name: 'Clear filters' })).toBeNull();
+    expect(phoneRow()).toHaveTextContent(/Showing \d+ of 4 users/);
   });
 
   it('desktop pieces stay: the Card filters, the plain count line, the action bar Invite', () => {

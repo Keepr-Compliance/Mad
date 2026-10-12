@@ -216,6 +216,9 @@ export function SubmissionPhoneFilters({
   // BACKLOG-3904: "Showing X of Y submissions" + Clear filters, only while
   // a filter or the search is applied (the URL's, not the half-typed text).
   const filtered = hasActiveFilters(filters);
+  // Clear filters resets the two non-search filters only; the X in the search
+  // field clears the text, so typing alone never offers it.
+  const hasChipFilters = filters.status !== 'all' || filters.agent !== null;
 
   return (
     <PhoneFilterBar
@@ -251,9 +254,11 @@ export function SubmissionPhoneFilters({
             total={scopeTotal}
             noun="submission"
             action={
-              <PhoneClearFilters
-                onClick={() => router.push(buildListUrl({ status: 'all', agent: null, search: '' }))}
-              />
+              hasChipFilters ? (
+                <PhoneClearFilters
+                  onClick={() => router.push(buildListUrl({ status: 'all', agent: null, search: filters.search }))}
+                />
+              ) : null
             }
           />
         ) : null

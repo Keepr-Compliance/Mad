@@ -142,7 +142,7 @@ describe('broker Submissions list: one row per deal', () => {
 
   it('D1b: the row shows the latest version\'s status', async () => {
     const { container } = await renderList();
-    const row = container.querySelector(`a[href="/dashboard/submissions/${V2}"]`)!.closest('tr')!;
+    const row = container.querySelector(`table a[href="/dashboard/submissions/${V2}"]`)!.closest('tr')!;
     expect(row).toHaveTextContent('Needs Changes');
     expect(row).not.toHaveTextContent('Rejected');
   });
