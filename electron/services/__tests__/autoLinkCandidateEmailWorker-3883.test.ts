@@ -11,10 +11,11 @@
  * same statement inputs, and the main connection never runs it; `start_failed` reads on
  * the main thread; any other worker failure is a failed run, not a main-thread rescan.
  *
- * Part B — stall, #2915 style: a large on-disk store, the dedicated worker played by a
- * REAL worker thread on its own connection, monitorEventLoopDelay on the main thread.
- * The bound is relative to the same run's main-thread cost of the two candidate reads,
- * so it holds on a slow CI runner. Size: KEEPR_3883_TEXTS / KEEPR_3883_EMAILS.
+ * Part B — a large on-disk store, the dedicated worker played by a REAL worker thread
+ * on its own connection. Asserted deterministically (BACKLOG-3915): neither candidate
+ * statement is prepared on the main connection, and the email loops yield at their
+ * sites. monitorEventLoopDelay's max is printed for information only — a tail max on a
+ * shared runner is not a pass/fail signal. Size: KEEPR_3883_TEXTS / KEEPR_3883_EMAILS.
  *
  * Run: ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js --runTestsByPath <this file>
  * Reserved 555-01xx numbers, .test addresses, invented ids.
@@ -35,7 +36,7 @@ jest.mock("../logService", () => {
 import { setDb } from "../db/core/dbConnection";
 import * as contactWorkerPool from "../../workers/contactWorkerPool";
 import { candidateEmailsSql, candidateMessageThreadsSql } from "../db/autoLinkSql";
-import { autoLinkCommunicationsForContact, readCandidateEmails } from "../autoLinkService";
+import { AUTO_LINK_EMAILS_PER_TURN, autoLinkCommunicationsForContact, readCandidateEmails } from "../autoLinkService";
 
 const DRIVER = path.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers");
 function loadDriver(): (new (file: string, opts?: object) => DatabaseType) | null {
@@ -203,14 +204,33 @@ maybe("BACKLOG-3883 — the candidate-email read runs off the main thread", () =
       return h.max / 1e6;
     }
 
-    it("one contact's auto-link: correct result, and no main-thread block near the reads' own cost", async () => {
-      // The reads' cost on the main thread, measured in this run: the bound scales with the runner.
-      const range = ["2024-01-01T00:00:00.000Z", "2099-01-01T00:00:00.000Z"];
-      const t0 = performance.now();
-      db.prepare(candidateEmailsSql(1)).all(TXN, ADDRESS, USER, ...range);
-      db.prepare(candidateMessageThreadsSql(1)).all(USER, TXN, TXN, TXN, "%2065550142%", ...range);
-      const readsMs = performance.now() - t0;
-      expect(readsMs).toBeGreaterThan(40); // the store must be big enough to tell the two paths apart
+    /**
+     * BACKLOG-3915: this used to compare the MAX of the event-loop delay with one
+     * timing of the two reads on the main thread. A tail statistic on a shared CI
+     * runner spiked on GC / de-scheduling while the reads timed normally, and the
+     * bound caught neither a read routed back to main (the worker-call check did)
+     * nor a removed yield (60 bodies block for less than the bound). It now
+     * asserts the two mechanisms directly, deterministically:
+     *  - neither candidate statement is prepared on the main connection;
+     *  - the email classify and link loops give the event loop a turn every
+     *    AUTO_LINK_EMAILS_PER_TURN emails (counted at the yield sites).
+     * The event-loop max is still printed, as information only.
+     */
+    it("one contact's auto-link: correct result, candidate reads never on the main connection, email loops yield", async () => {
+      const candidateSql = new Set([String(candidateEmailsSql(1)), String(candidateMessageThreadsSql(1))]);
+      const mainTexts: string[] = [];
+      const realPrepare = db.prepare.bind(db);
+      jest.spyOn(db, "prepare").mockImplementation(((t: string) => {
+        mainTexts.push(String(t));
+        return realPrepare(t);
+      }) as typeof db.prepare);
+      // Yields counted where they happen: setImmediate calls made from autoLinkService.
+      let serviceYields = 0;
+      const realSetImmediate = global.setImmediate;
+      jest.spyOn(global, "setImmediate").mockImplementation(((fn: (...a: unknown[]) => void, ...a: unknown[]) => {
+        if (/autoLinkService\.ts/.test(new Error().stack ?? "")) serviceYields++;
+        return realSetImmediate(fn, ...a);
+      }) as typeof setImmediate);
 
       jest.spyOn(contactWorkerPool, "isPoolReady").mockReturnValue(true);
       const query = routeDedicatedQueriesToTheThread();
@@ -218,11 +238,17 @@ maybe("BACKLOG-3883 — the candidate-email read runs off the main thread", () =
       const blockMs = await maxMainBlockMs(async () => {
         result = await autoLinkCommunicationsForContact({ contactId: "c1", transactionId: TXN, queueAmbiguousInsteadOfLinking: true });
       });
-      process.stderr.write(`[3883] texts=${TEXTS} emails=${EMAILS} reads-on-main=${readsMs.toFixed(0)}ms max-main-block=${blockMs.toFixed(0)}ms\n`);
+      process.stderr.write(`[3883] texts=${TEXTS} emails=${EMAILS} service-yields=${serviceYields} max-main-block=${blockMs.toFixed(0)}ms (info only)\n`);
 
       expect(query.mock.calls.map((c) => c[0]).sort()).toEqual(["candidateEmails", "candidateMessageThreads"]);
       expect(result).toMatchObject({ messagesLinked: 7, queuedForReview: PARTY_EMAILS, errors: 0 });
-      expect(blockMs).toBeLessThan(readsMs / 2);
+      expect(mainTexts.filter((t) => candidateSql.has(t))).toEqual([]);
+      // Classify loop yields at i = 10, 20, … (< PARTY_EMAILS); link loop after every
+      // AUTO_LINK_EMAILS_PER_TURN handled. Measured 12 with the one thread-loop yield;
+      // removing either email site drops it to 7 or 6.
+      const emailYields =
+        Math.floor((PARTY_EMAILS - 1) / AUTO_LINK_EMAILS_PER_TURN) + Math.floor(PARTY_EMAILS / AUTO_LINK_EMAILS_PER_TURN);
+      expect(serviceYields).toBeGreaterThanOrEqual(emailYields);
     }, 300_000);
   });
 });
