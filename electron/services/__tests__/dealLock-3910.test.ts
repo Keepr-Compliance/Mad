@@ -241,6 +241,10 @@ describe("C-R3c: attached-thread expansion", () => {
 
     expect(reached(A)).toEqual([`message:${TEXT_MSG}`]);
     expect(reached(B)).toEqual([`message:${TEXT_MSG}`, "message:m-sibling"]);
+    // Not half-written either: the sibling's own deal column names the open deal.
+    expect(db.prepare(`SELECT transaction_id FROM messages WHERE id = 'm-sibling'`).get()).toEqual({
+      transaction_id: B,
+    });
   });
 
   it("REVERSE: an open deal A gets the sibling", async () => {
