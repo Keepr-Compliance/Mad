@@ -152,7 +152,7 @@ async function renderDashboard() {
     return b;
   });
   mockEmulator.reset();
-  mockEmulator.set({ rows: { transaction_submissions: [...ROWS, ...OUTSIDE_ROWS] } });
+  mockEmulator.set({ rows: { transaction_submissions: [...OUTSIDE_ROWS, ...ROWS] } });
   return render(await DashboardPage());
 }
 
@@ -184,7 +184,7 @@ describe('cards on the real dashboard', () => {
     for (const l of labels) expect(l).toMatch(/: 0, view submissions$/);
   });
 
-  it('BACKLOG-3906: Recent Submissions lists only orgs with portal access (the no-access org holds the newest rows)', async () => {
+  it('BACKLOG-3906: Recent Submissions lists only orgs with portal access (the no-access org's rows come first in the fixture)', async () => {
     const { container } = await renderDashboard();
     const ids = recentIds(container);
     expect(ids.length).toBeGreaterThan(0);
@@ -272,7 +272,7 @@ describe('cards on the real dashboard', () => {
     for (const href of hrefs) {
       const status = statusOf(href);
       mockEmulator.reset();
-      mockEmulator.set({ rows: { transaction_submissions: [...ROWS, ...OUTSIDE_ROWS], users: [] } });
+      mockEmulator.set({ rows: { transaction_submissions: [...OUTSIDE_ROWS, ...ROWS], users: [] } });
       const page = render(await SubmissionsPage({ searchParams: Promise.resolve({ status }) }));
       const listed = Array.from(page.container.querySelectorAll('tbody a[href^="/dashboard/submissions/"]')).map(
         (a) => (a.getAttribute('href') as string).split('/').pop() as string
