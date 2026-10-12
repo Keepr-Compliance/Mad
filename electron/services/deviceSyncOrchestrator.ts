@@ -515,6 +515,8 @@ export interface SyncResult {
     startedAtMs: number;
     floorPlan?: ChatFloorPlan;
     chatFloors: ReadonlyArray<readonly [number, number | null]>;
+    /** BACKLOG-3892 W3b: the oldest text this phone holds (epoch ms); null = unknown. */
+    oldestTextMs?: number | null;
   };
 }
 
@@ -2207,6 +2209,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         }
       }
 
+      // BACKLOG-3892 W3b: how far back this phone's texts go (a new phone's coverage
+      // never starts before it). A failed read is unknown (null): no cap.
+      let oldestTextMs: number | null = null;
+      try {
+        oldestTextMs = this.messagesParser.getOldestMessageDateMs();
+      } catch {
+        oldestTextMs = null;
+      }
+
       if (this.abortController?.signal.aborted) {
         this.isRunning = false;
         this.messagesParser.close();
@@ -2315,6 +2326,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           startedAtMs: this.startTime,
           ...(floorPlan ? { floorPlan } : {}),
           chatFloors: appliedChatFloors,
+          oldestTextMs,
         },
       };
 

@@ -45,6 +45,24 @@ export function upsertIphoneDevice(userId: string, row: IphoneDeviceCoverageRow)
   );
 }
 
+/** BACKLOG-3892 W3b: the oldest text each phone holds, per udid (no row = unknown). */
+export function iphoneDeviceSpanRows(userId: string): Array<{ udid: string; oldestTextAt: string }> {
+  return dbAll<{ udid: string; oldestTextAt: string }>(
+    sql`SELECT udid, oldest_text_at AS oldestTextAt FROM iphone_device_span WHERE user_id = ?`,
+    [userId],
+  );
+}
+
+export function upsertIphoneDeviceSpan(userId: string, udid: string, oldestTextAt: string, recordedAt: string): void {
+  dbRun(
+    sql`INSERT INTO iphone_device_span (user_id, udid, oldest_text_at, recorded_at)
+          VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, udid) DO UPDATE SET
+          oldest_text_at = excluded.oldest_text_at, recorded_at = excluded.recorded_at`,
+    [userId, udid, oldestTextAt, recordedAt],
+  );
+}
+
 /** One phone's per-chat rows (key = chat ROWID as text). */
 export function iphoneChatRows(userId: string, udid: string): IphoneScanRow[] {
   return dbAll<IphoneScanRow>(
@@ -107,10 +125,14 @@ export function iphoneStoredTextSpan(userId: string): { floor: string | null; la
   );
 }
 
-/** Phones and emails of the contacts on ONE transaction (the D2 members). */
-export function transactionContactHandles(userId: string, transactionId: string): string[] {
-  const rows = dbAll<{ handle: string }>(
-    sql`SELECT cp.phone_e164 AS handle
+/**
+ * BACKLOG-3892 W4: the D2 members of ONE transaction with the contact's name — the same
+ * rows as transactionContactHandles, plus contacts.display_name (may be "Unknown" or
+ * empty: the caller falls back to the handle).
+ */
+export function transactionContactMembers(userId: string, transactionId: string): Array<{ handle: string; name: string | null }> {
+  return dbAll<{ handle: string; name: string | null }>(
+    sql`SELECT cp.phone_e164 AS handle, c.display_name AS name
           FROM transaction_contacts tc
           JOIN transactions t ON t.id = tc.transaction_id
           JOIN contacts c ON c.id = tc.contact_id
@@ -119,7 +141,7 @@ export function transactionContactHandles(userId: string, transactionId: string)
            AND tc.removed_at IS NULL AND c.removed_at IS NULL
            AND cp.phone_e164 IS NOT NULL AND cp.phone_e164 != ''
         UNION
-        SELECT LOWER(ce.email) AS handle
+        SELECT LOWER(ce.email) AS handle, c.display_name AS name
           FROM transaction_contacts tc
           JOIN transactions t ON t.id = tc.transaction_id
           JOIN contacts c ON c.id = tc.contact_id
@@ -129,7 +151,6 @@ export function transactionContactHandles(userId: string, transactionId: string)
            AND ce.email IS NOT NULL AND ce.email != ''`,
     [transactionId, userId, transactionId, userId],
   );
-  return rows.map((r) => r.handle);
 }
 
 /** iPhone threads (`ios-chat-<ROWID>`) linked to ONE transaction, as chat ROWIDs. */

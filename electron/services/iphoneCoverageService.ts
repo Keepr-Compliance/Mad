@@ -19,18 +19,22 @@
  * READ: the current phone = the latest last_sync_at. A deal's iPhone coverage is
  * its least covered member (contact handle or linked chat); a member with no valid
  * row counts as the phone's interval (the settings floor), so its gap shows until a
- * sync widens it (SR D2).
+ * sync widens it (SR D2). BACKLOG-3892 W: each member is read across EVERY phone,
+ * earlier phones joining only where contiguous (W3), never before a phone's own
+ * oldest text (W3b, iphone_device_span), and the least covered person is named (W4).
  */
 import { dbTransaction } from "./db/core/dbConnection";
 import {
   iphoneChatRows,
   iphoneDeviceRows,
+  iphoneDeviceSpanRows,
   iphoneHandleRows,
   iphoneStoredTextSpan,
-  transactionContactHandles,
+  transactionContactMembers,
   transactionLinkedIosChats,
   upsertIphoneChat,
   upsertIphoneDevice,
+  upsertIphoneDeviceSpan,
   upsertIphoneHandle,
   type IphoneDeviceCoverageRow,
   type IphoneScanRow,
@@ -132,6 +136,10 @@ export function recordIphoneSyncCoverage(
       lastSyncAt: iso(merged.lastSyncMs),
       approximate: merged.approximate ? 1 : 0,
     });
+    // BACKLOG-3892 W3b: the oldest text this phone holds; its coverage never starts before it.
+    if (typeof run.oldestTextMs === "number" && Number.isFinite(run.oldestTextMs)) {
+      upsertIphoneDeviceSpan(userId, run.udid, iso(run.oldestTextMs), scannedAt);
+    }
     if (runFloorMs === IPHONE_ALL_TIME_MS || !plan) return;
 
     // Per handle: every deal handle the plan read below the settings floor (C2: the
@@ -155,20 +163,11 @@ function toDevice(r: IphoneDeviceCoverageRow): IphoneDeviceCoverage {
   return { udid: r.udid, coveredSince: r.coveredSince, lastSyncAt: r.lastSyncAt, approximate: r.approximate === 1 };
 }
 
-/** The user's current phone (latest last_sync_at), or null = iPhone coverage unknown. */
-export function getCurrentIphoneCoverage(userId: string): IphoneDeviceCoverage | null {
-  let best: IphoneDeviceCoverageRow | null = null;
-  for (const r of iphoneDeviceRows(userId)) {
-    if (!best || Date.parse(r.lastSyncAt) > Date.parse(best.lastSyncAt)) best = r;
-  }
-  return best ? toDevice(best) : null;
-}
-
 /**
- * A member's effective coverage: the earliest valid row among its keys merged with
- * the phone's interval. A row is valid only when its scan reaches the phone's
- * interval (scanned_at >= covered_since); a stale row (the person left every deal
- * and the phone's interval restarted later) counts as no row.
+ * A member's effective coverage on ONE phone: the earliest valid row among its keys
+ * merged with the phone's interval. A row is valid only when its scan reaches the
+ * phone's interval (scanned_at >= covered_since); a stale row (the person left every
+ * deal and the phone's interval restarted later) counts as no row.
  */
 function memberSince(rows: Map<string, IphoneScanRow>, keys: readonly string[], deviceSinceMs: number): number {
   let best: number | null = null;
@@ -183,28 +182,164 @@ function memberSince(rows: Map<string, IphoneScanRow>, keys: readonly string[], 
   return best === null ? deviceSinceMs : Math.min(best, deviceSinceMs);
 }
 
+/** One deal's iPhone coverage (BACKLOG-3892 W): the device fields plus who and why. */
+export interface IphoneDealCoverage extends IphoneDeviceCoverage {
+  /** W4: the least covered person (contact name, else the handle), or null. */
+  who: string | null;
+  /** W3b: the current phone's oldest text (ISO) when it is what limits the start. */
+  cappedByPhone: string | null;
+  /** W3b: the user has synced another iPhone before the current one. */
+  previousPhone: boolean;
+}
+
+/** One phone, as the read side sees it (BACKLOG-3892 W3/W3b). */
+interface PhoneView {
+  udid: string;
+  sinceMs: number;
+  endMs: number;
+  approximate: boolean;
+  /** The oldest text this phone holds (W3b), or null = unknown (no cap). */
+  oldestMs: number | null;
+  handleRows: Map<string, IphoneScanRow>;
+  chatRows: Map<string, IphoneScanRow>;
+}
+
+/** A member's coverage across every phone, and whether the current phone's cap set it. */
+interface MemberCoverage {
+  sinceMs: number;
+  capped: boolean;
+}
+
 /**
- * SR D2: one deal's iPhone coverage on the current phone — its LEAST covered member
- * over the deal contacts' handles and its linked iPhone chats. null = no phone row
- * (unknown, never "covered"). Throws on a read failure (callers decide).
+ * BACKLOG-3892 W3/W3b: a member's coverage across phones. On each phone: its own
+ * coverage there (`sinceOn`), never earlier than that phone's oldest text. The current
+ * phone's interval anchors; an older phone's interval joins only when it reaches the
+ * joined start (end >= start: the D4 contiguity rule), so the months between two
+ * phones are never covered by either.
  */
-export function getIphoneDealCoverage(userId: string, transactionId: string): IphoneDeviceCoverage | null {
-  const device = getCurrentIphoneCoverage(userId);
-  if (!device) return null;
-  const deviceSinceMs = Date.parse(device.coveredSince);
-  if (!Number.isFinite(deviceSinceMs)) return { ...device };
-  const handleRows = new Map(iphoneHandleRows(userId, device.udid).map((r) => [r.key, r]));
-  const chatRows = new Map(iphoneChatRows(userId, device.udid).map((r) => [r.key, r]));
-  let least: number | null = null;
-  const take = (ms: number): void => {
-    if (least === null || ms > least) least = ms;
+function acrossPhones(current: PhoneView, others: readonly PhoneView[], sinceOn: (p: PhoneView) => number): MemberCoverage {
+  const capped = (p: PhoneView): { ms: number; capped: boolean } => {
+    const raw = sinceOn(p);
+    return p.oldestMs !== null && raw < p.oldestMs ? { ms: p.oldestMs, capped: true } : { ms: raw, capped: false };
   };
-  for (const handle of transactionContactHandles(userId, transactionId)) {
+  const cur = capped(current);
+  let start = cur.ms;
+  const intervals = others.map((p) => ({ startMs: capped(p).ms, endMs: p.endMs }));
+  let moved = true;
+  while (moved) {
+    moved = false;
+    for (const i of intervals) {
+      if (i.endMs >= start && i.startMs < start) {
+        start = i.startMs;
+        moved = true;
+      }
+    }
+  }
+  return { sinceMs: start, capped: cur.capped && start === cur.ms };
+}
+
+/** Every phone's view for this user; [current, others] or null when there is no phone row. */
+function readPhones(userId: string): { current: PhoneView; others: PhoneView[] } | null {
+  const devices = iphoneDeviceRows(userId);
+  if (devices.length === 0) return null;
+  const spans = new Map(iphoneDeviceSpanRows(userId).map((r) => [r.udid, Date.parse(r.oldestTextAt)]));
+  const views: PhoneView[] = devices.map((d) => {
+    const oldest = spans.get(d.udid);
+    return {
+      udid: d.udid,
+      sinceMs: Date.parse(d.coveredSince),
+      endMs: Date.parse(d.lastSyncAt),
+      approximate: d.approximate === 1,
+      oldestMs: oldest !== undefined && Number.isFinite(oldest) ? oldest : null,
+      handleRows: new Map(iphoneHandleRows(userId, d.udid).map((r) => [r.key, r])),
+      chatRows: new Map(iphoneChatRows(userId, d.udid).map((r) => [r.key, r])),
+    };
+  });
+  let current = views[0];
+  for (const v of views) if (v.endMs > current.endMs) current = v;
+  return { current, others: views.filter((v) => v !== current && Number.isFinite(v.sinceMs) && Number.isFinite(v.endMs)) };
+}
+
+/** The user's current phone row (latest last_sync_at), raw; null = no phone row. */
+export function getCurrentIphoneCoverage(userId: string): IphoneDeviceCoverage | null {
+  let best: IphoneDeviceCoverageRow | null = null;
+  for (const r of iphoneDeviceRows(userId)) {
+    if (!best || Date.parse(r.lastSyncAt) > Date.parse(best.lastSyncAt)) best = r;
+  }
+  return best ? toDevice(best) : null;
+}
+
+/**
+ * BACKLOG-3892 W: the user's iPhone coverage with no deal (the create dialog): the
+ * current phone's interval joined with earlier phones' (W3), capped at each phone's
+ * oldest text (W3b). null = no phone row (unknown, never "covered").
+ */
+export function getIphoneUserCoverage(userId: string): IphoneDealCoverage | null {
+  const phones = readPhones(userId);
+  if (!phones) return null;
+  const { current, others } = phones;
+  const base = { udid: current.udid, lastSyncAt: iso(current.endMs), approximate: current.approximate };
+  if (!Number.isFinite(current.sinceMs)) {
+    // An unreadable stored date: hand back the row's own value (as before W), never iso(NaN).
+    const raw = iphoneDeviceRows(userId).find((d) => d.udid === current.udid)?.coveredSince ?? "";
+    return { ...base, coveredSince: raw, who: null, cappedByPhone: null, previousPhone: others.length > 0 };
+  }
+  const m = acrossPhones(current, others, (p) => p.sinceMs);
+  return {
+    ...base,
+    coveredSince: iso(m.sinceMs),
+    who: null,
+    cappedByPhone: m.capped && current.oldestMs !== null ? iso(current.oldestMs) : null,
+    previousPhone: others.length > 0,
+  };
+}
+
+/** W4: a contact's name for a warning; "Unknown" (five live writers) or empty -> the handle. */
+function memberName(name: string | null, handle: string): string {
+  const n = (name ?? "").trim();
+  return n.length > 0 && n.toLowerCase() !== "unknown" ? n : handle;
+}
+
+/**
+ * SR D2 + BACKLOG-3892 W: one deal's iPhone coverage — its LEAST covered member over
+ * the deal contacts' handles and its linked iPhone chats, each across every phone (W3)
+ * and capped at each phone's oldest text (W3b). The least covered person is named (W4;
+ * on a tie a contact is named before a linked chat). null = no phone row (unknown,
+ * never "covered"). Throws on a read failure (callers decide).
+ *
+ * A linked chat is a sms.db ROWID, which a replacement phone reuses (SR D6): its own
+ * row is read on the CURRENT phone only; on an earlier phone it counts as that phone's
+ * interval.
+ */
+export function getIphoneDealCoverage(userId: string, transactionId: string): IphoneDealCoverage | null {
+  const user = getIphoneUserCoverage(userId);
+  const phones = readPhones(userId);
+  if (!user || !phones) return null;
+  const { current, others } = phones;
+  if (!Number.isFinite(current.sinceMs)) return user;
+  let least: { m: MemberCoverage; who: string | null } | null = null;
+  const take = (m: MemberCoverage, who: string | null): void => {
+    if (!least || m.sinceMs > least.m.sinceMs || (m.sinceMs === least.m.sinceMs && least.who === null && who !== null)) {
+      least = { m, who };
+    }
+  };
+  for (const { handle, name } of transactionContactMembers(userId, transactionId)) {
     const keys = handleKeys(handle);
-    if (keys.length > 0) take(memberSince(handleRows, keys, deviceSinceMs));
+    if (keys.length === 0) continue;
+    take(acrossPhones(current, others, (p) => memberSince(p.handleRows, keys, p.sinceMs)), memberName(name, handle));
   }
   for (const chatId of transactionLinkedIosChats(userId, transactionId)) {
-    take(memberSince(chatRows, [String(chatId)], deviceSinceMs));
+    take(
+      acrossPhones(current, others, (p) => (p === current ? memberSince(p.chatRows, [String(chatId)], p.sinceMs) : p.sinceMs)),
+      null,
+    );
   }
-  return least === null ? { ...device } : { ...device, coveredSince: iso(least) };
+  if (!least) return user;
+  const found: { m: MemberCoverage; who: string | null } = least;
+  return {
+    ...user,
+    coveredSince: iso(found.m.sinceMs),
+    who: found.who,
+    cappedByPhone: found.m.capped && current.oldestMs !== null ? iso(current.oldestMs) : null,
+  };
 }

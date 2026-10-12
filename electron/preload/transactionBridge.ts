@@ -911,8 +911,10 @@ export const transactionBridge = {
    * Coverage for a PROPOSED audit start (date-selection time). Drives the
    * Layer-1 popup. Floors are ISO strings — compare by epoch-ms (SR-correction f).
    */
-  getAuditCoverage: (userId: string, proposedStartISO: string, chosenSource?: string | null) =>
-    ipcRenderer.invoke("transactions:get-audit-coverage", userId, proposedStartISO, chosenSource ?? null),
+  getAuditCoverage: (userId: string, proposedStartISO: string, chosenSource?: string | null, proposedEndISO?: string | null) =>
+    proposedEndISO
+      ? ipcRenderer.invoke("transactions:get-audit-coverage", userId, proposedStartISO, chosenSource ?? null, proposedEndISO)
+      : ipcRenderer.invoke("transactions:get-audit-coverage", userId, proposedStartISO, chosenSource ?? null),
 
   /**
    * Export completeness backstop (Layer 3): is a transaction's messages coverage

@@ -12,6 +12,8 @@ import { ExportUnlockPrompt } from "./paywall/ExportUnlockPrompt";
 import { formatLastExported } from "../utils/formatUtils";
 import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
 import { readChosenTextSource } from "./transactionDetailsModule/components/TextCoverageNotice";
+import { coverageDay, endLine, iphoneStartWithAction } from "./transactionDetailsModule/components/coverageCopy";
+import type { SourceCoverageGap, TextSource } from "../../electron/types/auditCoverage";
 import {
   TransactionDatesFields,
   saveConfirmedTransactionDates,
@@ -92,8 +94,17 @@ function ExportModal({
      * iPhone sync can fill it, so the gate says so and never offers "Update now"
      * (the Mac import), which could not clear it.
      */
-    iphone?: { coveredSince: string | null };
+    iphone?: { coveredSince: string | null; startGap?: SourceCoverageGap };
+    /**
+     * BACKLOG-3892 W1: the chosen source's last sync is more than a day before the end
+     * of the audit period (newer texts may be missing). Alone it opens the gate too.
+     */
+    endGap?: SourceCoverageGap;
+    /** BACKLOG-3892 W1: false = the gate is about newer texts only (no start gap to explain). */
+    startShown?: boolean;
   } | null>(null);
+  // BACKLOG-3892 W2: the source the gate was checked for (the recheck uses it too).
+  const [gateSource, setGateSource] = useState<TextSource | null>(null);
 
   // Feature gate check
   const { isAllowed, loading: featureGateLoading } = useFeatureGate();
@@ -348,12 +359,15 @@ function ExportModal({
     if (userId) {
       // BACKLOG-3892 S2: for an iPhone user, completeness is the deal's iPhone coverage.
       const chosen = await readChosenTextSource(userId);
+      setGateSource(chosen);
       const completeness = await checkExportCompleteness(transaction.id, chosen);
+      const endGap = completeness?.textEndGap;
       if (completeness && !completeness.complete && completeness.iphoneGap) {
         setCompletenessGate({
           auditStartISO: completeness.auditStartISO,
           importerAvailable: false,
-          iphone: { coveredSince: completeness.iphoneCoveredSince ?? null },
+          iphone: { coveredSince: completeness.iphoneCoveredSince ?? null, startGap: completeness.textStartGap },
+          ...(endGap ? { endGap } : {}),
         });
         return;
       }
@@ -361,6 +375,18 @@ function ExportModal({
         setCompletenessGate({
           auditStartISO: completeness.auditStartISO,
           importerAvailable: completeness.messagesImporterAvailable,
+          ...(endGap ? { endGap } : {}),
+        });
+        return;
+      }
+      // BACKLOG-3892 W1 (founder f240c29a): newer texts may be missing — say so before
+      // exporting. Only the Mac import can be run from here ("Update now").
+      if (completeness && endGap) {
+        setCompletenessGate({
+          auditStartISO: completeness.auditStartISO,
+          importerAvailable: endGap.source === "mac" && completeness.messagesImporterAvailable,
+          endGap,
+          startShown: false,
         });
         return;
       }
@@ -375,11 +401,16 @@ function ExportModal({
   const handleGateUpdateNow = async () => {
     const auditStart = completenessGate?.auditStartISO ?? startDate;
     const outcome = await runMessagesImport(auditStart, transaction.id);
-    const recheck = await checkExportCompleteness(transaction.id);
+    // BACKLOG-3892 W2: recheck for the same source the gate was opened for.
+    const recheck = gateSource
+      ? await checkExportCompleteness(transaction.id, gateSource)
+      : await checkExportCompleteness(transaction.id);
     setCompletenessGate(null);
     // Proceed when complete now OR a real device import ran (we scanned back to
     // the audit start — a floor still above it means nothing older exists).
-    if ((recheck && recheck.complete) || outcome.importRan) {
+    // BACKLOG-3892 W1: "complete" says nothing about newer texts — an end gap that is
+    // still there after an import that did not run re-surfaces the choice.
+    if ((recheck && recheck.complete && !recheck.textEndGap) || outcome.importRan) {
       await proceedWithExport();
       return;
     }
@@ -393,6 +424,9 @@ function ExportModal({
     setCompletenessGate({
       auditStartISO: recheck?.auditStartISO ?? auditStart,
       importerAvailable: recheck?.messagesImporterAvailable ?? false,
+      ...(recheck?.textEndGap ? { endGap: recheck.textEndGap } : {}),
+      // Only newer texts are still missing: no start gap to explain.
+      ...(recheck?.textEndGap && recheck.complete ? { startShown: false } : {}),
     });
   };
 
@@ -995,20 +1029,29 @@ function ExportModal({
                 <h3 className="text-lg font-bold text-gray-900">
                   {completenessGate.iphone
                     ? "Your iPhone texts don't reach the start of this audit period yet"
-                    : "Your audit period extends earlier than the imported message history"}
+                    : startGapShown(completenessGate)
+                      ? "Your audit period extends earlier than the imported message history"
+                      : "Some texts may be missing for this transaction\u2019s dates"}
                 </h3>
               </div>
 
               {completenessGate.iphone ? (
                 <p className="text-sm text-gray-700 mb-3" data-testid="export-gate-iphone">
-                  {iphoneGateLine(completenessGate.iphone.coveredSince, completenessGate.auditStartISO)}
+                  {iphoneGateLine(completenessGate.iphone.coveredSince, completenessGate.auditStartISO, completenessGate.iphone.startGap)}
                 </p>
-              ) : (
+              ) : startGapShown(completenessGate) ? (
               <p className="text-sm text-gray-700 mb-3">
                 {completenessGate.importerAvailable
                   ? "Older messages haven't been imported for this date range yet. Import them now so this audit is complete, or export anyway."
                   : "Older messages for this date range can only be imported on a Mac with Full Disk Access. You can export anyway, but earlier texts won't be included on this device."}
               </p>
+              ) : null}
+
+              {/* BACKLOG-3892 W1: newer texts may be missing (the source's last sync). */}
+              {completenessGate.endGap && (
+                <p className="text-sm text-gray-700 mb-3" data-testid="export-gate-end">
+                  {endLine(completenessGate.endGap)}
+                </p>
               )}
 
               {coverageImporting && (
@@ -1070,17 +1113,27 @@ function ExportModal({
  * iPhone texts were read, and the one action that reads further: Sync iPhone (the
  * next sync reads this deal's chats back to its start).
  */
-export function iphoneGateLine(coveredSince: string | null, auditStartISO: string | null): string {
-  const day = (iso: string | null): string => {
-    const t = iso ? Date.parse(iso) : NaN;
-    return Number.isFinite(t) ? new Date(t).toLocaleDateString() : "";
-  };
-  const since = day(coveredSince);
-  const start = day(auditStartISO);
+export function iphoneGateLine(
+  coveredSince: string | null,
+  auditStartISO: string | null,
+  // BACKLOG-3892 W: the deal's start gap (who, the new-phone cap) — the approved lines.
+  startGap?: SourceCoverageGap,
+): string {
+  const start = coverageDay(auditStartISO);
+  const sync = `Connect your iPhone and click Sync iPhone on the dashboard: the next sync reads this deal's texts back${start ? ` to ${start}` : ""}.`;
+  const anyway = "You can also export anyway without the earlier texts.";
+  const approved = startGap ? iphoneStartWithAction(startGap, auditStartISO, sync) : null;
+  if (approved) return `${approved} ${anyway}`;
+  const since = coverageDay(coveredSince);
   const have = since
     ? `Keepr has this deal's iPhone texts from ${since}.`
     : "Keepr hasn't read this deal's iPhone texts back yet.";
-  return `${have} Connect your iPhone and click Sync iPhone on the dashboard: the next sync reads this deal's texts back${start ? ` to ${start}` : ""}. You can also export anyway without the earlier texts.`;
+  return `${have} ${sync} ${anyway}`;
+}
+
+/** BACKLOG-3892 W1: the gate has a START gap to explain (not only newer texts). */
+function startGapShown(gate: { startShown?: boolean }): boolean {
+  return gate.startShown !== false;
 }
 
 export default ExportModal;

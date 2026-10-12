@@ -74,7 +74,7 @@ import {
   type DeliveryFs,
 } from "../services/rcsExtensionDelivery";
 import {
-  backfillCoverageFrom,
+  backfillCoverageRecord,
   cacheRunCoverage,
   cacheRunReadNothing,
   chatFloorDecision,
@@ -864,10 +864,10 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   // only when that run was a full read with a normal list stop that reached it.
   let coveredSince = recordedCoveredSince(decision.userId, "google_messages");
   if (!coveredSince) {
-    const backfill = backfillCoverageFrom(getRcsCacheRun(decision.userId));
+    const backfill = backfillCoverageRecord(getRcsCacheRun(decision.userId));
     if (backfill) {
-      recordSourceCoverage(decision.userId, "google_messages", backfill, new Date().toISOString());
-      coveredSince = backfill;
+      recordSourceCoverage(decision.userId, "google_messages", backfill.coveredSince, backfill.lastSyncAt);
+      coveredSince = backfill.coveredSince;
     }
   }
   const window = cacheWindow({

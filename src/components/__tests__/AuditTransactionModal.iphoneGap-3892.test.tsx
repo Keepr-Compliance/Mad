@@ -94,3 +94,23 @@ it("the global oldest-text floor alone does not open it for an iPhone user whose
   await waitFor(() => expect(screen.getByTestId("contact-assignment-step-2")).toBeInTheDocument());
   expect(screen.queryByTestId("audit-coverage-prompt")).toBeNull();
 });
+
+// BACKLOG-3892 W1: newer texts may be missing — an END gap alone opens the prompt (so the
+// line is read) but is not a start gap: no "Update now", the title stays the reassurance.
+it("an END gap alone opens the prompt with its line, as a non-gap (Got it)", async () => {
+  mockCheckCoverage.mockResolvedValue({
+    ...base,
+    sourceGaps: [{
+      source: "iphone",
+      coveredSince: "2025-01-01T00:00:00.000Z",
+      approximate: false,
+      kind: "newer",
+      lastSyncAt: "2026-09-01T12:00:00.000Z",
+      requiredEndISO: "2026-10-12T12:00:00.000Z",
+    }],
+  });
+  await continueWithStart();
+  expect(await screen.findByTestId("audit-coverage-gap-iphone-newer")).toHaveTextContent("Newer texts may be missing: your iPhone was last synced");
+  expect(screen.queryByTestId("audit-coverage-update-now")).toBeNull();
+  expect(screen.getByTestId("audit-coverage-continue")).toHaveTextContent("Got it");
+});

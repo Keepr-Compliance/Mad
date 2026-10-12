@@ -46,11 +46,13 @@ import {
   AUDIO_TRANSCRIPT_COLUMN_PROBE_SQL,
   CHAT_BY_ROWID_SQL,
   CHAT_LAST_MESSAGE_DATE_SQL,
+  OLDEST_MESSAGE_DATE_SQL,
   CHAT_MESSAGE_COUNT_SQL,
   CHAT_PARTICIPANT_HANDLES_SQL,
   CHAT_SENDER_HANDLES_SQL,
   HANDLE_ID_BY_ROWID_SQL,
   MESSAGE_ATTACHMENTS_SQL,
+  appleDateToMs,
   searchMessagesByText,
   selectChatMessages,
 } from "./db/appleSmsDbSql";
@@ -377,6 +379,23 @@ export class iOSMessagesParser {
     });
 
     return this.hasAudioTranscriptColumn;
+  }
+
+  /**
+   * BACKLOG-3892 W3b: the oldest dated text this phone holds, as epoch ms; null when
+   * there is none or the read fails (null = unknown: no coverage cap).
+   */
+  getOldestMessageDateMs(): number | null {
+    this.ensureOpen();
+    try {
+      const row = this.db!.prepare(OLDEST_MESSAGE_DATE_SQL).get() as { oldest: number | bigint | null } | undefined;
+      return appleDateToMs(row?.oldest ?? null);
+    } catch (error) {
+      log.warn("iOSMessagesParser: oldest message date read failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
   }
 
     /**

@@ -84,6 +84,12 @@ jest.mock("../../services/importPlanInputs", () => ({
   loadStoredImportFilters: jest.fn().mockResolvedValue({}),
 }));
 
+// BACKLOG-3892 W1: the Mac end-of-sync marker.
+const mockRecordMacImportRun = jest.fn();
+jest.mock("../../services/macImportMarker", () => ({
+  recordMacImportRun: (...a: unknown[]) => mockRecordMacImportRun(...a),
+}));
+
 import { registerMessageImportHandlers } from "../messageImportHandlers";
 
 const USER_A = "3f2a1c60-0000-4000-8000-00000000325a";  // pii-allow-uuid: invented, not from any live row
@@ -183,5 +189,19 @@ describe("messages:import-macos", () => {
     expect(mockResolveImportPlanForUser).toHaveBeenCalledWith(
       expect.objectContaining({ userId: USER_B }),
     );
+  });
+
+  it("BACKLOG-3892 W1: a completed import records the Mac last sync; a cancelled one does not", async () => {
+    await handlerFor("messages:import-macos")(EVENT, USER_B as never, false as never);
+    expect(mockRecordMacImportRun).toHaveBeenCalledTimes(1);
+    expect(mockRecordMacImportRun).toHaveBeenCalledWith(USER_B, expect.any(Number));
+    mockRecordMacImportRun.mockClear();
+    mockImportMessages.mockResolvedValue({
+      success: false, cancelled: true, error: "Import cancelled", messagesImported: 0, messagesSkipped: 0,
+      attachmentsImported: 0, attachmentsUpdated: 0, attachmentsSkipped: 0, duration: 1,
+    });
+    await handlerFor("messages:import-macos")(EVENT, USER_B as never, false as never);
+    expect(mockImportMessages).toHaveBeenCalledTimes(2);
+    expect(mockRecordMacImportRun).not.toHaveBeenCalled();
   });
 });

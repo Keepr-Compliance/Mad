@@ -423,6 +423,18 @@ export function backfillCoverageFrom(run: { floorISO: string; fullRead: boolean;
 }
 
 /**
+ * The row the L2 backfill records: the previous run's floor as the coverage, and that
+ * run's FINISH as the last sync (the end check reads it, so a Sync that has not
+ * finished yet must not count as one). Null when the run backfills nothing.
+ */
+export function backfillCoverageRecord(
+  run: { floorISO: string; fullRead: boolean; listStop: string | null; reachedFloor: boolean; finishedAt: string } | null,
+): { coveredSince: string; lastSyncAt: string } | null {
+  const coveredSince = backfillCoverageFrom(run);
+  return run && coveredSince ? { coveredSince, lastSyncAt: run.finishedAt } : null;
+}
+
+/**
  * BACKLOG-3663: did this cache run read down to its floor? Only a FULL read
  * (since = floor) that checked every listed chat (none over the cap) and
  * read every chat's history (no truncated / failed one) counts — then the

@@ -128,13 +128,19 @@ function AuditTransactionModal({
 
     // BACKLOG-3892 S2 (SR D3a): the user's own source is checked even with no texts.
     const chosen = dialogTextSource(importSource, isMacOS);
-    const coverage = await checkCoverage(proposed, chosen);
+    // BACKLOG-3892 W1: with the End Date, for the end check (open = today).
+    const coverage = addressData.closed_at
+      ? await checkCoverage(proposed, chosen, addressData.closed_at)
+      : await checkCoverage(proposed, chosen);
     // For an iPhone user the texts half of the gap is the iPhone coverage (the
     // global oldest-text floor no longer says how far the phone was read), and the
     // Mac "Update now" is never offered: it cannot fill an iPhone gap. The iPhone
     // line tells the user to Sync iPhone, which reads the deal's chats back.
     const iphoneUser = chosen === "iphone";
-    const iphoneGap = iphoneUser && !!coverage?.sourceGaps?.some((g) => g.source === "iphone");
+    // BACKLOG-3892 W1: an END gap (newer texts) is not a start gap: it never offers the
+    // Mac "Update now" or changes hasGap; it only opens the prompt so the line is read.
+    const iphoneGap = iphoneUser && !!coverage?.sourceGaps?.some((g) => g.source === "iphone" && g.kind !== "newer");
+    const endGap = !!chosen && !!coverage?.sourceGaps?.some((g) => g.source === chosen && g.kind === "newer");
     const hasGap = !!coverage && (iphoneUser
       ? iphoneGap || coverage.needsEmailBackfill
       : coverage.needsMessagesImport || coverage.needsEmailBackfill);
@@ -148,7 +154,7 @@ function AuditTransactionModal({
 
     // CREATE: prompt only on a real data gap. EDIT: also show the Layer-1
     // re-crop reassurance whenever the start date changed (pure crop included).
-    const shouldPrompt = hasGap || (isEditing && dateChanged);
+    const shouldPrompt = hasGap || endGap || (isEditing && dateChanged);
     if (!shouldPrompt) {
       handleNextStep();
       return;

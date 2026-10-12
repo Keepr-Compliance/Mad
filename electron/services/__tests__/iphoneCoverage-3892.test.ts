@@ -191,7 +191,10 @@ function linkThread(txn: string, threadId: string): void {
   n += 1;
   db.prepare("INSERT INTO communications (id, user_id, transaction_id, thread_id) VALUES (?, ?, ?, ?)").run(`co-${n}`, USER, txn, threadId);
 }
-const iphoneGapOf = (txn: string) => getTransactionTextCoverage(txn, USER, "iphone").gaps.find((g) => g.source === "iphone");
+// BACKLOG-3892 W1: the START gap. These syncs are dated before the real "now", so an open
+// deal also has an END gap ("newer"); that one is pinned in iphoneCoverage-W-3892.test.ts.
+const iphoneGapOf = (txn: string) =>
+  getTransactionTextCoverage(txn, USER, "iphone").gaps.find((g) => g.source === "iphone" && g.kind !== "newer");
 
 beforeEach(() => {
   n = 0;

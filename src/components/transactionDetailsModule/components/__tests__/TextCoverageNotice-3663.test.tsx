@@ -102,7 +102,9 @@ describe("TextCoverageNotice", () => {
     const { unmount } = render(<TextCoverageNotice transactionId="tx-1" userId="user-1" />);
     const soft = await screen.findByTestId("text-coverage-notice");
     expect(soft.className).toMatch(/bg-gray-50/);
-    expect(soft).toHaveTextContent("from the oldest text Keepr has");
+    // BACKLOG-3892 W: an iPhone "later" gap reads the founder-approved start line (an
+    // approximate interval is still soft, above); other sources keep the approximate note.
+    expect(soft).toHaveTextContent("Older texts may be missing.");
     unmount();
     getTextCoverage.mockResolvedValue({ success: true, auditStartISO: "2026-05-01T00:00:00.000Z", gaps: [iphone, gm] });
     render(<TextCoverageNotice transactionId="tx-1" userId="user-1" />);

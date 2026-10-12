@@ -118,6 +118,7 @@ const mockParser = {
   getMessagesAsync: jest.fn(),
   getMessageCount: jest.fn(),
   getChatSenderHandles: jest.fn(),
+  getOldestMessageDateMs: jest.fn(),
   readFailures: 0,
 };
 jest.mock("../iosMessagesParser", () => ({
@@ -229,6 +230,7 @@ beforeEach(() => {
   mockParser.getMessagesAsync.mockReset().mockImplementation(async (chatId: number) => [msg(chatId * 10)]);
   mockParser.getMessageCount.mockReset().mockReturnValue(4);
   mockParser.getChatSenderHandles.mockReset().mockReturnValue([]);
+  mockParser.getOldestMessageDateMs.mockReset().mockReturnValue(Date.UTC(2025, 7, 1));
   mockParser.readFailures = 3;
 });
 
@@ -260,5 +262,16 @@ describe("BACKLOG-3892 S1: the sync's parse loop under SyncOptions.floorPlan", (
     // S2: a full read records no plan (= everything the phone holds).
     expect(r.coverageRun?.floorPlan).toBeUndefined();
     expect(r.coverageRun?.chatFloors).toEqual([]);
+  });
+
+  it("BACKLOG-3892 W3b: the run carries the phone's oldest text; a failed read is unknown (null), never fatal", async () => {
+    const r = await newOrchestrator().sync({ udid: UDID });
+    expect(r.coverageRun?.oldestTextMs).toBe(Date.UTC(2025, 7, 1));
+    mockParser.getOldestMessageDateMs.mockImplementation(() => {
+      throw new Error("sms.db read failed");
+    });
+    const failed = await newOrchestrator().sync({ udid: UDID });
+    expect(failed.success).toBe(true);
+    expect(failed.coverageRun?.oldestTextMs).toBeNull();
   });
 });

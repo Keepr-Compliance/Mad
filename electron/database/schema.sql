@@ -1020,6 +1020,19 @@ CREATE TABLE IF NOT EXISTS iphone_handle_coverage (
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
 
+-- BACKLOG-3892 W3b: the oldest text one phone holds (sms.db MIN(message.date)),
+-- recorded by each completed sync of that phone. A phone's coverage never starts
+-- before it: texts older than this phone's oldest are on a previous phone (or its
+-- backup), never on this one. No row = not known yet (no cap).
+CREATE TABLE IF NOT EXISTS iphone_device_span (
+  user_id TEXT NOT NULL,
+  udid TEXT NOT NULL,
+  oldest_text_at DATETIME NOT NULL,
+  recorded_at DATETIME NOT NULL,
+  PRIMARY KEY (user_id, udid),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS message_thread_names (
   user_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")

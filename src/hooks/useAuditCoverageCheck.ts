@@ -53,7 +53,7 @@ export interface RunMessagesImportOutcome {
 
 export interface UseAuditCoverageCheckResult {
   /** BACKLOG-3892 S2: `chosenSource` = the user's import source (TextSource), when known. */
-  checkCoverage: (proposedStartISO: string, chosenSource?: TextSource | null) => Promise<AuditCoverageResult | null>;
+  checkCoverage: (proposedStartISO: string, chosenSource?: TextSource | null, proposedEndISO?: string | null) => Promise<AuditCoverageResult | null>;
   checkExportCompleteness: (transactionId: string, chosenSource?: TextSource | null) => Promise<ExportCompletenessResult | null>;
   runMessagesImport: (
     proposedStartISO: string | null,
@@ -145,9 +145,17 @@ export function useAuditCoverageCheck(userId: string): UseAuditCoverageCheckResu
   const [indeterminate, setIndeterminate] = useState<boolean>(false);
 
   const checkCoverage = useCallback(
-    async (proposedStartISO: string, chosenSource?: TextSource | null): Promise<AuditCoverageResult | null> => {
+    async (
+      proposedStartISO: string,
+      chosenSource?: TextSource | null,
+      // BACKLOG-3892 W1: the proposed End Date (null/absent = open: today).
+      proposedEndISO?: string | null,
+    ): Promise<AuditCoverageResult | null> => {
       if (!userId || !proposedStartISO) return null;
       try {
+        if (proposedEndISO) {
+          return await window.api.transactions.getAuditCoverage(userId, proposedStartISO, chosenSource ?? null, proposedEndISO);
+        }
         return chosenSource
           ? await window.api.transactions.getAuditCoverage(userId, proposedStartISO, chosenSource)
           : await window.api.transactions.getAuditCoverage(userId, proposedStartISO);
