@@ -93,7 +93,9 @@ describe("BACKLOG-3910a C10 — Force Re-cache copy says attached emails are kep
     expect(body).toContain(
       "An email that is only waiting in Needs Review is not kept: it is downloaded again if it is within your Email History and its mailbox is connected, and its suggestion is cleared.",
     );
-    expect(body).toContain("Every other email from a mailbox that is no longer connected is removed.");
+    expect(body).toContain(
+      "Emails from a mailbox that is no longer connected are removed, apart from the kept emails described above.",
+    );
     // Negative: the old rule's claims are gone.
     expect(body).not.toMatch(UNLINK_CLAIM);
     expect(body).not.toMatch(/review decisions/i);

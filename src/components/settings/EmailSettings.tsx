@@ -1097,8 +1097,9 @@ export function EmailSettings({
             submitted or approved are left exactly as they are. An email that is
             only waiting in Needs Review is not kept: it is downloaded again if it
             is within your Email History and its mailbox is connected, and its
-            suggestion is cleared. Every other email from a mailbox that is no
-            longer connected is removed. This can take a while.
+            suggestion is cleared. Emails from a mailbox that is no longer
+            connected are removed, apart from the kept emails described above.
+            This can take a while.
           </p>
           <p className="text-sm font-medium text-gray-800 -mt-4 mb-6" data-testid="force-window-line">
             {forceWindowLine(emailCacheDurationMonths, "emails")}
