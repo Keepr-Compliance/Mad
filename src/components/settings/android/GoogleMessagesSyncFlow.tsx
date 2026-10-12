@@ -28,6 +28,11 @@ import { browserLinkView, CHECKING_BROWSER, LINK_CHECK_MS, useLinkCheckOver } fr
 
 const POLL_MS = 3000;
 
+/** BACKLOG-3924 S8–S10 (founder-approved 2026-10-12): the failed step when Google Messages is not signed in. */
+export const NOT_SIGNED_IN_TITLE = "Sign in to Google Messages first";
+export const NOT_SIGNED_IN_BODY = "Open Messages for Web in Chrome, scan the QR code with your phone, then click Sync again.";
+export const NOT_SIGNED_IN_BUTTON = "Sync again";
+
 interface GoogleMessagesSyncFlowProps {
   onClose: () => void;
   /** Kept for the modal's API (Settings › Messages); the storyboards show no link here. */
@@ -262,6 +267,13 @@ export function GoogleMessagesSyncFlow({
     setJob(r.data);
   }, []);
 
+  /**
+   * BACKLOG-3924: the Sync failed because Google Messages is not signed in.
+   * Nothing was claimed, so "Sync again" starts a new Sync (a failed-run
+   * retry needs a recorded failed run, which a never-started Sync may lack).
+   */
+  const notSignedIn = job?.state === "failed" && job.error?.code === "not_signed_in";
+
   const tryAgain = useCallback(() => {
     jobIdRef.current = null;
     setJob(null);
@@ -409,7 +421,25 @@ export function GoogleMessagesSyncFlow({
         </>
       )}
 
-      {step === "failed" && job && (
+      {step === "failed" && job && notSignedIn && (
+        <>
+          {/* BACKLOG-3924 S8–S10 (founder, 2026-10-12): what to do, and where. */}
+          <h2 className={title}>{NOT_SIGNED_IN_TITLE}</h2>
+          <p className="text-[14px] text-[#374151]">{NOT_SIGNED_IN_BODY}</p>
+          <button
+            type="button"
+            className={primary}
+            onClick={() => void startSync()}
+            disabled={starting}
+            data-testid="gm-try-again"
+          >
+            {NOT_SIGNED_IN_BUTTON}
+          </button>
+          {windowNote}
+        </>
+      )}
+
+      {step === "failed" && job && !notSignedIn && (
         <>
           <h2 className={title}>{job.state === "failed" ? "Sync failed" : "Sync stopped"}</h2>
           <p className="text-[14px] text-[#374151]">

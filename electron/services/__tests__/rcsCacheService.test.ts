@@ -109,10 +109,21 @@ describe("cacheSavedFromCommit", () => {
 
 describe("shouldFocusKeeprOnJobEnd", () => {
   it("done or failed: yes; cancelled (or still running): no", () => {
-    expect(shouldFocusKeeprOnJobEnd("finished")).toBe(true);
-    expect(shouldFocusKeeprOnJobEnd("failed")).toBe(true);
-    expect(shouldFocusKeeprOnJobEnd("cancelled")).toBe(false);
-    expect(shouldFocusKeeprOnJobEnd("running")).toBe(false);
+    expect(shouldFocusKeeprOnJobEnd({ state: "finished" })).toBe(true);
+    expect(shouldFocusKeeprOnJobEnd({ state: "failed", error: { code: "scan_failed" } })).toBe(true);
+    expect(shouldFocusKeeprOnJobEnd({ state: "cancelled" })).toBe(false);
+    expect(shouldFocusKeeprOnJobEnd({ state: "running" })).toBe(false);
+  });
+  // BACKLOG-3924 C1 (founder, 2026-10-12): not signed in → Chrome stays in
+  // front (the QR code and the page's card). Every other failure still
+  // brings Keepr forward. Mutations: the code check taken out → red on the
+  // first line; "never focus on failed" → red on the second half.
+  it("C1: failed as not_signed_in → no focus; every other failure still focuses", () => {
+    expect(shouldFocusKeeprOnJobEnd({ state: "failed", error: { code: "not_signed_in" } })).toBe(false);
+    for (const code of ["page_gone", "not_opened", "page_not_ready", "keepr_refused", "list_not_reachable"]) {
+      expect(shouldFocusKeeprOnJobEnd({ state: "failed", error: { code } })).toBe(true);
+    }
+    expect(shouldFocusKeeprOnJobEnd({ state: "finished" })).toBe(true);
   });
 });
 
