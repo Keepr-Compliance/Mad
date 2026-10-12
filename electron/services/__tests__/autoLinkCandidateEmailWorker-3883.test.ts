@@ -50,6 +50,21 @@ function loadDriver(): (new (file: string, opts?: object) => DatabaseType) | nul
     return null;
   }
 }
+/**
+ * BACKLOG-3915: the full stack of the current call. tests/setup.js sets
+ * Error.stackTraceLimit = 3 when CI is set, which cuts the stack inside jest-mock's
+ * own frames, before the service frame — every yield then counts as 0. Raise the
+ * limit for this one capture only.
+ */
+function fullStack(): string {
+  const limit = Error.stackTraceLimit;
+  Error.stackTraceLimit = 50;
+  try {
+    return new Error().stack ?? "";
+  } finally {
+    Error.stackTraceLimit = limit;
+  }
+}
 const Database = loadDriver();
 const maybe = Database ? describe : describe.skip;
 
@@ -228,7 +243,7 @@ maybe("BACKLOG-3883 — the candidate-email read runs off the main thread", () =
       let serviceYields = 0;
       const realSetImmediate = global.setImmediate;
       jest.spyOn(global, "setImmediate").mockImplementation(((fn: (...a: unknown[]) => void, ...a: unknown[]) => {
-        if (/autoLinkService\.ts/.test(new Error().stack ?? "")) serviceYields++;
+        if (/autoLinkService\.ts/.test(fullStack())) serviceYields++;
         return realSetImmediate(fn, ...a);
       }) as typeof setImmediate);
 

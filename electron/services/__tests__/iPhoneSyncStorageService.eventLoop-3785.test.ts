@@ -100,6 +100,21 @@ function loadDriver(): (new (file: string) => DatabaseType) | null {
   }
 }
 
+/**
+ * BACKLOG-3915: the full stack of the current call. tests/setup.js sets
+ * Error.stackTraceLimit = 3 when CI is set, which cuts the stack inside jest-mock's
+ * own frames, before the service frame — every yield then counts as 0. Raise the
+ * limit for this one capture only.
+ */
+function fullStack(): string {
+  const limit = Error.stackTraceLimit;
+  Error.stackTraceLimit = 50;
+  try {
+    return new Error().stack ?? "";
+  } finally {
+    Error.stackTraceLimit = limit;
+  }
+}
 const Driver = loadDriver();
 const maybe = Driver ? describe : describe.skip;
 
@@ -192,7 +207,7 @@ maybe("BACKLOG-3785: storeAttachments setup keeps the main event loop responsive
     // Event-loop turns the service gives, recorded where they happen.
     const realSetImmediate = global.setImmediate;
     const yieldSpy = jest.spyOn(global, "setImmediate").mockImplementation(((fn: (...a: unknown[]) => void, ...a: unknown[]) => {
-      if (/iPhoneSyncStorageService\.ts/.test(new Error().stack ?? "")) mockEvents.push({ kind: "yield" });
+      if (/iPhoneSyncStorageService\.ts/.test(fullStack())) mockEvents.push({ kind: "yield" });
       return realSetImmediate(fn, ...a);
     }) as typeof setImmediate);
     mockEvents.length = 0;
