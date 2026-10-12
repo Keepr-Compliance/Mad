@@ -146,7 +146,7 @@ describe('cards on the real dashboard', () => {
   it('Pending Review is not a link and counts submitted + under_review deals', async () => {
     await renderDashboard();
     expect(screen.queryByRole('link', { name: /Pending Review/ })).toBeNull();
-    const label = screen.getByText('Pending Review');
+    const label = screen.getByText((_, el) => el?.hasAttribute('data-stat-label') === true && el.textContent === 'Pending Review');
     expect(label.closest('a')).toBeNull();
     expect(within(label.parentElement as HTMLElement).getByText('3')).toBeInTheDocument();
   });
@@ -222,5 +222,68 @@ describe('card markup', () => {
     expect(mockStartProgress).not.toHaveBeenCalled();
     fireEvent.click(link);
     expect(mockStartProgress).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('compact phone card (below md)', () => {
+  const cards = buildStatCards(HEADS);
+  const icons = { pending: <i data-icon />, needs_changes: <i data-icon />, approved: <i data-icon />, total: <i data-icon /> };
+  const WORDS: Record<string, string[]> = {
+    'Pending Review': ['Pending', 'Review'],
+    'Needs Changes': ['Needs', 'Changes'],
+    Approved: ['Approved'],
+    'Total Submissions': ['Total', 'Submissions'],
+  };
+  const cardBoxes = (c: HTMLElement) => Array.from(c.firstElementChild!.children) as HTMLElement[];
+  const plain = (cls: string) => cls.split(/\s+/).filter((t) => !t.startsWith('max-md:'));
+
+  it('splits each title into one block span per word, in a single label', () => {
+    const { container } = render(<DashboardStatCards cards={cards} icons={icons} />);
+    const labels = Array.from(container.querySelectorAll('[data-stat-label]'));
+    expect(labels).toHaveLength(4);
+    for (const label of labels) {
+      const spans = Array.from(label.querySelectorAll('span'));
+      expect(spans.map((s) => s.textContent)).toEqual(WORDS[label.textContent!]);
+      for (const s of spans) expect(s.className.split(/\s+/)).toContain('max-md:block');
+    }
+  });
+
+  it('is one row: icon left, title next, number pushed right and vertically centred', () => {
+    const { container } = render(<DashboardStatCards cards={cards} icons={icons} />);
+    for (const box of cardBoxes(container)) {
+      const cls = box.className.split(/\s+/);
+      expect(cls).not.toContain('max-md:flex-col');
+      expect(cls).toContain('items-center');
+      expect(cls).not.toContain('max-md:items-start');
+      const [tile, text] = Array.from(box.children) as HTMLElement[];
+      expect(tile.querySelector('[data-icon]')).not.toBeNull();
+      expect(text.className.split(/\s+/)).toContain('max-md:contents');
+      const value = text.querySelector('[data-stat-value]')!.parentElement!;
+      expect(value.className.split(/\s+/)).toContain('max-md:ml-auto');
+      expect(text.querySelector('[data-stat-label]')!.className.split(/\s+/)).toContain('max-md:flex-1');
+    }
+  });
+
+  it('keeps the desktop (md and up) classes exactly as before', () => {
+    const { container } = render(<DashboardStatCards cards={cards} icons={icons} />);
+    const box = cardBoxes(container)[0];
+    expect(plain(box.className)).toEqual(
+      expect.arrayContaining(['bg-white', 'rounded-lg', 'border', 'border-gray-200', 'p-5', 'flex', 'items-center', 'gap-4'])
+    );
+    expect(plain(box.className)).toHaveLength(8);
+    expect(plain((box.children[0] as HTMLElement).className)).toEqual(['rounded-lg', 'p-3', 'text-blue-600', 'bg-blue-50']);
+    const text = box.children[1] as HTMLElement;
+    expect(plain(text.className)).toEqual(['min-w-0']);
+    expect(plain(text.querySelector('[data-stat-label]')!.className)).toEqual(['text-sm', 'font-medium', 'text-gray-500', 'truncate']);
+    expect(plain(text.querySelector('[data-stat-value]')!.className)).toEqual(['text-2xl', 'font-semibold', 'text-gray-900']);
+    expect(plain(text.querySelector('[data-stat-value]')!.parentElement!.className)).toEqual(['flex', 'items-baseline', 'gap-2']);
+  });
+
+  it('keeps the unlinked Pending card a plain box and the aria labels', () => {
+    const { container } = render(<DashboardStatCards cards={cards} icons={icons} />);
+    expect(cardBoxes(container)[0].tagName).toBe('DIV');
+    expect(screen.getAllByRole('link').map((a) => a.getAttribute('aria-label'))).toEqual([
+      ...cards.filter((c) => c.href).map((c) => `${c.label}: ${c.value}, view submissions`),
+    ]);
   });
 });

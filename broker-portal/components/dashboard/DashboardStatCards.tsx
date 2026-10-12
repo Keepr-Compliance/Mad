@@ -3,7 +3,7 @@
 /**
  * The dashboard's four stat cards — BACKLOG-3904.
  *
- * Below md: a 2x2 grid of compact cards (icon over label over value). From md
+ * Below md: a 2x2 grid of compact one-row cards (icon, label one word per line, value right-aligned). From md
  * up the layout is the one the page always had (`StatCard` from the design
  * system: 2 columns, 4 from lg, gap-4, p-5, icon beside the text).
  *
@@ -11,7 +11,7 @@
  */
 
 import Link from 'next/link';
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
 import type { StatCardData, StatCardKey } from '@/lib/dashboard/statCards';
 
@@ -32,7 +32,7 @@ const HUE: Record<StatCardKey, Hue> = {
 };
 
 const BOX =
-  'bg-white rounded-lg border border-gray-200 p-5 flex items-center gap-4 max-md:flex-col max-md:items-start max-md:gap-2 max-md:p-3';
+  'bg-white rounded-lg border border-gray-200 p-5 flex items-center gap-4 max-md:gap-2 max-md:px-2.5 max-md:py-3.5';
 
 const LINK_AFFORDANCE =
   'min-h-[44px] cursor-pointer transition-colors [@media(hover:hover)]:hover:border-gray-300 [@media(hover:hover)]:hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2';
@@ -41,10 +41,20 @@ function Body({ card, icon }: { card: StatCardData; icon: ReactNode }) {
   return (
     <>
       <div className={`rounded-lg p-3 max-md:p-2 ${TILE[HUE[card.key]]}`}>{icon}</div>
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-gray-500 truncate max-md:text-xs max-md:whitespace-normal">{card.label}</p>
-        <div className="flex items-baseline gap-2">
-          <p className="text-2xl font-semibold text-gray-900 max-md:text-xl">{card.value}</p>
+      <div className="min-w-0 max-md:contents">
+        <p
+          data-stat-label
+          className="text-sm font-medium text-gray-500 truncate max-md:text-xs max-md:leading-tight max-md:whitespace-normal max-md:min-w-0 max-md:flex-1"
+        >
+          {card.label.split(' ').map((word, i) => (
+            <Fragment key={word}>
+              {i > 0 ? ' ' : null}
+              <span className="max-md:block">{word}</span>
+            </Fragment>
+          ))}
+        </p>
+        <div className="flex items-baseline gap-2 max-md:ml-auto">
+          <p data-stat-value className="text-2xl font-semibold text-gray-900">{card.value}</p>
         </div>
       </div>
     </>
