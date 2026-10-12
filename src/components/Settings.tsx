@@ -4,6 +4,8 @@ import { LLMSettings } from "./settings/LLMSettings";
 import { MacOSMessagesImportSettings } from "./settings/MacOSMessagesImportSettings";
 import { GoogleMessagesSettings } from "./settings/GoogleMessagesSettings";
 import { ImportSourceSettings } from "./settings/ImportSourceSettings";
+import { TextsLookbackSettings } from "./settings/TextsLookbackSettings";
+import { TextsLookbackProvider } from "./settings/textsLookback";
 import { IphoneSyncSettings } from "./settings/IphoneSyncSettings";
 import { FeatureGate } from "./common/FeatureGate";
 import { SettingsTabBar } from "./settings/SettingsTabBar";
@@ -213,8 +215,13 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             {/* Messages Import — adapts per active import source (BACKLOG-1458) */}
             <div id="settings-messages" className="mb-8">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Messages</h3>
+              <TextsLookbackProvider userId={userId}>
               <div className="space-y-4">
                 <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} />
+                {/* BACKLOG-3892 S3: ONE "How far back to import texts" picker for
+                    every source, on Mac and Windows — outside the per-source
+                    branch below, which no longer has a picker of its own. */}
+                <TextsLookbackSettings userId={userId} />
                 {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below.
                     SR C6 (founder): the Android Companion panel is no longer mounted. */}
                 {activeImportSource === 'android-messages-web' ? (
@@ -238,6 +245,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                   />
                 )}
               </div>
+              </TextsLookbackProvider>
             </div>
 
             {/* iPhone Sync — merged USB toggle + (Windows) Apple driver tools (BACKLOG-1937).

@@ -8,10 +8,11 @@
  * - Status: the extension (installed / version), Google Messages paired, the
  *   last Sync. (No consent line: users accept Keepr's terms at sign-up; the
  *   first Sync records the consent for audit.)
- * - How far back a Sync copies (the months control, shared with the macOS
- *   section). Written to `messageImport.filters` — the key the cache Sync's
- *   floor actually reads (importPlanInputs.loadStoredImportFilters); the
- *   companion's `messageImport.android` namespace is not read by it.
+ * - How far back a Sync copies: one line stating the window. The months
+ *   control itself is Settings → Messages → "How far back to import texts"
+ *   (BACKLOG-3892 S3, TextsLookbackSettings), shared by every text source;
+ *   this panel reads the same value (`messageImport.filters`, the key the
+ *   cache Sync's floor reads).
  * - Auto-delete (BACKLOG-3658 P3b): REMOVED from the screen "for now"
  *   (founder, 2026-10-04); the purge is dormant (RCS_AUTO_DELETE_ENABLED).
  * - Force re-import: Android's SHARED reset (BACKLOG-3657) — every text
@@ -40,7 +41,7 @@ export function videoEstimateText(lastVideosSeen: number | null | undefined): st
 }
 import { rcsImportService } from "../../services/rcsImportService";
 import { settingsService } from "../../services";
-import { LookbackMonthsSelect, lastMonthsPhrase, parseLookbackOption } from "./LookbackMonthsSelect";
+import { lastMonthsPhrase } from "./LookbackMonthsSelect";
 import { AndroidForceReimportWarning, androidClearedText } from "./AndroidForceReimportWarning";
 import { NotSyncedChatsModal } from "./android/NotSyncedChatsModal";
 import {
@@ -55,9 +56,7 @@ export const LINK_STATUS = { linked: "Linked", notLinked: "Not linked" } as cons
 export const FORGET_ASK = "Unlink from Keepr? You'll need to link again to sync";
 /** SR (C7 review): Withdraw consent asks first, in one line. A Sync already running is not stopped. */
 export const WITHDRAW_ASK = "Syncing stops. Texts already in Keepr stay.";
-import { readMessageImportPreferences, resolveStoredLookbackMonths } from "./messageImportPreferences";
-
-import { GM_LOOKBACK_TARGET } from "./android/googleMessagesSyncSteps";
+import { useTextsLookback } from "./textsLookback";
 import { browserLinkView, CHECKING_BROWSER, LINK_CHECK_MS, useLinkCheckOver } from "./android/browserLinkState";
 import type { RcsExtensionState } from "../../../electron/types/ipc/window-api-rcs-import";
 
@@ -82,8 +81,8 @@ interface GoogleMessagesSettingsProps {
 
 export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = EXTENSION_PUBLISHED, linkCheckMs = LINK_CHECK_MS }: GoogleMessagesSettingsProps) {
   const [state, setState] = useState<RcsExtensionState | null>(null);
-  const [lookbackMonths, setLookbackMonths] = useState<number | null>(resolveStoredLookbackMonths(undefined));
-  const [prefsSettled, setPrefsSettled] = useState(false);
+  // BACKLOG-3892 S3: the shared "How far back to import texts" value.
+  const { months: lookbackMonths } = useTextsLookback(userId);
   /** SR: Forget link's inline confirm is open. */
   const [forgetAsk, setForgetAsk] = useState(false);
   /** Founder (J flow): the account's "Beta extension install" (default off). */
@@ -122,44 +121,23 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
     await refresh();
   }, [refresh]);
 
-  // The stored window (absent key → the default, null → All time).
+  // The account's "Beta extension install".
   useEffect(() => {
     let live = true;
     void (async () => {
       try {
         const r = await settingsService.getPreferences(userId);
         if (live && r?.success) {
-          setLookbackMonths(resolveStoredLookbackMonths(readMessageImportPreferences(r.data)?.filters));
           setBetaInstall(readBetaInstallPreference(r.data));
         }
       } catch {
         // The default stays.
-      } finally {
-        if (live) setPrefsSettled(true);
       }
     })();
     return () => {
       live = false;
     };
   }, [userId]);
-
-  // Saved where the cache Sync reads it; reverted when the save fails.
-  const changeLookback = useCallback(async (value: string) => {
-    const months = parseLookbackOption(value);
-    const previous = lookbackMonths;
-    setLookbackMonths(months);
-    let saved = false;
-    try {
-      const r = await settingsService.updatePreferences(userId, { messageImport: { filters: { lookbackMonths: months } } });
-      saved = r?.success !== false;
-    } catch {
-      saved = false;
-    }
-    if (!saved) {
-      setLookbackMonths(previous);
-      setResult({ ok: false, text: "Keepr could not save that." });
-    }
-  }, [userId, lookbackMonths]);
 
   // Founder (J flow): saved with the account's other preferences; reverted on failure.
   const changeBetaInstall = useCallback(async (on: boolean) => {
@@ -229,17 +207,10 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
         )}
       </div>
 
-      <div id={GM_LOOKBACK_TARGET} className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-lookback">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-gray-600">Import messages from</span>
-          <LookbackMonthsSelect
-            value={lookbackMonths}
-            onChange={(v) => void changeLookback(v)}
-            disabled={!prefsSettled}
-            aria-label="Import messages from"
-          />
-        </div>
-        <p className="text-xs text-blue-600 mt-2" data-testid="gm-lookback-line">
+      {/* BACKLOG-3892 S3: the months control moved to the shared "How far
+          back to import texts" picker above; this line states its value. */}
+      <div className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-lookback">
+        <p className="text-xs text-blue-600" data-testid="gm-lookback-line">
           {lookbackMonths === null ? "Copying all your texts" : `Copying texts from ${lastMonthsPhrase(lookbackMonths)}`}
         </p>
       </div>
