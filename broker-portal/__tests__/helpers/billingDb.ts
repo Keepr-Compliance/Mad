@@ -17,12 +17,22 @@
  *   - maybeSingle() over more than one row: supabase-js / PostgREST answer
  *     { data: null, error: { code: 'PGRST116', ... } } (postgrest-js
  *     PostgrestBuilder, "Results contain N rows").
- *   - unique violation: Postgres SQLSTATE 23505 as PostgREST relays it.
+ *   - unique violation: Postgres SQLSTATE 23505 as PostgREST relays it; the
+ *     message names the constraint, as Postgres writes it ("duplicate key value
+ *     violates unique constraint \"<name>\"").
+ *   - billing_subscriptions (BACKLOG-3846): columns, UNIQUE
+ *     billing_subscriptions_stripe_subscription_id_key and the partial unique
+ *     index billing_subscriptions_one_open_per_user_mode (user_id, stripe_mode)
+ *     WHERE status IN (active, trialing, past_due, incomplete), from
+ *     20261011230913_backlog_3845_billing_foundation.sql.
+ *   - `.or('col.is.null,col.lt.N')`: PostgREST logic tree; `is.null` matches SQL
+ *     NULL only (a NULL never satisfies `eq`/`lt`), so a column the code leaves
+ *     NULL behaves here as it does in Postgres.
  * Ids are synthetic.
  */
 
 export type Row = Record<string, unknown>;
-type Filter = { op: 'eq' | 'in' | 'lt' | 'not'; column: string; value: unknown };
+type Filter = { op: 'eq' | 'in' | 'lt' | 'not' | 'or'; column: string; value: unknown };
 
 export interface DbCall {
   table: string;
@@ -41,6 +51,36 @@ const PRIMARY_KEYS: Record<string, string[]> = {
   stripe_customers: ['user_id', 'stripe_mode'],
   payment_intents: ['id'],
 };
+
+interface UniqueIndex {
+  name: string;
+  columns: string[];
+  where?: (row: Row) => boolean;
+}
+const OPEN_SUB_STATUSES = ['active', 'trialing', 'past_due', 'incomplete'];
+const UNIQUE_INDEXES: Record<string, UniqueIndex[]> = {
+  billing_subscriptions: [
+    { name: 'billing_subscriptions_stripe_subscription_id_key', columns: ['stripe_subscription_id'] },
+    {
+      name: 'billing_subscriptions_one_open_per_user_mode',
+      columns: ['user_id', 'stripe_mode'],
+      where: (r) => OPEN_SUB_STATUSES.includes(r.status as string),
+    },
+  ],
+};
+
+function uniqueViolation(table: string, rows: Row[], candidate: Row, self?: Row): DbError | null {
+  for (const ix of UNIQUE_INDEXES[table] ?? []) {
+    if (ix.where && !ix.where(candidate)) continue;
+    const clash = rows.some(
+      (e) => e !== self && (!ix.where || ix.where(e)) && ix.columns.every((c) => e[c] === candidate[c])
+    );
+    if (clash) {
+      return { code: '23505', message: `duplicate key value violates unique constraint "${ix.name}"` };
+    }
+  }
+  return null;
+}
 
 export class BillingDb {
   tables: Record<string, Row[]> = {};
@@ -64,9 +104,23 @@ export class BillingDb {
   from = (table: string) => new Query(this, table);
 }
 
+/** One PostgREST condition `col.op.value` (the operators the billing code uses). */
+function matchesCondition(row: Row, cond: string): boolean {
+  const [column, op, ...rest] = cond.split('.');
+  const raw = rest.join('.');
+  const v = row[column];
+  if (op === 'is' && raw === 'null') return v === null || v === undefined;
+  if (v === null || v === undefined) return false;
+  if (op === 'lt') return (v as number) < Number(raw);
+  if (op === 'eq') return String(v) === raw;
+  throw new Error(`BillingDb: unsupported or-condition ${cond}`);
+}
+
 function matches(row: Row, f: Filter): boolean {
   const v = row[f.column];
   switch (f.op) {
+    case 'or':
+      return (f.value as string).split(',').some((c) => matchesCondition(row, c));
     case 'eq':
       return v === f.value;
     case 'in':
@@ -119,6 +173,10 @@ class Query implements PromiseLike<{ data: unknown; error: DbError | null }> {
     this.call.filters.push({ op: 'lt', column, value });
     return this;
   }
+  or(expression: string) {
+    this.call.filters.push({ op: 'or', column: '', value: expression });
+    return this;
+  }
   not(column: string, op: string, value: unknown) {
     this.call.filters.push({ op: 'not', column, value: [op, value] });
     return this;
@@ -157,10 +215,18 @@ class Query implements PromiseLike<{ data: unknown; error: DbError | null }> {
           return { data: null, error: { code: '23505', message: `duplicate key value violates unique constraint "${table}_pkey"` } };
         }
       }
+      for (const r of incoming) {
+        const dup = uniqueViolation(table, rows, r);
+        if (dup) return { data: null, error: dup };
+      }
       for (const r of incoming) rows.push({ ...r });
       return { data: this.wantReturn ? incoming : null, error: null };
     }
     if (op === 'update') {
+      for (const r of hit) {
+        const dup = uniqueViolation(table, rows, { ...r, ...(this.call.payload as Row) }, r);
+        if (dup) return { data: null, error: dup };
+      }
       for (const r of hit) Object.assign(r, this.call.payload);
       return { data: this.wantReturn ? hit : null, error: null };
     }

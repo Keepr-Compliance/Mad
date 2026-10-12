@@ -17,6 +17,7 @@ import { Card, Button } from '@keepr/design-system';
 import { createClient } from '@/lib/supabase/client';
 import { formatTimestamp } from '@/lib/format';
 import { useClickOutside } from '@/hooks/useClickOutside';
+import { auditActorLabel } from '@/lib/audit-actor';
 
 interface AuditLogEntry {
   id: string;
@@ -29,7 +30,7 @@ interface AuditLogEntry {
   ip_address: string | null;
   user_agent: string | null;
   created_at: string;
-  actor_id: string;
+  actor_id: string | null;
   actor_email: string | null;
   actor_name: string | null;
 }
@@ -495,7 +496,7 @@ export function AuditLogContent({ embedded = false }: { embedded?: boolean } = {
                       {isColumnVisible('actor') && (
                         <div className="flex items-center gap-1.5 text-xs text-gray-500">
                           <User className="h-3 w-3" />
-                          <span>{entry.actor_name || entry.actor_email || 'Unknown'}</span>
+                          <span>{auditActorLabel(entry)}</span>
                         </div>
                       )}
                       {isColumnVisible('timestamp') && (
