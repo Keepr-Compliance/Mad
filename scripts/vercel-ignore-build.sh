@@ -111,9 +111,50 @@ fi
 #   package.json,
 #   package-lock.json  the install step is `cd .. && npm ci`, so the root
 #                      manifest and lockfile determine what gets installed.
-if printf '%s\n' "$CHANGED" | grep -qE "^(${PORTAL}/|packages/|shared/|package\.json\$|package-lock\.json\$)"; then
+PORTAL_PATHS="^(${PORTAL}/|packages/|shared/|package\.json\$|package-lock\.json\$)"
+
+touches_portal() {
+  printf '%s\n' "$1" | grep -qE "$PORTAL_PATHS"
+}
+
+if touches_portal "$CHANGED"; then
   log "$PORTAL affected between '$BASE' and HEAD; building"
   exit 1
+fi
+
+# Merge tips (BACKLOG-3916). A tree diff against one parent of a merge shows
+# only what the OTHER side brought in. Common shape: a branch's first push is a
+# merge of the base branch into the feature commit. With no previous deployment
+# BASE falls back to HEAD~1 -- the first parent, the feature commit -- and that
+# diff holds only the base branch's files, so the feature's own portal change
+# was invisible and the build was skipped. For a merge, also diff against EVERY
+# parent and build if any of those diffs touches the portal.
+#
+# Parents come from the raw commit object, not HEAD^@: in a shallow clone a
+# boundary commit is grafted to look parentless, which would hide that HEAD is
+# a merge at all. A parent named there but absent from the clone fails safe.
+RAW_HEAD=$(git cat-file -p HEAD 2>/dev/null) || {
+  log "cannot read the HEAD commit object; building to be safe"
+  exit 1
+}
+PARENTS=$(printf '%s\n' "$RAW_HEAD" | sed -n 's/^parent //p')
+PARENT_COUNT=$(printf '%s\n' "$PARENTS" | grep -c .)
+
+if [ "$PARENT_COUNT" -gt 1 ]; then
+  for P in $PARENTS; do
+    if ! have_commit "$P"; then
+      log "HEAD is a merge and parent '$P' is not in the clone (shallow?); building to be safe"
+      exit 1
+    fi
+    PCHANGED=$(git diff --name-only --no-renames "$P" HEAD --) || {
+      log "git diff against merge parent '$P' failed; building to be safe"
+      exit 1
+    }
+    if touches_portal "$PCHANGED"; then
+      log "$PORTAL affected between merge parent '$P' and HEAD; building"
+      exit 1
+    fi
+  done
 fi
 
 log "no $PORTAL-affecting change between '$BASE' and HEAD; skipping build"
