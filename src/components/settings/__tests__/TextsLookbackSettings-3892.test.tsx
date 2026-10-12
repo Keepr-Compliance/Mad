@@ -66,6 +66,10 @@ beforeEach(() => {
   mockUpdatePreferences.mockReset().mockImplementation(
     async (_userId: string, patch: { messageImport?: { filters?: { lookbackMonths?: number | null } } }) => {
       const months = patch.messageImport?.filters?.lookbackMonths;
+      // Real order (preferences:update = Supabase GET + UPSERT): the store changes
+      // only when the write lands, a few ticks AFTER the call. A mock that set it
+      // synchronously could not show a read that races ahead of the write.
+      await new Promise((resolve) => setTimeout(resolve, 50));
       if (months !== undefined) storedLookback = months;
       return { success: true };
     },

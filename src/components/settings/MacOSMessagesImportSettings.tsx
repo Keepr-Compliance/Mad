@@ -963,9 +963,19 @@ export function MacOSMessagesImportSettings({
     if (seenLookbackRef.current.months === lookbackMonths) return;
     seenLookbackRef.current = { months: lookbackMonths };
     setLastResult(null);
-    loadEffectiveWindow();
-    // loadEffectiveWindow is a plain per-render function; re-run on the value only.
   }, [isMacOS, textsLookback.settled, lookbackMonths]);
+
+  // The effective window is read from the STORE (main), so it can only be
+  // re-read once the save has landed — reading on the optimistic value change
+  // beats the write and keeps the old label. One read per landed save.
+  const seenSaveCountRef = useRef(textsLookback.saveCount);
+  useEffect(() => {
+    if (seenSaveCountRef.current === textsLookback.saveCount) return;
+    seenSaveCountRef.current = textsLookback.saveCount;
+    if (!isMacOS) return;
+    loadEffectiveWindow();
+    // loadEffectiveWindow is a plain per-render function; re-run on the save only.
+  }, [isMacOS, textsLookback.saveCount]);
 
   // TASK-1952: Save max messages filter
   const handleMaxMessagesChange = async (value: string) => {

@@ -30,6 +30,8 @@ export interface TextsLookback {
   settled: boolean;
   /** The last save failed and was reverted. Cleared by the next change. */
   saveFailed: boolean;
+  /** Counts saves that LANDED; a consumer re-reads anything the store derives from the value when it changes. */
+  saveCount: number;
   /**
    * Save an option value ("1.5", "3", … or "all"). Resolves true once the
    * save LANDED; on a failed save the value reverts and it resolves false.
@@ -44,6 +46,7 @@ function useTextsLookbackState(userId: string, active: boolean): TextsLookback {
   const [months, setMonths] = useState<number | null>(resolveStoredLookbackMonths(undefined));
   const [settled, setSettled] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
+  const [saveCount, setSaveCount] = useState(0);
   const monthsRef = useRef(months);
   monthsRef.current = months;
 
@@ -84,7 +87,9 @@ function useTextsLookbackState(userId: string, active: boolean): TextsLookback {
       } catch {
         saved = false;
       }
-      if (!saved) {
+      if (saved) {
+        setSaveCount((n) => n + 1);
+      } else {
         setMonths(previous);
         setSaveFailed(true);
       }
@@ -93,7 +98,10 @@ function useTextsLookbackState(userId: string, active: boolean): TextsLookback {
     [userId],
   );
 
-  return useMemo(() => ({ months, settled, saveFailed, change }), [months, settled, saveFailed, change]);
+  return useMemo(
+    () => ({ months, settled, saveFailed, saveCount, change }),
+    [months, settled, saveFailed, saveCount, change],
+  );
 }
 
 export function TextsLookbackProvider({ userId, children }: { userId: string; children: React.ReactNode }) {
