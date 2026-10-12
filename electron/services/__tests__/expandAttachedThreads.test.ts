@@ -89,7 +89,9 @@ function createSchema(db: DatabaseType): void {
       started_at DATETIME,
       status TEXT,
       message_count INTEGER DEFAULT 0,
-      text_thread_count INTEGER DEFAULT 0
+      text_thread_count INTEGER DEFAULT 0,
+      -- BACKLOG-3910 (slice b): transcribed from schema.sql transactions.submission_status
+      submission_status TEXT DEFAULT 'not_submitted' CHECK (submission_status IN ('not_submitted', 'submitted', 'under_review', 'needs_changes', 'resubmitted', 'approved', 'rejected'))
     );
 
     CREATE TABLE messages (

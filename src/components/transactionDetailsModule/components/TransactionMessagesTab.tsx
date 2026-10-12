@@ -102,6 +102,16 @@ interface TransactionMessagesTabProps {
   /** Whether a global sync (from dashboard) is in progress */
   globalSyncRunning?: boolean;
   /**
+   * BACKLOG-3910: set when the deal is locked (with the broker, or sealed). Sync is
+   * disabled and this is its tooltip.
+   */
+  syncLockedTooltip?: string;
+  /**
+   * BACKLOG-3910: set when the deal is locked (with the broker, or sealed). The deal
+   * is read-only: Attach is disabled and this is its tooltip.
+   */
+  editLockedTooltip?: string;
+  /**
    * BACKLOG-2294: true while a BACKGROUND messages sync/import is in flight
    * (audit-date-change auto-import, create auto-import, or the 2293 re-sync
    * expansion). Drives the SAME active affordance as a user-initiated sync so
@@ -159,6 +169,8 @@ export function TransactionMessagesTab({
   onSyncMessages,
   syncingMessages = false,
   globalSyncRunning = false,
+  syncLockedTooltip,
+  editLockedTooltip,
   messagesSyncInFlight = false,
   isOnline = true,
   hasContacts = false,
@@ -212,8 +224,10 @@ export function TransactionMessagesTab({
   // SAME spinner + "Syncing…" affordance instead of a dead disabled gray, and keep the button
   // non-clickable while it runs (a manual re-sync would only coalesce onto the in-flight one).
   const syncActive = syncingMessages || globalSyncRunning || messagesSyncInFlight;
-  const syncDisabled = !isOnline || syncActive;
-  const syncTooltip = !isOnline
+  const syncDisabled = !isOnline || syncActive || !!syncLockedTooltip;
+  const syncTooltip = syncLockedTooltip
+    ? syncLockedTooltip
+    : !isOnline
     ? "You are offline"
     : globalSyncRunning
     ? "A sync is already in progress from the dashboard"
@@ -331,8 +345,10 @@ export function TransactionMessagesTab({
 
   // Handle attach button click
   const handleAttachClick = useCallback(() => {
+    // BACKLOG-3910: a locked deal is read-only (the main process refuses too).
+    if (editLockedTooltip) return;
     setShowAttachModal(true);
-  }, []);
+  }, [editLockedTooltip]);
 
   // BACKLOG-2390: Undo a just-completed attach. Removes the EXACT message ids that
   // were linked via the symmetric `unlinkMessages` IPC (the same call the remove
@@ -1067,7 +1083,9 @@ export function TransactionMessagesTab({
             {userId && transactionId && (
               <button
                 onClick={handleAttachClick}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                disabled={!!editLockedTooltip}
+                title={editLockedTooltip}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="attach-messages-button"
               >
                 <svg
@@ -1093,6 +1111,7 @@ export function TransactionMessagesTab({
         {transactionId && (
           <RemovedMessagesSection
             transactionId={transactionId}
+            restoreLockedTooltip={editLockedTooltip}
             userId={userId}
             contactNames={contactNames}
             onMessagesChanged={onMessagesChanged}
@@ -1144,7 +1163,9 @@ export function TransactionMessagesTab({
           {userId && transactionId && (
             <button
               onClick={handleAttachClick}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors"
+              disabled={!!editLockedTooltip}
+              title={editLockedTooltip}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               data-testid="attach-messages-button"
             >
               <svg
@@ -1225,12 +1246,14 @@ export function TransactionMessagesTab({
       <div className="flex items-center gap-2 mb-4">
         <button
           onClick={handleToggleSelectionMode}
-          className={`flex items-center gap-1.5 px-3 h-10 text-sm font-medium rounded-lg transition-colors flex-shrink-0 ${
+          className={`flex items-center gap-1.5 px-3 h-10 text-sm font-medium rounded-lg transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${
             selectionMode
               ? "bg-blue-500 text-white hover:bg-blue-600"
               : "bg-gray-200 text-gray-700 hover:bg-gray-300"
           }`}
           data-testid="select-messages-button"
+          disabled={!!editLockedTooltip}
+          title={editLockedTooltip}
         >
           <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
@@ -1301,6 +1324,7 @@ export function TransactionMessagesTab({
                  removed list and the review queue below never receive it. */
               onSetHiddenFromExport={transactionId ? handleSetHiddenFromExport : undefined}
               hideFromExportState={hideFromExportState}
+              actionsLockedTooltip={editLockedTooltip}
               paged={
                 pagedMode && transactionId
                   ? {
@@ -1351,6 +1375,7 @@ export function TransactionMessagesTab({
       {transactionId && (
         <RemovedMessagesSection
           transactionId={transactionId}
+          restoreLockedTooltip={editLockedTooltip}
           userId={userId}
           contactNames={contactNames}
           onMessagesChanged={onMessagesChanged}

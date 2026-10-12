@@ -111,11 +111,11 @@ const TRIGGERS: ReadonlyArray<TriggerSpec> = [
   trigger("keepr_al_txn_del", "transactions", sql`DROP TRIGGER IF EXISTS temp.keepr_al_txn_del`, sql`CREATE TEMP TRIGGER IF NOT EXISTS keepr_al_txn_del AFTER DELETE ON main.transactions
     BEGIN ${BUMP}; END`),
   trigger("keepr_al_txn_upd", "transactions", sql`DROP TRIGGER IF EXISTS temp.keepr_al_txn_upd`, sql`CREATE TEMP TRIGGER IF NOT EXISTS keepr_al_txn_upd
-    AFTER UPDATE OF started_at, closed_at, created_at, property_address, property_street, status, user_id ON main.transactions
+    AFTER UPDATE OF started_at, closed_at, created_at, property_address, property_street, status, user_id, submission_status ON main.transactions
     WHEN OLD.started_at IS NOT NEW.started_at OR OLD.closed_at IS NOT NEW.closed_at
       OR OLD.created_at IS NOT NEW.created_at OR OLD.property_address IS NOT NEW.property_address
       OR OLD.property_street IS NOT NEW.property_street OR OLD.status IS NOT NEW.status
-      OR OLD.user_id IS NOT NEW.user_id
+      OR OLD.user_id IS NOT NEW.user_id OR OLD.submission_status IS NOT NEW.submission_status
     BEGIN ${BUMP}; END`),
   trigger("keepr_al_contact_del", "contacts", sql`DROP TRIGGER IF EXISTS temp.keepr_al_contact_del`, sql`CREATE TEMP TRIGGER IF NOT EXISTS keepr_al_contact_del AFTER DELETE ON main.contacts
     BEGIN ${BUMP}; END`),

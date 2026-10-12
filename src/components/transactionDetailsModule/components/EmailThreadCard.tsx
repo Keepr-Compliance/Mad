@@ -81,6 +81,8 @@ export interface EmailThreadCardProps {
   onConfirm?: (thread: EmailThread) => void;
   /** BACKLOG-2319: whether this thread's confirm action is in progress. */
   isConfirming?: boolean;
+  /** BACKLOG-3910: locked deal — approve and reject are disabled and show this text. */
+  actionsLockedTooltip?: string;
 }
 
 /**
@@ -101,6 +103,7 @@ export function EmailThreadCard({
   variant = "linked",
   onConfirm,
   isConfirming = false,
+  actionsLockedTooltip,
 }: EmailThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
   const isNeedsReview = variant === "needsReview";
@@ -238,9 +241,9 @@ export function EmailThreadCard({
                   e.stopPropagation();
                   onConfirm(thread);
                 }}
-                disabled={isConfirming || isUnlinking}
+                disabled={isConfirming || isUnlinking || !!actionsLockedTooltip}
                 className="text-gray-400 hover:text-green-600 hover:bg-green-50 rounded p-1 transition-all disabled:opacity-50"
-                title="Keep — confirm this conversation belongs to the transaction"
+                title={actionsLockedTooltip ?? "Keep — confirm this conversation belongs to the transaction"}
                 data-testid="confirm-thread-button"
               >
                 {isConfirming ? (
@@ -284,9 +287,9 @@ export function EmailThreadCard({
                   e.stopPropagation();
                   onUnlink(thread);
                 }}
-                disabled={isUnlinking}
+                disabled={isUnlinking || !!actionsLockedTooltip}
                 className="text-gray-400 hover:text-red-600 hover:bg-red-50 rounded p-1 transition-all disabled:opacity-50"
-                title="Remove from transaction"
+                title={actionsLockedTooltip ?? "Remove from transaction"}
                 data-testid="unlink-thread-button"
               >
                 {isUnlinking ? (

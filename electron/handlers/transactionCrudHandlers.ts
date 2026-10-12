@@ -16,6 +16,11 @@ import emailSyncService from "../services/emailSyncService";
 // BACKLOG-1802: automatic per-transaction email sync on create/open/date-change.
 // BACKLOG-1832: isAutoSyncInFlight supports mount-time spinner state query.
 import { triggerTransactionSyncInBackground, isAutoSyncInFlight } from "../services/transactionSyncTrigger";
+import {
+  refuseIfDealLocked,
+  refuseIfAnyDealLocked,
+  getCommunicationTransactionId,
+} from "../services/dealLockState";
 import { isAuditWindowExtended } from "../utils/emailDateRange";
 // BACKLOG-2292: automatic audit-window MESSAGES sync (the messages twin) + the
 // coverage-detection reads that drive the date-selection popup and export gate.
@@ -476,6 +481,9 @@ export function registerTransactionCrudHandlers(
       if (!validatedTransactionId) {
         throw new ValidationError("Transaction ID validation failed", "transactionId");
       }
+      // BACKLOG-3910: a locked deal (submitted or sealed) is fully read-only.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId, "remove-texts");
+      if (lockedRefusal) return lockedRefusal;
       const result = await unlinkTextThreads(validatedTransactionId, validateThreadKeys(threadKeys));
       return { success: true, ...result };
     }, { module: "Transactions" }),
@@ -998,6 +1006,10 @@ export function registerTransactionCrudHandlers(
       const validatedNotes =
         notes && typeof notes === "string" ? notes.trim() : null;
 
+      // BACKLOG-3910: no contact may be added to a locked deal (submitted or sealed).
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId as string, "add-contact");
+      if (lockedRefusal) return lockedRefusal;
+
       // TASK-1031: assignContactToTransaction now auto-links communications
       // for the newly added contact
       const result = await transactionService.assignContactToTransaction(
@@ -1047,6 +1059,10 @@ export function registerTransactionCrudHandlers(
         );
       }
       const validatedContactId = validateContactId(contactId);
+
+      // BACKLOG-3910: a locked deal (submitted or sealed) is fully read-only.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId as string, "remove-contact");
+      if (lockedRefusal) return lockedRefusal;
 
       await transactionService.removeContactFromTransaction(
         validatedTransactionId as string,
@@ -1117,6 +1133,10 @@ export function registerTransactionCrudHandlers(
       if (!validatedContactId) {
         throw new ValidationError("Contact ID validation failed", "contactId");
       }
+
+      // BACKLOG-3910: putting a removed party back is adding a contact.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId as string, "add-contact");
+      if (lockedRefusal) return lockedRefusal;
 
       const restored = await databaseService.restoreContactToTransaction(
         validatedTransactionId as string,
@@ -1231,6 +1251,17 @@ export function registerTransactionCrudHandlers(
         };
       });
 
+      // BACKLOG-3910: a batch is refused whole on a
+      // locked deal (submitted or sealed), so nothing in it is half-applied.
+      // A remove-only batch is refused too: a locked deal is read-only.
+      {
+        const lockedRefusal = refuseIfDealLocked(
+          validatedTransactionId as string,
+          validatedOperations.some((op) => op.action === "add") ? "add-contact" : "remove-contact",
+        );
+        if (lockedRefusal) return lockedRefusal;
+      }
+
       await transactionService.batchUpdateContactAssignments(
         validatedTransactionId as string,
         validatedOperations,
@@ -1269,7 +1300,9 @@ export function registerTransactionCrudHandlers(
       // window: bounded enough to await. The multi-deal loop in contacts:update
       // is NOT awaited for exactly this reason. The provider fetch below stays
       // fire-and-forget, so the 820 regression cannot return.
-      let review: { added: number; linked: number; outstanding: number } | undefined;
+      let review:
+        | { added: number; linked: number; outstanding: number; skipped?: "submitted" | "sealed" }
+        | undefined;
       if (addOperations.length > 0) {
         try {
           const { autoLinkCommunicationsForContact } = await import(
@@ -1278,6 +1311,8 @@ export function registerTransactionCrudHandlers(
           const { countReviewItems } = await import("../services/reviewStateService");
           let linked = 0;
           let added = 0;
+          // BACKLOG-3910: set when the deal is locked and discovery added nothing.
+          let skipped: "submitted" | "sealed" | undefined;
           for (const op of addOperations) {
             const r = await autoLinkCommunicationsForContact({
               caller: "addContact",
@@ -1289,11 +1324,13 @@ export function registerTransactionCrudHandlers(
             });
             linked += r.emailsLinked + r.messagesLinked;
             added += r.queuedForReview ?? 0;
+            if (r.skippedLocked) skipped = r.skippedLocked;
           }
           review = {
             added,
             linked,
             outstanding: countReviewItems(validatedTransactionId as string),
+            ...(skipped ? { skipped } : {}),
           };
         } catch (error) {
           logService.warn("[BACKLOG-2791] discovery failed after contact save", "Transactions", {
@@ -1386,6 +1423,13 @@ export function registerTransactionCrudHandlers(
           error: "Invalid communication ID",
         };
       }
+
+      // BACKLOG-3910: a locked deal (submitted or sealed) is fully read-only.
+      const lockedRefusal = refuseIfAnyDealLocked(
+        [getCommunicationTransactionId(communicationId.trim())],
+        "remove-emails",
+      );
+      if (lockedRefusal) return lockedRefusal;
 
       // BACKLOG-1778: capture the removed communication ids (clicked row +
       // thread siblings) so the renderer can drop exactly those rows in place

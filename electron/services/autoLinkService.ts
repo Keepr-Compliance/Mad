@@ -67,6 +67,8 @@ import {
   type NormalizedAddress,
 } from "../utils/addressNormalization";
 import type { MatchReason } from "../types/models";
+import { dealLockReason, type DealLockReason } from "./transactionEligibility";
+import { getDealLockReason } from "./dealLockState";
 // BACKLOG-2562: the ONE definition of "is this deal live?". These queries
 // previously carried `status != 'archived'`, which is a tautology ('archived'
 // is not a permitted status) and therefore admitted REJECTED deals.
@@ -169,6 +171,11 @@ export interface AutoLinkResult {
    * made this defect take a full log trace to find.
    */
   blockedPendingReview?: number;
+  /**
+   * BACKLOG-3910: the deal is locked (submitted to the broker, or sealed), so
+   * this run added nothing. Set only when the run returned for that reason.
+   */
+  skippedLocked?: DealLockReason;
 }
 
 /**
@@ -191,6 +198,8 @@ interface TransactionInfo {
   propertyAddress: string | null;
   /** BACKLOG-1364: When true, skip the address filter and link ALL emails from contacts */
   skipAddressFilter: boolean;
+  /** BACKLOG-3910: why the deal is locked, or null when it is open. */
+  lockReason: DealLockReason | null;
 }
 
 // ============================================
@@ -255,6 +264,7 @@ async function getTransactionInfo(
     property_address: string | null;
     property_street: string | null;
     skip_address_filter: number | null;
+    submission_status?: string | null;
   }>(TRANSACTION_AUTOLINK_WINDOW_SQL, [transactionId]);
 
   if (!transaction) {
@@ -268,6 +278,7 @@ async function getTransactionInfo(
     closed_at: transaction.closed_at,
     propertyAddress: transaction.property_address || transaction.property_street || null,
     skipAddressFilter: transaction.skip_address_filter === 1,
+    lockReason: dealLockReason(transaction.submission_status),
   };
 }
 
@@ -629,7 +640,7 @@ export async function linkEmailToTransaction(
   linkSource: "auto" | "manual" | "scan" = "auto",
   linkConfidence: number = 0.85,
   matchReason: MatchReason = "address_found"
-): Promise<"linked" | "already_linked" | "pending_review" | "error"> {
+): Promise<"linked" | "already_linked" | "pending_review" | "locked" | "error"> {
   // Check if this email is already linked to this transaction via communications table
   const existing = dbGet<{ id: string; transaction_id: string }>(EXISTING_EMAIL_COMMUNICATION_SQL, [emailId, transactionId]);
 
@@ -639,6 +650,21 @@ export async function linkEmailToTransaction(
     // user_confirmed link back to address_missing (idempotent + preserves the
     // user's decision).
     return "already_linked";
+  }
+
+  // BACKLOG-3910: backstop. An AUTOMATIC link ("auto" / "scan") never lands on a
+  // locked deal, whoever the caller is. "manual" is the user's own act and is
+  // allowed (attach by hand, approving a Needs Review item).
+  if (linkSource !== "manual") {
+    const lockReason = getDealLockReason(transactionId);
+    if (lockReason) {
+      await logService.debug(
+        `[BACKLOG-3910] refused to auto-link email ${emailId}: deal is locked (${lockReason})`,
+        "AutoLinkService",
+        { transactionId, emailId, linkSource },
+      );
+      return "locked";
+    }
   }
 
   // BACKLOG-2880: AN AUTOMATIC PASS MAY NOT LINK WHAT REVIEW ALREADY OWNS.
@@ -815,6 +841,21 @@ export async function autoLinkCommunicationsForContact(
         level: "info",
         data: { transactionId },
       });
+    }
+
+    // BACKLOG-3910: a locked deal (with the broker, or sealed) gets no automatic
+    // links and no new Needs Review items — from this pass or any caller of it
+    // (deal open, contact add/assign, the Sync buttons, the post-import sweep).
+    // Read from the transaction query above; no extra read. Other deals the same
+    // contact is on are unaffected: each runs its own pass.
+    if (transactionInfo.lockReason) {
+      result.skippedLocked = transactionInfo.lockReason;
+      await logService.info(
+        `[BACKLOG-3910] auto-link skipped: deal is locked (${transactionInfo.lockReason})`,
+        "AutoLinkService",
+        { transactionId, contactId, caller: options.caller },
+      );
+      return result;
     }
 
     const { userId } = transactionInfo;
@@ -1560,6 +1601,8 @@ export interface ExpandAttachedThreadsResult {
   messagesLinked: number;
   /** Candidate messages skipped because the user had removed the thread/message */
   skippedSuppressed: number;
+  /** BACKLOG-3910: transactions skipped because the deal is locked (submitted / sealed) */
+  skippedLockedDeals?: number;
   /** Candidate messages skipped because they were already linked (idempotency) */
   skippedAlreadyLinked: number;
   /** Errors encountered while linking */
@@ -1971,6 +2014,13 @@ async function expandAttachedThreadsForUserOnce(
     for (const [transactionId, attachedThreadIds] of threadsByTxn) {
       // One transaction per event-loop turn (the per-transaction reads are synchronous).
       await new Promise<void>((resolve) => setImmediate(resolve));
+      // BACKLOG-3910: a locked deal (with the broker, or sealed) gets nothing new from
+      // the expansion. Read live, per deal: on an incremental run `threadsByTxn` is the
+      // previous run's map, so a deal locked since then is still in it.
+      if (getDealLockReason(transactionId)) {
+        result.skippedLockedDeals = (result.skippedLockedDeals ?? 0) + 1;
+        continue;
+      }
       // 6. Suppression sets for THIS transaction — identical to the ones
       //    autoLinkCommunicationsForContact honors. A conversation/message the
       //    user removed stays removed.

@@ -10,6 +10,7 @@
 // - Network resilience wrapping
 // ============================================
 
+import { getDealLockReason } from "./dealLockState";
 import * as Sentry from "@sentry/electron/main";
 import {
   UPDATE_EMAIL_IDENTITY_SQL,
@@ -1839,6 +1840,23 @@ class EmailSyncService {
     queueForReviewInsteadOfLinking?: boolean;
   }): Promise<FetchAndAutoLinkResult> {
     const { userId, transactionId, contactId, transactionDetails, queueForReviewInsteadOfLinking } = params;
+
+    // BACKLOG-3910: a locked deal (with the broker, or sealed) is not searched and
+    // gets nothing new when a contact is added or assigned.
+    const lockReason = getDealLockReason(transactionId);
+    if (lockReason) {
+      return {
+        emailsFetched: 0,
+        emailsStored: 0,
+        autoLinkResult: {
+          emailsLinked: 0,
+          messagesLinked: 0,
+          alreadyLinked: 0,
+          errors: 0,
+          skippedLocked: lockReason,
+        },
+      };
+    }
 
     // Get contact email addresses
     const contactEmails = getEmailsByContactId(contactId);

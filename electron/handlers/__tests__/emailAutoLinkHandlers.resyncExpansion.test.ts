@@ -100,6 +100,27 @@ describe("transactions:resync-auto-link runs attached-thread expansion (BACKLOG-
     });
   });
 
+  // BACKLOG-3910 (slice b): the deal's Sync button on a locked deal is a no-op that says why.
+  it.each([
+    ["submitted", "submitted"],
+    ["under_review", "submitted"],
+    ["resubmitted", "submitted"],
+    ["approved", "sealed"],
+  ])("a %s deal returns skipped:%s and runs neither auto-link nor expansion", async (status, reason) => {
+    mockGetTransactionWithContacts.mockResolvedValue({
+      id: TX_ID,
+      user_id: USER_ID,
+      submission_status: status,
+      contact_assignments: [{ contact_id: "c-1" }],
+    });
+
+    const result = (await resync({}, TX_ID)) as { success: boolean; skipped?: string };
+
+    expect([result.success, result.skipped]).toEqual([true, reason]);
+    expect(mockAutoLinkForContact).not.toHaveBeenCalled();
+    expect(mockExpandAttachedThreads).not.toHaveBeenCalled();
+  });
+
   it("invokes expandAttachedThreadsForUser with the transaction's user_id, after the per-contact loop", async () => {
     const result = (await resync({}, TX_ID)) as {
       success: boolean;

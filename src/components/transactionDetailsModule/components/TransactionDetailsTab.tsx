@@ -57,6 +57,16 @@ interface TransactionDetailsTabProps {
   syncingCommunications?: boolean;
   /** Whether a global sync (from dashboard) is in progress */
   globalSyncRunning?: boolean;
+  /**
+   * BACKLOG-3910: set when the deal is locked (with the broker, or sealed). Sync is
+   * disabled and this is its tooltip.
+   */
+  syncLockedTooltip?: string;
+  /**
+   * BACKLOG-3910: set when the deal is locked (with the broker, or sealed). The deal
+   * is read-only: Edit contacts is disabled and this is its tooltip.
+   */
+  editLockedTooltip?: string;
   /** TASK-2074: Whether the app is online (network connectivity) */
   isOnline?: boolean;
   /** BACKLOG-1548: Callback to refresh contact data after editing a contact */
@@ -138,6 +148,8 @@ export function TransactionDetailsTab({
   onSyncCommunications,
   syncingCommunications = false,
   globalSyncRunning = false,
+  syncLockedTooltip,
+  editLockedTooltip,
   isOnline = true,
   onContactUpdated,
   onNavigateToTab,
@@ -150,8 +162,10 @@ export function TransactionDetailsTab({
   removedContactsRefreshKey,
 }: TransactionDetailsTabProps): React.ReactElement {
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
-  const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning;
-  const syncTooltip = !isOnline
+  const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning || !!syncLockedTooltip;
+  const syncTooltip = syncLockedTooltip
+    ? syncLockedTooltip
+    : !isOnline
     ? "You are offline"
     : globalSyncRunning
     ? "A sync is already in progress from the dashboard"
@@ -478,7 +492,8 @@ export function TransactionDetailsTab({
       {checklistSection}
 
       {/* AI Suggested Contacts Section - only show if there are suggestions */}
-      {resolvedSuggestions.length > 0 && onAcceptSuggestion && onRejectSuggestion && onAcceptAll && (
+      {/* BACKLOG-3910: hidden on a locked deal; accepting one would add a contact. */}
+      {!editLockedTooltip && resolvedSuggestions.length > 0 && onAcceptSuggestion && onRejectSuggestion && onAcceptAll && (
         <div className="mb-8">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
@@ -599,8 +614,9 @@ export function TransactionDetailsTab({
             {onEditContacts && (
               <button
                 onClick={onEditContacts}
-                className="flex items-center gap-2 p-1.5 sm:px-3 sm:py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors"
-                title="Edit Contacts"
+                disabled={!!editLockedTooltip}
+                className="flex items-center gap-2 p-1.5 sm:px-3 sm:py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title={editLockedTooltip ?? "Edit Contacts"}
                 data-testid="edit-contacts-button"
               >
                 <svg
@@ -699,6 +715,7 @@ export function TransactionDetailsTab({
           transactionId={transaction.id}
           transactionType={(transaction.transaction_type as TransactionType) || "other"}
           onRestoreComplete={onContactRestoreComplete}
+          restoreLockedTooltip={editLockedTooltip}
           onShowSuccess={onShowSuccess}
           onShowError={onShowError}
           isOpen={removedContactsOpen}

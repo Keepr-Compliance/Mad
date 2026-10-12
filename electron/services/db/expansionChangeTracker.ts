@@ -12,6 +12,9 @@
  *   comm_ins   a per-message communications INSERT (a new attached pair)
  *   comm_other a per-message communications DELETE, or an UPDATE of its link columns
  *   ign        any change to ignored_communications (suppression added or restored)
+ *   (msg)      also a deal's submission_status changing (BACKLOG-3910): a locked deal is
+ *              skipped, so locking or unlocking one changes what a run would link, and an
+ *              unlocked deal must get a full look at its attached threads again
  *
  * New messages are not counted here: they are found by rowid (MAX(rowid) per user is an
  * index seek), which is how a post-sync run looks at only the threads that grew.
@@ -109,6 +112,17 @@ const TRIGGERS: ReadonlyArray<{ name: string; table: string; drop: SafeSql; ddl:
     table: "ignored_communications",
     ddl: sql`CREATE TEMP TRIGGER IF NOT EXISTS keepr_exp_ign_upd AFTER UPDATE ON main.ignored_communications
       BEGIN UPDATE ${GEN_TABLE} SET n = n + 1 WHERE k = 'ign'; END`,
+  },
+  {
+    // BACKLOG-3910: locking or unlocking a deal (submission_status) changes what the
+    // expansion may link. Counted as 'msg' so the next run is a full (targeted) one.
+    name: "keepr_exp_txn_lock",
+    drop: sql`DROP TRIGGER IF EXISTS temp.keepr_exp_txn_lock`,
+    table: "transactions",
+    ddl: sql`CREATE TEMP TRIGGER IF NOT EXISTS keepr_exp_txn_lock
+      AFTER UPDATE OF submission_status ON main.transactions
+      WHEN OLD.submission_status IS NOT NEW.submission_status
+      BEGIN UPDATE ${GEN_TABLE} SET n = n + 1 WHERE k = 'msg'; END`,
   },
 ];
 

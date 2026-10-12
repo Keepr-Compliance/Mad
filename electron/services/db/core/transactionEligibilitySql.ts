@@ -71,3 +71,17 @@ export const LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED = sql`status != ?`;
 export function withLiveTransactionParam(params: readonly unknown[]): unknown[] {
   return [...params, REJECTED_TRANSACTION_STATUS];
 }
+
+/**
+ * BACKLOG-3910: a deal's submission status, for the locked-deal check
+ * (`transactionEligibility.dealLockReason`). One bound parameter: transaction id.
+ * Read by `dealLockState.getDealLockReason`, the backstop at every automatic
+ * writer. The sweeps read the same column through queries they already run.
+ */
+export const TRANSACTION_SUBMISSION_STATUS_SQL = sql`SELECT submission_status FROM transactions WHERE id = ?`;
+
+/** BACKLOG-3910: the deal a linked communication row belongs to. One parameter: communication id. */
+export const COMMUNICATION_TRANSACTION_ID_SQL = sql`SELECT transaction_id FROM communications WHERE id = ?`;
+
+/** BACKLOG-3910: the deal a text message is linked to. One parameter: message id. */
+export const MESSAGE_TRANSACTION_ID_SQL = sql`SELECT transaction_id FROM messages WHERE id = ?`;

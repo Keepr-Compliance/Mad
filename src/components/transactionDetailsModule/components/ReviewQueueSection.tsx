@@ -53,6 +53,8 @@ export interface ReviewQueueSectionProps {
   contactNames?: Record<string, string>;
   auditStartDate?: Date | string | null;
   auditEndDate?: Date | string | null;
+  /** BACKLOG-3910: locked deal — approve and reject are disabled and show this text. */
+  actionsLockedTooltip?: string;
 }
 
 /**
@@ -157,8 +159,12 @@ export function ReviewCards({
   contactNames,
   auditStartDate,
   auditEndDate,
+  actionsLockedTooltip,
 }: {
   items: ReviewItemDto[];
+  /** BACKLOG-3910: locked deal — approve and reject are disabled and show this text. */
+  actionsLockedTooltip?: string;
+
   kind: "email" | "text";
   /** The THREAD key currently acting, not an item id. */
   busyId: string | null;
@@ -196,6 +202,7 @@ export function ReviewCards({
               onUnlink={() => onRejectItem(ids, group.key)}
               isConfirming={busyId === group.key}
               isUnlinking={busyId === group.key}
+              actionsLockedTooltip={actionsLockedTooltip}
               userEmail={userEmail}
               nameMap={nameMap}
             />
@@ -238,6 +245,7 @@ export function ReviewCards({
               onConfirm={() => onApproveItem(ids, group.key)}
               isConfirming={busyId === group.key}
               onUnlink={() => onRejectItem(ids, group.key)}
+              actionsLockedTooltip={actionsLockedTooltip}
             />
           </div>
         );
@@ -257,6 +265,7 @@ export function ReviewQueueSection({
   contactNames,
   auditStartDate,
   auditEndDate,
+  actionsLockedTooltip,
 }: ReviewQueueSectionProps): React.ReactElement | null {
   // Default OPEN — this is the actionable surface (develop's behaviour).
   const [isOpen, setIsOpen] = useState(true);
@@ -345,6 +354,7 @@ export function ReviewQueueSection({
           contactNames={contactNames}
           auditStartDate={auditStartDate}
           auditEndDate={auditEndDate}
+          actionsLockedTooltip={actionsLockedTooltip}
         />
       )}
     </div>

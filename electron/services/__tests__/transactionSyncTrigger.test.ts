@@ -268,6 +268,51 @@ describe("ensureTransactionEmailsSynced", () => {
     expect(mockRecordFailure).toHaveBeenCalled();
   });
 
+  // BACKLOG-3910 (slice b) — C-R3d: a locked deal is not searched, for every reason.
+  it.each([
+    ["submitted", "submitted"],
+    ["under_review", "submitted"],
+    ["resubmitted", "submitted"],
+    ["approved", "sealed"],
+  ])("C-R3d: a %s deal is skipped (%s) for every reason: no fetch, no auto-link", async (status, lockReason) => {
+    mockGetSyncState.mockReturnValue({
+      newest_cached_at: "2028-06-01T00:00:00.000Z",
+      oldest_cached_at: "2025-01-01T00:00:00.000Z",
+    });
+    mockGetTxn.mockResolvedValue({
+      id: "tx-1",
+      user_id: "user-1",
+      started_at: "2026-01-01T00:00:00.000Z",
+      closed_at: "2027-12-31T00:00:00.000Z",
+      submission_status: status,
+      contact_assignments: [{ contact_id: "c1" }],
+    });
+    for (const reason of ["open", "create", "export", "date-change", "scan"] as const) {
+      const result = await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason });
+      expect([reason, result.ran, result.skipped]).toEqual([reason, false, lockReason]);
+    }
+    expect(mockSyncTransactionEmails).not.toHaveBeenCalled();
+    expect(mockAutoLink).not.toHaveBeenCalled();
+  });
+
+  it("C-R3d REVERSE: a needs_changes deal is swept as usual (covered path runs auto-link)", async () => {
+    mockGetSyncState.mockReturnValue({
+      newest_cached_at: "2028-06-01T00:00:00.000Z",
+      oldest_cached_at: "2025-01-01T00:00:00.000Z",
+    });
+    mockGetTxn.mockResolvedValue({
+      id: "tx-1",
+      user_id: "user-1",
+      started_at: "2026-01-01T00:00:00.000Z",
+      closed_at: "2027-12-31T00:00:00.000Z",
+      submission_status: "needs_changes",
+      contact_assignments: [{ contact_id: "c1" }],
+    });
+    const result = await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason: "open" });
+    expect(result.skipped).toBe("covered");
+    expect(mockAutoLink).toHaveBeenCalledTimes(1);
+  });
+
   it("returns skipped:not_found for a missing transaction", async () => {
     mockGetTxn.mockResolvedValue(null);
     const result = await ensureTransactionEmailsSynced({ transactionId: "nope", reason: "open" });

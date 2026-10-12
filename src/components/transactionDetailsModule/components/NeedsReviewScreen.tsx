@@ -54,6 +54,8 @@ export interface NeedsReviewScreenProps {
   contactNames?: Record<string, string>;
   auditStartDate?: Date | string | null;
   auditEndDate?: Date | string | null;
+  /** BACKLOG-3910: locked deal — approve and reject are disabled and show this text. */
+  actionsLockedTooltip?: string;
 }
 
 export function NeedsReviewScreen({
@@ -68,6 +70,7 @@ export function NeedsReviewScreen({
   contactNames,
   auditStartDate,
   auditEndDate,
+  actionsLockedTooltip,
 }: NeedsReviewScreenProps): React.ReactElement {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -167,7 +170,8 @@ export function NeedsReviewScreen({
               <button
                 type="button"
                 onClick={() => actAll(onReject)}
-                disabled={bulkBusy}
+                disabled={bulkBusy || !!actionsLockedTooltip}
+                title={actionsLockedTooltip}
                 className="whitespace-nowrap text-white bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg px-2.5 py-2 sm:px-3.5 transition-all font-medium text-xs sm:text-sm disabled:opacity-50"
               >
                 Reject all
@@ -175,7 +179,8 @@ export function NeedsReviewScreen({
               <button
                 type="button"
                 onClick={() => actAll(onApprove)}
-                disabled={bulkBusy}
+                disabled={bulkBusy || !!actionsLockedTooltip}
+                title={actionsLockedTooltip}
                 className="whitespace-nowrap text-amber-700 bg-white hover:bg-opacity-90 rounded-lg px-2.5 py-2 sm:px-3.5 transition-all font-semibold text-xs sm:text-sm disabled:opacity-50"
               >
                 Approve all
@@ -283,6 +288,7 @@ export function NeedsReviewScreen({
               contactNames={contactNames}
               auditStartDate={auditStartDate}
               auditEndDate={auditEndDate}
+              actionsLockedTooltip={actionsLockedTooltip}
             />
           </div>
         )}

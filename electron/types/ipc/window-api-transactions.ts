@@ -711,6 +711,8 @@ export interface WindowApiTransactions {
      */
     unlinkedIds?: string[];
     error?: string;
+    /** BACKLOG-3910: set when the deal is locked and the main process refused. */
+    dealLocked?: "submitted" | "sealed";
   }>;
   /**
    * BACKLOG-2319: Confirm "Needs review" email links (thread-aware) → Linked.

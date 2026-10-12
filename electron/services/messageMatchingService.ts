@@ -31,6 +31,7 @@ import {
 } from "./db/messageMatchingSql";
 import { MESSAGE_EXTERNAL_ID_BY_ID_SQL } from "./db/messageImportSql";
 import logService from "./logService";
+import { getDealLockReason } from "./dealLockState";
 import { normalizeAddress, contentContainsAddress, type NormalizedAddress } from "../utils/addressNormalization";
 import {
   getIgnoredEmailIdsForTransaction,
@@ -311,6 +312,10 @@ export function createCommunicationReferenceSync(
   linkSource: "auto" | "manual" | "scan" = "auto",
   linkConfidence: number = 0.9
 ): string | null {
+  // BACKLOG-3910: backstop. An AUTOMATIC link never lands on a locked deal (with
+  // the broker, or sealed). "manual" is the user's own act and is allowed.
+  if (linkSource !== "manual" && getDealLockReason(transactionId)) return null;
+
   const id = crypto.randomUUID();
 
   // First check if this link already exists

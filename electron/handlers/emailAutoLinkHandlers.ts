@@ -5,6 +5,7 @@
 // BACKLOG-1364: Added update-address-filter handler
 // ============================================
 
+import { dealLockReason } from "../services/transactionEligibility";
 import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import transactionService from "../services/transactionService";
@@ -93,6 +94,19 @@ export function registerEmailAutoLinkHandlers(): void {
         return {
           success: false,
           error: "Transaction not found",
+        };
+      }
+
+      // BACKLOG-3910: a locked deal (with the broker, or sealed) gets nothing new.
+      // The deal screen disables this button; this is the backstop.
+      const lockReason = dealLockReason(transactionDetails.submission_status);
+      if (lockReason) {
+        return {
+          success: true,
+          skipped: lockReason,
+          totalEmailsLinked: 0,
+          totalMessagesLinked: 0,
+          totalAlreadyLinked: 0,
         };
       }
 
@@ -251,6 +265,18 @@ export function registerEmailAutoLinkHandlers(): void {
         return {
           success: true,
           message: "Address filter updated, but transaction not found for re-link",
+        };
+      }
+
+      // BACKLOG-3910: the setting is saved, but a locked deal gets nothing new.
+      const lockReason = dealLockReason(transactionDetails.submission_status);
+      if (lockReason) {
+        return {
+          success: true,
+          skipped: lockReason,
+          totalEmailsLinked: 0,
+          totalMessagesLinked: 0,
+          totalAlreadyLinked: 0,
         };
       }
 

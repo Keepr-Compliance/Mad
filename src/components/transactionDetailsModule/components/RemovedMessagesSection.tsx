@@ -68,6 +68,12 @@ interface RemovedThread {
 interface RemovedMessagesSectionProps {
   transactionId: string;
   /**
+   * BACKLOG-3910: set on a locked deal (submitted or sealed). Restoring puts an
+   * item back on the deal, which a locked deal refuses, so the restore buttons
+   * (single and bulk) are disabled and carry this text.
+   */
+  restoreLockedTooltip?: string;
+  /**
    * BACKLOG-2758: owner of the contacts. This section resolved handles with NO
    * userId at all, so the hard filter that keeps another user's contacts from
    * naming this user's threads was simply absent here — the "user-unscoped"
@@ -267,6 +273,7 @@ const removeRestoredMessageRows = (
 };
 
 export function RemovedMessagesSection({
+  restoreLockedTooltip,
   transactionId,
   userId,
   onRestoreComplete,
@@ -445,6 +452,7 @@ export function RemovedMessagesSection({
           isRemoved={true}
           onRestore={() => handleRestore(thread)}
           isRestoring={restoringId === messageGroupKey(thread)}
+          restoreLockedTooltip={restoreLockedTooltip}
         />
         {/* Removal metadata below the card */}
         <div className="flex items-center gap-3 -mt-2 mb-3 ml-1 text-xs text-gray-400">
@@ -481,7 +489,7 @@ export function RemovedMessagesSection({
       getGroupKey={messageGroupKey}
       renderGroup={renderGroup}
       selectionMode={selectionMode}
-      onEnterSelectionMode={enterSelectionMode}
+      onEnterSelectionMode={restoreLockedTooltip ? undefined : enterSelectionMode}
       onExitSelectionMode={exitSelectionMode}
       isGroupSelected={isGroupSelected}
       onToggleGroupSelect={toggleGroupSelection}
