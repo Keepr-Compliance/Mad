@@ -166,7 +166,7 @@ describe('page headings below md (BACKLOG-3896)', () => {
         headers++;
         const tag = part.slice(0, part.search(/\/>|>\s*\n?\s*</) + 2);
         expect({ f: path.basename(f), ok: /phoneHideTitle/.test(tag) }).toEqual({ f: path.basename(f), ok: true });
-        expect(/title="/.test(tag)).toBe(false); // titles come from PAGE_TITLES or a computed greeting
+        expect(/(?<![A-Za-z])title="/.test(tag)).toBe(false); // titles come from PAGE_TITLES or a computed greeting
       }
     }
     expect(headers).toBeGreaterThanOrEqual(13);
