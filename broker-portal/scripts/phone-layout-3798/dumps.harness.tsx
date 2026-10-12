@@ -26,10 +26,11 @@ import { submissionRow } from '../../__tests__/helpers/submissionRows';
 import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../../__tests__/fixtures/orgFeatures';
 
 const mockEmulator = createPostgrestEmulator();
+let mockPath = '/dashboard/submissions/sub-1';
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: jest.fn(), push: jest.fn() }),
-  usePathname: () => '/dashboard/submissions/sub-1',
+  usePathname: () => mockPath,
   useSearchParams: () => new URLSearchParams(),
   redirect: (to: string) => {
     throw new Error(`redirect:${to}`);
@@ -101,6 +102,7 @@ import { MessageList, type Message } from '@/components/submission/MessageList';
 import { AttachmentList } from '@/components/submission/AttachmentList';
 import { ChecklistReview } from '@/components/submission/ChecklistReview';
 import type { ChecklistSectionView } from '@/lib/submissions/checklistModel';
+import { PageHeader } from '@keepr/design-system';
 import UserListClient from '@/components/users/UserListClient';
 import UserDetailsCard, { type MemberDetailsData } from '@/components/users/UserDetailsCard';
 import SubmissionsPage from '@/app/dashboard/submissions/page';
@@ -155,25 +157,33 @@ const reviewPage = (
   </div>
 );
 
+// BACKLOG-3896: the shell dumps are WHOLE-BODY dumps. A Radix drawer portals to
+// document.body, outside the render container; a container dump would silently
+// drop it and leave the phone drawer unmeasured. Run on both sides of a
+// comparison (base and branch) so the harness change cancels out.
+const bodyDump = () => document.body.innerHTML;
+
 it('shell-expanded / shell-collapsed / shell-drawer / support-dialog', async () => {
-  const { container, getByRole, queryByRole } = render(shell(reviewPage));
-  dump('shell-expanded', container.innerHTML);
+  const { getByRole } = render(shell(reviewPage));
+  dump('shell-expanded', bodyDump());
 
   fireEvent.click(getByRole('button', { name: 'Collapse sidebar' }));
-  dump('shell-collapsed', container.innerHTML);
+  dump('shell-collapsed', bodyDump());
   fireEvent.click(getByRole('button', { name: 'Expand sidebar' }));
 
-  const open = queryByRole('button', { name: 'Open menu' });
-  if (open) {
-    fireEvent.click(open);
-    dump('shell-drawer', container.innerHTML);
-    fireEvent.click(getByRole('button', { name: 'Close menu' }));
-  }
+  fireEvent.click(getByRole('button', { name: 'Open menu' }));
+  await act(async () => {});
+  // The drawer must be in the dump, or shell-drawer measures nothing.
+  if (!document.getElementById('mobile-nav')) throw new Error('shell-drawer: #mobile-nav not in document.body');
+  dump('shell-drawer', bodyDump());
+  fireEvent.click(getByRole('button', { name: 'Close menu' }));
+  await act(async () => {});
+  if (document.getElementById('mobile-nav')) throw new Error('shell-drawer: #mobile-nav still open after Close');
 
   await act(async () => {
     fireEvent.click(getByRole('button', { name: 'Contact Support' }));
   });
-  dump('support-dialog', container.innerHTML);
+  dump('support-dialog', bodyDump());
 });
 
 const MEMBERS = [1, 2, 3].map((i) => ({
@@ -340,4 +350,38 @@ it('submissions-list', async () => {
   const element = await SubmissionsPage({ searchParams: Promise.resolve({}) });
   const { container } = render(element);
   dump('submissions-list', container.innerHTML);
+});
+
+// BACKLOG-3896 fix-up: page title in the phone top bar. Each dump is the real shell
+// at a real route path, with the real PageHeader and the props that page passes.
+// The phone-only props are spread from an untyped object so this file type-checks
+// and runs unchanged on the base side (where PageHeader ignores them and the shell
+// passes no title).
+const PH = { phoneHideTitle: true, phoneHideSubtitle: true } as object;
+const PH_TITLE_ONLY = { phoneHideTitle: true } as object;
+
+it('title-* (page title in the top bar)', () => {
+  const cases: Array<[string, string, React.ReactNode]> = [
+    ['title-users', '/dashboard/users', <PageHeader key="h" title="Users Management" subtitle="Manage your organization's team members" {...PH} />],
+    ['title-support', '/dashboard/support', <PageHeader key="h" title="Support" subtitle="View and track your support requests" actions={<button type="button">New Ticket</button>} {...PH} />],
+    ['title-mytx', '/dashboard/my-transactions', <PageHeader key="h" title="My Transactions" subtitle="3 submissions" {...PH_TITLE_ONLY} />],
+    ['title-dashboard', '/dashboard', <PageHeader key="h" title="Welcome, Alex" subtitle="Overview of transaction submissions" {...PH} />],
+    ['title-detail', '/dashboard/users/u1', <h1 key="h" className="text-xl font-bold text-gray-900">Agent Number1</h1>],
+    ['title-submissions', '/dashboard/submissions', <h1 key="h" className="text-2xl font-bold text-gray-900">Submissions</h1>],
+  ];
+  for (const [name, p, header] of cases) {
+    mockPath = p;
+    const { unmount } = render(
+      shell(
+        <div className="max-w-7xl mx-auto">
+          {header}
+          <p>Body content</p>
+          <button type="button">Body action</button>
+        </div>
+      )
+    );
+    dump(name, document.body.innerHTML);
+    unmount();
+  }
+  mockPath = '/dashboard/submissions/sub-1';
 });

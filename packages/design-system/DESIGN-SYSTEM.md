@@ -200,12 +200,16 @@ portal layouts set `viewport-fit=cover`; the kit components already pad for them
 panels use `fixed inset-y-0` (never `h-screen`/`100vh`); sheets cap at `max-h-[90vh]` with
 `supports-[height:100dvh]:max-h-[90dvh]`.
 
+**Page title on phone**: `PageHeader` takes optional `phoneHideTitle` and `phoneHideSubtitle`. Below `md`
+the h1 becomes `sr-only` (still the page's one h1) and the subtitle is `hidden`; from `md` up nothing
+changes. Pair `phoneHideTitle` with `MobileTopBar` `title` so the page name shows once, in the bar.
+
 **Phone kit** — import from `@keepr/ui`. Every file is a client component (`'use client'`).
 No kit component imports `next`: apps pass router facts in (`open`/`onOpenChange`, `renderLink`).
 
 | Component | Use |
 |---|---|
-| `MobileTopBar` | Phone top bar: 44px menu button (ref forwards to it) + wordmark + qualifier. |
+| `MobileTopBar` | Phone top bar: 44px menu button (ref forwards to it) + wordmark + qualifier. Optional `title` replaces the wordmark + qualifier (`leading` still wins); it renders in a `<span>`, not a heading. |
 | `Drawer` | Slide-out nav on Radix Dialog. App supplies nav items, footer (user + sign out) and `returnFocusRef`. |
 | `BottomSheet` | Modal sheet for filters and quick edits; scrolling body, pinned primary action. |
 | `SegmentedTabs` | Tab mode (`role=tablist`, roving tabindex, arrows/Home/End, `panelId`) or link mode (all items have `href`: `<nav>` + `aria-current="page"`). |

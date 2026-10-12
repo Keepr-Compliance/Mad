@@ -12,8 +12,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { ImpersonationBanner } from '@/components/ImpersonationBanner';
+import { MobileTopBar } from '@keepr/ui';
 import { Sidebar } from '@/components/layout/Sidebar';
-import { MobileTopBar } from '@/components/layout/MobileTopBar';
+import { getPhoneTitle } from '@/lib/dashboard-page-titles';
 import { SupportWidget } from '@/app/dashboard/components/SupportWidget';
 
 export interface DashboardShellProps {
@@ -86,13 +87,19 @@ export function DashboardShell({
         showMyTransactions={showMyTransactions}
         floorOnly={floorOnly}
         mobileOpen={menuOpen}
-        onMobileClose={() => {
-          setMenuOpen(false);
-          menuButtonRef.current?.focus();
-        }}
+        // BACKLOG-3896: the kit Drawer returns focus to this ref on close. No
+        // focus() here: a second restore would mask a missing ref.
+        onMobileClose={() => setMenuOpen(false)}
+        mobileReturnFocusRef={menuButtonRef}
       />
       <div className="flex-1 flex flex-col min-w-0">
-        <MobileTopBar ref={menuButtonRef} menuOpen={menuOpen} onOpenMenu={() => setMenuOpen(true)} />
+        <MobileTopBar
+          ref={menuButtonRef}
+          qualifier="Broker"
+          title={getPhoneTitle(pathname)}
+          menuOpen={menuOpen}
+          onOpenMenu={() => setMenuOpen(true)}
+        />
         {/* Impersonation banner spans the content column so it never covers the sidebar */}
         <ImpersonationBanner />
         <main className="flex-1 p-4 md:p-6 bg-gray-50 overflow-auto">{children}</main>
