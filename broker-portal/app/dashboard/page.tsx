@@ -32,9 +32,10 @@ import { SubmissionCard } from '@/components/submission/SubmissionCard';
  * opens. See lib/dashboard/statCards.ts.
  */
 async function getStatCards(client: SupabaseClient, orgId?: string): Promise<StatCardData[]> {
-  const allowedOrgIds = await getAllowedOrgIds(client, orgId);
-  const restrictToOrgs = allowedOrgIds !== null && !orgId;
-  if (restrictToOrgs && allowedOrgIds.length === 0) return buildStatCards([]);
+  // BACKLOG-3906: a failed lookup counts nothing.
+  const allowed = await getAllowedOrgIds(client, orgId);
+  if (!allowed.ok || allowed.orgIds.length === 0) return buildStatCards([]);
+  const allowedOrgIds = allowed.orgIds;
 
   const read = await readDealHeads((from, to) => {
     let query = client
@@ -43,7 +44,7 @@ async function getStatCards(client: SupabaseClient, orgId?: string): Promise<Sta
       .neq('status', 'uploading');
     // During impersonation, filter by organization
     if (orgId) query = query.eq('organization_id', orgId);
-    if (restrictToOrgs) query = query.in('organization_id', allowedOrgIds);
+    query = query.in('organization_id', allowedOrgIds);
     return query.order('id').range(from, to);
   });
 
