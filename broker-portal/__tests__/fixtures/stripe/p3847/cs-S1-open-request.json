@@ -1,0 +1,32 @@
+{
+  "params": {
+    "mode": "subscription",
+    "customer": "cus_VQgXaqEk9u2nCF",
+    "line_items": [
+      {
+        "price": "price_1UPpA2Bg3cyTef3dgOBirPOh",
+        "quantity": 1
+      }
+    ],
+    "payment_method_types": [
+      "card"
+    ],
+    "metadata": {
+      "kind": "agent",
+      "user_id": "USER-3847",
+      "organization_id": "ORG-P3847",
+      "interval": "month",
+      "price_id": "price_1UPpA2Bg3cyTef3dgOBirPOh"
+    },
+    "subscription_data": {
+      "metadata": {
+        "kind": "agent",
+        "user_id": "USER-3847",
+        "organization_id": "ORG-P3847"
+      }
+    },
+    "success_url": "https://app.keeprcompliance.com/dashboard/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}",
+    "cancel_url": "https://app.keeprcompliance.com/dashboard/billing?checkout=cancelled"
+  },
+  "key": "agent-co:USER-3847:test:month:cs_test_a1C33fMrOuzFyu5cvYNdSpaxls6FhAr6Mt9R3FfgH1ILFKP4phCVitBZJA"
+}

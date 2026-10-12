@@ -20,6 +20,7 @@ const mockConstructEvent = jest.fn();
 const mockCaptureMessage = jest.fn();
 const mockSubscriptionsCancel = jest.fn();
 const mockRetrieve = jest.fn();
+const mockVoidInvoice = jest.fn();
 
 jest.mock('@sentry/nextjs', () => ({
   captureMessage: (...a: unknown[]) => mockCaptureMessage(...a),
@@ -35,7 +36,7 @@ jest.mock('stripe', () => {
   const StripeMock = jest.fn().mockImplementation(() => ({
     webhooks: { constructEvent: mockConstructEvent },
     subscriptions: { retrieve: r('subscription'), cancel: mockSubscriptionsCancel },
-    invoices: { retrieve: r('invoice') },
+    invoices: { retrieve: r('invoice'), voidInvoice: (...a: unknown[]) => mockVoidInvoice(...a) },
     charges: { retrieve: r('charge') },
     disputes: { retrieve: r('dispute') },
     refunds: { retrieve: r('refund') },
@@ -133,6 +134,7 @@ beforeEach(() => {
     return { data: null, error: null };
   });
   mockSubscriptionsCancel.mockResolvedValue({ status: 'canceled' });
+  mockVoidInvoice.mockReset();
   useDb({});
 });
 
@@ -598,5 +600,106 @@ describe('W-1 / W-2 hazards', () => {
     expect((await deliver(fx('ev-W2-pi.succeeded'))).status).toBe(200);
     expect(rpcCalls('finalize_paid_unlock')).toEqual([]);
     expect(db.callsTo('payment_intents')).toEqual([]);
+  });
+});
+
+// ---- BACKLOG-3847: half-made incumbent (F2, SR R1b) and the write-through cursor (R6) ----------
+
+describe('3847: incomplete incumbent + paid newcomer (C-INC, C-INC2, C-VOID-WH)', () => {
+  // Real TEST objects, one customer (fixtures/stripe/p3847). The envelope is
+  // hand-made: E0 reads only id/type/livemode/created and data.object.id.
+  const FX47 = path.join(__dirname, '../../../fixtures/stripe/p3847');
+  const fx47 = (n: string): Obj => JSON.parse(fs.readFileSync(path.join(FX47, `${n}.json`), 'utf8'));
+  const A = fx47('sub-A-incomplete');
+  const A_AFTER = fx47('sub-A-after-void');
+  const C_INC = fx47('sub-C-incomplete');
+  const C_ACTIVE = fx47('sub-C-active-after-pay');
+  const CUS = A.customer as string;
+  const created = (sub: Obj) => ({
+    id: `evt_FX3847_${sub.id}`,
+    type: 'customer.subscription.created',
+    livemode: false,
+    created: sub.created,
+    data: { object: { id: sub.id } },
+  });
+  const statusById = () => Object.fromEntries(db.rows('billing_subscriptions').map((r) => [r.stripe_subscription_id, r.status]));
+
+  it('C-INC + SR-P1b: stored incumbent still incomplete -> its invoice voided, incumbent closed, paid newcomer kept', async () => {
+    expect([A.status, C_ACTIVE.status, C_ACTIVE.customer]).toEqual(['incomplete', 'active', CUS]);
+    useDb({ stripe_customers: [customerRow(CUS)], billing_subscriptions: [subRow(A.id, CUS, { status: 'incomplete' })] });
+    serve(A, C_ACTIVE);
+    mockVoidInvoice.mockImplementation(async () => {
+      serve(A_AFTER); // Stripe moves A to incomplete_expired synchronously (measured)
+      return fx47('inv-A-void');
+    });
+    expect((await deliver(created(C_ACTIVE))).status).toBe(200);
+    expect(mockVoidInvoice.mock.calls).toEqual([[A.latest_invoice, {}, { idempotencyKey: `incomplete-void:${A.latest_invoice}` }]]);
+    expect(mockSubscriptionsCancel).not.toHaveBeenCalled();
+    expect(statusById()).toEqual({ [A.id]: 'incomplete_expired', [C_ACTIVE.id]: 'active' });
+  });
+
+  it('C-INC2: incumbent already incomplete_expired in Stripe -> newcomer kept, nothing voided or cancelled', async () => {
+    useDb({ stripe_customers: [customerRow(CUS)], billing_subscriptions: [subRow(A.id, CUS, { status: 'incomplete' })] });
+    serve(A_AFTER, C_ACTIVE);
+    expect((await deliver(created(C_ACTIVE))).status).toBe(200);
+    expect(mockVoidInvoice).not.toHaveBeenCalled();
+    expect(mockSubscriptionsCancel).not.toHaveBeenCalled();
+    expect(statusById()).toEqual({ [A.id]: 'incomplete_expired', [C_ACTIVE.id]: 'active' });
+  });
+
+  it('C-VOID-WH: the incumbent was paid meanwhile (void refused) -> incumbent NOT cancelled; the newcomer is the duplicate [COMPOSED newcomer id]', async () => {
+    const err = fx47('inv-C-void-refused').error;
+    const newcomer = { ...C_ACTIVE, id: 'sub_COMPOSED_newcomer' };
+    useDb({ stripe_customers: [customerRow(CUS)], billing_subscriptions: [subRow(C_INC.id, CUS, { status: 'incomplete' })] });
+    serve(C_INC, newcomer);
+    mockVoidInvoice.mockImplementation(async () => {
+      serve(C_ACTIVE); // paid out of band before our void (TEST: invoices.pay, then void -> refused)
+      throw Object.assign(new Error(err.message), { type: 'StripeInvalidRequestError', rawType: err.type });
+    });
+    expect((await deliver(created(newcomer))).status).toBe(200);
+    expect(mockSubscriptionsCancel.mock.calls.map((c) => c[0])).toEqual([newcomer.id]);
+    expect(statusById()).toEqual({ [C_INC.id]: 'incomplete' });
+  });
+
+  it('a failed void on a subscription that is still incomplete -> 500 so Stripe retries; nothing cancelled', async () => {
+    useDb({ stripe_customers: [customerRow(CUS)], billing_subscriptions: [subRow(A.id, CUS, { status: 'incomplete' })] });
+    serve(A, C_ACTIVE);
+    mockVoidInvoice.mockRejectedValue(new Error('network'));
+    expect((await deliver(created(C_ACTIVE))).status).toBe(500);
+    expect(mockSubscriptionsCancel).not.toHaveBeenCalled();
+  });
+});
+
+describe('3847 R6: the write-through never takes the webhook cursor (C-WT-CURSOR)', () => {
+  it('write-through, then the action\'s own subscription.updated in the same second -> applied', async () => {
+    const FX47 = path.join(__dirname, '../../../fixtures/stripe/p3847');
+    const pending = JSON.parse(fs.readFileSync(path.join(FX47, 'sub-C-cancel-at-period-end.json'), 'utf8'));
+    const { writeThroughCancelFlag } = await import('@/lib/billing/sync');
+    const { createServiceClient } = await import('@/lib/supabase/service');
+    // [SEEDED] a row whose period is stale, so the event's own write is visible.
+    useDb({
+      stripe_customers: [customerRow(pending.customer)],
+      billing_subscriptions: [subRow(pending.id, pending.customer, { current_period_end: null, cancel_at_period_end: false, last_event_created: 1791000000 })],
+    });
+    serve(pending);
+    await writeThroughCancelFlag(createServiceClient(), pending);
+    const second = Math.floor(Date.now() / 1000);
+    const ev = { id: 'evt_FX3847_upd', type: 'customer.subscription.updated', livemode: false, created: second, data: { object: { id: pending.id } } };
+    expect((await deliver(ev)).status).toBe(200);
+    expect(db.rows('billing_subscriptions')[0]).toMatchObject({
+      cancel_at_period_end: true,
+      current_period_end: new Date(pending.current_period_end * 1000).toISOString(),
+      last_event_created: second,
+    });
+  });
+
+  it('the write-through leaves a closed row alone', async () => {
+    const FX47 = path.join(__dirname, '../../../fixtures/stripe/p3847');
+    const pending = JSON.parse(fs.readFileSync(path.join(FX47, 'sub-C-cancel-at-period-end.json'), 'utf8'));
+    const { writeThroughCancelFlag } = await import('@/lib/billing/sync');
+    const { createServiceClient } = await import('@/lib/supabase/service');
+    useDb({ billing_subscriptions: [subRow(pending.id, pending.customer, { status: 'canceled', cancel_at_period_end: false })] });
+    await writeThroughCancelFlag(createServiceClient(), pending);
+    expect(db.rows('billing_subscriptions')[0]).toMatchObject({ status: 'canceled', cancel_at_period_end: false });
   });
 });

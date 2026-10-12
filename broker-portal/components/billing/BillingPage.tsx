@@ -1,12 +1,11 @@
 /**
- * The Billing page body — BACKLOG-3844.
+ * The Billing page body — BACKLOG-3844, Agent plan blocks 1 and 2 by BACKLOG-3847.
  *
- * Renders exactly the blocks `caps.blocks` lists, in that order. No price, no
- * amount, no Stripe call and no server action in 3844. Synchronous, so it
- * renders inside a server component tree without a client boundary.
+ * Renders exactly the blocks `caps.blocks` lists, in that order. No Stripe call
+ * here: the route reads everything and passes plain data. Synchronous.
  */
 
-import type { BillingBlock, BillingCapabilities } from '@/lib/billing/capabilities';
+import type { AgentPlanState, BillingBlock, BillingCapabilities } from '@/lib/billing/capabilities';
 import { PlanBlock } from './PlanBlock';
 import { ChoosePlanBlock } from './ChoosePlanBlock';
 import { SeatsBlock } from './SeatsBlock';
@@ -14,10 +13,29 @@ import { CreditsBlock } from './CreditsBlock';
 import { PaymentContactBlock } from './PaymentContactBlock';
 import { InvoicesBlock } from './InvoicesBlock';
 
+export interface PlanPrice {
+  id: string;
+  /** e.g. "$19.99", formatted on the server from the Stripe Price. */
+  display: string;
+}
+
+/** The personal owner's Agent plan, as plain props (BACKLOG-3847). */
+export interface PersonalPlanData {
+  state: AgentPlanState;
+  interval: string | null;
+  currentPeriodEnd: string | null;
+  supportGrantEffective: boolean;
+  prices: { month?: PlanPrice; year?: PlanPrice };
+  checkout: 'success' | 'cancelled' | null;
+  sessionId: string | null;
+}
+
 export interface BillingPageProps {
   caps: BillingCapabilities;
   /** The organization has a billing deal on record. Ignored for a personal page. */
   orgBillingSetUp: boolean;
+  /** Personal page only. */
+  personal?: PersonalPlanData;
 }
 
 function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
@@ -26,13 +44,13 @@ function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
   return orgBillingSetUp ? 'Organization plan' : 'Managed by Keepr';
 }
 
-export function BillingPage({ caps, orgBillingSetUp }: BillingPageProps) {
+export function BillingPage({ caps, orgBillingSetUp, personal }: BillingPageProps) {
   const render = (block: BillingBlock) => {
     switch (block) {
       case 'plan':
-        return <PlanBlock key={block} line={planLine(caps, orgBillingSetUp)} />;
+        return <PlanBlock key={block} line={planLine(caps, orgBillingSetUp)} personal={personal} />;
       case 'choose_plan':
-        return <ChoosePlanBlock key={block} />;
+        return <ChoosePlanBlock key={block} prices={personal?.prices} />;
       case 'seats':
         return <SeatsBlock key={block} />;
       case 'credits':

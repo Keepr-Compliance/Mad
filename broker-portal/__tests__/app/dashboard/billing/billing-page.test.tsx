@@ -13,6 +13,7 @@
  */
 
 import {
+  FIXTURE_PERSONAL_ORG_ID,
   FIXTURE_USER_ID,
   brokerageMembership,
   createPostgrestEmulator,
@@ -26,6 +27,8 @@ let mockReadFails = false;
 let mockCookie: string | undefined;
 let mockSessionRow: Record<string, unknown> | null = null;
 const mockServiceTables: string[] = [];
+// Assigned in beforeEach; the service mock reads it lazily.
+let mockBillingDb: BillingDb;
 
 jest.mock('next/headers', () => ({
   cookies: async () => ({
@@ -49,14 +52,16 @@ jest.mock('@/lib/supabase/server', () => ({
 }));
 
 /**
- * The service client the impersonation helper validates with. A recording
- * stub (the emulator has no `.gt`): serves the one session row for
- * impersonation_sessions and nothing for any other table.
+ * The service client. impersonation_sessions: a recording stub (the emulator
+ * has no `.gt`) serving the one session row. Every other table (the 3847
+ * Agent plan reads, only after the page admitted the caller) goes to an
+ * argument-applying BillingDb.
  */
 jest.mock('@/lib/supabase/service', () => ({
   createServiceClient: jest.fn(() => ({
     from: (table: string) => {
       mockServiceTables.push(table);
+      if (table !== 'impersonation_sessions') return mockBillingDb.from(table);
       const q: Record<string, unknown> = {};
       for (const m of ['select', 'eq', 'in', 'gt', 'order', 'limit']) q[m] = jest.fn(() => q);
       q.single = jest.fn(async () =>
@@ -69,6 +74,21 @@ jest.mock('@/lib/supabase/service', () => ({
     },
   })),
 }));
+
+// BACKLOG-3847: the Agent prices, from the TEST lookup-key list (fixtures/stripe/p3847).
+const mockPricesList = jest.fn();
+jest.mock('stripe', () => ({
+  __esModule: true,
+  default: jest.fn().mockImplementation(() => ({ prices: { list: (...a: unknown[]) => mockPricesList(...a) } })),
+}));
+// The page renders the Agent plan buttons; their server actions are not under test here.
+jest.mock('@/lib/actions/agentPlan', () => ({
+  startAgentCheckout: jest.fn(),
+  endAgentPlanAtPeriodEnd: jest.fn(),
+  keepAgentPlan: jest.fn(),
+  confirmAgentCheckout: jest.fn(async () => ({ ok: true })),
+}));
+jest.mock('next/cache', () => ({ revalidatePath: jest.fn() }));
 
 class Redirect extends Error {
   constructor(public readonly to: string) {
@@ -87,9 +107,14 @@ jest.mock('next/navigation', () => ({
   notFound: () => {
     throw new NotFound();
   },
+  useRouter: () => ({ refresh: jest.fn() }),
 }));
 
+import fs from 'fs';
+import path from 'path';
 import { render, within } from '@testing-library/react';
+import { BillingDb, eqValue } from '../../../helpers/billingDb';
+import { mirrorState } from '@/lib/billing/sync';
 import BillingRoute from '@/app/dashboard/billing/page';
 import { BillingPage } from '@/components/billing/BillingPage';
 import { getImpersonationSession } from '@/lib/impersonation';
@@ -138,7 +163,7 @@ function given(memberships: Row[], readFails = false): void {
 type Outcome = { redirect: string } | { notFound: true } | { element: string };
 async function run(): Promise<Outcome> {
   try {
-    const el = await BillingRoute();
+    const el = await BillingRoute({});
     return { element: el.type === BillingPage ? 'BillingPage' : String(el.type) };
   } catch (e) {
     if (e instanceof Redirect) return { redirect: e.to };
@@ -149,7 +174,7 @@ async function run(): Promise<Outcome> {
 
 /** The h2 of every block, in render order. */
 async function renderedBlocks(): Promise<string[]> {
-  const { container, unmount } = render(await BillingRoute());
+  const { container, unmount } = render(await BillingRoute({}));
   const titles = within(container)
     .getAllByRole('heading', { level: 2 })
     .map((h) => h.textContent ?? '');
@@ -158,6 +183,11 @@ async function renderedBlocks(): Promise<string[]> {
 }
 
 const sessionTablesRead = () => Array.from(new Set(mockEmulator.state.selects.map((s) => s.table))).sort();
+
+const FX3847 = path.join(__dirname, '../../../fixtures/stripe/p3847');
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const fx3847 = (n: string): any => JSON.parse(fs.readFileSync(path.join(FX3847, `${n}.json`), 'utf8'));
+const PRICES_LIST = fx3847('prices-list-lookup');
 
 const OLD_FLAG = process.env.BILLING_ENABLED;
 const OLD_SECRET = process.env.IMPERSONATION_COOKIE_SECRET;
@@ -179,6 +209,9 @@ beforeEach(() => {
   mockSessionRow = null;
   mockServiceTables.length = 0;
   process.env.BILLING_ENABLED = 'true';
+  process.env.STRIPE_SECRET_KEY = 'sk_test_fixture';
+  mockBillingDb = new BillingDb({ organizations: [{ id: FIXTURE_PERSONAL_ORG_ID, personal_owner_user_id: FIXTURE_USER_ID, is_test: true }] });
+  mockPricesList.mockResolvedValue(PRICES_LIST);
 });
 
 // ---------------------------------------------------------------------------
@@ -223,10 +256,15 @@ describe('R1: the page refuses on its own', () => {
     given(rows);
     expect(await renderedBlocks()).toEqual(blocks);
     given(rows);
-    const { container, unmount } = render(await BillingRoute());
+    const { container, unmount } = render(await BillingRoute({}));
     expect(container.textContent).toContain(planLine);
-    // No amount of money anywhere on the 3844 page.
-    expect(container.textContent).not.toMatch(/\$|USD|\/mo/);
+    if (rows[0] === undefined || (rows[0] as Row).role !== 'agent') {
+      // No amount of money anywhere on an organization page (3844).
+      expect(container.textContent).not.toMatch(/\$|USD|\/mo/);
+    } else {
+      // BACKLOG-3847: the only amount is the Stripe Price's ($19.99 TEST).
+      expect(container.textContent).toContain('$19.99');
+    }
     unmount();
     expect(mockEmulator.state.writes).toEqual([]);
   });
@@ -330,5 +368,120 @@ describe('C5: BILLING_ENABLED', () => {
     givenSupportSession();
     expect(await run()).toEqual({ notFound: true });
     expect(mockServiceTables).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3847 — blocks 1 and 2 from the Agent plan view. Mirror rows are
+// mirrorState() of real TEST re-fetches (fixtures/stripe/p3847).
+// ---------------------------------------------------------------------------
+
+describe('3847: personal plan blocks', () => {
+  function seedSub(name: string, over: Record<string, unknown> = {}): void {
+    const sub = fx3847(name);
+    mockBillingDb.rows('billing_subscriptions').push({
+      stripe_mode: 'test',
+      user_id: FIXTURE_USER_ID,
+      stripe_subscription_id: sub.id,
+      ...mirrorState(sub),
+      ...over,
+    });
+  }
+  function seedOverride(o: unknown): void {
+    mockBillingDb.rows('organization_plans').push({
+      organization_id: FIXTURE_PERSONAL_ORG_ID,
+      feature_overrides: { unlimited_transactions: o },
+    });
+  }
+  async function text(params?: Record<string, string>): Promise<{ text: string; titles: string[]; buttons: string[] }> {
+    given([personalMembership()]);
+    const el = await BillingRoute(params ? { searchParams: Promise.resolve(params) } : {});
+    const { container, unmount } = render(el);
+    const out = {
+      text: container.textContent ?? '',
+      titles: within(container).getAllByRole('heading', { level: 2 }).map((h) => h.textContent ?? ''),
+      buttons: within(container).queryAllByRole('button').map((b) => b.textContent ?? ''),
+    };
+    unmount();
+    return out;
+  }
+  const day = (sec: number) =>
+    new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(sec * 1000));
+
+  it('C-ST: active + cancel_at_period_end (canceled_at set by Stripe) -> "Cancels <date>", Keep my plan, no plan choice', async () => {
+    const sub = fx3847('sub-C-cancel-at-period-end');
+    expect([sub.status, sub.cancel_at_period_end, typeof sub.canceled_at]).toEqual(['active', true, 'number']);
+    seedSub('sub-C-cancel-at-period-end');
+    const r = await text();
+    expect(r.text).toContain(`Cancels ${day(sub.current_period_end)}`);
+    expect(r.text).toContain('Access until');
+    expect(r.buttons).toEqual(['Keep my plan']);
+    expect(r.titles).not.toContain('Choose a plan');
+  });
+
+  it('active plan -> Renews on <date>, Cancel plan, no plan choice', async () => {
+    const sub = fx3847('sub-C-keep');
+    seedSub('sub-C-keep');
+    const r = await text();
+    expect(r.text).toContain('Renews on');
+    expect(r.text).toContain(day(sub.current_period_end));
+    expect(r.buttons).toEqual(['Cancel plan']);
+    expect(r.titles).toEqual(['Your plan', 'Credits', 'Payment method & billing contact', 'Invoices']);
+  });
+
+  it('a half-made (incomplete) subscription reads as no plan: Subscribe is offered', async () => {
+    seedSub('sub-A-incomplete');
+    const r = await text();
+    expect(r.titles).toContain('Choose a plan');
+    expect(r.buttons).toContain('Subscribe — $19.99/month');
+  });
+
+  it.each([
+    ['prod shape {enabled:true}', { enabled: true }, 'Unlimited exports, provided by Keepr.'],
+    ['past paid_through, no source', { enabled: true, paid_through: '2026-01-01T00:00:00Z' }, 'Contact support'],
+  ])('R4 page: support grant %s -> no Subscribe, %s', async (_n, override, line) => {
+    seedOverride(override);
+    const r = await text();
+    expect(r.text).toContain(line);
+    expect(r.buttons.filter((b) => b.startsWith('Subscribe'))).toEqual([]);
+    expect(r.titles).not.toContain('Choose a plan');
+  });
+
+  it('a stripe-sourced override with no mirror row is not a support grant: Subscribe offered', async () => {
+    seedOverride({ enabled: true, paid_through: '2026-12-01T00:00:00Z', source: 'stripe' });
+    expect((await text()).titles).toContain('Choose a plan');
+  });
+
+  it('C-PRICE: the amount is the Stripe Price unit_amount, annual only when agent_year_usd exists [EDITED: amounts/year]', async () => {
+    const month = { ...PRICES_LIST.data[0], unit_amount: 2499 };
+    mockPricesList.mockResolvedValue({ ...PRICES_LIST, data: [month] });
+    let r = await text();
+    expect(r.buttons).toEqual(['Subscribe — $24.99/month', 'Subscribe — $24.99/month']);
+    expect(r.text).not.toMatch(/year/i);
+
+    const year = { ...month, id: 'price_EDITED_year', unit_amount: 19900, lookup_key: 'agent_year_usd', recurring: { ...month.recurring, interval: 'year' } };
+    mockPricesList.mockResolvedValue({ ...PRICES_LIST, data: [month, year] });
+    r = await text();
+    expect(r.buttons).toContain('Subscribe yearly — $199.00/year');
+  });
+
+  it('prices unavailable -> the page renders and nothing can be bought', async () => {
+    mockPricesList.mockRejectedValue(new Error('stripe down'));
+    const r = await text();
+    expect(r.text).toContain('Not available right now.');
+    expect(r.buttons.filter((b) => b.startsWith('Subscribe'))).toEqual([]);
+  });
+
+  it('back from Checkout before the webhook -> "Finishing your subscription…"; cancelled -> nothing charged', async () => {
+    expect((await text({ checkout: 'success', session_id: 'cs_test_x' })).text).toContain('Finishing your subscription');
+    expect((await text({ checkout: 'cancelled' })).text).toContain('Nothing was charged.');
+  });
+
+  it('the plan reads are keyed to the signed-in user and the deployment mode', async () => {
+    await text();
+    const subRead = mockBillingDb.callsTo('billing_subscriptions', 'select')[0];
+    expect(eqValue(subRead, 'user_id')).toBe(FIXTURE_USER_ID);
+    expect(eqValue(subRead, 'stripe_mode')).toBe('test');
+    expect(mockBillingDb.calls.filter((c) => c.op !== 'select')).toEqual([]);
   });
 });
