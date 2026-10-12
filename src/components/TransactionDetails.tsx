@@ -57,6 +57,9 @@ import { useReviewQueue } from "./transactionDetailsModule/hooks/useReviewQueue"
 import { useTextThreads } from "./transactionDetailsModule/hooks/useTextThreads";
 import { useResolvedContactNames } from "./transactionDetailsModule/hooks/useResolvedContactNames";
 import { useCompleteTransaction } from "./transactionDetailsModule/hooks/useCompleteTransaction";
+import { useDealLock } from "./transactionDetailsModule/hooks/useDealLock";
+import { DealLockNotice } from "./transactionDetailsModule/components/DealLockNotice";
+import { DEAL_LOCK_SYNC_TOOLTIP } from "../utils/dealLock";
 import { NeedsReviewScreen } from "./transactionDetailsModule/components/NeedsReviewScreen";
 import { ReviewPromptDialog } from "./transactionDetailsModule/components/ReviewPromptDialog";
 import { ChecklistWarningDialog } from "./transactionDetailsModule/components/ChecklistWarningDialog";
@@ -436,6 +439,10 @@ function TransactionDetails({
   const [showEditModal, setShowEditModal] = useState<boolean>(false);
   const [showEditContactsModal, setShowEditContactsModal] = useState<boolean>(false);
   const [syncingCommunications, setSyncingCommunications] = useState<boolean>(false);
+  // BACKLOG-3910: a locked deal (with the broker, or sealed) gets nothing automatic,
+  // so its Sync buttons are disabled with this tooltip and one notice explains why.
+  const dealLock = useDealLock(transaction);
+  const syncLockedTooltip = dealLock.reason ? DEAL_LOCK_SYNC_TOOLTIP[dealLock.reason] : undefined;
   const [syncingMessages, setSyncingMessages] = useState<boolean>(false);
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
 
@@ -1431,6 +1438,8 @@ function TransactionDetails({
         {/* Content */}
         <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-3 sm:p-6">
           {/* Review Notes Panel - shown when broker requests changes (BACKLOG-395) */}
+          {/* BACKLOG-3910: one notice on a locked deal (with the broker, or sealed). */}
+          <DealLockNotice reason={dealLock.reason} />
           {transaction.submission_status === "needs_changes" && transaction.last_review_notes && (
             <ReviewNotesPanel
               reviewNotes={transaction.last_review_notes}
@@ -1455,6 +1464,7 @@ function TransactionDetails({
               onSyncCommunications={handleSyncCommunications}
               syncingCommunications={syncingCommunications}
               globalSyncRunning={globalSyncRunning}
+              syncLockedTooltip={syncLockedTooltip}
               isOnline={isOnline}
               onContactUpdated={loadDetails}
               onNavigateToTab={handleNavigateToTab}
@@ -1503,6 +1513,7 @@ function TransactionDetails({
               onSyncCommunications={handleSyncCommunications}
               syncingCommunications={syncingCommunications}
               globalSyncRunning={globalSyncRunning}
+              syncLockedTooltip={syncLockedTooltip}
               isOnline={isOnline}
               hasContacts={contactAssignments.length > 0}
               userId={userId}
@@ -1574,6 +1585,7 @@ function TransactionDetails({
               onSyncMessages={handleSyncMessages}
               syncingMessages={syncingMessages}
               globalSyncRunning={globalSyncRunning}
+              syncLockedTooltip={syncLockedTooltip}
               messagesSyncInFlight={messagesSyncInFlight}
               isOnline={isOnline}
               hasContacts={contactAssignments.length > 0}

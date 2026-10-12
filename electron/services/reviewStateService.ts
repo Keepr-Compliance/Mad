@@ -100,6 +100,7 @@ import {
 } from "./db/communicationDbService";
 import { linkEmailToTransaction } from "./autoLinkService";
 import logService from "./logService";
+import { getDealLockReason } from "./dealLockState";
 import { runFullSweepOnce, yieldToEventLoop } from "./autoLinkSweepGuard";
 // BACKLOG-2818: the published lifecycle definition. The discriminator is a
 // persisted-data contract, so it is named here rather than spelled out at each
@@ -662,6 +663,11 @@ export async function queueEmailForReview(
   emailId: string,
   userId: string,
 ): Promise<boolean> {
+  // BACKLOG-3910: backstop. Nothing new is queued for review on a locked deal
+  // (with the broker, or sealed), whoever the caller is. Restoring a rejected
+  // item is the user's own act and does not come through here.
+  if (getDealLockReason(transactionId)) return false;
+
   // A previously REJECTED email must not be re-queued; the suppression row is
   // the same one every discovery path already filters on.
   const rejected = dbGet<{ id: string }>(

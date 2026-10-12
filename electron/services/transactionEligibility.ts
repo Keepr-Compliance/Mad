@@ -38,7 +38,7 @@
  * ---------------------------------------------------------------------------
  */
 
-import type { TransactionStatus } from "../types/models";
+import type { SubmissionStatus, TransactionStatus } from "../types/models";
 
 /**
  * The status that marks a deal dead. Typed against the status union so that
@@ -71,4 +71,60 @@ export const REJECTED_TRANSACTION_STATUS: TransactionStatus = "rejected";
  */
 export function isLiveTransactionStatus(status: string | null | undefined): boolean {
   return status !== REJECTED_TRANSACTION_STATUS;
+}
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3910 (slice b): the LOCKED-DEAL state.
+// ---------------------------------------------------------------------------
+//
+// One answer to "may Keepr add anything to this deal on its own?", read from
+// `transactions.submission_status`. A locked deal gets no automatic links and
+// no new Needs Review items from any path; the user can still attach things
+// by hand. Two reasons, because the founder wants one locked state with two
+// meanings:
+//
+//   "submitted"  the deal is with the broker. Locked while the broker reviews;
+//                unlocks when the broker asks for changes or rejects it.
+//   "sealed"     permanent. In 2.41 the only producer is `approved`;
+//                BACKLOG-2229 adds closed (Complete) deals.
+//
+// Every gate tests `dealLockReason(...) !== null`, so adding a producer later
+// changes no gate.
+//
+// THE RENDERER MIRROR is `src/utils/dealLock.ts` (nothing under `electron/`
+// may import from `src/`, and the renderer cannot value-import from here).
+// `src/utils/__tests__/dealLock.parity.test.ts` imports both and fails when
+// they disagree, and fails when the schema's CHECK list gains a status this
+// map does not name.
+
+export type DealLockReason = "submitted" | "sealed";
+
+/**
+ * Every submission status, and what it means for locking. `null` = open.
+ * Exhaustive over `SubmissionStatus` (the type makes a missing key an error).
+ */
+export const DEAL_LOCK_REASON_BY_STATUS: Readonly<
+  Record<SubmissionStatus, DealLockReason | null>
+> = {
+  not_submitted: null,
+  submitted: "submitted",
+  under_review: "submitted",
+  resubmitted: "submitted",
+  needs_changes: null,
+  rejected: null,
+  approved: "sealed",
+};
+
+/**
+ * Why this deal is locked, or `null` when Keepr may still add to it.
+ * NULL / unknown status = open (the column defaults to 'not_submitted').
+ */
+export function dealLockReason(
+  submissionStatus: string | null | undefined,
+): DealLockReason | null {
+  if (!submissionStatus) return null;
+  if (!Object.prototype.hasOwnProperty.call(DEAL_LOCK_REASON_BY_STATUS, submissionStatus)) {
+    return null;
+  }
+  return DEAL_LOCK_REASON_BY_STATUS[submissionStatus as SubmissionStatus];
 }

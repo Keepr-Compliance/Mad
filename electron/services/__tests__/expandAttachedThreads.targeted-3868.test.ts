@@ -77,7 +77,9 @@ const TXNS = ["txn-a", "txn-b", "txn-c"];
 
 const SCHEMA = `
   CREATE TABLE transactions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, started_at DATETIME, status TEXT,
-    message_count INTEGER DEFAULT 0, text_thread_count INTEGER DEFAULT 0);
+    message_count INTEGER DEFAULT 0, text_thread_count INTEGER DEFAULT 0,
+    -- BACKLOG-3910 (slice b): transcribed from schema.sql transactions.submission_status
+    submission_status TEXT DEFAULT 'not_submitted' CHECK (submission_status IN ('not_submitted', 'submitted', 'under_review', 'needs_changes', 'resubmitted', 'approved', 'rejected')));
   CREATE TABLE messages (
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL, channel TEXT, direction TEXT, subject TEXT, body_text TEXT,
     body_html TEXT, participants TEXT, participants_flat TEXT, thread_id TEXT, sent_at DATETIME,

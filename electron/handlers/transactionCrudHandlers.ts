@@ -1269,7 +1269,9 @@ export function registerTransactionCrudHandlers(
       // window: bounded enough to await. The multi-deal loop in contacts:update
       // is NOT awaited for exactly this reason. The provider fetch below stays
       // fire-and-forget, so the 820 regression cannot return.
-      let review: { added: number; linked: number; outstanding: number } | undefined;
+      let review:
+        | { added: number; linked: number; outstanding: number; skipped?: "submitted" | "sealed" }
+        | undefined;
       if (addOperations.length > 0) {
         try {
           const { autoLinkCommunicationsForContact } = await import(
@@ -1278,6 +1280,8 @@ export function registerTransactionCrudHandlers(
           const { countReviewItems } = await import("../services/reviewStateService");
           let linked = 0;
           let added = 0;
+          // BACKLOG-3910: set when the deal is locked and discovery added nothing.
+          let skipped: "submitted" | "sealed" | undefined;
           for (const op of addOperations) {
             const r = await autoLinkCommunicationsForContact({
               caller: "addContact",
@@ -1289,11 +1293,13 @@ export function registerTransactionCrudHandlers(
             });
             linked += r.emailsLinked + r.messagesLinked;
             added += r.queuedForReview ?? 0;
+            if (r.skippedLocked) skipped = r.skippedLocked;
           }
           review = {
             added,
             linked,
             outstanding: countReviewItems(validatedTransactionId as string),
+            ...(skipped ? { skipped } : {}),
           };
         } catch (error) {
           logService.warn("[BACKLOG-2791] discovery failed after contact save", "Transactions", {

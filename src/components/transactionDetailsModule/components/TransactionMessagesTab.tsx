@@ -102,6 +102,11 @@ interface TransactionMessagesTabProps {
   /** Whether a global sync (from dashboard) is in progress */
   globalSyncRunning?: boolean;
   /**
+   * BACKLOG-3910: set when the deal is locked (with the broker, or sealed). Sync is
+   * disabled and this is its tooltip.
+   */
+  syncLockedTooltip?: string;
+  /**
    * BACKLOG-2294: true while a BACKGROUND messages sync/import is in flight
    * (audit-date-change auto-import, create auto-import, or the 2293 re-sync
    * expansion). Drives the SAME active affordance as a user-initiated sync so
@@ -159,6 +164,7 @@ export function TransactionMessagesTab({
   onSyncMessages,
   syncingMessages = false,
   globalSyncRunning = false,
+  syncLockedTooltip,
   messagesSyncInFlight = false,
   isOnline = true,
   hasContacts = false,
@@ -212,8 +218,10 @@ export function TransactionMessagesTab({
   // SAME spinner + "Syncing…" affordance instead of a dead disabled gray, and keep the button
   // non-clickable while it runs (a manual re-sync would only coalesce onto the in-flight one).
   const syncActive = syncingMessages || globalSyncRunning || messagesSyncInFlight;
-  const syncDisabled = !isOnline || syncActive;
-  const syncTooltip = !isOnline
+  const syncDisabled = !isOnline || syncActive || !!syncLockedTooltip;
+  const syncTooltip = syncLockedTooltip
+    ? syncLockedTooltip
+    : !isOnline
     ? "You are offline"
     : globalSyncRunning
     ? "A sync is already in progress from the dashboard"

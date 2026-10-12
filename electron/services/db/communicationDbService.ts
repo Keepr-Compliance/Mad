@@ -61,6 +61,8 @@ import { dbTimestampNow } from "../../utils/dbTimestamp";
 import logService from "../logService";
 import { placeholderList } from "./core/sqlFragments";
 import { assignmentList } from "./core/columnSql";
+import { TRANSACTION_SUBMISSION_STATUS_SQL } from "./core/transactionEligibilitySql";
+import { dealLockReason } from "../transactionEligibility";
 
 /**
  * Create a new communication (junction table entry linking content to transaction)
@@ -1048,7 +1050,8 @@ export async function getTransactionsForMessage(
  * @param userId - The user ID
  * @param linkSource - How the link was created ('auto', 'manual', 'scan')
  * @param linkConfidence - Confidence score (0.0 - 1.0)
- * @returns The created communication ID
+ * @returns The created communication ID, or null when refused because the deal is
+ *   locked and the link is automatic (BACKLOG-3910)
  */
 export async function createThreadCommunicationReference(
   threadId: string,
@@ -1056,7 +1059,17 @@ export async function createThreadCommunicationReference(
   userId: string,
   linkSource: 'auto' | 'manual' | 'scan' = 'auto',
   linkConfidence: number = 0.9,
-): Promise<string> {
+): Promise<string | null> {
+  // BACKLOG-3910: backstop. An AUTOMATIC text link never lands on a locked deal
+  // (with the broker, or sealed). "manual" is the user's own act and is allowed.
+  if (linkSource !== "manual") {
+    const row = dbGet<{ submission_status: string | null }>(
+      TRANSACTION_SUBMISSION_STATUS_SQL,
+      [transactionId],
+    );
+    if (dealLockReason(row?.submission_status)) return null;
+  }
+
   const id = crypto.randomUUID();
 
   // BACKLOG-506 (TASK-1307): Pure junction table - no communication_type column.

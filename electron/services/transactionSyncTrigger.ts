@@ -26,6 +26,7 @@
 // falls inside it finds its mail in the local cache without re-fetching.
 // ============================================
 
+import { dealLockReason, type DealLockReason } from "./transactionEligibility";
 import * as Sentry from "@sentry/electron/main";
 import transactionService from "./transactionService";
 import emailSyncService, { EMAIL_CACHE_FRESHNESS_MS } from "./emailSyncService";
@@ -94,7 +95,7 @@ const BUFFER_MS = DELTA_SKEW_PAD_DAYS * 24 * 60 * 60 * 1000;
 export interface EnsureSyncResult {
   ran: boolean;
   reason: SyncTriggerReason;
-  skipped?: "throttled" | "not_found" | "no_provider" | "covered" | "past_window";
+  skipped?: "throttled" | "not_found" | "no_provider" | "covered" | "past_window" | DealLockReason;
   windowsFetched?: number;
   error?: string;
 }
@@ -183,6 +184,19 @@ export async function ensureTransactionEmailsSynced(params: {
     //    the shape syncTransactionEmails consumes). Leaf consumer → no cycle.
     const details = await transactionService.getTransactionWithContacts(transactionId);
     if (!details) return { ran: false, reason, skipped: "not_found" };
+
+    // BACKLOG-3910: a locked deal (with the broker, or sealed) is not searched and
+    // gets nothing new, for every reason (open, create, export, date change, scan).
+    // Export goes on with what the deal already holds.
+    const lockReason = dealLockReason(details.submission_status);
+    if (lockReason) {
+      logService.info("[BACKLOG-3910] sync skipped: deal is locked", "TxnSyncTrigger", {
+        transactionId,
+        reason,
+        lockReason,
+      });
+      return { ran: false, reason, skipped: lockReason };
+    }
     userId = params.userId ?? details.user_id;
     const contactAssignments = details.contact_assignments ?? [];
 

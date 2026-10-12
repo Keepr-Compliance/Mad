@@ -57,6 +57,11 @@ interface TransactionDetailsTabProps {
   syncingCommunications?: boolean;
   /** Whether a global sync (from dashboard) is in progress */
   globalSyncRunning?: boolean;
+  /**
+   * BACKLOG-3910: set when the deal is locked (with the broker, or sealed). Sync is
+   * disabled and this is its tooltip.
+   */
+  syncLockedTooltip?: string;
   /** TASK-2074: Whether the app is online (network connectivity) */
   isOnline?: boolean;
   /** BACKLOG-1548: Callback to refresh contact data after editing a contact */
@@ -138,6 +143,7 @@ export function TransactionDetailsTab({
   onSyncCommunications,
   syncingCommunications = false,
   globalSyncRunning = false,
+  syncLockedTooltip,
   isOnline = true,
   onContactUpdated,
   onNavigateToTab,
@@ -150,8 +156,10 @@ export function TransactionDetailsTab({
   removedContactsRefreshKey,
 }: TransactionDetailsTabProps): React.ReactElement {
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
-  const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning;
-  const syncTooltip = !isOnline
+  const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning || !!syncLockedTooltip;
+  const syncTooltip = syncLockedTooltip
+    ? syncLockedTooltip
+    : !isOnline
     ? "You are offline"
     : globalSyncRunning
     ? "A sync is already in progress from the dashboard"

@@ -44,6 +44,11 @@ interface TransactionEmailsTabProps {
   syncingCommunications?: boolean;
   /** Whether a global sync (from dashboard) is in progress */
   globalSyncRunning?: boolean;
+  /**
+   * BACKLOG-3910: set when the deal is locked (with the broker, or sealed). Sync is
+   * disabled and this is its tooltip.
+   */
+  syncLockedTooltip?: string;
   /** TASK-2074: Whether the app is online (network connectivity) */
   isOnline?: boolean;
   /** Whether there are contacts assigned (to show appropriate help text) */
@@ -114,6 +119,7 @@ export function TransactionEmailsTab({
   onSyncCommunications,
   syncingCommunications = false,
   globalSyncRunning = false,
+  syncLockedTooltip,
   isOnline = true,
   hasContacts = false,
   userId,
@@ -158,8 +164,10 @@ export function TransactionEmailsTab({
   const nameMap = useContactNameMap(userId ?? currentUser?.id);
 
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
-  const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning;
-  const syncTooltip = !isOnline
+  const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning || !!syncLockedTooltip;
+  const syncTooltip = syncLockedTooltip
+    ? syncLockedTooltip
+    : !isOnline
     ? "You are offline"
     : globalSyncRunning
     ? "A sync is already in progress from the dashboard"

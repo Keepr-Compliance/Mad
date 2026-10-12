@@ -71,3 +71,11 @@ export const LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED = sql`status != ?`;
 export function withLiveTransactionParam(params: readonly unknown[]): unknown[] {
   return [...params, REJECTED_TRANSACTION_STATUS];
 }
+
+/**
+ * BACKLOG-3910: a deal's submission status, for the locked-deal check
+ * (`transactionEligibility.dealLockReason`). One bound parameter: transaction id.
+ * Read by `dealLockState.getDealLockReason`, the backstop at every automatic
+ * writer. The sweeps read the same column through queries they already run.
+ */
+export const TRANSACTION_SUBMISSION_STATUS_SQL = sql`SELECT submission_status FROM transactions WHERE id = ?`;
