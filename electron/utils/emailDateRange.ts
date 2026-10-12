@@ -10,13 +10,15 @@
  *
  * BACKLOG-2788: the END of the range is no longer computed here. The closing
  * day's end belongs to `auditWindowEnd()` (electron/services/exportPlan.ts) —
- * one helper owns "where does the user's day end", and this file's 30-day
- * buffer advances from it. See that function for the local-midnight contract.
+ * one helper owns "where does the user's day end". See that function for the
+ * local-midnight contract.
+ *
+ * BACKLOG-3910 (founder decision, 2026-10-11): there is no post-closing buffer.
+ * The range ends at the end of the deal's End Date (`closed_at`), the same
+ * bound the export, the broker submission and the Texts tab use. The "Closing
+ * Date" field (`closing_deadline`) is not a window bound and is not read here.
  */
 import { auditWindowEnd, auditWindowStart } from "../services/exportPlan";
-
-/** Buffer days added after closed_at date to catch post-closing communications */
-export const DEFAULT_BUFFER_DAYS = 30;
 
 /** Fallback lookback period when no transaction dates are available */
 const FALLBACK_YEARS = 2;
@@ -30,15 +32,14 @@ const FALLBACK_YEARS = 2;
  *   3. Fallback: 2 years ago
  *
  * End date:
- *   - the END of the closing day in the user's LOCAL timezone (BACKLOG-2788's
- *     `auditWindowEnd`) + a 30-day buffer, to catch post-closing communications
- *   - Or today if closed_at is not set
+ *   - the END of the End Date (`closed_at`) in the user's LOCAL timezone
+ *     (BACKLOG-2788's `auditWindowEnd`) — no post-closing buffer (BACKLOG-3910)
+ *   - Or today if closed_at is not set (or cannot be parsed)
  *
- * The end therefore sits ~24h later than it did before BACKLOG-2788 (it used to
- * be UTC MIDNIGHT of closing-day+30, i.e. the START of that day). The direction
- * is deliberate and safe for every consumer: the email fetch and the auto-link
- * candidate window get the whole buffered final day, and `deriveAuditSpans`
- * protects the whole buffered final day from the import cap.
+ * Consumers of the end: the auto-link candidate window, the on-open email
+ * fetch window and its past-window gate, the import-cap protected span
+ * (`deriveAuditSpans`), and the date-edit re-sync check
+ * (`isAuditWindowExtended`).
  *
  * @param params - Transaction date fields (all optional)
  * @param now - The clock for the two "today" fallbacks. Defaults to the real
@@ -82,16 +83,12 @@ export function computeTransactionDateRange(
   let end: Date = new Date(now.getTime()); // default: today
 
   if (params.closed_at) {
-    // BACKLOG-2788: the buffer runs from the end of the closing DAY as the user
-    // experiences it — local midnight — not from UTC midnight of that date.
-    // `auditWindowEnd()` is the single place that decides where a closing day
-    // ends; the buffer then advances 30 LOCAL days from that instant, so the
-    // last buffered day also ends at local midnight and both DST-transition
-    // days land exact (setDate preserves the local wall clock).
-    const bufferedEnd = auditWindowEnd(params.closed_at);
-    if (bufferedEnd && !isNaN(bufferedEnd.getTime())) {
-      bufferedEnd.setDate(bufferedEnd.getDate() + DEFAULT_BUFFER_DAYS);
-      end = bufferedEnd;
+    // BACKLOG-2788: the End Date ends at the user's LOCAL midnight, and
+    // `auditWindowEnd()` is the single place that decides where.
+    // BACKLOG-3910: nothing is added after it.
+    const endOfEndDate = auditWindowEnd(params.closed_at);
+    if (endOfEndDate && !isNaN(endOfEndDate.getTime())) {
+      end = endOfEndDate;
     }
   }
 

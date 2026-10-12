@@ -99,8 +99,8 @@ export function deriveAuditSpans(userId: string): AuditSpan[] {
     const { start, end } = computeTransactionDateRange(txn);
     spans.push({
       startISO: start.toISOString(),
-      // Closed deal -> a real upper bound (with the buffer the shared helper
-      // applies). Open deal -> open-ended, see above.
+      // Closed deal -> a real upper bound: the end of its End Date (no
+      // post-closing buffer, BACKLOG-3910). Open deal -> open-ended, see above.
       endISO: txn.closed_at ? end.toISOString() : null,
     });
   }
