@@ -34,7 +34,6 @@ export type BillingBlock = 'plan' | 'choose_plan' | 'seats' | 'credits' | 'payme
 export type AgentPlanState = 'none' | 'active' | 'cancel_pending' | 'payment_failed' | 'support_grant';
 
 export type BillingPrimaryAction =
-  | 'subscribe'
   | 'cancel_plan'
   | 'keep_plan'
   | 'update_card'
@@ -73,7 +72,9 @@ const ORG_PAYER_ROLES = ['broker', 'admin'] as const;
 const ORG_ROLES = ['broker', 'admin', 'it_admin'] as const;
 
 const PERSONAL_PRIMARY: Record<AgentPlanState, BillingPrimaryAction | null> = {
-  none: 'subscribe',
+  // Block 2 (Choose a plan) carries Subscribe for a pay-as-you-go owner, so block 1 has no
+  // primary action then (founder decision 2026-10-12).
+  none: null,
   active: 'cancel_plan',
   cancel_pending: 'keep_plan',
   payment_failed: 'update_card',

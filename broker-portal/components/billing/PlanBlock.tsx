@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { BillingBlock } from './BillingBlock';
-import { CancelPlanButton, CheckoutReturn, KeepPlanButton, SubscribeButton } from './AgentPlanControls';
+import { CancelPlanButton, CheckoutReturn, KeepPlanButton } from './AgentPlanControls';
 import type { PersonalPlanData } from './BillingPage';
 
 /** "Your plan". Organization pages show the plan name only (3844). */
@@ -90,7 +90,6 @@ function PersonalPlan({ p }: { p: PersonalPlanData }) {
           {p.checkout === 'cancelled' ? (
             <p role="status" className="text-sm text-gray-600">Checkout was cancelled. Nothing was charged.</p>
           ) : null}
-          {month ? <SubscribeButton label={`Subscribe — ${month.display}/month`} /> : null}
         </div>
       );
   }
