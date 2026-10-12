@@ -87,6 +87,7 @@ describe("EmailAttachmentService", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    (existsSync as jest.Mock).mockReturnValue(false);
 
     // TASK-2100: Mock new service-layer methods instead of getRawDatabase
     (databaseService.getAttachmentStoragePaths as jest.Mock).mockReturnValue([]);
@@ -542,6 +543,21 @@ describe("EmailAttachmentService", () => {
       // File should not be written again (deduplicated)
       expect(sealBufferToFile).not.toHaveBeenCalled();
       // But record should still be created
+      expect(result.stored).toBe(1);
+    });
+
+    it("BACKLOG-3913: a known hash whose file is gone is written again", async () => {
+      const contentHash = crypto.createHash("sha256").update(mockAttachmentData).digest("hex");
+      (databaseService.getAttachmentStoragePaths as jest.Mock).mockReturnValue([
+        { storage_path: `/mock/path/${contentHash}.pdf` },
+      ]);
+      (existsSync as jest.Mock).mockReturnValue(false);
+
+      const result = await emailAttachmentService.downloadEmailAttachments(
+        mockUserId, mockEmailId, mockExternalEmailId, "gmail", [mockAttachment]
+      );
+
+      expect(sealBufferToFile).toHaveBeenCalledTimes(1);
       expect(result.stored).toBe(1);
     });
   });
