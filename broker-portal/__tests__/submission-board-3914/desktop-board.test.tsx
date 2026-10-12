@@ -391,6 +391,62 @@ describe('view param', () => {
   });
 });
 
+describe('board URL carrying a status (hand-typed or shared)', () => {
+  it('Board -> List opens All: the URL status is dropped from the List link', async () => {
+    const { container } = await renderList({ view: 'board', status: 'approved', agent: AGENT_B, sort: 'oldest' });
+    const links = Array.from(toggle(container)!.querySelectorAll('a')).map((a) => [a.textContent, a.getAttribute('href')]);
+    expect(links).toEqual([
+      ['List', `/dashboard/submissions?agent=${AGENT_B}&sort=oldest`],
+      ['Board', `/dashboard/submissions?agent=${AGENT_B}&sort=oldest&view=board`],
+    ]);
+  });
+});
+
+describe('list page read error on a board URL', () => {
+  it('still renders the board (empty lanes), not the list empty state', async () => {
+    seed();
+    const real = (t: string) => mockEmulator.from(t);
+    const { getDataClient } = jest.requireMock('@/lib/impersonation-guards') as { getDataClient: jest.Mock };
+    // Wrap every builder step so a .in('id', ...) anywhere in the chain fails: that is
+    // the page-of-heads row read (readRows) and the only id-filtered read besides the board's own.
+    const failIds = (b: Record<string, unknown>): Record<string, unknown> =>
+      new Proxy(b, {
+        get: (target, prop) => {
+          if (prop === 'in') {
+            return (col: string, ...r: unknown[]) =>
+              col === 'id'
+                ? Promise.resolve({ data: null, error: { message: 'boom' } })
+                : failIds((target.in as (...x: unknown[]) => Record<string, unknown>)(col, ...r));
+          }
+          const v = target[prop as string];
+          if (typeof v === 'function' && prop !== 'then') {
+            return (...a: unknown[]) => {
+              const out = (v as (...x: unknown[]) => unknown).apply(target, a);
+              return out && typeof out === 'object' ? failIds(out as Record<string, unknown>) : out;
+            };
+          }
+          return v;
+        },
+      });
+    getDataClient.mockImplementationOnce(async () => ({
+      client: {
+        from: (t: string) => {
+          const q = real(t) as { select: (c: string) => Record<string, unknown> };
+          return { select: (cols: string) => (cols === '*' ? failIds(q.select(cols)) : q.select(cols)) };
+        },
+      },
+      impersonation: null,
+      organizationId: null,
+    }));
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { container } = render(await SubmissionsPage({ searchParams: Promise.resolve({ view: 'board' }) }));
+    spy.mockRestore();
+    expect(boardRoot(container)).not.toBeNull();
+    expect(Object.keys(laneCounts(container))).toEqual(OPEN_LANES.map((l) => l.value));
+    expect(laneCounts(container)).toEqual({ new: 0, resubmitted: 0, under_review: 0, needs_changes: 0 });
+  });
+});
+
 describe('desktop only, read-only', () => {
   it('the board and the toggle sit only inside max-md:hidden; on the board the list is md:hidden', async () => {
     const { container } = await renderList({ view: 'board' });

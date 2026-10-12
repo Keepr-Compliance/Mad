@@ -217,7 +217,7 @@ async function getSubmissions(
 
   if (result.error) {
     console.error('Error fetching submissions:', result.error);
-    return EMPTY_LIST;
+    return { ...EMPTY_LIST, board: filters.view === 'board' ? EMPTY_BOARD(!!filters.closed) : null };
   }
 
   // BACKLOG-3914: the board's lanes are the same searched heads with the same
