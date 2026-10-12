@@ -250,7 +250,7 @@ describe('broker Submissions list: one row per deal', () => {
     // match on (BROKER_LINK_COLUMNS); My Transactions keeps LINK_COLUMNS.
     expect(reads.map((r) => r.columns)).toEqual([
       'organization_id',
-      'id, parent_submission_id, status, created_at, submitted_by, property_address, property_city',
+      'id, parent_submission_id, status, created_at, submitted_by, property_address, property_city, property_state, sale_price, listing_price',
       '*',
     ]);
     expect(mockEmulator.state.writes).toEqual([]);

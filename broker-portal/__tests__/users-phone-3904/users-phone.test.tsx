@@ -138,3 +138,14 @@ describe('Users phone bar', () => {
     expect(count?.className).toContain('max-md:hidden');
   });
 });
+
+describe('Users stays without a sort control (BACKLOG-3904 sort)', () => {
+  it('the filter row is the two filters only, in a two-column grid', () => {
+    renderList();
+    const bar = document.querySelector('[data-slot=phone-filter-bar]') as HTMLElement;
+    expect(within(bar).queryByRole('button', { name: /^Sort/ })).toBeNull();
+    const grid = bar.querySelector('.grid') as HTMLElement;
+    expect(grid.className).toBe('mt-2 grid grid-cols-2 gap-2');
+    expect(grid.children).toHaveLength(2);
+  });
+});

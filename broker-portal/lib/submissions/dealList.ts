@@ -27,12 +27,15 @@ export const LINK_COLUMNS = 'id, parent_submission_id, status, created_at';
  * LINK_COLUMNS. Matched on the HEAD (the producer re-reads the address on
  * every version, so an older version's address can differ).
  */
-export const BROKER_LINK_COLUMNS = `${LINK_COLUMNS}, submitted_by, property_address, property_city`;
+export const BROKER_LINK_COLUMNS = `${LINK_COLUMNS}, submitted_by, property_address, property_city, property_state, sale_price, listing_price`;
 
 export interface BrokerChainLink extends ChainLink {
   submitted_by: string | null;
   property_address: string | null;
   property_city: string | null;
+  property_state: string | null;
+  sale_price: number | null;
+  listing_price: number | null;
 }
 
 /** Longest search text acted on; the rest is ignored. */
@@ -187,13 +190,15 @@ export async function pageOfHeads<T extends { id: string }, L extends ChainLink 
   status: string | null;
   /** Any further per-head filter (search, agent). */
   match?: (_head: L) => boolean;
+  /** Head order; applied before the count and the page slice. Default: newest first. */
+  compare?: (_a: L, _b: L) => number;
   page: number;
   pageSize: number;
 }): Promise<DealPage<T>> {
   const match = args.match ?? (() => true);
   const heads = args.heads
     .filter((h) => headMatchesFilter(h.status, args.status) && match(h))
-    .sort(compareNewestFirst);
+    .sort(args.compare ?? compareNewestFirst);
 
   const total = heads.length;
   const totalPages = Math.max(1, Math.ceil(total / args.pageSize));

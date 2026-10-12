@@ -30,6 +30,7 @@ import {
   parseSearchParam,
   type ListFilters,
 } from '@/lib/submissions/listUrl';
+import { compareHeads, parseSortParam } from '@/lib/submissions/listSort';
 import {
   SubmissionDesktopFilters,
   SubmissionPhoneFilters,
@@ -55,7 +56,7 @@ interface Submission {
 }
 
 interface PageProps {
-  searchParams: Promise<{ status?: string; search?: string; agent?: string; page?: string }>;
+  searchParams: Promise<{ status?: string; search?: string; agent?: string; page?: string; sort?: string }>;
 }
 
 const PAGE_SIZE = 25;
@@ -172,6 +173,7 @@ async function getSubmissions(
     readRows: (ids) => scoped('*').in('id', ids),
     status: filters.status !== 'all' ? filters.status : null,
     match: filters.agent ? (h) => h.submitted_by === filters.agent : undefined,
+    compare: compareHeads(filters.sort ?? 'newest'),
     page,
     pageSize: PAGE_SIZE,
   });
@@ -193,7 +195,7 @@ async function getSubmissions(
 }
 
 export default async function SubmissionsPage({ searchParams }: PageProps) {
-  const { status, page: pageParam, agent: agentParam, search: searchParam } = await searchParams;
+  const { status, page: pageParam, agent: agentParam, search: searchParam, sort: sortParam } = await searchParams;
   const currentPage = Math.max(1, Number(pageParam) || 1);
   const currentStatus = status || 'all';
   // BACKLOG-3904: a non-uuid agent is ignored; search is trimmed and capped.
@@ -201,6 +203,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
     status: currentStatus,
     agent: parseAgentParam(agentParam),
     search: parseSearchParam(searchParam),
+    sort: parseSortParam(sortParam),
   };
   // BACKLOG-3597: the "submitted" filter now covers submitted AND resubmitted
   // deals (STATUSES labels it "Pending"), so the caption uses that tab label

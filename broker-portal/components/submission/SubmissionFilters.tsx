@@ -14,9 +14,10 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { BottomSheet, PhoneClearFilters, PhoneFilterBar, PhoneResultsRow, SearchField } from '@keepr/ui';
+import { BottomSheet, PhoneClearFilters, PhoneFilterBar, PhoneResultsRow, PhoneSortButton, SearchField } from '@keepr/ui';
 import ListFilterCard from '@/components/ui/ListFilterCard';
 import { headMatchesFilter } from '@/lib/submissions/dealList';
+import { DEFAULT_SORT, SORT_OPTIONS, sortLabel, type SortKey } from '@/lib/submissions/listSort';
 import { buildListUrl, hasActiveFilters, parseSearchParam, type ListFilters } from '@/lib/submissions/listUrl';
 
 export interface AgentOption {
@@ -188,7 +189,7 @@ export function SubmissionDesktopFilters({
           {hasChipFilters ? (
             <button
               type="button"
-              onClick={() => router.push(buildListUrl({ status: 'all', agent: null, search: filters.search }))}
+              onClick={() => router.push(buildListUrl({ status: 'all', agent: null, search: filters.search, sort: filters.sort }))}
               className="font-medium text-primary-700 hover:text-primary-800 hover:underline"
             >
               Clear filters
@@ -224,6 +225,8 @@ export function SubmissionPhoneFilters({
 
   // One sheet at a time, each for its own filter, applied by "Show N".
   const [sheet, setSheet] = useState<'status' | 'agent' | null>(null);
+  const [sortOpen, setSortOpen] = useState(false);
+  const currentSort: SortKey = filters.sort ?? DEFAULT_SORT;
   const [pendingStatus, setPendingStatus] = useState(filters.status);
   const [pendingAgent, setPendingAgent] = useState<string | null>(filters.agent);
   const [agentQuery, setAgentQuery] = useState('');
@@ -288,6 +291,14 @@ export function SubmissionPhoneFilters({
           onClick: () => openSheet('agent'),
         },
       ]}
+      trailing={
+        <PhoneSortButton
+          label={`Sort: ${sortLabel(currentSort)}`}
+          active={currentSort !== DEFAULT_SORT}
+          expanded={sortOpen}
+          onClick={() => setSortOpen(true)}
+        />
+      }
       results={
         filtered ? (
           <PhoneResultsRow
@@ -297,7 +308,7 @@ export function SubmissionPhoneFilters({
             action={
               hasChipFilters ? (
                 <PhoneClearFilters
-                  onClick={() => router.push(buildListUrl({ status: 'all', agent: null, search: filters.search }))}
+                  onClick={() => router.push(buildListUrl({ status: 'all', agent: null, search: filters.search, sort: filters.sort }))}
                 />
               ) : null
             }
@@ -305,6 +316,34 @@ export function SubmissionPhoneFilters({
         ) : null
       }
     >
+      <BottomSheet open={sortOpen} onOpenChange={setSortOpen} title="Sort by">
+        <fieldset className="divide-y divide-gray-100 overflow-hidden rounded-lg border border-gray-200">
+          <legend className="sr-only">Sort by</legend>
+          {SORT_OPTIONS.map((o) => {
+            const checked = currentSort === o.value;
+            return (
+              <label
+                key={o.value}
+                className={`flex min-h-12 items-center gap-3 px-3 text-base text-gray-900 ${checked ? 'bg-primary-50' : 'bg-white'}`}
+              >
+                <input
+                  type="radio"
+                  name="submissions-sort"
+                  value={o.value}
+                  checked={checked}
+                  aria-label={o.label}
+                  onChange={() => {
+                    setSortOpen(false);
+                    router.push(buildListUrl({ ...filters, sort: o.value }));
+                  }}
+                  className="h-5 w-5 accent-primary-600"
+                />
+                <span className="flex-1">{o.label}</span>
+              </label>
+            );
+          })}
+        </fieldset>
+      </BottomSheet>
       <BottomSheet
         open={sheet !== null}
         onOpenChange={(o) => !o && setSheet(null)}

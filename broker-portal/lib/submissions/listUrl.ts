@@ -8,6 +8,7 @@
  */
 
 import { MAX_SEARCH_LENGTH } from './dealList';
+import { DEFAULT_SORT, type SortKey } from './listSort';
 
 export const SUBMISSIONS_PATH = '/dashboard/submissions';
 
@@ -15,6 +16,8 @@ export interface ListFilters {
   status: string;
   agent: string | null;
   search: string;
+  /** Omitted means the default (newest first). */
+  sort?: SortKey;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -36,6 +39,7 @@ export function buildListUrl(filters: ListFilters, page = 1): string {
   if (filters.status && filters.status !== 'all') params.set('status', filters.status);
   if (filters.agent) params.set('agent', filters.agent);
   if (filters.search) params.set('search', filters.search);
+  if (filters.sort && filters.sort !== DEFAULT_SORT) params.set('sort', filters.sort);
   if (page > 1) params.set('page', String(page));
   const query = params.toString();
   return query ? `${SUBMISSIONS_PATH}?${query}` : SUBMISSIONS_PATH;

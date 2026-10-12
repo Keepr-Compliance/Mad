@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { PhoneFilterBar, PhoneResultsRow, PhoneClearFilters } from './filter-bar';
+import { PhoneFilterBar, PhoneResultsRow, PhoneClearFilters, PhoneSortButton } from './filter-bar';
 
 const filters = [
   { label: 'Role', value: 'All Roles', onClick: () => {} },
@@ -74,5 +74,43 @@ describe('PhoneClearFilters', () => {
     expect(btn.className).toContain('min-h-11');
     fireEvent.click(btn);
     expect(onClick).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PhoneFilterBar trailing slot', () => {
+  it('without trailing, the grid is exactly two columns', () => {
+    render(<PhoneFilterBar search={{ label: 'Search', value: '', onChange: () => {} }} filters={filters} />);
+    const grid = screen.getByRole('button', { name: 'Role: All Roles' }).parentElement!;
+    expect(grid.className).toBe('mt-2 grid grid-cols-2 gap-2');
+    expect(grid.children).toHaveLength(2);
+  });
+
+  it('with trailing, the square sits third on the same grid row', () => {
+    render(
+      <PhoneFilterBar
+        search={{ label: 'Search', value: '', onChange: () => {} }}
+        filters={filters}
+        trailing={<PhoneSortButton label="Sort: Newest first" onClick={() => {}} />}
+      />
+    );
+    const grid = screen.getByRole('button', { name: 'Role: All Roles' }).parentElement!;
+    expect(grid.className).toContain('2.75rem');
+    expect(grid.children).toHaveLength(3);
+    expect(grid.children[2]).toBe(screen.getByRole('button', { name: 'Sort: Newest first' }));
+  });
+});
+
+describe('PhoneSortButton', () => {
+  it('is a 44px square, highlighted only when active, and clicks', () => {
+    const onClick = jest.fn();
+    const { rerender } = render(<PhoneSortButton label="Sort: Newest first" onClick={onClick} />);
+    const b = screen.getByRole('button', { name: 'Sort: Newest first' });
+    expect(b.className).toContain('h-11');
+    expect(b.className).toContain('w-11');
+    expect(b).not.toHaveAttribute('data-active');
+    fireEvent.click(b);
+    expect(onClick).toHaveBeenCalledTimes(1);
+    rerender(<PhoneSortButton label="Sort: Oldest first" onClick={onClick} active />);
+    expect(screen.getByRole('button', { name: 'Sort: Oldest first' })).toHaveAttribute('data-active', 'true');
   });
 });

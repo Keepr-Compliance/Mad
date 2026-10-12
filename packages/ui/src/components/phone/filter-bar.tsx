@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { ArrowUpDown } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { SearchField } from './search-field';
 import { FilterSelectButton, type FilterSelectButtonProps } from './filter-select-button';
@@ -29,12 +30,14 @@ export interface PhoneFilterBarProps {
   };
   /** Exactly two filters. */
   filters: readonly [PhoneFilterSpec, PhoneFilterSpec];
+  /** Optional square control after the two filters (e.g. PhoneSortButton). Without it the bar is unchanged. */
+  trailing?: React.ReactNode;
   results?: React.ReactNode;
   children?: React.ReactNode;
   className?: string;
 }
 
-export function PhoneFilterBar({ search, filters, results, children, className }: PhoneFilterBarProps) {
+export function PhoneFilterBar({ search, filters, trailing, results, children, className }: PhoneFilterBarProps) {
   return (
     <div data-slot="phone-filter-bar" className={className}>
       <form
@@ -53,9 +56,14 @@ export function PhoneFilterBar({ search, filters, results, children, className }
           onClear={search.onClear}
         />
       </form>
-      <div className="mt-2 grid grid-cols-2 gap-2">
+      <div
+        className={
+          trailing ? 'mt-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.75rem] gap-2' : 'mt-2 grid grid-cols-2 gap-2'
+        }
+      >
         <FilterSelectButton {...filters[0]} />
         <FilterSelectButton {...filters[1]} />
+        {trailing}
       </div>
       {results}
       {children}
@@ -101,6 +109,43 @@ export function PhoneClearFilters({ onClick, className }: { onClick: () => void;
       className={cn('min-h-11 px-1 text-sm font-semibold text-primary-700', className)}
     >
       Clear filters
+    </button>
+  );
+}
+
+/**
+ * Phone kit - the 44x44 square icon button for PhoneFilterBar's `trailing` slot
+ * (the sort control, BACKLOG-3904). Same height, radius and active style as
+ * FilterSelectButton; opens a BottomSheet.
+ */
+export interface PhoneSortButtonProps {
+  /** Accessible name, e.g. "Sort: Newest first". */
+  label: string;
+  onClick: () => void;
+  expanded?: boolean;
+  /** A non-default option is selected: highlights the control. */
+  active?: boolean;
+  className?: string;
+}
+
+export function PhoneSortButton({ label, onClick, expanded = false, active = false, className }: PhoneSortButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-haspopup="dialog"
+      aria-expanded={expanded}
+      aria-label={label}
+      data-active={active ? 'true' : undefined}
+      className={cn(
+        'flex h-11 w-11 items-center justify-center rounded-md border focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
+        active
+          ? 'border-primary-600 bg-primary-50 text-primary-700'
+          : 'border-gray-300 bg-white text-gray-500 [@media(hover:hover)]:hover:bg-gray-50',
+        className
+      )}
+    >
+      <ArrowUpDown className="h-4 w-4" aria-hidden="true" />
     </button>
   );
 }
