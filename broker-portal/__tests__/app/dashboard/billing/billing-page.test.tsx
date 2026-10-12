@@ -163,7 +163,7 @@ function given(memberships: Row[], readFails = false): void {
 type Outcome = { redirect: string } | { notFound: true } | { element: string };
 async function run(): Promise<Outcome> {
   try {
-    const el = await BillingRoute();
+    const el = await BillingRoute({});
     return { element: el.type === BillingPage ? 'BillingPage' : String(el.type) };
   } catch (e) {
     if (e instanceof Redirect) return { redirect: e.to };
@@ -174,7 +174,7 @@ async function run(): Promise<Outcome> {
 
 /** The h2 of every block, in render order. */
 async function renderedBlocks(): Promise<string[]> {
-  const { container, unmount } = render(await BillingRoute());
+  const { container, unmount } = render(await BillingRoute({}));
   const titles = within(container)
     .getAllByRole('heading', { level: 2 })
     .map((h) => h.textContent ?? '');
@@ -256,7 +256,7 @@ describe('R1: the page refuses on its own', () => {
     given(rows);
     expect(await renderedBlocks()).toEqual(blocks);
     given(rows);
-    const { container, unmount } = render(await BillingRoute());
+    const { container, unmount } = render(await BillingRoute({}));
     expect(container.textContent).toContain(planLine);
     if (rows[0] === undefined || (rows[0] as Row).role !== 'agent') {
       // No amount of money anywhere on an organization page (3844).
@@ -395,7 +395,7 @@ describe('3847: personal plan blocks', () => {
   }
   async function text(params?: Record<string, string>): Promise<{ text: string; titles: string[]; buttons: string[] }> {
     given([personalMembership()]);
-    const el = await BillingRoute(params ? { searchParams: Promise.resolve(params) } : undefined);
+    const el = await BillingRoute(params ? { searchParams: Promise.resolve(params) } : {});
     const { container, unmount } = render(el);
     const out = {
       text: container.textContent ?? '',

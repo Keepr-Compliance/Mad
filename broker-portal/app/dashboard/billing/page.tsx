@@ -53,7 +53,7 @@ async function agentPrices(): Promise<PersonalPlanData['prices']> {
   }
 }
 
-export default async function BillingRoute({ searchParams }: { searchParams?: Promise<SearchParams> } = {}) {
+export default async function BillingRoute({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   if (!billingEnabled()) notFound();
   if (await getImpersonationSession()) notFound();
 

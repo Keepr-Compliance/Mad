@@ -441,7 +441,7 @@ const PLAN_GATED_PAGES: Record<string, PageEntry> = {
 /** BACKLOG-3844: the page refuses everyone but a personal-org owner and a full-portal user. */
 const BILLING_PAGES: Record<string, PageEntry> = {
   'app/dashboard/billing/page.tsx': {
-    invoke: async () => (await import('@/app/dashboard/billing/page')).default(),
+    invoke: async () => (await import('@/app/dashboard/billing/page')).default({}),
     refused: { notFound: true },
   },
 };
