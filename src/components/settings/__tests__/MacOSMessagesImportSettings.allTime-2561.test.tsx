@@ -16,12 +16,19 @@
  * These assertions also pin the component's local `DEFAULT_LOOKBACK_MONTHS`
  * against the main process's, which the renderer cannot import across the
  * electron/renderer boundary.
+ *
+ * BACKLOG-3892 S3: the dropdown moved out of the macOS panel into the shared
+ * "How far back to import texts" picker (TextsLookbackSettings). These cases
+ * are re-pinned to it, rendered the way Settings composes it: the picker and
+ * the macOS panel under one TextsLookbackProvider.
  */
 
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
+import { TextsLookbackSettings } from "../TextsLookbackSettings";
+import { TextsLookbackProvider } from "../textsLookback";
 
 jest.mock("../../../contexts/PlatformContext", () => ({
   usePlatform: jest.fn(() => ({ isMacOS: true })),
@@ -57,6 +64,18 @@ jest.mock("../../../services", () => ({
 
 const renderStrict = (ui: React.ReactElement) =>
   render(<React.StrictMode>{ui}</React.StrictMode>);
+
+/** Settings' composition: the shared picker + the macOS panel, one provider. */
+const renderSettingsMessages = () =>
+  renderStrict(
+    <TextsLookbackProvider userId="user-2561">
+      <TextsLookbackSettings userId="user-2561" />
+      <MacOSMessagesImportSettings userId="user-2561" />
+    </TextsLookbackProvider>
+  );
+
+/** The shared picker, once its stored value has been read (disabled until then). */
+const sharedPicker = () => screen.getByTestId("texts-lookback-select");
 
 beforeEach(() => {
   mockGetPreferences.mockReset();
@@ -98,12 +117,15 @@ describe("BACKLOG-2561 · the lookback dropdown tells the truth about stored sta
       data: { messageImport: { filters: { maxMessages: 10000 } } },
     });
 
-    renderStrict(<MacOSMessagesImportSettings userId="user-2561" />);
+    renderSettingsMessages();
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("10,000")).toBeInTheDocument();
     });
-    expect(screen.getByDisplayValue("Last 1.5 months (default)")).toBeInTheDocument();
+    // BACKLOG-3892 S3: the shared picker reads the key itself; its anchor is
+    // that it has settled (it is disabled until the stored value is read).
+    await waitFor(() => expect(sharedPicker()).not.toBeDisabled());
+    expect(sharedPicker()).toHaveDisplayValue("Last 1.5 months (default)");
     expect(screen.queryByDisplayValue("All time")).not.toBeInTheDocument();
   });
 
@@ -113,10 +135,10 @@ describe("BACKLOG-2561 · the lookback dropdown tells the truth about stored sta
       data: { messageImport: { filters: { lookbackMonths: null, maxMessages: 50000 } } },
     });
 
-    renderStrict(<MacOSMessagesImportSettings userId="user-2561" />);
+    renderSettingsMessages();
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("All time")).toBeInTheDocument();
+      expect(sharedPicker()).toHaveDisplayValue("All time");
     });
   });
 
@@ -126,20 +148,19 @@ describe("BACKLOG-2561 · the lookback dropdown tells the truth about stored sta
       data: { messageImport: { filters: { lookbackMonths: 12, maxMessages: 50000 } } },
     });
 
-    renderStrict(<MacOSMessagesImportSettings userId="user-2561" />);
+    renderSettingsMessages();
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("Last 1 year")).toBeInTheDocument();
+      expect(sharedPicker()).toHaveDisplayValue("Last 1 year");
     });
   });
 
   it("shows the 1.5-month default when no messageImport preference exists at all", async () => {
     mockGetPreferences.mockResolvedValue({ success: true, data: {} });
 
-    renderStrict(<MacOSMessagesImportSettings userId="user-2561" />);
+    renderSettingsMessages();
 
-    await waitFor(() => {
-      expect(screen.getByDisplayValue("Last 1.5 months (default)")).toBeInTheDocument();
-    });
+    await waitFor(() => expect(sharedPicker()).not.toBeDisabled());
+    expect(sharedPicker()).toHaveDisplayValue("Last 1.5 months (default)");
   });
 });

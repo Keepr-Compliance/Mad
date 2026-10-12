@@ -55,6 +55,8 @@ jest.mock("../../../services/rcsImportService", () => ({
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { GoogleMessagesSettings } = require("../GoogleMessagesSettings") as typeof import("../GoogleMessagesSettings");
+const { TextsLookbackSettings } = require("../TextsLookbackSettings") as typeof import("../TextsLookbackSettings");
+const { TextsLookbackProvider } = require("../textsLookback") as typeof import("../textsLookback");
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -81,8 +83,20 @@ describe("GoogleMessagesSettings", () => {
     expect(screen.queryByRole("button", { name: "Withdraw" })).toBeNull();
   });
 
+  // BACKLOG-3892 S3: the months control is the shared "How far back to import
+  // texts" picker now, outside this panel; L1/L2 are re-pinned to it, rendered
+  // the way Settings composes it (one provider around the picker and the panel).
+  // The panel's "Copying texts from …" line follows the shared value.
+  const renderWithSharedPicker = () =>
+    render(
+      <TextsLookbackProvider userId="user-1">
+        <TextsLookbackSettings userId="user-1" />
+        <GoogleMessagesSettings userId="user-1" />
+      </TextsLookbackProvider>,
+    );
+
   it("months control: absent → the default 1.5 months; the stored value; null → All time (L1)", async () => {
-    const view = render(<GoogleMessagesSettings userId="user-1" />);
+    const view = renderWithSharedPicker();
     const select = (await screen.findByRole("combobox", { name: "Import messages from" })) as HTMLSelectElement;
     await waitFor(() => expect(select.disabled).toBe(false));
     expect(select.value).toBe("1.5");
@@ -90,14 +104,14 @@ describe("GoogleMessagesSettings", () => {
     expect(screen.getByTestId("gm-lookback-line")).toHaveTextContent("Copying texts from the last 1.5 months");
     view.unmount();
     mockPrefs = { messageImport: { filters: { lookbackMonths: null } } };
-    render(<GoogleMessagesSettings userId="user-1" />);
+    renderWithSharedPicker();
     await waitFor(() => expect((screen.getByRole("combobox", { name: "Import messages from" }) as HTMLSelectElement).value).toBe("all"));
     expect(screen.getByTestId("gm-lookback-line")).toHaveTextContent("Copying all your texts");
   });
 
   it("months control: a change is saved to messageImport.filters; a failed save reverts (L2)", async () => {
     mockPrefs = { messageImport: { filters: { lookbackMonths: 6 } } };
-    render(<GoogleMessagesSettings userId="user-1" />);
+    renderWithSharedPicker();
     const select = (await screen.findByRole("combobox", { name: "Import messages from" })) as HTMLSelectElement;
     await waitFor(() => expect(select.value).toBe("6"));
     fireEvent.change(select, { target: { value: "12" } });
