@@ -21,6 +21,8 @@ const mockCaptureMessage = jest.fn();
 const mockSubscriptionsCancel = jest.fn();
 const mockRetrieve = jest.fn();
 const mockVoidInvoice = jest.fn();
+const mockSessionsList = jest.fn();
+const mockSessionsExpire = jest.fn();
 
 jest.mock('@sentry/nextjs', () => ({
   captureMessage: (...a: unknown[]) => mockCaptureMessage(...a),
@@ -41,7 +43,13 @@ jest.mock('stripe', () => {
     disputes: { retrieve: r('dispute') },
     refunds: { retrieve: r('refund') },
     paymentIntents: { retrieve: r('payment_intent') },
-    checkout: { sessions: { retrieve: r('checkout.session') } },
+    checkout: {
+      sessions: {
+        retrieve: r('checkout.session'),
+        list: (...a: unknown[]) => mockSessionsList(...a),
+        expire: (...a: unknown[]) => mockSessionsExpire(...a),
+      },
+    },
     customers: { create: jest.fn() },
   }));
   return { __esModule: true, default: StripeMock };
@@ -135,6 +143,9 @@ beforeEach(() => {
   });
   mockSubscriptionsCancel.mockResolvedValue({ status: 'canceled' });
   mockVoidInvoice.mockReset();
+  // No Checkout session holds the subscription (the API-made A/C fixtures).
+  mockSessionsList.mockReset().mockResolvedValue({ object: 'list', data: [], has_more: false, url: '/v1/checkout/sessions' });
+  mockSessionsExpire.mockReset();
   useDb({});
 });
 
@@ -659,6 +670,44 @@ describe('3847: incomplete incumbent + paid newcomer (C-INC, C-INC2, C-VOID-WH)'
     expect((await deliver(created(newcomer))).status).toBe(200);
     expect(mockSubscriptionsCancel.mock.calls.map((c) => c[0])).toEqual([newcomer.id]);
     expect(statusById()).toEqual({ [C_INC.id]: 'incomplete' });
+  });
+
+  // BACKLOG-3847 QA3: the incumbent was made by Checkout (3DS failed) and its
+  // session is still open. Stripe refuses the void while that session is open
+  // and ends the subscription itself when the session is expired (measured,
+  // fixtures/stripe/p3847-qa3). The newcomer is C_ACTIVE [COMPOSED: same TEST
+  // customer, a different capture].
+  it('C-QA3-WH: incumbent held by an open Checkout session -> session expired FIRST, nothing voided, incumbent closed, newcomer kept', async () => {
+    const FXQ = path.join(__dirname, '../../../fixtures/stripe/p3847-qa3');
+    const fxq = (n: string): Obj => JSON.parse(fs.readFileSync(path.join(FXQ, `${n}.json`), 'utf8'));
+    const Q = fxq('sub-Q-incomplete');
+    const CS = fxq('cs-Q-open');
+    expect([Q.status, Q.customer, CS.status, CS.subscription, CS.invoice]).toEqual(['incomplete', CUS, 'open', Q.id, Q.latest_invoice]);
+    const refusedOpen = fxq('inv-Q-void-refused-open-session').error;
+    const refusedNotOpen = fxq('inv-Q-void-refused-not-open').error;
+    let expired = false;
+    useDb({ stripe_customers: [customerRow(CUS)], billing_subscriptions: [subRow(Q.id, CUS, { status: 'incomplete' })] });
+    serve(Q, C_ACTIVE);
+    // [COMPOSED] the by-subscription listing before expiry: the captured
+    // after-expiry listing with its one session swapped for the open capture.
+    mockSessionsList.mockImplementation(async () =>
+      expired ? fxq('sessions-by-sub-Q-after-expire') : { ...fxq('sessions-by-sub-Q-after-expire'), data: [CS] }
+    );
+    mockSessionsExpire.mockImplementation(async () => {
+      expired = true;
+      serve(fxq('sub-Q-after-expire'));
+      return fxq('cs-Q-expire');
+    });
+    mockVoidInvoice.mockImplementation(async () => {
+      const e = expired ? refusedNotOpen : refusedOpen;
+      throw Object.assign(new Error(e.message), { type: 'StripeInvalidRequestError', rawType: e.type });
+    });
+    expect((await deliver(created(C_ACTIVE))).status).toBe(200);
+    expect(mockSessionsList.mock.calls[0][0]).toEqual({ subscription: Q.id });
+    expect(mockSessionsExpire.mock.calls).toEqual([[CS.id]]);
+    expect(mockVoidInvoice).not.toHaveBeenCalled();
+    expect(mockSubscriptionsCancel).not.toHaveBeenCalled();
+    expect(statusById()).toEqual({ [Q.id]: 'incomplete_expired', [C_ACTIVE.id]: 'active' });
   });
 
   it('a failed void on a subscription that is still incomplete -> 500 so Stripe retries; nothing cancelled', async () => {

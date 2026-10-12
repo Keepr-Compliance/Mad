@@ -123,7 +123,10 @@ export function CancelPlanButton({ paidThrough }: { paidThrough: string }) {
 }
 
 /** Back from Checkout: record the subscription once, then re-render the page. */
-export function CheckoutReturn({ sessionId }: { sessionId: string }) {
+export const PAYMENT_INCOMPLETE_NOTE =
+  "Your last payment didn't go through. You haven't been charged. Subscribe again to try another card.";
+
+export function CheckoutReturn({ sessionId, paymentIncomplete = false }: { sessionId: string; paymentIncomplete?: boolean }) {
   const router = useRouter();
   const done = useRef(false);
   const [failed, setFailed] = useState(false);
@@ -140,7 +143,9 @@ export function CheckoutReturn({ sessionId }: { sessionId: string }) {
   return (
     <p role="status" className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-800">
       {failed
-        ? 'Your payment is being confirmed. This can take a minute; refresh the page to see your plan.'
+        ? paymentIncomplete
+          ? PAYMENT_INCOMPLETE_NOTE
+          : 'Your payment is being confirmed. This can take a minute; refresh the page to see your plan.'
         : 'Finishing your subscription…'}
     </p>
   );

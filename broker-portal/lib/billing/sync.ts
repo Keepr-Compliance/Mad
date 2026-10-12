@@ -258,18 +258,60 @@ async function handleSecondOpenSubscription(
   return 'duplicate';
 }
 
+/** Every item of a Stripe list, following has_more / starting_after. */
+export async function listAll<T extends { id: string }>(
+  page: (_startingAfter: string | undefined) => Promise<Stripe.ApiList<T>>
+): Promise<T[]> {
+  const out: T[] = [];
+  let after: string | undefined;
+  for (;;) {
+    const res = await page(after);
+    out.push(...res.data);
+    if (!res.has_more || res.data.length === 0) return out;
+    after = res.data[res.data.length - 1].id;
+  }
+}
+
 /**
- * End a half-made (`incomplete`) subscription the only safe way: void its
- * unpaid latest invoice (SR R1). Never subscriptions.cancel, which would end a
- * plan the user paid for in the moment between our read and this call. Returns
- * the subscription as Stripe reports it afterwards: `incomplete_expired` when
- * the void went through; `active`/`trialing` when the invoice had been paid
- * (Stripe refuses to void it). A failed void on a subscription that is still
- * `incomplete` is rethrown (a transient error: the caller retries).
+ * End a half-made (`incomplete`) subscription the only safe way (SR R1): never
+ * subscriptions.cancel, which would end a plan the user paid for in the moment
+ * between our read and this call. Returns the subscription as Stripe reports it
+ * afterwards: `incomplete_expired` when it was ended; `active`/`trialing` when
+ * its invoice had been paid (Stripe refuses both steps below once it is paid).
+ *
+ *   1. Expire every open Checkout session of this subscription FIRST. Stripe
+ *      refuses to void an invoice that an open session still holds; expiring
+ *      that session voids the invoice and ends the subscription itself
+ *      (measured in TEST, BACKLOG-3847). An expire refused because the session
+ *      is no longer open (a concurrent request, or it completed) is not an
+ *      error: the subscription's own status below decides.
+ *   2. If any was open, re-fetch. No longer `incomplete` -> done, nothing to
+ *      void.
+ *   3. Still `incomplete` (a subscription no session holds) -> void its unpaid
+ *      latest invoice. A void Stripe refuses is judged by the re-fetched
+ *      subscription: ended or paid is returned; still `incomplete` is rethrown
+ *      (a transient error: the caller retries).
  */
 export async function voidIncompleteSubscription(stripe: Stripe, sub: Stripe.Subscription): Promise<Stripe.Subscription> {
   const invoiceId = stripeId(sub.latest_invoice);
   if (!invoiceId) throw new Error(`incomplete subscription ${sub.id} has no latest invoice`);
+
+  const sessions = await listAll((after) =>
+    stripe.checkout.sessions.list({ subscription: sub.id, ...(after ? { starting_after: after } : {}) })
+  );
+  const open = sessions.filter((x) => x.status === 'open');
+  for (const s of open) {
+    try {
+      await stripe.checkout.sessions.expire(s.id);
+    } catch {
+      // Judged by the subscription below (step 2/3), never by this response.
+    }
+  }
+  if (open.length > 0) {
+    const after = await stripe.subscriptions.retrieve(sub.id);
+    if (after.status !== 'incomplete') return after;
+  }
+
   try {
     await stripe.invoices.voidInvoice(invoiceId, {}, { idempotencyKey: `incomplete-void:${invoiceId}` });
   } catch (err) {

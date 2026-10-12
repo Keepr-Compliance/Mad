@@ -88,6 +88,8 @@ export interface AgentPlanView {
   /** support_grant only: the grant still gives Unlimited. When false the page shows "contact support". */
   supportGrantEffective: boolean;
   suspended: boolean;
+  /** A mirror row is `incomplete`: a Checkout payment failed or was abandoned. Does not change `state` or `row`. */
+  paymentIncomplete: boolean;
 }
 
 export async function getAgentPlanView(
@@ -103,9 +105,10 @@ export async function getAgentPlanView(
     .select('stripe_subscription_id, status, interval, current_period_end, cancel_at_period_end, canceled_at')
     .eq('user_id', userId)
     .eq('stripe_mode', mode)
-    .in('status', [...ROW_PRIORITY]);
+    .in('status', [...ROW_PRIORITY, 'incomplete']);
   if (subErr) throw new Error(`billing_subscriptions read failed: ${subErr.message}`);
   const list = (rows as AgentSubscriptionRow[] | null) ?? [];
+  const paymentIncomplete = list.some((r) => r.status === 'incomplete');
   const row =
     ROW_PRIORITY.map((st) => list.find((r) => r.status === st)).find((r): r is AgentSubscriptionRow => !!r) ?? null;
 
@@ -139,6 +142,7 @@ export async function getAgentPlanView(
     override,
     supportGrantEffective: state === 'support_grant' && overrideEffective(override ?? null, now),
     suspended: Array.isArray(susp) && susp.length > 0,
+    paymentIncomplete,
   };
 }
 

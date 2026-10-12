@@ -87,7 +87,10 @@ jest.mock('stripe', () => {
       invoices: { voidInvoice: op('invoices.voidInvoice'), retrieve: op('invoices.retrieve') },
       checkout: {
         sessions: {
-          list: op('checkout.sessions.list'),
+          // By-subscription listings (voidIncompleteSubscription) are served
+          // apart from the by-customer ones, so they never shift `lists()`.
+          list: (params: { subscription?: string } | undefined, ...rest: unknown[]) =>
+            op(params?.subscription ? 'checkout.sessions.list:subscription' : 'checkout.sessions.list')(params, ...rest),
           expire: op('checkout.sessions.expire'),
           create: op('checkout.sessions.create'),
           retrieve: op('checkout.sessions.retrieve'),
@@ -258,6 +261,8 @@ beforeEach(() => {
     },
     'subscriptions.list': async () => clone(EMPTY_LIST),
     'checkout.sessions.list': lists([[fx('sessions-expired-p1'), fx('sessions-expired-p2')]]),
+    // The API-made A/C fixtures: no Checkout session holds them.
+    'checkout.sessions.list:subscription': async () => clone({ ...EMPTY_LIST, url: '/v1/checkout/sessions' }),
     'checkout.sessions.expire': async (id) => ({ id, status: 'expired' }),
     'checkout.sessions.create': async () => ({ ...clone(S1), id: 'cs_test_created', url: 'https://checkout.stripe.com/c/pay/created' }),
   };
@@ -300,6 +305,18 @@ describe('Subscribe: refused before any Stripe call', () => {
   it('C-CAPS-SRV: a caller whose mirror row is active -> refused (the hidden button is not the gate)', async () => {
     seed({ billing_subscriptions: [mirrorRow(C_KEEP)] });
     expect(await subscribe()).toEqual({ error: expect.stringContaining('not available for your plan') });
+    expect(stripeOps()).toEqual([]);
+  });
+
+  // SR (PR #2986) should-fix: a sweep over every mirror row that has a plan, not one sample.
+  it.each([
+    ['trialing [EDITED status of sub-C-keep]', () => mirrorRow(C_KEEP, { status: 'trialing' })],
+    ['cancel_pending (captured sub-C-cancel-at-period-end)', () => mirrorRow(C_PENDING)],
+    ['past_due [EDITED status of sub-C-keep]', () => mirrorRow(C_KEEP, { status: 'past_due' })],
+    ['unpaid [EDITED status of sub-C-keep]', () => mirrorRow(C_KEEP, { status: 'unpaid' })],
+  ])('C-CAPS-SRV sweep: mirror row %s -> refused "not available right now", zero Stripe calls', async (_n, row) => {
+    seed({ billing_subscriptions: [row()] });
+    expect(await subscribe()).toEqual({ error: 'That change is not available for your plan right now. Refresh the page.' });
     expect(stripeOps()).toEqual([]);
   });
 
@@ -391,6 +408,103 @@ describe('Subscribe: what Stripe already has', () => {
     expect(calls('subscriptions.cancel')).toEqual([]);
     expect(calls('checkout.sessions.create')).toEqual([]);
     expect(calls('subscriptions.list')).toHaveLength(2);
+  });
+
+  // ---- BACKLOG-3847 QA3: the incomplete subscription was made BY Checkout -------------
+  // Founder QA: 3DS failed inside Checkout, Subscribe again -> "Something went wrong".
+  // Measured in TEST (fixtures/stripe/p3847-qa3, README): while the session that made
+  // the subscription is open, Stripe refuses the void ("You cannot void an invoice
+  // with an active checkout session"); expiring that session voids the invoice and
+  // moves the subscription to incomplete_expired itself; a second void or a second
+  // expire is refused as "not open".
+  const FXQ = path.join(__dirname, '../../fixtures/stripe/p3847-qa3');
+  const fxq = (n: string): Obj => JSON.parse(fs.readFileSync(path.join(FXQ, `${n}.json`), 'utf8'));
+  const stripeErr = (n: string) => {
+    const e = fxq(n).error;
+    return Object.assign(new Error(e.message), { type: 'StripeInvalidRequestError', rawType: e.type });
+  };
+  /** Stripe as measured: the open session holds the invoice until it is expired. */
+  function givenCheckoutMadeIncomplete(o: { expiredElsewhere?: 'before-list' | 'before-expire' } = {}) {
+    const Q = fxq('sub-Q-incomplete');
+    const CS = fxq('cs-Q-open');
+    expect([Q.status, Q.customer, CS.status, CS.subscription, CS.invoice, CS.metadata.kind]).toEqual(['incomplete', CUS, 'open', Q.id, Q.latest_invoice, 'agent']);
+    let expired = o.expiredElsewhere === 'before-list';
+    const expire = () => {
+      expired = true;
+      serve(Q.id, fxq('sub-Q-after-expire'));
+    };
+    serve(Q.id, expired ? fxq('sub-Q-after-expire') : Q);
+    mockStripeImpl['subscriptions.list'] = lists([[fxq('subs-by-customer-Q-incomplete')]]);
+    // [COMPOSED] before expiry: the captured after-expiry by-subscription listing with
+    // its one session swapped for the open capture of the same session.
+    mockStripeImpl['checkout.sessions.list:subscription'] = async () => {
+      const page = fxq('sessions-by-sub-Q-after-expire');
+      if (expired) return page;
+      if (o.expiredElsewhere === 'before-expire') expire(); // a concurrent request wins after our listing
+      return { ...page, data: [clone(CS)] };
+    };
+    // By-customer listing for step 7: open before, the expire result after [COMPOSED envelope].
+    mockStripeImpl['checkout.sessions.list'] = async () =>
+      expired ? { ...fxq('sessions-by-customer-Q-open'), data: [fxq('cs-Q-expire')] } : fxq('sessions-by-customer-Q-open');
+    mockStripeImpl['checkout.sessions.expire'] = async () => {
+      if (expired) throw stripeErr('cs-Q-expire-refused-not-open');
+      expire();
+      return fxq('cs-Q-expire');
+    };
+    mockStripeImpl['invoices.voidInvoice'] = async () => {
+      throw stripeErr(expired ? 'inv-Q-void-refused-not-open' : 'inv-Q-void-refused-open-session');
+    };
+    return { Q, CS };
+  }
+
+  it('C-QA3: the open session holding the incomplete invoice is expired BEFORE any void -> a fresh session, never reused', async () => {
+    const { Q, CS } = givenCheckoutMadeIncomplete();
+    expect(await subscribe()).toEqual({ redirect: 'https://checkout.stripe.com/c/pay/created' });
+    const ops = stripeOps();
+    expect(ops.indexOf('checkout.sessions.expire')).toBeGreaterThan(-1);
+    expect(ops.indexOf('invoices.voidInvoice') === -1 || ops.indexOf('invoices.voidInvoice') > ops.indexOf('checkout.sessions.expire')).toBe(true);
+    expect(calls('checkout.sessions.list:subscription')[0][0]).toEqual({ subscription: Q.id });
+    expect(calls('checkout.sessions.expire')).toEqual([[CS.id]]);
+    expect(calls('invoices.voidInvoice')).toEqual([]); // Stripe voided it on expiry (measured)
+    expect(calls('subscriptions.cancel')).toEqual([]);
+    expect(calls('checkout.sessions.create')).toEqual([expectedCreate(CS.id)]);
+  });
+
+  it('C-QA3-RACE1: a concurrent request expires the session between our listing and our expire -> refused expire is not an error', async () => {
+    const { CS } = givenCheckoutMadeIncomplete({ expiredElsewhere: 'before-expire' });
+    expect(await subscribe()).toEqual({ redirect: 'https://checkout.stripe.com/c/pay/created' });
+    expect(calls('checkout.sessions.expire')).toEqual([[CS.id]]);
+    expect(calls('invoices.voidInvoice')).toEqual([]);
+  });
+
+  it('C-QA3-RACE2: stale incomplete read, session already expired elsewhere -> void refused "not open" is success', async () => {
+    givenCheckoutMadeIncomplete({ expiredElsewhere: 'before-list' });
+    // [COMPOSED] the subscription listing still says incomplete (read before the other request ended it).
+    expect(await subscribe()).toEqual({ redirect: 'https://checkout.stripe.com/c/pay/created' });
+    expect(calls('checkout.sessions.expire')).toEqual([]);
+    expect(calls('invoices.voidInvoice')).toHaveLength(1);
+  });
+
+  it('C-QA3-PAID: the session completes (paid) between our listing and our expire -> "already have a plan", no session, nothing cancelled', async () => {
+    const { Q, CS } = givenCheckoutMadeIncomplete();
+    // [COMPOSED] the paid subscription: the captured sub-Q-incomplete with status active.
+    const paid = { ...clone(Q), status: 'active' };
+    // [COMPOSED] the second listing: the captured by-customer listing with its one item paid.
+    const listed = fxq('subs-by-customer-Q-incomplete');
+    expect(listed.data.map((s: Obj) => [s.id, s.status])).toEqual([[Q.id, 'incomplete']]);
+    mockStripeImpl['subscriptions.list'] = lists([[listed], [{ ...listed, data: [paid] }]]);
+    // Stripe refuses the expire: the session is no longer open. The captured refusal
+    // (cs-Q-expire-refused-not-open) names `expired`; for a paid session it would name `complete`.
+    mockStripeImpl['checkout.sessions.expire'] = async () => {
+      throw stripeErr('cs-Q-expire-refused-not-open');
+    };
+    serve(Q.id, paid);
+    expect(await subscribe()).toEqual({ error: 'You already have a plan. Refresh the page to see it.' });
+    expect(calls('checkout.sessions.expire')).toEqual([[CS.id]]);
+    expect(calls('subscriptions.list')).toHaveLength(2);
+    expect(calls('checkout.sessions.create')).toEqual([]);
+    expect(calls('subscriptions.cancel')).toEqual([]);
+    expect(calls('invoices.voidInvoice')).toEqual([]);
   });
 
   it('C-NOREUSE (R2): after ending an incomplete, the open same-interval session is expired, not reused', async () => {
