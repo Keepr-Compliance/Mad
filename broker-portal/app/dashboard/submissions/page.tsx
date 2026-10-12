@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronRight } from 'lucide-react';
 import { PageHeader } from '@keepr/design-system';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 import { formatCurrency, formatRelativeTime, getStatusColor, formatStatus } from '@/lib/utils';
 import { SubmissionListClient } from '@/components/submission/SubmissionListClient';
 import { EmptySubmissions } from '@/components/ui/EmptyState';
@@ -284,7 +285,9 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
     <div className="max-w-7xl mx-auto">
       {/* Header */}
       <PageHeader
-        title="Submissions"
+        phoneHideTitle
+        phoneHideSubtitle
+        title={PAGE_TITLES.submissions}
         className="max-md:mb-3"
         subtitle={
           <span className="max-md:hidden">
