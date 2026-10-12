@@ -280,6 +280,104 @@ export function contentContainsAddress(
   return true;
 }
 
+/** Words of a text, lowercased; "7,000" and "12.5" stay ONE token (a price is not a number). */
+const ADJACENT_TOKEN_RE = /[a-z0-9]+(?:[,.][0-9]+)*/gi;
+
+/** True when the word list `words` starts at tokens[at], each spelling-variant aware. */
+function wordsAt(tokens: AdjToken[], at: number, words: string[]): boolean {
+  for (let k = 0; k < words.length; k++) {
+    const t = tokens[at + k];
+    if (!t || !t.adjacentToPrev && k > 0) return false;
+    const variants = CANON_VARIANTS[words[k]] ?? [words[k]];
+    if (!variants.includes(t.text)) return false;
+  }
+  return true;
+}
+
+interface AdjToken {
+  text: string;
+  /** Separated from the previous token by whitespace only (no punctuation, no "$"). */
+  adjacentToPrev: boolean;
+  /** Immediately preceded by "$". */
+  afterDollar: boolean;
+}
+
+function isOptionalAddressToken(text: string): boolean {
+  return classifyToken(text).kind !== "name";
+}
+
+/**
+ * BACKLOG-3925 address-only precision: like {@link contentContainsAddress}, but the
+ * street number and the street name must be ADJACENT, in either order
+ * ("12 Park Rd", "12 Park Road", "12 N Park Rd", "Park Rd 12"). Used only by the
+ * address-only review route; the contact route keeps `contentContainsAddress`.
+ *
+ * Adjacent means consecutive words separated by whitespace only: a suffix or
+ * directional word (Rd, N, SW...) may sit between the number and the name, or between
+ * the name and a trailing number, but any other word may not. "$7,000 ... Oak St" and
+ * "closing at 12 on Park Ave" do not match "7 Oak St" / "12 Park Rd". A number written
+ * "$7" is a price, not a street number.
+ */
+export function contentContainsAddressAdjacent(
+  content: string | null | undefined,
+  normalizedAddress: NormalizedAddress
+): boolean {
+  if (!content) return false;
+  const name = normalizedAddress.requiredNameWords;
+  if (name.length === 0) return false;
+
+  const tokens: AdjToken[] = [];
+  let prevEnd = -1;
+  const lower = content.toLowerCase();
+  for (const m of lower.matchAll(ADJACENT_TOKEN_RE)) {
+    const start = m.index ?? 0;
+    const gap = prevEnd < 0 ? "" : lower.slice(prevEnd, start);
+    tokens.push({
+      text: m[0].replace(/[.,]+$/, ""),
+      adjacentToPrev: prevEnd >= 0 && /^\s+$/.test(gap),
+      afterDollar: start > 0 && lower[start - 1] === "$",
+    });
+    prevEnd = start + m[0].length;
+  }
+
+  const num = normalizedAddress.streetNumber;
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].text !== num || tokens[i].afterDollar) continue;
+
+    // Number first: "12 Park ..." or "12 N Park ..." (at most one directional between).
+    const next = tokens[i + 1];
+    if (next && next.adjacentToPrev) {
+      if (wordsAt(tokens, i + 1, name)) return true;
+      const after = tokens[i + 2];
+      if (classifyToken(next.text).kind === "directional" && after && after.adjacentToPrev && wordsAt(tokens, i + 2, name)) {
+        return true;
+      }
+    }
+
+    // Name first: "Park [Rd] [SW] 12" — name words, up to two suffix/directional
+    // words, then the number.
+    const nameLen = name.length;
+    for (let extra = 0; extra <= 2; extra++) {
+      const startAt = i - extra - nameLen;
+      if (startAt < 0) break;
+      if (!tokens[i].adjacentToPrev) break;
+      if (!wordsAt(tokens, startAt, name)) continue;
+      let ok = true;
+      for (let k = startAt + nameLen; k < i; k++) {
+        if (!tokens[k].adjacentToPrev || !isOptionalAddressToken(tokens[k].text)) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) {
+        // the number must be adjacent to the token before it (checked for i above)
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * Count how many of an address's OPTIONAL (suffix + directional) tokens appear
  * in the content. Not used for the pass/fail gate — exposed for tie-breaking /

@@ -41,7 +41,6 @@ jest.mock("../logService", () => {
 import { setDb } from "../db/core/dbConnection";
 import { linkEmailToTransaction, resetExpansionWatermarksForTests } from "../autoLinkService";
 import {
-  ADDRESS_MATCH_CAP_PER_DEAL,
   approveReviewItems,
   getReviewState,
   queueAddressMatchesForTransaction,
@@ -200,7 +199,7 @@ describe("BACKLOG-3925 discovery on the deal-open sweep", () => {
     const r = await queueAddressMatchesForTransaction(A);
 
     expect(pending(A)).toEqual(["e-addr:address", "e-unit:address"]);
-    expect(r).toMatchObject({ queued: 2, matched: 2, capped: false });
+    expect(r).toMatchObject({ queued: 2, matched: 2 });
   });
 
   it("a deal with no street number gets no address pass", async () => {
@@ -223,7 +222,7 @@ describe("C4 — locked deals queue nothing", () => {
 
       const r = await queueAddressMatchesForTransaction(A);
 
-      expect(r).toEqual({ queued: 0, candidates: 0, matched: 0, capped: false, skipped: "locked" });
+      expect(r).toEqual({ queued: 0, candidates: 0, matched: 0, skipped: "locked" });
       expect(pending(A)).toEqual([]);
     },
   );
@@ -320,30 +319,61 @@ describe("C9 — approving an address item settles it", () => {
   });
 });
 
-describe("C10 — noise cap", () => {
-  it(`queues at most ${ADDRESS_MATCH_CAP_PER_DEAL} address items per deal, newest first`, async () => {
+describe("C10 — no per-deal cap; precision comes from adjacency", () => {
+  it("queues every adjacent match, however many (the audit dates bound it)", async () => {
     seedBase();
-    const total = ADDRESS_MATCH_CAP_PER_DEAL + 10;
+    const total = 75;
     for (let i = 0; i < total; i++) {
       const day = String(1 + (i % 28)).padStart(2, "0");
       const hour = String(i % 24).padStart(2, "0");
       insertEmail(`e-flood-${i}`, STRANGER, `Newsletter ${i}`, `Open house at 1428 Maple Ave`, `2026-02-${day}T${hour}:00:00.000Z`);
     }
 
-    const first = await queueAddressMatchesForTransaction(A);
-    expect(first).toMatchObject({ queued: ADDRESS_MATCH_CAP_PER_DEAL, matched: total, capped: true });
+    const r = await queueAddressMatchesForTransaction(A);
 
-    const newest = (
-      db
-        .prepare(`SELECT id FROM emails WHERE id LIKE 'e-flood-%' ORDER BY sent_at DESC LIMIT ?`)
-        .all(ADDRESS_MATCH_CAP_PER_DEAL) as Array<{ id: string }>
-    )
-      .map((r) => `${r.id}:address`)
-      .sort();
-    expect(pending(A)).toEqual(newest);
+    expect(r).toMatchObject({ queued: total, matched: total });
+    expect(pending(A)).toHaveLength(total);
+  });
 
-    const second = await queueAddressMatchesForTransaction(A);
-    expect(second).toMatchObject({ queued: 0, capped: true });
+  it("the founder's cases through the pass: '$7,000 ... Oak St' and 'closing at 12 on Park Ave' are not matches; the reversed order is", async () => {
+    seedBase("not_submitted", "7 Oak St, Springfield");
+    insertEmail("e-price", STRANGER, "Offer", "We offered $7,000 over asking on the Oak St listing.");
+    insertEmail("e-at", STRANGER, "Closing", "Closing at 7 on Oak St, see you there.");
+    insertEmail("e-fwd", STRANGER, "Inspection", "Inspection at 7 Oak Street is Friday.");
+    insertEmail("e-rev", STRANGER, "Listing", "Oak St 7 is under contract.");
+    insertEmail("e-subject-body-join", STRANGER, "Re: offer for 7", "Oak St is lovely.");
+
+    const r = await queueAddressMatchesForTransaction(A);
+
+    expect(pending(A)).toEqual(["e-fwd:address", "e-rev:address"]);
+    expect(r).toMatchObject({ queued: 2, matched: 2 });
+  });
+});
+
+describe("C11 — subject and body are each searched, never joined", () => {
+  it("(a) address only in the subject matches; (b) only in the body matches; (c) subject ending in the number + body starting with the name does not", async () => {
+    seedBase("not_submitted", "12 Park Rd, Springfield");
+    insertEmail("e-subj", STRANGER, "Re: 12 Park Rd inspection", "See you Friday.");
+    insertEmail("e-body", STRANGER, "Inspection", "The house at 12 Park Road is ready.");
+    insertEmail("e-join", STRANGER, "Re: offer for 12", "Park Rd is a nice street.");
+    insertEmail("e-join2", STRANGER, "Park Rd", "Gate code 12");
+
+    await queueAddressMatchesForTransaction(A);
+
+    expect(pending(A)).toEqual(["e-body:address", "e-subj:address"]);
+  });
+});
+
+describe("the reasons table accepts 'folder' (BACKLOG-3926) and nothing else new", () => {
+  it("accepts address, contact and folder; refuses an unknown reason", () => {
+    seedBase();
+    insertEmail("e-x", STRANGER, "x", "y");
+    const ins = (reason: string) =>
+      db.prepare(`INSERT OR REPLACE INTO pending_review_match_reasons (transaction_id, email_id, reason) VALUES (?, 'e-x', ?)`).run(A, reason);
+    expect(() => ins("address")).not.toThrow();
+    expect(() => ins("contact")).not.toThrow();
+    expect(() => ins("folder")).not.toThrow();
+    expect(() => ins("bogus")).toThrow(/CHECK/);
   });
 });
 

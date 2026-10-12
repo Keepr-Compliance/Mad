@@ -71,7 +71,6 @@ import { hostWindows } from "../capabilities/windowsProvider";
 import { dbGet, dbAll, dbRun } from "./db/core/dbConnection";
 import {
   ADDRESS_MATCH_CANDIDATE_EMAILS_SQL,
-  ADDRESS_MATCH_PENDING_COUNT_SQL,
   ADDRESS_MISSING_COMMUNICATIONS_BY_TRANSACTION_SQL,
   ADDRESS_MISSING_COMMUNICATION_BY_ID_SQL,
   DELETE_ADDRESS_MISSING_COMMUNICATION_SQL,
@@ -119,7 +118,7 @@ import {
 } from "../types/ipc/reviewMatchReason";
 import { TRANSACTION_AUTOLINK_WINDOW_SQL } from "./db/autoLinkSql";
 import { getCachedEmailSentAtBounds } from "./db/emailCacheWindow";
-import { normalizeAddress, contentContainsAddress } from "../utils/addressNormalization";
+import { normalizeAddress, contentContainsAddressAdjacent } from "../utils/addressNormalization";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
 
 const MODULE = "ReviewStateService";
@@ -738,12 +737,12 @@ function recordMatchReason(transactionId: string, emailId: string, incoming: Rev
   dbRun(UPSERT_MATCH_REASON_SQL, [transactionId, emailId, winner]);
 }
 
-/**
- * Noise guard: at most this many ADDRESS-reason items outstanding per deal. A pass
- * queues up to (cap - outstanding), newest first. An unparseable address or one with
- * no street number never reaches discovery (normalizeAddress returns null).
+/*
+ * No per-deal cap (founder, 2026-10-12: "no cap; the audit dates bound it"). Precision
+ * comes from the matcher (number and street name adjacent), not from a limit. An
+ * unparseable address or one with no street number never reaches discovery
+ * (normalizeAddress returns null).
  */
-export const ADDRESS_MATCH_CAP_PER_DEAL = 50;
 
 /** Emails classified per event-loop turn by the address pass. */
 const ADDRESS_MATCH_EMAILS_PER_TURN = 10;
@@ -753,10 +752,8 @@ export interface AddressMatchPassResult {
   queued: number;
   /** Rows the number prefilter returned. */
   candidates: number;
-  /** Candidates that passed contentContainsAddress. */
+  /** Candidates that passed contentContainsAddressAdjacent. */
   matched: number;
-  /** True when the cap stopped the pass before every match was queued. */
-  capped: boolean;
   /** Why nothing ran, when nothing ran. */
   skipped?: "missing" | "locked" | "no-address";
 }
@@ -777,7 +774,6 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
     queued: 0,
     candidates: 0,
     matched: 0,
-    capped: false,
     skipped,
   });
 
@@ -805,10 +801,6 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
   const start = range.start.toISOString();
   const end = range.end.toISOString();
 
-  const outstanding =
-    dbGet<{ n: number }>(ADDRESS_MATCH_PENDING_COUNT_SQL, [transactionId])?.n ?? 0;
-  let room = Math.max(0, ADDRESS_MATCH_CAP_PER_DEAL - outstanding);
-
   const rows = dbAll<{ id: string; subject: string | null; body_plain: string | null }>(
     ADDRESS_MATCH_CANDIDATE_EMAILS_SQL,
     [
@@ -826,20 +818,19 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
 
   let matched = 0;
   let queued = 0;
-  let capped = false;
   for (let i = 0; i < rows.length; i++) {
     if (i > 0 && i % ADDRESS_MATCH_EMAILS_PER_TURN === 0) await yieldToEventLoop();
     const r = rows[i];
-    if (!contentContainsAddress(`${r.subject ?? ""} ${r.body_plain ?? ""}`, address)) continue;
-    matched++;
-    if (room <= 0) {
-      capped = true;
+    // Subject and body are judged separately so a number ending one cannot join a name
+    // starting the other.
+    if (
+      !contentContainsAddressAdjacent(r.subject, address) &&
+      !contentContainsAddressAdjacent(r.body_plain, address)
+    ) {
       continue;
     }
-    if (await queueEmailForReview(transactionId, r.id, txn.user_id, "address")) {
-      queued++;
-      room--;
-    }
+    matched++;
+    if (await queueEmailForReview(transactionId, r.id, txn.user_id, "address")) queued++;
   }
 
   const bounds = getCachedEmailSentAtBounds(txn.user_id);
@@ -853,12 +844,10 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
     candidates: rows.length,
     matched,
     queued,
-    capped,
-    outstandingBefore: outstanding,
     uncoveredDays,
   });
 
-  return { queued, candidates: rows.length, matched, capped };
+  return { queued, candidates: rows.length, matched };
 }
 
 /**

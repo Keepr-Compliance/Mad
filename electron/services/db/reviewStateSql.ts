@@ -222,21 +222,10 @@ export const UPSERT_MATCH_REASON_SQL = sql`INSERT INTO pending_review_match_reas
      DO UPDATE SET reason = excluded.reason, updated_at = CURRENT_TIMESTAMP`;
 
 /**
- * How many ADDRESS-reason items are outstanding on one transaction — the noise cap's
- * input. One bound parameter.
- */
-export const ADDRESS_MATCH_PENDING_COUNT_SQL = sql`SELECT COUNT(*) AS n
-       FROM pending_review_communications p
-       JOIN pending_review_match_reasons r
-         ON r.transaction_id = p.transaction_id AND r.email_id = p.email_id
-      WHERE p.transaction_id = ?
-        AND r.reason = 'address'`;
-
-/**
  * Address-only discovery candidates: the user's cached emails inside the deal's
  * window whose subject or plain body contains the street NUMBER. A superset — the
- * decision is `contentContainsAddress` in JS (number + street-name words, word
- * boundaries, Ave/Avenue variants), exactly as the contact route decides.
+ * decision is `contentContainsAddressAdjacent` in JS (street number and street name
+ * adjacent, either order, Ave/Avenue variants).
  *
  * Excluded here, all for THIS transaction:
  *   - already linked (`communications`)
@@ -245,7 +234,7 @@ export const ADDRESS_MATCH_PENDING_COUNT_SQL = sql`SELECT COUNT(*) AS n
  *   - any participant is an email address of a contact on the deal. Those belong to
  *     the contact route, which links the ones naming the address and queues the rest.
  *
- * Newest first, so a capped pass keeps the most recent mail. Bound, in order: user id,
+ * Newest first. Bound, in order: user id,
  * window start, window end, street number (subject), street number (body), then the
  * transaction id four times.
  */

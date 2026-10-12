@@ -6,8 +6,9 @@
  * per THREAD; a thread's reason is the strongest among its items.
  */
 import React from "react";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, within, waitFor, cleanup } from "@testing-library/react";
 import { ReviewQueueSection } from "../ReviewQueueSection";
+import { NeedsReviewScreen } from "../NeedsReviewScreen";
 import type { ReviewItemDto } from "../../../../../electron/types/ipc/window-api-transactions";
 import type { ReviewMatchReason } from "../../../../../electron/types/ipc/reviewMatchReason";
 import { REVIEW_MATCH_REASON_PRECEDENCE } from "../../../../../electron/types/ipc/reviewMatchReason";
@@ -60,22 +61,25 @@ function renderSection(items = ITEMS, kind: "email" | "text" = "email") {
 const subjects = () => screen.getAllByTestId("thread-subject").map((el) => el.textContent ?? "");
 const pills = () => screen.queryAllByTestId("match-pill").map((el) => `${el.getAttribute("data-reason")}:${el.textContent}`);
 
-describe("BACKLOG-3925 Needs Review tabs", () => {
+function renderScreen(items = ITEMS, onApprove = jest.fn().mockResolvedValue(undefined), onReject = jest.fn().mockResolvedValue(undefined)) {
+  render(<NeedsReviewScreen items={items} isLoading={false} onApprove={onApprove} onReject={onReject} onClose={jest.fn()} />);
+  return { onApprove, onReject };
+}
+
+describe("BACKLOG-3925 Emails-tab Needs Review section: no tabs, every item, pills", () => {
   it("renderer kind table is in the main-process precedence order (mirror parity)", () => {
     expect(REVIEW_MATCH_KINDS.map((k) => k.reason)).toEqual([...REVIEW_MATCH_REASON_PRECEDENCE]);
   });
 
-  it("tabs show thread counts that add up to the header count", () => {
+  it("has NO tabs, lists every thread with its pill", () => {
     renderSection();
+    expect(screen.queryByTestId("needs-review-filter")).toBeNull();
     expect(screen.getByTestId("needs-review-count").textContent).toBe("(3)");
-    expect(screen.getByTestId("needs-review-filter-all").textContent).toBe("All (3)");
-    expect(screen.getByTestId("needs-review-filter-address").textContent).toBe("Address match (2)");
-    expect(screen.getByTestId("needs-review-filter-contact").textContent).toBe("Contact match (1)");
-    expect(screen.getByTestId("needs-review-filter-all").getAttribute("aria-pressed")).toBe("true");
-  });
-
-  it("All tab: a pill after every subject, with the thread's strongest reason", () => {
-    renderSection();
+    expect(subjects().map((s) => s.replace(/(Contact match · no address|Address matched)$/, ""))).toEqual([
+      "Updated payoff statement",
+      "Showing feedback for 1428 Maple Ave",
+      "Neighbor fence survey",
+    ]);
     expect(pills()).toEqual([
       "contact:Contact match · no address",
       "address:Address matched",
@@ -83,36 +87,8 @@ describe("BACKLOG-3925 Needs Review tabs", () => {
     ]);
     const pill = screen.getAllByTestId("match-pill")[1];
     expect(pill.className).toContain("bg-blue-100");
-    expect(pill.className).toContain("text-blue-700");
     expect(screen.getAllByTestId("match-pill")[0].className).toContain("bg-purple-100");
-    // Pill sits inside the subject block, right after the title.
     expect(within(screen.getAllByTestId("thread-subject")[1]).getByTestId("match-pill")).toBeTruthy();
-  });
-
-  it("Address match tab: only address threads, and no pills", () => {
-    renderSection();
-    fireEvent.click(screen.getByTestId("needs-review-filter-address"));
-    expect(subjects().map((s) => s.split("Someone")[0])).toEqual([
-      "Showing feedback for 1428 Maple Ave",
-      "Neighbor fence survey",
-    ]);
-    expect(pills()).toEqual([]);
-  });
-
-  it("Contact match tab: only contact threads, and no pills", () => {
-    renderSection();
-    fireEvent.click(screen.getByTestId("needs-review-filter-contact"));
-    expect(subjects().map((s) => s.split("Someone")[0])).toEqual(["Updated payoff statement"]);
-    expect(pills()).toEqual([]);
-  });
-
-  it("an empty tab shows the mock's empty state", () => {
-    renderSection([item("1", "th-1", "Updated payoff statement", "contact")]);
-    fireEvent.click(screen.getByTestId("needs-review-filter-address"));
-    expect(screen.getByTestId("needs-review-filter-empty").textContent).toBe(
-      "No address-match emails need reviewSwitch to another tab to review the rest.",
-    );
-    expect(screen.queryAllByTestId("thread-subject")).toEqual([]);
   });
 
   it("(i) explains each kind with the mock's text", () => {
@@ -124,9 +100,6 @@ describe("BACKLOG-3925 Needs Review tabs", () => {
     expect(screen.getByTestId("needs-review-info-contact").textContent).toBe(
       "Contact match: it's from a contact on the deal but doesn't mention the property address.",
     );
-    expect(screen.getByTestId("needs-review-info-popover").textContent).toContain(
-      "These are messages Keepr wasn't sure belong to this deal.",
-    );
   });
 
   it("texts: no tabs, no pills, the original explainer", () => {
@@ -137,5 +110,70 @@ describe("BACKLOG-3925 Needs Review tabs", () => {
     expect(screen.getByTestId("needs-review-info-popover").textContent).toBe(
       "Text conversations found for contacts on this deal, within the audit period, that aren't linked yet. Keep the ones that belong (✓), remove the ones that don't (🗑).",
     );
+  });
+});
+
+describe("BACKLOG-3925 full Needs Review screen: tabs, pills on All, scoped bulk actions", () => {
+  it("tabs show thread counts; All is selected and shows pills", () => {
+    renderScreen();
+    expect(screen.getByTestId("needs-review-filter-all").textContent).toBe("All (3)");
+    expect(screen.getByTestId("needs-review-filter-address").textContent).toBe("Address match (2)");
+    expect(screen.getByTestId("needs-review-filter-contact").textContent).toBe("Contact match (1)");
+    expect(screen.getByTestId("needs-review-filter-all").getAttribute("aria-pressed")).toBe("true");
+    expect(pills()).toHaveLength(3);
+  });
+
+  it("Address match tab: only address threads, no pills", () => {
+    renderScreen();
+    fireEvent.click(screen.getByTestId("needs-review-filter-address"));
+    expect(subjects().map((s) => s.split("Someone")[0])).toEqual([
+      "Showing feedback for 1428 Maple Ave",
+      "Neighbor fence survey",
+    ]);
+    expect(pills()).toEqual([]);
+  });
+
+  it("Contact match tab: only contact threads, no pills; empty tab shows the empty state", () => {
+    renderScreen();
+    fireEvent.click(screen.getByTestId("needs-review-filter-contact"));
+    expect(subjects().map((s) => s.split("Someone")[0])).toEqual(["Updated payoff statement"]);
+    expect(pills()).toEqual([]);
+    cleanup();
+    renderScreen([item("1", "th-1", "Updated payoff statement", "contact")]);
+    fireEvent.click(screen.getByTestId("needs-review-filter-address"));
+    expect(screen.getByTestId("needs-review-filter-empty").textContent).toBe(
+      "No address-match emails need reviewSwitch to another tab to review the rest.",
+    );
+  });
+
+  it("(i) on the screen shows the same explainer", () => {
+    renderScreen();
+    fireEvent.click(screen.getByTestId("needs-review-info-button"));
+    expect(screen.getByTestId("needs-review-info-address").textContent).toContain("Address match:");
+    expect(screen.getByTestId("needs-review-info-contact").textContent).toContain("Contact match:");
+  });
+
+  it("Reject all on Address match rejects ONLY address items; contact items untouched", async () => {
+    const { onReject, onApprove } = renderScreen();
+    fireEvent.click(screen.getByTestId("needs-review-filter-address"));
+    fireEvent.click(screen.getByText("Reject all"));
+    await waitFor(() => expect(onReject).toHaveBeenCalledTimes(1));
+    expect([...onReject.mock.calls[0][0]].sort()).toEqual(["pending:2", "pending:3a", "pending:3b"]);
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
+  it("Approve all on Contact match approves ONLY contact items", async () => {
+    const { onApprove } = renderScreen();
+    fireEvent.click(screen.getByTestId("needs-review-filter-contact"));
+    fireEvent.click(screen.getByText("Approve all"));
+    await waitFor(() => expect(onApprove).toHaveBeenCalledTimes(1));
+    expect(onApprove.mock.calls[0][0]).toEqual(["pending:1"]);
+  });
+
+  it("Reject all on All still rejects every item", async () => {
+    const { onReject } = renderScreen();
+    fireEvent.click(screen.getByText("Reject all"));
+    await waitFor(() => expect(onReject).toHaveBeenCalledTimes(1));
+    expect([...onReject.mock.calls[0][0]].sort()).toEqual(["pending:1", "pending:2", "pending:3a", "pending:3b"]);
   });
 });

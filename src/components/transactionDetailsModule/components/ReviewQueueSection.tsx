@@ -75,6 +75,81 @@ function filterButtonClass(active: boolean, first: boolean): string {
     .join(" ");
 }
 
+/**
+ * The All / Address match / Contact match segmented control, with THREAD counts.
+ * Shown on the full Needs Review screen only (founder, 2026-10-12): the Emails-tab
+ * section lists everything with pills and has no tabs.
+ */
+export function ReviewMatchFilterBar({
+  value,
+  onChange,
+  total,
+  counts,
+}: {
+  value: ReviewMatchFilter;
+  onChange: (f: ReviewMatchFilter) => void;
+  total: number;
+  counts: ReadonlyMap<ReviewMatchReason, number>;
+}): React.ReactElement {
+  return (
+    <div
+      role="group"
+      aria-label="Filter by match type"
+      className="inline-flex rounded-lg border border-gray-300 overflow-hidden"
+      data-testid="needs-review-filter"
+    >
+      {(["all", ...REVIEW_MATCH_KINDS.map((k) => k.reason)] as ReviewMatchFilter[]).map((f, idx) => {
+        const label = f === "all" ? "All" : reviewMatchKind(f)?.tabLabel ?? f;
+        const n = f === "all" ? total : counts.get(f) ?? 0;
+        return (
+          <button
+            key={f}
+            type="button"
+            onClick={() => onChange(f)}
+            aria-pressed={value === f}
+            className={filterButtonClass(value === f, idx === 0)}
+            data-testid={`needs-review-filter-${f}`}
+          >
+            {label} <span className="ml-1 text-xs">({n})</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Thread counts per reason — each THREAD counts once, under its strongest reason. */
+export function countThreadsByReason(groups: ReviewThreadGroup[]): Map<ReviewMatchReason, number> {
+  const out = new Map<ReviewMatchReason, number>();
+  for (const g of groups) {
+    const r = reviewThreadReason(g);
+    out.set(r, (out.get(r) ?? 0) + 1);
+  }
+  return out;
+}
+
+/** The email explainer body: intro line plus one line per kind (mock v3 text). */
+export function ReviewEmailExplainer(): React.ReactElement {
+  return (
+    <>
+      <p className="mb-2">
+        These are messages Keepr wasn&apos;t sure belong to this deal. Keep the ones
+        that belong (<span aria-hidden="true">✓</span>), remove the ones that
+        don&apos;t (<span aria-hidden="true">🗑</span>).
+      </p>
+      {REVIEW_MATCH_KINDS.map((k, idx) => (
+        <p
+          key={k.reason}
+          className={idx < REVIEW_MATCH_KINDS.length - 1 ? "mb-1" : undefined}
+          data-testid={`needs-review-info-${k.reason}`}
+        >
+          <span className="font-semibold text-gray-900">{k.infoLabel}</span> {k.infoText}
+        </p>
+      ))}
+    </>
+  );
+}
+
 export interface ReviewQueueSectionProps {
   /** The full review set — filtered here by kind, never re-derived. */
   items: ReviewItemDto[];
@@ -313,7 +388,6 @@ export function ReviewQueueSection({
   const [isOpen, setIsOpen] = useState(true);
   const [showInfo, setShowInfo] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<ReviewMatchFilter>("all");
 
   const mine = useMemo(() => items.filter((i) => i.kind === kind), [items, kind]);
   // The count in the header is a THREAD count (contract: "badges and subtitles
@@ -322,26 +396,8 @@ export function ReviewQueueSection({
   const groups = useMemo(() => groupReviewItemsByThread(mine), [mine]);
   const threadCount = groups.length;
 
-  // BACKLOG-3925: match-kind tabs (emails only — texts are only ever "contact").
-  // Each THREAD counts once, under its strongest reason, so the tab counts add up
-  // to the header count. Data-driven from REVIEW_MATCH_KINDS.
-  const showTabs = kind === "email";
-  const countsByReason = useMemo(() => {
-    const out = new Map<ReviewMatchReason, number>();
-    for (const g of groups) {
-      const r = reviewThreadReason(g);
-      out.set(r, (out.get(r) ?? 0) + 1);
-    }
-    return out;
-  }, [groups]);
-  const activeFilter: ReviewMatchFilter = showTabs ? filter : "all";
-  const shownItems = useMemo(
-    () =>
-      activeFilter === "all"
-        ? mine
-        : groups.filter((g) => reviewThreadReason(g) === activeFilter).flatMap((g) => g.items),
-    [activeFilter, mine, groups],
-  );
+  // BACKLOG-3925: emails carry a match pill each; NO tabs here (founder, 2026-10-12).
+  const showPills = kind === "email";
 
   // Nothing to review → render nothing, so a clean transaction is unchanged.
   if (mine.length === 0) return null;
@@ -393,23 +449,7 @@ export function ReviewQueueSection({
               role="tooltip"
             >
               {kind === "email" ? (
-                // BACKLOG-3925: mock v3's explainer (wording draft).
-                <>
-                  <p className="mb-2">
-                    These are messages Keepr wasn&apos;t sure belong to this deal. Keep the ones
-                    that belong (<span aria-hidden="true">✓</span>), remove the ones that
-                    don&apos;t (<span aria-hidden="true">🗑</span>).
-                  </p>
-                  {REVIEW_MATCH_KINDS.map((k, idx) => (
-                    <p
-                      key={k.reason}
-                      className={idx < REVIEW_MATCH_KINDS.length - 1 ? "mb-1" : undefined}
-                      data-testid={`needs-review-info-${k.reason}`}
-                    >
-                      <span className="font-semibold text-gray-900">{k.infoLabel}</span> {k.infoText}
-                    </p>
-                  ))}
-                </>
+                <ReviewEmailExplainer />
               ) : (
                 <>
                   {"Text conversations found for contacts on this deal, within the audit period, that aren't linked yet."}{" "}
@@ -426,48 +466,10 @@ export function ReviewQueueSection({
         </span>
       </div>
 
-      {isOpen && showTabs && (
-        <div className="mt-3">
-          <div
-            role="group"
-            aria-label="Filter by match type"
-            className="inline-flex rounded-lg border border-gray-300 overflow-hidden"
-            data-testid="needs-review-filter"
-          >
-            {(["all", ...REVIEW_MATCH_KINDS.map((k) => k.reason)] as ReviewMatchFilter[]).map((f, idx) => {
-              const active = activeFilter === f;
-              const label = f === "all" ? "All" : reviewMatchKind(f)?.tabLabel ?? f;
-              const n = f === "all" ? threadCount : countsByReason.get(f) ?? 0;
-              return (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() => setFilter(f)}
-                  aria-pressed={active}
-                  className={filterButtonClass(active, idx === 0)}
-                  data-testid={`needs-review-filter-${f}`}
-                >
-                  {label} <span className="ml-1 text-xs">({n})</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {isOpen && shownItems.length === 0 && activeFilter !== "all" && (
-        <div className="mx-auto mt-10 max-w-sm text-center" data-testid="needs-review-filter-empty">
-          <p className="font-medium text-gray-900">
-            No {reviewMatchKind(activeFilter)?.emptyNoun ?? activeFilter} emails need review
-          </p>
-          <p className="mt-1 text-sm text-gray-600">Switch to another tab to review the rest.</p>
-        </div>
-      )}
-
-      {isOpen && shownItems.length > 0 && (
+      {isOpen && (
         <ReviewCards
-          items={shownItems}
-          showMatchPills={showTabs && activeFilter === "all"}
+          items={mine}
+          showMatchPills={showPills}
           kind={kind}
           busyId={busyId}
           onApproveItem={(ids, key) => act(ids, key, onApprove)}
