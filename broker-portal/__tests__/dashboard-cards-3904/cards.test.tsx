@@ -29,6 +29,7 @@ import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../fixtures/orgFeatures'
 const mockEmulator = createPostgrestEmulator();
 const mockAuthFrom = jest.fn();
 const mockStartProgress = jest.fn();
+let mockNoAccessOrgs: string[] = [];
 
 jest.mock('next/link', () => ({
   __esModule: true,
@@ -38,7 +39,15 @@ jest.mock('next/link', () => ({
     </a>
   ),
 }));
-jest.mock('next/navigation', () => ({ redirect: jest.fn(), usePathname: () => '/dashboard' }));
+jest.mock('@/components/submission/SubmissionListClient', () => ({
+  SubmissionListClient: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+jest.mock('next/navigation', () => ({
+  redirect: jest.fn(),
+  usePathname: () => '/dashboard',
+  useRouter: () => ({ push: jest.fn(), replace: jest.fn(), refresh: jest.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
 jest.mock('@/components/pwa/NavigationProgress', () => ({
   startNavigationProgress: () => mockStartProgress(),
 }));
@@ -61,12 +70,13 @@ jest.mock('@/lib/feature-gate', () => {
   return {
     ...actual,
     getOrgFeatures: jest.fn(async (orgId: string) =>
-      withFeature({ ...ORG_WITHOUT_PLAN_FEATURES, org_id: orgId }, 'broker_portal_access', true)
+      withFeature({ ...ORG_WITHOUT_PLAN_FEATURES, org_id: orgId }, 'broker_portal_access', !mockNoAccessOrgs.includes(orgId))
     ),
   };
 });
 
 import DashboardPage from '@/app/dashboard/page';
+import SubmissionsPage from '@/app/dashboard/submissions/page';
 import { DashboardStatCards } from '@/components/dashboard/DashboardStatCards';
 import { STAT_CARDS, buildStatCards, cardDealIds } from '@/lib/dashboard/statCards';
 import { headMatchesFilter, pageOfHeads, selectDealHeads, type ChainLink } from '@/lib/submissions/dealList';
@@ -96,6 +106,23 @@ const ROWS: Row[] = [
   row('a0', 'submitted', null, '2026-09-01T05:00:00Z'),
   row('r1', 'rejected', null, '2026-09-03T06:00:00Z'),
 ];
+
+// A second org WITHOUT broker_portal_access, holding a deal in each card status.
+// Neither the cards nor the list may count or show it (the org gate).
+// Row shape = row() above; org id and addresses invented.
+const ORG_NO_ACCESS = '00000000-0000-4000-8000-0000003904b2'; // pii-allow-uuid: invented fixture id
+function outsideRow(id: string, status: string, createdAt: string): Row {
+  return {
+    ...submissionRow({ id, organizationId: ORG_NO_ACCESS, submittedBy: FIXTURE_USER_ID, status, createdAt }),
+    version: 1,
+  };
+}
+const OUTSIDE_ROWS: Row[] = [
+  outsideRow('x-sub', 'submitted', '2026-09-05T00:00:00Z'),
+  outsideRow('x-resub', 'resubmitted', '2026-09-05T01:00:00Z'),
+  outsideRow('x-review', 'under_review', '2026-09-05T02:00:00Z'),
+  outsideRow('x-changes', 'needs_changes', '2026-09-05T03:00:00Z'),
+];
 const LINKS = ROWS as unknown as ChainLink[];
 const HEADS = selectDealHeads(LINKS.filter((l) => l.status !== 'uploading'));
 
@@ -114,12 +141,13 @@ async function renderDashboard() {
     return b;
   });
   mockEmulator.reset();
-  mockEmulator.set({ rows: { transaction_submissions: ROWS } });
+  mockEmulator.set({ rows: { transaction_submissions: [...ROWS, ...OUTSIDE_ROWS] } });
   return render(await DashboardPage());
 }
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockNoAccessOrgs = [ORG_NO_ACCESS];
 });
 
 describe('fixture sanity (so the controls below can fail)', () => {
@@ -182,6 +210,40 @@ describe('cards on the real dashboard', () => {
     expect(ids('submitted')).toEqual(['c2-v2', 's1', 's2']);
     expect(ids('pending')).toEqual(['c2-v2', 's1', 's2', 'u1']);
     expect(ids('new')).not.toContain('c2-v2');
+  });
+
+  it('org gate: deals in an org without broker portal access are in no card and no linked list', async () => {
+    const { container, unmount } = await renderDashboard();
+    // Card values are the in-scope numbers only (2 / 1 / 1 / 2), not +1 each.
+    const linked = Array.from(container.querySelectorAll('a[aria-label$="view submissions"]'));
+    expect(linked.map((a) => a.getAttribute('aria-label'))).toEqual([
+      'New: 2, view submissions',
+      'Resubmitted: 1, view submissions',
+      'Under Review: 1, view submissions',
+      'Needs Changes: 2, view submissions',
+    ]);
+    const hrefs = linked.map((a) => a.getAttribute('href') as string);
+    unmount();
+    // Parity: the REAL Submissions page opened by each card lists the same deals.
+    const outside = OUTSIDE_ROWS.map((r) => r.id as string);
+    const expected: Record<string, string[]> = {
+      new: ['s1', 's2'],
+      resubmitted: ['c2-v2'],
+      under_review: ['u1'],
+      needs_changes: ['c1-v2', 'n1'],
+    };
+    for (const href of hrefs) {
+      const status = statusOf(href);
+      mockEmulator.reset();
+      mockEmulator.set({ rows: { transaction_submissions: [...ROWS, ...OUTSIDE_ROWS], users: [] } });
+      const page = render(await SubmissionsPage({ searchParams: Promise.resolve({ status }) }));
+      const listed = Array.from(page.container.querySelectorAll('tbody a[href^="/dashboard/submissions/"]')).map(
+        (a) => (a.getAttribute('href') as string).split('/').pop() as string
+      );
+      expect(listed.sort()).toEqual(expected[status]);
+      for (const id of outside) expect(listed).not.toContain(id);
+      page.unmount();
+    }
   });
 
   it('hrefs carry no agent, search or page: a link cannot widen or narrow scope', async () => {
