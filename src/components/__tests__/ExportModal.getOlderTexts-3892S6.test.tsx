@@ -55,7 +55,7 @@ beforeEach(() => {
   exportEnhancedMock.mockResolvedValue({ success: true, path: "/out/audit" });
   jest.mocked(window.api.preferences.get).mockResolvedValue({ success: true, preferences: { messages: { source: "iphone-sync" } } } as never);
   getStatusMock.mockResolvedValue({ localTransactionId: TX, status: "unlocked", fromCache: false });
-  backfillAvailability.mockResolvedValue({ available: true, udid: "00008110-TEST", cappedByPhone: false });
+  backfillAvailability.mockResolvedValue({ available: true, cappedByPhone: false });
   syncBefore = apiWithSync.sync;
   apiWithSync.sync = {
     backfillAvailability,

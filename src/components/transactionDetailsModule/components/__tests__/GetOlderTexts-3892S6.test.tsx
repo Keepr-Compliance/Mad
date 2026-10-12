@@ -60,7 +60,6 @@ const iphoneGap: SourceCoverageGap = {
 const gapResult = { success: true, auditStartISO: "2026-03-01T00:00:00.000Z", gaps: [iphoneGap] };
 const available: BackfillAvailability = {
   available: true,
-  udid: "00008110-TEST",
   floorMs: Date.parse("2026-02-28T00:00:00.000Z"),
   ceilingMs: Date.parse("2026-06-01T00:00:00.000Z"),
   cappedByPhone: false,
@@ -162,6 +161,31 @@ describe("C2: progress and Cancel", () => {
     // cancelled: nothing said, coverage not re-read as a success
     expect(screen.queryByTestId("get-older-texts-result")).toBeNull();
     expect(getTextCoverage.mock.calls.length).toBe(coverageCalls);
+  });
+});
+
+describe("C2b: the run's own result decides, not Cancel's return (S5 cancel-after-save)", () => {
+  it("cancel returns {success:false}, the run still ends in success -> success UI", async () => {
+    let finish: (r: BackfillResult) => void = () => undefined;
+    backfillOlder.mockImplementation(() => new Promise<BackfillResult>((res) => (finish = res)));
+    cancelBackfill.mockResolvedValueOnce({ success: false });
+    const onTextsAdded = jest.fn();
+    await renderNotice(onTextsAdded);
+    fireEvent.click(await screen.findByTestId("get-older-texts-button"));
+    fireEvent.click(await screen.findByTestId("get-older-texts-cancel"));
+    await waitFor(() => expect(cancelBackfill).toHaveBeenCalledTimes(1));
+    await act(async () =>
+      finish({ success: true, messagesStored: 5, coverageRecorded: true, cappedByPhone: false }),
+    );
+    await waitFor(() => expect(onTextsAdded).toHaveBeenCalledTimes(1));
+    expect(getTextCoverage).toHaveBeenLastCalledWith(TX, "user-1", "iphone");
+  });
+
+  it("a failure with no message and no reason (saving) -> the generic failure line", async () => {
+    backfillOlder.mockResolvedValue({ success: false, messagesStored: 0, coverageRecorded: false });
+    await renderNotice();
+    fireEvent.click(await screen.findByTestId("get-older-texts-button"));
+    expect(await screen.findByTestId("get-older-texts-result")).toHaveTextContent(FAILED_DRAFT);
   });
 });
 
