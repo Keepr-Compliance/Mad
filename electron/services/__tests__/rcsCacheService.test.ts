@@ -51,6 +51,7 @@ import {
   RCS_CONSENT_VERSION,
   RCS_HELLO_PERSIST_MS,
   shouldPersistHello,
+  chatOnlyBackToMs,
 } from "../rcsCacheService";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -506,5 +507,23 @@ describe("chatFloorDecision / pickDealChats (per-chat widening)", () => {
     expect(picked.map((p) => p.chatHash)).toEqual(["h-old", "h-jan"]);
     expect(pickDealChats({ nowMs: NOW, settingsFloorMs: settings, starts, own, sourceCoveredSince: null, excluded: new Set(), max: 1 }))
       .toHaveLength(1);
+  });
+});
+
+describe("BACKLOG-3892 E: chatOnlyBackToMs (a deal chat Google Messages returned only part of)", () => {
+  const DAY = 86_400_000;
+  const FLOOR = Date.parse("2026-01-10T00:00:00.000Z");
+  const deal = { chatFloorMs: FLOOR, readFloorMs: FLOOR, reachedFloor: false };
+  it.each([
+    ["short by a day + 1 ms -> the oldest saved text", deal, FLOOR + DAY + 1, FLOOR + DAY + 1],
+    ["short by exactly a day -> covered (tolerance)", deal, FLOOR + DAY, null],
+    ["older than the floor -> null", deal, FLOOR - 1, null],
+    ["reached its floor -> null", { ...deal, reachedFloor: true }, FLOOR + 30 * DAY, null],
+    ["not a deal chat -> null", { chatFloorMs: null, readFloorMs: FLOOR, reachedFloor: false }, FLOOR + 30 * DAY, null],
+    ["read to another floor this run (delta / settings) -> null", { ...deal, readFloorMs: FLOOR + 90 * DAY }, FLOOR + 30 * DAY, null],
+    ["nothing saved -> null", deal, null, null],
+    ["no meta -> null", null, FLOOR + 30 * DAY, null],
+  ] as const)("%s", (_name, meta, oldest, expected) => {
+    expect(chatOnlyBackToMs(meta, oldest)).toBe(expected);
   });
 });

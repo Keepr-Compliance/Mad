@@ -325,6 +325,40 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(screen.getByTestId("gm-stage")).toHaveTextContent("Chat 5 of 21");
   });
 
+  // BACKLOG-3892 E (founder 2026-10-11): a deal chat Google Messages returned only part
+  // of: its own line under the counts, the date from the saved result.
+  it("done: a deal chat came back short -> \"Google Messages on the web only returned texts back to <date>.\"", async () => {
+    mockState = INSTALLED;
+    mockCurrentJob = job({ jobId: "job-live", state: "running", stage: "Chat 4 of 21" });
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-stage")).toHaveTextContent("Chat 4 of 21");
+    act(() => {
+      progressListener?.(
+        job({
+          jobId: "job-live",
+          state: "finished",
+          saved: { chats: 2, messages: 3, newMessages: 3, onlyBackTo: "2024-02-01T10:00:00.000Z" },
+        } as Partial<RcsJobInfo>),
+      );
+    });
+    expect(screen.getByTestId("gm-done-summary")).toHaveTextContent(/^2 chats · 3 messages \(3 new\)$/);
+    expect(screen.getByTestId("gm-done-only-back-to")).toHaveTextContent(
+      /^Google Messages on the web only returned texts back to Feb 1, 2024\.$/,
+    );
+  });
+
+  it("done: no short chat -> no such line", async () => {
+    mockState = INSTALLED;
+    mockCurrentJob = job({ jobId: "job-live", state: "running", stage: "Chat 4 of 21" });
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-stage")).toHaveTextContent("Chat 4 of 21");
+    act(() => {
+      progressListener?.(job({ jobId: "job-live", state: "finished", saved: { chats: 2, messages: 3, newMessages: 3 } } as Partial<RcsJobInfo>));
+    });
+    expect(screen.getByTestId("gm-done-summary")).toHaveTextContent(/^2 chats · 3 messages \(3 new\)$/);
+    expect(screen.queryByTestId("gm-done-only-back-to")).toBeNull();
+  });
+
   it("reopened after a Sync ended (and was saved): the normal start, not the old run", async () => {
     mockState = INSTALLED;
     mockCurrentJob = job({ jobId: "job-old", state: "finished", saved: { chats: 1, messages: 1, newMessages: 1 } } as Partial<RcsJobInfo>);

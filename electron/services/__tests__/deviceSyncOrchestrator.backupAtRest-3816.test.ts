@@ -115,9 +115,10 @@ import plist from "simple-plist";
 
 import { BackupService, classifyBackupFailure } from "../backupService";
 import { DeviceSyncOrchestrator } from "../deviceSyncOrchestrator";
+import * as Sentry from "@sentry/electron/main";
 import {
-  BACKUP_AT_REST_QUARANTINED_MESSAGE,
   BackupAtRest,
+  BackupAtRestRefusal,
   BACKUP_SECURING_SENTENCE,
   QUARANTINE_DIR_NAME,
   readMarkerAt,
@@ -126,6 +127,34 @@ import { createFileCrypto, MAGIC, type KeyResolver } from "../atRest/fileCrypto"
 import { createMarkerStore } from "../atRest/markers";
 import { setBackupIndexKeysForTests } from "../atRest/backupIndexFiles";
 import { syncTimeline } from "../syncTimeline";
+import { backupEncryptionMetrics } from "../syncOutcomeSupabase";
+import { BACKUP_DAMAGED_QUARANTINED_MESSAGE, BACKUP_DAMAGED_RETRY_MESSAGE, BACKUP_KEY_MISSING_QUARANTINED_MESSAGE, BACKUP_KEY_MISSING_RETRY_MESSAGE } from "../atRest/backupProblem";
+
+/** BACKLOG-3892 E: the backup-problem events sent to Sentry (other captureMessage calls left out). */
+function backupProblemEvents(): unknown[][] {
+  return (Sentry.captureMessage as jest.Mock).mock.calls.filter((c) => c[0] === "iPhone backup problem");
+}
+/** BACKLOG-3892 E: the terminal row's fields (what sync_outcomes receives) for one run. */
+async function terminalFields(run: () => Promise<unknown>): Promise<Record<string, unknown>> {
+  const rows: Array<{ outcome: string; fields: Record<string, unknown> }> = [];
+  const tl = syncTimeline as unknown as { reporter: (row: unknown) => void };
+  const original = tl.reporter;
+  tl.reporter = (row) => rows.push(row as { outcome: string; fields: Record<string, unknown> });
+  try {
+    await run();
+  } finally {
+    tl.reporter = original;
+  }
+  const terminal = rows.filter((r) => r.outcome !== "running");
+  expect(terminal).toHaveLength(1);
+  return terminal[0].fields;
+}
+function backupProblemEvent(reason: string): unknown[] {
+  return [
+    "iPhone backup problem",
+    { level: "warning", tags: { component: "iphone_backup", reason }, fingerprint: ["iphone-backup-problem", reason] },
+  ];
+}
 import type { BackupResult, BackupSizeReading } from "../../types/backup";
 import { createDeferredBackupSize } from "../backupSizeRecord";
 import { heldStartFailure } from "./helpers/toolStartHoldFixture";
@@ -238,6 +267,7 @@ beforeEach(async () => {
   parserSaw.length = 0;
   parserBehaviour = "ok";
   syncTimeline.reset();
+  (Sentry.captureMessage as jest.Mock).mockClear();
   atRest = new BackupAtRest({
     backupsRoot: () => backups,
     files: () => files,
@@ -661,11 +691,17 @@ describe("refusals before idevicebackup2", () => {
     keyAvailable = false;
     const o = newOrchestrator();
     backupReturns(ok());
-    const result = await o.sync({ udid: UDID });
+    let result!: Awaited<ReturnType<DeviceSyncOrchestrator["sync"]>>;
+    const fields = await terminalFields(async () => {
+      result = await o.sync({ udid: UDID });
+    });
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/encryption key/);
     expect(startBackup).not.toHaveBeenCalled();
     expect(plaintextLeft()).toEqual([]);
+    // BACKLOG-3892 E: one Sentry event, reason only; the admin row gets the reason.
+    expect(backupProblemEvents()).toEqual([backupProblemEvent("key-unavailable")]);
+    expect(fields).toMatchObject({ endedBy: "backup-at-rest", reasonCode: "key-unavailable" });
   });
 
   it("B (founder decision 2026-10-09): a sync started during the launch migration is NOT refused — the migration pauses, the sync runs, its seal finishes the rest", async () => {
@@ -939,6 +975,40 @@ describe("D — C-DELTA reads a parse copy", () => {
   });
 });
 
+describe("BACKLOG-3892 E — a C-DELTA parse copy refused by the at-rest layer", () => {
+  function deltaAtRest(): BackupAtRest {
+    return new BackupAtRest({
+      backupsRoot: () => backups,
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => userData }),
+      ensureKey: async () => undefined,
+      freeBytes: async () => Number.MAX_SAFE_INTEGER,
+      sleep: async () => undefined,
+      log: () => undefined,
+      strategy: () => "delta",
+    });
+  }
+  it.each([
+    ["damaged", BACKUP_DAMAGED_RETRY_MESSAGE, "BACKUP_DAMAGED", "damaged"],
+    ["key-missing", BACKUP_KEY_MISSING_RETRY_MESSAGE, "unreadable", "key-missing"],
+  ] as const)("%s: the user sees its line, the row records it, Sentry gets one event", async (problem, message, reasonCode, sentryReason) => {
+    atRest = deltaAtRest();
+    jest.spyOn(atRest, "buildParseCopy").mockRejectedValue(new BackupAtRestRefusal("unreadable", message, problem));
+    const o = newOrchestrator();
+    backupReturns(ok());
+    let result!: Awaited<ReturnType<DeviceSyncOrchestrator["sync"]>>;
+    const fields = await terminalFields(async () => {
+      result = await o.sync({ udid: UDID });
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(message);
+    expect(fields).toMatchObject({ endedBy: "backup-at-rest", reasonCode });
+    expect(backupProblemEvents()).toEqual([backupProblemEvent(sentryReason)]);
+    await o.completeBackupAtRest();
+    await sealedAfter(o);
+  });
+});
+
 describe("C2-DELTA (founder must-fix 2026-10-09) — every end of a C-DELTA sync reseals at once; persistence is not waited for", () => {
   let copySpy: jest.SpyInstance;
   beforeEach(() => {
@@ -1183,10 +1253,45 @@ describe("B2 — an unreadable kept backup no longer ends iPhone sync", () => {
     const result = await o.sync({ udid: UDID });
     expect(result.success).toBe(true);
     expect(startBackup).toHaveBeenCalledTimes(1);
-    expect(messages).toContain(BACKUP_AT_REST_QUARANTINED_MESSAGE);
+    // BACKLOG-3892 E: a file that fails authentication is "damaged" (founder wording).
+    expect(messages).toContain(BACKUP_DAMAGED_QUARANTINED_MESSAGE);
+    expect(BACKUP_DAMAGED_QUARANTINED_MESSAGE).toBe(
+      "Your saved iPhone backup is damaged. Keepr will make a fresh full backup, which takes longer.",
+    );
+    expect(backupProblemEvents()).toEqual([backupProblemEvent("damaged")]);
+    // The admin report reads it from source_metrics (allow-listed values only).
+    const ctx = syncTimeline.contextSnapshot();
+    expect(ctx).toMatchObject({ keptBackup: "quarantined", keptBackupReason: "damaged" });
+    expect(backupEncryptionMetrics(ctx)).toMatchObject({ keptBackup: "quarantined", keptBackupReason: "damaged" });
     const quarantined = fsSync.readdirSync(path.join(backups, QUARANTINE_DIR_NAME));
     expect(quarantined).toHaveLength(1);
     expect(quarantined[0].startsWith(`${UDID}-`)).toBe(true);
+    await o.completeBackupAtRest();
+    await sealedAfter(o);
+  });
+
+  it("BACKLOG-3892 E: a key this computer does not hold reads \"cannot decrypt\", not damaged", async () => {
+    // Shape of the producer's answer: backupAtRest.test.ts "a data key that is no longer held (KEY_MISSING)".
+    jest.spyOn(atRest, "beginSync").mockResolvedValueOnce({
+      kind: "first",
+      udid: UDID,
+      quarantined: { reasonCode: "KEY_MISSING", kind: "key-missing" },
+    } as Awaited<ReturnType<typeof atRest.beginSync>>);
+    const o = newOrchestrator();
+    const messages: string[] = [];
+    o.on("progress", (p: { message: string }) => messages.push(p.message));
+    startBackup.mockImplementation(async () => {
+      makeChain();
+      return ok({ isIncremental: false });
+    });
+    const result = await o.sync({ udid: UDID });
+    expect(result.success).toBe(true);
+    expect(messages).toContain(BACKUP_KEY_MISSING_QUARANTINED_MESSAGE);
+    expect(messages).not.toContain(BACKUP_DAMAGED_QUARANTINED_MESSAGE);
+    expect(BACKUP_KEY_MISSING_QUARANTINED_MESSAGE).toBe(
+      "Keepr cannot decrypt your saved iPhone backup on this computer. Keepr will make a fresh full backup, which takes longer.",
+    );
+    expect(backupProblemEvents()).toEqual([backupProblemEvent("key-missing")]);
     await o.completeBackupAtRest();
     await sealedAfter(o);
   });

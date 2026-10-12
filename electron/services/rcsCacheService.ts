@@ -224,7 +224,25 @@ export function cacheSavedFromCommit(r: CacheCommitResult): RcsCacheSaved {
     chats: r.chats, messages: r.stored + r.alreadyPresent, newMessages: r.stored,
     reactions: r.reactionsKept ?? r.reactions, newReactions: r.reactions,
     photos: r.imagesStored + (r.imagesAlreadyThere ?? 0),
+    ...(typeof r.onlyBackToMs === "number" ? { onlyBackTo: new Date(r.onlyBackToMs).toISOString() } : {}),
   };
+}
+
+/**
+ * BACKLOG-3892 E (founder 2026-10-11): a deal chat Google Messages did not return back
+ * to the date the deal needs. Only a chat this run asked to read down to its DEAL floor
+ * (readFloorMs = chatFloorMs; a delta or settings-floor read is not judged here) that
+ * the page did not reach (extension depthKind "partial": not settled, a gap, a cap —
+ * NOT "start of the chat", which counts as reached). Returns the oldest text saved for
+ * it when that is more than a day after the floor; null otherwise.
+ */
+export function chatOnlyBackToMs(
+  meta: { chatFloorMs: number | null; readFloorMs: number | null; reachedFloor: boolean } | null,
+  oldestKeptMs: number | null | undefined,
+): number | null {
+  if (!meta || meta.reachedFloor || meta.chatFloorMs === null || meta.readFloorMs !== meta.chatFloorMs) return null;
+  if (typeof oldestKeptMs !== "number" || !Number.isFinite(oldestKeptMs)) return null;
+  return oldestKeptMs - meta.chatFloorMs > CHAT_COVERAGE_TOLERANCE_MS ? oldestKeptMs : null;
 }
 
 /**

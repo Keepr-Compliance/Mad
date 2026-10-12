@@ -228,6 +228,9 @@ function RunEvidence({ run }: { run: SyncRun }) {
   if (run.reasonCode) {
     items.push({ label: 'Reason', value: reasonCodeLabel(run.reasonCode), raw: run.reasonCode });
   }
+  if (run.keptBackupLabel) {
+    items.push({ label: 'Kept backup', value: run.keptBackupLabel });
+  }
 
   if (items.length === 0) return null;
 

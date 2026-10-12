@@ -121,6 +121,8 @@ export interface SyncOutcomeRow {
   last_phase?: string | null;
   reason_code?: string | null;
   ended_by?: string | null;
+  // BACKLOG-3892 E: allow-listed facts the desktop app writes (backupEncryptionMetrics).
+  source_metrics?: unknown;
 }
 
 export interface ReportUser {
@@ -219,6 +221,8 @@ export interface SyncRun {
   lastPhaseRaw: string | null;
   reasonCode: string | null;
   endedBy: string | null;
+  /** BACKLOG-3892 E: the kept backup could not be read and was moved aside (null: not reported). */
+  keptBackupLabel: string | null;
 
   stalled: boolean;
 }
@@ -347,8 +351,41 @@ const REASON_CODE_LABELS: Record<string, string> = {
   UNKNOWN_ERROR: 'The device reported an error it could not name',
 };
 
+/**
+ * BACKLOG-3892 E: reasons the desktop app records when the SAVED backup (not the
+ * device) stops a sync. Kept apart from REASON_CODE_LABELS, which transcribes
+ * `BackupErrorCode` one-to-one. TRANSCRIBED from:
+ *   busy, key-unavailable, disk-space, unreadable, cancelled
+ *       BackupAtRestRefusal reasons, electron/services/atRest/backupAtRest.ts
+ *       (`cancelled` never reaches a row: the orchestrator turns it into a cancel)
+ *   BACKUP_DAMAGED          electron/services/atRest/backupProblem.ts
+ *   APPLE_ENCRYPTED_BACKUP  electron/services/deviceSyncOrchestrator.ts
+ */
+export const AT_REST_REASON_LABELS: Record<string, string> = {
+  busy: 'The saved backup was being secured',
+  'key-unavailable': "The computer's encryption key could not be opened",
+  'disk-space': 'Not enough free space to prepare the saved backup',
+  unreadable: 'Part of the saved backup could not be opened',
+  BACKUP_DAMAGED: 'The saved backup is damaged',
+  APPLE_ENCRYPTED_BACKUP: 'The phone encrypts its backups (Encrypt local backup is on)',
+};
+
 export function reasonCodeLabel(code: string): string {
-  return REASON_CODE_LABELS[code] ?? code;
+  return REASON_CODE_LABELS[code] ?? AT_REST_REASON_LABELS[code] ?? code;
+}
+
+/** BACKLOG-3892 E: what happened to the kept backup (source_metrics.keptBackup*). */
+const KEPT_BACKUP_REASON_LABELS: Record<string, string> = {
+  damaged: 'Damaged: moved aside, full backup made',
+  'key-missing': 'Key not on this computer: moved aside, full backup made',
+};
+
+export function keptBackupLabel(sourceMetrics: unknown): string | null {
+  if (!sourceMetrics || typeof sourceMetrics !== 'object') return null;
+  const m = sourceMetrics as { keptBackup?: unknown; keptBackupReason?: unknown };
+  if (m.keptBackup !== 'quarantined') return null;
+  const reason = typeof m.keptBackupReason === 'string' ? m.keptBackupReason : '';
+  return KEPT_BACKUP_REASON_LABELS[reason] ?? 'Unreadable: moved aside, full backup made';
 }
 
 /**
@@ -363,6 +400,10 @@ export function reasonCodeLabel(code: string): string {
  *   reset                 the `forceReset()` default, :200 / :275 / :283
  */
 const ENDED_BY_LABELS: Record<string, string> = {
+  // BACKLOG-3892 E: deviceSyncOrchestrator refuseForAtRest / the parse-copy refusal,
+  // and stopForAppleEncryptedBackup.
+  'backup-at-rest': 'Stopped by a problem with the saved backup',
+  'backup-encryption': 'Stopped: the phone encrypts its backups',
   'host-guard': 'Stopped by the app to protect the computer',
   watchdog: 'Stopped by the watchdog after no progress',
   'device-error': 'Stopped by an error from the phone',
@@ -605,6 +646,7 @@ export function buildRun(row: SyncOutcomeRow, users: Map<string, ReportUser>): S
     lastPhaseRaw: row.last_phase ?? null,
     reasonCode: row.reason_code ?? null,
     endedBy: row.ended_by ?? null,
+    keptBackupLabel: keptBackupLabel(row.source_metrics),
 
     stalled: isStalled(row),
   };
