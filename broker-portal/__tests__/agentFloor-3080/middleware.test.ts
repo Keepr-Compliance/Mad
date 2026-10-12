@@ -98,6 +98,9 @@ const PATHS = [
   '/dashboard/my-transactionsx',
   '/dashboard/supportx',
   '/dashboard/accounts',
+  '/dashboard/billing',
+  '/dashboard/billing/x',
+  '/dashboard/billingx',
 ] as const;
 
 type Verdict = typeof ADMIT | string;
@@ -124,6 +127,14 @@ const FLOOR_VERDICTS: Record<(typeof PATHS)[number], Verdict> = {
   // Boundary: shared prefix, not a sub-path.
   '/dashboard/supportx': TO_DASHBOARD,
   '/dashboard/accounts': TO_DASHBOARD,
+  '/dashboard/billing': TO_DASHBOARD,
+  '/dashboard/billing/x': TO_DASHBOARD,
+  '/dashboard/billingx': TO_DASHBOARD,
+};
+const PERSONAL_OWNER_VERDICTS: Record<(typeof PATHS)[number], Verdict> = {
+  ...FLOOR_VERDICTS,
+  '/dashboard/billing': ADMIT,
+  '/dashboard/billing/x': ADMIT,
 };
 
 /** A floor user routed on a brokerage row: the floor, plus My Transactions (the page decides the plan). */
@@ -149,7 +160,7 @@ const PERSONAS: [string, () => void, Record<(typeof PATHS)[number], Verdict>][] 
   ['brokerage agent', () => given([brokerageMembership('agent')]), BROKERAGE_FLOOR_VERDICTS],
   ['brokerage agent, pre-migration', () => given([brokerageMembership('agent', 'pre')], { columnPresent: false }), BROKERAGE_FLOOR_VERDICTS],
   ['unrecognised brokerage role', () => given([brokerageMembership('viewer')]), BROKERAGE_FLOOR_VERDICTS],
-  ['personal-org owner', () => given([personalMembership()]), FLOOR_VERDICTS],
+  ['personal-org owner', () => given([personalMembership()]), PERSONAL_OWNER_VERDICTS],
   ['personal row then brokerage agent', () => given([personalMembership(), brokerageMembership('agent')]), BROKERAGE_FLOOR_VERDICTS],
   [
     'two brokerage rows [agent, broker]',

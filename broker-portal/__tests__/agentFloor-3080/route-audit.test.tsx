@@ -431,6 +431,14 @@ const PLAN_GATED_PAGES: Record<string, PageEntry> = {
     refused: { notFound: true },
   },
 };
+/** BACKLOG-3844: the page refuses everyone but a personal-org owner and a full-portal user. */
+const BILLING_PAGES: Record<string, PageEntry> = {
+  'app/dashboard/billing/page.tsx': {
+    invoke: async () => (await import('@/app/dashboard/billing/page')).default(),
+    refused: { notFound: true },
+  },
+};
+
 const PLAN_GATED_ADMITTED = {
   'brokerage agent': [brokerageMembership('agent')],
   '[brokerage agent, personal-org owner]': [brokerageMembership('agent'), personalMembership()],
@@ -843,7 +851,7 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(16);
+    expect(pages.length).toBe(17);
   });
 
   it('finds route handlers, keyed POSIX on any OS (R8)', () => {
@@ -893,6 +901,7 @@ describe('set completeness', () => {
       ...FLOOR_PAGES,
       ...Object.keys(OWN_GATE_PAGES),
       ...Object.keys(PLAN_GATED_PAGES),
+      ...Object.keys(BILLING_PAGES),
     ];
     expect(new Set(classified).size).toBe(classified.length);
     expect(discoverDashboardPages()).toEqual([...classified].sort());
@@ -1153,4 +1162,44 @@ describe('plan-gated pages: My Transactions (BACKLOG-3080, R7)', () => {
       expect(tablesRead()).toEqual(['organization_members']);
     }
   );
+});
+
+/**
+ * BACKLOG-3844 (SR R1): the billing page is its own gate. Middleware is not in
+ * this path (pages are invoked directly), and a request carrying any
+ * impersonation cookie skips middleware's membership check in production too,
+ * so the refusals below are the page's own. The flag is forced ON so a refusal
+ * can only be the access rule. A failed membership read and a real
+ * impersonation session are covered in __tests__/app/dashboard/billing/.
+ */
+describe('billing page (BACKLOG-3844)', () => {
+  const OLD = process.env.BILLING_ENABLED;
+  beforeAll(() => {
+    process.env.BILLING_ENABLED = 'true';
+  });
+  afterAll(() => {
+    if (OLD === undefined) delete process.env.BILLING_ENABLED;
+    else process.env.BILLING_ENABLED = OLD;
+  });
+  const page = BILLING_PAGES['app/dashboard/billing/page.tsx'];
+
+  it.each([
+    ['brokerage agent', PERSONAS['brokerage agent']],
+    ['[agent, broker] (two brokerage rows)', PERSONAS['[agent, broker] (two brokerage rows)']],
+    ['[brokerage agent, personal-org owner]', [brokerageMembership('agent'), personalMembership()]],
+  ] as const)('refuses the %s before reading anything else, and writes nothing', async (_n, rows) => {
+    given(rows);
+    expect(await run(page.invoke)).toEqual(page.refused);
+    expect(tablesRead()).toEqual(['organization_members']);
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+
+  it.each([
+    ['personal-org owner', PERSONAS['personal-org owner']],
+    ['brokerage admin', ADMIN],
+  ] as const)('admits the %s, and writes nothing', async (_n, rows) => {
+    given(rows);
+    expect(await run(page.invoke)).toEqual({ element: 'BillingPage' });
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
 });

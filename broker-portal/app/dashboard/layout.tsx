@@ -7,6 +7,8 @@ import { getChecklistNavPolicy } from '@/lib/checklist-nav';
 import { featureUnlockLabel } from '@/lib/feature-availability';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
 import { getMyTransactionsGate } from '@/lib/my-transactions-access';
+import { billingEnabled } from '@/lib/billing/flag';
+import { billingNavVisible } from '@/lib/billing/capabilities';
 
 export default async function DashboardLayout({
   children,
@@ -53,6 +55,9 @@ export default async function DashboardLayout({
   // BACKLOG-3080: the same gate the My Transactions pages use. Shown when the
   // pages would render (the list, or the plan message), hidden when they 404.
   const showMyTransactions = !isImpersonating && (await getMyTransactionsGate()) !== null;
+  // BACKLOG-3844: the rule the billing page uses, on access only. No read: the
+  // access above is reused. The page refuses on its own.
+  const showBilling = billingNavVisible({ access, isImpersonating, enabled: billingEnabled() });
 
   return (
     <DashboardShell
@@ -65,6 +70,7 @@ export default async function DashboardLayout({
       showChecklists={showChecklists}
       checklistsUnavailableLabel={checklistsUnavailableLabel}
       showMyTransactions={showMyTransactions}
+      showBilling={showBilling}
     >
       {children}
     </DashboardShell>

@@ -210,6 +210,60 @@ describe('DashboardLayout', () => {
   });
 });
 
+// BACKLOG-3844: the layout passes billingNavVisible(...) as showBilling. The
+// expected column is hand-written from the step-0 truth table.
+describe('DashboardLayout — showBilling (BACKLOG-3844)', () => {
+  const OLD = process.env.BILLING_ENABLED;
+  afterEach(() => {
+    if (OLD === undefined) delete process.env.BILLING_ENABLED;
+    else process.env.BILLING_ENABLED = OLD;
+  });
+
+  it.each([
+    ['personal-org owner', [personalMembership()], true],
+    ['brokerage broker', [brokerageMembership('broker')], true],
+    ['brokerage admin', [brokerageMembership('admin')], true],
+    ['brokerage it_admin', [brokerageMembership('it_admin')], true],
+    ['brokerage agent', [brokerageMembership('agent')], false],
+    ['[agent, broker] (two brokerage rows)', [brokerageMembership('agent'), second(brokerageMembership('broker'))], false],
+    ['[personal, brokerage agent]', [personalMembership(), brokerageMembership('agent')], false],
+  ] as [string, Row[], boolean][])('flag on: %s -> showBilling %s', async (_n, rows, showBilling) => {
+    process.env.BILLING_ENABLED = 'true';
+    given(rows);
+    const { props } = await layoutOutcome();
+    expect(props!.showBilling).toBe(showBilling);
+  });
+
+  it('flag on: a failed membership read -> no Billing', async () => {
+    process.env.BILLING_ENABLED = 'true';
+    given([brokerageMembership('admin')], true);
+    const { props } = await layoutOutcome();
+    expect(props!.showBilling).toBe(false);
+  });
+
+  it('flag on: impersonation -> no Billing, and still no membership read', async () => {
+    process.env.BILLING_ENABLED = 'true';
+    (getImpersonationSession as jest.Mock).mockResolvedValue({
+      target_email: 'target@fixture.example.test',
+      target_name: 'Target Fixture',
+    });
+    given([brokerageMembership('admin')]);
+    const { props } = await layoutOutcome();
+    expect(props!.showBilling).toBe(false);
+    expect(mockEmulator.state.selects).toEqual([]);
+  });
+
+  it.each([undefined, 'false', '1', 'TRUE'])('flag %s: the admin and the owner get no Billing', async (value) => {
+    if (value === undefined) delete process.env.BILLING_ENABLED;
+    else process.env.BILLING_ENABLED = value;
+    for (const rows of [[brokerageMembership('admin')], [personalMembership()]]) {
+      given(rows);
+      const { props } = await layoutOutcome();
+      expect(props!.showBilling).toBe(false);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The /dashboard page, and C-data
 // ---------------------------------------------------------------------------
