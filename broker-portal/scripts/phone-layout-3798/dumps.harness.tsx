@@ -367,7 +367,8 @@ it('title-* (page title in the top bar)', () => {
     ['title-mytx', '/dashboard/my-transactions', <PageHeader key="h" title="My Transactions" subtitle="3 submissions" {...PH_TITLE_ONLY} />],
     ['title-dashboard', '/dashboard', <PageHeader key="h" title="Welcome, Alex" subtitle="Overview of transaction submissions" {...PH} />],
     ['title-detail', '/dashboard/users/u1', <h1 key="h" className="text-xl font-bold text-gray-900">Agent Number1</h1>],
-    ['title-submissions', '/dashboard/submissions', <h1 key="h" className="text-2xl font-bold text-gray-900">Submissions</h1>],
+    ['title-submissions', '/dashboard/submissions', <PageHeader key="h" title="Submissions" subtitle="2 submissions" className="max-md:mb-3" {...PH} />],
+    ['title-submission-detail', '/dashboard/submissions/s1', <h1 key="h" className="text-2xl font-bold text-gray-900">1234 Invented Boulevard Northwest</h1>],
   ];
   for (const [name, p, header] of cases) {
     mockPath = p;
