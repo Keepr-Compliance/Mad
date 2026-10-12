@@ -51,6 +51,8 @@ describe('PhoneResultsRow', () => {
     const { container, rerender } = render(<PhoneResultsRow shown={2} total={5} noun="user" />);
     expect(container.firstElementChild).toHaveTextContent('Showing 2 of 5 users');
     expect(container.firstElementChild!.className).toContain('h-11');
+    rerender(<PhoneResultsRow shown={1} total={5} noun="user" />);
+    expect(container.firstElementChild).toHaveTextContent('Showing 1 of 5 users');
     rerender(<PhoneResultsRow shown={1} total={1} noun="submission" />);
     expect(container.firstElementChild).toHaveTextContent('Showing 1 of 1 submission');
     expect(container.firstElementChild).not.toHaveTextContent('submissions');
