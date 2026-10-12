@@ -52,7 +52,8 @@ export type DealLockedEdit =
   | "link-checklist-item"
   | "unlink-checklist-item"
   | "include-outside-dates"
-  | "edit-deal-details";
+  | "edit-deal-details"
+  | "change-status";
 
 const REFUSAL_TEXT: Readonly<Record<DealLockReason, string>> = {
   submitted: "This deal is with your broker for review, so it can't be changed until it's returned to you.",
@@ -70,6 +71,46 @@ export function refuseIfDealLocked(
   const reason = getDealLockReason(transactionId);
   if (reason === null) return null;
   return { success: false, error: REFUSAL_TEXT[reason], dealLocked: reason, refusedEdit: edit };
+}
+
+/**
+ * Founder 2026-10-12: an approved deal can still be CLOSED. This is the one
+ * allowance on a locked deal, and it is narrow: the deal's submission status is
+ * `approved` (so not submitted, under review or resubmitted) and the change is
+ * the deal status set to `closed`, nothing else.
+ */
+function isCloseOfApprovedDeal(transactionId: string, status: unknown): boolean {
+  if (status !== "closed") return false;
+  const row = dbGet<{ submission_status: string | null }>(
+    TRANSACTION_SUBMISSION_STATUS_SQL,
+    [transactionId],
+  );
+  return row?.submission_status === "approved";
+}
+
+/** `transactions:update` gate: locked deals refuse everything except a status-only close of an approved deal. */
+export function refuseUpdateIfDealLocked(
+  transactionId: string,
+  updates: unknown,
+): ReturnType<typeof refuseIfDealLocked> {
+  const refusal = refuseIfDealLocked(transactionId, "edit-deal-details");
+  if (refusal === null) return null;
+  const record = updates && typeof updates === "object" ? (updates as Record<string, unknown>) : {};
+  const keys = Object.keys(record);
+  if (keys.length === 1 && keys[0] === "status" && isCloseOfApprovedDeal(transactionId, record.status)) {
+    return null;
+  }
+  return refusal;
+}
+
+/** `transactions:bulk-update-status` gate, per deal: same rule as `refuseUpdateIfDealLocked`. */
+export function refuseStatusChangeIfDealLocked(
+  transactionId: string,
+  status: unknown,
+): ReturnType<typeof refuseIfDealLocked> {
+  const refusal = refuseIfDealLocked(transactionId, "change-status");
+  if (refusal === null) return null;
+  return isCloseOfApprovedDeal(transactionId, status) ? null : refusal;
 }
 
 /** Same gate over several deals; the first locked one refuses the whole call. */

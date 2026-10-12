@@ -747,6 +747,8 @@ export interface WindowApiTransactions {
     updatedCount?: number;
     errors?: string[];
     error?: string;
+    /** BACKLOG-3910d: deals left unchanged because they are locked. */
+    refusedIds?: string[];
   }>;
 
   // ============================================
