@@ -115,6 +115,22 @@ maybe("BACKLOG-3925 — the address-match candidate read runs off the main threa
     expect(r).toMatchObject({ candidates: 2, matched: 1, queued: 1 });
   });
 
+  it("classifyAddressMatchCandidatesOn (the worker's path): body-only, subject-only and non-match rows", () => {
+    db.prepare("DELETE FROM emails").run();
+    const ins = db.prepare("INSERT INTO emails (id, user_id, subject, body_plain, sent_at) VALUES (?, ?, ?, ?, '2026-03-01T15:00:00.000Z')");
+    ins.run("e-body-only", USER, "Question", "Please visit 1428 Maple Ave on Friday.");
+    ins.run("e-subject-only", USER, "Showing at 1428 Maple Ave", "See you.");
+    ins.run("e-non-match", USER, "Maple Ave 9", "Gate code 1428, then Maple trees.");
+    const params = addressMatchCandidateParamsForTests(TXN) as Array<string | number>;
+    const address = normalizeAddress("1428 Maple Ave, Springfield");
+
+    const classified = classifyAddressMatchCandidatesOn(db, params, address!);
+
+    // Newest-first with equal sent_at: compare as a set; the non-match is a candidate, not matched.
+    expect(classified.candidates).toBe(3);
+    expect([...classified.matchedIds].sort()).toEqual(["e-body-only", "e-subject-only"]);
+  });
+
   it("worker could not start: the main thread reads, same rows", async () => {
     jest.spyOn(contactWorkerPool, "isPoolReady").mockReturnValue(true);
     jest

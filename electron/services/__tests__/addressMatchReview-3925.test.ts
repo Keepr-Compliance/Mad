@@ -406,6 +406,34 @@ describe("C10 — no per-deal cap; precision comes from adjacency", () => {
   });
 });
 
+describe("fix round 3 — the SQL prefilter keeps what the matcher accepts", () => {
+  it("(a) a letter-suffixed number: the deal's own text matches; a bare 12 does not", async () => {
+    seedBase("not_submitted", "12A Park Rd, Springfield");
+    insertEmail("e-own-subject", STRANGER, "12A Park Rd closing", "See you.");
+    insertEmail("e-own-body", STRANGER, "Closing", "The house at 12A Park Road is ready.");
+    insertEmail("e-lower", STRANGER, "Closing", "Visit 12a Park Rd tomorrow.");
+    insertEmail("e-bare", STRANGER, "Closing", "The house at 12 Park Rd is ready.");
+
+    const r = await queueAddressMatchesForTransaction(A);
+
+    expect(pending(A)).toEqual(["e-lower:address", "e-own-body:address", "e-own-subject:address"]);
+    expect(r).toMatchObject({ queued: 3, matched: 3 });
+  });
+
+  it("(c) a ranged deal: an email naming only the far end is found, either end, either order", async () => {
+    seedBase("not_submitted", "12-14 Elm St, Springfield");
+    insertEmail("e-first", STRANGER, "Showing at 12 Elm St", "x");
+    insertEmail("e-second", STRANGER, "Closing", "Showing at 14 Elm St on Friday.");
+    insertEmail("e-range", STRANGER, "12-14 Elm St", "x");
+    insertEmail("e-other", STRANGER, "Closing", "Showing at 16 Elm St on Friday.");
+
+    const r = await queueAddressMatchesForTransaction(A);
+
+    expect(pending(A)).toEqual(["e-first:address", "e-range:address", "e-second:address"]);
+    expect(r).toMatchObject({ queued: 3, matched: 3 });
+  });
+});
+
 describe("C11 — subject and body are each searched, never joined", () => {
   it("(a) address only in the subject matches; (b) only in the body matches; (c) subject ending in the number + body starting with the name does not", async () => {
     seedBase("not_submitted", "12 Park Rd, Springfield");

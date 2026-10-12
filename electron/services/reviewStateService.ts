@@ -771,11 +771,14 @@ function addressMatchCandidateParams(
   address: NormalizedAddress,
   transactionId: string,
 ): Array<string | number> {
-  // A ranged deal number ("12-14") is looked for by its first number; the matcher
-  // accepts either end.
-  const num = addressRouteStreetNumbers(address)[0];
+  // The raw columns are searched, so a number is bound as its digit run ("12A" -> "12";
+  // normalizeAddress lowercases the suffix, the columns are not). A ranged deal
+  // ("12-14") binds both ends: the matcher accepts either.
+  const nums = addressRouteStreetNumbers(address).map((n) => n.match(/^\d+/)?.[0] ?? n);
+  const first = nums[0];
+  const last = nums[nums.length - 1];
   const word = addressRoutePrefilterWord(address);
-  const params = [userId, start, end, num, num, word, word, transactionId, transactionId, transactionId, transactionId];
+  const params = [userId, start, end, first, first, last, last, word, word, transactionId, transactionId, transactionId, transactionId];
   if (params.length !== ADDRESS_MATCH_CANDIDATE_PARAM_COUNT) throw new Error("address-match params out of step with the SQL");
   return params;
 }

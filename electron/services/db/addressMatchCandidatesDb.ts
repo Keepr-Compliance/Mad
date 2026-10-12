@@ -34,15 +34,19 @@ import { sql } from "./core/sqlText";
  *     the contact route, which links the ones naming the address and queues the rest.
  *
  * Newest first. Bound, in order (ADDRESS_MATCH_CANDIDATE_PARAM_COUNT): user id,
- * window start, window end, street number (subject), street number (body), name word
- * (subject), name word (body), then the transaction id four times.
+ * window start, window end, first street number (subject), first street number (body),
+ * last street number (subject), last street number (body), name word (subject), name
+ * word (body), then the transaction id four times. A street number is its DIGIT run
+ * only ("12A" -> "12": digits have no case, the columns are raw, and the matcher
+ * decides the suffix); a ranged deal ("12-14") binds both ends, so "14 Elm St" is found.
  */
 export const ADDRESS_MATCH_CANDIDATE_EMAILS_SQL = sql`SELECT e.id, e.subject, e.body_plain
        FROM emails e
       WHERE e.user_id = ?
         AND e.sent_at >= ?
         AND e.sent_at <= ?
-        AND (instr(e.subject, ?) > 0 OR instr(e.body_plain, ?) > 0)
+        AND (instr(e.subject, ?) > 0 OR instr(e.body_plain, ?) > 0
+             OR instr(e.subject, ?) > 0 OR instr(e.body_plain, ?) > 0)
         AND (instr(lower(e.subject), ?) > 0 OR instr(lower(e.body_plain), ?) > 0)
         AND NOT EXISTS (
           SELECT 1 FROM communications c
@@ -69,7 +73,7 @@ export const ADDRESS_MATCH_CANDIDATE_EMAILS_SQL = sql`SELECT e.id, e.subject, e.
       ORDER BY e.sent_at DESC`;
 
 /** Bound values of ADDRESS_MATCH_CANDIDATE_EMAILS_SQL. */
-export const ADDRESS_MATCH_CANDIDATE_PARAM_COUNT = 11;
+export const ADDRESS_MATCH_CANDIDATE_PARAM_COUNT = 13;
 
 /**
  * Run the address-match candidate read on a given connection — the dedicated query
