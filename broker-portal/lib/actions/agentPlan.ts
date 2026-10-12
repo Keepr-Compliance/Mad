@@ -95,7 +95,8 @@ export async function startAgentCheckout(interval: AgentInterval = 'month'): Pro
   // A payment that the grant would refuse buys nothing (SR R4: the RPC's own rules).
   if (view.suspended) return { error: SUSPENDED };
   if (isNonStripeOverride(view.override)) return { error: SUPPORT_GRANT };
-  if (caps.primaryAction !== 'subscribe' || !caps.canPurchase) return { error: NOT_NOW };
+  // Subscribe lives on the Agent card of "Choose a plan" (block 2), not on "Your plan".
+  if (!caps.blocks.includes('choose_plan') || !caps.canPurchase) return { error: NOT_NOW };
 
   if (!(await isModeAllowedForUser(service, userId, mode))) return { error: MODE_REFUSED };
 

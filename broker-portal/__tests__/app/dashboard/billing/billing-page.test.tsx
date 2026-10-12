@@ -117,6 +117,7 @@ import { BillingDb, eqValue } from '../../../helpers/billingDb';
 import { mirrorState } from '@/lib/billing/sync';
 import BillingRoute from '@/app/dashboard/billing/page';
 import { BillingPage } from '@/components/billing/BillingPage';
+import { BOOK_A_CALL_URL } from '@/lib/billing/bookCall';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { signCookieValue } from '@/lib/cookie-signing';
 
@@ -429,6 +430,26 @@ describe('3847: personal plan blocks', () => {
     expect(r.titles).toEqual(['Your plan', 'Credits', 'Payment method & billing contact', 'Invoices']);
   });
 
+  it('Book a Call links to the onboarding booking page, in a new tab', async () => {
+    given([personalMembership()]);
+    const { container, unmount } = render(await BillingRoute({}));
+    const link = within(container).getByRole('link', { name: 'Book a Call' });
+    expect(link.getAttribute('href')).toBe(BOOK_A_CALL_URL);
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    unmount();
+  });
+
+  it('pay as you go: exactly one Subscribe button on the page (the Agent card), none in Your plan', async () => {
+    given([personalMembership()]);
+    const { container, unmount } = render(await BillingRoute({}));
+    const subs = within(container).queryAllByRole('button').filter((b) => (b.textContent ?? '').startsWith('Subscribe —'));
+    expect(subs).toHaveLength(1);
+    expect(within(container.querySelector('[data-billing-block="plan"]') as HTMLElement).queryAllByRole('button')).toHaveLength(0);
+    expect(container.querySelector('[data-plan="agent"]')?.contains(subs[0])).toBe(true);
+    unmount();
+  });
+
   it('a half-made (incomplete) subscription reads as no plan: Subscribe is offered', async () => {
     seedSub('sub-A-incomplete');
     const r = await text();
@@ -456,7 +477,7 @@ describe('3847: personal plan blocks', () => {
     const month = { ...PRICES_LIST.data[0], unit_amount: 2499 };
     mockPricesList.mockResolvedValue({ ...PRICES_LIST, data: [month] });
     let r = await text();
-    expect(r.buttons).toEqual(['Subscribe — $24.99/month', 'Subscribe — $24.99/month']);
+    expect(r.buttons).toEqual(['Subscribe — $24.99/month']);
     expect(r.text).not.toMatch(/year/i);
 
     const year = { ...month, id: 'price_EDITED_year', unit_amount: 19900, lookup_key: 'agent_year_usd', recurring: { ...month.recurring, interval: 'year' } };

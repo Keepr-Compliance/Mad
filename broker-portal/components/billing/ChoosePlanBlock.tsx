@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { BOOK_A_CALL_URL } from '@/lib/billing/bookCall';
 import { BillingBlock } from './BillingBlock';
 import { SubscribeButton } from './AgentPlanControls';
 import type { PersonalPlanData } from './BillingPage';
@@ -45,12 +45,14 @@ export function ChoosePlanBlock({ prices }: { prices?: PersonalPlanData['prices'
         <div className={CARD} data-plan="brokerage">
           <p className="font-semibold text-gray-900">Brokerage</p>
           <p className="text-sm text-gray-600">Purchased by a Designated Broker. Demo required.</p>
-          <Link
-            href="/support/new"
+          <a
+            href={BOOK_A_CALL_URL}
+            target="_blank"
+            rel="noopener noreferrer"
             className="mt-auto rounded-lg border border-indigo-200 px-4 py-2.5 text-center text-sm font-semibold text-indigo-700 hover:bg-indigo-50"
           >
             Book a Call
-          </Link>
+          </a>
         </div>
       </div>
     </BillingBlock>
