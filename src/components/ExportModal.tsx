@@ -10,6 +10,7 @@ import { UpgradePrompt } from "./common/UpgradePrompt";
 import { isPaywallLockedError } from "../services/entitlementService";
 import { ExportUnlockPrompt } from "./paywall/ExportUnlockPrompt";
 import { formatLastExported } from "../utils/formatUtils";
+import { dealLockReason, DEAL_LOCK_EDIT_TOOLTIP } from "../utils/dealLock";
 import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
 import { readChosenTextSource } from "./transactionDetailsModule/components/TextCoverageNotice";
 import { coverageDay, endLine, iphoneStartWithAction } from "./transactionDetailsModule/components/coverageCopy";
@@ -52,6 +53,12 @@ function ExportModal({
   // BACKLOG-3520: the commission block of the same step. An empty commission
   // shows an inline warning and never blocks; an unparseable figure does.
   const commission = useCommissionForm(transaction);
+  // BACKLOG-3910 (slice d, founder 2026-10-12): a locked deal (with the broker,
+  // or sealed) is read-only. It still exports, with the dates it was submitted
+  // with: the fields are disabled, nothing is saved, and the close prompt is
+  // not offered (the main process refuses any write to a locked deal).
+  const lockReason = dealLockReason(transaction.submission_status);
+  const datesLockedTooltip = lockReason ? DEAL_LOCK_EDIT_TOOLTIP[lockReason] : undefined;
 
   const [contentType, setContentType] = useState<"both" | "emails" | "texts">("both");
   const [attachmentType, setAttachmentType] = useState<"all" | "email" | "text" | "none">("all");
@@ -331,13 +338,15 @@ function ExportModal({
     // BACKLOG-3498: the one shared writer of the confirmed dates.
     // With nothing to say about commission the call is exactly the two-argument
     // call it was before BACKLOG-3520.
-    const updateResult = commission.update
-      ? await saveConfirmedTransactionDates(transaction.id, dates, commission.update)
-      : await saveConfirmedTransactionDates(transaction.id, dates);
-    if (!updateResult.success) {
-      setError(`Failed to save dates: ${updateResult.error}`);
-      setStep(1);
-      return;
+    if (!datesLockedTooltip) {
+      const updateResult = commission.update
+        ? await saveConfirmedTransactionDates(transaction.id, dates, commission.update)
+        : await saveConfirmedTransactionDates(transaction.id, dates);
+      if (!updateResult.success) {
+        setError(`Failed to save dates: ${updateResult.error}`);
+        setStep(1);
+        return;
+      }
     }
 
     // Save export options as defaults if requested (BACKLOG-1551). Non-blocking.
@@ -472,7 +481,7 @@ function ExportModal({
   // "Done" on the success screen. If the transaction can still be closed, surface
   // the "mark as closed?" prompt (step 4); otherwise finish the flow.
   const handleDismissSuccess = () => {
-    if (transaction.status === "closed") {
+    if (transaction.status === "closed" || datesLockedTooltip) {
       onExportComplete({ success: true, path: exportedPath });
     } else {
       setStep(4);
@@ -593,6 +602,7 @@ function ExportModal({
               onDateChange={setDate}
               commission={commission}
               commissionRoute="export"
+              lockedTooltip={datesLockedTooltip}
               headerAction={
                 hasSavedDefaults ? (
                   <div className="flex gap-2">

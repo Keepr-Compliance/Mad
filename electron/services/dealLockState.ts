@@ -10,12 +10,17 @@
  * locked deal (2026-10-11): a locked deal is fully read-only. Both lock reasons
  * refuse adding or removing a contact, attaching or removing emails and texts,
  * restoring a removed item, and approving or rejecting a Needs Review item.
+ * Slice d (founder 2026-10-12): also every checklist edit (add or take off a
+ * checklist, tick, note, link or unlink evidence, include outside the dates)
+ * and every deal-detail edit through `transactions:update`.
  */
 import { dbGet } from "./db/core/dbConnection";
 import {
   TRANSACTION_SUBMISSION_STATUS_SQL,
   COMMUNICATION_TRANSACTION_ID_SQL,
   MESSAGE_TRANSACTION_ID_SQL,
+  CHECKLIST_ITEM_TRANSACTION_ID_SQL,
+  CHECKLIST_LINK_TRANSACTION_ID_SQL,
 } from "./db/core/transactionEligibilitySql";
 import { dealLockReason, type DealLockReason } from "./transactionEligibility";
 
@@ -38,7 +43,16 @@ export type DealLockedEdit =
   | "approve-review"
   | "reject-review"
   | "hide-text"
-  | "unhide-text";
+  | "unhide-text"
+  // Slice d (founder 2026-10-12): checklists and deal details.
+  | "add-checklist"
+  | "take-off-checklist"
+  | "tick-checklist-item"
+  | "edit-checklist-note"
+  | "link-checklist-item"
+  | "unlink-checklist-item"
+  | "include-outside-dates"
+  | "edit-deal-details";
 
 const REFUSAL_TEXT: Readonly<Record<DealLockReason, string>> = {
   submitted: "This deal is with your broker for review, so it can't be changed until it's returned to you.",
@@ -87,4 +101,16 @@ export function getMessageTransactionIds(messageIds: readonly string[]): string[
     if (row?.transaction_id) out.push(row.transaction_id);
   }
   return out;
+}
+
+/** BACKLOG-3910 (slice d): the deal a checklist item belongs to, or null. */
+export function getChecklistItemTransactionId(itemId: string): string | null {
+  const row = dbGet<{ transaction_id: string | null }>(CHECKLIST_ITEM_TRANSACTION_ID_SQL, [itemId]);
+  return row?.transaction_id ?? null;
+}
+
+/** BACKLOG-3910 (slice d): the deal a checklist evidence group belongs to, or null. */
+export function getChecklistLinkTransactionId(linkId: string): string | null {
+  const row = dbGet<{ transaction_id: string | null }>(CHECKLIST_LINK_TRANSACTION_ID_SQL, [linkId]);
+  return row?.transaction_id ?? null;
 }

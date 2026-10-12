@@ -266,6 +266,9 @@ describe("BACKLOG-3595: broker-added checklist appears in an open transaction", 
   });
 
   it("P3: an unsaved note draft survives the refresh", async () => {
+    // BACKLOG-3910 slice d: a submitted deal's checklist is read-only (no
+    // Add note), so the draft is written on a deal the broker has returned.
+    serverRows.set(TXN_A, txn(TXN_A, ADDR_A, "needs_changes"));
     await openDetails(ADDR_A);
     await openChecklistTab();
     fireEvent.click(screen.getByTestId(`checklist-add-note-${NOTE_ITEM.id}`));
@@ -311,6 +314,9 @@ describe("BACKLOG-3595: broker-added checklist appears in an open transaction", 
   });
 
   it("P7: a failed background re-read keeps the open checklist and the draft", async () => {
+    // BACKLOG-3910 slice d: a submitted deal's checklist is read-only (no
+    // Add note), so the draft is written on a deal the broker has returned.
+    serverRows.set(TXN_A, txn(TXN_A, ADDR_A, "needs_changes"));
     await openDetails(ADDR_A);
     await openChecklistTab();
     fireEvent.click(screen.getByTestId(`checklist-add-note-${NOTE_ITEM.id}`));
@@ -390,6 +396,9 @@ describe("BACKLOG-3595: broker-added checklist appears in an open transaction", 
   });
 
   it("C4: checklists-changed keeps an unsaved note draft, and a failed read keeps the checklist", async () => {
+    // BACKLOG-3910 slice d: a submitted deal's checklist is read-only (no
+    // Add note), so the draft is written on a deal the broker has returned.
+    serverRows.set(TXN_A, txn(TXN_A, ADDR_A, "needs_changes"));
     await openDetails(ADDR_A);
     await openChecklistTab();
     fireEvent.click(screen.getByTestId(`checklist-add-note-${NOTE_ITEM.id}`));
@@ -446,7 +455,8 @@ describe("BACKLOG-3595: broker-added checklist appears in an open transaction", 
     const all = fixtureAttachments();
     const [inside, outside] = [all[0], all[1]];
     serverRows.set(TXN_A, {
-      ...txn(TXN_A, ADDR_A, "submitted"),
+      // BACKLOG-3910 slice d: Link is offered only on an open deal.
+      ...txn(TXN_A, ADDR_A, "needs_changes"),
       started_at: "2026-09-01",
       closed_at: "2026-09-30",
     } as unknown as Transaction);

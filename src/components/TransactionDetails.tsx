@@ -1629,6 +1629,7 @@ function TransactionDetails({
               onShowSuccess={showSuccess}
               onShowError={showError}
               nameMap={emailNameMap}
+              lockedTooltip={editLockedTooltip}
             />
           )}
         </div>

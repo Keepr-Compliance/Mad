@@ -371,8 +371,11 @@ export function TransactionDetailsTab({
           {onEdit && (
             <button
               onClick={onEdit}
-              className="flex items-center gap-2 p-1.5 sm:px-3 sm:py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors"
-              title="Edit Summary"
+              // BACKLOG-3910 (slice d): a locked deal's details are read-only.
+              disabled={!!editLockedTooltip}
+              className="flex items-center gap-2 p-1.5 sm:px-3 sm:py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              title={editLockedTooltip ?? "Edit Summary"}
+              data-testid="edit-summary-button"
             >
               <svg
                 className="w-4 h-4"

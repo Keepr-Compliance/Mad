@@ -93,6 +93,13 @@ jest.mock("../../services/logService", () => ({
   },
 }));
 
+// BACKLOG-3910 slice d: transactions:update reads the deal's lock first. No row
+// (undefined) is an open deal, which is what this suite's deal is.
+jest.mock("../../services/db/core/dbConnection", () => ({
+  dbGet: jest.fn(() => undefined),
+  dbAll: jest.fn(() => []),
+  dbRun: jest.fn(),
+}));
 jest.mock("../../services/emailSyncService", () => ({ __esModule: true, default: {} }));
 jest.mock("../../services/databaseService", () => ({ __esModule: true, default: {} }));
 

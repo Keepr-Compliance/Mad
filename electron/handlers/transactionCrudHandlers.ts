@@ -529,6 +529,11 @@ export function registerTransactionCrudHandlers(
           "transactionId",
         );
       }
+      // BACKLOG-3910 (slice d, founder 2026-10-12): a locked deal is read-only,
+      // every field included (audit dates, address, price, status).
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId, "edit-deal-details");
+      if (lockedRefusal) return lockedRefusal;
+
       const sanitizedUpdates = sanitizeObject(updates || {});
       const validatedUpdates = validateTransactionData(
         sanitizedUpdates,
