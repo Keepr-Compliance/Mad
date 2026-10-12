@@ -92,7 +92,7 @@ import { planEmailWrites, computeLegacyContentKey, type ExistingByMessageId } fr
 import {
   buildEmailForceSet,
   emailForceStagingLifecycle,
-  restrictForceSetToRebuiltProviders,
+  providersNotRebuilt,
   sweepStaleEmailStaging,
   swapEmailStagingIntoLive,
   type EmailForceProvider,
@@ -210,6 +210,30 @@ export const SENT_ITEMS_SAFETY_CAP = 200;
 /**
  * Search parameters passed from the get-unlinked-emails handler.
  */
+/**
+ * BACKLOG-2856 / 3910a: what a committed force swap did. See
+ * `EmailForceSwapCounts` in `emailForceStaging.ts` for the kept buckets.
+ */
+export interface ForceSwapResult {
+  emailsDeleted: number;
+  emailsInserted: number;
+  emailsRefreshed: number;
+  emailsKeptLocked: number;
+  emailsKeptNoCopy: number;
+  participantsInserted: number;
+  providers: EmailForceProvider[];
+}
+
+/** BACKLOG-3910a: why a force run applied nothing — one entry per unfinished mailbox. */
+export interface ForceNotApplied {
+  mailboxes: Array<{
+    provider: EmailForceProvider;
+    /** The mailbox address, or "Outlook" / "Gmail" when none is stored. */
+    mailbox: string;
+    tokenExpired: boolean;
+  }>;
+}
+
 export interface EmailSearchParams {
   query: string;
   after: Date | null;
@@ -607,8 +631,9 @@ async function fetchStoreAndDedup(params: {
   // every re-fetched row would match, be classified an already-cached duplicate,
   // and never be staged — staging would finish empty and the swap would delete
   // the user's corpus and put nothing back. `db/emailForceSetSql.ts`'s
-  // `emailForceReadView` substitutes
-  // "rows the swap will keep ∪ rows staged so far" for the table name.
+  // `emailForceReadView` substitutes "other users' rows ∪ rows staged so far"
+  // for the table name (BACKLOG-3910a: every live row of this user is hidden,
+  // so every fetched message is staged and the swap decides per row).
   // BACKLOG-2989 chunk 4: what crosses into db/ is a DISCRIMINATED TARGET
   // carrying the branded staging names, never a pre-quoted identifier. The
   // previous `force ? `"${force.emailsTable}"` : "emails"` destroyed the
@@ -2059,12 +2084,14 @@ class EmailSyncService {
      */
     cancelled?: boolean;
     /** BACKLOG-2856: present only on a force run that reached the swap. */
-    forceSwap?: {
-      emailsDeleted: number;
-      emailsInserted: number;
-      participantsInserted: number;
-      providers: EmailForceProvider[];
-    };
+    forceSwap?: ForceSwapResult;
+    /**
+     * BACKLOG-3910a: a force run that applied NOTHING because a connected
+     * mailbox did not finish its fetch. Names each such mailbox and whether its
+     * failure was an expired token, so the UI can say which mailbox and what
+     * to do next. Always accompanied by `error`.
+     */
+    forceNotApplied?: ForceNotApplied;
     // BACKLOG-2127: set ONLY for auth-class (token expiry) failures so the
     // sync UI can surface a reconnect prompt instead of a green "0 new".
     // Transient/network failures leave this undefined so the sync still
@@ -2174,12 +2201,7 @@ class EmailSyncService {
     const failedPrecacheProviders = new Set<EmailForceProvider>();
 
     let forceStaging: EmailForceStaging | null = null;
-    let forceSwap: {
-      emailsDeleted: number;
-      emailsInserted: number;
-      participantsInserted: number;
-      providers: EmailForceProvider[];
-    } | undefined;
+    let forceSwap: ForceSwapResult | undefined;
     try {
     logService.info("Starting email pre-cache", "EmailSyncService", { userId, force: isForce });
 
@@ -2388,6 +2410,9 @@ class EmailSyncService {
     let providerError:
       | { provider: "microsoft" | "google"; message: string; tokenExpired: boolean }
       | undefined;
+    // BACKLOG-3910a: every provider whose failure was a token expiry —
+    // `providerError` records only the first.
+    const tokenExpiredProviders = new Set<EmailForceProvider>();
 
     // Check which providers are connected
     const googleToken = await databaseService.getOAuthToken(userId, "google", "mailbox");
@@ -2399,30 +2424,29 @@ class EmailSyncService {
     }
 
     // BACKLOG-2856: providers this run COULD rebuild, from the connected tokens.
-    // The force set starts optimistic — every connected provider — so the
-    // rebuild's dedup reads treat those rows as "about to be replaced" and stage
-    // their re-fetched copies. It is narrowed to the providers that actually
-    // finished, immediately before the swap.
+    // BACKLOG-3910a: a force run is applied only when every one of them
+    // finished (`providersNotRebuilt`, immediately before the swap).
     const connectedProviders: EmailForceProvider[] = [
       ...(microsoftToken ? (["outlook"] as const) : []),
       ...(googleToken ? (["gmail"] as const) : []),
     ];
     // BACKLOG-2960: the timing line reports the providers this run WORKED, which
-    // is the connected set — not `rebuiltProviders`, which is narrowed to the
+    // is the connected set — not `rebuiltProviders`, which holds only the
     // ones that finished. A duration is spent on every provider the run tried,
     // including one that failed halfway, so the connected set is what makes two
     // measurements comparable.
     //
     // COPIED, not aliased. `connectedProviders` is not mutated anywhere today
     // (checked: its five references are all reads), but `rebuiltProviders` two
-    // lines below IS mutated in place and holds the narrowed set — so an edit
+    // lines below IS mutated in place and holds the finished set — so an edit
     // that ever narrowed this array instead would silently change what the
     // timing line means, with no test to catch it. The copy costs nothing and
     // makes the snapshot the intent rather than a coincidence.
     timedProviders = [...connectedProviders];
     // A provider joins this only when its ENTIRE fetch succeeded — the inbox
-    // round AND the all-folders/all-labels round. A partial fetch must not
-    // delete that provider's live rows; see `restrictForceSetToRebuiltProviders`.
+    // round AND the all-folders/all-labels round. A force run with any
+    // connected provider missing from this applies nothing; see
+    // `providersNotRebuilt`.
     const rebuiltProviders: EmailForceProvider[] = [];
 
     if (isForce) {
@@ -2435,11 +2459,7 @@ class EmailSyncService {
       }
       forceStaging = emailForceStagingLifecycle.create(db, {
         userId,
-        forceSet: buildEmailForceSet({
-          userId,
-          providers: connectedProviders,
-          cacheSinceIso: cacheSinceDate.toISOString(),
-        }),
+        forceSet: buildEmailForceSet({ userId }),
       });
       logService.info("Email force re-cache staging created", "EmailSyncService", {
         userId,
@@ -2638,6 +2658,8 @@ class EmailSyncService {
         // BACKLOG-2127: surface auth-class (expired/revoked token) failures so
         // the sync UI can prompt a reconnect. Transient/network errors are left
         // unrecorded so the sync still completes green (AC).
+        // BACKLOG-3910a: per provider, for the all-or-nothing message.
+        if (isTokenExpiryError(outlookError)) tokenExpiredProviders.add("outlook");
         if (isTokenExpiryError(outlookError)) {
           providerError = {
             provider: "microsoft",
@@ -2809,6 +2831,8 @@ class EmailSyncService {
           error: gmailError instanceof Error ? gmailError.message : "Unknown",
         });
         // BACKLOG-2127: surface auth-class Gmail failures symmetrically.
+        // BACKLOG-3910a: per provider, for the all-or-nothing message.
+        if (isTokenExpiryError(gmailError)) tokenExpiredProviders.add("gmail");
         if (isTokenExpiryError(gmailError) && !providerError) {
           providerError = {
             provider: "google",
@@ -2928,6 +2952,8 @@ class EmailSyncService {
           logService.warn("Outlook window backfill failed", "EmailSyncService", {
             error: outlookError instanceof Error ? outlookError.message : "Unknown",
           });
+          // BACKLOG-3910a: per provider, for the all-or-nothing message.
+          if (isTokenExpiryError(outlookError)) tokenExpiredProviders.add("outlook");
           if (isTokenExpiryError(outlookError) && !providerError) {
             providerError = {
               provider: "microsoft",
@@ -2995,6 +3021,8 @@ class EmailSyncService {
           logService.warn("Gmail window backfill failed", "EmailSyncService", {
             error: gmailError instanceof Error ? gmailError.message : "Unknown",
           });
+          // BACKLOG-3910a: per provider, for the all-or-nothing message.
+          if (isTokenExpiryError(gmailError)) tokenExpiredProviders.add("gmail");
           if (isTokenExpiryError(gmailError) && !providerError) {
             providerError = {
               provider: "google",
@@ -3070,32 +3098,43 @@ class EmailSyncService {
         percent: EMAIL_PRECACHE_PERCENT.SWAPPING,
       });
 
-      const db = getRawDatabase();
-      const restricted = restrictForceSetToRebuiltProviders(
-        db,
-        forceStaging,
-        rebuiltProviders,
-        cacheSinceDate.toISOString(),
-      );
-
-      if (!restricted) {
-        // No provider finished a rebuild, so there is nothing to put back and a
-        // swap would be a pure deletion. Reported as an error rather than a
-        // green "0 re-cached", which is the BACKLOG-2127 lesson: a run that
-        // achieved nothing must not look like a run that found nothing to do.
-        logService.warn("Email force re-cache: no provider rebuilt, skipping swap", "EmailSyncService", {
+      // BACKLOG-3910a, SR decision 5: ALL OR NOTHING. The removal is every
+      // unprotected email of the user, not one mailbox's, so applying a run in
+      // which a connected mailbox stopped part-way would remove that mailbox's
+      // mail and put nothing back. "Nothing changed" is the safe failure.
+      // Synchronous from the 3903 gate above to the swap below: no await.
+      const notRebuilt = providersNotRebuilt(connectedProviders, rebuiltProviders);
+      if (notRebuilt.length > 0) {
+        const forceNotApplied: ForceNotApplied = {
+          mailboxes: notRebuilt.map((provider) => {
+            const token = provider === "outlook" ? microsoftToken : googleToken;
+            return {
+              provider,
+              mailbox:
+                token?.connected_email_address ??
+                (provider === "outlook" ? "Outlook" : "Gmail"),
+              tokenExpired: tokenExpiredProviders.has(provider),
+            };
+          }),
+        };
+        logService.warn("Email force re-cache: a connected mailbox did not finish, nothing applied", "EmailSyncService", {
           userId,
           connectedProviders,
+          notRebuilt,
         });
         this.lastPrecacheCompletedAt = Date.now();
         return {
           fetched: totalFetched,
           stored: totalStored,
           providerError,
-          error: "Re-cache could not complete for any connected mailbox. Nothing was changed.",
+          forceNotApplied,
+          error: `Re-cache could not finish for ${forceNotApplied.mailboxes
+            .map((m) => m.mailbox)
+            .join(" and ")}. Nothing was changed.`,
         };
       }
 
+      const db = getRawDatabase();
       // The swap either happens completely or not at all, so a throw here means
       // the user's mail is exactly as it was. Reported as a structured error
       // rather than allowed to propagate: the caller cannot distinguish a thrown
@@ -3124,6 +3163,9 @@ class EmailSyncService {
       forceSwap = {
         emailsDeleted: counts.emailsDeleted,
         emailsInserted: counts.emailsInserted,
+        emailsRefreshed: counts.emailsRefreshed,
+        emailsKeptLocked: counts.emailsKeptLocked,
+        emailsKeptNoCopy: counts.emailsKeptNoCopy,
         participantsInserted: counts.participantsInserted,
         providers: [...rebuiltProviders],
       };

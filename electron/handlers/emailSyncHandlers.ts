@@ -545,6 +545,9 @@ export function registerEmailSyncHandlers(
           success: false,
           error: result.error,
           ...(result.providerError ? { providerError: result.providerError } : {}),
+          // BACKLOG-3910a: which mailbox stopped a force run, and whether its
+          // token expired — the renderer words the next step from this.
+          ...(result.forceNotApplied ? { forceNotApplied: result.forceNotApplied } : {}),
           emailsFetched: result.fetched,
           emailsStored: result.stored,
         };
