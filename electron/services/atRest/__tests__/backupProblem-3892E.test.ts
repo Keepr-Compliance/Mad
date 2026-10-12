@@ -8,6 +8,8 @@ import * as Sentry from "@sentry/electron/main";
 import {
   BACKUP_DAMAGED_QUARANTINED_MESSAGE,
   BACKUP_DAMAGED_RETRY_MESSAGE,
+  BACKUP_KEY_MISSING_QUARANTINED_MESSAGE,
+  BACKUP_KEY_MISSING_RETRY_MESSAGE,
   backupProblemForRefusal,
   unreadableKind,
 } from "../backupProblem";
@@ -47,6 +49,17 @@ describe("the lines (founder sentence + the next step already shipped)", () => {
     );
     expect(BACKUP_DAMAGED_RETRY_MESSAGE).toBe(
       "Your saved iPhone backup is damaged. Select Try Again: Keepr will make a fresh full backup, which takes longer.",
+    );
+  });
+});
+
+describe("the key-missing lines (founder sentence 2026-10-12 + the same next step)", () => {
+  it("are exactly these", () => {
+    expect(BACKUP_KEY_MISSING_QUARANTINED_MESSAGE).toBe(
+      "Keepr cannot decrypt your saved iPhone backup on this computer. Keepr will make a fresh full backup, which takes longer.",
+    );
+    expect(BACKUP_KEY_MISSING_RETRY_MESSAGE).toBe(
+      "Keepr cannot decrypt your saved iPhone backup on this computer. Select Try Again: Keepr will make a fresh full backup, which takes longer.",
     );
   });
 });

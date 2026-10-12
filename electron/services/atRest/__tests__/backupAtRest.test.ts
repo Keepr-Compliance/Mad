@@ -26,9 +26,8 @@ import path from "path";
 import plist from "simple-plist";
 
 import { ADDRESS_BOOK_FILE_ID, SMS_DB_FILE_ID } from "../../backupDecryptionService";
+import { BACKUP_KEY_MISSING_RETRY_MESSAGE } from "../backupProblem";
 import {
-  BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE,
-  BACKUP_AT_REST_QUARANTINED_MESSAGE,
   BackupAtRest,
   BackupAtRestRefusal,
   DELTA_UNSEAL_FILES,
@@ -1062,11 +1061,6 @@ describe("B2: unreadable kept backup → quarantine + full backup", () => {
     expect(fs.existsSync(young)).toBe(true);
   });
 
-  it("the plain sentence the user is shown", () => {
-    expect(BACKUP_AT_REST_QUARANTINED_MESSAGE).toBe(
-      "Keepr couldn't read the saved iPhone backup, so it will make a fresh full backup — this takes longer.",
-    );
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2082,7 +2076,7 @@ describe("audit G2: under C-DELTA a damaged sealed file the sync reads no longer
     await s.finishSync(second);
   });
 
-  it("BACKLOG-3892 E: sms.db whose key this computer does not hold (KEY_MISSING only) keeps the old Try Again message, not \"damaged\"", async () => {
+  it("BACKLOG-3892 E: sms.db whose key this computer does not hold (KEY_MISSING only) says Keepr cannot decrypt it on this computer, not \"damaged\"", async () => {
     makeChain();
     expect(await service().migrate(UDID)).toBe("encrypted");
     const keyGone = createFileCrypto(
@@ -2105,7 +2099,10 @@ describe("audit G2: under C-DELTA a damaged sealed file the sync reads no longer
       (e: unknown) => e,
     );
     expect(refusal).toBeInstanceOf(BackupAtRestRefusal);
-    expect((refusal as BackupAtRestRefusal).message).toBe(BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE);
+    expect((refusal as BackupAtRestRefusal).message).toBe(BACKUP_KEY_MISSING_RETRY_MESSAGE);
+    expect((refusal as BackupAtRestRefusal).message).toBe(
+      "Keepr cannot decrypt your saved iPhone backup on this computer. Select Try Again: Keepr will make a fresh full backup, which takes longer.",
+    );
     expect((refusal as BackupAtRestRefusal).problem).toBe("key-missing");
     await s.finishSync(first);
   });

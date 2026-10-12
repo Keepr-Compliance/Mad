@@ -7,13 +7,12 @@
  * today (the tail of the C-DELTA retry message), so no new wording is introduced.
  *
  * "Damaged" means a sealed file failed authentication (INTEGRITY). A file whose key
- * this computer does not hold (KEY_MISSING alone) is not called damaged: it keeps the
- * messages it had before. A transient failure (a lock, EIO, no space) is never damaged.
+ * this computer does not hold (KEY_MISSING alone) reads "Keepr cannot decrypt your saved
+ * iPhone backup on this computer." (founder-approved 2026-10-12), with the same next step. A transient failure (a lock, EIO, no space) is never damaged.
  *
- * The other two approved sentences are not used here: "can't be opened. Check the
- * backup password." has no producer since BACKLOG-3881 (no password is ever asked
- * for), and "no longer on this computer" is not an error during a sync (a missing
- * backup means a full backup). See pm_comments on BACKLOG-3892.
+ * Retired by the founder (2026-10-12): the "can't be opened. Check the backup password."
+ * line (no password is ever asked for). "No longer on this computer" is not an error
+ * during a sync (a missing backup means a full backup). See pm_comments on BACKLOG-3892.
  */
 export const BACKUP_DAMAGED_SENTENCE = "Your saved iPhone backup is damaged.";
 const FRESH_FULL_BACKUP_SENTENCE = "Keepr will make a fresh full backup, which takes longer.";
@@ -24,6 +23,12 @@ export const BACKUP_DAMAGED_QUARANTINED_MESSAGE = `${BACKUP_DAMAGED_SENTENCE} ${
 export const BACKUP_DAMAGED_RETRY_MESSAGE = `${BACKUP_DAMAGED_SENTENCE} Select Try Again: ${FRESH_FULL_BACKUP_SENTENCE}`;
 
 /** The timeline / sync_outcomes reason_code for a sync stopped by a damaged backup. */
+export const BACKUP_KEY_MISSING_SENTENCE = "Keepr cannot decrypt your saved iPhone backup on this computer.";
+/** Status line while a sync moves a backup whose key is not on this computer aside. */
+export const BACKUP_KEY_MISSING_QUARANTINED_MESSAGE = `${BACKUP_KEY_MISSING_SENTENCE} ${FRESH_FULL_BACKUP_SENTENCE}`;
+/** A C-DELTA sync stopped because the messages or contacts database cannot be decrypted here. */
+export const BACKUP_KEY_MISSING_RETRY_MESSAGE = `${BACKUP_KEY_MISSING_SENTENCE} Select Try Again: ${FRESH_FULL_BACKUP_SENTENCE}`;
+
 export const BACKUP_DAMAGED_REASON = "BACKUP_DAMAGED";
 
 /** Why a kept file could not be opened, when no retry can fix it. */

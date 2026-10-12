@@ -315,3 +315,35 @@ describe("per-chat widening for deals (SR 2026-10-02)", () => {
     expect(gm((await checkExportCompleteness("t-jan", USER)).sourceGaps)).toEqual([]);
   });
 });
+
+describe("delta read of a covered deal chat (BACKLOG-3892 E, SR review)", () => {
+  // The deal chat was already read back to its deal start (coverage = January), so it is
+  // not widened this run; the page stops short of its floor. The chat's read floor is its
+  // own, so the commit must not report "only returned texts back to <date>" after a routine
+  // Sync. Mutation: noteCacheChatRead falling back to the chat floor for the read floor.
+  for (const fullRead of [false, true]) {
+    it(`fullRead=${fullRead}: no only-back-to date, coverage unchanged`, async () => {
+      recordChatCoverage(USER, HASH_A, JANUARY_ISO);
+      const chatFloors = track({ fullRead });
+      expect(cacheChatFloorFor(JOB, USER, "conv-a", pplA.numbers)).toBeNull();
+      expect(chatFloors.get(HASH_A)).toBe(JANUARY);
+      staging.stageChat(JOB, USER, chat("conv-a", false), pplA, HASH_A);
+      noteCacheChatRead(JOB, pplA.numbers, false);
+      takeCacheChats(JOB);
+      const r = await commitCacheStaging(
+        JOB,
+        USER,
+        { floorMs: SETTINGS_FLOOR, cap: null, protectedSpans: [], chatFloorsMs: chatFloors },
+        { fullRead, floorISO: SETTINGS_FLOOR_ISO },
+        {
+          complete: true,
+          startedAt: "2026-10-01T00:00:00.000Z",
+          snapshot: { state: "finished", jobId: JOB, listStop: "since", progress: { notChecked: 0 }, notReached: [] },
+        },
+      );
+      expect(threadRows(HASH_A)).toContain("2026-02-01T10:00:00.000Z");
+      expect(r.onlyBackToMs).toBeUndefined();
+      expect(getChatCoverage(USER).get(HASH_A)).toBe(JANUARY_ISO);
+    });
+  }
+});

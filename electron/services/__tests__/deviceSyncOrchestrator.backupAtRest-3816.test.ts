@@ -117,7 +117,6 @@ import { BackupService, classifyBackupFailure } from "../backupService";
 import { DeviceSyncOrchestrator } from "../deviceSyncOrchestrator";
 import * as Sentry from "@sentry/electron/main";
 import {
-  BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE,
   BackupAtRest,
   BackupAtRestRefusal,
   BACKUP_SECURING_SENTENCE,
@@ -129,7 +128,7 @@ import { createMarkerStore } from "../atRest/markers";
 import { setBackupIndexKeysForTests } from "../atRest/backupIndexFiles";
 import { syncTimeline } from "../syncTimeline";
 import { backupEncryptionMetrics } from "../syncOutcomeSupabase";
-import { BACKUP_DAMAGED_QUARANTINED_MESSAGE, BACKUP_DAMAGED_RETRY_MESSAGE } from "../atRest/backupProblem";
+import { BACKUP_DAMAGED_QUARANTINED_MESSAGE, BACKUP_DAMAGED_RETRY_MESSAGE, BACKUP_KEY_MISSING_QUARANTINED_MESSAGE, BACKUP_KEY_MISSING_RETRY_MESSAGE } from "../atRest/backupProblem";
 
 /** BACKLOG-3892 E: the backup-problem events sent to Sentry (other captureMessage calls left out). */
 function backupProblemEvents(): unknown[][] {
@@ -991,7 +990,7 @@ describe("BACKLOG-3892 E — a C-DELTA parse copy refused by the at-rest layer",
   }
   it.each([
     ["damaged", BACKUP_DAMAGED_RETRY_MESSAGE, "BACKUP_DAMAGED", "damaged"],
-    ["key-missing", BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE, "unreadable", "key-missing"],
+    ["key-missing", BACKUP_KEY_MISSING_RETRY_MESSAGE, "unreadable", "key-missing"],
   ] as const)("%s: the user sees its line, the row records it, Sentry gets one event", async (problem, message, reasonCode, sentryReason) => {
     atRest = deltaAtRest();
     jest.spyOn(atRest, "buildParseCopy").mockRejectedValue(new BackupAtRestRefusal("unreadable", message, problem));
@@ -1267,6 +1266,32 @@ describe("B2 — an unreadable kept backup no longer ends iPhone sync", () => {
     const quarantined = fsSync.readdirSync(path.join(backups, QUARANTINE_DIR_NAME));
     expect(quarantined).toHaveLength(1);
     expect(quarantined[0].startsWith(`${UDID}-`)).toBe(true);
+    await o.completeBackupAtRest();
+    await sealedAfter(o);
+  });
+
+  it("BACKLOG-3892 E: a key this computer does not hold reads \"cannot decrypt\", not damaged", async () => {
+    // Shape of the producer's answer: backupAtRest.test.ts "a data key that is no longer held (KEY_MISSING)".
+    jest.spyOn(atRest, "beginSync").mockResolvedValueOnce({
+      kind: "first",
+      udid: UDID,
+      quarantined: { reasonCode: "KEY_MISSING", kind: "key-missing" },
+    } as Awaited<ReturnType<typeof atRest.beginSync>>);
+    const o = newOrchestrator();
+    const messages: string[] = [];
+    o.on("progress", (p: { message: string }) => messages.push(p.message));
+    startBackup.mockImplementation(async () => {
+      makeChain();
+      return ok({ isIncremental: false });
+    });
+    const result = await o.sync({ udid: UDID });
+    expect(result.success).toBe(true);
+    expect(messages).toContain(BACKUP_KEY_MISSING_QUARANTINED_MESSAGE);
+    expect(messages).not.toContain(BACKUP_DAMAGED_QUARANTINED_MESSAGE);
+    expect(BACKUP_KEY_MISSING_QUARANTINED_MESSAGE).toBe(
+      "Keepr cannot decrypt your saved iPhone backup on this computer. Keepr will make a fresh full backup, which takes longer.",
+    );
+    expect(backupProblemEvents()).toEqual([backupProblemEvent("key-missing")]);
     await o.completeBackupAtRest();
     await sealedAfter(o);
   });

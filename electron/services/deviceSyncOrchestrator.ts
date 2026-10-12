@@ -38,7 +38,6 @@ import {
 } from "./toolStartHold";
 import { BackupDecryptionService } from "./backupDecryptionService";
 import {
-  BACKUP_AT_REST_QUARANTINED_MESSAGE,
   BackupAtRestRefusal,
   FORCE_FULL_REASON_DELTA_TOOL_FAILED,
   describeBackupAtRestProgress,
@@ -50,6 +49,7 @@ import {
 import {
   BACKUP_DAMAGED_QUARANTINED_MESSAGE,
   BACKUP_DAMAGED_REASON,
+  BACKUP_KEY_MISSING_QUARANTINED_MESSAGE,
   backupProblemForRefusal,
   type UnreadableKind,
 } from "./atRest/backupProblem";
@@ -2537,9 +2537,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       phase: "backup",
       phaseProgress: 0,
       overallProgress: 0,
-      // A file that fails authentication is damaged (founder wording); a key this
-      // computer does not hold keeps the message it had.
-      message: kind === "damaged" ? BACKUP_DAMAGED_QUARANTINED_MESSAGE : BACKUP_AT_REST_QUARANTINED_MESSAGE,
+      // A file that fails authentication is damaged; a key this computer does not hold
+      // reads "cannot decrypt ... on this computer" (founder wording, 2026-10-12).
+      message: kind === "damaged" ? BACKUP_DAMAGED_QUARANTINED_MESSAGE : BACKUP_KEY_MISSING_QUARANTINED_MESSAGE,
     });
   }
 

@@ -76,7 +76,7 @@ import { BACKUP_ROOT_PLISTS, openBackupIndexBytes } from "./backupIndexFiles";
 import { createMarkerStore, MARKER_DIR_NAME, type BackupAtRestState, type MarkerStore } from "./markers";
 import type { FileOutcome, SealEngineOptions, SealMode } from "./sealEngine";
 import { defaultSealWorkers, runPass, type PassFile } from "./sealPool";
-import { BACKUP_DAMAGED_RETRY_MESSAGE, unreadableKind, type UnreadableKind } from "./backupProblem";
+import { BACKUP_DAMAGED_RETRY_MESSAGE, BACKUP_KEY_MISSING_RETRY_MESSAGE, unreadableKind, type UnreadableKind } from "./backupProblem";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -144,16 +144,6 @@ export const BACKUP_AT_REST_DISK_MESSAGE =
   "There is not enough free disk space to prepare your saved iPhone backup for this sync. Free up some space and try again.";
 export const BACKUP_AT_REST_UNREADABLE_MESSAGE =
   "Part of your saved iPhone backup could not be opened, so this sync was stopped before it changed anything.";
-/** B2: a sealed backup that fails authentication was moved aside; this sync makes a full backup. */
-/**
- * G2: a sealed file this C-DELTA sync must read (the messages or contacts database) does
- * not open. The next sync unseals everything (C-FULL), finds it, moves the backup to
- * quarantine and makes a fresh full backup (B2) — so Try Again recovers.
- */
-export const BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE =
-  "Part of your saved iPhone backup could not be opened. Select Try Again: Keepr will make a fresh full backup, which takes longer.";
-export const BACKUP_AT_REST_QUARANTINED_MESSAGE =
-  "Keepr couldn't read the saved iPhone backup, so it will make a fresh full backup — this takes longer.";
 
 /**
  * B2 (founder D10, "quarantine unreadable data 30 days"): a kept chain with sealed files
@@ -2159,11 +2149,11 @@ export class BackupAtRest extends EventEmitter {
       // Without the messages or contacts database this sync has nothing to import.
       if (core) {
         // BACKLOG-3892 E: a file that fails authentication is damaged; a key this computer
-        // does not hold keeps the message it had.
+        // does not hold reads "cannot decrypt" (founder wording).
         const kind = unreadableKind([...unreadableCodes]);
         throw new BackupAtRestRefusal(
           "unreadable",
-          kind === "damaged" ? BACKUP_DAMAGED_RETRY_MESSAGE : BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE,
+          kind === "damaged" ? BACKUP_DAMAGED_RETRY_MESSAGE : BACKUP_KEY_MISSING_RETRY_MESSAGE,
           kind,
         );
       }
