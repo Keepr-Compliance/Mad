@@ -136,6 +136,12 @@ interface MacOSMessagesImportSettingsProps {
    * active import source (e.g. "…set to iPhone — switch to macOS above…").
    */
   disabledReason?: string;
+  /**
+   * BACKLOG-3892 (founder QA 2026-10-12): the shared "Import messages from"
+   * picker, rendered as a row of Import Preferences directly under "Maximum
+   * messages". Settings supplies it only while this panel is the live source.
+   */
+  lookbackPicker?: React.ReactNode;
 }
 
 /**
@@ -176,6 +182,7 @@ export function MacOSMessagesImportSettings({
   userId,
   enabled = true,
   disabledReason,
+  lookbackPicker,
 }: MacOSMessagesImportSettingsProps) {
   const { isMacOS } = usePlatform();
   const { queue, requestSync, markCancelRequested, getQueueItem } = useSyncOrchestrator();
@@ -2025,6 +2032,7 @@ export function MacOSMessagesImportSettings({
             <option value="unlimited">Unlimited</option>
           </select>
         </div>
+        {lookbackPicker}
 
         {/* Active filter / effective-window indicator (BACKLOG-2286)
             ────────────────────────────────────────────────────────────────

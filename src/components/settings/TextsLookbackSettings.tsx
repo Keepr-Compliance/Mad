@@ -16,10 +16,45 @@ export const TEXTS_LOOKBACK_HEADING = "How far back to import texts";
 
 interface TextsLookbackSettingsProps {
   userId: string;
+  /**
+   * BACKLOG-3892 (founder QA 2026-10-12): render as one row of the macOS
+   * panel's Import Preferences card, directly under "Maximum messages" —
+   * the same row shape as that control, no card and no heading of its own.
+   * Settings passes it only when that card is live (Mac, macOS Messages
+   * source); every other case keeps the standalone card.
+   */
+  embedded?: boolean;
 }
 
-export function TextsLookbackSettings({ userId }: TextsLookbackSettingsProps) {
+export function TextsLookbackSettings({ userId, embedded = false }: TextsLookbackSettingsProps) {
   const { months, settled, saveFailed, change } = useTextsLookback(userId);
+
+  const select = (
+    <LookbackMonthsSelect
+      value={months}
+      onChange={(v) => void change(v)}
+      disabled={!settled}
+      aria-label="Import messages from"
+      data-testid="texts-lookback-select"
+    />
+  );
+  const error = saveFailed && (
+    <p className="text-xs text-red-600 mt-2" role="alert" data-testid="texts-lookback-error">
+      Keepr could not save that.
+    </p>
+  );
+
+  if (embedded) {
+    return (
+      <div id={TEXTS_LOOKBACK_TARGET} className="mt-2" data-testid="texts-lookback">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-gray-600">Import messages from</span>
+          {select}
+        </div>
+        {error}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -30,19 +65,9 @@ export function TextsLookbackSettings({ userId }: TextsLookbackSettingsProps) {
       <p className="text-sm font-medium text-gray-900 mb-2">{TEXTS_LOOKBACK_HEADING}</p>
       <div className="flex items-center justify-between">
         <span className="text-xs text-gray-600">Import messages from</span>
-        <LookbackMonthsSelect
-          value={months}
-          onChange={(v) => void change(v)}
-          disabled={!settled}
-          aria-label="Import messages from"
-          data-testid="texts-lookback-select"
-        />
+        {select}
       </div>
-      {saveFailed && (
-        <p className="text-xs text-red-600 mt-2" role="alert" data-testid="texts-lookback-error">
-          Keepr could not save that.
-        </p>
-      )}
+      {error}
     </div>
   );
 }
