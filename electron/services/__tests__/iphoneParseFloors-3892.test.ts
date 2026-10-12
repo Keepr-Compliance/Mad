@@ -308,3 +308,33 @@ maybe("BACKLOG-3892 S1: iPhone parse floors (real sms.db)", () => {
     expect(r.readFailures).toBe(0);
   });
 });
+
+maybe("BACKLOG-3892 W3b: the phone's oldest text (real sms.db)", () => {
+  async function oldest(chats: SmsChatSpec[]): Promise<number | null> {
+    writeSmsDbFromSpec(Driver!, tmp, chats);
+    const parser = new iOSMessagesParser();
+    parser.open(tmp);
+    try {
+      return parser.getOldestMessageDateMs();
+    } finally {
+      parser.close();
+    }
+  }
+
+  it("is the oldest DATED text across every chat (undated rows ignored), in either unit", async () => {
+    expect(
+      await oldest([
+        { id: 1, identifier: OTHER_PHONE, members: [OTHER_PHONE], messages: [{ date: 0 }, { date: null }, { date: ns(F) }] },
+        { id: 2, identifier: DEAL_PHONE, members: [DEAL_PHONE], messages: [{ date: ns(D) }, { date: ns(F + DAY) }] },
+      ]),
+    ).toBe(D);
+    // A seconds-dated (pre-iOS 11) text is older than every nanosecond one.
+    expect(
+      await oldest([{ id: 1, identifier: OTHER_PHONE, members: [OTHER_PHONE], messages: [{ date: sec(D2) }, { date: ns(D) }] }]),
+    ).toBe(Math.floor(D2 / 1000) * 1000);
+  });
+
+  it("is null for a phone with no dated text", async () => {
+    expect(await oldest([{ id: 1, identifier: OTHER_PHONE, members: [OTHER_PHONE], messages: [{ date: 0 }] }])).toBeNull();
+  });
+});
