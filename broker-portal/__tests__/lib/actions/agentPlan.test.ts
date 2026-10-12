@@ -344,6 +344,22 @@ describe('Subscribe: what Stripe already has', () => {
     expect(calls('checkout.sessions.create')).toEqual([]);
   });
 
+  // SR round 1: C-LIVE sampled `active` only. The mirror is empty (webhook lag) and Stripe holds a plan in
+  // any of the five "already has a plan" statuses -> refused. A sweep, not a sample.
+  it.each(['active', 'trialing', 'past_due', 'unpaid', 'paused'])(
+    'C-LIVE sweep: real sub C with status %s [EDITED status] -> refused, no session, zero Stripe create calls',
+    async (status) => {
+      const page = clone(fx('subs-L3-C-active'));
+      expect(page.data[0].status).toBe('active'); // the captured status; the others are [EDITED]
+      page.data[0].status = status;
+      mockStripeImpl['subscriptions.list'] = lists([[page]]);
+      expect(await subscribe()).toEqual({ error: 'You already have a plan. Refresh the page to see it.' });
+      expect(calls('checkout.sessions.create')).toEqual([]);
+      expect(calls('customers.create')).toEqual([]);
+      expect(stripeOps().filter((o) => o.endsWith('.create'))).toEqual([]);
+    }
+  );
+
   it('C-PAGE (subscriptions): the active one is item 11, past the first page -> found, refused', async () => {
     const [p1, p2] = [fx('subs-L4-p1'), fx('subs-L4-p2')];
     expect([p1.data.length, p1.has_more, p1.data.every((s: Obj) => s.status === 'incomplete_expired')]).toEqual([10, true, true]);
@@ -395,6 +411,15 @@ describe('Subscribe: what Stripe already has', () => {
     expect(await subscribe()).toEqual({ redirect: S1.url });
     expect(calls('checkout.sessions.create')).toEqual([]);
     expect(calls('checkout.sessions.expire')).toEqual([[S0.id]]);
+  });
+
+  it('C-REUSE price: only the OLD-price session S0 is open, same interval -> expired, a new session created, never reused', async () => {
+    // [COMPOSED] a one-item listing holding only S0 (captured object: open, interval month, old price_id).
+    expect([S0.status, S0.metadata.interval, S0.metadata.price_id === PRICE.id]).toEqual(['open', 'month', false]);
+    mockStripeImpl['checkout.sessions.list'] = lists([[{ ...clone(EMPTY_LIST), url: '/v1/checkout/sessions', data: [clone(S0)] }]]);
+    expect(await subscribe()).toEqual({ redirect: 'https://checkout.stripe.com/c/pay/created' });
+    expect(calls('checkout.sessions.expire')).toEqual([[S0.id]]);
+    expect(calls('checkout.sessions.create')).toEqual([expectedCreate(S0.id)]);
   });
 
   it('C-ANCHOR (R3): newest Agent session expired, none open -> key anchored on it, not "none"', async () => {
