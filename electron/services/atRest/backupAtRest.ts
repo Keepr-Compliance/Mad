@@ -76,6 +76,7 @@ import { BACKUP_ROOT_PLISTS, openBackupIndexBytes } from "./backupIndexFiles";
 import { createMarkerStore, MARKER_DIR_NAME, type BackupAtRestState, type MarkerStore } from "./markers";
 import type { FileOutcome, SealEngineOptions, SealMode } from "./sealEngine";
 import { defaultSealWorkers, runPass, type PassFile } from "./sealPool";
+import { BACKUP_DAMAGED_RETRY_MESSAGE, BACKUP_KEY_MISSING_RETRY_MESSAGE, unreadableKind, type UnreadableKind } from "./backupProblem";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -143,16 +144,6 @@ export const BACKUP_AT_REST_DISK_MESSAGE =
   "There is not enough free disk space to prepare your saved iPhone backup for this sync. Free up some space and try again.";
 export const BACKUP_AT_REST_UNREADABLE_MESSAGE =
   "Part of your saved iPhone backup could not be opened, so this sync was stopped before it changed anything.";
-/** B2: a sealed backup that fails authentication was moved aside; this sync makes a full backup. */
-/**
- * G2: a sealed file this C-DELTA sync must read (the messages or contacts database) does
- * not open. The next sync unseals everything (C-FULL), finds it, moves the backup to
- * quarantine and makes a fresh full backup (B2) — so Try Again recovers.
- */
-export const BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE =
-  "Part of your saved iPhone backup could not be opened. Select Try Again: Keepr will make a fresh full backup, which takes longer.";
-export const BACKUP_AT_REST_QUARANTINED_MESSAGE =
-  "Keepr couldn't read the saved iPhone backup, so it will make a fresh full backup — this takes longer.";
 
 /**
  * B2 (founder D10, "quarantine unreadable data 30 days"): a kept chain with sealed files
@@ -311,13 +302,15 @@ export type BackupSyncSession =
   | { kind: "apple"; udid: string } // owner-encrypted chain: Apple encrypts, Keepr does not seal
   // no chain yet: sealed only once the first backup exists. `quarantined`: the kept chain
   // could not be read and was moved to Backups/.quarantine (B2) — this sync is a full backup.
-  | { kind: "first"; udid: string; quarantined?: { reasonCode: string } }
+  | { kind: "first"; udid: string; quarantined?: { reasonCode: string; kind: UnreadableKind } }
   | { kind: "keepr"; udid: string; strategy: BackupUnsealStrategy };
 
 export class BackupAtRestRefusal extends Error {
   constructor(
     readonly reason: "busy" | "key-unavailable" | "disk-space" | "unreadable" | "cancelled",
     message: string,
+    /** BACKLOG-3892 E: an `unreadable` refusal that no retry can fix, and why. */
+    readonly problem?: UnreadableKind,
   ) {
     super(message);
     this.name = "BackupAtRestRefusal";
@@ -1597,7 +1590,7 @@ export class BackupAtRest extends EventEmitter {
     this.log("warn", "[BackupAtRest] moved an unreadable backup to quarantine; this sync makes a full backup", {
       reasonCode,
     });
-    return { kind: "first", udid, quarantined: { reasonCode } };
+    return { kind: "first", udid, quarantined: { reasonCode, kind: unreadableKind(reasonCode.split("+")) } };
   }
 
   /**
@@ -2103,6 +2096,7 @@ export class BackupAtRest extends EventEmitter {
     // at it, so rethrowing failed EVERY sync. It is skipped and counted instead, and the
     // next sync is forced to C-FULL: that unseal finds it and quarantines the chain (B2).
     const unreadable: string[] = [];
+    const unreadableCodes = new Set<string>();
     // A plaintext file older than this sync's unseal time is neither this sync's delta nor
     // an index file Keepr unsealed: record it so the sync's end walks the whole chain.
     const since = this.syncUnsealedAt.get(udid);
@@ -2133,6 +2127,7 @@ export class BackupAtRest extends EventEmitter {
           }
           if (UNRECOVERABLE_CODES.has(errCode(error))) {
             unreadable.push(fileId);
+            unreadableCodes.add(errCode(error));
             await fs.promises.rm(dest, { force: true }).catch(() => undefined);
             return;
           }
@@ -2152,7 +2147,16 @@ export class BackupAtRest extends EventEmitter {
         messagesOrContacts: core,
       });
       // Without the messages or contacts database this sync has nothing to import.
-      if (core) throw new BackupAtRestRefusal("unreadable", BACKUP_AT_REST_DAMAGED_RETRY_MESSAGE);
+      if (core) {
+        // BACKLOG-3892 E: a file that fails authentication is damaged; a key this computer
+        // does not hold reads "cannot decrypt" (founder wording).
+        const kind = unreadableKind([...unreadableCodes]);
+        throw new BackupAtRestRefusal(
+          "unreadable",
+          kind === "damaged" ? BACKUP_DAMAGED_RETRY_MESSAGE : BACKUP_KEY_MISSING_RETRY_MESSAGE,
+          kind,
+        );
+      }
     }
     return { copied, missing, unreadable: unreadable.length };
   }

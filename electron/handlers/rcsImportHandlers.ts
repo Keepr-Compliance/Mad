@@ -84,6 +84,7 @@ import {
   type CacheEndSnapshot,
   consentIsCurrent,
   cacheSavedFromCommit,
+  chatOnlyBackToMs,
   consentToRecordOnSync,
   RCS_CONSENT_VERSION,
   cancelOnSessionChange,
@@ -525,11 +526,15 @@ export async function commitCacheStaging(
   const readNothing = !!run.snapshot && cacheRunReadNothing(run.snapshot);
   // Live (founder): counts only — how many chats recorded their coverage.
   let coverageRecorded = 0;
+  // BACKLOG-3892 E: the latest "only back to" date over the deal chats that came back short.
+  let onlyBackToMs: number | null = null;
   const r = await cacheStaging().commit(jobId, userId, limits, commitWriter, {
     // SR: a chat switched to Don't sync since it was read is not saved.
     chatExcluded: (u, hash, conversationId) => databaseService.checkRcsExclusion(u, hash, conversationId),
     perChat: (chat) => {
       if (cacheChatCommitted(userId, chat)) coverageRecorded += 1;
+      const short = chatOnlyBackToMs(chat.meta, chat.oldestKeptMs);
+      if (short !== null && (onlyBackToMs === null || short > onlyBackToMs)) onlyBackToMs = short;
     },
     runDone: () => {
       if (readNothing) {
@@ -544,7 +549,7 @@ export async function commitCacheStaging(
   // timeout): the next run is "Try again" — it skips the chats this one finished.
   if (!run.complete || (r.chatsFailed ?? 0) > 0 || r.stopped || r.runRecordFailed) setFailedRun(userId, run.startedAt);
   void logService.info(`[RcsCache] chat coverage recorded: ${coverageRecorded}`, LOG_TAG);
-  return r;
+  return onlyBackToMs === null ? r : { ...r, onlyBackToMs };
 }
 
 async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEndSnapshot): Promise<void> {
