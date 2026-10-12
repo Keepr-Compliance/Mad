@@ -32,6 +32,9 @@ import { EmailSettings } from "../EmailSettings";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
 import { AndroidMessagesSettings } from "../AndroidMessagesSettings";
 import { ContactsSettings } from "../ContactsSettings";
+import { GoogleMessagesSettings } from "../GoogleMessagesSettings";
+import { IphoneSyncSettings } from "../IphoneSyncSettings";
+import { TextsLookbackSettings } from "../TextsLookbackSettings";
 import { PlatformProvider } from "../../../contexts/PlatformContext";
 
 jest.mock("../../../contexts/NetworkContext", () => ({
@@ -79,6 +82,32 @@ jest.mock("../../../services", () => ({
     microsoftDisconnectMailbox: jest.fn(),
     onMailboxConnected: jest.fn(() => () => {}),
   },
+}));
+
+/** BACKLOG-3156 stage F: the Google Messages panel's state (fixture from GoogleMessagesSettings-3659.test.tsx). */
+jest.mock("../../../services/rcsImportService", () => ({
+  rcsImportService: {
+    getExtensionState: async () => ({
+      success: true,
+      data: {
+        extensionVersion: "0.3.4",
+        extensionSeenAt: "2026-10-01T10:00:00.000Z",
+        pairedAt: "2026-10-01T10:00:00.000Z",
+        optedIn: true,
+        lastCacheFinishedAt: "2026-10-01T11:00:00.000Z",
+        consentVersion: 1,
+        consentRequired: 1,
+        consentAt: "2026-10-01T09:00:00.000Z",
+        autoDeleteDays: null,
+      },
+    }),
+    listExclusions: async () => ({ success: true, data: [] }),
+    onDataChanged: () => () => undefined,
+  },
+}));
+
+jest.mock("../../../contexts/IPhoneSyncContext", () => ({
+  useIPhoneSyncEnabled: () => ({ enabled: false, setIphoneSyncEnabled: jest.fn() }),
 }));
 
 jest.mock("../../../utils/logger", () => ({
@@ -320,6 +349,37 @@ describe("BACKLOG-3156 — Messages", () => {
     const actions = screen.getByTestId("android-block-actions");
     expect(actions.closest(".bg-gray-50.rounded-lg")).toBeNull();
     expect(actions.querySelector("h1,h2,h3,h4,h5,h6")).toBeNull();
+  });
+});
+
+describe("BACKLOG-3156 stage F — Messages (Google, iPhone)", () => {
+  it("Google: Import Preferences precedes the actions, which sit outside the card", async () => {
+    render(
+      <GoogleMessagesSettings userId="u" lookbackPicker={<TextsLookbackSettings userId="u" embedded />} />,
+    );
+    await screen.findByTestId("gm-consent");
+
+    expectInOrder(["gm-block-preferences", "gm-block-actions"]);
+
+    const actions = screen.getByTestId("gm-block-actions");
+    expect(actions.closest(".bg-gray-50.rounded-lg")).toBeNull();
+    expect(actions.querySelector("h1,h2,h3,h4,h5,h6")).toBeNull();
+    expect(screen.getByRole("button", { name: "Force Re-import" })).toBeInTheDocument();
+  });
+
+  it("Google: the picker is the first row of Import Preferences", async () => {
+    render(
+      <GoogleMessagesSettings userId="u" lookbackPicker={<TextsLookbackSettings userId="u" embedded />} />,
+    );
+    const block = await screen.findByTestId("gm-block-preferences");
+    expect(block.firstElementChild?.nextElementSibling).toBe(screen.getByTestId("texts-lookback"));
+  });
+
+  it("iPhone: the picker is the first row of Import Preferences, the USB toggle after it", () => {
+    render(<IphoneSyncSettings lookbackPicker={<TextsLookbackSettings userId="u" embedded />} />);
+    const block = screen.getByTestId("iphone-block-preferences");
+    expect(block.firstElementChild?.nextElementSibling).toBe(screen.getByTestId("texts-lookback"));
+    expectInOrder(["texts-lookback", "iphone-usb-toggle-row"]);
   });
 });
 

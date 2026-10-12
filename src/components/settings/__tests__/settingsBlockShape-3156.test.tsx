@@ -104,6 +104,9 @@ import { ImportSourceSettings } from "../ImportSourceSettings";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
 import { AndroidMessagesSettings } from "../AndroidMessagesSettings";
 import { ContactsSettings } from "../ContactsSettings";
+import { GoogleMessagesSettings } from "../GoogleMessagesSettings";
+import { IphoneSyncSettings } from "../IphoneSyncSettings";
+import { TextsLookbackSettings } from "../TextsLookbackSettings";
 import { PlatformProvider } from "../../../contexts/PlatformContext";
 
 jest.mock("../../../contexts/NetworkContext", () => ({
@@ -151,6 +154,46 @@ jest.mock("../../../services", () => ({
     microsoftDisconnectMailbox: jest.fn(),
     onMailboxConnected: jest.fn(() => () => {}),
   },
+}));
+
+/**
+ * BACKLOG-3156 stage F: the Google Messages panel reads its state from the
+ * extension service. The state is transcribed from the fixture in
+ * `GoogleMessagesSettings-3659.test.tsx` (consent current, so the consent row
+ * renders and is audited; one chat switched off, so the "not synced" line is
+ * there too).
+ */
+jest.mock("../../../services/rcsImportService", () => ({
+  rcsImportService: {
+    linkForget: async () => undefined,
+    setCacheConsent: async () => ({ success: true }),
+    getExtensionState: async () => ({
+      success: true,
+      data: {
+        extensionVersion: "0.3.4",
+        extensionSeenAt: "2026-10-01T10:00:00.000Z",
+        pairedAt: "2026-10-01T10:00:00.000Z",
+        optedIn: true,
+        lastCacheFinishedAt: "2026-10-01T11:00:00.000Z",
+        consentVersion: 1,
+        consentRequired: 1,
+        consentAt: "2026-10-01T09:00:00.000Z",
+        autoDeleteDays: null,
+      },
+    }),
+    clearTexts: async () => ({ success: true, data: { messagesDeleted: 0, androidMessagesDeleted: 0, contactsDeleted: 0 } }),
+    setMediaOptions: async () => ({ success: true }),
+    listExclusions: async () => ({
+      success: true,
+      data: [{ id: "c1", title: "Chat", createdAt: "2026-10-01T10:00:00.000Z" }],
+    }),
+    onDataChanged: () => () => undefined,
+  },
+}));
+
+/** The iPhone panel's toggle state (BACKLOG-1706), as `IphoneSyncSettings.test.tsx` mocks it. */
+jest.mock("../../../contexts/IPhoneSyncContext", () => ({
+  useIPhoneSyncEnabled: () => ({ enabled: false, setIphoneSyncEnabled: jest.fn() }),
 }));
 
 jest.mock("../../../utils/logger", () => ({
@@ -778,6 +821,128 @@ describe("BACKLOG-3156 stage E — Contacts", () => {
   });
 });
 
+describe("BACKLOG-3156 stage F — Messages (Google)", () => {
+  /**
+   * Founder 2026-10-12: Google Messages has an Import Preferences block like
+   * every other import panel, holding (in this order) "Import messages from",
+   * the per-chat eye note, consent + Withdraw consent, photos, videos.
+   */
+  it("has one Import Preferences card and bare actions", async () => {
+    const { container } = render(
+      <GoogleMessagesSettings
+        userId="u"
+        lookbackPicker={<TextsLookbackSettings userId="u" embedded />}
+      />,
+    );
+    await screen.findByTestId("gm-consent");
+
+    recordStyles(
+      "Messages (Google)",
+      auditScreen(
+        "Messages (Google)",
+        container,
+        [
+          {
+            testId: "gm-block-preferences",
+            label: "Import Preferences",
+            description: null,
+          },
+        ],
+        "gm-block-actions",
+        null,
+      ),
+    );
+  });
+
+  it("holds every founder-named setting inside Import Preferences, in order", async () => {
+    render(
+      <GoogleMessagesSettings
+        userId="u"
+        lookbackPicker={<TextsLookbackSettings userId="u" embedded />}
+      />,
+    );
+    await screen.findByTestId("gm-consent");
+    const block = screen.getByTestId("gm-block-preferences");
+
+    const named = [
+      "texts-lookback",
+      "gm-not-synced",
+      "gm-consent",
+      "gm-photos-all",
+      "gm-videos-all",
+    ];
+    const outside = named.filter((id) => !block.contains(screen.getByTestId(id)));
+    expect(`Google Messages settings outside Import Preferences: ${JSON.stringify(outside)}`).toBe(
+      "Google Messages settings outside Import Preferences: []",
+    );
+    // The eye note and the Withdraw button are what the founder named; pin the
+    // words too, so an emptied row cannot stand in for them.
+    expect(within(block).getByText(/Switch a chat off with the eye/)).toBeInTheDocument();
+    expect(within(block).getByRole("button", { name: "Withdraw consent" })).toBeInTheDocument();
+
+    for (let i = 0; i < named.length - 1; i++) {
+      const a = screen.getByTestId(named[i]);
+      const b = screen.getByTestId(named[i + 1]);
+      expect(`${named[i]} then ${named[i + 1]}: ${(a.compareDocumentPosition(b) & 4) !== 0}`).toBe(
+        `${named[i]} then ${named[i + 1]}: true`,
+      );
+    }
+  });
+});
+
+describe("BACKLOG-3156 stage F — Messages (iPhone)", () => {
+  it("has one Import Preferences card", async () => {
+    const { container } = render(
+      <IphoneSyncSettings lookbackPicker={<TextsLookbackSettings userId="u" embedded />} />,
+    );
+    await screen.findByTestId("iphone-block-preferences");
+
+    recordStyles(
+      "Messages (iPhone)",
+      auditScreen(
+        "Messages (iPhone)",
+        container,
+        [
+          {
+            testId: "iphone-block-preferences",
+            label: "Import Preferences",
+            description: null,
+          },
+        ],
+        null,
+        null,
+      ),
+    );
+  });
+
+  it("holds Import messages from and the USB toggle inside Import Preferences", async () => {
+    render(<IphoneSyncSettings lookbackPicker={<TextsLookbackSettings userId="u" embedded />} />);
+    const block = await screen.findByTestId("iphone-block-preferences");
+
+    const outside = ["texts-lookback", "iphone-usb-toggle-row"].filter(
+      (id) => !block.contains(screen.getByTestId(id)),
+    );
+    expect(`iPhone settings outside Import Preferences: ${JSON.stringify(outside)}`).toBe(
+      "iPhone settings outside Import Preferences: []",
+    );
+    expect(
+      within(block).getByRole("switch", { name: /enable iphone sync over usb/i }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The greyed state used to sit on the card's own classes. It moved to a
+   * wrapper so the card keeps the shared class string — asserted here so the
+   * move cannot quietly drop the muting.
+   */
+  it("still mutes the whole block when iPhone is not the source", () => {
+    render(<IphoneSyncSettings disabled />);
+    const block = screen.getByTestId("iphone-block-preferences");
+    expect(block.closest(".opacity-50")).not.toBeNull();
+    expect(screen.getByText("iPhone Sync (USB)")).toHaveClass("text-gray-400");
+  });
+});
+
 describe("BACKLOG-3156 stage E — the four screens agree", () => {
   /**
    * THE POINT OF THE SUITE. Every block card collected above must carry the
@@ -798,6 +963,8 @@ describe("BACKLOG-3156 stage E — the four screens agree", () => {
       "Emails #0",
       "Emails #1",
       "Messages (Android) #0",
+      "Messages (Google) #0",
+      "Messages (iPhone) #0",
       "Messages (macOS) #0",
       "Messages (sources) #0",
     ]);
@@ -843,6 +1010,8 @@ describe("BACKLOG-3156 stage E — the four screens agree", () => {
       "Contacts",
       "Emails",
       "Messages (Android)",
+      "Messages (Google)",
+      "Messages (iPhone)",
       "Messages (macOS)",
       "Messages (sources)",
     ]);

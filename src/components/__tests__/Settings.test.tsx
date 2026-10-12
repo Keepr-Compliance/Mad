@@ -1351,8 +1351,8 @@ describe("Settings", () => {
       expect(section).toBeInTheDocument();
 
       // The section's own heading, scoped inside the section. `name` is an
-      // exact string match, so the <h4>iPhone Sync (USB)</h4> that the toggle
-      // renders inside this same section does NOT satisfy it.
+      // exact string match, so the "iPhone Sync (USB)" toggle label inside
+      // this same section does NOT satisfy it.
       expect(
         within(section as HTMLElement).getByRole("heading", { name: "iPhone Sync" }),
       ).toBeInTheDocument();
@@ -1784,19 +1784,70 @@ describe("Settings", () => {
       (window.api.system as unknown as { platform: string }).platform = platformBefore;
     });
 
+    /**
+     * BACKLOG-3156 stage F: the iPhone picker sits in a different section from
+     * the Messages panels, and must still share their ONE value. Observable
+     * through the (greyed) macOS panel, which re-reads its effective window
+     * once per save that lands on the shared value. A second, private copy of
+     * the value under the iPhone section would save the same key but never
+     * tell the macOS panel.
+     */
+    it("darwin, source iphone-sync: a change in the iPhone picker reaches the macOS panel", async () => {
+      (window.api.system as unknown as { platform: string }).platform = "darwin";
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: { source: "iphone-sync" },
+          messageImport: { filters: { lookbackMonths: 6 } },
+        },
+      });
+      jest.mocked(window.api.preferences.update).mockResolvedValue({ success: true });
+
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const block = await screen.findByTestId("iphone-block-preferences");
+      await screen.findByTestId("macos-messages-import");
+      const select = await within(block).findByRole("combobox", { name: "Import messages from" });
+      await waitFor(() => expect(select).not.toBeDisabled());
+
+      const windowReads = window.api.messages.getEffectiveImportWindow as jest.Mock;
+      const before = windowReads.mock.calls.length;
+      await userEvent.selectOptions(select, "3");
+      await waitFor(() =>
+        expect(window.api.preferences.update).toHaveBeenCalledWith(mockUserId, {
+          messageImport: { filters: { lookbackMonths: 3 } },
+        }),
+      );
+      await waitFor(() =>
+        expect(`macOS panel re-read its window after the iPhone change: ${windowReads.mock.calls.length > before}`).toBe(
+          "macOS panel re-read its window after the iPhone change: true",
+        ),
+      );
+    });
+
+    /**
+     * BACKLOG-3156 stage F: the picker is a row of the LIVE source panel's
+     * Import Preferences — macOS Messages (Mac), Google Messages, iPhone. Only
+     * with no such panel (Windows with no source, or a stored macos-native off
+     * a Mac, which `isKnownImportSource` lets through and the macOS panel
+     * renders nothing for) is it the standalone card. Counted across the WHOLE
+     * page, because the iPhone panel is a separate section.
+     */
     it.each([
-      ["darwin", "macos-native"],
-      ["darwin", "iphone-sync"],
-      ["darwin", "android-messages-web"],
-      ["win32", "iphone-sync"],
-      ["win32", "android-messages-web"],
-    ])("%s, source %s: one picker under the source selection, saving messageImport.filters", async (platform, source) => {
+      ["darwin", "macos-native", "messages-block-preferences"],
+      ["darwin", "iphone-sync", "iphone-block-preferences"],
+      ["darwin", "android-messages-web", "gm-block-preferences"],
+      ["win32", "iphone-sync", "iphone-block-preferences"],
+      ["win32", "android-messages-web", "gm-block-preferences"],
+      ["win32", "macos-native", null],
+      ["win32", undefined, null],
+    ])("%s, source %s: one picker, in %s, saving messageImport.filters", async (platform, source, home) => {
       (window.api.system as unknown as { platform: string }).platform = platform;
       jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           export: { defaultFormat: "combined-pdf" },
-          messages: { source },
+          messages: source ? { source } : {},
           messageImport: { filters: { lookbackMonths: 6 } },
         },
       });
@@ -1807,31 +1858,75 @@ describe("Settings", () => {
       if (source === "android-messages-web") {
         expect(await screen.findByTestId("google-messages-settings")).toBeInTheDocument();
       }
-      const section = container.querySelector<HTMLElement>("#settings-messages")!;
-      const target = section.querySelector<HTMLElement>("#settings-texts-lookback");
-      expect(target).not.toBeNull();
-      // BACKLOG-3892 (founder QA 2026-10-12): on a Mac with macOS Messages as
-      // the source the picker is a row of Import Preferences, directly under
-      // "Maximum messages"; every other case keeps the standalone card.
-      const prefs = section.querySelector<HTMLElement>('[data-testid="messages-block-preferences"]');
-      if (platform === "darwin" && source === "macos-native") {
-        expect(prefs).not.toBeNull();
-        expect(`picker inside Import Preferences: ${prefs!.contains(target!)}`).toBe(
-          "picker inside Import Preferences: true",
+      if (home !== null) {
+        await screen.findByTestId(home);
+        await waitFor(() =>
+          expect(within(screen.getByTestId(home)).queryByTestId("texts-lookback")).not.toBeNull(),
         );
-        const maxRow = within(prefs!).getByText("Maximum messages").parentElement!;
+      }
+      const target = container.querySelector<HTMLElement>("#settings-texts-lookback");
+      expect(target).not.toBeNull();
+
+      // Exactly one months picker on the whole page.
+      expect(within(container).getAllByRole("combobox", { name: "Import messages from" })).toHaveLength(1);
+      expect(container.querySelectorAll("#settings-texts-lookback")).toHaveLength(1);
+
+      // Where it is: inside the owning Import Preferences block, or standalone.
+      const blocks = [
+        "messages-block-preferences",
+        "gm-block-preferences",
+        "iphone-block-preferences",
+      ].filter((id) => screen.queryByTestId(id)?.contains(target!));
+      expect(`picker inside: ${JSON.stringify(blocks)}`).toBe(
+        `picker inside: ${JSON.stringify(home === null ? [] : [home])}`,
+      );
+      if (home === null) {
+        expect(within(target!).getByText("How far back to import texts")).toBeInTheDocument();
+        expect(container.querySelector("#settings-messages")!.contains(target!)).toBe(true);
+      } else {
+        expect(within(target!).queryByText("How far back to import texts")).toBeNull();
+      }
+      if (home === "messages-block-preferences") {
+        const prefs = screen.getByTestId(home);
+        const maxRow = within(prefs).getByText("Maximum messages").parentElement!;
         expect(`picker is the row right after Maximum messages: ${maxRow.nextElementSibling === target}`).toBe(
           "picker is the row right after Maximum messages: true",
         );
-        expect(within(target!).queryByText("How far back to import texts")).toBeNull();
-      } else {
-        expect(`picker inside Import Preferences: ${prefs?.contains(target!) ?? false}`).toBe(
-          "picker inside Import Preferences: false",
-        );
-        expect(within(target!).getByText("How far back to import texts")).toBeInTheDocument();
       }
-      // Exactly one months picker in the Messages section — the per-panel ones are gone.
-      expect(within(section).getAllByRole("combobox", { name: "Import messages from" })).toHaveLength(1);
+
+      // BACKLOG-3156 stage F sweep: every setting control in the Messages and
+      // iPhone Sync sections sits in a block card that opens with one of the
+      // three block labels — so a panel added later cannot put its settings
+      // outside the shape without this going red. The one exception is the
+      // standalone picker card, which exists only when no source panel can
+      // host the picker (asserted above), and is named by its id.
+      const BLOCK_LABELS = ["Sources", "Import Preferences", "Stored on this computer"];
+      const isLabelledBlock = (el: Element) =>
+        el.tagName === "DIV" &&
+        /(^|\s)rounded-lg(\s|$)/.test(el.className) &&
+        /(^|\s)border(\s|$)/.test(el.className) &&
+        (el.firstElementChild?.matches("p.text-xs.font-medium.text-gray-500.uppercase.tracking-wide") ?? false) &&
+        BLOCK_LABELS.includes((el.firstElementChild?.textContent ?? "").trim());
+      const controlsOutsideBlocks = ["#settings-messages", "#settings-iphone-sync"]
+        .flatMap((sel) =>
+          Array.from(
+            container
+              .querySelector(sel)!
+              .querySelectorAll("select, textarea, input:not([type=hidden]), [role=switch], [role=checkbox], [role=radio], button[aria-pressed]"),
+          ),
+        )
+        .filter((control) => {
+          if (home === null && target!.contains(control)) return false;
+          const want = control.matches("input[type=radio], [role=radio]") ? "Sources" : "Import Preferences";
+          for (let node = control.parentElement; node; node = node.parentElement) {
+            if (isLabelledBlock(node)) return (node.firstElementChild?.textContent ?? "").trim() !== want;
+          }
+          return true;
+        })
+        .map((control) => control.getAttribute("aria-label") ?? control.getAttribute("data-testid") ?? control.outerHTML.slice(0, 60));
+      expect(`setting controls outside a labelled block: ${JSON.stringify(controlsOutsideBlocks)}`).toBe(
+        "setting controls outside a labelled block: []",
+      );
 
       const select = within(target!).getByRole("combobox", { name: "Import messages from" }) as HTMLSelectElement;
       await waitFor(() => expect(select).not.toBeDisabled());
