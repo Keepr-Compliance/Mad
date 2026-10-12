@@ -1900,12 +1900,13 @@ export class BackupAtRest extends EventEmitter {
    * (the quit is not deferred).
    */
   sealIndexForQuit(boundMs: number = QUIT_SEAL_BOUND_MS): Promise<void> | null {
+    // BACKLOG-3892 S5: a backfill read stops too, even when it is the only work (a
+    // synchronous flag: its copy stops at the next file; the quit is not deferred for it).
+    for (const flag of this.readers.values()) Atomics.store(flag, 0, 1);
     const udids = new Set<string>([...this.indexUnsealed, ...this.pausable.keys()]);
     if (udids.size === 0) return null;
     const work = (async () => {
       for (const udid of udids) this.requestPause(udid);
-      // BACKLOG-3892 S5: a backfill read stops too (its parse copy is swept by the quit).
-      for (const flag of this.readers.values()) Atomics.store(flag, 0, 1);
       await Promise.all(
         [...udids].map((udid) => (this.pausable.has(udid) ? this.waitForRelease(udid, boundMs) : Promise.resolve(true))),
       );

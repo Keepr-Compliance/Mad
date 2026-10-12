@@ -25,8 +25,6 @@ export type BackfillReason =
 export interface BackfillAvailability {
   available: boolean;
   reason?: BackfillReason;
-  /** The phone whose kept backup would be read. */
-  udid?: string;
   /** What would be read: [floorMs, ceilingMs) (epoch ms). */
   floorMs?: number;
   ceilingMs?: number;
@@ -49,6 +47,7 @@ export interface BackfillResult {
   /** The deal's iPhone covered-since afterwards (ISO), read back. */
   coveredSinceAfter?: string;
   cappedByPhone?: boolean;
+  /** Set only from a founder-approved sentence (missing / damaged / cannot decrypt); never error text. */
   message?: string;
 }
 

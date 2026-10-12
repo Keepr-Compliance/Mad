@@ -25,7 +25,9 @@ const mockOrchestrator = Object.assign(new (jest.requireActual("events").EventEm
   stopDeviceDetection: jest.fn(),
   getStatus: jest.fn(() => ({ isRunning: false, phase: "idle" })),
   sync: (...args: unknown[]) => mockSync(...args),
+  processExistingBackup: (...args: unknown[]) => mockSync(...args),
   forceReset: jest.fn(),
+  discardParseCopiesForQuit: jest.fn(),
 });
 jest.mock("../../services/deviceDetectionService", () => ({ deviceDetectionService: new EventEmitter() }));
 jest.mock("../../services/deviceSyncOrchestrator", () => ({
@@ -60,8 +62,12 @@ jest.mock("../../services/syncTimeline", () => ({
 }));
 jest.mock("../../services/iphoneChatFloorPlan", () => ({ floorPlanForSync: jest.fn().mockResolvedValue(undefined) }));
 const mockForceReimport = jest.fn(() => false);
+const mockSetReprocessBlocker = jest.fn();
 jest.mock("../../services/macOSMessagesImportService/macOSMessagesImportService", () => ({
-  macOSMessagesImportService: { isForceReimportInProgress: () => mockForceReimport() },
+  macOSMessagesImportService: {
+    isForceReimportInProgress: () => mockForceReimport(),
+    setReprocessBlocker: (...a: unknown[]) => mockSetReprocessBlocker(...a),
+  },
 }));
 jest.mock("../../windowRegistry", () => ({ getMainWindow: jest.fn(), sendToMainWindow: jest.fn() }));
 
@@ -117,5 +123,32 @@ describe("BACKLOG-3892 S5: backfill IPC", () => {
     mockForceReimport.mockReturnValue(true);
     expect(await call("sync:backfill-availability", TXN)).toEqual({ available: false, reason: "busy" });
     expect(await call("sync:backfill-older", TXN)).toMatchObject({ success: false, reason: "busy", messagesStored: 0 });
+  });
+
+  it("R3d: processing an existing backup stops the running backfill too", async () => {
+    const cancel = jest.spyOn(getIphoneBackfillForTests(), "cancel");
+    await call("sync:process-existing", { udid: UDID });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(mockSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("S2: on quit the backfill is stopped BEFORE the parse copies are swept", () => {
+    const cancel = jest.spyOn(getIphoneBackfillForTests(), "cancel");
+    cleanupSyncHandlers();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(mockOrchestrator.discardParseCopiesForQuit).toHaveBeenCalledTimes(1);
+    expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(mockOrchestrator.discardParseCopiesForQuit.mock.invocationCallOrder[0]);
+  });
+
+  it("S3: the texts force re-import is told about a running backfill (it refuses while one runs)", () => {
+    expect(mockSetReprocessBlocker).toHaveBeenCalledTimes(1);
+    const blocker = mockSetReprocessBlocker.mock.calls[0][0] as () => string | null;
+    expect(blocker()).toBeNull();
+    const running = jest.spyOn(getIphoneBackfillForTests(), "runningFor").mockReturnValue("deal-1");
+    try {
+      expect(blocker()).toBe("iphone-backfill");
+    } finally {
+      running.mockRestore();
+    }
   });
 });
