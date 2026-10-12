@@ -2385,7 +2385,10 @@ class TransactionService {
           if (message?.transaction_id) {
             unlinkMessageFromTransaction(messageId);
           }
-          deleteCommunicationByMessageIdSync(messageId);
+          // BACKLOG-3890: scoped to the deal being edited, so the same
+          // message's links in other deals survive. No deal named -> all-deal
+          // delete, as before.
+          deleteCommunicationByMessageIdSync(messageId, passedTransactionId);
         }
 
         // Delete thread-level communication records

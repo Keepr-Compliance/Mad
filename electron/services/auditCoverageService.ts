@@ -48,6 +48,7 @@ export {
 } from "./sourceCoverageFloors";
 import type { SourceFloorRow } from "./db/wizardMessageScansDb";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
+import { getCurrentIphoneCoverage, getIphoneDealCoverage, type IphoneDeviceCoverage } from "./iphoneCoverageService";
 // BACKLOG-2562: the ONE definition of "is this deal live?" (see the call site).
 import { isLiveTransactionStatus } from "./transactionEligibility";
 import {
@@ -74,8 +75,12 @@ export const COVERAGE_TOLERANCE_MS = 24 * 60 * 60 * 1000;
  *    only when a run read down to its floor) — exact; null = never complete.
  *  - Mac: message_import_state.deepest_import_start (exact), else the oldest
  *    Mac text (approximate).
- *  - iPhone / Android companion: a recorded coverage row when their importer
- *    writes one (follow-up), else the oldest text (approximate).
+ *  - iPhone (BACKLOG-3892 S2, SR D1): the current phone's recorded interval
+ *    (iphone_device_coverage) ONLY. Never the oldest stored text: once sync reads
+ *    only the lookback, that text is whichever deal chat was read furthest back.
+ *    No row = null ("never").
+ *  - Android companion: a recorded coverage row when its importer writes one
+ *    (follow-up), else the oldest text (approximate).
  */
 export function getSourceCoverage(userId: string): SourceCoverage[] {
   try {
@@ -136,6 +141,18 @@ export async function getSourceCoverageAsync(userId: string): Promise<SourceCove
   }
 }
 
+/** The current phone's row; a read failure is "unknown" (null), never covered. */
+function readCurrentIphone(userId: string): IphoneDeviceCoverage | null {
+  try {
+    return getCurrentIphoneCoverage(userId);
+  } catch (error) {
+    logService.warn("[BACKLOG-3892] iPhone coverage read failed (treated as unknown)", "AuditCoverage", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
 function buildSourceCoverage(userId: string, floorRows: readonly SourceFloorRow[]): SourceCoverage[] {
   const floors = new Map<string, { floor: string | null; n: number }>();
   for (const r of floorRows) {
@@ -146,12 +163,14 @@ function buildSourceCoverage(userId: string, floorRows: readonly SourceFloorRow[
     recorded.set(r.source, { coveredSince: r.coveredSince, lastSyncAt: r.lastSyncAt });
   }
   const deepestMac = getDeepestImportStart(userId);
+  // BACKLOG-3892 S2 (D1): the iPhone floor of record is the phone's own row.
+  const iphone = readCurrentIphone(userId);
   const out: SourceCoverage[] = [];
   for (const source of TEXT_SOURCES) {
     const f = floors.get(source);
     const rec = recorded.get(source);
     const hasRows = !!f && f.n > 0;
-    if (!hasRows && !rec && !(source === "mac" && deepestMac)) continue;
+    if (!hasRows && !rec && !(source === "mac" && deepestMac) && !(source === "iphone" && iphone)) continue;
     let coveredSince: string | null;
     let approximate: boolean;
     let incompleteChats: number | undefined;
@@ -164,6 +183,11 @@ function buildSourceCoverage(userId: string, floorRows: readonly SourceFloorRow[
     } else if (source === "mac") {
       coveredSince = deepestMac ?? rec?.coveredSince ?? f?.floor ?? null;
       approximate = !deepestMac && !rec?.coveredSince;
+    } else if (source === "iphone") {
+      coveredSince = iphone?.coveredSince ?? null;
+      approximate = iphone?.approximate ?? false;
+      out.push({ source, coveredSince, lastSyncAt: iphone?.lastSyncAt ?? null, approximate, hasRows });
+      continue;
     } else {
       coveredSince = rec?.coveredSince ?? f?.floor ?? null;
       approximate = !rec?.coveredSince;
@@ -183,13 +207,57 @@ function buildSourceCoverage(userId: string, floorRows: readonly SourceFloorRow[
  * only over-warn. Never throws.
  */
 export function getTransactionSourceCoverage(userId: string, transactionId: string): SourceCoverage[] {
-  return withLinkedChatCoverage(getSourceCoverage(userId), userId, transactionId);
+  return withIphoneDealCoverage(withLinkedChatCoverage(getSourceCoverage(userId), userId, transactionId), userId, transactionId);
 }
 
 /** BACKLOG-3837: `getTransactionSourceCoverage` off main; `null` = pending. Never throws. */
 export async function getTransactionSourceCoverageAsync(userId: string, transactionId: string): Promise<SourceCoverage[] | null> {
   const coverage = await getSourceCoverageAsync(userId);
-  return coverage ? withLinkedChatCoverage(coverage, userId, transactionId) : null;
+  return coverage ? withIphoneDealCoverage(withLinkedChatCoverage(coverage, userId, transactionId), userId, transactionId) : null;
+}
+
+/**
+ * BACKLOG-3892 S2 (SR D2): the iPhone line of one deal = its least covered member
+ * (contact handles, linked iPhone chats) on the current phone. A read failure
+ * reports the iPhone source as unknown ("never"), never covered.
+ */
+function withIphoneDealCoverage(coverage: SourceCoverage[], userId: string, transactionId: string): SourceCoverage[] {
+  const ip = coverage.find((c) => c.source === "iphone");
+  if (!ip) return coverage;
+  let deal: IphoneDeviceCoverage | null;
+  try {
+    deal = getIphoneDealCoverage(userId, transactionId);
+  } catch (error) {
+    logService.warn("[BACKLOG-3892] iPhone deal coverage failed (treated as unknown)", "AuditCoverage", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    deal = null;
+  }
+  const coveredSince = deal?.coveredSince ?? null;
+  return coverage.map((c) => (c === ip ? { ...c, coveredSince, approximate: deal?.approximate ?? false } : c));
+}
+
+/**
+ * BACKLOG-3892 S2 (SR D3b): whether one deal's iPhone texts reach its audit start.
+ * Unknown (no phone row, or a read failure) is a gap, never covered.
+ */
+export function iphoneDealGap(userId: string, transactionId: string, auditStartISO: string | null): { gap: boolean; coveredSince: string | null } {
+  if (!auditStartISO) return { gap: false, coveredSince: null };
+  let deal: IphoneDeviceCoverage | null = null;
+  try {
+    deal = getIphoneDealCoverage(userId, transactionId);
+  } catch (error) {
+    logService.warn("[BACKLOG-3892] iPhone deal coverage failed (treated as a gap)", "AuditCoverage", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  const coveredSince = deal?.coveredSince ?? null;
+  const gaps = sourceCoverageGaps(
+    [{ source: "iphone", coveredSince, lastSyncAt: deal?.lastSyncAt ?? null, approximate: deal?.approximate ?? false, hasRows: true }],
+    auditStartISO,
+    "iphone",
+  );
+  return { gap: gaps.length > 0, coveredSince };
 }
 
 function withLinkedChatCoverage(coverage: SourceCoverage[], userId: string, transactionId: string): SourceCoverage[] {
@@ -377,6 +445,9 @@ export async function isMessagesImporterAvailable(): Promise<boolean> {
 export async function getAuditCoverage(
   userId: string,
   proposedStartISO: string,
+  // BACKLOG-3892 S2 (SR D3a): the user's import source, so a chosen source with no
+  // texts yet is still checked (as get-text-coverage does).
+  chosen: TextSource | null = null,
 ): Promise<AuditCoverageResult> {
   try {
     const messagesFloorISO = getMessagesFloorISO(userId);
@@ -399,7 +470,7 @@ export async function getAuditCoverage(
       messagesImporterAvailable,
       // Unknown is never reported as "no gaps": pending, and no sourceGaps at all.
       ...(sourceCoverage
-        ? { sourceGaps: sourceCoverageGaps(sourceCoverage, proposedStartISO, null) }
+        ? { sourceGaps: sourceCoverageGaps(sourceCoverage, proposedStartISO, chosen) }
         : { sourceCoveragePending: true }),
     };
   } catch (error) {
@@ -434,6 +505,9 @@ export async function getAuditCoverage(
 export async function checkExportCompleteness(
   transactionId: string,
   userId: string,
+  // BACKLOG-3892 S2 (SR D3b): the user's import source. For iPhone the texts half
+  // of `complete` is the deal's iPhone coverage (D2 rows), not the global floor.
+  chosen: TextSource | null = null,
 ): Promise<ExportCompletenessResult> {
   try {
     const txn = dbGet<{
@@ -497,8 +571,15 @@ export async function checkExportCompleteness(
       deepestImportStartISO !== null &&
       auditStartISO !== null &&
       !isBeforeFloor(auditStartISO, deepestImportStartISO); // auditStart >= deepest
-    const complete =
-      !expansionStale && (!needsMessagesImport || importReachesAuditStart);
+    // BACKLOG-3892 S2 (SR D3b): an iPhone user's texts are complete when this deal's
+    // iPhone coverage reaches its audit start, and not otherwise — whatever the
+    // global oldest-text floor says (after S1 it is no longer how far the phone was
+    // read). Only "Sync iPhone" can clear an iPhone gap (the next sync reads the
+    // deal's chats back to its start); the Mac "Update now" cannot.
+    const iphone = chosen === "iphone" ? iphoneDealGap(userId, transactionId, auditStartISO) : null;
+    const complete = iphone
+      ? !expansionStale && !iphone.gap
+      : !expansionStale && (!needsMessagesImport || importReachesAuditStart);
     const txSourceCoverage = await getTransactionSourceCoverageAsync(userId, transactionId);
 
     return {
@@ -509,6 +590,7 @@ export async function checkExportCompleteness(
       needsMessagesImport,
       expansionStale,
       messagesImporterAvailable,
+      ...(iphone ? { iphoneGap: iphone.gap, iphoneCoveredSince: iphone.coveredSince } : {}),
       // BACKLOG-3663: informational only — never changes `complete`.
       // BACKLOG-3837: read off main; unknown is pending, never "no gaps".
       ...(txSourceCoverage

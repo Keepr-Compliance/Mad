@@ -60,6 +60,13 @@ import { getRawDatabase } from "./db/core/dbConnection";
 import { readDbTimeMs } from "./db/core/dbTiming";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
+import {
+  currentMailboxGeneration,
+  isMailboxGenerationStale,
+  openMailboxFetchScope,
+  type MailboxFetchScope,
+  type MailboxProvider,
+} from "./mailboxFetchGeneration";
 import databaseService from "./databaseService";
 import failureLogService from "./failureLogService";
 import { isNetworkError } from "../utils/networkErrors";
@@ -561,6 +568,14 @@ async function fetchStoreAndDedup(params: {
    * property that keeps ordinary delta syncs out of this feature's blast radius.
    */
   force?: EmailForceStaging;
+  /**
+   * BACKLOG-3903: the provider's mailbox generation, captured by the caller
+   * BEFORE it called the fetch service's `initialize()`. When the mailbox is
+   * disconnected after that, nothing this call fetched is written. Absent, it
+   * is captured at entry — enough for a caller whose fetch starts here, too
+   * late for a later round of a run that initialized earlier.
+   */
+  mailboxGeneration?: number;
   // BACKLOG-1831: cache HITS for this batch = writePlan.duplicates (exact dupes,
   // already cached) + writePlan.resurrections.length (re-deliveries remapped in
   // place, i.e. the message was already cached under a different provider id).
@@ -568,6 +583,19 @@ async function fetchStoreAndDedup(params: {
   // dedup signal into the experiment's success metric.
 }): Promise<{ fetched: number; stored: number; errors: number; duplicates: number }> {
   const { provider, fetchFn, userId, seenIds, ingestSourceOverride, getAttachmentsFn, force } = params;
+  const mailboxProvider: MailboxProvider = provider === "outlook" ? "microsoft" : "google";
+  const mailboxGeneration = params.mailboxGeneration ?? currentMailboxGeneration(mailboxProvider);
+  const disconnectedSinceFetchStarted = (stage: string): boolean => {
+    if (!isMailboxGenerationStale(mailboxProvider, mailboxGeneration)) return false;
+    logService.info(
+      `Mailbox disconnected during fetch; nothing from this fetch is written (${stage})`,
+      "EmailSyncService",
+      { provider },
+    );
+    return true;
+  };
+  const nothingWritten = { fetched: 0, stored: 0, errors: 0, duplicates: 0 };
+  if (disconnectedSinceFetchStarted("before-fetch")) return nothingWritten;
   let fetched = 0;
   let stored = 0;
   let errors = 0;
@@ -935,6 +963,11 @@ async function fetchStoreAndDedup(params: {
         }
       });
 
+      // BACKLOG-3903: THE gate. The fetch above can take minutes; a disconnect
+      // during it must not be followed by a write. Placed after the last
+      // `await` before the insert transaction, which is synchronous, so no
+      // disconnect can land between this check and the write.
+      if (disconnectedSinceFetchStarted("before-write")) return nothingWritten;
       runTransaction();
 
       // BACKLOG-1769: surface resurrection remaps for observability (ghost fix).
@@ -1552,6 +1585,8 @@ class EmailSyncService {
     if (googleToken) {
       try {
         await retryOnNetwork(async () => {
+          // BACKLOG-3903: bound to the token this initialize loads.
+          const gmailMailboxGeneration = currentMailboxGeneration("google");
           const isReady = await gmailFetchService.initialize(userId);
           if (isReady) {
             const gmailEmails = await gmailFetchService.searchEmails(effectiveSearchParams);
@@ -1559,6 +1594,7 @@ class EmailSyncService {
             // TASK-2067: Store fetched emails locally via fetchStoreAndDedup
             await fetchStoreAndDedup({
               provider: "gmail",
+              mailboxGeneration: gmailMailboxGeneration,
               fetchFn: async () => gmailEmails,
               userId,
               seenIds,
@@ -1620,6 +1656,8 @@ class EmailSyncService {
     if (microsoftToken && emails.length === 0) {
       try {
         await retryOnNetwork(async () => {
+          // BACKLOG-3903: bound to the token this initialize loads.
+          const outlookMailboxGeneration = currentMailboxGeneration("microsoft");
           const isReady = await outlookFetchService.initialize(userId);
           if (isReady) {
             const outlookEmails = await outlookFetchService.searchEmails(effectiveSearchParams);
@@ -1647,6 +1685,7 @@ class EmailSyncService {
             // TASK-2067: Store fetched emails locally via fetchStoreAndDedup
             await fetchStoreAndDedup({
               provider: "outlook",
+              mailboxGeneration: outlookMailboxGeneration,
               fetchFn: async () => dedupedOutlook,
               userId,
               seenIds,
@@ -2045,6 +2084,14 @@ class EmailSyncService {
     const abort = new AbortController();
     this.precacheAbortController = abort;
     const isCancelled = (): boolean => abort.signal.aborted;
+    // BACKLOG-3903: one scope per provider. Disconnecting a mailbox aborts its
+    // provider's rounds (and only those — the other provider's rounds carry on
+    // and a disconnect is not reported as the user's Cancel). The user's Cancel
+    // still reaches both through the parent signal.
+    const mailboxScopes: Record<MailboxProvider, MailboxFetchScope> = {
+      microsoft: openMailboxFetchScope("microsoft", abort.signal),
+      google: openMailboxFetchScope("google", abort.signal),
+    };
 
     // Progress bookkeeping. Declared out here because the terminal event is
     // emitted from the `finally`, which cannot see the counters declared inside
@@ -2438,17 +2485,20 @@ class EmailSyncService {
       };
       try {
         await retryOnNetwork(async () => {
+          // BACKLOG-3903: bound to the token this initialize loads.
+          const outlookMailboxGeneration = currentMailboxGeneration("microsoft");
           const outlookReady = await outlookFetchService.initialize(userId);
           if (outlookReady) {
             // Fetch inbox emails (no contact filter fetches all)
             const inboxResult = await fetchStoreAndDedup({
               provider: "outlook",
+              mailboxGeneration: outlookMailboxGeneration,
               fetchFn: () => outlookFetchService.searchEmails({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: fetchSinceDate,
                 // BACKLOG-2856: the signal reaches the paging loop and the HTTP
                 // request, not just the boundary check above.
-                signal: abort.signal,
+                signal: mailboxScopes.microsoft.signal,
                 // The inbox round is the one fetch in this method with a REAL
                 // denominator: `searchEmails` asks Graph for `@odata.count`
                 // before it pages, so `percentage` is a true fraction of the
@@ -2507,6 +2557,7 @@ class EmailSyncService {
               const currentAfterInbox = reportOutlook(outlookBaseFetched + inboxResult.fetched);
               allFolderResult = await fetchStoreAndDedup({
                 provider: "outlook",
+                mailboxGeneration: outlookMailboxGeneration,
                 fetchFn: () => outlookFetchService.searchAllFolders({
                   maxResults: EMAIL_FETCH_SAFETY_CAP,
                   after: fetchSinceDate,
@@ -2514,7 +2565,7 @@ class EmailSyncService {
                   // inside. It walks every folder under one await; without the
                   // signal the next boundary check below is unreachable until it
                   // has finished.
-                  signal: abort.signal,
+                  signal: mailboxScopes.microsoft.signal,
                   // Folders completed, not messages fetched: the per-folder
                   // counters restart on every folder, the walk-level pair does
                   // not. `folderIndex` is the folder currently being paged, so
@@ -2623,14 +2674,17 @@ class EmailSyncService {
       };
       try {
         await retryOnNetwork(async () => {
+          // BACKLOG-3903: bound to the token this initialize loads.
+          const gmailMailboxGeneration = currentMailboxGeneration("google");
           const gmailReady = await gmailFetchService.initialize(userId);
           if (gmailReady) {
             const gmailResult = await fetchStoreAndDedup({
               provider: "gmail",
+              mailboxGeneration: gmailMailboxGeneration,
               fetchFn: () => gmailFetchService.searchEmails({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: fetchSinceDate,
-                signal: abort.signal,
+                signal: mailboxScopes.google.signal,
                 // TWO PASSES, TWO DENOMINATORS, AND ONLY THE SECOND ONE IS REAL.
                 //
                 // `searchEmails` lists message IDs (`hasEstimate: false`,
@@ -2685,10 +2739,11 @@ class EmailSyncService {
               const currentAfterGmailSearch = reportGmail(gmailBaseFetched + gmailResult.fetched);
               allLabelResult = await fetchStoreAndDedup({
                 provider: "gmail",
+                mailboxGeneration: gmailMailboxGeneration,
                 fetchFn: () => gmailFetchService.searchAllLabels({
                   maxResults: EMAIL_FETCH_SAFETY_CAP,
                   after: fetchSinceDate,
-                  signal: abort.signal,
+                  signal: mailboxScopes.google.signal,
                   // Labels completed — the Gmail mirror of the folder walk.
                   onProgress: (p) => emitProgress({
                     phase: "fetching",
@@ -2796,16 +2851,19 @@ class EmailSyncService {
       if (microsoftToken && !isCancelled()) {
         try {
           await retryOnNetwork(async () => {
+            // BACKLOG-3903: bound to the token this initialize loads.
+            const outlookMailboxGeneration = currentMailboxGeneration("microsoft");
             const outlookReady = await outlookFetchService.initialize(userId);
             if (!outlookReady) return;
 
             const inboxBackfill = await fetchStoreAndDedup({
               provider: "outlook",
+              mailboxGeneration: outlookMailboxGeneration,
               fetchFn: () => outlookFetchService.searchEmails({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: backfillWindow.after,
                 before: backfillWindow.before,
-                signal: abort.signal,
+                signal: mailboxScopes.microsoft.signal,
               }),
               userId,
               seenIds: seenEmailIds,
@@ -2817,11 +2875,12 @@ class EmailSyncService {
               if (!isCancelled()) {
                 folderBackfill = await fetchStoreAndDedup({
                   provider: "outlook",
+                  mailboxGeneration: outlookMailboxGeneration,
                   fetchFn: () => outlookFetchService.searchAllFolders({
                     maxResults: EMAIL_FETCH_SAFETY_CAP,
                     after: backfillWindow.after,
                     before: backfillWindow.before,
-                    signal: abort.signal,
+                    signal: mailboxScopes.microsoft.signal,
                   }),
                   userId,
                   seenIds: seenEmailIds,
@@ -2864,16 +2923,19 @@ class EmailSyncService {
       if (googleToken && !isCancelled()) {
         try {
           await retryOnNetwork(async () => {
+            // BACKLOG-3903: bound to the token this initialize loads.
+            const gmailMailboxGeneration = currentMailboxGeneration("google");
             const gmailReady = await gmailFetchService.initialize(userId);
             if (!gmailReady) return;
 
             const searchBackfill = await fetchStoreAndDedup({
               provider: "gmail",
+              mailboxGeneration: gmailMailboxGeneration,
               fetchFn: () => gmailFetchService.searchEmails({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: backfillWindow.after,
                 before: backfillWindow.before,
-                signal: abort.signal,
+                signal: mailboxScopes.google.signal,
               }),
               userId,
               seenIds: seenEmailIds,
@@ -2884,11 +2946,12 @@ class EmailSyncService {
               if (!isCancelled()) {
                 labelBackfill = await fetchStoreAndDedup({
                   provider: "gmail",
+                  mailboxGeneration: gmailMailboxGeneration,
                   fetchFn: () => gmailFetchService.searchAllLabels({
                     maxResults: EMAIL_FETCH_SAFETY_CAP,
                     after: backfillWindow.after,
                     before: backfillWindow.before,
-                    signal: abort.signal,
+                    signal: mailboxScopes.google.signal,
                   }),
                   userId,
                   seenIds: seenEmailIds,
@@ -2960,6 +3023,21 @@ class EmailSyncService {
         "Email pre-cache cancelled before the swap — the email store was never touched",
         "EmailSyncService",
         { userId, staged: totalStored, force: isForce },
+      );
+      progressOutcome = "cancelled";
+      this.lastPrecacheCompletedAt = Date.now();
+      return { fetched: totalFetched, stored: totalStored, cancelled: true };
+    }
+
+    // BACKLOG-3903: a force run holds everything it fetched in staging until
+    // the swap below. A mailbox disconnected during the run must not have its
+    // staged rows made live after the disconnect, so the swap is skipped and
+    // live is left exactly as it was — the same outcome as a Cancel.
+    if (isForce && (mailboxScopes.microsoft.isStale() || mailboxScopes.google.isStale())) {
+      logService.info(
+        "Email re-cache stopped before the swap — a mailbox was disconnected during it",
+        "EmailSyncService",
+        { userId, staged: totalStored },
       );
       progressOutcome = "cancelled";
       this.lastPrecacheCompletedAt = Date.now();
@@ -3082,6 +3160,8 @@ class EmailSyncService {
     } finally {
       this.precacheInProgress = false;
       this.precacheAbortController = null;
+      mailboxScopes.microsoft.close();
+      mailboxScopes.google.close();
 
       // BACKLOG-2960 — THE ONE TIMING LINE, on every exit path, emitted FIRST.
       //
@@ -3214,11 +3294,14 @@ class EmailSyncService {
 
     try {
       await retryOnNetwork(async () => {
+        // BACKLOG-3903: bound to the token this initialize loads.
+        const outlookMailboxGeneration = currentMailboxGeneration("microsoft");
         const outlookReady = await outlookFetchService.initialize(userId);
         if (outlookReady) {
           // TASK-2060: Fetch inbox emails with date-range filtering via shared helper
           const inboxResult = await fetchStoreAndDedup({
             provider: "outlook",
+            mailboxGeneration: outlookMailboxGeneration,
             fetchFn: () => outlookFetchService.searchEmails({
               contactEmails,
               maxResults: EMAIL_FETCH_SAFETY_CAP,
@@ -3234,6 +3317,7 @@ class EmailSyncService {
           // TASK-2060: Fetch sent items with date-range filtering via shared helper
           const sentResult = await fetchStoreAndDedup({
             provider: "outlook",
+            mailboxGeneration: outlookMailboxGeneration,
             fetchFn: () => outlookFetchService.searchSentEmailsToContacts(
               contactEmails,
               SENT_ITEMS_SAFETY_CAP,
@@ -3251,6 +3335,7 @@ class EmailSyncService {
           try {
             allFolderResult = await fetchStoreAndDedup({
               provider: "outlook",
+              mailboxGeneration: outlookMailboxGeneration,
               fetchFn: () => outlookFetchService.searchAllFolders({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: emailFetchSinceDate,
@@ -3404,11 +3489,14 @@ class EmailSyncService {
 
     try {
       await retryOnNetwork(async () => {
+        // BACKLOG-3903: bound to the token this initialize loads.
+        const gmailMailboxGeneration = currentMailboxGeneration("google");
         const gmailReady = await gmailFetchService.initialize(userId);
         if (gmailReady) {
           // TASK-2060: Fetch contact emails with date-range filtering via shared helper
           const gmailResult = await fetchStoreAndDedup({
             provider: "gmail",
+            mailboxGeneration: gmailMailboxGeneration,
             fetchFn: () => {
               const gmailSearchOptions: { query?: string; maxResults: number; contactEmails?: string[]; after?: Date | null; before?: Date | null } = {
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
@@ -3431,6 +3519,7 @@ class EmailSyncService {
           try {
             allLabelResult = await fetchStoreAndDedup({
               provider: "gmail",
+              mailboxGeneration: gmailMailboxGeneration,
               fetchFn: () => gmailFetchService.searchAllLabels({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: emailFetchSinceDate,

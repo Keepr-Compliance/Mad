@@ -63,6 +63,12 @@ import { checkAppleDrivers } from "./appleDriverService";
 import { canUseLibimobiledevice, isMockMode } from "./libimobiledeviceService";
 import type { iOSDevice, DeviceStorageInfo } from "../types/device";
 import type { iOSMessage, iOSConversation } from "../types/iosMessages";
+import {
+  floorSourceOf,
+  readChatWithFloor,
+  type ChatFloorPlan,
+  type ParseFloorReport,
+} from "./iphoneChatFloors";
 import type { iOSContact } from "../types/iosContacts";
 import type {
   BackupProgress,
@@ -485,6 +491,31 @@ export interface SyncResult {
    * uses it to hold Try Again while the phone's backup service winds down.
    */
   errorCode?: BackupErrorCode;
+  /**
+   * BACKLOG-3892 S1 (SR D5): sms.db reads that FAILED in this run (a chat, its
+   * people, its senders, or the chat list). A failed read looks like an empty chat;
+   * S2 must not advance any coverage for a run where this is above zero.
+   */
+  chatReadFailures?: number;
+  /** BACKLOG-3892 S1: what the parse floors did (counts only); absent when no floor plan. */
+  parseFloors?: ParseFloorReport;
+  /**
+   * BACKLOG-3892 S2: what persistence needs to record iPhone coverage. Set ONLY by
+   * sync() (a fresh backup of one phone); absent on every other path, which then
+   * records no coverage.
+   *  - udid: the phone this run read (coverage is per phone, SR D4/D6);
+   *  - startedAtMs: when the run started, before the backup was taken — never later
+   *    than the snapshot, so it is a safe end for the covered interval;
+   *  - floorPlan: the plan the run APPLIED (SR C2), absent = every chat read in full;
+   *  - chatFloors: per chat ROWID, the floor actually applied (null = read in full),
+   *    including chats skipped as too old.
+   */
+  coverageRun?: {
+    udid: string;
+    startedAtMs: number;
+    floorPlan?: ChatFloorPlan;
+    chatFloors: ReadonlyArray<readonly [number, number | null]>;
+  };
 }
 
 /**
@@ -495,6 +526,11 @@ export interface SyncOptions {
   udid: string;
   /** Force full backup (no incremental) */
   forceFullBackup?: boolean;
+  /**
+   * BACKLOG-3892 S1: per-chat parse floors, resolved by syncHandlers (this class
+   * reads no preferences). Absent = every chat read in full (today's sync).
+   */
+  floorPlan?: ChatFloorPlan;
 }
 
 /**
@@ -2124,14 +2160,36 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         },
       );
 
-      // Load messages for each conversation using async method
+      // Load messages for each conversation using async method.
+      // BACKLOG-3892 S1: with a floor plan, a chat older than its floor is not read
+      // at all and the rest are read down to their floor only.
+      const floorPlan = options.floorPlan;
+      const floorReport: ParseFloorReport | undefined = floorPlan
+        ? {
+            floorSource: floorSourceOf(floorPlan),
+            settingsFloorMs: floorPlan.settingsFloorMs,
+            chatsSkippedOld: 0,
+            chatsWidened: 0,
+            messagesBelowFloor: 0,
+          }
+        : undefined;
+      const skippedChats = new Set<number>();
+      // BACKLOG-3892 S2 (SR C2): the floor each chat was actually read to.
+      const appliedChatFloors: Array<readonly [number, number | null]> = [];
       let loadedCount = 0;
       for (const conv of conversations) {
         if (this.abortController?.signal.aborted) {
           break;
         }
 
-        conv.messages = await this.messagesParser.getMessagesAsync(conv.chatId);
+        if (floorPlan && floorReport) {
+          if ((await readChatWithFloor(this.messagesParser, floorPlan, conv, floorReport)) === "skipped") {
+            skippedChats.add(conv.chatId);
+          }
+          appliedChatFloors.push([conv.chatId, conv.appliedFloorMs ?? null]);
+        } else {
+          conv.messages = await this.messagesParser.getMessagesAsync(conv.chatId);
+        }
         loadedCount++;
 
         // Report progress every 10 conversations (second 50%)
@@ -2157,11 +2215,30 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         return this.errorResult("Sync cancelled by user");
       }
 
+      // BACKLOG-3892 S1: a chat not read (older than its floor) is not a conversation of this run.
+      if (skippedChats.size > 0) {
+        for (let i = conversations.length - 1; i >= 0; i--) {
+          if (skippedChats.has(conversations[i].chatId)) conversations.splice(i, 1);
+        }
+      }
+      // BACKLOG-3892 S1 (D5): reads that failed; `?? 0` because test doubles of the parser omit it.
+      const chatReadFailures = this.messagesParser.readFailures ?? 0;
+
       // BACKLOG-2898/2894: what the parsing phase produced.
       syncTimeline.annotate("parsing-messages", {
         conversations: conversations.length,
         messages: conversations.reduce((sum, c) => sum + c.messages.length, 0),
+        chatReadFailures,
+        ...(floorReport
+          ? {
+              chatsSkippedOld: floorReport.chatsSkippedOld,
+              chatsWidened: floorReport.chatsWidened,
+              messagesBelowFloor: floorReport.messagesBelowFloor,
+            }
+          : {}),
       });
+      // Phase counts are numeric; the floor's source is run context (a label, no content).
+      syncTimeline.setContext({ floorSource: floorReport?.floorSource ?? "none" });
 
       // Step 5: Resolve contact names
       this.setPhase("resolving");
@@ -2230,6 +2307,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         backupPath,  // SPRINT-068: Pass for attachment extraction
         needsCleanup, // SPRINT-068: Caller should cleanup after persistence
         sessionId,   // TASK-2110: For ACID rollback on cancel
+        chatReadFailures, // BACKLOG-3892 S1 (D5)
+        ...(floorReport ? { parseFloors: floorReport } : {}),
+        // BACKLOG-3892 S2: what persistence records iPhone coverage from.
+        coverageRun: {
+          udid: options.udid,
+          startedAtMs: this.startTime,
+          ...(floorPlan ? { floorPlan } : {}),
+          chatFloors: appliedChatFloors,
+        },
       };
 
       // BACKLOG-3816 S4-C: persistence still reads this chain; it is sealed when

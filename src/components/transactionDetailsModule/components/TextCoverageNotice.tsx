@@ -10,7 +10,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { settingsService } from "../../../services/settingsService";
-import { effectiveImportSource } from "../../../services/importSourcePolicy";
+import { loadChosenImportSource } from "../../../services/importSourcePolicy";
 import { isMacOS } from "../../../utils/platform";
 import { rcsImportService } from "../../../services/rcsImportService";
 import { transactionService } from "../../../services/transactionService";
@@ -42,6 +42,31 @@ const ACTION: Record<TextSource, string> = {
 export function dialogTextSource(effective: string | null, onMac: boolean): TextSource | null {
   const chosen = chosenTextSource(effective);
   return chosen === "mac" && !onMac ? null : chosen;
+}
+
+/**
+ * The user's stored import source as a coverage source (the Texts tab's rule; also
+ * the export gate's, BACKLOG-3892 S2). null when it cannot be read. Never throws.
+ */
+export async function readChosenTextSource(userId: string): Promise<TextSource | null> {
+  try {
+    // BACKLOG-3892 R1: ONE derivation (importSourcePolicy) shared with sync detection and
+    // the create prompt, so phone type counts when nothing is stored. A preferences read
+    // failure still resolves through the local phone type.
+    let prefs: Parameters<typeof loadChosenImportSource>[0];
+    try {
+      const r = await settingsService.getPreferences(userId);
+      prefs = r.success ? (r.data as Parameters<typeof loadChosenImportSource>[0]) : undefined;
+    } catch {
+      prefs = undefined;
+    }
+    const chosen = await loadChosenImportSource(prefs, isMacOS(), () =>
+      settingsService.getPhoneType(userId),
+    );
+    return chosenTextSource(chosen);
+  } catch {
+    return null;
+  }
 }
 
 export function chosenTextSource(pref: string | undefined | null): TextSource | null {
@@ -130,15 +155,7 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
   }, []);
 
   const load = useCallback(async () => {
-    let chosen: TextSource | null = null;
-    try {
-      const prefs = await settingsService.getPreferences(userId);
-      const stored = prefs.success ? prefs.data?.messages?.source : null;
-      // BACKLOG-3749: a value this build does not know → the platform default.
-      chosen = chosenTextSource(stored ? effectiveImportSource(stored, isMacOS()) : null);
-    } catch {
-      chosen = null;
-    }
+    const chosen = await readChosenTextSource(userId);
     try {
       // SR: through the service, never window.api from the component.
       const r = await transactionService.getTextCoverage(transactionId, userId, chosen);
