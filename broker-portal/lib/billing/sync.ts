@@ -122,7 +122,7 @@ export async function resolveAgentUser(
 
 type SyncOutcome = 'inserted' | 'updated' | 'unchanged' | 'duplicate' | 'refused';
 
-function mirrorState(sub: Stripe.Subscription): Record<string, unknown> {
+export function mirrorState(sub: Stripe.Subscription): Record<string, unknown> {
   const interval = sub.items?.data?.[0]?.price?.recurring?.interval;
   return {
     status: sub.status,
@@ -223,7 +223,15 @@ async function handleSecondOpenSubscription(
   const incumbentId = (inc as { stripe_subscription_id?: string } | null)?.stripe_subscription_id;
   if (!incumbentId) throw new Error(`second open subscription ${newcomer.id} but no incumbent row; retry`);
 
-  const incumbent = await ctx.stripe.subscriptions.retrieve(incumbentId);
+  let incumbent: Stripe.Subscription = await ctx.stripe.subscriptions.retrieve(incumbentId);
+  if (incumbent.status === 'incomplete' && (newcomer.status === 'active' || newcomer.status === 'trialing')) {
+    // BACKLOG-3847 (F2, SR R1b): a half-made incumbent (declined card or
+    // abandoned 3DS) must not cost the user the plan they just paid for. Void
+    // its unpaid invoice: Stripe refuses that once the invoice is paid, so a
+    // plan completed in another tab is never ended here; it then falls through
+    // to the newcomer branch below, which is right if the incumbent completed.
+    incumbent = await voidIncompleteSubscription(ctx.stripe, incumbent);
+  }
   if (!OPEN.has(incumbent.status)) {
     const { error: closeErr } = await ctx.service
       .from('billing_subscriptions')
@@ -248,6 +256,47 @@ async function handleSecondOpenSubscription(
     extra: { event_id: ctx.event.id, user_id: userId, kept: incumbentId, cancelled: newcomer.id },
   });
   return 'duplicate';
+}
+
+/**
+ * End a half-made (`incomplete`) subscription the only safe way: void its
+ * unpaid latest invoice (SR R1). Never subscriptions.cancel, which would end a
+ * plan the user paid for in the moment between our read and this call. Returns
+ * the subscription as Stripe reports it afterwards: `incomplete_expired` when
+ * the void went through; `active`/`trialing` when the invoice had been paid
+ * (Stripe refuses to void it). A failed void on a subscription that is still
+ * `incomplete` is rethrown (a transient error: the caller retries).
+ */
+export async function voidIncompleteSubscription(stripe: Stripe, sub: Stripe.Subscription): Promise<Stripe.Subscription> {
+  const invoiceId = stripeId(sub.latest_invoice);
+  if (!invoiceId) throw new Error(`incomplete subscription ${sub.id} has no latest invoice`);
+  try {
+    await stripe.invoices.voidInvoice(invoiceId, {}, { idempotencyKey: `incomplete-void:${invoiceId}` });
+  } catch (err) {
+    const now = await stripe.subscriptions.retrieve(sub.id);
+    if (now.status === 'incomplete') throw err;
+    return now;
+  }
+  return stripe.subscriptions.retrieve(sub.id);
+}
+
+/**
+ * Write-through after the page ends or keeps a plan (BACKLOG-3847, SR R6):
+ * only cancel_at_period_end and canceled_at, only on a row that is still
+ * active/trialing, and never last_event_created. Status and period stay the
+ * webhook's; leaving the cursor alone lets the action's own
+ * customer.subscription.updated event still apply.
+ */
+export async function writeThroughCancelFlag(
+  service: ServiceClient,
+  sub: Pick<Stripe.Subscription, 'id' | 'cancel_at_period_end' | 'canceled_at'>
+): Promise<void> {
+  const { error } = await service
+    .from('billing_subscriptions')
+    .update({ cancel_at_period_end: sub.cancel_at_period_end === true, canceled_at: iso(sub.canceled_at) })
+    .eq('stripe_subscription_id', sub.id)
+    .in('status', ['active', 'trialing']);
+  if (error) throw new Error(`billing_subscriptions write-through failed: ${error.message}`);
 }
 
 /** True when the user has an open subscription in this mode other than subId. */
