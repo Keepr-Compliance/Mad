@@ -371,4 +371,17 @@ describe("SupportReportQueue", () => {
     // "nothing happened".
     expect(payload.logs.otherConsentRecords).toBe(1);
   });
+
+  it("carries the refused-record and dropped-write counts, as numbers only (BACKLOG-3191)", async () => {
+    await logStore.write("message-import", "chats-found", { n: 12 });
+    jest.spyOn(logStore, "heldDropCount").mockReturnValue(7);
+    jest.spyOn(logStore, "droppedWriteCount").mockReturnValue(3);
+
+    const queue = makeQueue();
+    const meta = await queue.capture("manual");
+    const payload = await readPayload(queue, meta.id);
+
+    expect(payload.logs.refusedRecords).toBe(7);
+    expect(payload.logs.droppedWrites).toBe(3);
+  });
 });

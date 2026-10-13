@@ -284,7 +284,8 @@
         "from": "resources/win",
         "to": "win",
         "filter": [
-          "**/*"
+          "**/*",
+          "!libimobiledevice{,/**/*}"
         ]
       },
       ".env.production",
