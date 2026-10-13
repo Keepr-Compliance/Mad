@@ -5,13 +5,16 @@
  * extension on Google Messages for Web). The Android companion app has its
  * own section (AndroidMessagesSettings) with its own reset.
  *
- * - Status: the extension (installed / version), Google Messages paired, the
- *   last Sync. (No consent line: users accept Keepr's terms at sign-up; the
- *   first Sync records the consent for audit.)
- * - How far back a Sync copies: one line stating the window. The months
- *   control is the shared TextsLookbackSettings picker (BACKLOG-3892 S3),
- *   which Settings passes in as `lookbackPicker` and this panel renders as the
- *   first row of its Import Preferences block (BACKLOG-3156 stage F); the
+ * - BACKLOG-3156 stage G (founder approved 2026-10-13): the link status, Link /
+ *   Relink / Unlink and the diagnostic lines (extension, connected, last sync)
+ *   live in the Messages Sources card under the Android row
+ *   (ImportSourceSettings), and the separate "Copying texts from…" line is gone
+ *   — the picker states the window. This pane is Import Preferences + Stored on
+ *   this computer + Force Re-import. Link state comes from
+ *   android/googleMessagesLink (one owner for the Sources card and this pane).
+ * - The months control is the shared TextsLookbackSettings picker (BACKLOG-3892
+ *   S3), which Settings passes in as `lookbackPicker` and this panel renders as
+ *   the first row of its Import Preferences block (BACKLOG-3156 stage F); the
  *   value is `messageImport.filters`, the key the cache Sync's floor reads.
  * - Auto-delete (BACKLOG-3658 P3b): REMOVED from the screen "for now"
  *   (founder, 2026-10-04); the purge is dormant (RCS_AUTO_DELETE_ENABLED).
@@ -41,7 +44,6 @@ export function videoEstimateText(lastVideosSeen: number | null | undefined): st
 }
 import { rcsImportService } from "../../services/rcsImportService";
 import { settingsService } from "../../services";
-import { lastMonthsPhrase } from "./LookbackMonthsSelect";
 import { AndroidForceReimportWarning, androidClearedText } from "./AndroidForceReimportWarning";
 import { NotSyncedChatsModal } from "./android/NotSyncedChatsModal";
 import {
@@ -50,32 +52,21 @@ import {
   readBetaInstallPreference,
 } from "./android/extensionDistribution";
 
-/** The link row's status (founder 2026-10-04): "Linked" / "Not linked". */
-export const LINK_STATUS = { linked: "Linked", notLinked: "Not linked" } as const;
-/** SR: Forget link asks first, worded as the popup's Unlink (popup.js COPY.unlinkAsk). */
-export const FORGET_ASK = "Unlink from Keepr? You'll need to link again to sync";
+// BACKLOG-3156 stage G: the Unlink confirmation moved to the Sources card with the control.
+export { FORGET_ASK } from "./android/googleMessagesLink";
 /** SR (C7 review): Withdraw consent asks first, in one line. A Sync already running is not stopped. */
 export const WITHDRAW_ASK = "Syncing stops. Texts already in Keepr stay.";
 import { useTextsLookback } from "./textsLookback";
-import { browserLinkView, CHECKING_BROWSER, LINK_CHECK_MS, useLinkCheckOver } from "./android/browserLinkState";
-import type { RcsExtensionState } from "../../../electron/types/ipc/window-api-rcs-import";
-
-function formatWhen(iso: string | null | undefined): string {
-  if (!iso) return "never";
-  const t = Date.parse(iso);
-  return Number.isFinite(t) ? new Date(t).toLocaleString() : "never";
-}
+import { LINK_CHECK_MS } from "./android/browserLinkState";
+import { useGoogleMessagesLink } from "./android/googleMessagesLink";
+import { ToggleSwitch } from "./ToggleSwitch";
+import { MessagesStoredBlock } from "./MessagesStoredBlock";
 
 interface GoogleMessagesSettingsProps {
   userId: string;
-  /**
-   * Founder (2026-10-04): Link / Relink open the SAME Sync Android modal the
-   * dashboard opens (it closes Settings), at its link step.
-   */
-  onOpenSyncAndroid?: () => void;
   /** Test seam: the extension is in the Chrome Web Store (default EXTENSION_PUBLISHED). */
   published?: boolean;
-  /** Test seam: the "Checking the browser…" window (default LINK_CHECK_MS). */
+  /** Test seam: the "Checking the browser…" window when rendered without the provider. */
   linkCheckMs?: number;
   /**
    * BACKLOG-3156 stage F: the shared "Import messages from" picker, rendered as
@@ -85,39 +76,29 @@ interface GoogleMessagesSettingsProps {
   lookbackPicker?: React.ReactNode;
 }
 
-export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = EXTENSION_PUBLISHED, linkCheckMs = LINK_CHECK_MS, lookbackPicker }: GoogleMessagesSettingsProps) {
-  const [state, setState] = useState<RcsExtensionState | null>(null);
+export function GoogleMessagesSettings({ userId, published = EXTENSION_PUBLISHED, linkCheckMs = LINK_CHECK_MS, lookbackPicker }: GoogleMessagesSettingsProps) {
+  const link = useGoogleMessagesLink(linkCheckMs);
+  const state = link.state;
   // BACKLOG-3892 S3: the shared "How far back to import texts" value.
   const { months: lookbackMonths } = useTextsLookback(userId);
-  /** SR: Forget link's inline confirm is open. */
-  const [forgetAsk, setForgetAsk] = useState(false);
   /** Founder (J flow): the account's "Beta extension install" (default off). */
   const [betaInstall, setBetaInstall] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [showForceWarning, setShowForceWarning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [excluded, setExcluded] = useState<Array<{ id: string; title: string | null }>>([]);
   const [manageOpen, setManageOpen] = useState(false);
-  // BACKLOG-3666: Pair / Re-pair the extension with this Keepr. Live
-  // (0.3.76): the same rule as the Sync Android modal (browserLinkState) — a
-  // saved link reads "Checking the browser…" briefly after Keepr starts, then
-  // Linked.
-  const linkCheckOver = useLinkCheckOver(linkCheckMs);
-  const linkView = browserLinkView(state, linkCheckOver);
-  const keeprPaired = linkView !== "notLinked";
 
   const refreshExcluded = useCallback(async () => {
     const r = await rcsImportService.listExclusions();
     if (r.success && r.data) setExcluded(r.data);
   }, []);
 
+  const linkRefresh = link.refresh;
   const refresh = useCallback(async () => {
-    const r = await rcsImportService.getExtensionState();
-    if (r.success && r.data) setState(r.data);
-    setLoading(false);
+    await linkRefresh();
     await refreshExcluded();
-  }, [refreshExcluded]);
+  }, [linkRefresh, refreshExcluded]);
 
   const [withdrawAsk, setWithdrawAsk] = useState(false);
   /** SR C7: withdraw the consent (Keepr's record); the next Sync asks again. */
@@ -162,10 +143,11 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
   }, [userId]);
 
   useEffect(() => {
-    void refresh();
+    // The link state is read by its owner (googleMessagesLink); this pane reads the hidden chats.
+    void refreshExcluded();
     // A chat switched off (or on) with the eye on the page.
     return rcsImportService.onDataChanged(() => void refreshExcluded());
-  }, [refresh, refreshExcluded]);
+  }, [refreshExcluded]);
 
   // SR M: "Download photos / videos from all chats". Videos ask first (storage).
   const [videoConfirm, setVideoConfirm] = useState(false);
@@ -198,94 +180,6 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
 
   return (
     <div id="settings-google-messages" className="space-y-4" data-testid="google-messages-settings">
-      <div className="p-4 bg-white rounded-lg border border-gray-200 space-y-1 text-sm text-gray-700">
-        {loading ? (
-          <div className="text-xs text-gray-500">Loading…</div>
-        ) : (
-          <>
-            <div data-testid="gm-settings-extension">
-              Keepr extension: {state?.extensionVersion ? `installed (version ${state.extensionVersion})` : "not installed yet"}
-            </div>
-            <div>Google Messages connected: {state?.pairedAt ? "yes" : "not yet"}</div>
-            <div>Last sync: {formatWhen(state?.lastCacheFinishedAt)}</div>
-            <p className="text-xs text-gray-600 pt-1">To sync, click Sync Android on the dashboard.</p>
-          </>
-        )}
-      </div>
-
-      {/* BACKLOG-3892 S3: this line states the shared months value; the
-          picker itself is the first row of Import Preferences below. */}
-      <div className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-lookback">
-        <p className="text-xs text-blue-600" data-testid="gm-lookback-line">
-          {lookbackMonths === null ? "Copying all your texts" : `Copying texts from ${lastMonthsPhrase(lookbackMonths)}`}
-        </p>
-      </div>
-
-      {/* Founder (2026-10-04): Settings hosts no copy of a flow screen — one
-          row in this screen's style: the status, and Link / Relink, which
-          open the Sync Android modal at its link step (a new link replaces
-          the old one only once its code succeeds). */}
-      <div className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-pairing">
-        {forgetAsk && (
-          <div className="flex items-center justify-between gap-3 mb-3" role="alert" data-testid="gm-forget-confirm">
-            <span className="text-sm text-gray-900">{FORGET_ASK}</span>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                className="text-sm text-indigo-700 hover:text-indigo-900 font-medium"
-                onClick={() => setForgetAsk(false)}
-                data-testid="gm-forget-cancel"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={() => {
-                  setForgetAsk(false);
-                  void rcsImportService.linkForget().then(refresh);
-                }}
-                data-testid="gm-forget-yes"
-              >
-                Forget link
-              </button>
-            </div>
-          </div>
-        )}
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-900" data-testid="gm-pairing-line">
-            {linkView === "checking" ? (
-              <span className="inline-flex items-center gap-2" role="status" data-testid="gm-pairing-checking">
-                <span className="w-3.5 h-3.5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" aria-hidden="true" />
-                {CHECKING_BROWSER}
-              </span>
-            ) : keeprPaired ? LINK_STATUS.linked : LINK_STATUS.notLinked}
-          </span>
-          <div className="flex items-center gap-3">
-            {keeprPaired && !forgetAsk && (
-              <button
-                type="button"
-                className="text-sm text-indigo-700 hover:text-indigo-900 font-medium"
-                onClick={() => setForgetAsk(true)}
-                data-testid="gm-link-forget"
-              >
-                Forget link
-              </button>
-            )}
-            {onOpenSyncAndroid && (
-              <button
-                type="button"
-                onClick={() => onOpenSyncAndroid()}
-                className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                data-testid="gm-link-open"
-              >
-                {keeprPaired ? "Relink" : "Link"}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
       {/* BACKLOG-3156 stage F: ONE Import Preferences block in the shared
           settings shape — the label is the card's first child, every setting
           below it is a row (no card inside the card). Founder's order:
@@ -392,39 +286,40 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
             off, so a stored ON value does nothing. */}
 
         {/* SR M: media from chats with no transaction contact. Photos ON, videos OFF by default. */}
-        <label className="mt-3 flex items-start gap-3 cursor-pointer" data-testid="gm-photos-row">
-          <input
-            type="checkbox"
-            className="mt-0.5 w-5 h-5"
-            checked={state?.media ? state.media.photosAllChats : true}
-            onChange={(e) => void setMedia({ photosAllChats: e.target.checked })}
-            data-testid="gm-photos-all"
-          />
+        {/* BACKLOG-3156 stage G (founder 2026-10-13): photos and videos are
+            switches (ToggleSwitch, the iPhone Sync row's switch), descriptions
+            kept underneath. Switching videos ON still asks first. */}
+        <div className="mt-3 flex items-start justify-between gap-3" data-testid="gm-photos-row">
           <span>
             <span className="block text-sm font-medium text-gray-900">Download photos from all chats</span>
             <span className="block text-xs text-gray-600">
               On: photos are saved for every chat in the period. Off: only for chats with a transaction contact.
             </span>
           </span>
-        </label>
-        <label className="mt-3 flex items-start gap-3 cursor-pointer" data-testid="gm-videos-row">
-          <input
-            type="checkbox"
-            className="mt-0.5 w-5 h-5"
-            checked={!!state?.media?.videosAllChats}
-            onChange={(e) => {
-              if (e.target.checked) setVideoConfirm(true);
-              else void setMedia({ videosAllChats: false });
-            }}
-            data-testid="gm-videos-all"
+          <ToggleSwitch
+            checked={state?.media ? state.media.photosAllChats : true}
+            onChange={(next) => void setMedia({ photosAllChats: next })}
+            ariaLabel="Download photos from all chats"
+            testId="gm-photos-all"
           />
+        </div>
+        <div className="mt-3 flex items-start justify-between gap-3" data-testid="gm-videos-row">
           <span>
             <span className="block text-sm font-medium text-gray-900">Download videos from all chats</span>
             <span className="block text-xs text-gray-600">
               Off by default. Videos take much more space than photos.
             </span>
           </span>
-        </label>
+          <ToggleSwitch
+            checked={!!state?.media?.videosAllChats}
+            onChange={(next) => {
+              if (next) setVideoConfirm(true);
+              else void setMedia({ videosAllChats: false });
+            }}
+            ariaLabel="Download videos from all chats"
+            testId="gm-videos-all"
+          />
+        </div>
         {videoConfirm && (
           <div className="mt-3 p-3 bg-amber-50 border border-amber-300 rounded" role="alert" data-testid="gm-videos-confirm">
             <p className="text-xs text-amber-800" data-testid="gm-videos-estimate">{videoEstimateText(state?.media?.lastVideosSeen)}</p>
@@ -450,6 +345,10 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
           </div>
         )}
       </div>
+
+      {/* BACKLOG-3156 stage G: block 3 — Stored on this computer (texts copied
+          from Google Messages; Android Companion texts are not counted here). */}
+      <MessagesStoredBlock userId={userId} source="google" testId="gm-block-stored" />
 
       {manageOpen && (
         <NotSyncedChatsModal

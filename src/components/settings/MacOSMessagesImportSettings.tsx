@@ -12,6 +12,8 @@
  * @module settings/MacOSMessagesImportSettings
  */
 
+import { ToggleSwitch } from "./ToggleSwitch";
+import { MessagesStoredBlock } from "./MessagesStoredBlock";
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { ResponsiveModal } from "../common/ResponsiveModal";
 import { ImportInfoPopover } from "./ImportInfoPopover";
@@ -2156,19 +2158,28 @@ export function MacOSMessagesImportSettings({
 
         {/* BACKLOG-2743: Import without attachments. Also reachable from the
             block below; kept here so it is a normal, always-available choice. */}
-        <label className="flex items-center gap-2 mt-2 text-xs text-gray-600">
-          <input
-            type="checkbox"
+        {/* BACKLOG-3156 stage G (founder 2026-10-13): a switch, the one the
+            iPhone Sync (USB) row uses — same label, same setting and save. */}
+        <div className="flex items-center justify-between gap-3 mt-2">
+          <span className="text-xs text-gray-600">
+            Import message text only (no attachment files)
+          </span>
+          <ToggleSwitch
             checked={skipAttachments}
-            onChange={(e) => handleSkipAttachmentsChange(e.target.checked)}
+            onChange={(next) => handleSkipAttachmentsChange(next)}
             disabled={controlsDisabled}
-            data-testid="skip-attachments-toggle"
-            className="rounded border-gray-300"
+            testId="skip-attachments-toggle"
+            ariaLabel="Import message text only (no attachment files)"
           />
-          Import message text only (no attachment files)
-        </label>
+        </div>
       </div>
       </div>{/* /BACKLOG-3156 stage E — Import Preferences block (its own card) */}
+
+      {/* BACKLOG-3156 stage G: block 3 — Stored on this computer (texts from
+          macOS Messages only). */}
+      <div className={enabled ? "" : "opacity-60"}>
+        <MessagesStoredBlock userId={userId} source="macos" testId="messages-block-stored" />
+      </div>
 
       {/* BACKLOG-3156 stage E: the run's own feedback — a space refusal, the
           result of the last run, and the plan dialog. None of it is a settings
