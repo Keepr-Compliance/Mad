@@ -71,12 +71,12 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
     // that triggers the UAC admin prompt directly from this screen. Previously
     // the user was stuck here with zero guidance (root cause of ticket #64).
     // BACKLOG-3927: Microsoft Store build — no driver install from Keepr. Once
-    // the Apple Devices state is known, the self-ticking setup checklist replaces
-    // this screen (including "ready": rows 1-2 ticked, row 3 open). Unknown
-    // (null) keeps the plain connect view below: it claims nothing either way.
+    // the Apple Devices state is known and setup is unfinished, the self-ticking
+    // two-row setup checklist replaces this screen. "ready" (both rows met) and
+    // unknown (null) keep the plain connect view below (unlock / Trust steps).
     // The hook already re-checks on focus here (throttled), so the checklist's
     // own focus re-check is off.
-    if (isStoreBuild && onRecheckDriver && appleDevicesState !== null) {
+    if (isStoreBuild && onRecheckDriver && appleDevicesState !== null && appleDevicesState !== "ready") {
       return (
         <IPhoneSetupChecklist
           onCheckAgain={onRecheckDriver}
