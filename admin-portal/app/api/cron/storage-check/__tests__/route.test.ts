@@ -47,8 +47,8 @@ describe('GET /api/cron/storage-check — secret not configured', () => {
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  it('refuses the header an unset secret would interpolate to', async () => {
-    expect((await GET(req('Bearer undefined'))).status).toBe(401);
+  it('refuses when the cron secret is not configured', async () => {
+    expect((await GET(req(`Bearer ${process.env.CRON_SECRET}`))).status).toBe(401);
     expect(mockRpc).not.toHaveBeenCalled();
   });
 });
@@ -74,8 +74,10 @@ describe('GET /api/cron/storage-check — secret configured', () => {
 
 describe('isAuthorizedCronRequest (admin-portal)', () => {
   it('is false for every header when the secret is unset or empty', () => {
+    delete process.env.CRON_SECRET;
+    const unsetHeader = `Bearer ${process.env.CRON_SECRET}`;
     for (const secret of [undefined, '']) {
-      for (const header of [null, '', 'Bearer ', 'Bearer undefined']) {
+      for (const header of [null, '', 'Bearer ', unsetHeader]) {
         expect(isAuthorizedCronRequest(header, secret)).toBe(false);
       }
     }

@@ -82,8 +82,8 @@ describe.each(routes)('GET /api/cron/%s authorization', (_name, GET, work) => {
       expect(work()).not.toHaveBeenCalled();
     });
 
-    it('refuses the header an unset secret would interpolate to', async () => {
-      const res = await GET(req('Bearer undefined'));
+    it('refuses when the cron secret is not configured', async () => {
+      const res = await GET(req(`Bearer ${process.env.CRON_SECRET}`));
       expect(res.status).toBe(401);
       expect(work()).not.toHaveBeenCalled();
     });
@@ -124,8 +124,11 @@ describe.each(routes)('GET /api/cron/%s authorization', (_name, GET, work) => {
 
 describe('isAuthorizedCronRequest', () => {
   it('is false for every header when the secret is unset or empty', () => {
+    delete process.env.CRON_SECRET;
+    const unsetHeader = `Bearer ${process.env.CRON_SECRET}`;
+    const nullHeader = `Bearer ${String(null)}`;
     for (const secret of [undefined, '']) {
-      for (const header of [null, '', 'Bearer ', 'Bearer undefined', 'Bearer null']) {
+      for (const header of [null, '', 'Bearer ', unsetHeader, nullHeader]) {
         expect(isAuthorizedCronRequest(header, secret)).toBe(false);
       }
     }
