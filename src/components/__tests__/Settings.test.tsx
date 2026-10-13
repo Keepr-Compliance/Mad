@@ -730,7 +730,7 @@ describe("Settings", () => {
         .mockResolvedValue({ success: true, messageCount: 1234, lastImportAt: new Date().toISOString() });
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
       await screen.findByTestId("macos-messages-import");
-      await waitFor(() => expect(screen.getByTestId("macos-block-stored")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByTestId("messages-block-stored")).toBeInTheDocument());
       expect(document.body.textContent).not.toMatch(/last imported/i);
       expect(document.body.textContent).not.toMatch(/1,234 messages/);
     });
