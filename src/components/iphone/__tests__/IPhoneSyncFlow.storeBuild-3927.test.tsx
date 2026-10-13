@@ -11,7 +11,7 @@ import type { UseIPhoneSyncReturn } from "../../../types/iphone";
 import userEvent from "@testing-library/user-event";
 import {
   APPLE_DEVICES_CHECK_BUTTON,
-  APPLE_DEVICES_HEADING,
+  CHECKLIST_APPLE_DEVICES_INSTALL,
 } from "../../../constants/appleDevicesStoreCopy";
 
 const baseContext: UseIPhoneSyncReturn = {
@@ -36,6 +36,7 @@ const baseContext: UseIPhoneSyncReturn = {
   recheckDriver: jest.fn(async () => "not-installed" as const),
   setConnectScreenActive: jest.fn(),
   appleDevicesState: null,
+  appleUsbDriver: null,
   startSync: jest.fn(),
   cancelSync: jest.fn(),
   dismissSync: jest.fn(),
@@ -66,11 +67,23 @@ describe("IPhoneSyncFlow in the Store build (BACKLOG-3927)", () => {
     const recheckDriver = jest.fn(async () => "not-installed" as const);
     mockContextValue = { ...baseContext, driverMissing: true, recheckDriver, appleDevicesState: "not-installed" };
     render(<IPhoneSyncFlow />);
-    expect(screen.getByText(APPLE_DEVICES_HEADING)).toBeInTheDocument();
+    expect(screen.getByTestId("iphone-setup-checklist")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Install Apple Mobile Device Support/i })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: APPLE_DEVICES_CHECK_BUTTON }));
     expect(recheckDriver).toHaveBeenCalled();
     expect(baseContext.recoverInstallDriver).not.toHaveBeenCalled();
+  });
+
+  it("Store + ready: the hook's USB-driver reading reaches the checklist (row 2 ticks only when bound)", () => {
+    setStoreFlag(true);
+    mockContextValue = { ...baseContext, driverMissing: false, appleDevicesState: "ready", appleUsbDriver: "bound" };
+    const { unmount } = render(<IPhoneSyncFlow />);
+    expect(screen.getByTestId("setup-row-usbDriver")).toHaveAttribute("data-status", "done");
+    expect(screen.getByTestId("setup-row-iphone")).toHaveAttribute("data-status", "open");
+    unmount();
+    mockContextValue = { ...baseContext, driverMissing: false, appleDevicesState: "ready", appleUsbDriver: "no-device" };
+    render(<IPhoneSyncFlow />);
+    expect(screen.getByTestId("setup-row-usbDriver")).toHaveAttribute("data-status", "unchecked");
   });
 
   it("reports the Connect screen shown, and not shown once it unmounts or another view takes over", () => {
@@ -92,6 +105,6 @@ describe("IPhoneSyncFlow in the Store build (BACKLOG-3927)", () => {
     mockContextValue = { ...baseContext, driverMissing: true };
     render(<IPhoneSyncFlow />);
     expect(screen.getByRole("button", { name: /Install Apple Mobile Device Support/i })).toBeInTheDocument();
-    expect(screen.queryByText(APPLE_DEVICES_HEADING)).toBeNull();
+    expect(screen.queryByText(CHECKLIST_APPLE_DEVICES_INSTALL)).toBeNull();
   });
 });

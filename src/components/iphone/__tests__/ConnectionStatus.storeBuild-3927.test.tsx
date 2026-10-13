@@ -14,17 +14,16 @@ import {
   APPLE_DEVICES_NOT_FOUND,
   APPLE_DEVICES_BODY,
   APPLE_DEVICES_OPEN_BUTTON,
-  APPLE_DEVICES_NOT_RUNNING_HEADING,
-  APPLE_DEVICES_NOT_RUNNING_BODY,
-  APPLE_USB_DRIVER_HEADING,
   APPLE_USB_DRIVER_STEPS,
   APPLE_WU_CHECK_BUTTON,
   APPLE_WU_OPTIONAL_BUTTON,
   APPLE_OPEN_WINDOWS_UPDATE_FAILED,
   APPLE_USB_DRIVER_STILL_MISSING,
-  APPLE_DEVICES_READY_HEADING,
-  APPLE_MSI_STOPPED_HEADING,
   APPLE_MSI_STOPPED_BODY,
+  CHECKLIST_APPLE_DEVICES_INSTALL,
+  CHECKLIST_APPLE_DEVICES_STARTING,
+  CHECKLIST_HEADING,
+  CHECKLIST_USB_DRIVER_BODY,
 } from "../../../constants/appleDevicesStoreCopy";
 
 const base = { isConnected: false, device: null, onSyncClick: jest.fn(), driverMissing: true };
@@ -43,7 +42,7 @@ it("Store build: Apple Devices guide; Check again calls the re-check", async () 
       onRecheckDriver={onRecheckDriver}
     />,
   );
-  expect(screen.getByText(APPLE_DEVICES_HEADING)).toBeInTheDocument();
+  expect(screen.getByTestId("iphone-setup-checklist")).toBeInTheDocument();
   expect(screen.queryByText("Install Apple Mobile Device Support")).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: APPLE_DEVICES_CHECK_BUTTON }));
@@ -62,12 +61,30 @@ it("website build unchanged: Install Apple Mobile Device Support", () => {
   render(<ConnectionStatus {...base} onInstallDriver={jest.fn()} onRecheckDriver={jest.fn()} />);
   expect(screen.getByRole("button", { name: "Install Apple Mobile Device Support" })).toBeInTheDocument();
   expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+  expect(screen.queryByTestId("iphone-setup-checklist")).not.toBeInTheDocument();
+});
+
+it("website build shows no checklist in any Apple Devices state", () => {
+  for (const st of ["not-installed", "not-running", "msi-service-stopped", "usb-driver-missing", "ready"] as const) {
+    const { unmount } = render(
+      <ConnectionStatus
+        {...base}
+        driverMissing={st !== "ready"}
+        appleDevicesState={st}
+        onInstallDriver={jest.fn()}
+        onRecheckDriver={jest.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("iphone-setup-checklist")).not.toBeInTheDocument();
+    expect(screen.queryByText(CHECKLIST_HEADING)).not.toBeInTheDocument();
+    unmount();
+  }
 });
 
 it("Windows on ARM still wins over the Store guide (BACKLOG-3363 unchanged)", () => {
   render(<ConnectionStatus {...base} isWindowsArm64 isStoreBuild onRecheckDriver={jest.fn()} />);
   expect(screen.getByTestId("windows-arm64-unsupported")).toBeInTheDocument();
-  expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+  expect(screen.queryByTestId("iphone-setup-checklist")).not.toBeInTheDocument();
 });
 
 // BACKLOG-3927 fix round (PC test 2026-10-12): three different Store-build
@@ -87,16 +104,15 @@ describe("Store build guidance follows the Apple Devices state", () => {
 
   it("not installed: install Apple Devices from the Microsoft Store", () => {
     renderState("not-installed");
-    expect(screen.getByText(APPLE_DEVICES_HEADING)).toBeInTheDocument();
+    expect(screen.getByText(CHECKLIST_APPLE_DEVICES_INSTALL)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: APPLE_DEVICES_OPEN_BUTTON })).toBeInTheDocument();
-    expect(screen.queryByText(APPLE_USB_DRIVER_HEADING)).not.toBeInTheDocument();
+    expect(screen.queryByText(CHECKLIST_USB_DRIVER_BODY)).not.toBeInTheDocument();
   });
 
   it("installed but not running: open Apple Devices once, no Store install text", () => {
     renderState("not-running");
-    expect(screen.getByText(APPLE_DEVICES_NOT_RUNNING_HEADING)).toBeInTheDocument();
-    expect(screen.getByText(APPLE_DEVICES_NOT_RUNNING_BODY)).toBeInTheDocument();
-    expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+    expect(screen.getByText(CHECKLIST_APPLE_DEVICES_STARTING)).toBeInTheDocument();
+    expect(screen.queryByText(CHECKLIST_APPLE_DEVICES_INSTALL)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: APPLE_DEVICES_OPEN_BUTTON })).not.toBeInTheDocument();
   });
 
@@ -131,9 +147,10 @@ describe("Store build guidance follows the Apple Devices state", () => {
 
   it("USB driver missing: Windows Update / Device Manager steps, not the Apple Devices install message", async () => {
     renderState("usb-driver-missing");
-    expect(screen.getByText(APPLE_USB_DRIVER_HEADING)).toBeInTheDocument();
-    for (const step of APPLE_USB_DRIVER_STEPS) expect(screen.getByText(step)).toBeInTheDocument();
-    expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+    expect(screen.getByText(CHECKLIST_USB_DRIVER_BODY)).toBeInTheDocument();
+    expect(CHECKLIST_USB_DRIVER_BODY).not.toMatch(/Device Manager/);
+    expect(CHECKLIST_USB_DRIVER_BODY).toMatch(/restart may be needed/);
+    expect(screen.queryByText(CHECKLIST_APPLE_DEVICES_INSTALL)).not.toBeInTheDocument();
     expect(screen.queryByText(APPLE_DEVICES_BODY)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: APPLE_DEVICES_CHECK_BUTTON }));
     expect(await screen.findByText(APPLE_USB_DRIVER_STILL_MISSING)).toBeInTheDocument();
@@ -142,22 +159,22 @@ describe("Store build guidance follows the Apple Devices state", () => {
 
   it("SR: 'ready' never shows the not-installed copy (neutral connect text)", () => {
     renderState("ready");
-    expect(screen.getByText(APPLE_DEVICES_READY_HEADING)).toBeInTheDocument();
-    expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+    expect(screen.getByTestId("setup-row-iphone")).toHaveAttribute("data-status", "open");
+    expect(screen.queryByText(CHECKLIST_APPLE_DEVICES_INSTALL)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: APPLE_DEVICES_OPEN_BUTTON })).not.toBeInTheDocument();
   });
 
   it("unknown (null) state never claims Apple Devices is missing", () => {
     renderState(null);
-    expect(screen.getByText(APPLE_DEVICES_READY_HEADING)).toBeInTheDocument();
-    expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+    // Unknown: plain connect view, no checklist (claims nothing either way).
+    expect(screen.getByText("Connect Your iPhone")).toBeInTheDocument();
+    expect(screen.queryByTestId("iphone-setup-checklist")).not.toBeInTheDocument();
   });
 
   it("Apple's MSI service stopped: neutral restart text, no Apple Devices install or open", () => {
     renderState("msi-service-stopped");
-    expect(screen.getByText(APPLE_MSI_STOPPED_HEADING)).toBeInTheDocument();
     expect(screen.getByText(APPLE_MSI_STOPPED_BODY)).toBeInTheDocument();
-    expect(screen.queryByText(APPLE_DEVICES_NOT_RUNNING_HEADING)).not.toBeInTheDocument();
+    expect(screen.queryByText(CHECKLIST_APPLE_DEVICES_STARTING)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: APPLE_DEVICES_OPEN_BUTTON })).not.toBeInTheDocument();
   });
 });

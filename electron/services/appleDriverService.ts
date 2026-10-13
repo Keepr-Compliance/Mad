@@ -200,6 +200,38 @@ export async function getDriverDiagnostics(): Promise<DriverDiagnostics> {
 }
 
 /**
+ * BACKLOG-3927: the last source/state line written to main.log. The PC test
+ * (2026-10-12) found no log line naming the detected source, so each check
+ * whose source/state differs from the previous one writes ONE line. Enums only:
+ * no UDID, serial or device name.
+ */
+let lastDriverStateLine: string | null = null;
+
+/** BACKLOG-3927: test hook — forget the last logged line. */
+export function resetDriverStateLogForTests(): void {
+  lastDriverStateLine = null;
+}
+
+/** BACKLOG-3927: the one-line summary of a check, both branches. Exported for tests. */
+export function driverStateLine(result: AppleDriverStatus, store: boolean): string {
+  const state =
+    result.appleDevices?.state ??
+    appleDevicesState(result.isInstalled, result.serviceRunning, "no-device", result.installedVia ?? "msi");
+  const usbDriver = result.appleDevices?.usbDriver ?? "not-probed";
+  return (
+    `channel=${store ? "store" : "website"} source=${result.installedVia ?? "none"} state=${state} ` +
+    `usbDriver=${usbDriver} service=${result.serviceRunning ? "running" : "not-running"}`
+  );
+}
+
+function logDriverStateChange(result: AppleDriverStatus, store: boolean): void {
+  const line = driverStateLine(result, store);
+  if (line === lastDriverStateLine) return;
+  lastDriverStateLine = line;
+  log.info(`[AppleDriverService] Apple driver source/state: ${line}`);
+}
+
+/**
  * Check if Apple Mobile Device Support drivers are installed
  */
 export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
@@ -281,6 +313,8 @@ export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
     }
 
     if (source !== "auto") result.sourceOverridden = true;
+
+    logDriverStateChange(result, store);
 
     // Persist driver state on Sentry scope for enrichment of future events
     Sentry.setContext("apple_drivers", {

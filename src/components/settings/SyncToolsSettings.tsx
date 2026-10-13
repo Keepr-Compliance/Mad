@@ -18,6 +18,7 @@ import { safeErrorMessage } from "../../utils/formatUtils";
 import { isStoreBuild, isWindowsArm64 } from "../../utils/platform";
 import { WindowsArm64Unsupported } from "../iphone/WindowsArm64Unsupported";
 import { AppleDevicesStoreGuide } from "../iphone/AppleDevicesStoreGuide";
+import { IPhoneSetupChecklist } from "../iphone/IPhoneSetupChecklist";
 import {
   appleDevicesStateOf,
   driverSourceLabel,
@@ -231,7 +232,18 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
 
           {/* BACKLOG-3927: Store build — Apple Devices guide for whichever step
               is not done (install / open it / USB driver), no Install/Repair */}
-          {showGuide && (
+          {/* BACKLOG-3927 round 5: the Store build shows the self-ticking
+              checklist; the website build (Apple Devices source) keeps the
+              single-state guide unchanged. */}
+          {showGuide && storeBuild && (
+            <IPhoneSetupChecklist
+              variant="compact"
+              disabled={disabled}
+              state={storeState}
+              onCheckAgain={() => refreshStatus(true)}
+            />
+          )}
+          {showGuide && !storeBuild && (
             <AppleDevicesStoreGuide
               variant="compact"
               disabled={disabled}

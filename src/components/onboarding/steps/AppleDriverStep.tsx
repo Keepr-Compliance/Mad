@@ -18,7 +18,7 @@ import { reportOnboardingFailure } from '../sentryOnboarding';
 import type { SkipConfig, StepNavigationConfig } from "../types/config";
 import { isStoreBuild, isWindowsArm64 } from "../../../utils/platform";
 import { WindowsArm64Unsupported } from "../../iphone/WindowsArm64Unsupported";
-import { AppleDevicesStoreGuide } from "../../iphone/AppleDevicesStoreGuide";
+import { IPhoneSetupChecklist } from "../../iphone/IPhoneSetupChecklist";
 import { appleDevicesStateOf } from "../../../utils/appleDevicesState";
 import type { AppleDevicesState } from "../../../types/iphone";
 import {
@@ -254,7 +254,7 @@ function StoreAppleDevicesStepContent({
     );
   }
 
-  return <AppleDevicesStoreGuide onCheckAgain={handleCheckAgain} state={status} />;
+  return <IPhoneSetupChecklist onCheckAgain={handleCheckAgain} state={status} />;
 }
 
 function AppleDriverStepContent(

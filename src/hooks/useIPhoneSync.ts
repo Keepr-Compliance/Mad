@@ -10,8 +10,8 @@ import type {
 } from "../types/iphone";
 import type { SyncCancelTrigger } from "../../electron/types/ipc/window-api-platform";
 import { isStoreBuild } from "../utils/platform";
-import { appleDevicesStateOf } from "../utils/appleDevicesState";
-import type { AppleDevicesState } from "../types/iphone";
+import { appleDevicesStateOf, appleUsbDriverOf } from "../utils/appleDevicesState";
+import type { AppleDevicesState, AppleUsbDriverState } from "../types/iphone";
 import logger from '../utils/logger';
 import { syncOrchestrator } from '../services/SyncOrchestratorService';
 import { usePlatform } from '../contexts/PlatformContext';
@@ -82,11 +82,15 @@ async function isAppleDriverAbsent(): Promise<boolean> {
  * `drivers.checkApple()`. null when the API is unavailable or fails (fail safe:
  * don't nag on ambiguity).
  */
-async function readStoreAppleDevicesState(): Promise<AppleDevicesState | null> {
+async function readStoreAppleDevicesState(): Promise<{
+  state: AppleDevicesState;
+  usbDriver: AppleUsbDriverState | null;
+} | null> {
   try {
     const drivers = window.api?.drivers;
     if (!drivers?.checkApple) return null;
-    return appleDevicesStateOf(await drivers.checkApple());
+    const status = await drivers.checkApple();
+    return { state: appleDevicesStateOf(status), usbDriver: appleUsbDriverOf(status) };
   } catch (err) {
     logger.debug("[useIPhoneSync] Apple Devices check failed (non-fatal):", err);
     return null;
@@ -219,6 +223,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const storeProbeRef = useRef({ inFlight: false, lastAt: 0 });
   // BACKLOG-3927: Store build — which Apple Devices step the user is on.
   const [appleDevicesState, setAppleDevicesState] = useState<AppleDevicesState | null>(null);
+  // BACKLOG-3927: the iPhone's USB driver from the same probe (null = not probed).
+  const [appleUsbDriver, setAppleUsbDriver] = useState<AppleUsbDriverState | null>(null);
   const [installDriverStatus, setInstallDriverStatus] =
     useState<"idle" | "installing" | "error">("idle");
   const [installDriverError, setInstallDriverError] = useState<string | null>(null);
@@ -921,10 +927,12 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     if (throttleMs > 0 && p.lastAt > 0 && Date.now() - p.lastAt < throttleMs) return;
     p.inFlight = true;
     p.lastAt = Date.now();
-    void readStoreAppleDevicesState().then((state) => {
+    void readStoreAppleDevicesState().then((read) => {
       p.inFlight = false;
       if (isCancelled()) return;
+      const state = read?.state ?? null;
       setAppleDevicesState(state);
+      setAppleUsbDriver(read?.usbDriver ?? null);
       setDriverMissing(state !== null && state !== "ready");
     });
   }, []);
@@ -1109,8 +1117,12 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       // the guide shown next names the right step (not a stale or null one).
       let driverAbsent = false;
       if (isWindows && isStoreBuild()) {
-        const state = await readStoreAppleDevicesState();
-        if (state !== null) setAppleDevicesState(state);
+        const read = await readStoreAppleDevicesState();
+        const state = read?.state ?? null;
+        if (read !== null) {
+          setAppleDevicesState(read.state);
+          setAppleUsbDriver(read.usbDriver);
+        }
         driverAbsent = state !== null && state !== "ready";
       } else if (isWindows) {
         driverAbsent = await isAppleDriverAbsent();
@@ -1450,8 +1462,10 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
 
   /** BACKLOG-3927: Store build "Check again" — re-detect, update driverMissing. */
   const recheckDriver = useCallback(async (): Promise<AppleDevicesState> => {
-    const state = (await readStoreAppleDevicesState()) ?? "not-installed";
+    const read = await readStoreAppleDevicesState();
+    const state = read?.state ?? "not-installed";
     setAppleDevicesState(state);
+    setAppleUsbDriver(read?.usbDriver ?? null);
     setDriverMissing(state !== "ready");
     return state;
   }, []);
@@ -1482,6 +1496,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     recheckDriver,
     setConnectScreenActive,
     appleDevicesState,
+    appleUsbDriver,
     isStarting,
     retryAvailableAt,
     startSync,
