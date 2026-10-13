@@ -680,6 +680,7 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
       text: container.textContent ?? '',
       credits: block('credits')?.textContent ?? null,
       payment: block('payment')?.textContent ?? null,
+      paymentButtonClasses: block('payment') ? within(block('payment')!).queryAllByRole('button').map((b) => b.className) : [],
       paymentButtons: block('payment') ? within(block('payment')!).queryAllByRole('button').map((b) => b.textContent) : [],
       planButtons: block('plan') ? within(block('plan')!).queryAllByRole('button').map((b) => b.textContent) : [],
       planText: block('plan')?.textContent ?? null,
@@ -771,6 +772,16 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
     expect(mockStripe.subscriptionsRetrieve).not.toHaveBeenCalled();
     expect(mockStripe.customersCreate).not.toHaveBeenCalled();
     expect(mockStripe.customersUpdate).not.toHaveBeenCalled();
+  });
+
+  it('3848: Edit contact uses the same button design (class string) as Update card in the payment block', async () => {
+    seedCustomer();
+    mockSessionRpc.mockResolvedValue({ data: 1, error: null });
+    const r = await page();
+    expect(r.paymentButtons).toEqual(['Update card', 'Edit contact']);
+    const [updateCard, editContact] = r.paymentButtonClasses;
+    expect(updateCard).toContain('border-gray-300');
+    expect(editContact).toBe(updateCard);
   });
 
   it('invoices read fails -> "Your payment history is unavailable right now.", card still shown', async () => {
