@@ -17,6 +17,14 @@ import {
   APPLE_USB_DRIVER_HEADING,
   APPLE_USB_DRIVER_STEPS,
   APPLE_USB_DRIVER_STILL_MISSING,
+  APPLE_MSI_STOPPED_HEADING,
+  APPLE_MSI_STOPPED_BODY,
+  APPLE_MSI_STOPPED_STEPS,
+  APPLE_MSI_STILL_STOPPED,
+  APPLE_DEVICES_READY_HEADING,
+  APPLE_DEVICES_READY_BODY,
+  APPLE_DEVICES_READY_STEPS,
+  APPLE_DEVICES_READY_STILL,
 } from "../../constants/appleDevicesStoreCopy";
 import type { AppleDevicesState } from "../../types/iphone";
 import { deviceService } from "../../services/deviceService";
@@ -31,10 +39,12 @@ import logger from "../../utils/logger";
  * `onCheckAgain` re-runs detection and resolves with the Apple Devices state.
  * It is also called, quietly, when the window regains focus (the user coming
  * back from the Microsoft Store). `state` picks the guidance: Apple Devices
- * not installed / installed but not running / iPhone not on Apple's USB driver.
+ * not installed / installed but not running / Apple's MSI service stopped /
+ * iPhone not on Apple's USB driver. "ready" and an unknown (null) state get a
+ * neutral "connect your iPhone" text that claims nothing is missing.
  */
 const STATE_COPY: Record<
-  Exclude<AppleDevicesState, "ready">,
+  AppleDevicesState,
   { heading: string; body: string; steps: readonly string[]; still: string; storeButton: boolean }
 > = {
   "not-installed": {
@@ -58,11 +68,25 @@ const STATE_COPY: Record<
     still: APPLE_USB_DRIVER_STILL_MISSING,
     storeButton: false,
   },
+  "msi-service-stopped": {
+    heading: APPLE_MSI_STOPPED_HEADING,
+    body: APPLE_MSI_STOPPED_BODY,
+    steps: APPLE_MSI_STOPPED_STEPS,
+    still: APPLE_MSI_STILL_STOPPED,
+    storeButton: false,
+  },
+  ready: {
+    heading: APPLE_DEVICES_READY_HEADING,
+    body: APPLE_DEVICES_READY_BODY,
+    steps: APPLE_DEVICES_READY_STEPS,
+    still: APPLE_DEVICES_READY_STILL,
+    storeButton: false,
+  },
 };
 
 export function AppleDevicesStoreGuide({
   onCheckAgain,
-  state: stateProp = "not-installed",
+  state: stateProp = null,
   variant = "full",
   disabled = false,
 }: {
@@ -74,11 +98,11 @@ export function AppleDevicesStoreGuide({
   const [checking, setChecking] = useState(false);
   const [notFound, setNotFound] = useState(false);
   // The latest state this guide has seen: the prop, or a Check again result.
-  const [state, setState] = useState<AppleDevicesState>(stateProp ?? "not-installed");
+  const [state, setState] = useState<AppleDevicesState>(stateProp ?? "ready");
   useEffect(() => {
-    setState(stateProp ?? "not-installed");
+    setState(stateProp ?? "ready");
   }, [stateProp]);
-  const copy = STATE_COPY[state === "ready" ? "not-installed" : state];
+  const copy = STATE_COPY[state];
   const [openFailed, setOpenFailed] = useState(false);
   const mountedRef = useRef(true);
   const onCheckAgainRef = useRef(onCheckAgain);
@@ -134,7 +158,7 @@ export function AppleDevicesStoreGuide({
     }
     if (!mountedRef.current) return;
     setChecking(false);
-    if (!failed && next !== "ready") setState(next);
+    if (!failed) setState(next);
     setNotFound(next !== "ready");
   }, []);
 

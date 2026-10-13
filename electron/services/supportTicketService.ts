@@ -91,7 +91,7 @@ export interface IphoneSyncDiagnostics {
     /** BACKLOG-3927: msi (Apple's installer) | apple-devices (Store build); null when not found. */
     installed_via?: "msi" | "apple-devices" | null;
     /** BACKLOG-3927: Store build Apple Devices state; null on the website build. */
-    apple_devices_state?: "not-installed" | "not-running" | "usb-driver-missing" | "ready" | null;
+    apple_devices_state?: "not-installed" | "not-running" | "msi-service-stopped" | "usb-driver-missing" | "ready" | null;
   };
   /**
    * Android WiFi-companion state. Populated best-effort for all users but most

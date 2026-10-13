@@ -200,9 +200,9 @@ export interface WindowApiDrivers {
     error: string | null;
     /** BACKLOG-3927 */
     installedVia?: "msi" | "apple-devices" | null;
-    /** BACKLOG-3927: Store build only. */
+    /** BACKLOG-3927: present when the Apple Devices probe ran. */
     appleDevices?: {
-      state: "not-installed" | "not-running" | "usb-driver-missing" | "ready";
+      state: "not-installed" | "not-running" | "msi-service-stopped" | "usb-driver-missing" | "ready";
     };
   }>;
   hasBundled: () => Promise<{ available: boolean }>;

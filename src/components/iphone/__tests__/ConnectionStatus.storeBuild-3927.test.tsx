@@ -19,6 +19,9 @@ import {
   APPLE_USB_DRIVER_HEADING,
   APPLE_USB_DRIVER_STEPS,
   APPLE_USB_DRIVER_STILL_MISSING,
+  APPLE_DEVICES_READY_HEADING,
+  APPLE_MSI_STOPPED_HEADING,
+  APPLE_MSI_STOPPED_BODY,
 } from "../../../constants/appleDevicesStoreCopy";
 
 const base = { isConnected: false, device: null, onSyncClick: jest.fn(), driverMissing: true };
@@ -29,7 +32,13 @@ it("Store build: Apple Devices guide; Check again calls the re-check", async () 
   const onInstallDriver = jest.fn();
   const onRecheckDriver = jest.fn(async () => "not-installed" as const);
   render(
-    <ConnectionStatus {...base} isStoreBuild onInstallDriver={onInstallDriver} onRecheckDriver={onRecheckDriver} />,
+    <ConnectionStatus
+      {...base}
+      isStoreBuild
+      appleDevicesState="not-installed"
+      onInstallDriver={onInstallDriver}
+      onRecheckDriver={onRecheckDriver}
+    />,
   );
   expect(screen.getByText(APPLE_DEVICES_HEADING)).toBeInTheDocument();
   expect(screen.queryByText("Install Apple Mobile Device Support")).not.toBeInTheDocument();
@@ -61,13 +70,15 @@ it("Windows on ARM still wins over the Store guide (BACKLOG-3363 unchanged)", ()
 // BACKLOG-3927 fix round (PC test 2026-10-12): three different Store-build
 // problems, three different instructions.
 describe("Store build guidance follows the Apple Devices state", () => {
-  const renderState = (state: "not-installed" | "not-running" | "usb-driver-missing") =>
+  const renderState = (
+    state: "not-installed" | "not-running" | "msi-service-stopped" | "usb-driver-missing" | "ready" | null,
+  ) =>
     render(
       <ConnectionStatus
         {...base}
         isStoreBuild
         appleDevicesState={state}
-        onRecheckDriver={jest.fn(async () => state)}
+        onRecheckDriver={jest.fn(async () => state ?? "ready")}
       />,
     );
 
@@ -95,5 +106,26 @@ describe("Store build guidance follows the Apple Devices state", () => {
     await userEvent.click(screen.getByRole("button", { name: APPLE_DEVICES_CHECK_BUTTON }));
     expect(await screen.findByText(APPLE_USB_DRIVER_STILL_MISSING)).toBeInTheDocument();
     expect(screen.queryByText(APPLE_DEVICES_NOT_FOUND)).not.toBeInTheDocument();
+  });
+
+  it("SR: 'ready' never shows the not-installed copy (neutral connect text)", () => {
+    renderState("ready");
+    expect(screen.getByText(APPLE_DEVICES_READY_HEADING)).toBeInTheDocument();
+    expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: APPLE_DEVICES_OPEN_BUTTON })).not.toBeInTheDocument();
+  });
+
+  it("unknown (null) state never claims Apple Devices is missing", () => {
+    renderState(null);
+    expect(screen.getByText(APPLE_DEVICES_READY_HEADING)).toBeInTheDocument();
+    expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+  });
+
+  it("Apple's MSI service stopped: neutral restart text, no Apple Devices install or open", () => {
+    renderState("msi-service-stopped");
+    expect(screen.getByText(APPLE_MSI_STOPPED_HEADING)).toBeInTheDocument();
+    expect(screen.getByText(APPLE_MSI_STOPPED_BODY)).toBeInTheDocument();
+    expect(screen.queryByText(APPLE_DEVICES_NOT_RUNNING_HEADING)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: APPLE_DEVICES_OPEN_BUTTON })).not.toBeInTheDocument();
   });
 });

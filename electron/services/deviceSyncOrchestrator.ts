@@ -67,6 +67,7 @@ import {
   formatDriverServiceStoppedError,
   formatStoreAppleDevicesMissingError,
   formatStoreAppleDevicesNotRunningError,
+  formatMsiServiceStoppedNeutralError,
 } from "./diagnostics/userFacingErrors";
 import { checkAppleDrivers } from "./appleDriverService";
 import { isStoreBuild } from "./distributionChannelService";
@@ -1102,9 +1103,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           return this.errorResult(userError.description);
         }
         if (!driverStatus.serviceRunning) {
-          const userError = storeBuild
-            ? formatStoreAppleDevicesNotRunningError()
-            : formatDriverServiceStoppedError();
+          // BACKLOG-3927: the text follows the source that is installed.
+          // Apple Devices -> open the app (either build). Apple's MSI ->
+          // website keeps its Repair text; the Store build has no Repair
+          // button, so a neutral line.
+          const userError =
+            driverStatus.installedVia === "apple-devices"
+              ? formatStoreAppleDevicesNotRunningError()
+              : storeBuild
+                ? formatMsiServiceStoppedNeutralError()
+                : formatDriverServiceStoppedError();
           log.warn("[DeviceSyncOrchestrator] Apple Mobile Device Service not running");
           // BACKLOG-1354: Breadcrumb + captureMessage when pre-sync fails
           Sentry.addBreadcrumb({

@@ -13,6 +13,12 @@ import {
   resolveDistributionChannel,
   type DistributionChannel,
 } from "../utils/distributionChannel";
+import {
+  APPLE_DRIVER_SOURCE_ENV,
+  QA_OVERRIDES_ENV,
+  resolveAppleDriverSource,
+  type AppleDriverSource,
+} from "../utils/appleDriverSource";
 
 let cached: DistributionChannel | null = null;
 
@@ -49,4 +55,24 @@ export function isStoreBuild(): boolean {
 /** Test seam: forget the cached value. */
 export function resetDistributionChannelCacheForTests(): void {
   cached = null;
+}
+
+let loggedSource: AppleDriverSource | null = null;
+
+/**
+ * BACKLOG-3927: the hidden KEEPR_APPLE_DRIVER_SOURCE test override (see
+ * electron/utils/appleDriverSource.ts for the gate). Read only by
+ * `checkAppleDrivers`; never by any install, download or bundled-installer path.
+ */
+export function getAppleDriverSource(): AppleDriverSource {
+  const source = resolveAppleDriverSource({
+    envValue: process.env[APPLE_DRIVER_SOURCE_ENV],
+    qaFlag: process.env[QA_OVERRIDES_ENV],
+    isPackaged: app.isPackaged,
+  });
+  if (source !== "auto" && loggedSource !== source) {
+    loggedSource = source;
+    log.info(`[DistributionChannel] Apple driver source override: ${source}`);
+  }
+  return source;
 }

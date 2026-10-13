@@ -18,7 +18,7 @@ import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
 import { isWindowsArm64 } from "../utils/windowsArm64";
 import { mainNetFetch } from "./mainNetFetch";
-import { isStoreBuild } from "./distributionChannelService";
+import { getAppleDriverSource, isStoreBuild } from "./distributionChannelService";
 import {
   probeAppleDevices,
   probeUsbmux,
@@ -41,12 +41,13 @@ function getDownloadedDriversPath(): string {
 }
 
 /**
- * BACKLOG-3927 (Store build): where Apple Devices stands, in the order the user
+ * BACKLOG-3927: where Apple Mobile Device Support stands, in the order the user
  * has to fix it.
  */
 export type AppleDevicesState =
-  | "not-installed" // no Apple Devices package
-  | "not-running" // package present, Apple Mobile Device Support not answering
+  | "not-installed" // neither Apple Devices nor Apple's MSI
+  | "not-running" // Apple Devices present, Apple Mobile Device Support not answering
+  | "msi-service-stopped" // only Apple's MSI present, its Windows service stopped
   | "usb-driver-missing" // iPhone plugged in but not on Apple's USB driver
   | "ready";
 
@@ -76,18 +77,19 @@ export interface AppleDriverStatus {
   error: string | null;
   /** BACKLOG-3927: msi (registry / Common Files / service) or apple-devices (Store build). */
   installedVia?: AppleDriverInstalledVia | null;
-  /** BACKLOG-3927: Store build only — Apple Devices readiness. */
+  /** BACKLOG-3927: present when the Apple Devices probe ran (MSI route not running). */
   appleDevices?: AppleDevicesStatus;
 }
 
-/** BACKLOG-3927: derive the Store-build state. Exported for tests. */
+/** BACKLOG-3927: derive the state. Exported for tests. */
 export function appleDevicesState(
-  packageInstalled: boolean,
-  amdsOrUsbmux: boolean,
+  installed: boolean,
+  running: boolean,
   usbDriver: AppleUsbDriverState,
+  installedVia: AppleDriverInstalledVia | null = "apple-devices",
 ): AppleDevicesState {
-  if (!packageInstalled) return "not-installed";
-  if (!amdsOrUsbmux) return "not-running";
+  if (!installed) return "not-installed";
+  if (!running) return installedVia === "msi" ? "msi-service-stopped" : "not-running";
   if (usbDriver === "missing") return "usb-driver-missing";
   return "ready";
 }
@@ -215,38 +217,59 @@ export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
     // Check if the service exists and is running
     const serviceStatus = await checkAppleMobileDeviceService();
 
-    // BACKLOG-3927: in the Store build Apple Mobile Device Support comes from
-    // Apple's "Apple Devices" app (MSIX). Measured on a real PC (PC TEST rows
-    // on BACKLOG-3927): it writes no HKLM key, no Common Files path and registers no Windows
-    // service — it runs per-user processes. Store build only, and only when the
-    // MSI route above found nothing: package present = installed; running =
-    // AppleMobileDeviceProcess running OR usbmux answering (idevice_id -l).
-    // When the MSI route found it, the raw `sc query` result stands (SR R1).
+    // BACKLOG-3927: Apple Mobile Device Support can come from either of two
+    // sources, and BOTH builds accept either:
+    //  - "msi": Apple's installer (the website build bundles it) — HKLM key /
+    //    Common Files path + the "Apple Mobile Device Service" Windows service.
+    //  - "apple-devices": Apple's "Apple Devices" Store app (MSIX). Measured on
+    //    a real PC (PC TEST rows on BACKLOG-3927): no HKLM key, no Common Files
+    //    path, no Windows service — per-user AppleMobileDeviceProcess instead.
+    // When the MSI route is installed and its service runs, nothing else is
+    // asked. Otherwise one PowerShell probe looks for Apple Devices and the
+    // iPhone's USB driver; usbmux (`idevice_id -l`) is asked only when an
+    // iPhone is plugged in and no process/service answered.
+    // KEEPR_APPLE_DRIVER_SOURCE (tests only, gated) narrows which source counts.
     const store = isStoreBuild();
+    const source = getAppleDriverSource();
+    const msiCounts = source !== "appledevices";
+    const appleDevicesCounts = source !== "msi";
+    const msiInstalled = msiCounts && registryCheck.installed;
+    const msiRunning = msiInstalled && serviceStatus;
     let result: AppleDriverStatus;
-    if (registryCheck.installed || !store) {
+    if (msiRunning || !appleDevicesCounts) {
       result = {
-        isInstalled: registryCheck.installed,
-        version: registryCheck.version,
-        serviceRunning: serviceStatus,
+        isInstalled: msiInstalled,
+        version: msiInstalled ? registryCheck.version : null,
+        serviceRunning: msiRunning,
         error: null,
-        installedVia: registryCheck.installed ? "msi" : null,
+        installedVia: msiInstalled ? "msi" : null,
       };
     } else {
       const probe = await probeAppleDevices();
+      const anyInstalled = msiInstalled || probe.packageInstalled;
       let usbmuxReachable: boolean | null = null;
-      if (probe.packageInstalled && !probe.amdsRunning) {
+      if (anyInstalled && !probe.amdsRunning && probe.usbDriver !== "no-device") {
         usbmuxReachable = await probeUsbmux();
       }
-      const running = probe.amdsRunning || usbmuxReachable === true;
+      const appleDevicesRunning = probe.packageInstalled && probe.amdsRunning;
+      // usbmux listing the iPhone proves Apple Mobile Device Support answers,
+      // whichever source started it.
+      const running = appleDevicesRunning || usbmuxReachable === true;
+      const installedVia: AppleDriverInstalledVia | null = appleDevicesRunning
+        ? "apple-devices"
+        : msiInstalled && !probe.packageInstalled
+          ? "msi"
+          : probe.packageInstalled
+            ? "apple-devices"
+            : null;
       result = {
-        isInstalled: probe.packageInstalled,
-        version: null,
-        serviceRunning: probe.packageInstalled && running,
+        isInstalled: anyInstalled,
+        version: msiInstalled ? registryCheck.version : null,
+        serviceRunning: anyInstalled && running,
         error: null,
-        installedVia: probe.packageInstalled ? "apple-devices" : null,
+        installedVia,
         appleDevices: {
-          state: appleDevicesState(probe.packageInstalled, running, probe.usbDriver),
+          state: appleDevicesState(anyInstalled, running, probe.usbDriver, installedVia),
           packageInstalled: probe.packageInstalled,
           amdsRunning: probe.amdsRunning,
           usbmuxReachable,

@@ -16,6 +16,7 @@ import {
   APPLE_DEVICES_NOT_FOUND,
   APPLE_DEVICES_OPEN_BUTTON,
   APPLE_DEVICES_SKIP_DESCRIPTION,
+  APPLE_DEVICES_NOT_RUNNING_HEADING,
 } from "../../../../constants/appleDevicesStoreCopy";
 
 const context = {
@@ -49,6 +50,23 @@ beforeEach(() => {
 afterEach(() => setStoreFlag(undefined));
 
 describe("AppleDriverStep — Store build (BACKLOG-3927)", () => {
+  it("SR U1: Apple Devices installed but not running -> 'Open Apple Devices', not the install text", async () => {
+    setStoreFlag(true);
+    (window.api.drivers!.checkApple as jest.Mock).mockResolvedValue({
+      isInstalled: true,
+      version: null,
+      serviceRunning: false,
+      error: null,
+      installedVia: "apple-devices",
+      appleDevices: { state: "not-running" },
+    });
+    const { Content } = AppleDriverStep;
+    render(<Content context={context} onAction={jest.fn()} />);
+    expect(await screen.findByText(APPLE_DEVICES_NOT_RUNNING_HEADING)).toBeInTheDocument();
+    expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: APPLE_DEVICES_OPEN_BUTTON })).not.toBeInTheDocument();
+  });
+
   it("driver missing: Apple Devices guide, no Install Tools, installer never called", async () => {
     setStoreFlag(true);
     const { Content } = AppleDriverStep;

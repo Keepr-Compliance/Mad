@@ -80,3 +80,40 @@ export const APPLE_DEVICES_SKIP_DESCRIPTION =
 
 export const APPLE_DEVICES_SKIP_WARNING =
   "Without Apple Devices, your iPhone can't be detected and sync won't work. You can install it later from Settings, or install it now.";
+
+/**
+ * Apple's MSI (installed outside Keepr) is present but its Windows service is
+ * stopped. Neither "open Apple Devices" (the user may not have it) nor a Keepr
+ * Repair button (the Store build has none).
+ */
+export const APPLE_MSI_STOPPED_HEADING = "Apple Mobile Device Service isn't running";
+
+export const APPLE_MSI_STOPPED_BODY =
+  "Apple Mobile Device Support is installed on this computer, but its Windows service isn't running.";
+
+export const APPLE_MSI_STOPPED_STEPS: readonly string[] = [
+  "Restart your computer.",
+  "If that doesn't help, reinstall the Apple software you already use for your iPhone.",
+  "Come back to Keepr and click Check again.",
+];
+
+export const APPLE_MSI_STILL_STOPPED =
+  "The Apple Mobile Device service still isn't running. Restart your computer, then click Check again.";
+
+/**
+ * Apple's iPhone support is ready but no iPhone is seen (or the state is not
+ * known yet). Never claims anything is missing.
+ */
+export const APPLE_DEVICES_READY_HEADING = "Connect your iPhone";
+
+export const APPLE_DEVICES_READY_BODY =
+  "Keepr can't see your iPhone yet.";
+
+export const APPLE_DEVICES_READY_STEPS: readonly string[] = [
+  "Plug your iPhone into this computer with a USB cable and unlock it.",
+  "If your iPhone asks, tap Trust.",
+  "Click Check again.",
+];
+
+export const APPLE_DEVICES_READY_STILL =
+  "Keepr still can't see your iPhone. Unplug it, plug it back in, unlock it, then click Check again.";

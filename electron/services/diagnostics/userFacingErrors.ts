@@ -155,6 +155,23 @@ export function formatStoreAppleDevicesNotRunningError(): UserFacingError {
 }
 
 /**
+ * BACKLOG-3927 (Microsoft Store build): Apple's MSI (installed outside Keepr)
+ * is present but its Windows service is stopped. The Store build has no
+ * Repair button and the user may not have Apple Devices, so the text names
+ * neither. DRAFT TEXT — OPEN QUESTION on BACKLOG-3927.
+ */
+export function formatMsiServiceStoppedNeutralError(): UserFacingError {
+  return {
+    title: "Apple Mobile Device Service Not Running",
+    description:
+      "Apple Mobile Device Support is installed, but its Windows service isn't running. iPhone detection needs it.",
+    actionSuggestion:
+      "Restart your computer. If that doesn't help, reinstall the Apple software you already use for your iPhone, then sync again.",
+    code: "DRIVER_SERVICE_STOPPED",
+  };
+}
+
+/**
  * Format error for iPhone not detected via USB.
  * Provides step-by-step troubleshooting instructions.
  */

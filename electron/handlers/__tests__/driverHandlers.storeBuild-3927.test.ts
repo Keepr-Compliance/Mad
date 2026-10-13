@@ -32,7 +32,11 @@ jest.mock("../../services/appleDriverService", () => ({
 }));
 
 let mockStore = false;
-jest.mock("../../services/distributionChannelService", () => ({ isStoreBuild: () => mockStore }));
+let mockSource: "auto" | "msi" | "appledevices" = "auto";
+jest.mock("../../services/distributionChannelService", () => ({
+  isStoreBuild: () => mockStore,
+  getAppleDriverSource: () => mockSource,
+}));
 
 import { registerDriverHandlers } from "../driverHandlers";
 
@@ -49,6 +53,23 @@ beforeEach(() => jest.clearAllMocks());
 describe("Store build (BACKLOG-3927)", () => {
   beforeEach(() => {
     mockStore = true;
+    mockSource = "auto";
+  });
+
+  it("KEEPR_APPLE_DRIVER_SOURCE=msi does not unlock install or download IPC", async () => {
+    mockSource = "msi";
+    mockHasBundled.mockReturnValue(true);
+    const install = await call("drivers:install-apple");
+    expect(install).toEqual({
+      success: false,
+      error: "Install Apple Devices from the Microsoft Store to set up your iPhone.",
+      rebootRequired: false,
+    });
+    const download = (await call("drivers:download")) as { success: boolean };
+    expect(download.success).toBe(false);
+    expect(mockInstall).not.toHaveBeenCalled();
+    expect(mockDownload).not.toHaveBeenCalled();
+    mockHasBundled.mockReturnValue(false);
   });
 
   it("drivers:install-apple refuses without downloading or installing", async () => {

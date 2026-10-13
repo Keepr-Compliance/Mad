@@ -145,6 +145,7 @@ import {
   formatDriverServiceStoppedError,
   formatStoreAppleDevicesMissingError,
   formatStoreAppleDevicesNotRunningError,
+  formatMsiServiceStoppedNeutralError,
 } from "../diagnostics/userFacingErrors";
 
 const TEST_UDID = "a1b2c3d4e5f6789012345678901234567890abcd";
@@ -160,7 +161,9 @@ afterEach(() => {
   Object.defineProperty(process, "platform", originalPlatform);
 });
 
-async function runPreflight(driver: { isInstalled: boolean; serviceRunning: boolean }) {
+type Driver = { isInstalled: boolean; serviceRunning: boolean; installedVia?: "msi" | "apple-devices" | null };
+
+async function runPreflight(driver: Driver) {
   mockCheckAppleDrivers.mockResolvedValue({ version: null, error: null, ...driver });
   const orchestrator = new DeviceSyncOrchestrator();
   const errors: Array<{ userError: { title: string; description: string; actionSuggestion: string } }> = [];
@@ -187,9 +190,53 @@ describe("Store build", () => {
   });
 
   it("Apple Devices not running: Store text, no repair", async () => {
-    const { userError } = await runPreflight({ isInstalled: true, serviceRunning: false });
+    const { userError } = await runPreflight({ isInstalled: true, serviceRunning: false, installedVia: "apple-devices" });
     expect(userError).toEqual(formatStoreAppleDevicesNotRunningError());
     expect(allText(userError)).not.toMatch(/Install Sync Tools|repair/i);
+  });
+});
+
+describe("Store build, Apple's MSI found but its service stopped (BACKLOG-3927)", () => {
+  beforeEach(() => {
+    mockStore = true;
+  });
+
+  it("neutral text: no repair button text, no 'open Apple Devices'", async () => {
+    const { userError } = await runPreflight({ isInstalled: true, serviceRunning: false, installedVia: "msi" });
+    expect(userError).toEqual(formatMsiServiceStoppedNeutralError());
+    expect(allText(userError)).not.toMatch(/Install Sync Tools|Settings > Sync Tools|Apple Devices/i);
+  });
+});
+
+describe("website build accepts the Apple Devices route (BACKLOG-3927)", () => {
+  beforeEach(() => {
+    mockStore = false;
+  });
+
+  it("Apple Devices ready: the driver preflight does not refuse", async () => {
+    mockCheckAppleDrivers.mockResolvedValue({
+      version: null,
+      error: null,
+      isInstalled: true,
+      serviceRunning: true,
+      installedVia: "apple-devices",
+    });
+    const orchestrator = new DeviceSyncOrchestrator();
+    const errors: Array<{ userError?: { code?: string } }> = [];
+    orchestrator.on("error", (e) => errors.push(e));
+    await orchestrator.sync({ udid: TEST_UDID });
+    expect(mockCheckAppleDrivers).toHaveBeenCalled();
+    expect(errors.map((e) => e.userError?.code)).not.toEqual(
+      expect.arrayContaining(["MISSING_DRIVERS"]),
+    );
+    expect(errors.map((e) => e.userError?.code)).not.toEqual(
+      expect.arrayContaining(["DRIVER_SERVICE_STOPPED"]),
+    );
+  });
+
+  it("Apple Devices installed but not running: 'open Apple Devices' text, not the MSI repair text", async () => {
+    const { userError } = await runPreflight({ isInstalled: true, serviceRunning: false, installedVia: "apple-devices" });
+    expect(userError).toEqual(formatStoreAppleDevicesNotRunningError());
   });
 });
 
@@ -204,7 +251,7 @@ describe("website build unchanged", () => {
   });
 
   it("service stopped: repair text", async () => {
-    const { userError } = await runPreflight({ isInstalled: true, serviceRunning: false });
+    const { userError } = await runPreflight({ isInstalled: true, serviceRunning: false, installedVia: "msi" });
     expect(userError).toEqual(formatDriverServiceStoppedError());
   });
 });

@@ -28,6 +28,7 @@ export {
   formatDriverServiceStoppedError,
   formatStoreAppleDevicesMissingError,
   formatStoreAppleDevicesNotRunningError,
+  formatMsiServiceStoppedNeutralError,
   formatDeviceNotDetectedError,
   formatSyncFailedError,
 } from "./userFacingErrors";

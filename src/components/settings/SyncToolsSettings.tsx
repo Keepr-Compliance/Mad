@@ -18,7 +18,11 @@ import { safeErrorMessage } from "../../utils/formatUtils";
 import { isStoreBuild, isWindowsArm64 } from "../../utils/platform";
 import { WindowsArm64Unsupported } from "../iphone/WindowsArm64Unsupported";
 import { AppleDevicesStoreGuide } from "../iphone/AppleDevicesStoreGuide";
-import { appleDevicesStateOf } from "../../utils/appleDevicesState";
+import {
+  appleDevicesStateOf,
+  driverSourceLabel,
+  type AppleDriverInstalledVia,
+} from "../../utils/appleDevicesState";
 import type { AppleDevicesState } from "../../types/iphone";
 
 // ---------------------------------------------------------------------------
@@ -32,6 +36,8 @@ interface DriverStatusInfo {
   error: string | null;
   /** BACKLOG-3927: Store build — Apple Devices state. */
   appleDevicesState?: AppleDevicesState;
+  /** BACKLOG-3927: which source was detected (msi | apple-devices). */
+  installedVia?: AppleDriverInstalledVia | null;
 }
 
 interface InstallProgress {
@@ -78,6 +84,7 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
           serviceRunning: status.serviceRunning,
           error: status.error,
           appleDevicesState: appleDevicesStateOf(status),
+          installedVia: status.installedVia ?? null,
         });
         return appleDevicesStateOf(status);
       } else {
@@ -165,6 +172,11 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
   // driver; it points the user at Apple Devices in the Microsoft Store.
   const storeBuild = isStoreBuild();
   const storeState: AppleDevicesState = driverStatus?.appleDevicesState ?? appleDevicesStateOf(driverStatus);
+  // BACKLOG-3927: either build accepts Apple Devices. When it is the detected
+  // source, Keepr's Repair (which re-runs Apple's MSI) does not apply, so the
+  // website build shows the same Apple Devices guide for the unfinished step.
+  const viaAppleDevices = driverStatus?.installedVia === "apple-devices";
+  const showGuide = !loading && storeState !== "ready" && (storeBuild || viaAppleDevices);
 
   // BACKLOG-3363: Windows on ARM — the driver can never work here; no Install
   // or Repair is offered.
@@ -197,6 +209,14 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
             )}
           </div>
 
+          {/* BACKLOG-3927: which source was detected */}
+          {!loading && driverStatus && (
+            <div className="flex items-center justify-between" data-testid="sync-tools-driver-source">
+              <span className="text-sm text-gray-700">Detected source</span>
+              <span className="text-sm text-gray-700">{driverSourceLabel(driverStatus.installedVia)}</span>
+            </div>
+          )}
+
           {/* Service status row — only when drivers are installed */}
           {driverStatus?.isInstalled && (
             <div className="flex items-center justify-between">
@@ -211,7 +231,7 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
 
           {/* BACKLOG-3927: Store build — Apple Devices guide for whichever step
               is not done (install / open it / USB driver), no Install/Repair */}
-          {storeBuild && !loading && storeState !== "ready" && (
+          {showGuide && (
             <AppleDevicesStoreGuide
               variant="compact"
               disabled={disabled}
@@ -232,6 +252,7 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
           )}
 
           {!storeBuild &&
+            !viaAppleDevices &&
             !loading &&
             driverStatus?.isInstalled &&
             !driverStatus.serviceRunning &&

@@ -37,6 +37,7 @@ export type TrustErrorReason = "locked" | "trust_pending" | "unknown";
 export type AppleDevicesState =
   | "not-installed"
   | "not-running"
+  | "msi-service-stopped"
   | "usb-driver-missing"
   | "ready";
 

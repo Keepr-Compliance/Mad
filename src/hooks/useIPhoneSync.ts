@@ -63,10 +63,6 @@ const DRIVER_ABSENT_GUIDANCE: UserFacingError = {
  * (installed, unavailable API, or an error — fail safe: don't nag on ambiguity).
  */
 async function isAppleDriverAbsent(): Promise<boolean> {
-  if (isStoreBuild()) {
-    const state = await readStoreAppleDevicesState();
-    return state !== null && state !== "ready";
-  }
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const drivers = (window.api as any)?.drivers as
@@ -96,6 +92,17 @@ async function readStoreAppleDevicesState(): Promise<AppleDevicesState | null> {
     return null;
   }
 }
+
+/**
+ * BACKLOG-3927 (Store build): Connect-screen re-check while no iPhone is
+ * connected. An iPhone plugged in on Microsoft's photo driver does not change
+ * `isConnected`, so without this a user who opened the screen first would keep
+ * the plain "Connect your iPhone" view. Re-probe every 15 s, at most 20 times
+ * (5 minutes) per visit, plus on window focus; each probe is one PowerShell
+ * spawn in main. Stops when a device connects or the screen closes.
+ */
+export const STORE_RECHECK_INTERVAL_MS = 15_000;
+export const STORE_RECHECK_MAX = 20;
 
 /**
  * BACKLOG-3927: Store-build text for a sync attempted before Apple Devices is
@@ -927,13 +934,32 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
 
     let cancelled = false;
     if (isStoreBuild()) {
-      void readStoreAppleDevicesState().then((state) => {
-        if (cancelled) return;
-        setAppleDevicesState(state);
-        setDriverMissing(state !== null && state !== "ready");
-      });
+      let inFlight = false;
+      let rechecks = 0;
+      const check = () => {
+        if (inFlight || cancelled) return;
+        inFlight = true;
+        void readStoreAppleDevicesState().then((state) => {
+          inFlight = false;
+          if (cancelled) return;
+          setAppleDevicesState(state);
+          setDriverMissing(state !== null && state !== "ready");
+        });
+      };
+      check();
+      const timer = setInterval(() => {
+        rechecks += 1;
+        if (rechecks > STORE_RECHECK_MAX) {
+          clearInterval(timer);
+          return;
+        }
+        check();
+      }, STORE_RECHECK_INTERVAL_MS);
+      window.addEventListener("focus", check);
       return () => {
         cancelled = true;
+        clearInterval(timer);
+        window.removeEventListener("focus", check);
       };
     }
     void isAppleDriverAbsent().then((absent) => {
@@ -1056,7 +1082,17 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       // diagnostics, on Windows check whether the Apple driver is simply absent
       // (the common "onboarding skipped / UAC declined" case). If so, surface
       // the inline recovery prompt instead of a generic "No device connected".
-      if (isWindows && (await isAppleDriverAbsent())) {
+      // BACKLOG-3927: the Store build reads the full state and records it, so
+      // the guide shown next names the right step (not a stale or null one).
+      let driverAbsent = false;
+      if (isWindows && isStoreBuild()) {
+        const state = await readStoreAppleDevicesState();
+        if (state !== null) setAppleDevicesState(state);
+        driverAbsent = state !== null && state !== "ready";
+      } else if (isWindows) {
+        driverAbsent = await isAppleDriverAbsent();
+      }
+      if (driverAbsent) {
         logger.warn(
           "[useIPhoneSync] Sync attempted but Apple driver is absent — showing recovery prompt",
         );

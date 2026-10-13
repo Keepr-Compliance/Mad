@@ -34,8 +34,28 @@ export const APPLE_STORE_PACKAGE_NAMES = ["AppleInc.AppleDevices", "AppleInc.iTu
 export const APPLE_DEVICES_AMDS_PROCESS = "AppleMobileDeviceProcess";
 
 /**
+ * iPhone / iPad USB nodes only (SR review D2). Apple's vendor id 05AC is also on
+ * Apple keyboards, mice, trackpads and adapters; iOS devices use product ids
+ * 0x12xx. Matched with PowerShell `-like` (case-insensitive wildcard).
+ */
+export const APPLE_IOS_USB_INSTANCE_PATTERN = "USB\\VID_05AC&PID_12*";
+
+/**
+ * JS mirror of the script's `-like` filter, for tests only: the filter itself
+ * runs inside PowerShell, so a stdout fixture cannot exercise it.
+ */
+export function matchesAppleIosUsbInstance(instanceId: string): boolean {
+  const escaped = APPLE_IOS_USB_INSTANCE_PATTERN.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`, "i").test(instanceId);
+}
+
+/**
  * The probe script. No parameter takes a comma list: `Get-AppxPackage -Name`
  * is typed String, and an array there is a binding error (SR review B1).
+ * Ends with `exit 0` (SR review D1): `powershell -Command` exits 1 when the last
+ * statement leaves `$?` false — e.g. Get-PnpDeviceProperty failing on a
+ * driverless interface — even though `SilentlyContinue` hid the error and the
+ * lines above it are good.
  */
 export const APPLE_DEVICES_PROBE_SCRIPT = [
   "$ErrorActionPreference = 'SilentlyContinue'",
@@ -43,7 +63,8 @@ export const APPLE_DEVICES_PROBE_SCRIPT = [
   "$pkgs = @(Get-AppxPackage | Where-Object { $names -contains $_.Name } | ForEach-Object { $_.Name })",
   "'packages=' + ($pkgs -join ';')",
   `'amds=' + [bool](Get-Process -Name ${APPLE_DEVICES_AMDS_PROCESS} -ErrorAction SilentlyContinue)`,
-  "Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like 'USB\\VID_05AC*' } | ForEach-Object { 'usbProvider=' + (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_DriverProvider').Data }",
+  `Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like '${APPLE_IOS_USB_INSTANCE_PATTERN}' } | ForEach-Object { 'usbProvider=' + (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_DriverProvider').Data }`,
+  "exit 0",
 ].join("; ");
 
 /** Apple's USB driver for this iPhone. */
@@ -96,24 +117,33 @@ export async function probeAppleDevices(): Promise<AppleDevicesProbeResult> {
     return parseAppleDevicesProbe(String(stdout));
   } catch (error) {
     log.warn("[AppleDevicesProbe] Probe failed:", error);
+    // SR review D1: a non-zero exit still carries the lines printed before the
+    // failing statement. Use them rather than reading everything as absent.
+    const partial = (error as { stdout?: unknown } | null)?.stdout;
+    if (partial !== undefined && partial !== null && String(partial).trim() !== "") {
+      return parseAppleDevicesProbe(String(partial));
+    }
     return { packageInstalled: false, amdsRunning: false, usbDriver: "no-device" };
   }
 }
 
 /**
- * Does usbmux answer? `idevice_id -l` through deviceDetectionService
- * (`probeConnectedUdids`, BACKLOG-3598): a list (even empty) means usbmux
- * answered; null means it could not. NOTE: the bundled Windows binary's exit
- * code on an EMPTY list is unmeasured — with no phone attached this may read
- * false even when usbmux is fine, so it is only a second signal after the
- * process check. BACKLOG-3418: the iPhone helper runs only while iPhone
- * checking is on; when it is off this answers false without spawning anything.
+ * Does usbmux list an iPhone? `idevice_id -l` through deviceDetectionService
+ * (`probeConnectedUdids`, BACKLOG-3598). Measured on the PC (BACKLOG-3927 "REAL
+ * PROBE OUTPUT" row): the bundled Windows binary exits 0 both with a phone
+ * (one UDID line) and without one (empty stdout), so neither the exit code nor
+ * "a list came back" says anything. Only a NON-EMPTY list counts, and callers
+ * ask only when an iPhone is plugged in (the probe saw an iOS USB node).
+ * BACKLOG-3418: the iPhone helper runs only while iPhone checking is on; when
+ * it is off this answers false without spawning anything, so a Settings or
+ * Connect-screen check with checking off relies on the process check alone.
  */
 export async function probeUsbmux(): Promise<boolean> {
   try {
     const { deviceDetectionService } = await import("./deviceDetectionService");
     if (!deviceDetectionService.isDetectionRequested()) return false;
-    return (await deviceDetectionService.probeConnectedUdids()) !== null;
+    const udids = await deviceDetectionService.probeConnectedUdids();
+    return Array.isArray(udids) && udids.length > 0;
   } catch (error) {
     log.warn("[AppleDevicesProbe] usbmux probe failed:", error);
     return false;

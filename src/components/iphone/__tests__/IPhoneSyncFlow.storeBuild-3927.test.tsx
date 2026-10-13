@@ -63,7 +63,7 @@ describe("IPhoneSyncFlow in the Store build (BACKLOG-3927)", () => {
   it("Store + driverMissing: Apple Devices guide, no Install button; Check again calls recheckDriver", async () => {
     setStoreFlag(true);
     const recheckDriver = jest.fn(async () => "not-installed" as const);
-    mockContextValue = { ...baseContext, driverMissing: true, recheckDriver };
+    mockContextValue = { ...baseContext, driverMissing: true, recheckDriver, appleDevicesState: "not-installed" };
     render(<IPhoneSyncFlow />);
     expect(screen.getByText(APPLE_DEVICES_HEADING)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Install Apple Mobile Device Support/i })).toBeNull();

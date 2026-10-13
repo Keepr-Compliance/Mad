@@ -140,9 +140,9 @@ interface ElectronAPI {
       error?: string;
       /** BACKLOG-3927 */
       installedVia?: "msi" | "apple-devices" | null;
-      /** BACKLOG-3927: Store build only. */
+      /** BACKLOG-3927: present when the Apple Devices probe ran. */
       appleDevices?: {
-        state: "not-installed" | "not-running" | "usb-driver-missing" | "ready";
+        state: "not-installed" | "not-running" | "msi-service-stopped" | "usb-driver-missing" | "ready";
       };
     }>;
     /** Check if bundled Apple drivers are available in the app */
