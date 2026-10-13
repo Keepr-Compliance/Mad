@@ -135,7 +135,11 @@ describe('getPersonalBillingView', () => {
         return value;
       });
     const stripe = {
-      customers: { retrieve: rec('customers.retrieve', fx('p3848/cus-expand-pm')), create: rec('customers.create', { id: 'cus_EDITED' }) },
+      customers: { retrieve: rec('customers.retrieve', fx('p3848/cus-expand-pm')), create: rec('customers.create', { id: 'cus_EDITED' }),
+        // C-KEYED: a lookup by email would find a DIFFERENT customer. [EDITED id: not a Stripe producer output]
+        list: rec('customers.list', { data: [{ id: 'cus_EDITED_BY_EMAIL' }] }),
+        search: rec('customers.search', { data: [{ id: 'cus_EDITED_BY_EMAIL' }] }),
+      },
       subscriptions: { retrieve: rec('subscriptions.retrieve', fx('p3848/sub-pastdue-expand-pm')) },
       invoices: { list: rec('invoices.list', fx('p3848/invoices-list-pastdue')) },
       charges: { list: rec('charges.list', fx('p3848/charges-list-pastdue')) },
@@ -187,6 +191,31 @@ describe('getPersonalBillingView', () => {
       view: { row: null },
     });
     expect(out.customer).toBe('present');
+    expect(calls.sort()).toEqual(
+      [
+        `charges.list:${JSON.stringify({ customer: cus.id, limit: ROWS_LIMIT })}`,
+        `customers.retrieve:${JSON.stringify(cus.id)}`,
+        `invoices.list:${JSON.stringify({ customer: cus.id, limit: ROWS_LIMIT })}`,
+      ].sort()
+    );
+  });
+
+  it('C-KEYED: a non-null sign-in email never looks the customer up by email -> no customers.list/search, every read uses the stored row id', async () => {
+    const cus = fx('p3848/cus-expand-pm');
+    const db = new BillingDb({
+      stripe_customers: [{ user_id: USER, stripe_customer_id: cus.id, stripe_mode: 'test', default_payment_method_id: null }],
+    });
+    const { stripe, calls } = stripeStub();
+    await getPersonalBillingView({
+      session: session() as never,
+      service: db as never,
+      stripe,
+      userId: USER,
+      signInEmail: 'signin@fixture.example.test',
+      mode: 'test',
+      view: { row: null },
+    });
+    expect(calls.some((c) => c.startsWith('customers.list') || c.startsWith('customers.search'))).toBe(false);
     expect(calls.sort()).toEqual(
       [
         `charges.list:${JSON.stringify({ customer: cus.id, limit: ROWS_LIMIT })}`,
