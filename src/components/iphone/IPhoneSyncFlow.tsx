@@ -66,6 +66,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     installDriverError,
     recoverInstallDriver,
     recheckDriver,
+    setConnectScreenActive,
     appleDevicesState,
     startSync,
     cancelSync,
@@ -97,6 +98,16 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     (isError && appleEncryptedBackup) ? "appleEncrypted" :
     isError ? "error" :
     "connection";
+
+  // BACKLOG-3927: tell the app-wide hook when the Connect screen is shown, so the
+  // Store build's Apple Devices re-check runs only then. `?.` because several
+  // test doubles of the context predate this member.
+  const connectionShown = view === "connection";
+  useEffect(() => {
+    if (!connectionShown) return;
+    setConnectScreenActive?.(true);
+    return () => setConnectScreenActive?.(false);
+  }, [connectionShown, setConnectScreenActive]);
 
   useEffect(() => {
     logger.info("[IPhoneSyncFlow] Mounted");

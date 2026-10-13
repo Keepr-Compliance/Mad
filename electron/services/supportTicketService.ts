@@ -90,6 +90,8 @@ export interface IphoneSyncDiagnostics {
     version: string | null;
     /** BACKLOG-3927: msi (Apple's installer) | apple-devices (Store build); null when not found. */
     installed_via?: "msi" | "apple-devices" | null;
+    /** BACKLOG-3927: true only for a QA session that overrode the driver source. */
+    installed_via_override?: true;
     /** BACKLOG-3927: Store build Apple Devices state; null on the website build. */
     apple_devices_state?: "not-installed" | "not-running" | "msi-service-stopped" | "usb-driver-missing" | "ready" | null;
   };
@@ -306,6 +308,7 @@ function composeIphoneSyncLine(s: IphoneSyncDiagnostics): string {
     `apple_driver.service_running=${yn(s.apple_driver.service_running)}`,
     // BACKLOG-3927: present only when known.
     ...(s.apple_driver.installed_via ? [`apple_driver.installed_via=${s.apple_driver.installed_via}`] : []),
+    ...(s.apple_driver.installed_via_override ? ["apple_driver.installed_via_override=true"] : []),
     ...(s.apple_driver.apple_devices_state ? [`apple_devices.state=${s.apple_driver.apple_devices_state}`] : []),
     `iphone_sync_enabled=${s.user_settings.iphone_sync_enabled === null ? "unknown" : yn(s.user_settings.iphone_sync_enabled)}`,
     // BACKLOG-2408: which importer this user actually runs. "unset" means no
@@ -679,6 +682,7 @@ async function collectIphoneSyncDiagnostics(): Promise<IphoneSyncDiagnostics> {
       version: driver.version,
       // BACKLOG-3927: only when known (installed_via: msi | apple-devices).
       ...(driver.installedVia ? { installed_via: driver.installedVia } : {}),
+      ...(driver.sourceOverridden ? { installed_via_override: true as const } : {}),
       ...(driver.appleDevices ? { apple_devices_state: driver.appleDevices.state } : {}),
     };
   } catch {

@@ -284,6 +284,15 @@ describe("Store build: Apple Devices readiness (BACKLOG-3927)", () => {
     expect(status.appleDevices?.state).toBe("ready");
   });
 
+  it("SR S7 (pinned): MSI present + service stopped AND Apple Devices installed but not running -> credited to apple-devices, state not-running (Store text: open Apple Devices, not the MSI line)", async () => {
+    msiInstalled("STOPPED");
+    probeStdout(PROBE_NOT_RUNNING_NO_PHONE);
+    const status = await checkAppleDrivers();
+    expect(status).toMatchObject({ isInstalled: true, serviceRunning: false, installedVia: "apple-devices", version: "20.0.0.35" });
+    expect(status.appleDevices?.state).toBe("not-running");
+    expect(status.sourceOverridden).toBeUndefined();
+  });
+
   it("MSI found and running: ready via msi, no PowerShell probe", async () => {
     msiInstalled("RUNNING");
     probeStdout(PROBE_NOTHING);
@@ -399,6 +408,16 @@ describe("website build: install path unchanged, either source accepted (BACKLOG
 describe("KEEPR_APPLE_DRIVER_SOURCE override narrows which source counts (BACKLOG-3927)", () => {
   beforeEach(() => {
     mockProbeConnectedUdids.mockResolvedValue([]);
+  });
+
+  it("override sessions are marked (sourceOverridden); auto sessions are not", async () => {
+    mockStore = true;
+    mockSource = "msi";
+    fsMock.existsSync.mockReturnValue(false);
+    probeStdout(PROBE_READY);
+    expect((await checkAppleDrivers()).sourceOverridden).toBe(true);
+    mockSource = "auto";
+    expect((await checkAppleDrivers()).sourceOverridden).toBeUndefined();
   });
 
   it("override=msi: Apple Devices ready but no MSI -> not installed, Apple Devices not probed", async () => {

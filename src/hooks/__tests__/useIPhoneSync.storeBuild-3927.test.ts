@@ -13,6 +13,7 @@ import {
   useIPhoneSync,
   STORE_RECHECK_INTERVAL_MS,
   STORE_RECHECK_MAX,
+  STORE_FOCUS_THROTTLE_MS,
 } from "../useIPhoneSync";
 
 let mockPlatform = { isWindows: true, isMacOS: false, isLinux: false, platform: "windows" };
@@ -93,6 +94,7 @@ describe("useIPhoneSync — Store build (BACKLOG-3927)", () => {
     const checkApple = setupApi(true, "ready");
     const { result } = renderHook(() => useIPhoneSync(true));
     await flush();
+    act(() => result.current.setConnectScreenActive(true));
     expect(result.current.driverMissing).toBe(false);
     checkApple.mockResolvedValue(driverStatus("usb-driver-missing"));
     await act(async () => {
@@ -105,7 +107,9 @@ describe("useIPhoneSync — Store build (BACKLOG-3927)", () => {
 
   it(`re-check is bounded: at most ${STORE_RECHECK_MAX} interval probes per visit`, async () => {
     const checkApple = setupApi(true, "ready");
-    renderHook(() => useIPhoneSync(true));
+    const { result } = renderHook(() => useIPhoneSync(true));
+    await flush();
+    act(() => result.current.setConnectScreenActive(true));
     await flush();
     const afterMount = checkApple.mock.calls.length;
     for (let i = 0; i < STORE_RECHECK_MAX + 10; i++) {
@@ -121,12 +125,104 @@ describe("useIPhoneSync — Store build (BACKLOG-3927)", () => {
     const checkApple = setupApi(true, "ready");
     const { result } = renderHook(() => useIPhoneSync(true));
     await flush();
+    act(() => result.current.setConnectScreenActive(true));
+    await act(async () => {
+      jest.advanceTimersByTime(STORE_FOCUS_THROTTLE_MS);
+    });
+    await flush();
     checkApple.mockResolvedValue(driverStatus("not-installed"));
     await act(async () => {
       window.dispatchEvent(new Event("focus"));
     });
     await flush();
     expect(result.current.appleDevicesState).toBe("not-installed");
+  });
+});
+
+describe("useIPhoneSync — re-check is tied to the Connect screen (SR round 3)", () => {
+  const advance = async (ms: number) => {
+    await act(async () => {
+      jest.advanceTimersByTime(ms);
+    });
+    await flush();
+  };
+
+  it("no probe at all (interval or focus) while the Connect screen is not shown", async () => {
+    const checkApple = setupApi(true, "ready");
+    renderHook(() => useIPhoneSync(true));
+    await flush();
+    const afterMount = checkApple.mock.calls.length;
+    await advance(STORE_RECHECK_INTERVAL_MS * 5);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await flush();
+    expect(checkApple.mock.calls.length).toBe(afterMount);
+  });
+
+  it("no probe runs after the Connect screen closes (interval and focus)", async () => {
+    const checkApple = setupApi(true, "ready");
+    const { result } = renderHook(() => useIPhoneSync(true));
+    await flush();
+    act(() => result.current.setConnectScreenActive(true));
+    await advance(STORE_RECHECK_INTERVAL_MS);
+    act(() => result.current.setConnectScreenActive(false));
+    await flush();
+    const afterClose = checkApple.mock.calls.length;
+    await advance(STORE_RECHECK_INTERVAL_MS * 5);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await flush();
+    expect(checkApple.mock.calls.length).toBe(afterClose);
+  });
+
+  it("focus spam yields at most one probe per throttle window", async () => {
+    const checkApple = setupApi(true, "ready");
+    const { result } = renderHook(() => useIPhoneSync(true));
+    await flush();
+    act(() => result.current.setConnectScreenActive(true));
+    await advance(STORE_FOCUS_THROTTLE_MS);
+    const before = checkApple.mock.calls.length;
+    for (let i = 0; i < 25; i++) {
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await flush();
+    }
+    expect(checkApple.mock.calls.length - before).toBe(1);
+    await advance(STORE_FOCUS_THROTTLE_MS - 1);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await flush();
+    expect(checkApple.mock.calls.length - before).toBeGreaterThanOrEqual(1);
+  });
+
+  it("SR S14: re-check stops once the iPhone connects (no probe on interval or focus)", async () => {
+    const checkApple = setupApi(true, "ready");
+    let onConnected: ((d: unknown) => void) | undefined;
+    (window as unknown as { api: { device: { onConnected: jest.Mock } } }).api.device.onConnected = jest.fn(
+      (cb: (d: unknown) => void) => {
+        onConnected = cb;
+        return jest.fn();
+      },
+    );
+    const { result } = renderHook(() => useIPhoneSync(true));
+    await flush();
+    act(() => result.current.setConnectScreenActive(true));
+    await advance(STORE_RECHECK_INTERVAL_MS);
+    expect(onConnected).toBeDefined();
+    act(() => onConnected!({ name: "iPhone", udid: "u", productType: "iPhone", productVersion: "17", serialNumber: "s", isConnected: true }));
+    await flush();
+    expect(result.current.isConnected).toBe(true);
+    const afterConnect = checkApple.mock.calls.length;
+    await advance(STORE_RECHECK_INTERVAL_MS * 5);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await flush();
+    expect(checkApple.mock.calls.length).toBe(afterConnect);
   });
 });
 

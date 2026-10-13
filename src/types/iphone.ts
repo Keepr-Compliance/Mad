@@ -233,6 +233,11 @@ export interface UseIPhoneSyncReturn {
    * update `driverMissing`. Resolves with the new state.
    */
   recheckDriver: () => Promise<AppleDevicesState>;
+  /**
+   * BACKLOG-3927: the Connect-iPhone screen reports whether it is shown. The Store
+   * build's periodic / focus Apple Devices re-check runs only while it is.
+   */
+  setConnectScreenActive: (active: boolean) => void;
   /** BACKLOG-3927: Store build — the Apple Devices state last detected (null on the website build). */
   appleDevicesState: AppleDevicesState | null;
   /**

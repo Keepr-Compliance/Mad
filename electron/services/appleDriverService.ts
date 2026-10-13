@@ -77,6 +77,8 @@ export interface AppleDriverStatus {
   error: string | null;
   /** BACKLOG-3927: msi (registry / Common Files / service) or apple-devices (Store build). */
   installedVia?: AppleDriverInstalledVia | null;
+  /** BACKLOG-3927: set (true) only when a QA source override narrowed this check; absent otherwise. */
+  sourceOverridden?: true;
   /** BACKLOG-3927: present when the Apple Devices probe ran (MSI route not running). */
   appleDevices?: AppleDevicesStatus;
 }
@@ -277,6 +279,8 @@ export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
         },
       };
     }
+
+    if (source !== "auto") result.sourceOverridden = true;
 
     // Persist driver state on Sentry scope for enrichment of future events
     Sentry.setContext("apple_drivers", {

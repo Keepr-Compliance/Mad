@@ -103,6 +103,8 @@ async function readStoreAppleDevicesState(): Promise<AppleDevicesState | null> {
  */
 export const STORE_RECHECK_INTERVAL_MS = 15_000;
 export const STORE_RECHECK_MAX = 20;
+/** BACKLOG-3927: at most one window-focus (or screen-open) probe per this window. */
+export const STORE_FOCUS_THROTTLE_MS = 15_000;
 
 /**
  * BACKLOG-3927: Store-build text for a sync attempted before Apple Devices is
@@ -211,6 +213,10 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const [toolsMissing, setToolsMissing] = useState(false);
   // BACKLOG-1919: Apple driver absent while 0 devices detected (Windows recovery path)
   const [driverMissing, setDriverMissing] = useState(false);
+  // BACKLOG-3927: true only while the Connect-iPhone screen is on screen. The Store
+  // build's interval + focus re-check runs only then (this hook is mounted app-wide).
+  const [connectScreenActive, setConnectScreenActive] = useState(false);
+  const storeProbeRef = useRef({ inFlight: false, lastAt: 0 });
   // BACKLOG-3927: Store build — which Apple Devices step the user is on.
   const [appleDevicesState, setAppleDevicesState] = useState<AppleDevicesState | null>(null);
   const [installDriverStatus, setInstallDriverStatus] =
@@ -909,6 +915,20 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     }
   }, [syncStatus]);
 
+  const probeStore = useCallback((isCancelled: () => boolean, throttleMs: number) => {
+    const p = storeProbeRef.current;
+    if (p.inFlight) return;
+    if (throttleMs > 0 && p.lastAt > 0 && Date.now() - p.lastAt < throttleMs) return;
+    p.inFlight = true;
+    p.lastAt = Date.now();
+    void readStoreAppleDevicesState().then((state) => {
+      p.inFlight = false;
+      if (isCancelled()) return;
+      setAppleDevicesState(state);
+      setDriverMissing(state !== null && state !== "ready");
+    });
+  }, []);
+
   // BACKLOG-1919: Proactive Apple-driver recovery check (Windows).
   //
   // The original incident: an iPhone user reached the "Connect Your iPhone"
@@ -934,32 +954,9 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
 
     let cancelled = false;
     if (isStoreBuild()) {
-      let inFlight = false;
-      let rechecks = 0;
-      const check = () => {
-        if (inFlight || cancelled) return;
-        inFlight = true;
-        void readStoreAppleDevicesState().then((state) => {
-          inFlight = false;
-          if (cancelled) return;
-          setAppleDevicesState(state);
-          setDriverMissing(state !== null && state !== "ready");
-        });
-      };
-      check();
-      const timer = setInterval(() => {
-        rechecks += 1;
-        if (rechecks > STORE_RECHECK_MAX) {
-          clearInterval(timer);
-          return;
-        }
-        check();
-      }, STORE_RECHECK_INTERVAL_MS);
-      window.addEventListener("focus", check);
+      probeStore(() => cancelled, 0);
       return () => {
         cancelled = true;
-        clearInterval(timer);
-        window.removeEventListener("focus", check);
       };
     }
     void isAppleDriverAbsent().then((absent) => {
@@ -980,7 +977,33 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     return () => {
       cancelled = true;
     };
-  }, [enabled, isConnected, isWindows, isWindowsArm64]);
+  }, [enabled, isConnected, isWindows, isWindowsArm64, probeStore]);
+
+  // BACKLOG-3927 (Store build): bounded interval + throttled window-focus re-check,
+  // only while the Connect-iPhone screen is shown and no iPhone is connected.
+  useEffect(() => {
+    if (!enabled || !isWindows || isWindowsArm64 || isConnected) return;
+    if (!connectScreenActive || !isStoreBuild()) return;
+    let cancelled = false;
+    const isCancelled = () => cancelled;
+    let rechecks = 0;
+    probeStore(isCancelled, STORE_FOCUS_THROTTLE_MS);
+    const timer = setInterval(() => {
+      rechecks += 1;
+      if (rechecks > STORE_RECHECK_MAX) {
+        clearInterval(timer);
+        return;
+      }
+      probeStore(isCancelled, 0);
+    }, STORE_RECHECK_INTERVAL_MS);
+    const onFocus = () => probeStore(isCancelled, STORE_FOCUS_THROTTLE_MS);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [enabled, isConnected, isWindows, isWindowsArm64, connectScreenActive, probeStore]);
 
   // TASK-910 / BACKLOG-1773: Poll sync status while mounted AND enabled.
   // Uses a recursive setTimeout with exponential backoff instead of a fixed 5s
@@ -1457,6 +1480,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     installDriverError,
     recoverInstallDriver,
     recheckDriver,
+    setConnectScreenActive,
     appleDevicesState,
     isStarting,
     retryAvailableAt,
