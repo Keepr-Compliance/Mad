@@ -666,11 +666,17 @@ const FLOOR_ACTIONS = [
  * brokerage persona is refused before any billing table is read.
  */
 const agentPlan = () => import('@/lib/actions/agentPlan');
+const billingCard = () => import('@/lib/actions/billingCard');
 const BILLING_ACTIONS: Record<string, ActionEntry> = {
   'lib/actions/agentPlan.ts#startAgentCheckout': act(agentPlan, 'startAgentCheckout', 'month'),
   'lib/actions/agentPlan.ts#endAgentPlanAtPeriodEnd': act(agentPlan, 'endAgentPlanAtPeriodEnd'),
   'lib/actions/agentPlan.ts#keepAgentPlan': act(agentPlan, 'keepAgentPlan'),
   'lib/actions/agentPlan.ts#confirmAgentCheckout': act(agentPlan, 'confirmAgentCheckout', 'cs_test_route_audit'),
+  // BACKLOG-3848: same gate (lib/billing/personalActionContext.ts).
+  'lib/actions/agentPlan.ts#endAgentPlanNow': act(agentPlan, 'endAgentPlanNow'),
+  'lib/actions/billingCard.ts#startCardUpdate': act(billingCard, 'startCardUpdate'),
+  'lib/actions/billingCard.ts#confirmCardUpdate': act(billingCard, 'confirmCardUpdate', 'cs_test_route_audit'),
+  'lib/actions/billingCard.ts#updateBillingContact': act(billingCard, 'updateBillingContact', { name: 'Audit', email: 'audit@example.invalid' }),
 };
 const BILLING_ACTION_REFUSED: Outcome = { returned: { error: 'Billing is not available for this account.' } };
 
@@ -914,7 +920,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(40); // BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions
+    expect(actions.length).toBe(44); // BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 
