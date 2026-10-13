@@ -36,6 +36,7 @@ import {
   emitPaymentSucceeded,
 } from '@/lib/payments/fulfillment';
 import { dispatchReceiptEmail } from '@/lib/payments/receipt';
+import { applyCardUpdate } from '@/lib/billing/cardUpdate';
 
 export const runtime = 'nodejs';
 // Never cache; each webhook is a unique event.
@@ -198,6 +199,8 @@ async function handlePaymentIntentSucceeded(ctx: BillingContext, piId: string): 
       userId: md.user_id,
       amountCents: unitPriceCents,
       stripePaymentIntentId: pi.id,
+      stripe: ctx.stripe,
+      customerId: stripeId(pi.customer),
     });
   }
 }
@@ -210,6 +213,16 @@ async function handleCheckoutSessionCompleted(ctx: BillingContext, sessionId: st
   // saved per-export card or payment_intents; it only mirrors the subscription.
   if (session.mode === 'subscription') {
     await handleSubscriptionCheckout(ctx, session);
+    return;
+  }
+  // BACKLOG-3848 (SR R1): EVERY setup-mode session ends here, whatever its
+  // metadata. A setup session has no PaymentIntent, so the per-export card save
+  // below would store null. applyCardUpdate() acts only on an Update-card
+  // session and refuses (logs, no write) anything else. A card decline while
+  // paying the failed renewal is an outcome, not a throw: this answers 200.
+  if (session.mode === 'setup') {
+    const out = await applyCardUpdate(ctx, session.id, { onPayError: 'throw' });
+    console.info(`[payments/webhook] setup session ${session.id}: ${out.kind === 'updated' ? `card updated, payment ${out.pay.kind}` : `ignored (${out.reason})`}`);
     return;
   }
   const md = (session.metadata ?? {}) as UnlockMetadata;

@@ -30,6 +30,7 @@ import type { createServiceClient } from '@/lib/supabase/service';
 import type { AgentPlanView } from './agentPlan';
 import type { StripeMode } from './mode';
 import { getStripeCustomer } from './customers';
+import { billingContactEmail, billingContactName } from './contact';
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 type SessionClient = Pick<SupabaseClient, 'rpc'>;
@@ -254,7 +255,8 @@ export async function getPersonalBillingView(args: {
     credits,
     customer: customer ? 'present' : 'unavailable',
     card,
-    contact: { name: live?.name ?? null, email: live?.email ?? signInEmail },
+    // The same function the receipt senders use (lib/billing/contact.ts).
+    contact: { name: billingContactName(customer), email: billingContactEmail(customer, signInEmail) },
     rows: invoices && charges ? rowsFrom(invoices.data, charges.data) : null,
     failedInvoice: invoices ? failedInvoiceFrom(invoices.data) : null,
   };

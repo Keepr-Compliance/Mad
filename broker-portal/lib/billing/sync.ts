@@ -23,6 +23,7 @@ import type Stripe from 'stripe';
 import type { createServiceClient } from '@/lib/supabase/service';
 import type { StripeMode } from './mode';
 import { getPersonalOrganization, getUserByStripeCustomer, modeAllowsTestFlag } from './customers';
+import { enqueueAgentReceipt } from './agentReceipt';
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
@@ -422,15 +423,19 @@ export async function handleInvoicePaid(ctx: BillingContext, invoiceId: string):
   const invoice = await ctx.stripe.invoices.retrieve(invoiceId, { expand: ['charge'] });
   if (invoice.status !== 'paid') return log(ctx, `invoice ${invoice.id} is ${invoice.status}; no grant`);
   if (!(invoice.total > 0)) return log(ctx, `invoice ${invoice.id} total ${invoice.total}; no grant`);
-  if (!invoice.billing_reason || !GRANT_REASONS.has(invoice.billing_reason)) {
-    return log(ctx, `invoice ${invoice.id} reason ${invoice.billing_reason}; no grant`);
-  }
   const subId = stripeId(invoice.subscription);
   if (!subId) return;
 
   const sub = await ctx.stripe.subscriptions.retrieve(subId);
   const userId = await resolveAgentUser(ctx, sub, 'grant');
   if (!userId) return;
+  // BACKLOG-3848 (SR R9): one receipt per paid Agent invoice, before and
+  // whatever the grant below decides. Deduped per invoice; sent ~10 min later.
+  const queued = await enqueueAgentReceipt(ctx.service, { mode: ctx.mode, userId, invoice });
+  log(ctx, `receipt for ${invoice.id}: ${queued}`);
+  if (!invoice.billing_reason || !GRANT_REASONS.has(invoice.billing_reason)) {
+    return log(ctx, `invoice ${invoice.id} reason ${invoice.billing_reason}; no grant`);
+  }
   const outcome = await syncSubscription(ctx, sub, userId, { advanceCursor: false });
   if (outcome === 'duplicate' || outcome === 'refused') return;
 

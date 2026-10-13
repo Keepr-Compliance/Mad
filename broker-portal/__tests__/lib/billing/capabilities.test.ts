@@ -60,6 +60,8 @@ const P_PAYG: BillingCapabilities = {
   blocks: ['plan', 'choose_plan', 'credits', 'payment', 'invoices'],
   showPrice: true,
   canPay: true,
+  canUpdateCard: true,
+  canEndPlanNow: false,
   canSeeInvoices: true,
   canPurchase: true,
   canManageLicenses: false,
@@ -73,6 +75,8 @@ const P_ACTIVE: BillingCapabilities = {
   blocks: ['plan', 'credits', 'payment', 'invoices'],
   showPrice: true,
   canPay: true,
+  canUpdateCard: true,
+  canEndPlanNow: false,
   canSeeInvoices: true,
   canPurchase: true,
   canManageLicenses: false,
@@ -86,6 +90,8 @@ const P_CANCEL_PENDING: BillingCapabilities = {
   blocks: ['plan', 'credits', 'payment', 'invoices'],
   showPrice: true,
   canPay: true,
+  canUpdateCard: true,
+  canEndPlanNow: false,
   canSeeInvoices: true,
   canPurchase: true,
   canManageLicenses: false,
@@ -99,6 +105,8 @@ const P_PAYMENT_FAILED: BillingCapabilities = {
   blocks: ['plan', 'credits', 'payment', 'invoices'],
   showPrice: true,
   canPay: true,
+  canUpdateCard: true,
+  canEndPlanNow: true,
   canSeeInvoices: true,
   canPurchase: true,
   canManageLicenses: false,
@@ -112,6 +120,8 @@ const P_SUPPORT_GRANT: BillingCapabilities = {
   blocks: ['plan', 'credits', 'payment', 'invoices'],
   showPrice: true,
   canPay: true,
+  canUpdateCard: true,
+  canEndPlanNow: false,
   canSeeInvoices: true,
   canPurchase: true,
   canManageLicenses: false,
@@ -125,6 +135,8 @@ const P_PAYG_SUSPENDED: BillingCapabilities = {
   blocks: ['plan', 'choose_plan', 'credits', 'payment', 'invoices'],
   showPrice: true,
   canPay: true,
+  canUpdateCard: true,
+  canEndPlanNow: false,
   canSeeInvoices: true,
   canPurchase: false,
   canManageLicenses: false,
@@ -138,6 +150,8 @@ const P_PLAN_SUSPENDED: BillingCapabilities = {
   blocks: ['plan', 'credits', 'payment', 'invoices'],
   showPrice: true,
   canPay: true,
+  canUpdateCard: true,
+  canEndPlanNow: false,
   canSeeInvoices: true,
   canPurchase: false,
   canManageLicenses: false,
@@ -151,6 +165,8 @@ const BROKER_SET_UP: BillingCapabilities = {
   blocks: ['plan', 'seats', 'payment', 'invoices'],
   showPrice: true,
   canPay: true,
+  canUpdateCard: false,
+  canEndPlanNow: false,
   canSeeInvoices: true,
   canPurchase: true,
   canManageLicenses: true,
@@ -163,6 +179,8 @@ const BROKER_SET_UP_SUSPENDED: BillingCapabilities = {
   blocks: ['plan', 'seats', 'payment', 'invoices'],
   showPrice: true,
   canPay: true,
+  canUpdateCard: false,
+  canEndPlanNow: false,
   canSeeInvoices: true,
   canPurchase: false,
   canManageLicenses: true,
@@ -176,6 +194,8 @@ const BROKER_NOT_SET_UP: BillingCapabilities = {
   blocks: ['plan', 'seats'],
   showPrice: true,
   canPay: false,
+  canUpdateCard: false,
+  canEndPlanNow: false,
   canSeeInvoices: false,
   canPurchase: false,
   canManageLicenses: true,
@@ -189,6 +209,8 @@ const ADMIN_SET_UP: BillingCapabilities = {
   blocks: ['plan', 'seats', 'payment', 'invoices'],
   showPrice: true,
   canPay: true,
+  canUpdateCard: false,
+  canEndPlanNow: false,
   canSeeInvoices: true,
   canPurchase: true,
   canManageLicenses: true,
@@ -201,6 +223,8 @@ const ADMIN_SET_UP_SUSPENDED: BillingCapabilities = {
   blocks: ['plan', 'seats', 'payment', 'invoices'],
   showPrice: true,
   canPay: true,
+  canUpdateCard: false,
+  canEndPlanNow: false,
   canSeeInvoices: true,
   canPurchase: false,
   canManageLicenses: true,
@@ -214,6 +238,8 @@ const ADMIN_NOT_SET_UP: BillingCapabilities = {
   blocks: ['plan', 'seats'],
   showPrice: true,
   canPay: false,
+  canUpdateCard: false,
+  canEndPlanNow: false,
   canSeeInvoices: false,
   canPurchase: false,
   canManageLicenses: true,
@@ -227,6 +253,8 @@ const IT_ADMIN: BillingCapabilities = {
   blocks: ['plan', 'seats'],
   showPrice: false,
   canPay: false,
+  canUpdateCard: false,
+  canEndPlanNow: false,
   canSeeInvoices: false,
   canPurchase: false,
   canManageLicenses: true,
@@ -353,6 +381,16 @@ describe('billingCapabilities — the whole table', () => {
         orgBillingSetUp: c.setUp,
       })
     ).toEqual(expectedFor(c));
+  });
+});
+
+describe('3848 SR RC4: an unpaid subscription', () => {
+  const owner = { access: PERSONAS['personal-org owner'], isImpersonating: false, enabled: true, agentPlan: 'payment_failed' as const, accountSuspended: false, orgBillingSetUp: false };
+  it('renewalUnpaid -> End plan now is not offered; everything else as payment_failed', () => {
+    expect(billingCapabilities({ ...owner, renewalUnpaid: true })).toEqual({ ...P_PAYMENT_FAILED, canEndPlanNow: false });
+  });
+  it('control: renewalUnpaid false -> End plan now offered (row 4)', () => {
+    expect(billingCapabilities({ ...owner, renewalUnpaid: false })).toEqual(P_PAYMENT_FAILED);
   });
 });
 

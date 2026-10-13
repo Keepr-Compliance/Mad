@@ -59,6 +59,8 @@ interface UniqueIndex {
 }
 const OPEN_SUB_STATUSES = ['active', 'trialing', 'past_due', 'incomplete'];
 const UNIQUE_INDEXES: Record<string, UniqueIndex[]> = {
+  // BACKLOG-3848: billing_outbox.dedupe_key UNIQUE (20261011230913, constraint billing_outbox_dedupe_key_key).
+  billing_outbox: [{ name: 'billing_outbox_dedupe_key_key', columns: ['dedupe_key'] }],
   billing_subscriptions: [
     { name: 'billing_subscriptions_stripe_subscription_id_key', columns: ['stripe_subscription_id'] },
     {
@@ -116,8 +118,17 @@ function matchesCondition(row: Row, cond: string): boolean {
   throw new Error(`BillingDb: unsupported or-condition ${cond}`);
 }
 
+/** A column, or a PostgREST JSON text path `col->>key` (BACKLOG-3848: email_delivery_log.metadata). */
+function columnValue(row: Row, column: string): unknown {
+  const m = /^(\w+)->>(\w+)$/.exec(column);
+  if (!m) return row[column];
+  const obj = row[m[1]] as Record<string, unknown> | null | undefined;
+  const v = obj?.[m[2]];
+  return v === undefined || v === null ? null : String(v);
+}
+
 function matches(row: Row, f: Filter): boolean {
-  const v = row[f.column];
+  const v = columnValue(row, f.column);
   switch (f.op) {
     case 'or':
       return (f.value as string).split(',').some((c) => matchesCondition(row, c));

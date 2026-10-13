@@ -23,6 +23,12 @@ const mockRetrieve = jest.fn();
 const mockVoidInvoice = jest.fn();
 const mockSessionsList = jest.fn();
 const mockSessionsExpire = jest.fn();
+// BACKLOG-3848: Update card writes and the failed-renewal payment.
+const mockCustomersUpdate = jest.fn();
+const mockSubscriptionsUpdate = jest.fn();
+const mockInvoicesPay = jest.fn();
+const mockSendReceipt = jest.fn();
+jest.mock('@/lib/email', () => ({ sendReceiptEmail: (...a: unknown[]) => mockSendReceipt(...a) }));
 
 jest.mock('@sentry/nextjs', () => ({
   captureMessage: (...a: unknown[]) => mockCaptureMessage(...a),
@@ -37,8 +43,17 @@ jest.mock('stripe', () => {
   const r = (kind: string) => (id: string, params?: unknown) => mockRetrieve(kind, id, params);
   const StripeMock = jest.fn().mockImplementation(() => ({
     webhooks: { constructEvent: mockConstructEvent },
-    subscriptions: { retrieve: r('subscription'), cancel: mockSubscriptionsCancel },
-    invoices: { retrieve: r('invoice'), voidInvoice: (...a: unknown[]) => mockVoidInvoice(...a) },
+    subscriptions: {
+      retrieve: r('subscription'),
+      cancel: mockSubscriptionsCancel,
+      update: (...a: unknown[]) => mockSubscriptionsUpdate(...a),
+    },
+    invoices: {
+      retrieve: r('invoice'),
+      voidInvoice: (...a: unknown[]) => mockVoidInvoice(...a),
+      pay: (...a: unknown[]) => mockInvoicesPay(...a),
+    },
+    setupIntents: { retrieve: r('setup_intent') },
     charges: { retrieve: r('charge') },
     disputes: { retrieve: r('dispute') },
     refunds: { retrieve: r('refund') },
@@ -50,7 +65,7 @@ jest.mock('stripe', () => {
         expire: (...a: unknown[]) => mockSessionsExpire(...a),
       },
     },
-    customers: { create: jest.fn() },
+    customers: { create: jest.fn(), retrieve: r('customer'), update: (...a: unknown[]) => mockCustomersUpdate(...a) },
   }));
   return { __esModule: true, default: StripeMock };
 });
@@ -332,7 +347,7 @@ describe('invoice.paid gates on real fixtures (C-3b, C-D3, C-D2, C-D2b)', () => 
     expect(grants()).toEqual([]);
   });
 
-  it('C-D3: credit-settled renewal (total 1999, amount_paid 0, no charge) -> grant', async () => {
+  it('C-D3: credit-settled renewal (total 1999, amount_paid 0, no charge) -> grant, and NO receipt queued (3848 SR RC2)', async () => {
     const sub = fx('sub-2b-credit');
     const inv = fx('inv-2b-credit');
     expect([inv.total, inv.amount_paid, inv.charge]).toEqual([1999, 0, null]);
@@ -340,6 +355,7 @@ describe('invoice.paid gates on real fixtures (C-3b, C-D3, C-D2, C-D2b)', () => 
     serve(inv, sub);
     expect((await deliver(fx('ev-2b-invoice.paid-cycle'))).status).toBe(200);
     expect(grants().map((g) => g.p_paid_through)).toEqual([paidThrough(1796928475)]);
+    expect(db.rows('billing_outbox').filter((r) => r.kind === 'agent_receipt')).toEqual([]);
   });
 
   it('C-D2: void-pause resume (subscription_update) -> grant to the new period end', async () => {
@@ -750,5 +766,135 @@ describe('3847 R6: the write-through never takes the webhook cursor (C-WT-CURSOR
     useDb({ billing_subscriptions: [subRow(pending.id, pending.customer, { status: 'canceled', cancel_at_period_end: false })] });
     await writeThroughCancelFlag(createServiceClient(), pending);
     expect(db.rows('billing_subscriptions')[0]).toMatchObject({ status: 'canceled', cancel_at_period_end: false });
+  });
+});
+
+// ---- BACKLOG-3848: Update card (setup mode) and Agent receipts ----------------
+//
+// Objects: fixtures/stripe/p3848 (TEST, acacia; README). The setup session is
+// the captured open one with `status` [EDITED] complete; its setup_intent id
+// answers the standalone succeeded SetupIntent of the same customer
+// [COMPOSED] (Stripe refuses to confirm a Checkout-made SetupIntent via API).
+
+const FX3848 = path.join(__dirname, '../../../fixtures/stripe/p3848');
+function fx3848(name: string): Obj {
+  return JSON.parse(fs.readFileSync(path.join(FX3848, `${name}.json`), 'utf8'));
+}
+
+describe('3848: setup-mode checkout.session.completed (C-SETUP-ALL, C-SETUP, C-PAY-DECLINE-WH)', () => {
+  const CS = { ...fx3848('pr2-cs-setup-open'), status: 'complete' }; // [EDITED]
+  const SI = fx3848('pr2-seti-succeeded');
+  const SUB_PD = fx3848('pr2-sub-past_due');
+  const INV_OPEN = fx3848('pr2-inv-open');
+  const CUS = CS.customer as string;
+  const PM = SI.payment_method as string;
+  const ev = { id: 'evt_3848_setup', type: 'checkout.session.completed', livemode: false, created: 1791864000, data: { object: { id: CS.id } } };
+
+  function given(session: Obj = CS): void {
+    useDb({
+      stripe_customers: [{ ...customerRow(CUS), default_payment_method_id: 'pm_SEEDED_saved' }],
+      billing_subscriptions: [subRow(SUB_PD.id, CUS, { status: 'past_due' })],
+    });
+    serve(session, SUB_PD, INV_OPEN);
+    serveAs(CS.setup_intent, SI); // [COMPOSED]
+    // Customer before the update: default still the failing card [EDITED from pr2-cus-update-default].
+    const before = fx3848('pr2-cus-update-default');
+    before.invoice_settings.default_payment_method = SUB_PD.default_payment_method;
+    serveAs(CUS, before);
+    mockCustomersUpdate.mockReset().mockResolvedValue(fx3848('pr2-cus-update-default'));
+    mockSubscriptionsUpdate.mockReset().mockResolvedValue(fx3848('pr2-sub-update-default'));
+    mockInvoicesPay.mockReset().mockImplementation(async () => {
+      serve(fx3848('pr2-sub-after-pay'), fx3848('pr2-inv-paid'));
+      return fx3848('pr2-inv-paid');
+    });
+  }
+  const savedCards = () => db.callsTo('stripe_customers', 'update').map((c) => (c.payload as Obj).default_payment_method_id);
+
+  it('C-SETUP-ALL (R1): a setup session that is NOT an Update-card session [EDITED metadata {}] -> 200, zero stripe_customers writes, no Stripe write', async () => {
+    given({ ...CS, metadata: {} });
+    const res = await deliver(ev);
+    expect(res.status).toBe(200);
+    expect(db.callsTo('stripe_customers', 'update')).toEqual([]);
+    expect(db.rows('stripe_customers')[0].default_payment_method_id).toBe('pm_SEEDED_saved');
+    expect(mockCustomersUpdate).not.toHaveBeenCalled();
+    expect(mockInvoicesPay).not.toHaveBeenCalled();
+    expect(db.callsTo('payment_intents')).toEqual([]);
+  });
+
+  it('C-SETUP: an Update-card session -> the SetupIntent card is saved everywhere and the failed renewal is paid; never null', async () => {
+    given();
+    const res = await deliver(ev);
+    expect(res.status).toBe(200);
+    expect(savedCards()).toEqual([PM]);
+    expect(mockCustomersUpdate).toHaveBeenCalledWith(CUS, { invoice_settings: { default_payment_method: PM } });
+    expect(mockSubscriptionsUpdate).toHaveBeenCalledWith(SUB_PD.id, { default_payment_method: PM });
+    expect(mockInvoicesPay).toHaveBeenCalledWith(INV_OPEN.id, { payment_method: PM }, { idempotencyKey: `card-update-pay:${INV_OPEN.id}:${PM}` });
+    expect(db.callsTo('payment_intents')).toEqual([]);
+  });
+
+  it('C-PAY-DECLINE-WH (R3e): the new card is declined (captured) -> 200, card saved, no rethrow', async () => {
+    given();
+    const body = fx3848('SR-PAY-decline').error;
+    mockInvoicesPay.mockReset().mockRejectedValue(Object.assign(new Error(body.message), { type: 'StripeCardError', code: body.code }));
+    const res = await deliver(ev);
+    expect(res.status).toBe(200);
+    expect(mockInvoicesPay).toHaveBeenCalledTimes(1);
+    expect(savedCards()).toEqual([PM]);
+  });
+
+  it('a non-card error while paying -> 500 so Stripe retries (the payment is idempotent per invoice and card)', async () => {
+    given();
+    mockInvoicesPay.mockReset().mockRejectedValue(Object.assign(new Error('api down'), { type: 'StripeAPIError' }));
+    const res = await deliver(ev);
+    expect(res.status).toBe(500);
+  });
+});
+
+describe('3848: Agent receipt queued on invoice.paid (C-RCPT-DEDUPE, R9)', () => {
+  const outbox = () => db.rows('billing_outbox');
+
+  it('C-RCPT-DEDUPE: invoice.paid delivered twice -> one agent_receipt row, ~10 min out, nothing sent inline', async () => {
+    const ev = renewal2a();
+    const before = Date.now();
+    expect((await deliver(ev)).status).toBe(200);
+    expect((await deliver(ev)).status).toBe(200);
+    expect(outbox()).toEqual([
+      expect.objectContaining({
+        stripe_mode: 'test',
+        kind: 'agent_receipt',
+        user_id: USER,
+        dedupe_key: `agent_receipt:test:${INV_2A.id}`,
+        payload: { invoice_id: INV_2A.id },
+      }),
+    ]);
+    const runAfter = Date.parse(outbox()[0].run_after as string);
+    expect(runAfter - before).toBeGreaterThanOrEqual(10 * 60_000 - 1000);
+    expect(runAfter - before).toBeLessThan(11 * 60_000);
+    expect(mockSendReceipt).not.toHaveBeenCalled();
+  });
+
+  it('queued whatever the grant decides: grant refused (licence_suspended) -> still one receipt row', async () => {
+    const ev = renewal2a();
+    mockRpc.mockImplementation(async (fn: string) =>
+      fn === 'grant_unlimited_from_subscription' ? { data: { status: 'refused', reason: 'licence_suspended' }, error: null } : { data: null, error: null }
+    );
+    expect((await deliver(ev)).status).toBe(200);
+    expect(outbox().map((r) => r.kind)).toEqual(['agent_receipt']);
+  });
+
+  it('queued for a paid invoice outside the grant reasons [EDITED billing_reason manual] -> one row, no grant', async () => {
+    const ev = renewal2a();
+    serve({ ...INV_2A, billing_reason: 'manual' });
+    expect((await deliver(ev)).status).toBe(200);
+    expect(grants()).toEqual([]);
+    expect(outbox().map((r) => r.kind)).toEqual(['agent_receipt']);
+  });
+
+  it('a customer with no stored row (not an Agent subscription) -> no receipt row', async () => {
+    useDb({});
+    serve(INV_2A, SUB_2A);
+    const ev = fx('ev-2a-invoice.paid-cycle');
+    expect((await deliver(ev)).status).toBe(200);
+    expect(outbox()).toEqual([]);
   });
 });

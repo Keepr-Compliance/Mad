@@ -94,6 +94,7 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
     enabled: true,
     ...SITUATION_3844,
     agentPlan: view.state,
+    renewalUnpaid: view.row?.status === 'unpaid',
   });
   if (!personalCaps) notFound();
   const sp = (await searchParams) ?? {};
@@ -122,6 +123,10 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
     paymentIncomplete: view.paymentIncomplete,
     billing,
     suspended: view.suspended,
+    card: one(sp.card) === 'updated' || one(sp.card) === 'cancelled' ? (one(sp.card) as 'updated' | 'cancelled') : null,
+    canEndPlanNow: personalCaps.canEndPlanNow,
+    renewalUnpaid: view.row?.status === 'unpaid',
+    canUpdateCard: personalCaps.canUpdateCard,
   };
   return <BillingPage caps={personalCaps} orgBillingSetUp={SITUATION_3844.orgBillingSetUp} personal={personal} />;
 }

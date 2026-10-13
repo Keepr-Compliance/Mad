@@ -105,5 +105,16 @@ function stableJson(v: unknown): string {
     .join(',')}}`;
 }
 
-/** kind -> handler. Empty until the first producer slice lands. */
-export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.freeze({});
+/**
+ * kind -> handler. Each entry calls through a dynamic import, so this module
+ * and the handler modules (which import NonRetryableOutboxError from here)
+ * never load each other in a cycle.
+ *   - agent_receipt          BACKLOG-3848, lib/billing/agentReceipt.ts
+ *   - agent_end_now_cancel   BACKLOG-3848, lib/billing/endPlanNow.ts
+ */
+export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.freeze({
+  agent_receipt: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./agentReceipt')).handleAgentReceiptRow(row, ctx),
+  agent_end_now_cancel: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./endPlanNow')).handleEndNowCancelRow(row, ctx),
+});

@@ -14,6 +14,7 @@ import { CreditsBlock } from './CreditsBlock';
 import { PaymentContactBlock } from './PaymentContactBlock';
 import { InvoicesBlock } from './InvoicesBlock';
 import { PaymentFailedBanner } from './PaymentFailedBanner';
+import { CardUpdateReturn } from './BillingCardControls';
 import type { PersonalBillingData } from '@/lib/billing/personalBilling';
 
 export interface PlanPrice {
@@ -37,6 +38,13 @@ export interface PersonalPlanData {
   billing?: PersonalBillingData;
   /** licenses.status = suspended (agentPlan view). Copy only; access stays with 3878. */
   suspended?: boolean;
+  /** BACKLOG-3848: back from the Stripe card page (`?card=`). */
+  card?: 'updated' | 'cancelled' | null;
+  /** BACKLOG-3848: from billingCapabilities (the server re-checks on every action). */
+  canEndPlanNow?: boolean;
+  canUpdateCard?: boolean;
+  /** BACKLOG-3848 (SR RC4): the subscription is `unpaid`; End plan now is not offered, support is. */
+  renewalUnpaid?: boolean;
 }
 
 export interface BillingPageProps {
@@ -71,7 +79,11 @@ export function BillingPage({ caps, orgBillingSetUp, personal }: BillingPageProp
         return (
           <PaymentContactBlock
             key={block}
-            data={b && personal ? { billing: b, state: personal.state, interval: personal.interval, suspended } : undefined}
+            data={
+              b && personal
+                ? { billing: b, state: personal.state, interval: personal.interval, suspended, canUpdateCard: caps.canUpdateCard }
+                : undefined
+            }
           />
         );
       case 'invoices':
@@ -81,7 +93,15 @@ export function BillingPage({ caps, orgBillingSetUp, personal }: BillingPageProp
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <h1 className="text-2xl font-semibold text-gray-900">Billing</h1>
-      {b && personal?.state === 'payment_failed' ? <PaymentFailedBanner card={b.card} invoice={b.failedInvoice} /> : null}
+      {caps.kind === 'personal' && personal?.card === 'updated' && personal.sessionId ? (
+        <CardUpdateReturn sessionId={personal.sessionId} />
+      ) : null}
+      {caps.kind === 'personal' && personal?.card === 'cancelled' ? (
+        <p role="status" className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-700">Your card was not changed.</p>
+      ) : null}
+      {b && personal?.state === 'payment_failed' ? (
+        <PaymentFailedBanner card={b.card} invoice={b.failedInvoice} canUpdateCard={caps.canUpdateCard && b.customer === 'present'} />
+      ) : null}
       {caps.blocks.map(render)}
     </div>
   );
