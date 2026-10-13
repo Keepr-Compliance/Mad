@@ -43,6 +43,8 @@ const mockAutoLink = jest.fn();
 const mockSyncReviewQueue = jest.fn();
 jest.mock("../reviewStateService", () => ({
   syncReviewQueueForTransaction: (...args: unknown[]) => mockSyncReviewQueue(...args),
+  // BACKLOG-3925: the covered path's full sweep also runs the address-only pass.
+  runAddressMatchPassInSweep: jest.fn().mockResolvedValue({ queued: 0, clean: true }),
 }));
 jest.mock("../autoLinkService", () => ({
   autoLinkCommunicationsForContact: mockAutoLink,

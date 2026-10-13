@@ -286,6 +286,9 @@ export async function ensureTransactionEmailsSynced(params: {
             });
           }
         }
+        // BACKLOG-3925: address-only matches from the local cache, after the contact pass.
+        const { runAddressMatchPassInSweep } = await import("./reviewStateService");
+        if (!(await runAddressMatchPassInSweep(transactionId, `covered-${reason}`)).clean) clean = false;
         return { clean };
       }, `covered-${reason}`);
       lastSyncAt.set(transactionId, Date.now());

@@ -33,9 +33,122 @@ import type { ReviewItemDto } from "../../../../electron/types/ipc/window-api-tr
 // and the CARDS drawn here cannot drift apart. Re-exported because three
 // surfaces and their suites already import it from this module.
 import { groupReviewItemsByThread, type ReviewThreadGroup } from "../utils/reviewThreads";
+import {
+  REVIEW_MATCH_KINDS,
+  reviewMatchKind,
+  strongestReason,
+  type ReviewMatchFilter,
+} from "../utils/reviewMatchReasons";
+import type { ReviewMatchReason } from "../../../../electron/types/ipc/reviewMatchReason";
 
 export { groupReviewItemsByThread };
 export type { ReviewThreadGroup };
+
+/** BACKLOG-3925: the reason a thread card shows — the strongest among its items. */
+export function reviewThreadReason(group: ReviewThreadGroup): ReviewMatchReason {
+  return strongestReason(group.items.map((i) => i.matchReason ?? "contact"));
+}
+
+/** BACKLOG-3925: the match pill (mock v3; wording draft). */
+export function ReviewMatchPill({ reason }: { reason: ReviewMatchReason }): React.ReactElement | null {
+  const kind = reviewMatchKind(reason);
+  if (!kind) return null;
+  return (
+    <span
+      className={`px-1.5 py-0.5 text-xs rounded-full ${kind.pillClass} whitespace-nowrap`}
+      data-testid="match-pill"
+      data-reason={reason}
+    >
+      {kind.pillLabel}
+    </span>
+  );
+}
+
+/** Segmented-control classes — ContactSearchList.tsx's sort toggle (mock v3). */
+function filterButtonClass(active: boolean, first: boolean): string {
+  return [
+    "px-3 py-2 text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-purple-500",
+    first ? "" : "border-l border-gray-300",
+    active ? "bg-gray-100 text-gray-900 font-semibold" : "bg-white text-gray-500 font-medium hover:bg-gray-50",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * The All / Address match / Contact match segmented control, with THREAD counts.
+ * Shown on the full Needs Review screen only (founder, 2026-10-12): the Emails-tab
+ * section lists everything with pills and has no tabs.
+ */
+export function ReviewMatchFilterBar({
+  value,
+  onChange,
+  total,
+  counts,
+}: {
+  value: ReviewMatchFilter;
+  onChange: (f: ReviewMatchFilter) => void;
+  total: number;
+  counts: ReadonlyMap<ReviewMatchReason, number>;
+}): React.ReactElement {
+  return (
+    <div
+      role="group"
+      aria-label="Filter by match type"
+      className="inline-flex rounded-lg border border-gray-300 overflow-hidden"
+      data-testid="needs-review-filter"
+    >
+      {(["all", ...REVIEW_MATCH_KINDS.map((k) => k.reason)] as ReviewMatchFilter[]).map((f, idx) => {
+        const label = f === "all" ? "All" : reviewMatchKind(f)?.tabLabel ?? f;
+        const n = f === "all" ? total : counts.get(f) ?? 0;
+        return (
+          <button
+            key={f}
+            type="button"
+            onClick={() => onChange(f)}
+            aria-pressed={value === f}
+            className={filterButtonClass(value === f, idx === 0)}
+            data-testid={`needs-review-filter-${f}`}
+          >
+            {label} <span className="ml-1 text-xs">({n})</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Thread counts per reason — each THREAD counts once, under its strongest reason. */
+export function countThreadsByReason(groups: ReviewThreadGroup[]): Map<ReviewMatchReason, number> {
+  const out = new Map<ReviewMatchReason, number>();
+  for (const g of groups) {
+    const r = reviewThreadReason(g);
+    out.set(r, (out.get(r) ?? 0) + 1);
+  }
+  return out;
+}
+
+/** The email explainer body: intro line plus one line per kind (mock v3 text). */
+export function ReviewEmailExplainer(): React.ReactElement {
+  return (
+    <>
+      <p className="mb-2">
+        These are messages Keepr wasn&apos;t sure belong to this deal. Keep the ones
+        that belong (<span aria-hidden="true">✓</span>), remove the ones that
+        don&apos;t (<span aria-hidden="true">🗑</span>).
+      </p>
+      {REVIEW_MATCH_KINDS.map((k, idx) => (
+        <p
+          key={k.reason}
+          className={idx < REVIEW_MATCH_KINDS.length - 1 ? "mb-1" : undefined}
+          data-testid={`needs-review-info-${k.reason}`}
+        >
+          <span className="font-semibold text-gray-900">{k.infoLabel}</span> {k.infoText}
+        </p>
+      ))}
+    </>
+  );
+}
 
 export interface ReviewQueueSectionProps {
   /** The full review set — filtered here by kind, never re-derived. */
@@ -160,8 +273,11 @@ export function ReviewCards({
   auditStartDate,
   auditEndDate,
   actionsLockedTooltip,
+  showMatchPills = false,
 }: {
   items: ReviewItemDto[];
+  /** BACKLOG-3925: show the match pill after each email subject (the All tab). */
+  showMatchPills?: boolean;
   /** BACKLOG-3910: locked deal — approve and reject are disabled and show this text. */
   actionsLockedTooltip?: string;
 
@@ -205,6 +321,7 @@ export function ReviewCards({
               actionsLockedTooltip={actionsLockedTooltip}
               userEmail={userEmail}
               nameMap={nameMap}
+              subjectBadge={showMatchPills ? <ReviewMatchPill reason={reviewThreadReason(group)} /> : undefined}
             />
           );
         }
@@ -276,7 +393,11 @@ export function ReviewQueueSection({
   // The count in the header is a THREAD count (contract: "badges and subtitles
   // count threads"), derived from the same grouping ReviewCards renders — so
   // the number beside "Needs review" can never disagree with the cards below it.
-  const threadCount = useMemo(() => groupReviewItemsByThread(mine).length, [mine]);
+  const groups = useMemo(() => groupReviewItemsByThread(mine), [mine]);
+  const threadCount = groups.length;
+
+  // BACKLOG-3925: emails carry a match pill each; NO tabs here (founder, 2026-10-12).
+  const showPills = kind === "email";
 
   // Nothing to review → render nothing, so a clean transaction is unchanged.
   if (mine.length === 0) return null;
@@ -291,7 +412,7 @@ export function ReviewQueueSection({
   return (
     <div className="mb-4" data-testid="needs-review-section">
       {/* Header row — one line: chevron + "Needs review" + (i) + (N), amber. */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <button
           type="button"
           onClick={() => setIsOpen((v) => !v)}
@@ -327,11 +448,15 @@ export function ReviewQueueSection({
               data-testid="needs-review-info-popover"
               role="tooltip"
             >
-              {kind === "email"
-                ? "Emails found for contacts on this deal, within the audit period, that aren't linked yet."
-                : "Text conversations found for contacts on this deal, within the audit period, that aren't linked yet."}{" "}
-              Keep the ones that belong (<span aria-hidden="true">✓</span>), remove the
-              ones that don&apos;t (<span aria-hidden="true">🗑</span>).
+              {kind === "email" ? (
+                <ReviewEmailExplainer />
+              ) : (
+                <>
+                  {"Text conversations found for contacts on this deal, within the audit period, that aren't linked yet."}{" "}
+                  Keep the ones that belong (<span aria-hidden="true">✓</span>), remove the
+                  ones that don&apos;t (<span aria-hidden="true">🗑</span>).
+                </>
+              )}
             </div>
           )}
         </div>
@@ -344,6 +469,7 @@ export function ReviewQueueSection({
       {isOpen && (
         <ReviewCards
           items={mine}
+          showMatchPills={showPills}
           kind={kind}
           busyId={busyId}
           onApproveItem={(ids, key) => act(ids, key, onApprove)}
