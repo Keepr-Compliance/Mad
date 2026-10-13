@@ -38,3 +38,7 @@ PR-2 spike (`p3878-pr2-spike/x4.py`):
   `POST …/expire`.
 - `x2-resume-charge`: the charge of `x2-resume-invoice-marker`, re-fetched after the spike (`GET /v1/charges/<id>`).
 - `x2-resume-ev-invoice.paid`: the `invoice.paid` event delivered for that invoice (account version `2026-06-24.dahlia`, request idempotency key stripped).
+- `x2-renewal-voided`: the x2 renewal (`latest_invoice` of `x2-sub-after-void-and-pause`) re-fetched
+  after the spike: `void` (voided before the pause).
+- `x4-charge`, `x4cape-charge`: the charges of `x4-latest-invoice-paid` / `x4cape-latest-invoice-paid`,
+  re-fetched after the spike.

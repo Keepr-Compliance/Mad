@@ -18,7 +18,12 @@ import fs from 'fs';
 import path from 'path';
 import { OUTBOX_HANDLERS } from '@/lib/billing/outboxKinds';
 
-const EXPECTED_KINDS: string[] = ['agent_end_now_cancel', 'agent_receipt']; // BACKLOG-3848
+const EXPECTED_KINDS: string[] = [
+  'agent_end_now_cancel', // BACKLOG-3848
+  'agent_receipt', // BACKLOG-3848
+  'pause_agent_subscription', // BACKLOG-3878
+  'resume_agent_subscription', // BACKLOG-3878
+];
 const DIR = path.join(__dirname, 'outboxKinds');
 
 function missingConvergenceTests(kinds: string[], dir: string): string[] {

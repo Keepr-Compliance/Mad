@@ -25,7 +25,11 @@ export type BillingAlertName =
   // BACKLOG-3849 PR-2 (nightly reconcile + queue check)
   | 'reconcile_mismatch'
   | 'outbox_stale_daily'
-  | 'outbox_parked';
+  | 'outbox_parked'
+  // BACKLOG-3878 (suspension pause / resume, SR R7 + R8)
+  | 'paid_while_suspended'
+  | 'suspended_subscription_unpaused'
+  | 'paused_subscription_licence_active';
 
 export function billingAlert(
   name: BillingAlertName,
