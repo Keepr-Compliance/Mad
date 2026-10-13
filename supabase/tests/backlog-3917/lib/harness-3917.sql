@@ -4,8 +4,8 @@
 CREATE FUNCTION pg_temp.id(p_name text) RETURNS uuid LANGUAGE sql IMMUTABLE AS $f$
   SELECT md5('backlog-3917:' || p_name)::uuid $f$;
 CREATE FUNCTION pg_temp.id_names() RETURNS SETOF text LANGUAGE sql IMMUTABLE AS $f$
-  SELECT unnest(ARRAY['org1','org_p','org_p2','plan','u_s','u_a','u_g','u_gs','u_ts','u_ta','u_p','u_ps',
-                      'm_s','m_a','m_g','m_gs','m_ts','m_ta','m_p','m_ps','sub','sub_p','tpl_org','tpl_own_p','tpl_own_s',
+  SELECT unnest(ARRAY['org1','org2','org_p','org_p2','plan','u_s','u_a','u_g','u_gs','u_ts','u_ta','u_p','u_ps',
+                      'm_s','m_a','m_g','m_gs','m_ts','m_ta','m_p','m_ps','m_s2','m_gs2','scl','scl_item','sub','sub_p','tpl_org','tpl_own_p','tpl_own_s',
                       'idp','tok','log','att','msg','new_sub']) $f$;
 CREATE FUNCTION pg_temp.subst(p text) RETURNS text LANGUAGE plpgsql AS $f$
 DECLARE n text; BEGIN

@@ -27,21 +27,31 @@ version differs between venues) and the six support-attachments storage policies
 
 | Control | What it proves |
 |---|---|
-| c01 | suspended / expired / pending admin: promote, demote, remove, invite refused, `is_org_admin` false; active admin allowed |
+| c01 | suspended / expired / pending admin: promote, demote, remove, invite refused, `is_org_admin` false; active admin allowed; the same admin's active org2 membership grants `is_org_admin` in org2 only |
 | c02 | organization settings (retention, JIT) refused for suspended / expired admin; allowed for active |
 | c03 | approve, mark under review, comment refused for suspended / expired admin; allowed for active |
 | c04 | reads: roster = own row, no submission / comments / attachment rows / message rows / attachment file / colleague users, reviewer check false, org template hidden; organization row still visible; active twin reads all |
 | c05 | active personal owner keeps own organization, templates, template writes, reviewer check |
 | c06 | template writes refused for suspended / expired admin and agent; allowed when active |
-| c07 | suspended / expired agent: storage upload refused and submission row insert refused, nothing written; active agent allowed |
+| c07 | suspended / expired agent: storage upload refused and submission row insert refused, nothing written; active agent allowed; the agent's active org2 membership allows an org2 upload; an `{org1}/…` upload into a second bucket with no policy of its own is refused for the active agent |
 | c08 | identity providers, SCIM tokens, SCIM sync log: none for suspended / expired it_admin; all for active |
 | c09 | catalogue: helper definition and grants; the five helpers keep production flags and grants; every changed object calls the helper; roles/commands unchanged; every other pinned object equals production |
 | c10 / c11 | apply twice; `rollback-3917.sql` restores every pinned md5 to production's |
 | c12 | signed-out requests: reads return nothing without error; writes refused |
+| c13 | `set_submission_checklist_reviewer_check`: refused (42501) for suspended / expired admin; active admin ticks the item |
 
-`base` runs the controls without the 3917 file: every deny-side check in c01-c04, c06, c07
-fails there, every active-twin check passes. `mutants` runs every control on the unmutated
+Fixture org2 is a second brokerage where the suspended admin `u_s` and the suspended agent
+`u_gs` each hold an active membership (writers: `admin_invite_user` organization path and
+`claim_pending_invite`, which refuse a duplicate only within the same organization). Every
+org1 refusal holds with it present; m26 / m27 (status read from any membership) are killed
+by it.
+
+`base` runs the controls without the 3917 file: every deny-side check in c01-c04, c06, c07,
+c13 fails there, every active-twin check passes. The c07 second-bucket check passes in base
+too (production's policy already names the bucket); m28 is what it kills. `mutants` runs every control on the unmutated
 file first, then each mutant in `lib/mutants.py` (each edit must match exactly once, else
 INVALID). Mutants of the inline policy filters that stay closed through another table's
 policy while the function changes stand are killed by c09 only; their behavioural control is
-listed so the run shows it staying green.
+listed so the run shows it staying green. m23 is not one of them: both identity-provider
+policies are permissive and the manage policy is FOR ALL, so its USING applies to SELECT and
+c08 kills it as well as c09.

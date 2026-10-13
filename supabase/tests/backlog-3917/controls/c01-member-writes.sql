@@ -21,6 +21,10 @@ DO $$ DECLARE st text; actor text; m text; deny boolean; BEGIN
     m := pg_temp.as_user(actor, $q$select public.is_org_admin(auth.uid(), '{org1}')$q$);
     PERFORM pg_temp.check('c01 '||st||' admin: is_org_admin = '||(NOT deny)::text, m = 'OK '||(NOT deny)::text, m);
   END LOOP;
+  -- u_s is suspended in org1 and active admin of org2: the org2 membership grants
+  -- access in org2 and nothing in org1 (checked above with it present).
+  m := pg_temp.as_user('u_s', $q$select public.is_org_admin(auth.uid(), '{org2}')$q$);
+  PERFORM pg_temp.check('c01 admin suspended in org1, active in org2: is_org_admin(org2) = true', m = 'OK true', m);
   -- the refused attempts left nothing behind
   PERFORM pg_temp.check('c01 rows unchanged',
     (SELECT count(*) FROM public.organization_members WHERE organization_id = pg_temp.id('org1')) = 6

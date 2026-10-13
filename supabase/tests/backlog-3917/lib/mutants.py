@@ -9,6 +9,8 @@ Targets name control files in ../controls (without .sql). Mutants whose only
 killer is the catalogue control c09 are the policies that stay closed through
 another table's policy while the function changes stand (SR R1); they list
 their behavioural control too, so the run shows that control staying green.
+m23 is not one of them: both identity-provider policies are permissive and the
+manage policy is FOR ALL, so its USING also applies to SELECT and c08 kills it.
 
 usage: mutants.py list                      -> name|expected|targets
        mutants.py apply <name> <migration> <out-migration>
@@ -54,7 +56,7 @@ ALL_READS_WRITES = "c01-member-writes c02-org-settings c03-review-writes c04-rea
 MUTANTS = {
     # name: (expected, [(old, new), ...], targets)
     "m01-is-org-admin-reverted": ("kill", [D1], "c01-member-writes"),
-    "m02-can-review-submission-reverted": ("kill", [D2], "c03-review-writes c04-reads"),
+    "m02-can-review-submission-reverted": ("kill", [D2], "c03-review-writes c04-reads c13-reviewer-check-rpc"),
     "m03-review-function-and-inline-policies-reverted": ("kill", [D2, P2U, P2C, P3, P4A, P4B], "c03-review-writes c04-reads"),
     "m04-update-policy-both-branches-removed": ("kill", [P2U, P2C], "c03-review-writes c09-catalog"),
     "m05-update-policy-using-removed": ("kill", [P2U], "c03-review-writes c09-catalog"),
@@ -79,9 +81,22 @@ MUTANTS = {
     "m20-is-org-admin-only": ("kill", [D2, D5, D3, D4, P1, P2U, P2C, P3, P4A, P4B, P5, P6, P7], "c02-org-settings c03-review-writes c04-reads c06-checklist-templates c07-agent-upload"),
     "m21-scim-token-policy-without-status": ("kill", [R4_TOKEN], "c08-identity-scim"),
     "m22-idp-view-policy-without-status": ("kill", [R4_IDP_VIEW], "c08-identity-scim"),
-    "m23-idp-manage-policy-without-status": ("kill", [R4_IDP_MANAGE], "c09-catalog"),
+    "m23-idp-manage-policy-without-status": ("kill", [R4_IDP_MANAGE], "c08-identity-scim c09-catalog"),
     "m24-scim-log-policy-without-status": ("kill", [R4_LOG], "c08-identity-scim"),
     "m25-organizations-select-filtered": ("kill", [(LAST, ORG_SELECT_FILTERED)], "c04-reads c09-catalog"),
+    # A user can be active in a second brokerage (fixture org2): status must come
+    # from the membership in the organization being acted on, not from any row.
+    "m26-storage-status-from-any-membership": ("kill", [(
+        "         AND " + H + "(uploader.license_status)));",
+        "         AND EXISTS (SELECT 1 FROM public.organization_members anyrow WHERE anyrow.user_id = auth.uid() AND "
+        + H + "(anyrow.license_status))));")], "c07-agent-upload"),
+    "m27-is-org-admin-status-from-any-membership": ("kill", [(
+        "    AND role IN ('admin', 'it_admin')\n    AND " + H + "(license_status)\n",
+        "    AND role IN ('admin', 'it_admin')\n    AND EXISTS (SELECT 1 FROM organization_members z WHERE z.user_id = user_uuid AND "
+        + H + "(z.license_status))\n")], "c01-member-writes"),
+    "m28-storage-policy-any-bucket": ("kill", [(
+        "    bucket_id = 'submission-attachments'\n    AND split_part",
+        "    bucket_id IS NOT NULL\n    AND split_part")], "c07-agent-upload"),
 }
 
 
