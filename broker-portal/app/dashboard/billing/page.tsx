@@ -15,7 +15,9 @@
  * Each step runs before any billing data is read. BACKLOG-3847 reads the
  * personal owner's Agent plan (mirror row, support grant) and the Agent prices
  * AFTER step 4; account suspension stays with 3878, the organization's deal
- * with 3853/3855.
+ * with 3853/3855. BACKLOG-3848 reads blocks 4–6 (credits, card, contact,
+ * receipts/invoices) for the personal owner only, also after step 4: an
+ * organization page (broker, admin, it_admin) returns before any of it.
  */
 
 import { notFound, redirect } from 'next/navigation';
@@ -28,6 +30,8 @@ import { createServiceClient } from '@/lib/supabase/service';
 import { getStripe } from '@/lib/stripe';
 import { currentStripeMode } from '@/lib/billing/mode';
 import { formatPrice, getAgentPlanView, getAgentPrices, type AgentPrice } from '@/lib/billing/agentPlan';
+import { getPersonalBillingView } from '@/lib/billing/personalBilling';
+import { createClient } from '@/lib/supabase/server';
 
 const SITUATION_3844 = {
   agentPlan: 'none',
@@ -53,6 +57,15 @@ async function agentPrices(): Promise<PersonalPlanData['prices']> {
   }
 }
 
+function stripeOrNull() {
+  try {
+    return getStripe();
+  } catch (e) {
+    console.error('[billing/page] Stripe unavailable:', (e as Error).message);
+    return null;
+  }
+}
+
 export default async function BillingRoute({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   if (!billingEnabled()) notFound();
   if (await getImpersonationSession()) notFound();
@@ -72,7 +85,9 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
   }
 
   // BACKLOG-3847: the personal owner's Agent plan, read only now that the page is admitted.
-  const view = await getAgentPlanView(createServiceClient(), portal.user.id, currentStripeMode());
+  const service = createServiceClient();
+  const mode = currentStripeMode();
+  const view = await getAgentPlanView(service, portal.user.id, mode);
   const personalCaps = billingCapabilities({
     access: portal.access,
     isImpersonating: false,
@@ -83,15 +98,30 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
   if (!personalCaps) notFound();
   const sp = (await searchParams) ?? {};
   const checkout = one(sp.checkout);
+  // BACKLOG-3848 blocks 4–6: read only, never creates a Stripe customer; each source fails soft.
+  const [prices, billing] = await Promise.all([
+    agentPrices(),
+    getPersonalBillingView({
+      session: await createClient(),
+      service,
+      stripe: stripeOrNull(),
+      userId: portal.user.id,
+      signInEmail: portal.user.email ?? null,
+      mode,
+      view,
+    }),
+  ]);
   const personal: PersonalPlanData = {
     state: view.state,
     interval: view.row?.interval ?? null,
     currentPeriodEnd: view.row?.current_period_end ?? null,
     supportGrantEffective: view.supportGrantEffective,
-    prices: await agentPrices(),
+    prices,
     checkout: checkout === 'success' || checkout === 'cancelled' ? checkout : null,
     sessionId: one(sp.session_id),
     paymentIncomplete: view.paymentIncomplete,
+    billing,
+    suspended: view.suspended,
   };
   return <BillingPage caps={personalCaps} orgBillingSetUp={SITUATION_3844.orgBillingSetUp} personal={personal} />;
 }

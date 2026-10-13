@@ -637,6 +637,17 @@ describe('Cancel plan and Keep my plan', () => {
     expect(mockDb.rows('billing_subscriptions').find((r) => r.user_id === OTHER_USER)).toMatchObject({ cancel_at_period_end: false });
   });
 
+  // BACKLOG-3848 R5 (SR probe SR-PIN-142): pins the caps gate in endAgentPlanAtPeriodEnd. Without it
+  // the Stripe status check alone decides, and a mirror that lags Stripe would be let through.
+  it('C-PIN-142: past_due mirror, Stripe re-fetch says active -> End at period end refused by the caps gate, no update', async () => {
+    seed({ billing_subscriptions: [mirrorRow(C_KEEP, { status: 'past_due' })] });
+    serve(C_KEEP.id, C_KEEP); // [COMPOSED] mirror lags Stripe: Stripe already active
+    const view = await getAgentPlanView(createServiceClient(), FIXTURE_USER_ID, 'test');
+    expect(view.state).toBe('payment_failed');
+    expect(await endAgentPlanAtPeriodEnd()).toHaveProperty('error');
+    expect(calls('subscriptions.update')).toEqual([]);
+  });
+
   it('End when Stripe already says it is ending -> refused, no update', async () => {
     seed({ billing_subscriptions: [mirrorRow(C_KEEP)] });
     serve(C_KEEP.id, C_PENDING);
