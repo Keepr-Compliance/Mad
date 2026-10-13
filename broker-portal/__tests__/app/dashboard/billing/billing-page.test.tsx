@@ -115,6 +115,13 @@ jest.mock('@/lib/actions/agentPlan', () => ({
   endAgentPlanAtPeriodEnd: jest.fn(),
   keepAgentPlan: jest.fn(),
   confirmAgentCheckout: jest.fn(async () => ({ ok: true })),
+  endAgentPlanNow: jest.fn(),
+}));
+// BACKLOG-3848 card and contact buttons; their server actions are tested in billingCard.test.ts.
+jest.mock('@/lib/actions/billingCard', () => ({
+  startCardUpdate: jest.fn(),
+  confirmCardUpdate: jest.fn(async () => ({ ok: true })),
+  updateBillingContact: jest.fn(),
 }));
 jest.mock('next/cache', () => ({ revalidatePath: jest.fn() }));
 
@@ -457,7 +464,7 @@ describe('3847: personal plan blocks', () => {
     const r = await text();
     expect(r.text).toContain(`Cancels ${day(sub.current_period_end)}`);
     expect(r.text).toContain('Access until');
-    expect(r.buttons).toEqual(['Keep my plan']);
+    expect(r.buttons).toEqual(['Keep my plan', 'Edit contact']); // + block 5 Edit contact (BACKLOG-3848)
     expect(r.titles).not.toContain('Choose a plan');
   });
 
@@ -467,7 +474,7 @@ describe('3847: personal plan blocks', () => {
     const r = await text();
     expect(r.text).toContain('Renews on');
     expect(r.text).toContain(day(sub.current_period_end));
-    expect(r.buttons).toEqual(['Cancel plan']);
+    expect(r.buttons).toEqual(['Cancel plan', 'Edit contact']); // + block 5 Edit contact (BACKLOG-3848)
     expect(r.titles).toEqual(['Your plan', 'Credits', 'Payment method & billing contact', 'Invoices']);
   });
 
@@ -547,7 +554,7 @@ describe('3847: personal plan blocks', () => {
     const month = { ...PRICES_LIST.data[0], unit_amount: 2499 };
     mockPricesList.mockResolvedValue({ ...PRICES_LIST, data: [month] });
     let r = await text();
-    expect(r.buttons).toEqual(['Subscribe — $24.99/month']);
+    expect(r.buttons).toEqual(['Subscribe — $24.99/month', 'Edit contact']); // + block 5 Edit contact (BACKLOG-3848)
     expect(r.text).not.toMatch(/year/i);
 
     const year = { ...month, id: 'price_EDITED_year', unit_amount: 19900, lookup_key: 'agent_year_usd', recurring: { ...month.recurring, interval: 'year' } };
@@ -658,14 +665,18 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
       text: container.textContent ?? '',
       credits: block('credits')?.textContent ?? null,
       payment: block('payment')?.textContent ?? null,
-      paymentButtons: block('payment') ? within(block('payment')!).queryAllByRole('button').length : 0,
+      paymentButtons: block('payment') ? within(block('payment')!).queryAllByRole('button').map((b) => b.textContent) : [],
+      planButtons: block('plan') ? within(block('plan')!).queryAllByRole('button').map((b) => b.textContent) : [],
+      planText: block('plan')?.textContent ?? null,
       invoiceRows: Array.from(container.querySelectorAll('[data-billing-row]')).map((r) => r.getAttribute('data-billing-row')),
       invoiceText: block('invoices')?.textContent ?? null,
       invoiceTitle: block('invoices')?.querySelector('h2')?.textContent ?? null,
       links: Array.from(block('invoices')?.querySelectorAll('a') ?? []).map((a) => [a.textContent, a.getAttribute('target')]),
       banner: container.querySelector('[data-billing-banner]') as HTMLElement | null,
     };
-    const banner = out.banner ? { text: out.banner.textContent, buttons: within(out.banner).queryAllByRole('button').length } : null;
+    const banner = out.banner
+      ? { text: out.banner.querySelector('p')?.textContent ?? '', buttons: within(out.banner).queryAllByRole('button').map((b) => b.textContent) }
+      : null;
     unmount();
     return { ...out, banner };
   }
@@ -690,12 +701,13 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
     }
   );
 
-  it('C-READ-NOCREATE (R11): pay as you go, no customer row -> zero Stripe customer calls, "No card saved", no button, contact = sign-in email', async () => {
+  it('C-READ-NOCREATE (R11): pay as you go, no customer row -> zero Stripe customer calls, "No card saved", no Update card, contact = sign-in email', async () => {
     const r = await page();
     expect(mockStripe.customersCreate).not.toHaveBeenCalled();
     expect(stripeCalls()).toBe(0);
     expect(r.payment).toContain('No card saved. A card is saved at your first purchase in the Keepr app.');
-    expect(r.paymentButtons).toBe(0);
+    // No customer -> no Update card (the first card is saved at the first purchase); Edit contact stays.
+    expect(r.paymentButtons).toEqual(['Edit contact']);
     expect(r.payment).toContain(`Receipts sent to${SIGN_IN}`);
     expect(r.invoiceTitle).toBe('Receipts');
     expect(r.invoiceText).toContain('No payments yet.');
@@ -739,7 +751,7 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
     expect(r.payment).toContain(`Expires${String(pm.card.exp_month).padStart(2, '0')} / ${pm.card.exp_year}`);
     expect(r.payment).toContain(`Name${CUS.name}`);
     expect(r.payment).toContain(`Receipts sent to${CUS.email}`);
-    expect(r.paymentButtons).toBe(0);
+    expect(r.paymentButtons).toEqual(['Update card', 'Edit contact']);
     // Pay as you go: no subscription read.
     expect(mockStripe.subscriptionsRetrieve).not.toHaveBeenCalled();
     expect(mockStripe.customersCreate).not.toHaveBeenCalled();
@@ -754,7 +766,7 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
     expect(r.payment).toContain('Visa •••• 4242');
   });
 
-  it('C-BANNER: payment failed -> banner names the failing subscription card, amount and date, with no button; row "Payment failed"', async () => {
+  it('C-BANNER: payment failed -> banner names the failing subscription card, amount and date, with Update card; row "Payment failed"', async () => {
     seedCustomer();
     seedMirror(SUB);
     mockStripe.invoicesList.mockResolvedValue(fx3848('invoices-list-pastdue'));
@@ -763,13 +775,16 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
     const r = await page();
     expect(r.banner).toEqual({
       text: `Your card payment failed. We could not charge Visa •••• 0341 for $19.99 on ${day(open.created)}. Unlimited exports are off from the first failed charge and come back when it is paid.`,
-      buttons: 0,
+      buttons: ['Update card'],
     });
+    // "Update your card below." points at a real button in block 5 (BACKLOG-3848), and End plan now is offered.
+    expect(r.planText).toContain('Update your card below.');
+    expect(r.planButtons).toEqual(['End plan now']);
     expect(mockStripe.subscriptionsRetrieve.mock.calls[0][0]).toBe(SUB.id);
     expect(r.payment).toContain(`Last charge failed on ${day(open.created)}`);
     expect(r.payment).toContain('Visa •••• 0341Charge failed');
     expect(r.payment).toContain('Invoices sent to');
-    expect(r.paymentButtons).toBe(0);
+    expect(r.paymentButtons).toEqual(['Update card', 'Edit contact']);
     expect(r.invoiceTitle).toBe('Invoices');
     expect(r.invoiceText).toContain('Payment failed');
     expect(r.credits).toContain('Usable now, while Unlimited exports are off');

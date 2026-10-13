@@ -3,6 +3,7 @@ import type { AgentPlanState } from '@/lib/billing/capabilities';
 import type { PersonalBillingData } from '@/lib/billing/personalBilling';
 import { onAgentPlan } from './CreditsBlock';
 import { cardLabel, formatUnixDay } from './format';
+import { ContactEditor, UpdateCardButton } from './BillingCardControls';
 
 export const NO_CARD = 'No card saved. A card is saved at your first purchase in the Keepr app.';
 export const CARD_UNAVAILABLE = 'Your payment method is unavailable right now.';
@@ -12,6 +13,8 @@ export interface PaymentContactData {
   state: AgentPlanState;
   interval: string | null;
   suspended: boolean;
+  /** caps.canUpdateCard (BACKLOG-3848). */
+  canUpdateCard?: boolean;
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -34,9 +37,10 @@ function cardSubLine(d: PaymentContactData): string {
 }
 
 /**
- * Block 5 — Payment method & billing contact (BACKLOG-3848). Display only:
- * Update card and Edit contact arrive in a later change. Organization pages
- * render the frame only (BACKLOG-3855).
+ * Block 5 — Payment method & billing contact (BACKLOG-3848): the card with
+ * Update card (only when a Stripe customer exists in this mode; the first card
+ * is saved at the first purchase in the app), and the contact with Edit
+ * contact. Organization pages render the frame only (BACKLOG-3855).
  */
 export function PaymentContactBlock({ data }: { data?: PaymentContactData }) {
   const title = 'Payment method & billing contact';
@@ -71,6 +75,11 @@ export function PaymentContactBlock({ data }: { data?: PaymentContactData }) {
         <div className="min-w-0" data-payment-method>
           <h3 className="text-sm font-semibold text-gray-900">Payment method</h3>
           {pay}
+          {data.canUpdateCard && billing.customer === 'present' ? (
+            <div className="mt-3">
+              <UpdateCardButton />
+            </div>
+          ) : null}
         </div>
         <div className="min-w-0" data-billing-contact>
           <h3 className="text-sm font-semibold text-gray-900">Billing contact</h3>
@@ -78,6 +87,7 @@ export function PaymentContactBlock({ data }: { data?: PaymentContactData }) {
             <Row label="Name">{billing.contact.name ?? '—'}</Row>
             <Row label={sentTo}>{billing.contact.email ?? '—'}</Row>
           </dl>
+          {billing.customer !== 'unavailable' ? <ContactEditor name={billing.contact.name} email={billing.contact.email} /> : null}
         </div>
       </div>
     </BillingBlock>

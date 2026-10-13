@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { BillingBlock } from './BillingBlock';
 import { CancelPlanButton, CheckoutReturn, KeepPlanButton, PAYMENT_INCOMPLETE_NOTE, SubscribeButton } from './AgentPlanControls';
 import type { PersonalPlanData } from './BillingPage';
+import { EndPlanNowButton } from './BillingCardControls';
 
 /** "Your plan". Organization pages show the plan name only (3844). */
 export function PlanBlock({ line, personal }: { line: string; personal?: PersonalPlanData }) {
@@ -67,6 +68,7 @@ function PersonalPlan({ p }: { p: PersonalPlanData }) {
         <div className="mt-2 space-y-2">
           <p className="font-medium text-gray-900">Agent · Unlimited exports</p>
           <p className="text-sm text-red-700">Your last payment did not go through. Update your card below.</p>
+          {p.canEndPlanNow ? <EndPlanNowButton /> : null}
         </div>
       );
     case 'support_grant':

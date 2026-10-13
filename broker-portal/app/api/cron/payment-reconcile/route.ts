@@ -93,6 +93,8 @@ export async function GET(req: Request): Promise<Response> {
           userId: row.user_id,
           amountCents: row.quoted_unit_price_cents,
           stripePaymentIntentId: piId,
+          stripe,
+          customerId: typeof pi.customer === 'string' ? pi.customer : pi.customer?.id ?? null,
         });
       }
       fulfilled++;

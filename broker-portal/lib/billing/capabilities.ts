@@ -59,6 +59,14 @@ export interface BillingCapabilities {
   showPrice: boolean;
   /** Payment method and billing contact are shown and editable. */
   canPay: boolean;
+  /** BACKLOG-3848: the personal owner may replace the saved card (Stripe-hosted setup page). */
+  canUpdateCard: boolean;
+  /**
+   * BACKLOG-3848 (founder Q1 = A, SR R6): an Agent plan whose renewal payment
+   * failed may be ended now (unpaid renewal voided, then cancelled). Reads the
+   * plan state only; a suspended account is BACKLOG-3878's, so it is false here.
+   */
+  canEndPlanNow: boolean;
   canSeeInvoices: boolean;
   canPurchase: boolean;
   canManageLicenses: boolean;
@@ -91,6 +99,8 @@ function personal(s: BillingSituation): BillingCapabilities {
     blocks,
     showPrice: true,
     canPay: true,
+    canUpdateCard: true,
+    canEndPlanNow: !s.accountSuspended && s.agentPlan === 'payment_failed',
     canSeeInvoices: true,
     canPurchase: !s.accountSuspended,
     canManageLicenses: false,
@@ -110,6 +120,9 @@ function organization(role: string, s: BillingSituation): BillingCapabilities {
     blocks: money ? ['plan', 'seats', 'payment', 'invoices'] : ['plan', 'seats'],
     showPrice: payer,
     canPay: money,
+    // Organization payment and plan changes are BACKLOG-3855's.
+    canUpdateCard: false,
+    canEndPlanNow: false,
     canSeeInvoices: money,
     canPurchase,
     canManageLicenses: true,

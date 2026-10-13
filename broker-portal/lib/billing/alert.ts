@@ -17,7 +17,11 @@ import type { StripeMode } from './mode';
 export type BillingAlertName =
   | 'outbox_dead_letter'
   | 'outbox_unknown_kind'
-  | 'outbox_stale';
+  | 'outbox_stale'
+  // BACKLOG-3848
+  | 'card_update_pay_not_active'
+  | 'end_now_cancel_failed'
+  | 'agent_receipt_stripe_sent';
 
 export function billingAlert(
   name: BillingAlertName,

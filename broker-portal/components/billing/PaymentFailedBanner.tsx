@@ -1,5 +1,6 @@
 import type { CardView, FailedInvoice } from '@/lib/billing/personalBilling';
 import { cardLabel, formatMoney, formatUnixDay } from './format';
+import { UpdateCardButton } from './BillingCardControls';
 
 export const FAILED_TAIL = 'Unlimited exports are off from the first failed charge and come back when it is paid.';
 
@@ -10,14 +11,26 @@ export function failedSentence(card: CardView | null, inv: FailedInvoice | null)
   return `We could not charge ${what} for ${formatMoney(inv.amountCents, inv.currency)} on ${formatUnixDay(inv.created)}.`;
 }
 
-/**
- * Page banner for an Agent plan whose payment failed (BACKLOG-3848). Text only:
- * the Update card button arrives with the card-update change.
- */
-export function PaymentFailedBanner({ card, invoice }: { card: CardView | null; invoice: FailedInvoice | null }) {
+/** Page banner for an Agent plan whose payment failed (BACKLOG-3848), with Update card. */
+export function PaymentFailedBanner({
+  card,
+  invoice,
+  canUpdateCard = false,
+}: {
+  card: CardView | null;
+  invoice: FailedInvoice | null;
+  canUpdateCard?: boolean;
+}) {
   return (
     <div role="alert" data-billing-banner="payment_failed" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
-      <strong>Your card payment failed.</strong> {failedSentence(card, invoice)} {FAILED_TAIL}
+      <p>
+        <strong>Your card payment failed.</strong> {failedSentence(card, invoice)} {FAILED_TAIL}
+      </p>
+      {canUpdateCard ? (
+        <div className="mt-3">
+          <UpdateCardButton primary />
+        </div>
+      ) : null}
     </div>
   );
 }

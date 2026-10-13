@@ -14,75 +14,31 @@
  * this mode, never an id from the request.
  */
 
-import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import type Stripe from 'stripe';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
-import { getPortalAccess } from '@/lib/auth/portalAccess';
-import { createServiceClient } from '@/lib/supabase/service';
 import { getStripe } from '@/lib/stripe';
-import { billingEnabled } from '@/lib/billing/flag';
-import { billingCapabilities, type BillingCapabilities } from '@/lib/billing/capabilities';
-import { currentStripeMode, type StripeMode } from '@/lib/billing/mode';
 import { ensureStripeCustomer, getStripeCustomer, isModeAllowedForUser } from '@/lib/billing/customers';
-import { getAgentPlanView, getAgentPrices, isNonStripeOverride, type AgentPlanView } from '@/lib/billing/agentPlan';
+import { getAgentPrices, isNonStripeOverride } from '@/lib/billing/agentPlan';
 import { prepareAgentCheckout } from '@/lib/billing/agentCheckout';
-import { AGENT_KIND, chooseReturnBase, type AgentInterval } from '@/lib/billing/agentCheckoutParams';
+import { AGENT_KIND, type AgentInterval } from '@/lib/billing/agentCheckoutParams';
 import { handleSubscriptionCheckout, stripeId, writeThroughCancelFlag, type BillingContext } from '@/lib/billing/sync';
+import {
+  agentContext,
+  returnBase,
+  BILLING_PATH,
+  MODE_REFUSED,
+  NOT_NOW,
+  type AgentContext,
+} from '@/lib/billing/personalActionContext';
+import { endPlanNow, END_NOW_MESSAGES } from '@/lib/billing/endPlanNow';
 
-export type AgentActionResult = { error: string } | { ok: true };
+/** `notice`: a message for the person when the action ended without doing everything it was asked. */
+export type AgentActionResult = { error: string } | { ok: true; notice?: string };
 
-const NOT_AVAILABLE = 'Billing is not available for this account.';
-const NOT_NOW = 'That change is not available for your plan right now. Refresh the page.';
 const SUSPENDED = 'Your account is suspended. Please contact support.';
 const SUPPORT_GRANT = 'Your Unlimited exports come from Keepr. Please contact support to change your plan.';
-const MODE_REFUSED = 'Payments are not available for this account.';
-const BILLING_PATH = '/dashboard/billing';
-
-interface AgentContext {
-  userId: string;
-  email: string | null;
-  service: ReturnType<typeof createServiceClient>;
-  mode: StripeMode;
-  view: AgentPlanView;
-  caps: BillingCapabilities;
-}
-
-async function agentContext(): Promise<AgentContext | { error: string }> {
-  if (!billingEnabled()) return { error: NOT_AVAILABLE };
-  const portal = await getPortalAccess();
-  if (!portal) return { error: 'Please sign in again.' };
-  const access = portal.access;
-  // Only a personal owner has an Agent plan; refuse before any billing read.
-  if (!(access.kind === 'floor' && access.via === 'personal_owner')) return { error: NOT_AVAILABLE };
-  const service = createServiceClient();
-  const mode = currentStripeMode();
-  const view = await getAgentPlanView(service, portal.user.id, mode);
-  const caps = billingCapabilities({
-    access,
-    isImpersonating: false,
-    enabled: true,
-    agentPlan: view.state,
-    accountSuspended: false, // the page gate is BACKLOG-3878's; Subscribe refuses suspension itself.
-    orgBillingSetUp: false,
-  });
-  if (!caps || caps.kind !== 'personal') return { error: NOT_AVAILABLE };
-  return { userId: portal.user.id, email: portal.user.email ?? null, service, mode, view, caps };
-}
-
-async function returnBase(): Promise<string> {
-  const h = await headers();
-  const chosen = chooseReturnBase(h.get('x-forwarded-host') ?? h.get('host'), {
-    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
-    VERCEL_URL: process.env.VERCEL_URL,
-    VERCEL_BRANCH_URL: process.env.VERCEL_BRANCH_URL,
-  });
-  console.info(
-    `[billing/agent] checkout return base ${chosen.base} (${chosen.source}; VERCEL_BRANCH_URL ${process.env.VERCEL_BRANCH_URL ? 'set' : 'unset'})`
-  );
-  return chosen.base;
-}
 
 /** Subscribe: open Stripe Checkout for the Agent plan (same tab). */
 export async function startAgentCheckout(interval: AgentInterval = 'month'): Promise<AgentActionResult> {
@@ -150,6 +106,41 @@ export async function endAgentPlanAtPeriodEnd(): Promise<AgentActionResult> {
   await writeThroughCancelFlag(ctx.service, updated);
   revalidatePath(BILLING_PATH);
   return { ok: true };
+}
+
+/**
+ * End plan now — BACKLOG-3848, founder Q1 = A. Only for a plan whose renewal
+ * payment failed (caps.canEndPlanNow). The unpaid renewal is voided first,
+ * then the plan is cancelled; see lib/billing/endPlanNow.ts for the order and
+ * the refusals. Credits are kept; nothing is refunded.
+ */
+export async function endAgentPlanNow(): Promise<AgentActionResult> {
+  const blocked = await blockWriteDuringImpersonation();
+  if (blocked) return { error: blocked.error };
+  const ctx = await agentContext();
+  if ('error' in ctx) return ctx;
+  if (!ctx.caps.canEndPlanNow) return { error: NOT_NOW };
+  const id = ctx.view.row?.stripe_subscription_id;
+  if (!id) return { error: NOT_NOW };
+  if (!(await isModeAllowedForUser(ctx.service, ctx.userId, ctx.mode))) return { error: MODE_REFUSED };
+
+  const outcome = await endPlanNow({
+    stripe: getStripe(),
+    service: ctx.service,
+    mode: ctx.mode,
+    userId: ctx.userId,
+    subscriptionId: id,
+  });
+  revalidatePath(BILLING_PATH);
+  switch (outcome) {
+    case 'ended':
+      return { ok: true };
+    case 'paid_meanwhile':
+    case 'finalizing':
+      return { ok: true, notice: END_NOW_MESSAGES[outcome] };
+    default:
+      return { error: END_NOW_MESSAGES[outcome] };
+  }
 }
 
 /** Keep my plan: undo a pending end while the period is still running. */
