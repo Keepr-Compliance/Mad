@@ -170,7 +170,9 @@ describe("Store build guidance follows the Apple Devices state", () => {
 
   it("SR: 'ready' never shows the not-installed copy (neutral connect text)", () => {
     renderState("ready");
-    expect(screen.getByTestId("setup-row-iphone")).toHaveAttribute("data-status", "open");
+    // Both setup rows met: the normal Connect screen (unlock / Trust steps), no checklist.
+    expect(screen.queryByTestId("iphone-setup-checklist")).not.toBeInTheDocument();
+    expect(screen.getByText("Connect Your iPhone")).toBeInTheDocument();
     expect(screen.queryByText(CHECKLIST_APPLE_DEVICES_INSTALL)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: APPLE_DEVICES_OPEN_BUTTON })).not.toBeInTheDocument();
   });
