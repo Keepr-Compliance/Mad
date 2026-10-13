@@ -37,7 +37,7 @@
 import * as crypto from "crypto";
 import * as path from "path";
 
-import type { RcsChatPeople, RcsImportResult, RcsIncomingChat, RcsIncomingMessage } from "./rcsImportStore";
+import { lookupMessageIds, RCS_LOOKUP_CHUNK, type RcsChatPeople, type RcsImportResult, type RcsIncomingChat, type RcsIncomingMessage } from "./rcsImportStore";
 import { RCS_ALLOWED_IMAGE_MIME, RCS_MAX_IMAGE_BYTES, rcsImageExt, type RcsImageResult, type RcsIncomingImage } from "./rcsImportMedia";
 import { scrubRcsText } from "../utils/redactSensitive";
 
@@ -132,10 +132,14 @@ export interface RcsStagingFs {
 export interface RcsCommitWriter {
   /** Store one chat for the user: synchronous (it runs inside the transaction). */
   storeChat(chat: RcsIncomingChat, userId: string, people: RcsChatPeople): RcsImportResult;
-  /** external_id -> id for this user (read once, after every chat is stored). */
-  getMessageIdMap(userId: string): Map<string, string>;
-  /** `${message_id}:${filename}` of every attachment (read once). */
-  getExistingAttachmentRecords(): Set<string>;
+  /**
+   * BACKLOG-3924: external_id -> id for these external ids of the user (one
+   * chunk). Keyed: the commit runs it per chat, so a full read of the user's
+   * messages here costs seconds per chat on a large history.
+   */
+  getMessageIdsByExternalIds(userId: string, externalIds: readonly string[]): Map<string, string>;
+  /** BACKLOG-3924: `${message_id}:${filename}` of the attachments of these messages (one chunk). */
+  getExistingAttachmentRecordsForMessages(messageIds: readonly string[]): Set<string>;
   insertAttachment(params: {
     id: string;
     messageId: string;
@@ -533,8 +537,19 @@ export class RcsCacheStaging {
               r.reactions = s.reactionsStored ?? 0;
             }
             if (images.length > 0) {
-              const ids = writer.getMessageIdMap(userId);
-              const existing = writer.getExistingAttachmentRecords();
+              // BACKLOG-3924: this chat's ids and attachment records only (keyed, chunked).
+              const ids = lookupMessageIds(
+                (u, keys) => writer.getMessageIdsByExternalIds(u, keys),
+                userId,
+                images.map((img) => writer.externalId(img.chatHash, img.msgId)),
+              );
+              const messageIds = [...new Set(ids.values())];
+              const existing = new Set<string>();
+              for (let start = 0; start < messageIds.length; start += RCS_LOOKUP_CHUNK) {
+                for (const rec of writer.getExistingAttachmentRecordsForMessages(messageIds.slice(start, start + RCS_LOOKUP_CHUNK))) {
+                  existing.add(rec);
+                }
+              }
               for (const img of images) {
                 const externalId = writer.externalId(img.chatHash, img.msgId);
                 const messageId = ids.get(externalId);
@@ -590,6 +605,10 @@ export class RcsCacheStaging {
           out.chatsFailed = (out.chatsFailed ?? 0) + 1;
           h.log?.(`[RcsCache] A chat could not be saved (the others are kept): ${scrubRcsText(err)}`);
         }
+        // BACKLOG-3924: let the main process breathe between chats (each chat's
+        // transaction is already closed here). Text-only chats have no await of
+        // their own, so without this a large commit ran start to end in one turn.
+        await new Promise<void>((resolve) => setImmediate(resolve));
       }
       // A complete run: the run-level records, in one last transaction.
       if (complete && !out.stopped && (out.chatsFailed ?? 0) === 0 && h.runDone) {
