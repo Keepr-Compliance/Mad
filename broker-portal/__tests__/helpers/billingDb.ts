@@ -32,7 +32,7 @@
  */
 
 export type Row = Record<string, unknown>;
-type Filter = { op: 'eq' | 'in' | 'lt' | 'not' | 'or'; column: string; value: unknown };
+type Filter = { op: 'eq' | 'in' | 'lt' | 'not' | 'or' | 'is'; column: string; value: unknown };
 
 export interface DbCall {
   table: string;
@@ -134,6 +134,9 @@ function matches(row: Row, f: Filter): boolean {
       return (f.value as string).split(',').some((c) => matchesCondition(row, c));
     case 'eq':
       return v === f.value;
+    case 'is':
+      // BACKLOG-3849: `.is(col, null)` matches SQL NULL only.
+      return f.value === null ? v === null || v === undefined : v === f.value;
     case 'in':
       return (f.value as unknown[]).includes(v);
     case 'lt':
@@ -174,6 +177,10 @@ class Query implements PromiseLike<{ data: unknown; error: DbError | null }> {
   }
   eq(column: string, value: unknown) {
     this.call.filters.push({ op: 'eq', column, value });
+    return this;
+  }
+  is(column: string, value: null | boolean) {
+    this.call.filters.push({ op: 'is', column, value });
     return this;
   }
   in(column: string, value: unknown[]) {

@@ -8,6 +8,10 @@
  * local_transaction_id (C-C — not re-parsed Stripe metadata).
  *
  * Auth: CRON_SECRET bearer via lib/auth/cronAuth (refuses when CRON_SECRET is unset).
+ *
+ * BACKLOG-3849: after the PaymentIntent loop, and only while BILLING_ENABLED is
+ * on, the Agent-subscription reconcile and the billing queue check run, each
+ * in its own try/catch so neither can affect the other or the loop above.
  */
 
 import { NextResponse } from 'next/server';
@@ -17,6 +21,8 @@ import { createServiceClient } from '@/lib/supabase/service';
 import { fulfillPaidUnlock, emitPaymentSucceeded } from '@/lib/payments/fulfillment';
 import { dispatchReceiptEmail } from '@/lib/payments/receipt';
 import { isAuthorizedCronRequest } from '@/lib/auth/cronAuth';
+import { billingEnabled } from '@/lib/billing/flag';
+import { reconcileAgentSubscriptions, reportOutboxHealth } from '@/lib/billing/reconcile';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -104,7 +110,31 @@ export async function GET(req: Request): Promise<Response> {
     }
   }
 
-  return NextResponse.json({ reconciled: fulfilled, skipped, scanned: stuck?.length ?? 0 });
+  const billing = await runBillingChecks(service, stripe, mode);
+
+  return NextResponse.json({ reconciled: fulfilled, skipped, scanned: stuck?.length ?? 0, billing });
+}
+
+async function runBillingChecks(
+  service: ReturnType<typeof createServiceClient>,
+  stripe: ReturnType<typeof getStripe>,
+  mode: ReturnType<typeof currentStripeMode>
+): Promise<Record<string, unknown>> {
+  if (!billingEnabled()) return { disabled: true };
+  const out: Record<string, unknown> = {};
+  try {
+    out.subscriptions = await reconcileAgentSubscriptions({ service, stripe, mode });
+  } catch (err) {
+    console.error('[cron/payment-reconcile] subscription reconcile failed:', (err as Error).message);
+    out.subscriptions = { error: true };
+  }
+  try {
+    out.outbox = await reportOutboxHealth({ service, stripe, mode });
+  } catch (err) {
+    console.error('[cron/payment-reconcile] outbox check failed:', (err as Error).message);
+    out.outbox = { error: true };
+  }
+  return out;
 }
 
 async function resolvePaymentIntentId(

@@ -27,11 +27,21 @@ import { enqueueAgentReceipt } from './agentReceipt';
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
+/**
+ * The fields of the triggering event that billing code may read (BACKLOG-3849,
+ * SR R10.3). A webhook passes the Stripe event itself; the nightly reconcile
+ * passes a synthetic `{ id: 'reconcile:<sub>', type: 'reconcile', ... }`.
+ * `created` is read only by syncSubscription(..., { advanceCursor: true }).
+ */
+export type BillingEventRef = Pick<Stripe.Event, 'id' | 'livemode' | 'created'> & {
+  type: Stripe.Event['type'] | 'reconcile';
+};
+
 export interface BillingContext {
   service: ServiceClient;
   stripe: Stripe;
   mode: StripeMode;
-  event: Stripe.Event;
+  event: BillingEventRef;
 }
 
 /** Statuses the one-open-per-user index treats as open. */

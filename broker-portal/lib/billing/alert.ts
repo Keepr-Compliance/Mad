@@ -21,7 +21,11 @@ export type BillingAlertName =
   // BACKLOG-3848
   | 'card_update_pay_not_active'
   | 'end_now_cancel_failed'
-  | 'agent_receipt_stripe_sent';
+  | 'agent_receipt_stripe_sent'
+  // BACKLOG-3849 PR-2 (nightly reconcile + queue check)
+  | 'reconcile_mismatch'
+  | 'outbox_stale_daily'
+  | 'outbox_parked';
 
 export function billingAlert(
   name: BillingAlertName,
