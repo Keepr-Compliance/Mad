@@ -841,3 +841,74 @@ describe('BACKLOG-3845 RC8: reconcile sweeps only the key mode', () => {
     expect(mockPaymentIntentsRetrieve.mock.calls.map((c) => c[0])).toEqual(['pi_live_stuck']);
   });
 });
+
+// ---- BACKLOG-3878: a suspended licence buys nothing ----------------------
+//
+// The licence row is the value both suspension writers set
+// (suspend_account_for_dispute / admin_suspend_user:
+// `UPDATE public.licenses SET status = 'suspended'`). The refusal sits after the
+// mode guard and before the quote, the customer and every Stripe call; a failed
+// licence read refuses too (fail closed, 5xx).
+
+describe('BACKLOG-3878 C2: desktop purchase routes refuse a suspended licence before any Stripe call', () => {
+  const ROUTES = [
+    ['checkout-session', '@/app/api/payments/checkout-session/route'],
+    ['charge', '@/app/api/payments/charge/route'],
+  ] as const;
+  const licence = (status: string): Row => ({ id: 'LIC-1', user_id: 'USER-1', status });
+
+  function wire(licences: Row[]): void {
+    signedIn();
+    quoteRpc(1499);
+    // No stripe_customers row: an unrefused checkout would CREATE a customer here.
+    useDb({ organizations: [personalOrg(true)], stripe_customers: [], licenses: licences });
+  }
+  function nothingBought(): void {
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('get_next_unlock_quote');
+    expect(db.callsTo('stripe_customers', 'select')).toEqual([]);
+    expect(db.callsTo('stripe_customers', 'insert')).toEqual([]);
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+    expect(mockCheckoutCreate).not.toHaveBeenCalled();
+    expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
+  }
+
+  it.each(ROUTES)('%s: suspended -> 403 account_suspended, no quote, no customer, no Stripe call', async (_n, mod) => {
+    wire([licence('suspended')]);
+    const { POST } = await import(mod);
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(403);
+    expect(await (res as NextResponse).json()).toEqual({ error: 'account_suspended' });
+    nothingBought();
+  });
+
+  it.each(ROUTES)('%s: licence read fails -> 503, no quote, no customer, no Stripe call', async (_n, mod) => {
+    wire([licence('active')]);
+    db.failNext['licenses.select'] = { code: 'PGRST000', message: 'fixture: read failed' };
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { POST } = await import(mod);
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(503);
+    expect(errSpy).toHaveBeenCalledWith('[payments] suspended check failed', { code: 'licence_read_failed' });
+    errSpy.mockRestore();
+    nothingBought();
+  });
+
+  it('control: checkout-session with an active licence creates the customer and the session', async () => {
+    wire([licence('active')]);
+    mockCustomersCreate.mockResolvedValue({ id: 'cus_FX3878' });
+    mockCheckoutCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe/x', payment_intent: 'pi_1' });
+    const { POST } = await import('@/app/api/payments/checkout-session/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(200);
+    expect(mockCustomersCreate).toHaveBeenCalledTimes(1);
+    expect(mockCheckoutCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('control: charge with an active licence reaches the saved-card check', async () => {
+    wire([licence('active')]);
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(409);
+    expect(mockRpc.mock.calls.map((c) => c[0])).toContain('get_next_unlock_quote');
+  });
+});

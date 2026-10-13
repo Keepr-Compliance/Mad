@@ -51,6 +51,7 @@ jest.mock('next/navigation', () => ({
 }));
 
 import {
+  BILLING_SUSPENDED_HREF,
   MY_TRANSACTIONS_UPGRADE_HREF,
   TICKET_PRESETS,
   presetCategoryIds,
@@ -137,6 +138,15 @@ describe('resolveTicketPreset (C-M12)', () => {
 
   it('the upsell link names the preset key', () => {
     expect(MY_TRANSACTIONS_UPGRADE_HREF).toBe('/dashboard/support/new?preset=my-transactions-upgrade');
+  });
+
+  // BACKLOG-3878: slugs as in prod support_categories (both active, 2026-10-13).
+  it('the suspended Billing page link opens Billing & Subscription / Invoice/payment issue', () => {
+    expect(BILLING_SUSPENDED_HREF).toBe('/dashboard/support/new?preset=billing-suspended');
+    expect(resolveTicketPreset({ preset: 'billing-suspended' })).toMatchObject({
+      categorySlug: 'billing-subscription',
+      subcategorySlug: 'invoice-payment-issue',
+    });
   });
 });
 

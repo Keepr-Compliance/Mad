@@ -278,3 +278,45 @@ export function mayOpenDashboardPath(access: PortalAccess, pathname: string): bo
   }
   return false;
 }
+
+// ===========================================================================
+// Suspended account — BACKLOG-3878.
+// ===========================================================================
+//
+// Suspended means `licenses.status = 'suspended'` (both suspension paths write
+// it; users.status is written by one path only). The licence is read by
+// lib/auth/suspension.ts; these two functions only decide WHERE a suspended
+// person may go. Still zero imports: middleware calls them.
+//
+//   - the OWNER of a personal organization: Billing (only while billing is on;
+//     the page 404s otherwise), My Account, Support;
+//   - everyone else (brokerage member, full or floor, and an unknown access):
+//     My Account and Support only. The brokerage's bill is not theirs.
+
+/** Paths every suspended person may open. Each also opens its sub-paths. */
+export const SUSPENDED_PATHS = ['/dashboard/account', '/dashboard/support'] as const;
+
+function suspendedSeesBilling(access: PortalAccess, billingOn: boolean): boolean {
+  return billingOn && access.kind === 'floor' && access.via === 'personal_owner';
+}
+
+/** May a SUSPENDED person with this access open this dashboard path? */
+export function maySuspendedOpenPath(access: PortalAccess, pathname: string, billingOn: boolean): boolean {
+  for (const base of SUSPENDED_PATHS) {
+    if (isUnder(pathname, base)) return true;
+  }
+  if (suspendedSeesBilling(access, billingOn)) {
+    for (const base of BILLING_PATHS) {
+      if (isUnder(pathname, base)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Where a suspended person lands. Always a path {@link maySuspendedOpenPath}
+ * admits for the same arguments, so a redirect to it never redirects again.
+ */
+export function suspendedLanding(access: PortalAccess, billingOn: boolean): string {
+  return suspendedSeesBilling(access, billingOn) ? '/dashboard/billing' : '/dashboard/account';
+}

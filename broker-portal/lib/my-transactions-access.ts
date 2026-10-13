@@ -54,6 +54,8 @@ export async function getMyTransactionsGate(): Promise<MyTransactionsGate> {
 
   const { access } = portal;
   if (access.kind !== 'floor' || access.via !== 'brokerage') return null;
+  // BACKLOG-3878: a suspended account keeps My Account and Support only.
+  if (portal.suspended === true) return null;
 
   const features = await getOrgFeatures(access.organizationId);
   if (!isFeatureEnabledStrict(features, MY_TRANSACTIONS_FEATURE_KEY)) return { kind: 'upsell' };

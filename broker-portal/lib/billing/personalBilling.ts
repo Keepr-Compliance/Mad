@@ -45,7 +45,15 @@ export interface CardView {
   expYear: number;
 }
 
-export type RowStatus = 'paid' | 'payment_failed' | 'open' | 'void' | 'uncollectible' | 'refunded' | 'partly_refunded';
+export type RowStatus =
+  | 'paid'
+  | 'payment_failed'
+  | 'open'
+  | 'void'
+  | 'uncollectible'
+  | 'refunded'
+  | 'partly_refunded'
+  | 'disputed';
 
 export interface BillingRow {
   id: string;
@@ -105,6 +113,8 @@ function invoiceDescription(inv: Stripe.Invoice): string {
 function invoiceStatus(inv: Stripe.Invoice, paidBy: Stripe.Charge[]): RowStatus | null {
   switch (inv.status) {
     case 'paid':
+      // BACKLOG-3878: a chargeback leaves the invoice 'paid'; the dispute is on its charge.
+      if (paidBy.some((c) => c.disputed)) return 'disputed';
       // Stripe leaves a refunded invoice 'paid'; the refund is on its charge.
       if (paidBy.some((c) => c.refunded)) return 'refunded';
       if (paidBy.some((c) => (c.amount_refunded ?? 0) > 0)) return 'partly_refunded';
@@ -124,6 +134,8 @@ function invoiceStatus(inv: Stripe.Invoice, paidBy: Stripe.Charge[]): RowStatus 
 function chargeStatus(ch: Stripe.Charge): RowStatus | null {
   // A failed or pending per-export charge took no money: it is not a receipt.
   if (ch.status !== 'succeeded') return null;
+  // BACKLOG-3878: a disputed (charged-back) payment reads Disputed, not Paid.
+  if (ch.disputed) return 'disputed';
   if (ch.refunded) return 'refunded';
   if ((ch.amount_refunded ?? 0) > 0) return 'partly_refunded';
   return 'paid';

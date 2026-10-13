@@ -152,6 +152,7 @@ class Query implements PromiseLike<{ data: unknown; error: DbError | null }> {
   private call: DbCall;
   private terminal: 'many' | 'maybeSingle' = 'many';
   private limitN: number | null = null;
+  private orderBy: { column: string; ascending: boolean }[] = [];
   private wantReturn = false;
 
   constructor(private db: BillingDb, table: string) {
@@ -203,6 +204,11 @@ class Query implements PromiseLike<{ data: unknown; error: DbError | null }> {
     this.limitN = n;
     return this;
   }
+  /** BACKLOG-3878: PostgREST ordering, applied before limit (string / ISO-date compare). */
+  order(column: string, opts: { ascending?: boolean } = {}) {
+    this.orderBy.push({ column, ascending: opts.ascending !== false });
+    return this;
+  }
   maybeSingle() {
     this.terminal = 'maybeSingle';
     return Promise.resolve(this.execute());
@@ -248,7 +254,15 @@ class Query implements PromiseLike<{ data: unknown; error: DbError | null }> {
       for (const r of hit) Object.assign(r, this.call.payload);
       return { data: this.wantReturn ? hit : null, error: null };
     }
-    const out = this.limitN === null ? hit : hit.slice(0, this.limitN);
+    const sorted = this.orderBy.length === 0 ? hit : [...hit].sort((a, b) => {
+      for (const o of this.orderBy) {
+        const x = String(a[o.column] ?? '');
+        const y = String(b[o.column] ?? '');
+        if (x !== y) return (x < y ? -1 : 1) * (o.ascending ? 1 : -1);
+      }
+      return 0;
+    });
+    const out = this.limitN === null ? sorted : sorted.slice(0, this.limitN);
     if (this.terminal === 'maybeSingle') {
       if (out.length > 1) {
         return {

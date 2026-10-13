@@ -47,7 +47,8 @@ async function checkUserAccess(): Promise<AccessCheck> {
 
   // Only admin and it_admin can access users management
   const allowedRoles: Role[] = ['admin', 'it_admin'];
-  if (access.kind !== 'full' || !allowedRoles.includes(access.role as Role)) {
+  // BACKLOG-3878: a suspended account keeps My Account and Support only.
+  if (access.kind !== 'full' || !allowedRoles.includes(access.role as Role) || portal.suspended === true) {
     return { allowed: false, reason: 'unauthorized' };
   }
 

@@ -2,10 +2,63 @@ import Link from 'next/link';
 import { BillingBlock } from './BillingBlock';
 import { CancelPlanButton, CheckoutReturn, KeepPlanButton, PAYMENT_INCOMPLETE_NOTE, SubscribeButton } from './AgentPlanControls';
 import type { PersonalPlanData } from './BillingPage';
-import { EndPlanNowButton } from './BillingCardControls';
+import { EndPlanNowButton, UpdateCardButton } from './BillingCardControls';
+import { onAgentPlan } from './CreditsBlock';
+import { SuspendedSupportLink } from './SuspendedBanner';
 
 /** BACKLOG-3848 (SR RC4): shown instead of End plan now for an `unpaid` subscription. */
 export const RENEWAL_UNPAID_NOTE = 'To end this plan or settle the unpaid bill, please contact support.';
+
+/** BACKLOG-3878, mockup v17 "Suspended". */
+export const SUSPENDED_AGENT_LINE = 'Unlimited exports · renewal paused';
+export const SUSPENDED_EXPORTS = 'Off while suspended';
+export const SUSPENDED_RENEWAL = 'Paused while your account is suspended. You are not charged.';
+export const SUSPENDED_DESKTOP = 'Blocked · "License Suspended — contact support"';
+export const SUSPENDED_REINSTATE_NOTE = 'Support will confirm your plan when your account is reinstated.';
+
+function SuspendedBadge() {
+  return <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">Suspended</span>;
+}
+
+/**
+ * BACKLOG-3878: a suspended account's plan. Takes precedence over the plan
+ * state: no Cancel, Keep or End plan now, nothing to buy; Update card and
+ * Contact support only (the server refuses the rest on its own).
+ */
+function SuspendedPlan({ p }: { p: PersonalPlanData }) {
+  if (onAgentPlan(p.state)) {
+    return (
+      <div className="mt-2 space-y-3" data-billing-plan="suspended_agent">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <p className="font-medium text-gray-900">Agent</p>
+          <SuspendedBadge />
+        </div>
+        <p className="text-sm text-gray-600">{SUSPENDED_AGENT_LINE}</p>
+        <dl>
+          <Row label="Unlimited exports" value={SUSPENDED_EXPORTS} />
+          <Row label="Renewal" value={SUSPENDED_RENEWAL} />
+          <Row label="Keepr desktop app" value={SUSPENDED_DESKTOP} />
+        </dl>
+        <div className="flex flex-wrap items-start gap-3">
+          {p.canUpdateCard && p.billing?.customer === 'present' ? <UpdateCardButton /> : null}
+          <SuspendedSupportLink />
+        </div>
+        <p className="text-sm text-gray-600">{SUSPENDED_REINSTATE_NOTE}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-2 space-y-3" data-billing-plan="suspended_solo">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="font-medium text-gray-900">{p.state === 'support_grant' ? 'Unlimited exports, provided by Keepr' : 'Solo, pay as you go'}</p>
+        <SuspendedBadge />
+      </div>
+      <dl>
+        <Row label="Keepr desktop app" value={SUSPENDED_DESKTOP} />
+      </dl>
+    </div>
+  );
+}
 
 /** "Your plan". Organization pages show the plan name only (3844). */
 export function PlanBlock({ line, personal }: { line: string; personal?: PersonalPlanData }) {
@@ -37,6 +90,8 @@ function PersonalPlan({ p }: { p: PersonalPlanData }) {
   const month = p.prices.month;
   const priceLine = month ? `${month.display} / month` : null;
   const until = formatDay(p.currentPeriodEnd);
+
+  if (p.suspended) return <SuspendedPlan p={p} />;
 
   switch (p.state) {
     case 'active':

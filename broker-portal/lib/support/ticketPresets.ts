@@ -23,6 +23,7 @@ export interface TicketPreset {
 }
 
 export const MY_TRANSACTIONS_UPGRADE_PRESET = 'my-transactions-upgrade';
+export const BILLING_SUSPENDED_PRESET = 'billing-suspended';
 
 /**
  * The presets. Wording of the My Transactions entry is the build default,
@@ -36,7 +37,17 @@ export const TICKET_PRESETS: Readonly<Record<string, TicketPreset>> = Object.fre
     description:
       "I'd like my brokerage's plan to include My Transactions so I can view my submitted transactions on the web.",
   }),
+  // BACKLOG-3878: "Contact support" on a suspended account's Billing page.
+  [BILLING_SUSPENDED_PRESET]: Object.freeze({
+    categorySlug: 'billing-subscription',
+    subcategorySlug: 'invoice-payment-issue',
+    subject: 'My account is suspended',
+    description: 'My Keepr account is suspended. Please help me get it reinstated.',
+  }),
 });
+
+/** The link "Contact support" opens on a suspended account's Billing page (BACKLOG-3878). */
+export const BILLING_SUSPENDED_HREF = `/dashboard/support/new?preset=${BILLING_SUSPENDED_PRESET}`;
 
 /** The link the My Transactions upsell sends an agent to. */
 export const MY_TRANSACTIONS_UPGRADE_HREF = `/dashboard/support/new?preset=${MY_TRANSACTIONS_UPGRADE_PRESET}`;

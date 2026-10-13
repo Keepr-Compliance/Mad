@@ -276,7 +276,7 @@ describe('R1: the page refuses on its own', () => {
   ] as [string, Row[], boolean][])('%s -> 404, nothing but the membership read, no write', async (_n, rows, readFails) => {
     given(rows, readFails);
     expect(await run()).toEqual({ notFound: true });
-    expect(sessionTablesRead()).toEqual(['organization_members']);
+    expect(sessionTablesRead()).toEqual(['licenses', 'organization_members']);
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
@@ -324,6 +324,23 @@ describe('R1: the page refuses on its own', () => {
 // full-portal session of its own.
 // ---------------------------------------------------------------------------
 
+describe('BACKLOG-3878: a suspended brokerage member is sent to My Account by the page itself', () => {
+  // Session-side licence row: the value both suspension writers set.
+  it.each(['broker', 'admin', 'it_admin'])('suspended %s -> /dashboard/account, no billing read', async (role) => {
+    given([brokerageMembership(role)]);
+    mockEmulator.set({ rows: { organization_members: [brokerageMembership(role)], licenses: [{ user_id: FIXTURE_USER_ID, status: 'suspended' }] } });
+    await expect(BillingRoute({})).rejects.toEqual(new Redirect('/dashboard/account'));
+    expect(stripeCalls()).toBe(0);
+  });
+
+  it('control: the same broker, licence active -> the organization page renders', async () => {
+    given([brokerageMembership('broker')]);
+    mockEmulator.set({ rows: { organization_members: [brokerageMembership('broker')], licenses: [{ user_id: FIXTURE_USER_ID, status: 'active' }] } });
+    const el = await BillingRoute({});
+    expect(el).toBeTruthy();
+  });
+});
+
 describe('R2: a support session never sees billing', () => {
   it('fixture check: the real helper accepts this session', async () => {
     givenSupportSession();
@@ -333,7 +350,7 @@ describe('R2: a support session never sees billing', () => {
   it('fixture check: the same signed-in admin without the cookie gets the page', async () => {
     given([brokerageMembership('admin')]);
     expect(await run()).toEqual({ element: 'BillingPage' });
-    expect(sessionTablesRead()).toEqual(['organization_members']);
+    expect(sessionTablesRead()).toEqual(['licenses', 'organization_members']);
   });
 
   it.each([
@@ -823,6 +840,122 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
     const r = await page();
     expect(r.banner).toBeNull();
     expect(r.payment).toContain('Charged automatically each month');
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-3878 C4 — the suspended page. The licence row is the value both
+  // suspension writers set (`UPDATE public.licenses SET status = 'suspended'`
+  // in suspend_account_for_dispute and admin_suspend_user); the dispute row
+  // carries the columns suspend_account_for_dispute inserts (ids synthetic).
+  // -------------------------------------------------------------------------
+  function suspend(dispute = false): void {
+    mockBillingDb.rows('licenses').push({ id: 'lic-SEEDED', user_id: FIXTURE_USER_ID, status: 'suspended' });
+    if (dispute) {
+      mockBillingDb.rows('account_suspensions').push({
+        id: 'susp-SEEDED',
+        user_id: FIXTURE_USER_ID,
+        event_type: 'suspended',
+        reason: 'chargeback',
+        stripe_dispute_id: 'dp_FX3878',
+        stripe_payment_intent_id: 'pi_FX3878',
+        previous_license_status: 'active',
+        acted_by: null,
+        created_at: '2026-10-13T00:00:00+00:00',
+      });
+    }
+  }
+  const SUSPENDED_HREF = '/dashboard/support/new?preset=billing-suspended';
+  async function suspendedPage() {
+    given([personalMembership()]);
+    const { container, unmount } = render(await BillingRoute({}));
+    const plan = container.querySelector('[data-billing-block="plan"]') as HTMLElement;
+    const out = {
+      banner: container.querySelector('[data-billing-banner]')?.getAttribute('data-billing-banner') ?? null,
+      bannerText: container.querySelector('[data-billing-banner] p')?.textContent ?? '',
+      planText: plan.textContent ?? '',
+      planButtons: within(plan).queryAllByRole('button').map((b) => b.textContent),
+      supportHrefs: Array.from(container.querySelectorAll('[data-billing-action="contact_support"]')).map((a) => a.getAttribute('href')),
+      choose: (container.querySelector('[data-billing-block="choose_plan"]') as HTMLElement | null)?.textContent ?? null,
+      enabledButtons: within(container).queryAllByRole('button').filter((b) => !(b as HTMLButtonElement).disabled).map((b) => b.textContent),
+    };
+    unmount();
+    return out;
+  }
+
+  it('C4 control: the same Agent plan, licence active -> Cancel plan offered, no suspended banner', async () => {
+    seedCustomer();
+    seedMirror(fx3847('sub-C-keep'));
+    const r = await suspendedPage();
+    expect(r.banner).toBeNull();
+    expect(r.planButtons).toContain('Cancel plan');
+  });
+
+  it('C4 suspended Agent (admin suspension) -> banner without "chargeback", renewal paused, Update card + Contact support only', async () => {
+    seedCustomer();
+    seedMirror(fx3847('sub-C-keep'));
+    suspend();
+    const r = await suspendedPage();
+    expect(r.banner).toBe('suspended');
+    expect(r.bannerText).toMatch(/^Your account is suspended\. You can still see your plan/);
+    expect(r.bannerText).not.toContain('chargeback');
+    expect(r.planText).toContain('Suspended');
+    expect(r.planText).toContain('Unlimited exports · renewal paused');
+    expect(r.planText).toContain('Off while suspended');
+    expect(r.planText).toContain('Paused while your account is suspended. You are not charged.');
+    expect(r.planText).toContain('Blocked · "License Suspended — contact support"');
+    expect(r.planButtons).toEqual(['Update card']);
+    expect(r.supportHrefs.length).toBeGreaterThanOrEqual(2);
+    for (const href of r.supportHrefs) expect(href).toBe(SUSPENDED_HREF);
+    expect(r.enabledButtons).not.toContain('Cancel plan');
+    expect(r.enabledButtons).not.toContain('Keep my plan');
+    expect(r.enabledButtons).not.toContain('End plan now');
+  });
+
+  it('C4 dispute suspension -> "Your account is suspended after a chargeback."', async () => {
+    seedCustomer();
+    seedMirror(fx3847('sub-C-keep'));
+    suspend(true);
+    const r = await suspendedPage();
+    expect(r.bannerText).toMatch(/^Your account is suspended after a chargeback\./);
+  });
+
+  it('C4 suspended + payment failed -> the suspended banner only, no End plan now', async () => {
+    seedCustomer();
+    seedMirror(SUB);
+    mockStripe.invoicesList.mockResolvedValue(fx3848('invoices-list-pastdue'));
+    mockStripe.chargesList.mockResolvedValue(fx3848('charges-list-pastdue'));
+    suspend();
+    const r = await suspendedPage();
+    expect(r.banner).toBe('suspended');
+    expect(r.planButtons).toEqual(['Update card']);
+    expect(r.enabledButtons).not.toContain('End plan now');
+  });
+
+  it('C4 suspended solo (pay as you go) -> plan cards shown, every purchase disabled, paused copy', async () => {
+    suspend();
+    const r = await suspendedPage();
+    expect(r.banner).toBe('suspended');
+    expect(r.choose).toContain('Purchases are paused until support reinstates your account.');
+    expect(r.planText).toContain('Suspended');
+    expect(r.enabledButtons.filter((t) => /Subscribe|Book a Call/.test(t ?? ''))).toEqual([]);
+    expect(startAgentCheckout).not.toHaveBeenCalled();
+  });
+
+  it('C4 the disputed per-export payment reads "Disputed" in Receipts (TEST fixture p3878)', async () => {
+    seedCustomer();
+    suspend(true);
+    mockStripe.invoicesList.mockResolvedValue({ object: 'list', data: [], has_more: false, url: '/v1/invoices' });
+    mockStripe.chargesList.mockResolvedValue(JSON.parse(fs.readFileSync(path.join(__dirname, '../../../fixtures/stripe/p3878/charges-list-disputed.json'), 'utf8')));
+    const r = await page();
+    expect(r.invoiceText).toContain('Export unlock');
+    expect(r.invoiceText).toContain('Disputed');
+    expect(r.invoiceText).not.toContain('Paid');
+  });
+
+  it('C4 solo control: licence active -> Subscribe is enabled', async () => {
+    const r = await suspendedPage();
+    expect(r.choose).not.toContain('Purchases are paused');
+    expect(r.enabledButtons.some((t) => /^Subscribe/.test(t ?? ''))).toBe(true);
   });
 
   it('suspended (licenses row) -> credits kept copy, "Card on file"', async () => {

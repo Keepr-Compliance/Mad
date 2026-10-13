@@ -15,6 +15,7 @@ import { NextResponse } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
 import { getStripe, verifyBearerUser, CURRENCY, UNLOCK_PRODUCT_NAME, paymentCallbackUrl } from '@/lib/stripe';
 import { createServiceClient } from '@/lib/supabase/service';
+import { LICENCE_READ_FAILED, readOwnLicenceSuspended } from '@/lib/auth/suspension';
 import { getNextUnlockQuote } from '@/lib/payments/fulfillment';
 import { currentStripeMode } from '@/lib/billing/mode';
 import { ensureStripeCustomer, isModeAllowedForUser } from '@/lib/billing/customers';
@@ -51,6 +52,17 @@ export async function POST(req: Request): Promise<Response> {
   // Stripe call, so a refused user leaves no customer or session behind.
   if (!(await isModeAllowedForUser(service, user.userId, mode))) {
     return NextResponse.json({ error: 'payments unavailable for this account' }, { status: 403 });
+  }
+
+  // BACKLOG-3878: a suspended licence buys nothing, before any quote, customer
+  // or Stripe call. Fails closed: a failed licence read refuses too.
+  const suspended = await readOwnLicenceSuspended(service, user.userId);
+  if (suspended === null) {
+    console.error('[payments] suspended check failed', { code: LICENCE_READ_FAILED });
+    return NextResponse.json({ error: 'payments unavailable right now' }, { status: 503 });
+  }
+  if (suspended) {
+    return NextResponse.json({ error: 'account_suspended' }, { status: 403 });
   }
 
   // Server-side quote (never client-supplied).

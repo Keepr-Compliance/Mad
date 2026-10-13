@@ -47,9 +47,9 @@ export async function agentContext(): Promise<AgentContext | { error: string }> 
     enabled: true,
     agentPlan: view.state,
     renewalUnpaid: view.row?.status === 'unpaid',
-    // The suspended page gate is BACKLOG-3878's. view.suspended (licences) is
-    // read by each action that must refuse or skip a charge for it.
-    accountSuspended: false,
+    // BACKLOG-3878: the licence (view.suspended). A suspended account cannot
+    // cancel, keep or end its plan, or buy one; it may still replace its card.
+    accountSuspended: view.suspended,
     orgBillingSetUp: false,
   });
   if (!caps || caps.kind !== 'personal') return { error: NOT_AVAILABLE };
