@@ -60,25 +60,27 @@ describe("SupportLogStore", () => {
   };
 
   /**
-   * Measure the directory once queued writes and any pending cap retry have
-   * landed. The bound asserted is unchanged; only the instant it is measured
-   * moves past a retry. If a segment is still held after that, fail with the
-   * captured warnings rather than a bare number (BACKLOG-3191).
+   * Measure the directory once queued writes have landed. If something outside
+   * the store (on Windows: antivirus or the indexer) is holding a segment, the
+   * store trims again on its delayed retry and on the next write — so wait,
+   * write one small record, and measure again. The bound asserted is unchanged;
+   * only the instant it is measured moves past a retry. On a hold that outlasts
+   * the deadline, fail with the captured warnings so the errno is named
+   * (BACKLOG-3191).
    */
   async function settledSize(store: SupportLogStore, cap: number): Promise<number> {
-    const deadline = Date.now() + 3000;
+    const deadline = Date.now() + 10_000;
     for (;;) {
       await store.flush();
       const size = await dirSize(logsDir);
-      if (size <= cap || Date.now() > deadline) {
-        if (size > cap) {
-          throw new Error(
-            `log dir ${size} > cap ${cap}; warnings:\n${warnings.join("\n")}`,
-          );
-        }
-        return size;
+      if (size <= cap) return size;
+      if (Date.now() > deadline) {
+        throw new Error(
+          `log dir ${size} > cap ${cap}; warnings:\n${warnings.join("\n")}`,
+        );
       }
       await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+      await store.write("message-import", "settle", {});
     }
   }
 
