@@ -18,7 +18,10 @@
  *   The control tests below therefore start with Android selected.
  *
  * Controls (each mutation run, see the PR):
- *   K1 ROW_CLICK_IGNORE without "button"            → "kebab / Link / menu clicks never change the source"
+ *   K1 (no mutation reds it: the control renders only while Android is selected,
+ *      and the row handler returns then) kebab / Link / menu clicks leave the source alone
+ *   K1b unlinkAsk not cleared on source change       → "Unlink confirm is gone after switching to macOS"
+ *   K1c ROW_CLICK_IGNORE without "label,input"       → "clicking the unselected Android label selects it once"
  *   D1 details rendered whatever the source         → "details only for Android"
  *   I1 iPhone steps rendered whatever the source    → "iPhone steps only for iPhone"
  */
@@ -123,6 +126,30 @@ describe("the Android row's connection control", () => {
     await act(async () => undefined);
     expect(radio("android-messages-web").checked).toBe(true);
     expect(window.api.preferences.update).not.toHaveBeenCalled();
+  });
+
+  it("K1b: Unlink confirm open, then switching to macOS: the confirm is gone and nothing re-selects Android", async () => {
+    await renderSources({ source: "android-messages-web" });
+    const row = screen.getByTestId("import-source-android-row");
+    fireEvent.click(within(row).getByRole("button", { name: "Google Messages connection options" }));
+    fireEvent.click(within(row).getByRole("menuitem", { name: "Unlink Google Messages" }));
+    expect(screen.getByTestId("gm-forget-confirm")).toBeInTheDocument();
+    fireEvent.click(radio("macos-native"));
+    await waitFor(() => expect(radio("macos-native").checked).toBe(true));
+    await act(async () => undefined);
+    expect(screen.queryByTestId("gm-forget-confirm")).toBeNull();
+    expect(screen.queryByTestId("gm-forget-cancel")).toBeNull();
+    expect(radio("macos-native").checked).toBe(true);
+    expect(window.api.preferences.update).toHaveBeenCalledTimes(1);
+    expect(window.api.preferences.update).toHaveBeenCalledWith(USER, { messages: { source: "macos-native" } });
+  });
+
+  it("K1c: clicking the unselected Android label selects it exactly once", async () => {
+    await renderSources({ source: "macos-native" });
+    fireEvent.click(within(screen.getByTestId("import-source-android-row")).getByText(/Includes RCS chats/));
+    await act(async () => undefined);
+    expect(radio("android-messages-web").checked).toBe(true);
+    expect(window.api.preferences.update).toHaveBeenCalledTimes(1);
   });
 
   it("a Link click does not change the source either (K1)", async () => {

@@ -41,10 +41,12 @@ function formatWhen(iso: string | null | undefined): string {
 
 /**
  * BACKLOG-3156 stage G: a click inside one of these does not select the
- * Android row — the kebab, its menu, Link, the Unlink confirm and the
- * connection-details disclosure act on the link, not on the source.
+ * Android row. The kebab, its menu items and Link are buttons; the radio and
+ * its label are handled by the radio itself (so the row handler must not
+ * select a second time). The row handler already returns while Android is
+ * selected, and the menu, details and Unlink confirm render only then.
  */
-export const ROW_CLICK_IGNORE = "button,summary,details,[role=menu],[role=alert],label,input";
+export const ROW_CLICK_IGNORE = "button,[role=alert],label,input";
 
 // Re-export type for consumers
 export type { ImportSource } from "../../services/settingsService";
@@ -77,6 +79,11 @@ export function ImportSourceSettings({ userId, onSourceChange, onLinkGoogleMessa
   // link state (android/googleMessagesLink), the same the Google pane reads.
   const link = useGoogleMessagesLink();
   const [unlinkAsk, setUnlinkAsk] = useState(false);
+  // The Unlink confirm belongs to the Android row: drop it when another source
+  // is selected, so Cancel/Unlink cannot act on a row that shows no control.
+  useEffect(() => {
+    if (source !== "android-messages-web") setUnlinkAsk(false);
+  }, [source]);
 
   // Load preference on mount, falling back to phoneType-based default
   useEffect(() => {
