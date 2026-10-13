@@ -422,7 +422,7 @@ describe('reconcile alert', () => {
  * cus_VQohssQXi8riIA) under a new id with metadata.kind 'brokerage' stands in
  * for a future brokerage subscription on an Agent's customer.
  */
-const SUB_BROKERAGE = { ...SUB_VOID, id: 'sub_composed_brokerage', metadata: { kind: 'brokerage' } };
+const SUB_BROKERAGE: Obj = { ...SUB_VOID, id: 'sub_composed_brokerage', metadata: { kind: 'brokerage' } };
 
 describe('reverse: re-subscriber with several mirror rows (RC-1)', () => {
   /**
