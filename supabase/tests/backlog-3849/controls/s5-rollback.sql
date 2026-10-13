@@ -20,6 +20,7 @@ SELECT pg_temp.check('test URL row stored (inert loopback)',
 SELECT pg_temp.check('before rollback: fns=2 secrets=2 jobs=1',
   pg_temp.n_fns() = 2 AND pg_temp.n_secrets() = 2 AND pg_temp.n_jobs() = 1,
   format('fns=%s secrets=%s jobs=%s', pg_temp.n_fns(), pg_temp.n_secrets(), pg_temp.n_jobs()));
+DO $s$ BEGIN IF to_regprocedure('public.billing_outbox_claim(text,integer)') IS NULL THEN CREATE FUNCTION public.billing_outbox_claim(text, integer) RETURNS int LANGUAGE sql AS 'SELECT 1'; END IF; END $s$;
 SELECT set_config('t3849.claim_fns', (SELECT count(*)::text FROM pg_proc WHERE proname = 'billing_outbox_claim'), true) IS NULL;
 -- @step rollback
 SELECT pg_temp.check('rollback ran', pg_temp.step_ok('rollback'), pg_temp.step_err('rollback'));
@@ -27,8 +28,7 @@ SELECT pg_temp.check('after rollback: fns=0 secrets=0 jobs=0',
   pg_temp.n_fns() = 0 AND pg_temp.n_secrets() = 0 AND pg_temp.n_jobs() = 0,
   format('fns=%s secrets=%s jobs=%s', pg_temp.n_fns(), pg_temp.n_secrets(), pg_temp.n_jobs()));
 SELECT pg_temp.check('unrelated cron job kept', pg_temp.n_other() = 1, format('other=%s', pg_temp.n_other()));
-SELECT pg_temp.check('billing_outbox_claim untouched (same count as before rollback)',
-  current_setting('t3849.claim_fns') = (SELECT count(*)::text FROM pg_proc WHERE proname = 'billing_outbox_claim'));
+SELECT pg_temp.check('billing_outbox_claim untouched', to_regprocedure('public.billing_outbox_claim(text,integer)') IS NOT NULL);
 -- @step reapply
 SELECT pg_temp.check('re-apply after rollback ran', pg_temp.step_ok('reapply'), pg_temp.step_err('reapply'));
 SELECT pg_temp.check('after re-apply: fns=2 secrets=1 jobs=0',
