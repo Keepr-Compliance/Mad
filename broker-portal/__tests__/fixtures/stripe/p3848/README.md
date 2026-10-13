@@ -35,3 +35,51 @@ the test clock, so the two do not interleave as they would in production.
 
 Where a test edits a field or composes objects, the test says so next to it
 (`[EDITED]`, `[COMPOSED]`, `[SEEDED]`).
+
+## PR-2 (writes): `pr2-*` and `SR-*`
+
+Second TEST spike, 2026-10-13, same CLI version. One customer on a test clock
+(synthetic user `USER-3848-PR2`, email on `example.invalid`), cleaned up (clock
+deleted; the setup session expired). Strings containing `https://` were cut to
+`<stripped>` inside the string (error messages keep their text).
+
+1. `pm_card_visa`, Agent subscription on `agent_month_usd`; default switched to
+   `pm_card_chargeCustomerFail`; clock past the period end: `past_due`.
+2. A setup-mode Checkout session created with the exact parameters
+   `startCardUpdate` sends.
+3. Stripe refuses `setup_intents.confirm` on a Checkout-made SetupIntent ("You
+   cannot confirm SetupIntents created by Checkout"), so a standalone
+   SetupIntent on the same customer was confirmed with `pm_card_visa`.
+   Tests that pair the session with it say `[COMPOSED]`.
+4. Customer and subscription default set to that card; contact edited.
+5. `invoices.pay` with `pm_card_authenticationRequired` (error), then with the
+   new card (paid), then again (error), then `voidInvoice` on the paid invoice
+   (error).
+
+| File | Producer |
+|---|---|
+| `pr2-sub-past_due.json` | `subscriptions.retrieve` after step 1 |
+| `pr2-inv-open.json` | `invoices.retrieve(sub.latest_invoice)` after step 1 (the open renewal) |
+| `pr2-invoices-list-sub-open.json` | `invoices.list({subscription, status: 'open', limit: 100})` after step 1 |
+| `pr2-cs-setup-open.json` | `checkout.sessions.create({mode: 'setup', ...})` (step 2) |
+| `pr2-seti-before.json` | `setupIntents.retrieve` of the session's SetupIntent (`requires_payment_method`) |
+| `pr2-seti-succeeded.json` | the standalone SetupIntent, `succeeded` (step 3) |
+| `pr2-cus-update-default.json` | `customers.update(id, {invoice_settings: {default_payment_method}})` |
+| `pr2-sub-update-default.json` | `subscriptions.update(id, {default_payment_method})` |
+| `pr2-cus-update-contact.json` | `customers.update(id, {name, email})` |
+| `pr2-pay-auth-required.json` | `invoices.pay` with the 3DS card: error `invoice_payment_intent_requires_action` |
+| `pr2-inv-after-3ds.json` | `invoices.retrieve` after that (still `open`) |
+| `pr2-inv-paid.json` | `invoices.pay` with the new card: `paid` |
+| `pr2-pay-already-paid.json` | `invoices.pay` again: error "Invoice is already paid" (no `code`) |
+| `pr2-void-paid-refused.json` | `invoices.voidInvoice` on the paid invoice: error (no `code`) |
+| `pr2-inv-paid-expand-charge.json` | `invoices.retrieve(id, {expand: ['charge']})`: `charge.receipt_number` is null in TEST |
+| `pr2-sub-after-pay.json` | `subscriptions.retrieve` after the payment: `active` |
+
+SR plan-review spike (`3848-sr/spike`, TEST, acacia, clock deleted):
+
+| File | Producer |
+|---|---|
+| `SR-PAY-decline.json` | `invoices.pay` with a declining card: error `card_declined` |
+| `SR-VOID-inv-voided.json` | `invoices.voidInvoice` on a past_due renewal |
+| `SR-VOID-sub-after-void.json` | `subscriptions.retrieve` after the void: `active` |
+| `SR-VOID-sub-canceled.json` | `subscriptions.cancel(id, {prorate: false, invoice_now: false})`: `canceled` |

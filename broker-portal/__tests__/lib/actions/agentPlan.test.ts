@@ -77,14 +77,20 @@ jest.mock('stripe', () => {
     __esModule: true,
     default: jest.fn().mockImplementation(() => ({
       prices: { list: op('prices.list') },
-      customers: { create: op('customers.create') },
+      customers: { create: op('customers.create'), retrieve: op('customers.retrieve'), update: op('customers.update') },
+      setupIntents: { retrieve: op('setupIntents.retrieve') },
       subscriptions: {
         list: op('subscriptions.list'),
         retrieve: op('subscriptions.retrieve'),
         update: op('subscriptions.update'),
         cancel: op('subscriptions.cancel'),
       },
-      invoices: { voidInvoice: op('invoices.voidInvoice'), retrieve: op('invoices.retrieve') },
+      invoices: {
+        voidInvoice: op('invoices.voidInvoice'),
+        retrieve: op('invoices.retrieve'),
+        list: op('invoices.list'),
+        pay: op('invoices.pay'),
+      },
       checkout: {
         sessions: {
           // By-subscription listings (voidIncompleteSubscription) are served
@@ -100,8 +106,10 @@ jest.mock('stripe', () => {
   };
 });
 
+import { confirmCardUpdate, startCardUpdate, updateBillingContact } from '@/lib/actions/billingCard';
 import {
   confirmAgentCheckout,
+  endAgentPlanNow,
   endAgentPlanAtPeriodEnd,
   keepAgentPlan,
   startAgentCheckout,
@@ -734,5 +742,192 @@ describe('confirmAgentCheckout (C-CONF, R8)', () => {
     await confirmAgentCheckout(S1.id);
     const read = mockDb.callsTo('stripe_customers', 'select')[0];
     expect([eqValue(read, 'user_id'), eqValue(read, 'stripe_mode')]).toEqual([FIXTURE_USER_ID, 'test']);
+  });
+});
+
+// ---- BACKLOG-3848: Update card, End plan now, Edit contact ------------------------
+//
+// Objects: fixtures/stripe/p3848 (TEST, acacia; README). The setup session is the
+// captured open one with `status` [EDITED] complete; its setup_intent answers the
+// standalone succeeded SetupIntent of the same customer [COMPOSED].
+
+const FX48 = path.join(__dirname, '../../fixtures/stripe/p3848');
+const fx48 = (n: string): Obj => JSON.parse(fs.readFileSync(path.join(FX48, `${n}.json`), 'utf8'));
+const CS48 = { ...fx48('pr2-cs-setup-open'), status: 'complete' }; // [EDITED]
+const SI48 = fx48('pr2-seti-succeeded');
+const SUB48 = fx48('pr2-sub-past_due');
+const CUS48 = CS48.customer as string;
+const IMP_ERROR = 'Write operations are not allowed during impersonation sessions';
+
+async function caught(fn: () => Promise<unknown>): Promise<Obj> {
+  try {
+    return (await fn()) as Obj;
+  } catch (e) {
+    const digest = (e as { digest?: string }).digest;
+    if (typeof digest === 'string' && digest.startsWith('NEXT_REDIRECT')) return { redirect: digest.split(';')[2] };
+    throw e;
+  }
+}
+
+const ACTIONS_3848: [string, () => Promise<unknown>][] = [
+  ['startCardUpdate', () => startCardUpdate()],
+  ['confirmCardUpdate', () => confirmCardUpdate(CS48.id)],
+  ['endAgentPlanNow', () => endAgentPlanNow()],
+  ['updateBillingContact', () => updateBillingContact({ name: 'Billing contact 3848', email: 'billing-3848@example.invalid' })],
+];
+
+describe('3848 actions: refused before any Stripe call', () => {
+  it.each(ACTIONS_3848)('C-IMP (%s): support session -> refused, zero Stripe calls, zero writes', async (_n, fn) => {
+    seed({ billing_subscriptions: [mirrorRow(SUB48, { status: 'past_due' })] });
+    givenSupportSession();
+    expect(await caught(fn)).toEqual({ error: IMP_ERROR });
+    expect(stripeOps()).toEqual([]);
+    expect(dbWrites()).toEqual([]);
+    expect(mockServiceTables).toEqual(['impersonation_sessions']);
+  });
+
+  it.each(
+    ACTIONS_3848.flatMap(([n, fn]) => [
+      [n, 'brokerage agent', fn, [brokerageMembership('agent')]],
+      [n, 'brokerage admin', fn, [brokerageMembership('admin')]],
+      [n, 'brokerage it_admin', fn, [brokerageMembership('it_admin')]],
+    ]) as [string, string, () => Promise<unknown>, Row[]][]
+  )('C-SRV (%s): %s -> refused, no billing read, no Stripe call', async (_n, _who, fn, rows) => {
+    signedIn(rows);
+    expect(await caught(fn)).toEqual({ error: 'Billing is not available for this account.' });
+    expect(stripeOps()).toEqual([]);
+    expect(mockServiceTables).toEqual([]);
+  });
+
+  it.each([
+    ['startCardUpdate', () => startCardUpdate()],
+    ['updateBillingContact', () => updateBillingContact({ name: 'Pat', email: 'billing-3848@example.invalid' })],
+    ['confirmCardUpdate', () => confirmCardUpdate(CS48.id)],
+  ] as [string, () => Promise<unknown>][])(
+    'C-MODE-GUARD / C-CONTACT-MODE (%s): test key + personal org not is_test -> refused before any Stripe call (no customer created)',
+    async (_n, fn) => {
+      seed({ stripe_customers: [] }, false);
+      expect(await caught(fn)).toEqual({ error: 'Payments are not available for this account.' });
+      expect(stripeOps()).toEqual([]);
+      expect(mockDb.rows('stripe_customers')).toEqual([]);
+    }
+  );
+});
+
+describe('3848 Update card', () => {
+  beforeEach(() => {
+    seed({
+      stripe_customers: [{ user_id: FIXTURE_USER_ID, stripe_customer_id: CUS48, default_payment_method_id: null, stripe_mode: 'test' }],
+      billing_subscriptions: [mirrorRow(SUB48, { status: 'past_due', stripe_customer_id: CUS48 })],
+    });
+    mockStripeImpl['checkout.sessions.create'] = async () => ({ ...clone(fx48('pr2-cs-setup-open')), url: 'https://checkout.stripe.com/c/pay/setup' });
+  });
+
+  it('opens a setup-mode Stripe page for the caller\'s own customer; return URL carries the session id', async () => {
+    expect(await caught(() => startCardUpdate())).toEqual({ redirect: 'https://checkout.stripe.com/c/pay/setup' });
+    const [[params]] = calls('checkout.sessions.create');
+    expect(params).toEqual({
+      mode: 'setup',
+      customer: CUS48,
+      currency: 'usd',
+      payment_method_types: ['card'],
+      metadata: { kind: 'agent_card_update', user_id: FIXTURE_USER_ID },
+      setup_intent_data: { metadata: { kind: 'agent_card_update', user_id: FIXTURE_USER_ID } },
+      success_url: `${APP}/dashboard/billing?card=updated&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${APP}/dashboard/billing?card=cancelled`,
+    });
+  });
+
+  it('no Stripe customer in this mode -> refused, nothing created', async () => {
+    seed({ stripe_customers: [] });
+    expect(await caught(() => startCardUpdate())).toEqual({ error: 'A card is saved at your first purchase in the Keepr app.' });
+    expect(stripeOps()).toEqual([]);
+  });
+
+  it('confirm: a session id that is not one -> refused before Stripe', async () => {
+    expect(await confirmCardUpdate('not-a-session')).toHaveProperty('error');
+    expect(stripeOps()).toEqual([]);
+  });
+
+  it('confirm: a completed session of ANOTHER customer -> refused, nothing written', async () => {
+    seed({ stripe_customers: [{ user_id: FIXTURE_USER_ID, stripe_customer_id: 'cus_EDITED_mine', default_payment_method_id: null, stripe_mode: 'test' }] });
+    mockStripeImpl['checkout.sessions.retrieve'] = async () => clone(CS48);
+    expect(await confirmCardUpdate(CS48.id)).toHaveProperty('error');
+    expect(stripeOps()).toEqual(['checkout.sessions.retrieve']);
+    expect(dbWrites()).toEqual([]);
+  });
+
+  it('confirm: the caller\'s completed session -> card saved, failed renewal paid, a notice for the person', async () => {
+    mockStripeImpl['checkout.sessions.retrieve'] = async () => clone(CS48);
+    mockStripeImpl['setupIntents.retrieve'] = async () => clone(SI48); // [COMPOSED]
+    mockStripeImpl['customers.retrieve'] = async () => fx48('pr2-cus-update-default');
+    mockStripeImpl['customers.update'] = async () => fx48('pr2-cus-update-default');
+    serve(SUB48.id, SUB48, SUB48, fx48('pr2-sub-after-pay'));
+    mockStripeImpl['subscriptions.update'] = async () => fx48('pr2-sub-update-default');
+    mockStripeImpl['invoices.retrieve'] = async () => fx48('pr2-inv-open');
+    mockStripeImpl['invoices.pay'] = async () => fx48('pr2-inv-paid');
+    const r = await confirmCardUpdate(CS48.id);
+    expect(r).toEqual({ ok: true, notice: expect.stringContaining('payment went through') });
+    expect(calls('invoices.pay')).toHaveLength(1);
+    expect(mockDb.rows('stripe_customers')[0].default_payment_method_id).toBe(SI48.payment_method);
+  });
+});
+
+describe('3848 End plan now', () => {
+  it('C-END-SCOPE: an active plan -> refused by the server-side capability, zero Stripe calls', async () => {
+    seed({ billing_subscriptions: [mirrorRow(C_KEEP)] });
+    expect(await endAgentPlanNow()).toEqual({ error: 'That change is not available for your plan right now. Refresh the page.' });
+    expect(stripeOps()).toEqual([]);
+  });
+
+  it('a past_due plan of the caller -> voided, cancelled, mirror canceled; a subscription id in the request is impossible (no parameter)', async () => {
+    seed({ billing_subscriptions: [mirrorRow(SUB48, { status: 'past_due' })] });
+    serve(SUB48.id, SUB48);
+    mockStripeImpl['invoices.list'] = async () => fx48('pr2-invoices-list-sub-open');
+    mockStripeImpl['invoices.voidInvoice'] = async () => fx48('SR-VOID-inv-voided');
+    mockStripeImpl['subscriptions.cancel'] = async () => ({ ...fx48('SR-VOID-sub-canceled'), id: SUB48.id }); // [COMPOSED]
+    expect(await endAgentPlanNow()).toEqual({ ok: true });
+    expect(stripeOps()).toEqual(['subscriptions.retrieve', 'invoices.list', 'invoices.voidInvoice', 'subscriptions.cancel']);
+    expect(mockDb.rows('billing_subscriptions')[0]).toMatchObject({ status: 'canceled', paused: false });
+  });
+
+  it('paid in the meantime -> ok with a notice, nothing cancelled', async () => {
+    seed({ billing_subscriptions: [mirrorRow(SUB48, { status: 'past_due' })] });
+    serve(SUB48.id, SUB48);
+    mockStripeImpl['invoices.list'] = async () => fx48('pr2-invoices-list-sub-open');
+    mockStripeImpl['invoices.voidInvoice'] = async () => {
+      throw Object.assign(new Error('Invoices with `paid` payments cannot be voided.'), { type: 'StripeInvalidRequestError' });
+    };
+    mockStripeImpl['invoices.retrieve'] = async () => fx48('pr2-inv-paid');
+    expect(await endAgentPlanNow()).toEqual({ ok: true, notice: expect.stringContaining('payment went through') });
+    expect(calls('subscriptions.cancel')).toEqual([]);
+  });
+});
+
+describe('3848 Edit contact (C-CONTACT)', () => {
+  it('updates the caller\'s own customer only; an id in the request is ignored', async () => {
+    mockStripeImpl['customers.update'] = async () => fx48('pr2-cus-update-contact');
+    const r = await updateBillingContact({ name: '  Billing contact 3848 ', email: 'billing-3848@example.invalid', customer: 'cus_EDITED_victim' } as never);
+    expect(r).toEqual({ ok: true });
+    expect(calls('customers.update')).toEqual([[CUS, { name: 'Billing contact 3848', email: 'billing-3848@example.invalid' }]]);
+    expect(calls('customers.create')).toEqual([]);
+  });
+
+  it.each([
+    ['empty email', { name: 'Pat', email: '' }],
+    ['not an email', { name: 'Pat', email: 'not-an-email' }],
+    ['name over 100', { name: 'x'.repeat(101), email: 'a@example.invalid' }],
+  ])('validation: %s -> refused, zero Stripe calls', async (_n, input) => {
+    expect(await updateBillingContact(input)).toHaveProperty('error');
+    expect(stripeOps()).toEqual([]);
+  });
+
+  it('no customer yet in this (test-allowed) mode -> one customer created for the caller, then updated', async () => {
+    seed({ stripe_customers: [] });
+    mockStripeImpl['customers.create'] = async () => ({ ...fx48('pr2-cus-update-contact'), id: 'cus_EDITED_new' });
+    mockStripeImpl['customers.update'] = async () => fx48('pr2-cus-update-contact');
+    expect(await updateBillingContact({ name: 'Pat', email: 'billing-3848@example.invalid' })).toEqual({ ok: true });
+    expect(stripeOps()).toEqual(['customers.create', 'customers.update']);
+    expect(calls('customers.update')[0][0]).toBe('cus_EDITED_new');
   });
 });

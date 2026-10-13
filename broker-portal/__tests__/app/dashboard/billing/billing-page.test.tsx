@@ -457,6 +457,21 @@ describe('3847: personal plan blocks', () => {
   const day = (sec: number) =>
     new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(sec * 1000));
 
+  it('3848: back from the card page (?card=updated&session_id=) -> confirmCardUpdate(session id) runs once, status line shown', async () => {
+    const { confirmCardUpdate } = jest.requireMock('@/lib/actions/billingCard') as { confirmCardUpdate: jest.Mock };
+    const r = await text({ card: 'updated', session_id: 'cs_test_FIXTURE' });
+    expect(confirmCardUpdate).toHaveBeenCalledWith('cs_test_FIXTURE');
+    expect(confirmCardUpdate).toHaveBeenCalledTimes(1);
+    expect(r.text).toMatch(/Saving your new card|Your card is updated/);
+  });
+
+  it('3848: ?card=cancelled -> "Your card was not changed.", nothing confirmed', async () => {
+    const { confirmCardUpdate } = jest.requireMock('@/lib/actions/billingCard') as { confirmCardUpdate: jest.Mock };
+    const r = await text({ card: 'cancelled' });
+    expect(r.text).toContain('Your card was not changed.');
+    expect(confirmCardUpdate).not.toHaveBeenCalled();
+  });
+
   it('C-ST: active + cancel_at_period_end (canceled_at set by Stripe) -> "Cancels <date>", Keep my plan, no plan choice', async () => {
     const sub = fx3847('sub-C-cancel-at-period-end');
     expect([sub.status, sub.cancel_at_period_end, typeof sub.canceled_at]).toEqual(['active', true, 'number']);
