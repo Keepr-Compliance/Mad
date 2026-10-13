@@ -58,10 +58,15 @@ $$;
 INSERT INTO auth.users (id, email) VALUES
   (:'A', 'f3403-a@example.test'), (:'B', 'f3403-b@example.test'), (:'K', 'f3403-k@example.test'),
   (:'O', 'f3403-o@example.test'), (:'Z', 'f3403-z@example.test');
-INSERT INTO public.organizations (id) VALUES (:'ORG'), (:'ORG2');
+INSERT INTO public.users (id, email, oauth_provider, oauth_id)
+  SELECT id, email, 'google', 'f3403-' || id FROM auth.users WHERE id IN (:'A', :'B', :'K', :'O', :'Z')
+  ON CONFLICT (id) DO NOTHING;
+INSERT INTO public.organizations (id, name, slug) VALUES (:'ORG', 'Org 3403', 'org-3403'), (:'ORG2', 'Org 3403 two', 'org-3403-two');
 INSERT INTO public.organization_members (organization_id, user_id, role) VALUES
   (:'ORG', :'A', 'agent'), (:'ORG', :'B', 'agent'), (:'ORG', :'K', 'broker'), (:'ORG2', :'O', 'agent');
-INSERT INTO public.internal_roles (user_id) VALUES (:'Z');
+INSERT INTO public.admin_roles (name, slug) VALUES ('Fixture 3403 staff', 'fixture-3403-staff');
+INSERT INTO public.internal_roles (user_id, role_id)
+  SELECT :'Z', id FROM public.admin_roles WHERE slug = 'fixture-3403-staff';
 
 INSERT INTO public.transaction_submissions (id, organization_id, submitted_by, local_transaction_id, property_address, status, version)
 VALUES (:'S', :'ORG', :'A', 't1', 'Fixture Street 1', 'uploading', 1),
