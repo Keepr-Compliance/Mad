@@ -119,6 +119,17 @@ const TRIGGERS: ReadonlyArray<TriggerSpec> = [
     BEGIN ${BUMP}; END`),
   trigger("keepr_al_contact_del", "contacts", sql`DROP TRIGGER IF EXISTS temp.keepr_al_contact_del`, sql`CREATE TEMP TRIGGER IF NOT EXISTS keepr_al_contact_del AFTER DELETE ON main.contacts
     BEGIN ${BUMP}; END`),
+  // BACKLOG-3926: the folder / label match reads which folder each message sits in and
+  // the folder / label names. Written only when they change (mailFolderDb.ts), so a
+  // sync that re-fetches unchanged mail does not invalidate every deal's sweep.
+  trigger("keepr_al_mfr_ins", "mail_folder_refs", sql`DROP TRIGGER IF EXISTS temp.keepr_al_mfr_ins`, sql`CREATE TEMP TRIGGER IF NOT EXISTS keepr_al_mfr_ins AFTER INSERT ON main.mail_folder_refs
+    BEGIN ${BUMP}; END`),
+  trigger("keepr_al_mfr_del", "mail_folder_refs", sql`DROP TRIGGER IF EXISTS temp.keepr_al_mfr_del`, sql`CREATE TEMP TRIGGER IF NOT EXISTS keepr_al_mfr_del AFTER DELETE ON main.mail_folder_refs
+    BEGIN ${BUMP}; END`),
+  trigger("keepr_al_mfn_ins", "mail_folder_names", sql`DROP TRIGGER IF EXISTS temp.keepr_al_mfn_ins`, sql`CREATE TEMP TRIGGER IF NOT EXISTS keepr_al_mfn_ins AFTER INSERT ON main.mail_folder_names
+    BEGIN ${BUMP}; END`),
+  trigger("keepr_al_mfn_del", "mail_folder_names", sql`DROP TRIGGER IF EXISTS temp.keepr_al_mfn_del`, sql`CREATE TEMP TRIGGER IF NOT EXISTS keepr_al_mfn_del AFTER DELETE ON main.mail_folder_names
+    BEGIN ${BUMP}; END`),
   trigger("keepr_al_user_upd", "users_local", sql`DROP TRIGGER IF EXISTS temp.keepr_al_user_upd`, sql`CREATE TEMP TRIGGER IF NOT EXISTS keepr_al_user_upd AFTER UPDATE OF email ON main.users_local
     WHEN OLD.email IS NOT NEW.email
     BEGIN ${BUMP}; END`),

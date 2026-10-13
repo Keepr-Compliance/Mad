@@ -49,6 +49,24 @@ export function reviewThreadReason(group: ReviewThreadGroup): ReviewMatchReason 
   return strongestReason(group.items.map((i) => i.matchReason ?? "contact"));
 }
 
+/**
+ * BACKLOG-3926: the folder / label a folder-match thread was found in — from the first
+ * of its items that carries one — or undefined when the thread's reason is not folder.
+ */
+export function reviewThreadFolder(group: ReviewThreadGroup): string | undefined {
+  if (reviewThreadReason(group) !== "folder") return undefined;
+  return group.items.find((i) => i.matchReason === "folder" && i.matchFolder)?.matchFolder;
+}
+
+/** BACKLOG-3926: the folder / label name on the title row (mock v5, emerald text). */
+export function ReviewMatchFolderNote({ text }: { text: string }): React.ReactElement {
+  return (
+    <span className="text-xs text-emerald-700 truncate min-w-0" data-testid="match-folder">
+      {text}
+    </span>
+  );
+}
+
 /** BACKLOG-3925: the match pill (mock v3; wording draft). */
 export function ReviewMatchPill({ reason }: { reason: ReviewMatchReason }): React.ReactElement | null {
   const kind = reviewMatchKind(reason);
@@ -76,7 +94,7 @@ function filterButtonClass(active: boolean, first: boolean): string {
 }
 
 /**
- * The All / Address match / Contact match segmented control, with THREAD counts.
+ * The All / Address match / Contact match / Folder / label segmented control, with THREAD counts.
  * Shown on the full Needs Review screen only (founder, 2026-10-12): the Emails-tab
  * section lists everything with pills and has no tabs.
  */
@@ -322,6 +340,10 @@ export function ReviewCards({
               userEmail={userEmail}
               nameMap={nameMap}
               subjectBadge={showMatchPills ? <ReviewMatchPill reason={reviewThreadReason(group)} /> : undefined}
+              subjectNote={(() => {
+                const folder = reviewThreadFolder(group);
+                return folder ? <ReviewMatchFolderNote text={folder} /> : undefined;
+              })()}
             />
           );
         }

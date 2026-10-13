@@ -147,6 +147,56 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     ref: "BACKLOG-3925",
   },
   {
+    key: "TABLE:mail_folder_refs",
+    what: "New table: which Outlook folder / Gmail labels each fetched message sits in.",
+    why:
+      "BACKLOG-3926: Needs Review gains folder / label matches. Keyed by the provider " +
+      "message id (account_id, external_id, folder_id) so it is written for every fetched " +
+      "message and is independent of the force re-cache staging. IF NOT EXISTS, created " +
+      "by schema.sql's exec on every open; no migration entry.",
+    ref: "BACKLOG-3926",
+  },
+  {
+    key: "TABLE:mail_folder_names",
+    what: "New table: folder / label id -> display path, per mailbox account, with a system flag.",
+    why:
+      "BACKLOG-3926: folder / label names to match against the deal address. IF NOT " +
+      "EXISTS, created by schema.sql's exec on every open; no migration entry.",
+    ref: "BACKLOG-3926",
+  },
+  {
+    key: "INDEX:idx_mail_folder_refs_folder",
+    what: "Index on mail_folder_refs (account_id, folder_id).",
+    why: "BACKLOG-3926: the folder-match candidate read starts from the matching folders.",
+    ref: "BACKLOG-3926",
+  },
+  {
+    key: "INDEX:idx_mail_folder_refs_external",
+    what: "Index on mail_folder_refs (external_id).",
+    why:
+      "BACKLOG-3926: the read-time folder label lookup goes email -> refs by external_id; " +
+      "without it getReviewState measured 2.4 s at 60k emails (folderMatchWorker-3926).",
+    ref: "BACKLOG-3926",
+  },
+  {
+    key: "INDEX:idx_mail_folder_names_user",
+    what: "Index on mail_folder_names (user_id).",
+    why: "BACKLOG-3926: the per-deal catalogue read is by user.",
+    ref: "BACKLOG-3926",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_mail_folder_refs_1",
+    what: "SQLite's automatic index for mail_folder_refs' composite primary key.",
+    why: "BACKLOG-3926: produced by the composite PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-3926",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_mail_folder_names_1",
+    what: "SQLite's automatic index for mail_folder_names' composite primary key.",
+    why: "BACKLOG-3926: produced by the composite PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-3926",
+  },
+  {
     key: "INDEX:idx_messages_thread_sent",
     what: "Index on messages (thread_id, sent_at).",
     why:

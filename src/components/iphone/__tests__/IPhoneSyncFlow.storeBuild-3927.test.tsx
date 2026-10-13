@@ -74,16 +74,20 @@ describe("IPhoneSyncFlow in the Store build (BACKLOG-3927)", () => {
     expect(baseContext.recoverInstallDriver).not.toHaveBeenCalled();
   });
 
-  it("Store + ready: the hook's USB-driver reading reaches the checklist (row 2 ticks only when bound)", () => {
+  it("Store + usb-driver-missing: the hook's USB-driver reading reaches the checklist (row 2 open)", () => {
+    setStoreFlag(true);
+    mockContextValue = { ...baseContext, driverMissing: false, appleDevicesState: "usb-driver-missing", appleUsbDriver: "missing" };
+    render(<IPhoneSyncFlow />);
+    expect(screen.getByTestId("setup-row-usbDriver")).toHaveAttribute("data-status", "open");
+    expect(screen.queryByTestId("setup-row-iphone")).toBeNull();
+  });
+
+  it("Store + ready: both rows met, the normal Connect screen shows (no checklist)", () => {
     setStoreFlag(true);
     mockContextValue = { ...baseContext, driverMissing: false, appleDevicesState: "ready", appleUsbDriver: "bound" };
-    const { unmount } = render(<IPhoneSyncFlow />);
-    expect(screen.getByTestId("setup-row-usbDriver")).toHaveAttribute("data-status", "done");
-    expect(screen.getByTestId("setup-row-iphone")).toHaveAttribute("data-status", "open");
-    unmount();
-    mockContextValue = { ...baseContext, driverMissing: false, appleDevicesState: "ready", appleUsbDriver: "no-device" };
     render(<IPhoneSyncFlow />);
-    expect(screen.getByTestId("setup-row-usbDriver")).toHaveAttribute("data-status", "unchecked");
+    expect(screen.queryByTestId("iphone-setup-checklist")).toBeNull();
+    expect(screen.getByText("Connect Your iPhone")).toBeInTheDocument();
   });
 
   it("reports the Connect screen shown, and not shown once it unmounts or another view takes over", () => {

@@ -217,9 +217,14 @@ export interface ReviewItemDto {
   found_at: string;
   /**
    * BACKLOG-3925: why this item is in Needs Review. Drives the All / Address match /
-   * Contact match tabs and the pill. "contact" for every row with no stored reason.
+   * Contact match / Folder / label tabs and the pill. "contact" for every row with no stored reason.
    */
   matchReason: ReviewMatchReason;
+  /**
+   * BACKLOG-3926: for a "folder" item, the folder / label it matched on, as shown on
+   * the title row ("Outlook folder: <path>" / "Gmail label: <path>").
+   */
+  matchFolder?: string;
   display: ReviewItemDisplayDto;
 }
 
