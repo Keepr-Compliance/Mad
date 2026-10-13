@@ -5,7 +5,7 @@
  * a real app.asar.
  */
 import { spawnSync } from "child_process";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import os from "os";
 import path from "path";
 import { pathToFileURL } from "url";
@@ -25,18 +25,17 @@ beforeEach(() => {
   mkdirSync(path.join(app, "resources"), { recursive: true });
 });
 afterEach(() => {
-  // The pre-push hook may run jest under Electron, whose fs treats *.asar as an
-  // archive, so a recursive rm fails on it with ENOTDIR. Unlink it first.
-  try {
-    unlinkSync(path.join(app, "resources", "app.asar"));
-  } catch {
-    /* absent, or still held open on Windows (retried below) */
-  }
-  // Windows: @electron/asar's createPackage resolves when its write stream emits
-  // "finish", which can precede "close", so the archive may stay delete-pending
-  // for a moment and lstat/unlink fail with EPERM. Node retries EPERM/EBUSY with
-  // maxRetries; the handle is inside the asar package and cannot be closed here.
-  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  // Under Electron's node mode, fs treats paths ending in ".asar" as archives, so
+  // removing app.asar from this process fails (ENOTDIR on macOS, EPERM on
+  // Windows CI; retries do not help, so it is not a transient handle). Remove the
+  // tree in a child with process.noAsar set, as the script under test does.
+  const code = `process.noAsar = true;
+require("fs").rmSync(process.argv[1], { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });`;
+  const r = spawnSync(process.execPath, ["-e", code, root], {
+    encoding: "utf8",
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+  });
+  if (r.status !== 0) throw new Error(`teardown failed: ${r.stderr}`);
 });
 
 const put = (rel: string, content = "x") => {
