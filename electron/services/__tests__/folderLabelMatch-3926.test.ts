@@ -421,6 +421,22 @@ describe("the catalogue throttle yields to a force re-cache and to a changed wal
     expect(outlookListFolders).toHaveBeenCalledTimes(2);
   });
 
+  it("a non-force fetch whose fresh walk renames a folder (same id) writes the new name within the throttle", async () => {
+    seedBase();
+    const t0 = Date.now();
+    outlookPeekFolders.mockReturnValue(OUTLOOK_FOLDERS);
+    await refreshMailFolderCatalog("outlook", USER, OUTLOOK_ACCT, t0);
+    const renamed = OUTLOOK_FOLDERS.map((f) => (f.id === "AAMkOther==" ? { ...f, displayName: "100 Main St" } : f));
+    outlookPeekFolders.mockReturnValue(renamed);
+    outlookListFolders.mockResolvedValue({ folders: renamed, systemFolderIds: OUTLOOK_SYSTEM_IDS });
+    await refreshMailFolderCatalog("outlook", USER, OUTLOOK_ACCT, t0 + 60_000);
+    const row = db
+      .prepare(`SELECT display_path FROM mail_folder_names WHERE account_id = ? AND folder_id = 'AAMkOther=='`)
+      .get(OUTLOOK_ACCT) as { display_path: string };
+    expect(row.display_path).toBe("100 Main St");
+    expect(outlookListFolders).toHaveBeenCalledTimes(2);
+  });
+
   it("an unchanged walk within the throttle is not re-listed and writes nothing", async () => {
     seedBase();
     const t0 = Date.now();
