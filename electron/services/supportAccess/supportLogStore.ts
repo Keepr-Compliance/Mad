@@ -322,7 +322,7 @@ export class SupportLogStore {
    * resulting segment trimmed, and an empty `current.log` is put back.
    *
    * A segment that cannot be removed (Windows: held by an antivirus scanner or
-   * the indexer) is skipped, never spun on (BACKLOG-3191). One delayed retry is
+   * the indexer) ends the pass; it is never spun on (BACKLOG-3191). One delayed retry is
    * scheduled without blocking the caller; if that also fails, the next write
    * tries again. While waiting, the total on disk never exceeds
    * `maxTotalBytes + maxSegmentBytes`: `append` refuses a record that would
@@ -387,11 +387,15 @@ export class SupportLogStore {
           total -= segment.size;
           continue;
         }
+        // Stop at the first held segment rather than removing younger ones
+        // around it, so the oldest content is always what goes first. The
+        // bound is kept by append (see wouldExceedHeldBound), not by this loop.
         held = true;
         this.log(
           "warn",
           `Could not drop support log segment ${segment.name}: ${String(error)}`,
         );
+        break;
       }
     }
 

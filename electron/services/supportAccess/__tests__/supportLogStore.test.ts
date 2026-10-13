@@ -181,10 +181,18 @@ describe("SupportLogStore", () => {
     const payload = "z".repeat(256);
 
     await store.write("message-import", "first-entry-marker", {});
-    for (let i = 0; i < 400; i += 1) {
+    for (let i = 0; i < 399; i += 1) {
       now = T0 + i * 1000;
       await store.write("message-import", "bulk", { i, payload });
     }
+    // While another process holds segments the store may refuse records to
+    // stay inside its bound (BACKLOG-3191), so the newest-kept claim is made
+    // about a record written once the cap has been reached again.
+    await settledSize(store, 8 * 1024);
+    now = T0 + 399 * 1000;
+    expect(
+      await store.write("message-import", "bulk", { i: 399, payload }),
+    ).toBe(true);
     await settledSize(store, 8 * 1024);
 
     const names = await fs.readdir(logsDir);
