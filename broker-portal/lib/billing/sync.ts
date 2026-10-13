@@ -27,11 +27,21 @@ import { enqueueAgentReceipt } from './agentReceipt';
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
+/**
+ * The fields of the triggering event that billing code may read (BACKLOG-3849,
+ * SR R10.3). A webhook passes the Stripe event itself; the nightly reconcile
+ * passes a synthetic `{ id: 'reconcile:<sub>', type: 'reconcile', ... }`.
+ * `created` is read only by syncSubscription(..., { advanceCursor: true }).
+ */
+export type BillingEventRef = Pick<Stripe.Event, 'id' | 'livemode' | 'created'> & {
+  type: Stripe.Event['type'] | 'reconcile';
+};
+
 export interface BillingContext {
   service: ServiceClient;
   stripe: Stripe;
   mode: StripeMode;
-  event: Stripe.Event;
+  event: BillingEventRef;
 }
 
 /** Statuses the one-open-per-user index treats as open. */
@@ -378,13 +388,18 @@ async function entitlementRpc(
   }
 }
 
-/** Revoke unless the user has a different open subscription (R2). */
-export async function revokeIfCurrent(ctx: BillingContext, userId: string, subId: string, stage: string): Promise<void> {
+/**
+ * Revoke unless the user has a different open subscription (R2). Returns true
+ * when the revoke RPC was called (a refusal the RPC reports still counts),
+ * false when declined here.
+ */
+export async function revokeIfCurrent(ctx: BillingContext, userId: string, subId: string, stage: string): Promise<boolean> {
   if (await hasOtherOpenSubscription(ctx, userId, subId)) {
     log(ctx, `${subId} is not the user's current subscription; no revoke`);
-    return;
+    return false;
   }
   await entitlementRpc(ctx, 'revoke_unlimited_from_subscription', { p_user_id: userId, p_mode: ctx.mode }, stage);
+  return true;
 }
 
 /** The line that pays the subscription period (R5): never lines[0]. */
