@@ -65,6 +65,11 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
+it("pins the Store focus throttle and recheck interval at 15 s", () => {
+  expect(STORE_FOCUS_THROTTLE_MS).toBe(15_000);
+  expect(STORE_RECHECK_INTERVAL_MS).toBe(15_000);
+});
+
 describe("useIPhoneSync — Store build (BACKLOG-3927)", () => {
   it("mount: records the state and sets driverMissing", async () => {
     setupApi(true, "not-running");

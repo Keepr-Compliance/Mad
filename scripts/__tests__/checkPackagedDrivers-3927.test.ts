@@ -8,6 +8,7 @@ import { spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "fs";
 import os from "os";
 import path from "path";
+import { pathToFileURL } from "url";
 // Loaded by path: jest maps the bare "@electron/..." prefix to electron/ (jest.config.js).
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const asar = require(path.resolve(__dirname, "..", "..", "node_modules", "@electron", "asar")) as {
@@ -29,9 +30,13 @@ afterEach(() => {
   try {
     unlinkSync(path.join(app, "resources", "app.asar"));
   } catch {
-    /* absent */
+    /* absent, or still held open on Windows (retried below) */
   }
-  rmSync(root, { recursive: true, force: true });
+  // Windows: @electron/asar's createPackage resolves when its write stream emits
+  // "finish", which can precede "close", so the archive may stay delete-pending
+  // for a moment and lstat/unlink fail with EPERM. Node retries EPERM/EBUSY with
+  // maxRetries; the handle is inside the asar package and cannot be closed here.
+  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 const put = (rel: string, content = "x") => {
@@ -137,6 +142,32 @@ describe("website", () => {
     put("resources/win/apple-drivers/AppleMobileDeviceSupport64.msi", "");
     const r = run("website");
     expect(r.status).toBe(1);
+  });
+});
+
+describe("toPosixRelative", () => {
+  // Run in a node child: the script is ESM and jest here is CommonJS.
+  const normalise = (appDir: string, file: string, lib: "win32" | "posix") => {
+    const code = `import path from "node:path";
+import { toPosixRelative } from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
+process.stdout.write(toPosixRelative(${JSON.stringify(appDir)}, ${JSON.stringify(file)}, path.${lib}));`;
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { encoding: "utf8" });
+    expect(r.stderr).toBe("");
+    return r.stdout;
+  };
+
+  it("turns a Windows relative path into forward slashes", () => {
+    expect(
+      normalise(
+        "C:\\x\\win-unpacked",
+        "C:\\x\\win-unpacked\\resources\\win\\apple-drivers\\AppleMobileDeviceSupport64.msi",
+        "win32",
+      ),
+    ).toBe("resources/win/apple-drivers/AppleMobileDeviceSupport64.msi");
+  });
+
+  it("leaves a POSIX relative path unchanged", () => {
+    expect(normalise("/x/app", "/x/app/resources/a.msi", "posix")).toBe("resources/a.msi");
   });
 });
 

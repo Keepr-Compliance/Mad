@@ -434,6 +434,21 @@ describe("supportTicketService", () => {
       });
     });
 
+    it("BACKLOG-3927: carries installed_via_override only for an override session", async () => {
+      const { checkAppleDrivers } = require("../appleDriverService");
+      checkAppleDrivers.mockResolvedValueOnce({
+        isInstalled: true,
+        version: "1.2.3",
+        serviceRunning: true,
+        error: null,
+        installedVia: "msi",
+        sourceOverridden: true,
+      });
+      const diagnostics = await collectDiagnostics();
+      expect(diagnostics.iphone_sync.apple_driver.installed_via_override).toBe(true);
+      expect(diagnostics.iphone_sync.apple_driver.installed_via).toBe("msi");
+    });
+
     it("should surface driver_missing_suspected for Zoe's fingerprint (mounted, not detected)", async () => {
       const { deviceDetectionService } = require("../deviceDetectionService");
       // Windows: device visible to PnP but idevice_id -l returns 0 →
@@ -723,6 +738,13 @@ describe("supportTicketService", () => {
       expect(block).toContain("apple_driver.installed=no");
       expect(block).toContain("apple_driver.service_running=no");
       expect(block).toContain("iphone_sync_enabled=yes");
+    });
+
+    it("BACKLOG-3927: the ticket line carries apple_driver.installed_via_override=true only when set", () => {
+      const diag = makeDiagnostics();
+      expect(composeDiagnosticsSummary(diag)).not.toContain("installed_via_override");
+      diag.iphone_sync.apple_driver = { ...diag.iphone_sync.apple_driver, installed_via_override: true };
+      expect(composeDiagnosticsSummary(diag)).toContain("apple_driver.installed_via_override=true");
     });
 
     it("renders iphone_sync_enabled=unknown when the setting is null", () => {

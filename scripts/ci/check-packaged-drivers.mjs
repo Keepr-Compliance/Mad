@@ -33,6 +33,11 @@ export const APPLE_DRIVER_NAME_RE = /^AppleMobileDeviceSupport/i;
 export const WEBSITE_MSI = "resources/win/apple-drivers/AppleMobileDeviceSupport64.msi";
 export const CHANNEL_FIELD = "distributionChannel";
 
+/** Report paths with "/" on every platform (Windows path.relative uses "\\"). */
+export function toPosixRelative(appDir, file, pathLib = path) {
+  return pathLib.relative(appDir, file).split(pathLib.sep).join("/");
+}
+
 function listFiles(dir) {
   const out = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -74,7 +79,7 @@ export function checkPackagedDrivers(appDir, channel) {
       const base = path.basename(file);
       const ext = path.extname(base).toLowerCase();
       if (DRIVER_EXTENSIONS.includes(ext) || APPLE_DRIVER_NAME_RE.test(base)) {
-        problems.push(`driver payload in a Store build: ${path.relative(appDir, file)}`);
+        problems.push(`driver payload in a Store build: ${toPosixRelative(appDir, file)}`);
       }
     }
     if (!pkg.error && pkg.value !== "store") {
