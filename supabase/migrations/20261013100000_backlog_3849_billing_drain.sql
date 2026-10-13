@@ -15,6 +15,8 @@
 --
 -- Additive: no table change, no schedule. The cron jobs that call (3) are
 -- separate migrations applied on their own go.
+-- Harness: supabase/tests/backlog-3849/ (every run rolled back).
+-- Rollback: supabase/tests/backlog-3849/rollback-3849.sql.
 -- ============================================
 
 -- 1. Secret (idempotent; an existing value is never replaced)

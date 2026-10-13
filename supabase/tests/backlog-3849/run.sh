@@ -8,6 +8,8 @@
 #   SSH_HOST=... PG_CONTAINER=... bash run.sh mutants  [fragment]
 #
 # Header tag in a control file:  -- harness: apply-twice
+# Step lines in a control file:   -- @step rollback   (runs rollback-3849.sql)
+#                                 -- @step reapply    (applies the migration again)
 # S1-S3 (two sessions, real commits) live in concurrency/run.sh.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,7 +41,14 @@ build() { # $1 control, $2 migration
     step apply2 "$2"
     echo "SELECT pg_temp.check('second apply succeeded', pg_temp.step_ok('apply2'), pg_temp.step_err('apply2'));"
   fi
-  cat "$1"
+  # Placeholder lines in a control run a file as a named step at that point.
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "-- @step rollback") step rollback "$HERE/rollback-3849.sql" ;;
+      "-- @step reapply") step reapply "$2" ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done <"$1"
   echo "SELECT CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END || '|' || label || '|' || coalesce(detail, '') FROM t3849_r ORDER BY seq;"
   echo "SELECT 'CHECKS|' || count(*) FROM t3849_r;"
   echo "ROLLBACK;"
