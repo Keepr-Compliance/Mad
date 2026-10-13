@@ -118,6 +118,9 @@ describe("Store build (BACKLOG-3927)", () => {
     );
     const status = await checkAppleDrivers();
     expect(status.isInstalled).toBe(true);
+    // sc query found no "Apple Mobile Device Service": not reported as stopped,
+    // or sync start would refuse (deviceSyncOrchestrator pre-sync check).
+    expect(status.serviceRunning).toBe(true);
     const [file, args] = mockExecFile.mock.calls[0];
     expect(file).toMatch(/powershell\.exe$/);
     expect(args.join(" ")).toContain("Get-AppxPackage -Name AppleInc.AppleDevices,AppleInc.iTunes");

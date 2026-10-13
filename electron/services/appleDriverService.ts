@@ -178,14 +178,21 @@ export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
     // installed Apple Devices (or Store iTunes) package as installed.
     const store = isStoreBuild();
     let installed = registryCheck.installed;
+    let viaStorePackage = false;
     if (!installed && store) {
-      installed = await checkAppleStorePackage();
+      viaStorePackage = await checkAppleStorePackage();
+      installed = viaStorePackage;
     }
 
     const result: AppleDriverStatus = {
       isInstalled: installed,
       version: registryCheck.version,
-      serviceRunning: serviceStatus,
+      // Whether Apple Devices registers its service under the MSI's name
+      // ("Apple Mobile Device Service") is UNVERIFIED. When the Store package is
+      // what made it installed, do not report a stopped service we cannot see:
+      // sync start (deviceSyncOrchestrator) would refuse on it. Device
+      // detection still decides whether an iPhone is reachable.
+      serviceRunning: serviceStatus || viaStorePackage,
       error: null,
     };
 
