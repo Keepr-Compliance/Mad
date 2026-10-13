@@ -113,7 +113,7 @@ function placePinnedTools(
   if (fs.existsSync(dest)) {
     throw new Error(
       `[pinned-iphone-tools] ${dest} already exists before afterPack placed it: electron-builder copied the ` +
-        `iPhone tools itself, so a signed build re-signs them. Keep "!libimobiledevice/**" in the resources/win ` +
+        `iPhone tools itself, so a signed build re-signs them. Keep "!libimobiledevice{,/**/*}" in the resources/win ` +
         `extraResources filter in package.json.`
     );
   }
