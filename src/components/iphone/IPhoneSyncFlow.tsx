@@ -4,7 +4,7 @@ import { ConnectionStatus } from "./ConnectionStatus";
 import { SyncProgress } from "./SyncProgress";
 import { SyncLockBanner } from "../sync/SyncLockBanner";
 import logger from "../../utils/logger";
-import { isWindowsArm64 } from "../../utils/platform";
+import { isStoreBuild, isWindowsArm64 } from "../../utils/platform";
 import { SyncStepChangeLog } from "../../utils/syncStepLog";
 import { useRetryCountdown } from "../../utils/syncRetryCooldown";
 import { RetryCooldownNotice, SyncStartButtonContent } from "./SyncStartButtonContent";
@@ -65,6 +65,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     installDriverStatus,
     installDriverError,
     recoverInstallDriver,
+    recheckDriver,
     startSync,
     cancelSync,
     dismissSync,
@@ -159,6 +160,8 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           isInstallingDriver={installDriverStatus === "installing"}
           driverInstallError={installDriverError}
           isWindowsArm64={isWindowsArm64()}
+          isStoreBuild={isStoreBuild()}
+          onRecheckDriver={recheckDriver}
           isStarting={isStarting}
           retryAvailableAt={retryAvailableAt}
         />

@@ -9,6 +9,7 @@ import type {
   UserFacingError,
 } from "../types/iphone";
 import type { SyncCancelTrigger } from "../../electron/types/ipc/window-api-platform";
+import { isStoreBuild } from "../utils/platform";
 import logger from '../utils/logger';
 import { syncOrchestrator } from '../services/SyncOrchestratorService';
 import { usePlatform } from '../contexts/PlatformContext';
@@ -1266,6 +1267,12 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
    * this recovery path is. No PII.
    */
   const recoverInstallDriver = useCallback(async () => {
+    // BACKLOG-3927: the Microsoft Store build never installs Apple's driver.
+    // Its screen shows the Apple Devices guide instead; nothing to run here.
+    if (isStoreBuild()) {
+      logger.info("[useIPhoneSync] Store build: driver install not offered");
+      return;
+    }
     // Telemetry: recovery install invoked → onboarding's driver step did not
     // leave the machine ready. Reused @sentry/electron/renderer (no new system).
     Sentry.captureMessage("iPhone driver recovery install invoked", {
@@ -1334,6 +1341,13 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     }
   }, []);
 
+  /** BACKLOG-3927: Store build "Check again" — re-detect, update driverMissing. */
+  const recheckDriver = useCallback(async (): Promise<boolean> => {
+    const absent = await isAppleDriverAbsent();
+    setDriverMissing(absent);
+    return !absent;
+  }, []);
+
   return {
     isConnected,
     device,
@@ -1357,6 +1371,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     installDriverStatus,
     installDriverError,
     recoverInstallDriver,
+    recheckDriver,
     isStarting,
     retryAvailableAt,
     startSync,

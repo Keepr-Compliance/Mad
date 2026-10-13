@@ -1,0 +1,80 @@
+/**
+ * BACKLOG-3927: the Sync iPhone window in the Microsoft Store build. Real
+ * ConnectionStatus; the flag comes from window.api.system.isStoreBuild. With
+ * the driver missing, the Apple Devices guide replaces the Install button, and
+ * Check again runs the hook's recheckDriver.
+ */
+import React from "react";
+import { render, screen } from "@testing-library/react";
+import { IPhoneSyncFlow } from "../IPhoneSyncFlow";
+import type { UseIPhoneSyncReturn } from "../../../types/iphone";
+import userEvent from "@testing-library/user-event";
+import {
+  APPLE_DEVICES_CHECK_BUTTON,
+  APPLE_DEVICES_HEADING,
+} from "../../../constants/appleDevicesStoreCopy";
+
+const baseContext: UseIPhoneSyncReturn = {
+  isConnected: false,
+  device: null,
+  syncStatus: "idle",
+  progress: null,
+  error: null,
+  userError: null,
+  appleEncryptedBackup: false,
+  lastSyncTime: null,
+  isWaitingForPasscode: false,
+  syncLocked: false,
+  lockReason: null,
+  needsTrust: false,
+  needsTrustUdid: null,
+  toolsMissing: false,
+  driverMissing: true,
+  installDriverStatus: "idle",
+  installDriverError: null,
+  recoverInstallDriver: jest.fn(),
+  recheckDriver: jest.fn(async () => false),
+  startSync: jest.fn(),
+  cancelSync: jest.fn(),
+  dismissSync: jest.fn(),
+  checkSyncStatus: jest.fn(),
+  requestTrust: jest.fn(),
+  isStarting: false,
+  retryAvailableAt: null,
+};
+
+let mockContextValue: UseIPhoneSyncReturn = { ...baseContext };
+jest.mock("../../../contexts/IPhoneSyncContext", () => ({
+  useIPhoneSyncContext: () => mockContextValue,
+}));
+jest.mock("../SyncProgress", () => ({ SyncProgress: () => <div>Progress</div> }));
+jest.mock("../../sync/SyncLockBanner", () => ({ SyncLockBanner: () => <div>Locked</div> }));
+
+function setStoreFlag(value: boolean | undefined) {
+  const system = (window.api as unknown as { system: Record<string, unknown> }).system;
+  if (value === undefined) delete system.isStoreBuild;
+  else system.isStoreBuild = value;
+}
+
+describe("IPhoneSyncFlow in the Store build (BACKLOG-3927)", () => {
+  afterEach(() => setStoreFlag(undefined));
+
+  it("Store + driverMissing: Apple Devices guide, no Install button; Check again calls recheckDriver", async () => {
+    setStoreFlag(true);
+    const recheckDriver = jest.fn(async () => false);
+    mockContextValue = { ...baseContext, driverMissing: true, recheckDriver };
+    render(<IPhoneSyncFlow />);
+    expect(screen.getByText(APPLE_DEVICES_HEADING)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Install Apple Mobile Device Support/i })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: APPLE_DEVICES_CHECK_BUTTON }));
+    expect(recheckDriver).toHaveBeenCalled();
+    expect(baseContext.recoverInstallDriver).not.toHaveBeenCalled();
+  });
+
+  it("website build (flag absent) + driverMissing: Install button, no guide", () => {
+    mockContextValue = { ...baseContext, driverMissing: true };
+    render(<IPhoneSyncFlow />);
+    expect(screen.getByRole("button", { name: /Install Apple Mobile Device Support/i })).toBeInTheDocument();
+    expect(screen.queryByText(APPLE_DEVICES_HEADING)).toBeNull();
+  });
+});

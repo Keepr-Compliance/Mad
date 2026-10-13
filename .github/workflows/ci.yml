@@ -1060,6 +1060,16 @@ jobs:
           Get-ChildItem -Path release -Filter "*.exe" | Format-Table Name, Length
         shell: pwsh
 
+      # BACKLOG-3927: this is the website build, so Apple's installer must be in
+      # it. (release.yml runs the same script for both channels; the Store
+      # build must contain no driver payload at all.)
+      - name: Verify the website package still bundles the Apple driver installer
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          node scripts/ci/check-packaged-drivers.mjs release/win-unpacked website
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       # BACKLOG-3438. release.yml has asserted this since BACKLOG-3192 (release.yml
       # :225-251); ci.yml never did. A macOS build that dies partway leaves exactly
       # ONE pre-signature bundle behind, and the step above still exits 0 for every

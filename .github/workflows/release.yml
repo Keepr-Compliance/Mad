@@ -4,11 +4,23 @@ name: Release
 on:
   push:
     branches: [main]
-  # No inputs. A dispatch behaves exactly like a push to main: what gets
-  # published is decided by the create-release job's github.ref guard alone.
-  # The former `publish` input was declared and read nowhere, so it read as a
-  # safety control while being none (BACKLOG-3192).
+  # One input, and it is read (BACKLOG-3927). What gets published is still
+  # decided by the create-release job's github.ref guard. (The former
+  # `publish` input was declared and read nowhere, so it read as a safety
+  # control while being none -- BACKLOG-3192.)
+  #
+  # channel: website (default; also every push) builds both platforms and the
+  #          website Windows installer, which bundles Apple Mobile Device
+  #          Support. store builds ONLY the Microsoft Store Windows installer:
+  #          no Apple driver payload, marked distributionChannel=store, artifact
+  #          `release-windows-store`, never published. Refused on main.
   workflow_dispatch:
+    inputs:
+      channel:
+        description: "Distribution channel (store = Microsoft Store Windows installer only, never published)"
+        type: choice
+        options: [website, store]
+        default: website
 
 # Required permissions for creating releases
 permissions:
@@ -19,6 +31,8 @@ jobs:
   release-macos:
     name: Release macOS
     runs-on: macos-latest
+    # BACKLOG-3927: a Store run builds Windows only.
+    if: inputs.channel != 'store'
 
     steps:
       - name: Checkout code
@@ -301,6 +315,15 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      # BACKLOG-3927: the Store installer is never published, so it is never
+      # built from main (where create-release would publish this run).
+      - name: Refuse a Store build on main
+        if: inputs.channel == 'store' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          echo "::error::channel=store must be dispatched from a branch other than main"
+          exit 1
+
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -319,8 +342,10 @@ jobs:
       - name: Build application
         run: npm run build
 
-      # Download Apple drivers for Windows build
+      # Download Apple drivers for the website Windows build. Skipped for the
+      # Microsoft Store build (BACKLOG-3927, Store policy 10.2.4.2).
       - name: Download Apple Drivers
+        if: inputs.channel != 'store'
         run: |
           echo "Downloading iTunes installer to extract Apple Mobile Device Support..."
 
@@ -360,6 +385,16 @@ jobs:
           Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
           Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
         shell: pwsh
+
+      # BACKLOG-3927: the Store build carries no Apple installer. Nothing above
+      # put one there; this clears any that a future step might, and the
+      # driver check after packaging is the gate.
+      - name: Store build - no Apple driver payload
+        if: inputs.channel == 'store'
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path "resources\win\apple-drivers" -Filter "*.msi" -ErrorAction SilentlyContinue | Remove-Item -Force
+          Get-ChildItem -Path "resources\win\apple-drivers" | Format-Table Name, Length
 
       # Create .env.production with secrets for runtime use
       # The app loads credentials from this file at runtime (electron/main.ts)
@@ -530,6 +565,8 @@ jobs:
           AZURE_ENDPOINT: ${{ secrets.AZURE_ENDPOINT }}
           AZURE_CODE_SIGNING_ACCOUNT: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT }}
           AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+          # BACKLOG-3927: website | store
+          KEEPR_CHANNEL: ${{ inputs.channel == 'store' && 'store' || 'website' }}
           # Secrets for .env.production recreation after build
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -591,7 +628,19 @@ jobs:
           # -TimestampRfc3161 / -TimestampDigest / -FileDigest, so the signature IS
           # timestamped (defaults http://timestamp.acs.microsoft.com + SHA256; we pass
           # them explicitly to mirror the old external action exactly).
-          npx electron-builder --publish never `
+          # BACKLOG-3927: the Store build is marked in the asar's package.json
+          # (read at runtime by electron/services/distributionChannelService.ts)
+          # and named apart from the website installer.
+          $channelArgs = @()
+          if ($env:KEEPR_CHANNEL -eq "store") {
+            $channelArgs = @(
+              "--config.extraMetadata.distributionChannel=store",
+              '--config.nsis.artifactName=${productName}-Setup-${version}-store.${ext}'
+            )
+            echo "Packaging the Microsoft Store build: $($channelArgs -join ' ')"
+          }
+
+          npx electron-builder --publish never @channelArgs `
             --config.win.azureSignOptions.endpoint="$env:AZURE_ENDPOINT" `
             --config.win.azureSignOptions.codeSigningAccountName="$env:AZURE_CODE_SIGNING_ACCOUNT" `
             --config.win.azureSignOptions.certificateProfileName="$env:AZURE_CERT_PROFILE" `
@@ -705,10 +754,26 @@ jobs:
             -WorkDir (Join-Path $env:RUNNER_TEMP "pe-signature-check")
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+      # BACKLOG-3927. Store build: no driver payload anywhere and marked store.
+      # Website build: Apple's installer still present. Checks both the
+      # unpacked app and the app unpacked FROM the built installer (left in the
+      # PE check's WorkDir), so what ships is what is checked.
+      - name: Verify the Apple driver payload for this channel (BACKLOG-3927)
+        shell: pwsh
+        env:
+          KEEPR_CHANNEL: ${{ inputs.channel == 'store' && 'store' || 'website' }}
+        run: |
+          $installerApp = Join-Path $env:RUNNER_TEMP "pe-signature-check/app"
+          foreach ($dir in @("release/win-unpacked", $installerApp)) {
+            node scripts/ci/check-packaged-drivers.mjs $dir $env:KEEPR_CHANNEL
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-windows
+          # BACKLOG-3927: a Store run uploads under its own name.
+          name: ${{ inputs.channel == 'store' && 'release-windows-store' || 'release-windows' }}
           path: |
             release/*.exe
             release/*.blockmap
@@ -731,8 +796,11 @@ jobs:
     #    A dispatch from any other branch must never reach those steps.
     #  - BOTH platforms must succeed. This was `||`, so a run with one platform
     #    dead still drafted a release advertising downloads that did not exist.
+    #  - BACKLOG-3927: a Store run (Windows only, never published) never
+    #    reaches this job; the Windows job also refuses store on main.
     if: >-
       always() && github.ref == 'refs/heads/main' &&
+      inputs.channel != 'store' &&
       needs.release-macos.result == 'success' &&
       needs.release-windows.result == 'success'
 

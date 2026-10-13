@@ -15,8 +15,10 @@
 import React, { useState, useEffect, useCallback } from "react";
 import logger from "../../utils/logger";
 import { safeErrorMessage } from "../../utils/formatUtils";
-import { isWindowsArm64 } from "../../utils/platform";
+import { isStoreBuild, isWindowsArm64 } from "../../utils/platform";
 import { WindowsArm64Unsupported } from "../iphone/WindowsArm64Unsupported";
+import { AppleDevicesStoreGuide } from "../iphone/AppleDevicesStoreGuide";
+import { APPLE_DEVICES_SERVICE_STOPPED } from "../../constants/appleDevicesStoreCopy";
 
 // ---------------------------------------------------------------------------
 // Types — mirrors WindowApiDrivers return shapes (no duplicate of AppleDriverStatus)
@@ -60,8 +62,10 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
   // ------------------------------------------------------------------
   // Check driver status on mount
   // ------------------------------------------------------------------
-  const refreshStatus = useCallback(async () => {
-    setLoading(true);
+  // `quiet` (BACKLOG-3927): re-check without the "Checking..." state, so the
+  // Store build's Apple Devices guide stays mounted and can show its result.
+  const refreshStatus = useCallback(async (quiet = false): Promise<boolean> => {
+    if (!quiet) setLoading(true);
     try {
       const status = await window.api.drivers?.checkApple();
       if (status) {
@@ -71,6 +75,7 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
           serviceRunning: status.serviceRunning,
           error: status.error,
         });
+        return status.isInstalled === true;
       } else {
         setDriverStatus(null);
       }
@@ -83,8 +88,9 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
         error: "Failed to check driver status",
       });
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
+    return false;
   }, []);
 
   useEffect(() => {
@@ -151,6 +157,9 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
   // Render helpers
   // ------------------------------------------------------------------
   const isInstalling = installProgress.phase === "downloading" || installProgress.phase === "installing";
+  // BACKLOG-3927: the Microsoft Store build never installs or repairs Apple's
+  // driver; it points the user at Apple Devices in the Microsoft Store.
+  const storeBuild = isStoreBuild();
 
   // BACKLOG-3363: Windows on ARM — the driver can never work here; no Install
   // or Repair is offered.
@@ -195,8 +204,16 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
             </div>
           )}
 
+          {/* BACKLOG-3927: Store build — Apple Devices guide, no Install/Repair */}
+          {storeBuild && !loading && !driverStatus?.isInstalled && (
+            <AppleDevicesStoreGuide variant="compact" disabled={disabled} onCheckAgain={() => refreshStatus(true)} />
+          )}
+          {storeBuild && !loading && driverStatus?.isInstalled && !driverStatus.serviceRunning && (
+            <p className="text-sm text-amber-700">{APPLE_DEVICES_SERVICE_STOPPED}</p>
+          )}
+
           {/* Action buttons */}
-          {!loading && !driverStatus?.isInstalled && installProgress.phase === "idle" && !confirmingInstall && (
+          {!storeBuild && !loading && !driverStatus?.isInstalled && installProgress.phase === "idle" && !confirmingInstall && (
             <button
               onClick={handleRequestInstall}
               disabled={disabled}
@@ -206,7 +223,8 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
             </button>
           )}
 
-          {!loading &&
+          {!storeBuild &&
+            !loading &&
             driverStatus?.isInstalled &&
             !driverStatus.serviceRunning &&
             installProgress.phase === "idle" &&
@@ -222,7 +240,7 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
 
           {/* Inline install confirmation (BACKLOG-1943) — replaces the native
               admin-elevation prompt's surprise factor with an in-app warning. */}
-          {!disabled && !loading && installProgress.phase === "idle" && confirmingInstall && (
+          {!storeBuild && !disabled && !loading && installProgress.phase === "idle" && confirmingInstall && (
             <div className="space-y-2">
               <p className="text-sm text-gray-700">
                 Windows will ask you to approve the installation (an admin prompt will appear). Click Continue to proceed.

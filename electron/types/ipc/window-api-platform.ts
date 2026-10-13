@@ -206,6 +206,8 @@ export interface WindowApiDrivers {
     rebootRequired: boolean;
   }>;
   openITunesStore: () => Promise<{ success: boolean; error?: string }>;
+  /** BACKLOG-3927: open Apple Devices in the Microsoft Store (Store build). */
+  openAppleDevicesStore?: () => Promise<{ success: boolean; error?: string }>;
 }
 
 /**

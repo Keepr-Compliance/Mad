@@ -18,6 +18,11 @@ import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
 import { isWindowsArm64 } from "../utils/windowsArm64";
 import { mainNetFetch } from "./mainNetFetch";
+import { isStoreBuild } from "./distributionChannelService";
+import {
+  APPLE_DEVICES_STORE_URL,
+  APPLE_DEVICES_WEB_URL,
+} from "../utils/distributionChannel";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -167,8 +172,18 @@ export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
     // Check if the service exists and is running
     const serviceStatus = await checkAppleMobileDeviceService();
 
+    // BACKLOG-3927: in the Store build the driver comes from Apple's "Apple
+    // Devices" app (MSIX). A packaged app's registry and file writes may be
+    // virtualised, so the checks above can miss it. Store build only: treat an
+    // installed Apple Devices (or Store iTunes) package as installed.
+    const store = isStoreBuild();
+    let installed = registryCheck.installed;
+    if (!installed && store) {
+      installed = await checkAppleStorePackage();
+    }
+
     const result: AppleDriverStatus = {
-      isInstalled: registryCheck.installed,
+      isInstalled: installed,
       version: registryCheck.version,
       serviceRunning: serviceStatus,
       error: null,
@@ -179,6 +194,7 @@ export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
       isInstalled: result.isInstalled,
       version: result.version,
       serviceRunning: result.serviceRunning,
+      distributionChannel: store ? "store" : "website",
     });
 
     // BACKLOG-1354: Enhanced breadcrumb with full driver diagnostic context
@@ -295,6 +311,32 @@ async function checkRegistry(): Promise<{
 }
 
 /**
+ * BACKLOG-3927 (Store build only): is Apple's "Apple Devices" app, or the
+ * Microsoft Store iTunes, installed for this user? Both carry Apple Mobile
+ * Device Support. Any failure reads as "not installed".
+ */
+export const APPLE_STORE_PACKAGE_NAMES = ["AppleInc.AppleDevices", "AppleInc.iTunes"] as const;
+
+async function checkAppleStorePackage(): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      powershellPath(),
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Get-AppxPackage -Name ${APPLE_STORE_PACKAGE_NAMES.join(",")} | Select-Object -ExpandProperty Name`,
+      ],
+      { timeout: 10000, windowsHide: true },
+    );
+    return APPLE_STORE_PACKAGE_NAMES.some((name) => stdout.includes(name));
+  } catch (error) {
+    log.warn("[AppleDriverService] Apple Store package check failed:", error);
+    return false;
+  }
+}
+
+/**
  * Check if Apple Mobile Device Service is running
  */
 async function checkAppleMobileDeviceService(): Promise<boolean> {
@@ -317,6 +359,12 @@ async function checkAppleMobileDeviceService(): Promise<boolean> {
  * signature-checked before it is installed.
  */
 export function getBundledDriverPath(): string | null {
+  // BACKLOG-3927: the Store build has no Apple installer to offer — neither a
+  // bundled one nor one downloaded earlier into userData.
+  if (isStoreBuild()) {
+    return null;
+  }
+
   const isDev = !app.isPackaged;
 
   let basePath: string;
@@ -391,6 +439,18 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
     return {
       success: false,
       error: "iPhone USB sync isn't supported on this PC",
+      rebootRequired: false,
+    };
+  }
+
+  // BACKLOG-3927: the Microsoft Store build never installs a non-Microsoft
+  // driver (Store policy 10.2.4.2). The renderer shows the Apple Devices guide
+  // instead of an Install button; this is the main-process backstop.
+  if (isStoreBuild()) {
+    log.info("[AppleDriverService] Store build: Apple driver install not offered");
+    return {
+      success: false,
+      error: STORE_INSTALL_REFUSAL_MESSAGE,
       rebootRequired: false,
     };
   }
@@ -552,6 +612,10 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
     if (stagingDir) removeDirQuietly(stagingDir);
   }
 }
+
+/** BACKLOG-3927: returned when the Store build is asked to install or download the Apple driver. */
+export const STORE_INSTALL_REFUSAL_MESSAGE =
+  "Install Apple Devices from the Microsoft Store to set up your iPhone.";
 
 /** Fixed text for a failure to copy the installer (BACKLOG-3806); never includes error text or paths. */
 export const STAGING_FAILURE_MESSAGE = "Could not prepare the installer copy.";
@@ -1031,6 +1095,12 @@ export async function downloadAppleDrivers(
     percent: number;
   }) => void,
 ): Promise<{ success: boolean; msiPath?: string; error?: string }> {
+  // BACKLOG-3927: the Store build never fetches Apple's installer.
+  if (isStoreBuild()) {
+    log.info("[AppleDriverService] Store build: Apple driver download not offered");
+    return { success: false, error: STORE_INSTALL_REFUSAL_MESSAGE };
+  }
+
   const driversDir = getDownloadedDriversPath();
   const installerPath = path.join(driversDir, "iTunes64Setup.exe");
   const extractDir = path.join(driversDir, "extracted");
@@ -1188,6 +1258,16 @@ function getDownloadedDriverPath(): string | null {
 export function getITunesDownloadUrl(): string {
   // Microsoft Store link - easiest for users
   return "ms-windows-store://pdp/?ProductId=9PB2MZ1ZMB1S";
+}
+
+/** BACKLOG-3927: Apple Devices product page in the Microsoft Store app. */
+export function getAppleDevicesStoreUrl(): string {
+  return APPLE_DEVICES_STORE_URL;
+}
+
+/** BACKLOG-3927: Apple Devices product page on the web (fallback). */
+export function getAppleDevicesWebUrl(): string {
+  return APPLE_DEVICES_WEB_URL;
 }
 
 /**

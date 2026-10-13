@@ -14,7 +14,11 @@ import {
   getITunesWebUrl,
   checkForDriverUpdate,
   downloadAppleDrivers,
+  getAppleDevicesStoreUrl,
+  getAppleDevicesWebUrl,
+  STORE_INSTALL_REFUSAL_MESSAGE,
 } from "../services/appleDriverService";
+import { isStoreBuild } from "../services/distributionChannelService";
 
 /**
  * Register driver-related IPC handlers
@@ -45,6 +49,17 @@ export function registerDriverHandlers(): void {
   // Will download on-demand if not bundled
   ipcMain.handle("drivers:install-apple", async (event) => {
     log.info("[DriverHandlers] User consented to install Apple drivers");
+
+    // BACKLOG-3927: the Microsoft Store build installs no Apple driver and
+    // never downloads Apple's installer. Refuse before anything is fetched.
+    if (isStoreBuild()) {
+      log.info("[DriverHandlers] Store build: install refused, Apple Devices guide applies");
+      return {
+        success: false,
+        error: STORE_INSTALL_REFUSAL_MESSAGE,
+        rebootRequired: false,
+      };
+    }
 
     // Check if we have drivers available (bundled or previously downloaded)
     if (!hasBundledDrivers()) {
@@ -81,6 +96,12 @@ export function registerDriverHandlers(): void {
   ipcMain.handle("drivers:download", async (event) => {
     log.info("[DriverHandlers] Downloading Apple drivers...");
 
+    // BACKLOG-3927: no Apple installer download in the Store build.
+    if (isStoreBuild()) {
+      log.info("[DriverHandlers] Store build: download refused");
+      return { success: false, error: STORE_INSTALL_REFUSAL_MESSAGE };
+    }
+
     const window = BrowserWindow.fromWebContents(event.sender);
 
     const result = await downloadAppleDrivers((progress) => {
@@ -108,6 +129,26 @@ export function registerDriverHandlers(): void {
         return {
           success: false,
           error: "Failed to open iTunes download page",
+        };
+      }
+    }
+  });
+
+  // BACKLOG-3927: open Apple's "Apple Devices" app page in the Microsoft Store
+  // (the Store build's way to get Apple Mobile Device Support).
+  ipcMain.handle("drivers:open-apple-devices-store", async () => {
+    try {
+      await shell.openExternal(getAppleDevicesStoreUrl());
+      return { success: true };
+    } catch (error) {
+      log.error("[DriverHandlers] Failed to open Apple Devices in the Store:", error);
+      try {
+        await shell.openExternal(getAppleDevicesWebUrl());
+        return { success: true };
+      } catch (_fallbackError) {
+        return {
+          success: false,
+          error: "Failed to open the Apple Devices page",
         };
       }
     }

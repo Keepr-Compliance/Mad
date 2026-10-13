@@ -150,6 +150,8 @@ interface ElectronAPI {
     }>;
     /** Open iTunes in Microsoft Store for manual installation */
     openITunesStore: () => Promise<{ success: boolean; error?: string }>;
+    /** BACKLOG-3927: open Apple Devices in the Microsoft Store (Store build). */
+    openAppleDevicesStore?: () => Promise<{ success: boolean; error?: string }>;
     /** Check if a driver update is available */
     checkUpdate: () => Promise<{
       updateAvailable: boolean;

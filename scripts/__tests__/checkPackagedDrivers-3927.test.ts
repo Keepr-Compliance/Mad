@@ -1,0 +1,139 @@
+/**
+ * BACKLOG-3927: the release gate that keeps Apple's driver installer out of the
+ * Microsoft Store build and in the website build. Runs the real script
+ * (scripts/ci/check-packaged-drivers.mjs) against fixture app directories with
+ * a real app.asar.
+ */
+import { spawnSync } from "child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import os from "os";
+import path from "path";
+// Loaded by path: jest maps the bare "@electron/..." prefix to electron/ (jest.config.js).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const asar = require(path.resolve(__dirname, "..", "..", "node_modules", "@electron", "asar")) as {
+  createPackage: (src: string, dest: string) => Promise<void>;
+};
+
+const SCRIPT = path.resolve(__dirname, "..", "ci", "check-packaged-drivers.mjs");
+
+let root: string;
+let app: string;
+beforeEach(() => {
+  root = mkdtempSync(path.join(os.tmpdir(), "pkg-drivers-3927-"));
+  app = path.join(root, "win-unpacked");
+  mkdirSync(path.join(app, "resources"), { recursive: true });
+});
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+});
+
+const put = (rel: string, content = "x") => {
+  mkdirSync(path.dirname(path.join(app, rel)), { recursive: true });
+  writeFileSync(path.join(app, rel), content);
+};
+
+async function packAsar(pkg: object) {
+  const src = path.join(root, "asar-src");
+  mkdirSync(src, { recursive: true });
+  writeFileSync(path.join(src, "package.json"), JSON.stringify(pkg));
+  await asar.createPackage(src, path.join(app, "resources", "app.asar"));
+}
+
+const run = (channel: string) => spawnSync(process.execPath, [SCRIPT, app, channel], { encoding: "utf8" });
+
+/** What a website build contains (the shape release.yml produces). */
+async function websiteBuild() {
+  await packAsar({ name: "keepr", version: "2.41.0" });
+  put("Keepr.exe");
+  put("resources/win/apple-drivers/AppleMobileDeviceSupport64.msi", "msi bytes");
+  put("resources/win/apple-drivers/version.txt", "19.4.0.10");
+  put("resources/win/apple-drivers/README.md", "readme");
+  put("resources/win/libimobiledevice/idevice_id.exe");
+  put("resources/win/libimobiledevice/libimobiledevice-1.0.dll");
+}
+
+/** What a Store build contains. */
+async function storeBuild() {
+  await packAsar({ name: "keepr", version: "2.41.0", distributionChannel: "store" });
+  put("Keepr.exe");
+  put("resources/win/apple-drivers/version.txt", "unknown");
+  put("resources/win/apple-drivers/README.md", "readme");
+  put("resources/win/libimobiledevice/idevice_id.exe");
+  put("resources/win/libimobiledevice/libimobiledevice-1.0.dll");
+}
+
+describe("store", () => {
+  it("passes a Store build", async () => {
+    await storeBuild();
+    const r = run("store");
+    expect(r.stderr).toBe("");
+    expect(r.status).toBe(0);
+  });
+
+  it("fails a website build checked as store (the MSI, and no store marker)", async () => {
+    await websiteBuild();
+    const r = run("store");
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("driver payload in a Store build: resources/win/apple-drivers/AppleMobileDeviceSupport64.msi");
+    expect(r.stderr).toContain('distributionChannel is undefined, expected "store"');
+  });
+
+  it.each([
+    "resources/win/apple-drivers/AppleMobileDeviceSupport64.msi",
+    "resources/win/anything.MSI",
+    "resources/drivers/usbaapl64.sys",
+    "resources/drivers/usbaapl64.inf",
+    "resources/drivers/usbaapl64.cat",
+    "AppleMobileDeviceSupport.exe",
+  ])("fails a Store build carrying %s", async (rel) => {
+    await storeBuild();
+    put(rel);
+    const r = run("store");
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`driver payload in a Store build: ${rel}`);
+  });
+
+  it("fails a Store build whose app.asar is not marked store", async () => {
+    await storeBuild();
+    await packAsar({ name: "keepr", version: "2.41.0" });
+    const r = run("store");
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('expected "store"');
+  });
+
+  it("fails when app.asar is missing", async () => {
+    put("Keepr.exe");
+    const r = run("store");
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("missing resources/app.asar");
+  });
+});
+
+describe("website", () => {
+  it("passes a website build", async () => {
+    await websiteBuild();
+    const r = run("website");
+    expect(r.stderr).toBe("");
+    expect(r.status).toBe(0);
+  });
+
+  it("fails a Store build checked as website (no MSI, marked store)", async () => {
+    await storeBuild();
+    const r = run("website");
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("website build is missing resources/win/apple-drivers/AppleMobileDeviceSupport64.msi");
+    expect(r.stderr).toContain('website build is marked distributionChannel "store"');
+  });
+
+  it("fails a website build whose MSI is empty", async () => {
+    await websiteBuild();
+    put("resources/win/apple-drivers/AppleMobileDeviceSupport64.msi", "");
+    const r = run("website");
+    expect(r.status).toBe(1);
+  });
+});
+
+it("rejects an unknown channel", () => {
+  const r = run("beta");
+  expect(r.status).toBe(2);
+});

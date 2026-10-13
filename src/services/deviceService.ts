@@ -514,6 +514,22 @@ export const deviceService = {
     }
   },
 
+  /**
+   * BACKLOG-3927: open Apple's "Apple Devices" app in the Microsoft Store
+   * (Store build iPhone setup).
+   */
+  async openAppleDevicesStore(): Promise<ApiResult> {
+    try {
+      if (!window.api.drivers?.openAppleDevicesStore) {
+        return { success: false, error: "Drivers API not available" };
+      }
+      const result = await window.api.drivers.openAppleDevicesStore();
+      return { success: result.success, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
   // ============================================
   // SYNC METHODS
   // ============================================

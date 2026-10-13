@@ -124,6 +124,14 @@ export interface ConnectionStatusProps {
    * precedence over every other view (including driverMissing).
    */
   isWindowsArm64?: boolean;
+  /**
+   * BACKLOG-3927: Microsoft Store build. When the driver is missing, the
+   * disconnected view shows the Apple Devices guide instead of an Install
+   * button (this build never installs a driver).
+   */
+  isStoreBuild?: boolean;
+  /** BACKLOG-3927: re-detect the driver; resolves true when it is now found. */
+  onRecheckDriver?: () => Promise<boolean>;
   /** BACKLOG-3816: the sync request is being prepared — the button shows "Getting ready…". */
   isStarting?: boolean;
   /** BACKLOG-3816: epoch ms until which the Sync button stays disabled (hold after a failure). */
@@ -206,6 +214,11 @@ export interface UseIPhoneSyncReturn {
    * state and clears `driverMissing` so device enumeration/sync can proceed.
    */
   recoverInstallDriver: () => Promise<void>;
+  /**
+   * BACKLOG-3927: re-check driver presence (Store build "Check again") and
+   * update `driverMissing`. Resolves true when the driver is now found.
+   */
+  recheckDriver: () => Promise<boolean>;
   /**
    * BACKLOG-3816: a Sync / Try Again request is being prepared and has not yet been
    * handed to the main process or refused. The buttons show "Getting ready…".

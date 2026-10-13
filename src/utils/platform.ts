@@ -85,6 +85,15 @@ export function isWindowsArm64(): boolean {
 }
 
 /**
+ * BACKLOG-3927: true in the Microsoft Store build. That build ships no Apple
+ * driver and never installs one; iPhone setup sends the user to Apple's
+ * "Apple Devices" app in the Microsoft Store. Absent → false (website build).
+ */
+export function isStoreBuild(): boolean {
+  return window.api?.system?.isStoreBuild === true;
+}
+
+/**
  * Returns true if running inside Electron (desktop app).
  * Checks for the presence of the Electron IPC bridge (window.api).
  * Returns false in browser environments (Android WebView, mobile browsers, etc.)

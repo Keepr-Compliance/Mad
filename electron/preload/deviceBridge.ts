@@ -235,6 +235,12 @@ export const driverBridge = {
   openITunesStore: () => ipcRenderer.invoke("drivers:open-itunes-store"),
 
   /**
+   * BACKLOG-3927: open Apple's "Apple Devices" app in the Microsoft Store
+   * (Store build iPhone setup)
+   */
+  openAppleDevicesStore: () => ipcRenderer.invoke("drivers:open-apple-devices-store"),
+
+  /**
    * Check if a driver update is available
    */
   checkUpdate: () => ipcRenderer.invoke("drivers:check-update"),
