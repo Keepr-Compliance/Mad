@@ -13,6 +13,10 @@
  *   opening the Sync Android modal, Unlink asking first in the popup's words,
  *   and the "Checking the browser…" window after Keepr starts.
  *
+ * - The control itself renders ONLY while Android is the selected source
+ *   (founder QA 2026-10-13); the visibility tests are in ImportSourceSettings.test.tsx.
+ *   The control tests below therefore start with Android selected.
+ *
  * Controls (each mutation run, see the PR):
  *   K1 ROW_CLICK_IGNORE without "button"            → "kebab / Link / menu clicks never change the source"
  *   D1 details rendered whatever the source         → "details only for Android"
@@ -82,7 +86,7 @@ beforeEach(() => {
 
 describe("the Android row's connection control", () => {
   it("linked: green Connected + a kebab with Relink and Unlink (the email control); Relink opens the link step", async () => {
-    const { onLink } = await renderSources({ source: "macos-native" });
+    const { onLink } = await renderSources({ source: "android-messages-web" });
     const row = screen.getByTestId("import-source-android-row");
     expect(within(row).getByTestId("gm-connection-dot")).toHaveClass("w-2", "h-2", "bg-green-500", "rounded-full");
     expect(within(row).getByTestId("gm-connection-status")).toHaveTextContent(/^Connected$/);
@@ -98,7 +102,7 @@ describe("the Android row's connection control", () => {
 
   it("not linked: a blue Link button (the email Connect button's classes) that opens the link step", async () => {
     mockState = { ...BASE_STATE, extensionPaired: false, pairingSaved: false };
-    const { onLink } = await renderSources({ source: "macos-native" });
+    const { onLink } = await renderSources({ source: "android-messages-web" });
     const link = screen.getByTestId("gm-connection-connect");
     expect(link).toHaveTextContent(/^Link$/);
     expect(link.className).toBe(
@@ -111,23 +115,22 @@ describe("the Android row's connection control", () => {
   });
 
   it("kebab / Link / menu clicks never change the source (K1)", async () => {
-    await renderSources({ source: "macos-native" });
+    await renderSources({ source: "android-messages-web" });
     const row = screen.getByTestId("import-source-android-row");
     fireEvent.click(within(row).getByRole("button", { name: "Google Messages connection options" }));
     fireEvent.click(within(row).getByRole("menuitem", { name: "Unlink Google Messages" }));
     fireEvent.click(screen.getByTestId("gm-forget-cancel"));
     await act(async () => undefined);
-    expect(radio("macos-native").checked).toBe(true);
-    expect(radio("android-messages-web").checked).toBe(false);
+    expect(radio("android-messages-web").checked).toBe(true);
     expect(window.api.preferences.update).not.toHaveBeenCalled();
   });
 
   it("a Link click does not change the source either (K1)", async () => {
     mockState = { ...BASE_STATE, extensionPaired: false, pairingSaved: false };
-    await renderSources({ source: "macos-native" });
+    await renderSources({ source: "android-messages-web" });
     fireEvent.click(screen.getByTestId("gm-connection-connect"));
     await act(async () => undefined);
-    expect(radio("macos-native").checked).toBe(true);
+    expect(radio("android-messages-web").checked).toBe(true);
     expect(window.api.preferences.update).not.toHaveBeenCalled();
   });
 
@@ -165,7 +168,7 @@ describe("the Android row's connection control", () => {
 
   it("a saved, unproven link right after Keepr starts: 'Checking the browser…', then Connected", async () => {
     mockState = { ...BASE_STATE, extensionPaired: false, pairingSaved: true, linkNotHere: false };
-    storeSource("macos-native");
+    storeSource("android-messages-web");
     render(
       <GoogleMessagesLinkProvider linkCheckMs={150}>
         <ImportSourceSettings userId={USER} onLinkGoogleMessages={jest.fn()} />
@@ -177,7 +180,7 @@ describe("the Android row's connection control", () => {
 
   it("nothing saved, or an extension said 'no link here': Link at once", async () => {
     mockState = { ...BASE_STATE, extensionPaired: false, pairingSaved: true, linkNotHere: true };
-    await renderSources({ source: "macos-native" });
+    await renderSources({ source: "android-messages-web" });
     expect(screen.getByTestId("gm-connection-connect")).toHaveTextContent("Link");
     expect(screen.queryByTestId("gm-connection-checking")).toBeNull();
   });
