@@ -24,6 +24,7 @@ jest.mock('@sentry/nextjs', () => ({
 
 import {
   RECONCILE_LIST_STATUSES,
+  RECONCILE_MAX_ITEMS,
   reconcileAgentSubscriptions,
   reportOutboxHealth,
   stripeOverrideEffective,
@@ -410,6 +411,163 @@ describe('reconcile alert', () => {
     listed = [SUB_VOID, SUB_NU];
     await reconcileAgentSubscriptions(deps());
     expect(alerts('reconcile_mismatch')).toEqual([expect.objectContaining({ mismatches: 2, subscription_ids: `${SUB_VOID.id},${SUB_NU.id}` })]);
+  });
+});
+
+// ---- SR fix-up round 1 (PR #3007 review) ------------------------------------------------------
+
+/**
+ * Composed: no non-Agent subscription exists in either Stripe account to
+ * transcribe. SUB_VOID (transcribed, active, kind 'agent', customer
+ * cus_VQohssQXi8riIA) under a new id with metadata.kind 'brokerage' stands in
+ * for a future brokerage subscription on an Agent's customer.
+ */
+const SUB_BROKERAGE = { ...SUB_VOID, id: 'sub_composed_brokerage', metadata: { kind: 'brokerage' } };
+
+describe('reverse: re-subscriber with several mirror rows (RC-1)', () => {
+  /**
+   * Old subscription A canceled (mirror reads canceled); current subscription
+   * (SUB_VOID_CANCELED, transcribed) canceled in Stripe but its mirror row still
+   * reads 'active' because the deleted webhook was missed. A is composed:
+   * SUB_VOID_CANCELED served under another id.
+   */
+  function reSubscriber(order: 'old-first' | 'current-first', currentStatus = 'active') {
+    const A = { ...SUB_VOID_CANCELED, id: 'sub_OLD_canceled' };
+    serve(SUB_VOID_CANCELED);
+    serveAs(A.id, A);
+    const old = mirror(USER, A.id, SUB_VOID_CANCELED.customer, 'test', { id: 'row-old', status: 'canceled' });
+    const cur = mirror(USER, SUB_VOID_CANCELED.id, SUB_VOID_CANCELED.customer, 'test', { status: currentStatus });
+    seed({
+      organizations: [personal(USER, ORG, true)],
+      organization_plans: [plan(ORG, effective())],
+      stripe_customers: [customer(USER, SUB_VOID_CANCELED.customer, 'test')],
+      billing_subscriptions: order === 'old-first' ? [old, cur] : [cur, old],
+    });
+  }
+
+  it.each(['current-first', 'old-first'] as const)('mirror rows %s -> exactly one revoke, counted once', async (order) => {
+    reSubscriber(order);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(revokes()).toEqual([{ p_user_id: USER, p_mode: 'test' }]);
+    expect(r).toMatchObject({ reverseScanned: 1, revokeAttempted: 1, mismatches: 1 });
+    expect(alerts('reconcile_mismatch')).toEqual([expect.objectContaining({ revoke_attempted: 1, subscription_ids: SUB_VOID_CANCELED.id })]);
+  });
+
+  it('both mirror rows read open -> reported, nothing revoked, nothing counted as attempted', async () => {
+    reSubscriber('old-first');
+    db = new BillingDb({
+      organizations: [personal(USER, ORG, true)],
+      organization_plans: [plan(ORG, effective())],
+      stripe_customers: [customer(USER, SUB_VOID_CANCELED.customer, 'test')],
+      billing_subscriptions: [
+        mirror(USER, 'sub_OLD_canceled', SUB_VOID_CANCELED.customer, 'test', { id: 'row-old', status: 'past_due' }),
+        mirror(USER, SUB_VOID_CANCELED.id, SUB_VOID_CANCELED.customer, 'test', { status: 'active' }),
+      ],
+    });
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(revokes()).toEqual([]);
+    expect(r).toMatchObject({ revokeAttempted: 0, mismatches: 1 });
+    expect(alerts('reconcile_mismatch')).toEqual([
+      expect.objectContaining({ revoke_attempted: 0, subscription_ids: `sub_OLD_canceled,${SUB_VOID_CANCELED.id}` }),
+    ]);
+  });
+});
+
+describe('metadata.kind pins (RC-2, RC-3)', () => {
+  it('reverse: canceled Agent sub + an active brokerage sub on the same customer -> revoke', async () => {
+    seed({
+      organizations: [personal(USER, ORG, true)],
+      organization_plans: [plan(ORG, effective())],
+      stripe_customers: [customer(USER, SUB_VOID_CANCELED.customer, 'test')],
+      billing_subscriptions: [mirror(USER, SUB_VOID_CANCELED.id, SUB_VOID_CANCELED.customer, 'test', { status: 'canceled' })],
+    });
+    serve(SUB_VOID_CANCELED, SUB_BROKERAGE);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(revokes()).toEqual([{ p_user_id: USER, p_mode: 'test' }]);
+    expect(r).toMatchObject({ revokeAttempted: 1, mismatches: 1 });
+  });
+
+  it('forward: an active brokerage sub on an Agent customer is not scanned', async () => {
+    seed({
+      organizations: [personal(USER, ORG, true)],
+      organization_plans: [plan(ORG, undefined)],
+      stripe_customers: [customer(USER, SUB_BROKERAGE.customer, 'test')],
+    });
+    serve(SUB_BROKERAGE, INV_2A);
+    listed = [SUB_BROKERAGE];
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(r).toMatchObject({ forwardScanned: 0, regrantAttempted: 0, mismatches: 0 });
+    expect(stripeCalls.filter((c) => c.op === 'invoices.retrieve')).toEqual([]);
+    expect(grants()).toEqual([]);
+    expect(alerts('reconcile_mismatch')).toEqual([]);
+  });
+});
+
+describe('cap (RC-4): above RECONCILE_MAX_ITEMS the rest is reported, not processed', () => {
+  it('forward: 201 listed subscriptions -> 200 scanned, truncated, one alert', async () => {
+    renewalUser(effective()); // every one is in sync, so only the cap can raise the alert
+    // Composed: SUB_2A (transcribed) under 201 distinct ids.
+    listed = Array.from({ length: RECONCILE_MAX_ITEMS + 1 }, (_, i) => ({ ...SUB_2A, id: `sub_cap_${i}` }));
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(r).toMatchObject({ forwardScanned: RECONCILE_MAX_ITEMS, mismatches: 0, truncated: true });
+    expect(alerts('reconcile_mismatch')).toEqual([expect.objectContaining({ mismatches: 0, truncated: true })]);
+  });
+
+  it('forward: exactly RECONCILE_MAX_ITEMS -> not truncated, no alert', async () => {
+    renewalUser(effective());
+    listed = Array.from({ length: RECONCILE_MAX_ITEMS }, (_, i) => ({ ...SUB_2A, id: `sub_cap_${i}` }));
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(r.truncated).toBe(false);
+    expect(alerts('reconcile_mismatch')).toEqual([]);
+  });
+
+  it('reverse: 201 users with mirror rows -> 200 scanned, truncated', async () => {
+    seed({
+      billing_subscriptions: Array.from({ length: RECONCILE_MAX_ITEMS + 1 }, (_, i) =>
+        mirror(`U-${i}`, `sub_r_${i}`, SUB_VOID_CANCELED.customer, 'test', { id: `row-${i}` })
+      ),
+    });
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(r).toMatchObject({ reverseScanned: RECONCILE_MAX_ITEMS, truncated: true });
+  });
+});
+
+describe('non-Stripe overrides (RC-5): mirror the grant RPC refusal', () => {
+  const future = '2026-12-10T12:00:00.000Z';
+
+  it.each([
+    ['support, enabled', { source: 'support', enabled: true, paid_through: future }],
+    ['manual (no source), enabled', { enabled: true }],
+  ])('forward: %s override + open paid sub -> in sync, no grant call, no alert', async (_l, override) => {
+    renewalUser(override);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(r).toMatchObject({ forwardScanned: 1, regrantAttempted: 0, mismatches: 0, overrideBlocked: 0 });
+    expect(grants()).toEqual([]);
+    expect(stripeCalls.filter((c) => c.op === 'invoices.retrieve')).toEqual([]);
+    expect(alerts('reconcile_mismatch')).toEqual([]);
+  });
+
+  it('forward: support override present but not enabled -> counted as blocked, no grant call, no mismatch alert', async () => {
+    renewalUser({ source: 'support', enabled: false });
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(r).toMatchObject({ regrantAttempted: 0, mismatches: 0, overrideBlocked: 1 });
+    expect(grants()).toEqual([]);
+    expect(stripeCalls.filter((c) => c.op === 'invoices.retrieve')).toEqual([]);
+    expect(alerts('reconcile_mismatch')).toEqual([]);
+  });
+
+  it('reverse: support override + nothing open in Stripe -> no revoke call, Stripe not asked', async () => {
+    seed({
+      organizations: [personal(USER, ORG, true)],
+      organization_plans: [plan(ORG, { source: 'support', enabled: true, paid_through: future })],
+      stripe_customers: [customer(USER, SUB_VOID_CANCELED.customer, 'test')],
+      billing_subscriptions: [mirror(USER, SUB_VOID_CANCELED.id, SUB_VOID_CANCELED.customer, 'test', { status: 'canceled' })],
+    });
+    serve(SUB_VOID_CANCELED);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(revokes()).toEqual([]);
+    expect(r).toMatchObject({ reverseScanned: 1, revokeAttempted: 0, mismatches: 0 });
+    expect(stripeCalls.filter((c) => c.op === 'subscriptions.list' && (c.args[0] as Obj).customer)).toEqual([]);
   });
 });
 

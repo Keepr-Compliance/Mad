@@ -388,13 +388,18 @@ async function entitlementRpc(
   }
 }
 
-/** Revoke unless the user has a different open subscription (R2). */
-export async function revokeIfCurrent(ctx: BillingContext, userId: string, subId: string, stage: string): Promise<void> {
+/**
+ * Revoke unless the user has a different open subscription (R2). Returns true
+ * when the revoke RPC was called (a refusal the RPC reports still counts),
+ * false when declined here.
+ */
+export async function revokeIfCurrent(ctx: BillingContext, userId: string, subId: string, stage: string): Promise<boolean> {
   if (await hasOtherOpenSubscription(ctx, userId, subId)) {
     log(ctx, `${subId} is not the user's current subscription; no revoke`);
-    return;
+    return false;
   }
   await entitlementRpc(ctx, 'revoke_unlimited_from_subscription', { p_user_id: userId, p_mode: ctx.mode }, stage);
+  return true;
 }
 
 /** The line that pays the subscription period (R5): never lines[0]. */

@@ -20,12 +20,28 @@
  *    (the 3846 revoke rule). The population is billing_subscriptions rows of
  *    THIS mode: the override itself carries no mode, and one database serves
  *    both modes, so a live run must never reach a test user (and the reverse).
+ *    A user can have several mirror rows (a re-subscriber). The revoke is made
+ *    against the user's one mirror row whose status is open (a missed webhook
+ *    leaves the current row reading open); with two or more open rows it is
+ *    reported and nothing is revoked. With none open, any row serves (the
+ *    "other open subscription" check then finds nothing either way).
+ *  - Non-Stripe overrides (support / manual): the grant RPC refuses whenever
+ *    such an override exists, whatever `enabled` says (`non_stripe_override`),
+ *    so forward never calls `handleInvoicePaid` for that user. Enabled = held
+ *    by support, in sync. Not enabled = a paying agent blocked by a dead manual
+ *    override: logged and counted in `overrideBlocked`, not a mismatch alert.
  *  - Never `handleSubscriptionEvent` or `syncSubscription(..., { advanceCursor:
  *    true })`: a synthetic event must not move the webhook's ordering cursor.
  *
  * "Effective Stripe override" = organization_plans.feature_overrides
  * .unlimited_transactions with source 'stripe', enabled true and paid_through
  * strictly after now.
+ *
+ * Cap: each side looks at RECONCILE_MAX_ITEMS per run and sets `truncated`
+ * (carried by the alert) when there were more. Stripe lists newest first, so
+ * above the cap the OLDEST subscriptions are never checked, and it is the same
+ * 200 every night. The reverse read has no ORDER BY, so above the cap which
+ * users are skipped is unspecified but equally stable in practice.
  */
 
 import type Stripe from 'stripe';
@@ -35,13 +51,18 @@ import { getPersonalOrganization, getStripeCustomer } from './customers';
 import type { StripeMode } from './mode';
 import { parseRunAfter, OUTBOX_STALE_AFTER_MS } from './outbox';
 import { END_NOW_KIND } from './endPlanNow';
-import { handleInvoicePaid, listAll, revokeIfCurrent, stripeId, type BillingContext } from './sync';
+import { isNonStripeOverride, type UnlimitedOverride } from './agentPlan';
+import { handleInvoicePaid, listAll, OPEN_STATUSES, revokeIfCurrent, stripeId, type BillingContext } from './sync';
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
 /** Subscription statuses the forward scan lists (open AND entitled: SR R10.4). */
 export const RECONCILE_LIST_STATUSES = ['active', 'trialing'] as const;
-/** Most subscriptions / users looked at per side per run. More is reported, not processed. */
+/**
+ * Most subscriptions / users looked at per side per run. More sets `truncated`
+ * (reported, not processed). Above it the oldest subscriptions are never
+ * reconciled: see the header.
+ */
 export const RECONCILE_MAX_ITEMS = 200;
 /** Unprocessed outbox rows read per run for the queue check. */
 export const OUTBOX_HEALTH_READ_LIMIT = 1000;
@@ -59,6 +80,8 @@ export interface ReconcileResult {
   reverseScanned: number;
   revokeAttempted: number;
   mismatches: number;
+  /** Forward: paying agents whose non-Stripe override is present but not enabled (grant RPC would refuse). */
+  overrideBlocked: number;
   truncated: boolean;
 }
 
@@ -142,6 +165,7 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
     reverseScanned: 0,
     revokeAttempted: 0,
     mismatches: 0,
+    overrideBlocked: 0,
     truncated: false,
   };
   const mismatchIds: string[] = [];
@@ -163,7 +187,15 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
       if (!userId) continue;
       result.forwardScanned++;
       if (!entitledInStripe(sub)) continue; // paused: no access is the right state
-      if (stripeOverrideEffective(await readOverride(deps.service, userId), now)) continue;
+      const override = await readOverride(deps.service, userId);
+      if (stripeOverrideEffective(override, now)) continue;
+      if (isNonStripeOverride(override as UnlimitedOverride | undefined)) {
+        // The grant RPC refuses non_stripe_override whatever `enabled` says.
+        if ((override as { enabled?: unknown } | null)?.enabled === true) continue; // held by support: in sync
+        result.overrideBlocked++;
+        console.warn(`[billing/reconcile] forward ${sub.id}: open subscription blocked by a non-Stripe override that is not enabled`);
+        continue;
+      }
 
       // Not entitled although Stripe lists the plan as open.
       result.mismatches++;
@@ -183,18 +215,23 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
   // ---- reverse: entitled in DB, nothing open in Stripe (this mode's users only)
   const { data: rows, error } = await deps.service
     .from('billing_subscriptions')
-    .select('user_id, stripe_subscription_id')
+    .select('user_id, stripe_subscription_id, status')
     .eq('stripe_mode', deps.mode)
     .limit(RECONCILE_MAX_ITEMS * 5);
   if (error) throw new Error(`billing_subscriptions read failed: ${error.message}`);
-  const byUser = new Map<string, string>();
-  for (const r of (rows as { user_id: string; stripe_subscription_id: string }[] | null) ?? []) {
-    if (!byUser.has(r.user_id)) byUser.set(r.user_id, r.stripe_subscription_id);
+  type MirrorRow = { user_id: string; stripe_subscription_id: string; status: string };
+  const byUser = new Map<string, MirrorRow[]>();
+  for (const r of (rows as MirrorRow[] | null) ?? []) {
+    const list = byUser.get(r.user_id);
+    if (list) list.push(r);
+    else byUser.set(r.user_id, [r]);
   }
   const users = [...byUser.entries()];
   if (users.length > RECONCILE_MAX_ITEMS) result.truncated = true;
+  const openStatus = new Set<string>(OPEN_STATUSES);
 
-  for (const [userId, mirrorSubId] of users.slice(0, RECONCILE_MAX_ITEMS)) {
+  for (const [userId, mirrorRows] of users.slice(0, RECONCILE_MAX_ITEMS)) {
+    const mirrorSubId = mirrorRows[0].stripe_subscription_id; // for log/report lines only
     try {
       result.reverseScanned++;
       if (!stripeOverrideEffective(await readOverride(deps.service, userId), now)) continue;
@@ -212,9 +249,15 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
       const open = subs.find((s) => (!s.metadata?.kind || s.metadata.kind === 'agent') && entitledInStripe(s));
       if (open) continue;
       result.mismatches++;
-      mismatchIds.push(mirrorSubId);
-      result.revokeAttempted++;
-      await revokeIfCurrent(reconcileContext(deps, mirrorSubId, now), userId, mirrorSubId, 'reconcile');
+      const openRows = mirrorRows.filter((r) => openStatus.has(r.status));
+      if (openRows.length > 1) {
+        // More than one mirror row reads open: report, never revoke on a guess.
+        mismatchIds.push(...openRows.map((r) => r.stripe_subscription_id));
+        continue;
+      }
+      const target = (openRows[0] ?? mirrorRows[0]).stripe_subscription_id;
+      mismatchIds.push(target);
+      if (await revokeIfCurrent(reconcileContext(deps, target, now), userId, target, 'reconcile')) result.revokeAttempted++;
     } catch (err) {
       console.error(`[billing/reconcile] reverse ${mirrorSubId} failed: ${(err as { code?: string }).code ?? 'error'}`);
     }
@@ -225,6 +268,7 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
       mismatches: result.mismatches,
       regrant_attempted: result.regrantAttempted,
       revoke_attempted: result.revokeAttempted,
+      override_blocked: result.overrideBlocked,
       truncated: result.truncated,
       subscription_ids: mismatchIds.slice(0, 20).join(','),
     });
