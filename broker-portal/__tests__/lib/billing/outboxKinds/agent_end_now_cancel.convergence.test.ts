@@ -152,7 +152,7 @@ describe('agent_end_now_cancel handler', () => {
 describe('agent_end_now_cancel handler, draft hour', () => {
   const DRAFT_RAW = fx('SR-DRAFT-inv-draft');
   const PREV_ID = VOIDED_INV.id;
-  const DRAFT = {
+  const DRAFT: Obj = {
     ...DRAFT_RAW,
     subscription: ACTIVE.id,
     parent: { ...DRAFT_RAW.parent, subscription_details: { ...DRAFT_RAW.parent.subscription_details, subscription: ACTIVE.id } },

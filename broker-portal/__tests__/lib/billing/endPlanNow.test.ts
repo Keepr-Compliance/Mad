@@ -243,7 +243,7 @@ describe('endPlanNow (R4)', () => {
  */
 describe('endPlanNow draft hour (previous renewal decides)', () => {
   const DRAFT_RAW = fx('SR-DRAFT-inv-draft');
-  const DRAFT = {
+  const DRAFT: Obj = {
     ...DRAFT_RAW,
     subscription: SUB.id,
     parent: { ...DRAFT_RAW.parent, subscription_details: { ...DRAFT_RAW.parent.subscription_details, subscription: SUB.id } },
