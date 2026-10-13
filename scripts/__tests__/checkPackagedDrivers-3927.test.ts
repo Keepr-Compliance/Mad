@@ -9,12 +9,6 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import os from "os";
 import path from "path";
 import { pathToFileURL } from "url";
-// Loaded by path: jest maps the bare "@electron/..." prefix to electron/ (jest.config.js).
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const asar = require(path.resolve(__dirname, "..", "..", "node_modules", "@electron", "asar")) as {
-  createPackage: (src: string, dest: string) => Promise<void>;
-};
-
 const SCRIPT = path.resolve(__dirname, "..", "ci", "check-packaged-drivers.mjs");
 
 let root: string;
@@ -43,11 +37,21 @@ const put = (rel: string, content = "x") => {
   writeFileSync(path.join(app, rel), content);
 };
 
-async function packAsar(pkg: object) {
+// Packed in a child process: createPackage resolves on the write stream's "finish",
+// and in this process the handle on app.asar stayed open on Windows, so the file
+// could not be removed (unlink succeeded, rmdir then failed ENOTEMPTY). A child's
+// handles are gone when it exits.
+const ASAR_PKG = path.resolve(__dirname, "..", "..", "node_modules", "@electron", "asar");
+function packAsar(pkg: object) {
   const src = path.join(root, "asar-src");
   mkdirSync(src, { recursive: true });
   writeFileSync(path.join(src, "package.json"), JSON.stringify(pkg));
-  await asar.createPackage(src, path.join(app, "resources", "app.asar"));
+  const code = `require(${JSON.stringify(ASAR_PKG)}).createPackage(process.argv[1], process.argv[2]).then(() => process.exit(0), (e) => { console.error(e); process.exit(1); });`;
+  const r = spawnSync(process.execPath, ["-e", code, src, path.join(app, "resources", "app.asar")], {
+    encoding: "utf8",
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+  });
+  if (r.status !== 0) throw new Error(`packing app.asar failed: ${r.stderr}`);
 }
 
 const run = (channel: string) => spawnSync(process.execPath, [SCRIPT, app, channel], { encoding: "utf8" });
