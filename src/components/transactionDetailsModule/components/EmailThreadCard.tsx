@@ -88,6 +88,11 @@ export interface EmailThreadCardProps {
    * pill). When absent the subject markup is unchanged.
    */
   subjectBadge?: React.ReactNode;
+  /**
+   * BACKLOG-3926: rendered on the title row after the badge (the folder / label a
+   * Needs Review folder match was found in). Shown with or without a badge.
+   */
+  subjectNote?: React.ReactNode;
 }
 
 /**
@@ -110,6 +115,7 @@ export function EmailThreadCard({
   isConfirming = false,
   actionsLockedTooltip,
   subjectBadge,
+  subjectNote,
 }: EmailThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
   const isNeedsReview = variant === "needsReview";
@@ -190,12 +196,13 @@ export function EmailThreadCard({
             {/* Thread info: Subject and participants */}
             <div className="min-w-0 flex-1">
               <div data-testid="thread-subject">
-                {subjectBadge ? (
+                {subjectBadge || subjectNote ? (
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="font-semibold text-gray-900 truncate text-sm sm:text-base min-w-0">
                       {thread.subject || "(No Subject)"}
                     </span>
-                    <span className="flex-shrink-0">{subjectBadge}</span>
+                    {subjectBadge ? <span className="flex-shrink-0">{subjectBadge}</span> : null}
+                    {subjectNote}
                   </div>
                 ) : (
                   <span className="font-semibold text-gray-900 block truncate text-sm sm:text-base">

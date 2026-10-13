@@ -335,7 +335,8 @@ describe("C6 — already decided or already waiting is not queued again", () => 
 
 describe("C8 — precedence (address over contact), one list", () => {
   it("the order lives in REVIEW_MATCH_REASON_PRECEDENCE", () => {
-    expect(REVIEW_MATCH_REASON_PRECEDENCE).toEqual(["address", "contact"]);
+    // BACKLOG-3926: folder joined at the front.
+    expect(REVIEW_MATCH_REASON_PRECEDENCE).toEqual(["folder", "address", "contact"]);
     expect(strongerReviewMatchReason("contact", "address")).toBe("address");
     expect(strongerReviewMatchReason("address", "contact")).toBe("address");
     expect(strongerReviewMatchReason(null, "contact")).toBe("contact");

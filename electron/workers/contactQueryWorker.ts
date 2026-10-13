@@ -42,6 +42,7 @@ import { runThreadIdentityRequestOn, type ThreadIdentityRequest } from "../servi
 import { readCandidateEmailsOn, readCandidateMessageThreadsOn } from "../services/db/autoLinkSql";
 import { readTransactionTextThreadsOn } from "../services/db/transactionTextPagingDb";
 import { ADDRESS_MATCH_CANDIDATE_PARAM_COUNT, classifyAddressMatchCandidatesOn } from "../services/db/addressMatchCandidatesDb";
+import { FOLDER_MATCH_CANDIDATE_PARAM_COUNT, readFolderMatchCandidatesOn } from "../services/db/folderMatchCandidatesDb";
 import type { NormalizedAddress } from "../utils/addressNormalization";
 import { runMessageRosterOn } from "../services/db/messageRosterDb";
 import { readMessageSourceStatsOn } from "../services/db/messageSourceStatsDb";
@@ -71,7 +72,9 @@ type QueryType =
   // BACKLOG-3837: the Attach Messages roster (every unlinked text of the user).
   | "messageRoster"
   // BACKLOG-3925: the address-only Needs Review candidates (bodies scanned with instr).
-  | "addressMatchCandidates";
+  | "addressMatchCandidates"
+  // BACKLOG-3926: the folder / label match candidates (index-driven).
+  | "folderMatchCandidates";
 
 interface InitMessage {
   type: "init";
@@ -363,6 +366,14 @@ parentPort?.on("message", (msg: WorkerMessage) => {
         throw new Error("addressMatchCandidates needs its params and address");
       }
       rows = [classifyAddressMatchCandidatesOn(db, params, address)];
+    } else if (queryMsg.type === "folderMatchCandidates") {
+      // BACKLOG-3926: emails filed in a folder / label named after the deal address.
+      if (!db) throw new Error("Database not initialized");
+      const { params } = queryMsg as QueryMessage & QueryMessageExtras;
+      if (!Array.isArray(params) || params.length !== FOLDER_MATCH_CANDIDATE_PARAM_COUNT) {
+        throw new Error("folderMatchCandidates needs its params");
+      }
+      rows = readFolderMatchCandidatesOn(db, params);
     } else if (queryMsg.type === "transactionTextThreads") {
       // BACKLOG-3884: the Texts tab's conversation list reads every linked text of the deal.
       if (!db) throw new Error("Database not initialized");

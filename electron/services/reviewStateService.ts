@@ -131,6 +131,16 @@ import {
   type NormalizedAddress,
 } from "../utils/addressNormalization";
 import { DedicatedWorkerError, isPoolReady, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
+import {
+  FOLDER_MATCH_CANDIDATE_EMAILS_SQL,
+  FOLDER_MATCH_CANDIDATE_PARAM_COUNT,
+} from "./db/folderMatchCandidatesDb";
+import {
+  readMailFolderCatalogForUser,
+  readMailFoldersForEmails,
+  type StoredMailFolder,
+} from "./db/mailFolderDb";
+import { folderEntryMatchesAddress, folderMatchLabel } from "../utils/mailFolderCatalog";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
 
 const MODULE = "ReviewStateService";
@@ -277,6 +287,11 @@ export interface ReviewItem {
    * and every queued email with no stored reason.
    */
   matchReason: ReviewMatchReason;
+  /**
+   * BACKLOG-3926: for a "folder" item, the folder / label it matched on, as shown on
+   * the title row ("Outlook folder: <path>" / "Gmail label: <path>"). Absent otherwise.
+   */
+  matchFolder?: string;
   display: ReviewItemDisplay;
 }
 
@@ -436,6 +451,16 @@ export function getReviewState(transactionId: string): ReviewState {
       seenEmailIds.add(item.email_id);
     }
     deduped.push(item);
+  }
+
+  // BACKLOG-3926: the folder / label name for folder-match items.
+  const folderLabels = folderMatchLabels(
+    transactionId,
+    deduped.filter((i) => i.matchReason === "folder" && i.email_id).map((i) => i.email_id as string),
+  );
+  for (const item of deduped) {
+    const label = item.email_id ? folderLabels.get(item.email_id) : undefined;
+    if (label) item.matchFolder = label;
   }
 
   const items = deduped.sort((a, b) =>
@@ -940,15 +965,174 @@ export async function runAddressMatchPassInSweep(
   transactionId: string,
   caller: string,
 ): Promise<{ queued: number; clean: boolean }> {
+  let queued = 0;
+  let clean = true;
   try {
-    return { queued: (await queueAddressMatchesForTransaction(transactionId)).queued, clean: true };
+    queued += (await queueAddressMatchesForTransaction(transactionId)).queued;
   } catch (error) {
     await logService.warn(
       `[BACKLOG-3925] address-only discovery failed (${caller}): ${error instanceof Error ? error.message : "Unknown"}`,
       MODULE,
     );
-    return { queued: 0, clean: false };
+    clean = false;
   }
+  // BACKLOG-3926: the folder / label pass rides in the same sweeps.
+  try {
+    queued += (await queueFolderMatchesForTransaction(transactionId)).queued;
+  } catch (error) {
+    await logService.warn(
+      `[BACKLOG-3926] folder / label discovery failed (${caller}): ${error instanceof Error ? error.message : "Unknown"}`,
+      MODULE,
+    );
+    clean = false;
+  }
+  return { queued, clean };
+}
+
+/* ------------------------------------------------------------------ *
+ * BACKLOG-3926 — folder / label match discovery
+ * ------------------------------------------------------------------ */
+
+/** The candidate read is index-driven; bound it like the address read anyway. */
+const FOLDER_MATCH_WORKER_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * The user's folders / labels whose name matches the deal address, as
+ * [accountId, folderId] pairs. At most a few hundred names, each judged by the SAME
+ * address-only matcher the address route uses (contentContainsAddressAdjacent).
+ * System folders / labels never match.
+ */
+export function matchingFolderPairs(userId: string, address: NormalizedAddress): Array<[string, string]> {
+  return readMailFolderCatalogForUser(userId)
+    .filter((e) => folderEntryMatchesAddress(e, address))
+    .map((e) => [e.accountId, e.folderId]);
+}
+
+/**
+ * The folder-match candidate read on a dedicated contact query worker when the pool
+ * is up; on the main thread only when no worker could start (same contract as
+ * readAddressMatches).
+ */
+export async function readFolderMatches(userId: string, params: unknown[]): Promise<string[]> {
+  if (isPoolReady()) {
+    try {
+      return (await queryOnDedicatedWorker("folderMatchCandidates", userId, FOLDER_MATCH_WORKER_TIMEOUT_MS, {
+        params: params as Array<string | number>,
+      })) as string[];
+    } catch (error) {
+      const code = error instanceof DedicatedWorkerError ? error.code : "failed";
+      if (code !== "start_failed") throw error;
+      await logService.warn(
+        "[BACKLOG-3926] Folder-match candidate worker could not start; reading on the main thread",
+        MODULE,
+        { code },
+      );
+    }
+  }
+  return dbAll<{ id: string }>(FOLDER_MATCH_CANDIDATE_EMAILS_SQL, params).map((r) => r.id);
+}
+
+export interface FolderMatchPassResult {
+  /** Newly queued with reason "folder" (an existing row upgraded to "folder" is not counted). */
+  queued: number;
+  /** Folders / labels whose name matched the deal address. */
+  folders: number;
+  /** Emails in those folders inside the window, not linked and not rejected. */
+  candidates: number;
+  skipped?: "missing" | "locked" | "no-address";
+}
+
+/**
+ * Folder / label discovery (BACKLOG-3926): queue the deal's cached emails that sit in
+ * an Outlook folder or Gmail label named after its address. Local cache only.
+ *
+ * Unlike the address pass, emails already waiting in Needs Review and emails with a
+ * deal contact on them are NOT skipped: precedence is folder > address > contact, and
+ * queueEmailForReview upgrades the stored reason of a row that already exists.
+ */
+export async function queueFolderMatchesForTransaction(transactionId: string): Promise<FolderMatchPassResult> {
+  const none = (skipped?: FolderMatchPassResult["skipped"]): FolderMatchPassResult => ({
+    queued: 0,
+    folders: 0,
+    candidates: 0,
+    ...(skipped ? { skipped } : {}),
+  });
+
+  // BACKLOG-3910: a locked deal queues nothing, and reads nothing to find out.
+  if (getDealLockReason(transactionId)) return none("locked");
+
+  const txn = dbGet<{
+    user_id: string;
+    started_at: string | null;
+    created_at: string | null;
+    closed_at: string | null;
+    property_address: string | null;
+    property_street: string | null;
+  }>(TRANSACTION_AUTOLINK_WINDOW_SQL, [transactionId]);
+  if (!txn) return none("missing");
+  const address = normalizeAddress(txn.property_address || txn.property_street || null);
+  if (!address) return none("no-address");
+
+  const pairs = matchingFolderPairs(txn.user_id, address);
+  if (pairs.length === 0) return none();
+
+  const range = computeTransactionDateRange({
+    started_at: txn.started_at,
+    created_at: txn.created_at,
+    closed_at: txn.closed_at,
+  });
+  const params = [
+    JSON.stringify(pairs),
+    txn.user_id,
+    range.start.toISOString(),
+    range.end.toISOString(),
+    transactionId,
+    transactionId,
+  ];
+  if (params.length !== FOLDER_MATCH_CANDIDATE_PARAM_COUNT) throw new Error("folder-match params out of step with the SQL");
+
+  const ids = await readFolderMatches(txn.user_id, params);
+  let queued = 0;
+  for (let i = 0; i < ids.length; i++) {
+    if (i > 0 && i % ADDRESS_MATCH_EMAILS_PER_TURN === 0) await yieldToEventLoop();
+    if (await queueEmailForReview(transactionId, ids[i], txn.user_id, "folder")) queued++;
+  }
+
+  // Counts only: folder / label names are user data.
+  await logService.info("[BACKLOG-3926] folder / label discovery", MODULE, {
+    transactionId,
+    folders: pairs.length,
+    candidates: ids.length,
+    queued,
+  });
+  return { queued, folders: pairs.length, candidates: ids.length };
+}
+
+/**
+ * "Outlook folder: <path>" / "Gmail label: <path>" for each given email of the deal —
+ * the first of its folders / labels whose name matches the deal address. Read-time
+ * only; nothing is stored.
+ */
+function folderMatchLabels(transactionId: string, emailIds: readonly string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  if (emailIds.length === 0) return out;
+  const txn = dbGet<{ user_id: string; property_address: string | null; property_street: string | null }>(
+    TRANSACTION_AUTOLINK_WINDOW_SQL,
+    [transactionId],
+  );
+  const address = txn ? normalizeAddress(txn.property_address || txn.property_street || null) : null;
+  if (!txn || !address) return out;
+  const matching = new Map<string, StoredMailFolder>();
+  for (const e of readMailFolderCatalogForUser(txn.user_id)) {
+    if (folderEntryMatchesAddress(e, address)) matching.set(`${e.accountId}\u0000${e.folderId}`, e);
+  }
+  if (matching.size === 0) return out;
+  for (const r of readMailFoldersForEmails(emailIds)) {
+    if (out.has(r.email_id)) continue;
+    const e = matching.get(`${r.account_id}\u0000${r.folder_id}`);
+    if (e) out.set(r.email_id, folderMatchLabel(e.provider, e.displayPath));
+  }
+  return out;
 }
 
 /**
