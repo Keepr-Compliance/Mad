@@ -293,6 +293,7 @@ export function ImportSourceSettings({ userId, onSourceChange, onLinkGoogleMessa
                     </div>
                   </div>
                 </label>
+                {source === "android-messages-web" && (
                 <div className="shrink-0">
                   <ConnectionControl
                     state={link.linkView === "checking" ? "checking" : link.linkView === "linked" ? "connected" : "disconnected"}
@@ -325,6 +326,7 @@ export function ImportSourceSettings({ userId, onSourceChange, onLinkGoogleMessa
                     ]}
                   />
                 </div>
+                )}
               </div>
 
               {unlinkAsk && (
