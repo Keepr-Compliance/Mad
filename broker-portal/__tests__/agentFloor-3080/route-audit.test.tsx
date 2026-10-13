@@ -712,6 +712,9 @@ const KNOWN_ROUTE_HANDLERS = [
   'app/api/email/ticket-notification/route.ts',
   'app/api/email/ticket-resolved/route.ts',
   'app/api/impersonation/end/route.ts',
+  // BACKLOG-3849: billing outbox drain, called by a database cron job with a
+  // secret header; no user session, no request-supplied ids.
+  'app/api/internal/billing/drain/route.ts',
   'app/api/invite/validate/route.ts',
   'app/api/payments/charge/route.ts',
   'app/api/payments/checkout-session/route.ts',
@@ -891,7 +894,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(21);
+    expect(handlers.length).toBe(22);
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {
