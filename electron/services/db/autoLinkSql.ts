@@ -73,8 +73,9 @@ export const AUTOLINK_CONTACT_PHONES_SQL = sql`
   `;
 
 /**
- * The transaction fields the auto-linker needs: its window, its addresses, and whether
- * address filtering is switched off for it. One bound parameter: transaction id.
+ * The transaction fields the auto-linker needs: its window, its addresses, whether
+ * address filtering is switched off for it, and its submission status (BACKLOG-3910:
+ * a locked deal gets nothing automatically). One bound parameter: transaction id.
  */
 export const TRANSACTION_AUTOLINK_WINDOW_SQL = sql`
     SELECT
@@ -84,7 +85,8 @@ export const TRANSACTION_AUTOLINK_WINDOW_SQL = sql`
       closed_at,
       property_address,
       property_street,
-      skip_address_filter
+      skip_address_filter,
+      submission_status
     FROM transactions
     WHERE id = ?
   `;

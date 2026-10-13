@@ -53,6 +53,8 @@ import {
 import "@testing-library/jest-dom";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
 import { stripStaleCapClause } from "../MacOSMessagesImportSettings";
+import { TextsLookbackSettings } from "../TextsLookbackSettings";
+import { TextsLookbackProvider } from "../textsLookback";
 
 jest.mock("../../../contexts/PlatformContext", () => ({
   usePlatform: jest.fn(() => ({ isMacOS: true })),
@@ -1242,8 +1244,22 @@ describe("BACKLOG-2749 — a failed preference write stops the run", () => {
     );
   });
 
-  async function clickFittingWindow(): Promise<void> {
-    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+  /**
+   * BACKLOG-3892 S3: the period dropdown is the shared "How far back to import
+   * texts" picker now, outside this panel. `withSharedPicker` renders it the way
+   * Settings composes it (one provider around both), so a test can read it.
+   */
+  const renderWithSharedPicker = () =>
+    renderStrict(
+      <TextsLookbackProvider userId={USER_ID}>
+        <TextsLookbackSettings userId={USER_ID} />
+        <MacOSMessagesImportSettings userId={USER_ID} />
+      </TextsLookbackProvider>
+    );
+
+  async function clickFittingWindow(withSharedPicker = false): Promise<void> {
+    if (withSharedPicker) renderWithSharedPicker();
+    else renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
     const dialog = await openDialog();
     await act(async () => {
       fireEvent.click(
@@ -1285,10 +1301,12 @@ describe("BACKLOG-2749 — a failed preference write stops the run", () => {
     // a window no run would use.
     mockUpdatePreferences.mockResolvedValue({ success: false });
 
-    await clickFittingWindow();
+    await clickFittingWindow(true);
 
+    // BACKLOG-3892 S3: re-pinned to the shared picker, which shows what the
+    // dialog's save did (or, here, did not) store.
     await waitFor(() =>
-      expect(screen.getByDisplayValue("All time")).toBeInTheDocument()
+      expect(screen.getByTestId("texts-lookback-select")).toHaveDisplayValue("All time")
     );
   });
 
@@ -1334,7 +1352,7 @@ describe("BACKLOG-2749 — a failed preference write stops the run", () => {
         )
     );
 
-    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    renderWithSharedPicker();
     const dialog = await openDialog();
     await act(async () => {
       fireEvent.click(
@@ -1347,9 +1365,9 @@ describe("BACKLOG-2749 — a failed preference write stops the run", () => {
       await screen.findByTestId("import-plan-action-error")
     ).toBeInTheDocument();
     // M14 carried over: the range that failed to save is not displayed as if
-    // it had been.
+    // it had been (BACKLOG-3892 S3: on the shared picker).
     await waitFor(() =>
-      expect(screen.getByDisplayValue("All time")).toBeInTheDocument()
+      expect(screen.getByTestId("texts-lookback-select")).toHaveDisplayValue("All time")
     );
   });
 
@@ -1376,6 +1394,39 @@ describe("BACKLOG-2749 — a failed preference write stops the run", () => {
     expect(
       screen.queryByTestId("import-plan-action-error")
     ).not.toBeInTheDocument();
+  });
+
+  // BACKLOG-3892 S3 — C3: the dialog's "change range" is the second writer of
+  // the shared value. What it saves is what the shared picker shows.
+  it("C3: the blue recommendation's saved range shows on the shared picker", async () => {
+    mockUpdatePreferences.mockResolvedValue({ success: true });
+    (window.api.messages.getImportCount as jest.Mock).mockImplementation(
+      (_userId: string, selection?: { lookbackMonths: number | null }) =>
+        Promise.resolve(
+          selection?.lookbackMonths === null
+            ? FOUNDER_RESULT
+            : { ...FOUNDER_RESULT, windowCount: 41000 }
+        )
+    );
+
+    renderWithSharedPicker();
+    const shared = screen.getByTestId("texts-lookback-select") as HTMLSelectElement;
+    await waitFor(() => expect(shared).toHaveDisplayValue("All time"));
+    const dialog = await openDialog();
+    await act(async () => {
+      fireEvent.click(
+        await within(dialog).findByTestId("import-plan-change-range")
+      );
+    });
+
+    await waitFor(() => expect(mockUpdatePreferences).toHaveBeenCalled());
+    const saved = (
+      mockUpdatePreferences.mock.calls[0][1] as {
+        messageImport: { filters: { lookbackMonths: number | null } };
+      }
+    ).messageImport.filters.lookbackMonths;
+    expect(typeof saved).toBe("number");
+    await waitFor(() => expect(shared.value).toBe(String(saved)));
   });
 
   it("the text-only escape obeys the same rule", async () => {

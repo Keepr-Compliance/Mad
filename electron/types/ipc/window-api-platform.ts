@@ -2,6 +2,7 @@
  * WindowApi Platform sub-interfaces
  * Device detection, backup, drivers, and sync (primarily Windows)
  */
+import type { BackfillAvailability, BackfillProgress, BackfillResult } from "../iphoneBackfill";
 
 /**
  * BACKLOG-2907: what the host knows about a prior backup for this device.
@@ -197,6 +198,12 @@ export interface WindowApiDrivers {
     version: string | null;
     serviceRunning: boolean;
     error: string | null;
+    /** BACKLOG-3927 */
+    installedVia?: "msi" | "apple-devices" | null;
+    /** BACKLOG-3927: present when the Apple Devices probe ran. */
+    appleDevices?: {
+      state: "not-installed" | "not-running" | "msi-service-stopped" | "usb-driver-missing" | "ready";
+    };
   }>;
   hasBundled: () => Promise<{ available: boolean }>;
   installApple: () => Promise<{
@@ -205,6 +212,10 @@ export interface WindowApiDrivers {
     rebootRequired: boolean;
   }>;
   openITunesStore: () => Promise<{ success: boolean; error?: string }>;
+  /** BACKLOG-3927: open Apple Devices in the Microsoft Store (Store build). */
+  openAppleDevicesStore?: () => Promise<{ success: boolean; error?: string }>;
+  /** BACKLOG-3927: open Windows Settings > Windows Update. Opens Settings only. */
+  openWindowsUpdate?: (target: "check" | "optional") => Promise<{ success: boolean; error?: string }>;
 }
 
 /**
@@ -284,4 +295,9 @@ export interface WindowApiSync {
   onComplete: (callback: (result: unknown) => void) => () => void;
   onWaitingForPasscode: (callback: () => void) => () => void;
   onPasscodeEntered: (callback: () => void) => () => void;
+  /** BACKLOG-3892 S5: "Get older texts" from the iPhone backup kept on this computer. */
+  backfillAvailability?: (transactionId: string) => Promise<BackfillAvailability>;
+  backfillOlder?: (transactionId: string) => Promise<BackfillResult>;
+  cancelBackfill?: () => Promise<{ success: boolean }>;
+  onBackfillProgress?: (callback: (progress: BackfillProgress) => void) => () => void;
 }

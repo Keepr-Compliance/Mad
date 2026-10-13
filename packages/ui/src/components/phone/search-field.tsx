@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Search, SlidersHorizontal } from 'lucide-react';
+import { Search, SlidersHorizontal, X } from 'lucide-react';
 import { cn } from '../../lib/cn';
 
 /**
@@ -9,7 +9,13 @@ import { cn } from '../../lib/cn';
  * does not zoom on focus; 44px tall; visually hidden label. Deliberately not
  * built on `Input` (which is `text-sm`).
  *
- * Consumers: BACKLOG-3898 (support queue), BACKLOG-3901 (plans).
+ * With `onClear`, an X sits inside the right edge while the field has text
+ * (44px tap target, `Clear search`, focus returns to the input) and the
+ * browser's own search cancel button is hidden so there is only one. Without
+ * it the field is unchanged.
+ *
+ * Consumers: BACKLOG-3898 (support queue), BACKLOG-3901 (plans), BACKLOG-3904
+ * (broker submissions, `onClear`).
  */
 export interface SearchFieldProps {
   label: string;
@@ -18,11 +24,15 @@ export interface SearchFieldProps {
   placeholder?: string;
   id?: string;
   className?: string;
+  /** Shows the clear X while `value` is not empty. */
+  onClear?: () => void;
 }
 
-export function SearchField({ label, value, onChange, placeholder, id, className }: SearchFieldProps) {
+export function SearchField({ label, value, onChange, placeholder, id, className, onClear }: SearchFieldProps) {
   const autoId = React.useId();
   const inputId = id ?? autoId;
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const showClear = !!onClear && value !== '';
   return (
     <div className={cn('relative', className)}>
       <label htmlFor={inputId} className="sr-only">
@@ -33,13 +43,30 @@ export function SearchField({ label, value, onChange, placeholder, id, className
         aria-hidden="true"
       />
       <input
+        ref={inputRef}
         id={inputId}
         type="search"
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className="h-11 w-full rounded-md border border-gray-300 bg-white pl-9 pr-3 text-base text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+        className={cn(
+          'h-11 w-full rounded-md border border-gray-300 bg-white pl-9 pr-3 text-base text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500',
+          onClear && 'pr-11 [&::-webkit-search-cancel-button]:hidden [&::-webkit-search-cancel-button]:appearance-none'
+        )}
       />
+      {showClear ? (
+        <button
+          type="button"
+          aria-label="Clear search"
+          onClick={() => {
+            onClear?.();
+            inputRef.current?.focus();
+          }}
+          className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center rounded-md text-gray-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+        >
+          <X className="h-4 w-4" aria-hidden="true" />
+        </button>
+      ) : null}
     </div>
   );
 }

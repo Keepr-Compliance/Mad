@@ -25,6 +25,9 @@ const SELECTOR = [
       const r = {};
       const seen = {};
       for (const el of document.querySelectorAll(sel)) {
+        // A display:none element has no geometry and must not shift the #n suffix of its visible
+        // namesakes (a phone-only input before a desktop one would renumber every input after it).
+        if (el.getClientRects().length === 0) continue;
         const label = (el.getAttribute('aria-label') || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 30);
         const base = `${el.tagName}:${label}`;
         seen[base] = (seen[base] || 0) + 1;

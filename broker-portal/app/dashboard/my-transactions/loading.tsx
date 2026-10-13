@@ -11,7 +11,7 @@ export default function MyTransactionsLoading() {
     <div className="max-w-7xl mx-auto">
       {/* Header Skeleton (mirrors PageHeader) */}
       <div className="mb-6">
-        <Skeleton className="h-8 w-40 mb-2" />
+        <Skeleton className="h-8 w-40 mb-2 max-md:hidden" />
         <Skeleton className="h-4 w-32" />
       </div>
 

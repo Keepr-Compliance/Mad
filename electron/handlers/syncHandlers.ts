@@ -29,7 +29,15 @@ import supabaseService from "../services/supabaseService";
 import { getMainWindow, sendToMainWindow } from "../windowRegistry";
 import { handleBusy } from "../utils/busyIpc";
 import { backupDecryptionService } from "../services/backupDecryptionService";
+import { floorPlanForSync } from "../services/iphoneChatFloorPlan";
 import type { SyncStartReply } from "../types/ipc/window-api-platform";
+import { IphoneBackfillService, type BackfillMessagesParser } from "../services/iphoneBackfillService";
+import { getBackupAtRest } from "../services/atRest/backupAtRest";
+import { reportBackupProblem } from "../services/atRest/backupProblemReport";
+import { iOSMessagesParser } from "../services/iosMessagesParser";
+import { macOSMessagesImportService } from "../services/macOSMessagesImportService/macOSMessagesImportService";
+import { validateTransactionId } from "../utils/validation";
+import type { BackfillAvailability, BackfillResult } from "../types/iphoneBackfill";
 
 /**
  * BACKLOG-3785: what `sync:start` and `sync:process-existing` send back to the renderer.
@@ -69,6 +77,35 @@ let syncSessionDeviceUdid: string | null = null;
 let syncSessionDeviceName: string | null = null;
 // TASK-2110: Cancellation signal ref shared between sync:cancel and persistence
 const persistCancelSignal = { cancelled: false };
+// BACKLOG-3892 S5: a finished sync's persistence is running (the orchestrator's
+// isRunning is already false then). A backfill never overlaps it.
+let syncPersisting = false;
+
+/**
+ * BACKLOG-3892 S5: the "Get older texts" engine. One per process; it refuses while a
+ * sync runs or persists, or while a texts force re-import runs; a sync that starts
+ * cancels it.
+ */
+const iphoneBackfill = new IphoneBackfillService({
+  atRest: () => getBackupAtRest(),
+  copies: backupDecryptionService,
+  newParser: () => new iOSMessagesParser() as unknown as BackfillMessagesParser,
+  persist: (userId, result, backupPath, onProgress, sessionId, cancel) =>
+    iPhoneSyncStorageService.persistSyncResult(userId, result, backupPath, onProgress, sessionId, cancel),
+  autoLink: (userId) => autoLinkNewMessagesForUser(userId),
+  otherWork: () => {
+    if (orchestrator?.getStatus().isRunning) return "sync";
+    if (syncPersisting) return "sync-persisting";
+    if (macOSMessagesImportService.isForceReimportInProgress()) return "texts-force-reimport";
+    return null;
+  },
+  reportProblem: reportBackupProblem,
+});
+
+/** Test seam (BACKLOG-3892 S5). */
+export function getIphoneBackfillForTests(): IphoneBackfillService {
+  return iphoneBackfill;
+}
 
 /**
  * Get the current user ID, trying multiple sources
@@ -193,6 +230,10 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
         };
       }
 
+      // BACKLOG-3892 S5: a sync takes the phone from a running "Get older texts" (its copy
+      // stops at the next file; its storing rolls back).
+      if (iphoneBackfill.cancel()) log.info("[SyncHandlers] Sync starting: stopped the running backfill");
+
       // Capture user ID at sync start to prevent race conditions
       // This ensures data is saved to the correct user even if login state changes during sync
       syncSessionUserId = await getCurrentUserIdForSync();
@@ -234,7 +275,13 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
       try {
         // BACKLOG-3881: only the fields the orchestrator reads — a password a stale
         // renderer might still send is never passed on.
-        const result = await orchestrator!.sync({ udid: options.udid, forceFullBackup: options.forceFullBackup });
+        // BACKLOG-3892: the per-chat parse floors (undefined = every chat read in full).
+        const floorPlan = await floorPlanForSync(syncSessionUserId);
+        const result = await orchestrator!.sync({
+          udid: options.udid,
+          forceFullBackup: options.forceFullBackup,
+          ...(floorPlan ? { floorPlan } : {}),
+        });
         // BACKLOG-3881: a run stopped by an Apple-encrypted backup did no work. The user's
         // Sync after turning encryption off must not be refused by the cooldown above.
         if (result?.appleEncryptedBackup) {
@@ -285,6 +332,28 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
     persistCancelSignal.cancelled = true;
     return { success: true };
   });
+
+  // BACKLOG-3892 S5 (SR S3): a texts force re-import refuses while a backfill runs, as
+  // the backfill refuses while a force re-import runs. `typeof`: handler suites stub it.
+  if (typeof macOSMessagesImportService.setReprocessBlocker === "function") {
+    macOSMessagesImportService.setReprocessBlocker(() => (iphoneBackfill.runningFor() ? "iphone-backfill" : null));
+  }
+
+  // BACKLOG-3892 S5: "Get older texts" from the kept iPhone backup (S6 is the UI).
+  ipcMain.handle("sync:backfill-availability", async (_, transactionId: unknown): Promise<BackfillAvailability> => {
+    const txId = validateTransactionId(transactionId) as string;
+    const userId = await getCurrentUserIdForSync();
+    if (!userId) return { available: false, reason: "error" };
+    return iphoneBackfill.availability(userId, txId);
+  });
+  handleBusy("sync:backfill-older", async (_, transactionId: unknown): Promise<BackfillResult> => {
+    const txId = validateTransactionId(transactionId) as string;
+    const userId = await getCurrentUserIdForSync();
+    if (!userId) return { success: false, reason: "error", messagesStored: 0, coverageRecorded: false };
+    log.info("[SyncHandlers] Backfill of older iPhone texts requested");
+    return iphoneBackfill.backfill(userId, txId, (p) => sendToMainWindow("sync:backfill-progress", p));
+  });
+  ipcMain.handle("sync:backfill-cancel", () => ({ success: iphoneBackfill.cancel() }));
 
   // BACKLOG-3785: large ipcMain.handle replies are logged while a sync is running
   // or just finished (the phase source gates the measurement).
@@ -356,6 +425,8 @@ export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string
     "sync:process-existing",
     async (_, options: { udid: string }): Promise<SyncStartReply> => {
       log.info("[SyncHandlers] Processing existing backup", { udid: options.udid });
+      // BACKLOG-3892 S5: as for sync:start, the run takes over from a running backfill.
+      iphoneBackfill.cancel();
 
       // Capture user ID at sync start to prevent race conditions
       syncSessionUserId = await getCurrentUserIdForSync();
@@ -535,6 +606,7 @@ function setupEventForwarding(): void {
   // stored, cancelled, failed, refused, no user, or nothing to persist.
   const onSyncComplete = async (result: SyncResult) => {
     let succeeded = false;
+    syncPersisting = true;
     try {
       succeeded = await persistCompletedSync(result);
     } catch (error) {
@@ -555,8 +627,12 @@ function setupEventForwarding(): void {
         // cleanupBackup logs and never throws; the next sweep removes a leftover.
       }
       // `typeof` guard: handler suites stub the orchestrator with only what they drive.
-      if (typeof orchestrator?.completeBackupAtRest === "function") {
-        await orchestrator.completeBackupAtRest(succeeded);
+      try {
+        if (typeof orchestrator?.completeBackupAtRest === "function") {
+          await orchestrator.completeBackupAtRest(succeeded);
+        }
+      } finally {
+        syncPersisting = false;
       }
     }
   };
@@ -815,6 +891,11 @@ export function stopBackupForQuit(): Promise<unknown> | null {
  * Cleanup sync handlers
  */
 export function cleanupSyncHandlers(): void {
+  // BACKLOG-3892 S5: stop a running backfill BEFORE the parse-copy sweep, so its copy
+  // takes no new file after the sweep. A file already in flight (at most the copy's
+  // concurrency) can still land after it: the engine's own cleanup clears it if the
+  // process lives on, otherwise the next launch sweep does.
+  iphoneBackfill.cancel();
   // BACKLOG-3816: a quit mid-parse or mid-persistence must not leave plaintext on disk.
   if (typeof orchestrator?.discardParseCopiesForQuit === "function") {
     orchestrator.discardParseCopiesForQuit();
@@ -841,6 +922,10 @@ export function cleanupSyncHandlers(): void {
   ipcMain.removeHandler("sync:start-detection");
   ipcMain.removeHandler("sync:stop-detection");
   ipcMain.removeHandler("sync:get-iphone-last-sync-time");
+  ipcMain.removeHandler("sync:backfill-availability");
+  ipcMain.removeHandler("sync:backfill-older");
+  ipcMain.removeHandler("sync:backfill-cancel");
+  syncPersisting = false;
   ipcMain.removeAllListeners("sync:completion-shown");
   ipcMain.removeAllListeners("sync:renderer-tick");
 

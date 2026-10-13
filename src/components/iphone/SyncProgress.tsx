@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
 import type { SyncProgressProps } from "../../types/iphone";
 import logger from "../../utils/logger";
+import { SYNC_KEEP_UNLOCKED_HINT } from "../../constants/appleDevicesStoreCopy";
 import { formatBytesAtUnit, MB_UNIT_INDEX } from "../../utils/transferByteUnit";
 
 /**
@@ -306,6 +307,15 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
             */}
             <p className="text-xs text-amber-600">
               Your iPhone is preparing the export. This can take up to 20 minutes before the transfer starts, and it&apos;s normal — please don&apos;t disconnect or cancel. If your iPhone is showing a passcode prompt, enter it to continue.
+            </p>
+            {/*
+              BACKLOG-3927: both builds. Measured 2026-10-12 on a Windows PC: the
+              backup waited ~15 minutes ("Device has not started sending files
+              yet" -> "started sending") until the phone was unlocked, and a
+              mid-sync auto-lock was logged twice. An instruction, not a cause.
+            */}
+            <p className="text-xs font-medium text-amber-700 mt-1" data-testid="sync-keep-unlocked-hint">
+              {SYNC_KEEP_UNLOCKED_HINT}
             </p>
           </div>
         </div>

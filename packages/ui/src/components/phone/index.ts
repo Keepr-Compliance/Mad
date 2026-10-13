@@ -26,3 +26,7 @@ export { Toast } from './toast';
 export type { ToastProps } from './toast';
 export { SearchField, FilterButton } from './search-field';
 export type { SearchFieldProps, FilterButtonProps } from './search-field';
+export { FilterSelectButton } from './filter-select-button';
+export type { FilterSelectButtonProps } from './filter-select-button';
+export { PhoneFilterBar, PhoneResultsRow, PhoneClearFilters, PhoneSortButton } from './filter-bar';
+export type { PhoneFilterBarProps, PhoneFilterSpec, PhoneResultsRowProps, PhoneSortButtonProps } from './filter-bar';

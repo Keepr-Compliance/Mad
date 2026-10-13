@@ -21,6 +21,7 @@ import { useCallback, useState } from "react";
 import type {
   AuditCoverageResult,
   ExportCompletenessResult,
+  TextSource,
 } from "../../electron/types/auditCoverage";
 // BACKLOG-2832: the phase union, so a phase added without a band fails to compile.
 import type { ImportPhase } from "../../electron/types/ipc/importPhase";
@@ -51,8 +52,9 @@ export interface RunMessagesImportOutcome {
 }
 
 export interface UseAuditCoverageCheckResult {
-  checkCoverage: (proposedStartISO: string) => Promise<AuditCoverageResult | null>;
-  checkExportCompleteness: (transactionId: string) => Promise<ExportCompletenessResult | null>;
+  /** BACKLOG-3892 S2: `chosenSource` = the user's import source (TextSource), when known. */
+  checkCoverage: (proposedStartISO: string, chosenSource?: TextSource | null, proposedEndISO?: string | null) => Promise<AuditCoverageResult | null>;
+  checkExportCompleteness: (transactionId: string, chosenSource?: TextSource | null) => Promise<ExportCompletenessResult | null>;
   runMessagesImport: (
     proposedStartISO: string | null,
     transactionId?: string,
@@ -143,10 +145,20 @@ export function useAuditCoverageCheck(userId: string): UseAuditCoverageCheckResu
   const [indeterminate, setIndeterminate] = useState<boolean>(false);
 
   const checkCoverage = useCallback(
-    async (proposedStartISO: string): Promise<AuditCoverageResult | null> => {
+    async (
+      proposedStartISO: string,
+      chosenSource?: TextSource | null,
+      // BACKLOG-3892 W1: the proposed End Date (null/absent = open: today).
+      proposedEndISO?: string | null,
+    ): Promise<AuditCoverageResult | null> => {
       if (!userId || !proposedStartISO) return null;
       try {
-        return await window.api.transactions.getAuditCoverage(userId, proposedStartISO);
+        if (proposedEndISO) {
+          return await window.api.transactions.getAuditCoverage(userId, proposedStartISO, chosenSource ?? null, proposedEndISO);
+        }
+        return chosenSource
+          ? await window.api.transactions.getAuditCoverage(userId, proposedStartISO, chosenSource)
+          : await window.api.transactions.getAuditCoverage(userId, proposedStartISO);
       } catch {
         // Detection failure must never block the create/edit flow (the export
         // gate remains the backstop). Treat as "no gap".
@@ -157,10 +169,12 @@ export function useAuditCoverageCheck(userId: string): UseAuditCoverageCheckResu
   );
 
   const checkExportCompleteness = useCallback(
-    async (transactionId: string): Promise<ExportCompletenessResult | null> => {
+    async (transactionId: string, chosenSource?: TextSource | null): Promise<ExportCompletenessResult | null> => {
       if (!userId || !transactionId) return null;
       try {
-        return await window.api.transactions.checkExportCompleteness(transactionId, userId);
+        return chosenSource
+          ? await window.api.transactions.checkExportCompleteness(transactionId, userId, chosenSource)
+          : await window.api.transactions.checkExportCompleteness(transactionId, userId);
       } catch {
         return null;
       }

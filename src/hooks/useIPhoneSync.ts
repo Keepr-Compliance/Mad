@@ -9,6 +9,9 @@ import type {
   UserFacingError,
 } from "../types/iphone";
 import type { SyncCancelTrigger } from "../../electron/types/ipc/window-api-platform";
+import { isStoreBuild } from "../utils/platform";
+import { appleDevicesStateOf, appleUsbDriverOf } from "../utils/appleDevicesState";
+import type { AppleDevicesState, AppleUsbDriverState } from "../types/iphone";
 import logger from '../utils/logger';
 import { syncOrchestrator } from '../services/SyncOrchestratorService';
 import { usePlatform } from '../contexts/PlatformContext';
@@ -73,6 +76,52 @@ async function isAppleDriverAbsent(): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * BACKLOG-3927 (Microsoft Store build): Apple Devices readiness from
+ * `drivers.checkApple()`. null when the API is unavailable or fails (fail safe:
+ * don't nag on ambiguity).
+ */
+async function readStoreAppleDevicesState(): Promise<{
+  state: AppleDevicesState;
+  usbDriver: AppleUsbDriverState | null;
+} | null> {
+  try {
+    const drivers = window.api?.drivers;
+    if (!drivers?.checkApple) return null;
+    const status = await drivers.checkApple();
+    return { state: appleDevicesStateOf(status), usbDriver: appleUsbDriverOf(status) };
+  } catch (err) {
+    logger.debug("[useIPhoneSync] Apple Devices check failed (non-fatal):", err);
+    return null;
+  }
+}
+
+/**
+ * BACKLOG-3927 (Store build): Connect-screen re-check while no iPhone is
+ * connected. An iPhone plugged in on Microsoft's photo driver does not change
+ * `isConnected`, so without this a user who opened the screen first would keep
+ * the plain "Connect your iPhone" view. Re-probe every 15 s, at most 20 times
+ * (5 minutes) per visit, plus on window focus; each probe is one PowerShell
+ * spawn in main. Stops when a device connects or the screen closes.
+ */
+export const STORE_RECHECK_INTERVAL_MS = 15_000;
+export const STORE_RECHECK_MAX = 20;
+/** BACKLOG-3927: at most one window-focus (or screen-open) probe per this window. */
+export const STORE_FOCUS_THROTTLE_MS = 15_000;
+
+/**
+ * BACKLOG-3927: Store-build text for a sync attempted before Apple Devices is
+ * ready. The website text says "Click Install below", and the Store build has
+ * no Install button. DRAFT TEXT — OPEN QUESTION on BACKLOG-3927.
+ */
+const STORE_DRIVER_ABSENT_GUIDANCE: UserFacingError = {
+  code: "DRIVER_ABSENT_RECOVERY",
+  title: "Apple Devices isn't ready yet",
+  description:
+    "Your iPhone can't be detected until Apple's Apple Devices app is set up on this computer.",
+  actionSuggestion: "Follow the steps on this screen, then click Check again.",
+};
 
 /**
  * Module-level sync state ref for cross-hook communication.
@@ -168,6 +217,14 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const [toolsMissing, setToolsMissing] = useState(false);
   // BACKLOG-1919: Apple driver absent while 0 devices detected (Windows recovery path)
   const [driverMissing, setDriverMissing] = useState(false);
+  // BACKLOG-3927: true only while the Connect-iPhone screen is on screen. The Store
+  // build's interval + focus re-check runs only then (this hook is mounted app-wide).
+  const [connectScreenActive, setConnectScreenActive] = useState(false);
+  const storeProbeRef = useRef({ inFlight: false, lastAt: 0 });
+  // BACKLOG-3927: Store build — which Apple Devices step the user is on.
+  const [appleDevicesState, setAppleDevicesState] = useState<AppleDevicesState | null>(null);
+  // BACKLOG-3927: the iPhone's USB driver from the same probe (null = not probed).
+  const [appleUsbDriver, setAppleUsbDriver] = useState<AppleUsbDriverState | null>(null);
   const [installDriverStatus, setInstallDriverStatus] =
     useState<"idle" | "installing" | "error">("idle");
   const [installDriverError, setInstallDriverError] = useState<string | null>(null);
@@ -864,6 +921,22 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     }
   }, [syncStatus]);
 
+  const probeStore = useCallback((isCancelled: () => boolean, throttleMs: number) => {
+    const p = storeProbeRef.current;
+    if (p.inFlight) return;
+    if (throttleMs > 0 && p.lastAt > 0 && Date.now() - p.lastAt < throttleMs) return;
+    p.inFlight = true;
+    p.lastAt = Date.now();
+    void readStoreAppleDevicesState().then((read) => {
+      p.inFlight = false;
+      if (isCancelled()) return;
+      const state = read?.state ?? null;
+      setAppleDevicesState(state);
+      setAppleUsbDriver(read?.usbDriver ?? null);
+      setDriverMissing(state !== null && state !== "ready");
+    });
+  }, []);
+
   // BACKLOG-1919: Proactive Apple-driver recovery check (Windows).
   //
   // The original incident: an iPhone user reached the "Connect Your iPhone"
@@ -888,6 +961,12 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     }
 
     let cancelled = false;
+    if (isStoreBuild()) {
+      probeStore(() => cancelled, 0);
+      return () => {
+        cancelled = true;
+      };
+    }
     void isAppleDriverAbsent().then((absent) => {
       if (cancelled) return;
       setDriverMissing(absent);
@@ -906,7 +985,33 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     return () => {
       cancelled = true;
     };
-  }, [enabled, isConnected, isWindows, isWindowsArm64]);
+  }, [enabled, isConnected, isWindows, isWindowsArm64, probeStore]);
+
+  // BACKLOG-3927 (Store build): bounded interval + throttled window-focus re-check,
+  // only while the Connect-iPhone screen is shown and no iPhone is connected.
+  useEffect(() => {
+    if (!enabled || !isWindows || isWindowsArm64 || isConnected) return;
+    if (!connectScreenActive || !isStoreBuild()) return;
+    let cancelled = false;
+    const isCancelled = () => cancelled;
+    let rechecks = 0;
+    probeStore(isCancelled, STORE_FOCUS_THROTTLE_MS);
+    const timer = setInterval(() => {
+      rechecks += 1;
+      if (rechecks > STORE_RECHECK_MAX) {
+        clearInterval(timer);
+        return;
+      }
+      probeStore(isCancelled, 0);
+    }, STORE_RECHECK_INTERVAL_MS);
+    const onFocus = () => probeStore(isCancelled, STORE_FOCUS_THROTTLE_MS);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [enabled, isConnected, isWindows, isWindowsArm64, connectScreenActive, probeStore]);
 
   // TASK-910 / BACKLOG-1773: Poll sync status while mounted AND enabled.
   // Uses a recursive setTimeout with exponential backoff instead of a fixed 5s
@@ -1008,13 +1113,28 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       // diagnostics, on Windows check whether the Apple driver is simply absent
       // (the common "onboarding skipped / UAC declined" case). If so, surface
       // the inline recovery prompt instead of a generic "No device connected".
-      if (isWindows && (await isAppleDriverAbsent())) {
+      // BACKLOG-3927: the Store build reads the full state and records it, so
+      // the guide shown next names the right step (not a stale or null one).
+      let driverAbsent = false;
+      if (isWindows && isStoreBuild()) {
+        const read = await readStoreAppleDevicesState();
+        const state = read?.state ?? null;
+        if (read !== null) {
+          setAppleDevicesState(read.state);
+          setAppleUsbDriver(read.usbDriver);
+        }
+        driverAbsent = state !== null && state !== "ready";
+      } else if (isWindows) {
+        driverAbsent = await isAppleDriverAbsent();
+      }
+      if (driverAbsent) {
         logger.warn(
           "[useIPhoneSync] Sync attempted but Apple driver is absent — showing recovery prompt",
         );
         setDriverMissing(true);
-        setUserError(DRIVER_ABSENT_GUIDANCE);
-        setError(DRIVER_ABSENT_GUIDANCE.title);
+        const guidance = isStoreBuild() ? STORE_DRIVER_ABSENT_GUIDANCE : DRIVER_ABSENT_GUIDANCE;
+        setUserError(guidance);
+        setError(guidance.title);
         return;
       }
 
@@ -1266,6 +1386,12 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
    * this recovery path is. No PII.
    */
   const recoverInstallDriver = useCallback(async () => {
+    // BACKLOG-3927: the Microsoft Store build never installs Apple's driver.
+    // Its screen shows the Apple Devices guide instead; nothing to run here.
+    if (isStoreBuild()) {
+      logger.info("[useIPhoneSync] Store build: driver install not offered");
+      return;
+    }
     // Telemetry: recovery install invoked → onboarding's driver step did not
     // leave the machine ready. Reused @sentry/electron/renderer (no new system).
     Sentry.captureMessage("iPhone driver recovery install invoked", {
@@ -1334,6 +1460,16 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     }
   }, []);
 
+  /** BACKLOG-3927: Store build "Check again" — re-detect, update driverMissing. */
+  const recheckDriver = useCallback(async (): Promise<AppleDevicesState> => {
+    const read = await readStoreAppleDevicesState();
+    const state = read?.state ?? "not-installed";
+    setAppleDevicesState(state);
+    setAppleUsbDriver(read?.usbDriver ?? null);
+    setDriverMissing(state !== "ready");
+    return state;
+  }, []);
+
   return {
     isConnected,
     device,
@@ -1357,6 +1493,10 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     installDriverStatus,
     installDriverError,
     recoverInstallDriver,
+    recheckDriver,
+    setConnectScreenActive,
+    appleDevicesState,
+    appleUsbDriver,
     isStarting,
     retryAvailableAt,
     startSync,

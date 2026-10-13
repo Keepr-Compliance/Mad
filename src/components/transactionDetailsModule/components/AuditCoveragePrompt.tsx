@@ -20,7 +20,7 @@ import React from "react";
 import { ResponsiveModal } from "../../common/ResponsiveModal";
 import type { CoverageImportProgress } from "../../../hooks/useAuditCoverageCheck";
 import type { AuditCoverageResult, SourceCoverageGap, TextSource } from "../../../../electron/types/auditCoverage";
-import { gapLine, googleMessagesGapLine } from "./TextCoverageNotice";
+import { coverageLine, gapKey } from "./coverageCopy";
 
 /**
  * BACKLOG-3837: the prompt's source lines from a coverage result. A result whose
@@ -98,9 +98,12 @@ export function AuditCoveragePrompt({
   chosenSource,
 }: AuditCoveragePromptProps): React.ReactElement {
   // One gap line, one action: the Mac lines for the Mac source; otherwise
-  // only the chosen source's line.
+  // only the chosen source's line. BACKLOG-3892 W1: the Mac END line (newer texts)
+  // shows here too — the Mac lines above are about the start only.
   const macSource = chosenSource === "mac";
-  const otherGaps = macSource ? [] : sourceGaps.filter((g) => g.source === chosenSource);
+  const otherGaps = macSource
+    ? sourceGaps.filter((g) => g.source === "mac" && g.kind === "newer")
+    : sourceGaps.filter((g) => g.source === chosenSource);
   const canImport = hasGap && importerAvailable;
   const percent = progress ? Math.max(0, Math.min(100, Math.round(progress.percent))) : 0;
   // BACKLOG-2305: fall back to indeterminate whenever we lack a trustworthy
@@ -170,10 +173,13 @@ export function AuditCoveragePrompt({
         {otherGaps.length > 0 && (
           <ul className="text-sm text-gray-700 mb-3 space-y-1" data-testid="audit-coverage-source-gaps">
             {otherGaps.map((g) => (
-              <li key={g.source} data-testid={`audit-coverage-gap-${g.source}`}>
-                {/* Founder: the Google Messages line is the one the Texts tab shows. */}
-                {googleMessagesGapLine(g) ??
-                  `${gapLine(g, proposedStartISO)} ${g.source === "iphone" ? "Click Sync iPhone on the dashboard." : "Click Sync Android on the dashboard."}`}
+              <li key={gapKey(g)} data-testid={`audit-coverage-gap-${gapKey(g)}`}>
+                {/* BACKLOG-3892 W: every line from coverageCopy (the Texts tab's lines). */}
+                {coverageLine(
+                  g,
+                  proposedStartISO,
+                  g.source === "iphone" ? "Click Sync iPhone on the dashboard." : "Click Sync Android on the dashboard.",
+                )}
               </li>
             ))}
           </ul>

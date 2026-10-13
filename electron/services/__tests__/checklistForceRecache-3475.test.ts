@@ -1,49 +1,24 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-3475 — A FORCE RE-CACHE TAKES THE CHECKLIST LINK WITH THE EMAIL.
+ * BACKLOG-3475 / BACKLOG-3910a — A FORCE RE-CACHE KEEPS AN EMAIL THAT IS ON
+ * A CHECKLIST, AND THE CHECKLIST KEEPS ITS LINK.
  *
  * ===========================================================================
- * WHAT THIS PROVES, AND WHY IT IS NOT A CASCADE UNIT TEST
+ * THE RULE CHANGED
  * ===========================================================================
- * The founder's ruling is that a force re-cache removes checklist links
- * exactly as it removes transaction links — one force button, one behaviour.
- * The mechanism is `ON DELETE CASCADE` from a link member to `emails` and
- * `attachments`, plus the AFTER DELETE trigger that drops a group once its last
- * member is gone.
+ * 3475 shipped under the 2026-08-24 parity ruling: a force re-cache removed
+ * checklist links exactly as it removed transaction links. The founder
+ * reversed that on 2026-10-11 (BACKLOG-3910a): an email tied to a deal — by a
+ * checklist member on the email OR on one of its attachments — is never
+ * removed. It is refreshed in place (same id), so no ON DELETE CASCADE fires
+ * and the AFTER DELETE group trigger never runs.
  *
- * A hand-written `DELETE FROM emails` would prove the cascade fires and prove
- * nothing about the feature: the force path does not delete emails that way. So
- * this runs the REAL `emailSyncService.precacheEmails(..., { force: true })`
- * against the REAL `schema.sql` on the REAL driver, and asserts on the rows
- * that survive its staging swap.
+ * Runs the REAL `precacheEmails(..., { force: true })` against the REAL
+ * `schema.sql` on the REAL driver and compares exact id SETS.
  *
- * ===========================================================================
- * WHY ID SETS AND NOT COUNTS
- * ===========================================================================
- * Every assertion below compares the exact set of surviving `link:target` pairs
- * and group ids. A count cannot tell "the right two survived" from "two of the
- * wrong ones survived", and the wrong-implementation shapes this suite exists to
- * catch differ by WHICH rows are left, not how many.
- *
- * ===========================================================================
- * THE FIVE WRONG IMPLEMENTATIONS IT CATCHES (measured, SR plan review + Step 9)
- * ===========================================================================
- *   email FK without CASCADE    the force re-cache ABORTS — the user's force
- *                               button reports "Re-cache could not be applied"
- *                               and nothing syncs. The likeliest wrong shape,
- *                               and the most user-visible.
- *   email FK absent             members dangle, pointing at deleted emails.
- *   attachment FK w/o CASCADE   the same abort, on the attachment side.
- *   attachment FK absent        attachment members dangle.
- *   trigger absent              groups survive with ZERO members. Invisible to
- *                               a dangling-row check — the row points at
- *                               nothing — and would render as an empty
- *                               evidence chip.
- *
- * **No pre-existing suite sees any of the five.** `emailSyncService.forceRecache-2856`
- * stayed 13/13 green through every one of them, including the two that break the
- * user's force button outright.
+ * The cascade and trigger themselves are still pinned by the second test
+ * (deleting the transaction / a group), which is the path that still uses them.
  */
 import * as nodePath from "path";
 import * as fs from "fs";
@@ -218,31 +193,67 @@ beforeEach(() => {
 
 afterEach(() => db.close());
 
-describe("BACKLOG-3475 — email Force Re-cache removes checklist link members in the swap", () => {
-  it("members of replaced emails and their attachments are gone, empty groups gone, survivors intact, nothing dangles", async () => {
+describe("BACKLOG-3910a — email Force Re-cache keeps checklist members, their emails and attachments", () => {
+  /**
+   * MUTATION: drop the email-kind member arm from the keep-set -> L-gone loses
+   * its member and the trigger drops the group, red. Drop the attachment-kind
+   * arm -> nothing changes HERE (live-1 is also linked) — C11 below is the
+   * control for that arm.
+   */
+  it("every member, group and attachment survives; the replaced email keeps its id; nothing dangles", async () => {
+    const membersBefore = memberSet();
+    const linksBefore = linkSet();
     mockOutlookSearch.mockResolvedValue([providerEmail(1)]);
 
     const result = await emailSyncService.precacheEmails(USER, undefined, { force: true });
 
-    const oldGone =
-      (db.prepare(`SELECT COUNT(*) AS n FROM emails WHERE id = 'live-1'`).get() as { n: number })
-        .n === 0;
-    // The force path ran and replaced the row: without this, every assertion
-    // below would pass on a re-cache that simply did nothing.
     expect(result.error ?? null).toBeNull();
     expect(result.forceSwap).toBeDefined();
-    expect(oldGone).toBe(true);
-
-    // L-gone loses its only member and the group goes with it (the trigger).
-    // L-att loses its attachment with the replaced email.
-    // L-mixed keeps keep-1; L-att-keep keeps its attachment.
-    // The second checklist (BACKLOG-3476): L-c2-gone goes, L-c2-keep stays.
-    expect(memberSet()).toEqual(["L-att-keep:att-keep", "L-c2-keep:keep-1", "L-mixed:keep-1"]);
-    expect(linkSet()).toEqual(["L-att-keep", "L-c2-keep", "L-mixed"]);
+    // live-1 was refreshed in place (same id, fresh body), not replaced.
+    expect(rows(`SELECT id, body_plain FROM emails ORDER BY id`)).toEqual([
+      { id: "keep-1", body_plain: "b" },
+      { id: "live-1", body_plain: "m1" },
+    ]);
+    expect(memberSet()).toEqual(membersBefore);
+    expect(linkSet()).toEqual(linksBefore);
+    expect(rows(`SELECT id, email_id FROM attachments ORDER BY id`)).toEqual([
+      { id: "att-1", email_id: "live-1" },
+      { id: "att-keep", email_id: "keep-1" },
+    ]);
     expect(dangling()).toBe(0);
-    // The checklists and their items are untouched: a tick survives a
-    // re-cache, only the evidence under it can go.
     expect(rows("SELECT id FROM transaction_checklist_items ORDER BY id")).toEqual([{ id: "i1" }, { id: "i2" }]);
+  });
+
+  /**
+   * C11 — an email whose ONLY tie is an attachment on a checklist item is kept,
+   * the member id is unchanged and the trigger does not drop the group.
+   *
+   * MUTATION: drop the attachment-kind arm from the keep-set -> att-only is
+   * removed, att-only-1 cascades away, the group L-only goes with it, red.
+   */
+  it("C11: an email tied only by a checklist attachment is kept with its member and group", async () => {
+    seedEmail("att-only", "ext-2", "2026-03-02T10:00:00Z");
+    seedEmail("untied", "ext-3", "2026-03-03T10:00:00Z");
+    db.prepare(`INSERT INTO attachments (id, email_id, filename) VALUES ('att-only-1', 'att-only', 'deed.pdf')`).run();
+    db.prepare(
+      `INSERT INTO transaction_checklist_links (id, item_id, kind, label) VALUES ('L-only', 'i1', 'attachment', 'deed.pdf')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO transaction_checklist_link_members (id, link_id, kind, attachment_id) VALUES ('m-only', 'L-only', 'attachment', 'att-only-1')`,
+    ).run();
+    mockOutlookSearch.mockResolvedValue([providerEmail(1), providerEmail(2), providerEmail(3)]);
+
+    const result = await emailSyncService.precacheEmails(USER, undefined, { force: true });
+
+    expect(result.error ?? null).toBeNull();
+    const ids = rows(`SELECT id FROM emails ORDER BY id`).map((r) => r.id);
+    expect(ids).toContain("att-only");
+    expect(ids).not.toContain("untied");
+    expect(rows(`SELECT id, link_id FROM transaction_checklist_link_members WHERE id = 'm-only'`)).toEqual([
+      { id: "m-only", link_id: "L-only" },
+    ]);
+    expect(linkSet()).toContain("L-only");
+    expect(dangling()).toBe(0);
   });
 
   it("removing a group, and deleting the transaction, still work with the trigger present", () => {

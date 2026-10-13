@@ -16,6 +16,8 @@ export interface WindowApiSystem {
   platform: NodeJS.Platform;
   /** BACKLOG-3363: true on a Windows on ARM PC (iPhone USB sync unsupported). */
   isWindowsArm64?: boolean;
+  /** BACKLOG-3927: true in the Microsoft Store build (no bundled Apple driver). */
+  isStoreBuild?: boolean;
 
   // App info methods (migrated from window.electron)
   getAppInfo: () => Promise<{ version: string; name: string }>;

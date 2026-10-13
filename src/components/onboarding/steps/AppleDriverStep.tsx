@@ -16,8 +16,15 @@ import type {
 import logger from '../../../utils/logger';
 import { reportOnboardingFailure } from '../sentryOnboarding';
 import type { SkipConfig, StepNavigationConfig } from "../types/config";
-import { isWindowsArm64 } from "../../../utils/platform";
+import { isStoreBuild, isWindowsArm64 } from "../../../utils/platform";
 import { WindowsArm64Unsupported } from "../../iphone/WindowsArm64Unsupported";
+import { IPhoneSetupChecklist } from "../../iphone/IPhoneSetupChecklist";
+import { appleDevicesStateOf } from "../../../utils/appleDevicesState";
+import type { AppleDevicesState } from "../../../types/iphone";
+import {
+  APPLE_DEVICES_SKIP_DESCRIPTION,
+  APPLE_DEVICES_SKIP_WARNING,
+} from "../../../constants/appleDevicesStoreCopy";
 
 // =============================================================================
 // TYPES
@@ -105,6 +112,13 @@ const SKIP: SkipConfig = {
   confirmLabel: "Skip anyway",
 };
 
+// BACKLOG-3927: Store build — the user installs Apple Devices, not our installer.
+const SKIP_STORE: SkipConfig = {
+  ...SKIP,
+  description: APPLE_DEVICES_SKIP_DESCRIPTION,
+  confirmWarning: APPLE_DEVICES_SKIP_WARNING,
+};
+
 export const meta: OnboardingStepMeta = {
   id: "apple-driver",
   progressLabel: "Install Tools",
@@ -115,7 +129,8 @@ export const meta: OnboardingStepMeta = {
     return isWindowsArm64() ? NAVIGATION_WINDOWS_ARM64 : NAVIGATION;
   },
   get skip(): SkipConfig | undefined {
-    return isWindowsArm64() ? undefined : SKIP;
+    if (isWindowsArm64()) return undefined;
+    return isStoreBuild() ? SKIP_STORE : SKIP;
   },
   // Only show for iPhone users who need driver setup (skip if already installed)
   shouldShow: (context) => context.phoneType === "iphone" && !context.driverSetupComplete,
@@ -167,11 +182,89 @@ function WindowsArm64DriverStepContent({
   );
 }
 
+/**
+ * BACKLOG-3927: Microsoft Store build — no Apple driver ships with Keepr and
+ * none is installed by it. Detect Apple Mobile Device Support; when missing,
+ * send the user to Apple's "Apple Devices" app in the Microsoft Store and
+ * re-detect. The step's Skip stays available.
+ */
+function StoreAppleDevicesStepContent({
+  onAction,
+}: OnboardingStepContentProps): React.ReactElement {
+  const [status, setStatus] = useState<"checking" | AppleDevicesState>("checking");
+
+  const detect = useCallback(async (): Promise<AppleDevicesState> => {
+    const drivers = getDriversAPI();
+    if (!drivers) return "not-installed";
+    try {
+      return appleDevicesStateOf(await drivers.checkApple());
+    } catch (error) {
+      logger.error("[AppleDriverStep] Store build: driver check failed:", error);
+      return "not-installed";
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void detect().then((state) => {
+      if (!cancelled) setStatus(state);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [detect]);
+
+  const handleCheckAgain = useCallback(async (): Promise<AppleDevicesState> => {
+    const state = await detect();
+    if (state === "ready") setStatus("ready");
+    return state;
+  }, [detect]);
+
+  if (status === "checking") {
+    return (
+      <div className="text-center mb-5">
+        <div className="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-3 bg-blue-100">
+          <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+        <h1 className="text-xl font-bold text-gray-900 mb-2">Checking System...</h1>
+        <p className="text-gray-600">Checking if Apple tools are already installed...</p>
+      </div>
+    );
+  }
+
+  if (status === "ready") {
+    return (
+      <>
+        <div className="text-center mb-5">
+          <div className="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-3 bg-green-100">
+            <svg className="w-7 h-7 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <h1 className="text-xl font-bold text-gray-900 mb-2">Tools Ready!</h1>
+          <p className="text-gray-600">Your computer is ready to sync with your iPhone.</p>
+        </div>
+        <button
+          onClick={() => onAction({ type: "DRIVER_SETUP_COMPLETE" })}
+          className="w-full py-2.5 px-4 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600 transition-all shadow-md hover:shadow-lg"
+        >
+          Continue
+        </button>
+      </>
+    );
+  }
+
+  return <IPhoneSetupChecklist onCheckAgain={handleCheckAgain} state={status} />;
+}
+
 function AppleDriverStepContent(
   props: OnboardingStepContentProps,
 ): React.ReactElement {
   if (isWindowsArm64()) {
     return <WindowsArm64DriverStepContent {...props} />;
+  }
+  if (isStoreBuild()) {
+    return <StoreAppleDevicesStepContent {...props} />;
   }
   return <AppleDriverInstallContent {...props} />;
 }

@@ -18,7 +18,7 @@
  *     for a while under a landed parent.
  */
 
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import React from 'react';
 import { FIXTURE_BROKERAGE_ORG_ID, createPostgrestEmulator, type Row } from '../helpers/postgrestEmulator';
@@ -142,7 +142,7 @@ describe('broker Submissions list: one row per deal', () => {
 
   it('D1b: the row shows the latest version\'s status', async () => {
     const { container } = await renderList();
-    const row = container.querySelector(`a[href="/dashboard/submissions/${V2}"]`)!.closest('tr')!;
+    const row = container.querySelector(`table a[href="/dashboard/submissions/${V2}"]`)!.closest('tr')!;
     expect(row).toHaveTextContent('Needs Changes');
     expect(row).not.toHaveTextContent('Rejected');
   });
@@ -176,10 +176,11 @@ describe('broker Submissions list: one row per deal', () => {
     // The caption reads "Pending", not the raw filter value's own formatStatus
     // label ("Submitted") — BACKLOG-3597.
     expect(pending.container).toHaveTextContent('2 submissions with status "Pending"');
-    // The tab's label is still "Pending".
-    expect(pending.container.querySelector('a[href="/dashboard/submissions?status=submitted"]')).toHaveTextContent(
-      /^Pending$/
+    // The status select's label is still "Pending".
+    const option = Array.from((screen.getByLabelText('Filter by status') as HTMLSelectElement).options).find(
+      (o) => o.value === 'submitted'
     );
+    expect(option).toHaveTextContent(/^Pending$/);
     // Every other tab is unchanged: an exact match on the head's status.
     expect(listedIds((await renderList({ status: 'needs_changes' })).container)).toEqual([P_NC, V2]);
     expect(listedIds((await renderList({ status: 'approved' })).container)).toEqual([P_AP]);
@@ -244,8 +245,14 @@ describe('broker Submissions list: one row per deal', () => {
   it('D9: two reads of transaction_submissions per render beyond the org lookup, none per row', async () => {
     await renderList();
     const reads = mockEmulator.state.selects.filter((s) => s.table === 'transaction_submissions');
-    // getAllowedOrgIds, the chain links, the page rows.
-    expect(reads.map((r) => r.columns)).toEqual(['organization_id', 'id, parent_submission_id, status, created_at', '*']);
+    // getAllowedOrgIds, the chain links, the page rows. BACKLOG-3904: the
+    // broker list's link read also carries what search and the agent filter
+    // match on (BROKER_LINK_COLUMNS); My Transactions keeps LINK_COLUMNS.
+    expect(reads.map((r) => r.columns)).toEqual([
+      'organization_id',
+      'id, parent_submission_id, status, created_at, submitted_by, property_address, property_city, property_state, sale_price, listing_price',
+      '*',
+    ]);
     expect(mockEmulator.state.writes).toEqual([]);
   });
 });

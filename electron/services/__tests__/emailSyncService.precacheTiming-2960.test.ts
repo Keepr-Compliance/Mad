@@ -615,8 +615,11 @@ describe("BACKLOG-2960 — the counts on the line are the run's own", () => {
     const result = await emailSyncService.precacheEmails(USER, undefined, { force: true });
 
     // The premise: the two sets really do differ on this run. Without this the
-    // assertion below could pass for the wrong reason.
-    expect(result.forceSwap?.providers).toEqual(["gmail"]);
+    // assertion below could pass for the wrong reason. BACKLOG-3910a: a force
+    // run with an unfinished mailbox now applies nothing, and names the
+    // mailbox that did not finish — Outlook, so only Gmail finished.
+    expect(result.forceSwap).toBeUndefined();
+    expect(result.forceNotApplied?.mailboxes.map((m) => m.provider)).toEqual(["outlook"]);
     expect(field(theTimingLine(), "providers")).toBe("outlook+gmail");
   });
 

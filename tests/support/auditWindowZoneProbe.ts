@@ -36,7 +36,7 @@ const report = {
   /** Does the Texts tab agree, AT the bound and one millisecond past it? */
   tabAtBound: {} as Record<string, boolean>,
   tabPastBound: {} as Record<string, boolean>,
-  /** The email/import window end (closing day + 30-day buffer). */
+  /** The email/import window end (end of the closing day; no buffer since BACKLOG-3910). */
   emailRangeEnd: computeTransactionDateRange({ closed_at: "2026-07-29" }).end.toISOString(),
   /**
    * The audit-window START edge: the instant one millisecond before UTC

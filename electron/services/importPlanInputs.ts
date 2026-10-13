@@ -99,8 +99,8 @@ export function deriveAuditSpans(userId: string): AuditSpan[] {
     const { start, end } = computeTransactionDateRange(txn);
     spans.push({
       startISO: start.toISOString(),
-      // Closed deal -> a real upper bound (with the buffer the shared helper
-      // applies). Open deal -> open-ended, see above.
+      // Closed deal -> a real upper bound: the end of its End Date (no
+      // post-closing buffer, BACKLOG-3910). Open deal -> open-ended, see above.
       endISO: txn.closed_at ? end.toISOString() : null,
     });
   }
@@ -120,12 +120,16 @@ export function deriveAuditSpans(userId: string): AuditSpan[] {
  * resolver treats as "no preference stored" — the documented defaults.
  */
 export async function loadStoredImportFilters(
-  userId: string
+  userId: string,
+  options: { failOnError?: boolean } = {}
 ): Promise<StoredImportFilters | null> {
   try {
     const preferences = await supabaseService.getPreferences(userId);
     return preferences?.messageImport?.filters ?? null;
   } catch (error) {
+    // BACKLOG-3892 S2 (SR C1): a caller that must not guess (the iPhone parse
+    // floor) gets the failure instead of the defaults.
+    if (options.failOnError) throw error;
     logService.warn(
       "Failed to load import filter preferences; falling back to the stored defaults",
       SERVICE_NAME,
@@ -163,6 +167,12 @@ export interface ImportPlanContext {
    * same resolver and can differ only by this one stated input.
    */
   selectionOverride?: StoredImportFilters | null;
+  /**
+   * BACKLOG-3892 S2 (SR C1): throw when the stored preference cannot be read,
+   * instead of resolving the documented defaults. The iPhone parse floor sets it:
+   * a defaulted 1.5-month floor would silently cut an "All time" user's texts.
+   */
+  failOnPreferencesError?: boolean;
 }
 
 /**
@@ -174,7 +184,9 @@ export async function resolveImportPlanForUser(
   context: ImportPlanContext,
   now: Date = new Date()
 ): Promise<ImportPlan> {
-  const stored = await loadStoredImportFilters(context.userId);
+  const stored = await loadStoredImportFilters(context.userId, {
+    failOnError: context.failOnPreferencesError === true,
+  });
   // Key-by-key, so an override that mentions only `lookbackMonths` does not
   // silently erase a stored cap. An explicitly-null value in the override is a
   // CHOICE ("All time" / "Unlimited") and must survive the merge, so this

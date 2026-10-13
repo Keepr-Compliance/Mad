@@ -26,7 +26,7 @@ export interface FloorDashboardProps {
 export function FloorDashboard({ headerTitle }: FloorDashboardProps) {
   return (
     <div className="max-w-3xl mx-auto">
-      <PageHeader title={headerTitle} subtitle="Your Keepr account" />
+      <PageHeader phoneHideTitle phoneHideSubtitle title={headerTitle} subtitle="Your Keepr account" />
 
       <div className="space-y-6">
         <Card>

@@ -114,7 +114,7 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
   "electron/services/sessionService.ts": { count: 1, reason: `${SEALED} (session file via encryptSessionData, written to a tmp file — BACKLOG-3833)` },
   "electron/services/offlinePass/offlinePassStore.ts": { count: 1, reason: SEALED },
   "electron/services/supportAccess/supportCipher.ts": { count: 2, reason: `${SEALED} (wrapped support key, tmp+rename)` },
-  "electron/services/supportAccess/supportLogStore.ts": { count: 2, reason: `${SEALED} (framed sealed records + rotation rename)` },
+  "electron/services/supportAccess/supportLogStore.ts": { count: 3, reason: `${SEALED} (framed sealed records + rotation rename + zero-byte current.log create in ensureCurrentFile, no content written — BACKLOG-3191)` },
   "electron/services/supportAccess/supportReportQueue.ts": { count: 3, reason: `${SEALED} (sealed payload) + meta JSON with no content` },
   "electron/services/supportAccess/supportAccessService.ts": { count: 2, reason: `${META} (support consent state, tmp+rename)` },
   "electron/services/supportAccess/supabaseSupportTransport.ts": { count: 2, reason: `${META} (ticket id map, tmp+rename)` },

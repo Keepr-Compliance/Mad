@@ -10,6 +10,7 @@
 import Link from 'next/link';
 import { PageHeader } from '@keepr/design-system';
 import { MY_TRANSACTIONS_UPGRADE_HREF } from '@/lib/support/ticketPresets';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 
 export const MY_TRANSACTIONS_UPSELL_TEXT =
   "My Transactions isn't included in your brokerage's plan. If you'd like to view your transactions online, contact sales to upgrade your plan.";
@@ -17,7 +18,7 @@ export const MY_TRANSACTIONS_UPSELL_TEXT =
 export function UpsellPanel() {
   return (
     <div className="max-w-7xl mx-auto">
-      <PageHeader title="My Transactions" />
+      <PageHeader phoneHideTitle phoneHideSubtitle title={PAGE_TITLES.myTransactions} />
       <div className="bg-white shadow-sm border border-gray-200 rounded-lg p-8 text-center">
         <p className="text-sm text-gray-600 max-w-xl mx-auto">{MY_TRANSACTIONS_UPSELL_TEXT}</p>
         <Link

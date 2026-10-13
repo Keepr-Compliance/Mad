@@ -26,10 +26,11 @@ import { submissionRow } from '../../__tests__/helpers/submissionRows';
 import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../../__tests__/fixtures/orgFeatures';
 
 const mockEmulator = createPostgrestEmulator();
+let mockPath = '/dashboard/submissions/sub-1';
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: jest.fn(), push: jest.fn() }),
-  usePathname: () => '/dashboard/submissions/sub-1',
+  usePathname: () => mockPath,
   useSearchParams: () => new URLSearchParams(),
   redirect: (to: string) => {
     throw new Error(`redirect:${to}`);
@@ -90,7 +91,13 @@ jest.mock('@/lib/feature-gate', () => {
     ),
   };
 });
-jest.mock('@/lib/auth/portalAccess', () => ({ requireFullPortalAccess: jest.fn(async () => ({ ok: true })) }));
+jest.mock('@/lib/auth/portalAccess', () => ({
+  requireFullPortalAccess: jest.fn(async () => ({ ok: true })),
+  getPortalAccess: jest.fn(async () => ({
+    user: { email: 'alex@example.test', user_metadata: {} },
+    access: { kind: 'full', role: 'broker' },
+  })),
+}));
 jest.mock('@/components/submission/SubmissionListClient', () => ({
   SubmissionListClient: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
@@ -101,9 +108,11 @@ import { MessageList, type Message } from '@/components/submission/MessageList';
 import { AttachmentList } from '@/components/submission/AttachmentList';
 import { ChecklistReview } from '@/components/submission/ChecklistReview';
 import type { ChecklistSectionView } from '@/lib/submissions/checklistModel';
+import { PageHeader } from '@keepr/design-system';
 import UserListClient from '@/components/users/UserListClient';
 import UserDetailsCard, { type MemberDetailsData } from '@/components/users/UserDetailsCard';
 import SubmissionsPage from '@/app/dashboard/submissions/page';
+import DashboardPage from '@/app/dashboard/page';
 
 const DIR = process.env.DUMP_DIR as string;
 const dump = (name: string, html: string) => writeFileSync(join(DIR, `${name}.html`), html);
@@ -155,25 +164,33 @@ const reviewPage = (
   </div>
 );
 
+// BACKLOG-3896: the shell dumps are WHOLE-BODY dumps. A Radix drawer portals to
+// document.body, outside the render container; a container dump would silently
+// drop it and leave the phone drawer unmeasured. Run on both sides of a
+// comparison (base and branch) so the harness change cancels out.
+const bodyDump = () => document.body.innerHTML;
+
 it('shell-expanded / shell-collapsed / shell-drawer / support-dialog', async () => {
-  const { container, getByRole, queryByRole } = render(shell(reviewPage));
-  dump('shell-expanded', container.innerHTML);
+  const { getByRole } = render(shell(reviewPage));
+  dump('shell-expanded', bodyDump());
 
   fireEvent.click(getByRole('button', { name: 'Collapse sidebar' }));
-  dump('shell-collapsed', container.innerHTML);
+  dump('shell-collapsed', bodyDump());
   fireEvent.click(getByRole('button', { name: 'Expand sidebar' }));
 
-  const open = queryByRole('button', { name: 'Open menu' });
-  if (open) {
-    fireEvent.click(open);
-    dump('shell-drawer', container.innerHTML);
-    fireEvent.click(getByRole('button', { name: 'Close menu' }));
-  }
+  fireEvent.click(getByRole('button', { name: 'Open menu' }));
+  await act(async () => {});
+  // The drawer must be in the dump, or shell-drawer measures nothing.
+  if (!document.getElementById('mobile-nav')) throw new Error('shell-drawer: #mobile-nav not in document.body');
+  dump('shell-drawer', bodyDump());
+  fireEvent.click(getByRole('button', { name: 'Close menu' }));
+  await act(async () => {});
+  if (document.getElementById('mobile-nav')) throw new Error('shell-drawer: #mobile-nav still open after Close');
 
   await act(async () => {
     fireEvent.click(getByRole('button', { name: 'Contact Support' }));
   });
-  dump('support-dialog', container.innerHTML);
+  dump('support-dialog', bodyDump());
 });
 
 const MEMBERS = [1, 2, 3].map((i) => ({
@@ -332,12 +349,161 @@ it('messages / attachments / checklist', () => {
 
 it('submissions-list', async () => {
   const rows: Row[] = [
-    { ...submissionRow({ id: 's1', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'submitted', parentSubmissionId: null, createdAt: '2026-09-02T00:00:00Z', address: '1234 Invented Boulevard Northwest' }), version: 1 },
-    { ...submissionRow({ id: 's2', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'approved', parentSubmissionId: null, createdAt: '2026-09-01T00:00:00Z', address: '34 Fictional Road' }), version: 1 },
+    { ...submissionRow({ id: 's1', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'submitted', parentSubmissionId: null, createdAt: '2026-09-02T00:00:00Z', address: '1234 Invented Boulevard Northwest, Fixture City, CA 90000, USA' }), version: 1 },
+    { ...submissionRow({ id: 's2', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'approved', parentSubmissionId: null, createdAt: '2026-09-01T00:00:00Z', address: '34 Fictional Road, Unit 2, Fixture City, CA 90000, USA' }), version: 1 },
   ];
   mockEmulator.reset();
   mockEmulator.set({ rows: { transaction_submissions: rows } });
   const element = await SubmissionsPage({ searchParams: Promise.resolve({}) });
   const { container } = render(element);
   dump('submissions-list', container.innerHTML);
+});
+
+// BACKLOG-3896 fix-up: page title in the phone top bar. Each dump is the real shell
+// at a real route path, with the real PageHeader and the props that page passes.
+// The phone-only props are spread from an untyped object so this file type-checks
+// and runs unchanged on the base side (where PageHeader ignores them and the shell
+// passes no title).
+const PH = { phoneHideTitle: true, phoneHideSubtitle: true } as object;
+const PH_TITLE_ONLY = { phoneHideTitle: true } as object;
+
+it('title-* (page title in the top bar)', () => {
+  const cases: Array<[string, string, React.ReactNode]> = [
+    ['title-users', '/dashboard/users', <PageHeader key="h" title="Users Management" subtitle="Manage your organization's team members" {...PH} />],
+    ['title-support', '/dashboard/support', <PageHeader key="h" title="Support" subtitle="View and track your support requests" actions={<button type="button">New Ticket</button>} {...PH} />],
+    ['title-mytx', '/dashboard/my-transactions', <PageHeader key="h" title="My Transactions" subtitle="3 submissions" {...PH_TITLE_ONLY} />],
+    ['title-dashboard', '/dashboard', <PageHeader key="h" title="Welcome, Alex" subtitle="Overview of transaction submissions" {...PH} />],
+    ['title-detail', '/dashboard/users/u1', <h1 key="h" className="text-xl font-bold text-gray-900">Agent Number1</h1>],
+    ['title-submissions', '/dashboard/submissions', <PageHeader key="h" title="Submissions" subtitle="2 submissions" className="max-md:mb-3" {...PH} />],
+    ['title-submission-detail', '/dashboard/submissions/s1', <h1 key="h" className="text-2xl font-bold text-gray-900">1234 Invented Boulevard Northwest</h1>],
+  ];
+  for (const [name, p, header] of cases) {
+    mockPath = p;
+    const { unmount } = render(
+      shell(
+        <div className="max-w-7xl mx-auto">
+          {header}
+          <p>Body content</p>
+          <button type="button">Body action</button>
+        </div>
+      )
+    );
+    dump(name, document.body.innerHTML);
+    unmount();
+  }
+  mockPath = '/dashboard/submissions/sub-1';
+});
+
+// BACKLOG-3904 fix-up: the dashboard's four stat cards, from the REAL page. Runs
+// unchanged on the base (cards were plain boxes) and on the branch (links).
+it('dashboard-cards', async () => {
+  const mk = (id: string, status: string, parent: string | null, createdAt: string): Row => ({
+    ...submissionRow({ id, organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status, parentSubmissionId: parent, createdAt }),
+    version: 1,
+  });
+  mockEmulator.reset();
+  mockEmulator.set({
+    rows: {
+      transaction_submissions: [
+        mk('s1', 'submitted', null, '2026-09-03T00:00:00Z'),
+        mk('s2', 'under_review', null, '2026-09-03T01:00:00Z'),
+        mk('s3', 'needs_changes', null, '2026-09-03T02:00:00Z'),
+        mk('s4', 'approved', null, '2026-09-03T03:00:00Z'),
+        mk('s5', 'approved', null, '2026-09-03T04:00:00Z'),
+        mk('s6', 'rejected', null, '2026-09-03T05:00:00Z'),
+      ],
+    },
+  });
+  const { container } = render(await DashboardPage());
+  dump('dashboard-cards', container.innerHTML);
+});
+
+// BACKLOG-3904 fix-up: the real dashboard and submissions pages inside the real
+// shell (whole-body dumps), to measure the gap from the phone top bar to the
+// first content (stat cards / search field) and the Clear filters row.
+async function gapDump(name: string, path: string, element: React.ReactNode) {
+  mockPath = path;
+  const { unmount } = render(shell(element));
+  dump(name, document.body.innerHTML);
+  unmount();
+}
+
+it('gap-* (top bar to first content)', async () => {
+  const mk = (id: string, status: string, createdAt: string): Row => ({
+    ...submissionRow({ id, organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status, parentSubmissionId: null, createdAt, address: '34 Fictional Road' }),
+    version: 1,
+  });
+  mockEmulator.reset();
+  mockEmulator.set({
+    rows: {
+      transaction_submissions: [
+        mk('s1', 'submitted', '2026-09-03T00:00:00Z'),
+        mk('s2', 'approved', '2026-09-03T01:00:00Z'),
+      ],
+    },
+  });
+  await gapDump('gap-dashboard', '/dashboard', await DashboardPage());
+  await gapDump('gap-submissions', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({}) }));
+  await gapDump('gap-submissions-filtered', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ status: 'approved' }) }));
+});
+
+// BACKLOG-3914: the desktop status board (view=board) inside the real shell: deals in
+// two open lanes, one long enough for nothing, and the closed lanes shown. Below md the
+// board is display:none and the page is the list.
+it('board-* (desktop status board)', async () => {
+  const mk = (id: string, status: string, createdAt: string): Row => ({
+    ...submissionRow({ id, organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status, parentSubmissionId: null, createdAt, address: '34 Fictional Road, Fixture City, CA 90000, USA' }),
+    version: 1,
+  });
+  mockEmulator.reset();
+  mockEmulator.set({
+    rows: {
+      transaction_submissions: [
+        mk('s1', 'submitted', '2026-09-03T00:00:00Z'),
+        mk('s2', 'needs_changes', '2026-09-03T01:00:00Z'),
+        mk('s3', 'approved', '2026-09-03T02:00:00Z'),
+      ],
+    },
+  });
+  await gapDump('board-desktop', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ view: 'board' }) }));
+  await gapDump('board-desktop-closed', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ view: 'board', closed: '1' }) }));
+});
+
+// BACKLOG-3904 fix-up: the Users page composition (page.tsx: PageHeader + UserListClient)
+// inside the real shell, unfiltered and with a search typed, to measure the
+// controls block and the gap under the top bar. Phone only (matchMedia true).
+async function usersGapDump(name: string, search: string | null) {
+  mockPath = '/dashboard/users';
+  setMatchMedia(true);
+  const { unmount } = render(
+    shell(
+      <div className="max-w-7xl mx-auto space-y-6 max-md:space-y-3 max-md:[&>:nth-child(2)]:!mt-0">
+        <PageHeader
+          phoneHideTitle
+          phoneHideSubtitle
+          title="Users Management"
+          subtitle="Manage your organization's team members"
+          className="max-md:mb-0"
+        />
+        <UserListClient
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          initialMembers={MEMBERS as any}
+          currentUserId="u0"
+          currentUserRole="admin"
+          organizationId="org-1"
+        />
+      </div>
+    )
+  );
+  if (search !== null) {
+    const input = (document.querySelector('#user-search-phone') ?? document.querySelector('#user-search')) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: search } });
+  }
+  dump(name, document.body.innerHTML);
+  unmount();
+}
+
+it('gap-users*', async () => {
+  await usersGapDump('gap-users', null);
+  await usersGapDump('gap-users-filtered', 'Number1');
 });

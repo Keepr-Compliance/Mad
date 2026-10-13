@@ -46,10 +46,13 @@ import {
   AUDIO_TRANSCRIPT_COLUMN_PROBE_SQL,
   CHAT_BY_ROWID_SQL,
   CHAT_LAST_MESSAGE_DATE_SQL,
+  OLDEST_MESSAGE_DATE_SQL,
   CHAT_MESSAGE_COUNT_SQL,
   CHAT_PARTICIPANT_HANDLES_SQL,
+  CHAT_SENDER_HANDLES_SQL,
   HANDLE_ID_BY_ROWID_SQL,
   MESSAGE_ATTACHMENTS_SQL,
+  appleDateToMs,
   searchMessagesByText,
   selectChatMessages,
 } from "./db/appleSmsDbSql";
@@ -82,6 +85,17 @@ export class iOSMessagesParser {
   private hasAudioTranscriptColumn: boolean | null = null;
   /** BACKLOG-3785: when this parser last let the event loop run (performance.now()). */
   private lastYieldAt = performance.now();
+  /**
+   * BACKLOG-3892 S1 (SR D5): reads that failed since open(). Every read below
+   * returns [] on failure, which looks like an empty chat; this count is how a
+   * run tells "nothing there" from "could not read it".
+   */
+  private failedReads = 0;
+
+  /** BACKLOG-3892 S1 (D5): reads that failed since the database was opened. */
+  get readFailures(): number {
+    return this.failedReads;
+  }
 
   /**
    * BACKLOG-3785: true once PARSE_YIELD_BUDGET_MS have passed since the last yield
@@ -296,6 +310,7 @@ export class iOSMessagesParser {
     try {
       this.db = new Database(dbPath, { readonly: true });
       this.backupPath = backupPath;
+      this.failedReads = 0;
       log.info("iOSMessagesParser: Opened database", { backupPath });
     } catch (error) {
       log.error("iOSMessagesParser: Failed to open database", {
@@ -364,6 +379,23 @@ export class iOSMessagesParser {
     });
 
     return this.hasAudioTranscriptColumn;
+  }
+
+  /**
+   * BACKLOG-3892 W3b: the oldest dated text this phone holds, as epoch ms; null when
+   * there is none or the read fails (null = unknown: no coverage cap).
+   */
+  getOldestMessageDateMs(): number | null {
+    this.ensureOpen();
+    try {
+      const row = this.db!.prepare(OLDEST_MESSAGE_DATE_SQL).get() as { oldest: number | bigint | null } | undefined;
+      return appleDateToMs(row?.oldest ?? null);
+    } catch (error) {
+      log.warn("iOSMessagesParser: oldest message date read failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
   }
 
     /**
@@ -477,22 +509,31 @@ export class iOSMessagesParser {
 
       log.info(`iOSMessagesParser: Processing ${chats.length} chats async`);
 
+      const lastDateStmt = this.db!.prepare(CHAT_LAST_MESSAGE_DATE_SQL);
+      lastDateStmt.safeIntegers(true);
+
       const conversations: iOSConversation[] = [];
 
       for (let i = 0; i < chats.length; i++) {
         const chat = chats[i];
 
         try {
-          // Get participants for this chat
-          const participants = this.getParticipants(chat.ROWID);
+          // Get participants for this chat (null = the read failed, D5)
+          const read = this.readParticipants(chat.ROWID);
+          const participants = read ?? [];
 
-          // Get last message date
-          const lastMessageRow = this.db!.prepare(
-            CHAT_LAST_MESSAGE_DATE_SQL,
-          ).get(chat.ROWID) as { last_date: number | null } | undefined;
+          // Get last message date, read as a BigInt (BACKLOG-3892 S1): the parse
+          // floor compares it exactly, in the unit it is stored in.
+          const lastMessageRow = lastDateStmt.get(chat.ROWID) as
+            | { last_date: bigint | number | null; undated?: bigint | number | null }
+            | undefined;
+          // BACKLOG-3892 S2 (SR C3): undated rows this chat holds.
+          const undatedCount = Number(lastMessageRow?.undated ?? 0) || 0;
+          const lastDate = lastMessageRow?.last_date ?? null;
+          const lastDateRaw = lastDate === null ? null : String(lastDate);
 
           const lastMessageDate = convertAppleTimestamp(
-            lastMessageRow?.last_date || null,
+            lastDate === null ? null : Number(lastDate) || null,
           );
 
           // Skip chats with no messages
@@ -513,8 +554,12 @@ export class iOSMessagesParser {
             messages: [], // Messages loaded separately via getMessagesAsync()
             lastMessage: lastMessageDate,
             isGroupChat,
+            lastDateRaw,
+            ...(undatedCount > 0 ? { undatedCount } : {}),
+            ...(read === null ? { participantsReadFailed: true } : {}),
           });
         } catch (chatError) {
+          this.failedReads++;
           log.error("iOSMessagesParser: Error processing chat", {
             chatId: chat.ROWID,
             error:
@@ -544,10 +589,50 @@ export class iOSMessagesParser {
 
       return conversations;
     } catch (error) {
+      this.failedReads++;
       log.error("iOSMessagesParser: Error getting conversations async", {
         error: error instanceof Error ? error.message : String(error),
       });
       return [];
+    }
+  }
+
+  /**
+   * BACKLOG-3892 S1: participants of a chat, or null when the read failed
+   * (counted in readFailures).
+   */
+  private readParticipants(chatId: number): string[] | null {
+    this.ensureOpen();
+    try {
+      const rows = this.db!.prepare(CHAT_PARTICIPANT_HANDLES_SQL).all(chatId) as Array<{ id: string }>;
+      return rows.map((row) => row.id);
+    } catch (error) {
+      this.failedReads++;
+      log.error("iOSMessagesParser: Error getting participants", {
+        chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * BACKLOG-3892 S1 (SR D7d): every handle that sent a message in a chat — this
+   * includes members who have since left a group. null when the read failed
+   * (counted in readFailures).
+   */
+  getChatSenderHandles(chatId: number): string[] | null {
+    this.ensureOpen();
+    try {
+      const rows = this.db!.prepare(CHAT_SENDER_HANDLES_SQL).all(chatId) as Array<{ id: string }>;
+      return rows.map((row) => row.id);
+    } catch (error) {
+      this.failedReads++;
+      log.error("iOSMessagesParser: Error getting chat senders", {
+        chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
     }
   }
 
@@ -622,11 +707,19 @@ export class iOSMessagesParser {
    * @param chatId The chat ID to get messages for
    * @param limit Optional limit on number of messages (for pagination)
    * @param offset Optional offset for pagination
+   * @param sinceMs BACKLOG-3892 S1: only messages dated at or after this (epoch ms,
+   *   inclusive; undated rows kept). Absent = every message.
+   * @param untilMs BACKLOG-3892 S5: only DATED messages before this (epoch ms, exclusive).
+   *
+   * A failed read still returns [] (callers rely on it) but is counted in
+   * readFailures (D5).
    */
   async getMessagesAsync(
     chatId: number,
     limit?: number,
     offset?: number,
+    sinceMs?: number,
+    untilMs?: number,
   ): Promise<iOSMessage[]> {
     this.ensureOpen();
 
@@ -641,7 +734,12 @@ export class iOSMessagesParser {
         this.db!,
         this.checkAudioTranscriptColumn(),
         chatId,
-        { limit, offset },
+        {
+          limit,
+          offset,
+          ...(sinceMs === undefined ? {} : { sinceMs }),
+          ...(untilMs === undefined ? {} : { untilMs }),
+        },
       );
 
       const messages: iOSMessage[] = [];
@@ -674,6 +772,7 @@ export class iOSMessagesParser {
 
       return messages;
     } catch (error) {
+      this.failedReads++;
       log.error("iOSMessagesParser: Error getting messages async", {
         chatId,
         limit,

@@ -16,8 +16,12 @@ WIDTHS="${WIDTHS:-375 640 768 1024 1280}"
 cd "$PORTAL"
 DUMP_DIR="$OUT" npx jest -c "$HERE/jest.harness.config.js" --silent
 for html in "$OUT"/*.html; do
+  case "$html" in *.tw.html) continue;; esac
   name="$(basename "$html" .html)"
-  npx tailwindcss -c "$PORTAL/tailwind.config.ts" -i "$PORTAL/app/globals.css" --content "$html" -o "$OUT/$name.css" 2>/dev/null
+  # innerHTML escapes "&" in attributes (a [&>x]: variant becomes [&amp;>x]:);
+  # Tailwind scans the unescaped copy, as it scans real source.
+  sed 's/&amp;/\&/g' "$html" > "$OUT/$name.tw.html"
+  npx tailwindcss -c "$PORTAL/tailwind.config.ts" -i "$PORTAL/app/globals.css" --content "$OUT/$name.tw.html" -o "$OUT/$name.css" 2>/dev/null
   node "$HERE/measure.cjs" "$html" "$OUT/$name.css" $WIDTHS > "$OUT/$name.json"
   echo "measured $name"
 done

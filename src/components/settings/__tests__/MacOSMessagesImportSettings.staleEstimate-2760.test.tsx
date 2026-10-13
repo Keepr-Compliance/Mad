@@ -42,6 +42,24 @@ import React from "react";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
+import { TextsLookbackSettings } from "../TextsLookbackSettings";
+import { TextsLookbackProvider } from "../textsLookback";
+
+/**
+ * BACKLOG-3892 S3: the window dropdown is the shared "How far back to import
+ * texts" picker, outside the macOS panel. Rendered the way Settings composes
+ * it: one provider around the picker and the panel.
+ */
+function renderWithSharedPicker(userId: string) {
+  return render(
+    <React.StrictMode>
+      <TextsLookbackProvider userId={userId}>
+        <TextsLookbackSettings userId={userId} />
+        <MacOSMessagesImportSettings userId={userId} />
+      </TextsLookbackProvider>
+    </React.StrictMode>
+  );
+}
 
 jest.mock("../../../contexts/PlatformContext", () => ({
   usePlatform: jest.fn(() => ({ isMacOS: true })),
@@ -297,14 +315,15 @@ describe("BACKLOG-2760 — a superseded estimate can never overwrite a newer one
           : Promise.resolve(THREE_MONTH_RESULT)
     );
 
-    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    renderWithSharedPicker(USER_ID);
 
     // On All time, the estimate is in flight and Import is refused.
     await waitFor(() =>
       expect(screen.getByTestId("import-estimate-pending")).toBeInTheDocument()
     );
 
-    const select = screen.getByDisplayValue("All time") as HTMLSelectElement;
+    const select = screen.getByTestId("texts-lookback-select") as HTMLSelectElement;
+    expect(select).toHaveDisplayValue("All time");
     await act(async () => {
       select.value = "3";
       select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -410,13 +429,14 @@ describe("BACKLOG-2760 — the guard fails CLOSED while the estimate is unknown"
           : Promise.resolve(THREE_MONTH_RESULT)
     );
 
-    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    renderWithSharedPicker(USER_ID);
 
     await waitFor(() => expect(importButton()).toBeEnabled());
 
     // Switch to a wider window (1 year; All time is no longer offered). The
     // new estimate is in flight and unknown.
-    const select = screen.getByDisplayValue("Last 3 months") as HTMLSelectElement;
+    const select = screen.getByTestId("texts-lookback-select") as HTMLSelectElement;
+    expect(select).toHaveDisplayValue("Last 3 months");
     await act(async () => {
       select.value = "12";
       select.dispatchEvent(new Event("change", { bubbles: true }));

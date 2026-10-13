@@ -35,6 +35,7 @@ import {
 } from '@/lib/checklists/listRows';
 import { auditUserIds, resolveAuditNames } from '@/lib/checklists/audit';
 import ChecklistsListClient from './ChecklistsListClient';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 
 function NewTemplateLink({ label = 'New template' }: { label?: string }) {
   return (
@@ -81,7 +82,7 @@ export default async function ChecklistsPage() {
     const brokerage = toListRows(brokerageActive, names);
     return (
       <div className="space-y-6">
-        <PageHeader title="Checklists" subtitle="Your own checklists, and the ones your brokerage uses" />
+        <PageHeader phoneHideTitle phoneHideSubtitle title={PAGE_TITLES.checklists} subtitle="Your own checklists, and the ones your brokerage uses" />
         {failed ? (
           <LoadError />
         ) : (
@@ -136,7 +137,9 @@ export default async function ChecklistsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Checklists"
+        phoneHideTitle
+        phoneHideSubtitle
+        title={PAGE_TITLES.checklists}
         subtitle="Templates your brokerage applies to transactions"
         actions={!failed && rows.length > 0 ? <NewTemplateLink /> : undefined}
       />

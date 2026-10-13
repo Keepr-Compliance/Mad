@@ -45,6 +45,7 @@ const emailItem: ReviewItemDto = {
   email_id: "e1",
   thread_id: null,
   found_at: "2026-08-01T00:00:00.000Z",
+  matchReason: "contact",
   display: {
     title: "Inspection addendum",
     subtitle: "paul@example.com",
@@ -72,6 +73,7 @@ const textItem: ReviewItemDto = {
   email_id: null,
   thread_id: "th-1",
   found_at: "2026-08-01T00:00:00.000Z",
+  matchReason: "contact",
   display: {
     title: "+15555550142",
     subtitle: "+15555550142",

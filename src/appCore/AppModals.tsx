@@ -46,6 +46,7 @@ export function AppModals({ app }: AppModalsProps) {
     openSettings,
     openTransactions,
     openAndroidSync,
+    openIPhoneSync,
     // Handlers
     handleLogout,
     handleAcceptTerms,
@@ -99,6 +100,13 @@ export function AppModals({ app }: AppModalsProps) {
     openAndroidSync("link");
   }, [closeSettings, openAndroidSync]);
 
+  // BACKLOG-3156 stage G: Settings › Messages › iPhone "Import from iPhone" — the
+  // same iPhone sync the dashboard's Sync iPhone card opens.
+  const handleImportIphoneFromSettings = useCallback(() => {
+    closeSettings();
+    openIPhoneSync();
+  }, [closeSettings, openIPhoneSync]);
+
   return (
     <>
       {/* Move App Prompt */}
@@ -132,6 +140,7 @@ export function AppModals({ app }: AppModalsProps) {
           onEmailConnected={handleEmailConnectedFromSettings}
           onEmailDisconnected={handleEmailDisconnectedFromSettings}
           onLinkGoogleMessages={handleLinkGoogleMessagesFromSettings}
+          onImportIphone={handleImportIphoneFromSettings}
         />
       )}
 

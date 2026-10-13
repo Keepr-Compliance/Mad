@@ -170,6 +170,7 @@ import {
   handleSavePendingMailboxTokens,
   handleDisconnectMailbox,
 } from "../sharedAuthHandlers";
+import { openMailboxFetchScope } from "../../services/mailboxFetchGeneration";
 
 describe("SharedAuthHandlers", () => {
   beforeEach(() => {
@@ -427,6 +428,44 @@ describe("SharedAuthHandlers", () => {
      * assertions are the ones that would go green again if the revoke were
      * quietly dropped in a future refactor.
      */
+    // BACKLOG-3903: Disconnect stops every in-flight fetch for that provider,
+    // and does it before the revoke and the delete — the real generation module,
+    // not a mock, so these read the state the fetch paths will read.
+    describe("BACKLOG-3903: stopping in-flight fetches", () => {
+      it.each(["google", "microsoft"] as const)(
+        "aborts open %s fetches and moves the generation before revoking",
+        async (provider) => {
+          const scope = openMailboxFetchScope(provider);
+          const other = openMailboxFetchScope(
+            provider === "google" ? "microsoft" : "google"
+          );
+          let staleWhenRevoking: boolean | undefined;
+          const revoke =
+            provider === "google"
+              ? mockGoogleAuthService.revokeToken
+              : mockMicrosoftAuthService.revokeToken;
+          mockDatabaseService.getOAuthToken.mockResolvedValue({
+            refresh_token: "rt",
+          });
+          revoke.mockImplementationOnce(async () => {
+            staleWhenRevoking = scope.isStale();
+            return { outcome: "revoked" };
+          });
+
+          await handleDisconnectMailbox(null, "user-123", provider);
+
+          expect(staleWhenRevoking).toBe(true);
+          expect(scope.signal.aborted).toBe(true);
+          expect(scope.isStale()).toBe(true);
+          // The other provider's fetches are left alone.
+          expect(other.signal.aborted).toBe(false);
+          expect(other.isStale()).toBe(false);
+          scope.close();
+          other.close();
+        }
+      );
+    });
+
     describe("BACKLOG-3206: revoking the provider grant", () => {
       const googleToken = {
         id: "token-id",

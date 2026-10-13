@@ -43,6 +43,8 @@ const mockAutoLink = jest.fn();
 const mockSyncReviewQueue = jest.fn();
 jest.mock("../reviewStateService", () => ({
   syncReviewQueueForTransaction: (...args: unknown[]) => mockSyncReviewQueue(...args),
+  // BACKLOG-3925: the covered path's full sweep also runs the address-only pass.
+  runAddressMatchPassInSweep: jest.fn().mockResolvedValue({ queued: 0, clean: true }),
 }));
 jest.mock("../autoLinkService", () => ({
   autoLinkCommunicationsForContact: mockAutoLink,
@@ -235,7 +237,7 @@ describe("ensureTransactionEmailsSynced", () => {
    */
   it("COVERED window: no fetch, and auto-link runs with the ambiguous half queued", async () => {
     mockGetSyncState.mockReturnValue({
-      newest_cached_at: "2028-06-01T00:00:00.000Z", // covers reqEnd Jan 30 2028 (closed_at Dec 31 2027 + 30d)
+      newest_cached_at: "2028-06-01T00:00:00.000Z", // covers reqEnd = end of Dec 31 2027 (closed_at; no buffer, BACKLOG-3910)
       oldest_cached_at: "2025-01-01T00:00:00.000Z",
     });
     const result = await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason: "open" });
@@ -266,6 +268,51 @@ describe("ensureTransactionEmailsSynced", () => {
     expect(result.ran).toBe(false);
     expect(result.error).toContain("graph 500");
     expect(mockRecordFailure).toHaveBeenCalled();
+  });
+
+  // BACKLOG-3910 (slice b) — C-R3d: a locked deal is not searched, for every reason.
+  it.each([
+    ["submitted", "submitted"],
+    ["under_review", "submitted"],
+    ["resubmitted", "submitted"],
+    ["approved", "sealed"],
+  ])("C-R3d: a %s deal is skipped (%s) for every reason: no fetch, no auto-link", async (status, lockReason) => {
+    mockGetSyncState.mockReturnValue({
+      newest_cached_at: "2028-06-01T00:00:00.000Z",
+      oldest_cached_at: "2025-01-01T00:00:00.000Z",
+    });
+    mockGetTxn.mockResolvedValue({
+      id: "tx-1",
+      user_id: "user-1",
+      started_at: "2026-01-01T00:00:00.000Z",
+      closed_at: "2027-12-31T00:00:00.000Z",
+      submission_status: status,
+      contact_assignments: [{ contact_id: "c1" }],
+    });
+    for (const reason of ["open", "create", "export", "date-change", "scan"] as const) {
+      const result = await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason });
+      expect([reason, result.ran, result.skipped]).toEqual([reason, false, lockReason]);
+    }
+    expect(mockSyncTransactionEmails).not.toHaveBeenCalled();
+    expect(mockAutoLink).not.toHaveBeenCalled();
+  });
+
+  it("C-R3d REVERSE: a needs_changes deal is swept as usual (covered path runs auto-link)", async () => {
+    mockGetSyncState.mockReturnValue({
+      newest_cached_at: "2028-06-01T00:00:00.000Z",
+      oldest_cached_at: "2025-01-01T00:00:00.000Z",
+    });
+    mockGetTxn.mockResolvedValue({
+      id: "tx-1",
+      user_id: "user-1",
+      started_at: "2026-01-01T00:00:00.000Z",
+      closed_at: "2027-12-31T00:00:00.000Z",
+      submission_status: "needs_changes",
+      contact_assignments: [{ contact_id: "c1" }],
+    });
+    const result = await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason: "open" });
+    expect(result.skipped).toBe("covered");
+    expect(mockAutoLink).toHaveBeenCalledTimes(1);
   });
 
   it("returns skipped:not_found for a missing transaction", async () => {
@@ -404,7 +451,7 @@ describe("triggerTransactionSyncInBackground (BACKLOG-1832)", () => {
 // BACKLOG-1862: open-trigger past-window policy
 // ---------------------------------------------------------------------------
 describe("BACKLOG-1862: open-trigger past-window policy", () => {
-  // Birchwood scenario: closed Apr 30 2026, reqEnd = May 30 2026 (37 days in the past on 2026-07-06).
+  // Birchwood scenario: closed Apr 30 2026, reqEnd = end of Apr 30 2026 (closed_at; no buffer since BACKLOG-3910).
   const pastWindowTxn = {
     id: "tx-1",
     user_id: "user-1",

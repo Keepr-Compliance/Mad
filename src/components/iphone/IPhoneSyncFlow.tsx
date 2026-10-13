@@ -4,7 +4,7 @@ import { ConnectionStatus } from "./ConnectionStatus";
 import { SyncProgress } from "./SyncProgress";
 import { SyncLockBanner } from "../sync/SyncLockBanner";
 import logger from "../../utils/logger";
-import { isWindowsArm64 } from "../../utils/platform";
+import { isStoreBuild, isWindowsArm64 } from "../../utils/platform";
 import { SyncStepChangeLog } from "../../utils/syncStepLog";
 import { useRetryCountdown } from "../../utils/syncRetryCooldown";
 import { RetryCooldownNotice, SyncStartButtonContent } from "./SyncStartButtonContent";
@@ -65,6 +65,10 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     installDriverStatus,
     installDriverError,
     recoverInstallDriver,
+    recheckDriver,
+    setConnectScreenActive,
+    appleDevicesState,
+    appleUsbDriver,
     startSync,
     cancelSync,
     dismissSync,
@@ -95,6 +99,16 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     (isError && appleEncryptedBackup) ? "appleEncrypted" :
     isError ? "error" :
     "connection";
+
+  // BACKLOG-3927: tell the app-wide hook when the Connect screen is shown, so the
+  // Store build's Apple Devices re-check runs only then. `?.` because several
+  // test doubles of the context predate this member.
+  const connectionShown = view === "connection";
+  useEffect(() => {
+    if (!connectionShown) return;
+    setConnectScreenActive?.(true);
+    return () => setConnectScreenActive?.(false);
+  }, [connectionShown, setConnectScreenActive]);
 
   useEffect(() => {
     logger.info("[IPhoneSyncFlow] Mounted");
@@ -159,6 +173,10 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           isInstallingDriver={installDriverStatus === "installing"}
           driverInstallError={installDriverError}
           isWindowsArm64={isWindowsArm64()}
+          isStoreBuild={isStoreBuild()}
+          onRecheckDriver={recheckDriver}
+          appleDevicesState={appleDevicesState}
+          appleUsbDriver={appleUsbDriver}
           isStarting={isStarting}
           retryAvailableAt={retryAvailableAt}
         />

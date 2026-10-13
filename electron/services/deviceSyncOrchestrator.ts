@@ -38,7 +38,6 @@ import {
 } from "./toolStartHold";
 import { BackupDecryptionService } from "./backupDecryptionService";
 import {
-  BACKUP_AT_REST_QUARANTINED_MESSAGE,
   BackupAtRestRefusal,
   FORCE_FULL_REASON_DELTA_TOOL_FAILED,
   describeBackupAtRestProgress,
@@ -47,6 +46,14 @@ import {
   type BackupAtRestProgress,
   type BackupSyncSession,
 } from "./atRest/backupAtRest";
+import {
+  BACKUP_DAMAGED_QUARANTINED_MESSAGE,
+  BACKUP_DAMAGED_REASON,
+  BACKUP_KEY_MISSING_QUARANTINED_MESSAGE,
+  backupProblemForRefusal,
+  type UnreadableKind,
+} from "./atRest/backupProblem";
+import { reportBackupProblem } from "./atRest/backupProblemReport";
 import { iOSMessagesParser } from "./iosMessagesParser";
 import { iOSContactsParser } from "./iosContactsParser";
 import {
@@ -58,11 +65,21 @@ import {
   formatUnknownBackupSizeError,
   formatMissingDriversError,
   formatDriverServiceStoppedError,
+  formatStoreAppleDevicesMissingError,
+  formatStoreAppleDevicesNotRunningError,
+  formatMsiServiceStoppedNeutralError,
 } from "./diagnostics/userFacingErrors";
 import { checkAppleDrivers } from "./appleDriverService";
+import { isStoreBuild } from "./distributionChannelService";
 import { canUseLibimobiledevice, isMockMode } from "./libimobiledeviceService";
 import type { iOSDevice, DeviceStorageInfo } from "../types/device";
 import type { iOSMessage, iOSConversation } from "../types/iosMessages";
+import {
+  floorSourceOf,
+  readChatWithFloor,
+  type ChatFloorPlan,
+  type ParseFloorReport,
+} from "./iphoneChatFloors";
 import type { iOSContact } from "../types/iosContacts";
 import type {
   BackupProgress,
@@ -485,6 +502,33 @@ export interface SyncResult {
    * uses it to hold Try Again while the phone's backup service winds down.
    */
   errorCode?: BackupErrorCode;
+  /**
+   * BACKLOG-3892 S1 (SR D5): sms.db reads that FAILED in this run (a chat, its
+   * people, its senders, or the chat list). A failed read looks like an empty chat;
+   * S2 must not advance any coverage for a run where this is above zero.
+   */
+  chatReadFailures?: number;
+  /** BACKLOG-3892 S1: what the parse floors did (counts only); absent when no floor plan. */
+  parseFloors?: ParseFloorReport;
+  /**
+   * BACKLOG-3892 S2: what persistence needs to record iPhone coverage. Set ONLY by
+   * sync() (a fresh backup of one phone); absent on every other path, which then
+   * records no coverage.
+   *  - udid: the phone this run read (coverage is per phone, SR D4/D6);
+   *  - startedAtMs: when the run started, before the backup was taken — never later
+   *    than the snapshot, so it is a safe end for the covered interval;
+   *  - floorPlan: the plan the run APPLIED (SR C2), absent = every chat read in full;
+   *  - chatFloors: per chat ROWID, the floor actually applied (null = read in full),
+   *    including chats skipped as too old.
+   */
+  coverageRun?: {
+    udid: string;
+    startedAtMs: number;
+    floorPlan?: ChatFloorPlan;
+    chatFloors: ReadonlyArray<readonly [number, number | null]>;
+    /** BACKLOG-3892 W3b: the oldest text this phone holds (epoch ms); null = unknown. */
+    oldestTextMs?: number | null;
+  };
 }
 
 /**
@@ -495,6 +539,11 @@ export interface SyncOptions {
   udid: string;
   /** Force full backup (no incremental) */
   forceFullBackup?: boolean;
+  /**
+   * BACKLOG-3892 S1: per-chat parse floors, resolved by syncHandlers (this class
+   * reads no preferences). Absent = every chat read in full (today's sync).
+   */
+  floorPlan?: ChatFloorPlan;
 }
 
 /**
@@ -1030,8 +1079,13 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "driver-check");
         driversInstalled = driverStatus.isInstalled;
         serviceRunning = driverStatus.serviceRunning;
+        // BACKLOG-3927: the Store build has no "Install Sync Tools" or repair
+        // button; its texts point at Apple Devices instead.
+        const storeBuild = isStoreBuild();
         if (!driverStatus.isInstalled) {
-          const userError = formatMissingDriversError();
+          const userError = storeBuild
+            ? formatStoreAppleDevicesMissingError()
+            : formatMissingDriversError();
           log.warn("[DeviceSyncOrchestrator] Apple drivers not installed");
           // BACKLOG-1354: Breadcrumb + captureMessage when pre-sync fails
           Sentry.addBreadcrumb({
@@ -1049,7 +1103,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           return this.errorResult(userError.description);
         }
         if (!driverStatus.serviceRunning) {
-          const userError = formatDriverServiceStoppedError();
+          // BACKLOG-3927: the text follows the source that is installed.
+          // Apple Devices -> open the app (either build). Apple's MSI ->
+          // website keeps its Repair text; the Store build has no Repair
+          // button, so a neutral line.
+          const userError =
+            driverStatus.installedVia === "apple-devices"
+              ? formatStoreAppleDevicesNotRunningError()
+              : storeBuild
+                ? formatMsiServiceStoppedNeutralError()
+                : formatDriverServiceStoppedError();
           log.warn("[DeviceSyncOrchestrator] Apple Mobile Device Service not running");
           // BACKLOG-1354: Breadcrumb + captureMessage when pre-sync fails
           Sentry.addBreadcrumb({
@@ -1732,10 +1795,10 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             this.isRunning = false;
             return this.errorResult("Sync cancelled by user");
           }
-          return this.refuseForAtRest(error.message, error.reason);
+          return this.refuseForAtRest(error.message, error.reason, error.problem);
         }
         if (atRestSession.kind === "first" && atRestSession.quarantined) {
-          this.reportQuarantinedBackup(atRestSession.quarantined.reasonCode);
+          this.reportQuarantinedBackup(atRestSession.quarantined);
         }
       }
 
@@ -2124,14 +2187,36 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         },
       );
 
-      // Load messages for each conversation using async method
+      // Load messages for each conversation using async method.
+      // BACKLOG-3892 S1: with a floor plan, a chat older than its floor is not read
+      // at all and the rest are read down to their floor only.
+      const floorPlan = options.floorPlan;
+      const floorReport: ParseFloorReport | undefined = floorPlan
+        ? {
+            floorSource: floorSourceOf(floorPlan),
+            settingsFloorMs: floorPlan.settingsFloorMs,
+            chatsSkippedOld: 0,
+            chatsWidened: 0,
+            messagesBelowFloor: 0,
+          }
+        : undefined;
+      const skippedChats = new Set<number>();
+      // BACKLOG-3892 S2 (SR C2): the floor each chat was actually read to.
+      const appliedChatFloors: Array<readonly [number, number | null]> = [];
       let loadedCount = 0;
       for (const conv of conversations) {
         if (this.abortController?.signal.aborted) {
           break;
         }
 
-        conv.messages = await this.messagesParser.getMessagesAsync(conv.chatId);
+        if (floorPlan && floorReport) {
+          if ((await readChatWithFloor(this.messagesParser, floorPlan, conv, floorReport)) === "skipped") {
+            skippedChats.add(conv.chatId);
+          }
+          appliedChatFloors.push([conv.chatId, conv.appliedFloorMs ?? null]);
+        } else {
+          conv.messages = await this.messagesParser.getMessagesAsync(conv.chatId);
+        }
         loadedCount++;
 
         // Report progress every 10 conversations (second 50%)
@@ -2149,6 +2234,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         }
       }
 
+      // BACKLOG-3892 W3b: how far back this phone's texts go (a new phone's coverage
+      // never starts before it). A failed read is unknown (null): no cap.
+      let oldestTextMs: number | null = null;
+      try {
+        oldestTextMs = this.messagesParser.getOldestMessageDateMs();
+      } catch {
+        oldestTextMs = null;
+      }
+
       if (this.abortController?.signal.aborted) {
         this.isRunning = false;
         this.messagesParser.close();
@@ -2157,11 +2251,30 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         return this.errorResult("Sync cancelled by user");
       }
 
+      // BACKLOG-3892 S1: a chat not read (older than its floor) is not a conversation of this run.
+      if (skippedChats.size > 0) {
+        for (let i = conversations.length - 1; i >= 0; i--) {
+          if (skippedChats.has(conversations[i].chatId)) conversations.splice(i, 1);
+        }
+      }
+      // BACKLOG-3892 S1 (D5): reads that failed; `?? 0` because test doubles of the parser omit it.
+      const chatReadFailures = this.messagesParser.readFailures ?? 0;
+
       // BACKLOG-2898/2894: what the parsing phase produced.
       syncTimeline.annotate("parsing-messages", {
         conversations: conversations.length,
         messages: conversations.reduce((sum, c) => sum + c.messages.length, 0),
+        chatReadFailures,
+        ...(floorReport
+          ? {
+              chatsSkippedOld: floorReport.chatsSkippedOld,
+              chatsWidened: floorReport.chatsWidened,
+              messagesBelowFloor: floorReport.messagesBelowFloor,
+            }
+          : {}),
       });
+      // Phase counts are numeric; the floor's source is run context (a label, no content).
+      syncTimeline.setContext({ floorSource: floorReport?.floorSource ?? "none" });
 
       // Step 5: Resolve contact names
       this.setPhase("resolving");
@@ -2230,6 +2343,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         backupPath,  // SPRINT-068: Pass for attachment extraction
         needsCleanup, // SPRINT-068: Caller should cleanup after persistence
         sessionId,   // TASK-2110: For ACID rollback on cancel
+        chatReadFailures, // BACKLOG-3892 S1 (D5)
+        ...(floorReport ? { parseFloors: floorReport } : {}),
+        // BACKLOG-3892 S2: what persistence records iPhone coverage from.
+        coverageRun: {
+          udid: options.udid,
+          startedAtMs: this.startTime,
+          ...(floorPlan ? { floorPlan } : {}),
+          chatFloors: appliedChatFloors,
+          oldestTextMs,
+        },
       };
 
       // BACKLOG-3816 S4-C: persistence still reads this chain; it is sealed when
@@ -2250,6 +2373,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       log.error("[DeviceSyncOrchestrator] Sync failed", { error: errorMessage });
+      // BACKLOG-3892 E: a C-DELTA parse copy refused by the at-rest layer (the messages or
+      // contacts database could not be opened) is recorded like every other at-rest refusal.
+      if (error instanceof BackupAtRestRefusal) {
+        syncTimeline.setContext({
+          endedBy: "backup-at-rest",
+          reasonCode: error.problem === "damaged" ? BACKUP_DAMAGED_REASON : error.reason,
+        });
+        const sentryReason = backupProblemForRefusal(error.reason, error.problem);
+        if (sentryReason) reportBackupProblem(sentryReason);
+      }
       Sentry.captureException(error, {
         tags: { service: "sync-orchestrator", operation: "sync" },
       });
@@ -2358,9 +2491,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   }
 
   /** S4-C: a sync refused by the at-rest layer, before anything was spawned. */
-  private refuseForAtRest(message: string, reason: string): SyncResult {
+  private refuseForAtRest(message: string, reason: string, problem?: UnreadableKind): SyncResult {
     log.warn("[DeviceSyncOrchestrator] Sync refused by the backup at-rest layer", { reason });
-    syncTimeline.setContext({ endedBy: "backup-at-rest", reasonCode: reason });
+    syncTimeline.setContext({ endedBy: "backup-at-rest", reasonCode: problem === "damaged" ? BACKUP_DAMAGED_REASON : reason });
+    // BACKLOG-3892 E: one Sentry event per backup problem (not for busy / cancelled).
+    const sentryReason = backupProblemForRefusal(reason, problem);
+    if (sentryReason) reportBackupProblem(sentryReason);
     this.isRunning = false;
     this.setPhase("error");
     this.emit("error", { message });
@@ -2407,16 +2543,21 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * B2: the kept backup could not be read and was moved to quarantine; this sync makes a
    * full backup. Said plainly in the status line, and recorded for the timeline.
    */
-  private reportQuarantinedBackup(reasonCode: string): void {
+  private reportQuarantinedBackup(quarantined: { reasonCode: string; kind: UnreadableKind }): void {
+    const { reasonCode, kind } = quarantined;
     log.warn("[DeviceSyncOrchestrator] Kept backup was unreadable; quarantined it and making a full backup", {
       reasonCode,
     });
-    syncTimeline.setContext({ keptBackup: "quarantined", keptBackupReasonCode: reasonCode });
+    // BACKLOG-3892 E: `keptBackupReason` reaches sync_outcomes.source_metrics (admin report).
+    syncTimeline.setContext({ keptBackup: "quarantined", keptBackupReasonCode: reasonCode, keptBackupReason: kind });
+    reportBackupProblem(kind);
     this.emitProgress({
       phase: "backup",
       phaseProgress: 0,
       overallProgress: 0,
-      message: BACKUP_AT_REST_QUARANTINED_MESSAGE,
+      // A file that fails authentication is damaged; a key this computer does not hold
+      // reads "cannot decrypt ... on this computer" (founder wording, 2026-10-12).
+      message: kind === "damaged" ? BACKUP_DAMAGED_QUARANTINED_MESSAGE : BACKUP_KEY_MISSING_QUARANTINED_MESSAGE,
     });
   }
 
@@ -3538,6 +3679,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    */
   private stopForAppleEncryptedBackup(): SyncResult {
     syncTimeline.setContext({ endedBy: "backup-encryption", reasonCode: APPLE_ENCRYPTED_BACKUP_REASON });
+    reportBackupProblem("apple-encrypted");
     this.isRunning = false;
     return { ...this.errorResult(APPLE_ENCRYPTED_BACKUP_MESSAGE), appleEncryptedBackup: true };
   }

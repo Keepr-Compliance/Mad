@@ -26,13 +26,14 @@
 // falls inside it finds its mail in the local cache without re-fetching.
 // ============================================
 
+import { dealLockReason, type DealLockReason } from "./transactionEligibility";
 import * as Sentry from "@sentry/electron/main";
 import transactionService from "./transactionService";
 import emailSyncService, { EMAIL_CACHE_FRESHNESS_MS } from "./emailSyncService";
 import { autoLinkCommunicationsForContact } from "./autoLinkService";
 import { runFullSweepOnce, yieldToEventLoop } from "./autoLinkSweepGuard";
 import logService from "./logService";
-import { computeTransactionDateRange, DEFAULT_BUFFER_DAYS } from "../utils/emailDateRange";
+import { computeTransactionDateRange } from "../utils/emailDateRange";
 import { getEmailsByContactId } from "./db/contactDbService";
 import {
   resolveMailboxAccountId,
@@ -82,12 +83,19 @@ export function isAutoSyncInFlight(transactionId: string): boolean {
 /** Reasons that must reflect the very latest state and so bypass the throttle. */
 const BYPASS_THROTTLE: ReadonlySet<SyncTriggerReason> = new Set(["export", "date-change"]);
 
-const BUFFER_MS = DEFAULT_BUFFER_DAYS * 24 * 60 * 60 * 1000;
+/**
+ * Overlap added to each delta fetch window to absorb sent/received date skew
+ * (design R2). This is NOT the deal's window: until BACKLOG-3910 it borrowed the
+ * 30-day post-closing buffer's constant, which that item removed. The overlap
+ * keeps its 30 days; the app-layer dedup collapses it.
+ */
+const DELTA_SKEW_PAD_DAYS = 30;
+const BUFFER_MS = DELTA_SKEW_PAD_DAYS * 24 * 60 * 60 * 1000;
 
 export interface EnsureSyncResult {
   ran: boolean;
   reason: SyncTriggerReason;
-  skipped?: "throttled" | "not_found" | "no_provider" | "covered" | "past_window";
+  skipped?: "throttled" | "not_found" | "no_provider" | "covered" | "past_window" | DealLockReason;
   windowsFetched?: number;
   error?: string;
 }
@@ -106,7 +114,7 @@ interface AccountPlan {
  * - Otherwise plan up to two deltas across the LEAST-covered account:
  *     forward-fill (minNewest .. reqEnd]  when new mail may exist past the cache;
  *     backfill     [reqStart .. maxOldest) when the window predates the cache.
- *   Delta bounds are padded by DEFAULT_BUFFER_DAYS to absorb sent/received date
+ *   Delta bounds are padded by DELTA_SKEW_PAD_DAYS to absorb sent/received date
  *   skew (design R2); the app-layer dedup collapses the overlap.
  * - Empty result ⇒ the whole-mailbox cache already covers this window.
  */
@@ -176,6 +184,19 @@ export async function ensureTransactionEmailsSynced(params: {
     //    the shape syncTransactionEmails consumes). Leaf consumer → no cycle.
     const details = await transactionService.getTransactionWithContacts(transactionId);
     if (!details) return { ran: false, reason, skipped: "not_found" };
+
+    // BACKLOG-3910: a locked deal (with the broker, or sealed) is not searched and
+    // gets nothing new, for every reason (open, create, export, date change, scan).
+    // Export goes on with what the deal already holds.
+    const lockReason = dealLockReason(details.submission_status);
+    if (lockReason) {
+      logService.info("[BACKLOG-3910] sync skipped: deal is locked", "TxnSyncTrigger", {
+        transactionId,
+        reason,
+        lockReason,
+      });
+      return { ran: false, reason, skipped: lockReason };
+    }
     userId = params.userId ?? details.user_id;
     const contactAssignments = details.contact_assignments ?? [];
 
@@ -198,8 +219,9 @@ export async function ensureTransactionEmailsSynced(params: {
     const { start: reqStart, end: reqEnd } = computeTransactionDateRange(details, gateNow);
 
     // BACKLOG-1862: open-trigger past-window gate (founder policy, 2026-07-06).
-    // Auto-sync-on-open applies ONLY to ONGOING transactions whose effective window
-    // end (closed_at + 30-day buffer) is still in the future. Past/closed-window
+    // Auto-sync-on-open applies ONLY to ONGOING transactions whose window end
+    // (the end of the End Date, closed_at — no buffer since BACKLOG-3910) is
+    // still in the future. Past/closed-window
     // transactions are never auto-mutated on open — manual "Sync Emails" is the
     // deliberate path. Export / date-change / create / scan keep their current
     // behavior unchanged. BYPASS_THROTTLE reasons are also unaffected.
@@ -264,6 +286,9 @@ export async function ensureTransactionEmailsSynced(params: {
             });
           }
         }
+        // BACKLOG-3925: address-only matches from the local cache, after the contact pass.
+        const { runAddressMatchPassInSweep } = await import("./reviewStateService");
+        if (!(await runAddressMatchPassInSweep(transactionId, `covered-${reason}`)).clean) clean = false;
         return { clean };
       }, `covered-${reason}`);
       lastSyncAt.set(transactionId, Date.now());

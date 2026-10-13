@@ -514,6 +514,38 @@ export const deviceService = {
     }
   },
 
+  /**
+   * BACKLOG-3927: open Apple's "Apple Devices" app in the Microsoft Store
+   * (Store build iPhone setup).
+   */
+  async openAppleDevicesStore(): Promise<ApiResult> {
+    try {
+      if (!window.api.drivers?.openAppleDevicesStore) {
+        return { success: false, error: "Drivers API not available" };
+      }
+      const result = await window.api.drivers.openAppleDevicesStore();
+      return { success: result.success, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /**
+   * BACKLOG-3927: open Windows Settings > Windows Update (USB driver guide).
+   * Only opens Settings; installs nothing.
+   */
+  async openWindowsUpdate(target: "check" | "optional"): Promise<ApiResult> {
+    try {
+      if (!window.api.drivers?.openWindowsUpdate) {
+        return { success: false, error: "Drivers API not available" };
+      }
+      const result = await window.api.drivers.openWindowsUpdate(target);
+      return { success: result.success, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
   // ============================================
   // SYNC METHODS
   // ============================================

@@ -17,6 +17,8 @@ interface ChecklistCheckboxProps {
   dimmed?: boolean;
   onClick?: () => void;
   testId?: string;
+  /** BACKLOG-3910 (slice d): why it is disabled (a locked deal). */
+  title?: string;
 }
 
 export function ChecklistCheckbox({
@@ -26,6 +28,7 @@ export function ChecklistCheckbox({
   dimmed = false,
   onClick,
   testId,
+  title,
 }: ChecklistCheckboxProps): React.ReactElement {
   return (
     <button
@@ -34,6 +37,7 @@ export function ChecklistCheckbox({
       aria-checked={checked}
       aria-label={label}
       disabled={disabled}
+      title={title}
       onClick={onClick}
       className={`w-6 h-6 rounded-md border-2 inline-flex items-center justify-center flex-shrink-0 mt-0.5 transition-colors disabled:cursor-not-allowed ${
         checked ? "bg-blue-500 border-blue-500" : "bg-white border-gray-300 hover:border-blue-300"

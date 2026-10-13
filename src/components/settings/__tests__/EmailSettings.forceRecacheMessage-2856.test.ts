@@ -17,79 +17,112 @@
  *
  * The message is now derived from `forceSwap`, which exists only when the swap
  * actually committed.
+ *
+ * BACKLOG-3910a: a force run no longer unlinks anything (emails tied to a deal
+ * are kept), and a run in which a connected mailbox did not finish applies
+ * nothing — so there is no partial-mailbox sentence any more; its replacement
+ * is `describeForceNotApplied`.
  */
 
-import { describeForceRecache } from "../EmailSettings";
-import type { Connections } from "../types";
+import { describeForceNotApplied, describeForceRecache } from "../EmailSettings";
+import type { ForceSwapSummary } from "../EmailSettings";
 
-const connected = (google: boolean, microsoft: boolean): Connections => ({
-  google: google ? ({ connected: true } as Connections["google"]) : null,
-  microsoft: microsoft ? ({ connected: true } as Connections["microsoft"]) : null,
-});
-
-const swap = (over: Partial<{ emailsInserted: number; providers: Array<"gmail" | "outlook"> }> = {}) => ({
-  emailsDeleted: over.emailsInserted ?? 47,
-  emailsInserted: over.emailsInserted ?? 47,
+const swap = (over: Partial<ForceSwapSummary> = {}): ForceSwapSummary => ({
+  emailsDeleted: 47,
+  emailsInserted: 47,
+  emailsRefreshed: 0,
+  emailsKeptLocked: 0,
+  emailsKeptNoCopy: 0,
   participantsInserted: 94,
-  providers: over.providers ?? (["outlook"] as Array<"gmail" | "outlook">),
+  providers: ["outlook"],
+  ...over,
 });
 
-describe("describeForceRecache (BACKLOG-2856)", () => {
+describe("describeForceRecache (BACKLOG-2856 / 3910a)", () => {
   /**
-   * The defect, stated as a test. `success: true` with no `forceSwap` is the
-   * decline-to-swap outcome, and it must not claim an unlink.
-   *
-   * MUTATION: return the old template string -> "unlinked from their
-   * transactions" appears and this goes red.
+   * `success: true` with no `forceSwap` is the decline-to-swap outcome, and it
+   * must not claim an unlink.
    */
   it("claims no unlink when no swap committed", () => {
-    const msg = describeForceRecache(undefined, connected(false, true));
+    const msg = describeForceRecache(undefined);
     expect(msg).not.toMatch(/unlinked/i);
     expect(msg).toMatch(/unchanged/i);
   });
 
-  /** A clean single-mailbox run reports what LANDED, and owns the unlink. */
-  it("reports the inserted count and the unlink on a clean run", () => {
-    const msg = describeForceRecache(swap({ emailsInserted: 47 }), connected(false, true));
-    expect(msg).toContain("Re-cached 47 emails");
-    expect(msg).toMatch(/unlinked from their transactions/i);
-    expect(msg).not.toMatch(/could not be re-downloaded/i);
-  });
-
   /**
-   * The partial success — the case most likely to mislead, because the count
-   * looks healthy and nothing else on screen would say a whole mailbox was left
-   * untouched.
-   *
-   * MUTATION: drop the `skipped` branch -> the Gmail warning disappears and the
-   * message reads as a complete success.
+   * MUTATION: restore "Those emails were unlinked from their transactions." ->
+   * red.
    */
-  it("names a connected mailbox that was skipped", () => {
-    const msg = describeForceRecache(
-      swap({ emailsInserted: 47, providers: ["outlook"] }),
-      connected(true, true),
-    );
-    expect(msg).toContain("Re-cached 47 emails");
-    expect(msg).toContain("Gmail could not be re-downloaded");
-    expect(msg).toMatch(/left unchanged/i);
+  it("reports what landed and claims no unlink on a clean run", () => {
+    const msg = describeForceRecache(swap({ emailsInserted: 47 }));
+    expect(msg).toBe("Re-cached 47 emails.");
+    expect(msg).not.toMatch(/unlink/i);
   });
 
-  it("names both mailboxes when neither provider is in the swap", () => {
-    const msg = describeForceRecache(
-      swap({ emailsInserted: 0, providers: [] }),
-      connected(true, true),
+  /** Re-cached = new rows + kept rows updated in place. Zero clauses omitted. */
+  it("counts the refreshed rows in, and names them and the locked ones", () => {
+    expect(
+      describeForceRecache(swap({ emailsInserted: 40, emailsRefreshed: 7, emailsKeptLocked: 3 })),
+    ).toBe(
+      "Re-cached 47 emails. 7 of them were updated in place and kept their links. 3 emails on submitted or approved deals were left unchanged.",
     );
-    expect(msg).toContain("Gmail and Outlook could not be re-downloaded");
-    expect(msg).toMatch(/were left unchanged/i);
+    expect(describeForceRecache(swap({ emailsInserted: 5, emailsKeptLocked: 2 }))).toBe(
+      "Re-cached 5 emails. 2 emails on submitted or approved deals were left unchanged.",
+    );
   });
 
   /** Singular/plural, because "Re-cached 1 emails" is the kind of thing he notices. */
   it("agrees in number", () => {
-    expect(describeForceRecache(swap({ emailsInserted: 1 }), connected(false, true))).toContain(
-      "Re-cached 1 email.",
+    expect(describeForceRecache(swap({ emailsInserted: 1 }))).toBe("Re-cached 1 email.");
+    expect(describeForceRecache(swap({ emailsInserted: 0 }))).toBe("Re-cached 0 emails.");
+    expect(
+      describeForceRecache(swap({ emailsInserted: 0, emailsRefreshed: 1, emailsKeptLocked: 1 })),
+    ).toBe(
+      "Re-cached 1 email. 1 of them was updated in place and kept its links. 1 email on a submitted or approved deal was left unchanged.",
     );
-    expect(describeForceRecache(swap({ emailsInserted: 0 }), connected(false, true))).toContain(
-      "Re-cached 0 emails.",
+  });
+});
+
+describe("describeForceNotApplied (BACKLOG-3910a, SR S6)", () => {
+  const FALLBACK = "Re-cache could not finish for x. Nothing was changed.";
+
+  it("token expired: reconnect, then run again", () => {
+    expect(
+      describeForceNotApplied(
+        { mailboxes: [{ provider: "outlook", mailbox: "me@example.com", tokenExpired: true }] },
+        FALLBACK,
+      ),
+    ).toBe(
+      "Re-cache could not finish for me@example.com. Nothing was changed. Reconnect me@example.com in Settings, then run Re-cache again.",
     );
+  });
+
+  it("otherwise: check the connection", () => {
+    expect(
+      describeForceNotApplied(
+        { mailboxes: [{ provider: "gmail", mailbox: "Gmail", tokenExpired: false }] },
+        FALLBACK,
+      ),
+    ).toBe("Re-cache could not finish for Gmail. Nothing was changed. Check your connection and try again.");
+  });
+
+  it("two mailboxes, one expired: names both, gives each next step", () => {
+    expect(
+      describeForceNotApplied(
+        {
+          mailboxes: [
+            { provider: "gmail", mailbox: "a@example.net", tokenExpired: true },
+            { provider: "outlook", mailbox: "b@example.com", tokenExpired: false },
+          ],
+        },
+        FALLBACK,
+      ),
+    ).toBe(
+      "Re-cache could not finish for a@example.net and b@example.com. Nothing was changed. Reconnect a@example.net in Settings, then run Re-cache again. Check your connection and try again.",
+    );
+  });
+
+  it("falls back to the main process sentence when no mailbox is named", () => {
+    expect(describeForceNotApplied({ mailboxes: [] }, FALLBACK)).toBe(FALLBACK);
   });
 });

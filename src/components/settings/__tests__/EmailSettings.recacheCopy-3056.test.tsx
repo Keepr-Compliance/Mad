@@ -25,8 +25,8 @@
  *   - the thing that is now FALSE ("only ... newer") is absent
  *   - the two things that must be SAYABLE: older mail arrives when the history
  *     window has been widened, and the user's emails stay linked
- *   - the Force re-cache line next to it still says it unlinks — the contrast is
- *     the whole reason the ordinary button gained the reassurance
+ *   - the Force re-cache line next to it says attached emails stay attached
+ *     (BACKLOG-3910a: a force run no longer unlinks anything)
  *
  * MUTATION: restore "Only downloads emails newer than what is already cached."
  * in EmailSettings -> the first two tests go red.
@@ -133,14 +133,14 @@ describe("BACKLOG-3056 — Re-cache copy", () => {
     expect(text).toMatch(/stay linked|nothing is unlinked|does not unlink/i);
   });
 
-  it("still warns that Force re-cache unlinks — the contrast must survive", async () => {
+  it("says Force re-cache keeps attached emails attached (BACKLOG-3910a)", async () => {
     renderPanel();
     await waitFor(() => expect(screen.getByTestId("force-recache-emails")).toBeInTheDocument());
     await openInfoPopup();
     const forceRow = screen.getByTestId("force-recache-description");
+    const text = (forceRow.textContent ?? "").replace(/\s+/g, " ");
 
-    expect((forceRow.textContent ?? "").replace(/\s+/g, " ")).toMatch(
-      /unlinks your emails from their transactions/i,
-    );
+    expect(text).toMatch(/Emails attached to deals stay attached/i);
+    expect(text).not.toMatch(/unlink/i);
   });
 });

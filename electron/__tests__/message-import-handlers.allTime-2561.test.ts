@@ -321,6 +321,32 @@ describe("BACKLOG-2561 · the label handler and the import handler agree", () =>
     capturedPlan = undefined;
     mockTransactionRows = [];
     mockGetPreferences.mockReset();
+    // BACKLOG-3915: each handler reads the clock on its own. Freeze `Date`
+    // (only `Date` — every timer and microtask stays real) so both reads
+    // return the same instant and the bounds can be compared exactly. With a
+    // live clock the two reads straddled a second boundary on loaded runners.
+    jest.useFakeTimers({
+      now: Date.now(),
+      doNotFake: [
+        "hrtime",
+        "nextTick",
+        "performance",
+        "queueMicrotask",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "requestIdleCallback",
+        "cancelIdleCallback",
+        "setImmediate",
+        "clearImmediate",
+        "setInterval",
+        "clearInterval",
+        "setTimeout",
+        "clearTimeout",
+      ],
+    });
+  });
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   /**
@@ -365,13 +391,9 @@ describe("BACKLOG-2561 · the label handler and the import handler agree", () =>
           TEST_USER_ID
         );
 
-        // Same instant, or both unbounded. Compared to the SECOND to absorb the
-        // sub-second drift between the two handlers' separate `new Date()` calls.
-        if (importBoundISO === null || label.effectiveCutoffISO === null) {
-          expect(label.effectiveCutoffISO).toBe(importBoundISO);
-        } else {
-          expect(label.effectiveCutoffISO.slice(0, 19)).toBe(importBoundISO.slice(0, 19));
-        }
+        // Same instant, or both unbounded. Exact: `Date` is frozen for this
+        // describe, so the two handlers' separate clock reads agree.
+        expect(label.effectiveCutoffISO).toBe(importBoundISO);
 
         /*
          * BACKLOG-2749: `source` too, and this half is NEW.

@@ -209,7 +209,9 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
   const approve = useCallback(
     async (itemIds: string[]): Promise<void> => {
       if (itemIds.length === 0) return;
-      await window.api.transactions.approveReviewItems(itemIds);
+      const result = (await window.api.transactions.approveReviewItems(itemIds)) as { success?: boolean; error?: string };
+      // BACKLOG-3910: a locked deal refuses; surface it instead of reporting success.
+      if (result?.success === false) throw new Error(result.error || "Deal is read-only");
       await refresh();
     },
     [refresh],
@@ -218,7 +220,9 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
   const reject = useCallback(
     async (itemIds: string[]): Promise<void> => {
       if (itemIds.length === 0) return;
-      await window.api.transactions.rejectReviewItems(itemIds);
+      const result = (await window.api.transactions.rejectReviewItems(itemIds)) as { success?: boolean; error?: string };
+      // BACKLOG-3910: a locked deal refuses; surface it instead of reporting success.
+      if (result?.success === false) throw new Error(result.error || "Deal is read-only");
       await refresh();
     },
     [refresh],
