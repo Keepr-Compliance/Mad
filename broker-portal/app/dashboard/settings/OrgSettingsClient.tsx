@@ -40,6 +40,7 @@ import {
   Select,
 } from '@keepr/design-system';
 import { AlertBanner, Button } from '@keepr/ui';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 
 interface ConsentInfo {
   organizationId: string;
@@ -131,7 +132,7 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
   if (loading) {
     return (
       <div className="max-w-7xl mx-auto space-y-6">
-        <PageHeader title="Settings" subtitle="Loading..." />
+        <PageHeader phoneHideTitle phoneHideSubtitle title={PAGE_TITLES.settings} subtitle="Loading..." />
       </div>
     );
   }
@@ -139,7 +140,9 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       <PageHeader
-        title="Settings"
+        phoneHideTitle
+        phoneHideSubtitle
+        title={PAGE_TITLES.settings}
         subtitle="Manage your organization settings"
       />
 

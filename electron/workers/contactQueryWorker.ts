@@ -41,7 +41,10 @@ import { readOneToOneThreadIndexOn } from "../services/db/threadIdentityIndexDb"
 import { runThreadIdentityRequestOn, type ThreadIdentityRequest } from "../services/db/threadIdentityTargetedDb";
 import { readCandidateEmailsOn, readCandidateMessageThreadsOn } from "../services/db/autoLinkSql";
 import { readTransactionTextThreadsOn } from "../services/db/transactionTextPagingDb";
+import { ADDRESS_MATCH_CANDIDATE_PARAM_COUNT, classifyAddressMatchCandidatesOn } from "../services/db/addressMatchCandidatesDb";
+import type { NormalizedAddress } from "../utils/addressNormalization";
 import { runMessageRosterOn } from "../services/db/messageRosterDb";
+import { readMessageSourceStatsOn } from "../services/db/messageSourceStatsDb";
 import {
   planCommunicationDatesOn,
   runMessageDerivedQueryOn,
@@ -61,10 +64,14 @@ type QueryType =
   | "messageDerived"
   | "commDatesPlan"
   | "sourceCoverageFloors"
+  // BACKLOG-3156 stage G: Settings > Messages "Stored on this computer" (messageSourceStatsDb.ts).
+  | "messageSourceStats"
   // BACKLOG-3884: the Texts tab's conversation list (every linked text of one deal).
   | "transactionTextThreads"
   // BACKLOG-3837: the Attach Messages roster (every unlinked text of the user).
-  | "messageRoster";
+  | "messageRoster"
+  // BACKLOG-3925: the address-only Needs Review candidates (bodies scanned with instr).
+  | "addressMatchCandidates";
 
 interface InitMessage {
   type: "init";
@@ -98,6 +105,8 @@ interface QueryMessageExtras {
   params?: Array<string | number>;
   /** BACKLOG-3883: `candidateEmails` — the statement's address count (bound values in `params`). */
   addressCount?: number;
+  /** BACKLOG-3925: `addressMatchCandidates` — the deal's normalized address (bound values in `params`). */
+  address?: NormalizedAddress;
   /** BACKLOG-3884: `transactionTextThreads` — the deal and its audit window (epoch ms, null = open). */
   transactionId?: string;
   startMs?: number | null;
@@ -326,6 +335,10 @@ parentPort?.on("message", (msg: WorkerMessage) => {
       // BACKLOG-3837: the audit coverage check's per-source floors (every text row).
       if (!db) throw new Error("Database not initialized");
       rows = runSourceFloorsOn(db, queryMsg.userId);
+    } else if (queryMsg.type === "messageSourceStats") {
+      // BACKLOG-3156 stage G: ~250 ms at 100k texts on main, measured — so here.
+      if (!db) throw new Error("Database not initialized");
+      rows = [readMessageSourceStatsOn(db, queryMsg.userId)];
     } else if (queryMsg.type === "candidateEmails") {
       // BACKLOG-3883: the auto-link candidate-email read (every email of the user in the
       // deal's window, joined to its participants, bodies included); off the main thread.
@@ -335,6 +348,21 @@ parentPort?.on("message", (msg: WorkerMessage) => {
         throw new Error("candidateEmails needs addressCount and its params");
       }
       rows = readCandidateEmailsOn(db, addressCount as number, params);
+    } else if (queryMsg.type === "addressMatchCandidates") {
+      // BACKLOG-3925: the address-only review candidates (instr over every body of the
+      // user in the deal's window cannot use an index), classified here so only the
+      // matched ids cross back; off the main thread.
+      if (!db) throw new Error("Database not initialized");
+      const { params, address } = queryMsg as QueryMessage & QueryMessageExtras;
+      if (
+        !Array.isArray(params) ||
+        params.length !== ADDRESS_MATCH_CANDIDATE_PARAM_COUNT ||
+        !address ||
+        !Array.isArray(address.requiredNameWords)
+      ) {
+        throw new Error("addressMatchCandidates needs its params and address");
+      }
+      rows = [classifyAddressMatchCandidatesOn(db, params, address)];
     } else if (queryMsg.type === "transactionTextThreads") {
       // BACKLOG-3884: the Texts tab's conversation list reads every linked text of the deal.
       if (!db) throw new Error("Database not initialized");

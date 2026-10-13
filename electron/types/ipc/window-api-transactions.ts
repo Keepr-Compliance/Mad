@@ -1,3 +1,4 @@
+import type { ReviewMatchReason } from "./reviewMatchReason";
 import type { TextPageCursor, TextThreadSummary, TextWindow } from "../textThreads";
 /**
  * WindowApi Transactions sub-interface
@@ -214,6 +215,11 @@ export interface ReviewItemDto {
   email_id: string | null;
   thread_id: string | null;
   found_at: string;
+  /**
+   * BACKLOG-3925: why this item is in Needs Review. Drives the All / Address match /
+   * Contact match tabs and the pill. "contact" for every row with no stored reason.
+   */
+  matchReason: ReviewMatchReason;
   display: ReviewItemDisplayDto;
 }
 
@@ -620,7 +626,12 @@ export interface WindowApiTransactions {
   update: (
     transactionId: string,
     data: Record<string, unknown>,
-  ) => Promise<{ success: boolean; error?: string }>;
+  ) => Promise<{
+    success: boolean;
+    error?: string;
+    /** BACKLOG-3910d: set when the deal is locked and the main process refused. */
+    dealLocked?: "submitted" | "sealed";
+  }>;
   delete: (
     transactionId: string,
   ) => Promise<{ success: boolean; error?: string }>;
@@ -711,6 +722,8 @@ export interface WindowApiTransactions {
      */
     unlinkedIds?: string[];
     error?: string;
+    /** BACKLOG-3910: set when the deal is locked and the main process refused. */
+    dealLocked?: "submitted" | "sealed";
   }>;
   /**
    * BACKLOG-2319: Confirm "Needs review" email links (thread-aware) → Linked.
@@ -740,6 +753,8 @@ export interface WindowApiTransactions {
     updatedCount?: number;
     errors?: string[];
     error?: string;
+    /** BACKLOG-3910d: deals left unchanged because they are locked. */
+    refusedIds?: string[];
   }>;
 
   // ============================================
@@ -962,8 +977,26 @@ export interface WindowApiTransactions {
     forceSwap?: {
       emailsDeleted: number;
       emailsInserted: number;
+      /** BACKLOG-3910a: kept rows on no locked deal, updated in place (same id). */
+      emailsRefreshed: number;
+      /** BACKLOG-3910a: kept rows on a locked deal, left exactly as they were. */
+      emailsKeptLocked: number;
+      /** BACKLOG-3910a: kept rows no fresh copy arrived for. */
+      emailsKeptNoCopy: number;
       participantsInserted: number;
       providers: Array<"gmail" | "outlook">;
+    };
+    /**
+     * BACKLOG-3910a: a force run in which a connected mailbox did not finish
+     * applies nothing. Arrives only with `success: false`; one entry per
+     * unfinished mailbox, so the renderer can name it and the next step.
+     */
+    forceNotApplied?: {
+      mailboxes: Array<{
+        provider: "gmail" | "outlook";
+        mailbox: string;
+        tokenExpired: boolean;
+      }>;
     };
     /**
      * BACKLOG-2856: the user stopped the run. Arrives with `success: false` and
@@ -1254,6 +1287,10 @@ export interface WindowApiTransactions {
   getAuditCoverage: (
     userId: string,
     proposedStartISO: string,
+    /** BACKLOG-3892 S2: the user's import source (TextSource), checked even with no texts. */
+    chosenSource?: string | null,
+    /** BACKLOG-3892 W1: the proposed audit end (the End Date as entered); null/absent = open (today). */
+    proposedEndISO?: string | null,
   ) => Promise<AuditCoverageResult>;
 
   /**
@@ -1263,6 +1300,8 @@ export interface WindowApiTransactions {
   checkExportCompleteness: (
     transactionId: string,
     userId: string,
+    /** BACKLOG-3892 S2: the user's import source; "iphone" decides completeness by the deal's iPhone coverage. */
+    chosenSource?: string | null,
   ) => Promise<ExportCompletenessResult>;
   /** BACKLOG-3663: per-source text coverage for one transaction (the Texts tab). */
   getTextCoverage?: (

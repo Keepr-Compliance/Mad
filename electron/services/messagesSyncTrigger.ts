@@ -73,6 +73,7 @@ import {
   emitBackgroundImportFinished,
 } from "./messagesBackgroundImportSignal";
 import logService from "./logService";
+import { recordMacImportRun } from "./macImportMarker";
 
 export type MessagesSyncReason = "create" | "open" | "export" | "date-change" | "scan";
 
@@ -335,6 +336,7 @@ async function runEnsure(params: {
       // and would have stopped it, but nothing ever offered the button. A deal
       // created on a large library started an unstoppable full-device scan.
       emitBackgroundImportStarted(userId, reason);
+      const importStartedAtMs = Date.now();
       let result: MacOSImportResult | undefined;
       try {
         result = await macOSMessagesImportService.importMessages(
@@ -349,6 +351,8 @@ async function runEnsure(params: {
       }
       if (result.success) {
         importRan = true;
+        // BACKLOG-3892 W1: when this completed run started = Mac's "last synced".
+        recordMacImportRun(userId, importStartedAtMs);
         imported = result.messagesImported;
         // Record how far back this import actually scanned (SR D2) so the export
         // gate can require deepest_import_start <= the audit start.

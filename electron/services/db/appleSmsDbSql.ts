@@ -75,12 +75,24 @@ export const ALL_CHATS_SQL = `
 /**
  * The most recent message date in a chat — how a conversation list sorts.
  */
+// BACKLOG-3892 S2 (SR C3): `undated` counts rows with no date (NULL / <= 0) in the
+// same scan. MAX ignores NULL and 0 sorts low, so a chat whose newest DATED text is
+// below its floor may still hold undated texts; the parse floor must not skip it.
 export const CHAT_LAST_MESSAGE_DATE_SQL = `
-            SELECT MAX(message.date) as last_date
+            SELECT MAX(message.date) as last_date,
+                   SUM(CASE WHEN message.date IS NULL OR message.date <= 0 THEN 1 ELSE 0 END) as undated
             FROM message
             JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
             WHERE chat_message_join.chat_id = ?
           `;
+
+/**
+ * BACKLOG-3892 W3b: the oldest dated text on the phone (NULL / <= 0 = undated, skipped).
+ * Mixed units (seconds before iOS 11, nanoseconds after) sort with every seconds row
+ * below every nanosecond row, and a seconds row is from an older iOS, so MIN is the
+ * oldest either way; appleDateToMs converts it.
+ */
+export const OLDEST_MESSAGE_DATE_SQL = `SELECT MIN(date) AS oldest FROM message WHERE date > 0`;
 
 /**
  * The handles participating in a chat.
@@ -94,6 +106,19 @@ export const CHAT_PARTICIPANT_HANDLES_SQL = `
         FROM chat_handle_join
         JOIN handle ON chat_handle_join.handle_id = handle.ROWID
         WHERE chat_handle_join.chat_id = ?
+      `;
+
+/**
+ * BACKLOG-3892 S1 (SR D7d): every handle that SENT a message in a chat. Members
+ * who have left a group are no longer in `chat_handle_join`, but their messages
+ * still carry their handle.
+ */
+export const CHAT_SENDER_HANDLES_SQL = `
+        SELECT DISTINCT handle.id
+        FROM message
+        JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
+        JOIN handle ON message.handle_id = handle.ROWID
+        WHERE chat_message_join.chat_id = ?
       `;
 
 /**
@@ -182,7 +207,81 @@ function messageSelectColumns(hasAudioTranscript: boolean): string {
 export interface MessagePage {
   readonly limit?: number;
   readonly offset?: number;
+  /**
+   * BACKLOG-3892 S1: keep only messages dated at or after this instant (epoch ms,
+   * inclusive). Absent = every message (today's read).
+   */
+  readonly sinceMs?: number;
+  /**
+   * BACKLOG-3892 S5 (backfill): keep only DATED messages before this instant (epoch ms,
+   * exclusive). The exact complement of a `sinceMs` floor at the same instant, in both
+   * date eras; undated rows are NOT kept (a floored sync already read them).
+   */
+  readonly untilMs?: number;
 }
+
+/** Apple epoch (2001-01-01T00:00:00Z) in Unix epoch milliseconds. */
+export const APPLE_EPOCH_MS = 978_307_200_000;
+
+/**
+ * BACKLOG-3892 S1 (SR D8): `message.date` below this is in SECONDS (backups from
+ * before iOS 11), at or above it in NANOSECONDS. 1e11 ns is 100 s after the Apple
+ * epoch, which no real nanosecond date is; 1e11 s is over 3,000 years.
+ */
+export const APPLE_SECONDS_DATE_MAX = 100_000_000_000;
+
+/**
+ * An Apple `message.date` as epoch ms, the unit detected per value (D8).
+ * null for an undated row (NULL or <= 0).
+ */
+export function appleDateToMs(raw: number | bigint | null | undefined): number | null {
+  if (raw === null || raw === undefined) return null;
+  const n = typeof raw === "bigint" ? Number(raw) : raw;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n < APPLE_SECONDS_DATE_MAX ? APPLE_EPOCH_MS + n * 1000 : APPLE_EPOCH_MS + n / 1_000_000;
+}
+
+/**
+ * The two binds of a `sinceMs` floor, clamped together so they cannot drift:
+ * nanoseconds as a BigInt (exact: a Number at ~8e17 cannot hold 1 ns steps) and
+ * whole seconds rounded DOWN (a seconds row in the floor's own second is kept).
+ */
+export function floorBinds(sinceMs: number): { ns: bigint; sec: number } {
+  const ms = Math.floor(sinceMs) - APPLE_EPOCH_MS;
+  return { ns: BigInt(ms) * 1_000_000n, sec: Math.floor(ms / 1000) };
+}
+
+/**
+ * The SQL bound's rule in TypeScript, exact on a BigInt `message.date`: true when
+ * the row is kept by a floor with these binds (undated rows are kept).
+ */
+export function appleDateKeptByFloor(raw: string | number | bigint | null | undefined, binds: { ns: bigint; sec: number }): boolean {
+  if (raw === null || raw === undefined) return true;
+  let n: bigint | null;
+  if (typeof raw === "bigint") n = raw;
+  else if (typeof raw === "string") n = /^-?\d+$/.test(raw) ? BigInt(raw) : null;
+  else n = Number.isFinite(raw) ? BigInt(Math.trunc(raw)) : null;
+  if (n === null || n <= 0n) return true;
+  if (n >= binds.ns) return true;
+  return n < BigInt(APPLE_SECONDS_DATE_MAX) && n >= BigInt(binds.sec);
+}
+
+/**
+ * The date bound (D8): undated rows (NULL / <= 0) are KEPT — an unknown date is
+ * never proof a text is older than the floor; a seconds-era row compares in
+ * seconds, every other row in nanoseconds. Inclusive.
+ */
+const SINCE_CLAUSE = ` AND (message.date IS NULL OR message.date <= 0 OR message.date >= ?
+          OR (message.date < ${APPLE_SECONDS_DATE_MAX} AND message.date >= ?))`;
+
+/**
+ * BACKLOG-3892 S5: the ceiling (exclusive): dated rows only, each era below the same
+ * binds a floor at that instant keeps at or above (floorBinds), so floor and ceiling
+ * at one instant split the dated rows exactly, with no row read twice or missed.
+ */
+const UNTIL_CLAUSE = ` AND message.date > 0
+          AND ((message.date >= ${APPLE_SECONDS_DATE_MAX} AND message.date < ?)
+            OR (message.date < ${APPLE_SECONDS_DATE_MAX} AND message.date < ?))`;
 
 /**
  * Messages in one chat, oldest first.
@@ -209,7 +308,19 @@ export function selectChatMessages<T>(
 
   const clause =
     limit === undefined ? "" : offset === undefined ? " LIMIT ?" : " LIMIT ? OFFSET ?";
-  const params: number[] = [chatId];
+  const params: (number | bigint)[] = [chatId];
+  let since = "";
+  if (page.sinceMs !== undefined && Number.isFinite(page.sinceMs)) {
+    const b = floorBinds(page.sinceMs);
+    params.push(b.ns, b.sec);
+    since = SINCE_CLAUSE;
+  }
+  let until = "";
+  if (page.untilMs !== undefined && Number.isFinite(page.untilMs)) {
+    const b = floorBinds(page.untilMs);
+    params.push(b.ns, b.sec);
+    until = UNTIL_CLAUSE;
+  }
   if (limit !== undefined) params.push(limit);
   if (offset !== undefined) params.push(offset);
 
@@ -221,7 +332,7 @@ export function selectChatMessages<T>(
           ${messageSelectColumns(hasAudioTranscript)}
         FROM message
         JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
-        WHERE chat_message_join.chat_id = ?
+        WHERE chat_message_join.chat_id = ?${since}${until}
         ORDER BY message.date ASC
       ` + clause,
       )

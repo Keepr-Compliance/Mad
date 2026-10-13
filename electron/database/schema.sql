@@ -972,6 +972,67 @@ CREATE TABLE IF NOT EXISTS message_source_coverage (
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
 
+-- BACKLOG-3892 S2: iPhone text coverage, PER PHONE (udid). An iPhone sync reads
+-- only the texts lookback (plus deal chats back to the deal start), so the oldest
+-- stored iPhone text no longer says how far back the phone was read; these rows
+-- do. Written by iPhone sync persistence, in one transaction at its commit point,
+-- only for a run with no failed sms.db read, from the floors the run APPLIED.
+-- One interval per phone: [covered_since, last_sync_at]. A run reading [F, T]
+-- merges with the prior interval only when last_sync_at >= F; otherwise
+-- covered_since restarts at F. last_sync_at = when the run started (before its
+-- backup). approximate = the interval was seeded from stored texts (an upgrader's
+-- first sync after this change). The phone with the latest last_sync_at is the
+-- user's current phone. No row = iPhone coverage unknown ("never").
+CREATE TABLE IF NOT EXISTS iphone_device_coverage (
+  user_id TEXT NOT NULL,
+  udid TEXT NOT NULL,
+  covered_since DATETIME NOT NULL,
+  last_sync_at DATETIME NOT NULL,
+  approximate INTEGER NOT NULL DEFAULT 0,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, udid),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3892 S2: one iPhone chat (sms.db chat ROWID, per phone: a replacement
+-- phone reuses ROWIDs) read further back than the lookback, to covered_since,
+-- by the run that started at scanned_at.
+CREATE TABLE IF NOT EXISTS iphone_chat_coverage (
+  user_id TEXT NOT NULL,
+  udid TEXT NOT NULL,
+  chat_rowid INTEGER NOT NULL,
+  covered_since DATETIME NOT NULL,
+  scanned_at DATETIME NOT NULL,
+  PRIMARY KEY (user_id, udid, chat_rowid),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3892 S2: one deal contact's handle (iphoneChatFloors.handleKeys: E.164,
+-- last 10 digits, or lowercased email) whose chats were read back to covered_since
+-- by the run that started at scanned_at — written even when the handle has no chat.
+CREATE TABLE IF NOT EXISTS iphone_handle_coverage (
+  user_id TEXT NOT NULL,
+  udid TEXT NOT NULL,
+  handle_key TEXT NOT NULL,
+  covered_since DATETIME NOT NULL,
+  scanned_at DATETIME NOT NULL,
+  PRIMARY KEY (user_id, udid, handle_key),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3892 W3b: the oldest text one phone holds (sms.db MIN(message.date)),
+-- recorded by each completed sync of that phone. A phone's coverage never starts
+-- before it: texts older than this phone's oldest are on a previous phone (or its
+-- backup), never on this one. No row = not known yet (no cap).
+CREATE TABLE IF NOT EXISTS iphone_device_span (
+  user_id TEXT NOT NULL,
+  udid TEXT NOT NULL,
+  oldest_text_at DATETIME NOT NULL,
+  recorded_at DATETIME NOT NULL,
+  PRIMARY KEY (user_id, udid),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS message_thread_names (
   user_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")
@@ -1126,6 +1187,24 @@ CREATE TABLE IF NOT EXISTS pending_review_communications (
     OR (thread_id IS NOT NULL AND email_id IS NULL)
   )
 );
+
+-- BACKLOG-3925: WHY an email is in Needs Review ('address' | 'contact' | 'folder'; 'folder' is
+-- used by BACKLOG-3926). Keyed by (deal, email), not by the queue row, so the reason
+-- survives reject -> restore (which queues a NEW row). No row = 'contact'.
+-- A new table, so this file's exec on every open creates it on fresh and existing
+-- databases alike; no migration entry.
+CREATE TABLE IF NOT EXISTS pending_review_match_reasons (
+  transaction_id TEXT NOT NULL,
+  email_id TEXT NOT NULL,
+  reason TEXT NOT NULL CHECK (reason IN ('address', 'contact', 'folder')),
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (transaction_id, email_id),
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+);
+-- The foreign-key check on every email delete looks rows up by email_id; without this
+-- index it scans the table once per deleted email.
+CREATE INDEX IF NOT EXISTS idx_pending_review_match_reasons_email ON pending_review_match_reasons(email_id);
 
 CREATE TABLE IF NOT EXISTS phone_last_message (
   phone_normalized TEXT NOT NULL,

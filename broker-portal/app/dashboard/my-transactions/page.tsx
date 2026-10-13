@@ -25,6 +25,7 @@ import { SubmissionPagination } from '@/components/submission/SubmissionPaginati
 import { UpsellPanel } from '@/components/my-transactions/UpsellPanel';
 import { getMyTransactionsGate } from '@/lib/my-transactions-access';
 import { LINK_COLUMNS, loadDealPage } from '@/lib/submissions/dealList';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 
 interface MyTransaction {
   id: string;
@@ -110,7 +111,8 @@ export default async function MyTransactionsPage({ searchParams }: PageProps) {
   return (
     <div className="max-w-7xl mx-auto">
       <PageHeader
-        title="My Transactions"
+        phoneHideTitle
+        title={PAGE_TITLES.myTransactions}
         subtitle={
           <>
             {total} submission{total !== 1 ? 's' : ''}

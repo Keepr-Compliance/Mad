@@ -50,6 +50,15 @@ export interface SourceCoverage {
   hasRows: boolean;
   /** L2 (Google Messages): chats whose history the last full run could not confirm complete. */
   incompleteChats?: number;
+  /** BACKLOG-3892 W4 (iPhone, one deal): the least covered person's name, or null. */
+  who?: string | null;
+  /**
+   * BACKLOG-3892 W3b (iPhone, one deal): set when the start is limited by the oldest
+   * text the current phone holds (ISO of that text); a sync cannot read further back.
+   */
+  cappedByPhone?: string | null;
+  /** BACKLOG-3892 W3b: the user has synced another iPhone before this one. */
+  previousPhone?: boolean;
 }
 
 /** A source that does not reach back to an audit start. Never blocks export. */
@@ -62,8 +71,23 @@ export interface SourceCoverageGap {
    * "incomplete" (L2): covered, but some chats' history could not be
    * confirmed complete (incompleteChats).
    */
-  kind: "later" | "never" | "incomplete";
+  /**
+   * BACKLOG-3892 W1: "newer" = the source's last sync is more than a day before the
+   * end of the audit period (or today, when that end has not passed): newer texts may
+   * be missing. A source can have a start gap AND a "newer" gap (two entries).
+   */
+  kind: "later" | "never" | "incomplete" | "newer";
   incompleteChats?: number;
+  /** "newer": when the source was last synced (ISO). */
+  lastSyncAt?: string | null;
+  /** "newer": the end the texts must reach — min(audit end, now) (ISO). */
+  requiredEndISO?: string | null;
+  /** BACKLOG-3892 W4 (iPhone): the least covered person on this deal, or null. */
+  who?: string | null;
+  /** BACKLOG-3892 W3b (iPhone): the current phone's oldest text, when it limits the start. */
+  cappedByPhone?: string | null;
+  /** BACKLOG-3892 W3b (iPhone): the user has synced another iPhone before this one. */
+  previousPhone?: boolean;
 }
 
 /** Result of transactions:get-text-coverage (the Texts tab). */
@@ -128,6 +152,22 @@ export interface ExportCompletenessResult {
   messagesImporterAvailable: boolean;
   /** BACKLOG-3663: per-source gaps (informational; never changes `complete`). */
   sourceGaps?: SourceCoverageGap[];
+  /**
+   * BACKLOG-3892 S2: set only when the user's source is iPhone. true = this deal's
+   * iPhone texts do not reach its audit start (or it is not known how far they go);
+   * `complete` is then false. Only an iPhone sync can clear it — never the Mac import.
+   */
+  iphoneGap?: boolean;
+  /** BACKLOG-3892 S2: how far back this deal's iPhone texts were read (ISO), or null. */
+  iphoneCoveredSince?: string | null;
+  /** BACKLOG-3892 W: the chosen source's start gap for this deal (iPhone: with the person's name). */
+  textStartGap?: SourceCoverageGap;
+  /**
+   * BACKLOG-3892 W1: the chosen source's last sync is more than a day before the end of
+   * the audit period (or today). Opens the export gate for every source; `complete` is
+   * unchanged by it.
+   */
+  textEndGap?: SourceCoverageGap;
   /** BACKLOG-3837: as AuditCoverageResult.sourceCoveragePending (never changes `complete`). */
   sourceCoveragePending?: boolean;
   error?: string;

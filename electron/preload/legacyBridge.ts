@@ -141,6 +141,8 @@ export const legacyElectronBridge = {
     hasBundled: () => driverBridge.hasBundled(),
     installApple: () => driverBridge.installApple(),
     openITunesStore: () => driverBridge.openITunesStore(),
+    openAppleDevicesStore: () => driverBridge.openAppleDevicesStore(),
+    openWindowsUpdate: (target: "check" | "optional") => driverBridge.openWindowsUpdate(target),
     checkUpdate: () => driverBridge.checkUpdate(),
   },
 };

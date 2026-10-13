@@ -98,6 +98,14 @@ export interface SupportReportPayload {
      * the system working: a previous window's data is not this consent's to send.
      */
     otherConsentRecords: number;
+    /**
+     * Records the log store refused because a segment was held and the log was
+     * at its size limit (count only, no content). Non-zero means a gap with no
+     * marker in `text` (BACKLOG-3191).
+     */
+    refusedRecords: number;
+    /** Records the log store could not write at all (encrypt failure). Count only. */
+    droppedWrites: number;
   };
 }
 
@@ -193,6 +201,8 @@ export class SupportReportQueue {
           truncated: snapshot.droppedBytes > 0,
           unreadableRecords: snapshot.unreadableRecords,
           otherConsentRecords: snapshot.otherConsentRecords,
+          refusedRecords: this.deps.logStore.heldDropCount(),
+          droppedWrites: this.deps.logStore.droppedWriteCount(),
         },
       };
       const json = JSON.stringify(payload);

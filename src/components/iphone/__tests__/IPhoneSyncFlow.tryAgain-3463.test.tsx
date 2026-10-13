@@ -90,6 +90,10 @@ const makeErrorState = (isConnected: boolean): UseIPhoneSyncReturn => ({
   installDriverStatus: "idle",
   installDriverError: null,
   recoverInstallDriver: jest.fn(),
+  recheckDriver: jest.fn(),
+  setConnectScreenActive: jest.fn(),
+  appleDevicesState: null,
+  appleUsbDriver: null,
   startSync: jest.fn(),
   cancelSync: jest.fn(() => {
     applyCancelSyncReset();

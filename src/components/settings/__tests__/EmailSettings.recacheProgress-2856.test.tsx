@@ -137,7 +137,18 @@ describe("BACKLOG-2856 — the progress bar", () => {
     expect(screen.getByTestId("recache-progress-label")).toHaveTextContent(/Replacing your cached emails/i);
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "95");
 
-    gate.release({ success: true, forceSwap: { emailsInserted: 487, providers: ["gmail"] } });
+    gate.release({
+      success: true,
+      forceSwap: {
+        emailsDeleted: 487,
+        emailsInserted: 487,
+        emailsRefreshed: 0,
+        emailsKeptLocked: 0,
+        emailsKeptNoCopy: 0,
+        participantsInserted: 974,
+        providers: ["gmail"],
+      },
+    });
   });
 
   /**

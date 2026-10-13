@@ -61,6 +61,8 @@ import { dbTimestampNow } from "../../utils/dbTimestamp";
 import logService from "../logService";
 import { placeholderList } from "./core/sqlFragments";
 import { assignmentList } from "./core/columnSql";
+import { TRANSACTION_SUBMISSION_STATUS_SQL } from "./core/transactionEligibilitySql";
+import { dealLockReason } from "../transactionEligibility";
 
 /**
  * Create a new communication (junction table entry linking content to transaction)
@@ -365,16 +367,26 @@ export async function deleteCommunication(communicationId: string): Promise<void
  * Delete communication by message_id
  * Used when unlinking messages from a transaction - removes the communications table reference
  */
-export function deleteCommunicationByMessageIdSync(messageId: string): void {
+export function deleteCommunicationByMessageIdSync(
+  messageId: string,
+  transactionId?: string,
+): void {
+  // BACKLOG-3890: one message can be linked to several deals
+  // (idx_comm_msg_txn is unique on (message_id, transaction_id)). When the
+  // caller names a deal, touch only that deal's row; with no deal, keep the
+  // all-deal delete.
+  const scope = transactionId ? sql` AND transaction_id = ?` : sql``;
+  const params = transactionId ? [messageId, transactionId] : [messageId];
+
   // BACKLOG-506 (TASK-1307): Get the transaction ID before deleting.
   // Check if the message is a text type to update thread count.
   const comm = dbGet<{ transaction_id: string | null }>(
-    sql`SELECT transaction_id FROM communications WHERE message_id = ?`,
-    [messageId]
+    sql`SELECT transaction_id FROM communications WHERE message_id = ?${scope}`,
+    params
   );
 
-  const statement = sql`DELETE FROM communications WHERE message_id = ?`;
-  dbRun(statement, [messageId]);
+  const statement = sql`DELETE FROM communications WHERE message_id = ?${scope}`;
+  dbRun(statement, params);
 
   // BACKLOG-396: Update thread count if this was a text message linked to a transaction
   if (comm?.transaction_id) {
@@ -398,8 +410,11 @@ export function deleteCommunicationByMessageIdSync(messageId: string): void {
  * argument to `Promise.resolve`, so the throw escapes the body synchronously
  * and SQLite rolls back. It fails closed where `async` fails open.
  */
-export function deleteCommunicationByMessageId(messageId: string): Promise<void> {
-  return Promise.resolve(deleteCommunicationByMessageIdSync(messageId));
+export function deleteCommunicationByMessageId(
+  messageId: string,
+  transactionId?: string,
+): Promise<void> {
+  return Promise.resolve(deleteCommunicationByMessageIdSync(messageId, transactionId));
 }
 
 
@@ -1035,7 +1050,8 @@ export async function getTransactionsForMessage(
  * @param userId - The user ID
  * @param linkSource - How the link was created ('auto', 'manual', 'scan')
  * @param linkConfidence - Confidence score (0.0 - 1.0)
- * @returns The created communication ID
+ * @returns The created communication ID, or null when refused because the deal is
+ *   locked and the link is automatic (BACKLOG-3910)
  */
 export async function createThreadCommunicationReference(
   threadId: string,
@@ -1043,7 +1059,17 @@ export async function createThreadCommunicationReference(
   userId: string,
   linkSource: 'auto' | 'manual' | 'scan' = 'auto',
   linkConfidence: number = 0.9,
-): Promise<string> {
+): Promise<string | null> {
+  // BACKLOG-3910: backstop. An AUTOMATIC text link never lands on a locked deal
+  // (with the broker, or sealed). "manual" is the user's own act and is allowed.
+  if (linkSource !== "manual") {
+    const row = dbGet<{ submission_status: string | null }>(
+      TRANSACTION_SUBMISSION_STATUS_SQL,
+      [transactionId],
+    );
+    if (dealLockReason(row?.submission_status)) return null;
+  }
+
   const id = crypto.randomUUID();
 
   // BACKLOG-506 (TASK-1307): Pure junction table - no communication_type column.

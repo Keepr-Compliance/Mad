@@ -36,6 +36,8 @@ jest.mock("../messagesBackgroundImportSignal", () => ({
   emitBackgroundImportStarted: jest.fn(),
   emitBackgroundImportFinished: jest.fn(),
 }));
+// BACKLOG-3892 W1: the Mac end-of-sync marker, written only by a COMPLETED import.
+jest.mock("../macImportMarker", () => ({ recordMacImportRun: jest.fn() }));
 jest.mock("../autoLinkService", () => ({
   __esModule: true,
   expandAttachedThreadsForUser: jest.fn().mockResolvedValue({ messagesLinked: 0, errors: 0 }),
@@ -51,6 +53,7 @@ jest.mock("../auditCoverageService", () => {
 });
 
 import { setDb } from "../db/core/dbConnection";
+import { recordMacImportRun } from "../macImportMarker";
 import macOSMessagesImportService from "../macOSMessagesImportService";
 import { expandAttachedThreadsForUser } from "../autoLinkService";
 import {
@@ -113,6 +116,7 @@ beforeEach(() => {
   importerAvailableMock.mockReset().mockResolvedValue(true);
   startedMock.mockClear();
   finishedMock.mockClear();
+  (recordMacImportRun as jest.Mock).mockClear();
   __resetMessagesSyncStateForTests();
 });
 afterEach(() => db.close());
@@ -141,6 +145,9 @@ describe("ensureTransactionMessagesSynced (BACKLOG-2292)", () => {
     // copying full-device scan regardless of what the user had chosen.
     expect(planOf(0).effectiveCap).toBe(50000);
     expect(planOf(0).fetchAttachments).toBe(true);
+    // BACKLOG-3892 W1: the completed run records when it started as Mac's last sync.
+    expect(recordMacImportRun).toHaveBeenCalledTimes(1);
+    expect(recordMacImportRun).toHaveBeenCalledWith(USER, expect.any(Number));
 
     expect(expandMock).toHaveBeenCalledTimes(1);
     expect(result.importRan).toBe(true);
@@ -233,6 +240,8 @@ describe("ensureTransactionMessagesSynced (BACKLOG-2292)", () => {
     // expansion still ran (and recorded), but import did NOT record.
     expect(getState(USER)?.last_import_at).toBeNull();
     expect(getState(USER)?.last_expansion_at).toBeTruthy();
+    // BACKLOG-3892 W1: a run that did not complete is not a Mac sync.
+    expect(recordMacImportRun).not.toHaveBeenCalled();
   });
 
   it("throttles a second 'open' within the freshness window; 'date-change' bypasses", async () => {

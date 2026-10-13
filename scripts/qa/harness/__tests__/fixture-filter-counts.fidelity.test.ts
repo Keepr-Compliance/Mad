@@ -129,6 +129,7 @@ describe('fixture-filter-counts fidelity (BACKLOG-1947/1950)', () => {
       requiredNameWords: ['birchwood'],
       optionalWords: ['lane', 'northeast'],
       full: '742 birchwood lane northeast',
+      streetNameWords: ['birchwood'],
     });
 
     // NOT compared against manifest.transaction.normalizedTokens (["742","birchwood","lane","ne"]).

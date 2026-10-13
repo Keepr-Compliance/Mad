@@ -68,13 +68,16 @@ afterEach(() => db?.close());
 const by = (c: SourceCoverage[], s: string) => c.find((x) => x.source === s);
 
 describe("getSourceCoverage", () => {
-  it("per source: iPhone and the companion from their oldest text (approximate); malformed metadata is ignored (V1, V7)", () => {
+  // BACKLOG-3892 S2 (SR D1): iPhone texts alone no longer prove coverage — the
+  // phone's own coverage row does (iphoneCoverage-3892.test.ts). The companion is
+  // still read from its oldest text.
+  it("per source: the companion from its oldest text (approximate); iPhone texts alone are never 'covered'; malformed metadata is ignored (V1, V7)", () => {
     text("iphone_sync", "2026-03-01T10:00:00.000Z");
     text("iphone_sync", "2026-06-01T10:00:00.000Z");
     text("android_wifi_sync", "2026-08-01T10:00:00.000Z");
     text(null, "2025-01-01T10:00:00.000Z", { raw: "{not json" });
     const c = getSourceCoverage(USER);
-    expect(by(c, "iphone")).toMatchObject({ coveredSince: "2026-03-01T10:00:00.000Z", approximate: true, hasRows: true });
+    expect(by(c, "iphone")).toMatchObject({ coveredSince: null, approximate: false, hasRows: true });
     expect(by(c, "android_companion")).toMatchObject({ coveredSince: "2026-08-01T10:00:00.000Z", approximate: true });
     expect(by(c, "mac")).toBeUndefined();
   });

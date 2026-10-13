@@ -34,6 +34,8 @@ import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { AndroidMessagesSettings } from "../AndroidMessagesSettings";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
+import { TextsLookbackSettings } from "../TextsLookbackSettings";
+import { TextsLookbackProvider } from "../textsLookback";
 
 // ---------------------------------------------------------------------------
 // The preference store, merging exactly as the main process does
@@ -114,6 +116,19 @@ jest.mock("../../../hooks/useSyncOrchestrator", () => ({
 const renderStrict = (ui: React.ReactElement) =>
   render(<React.StrictMode>{ui}</React.StrictMode>);
 
+/**
+ * BACKLOG-3892 S3: the macOS lookback dropdown is the shared "How far back to
+ * import texts" picker now, outside the panel. Rendered as Settings composes
+ * it, so the macOS half's lookback can still be read off the screen.
+ */
+const renderMacWithSharedPicker = () =>
+  renderStrict(
+    <TextsLookbackProvider userId="u-2734">
+      <TextsLookbackSettings userId="u-2734" />
+      <MacOSMessagesImportSettings userId="u-2734" />
+    </TextsLookbackProvider>
+  );
+
 const messageImport = () =>
   (store as { messageImport?: Record<string, unknown> }).messageImport ?? {};
 const sharedFilters = () =>
@@ -183,7 +198,7 @@ describe("BACKLOG-2734 · the panels no longer reconfigure each other", () => {
 
     // The macOS panel, reading the same store, still shows the user's macOS
     // choice — the display half of the same defect.
-    renderStrict(<MacOSMessagesImportSettings userId="u-2734" />);
+    renderMacWithSharedPicker();
     await waitFor(() =>
       expect(screen.getByDisplayValue("Last 1 year")).toBeInTheDocument()
     );
@@ -198,7 +213,7 @@ describe("BACKLOG-2734 · the panels no longer reconfigure each other", () => {
       },
     };
 
-    const mac = renderStrict(<MacOSMessagesImportSettings userId="u-2734" />);
+    const mac = renderMacWithSharedPicker();
     await waitFor(() =>
       expect(screen.getByDisplayValue("Last 1 year")).toBeInTheDocument()
     );

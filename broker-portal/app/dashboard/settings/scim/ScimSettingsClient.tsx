@@ -26,6 +26,7 @@ import {
   Td,
 } from '@keepr/design-system';
 import { AlertBanner, Button } from '@keepr/ui';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 
 interface ScimToken {
   id: string;
@@ -141,7 +142,7 @@ export default function ScimSettingsClient() {
   if (loading) {
     return (
       <div className="max-w-7xl mx-auto space-y-6">
-        <PageHeader title="SCIM Provisioning" subtitle="Loading..." />
+        <PageHeader phoneHideTitle phoneHideSubtitle title={PAGE_TITLES.scim} subtitle="Loading..." />
       </div>
     );
   }
@@ -150,7 +151,9 @@ export default function ScimSettingsClient() {
     <div className="max-w-7xl mx-auto space-y-6">
       {/* Header */}
       <PageHeader
-        title="SCIM Provisioning"
+        phoneHideTitle
+        phoneHideSubtitle
+        title={PAGE_TITLES.scim}
         subtitle="Configure SCIM to automatically sync users from your identity provider"
       />
 

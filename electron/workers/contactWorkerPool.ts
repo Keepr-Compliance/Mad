@@ -33,9 +33,13 @@ type QueryType =
   | "messageDerived"
   | "commDatesPlan"
   | "sourceCoverageFloors"
+  // BACKLOG-3156 stage G: Settings > Messages "Stored on this computer".
+  | "messageSourceStats"
   | "transactionTextThreads"
   // BACKLOG-3837: the Attach Messages roster.
-  | "messageRoster";
+  | "messageRoster"
+  // BACKLOG-3925: the address-only Needs Review candidates.
+  | "addressMatchCandidates";
 
 /**
  * Per-type payload carried alongside `{ id, type, userId }` (BACKLOG-1717).

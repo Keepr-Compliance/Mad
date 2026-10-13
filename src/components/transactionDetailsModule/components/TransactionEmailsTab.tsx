@@ -44,6 +44,16 @@ interface TransactionEmailsTabProps {
   syncingCommunications?: boolean;
   /** Whether a global sync (from dashboard) is in progress */
   globalSyncRunning?: boolean;
+  /**
+   * BACKLOG-3910: set when the deal is locked (with the broker, or sealed). Sync is
+   * disabled and this is its tooltip.
+   */
+  syncLockedTooltip?: string;
+  /**
+   * BACKLOG-3910: set when the deal is locked (with the broker, or sealed). The deal
+   * is read-only: Attach is disabled and this is its tooltip.
+   */
+  editLockedTooltip?: string;
   /** TASK-2074: Whether the app is online (network connectivity) */
   isOnline?: boolean;
   /** Whether there are contacts assigned (to show appropriate help text) */
@@ -114,6 +124,8 @@ export function TransactionEmailsTab({
   onSyncCommunications,
   syncingCommunications = false,
   globalSyncRunning = false,
+  syncLockedTooltip,
+  editLockedTooltip,
   isOnline = true,
   hasContacts = false,
   userId,
@@ -158,8 +170,10 @@ export function TransactionEmailsTab({
   const nameMap = useContactNameMap(userId ?? currentUser?.id);
 
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
-  const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning;
-  const syncTooltip = !isOnline
+  const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning || !!syncLockedTooltip;
+  const syncTooltip = syncLockedTooltip
+    ? syncLockedTooltip
+    : !isOnline
     ? "You are offline"
     : globalSyncRunning
     ? "A sync is already in progress from the dashboard"
@@ -318,8 +332,10 @@ export function TransactionEmailsTab({
 
   // Handle attach button click
   const handleAttachClick = useCallback(() => {
+    // BACKLOG-3910: a locked deal is read-only (the main process refuses too).
+    if (editLockedTooltip) return;
     setShowAttachModal(true);
-  }, []);
+  }, [editLockedTooltip]);
 
   // Handle emails attached successfully
   // BACKLOG-2390: left as a plain toast (no Undo). `linkEmails` takes pre-link
@@ -456,13 +472,27 @@ export function TransactionEmailsTab({
       }
 
       const allUnlinkedIds: string[] = [];
+      let succeededCount = 0;
+      let firstRefusal: string | undefined;
       for (const cid of repCommIds) {
         try {
           const r = await window.api.transactions.unlinkCommunication(cid);
-          if (r.success && r.unlinkedIds) allUnlinkedIds.push(...r.unlinkedIds);
+          if (r.success) {
+            succeededCount += 1;
+            if (r.unlinkedIds) allUnlinkedIds.push(...r.unlinkedIds);
+          } else if (!firstRefusal) {
+            firstRefusal = r.error;
+          }
         } catch {
           // Non-blocking: one constituent failing shouldn't abort the batch.
         }
+      }
+
+      // BACKLOG-3910: nothing was removed (e.g. the deal is locked and the main
+      // process refused). Say so; never claim success or offer an Undo.
+      if (succeededCount === 0) {
+        onShowError?.(firstRefusal || "Couldn't remove the emails. Please try again.");
+        return;
       }
 
       // Single in-place removal; fall back to a refetch only if nothing matched.
@@ -497,7 +527,7 @@ export function TransactionEmailsTab({
       deselectAllThreads();
       setSelectionMode(false);
     }
-  }, [selectedThreads, selectedEmailCount, onRemoveEmailsByIds, onEmailsChanged, onShowSuccess, deselectAllThreads, undoBulkRemoveEmails]);
+  }, [selectedThreads, selectedEmailCount, onRemoveEmailsByIds, onEmailsChanged, onShowSuccess, onShowError, deselectAllThreads, undoBulkRemoveEmails]);
 
   // Loading state
   if (loading) {
@@ -566,7 +596,9 @@ export function TransactionEmailsTab({
             {userId && transactionId && (
               <button
                 onClick={handleAttachClick}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                disabled={!!editLockedTooltip}
+                title={editLockedTooltip}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="attach-emails-button"
               >
                 <svg
@@ -593,6 +625,7 @@ export function TransactionEmailsTab({
         {transactionId && (
           <RemovedEmailsSection
             transactionId={transactionId}
+            restoreLockedTooltip={editLockedTooltip}
             onRestoreComplete={onRestoreComplete}
             onShowSuccess={onShowSuccess}
             onShowError={onShowError}
@@ -677,7 +710,9 @@ export function TransactionEmailsTab({
           {userId && transactionId && (
             <button
               onClick={handleAttachClick}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors"
+              disabled={!!editLockedTooltip}
+              title={editLockedTooltip}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               data-testid="attach-emails-button"
             >
               <svg
@@ -758,12 +793,14 @@ export function TransactionEmailsTab({
       <div className="flex items-center gap-2 mb-4">
         <button
           onClick={handleToggleSelectionMode}
-          className={`flex items-center gap-1.5 px-3 h-10 text-sm font-medium rounded-lg transition-colors flex-shrink-0 ${
+          className={`flex items-center gap-1.5 px-3 h-10 text-sm font-medium rounded-lg transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${
             selectionMode
               ? "bg-blue-500 text-white hover:bg-blue-600"
               : "bg-gray-200 text-gray-700 hover:bg-gray-300"
           }`}
           data-testid="select-emails-button"
+          disabled={!!editLockedTooltip}
+          title={editLockedTooltip}
         >
           <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
@@ -809,6 +846,7 @@ export function TransactionEmailsTab({
             thread={thread}
             onViewEmail={onViewEmail}
             onUnlink={() => handleUnlinkThread(thread)}
+            actionsLockedTooltip={editLockedTooltip}
             isUnlinking={unlinkingThreadId === thread.id}
             userEmail={currentUser?.email}
             nameMap={nameMap}
@@ -824,6 +862,7 @@ export function TransactionEmailsTab({
       {transactionId && (
         <RemovedEmailsSection
           transactionId={transactionId}
+          restoreLockedTooltip={editLockedTooltip}
           onRestoreComplete={onRestoreComplete}
           onShowSuccess={onShowSuccess}
           onShowError={onShowError}

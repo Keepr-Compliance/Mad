@@ -264,3 +264,78 @@ describe("cache job: the contacts-only filter", () => {
     expect(job.progress.matched).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3924 C3 (founder, 2026-10-12): the page waits for the user to sign
+// in. Each waiting message keeps the unclaimed job alive 5 minutes; never past
+// 15 minutes from the start, then it fails as not_signed_in. No waiting
+// message: the old 60 s not_opened. Mutations: the deadline extension
+// reverted → red ("alive at 4 min"); the cap taken out → red ("never past
+// 15 min"); the expiry code left as not_opened → red.
+// ---------------------------------------------------------------------------
+describe("C3: waiting for sign-in (BACKLOG-3924)", () => {
+  const MIN = 60_000;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const m = require("../rcsImportJob") as typeof import("../rcsImportJob");
+
+  it("the limits are the founder's: 5 min a waiting message, 15 min in all", () => {
+    expect(m.RCS_SIGN_IN_WAIT_MS).toBe(5 * MIN);
+    expect(m.RCS_SIGN_IN_WAIT_CAP_MS).toBe(15 * MIN);
+  });
+
+  it("one waiting message keeps the job alive at 4 min, with S7 as its stage; claimable then", () => {
+    const { clock, jobs } = registry();
+    const job = jobs.createCache("u-1", SINCE);
+    clock.now += 1_000;
+    expect(job.markWaitingForSignIn(clock.now)).toBe(true);
+    expect(job.snapshot().stage).toBe("Waiting for you to sign in to Google Messages in Chrome");
+    clock.now += 4 * MIN;
+    expect(jobs.pending()?.jobId).toBe(job.jobId);
+    expect(job.claim(clock.now)).toMatchObject({ kind: "cache" });
+  });
+
+  it("no more waiting messages: not_signed_in 5 min after the last one (not not_opened)", () => {
+    const { clock, jobs } = registry();
+    const job = jobs.createCache("u-1", SINCE);
+    clock.now += 1_000;
+    job.markWaitingForSignIn(clock.now);
+    clock.now += 5 * MIN - 1;
+    expect(jobs.pending()?.jobId).toBe(job.jobId);
+    clock.now += 1;
+    expect(jobs.pending()).toBeNull();
+    expect(job.snapshot()).toMatchObject({ state: "failed", error: { code: "not_signed_in", message: m.RCS_NOT_SIGNED_IN_MESSAGE } });
+  });
+
+  it("no waiting message: not_opened at 60 s, as before", () => {
+    const { clock, jobs } = registry();
+    const job = jobs.createCache("u-1", SINCE);
+    clock.now += RCS_JOB_UNCLAIMED_MS;
+    expect(jobs.pending()).toBeNull();
+    expect(job.snapshot()).toMatchObject({ state: "failed", error: { code: "not_opened" } });
+  });
+
+  it("heartbeats every 15 s never carry it past 15 min from the start", () => {
+    const { clock, jobs } = registry();
+    const job = jobs.createCache("u-1", SINCE);
+    const start = clock.now;
+    while (clock.now - start < 15 * MIN - 15_000) {
+      clock.now += 15_000;
+      expect(job.markWaitingForSignIn(clock.now)).toBe(true);
+    }
+    expect(job.unclaimedDeadlineMs()).toBe(start + 15 * MIN);
+    clock.now = start + 15 * MIN - 1;
+    expect(jobs.pending()?.jobId).toBe(job.jobId);
+    clock.now += 1;
+    expect(jobs.pending()).toBeNull();
+    expect(job.snapshot()).toMatchObject({ state: "failed", error: { code: "not_signed_in" } });
+    expect(job.markWaitingForSignIn(clock.now)).toBe(false);
+  });
+
+  it("a claimed (running) job is not a waiting one", () => {
+    const { clock, jobs } = registry();
+    const job = jobs.createCache("u-1", SINCE);
+    job.claim(clock.now);
+    expect(job.markWaitingForSignIn(clock.now)).toBe(false);
+    expect(job.snapshot().stage).not.toBe(m.RCS_WAITING_FOR_SIGN_IN_STAGE);
+  });
+});

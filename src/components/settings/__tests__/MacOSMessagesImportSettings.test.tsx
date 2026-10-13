@@ -19,6 +19,8 @@ import React from "react";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
+import { TextsLookbackSettings } from "../TextsLookbackSettings";
+import { TextsLookbackProvider } from "../textsLookback";
 import { parseLocalCalendarDay } from "../../../utils/dateRangeUtils";
 
 // macOS platform so the component renders.
@@ -271,22 +273,34 @@ describe("MacOSMessagesImportSettings — inactive-source gating (BACKLOG-2335)"
   const userId = "user-123";
 
   it("disables every control and shows the note when macOS is NOT the active source", async () => {
+    // BACKLOG-3892 S3: rendered as Settings composes it — the shared "How far
+    // back to import texts" picker sits outside this panel and serves every
+    // source, so it is NOT gated with the macOS panel.
     renderStrict(
-      <MacOSMessagesImportSettings
-        userId={userId}
-        enabled={false}
-        disabledReason="Your message source is set to iPhone — switch to macOS above to import from Messages."
-      />,
+      <TextsLookbackProvider userId={userId}>
+        <TextsLookbackSettings userId={userId} />
+        <MacOSMessagesImportSettings
+          userId={userId}
+          enabled={false}
+          disabledReason="Your message source is set to iPhone — switch to macOS above to import from Messages."
+        />
+      </TextsLookbackProvider>,
     );
 
     // Explanatory note renders, worded from the real active source.
     const note = await screen.findByTestId("macos-import-disabled-note");
     expect(note).toHaveTextContent(/message source is set to iPhone/i);
 
-    // Both filter selects (date range + max messages) are disabled.
-    const selects = screen.getAllByRole("combobox");
-    expect(selects).toHaveLength(2);
-    selects.forEach((select) => expect(select).toBeDisabled());
+    // The panel's own filter select (max messages; the date range moved to the
+    // shared picker) is disabled.
+    const shared = screen.getByTestId("texts-lookback-select");
+    const panelSelects = screen
+      .getAllByRole("combobox")
+      .filter((select) => select !== shared);
+    expect(panelSelects).toHaveLength(1);
+    panelSelects.forEach((select) => expect(select).toBeDisabled());
+    // The shared picker applies to iPhone too, so it stays usable.
+    await waitFor(() => expect(shared).not.toBeDisabled());
 
     // Import + Force Re-import buttons are disabled → the controls cannot no-op.
     expect(
@@ -322,9 +336,10 @@ describe("MacOSMessagesImportSettings — inactive-source gating (BACKLOG-2335)"
       ).not.toBeInTheDocument(),
     );
 
-    // Filter selects are interactive.
+    // The panel's filter select is interactive. BACKLOG-3892 S3: it has one
+    // now (max messages); the date range is the shared picker outside it.
     const selects = screen.getAllByRole("combobox");
-    expect(selects).toHaveLength(2);
+    expect(selects).toHaveLength(1);
     selects.forEach((select) => expect(select).not.toBeDisabled());
 
     // Import + Force Re-import are clickable — once the BACKLOG-2760 size

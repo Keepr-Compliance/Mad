@@ -27,7 +27,7 @@ jest.mock('@/lib/supabase/client', () => ({
   createClient: () => ({ auth: { signOut: jest.fn() } }),
 }));
 
-import { MobileTopBar } from '@/components/layout/MobileTopBar';
+import { MobileTopBar } from '@keepr/ui';
 import { Sidebar } from '@/components/layout/Sidebar';
 
 const tokens = (el: Element | null) => (el?.getAttribute('class') || '').split(/\s+/).filter(Boolean);
@@ -45,7 +45,7 @@ function expectIconOnly(btn: HTMLElement) {
 
 describe('BACKLOG-3796 menu buttons are icon-only on touch', () => {
   it('the open-menu button has a keyboard-only ring and a hover-capable-only hover', () => {
-    render(<MobileTopBar menuOpen={false} onOpenMenu={() => {}} />);
+    render(<MobileTopBar qualifier="Broker" menuOpen={false} onOpenMenu={() => {}} />);
     expectIconOnly(screen.getByRole('button', { name: 'Open menu' }));
   });
 
