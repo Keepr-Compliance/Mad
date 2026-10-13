@@ -840,6 +840,20 @@ describe('3933: reverse revoke rewrites the stale open mirror row from Stripe', 
     expect(db.callsTo('billing_subscriptions', 'update')).toEqual([]);
   });
 
+  it('mirror row already closed -> revoke, but no Stripe re-fetch and no rewrite (nothing stale)', async () => {
+    seed({
+      organizations: [personal(USER, ORG, true)],
+      organization_plans: [plan(ORG, effective())],
+      stripe_customers: [customer(USER, SUB_VOID_CANCELED.customer, 'test')],
+      billing_subscriptions: [mirror(USER, SUB_VOID_CANCELED.id, SUB_VOID_CANCELED.customer, 'test', { status: 'canceled' })],
+    });
+    serve(SUB_VOID_CANCELED);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(r).toMatchObject({ revokeAttempted: 1, mirrorRepaired: 0 });
+    expect(stripeCalls.filter((c) => c.op === 'subscriptions.retrieve')).toEqual([]);
+    expect(db.callsTo('billing_subscriptions', 'update')).toEqual([]);
+  });
+
   it('a live run never rewrites a test-mode row', async () => {
     staleUser();
     await reconcileAgentSubscriptions(deps('live'));
