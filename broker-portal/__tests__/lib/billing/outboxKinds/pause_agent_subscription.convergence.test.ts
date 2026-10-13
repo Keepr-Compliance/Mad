@@ -154,6 +154,19 @@ describe('pause_agent_subscription handler', () => {
     expect(stripe.calls).toEqual([]);
   });
 
+  it.each(['expired', 'cancelled'])('licence %s at drain time -> zero Stripe calls (only a suspended licence is paused)', async (status) => {
+    db.rows('licenses')[0].status = status;
+    await handlePauseRow(row, ctx());
+    expect(stripe.calls).toEqual([]);
+  });
+
+  it('no licence row at drain time -> zero Stripe calls', async () => {
+    db.rows('licenses').length = 0;
+    expect(db.rows('licenses')).toHaveLength(0);
+    await handlePauseRow(row, ctx());
+    expect(stripe.calls).toEqual([]);
+  });
+
   it('no stripe_customers row in this mode -> zero Stripe calls', async () => {
     db.rows('stripe_customers')[0].stripe_mode = 'live';
     await handlePauseRow(row, ctx());
@@ -188,6 +201,12 @@ describe('pause_agent_subscription handler', () => {
     await handlePauseRow(row, ctx());
     expect(alerts()).toEqual([expect.objectContaining({ subscription_id: SUB.id, invoice_id: PAID_WHILE_PAUSED.id, outbox_id: row.id })]);
     expect(stripe.callsTo('subscriptions.update')).toHaveLength(1);
+  });
+
+  it('R8 boundary: paid_at equal to the suspension second -> alert (at or after)', async () => {
+    invoices = [PAID_WHILE_PAUSED];
+    await handlePauseRow({ ...row, created_at: new Date(PAID_WHILE_PAUSED.status_transitions.paid_at * 1000).toISOString() }, ctx());
+    expect(alerts().map((a) => a.invoice_id)).toEqual([PAID_WHILE_PAUSED.id]);
   });
 
   it('R8: a paid invoice from before the suspension raises nothing', async () => {

@@ -711,6 +711,16 @@ describe('3878 R7: suspended licence with a plan still collecting', () => {
     expect(alerts('suspended_subscription_unpaused')).toEqual([]);
   });
 
+  it('suspended + only an unpaused brokerage-kind subscription -> no pause row, no alert [COMPOSED: kind brokerage]', async () => {
+    const brokerage: Obj = { ...UNPAUSED, id: 'sub_composed_brokerage_3878', metadata: { kind: 'brokerage' } };
+    suspendedUser('suspended', brokerage);
+    expect([brokerage.status, brokerage.pause_collection]).toEqual(['past_due', null]);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(pauseRows()).toEqual([]);
+    expect(alerts('suspended_subscription_unpaused')).toEqual([]);
+    expect(r.suspendedUnpaused).toBe(0);
+  });
+
   it('licence active + unpaused plan -> nothing (only suspended licences are read)', async () => {
     suspendedUser('active', UNPAUSED);
     await reconcileAgentSubscriptions(deps());

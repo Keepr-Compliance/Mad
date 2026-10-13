@@ -137,6 +137,15 @@ describe('resume_agent_subscription handler', () => {
     expect(updates()).toEqual([]);
   });
 
+  it('contract (c) negative: a recent invoice carrying ANOTHER row\'s marker, paid period lapsed -> exactly one re-anchor [COMPOSED: row id differs from the spike marker]', async () => {
+    expect(X2_RESUME_INV.subscription_details.metadata.keepr_resume).not.toBe(row.id);
+    seed(X2_PAUSED.customer);
+    subs = [X2_PAUSED];
+    stripe.impl['invoices.list'] = () => list([X2_RESUME_INV]);
+    await handleResumeRow(row, ctx());
+    expect(updates()).toEqual([[X2_PAUSED.id, RESUME_PARAMS, { idempotencyKey: outboxIdempotencyKey(row, `resume:${X2_PAUSED.id}`, RESUME_PARAMS) }]]);
+  });
+
   it('R5 / X4: latest invoice paid and its period running -> un-pause ONLY, then the grant is repaired', async () => {
     seed(X4_PAUSED.customer);
     subs = [X4_PAUSED];
