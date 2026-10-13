@@ -353,6 +353,24 @@ export async function writeThroughCancelFlag(
   if (error) throw new Error(`billing_subscriptions write-through failed: ${error.message}`);
 }
 
+/**
+ * BACKLOG-3933: bring an existing mirror row back to what Stripe reports now.
+ * Re-fetches the subscription by id and writes mirrorState (status, period,
+ * cancel flags, paused) on that row in this mode. Never last_event_created:
+ * the webhook's ordering cursor stays the webhook's. Same write as the stale
+ * incumbent close in handleSecondOpenSubscription. Returns the status written.
+ */
+export async function refreshMirrorRow(ctx: BillingContext, subId: string): Promise<string> {
+  const sub = await ctx.stripe.subscriptions.retrieve(subId);
+  const { error } = await ctx.service
+    .from('billing_subscriptions')
+    .update(mirrorState(sub))
+    .eq('stripe_subscription_id', subId)
+    .eq('stripe_mode', ctx.mode);
+  if (error) throw new Error(`billing_subscriptions refresh failed: ${error.code ?? 'unknown'}`);
+  return sub.status;
+}
+
 /** True when the user has an open subscription in this mode other than subId. */
 export async function hasOtherOpenSubscription(ctx: BillingContext, userId: string, subId: string): Promise<boolean> {
   const { data, error } = await ctx.service

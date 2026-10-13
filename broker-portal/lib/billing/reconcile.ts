@@ -25,6 +25,9 @@
  *    leaves the current row reading open); with two or more open rows it is
  *    reported and nothing is revoked. With none open, any row serves (the
  *    "other open subscription" check then finds nothing either way).
+ *    BACKLOG-3933: after a revoke against the one open row, that row is
+ *    re-read from Stripe and rewritten (refreshMirrorRow; never the cursor), so
+ *    a stale `active` no longer hides Subscribe or blocks a new plan.
  *  - Non-Stripe overrides (support / manual): the grant RPC refuses whenever
  *    such an override exists, whatever `enabled` says (`non_stripe_override`),
  *    so forward never calls `handleInvoicePaid` for that user. Enabled = held
@@ -47,6 +50,11 @@
  *    no unprocessed `resume_agent_subscription` row -> alert only
  *    (`paused_subscription_licence_active`); support decides.
  *
+ * Brokerage members (BACKLOG-3934, founder decision 2026-10-13): a user with an
+ * open, unpaused Agent subscription who is an active member of a non-personal
+ * organization -> one `agent_subscription_brokerage_member` alert per run with
+ * the subscription ids. Alert only; support cancels and refunds in Stripe.
+ *
  * Cap: each side looks at RECONCILE_MAX_ITEMS per run and sets `truncated`
  * (carried by the alert) when there were more. Stripe lists newest first, so
  * above the cap the OLDEST subscriptions are never checked, and it is the same
@@ -64,7 +72,7 @@ import { END_NOW_KIND } from './endPlanNow';
 import { enqueueOutbox } from './outboxEnqueue';
 import { licenceStatus, PAUSE_KIND, RESUME_KIND } from './suspension';
 import { isNonStripeOverride, overrideEffective, type UnlimitedOverride } from './agentPlan';
-import { handleInvoicePaid, listAll, OPEN_STATUSES, revokeIfCurrent, stripeId, type BillingContext } from './sync';
+import { handleInvoicePaid, listAll, OPEN_STATUSES, refreshMirrorRow, revokeIfCurrent, stripeId, type BillingContext } from './sync';
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
@@ -99,6 +107,10 @@ export interface ReconcileResult {
   suspendedUnpaused: number;
   /** BACKLOG-3878 R7: paused plans whose licence is active with no resume waiting (alert only). */
   pausedLicenceActive: number;
+  /** BACKLOG-3933: reverse revokes whose stale open mirror row was re-read from Stripe and rewritten. */
+  mirrorRepaired: number;
+  /** BACKLOG-3934: users paying for an Agent plan while an active member of a brokerage (alert only). */
+  brokerageMembers: number;
 }
 
 /** The R10.1 definition. Anything else (absent, non-stripe, disabled, expired, malformed) is not effective. */
@@ -185,6 +197,8 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
     truncated: false,
     suspendedUnpaused: 0,
     pausedLicenceActive: 0,
+    mirrorRepaired: 0,
+    brokerageMembers: 0,
   };
   const mismatchIds: string[] = [];
   const pausedActiveIds: string[] = [];
@@ -284,7 +298,15 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
       }
       const target = (openRows[0] ?? mirrorRows[0]).stripe_subscription_id;
       mismatchIds.push(target);
-      if (await revokeIfCurrent(reconcileContext(deps, target, now), userId, target, 'reconcile')) result.revokeAttempted++;
+      if (await revokeIfCurrent(reconcileContext(deps, target, now), userId, target, 'reconcile')) {
+        result.revokeAttempted++;
+        // BACKLOG-3933: the row still reads open after a missed webhook. Left so, it
+        // keeps the billing page on "active" (no Subscribe) and blocks a new plan.
+        if (openRows.length === 1) {
+          await refreshMirrorRow(reconcileContext(deps, target, now), target);
+          result.mirrorRepaired++;
+        }
+      }
     } catch (err) {
       console.error(`[billing/reconcile] reverse ${mirrorSubId} failed: ${(err as { code?: string }).code ?? 'error'}`);
     }
@@ -292,6 +314,15 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
 
   // ---- BACKLOG-3878 R7: suspended licence, plan still collecting
   const unpausedIds = await suspendedSafetyNet(deps, result);
+
+  // ---- BACKLOG-3934: paying for an Agent plan while a brokerage member (alert only)
+  const brokerageIds = await brokerageMemberScan(deps, result);
+  if (brokerageIds.length > 0) {
+    billingAlert('agent_subscription_brokerage_member', deps.mode, {
+      count: result.brokerageMembers,
+      subscription_ids: brokerageIds.slice(0, 20).join(','),
+    });
+  }
 
   if (pausedActiveIds.length > 0) {
     billingAlert('paused_subscription_licence_active', deps.mode, {
@@ -384,6 +415,67 @@ async function suspendedSafetyNet(deps: ReconcileDeps, result: ReconcileResult):
     } catch (err) {
       console.error(`[billing/reconcile] suspended safety net failed: ${(err as { code?: string }).code ?? 'error'}`);
     }
+  }
+  return found;
+}
+
+/** BACKLOG-3934: organization_members.license_status values that count as a brokerage member. */
+export const BROKERAGE_MEMBER_STATUSES = ['active'] as const;
+/** BACKLOG-3934: Agent subscription statuses that still charge the user. */
+export const BROKERAGE_ALERT_SUB_STATUSES = new Set(['active', 'trialing', 'past_due']);
+
+/**
+ * BACKLOG-3934 (founder decision 2026-10-13, instead of 3850's automatic
+ * cancel): a user with an open, unpaused Agent subscription in this mode who is
+ * an active member of a brokerage (an organization that is not a personal one)
+ * pays twice. Nothing is changed here; one alert per run lists the Stripe
+ * subscription ids and support cancels + refunds by hand. Mode isolation is the
+ * user's stripe_customers row in this mode. Returns the subscription ids found.
+ */
+async function brokerageMemberScan(deps: ReconcileDeps, result: ReconcileResult): Promise<string[]> {
+  const found: string[] = [];
+  try {
+    const { data: members, error } = await deps.service
+      .from('organization_members')
+      .select('user_id, organization_id')
+      .in('license_status', [...BROKERAGE_MEMBER_STATUSES])
+      .not('user_id', 'is', null)
+      .limit(RECONCILE_MAX_ITEMS * 5);
+    if (error) throw new Error(`organization_members read failed: ${error.code ?? 'unknown'}`);
+    const rows = (members as { user_id: string | null; organization_id: string }[] | null) ?? [];
+    const orgIds = [...new Set(rows.map((r) => r.organization_id))];
+    if (orgIds.length === 0) return found;
+    const { data: orgs, error: orgErr } = await deps.service
+      .from('organizations')
+      .select('id, personal_owner_user_id')
+      .in('id', orgIds);
+    if (orgErr) throw new Error(`organizations read failed: ${orgErr.code ?? 'unknown'}`);
+    const brokerageOrgs = new Set(
+      ((orgs as { id: string; personal_owner_user_id: string | null }[] | null) ?? [])
+        .filter((o) => o.personal_owner_user_id === null || o.personal_owner_user_id === undefined)
+        .map((o) => o.id)
+    );
+    const users = [...new Set(rows.filter((r) => r.user_id && brokerageOrgs.has(r.organization_id)).map((r) => r.user_id as string))];
+    if (users.length > RECONCILE_MAX_ITEMS) result.truncated = true;
+    for (const userId of users.slice(0, RECONCILE_MAX_ITEMS)) {
+      try {
+        const customer = await getStripeCustomer(deps.service, userId, deps.mode);
+        if (!customer?.stripe_customer_id) continue;
+        const subs = await listAll((after) =>
+          deps.stripe.subscriptions.list({ customer: customer.stripe_customer_id, status: 'all', limit: 100, ...(after ? { starting_after: after } : {}) })
+        );
+        const paying = subs.filter(
+          (s) => (!s.metadata?.kind || s.metadata.kind === 'agent') && BROKERAGE_ALERT_SUB_STATUSES.has(s.status) && !s.pause_collection
+        );
+        if (paying.length === 0) continue;
+        result.brokerageMembers++;
+        found.push(...paying.map((s) => s.id));
+      } catch (err) {
+        console.error(`[billing/reconcile] brokerage member check failed: ${(err as { code?: string }).code ?? 'error'}`);
+      }
+    }
+  } catch (err) {
+    console.error(`[billing/reconcile] brokerage member scan failed: ${(err as Error).message}`);
   }
   return found;
 }

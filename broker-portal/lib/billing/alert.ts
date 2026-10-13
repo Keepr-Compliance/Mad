@@ -29,7 +29,9 @@ export type BillingAlertName =
   // BACKLOG-3878 (suspension pause / resume, SR R7 + R8)
   | 'paid_while_suspended'
   | 'suspended_subscription_unpaused'
-  | 'paused_subscription_licence_active';
+  | 'paused_subscription_licence_active'
+  // BACKLOG-3934 (a paying Agent who is also a brokerage member; support cancels + refunds)
+  | 'agent_subscription_brokerage_member';
 
 export function billingAlert(
   name: BillingAlertName,

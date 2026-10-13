@@ -143,7 +143,10 @@ function matches(row: Row, f: Filter): boolean {
       return typeof v === 'string' && typeof f.value === 'string' ? v < f.value : (v as number) < (f.value as number);
     case 'not': {
       const [op, val] = f.value as [string, unknown];
-      return op === 'eq' ? v !== val : true;
+      if (op === 'eq') return v !== val;
+      // BACKLOG-3934: `.not(col, 'is', null)` = IS NOT NULL.
+      if (op === 'is' && val === null) return v !== null && v !== undefined;
+      return true;
     }
   }
 }

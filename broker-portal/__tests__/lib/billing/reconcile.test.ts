@@ -23,6 +23,7 @@ jest.mock('@sentry/nextjs', () => ({
 }));
 
 import {
+  BROKERAGE_MEMBER_STATUSES,
   RECONCILE_LIST_STATUSES,
   RECONCILE_MAX_ITEMS,
   reconcileAgentSubscriptions,
@@ -30,6 +31,8 @@ import {
   stripeOverrideEffective,
 } from '@/lib/billing/reconcile';
 import type { StripeMode } from '@/lib/billing/mode';
+import { getAgentPlanView } from '@/lib/billing/agentPlan';
+import { handleInvoicePaid } from '@/lib/billing/sync';
 
 type Obj = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 const FX = path.join(__dirname, '../../fixtures/stripe');
@@ -780,5 +783,162 @@ describe('3878 R7: paused plan whose licence is active', () => {
     pausedUser('suspended');
     await reconcileAgentSubscriptions(deps());
     expect(alerts('paused_subscription_licence_active')).toEqual([]);
+  });
+});
+
+// ---- BACKLOG-3933: reverse repair also corrects the stale mirror row ---------------------------
+
+describe('3933: reverse revoke rewrites the stale open mirror row from Stripe', () => {
+  /** SUB_VOID_CANCELED (transcribed) is canceled in Stripe; its mirror row still reads 'active' (missed webhook). */
+  function staleUser(extraRows: Row[] = []): void {
+    seed({
+      organizations: [personal(USER, ORG, true)],
+      organization_plans: [plan(ORG, effective())],
+      stripe_customers: [customer(USER, SUB_VOID_CANCELED.customer, 'test')],
+      billing_subscriptions: [mirror(USER, SUB_VOID_CANCELED.id, SUB_VOID_CANCELED.customer, 'test'), ...extraRows],
+    });
+    serve(SUB_VOID_CANCELED);
+  }
+  const rowOf = (subId: string) => db.rows('billing_subscriptions').find((r) => r.stripe_subscription_id === subId) as Row;
+
+  it('revoke -> the row is re-fetched by id and now reads canceled; the cursor is not moved', async () => {
+    staleUser();
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(revokes()).toEqual([{ p_user_id: USER, p_mode: 'test' }]);
+    expect(r).toMatchObject({ revokeAttempted: 1, mirrorRepaired: 1 });
+    expect(stripeCalls.filter((c) => c.op === 'subscriptions.retrieve').map((c) => c.args[0])).toEqual([SUB_VOID_CANCELED.id]);
+    expect(rowOf(SUB_VOID_CANCELED.id)).toMatchObject({ status: 'canceled', last_event_created: 1790000000 });
+    expect(db.callsTo('billing_subscriptions', 'update').filter((c) => 'last_event_created' in (c.payload as Row))).toEqual([]);
+  });
+
+  it('re-subscribe after the repair: plan reads none (Subscribe offered) and the new plan grants with no duplicate handling', async () => {
+    staleUser();
+    await reconcileAgentSubscriptions(deps());
+    // The billing page offers Subscribe only on 'none' (capabilities.ts). A stale 'active' row reads 'active'.
+    expect((await getAgentPlanView({ from: db.from } as never, USER, 'test', NOW)).state).toBe('none');
+
+    // Composed: SUB_2A / INV_2A / CH_2A (transcribed, p0a) moved onto this user's customer, standing in
+    // for the plan they buy after the repair. No re-subscription on one customer exists in TEST to transcribe.
+    mockRpc.mockClear();
+    stripeCalls = [];
+    serve({ ...SUB_2A, customer: SUB_VOID_CANCELED.customer, metadata: { kind: 'agent' } });
+    serve({ ...INV_2A, customer: SUB_VOID_CANCELED.customer }, CH_2A);
+    await handleInvoicePaid(
+      { service: { from: db.from, rpc: mockRpc } as never, stripe, mode: 'test', event: { id: 'evt_t', type: 'invoice.paid', livemode: false, created: 1800000000 } },
+      INV_2A.id
+    );
+    expect(grants()).toEqual([{ p_user_id: USER, p_paid_through: paidThrough(LINE_END_2A), p_mode: 'test' }]);
+    // No one-open-index clash: the old row was not re-read from Stripe as an incumbent.
+    expect(stripeCalls.filter((c) => c.op === 'subscriptions.retrieve' && c.args[0] === SUB_VOID_CANCELED.id)).toEqual([]);
+    expect(rowOf(SUB_2A.id)).toMatchObject({ status: 'active' });
+  });
+
+  it('two open mirror rows (report only) -> nothing revoked, no row rewritten', async () => {
+    staleUser([mirror(USER, 'sub_OLD_open', SUB_VOID_CANCELED.customer, 'test', { id: 'row-old', status: 'past_due' })]);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(r).toMatchObject({ revokeAttempted: 0, mirrorRepaired: 0 });
+    expect(db.callsTo('billing_subscriptions', 'update')).toEqual([]);
+  });
+
+  it('a live run never rewrites a test-mode row', async () => {
+    staleUser();
+    await reconcileAgentSubscriptions(deps('live'));
+    expect(rowOf(SUB_VOID_CANCELED.id).status).toBe('active');
+    expect(db.callsTo('billing_subscriptions', 'update')).toEqual([]);
+  });
+});
+
+// ---- BACKLOG-3934: paying Agent who is also a brokerage member -> one alert --------------------
+
+describe('3934: open Agent subscription + brokerage membership -> one alert per run', () => {
+  const PAST_DUE = fx('p3878', 'x1-sub-past-due-before-pause'); // past_due, kind agent, not paused
+  const BRK = 'ORG-BRK';
+  function member(userId: string, orgId = BRK, status = 'active'): Row {
+    return { id: `om-${userId}-${orgId}`, user_id: userId, organization_id: orgId, license_status: status, role: 'agent' };
+  }
+  function brokerage(orgId = BRK): Row {
+    return { id: orgId, personal_owner_user_id: null, is_test: true };
+  }
+  /** USER pays with `sub` (served) and has `members` rows. */
+  function payingAgent(sub: Obj, members: Row[], custMode: StripeMode = 'test'): void {
+    seed({
+      organizations: [personal(USER, ORG, true), brokerage()],
+      organization_plans: [plan(ORG, undefined)],
+      stripe_customers: [customer(USER, sub.customer, custMode)],
+      organization_members: members,
+    });
+    serve(sub);
+    listed = [];
+  }
+  const brokerageAlerts = () => alerts('agent_subscription_brokerage_member');
+
+  it('statuses that count as a member: active only', () => {
+    expect([...BROKERAGE_MEMBER_STATUSES]).toEqual(['active']);
+  });
+
+  it.each([
+    ['active', SUB_VOID],
+    ['past_due', PAST_DUE],
+  ])('%s Agent plan + active brokerage member -> ONE alert with the subscription id only', async (_l, sub) => {
+    payingAgent(sub, [member(USER)]);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(brokerageAlerts()).toEqual([{ count: 1, subscription_ids: sub.id }]);
+    expect(r.brokerageMembers).toBe(1);
+    expect(JSON.stringify(brokerageAlerts())).not.toContain(USER);
+    // Alert only: nothing written, nothing cancelled.
+    expect(db.callsTo('billing_subscriptions', 'update')).toEqual([]);
+    expect(db.rows('billing_outbox')).toEqual([]);
+    expect(stripeCalls.filter((c) => !['subscriptions.list', 'subscriptions.retrieve'].includes(c.op))).toEqual([]);
+    expect(alerts('reconcile_mismatch')).toEqual([]);
+  });
+
+  it('no brokerage membership -> no alert', async () => {
+    payingAgent(SUB_VOID, []);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(brokerageAlerts()).toEqual([]);
+    expect(r.brokerageMembers).toBe(0);
+  });
+
+  it('membership of their own personal organization only -> no alert', async () => {
+    payingAgent(SUB_VOID, [member(USER, ORG)]);
+    await reconcileAgentSubscriptions(deps());
+    expect(brokerageAlerts()).toEqual([]);
+  });
+
+  it.each(['pending', 'suspended', 'expired'])('brokerage row with license_status %s -> no alert', async (status) => {
+    payingAgent(SUB_VOID, [member(USER, BRK, status)]);
+    await reconcileAgentSubscriptions(deps());
+    expect(brokerageAlerts()).toEqual([]);
+  });
+
+  it.each([
+    ['canceled', SUB_VOID_CANCELED],
+    ['paused', SUB_PAUSED],
+    ['brokerage-kind [COMPOSED: kind brokerage]', SUB_BROKERAGE],
+  ])('%s subscription -> no alert', async (_l, sub) => {
+    payingAgent(sub, [member(USER)]);
+    await reconcileAgentSubscriptions(deps());
+    expect(brokerageAlerts()).toEqual([]);
+  });
+
+  it('customer only in the other mode -> not this run: no Stripe read, no alert', async () => {
+    payingAgent(SUB_VOID, [member(USER)], 'live');
+    await reconcileAgentSubscriptions(deps('test'));
+    expect(brokerageAlerts()).toEqual([]);
+    expect(stripeCalls.filter((c) => c.op === 'subscriptions.list' && (c.args[0] as Obj).customer)).toEqual([]);
+  });
+
+  it('two such users -> still ONE alert carrying both ids', async () => {
+    seed({
+      organizations: [personal(USER, ORG, true), personal('U2', 'ORG-2', true), brokerage()],
+      organization_plans: [plan(ORG, undefined), plan('ORG-2', undefined)],
+      stripe_customers: [customer(USER, SUB_VOID.customer, 'test'), customer('U2', PAST_DUE.customer, 'test')],
+      organization_members: [member(USER), member('U2')],
+    });
+    serve(SUB_VOID, PAST_DUE);
+    listed = [];
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(brokerageAlerts()).toEqual([{ count: 2, subscription_ids: `${SUB_VOID.id},${PAST_DUE.id}` }]);
+    expect(r.brokerageMembers).toBe(2);
   });
 });
