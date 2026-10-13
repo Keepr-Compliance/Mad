@@ -140,9 +140,11 @@ export function ContactEditor({ name, email }: { name: string | null; email: str
   const { pending, error, run } = useAction();
   if (!editing) {
     return (
-      <button type="button" className="mt-2 text-sm font-medium text-indigo-700 hover:underline" onClick={() => setEditing(true)}>
-        Edit contact
-      </button>
+      <div className="mt-3">
+        <button type="button" className={SECONDARY} onClick={() => setEditing(true)}>
+          Edit contact
+        </button>
+      </div>
     );
   }
   return (
