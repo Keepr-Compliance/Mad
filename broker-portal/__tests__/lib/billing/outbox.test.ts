@@ -17,6 +17,7 @@ import {
   createDrainStripe,
   drainOnce,
   OUTBOX_MAX_ATTEMPTS,
+  OUTBOX_RUN_BUDGET_MS,
   parseRunAfter,
   reportStaleRows,
   staleAlertDue,
@@ -365,6 +366,24 @@ describe('J7 stale alert (R9)', () => {
     expect(fired).toBe(2);
   });
 
+  it('S1: the alert window is checked at the run start, not after the rows ran', async () => {
+    // B crosses the line 10 s before the run starts (window [T0-10s, T0+50s)).
+    // A runs first and takes 55 s, so the budget releases B and the stale check
+    // happens at T0+55s, outside the window. Sampled at the start, the run alerts.
+    const a = staleRow({ run_after: new Date(T0.getTime() - line - 11_000).toISOString() });
+    const b = staleRow({ run_after: new Date(T0.getTime() - line - 10_000).toISOString() });
+    seed(a, b);
+    const handler = jest.fn(async () => {
+      clock.now = new Date(clock.now.getTime() + 55_000);
+    });
+    const res = await run({ fake_kind: handler });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(res).toMatchObject({ claimed: 2, done: 1, released: 1, stale: 1 });
+    const al = alerts('outbox_stale');
+    expect(al).toHaveLength(1);
+    expect(al[0]).toMatchObject({ extra: { stale_rows: 1, oldest_run_after: b.run_after } });
+  });
+
   it('staleAlertDue: before the line never, boundary sweep around the crossing', () => {
     const ra = new Date(T0.getTime() - line);
     expect(staleAlertDue(ra, new Date(T0.getTime() - 1))).toBe(false);
@@ -454,6 +473,23 @@ describe('J11 Stripe error classification (R6)', () => {
     }
   );
 
+  it('a Stripe error type in neither list (StripeUnknownError) backs off, not parked', async () => {
+    const err = stripeError('StripeUnknownError');
+    // The SDK's own class: its type is outside both the final and the retryable list.
+    expect((err as { type?: string }).type).toBe('StripeUnknownError');
+    const r = outboxRow();
+    seed(r);
+    const res = await run({ fake_kind: fails(err) });
+    expect(res).toMatchObject({ retried: 1, parked: 0 });
+    expect(db.row(r.id)).toMatchObject({
+      attempts: 1,
+      run_after: new Date(T0.getTime() + MIN).toISOString(),
+      claimed_until: null,
+      last_error: 'stripe:StripeUnknownError:resource_missing',
+    });
+    expect(alerts()).toHaveLength(0);
+  });
+
   it('NonRetryableOutboxError parks with its code', async () => {
     const r = outboxRow();
     seed(r);
@@ -514,6 +550,17 @@ describe('J12 time budget (R5)', () => {
     const res = await run({ fake_kind: handler }, 40_000);
     expect(handler).toHaveBeenCalledTimes(3);
     expect(res.done).toBe(3);
+  });
+
+  it('handlers get the run deadline: run start + budget (contract (e))', async () => {
+    seed(outboxRow());
+    const seen: Date[] = [];
+    await run({
+      fake_kind: async (_row, ctx) => {
+        seen.push(ctx.deadline);
+      },
+    });
+    expect(seen.map((d) => d.toISOString())).toEqual([new Date(T0.getTime() + OUTBOX_RUN_BUDGET_MS).toISOString()]);
   });
 
   it('the drain Stripe client has a 15 s timeout and one network retry', () => {

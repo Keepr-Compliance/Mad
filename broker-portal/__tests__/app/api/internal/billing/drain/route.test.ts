@@ -18,6 +18,19 @@ jest.mock('@/lib/supabase/service', () => ({
 
 jest.mock('@sentry/nextjs', () => ({ captureMessage: jest.fn(), captureException: jest.fn() }));
 
+// Wraps the real function: the compare still decides, the spy only records the call.
+const mockTimingSafeEqual = jest.fn();
+jest.mock('crypto', () => {
+  const actual = jest.requireActual('crypto');
+  return {
+    ...actual,
+    timingSafeEqual: (a: Buffer, b: Buffer) => {
+      mockTimingSafeEqual(a, b);
+      return actual.timingSafeEqual(a, b);
+    },
+  };
+});
+
 const mockStripeCtor = jest.fn();
 jest.mock('stripe', () => {
   const actual = jest.requireActual('stripe');
@@ -30,6 +43,12 @@ jest.mock('stripe', () => {
 });
 
 import * as route from '@/app/api/internal/billing/drain/route';
+import {
+  OUTBOX_RUN_BUDGET_MS,
+  OUTBOX_RUN_MARGIN_MS,
+  OUTBOX_STRIPE_MAX_RETRIES,
+  OUTBOX_STRIPE_TIMEOUT_MS,
+} from '@/lib/billing/outbox';
 
 const SECRET = 'a'.repeat(32) + '0123456789abcdef'.repeat(2);
 const WRONG = 'b'.repeat(64);
@@ -161,6 +180,22 @@ describe('J2 auth (R2)', () => {
     expect(route.runtime).toBe('nodejs');
   });
 
+  it.each([
+    ['right value', () => SECRET, 200],
+    ['well-formed wrong value', () => WRONG, 401],
+  ])('%s: compared once with timingSafeEqual on two 32-byte digests', async (_l, value, status) => {
+    mockTimingSafeEqual.mockClear();
+    const spy = mockTimingSafeEqual;
+    const res = await post({ 'x-billing-drain-secret': value() });
+    expect(res.status).toBe(status);
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [a, b] = spy.mock.calls[0];
+    for (const buf of [a, b]) {
+      expect(Buffer.isBuffer(buf)).toBe(true);
+      expect((buf as Buffer).length).toBe(32);
+    }
+  });
+
   it('a claim failure is a 500', async () => {
     db.claimError = { code: '42883', message: 'x' };
     const res = await post();
@@ -187,5 +222,17 @@ describe('J9 billing flag (R3)', () => {
     await post();
     expect(mockStripeCtor).toHaveBeenCalledTimes(1);
     expect(mockStripeCtor.mock.calls[0][1]).toMatchObject({ timeout: 15_000, maxNetworkRetries: 1 });
+  });
+});
+
+describe('R5 run time fits the route (SR RC3)', () => {
+  it('budget + one Stripe call worst case (timeout x (1 + retries)) + margin <= maxDuration', () => {
+    expect(OUTBOX_RUN_BUDGET_MS).toBe(20_000);
+    expect(OUTBOX_STRIPE_TIMEOUT_MS).toBe(15_000);
+    expect(OUTBOX_STRIPE_MAX_RETRIES).toBe(1);
+    expect(OUTBOX_RUN_MARGIN_MS).toBe(5_000);
+    const worst =
+      OUTBOX_RUN_BUDGET_MS + OUTBOX_STRIPE_TIMEOUT_MS * (1 + OUTBOX_STRIPE_MAX_RETRIES) + OUTBOX_RUN_MARGIN_MS;
+    expect(worst).toBeLessThanOrEqual(route.maxDuration * 1000);
   });
 });

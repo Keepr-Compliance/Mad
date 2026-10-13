@@ -25,6 +25,13 @@
  *     cannot change the answer): the row is parked at once and an alert fires.
  *     Any other throw is retried with backoff unless it is a Stripe error that
  *     the drain classifies as final. Never put personal data in an error code.
+ * (e) Deadline. A handler that makes more than one Stripe call checks
+ *     `ctx.deadline` before every call after the first and, once
+ *     `Date.now() >= ctx.deadline`, starts no further call: it throws an
+ *     ordinary (retryable) error and the row converges on its next try (a).
+ *     The route's maxDuration only covers the budget plus ONE call's worst
+ *     case; a second call started late can outlive the function, and a killed
+ *     run leaves its rows leased with the try counted.
  *
  * Every key in OUTBOX_HANDLERS must have
  * `__tests__/lib/billing/outboxKinds/<kind>.convergence.test.ts`
@@ -59,6 +66,8 @@ export interface OutboxHandlerContext {
   stripe: Stripe;
   service: ServiceClient;
   mode: StripeMode;
+  /** Start no further Stripe call at or after this time (contract (e)). */
+  deadline: Date;
 }
 
 export type OutboxHandler = (_row: OutboxRow, _ctx: OutboxHandlerContext) => Promise<void>;

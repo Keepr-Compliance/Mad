@@ -42,8 +42,18 @@ export const OUTBOX_MAX_ATTEMPTS = 8;
 export const OUTBOX_CLAIM_LIMIT = 10;
 /** Backoff cap. */
 export const OUTBOX_MAX_BACKOFF_MINUTES = 60;
-/** Stop starting rows after this much of the run (route maxDuration is 60 s). */
-export const OUTBOX_RUN_BUDGET_MS = 40_000;
+/**
+ * Stop starting rows after this much of the run. The route's maxDuration is
+ * 60 s: budget + one row's worst Stripe call (timeout x (1 + retries)) + 5 s
+ * margin must fit (20 + 30 + 5 = 55 s).
+ */
+export const OUTBOX_RUN_BUDGET_MS = 20_000;
+/** Per-request timeout of the drain's Stripe client. */
+export const OUTBOX_STRIPE_TIMEOUT_MS = 15_000;
+/** Network retries of the drain's Stripe client. */
+export const OUTBOX_STRIPE_MAX_RETRIES = 1;
+/** Margin kept between the worst-case run and the route's maxDuration. */
+export const OUTBOX_RUN_MARGIN_MS = 5_000;
 /** A due row this much past its run_after, not leased, is stale. */
 export const OUTBOX_STALE_AFTER_MS = 10 * 60_000;
 /** One stale alert per hour per mode, plus one when the oldest stale row first crosses the line. */
@@ -137,8 +147,8 @@ export function createDrainStripe(key: string | undefined = process.env.STRIPE_S
   return new Stripe(key, {
     apiVersion: '2025-02-24.acacia',
     typescript: true,
-    timeout: 15_000,
-    maxNetworkRetries: 1,
+    timeout: OUTBOX_STRIPE_TIMEOUT_MS,
+    maxNetworkRetries: OUTBOX_STRIPE_MAX_RETRIES,
   });
 }
 
@@ -177,6 +187,7 @@ export async function drainOnce(ctx: DrainContext): Promise<DrainResult> {
   const now = ctx.now ?? (() => new Date());
   const budgetMs = ctx.budgetMs ?? OUTBOX_RUN_BUDGET_MS;
   const started = now().getTime();
+  const deadline = new Date(started + budgetMs);
   const result: DrainResult = { claimed: 0, done: 0, retried: 0, parked: 0, released: 0, leaseLost: 0, stale: 0 };
 
   const { data, error } = await ctx.service.rpc('billing_outbox_claim', {
@@ -214,7 +225,7 @@ export async function drainOnce(ctx: DrainContext): Promise<DrainResult> {
     }
 
     try {
-      await handler(row, { stripe: ctx.stripe, service: ctx.service, mode: ctx.mode });
+      await handler(row, { stripe: ctx.stripe, service: ctx.service, mode: ctx.mode, deadline });
     } catch (err) {
       const failure = classifyFailure(err);
       if (failure.final || row.attempts >= OUTBOX_MAX_ATTEMPTS) {
@@ -241,7 +252,8 @@ export async function drainOnce(ctx: DrainContext): Promise<DrainResult> {
     else result.leaseLost++;
   }
 
-  result.stale = await reportStaleRows(ctx, now());
+  // The alert window is sampled at the run's start, so it does not drift with processing time.
+  result.stale = await reportStaleRows(ctx, now(), new Date(started));
   return result;
 }
 
@@ -250,8 +262,11 @@ export async function drainOnce(ctx: DrainContext): Promise<DrainResult> {
  * being worked on (R9): unprocessed, run_after past the line and not parked,
  * no live lease. Alerts at most when the oldest such row first crosses the line
  * and then once an hour after that. Returns the count.
+ *
+ * `now` filters the rows; `dueAt` (the drain passes its run's start time) decides
+ * whether this run falls in an alert window.
  */
-export async function reportStaleRows(ctx: DrainContext, now: Date): Promise<number> {
+export async function reportStaleRows(ctx: DrainContext, now: Date, dueAt: Date = now): Promise<number> {
   const line = new Date(now.getTime() - OUTBOX_STALE_AFTER_MS).toISOString();
   const { data, count, error } = await ctx.service
     .from('billing_outbox')
@@ -270,7 +285,7 @@ export async function reportStaleRows(ctx: DrainContext, now: Date): Promise<num
   const n = count ?? (Array.isArray(data) ? data.length : 0);
   if (n === 0) return 0;
   const oldest = parseRunAfter((data as { run_after: string }[] | null)?.[0]?.run_after);
-  if (oldest && staleAlertDue(oldest, now)) {
+  if (oldest && staleAlertDue(oldest, dueAt)) {
     billingAlert('outbox_stale', ctx.mode, { stale_rows: n, oldest_run_after: oldest.toISOString() });
   }
   return n;
