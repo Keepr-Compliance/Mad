@@ -904,6 +904,25 @@ describe('BACKLOG-3878 C2: desktop purchase routes refuse a suspended licence be
     expect(mockCheckoutCreate).toHaveBeenCalledTimes(1);
   });
 
+  it("control: another user's SUSPENDED licence beside the caller's ACTIVE one: checkout-session still creates the customer and the session", async () => {
+    wire([licence('active'), { id: 'LIC-2', user_id: 'OTHER-USER', status: 'suspended' }]);
+    mockCustomersCreate.mockResolvedValue({ id: 'cus_FX3878' });
+    mockCheckoutCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe/x', payment_intent: 'pi_1' });
+    const { POST } = await import('@/app/api/payments/checkout-session/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(200);
+    expect(mockCustomersCreate).toHaveBeenCalledTimes(1);
+    expect(mockCheckoutCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("control: another user's SUSPENDED licence beside the caller's ACTIVE one: charge reaches the saved-card check", async () => {
+    wire([licence('active'), { id: 'LIC-2', user_id: 'OTHER-USER', status: 'suspended' }]);
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(409);
+    expect(mockRpc.mock.calls.map((c) => c[0])).toContain('get_next_unlock_quote');
+  });
+
   it('control: charge with an active licence reaches the saved-card check', async () => {
     wire([licence('active')]);
     const { POST } = await import('@/app/api/payments/charge/route');

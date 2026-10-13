@@ -25,9 +25,29 @@ import {
 const mockEmulator = createPostgrestEmulator();
 const mockGetUser = jest.fn();
 let mockLicenceReadFails = false;
+// Ordering probe: when set, the memberships read resolves only once the licence
+// read has been issued (or after a short timeout), and records which happened.
+let mockHoldMemberships = false;
+let mockLicenceIssued = false;
+let mockLicenceIssuedWhenMembershipsResolved: boolean | null = null;
+let mockReleaseMemberships: () => void = () => {};
+let mockMembershipsGate: Promise<void> = Promise.resolve();
 
 function mockFrom(table: string) {
   const chain = mockEmulator.from(table);
+  if (mockHoldMemberships && table === 'licenses') {
+    mockLicenceIssued = true;
+    mockReleaseMemberships();
+  }
+  if (mockHoldMemberships && table === 'organization_members') {
+    const inner = (chain as unknown as { then: (a: (r: unknown) => unknown, b?: (e: unknown) => unknown) => Promise<unknown> }).then.bind(chain);
+    (chain as { then: unknown }).then = (onFulfilled: (r: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
+      Promise.race([mockMembershipsGate, new Promise<void>((r) => setTimeout(r, 150))])
+        .then(() => {
+          mockLicenceIssuedWhenMembershipsResolved = mockLicenceIssued;
+        })
+        .then(() => inner(onFulfilled, onRejected));
+  }
   if (mockLicenceReadFails && table === 'licenses') {
     (chain as { then: unknown }).then = (
       onFulfilled: (r: unknown) => unknown,
@@ -81,6 +101,12 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockEmulator.reset();
   mockLicenceReadFails = false;
+  mockHoldMemberships = false;
+  mockLicenceIssued = false;
+  mockLicenceIssuedWhenMembershipsResolved = null;
+  mockMembershipsGate = new Promise<void>((r) => {
+    mockReleaseMemberships = r;
+  });
   process.env.BILLING_ENABLED = 'true';
   warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 });
@@ -163,10 +189,57 @@ describe('C1: a suspended account keeps Billing (personal owner) / My Account / 
     expect(await verdict('/dashboard')).toBeNull();
   });
 
-  it('C1: the licence is read alongside the memberships (one request, both tables)', async () => {
+  it('C1: both tables are read in one request', async () => {
     given([personalMembership()], SUSPENDED);
     await verdict('/dashboard');
     expect(mockEmulator.state.selects.map((s) => s.table).sort()).toEqual(['licenses', 'organization_members']);
+  });
+
+  it('C1 ordering: the licence read is issued while the memberships read is still pending (parallel, not serial)', async () => {
+    given([personalMembership()], SUSPENDED);
+    mockHoldMemberships = true;
+    expect(await verdict('/dashboard')).toBe(TO_BILLING);
+    // Serial code never issues the licence read until memberships resolve, so
+    // memberships resolve on the timeout with the licence read still unissued.
+    expect(mockLicenceIssuedWhenMembershipsResolved).toBe(true);
+  });
+
+  it("C1 user filter: another user's SUSPENDED licence row beside the caller's ACTIVE one does not suspend the caller", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: FIXTURE_USER_ID } } });
+    mockEmulator.set({
+      columnPresent: true,
+      rows: {
+        organization_members: [personalMembership()],
+        licenses: [
+          { user_id: 'OTHER-USER', status: 'suspended' },
+          { user_id: FIXTURE_USER_ID, status: 'active' },
+        ],
+      },
+    });
+    expect(await verdict('/dashboard')).toBeNull();
+  });
+
+  it("C1 user filter: another user's SUSPENDED licence row alone (caller has none) does not suspend the caller", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: FIXTURE_USER_ID } } });
+    mockEmulator.set({
+      columnPresent: true,
+      rows: { organization_members: [personalMembership()], licenses: [{ user_id: 'OTHER-USER', status: 'suspended' }] },
+    });
+    expect(await verdict('/dashboard')).toBeNull();
+  });
+
+  it('RC10: users.status = suspended with an ACTIVE licence is NOT suspended (the licence is the one signal)', async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: FIXTURE_USER_ID } } });
+    mockEmulator.set({
+      columnPresent: true,
+      rows: {
+        organization_members: [personalMembership()],
+        licenses: [ACTIVE],
+        users: [{ id: FIXTURE_USER_ID, status: 'suspended' }],
+      },
+    });
+    expect(await verdict('/dashboard')).toBeNull();
+    expect(await verdict('/dashboard/checklists')).toBeNull();
   });
 });
 
