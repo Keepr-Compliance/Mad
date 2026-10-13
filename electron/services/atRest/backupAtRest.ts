@@ -946,7 +946,10 @@ export class BackupAtRest extends EventEmitter {
     //     (if that step could not, the walk's verdict adds them back);
     //   - anywhere the state is unknown (launch migration, recovery, a new process) the
     //     whole chain.
-    const counted = listed.map((f) => since === undefined || (!indexPaths.has(f.path) && inDelta(f)));
+    // A 0-byte file is never work (sealPool reports it `empty` without opening it, after the
+    // workers), so it is not in the estimate: counted, it would hold the bar at the share of
+    // non-empty files until the pass ends (about half of a real chain is 0-byte files).
+    const counted = listed.map((f) => f.size > 0 && (since === undefined || (!indexPaths.has(f.path) && inDelta(f))));
     const unitsOf = (f: ListedFile): number => f.size + PROGRESS_FILE_WEIGHT_BYTES;
     let totalUnits = listed.reduce((sum, f, i) => sum + (counted[i] ? unitsOf(f) : 0), 0);
     let done = 0;
@@ -1841,7 +1844,8 @@ export class BackupAtRest extends EventEmitter {
       };
       const reason = allowWalkSkip ? { reasonCode: "ELIGIBLE" } : why();
       this.log("info", "[BackupAtRest] post-sync seal decision", {
-        mode: allowWalkSkip ? "delta" : "walk",
+        // An Apple-encrypted chain is never sealed; a first backup is a full seal, not a "walk".
+        mode: allowWalkSkip ? "delta" : session.kind === "keepr" ? "walk" : "none",
         reasonCode: reason.reasonCode,
         ...(reason.data ?? {}),
       });

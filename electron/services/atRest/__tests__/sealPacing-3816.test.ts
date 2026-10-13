@@ -18,7 +18,7 @@ import path from "path";
 import { build } from "esbuild";
 import plist from "simple-plist";
 
-import { BackupAtRest } from "../backupAtRest";
+import { BackupAtRest, describeBackupAtRestProgress, type BackupAtRestProgress } from "../backupAtRest";
 import { createFileCrypto, type KeyResolver } from "../fileCrypto";
 import { createMarkerStore } from "../markers";
 import { defaultSealWorkers, runPass, SEAL_WORKER_COUNT } from "../sealPool";
@@ -171,5 +171,43 @@ describe("b2: a 0-byte file is never opened", () => {
     expect(sealed?.data).toMatchObject({ empty: 10, failed: 0, plaintextLeft: 0 });
     expect(opened.length).toBeGreaterThan(0);
     expect(opened.filter((p) => empties.has(p))).toEqual([]);
+  });
+
+  it("progress does not stall on 0-byte files: half the chain empty, the bar still moves past 60% before the pass ends", async () => {
+    const UDID = "00008110-000A1B2C3D4E5F61";
+    const userData = path.join(dir, "userData2");
+    const backups = path.join(userData, "Backups");
+    const chain = path.join(backups, UDID);
+    const w = (rel: string, data: Buffer | string) => {
+      const p = path.join(chain, rel);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, data);
+    };
+    w("Info.plist", plist.stringify({ "Device Name": "Test" }));
+    w("Status.plist", plist.stringify({ SnapshotState: "finished", IsFullBackup: false }));
+    w("Manifest.plist", plist.stringify({ IsEncrypted: false }));
+    w("Manifest.db", "SQLite format 3\0" + "index rows ".repeat(40));
+    for (let i = 0; i < 200; i++) {
+      w(`${String(i % 16).padStart(2, "0")}/${"d".repeat(30)}${String(i).padStart(10, "0")}`, i % 2 === 0 ? Buffer.alloc(0) : crypto.randomBytes(120));
+    }
+    const s = new BackupAtRest({
+      backupsRoot: () => backups,
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => userData }),
+      ensureKey: async () => undefined,
+      freeBytes: async () => Number.MAX_SAFE_INTEGER,
+      sleep: async () => undefined,
+      log: () => undefined,
+      concurrency: 4,
+      chunkSize: CHUNK,
+      appVersion: () => "2.41.0",
+    });
+    const ticks: BackupAtRestProgress[] = [];
+    let clock = Date.now();
+    jest.spyOn(Date, "now").mockImplementation(() => (clock += 1500)); // every batch reports
+    expect(await s.migrate(UDID, (p) => p.phase === "migrating" && ticks.push(p))).toBe("encrypted");
+    const mid = ticks.filter((p) => p.done < p.total).map((p) => describeBackupAtRestProgress(p).percent);
+    expect(mid.length).toBeGreaterThan(3);
+    expect(Math.max(...mid)).toBeGreaterThanOrEqual(60);
   });
 });
