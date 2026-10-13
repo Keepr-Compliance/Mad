@@ -109,6 +109,24 @@ describe('agent_end_now_cancel handler', () => {
     expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
   });
 
+  it('C-END-OUTBOX-UNCOLLECTIBLE (SR ruling Q3): the latest invoice is the uncollectible one End plan now read [TEST F1-RN-inv-uncollectible under its id] -> cancels once', async () => {
+    // TEST RN: after the mark the sub read active (ACTIVE), latest invoice unchanged.
+    const uRow: OutboxRow = { ...row, payload: { subscription_id: ACTIVE.id, voided_invoice_ids: [], uncollectible_invoice_id: ACTIVE.latest_invoice } };
+    stripe.impl['invoices.retrieve'] = (id: string) => ({ ...fx('F1-RN-inv-uncollectible'), id });
+    await handleEndNowCancelRow(uRow, ctx());
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([
+      [ACTIVE.id, { prorate: false, invoice_now: false }, { idempotencyKey: outboxIdempotencyKey(uRow, 'cancel') }],
+    ]);
+    expect(db.rows('billing_subscriptions')[0]).toMatchObject({ status: 'canceled', paused: false });
+  });
+
+  it('C-END-OUTBOX-UNCOLLECTIBLE-NOT-MINE: the latest invoice reads uncollectible but this row neither voided nor read it -> parked, nothing cancelled', async () => {
+    const uRow: OutboxRow = { ...row, payload: { subscription_id: ACTIVE.id, voided_invoice_ids: [], uncollectible_invoice_id: 'in_EDITED_other' } };
+    stripe.impl['invoices.retrieve'] = (id: string) => ({ ...fx('F1-RN-inv-uncollectible'), id }); // [COMPOSED]
+    await expect(handleEndNowCancelRow(uRow, ctx())).rejects.toThrow('latest_invoice_not_voided_here');
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
+  });
+
   it('a row queued before RC1b (no voided_invoice_ids) -> parked as bad_payload, zero Stripe calls', async () => {
     await expect(handleEndNowCancelRow({ ...row, payload: { subscription_id: ACTIVE.id } }, ctx())).rejects.toThrow('bad_payload');
     expect(stripe.ops()).toEqual([]);
@@ -117,6 +135,83 @@ describe('agent_end_now_cancel handler', () => {
   it('the subscription belongs to another user\'s customer -> parked, nothing cancelled', async () => {
     current = { ...clone(ACTIVE), customer: 'cus_EDITED_other' };
     await expect(handleEndNowCancelRow(row, ctx())).rejects.toBeInstanceOf(NonRetryableOutboxError);
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
+  });
+});
+
+/**
+ * Draft hour (BACKLOG-3848 go-live; SR ruling D4): the row was queued while
+ * the latest invoice was the next cycle's draft. SR-DRAFT-inv-draft (TEST)
+ * [COMPOSED: subscription ids set to ACTIVE.id, created after the previous
+ * renewal]; the sub is ACTIVE [EDITED status past_due — the SR trace read
+ * past_due in the draft hour — and latest_invoice = the draft]. The previous
+ * renewal is SR-VOID-inv-voided (ACTIVE.latest_invoice), served void, paid
+ * (pr2-inv-paid) or open [COMPOSED under its id]. OLDER is one cycle earlier,
+ * with the opposite status.
+ */
+describe('agent_end_now_cancel handler, draft hour', () => {
+  const DRAFT_RAW = fx('SR-DRAFT-inv-draft');
+  const PREV_ID = VOIDED_INV.id;
+  const DRAFT: Obj = {
+    ...DRAFT_RAW,
+    subscription: ACTIVE.id,
+    parent: { ...DRAFT_RAW.parent, subscription_details: { ...DRAFT_RAW.parent.subscription_details, subscription: ACTIVE.id } },
+    created: VOIDED_INV.created + 86_400,
+  };
+  const draftRow: OutboxRow = {
+    ...row,
+    payload: { subscription_id: ACTIVE.id, voided_invoice_ids: [PREV_ID], draft_invoice_id: DRAFT.id, previous_renewal_id: PREV_ID },
+  };
+  const older = (status: 'paid' | 'void') =>
+    ({ ...(status === 'paid' ? fx('pr2-inv-paid') : VOIDED_INV), id: 'in_EDITED_older', subscription: ACTIVE.id, created: VOIDED_INV.created - 86_400 });
+
+  function serve(previous: Obj, olderStatus: 'paid' | 'void', draft: Obj = DRAFT, newer: Obj[] = []) {
+    current = { ...clone(ACTIVE), status: 'past_due', latest_invoice: DRAFT.id };
+    stripe.impl['invoices.list'] = (params: Obj) =>
+      params.status === 'open' ? EMPTY : { ...EMPTY, data: [draft, ...newer, previous, older(olderStatus)] };
+    stripe.impl['invoices.retrieve'] = (id: string) => (id === DRAFT.id ? draft : previous);
+  }
+
+  it('C-DRAFT-OUTBOX-VOIDED: draft still a draft, previous renewal void -> cancels once, mirrors canceled', async () => {
+    serve(VOIDED_INV, 'paid');
+    await handleEndNowCancelRow(draftRow, ctx());
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([
+      [ACTIVE.id, { prorate: false, invoice_now: false }, { idempotencyKey: outboxIdempotencyKey(draftRow, 'cancel') }],
+    ]);
+    expect(db.rows('billing_subscriptions')[0]).toMatchObject({ status: 'canceled', paused: false });
+  });
+
+  it('C-DRAFT-OUTBOX-PAID: previous renewal now paid [pr2-inv-paid under its id] -> parked, nothing cancelled', async () => {
+    serve({ ...fx('pr2-inv-paid'), id: PREV_ID, created: VOIDED_INV.created }, 'void');
+    await expect(handleEndNowCancelRow(draftRow, ctx())).rejects.toBeInstanceOf(NonRetryableOutboxError);
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
+  });
+
+  it('C-DRAFT-OUTBOX-UNCOLLECTIBLE (TEST DU): previous renewal marked uncollectible in the draft hour [F1-DU-inv-uncollectible under its id] -> cancels once', async () => {
+    serve({ ...fx('F1-DU-inv-uncollectible'), id: PREV_ID, created: VOIDED_INV.created }, 'paid');
+    const uRow: OutboxRow = { ...draftRow, payload: { ...draftRow.payload, voided_invoice_ids: [] } };
+    await handleEndNowCancelRow(uRow, ctx());
+    expect(stripe.callsTo('subscriptions.cancel')).toHaveLength(1);
+  });
+
+  it('C-DRAFT-OUTBOX-ANY-REASON: previous cycle renewal paid, a NEWER finalized non-cycle invoice reads void -> parked as paid, nothing cancelled', async () => {
+    // [EDITED] the subscription_create invoice of invoices-list-pastdue: subscription ACTIVE.id, status void, created after the previous renewal.
+    const createInv = fx('invoices-list-pastdue').data.find((i: Obj) => i.billing_reason === 'subscription_create');
+    const nonCycle = { ...createInv, id: 'in_EDITED_noncycle', subscription: ACTIVE.id, status: 'void', created: VOIDED_INV.created + 3_600 };
+    serve({ ...fx('pr2-inv-paid'), id: PREV_ID, created: VOIDED_INV.created }, 'void', DRAFT, [nonCycle]);
+    await expect(handleEndNowCancelRow(draftRow, ctx())).rejects.toThrow('previous_renewal_paid_meanwhile');
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
+  });
+
+  it('C-DRAFT-OUTBOX-OPEN: previous renewal reads open [EDITED status; open list served empty] -> parked, nothing cancelled', async () => {
+    serve({ ...VOIDED_INV, status: 'open' }, 'void');
+    await expect(handleEndNowCancelRow(draftRow, ctx())).rejects.toBeInstanceOf(NonRetryableOutboxError);
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
+  });
+
+  it('C-DRAFT-OUTBOX-FINALIZED: the draft was finalized before the drain [EDITED status open] -> parked, nothing cancelled', async () => {
+    serve(VOIDED_INV, 'paid', { ...DRAFT, status: 'open' });
+    await expect(handleEndNowCancelRow(draftRow, ctx())).rejects.toThrow('draft_now_open');
     expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
   });
 });

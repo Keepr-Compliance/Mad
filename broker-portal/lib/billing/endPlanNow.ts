@@ -21,7 +21,16 @@
  *      cannot see it (SR RC1, reproduced in Stripe TEST). Its status decides,
  *      never a second subscription read (a void flips the sub to `active`):
  *        - `void`  -> continue to the cancel;
+ *        - `uncollectible` -> continue to the cancel WITHOUT voiding it
+ *          (Stripe has stopped collecting; SR ruling Q3, traced in TEST).
+ *          Accepted residual: it stays payable, so a manual payment landing
+ *          between this read and the cancel would end a just-paid plan; the
+ *          window is one API round-trip and nothing automatic pays it;
  *        - `paid`  -> stop, no cancel ("your payment went through");
+ *        - `draft` of this subscription (the next cycle's invoice, in the
+ *          hour before Stripe finalizes it) -> the most recent FINALIZED
+ *          renewal decides (decideDraftHour); a cancel with the draft
+ *          present stops it (Stripe sets auto_advance false; SR, TEST);
  *        - else    -> "try again", no cancel.
  *   4. subscriptions.cancel (no proration, no final invoice).
  *      A cancel that fails AFTER the voids leaves an unpaid, active plan that
@@ -71,6 +80,36 @@ export function openInvoicesOf(stripe: Stripe, subscriptionId: string): Promise<
   return listAll((after) =>
     stripe.invoices.list({ subscription: subscriptionId, status: 'open', limit: 100, ...(after ? { starting_after: after } : {}) })
   );
+}
+
+/**
+ * The latest invoice is a draft of this subscription (next cycle, before
+ * Stripe finalizes it). The draft says nothing about whether the plan was
+ * paid, so the most recent FINALIZED renewal (billing_reason
+ * subscription_cycle, any status but draft; newest by `created`) decides:
+ *   - `void` / `uncollectible` -> 'cancel';
+ *   - `paid`                   -> 'paid_meanwhile' (a retry paid it after
+ *                                  the status read: never end that plan);
+ *   - `open` / none            -> 'try_again'.
+ * The draft is never finalized or voided here.
+ */
+export type DraftHourDecision = { decision: 'cancel' | 'paid_meanwhile' | 'try_again'; previousRenewalId: string | null };
+
+export async function decideDraftHour(stripe: Stripe, subscriptionId: string): Promise<DraftHourDecision> {
+  const all = await listAll((after) =>
+    stripe.invoices.list({ subscription: subscriptionId, limit: 100, ...(after ? { starting_after: after } : {}) })
+  );
+  const previous = all
+    .filter((inv) => inv.billing_reason === 'subscription_cycle' && inv.status !== 'draft')
+    .sort((a, b) => b.created - a.created)[0];
+  if (!previous) return { decision: 'try_again', previousRenewalId: null };
+  if (previous.status === 'void' || previous.status === 'uncollectible') return { decision: 'cancel', previousRenewalId: previous.id };
+  if (previous.status === 'paid') return { decision: 'paid_meanwhile', previousRenewalId: previous.id };
+  return { decision: 'try_again', previousRenewalId: previous.id };
+}
+
+function isDraftOf(inv: Stripe.Invoice, subscriptionId: string): boolean {
+  return inv.status === 'draft' && stripeId(inv.subscription) === subscriptionId;
 }
 
 /** Mirror write-through after an immediate end: this row only (user, mode, subscription). */
@@ -132,11 +171,25 @@ export async function endPlanNow(args: {
   if (!latestId) return 'try_again';
   const latest = await stripe.invoices.retrieve(latestId);
   if (latest.status === 'paid') return 'paid_meanwhile';
-  if (latest.status !== 'void') {
+  let draftHour: { draft_invoice_id: string; previous_renewal_id: string } | null = null;
+  let uncollectibleId: string | null = null;
+  if (isDraftOf(latest, sub.id)) {
+    const { decision, previousRenewalId } = await decideDraftHour(stripe, sub.id);
+    if (decision === 'paid_meanwhile') return 'paid_meanwhile';
+    if (decision !== 'cancel' || !previousRenewalId) {
+      console.warn(`[billing/end-now] latest invoice ${latestId} of ${sub.id} is a draft and the previous renewal is not settled; not ending`);
+      return 'try_again';
+    }
+    draftHour = { draft_invoice_id: latestId, previous_renewal_id: previousRenewalId };
+  } else if (latest.status === 'uncollectible') {
+    // SR ruling Q3: cancel, never void it (an extra money-path call for nothing).
+    uncollectibleId = latestId;
+  } else if (latest.status !== 'void') {
     console.warn(`[billing/end-now] latest invoice ${latestId} of ${sub.id} reads ${latest.status}; not ending`);
     return 'try_again';
+  } else {
+    voided.add(latestId);
   }
-  voided.add(latestId);
 
   // Step 4.
   let ended: Stripe.Subscription;
@@ -149,8 +202,15 @@ export async function endPlanNow(args: {
       kind: END_NOW_KIND,
       userId,
       dedupeKey: `end-now:${mode}:${sub.id}`,
-      // The handler cancels only while the latest invoice is one of these and still void (SR RC1b).
-      payload: { subscription_id: sub.id, voided_invoice_ids: [...voided] },
+      // The handler cancels only while the latest invoice is one of these and still void (SR RC1b),
+      // or is the uncollectible one this run read (still void or uncollectible), or, in the draft
+      // hour, is still this draft and the previous renewal still decides 'cancel'.
+      payload: {
+        subscription_id: sub.id,
+        voided_invoice_ids: [...voided],
+        ...(uncollectibleId ? { uncollectible_invoice_id: uncollectibleId } : {}),
+        ...(draftHour ?? {}),
+      },
       runAfter: new Date(),
     });
     return 'finalizing';
@@ -169,12 +229,17 @@ function pastDeadline(deadline: Date): void {
  * billing_outbox kind `agent_end_now_cancel`: retry the cancel that failed
  * after the voids (step 4). Converges: reads Stripe first and only cancels a
  * subscription that is still running with no open invoice and whose latest
- * invoice is one End plan now voided and still reads `void`.
+ * invoice is one End plan now voided (or read `uncollectible`) and still reads
+ * `void` or `uncollectible`.
  *   - already canceled           -> mirror written, done;
  *   - not this row's user        -> parked (never cancels someone else's plan);
  *   - an open invoice reappeared -> parked for a person (the state changed);
- *   - latest invoice not one this row voided, or not `void` (a new cycle was
- *     invoiced, perhaps paid, before the drain) -> parked, nothing cancelled;
+ *   - latest invoice is this row's draft (draft hour): it must still read
+ *     `draft` and decideDraftHour must still say 'cancel' for the same
+ *     previous renewal, else parked, nothing cancelled;
+ *   - otherwise: latest invoice not one this row voided or read uncollectible,
+ *     or not `void` / `uncollectible` (a new cycle was invoiced, perhaps paid,
+ *     before the drain) -> parked;
  *   - active / past_due          -> cancel (key per row), mirror written.
  */
 export const handleEndNowCancelRow: OutboxHandler = async (row, ctx) => {
@@ -193,10 +258,24 @@ export const handleEndNowCancelRow: OutboxHandler = async (row, ctx) => {
   pastDeadline(ctx.deadline);
   if ((await openInvoicesOf(ctx.stripe, sub.id)).length > 0) throw new NonRetryableOutboxError('open_invoice');
   const latestId = stripeId(sub.latest_invoice);
-  if (!latestId || !voidedIds.includes(latestId)) throw new NonRetryableOutboxError('latest_invoice_not_voided_here');
-  pastDeadline(ctx.deadline);
-  const latest = await ctx.stripe.invoices.retrieve(latestId);
-  if (latest.status !== 'void') throw new NonRetryableOutboxError(`latest_invoice_${latest.status}`);
+  const draftId = typeof row.payload?.draft_invoice_id === 'string' ? row.payload.draft_invoice_id : null;
+  if (latestId && draftId && latestId === draftId) {
+    pastDeadline(ctx.deadline);
+    const draft = await ctx.stripe.invoices.retrieve(latestId);
+    if (!isDraftOf(draft, sub.id)) throw new NonRetryableOutboxError(`draft_now_${draft.status}`);
+    pastDeadline(ctx.deadline);
+    const { decision, previousRenewalId } = await decideDraftHour(ctx.stripe, sub.id);
+    if (decision !== 'cancel') throw new NonRetryableOutboxError(`previous_renewal_${decision}`);
+    if (previousRenewalId !== row.payload?.previous_renewal_id) throw new NonRetryableOutboxError('previous_renewal_changed');
+  } else {
+    const uncollectibleId = typeof row.payload?.uncollectible_invoice_id === 'string' ? row.payload.uncollectible_invoice_id : null;
+    if (!latestId || !(voidedIds.includes(latestId) || latestId === uncollectibleId)) {
+      throw new NonRetryableOutboxError('latest_invoice_not_voided_here');
+    }
+    pastDeadline(ctx.deadline);
+    const latest = await ctx.stripe.invoices.retrieve(latestId);
+    if (latest.status !== 'void' && latest.status !== 'uncollectible') throw new NonRetryableOutboxError(`latest_invoice_${latest.status}`);
+  }
   pastDeadline(ctx.deadline);
   const ended = await ctx.stripe.subscriptions.cancel(
     sub.id,
