@@ -179,6 +179,9 @@ describe("C2b: the run's own result decides, not Cancel's return (S5 cancel-afte
     );
     await waitFor(() => expect(onTextsAdded).toHaveBeenCalledTimes(1));
     expect(getTextCoverage).toHaveBeenLastCalledWith(TX, "user-1", "iphone");
+    expect(await screen.findByTestId("get-older-texts-result")).toHaveTextContent(
+      "Added 5 older texts from your saved iPhone backup.",
+    );
   });
 
   it("a failure with no message and no reason (saving) -> the generic failure line", async () => {

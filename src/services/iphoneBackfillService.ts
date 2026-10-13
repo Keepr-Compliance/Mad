@@ -42,7 +42,10 @@ export const iphoneBackfillService = {
     }
   },
 
-  /** Stop the running backfill (nothing it stored is kept). */
+  /**
+   * Ask the running backfill to stop. Before the save commit point nothing is stored;
+   * after it the texts are kept and this returns false. The run's own result decides.
+   */
   async cancel(): Promise<boolean> {
     const api = bridge();
     if (!api?.cancelBackfill) return false;
