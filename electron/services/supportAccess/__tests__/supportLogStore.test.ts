@@ -510,6 +510,29 @@ describe("SupportLogStore", () => {
       expect(await names()).toContain("current.log");
       expect(await store.totalBytes()).toBeLessThanOrEqual(CAP);
     });
+
+    it("never lets the total pass cap + one segment while segments are held", async () => {
+      const store = makeStore({ segment: SEGMENT, total: CAP });
+      held.failuresLeft = 10_000;
+
+      const results: boolean[] = [];
+      const totals: number[] = [];
+      for (let i = 0; i < 100; i += 1) {
+        results.push(await store.write("message-import", "bulk", { i, payload }));
+        totals.push(await store.totalBytes());
+      }
+      // Every point in the series, not just the last one.
+      expect(totals.filter((t) => t > CAP + SEGMENT)).toEqual([]);
+      expect(results).toContain(false);
+      expect(store.heldDropCount()).toBeGreaterThan(0);
+      expect(await names()).toContain("current.log");
+      expect(warnings.some((w) => w.includes("at its limit"))).toBe(true);
+
+      // Released: writing resumes and the next write brings it back to the cap.
+      held.failuresLeft = 0;
+      expect(await store.write("message-import", "released", {})).toBe(true);
+      expect(await store.totalBytes()).toBeLessThanOrEqual(CAP);
+    });
   });
 
   it("keeps a current.log when current.log alone was over the cap", async () => {
