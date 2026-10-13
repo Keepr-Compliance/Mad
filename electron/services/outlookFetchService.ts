@@ -1703,6 +1703,14 @@ class OutlookFetchService {
   } | null = null;
 
   /**
+   * BACKLOG-3926: the last full folder walk, or null — no network. The catalogue
+   * refresh compares it with what it last catalogued to notice a new / renamed folder.
+   */
+  peekFolderCatalogSource(): Array<{ id: string; displayName: string; parentFolderId?: string }> | null {
+    return this.lastDiscoveredFolders?.folders ?? null;
+  }
+
+  /**
    * BACKLOG-3926: the raw material of the folder-name catalogue — every syncable
    * folder (reusing a walk younger than `maxAgeMs`) and the ids of Outlook's own
    * folders, resolved by WELL-KNOWN NAME in one `$batch` (never by display name, which

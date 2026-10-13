@@ -44,14 +44,22 @@ jest.mock("../logService", () => {
 });
 
 const gmailListLabels = jest.fn();
+const gmailPeekLabels = jest.fn();
 jest.mock("../gmailFetchService", () => ({
   __esModule: true,
-  default: { listLabelCatalogSource: (...a: unknown[]) => gmailListLabels(...a) },
+  default: {
+    listLabelCatalogSource: (...a: unknown[]) => gmailListLabels(...a),
+    peekLabelCatalogSource: () => gmailPeekLabels(),
+  },
 }));
 const outlookListFolders = jest.fn();
+const outlookPeekFolders = jest.fn();
 jest.mock("../outlookFetchService", () => ({
   __esModule: true,
-  default: { listFolderCatalogSource: (...a: unknown[]) => outlookListFolders(...a) },
+  default: {
+    listFolderCatalogSource: (...a: unknown[]) => outlookListFolders(...a),
+    peekFolderCatalogSource: () => outlookPeekFolders(),
+  },
 }));
 
 import { setDb } from "../db/core/dbConnection";
@@ -228,6 +236,8 @@ beforeEach(() => {
   logCalls.length = 0;
   gmailListLabels.mockReset().mockResolvedValue(GMAIL_LABELS);
   outlookListFolders.mockReset().mockResolvedValue({ folders: OUTLOOK_FOLDERS, systemFolderIds: OUTLOOK_SYSTEM_IDS });
+  gmailPeekLabels.mockReset().mockReturnValue(null);
+  outlookPeekFolders.mockReset().mockReturnValue(null);
   db = new Database(":memory:") as DatabaseType;
   setDb(db);
 });
@@ -370,6 +380,87 @@ describe("catalogue is written only when it changes (BACKLOG-3926 R2)", () => {
     await refreshMailFolderCatalog("gmail", USER, GMAIL_ACCT, t0 + CATALOG_REFRESH_MS + 1);
     expect(gmailListLabels).toHaveBeenCalledTimes(2);
     expect(sameAutoLinkInputToken(before, readAutoLinkInputToken(db))).toBe(true);
+  });
+});
+
+describe("the catalogue throttle yields to a force re-cache and to a changed walk (BACKLOG-3926 fix round)", () => {
+  // A folder created after the catalogue refreshed: same Graph shape as OUTLOOK_FOLDERS.
+  const NEW_FOLDER = { id: "AAMkNewDeal==", displayName: "100 Main St", parentFolderId: "AAMkInbox==", childFolderCount: 0 };
+  const WALK_AFTER = [...OUTLOOK_FOLDERS, NEW_FOLDER];
+  const ids = () =>
+    (db.prepare(`SELECT folder_id FROM mail_folder_names WHERE account_id = ? ORDER BY folder_id`).all(OUTLOOK_ACCT) as Array<{
+      folder_id: string;
+    }>).map((r) => r.folder_id);
+
+  it("force re-cache within the throttle writes a folder created after the last refresh, from a walk made now", async () => {
+    seedBase();
+    const t0 = Date.now();
+    await refreshMailFolderCatalog("outlook", USER, OUTLOOK_ACCT, t0);
+    expect(ids()).not.toContain(NEW_FOLDER.id);
+    outlookListFolders.mockResolvedValue({ folders: WALK_AFTER, systemFolderIds: OUTLOOK_SYSTEM_IDS });
+    const run = {};
+    await refreshMailFolderCatalog("outlook", USER, OUTLOOK_ACCT, t0 + 60_000, { forceRun: run });
+    expect(ids()).toContain(NEW_FOLDER.id);
+    expect(outlookListFolders).toHaveBeenCalledTimes(2);
+    expect(outlookListFolders).toHaveBeenLastCalledWith(0);
+    // Later batches of the same run are throttled again (walk unchanged).
+    outlookPeekFolders.mockReturnValue(WALK_AFTER);
+    await refreshMailFolderCatalog("outlook", USER, OUTLOOK_ACCT, t0 + 90_000, { forceRun: run });
+    expect(outlookListFolders).toHaveBeenCalledTimes(2);
+  });
+
+  it("a non-force fetch whose fresh walk differs refreshes within the throttle", async () => {
+    seedBase();
+    const t0 = Date.now();
+    outlookPeekFolders.mockReturnValue(OUTLOOK_FOLDERS);
+    await refreshMailFolderCatalog("outlook", USER, OUTLOOK_ACCT, t0);
+    outlookPeekFolders.mockReturnValue(WALK_AFTER);
+    outlookListFolders.mockResolvedValue({ folders: WALK_AFTER, systemFolderIds: OUTLOOK_SYSTEM_IDS });
+    await refreshMailFolderCatalog("outlook", USER, OUTLOOK_ACCT, t0 + 60_000);
+    expect(ids()).toContain(NEW_FOLDER.id);
+    expect(outlookListFolders).toHaveBeenCalledTimes(2);
+  });
+
+  it("a non-force fetch whose fresh walk renames a folder (same id) writes the new name within the throttle", async () => {
+    seedBase();
+    const t0 = Date.now();
+    outlookPeekFolders.mockReturnValue(OUTLOOK_FOLDERS);
+    await refreshMailFolderCatalog("outlook", USER, OUTLOOK_ACCT, t0);
+    const renamed = OUTLOOK_FOLDERS.map((f) => (f.id === "AAMkOther==" ? { ...f, displayName: "100 Main St" } : f));
+    outlookPeekFolders.mockReturnValue(renamed);
+    outlookListFolders.mockResolvedValue({ folders: renamed, systemFolderIds: OUTLOOK_SYSTEM_IDS });
+    await refreshMailFolderCatalog("outlook", USER, OUTLOOK_ACCT, t0 + 60_000);
+    const row = db
+      .prepare(`SELECT display_path FROM mail_folder_names WHERE account_id = ? AND folder_id = 'AAMkOther=='`)
+      .get(OUTLOOK_ACCT) as { display_path: string };
+    expect(row.display_path).toBe("100 Main St");
+    expect(outlookListFolders).toHaveBeenCalledTimes(2);
+  });
+
+  it("an unchanged walk within the throttle is not re-listed and writes nothing", async () => {
+    seedBase();
+    const t0 = Date.now();
+    outlookPeekFolders.mockReturnValue(OUTLOOK_FOLDERS);
+    await refreshMailFolderCatalog("outlook", USER, OUTLOOK_ACCT, t0);
+    const before = readAutoLinkInputToken(db);
+    await refreshMailFolderCatalog("outlook", USER, OUTLOOK_ACCT, t0 + 60_000);
+    expect(outlookListFolders).toHaveBeenCalledTimes(1);
+    expect(sameAutoLinkInputToken(before, readAutoLinkInputToken(db))).toBe(true);
+  });
+
+  it("Gmail: a label added after the last refresh is written when the fresh label list differs", async () => {
+    seedBase();
+    const t0 = Date.now();
+    gmailPeekLabels.mockReturnValue(GMAIL_LABELS);
+    await refreshMailFolderCatalog("gmail", USER, GMAIL_ACCT, t0);
+    const after = [...GMAIL_LABELS, { id: "Label_40", name: "100 Main St", type: "user" }];
+    gmailPeekLabels.mockReturnValue(after);
+    gmailListLabels.mockResolvedValue(after);
+    await refreshMailFolderCatalog("gmail", USER, GMAIL_ACCT, t0 + 60_000);
+    const gm = (db.prepare(`SELECT folder_id FROM mail_folder_names WHERE account_id = ?`).all(GMAIL_ACCT) as Array<{
+      folder_id: string;
+    }>).map((r) => r.folder_id);
+    expect(gm).toContain("Label_40");
   });
 });
 

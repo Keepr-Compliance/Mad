@@ -41,9 +41,13 @@ jest.mock("../outlookFetchService", () => ({
       folders: [{ id: "FA", displayName: "Folder A" }, { id: "FB", displayName: "Folder B" }],
       systemFolderIds: [],
     })),
+    peekFolderCatalogSource: jest.fn(() => null),
   },
 }));
-jest.mock("../gmailFetchService", () => ({ __esModule: true, default: { listLabelCatalogSource: jest.fn(async () => []) } }));
+jest.mock("../gmailFetchService", () => ({
+  __esModule: true,
+  default: { listLabelCatalogSource: jest.fn(async () => []), peekLabelCatalogSource: jest.fn(() => null) },
+}));
 
 import { setDb } from "../db/core/dbConnection";
 import { storeParsedEmailsForAccount, type StoreableEmail } from "../emailSyncService";

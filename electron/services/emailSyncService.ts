@@ -1048,7 +1048,7 @@ async function fetchStoreAndDedup(params: {
   // the provider message id, so a force re-cache's staging needs nothing extra.
   // Never throws; never writes after a disconnect (BACKLOG-3903).
   if (accountId && newEmails.length > 0 && !isMailboxGenerationStale(mailboxProvider, mailboxGeneration)) {
-    await recordMailFoldersForFetchedEmails({ provider, userId, accountId, emails: newEmails });
+    await recordMailFoldersForFetchedEmails({ provider, userId, accountId, emails: newEmails, forceRun: force });
   }
 
   // BACKLOG-1831: cache hits = exact duplicates + resurrection remaps (both mean
