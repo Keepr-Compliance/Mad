@@ -83,3 +83,9 @@ SR plan-review spike (`3848-sr/spike`, TEST, acacia, clock deleted):
 | `SR-VOID-inv-voided.json` | `invoices.voidInvoice` on a past_due renewal |
 | `SR-VOID-sub-after-void.json` | `subscriptions.retrieve` after the void: `active` |
 | `SR-VOID-sub-canceled.json` | `subscriptions.cancel(id, {prorate: false, invoice_now: false})`: `canceled` |
+
+SR delta-review e2e (`3848-pr2-sr2/e2e`, TEST, acacia, daily price, failing card, clock deleted):
+
+| File | Producer |
+|---|---|
+| `SR-DRAFT-inv-draft.json` | `invoices.retrieve(sub.latest_invoice)` in the draft hour: the next cycle's renewal, `draft`, `billing_reason: subscription_cycle` (SR file `TEST-dcancel-draft-after-cancel.json`; read after the void of the previous renewal and the cancel, so `auto_advance` is `false` — before the cancel it read `true`) |

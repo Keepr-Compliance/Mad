@@ -199,3 +199,79 @@ describe('endPlanNow (R4)', () => {
     expect(db.calls.filter((c) => c.op !== 'select')).toEqual([]);
   });
 });
+
+/**
+ * Draft hour (BACKLOG-3848 go-live; SR ruling, delta review D4). The latest
+ * invoice is the next cycle's DRAFT while the previous renewal decides.
+ * SR-DRAFT-inv-draft is the TEST draft [COMPOSED: its subscription ids set to
+ * SUB.id; `created` one day after INV so it is the newest, as in the trace].
+ * The previous renewal is INV (the open renewal), served void (VOIDED), paid
+ * (pr2-inv-paid) or open (INV) under INV.id. OLDER is a renewal one cycle
+ * earlier [COMPOSED from pr2-inv-paid / VOIDED, edited id and created] whose
+ * status is the opposite of the case's, so a decision on the wrong renewal
+ * reads differently.
+ */
+describe('endPlanNow draft hour (previous renewal decides)', () => {
+  const DRAFT_RAW = fx('SR-DRAFT-inv-draft');
+  const DRAFT = {
+    ...DRAFT_RAW,
+    subscription: SUB.id,
+    parent: { ...DRAFT_RAW.parent, subscription_details: { ...DRAFT_RAW.parent.subscription_details, subscription: SUB.id } },
+    created: INV.created + 86_400,
+  };
+  const SUB_DRAFT = { ...clone(SUB), latest_invoice: DRAFT.id }; // [EDITED latest_invoice]
+  const older = (status: 'paid' | 'void') =>
+    ({ ...(status === 'paid' ? fx('pr2-inv-paid') : fx('SR-VOID-inv-voided')), id: 'in_EDITED_older', subscription: SUB.id, created: INV.created - 86_400 });
+
+  function serve(opts: { open: Obj[]; previous: Obj; olderStatus: 'paid' | 'void' }) {
+    stripe.impl['subscriptions.retrieve'] = () => SUB_DRAFT;
+    stripe.impl['invoices.list'] = (params: Obj) =>
+      params.status === 'open'
+        ? { ...clone(OPEN_LIST), data: opts.open }
+        : { ...clone(OPEN_LIST), data: [DRAFT, opts.previous, older(opts.olderStatus)] }; // newest first, as Stripe lists
+    stripe.impl['invoices.retrieve'] = (id: string) => (id === DRAFT.id ? DRAFT : opts.previous);
+  }
+
+  it('C-DRAFT-VOIDED: previous renewal voided by this run, latest is a draft -> ended, one cancel, the draft is never touched', async () => {
+    serve({ open: [INV], previous: { ...VOIDED, id: INV.id, created: INV.created }, olderStatus: 'paid' });
+    expect(await run()).toBe('ended');
+    expect(stripe.callsTo('invoices.voidInvoice').map((a) => a[0])).toEqual([INV.id]);
+    expect(stripe.callsTo('invoices.list').map((a) => a[0])).toEqual([
+      { subscription: SUB.id, status: 'open', limit: 100 },
+      { subscription: SUB.id, limit: 100 },
+    ]);
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([
+      [SUB.id, { prorate: false, invoice_now: false }, { idempotencyKey: `end-now-cancel:${SUB.id}` }],
+    ]);
+    expect(stripe.ops().filter((o) => o.startsWith('invoices.') && !['invoices.list', 'invoices.retrieve', 'invoices.voidInvoice'].includes(o))).toEqual([]);
+    expect(mine()).toMatchObject({ status: 'canceled', paused: false });
+  });
+
+  it('C-DRAFT-PAID (RC1 in the draft hour): previous renewal paid after the status read -> paid_meanwhile, zero cancel', async () => {
+    serve({ open: [], previous: { ...fx('pr2-inv-paid'), id: INV.id }, olderStatus: 'void' }); // [EDITED data: []] nothing open once paid
+    expect(await run()).toBe('paid_meanwhile');
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
+    expect(mine()).toMatchObject({ status: 'past_due' });
+    expect(db.rows('billing_outbox')).toEqual([]);
+  });
+
+  it('C-DRAFT-OPEN: previous renewal still open [EDITED: open list served empty] -> try_again, zero cancel', async () => {
+    serve({ open: [], previous: INV, olderStatus: 'void' });
+    expect(await run()).toBe('try_again');
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
+    expect(mine()).toMatchObject({ status: 'past_due' });
+  });
+
+  it('C-DRAFT-CANCEL-FAIL: a failed cancel in the draft hour queues the draft and the previous renewal in the payload', async () => {
+    serve({ open: [INV], previous: { ...VOIDED, id: INV.id, created: INV.created }, olderStatus: 'paid' });
+    stripe.impl['subscriptions.cancel'] = () => {
+      throw Object.assign(new Error('api down'), { type: 'StripeAPIError' });
+    };
+    expect(await run()).toBe('finalizing');
+    expect(db.rows('billing_outbox')).toEqual([
+      expect.objectContaining({
+        payload: { subscription_id: SUB.id, voided_invoice_ids: [INV.id], draft_invoice_id: DRAFT.id, previous_renewal_id: INV.id },
+      }),
+    ]);
+  });
+});
