@@ -98,10 +98,25 @@ describe("worker not ready when Settings opens", () => {
     getSourceStats.mockResolvedValue({ success: false, error: "x" });
     render(<MessagesStoredBlock userId="u-1" source="macos" testId="blk" />);
     await act(async () => {});
+    // Async advance flushes the promise chain between timers, so a retry
+    // scheduled by the second failure would fire inside this window.
     await act(async () => {
-      jest.advanceTimersByTime(STATS_RETRY_MS * 5);
+      await jest.advanceTimersByTimeAsync(STATS_RETRY_MS * 5);
     });
     expect(getSourceStats).toHaveBeenCalledTimes(2);
     expect(cells("blk")).toEqual(["—", "—", "—"]);
+  });
+
+  it("unmounting before the retry fires cancels it: one read in total", async () => {
+    jest.useFakeTimers();
+    getSourceStats.mockResolvedValue({ success: false, error: "x" });
+    const { unmount } = render(<MessagesStoredBlock userId="u-1" source="macos" testId="blk" />);
+    await act(async () => {});
+    expect(getSourceStats).toHaveBeenCalledTimes(1);
+    unmount();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(STATS_RETRY_MS * 5);
+    });
+    expect(getSourceStats).toHaveBeenCalledTimes(1);
   });
 });
