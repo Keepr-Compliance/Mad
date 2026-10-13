@@ -14,6 +14,7 @@ import {
   APPLE_DEVICES_OPEN_BUTTON,
   APPLE_DEVICES_SERVICE_STOPPED,
   APPLE_MSI_STOPPED_BODY,
+  CHECKLIST_APPLE_DEVICES_STARTING,
 } from "../../../constants/appleDevicesStoreCopy";
 
 function setStoreFlag(value: boolean | undefined) {
@@ -67,7 +68,9 @@ describe("Store build (BACKLOG-3927)", () => {
       status(true, false, "apple-devices", "not-running"),
     );
     render(<SyncToolsSettings />);
-    expect(await screen.findByText(APPLE_DEVICES_SERVICE_STOPPED)).toBeInTheDocument();
+    expect(await screen.findByText(CHECKLIST_APPLE_DEVICES_STARTING)).toBeInTheDocument();
+    expect(screen.getByTestId("iphone-setup-checklist")).toBeInTheDocument();
+    expect(screen.queryByTestId("apple-devices-store-guide")).not.toBeInTheDocument();
     expect(screen.queryByText("Repair Installation")).not.toBeInTheDocument();
     expect(screen.getByTestId("sync-tools-driver-source")).toHaveTextContent("Apple Devices app");
   });
@@ -126,5 +129,8 @@ describe("website build, Apple Devices as the source (BACKLOG-3927)", () => {
     render(<SyncToolsSettings />);
     expect(await screen.findByText(APPLE_DEVICES_SERVICE_STOPPED)).toBeInTheDocument();
     expect(screen.queryByText("Repair Installation")).not.toBeInTheDocument();
+    // BACKLOG-3927 round 5: the website build keeps the single-state guide.
+    expect(screen.getByTestId("apple-devices-store-guide")).toBeInTheDocument();
+    expect(screen.queryByTestId("iphone-setup-checklist")).not.toBeInTheDocument();
   });
 });

@@ -2,7 +2,7 @@
  * BACKLOG-3927: read Apple Mobile Device Support readiness from the main
  * process's driver status (`drivers.checkApple()`).
  */
-import type { AppleDevicesState } from "../types/iphone";
+import type { AppleDevicesState, AppleUsbDriverState } from "../types/iphone";
 
 export type AppleDriverInstalledVia = "msi" | "apple-devices";
 
@@ -10,7 +10,17 @@ export interface DriverStatusLike {
   isInstalled?: boolean;
   serviceRunning?: boolean;
   installedVia?: AppleDriverInstalledVia | null;
-  appleDevices?: { state?: AppleDevicesState } | null;
+  appleDevices?: { state?: AppleDevicesState; usbDriver?: AppleUsbDriverState } | null;
+}
+
+/**
+ * BACKLOG-3927: the iPhone's USB driver from the probe, or null when the probe
+ * did not run (the MSI route answered on its own) — never read as "bound".
+ */
+export function appleUsbDriverOf(
+  status: DriverStatusLike | null | undefined,
+): AppleUsbDriverState | null {
+  return status?.appleDevices?.usbDriver ?? null;
 }
 
 export function appleDevicesStateOf(

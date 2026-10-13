@@ -71,6 +71,34 @@ it("pins the Store focus throttle and recheck interval at 15 s", () => {
 });
 
 describe("useIPhoneSync — Store build (BACKLOG-3927)", () => {
+  it("round 5: records the probe's USB-driver reading from every writer (mount, re-check, Check again)", async () => {
+    const checkApple = setupApi(true, "ready");
+    checkApple.mockResolvedValue({ ...driverStatus("ready"), appleDevices: { state: "ready", usbDriver: "no-device" } });
+    const { result } = renderHook(() => useIPhoneSync(true));
+    await flush();
+    expect(result.current.appleUsbDriver).toBe("no-device");
+    // interval re-check while the Connect screen is shown
+    act(() => result.current.setConnectScreenActive(true));
+    checkApple.mockResolvedValue({ ...driverStatus("ready"), appleDevices: { state: "ready", usbDriver: "bound" } });
+    await act(async () => {
+      jest.advanceTimersByTime(STORE_RECHECK_INTERVAL_MS);
+    });
+    await flush();
+    expect(result.current.appleUsbDriver).toBe("bound");
+    // Check again
+    checkApple.mockResolvedValue({ ...driverStatus("usb-driver-missing"), appleDevices: { state: "usb-driver-missing", usbDriver: "missing" } });
+    await act(async () => {
+      await result.current.recheckDriver();
+    });
+    expect(result.current.appleUsbDriver).toBe("missing");
+    // MSI route answered alone (no probe block): unknown, never "bound"
+    checkApple.mockResolvedValue({ isInstalled: true, serviceRunning: true, version: null, error: null, installedVia: "msi" });
+    await act(async () => {
+      await result.current.recheckDriver();
+    });
+    expect(result.current.appleUsbDriver).toBeNull();
+  });
+
   it("mount: records the state and sets driverMissing", async () => {
     setupApi(true, "not-running");
     const { result } = renderHook(() => useIPhoneSync(true));

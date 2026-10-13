@@ -52,6 +52,7 @@ const baseContext: UseIPhoneSyncReturn = {
   recheckDriver: jest.fn(),
   setConnectScreenActive: jest.fn(),
   appleDevicesState: null,
+  appleUsbDriver: null,
   startSync: jest.fn(),
   cancelSync: jest.fn(),
   dismissSync: jest.fn(),
