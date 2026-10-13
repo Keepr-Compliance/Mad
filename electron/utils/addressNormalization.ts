@@ -130,6 +130,65 @@ export interface NormalizedAddress {
   optionalWords: string[];
   /** Canonical combined string for logging, e.g. "3414 sapp road southwest" */
   full: string;
+  /**
+   * BACKLOG-3925: the street name as the address-only route reads it — the name words
+   * in written order, ending at the first street suffix after a name word (or at a
+   * unit/floor token, or a city/province/postcode tail). Absent on hand-built values;
+   * the route then falls back to `requiredNameWords`. The contact route never reads it.
+   */
+  streetNameWords?: string[];
+}
+
+/** Words that start the unit / floor part of an address, after the street. */
+const STREET_END_WORDS = new Set([
+  "floor", "fl", "suite", "ste", "unit", "apt", "apartment", "room", "rm", "#",
+]);
+
+/** US states, Canadian provinces/territories: a bare code after the street name starts the tail. */
+const REGION_CODES = new Set([
+  "al","ak","az","ar","ca","co","ct","de","fl","ga","hi","id","il","in","ia","ks","ky","la","me","md",
+  "ma","mi","mn","ms","mo","mt","ne","nv","nh","nj","nm","ny","nc","nd","oh","ok","or","pa","ri","sc",
+  "sd","tn","tx","ut","vt","va","wa","wv","wi","wy","dc","on","qc","bc","ab","sk","mb","nb","ns","pe",
+  "nl","yt","nt","nu",
+]);
+
+const COUNTRY_WORDS = new Set(["canada", "usa", "us"]);
+
+/** Canadian postcode half ("m2n"), US zip ("90210", "90210-1234"). */
+function isPostcodeToken(t: string): boolean {
+  return /^[a-z]\d[a-z]$/.test(t) || /^\d{5}(-\d{4})?$/.test(t);
+}
+
+/**
+ * BACKLOG-3925: the street name from the tokens after the street number. Ends at the
+ * first street suffix once a name word has been seen (a suffix BEFORE any name word is
+ * part of the name: "St Charles Ave", "Avenue of the Americas"), at a unit/floor token,
+ * or — when no comma split the address — at a postcode, or a region code / country word that
+ * is last or followed by a postcode / country word.
+ */
+function streetNameFromTokens(rest: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const token = rest[i];
+    const next = rest[i + 1];
+    const kind = classifyToken(token).kind;
+    if (kind === "suffix" && out.length > 0) break;
+    if (out.length > 0) {
+      if (STREET_END_WORDS.has(token) || token.startsWith("#")) {
+        // "Example 10th Floor": the ordinal belongs to the floor, not the street.
+        if ((token === "floor" || token === "fl") && /^\d+(st|nd|rd|th)$/.test(out[out.length - 1])) out.pop();
+        break;
+      }
+      if (isPostcodeToken(token)) break;
+      // A region code / country word is also an ordinary street-name word ("Ponce de Leon",
+      // "Rue de la Montagne", "Old Mt Vernon"): it ends the street only as the last word or
+      // when a postcode or country word follows.
+      if ((REGION_CODES.has(token) || COUNTRY_WORDS.has(token)) &&
+          (next === undefined || isPostcodeToken(next) || COUNTRY_WORDS.has(next))) break;
+    }
+    if (kind === "name") uniquePush(out, token);
+  }
+  return out;
 }
 
 function uniquePush(arr: string[], value: string): void {
@@ -207,6 +266,7 @@ export function normalizeAddress(fullAddress: string | null | undefined): Normal
     requiredNameWords,
     optionalWords,
     full,
+    streetNameWords: streetNameFromTokens(tokens.slice(1)),
   };
 }
 
@@ -305,7 +365,8 @@ const PERIOD_ABBREVIATIONS = new Set(["jr", "sr", "mt", "ft"]);
  * words stand in, as in normalizeAddress's own fallback.
  */
 export function addressRouteNameWords(normalizedAddress: NormalizedAddress): string[] {
-  const words = normalizedAddress.requiredNameWords;
+  const streetWords = normalizedAddress.streetNameWords;
+  const words = streetWords && streetWords.length > 0 ? streetWords : normalizedAddress.requiredNameWords;
   const out: string[] = [];
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
