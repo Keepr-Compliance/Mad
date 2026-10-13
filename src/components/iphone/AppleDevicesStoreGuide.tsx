@@ -50,10 +50,19 @@ export function AppleDevicesStoreGuide({
   // message on this path: the user may not have finished in the Store.
   useEffect(() => {
     if (disabled) return;
+    let inFlight = false;
     const onFocus = () => {
-      void onCheckAgainRef.current().catch((err) => {
-        logger.warn("[AppleDevicesStoreGuide] Focus re-check failed:", err);
-      });
+      // One probe at a time: each runs a PowerShell package query.
+      if (inFlight) return;
+      inFlight = true;
+      void onCheckAgainRef
+        .current()
+        .catch((err) => {
+          logger.warn("[AppleDevicesStoreGuide] Focus re-check failed:", err);
+        })
+        .finally(() => {
+          inFlight = false;
+        });
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
