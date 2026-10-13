@@ -101,13 +101,40 @@ describe(`BACKLOG-3535 *${SUFFIX}`, () => {
     }
   });
 
-  it.each(['can_edit_checklist_templates', '_seed_checklists_on_plan_write'])(
-    'is the last migration that defines %s',
-    (name) => {
-      const definers = MIGRATION_FILES.filter((f) => definerRe(name).test(stripSqlComments(readMigration(f))));
-      expect(definers[definers.length - 1]).toBe(FILE);
+  it('is the last migration that defines _seed_checklists_on_plan_write', () => {
+    const definers = MIGRATION_FILES.filter((f) =>
+      definerRe('_seed_checklists_on_plan_write').test(stripSqlComments(readMigration(f)))
+    );
+    expect(definers[definers.length - 1]).toBe(FILE);
+  });
+
+  // BACKLOG-3917 redefines can_edit_checklist_templates after this file (it adds the
+  // membership license_status allow-list). A later definer is accepted only when it is
+  // listed here AND still carries this file's rules: the owner clause inside the
+  // membership EXISTS, the role list, and the check_feature_access decision.
+  const LATER_CAN_EDIT_DEFINERS = ['20261014100000_backlog_3917_member_status_allow_list.sql'];
+  it('is the last migration that defines can_edit_checklist_templates, or a listed later file keeps its rules', () => {
+    const definers = MIGRATION_FILES.filter((f) =>
+      definerRe('can_edit_checklist_templates').test(stripSqlComments(readMigration(f)))
+    );
+    const last = definers[definers.length - 1];
+    expect(definers.slice(definers.indexOf(FILE) + 1)).toEqual(
+      LATER_CAN_EDIT_DEFINERS.filter((f) => definers.includes(f))
+    );
+    expect([FILE, ...LATER_CAN_EDIT_DEFINERS]).toContain(last);
+    if (last !== FILE) {
+      const text = squash(stripSqlComments(readMigration(last)));
+      const start = text.search(definerRe('can_edit_checklist_templates'));
+      const fn = text.slice(start, text.indexOf('$function$;', start));
+      const exists = fn.slice(fn.indexOf('SELECT EXISTS ('), fn.indexOf(') AND COALESCE('));
+      expect(exists).toContain(
+        "AND (m.role IN ('broker', 'admin', 'it_admin') OR o.personal_owner_user_id = m.user_id)"
+      );
+      expect(fn).toContain(
+        "AND COALESCE((public.check_feature_access(p_org_id, 'transaction_checklists') ->> 'allowed')::boolean, false);"
+      );
     }
-  );
+  });
 
   it('only replaces the two functions: no grant, revoke, trigger, drop, data change or transaction control', () => {
     const creates = CODE.match(/CREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+public\.\w+/gi) ?? [];
