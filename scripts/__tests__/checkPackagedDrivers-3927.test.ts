@@ -5,7 +5,7 @@
  * a real app.asar.
  */
 import { spawnSync } from "child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "fs";
 import os from "os";
 import path from "path";
 // Loaded by path: jest maps the bare "@electron/..." prefix to electron/ (jest.config.js).
@@ -24,6 +24,13 @@ beforeEach(() => {
   mkdirSync(path.join(app, "resources"), { recursive: true });
 });
 afterEach(() => {
+  // The pre-push hook may run jest under Electron, whose fs treats *.asar as an
+  // archive, so a recursive rm fails on it with ENOTDIR. Unlink it first.
+  try {
+    unlinkSync(path.join(app, "resources", "app.asar"));
+  } catch {
+    /* absent */
+  }
   rmSync(root, { recursive: true, force: true });
 });
 
