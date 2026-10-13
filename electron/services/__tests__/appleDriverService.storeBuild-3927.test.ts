@@ -77,6 +77,7 @@ import {
   downloadAppleDrivers,
   getBundledDriverPath,
   installAppleDrivers,
+  resetDriverStateLogForTests,
   STORE_INSTALL_REFUSAL_MESSAGE,
 } from "../appleDriverService";
 
@@ -461,5 +462,62 @@ describe("KEEPR_APPLE_DRIVER_SOURCE override narrows which source counts (BACKLO
     expect(await downloadAppleDrivers()).toEqual({ success: false, error: STORE_INSTALL_REFUSAL_MESSAGE });
     expect(mockSpawn).not.toHaveBeenCalled();
     expect(mockNetFetch).not.toHaveBeenCalled();
+  });
+});
+
+// BACKLOG-3927 round 5: the PC test found no log line naming the detected
+// source. One info line per CHANGE of source/state, both branches, enums only.
+describe("driver source/state log line (BACKLOG-3927)", () => {
+  const logMock = jest.requireMock("electron-log") as { info: jest.Mock };
+  const stateLines = () =>
+    logMock.info.mock.calls
+      .map((c) => String(c[0]))
+      .filter((m) => m.startsWith("[AppleDriverService] Apple driver source/state:"));
+
+  beforeEach(() => {
+    resetDriverStateLogForTests();
+    mockStore = true;
+    fsMock.existsSync.mockReturnValue(false);
+    mockProbeConnectedUdids.mockResolvedValue([]);
+    mockDetectionRequested = true;
+  });
+
+  it("first check logs one line; an unchanged re-check logs nothing; a change logs one more", async () => {
+    probeStdout(PROBE_READY_UNPLUGGED);
+    await checkAppleDrivers();
+    await checkAppleDrivers();
+    expect(stateLines()).toEqual([
+      "[AppleDriverService] Apple driver source/state: channel=store source=apple-devices state=ready usbDriver=no-device service=running",
+    ]);
+    probeStdout(PROBE_USB_DRIVER_MISSING);
+    await checkAppleDrivers();
+    expect(stateLines()).toHaveLength(2);
+    expect(stateLines()[1]).toContain("state=usb-driver-missing usbDriver=missing");
+  });
+
+  it("not installed logs source=none state=not-installed", async () => {
+    probeStdout(PROBE_NOTHING);
+    await checkAppleDrivers();
+    expect(stateLines()).toEqual([
+      "[AppleDriverService] Apple driver source/state: channel=store source=none state=not-installed usbDriver=no-device service=not-running",
+    ]);
+  });
+
+  it("MSI route answering on its own (no probe) still logs its source", async () => {
+    mockStore = false;
+    msiInstalled("RUNNING");
+    await checkAppleDrivers();
+    expect(mockExecFile).not.toHaveBeenCalled();
+    expect(stateLines()).toEqual([
+      "[AppleDriverService] Apple driver source/state: channel=website source=msi state=ready usbDriver=not-probed service=running",
+    ]);
+  });
+
+  it("never logs a UDID", async () => {
+    probeStdout(PROBE_NOT_RUNNING_WITH_PHONE);
+    mockProbeConnectedUdids.mockResolvedValue([UDID]);
+    await checkAppleDrivers();
+    expect(stateLines()).toHaveLength(1);
+    expect(logMock.info.mock.calls.flat().join(" ")).not.toContain(UDID);
   });
 });

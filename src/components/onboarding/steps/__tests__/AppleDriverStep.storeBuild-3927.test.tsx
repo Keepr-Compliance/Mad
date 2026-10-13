@@ -12,11 +12,11 @@ import AppleDriverStep, { meta } from "../AppleDriverStep";
 import type { OnboardingContext } from "../../types";
 import {
   APPLE_DEVICES_CHECK_BUTTON,
-  APPLE_DEVICES_HEADING,
+  CHECKLIST_APPLE_DEVICES_INSTALL,
   APPLE_DEVICES_NOT_FOUND,
   APPLE_DEVICES_OPEN_BUTTON,
   APPLE_DEVICES_SKIP_DESCRIPTION,
-  APPLE_DEVICES_NOT_RUNNING_HEADING,
+  CHECKLIST_APPLE_DEVICES_STARTING,
 } from "../../../../constants/appleDevicesStoreCopy";
 
 const context = {
@@ -62,8 +62,8 @@ describe("AppleDriverStep — Store build (BACKLOG-3927)", () => {
     });
     const { Content } = AppleDriverStep;
     render(<Content context={context} onAction={jest.fn()} />);
-    expect(await screen.findByText(APPLE_DEVICES_NOT_RUNNING_HEADING)).toBeInTheDocument();
-    expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+    expect(await screen.findByText(CHECKLIST_APPLE_DEVICES_STARTING)).toBeInTheDocument();
+    expect(screen.queryByText(CHECKLIST_APPLE_DEVICES_INSTALL)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: APPLE_DEVICES_OPEN_BUTTON })).not.toBeInTheDocument();
   });
 
@@ -72,7 +72,7 @@ describe("AppleDriverStep — Store build (BACKLOG-3927)", () => {
     const { Content } = AppleDriverStep;
     render(<Content context={context} onAction={jest.fn()} />);
 
-    expect(await screen.findByText(APPLE_DEVICES_HEADING)).toBeInTheDocument();
+    expect(await screen.findByText(CHECKLIST_APPLE_DEVICES_INSTALL)).toBeInTheDocument();
     expect(screen.queryByText("Install Tools")).not.toBeInTheDocument();
     expect(screen.queryByText(/iTunes/)).not.toBeInTheDocument();
 
@@ -95,7 +95,7 @@ describe("AppleDriverStep — Store build (BACKLOG-3927)", () => {
     const onAction = jest.fn();
     const { Content } = AppleDriverStep;
     render(<Content context={context} onAction={onAction} />);
-    await screen.findByText(APPLE_DEVICES_HEADING);
+    await screen.findByText(CHECKLIST_APPLE_DEVICES_INSTALL);
 
     (window.api.drivers!.checkApple as jest.Mock).mockResolvedValue(installed);
     await userEvent.click(screen.getByRole("button", { name: APPLE_DEVICES_CHECK_BUTTON }));
@@ -110,7 +110,7 @@ describe("AppleDriverStep — Store build (BACKLOG-3927)", () => {
     const { Content } = AppleDriverStep;
     render(<Content context={context} onAction={jest.fn()} />);
     expect(await screen.findByText("Tools Ready!")).toBeInTheDocument();
-    expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+    expect(screen.queryByText(CHECKLIST_APPLE_DEVICES_INSTALL)).not.toBeInTheDocument();
   });
 
   it("skip copy names Apple Devices, not iTunes", () => {
@@ -124,7 +124,7 @@ describe("AppleDriverStep — website build unchanged (BACKLOG-3927)", () => {
     const { Content } = AppleDriverStep;
     render(<Content context={context} onAction={jest.fn()} />);
     expect(await screen.findByRole("button", { name: "Install Tools" })).toBeInTheDocument();
-    expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+    expect(screen.queryByText(CHECKLIST_APPLE_DEVICES_INSTALL)).not.toBeInTheDocument();
     await waitFor(() => expect(window.api.drivers!.hasBundled).toHaveBeenCalled());
     expect(meta.skip?.description).toBe("You can install iTunes later to sync iPhone messages");
   });

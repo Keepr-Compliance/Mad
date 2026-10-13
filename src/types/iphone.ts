@@ -41,6 +41,13 @@ export type AppleDevicesState =
   | "usb-driver-missing"
   | "ready";
 
+/**
+ * BACKLOG-3927: the iPhone's USB driver as the main-process probe saw it.
+ * "no-device" = no iPhone plugged in, so the driver could not be checked.
+ * Mirrors AppleUsbDriverState in electron/services/appleDevicesProbe.ts.
+ */
+export type AppleUsbDriverState = "bound" | "missing" | "no-device";
+
 // ============================================
 // BACKUP TYPES
 // ============================================
@@ -146,6 +153,8 @@ export interface ConnectionStatusProps {
   onRecheckDriver?: () => Promise<AppleDevicesState>;
   /** BACKLOG-3927: Store build — the Apple Devices state last detected. */
   appleDevicesState?: AppleDevicesState | null;
+  /** BACKLOG-3927: Store build — the iPhone's USB driver as last probed (null = not probed). */
+  appleUsbDriver?: AppleUsbDriverState | null;
   /** BACKLOG-3816: the sync request is being prepared — the button shows "Getting ready…". */
   isStarting?: boolean;
   /** BACKLOG-3816: epoch ms until which the Sync button stays disabled (hold after a failure). */
@@ -240,6 +249,8 @@ export interface UseIPhoneSyncReturn {
   setConnectScreenActive: (active: boolean) => void;
   /** BACKLOG-3927: Store build — the Apple Devices state last detected (null on the website build). */
   appleDevicesState: AppleDevicesState | null;
+  /** BACKLOG-3927: Store build — the iPhone's USB driver as last probed (null = not probed). */
+  appleUsbDriver: AppleUsbDriverState | null;
   /**
    * BACKLOG-3816: a Sync / Try Again request is being prepared and has not yet been
    * handed to the main process or refused. The buttons show "Getting ready…".

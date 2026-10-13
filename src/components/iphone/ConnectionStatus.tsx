@@ -2,7 +2,7 @@ import React, { useEffect } from "react";
 import type { ConnectionStatusProps } from "../../types/iphone";
 import { TrustComputerHint } from "./TrustComputerHint";
 import { WindowsArm64Unsupported } from "./WindowsArm64Unsupported";
-import { AppleDevicesStoreGuide } from "./AppleDevicesStoreGuide";
+import { IPhoneSetupChecklist } from "./IPhoneSetupChecklist";
 import logger from "../../utils/logger";
 import { useRetryCountdown } from "../../utils/syncRetryCooldown";
 import { RetryCooldownNotice, SyncStartButtonContent } from "./SyncStartButtonContent";
@@ -49,6 +49,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   isStoreBuild = false,
   onRecheckDriver,
   appleDevicesState = null,
+  appleUsbDriver = null,
   isStarting = false,
   retryAvailableAt = null,
 }) => {
@@ -69,10 +70,21 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
     // silent "Connect your iPhone" text with an inline one-click install button
     // that triggers the UAC admin prompt directly from this screen. Previously
     // the user was stuck here with zero guidance (root cause of ticket #64).
-    // BACKLOG-3927: Microsoft Store build — no driver install from Keepr; send
-    // the user to Apple Devices in the Microsoft Store, then re-detect.
-    if (driverMissing && isStoreBuild && onRecheckDriver) {
-      return <AppleDevicesStoreGuide onCheckAgain={onRecheckDriver} state={appleDevicesState} />;
+    // BACKLOG-3927: Microsoft Store build — no driver install from Keepr. Once
+    // the Apple Devices state is known, the self-ticking setup checklist replaces
+    // this screen (including "ready": rows 1-2 ticked, row 3 open). Unknown
+    // (null) keeps the plain connect view below: it claims nothing either way.
+    // The hook already re-checks on focus here (throttled), so the checklist's
+    // own focus re-check is off.
+    if (isStoreBuild && onRecheckDriver && appleDevicesState !== null) {
+      return (
+        <IPhoneSetupChecklist
+          onCheckAgain={onRecheckDriver}
+          state={appleDevicesState}
+          usbDriver={appleUsbDriver}
+          recheckOnFocus={false}
+        />
+      );
     }
     if (driverMissing && onInstallDriver && !isStoreBuild) {
       return (

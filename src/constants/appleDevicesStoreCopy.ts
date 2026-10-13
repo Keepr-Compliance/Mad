@@ -128,3 +128,54 @@ export const APPLE_DEVICES_READY_STEPS: readonly string[] = [
 
 export const APPLE_DEVICES_READY_STILL =
   "Keepr still can't see your iPhone. Unplug it, plug it back in, unlock it, then click Check again.";
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3927 round 5: Store-build self-ticking setup checklist.
+// DRAFT — every string below awaits founder sign-off (OPEN QUESTION on
+// BACKLOG-3927). Expanded-row bodies reuse the strings above where they fit.
+// ---------------------------------------------------------------------------
+
+/** Checklist heading. */
+export const CHECKLIST_HEADING = "Set up iPhone sync";
+
+/** Row titles, in the order the user has to finish them. */
+export const CHECKLIST_ROW_APPLE_DEVICES = "Apple Devices installed";
+export const CHECKLIST_ROW_USB_DRIVER = "Apple iPhone USB driver";
+export const CHECKLIST_ROW_IPHONE = "iPhone connected and trusted";
+
+/** Row 1: Apple Devices not installed. */
+export const CHECKLIST_APPLE_DEVICES_INSTALL =
+  "Install Apple's free Apple Devices app from the Microsoft Store.";
+
+/**
+ * Row 1: Apple Devices installed but its iPhone support not running yet.
+ * Measured on a PC (2026-10-12, state b): it starts on its own about 2-4
+ * minutes after Windows starts, without the app being opened.
+ */
+export const CHECKLIST_APPLE_DEVICES_STARTING =
+  "Apple Devices is installed but hasn't started yet. It starts on its own a few minutes after your computer starts, or you can open the Apple Devices app now.";
+
+/** Row 2: shown under the two Windows Update buttons. */
+export const CHECKLIST_USB_DRIVER_BODY =
+  'Windows Update provides this driver. Check for updates, then install "Apple Inc. - USBDevice" from Optional updates. A restart may be needed.';
+
+/**
+ * Row 2 when no iPhone is plugged in: the driver can only be checked against a
+ * plugged-in iPhone, so the row is neither ticked nor marked missing.
+ */
+export const CHECKLIST_USB_DRIVER_UNCHECKED = "Checked when your iPhone is plugged in.";
+
+/** Row 3: no iPhone seen yet (the Trust prompt hint is TrustComputerHint). */
+export const CHECKLIST_IPHONE_BODY =
+  "Plug your iPhone into this computer with a USB cable.";
+
+/** Screen-reader labels for the row markers. */
+export const CHECKLIST_DONE_LABEL = "Done";
+export const CHECKLIST_TODO_LABEL = "Not done yet";
+
+/**
+ * Sync progress, BOTH builds: shown inside the amber "Waiting for iPhone" panel
+ * while the backup reports the device has not started sending files. Measured
+ * 2026-10-12: the transfer waited ~15 minutes until the phone was unlocked.
+ */
+export const SYNC_KEEP_UNLOCKED_HINT = "Keep your iPhone unlocked until the transfer starts.";
