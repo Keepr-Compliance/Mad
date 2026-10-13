@@ -48,11 +48,14 @@ const OUTLOOK_FOLDERS = [{ id: "FInbox", displayName: "Inbox", parentFolderId: "
 
 jest.mock("../../services/gmailFetchService", () => ({
   __esModule: true,
-  default: { listLabelCatalogSource: async () => GMAIL_LABELS },
+  default: { listLabelCatalogSource: async () => GMAIL_LABELS, peekLabelCatalogSource: () => null },
 }));
 jest.mock("../../services/outlookFetchService", () => ({
   __esModule: true,
-  default: { listFolderCatalogSource: async () => ({ folders: OUTLOOK_FOLDERS, systemFolderIds: ["FInbox", "FRoot"] }) },
+  default: {
+    listFolderCatalogSource: async () => ({ folders: OUTLOOK_FOLDERS, systemFolderIds: ["FInbox", "FRoot"] }),
+    peekFolderCatalogSource: () => null,
+  },
 }));
 
 import { initializePool, isPoolReady, setContactWorkerPathForTests, shutdownPool } from "../contactWorkerPool";

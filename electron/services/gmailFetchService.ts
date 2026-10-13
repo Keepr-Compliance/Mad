@@ -941,6 +941,14 @@ class GmailFetchService {
   } | null = null;
 
   /**
+   * BACKLOG-3926: the last `labels.list` response, or null — no network. The catalogue
+   * refresh compares it with what it last catalogued to notice a new / renamed label.
+   */
+  peekLabelCatalogSource(): Array<{ id: string | null; name: string | null; type: string | null }> | null {
+    return this.lastListedLabels?.labels ?? null;
+  }
+
+  /**
    * BACKLOG-3926: every label of the mailbox with its `type` ("system" | "user") —
    * one `labels.list`, reused when a walk listed them less than `maxAgeMs` ago.
    */
