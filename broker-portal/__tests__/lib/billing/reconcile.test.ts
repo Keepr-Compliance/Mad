@@ -128,6 +128,8 @@ function mirror(userId: string, subId: string, customerId: string, mode: StripeM
     status: 'active',
     paused: false,
     last_event_created: 1790000000,
+    // NOT NULL DEFAULT now() in prod (20261011230913). In the real past: refreshMirrorRow reads the real clock.
+    updated_at: '2026-01-01T00:00:00.000Z',
     ...over,
   };
 }
@@ -833,6 +835,46 @@ describe('3933: reverse revoke rewrites the stale open mirror row from Stripe', 
     expect(rowOf(SUB_2A.id)).toMatchObject({ status: 'active' });
   });
 
+  it('R1: PAUSED in Stripe (active + pause_collection), row reads active/unpaused -> row becomes active + paused; cursor not moved', async () => {
+    // SUB_PAUSED (transcribed, p0a): status active, pause_collection set, no metadata.kind.
+    seed({
+      organizations: [personal(USER, ORG, true)],
+      organization_plans: [plan(ORG, effective())],
+      stripe_customers: [customer(USER, SUB_PAUSED.customer, 'test')],
+      billing_subscriptions: [mirror(USER, SUB_PAUSED.id, SUB_PAUSED.customer, 'test')],
+    });
+    serve(SUB_PAUSED);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(revokes()).toEqual([{ p_user_id: USER, p_mode: 'test' }]);
+    expect(r).toMatchObject({ revokeAttempted: 1, mirrorRepaired: 1 });
+    expect(rowOf(SUB_PAUSED.id)).toMatchObject({ status: 'active', paused: true, last_event_created: 1790000000 });
+  });
+
+  /** A webhook writes newer state while the reconcile's Stripe read is in flight (the S1 race). */
+  function webhookDuringRead(): void {
+    const inner = stripe.subscriptions.retrieve;
+    jest.spyOn(stripe.subscriptions, 'retrieve').mockImplementation((async (id: string, ...rest: unknown[]) => {
+      const out = await (inner as (...a: unknown[]) => Promise<Obj>)(id, ...rest);
+      Object.assign(rowOf(id), { status: 'past_due', updated_at: new Date(Date.now() + 60_000).toISOString() });
+      return out;
+    }) as never);
+  }
+
+  it('S1: a row written after the Stripe read began is not overwritten', async () => {
+    staleUser();
+    webhookDuringRead();
+    await reconcileAgentSubscriptions(deps());
+    expect(revokes()).toEqual([{ p_user_id: USER, p_mode: 'test' }]);
+    expect(rowOf(SUB_VOID_CANCELED.id).status).toBe('past_due');
+  });
+
+  it('S2: mirrorRepaired counts only a rewrite that matched a row', async () => {
+    staleUser();
+    webhookDuringRead();
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(r).toMatchObject({ revokeAttempted: 1, mirrorRepaired: 0 });
+  });
+
   it('two open mirror rows (report only) -> nothing revoked, no row rewritten', async () => {
     staleUser([mirror(USER, 'sub_OLD_open', SUB_VOID_CANCELED.customer, 'test', { id: 'row-old', status: 'past_due' })]);
     const r = await reconcileAgentSubscriptions(deps());
@@ -890,9 +932,15 @@ describe('3934: open Agent subscription + brokerage membership -> one alert per 
     expect([...BROKERAGE_MEMBER_STATUSES]).toEqual(['active']);
   });
 
+  // [COMPOSED: kind absent] SUB_VOID (transcribed) with metadata.kind removed: the same predicate as
+  // forward/reverse/R7 counts a kind-less subscription as an Agent one. No such object exists in TEST to transcribe.
+  const { kind: _kind, ...noKindMeta } = SUB_VOID.metadata as Obj;
+  const SUB_NO_KIND: Obj = { ...SUB_VOID, id: 'sub_composed_no_kind', metadata: noKindMeta };
+
   it.each([
     ['active', SUB_VOID],
     ['past_due', PAST_DUE],
+    ['kind-absent [COMPOSED: kind absent]', SUB_NO_KIND],
   ])('%s Agent plan + active brokerage member -> ONE alert with the subscription id only', async (_l, sub) => {
     payingAgent(sub, [member(USER)]);
     const r = await reconcileAgentSubscriptions(deps());

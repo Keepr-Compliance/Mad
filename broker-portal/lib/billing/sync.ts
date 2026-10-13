@@ -347,7 +347,7 @@ export async function writeThroughCancelFlag(
 ): Promise<void> {
   const { error } = await service
     .from('billing_subscriptions')
-    .update({ cancel_at_period_end: sub.cancel_at_period_end === true, canceled_at: iso(sub.canceled_at) })
+    .update({ cancel_at_period_end: sub.cancel_at_period_end === true, canceled_at: iso(sub.canceled_at), updated_at: new Date().toISOString() })
     .eq('stripe_subscription_id', sub.id)
     .in('status', ['active', 'trialing']);
   if (error) throw new Error(`billing_subscriptions write-through failed: ${error.message}`);
@@ -358,17 +358,23 @@ export async function writeThroughCancelFlag(
  * Re-fetches the subscription by id and writes mirrorState (status, period,
  * cancel flags, paused) on that row in this mode. Never last_event_created:
  * the webhook's ordering cursor stays the webhook's. Same write as the stale
- * incumbent close in handleSecondOpenSubscription. Returns the status written.
+ * incumbent close in handleSecondOpenSubscription.
+ * Only a row last written before the Stripe read is rewritten: a webhook (or the
+ * cancel write-through) that wrote newer state meanwhile is left standing.
+ * Returns the status read and whether a row was rewritten.
  */
-export async function refreshMirrorRow(ctx: BillingContext, subId: string): Promise<string> {
+export async function refreshMirrorRow(ctx: BillingContext, subId: string): Promise<{ status: string; matched: boolean }> {
+  const readAt = new Date().toISOString();
   const sub = await ctx.stripe.subscriptions.retrieve(subId);
-  const { error } = await ctx.service
+  const { data, error } = await ctx.service
     .from('billing_subscriptions')
     .update(mirrorState(sub))
     .eq('stripe_subscription_id', subId)
-    .eq('stripe_mode', ctx.mode);
+    .eq('stripe_mode', ctx.mode)
+    .lt('updated_at', readAt)
+    .select('id');
   if (error) throw new Error(`billing_subscriptions refresh failed: ${error.code ?? 'unknown'}`);
-  return sub.status;
+  return { status: sub.status, matched: ((data as unknown[] | null) ?? []).length > 0 };
 }
 
 /** True when the user has an open subscription in this mode other than subId. */

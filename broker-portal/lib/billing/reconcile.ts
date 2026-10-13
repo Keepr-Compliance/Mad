@@ -303,8 +303,8 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
         // BACKLOG-3933: the row still reads open after a missed webhook. Left so, it
         // keeps the billing page on "active" (no Subscribe) and blocks a new plan.
         if (openRows.length === 1) {
-          await refreshMirrorRow(reconcileContext(deps, target, now), target);
-          result.mirrorRepaired++;
+          const { matched } = await refreshMirrorRow(reconcileContext(deps, target, now), target);
+          if (matched) result.mirrorRepaired++;
         }
       }
     } catch (err) {
