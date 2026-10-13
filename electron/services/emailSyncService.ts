@@ -1401,6 +1401,14 @@ class EmailSyncService {
         );
       }
     }
+    // BACKLOG-3925: address-only matches from the local cache, after the contact
+    // pass, on the queueing (deal surface) path only.
+    if (queueForReviewInsteadOfLinking) {
+      const { runAddressMatchPassInSweep } = await import("./reviewStateService");
+      const addressPass = await runAddressMatchPassInSweep(transactionId, "postFetch");
+      totalQueuedForReview += addressPass.queued;
+      if (!addressPass.clean) clean = false;
+    }
     return { clean };
     };
     if (queueForReviewInsteadOfLinking) {
@@ -1532,6 +1540,12 @@ class EmailSyncService {
           { error: error instanceof Error ? error.message : "Unknown" }
         );
       }
+    }
+    // BACKLOG-3925: a deal whose parties have no email address can still have
+    // address-only matches; same pass, same guard as postFetch.
+    if (queueForReviewInsteadOfLinking) {
+      const { runAddressMatchPassInSweep } = await import("./reviewStateService");
+      if (!(await runAddressMatchPassInSweep(transactionId, "autoLinkOnly")).clean) clean = false;
     }
     return { clean };
     };

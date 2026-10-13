@@ -199,6 +199,7 @@ describe("names resolve on review cards (the regression the founder reported)", 
     email_id: null,
     thread_id: "th-1",
     found_at: "2026-08-01T00:00:00.000Z",
+    matchReason: "contact" as const,
     display: {
       title: "+15550142",
       subtitle: "+15550142",

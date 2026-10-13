@@ -34,6 +34,7 @@ function item(over: Partial<ReviewItemDto> & { id: string }): ReviewItemDto {
     email_id: "e-1",
     thread_id: null,
     found_at: "2026-08-01T00:00:00.000Z",
+    matchReason: "contact",
     display: {
       title: "Subject",
       subtitle: "paul@example.com",

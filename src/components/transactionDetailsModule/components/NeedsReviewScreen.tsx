@@ -35,7 +35,15 @@
  */
 import React, { useMemo, useState } from "react";
 import type { ReviewItemDto } from "../../../../electron/types/ipc/window-api-transactions";
-import { ReviewCards, groupReviewItemsByThread } from "./ReviewQueueSection";
+import {
+  ReviewCards,
+  ReviewEmailExplainer,
+  ReviewMatchFilterBar,
+  countThreadsByReason,
+  groupReviewItemsByThread,
+  reviewThreadReason,
+} from "./ReviewQueueSection";
+import { reviewMatchKind, type ReviewMatchFilter } from "../utils/reviewMatchReasons";
 import type { Communication } from "../types";
 
 export interface NeedsReviewScreenProps {
@@ -99,7 +107,24 @@ export function NeedsReviewScreen({
       : emails.length > 0
         ? "email"
         : "text";
-  const shown = active === "email" ? emails : texts;
+
+  // BACKLOG-3925: match-kind tabs (emails only). Pills show on All only. "Approve all" /
+  // "Reject all" act on the items of the SELECTED tab: All = every item (as before),
+  // Address match / Contact match = only the email threads of that reason.
+  const [filter, setFilter] = useState<ReviewMatchFilter>("all");
+  const [showInfo, setShowInfo] = useState(false);
+  const emailGroups = useMemo(() => groupReviewItemsByThread(emails), [emails]);
+  const countsByReason = useMemo(() => countThreadsByReason(emailGroups), [emailGroups]);
+  const activeFilter: ReviewMatchFilter = active === "email" ? filter : "all";
+  const filteredEmails = useMemo(
+    () =>
+      filter === "all"
+        ? emails
+        : emailGroups.filter((g) => reviewThreadReason(g) === filter).flatMap((g) => g.items),
+    [filter, emails, emailGroups],
+  );
+  const shown = active === "email" ? filteredEmails : texts;
+  const bulkItems = activeFilter === "all" ? items : filteredEmails;
 
 
   // Acts on the WHOLE thread (contract rows T3/T4); `busyId` is the thread key,
@@ -116,7 +141,7 @@ export function NeedsReviewScreen({
   const actAll = async (fn: (ids: string[]) => Promise<void>) => {
     setBulkBusy(true);
     try {
-      await fn(items.map((i) => i.id));
+      await fn(bulkItems.map((i) => i.id));
     } finally {
       setBulkBusy(false);
     }
@@ -170,7 +195,7 @@ export function NeedsReviewScreen({
               <button
                 type="button"
                 onClick={() => actAll(onReject)}
-                disabled={bulkBusy || !!actionsLockedTooltip}
+                disabled={bulkBusy || !!actionsLockedTooltip || bulkItems.length === 0}
                 title={actionsLockedTooltip}
                 className="whitespace-nowrap text-white bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg px-2.5 py-2 sm:px-3.5 transition-all font-medium text-xs sm:text-sm disabled:opacity-50"
               >
@@ -179,7 +204,7 @@ export function NeedsReviewScreen({
               <button
                 type="button"
                 onClick={() => actAll(onApprove)}
-                disabled={bulkBusy || !!actionsLockedTooltip}
+                disabled={bulkBusy || !!actionsLockedTooltip || bulkItems.length === 0}
                 title={actionsLockedTooltip}
                 className="whitespace-nowrap text-amber-700 bg-white hover:bg-opacity-90 rounded-lg px-2.5 py-2 sm:px-3.5 transition-all font-semibold text-xs sm:text-sm disabled:opacity-50"
               >
@@ -239,6 +264,35 @@ export function NeedsReviewScreen({
         </div>
       )}
 
+      {items.length > 0 && active === "email" && (
+        <div
+          className="flex-shrink-0 flex items-center gap-2 border-b border-gray-200 bg-white px-3 sm:px-6 py-2"
+          data-testid="needs-review-match-tabs"
+        >
+          <ReviewMatchFilterBar value={filter} onChange={setFilter} total={emailThreadCount} counts={countsByReason} />
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowInfo((v) => !v)}
+              className="w-5 h-5 rounded-full bg-amber-100 text-amber-700 text-xs font-bold flex items-center justify-center hover:bg-amber-200 transition-colors"
+              aria-label="About Needs review"
+              data-testid="needs-review-info-button"
+            >
+              i
+            </button>
+            {showInfo && (
+              <div
+                className="absolute left-0 top-7 z-20 w-72 rounded-lg border border-amber-200 bg-white p-3 text-xs text-gray-600 shadow-lg"
+                data-testid="needs-review-info-popover"
+                role="tooltip"
+              >
+                <ReviewEmailExplainer />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-6">
         {isLoading && items.length === 0 ? (
           <p className="text-sm text-gray-500">Loading…</p>
@@ -263,12 +317,16 @@ export function NeedsReviewScreen({
             </button>
           </div>
         ) : shown.length === 0 ? (
-          <div className="mx-auto mt-16 max-w-sm text-center">
+          <div className="mx-auto mt-16 max-w-sm text-center" data-testid="needs-review-filter-empty">
             <p className="font-medium text-gray-900">
-              No {active === "email" ? "emails" : "texts"} need review
+              {activeFilter !== "all"
+                ? `No ${reviewMatchKind(activeFilter)?.emptyNoun ?? activeFilter} emails need review`
+                : `No ${active === "email" ? "emails" : "texts"} need review`}
             </p>
             <p className="mt-1 text-sm text-gray-600">
-              Switch to {active === "email" ? "Texts" : "Emails"} to review the rest.
+              {activeFilter !== "all"
+                ? "Switch to another tab to review the rest."
+                : `Switch to ${active === "email" ? "Texts" : "Emails"} to review the rest.`}
             </p>
           </div>
         ) : (
@@ -279,6 +337,7 @@ export function NeedsReviewScreen({
             <ReviewCards
               items={shown}
               kind={active}
+              showMatchPills={active === "email" && filter === "all"}
               busyId={bulkBusy ? shown[0]?.id ?? busyId : busyId}
               onApproveItem={(ids, key) => void act(ids, key, onApprove)}
               onRejectItem={(ids, key) => void act(ids, key, onReject)}
