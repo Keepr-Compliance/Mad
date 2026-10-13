@@ -68,3 +68,11 @@ jobs:
 
       - name: Verify the guard itself
         run: node scripts/__tests__/check-vercel-deploy-map.verify.js
+
+      # BACKLOG-3916 — scripts/vercel-ignore-build.sh decides whether a portal
+      # deployment builds. A wrong "skip" is silent: the preview just never
+      # appears. These rows build temp git repos (linear, merge tip, shallow,
+      # PREVIOUS_SHA) and run the real script under ubuntu's sh (dash), the
+      # same shell Vercel uses.
+      - name: Verify the ignore-build guard
+        run: node scripts/__tests__/vercel-ignore-build.verify.js

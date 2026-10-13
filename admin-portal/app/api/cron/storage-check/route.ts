@@ -9,14 +9,14 @@
 
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
+import { isAuthorizedCronRequest } from '@/lib/auth/cronAuth';
 
 const STORAGE_THRESHOLD_MB = 750;
 const TEAMS_WEBHOOK_URL = process.env.TEAMS_STORAGE_ALERT_WEBHOOK_URL;
 
 export async function GET(request: Request) {
-  // Verify cron secret to prevent unauthorized access
-  const authHeader = request.headers.get('authorization');
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  // Verify cron secret; refuses every request when CRON_SECRET is unset.
+  if (!isAuthorizedCronRequest(request.headers.get('authorization'))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
