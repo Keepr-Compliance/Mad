@@ -467,6 +467,19 @@ describe('3847: personal plan blocks', () => {
     unmount();
   });
 
+  it('back from Checkout with an incomplete subscription: Your plan has no Subscribe again (the return panel owns that moment)', async () => {
+    seedSub('sub-A-incomplete');
+    given([personalMembership()]);
+    const { container, unmount } = render(
+      await BillingRoute({ searchParams: Promise.resolve({ checkout: 'success', session_id: 'cs_test_x' }) })
+    );
+    await screen.findByText((t) => t.includes('Finishing your subscription') || t.includes("Your last payment didn't go through"));
+    const plan = container.querySelector('[data-billing-block="plan"]') as HTMLElement;
+    expect(plan).not.toBeNull();
+    expect(within(plan).queryAllByRole('button').filter((b) => (b.textContent ?? '').startsWith('Subscribe again'))).toHaveLength(0);
+    unmount();
+  });
+
   it('a half-made (incomplete) subscription reads as no plan: Subscribe is offered', async () => {
     seedSub('sub-A-incomplete');
     const r = await text();
