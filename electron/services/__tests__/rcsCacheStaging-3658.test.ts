@@ -45,8 +45,8 @@ import { setDb } from "../db/core/dbConnection";
 import {
   batchInsertMessages,
   findRcsContentDuplicates,
-  getExistingAttachmentRecords,
-  getMessageIdMap,
+  getExistingAttachmentRecordsForMessages,
+  getMessageIdsByExternalIds,
   insertAttachment,
   insertReactionRows,
   markMessageHasAttachments,
@@ -86,15 +86,15 @@ let staging: RcsCacheStaging;
 
 const storeDeps = {
   batchInsertMessages,
-  getMessageIdMap,
+  getMessageIdsByExternalIds,
   insertReactionRows,
   findContentDuplicates: findRcsContentDuplicates,
 };
 
 const writer: RcsCommitWriter = {
   storeChat: (chat, userId, people) => storeCacheChatSync(chat, userId, storeDeps, people),
-  getMessageIdMap,
-  getExistingAttachmentRecords,
+  getMessageIdsByExternalIds,
+  getExistingAttachmentRecordsForMessages,
   insertAttachment,
   markMessageHasAttachments,
   externalId: rcsExternalId,

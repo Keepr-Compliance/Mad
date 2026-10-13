@@ -48,10 +48,11 @@ function makeFakeDb(userId: string) {
       }
       return { stored, skipped };
     },
-    getMessageIdMap: (uid) => {
+    getMessageIdsByExternalIds: (uid, ids) => {
+      const want = new Set(ids);
       const map = new Map<string, string>();
-      for (const r of rows) if (r.userId === uid && r.externalId) map.set(r.externalId, r.id);
-      for (const r of reactionRows) if (r.userId === uid) map.set(r.externalId, r.id);
+      for (const r of rows) if (r.userId === uid && r.externalId && want.has(r.externalId)) map.set(r.externalId, r.id);
+      for (const r of reactionRows) if (r.userId === uid && want.has(r.externalId)) map.set(r.externalId, r.id);
       return map;
     },
     // Same unique index as messages: (user_id, external_id), INSERT OR IGNORE.
