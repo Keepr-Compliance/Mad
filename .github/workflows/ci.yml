@@ -1102,6 +1102,16 @@ jobs:
           Get-ChildItem -Path release -Filter "*.exe" | Format-Table Name, Length
         shell: pwsh
 
+      # BACKLOG-3927: this is the website build, so Apple's installer must be in
+      # it. (release.yml runs the same script for both channels; the Store
+      # build must contain no driver payload at all.)
+      - name: Verify the website package still bundles the Apple driver installer
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          node scripts/ci/check-packaged-drivers.mjs release/win-unpacked website
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       # BACKLOG-3814. scripts/afterPack.js places the pinned iPhone tools; check the
       # packaged copy is byte-identical to the manifest.
       - name: Verify the Windows package carries the pinned iPhone tools
