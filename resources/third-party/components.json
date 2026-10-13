@@ -14,7 +14,7 @@
       "releaseUrl": "https://github.com/libimobiledevice-win32/imobiledevice-net/releases/tag/v1.3.17",
       "asset": "libimobiledevice.1.2.1-r1122-win-x64.zip",
       "assetSha256": "d7cb57a71270848c35c3f01006701535aadf6dfb52325863ea368c94a34a2cab",
-      "evidence": "all 50 .exe/.dll files in toolsDir are byte-identical to this release asset and to runtimes/win-x64/native in iMobileDevice-net.1.3.17.nupkg; the nupkg's gitinfo/ files pin the source commit of each libimobiledevice-family project",
+      "evidence": "all 50 .exe/.dll files in toolsDir were byte-identical to this release asset and to runtimes/win-x64/native in iMobileDevice-net.1.3.17.nupkg; the nupkg's gitinfo/ files pin the source commit of each libimobiledevice-family project. Since BACKLOG-3814 the 45 shipped files are those same bytes with a Blue Spaces LLC Authenticode signature appended (only the PE checksum and certificate table differ); resources/pinned/libimobiledevice.manifest.json pins their sha256",
       "addedToKeepr": "commit be2a5b22d (2025-12-11)",
       "platforms": [
         "win",

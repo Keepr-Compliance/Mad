@@ -316,6 +316,12 @@ jobs:
       - name: Verify offline pass public key is set
         run: node scripts/ci/check-offline-pass-keys.mjs
 
+      # BACKLOG-3814. The iPhone tools in resources/win/libimobiledevice are the signed
+      # copies from the 2.40.0 installer, reused byte-for-byte every release. Fail before
+      # packaging if the checkout differs from resources/pinned/libimobiledevice.manifest.json.
+      - name: Verify the pinned iPhone tools match the manifest (BACKLOG-3814)
+        run: node scripts/release/pinnedIphoneTools.js --repo
+
       - name: Build application
         run: npm run build
 
@@ -703,6 +709,19 @@ jobs:
           ./scripts/ci/check-pe-signatures.ps1 `
             -Installer $exe[0].FullName `
             -WorkDir (Join-Path $env:RUNNER_TEMP "pe-signature-check")
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # BACKLOG-3814. The signing above must not have touched the pinned iPhone tools:
+      # package.json leaves them out of extraResources and scripts/afterPack.js places
+      # them after electron-builder's signing copy. Check the unpacked app AND the app
+      # archive inside the installer (unpacked by the step above) against the manifest:
+      # a re-signed file has a new sha256 and fails here.
+      - name: Verify the pinned iPhone tools shipped byte-identical (BACKLOG-3814)
+        shell: pwsh
+        run: |
+          node scripts/release/pinnedIphoneTools.js --packaged release/win-unpacked
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          node scripts/release/pinnedIphoneTools.js --packaged (Join-Path $env:RUNNER_TEMP "pe-signature-check/app")
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Upload Windows Artifacts

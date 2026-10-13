@@ -6,3 +6,8 @@ scripts/__tests__/fixtures/migration-grants/** text eol=lf
 # BACKLOG-3803: third-party licence texts are verbatim upstream copies hashed in
 # components.json. Keep them LF on every OS so the recorded sha256 holds.
 resources/third-party/** text eol=lf
+
+# BACKLOG-3814: the pinned, signed iPhone tools are hashed in
+# resources/pinned/libimobiledevice.manifest.json. Never convert line endings in
+# this folder (README.md included) so every checkout matches on every OS.
+resources/win/libimobiledevice/** -text
