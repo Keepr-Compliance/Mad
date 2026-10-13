@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { BillingBlock } from './BillingBlock';
-import { CancelPlanButton, CheckoutReturn, KeepPlanButton, PAYMENT_INCOMPLETE_NOTE } from './AgentPlanControls';
+import { CancelPlanButton, CheckoutReturn, KeepPlanButton, PAYMENT_INCOMPLETE_NOTE, SubscribeButton } from './AgentPlanControls';
 import type { PersonalPlanData } from './BillingPage';
 
 /** "Your plan". Organization pages show the plan name only (3844). */
@@ -89,9 +89,12 @@ function PersonalPlan({ p }: { p: PersonalPlanData }) {
           {p.checkout === 'success' && p.sessionId ? (
             <CheckoutReturn sessionId={p.sessionId} paymentIncomplete={p.paymentIncomplete === true} />
           ) : p.paymentIncomplete ? (
-            <p role="status" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-              {PAYMENT_INCOMPLETE_NOTE}
-            </p>
+            <div className="space-y-2">
+              <p role="status" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                {PAYMENT_INCOMPLETE_NOTE}
+              </p>
+              {month ? <SubscribeButton label={`Subscribe again — ${month.display}/month`} /> : null}
+            </div>
           ) : null}
           {p.checkout === 'cancelled' ? (
             <p role="status" className="text-sm text-gray-600">Checkout was cancelled. Nothing was charged.</p>

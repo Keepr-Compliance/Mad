@@ -112,8 +112,8 @@ jest.mock('next/navigation', () => ({
 
 import fs from 'fs';
 import path from 'path';
-import { render, screen, within } from '@testing-library/react';
-import { confirmAgentCheckout } from '@/lib/actions/agentPlan';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { confirmAgentCheckout, startAgentCheckout } from '@/lib/actions/agentPlan';
 import { BillingDb, eqValue } from '../../../helpers/billingDb';
 import { mirrorState } from '@/lib/billing/sync';
 import BillingRoute from '@/app/dashboard/billing/page';
@@ -441,13 +441,29 @@ describe('3847: personal plan blocks', () => {
     unmount();
   });
 
-  it('pay as you go: exactly one Subscribe button on the page (the Agent card), none in Your plan', async () => {
+  it('pay as you go: exactly one Subscribe button on the page (the Agent card), none in Your plan, and no Subscribe again', async () => {
     given([personalMembership()]);
     const { container, unmount } = render(await BillingRoute({}));
     const subs = within(container).queryAllByRole('button').filter((b) => (b.textContent ?? '').startsWith('Subscribe —'));
     expect(subs).toHaveLength(1);
     expect(within(container.querySelector('[data-billing-block="plan"]') as HTMLElement).queryAllByRole('button')).toHaveLength(0);
     expect(container.querySelector('[data-plan="agent"]')?.contains(subs[0])).toBe(true);
+    unmount();
+  });
+
+  it('payment did not go through: block 1 has Subscribe again next to the note, plus the Agent card Subscribe', async () => {
+    seedSub('sub-A-incomplete');
+    given([personalMembership()]);
+    const { container, unmount } = render(await BillingRoute({}));
+    const plan = container.querySelector('[data-billing-block="plan"]') as HTMLElement;
+    const again = within(plan).getAllByRole('button');
+    expect(again.map((b) => b.textContent)).toEqual(['Subscribe again — $19.99/month']);
+    expect(plan.querySelector('[role="status"]')?.parentElement?.contains(again[0])).toBe(true);
+    const all = within(container).queryAllByRole('button').filter((b) => (b.textContent ?? '').startsWith('Subscribe'));
+    expect(all.map((b) => b.textContent)).toEqual(['Subscribe again — $19.99/month', 'Subscribe — $19.99/month']);
+    (startAgentCheckout as jest.Mock).mockClear();
+    fireEvent.click(again[0]);
+    await waitFor(() => expect(startAgentCheckout).toHaveBeenCalledWith('month'));
     unmount();
   });
 
