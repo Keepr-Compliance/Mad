@@ -96,6 +96,13 @@ describe('agent_end_now_cancel handler', () => {
     expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
   });
 
+  it('C-END-OUTBOX-NOT-MINE (SR RC1b): the latest invoice is void but not one this row voided [EDITED latest_invoice; SR-VOID-inv-voided served under it] -> parked, nothing cancelled', async () => {
+    current = { ...clone(ACTIVE), latest_invoice: 'in_EDITED_voided_elsewhere' };
+    stripe.impl['invoices.retrieve'] = (id: string) => ({ ...VOIDED_INV, id });
+    await expect(handleEndNowCancelRow(row, ctx())).rejects.toBeInstanceOf(NonRetryableOutboxError);
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
+  });
+
   it('C-END-OUTBOX-NOT-VOID (SR RC1b): the voided invoice no longer reads void [EDITED status paid] -> parked, nothing cancelled', async () => {
     stripe.impl['invoices.retrieve'] = (id: string) => ({ ...VOIDED_INV, id, status: 'paid' });
     await expect(handleEndNowCancelRow(row, ctx())).rejects.toBeInstanceOf(NonRetryableOutboxError);
