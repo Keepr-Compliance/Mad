@@ -1079,7 +1079,8 @@ const bridge = new RcsExtensionBridge({
     // Founder (2026-10-01): a Sync that is done or failed brings Keepr to the
     // front by itself (the page's "Open Keepr" stays as the fallback); a
     // cancel does not. The /focus route's mechanism, incl. the taskbar flash.
-    if (shouldFocusKeeprOnJobEnd(ended.snapshot.state)) focusKeeprFromBrowser();
+    // BACKLOG-3924: not when the Sync failed as not signed in (Chrome stays in front).
+    if (shouldFocusKeeprOnJobEnd(ended.snapshot)) focusKeeprFromBrowser();
     if (ended.kind !== "cache") return;
     // SR F2: a STOP (cancel) is final at once — the job's record goes now,
     // synchronously, so a quit before the async discard can never let the

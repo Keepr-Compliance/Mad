@@ -35,6 +35,17 @@ export const RCS_JOB_NOT_OPENED_MESSAGE =
   "Messages for Web didn't open in Chrome with the Keepr extension. Open it in Chrome and click Sync again.";
 export const RCS_NOT_SIGNED_IN_MESSAGE =
   "Sign in to Google Messages, then click Sync in Keepr again";
+/**
+ * BACKLOG-3924 (founder, 2026-10-12): the page says it is waiting for the
+ * user to sign in to Google Messages (POST /job/:id/waiting). Each such
+ * message keeps the unclaimed job alive this long (no content script runs on
+ * accounts.google.com, and a two-step sign-in can outlast a minute)…
+ */
+export const RCS_SIGN_IN_WAIT_MS = 5 * 60_000;
+/** …but never past this long from the job's start. Then it fails as not_signed_in. */
+export const RCS_SIGN_IN_WAIT_CAP_MS = 15 * 60_000;
+/** BACKLOG-3924 S7: Keepr's progress line while the page waits for sign-in. */
+export const RCS_WAITING_FOR_SIGN_IN_STAGE = "Waiting for you to sign in to Google Messages in Chrome";
 
 export type RcsJobState =
   | "created"
@@ -338,11 +349,39 @@ export class RcsImportJob {
     if (this.state === "created") this.unlinkedHint = message;
   }
 
+  /**
+   * BACKLOG-3924: while the page waits for sign-in, the unclaimed job lives
+   * until this time (null: the page never said it was waiting).
+   */
+  private signInWaitUntilMs: number | null = null;
+
+  /**
+   * BACKLOG-3924: the page is on Google's sign-in page and waits for the
+   * user. The unclaimed job lives {@link RCS_SIGN_IN_WAIT_MS} from now,
+   * capped at {@link RCS_SIGN_IN_WAIT_CAP_MS} from its start. Only an
+   * unclaimed job; returns whether it was taken.
+   */
+  markWaitingForSignIn(nowMs: number): boolean {
+    this.expireIfUnclaimed(nowMs);
+    if (this.state !== "created") return false;
+    const until = Math.min(nowMs + RCS_SIGN_IN_WAIT_MS, this.createdAtMs + RCS_SIGN_IN_WAIT_CAP_MS);
+    this.signInWaitUntilMs = Math.max(this.signInWaitUntilMs ?? 0, until);
+    this.stage = RCS_WAITING_FOR_SIGN_IN_STAGE;
+    return true;
+  }
+
+  /** When an unclaimed job expires (ms since epoch). */
+  unclaimedDeadlineMs(): number {
+    return this.signInWaitUntilMs ?? this.createdAtMs + RCS_JOB_UNCLAIMED_MS;
+  }
+
   /** Expire an unclaimed job. Returns true when this call expired it. */
   expireIfUnclaimed(nowMs: number): boolean {
     if (this.state !== "created") return false;
-    if (nowMs - this.createdAtMs < RCS_JOB_UNCLAIMED_MS) return false;
-    if (this.unlinkedHint !== null) this.fail("keepr_refused", this.unlinkedHint, nowMs);
+    if (nowMs < this.unclaimedDeadlineMs()) return false;
+    // BACKLOG-3924: the page waited for sign-in and the user never finished.
+    if (this.signInWaitUntilMs !== null) this.fail("not_signed_in", RCS_NOT_SIGNED_IN_MESSAGE, nowMs);
+    else if (this.unlinkedHint !== null) this.fail("keepr_refused", this.unlinkedHint, nowMs);
     else this.fail("not_opened", RCS_JOB_NOT_OPENED_MESSAGE, nowMs);
     return true;
   }

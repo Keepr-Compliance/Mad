@@ -333,9 +333,13 @@ export function decideCacheStart(input: {
 /**
  * Founder (2026-10-01): when a Sync ends done or failed, Keepr comes to the
  * front by itself; a cancel (from Keepr, the page, or a user switch) does not.
+ * BACKLOG-3924 (founder, 2026-10-12): a Sync that failed because Google
+ * Messages is not signed in does NOT — Chrome stays in front, where the QR
+ * code and the page's sign-in card are. Every other failure still does.
  */
-export function shouldFocusKeeprOnJobEnd(state: string): boolean {
-  return state === "finished" || state === "failed";
+export function shouldFocusKeeprOnJobEnd(ended: { state: string; error?: { code: string } | null }): boolean {
+  if (ended.state === "failed" && ended.error?.code === "not_signed_in") return false;
+  return ended.state === "finished" || ended.state === "failed";
 }
 
 /** BACKLOG-3658: an extension report is written to the database at most once a minute per user. */
