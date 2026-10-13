@@ -36,6 +36,9 @@ const OPEN_LIST = fx('pr2-invoices-list-sub-open');
 const INV = OPEN_LIST.data[0];
 const VOIDED = { ...fx('SR-VOID-inv-voided'), id: INV.id }; // [COMPOSED] SR trace object under this invoice id
 const CANCELED = { ...fx('SR-VOID-sub-canceled'), id: SUB.id, customer: SUB.customer }; // [COMPOSED]
+// TEST trace, fix-up round 1 (README "Fix-up round 1"): R1 marked uncollectible.
+const UNCOLLECTIBLE_RACE = fx('F1-RN-inv-uncollectible'); // outside the draft hour, marked after the status read
+const UNCOLLECTIBLE_DRAFT_HOUR = fx('F1-DU-inv-uncollectible'); // marked in the draft hour
 const USER = 'USER-3848-END';
 const OTHER = 'USER-3848-OTHER';
 const NOW = new Date('2026-10-13T06:00:30Z');
@@ -168,6 +171,32 @@ describe('endPlanNow (R4)', () => {
     expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
   });
 
+  it('C-END-UNCOLLECTIBLE (SR ruling Q3, TEST race RN): the latest renewal reads uncollectible after the status read -> ended, one cancel, it is NOT voided', async () => {
+    // TEST: status read past_due, R1 marked uncollectible, then nothing open; F1-RN-inv-uncollectible served under SUB.latest_invoice [COMPOSED].
+    stripe.impl['invoices.list'] = () => ({ ...clone(OPEN_LIST), data: [] }); // [EDITED data: []] as Stripe answered once R1 was uncollectible
+    stripe.impl['invoices.retrieve'] = (id: string) => ({ ...UNCOLLECTIBLE_RACE, id });
+    expect(await run()).toBe('ended');
+    // The TEST trace's own op sequence.
+    expect(stripe.ops()).toEqual(['subscriptions.retrieve', 'invoices.list', 'invoices.retrieve', 'subscriptions.cancel']);
+    expect(stripe.callsTo('invoices.voidInvoice')).toEqual([]);
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([
+      [SUB.id, { prorate: false, invoice_now: false }, { idempotencyKey: `end-now-cancel:${SUB.id}` }],
+    ]);
+    expect(mine()).toMatchObject({ status: 'canceled', paused: false });
+  });
+
+  it('C-END-UNCOLLECTIBLE-CANCEL-FAIL: a failed cancel queues the uncollectible invoice id (not as voided)', async () => {
+    stripe.impl['invoices.list'] = () => ({ ...clone(OPEN_LIST), data: [] }); // [EDITED data: []]
+    stripe.impl['invoices.retrieve'] = (id: string) => ({ ...UNCOLLECTIBLE_RACE, id }); // [COMPOSED]
+    stripe.impl['subscriptions.cancel'] = () => {
+      throw Object.assign(new Error('api down'), { type: 'StripeAPIError' });
+    };
+    expect(await run()).toBe('finalizing');
+    expect(db.rows('billing_outbox')).toEqual([
+      expect.objectContaining({ payload: { subscription_id: SUB.id, voided_invoice_ids: [], uncollectible_invoice_id: SUB.latest_invoice } }),
+    ]);
+  });
+
   it('C-END-VOID-KEY: a double submit in the same minute reuses the void key; a retry a minute later gets a fresh one', async () => {
     await run(NOW);
     seed();
@@ -190,6 +219,7 @@ describe('endPlanNow (R4)', () => {
 
   it.each([
     ['active (SR trace, after a void)', () => fx('SR-VOID-sub-after-void')],
+    ['active (TEST NU: R1 marked uncollectible at rest, outside the draft hour)', () => fx('F1-NU-sub-after-mark')],
     ['unpaid [EDITED status]', () => ({ ...clone(SUB), status: 'unpaid' })],
     ['canceled', () => CANCELED],
   ])('status gate before any write: Stripe says %s -> not_now, nothing voided or cancelled', async (_n, sub) => {
@@ -223,12 +253,12 @@ describe('endPlanNow draft hour (previous renewal decides)', () => {
   const older = (status: 'paid' | 'void') =>
     ({ ...(status === 'paid' ? fx('pr2-inv-paid') : fx('SR-VOID-inv-voided')), id: 'in_EDITED_older', subscription: SUB.id, created: INV.created - 86_400 });
 
-  function serve(opts: { open: Obj[]; previous: Obj; olderStatus: 'paid' | 'void' }) {
+  function serve(opts: { open: Obj[]; previous: Obj; olderStatus: 'paid' | 'void'; newer?: Obj[] }) {
     stripe.impl['subscriptions.retrieve'] = () => SUB_DRAFT;
     stripe.impl['invoices.list'] = (params: Obj) =>
       params.status === 'open'
         ? { ...clone(OPEN_LIST), data: opts.open }
-        : { ...clone(OPEN_LIST), data: [DRAFT, opts.previous, older(opts.olderStatus)] }; // newest first, as Stripe lists
+        : { ...clone(OPEN_LIST), data: [DRAFT, ...(opts.newer ?? []), opts.previous, older(opts.olderStatus)] }; // newest first, as Stripe lists
     stripe.impl['invoices.retrieve'] = (id: string) => (id === DRAFT.id ? DRAFT : opts.previous);
   }
 
@@ -249,6 +279,28 @@ describe('endPlanNow draft hour (previous renewal decides)', () => {
 
   it('C-DRAFT-PAID (RC1 in the draft hour): previous renewal paid after the status read -> paid_meanwhile, zero cancel', async () => {
     serve({ open: [], previous: { ...fx('pr2-inv-paid'), id: INV.id }, olderStatus: 'void' }); // [EDITED data: []] nothing open once paid
+    expect(await run()).toBe('paid_meanwhile');
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
+    expect(mine()).toMatchObject({ status: 'past_due' });
+    expect(db.rows('billing_outbox')).toEqual([]);
+  });
+
+  it('C-DRAFT-UNCOLLECTIBLE (TEST DU): previous renewal marked uncollectible in the draft hour -> ended, one cancel, nothing voided', async () => {
+    // TEST: after the mark the sub still read past_due with the draft latest (F1-DU-sub-after-mark), nothing open.
+    // F1-DU-inv-uncollectible served under INV.id [COMPOSED]; OLDER paid.
+    serve({ open: [], previous: { ...UNCOLLECTIBLE_DRAFT_HOUR, id: INV.id, created: INV.created }, olderStatus: 'paid' });
+    expect(await run()).toBe('ended');
+    // The TEST trace's own op sequence.
+    expect(stripe.ops()).toEqual(['subscriptions.retrieve', 'invoices.list', 'invoices.retrieve', 'invoices.list', 'subscriptions.cancel']);
+    expect(stripe.callsTo('subscriptions.cancel')).toHaveLength(1);
+    expect(mine()).toMatchObject({ status: 'canceled', paused: false });
+  });
+
+  it('C-DRAFT-ANY-REASON: previous cycle renewal paid, a NEWER finalized non-cycle invoice reads void -> paid_meanwhile, zero cancel', async () => {
+    // [EDITED] the subscription_create invoice of invoices-list-pastdue: subscription SUB.id, status void, created after INV.
+    const createInv = fx('invoices-list-pastdue').data.find((i: Obj) => i.billing_reason === 'subscription_create');
+    const nonCycle = { ...createInv, id: 'in_EDITED_noncycle', subscription: SUB.id, status: 'void', created: INV.created + 3_600 };
+    serve({ open: [], previous: { ...fx('pr2-inv-paid'), id: INV.id, created: INV.created }, olderStatus: 'void', newer: [nonCycle] });
     expect(await run()).toBe('paid_meanwhile');
     expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
     expect(mine()).toMatchObject({ status: 'past_due' });

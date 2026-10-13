@@ -88,4 +88,35 @@ SR delta-review e2e (`3848-pr2-sr2/e2e`, TEST, acacia, daily price, failing card
 
 | File | Producer |
 |---|---|
-| `SR-DRAFT-inv-draft.json` | `invoices.retrieve(sub.latest_invoice)` in the draft hour: the next cycle's renewal, `draft`, `billing_reason: subscription_cycle` (SR file `TEST-dcancel-draft-after-cancel.json`; read after the void of the previous renewal and the cancel, so `auto_advance` is `false` — before the cancel it read `true`) |
+| `SR-DRAFT-inv-draft.json` | `invoices.retrieve(sub.latest_invoice)` in the draft hour: the next cycle's renewal, `draft`, `billing_reason: subscription_cycle` (SR file `TEST-dcancel-draft-after-cancel.json`). This is the draft as read AFTER the cancel: `auto_advance` is `false`. Before the click the same draft read `auto_advance: true`. The code never reads `auto_advance`. |
+
+## Fix-up round 1: `F1-*` (R1 marked uncollectible)
+
+Third TEST spike, 2026-10-13, same CLI version and `stripe` 17.7.0 client.
+Two test clocks, a temporary daily price, `pm_card_visa` then
+`pm_card_chargeCustomerFail`; clock moved past the period end so the first
+renewal (R1) is `open` and the subscription `past_due`. Synthetic customers on
+`example.invalid`. Clocks deleted (customers `deleted: true`), price and product
+set inactive. `https://` strings cut to `<stripped>`.
+
+- **NU** (outside the draft hour, at rest): `invoices.markUncollectible(R1)`;
+  the subscription then read **`active`** (latest invoice unchanged, nothing
+  open). End plan now answered `not_now` after one `subscriptions.retrieve`.
+  A day later the plan renewed, the charge failed, and it was `past_due` again.
+- **RN** (outside the draft hour, race): End plan now read `past_due`, then R1
+  was marked uncollectible before the list. Outcome `ended`; ops
+  `subscriptions.retrieve, invoices.list, invoices.retrieve, subscriptions.cancel`
+  (nothing voided). A day later: no new invoice, no new charge.
+- **DU** (draft hour, R2 `draft`): End plan now read `past_due`, then R1 was
+  marked uncollectible. The subscription still read **`past_due`** (latest =
+  the draft). Outcome `ended`; ops `subscriptions.retrieve, invoices.list,
+  invoices.retrieve, invoices.list, subscriptions.cancel`. Two hours later the
+  draft was still `draft` (`auto_advance: false`); no new charge.
+
+| File | Producer |
+|---|---|
+| `F1-NU-sub-after-mark.json` | `subscriptions.retrieve` right after `markUncollectible(R1)` outside the draft hour: `active` |
+| `F1-RN-sub-before-mark.json` | the `subscriptions.retrieve` End plan now made (RN): `past_due` |
+| `F1-RN-inv-uncollectible.json` | `invoices.markUncollectible(R1)` (RN): `uncollectible`, `subscription_cycle` |
+| `F1-DU-sub-after-mark.json` | `subscriptions.retrieve` right after the mark in the draft hour: `past_due`, latest = the draft |
+| `F1-DU-inv-uncollectible.json` | `invoices.markUncollectible(R1)` in the draft hour: `uncollectible`, `subscription_cycle` |
