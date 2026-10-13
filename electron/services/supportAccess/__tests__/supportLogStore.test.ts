@@ -541,6 +541,70 @@ describe("SupportLogStore", () => {
       expect(await store.write("message-import", "released", {})).toBe(true);
       expect(await store.totalBytes()).toBeLessThanOrEqual(CAP);
     });
+
+    it("arms at most one pending retry timer across many held writes", async () => {
+      const store = makeStore({ segment: SEGMENT, total: CAP });
+      held.failuresLeft = 10_000;
+      await writeUntilTrimNeeded(store);
+      for (let i = 0; i < 20; i += 1) {
+        await store.write("message-import", "bulk", { i, payload });
+        expect(jest.getTimerCount()).toBeLessThanOrEqual(1);
+      }
+    });
+
+    it("recovers on a normal-size record after the hold is released", async () => {
+      const store = makeStore({ segment: SEGMENT, total: CAP });
+      held.failuresLeft = 10_000;
+      for (let i = 0; i < 100; i += 1) {
+        await store.write("message-import", "bulk", { i, payload });
+      }
+      expect(store.heldDropCount()).toBeGreaterThan(0);
+      held.failuresLeft = 0;
+      expect(await store.write("message-import", "bulk", { i: 100, payload })).toBe(true);
+      expect(await store.totalBytes()).toBeLessThanOrEqual(CAP);
+    });
+
+    it("clear() leaves no retry timer behind, even with a write queued behind it", async () => {
+      const store = makeStore({ segment: SEGMENT, total: CAP });
+      held.failuresLeft = 10_000;
+      await writeUntilTrimNeeded(store);
+      expect(jest.getTimerCount()).toBe(1);
+
+      // A write is queued when clear() starts; its trim would re-arm a timer
+      // if clear() cancelled before draining the queue.
+      const queued = store.write("message-import", "bulk", { i: 999, payload });
+      await store.clear();
+      await queued;
+      expect(jest.getTimerCount()).toBe(0);
+
+      const attempts = held.attempts;
+      jest.advanceTimersByTime(RETRY_MS * 5);
+      await store.flush();
+      expect(held.attempts).toBe(attempts);
+    });
+
+    it("keeps a younger segment while the oldest is held (oldest first)", async () => {
+      const store = makeStore({ segment: SEGMENT, total: 6 * 1024 });
+      let heldName: string | null = null;
+      unlinkSpy.mockImplementation(async (target) => {
+        const base = path.basename(String(target));
+        if (base.startsWith("segment-")) {
+          heldName = heldName ?? base;
+          if (base === heldName) {
+            const e = new Error("EPERM: held"); (e as NodeJS.ErrnoException).code = "EPERM"; throw e;
+          }
+        }
+        return realUnlink(target);
+      });
+      for (let i = 0; i < 40; i += 1) {
+        await store.write("message-import", "bulk", { i, payload });
+      }
+      const segs = (await names()).filter((n) => n.startsWith("segment-")).sort();
+      expect(segs.length).toBeGreaterThanOrEqual(2);
+      // nothing younger than the held oldest one was taken: segment counters are contiguous
+      const nums = segs.map((n) => Number(n.slice(-8, -4)));
+      expect(nums).toEqual(nums.map((_, k) => nums[0] + k));
+    });
   });
 
   it("keeps a current.log when current.log alone was over the cap", async () => {

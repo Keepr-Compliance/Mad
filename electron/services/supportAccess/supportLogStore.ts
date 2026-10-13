@@ -579,10 +579,12 @@ export class SupportLogStore {
    * into the next grant's first report.
    */
   async clear(): Promise<void> {
+    // Cancel after the flush: a queued write can arm a retry timer, and would
+    // re-set heldTotal, while the flush drains.
+    await this.flush();
     this.cancelCapRetry();
     this.capRetryExhausted = false;
     this.heldTotal = null;
-    await this.flush();
     try {
       const names = await fs.readdir(this.dir);
       await Promise.all(
