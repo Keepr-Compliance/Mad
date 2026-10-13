@@ -1,6 +1,6 @@
 # BACKLOG-3849 harness
 
-Controls for `supabase/migrations/20261013100000_backlog_3849_billing_drain.sql` (S4) and for
+Controls for `supabase/migrations/20261013020819_backlog_3849_billing_drain.sql` (S4) and for
 the `billing_outbox_claim` behaviour the drain relies on (S1-S3).
 
 ```

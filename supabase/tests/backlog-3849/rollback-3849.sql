@@ -1,4 +1,4 @@
--- Rollback of 20261013100000_backlog_3849_billing_drain.sql.
+-- Rollback of 20261013020819_backlog_3849_billing_drain.sql.
 -- 1. Unschedules every cron job whose command calls billing_drain_invoke, so no
 --    job is left calling a function that no longer exists.
 -- 2. Drops billing_drain_invoke(text) and billing_drain_secret().

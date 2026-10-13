@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# BACKLOG-3849 S4 harness for migration A (20261013100000_backlog_3849_billing_drain.sql).
+# BACKLOG-3849 S4 harness for migration A (20261013020819_backlog_3849_billing_drain.sql).
 # Each control runs in ONE transaction ending in ROLLBACK: helpers, the migration
 # (or a mutant), optionally a second apply, then the control. Nothing is
 # committed and no queued pg_net request is ever sent.
@@ -14,7 +14,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-MIG="$REPO/supabase/migrations/20261013100000_backlog_3849_billing_drain.sql"
+MIG="$REPO/supabase/migrations/20261013020819_backlog_3849_billing_drain.sql"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 psql_in() {
   if [ "$SSH_HOST" = local ]; then docker exec -i "$CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 -X -q -tA -f -

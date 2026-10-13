@@ -1,6 +1,6 @@
 -- ============================================
 -- BILLING OUTBOX DRAIN: secret + invoker
--- Migration: 20261013100000_backlog_3849_billing_drain
+-- Migration: 20261013020819_backlog_3849_billing_drain
 -- Task: BACKLOG-3849 (depends on BACKLOG-3845: billing_outbox, billing_outbox_claim)
 --
 -- 1. Vault secret `billing_drain_secret` (generated in the database, never
