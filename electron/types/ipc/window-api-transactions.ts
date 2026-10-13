@@ -1,3 +1,4 @@
+import type { ReviewMatchReason } from "./reviewMatchReason";
 import type { TextPageCursor, TextThreadSummary, TextWindow } from "../textThreads";
 /**
  * WindowApi Transactions sub-interface
@@ -214,6 +215,11 @@ export interface ReviewItemDto {
   email_id: string | null;
   thread_id: string | null;
   found_at: string;
+  /**
+   * BACKLOG-3925: why this item is in Needs Review. Drives the All / Address match /
+   * Contact match tabs and the pill. "contact" for every row with no stored reason.
+   */
+  matchReason: ReviewMatchReason;
   display: ReviewItemDisplayDto;
 }
 

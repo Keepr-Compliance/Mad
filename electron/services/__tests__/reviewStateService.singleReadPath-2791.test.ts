@@ -34,6 +34,11 @@ const OWNERS = [
   // only importer of this module is asserted below — which is what keeps listing it
   // here from being a hole rather than a relocation.
   "electron/services/db/reviewStateSql.ts",
+  // BACKLOG-3925: the address-only discovery read excludes emails already waiting in
+  // Needs Review (NOT EXISTS on the pending store). It runs on the dedicated query
+  // worker (BACKLOG-3868 pattern), so its text lives in a worker-safe module rather than
+  // reviewStateSql. It decides nothing about review state; its importers are pinned below.
+  "electron/services/db/addressMatchCandidatesDb.ts",
 ];
 
 /**
@@ -107,6 +112,15 @@ describe("BACKLOG-2791 — review state has exactly one read path", () => {
       .filter((f) => !OWNERS.includes(f));
 
     expect(offenders).toEqual([]);
+  });
+
+  it("only reviewStateService and the query worker import the address-match read (BACKLOG-3925)", () => {
+    const importers = files
+      .filter((f) => /from "[^"]*addressMatchCandidatesDb"/.test(fs.readFileSync(f, "utf8")))
+      .map(relative)
+      .sort();
+
+    expect(importers).toEqual(["electron/services/reviewStateService.ts", "electron/workers/contactQueryWorker.ts"]);
   });
 
   it("only reviewStateService imports the review SQL module", () => {

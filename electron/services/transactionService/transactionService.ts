@@ -1248,6 +1248,11 @@ class TransactionService {
               );
             }
           }
+          // BACKLOG-3925: address-only matches, after the contact pass.
+          const { runAddressMatchPassInSweep } = await import("../reviewStateService");
+          const addressPass = await runAddressMatchPassInSweep(transactionId, "create");
+          totalQueuedForReview += addressPass.queued;
+          if (!addressPass.clean) clean = false;
           return { clean };
         }, "create");
 

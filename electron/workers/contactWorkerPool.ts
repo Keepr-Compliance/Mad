@@ -35,7 +35,9 @@ type QueryType =
   | "sourceCoverageFloors"
   | "transactionTextThreads"
   // BACKLOG-3837: the Attach Messages roster.
-  | "messageRoster";
+  | "messageRoster"
+  // BACKLOG-3925: the address-only Needs Review candidates.
+  | "addressMatchCandidates";
 
 /**
  * Per-type payload carried alongside `{ id, type, userId }` (BACKLOG-1717).

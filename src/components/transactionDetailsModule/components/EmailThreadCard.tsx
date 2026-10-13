@@ -83,6 +83,11 @@ export interface EmailThreadCardProps {
   isConfirming?: boolean;
   /** BACKLOG-3910: locked deal — approve and reject are disabled and show this text. */
   actionsLockedTooltip?: string;
+  /**
+   * BACKLOG-3925: rendered inline right after the subject (the Needs Review match
+   * pill). When absent the subject markup is unchanged.
+   */
+  subjectBadge?: React.ReactNode;
 }
 
 /**
@@ -104,6 +109,7 @@ export function EmailThreadCard({
   onConfirm,
   isConfirming = false,
   actionsLockedTooltip,
+  subjectBadge,
 }: EmailThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
   const isNeedsReview = variant === "needsReview";
@@ -184,9 +190,18 @@ export function EmailThreadCard({
             {/* Thread info: Subject and participants */}
             <div className="min-w-0 flex-1">
               <div data-testid="thread-subject">
-                <span className="font-semibold text-gray-900 block truncate text-sm sm:text-base">
-                  {thread.subject || "(No Subject)"}
-                </span>
+                {subjectBadge ? (
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-semibold text-gray-900 truncate text-sm sm:text-base min-w-0">
+                      {thread.subject || "(No Subject)"}
+                    </span>
+                    <span className="flex-shrink-0">{subjectBadge}</span>
+                  </div>
+                ) : (
+                  <span className="font-semibold text-gray-900 block truncate text-sm sm:text-base">
+                    {thread.subject || "(No Subject)"}
+                  </span>
+                )}
                 <span className="font-normal text-gray-500 text-xs sm:text-sm block truncate">
                   {formatParticipants(otherParticipants, 2, nameMap)}
                   {isMultipleEmails && (
