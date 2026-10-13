@@ -159,7 +159,10 @@ gh pr edit <number> --base int-portal/<name>     # each open PR into int/<name>
 
 **When the deployment builds.** A created deployment still runs the Ignored Build Step
 (`scripts/vercel-ignore-build.sh`), which builds only when the push changes that portal's paths.
-On a branch's first deployment it compares against the previous commit (`HEAD~1`). Measured on
+On a branch's first deployment it compares against the previous commit (`HEAD~1`); when the tip
+is a merge it also compares against every parent and builds if any of those diffs touches the
+portal (BACKLOG-3916 — a first push that merges the base branch into a feature commit was
+skipped). Measured on
 2026-09-13 (BACKLOG-3205):
 
 | What you push to the `-portal` branch | Result |
