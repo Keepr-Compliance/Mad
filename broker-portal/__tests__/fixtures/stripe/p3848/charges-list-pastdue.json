@@ -1,0 +1,469 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "ch_3UPxEOBg3cyTef3d0onpSHl3",
+      "object": "charge",
+      "amount": 1999,
+      "amount_captured": 0,
+      "amount_refunded": 0,
+      "application": null,
+      "application_fee": null,
+      "application_fee_amount": null,
+      "balance_transaction": null,
+      "billing_details": {
+        "address": {
+          "city": null,
+          "country": null,
+          "line1": null,
+          "line2": null,
+          "postal_code": null,
+          "state": null
+        },
+        "email": null,
+        "name": null,
+        "phone": null,
+        "tax_id": null
+      },
+      "calculated_statement_descriptor": "KEEPR SANDBOX",
+      "captured": false,
+      "created": 1791865355,
+      "currency": "usd",
+      "customer": "cus_VQorwf3sdrkZlt",
+      "description": "Subscription update",
+      "destination": null,
+      "dispute": null,
+      "disputed": false,
+      "failure_balance_transaction": null,
+      "failure_code": "card_declined",
+      "failure_message": "Your card was declined.",
+      "fraud_details": {},
+      "invoice": "in_1UPxEMBg3cyTef3dij7W6jiQ",
+      "livemode": false,
+      "metadata": {},
+      "on_behalf_of": null,
+      "order": null,
+      "outcome": {
+        "advice_code": "try_again_later",
+        "network_advice_code": null,
+        "network_decline_code": "01",
+        "network_status": "declined_by_network",
+        "reason": "generic_decline",
+        "risk_level": "normal",
+        "risk_score": 22,
+        "seller_message": "The bank did not return any further details with this decline.",
+        "type": "issuer_declined"
+      },
+      "paid": false,
+      "payment_intent": "pi_3UPxEOBg3cyTef3d0d5NGNZS",
+      "payment_method": "pm_1UPxEGBg3cyTef3dpoTnGEFp",
+      "payment_method_details": {
+        "card": {
+          "amount_authorized": null,
+          "authorization_code": "814473",
+          "brand": "visa",
+          "checks": {
+            "address_line1_check": null,
+            "address_postal_code_check": null,
+            "cvc_check": "pass"
+          },
+          "country": "US",
+          "electronic_commerce_indicator": "02",
+          "exp_month": 10,
+          "exp_year": 2027,
+          "extended_authorization": {
+            "status": "disabled"
+          },
+          "fingerprint": "p7nqmcn1tqt3SNPG",
+          "funding": "credit",
+          "incremental_authorization": {
+            "status": "unavailable"
+          },
+          "installments": null,
+          "last4": "0341",
+          "mandate": null,
+          "multicapture": {
+            "status": "unavailable"
+          },
+          "network": "visa",
+          "network_token": {
+            "used": false
+          },
+          "network_transaction_id": "112551101131099",
+          "overcapture": {
+            "maximum_amount_capturable": 1999,
+            "status": "unavailable"
+          },
+          "regulated_status": "unregulated",
+          "three_d_secure": null,
+          "transaction_link_id": null,
+          "wallet": null
+        },
+        "type": "card"
+      },
+      "radar_options": {},
+      "receipt_email": null,
+      "receipt_number": null,
+      "receipt_url": null,
+      "refunded": false,
+      "review": null,
+      "shipping": null,
+      "source": null,
+      "source_transfer": null,
+      "statement_descriptor": null,
+      "statement_descriptor_suffix": null,
+      "status": "failed",
+      "transfer_data": null,
+      "transfer_group": null
+    },
+    {
+      "id": "ch_3UPxEOBg3cyTef3d0aMlq1Py",
+      "object": "charge",
+      "amount": 1999,
+      "amount_captured": 0,
+      "amount_refunded": 0,
+      "application": null,
+      "application_fee": null,
+      "application_fee_amount": null,
+      "balance_transaction": null,
+      "billing_details": {
+        "address": {
+          "city": null,
+          "country": null,
+          "line1": null,
+          "line2": null,
+          "postal_code": null,
+          "state": null
+        },
+        "email": null,
+        "name": null,
+        "phone": null,
+        "tax_id": null
+      },
+      "calculated_statement_descriptor": "KEEPR SANDBOX",
+      "captured": false,
+      "created": 1791865350,
+      "currency": "usd",
+      "customer": "cus_VQorwf3sdrkZlt",
+      "description": "Subscription update",
+      "destination": null,
+      "dispute": null,
+      "disputed": false,
+      "failure_balance_transaction": null,
+      "failure_code": "card_declined",
+      "failure_message": "Your card was declined.",
+      "fraud_details": {},
+      "invoice": "in_1UPxEMBg3cyTef3dij7W6jiQ",
+      "livemode": false,
+      "metadata": {},
+      "on_behalf_of": null,
+      "order": null,
+      "outcome": {
+        "advice_code": "try_again_later",
+        "network_advice_code": null,
+        "network_decline_code": "01",
+        "network_status": "declined_by_network",
+        "reason": "generic_decline",
+        "risk_level": "normal",
+        "risk_score": 3,
+        "seller_message": "The bank did not return any further details with this decline.",
+        "type": "issuer_declined"
+      },
+      "paid": false,
+      "payment_intent": "pi_3UPxEOBg3cyTef3d0d5NGNZS",
+      "payment_method": "pm_1UPxEGBg3cyTef3dpoTnGEFp",
+      "payment_method_details": {
+        "card": {
+          "amount_authorized": null,
+          "authorization_code": "804789",
+          "brand": "visa",
+          "checks": {
+            "address_line1_check": null,
+            "address_postal_code_check": null,
+            "cvc_check": "pass"
+          },
+          "country": "US",
+          "electronic_commerce_indicator": "02",
+          "exp_month": 10,
+          "exp_year": 2027,
+          "extended_authorization": {
+            "status": "disabled"
+          },
+          "fingerprint": "p7nqmcn1tqt3SNPG",
+          "funding": "credit",
+          "incremental_authorization": {
+            "status": "unavailable"
+          },
+          "installments": null,
+          "last4": "0341",
+          "mandate": null,
+          "multicapture": {
+            "status": "unavailable"
+          },
+          "network": "visa",
+          "network_token": {
+            "used": false
+          },
+          "network_transaction_id": "112551101131099",
+          "overcapture": {
+            "maximum_amount_capturable": 1999,
+            "status": "unavailable"
+          },
+          "regulated_status": "unregulated",
+          "three_d_secure": null,
+          "transaction_link_id": null,
+          "wallet": null
+        },
+        "type": "card"
+      },
+      "radar_options": {},
+      "receipt_email": null,
+      "receipt_number": null,
+      "receipt_url": null,
+      "refunded": false,
+      "review": null,
+      "shipping": null,
+      "source": null,
+      "source_transfer": null,
+      "statement_descriptor": null,
+      "statement_descriptor_suffix": null,
+      "status": "failed",
+      "transfer_data": null,
+      "transfer_group": null
+    },
+    {
+      "id": "ch_3UPxEDBg3cyTef3d1I97bfHa",
+      "object": "charge",
+      "amount": 1999,
+      "amount_captured": 1999,
+      "amount_refunded": 0,
+      "application": null,
+      "application_fee": null,
+      "application_fee_amount": null,
+      "balance_transaction": "txn_3UPxEDBg3cyTef3d1OTloUhz",
+      "billing_details": {
+        "address": {
+          "city": null,
+          "country": null,
+          "line1": null,
+          "line2": null,
+          "postal_code": null,
+          "state": null
+        },
+        "email": null,
+        "name": null,
+        "phone": null,
+        "tax_id": null
+      },
+      "calculated_statement_descriptor": "KEEPR SANDBOX",
+      "captured": true,
+      "created": 1791865338,
+      "currency": "usd",
+      "customer": "cus_VQorwf3sdrkZlt",
+      "description": "Subscription creation",
+      "destination": null,
+      "dispute": null,
+      "disputed": false,
+      "failure_balance_transaction": null,
+      "failure_code": null,
+      "failure_message": null,
+      "fraud_details": {},
+      "invoice": "in_1UPxECBg3cyTef3dGKrmoKcA",
+      "livemode": false,
+      "metadata": {},
+      "on_behalf_of": null,
+      "order": null,
+      "outcome": {
+        "advice_code": null,
+        "network_advice_code": null,
+        "network_decline_code": null,
+        "network_status": "approved_by_network",
+        "reason": null,
+        "risk_level": "normal",
+        "risk_score": 39,
+        "seller_message": "Payment complete.",
+        "type": "authorized"
+      },
+      "paid": true,
+      "payment_intent": "pi_3UPxEDBg3cyTef3d1yBiWTBv",
+      "payment_method": "pm_1UPxEABg3cyTef3do5mVLY8t",
+      "payment_method_details": {
+        "card": {
+          "amount_authorized": 1999,
+          "authorization_code": "557380",
+          "brand": "visa",
+          "checks": {
+            "address_line1_check": null,
+            "address_postal_code_check": null,
+            "cvc_check": "pass"
+          },
+          "country": "US",
+          "electronic_commerce_indicator": "07",
+          "exp_month": 10,
+          "exp_year": 2027,
+          "extended_authorization": {
+            "status": "disabled"
+          },
+          "fingerprint": "cSxOgnRMhxzsri1K",
+          "funding": "credit",
+          "incremental_authorization": {
+            "status": "unavailable"
+          },
+          "installments": null,
+          "last4": "4242",
+          "mandate": null,
+          "multicapture": {
+            "status": "unavailable"
+          },
+          "network": "visa",
+          "network_token": {
+            "used": false
+          },
+          "network_transaction_id": "998312079103110",
+          "overcapture": {
+            "maximum_amount_capturable": 1999,
+            "status": "unavailable"
+          },
+          "regulated_status": "unregulated",
+          "three_d_secure": null,
+          "transaction_link_id": null,
+          "wallet": null
+        },
+        "type": "card"
+      },
+      "radar_options": {},
+      "receipt_email": null,
+      "receipt_number": null,
+      "receipt_url": "<stripped>",
+      "refunded": false,
+      "review": null,
+      "shipping": null,
+      "source": null,
+      "source_transfer": null,
+      "statement_descriptor": null,
+      "statement_descriptor_suffix": null,
+      "status": "succeeded",
+      "transfer_data": null,
+      "transfer_group": null
+    },
+    {
+      "id": "ch_3UPxEBBg3cyTef3d0kFPp3nH",
+      "object": "charge",
+      "amount": 1499,
+      "amount_captured": 1499,
+      "amount_refunded": 0,
+      "application": null,
+      "application_fee": null,
+      "application_fee_amount": null,
+      "balance_transaction": "txn_3UPxEBBg3cyTef3d0s9H105A",
+      "billing_details": {
+        "address": {
+          "city": null,
+          "country": null,
+          "line1": null,
+          "line2": null,
+          "postal_code": null,
+          "state": null
+        },
+        "email": null,
+        "name": null,
+        "phone": null,
+        "tax_id": null
+      },
+      "calculated_statement_descriptor": "KEEPR SANDBOX",
+      "captured": true,
+      "created": 1791865335,
+      "currency": "usd",
+      "customer": "cus_VQorwf3sdrkZlt",
+      "description": "Keepr transaction unlock",
+      "destination": null,
+      "dispute": null,
+      "disputed": false,
+      "failure_balance_transaction": null,
+      "failure_code": null,
+      "failure_message": null,
+      "fraud_details": {},
+      "invoice": null,
+      "livemode": false,
+      "metadata": {
+        "user_id": "USER-3848-PR1"
+      },
+      "on_behalf_of": null,
+      "order": null,
+      "outcome": {
+        "advice_code": null,
+        "network_advice_code": null,
+        "network_decline_code": null,
+        "network_status": "approved_by_network",
+        "reason": null,
+        "risk_level": "normal",
+        "risk_score": 23,
+        "seller_message": "Payment complete.",
+        "type": "authorized"
+      },
+      "paid": true,
+      "payment_intent": "pi_3UPxEBBg3cyTef3d04aXXTbE",
+      "payment_method": "pm_1UPxEABg3cyTef3do5mVLY8t",
+      "payment_method_details": {
+        "card": {
+          "amount_authorized": 1499,
+          "authorization_code": "609824",
+          "brand": "visa",
+          "checks": {
+            "address_line1_check": null,
+            "address_postal_code_check": null,
+            "cvc_check": "pass"
+          },
+          "country": "US",
+          "electronic_commerce_indicator": "02",
+          "exp_month": 10,
+          "exp_year": 2027,
+          "extended_authorization": {
+            "status": "disabled"
+          },
+          "fingerprint": "cSxOgnRMhxzsri1K",
+          "funding": "credit",
+          "incremental_authorization": {
+            "status": "unavailable"
+          },
+          "installments": null,
+          "last4": "4242",
+          "mandate": null,
+          "multicapture": {
+            "status": "unavailable"
+          },
+          "network": "visa",
+          "network_token": {
+            "used": false
+          },
+          "network_transaction_id": "998312079103110",
+          "overcapture": {
+            "maximum_amount_capturable": 1499,
+            "status": "unavailable"
+          },
+          "regulated_status": "unregulated",
+          "three_d_secure": null,
+          "transaction_link_id": null,
+          "wallet": null
+        },
+        "type": "card"
+      },
+      "radar_options": {},
+      "receipt_email": null,
+      "receipt_number": null,
+      "receipt_url": "<stripped>",
+      "refunded": false,
+      "review": null,
+      "shipping": null,
+      "source": null,
+      "source_transfer": null,
+      "statement_descriptor": null,
+      "statement_descriptor_suffix": null,
+      "status": "succeeded",
+      "transfer_data": null,
+      "transfer_group": null
+    }
+  ],
+  "has_more": false,
+  "url": "/v1/charges"
+}

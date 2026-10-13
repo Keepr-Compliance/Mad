@@ -113,3 +113,56 @@ describe('Sidebar — full-portal and support buckets are unchanged', () => {
     expect(hrefs({ ...props, floorOnly: props.floorOnly ?? false })).toEqual(expected);
   });
 });
+
+/**
+ * BACKLOG-3844: Billing sits immediately before My Account for every role,
+ * only when the layout passes showBilling, and never during impersonation.
+ * Each expected list is a BEFORE list above with one href inserted by hand.
+ */
+describe('Sidebar — Billing (BACKLOG-3844)', () => {
+  it.each([
+    ['floor', { role: 'agent', floorOnly: true }, ['/dashboard', '/dashboard/support', '/dashboard/billing', '/dashboard/account']],
+    ['broker', { role: 'broker' }, ['/dashboard', '/dashboard/submissions', '/dashboard/support', '/dashboard/billing', '/dashboard/account']],
+    [
+      'admin',
+      { role: 'admin' },
+      [
+        '/dashboard',
+        '/dashboard/submissions',
+        '/dashboard/support',
+        '/dashboard/users',
+        '/dashboard/settings',
+        '/dashboard/billing',
+        '/dashboard/account',
+      ],
+    ],
+    ['it_admin', { role: 'it_admin' }, ['/dashboard/users', '/dashboard/settings', '/dashboard/billing', '/dashboard/account']],
+    [
+      'broker + checklists',
+      { role: 'broker', showChecklists: true },
+      [
+        '/dashboard',
+        '/dashboard/submissions',
+        '/dashboard/support',
+        '/dashboard/checklists',
+        '/dashboard/billing',
+        '/dashboard/account',
+      ],
+    ],
+  ] as [string, Partial<SidebarProps>, string[]][])('%s with showBilling', (_name, props, expected) => {
+    expect(hrefs({ ...props, showBilling: true })).toEqual(expected);
+  });
+
+  it('impersonation never shows Billing, even if showBilling were set', () => {
+    expect(hrefs({ isImpersonating: true, showBilling: true })).toEqual(BEFORE.impersonation);
+  });
+
+  it.each([
+    ['floor', { role: 'agent', floorOnly: true }, FLOOR],
+    ['broker', { role: 'broker' }, BEFORE.broker],
+    ['admin', { role: 'admin' }, BEFORE.admin],
+    ['it_admin', { role: 'it_admin' }, BEFORE.it_admin],
+  ] as [string, Partial<SidebarProps>, string[]][])('%s without showBilling is unchanged', (_name, props, expected) => {
+    expect(hrefs({ ...props, showBilling: false })).toEqual(expected);
+  });
+});

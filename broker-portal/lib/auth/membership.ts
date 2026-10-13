@@ -235,6 +235,15 @@ export const OWN_GATE_PATHS = ['/dashboard/checklists'] as const;
  */
 export const MY_TRANSACTIONS_PATHS = ['/dashboard/my-transactions'] as const;
 
+/**
+ * Billing (BACKLOG-3844): passed through for the OWNER of a personal
+ * organization only. A brokerage agent never gets it (their brokerage pays).
+ * Full-portal users are admitted above. The flag and the rest of the rule are
+ * NOT read here; app/dashboard/billing/page.tsx refuses on its own, and that
+ * refusal is the gate.
+ */
+export const BILLING_PATHS = ['/dashboard/billing'] as const;
+
 /** `path` is `base` itself or a sub-path of it. Never a bare prefix match. */
 function isUnder(path: string, base: string): boolean {
   return path === base || path.startsWith(`${base}/`);
@@ -262,5 +271,52 @@ export function mayOpenDashboardPath(access: PortalAccess, pathname: string): bo
       if (isUnder(pathname, base)) return true;
     }
   }
+  if (access.kind === 'floor' && access.via === 'personal_owner') {
+    for (const base of BILLING_PATHS) {
+      if (isUnder(pathname, base)) return true;
+    }
+  }
   return false;
+}
+
+// ===========================================================================
+// Suspended account — BACKLOG-3878.
+// ===========================================================================
+//
+// Suspended means `licenses.status = 'suspended'` (both suspension paths write
+// it; users.status is written by one path only). The licence is read by
+// lib/auth/suspension.ts; these two functions only decide WHERE a suspended
+// person may go. Still zero imports: middleware calls them.
+//
+//   - the OWNER of a personal organization: Billing (only while billing is on;
+//     the page 404s otherwise), My Account, Support;
+//   - everyone else (brokerage member, full or floor, and an unknown access):
+//     My Account and Support only. The brokerage's bill is not theirs.
+
+/** Paths every suspended person may open. Each also opens its sub-paths. */
+export const SUSPENDED_PATHS = ['/dashboard/account', '/dashboard/support'] as const;
+
+function suspendedSeesBilling(access: PortalAccess, billingOn: boolean): boolean {
+  return billingOn && access.kind === 'floor' && access.via === 'personal_owner';
+}
+
+/** May a SUSPENDED person with this access open this dashboard path? */
+export function maySuspendedOpenPath(access: PortalAccess, pathname: string, billingOn: boolean): boolean {
+  for (const base of SUSPENDED_PATHS) {
+    if (isUnder(pathname, base)) return true;
+  }
+  if (suspendedSeesBilling(access, billingOn)) {
+    for (const base of BILLING_PATHS) {
+      if (isUnder(pathname, base)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Where a suspended person lands. Always a path {@link maySuspendedOpenPath}
+ * admits for the same arguments, so a redirect to it never redirects again.
+ */
+export function suspendedLanding(access: PortalAccess, billingOn: boolean): string {
+  return suspendedSeesBilling(access, billingOn) ? '/dashboard/billing' : '/dashboard/account';
 }

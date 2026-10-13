@@ -34,6 +34,12 @@
  * the layout's `showMyTransactions` (lib/my-transactions-access.ts) says so.
  * The pages refuse on their own; a hidden entry is not the gate.
  *
+ * BACKLOG-3844: Billing, immediately before My Account for every role, shown
+ * only when the layout's `showBilling` (lib/billing/capabilities.ts
+ * billingNavVisible) says so: the owner of a personal organization and
+ * broker / admin / it_admin, flag on. Never a brokerage agent and never during
+ * impersonation. The page refuses on its own; a hidden entry is not the gate.
+ *
  * BACKLOG-3798: below md the aside is hidden and the same nav renders in a
  * slide-out drawer (mobileOpen), always expanded. The drawer is a SIBLING of
  * the aside, never inside it: the aside is display:none below md.
@@ -52,6 +58,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
+  CreditCard,
   FileText,
   Files,
   Headphones,
@@ -85,6 +92,9 @@ const adminNavItems: NavItem[] = [
   { label: 'Org Settings', href: '/dashboard/settings', icon: Settings },
 ];
 
+/** BACKLOG-3878: the one entry a suspended account keeps besides Billing and My Account. */
+const supportNavItem: NavItem = { label: 'Support', href: '/dashboard/support', icon: Headphones };
+
 /** BACKLOG-3080: the floor. No brokerage data, so no Submissions. */
 const floorNavItems: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
@@ -104,6 +114,9 @@ export function insertAfter(items: NavItem[], href: string, item: NavItem): NavI
   const i = items.findIndex((x) => x.href === href);
   return i < 0 ? [...items, item] : [...items.slice(0, i + 1), item, ...items.slice(i + 1)];
 }
+
+/** BACKLOG-3844: right before My Account, when the layout says so. */
+const billingNavItem: NavItem = { label: 'Billing', href: '/dashboard/billing', icon: CreditCard };
 
 /** Personal, not org policy. Shown to every role, impersonation included. */
 const personalNavItems: NavItem[] = [
@@ -137,6 +150,17 @@ export interface SidebarProps {
   showMyTransactions?: boolean;
   /** BACKLOG-3080: not a full-portal user; show the floor bucket only. */
   floorOnly?: boolean;
+  /**
+   * BACKLOG-3844: the layout passes billingNavVisible(...), computed on the
+   * server (the flag is server-only). The page refuses on its own.
+   */
+  showBilling?: boolean;
+  /**
+   * BACKLOG-3878: the account is suspended. Only Billing (when showBilling),
+   * Support and My Account are listed. Presentation only: middleware and each
+   * page refuse the rest.
+   */
+  suspended?: boolean;
   /** BACKLOG-3798: the phone drawer is open (below md). Not rendered when false. */
   mobileOpen?: boolean;
   /** BACKLOG-3798: close the phone drawer (link tap, backdrop, Escape, close button). */
@@ -157,6 +181,8 @@ export function Sidebar({
   checklistsUnavailableLabel = null,
   showMyTransactions = false,
   floorOnly = false,
+  showBilling = false,
+  suspended = false,
   mobileOpen = false,
   onMobileClose,
   mobileReturnFocusRef,
@@ -237,12 +263,22 @@ export function Sidebar({
 
   const renderNavItems = (isCollapsed: boolean, variant: 'rail' | 'drawer' = 'rail') => {
     const r = (item: NavItem) => renderNavItem(item, isCollapsed, variant);
+    if (suspended && !isImpersonating) {
+      return (
+        <>
+          {showBilling && r(billingNavItem)}
+          {r(supportNavItem)}
+          {personalNavItems.map(r)}
+        </>
+      );
+    }
     return (
       <>
         {showFloorNav && floorItems.map(r)}
         {showMemberNav && memberNavItems.map(r)}
         {!showAdminNav && checklistsSlot && r(checklistsNavItem)}
         {showAdminNav && adminItems.map(r)}
+        {showBilling && !isImpersonating && r(billingNavItem)}
         {personalNavItems.map(r)}
       </>
     );

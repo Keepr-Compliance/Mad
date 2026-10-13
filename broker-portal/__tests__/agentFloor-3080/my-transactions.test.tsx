@@ -526,7 +526,7 @@ describe('list page', () => {
       given('brokerage agent', state === 'absent' ? {} : { [BROKERAGE]: state });
       const element = elementOf(await run(list()));
       expect(element.type).toBe(UpsellPanel);
-      expect(tablesRead()).toEqual(['organization_members']);
+      expect(tablesRead()).toEqual(['licenses', 'organization_members']);
       const { container } = render(element);
       expect(container.textContent).toContain(MY_TRANSACTIONS_UPSELL_TEXT);
       expect(within(container).getByRole('link', { name: 'Contact sales' })).toHaveAttribute(
@@ -545,7 +545,7 @@ describe('list page', () => {
   ] as [Persona, Record<string, FeatureState>][])('%s -> notFound before any submission read', async (persona, features) => {
     given(persona, features);
     expect(await run(list())).toEqual({ notFound: true });
-    expect(tablesRead()).toEqual(['organization_members']);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
@@ -602,19 +602,20 @@ describe('detail page', () => {
   ])('C2/C-M1/R2: %s -> notFound, and no child table is read', async (_name, id) => {
     given('brokerage agent', ON);
     expect(await run(detail(id))).toEqual({ notFound: true });
-    expect(tablesRead()).toEqual(['organization_members', 'transaction_submissions']);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members', 'transaction_submissions']);
   });
 
   it('a non-uuid id -> notFound with no submission read', async () => {
     given('brokerage agent', ON);
     expect(await run(detail('not-a-uuid'))).toEqual({ notFound: true });
-    expect(tablesRead()).toEqual(['organization_members']);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
   });
 
   it('children are read by the verified id', async () => {
     given('brokerage agent', ON);
     await run(detail(S_A));
     expect(tablesRead()).toEqual([
+      'licenses',
       'organization_members',
       'submission_attachments',
       'submission_messages',
@@ -654,7 +655,7 @@ describe('detail page', () => {
       given('brokerage agent', { [BROKERAGE]: 'off' });
       const element = elementOf(await run(detail(id)));
       expect(element.type).toBe(UpsellPanel);
-      expect(tablesRead()).toEqual(['organization_members']);
+      expect(tablesRead()).toEqual(['licenses', 'organization_members']);
       const { container, unmount } = render(element);
       expect(container.innerHTML).not.toContain(id);
       htmls.push(container.innerHTML);
@@ -666,7 +667,7 @@ describe('detail page', () => {
   it.each(['absent', 'rpc_error'] as FeatureState[])('C-M5: key %s -> detail upsell, zero submission reads', async (state) => {
     given('brokerage agent', state === 'absent' ? {} : { [BROKERAGE]: state });
     expect(elementOf(await run(detail(S_A))).type).toBe(UpsellPanel);
-    expect(tablesRead()).toEqual(['organization_members']);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
   });
 
   it.each([
@@ -676,7 +677,7 @@ describe('detail page', () => {
   ] as [Persona, Record<string, FeatureState>][])('%s -> notFound before any submission read', async (persona, features) => {
     given(persona, features);
     expect(await run(detail(S_A))).toEqual({ notFound: true });
-    expect(tablesRead()).toEqual(['organization_members']);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
   });
 
   it('R3: [agent, personal owner] with the key on the personal org only -> upsell; on the brokerage -> own rows', async () => {

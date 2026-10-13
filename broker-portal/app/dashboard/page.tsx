@@ -17,6 +17,8 @@ import {
 } from '@/lib/utils/userDisplay';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
+import { suspendedLanding } from '@/lib/auth/membership';
+import { billingEnabled } from '@/lib/billing/flag';
 import { FloorDashboard } from './components/FloorDashboard';
 import { DashboardStatCards } from '@/components/dashboard/DashboardStatCards';
 import { buildStatCards, type StatCardData } from '@/lib/dashboard/statCards';
@@ -91,6 +93,12 @@ export default async function DashboardPage() {
   // IT admins only manage users — redirect to Users page (skip during impersonation)
   if (!impersonation) {
     const portal = await getPortalAccess();
+    // BACKLOG-3878: a suspended account has no dashboard home; this page owns
+    // that refusal too (middleware is not the only gate). Never in the
+    // impersonation branch: a support session keeps its view.
+    if (portal?.suspended === true) {
+      redirect(suspendedLanding(portal.access, billingEnabled()));
+    }
     if (portal) {
       authUser = portal.user;
       if (portal.access.kind === 'full') {

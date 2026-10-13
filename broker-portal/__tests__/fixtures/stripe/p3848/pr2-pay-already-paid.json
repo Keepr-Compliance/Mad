@@ -1,0 +1,7 @@
+{
+  "error": {
+    "message": "Invoice is already paid",
+    "request_log_url": "<stripped>",
+    "type": "invalid_request_error"
+  }
+}
