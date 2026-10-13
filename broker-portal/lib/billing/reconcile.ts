@@ -37,6 +37,16 @@
  * .unlimited_transactions with source 'stripe', enabled true and paid_through
  * strictly after now.
  *
+ * Suspension safety net (BACKLOG-3878, SR R7). The licences trigger swallows
+ * its own failure (a WARNING never blocks a suspension), and a pause row can
+ * park, so:
+ *  - a suspended licence whose customer (this mode) has an open, UNPAUSED
+ *    Agent subscription -> a `pause_agent_subscription` row is enqueued (unless
+ *    one is already waiting) and `suspended_subscription_unpaused` fires;
+ *  - a paused subscription (forward list) whose licence is active and that has
+ *    no unprocessed `resume_agent_subscription` row -> alert only
+ *    (`paused_subscription_licence_active`); support decides.
+ *
  * Cap: each side looks at RECONCILE_MAX_ITEMS per run and sets `truncated`
  * (carried by the alert) when there were more. Stripe lists newest first, so
  * above the cap the OLDEST subscriptions are never checked, and it is the same
@@ -51,6 +61,8 @@ import { getPersonalOrganization, getStripeCustomer } from './customers';
 import type { StripeMode } from './mode';
 import { parseRunAfter, OUTBOX_STALE_AFTER_MS } from './outbox';
 import { END_NOW_KIND } from './endPlanNow';
+import { enqueueOutbox } from './outboxEnqueue';
+import { licenceStatus, PAUSE_KIND, RESUME_KIND } from './suspension';
 import { isNonStripeOverride, overrideEffective, type UnlimitedOverride } from './agentPlan';
 import { handleInvoicePaid, listAll, OPEN_STATUSES, revokeIfCurrent, stripeId, type BillingContext } from './sync';
 
@@ -83,6 +95,10 @@ export interface ReconcileResult {
   /** Forward: paying agents whose non-Stripe override is present but not enabled (grant RPC would refuse). */
   overrideBlocked: number;
   truncated: boolean;
+  /** BACKLOG-3878 R7: suspended licences with an unpaused Agent plan (a pause is enqueued for each). */
+  suspendedUnpaused: number;
+  /** BACKLOG-3878 R7: paused plans whose licence is active with no resume waiting (alert only). */
+  pausedLicenceActive: number;
 }
 
 /** The R10.1 definition. Anything else (absent, non-stripe, disabled, expired, malformed) is not effective. */
@@ -167,8 +183,11 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
     mismatches: 0,
     overrideBlocked: 0,
     truncated: false,
+    suspendedUnpaused: 0,
+    pausedLicenceActive: 0,
   };
   const mismatchIds: string[] = [];
+  const pausedActiveIds: string[] = [];
 
   // ---- forward: open in Stripe, not entitled in DB
   const listed: Stripe.Subscription[] = [];
@@ -186,6 +205,10 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
       const userId = await agentUserOf(deps, sub);
       if (!userId) continue;
       result.forwardScanned++;
+      if (sub.pause_collection && (await pausedWithLicenceActive(deps, userId))) {
+        result.pausedLicenceActive++;
+        pausedActiveIds.push(sub.id);
+      }
       if (!entitledInStripe(sub)) continue; // paused: no access is the right state
       const override = await readOverride(deps.service, userId);
       if (stripeOverrideEffective(override, now)) continue;
@@ -267,6 +290,22 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
     }
   }
 
+  // ---- BACKLOG-3878 R7: suspended licence, plan still collecting
+  const unpausedIds = await suspendedSafetyNet(deps, result);
+
+  if (pausedActiveIds.length > 0) {
+    billingAlert('paused_subscription_licence_active', deps.mode, {
+      count: pausedActiveIds.length,
+      subscription_ids: pausedActiveIds.slice(0, 20).join(','),
+    });
+  }
+  if (unpausedIds.length > 0) {
+    billingAlert('suspended_subscription_unpaused', deps.mode, {
+      count: unpausedIds.length,
+      subscription_ids: unpausedIds.slice(0, 20).join(','),
+    });
+  }
+
   if (result.mismatches > 0 || result.overrideBlocked > 0 || result.truncated) {
     billingAlert('reconcile_mismatch', deps.mode, {
       mismatches: result.mismatches,
@@ -278,6 +317,75 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
     });
   }
   return result;
+}
+
+/** True when an unprocessed row of `kind` waits for this user in this mode. */
+async function outboxPending(deps: ReconcileDeps, kind: string, userId: string): Promise<boolean> {
+  const { data, error } = await deps.service
+    .from('billing_outbox')
+    .select('id')
+    .eq('stripe_mode', deps.mode)
+    .eq('kind', kind)
+    .eq('user_id', userId)
+    .is('processed_at', null)
+    .limit(1);
+  if (error) throw new Error(`billing_outbox read failed: ${error.code ?? 'unknown'}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+/** R7 second branch: a paused plan, licence active, and no resume waiting. */
+async function pausedWithLicenceActive(deps: ReconcileDeps, userId: string): Promise<boolean> {
+  if ((await licenceStatus(deps.service, userId)) !== 'active') return false;
+  return !(await outboxPending(deps, RESUME_KIND, userId));
+}
+
+/** Statuses in which Stripe still collects (an unpaused one charges). */
+const COLLECTING = new Set(['active', 'trialing', 'past_due', 'unpaid']);
+
+/**
+ * R7 first branch: every suspended licence whose customer in this mode has an
+ * open, unpaused Agent subscription gets a pause row (unless one is waiting).
+ * The dedupe key carries the licence's updated_at, so the nightly run adds at
+ * most one row per suspension. Returns the subscription ids found.
+ */
+async function suspendedSafetyNet(deps: ReconcileDeps, result: ReconcileResult): Promise<string[]> {
+  const found: string[] = [];
+  const { data, error } = await deps.service
+    .from('licenses')
+    .select('user_id, updated_at')
+    .eq('status', 'suspended')
+    .limit(RECONCILE_MAX_ITEMS + 1);
+  if (error) {
+    console.error(`[billing/reconcile] suspended licences read failed: ${error.code ?? 'error'}`);
+    return found;
+  }
+  const rows = (data as { user_id: string; updated_at: string | null }[] | null) ?? [];
+  if (rows.length > RECONCILE_MAX_ITEMS) result.truncated = true;
+  for (const lic of rows.slice(0, RECONCILE_MAX_ITEMS)) {
+    try {
+      const customer = await getStripeCustomer(deps.service, lic.user_id, deps.mode);
+      if (!customer?.stripe_customer_id) continue;
+      const subs = await listAll((after) =>
+        deps.stripe.subscriptions.list({ customer: customer.stripe_customer_id, status: 'all', limit: 100, ...(after ? { starting_after: after } : {}) })
+      );
+      const unpaused = subs.filter((s) => (!s.metadata?.kind || s.metadata.kind === 'agent') && COLLECTING.has(s.status) && !s.pause_collection);
+      if (unpaused.length === 0) continue;
+      result.suspendedUnpaused++;
+      found.push(...unpaused.map((s) => s.id));
+      if (await outboxPending(deps, PAUSE_KIND, lic.user_id)) continue;
+      await enqueueOutbox(deps.service, {
+        mode: deps.mode,
+        kind: PAUSE_KIND,
+        userId: lic.user_id,
+        dedupeKey: `pause:${deps.mode}:${lic.user_id}:reconcile:${lic.updated_at ?? 'none'}`,
+        payload: { source: 'reconcile' },
+        runAfter: new Date(),
+      });
+    } catch (err) {
+      console.error(`[billing/reconcile] suspended safety net failed: ${(err as { code?: string }).code ?? 'error'}`);
+    }
+  }
+  return found;
 }
 
 export interface OutboxHealth {
