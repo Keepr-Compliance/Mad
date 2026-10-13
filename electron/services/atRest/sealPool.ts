@@ -15,7 +15,6 @@
  * new batch is handed out. The pass resolves with `stopped: true` and `outcomes[i]`
  * undefined for every file it did not reach.
  */
-import os from "os";
 import path from "path";
 import { Worker } from "worker_threads";
 
@@ -58,10 +57,21 @@ export interface PassResult {
   workersUsed: number;
 }
 
-/** Default worker count: I/O-bound work, so a few more than the spare cores, capped. */
+/**
+ * Seal worker threads for every seal and check pass (BACKLOG-3816 b1). Fixed at 2,
+ * whatever the core count (was max(2, min(8, cpus - 1))).
+ *
+ * The work is bound by ONE disk, not by CPU: more workers add queue depth, not
+ * throughput. Disk saturation starves the main process, whose SQLite (better-sqlite3)
+ * runs synchronously on the main thread: every page read waits behind the seal's I/O
+ * (2.41.0 PC QA: disk several hundred % busy, main stalled up to 16 s during a seal).
+ * Two keep one file sealing while the other waits on fsync, and leave the disk to main.
+ */
+export const SEAL_WORKER_COUNT = 2;
+
+/** Worker count for the app (and the seal benchmark): {@link SEAL_WORKER_COUNT}. */
 export function defaultSealWorkers(): number {
-  const cpus = Math.max(1, os.cpus()?.length ?? 1);
-  return Math.max(2, Math.min(8, cpus - 1));
+  return SEAL_WORKER_COUNT;
 }
 
 const MAX_BATCH_FILES = 64;
@@ -86,12 +96,25 @@ function makeBatches(files: readonly PassFile[]): number[][] {
 
 const yieldTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
 
+/** How many listed-empty files are reported per onBatch call (and per event-loop turn). */
+const EMPTY_REPORT_CHUNK = 4096;
+
 export async function runPass(opts: PassOptions): Promise<PassResult> {
   const outcomes: Array<FileOutcome | undefined> = new Array(opts.files.length);
   const touchedDirs = new Set<string>();
-  const queue = makeBatches(opts.files);
   const stopped = () => Atomics.load(opts.stop, 0) === 1;
   let anyStopped = false;
+  // BACKLOG-3816 b2: a file the listing saw at 0 bytes is "empty" — the verdict the engine
+  // gives it after open + fstat (classifyHead: size 0 → empty) — without opening it. About
+  // half of a large chain is 0-byte files, and each open costs (Defender on Windows).
+  // The listing's size is the file's size for the whole pass: the app's seal and check
+  // passes run under the phone's lock (or on a moved-aside chain), where nothing writes. (Only difference: a 0-byte file
+  // deleted between the listing and the pass reads `empty`, not `gone` — nothing to
+  // protect either way.) Empties never enter the queue, so no worker ever sees one.
+  const empties: number[] = [];
+  const work: number[] = [];
+  opts.files.forEach((f, i) => (f.size === 0 ? empties : work).push(i));
+  const queue = makeBatches(work.map((i) => opts.files[i])).map((batch) => batch.map((k) => work[k]));
 
   const record = (indexes: readonly number[], result: { outcomes: FileOutcome[]; touchedDirs: string[]; stopped: boolean }) => {
     result.outcomes.forEach((o, k) => {
@@ -170,6 +193,17 @@ export async function runPass(opts: PassOptions): Promise<PassResult> {
     // No worker started, or some died: whatever is left runs here.
     if (queue.length > 0 && !stopped()) await runInProcess();
     if (queue.length > 0 && stopped()) anyStopped = true;
+    // The listed-empty files are reported last, as files the pass reached: a pass that was
+    // stopped leaves them unreached (undefined), exactly like any other file it did not get to.
+    for (let k = 0; k < empties.length; k += EMPTY_REPORT_CHUNK) {
+      if (stopped()) {
+        anyStopped = true;
+        break;
+      }
+      const part = empties.slice(k, k + EMPTY_REPORT_CHUNK);
+      record(part, { outcomes: part.map(() => ({ v: "empty" as const })), touchedDirs: [], stopped: false });
+      if (k + EMPTY_REPORT_CHUNK < empties.length) await yieldTurn();
+    }
   } finally {
     held.engine?.dispose();
   }

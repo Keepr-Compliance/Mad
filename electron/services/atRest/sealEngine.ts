@@ -155,6 +155,18 @@ function writeFully(fd: number, buf: Buffer): void {
   }
 }
 
+/**
+ * The version of what a "proven fully sealed" chain means (BACKLOG-3816). Recorded on the
+ * backup marker with `encrypted`; a sync may skip the verification walk only when the
+ * marker's format equals this one. Bump it ONLY when one of these changes:
+ *   - the container layout (fileCrypto's KEPRENC header / chunk format),
+ *   - the classification rules ({@link classifyHead}),
+ *   - the set of files the walk covers (backupAtRest's listFiles, root plists, index files).
+ * An app update that changes none of them keeps the proof, so the first sync after an
+ * update does not walk the whole chain again.
+ */
+export const SEAL_FORMAT_VERSION = 1;
+
 /** Classification from the first ≤60 bytes and the size — no key needed (same rules as fileCrypto's probe). */
 export function classifyHead(head: Buffer, size: number): "empty" | "plaintext" | "sealed" | "damaged" {
   if (size === 0) return "empty";

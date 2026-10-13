@@ -25,6 +25,7 @@ import plist from "simple-plist";
 import { BackupAtRest, type BackupAtRestProgress } from "../backupAtRest";
 import { createFileCrypto, MAGIC, type KeyResolver } from "../fileCrypto";
 import { createMarkerStore } from "../markers";
+import { SEAL_FORMAT_VERSION } from "../sealEngine";
 
 const KEY = crypto.randomBytes(32);
 const KEY_ID = crypto.createHash("sha256").update(KEY).digest("hex").slice(0, 32);
@@ -60,6 +61,11 @@ function service(overrides: Partial<ConstructorParameters<typeof BackupAtRest>[0
 }
 
 const markers = () => createMarkerStore({ userData: () => userData });
+
+/** BACKLOG-3816 a1: the post-sync decision line (the last one logged). */
+function decision(logged: Logged[]): Record<string, unknown> | undefined {
+  return logged.filter((l) => l.message === "[BackupAtRest] post-sync seal decision").pop()?.data;
+}
 
 function write(rel: string, data: Buffer | string): string {
   const p = path.join(chain, rel);
@@ -113,7 +119,7 @@ function makeChain(): void {
 async function provenChain(s: BackupAtRest): Promise<string> {
   makeChain();
   expect(await s.migrate(UDID)).toBe("encrypted");
-  expect((await markers().readBackupMarker(UDID))?.verifiedBy).toBe(VERSION);
+  expect(await markers().readBackupMarker(UDID)).toMatchObject({ verifiedBy: VERSION, sealFormat: SEAL_FORMAT_VERSION });
   const planted = write(`7f/${"7".repeat(40)}`, "plaintext with an old mtime: only the walk reaches it");
   age(allFiles());
   return planted;
@@ -153,6 +159,7 @@ describe("normal sync: the verification walk is skipped", () => {
     expect(sealedLine?.data).toMatchObject({ mode: "delta", files: expect.any(Number), failed: 0 });
     expect(sealedLine?.data?.files as number).toBeLessThan(10); // the delta, not the 65-file chain
     expect(logged.some((l) => l.message.includes("checking the whole backup"))).toBe(false);
+    expect(decision(logged)).toEqual({ mode: "delta", reasonCode: "ELIGIBLE" });
     // Banner: the last tick is not sealing; quit prompt: no percent, nothing left for the quit seal.
     expect(ticks.length).toBeGreaterThan(0);
     expect(ticks[ticks.length - 1].sealing).toBe(false);
@@ -222,6 +229,7 @@ describe("every abnormal condition still walks (the planted old file gets sealed
     const planted = await provenChain(s);
     await expectWalk(s, planted, logged, (session) => s.finishSync(session, undefined, { toolOk: true }));
     expect(await markers().readBackupMarker(UDID)).toMatchObject({ state: "encrypted", verifiedBy: VERSION });
+    expect(decision(logged)).toEqual({ mode: "walk", reasonCode: "NOT_CLEAN_END" });
   });
 
   it("a tool failure end (forceFullNext) even if cleanEnd were passed", async () => {
@@ -231,15 +239,17 @@ describe("every abnormal condition still walks (the planted old file gets sealed
     await expectWalk(s, planted, logged, (session) =>
       s.finishSync(session, undefined, { forceFullNext: "DELTA_TOOL_FAILED", cleanEnd: true }),
     );
+    expect(decision(logged)).toEqual({ mode: "walk", reasonCode: "TOOL_FAILED" });
   });
 
-  it("first sync after an update: the marker was verified by another version", async () => {
+  it("the marker was proven under ANOTHER seal format (a future format bump): walks, FORMAT_CHANGED", async () => {
     const logged: Logged[] = [];
     const s = service({}, logged);
     const planted = await provenChain(s);
-    await markers().writeBackupMarker(UDID, "encrypted", { verifiedBy: "2.39.0" });
+    await markers().writeBackupMarker(UDID, "encrypted", { verifiedBy: VERSION, sealFormat: SEAL_FORMAT_VERSION + 1 });
     await expectWalk(s, planted, logged, (session) => s.finishSync(session, undefined, { toolOk: true, cleanEnd: true }));
-    expect((await markers().readBackupMarker(UDID))?.verifiedBy).toBe(VERSION); // proven again by this version
+    expect(decision(logged)).toEqual({ mode: "walk", reasonCode: "FORMAT_CHANGED", have: SEAL_FORMAT_VERSION + 1, want: SEAL_FORMAT_VERSION });
+    expect(await markers().readBackupMarker(UDID)).toMatchObject({ verifiedBy: VERSION, sealFormat: SEAL_FORMAT_VERSION }); // proven again
   });
 
   it("first sync after updating from a build that wrote no verifiedBy (marker `encrypted` from the 2.40 betas)", async () => {
@@ -249,6 +259,7 @@ describe("every abnormal condition still walks (the planted old file gets sealed
     await markers().writeBackupMarker(UDID, "encrypted");
     expect((await markers().readBackupMarker(UDID))?.verifiedBy).toBeUndefined();
     await expectWalk(s, planted, logged, (session) => s.finishSync(session, undefined, { toolOk: true, cleanEnd: true }));
+    expect(decision(logged)).toEqual({ mode: "walk", reasonCode: "NO_PROOF" });
   });
 
   it("a pending tool failure on the marker (toolFailures)", async () => {
@@ -257,6 +268,7 @@ describe("every abnormal condition still walks (the planted old file gets sealed
     const planted = await provenChain(s);
     await markers().setToolFailures(UDID, 1);
     await expectWalk(s, planted, logged, (session) => s.finishSync(session, undefined, { toolOk: true, cleanEnd: true }));
+    expect(decision(logged)).toEqual({ mode: "walk", reasonCode: "TOOL_FAILURES", toolFailures: 1 });
   });
 
   it("a forced C-FULL sync (marker nextStrategy)", async () => {
@@ -274,6 +286,7 @@ describe("every abnormal condition still walks (the planted old file gets sealed
       },
       {},
     );
+    expect(decision(logged)).toEqual({ mode: "walk", reasonCode: "NOT_DELTA" });
   });
 
   it("a C-FULL sync even with cleanEnd", async () => {
@@ -281,6 +294,7 @@ describe("every abnormal condition still walks (the planted old file gets sealed
     const s = service({}, logged);
     const planted = await provenChain(s);
     await expectWalk(s, planted, logged, (session) => s.finishSync(session, undefined, { toolOk: true, cleanEnd: true }), { strategy: "full" });
+    expect(decision(logged)).toEqual({ mode: "walk", reasonCode: "NOT_DELTA" });
   });
 
   it("the chain was not fully sealed when the sync started (marker `sealing`: a cut-off seal or a quit)", async () => {
@@ -289,6 +303,7 @@ describe("every abnormal condition still walks (the planted old file gets sealed
     const planted = await provenChain(s);
     await markers().writeBackupMarker(UDID, "sealing");
     await expectWalk(s, planted, logged, (session) => s.finishSync(session, undefined, { toolOk: true, cleanEnd: true }));
+    expect(decision(logged)).toEqual({ mode: "walk", reasonCode: "NOT_ENCRYPTED" });
   });
 
   it("crash during the sync: the relaunch (a new process) recovers with the full walk", async () => {
@@ -415,14 +430,36 @@ describe("every abnormal condition still walks (the planted old file gets sealed
   });
 });
 
+describe("BACKLOG-3816 a2: the proof survives an app update that keeps the seal format", () => {
+  for (const older of ["2.40.0-rc.1", "2.41.0"]) {
+    it(`first sync after updating from ${older} (marker verifiedBy ${older}, written before sealFormat existed): delta, no walk`, async () => {
+      const logged: Logged[] = [];
+      const s = service({}, logged);
+      const planted = await provenChain(s);
+      // Exactly what those builds wrote: `encrypted` + verifiedBy, no sealFormat.
+      await markers().writeBackupMarker(UDID, "encrypted", { verifiedBy: older });
+      expect(await markers().readBackupMarker(UDID)).not.toHaveProperty("sealFormat");
+      const session = await s.beginSync(UDID, { strategy: "delta" });
+      const fresh = write(NEW_FILE, crypto.randomBytes(300));
+      await s.finishSync(session, undefined, { toolOk: true, cleanEnd: true });
+      expect(isSealed(fresh)).toBe(true);
+      expect(isSealed(planted)).toBe(false); // the walk did not run
+      expect(decision(logged)).toEqual({ mode: "delta", reasonCode: "ELIGIBLE" });
+      expect(logged.some((l) => l.message === "[BackupAtRest] sealed" && l.data?.mode === "delta")).toBe(true);
+      expect(await markers().readBackupMarker(UDID)).toMatchObject({ state: "encrypted", verifiedBy: VERSION, sealFormat: SEAL_FORMAT_VERSION });
+    });
+  }
+});
+
 describe("marker: verifiedBy is written only with `encrypted` and never carried across another state", () => {
   it("syncing drops it; a later `encrypted` without proof has none", async () => {
     fs.mkdirSync(chain, { recursive: true });
     const m = markers();
-    await m.writeBackupMarker(UDID, "encrypted", { verifiedBy: VERSION });
-    expect((await m.readBackupMarker(UDID))?.verifiedBy).toBe(VERSION);
-    await m.writeBackupMarker(UDID, "syncing", { verifiedBy: VERSION });
+    await m.writeBackupMarker(UDID, "encrypted", { verifiedBy: VERSION, sealFormat: SEAL_FORMAT_VERSION });
+    expect(await m.readBackupMarker(UDID)).toMatchObject({ verifiedBy: VERSION, sealFormat: SEAL_FORMAT_VERSION });
+    await m.writeBackupMarker(UDID, "syncing", { verifiedBy: VERSION, sealFormat: SEAL_FORMAT_VERSION });
     expect((await m.readBackupMarker(UDID))?.verifiedBy).toBeUndefined();
+    expect(await m.readBackupMarker(UDID)).not.toHaveProperty("sealFormat");
     await m.writeBackupMarker(UDID, "encrypted");
     expect((await m.readBackupMarker(UDID))?.verifiedBy).toBeUndefined();
   });
