@@ -11,6 +11,7 @@ import Settings from "../Settings";
 import { PlatformProvider } from "../../contexts/PlatformContext";
 import { NotificationProvider } from "../../contexts/NotificationContext";
 import { IPhoneSyncProvider } from "../../contexts/IPhoneSyncContext";
+import { rcsImportService } from "../../services/rcsImportService";
 
 // Polyfill Element.scrollTo for jsdom (SettingsTabBar uses it)
 if (typeof Element.prototype.scrollTo !== "function") {
@@ -73,7 +74,7 @@ jest.mock("../../contexts/NetworkContext", () => ({
 }));
 
 // Wrap Settings in PlatformProvider for tests
-const renderSettings = async (props: { onClose: () => void; userId: string }) => {
+const renderSettings = async (props: { onClose: () => void; userId: string; onImportIphone?: () => void }) => {
   const result = render(
     <NotificationProvider>
       <PlatformProvider>
@@ -709,6 +710,68 @@ describe("Settings", () => {
       // …and the card opens with the eyebrow, not with a heading repeating it.
       expect(card.querySelector("h1,h2,h3,h4,h5,h6")).toBeNull();
       expect(within(card).queryByText("Import Source")).toBeNull();
+    });
+  });
+
+  // BACKLOG-3156 stage G (SR review, required changes 1-3).
+  describe("Messages panes: wiring guards (BACKLOG-3156 G)", () => {
+    const withSource = (source: string) =>
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: { export: { defaultFormat: "combined-pdf" }, messages: { source } },
+      });
+
+    // Founder: the macOS pane no longer shows "Last imported: <date> | N messages".
+    // The status IS available from the bridge here, so a pane that still read and
+    // printed it would show the line. Mutation: the line re-added -> red.
+    it("macOS pane: no 'Last imported' line, even when an import status exists", async () => {
+      (window.api.messages as unknown as { getImportStatus: jest.Mock }).getImportStatus = jest
+        .fn()
+        .mockResolvedValue({ success: true, messageCount: 1234, lastImportAt: new Date().toISOString() });
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      await screen.findByTestId("macos-messages-import");
+      await waitFor(() => expect(screen.getByTestId("macos-block-stored")).toBeInTheDocument());
+      expect(document.body.textContent).not.toMatch(/last imported/i);
+      expect(document.body.textContent).not.toMatch(/1,234 messages/);
+    });
+
+    // SR M7: Settings dropped onImportIphone and the whole suite stayed green.
+    it("iPhone source: Import from iPhone is in the Messages section and calls onImportIphone once", async () => {
+      withSource("iphone-sync");
+      const onImportIphone = jest.fn();
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose, onImportIphone });
+      const button = await screen.findByTestId("iphone-import");
+      expect(container.querySelector("#settings-messages")!.contains(button)).toBe(true);
+      await userEvent.click(button);
+      expect(onImportIphone).toHaveBeenCalledTimes(1);
+    });
+
+    // SR M10: the Google pane re-read the link state on mount and nothing noticed.
+    it("Google source: the extension state is read exactly once per Settings open", async () => {
+      withSource("android-messages-web");
+      const read = jest.spyOn(rcsImportService, "getExtensionState").mockResolvedValue({
+        success: true,
+        data: {
+          extensionVersion: "0.3.4",
+          extensionSeenAt: "2026-10-01T10:00:00.000Z",
+          pairedAt: "2026-10-01T10:00:00.000Z",
+          optedIn: true,
+          lastCacheFinishedAt: "2026-10-01T11:00:00.000Z",
+          consentVersion: 1,
+          consentRequired: 1,
+          consentAt: "2026-10-01T09:00:00.000Z",
+          autoDeleteDays: null,
+        },
+      });
+      try {
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        await screen.findByTestId("google-messages-settings");
+        await waitFor(() => expect(read).toHaveBeenCalled());
+        await new Promise((r) => setTimeout(r, 50));
+        expect(read).toHaveBeenCalledTimes(1);
+      } finally {
+        read.mockRestore();
+      }
     });
   });
 

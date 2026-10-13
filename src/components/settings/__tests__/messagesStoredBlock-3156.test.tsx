@@ -10,9 +10,9 @@
  * 0; the footnotes reworded → red.
  */
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import { MessagesStoredBlock, STORED_FOOTNOTE, formatOldest } from "../MessagesStoredBlock";
+import { MessagesStoredBlock, STORED_FOOTNOTE, STATS_RETRY_MS, formatOldest } from "../MessagesStoredBlock";
 
 const STATS = {
   macos: { texts: 12480, chats: 214, oldest: "2016-03-14T10:00:00.000Z" },
@@ -72,4 +72,36 @@ it("uses the Contacts cell treatment", async () => {
   await waitFor(() => expect(cells("blk")[0]).toBe("3,206"));
   expect(screen.getByTestId("blk-texts").className).toBe("p-2 rounded border bg-white border-gray-200");
   expect(formatOldest(null)).toBe("—");
+});
+
+describe("worker not ready when Settings opens", () => {
+  afterEach(() => jest.useRealTimers());
+
+  it("one failed read is retried once after a short delay, then the counts show", async () => {
+    jest.useFakeTimers();
+    getSourceStats
+      .mockResolvedValueOnce({ success: false, error: "Could not read stored counts" })
+      .mockResolvedValue({ success: true, stats: STATS });
+    render(<MessagesStoredBlock userId="u-1" source="macos" testId="blk" />);
+    await act(async () => {});
+    expect(getSourceStats).toHaveBeenCalledTimes(1);
+    expect(cells("blk")).toEqual(["—", "—", "—"]);
+    await act(async () => {
+      jest.advanceTimersByTime(STATS_RETRY_MS);
+    });
+    expect(getSourceStats).toHaveBeenCalledTimes(2);
+    expect(cells("blk")).toEqual(["12,480", "214", "Mar 2016"]);
+  });
+
+  it("a second failure is not retried again", async () => {
+    jest.useFakeTimers();
+    getSourceStats.mockResolvedValue({ success: false, error: "x" });
+    render(<MessagesStoredBlock userId="u-1" source="macos" testId="blk" />);
+    await act(async () => {});
+    await act(async () => {
+      jest.advanceTimersByTime(STATS_RETRY_MS * 5);
+    });
+    expect(getSourceStats).toHaveBeenCalledTimes(2);
+    expect(cells("blk")).toEqual(["—", "—", "—"]);
+  });
 });

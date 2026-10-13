@@ -279,10 +279,6 @@ export function MacOSMessagesImportSettings({
      */
     coalesced?: boolean;
   } | null>(null);
-  const [importStatus, setImportStatus] = useState<{
-    messageCount?: number;
-    lastImportAt?: string | null;
-  } | null>(null);
 
   // BACKLOG-2748: the cancel has been sent and the import has not stopped yet.
   // The main process honours cancellation at the next batch/attachment
@@ -554,7 +550,6 @@ export function MacOSMessagesImportSettings({
   // Load import status and filter preferences on mount
   useEffect(() => {
     if (!isMacOS || !userId) return;
-    loadImportStatus();
     loadFilterPreferences();
     loadEffectiveWindow();
   }, [isMacOS, userId]);
@@ -847,20 +842,6 @@ export function MacOSMessagesImportSettings({
     // it failed while it is quitting would be its own false statement.
     setRestartUnavailable(suppressed);
   }, []);
-
-  const loadImportStatus = async () => {
-    try {
-      const result = await window.api.messages.getImportStatus(userId);
-      if (result.success) {
-        setImportStatus({
-          messageCount: result.messageCount,
-          lastImportAt: result.lastImportAt,
-        });
-      }
-    } catch (error) {
-      logger.error("Failed to load import status:", error);
-    }
-  };
 
   // BACKLOG-2286: Load the effective (audit-aware) import window for the label.
   // Read-only; failures leave the label on the plain lookback-preference copy.
@@ -1188,24 +1169,6 @@ export function MacOSMessagesImportSettings({
     const gb = bytes / 1e9;
     if (gb < 0.1) return `${Math.max(1, Math.round(bytes / 1e6))} MB`;
     return `${gb.toFixed(1)} GB`;
-  };
-
-  // Format the last import time for display
-  const formatLastImport = (lastImportAt: string | null | undefined): string => {
-    if (!lastImportAt) return "Never imported";
-
-    const importDate = new Date(lastImportAt);
-    const now = new Date();
-    const diffMs = now.getTime() - importDate.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMins < 1) return "Just now";
-    if (diffMins < 60) return `${diffMins} minute${diffMins > 1 ? "s" : ""} ago`;
-    if (diffHours < 24)
-      return `${diffHours} hour${diffHours > 1 ? "s" : ""} ago`;
-    return `${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
   };
 
   // BACKLOG-2286: Format the effective-window cutoff as a local calendar day
@@ -1660,7 +1623,6 @@ export function MacOSMessagesImportSettings({
       return;
     }
     if (messagesItem?.status === 'complete') {
-      loadImportStatus();
       loadEffectiveWindow();
       // BACKLOG-2329: report the ACTUAL imported count carried by the queue item
       // (previously hard-coded to 0). Fall back to 0 only when the count is
@@ -1972,15 +1934,6 @@ export function MacOSMessagesImportSettings({
       {/* BACKLOG-2335: Mute the controls region while inactive (the note above
           stays full-strength so the reason is always legible). */}
       <div className={enabled ? "" : "opacity-60"}>
-      {/* Import status display */}
-      {importStatus && (
-        <div className="mt-1 text-xs text-gray-500">
-          Last imported: {formatLastImport(importStatus.lastImportAt)}
-          {importStatus.messageCount !== undefined && (
-            <> | {importStatus.messageCount.toLocaleString()} messages</>
-          )}
-        </div>
-      )}
       </div>
       </div>{/* /panel identity group */}
 

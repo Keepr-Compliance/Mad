@@ -12,6 +12,9 @@ import { messageService } from "../../services/messageService";
 import type { MessageSourceStat, MessageSourceStats } from "@electron/services/db/messageSourceStatsDb";
 import { STORED_CELL } from "./storedCell";
 
+/** One retry of an unreadable count (worker not ready yet). */
+export const STATS_RETRY_MS = 3000;
+
 export type MessagesStoredSource = keyof MessageSourceStats;
 
 /** The footnote under each block — the mock's wording (approved 2026-10-13). */
@@ -41,12 +44,25 @@ export function MessagesStoredBlock({ userId, source, testId }: MessagesStoredBl
 
   useEffect(() => {
     let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     setStat(null);
-    void messageService.getSourceStats(userId).then((r) => {
-      if (live && r.success && r.stats) setStat(r.stats[source]);
-    });
+    // The stats worker may still be starting when Settings opens right after
+    // sign-in: one failed read is retried once after a short delay, then the
+    // dashes stay until Settings is reopened.
+    const read = (retry: boolean) => {
+      void messageService
+        .getSourceStats(userId)
+        .catch(() => ({ success: false as const, stats: undefined }))
+        .then((r) => {
+          if (!live) return;
+          if (r.success && r.stats) setStat(r.stats[source]);
+          else if (retry) timer = setTimeout(() => read(false), STATS_RETRY_MS);
+        });
+    };
+    read(true);
     return () => {
       live = false;
+      if (timer) clearTimeout(timer);
     };
   }, [userId, source]);
 
