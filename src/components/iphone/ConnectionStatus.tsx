@@ -2,6 +2,7 @@ import React, { useEffect } from "react";
 import type { ConnectionStatusProps } from "../../types/iphone";
 import { TrustComputerHint } from "./TrustComputerHint";
 import { WindowsArm64Unsupported } from "./WindowsArm64Unsupported";
+import { AppleDevicesStoreGuide } from "./AppleDevicesStoreGuide";
 import logger from "../../utils/logger";
 import { useRetryCountdown } from "../../utils/syncRetryCooldown";
 import { RetryCooldownNotice, SyncStartButtonContent } from "./SyncStartButtonContent";
@@ -45,6 +46,9 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   isInstallingDriver = false,
   driverInstallError = null,
   isWindowsArm64 = false,
+  isStoreBuild = false,
+  onRecheckDriver,
+  appleDevicesState = null,
   isStarting = false,
   retryAvailableAt = null,
 }) => {
@@ -65,7 +69,12 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
     // silent "Connect your iPhone" text with an inline one-click install button
     // that triggers the UAC admin prompt directly from this screen. Previously
     // the user was stuck here with zero guidance (root cause of ticket #64).
-    if (driverMissing && onInstallDriver) {
+    // BACKLOG-3927: Microsoft Store build — no driver install from Keepr; send
+    // the user to Apple Devices in the Microsoft Store, then re-detect.
+    if (driverMissing && isStoreBuild && onRecheckDriver) {
+      return <AppleDevicesStoreGuide onCheckAgain={onRecheckDriver} state={appleDevicesState} />;
+    }
+    if (driverMissing && onInstallDriver && !isStoreBuild) {
       return (
         <div className="flex flex-col items-center justify-center p-8 text-center">
           {/* Driver-missing icon (amber warning) */}
