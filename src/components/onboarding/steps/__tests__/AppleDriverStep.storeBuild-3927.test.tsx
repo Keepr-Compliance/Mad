@@ -38,7 +38,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   (window.api.drivers!.checkApple as jest.Mock).mockResolvedValue(notInstalled);
   (window.api.drivers!.hasBundled as jest.Mock).mockResolvedValue({ hasBundled: true });
-  (window.api.drivers!.checkUpdate as jest.Mock).mockResolvedValue({
+  // checkUpdate is not on WindowApiDrivers' type, but the step calls it when present.
+  ((window.api.drivers as unknown as { checkUpdate: jest.Mock }).checkUpdate).mockResolvedValue({
     updateAvailable: false,
     installedVersion: null,
     bundledVersion: null,
