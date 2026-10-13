@@ -10,6 +10,8 @@ import type {
 } from "../types/iphone";
 import type { SyncCancelTrigger } from "../../electron/types/ipc/window-api-platform";
 import { isStoreBuild } from "../utils/platform";
+import { appleDevicesStateOf } from "../utils/appleDevicesState";
+import type { AppleDevicesState } from "../types/iphone";
 import logger from '../utils/logger';
 import { syncOrchestrator } from '../services/SyncOrchestratorService';
 import { usePlatform } from '../contexts/PlatformContext';
@@ -61,6 +63,10 @@ const DRIVER_ABSENT_GUIDANCE: UserFacingError = {
  * (installed, unavailable API, or an error — fail safe: don't nag on ambiguity).
  */
 async function isAppleDriverAbsent(): Promise<boolean> {
+  if (isStoreBuild()) {
+    const state = await readStoreAppleDevicesState();
+    return state !== null && state !== "ready";
+  }
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const drivers = (window.api as any)?.drivers as
@@ -74,6 +80,35 @@ async function isAppleDriverAbsent(): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * BACKLOG-3927 (Microsoft Store build): Apple Devices readiness from
+ * `drivers.checkApple()`. null when the API is unavailable or fails (fail safe:
+ * don't nag on ambiguity).
+ */
+async function readStoreAppleDevicesState(): Promise<AppleDevicesState | null> {
+  try {
+    const drivers = window.api?.drivers;
+    if (!drivers?.checkApple) return null;
+    return appleDevicesStateOf(await drivers.checkApple());
+  } catch (err) {
+    logger.debug("[useIPhoneSync] Apple Devices check failed (non-fatal):", err);
+    return null;
+  }
+}
+
+/**
+ * BACKLOG-3927: Store-build text for a sync attempted before Apple Devices is
+ * ready. The website text says "Click Install below", and the Store build has
+ * no Install button. DRAFT TEXT — OPEN QUESTION on BACKLOG-3927.
+ */
+const STORE_DRIVER_ABSENT_GUIDANCE: UserFacingError = {
+  code: "DRIVER_ABSENT_RECOVERY",
+  title: "Apple Devices isn't ready yet",
+  description:
+    "Your iPhone can't be detected until Apple's Apple Devices app is set up on this computer.",
+  actionSuggestion: "Follow the steps on this screen, then click Check again.",
+};
 
 /**
  * Module-level sync state ref for cross-hook communication.
@@ -169,6 +204,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const [toolsMissing, setToolsMissing] = useState(false);
   // BACKLOG-1919: Apple driver absent while 0 devices detected (Windows recovery path)
   const [driverMissing, setDriverMissing] = useState(false);
+  // BACKLOG-3927: Store build — which Apple Devices step the user is on.
+  const [appleDevicesState, setAppleDevicesState] = useState<AppleDevicesState | null>(null);
   const [installDriverStatus, setInstallDriverStatus] =
     useState<"idle" | "installing" | "error">("idle");
   const [installDriverError, setInstallDriverError] = useState<string | null>(null);
@@ -889,6 +926,16 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     }
 
     let cancelled = false;
+    if (isStoreBuild()) {
+      void readStoreAppleDevicesState().then((state) => {
+        if (cancelled) return;
+        setAppleDevicesState(state);
+        setDriverMissing(state !== null && state !== "ready");
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
     void isAppleDriverAbsent().then((absent) => {
       if (cancelled) return;
       setDriverMissing(absent);
@@ -1014,8 +1061,9 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           "[useIPhoneSync] Sync attempted but Apple driver is absent — showing recovery prompt",
         );
         setDriverMissing(true);
-        setUserError(DRIVER_ABSENT_GUIDANCE);
-        setError(DRIVER_ABSENT_GUIDANCE.title);
+        const guidance = isStoreBuild() ? STORE_DRIVER_ABSENT_GUIDANCE : DRIVER_ABSENT_GUIDANCE;
+        setUserError(guidance);
+        setError(guidance.title);
         return;
       }
 
@@ -1342,10 +1390,11 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   }, []);
 
   /** BACKLOG-3927: Store build "Check again" — re-detect, update driverMissing. */
-  const recheckDriver = useCallback(async (): Promise<boolean> => {
-    const absent = await isAppleDriverAbsent();
-    setDriverMissing(absent);
-    return !absent;
+  const recheckDriver = useCallback(async (): Promise<AppleDevicesState> => {
+    const state = (await readStoreAppleDevicesState()) ?? "not-installed";
+    setAppleDevicesState(state);
+    setDriverMissing(state !== "ready");
+    return state;
   }, []);
 
   return {
@@ -1372,6 +1421,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     installDriverError,
     recoverInstallDriver,
     recheckDriver,
+    appleDevicesState,
     isStarting,
     retryAvailableAt,
     startSync,

@@ -33,7 +33,8 @@ const baseContext: UseIPhoneSyncReturn = {
   installDriverStatus: "idle",
   installDriverError: null,
   recoverInstallDriver: jest.fn(),
-  recheckDriver: jest.fn(async () => false),
+  recheckDriver: jest.fn(async () => "not-installed" as const),
+  appleDevicesState: null,
   startSync: jest.fn(),
   cancelSync: jest.fn(),
   dismissSync: jest.fn(),
@@ -61,7 +62,7 @@ describe("IPhoneSyncFlow in the Store build (BACKLOG-3927)", () => {
 
   it("Store + driverMissing: Apple Devices guide, no Install button; Check again calls recheckDriver", async () => {
     setStoreFlag(true);
-    const recheckDriver = jest.fn(async () => false);
+    const recheckDriver = jest.fn(async () => "not-installed" as const);
     mockContextValue = { ...baseContext, driverMissing: true, recheckDriver };
     render(<IPhoneSyncFlow />);
     expect(screen.getByText(APPLE_DEVICES_HEADING)).toBeInTheDocument();

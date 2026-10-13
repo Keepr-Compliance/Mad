@@ -48,6 +48,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   isWindowsArm64 = false,
   isStoreBuild = false,
   onRecheckDriver,
+  appleDevicesState = null,
   isStarting = false,
   retryAvailableAt = null,
 }) => {
@@ -71,7 +72,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
     // BACKLOG-3927: Microsoft Store build — no driver install from Keepr; send
     // the user to Apple Devices in the Microsoft Store, then re-detect.
     if (driverMissing && isStoreBuild && onRecheckDriver) {
-      return <AppleDevicesStoreGuide onCheckAgain={onRecheckDriver} />;
+      return <AppleDevicesStoreGuide onCheckAgain={onRecheckDriver} state={appleDevicesState} />;
     }
     if (driverMissing && onInstallDriver && !isStoreBuild) {
       return (

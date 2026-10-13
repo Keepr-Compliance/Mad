@@ -18,7 +18,8 @@ import { safeErrorMessage } from "../../utils/formatUtils";
 import { isStoreBuild, isWindowsArm64 } from "../../utils/platform";
 import { WindowsArm64Unsupported } from "../iphone/WindowsArm64Unsupported";
 import { AppleDevicesStoreGuide } from "../iphone/AppleDevicesStoreGuide";
-import { APPLE_DEVICES_SERVICE_STOPPED } from "../../constants/appleDevicesStoreCopy";
+import { appleDevicesStateOf } from "../../utils/appleDevicesState";
+import type { AppleDevicesState } from "../../types/iphone";
 
 // ---------------------------------------------------------------------------
 // Types — mirrors WindowApiDrivers return shapes (no duplicate of AppleDriverStatus)
@@ -29,6 +30,8 @@ interface DriverStatusInfo {
   version: string | null;
   serviceRunning: boolean;
   error: string | null;
+  /** BACKLOG-3927: Store build — Apple Devices state. */
+  appleDevicesState?: AppleDevicesState;
 }
 
 interface InstallProgress {
@@ -64,7 +67,7 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
   // ------------------------------------------------------------------
   // `quiet` (BACKLOG-3927): re-check without the "Checking..." state, so the
   // Store build's Apple Devices guide stays mounted and can show its result.
-  const refreshStatus = useCallback(async (quiet = false): Promise<boolean> => {
+  const refreshStatus = useCallback(async (quiet = false): Promise<AppleDevicesState> => {
     if (!quiet) setLoading(true);
     try {
       const status = await window.api.drivers?.checkApple();
@@ -74,8 +77,9 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
           version: status.version,
           serviceRunning: status.serviceRunning,
           error: status.error,
+          appleDevicesState: appleDevicesStateOf(status),
         });
-        return status.isInstalled === true;
+        return appleDevicesStateOf(status);
       } else {
         setDriverStatus(null);
       }
@@ -90,7 +94,7 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
     } finally {
       if (!quiet) setLoading(false);
     }
-    return false;
+    return "not-installed";
   }, []);
 
   useEffect(() => {
@@ -160,6 +164,7 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
   // BACKLOG-3927: the Microsoft Store build never installs or repairs Apple's
   // driver; it points the user at Apple Devices in the Microsoft Store.
   const storeBuild = isStoreBuild();
+  const storeState: AppleDevicesState = driverStatus?.appleDevicesState ?? appleDevicesStateOf(driverStatus);
 
   // BACKLOG-3363: Windows on ARM — the driver can never work here; no Install
   // or Repair is offered.
@@ -204,12 +209,15 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
             </div>
           )}
 
-          {/* BACKLOG-3927: Store build — Apple Devices guide, no Install/Repair */}
-          {storeBuild && !loading && !driverStatus?.isInstalled && (
-            <AppleDevicesStoreGuide variant="compact" disabled={disabled} onCheckAgain={() => refreshStatus(true)} />
-          )}
-          {storeBuild && !loading && driverStatus?.isInstalled && !driverStatus.serviceRunning && (
-            <p className="text-sm text-amber-700">{APPLE_DEVICES_SERVICE_STOPPED}</p>
+          {/* BACKLOG-3927: Store build — Apple Devices guide for whichever step
+              is not done (install / open it / USB driver), no Install/Repair */}
+          {storeBuild && !loading && storeState !== "ready" && (
+            <AppleDevicesStoreGuide
+              variant="compact"
+              disabled={disabled}
+              state={storeState}
+              onCheckAgain={() => refreshStatus(true)}
+            />
           )}
 
           {/* Action buttons */}

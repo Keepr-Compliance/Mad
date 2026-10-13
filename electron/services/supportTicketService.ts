@@ -88,6 +88,10 @@ export interface IphoneSyncDiagnostics {
     is_installed: boolean;
     service_running: boolean;
     version: string | null;
+    /** BACKLOG-3927: msi (Apple's installer) | apple-devices (Store build); null when not found. */
+    installed_via?: "msi" | "apple-devices" | null;
+    /** BACKLOG-3927: Store build Apple Devices state; null on the website build. */
+    apple_devices_state?: "not-installed" | "not-running" | "usb-driver-missing" | "ready" | null;
   };
   /**
    * Android WiFi-companion state. Populated best-effort for all users but most
@@ -300,6 +304,9 @@ function composeIphoneSyncLine(s: IphoneSyncDiagnostics): string {
     `driver_missing_suspected=${yn(s.driver_missing_suspected)}`,
     `apple_driver.installed=${yn(s.apple_driver.is_installed)}`,
     `apple_driver.service_running=${yn(s.apple_driver.service_running)}`,
+    // BACKLOG-3927: present only when known.
+    ...(s.apple_driver.installed_via ? [`apple_driver.installed_via=${s.apple_driver.installed_via}`] : []),
+    ...(s.apple_driver.apple_devices_state ? [`apple_devices.state=${s.apple_driver.apple_devices_state}`] : []),
     `iphone_sync_enabled=${s.user_settings.iphone_sync_enabled === null ? "unknown" : yn(s.user_settings.iphone_sync_enabled)}`,
     // BACKLOG-2408: which importer this user actually runs. "unset" means no
     // stored preference, so the app is using its platform default.
@@ -670,6 +677,9 @@ async function collectIphoneSyncDiagnostics(): Promise<IphoneSyncDiagnostics> {
       is_installed: driver.isInstalled,
       service_running: driver.serviceRunning,
       version: driver.version,
+      // BACKLOG-3927: only when known (installed_via: msi | apple-devices).
+      ...(driver.installedVia ? { installed_via: driver.installedVia } : {}),
+      ...(driver.appleDevices ? { apple_devices_state: driver.appleDevices.state } : {}),
     };
   } catch {
     /* keep defaults */

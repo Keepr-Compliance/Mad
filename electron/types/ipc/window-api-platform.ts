@@ -198,6 +198,12 @@ export interface WindowApiDrivers {
     version: string | null;
     serviceRunning: boolean;
     error: string | null;
+    /** BACKLOG-3927 */
+    installedVia?: "msi" | "apple-devices" | null;
+    /** BACKLOG-3927: Store build only. */
+    appleDevices?: {
+      state: "not-installed" | "not-running" | "usb-driver-missing" | "ready";
+    };
   }>;
   hasBundled: () => Promise<{ available: boolean }>;
   installApple: () => Promise<{

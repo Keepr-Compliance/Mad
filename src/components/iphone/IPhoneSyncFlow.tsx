@@ -66,6 +66,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     installDriverError,
     recoverInstallDriver,
     recheckDriver,
+    appleDevicesState,
     startSync,
     cancelSync,
     dismissSync,
@@ -162,6 +163,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           isWindowsArm64={isWindowsArm64()}
           isStoreBuild={isStoreBuild()}
           onRecheckDriver={recheckDriver}
+          appleDevicesState={appleDevicesState}
           isStarting={isStarting}
           retryAvailableAt={retryAvailableAt}
         />

@@ -414,6 +414,26 @@ describe("supportTicketService", () => {
       });
     });
 
+    it("BACKLOG-3927: carries installed_via and the Apple Devices state when known (Store build)", async () => {
+      const { checkAppleDrivers } = require("../appleDriverService");
+      checkAppleDrivers.mockResolvedValueOnce({
+        isInstalled: true,
+        version: null,
+        serviceRunning: false,
+        error: null,
+        installedVia: "apple-devices",
+        appleDevices: { state: "not-running" },
+      });
+      const diagnostics = await collectDiagnostics();
+      expect(diagnostics.iphone_sync.apple_driver).toEqual({
+        is_installed: true,
+        service_running: false,
+        version: null,
+        installed_via: "apple-devices",
+        apple_devices_state: "not-running",
+      });
+    });
+
     it("should surface driver_missing_suspected for Zoe's fingerprint (mounted, not detected)", async () => {
       const { deviceDetectionService } = require("../deviceDetectionService");
       // Windows: device visible to PnP but idevice_id -l returns 0 →

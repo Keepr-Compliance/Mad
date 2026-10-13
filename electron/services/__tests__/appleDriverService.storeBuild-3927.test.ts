@@ -52,7 +52,13 @@ jest.mock("../mainNetFetch", () => ({ mainNetFetch: (...a: unknown[]) => mockNet
 let mockStore = false;
 jest.mock("../distributionChannelService", () => ({ isStoreBuild: () => mockStore }));
 
+const mockProbeConnectedUdids = jest.fn();
+jest.mock("../deviceDetectionService", () => ({
+  deviceDetectionService: { probeConnectedUdids: (...a: unknown[]) => mockProbeConnectedUdids(...a) },
+}));
+
 import { EventEmitter } from "events";
+import { APPLE_DEVICES_PROBE_SCRIPT, parseAppleDevicesProbe } from "../appleDevicesProbe";
 import {
   checkAppleDrivers,
   downloadAppleDrivers,
@@ -111,27 +117,134 @@ describe("Store build (BACKLOG-3927)", () => {
     expect(getBundledDriverPath()).toBeNull();
   });
 
-  it("checkAppleDrivers reports installed when the Apple Devices Store package is present", async () => {
-    fsMock.existsSync.mockReturnValue(false); // no AppleMobileDeviceService.exe in Program Files
-    mockExecFile.mockImplementation((_f: string, _a: string[], _o: unknown, cb: (e: Error | null, v?: unknown) => void) =>
-      cb(null, { stdout: "AppleInc.AppleDevices\r\n", stderr: "" }),
-    );
-    const status = await checkAppleDrivers();
-    expect(status.isInstalled).toBe(true);
-    // sc query found no "Apple Mobile Device Service": not reported as stopped,
-    // or sync start would refuse (deviceSyncOrchestrator pre-sync check).
-    expect(status.serviceRunning).toBe(true);
-    const [file, args] = mockExecFile.mock.calls[0];
-    expect(file).toMatch(/powershell\.exe$/);
-    expect(args.join(" ")).toContain("Get-AppxPackage -Name AppleInc.AppleDevices,AppleInc.iTunes");
+});
+
+// ---------------------------------------------------------------------------
+// Apple Devices readiness (fix round after the 2026-10-12 PC test).
+//
+// FIXTURES: constructed from what the PC session reported (package
+// AppleInc.AppleDevices_nzyj5cx40ttqa, AppleMobileDeviceProcess running,
+// appleusb.inf from provider "Apple, Inc." on the composite device and MI_01,
+// MI_00 left on Microsoft's WPD driver). The probe script's own stdout has NOT
+// been captured on Windows yet — replace these with the PC's pasted output.
+// ---------------------------------------------------------------------------
+const PROBE_READY = [
+  "packages=AppleInc.AppleDevices",
+  "amds=True",
+  "usbProvider=Apple, Inc.",
+  "usbProvider=Microsoft",
+  "usbProvider=Apple, Inc.",
+].join("\r\n");
+const PROBE_NOT_RUNNING_NO_PHONE = ["packages=AppleInc.AppleDevices", "amds=False"].join("\r\n");
+const PROBE_USB_DRIVER_MISSING = [
+  "packages=AppleInc.AppleDevices",
+  "amds=True",
+  "usbProvider=Microsoft",
+  "usbProvider=Microsoft",
+].join("\r\n");
+const PROBE_NOTHING = ["packages=", "amds=False"].join("\r\n");
+
+function probeStdout(stdout: string) {
+  mockExecFile.mockImplementation((_f: string, _a: string[], _o: unknown, cb: (e: Error | null, v?: unknown) => void) =>
+    cb(null, { stdout, stderr: "" }),
+  );
+}
+
+/** Registry: 64-bit key present with a version; `sc query` reports `scState`. */
+function msiInstalled(scState: "RUNNING" | "STOPPED") {
+  fsMock.existsSync.mockReturnValue(false);
+  mockExec.mockImplementation((cmd: string, _opts: unknown, cb: (e: Error | null, v?: unknown) => void) => {
+    if (cmd.startsWith("reg query") && !cmd.includes("WOW6432Node")) {
+      cb(null, { stdout: "    Version    REG_SZ    20.0.0.35\r\n", stderr: "" });
+    } else if (cmd.startsWith("sc query")) {
+      cb(null, { stdout: `        STATE              : 1  ${scState}\r\n`, stderr: "" });
+    } else {
+      cb(new Error("not found"));
+    }
+  });
+}
+
+describe("Store build: Apple Devices readiness (BACKLOG-3927)", () => {
+  beforeEach(() => {
+    mockStore = true;
+    fsMock.existsSync.mockReturnValue(false); // no Common Files AppleMobileDeviceService.exe
+    mockProbeConnectedUdids.mockResolvedValue(null);
   });
 
-  it("checkAppleDrivers reports not installed when no Apple Store package is present", async () => {
-    fsMock.existsSync.mockReturnValue(false);
-    mockExecFile.mockImplementation((_f: string, _a: string[], _o: unknown, cb: (e: Error | null, v?: unknown) => void) =>
-      cb(null, { stdout: "", stderr: "" }),
-    );
-    expect((await checkAppleDrivers()).isInstalled).toBe(false);
+  it("package + AMDS process running + Apple USB driver: ready, via apple-devices; usbmux not asked", async () => {
+    probeStdout(PROBE_READY);
+    const status = await checkAppleDrivers();
+    expect(status).toMatchObject({ isInstalled: true, serviceRunning: true, installedVia: "apple-devices" });
+    expect(status.appleDevices).toMatchObject({ state: "ready", amdsRunning: true, usbDriver: "bound" });
+    expect(mockProbeConnectedUdids).not.toHaveBeenCalled();
+  });
+
+  it("package, process not seen, usbmux answers: ready (the usbmux probe counts)", async () => {
+    probeStdout(PROBE_NOT_RUNNING_NO_PHONE);
+    mockProbeConnectedUdids.mockResolvedValue([]);
+    const status = await checkAppleDrivers();
+    expect(mockProbeConnectedUdids).toHaveBeenCalledTimes(1);
+    expect(status.serviceRunning).toBe(true);
+    expect(status.appleDevices).toMatchObject({ state: "ready", usbmuxReachable: true });
+  });
+
+  it("package, process not seen, usbmux silent: not-running, sync preflight would refuse", async () => {
+    probeStdout(PROBE_NOT_RUNNING_NO_PHONE);
+    const status = await checkAppleDrivers();
+    expect(status.isInstalled).toBe(true);
+    expect(status.serviceRunning).toBe(false);
+    expect(status.appleDevices).toMatchObject({ state: "not-running", usbmuxReachable: false });
+  });
+
+  it("iPhone present on Microsoft drivers only: usb-driver-missing, separate from not-installed", async () => {
+    probeStdout(PROBE_USB_DRIVER_MISSING);
+    const status = await checkAppleDrivers();
+    expect(status.isInstalled).toBe(true);
+    expect(status.appleDevices).toMatchObject({ state: "usb-driver-missing", usbDriver: "missing" });
+  });
+
+  it("no Apple package: not-installed; usbmux not asked", async () => {
+    probeStdout(PROBE_NOTHING);
+    const status = await checkAppleDrivers();
+    expect(status).toMatchObject({ isInstalled: false, serviceRunning: false, installedVia: null });
+    expect(status.appleDevices?.state).toBe("not-installed");
+    expect(mockProbeConnectedUdids).not.toHaveBeenCalled();
+  });
+
+  it("SR R1: MSI found, service stopped -> serviceRunning stays false, probe not run", async () => {
+    msiInstalled("STOPPED");
+    probeStdout(PROBE_READY);
+    const status = await checkAppleDrivers();
+    expect(status).toMatchObject({ isInstalled: true, serviceRunning: false, installedVia: "msi", version: "20.0.0.35" });
+    expect(status.appleDevices).toBeUndefined();
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it("SR B1: one PowerShell call, no comma list bound to Get-AppxPackage -Name", async () => {
+    probeStdout(PROBE_READY);
+    await checkAppleDrivers();
+    expect(mockExecFile).toHaveBeenCalledTimes(1);
+    const [file, args] = mockExecFile.mock.calls[0];
+    expect(file).toMatch(/powershell\.exe$/);
+    const script = args[args.length - 1] as string;
+    expect(script).toBe(APPLE_DEVICES_PROBE_SCRIPT);
+    expect(script).not.toMatch(/Get-AppxPackage\s+-Name/);
+    expect(script).toContain("Where-Object { $names -contains $_.Name }");
+    expect(script).toContain("Get-Process -Name AppleMobileDeviceProcess");
+    expect(script).toContain("Get-PnpDevice -PresentOnly");
+  });
+});
+
+describe("parseAppleDevicesProbe (BACKLOG-3927)", () => {
+  it("Apple provider on any present Apple-VID device = bound, even with MI_00 on WPD", () => {
+    expect(parseAppleDevicesProbe(PROBE_READY)).toEqual({ packageInstalled: true, amdsRunning: true, usbDriver: "bound" });
+  });
+  it("only Microsoft providers = missing; no lines = no-device", () => {
+    expect(parseAppleDevicesProbe(PROBE_USB_DRIVER_MISSING).usbDriver).toBe("missing");
+    expect(parseAppleDevicesProbe(PROBE_NOT_RUNNING_NO_PHONE).usbDriver).toBe("no-device");
+  });
+  it("a package name that only contains the Apple name does not count", () => {
+    expect(parseAppleDevicesProbe("packages=NotAppleInc.AppleDevicesX\r\namds=False").packageInstalled).toBe(false);
   });
 });
 
@@ -155,6 +268,23 @@ describe("website build is unchanged (BACKLOG-3927)", () => {
       cb(null, { stdout: "AppleInc.AppleDevices", stderr: "" }),
     );
     expect((await checkAppleDrivers()).isInstalled).toBe(false);
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it("website build ignores a ready Apple Devices setup and keeps the raw service result", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    probeStdout(PROBE_READY);
+    mockProbeConnectedUdids.mockResolvedValue([]);
+    const status = await checkAppleDrivers();
+    expect(status).toMatchObject({ isInstalled: false, serviceRunning: false, installedVia: null });
+    expect(status.appleDevices).toBeUndefined();
+    expect(mockProbeConnectedUdids).not.toHaveBeenCalled();
+  });
+
+  it("website build, MSI installed and service running: unchanged", async () => {
+    msiInstalled("RUNNING");
+    const status = await checkAppleDrivers();
+    expect(status).toMatchObject({ isInstalled: true, serviceRunning: true, version: "20.0.0.35", installedVia: "msi" });
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 });

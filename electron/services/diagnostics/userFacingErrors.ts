@@ -124,6 +124,37 @@ export function formatDriverServiceStoppedError(): UserFacingError {
 }
 
 /**
+ * BACKLOG-3927 (Microsoft Store build): Apple Devices is not installed. The
+ * Store build has no "Install Sync Tools" button and installs no driver.
+ * DRAFT TEXT — OPEN QUESTION on BACKLOG-3927.
+ */
+export function formatStoreAppleDevicesMissingError(): UserFacingError {
+  return {
+    title: "Apple Devices Not Installed",
+    description:
+      "iPhone sync needs Apple's free Apple Devices app, which isn't installed on this computer.",
+    actionSuggestion:
+      "Install Apple Devices from the Microsoft Store, open it once, then sync again.",
+    code: "MISSING_DRIVERS",
+  };
+}
+
+/**
+ * BACKLOG-3927 (Microsoft Store build): Apple Devices is installed but its
+ * iPhone support is not running. DRAFT TEXT — OPEN QUESTION on BACKLOG-3927.
+ */
+export function formatStoreAppleDevicesNotRunningError(): UserFacingError {
+  return {
+    title: "Apple Devices Not Running",
+    description:
+      "Apple Devices is installed, but its iPhone support isn't running yet.",
+    actionSuggestion:
+      "Open the Apple Devices app once, keep your iPhone plugged in, then sync again.",
+    code: "DRIVER_SERVICE_STOPPED",
+  };
+}
+
+/**
  * Format error for iPhone not detected via USB.
  * Provides step-by-step troubleshooting instructions.
  */

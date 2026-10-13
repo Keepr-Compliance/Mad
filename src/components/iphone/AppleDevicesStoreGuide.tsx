@@ -9,7 +9,16 @@ import {
   APPLE_DEVICES_OPEN_BUTTON,
   APPLE_DEVICES_OPEN_FAILED,
   APPLE_DEVICES_STEPS,
+  APPLE_DEVICES_NOT_RUNNING_BODY,
+  APPLE_DEVICES_NOT_RUNNING_HEADING,
+  APPLE_DEVICES_NOT_RUNNING_STEPS,
+  APPLE_DEVICES_STILL_NOT_RUNNING,
+  APPLE_USB_DRIVER_BODY,
+  APPLE_USB_DRIVER_HEADING,
+  APPLE_USB_DRIVER_STEPS,
+  APPLE_USB_DRIVER_STILL_MISSING,
 } from "../../constants/appleDevicesStoreCopy";
+import type { AppleDevicesState } from "../../types/iphone";
 import { deviceService } from "../../services/deviceService";
 import logger from "../../utils/logger";
 
@@ -19,21 +28,57 @@ import logger from "../../utils/logger";
  * sends the user to Apple's "Apple Devices" app in the Microsoft Store, then
  * re-detects Apple Mobile Device Support.
  *
- * `onCheckAgain` re-runs detection and resolves true once it is found. It is
- * also called, quietly, when the window regains focus (the user coming back
- * from the Microsoft Store).
+ * `onCheckAgain` re-runs detection and resolves with the Apple Devices state.
+ * It is also called, quietly, when the window regains focus (the user coming
+ * back from the Microsoft Store). `state` picks the guidance: Apple Devices
+ * not installed / installed but not running / iPhone not on Apple's USB driver.
  */
+const STATE_COPY: Record<
+  Exclude<AppleDevicesState, "ready">,
+  { heading: string; body: string; steps: readonly string[]; still: string; storeButton: boolean }
+> = {
+  "not-installed": {
+    heading: APPLE_DEVICES_HEADING,
+    body: APPLE_DEVICES_BODY,
+    steps: APPLE_DEVICES_STEPS,
+    still: APPLE_DEVICES_NOT_FOUND,
+    storeButton: true,
+  },
+  "not-running": {
+    heading: APPLE_DEVICES_NOT_RUNNING_HEADING,
+    body: APPLE_DEVICES_NOT_RUNNING_BODY,
+    steps: APPLE_DEVICES_NOT_RUNNING_STEPS,
+    still: APPLE_DEVICES_STILL_NOT_RUNNING,
+    storeButton: false,
+  },
+  "usb-driver-missing": {
+    heading: APPLE_USB_DRIVER_HEADING,
+    body: APPLE_USB_DRIVER_BODY,
+    steps: APPLE_USB_DRIVER_STEPS,
+    still: APPLE_USB_DRIVER_STILL_MISSING,
+    storeButton: false,
+  },
+};
+
 export function AppleDevicesStoreGuide({
   onCheckAgain,
+  state: stateProp = "not-installed",
   variant = "full",
   disabled = false,
 }: {
-  onCheckAgain: () => Promise<boolean>;
+  onCheckAgain: () => Promise<AppleDevicesState>;
+  state?: AppleDevicesState | null;
   variant?: "full" | "compact";
   disabled?: boolean;
 }): React.ReactElement {
   const [checking, setChecking] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  // The latest state this guide has seen: the prop, or a Check again result.
+  const [state, setState] = useState<AppleDevicesState>(stateProp ?? "not-installed");
+  useEffect(() => {
+    setState(stateProp ?? "not-installed");
+  }, [stateProp]);
+  const copy = STATE_COPY[state === "ready" ? "not-installed" : state];
   const [openFailed, setOpenFailed] = useState(false);
   const mountedRef = useRef(true);
   const onCheckAgainRef = useRef(onCheckAgain);
@@ -79,19 +124,23 @@ export function AppleDevicesStoreGuide({
     logger.info("[AppleDevicesStoreGuide] Check again clicked");
     setChecking(true);
     setNotFound(false);
-    let found = false;
+    let next: AppleDevicesState = "not-installed";
+    let failed = false;
     try {
-      found = await onCheckAgainRef.current();
+      next = await onCheckAgainRef.current();
     } catch (err) {
+      failed = true;
       logger.warn("[AppleDevicesStoreGuide] Re-check failed:", err);
     }
     if (!mountedRef.current) return;
     setChecking(false);
-    setNotFound(!found);
+    if (!failed && next !== "ready") setState(next);
+    setNotFound(next !== "ready");
   }, []);
 
   const buttons = (
     <div className={variant === "compact" ? "flex gap-2" : "mt-6 flex flex-col gap-3 w-full max-w-sm"}>
+      {copy.storeButton && (
       <button
         type="button"
         onClick={() => void handleOpenStore()}
@@ -104,6 +153,7 @@ export function AppleDevicesStoreGuide({
       >
         {APPLE_DEVICES_OPEN_BUTTON}
       </button>
+      )}
       <button
         type="button"
         onClick={() => void handleCheckAgain()}
@@ -123,7 +173,7 @@ export function AppleDevicesStoreGuide({
     <>
       {notFound && !checking && (
         <div className="mt-3 text-sm text-amber-800 bg-amber-50 p-3 rounded border border-amber-200" role="status">
-          {APPLE_DEVICES_NOT_FOUND}
+          {copy.still}
         </div>
       )}
       {openFailed && (
@@ -136,8 +186,16 @@ export function AppleDevicesStoreGuide({
 
   if (variant === "compact") {
     return (
-      <div className="space-y-2" data-testid="apple-devices-store-guide">
-        <p className="text-sm text-gray-700">{APPLE_DEVICES_BODY}</p>
+      <div className="space-y-2" data-testid="apple-devices-store-guide" data-state={state}>
+        <p className="text-sm font-medium text-gray-800">{copy.heading}</p>
+        <p className="text-sm text-gray-700">{copy.body}</p>
+        {state !== "not-installed" && (
+          <ol className="text-sm text-gray-700 list-decimal list-inside space-y-1">
+            {copy.steps.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+        )}
         {buttons}
         {messages}
       </div>
@@ -145,7 +203,7 @@ export function AppleDevicesStoreGuide({
   }
 
   return (
-    <div className="flex flex-col items-center justify-center p-8 text-center" data-testid="apple-devices-store-guide">
+    <div className="flex flex-col items-center justify-center p-8 text-center" data-testid="apple-devices-store-guide" data-state={state}>
       <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center mb-4">
         <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
@@ -156,10 +214,10 @@ export function AppleDevicesStoreGuide({
           />
         </svg>
       </div>
-      <h3 className="text-xl font-semibold text-gray-800">{APPLE_DEVICES_HEADING}</h3>
-      <p className="text-gray-500 mt-2 max-w-sm">{APPLE_DEVICES_BODY}</p>
+      <h3 className="text-xl font-semibold text-gray-800">{copy.heading}</h3>
+      <p className="text-gray-500 mt-2 max-w-sm">{copy.body}</p>
       <ol className="mt-4 max-w-sm text-left text-sm text-gray-700 list-decimal list-inside space-y-1">
-        {APPLE_DEVICES_STEPS.map((step) => (
+        {copy.steps.map((step) => (
           <li key={step}>{step}</li>
         ))}
       </ol>

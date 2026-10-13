@@ -138,6 +138,12 @@ interface ElectronAPI {
       version?: string;
       serviceRunning: boolean;
       error?: string;
+      /** BACKLOG-3927 */
+      installedVia?: "msi" | "apple-devices" | null;
+      /** BACKLOG-3927: Store build only. */
+      appleDevices?: {
+        state: "not-installed" | "not-running" | "usb-driver-missing" | "ready";
+      };
     }>;
     /** Check if bundled Apple drivers are available in the app */
     hasBundled: () => Promise<{ hasBundled: boolean }>;

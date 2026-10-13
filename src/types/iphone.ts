@@ -29,6 +29,17 @@ export interface iOSDevice {
  */
 export type TrustErrorReason = "locked" | "trust_pending" | "unknown";
 
+/**
+ * BACKLOG-3927 (Microsoft Store build): Apple Devices readiness, in the order
+ * the user has to fix it. Mirrors AppleDevicesState in
+ * electron/services/appleDriverService.ts.
+ */
+export type AppleDevicesState =
+  | "not-installed"
+  | "not-running"
+  | "usb-driver-missing"
+  | "ready";
+
 // ============================================
 // BACKUP TYPES
 // ============================================
@@ -130,8 +141,10 @@ export interface ConnectionStatusProps {
    * button (this build never installs a driver).
    */
   isStoreBuild?: boolean;
-  /** BACKLOG-3927: re-detect the driver; resolves true when it is now found. */
-  onRecheckDriver?: () => Promise<boolean>;
+  /** BACKLOG-3927: re-detect Apple Devices; resolves with the new state. */
+  onRecheckDriver?: () => Promise<AppleDevicesState>;
+  /** BACKLOG-3927: Store build — the Apple Devices state last detected. */
+  appleDevicesState?: AppleDevicesState | null;
   /** BACKLOG-3816: the sync request is being prepared — the button shows "Getting ready…". */
   isStarting?: boolean;
   /** BACKLOG-3816: epoch ms until which the Sync button stays disabled (hold after a failure). */
@@ -215,10 +228,12 @@ export interface UseIPhoneSyncReturn {
    */
   recoverInstallDriver: () => Promise<void>;
   /**
-   * BACKLOG-3927: re-check driver presence (Store build "Check again") and
-   * update `driverMissing`. Resolves true when the driver is now found.
+   * BACKLOG-3927: re-check Apple Devices (Store build "Check again") and
+   * update `driverMissing`. Resolves with the new state.
    */
-  recheckDriver: () => Promise<boolean>;
+  recheckDriver: () => Promise<AppleDevicesState>;
+  /** BACKLOG-3927: Store build — the Apple Devices state last detected (null on the website build). */
+  appleDevicesState: AppleDevicesState | null;
   /**
    * BACKLOG-3816: a Sync / Try Again request is being prepared and has not yet been
    * handed to the main process or refused. The buttons show "Getting ready…".

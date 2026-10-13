@@ -20,6 +20,11 @@ import { isWindowsArm64 } from "../utils/windowsArm64";
 import { mainNetFetch } from "./mainNetFetch";
 import { isStoreBuild } from "./distributionChannelService";
 import {
+  probeAppleDevices,
+  probeUsbmux,
+  type AppleUsbDriverState,
+} from "./appleDevicesProbe";
+import {
   APPLE_DEVICES_STORE_URL,
   APPLE_DEVICES_WEB_URL,
 } from "../utils/distributionChannel";
@@ -36,6 +41,28 @@ function getDownloadedDriversPath(): string {
 }
 
 /**
+ * BACKLOG-3927 (Store build): where Apple Devices stands, in the order the user
+ * has to fix it.
+ */
+export type AppleDevicesState =
+  | "not-installed" // no Apple Devices package
+  | "not-running" // package present, Apple Mobile Device Support not answering
+  | "usb-driver-missing" // iPhone plugged in but not on Apple's USB driver
+  | "ready";
+
+export interface AppleDevicesStatus {
+  state: AppleDevicesState;
+  packageInstalled: boolean;
+  amdsRunning: boolean;
+  /** null when not asked (the process check already answered). */
+  usbmuxReachable: boolean | null;
+  usbDriver: AppleUsbDriverState;
+}
+
+/** Which route made Apple Mobile Device Support available. */
+export type AppleDriverInstalledVia = "msi" | "apple-devices";
+
+/**
  * Status of Apple drivers on the system
  */
 export interface AppleDriverStatus {
@@ -47,6 +74,22 @@ export interface AppleDriverStatus {
   serviceRunning: boolean;
   /** Error message if check failed */
   error: string | null;
+  /** BACKLOG-3927: msi (registry / Common Files / service) or apple-devices (Store build). */
+  installedVia?: AppleDriverInstalledVia | null;
+  /** BACKLOG-3927: Store build only — Apple Devices readiness. */
+  appleDevices?: AppleDevicesStatus;
+}
+
+/** BACKLOG-3927: derive the Store-build state. Exported for tests. */
+export function appleDevicesState(
+  packageInstalled: boolean,
+  amdsOrUsbmux: boolean,
+  usbDriver: AppleUsbDriverState,
+): AppleDevicesState {
+  if (!packageInstalled) return "not-installed";
+  if (!amdsOrUsbmux) return "not-running";
+  if (usbDriver === "missing") return "usb-driver-missing";
+  return "ready";
 }
 
 /**
@@ -172,29 +215,45 @@ export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
     // Check if the service exists and is running
     const serviceStatus = await checkAppleMobileDeviceService();
 
-    // BACKLOG-3927: in the Store build the driver comes from Apple's "Apple
-    // Devices" app (MSIX). A packaged app's registry and file writes may be
-    // virtualised, so the checks above can miss it. Store build only: treat an
-    // installed Apple Devices (or Store iTunes) package as installed.
+    // BACKLOG-3927: in the Store build Apple Mobile Device Support comes from
+    // Apple's "Apple Devices" app (MSIX). Measured on a real PC (PC TEST rows
+    // on BACKLOG-3927): it writes no HKLM key, no Common Files path and registers no Windows
+    // service — it runs per-user processes. Store build only, and only when the
+    // MSI route above found nothing: package present = installed; running =
+    // AppleMobileDeviceProcess running OR usbmux answering (idevice_id -l).
+    // When the MSI route found it, the raw `sc query` result stands (SR R1).
     const store = isStoreBuild();
-    let installed = registryCheck.installed;
-    let viaStorePackage = false;
-    if (!installed && store) {
-      viaStorePackage = await checkAppleStorePackage();
-      installed = viaStorePackage;
+    let result: AppleDriverStatus;
+    if (registryCheck.installed || !store) {
+      result = {
+        isInstalled: registryCheck.installed,
+        version: registryCheck.version,
+        serviceRunning: serviceStatus,
+        error: null,
+        installedVia: registryCheck.installed ? "msi" : null,
+      };
+    } else {
+      const probe = await probeAppleDevices();
+      let usbmuxReachable: boolean | null = null;
+      if (probe.packageInstalled && !probe.amdsRunning) {
+        usbmuxReachable = await probeUsbmux();
+      }
+      const running = probe.amdsRunning || usbmuxReachable === true;
+      result = {
+        isInstalled: probe.packageInstalled,
+        version: null,
+        serviceRunning: probe.packageInstalled && running,
+        error: null,
+        installedVia: probe.packageInstalled ? "apple-devices" : null,
+        appleDevices: {
+          state: appleDevicesState(probe.packageInstalled, running, probe.usbDriver),
+          packageInstalled: probe.packageInstalled,
+          amdsRunning: probe.amdsRunning,
+          usbmuxReachable,
+          usbDriver: probe.usbDriver,
+        },
+      };
     }
-
-    const result: AppleDriverStatus = {
-      isInstalled: installed,
-      version: registryCheck.version,
-      // Whether Apple Devices registers its service under the MSI's name
-      // ("Apple Mobile Device Service") is UNVERIFIED. When the Store package is
-      // what made it installed, do not report a stopped service we cannot see:
-      // sync start (deviceSyncOrchestrator) would refuse on it. Device
-      // detection still decides whether an iPhone is reachable.
-      serviceRunning: serviceStatus || viaStorePackage,
-      error: null,
-    };
 
     // Persist driver state on Sentry scope for enrichment of future events
     Sentry.setContext("apple_drivers", {
@@ -202,6 +261,8 @@ export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
       version: result.version,
       serviceRunning: result.serviceRunning,
       distributionChannel: store ? "store" : "website",
+      installedVia: result.installedVia ?? null,
+      appleDevicesState: result.appleDevices?.state ?? null,
     });
 
     // BACKLOG-1354: Enhanced breadcrumb with full driver diagnostic context
@@ -315,32 +376,6 @@ async function checkRegistry(): Promise<{
   }
 
   return { installed: false, version: null };
-}
-
-/**
- * BACKLOG-3927 (Store build only): is Apple's "Apple Devices" app, or the
- * Microsoft Store iTunes, installed for this user? Both carry Apple Mobile
- * Device Support. Any failure reads as "not installed".
- */
-export const APPLE_STORE_PACKAGE_NAMES = ["AppleInc.AppleDevices", "AppleInc.iTunes"] as const;
-
-async function checkAppleStorePackage(): Promise<boolean> {
-  try {
-    const { stdout } = await execFileAsync(
-      powershellPath(),
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `Get-AppxPackage -Name ${APPLE_STORE_PACKAGE_NAMES.join(",")} | Select-Object -ExpandProperty Name`,
-      ],
-      { timeout: 10000, windowsHide: true },
-    );
-    return APPLE_STORE_PACKAGE_NAMES.some((name) => stdout.includes(name));
-  } catch (error) {
-    log.warn("[AppleDriverService] Apple Store package check failed:", error);
-    return false;
-  }
 }
 
 /**

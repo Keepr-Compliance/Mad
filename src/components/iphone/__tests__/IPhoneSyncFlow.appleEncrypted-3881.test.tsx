@@ -36,6 +36,7 @@ const base = (): UseIPhoneSyncReturn => ({
   installDriverError: null,
   recoverInstallDriver: jest.fn(),
   recheckDriver: jest.fn(),
+  appleDevicesState: null,
   startSync: jest.fn(),
   cancelSync: jest.fn(),
   dismissSync: jest.fn(),

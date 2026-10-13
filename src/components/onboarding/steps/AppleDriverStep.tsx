@@ -19,6 +19,8 @@ import type { SkipConfig, StepNavigationConfig } from "../types/config";
 import { isStoreBuild, isWindowsArm64 } from "../../../utils/platform";
 import { WindowsArm64Unsupported } from "../../iphone/WindowsArm64Unsupported";
 import { AppleDevicesStoreGuide } from "../../iphone/AppleDevicesStoreGuide";
+import { appleDevicesStateOf } from "../../../utils/appleDevicesState";
+import type { AppleDevicesState } from "../../../types/iphone";
 import {
   APPLE_DEVICES_SKIP_DESCRIPTION,
   APPLE_DEVICES_SKIP_WARNING,
@@ -189,34 +191,33 @@ function WindowsArm64DriverStepContent({
 function StoreAppleDevicesStepContent({
   onAction,
 }: OnboardingStepContentProps): React.ReactElement {
-  const [status, setStatus] = useState<"checking" | "missing" | "ready">("checking");
+  const [status, setStatus] = useState<"checking" | AppleDevicesState>("checking");
 
-  const detect = useCallback(async (): Promise<boolean> => {
+  const detect = useCallback(async (): Promise<AppleDevicesState> => {
     const drivers = getDriversAPI();
-    if (!drivers) return false;
+    if (!drivers) return "not-installed";
     try {
-      const result = await drivers.checkApple();
-      return result.isInstalled === true;
+      return appleDevicesStateOf(await drivers.checkApple());
     } catch (error) {
       logger.error("[AppleDriverStep] Store build: driver check failed:", error);
-      return false;
+      return "not-installed";
     }
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-    void detect().then((found) => {
-      if (!cancelled) setStatus(found ? "ready" : "missing");
+    void detect().then((state) => {
+      if (!cancelled) setStatus(state);
     });
     return () => {
       cancelled = true;
     };
   }, [detect]);
 
-  const handleCheckAgain = useCallback(async (): Promise<boolean> => {
-    const found = await detect();
-    if (found) setStatus("ready");
-    return found;
+  const handleCheckAgain = useCallback(async (): Promise<AppleDevicesState> => {
+    const state = await detect();
+    if (state === "ready") setStatus("ready");
+    return state;
   }, [detect]);
 
   if (status === "checking") {
@@ -253,7 +254,7 @@ function StoreAppleDevicesStepContent({
     );
   }
 
-  return <AppleDevicesStoreGuide onCheckAgain={handleCheckAgain} />;
+  return <AppleDevicesStoreGuide onCheckAgain={handleCheckAgain} state={status} />;
 }
 
 function AppleDriverStepContent(

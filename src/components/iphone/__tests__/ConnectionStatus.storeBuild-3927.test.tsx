@@ -12,6 +12,13 @@ import {
   APPLE_DEVICES_CHECK_BUTTON,
   APPLE_DEVICES_HEADING,
   APPLE_DEVICES_NOT_FOUND,
+  APPLE_DEVICES_BODY,
+  APPLE_DEVICES_OPEN_BUTTON,
+  APPLE_DEVICES_NOT_RUNNING_HEADING,
+  APPLE_DEVICES_NOT_RUNNING_BODY,
+  APPLE_USB_DRIVER_HEADING,
+  APPLE_USB_DRIVER_STEPS,
+  APPLE_USB_DRIVER_STILL_MISSING,
 } from "../../../constants/appleDevicesStoreCopy";
 
 const base = { isConnected: false, device: null, onSyncClick: jest.fn(), driverMissing: true };
@@ -20,7 +27,7 @@ beforeEach(() => jest.clearAllMocks());
 
 it("Store build: Apple Devices guide; Check again calls the re-check", async () => {
   const onInstallDriver = jest.fn();
-  const onRecheckDriver = jest.fn(async () => false);
+  const onRecheckDriver = jest.fn(async () => "not-installed" as const);
   render(
     <ConnectionStatus {...base} isStoreBuild onInstallDriver={onInstallDriver} onRecheckDriver={onRecheckDriver} />,
   );
@@ -49,4 +56,44 @@ it("Windows on ARM still wins over the Store guide (BACKLOG-3363 unchanged)", ()
   render(<ConnectionStatus {...base} isWindowsArm64 isStoreBuild onRecheckDriver={jest.fn()} />);
   expect(screen.getByTestId("windows-arm64-unsupported")).toBeInTheDocument();
   expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+});
+
+// BACKLOG-3927 fix round (PC test 2026-10-12): three different Store-build
+// problems, three different instructions.
+describe("Store build guidance follows the Apple Devices state", () => {
+  const renderState = (state: "not-installed" | "not-running" | "usb-driver-missing") =>
+    render(
+      <ConnectionStatus
+        {...base}
+        isStoreBuild
+        appleDevicesState={state}
+        onRecheckDriver={jest.fn(async () => state)}
+      />,
+    );
+
+  it("not installed: install Apple Devices from the Microsoft Store", () => {
+    renderState("not-installed");
+    expect(screen.getByText(APPLE_DEVICES_HEADING)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: APPLE_DEVICES_OPEN_BUTTON })).toBeInTheDocument();
+    expect(screen.queryByText(APPLE_USB_DRIVER_HEADING)).not.toBeInTheDocument();
+  });
+
+  it("installed but not running: open Apple Devices once, no Store install text", () => {
+    renderState("not-running");
+    expect(screen.getByText(APPLE_DEVICES_NOT_RUNNING_HEADING)).toBeInTheDocument();
+    expect(screen.getByText(APPLE_DEVICES_NOT_RUNNING_BODY)).toBeInTheDocument();
+    expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: APPLE_DEVICES_OPEN_BUTTON })).not.toBeInTheDocument();
+  });
+
+  it("USB driver missing: Windows Update / Device Manager steps, not the Apple Devices install message", async () => {
+    renderState("usb-driver-missing");
+    expect(screen.getByText(APPLE_USB_DRIVER_HEADING)).toBeInTheDocument();
+    for (const step of APPLE_USB_DRIVER_STEPS) expect(screen.getByText(step)).toBeInTheDocument();
+    expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
+    expect(screen.queryByText(APPLE_DEVICES_BODY)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: APPLE_DEVICES_CHECK_BUTTON }));
+    expect(await screen.findByText(APPLE_USB_DRIVER_STILL_MISSING)).toBeInTheDocument();
+    expect(screen.queryByText(APPLE_DEVICES_NOT_FOUND)).not.toBeInTheDocument();
+  });
 });

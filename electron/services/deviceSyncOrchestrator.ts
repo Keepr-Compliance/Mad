@@ -65,8 +65,11 @@ import {
   formatUnknownBackupSizeError,
   formatMissingDriversError,
   formatDriverServiceStoppedError,
+  formatStoreAppleDevicesMissingError,
+  formatStoreAppleDevicesNotRunningError,
 } from "./diagnostics/userFacingErrors";
 import { checkAppleDrivers } from "./appleDriverService";
+import { isStoreBuild } from "./distributionChannelService";
 import { canUseLibimobiledevice, isMockMode } from "./libimobiledeviceService";
 import type { iOSDevice, DeviceStorageInfo } from "../types/device";
 import type { iOSMessage, iOSConversation } from "../types/iosMessages";
@@ -1075,8 +1078,13 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "driver-check");
         driversInstalled = driverStatus.isInstalled;
         serviceRunning = driverStatus.serviceRunning;
+        // BACKLOG-3927: the Store build has no "Install Sync Tools" or repair
+        // button; its texts point at Apple Devices instead.
+        const storeBuild = isStoreBuild();
         if (!driverStatus.isInstalled) {
-          const userError = formatMissingDriversError();
+          const userError = storeBuild
+            ? formatStoreAppleDevicesMissingError()
+            : formatMissingDriversError();
           log.warn("[DeviceSyncOrchestrator] Apple drivers not installed");
           // BACKLOG-1354: Breadcrumb + captureMessage when pre-sync fails
           Sentry.addBreadcrumb({
@@ -1094,7 +1102,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           return this.errorResult(userError.description);
         }
         if (!driverStatus.serviceRunning) {
-          const userError = formatDriverServiceStoppedError();
+          const userError = storeBuild
+            ? formatStoreAppleDevicesNotRunningError()
+            : formatDriverServiceStoppedError();
           log.warn("[DeviceSyncOrchestrator] Apple Mobile Device Service not running");
           // BACKLOG-1354: Breadcrumb + captureMessage when pre-sync fails
           Sentry.addBreadcrumb({
