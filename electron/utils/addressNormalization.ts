@@ -163,11 +163,14 @@ function isPostcodeToken(t: string): boolean {
  * BACKLOG-3925: the street name from the tokens after the street number. Ends at the
  * first street suffix once a name word has been seen (a suffix BEFORE any name word is
  * part of the name: "St Charles Ave", "Avenue of the Americas"), at a unit/floor token,
- * or — when no comma split the address — at a region code, postcode or country word.
+ * or — when no comma split the address — at a postcode, or a region code / country word that
+ * is last or followed by a postcode / country word.
  */
 function streetNameFromTokens(rest: string[]): string[] {
   const out: string[] = [];
-  for (const token of rest) {
+  for (let i = 0; i < rest.length; i++) {
+    const token = rest[i];
+    const next = rest[i + 1];
     const kind = classifyToken(token).kind;
     if (kind === "suffix" && out.length > 0) break;
     if (out.length > 0) {
@@ -176,7 +179,12 @@ function streetNameFromTokens(rest: string[]): string[] {
         if ((token === "floor" || token === "fl") && /^\d+(st|nd|rd|th)$/.test(out[out.length - 1])) out.pop();
         break;
       }
-      if (REGION_CODES.has(token) || isPostcodeToken(token) || COUNTRY_WORDS.has(token)) break;
+      if (isPostcodeToken(token)) break;
+      // A region code / country word is also an ordinary street-name word ("Ponce de Leon",
+      // "Rue de la Montagne", "Old Mt Vernon"): it ends the street only as the last word or
+      // when a postcode or country word follows.
+      if ((REGION_CODES.has(token) || COUNTRY_WORDS.has(token)) &&
+          (next === undefined || isPostcodeToken(next) || COUNTRY_WORDS.has(next))) break;
     }
     if (kind === "name") uniquePush(out, token);
   }
