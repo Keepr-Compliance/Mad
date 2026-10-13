@@ -1,8 +1,8 @@
 /**
  * BACKLOG-3925: a cached email whose signature footer reads
- * "4711 Example St., 10th Floor • Springfield • Ontario • M2N 6K8 • Canada" was not
- * queued for a deal stored space-joined, without a comma ("4711 Example St 10th Floor
- * Springfield Ontario M2N 6K8 Canada").
+ * "4321 Example St., 9th Floor • Springfield • Ontario • A1A 1A1 • Canada" was not
+ * queued for a deal stored space-joined, without a comma ("4321 Example St 9th Floor
+ * Springfield Ontario A1A 1A1 Canada").
  *
  * Fixtures: fictional addresses in the shape the app stores and the shape the footer
  * had. The email text is also wrapped in marketing-style HTML and run through the real
@@ -10,7 +10,7 @@
  *
  * Mechanism: normalizeAddress took the street as everything before the FIRST comma.
  * With no comma, every word after the number became a required street-name word
- * (example, 10th, floor, springfield, ontario, m2n, 6k8, canada), and the address route
+ * (example, 9th, floor, springfield, ontario, a1a, 1a1, canada), and the address route
  * required all of them as one consecutive run. No email writes that run. The fix ends
  * the street name at the first suffix word (or unit / floor / region / postcode).
  */
@@ -23,9 +23,9 @@ import {
 import { isAddressMatchRow } from "../../services/db/addressMatchCandidatesDb";
 import { htmlToPlainText } from "../htmlToPlainText";
 
-const FOOTER = "4711 Example St., 10th Floor • Springfield • Ontario • M2N 6K8 • Canada";
+const FOOTER = "4321 Example St., 9th Floor • Springfield • Ontario • A1A 1A1 • Canada";
 const FOOTER_HTML =
-  '<table><tr><td style="font-size:12px">4711&nbsp;Example St.,&nbsp;10th Floor &bull; Springfield &bull; Ontario<br>M2N 6K8 &bull; Canada</td></tr></table>';
+  '<table><tr><td style="font-size:12px">4321&nbsp;Example St.,&nbsp;9th Floor &bull; Springfield &bull; Ontario<br>A1A 1A1 &bull; Canada</td></tr></table>';
 
 const addr = (a: string) => {
   const n = normalizeAddress(a);
@@ -33,14 +33,14 @@ const addr = (a: string) => {
   return n;
 };
 
-describe("BACKLOG-3925 missed match: 4711 Example St footer", () => {
+describe("BACKLOG-3925 missed match: 4321 Example St footer", () => {
   it("control: the footer matches the same address written with a comma", () => {
-    const deal = addr("4711 Example St, Springfield, ON M2N 6K8, Canada");
+    const deal = addr("4321 Example St, Springfield, ON A1A 1A1, Canada");
     expect(contentContainsAddressAdjacent(FOOTER, deal)).toBe(true);
     expect(contentContainsAddressAdjacent(htmlToPlainText(FOOTER_HTML), deal)).toBe(true);
   });
 
-  const stored = "4711 Example St 10th Floor Springfield Ontario M2N 6K8 Canada";
+  const stored = "4321 Example St 9th Floor Springfield Ontario A1A 1A1 Canada";
 
   it("the deal address as stored (no comma) matches the footer, plain text", () => {
     expect(isAddressMatchRow({ id: "e1", subject: "Your trial ends soon!", body_plain: FOOTER }, addr(stored))).toBe(true);
@@ -51,8 +51,8 @@ describe("BACKLOG-3925 missed match: 4711 Example St footer", () => {
     expect(isAddressMatchRow({ id: "e1", subject: "Your trial ends soon!", body_plain: body }, addr(stored))).toBe(true);
   });
 
-  it("the deal address as stored (no comma) matches a bare '4711 Example St'", () => {
-    expect(contentContainsAddressAdjacent("Visit us at 4711 Example St", addr(stored))).toBe(true);
+  it("the deal address as stored (no comma) matches a bare '4321 Example St'", () => {
+    expect(contentContainsAddressAdjacent("Visit us at 4321 Example St", addr(stored))).toBe(true);
   });
 });
 
@@ -60,28 +60,32 @@ describe("BACKLOG-3925 street name ends at the first suffix / unit / tail", () =
   const route = (a: string) => addressRouteNameWords(addr(a));
 
   it("comma and no-comma deal addresses give the same street", () => {
-    const withComma = "4711 Example St, 10th Floor, Springfield, ON M2N 6K8";
-    const without = "4711 Example St 10th Floor Springfield ON M2N 6K8";
+    const withComma = "4321 Example St, 9th Floor, Springfield, ON A1A 1A1";
+    const without = "4321 Example St 9th Floor Springfield ON A1A 1A1";
     expect(route(without)).toEqual(route(withComma));
     expect(route(without)).toEqual(["example"]);
   });
 
   it.each([
-    ["4711 Example St Floor 10 Springfield", ["example"]],
-    ["4711 Example Fl 10", ["example"]],
-    ["4711 Example Suite 200", ["example"]],
-    ["4711 Example Ste 200", ["example"]],
-    ["4711 Example Unit 4", ["example"]],
-    ["4711 Example Apt 2B", ["example"]],
-    ["4711 Example # 4", ["example"]],
-    ["4711 Example #4", ["example"]],
-    ["4711 Example Room 12", ["example"]],
-    ["4711 Example 10th Floor", ["example"]],
-    ["4711 Example Springfield ON M2N 6K8", ["example", "springfield"]],
-    ["4711 Example ON M2N 6K8 Canada", ["example"]],
-    ["4711 Example CA 90210", ["example"]],
-    ["4711 Example 90210", ["example"]],
-    ["4711 Example Canada", ["example"]],
+    ["4321 Example St Floor 10 Springfield", ["example"]],
+    ["4321 Example Fl 10", ["example"]],
+    ["4321 Example Suite 200", ["example"]],
+    ["4321 Example Ste 200", ["example"]],
+    ["4321 Example Unit 4", ["example"]],
+    ["4321 Example Apt 2B", ["example"]],
+    ["4321 Example # 4", ["example"]],
+    ["4321 Example #4", ["example"]],
+    ["4321 Example #4 Springfield ON", ["example"]],
+    ["100 Ponce de Leon Ave Atlanta GA", ["ponce", "de", "leon"]],
+    ["100 Rue de la Montagne", ["rue", "de", "la", "montagne"]],
+    ["100 Old Mt Vernon Rd", ["old", "mt", "vernon"]],
+    ["4321 Example Room 12", ["example"]],
+    ["4321 Example 9th Floor", ["example"]],
+    ["4321 Example Springfield ON A1A 1A1", ["example", "springfield"]],
+    ["4321 Example ON A1A 1A1 Canada", ["example"]],
+    ["4321 Example CA 90210", ["example"]],
+    ["4321 Example 90210", ["example"]],
+    ["4321 Example Canada", ["example"]],
   ])("%j -> street %j", (deal, expected) => {
     expect(route(deal)).toEqual(expected);
   });
@@ -116,7 +120,7 @@ describe("BACKLOG-3925 street name ends at the first suffix / unit / tail", () =
   });
 
   it("earlier rejections still reject, for a comma-free deal address", () => {
-    const park = addr("12 Park Rd Springfield ON M2N 6K8");
+    const park = addr("12 Park Rd Springfield ON A1A 1A1");
     expect(contentContainsAddressAdjacent("12 Parkway", park)).toBe(false);
     expect(contentContainsAddressAdjacent("at 12 on Park", park)).toBe(false);
     expect(contentContainsAddressAdjacent("closing at 12 on Park Ave", park)).toBe(false);
@@ -126,10 +130,25 @@ describe("BACKLOG-3925 street name ends at the first suffix / unit / tail", () =
     expect(contentContainsAddressAdjacent("the 12th of Oak St", twelfth)).toBe(false);
   });
 
+  it("a region code or country word inside a street name does not end it", () => {
+    const cases: Array<[string, string, string]> = [
+      ["100 Ponce de Leon Ave Atlanta GA", "100 Ponce de Leon Ave", "Ponce de Leon Ave 100"],
+      ["100 Rue de la Montagne", "100 Rue de la Montagne", "Rue de la Montagne 100"],
+      ["100 Old Mt Vernon Rd", "100 Old Mt Vernon Rd", "Old Mt Vernon Rd 100"],
+    ];
+    for (const [deal, numberFirst, nameFirst] of cases) {
+      const a = addr(deal);
+      expect(contentContainsAddressAdjacent(numberFirst, a)).toBe(true);
+      expect(contentContainsAddressAdjacent(nameFirst, a)).toBe(true);
+    }
+    expect(contentContainsAddressAdjacent("100 rue Sherbrooke", addr("100 Rue de la Montagne"))).toBe(false);
+    expect(contentContainsAddressAdjacent("100 Old Town Rd", addr("100 Old Mt Vernon Rd"))).toBe(false);
+  });
+
   it("the contact route keeps every word of a comma-free address required", () => {
-    const stored = addr("4711 Example St 10th Floor Springfield Ontario");
-    expect(stored.requiredNameWords).toEqual(["example", "10th", "floor", "springfield", "ontario"]);
-    expect(contentContainsAddress("4711 Example St", stored)).toBe(false);
-    expect(contentContainsAddress("4711 Example 10th floor Springfield Ontario", stored)).toBe(true);
+    const stored = addr("4321 Example St 9th Floor Springfield Ontario");
+    expect(stored.requiredNameWords).toEqual(["example", "9th", "floor", "springfield", "ontario"]);
+    expect(contentContainsAddress("4321 Example St", stored)).toBe(false);
+    expect(contentContainsAddress("4321 Example 9th floor Springfield Ontario", stored)).toBe(true);
   });
 });
