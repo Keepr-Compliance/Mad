@@ -106,11 +106,13 @@ export async function probeAppleDevices(): Promise<AppleDevicesProbeResult> {
  * answered; null means it could not. NOTE: the bundled Windows binary's exit
  * code on an EMPTY list is unmeasured — with no phone attached this may read
  * false even when usbmux is fine, so it is only a second signal after the
- * process check.
+ * process check. BACKLOG-3418: the iPhone helper runs only while iPhone
+ * checking is on; when it is off this answers false without spawning anything.
  */
 export async function probeUsbmux(): Promise<boolean> {
   try {
     const { deviceDetectionService } = await import("./deviceDetectionService");
+    if (!deviceDetectionService.isDetectionRequested()) return false;
     return (await deviceDetectionService.probeConnectedUdids()) !== null;
   } catch (error) {
     log.warn("[AppleDevicesProbe] usbmux probe failed:", error);

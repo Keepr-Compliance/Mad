@@ -53,8 +53,12 @@ let mockStore = false;
 jest.mock("../distributionChannelService", () => ({ isStoreBuild: () => mockStore }));
 
 const mockProbeConnectedUdids = jest.fn();
+let mockDetectionRequested = true;
 jest.mock("../deviceDetectionService", () => ({
-  deviceDetectionService: { probeConnectedUdids: (...a: unknown[]) => mockProbeConnectedUdids(...a) },
+  deviceDetectionService: {
+    probeConnectedUdids: (...a: unknown[]) => mockProbeConnectedUdids(...a),
+    isDetectionRequested: () => mockDetectionRequested,
+  },
 }));
 
 import { EventEmitter } from "events";
@@ -169,6 +173,16 @@ describe("Store build: Apple Devices readiness (BACKLOG-3927)", () => {
     mockStore = true;
     fsMock.existsSync.mockReturnValue(false); // no Common Files AppleMobileDeviceService.exe
     mockProbeConnectedUdids.mockResolvedValue(null);
+    mockDetectionRequested = true;
+  });
+
+  it("BACKLOG-3418: iPhone checking off -> usbmux not asked (no iPhone helper spawn), not-running", async () => {
+    mockDetectionRequested = false;
+    probeStdout(PROBE_NOT_RUNNING_NO_PHONE);
+    mockProbeConnectedUdids.mockResolvedValue([]);
+    const status = await checkAppleDrivers();
+    expect(mockProbeConnectedUdids).not.toHaveBeenCalled();
+    expect(status.appleDevices).toMatchObject({ state: "not-running", usbmuxReachable: false });
   });
 
   it("package + AMDS process running + Apple USB driver: ready, via apple-devices; usbmux not asked", async () => {
