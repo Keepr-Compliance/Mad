@@ -62,14 +62,25 @@ export const APPLE_DEVICES_STILL_NOT_RUNNING =
  */
 export const APPLE_USB_DRIVER_HEADING = "Install Apple's iPhone USB driver";
 
+// DRAFT (founder approval pending, BACKLOG-3927): every sentence in this block.
+// Measured on a live PC 2026-10-12: Device Manager > Update driver answers "best
+// drivers already installed (MTP)"; the driver arrives through Windows Update >
+// Optional updates as "Apple Inc. - USBDevice", and a restart may be needed.
 export const APPLE_USB_DRIVER_BODY =
-  "Windows sees your iPhone, but it isn't using Apple's USB driver yet. Windows Update provides this driver.";
+  "Windows sees your iPhone, but it isn't using Apple's USB driver yet. Windows Update provides this driver, and a restart may be needed.";
 
 export const APPLE_USB_DRIVER_STEPS: readonly string[] = [
-  "Open Device Manager, find Apple iPhone, right-click it and choose Update driver, then Search automatically for drivers.",
-  "If nothing is found, open Settings > Windows Update > Advanced options > Optional updates and install the Apple driver.",
-  "Unplug your iPhone, plug it back in, then click Check again.",
+  'Click "Check for updates" below and let Windows finish checking.',
+  'Click "Optional updates" below and install "Apple Inc. - USBDevice".',
+  "A restart may be needed. Then unplug your iPhone, plug it back in and click Check again.",
 ];
+
+/** Both buttons only open Windows Settings; nothing is installed by Keepr. */
+export const APPLE_WU_CHECK_BUTTON = "Check for updates";
+export const APPLE_WU_OPTIONAL_BUTTON = "Optional updates";
+
+export const APPLE_OPEN_WINDOWS_UPDATE_FAILED =
+  "Couldn't open Windows Settings. Open Settings > Windows Update yourself.";
 
 export const APPLE_USB_DRIVER_STILL_MISSING =
   "Your iPhone still isn't using Apple's USB driver. Follow the steps above, reconnect your iPhone, then click Check again.";

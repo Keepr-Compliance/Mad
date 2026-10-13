@@ -41,10 +41,10 @@ jest.mock("../../services/distributionChannelService", () => ({
 import { registerDriverHandlers } from "../driverHandlers";
 
 const event = { sender: {} };
-const call = (ch: string) => {
+const call = (ch: string, ...args: unknown[]) => {
   const fn = handlers.get(ch);
   if (!fn) throw new Error(`no handler for ${ch}`);
-  return fn(event);
+  return fn(event, ...args);
 };
 
 beforeAll(() => registerDriverHandlers());
@@ -99,6 +99,36 @@ describe("website build is unchanged (BACKLOG-3927)", () => {
     await call("drivers:install-apple");
     expect(mockDownload).toHaveBeenCalledTimes(1);
     expect(mockInstall).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("drivers:open-windows-update (BACKLOG-3927)", () => {
+  it.each([
+    ["check", "ms-settings:windowsupdate-action"],
+    ["optional", "ms-settings:windowsupdate-optionalupdates"],
+  ])("%s opens only its Settings page", async (target, uri) => {
+    mockOpenExternal.mockResolvedValueOnce(undefined);
+    expect(await call("drivers:open-windows-update", target)).toEqual({ success: true });
+    expect(mockOpenExternal).toHaveBeenCalledTimes(1);
+    expect(mockOpenExternal).toHaveBeenCalledWith(uri);
+    expect(mockInstall).not.toHaveBeenCalled();
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  it.each(["https://evil.example", "toString", undefined, 5])("refuses target %p without opening anything", async (target) => {
+    expect(await call("drivers:open-windows-update", target)).toEqual({
+      success: false,
+      error: "Unknown Windows Update target",
+    });
+    expect(mockOpenExternal).not.toHaveBeenCalled();
+  });
+
+  it("reports failure when Settings cannot be opened", async () => {
+    mockOpenExternal.mockRejectedValueOnce(new Error("no handler"));
+    expect(await call("drivers:open-windows-update", "check")).toEqual({
+      success: false,
+      error: "Failed to open Windows Update",
+    });
   });
 });
 

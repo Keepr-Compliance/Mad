@@ -530,6 +530,22 @@ export const deviceService = {
     }
   },
 
+  /**
+   * BACKLOG-3927: open Windows Settings > Windows Update (USB driver guide).
+   * Only opens Settings; installs nothing.
+   */
+  async openWindowsUpdate(target: "check" | "optional"): Promise<ApiResult> {
+    try {
+      if (!window.api.drivers?.openWindowsUpdate) {
+        return { success: false, error: "Drivers API not available" };
+      }
+      const result = await window.api.drivers.openWindowsUpdate(target);
+      return { success: result.success, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
   // ============================================
   // SYNC METHODS
   // ============================================

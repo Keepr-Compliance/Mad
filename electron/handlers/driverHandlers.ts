@@ -154,5 +154,23 @@ export function registerDriverHandlers(): void {
     }
   });
 
+  // BACKLOG-3927: open Windows Settings > Windows Update (the USB-driver guide's
+  // first step). Opens Settings only; nothing is installed.
+  const WINDOWS_UPDATE_URIS: Record<string, string> = {
+    check: "ms-settings:windowsupdate-action",
+    optional: "ms-settings:windowsupdate-optionalupdates",
+  };
+  ipcMain.handle("drivers:open-windows-update", async (_event, target: unknown) => {
+    const uri = typeof target === "string" && Object.prototype.hasOwnProperty.call(WINDOWS_UPDATE_URIS, target) ? WINDOWS_UPDATE_URIS[target] : null;
+    if (!uri) return { success: false, error: "Unknown Windows Update target" };
+    try {
+      await shell.openExternal(uri);
+      return { success: true };
+    } catch (error) {
+      log.error("[DriverHandlers] Failed to open Windows Update:", error);
+      return { success: false, error: "Failed to open Windows Update" };
+    }
+  });
+
   log.info("[DriverHandlers] Registered driver IPC handlers");
 }

@@ -214,6 +214,8 @@ export interface WindowApiDrivers {
   openITunesStore: () => Promise<{ success: boolean; error?: string }>;
   /** BACKLOG-3927: open Apple Devices in the Microsoft Store (Store build). */
   openAppleDevicesStore?: () => Promise<{ success: boolean; error?: string }>;
+  /** BACKLOG-3927: open Windows Settings > Windows Update. Opens Settings only. */
+  openWindowsUpdate?: (target: "check" | "optional") => Promise<{ success: boolean; error?: string }>;
 }
 
 /**

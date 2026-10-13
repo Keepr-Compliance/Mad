@@ -18,6 +18,9 @@ import {
   APPLE_DEVICES_NOT_RUNNING_BODY,
   APPLE_USB_DRIVER_HEADING,
   APPLE_USB_DRIVER_STEPS,
+  APPLE_WU_CHECK_BUTTON,
+  APPLE_WU_OPTIONAL_BUTTON,
+  APPLE_OPEN_WINDOWS_UPDATE_FAILED,
   APPLE_USB_DRIVER_STILL_MISSING,
   APPLE_DEVICES_READY_HEADING,
   APPLE_MSI_STOPPED_HEADING,
@@ -95,6 +98,35 @@ describe("Store build guidance follows the Apple Devices state", () => {
     expect(screen.getByText(APPLE_DEVICES_NOT_RUNNING_BODY)).toBeInTheDocument();
     expect(screen.queryByText(APPLE_DEVICES_HEADING)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: APPLE_DEVICES_OPEN_BUTTON })).not.toBeInTheDocument();
+  });
+
+  it("USB driver missing: no Device Manager step; the two buttons open their own Settings pages", async () => {
+    (window.api.drivers!.openWindowsUpdate as jest.Mock).mockResolvedValue({ success: true });
+    renderState("usb-driver-missing");
+    for (const step of APPLE_USB_DRIVER_STEPS) expect(step).not.toMatch(/Device Manager/);
+    expect(APPLE_USB_DRIVER_STEPS.join(" ")).toMatch(/restart may be needed/);
+    await userEvent.click(screen.getByRole("button", { name: APPLE_WU_CHECK_BUTTON }));
+    expect(window.api.drivers!.openWindowsUpdate).toHaveBeenLastCalledWith("check");
+    await userEvent.click(screen.getByRole("button", { name: APPLE_WU_OPTIONAL_BUTTON }));
+    expect(window.api.drivers!.openWindowsUpdate).toHaveBeenLastCalledWith("optional");
+    expect(window.api.drivers!.openWindowsUpdate).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(APPLE_OPEN_WINDOWS_UPDATE_FAILED)).not.toBeInTheDocument();
+  });
+
+  it("USB driver missing: a failed open says so", async () => {
+    (window.api.drivers!.openWindowsUpdate as jest.Mock).mockResolvedValue({ success: false, error: "x" });
+    renderState("usb-driver-missing");
+    await userEvent.click(screen.getByRole("button", { name: APPLE_WU_OPTIONAL_BUTTON }));
+    expect(await screen.findByText(APPLE_OPEN_WINDOWS_UPDATE_FAILED)).toBeInTheDocument();
+  });
+
+  it("the Windows Update buttons appear only for the USB-driver state", () => {
+    for (const st of ["not-installed", "not-running", "msi-service-stopped", "ready"] as const) {
+      const { unmount } = renderState(st);
+      expect(screen.queryByRole("button", { name: APPLE_WU_CHECK_BUTTON })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: APPLE_WU_OPTIONAL_BUTTON })).not.toBeInTheDocument();
+      unmount();
+    }
   });
 
   it("USB driver missing: Windows Update / Device Manager steps, not the Apple Devices install message", async () => {

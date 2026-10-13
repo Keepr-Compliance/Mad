@@ -239,6 +239,7 @@ export const driverBridge = {
    * (Store build iPhone setup)
    */
   openAppleDevicesStore: () => ipcRenderer.invoke("drivers:open-apple-devices-store"),
+  openWindowsUpdate: (target: "check" | "optional") => ipcRenderer.invoke("drivers:open-windows-update", target),
 
   /**
    * Check if a driver update is available

@@ -16,6 +16,9 @@ import {
   APPLE_USB_DRIVER_BODY,
   APPLE_USB_DRIVER_HEADING,
   APPLE_USB_DRIVER_STEPS,
+  APPLE_WU_CHECK_BUTTON,
+  APPLE_WU_OPTIONAL_BUTTON,
+  APPLE_OPEN_WINDOWS_UPDATE_FAILED,
   APPLE_USB_DRIVER_STILL_MISSING,
   APPLE_MSI_STOPPED_HEADING,
   APPLE_MSI_STOPPED_BODY,
@@ -45,7 +48,7 @@ import logger from "../../utils/logger";
  */
 const STATE_COPY: Record<
   AppleDevicesState,
-  { heading: string; body: string; steps: readonly string[]; still: string; storeButton: boolean }
+  { heading: string; body: string; steps: readonly string[]; still: string; storeButton: boolean; windowsUpdateButton: boolean }
 > = {
   "not-installed": {
     heading: APPLE_DEVICES_HEADING,
@@ -53,6 +56,7 @@ const STATE_COPY: Record<
     steps: APPLE_DEVICES_STEPS,
     still: APPLE_DEVICES_NOT_FOUND,
     storeButton: true,
+    windowsUpdateButton: false,
   },
   "not-running": {
     heading: APPLE_DEVICES_NOT_RUNNING_HEADING,
@@ -60,6 +64,7 @@ const STATE_COPY: Record<
     steps: APPLE_DEVICES_NOT_RUNNING_STEPS,
     still: APPLE_DEVICES_STILL_NOT_RUNNING,
     storeButton: false,
+    windowsUpdateButton: false,
   },
   "usb-driver-missing": {
     heading: APPLE_USB_DRIVER_HEADING,
@@ -67,6 +72,7 @@ const STATE_COPY: Record<
     steps: APPLE_USB_DRIVER_STEPS,
     still: APPLE_USB_DRIVER_STILL_MISSING,
     storeButton: false,
+    windowsUpdateButton: true,
   },
   "msi-service-stopped": {
     heading: APPLE_MSI_STOPPED_HEADING,
@@ -74,6 +80,7 @@ const STATE_COPY: Record<
     steps: APPLE_MSI_STOPPED_STEPS,
     still: APPLE_MSI_STILL_STOPPED,
     storeButton: false,
+    windowsUpdateButton: false,
   },
   ready: {
     heading: APPLE_DEVICES_READY_HEADING,
@@ -81,6 +88,7 @@ const STATE_COPY: Record<
     steps: APPLE_DEVICES_READY_STEPS,
     still: APPLE_DEVICES_READY_STILL,
     storeButton: false,
+    windowsUpdateButton: false,
   },
 };
 
@@ -144,6 +152,14 @@ export function AppleDevicesStoreGuide({
     if (mountedRef.current && !result.success) setOpenFailed(true);
   }, []);
 
+  const [updateOpenFailed, setUpdateOpenFailed] = useState(false);
+  const handleOpenWindowsUpdate = useCallback(async (target: "check" | "optional") => {
+    logger.info(`[AppleDevicesStoreGuide] Windows Update (${target}) clicked`);
+    setUpdateOpenFailed(false);
+    const result = await deviceService.openWindowsUpdate(target);
+    if (mountedRef.current && !result.success) setUpdateOpenFailed(true);
+  }, []);
+
   const handleCheckAgain = useCallback(async () => {
     logger.info("[AppleDevicesStoreGuide] Check again clicked");
     setChecking(true);
@@ -178,6 +194,34 @@ export function AppleDevicesStoreGuide({
         {APPLE_DEVICES_OPEN_BUTTON}
       </button>
       )}
+      {copy.windowsUpdateButton && (
+      <>
+            <button
+        type="button"
+        onClick={() => void handleOpenWindowsUpdate("check")}
+        disabled={disabled}
+        className={
+          variant === "compact"
+            ? "flex-1 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            : "w-full py-2.5 px-4 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600 transition-all shadow-md hover:shadow-lg"
+        }
+      >
+        {APPLE_WU_CHECK_BUTTON}
+      </button>
+            <button
+        type="button"
+        onClick={() => void handleOpenWindowsUpdate("optional")}
+        disabled={disabled}
+        className={
+          variant === "compact"
+            ? "flex-1 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            : "w-full py-2.5 px-4 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600 transition-all shadow-md hover:shadow-lg"
+        }
+      >
+        {APPLE_WU_OPTIONAL_BUTTON}
+      </button>
+      </>
+      )}
       <button
         type="button"
         onClick={() => void handleCheckAgain()}
@@ -198,6 +242,11 @@ export function AppleDevicesStoreGuide({
       {notFound && !checking && (
         <div className="mt-3 text-sm text-amber-800 bg-amber-50 p-3 rounded border border-amber-200" role="status">
           {copy.still}
+        </div>
+      )}
+      {updateOpenFailed && (
+        <div className="mt-3 text-sm text-red-700 bg-red-50 p-3 rounded border border-red-200" role="alert">
+          {APPLE_OPEN_WINDOWS_UPDATE_FAILED}
         </div>
       )}
       {openFailed && (

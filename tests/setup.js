@@ -339,6 +339,7 @@ if (typeof window !== 'undefined') {
       hasBundled: jest.fn(),
       openITunesStore: jest.fn(),
       openAppleDevicesStore: jest.fn(),
+      openWindowsUpdate: jest.fn(),
       checkUpdate: jest.fn(),
     },
     // Android companion pairing (BACKLOG-1447)
@@ -521,6 +522,7 @@ if (typeof window !== 'undefined') {
       hasBundled: jest.fn(),
       openITunesStore: jest.fn(),
       openAppleDevicesStore: jest.fn(),
+      openWindowsUpdate: jest.fn(),
       checkUpdate: jest.fn(),
     },
   };
