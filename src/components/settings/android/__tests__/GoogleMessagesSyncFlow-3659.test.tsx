@@ -483,6 +483,38 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(mockRetryCache).not.toHaveBeenCalled();
   });
 
+  // BACKLOG-3924 C2 (S8–S10, founder 2026-10-12): not signed in → what to do
+  // and where, and "Sync again" starts a NEW Sync (nothing was claimed, so
+  // there is no failed run to retry). Every other failure keeps "Sync failed"
+  // and Try again. Mutations: the branch reverted → red; Sync again wired to
+  // the retry → red; page_gone shown with the sign-in wording → red.
+  it("C2: failed as not_signed_in: S8 title, S9 body, Sync again starts a new Sync", async () => {
+    mockState = INSTALLED;
+    // The error as Keepr records it (rcsImportJob RCS_NOT_SIGNED_IN_MESSAGE / the page's /error body).
+    await failedRun({ state: "failed", error: { code: "not_signed_in", message: "Sign in to Google Messages, then click Sync in Keepr again" } } as Partial<RcsJobInfo>);
+    const step = await screen.findByTestId("gm-step-failed");
+    expect(step).toHaveTextContent("Sign in to Google Messages first");
+    expect(step).toHaveTextContent("Open Messages for Web in Chrome, scan the QR code with your phone, then click Sync again.");
+    expect(step).not.toHaveTextContent("Sync failed");
+    const button = screen.getByTestId("gm-try-again");
+    expect(button).toHaveTextContent(/^Sync again$/);
+    mockStartCache.mockResolvedValue({ success: true, data: job({ jobId: "job-2", state: "created" }) });
+    fireEvent.click(button);
+    await waitFor(() => expect(mockStartCache).toHaveBeenCalledTimes(1));
+    expect(mockRetryCache).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("gm-step-syncing")).toBeInTheDocument();
+  });
+
+  it("C2: every other failure keeps 'Sync failed' and Try again", async () => {
+    mockState = INSTALLED;
+    await failedRun({ state: "failed", error: { code: "page_gone", message: "x" } } as Partial<RcsJobInfo>);
+    const step = await screen.findByTestId("gm-step-failed");
+    expect(step).toHaveTextContent("Sync failed");
+    expect(step).toHaveTextContent("The Messages tab was closed.");
+    expect(step).not.toHaveTextContent("Sign in to Google Messages first");
+    expect(screen.getByTestId("gm-try-again")).toHaveTextContent(/^Try again$/);
+  });
+
   // Founder (B2): the linked screen — the row and Sync now centred in the
   // body (the modal keeps its size), the window note at the bottom with
   // Change. Mutations: not centred; the note's wording; Change not wired;

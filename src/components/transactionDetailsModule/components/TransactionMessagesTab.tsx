@@ -209,6 +209,8 @@ export function TransactionMessagesTab({
   // and linked (SR S1: data-changed), and when Force re-import cleared them.
   const onMessagesChangedRef = useRef(onMessagesChanged);
   onMessagesChangedRef.current = onMessagesChanged;
+  // BACKLOG-3892 S6: "Get older texts" stored texts (it broadcasts no data-changed).
+  const reloadAfterBackfill = useCallback(() => onMessagesChangedRef.current?.(), []);
   useEffect(() => {
     const offChanged = rcsImportService.onDataChanged(() => void onMessagesChangedRef.current?.());
     const offCleared = rcsImportService.onDataCleared(() => void onMessagesChangedRef.current?.());
@@ -1033,7 +1035,7 @@ export function TransactionMessagesTab({
     return (
       <div>
         {/* BACKLOG-3663: a source that does not reach back to the audit start. */}
-        {userId && transactionId && <TextCoverageNotice transactionId={transactionId} userId={userId} />}
+        {userId && transactionId && <TextCoverageNotice transactionId={transactionId} userId={userId} onTextsAdded={reloadAfterBackfill} />}
         <div className="bg-gray-50 rounded-lg p-6 text-center">
           <svg
             className="w-12 h-12 text-gray-300 mx-auto mb-3"
@@ -1142,7 +1144,7 @@ export function TransactionMessagesTab({
   return (
     <div>
       {/* BACKLOG-3663: a source that does not reach back to the audit start. */}
-      {userId && transactionId && <TextCoverageNotice transactionId={transactionId} userId={userId} />}
+      {userId && transactionId && <TextCoverageNotice transactionId={transactionId} userId={userId} onTextsAdded={reloadAfterBackfill} />}
       {/* Header with message count and filter toggle */}
       <div className="flex items-center justify-between mb-4">
         <div>

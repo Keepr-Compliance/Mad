@@ -66,6 +66,10 @@ export const RcsBridgeBodySchemas = {
     hidden: anyObject,
     metrics: anyObject,
   }),
+  /** BACKLOG-3924: the page waits for the user to sign in to Google Messages. */
+  waiting: z.looseObject({
+    reason: text(100),
+  }),
   error: z.looseObject({
     code: text(200),
     message: text(2000),

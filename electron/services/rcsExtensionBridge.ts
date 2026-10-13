@@ -38,6 +38,8 @@
  *                                 absent if the save outlasts RCS_FINISH_SAVE_WAIT_MS).
  * - `POST /focus`                — "Open Keepr" on the page: Keepr brings itself forward.
  * - `POST /job/:id/error`       — {code, message}; the job fails with it.
+ * - `POST /job/:id/waiting`     — {reason}; BACKLOG-3924: before the claim, the
+ *                                 page waits for sign-in (keeps the job alive).
  *
  * ## POST only, exact Host (BACKLOG-3628)
  * Every route is POST. Chrome on Windows (Chrome 154) sends a GET from the
@@ -61,6 +63,7 @@ import {
   parseNotReached,
   participantKey,
   RCS_JOB_MAX_CHATS,
+  RCS_SIGN_IN_WAIT_CAP_MS,
   RcsJobRegistry,
   type RcsCacheSaved,
   type RcsImportJob,
@@ -413,7 +416,7 @@ const prelimited = new WeakSet<http.IncomingMessage>();
 export const RCS_RATE_LIMITS = { attachment: 1200, job: 600, link: 120, other: 300 } as const;
 export type RcsRateGroup = keyof typeof RCS_RATE_LIMITS;
 
-const JOB_ROUTE = /^\/job\/([0-9a-fA-F-]{36})(?:\/(claim|match|chat|attachment|progress|finish|error|cancel))?$/;
+const JOB_ROUTE = /^\/job\/([0-9a-fA-F-]{36})(?:\/(claim|match|chat|attachment|progress|finish|error|cancel|waiting))?$/;
 
 const silentLogger: RcsBridgeLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
@@ -502,7 +505,23 @@ export class RcsExtensionBridge {
     return this.armJob(job, options.unclaimedMs ?? 60_000);
   }
 
+  /**
+   * BACKLOG-3924: the job's unclaimed deadline moved (the page waits for
+   * sign-in) — the expiry timer follows it, so a wait that just stops (Chrome
+   * closed) still ends the job on time, with nobody polling.
+   */
+  private armUnclaimedTimer(job: RcsImportJob): void {
+    this.armJobTimer(job, Math.max(0, job.unclaimedDeadlineMs() - this.jobs.nowMs()));
+  }
+
   private armJob(job: RcsImportJob, unclaimedMs: number): RcsJobSnapshot {
+    this.armJobTimer(job, unclaimedMs);
+    const snap = job.snapshot();
+    this.emitJob(snap);
+    return snap;
+  }
+
+  private armJobTimer(job: RcsImportJob, unclaimedMs: number): void {
     if (this.unclaimedTimer) clearTimeout(this.unclaimedTimer);
     this.unclaimedTimer = setTimeout(() => {
       this.unclaimedTimer = null;
@@ -515,9 +534,6 @@ export class RcsExtensionBridge {
       }
     }, unclaimedMs + 50);
     this.unclaimedTimer.unref?.();
-    const snap = job.snapshot();
-    this.emitJob(snap);
-    return snap;
   }
 
   /** BACKLOG-3671 P2: telemetry never breaks a Sync. */
@@ -1156,6 +1172,27 @@ export class RcsExtensionBridge {
       this.emitJob(claimedSnap);
       this.tel((t) => t.claimed(claimedSnap));
       sendJson(res, 200, claim);
+      return;
+    }
+
+    // BACKLOG-3924: the page waits for the user to sign in to Google
+    // Messages — before the claim only. Keeps the job alive (5 min a
+    // message, 15 min in all); 410 once Keepr's Stop ended it (check above).
+    if (action === "waiting") {
+      const read = await readJson(req, res, MAX_BODY_BYTES);
+      if (!read.ok) return;
+      if (!parseBridgeBody(RcsBridgeBodySchemas.waiting, read.body)) {
+        sendJson(res, 400, { error: "bad_request", message: "Invalid waiting request" });
+        return;
+      }
+      if (!job.markWaitingForSignIn(this.jobs.nowMs())) {
+        sendJson(res, 409, { error: "already_claimed", message: "This Keepr sync has already started." });
+        return;
+      }
+      this.armUnclaimedTimer(job);
+      this.emitJob(job.snapshot());
+      // How long Keepr's own limit still allows (the page ends its wait just before).
+      sendJson(res, 200, { ok: true, waitLeftMs: Math.max(0, job.createdAtMs + RCS_SIGN_IN_WAIT_CAP_MS - this.jobs.nowMs()) });
       return;
     }
 
