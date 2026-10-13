@@ -618,14 +618,14 @@ describe('Cancel plan and Keep my plan', () => {
     expect(view.state).toBe('cancel_pending');
   });
 
-  it('R6: the write-through touches only cancel_at_period_end and canceled_at, only on an active/trialing row', async () => {
+  it('R6: the write-through touches only cancel_at_period_end, canceled_at and updated_at (BACKLOG-3933 S1), only on an active/trialing row', async () => {
     seed({ billing_subscriptions: [mirrorRow(C_KEEP)] });
     serve(C_KEEP.id, C_KEEP);
     mockStripeImpl['subscriptions.update'] = async () => clone(C_PENDING);
     await endAgentPlanAtPeriodEnd();
     const upd = mockDb.callsTo('billing_subscriptions', 'update');
     expect(upd).toHaveLength(1);
-    expect(Object.keys(upd[0].payload as Row).sort()).toEqual(['cancel_at_period_end', 'canceled_at']);
+    expect(Object.keys(upd[0].payload as Row).sort()).toEqual(['cancel_at_period_end', 'canceled_at', 'updated_at']);
     expect(upd[0].filters).toEqual([
       { op: 'eq', column: 'stripe_subscription_id', value: C_KEEP.id },
       { op: 'in', column: 'status', value: ['active', 'trialing'] },
