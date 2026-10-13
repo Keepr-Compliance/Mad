@@ -73,8 +73,8 @@ import {
   type FileCrypto,
 } from "./fileCrypto";
 import { BACKUP_ROOT_PLISTS, openBackupIndexBytes } from "./backupIndexFiles";
-import { createMarkerStore, MARKER_DIR_NAME, type BackupAtRestState, type MarkerStore } from "./markers";
-import type { FileOutcome, SealEngineOptions, SealMode } from "./sealEngine";
+import { createMarkerStore, MARKER_DIR_NAME, type BackupAtRestState, type BackupMarker, type MarkerStore } from "./markers";
+import { SEAL_FORMAT_VERSION, type FileOutcome, type SealEngineOptions, type SealMode } from "./sealEngine";
 import { defaultSealWorkers, runPass, type PassFile } from "./sealPool";
 import { BACKUP_DAMAGED_RETRY_MESSAGE, BACKUP_KEY_MISSING_RETRY_MESSAGE, unreadableKind, type UnreadableKind } from "./backupProblem";
 
@@ -567,12 +567,17 @@ export class BackupAtRest extends EventEmitter {
   /** {@link syncUnsealedAt} on the monotonic clock: a wall clock set back during the sync is noticed. */
   private readonly syncUnsealedMono = new Map<string, number>();
   /**
-   * Phones whose chain was PROVEN fully sealed (marker `encrypted`, verified by this app
-   * version, no pending flags) when the current C-DELTA sync started. Only for these may a
+   * Phones whose chain was PROVEN fully sealed (marker `encrypted`, proven under this seal
+   * format, no pending flags) when the current C-DELTA sync started. Only for these may a
    * clean end seal just the sync's delta and skip the verification walk (founder decision
    * 2026-10-10). In memory on purpose: a crash loses it, and the recovery walks.
    */
   private readonly walkSkipEligible = new Set<string>();
+  /**
+   * BACKLOG-3816 a1: why a phone is NOT eligible (set by recordWalkSkipEligibility), logged
+   * at the sync's end as the reason for a full walk. Codes and counts only.
+   */
+  private readonly walkSkipIneligible = new Map<string, { reasonCode: string; data?: Record<string, number> }>();
   /**
    * Plaintext files the sync's parse copy read whose mtime is older than the sync's unseal
    * time: not this sync's delta and not an unsealed index file, so a delta-only seal would
@@ -720,7 +725,9 @@ export class BackupAtRest extends EventEmitter {
   }
 
   private async setMarker(udid: string, state: BackupAtRestState, verifiedBy?: string): Promise<void> {
-    await this.deps.markers().writeBackupMarker(udid, state, verifiedBy ? { verifiedBy } : undefined);
+    await this.deps
+      .markers()
+      .writeBackupMarker(udid, state, verifiedBy ? { verifiedBy, sealFormat: SEAL_FORMAT_VERSION } : undefined);
   }
 
   private appVersion(): string {
@@ -1014,7 +1021,8 @@ export class BackupAtRest extends EventEmitter {
       }
     });
     if (result.stopped) report.paused = true;
-    if ((this.deps.workers ?? 0) > 0 && result.workersUsed === 0) {
+    // A pass with only 0-byte files starts no worker (sealPool b2): not a main-thread pass.
+    if ((this.deps.workers ?? 0) > 0 && result.workersUsed === 0 && listed.some((f) => f.size > 0)) {
       this.log("warn", "[BackupAtRest] the seal pass ran on the main thread (no seal worker started)", { phase, files: listed.length });
     }
     report.seen = new Set(listed.filter((_, i) => result.outcomes[i] !== undefined).map((f) => f.path));
@@ -1578,24 +1586,39 @@ export class BackupAtRest extends EventEmitter {
 
   /**
    * A clean end of this sync may seal only its delta (no walk) when, right now, the chain
-   * is PROVEN fully sealed: marker `encrypted`, verified by this app version (a full walk
-   * or a clean delta seal on top of one), no forced C-FULL, no tool failure pending, and
+   * is PROVEN fully sealed: marker `encrypted`, proven under the current seal format (a full
+   * walk or a clean delta seal on top of one), no forced C-FULL, no tool failure pending, and
    * this sync is C-DELTA. Anything else (or a marker that cannot be read) walks.
+   *
+   * BACKLOG-3816 a2: the proof is keyed to SEAL_FORMAT_VERSION, not the app version, so an
+   * update that does not change the seal format keeps it. A marker with `verifiedBy` and no
+   * `sealFormat` was written by 2.40.0-rc.1 / 2.41.0 (or a dev build between them); it reads as
+   * format 1, because every commit that changed the container layout, the classification or
+   * the walk's file set predates the first commit that wrote `verifiedBy`. A marker with
+   * neither (the 2.40 betas) proves nothing and walks.
    */
   private async recordWalkSkipEligibility(udid: string, strategy: BackupUnsealStrategy): Promise<void> {
     this.walkSkipEligible.delete(udid);
+    this.walkSkipIneligible.delete(udid);
     this.oldPlaintextSeen.delete(udid);
-    if (strategy !== "delta") return;
-    const record = await this.deps.markers().readBackupMarker(udid).catch(() => null);
-    if (
-      record?.state === "encrypted" &&
-      !record.nextStrategy &&
-      !record.reasonCode &&
-      !record.toolFailures &&
-      record.verifiedBy === this.appVersion()
-    ) {
-      this.walkSkipEligible.add(udid);
+    const no = (reasonCode: string, data?: Record<string, number>): void => {
+      this.walkSkipIneligible.set(udid, { reasonCode, ...(data ? { data } : {}) });
+    };
+    if (strategy !== "delta") return no("NOT_DELTA");
+    let record: BackupMarker | null;
+    try {
+      record = await this.deps.markers().readBackupMarker(udid);
+    } catch {
+      return no("MARKER_UNREADABLE");
     }
+    if (!record) return no("NO_MARKER");
+    if (record.state !== "encrypted") return no("NOT_ENCRYPTED");
+    if (record.nextStrategy || record.reasonCode) return no("NEXT_FULL");
+    if (record.toolFailures) return no("TOOL_FAILURES", { toolFailures: record.toolFailures });
+    const format = typeof record.sealFormat === "number" ? record.sealFormat : record.verifiedBy ? 1 : undefined;
+    if (format === undefined) return no("NO_PROOF");
+    if (format !== SEAL_FORMAT_VERSION) return no("FORMAT_CHANGED", { have: format, want: SEAL_FORMAT_VERSION });
+    this.walkSkipEligible.add(udid);
   }
 
   /** beginSync for a Keepr-managed chain; the caller holds the lock. */
@@ -1805,7 +1828,26 @@ export class BackupAtRest extends EventEmitter {
       opts.cleanEnd === true &&
       !opts.forceFullNext &&
       this.walkSkipEligible.has(session.udid);
+    // BACKLOG-3816 a1: say which path this sync's end takes, and why (codes and counts only).
+    // "delta" here means the delta seal is TRIED; sealDeltaOnly logs its own reason if it
+    // still falls back to the walk.
+    {
+      const why = (): { reasonCode: string; data?: Record<string, number> } => {
+        if (session.kind !== "keepr") return { reasonCode: "NOT_KEPT_CHAIN" };
+        if (session.strategy !== "delta") return { reasonCode: "NOT_DELTA" };
+        if (opts.forceFullNext) return { reasonCode: "TOOL_FAILED" };
+        if (opts.cleanEnd !== true) return { reasonCode: "NOT_CLEAN_END" };
+        return this.walkSkipIneligible.get(session.udid) ?? { reasonCode: "NO_ELIGIBILITY_RECORD" };
+      };
+      const reason = allowWalkSkip ? { reasonCode: "ELIGIBLE" } : why();
+      this.log("info", "[BackupAtRest] post-sync seal decision", {
+        mode: allowWalkSkip ? "delta" : "walk",
+        reasonCode: reason.reasonCode,
+        ...(reason.data ?? {}),
+      });
+    }
     this.walkSkipEligible.delete(session.udid);
+    this.walkSkipIneligible.delete(session.udid);
     if (opts.onChainListed) this.chainListedSink.set(session.udid, opts.onChainListed);
     try {
       this.busy.set(session.udid, "sealing");
@@ -1882,6 +1924,7 @@ export class BackupAtRest extends EventEmitter {
     if (session.kind === "none") return;
     this.pausedForSync.delete(session.udid);
     this.walkSkipEligible.delete(session.udid);
+    this.walkSkipIneligible.delete(session.udid);
     this.release(session.udid);
     this.log("info", "[BackupAtRest] sync stopped for a quit; the phone is released, the seal is left to the quit and the launch", {
       session: session.kind,
