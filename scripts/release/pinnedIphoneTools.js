@@ -101,7 +101,10 @@ function resourcesDirOf(appDir) {
  *    re-signed every file. Fails in unsigned builds too, so CI sees it without secrets.
  * 3. Copy, then check the destination against the manifest.
  */
-function placePinnedTools(resourcesDir, { sourceDir, manifest = loadManifest(), log = console.log } = {}) {
+function placePinnedTools(
+  resourcesDir,
+  { sourceDir, manifest = loadManifest(), log = console.log, copyFile = fs.copyFileSync } = {}
+) {
   const src = sourceDir || path.join(REPO, manifest.dir);
   const srcProblems = verifyDir(src, manifest);
   if (srcProblems.length) throw fail(`source ${src}`, srcProblems);
@@ -116,7 +119,7 @@ function placePinnedTools(resourcesDir, { sourceDir, manifest = loadManifest(), 
   }
   fs.mkdirSync(dest, { recursive: true });
   for (const name of [...Object.keys(manifest.files), ...(manifest.companions || [])]) {
-    fs.copyFileSync(path.join(src, name), path.join(dest, name));
+    copyFile(path.join(src, name), path.join(dest, name));
   }
   const destProblems = verifyDir(dest, manifest);
   if (destProblems.length) throw fail(`packaged ${dest}`, destProblems);

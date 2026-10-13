@@ -171,6 +171,17 @@ describe("BACKLOG-3814 pinned iPhone tools", () => {
       expect(existsSync(path.join(resources, "win"))).toBe(false);
     });
 
+    it("re-checks the copy it made (a corrupted copy fails)", () => {
+      const resources = tmp();
+      const copyFile = (from: string, to: string) => {
+        copyFileSync(from, to);
+        if (path.basename(to) === "libusb-1.0.dll") writeFileSync(to, "corrupted in transit");
+      };
+      expect(() => pinned.placePinnedTools(resources, { manifest, log: quiet, copyFile })).toThrow(
+        /packaged .*\n  sha256 mismatch: libusb-1\.0\.dll/
+      );
+    });
+
     it("CLI --packaged reads win-unpacked/resources and Keepr.app/Contents/Resources", () => {
       const win = tmp();
       pinned.placePinnedTools(path.join(win, "resources"), { manifest, log: quiet });
