@@ -5,6 +5,8 @@
 
 import { ipcMain, BrowserWindow } from "electron";
 import { MESSAGE_IMPORT_SUMMARY_SQL } from "../services/db/messageImportStatsSql";
+import type { MessageSourceStats } from "../services/db/messageSourceStatsDb";
+import { queryContacts } from "../workers/contactWorkerPool";
 import type { IpcMainInvokeEvent } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import logService from "../services/logService";
@@ -723,6 +725,39 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
         messageCount: result?.count ?? 0,
         lastImportAt: result?.last_import_at ?? null,
       };
+    }, { module: "MessageImportHandlers" }),
+  );
+
+  /**
+   * BACKLOG-3156 stage G: Settings > Messages "Stored on this computer" — texts,
+   * chats and the oldest text for macOS Messages, iPhone and Google Messages.
+   * Runs on the contact query worker, never on main: ~250 ms at 100k texts,
+   * measured (messageSourceStatsDb-3156 test). No main-thread fallback — when
+   * the worker is unavailable the panel shows dashes.
+   * IPC: messages:get-source-stats
+   */
+  ipcMain.handle(
+    "messages:get-source-stats",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      userId: string
+    ): Promise<{ success: boolean; stats?: MessageSourceStats; error?: string }> => {
+      if (typeof userId !== "string" || userId.length === 0) {
+        return { success: false, error: "userId required" };
+      }
+      if (!databaseService.isInitialized()) {
+        return { success: false, error: "Database not ready" };
+      }
+      try {
+        const rows = await queryContacts("messageSourceStats", userId, 30_000);
+        const stats = rows[0] as MessageSourceStats | undefined;
+        return stats ? { success: true, stats } : { success: false, error: "No result" };
+      } catch (error) {
+        logService.warn("[BACKLOG-3156] message source stats read failed", "MessageImportHandlers", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return { success: false, error: "Could not read stored counts" };
+      }
     }, { module: "MessageImportHandlers" }),
   );
 

@@ -3,6 +3,7 @@ import { ResponsiveModal } from "./common/ResponsiveModal";
 import { LLMSettings } from "./settings/LLMSettings";
 import { MacOSMessagesImportSettings } from "./settings/MacOSMessagesImportSettings";
 import { GoogleMessagesSettings } from "./settings/GoogleMessagesSettings";
+import { GoogleMessagesLinkProvider } from "./settings/android/googleMessagesLink";
 import { ImportSourceSettings } from "./settings/ImportSourceSettings";
 import { TextsLookbackSettings } from "./settings/TextsLookbackSettings";
 import { TextsLookbackProvider } from "./settings/textsLookback";
@@ -35,10 +36,10 @@ const SETTINGS_TABS = [
   { id: "settings-email", label: "Email" },
   { id: "settings-messages", label: "Messages" },
   // BACKLOG-3423: no "iPhone Sync" nav entry, for any user on any platform.
-  // The iPhone Sync SECTION below (#settings-iphone-sync, BACKLOG-1937's merge
-  // of "Sync Tools" + the iPhone USB toggle) stays on the page and stays
-  // reachable by scrolling — grayed out and disabled unless the import source
-  // is iPhone, so a user can see the feature exists and is currently off.
+  // BACKLOG-3156 stage G: the iPhone USB toggle now sits in the Messages
+  // section's iPhone pane (shown when iPhone is the selected source); the
+  // iPhone Sync SECTION below (#settings-iphone-sync) remains on Windows only,
+  // for the Apple driver tools, grayed out unless the import source is iPhone.
   { id: "settings-contacts", label: "Contacts" },
   { id: "settings-ai", label: "AI" },
   { id: "settings-security", label: "Security" },
@@ -58,10 +59,12 @@ interface SettingsComponentProps {
   onEmailDisconnected?: (provider: "google" | "microsoft", anyStillConnected?: boolean) => void;
   /** Settings › Google Messages' Link / Relink: the Sync Android modal at its link step. */
   onLinkGoogleMessages?: () => void;
+  /** BACKLOG-3156 stage G: the iPhone pane's "Import from iPhone" — the dashboard's iPhone sync. */
+  onImportIphone?: () => void;
 }
 
 /** Settings — tab container that delegates to focused sub-components. */
-function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected, onLinkGoogleMessages }: SettingsComponentProps) {
+function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected, onLinkGoogleMessages, onImportIphone }: SettingsComponentProps) {
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
   // BACKLOG-3423: lets a source change re-gate iPhone USB detection live.
@@ -228,11 +231,18 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             {/* BACKLOG-3156 stage F: one lookback value for the Messages AND
                 iPhone Sync sections — the picker can sit in either. */}
             <TextsLookbackProvider userId={userId}>
+            {/* BACKLOG-3156 stage G: one owner of the Google Messages link state
+                for the Sources card's Android row and the Google pane. */}
+            <GoogleMessagesLinkProvider>
             {/* Messages Import — adapts per active import source (BACKLOG-1458) */}
             <div id="settings-messages" className="mb-8">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Messages</h3>
               <div className="space-y-4">
-                <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} />
+                <ImportSourceSettings
+                  userId={userId}
+                  onSourceChange={handleImportSourceChange}
+                  onLinkGoogleMessages={onLinkGoogleMessages}
+                />
                 {/* BACKLOG-3892 S3: ONE "How far back to import texts" picker for
                     every source, on Mac and Windows. Founder QA 2026-10-12 /
                     BACKLOG-3156 stage F: it sits inside the live source panel's
@@ -240,43 +250,50 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                     only with no such panel is it this standalone card. Exactly
                     one renders. */}
                 {lookbackHome === 'standalone' && <TextsLookbackSettings userId={userId} />}
-                {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below.
-                    SR C6 (founder): the Android Companion panel is no longer mounted. */}
+                {/* BACKLOG-3156 stage G (founder approved 2026-10-13): one pane per
+                    selected source — Import Preferences, Stored on this computer,
+                    its actions. SR C6 (founder): the Android Companion panel is
+                    no longer mounted. */}
                 {activeImportSource === 'android-messages-web' ? (
                   /* BACKLOG-3659 P3d: Android with Google Messages (Keepr's
-                     extension): its status and its own reset. The source picker
-                     above shows it selected — so a Mac that skips its Messages
-                     (BACKLOG-1467) says why (BACKLOG-3749). */
+                     extension). Its link status and Link / Relink / Unlink are
+                     on the Android row of the Sources card above. */
                   <GoogleMessagesSettings
                     userId={userId}
-                    onOpenSyncAndroid={onLinkGoogleMessages}
                     lookbackPicker={
                       lookbackHome === 'google' ? <TextsLookbackSettings userId={userId} embedded /> : undefined
                     }
                   />
+                ) : activeImportSource === 'iphone-sync' ? (
+                  /* BACKLOG-1706 / BACKLOG-3156 stage G: the iPhone pane — the USB
+                     detection opt-in, what is stored from iPhone, and Import. */
+                  <IphoneSyncSettings
+                    userId={userId}
+                    onImportIphone={onImportIphone}
+                    lookbackPicker={
+                      lookbackHome === 'iphone' ? <TextsLookbackSettings userId={userId} embedded /> : undefined
+                    }
+                  />
                 ) : (
                   /* BACKLOG-2335: the macOS panel is live only for macos-native
-                     (an unknown stored value reads as that on a Mac, 3749);
-                     iPhone Sync greys it out and says why. */
+                     (an unknown stored value reads as that on a Mac, 3749). */
                   <MacOSMessagesImportSettings
                     userId={userId}
                     enabled={activeImportSource === 'macos-native'}
                     lookbackPicker={
                       lookbackHome === 'macos' ? <TextsLookbackSettings userId={userId} embedded /> : undefined
                     }
-                    disabledReason={
-                      activeImportSource === 'iphone-sync'
-                        ? 'Your message source is set to iPhone — switch to macOS above to import from Messages.'
-                        : undefined
-                    }
                   />
                 )}
               </div>
             </div>
+            </GoogleMessagesLinkProvider>
 
-            {/* iPhone Sync — merged USB toggle + (Windows) Apple driver tools (BACKLOG-1937).
-                Grayed out when the import source is not iPhone. */}
-            {(() => {
+            {/* iPhone Sync — the Windows Apple Mobile Device driver tools
+                (TASK-2277 / BACKLOG-1937). BACKLOG-3156 stage G: the USB toggle
+                moved into the Messages section's iPhone pane, so this section
+                is Windows-only. Grayed out when the import source is not iPhone. */}
+            {isWindows && (() => {
               const iphoneSourceActive = activeImportSource === 'iphone-sync';
               return (
                 <div id="settings-iphone-sync" className="mb-8">
@@ -293,15 +310,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                     </p>
                   )}
                   <div className="space-y-4">
-                    {/* BACKLOG-1706: iPhone-over-USB detection opt-in (off by default on macOS) */}
-                    <IphoneSyncSettings
-                      disabled={!iphoneSourceActive}
-                      lookbackPicker={
-                        lookbackHome === 'iphone' ? <TextsLookbackSettings userId={userId} embedded /> : undefined
-                      }
-                    />
-                    {/* Apple Mobile Device driver tools — Windows only (TASK-2277) */}
-                    {isWindows && <SyncToolsSettings disabled={!iphoneSourceActive} />}
+                    <SyncToolsSettings disabled={!iphoneSourceActive} />
                   </div>
                 </div>
               );

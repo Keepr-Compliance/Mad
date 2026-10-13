@@ -28,6 +28,23 @@ import logger from '../../utils/logger';
 import { IMPORT_SOURCE_LABELS, shownImportSource } from "./importSourceLabels";
 import { loadChosenImportSource } from "../../services/importSourcePolicy";
 import { WindowsArm64Unsupported } from "../iphone/WindowsArm64Unsupported";
+import { ConnectionControl } from "./ConnectionControl";
+import { FORGET_ASK, useGoogleMessagesLink } from "./android/googleMessagesLink";
+import { CHECKING_BROWSER } from "./android/browserLinkState";
+import { rcsImportService } from "../../services/rcsImportService";
+
+function formatWhen(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? new Date(t).toLocaleString() : "never";
+}
+
+/**
+ * BACKLOG-3156 stage G: a click inside one of these does not select the
+ * Android row — the kebab, its menu, Link, the Unlink confirm and the
+ * connection-details disclosure act on the link, not on the source.
+ */
+export const ROW_CLICK_IGNORE = "button,summary,details,[role=menu],[role=alert],label,input";
 
 // Re-export type for consumers
 export type { ImportSource } from "../../services/settingsService";
@@ -36,13 +53,18 @@ interface ImportSourceSettingsProps {
   userId: string;
   /** Callback when the user changes the import source (BACKLOG-1458) */
   onSourceChange?: (source: ImportSource) => void;
+  /**
+   * BACKLOG-3156 stage G: Link / Relink on the Android row open the SAME Sync
+   * Android modal the dashboard opens (Settings closes), at its link step.
+   */
+  onLinkGoogleMessages?: () => void;
 }
 
 /**
  * Import source settings.
  * Allows switching between macOS native import, iPhone sync, and Google Messages.
  */
-export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSettingsProps) {
+export function ImportSourceSettings({ userId, onSourceChange, onLinkGoogleMessages }: ImportSourceSettingsProps) {
   const { isMacOS, isWindowsArm64 } = usePlatform();
   // BACKLOG-3418: `null` = the user has chosen no source, so no radio is
   // checked (Windows/Linux). Clicking "iPhone Sync" is then a real change that
@@ -51,6 +73,10 @@ export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSet
   const [source, setSource] = useState<ImportSource | null>(isMacOS ? "macos-native" : null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // BACKLOG-3156 stage G: the Android row's link control reads the one shared
+  // link state (android/googleMessagesLink), the same the Google pane reads.
+  const link = useGoogleMessagesLink();
+  const [unlinkAsk, setUnlinkAsk] = useState(false);
 
   // Load preference on mount, falling back to phoneType-based default
   useEffect(() => {
@@ -183,7 +209,9 @@ export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSet
               </label>
             )}
 
-            {/* Radio: iPhone Sync */}
+            {/* Radio: iPhone Sync. BACKLOG-3156 stage G: its "To use iPhone
+                Sync" steps (or, on Windows on ARM, why it cannot work —
+                BACKLOG-3363) sit INSIDE this card, only while it is selected. */}
             <label
               className={`flex items-start gap-3 p-3 bg-white rounded border cursor-pointer transition-all ${
                 source === "iphone-sync"
@@ -207,54 +235,150 @@ export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSet
                 <div className="text-xs text-gray-500">
                   Sync from a connected iPhone{isMacOS ? " (same as Windows experience)" : " via backup"}
                 </div>
+                {source === "iphone-sync" && isWindowsArm64 && (
+                  <div className="mt-2">
+                    <WindowsArm64Unsupported variant="compact" />
+                  </div>
+                )}
+                {source === "iphone-sync" && !isWindowsArm64 && (
+                  <div className="mt-2 p-3 bg-blue-50 rounded text-xs text-blue-700" data-testid="iphone-sync-steps">
+                    <p className="font-medium mb-1">To use iPhone Sync:</p>
+                    <ol className="list-decimal list-inside space-y-1">
+                      <li>Connect your iPhone to this {isMacOS ? "Mac" : "PC"} via USB</li>
+                      <li>Trust this computer on your iPhone if prompted</li>
+                      <li>Click "Import from iPhone" to sync messages</li>
+                    </ol>
+                  </div>
+                )}
               </div>
             </label>
 
-            {/* Radio: Android with Google Messages (BACKLOG-3659) */}
-            <label
-              className={`flex items-start gap-3 p-3 bg-white rounded border cursor-pointer transition-all ${
+            {/* Android with Google Messages (BACKLOG-3659). BACKLOG-3156 stage G:
+                the row carries the email-style connection control, so it is a
+                div with the radio in a nested label — a click on the control,
+                its menu, the Unlink confirm or the details disclosure must not
+                select this source (ROW_CLICK_IGNORE). A click anywhere else on
+                the row selects it, like the label rows above. */}
+            <div
+              data-testid="import-source-android-row"
+              onClick={(e) => {
+                if (saving || source === "android-messages-web") return;
+                const target = e.target as Element | null;
+                if (target?.closest?.(ROW_CLICK_IGNORE)) return;
+                void handleSourceChange("android-messages-web");
+              }}
+              className={`p-3 bg-white rounded border cursor-pointer transition-all ${
                 source === "android-messages-web"
-                  ? "border-indigo-500 ring-1 ring-indigo-500"
+                  ? "border-blue-500 ring-1 ring-blue-500"
                   : "border-gray-200 hover:border-gray-300"
               } ${saving ? "opacity-50 cursor-not-allowed" : ""}`}
             >
-              <input
-                type="radio"
-                name="importSource"
-                value="android-messages-web"
-                checked={source === "android-messages-web"}
-                onChange={() => handleSourceChange("android-messages-web")}
-                disabled={saving}
-                className="mt-0.5 w-5 h-5"
-              />
-              <div>
-                <div className="text-sm font-medium text-gray-900">
-                  {IMPORT_SOURCE_LABELS["android-messages-web"]}
-                </div>
-                <div className="text-xs text-gray-500">
-                  Includes RCS chats. Keepr reads them through a small Chrome extension.
+              <div className="flex items-start justify-between gap-3">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="importSource"
+                    value="android-messages-web"
+                    checked={source === "android-messages-web"}
+                    onChange={() => handleSourceChange("android-messages-web")}
+                    disabled={saving}
+                    className="mt-0.5 w-5 h-5"
+                  />
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">
+                      {IMPORT_SOURCE_LABELS["android-messages-web"]}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Includes RCS chats. Keepr reads them through a small Chrome extension.
+                    </div>
+                  </div>
+                </label>
+                <div className="shrink-0">
+                  <ConnectionControl
+                    state={link.linkView === "checking" ? "checking" : link.linkView === "linked" ? "connected" : "disconnected"}
+                    testIdBase="gm-connection"
+                    checkingContent={
+                      <span className="inline-flex items-center gap-2" role="status">
+                        <span className="w-3.5 h-3.5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" aria-hidden="true" />
+                        {CHECKING_BROWSER}
+                      </span>
+                    }
+                    connectLabel="Link"
+                    onConnect={() => onLinkGoogleMessages?.()}
+                    connectDisabled={!onLinkGoogleMessages}
+                    menuAriaLabel="Google Messages connection options"
+                    menuItems={[
+                      {
+                        label: "Relink",
+                        ariaLabel: "Relink Google Messages",
+                        onSelect: () => onLinkGoogleMessages?.(),
+                        testId: "gm-connection-relink",
+                        disabled: !onLinkGoogleMessages,
+                      },
+                      {
+                        label: "Unlink",
+                        ariaLabel: "Unlink Google Messages",
+                        onSelect: () => setUnlinkAsk(true),
+                        testId: "gm-connection-unlink",
+                        tone: "destructive",
+                      },
+                    ]}
+                  />
                 </div>
               </div>
-            </label>
-          </div>
 
-          {/* Show iPhone instructions when that source is selected */}
-          {/* BACKLOG-3363: Windows on ARM — no connect/Trust steps; they can't work. */}
-          {source === "iphone-sync" && isWindowsArm64 && (
-            <div className="mt-3">
-              <WindowsArm64Unsupported variant="compact" />
+              {unlinkAsk && (
+                <div className="flex items-center justify-between gap-3 mt-2 ml-8" role="alert" data-testid="gm-forget-confirm">
+                  <span className="text-sm text-gray-900">{FORGET_ASK}</span>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      className="text-sm text-indigo-700 hover:text-indigo-900 font-medium"
+                      onClick={() => setUnlinkAsk(false)}
+                      data-testid="gm-forget-cancel"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded transition-all"
+                      onClick={() => {
+                        setUnlinkAsk(false);
+                        void rcsImportService.linkForget().then(() => link.refresh());
+                      }}
+                      data-testid="gm-forget-yes"
+                    >
+                      Unlink
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Today's diagnostic lines, collapsed; only while Android is the
+                  selected source (founder approved 2026-10-13). */}
+              {source === "android-messages-web" && (
+                <details className="group mt-2 ml-8" data-testid="gm-connection-details">
+                  <summary className="list-none [&::-webkit-details-marker]:hidden text-xs text-indigo-700 hover:text-indigo-900 font-medium inline-flex items-center gap-1 cursor-pointer">
+                    <span className="inline-block text-[10px] transition-transform group-open:rotate-90" aria-hidden="true">&#9654;</span> Show connection details
+                  </summary>
+                  <div className="mt-2 space-y-1 text-sm text-gray-700">
+                    {link.loading ? (
+                      <div className="text-xs text-gray-500">Loading…</div>
+                    ) : (
+                      <>
+                        <div data-testid="gm-settings-extension">
+                          Keepr extension: {link.state?.extensionVersion ? `installed (version ${link.state.extensionVersion})` : "not installed yet"}
+                        </div>
+                        <div>Google Messages connected: {link.state?.pairedAt ? "yes" : "not yet"}</div>
+                        <div>Last sync: {formatWhen(link.state?.lastCacheFinishedAt)}</div>
+                        <p className="text-xs text-gray-600 pt-1">To sync, click Sync Android on the dashboard.</p>
+                      </>
+                    )}
+                  </div>
+                </details>
+              )}
             </div>
-          )}
-          {source === "iphone-sync" && !isWindowsArm64 && (
-            <div className="mt-3 p-3 bg-blue-50 rounded text-xs text-blue-700">
-              <p className="font-medium mb-1">To use iPhone Sync:</p>
-              <ol className="list-decimal list-inside space-y-1">
-                <li>Connect your iPhone to this {isMacOS ? "Mac" : "PC"} via USB</li>
-                <li>Trust this computer on your iPhone if prompted</li>
-                <li>Click "Import from iPhone" to sync messages</li>
-              </ol>
-            </div>
-          )}
+          </div>
         </>
       )}
     </div>

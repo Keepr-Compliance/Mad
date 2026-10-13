@@ -43,14 +43,8 @@ import { ResponsiveModal } from "../common/ResponsiveModal";
  * the rendered DOM as well, because a constant only helps for as long as the
  * next cell added uses it.
  */
-const STORED_CELL = {
-  on: "p-2 rounded border bg-white border-gray-200",
-  off: "p-2 rounded border bg-gray-50 border-gray-200 opacity-50",
-  countOn: "text-lg font-semibold text-gray-900",
-  countOff: "text-lg font-semibold text-gray-400",
-  labelOn: "text-xs text-gray-500",
-  labelOff: "text-xs text-gray-400",
-} as const;
+// BACKLOG-3156 stage G: shared with the Messages "Stored on this computer" blocks.
+import { STORED_CELL } from "./storedCell";
 import { ImportInfoPopover } from "./ImportInfoPopover";
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';

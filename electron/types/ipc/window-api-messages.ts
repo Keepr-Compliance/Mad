@@ -22,6 +22,7 @@ import type { ImportPlanOverride } from "../../services/importPlan";
 // spell the union by hand and omitted "querying", a phase the producer has
 // always emitted.
 import type { ImportPhase } from "./importPhase";
+import type { MessageSourceStats } from "../../services/db/messageSourceStatsDb";
 
 export type { AttachmentsRefusedForSpace, ImportPlanOverride };
 
@@ -276,6 +277,12 @@ export interface WindowApiMessages {
     success: boolean;
     messageCount?: number;
     lastImportAt?: string | null;
+    error?: string;
+  }>;
+  /** BACKLOG-3156 stage G: texts / chats / oldest text stored per messages source. */
+  getSourceStats: (userId: string) => Promise<{
+    success: boolean;
+    stats?: MessageSourceStats;
     error?: string;
   }>;
   /**

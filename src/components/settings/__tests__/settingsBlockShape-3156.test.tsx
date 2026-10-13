@@ -603,6 +603,12 @@ describe("BACKLOG-3156 stage E — Messages (macOS)", () => {
             description:
               "Import messages from the macOS Messages app to enable linking with your transactions.",
           },
+          // BACKLOG-3156 stage G: block 3 on every messages pane.
+          {
+            testId: "messages-block-stored",
+            label: "Stored on this computer",
+            description: null,
+          },
         ],
         "messages-block-actions",
         null,
@@ -847,6 +853,12 @@ describe("BACKLOG-3156 stage F — Messages (Google)", () => {
             label: "Import Preferences",
             description: null,
           },
+          // BACKLOG-3156 stage G: block 3 on every messages pane.
+          {
+            testId: "gm-block-stored",
+            label: "Stored on this computer",
+            description: null,
+          },
         ],
         "gm-block-actions",
         null,
@@ -891,9 +903,13 @@ describe("BACKLOG-3156 stage F — Messages (Google)", () => {
 });
 
 describe("BACKLOG-3156 stage F — Messages (iPhone)", () => {
-  it("has one Import Preferences card", async () => {
+  it("has Import Preferences and Stored on this computer cards, and bare actions", async () => {
     const { container } = render(
-      <IphoneSyncSettings lookbackPicker={<TextsLookbackSettings userId="u" embedded />} />,
+      <IphoneSyncSettings
+        userId="u"
+        onImportIphone={() => undefined}
+        lookbackPicker={<TextsLookbackSettings userId="u" embedded />}
+      />,
     );
     await screen.findByTestId("iphone-block-preferences");
 
@@ -908,8 +924,14 @@ describe("BACKLOG-3156 stage F — Messages (iPhone)", () => {
             label: "Import Preferences",
             description: null,
           },
+          // BACKLOG-3156 stage G: block 3 on every messages pane.
+          {
+            testId: "iphone-block-stored",
+            label: "Stored on this computer",
+            description: null,
+          },
         ],
-        null,
+        "iphone-block-actions",
         null,
       ),
     );
@@ -943,6 +965,47 @@ describe("BACKLOG-3156 stage F — Messages (iPhone)", () => {
   });
 });
 
+describe("BACKLOG-3156 stage G — every messages pane has the three blocks", () => {
+  /**
+   * Founder approved 2026-10-13: each source pane = Import Preferences +
+   * Stored on this computer + its actions. Enumerated per pane, so a pane that
+   * drops its Stored block (or never gets one) fails here by name.
+   */
+  beforeEach(() => {
+    (window.api.messages.getImportStatus as jest.Mock).mockResolvedValue({ success: true, messageCount: 0, lastImportAt: null });
+    (window.api.messages.getEffectiveImportWindow as jest.Mock).mockResolvedValue({
+      success: true, effectiveCutoffISO: null, source: "lookback-pref", lookbackMonths: 3,
+    });
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue({ success: true, count: 10, filteredCount: 10 });
+  });
+
+  it.each([
+    ["macOS", "messages"],
+    ["Google", "gm"],
+    ["iPhone", "iphone"],
+  ])("%s pane: preferences, stored, actions", async (pane, prefix) => {
+    if (pane === "macOS") {
+      render(
+        <PlatformProvider>
+          <MacOSMessagesImportSettings userId="u" enabled />
+        </PlatformProvider>,
+      );
+    } else if (pane === "Google") {
+      render(<GoogleMessagesSettings userId="u" />);
+    } else {
+      render(<IphoneSyncSettings userId="u" onImportIphone={() => undefined} />);
+    }
+    await waitFor(() => expect(screen.getByTestId(`${prefix}-block-actions`)).toBeInTheDocument());
+    const missing = ["preferences", "stored", "actions"].filter((b) => !screen.queryByTestId(`${prefix}-block-${b}`));
+    expect(`${pane} pane blocks missing: ${JSON.stringify(missing)}`).toBe(`${pane} pane blocks missing: []`);
+    expect(within(screen.getByTestId(`${prefix}-block-stored`)).getAllByText(/^(texts|chats|oldest text)$/).map((n) => n.textContent)).toEqual([
+      "texts",
+      "chats",
+      "oldest text",
+    ]);
+  });
+});
+
 describe("BACKLOG-3156 stage E — the four screens agree", () => {
   /**
    * THE POINT OF THE SUITE. Every block card collected above must carry the
@@ -964,8 +1027,11 @@ describe("BACKLOG-3156 stage E — the four screens agree", () => {
       "Emails #1",
       "Messages (Android) #0",
       "Messages (Google) #0",
+      "Messages (Google) #1",
       "Messages (iPhone) #0",
+      "Messages (iPhone) #1",
       "Messages (macOS) #0",
+      "Messages (macOS) #1",
       "Messages (sources) #0",
     ]);
 

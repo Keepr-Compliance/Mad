@@ -500,14 +500,16 @@ describe("ImportSourceSettings", () => {
       expect(macosLabel).not.toHaveClass("border-blue-500");
     });
 
-    it("should show the indigo border on Google Messages when selected", async () => {
+    // BACKLOG-3156 stage G: the approved mock gives every selected row the same
+    // blue ring; the Android row is a div (its control must not toggle a label).
+    it("should show the blue border on Google Messages when selected", async () => {
       const user = userEvent.setup();
       render(<ImportSourceSettings userId={mockUserId} />);
 
       const gmRadio = await screen.findByRole("radio", { name: /android: google messages/i });
       await user.click(gmRadio);
 
-      expect(screen.getByText("Android: Google Messages").closest("label")).toHaveClass("border-indigo-500");
+      expect(screen.getByTestId("import-source-android-row")).toHaveClass("border-blue-500", "ring-1", "ring-blue-500");
     });
   });
 });

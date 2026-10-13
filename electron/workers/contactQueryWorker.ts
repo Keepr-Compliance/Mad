@@ -44,6 +44,7 @@ import { readTransactionTextThreadsOn } from "../services/db/transactionTextPagi
 import { ADDRESS_MATCH_CANDIDATE_PARAM_COUNT, classifyAddressMatchCandidatesOn } from "../services/db/addressMatchCandidatesDb";
 import type { NormalizedAddress } from "../utils/addressNormalization";
 import { runMessageRosterOn } from "../services/db/messageRosterDb";
+import { readMessageSourceStatsOn } from "../services/db/messageSourceStatsDb";
 import {
   planCommunicationDatesOn,
   runMessageDerivedQueryOn,
@@ -63,6 +64,8 @@ type QueryType =
   | "messageDerived"
   | "commDatesPlan"
   | "sourceCoverageFloors"
+  // BACKLOG-3156 stage G: Settings > Messages "Stored on this computer" (messageSourceStatsDb.ts).
+  | "messageSourceStats"
   // BACKLOG-3884: the Texts tab's conversation list (every linked text of one deal).
   | "transactionTextThreads"
   // BACKLOG-3837: the Attach Messages roster (every unlinked text of the user).
@@ -332,6 +335,10 @@ parentPort?.on("message", (msg: WorkerMessage) => {
       // BACKLOG-3837: the audit coverage check's per-source floors (every text row).
       if (!db) throw new Error("Database not initialized");
       rows = runSourceFloorsOn(db, queryMsg.userId);
+    } else if (queryMsg.type === "messageSourceStats") {
+      // BACKLOG-3156 stage G: ~250 ms at 100k texts on main, measured — so here.
+      if (!db) throw new Error("Database not initialized");
+      rows = [readMessageSourceStatsOn(db, queryMsg.userId)];
     } else if (queryMsg.type === "candidateEmails") {
       // BACKLOG-3883: the auto-link candidate-email read (every email of the user in the
       // deal's window, joined to its participants, bodies included); off the main thread.
