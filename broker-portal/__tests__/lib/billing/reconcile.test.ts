@@ -572,12 +572,28 @@ describe('non-Stripe overrides (RC-5): mirror the grant RPC refusal', () => {
     expect(alerts('reconcile_mismatch')).toEqual([]);
   });
 
-  it('forward: support override present but not enabled -> counted as blocked, no grant call, no mismatch alert', async () => {
+  it('forward: support override present but disabled -> overrideBlocked, no grant call, one alert', async () => {
     renewalUser({ source: 'support', enabled: false });
     const r = await reconcileAgentSubscriptions(deps());
     expect(r).toMatchObject({ regrantAttempted: 0, mismatches: 0, overrideBlocked: 1 });
     expect(grants()).toEqual([]);
     expect(stripeCalls.filter((c) => c.op === 'invoices.retrieve')).toEqual([]);
+    expect(alerts('reconcile_mismatch')).toHaveLength(1);
+  });
+
+  it('forward: enabled support override with expired paid_through -> overrideBlocked, one alert', async () => {
+    renewalUser({ source: 'support', enabled: true, paid_through: '2026-01-01T00:00:00.000Z' });
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(r).toMatchObject({ regrantAttempted: 0, mismatches: 0, overrideBlocked: 1 });
+    expect(grants()).toEqual([]);
+    expect(alerts('reconcile_mismatch')).toHaveLength(1);
+  });
+
+  it('forward: support override with no `enabled` key -> in sync (absent counts as enabled), no alert', async () => {
+    renewalUser({ source: 'support', paid_through: future });
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(r).toMatchObject({ regrantAttempted: 0, mismatches: 0, overrideBlocked: 0 });
+    expect(grants()).toEqual([]);
     expect(alerts('reconcile_mismatch')).toEqual([]);
   });
 

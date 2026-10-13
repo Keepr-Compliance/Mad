@@ -29,7 +29,7 @@
  *    such an override exists, whatever `enabled` says (`non_stripe_override`),
  *    so forward never calls `handleInvoicePaid` for that user. Enabled = held
  *    by support, in sync. Not enabled = a paying agent blocked by a dead manual
- *    override: logged and counted in `overrideBlocked`, not a mismatch alert.
+ *    override that is disabled or expired: counted in `overrideBlocked` and alerted (separate from `mismatches`).
  *  - Never `handleSubscriptionEvent` or `syncSubscription(..., { advanceCursor:
  *    true })`: a synthetic event must not move the webhook's ordering cursor.
  *
@@ -51,7 +51,7 @@ import { getPersonalOrganization, getStripeCustomer } from './customers';
 import type { StripeMode } from './mode';
 import { parseRunAfter, OUTBOX_STALE_AFTER_MS } from './outbox';
 import { END_NOW_KIND } from './endPlanNow';
-import { isNonStripeOverride, type UnlimitedOverride } from './agentPlan';
+import { isNonStripeOverride, overrideEffective, type UnlimitedOverride } from './agentPlan';
 import { handleInvoicePaid, listAll, OPEN_STATUSES, revokeIfCurrent, stripeId, type BillingContext } from './sync';
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
@@ -191,8 +191,12 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
       if (stripeOverrideEffective(override, now)) continue;
       if (isNonStripeOverride(override as UnlimitedOverride | undefined)) {
         // The grant RPC refuses non_stripe_override whatever `enabled` says.
-        if ((override as { enabled?: unknown } | null)?.enabled === true) continue; // held by support: in sync
+        // Held by support (in sync) only while the override is effective and not disabled; an absent
+        // `enabled` counts as enabled, matching COALESCE(enabled, true) in check_feature_access.
+        const held = overrideEffective(override as UnlimitedOverride, now) && (override as { enabled?: unknown } | null)?.enabled !== false;
+        if (held) continue;
         result.overrideBlocked++;
+        mismatchIds.push(sub.id);
         console.warn(`[billing/reconcile] forward ${sub.id}: open subscription blocked by a non-Stripe override that is not enabled`);
         continue;
       }
@@ -263,7 +267,7 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
     }
   }
 
-  if (result.mismatches > 0 || result.truncated) {
+  if (result.mismatches > 0 || result.overrideBlocked > 0 || result.truncated) {
     billingAlert('reconcile_mismatch', deps.mode, {
       mismatches: result.mismatches,
       regrant_attempted: result.regrantAttempted,
