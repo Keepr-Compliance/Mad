@@ -1,0 +1,84 @@
+{
+  "id": "cus_VQorwf3sdrkZlt",
+  "object": "customer",
+  "address": null,
+  "balance": 0,
+  "created": 1791865332,
+  "currency": "usd",
+  "customer_account": null,
+  "default_source": null,
+  "delinquent": true,
+  "description": null,
+  "discount": null,
+  "email": "spike3848pr1@example.invalid",
+  "invoice_prefix": "NLGHUB5B",
+  "invoice_settings": {
+    "custom_fields": null,
+    "default_payment_method": {
+      "id": "pm_1UPxEABg3cyTef3do5mVLY8t",
+      "object": "payment_method",
+      "allow_redisplay": "unspecified",
+      "billing_details": {
+        "address": {
+          "city": null,
+          "country": null,
+          "line1": null,
+          "line2": null,
+          "postal_code": null,
+          "state": null
+        },
+        "email": null,
+        "name": null,
+        "phone": null,
+        "tax_id": null
+      },
+      "card": {
+        "brand": "visa",
+        "checks": {
+          "address_line1_check": null,
+          "address_postal_code_check": null,
+          "cvc_check": "pass"
+        },
+        "country": "US",
+        "display_brand": "visa",
+        "exp_month": 10,
+        "exp_year": 2027,
+        "fingerprint": "cSxOgnRMhxzsri1K",
+        "funding": "credit",
+        "generated_from": null,
+        "last4": "4242",
+        "networks": {
+          "available": [
+            "visa"
+          ],
+          "preferred": null
+        },
+        "regulated_status": "unregulated",
+        "three_d_secure_usage": {
+          "supported": true
+        },
+        "wallet": null
+      },
+      "created": 1791865334,
+      "customer": "cus_VQorwf3sdrkZlt",
+      "customer_account": null,
+      "livemode": false,
+      "metadata": {},
+      "shared_payment_granted_token": null,
+      "type": "card"
+    },
+    "footer": null,
+    "rendering_options": null
+  },
+  "livemode": false,
+  "metadata": {
+    "user_id": "USER-3848-PR1"
+  },
+  "name": "Spike PR1",
+  "next_invoice_sequence": 3,
+  "phone": null,
+  "preferred_locales": [],
+  "shipping": null,
+  "tax_exempt": "none",
+  "test_clock": "clock_1UPxE8Bg3cyTef3d5tfjbAK4"
+}

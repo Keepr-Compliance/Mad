@@ -1,5 +1,6 @@
 /**
- * The Billing page body — BACKLOG-3844, Agent plan blocks 1 and 2 by BACKLOG-3847.
+ * The Billing page body — BACKLOG-3844, Agent plan blocks 1 and 2 by BACKLOG-3847,
+ * personal blocks 4–6 and the payment-failed banner by BACKLOG-3848.
  *
  * Renders exactly the blocks `caps.blocks` lists, in that order. No Stripe call
  * here: the route reads everything and passes plain data. Synchronous.
@@ -12,6 +13,8 @@ import { SeatsBlock } from './SeatsBlock';
 import { CreditsBlock } from './CreditsBlock';
 import { PaymentContactBlock } from './PaymentContactBlock';
 import { InvoicesBlock } from './InvoicesBlock';
+import { PaymentFailedBanner } from './PaymentFailedBanner';
+import type { PersonalBillingData } from '@/lib/billing/personalBilling';
 
 export interface PlanPrice {
   id: string;
@@ -30,6 +33,10 @@ export interface PersonalPlanData {
   sessionId: string | null;
   /** The last Checkout payment did not go through (an `incomplete` subscription). */
   paymentIncomplete?: boolean;
+  /** BACKLOG-3848: blocks 4–6 (credits, card, contact, receipts/invoices). */
+  billing?: PersonalBillingData;
+  /** licenses.status = suspended (agentPlan view). Copy only; access stays with 3878. */
+  suspended?: boolean;
 }
 
 export interface BillingPageProps {
@@ -47,6 +54,9 @@ function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
 }
 
 export function BillingPage({ caps, orgBillingSetUp, personal }: BillingPageProps) {
+  // Blocks 4–6 are filled for a personal page only; organization pages keep the frame (3855).
+  const b = caps.kind === 'personal' ? personal?.billing : undefined;
+  const suspended = personal?.suspended === true;
   const render = (block: BillingBlock) => {
     switch (block) {
       case 'plan':
@@ -56,16 +66,22 @@ export function BillingPage({ caps, orgBillingSetUp, personal }: BillingPageProp
       case 'seats':
         return <SeatsBlock key={block} />;
       case 'credits':
-        return <CreditsBlock key={block} />;
+        return <CreditsBlock key={block} data={b && personal ? { balance: b.credits, state: personal.state, suspended } : undefined} />;
       case 'payment':
-        return <PaymentContactBlock key={block} />;
+        return (
+          <PaymentContactBlock
+            key={block}
+            data={b && personal ? { billing: b, state: personal.state, interval: personal.interval, suspended } : undefined}
+          />
+        );
       case 'invoices':
-        return <InvoicesBlock key={block} />;
+        return <InvoicesBlock key={block} data={b && personal ? { rows: b.rows, state: personal.state } : undefined} />;
     }
   };
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <h1 className="text-2xl font-semibold text-gray-900">Billing</h1>
+      {b && personal?.state === 'payment_failed' ? <PaymentFailedBanner card={b.card} invoice={b.failedInvoice} /> : null}
       {caps.blocks.map(render)}
     </div>
   );

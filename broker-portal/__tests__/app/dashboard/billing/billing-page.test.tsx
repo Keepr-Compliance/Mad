@@ -23,6 +23,8 @@ import {
 
 const mockEmulator = createPostgrestEmulator();
 const mockGetUser = jest.fn();
+// BACKLOG-3848: get_credit_balance on the SESSION client (recorded with its args).
+const mockSessionRpc = jest.fn();
 let mockReadFails = false;
 let mockCookie: string | undefined;
 let mockSessionRow: Record<string, unknown> | null = null;
@@ -40,6 +42,7 @@ jest.mock('next/headers', () => ({
 jest.mock('@/lib/supabase/server', () => ({
   createClient: jest.fn(async () => ({
     auth: { getUser: mockGetUser },
+    rpc: (...a: unknown[]) => mockSessionRpc(...a),
     from: (table: string) => {
       const chain = mockEmulator.from(table);
       if (mockReadFails && table === 'organization_members') {
@@ -57,8 +60,10 @@ jest.mock('@/lib/supabase/server', () => ({
  * Agent plan reads, only after the page admitted the caller) goes to an
  * argument-applying BillingDb.
  */
+const mockServiceRpc = jest.fn(async () => ({ data: 999, error: null }));
 jest.mock('@/lib/supabase/service', () => ({
   createServiceClient: jest.fn(() => ({
+    rpc: (...a: unknown[]) => mockServiceRpc(...(a as [])),
     from: (table: string) => {
       mockServiceTables.push(table);
       if (table !== 'impersonation_sessions') return mockBillingDb.from(table);
@@ -77,9 +82,32 @@ jest.mock('@/lib/supabase/service', () => ({
 
 // BACKLOG-3847: the Agent prices, from the TEST lookup-key list (fixtures/stripe/p3847).
 const mockPricesList = jest.fn();
+// BACKLOG-3848: every Stripe method the page may reach, each a resolving recorder, so a
+// call the page must never make (customers.create) RUNS and is counted instead of
+// throwing a TypeError that the fail-soft reads would swallow.
+const mockStripe = {
+  customersRetrieve: jest.fn(),
+  customersCreate: jest.fn(),
+  customersUpdate: jest.fn(),
+  subscriptionsRetrieve: jest.fn(),
+  invoicesList: jest.fn(),
+  chargesList: jest.fn(),
+  paymentMethodsRetrieve: jest.fn(),
+};
 jest.mock('stripe', () => ({
   __esModule: true,
-  default: jest.fn().mockImplementation(() => ({ prices: { list: (...a: unknown[]) => mockPricesList(...a) } })),
+  default: jest.fn().mockImplementation(() => ({
+    prices: { list: (...a: unknown[]) => mockPricesList(...a) },
+    customers: {
+      retrieve: (...a: unknown[]) => mockStripe.customersRetrieve(...a),
+      create: (...a: unknown[]) => mockStripe.customersCreate(...a),
+      update: (...a: unknown[]) => mockStripe.customersUpdate(...a),
+    },
+    subscriptions: { retrieve: (...a: unknown[]) => mockStripe.subscriptionsRetrieve(...a) },
+    invoices: { list: (...a: unknown[]) => mockStripe.invoicesList(...a) },
+    charges: { list: (...a: unknown[]) => mockStripe.chargesList(...a) },
+    paymentMethods: { retrieve: (...a: unknown[]) => mockStripe.paymentMethodsRetrieve(...a) },
+  })),
 }));
 // The page renders the Agent plan buttons; their server actions are not under test here.
 jest.mock('@/lib/actions/agentPlan', () => ({
@@ -190,6 +218,10 @@ const FX3847 = path.join(__dirname, '../../../fixtures/stripe/p3847');
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const fx3847 = (n: string): any => JSON.parse(fs.readFileSync(path.join(FX3847, `${n}.json`), 'utf8'));
 const PRICES_LIST = fx3847('prices-list-lookup');
+const FX3848 = path.join(__dirname, '../../../fixtures/stripe/p3848');
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const fx3848 = (n: string): any => JSON.parse(fs.readFileSync(path.join(FX3848, `${n}.json`), 'utf8'));
+const stripeCalls = () => Object.values(mockStripe).reduce((n, f) => n + f.mock.calls.length, 0);
 
 const OLD_FLAG = process.env.BILLING_ENABLED;
 const OLD_SECRET = process.env.IMPERSONATION_COOKIE_SECRET;
@@ -214,6 +246,13 @@ beforeEach(() => {
   process.env.STRIPE_SECRET_KEY = 'sk_test_fixture';
   mockBillingDb = new BillingDb({ organizations: [{ id: FIXTURE_PERSONAL_ORG_ID, personal_owner_user_id: FIXTURE_USER_ID, is_test: true }] });
   mockPricesList.mockResolvedValue(PRICES_LIST);
+  mockSessionRpc.mockResolvedValue({ data: 0, error: null });
+  mockStripe.customersCreate.mockResolvedValue({ id: 'cus_EDITED_created', object: 'customer' });
+  mockStripe.customersRetrieve.mockResolvedValue(fx3848('cus-expand-pm'));
+  mockStripe.subscriptionsRetrieve.mockResolvedValue(fx3848('sub-pastdue-expand-pm'));
+  mockStripe.invoicesList.mockResolvedValue(fx3848('invoices-list-after-pay'));
+  mockStripe.chargesList.mockResolvedValue(fx3848('charges-list-after-pay'));
+  mockStripe.paymentMethodsRetrieve.mockResolvedValue(fx3848('pm-good'));
 });
 
 // ---------------------------------------------------------------------------
@@ -246,7 +285,8 @@ describe('R1: the page refuses on its own', () => {
     [
       'personal-org owner',
       [personalMembership()],
-      ['Your plan', 'Choose a plan', 'Credits', 'Payment method & billing contact', 'Invoices'],
+      // BACKLOG-3848: pay as you go reads "Receipts".
+      ['Your plan', 'Choose a plan', 'Credits', 'Payment method & billing contact', 'Receipts'],
       'Solo, pay as you go',
     ],
     ['brokerage broker', [brokerageMembership('broker')], ['Your plan', 'Seats & licenses'], 'Managed by Keepr'],
@@ -579,5 +619,178 @@ describe('3847: personal plan blocks', () => {
     expect(eqValue(subRead, 'user_id')).toBe(FIXTURE_USER_ID);
     expect(eqValue(subRead, 'stripe_mode')).toBe('test');
     expect(mockBillingDb.calls.filter((c) => c.op !== 'select')).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3848 — blocks 4–6 and the payment-failed banner (read only).
+// Stripe objects: fixtures/stripe/p3848 (TEST producers, README).
+// ---------------------------------------------------------------------------
+
+describe('3848: credits, payment & contact, receipts / invoices', () => {
+  const SIGN_IN = 'billing-fixture-3844@fixture.example.test';
+  const CUS = fx3848('cus-expand-pm');
+  const SUB = fx3848('sub-pastdue-expand-pm');
+
+  function seedCustomer(over: Record<string, unknown> = {}): void {
+    mockBillingDb.rows('stripe_customers').push({
+      user_id: FIXTURE_USER_ID,
+      stripe_customer_id: CUS.id,
+      stripe_mode: 'test',
+      default_payment_method_id: null,
+      ...over,
+    });
+  }
+  /** Mirror row from the TEST re-fetch, as the webhook writes it (mirrorState). */
+  function seedMirror(sub: Record<string, unknown>): void {
+    mockBillingDb.rows('billing_subscriptions').push({
+      stripe_mode: 'test',
+      user_id: FIXTURE_USER_ID,
+      stripe_subscription_id: sub.id,
+      ...mirrorState(sub as never),
+    });
+  }
+  async function page(rows: Row[] = [personalMembership()]) {
+    given(rows);
+    const { container, unmount } = render(await BillingRoute({}));
+    const block = (id: string) => container.querySelector(`[data-billing-block="${id}"]`) as HTMLElement | null;
+    const out = {
+      text: container.textContent ?? '',
+      credits: block('credits')?.textContent ?? null,
+      payment: block('payment')?.textContent ?? null,
+      paymentButtons: block('payment') ? within(block('payment')!).queryAllByRole('button').length : 0,
+      invoiceRows: Array.from(container.querySelectorAll('[data-billing-row]')).map((r) => r.getAttribute('data-billing-row')),
+      invoiceText: block('invoices')?.textContent ?? null,
+      invoiceTitle: block('invoices')?.querySelector('h2')?.textContent ?? null,
+      links: Array.from(block('invoices')?.querySelectorAll('a') ?? []).map((a) => [a.textContent, a.getAttribute('target')]),
+      banner: container.querySelector('[data-billing-banner]') as HTMLElement | null,
+    };
+    const banner = out.banner ? { text: out.banner.textContent, buttons: within(out.banner).queryAllByRole('button').length } : null;
+    unmount();
+    return { ...out, banner };
+  }
+  const day = (sec: number) =>
+    new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(sec * 1000));
+
+  it.each([
+    ['brokerage broker', brokerageMembership('broker')],
+    ['brokerage admin', brokerageMembership('admin')],
+    ['brokerage it_admin', brokerageMembership('it_admin')],
+  ] as [string, Row][])(
+    'C-ITADMIN-PAYLOAD: %s -> no credit, card, contact or invoice read and none of it on the page',
+    async (_n, row) => {
+      seedCustomer();
+      const r = await page([row]);
+      expect(mockSessionRpc).not.toHaveBeenCalled();
+      expect(mockServiceRpc).not.toHaveBeenCalled();
+      expect(stripeCalls()).toBe(0);
+      expect(mockBillingDb.callsTo('stripe_customers', 'select')).toEqual([]);
+      expect(r.text).not.toMatch(/credit|••••|Export unlock|Agent plan ·|Receipts sent to|Invoices sent to/);
+      expect(r.banner).toBeNull();
+    }
+  );
+
+  it('C-READ-NOCREATE (R11): pay as you go, no customer row -> zero Stripe customer calls, "No card saved", no button, contact = sign-in email', async () => {
+    const r = await page();
+    expect(mockStripe.customersCreate).not.toHaveBeenCalled();
+    expect(stripeCalls()).toBe(0);
+    expect(r.payment).toContain('No card saved. A card is saved at your first purchase in the Keepr app.');
+    expect(r.paymentButtons).toBe(0);
+    expect(r.payment).toContain(`Receipts sent to${SIGN_IN}`);
+    expect(r.invoiceTitle).toBe('Receipts');
+    expect(r.invoiceText).toContain('No payments yet.');
+    expect(mockBillingDb.calls.filter((c) => c.op !== 'select')).toEqual([]);
+  });
+
+  it('C-CREDITS: get_credit_balance on the session client with no argument; the service client is never used for it', async () => {
+    mockSessionRpc.mockResolvedValue({ data: 7, error: null });
+    const r = await page();
+    expect(mockSessionRpc.mock.calls).toEqual([['get_credit_balance']]);
+    expect(mockServiceRpc).not.toHaveBeenCalled();
+    expect(r.credits).toContain('7credits available');
+    expect(r.credits).toContain('Buy credits in the Keepr desktop app, at its export paywall. Bulk buying on the website comes later.');
+  });
+
+  it('credits read fails -> "Credits are unavailable right now.", the rest of the page renders', async () => {
+    mockSessionRpc.mockResolvedValue({ data: null, error: { code: 'PGRST000', message: 'fixture' } });
+    seedCustomer();
+    const r = await page();
+    expect(r.credits).toContain('Credits are unavailable right now.');
+    expect(r.payment).toContain('Visa •••• 4242');
+  });
+
+  it('C-ROWS-INVOICE (R10) on the page: 2 invoices + 5 charges -> 3 rows (no row per renewal retry), card and contact from the customer', async () => {
+    seedCustomer();
+    mockSessionRpc.mockResolvedValue({ data: 1, error: null });
+    const r = await page();
+    const payg = fx3848('charges-list-after-pay').data.find((c: { invoice: unknown }) => !c.invoice);
+    const invIds = fx3848('invoices-list-after-pay').data.map((i: { id: string }) => i.id);
+    expect([...r.invoiceRows].sort()).toEqual([...invIds, payg.id].sort());
+    expect([...r.links].sort()).toEqual([
+      ['Receipt', '_blank'],
+      ['View', '_blank'],
+      ['View', '_blank'],
+    ]);
+    expect(r.invoiceText).toContain('Export unlock$14.99Paid');
+    expect(r.credits).toContain('1credit available');
+    const pm = fx3848('pm-good');
+    expect(r.payment).toContain('Saved at your last purchase');
+    expect(r.payment).toContain(`Visa •••• 4242`);
+    expect(r.payment).toContain(`Expires${String(pm.card.exp_month).padStart(2, '0')} / ${pm.card.exp_year}`);
+    expect(r.payment).toContain(`Name${CUS.name}`);
+    expect(r.payment).toContain(`Receipts sent to${CUS.email}`);
+    expect(r.paymentButtons).toBe(0);
+    // Pay as you go: no subscription read.
+    expect(mockStripe.subscriptionsRetrieve).not.toHaveBeenCalled();
+    expect(mockStripe.customersCreate).not.toHaveBeenCalled();
+    expect(mockStripe.customersUpdate).not.toHaveBeenCalled();
+  });
+
+  it('invoices read fails -> "Your payment history is unavailable right now.", card still shown', async () => {
+    seedCustomer();
+    mockStripe.invoicesList.mockRejectedValue(new Error('stripe down'));
+    const r = await page();
+    expect(r.invoiceText).toContain('Your payment history is unavailable right now.');
+    expect(r.payment).toContain('Visa •••• 4242');
+  });
+
+  it('C-BANNER: payment failed -> banner names the failing subscription card, amount and date, with no button; row "Payment failed"', async () => {
+    seedCustomer();
+    seedMirror(SUB);
+    mockStripe.invoicesList.mockResolvedValue(fx3848('invoices-list-pastdue'));
+    mockStripe.chargesList.mockResolvedValue(fx3848('charges-list-pastdue'));
+    const open = fx3848('invoices-list-pastdue').data.find((i: { status: string }) => i.status === 'open');
+    const r = await page();
+    expect(r.banner).toEqual({
+      text: `Your card payment failed. We could not charge Visa •••• 0341 for $19.99 on ${day(open.created)}. Unlimited exports are off from the first failed charge and come back when it is paid.`,
+      buttons: 0,
+    });
+    expect(mockStripe.subscriptionsRetrieve.mock.calls[0][0]).toBe(SUB.id);
+    expect(r.payment).toContain(`Last charge failed on ${day(open.created)}`);
+    expect(r.payment).toContain('Visa •••• 0341Charge failed');
+    expect(r.payment).toContain('Invoices sent to');
+    expect(r.paymentButtons).toBe(0);
+    expect(r.invoiceTitle).toBe('Invoices');
+    expect(r.invoiceText).toContain('Payment failed');
+    expect(r.credits).toContain('Usable now, while Unlimited exports are off');
+    expect(r.credits).toContain('credits saved');
+    expect(r.credits).toContain('Each export in the Keepr app uses one credit until your payment goes through.');
+  });
+
+  it('banner control: an active plan -> no banner, "Charged automatically each month"', async () => {
+    seedCustomer();
+    seedMirror(fx3847('sub-C-keep'));
+    const r = await page();
+    expect(r.banner).toBeNull();
+    expect(r.payment).toContain('Charged automatically each month');
+  });
+
+  it('suspended (licenses row) -> credits kept copy, "Card on file"', async () => {
+    seedCustomer();
+    seedMirror(fx3847('sub-C-keep'));
+    mockBillingDb.rows('licenses').push({ id: 'lic-SEEDED', user_id: FIXTURE_USER_ID, status: 'suspended' });
+    const r = await page();
+    expect(r.credits).toContain('Credits cannot be used or bought while your account is suspended. They are kept.');
+    expect(r.payment).toContain('Card on file');
   });
 });
