@@ -18,6 +18,16 @@ import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
 import { isWindowsArm64 } from "../utils/windowsArm64";
 import { mainNetFetch } from "./mainNetFetch";
+import { getAppleDriverSource, isStoreBuild } from "./distributionChannelService";
+import {
+  probeAppleDevices,
+  probeUsbmux,
+  type AppleUsbDriverState,
+} from "./appleDevicesProbe";
+import {
+  APPLE_DEVICES_STORE_URL,
+  APPLE_DEVICES_WEB_URL,
+} from "../utils/distributionChannel";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -31,6 +41,29 @@ function getDownloadedDriversPath(): string {
 }
 
 /**
+ * BACKLOG-3927: where Apple Mobile Device Support stands, in the order the user
+ * has to fix it.
+ */
+export type AppleDevicesState =
+  | "not-installed" // neither Apple Devices nor Apple's MSI
+  | "not-running" // Apple Devices present, Apple Mobile Device Support not answering
+  | "msi-service-stopped" // only Apple's MSI present, its Windows service stopped
+  | "usb-driver-missing" // iPhone plugged in but not on Apple's USB driver
+  | "ready";
+
+export interface AppleDevicesStatus {
+  state: AppleDevicesState;
+  packageInstalled: boolean;
+  amdsRunning: boolean;
+  /** null when not asked (the process check already answered). */
+  usbmuxReachable: boolean | null;
+  usbDriver: AppleUsbDriverState;
+}
+
+/** Which route made Apple Mobile Device Support available. */
+export type AppleDriverInstalledVia = "msi" | "apple-devices";
+
+/**
  * Status of Apple drivers on the system
  */
 export interface AppleDriverStatus {
@@ -42,6 +75,25 @@ export interface AppleDriverStatus {
   serviceRunning: boolean;
   /** Error message if check failed */
   error: string | null;
+  /** BACKLOG-3927: msi (registry / Common Files / service) or apple-devices (Store build). */
+  installedVia?: AppleDriverInstalledVia | null;
+  /** BACKLOG-3927: set (true) only when a QA source override narrowed this check; absent otherwise. */
+  sourceOverridden?: true;
+  /** BACKLOG-3927: present when the Apple Devices probe ran (MSI route not running). */
+  appleDevices?: AppleDevicesStatus;
+}
+
+/** BACKLOG-3927: derive the state. Exported for tests. */
+export function appleDevicesState(
+  installed: boolean,
+  running: boolean,
+  usbDriver: AppleUsbDriverState,
+  installedVia: AppleDriverInstalledVia | null = "apple-devices",
+): AppleDevicesState {
+  if (!installed) return "not-installed";
+  if (!running) return installedVia === "msi" ? "msi-service-stopped" : "not-running";
+  if (usbDriver === "missing") return "usb-driver-missing";
+  return "ready";
 }
 
 /**
@@ -167,18 +219,77 @@ export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
     // Check if the service exists and is running
     const serviceStatus = await checkAppleMobileDeviceService();
 
-    const result: AppleDriverStatus = {
-      isInstalled: registryCheck.installed,
-      version: registryCheck.version,
-      serviceRunning: serviceStatus,
-      error: null,
-    };
+    // BACKLOG-3927: Apple Mobile Device Support can come from either of two
+    // sources, and BOTH builds accept either:
+    //  - "msi": Apple's installer (the website build bundles it) — HKLM key /
+    //    Common Files path + the "Apple Mobile Device Service" Windows service.
+    //  - "apple-devices": Apple's "Apple Devices" Store app (MSIX). Measured on
+    //    a real PC (PC TEST rows on BACKLOG-3927): no HKLM key, no Common Files
+    //    path, no Windows service — per-user AppleMobileDeviceProcess instead.
+    // When the MSI route is installed and its service runs, nothing else is
+    // asked. Otherwise one PowerShell probe looks for Apple Devices and the
+    // iPhone's USB driver; usbmux (`idevice_id -l`) is asked only when an
+    // iPhone is plugged in and no process/service answered.
+    // KEEPR_APPLE_DRIVER_SOURCE (tests only, gated) narrows which source counts.
+    const store = isStoreBuild();
+    const source = getAppleDriverSource();
+    const msiCounts = source !== "appledevices";
+    const appleDevicesCounts = source !== "msi";
+    const msiInstalled = msiCounts && registryCheck.installed;
+    const msiRunning = msiInstalled && serviceStatus;
+    let result: AppleDriverStatus;
+    if (msiRunning || !appleDevicesCounts) {
+      result = {
+        isInstalled: msiInstalled,
+        version: msiInstalled ? registryCheck.version : null,
+        serviceRunning: msiRunning,
+        error: null,
+        installedVia: msiInstalled ? "msi" : null,
+      };
+    } else {
+      const probe = await probeAppleDevices();
+      const anyInstalled = msiInstalled || probe.packageInstalled;
+      let usbmuxReachable: boolean | null = null;
+      if (anyInstalled && !probe.amdsRunning && probe.usbDriver !== "no-device") {
+        usbmuxReachable = await probeUsbmux();
+      }
+      const appleDevicesRunning = probe.packageInstalled && probe.amdsRunning;
+      // usbmux listing the iPhone proves Apple Mobile Device Support answers,
+      // whichever source started it.
+      const running = appleDevicesRunning || usbmuxReachable === true;
+      const installedVia: AppleDriverInstalledVia | null = appleDevicesRunning
+        ? "apple-devices"
+        : msiInstalled && !probe.packageInstalled
+          ? "msi"
+          : probe.packageInstalled
+            ? "apple-devices"
+            : null;
+      result = {
+        isInstalled: anyInstalled,
+        version: msiInstalled ? registryCheck.version : null,
+        serviceRunning: anyInstalled && running,
+        error: null,
+        installedVia,
+        appleDevices: {
+          state: appleDevicesState(anyInstalled, running, probe.usbDriver, installedVia),
+          packageInstalled: probe.packageInstalled,
+          amdsRunning: probe.amdsRunning,
+          usbmuxReachable,
+          usbDriver: probe.usbDriver,
+        },
+      };
+    }
+
+    if (source !== "auto") result.sourceOverridden = true;
 
     // Persist driver state on Sentry scope for enrichment of future events
     Sentry.setContext("apple_drivers", {
       isInstalled: result.isInstalled,
       version: result.version,
       serviceRunning: result.serviceRunning,
+      distributionChannel: store ? "store" : "website",
+      installedVia: result.installedVia ?? null,
+      appleDevicesState: result.appleDevices?.state ?? null,
     });
 
     // BACKLOG-1354: Enhanced breadcrumb with full driver diagnostic context
@@ -317,6 +428,12 @@ async function checkAppleMobileDeviceService(): Promise<boolean> {
  * signature-checked before it is installed.
  */
 export function getBundledDriverPath(): string | null {
+  // BACKLOG-3927: the Store build has no Apple installer to offer — neither a
+  // bundled one nor one downloaded earlier into userData.
+  if (isStoreBuild()) {
+    return null;
+  }
+
   const isDev = !app.isPackaged;
 
   let basePath: string;
@@ -391,6 +508,18 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
     return {
       success: false,
       error: "iPhone USB sync isn't supported on this PC",
+      rebootRequired: false,
+    };
+  }
+
+  // BACKLOG-3927: the Microsoft Store build never installs a non-Microsoft
+  // driver (Store policy 10.2.4.2). The renderer shows the Apple Devices guide
+  // instead of an Install button; this is the main-process backstop.
+  if (isStoreBuild()) {
+    log.info("[AppleDriverService] Store build: Apple driver install not offered");
+    return {
+      success: false,
+      error: STORE_INSTALL_REFUSAL_MESSAGE,
       rebootRequired: false,
     };
   }
@@ -552,6 +681,10 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
     if (stagingDir) removeDirQuietly(stagingDir);
   }
 }
+
+/** BACKLOG-3927: returned when the Store build is asked to install or download the Apple driver. */
+export const STORE_INSTALL_REFUSAL_MESSAGE =
+  "Install Apple Devices from the Microsoft Store to set up your iPhone.";
 
 /** Fixed text for a failure to copy the installer (BACKLOG-3806); never includes error text or paths. */
 export const STAGING_FAILURE_MESSAGE = "Could not prepare the installer copy.";
@@ -1031,6 +1164,12 @@ export async function downloadAppleDrivers(
     percent: number;
   }) => void,
 ): Promise<{ success: boolean; msiPath?: string; error?: string }> {
+  // BACKLOG-3927: the Store build never fetches Apple's installer.
+  if (isStoreBuild()) {
+    log.info("[AppleDriverService] Store build: Apple driver download not offered");
+    return { success: false, error: STORE_INSTALL_REFUSAL_MESSAGE };
+  }
+
   const driversDir = getDownloadedDriversPath();
   const installerPath = path.join(driversDir, "iTunes64Setup.exe");
   const extractDir = path.join(driversDir, "extracted");
@@ -1188,6 +1327,16 @@ function getDownloadedDriverPath(): string | null {
 export function getITunesDownloadUrl(): string {
   // Microsoft Store link - easiest for users
   return "ms-windows-store://pdp/?ProductId=9PB2MZ1ZMB1S";
+}
+
+/** BACKLOG-3927: Apple Devices product page in the Microsoft Store app. */
+export function getAppleDevicesStoreUrl(): string {
+  return APPLE_DEVICES_STORE_URL;
+}
+
+/** BACKLOG-3927: Apple Devices product page on the web (fallback). */
+export function getAppleDevicesWebUrl(): string {
+  return APPLE_DEVICES_WEB_URL;
 }
 
 /**

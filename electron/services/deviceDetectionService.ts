@@ -290,6 +290,14 @@ export class DeviceDetectionService extends EventEmitter {
   }
 
   /**
+   * BACKLOG-3418 / BACKLOG-3927: whether iPhone checking is on. Callers outside
+   * this class that would spawn the iPhone helper read this first.
+   */
+  isDetectionRequested(): boolean {
+    return this.detectionRequested;
+  }
+
+  /**
    * Stops polling for devices.
    */
   stop(): void {
