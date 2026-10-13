@@ -473,6 +473,31 @@ describe('reverse: re-subscriber with several mirror rows (RC-1)', () => {
   });
 });
 
+describe('reverse: revokeAttempted counts only revokes that reached the RPC (RC-1)', () => {
+  it('open mirror row beyond the 1000-row read -> revokeIfCurrent declines, revokeAttempted 0', async () => {
+    // The user's open row sits after RECONCILE_MAX_ITEMS * 5 rows, so the reverse
+    // read sees only their canceled row; hasOtherOpenSubscription still finds the
+    // open one and declines. Fillers are other users with no organization.
+    const fillers = Array.from({ length: RECONCILE_MAX_ITEMS * 5 - 1 }, (_, i) =>
+      mirror(`FILL-${i}`, `sub_fill_${i}`, 'cus_fill', 'test', { id: `row-fill-${i}`, status: 'canceled' })
+    );
+    seed({
+      organizations: [personal(USER, ORG, true)],
+      organization_plans: [plan(ORG, effective())],
+      stripe_customers: [customer(USER, SUB_VOID_CANCELED.customer, 'test')],
+      billing_subscriptions: [
+        mirror(USER, 'sub_OLD_canceled', SUB_VOID_CANCELED.customer, 'test', { id: 'row-old', status: 'canceled' }),
+        ...fillers,
+        mirror(USER, SUB_VOID_CANCELED.id, SUB_VOID_CANCELED.customer, 'test', { status: 'active' }),
+      ],
+    });
+    serve(SUB_VOID_CANCELED);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(revokes()).toEqual([]);
+    expect(r).toMatchObject({ revokeAttempted: 0, mismatches: 1, truncated: true });
+  });
+});
+
 describe('metadata.kind pins (RC-2, RC-3)', () => {
   it('reverse: canceled Agent sub + an active brokerage sub on the same customer -> revoke', async () => {
     seed({
