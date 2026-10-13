@@ -841,6 +841,18 @@ describe('3847 R6: the write-through never takes the webhook cursor (C-WT-CURSOR
     });
   });
 
+  it('the write-through stamps updated_at, so the nightly refresh (BACKLOG-3933 S1) does not overwrite it', async () => {
+    const FX47 = path.join(__dirname, '../../../fixtures/stripe/p3847');
+    const pending = JSON.parse(fs.readFileSync(path.join(FX47, 'sub-C-cancel-at-period-end.json'), 'utf8'));
+    const { writeThroughCancelFlag } = await import('@/lib/billing/sync');
+    const { createServiceClient } = await import('@/lib/supabase/service');
+    // [SEEDED] updated_at NOT NULL DEFAULT now() in prod; an old value so the stamp is visible.
+    useDb({ billing_subscriptions: [subRow(pending.id, pending.customer, { cancel_at_period_end: false, updated_at: '2026-01-01T00:00:00.000Z' })] });
+    const before = new Date().toISOString();
+    await writeThroughCancelFlag(createServiceClient(), pending);
+    expect(String(db.rows('billing_subscriptions')[0].updated_at) >= before).toBe(true);
+  });
+
   it('the write-through leaves a closed row alone', async () => {
     const FX47 = path.join(__dirname, '../../../fixtures/stripe/p3847');
     const pending = JSON.parse(fs.readFileSync(path.join(FX47, 'sub-C-cancel-at-period-end.json'), 'utf8'));
