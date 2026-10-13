@@ -11,6 +11,9 @@
  *   3. Not signed in                             -> /login.
  *   4. billingCapabilities(...) is null          -> 404: a brokerage agent, a
  *      failed membership read, no membership.
+ *   5. BACKLOG-3878: a suspended brokerage member (organization page)
+ *      -> /dashboard/account. The brokerage's bill is not theirs. A suspended
+ *      personal owner IS shown the page: it is where they land.
  *
  * Each step runs before any billing data is read. BACKLOG-3847 reads the
  * personal owner's Agent plan (mirror row, support grant) and the Agent prices
@@ -32,6 +35,7 @@ import { currentStripeMode } from '@/lib/billing/mode';
 import { formatPrice, getAgentPlanView, getAgentPrices, type AgentPrice } from '@/lib/billing/agentPlan';
 import { getPersonalBillingView } from '@/lib/billing/personalBilling';
 import { createClient } from '@/lib/supabase/server';
+import { suspendedForDispute } from '@/lib/billing/suspensionCause';
 
 const SITUATION_3844 = {
   agentPlan: 'none',
@@ -80,6 +84,7 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
     ...SITUATION_3844,
   });
   if (!caps) notFound();
+  if (caps.kind !== 'personal' && portal.suspended === true) redirect('/dashboard/account');
   if (caps.kind !== 'personal') {
     return <BillingPage caps={caps} orgBillingSetUp={SITUATION_3844.orgBillingSetUp} />;
   }
@@ -95,12 +100,14 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
     ...SITUATION_3844,
     agentPlan: view.state,
     renewalUnpaid: view.row?.status === 'unpaid',
+    // BACKLOG-3878: the licence, as every personal action reads it.
+    accountSuspended: view.suspended,
   });
   if (!personalCaps) notFound();
   const sp = (await searchParams) ?? {};
   const checkout = one(sp.checkout);
   // BACKLOG-3848 blocks 4–6: read only, never creates a Stripe customer; each source fails soft.
-  const [prices, billing] = await Promise.all([
+  const [prices, billing, disputeSuspension] = await Promise.all([
     agentPrices(),
     getPersonalBillingView({
       session: await createClient(),
@@ -111,6 +118,7 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
       mode,
       view,
     }),
+    view.suspended ? suspendedForDispute(service, portal.user.id) : Promise.resolve(false),
   ]);
   const personal: PersonalPlanData = {
     state: view.state,
@@ -123,6 +131,7 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
     paymentIncomplete: view.paymentIncomplete,
     billing,
     suspended: view.suspended,
+    suspendedForDispute: disputeSuspension,
     card: one(sp.card) === 'updated' || one(sp.card) === 'cancelled' ? (one(sp.card) as 'updated' | 'cancelled') : null,
     canEndPlanNow: personalCaps.canEndPlanNow,
     renewalUnpaid: view.row?.status === 'unpaid',

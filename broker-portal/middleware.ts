@@ -15,8 +15,12 @@ import {
   PORTAL_MEMBERSHIP_SELECT,
   classifyPortalAccess,
   mayOpenDashboardPath,
+  maySuspendedOpenPath,
+  suspendedLanding,
   type PortalMembershipRow,
 } from '@/lib/auth/membership';
+import { LICENCE_READ_FAILED, readOwnLicenceSuspended } from '@/lib/auth/suspension';
+import { billingEnabled } from '@/lib/billing/flag';
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
@@ -126,18 +130,36 @@ export async function middleware(request: NextRequest) {
     if (isProtectedRoute && user) {
       // See lib/auth/membership.ts for why the personal-organization column is
       // never named in this query.
-      const { data: memberships } = await supabase
-        .from('organization_members')
-        .select(PORTAL_MEMBERSHIP_SELECT)
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: true })
-        .order('id', { ascending: true });
+      // BACKLOG-3878: the licence is read alongside the memberships, never after.
+      const [{ data: memberships }, suspended] = await Promise.all([
+        supabase
+          .from('organization_members')
+          .select(PORTAL_MEMBERSHIP_SELECT)
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: true })
+          .order('id', { ascending: true }),
+        readOwnLicenceSuspended(supabase, user.id),
+      ]);
 
       const access = classifyPortalAccess(memberships as PortalMembershipRow[] | null, user.id);
 
       // Not a portal user at all: end this browser's portal session.
       if (access.kind === 'none') {
         return NextResponse.redirect(new URL('/auth/logout?error=not_authorized', request.url));
+      }
+
+      // BACKLOG-3878: a suspended account keeps Billing (personal owner only),
+      // My Account and Support, for every access kind. Checked before the
+      // access redirect so a refused path ends in one hop. A failed licence
+      // read lets this request through (the pages ask again) and logs a
+      // static code only.
+      if (suspended === null) {
+        console.warn('[middleware] suspended check skipped', { code: LICENCE_READ_FAILED });
+      } else if (suspended) {
+        const billingOn = billingEnabled();
+        if (!maySuspendedOpenPath(access, pathname, billingOn)) {
+          return NextResponse.redirect(new URL(suspendedLanding(access, billingOn), request.url));
+        }
       }
 
       // A path above this person's access goes back to the dashboard.

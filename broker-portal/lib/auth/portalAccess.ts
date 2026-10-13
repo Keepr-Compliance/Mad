@@ -18,6 +18,7 @@ import {
   type PortalAccess,
   type PortalMembershipRow,
 } from '@/lib/auth/membership';
+import { LICENCE_READ_FAILED, readOwnLicenceSuspended } from '@/lib/auth/suspension';
 
 type ServerClient = Awaited<ReturnType<typeof createClient>>;
 
@@ -25,6 +26,12 @@ export interface PortalAccessResult {
   supabase: ServerClient;
   user: User;
   access: PortalAccess;
+  /**
+   * BACKLOG-3878: the user's own licence is suspended. null = the read failed;
+   * pages treat that as not suspended (fail open, logged), money paths never
+   * read this field.
+   */
+  suspended: boolean | null;
 }
 
 /**
@@ -41,17 +48,22 @@ export async function getPortalAccess(): Promise<PortalAccessResult | null> {
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const { data: memberships } = await supabase
-    .from('organization_members')
-    .select(PORTAL_MEMBERSHIP_SELECT)
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: true })
-    .order('id', { ascending: true });
+  const [{ data: memberships }, suspended] = await Promise.all([
+    supabase
+      .from('organization_members')
+      .select(PORTAL_MEMBERSHIP_SELECT)
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true }),
+    readOwnLicenceSuspended(supabase, user.id),
+  ]);
+  if (suspended === null) console.warn('[portalAccess] suspended check skipped', { code: LICENCE_READ_FAILED });
 
   return {
     supabase,
     user,
     access: classifyPortalAccess(memberships as PortalMembershipRow[] | null, user.id),
+    suspended,
   };
 }
 
@@ -62,12 +74,13 @@ export interface FullPortalAccess extends PortalAccessResult {
 
 /**
  * The caller's full-portal access, or null for everyone the portal floors,
- * does not know, or does not admit.
+ * does not know, or does not admit — and, BACKLOG-3878, for a suspended
+ * account, so every full-portal page refuses it on its own.
  *
  * Pages call this BEFORE any data read and redirect on null.
  */
 export async function requireFullPortalAccess(): Promise<FullPortalAccess | null> {
   const result = await getPortalAccess();
-  if (!result || result.access.kind !== 'full') return null;
+  if (!result || result.access.kind !== 'full' || result.suspended === true) return null;
   return result as FullPortalAccess;
 }

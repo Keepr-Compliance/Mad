@@ -92,6 +92,9 @@ const adminNavItems: NavItem[] = [
   { label: 'Org Settings', href: '/dashboard/settings', icon: Settings },
 ];
 
+/** BACKLOG-3878: the one entry a suspended account keeps besides Billing and My Account. */
+const supportNavItem: NavItem = { label: 'Support', href: '/dashboard/support', icon: Headphones };
+
 /** BACKLOG-3080: the floor. No brokerage data, so no Submissions. */
 const floorNavItems: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
@@ -152,6 +155,12 @@ export interface SidebarProps {
    * server (the flag is server-only). The page refuses on its own.
    */
   showBilling?: boolean;
+  /**
+   * BACKLOG-3878: the account is suspended. Only Billing (when showBilling),
+   * Support and My Account are listed. Presentation only: middleware and each
+   * page refuse the rest.
+   */
+  suspended?: boolean;
   /** BACKLOG-3798: the phone drawer is open (below md). Not rendered when false. */
   mobileOpen?: boolean;
   /** BACKLOG-3798: close the phone drawer (link tap, backdrop, Escape, close button). */
@@ -173,6 +182,7 @@ export function Sidebar({
   showMyTransactions = false,
   floorOnly = false,
   showBilling = false,
+  suspended = false,
   mobileOpen = false,
   onMobileClose,
   mobileReturnFocusRef,
@@ -253,6 +263,15 @@ export function Sidebar({
 
   const renderNavItems = (isCollapsed: boolean, variant: 'rail' | 'drawer' = 'rail') => {
     const r = (item: NavItem) => renderNavItem(item, isCollapsed, variant);
+    if (suspended && !isImpersonating) {
+      return (
+        <>
+          {showBilling && r(billingNavItem)}
+          {r(supportNavItem)}
+          {personalNavItems.map(r)}
+        </>
+      );
+    }
     return (
       <>
         {showFloorNav && floorItems.map(r)}

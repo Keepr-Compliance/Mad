@@ -647,7 +647,7 @@ function refusalFor(name: string, persona: Persona): Outcome {
  * before the role check).
  */
 const READS_BEFORE_REFUSAL: Record<string, string[]> = {
-  'lib/actions/inviteUser.ts#inviteUser': ['organization_members', 'users'],
+  'lib/actions/inviteUser.ts#inviteUser': ['licenses', 'organization_members', 'users'],
 };
 
 /** Open to every signed-in person: their own devices, and the desktop sign-in flow. */
@@ -994,7 +994,9 @@ describe('refused pages', () => {
   it.each(cases)('%s refuses the %s before reading anything else', async (_page, persona, entry) => {
     given(PERSONAS[persona]);
     expect(await run(entry.invoke)).toEqual(entry.refused);
-    expect(tablesRead()).toEqual(['organization_members']);
+    // BACKLOG-3878: the shared portal access read also reads the licence; the SCIM
+    // page keeps its own membership-only gate.
+    expect(tablesRead().filter((t) => t !== 'licenses')).toEqual(['organization_members']);
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
@@ -1085,7 +1087,7 @@ describe('own-gate server actions (D4)', () => {
     expect(await run(OWN_GATE_ACTIONS[name])).toEqual(AGENT_ACTION_OUTCOMES[name]);
     expect(mockEmulator.state.writes).toEqual([]);
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_checklist_template');
-    for (const table of tablesRead()) expect(['organization_members', 'checklist_templates']).toContain(table);
+    for (const table of tablesRead()) expect(['licenses', 'organization_members', 'checklist_templates']).toContain(table);
   });
 
   it.each(['lib/actions/checklists.ts#archiveChecklistTemplate', 'lib/actions/checklists.ts#restoreChecklistTemplate'])(
@@ -1143,7 +1145,7 @@ describe('refused server actions', () => {
     given(PERSONAS[persona]);
     expect(await run(REFUSED_ACTIONS[name])).toEqual(refusalFor(name, persona));
     expect(mockEmulator.state.writes).toEqual([]);
-    const allowed = READS_BEFORE_REFUSAL[name] ?? ['organization_members'];
+    const allowed = READS_BEFORE_REFUSAL[name] ?? ['licenses', 'organization_members'];
     for (const table of tablesRead()) expect(allowed).toContain(table);
   });
 
@@ -1168,7 +1170,7 @@ describe('plan-gated pages: My Transactions (BACKLOG-3080, R7)', () => {
   it.each(refusedCases)('%s refuses the %s before reading anything else', async (_page, persona, entry) => {
     given(PLAN_GATED_REFUSED[persona]);
     expect(await run(entry.invoke)).toEqual(entry.refused);
-    expect(tablesRead()).toEqual(['organization_members']);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
@@ -1190,7 +1192,7 @@ describe('plan-gated pages: My Transactions (BACKLOG-3080, R7)', () => {
     async (page) => {
       given(PLAN_GATED_ADMITTED['brokerage agent']);
       expect(await run(REFUSED_PAGES[page].invoke)).toEqual({ redirect: '/dashboard' });
-      expect(tablesRead()).toEqual(['organization_members']);
+      expect(tablesRead()).toEqual(['licenses', 'organization_members']);
     }
   );
 });
@@ -1225,7 +1227,7 @@ describe('billing page (BACKLOG-3844)', () => {
   ] as const)('refuses the %s before reading anything else, and writes nothing', async (_n, rows) => {
     given(rows);
     expect(await run(page.invoke)).toEqual(page.refused);
-    expect(tablesRead()).toEqual(['organization_members']);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
@@ -1270,7 +1272,7 @@ describe('Agent plan actions (BACKLOG-3847)', () => {
   it.each(cases)('%s refuses the %s before reading anything else', async (name, persona) => {
     given(refusedPersonas[persona]);
     expect(await run(BILLING_ACTIONS[name])).toEqual(BILLING_ACTION_REFUSED);
-    expect(tablesRead()).toEqual(['organization_members']);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
     expect(mockEmulator.state.writes).toEqual([]);
   });
 

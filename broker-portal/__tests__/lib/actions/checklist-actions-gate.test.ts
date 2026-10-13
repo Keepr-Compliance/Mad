@@ -43,6 +43,7 @@ import { SAVE_MESSAGES } from '@/lib/checklists/saveErrors';
 import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../../fixtures/orgFeatures';
 import {
   FIXTURE_BROKERAGE_ORG_ID,
+  ABSENT_COLUMN_ERROR,
   FIXTURE_OTHER_USER_ID,
   FIXTURE_PERSONAL_ORG_ID,
   FIXTURE_USER_ID,
@@ -77,11 +78,19 @@ interface Setup {
   impersonating?: boolean;
   save?: { data?: unknown; error?: unknown };
   write?: { data?: unknown; error?: unknown };
+  /**
+   * BACKLOG-3878: the caller's own licence row (licenses.status), as the
+   * PostgREST emulator returns it; 'read_error' makes that read fail.
+   */
+  licence?: { status: string } | 'read_error';
 }
 
 function setup(opts: Setup = {}) {
   const emu = createPostgrestEmulator({
-    rows: { organization_members: [opts.personal ? personalMembership() : brokerageMembership(opts.role ?? 'broker')] },
+    rows: {
+      organization_members: [opts.personal ? personalMembership() : brokerageMembership(opts.role ?? 'broker')],
+      licenses: opts.licence && opts.licence !== 'read_error' ? [{ user_id: FIXTURE_USER_ID, ...opts.licence }] : [],
+    },
   });
   const tableCalls: TableCall[] = [];
   const fromLog: string[] = [];
@@ -110,7 +119,12 @@ function setup(opts: Setup = {}) {
     auth: { getUser: async () => ({ data: { user: { id: FIXTURE_USER_ID } } }) },
     from: (t: string) => {
       fromLog.push(t);
-      return t === 'organization_members' ? emu.from(t) : recorder(t);
+      if (t === 'licenses' && opts.licence === 'read_error') {
+        // supabase-js resolves a failed read; it does not throw. The error is the
+        // transcribed PostgREST error the emulator already carries.
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { ...ABSENT_COLUMN_ERROR } }) }) }) };
+      }
+      return t === 'organization_members' || t === 'licenses' ? emu.from(t) : recorder(t);
     },
     rpc: async (fn: string, args: Record<string, unknown>) => {
       rpcLog.push({ fn, args });
@@ -182,7 +196,7 @@ describe('saveChecklistTemplate — one database call', () => {
     expect(rpcLog.map((r) => r.fn)).toContain('can_edit_checklist_templates');
     expect(fromLog).toContain('organization_members');
     // ...and nothing else touched a table.
-    expect(fromLog.filter((t) => t !== 'organization_members')).toEqual([]);
+    expect(fromLog.filter((t) => t !== 'organization_members' && t !== 'licenses')).toEqual([]);
     expect(writes()).toEqual([]);
   });
 
@@ -456,5 +470,42 @@ describe('BACKLOG-3618 — archive / restore by an agent', () => {
     const { tableCalls } = setup({ role: 'broker' });
     expect(await archiveChecklistTemplate(TEMPLATE_ID)).toEqual({ ok: true });
     expect(tableCalls.flatMap((t) => t.calls).some((c) => c.method === 'maybeSingle')).toBe(false);
+  });
+});
+
+// BACKLOG-3878 R3: one refusal in requireChecklistAccess covers the page and
+// every checklist write. The licence row is `{ status: 'suspended' }`, the value
+// both suspension writers set (suspend_account_for_dispute, admin_suspend_user:
+// `UPDATE public.licenses SET status = 'suspended'`).
+describe('BACKLOG-3878 — a suspended account makes no checklist write', () => {
+  const SUSPENDED = { status: 'suspended' } as const;
+  const owner = { personal: true } as const;
+
+  it('C-R3 control: the same personal owner with an active licence saves (the refusal below is the licence)', async () => {
+    const { saves } = setup({ ...owner, licence: { status: 'active' } });
+    expect(await saveChecklistTemplate(input())).toMatchObject({ ok: true });
+    expect(saves()).toHaveLength(1);
+  });
+
+  it.each([
+    ['suspended personal owner', { ...owner, licence: SUSPENDED }],
+    ['suspended brokerage broker', { role: 'broker', licence: SUSPENDED }],
+    ['licence read fails (fail closed)', { ...owner, licence: 'read_error' }],
+  ] as const)('C-R3 save: %s -> not_authorized, no save rpc, no write', async (_l, opts) => {
+    const { saves, writes, rpcLog } = setup(opts);
+    expect(await saveChecklistTemplate(input())).toMatchObject({ ok: false, reason: 'not_authorized' });
+    expect(saves()).toEqual([]);
+    expect(writes()).toEqual([]);
+    // Refused before the database is asked whether this user may edit.
+    expect(rpcLog).toEqual([]);
+  });
+
+  it.each([
+    ['archive', archiveChecklistTemplate],
+    ['restore', restoreChecklistTemplate],
+  ] as const)('C-R3 %s: suspended personal owner is refused and nothing is written', async (_l, action) => {
+    const { writes } = setup({ ...owner, licence: SUSPENDED });
+    expect(await action(TEMPLATE_ID)).toMatchObject({ ok: false });
+    expect(writes()).toEqual([]);
   });
 });

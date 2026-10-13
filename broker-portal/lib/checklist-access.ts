@@ -26,6 +26,8 @@
  *   The role list, the personal-owner rule and the feature check live in the
  *   database only. FAIL-CLOSED: an RPC error or anything other than a literal
  *   `true` refuses.
+ * - BACKLOG-3878: a suspended licence refuses, and so does a failed licence
+ *   read (fail closed), before the organization is picked.
  */
 
 import { createClient } from '@/lib/supabase/server';
@@ -36,6 +38,7 @@ import {
   pickBrokerageMembership,
   type PortalMembershipRow,
 } from '@/lib/auth/membership';
+import { readOwnLicenceSuspended } from '@/lib/auth/suspension';
 
 /** feature_definitions.key seeded by 20260921101757_backlog_3473_transaction_checklists.sql */
 export const CHECKLIST_FEATURE_KEY = 'transaction_checklists';
@@ -81,12 +84,19 @@ export async function requireChecklistAccess(): Promise<ChecklistAccess> {
   } = await supabase.auth.getUser();
   if (!user) throw new Error('Not authenticated');
 
-  const { data: memberships } = await supabase
-    .from('organization_members')
-    .select(PORTAL_MEMBERSHIP_SELECT)
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: true })
-    .order('id', { ascending: true });
+  const [{ data: memberships }, suspended] = await Promise.all([
+    supabase
+      .from('organization_members')
+      .select(PORTAL_MEMBERSHIP_SELECT)
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true }),
+    readOwnLicenceSuspended(supabase, user.id),
+  ]);
+
+  // BACKLOG-3878: a suspended account opens no checklist page and makes no
+  // checklist write. FAIL-CLOSED: a failed licence read refuses too.
+  if (suspended !== false) throw new Error('Not authorized');
 
   const membership = pickChecklistMembership(memberships);
   if (!membership) throw new Error('Not authorized');

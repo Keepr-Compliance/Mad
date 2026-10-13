@@ -938,3 +938,60 @@ describe('3848 Edit contact (C-CONTACT)', () => {
     expect(calls('customers.update')[0][0]).toBe('cus_EDITED_new');
   });
 });
+
+// BACKLOG-3878 C3: accountSuspended is wired from the licence (view.suspended),
+// not the literal false. A suspended account cannot cancel, keep or end its plan;
+// it may still replace its card. The licence row is the value both suspension
+// writers set (`UPDATE public.licenses SET status = 'suspended'`).
+describe('BACKLOG-3878 C3: plan actions on a suspended account', () => {
+  const SUSPENDED_LIC = { id: 'lic-1', user_id: FIXTURE_USER_ID, status: 'suspended' };
+  const NOT_NOW_MSG = 'That change is not available for your plan right now. Refresh the page.';
+
+  it('control: past_due, licence active -> End plan now runs (reaches Stripe)', async () => {
+    seed({ billing_subscriptions: [mirrorRow(SUB48, { status: 'past_due' })] });
+    serve(SUB48.id, SUB48);
+    mockStripeImpl['invoices.list'] = async () => fx48('pr2-invoices-list-sub-open');
+    mockStripeImpl['invoices.voidInvoice'] = async () => fx48('SR-VOID-inv-voided');
+    mockStripeImpl['subscriptions.cancel'] = async () => ({ ...fx48('SR-VOID-sub-canceled'), id: SUB48.id }); // [COMPOSED]
+    mockStripeImpl['invoices.retrieve'] = async () => fx48('SR-VOID-inv-voided');
+    expect(await endAgentPlanNow()).toEqual({ ok: true });
+  });
+
+  it('suspended + payment failed -> End plan now refused, zero Stripe calls', async () => {
+    seed({ billing_subscriptions: [mirrorRow(SUB48, { status: 'past_due' })], licenses: [SUSPENDED_LIC] });
+    serve(SUB48.id, SUB48);
+    expect(await endAgentPlanNow()).toEqual({ error: NOT_NOW_MSG });
+    expect(stripeOps()).toEqual([]);
+  });
+
+  it('control: active plan, licence active -> Cancel plan reaches Stripe', async () => {
+    seed({ billing_subscriptions: [mirrorRow(C_KEEP)] });
+    serve(C_KEEP.id, C_KEEP);
+    mockStripeImpl['subscriptions.update'] = async () => clone(C_PENDING);
+    expect(await endAgentPlanAtPeriodEnd()).toEqual({ ok: true });
+  });
+
+  it('suspended + active plan -> Cancel plan refused, zero Stripe calls', async () => {
+    seed({ billing_subscriptions: [mirrorRow(C_KEEP)], licenses: [SUSPENDED_LIC] });
+    serve(C_KEEP.id, C_KEEP);
+    expect(await endAgentPlanAtPeriodEnd()).toEqual({ error: NOT_NOW_MSG });
+    expect(stripeOps()).toEqual([]);
+  });
+
+  it('suspended + cancel pending -> Keep my plan refused, zero Stripe calls', async () => {
+    seed({ billing_subscriptions: [mirrorRow(C_PENDING)], licenses: [SUSPENDED_LIC] });
+    serve(C_PENDING.id, C_PENDING);
+    expect(await keepAgentPlan()).toEqual({ error: NOT_NOW_MSG });
+    expect(stripeOps()).toEqual([]);
+  });
+
+  it('suspended + payment failed -> Update card still opens the Stripe setup page', async () => {
+    seed({
+      stripe_customers: [{ user_id: FIXTURE_USER_ID, stripe_customer_id: CUS48, default_payment_method_id: null, stripe_mode: 'test' }],
+      billing_subscriptions: [mirrorRow(SUB48, { status: 'past_due', stripe_customer_id: CUS48 })],
+      licenses: [SUSPENDED_LIC],
+    });
+    mockStripeImpl['checkout.sessions.create'] = async () => ({ ...clone(fx48('pr2-cs-setup-open')), url: 'https://checkout.stripe.com/c/pay/setup' });
+    expect(await caught(() => startCardUpdate())).toEqual({ redirect: 'https://checkout.stripe.com/c/pay/setup' });
+  });
+});

@@ -15,6 +15,7 @@ const STATUS: Record<RowStatus, [string, string]> = {
   uncollectible: ['Unpaid', 'bg-red-100 text-red-800'],
   refunded: ['Refunded', 'bg-gray-100 text-gray-800'],
   partly_refunded: ['Partly refunded', 'bg-gray-100 text-gray-800'],
+  disputed: ['Disputed', 'bg-red-100 text-red-800'],
 };
 
 export interface InvoicesData {

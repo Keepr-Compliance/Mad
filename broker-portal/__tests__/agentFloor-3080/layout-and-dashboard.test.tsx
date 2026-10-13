@@ -292,14 +292,14 @@ describe('/dashboard on the floor', () => {
     // C-data: neither user's submission appears, and none was read.
     expect(html).not.toContain(SUBMISSION_MINE);
     expect(html).not.toContain(SUBMISSION_THEIRS);
-    expect(tablesRead()).toEqual(['organization_members']);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
   });
 
   it('a failed membership read: the floor view, nothing else read', async () => {
     given([brokerageMembership('broker')], true);
     const { html } = await pageOutcome();
     expect(html).toContain('Your Keepr account');
-    expect(tablesRead()).toEqual(['organization_members']);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
   });
 });
 
@@ -311,7 +311,7 @@ describe('/dashboard for the full portal (positive controls)', () => {
     expect(redirect).toBeUndefined();
     expect(html).toContain('Overview of transaction submissions');
     expect(html).not.toContain('Your Keepr account');
-    expect(tablesRead()).toEqual(['organization_members', 'transaction_submissions', 'users']); // users: agent names on the phone cards
+    expect(tablesRead()).toEqual(['licenses', 'organization_members', 'transaction_submissions', 'users']); // users: agent names on the phone cards
     // The emulator has no RLS, so the render shows the exact id set it served:
     // proof the "neither id" assertion above can fail.
     expect(html).toContain(`/dashboard/submissions/${SUBMISSION_MINE}`);
@@ -321,6 +321,6 @@ describe('/dashboard for the full portal (positive controls)', () => {
   it('it_admin -> /dashboard/users, before any submission is read', async () => {
     given([brokerageMembership('it_admin')]);
     expect(await pageOutcome()).toEqual({ redirect: '/dashboard/users' });
-    expect(tablesRead()).toEqual(['organization_members']);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
   });
 });

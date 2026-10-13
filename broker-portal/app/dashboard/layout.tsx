@@ -57,7 +57,13 @@ export default async function DashboardLayout({
   const showMyTransactions = !isImpersonating && (await getMyTransactionsGate()) !== null;
   // BACKLOG-3844: the rule the billing page uses, on access only. No read: the
   // access above is reused. The page refuses on its own.
-  const showBilling = billingNavVisible({ access, isImpersonating, enabled: billingEnabled() });
+  // BACKLOG-3878: a suspended account sees Billing (personal owner only), Support
+  // and My Account. The pages and middleware refuse the rest on their own. Never
+  // read while impersonating (portal is null then).
+  const suspended = portal?.suspended === true;
+  const personalOwner = access?.kind === 'floor' && access.via === 'personal_owner';
+  const showBilling =
+    billingNavVisible({ access, isImpersonating, enabled: billingEnabled() }) && (!suspended || personalOwner);
 
   return (
     <DashboardShell
@@ -71,6 +77,7 @@ export default async function DashboardLayout({
       checklistsUnavailableLabel={checklistsUnavailableLabel}
       showMyTransactions={showMyTransactions}
       showBilling={showBilling}
+      suspended={suspended}
     >
       {children}
     </DashboardShell>

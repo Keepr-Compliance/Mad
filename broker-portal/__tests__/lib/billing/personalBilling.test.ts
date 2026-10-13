@@ -266,3 +266,34 @@ describe('getPersonalBillingView', () => {
     expect(calls).toContain('paymentMethods.retrieve:"pm_SEEDED"');
   });
 });
+
+// BACKLOG-3878: a charged-back payment reads Disputed. The charge is a real
+// TEST charge disputed by Stripe (fixtures/stripe/p3878/README.md).
+describe('BACKLOG-3878 disputed rows', () => {
+  const disputed = fx('p3878/charges-list-disputed').data[0] as Stripe.Charge;
+
+  it('fixture check: Stripe set disputed on a succeeded, unrefunded, invoice-less charge', () => {
+    expect([disputed.status, disputed.disputed, disputed.refunded, disputed.amount_refunded, disputed.invoice]).toEqual([
+      'succeeded',
+      true,
+      false,
+      0,
+      null,
+    ]);
+  });
+
+  it('per-export charge, disputed (fixture) -> Disputed', () => {
+    expect(rowsFrom([], [disputed]).map((r) => [r.status, r.description])).toEqual([['disputed', 'Export unlock']]);
+  });
+
+  it('control: the same charge with disputed false [EDITED] -> Paid', () => {
+    expect(rowsFrom([], [{ ...disputed, disputed: false }]).map((r) => r.status)).toEqual(['paid']);
+  });
+
+  it('paid Agent invoice whose charge is disputed [COMPOSED: fixture charge given the invoice id] -> Disputed, one row', () => {
+    const inv = INV_AFTER_PAY[0];
+    const ch = { ...disputed, invoice: inv.id } as Stripe.Charge;
+    expect(rowsFrom([inv], [ch]).map((r) => [r.id, r.status])).toEqual([[inv.id, 'disputed']]);
+  });
+});
+

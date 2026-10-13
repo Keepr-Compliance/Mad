@@ -15,6 +15,7 @@ import { PaymentContactBlock } from './PaymentContactBlock';
 import { InvoicesBlock } from './InvoicesBlock';
 import { PaymentFailedBanner } from './PaymentFailedBanner';
 import { CardUpdateReturn } from './BillingCardControls';
+import { SuspendedBanner } from './SuspendedBanner';
 import type { PersonalBillingData } from '@/lib/billing/personalBilling';
 
 export interface PlanPrice {
@@ -36,8 +37,10 @@ export interface PersonalPlanData {
   paymentIncomplete?: boolean;
   /** BACKLOG-3848: blocks 4–6 (credits, card, contact, receipts/invoices). */
   billing?: PersonalBillingData;
-  /** licenses.status = suspended (agentPlan view). Copy only; access stays with 3878. */
+  /** licenses.status = suspended (agentPlan view). BACKLOG-3878: banner + suspended plan. */
   suspended?: boolean;
+  /** BACKLOG-3878: the latest account_suspensions row is a dispute suspension ("after a chargeback"). */
+  suspendedForDispute?: boolean;
   /** BACKLOG-3848: back from the Stripe card page (`?card=`). */
   card?: 'updated' | 'cancelled' | null;
   /** BACKLOG-3848: from billingCapabilities (the server re-checks on every action). */
@@ -70,7 +73,7 @@ export function BillingPage({ caps, orgBillingSetUp, personal }: BillingPageProp
       case 'plan':
         return <PlanBlock key={block} line={planLine(caps, orgBillingSetUp)} personal={personal} />;
       case 'choose_plan':
-        return <ChoosePlanBlock key={block} prices={personal?.prices} />;
+        return <ChoosePlanBlock key={block} prices={personal?.prices} suspended={suspended} />;
       case 'seats':
         return <SeatsBlock key={block} />;
       case 'credits':
@@ -99,7 +102,10 @@ export function BillingPage({ caps, orgBillingSetUp, personal }: BillingPageProp
       {caps.kind === 'personal' && personal?.card === 'cancelled' ? (
         <p role="status" className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-700">Your card was not changed.</p>
       ) : null}
-      {b && personal?.state === 'payment_failed' ? (
+      {/* BACKLOG-3878: one banner; a suspension outranks a failed payment. */}
+      {caps.kind === 'personal' && suspended ? (
+        <SuspendedBanner dispute={personal?.suspendedForDispute === true} />
+      ) : b && personal?.state === 'payment_failed' ? (
         <PaymentFailedBanner card={b.card} invoice={b.failedInvoice} canUpdateCard={caps.canUpdateCard && b.customer === 'present'} />
       ) : null}
       {caps.blocks.map(render)}
