@@ -652,3 +652,133 @@ describe('reportOutboxHealth (daily queue check)', () => {
     expect(mockCaptureMessage).not.toHaveBeenCalled();
   });
 });
+
+// ---- BACKLOG-3878 R7: suspension safety net ------------------------------------------------
+// Objects: fixtures/stripe/p3878 (TEST, see README). x1-sub-past-due-before-pause is an
+// unpaused Agent plan still collecting; x2-sub-after-void-and-pause is a paused one.
+
+describe('3878 R7: suspended licence with a plan still collecting', () => {
+  const UNPAUSED = fx('p3878', 'x1-sub-past-due-before-pause');
+  const PAUSED = fx('p3878', 'x2-sub-after-void-and-pause');
+  const LIC_UPDATED = '2026-10-13T10:00:00.000Z';
+
+  function suspendedUser(licStatus: string, sub: Obj, extra: Record<string, Row[]> = {}) {
+    seed({
+      organizations: [personal(USER, ORG, true)],
+      organization_plans: [plan(ORG, undefined)],
+      stripe_customers: [customer(USER, sub.customer, 'test')],
+      licenses: [{ user_id: USER, status: licStatus, updated_at: LIC_UPDATED }],
+      ...extra,
+    });
+    serve(sub);
+    listed = [];
+  }
+  const pauseRows = () => db.rows('billing_outbox').filter((r) => r.kind === 'pause_agent_subscription');
+
+  it('suspended + unpaused plan -> one pause row (reconcile dedupe key) and one alert', async () => {
+    suspendedUser('suspended', UNPAUSED);
+    expect([UNPAUSED.status, UNPAUSED.pause_collection]).toEqual(['past_due', null]);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(pauseRows()).toEqual([
+      expect.objectContaining({ stripe_mode: 'test', user_id: USER, dedupe_key: `pause:test:${USER}:reconcile:${LIC_UPDATED}` }),
+    ]);
+    expect(alerts('suspended_subscription_unpaused')).toEqual([expect.objectContaining({ count: 1, subscription_ids: UNPAUSED.id })]);
+    expect(r.suspendedUnpaused).toBe(1);
+    expect(stripeCalls.find((c) => c.op === 'subscriptions.list' && (c.args[0] as Obj).customer)?.args[0]).toMatchObject({ customer: UNPAUSED.customer, status: 'all' });
+  });
+
+  it('a pause row already waiting -> no second row, still alerted', async () => {
+    suspendedUser('suspended', UNPAUSED, {
+      billing_outbox: [{ id: 'ob-1', stripe_mode: 'test', kind: 'pause_agent_subscription', user_id: USER, dedupe_key: 'pause:test:trigger', processed_at: null }],
+    });
+    await reconcileAgentSubscriptions(deps());
+    expect(pauseRows()).toHaveLength(1);
+    expect(alerts('suspended_subscription_unpaused')).toHaveLength(1);
+  });
+
+  it('a second nightly run adds no second row (same licence -> same key)', async () => {
+    suspendedUser('suspended', UNPAUSED);
+    await reconcileAgentSubscriptions(deps());
+    db.rows('billing_outbox')[0].processed_at = '2026-10-13T11:00:00.000Z'; // drained, but Stripe still unpaused
+    await reconcileAgentSubscriptions(deps());
+    expect(pauseRows()).toHaveLength(1);
+  });
+
+  it('suspended + already paused -> nothing enqueued, no alert', async () => {
+    suspendedUser('suspended', PAUSED);
+    await reconcileAgentSubscriptions(deps());
+    expect(pauseRows()).toEqual([]);
+    expect(alerts('suspended_subscription_unpaused')).toEqual([]);
+  });
+
+  it('suspended + only an unpaused brokerage-kind subscription -> no pause row, no alert [COMPOSED: kind brokerage]', async () => {
+    const brokerage: Obj = { ...UNPAUSED, id: 'sub_composed_brokerage_3878', metadata: { kind: 'brokerage' } };
+    suspendedUser('suspended', brokerage);
+    expect([brokerage.status, brokerage.pause_collection]).toEqual(['past_due', null]);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(pauseRows()).toEqual([]);
+    expect(alerts('suspended_subscription_unpaused')).toEqual([]);
+    expect(r.suspendedUnpaused).toBe(0);
+  });
+
+  it('licence active + unpaused plan -> nothing (only suspended licences are read)', async () => {
+    suspendedUser('active', UNPAUSED);
+    await reconcileAgentSubscriptions(deps());
+    expect(pauseRows()).toEqual([]);
+    expect(alerts('suspended_subscription_unpaused')).toEqual([]);
+  });
+
+  it('customer only in the other mode -> not this run\'s concern', async () => {
+    suspendedUser('suspended', UNPAUSED);
+    db.rows('stripe_customers')[0].stripe_mode = 'live';
+    await reconcileAgentSubscriptions(deps('test'));
+    expect(pauseRows()).toEqual([]);
+  });
+});
+
+describe('3878 R7: paused plan whose licence is active', () => {
+  const PAUSED = fx('p3878', 'x2-sub-after-void-and-pause');
+
+  function pausedUser(licStatus: string, extra: Record<string, Row[]> = {}) {
+    seed({
+      organizations: [personal(USER, ORG, true)],
+      organization_plans: [plan(ORG, undefined)],
+      stripe_customers: [customer(USER, PAUSED.customer, 'test')],
+      licenses: [{ user_id: USER, status: licStatus, updated_at: '2026-10-13T10:00:00.000Z' }],
+      ...extra,
+    });
+    serve(PAUSED);
+    listed = [PAUSED];
+  }
+
+  it('licence active, no resume waiting -> alert only (no Stripe write, no outbox row)', async () => {
+    pausedUser('active');
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(alerts('paused_subscription_licence_active')).toEqual([expect.objectContaining({ count: 1, subscription_ids: PAUSED.id })]);
+    expect(r.pausedLicenceActive).toBe(1);
+    expect(db.rows('billing_outbox')).toEqual([]);
+    expect(grants()).toEqual([]);
+  });
+
+  it('a resume row still waiting -> no alert', async () => {
+    pausedUser('active', {
+      billing_outbox: [{ id: 'ob-r', stripe_mode: 'test', kind: 'resume_agent_subscription', user_id: USER, dedupe_key: 'resume:test:x', processed_at: null }],
+    });
+    await reconcileAgentSubscriptions(deps());
+    expect(alerts('paused_subscription_licence_active')).toEqual([]);
+  });
+
+  it('a processed resume row does not count as waiting -> alert', async () => {
+    pausedUser('active', {
+      billing_outbox: [{ id: 'ob-r', stripe_mode: 'test', kind: 'resume_agent_subscription', user_id: USER, dedupe_key: 'resume:test:x', processed_at: '2026-10-13T11:00:00.000Z' }],
+    });
+    await reconcileAgentSubscriptions(deps());
+    expect(alerts('paused_subscription_licence_active')).toHaveLength(1);
+  });
+
+  it('licence suspended -> paused is the right state, no alert', async () => {
+    pausedUser('suspended');
+    await reconcileAgentSubscriptions(deps());
+    expect(alerts('paused_subscription_licence_active')).toEqual([]);
+  });
+});

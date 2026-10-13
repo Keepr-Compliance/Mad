@@ -358,26 +358,109 @@ describe('invoice.paid gates on real fixtures (C-3b, C-D3, C-D2, C-D2b)', () => 
     expect(db.rows('billing_outbox').filter((r) => r.kind === 'agent_receipt')).toEqual([]);
   });
 
-  it('C-D2: void-pause resume (subscription_update) -> grant to the new period end', async () => {
+  // BACKLOG-3878 D2 (SR R4): the P0-a resume invoices were made by a spike, not by a Keepr
+  // resume: no keepr_resume marker (subscription_details.metadata = {spike, user_id}). They are
+  // now the no-grant control. A resume row for this user exists in both, so the marker is what
+  // decides, not the absence of rows.
+  const RESUME_ROW = { id: 'outbox-resume-1', stripe_mode: 'test', kind: 'resume_agent_subscription', user_id: USER, dedupe_key: 'resume:test:x', payload: {} };
+
+  it('C-D2: void-pause resume (subscription_update) WITHOUT a Keepr marker -> no grant (3878 R4)', async () => {
     const sub = fx('sub-2cv-resume');
-    useDb({ stripe_customers: [customerRow(sub.customer)] });
+    const inv = fx('inv-2cv-resume');
+    expect(inv.billing_reason).toBe('subscription_update');
+    expect(inv.subscription_details.metadata.keepr_resume).toBeUndefined();
+    useDb({ stripe_customers: [customerRow(sub.customer)], billing_outbox: [RESUME_ROW] });
     const charge = fx('ev-2cv-resume-charge.succeeded').data.object; // the resume charge as delivered
-    expect(charge.id).toBe(fx('inv-2cv-resume').charge);
-    serve(fx('inv-2cv-resume'), sub, charge);
+    expect(charge.id).toBe(inv.charge);
+    serve(inv, sub, charge);
     expect((await deliver(fx('ev-2cv-resume-invoice.paid'))).status).toBe(200);
-    expect(grants().map((g) => g.p_paid_through)).toEqual([paidThrough(1797792475)]);
+    expect(grants()).toEqual([]);
   });
 
-  it('C-D2b (R5): uncollectible resume, lines[0] is a proration item -> grant from the subscription line', async () => {
+  it('C-D2b: uncollectible resume WITHOUT a Keepr marker -> no grant (3878 R4)', async () => {
     const sub = fx('sub-2cu-resume');
     const inv = fx('inv-2cu-resume');
     expect(inv.lines.data[0]).toMatchObject({ type: 'invoiceitem', proration: true });
-    useDb({ stripe_customers: [customerRow(sub.customer)] });
+    expect(inv.subscription_details.metadata.keepr_resume).toBeUndefined();
+    useDb({ stripe_customers: [customerRow(sub.customer)], billing_outbox: [RESUME_ROW] });
     const charge = fx('ev-2cu-resume-charge.succeeded').data.object; // the resume charge as delivered
     expect(charge.id).toBe(inv.charge);
     serve(inv, sub, charge);
     expect((await deliver(fx('ev-2cu-resume-invoice.paid'))).status).toBe(200);
-    expect(grants().map((g) => g.p_paid_through)).toEqual([paidThrough(1797792475)]);
+    expect(grants()).toEqual([]);
+  });
+});
+
+// ---- BACKLOG-3878 D2: the resume charge grants only by an exact marker ------
+
+describe('3878 D2: subscription_update grants only on a Keepr resume marker (R4)', () => {
+  const FX3878 = path.join(__dirname, '../../../fixtures/stripe/p3878');
+  const fx3878 = (n: string): Obj => JSON.parse(fs.readFileSync(path.join(FX3878, `${n}.json`), 'utf8'));
+  const INV = fx3878('x2-resume-invoice-marker');
+  const SUB = fx3878('x2-resume-sub');
+  const CHARGE = fx3878('x2-resume-charge');
+  const EV = fx3878('x2-resume-ev-invoice.paid');
+  const MARKER = INV.subscription_details.metadata.keepr_resume as string;
+  // The resume row the trigger would have written. Its id is set to the spike's marker
+  // value [COMPOSED: a real row id is a uuid; the spike labelled the resume instead].
+  const resumeRow = (over: Obj = {}) => ({
+    id: MARKER, stripe_mode: 'test', kind: 'resume_agent_subscription', user_id: USER, dedupe_key: 'resume:test:x2', payload: {}, processed_at: '2026-10-13T00:00:00Z', ...over,
+  });
+
+  beforeEach(() => {
+    expect([INV.billing_reason, INV.status, INV.metadata]).toEqual(['subscription_update', 'paid', {}]);
+    expect(EV.data.object.id).toBe(INV.id);
+    expect(CHARGE.id).toBe(INV.charge);
+    serve(INV, SUB, CHARGE);
+  });
+
+  it('C7: marker = id of this user\'s resume row -> grant to the new period end', async () => {
+    useDb({ stripe_customers: [customerRow(SUB.customer)], billing_outbox: [resumeRow()] });
+    expect((await deliver(EV)).status).toBe(200);
+    expect(grants()).toEqual([{ p_user_id: USER, p_paid_through: paidThrough(SUB.current_period_end), p_mode: 'test' }]);
+  });
+
+  it('C7-unknown: marker matches no resume row (another id) -> no grant', async () => {
+    useDb({ stripe_customers: [customerRow(SUB.customer)], billing_outbox: [resumeRow({ id: 'outbox-other-resume' })] });
+    expect((await deliver(EV)).status).toBe(200);
+    expect(grants()).toEqual([]);
+  });
+
+  it('C7-scope: the matching row belongs to another user, another mode or another kind -> no grant', async () => {
+    useDb({
+      stripe_customers: [customerRow(SUB.customer)],
+      billing_outbox: [
+        resumeRow({ user_id: 'USER-OTHER' }),
+        resumeRow({ id: `${MARKER}`, stripe_mode: 'live', dedupe_key: 'resume:live:x2' }),
+        resumeRow({ kind: 'pause_agent_subscription', dedupe_key: 'pause:test:x2' }),
+      ],
+    });
+    expect((await deliver(EV)).status).toBe(200);
+    expect(grants()).toEqual([]);
+  });
+
+  it('C7-meta: a marker in invoice.metadata (not subscription_details) never grants [EDITED: marker moved]', async () => {
+    const moved = JSON.parse(JSON.stringify(INV));
+    moved.metadata = { keepr_resume: MARKER };
+    delete moved.subscription_details.metadata.keepr_resume;
+    serve(moved);
+    useDb({ stripe_customers: [customerRow(SUB.customer)], billing_outbox: [resumeRow()] });
+    expect((await deliver(EV)).status).toBe(200);
+    expect(grants()).toEqual([]);
+  });
+
+  it('C7-read-error: the outbox read fails -> 500 (Stripe redelivers), no grant', async () => {
+    useDb({ stripe_customers: [customerRow(SUB.customer)], billing_outbox: [resumeRow()] });
+    db.failNext['billing_outbox.select'] = { code: 'XX000', message: 'boom' };
+    expect((await deliver(EV)).status).toBe(500);
+    expect(grants()).toEqual([]);
+  });
+
+  it('R5 line rule kept: the period line is the subscription line, never lines[0] (2cu: lines[0] is a proration item)', async () => {
+    const { subscriptionLine } = await import('@/lib/billing/sync');
+    const inv = fx('inv-2cu-resume');
+    expect(inv.lines.data[0]).toMatchObject({ type: 'invoiceitem', proration: true });
+    expect(subscriptionLine(inv as never)).toMatchObject({ type: 'subscription', proration: false, period: { end: 1797792475 } });
   });
 });
 

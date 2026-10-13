@@ -27,6 +27,8 @@ export interface StripeStub {
 const OPS = [
   'checkout.sessions.retrieve',
   'checkout.sessions.create',
+  'checkout.sessions.list',
+  'checkout.sessions.expire',
   'setupIntents.retrieve',
   'customers.retrieve',
   'customers.update',
@@ -34,6 +36,7 @@ const OPS = [
   'customers.list',
   'customers.search',
   'subscriptions.retrieve',
+  'subscriptions.list',
   'subscriptions.update',
   'subscriptions.cancel',
   'invoices.retrieve',

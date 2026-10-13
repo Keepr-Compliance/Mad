@@ -34,7 +34,7 @@ export function InvoicesBlock({ data }: { data?: InvoicesData }) {
   const rows = data.rows;
   return (
     <BillingBlock id="invoices" title={agent ? 'Invoices' : 'Receipts'}>
-      {/* Keepr emails a receipt after every per-export payment (lib/payments/receipt.ts). */}
+      {/* Stripe emails the receipt after every per-export payment (founder 2026-10-13, BACKLOG-3648). */}
       {!agent ? <p className="mt-1 text-sm text-gray-500">Emailed after every payment</p> : null}
       {rows === null || rows.length === 0 ? (
         <p className="mt-3 text-sm text-gray-600">{rows === null ? ROWS_UNAVAILABLE : ROWS_EMPTY}</p>

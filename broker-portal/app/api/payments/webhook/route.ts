@@ -35,7 +35,6 @@ import {
   recordRefund,
   emitPaymentSucceeded,
 } from '@/lib/payments/fulfillment';
-import { dispatchReceiptEmail } from '@/lib/payments/receipt';
 import { applyCardUpdate } from '@/lib/billing/cardUpdate';
 
 export const runtime = 'nodejs';
@@ -186,21 +185,15 @@ async function handlePaymentIntentSucceeded(ctx: BillingContext, piId: string): 
     .update({ status: 'fulfilled', webhook_event_id: event.id, updated_at: new Date().toISOString() })
     .eq('stripe_payment_intent_id', pi.id);
 
-  // Emit the funnel event + send a receipt only on a NEW fulfillment (not a
-  // replay/short-circuit). Receipt dispatch is non-blocking (BACKLOG-2009).
+  // Emit the funnel event only on a NEW fulfillment (not a replay/short-circuit).
+  // No Keepr receipt: Stripe emails the receipt for the solo launch (founder
+  // 2026-10-13, BACKLOG-3648/3848), so Keepr's own one is switched off.
   if (result.unlocked && !result.alreadyFulfilled) {
     await emitPaymentSucceeded(service, md.user_id, {
       local_transaction_id: md.local_transaction_id,
       unit_price_cents: unitPriceCents,
       pricing_tier_id: md.pricing_tier_id ?? null,
       stripe_payment_intent_id: pi.id,
-    });
-    await dispatchReceiptEmail(service, {
-      userId: md.user_id,
-      amountCents: unitPriceCents,
-      stripePaymentIntentId: pi.id,
-      stripe: ctx.stripe,
-      customerId: stripeId(pi.customer),
     });
   }
 }

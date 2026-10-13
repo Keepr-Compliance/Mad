@@ -111,10 +111,17 @@ function stableJson(v: unknown): string {
  * never load each other in a cycle.
  *   - agent_receipt          BACKLOG-3848, lib/billing/agentReceipt.ts
  *   - agent_end_now_cancel   BACKLOG-3848, lib/billing/endPlanNow.ts
+ *   - pause_agent_subscription / resume_agent_subscription
+ *                            BACKLOG-3878, lib/billing/suspension.ts (enqueued by the
+ *                            licences trigger and the nightly reconcile)
  */
 export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.freeze({
   agent_receipt: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
     (await import('./agentReceipt')).handleAgentReceiptRow(row, ctx),
   agent_end_now_cancel: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
     (await import('./endPlanNow')).handleEndNowCancelRow(row, ctx),
+  pause_agent_subscription: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./suspension')).handlePauseRow(row, ctx),
+  resume_agent_subscription: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./suspension')).handleResumeRow(row, ctx),
 });

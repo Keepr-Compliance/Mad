@@ -8,6 +8,7 @@
  *    stripe_customers row in the event's mode; the user is that row's user.
  *    sub.metadata.user_id is a cross-check only (mismatch = warning, R1).
  *  - Grant only on invoice.paid (paid, total > 0, create/cycle/update reason,
+ *    an update only when it is a Keepr resume (BACKLOG-3878 D2),
  *    the non-proration subscription line pays the current period, the charge is
  *    neither refunded nor disputed, sub active/trialing and not paused).
  *  - Revoke only when the user has no OTHER open subscription in this mode
@@ -433,6 +434,32 @@ export async function handleSubscriptionEvent(ctx: BillingContext, subscriptionI
   }
 }
 
+/** billing_outbox kind of the reinstatement resume (BACKLOG-3878, lib/billing/suspension.ts). */
+export const RESUME_KIND = 'resume_agent_subscription';
+
+/**
+ * D2 (BACKLOG-3878, SR R4): a `subscription_update` invoice grants only when it
+ * is the charge of a Keepr resume: its `subscription_details.metadata.keepr_resume`
+ * (where Stripe copies the subscription metadata; `invoice.metadata` stays `{}`)
+ * equals the id of a resume outbox row for this user and mode. Exact match, not
+ * "non-empty": the marker stays on the subscription after the resume. The ids
+ * are compared here rather than by `.eq('id', marker)`, because `id` is a uuid
+ * column and a marker that is not a uuid would make that read fail on every retry.
+ */
+async function isKeeprResumeInvoice(ctx: BillingContext, invoice: Stripe.Invoice, userId: string): Promise<boolean> {
+  const marker = invoice.subscription_details?.metadata?.keepr_resume;
+  if (typeof marker !== 'string' || marker.length === 0) return false;
+  const { data, error } = await ctx.service
+    .from('billing_outbox')
+    .select('id')
+    .eq('kind', RESUME_KIND)
+    .eq('user_id', userId)
+    .eq('stripe_mode', ctx.mode)
+    .limit(1000);
+  if (error) throw new Error(`billing_outbox read failed: ${error.code ?? 'unknown'}`);
+  return ((data as { id: string }[] | null) ?? []).some((r) => r.id === marker);
+}
+
 /** invoice.paid: the only grant path. */
 export async function handleInvoicePaid(ctx: BillingContext, invoiceId: string): Promise<void> {
   const invoice = await ctx.stripe.invoices.retrieve(invoiceId, { expand: ['charge'] });
@@ -450,6 +477,9 @@ export async function handleInvoicePaid(ctx: BillingContext, invoiceId: string):
   log(ctx, `receipt for ${invoice.id}: ${queued}`);
   if (!invoice.billing_reason || !GRANT_REASONS.has(invoice.billing_reason)) {
     return log(ctx, `invoice ${invoice.id} reason ${invoice.billing_reason}; no grant`);
+  }
+  if (invoice.billing_reason === 'subscription_update' && !(await isKeeprResumeInvoice(ctx, invoice, userId))) {
+    return log(ctx, `invoice ${invoice.id} is a subscription_update Keepr did not make by a resume; no grant`);
   }
   const outcome = await syncSubscription(ctx, sub, userId, { advanceCursor: false });
   if (outcome === 'duplicate' || outcome === 'refused') return;

@@ -50,7 +50,6 @@ jest.mock('@/lib/stripe', () => ({
   }),
 }));
 jest.mock('@/lib/payments/fulfillment', () => ({ fulfillPaidUnlock: jest.fn(), emitPaymentSucceeded: jest.fn() }));
-jest.mock('@/lib/payments/receipt', () => ({ dispatchReceiptEmail: jest.fn() }));
 
 import { GET } from '@/app/api/cron/payment-reconcile/route';
 
