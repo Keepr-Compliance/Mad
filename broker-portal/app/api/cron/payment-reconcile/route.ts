@@ -19,7 +19,6 @@ import { getStripe } from '@/lib/stripe';
 import { currentStripeMode } from '@/lib/billing/mode';
 import { createServiceClient } from '@/lib/supabase/service';
 import { fulfillPaidUnlock, emitPaymentSucceeded } from '@/lib/payments/fulfillment';
-import { dispatchReceiptEmail } from '@/lib/payments/receipt';
 import { isAuthorizedCronRequest } from '@/lib/auth/cronAuth';
 import { billingEnabled } from '@/lib/billing/flag';
 import { reconcileAgentSubscriptions, reportOutboxHealth } from '@/lib/billing/reconcile';
@@ -94,14 +93,7 @@ export async function GET(req: Request): Promise<Response> {
           pricing_tier_id: row.pricing_tier_id,
           stripe_payment_intent_id: piId,
         });
-        // Receipt on the reconciliation-recovered fulfillment (BACKLOG-2009).
-        await dispatchReceiptEmail(service, {
-          userId: row.user_id,
-          amountCents: row.quoted_unit_price_cents,
-          stripePaymentIntentId: piId,
-          stripe,
-          customerId: typeof pi.customer === 'string' ? pi.customer : pi.customer?.id ?? null,
-        });
+        // No Keepr receipt: Stripe sends it (founder 2026-10-13, BACKLOG-3648/3848).
       }
       fulfilled++;
     } catch (err) {
