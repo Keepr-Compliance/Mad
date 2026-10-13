@@ -34,6 +34,7 @@ const baseContext: UseIPhoneSyncReturn = {
   installDriverError: null,
   recoverInstallDriver: jest.fn(),
   recheckDriver: jest.fn(async () => "not-installed" as const),
+  setConnectScreenActive: jest.fn(),
   appleDevicesState: null,
   startSync: jest.fn(),
   cancelSync: jest.fn(),
@@ -70,6 +71,21 @@ describe("IPhoneSyncFlow in the Store build (BACKLOG-3927)", () => {
     await userEvent.click(screen.getByRole("button", { name: APPLE_DEVICES_CHECK_BUTTON }));
     expect(recheckDriver).toHaveBeenCalled();
     expect(baseContext.recoverInstallDriver).not.toHaveBeenCalled();
+  });
+
+  it("reports the Connect screen shown, and not shown once it unmounts or another view takes over", () => {
+    const setConnectScreenActive = jest.fn();
+    mockContextValue = { ...baseContext, setConnectScreenActive };
+    const { unmount, rerender } = render(<IPhoneSyncFlow />);
+    expect(setConnectScreenActive).toHaveBeenLastCalledWith(true);
+    mockContextValue = { ...baseContext, setConnectScreenActive, syncStatus: "syncing", progress: { phase: "backup", percent: 1, message: "x" } as never };
+    rerender(<IPhoneSyncFlow />);
+    expect(setConnectScreenActive).toHaveBeenLastCalledWith(false);
+    mockContextValue = { ...baseContext, setConnectScreenActive };
+    rerender(<IPhoneSyncFlow />);
+    expect(setConnectScreenActive).toHaveBeenLastCalledWith(true);
+    unmount();
+    expect(setConnectScreenActive).toHaveBeenLastCalledWith(false);
   });
 
   it("website build (flag absent) + driverMissing: Install button, no guide", () => {

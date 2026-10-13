@@ -126,10 +126,8 @@ describe("useIPhoneSync — Store build (BACKLOG-3927)", () => {
     const { result } = renderHook(() => useIPhoneSync(true));
     await flush();
     act(() => result.current.setConnectScreenActive(true));
-    await act(async () => {
-      jest.advanceTimersByTime(STORE_FOCUS_THROTTLE_MS);
-    });
-    await flush();
+    // Move the clock past the throttle window without firing the interval.
+    jest.setSystemTime(Date.now() + STORE_FOCUS_THROTTLE_MS + 1);
     checkApple.mockResolvedValue(driverStatus("not-installed"));
     await act(async () => {
       window.dispatchEvent(new Event("focus"));
@@ -182,21 +180,26 @@ describe("useIPhoneSync — re-check is tied to the Connect screen (SR round 3)"
     const { result } = renderHook(() => useIPhoneSync(true));
     await flush();
     act(() => result.current.setConnectScreenActive(true));
-    await advance(STORE_FOCUS_THROTTLE_MS);
     const before = checkApple.mock.calls.length;
-    for (let i = 0; i < 25; i++) {
-      await act(async () => {
-        window.dispatchEvent(new Event("focus"));
-      });
-      await flush();
-    }
+    const spam = async (n: number) => {
+      for (let i = 0; i < n; i++) {
+        await act(async () => {
+          window.dispatchEvent(new Event("focus"));
+        });
+        await flush();
+      }
+    };
+    // Inside the window opened by the mount probe: nothing.
+    await spam(25);
+    expect(checkApple.mock.calls.length - before).toBe(0);
+    // Window elapsed (clock jump, interval not fired): spam -> exactly one.
+    jest.setSystemTime(Date.now() + STORE_FOCUS_THROTTLE_MS + 1);
+    await spam(25);
     expect(checkApple.mock.calls.length - before).toBe(1);
-    await advance(STORE_FOCUS_THROTTLE_MS - 1);
-    await act(async () => {
-      window.dispatchEvent(new Event("focus"));
-    });
-    await flush();
-    expect(checkApple.mock.calls.length - before).toBeGreaterThanOrEqual(1);
+    // Next window: one more.
+    jest.setSystemTime(Date.now() + STORE_FOCUS_THROTTLE_MS + 1);
+    await spam(25);
+    expect(checkApple.mock.calls.length - before).toBe(2);
   });
 
   it("SR S14: re-check stops once the iPhone connects (no probe on interval or focus)", async () => {
