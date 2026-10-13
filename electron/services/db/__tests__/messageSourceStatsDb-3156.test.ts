@@ -21,6 +21,9 @@
  * Controls:
  *   S1 each source's counts are exactly its own rows: another source's rows, another
  *      user's rows, Companion rows and reactions are not counted.
+ *   S3 through the REAL contact worker pool (esbuild bundle of contactQueryWorker.ts):
+ *      the same answer, and the main thread's longest stall during the call stays
+ *      under 50 ms (heartbeat on main while the worker reads).
  *   S2 the read is index-bounded (EXPLAIN QUERY PLAN: no full SCAN of messages). Its time
  *      at 100k texts is printed; measured ~250 ms, over the 50 ms main-thread budget, so
  *      the handler runs it on the contact query worker (messageSourceStatsHandler test).
@@ -32,6 +35,11 @@ import { performance } from "perf_hooks";
 import type { Database as DatabaseType } from "better-sqlite3";
 
 jest.mock("electron-log", () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
+jest.mock("../../logService", () => {
+  const noop = jest.fn().mockResolvedValue(undefined);
+  const m = { info: noop, warn: noop, error: noop, debug: noop };
+  return { __esModule: true, default: m, logService: m };
+});
 
 const DRIVER = nodePath.join(__dirname, "..", "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers");
 const KEY_HEX = "3156".repeat(16);
@@ -127,7 +135,12 @@ maybe("BACKLOG-3156 stage G: messages stored per source (real encrypted DB)", ()
     db.exec("ANALYZE");
   }, 600_000);
 
-  afterAll(() => {
+  afterAll(async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pool = require("../../../workers/contactWorkerPool") as typeof import("../../../workers/contactWorkerPool");
+    await pool.shutdownPool().catch(() => undefined);
+    pool.setContactWorkerPathForTests(null);
+    nodeFs.rmSync(nodePath.join(__dirname, "..", "..", "..", "..", ".tmp-3156"), { recursive: true, force: true });
     db?.close();
     if (dir) nodeFs.rmSync(dir, { recursive: true, force: true });
   });
@@ -164,4 +177,46 @@ maybe("BACKLOG-3156 stage G: messages stored per source (real encrypted DB)", ()
     process.stderr.write(`[3156] ${MESSAGES} texts: median ${times[2].toFixed(1)} ms, max ${times[4].toFixed(1)} ms; plan: ${plan.join(" | ")}\n`);
     expect(times[2]).toBeLessThan(MAX_MS);
   });
+
+  it("S3: through the real worker pool — same answer, main never stalls 50 ms", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const esbuild = require("esbuild");
+    // Inside the worktree so the bundle's external driver require resolves (as contactWorkerPool.drain-2553).
+    const bundleDir = nodePath.join(__dirname, "..", "..", "..", "..", ".tmp-3156");
+    nodeFs.mkdirSync(bundleDir, { recursive: true });
+    const bundle = nodePath.join(bundleDir, "contactQueryWorker.bundle.js");
+    esbuild.buildSync({
+      entryPoints: [nodePath.join(__dirname, "..", "..", "..", "workers", "contactQueryWorker.ts")],
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      outfile: bundle,
+      external: ["better-sqlite3-multiple-ciphers"],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pool = require("../../../workers/contactWorkerPool") as typeof import("../../../workers/contactWorkerPool");
+    pool.setContactWorkerPathForTests(bundle);
+    db.pragma("wal_checkpoint(TRUNCATE)");
+    await Promise.race([
+      pool.initializePool(nodePath.join(dir, "mad.db"), KEY_HEX),
+      new Promise((_r, reject) => setTimeout(() => reject(new Error("worker pool did not start in 30 s")), 30_000)),
+    ]);
+    expect(pool.isPoolReady()).toBe(true);
+
+    let last = performance.now();
+    let maxGap = 0;
+    const beat = setInterval(() => {
+      const now = performance.now();
+      maxGap = Math.max(maxGap, now - last);
+      last = now;
+    }, 1);
+    const t0 = performance.now();
+    const rows = await pool.queryContacts("messageSourceStats", USER, 30_000);
+    const total = performance.now() - t0;
+    clearInterval(beat);
+
+    expect(rows[0]).toEqual(readMessageSourceStatsOn(db, USER));
+    process.stderr.write(`[3156] worker round trip ${total.toFixed(1)} ms; longest main-thread stall ${maxGap.toFixed(1)} ms\n`);
+    expect(maxGap).toBeLessThan(50);
+  }, 120_000);
 });
