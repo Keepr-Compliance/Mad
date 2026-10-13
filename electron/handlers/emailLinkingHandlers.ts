@@ -20,6 +20,11 @@ import gmailFetchService from "../services/gmailFetchService";
 import outlookFetchService from "../services/outlookFetchService";
 import emailSyncService from "../services/emailSyncService";
 import { wrapHandler } from "../utils/wrapHandler";
+import {
+  refuseIfDealLocked,
+  refuseIfAnyDealLocked,
+  getMessageTransactionIds,
+} from "../services/dealLockState";
 import { notifyWhenMessageDerivedReady, notifyWhenReadLands } from "../services/messageDerivedReadyNotice";
 import { joinMessageRosterRead } from "../services/db/messageRosterCache";
 import type { TransactionResponse } from "../types/handlerTypes";
@@ -196,6 +201,10 @@ export function registerEmailLinkingHandlers(): void {
           "emailIds",
         );
       }
+
+      // BACKLOG-3910: a locked deal (submitted or sealed) is read-only.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId, "attach-emails");
+      if (lockedRefusal) return lockedRefusal;
 
       // Get transaction to get user_id
       const transaction = await transactionService.getTransactionDetails(validatedTransactionId);
@@ -575,6 +584,10 @@ export function registerEmailLinkingHandlers(): void {
         }
       }
 
+      // BACKLOG-3910: a locked deal (submitted or sealed) is read-only.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId, "attach-texts");
+      if (lockedRefusal) return lockedRefusal;
+
       await transactionService.linkMessages(messageIds, validatedTransactionId);
 
       logService.info("Messages linked successfully", "Transactions", {
@@ -615,6 +628,14 @@ export function registerEmailLinkingHandlers(): void {
           throw new ValidationError(`Invalid message ID: ${id}`, "messageIds");
         }
       }
+
+      // BACKLOG-3910: a locked deal (submitted or sealed) is fully read-only.
+      // The service unlinks from the passed deal, else each message's own deal.
+      const lockedRefusal = refuseIfAnyDealLocked(
+        transactionId ? [transactionId] : getMessageTransactionIds(messageIds),
+        "remove-texts",
+      );
+      if (lockedRefusal) return lockedRefusal;
 
       // TASK-1116: Pass transactionId for thread-based unlinking
       await transactionService.unlinkMessages(messageIds, transactionId);
@@ -765,6 +786,10 @@ export function registerEmailLinkingHandlers(): void {
         throw new ValidationError("Email ID is required", "emailId");
       }
 
+      // BACKLOG-3910: restoring a removed email re-attaches it; a locked deal is read-only.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId, "attach-emails");
+      if (lockedRefusal) return lockedRefusal;
+
       // Get transaction to get user_id
       const transaction = await transactionService.getTransactionDetails(validatedTransactionId);
       if (!transaction) {
@@ -844,6 +869,10 @@ export function registerEmailLinkingHandlers(): void {
       if (!Array.isArray(messageIds) || messageIds.length === 0) {
         throw new ValidationError("Message IDs must be a non-empty array", "messageIds");
       }
+
+      // BACKLOG-3910: restoring a removed text re-attaches it; a locked deal is read-only.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId, "attach-texts");
+      if (lockedRefusal) return lockedRefusal;
 
       // BACKLOG-2791: if this row is a REVIEW REJECTION, restoring it returns it
       // to the Needs Review queue — it must NOT become a link. Restoring used to

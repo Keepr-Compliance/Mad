@@ -1,12 +1,15 @@
 /**
- * Pins for `db/emailForceSetSql` — BACKLOG-2989 commit A2.
+ * Pins for `db/emailForceSetSql` — BACKLOG-2989 commit A2, rewritten for
+ * BACKLOG-3910a.
  *
- * The predicate stopped travelling as text, so these assert what it MEANS
- * rather than what it says. Schema: `electron/database/schema.sql`, whole.
+ * The rule under test (founder 2026-10-11): a Force Re-cache replaces EVERY
+ * email of the user — any account, provider, age, provider id or sent date —
+ * except emails tied to a deal by one of four links. Asserted by EXECUTION on
+ * the real driver against the whole `schema.sql`, comparing id SETS.
  *
- * The NULL-safety case is the one to read first. It is not defensive coding —
- * it is the difference between a re-cache that rebuilds the corpus and one that
- * silently stages a duplicate of every row it should have left alone.
+ * The NULL case (C16) is the one to read first: `id NOT IN (list holding a
+ * NULL)` is NULL for every row, so a keep-list written that way removes
+ * nothing while the run reports success.
  */
 
 import fs from "fs";
@@ -19,24 +22,20 @@ const RealDatabase = require(
 ) as typeof import("better-sqlite3-multiple-ciphers");
 
 import {
-  assertRebuildableProviders,
   deleteLiveForceSet,
   emailForceReadView,
+  selectProtectedLiveEmails,
   type EmailForceSet,
 } from "../emailForceSetSql";
 import { STAGING_PREFIX, checkedStagingTable } from "../stagingDdlSql";
 import { sql } from "../core/sqlText";
+import { LOCKED_SUBMISSION_STATUSES } from "../../transactionEligibility";
 
 const SCHEMA = path.join(__dirname, "..", "..", "..", "database", "schema.sql");
 const USER = "user-2989-force";
 const OTHER = "user-2989-force-other";
-const SINCE = "2026-01-01T00:00:00Z";
 
-const SET: EmailForceSet = {
-  userId: USER,
-  providers: ["gmail", "outlook"],
-  cacheSinceIso: SINCE,
-};
+const SET: EmailForceSet = { userId: USER };
 
 let tmpRoot: string;
 let db: InstanceType<typeof RealDatabase>;
@@ -54,11 +53,12 @@ const addEmail = (
     source?: string | null;
     externalId?: string | null;
     sentAt?: string | null;
+    accountId?: string | null;
   } = {},
 ): void => {
   db.prepare(
-    `INSERT INTO emails (id, user_id, external_id, source, sent_at, subject)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO emails (id, user_id, external_id, source, sent_at, subject, account_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     opts.userId ?? USER,
@@ -66,13 +66,70 @@ const addEmail = (
     opts.source === undefined ? "gmail" : opts.source,
     opts.sentAt === undefined ? "2026-06-01T00:00:00Z" : opts.sentAt,
     `subject ${id}`,
+    opts.accountId ?? null,
   );
 };
 
-const liveIds = (): string[] =>
-  (db.prepare("SELECT id FROM emails ORDER BY id").all() as Array<{ id: string }>).map(
-    (r) => r.id,
+const addDeal = (id: string, status = "not_submitted"): void => {
+  db.prepare(
+    `INSERT INTO transactions (id, user_id, property_address, submission_status) VALUES (?, ?, ?, ?)`,
+  ).run(id, USER, `${id} Main St`, status);
+};
+const linkEmail = (commId: string, dealId: string, emailId: string): void => {
+  db.prepare(
+    `INSERT INTO communications (id, user_id, transaction_id, email_id, link_source) VALUES (?, ?, ?, ?, 'manual')`,
+  ).run(commId, USER, dealId, emailId);
+};
+const rejectEmail = (id: string, dealId: string, emailId: string): void => {
+  db.prepare(
+    `INSERT INTO ignored_communications (id, user_id, transaction_id, email_id) VALUES (?, ?, ?, ?)`,
+  ).run(id, USER, dealId, emailId);
+};
+/** A checklist on `dealId` with one item; returns the item id. */
+const addChecklist = (dealId: string): string => {
+  db.prepare(
+    `INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name) VALUES (?, ?, 'tpl', 'Residential')`,
+  ).run(`ck-${dealId}`, dealId);
+  db.prepare(
+    `INSERT INTO transaction_checklist_items (id, checklist_id, title) VALUES (?, ?, 'Signed offer')`,
+  ).run(`it-${dealId}`, `ck-${dealId}`);
+  return `it-${dealId}`;
+};
+const addEmailMember = (linkId: string, itemId: string, emailId: string): void => {
+  db.prepare(
+    `INSERT INTO transaction_checklist_links (id, item_id, kind, label) VALUES (?, ?, 'email', 'e')`,
+  ).run(linkId, itemId);
+  db.prepare(
+    `INSERT INTO transaction_checklist_link_members (id, link_id, kind, email_id) VALUES (?, ?, 'email', ?)`,
+  ).run(`m-${linkId}`, linkId, emailId);
+};
+const addAttachmentMember = (
+  linkId: string,
+  itemId: string,
+  attachmentId: string,
+  owner: { emailId: string } | { messageId: string },
+): void => {
+  db.prepare(
+    `INSERT INTO attachments (id, email_id, message_id, filename) VALUES (?, ?, ?, 'offer.pdf')`,
+  ).run(
+    attachmentId,
+    "emailId" in owner ? owner.emailId : null,
+    "messageId" in owner ? owner.messageId : null,
   );
+  db.prepare(
+    `INSERT INTO transaction_checklist_links (id, item_id, kind, label) VALUES (?, ?, 'attachment', 'a')`,
+  ).run(linkId, itemId);
+  db.prepare(
+    `INSERT INTO transaction_checklist_link_members (id, link_id, kind, attachment_id) VALUES (?, ?, 'attachment', ?)`,
+  ).run(`m-${linkId}`, linkId, attachmentId);
+};
+
+const liveIds = (userId?: string): string[] =>
+  (
+    (userId
+      ? db.prepare("SELECT id FROM emails WHERE user_id = ? ORDER BY id").all(userId)
+      : db.prepare("SELECT id FROM emails ORDER BY id").all()) as Array<{ id: string }>
+  ).map((r) => r.id);
 
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-2989-force-"));
@@ -88,124 +145,189 @@ afterEach(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-describe("assertRebuildableProviders", () => {
-  it("refuses an unknown source rather than guessing", () => {
-    expect(() =>
-      assertRebuildableProviders(["gmail", "imap" as never]),
-    ).toThrow(/unknown source "imap"/);
+describe("deleteLiveForceSet — every UNPROTECTED email of the user, nothing else (BACKLOG-3910a)", () => {
+  /**
+   * C4' (SQL half). Each removed row is one the OLD predicate spared: another
+   * provider, out of window, NULL sent_at, NULL source, NULL provider id.
+   * MUTATION: put back `AND sent_at >= ?` / `AND source IN (…)` /
+   * `AND external_id IS NOT NULL` -> the matching row survives, red.
+   */
+  it("removes unprotected rows of any provider, age, account and provider id; other users untouched", () => {
+    addEmail("u-gmail");
+    addEmail("u-outlook", { source: "outlook" });
+    addEmail("u-old", { sentAt: "2019-01-01T00:00:00Z" });
+    addEmail("u-null-sent", { sentAt: null });
+    addEmail("u-null-source", { source: null });
+    addEmail("u-null-ext", { externalId: null });
+    addEmail("o-1", { userId: OTHER });
+
+    expect(deleteLiveForceSet(db as never, SET)).toBe(6);
+    expect(liveIds()).toEqual(["o-1"]);
   });
 
-  it("refuses an empty set — a predicate matching nothing is not a safe force set", () => {
-    expect(() => assertRebuildableProviders([])).toThrow(/no rebuildable provider/);
-  });
-
-  it("guards the DELETE too, not just the constructor", () => {
-    // The guard travels with the construction it protects, so a set that got
-    // past the constructor by any route still cannot reach the SQL.
-    expect(() =>
-      deleteLiveForceSet(db as never, { ...SET, providers: ["pop3" as never] }),
-    ).toThrow(/unknown source/);
-  });
-});
-
-describe("deleteLiveForceSet — the ROW READ BACK, one case per predicate arm", () => {
-  it("deletes exactly the force set and leaves every survivor in place", () => {
-    addEmail("in-gmail");
-    addEmail("in-outlook", { source: "outlook" });
-
-    addEmail("keep-other-user", { userId: OTHER });
-    addEmail("keep-null-external", { externalId: null });
-    addEmail("keep-too-old", { sentAt: "2025-06-01T00:00:00Z" });
-
-    const deleted = deleteLiveForceSet(db as never, SET);
-
-    expect(deleted).toBe(2);
-    // Identity, not a count: three different bugs give a survivor count of 3.
-    expect(liveIds()).toEqual(["keep-null-external", "keep-other-user", "keep-too-old"]);
-  });
-
-  it("leaves a row whose source is not in the rebuilt provider list", () => {
-    // Allow-list, not deny-list: a user who disconnected Outlook and clicks
-    // Re-cache must not lose their Outlook mail.
-    addEmail("gmail-row");
-    addEmail("outlook-row", { source: "outlook" });
-
-    deleteLiveForceSet(db as never, { ...SET, providers: ["gmail"] });
-
-    expect(liveIds()).toEqual(["outlook-row"]);
-  });
-
-  it("leaves rows with a NULL source or NULL sent_at — the unrecognised row survives", () => {
-    addEmail("null-source", { source: null });
-    addEmail("null-sent", { sentAt: null });
-    addEmail("deleted-me");
+  /**
+   * C3 / C11 (SQL half): each of the four ties keeps its email, one row per arm.
+   * MUTATION: drop any one arm -> that arm's row is removed, red.
+   */
+  it("keeps an email tied by ANY of the four links, and removes the untied one beside them", () => {
+    addDeal("d1");
+    const item = addChecklist("d1");
+    addEmail("k-linked");
+    addEmail("k-rejected");
+    addEmail("k-email-member");
+    addEmail("k-attachment-member");
+    addEmail("gone");
+    linkEmail("c1", "d1", "k-linked");
+    rejectEmail("i1", "d1", "k-rejected");
+    addEmailMember("L1", item, "k-email-member");
+    addAttachmentMember("L2", item, "att-1", { emailId: "k-attachment-member" });
 
     expect(deleteLiveForceSet(db as never, SET)).toBe(1);
-    expect(liveIds()).toEqual(["null-sent", "null-source"]);
+    expect(liveIds(USER)).toEqual(["k-attachment-member", "k-email-member", "k-linked", "k-rejected"]);
+  });
+
+  /**
+   * C16 — the NULL-in-keep-list trap. A checklist attachment member whose
+   * attachment is a TEXT attachment (`attachments.email_id` NULL) must not stop
+   * the removal. Written as EXISTS per arm (SR S1), there is no NULL to trip.
+   *
+   * MUTATION: rewrite the attachment arm as `e.id NOT IN (SELECT a.email_id …)`
+   * with no IS NOT NULL filter -> 0 rows removed, red.
+   */
+  it("C16: a text-attachment checklist member does not stop unprotected emails being removed", () => {
+    addDeal("d1");
+    const item = addChecklist("d1");
+    db.prepare(`INSERT INTO messages (id, user_id, channel) VALUES ('msg-1', ?, 'imessage')`).run(USER);
+    addAttachmentMember("L-text", item, "att-text", { messageId: "msg-1" });
+    addEmail("gone-1");
+    addEmail("gone-2", { source: "outlook" });
+
+    expect(deleteLiveForceSet(db as never, SET)).toBe(2);
+    expect(liveIds(USER)).toEqual([]);
+  });
+
+  /**
+   * C9' (SQL half): a suggestion waiting in Needs Review is NOT a protecting
+   * tie (founder ade2d364). Its row goes with the email.
+   * MUTATION: add the pending-review table as a fifth keep arm -> the
+   * pending-only email survives, red.
+   */
+  it("C9': a pending-review suggestion does not protect its email", () => {
+    addDeal("d1");
+    addEmail("pending-only");
+    db.prepare(
+      `INSERT INTO pending_review_communications (id, user_id, transaction_id, email_id) VALUES ('p1', ?, 'd1', 'pending-only')`,
+    ).run(USER);
+
+    expect(deleteLiveForceSet(db as never, SET)).toBe(1);
+    expect(liveIds(USER)).toEqual([]);
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM pending_review_communications`).get()).toEqual({ n: 0 });
   });
 });
 
-describe("emailForceReadView — live survivors UNION what this run staged", () => {
+describe("selectProtectedLiveEmails — the kept set and its frozen flag", () => {
+  const frozenOf = (): Record<string, number> =>
+    Object.fromEntries(
+      selectProtectedLiveEmails(db as never, SET, LOCKED_SUBMISSION_STATUSES).map((r) => [r.id, r.frozen]),
+    );
+
+  it("LOCKED_SUBMISSION_STATUSES is derived from the lock map: exactly the four locking statuses", () => {
+    expect([...LOCKED_SUBMISSION_STATUSES].sort()).toEqual([
+      "approved",
+      "resubmitted",
+      "submitted",
+      "under_review",
+    ]);
+  });
+
+  /**
+   * C5 / C5c (SQL half): the gate reads `submission_status`.
+   * MUTATION: freeze nothing (`CASE WHEN 0`) -> every locked row reads 0, red;
+   * freeze everything -> the open rows read 1, red.
+   */
+  it("flags an email linked to a locked deal frozen, and one on an open deal not frozen", () => {
+    const statuses = [
+      "submitted",
+      "under_review",
+      "resubmitted",
+      "approved",
+      "not_submitted",
+      "needs_changes",
+      "rejected",
+    ];
+    for (const status of statuses) {
+      addDeal(`d-${status}`, status);
+      addEmail(`e-${status}`);
+      linkEmail(`c-${status}`, `d-${status}`, `e-${status}`);
+    }
+    expect(frozenOf()).toEqual({
+      "e-submitted": 1,
+      "e-under_review": 1,
+      "e-resubmitted": 1,
+      "e-approved": 1,
+      "e-not_submitted": 0,
+      "e-needs_changes": 0,
+      "e-rejected": 0,
+    });
+  });
+
+  it("freezes via a locked deal's checklist (email-kind and attachment-kind), and via one locked link among open ones", () => {
+    addDeal("open");
+    addDeal("locked", "approved");
+    const lockedItem = addChecklist("locked");
+    addEmail("both");
+    addEmail("cl-email");
+    addEmail("cl-att");
+    linkEmail("c1", "open", "both");
+    linkEmail("c2", "locked", "both");
+    addEmailMember("L1", lockedItem, "cl-email");
+    addAttachmentMember("L2", lockedItem, "att-1", { emailId: "cl-att" });
+
+    expect(frozenOf()).toEqual({ both: 1, "cl-email": 1, "cl-att": 1 });
+  });
+
+  /** SR R3(b): a rejection on a locked deal keeps the email but does not freeze it. */
+  it("a rejected suggestion on a locked deal keeps the email without freezing it", () => {
+    addDeal("locked", "submitted");
+    addEmail("rej");
+    rejectEmail("i1", "locked", "rej");
+    expect(frozenOf()).toEqual({ rej: 0 });
+  });
+
+  it("refuses an empty locked-status list rather than freezing nothing", () => {
+    expect(() => selectProtectedLiveEmails(db as never, SET, [])).toThrow(/no locked status/);
+  });
+});
+
+describe("emailForceReadView — other users' rows UNION what this run staged", () => {
   const STAGING = checkedStagingTable(
-    `${STAGING_PREFIX["email-recache"]}deadbeefcafe_emails`,
+    `${STAGING_PREFIX["email-recache"]}0123456789ab_emails`,
     "email-recache",
   );
 
   beforeEach(() => {
-    db.exec(`CREATE TABLE "${STAGING}" (id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, source TEXT, sent_at TEXT)`);
+    db.exec(`CREATE TABLE "${STAGING}" AS SELECT * FROM emails WHERE 0`);
   });
 
-  it("returns survivors plus staged rows, and NOT the live rows being replaced", () => {
-    addEmail("live-in-force-set");
-    addEmail("live-survivor", { sentAt: "2025-01-01T00:00:00Z" });
-    db.prepare(`INSERT INTO "${STAGING}" (id, user_id, source, sent_at) VALUES ('staged-1', ?, 'gmail', '2026-06-02T00:00:00Z')`).run(USER);
+  /**
+   * Every live row of the user is hidden — protected or not, any provider or
+   * age — so every fetched message is staged and the swap decides per row.
+   * MUTATION: survivors predicate back to the old scope -> `mine-*` rows
+   * appear, red.
+   */
+  it("hides EVERY live row of the user, and returns other users' rows plus staged rows", () => {
+    addEmail("mine-gmail");
+    addEmail("mine-old", { sentAt: "2019-01-01T00:00:00Z", source: "outlook" });
+    addEmail("mine-null-ext", { externalId: null });
+    addEmail("theirs", { userId: OTHER });
+    db.prepare(`INSERT INTO "${STAGING}" (id, user_id, subject) VALUES ('staged-1', ?, 's')`).run(USER);
 
     const view = emailForceReadView(SET, STAGING, sql`id`);
-    const rows = (
-      db.prepare(`SELECT id FROM ${view.sql} ORDER BY id`).all(...view.params) as Array<{
-        id: string;
-      }>
+    const ids = (
+      db.prepare(`SELECT id FROM ${view.sql} ORDER BY id`).all(...view.params) as Array<{ id: string }>
     ).map((r) => r.id);
-
-    expect(rows).toEqual(["live-survivor", "staged-1"]);
-  });
-
-  it("NULL-SAFE: a row with a NULL source counts as a survivor, not as nothing", () => {
-    /**
-     * This is the case `COALESCE(..., 0) = 0` exists for, and the reason it is
-     * spelled out by hand rather than written `NOT (...)`.
-     *
-     * `source` is nullable past its CHECK and `sent_at` is nullable outright, so
-     * the force predicate can evaluate to NULL. Under a plain `NOT (...)` that
-     * row is NULL — so it SURVIVES the DELETE (correct; a DELETE removes a row
-     * only when its WHERE is TRUE) and then DROPS OUT of this survivor read
-     * (wrong). A row that survives but is invisible to the rebuild's dedup gets
-     * staged a second time, and the swap inserts a duplicate of a row the user
-     * still had.
-     */
-    addEmail("null-source-survivor", { source: null });
-
-    const view = emailForceReadView(SET, STAGING, sql`id`);
-    const rows = (
-      db.prepare(`SELECT id FROM ${view.sql}`).all(...view.params) as Array<{ id: string }>
-    ).map((r) => r.id);
-
-    expect(rows).toEqual(["null-source-survivor"]);
-    // And the DELETE agrees it survived — the two must not disagree.
-    expect(deleteLiveForceSet(db as never, SET)).toBe(0);
-  });
-
-  it("binds the same parameters the predicate needs, in order", () => {
-    // BACKLOG-3102 PR 2: the providers are BOUND now, and they sit BETWEEN the
-    // two parameters that were already here — matching the order the
-    // placeholders appear in (`user_id = ?`, `source IN (?, ?)`,
-    // `sent_at >= ?`). Transcribed from SET, so adding a provider to the fixture
-    // cannot leave this assertion quietly describing the old arity.
-    expect(emailForceReadView(SET, STAGING, sql`id`).params).toEqual([
-      USER,
-      ...SET.providers,
-      SINCE,
-    ]);
+    expect(ids).toEqual(["staged-1", "theirs"]);
+    expect(view.params).toEqual([USER]);
   });
 });
 
@@ -222,11 +344,7 @@ describe("the staging name is branded here too, not just in stagingDdlSql", () =
    * same control A1 uses. `type-check:tests` is where they bite; `type-check`
    * skips test files.
    */
-  const SET2: EmailForceSet = {
-    userId: "u",
-    providers: ["gmail"],
-    cacheSinceIso: "2026-01-01T00:00:00Z",
-  };
+  const SET2: EmailForceSet = { userId: "u" };
 
   it("refuses an unchecked staging table at the type level", () => {
     // `columns` is `sql`id`` and NOT the plain "id" it used to be. That matters:
@@ -254,175 +372,3 @@ describe("the staging name is branded here too, not just in stagingDdlSql", () =
   });
 });
 
-/**
- * BACKLOG-3102 PR 2 — EXECUTED PARITY across the provider-binding change.
- *
- * The provider list stopped being spliced as quoted literals and is now bound.
- * That rewrote the text of every force-mode statement, INCLUDING
- * `deleteLiveForceSet`, which deletes the user's mail. For that path a text
- * comparison is not evidence: the question is whether SQLite selects the same
- * rows, and only running both forms can answer it.
- *
- * So both statements are executed against the SAME fixture database and their
- * **ID SETS** are compared — never their counts. Three different defects produce
- * the same count.
- *
- * The old forms below are TRANSCRIBED from the pre-change tree
- * (`git show 47530f84a:electron/services/db/emailForceSetSql.ts`, `predicateFor`
- * at `:93-97` and `emailForceReadView` at `:143-147`), not re-derived from the
- * new code — a fixture re-derived from the thing under test proves nothing.
- *
- * Swept over EVERY provider combination the producer can emit. `connectedProviders`
- * (`emailSyncService.ts:2144-2147`) builds `[outlook?, gmail?]` and
- * `rebuiltProviders` (`:2151`, narrowed by `emailForceStaging.ts:410`) pushes in
- * completion order — so both single-provider sets and BOTH orderings of the pair
- * are reachable, and order is observable in the text and in the params.
- */
-describe("BACKLOG-3102 — binding the providers selects the same rows, executed", () => {
-  const STAGING_P = checkedStagingTable(
-    `${STAGING_PREFIX["email-recache"]}0123456789ab_emails`,
-    "email-recache",
-  );
-
-  /** Exactly what `predicateFor` emitted before the providers were bound. */
-  const oldPredicate = (providers: readonly string[]): string =>
-    `user_id = ? AND external_id IS NOT NULL ` +
-    `AND source IN (${providers.map((p) => `'${p}'`).join(", ")}) ` +
-    `AND sent_at >= ?`;
-
-  const oldReadViewSql = (providers: readonly string[], columns: string): string =>
-    `(SELECT ${columns} FROM emails WHERE COALESCE(${oldPredicate(providers)}, 0) = 0` +
-    ` UNION ALL SELECT ${columns} FROM "${STAGING_P}")`;
-
-  const COMBOS: ReadonlyArray<ReadonlyArray<"gmail" | "outlook">> = [
-    ["gmail"],
-    ["outlook"],
-    ["gmail", "outlook"],
-    ["outlook", "gmail"],
-  ];
-
-  /**
-   * Every arm of the predicate, and both nullable columns it can trip over.
-   * `source` is nullable past its CHECK and `sent_at` is nullable outright, so
-   * the predicate CAN evaluate to NULL — the case `COALESCE(..., 0) = 0` exists
-   * for. Names describe the row's role; no real mail, addresses or names.
-   */
-  const seedCorpus = (): void => {
-    addEmail("row-gmail-in-window");
-    addEmail("row-outlook-in-window", { source: "outlook" });
-    addEmail("row-source-null", { source: null });
-    addEmail("row-sent-at-null", { sentAt: null });
-    addEmail("row-external-id-null", { externalId: null });
-    addEmail("row-too-old", { sentAt: "2025-06-01T00:00:00Z" });
-    addEmail("row-other-user", { userId: OTHER });
-    addEmail("row-exactly-at-boundary", { sentAt: SINCE });
-    db.exec(
-      `CREATE TABLE "${STAGING_P}" (id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, source TEXT, sent_at TEXT, subject TEXT)`,
-    );
-    db.prepare(
-      `INSERT INTO "${STAGING_P}" (id, user_id, external_id, source, sent_at) VALUES ('row-staged', ?, 'ext-staged', 'gmail', '2026-06-02T00:00:00Z')`,
-    ).run(USER);
-  };
-
-  const idsFrom = (statement: string, params: readonly unknown[]): string[] =>
-    (db.prepare(statement).all(...params) as Array<{ id: string }>).map((r) => r.id).sort();
-
-  it.each(COMBOS.map((c) => [c.join("+"), c] as const))(
-    "READ VIEW %s — identical id SET, old form vs new",
-    (_label, providers) => {
-      seedCorpus();
-      const set: EmailForceSet = { ...SET, providers: [...providers] };
-
-      const oldIds = idsFrom(`SELECT id FROM ${oldReadViewSql(providers, "id, user_id")}`, [
-        USER,
-        SINCE,
-      ]);
-      const view = emailForceReadView(set, STAGING_P, sql`id, user_id`);
-      const newIds = idsFrom(`SELECT id FROM ${view.sql}`, view.params);
-
-      expect(newIds).toEqual(oldIds);
-      // And the set is the one the feature means, spelled out — so a change that
-      // broke BOTH forms identically would still fail here.
-      expect(newIds).toEqual(
-        [
-          "row-external-id-null",
-          "row-other-user",
-          "row-sent-at-null",
-          "row-source-null",
-          "row-staged",
-          "row-too-old",
-          // `row-exactly-at-boundary` is a gmail row with sent_at EXACTLY at the
-          // window start. `sent_at >= ?` is inclusive, so it is INSIDE the force
-          // set — it survives only when gmail is not being rebuilt. Sweeping the
-          // boundary rather than sampling either side of it is what makes an
-          // off-by-one here visible.
-          ...(providers.includes("gmail")
-            ? []
-            : ["row-gmail-in-window", "row-exactly-at-boundary"]),
-          ...(providers.includes("outlook") ? [] : ["row-outlook-in-window"]),
-        ].sort(),
-      );
-    },
-  );
-
-  it.each(COMBOS.map((c) => [c.join("+"), c] as const))(
-    "DELETE %s — identical id SET removed, old form vs new. This is the user's mail.",
-    (_label, providers) => {
-      const set: EmailForceSet = { ...SET, providers: [...providers] };
-
-      seedCorpus();
-      const before = liveIds();
-      db.prepare(`DELETE FROM emails WHERE ${oldPredicate(providers)}`).run(USER, SINCE);
-      const afterOld = liveIds();
-      const removedByOld = before.filter((id) => !afterOld.includes(id));
-
-      // Same fixture again, from scratch, so the two DELETEs cannot interfere.
-      db.exec(`DROP TABLE "${STAGING_P}"`);
-      db.prepare("DELETE FROM emails").run();
-      seedCorpus();
-      deleteLiveForceSet(db as never, set);
-      const afterNew = liveIds();
-      const removedByNew = before.filter((id) => !afterNew.includes(id));
-
-      expect(removedByNew).toEqual(removedByOld);
-      expect(afterNew).toEqual(afterOld);
-      // Spelled out, for the same reason as above.
-      expect(removedByNew).toEqual(
-        [
-          // The boundary row is gmail-sourced and sits exactly at `cacheSinceIso`;
-          // `>=` is inclusive, so it is deleted whenever gmail is rebuilt.
-          ...(providers.includes("gmail")
-            ? ["row-gmail-in-window", "row-exactly-at-boundary"]
-            : []),
-          ...(providers.includes("outlook") ? ["row-outlook-in-window"] : []),
-        ].sort(),
-      );
-    },
-  );
-
-  /**
-   * CONTROL — this assertion FAILS on the pre-change tree. Verified by running it
-   * against `47530f84a`, where the predicate emitted `source IN ('gmail', 'outlook')`
-   * and this test reported the quote. A conversion control that passes before and
-   * after the conversion has measured nothing.
-   */
-  it("carries NO quoted provider literal in the emitted text — fails on the old code", () => {
-    for (const providers of COMBOS) {
-      const view = emailForceReadView({ ...SET, providers: [...providers] }, STAGING_P, sql`id`);
-      for (const provider of providers) {
-        expect([provider, view.sql.includes(`'${provider}'`)]).toEqual([provider, false]);
-      }
-      expect(view.sql).toContain(`source IN (${providers.map(() => "?").join(", ")})`);
-    }
-  });
-
-  it("binds the providers BETWEEN userId and cacheSince, matching placeholder order", () => {
-    for (const providers of COMBOS) {
-      const view = emailForceReadView({ ...SET, providers: [...providers] }, STAGING_P, sql`id`);
-      expect([providers.join("+"), view.params]).toEqual([
-        providers.join("+"),
-        [USER, ...providers, SINCE],
-      ]);
-    }
-  });
-});

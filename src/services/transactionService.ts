@@ -54,6 +54,8 @@ export interface ApiResult<T = void> {
   success: boolean;
   error?: string;
   data?: T;
+  /** BACKLOG-3910d: the main process refused because the deal is locked. */
+  dealLocked?: "submitted" | "sealed";
 }
 
 /**
@@ -138,7 +140,13 @@ export const transactionService = {
       }
 
       const result = await window.api.transactions.update(transactionId, updates);
-      return { success: result.success, error: result.error };
+      // BACKLOG-3910d: keep the main process's lock refusal so a caller can tell
+      // "the deal is locked" from "the save failed".
+      return {
+        success: result.success,
+        error: result.error,
+        ...(result.dealLocked ? { dealLocked: result.dealLocked } : {}),
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       return { success: false, error: message };

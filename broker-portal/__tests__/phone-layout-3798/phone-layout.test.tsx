@@ -78,11 +78,22 @@ function setMatchMedia(matches: boolean | null) {
   });
 }
 
+// jsdom cannot navigate; a drawer link tap would log "Not implemented:
+// navigation" once a test waits a tick. Cancel link default actions only.
+const cancelLinkNavigation = (e: MouseEvent) => {
+  if ((e.target as Element | null)?.closest?.('a[href]')) e.preventDefault();
+};
+beforeEach(() => document.addEventListener('click', cancelLinkNavigation));
+
 afterEach(() => {
+  document.removeEventListener('click', cancelLinkNavigation);
   setMatchMedia(null);
   mockPath = '/dashboard/submissions/sub-1';
   document.documentElement.style.removeProperty('--review-bar-h');
 });
+
+/** One macrotask: Radix focus return and outside-pointer listeners run on setTimeout(0). */
+const tick = () => act(() => new Promise<void>((r) => setTimeout(r, 0)));
 
 const OPEN_SUBMISSION = { id: 'sub-1', status: 'under_review', organization_id: 'org-1' };
 
@@ -181,7 +192,7 @@ describe('shell', () => {
     expect(screen.queryByRole('dialog', { name: 'Main menu' })).not.toBeInTheDocument();
   });
 
-  it('C5 Escape closes the drawer and returns focus to Open menu; Tab wraps inside it', () => {
+  it('C5 Escape closes the drawer and returns focus to Open menu; Tab wraps inside it', async () => {
     renderShell();
     const opener = screen.getByRole('button', { name: 'Open menu' });
     fireEvent.click(opener);
@@ -189,30 +200,54 @@ describe('shell', () => {
     const closeBtn = within(dialog).getByRole('button', { name: 'Close menu' });
     expect(closeBtn).toHaveFocus();
 
+    // BACKLOG-3896: the kit Drawer's focus trap listens on the dialog, so Tab is
+    // fired where a browser fires it: on the focused element (it bubbles there).
     const signOut = within(dialog).getByRole('link', { name: /Sign Out/ });
     signOut.focus();
-    fireEvent.keyDown(document, { key: 'Tab' });
+    fireEvent.keyDown(document.activeElement as Element, { key: 'Tab' });
     expect(closeBtn).toHaveFocus();
-    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    fireEvent.keyDown(document.activeElement as Element, { key: 'Tab', shiftKey: true });
     expect(signOut).toHaveFocus();
 
-    expect(document.body.style.overflow).toBe('hidden');
-    fireEvent.keyDown(document, { key: 'Escape' });
+    // Scroll lock: react-remove-scroll marks body instead of setting overflow.
+    expect(document.body).toHaveAttribute('data-scroll-locked');
+    fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Main menu' })).not.toBeInTheDocument();
+    expect(document.body).not.toHaveAttribute('data-scroll-locked');
+    // Focus return runs on the focus scope's unmount, one tick later. Only the
+    // kit's returnFocusRef puts it on the opener; the shell does not focus it.
+    await tick();
     expect(opener).toHaveFocus();
-    expect(document.body.style.overflow).toBe('');
   });
 
-  it('C5b a tap on a drawer link or the backdrop closes it', () => {
-    renderShell();
-    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('link', { name: 'Submissions' }));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  it('C5b a tap on a drawer link or the backdrop closes it', async () => {
+    // jsdom 20 has no PointerEvent: fireEvent.pointerDown would build a plain
+    // Event and drop `button`, which sends Radix down its non-browser branch
+    // (close on pointerdown). With a MouseEvent-based PointerEvent, button 0
+    // reaches Radix and it defers the close to the click, as a browser tap does.
+    const w = window as unknown as { PointerEvent?: unknown };
+    const prev = w.PointerEvent;
+    w.PointerEvent = class PointerEvent extends MouseEvent {};
+    try {
+      renderShell();
+      const opener = screen.getByRole('button', { name: 'Open menu' });
+      fireEvent.click(opener);
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('link', { name: 'Submissions' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      await tick();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
-    const overlay = screen.getByTestId('mobile-nav-overlay');
-    fireEvent.click(overlay.firstElementChild as Element);
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      fireEvent.click(opener);
+      // Radix registers its outside-pointerdown listener after a tick.
+      await tick();
+      const backdrop = screen.getByTestId('mobile-nav-overlay').firstElementChild as Element;
+      fireEvent.pointerDown(backdrop, { button: 0 });
+      // Deferred to the click: still open after pointerdown alone.
+      expect(screen.getByRole('dialog', { name: 'Main menu' })).toBeInTheDocument();
+      fireEvent.click(backdrop);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    } finally {
+      w.PointerEvent = prev;
+    }
   });
 
   it('C6 the drawer shows labels even when the desktop sidebar is collapsed', () => {
@@ -238,6 +273,85 @@ describe('shell', () => {
       // The only hidden ancestor allowed is none; the overlay is md:hidden (visible below md).
       expect(tokens(el)).not.toContain('hidden');
     }
+  });
+});
+
+describe('BACKLOG-3896 kit drawer', () => {
+  it('R3 while open, the top bar and main are hidden from assistive tech; after close, neither is', async () => {
+    renderShell();
+    const opener = screen.getByRole('button', { name: 'Open menu' });
+    const topBar = screen.getByTestId('mobile-top-bar');
+    const main = document.querySelector('main') as HTMLElement;
+    expect(topBar.closest('[aria-hidden="true"]')).toBeNull();
+    expect(main.closest('[aria-hidden="true"]')).toBeNull();
+    fireEvent.click(opener);
+    const dialog = screen.getByRole('dialog', { name: 'Main menu' });
+    expect(topBar.closest('[aria-hidden="true"]')).not.toBeNull();
+    expect(main.closest('[aria-hidden="true"]')).not.toBeNull();
+    expect(dialog.closest('[aria-hidden="true"]')).toBeNull();
+    fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' });
+    await tick();
+    expect(topBar.closest('[aria-hidden="true"]')).toBeNull();
+    expect(main.closest('[aria-hidden="true"]')).toBeNull();
+  });
+
+  it('C12 a tap on the page that is already open closes the drawer (no route change)', () => {
+    mockPath = '/dashboard/submissions';
+    renderShell();
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+    const link = within(screen.getByRole('dialog')).getByRole('link', { name: 'Submissions' });
+    expect(link).toHaveClass('bg-gray-800'); // it is the current page
+    fireEvent.click(link);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('C13 every drawer row is 44px tall: links, the grayed Checklists entry, Sign Out', () => {
+    render(
+      <Sidebar
+        {...sidebarProps}
+        collapsed
+        checklistsUnavailableLabel="Not on your plan"
+        mobileOpen
+        onMobileClose={() => {}}
+      />
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Main menu' });
+    const links = within(dialog).getAllByRole('link');
+    expect(links.map((a) => a.textContent)).toEqual(['Dashboard', 'Submissions', 'Support', 'My Account', 'Sign Out']);
+    for (const a of links) expect(tokens(a)).toContain('min-h-[44px]');
+    const grayed = within(dialog).getByTestId('checklists-nav-grayed');
+    expect(tokens(grayed)).toContain('min-h-[44px]');
+    // The rail keeps its own row height.
+    for (const a of within(screen.getByTestId('desktop-sidebar')).getAllByRole('link', { hidden: true })) {
+      expect(tokens(a)).not.toContain('min-h-[44px]');
+    }
+  });
+
+  const ROLE_STATES: Array<[string, Partial<React.ComponentProps<typeof Sidebar>>]> = [
+    ['broker', { role: 'broker' }],
+    ['admin', { role: 'admin', showChecklists: true }],
+    ['it_admin', { role: 'it_admin' }],
+    ['floor only + My Transactions', { role: 'agent', floorOnly: true, showMyTransactions: true }],
+    ['impersonating', { role: undefined, isImpersonating: true, showChecklists: true }],
+    ['checklists grayed', { role: 'broker', checklistsUnavailableLabel: 'Not on your plan' }],
+  ];
+
+  it.each(ROLE_STATES)('C14 drawer and expanded rail show the same entries: %s', (_name, extra) => {
+    render(<Sidebar {...sidebarProps} collapsed={false} {...extra} mobileOpen onMobileClose={() => {}} />);
+    const entries = (root: HTMLElement) =>
+      Array.from(root.querySelectorAll('nav a[href], nav [data-testid="checklists-nav-grayed"]')).map(
+        (el) => el.getAttribute('href') ?? 'grayed:checklists'
+      );
+    const rail = entries(screen.getByTestId('desktop-sidebar'));
+    const drawer = entries(screen.getByRole('dialog', { name: 'Main menu' }));
+    expect(rail.length).toBeGreaterThan(0);
+    expect(drawer).toEqual(rail);
+  });
+
+  it('C15 the top bar shows the Broker qualifier (on a route with no phone title)', () => {
+    mockPath = '/dashboard/unmapped-route';
+    renderShell();
+    expect(within(screen.getByTestId('mobile-top-bar')).getByText('Broker')).toBeInTheDocument();
   });
 });
 

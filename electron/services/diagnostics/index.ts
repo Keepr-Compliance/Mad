@@ -26,6 +26,9 @@ export {
   formatUnknownBackupSizeError,
   formatMissingDriversError,
   formatDriverServiceStoppedError,
+  formatStoreAppleDevicesMissingError,
+  formatStoreAppleDevicesNotRunningError,
+  formatMsiServiceStoppedNeutralError,
   formatDeviceNotDetectedError,
   formatSyncFailedError,
 } from "./userFacingErrors";

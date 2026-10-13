@@ -20,6 +20,9 @@
  *   false negative is a paying customer locked out of something they bought.
  *   Callers as of BACKLOG-3087: app/dashboard/submissions/page.tsx,
  *   app/dashboard/submissions/[id]/page.tsx, components/ui/FeatureGated.tsx.
+ *   BACKLOG-3906: the Submissions list's org list (lib/submissions/allowedOrgs.ts)
+ *   still calls getOrgFeatures but reads a missing broker_portal_access key as a
+ *   failed read and lists nothing — it does not rely on the fail-open default.
  *   Their behaviour is pinned by __tests__/lib/feature-gate.test.ts — do not
  *   "tighten" these two functions without reading it.
  *

@@ -276,6 +276,8 @@ import { runStartupHealthChecks } from "./services/startupHealthCheck";
 import { getInstallMode } from "./services/diagnostics/installMode";
 import { getHostArchitecture } from "./services/diagnostics/hostArchitecture";
 import { WINDOWS_ARM64_ARGV_TOKEN } from "./utils/windowsArm64";
+import { STORE_BUILD_ARGV_TOKEN } from "./utils/distributionChannel";
+import { isStoreBuild } from "./services/distributionChannelService";
 import sessionSecurityService from "./services/sessionSecurityService";
 import {
   WindowResponsivenessTracker,
@@ -1223,9 +1225,11 @@ function createWindow(): void {
       // BACKLOG-3363: synchronous flag for the preload (process.argv), present
       // only on Windows on ARM. Read on every createWindow() (macOS activate
       // re-creates the window).
-      additionalArguments: getHostArchitecture().windows_arm64
-        ? [WINDOWS_ARM64_ARGV_TOKEN]
-        : [],
+      // BACKLOG-3927: likewise, a token present only in the Microsoft Store build.
+      additionalArguments: [
+        ...(getHostArchitecture().windows_arm64 ? [WINDOWS_ARM64_ARGV_TOKEN] : []),
+        ...(isStoreBuild() ? [STORE_BUILD_ARGV_TOKEN] : []),
+      ],
     },
     titleBarStyle: WINDOW_CONFIG.TITLE_BAR_STYLE as
       | "default"

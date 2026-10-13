@@ -18,6 +18,7 @@
  */
 
 import type { RcsExtensionState, RcsJobInfo } from "../../../../electron/types/ipc/window-api-rcs-import";
+import { googleMessagesOnlyBackToLine } from "../../transactionDetailsModule/components/coverageCopy";
 
 export type GoogleMessagesStep = "install" | "connect" | "syncing" | "done" | "failed";
 
@@ -43,9 +44,6 @@ export function extensionInstalled(state: RcsExtensionState | null): boolean {
   return !!state?.extensionVersion;
 }
 
-/** Settings → Messages → Google Messages' months control (scroll target of "Change"). */
-export const GM_LOOKBACK_TARGET = "settings-gm-lookback";
-
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 /**
@@ -53,13 +51,17 @@ const plural = (n: number, one: string, many: string): string => `${n} ${n === 1
  * the page sent — a chat whose messages were all older than the months
  * setting is not "saved". null while Keepr is still saving.
  */
-export function doneSummaryLines(job: RcsJobInfo): string[] | null {
+export function doneSummaryLines(job: RcsJobInfo, now: Date = new Date()): string[] | null {
   if (job.saved === undefined) return null;
   if (job.saved === null) return ["Keepr could not save this Sync. Nothing was imported: try again."];
   const s = job.saved;
   // Storyboard A11 / B05: ONE line — "20 chats · 412 messages (38 new) · 64 photos".
-  return [
+  const lines = [
     `${plural(s.chats, "chat", "chats")} · ${plural(s.messages, "message", "messages")} (${s.newMessages} new)` +
       (typeof s.photos === "number" && s.photos > 0 ? ` · ${plural(s.photos, "photo", "photos")}` : ""),
   ];
+  // BACKLOG-3892 E: a deal chat came back short of the date its deal needs.
+  const short = googleMessagesOnlyBackToLine(s.onlyBackTo, now);
+  if (short) lines.push(short);
+  return lines;
 }

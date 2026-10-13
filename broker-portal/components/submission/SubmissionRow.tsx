@@ -4,8 +4,9 @@
  * A submissions-table row that opens its submission when clicked anywhere,
  * matching the dashboard's "Recent Submissions" list, where each row is one
  * block link (app/dashboard/page.tsx). A <tr> cannot be wrapped in an anchor,
- * so the click is handled here; the row's own "Review" link stays the
- * keyboard path (one tab stop per row, Enter opens it) — BACKLOG-3609.
+ * so the click is handled here; the street <Link> in the list page
+ * (app/dashboard/submissions/page.tsx) is the keyboard path (one tab stop per
+ * row, Enter opens it) — BACKLOG-3609, BACKLOG-3904.
  */
 
 import { useRouter } from 'next/navigation';

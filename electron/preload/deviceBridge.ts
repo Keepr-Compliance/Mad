@@ -235,6 +235,13 @@ export const driverBridge = {
   openITunesStore: () => ipcRenderer.invoke("drivers:open-itunes-store"),
 
   /**
+   * BACKLOG-3927: open Apple's "Apple Devices" app in the Microsoft Store
+   * (Store build iPhone setup)
+   */
+  openAppleDevicesStore: () => ipcRenderer.invoke("drivers:open-apple-devices-store"),
+  openWindowsUpdate: (target: "check" | "optional") => ipcRenderer.invoke("drivers:open-windows-update", target),
+
+  /**
    * Check if a driver update is available
    */
   checkUpdate: () => ipcRenderer.invoke("drivers:check-update"),
@@ -458,4 +465,23 @@ export const syncBridge = {
    */
   getIPhoneLastSyncTime: (udid: string): Promise<{ lastSyncTime: string | null }> =>
     ipcRenderer.invoke("sync:get-iphone-last-sync-time", udid),
+
+  /**
+   * BACKLOG-3892 S5: can this deal's older texts be read from the iPhone backup kept on
+   * this computer? (S6 shows "Get older texts" only when `available`.)
+   */
+  backfillAvailability: (transactionId: string) => ipcRenderer.invoke("sync:backfill-availability", transactionId),
+
+  /** BACKLOG-3892 S5: read this deal's older texts from the kept backup. Resolves when done. */
+  backfillOlder: (transactionId: string) => ipcRenderer.invoke("sync:backfill-older", transactionId),
+
+  /** BACKLOG-3892 S5: stop the running backfill (nothing it stored is kept). */
+  cancelBackfill: () => ipcRenderer.invoke("sync:backfill-cancel"),
+
+  /** BACKLOG-3892 S5: backfill progress. Returns the unsubscribe function. */
+  onBackfillProgress: (callback: (progress: unknown) => void) => {
+    const listener = (_: IpcRendererEvent, progress: unknown) => callback(progress);
+    ipcRenderer.on("sync:backfill-progress", listener);
+    return () => ipcRenderer.removeListener("sync:backfill-progress", listener);
+  },
 };

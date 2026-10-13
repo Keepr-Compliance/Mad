@@ -83,6 +83,11 @@ interface ConversationViewModalProps {
    */
   hideFromExportState?: HideFromExportState;
   /**
+   * BACKLOG-3910: set when the deal is locked (read-only). The Hide / Unhide
+   * control stays visible but disabled, with this text as its tooltip.
+   */
+  hideLockedTooltip?: string;
+  /**
    * BACKLOG-3884: the conversation arrives a page at a time (the linked cards on
    * the Texts tab). `messages` holds the pages loaded so far; the list ends with
    * "Load earlier messages" while more exist, and the header counts against
@@ -342,6 +347,7 @@ export function ConversationViewModal({
   onSeeTransaction,
   onSetHiddenFromExport,
   hideFromExportState = "blocked",
+  hideLockedTooltip,
   pagination,
   onShowOutOfRangeChange,
 }: ConversationViewModalProps): React.ReactElement {
@@ -842,10 +848,10 @@ export function ConversationViewModal({
                           e.stopPropagation();
                           void handleSetHiddenFromExport(hiddenFromExportTargetId, !isHiddenFromExport);
                         }}
-                        disabled={pendingHiddenFromExportId === hiddenFromExportTargetId}
+                        disabled={pendingHiddenFromExportId === hiddenFromExportTargetId || !!hideLockedTooltip}
                         aria-pressed={isHiddenFromExport}
                         aria-label={isHiddenFromExport ? "Unhide" : "Hide from export"}
-                        title={isHiddenFromExport ? "Unhide" : "Hide from export"}
+                        title={hideLockedTooltip ?? (isHiddenFromExport ? "Unhide" : "Hide from export")}
                         className={`inline-flex items-center justify-center flex-shrink-0 rounded-full p-1 transition-colors disabled:opacity-50 ${
                           bubbleIsDark
                             ? "text-green-100 hover:bg-white hover:bg-opacity-20"

@@ -44,6 +44,12 @@ interface RemovedEmailRow {
 interface RemovedEmailsSectionProps {
   transactionId: string;
   /**
+   * BACKLOG-3910: set on a locked deal (submitted or sealed). Restoring puts an
+   * item back on the deal, which a locked deal refuses, so the restore buttons
+   * (single and bulk) are disabled and carry this text.
+   */
+  restoreLockedTooltip?: string;
+  /**
    * BACKLOG-1780: called on successful restore. Uses refreshCommunicationsSilently
    * in TransactionDetails — no loading flag, no spinner, scroll never moves.
    * Separate from onEmailsChanged (attach flow) so the attach path is unchanged.
@@ -260,6 +266,7 @@ const emailBulkSuccessMessage = (restoredTotal: number): string =>
   restoredTotal > 1 ? `${restoredTotal} emails restored` : "Email restored successfully";
 
 export function RemovedEmailsSection({
+  restoreLockedTooltip,
   transactionId,
   onRestoreComplete,
   onShowSuccess,
@@ -454,9 +461,9 @@ export function RemovedEmailsSection({
               <button
                 type="button"
                 onClick={() => handleRestore(group)}
-                disabled={isRestoring}
+                disabled={isRestoring || !!restoreLockedTooltip}
                 className="text-gray-400 hover:text-green-600 hover:bg-green-50 rounded p-1 transition-all disabled:opacity-50"
-                title="Restore to transaction"
+                title={restoreLockedTooltip ?? "Restore to transaction"}
                 data-testid="restore-email-button"
               >
                 {isRestoring ? (
@@ -508,7 +515,7 @@ export function RemovedEmailsSection({
         getGroupKey={emailGroupKey}
         renderGroup={renderGroup}
         selectionMode={selectionMode}
-        onEnterSelectionMode={enterSelectionMode}
+        onEnterSelectionMode={restoreLockedTooltip ? undefined : enterSelectionMode}
         onExitSelectionMode={exitSelectionMode}
         isGroupSelected={isGroupSelected}
         onToggleGroupSelect={toggleGroupSelection}

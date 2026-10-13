@@ -312,9 +312,9 @@ Where the iPhone tools folder is on your computer:
 - Licence: LicenseRef-Proprietary
 - Copyright: (c) Apple Inc.
 - Project: https://www.apple.com/itunes/download/win64
-- Location: resources/win/apple-drivers/AppleMobileDeviceSupport64.msi (Windows only; added by the release build, not stored in the repository)
+- Location: resources/win/apple-drivers/AppleMobileDeviceSupport64.msi (Windows website installer only; added by the release build, not stored in the repository; the Microsoft Store build does not include it)
 - Licence text: not reproduced (proprietary; attribution only)
-- Note: Proprietary Apple software, redistributed unmodified. It is extracted from Apple's iTunes for Windows installer when the Windows build is made and is installed only if you choose to set up iPhone sync and confirm the Windows prompt. It is not open source and is not covered by these notices.
+- Note: Proprietary Apple software, redistributed unmodified. It is extracted from Apple's iTunes for Windows installer when the Windows website build is made and is installed only if you choose to set up iPhone sync and confirm the Windows prompt. The Microsoft Store build does not include or install it; there, Apple Mobile Device Support comes from Apple's own Apple Devices app. It is not open source and is not covered by these notices.
 
 ### Electron and Chromium
 

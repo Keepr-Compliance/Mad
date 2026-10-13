@@ -77,7 +77,13 @@ export async function getIphoneSyncRuns(
   range: PeriodRange,
   limit = RUN_LIMIT
 ): Promise<IphoneSyncData> {
-  return getSyncRuns<SyncOutcomeRow>(supabase, range, { source: 'iphone-backup', limit, packagedOnly: false });
+  // BACKLOG-3892 E: source_metrics carries the kept-backup facts (quarantine).
+  return getSyncRuns<SyncOutcomeRow>(supabase, range, {
+    source: 'iphone-backup',
+    limit,
+    packagedOnly: false,
+    extraColumns: ['source_metrics'],
+  });
 }
 
 export interface SyncRunsQuery {

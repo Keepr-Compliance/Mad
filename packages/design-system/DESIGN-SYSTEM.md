@@ -200,12 +200,16 @@ portal layouts set `viewport-fit=cover`; the kit components already pad for them
 panels use `fixed inset-y-0` (never `h-screen`/`100vh`); sheets cap at `max-h-[90vh]` with
 `supports-[height:100dvh]:max-h-[90dvh]`.
 
+**Page title on phone**: `PageHeader` takes optional `phoneHideTitle` and `phoneHideSubtitle`. Below `md`
+the h1 becomes `sr-only` (still the page's one h1) and the subtitle is `hidden`; from `md` up nothing
+changes. Pair `phoneHideTitle` with `MobileTopBar` `title` so the page name shows once, in the bar.
+
 **Phone kit** — import from `@keepr/ui`. Every file is a client component (`'use client'`).
 No kit component imports `next`: apps pass router facts in (`open`/`onOpenChange`, `renderLink`).
 
 | Component | Use |
 |---|---|
-| `MobileTopBar` | Phone top bar: 44px menu button (ref forwards to it) + wordmark + qualifier. |
+| `MobileTopBar` | Phone top bar: 44px menu button (ref forwards to it) + wordmark + qualifier. Optional `title` replaces the wordmark + qualifier (`leading` still wins); it renders in a `<span>`, not a heading. |
 | `Drawer` | Slide-out nav on Radix Dialog. App supplies nav items, footer (user + sign out) and `returnFocusRef`. |
 | `BottomSheet` | Modal sheet for filters and quick edits; scrolling body, pinned primary action. |
 | `SegmentedTabs` | Tab mode (`role=tablist`, roving tabindex, arrows/Home/End, `panelId`) or link mode (all items have `href`: `<nav>` + `aria-current="page"`). |
@@ -214,4 +218,9 @@ No kit component imports `next`: apps pass router facts in (`open`/`onOpenChange
 | `DetailSection`, `DetailRow` | Grouped label/value rows; a row with `onClick`/`href` becomes a 48px button/link with a chevron. |
 | `StickyActionBar` | 1–2 actions pinned to the bottom (phone only); `variant` `light`/`dark`. |
 | `Toast` | Confirmation toast; closes after `duration` (4s default). |
-| `SearchField`, `FilterButton` | 16px search input; filter button with an active-count badge (hidden at 0) that opens a `BottomSheet`. |
+| `SearchField`, `FilterButton` | 16px search input; filter button with an active-count badge (hidden at 0) that opens a `BottomSheet`. `SearchField` takes an optional `onClear`: while the field has text an X (44px target, `Clear search`) sits inside the right edge, focus returns to the input, and the browser's own cancel button is hidden. Without `onClear` the field is unchanged. |
+| `FilterSelectButton` | Two-line filter control (small label over the current value, e.g. Status / Pending) that opens a `BottomSheet`; 44px, highlighted when `active`. Use when each filter's value must stay visible; `FilterButton` when one icon stands for all filters. |
+| `PhoneFilterBar` | Phone-only search + two `FilterSelectButton`s in a 2-column grid. Props: `search` (`label`, `value`, `onChange`, optional `placeholder`, `onClear`, `onSubmit`, `id`), `filters` (exactly two), `results` (a `PhoneResultsRow`, sits under the grid), `children` (the page's bottom sheets, rendered after the bar). Optional `trailing` slot: one square control after the two filters (e.g. `PhoneSortButton`); without it the bar is unchanged. The page hides it from md up (`className="md:hidden"`). |
+| `PhoneResultsRow` | 44px row under the bar: "Showing X of Y {noun}s" (singular `noun`, pluralised when Y is not 1) and an optional right-hand `action` slot. |
+| `PhoneClearFilters` | "Clear filters" text button, 44px target; goes in `PhoneResultsRow`'s `action`. |
+| `PhoneSortButton` | 44x44 icon button for `PhoneFilterBar`'s `trailing` slot; `label` is the accessible name (e.g. "Sort: Newest first"), `expanded` for the sheet it opens, `active` highlights a non-default sort. Same height, radius and active style as `FilterSelectButton`. |

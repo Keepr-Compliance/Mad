@@ -1248,6 +1248,11 @@ class TransactionService {
               );
             }
           }
+          // BACKLOG-3925: address-only matches, after the contact pass.
+          const { runAddressMatchPassInSweep } = await import("../reviewStateService");
+          const addressPass = await runAddressMatchPassInSweep(transactionId, "create");
+          totalQueuedForReview += addressPass.queued;
+          if (!addressPass.clean) clean = false;
           return { clean };
         }, "create");
 
@@ -2385,7 +2390,10 @@ class TransactionService {
           if (message?.transaction_id) {
             unlinkMessageFromTransaction(messageId);
           }
-          deleteCommunicationByMessageIdSync(messageId);
+          // BACKLOG-3890: scoped to the deal being edited, so the same
+          // message's links in other deals survive. No deal named -> all-deal
+          // delete, as before.
+          deleteCommunicationByMessageIdSync(messageId, passedTransactionId);
         }
 
         // Delete thread-level communication records

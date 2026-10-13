@@ -39,6 +39,18 @@ jest.mock('@/lib/impersonation-guards', () => ({
   getTargetOrganizationId: (id: string | null) => id || undefined,
 }));
 
+// The stat cards share the Submissions list's org gate (BACKLOG-3904), which
+// reads the org's features; this file is about the header, so the gate is open.
+jest.mock('@/lib/feature-gate', () => {
+  const actual = jest.requireActual('@/lib/feature-gate');
+  const { ORG_WITHOUT_PLAN_FEATURES, withFeature } = jest.requireActual('../../fixtures/orgFeatures');
+  return {
+    ...actual,
+    getOrgFeatures: async (orgId: string) =>
+      withFeature({ ...ORG_WITHOUT_PLAN_FEATURES, org_id: orgId }, 'broker_portal_access', true),
+  };
+});
+
 import DashboardPage from '@/app/dashboard/page';
 import { brokerageMembership } from '../../helpers/postgrestEmulator';
 
@@ -46,7 +58,7 @@ import { brokerageMembership } from '../../helpers/postgrestEmulator';
  *  builder itself is awaitable (the page awaits the chain, not a terminal). */
 function queryBuilder(result: unknown) {
   const builder: Record<string, unknown> = {};
-  for (const method of ['select', 'neq', 'eq', 'order', 'limit', 'in', 'gt']) {
+  for (const method of ['select', 'neq', 'eq', 'order', 'limit', 'in', 'gt', 'range']) {
     builder[method] = jest.fn(() => builder);
   }
   builder.maybeSingle = jest.fn(async () => result);

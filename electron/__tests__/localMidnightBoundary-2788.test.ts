@@ -90,7 +90,7 @@ import { auditWindowEnd, auditWindowStart, resolveExportPlan } from "../services
 import { getTransactionMessages } from "../services/db/submissionDbService";
 import { auditPeriodFromRow } from "../services/submissionAuditPeriod";
 import { findTextMessagesByPhones } from "../services/messageMatchingService";
-import { computeTransactionDateRange, DEFAULT_BUFFER_DAYS } from "../utils/emailDateRange";
+import { computeTransactionDateRange } from "../utils/emailDateRange";
 import {
   parseLocalCalendarDay,
   isTimestampInAuditPeriod,
@@ -425,16 +425,14 @@ describe("BACKLOG-2788 — every closing-day bound derives from the one helper",
     expect(bound).toBe(auditWindowEnd(CLOSED_AT)!.toISOString());
   });
 
-  it("the email/import window buffers from the end of the local closing day", () => {
+  it("the email/import window ends with the local closing day (no buffer, BACKLOG-3910)", () => {
     const { end } = computeTransactionDateRange({ closed_at: CLOSED_AT });
 
-    const expected = auditWindowEnd(CLOSED_AT)!;
-    expected.setDate(expected.getDate() + DEFAULT_BUFFER_DAYS);
-    expect(end.getTime()).toBe(expected.getTime());
+    expect(end.getTime()).toBe(auditWindowEnd(CLOSED_AT)!.getTime());
 
-    // Independently of the helper: 2026-07-29 + 30 days = 2026-08-28, and the
-    // window runs to the end of that day rather than to its start.
-    expect([end.getFullYear(), end.getMonth(), end.getDate()]).toEqual([2026, 7, 28]);
+    // Independently of the helper: the window runs to the end of 2026-07-29
+    // itself (it ran to the end of 2026-08-28 while the 30-day buffer existed).
+    expect([end.getFullYear(), end.getMonth(), end.getDate()]).toEqual([2026, 6, 29]);
     expect([end.getHours(), end.getMinutes(), end.getSeconds(), end.getMilliseconds()]).toEqual([
       23, 59, 59, 999,
     ]);
@@ -598,10 +596,11 @@ describe("BACKLOG-2788 — the bound in timezones this process cannot enter", ()
     }
   }, ZONE_TIMEOUT_MS);
 
-  it("the email/import window ends with the buffered local day in every zone", () => {
-    // 2026-07-29 + 30 days = 2026-08-28, ending at that day's local midnight.
-    expect(runInZone("UTC").emailRangeEnd).toBe("2026-08-28T23:59:59.999Z");
-    expect(runInZone("America/Chicago").emailRangeEnd).toBe("2026-08-29T04:59:59.999Z");
-    expect(runInZone("Europe/Berlin").emailRangeEnd).toBe("2026-08-28T21:59:59.999Z");
+  it("the email/import window ends with the local closing day in every zone", () => {
+    // BACKLOG-3910: no buffer — the window ends at the closing day's local
+    // midnight (Chicago CDT -5, Berlin CEST +2 in July).
+    expect(runInZone("UTC").emailRangeEnd).toBe("2026-07-29T23:59:59.999Z");
+    expect(runInZone("America/Chicago").emailRangeEnd).toBe("2026-07-30T04:59:59.999Z");
+    expect(runInZone("Europe/Berlin").emailRangeEnd).toBe("2026-07-29T21:59:59.999Z");
   }, ZONE_TIMEOUT_MS);
 });

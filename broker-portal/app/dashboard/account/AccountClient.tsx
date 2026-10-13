@@ -20,6 +20,7 @@ import { providerDisplayName, type AccountView } from '@/lib/account/accountView
 // Badge/Card family/PageHeader are Tier-2 (no @keepr/ui equivalent yet).
 import { Badge, Card, CardContent, CardHeader, PageHeader } from '@keepr/design-system';
 import { AlertBanner } from '@keepr/ui';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 
 export interface AccountClientProps {
   account: AccountView | null;
@@ -64,7 +65,9 @@ export default function AccountClient({ account }: AccountClientProps) {
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       <PageHeader
-        title="My Account"
+        phoneHideTitle
+        phoneHideSubtitle
+        title={PAGE_TITLES.account}
         subtitle="Your Keepr account, your saved settings, and the devices you are signed in on"
       />
 

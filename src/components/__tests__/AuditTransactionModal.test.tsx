@@ -1191,7 +1191,8 @@ describe("AuditTransactionModal", () => {
         expect(screen.getByTestId("contact-assignment-step-2")).toBeInTheDocument();
       });
       // The gated path ran (the start date passed basic validation) ...
-      expect(mockCheckCoverage).toHaveBeenCalledWith(futureISO);
+      // BACKLOG-3892 S2: with the user's own source (this suite runs as a Mac user).
+      expect(mockCheckCoverage).toHaveBeenCalledWith(futureISO, "mac");
       // ... and nothing complained about an end date the user cannot see.
       expect(screen.queryByText(/End date must be after start date/i)).toBeNull();
     });

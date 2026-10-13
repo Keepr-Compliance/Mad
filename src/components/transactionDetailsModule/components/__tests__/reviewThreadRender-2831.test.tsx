@@ -68,6 +68,7 @@ function reviewEmail(
     email_id: emailId,
     thread_id: null,
     found_at: "2026-08-01T00:00:00.000Z",
+    matchReason: "contact",
     display: {
       title: "Closing schedule",
       subtitle: "paul@example.com",

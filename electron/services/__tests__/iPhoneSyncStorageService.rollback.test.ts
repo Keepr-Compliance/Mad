@@ -171,6 +171,7 @@ beforeEach(() => {
 
   // Default mock implementations for database service
   mockDbService.getMessageExternalIdsPage.mockReturnValue([]);
+  mockDbService.getMessageExternalIdsSincePage.mockReturnValue({ ids: [], next: null });
   mockDbService.batchInsertMessages.mockReturnValue({ stored: 0, skipped: 0 });
   mockDbService.deleteAttachmentsBySessionId.mockReturnValue({
     deleted: 0,
@@ -341,6 +342,7 @@ describe("cancel signal timing", () => {
 
     // No DB operations should have been called at all
     expect(mockDbService.getMessageExternalIdsPage).not.toHaveBeenCalled();
+    expect(mockDbService.getMessageExternalIdsSincePage).not.toHaveBeenCalled();
     expect(mockDbService.batchInsertMessages).not.toHaveBeenCalled();
 
     // No rollback needed since nothing was stored
@@ -653,7 +655,7 @@ describe("error-path behavior (exception handling)", () => {
     const conversations = [makeConversation(1, messages)];
 
     // Simulate an exception during message storage
-    mockDbService.getMessageExternalIdsPage.mockImplementation(() => {
+    mockDbService.getMessageExternalIdsSincePage.mockImplementation(() => {
       throw new Error("Database corruption");
     });
 
@@ -738,7 +740,7 @@ describe("error-path behavior (exception handling)", () => {
     const conversations = [makeConversation(1, messages)];
 
     // Throw a non-Error object
-    mockDbService.getMessageExternalIdsPage.mockImplementation(() => {
+    mockDbService.getMessageExternalIdsSincePage.mockImplementation(() => {
       throw "string error"; // eslint-disable-line no-throw-literal
     });
 

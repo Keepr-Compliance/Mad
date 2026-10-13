@@ -5,6 +5,8 @@
 // BACKLOG-1364: Added update-address-filter handler
 // ============================================
 
+import { dealLockReason } from "../services/transactionEligibility";
+import { refuseIfDealLocked } from "../services/dealLockState";
 import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import transactionService from "../services/transactionService";
@@ -93,6 +95,19 @@ export function registerEmailAutoLinkHandlers(): void {
         return {
           success: false,
           error: "Transaction not found",
+        };
+      }
+
+      // BACKLOG-3910: a locked deal (with the broker, or sealed) gets nothing new.
+      // The deal screen disables this button; this is the backstop.
+      const lockReason = dealLockReason(transactionDetails.submission_status);
+      if (lockReason) {
+        return {
+          success: true,
+          skipped: lockReason,
+          totalEmailsLinked: 0,
+          totalMessagesLinked: 0,
+          totalAlreadyLinked: 0,
         };
       }
 
@@ -236,6 +251,10 @@ export function registerEmailAutoLinkHandlers(): void {
         );
       }
 
+      // BACKLOG-3910d: the setting is a deal detail, so a locked deal refuses it.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId, "edit-deal-details");
+      if (lockedRefusal) return lockedRefusal;
+
       // Update the skip_address_filter column
       await transactionService.updateTransaction(validatedTransactionId, {
         id: validatedTransactionId,
@@ -251,6 +270,18 @@ export function registerEmailAutoLinkHandlers(): void {
         return {
           success: true,
           message: "Address filter updated, but transaction not found for re-link",
+        };
+      }
+
+      // BACKLOG-3910: the setting is saved, but a locked deal gets nothing new.
+      const lockReason = dealLockReason(transactionDetails.submission_status);
+      if (lockReason) {
+        return {
+          success: true,
+          skipped: lockReason,
+          totalEmailsLinked: 0,
+          totalMessagesLinked: 0,
+          totalAlreadyLinked: 0,
         };
       }
 

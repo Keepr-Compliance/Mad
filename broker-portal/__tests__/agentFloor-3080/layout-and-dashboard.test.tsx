@@ -311,7 +311,7 @@ describe('/dashboard for the full portal (positive controls)', () => {
     expect(redirect).toBeUndefined();
     expect(html).toContain('Overview of transaction submissions');
     expect(html).not.toContain('Your Keepr account');
-    expect(tablesRead()).toEqual(['organization_members', 'transaction_submissions']);
+    expect(tablesRead()).toEqual(['organization_members', 'transaction_submissions', 'users']); // users: agent names on the phone cards
     // The emulator has no RLS, so the render shows the exact id set it served:
     // proof the "neither id" assertion above can fail.
     expect(html).toContain(`/dashboard/submissions/${SUBMISSION_MINE}`);

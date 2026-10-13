@@ -26,12 +26,15 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { EmailSettings } from "../EmailSettings";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
 import { AndroidMessagesSettings } from "../AndroidMessagesSettings";
 import { ContactsSettings } from "../ContactsSettings";
+import { GoogleMessagesSettings } from "../GoogleMessagesSettings";
+import { IphoneSyncSettings } from "../IphoneSyncSettings";
+import { TextsLookbackSettings } from "../TextsLookbackSettings";
 import { PlatformProvider } from "../../../contexts/PlatformContext";
 
 jest.mock("../../../contexts/NetworkContext", () => ({
@@ -79,6 +82,32 @@ jest.mock("../../../services", () => ({
     microsoftDisconnectMailbox: jest.fn(),
     onMailboxConnected: jest.fn(() => () => {}),
   },
+}));
+
+/** BACKLOG-3156 stage F: the Google Messages panel's state (fixture from GoogleMessagesSettings-3659.test.tsx). */
+jest.mock("../../../services/rcsImportService", () => ({
+  rcsImportService: {
+    getExtensionState: async () => ({
+      success: true,
+      data: {
+        extensionVersion: "0.3.4",
+        extensionSeenAt: "2026-10-01T10:00:00.000Z",
+        pairedAt: "2026-10-01T10:00:00.000Z",
+        optedIn: true,
+        lastCacheFinishedAt: "2026-10-01T11:00:00.000Z",
+        consentVersion: 1,
+        consentRequired: 1,
+        consentAt: "2026-10-01T09:00:00.000Z",
+        autoDeleteDays: null,
+      },
+    }),
+    listExclusions: async () => ({ success: true, data: [] }),
+    onDataChanged: () => () => undefined,
+  },
+}));
+
+jest.mock("../../../contexts/IPhoneSyncContext", () => ({
+  useIPhoneSyncEnabled: () => ({ enabled: false, setIphoneSyncEnabled: jest.fn() }),
 }));
 
 jest.mock("../../../utils/logger", () => ({
@@ -280,7 +309,9 @@ describe("BACKLOG-3156 — Messages", () => {
     });
   });
 
-  it("macOS: Import Preferences precedes the actions", async () => {
+  // BACKLOG-3156 stage G: every messages pane is Import Preferences → Stored on
+  // this computer → actions (founder approved 2026-10-13).
+  it("macOS: Import Preferences → Stored on this computer → actions", async () => {
     render(
       <PlatformProvider>
         <MacOSMessagesImportSettings userId="u" enabled />
@@ -290,7 +321,7 @@ describe("BACKLOG-3156 — Messages", () => {
       expect(screen.getByTestId("messages-block-actions")).toBeInTheDocument(),
     );
 
-    expectInOrder(["messages-block-preferences", "messages-block-actions"]);
+    expectInOrder(["messages-block-preferences", "messages-block-stored", "messages-block-actions"]);
   });
 
   it("macOS: the actions sit outside the card, primary before destructive", async () => {
@@ -309,6 +340,34 @@ describe("BACKLOG-3156 — Messages", () => {
     expect(primary.compareDocumentPosition(destructive) & 4).toBeTruthy();
   });
 
+  // BACKLOG-3156 stage G (founder 2026-10-13): "Import message text only" is a
+  // switch — the iPhone Sync (USB) row's — with the same label, setting and
+  // save path. Mutation: the checkbox back → red.
+  it("macOS: 'Import message text only' is a switch in Import Preferences, saving messageImport.filters.skipAttachments", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { settingsService } = require("../../../services") as { settingsService: { updatePreferences: jest.Mock } };
+    render(
+      <PlatformProvider>
+        <MacOSMessagesImportSettings userId="u" enabled />
+      </PlatformProvider>,
+    );
+    const prefs = await screen.findByTestId("messages-block-preferences");
+    const toggle = await within(prefs).findByRole("switch", { name: "Import message text only (no attachment files)" });
+    expect(toggle).toBe(screen.getByTestId("skip-attachments-toggle"));
+    expect(screen.queryByRole("checkbox", { name: /Import message text only/ })).toBeNull();
+    expect(within(prefs).getByText("Import message text only (no attachment files)")).toBeInTheDocument();
+    // The same switch the iPhone Sync (USB) row draws.
+    expect(toggle.className).toMatch(/relative inline-flex h-6 w-11 shrink-0 items-center rounded-full/);
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    settingsService.updatePreferences.mockClear();
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(settingsService.updatePreferences).toHaveBeenCalledWith("u", { messageImport: { filters: { skipAttachments: true } } }),
+    );
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+  });
+
   it("Android: Import Preferences precedes the actions, which sit outside the card", async () => {
     render(<AndroidMessagesSettings userId="u" />);
     await waitFor(() =>
@@ -320,6 +379,49 @@ describe("BACKLOG-3156 — Messages", () => {
     const actions = screen.getByTestId("android-block-actions");
     expect(actions.closest(".bg-gray-50.rounded-lg")).toBeNull();
     expect(actions.querySelector("h1,h2,h3,h4,h5,h6")).toBeNull();
+  });
+});
+
+describe("BACKLOG-3156 stage F — Messages (Google, iPhone)", () => {
+  it("Google: Import Preferences → Stored on this computer → actions, which sit outside the card", async () => {
+    render(
+      <GoogleMessagesSettings userId="u" lookbackPicker={<TextsLookbackSettings userId="u" embedded />} />,
+    );
+    await screen.findByTestId("gm-consent");
+
+    expectInOrder(["gm-block-preferences", "gm-block-stored", "gm-block-actions"]);
+
+    const actions = screen.getByTestId("gm-block-actions");
+    expect(actions.closest(".bg-gray-50.rounded-lg")).toBeNull();
+    expect(actions.querySelector("h1,h2,h3,h4,h5,h6")).toBeNull();
+    expect(screen.getByRole("button", { name: "Force Re-import" })).toBeInTheDocument();
+  });
+
+  it("Google: the picker is the first row of Import Preferences", async () => {
+    render(
+      <GoogleMessagesSettings userId="u" lookbackPicker={<TextsLookbackSettings userId="u" embedded />} />,
+    );
+    const block = await screen.findByTestId("gm-block-preferences");
+    expect(block.firstElementChild?.nextElementSibling).toBe(screen.getByTestId("texts-lookback"));
+  });
+
+  it("iPhone: Import Preferences → Stored on this computer → actions (Import from iPhone), outside the cards", () => {
+    const onImport = jest.fn();
+    render(<IphoneSyncSettings userId="u" onImportIphone={onImport} />);
+    expectInOrder(["iphone-block-preferences", "iphone-block-stored", "iphone-block-actions"]);
+    const actions = screen.getByTestId("iphone-block-actions");
+    expect(actions.closest(".bg-gray-50.rounded-lg")).toBeNull();
+    const button = screen.getByRole("button", { name: "Import from iPhone" });
+    expect(actions.contains(button)).toBe(true);
+    fireEvent.click(button);
+    expect(onImport).toHaveBeenCalledTimes(1);
+  });
+
+  it("iPhone: the picker is the first row of Import Preferences, the USB toggle after it", () => {
+    render(<IphoneSyncSettings lookbackPicker={<TextsLookbackSettings userId="u" embedded />} />);
+    const block = screen.getByTestId("iphone-block-preferences");
+    expect(block.firstElementChild?.nextElementSibling).toBe(screen.getByTestId("texts-lookback"));
+    expectInOrder(["texts-lookback", "iphone-usb-toggle-row"]);
   });
 });
 

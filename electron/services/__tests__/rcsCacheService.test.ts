@@ -51,6 +51,7 @@ import {
   RCS_CONSENT_VERSION,
   RCS_HELLO_PERSIST_MS,
   shouldPersistHello,
+  chatOnlyBackToMs,
 } from "../rcsCacheService";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -109,10 +110,21 @@ describe("cacheSavedFromCommit", () => {
 
 describe("shouldFocusKeeprOnJobEnd", () => {
   it("done or failed: yes; cancelled (or still running): no", () => {
-    expect(shouldFocusKeeprOnJobEnd("finished")).toBe(true);
-    expect(shouldFocusKeeprOnJobEnd("failed")).toBe(true);
-    expect(shouldFocusKeeprOnJobEnd("cancelled")).toBe(false);
-    expect(shouldFocusKeeprOnJobEnd("running")).toBe(false);
+    expect(shouldFocusKeeprOnJobEnd({ state: "finished" })).toBe(true);
+    expect(shouldFocusKeeprOnJobEnd({ state: "failed", error: { code: "scan_failed" } })).toBe(true);
+    expect(shouldFocusKeeprOnJobEnd({ state: "cancelled" })).toBe(false);
+    expect(shouldFocusKeeprOnJobEnd({ state: "running" })).toBe(false);
+  });
+  // BACKLOG-3924 C1 (founder, 2026-10-12): not signed in → Chrome stays in
+  // front (the QR code and the page's card). Every other failure still
+  // brings Keepr forward. Mutations: the code check taken out → red on the
+  // first line; "never focus on failed" → red on the second half.
+  it("C1: failed as not_signed_in → no focus; every other failure still focuses", () => {
+    expect(shouldFocusKeeprOnJobEnd({ state: "failed", error: { code: "not_signed_in" } })).toBe(false);
+    for (const code of ["page_gone", "not_opened", "page_not_ready", "keepr_refused", "list_not_reachable"]) {
+      expect(shouldFocusKeeprOnJobEnd({ state: "failed", error: { code } })).toBe(true);
+    }
+    expect(shouldFocusKeeprOnJobEnd({ state: "finished" })).toBe(true);
   });
 });
 
@@ -495,5 +507,23 @@ describe("chatFloorDecision / pickDealChats (per-chat widening)", () => {
     expect(picked.map((p) => p.chatHash)).toEqual(["h-old", "h-jan"]);
     expect(pickDealChats({ nowMs: NOW, settingsFloorMs: settings, starts, own, sourceCoveredSince: null, excluded: new Set(), max: 1 }))
       .toHaveLength(1);
+  });
+});
+
+describe("BACKLOG-3892 E: chatOnlyBackToMs (a deal chat Google Messages returned only part of)", () => {
+  const DAY = 86_400_000;
+  const FLOOR = Date.parse("2026-01-10T00:00:00.000Z");
+  const deal = { chatFloorMs: FLOOR, readFloorMs: FLOOR, reachedFloor: false };
+  it.each([
+    ["short by a day + 1 ms -> the oldest saved text", deal, FLOOR + DAY + 1, FLOOR + DAY + 1],
+    ["short by exactly a day -> covered (tolerance)", deal, FLOOR + DAY, null],
+    ["older than the floor -> null", deal, FLOOR - 1, null],
+    ["reached its floor -> null", { ...deal, reachedFloor: true }, FLOOR + 30 * DAY, null],
+    ["not a deal chat -> null", { chatFloorMs: null, readFloorMs: FLOOR, reachedFloor: false }, FLOOR + 30 * DAY, null],
+    ["read to another floor this run (delta / settings) -> null", { ...deal, readFloorMs: FLOOR + 90 * DAY }, FLOOR + 30 * DAY, null],
+    ["nothing saved -> null", deal, null, null],
+    ["no meta -> null", null, FLOOR + 30 * DAY, null],
+  ] as const)("%s", (_name, meta, oldest, expected) => {
+    expect(chatOnlyBackToMs(meta, oldest)).toBe(expected);
   });
 });

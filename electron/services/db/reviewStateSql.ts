@@ -195,3 +195,28 @@ export const DELETE_PENDING_REVIEW_SQL = sql`DELETE FROM pending_review_communic
 
 /** Remove one approved link. One bound parameter. */
 export const DELETE_COMMUNICATION_SQL = sql`DELETE FROM communications WHERE id = ?`;
+
+/* ------------------------------------------------------------------ *
+ * BACKLOG-3925 — why an email is in Needs Review, and address-only discovery
+ * ------------------------------------------------------------------ */
+
+/**
+ * Every stored reason on one transaction. One bound parameter. A queued email with no
+ * row here reads as "contact" (everything queued before BACKLOG-3925).
+ */
+export const MATCH_REASONS_BY_TRANSACTION_SQL = sql`SELECT email_id, reason
+       FROM pending_review_match_reasons
+      WHERE transaction_id = ?`;
+
+/** The stored reason for one (transaction, email). Two bound parameters. */
+export const MATCH_REASON_BY_EMAIL_SQL = sql`SELECT reason FROM pending_review_match_reasons WHERE transaction_id = ? AND email_id = ?`;
+
+/**
+ * Record (or replace) the reason for one (transaction, email). Three bound parameters:
+ * transaction id, email id, reason. The caller has already applied the precedence rule
+ * (`strongerReviewMatchReason`), so this writes what it is given.
+ */
+export const UPSERT_MATCH_REASON_SQL = sql`INSERT INTO pending_review_match_reasons (transaction_id, email_id, reason)
+     VALUES (?, ?, ?)
+     ON CONFLICT (transaction_id, email_id)
+     DO UPDATE SET reason = excluded.reason, updated_at = CURRENT_TIMESTAMP`;

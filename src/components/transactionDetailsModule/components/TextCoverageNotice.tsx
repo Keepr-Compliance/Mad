@@ -10,20 +10,19 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { settingsService } from "../../../services/settingsService";
-import { effectiveImportSource } from "../../../services/importSourcePolicy";
+import { loadChosenImportSource } from "../../../services/importSourcePolicy";
 import { isMacOS } from "../../../utils/platform";
 import { rcsImportService } from "../../../services/rcsImportService";
 import { transactionService } from "../../../services/transactionService";
 import type { SourceCoverageGap, TextSource } from "../../../../electron/types/auditCoverage";
+import { coverageLine, gapKey, gapLine, googleMessagesGapLine, googleMessagesOlderLine } from "./coverageCopy";
+import { GetOlderTexts } from "./GetOlderTexts";
+import type { BackfillResult } from "../../../../electron/types/iphoneBackfill";
 
-const LABEL: Record<TextSource, string> = {
-  iphone: "iPhone",
-  mac: "Mac Messages",
-  android_companion: "Android (companion app)",
-  google_messages: "Google Messages",
-};
+// BACKLOG-3892 W: the lines live in coverageCopy.ts; re-exported for existing callers.
+export { gapLine, googleMessagesGapLine, googleMessagesOlderLine };
 
-const ACTION: Record<TextSource, string> = {
+export const ACTION: Record<TextSource, string> = {
   iphone: "Click Sync iPhone on the dashboard.",
   mac: "Update Mac messages to read back further.",
   android_companion: "Click Sync Android on the dashboard.",
@@ -44,6 +43,34 @@ export function dialogTextSource(effective: string | null, onMac: boolean): Text
   return chosen === "mac" && !onMac ? null : chosen;
 }
 
+/**
+ * The user's stored import source as a coverage source (the Texts tab's rule; also
+ * the export gate's, BACKLOG-3892 S2). null when it cannot be read. Never throws.
+ */
+export async function readChosenTextSource(userId: string): Promise<TextSource | null> {
+  try {
+    // BACKLOG-3892 R1: ONE derivation (importSourcePolicy) shared with sync detection and
+    // the create prompt, so phone type counts when nothing is stored. A preferences read
+    // failure still resolves through the local phone type.
+    let prefs: Parameters<typeof loadChosenImportSource>[0];
+    try {
+      const r = await settingsService.getPreferences(userId);
+      prefs = r.success ? (r.data as Parameters<typeof loadChosenImportSource>[0]) : undefined;
+    } catch {
+      prefs = undefined;
+    }
+    const onMac = isMacOS();
+    const chosen = await loadChosenImportSource(prefs, onMac, () =>
+      settingsService.getPhoneType(userId),
+    );
+    // BACKLOG-3892 W5 (founder 62129738): there is no Mac Messages source off a Mac,
+    // so a stored "macos-native" names no source there (as the create dialog does).
+    return dialogTextSource(chosen, onMac);
+  } catch {
+    return null;
+  }
+}
+
 export function chosenTextSource(pref: string | undefined | null): TextSource | null {
   switch (pref) {
     case "macos-native":
@@ -60,50 +87,6 @@ export function chosenTextSource(pref: string | undefined | null): TextSource | 
   }
 }
 
-function day(iso: string | null): string {
-  if (!iso) return "";
-  const t = Date.parse(iso);
-  return Number.isFinite(t) ? new Date(t).toLocaleDateString() : "";
-}
-
-/**
- * Founder (2026-10-04): THE line for a Google Messages gap — the same
- * wherever it shows (the Texts tab, the "Communications will update"
- * dialog, any other caller): "Texts start Sep 2. Sync Android on the
- * dashboard to get older ones." ("MMM d"; the year only when it isn't this
- * year). null when the gap is not Google Messages reading only since a date.
- */
-export function googleMessagesGapLine(gap: SourceCoverageGap, now: Date = new Date()): string | null {
-  if (gap.source !== "google_messages" || gap.kind !== "later" || !gap.coveredSince) return null;
-  const t = Date.parse(gap.coveredSince);
-  if (!Number.isFinite(t)) return null;
-  const d = new Date(t);
-  const when = d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}),
-  });
-  return `Texts start ${when}. Sync Android on the dashboard to get older ones.`;
-}
-
-/** The Texts tab: Google Messages alone, read only since a date → that one line. */
-export function googleMessagesOlderLine(gaps: SourceCoverageGap[], now: Date = new Date()): string | null {
-  return gaps.length === 1 ? googleMessagesGapLine(gaps[0], now) : null;
-}
-
-/** One line per gap (exported for the audit prompt). */
-export function gapLine(gap: SourceCoverageGap, auditStartISO: string | null): string {
-  const label = LABEL[gap.source];
-  if (gap.kind === "never") return `${label}: not fully synced yet.`;
-  // L2: covered back to the start, but some chats could not be confirmed complete.
-  if (gap.kind === "incomplete") {
-    const n = gap.incompleteChats ?? 0;
-    return `${label}: ${n} chat${n === 1 ? "" : "s"} may be incomplete.`;
-  }
-  const approx = gap.approximate ? " (from the oldest text Keepr has)" : "";
-  return `${label}: texts only from ${day(gap.coveredSince)}${approx}${auditStartISO ? `; this transaction starts ${day(auditStartISO)}` : ""}.`;
-}
-
 /** BACKLOG-3884: re-asks while the coverage floors are still being read. */
 const PENDING_RETRY_MS = 4000;
 const PENDING_RETRIES = 5;
@@ -111,9 +94,11 @@ const PENDING_RETRIES = 5;
 interface TextCoverageNoticeProps {
   transactionId: string;
   userId: string;
+  /** BACKLOG-3892 S6: "Get older texts" stored texts — reload the tab's texts. */
+  onTextsAdded?: () => void | Promise<void>;
 }
 
-export function TextCoverageNotice({ transactionId, userId }: TextCoverageNoticeProps) {
+export function TextCoverageNotice({ transactionId, userId, onTextsAdded }: TextCoverageNoticeProps) {
   const [gaps, setGaps] = useState<SourceCoverageGap[]>([]);
   const [auditStart, setAuditStart] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
@@ -130,15 +115,7 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
   }, []);
 
   const load = useCallback(async () => {
-    let chosen: TextSource | null = null;
-    try {
-      const prefs = await settingsService.getPreferences(userId);
-      const stored = prefs.success ? prefs.data?.messages?.source : null;
-      // BACKLOG-3749: a value this build does not know → the platform default.
-      chosen = chosenTextSource(stored ? effectiveImportSource(stored, isMacOS()) : null);
-    } catch {
-      chosen = null;
-    }
+    const chosen = await readChosenTextSource(userId);
     try {
       // SR: through the service, never window.api from the component.
       const r = await transactionService.getTextCoverage(transactionId, userId, chosen);
@@ -154,7 +131,8 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
       }
       if (r && r.success) {
         pendingRetriesRef.current = 0;
-        setGaps(r.gaps);
+        // BACKLOG-3892 W5: never a Mac line off a Mac.
+        setGaps(isMacOS() ? r.gaps : r.gaps.filter((g) => g.source !== "mac"));
         setAuditStart(r.auditStartISO);
       }
     } catch {
@@ -184,6 +162,18 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
     }
   }, [auditStart, load, transactionId, userId]);
 
+  // BACKLOG-3892 S6: after "Get older texts", re-read coverage (with the chosen source,
+  // inside load) so the warning updates, and reload the texts it stored.
+  const onTextsAddedRef = useRef(onTextsAdded);
+  onTextsAddedRef.current = onTextsAdded;
+  const afterBackfill = useCallback(
+    async (r: BackfillResult) => {
+      await load();
+      if (r.messagesStored > 0) await onTextsAddedRef.current?.();
+    },
+    [load],
+  );
+
   if (gaps.length === 0) return null;
   const older = googleMessagesOlderLine(gaps);
   if (older) {
@@ -210,10 +200,15 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
     >
       <p className="font-medium">Some texts may be missing for this transaction&rsquo;s dates</p>
       <ul className="mt-1 space-y-1">
-        {gaps.map((g) => (
-          <li key={g.source} data-testid={`coverage-gap-${g.source}`}>
-            {googleMessagesGapLine(g) ?? `${gapLine(g, auditStart)} ${ACTION[g.source]}`}
-            {g.source === "mac" && (
+        {gaps.map((g, i) => (
+          <li key={gapKey(g)} data-testid={`coverage-gap-${gapKey(g)}`}>
+            {coverageLine(g, auditStart, ACTION[g.source])}
+            {/* BACKLOG-3892 S6: the iPhone start gap can be filled from the kept backup. */}
+            {g.source === "iphone" && g.kind === "later" && (
+              <GetOlderTexts transactionId={transactionId} refreshKey={g.coveredSince ?? ""} onSuccess={afterBackfill} onRefused={load} />
+            )}
+            {/* One "Update Mac messages" button, on the last Mac line (an import heals both ends). */}
+            {g.source === "mac" && !gaps.slice(i + 1).some((n) => n.source === "mac") && (
               <button
                 type="button"
                 className="ml-2 text-indigo-700 hover:text-indigo-900 font-medium disabled:opacity-50"

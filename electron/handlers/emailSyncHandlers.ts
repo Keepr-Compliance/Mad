@@ -8,6 +8,7 @@
 //            Handler is now a thin wrapper (validation + rate limit + delegate)
 // ============================================
 
+import { dealLockReason } from "../services/transactionEligibility";
 import { ipcMain } from "electron";
 import type { BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
@@ -331,6 +332,20 @@ export function registerEmailSyncHandlers(
         };
       }
 
+      // BACKLOG-3910: a locked deal (with the broker, or sealed) is not searched and
+      // gets nothing new. The deal screen disables this button; this is the backstop.
+      const lockReason = dealLockReason(transactionDetails.submission_status);
+      if (lockReason) {
+        return {
+          success: true,
+          skipped: lockReason,
+          emailsFetched: 0,
+          emailsStored: 0,
+          totalEmailsLinked: 0,
+          totalMessagesLinked: 0,
+        };
+      }
+
       const userId = transactionDetails.user_id;
       const contactAssignments = transactionDetails.contact_assignments || [];
 
@@ -530,6 +545,9 @@ export function registerEmailSyncHandlers(
           success: false,
           error: result.error,
           ...(result.providerError ? { providerError: result.providerError } : {}),
+          // BACKLOG-3910a: which mailbox stopped a force run, and whether its
+          // token expired — the renderer words the next step from this.
+          ...(result.forceNotApplied ? { forceNotApplied: result.forceNotApplied } : {}),
           emailsFetched: result.fetched,
           emailsStored: result.stored,
         };

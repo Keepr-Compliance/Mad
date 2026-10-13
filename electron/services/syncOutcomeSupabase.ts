@@ -134,6 +134,9 @@ const BACKUP_PASSWORD_SOURCES = new Set(["provided", "stored", "none", "unavaila
 const PHONE_BACKUP_ENCRYPTION = new Set(["on", "off", "unknown"]);
 /** What happened to an unencrypted chain when an encrypted one was started. */
 const OLD_CHAIN = new Set(["aside", "deleted-for-space", "kept"]);
+/** BACKLOG-3892 E: what happened to the kept backup, and why (deviceSyncOrchestrator reportQuarantinedBackup). */
+const KEPT_BACKUP = new Set(["quarantined"]);
+const KEPT_BACKUP_REASON = new Set(["damaged", "key-missing"]);
 
 export function backupEncryptionMetrics(f: TimelineMeta): Record<string, string | number> | undefined {
   const out: Record<string, string | number> = {};
@@ -144,6 +147,9 @@ export function backupEncryptionMetrics(f: TimelineMeta): Record<string, string 
   pick("backupPassword", BACKUP_PASSWORD_SOURCES);
   pick("phoneBackupEncryption", PHONE_BACKUP_ENCRYPTION);
   pick("oldChain", OLD_CHAIN);
+  // BACKLOG-3892 E: a kept backup this sync moved aside because it could not be read.
+  pick("keptBackup", KEPT_BACKUP);
+  pick("keptBackupReason", KEPT_BACKUP_REASON);
   // BACKLOG-3817: attachments the decrypt could not read — a non-negative integer count only.
   const undecryptable = f.attachmentsUndecryptable;
   if (typeof undecryptable === "number" && Number.isInteger(undecryptable) && undecryptable > 0) {

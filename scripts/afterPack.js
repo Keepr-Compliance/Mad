@@ -1,5 +1,6 @@
 const { flipFuses, FuseVersion, FuseV1Options } = require('@electron/fuses');
 const { resolveFuseGate, writeQaMarker } = require('./afterPack.fuse-gate');
+const { placePinnedTools } = require('./release/pinnedIphoneTools');
 
 /**
  * afterPack hook for electron-builder.
@@ -27,6 +28,14 @@ module.exports = async function afterPack(context) {
   }[context.electronPlatformName];
 
   const electronBinaryPath = `${context.appOutDir}/${context.packager.appInfo.productFilename}${ext}`;
+
+  // BACKLOG-3814: place the pinned, already-signed iPhone tools. package.json leaves
+  // resources/win/libimobiledevice out of extraResources because electron-builder signs every
+  // .exe/.dll it copies there on Windows, which changes their bytes each release. This hook
+  // runs after extraResources and before signApp (which never walks resources/win), so these
+  // files reach the installer byte-identical to the manifest. Every platform: the macOS app
+  // has always carried the same folder. Throws on any hash mismatch, missing or extra file.
+  placePinnedTools(context.packager.getResourcesDir(context.appOutDir));
 
   // Hard release-channel guard (BACKLOG-1885): refuse to enable the inspect fuse for a publish/
   // release build. Throws before any fuse is flipped when KEEPR_QA_BUILD=1 meets CI/--publish.

@@ -449,6 +449,48 @@ jobs:
       - name: Assert the packager cannot pack its own output
         run: node scripts/ci/check-package-sanity.mjs --config package.json
 
+  # BACKLOG-3814. The iPhone tools in resources/win/libimobiledevice are the signed
+  # copies from the 2.40.0 installer, shipped byte-for-byte every release. This job
+  # needs no secrets: it checks the folder against
+  # resources/pinned/libimobiledevice.manifest.json (no mismatch, missing or extra
+  # file), then asks Windows itself whether each signature is still Valid and carries
+  # a timestamp. The signing certificate is short-lived; the RFC3161 timestamp is what
+  # keeps these files Valid after it expires, so a lost timestamp is a release blocker.
+  # Not gated on docs-only and no `needs:`, for the same reason as package-config.
+  pinned-iphone-tools:
+    name: Pinned iPhone Tools
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+
+      - name: Verify the pinned iPhone tools match the manifest
+        run: node scripts/release/pinnedIphoneTools.js --repo
+
+      - name: Verify every pinned file has a Valid, timestamped signature
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $m = Get-Content -Raw resources/pinned/libimobiledevice.manifest.json | ConvertFrom-Json
+          $names = @($m.files.PSObject.Properties.Name)
+          if ($names.Count -lt 1) { Write-Error "manifest lists no files"; exit 1 }
+          $bad = 0
+          foreach ($n in $names) {
+            $sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $m.dir $n)
+            $signer = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { "" }
+            $tsa = if ($sig.TimeStamperCertificate) { $sig.TimeStamperCertificate.Subject } else { "" }
+            echo ("{0,-10} {1,-32} | {2} | TSA: {3}" -f $sig.Status, $n, $signer, $tsa)
+            if ($sig.Status -ne "Valid" -or -not $sig.TimeStamperCertificate -or $signer -notmatch "Blue Spaces LLC") { $bad++ }
+          }
+          if ($bad -gt 0) { echo "::error::$bad pinned iPhone tool file(s) are not Valid, not timestamped, or not signed by Blue Spaces LLC"; exit 1 }
+          echo "OK: $($names.Count) pinned files Valid and timestamped."
+
   # BACKLOG-2959: SQL text belongs in electron/services/db/** (the *Sql.ts
   # pattern). This gate fails when a NEW site defines SQL text anywhere else.
   #
@@ -1059,6 +1101,25 @@ jobs:
           echo "Build complete. Checking artifacts..."
           Get-ChildItem -Path release -Filter "*.exe" | Format-Table Name, Length
         shell: pwsh
+
+      # BACKLOG-3927: this is the website build, so Apple's installer must be in
+      # it. (release.yml runs the same script for both channels; the Store
+      # build must contain no driver payload at all.)
+      - name: Verify the website package still bundles the Apple driver installer
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          node scripts/ci/check-packaged-drivers.mjs release/win-unpacked website
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # BACKLOG-3814. scripts/afterPack.js places the pinned iPhone tools; check the
+      # packaged copy is byte-identical to the manifest.
+      - name: Verify the Windows package carries the pinned iPhone tools
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          node scripts/release/pinnedIphoneTools.js --packaged release/win-unpacked
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       # BACKLOG-3438. release.yml has asserted this since BACKLOG-3192 (release.yml
       # :225-251); ci.yml never did. A macOS build that dies partway leaves exactly

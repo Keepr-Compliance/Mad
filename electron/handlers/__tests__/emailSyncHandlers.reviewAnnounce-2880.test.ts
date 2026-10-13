@@ -128,6 +128,24 @@ describe("BACKLOG-2880 — the Sync button announces its run on the review chann
     });
   });
 
+  // BACKLOG-3910 (slice b): the Emails Sync button on a locked deal fetches and links nothing.
+  it.each([
+    ["submitted", "submitted"],
+    ["approved", "sealed"],
+  ])("a %s deal returns skipped:%s and never fetches", async (status, reason) => {
+    mockGetTransactionWithContacts.mockResolvedValue({
+      id: TXN,
+      user_id: "u-2880",
+      submission_status: status,
+      contact_assignments: [{ contact_id: "c-2880" }],
+    });
+
+    const result = (await sync({}, TXN)) as { success: boolean; skipped?: string };
+
+    expect([result.success, result.skipped]).toEqual([true, reason]);
+    expect(mockSyncTransactionEmails).not.toHaveBeenCalled();
+  });
+
   it("THE FOUNDER'S CASE — 9 queued, 0 linked: the run is announced with its counts", async () => {
     // The exact shape of pass C: mailbox already cached (0 stored), nine
     // address-unmatched emails queued for review, nothing linked. Before this

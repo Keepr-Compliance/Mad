@@ -51,6 +51,12 @@ const SEGMENT_SUFFIX = ".log";
 export const DEFAULT_MAX_SEGMENT_BYTES = 2 * 1024 * 1024;
 /** Total bytes across all segments plus current. Oldest segments are dropped. */
 export const DEFAULT_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
+/**
+ * How long to wait before the one extra attempt at trimming when a segment
+ * could not be removed (BACKLOG-3191 — on Windows an antivirus or indexer can
+ * hold a just-renamed file for a moment).
+ */
+export const DEFAULT_CAP_RETRY_DELAY_MS = 500;
 
 export interface SupportLogStoreDeps {
   now: () => number;
@@ -67,6 +73,8 @@ export interface SupportLogStoreDeps {
   cipher: SupportCipher;
   maxSegmentBytes?: number;
   maxTotalBytes?: number;
+  /** Delay before the single retry of a trim that could not remove a segment. */
+  capRetryDelayMs?: number;
   log?: (level: "info" | "warn" | "error", message: string) => void;
 }
 
@@ -111,6 +119,20 @@ export class SupportLogStore {
   private currentBytes: number | null = null;
   /** Records lost because they could not be sealed. Never silently zero. */
   private droppedWrites = 0;
+  /** The one delayed trim retry, while it is pending. */
+  private capRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Set when the delayed retry also failed. Nothing else is scheduled; the next
+   * write clears it and tries again (BACKLOG-3191).
+   */
+  private capRetryExhausted = false;
+  /**
+   * Total on disk after the last trim, while that trim was blocked by a held
+   * segment; null otherwise. Used to keep the hard bound below.
+   */
+  private heldTotal: number | null = null;
+  /** Records refused because a held segment left no room under the bound. */
+  private heldDrops = 0;
 
   constructor(deps: SupportLogStoreDeps) {
     this.deps = deps;
@@ -134,6 +156,11 @@ export class SupportLogStore {
 
   private log(level: "info" | "warn" | "error", message: string): void {
     this.deps.log?.(level, message);
+  }
+
+  /** Records refused while a held segment left no room under the bound. */
+  heldDropCount(): number {
+    return this.heldDrops;
   }
 
   /** Records dropped because sealing failed. Exposed so the loss is observable. */
@@ -210,6 +237,25 @@ export class SupportLogStore {
         this.currentBytes = await this.statSize(this.currentPath);
       }
 
+      // Hard bound while a segment is held: the total on disk never exceeds
+      // maxTotalBytes + maxSegmentBytes. A record that would cross it gets
+      // this write's trim attempt first; if that is still blocked, the record
+      // is refused and counted (BACKLOG-3191).
+      if (this.wouldExceedHeldBound(record.length)) {
+        this.capRetryExhausted = false;
+        await this.enforceTotalCap(false);
+        if (this.wouldExceedHeldBound(record.length)) {
+          this.heldDrops += 1;
+          if (this.heldDrops === 1 || this.heldDrops % 100 === 0) {
+            this.log(
+              "warn",
+              `Support log record dropped: a segment is held and the log is at its limit (${this.heldDrops} so far)`,
+            );
+          }
+          return false;
+        }
+      }
+
       // Seal before writing when this record would push us past the segment
       // size, so a segment never exceeds the bound it advertises.
       if (
@@ -221,12 +267,21 @@ export class SupportLogStore {
 
       await fs.appendFile(this.currentPath, record);
       this.currentBytes = (this.currentBytes ?? 0) + record.length;
-      await this.enforceTotalCap();
+      // A new write is a new chance: whatever held a segment may have let go.
+      this.capRetryExhausted = false;
+      await this.enforceTotalCap(false);
       return true;
     } catch (error) {
       this.log("warn", `Support log write failed: ${String(error)}`);
       return false;
     }
+  }
+
+  private wouldExceedHeldBound(recordBytes: number): boolean {
+    return (
+      this.heldTotal !== null &&
+      this.heldTotal + recordBytes > this.maxTotalBytes + this.maxSegmentBytes
+    );
   }
 
   private async statSize(target: string): Promise<number> {
@@ -262,25 +317,80 @@ export class SupportLogStore {
   }
 
   /**
-   * Drop oldest segments until the total fits. `current.log` is never deleted —
-   * if it alone exceeds the cap it is rotated, and the resulting segment can
-   * then be dropped on the next pass.
+   * Bring the total back under the cap, oldest segments first. `current.log` is
+   * never removed — if it alone is over the cap it is sealed once and the
+   * resulting segment trimmed, and an empty `current.log` is put back.
+   *
+   * A segment that cannot be removed (Windows: held by an antivirus scanner or
+   * the indexer) ends the pass; it is never spun on (BACKLOG-3191). One delayed retry is
+   * scheduled without blocking the caller; if that also fails, the next write
+   * tries again. While waiting, the total on disk never exceeds
+   * `maxTotalBytes + maxSegmentBytes`: `append` refuses a record that would
+   * cross that line (see `wouldExceedHeldBound`).
    */
-  private async enforceTotalCap(): Promise<void> {
+  private async enforceTotalCap(isRetry: boolean): Promise<void> {
+    let { blocked, total } = await this.trimOnce();
+
+    if (blocked === "current-only") {
+      // Nothing left but current.log, and it is still over the cap. Seal it so
+      // there is something the trim may remove, trim once more, and put an
+      // empty current.log back. Bounded: one rotate, one extra pass.
+      await this.rotate();
+      ({ blocked, total } = await this.trimOnce());
+      await this.ensureCurrentFile();
+    }
+
+    this.heldTotal = blocked === "held" ? total : null;
+    if (blocked !== "held") {
+      this.cancelCapRetry();
+      this.capRetryExhausted = false;
+      return;
+    }
+
+    if (isRetry) {
+      this.capRetryExhausted = true;
+      this.log(
+        "warn",
+        "Support log is over its size cap; a segment could not be removed. Will try again on the next write.",
+      );
+      return;
+    }
+    this.scheduleCapRetry();
+  }
+
+  /**
+   * One pass over the segments. `blocked` is `"held"` when a segment could not
+   * be removed and the total is still over the cap, `"current-only"` when every
+   * segment is gone and `current.log` alone is over, otherwise `null`. `total`
+   * is the size on disk after the pass.
+   */
+  private async trimOnce(): Promise<{
+    blocked: "held" | "current-only" | null;
+    total: number;
+  }> {
     const files = await this.listFiles();
     let total = files.reduce((sum, f) => sum + f.size, 0);
-    if (total <= this.maxTotalBytes) return;
+    if (total <= this.maxTotalBytes) return { blocked: null, total };
 
     const segments = files
       .filter((f) => f.name !== CURRENT_FILENAME)
       .sort((a, b) => a.name.localeCompare(b.name));
 
+    let held = false;
     for (const segment of segments) {
       if (total <= this.maxTotalBytes) break;
       try {
         await fs.unlink(path.join(this.dir, segment.name));
         total -= segment.size;
       } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+          total -= segment.size;
+          continue;
+        }
+        // Stop at the first held segment rather than removing younger ones
+        // around it, so the oldest content is always what goes first. The
+        // bound is kept by append (see wouldExceedHeldBound), not by this loop.
+        held = true;
         this.log(
           "warn",
           `Could not drop support log segment ${segment.name}: ${String(error)}`,
@@ -289,11 +399,39 @@ export class SupportLogStore {
       }
     }
 
-    if (total > this.maxTotalBytes) {
-      // Only `current.log` is left and it is still over budget. Seal it so the
-      // next pass has something it is allowed to delete.
-      await this.rotate();
-      await this.enforceTotalCap();
+    if (total <= this.maxTotalBytes) return { blocked: null, total };
+    return { blocked: held ? "held" : "current-only", total };
+  }
+
+  private async ensureCurrentFile(): Promise<void> {
+    try {
+      await fs.writeFile(this.currentPath, "", { flag: "a" });
+    } catch (error) {
+      this.log("warn", `Could not recreate support log: ${String(error)}`);
+    }
+  }
+
+  private scheduleCapRetry(): void {
+    if (this.capRetryTimer || this.capRetryExhausted) return;
+    const delay = this.deps.capRetryDelayMs ?? DEFAULT_CAP_RETRY_DELAY_MS;
+    const timer = setTimeout(() => {
+      this.capRetryTimer = null;
+      // Serialised with writes, so the retry never races a rename.
+      this.writeChain = this.writeChain
+        .catch(() => undefined)
+        .then(() => this.enforceTotalCap(true))
+        .catch((error) => {
+          this.log("warn", `Support log cap retry failed: ${String(error)}`);
+        });
+    }, delay);
+    timer.unref?.();
+    this.capRetryTimer = timer;
+  }
+
+  private cancelCapRetry(): void {
+    if (this.capRetryTimer) {
+      clearTimeout(this.capRetryTimer);
+      this.capRetryTimer = null;
     }
   }
 
@@ -441,7 +579,12 @@ export class SupportLogStore {
    * into the next grant's first report.
    */
   async clear(): Promise<void> {
+    // Cancel after the flush: a queued write can arm a retry timer, and would
+    // re-set heldTotal, while the flush drains.
     await this.flush();
+    this.cancelCapRetry();
+    this.capRetryExhausted = false;
+    this.heldTotal = null;
     try {
       const names = await fs.readdir(this.dir);
       await Promise.all(
