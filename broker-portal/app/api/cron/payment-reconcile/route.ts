@@ -7,7 +7,7 @@
  * Stripe, and re-runs finalize_paid_unlock (idempotent) using the STORED
  * local_transaction_id (C-C — not re-parsed Stripe metadata).
  *
- * Auth: CRON_SECRET bearer (same pattern as admin-portal/app/api/cron/storage-check).
+ * Auth: CRON_SECRET bearer via lib/auth/cronAuth (refuses when CRON_SECRET is unset).
  */
 
 import { NextResponse } from 'next/server';
@@ -15,6 +15,7 @@ import { getStripe } from '@/lib/stripe';
 import { createServiceClient } from '@/lib/supabase/service';
 import { fulfillPaidUnlock, emitPaymentSucceeded } from '@/lib/payments/fulfillment';
 import { dispatchReceiptEmail } from '@/lib/payments/receipt';
+import { isAuthorizedCronRequest } from '@/lib/auth/cronAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,8 +26,7 @@ const GRACE_MINUTES = 5;
 const BATCH_LIMIT = 50;
 
 export async function GET(req: Request): Promise<Response> {
-  const authHeader = req.headers.get('authorization');
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (!isAuthorizedCronRequest(req.headers.get('authorization'))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
