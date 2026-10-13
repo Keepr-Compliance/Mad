@@ -807,6 +807,16 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
     expect(r.credits).toContain('Each export in the Keepr app uses one credit until your payment goes through.');
   });
 
+  it('C-END-UNPAID (SR RC4): an unpaid subscription [EDITED status unpaid] -> no End plan now; the support note instead', async () => {
+    seedCustomer();
+    seedMirror({ ...SUB, status: 'unpaid' });
+    mockStripe.invoicesList.mockResolvedValue(fx3848('invoices-list-pastdue'));
+    mockStripe.chargesList.mockResolvedValue(fx3848('charges-list-pastdue'));
+    const r = await page();
+    expect(r.planButtons).toEqual([]);
+    expect(r.planText).toContain('To end this plan or settle the unpaid bill, please contact support.');
+  });
+
   it('banner control: an active plan -> no banner, "Charged automatically each month"', async () => {
     seedCustomer();
     seedMirror(fx3847('sub-C-keep'));

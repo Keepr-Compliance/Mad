@@ -3,8 +3,11 @@
  * the billing contact, one sender).
  *
  * Producer: handleInvoicePaid (lib/billing/sync.ts) enqueues ONE billing_outbox
- * row per paid Agent invoice with total > 0, whatever the grant decides (a paid
- * invoice that does not grant is still a charge that owes a receipt). The row
+ * row per paid Agent invoice with amount_paid > 0, whatever the grant decides (a
+ * paid invoice that does not grant is still a charge that owes a receipt). An
+ * invoice settled from the customer's credit balance (total > 0, amount_paid 0,
+ * no charge) gets no receipt: Stripe sends none where nothing was charged, and
+ * Keepr matches it (SR ruling a). The grant keeps its own total > 0 gate. The row
  * is keyed `agent_receipt:<mode>:<invoice id>` (UNIQUE dedupe_key), so a
  * redelivered invoice.paid never queues a second receipt. It runs about ten
  * minutes later.
@@ -44,9 +47,9 @@ export function agentReceiptDedupeKey(mode: StripeMode, invoiceId: string): stri
 
 export async function enqueueAgentReceipt(
   service: ServiceClient,
-  args: { mode: StripeMode; userId: string; invoice: Pick<Stripe.Invoice, 'id' | 'status' | 'total'>; now?: Date }
+  args: { mode: StripeMode; userId: string; invoice: Pick<Stripe.Invoice, 'id' | 'status' | 'amount_paid'>; now?: Date }
 ): Promise<'enqueued' | 'exists' | 'skipped'> {
-  if (args.invoice.status !== 'paid' || !(args.invoice.total > 0)) return 'skipped';
+  if (args.invoice.status !== 'paid' || !(args.invoice.amount_paid > 0)) return 'skipped';
   const now = args.now ?? new Date();
   return enqueueOutbox(service, {
     mode: args.mode,

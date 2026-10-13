@@ -43,6 +43,8 @@ export interface PersonalPlanData {
   /** BACKLOG-3848: from billingCapabilities (the server re-checks on every action). */
   canEndPlanNow?: boolean;
   canUpdateCard?: boolean;
+  /** BACKLOG-3848 (SR RC4): the subscription is `unpaid`; End plan now is not offered, support is. */
+  renewalUnpaid?: boolean;
 }
 
 export interface BillingPageProps {

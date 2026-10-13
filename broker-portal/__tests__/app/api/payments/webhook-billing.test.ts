@@ -347,7 +347,7 @@ describe('invoice.paid gates on real fixtures (C-3b, C-D3, C-D2, C-D2b)', () => 
     expect(grants()).toEqual([]);
   });
 
-  it('C-D3: credit-settled renewal (total 1999, amount_paid 0, no charge) -> grant', async () => {
+  it('C-D3: credit-settled renewal (total 1999, amount_paid 0, no charge) -> grant, and NO receipt queued (3848 SR RC2)', async () => {
     const sub = fx('sub-2b-credit');
     const inv = fx('inv-2b-credit');
     expect([inv.total, inv.amount_paid, inv.charge]).toEqual([1999, 0, null]);
@@ -355,6 +355,7 @@ describe('invoice.paid gates on real fixtures (C-3b, C-D3, C-D2, C-D2b)', () => 
     serve(inv, sub);
     expect((await deliver(fx('ev-2b-invoice.paid-cycle'))).status).toBe(200);
     expect(grants().map((g) => g.p_paid_through)).toEqual([paidThrough(1796928475)]);
+    expect(db.rows('billing_outbox').filter((r) => r.kind === 'agent_receipt')).toEqual([]);
   });
 
   it('C-D2: void-pause resume (subscription_update) -> grant to the new period end', async () => {

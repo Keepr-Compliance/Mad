@@ -38,6 +38,7 @@ import { endPlanNow, END_NOW_MESSAGES } from '@/lib/billing/endPlanNow';
 export type AgentActionResult = { error: string } | { ok: true; notice?: string };
 
 const SUSPENDED = 'Your account is suspended. Please contact support.';
+const UNPAID_END = 'Your plan has an unpaid bill. Please contact support to end it.';
 const SUPPORT_GRANT = 'Your Unlimited exports come from Keepr. Please contact support to change your plan.';
 
 /** Subscribe: open Stripe Checkout for the Agent plan (same tab). */
@@ -119,6 +120,8 @@ export async function endAgentPlanNow(): Promise<AgentActionResult> {
   if (blocked) return { error: blocked.error };
   const ctx = await agentContext();
   if ('error' in ctx) return ctx;
+  // SR RC4: `unpaid` reads payment_failed but is never ended here; send the person to support.
+  if (ctx.view.row?.status === 'unpaid') return { error: UNPAID_END };
   if (!ctx.caps.canEndPlanNow) return { error: NOT_NOW };
   const id = ctx.view.row?.stripe_subscription_id;
   if (!id) return { error: NOT_NOW };

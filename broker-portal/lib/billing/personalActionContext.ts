@@ -46,6 +46,7 @@ export async function agentContext(): Promise<AgentContext | { error: string }> 
     isImpersonating: false,
     enabled: true,
     agentPlan: view.state,
+    renewalUnpaid: view.row?.status === 'unpaid',
     // The suspended page gate is BACKLOG-3878's. view.suspended (licences) is
     // read by each action that must refuse or skip a charge for it.
     accountSuspended: false,

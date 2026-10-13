@@ -384,6 +384,16 @@ describe('billingCapabilities — the whole table', () => {
   });
 });
 
+describe('3848 SR RC4: an unpaid subscription', () => {
+  const owner = { access: PERSONAS['personal-org owner'], isImpersonating: false, enabled: true, agentPlan: 'payment_failed' as const, accountSuspended: false, orgBillingSetUp: false };
+  it('renewalUnpaid -> End plan now is not offered; everything else as payment_failed', () => {
+    expect(billingCapabilities({ ...owner, renewalUnpaid: true })).toEqual({ ...P_PAYMENT_FAILED, canEndPlanNow: false });
+  });
+  it('control: renewalUnpaid false -> End plan now offered (row 4)', () => {
+    expect(billingCapabilities({ ...owner, renewalUnpaid: false })).toEqual(P_PAYMENT_FAILED);
+  });
+});
+
 describe('billingNavVisible — the sidebar asks the same question as the page (C6b)', () => {
   const navCases = CASES.filter((c) => c.plan === 'none' && !c.suspended && !c.setUp);
 

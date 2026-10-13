@@ -886,9 +886,16 @@ describe('3848 End plan now', () => {
     mockStripeImpl['invoices.list'] = async () => fx48('pr2-invoices-list-sub-open');
     mockStripeImpl['invoices.voidInvoice'] = async () => fx48('SR-VOID-inv-voided');
     mockStripeImpl['subscriptions.cancel'] = async () => ({ ...fx48('SR-VOID-sub-canceled'), id: SUB48.id }); // [COMPOSED]
+    mockStripeImpl['invoices.retrieve'] = async () => fx48('SR-VOID-inv-voided'); // step-3 re-fetch of the latest invoice
     expect(await endAgentPlanNow()).toEqual({ ok: true });
-    expect(stripeOps()).toEqual(['subscriptions.retrieve', 'invoices.list', 'invoices.voidInvoice', 'subscriptions.cancel']);
+    expect(stripeOps()).toEqual(['subscriptions.retrieve', 'invoices.list', 'invoices.voidInvoice', 'invoices.retrieve', 'subscriptions.cancel']);
     expect(mockDb.rows('billing_subscriptions')[0]).toMatchObject({ status: 'canceled', paused: false });
+  });
+
+  it('C-END-UNPAID (SR RC4): an unpaid plan [EDITED status unpaid] -> the support message (never "Refresh the page"), zero Stripe calls', async () => {
+    seed({ billing_subscriptions: [mirrorRow(SUB48, { status: 'unpaid' })] });
+    expect(await endAgentPlanNow()).toEqual({ error: 'Your plan has an unpaid bill. Please contact support to end it.' });
+    expect(stripeOps()).toEqual([]);
   });
 
   it('paid in the meantime -> ok with a notice, nothing cancelled', async () => {

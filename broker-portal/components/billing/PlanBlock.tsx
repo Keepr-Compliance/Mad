@@ -4,6 +4,9 @@ import { CancelPlanButton, CheckoutReturn, KeepPlanButton, PAYMENT_INCOMPLETE_NO
 import type { PersonalPlanData } from './BillingPage';
 import { EndPlanNowButton } from './BillingCardControls';
 
+/** BACKLOG-3848 (SR RC4): shown instead of End plan now for an `unpaid` subscription. */
+export const RENEWAL_UNPAID_NOTE = 'To end this plan or settle the unpaid bill, please contact support.';
+
 /** "Your plan". Organization pages show the plan name only (3844). */
 export function PlanBlock({ line, personal }: { line: string; personal?: PersonalPlanData }) {
   return (
@@ -68,7 +71,16 @@ function PersonalPlan({ p }: { p: PersonalPlanData }) {
         <div className="mt-2 space-y-2">
           <p className="font-medium text-gray-900">Agent · Unlimited exports</p>
           <p className="text-sm text-red-700">Your last payment did not go through. Update your card below.</p>
-          {p.canEndPlanNow ? <EndPlanNowButton /> : null}
+          {p.canEndPlanNow ? (
+            <EndPlanNowButton />
+          ) : p.renewalUnpaid ? (
+            <p className="text-sm text-gray-600" data-billing-note="renewal_unpaid">
+              {RENEWAL_UNPAID_NOTE}{' '}
+              <Link className="font-medium text-indigo-700 hover:underline" href="/support/new">
+                Contact support
+              </Link>
+            </p>
+          ) : null}
         </div>
       );
     case 'support_grant':

@@ -10,6 +10,8 @@
  *     SR trace void -> sub flips active -> cancel -> canceled;
  *   - pr2-void-paid-refused / pr2-inv-paid: Stripe refusing to void a paid
  *     invoice, and the invoice as it then reads.
+ *   - pr2-sub-past_due.latest_invoice IS the open renewal (same id), so the
+ *     step-3 re-fetch of the latest invoice is served VOIDED once voided.
  * The SR trace ran on another TEST subscription than pr2-sub-past_due; the
  * outcome objects are served for it [COMPOSED]. No network.
  */
@@ -22,7 +24,7 @@ import { clone, createStripeStub, stripeError, type StripeStub } from '../../hel
 const mockCaptureMessage = jest.fn();
 jest.mock('@sentry/nextjs', () => ({ captureMessage: (...a: unknown[]) => mockCaptureMessage(...a), captureException: jest.fn() }));
 
-import { endPlanNow, END_NOW_KIND } from '@/lib/billing/endPlanNow';
+import { endPlanNow, endNowVoidKey, END_NOW_KIND } from '@/lib/billing/endPlanNow';
 import { mirrorState } from '@/lib/billing/sync';
 
 type Obj = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -36,6 +38,8 @@ const VOIDED = { ...fx('SR-VOID-inv-voided'), id: INV.id }; // [COMPOSED] SR tra
 const CANCELED = { ...fx('SR-VOID-sub-canceled'), id: SUB.id, customer: SUB.customer }; // [COMPOSED]
 const USER = 'USER-3848-END';
 const OTHER = 'USER-3848-OTHER';
+const NOW = new Date('2026-10-13T06:00:30Z');
+const MINUTE_BUCKET = Math.floor(NOW.getTime() / 60_000);
 
 let db: BillingDb;
 let stripe: StripeStub;
@@ -52,8 +56,8 @@ function seed(): void {
   });
 }
 
-async function run() {
-  return endPlanNow({ stripe: stripe.client, service: { from: db.from } as never, mode: 'test', userId: USER, subscriptionId: SUB.id });
+async function run(now: Date = NOW) {
+  return endPlanNow({ stripe: stripe.client, service: { from: db.from } as never, mode: 'test', userId: USER, subscriptionId: SUB.id, now });
 }
 const mine = () => db.rows('billing_subscriptions').find((r) => r.id === 'row-mine')!;
 
@@ -64,6 +68,8 @@ beforeEach(() => {
     'subscriptions.retrieve': () => SUB,
     'invoices.list': () => OPEN_LIST,
     'invoices.voidInvoice': () => VOIDED,
+    // Step 3 re-fetch of SUB.latest_invoice (= INV.id) after the void.
+    'invoices.retrieve': (id: string) => ({ ...VOIDED, id }),
     'subscriptions.cancel': () => CANCELED,
   });
 });
@@ -71,8 +77,9 @@ beforeEach(() => {
 describe('endPlanNow (R4)', () => {
   it('C-END-ORDER: status read, open invoices listed, every one voided, THEN cancel; mirror row canceled, paused false', async () => {
     expect(await run()).toBe('ended');
-    expect(stripe.ops()).toEqual(['subscriptions.retrieve', 'invoices.list', 'invoices.voidInvoice', 'subscriptions.cancel']);
-    expect(stripe.callsTo('invoices.voidInvoice')).toEqual([[INV.id, {}, { idempotencyKey: `end-now-void:${INV.id}` }]]);
+    expect(stripe.ops()).toEqual(['subscriptions.retrieve', 'invoices.list', 'invoices.voidInvoice', 'invoices.retrieve', 'subscriptions.cancel']);
+    expect(stripe.callsTo('invoices.voidInvoice')).toEqual([[INV.id, {}, { idempotencyKey: `end-now-void:${INV.id}:${MINUTE_BUCKET}` }]]);
+    expect(stripe.callsTo('invoices.retrieve')).toEqual([[SUB.latest_invoice]]);
     expect(stripe.callsTo('subscriptions.cancel')).toEqual([
       [SUB.id, { prorate: false, invoice_now: false }, { idempotencyKey: `end-now-cancel:${SUB.id}` }],
     ]);
@@ -136,10 +143,49 @@ describe('endPlanNow (R4)', () => {
         kind: END_NOW_KIND,
         user_id: USER,
         dedupe_key: `end-now:test:${SUB.id}`,
-        payload: { subscription_id: SUB.id },
+        payload: { subscription_id: SUB.id, voided_invoice_ids: [INV.id] },
       }),
     ]);
     expect(mockCaptureMessage).toHaveBeenCalledWith('billing alert: end_now_cancel_failed', expect.anything());
+  });
+
+  it('C-END-LIST-EMPTY (SR RC1): the renewal was paid after the status read, before the list -> nothing to void, latest invoice reads paid -> paid_meanwhile, zero cancel', async () => {
+    // [EDITED data: []] the list as Stripe answers once the renewal is paid; pr2-inv-paid served under the latest invoice id [COMPOSED].
+    stripe.impl['invoices.list'] = () => ({ ...clone(OPEN_LIST), data: [] });
+    stripe.impl['invoices.retrieve'] = (id: string) => ({ ...fx('pr2-inv-paid'), id });
+    expect(await run()).toBe('paid_meanwhile');
+    expect(stripe.callsTo('invoices.retrieve')).toEqual([[SUB.latest_invoice]]);
+    expect(stripe.callsTo('invoices.voidInvoice')).toEqual([]);
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
+    expect(mine()).toMatchObject({ status: 'past_due' });
+    expect(db.rows('billing_outbox')).toEqual([]);
+  });
+
+  it('C-END-LATEST-OPEN: after the voids the latest invoice still reads open [served INV] -> try_again, zero cancel', async () => {
+    stripe.impl['invoices.list'] = () => ({ ...clone(OPEN_LIST), data: [] }); // [EDITED data: []]
+    stripe.impl['invoices.retrieve'] = () => INV;
+    expect(await run()).toBe('try_again');
+    expect(stripe.callsTo('subscriptions.cancel')).toEqual([]);
+  });
+
+  it('C-END-VOID-KEY: a double submit in the same minute reuses the void key; a retry a minute later gets a fresh one', async () => {
+    await run(NOW);
+    seed();
+    await run(new Date(NOW.getTime() + 20_000)); // same minute bucket
+    seed();
+    await run(new Date(NOW.getTime() + 60_000)); // next bucket
+    const keys = stripe.callsTo('invoices.voidInvoice').map((a) => a[2].idempotencyKey);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(keys[2]).toBe(endNowVoidKey(INV.id, new Date(NOW.getTime() + 60_000)));
+  });
+
+  it('S3: a write-through that matches no mirror row is logged (the webhook writes it later)', async () => {
+    db.rows('billing_subscriptions').splice(0, db.rows('billing_subscriptions').length);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await run()).toBe('ended');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('matched no mirror row'));
+    warn.mockRestore();
   });
 
   it.each([

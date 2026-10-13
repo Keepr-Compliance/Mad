@@ -206,6 +206,15 @@ describe('R3: paying the failed renewal', () => {
     expect(stripe.callsTo('invoices.pay')).toEqual([]);
   });
 
+  it('C-PAY-DRAFT (SR RC3): the latest invoice is the next cycle\'s DRAFT [EDITED status draft] -> zero invoices.pay, outcome none', async () => {
+    // Real producer state: Stripe keeps invoicing a past_due subscription on cycle; the new renewal
+    // is a draft for ~1 h and is then latest_invoice. Its line pays the current period, so only the
+    // status check stops the pay.
+    stripe.impl['invoices.retrieve'] = () => ({ ...clone(INV_OPEN), status: 'draft' });
+    expect(await payAfterCardUpdate(ctx(), { ...base, onError: 'throw' })).toEqual({ kind: 'none' });
+    expect(stripe.callsTo('invoices.pay')).toEqual([]);
+  });
+
   it('an open invoice of another customer [EDITED customer] -> no pay', async () => {
     stripe.impl['invoices.retrieve'] = () => ({ ...clone(INV_OPEN), customer: 'cus_EDITED_other' });
     expect(await payAfterCardUpdate(ctx(), { ...base, onError: 'throw' })).toEqual({ kind: 'none' });

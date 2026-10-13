@@ -47,6 +47,13 @@ export interface BillingSituation {
   /** billingEnabled(), computed on the server. */
   enabled: boolean;
   agentPlan: AgentPlanState;
+  /**
+   * BACKLOG-3848 (SR RC4): the Agent subscription is `unpaid` (all retries
+   * failed). agentPlan reads `payment_failed` for it, but End plan now's
+   * void/cancel path refuses `unpaid` (untraced in TEST), so the button is
+   * hidden and the page sends the person to support instead.
+   */
+  renewalUnpaid?: boolean;
   accountSuspended: boolean;
   /** The organization has a billing deal on record (org_deals, 3853). */
   orgBillingSetUp: boolean;
@@ -100,7 +107,7 @@ function personal(s: BillingSituation): BillingCapabilities {
     showPrice: true,
     canPay: true,
     canUpdateCard: true,
-    canEndPlanNow: !s.accountSuspended && s.agentPlan === 'payment_failed',
+    canEndPlanNow: !s.accountSuspended && s.agentPlan === 'payment_failed' && !s.renewalUnpaid,
     canSeeInvoices: true,
     canPurchase: !s.accountSuspended,
     canManageLicenses: false,
