@@ -4,7 +4,7 @@
  * Check again) instead of "Install Apple Mobile Device Support".
  */
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { ConnectionStatus } from "../ConnectionStatus";
@@ -49,6 +49,17 @@ it("Store build: Apple Devices guide; Check again calls the re-check", async () 
   expect(onRecheckDriver).toHaveBeenCalled();
   expect(await screen.findByText(APPLE_DEVICES_NOT_FOUND)).toBeInTheDocument();
   expect(onInstallDriver).not.toHaveBeenCalled();
+});
+
+it("Store build: window focus does not re-probe from the checklist (the hook's throttled re-check owns it)", async () => {
+  const onRecheckDriver = jest.fn(async () => "not-installed" as const);
+  render(
+    <ConnectionStatus {...base} isStoreBuild appleDevicesState="not-installed" onRecheckDriver={onRecheckDriver} />,
+  );
+  await act(async () => {
+    fireEvent.focus(window);
+  });
+  expect(onRecheckDriver).not.toHaveBeenCalled();
 });
 
 it("Store build without a re-check handler never falls back to the installer view", () => {
