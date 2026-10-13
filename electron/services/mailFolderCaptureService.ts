@@ -83,9 +83,10 @@ export async function refreshMailFolderCatalog(
     }
     // An empty listing (cancelled walk, transient failure) never replaces a catalogue.
     if (entries.length === 0) return;
-    replaceMailFolderCatalog(userId, accountId, provider, entries);
+    const changed = replaceMailFolderCatalog(userId, accountId, provider, entries);
     await logService.info("[BACKLOG-3926] folder / label catalogue refreshed", MODULE, {
       provider,
+      changed,
       entries: entries.length,
       system: entries.filter((e) => e.isSystem).length,
     });

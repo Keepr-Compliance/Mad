@@ -13,6 +13,9 @@ import { dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
 import type { MailFolderEntry, MailFolderProvider } from "../../utils/mailFolderCatalog";
 
+const REFS_FOR_MESSAGE_SQL = sql`SELECT folder_id FROM mail_folder_refs WHERE account_id = ? AND external_id = ?`;
+const CATALOG_FOR_ACCOUNT_SQL = sql`SELECT folder_id, display_path, segments, is_system, provider, user_id
+  FROM mail_folder_names WHERE account_id = ? ORDER BY folder_id`;
 const CLEAR_REFS_FOR_MESSAGE_SQL = sql`DELETE FROM mail_folder_refs WHERE account_id = ? AND external_id = ?`;
 const INSERT_REF_SQL = sql`INSERT OR IGNORE INTO mail_folder_refs (user_id, account_id, external_id, folder_id) VALUES (?, ?, ?, ?)`;
 const CLEAR_NAMES_FOR_ACCOUNT_SQL = sql`DELETE FROM mail_folder_names WHERE account_id = ?`;
@@ -26,35 +29,72 @@ const FOLDERS_FOR_EMAILS_SQL = sql`SELECT e.id AS email_id, r.account_id, r.fold
   JOIN emails e ON e.id = j.value
   JOIN mail_folder_refs r ON r.user_id = e.user_id AND r.external_id = e.external_id`;
 
+const sameSet = (a: readonly string[], b: readonly string[]): boolean => {
+  if (a.length !== b.length) return false;
+  const sa = new Set(a);
+  return b.every((x) => sa.has(x));
+};
+
 /**
  * Replace each message's stored folder ids with its current set. Messages with an
  * empty set get no rows (and lose any old ones: the message was moved out).
+ *
+ * A message whose set is unchanged is not written at all: these tables are inputs of
+ * the full sweep (autoLinkInputTracker counts writes to them), and a sync re-fetches
+ * mostly unchanged mail — rewriting it would make every sync re-run every deal's sweep.
+ * Returns how many messages changed.
  */
 export function replaceMailFolderRefs(
   userId: string,
   accountId: string,
   messages: ReadonlyArray<{ externalId: string; folderIds: readonly string[] }>,
 ): number {
-  let written = 0;
+  let changed = 0;
   dbTransaction(() => {
     for (const m of messages) {
       if (!m.externalId) continue;
+      const current = dbAll<{ folder_id: string }>(REFS_FOR_MESSAGE_SQL, [accountId, m.externalId]).map((r) => r.folder_id);
+      if (sameSet(current, [...new Set(m.folderIds)])) continue;
+      changed++;
       dbRun(CLEAR_REFS_FOR_MESSAGE_SQL, [accountId, m.externalId]);
       for (const folderId of m.folderIds) {
-        written += dbRun(INSERT_REF_SQL, [userId, accountId, m.externalId, folderId]).changes ?? 0;
+        dbRun(INSERT_REF_SQL, [userId, accountId, m.externalId, folderId]);
       }
     }
   });
-  return written;
+  return changed;
 }
 
-/** Replace an account's whole folder / label catalogue. */
+/**
+ * Replace an account's whole folder / label catalogue — only when it differs from the
+ * stored one (same reason as above: the catalogue is a sweep input). Returns whether
+ * anything was written.
+ */
 export function replaceMailFolderCatalog(
   userId: string,
   accountId: string,
   provider: MailFolderProvider,
   entries: readonly MailFolderEntry[],
-): void {
+): boolean {
+  const key = (r: { folder_id: string; display_path: string; segments: string; is_system: number; provider: string; user_id: string }) =>
+    JSON.stringify([r.folder_id, r.display_path, r.segments, r.is_system, r.provider, r.user_id]);
+  const stored = dbAll<{ folder_id: string; display_path: string; segments: string; is_system: number; provider: string; user_id: string }>(
+    CATALOG_FOR_ACCOUNT_SQL,
+    [accountId],
+  ).map(key);
+  const incoming = [...entries]
+    .sort((a, b) => (a.folderId < b.folderId ? -1 : a.folderId > b.folderId ? 1 : 0))
+    .map((e) =>
+      key({
+        folder_id: e.folderId,
+        display_path: e.displayPath,
+        segments: JSON.stringify(e.segments),
+        is_system: e.isSystem ? 1 : 0,
+        provider,
+        user_id: userId,
+      }),
+    );
+  if (stored.length === incoming.length && stored.every((k, i) => k === incoming[i])) return false;
   dbTransaction(() => {
     dbRun(CLEAR_NAMES_FOR_ACCOUNT_SQL, [accountId]);
     for (const e of entries) {
@@ -69,6 +109,7 @@ export function replaceMailFolderCatalog(
       ]);
     }
   });
+  return true;
 }
 
 export interface StoredMailFolder extends MailFolderEntry {

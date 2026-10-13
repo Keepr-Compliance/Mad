@@ -395,6 +395,22 @@ describe("precedence folder > address > contact", () => {
     expect(p).toContain("e-contact-folder:folder");
   });
 
+  it("deal already swept, THEN folder ids arrive on a later fetch (no new email rows): the next open queues them", async () => {
+    seedBase();
+    seedCorpus();
+    await syncReviewQueueForTransaction({ transactionId: A, reason: "open" });
+    expect(pending(A).filter((k) => k.endsWith(":folder"))).toEqual([]);
+    expect(pending(A)).toContain("e-both:address");
+
+    await capture(); // writes refs + names only; the emails table is untouched
+
+    await syncReviewQueueForTransaction({ transactionId: A, reason: "open" });
+    const p = pending(A);
+    expect(p).toContain("e-both:folder");
+    expect(p).toContain("e-ol-folder:folder");
+    expect(p).toContain("e-contact-folder:folder");
+  });
+
   it("an existing address row is upgraded to folder (not double-queued)", async () => {
     seedBase();
     seedCorpus();
