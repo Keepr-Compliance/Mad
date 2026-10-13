@@ -4,9 +4,8 @@
  * ONE function decides the address, and both sides read it:
  *   - the "Receipts sent to" / "Invoices sent to" label on the Billing page
  *     (lib/billing/personalBilling.ts);
- *   - the Agent plan receipt Keepr sends (lib/billing/agentReceipt.ts), and
- *     lib/payments/receipt.ts, which has no caller since BACKLOG-3878 (Stripe
- *     emails the per-export receipt, founder 2026-10-13).
+ *   - the Agent plan receipt Keepr sends (lib/billing/agentReceipt.ts).
+ *     (Stripe emails the per-export receipt, founder 2026-10-13.)
  * So the page never shows one address while the receipt goes to another
  * (SR PR-1 review, binding on PR-2).
  *

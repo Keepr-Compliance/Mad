@@ -20,7 +20,7 @@ const mockDispatch = jest.fn();
 
 jest.mock('@sentry/nextjs', () => ({ captureMessage: jest.fn(), captureException: jest.fn() }));
 jest.mock('@/lib/supabase/service', () => ({ createServiceClient: () => ({ rpc: mockRpc, from: mockFrom }) }));
-jest.mock('@/lib/payments/receipt', () => ({ dispatchReceiptEmail: (...a: unknown[]) => mockDispatch(...a) }));
+jest.mock('@/lib/email', () => ({ sendReceiptEmail: (...a: unknown[]) => mockDispatch(...a) }));
 jest.mock('stripe', () => {
   const StripeMock = jest.fn().mockImplementation(() => ({
     webhooks: { constructEvent: mockConstructEvent },

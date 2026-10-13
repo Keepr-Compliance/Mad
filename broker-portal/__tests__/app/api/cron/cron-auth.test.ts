@@ -43,10 +43,6 @@ jest.mock('@/lib/payments/fulfillment', () => ({
   emitPaymentSucceeded: jest.fn(),
 }));
 
-jest.mock('@/lib/payments/receipt', () => ({
-  dispatchReceiptEmail: jest.fn(),
-}));
-
 import { GET as emailRetry } from '../../../../app/api/cron/email-retry/route';
 import { GET as paymentReconcile } from '../../../../app/api/cron/payment-reconcile/route';
 import { isAuthorizedCronRequest } from '../../../../lib/auth/cronAuth';
