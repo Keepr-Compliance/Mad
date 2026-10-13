@@ -101,9 +101,12 @@ function invoiceDescription(inv: Stripe.Invoice): string {
   return inv.description ?? 'Invoice';
 }
 
-function invoiceStatus(inv: Stripe.Invoice): RowStatus | null {
+function invoiceStatus(inv: Stripe.Invoice, paidBy: Stripe.Charge[]): RowStatus | null {
   switch (inv.status) {
     case 'paid':
+      // Stripe leaves a refunded invoice 'paid'; the refund is on its charge.
+      if (paidBy.some((c) => c.refunded)) return 'refunded';
+      if (paidBy.some((c) => (c.amount_refunded ?? 0) > 0)) return 'partly_refunded';
       return 'paid';
     case 'open':
       return (inv.attempt_count ?? 0) > 0 ? 'payment_failed' : 'open';
@@ -127,12 +130,18 @@ function chargeStatus(ch: Stripe.Charge): RowStatus | null {
 
 /**
  * One row per invoice (Agent plan), plus one per charge that has no invoice
- * (a per-export payment, "Export unlock"). Newest first, at most ROWS_LIMIT.
+ * (a per-export payment, "Export unlock"). A paid invoice whose charge was
+ * refunded reads refunded. Newest first, at most ROWS_LIMIT.
  */
 export function rowsFrom(invoices: Stripe.Invoice[], charges: Stripe.Charge[]): BillingRow[] {
   const rows: BillingRow[] = [];
+  const byInvoice = new Map<string, Stripe.Charge[]>();
+  for (const ch of charges) {
+    const invId = idOf(ch.invoice as string | Stripe.Invoice | null);
+    if (invId) byInvoice.set(invId, [...(byInvoice.get(invId) ?? []), ch]);
+  }
   for (const inv of invoices) {
-    const status = invoiceStatus(inv);
+    const status = invoiceStatus(inv, byInvoice.get(inv.id) ?? []);
     if (!status) continue;
     rows.push({
       id: inv.id,

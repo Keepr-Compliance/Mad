@@ -72,6 +72,18 @@ describe('row status sweep (one input per branch)', () => {
     expect(rowsFrom([inv], []).map((r) => r.status)).toEqual([status]);
   });
 
+  // p0a ch-4 is a real fully refunded Agent charge; Stripe keeps its invoice 'paid'.
+  const ch4 = fx('p0a/ch-4-after-refunds');
+  const paidInv = { ...INV_AFTER_PAY[0], id: ch4.invoice } as Stripe.Invoice; // [COMPOSED] paid invoice given ch-4's invoice id
+  it.each([
+    ['fully refunded charge (p0a ch-4)', ch4, 'refunded'],
+    ['partly refunded charge [EDITED refunded false, amount_refunded 500]', { ...ch4, refunded: false, amount_refunded: 500 }, 'partly_refunded'],
+    ['charge not refunded [EDITED refunded false, amount_refunded 0]', { ...ch4, refunded: false, amount_refunded: 0 }, 'paid'],
+  ] as [string, Stripe.Charge, string][])('C-ROWS-REFUND: paid invoice whose %s -> %s, still one row', (_n, ch, status) => {
+    expect(ch4.invoice).toBeTruthy();
+    expect(rowsFrom([paidInv], [ch]).map((r) => [r.id, r.status])).toEqual([[ch4.invoice, status]]);
+  });
+
   it('a draft invoice [EDITED status] makes no row', () => {
     expect(rowsFrom([{ ...base, status: 'draft' } as Stripe.Invoice], [])).toEqual([]);
   });
