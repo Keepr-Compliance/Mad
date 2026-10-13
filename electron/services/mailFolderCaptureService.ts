@@ -31,7 +31,7 @@ const MODULE = "MailFolderCapture";
 export const CATALOG_REFRESH_MS = 10 * 60_000;
 
 /** Messages whose folder rows are rewritten per transaction, with a yield between. */
-const REFS_PER_TRANSACTION = 250;
+const REFS_PER_TRANSACTION = 100;
 
 const lastCatalogRefreshAt = new Map<string, number>();
 
