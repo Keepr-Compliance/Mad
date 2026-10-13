@@ -65,8 +65,13 @@ import { __resetFullSweepGuardForTests } from "../autoLinkSweepGuard";
 import { computeParticipantHash } from "../../utils/emailAddress";
 import {
   __resetMailFolderCaptureForTests,
+  CATALOG_REFRESH_MS,
   recordMailFoldersForFetchedEmails,
+  refreshMailFolderCatalog,
 } from "../mailFolderCaptureService";
+import { replaceMailFolderCatalog } from "../db/mailFolderDb";
+import { readAutoLinkInputToken, sameAutoLinkInputToken } from "../db/autoLinkInputTracker";
+import * as Sentry from "@sentry/electron/main";
 import { buildGmailCatalog, buildOutlookCatalog } from "../../utils/mailFolderCatalog";
 
 const SCHEMA = fs.readFileSync(path.join(__dirname, "..", "..", "database", "schema.sql"), "utf8");
@@ -307,6 +312,93 @@ describe("capture: refs for every fetched message, names per account", () => {
     await capture();
     const text = JSON.stringify(logCalls);
     for (const n of ["Maple", "Deals", "Receipts", "Inspection"]) expect(text).not.toContain(n);
+  });
+});
+
+/** Every user-created folder / label name seeded above (system ones are not user data). */
+const SEEDED_NAMES = ["Deals", "Maple Ave 1428", "Main St 100 old", "Maple Ave", "1428 Maple", "Inspection", "Receipts"];
+
+describe("privacy: no folder or label name leaves the app (BACKLOG-3926 R1)", () => {
+  it("after capture, the full sweep on both deals and getReviewState, no log line or Sentry call carries a seeded name", async () => {
+    seedBase();
+    seedCorpus();
+    await capture();
+    await syncReviewQueueForTransaction({ transactionId: A, reason: "open" });
+    await syncReviewQueueForTransaction({ transactionId: B, reason: "open" });
+    await queueFolderMatchesForTransaction(A);
+    // Guard the guard: the discovery pass really ran and logged.
+    expect(JSON.stringify(logCalls)).toContain("folder / label discovery");
+    expect(getReviewState(A).items.some((i) => i.matchReason === "folder")).toBe(true);
+    getReviewState(B);
+
+    const seen = JSON.stringify([
+      logCalls,
+      (Sentry.addBreadcrumb as jest.Mock).mock.calls,
+      (Sentry.captureException as jest.Mock).mock.calls,
+      (Sentry.captureMessage as jest.Mock).mock.calls,
+    ]);
+    for (const n of SEEDED_NAMES) expect(seen).not.toContain(n);
+  });
+});
+
+describe("catalogue is written only when it changes (BACKLOG-3926 R2)", () => {
+  const entries = () => buildGmailCatalog(GMAIL_LABELS);
+
+  it("an identical catalogue returns false and leaves the auto-link input token unchanged", () => {
+    seedBase();
+    expect(replaceMailFolderCatalog(USER, GMAIL_ACCT, "gmail", entries())).toBe(true);
+    const before = readAutoLinkInputToken(db);
+    expect(before).not.toBeNull();
+    expect(replaceMailFolderCatalog(USER, GMAIL_ACCT, "gmail", entries())).toBe(false);
+    expect(sameAutoLinkInputToken(before, readAutoLinkInputToken(db))).toBe(true);
+  });
+
+  it("a real change still writes and moves the token (the control is not vacuous)", () => {
+    seedBase();
+    replaceMailFolderCatalog(USER, GMAIL_ACCT, "gmail", entries());
+    const before = readAutoLinkInputToken(db);
+    const renamed = entries().map((e) => (e.folderId === "Label_31" ? { ...e, displayPath: "Maple Ave 2" } : e));
+    expect(replaceMailFolderCatalog(USER, GMAIL_ACCT, "gmail", renamed)).toBe(true);
+    expect(sameAutoLinkInputToken(before, readAutoLinkInputToken(db))).toBe(false);
+  });
+
+  it("a re-refresh after the throttle with an unchanged listing does not move the token", async () => {
+    seedBase();
+    const t0 = Date.now();
+    await refreshMailFolderCatalog("gmail", USER, GMAIL_ACCT, t0);
+    const before = readAutoLinkInputToken(db);
+    await refreshMailFolderCatalog("gmail", USER, GMAIL_ACCT, t0 + CATALOG_REFRESH_MS + 1);
+    expect(gmailListLabels).toHaveBeenCalledTimes(2);
+    expect(sameAutoLinkInputToken(before, readAutoLinkInputToken(db))).toBe(true);
+  });
+});
+
+describe("an empty listing never replaces the stored catalogue (BACKLOG-3926 R3)", () => {
+  const rows = (acct: string) =>
+    db.prepare(`SELECT folder_id, display_path FROM mail_folder_names WHERE account_id = ? ORDER BY folder_id`).all(acct);
+
+  it("Gmail: an empty label list leaves the stored rows intact", async () => {
+    seedBase();
+    const t0 = Date.now();
+    await refreshMailFolderCatalog("gmail", USER, GMAIL_ACCT, t0);
+    const stored = rows(GMAIL_ACCT);
+    expect(stored.length).toBe(GMAIL_LABELS.length);
+    gmailListLabels.mockResolvedValue([]);
+    await refreshMailFolderCatalog("gmail", USER, GMAIL_ACCT, t0 + CATALOG_REFRESH_MS + 1);
+    expect(gmailListLabels).toHaveBeenCalledTimes(2);
+    expect(rows(GMAIL_ACCT)).toEqual(stored);
+  });
+
+  it("Outlook: an empty folder walk leaves the stored rows intact", async () => {
+    seedBase();
+    const t0 = Date.now();
+    await refreshMailFolderCatalog("outlook", USER, OUTLOOK_ACCT, t0);
+    const stored = rows(OUTLOOK_ACCT);
+    expect(stored.length).toBe(OUTLOOK_FOLDERS.length);
+    outlookListFolders.mockResolvedValue({ folders: [], systemFolderIds: [] });
+    await refreshMailFolderCatalog("outlook", USER, OUTLOOK_ACCT, t0 + CATALOG_REFRESH_MS + 1);
+    expect(outlookListFolders).toHaveBeenCalledTimes(2);
+    expect(rows(OUTLOOK_ACCT)).toEqual(stored);
   });
 });
 
