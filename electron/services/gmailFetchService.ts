@@ -934,6 +934,32 @@ class GmailFetchService {
    */
   private static readonly EXCLUDED_LABEL_PREFIXES = ["CATEGORY_"];
 
+  /** BACKLOG-3926: the last `labels.list` response, reduced to id / name / type. */
+  private lastListedLabels: {
+    at: number;
+    labels: Array<{ id: string | null; name: string | null; type: string | null }>;
+  } | null = null;
+
+  /**
+   * BACKLOG-3926: every label of the mailbox with its `type` ("system" | "user") —
+   * one `labels.list`, reused when a walk listed them less than `maxAgeMs` ago.
+   */
+  async listLabelCatalogSource(
+    maxAgeMs: number,
+  ): Promise<Array<{ id: string | null; name: string | null; type: string | null }>> {
+    const cached = this.lastListedLabels;
+    if (cached && Date.now() - cached.at <= maxAgeMs) return cached.labels;
+    if (!this.gmail) throw new Error("Gmail API not initialized. Call initialize() first.");
+    const response = await this._throttledCall(() => this.gmail!.users.labels.list({ userId: "me" }));
+    const labels = (response.data.labels || []).map((l) => ({
+      id: l.id ?? null,
+      name: l.name ?? null,
+      type: l.type ?? null,
+    }));
+    this.lastListedLabels = { at: Date.now(), labels };
+    return labels;
+  }
+
   /**
    * Discover all syncable Gmail labels (TASK-2046)
    *
@@ -963,6 +989,12 @@ class GmailFetchService {
       }
 
       const allLabels = response.data.labels || [];
+      // BACKLOG-3926: keep the full list (system labels included, with their `type`)
+      // so the label-name catalogue refresh after this fetch needs no second call.
+      this.lastListedLabels = {
+        at: Date.now(),
+        labels: allLabels.map((l) => ({ id: l.id ?? null, name: l.name ?? null, type: l.type ?? null })),
+      };
 
       const syncableLabels = allLabels.filter((label) => {
         if (!label.id) return false;
