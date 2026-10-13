@@ -18,6 +18,7 @@ import { makeTestCipher } from "./testCipher";
 
 const T0 = Date.parse("2026-08-02T09:00:00.000Z");
 const CONSENT_A = "11111111-1111-4111-8111-111111111111";
+const RETRY_MS = 20;
 
 async function dirSize(dir: string): Promise<number> {
   const names = await fs.readdir(dir);
@@ -36,8 +37,11 @@ describe("SupportLogStore", () => {
   let consentId: string | null;
   let cipher: ReturnType<typeof makeTestCipher>;
 
-  const makeStore = (overrides: Partial<{ segment: number; total: number }> = {}) =>
-    new SupportLogStore({
+  let warnings: string[];
+  let stores: SupportLogStore[];
+
+  const makeStore = (overrides: Partial<{ segment: number; total: number }> = {}) => {
+    const store = new SupportLogStore({
       now: () => now,
       baseDir,
       isScopeActive: (scope) => activeScopes.includes(scope),
@@ -45,7 +49,38 @@ describe("SupportLogStore", () => {
       cipher,
       maxSegmentBytes: overrides.segment ?? 4 * 1024,
       maxTotalBytes: overrides.total ?? 32 * 1024,
+      capRetryDelayMs: RETRY_MS,
+      // Captured so a red on a Windows runner names the errno (BACKLOG-3191).
+      log: (level, message) => {
+        if (level !== "info") warnings.push(message);
+      },
     });
+    stores.push(store);
+    return store;
+  };
+
+  /**
+   * Measure the directory once queued writes and any pending cap retry have
+   * landed. The bound asserted is unchanged; only the instant it is measured
+   * moves past a retry. If a segment is still held after that, fail with the
+   * captured warnings rather than a bare number (BACKLOG-3191).
+   */
+  async function settledSize(store: SupportLogStore, cap: number): Promise<number> {
+    const deadline = Date.now() + 3000;
+    for (;;) {
+      await store.flush();
+      const size = await dirSize(logsDir);
+      if (size <= cap || Date.now() > deadline) {
+        if (size > cap) {
+          throw new Error(
+            `log dir ${size} > cap ${cap}; warnings:\n${warnings.join("\n")}`,
+          );
+        }
+        return size;
+      }
+      await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+    }
+  }
 
   beforeEach(async () => {
     baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "keepr-support-logs-"));
@@ -54,9 +89,14 @@ describe("SupportLogStore", () => {
     activeScopes = ["message-import", "contact-resolution"];
     consentId = CONSENT_A;
     cipher = makeTestCipher();
+    warnings = [];
+    stores = [];
   });
 
   afterEach(async () => {
+    // Nothing may still be writing, or holding a retry timer, when the
+    // directory goes away.
+    for (const store of stores) await store.clear();
     await fs.rm(baseDir, { recursive: true, force: true });
   });
 
@@ -108,7 +148,7 @@ describe("SupportLogStore", () => {
     }
     expect(now).toBe(T0);
 
-    const size = await dirSize(logsDir);
+    const size = await settledSize(store, total);
     expect(size).toBeLessThanOrEqual(total);
     // And it really did write — a broken writer would also "pass" a <= check.
     expect(size).toBeGreaterThan(total / 2);
@@ -124,7 +164,7 @@ describe("SupportLogStore", () => {
       for (let i = 0; i < 200; i += 1) {
         await store.write("contact-resolution", "bulk", { batch, i, payload });
       }
-      sizes.push(await dirSize(logsDir));
+      sizes.push(await settledSize(store, total));
     }
 
     for (const size of sizes) {
@@ -143,6 +183,7 @@ describe("SupportLogStore", () => {
       now = T0 + i * 1000;
       await store.write("message-import", "bulk", { i, payload });
     }
+    await settledSize(store, 8 * 1024);
 
     const names = await fs.readdir(logsDir);
     expect(names).toContain("current.log");
@@ -338,5 +379,150 @@ describe("SupportLogStore", () => {
       expect(await store.write("message-import", "orphan", {})).toBe(false);
       expect(await store.totalBytes()).toBe(0);
     });
+  });
+  // ---------------------------------------------------------------------
+  // A segment that cannot be removed (BACKLOG-3191)
+  //
+  // On Windows an antivirus scanner or the indexer can hold a just-renamed
+  // file, and unlink fails with EPERM/EBUSY. The store must not spin on it:
+  // one delayed retry that does not block the caller, then wait for the next
+  // write. The cap is small enough that exactly one segment exists when the
+  // trim first needs it, so skipping it cannot satisfy the cap another way.
+  // ---------------------------------------------------------------------
+  describe("when the oldest segment is held by another process", () => {
+    const SEGMENT = 2 * 1024;
+    const CAP = 3 * 1024;
+    const payload = "h".repeat(200);
+    let held: { code: string; failuresLeft: number; attempts: number };
+    let realUnlink: typeof fs.unlink;
+    let unlinkSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      jest.useFakeTimers({
+        doNotFake: ["nextTick", "setImmediate", "queueMicrotask"],
+      });
+      held = { code: "EPERM", failuresLeft: 0, attempts: 0 };
+      realUnlink = fs.unlink.bind(fs);
+      unlinkSpy = jest
+        .spyOn(fs, "unlink")
+        .mockImplementation(async (target) => {
+          if (path.basename(String(target)).startsWith("segment-")) {
+            held.attempts += 1;
+            if (held.failuresLeft > 0) {
+              held.failuresLeft -= 1;
+              const error = new Error(`${held.code}: file is in use, unlink`);
+              (error as NodeJS.ErrnoException).code = held.code;
+              throw error;
+            }
+          }
+          return realUnlink(target);
+        });
+    });
+
+    afterEach(async () => {
+      unlinkSpy.mockRestore();
+      jest.useRealTimers();
+    });
+
+    /** Write until the trim first has to touch a segment. */
+    async function writeUntilTrimNeeded(store: SupportLogStore): Promise<void> {
+      for (let i = 0; i < 100 && held.attempts === 0; i += 1) {
+        expect(await store.write("message-import", "bulk", { i, payload })).toBe(
+          true,
+        );
+      }
+      expect(held.attempts).toBeGreaterThan(0);
+    }
+
+    async function names(): Promise<string[]> {
+      return fs.readdir(logsDir);
+    }
+
+    async function advancePastRetry(store: SupportLogStore): Promise<void> {
+      await jest.advanceTimersByTimeAsync(RETRY_MS);
+      await store.flush();
+    }
+
+    it("tries once inline and once after the delay, then stops, without blocking writes", async () => {
+      const store = makeStore({ segment: SEGMENT, total: CAP });
+      // More failures than the store may ever spend. An unbounded retry would
+      // burn through them inside a single write.
+      held.failuresLeft = 50;
+
+      await writeUntilTrimNeeded(store);
+      expect(held.attempts).toBe(1);
+      const segment = (await names()).find((n) => n.startsWith("segment-"));
+      expect(segment).toBeDefined();
+      expect(await names()).toContain("current.log");
+
+      await advancePastRetry(store);
+      expect(held.attempts).toBe(2);
+
+      // Nothing else is scheduled after the retry fails.
+      await jest.advanceTimersByTimeAsync(RETRY_MS * 20);
+      await store.flush();
+      expect(held.attempts).toBe(2);
+
+      // The held segment is still there, writes still succeed, and the
+      // overage is bounded by that one segment.
+      expect(await names()).toEqual(expect.arrayContaining(["current.log", segment]));
+      expect(await store.totalBytes()).toBeLessThanOrEqual(CAP + SEGMENT);
+      expect(warnings.some((w) => w.includes("EPERM"))).toBe(true);
+    });
+
+    it("trims to the cap when the delayed retry succeeds", async () => {
+      const store = makeStore({ segment: SEGMENT, total: CAP });
+      held.code = "EBUSY";
+      held.failuresLeft = 1;
+
+      await writeUntilTrimNeeded(store);
+      const segment = (await names()).find((n) => n.startsWith("segment-"));
+      expect(segment).toBeDefined();
+
+      await advancePastRetry(store);
+      expect(held.attempts).toBe(2);
+      expect(await names()).not.toContain(segment);
+      expect(await names()).toContain("current.log");
+      expect(await store.totalBytes()).toBeLessThanOrEqual(CAP);
+    });
+
+    it("tries again on the next write after the retry has given up", async () => {
+      const store = makeStore({ segment: SEGMENT, total: CAP });
+      held.failuresLeft = 50;
+
+      await writeUntilTrimNeeded(store);
+      await advancePastRetry(store);
+      expect(held.attempts).toBe(2);
+      const segment = (await names()).find((n) => n.startsWith("segment-"));
+
+      // Still held: the next write tries inline and arms one more retry.
+      expect(await store.write("message-import", "after-1", {})).toBe(true);
+      expect(held.attempts).toBe(3);
+      await advancePastRetry(store);
+      expect(held.attempts).toBe(4);
+
+      // Released: the next write trims it.
+      held.failuresLeft = 0;
+      expect(await store.write("message-import", "after-2", {})).toBe(true);
+      expect(await names()).not.toContain(segment);
+      expect(await names()).toContain("current.log");
+      expect(await store.totalBytes()).toBeLessThanOrEqual(CAP);
+    });
+  });
+
+  it("keeps a current.log when current.log alone was over the cap", async () => {
+    // One record larger than the whole cap: the only way under is to seal
+    // current.log and trim it. The store must still have a file to append to.
+    const store = makeStore({ segment: 64 * 1024, total: 1024 });
+    expect(
+      await store.write("message-import", "big", { pad: "b".repeat(2048) }),
+    ).toBe(true);
+
+    expect(await fs.readdir(logsDir)).toEqual(["current.log"]);
+    expect(await store.totalBytes()).toBeLessThanOrEqual(1024);
+
+    expect(await store.write("message-import", "next", {})).toBe(true);
+    const snapshot = await store.snapshot(1024 * 1024);
+    expect(snapshot.text).toContain('"event":"next"');
   });
 });
