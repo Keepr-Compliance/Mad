@@ -36,9 +36,9 @@ function input(over: Partial<PlanLineInput>): PlanLineInput {
 
 describe('planLine: literal table', () => {
   it.each([
-    ['active', false, 'agent_unlimited', 'Agent Unlimited, paid by Stripe'],
-    ['trialing', false, 'agent_unlimited', 'Agent Unlimited, paid by Stripe'],
-    ['active', true, 'agent_ending', 'Agent Unlimited, paid by Stripe, ends 2026-11-12'],
+    ['active', false, 'agent_unlimited', 'Agent Unlimited, paid by Stripe, renews Nov 12, 2026'],
+    ['trialing', false, 'agent_unlimited', 'Agent Unlimited, paid by Stripe, renews Nov 12, 2026'],
+    ['active', true, 'agent_ending', 'Agent Unlimited, paid by Stripe, ends Nov 12, 2026'],
     ['past_due', false, 'payment_failed', 'Agent Unlimited, payment failed'],
     ['unpaid', false, 'payment_failed', 'Agent Unlimited, payment failed'],
     ['incomplete', false, 'pay_as_you_go', 'Solo Pay as you go'],
@@ -53,9 +53,27 @@ describe('planLine: literal table', () => {
     expect(out.text).not.toMatch(/renew/i);
   });
 
-  it('an active plan shows no date at all (no next-charge date, Q1 open)', () => {
-    const out = planLine(input({ rows: [row('active')] }));
-    expect(out.text).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+  it('an active plan says "renews <period end>"; the date is current_period_end, not created_at', () => {
+    const out = planLine(input({ rows: [{ ...row('active'), created_at: '2026-01-02T03:04:05+00:00' } as AgentSubscriptionRow] }));
+    expect(out.text).toBe('Agent Unlimited, paid by Stripe, renews Nov 12, 2026');
+    expect(out.text).not.toContain('Jan 2, 2026');
+  });
+
+  it('the date is UTC: 23:30 UTC on Nov 12 stays Nov 12', () => {
+    const r = { ...row('active'), current_period_end: '2026-11-12T23:30:00+00:00' };
+    expect(planLine(input({ rows: [r] })).text).toBe('Agent Unlimited, paid by Stripe, renews Nov 12, 2026');
+  });
+
+  it('no subscription row -> no date; row with no period end -> no renews', () => {
+    expect(planLine(input({ rows: [] })).text).not.toMatch(/renews|ends/);
+    const r = { ...row('active'), current_period_end: null };
+    expect(planLine(input({ rows: [r] })).text).toBe('Agent Unlimited, paid by Stripe');
+  });
+
+  it('no price, no currency sign on any subscription line', () => {
+    for (const st of ['active', 'trialing', 'past_due']) {
+      expect(planLine(input({ rows: [row(st)] })).text).not.toMatch(/[$€£]|month|charge/i);
+    }
   });
 
   it('TEST tag only when the line came from a test-mode row', () => {
@@ -98,7 +116,7 @@ describe('planLine: literal table', () => {
   });
 
   it('suspended prefix and no organization', () => {
-    expect(planLine(input({ suspended: true, rows: [row('active')] })).text).toBe('Suspended — Agent Unlimited, paid by Stripe');
+    expect(planLine(input({ suspended: true, rows: [row('active')] })).text).toBe('Suspended — Agent Unlimited, paid by Stripe, renews Nov 12, 2026');
     expect(planLine(input({ hasPersonalOrganization: false }))).toMatchObject({ kind: 'no_organization', text: 'No plan (no organization)' });
   });
 });

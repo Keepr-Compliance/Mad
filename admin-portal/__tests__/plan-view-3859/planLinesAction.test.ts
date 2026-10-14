@@ -180,10 +180,10 @@ describe('the lines (shared rule, batched facts)', () => {
     expect((await lines())[U_AGENT]).toMatchObject({ kind: 'brokerage', text: 'Brokerage Demo Realty, license assigned', test: false });
   });
 
-  it('test-org user with a TEST-mode active row -> Agent Unlimited, TEST tag, no date', async () => {
+  it('test-org user with a TEST-mode active row -> Agent Unlimited, TEST tag, renews date', async () => {
     expect((await lines())[U_SOLO_PAID]).toEqual({
       kind: 'agent_unlimited',
-      text: 'Agent Unlimited, paid by Stripe',
+      text: 'Agent Unlimited, paid by Stripe, renews Nov 12, 2026',
       test: true,
       warning: null,
     });
@@ -209,7 +209,7 @@ describe('the lines (shared rule, batched facts)', () => {
   it('R5: personal org found by personal_owner_user_id even with no member row', async () => {
     expect((await lines())[U_NOMEMBER]).toMatchObject({
       kind: 'agent_ending',
-      text: 'Agent Unlimited, paid by Stripe, ends 2026-11-12',
+      text: 'Agent Unlimited, paid by Stripe, ends Nov 12, 2026',
       test: true,
     });
   });
@@ -220,7 +220,7 @@ describe('the lines (shared rule, batched facts)', () => {
 
   it('suspended (SYNTHETIC licenses row) prefixes the line', async () => {
     state.tables = { ...BASE_TABLES, licenses: [{ user_id: U_SOLO_PAID, status: 'suspended' }] };
-    expect((await lines())[U_SOLO_PAID].text).toBe('Suspended — Agent Unlimited, paid by Stripe');
+    expect((await lines())[U_SOLO_PAID].text).toBe('Suspended — Agent Unlimited, paid by Stripe, renews Nov 12, 2026');
   });
 
   it('a read error -> unavailable, never a guessed plan', async () => {
@@ -249,14 +249,13 @@ describe('C3: nothing price-like leaves the server', () => {
     return out;
   }
 
-  it('the action result has no price-like key, no currency sign, no renewal date', async () => {
+  it('the action result has no price-like key, no currency sign', async () => {
     const res = await getPlanLines(ALL_USERS);
     expect(res.ok).toBe(true);
     const json = JSON.stringify(res);
     expect(json.length).toBeGreaterThan(200);
     expect(keysDeep(res).filter((k) => PRICE_KEY.test(k))).toEqual([]);
     expect(json).not.toMatch(/[$€£]/);
-    expect(json).not.toMatch(/renews/i);
   });
 
   it('each line carries exactly kind, text, test, warning', async () => {

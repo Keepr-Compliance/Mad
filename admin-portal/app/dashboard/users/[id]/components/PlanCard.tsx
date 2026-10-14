@@ -2,8 +2,8 @@
  * PlanCard — the plan this user is on, in one line (BACKLOG-3859).
  *
  * The line comes from the shared plan rule (@keepr/shared planLine), the same
- * rule the broker portal's Billing page uses. It never carries a price or a
- * next-charge date.
+ * rule the broker portal's Billing page uses. It carries the renewal (or end)
+ * date, never a price or a charge amount.
  */
 
 import { CreditCard, AlertTriangle } from 'lucide-react';

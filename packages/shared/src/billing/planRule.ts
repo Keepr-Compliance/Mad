@@ -316,8 +316,8 @@ export function classifyPortalAccess(
 // ===========================================================================
 //
 // Built ONLY from the functions above, so the admin portal shows exactly the
-// state the broker portal's Billing page computes. No price and no next-charge
-// date: founder question Q1 on 3859 is open and no price is stored anywhere
+// state the broker portal's Billing page computes. It carries the period-end date
+// (renews / ends) and no price: no price is stored anywhere
 // (price_book_price_id is NULL on every row; the price lives only in Stripe).
 // BACKLOG-3852 adds the amount behind a billing.view permission.
 
@@ -364,6 +364,17 @@ function isoDay(raw: unknown): string | null {
 }
 
 /**
+ * "Nov 12, 2026" of an ISO date-time, in UTC (so server and browser agree), or
+ * null. Same format and timezone as broker-portal formatDay (PlanBlock.tsx).
+ */
+function longDay(raw: unknown): string | null {
+  if (typeof raw !== 'string' || !/^\d{4}-\d{2}-\d{2}/.test(raw)) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(d);
+}
+
+/**
  * Is Unlimited ON from this override, the way check_feature_access /
  * get_org_features read it: present, _override_effective, and
  * COALESCE(enabled, true). (The tier ceiling, _override_above_tier, is not
@@ -397,10 +408,12 @@ export function planLine(input: PlanLineInput): PlanLine {
   const fromTestRow = row !== null && input.mode === 'test';
 
   switch (state) {
-    case 'active':
-      return line('agent_unlimited', 'Agent Unlimited, paid by Stripe', fromTestRow);
+    case 'active': {
+      const renews = longDay(row?.current_period_end);
+      return line('agent_unlimited', `Agent Unlimited, paid by Stripe${renews ? `, renews ${renews}` : ''}`, fromTestRow);
+    }
     case 'cancel_pending': {
-      const day = isoDay(row?.current_period_end);
+      const day = longDay(row?.current_period_end);
       return line('agent_ending', `Agent Unlimited, paid by Stripe, ends ${day ?? 'at period end'}`, fromTestRow);
     }
     case 'payment_failed':
