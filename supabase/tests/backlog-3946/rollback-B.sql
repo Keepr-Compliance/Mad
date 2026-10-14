@@ -1,4 +1,4 @@
--- BACKLOG-3946 rollback B (undoes 20261014130100): production grants (PUBLIC+anon EXECUTE only where production had it) and TO public.
+-- BACKLOG-3946 rollback B (undoes 20261014152839): production grants (PUBLIC+anon EXECUTE only where production had it) and TO public.
 GRANT EXECUTE ON FUNCTION public.has_internal_role(uuid) TO PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_user_org_ids(uuid) TO PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.is_org_admin(uuid, uuid) TO PUBLIC, anon;

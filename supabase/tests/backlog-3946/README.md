@@ -4,9 +4,9 @@ Controls, wrong-fix variants, mutants and rollback checks for:
 
 | File | Change |
 |---|---|
-| `supabase/migrations/20261014130000_backlog_3946_staff_helpers_caller_only.sql` (A) | `has_internal_role(uuid)`, `has_permission(uuid, text)`, `has_any_permission(uuid, text[])`, `is_super_admin(uuid)`, `get_user_permissions(uuid)` answer only for the calling user (`AND check_user_id = (SELECT auth.uid())`). A service-role or NULL-uid caller gets false / no rows. Bodies are production's definitions plus that line; signatures, SECURITY DEFINER, `search_path`, volatility and grants unchanged. |
-| `supabase/migrations/20261014130100_backlog_3946_identity_helpers_signed_in_only.sql` (B) | 22 policies that call a helper move from TO public to TO authenticated, then EXECUTE is removed from PUBLIC and anon on the seven helpers (the five above, `get_user_org_ids`, `is_org_admin`). |
-| `supabase/migrations/20261014130200_backlog_3946_support_links_table_grants.sql` (C) | `support_ticket_backlog_links`: anon holds no privileges; authenticated holds SELECT, INSERT, DELETE. RLS unchanged. |
+| `supabase/migrations/20261014152722_backlog_3946_staff_helpers_caller_only.sql` (A) | `has_internal_role(uuid)`, `has_permission(uuid, text)`, `has_any_permission(uuid, text[])`, `is_super_admin(uuid)`, `get_user_permissions(uuid)` answer only for the calling user (`AND check_user_id = (SELECT auth.uid())`). A service-role or NULL-uid caller gets false / no rows. Bodies are production's definitions plus that line; signatures, SECURITY DEFINER, `search_path`, volatility and grants unchanged. |
+| `supabase/migrations/20261014152839_backlog_3946_identity_helpers_signed_in_only.sql` (B) | 22 policies that call a helper move from TO public to TO authenticated, then EXECUTE is removed from PUBLIC and anon on the seven helpers (the five above, `get_user_org_ids`, `is_org_admin`). |
+| `supabase/migrations/20261014152904_backlog_3946_support_links_table_grants.sql` (C) | `support_ticket_backlog_links`: anon holds no privileges; authenticated holds SELECT, INSERT, DELETE. RLS unchanged. |
 
 Rollbacks: `rollback-A.sql` (production's five definitions, verbatim), `rollback-B.sql`
 (production's ACLs and policy roles), `rollback-C.sql` (production's table grants). Each runs alone.
