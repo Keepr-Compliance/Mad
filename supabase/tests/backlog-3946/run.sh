@@ -32,9 +32,9 @@ PARITY=("$M/20261003160000_backlog_3673_onboarding_completed_backfill.sql"
 MIG3917="$M/20261014002359_backlog_3917_member_status_allow_list.sql"
 MIG3938="$M/20261014053520_backlog_3938_membership_helpers_caller_only.sql"
 MIG3940="$M/20261014061621_backlog_3940_support_links_internal_only.sql"
-MIG_A="${MIG_A_OVERRIDE:-$M/20261014130000_backlog_3946_staff_helpers_caller_only.sql}"
-MIG_B="${MIG_B_OVERRIDE:-$M/20261014130100_backlog_3946_identity_helpers_signed_in_only.sql}"
-MIG_C="${MIG_C_OVERRIDE:-$M/20261014130200_backlog_3946_support_links_table_grants.sql}"
+MIG_A="${MIG_A_OVERRIDE:-$M/20261014152722_backlog_3946_staff_helpers_caller_only.sql}"
+MIG_B="${MIG_B_OVERRIDE:-$M/20261014152839_backlog_3946_identity_helpers_signed_in_only.sql}"
+MIG_C="${MIG_C_OVERRIDE:-$M/20261014152904_backlog_3946_support_links_table_grants.sql}"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 psql_in() {
   if [ "$SSH_HOST" = local ]; then docker exec -i "$CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 -X -q -tA -f -

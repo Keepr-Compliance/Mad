@@ -1,4 +1,4 @@
--- BACKLOG-3946 rollback A (undoes 20261014130000): production's five helper definitions, verbatim from pg_get_functiondef (read 2026-10-14).
+-- BACKLOG-3946 rollback A (undoes 20261014152722): production's five helper definitions, verbatim from pg_get_functiondef (read 2026-10-14).
 CREATE OR REPLACE FUNCTION public.get_user_permissions(check_user_id uuid)
  RETURNS TABLE(key text)
  LANGUAGE sql

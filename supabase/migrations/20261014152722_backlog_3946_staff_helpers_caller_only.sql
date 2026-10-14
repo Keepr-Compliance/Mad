@@ -17,12 +17,12 @@
 --
 -- has_permission: PUBLIC and anon hold no EXECUTE today; the REVOKE at the end of this file
 -- restates that (no change). The other three helpers keep their grants here; migration
--- 20261014130100 removes anon EXECUTE after moving the policies that call them.
+-- 20261014152839 removes anon EXECUTE after moving the policies that call them.
 --
 -- Apply as one transaction. No BEGIN/COMMIT here.
 -- Rollback: supabase/tests/backlog-3946/rollback-A.sql
 
--- Intentionally callable by anon: grant unchanged by this file; 20261014130100 removes anon EXECUTE
+-- Intentionally callable by anon: grant unchanged by this file; 20261014152839 removes anon EXECUTE
 CREATE OR REPLACE FUNCTION public.get_user_permissions(check_user_id uuid)
  RETURNS TABLE(key text)
  LANGUAGE sql
@@ -54,7 +54,7 @@ AS $function$
   );
 $function$;
 
--- Intentionally callable by anon: grant unchanged by this file (TO public policies call it); 20261014130100 moves those policies TO authenticated and removes anon EXECUTE
+-- Intentionally callable by anon: grant unchanged by this file (TO public policies call it); 20261014152839 moves those policies TO authenticated and removes anon EXECUTE
 CREATE OR REPLACE FUNCTION public.has_internal_role(check_user_id uuid)
  RETURNS boolean
  LANGUAGE sql
@@ -85,7 +85,7 @@ AS $function$
   );
 $function$;
 
--- Intentionally callable by anon: grant unchanged by this file (TO public policies call it); 20261014130100 moves those policies TO authenticated and removes anon EXECUTE
+-- Intentionally callable by anon: grant unchanged by this file (TO public policies call it); 20261014152839 moves those policies TO authenticated and removes anon EXECUTE
 CREATE OR REPLACE FUNCTION public.is_super_admin(check_user_id uuid)
  RETURNS boolean
  LANGUAGE sql
