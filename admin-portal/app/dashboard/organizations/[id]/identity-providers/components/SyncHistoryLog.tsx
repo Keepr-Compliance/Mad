@@ -20,7 +20,9 @@ import { Button, Card } from '@keepr/design-system';
 import { formatTimestamp } from '@/lib/format';
 
 // ---------------------------------------------------------------------------
-// Types (inline -- NOT from @keepr/shared per Vercel deploy limitation)
+// Types (inline). The old note here said @keepr/shared could not deploy on
+// Vercel; that stopped being true when the portals began installing from the
+// repo root (installCommand in vercel.json). They may move to @keepr/shared.
 // ---------------------------------------------------------------------------
 
 export interface SyncLogEntry {
