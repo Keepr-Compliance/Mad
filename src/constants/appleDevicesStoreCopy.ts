@@ -64,15 +64,18 @@ export const APPLE_USB_DRIVER_HEADING = "Install Apple's iPhone USB driver";
 
 // Measured on a live PC 2026-10-12: Device Manager > Update driver answers "best
 // drivers already installed (MTP)"; the driver arrives through Windows Update >
-// Optional updates as "Apple Inc. - USBDevice", and a restart may be needed.
+// Optional updates as "Apple, Inc. - USBDevice".
 export const APPLE_USB_DRIVER_BODY =
-  "Windows sees your iPhone, but it isn't using Apple's USB driver yet. Windows Update provides this driver, and a restart may be needed.";
+  "Windows sees your iPhone, but it isn't using Apple's USB driver yet. Windows Update provides this driver.";
 
-export const APPLE_USB_DRIVER_STEPS: readonly string[] = [
-  'Click "Check for updates" below and let Windows finish checking.',
-  'Click "Optional updates" below and install "Apple Inc. - USBDevice".',
-  "A restart may be needed. Then unplug your iPhone, plug it back in and click Check again.",
-];
+/**
+ * BACKLOG-3927 (2.41): the Apple USB driver instruction, exact founder wording.
+ * Used by the Store guide and the setup checklist.
+ */
+export const APPLE_USB_DRIVER_INSTRUCTION =
+  'Click Check for updates and wait for it to finish. Then open Optional updates, tick "Apple, Inc. - USBDevice", and click Download & install. If Windows shows Restart now, click it, then reopen Keepr.';
+
+export const APPLE_USB_DRIVER_STEPS: readonly string[] = [APPLE_USB_DRIVER_INSTRUCTION];
 
 /** Both buttons only open Windows Settings; nothing is installed by Keepr. */
 export const APPLE_WU_CHECK_BUTTON = "Check for updates";
@@ -153,8 +156,7 @@ export const CHECKLIST_APPLE_DEVICES_STARTING =
   "Apple Devices is installed but hasn't started yet. It starts on its own a few minutes after your computer starts, or you can open the Apple Devices app now.";
 
 /** Row 2: shown under the two Windows Update buttons. */
-export const CHECKLIST_USB_DRIVER_BODY =
-  'Windows Update provides this driver. Check for updates, then install "Apple Inc. - USBDevice" from Optional updates. A restart may be needed.';
+export const CHECKLIST_USB_DRIVER_BODY = APPLE_USB_DRIVER_INSTRUCTION;
 
 /**
  * Row 2 when no iPhone is plugged in: the driver can only be checked against a
