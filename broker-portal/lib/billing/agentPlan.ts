@@ -21,63 +21,30 @@
 
 import type Stripe from 'stripe';
 import type { createServiceClient } from '@/lib/supabase/service';
-import type { AgentPlanState } from './capabilities';
+import {
+  ROW_PRIORITY,
+  agentPlanState,
+  overrideEffective,
+  pickAgentRow,
+  type AgentPlanState,
+  type AgentSubscriptionRow,
+  type UnlimitedOverride,
+} from '@keepr/shared';
 import type { StripeMode } from './mode';
 import { getPersonalOrganization } from './customers';
 import { AGENT_LOOKUP_KEYS, type AgentInterval } from './agentCheckoutParams';
 
+// BACKLOG-3859: the pure rule lives in packages/shared/src/billing/planRule.ts,
+// one copy for both portals. Re-exported so importers of this file are unchanged.
+export {
+  agentPlanState,
+  isNonStripeOverride,
+  overrideEffective,
+  pickAgentRow,
+} from '@keepr/shared';
+export type { AgentSubscriptionRow, UnlimitedOverride } from '@keepr/shared';
+
 type ServiceClient = ReturnType<typeof createServiceClient>;
-
-export interface AgentSubscriptionRow {
-  stripe_subscription_id: string;
-  status: string;
-  interval: string | null;
-  current_period_end: string | null;
-  cancel_at_period_end: boolean;
-  canceled_at: string | null;
-}
-
-export type UnlimitedOverride = Record<string, unknown> | null;
-
-/** Rows the page can act on, best first. Closed and half-made rows are "no plan". */
-const ROW_PRIORITY = ['active', 'trialing', 'past_due', 'unpaid'] as const;
-
-/** The grant RPC's non_stripe_override rule: key present and source is not 'stripe'. */
-export function isNonStripeOverride(override: UnlimitedOverride | undefined): boolean {
-  if (override === undefined) return false;
-  return (override?.source ?? null) !== 'stripe';
-}
-
-/** _override_effective: absent/null paid_through -> effective; otherwise an ISO date-time in the future. */
-export function overrideEffective(override: UnlimitedOverride, now: Date): boolean {
-  const raw = override?.paid_through;
-  if (raw === undefined || raw === null) return true;
-  if (typeof raw !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(raw)) return false;
-  const t = Date.parse(raw);
-  return Number.isFinite(t) && t > now.getTime();
-}
-
-/**
- * Literal truth table (step 0 §2.4):
- *   active/trialing, cancel_at_period_end false -> active
- *   active/trialing, cancel_at_period_end true  -> cancel_pending
- *   past_due / unpaid                           -> payment_failed
- *   none (incl. incomplete, incomplete_expired, canceled):
- *     non-stripe override present               -> support_grant
- *     otherwise                                 -> none
- */
-export function agentPlanState(
-  row: Pick<AgentSubscriptionRow, 'status' | 'cancel_at_period_end'> | null,
-  override: UnlimitedOverride | undefined
-): AgentPlanState {
-  if (row) {
-    if (row.status === 'active' || row.status === 'trialing') {
-      return row.cancel_at_period_end === true ? 'cancel_pending' : 'active';
-    }
-    if (row.status === 'past_due' || row.status === 'unpaid') return 'payment_failed';
-  }
-  return isNonStripeOverride(override) ? 'support_grant' : 'none';
-}
 
 export interface AgentPlanView {
   state: AgentPlanState;
@@ -109,8 +76,7 @@ export async function getAgentPlanView(
   if (subErr) throw new Error(`billing_subscriptions read failed: ${subErr.message}`);
   const list = (rows as AgentSubscriptionRow[] | null) ?? [];
   const paymentIncomplete = list.some((r) => r.status === 'incomplete');
-  const row =
-    ROW_PRIORITY.map((st) => list.find((r) => r.status === st)).find((r): r is AgentSubscriptionRow => !!r) ?? null;
+  const row = pickAgentRow(list);
 
   let override: UnlimitedOverride | undefined;
   if (org) {

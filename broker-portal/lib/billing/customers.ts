@@ -13,6 +13,7 @@ import * as Sentry from '@sentry/nextjs';
 import type Stripe from 'stripe';
 import type { createServiceClient } from '@/lib/supabase/service';
 import type { StripeMode } from './mode';
+import { modeAllowsTestFlag } from '@keepr/shared';
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
@@ -153,10 +154,9 @@ export async function getPersonalOrganization(
   return row?.id ? { id: row.id, isTest: row.is_test === true } : null;
 }
 
-/** The mode-guard rule of isModeAllowedForUser, on an is_test flag already read (no personal org = false). */
-export function modeAllowsTestFlag(mode: StripeMode, isTest: boolean): boolean {
-  return mode === 'live' ? !isTest : isTest;
-}
+// The mode-guard rule of isModeAllowedForUser, on an is_test flag already read
+// (no personal org = false). BACKLOG-3859: one copy, in packages/shared.
+export { modeAllowsTestFlag } from '@keepr/shared';
 
 /**
  * Mode guard (plan 2.6). Live: refused when the user's personal organization is

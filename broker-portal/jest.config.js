@@ -59,6 +59,11 @@ module.exports = {
     // to source so ts-jest transforms it instead of hitting untranspiled
     // node_modules (BACKLOG-1750 wave C adoption).
     '^@keepr/ui$': '<rootDir>/../packages/ui/src/index.ts',
+    // BACKLOG-3859: map @keepr/shared to THIS checkout's source. Without it jest
+    // follows node_modules/@keepr/shared, a symlink that in a git worktree points
+    // at the main checkout's packages/shared, so tests would run another copy.
+    '^@keepr/shared$': '<rootDir>/../packages/shared/src/index.ts',
+    '^@keepr/shared/(.*)$': '<rootDir>/../packages/shared/src/$1',
   },
   testMatch: [
     '**/__tests__/**/*.(test|spec).{js,jsx,ts,tsx}',
