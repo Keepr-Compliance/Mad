@@ -1,0 +1,185 @@
+== variant v1-alt3938
+     FAIL|e04 no TO public/anon policy calls an identity helper|20 devices.devices_select_public, admin_audit_logs.Internal users can view admin audit logs, admin_permissions.Internal users can view permissions, admin_role_permissions.Internal users can view role permissions, admin_roles.Internal users can view roles, impersonation_sessions.Internal users can view their own sessions, internal_roles.Super admins can manage internal roles, analytics_events.analytics_events_select_own_or_internal, audit_logs.audit_logs_select_public, credit_ledger.credit_ledger_select_own, pending_internal_invitations.internal_users_can_manage_invitations, individual_invitations.internal_users_can_read_individual_invitations, organization_plans.internal_users_can_read_org_plans, licenses.licenses_select_public, organizations.organizations_select_public, payment_intents.payment_intents_select_own, transaction_unlocks.transaction_unlocks_select_own, users.users_select_public, user_preferences.user_preferences_select_internal, stripe_customers.stripe_customers_select_own
+     FAIL|e04 anon (incl. PUBLIC) cannot execute any of the 7 helpers|3 get_user_permissions,has_internal_role,is_super_admin
+     FAIL|e06 anon exec has_internal_role = 42501|OK false
+     FAIL|e06 anon exec is_super_admin = 42501|OK false
+     FAIL|e06 anon exec get_user_permissions = 42501|OK 0
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=5
+KILLED|v1-alt3938
+== variant v2-revoke-no-retarget
+     FAIL|e02 anon admin_audit_logs unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon admin_permissions unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon admin_role_permissions unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon admin_roles unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon analytics_events unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon audit_logs unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon credit_ledger unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon devices unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon impersonation_sessions unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon individual_invitations unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon internal_roles unchanged, no error|OK 0 -> ERR 42501 permission denied for function is_super_admin
+     FAIL|e02 anon licenses unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon organization_members unchanged, no error|OK 0 -> ERR 42501 permission denied for function get_user_org_ids
+     FAIL|e02 anon organization_plans unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon organizations unchanged, no error|OK 0 -> ERR 42501 permission denied for function get_user_org_ids
+     FAIL|e02 anon payment_intents unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon pending_internal_invitations unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon stripe_customers unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon transaction_unlocks unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon user_preferences unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon users unchanged, no error|OK 0 -> ERR 42501 permission denied for function get_user_org_ids
+     FAIL|e04 no TO public/anon policy calls an identity helper|22 devices.devices_select_public, admin_audit_logs.Internal users can view admin audit logs, admin_permissions.Internal users can view permissions, admin_role_permissions.Internal users can view role permissions, admin_roles.Internal users can view roles, impersonation_sessions.Internal users can view their own sessions, internal_roles.Super admins can manage internal roles, analytics_events.analytics_events_select_own_or_internal, audit_logs.audit_logs_select_public, credit_ledger.credit_ledger_select_own, pending_internal_invitations.internal_users_can_manage_invitations, individual_invitations.internal_users_can_read_individual_invitations, organization_plans.internal_users_can_read_org_plans, licenses.licenses_select_public, organization_members.organization_members_all_public, organization_members.organization_members_select_public, organizations.organizations_select_public, payment_intents.payment_intents_select_own, transaction_unlocks.transaction_unlocks_select_own, users.users_select_public, user_preferences.user_preferences_select_internal, stripe_customers.stripe_customers_select_own
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=22
+KILLED|v2-revoke-no-retarget
+== variant v3-guard-hir-only
+     FAIL|e01 agent has_permission(staff) closed|OK true
+     FAIL|e01 agent has_any_permission(staff) closed|OK true
+     FAIL|e01 agent is_super_admin(super) closed|OK true
+     FAIL|e01 agent get_user_permissions(staff) closed|OK 3
+     FAIL|e01 super get_user_permissions(fellow staff) closed|OK 3
+     FAIL|e01 staff is_super_admin(super) closed|OK true
+     FAIL|e06 orgadmin has_permission(staff) = false|OK true
+     FAIL|e06 orgadmin has_any_permission(staff) = false|OK true
+     FAIL|e06 orgadmin get_user_permissions(staff) = 0|OK 3
+     FAIL|e06 orgadmin is_super_admin(super) = false|OK true
+     FAIL|e06 service_role has_permission(staff) = false|OK true
+     FAIL|e06 service_role get_user_permissions(staff) = 0|OK 3
+     FAIL|e06 service_role has_any_permission(staff) = false|OK true
+     FAIL|e06 service_role is_super_admin(super) = false|OK true
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=14
+KILLED|v3-guard-hir-only
+== variant v4-noarg-is-internal
+     FAIL|e01 anon has_internal_role(staff) closed|OK true
+     FAIL|e01 anon is_super_admin(super) closed|OK true
+     FAIL|e01 anon get_user_permissions(staff) closed|OK 3
+     FAIL|e01 agent has_internal_role(staff) closed|OK true
+     FAIL|e01 agent has_permission(staff) closed|OK true
+     FAIL|e01 agent has_any_permission(staff) closed|OK true
+     FAIL|e01 agent is_super_admin(super) closed|OK true
+     FAIL|e01 agent get_user_permissions(staff) closed|OK 3
+     FAIL|e01 super has_internal_role(fellow staff) closed|OK true
+     FAIL|e01 super get_user_permissions(fellow staff) closed|OK 3
+     FAIL|e01 staff is_super_admin(super) closed|OK true
+     FAIL|e04 no TO public/anon policy calls an identity helper|22 devices.devices_select_public, admin_audit_logs.Internal users can view admin audit logs, admin_permissions.Internal users can view permissions, admin_role_permissions.Internal users can view role permissions, admin_roles.Internal users can view roles, impersonation_sessions.Internal users can view their own sessions, internal_roles.Super admins can manage internal roles, analytics_events.analytics_events_select_own_or_internal, audit_logs.audit_logs_select_public, credit_ledger.credit_ledger_select_own, pending_internal_invitations.internal_users_can_manage_invitations, individual_invitations.internal_users_can_read_individual_invitations, organization_plans.internal_users_can_read_org_plans, licenses.licenses_select_public, organization_members.organization_members_all_public, organization_members.organization_members_select_public, organizations.organizations_select_public, payment_intents.payment_intents_select_own, transaction_unlocks.transaction_unlocks_select_own, users.users_select_public, user_preferences.user_preferences_select_internal, stripe_customers.stripe_customers_select_own
+     FAIL|e04 anon (incl. PUBLIC) cannot execute any of the 7 helpers|5 get_user_org_ids,get_user_permissions,has_internal_role,is_org_admin,is_super_admin
+     FAIL|e06 orgadmin has_internal_role(staff) = false|OK true
+     FAIL|e06 orgadmin has_permission(staff) = false|OK true
+     FAIL|e06 orgadmin has_any_permission(staff) = false|OK true
+     FAIL|e06 orgadmin get_user_permissions(staff) = 0|OK 3
+     FAIL|e06 orgadmin is_super_admin(super) = false|OK true
+     FAIL|e06 anon exec has_internal_role = 42501|OK true
+     FAIL|e06 anon exec is_super_admin = 42501|OK true
+     FAIL|e06 anon exec get_user_permissions = 42501|OK 3
+     FAIL|e06 anon exec get_user_org_ids = 42501|OK 0
+     FAIL|e06 anon exec is_org_admin = 42501|OK false
+     FAIL|e06 service_role has_permission(staff) = false|OK true
+     FAIL|e06 service_role has_internal_role(staff) = false|OK true
+     FAIL|e06 service_role get_user_permissions(staff) = 0|OK 3
+     FAIL|e06 service_role has_any_permission(staff) = false|OK true
+     FAIL|e06 service_role is_super_admin(super) = false|OK true
+CONTROLS: pass=3 fail=3 error=0 checks=213 failed_checks=28
+KILLED|v4-noarg-is-internal
+== variant v5-item-text-literal
+     FAIL|e02 anon admin_audit_logs unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon admin_permissions unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon admin_role_permissions unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon admin_roles unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon analytics_events unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon audit_logs unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon credit_ledger unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon devices unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon impersonation_sessions unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon individual_invitations unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon licenses unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon organization_plans unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon organizations unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon payment_intents unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon pending_internal_invitations unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon stripe_customers unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon transaction_unlocks unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon user_preferences unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e02 anon users unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e04 no TO public/anon policy calls an identity helper|20 devices.devices_select_public, admin_audit_logs.Internal users can view admin audit logs, admin_permissions.Internal users can view permissions, admin_role_permissions.Internal users can view role permissions, admin_roles.Internal users can view roles, impersonation_sessions.Internal users can view their own sessions, internal_roles.Super admins can manage internal roles, analytics_events.analytics_events_select_own_or_internal, audit_logs.audit_logs_select_public, credit_ledger.credit_ledger_select_own, pending_internal_invitations.internal_users_can_manage_invitations, individual_invitations.internal_users_can_read_individual_invitations, organization_plans.internal_users_can_read_org_plans, licenses.licenses_select_public, organizations.organizations_select_public, payment_intents.payment_intents_select_own, transaction_unlocks.transaction_unlocks_select_own, users.users_select_public, user_preferences.user_preferences_select_internal, stripe_customers.stripe_customers_select_own
+     FAIL|e04 anon (incl. PUBLIC) cannot execute any of the 7 helpers|2 get_user_permissions,is_super_admin
+     FAIL|e06 anon exec is_super_admin = 42501|OK false
+     FAIL|e06 anon exec get_user_permissions = 42501|OK 0
+CONTROLS: pass=3 fail=3 error=0 checks=213 failed_checks=23
+KILLED|v5-item-text-literal
+== variant A-only
+     FAIL|e04 no TO public/anon policy calls an identity helper|22 devices.devices_select_public, admin_audit_logs.Internal users can view admin audit logs, admin_permissions.Internal users can view permissions, admin_role_permissions.Internal users can view role permissions, admin_roles.Internal users can view roles, impersonation_sessions.Internal users can view their own sessions, internal_roles.Super admins can manage internal roles, analytics_events.analytics_events_select_own_or_internal, audit_logs.audit_logs_select_public, credit_ledger.credit_ledger_select_own, pending_internal_invitations.internal_users_can_manage_invitations, individual_invitations.internal_users_can_read_individual_invitations, organization_plans.internal_users_can_read_org_plans, licenses.licenses_select_public, organization_members.organization_members_all_public, organization_members.organization_members_select_public, organizations.organizations_select_public, payment_intents.payment_intents_select_own, transaction_unlocks.transaction_unlocks_select_own, users.users_select_public, user_preferences.user_preferences_select_internal, stripe_customers.stripe_customers_select_own
+     FAIL|e04 anon (incl. PUBLIC) cannot execute any of the 7 helpers|5 get_user_org_ids,get_user_permissions,has_internal_role,is_org_admin,is_super_admin
+     FAIL|e04 anon holds no privilege on support_ticket_backlog_links|DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE
+     FAIL|e04 authenticated holds exactly DELETE,INSERT,SELECT on links|DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE
+     FAIL|e05 anon delete refused (grant, not just RLS)|OK rows=0
+     FAIL|e05 update not granted to signed-in (unused by admin-portal)|OK rows=0
+     FAIL|e06 anon exec has_internal_role = 42501|OK false
+     FAIL|e06 anon exec is_super_admin = 42501|OK false
+     FAIL|e06 anon exec get_user_permissions = 42501|OK 0
+     FAIL|e06 anon exec get_user_org_ids = 42501|OK 0
+     FAIL|e06 anon exec is_org_admin = 42501|OK false
+     FAIL|e06 anon select links = 42501|OK 0
+CONTROLS: pass=3 fail=3 error=0 checks=213 failed_checks=12
+KILLED|A-only
+== variant A+C
+     FAIL|e04 no TO public/anon policy calls an identity helper|22 devices.devices_select_public, admin_audit_logs.Internal users can view admin audit logs, admin_permissions.Internal users can view permissions, admin_role_permissions.Internal users can view role permissions, admin_roles.Internal users can view roles, impersonation_sessions.Internal users can view their own sessions, internal_roles.Super admins can manage internal roles, analytics_events.analytics_events_select_own_or_internal, audit_logs.audit_logs_select_public, credit_ledger.credit_ledger_select_own, pending_internal_invitations.internal_users_can_manage_invitations, individual_invitations.internal_users_can_read_individual_invitations, organization_plans.internal_users_can_read_org_plans, licenses.licenses_select_public, organization_members.organization_members_all_public, organization_members.organization_members_select_public, organizations.organizations_select_public, payment_intents.payment_intents_select_own, transaction_unlocks.transaction_unlocks_select_own, users.users_select_public, user_preferences.user_preferences_select_internal, stripe_customers.stripe_customers_select_own
+     FAIL|e04 anon (incl. PUBLIC) cannot execute any of the 7 helpers|5 get_user_org_ids,get_user_permissions,has_internal_role,is_org_admin,is_super_admin
+     FAIL|e06 anon exec has_internal_role = 42501|OK false
+     FAIL|e06 anon exec is_super_admin = 42501|OK false
+     FAIL|e06 anon exec get_user_permissions = 42501|OK 0
+     FAIL|e06 anon exec get_user_org_ids = 42501|OK 0
+     FAIL|e06 anon exec is_org_admin = 42501|OK false
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=7
+KILLED|A+C
+== variant B-without-A
+     FAIL|e01 agent has_internal_role(staff) closed|OK true
+     FAIL|e01 agent has_permission(staff) closed|OK true
+     FAIL|e01 agent has_any_permission(staff) closed|OK true
+     FAIL|e01 agent is_super_admin(super) closed|OK true
+     FAIL|e01 agent get_user_permissions(staff) closed|OK 3
+     FAIL|e01 super has_internal_role(fellow staff) closed|OK true
+     FAIL|e01 super get_user_permissions(fellow staff) closed|OK 3
+     FAIL|e01 staff is_super_admin(super) closed|OK true
+     FAIL|e06 orgadmin has_internal_role(staff) = false|OK true
+     FAIL|e06 orgadmin has_permission(staff) = false|OK true
+     FAIL|e06 orgadmin has_any_permission(staff) = false|OK true
+     FAIL|e06 orgadmin get_user_permissions(staff) = 0|OK 3
+     FAIL|e06 orgadmin is_super_admin(super) = false|OK true
+     FAIL|e06 service_role has_permission(staff) = false|OK true
+     FAIL|e06 service_role has_internal_role(staff) = false|OK true
+     FAIL|e06 service_role get_user_permissions(staff) = 0|OK 3
+     FAIL|e06 service_role has_any_permission(staff) = false|OK true
+     FAIL|e06 service_role is_super_admin(super) = false|OK true
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=18
+KILLED|B-without-A
+== variant C-only
+     FAIL|e01 anon has_internal_role(staff) closed|OK true
+     FAIL|e01 anon is_super_admin(super) closed|OK true
+     FAIL|e01 anon get_user_permissions(staff) closed|OK 3
+     FAIL|e01 agent has_internal_role(staff) closed|OK true
+     FAIL|e01 agent has_permission(staff) closed|OK true
+     FAIL|e01 agent has_any_permission(staff) closed|OK true
+     FAIL|e01 agent is_super_admin(super) closed|OK true
+     FAIL|e01 agent get_user_permissions(staff) closed|OK 3
+     FAIL|e01 super has_internal_role(fellow staff) closed|OK true
+     FAIL|e01 super get_user_permissions(fellow staff) closed|OK 3
+     FAIL|e01 staff is_super_admin(super) closed|OK true
+     FAIL|e04 no TO public/anon policy calls an identity helper|22 devices.devices_select_public, admin_audit_logs.Internal users can view admin audit logs, admin_permissions.Internal users can view permissions, admin_role_permissions.Internal users can view role permissions, admin_roles.Internal users can view roles, impersonation_sessions.Internal users can view their own sessions, internal_roles.Super admins can manage internal roles, analytics_events.analytics_events_select_own_or_internal, audit_logs.audit_logs_select_public, credit_ledger.credit_ledger_select_own, pending_internal_invitations.internal_users_can_manage_invitations, individual_invitations.internal_users_can_read_individual_invitations, organization_plans.internal_users_can_read_org_plans, licenses.licenses_select_public, organization_members.organization_members_all_public, organization_members.organization_members_select_public, organizations.organizations_select_public, payment_intents.payment_intents_select_own, transaction_unlocks.transaction_unlocks_select_own, users.users_select_public, user_preferences.user_preferences_select_internal, stripe_customers.stripe_customers_select_own
+     FAIL|e04 anon (incl. PUBLIC) cannot execute any of the 7 helpers|5 get_user_org_ids,get_user_permissions,has_internal_role,is_org_admin,is_super_admin
+     FAIL|e06 orgadmin has_internal_role(staff) = false|OK true
+     FAIL|e06 orgadmin has_permission(staff) = false|OK true
+     FAIL|e06 orgadmin has_any_permission(staff) = false|OK true
+     FAIL|e06 orgadmin get_user_permissions(staff) = 0|OK 3
+     FAIL|e06 orgadmin is_super_admin(super) = false|OK true
+     FAIL|e06 anon exec has_internal_role = 42501|OK true
+     FAIL|e06 anon exec is_super_admin = 42501|OK true
+     FAIL|e06 anon exec get_user_permissions = 42501|OK 3
+     FAIL|e06 anon exec get_user_org_ids = 42501|OK 0
+     FAIL|e06 anon exec is_org_admin = 42501|OK false
+     FAIL|e06 service_role has_permission(staff) = false|OK true
+     FAIL|e06 service_role has_internal_role(staff) = false|OK true
+     FAIL|e06 service_role get_user_permissions(staff) = 0|OK 3
+     FAIL|e06 service_role has_any_permission(staff) = false|OK true
+     FAIL|e06 service_role is_super_admin(super) = false|OK true
+CONTROLS: pass=3 fail=3 error=0 checks=213 failed_checks=28
+KILLED|C-only
+VARIANTS: killed=9 survived=0

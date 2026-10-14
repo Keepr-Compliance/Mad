@@ -1,0 +1,226 @@
+== e01-caller-only
+FAIL|e01 anon has_internal_role(staff) closed|OK true
+FAIL|e01 anon is_super_admin(super) closed|OK true
+FAIL|e01 anon get_user_permissions(staff) closed|OK 3
+PASS|e01 anon has_permission(staff) closed|ERR 42501 permission denied for function has_permission
+FAIL|e01 agent has_internal_role(staff) closed|OK true
+FAIL|e01 agent has_permission(staff) closed|OK true
+FAIL|e01 agent has_any_permission(staff) closed|OK true
+FAIL|e01 agent is_super_admin(super) closed|OK true
+FAIL|e01 agent get_user_permissions(staff) closed|OK 3
+PASS|e01 staff has_internal_role(agent) = false|OK false
+PASS|e01 staff has_permission(agent) = false|OK false
+PASS|e01 staff has_any_permission(agent) = false|OK false
+PASS|e01 staff get_user_permissions(agent) = 0|OK 0
+PASS|e01 super is_super_admin(staff) = false|OK false
+FAIL|e01 super has_internal_role(fellow staff) closed|OK true
+FAIL|e01 super get_user_permissions(fellow staff) closed|OK 3
+FAIL|e01 staff is_super_admin(super) closed|OK true
+PASS|e01 own has_internal_role = true|OK true
+PASS|e01 own has_internal_role as agent = false|OK false
+PASS|e01 own has_permission = true|OK true
+PASS|e01 own has_permission(unheld) = false|OK false
+PASS|e01 own has_any_permission = true|OK true
+PASS|e01 own is_super_admin = true|OK true
+PASS|e01 own is_super_admin as non-system staff = false|OK false
+PASS|e01 own get_user_permissions = 3|OK 3
+CHECKS|e01-caller-only|25
+== e02-visibility
+PASS|e02 anon account_suspensions unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a account_suspensions unchanged|OK 0 -> OK 0
+PASS|e02 u_g account_suspensions unchanged|OK 0 -> OK 0
+PASS|e02 u_i account_suspensions unchanged|OK 0 -> OK 0
+PASS|e02 u_sa account_suspensions unchanged|OK 0 -> OK 0
+PASS|e02 anon admin_audit_logs unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a admin_audit_logs unchanged|OK 0 -> OK 0
+PASS|e02 u_g admin_audit_logs unchanged|OK 0 -> OK 0
+PASS|e02 u_i admin_audit_logs unchanged|OK 0 -> OK 0
+PASS|e02 u_sa admin_audit_logs unchanged|OK 0 -> OK 0
+PASS|e02 anon admin_permissions unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a admin_permissions unchanged|OK 0 -> OK 0
+PASS|e02 u_g admin_permissions unchanged|OK 0 -> OK 0
+PASS|e02 u_i admin_permissions unchanged|OK 3 -> OK 3
+PASS|e02 u_sa admin_permissions unchanged|OK 3 -> OK 3
+PASS|e02 anon admin_role_permissions unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a admin_role_permissions unchanged|OK 0 -> OK 0
+PASS|e02 u_g admin_role_permissions unchanged|OK 0 -> OK 0
+PASS|e02 u_i admin_role_permissions unchanged|OK 3 -> OK 3
+PASS|e02 u_sa admin_role_permissions unchanged|OK 3 -> OK 3
+PASS|e02 anon admin_roles unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a admin_roles unchanged|OK 0 -> OK 0
+PASS|e02 u_g admin_roles unchanged|OK 0 -> OK 0
+PASS|e02 u_i admin_roles unchanged|OK 2 -> OK 2
+PASS|e02 u_sa admin_roles unchanged|OK 2 -> OK 2
+PASS|e02 anon analytics_events unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a analytics_events unchanged|OK 0 -> OK 0
+PASS|e02 u_g analytics_events unchanged|OK 0 -> OK 0
+PASS|e02 u_i analytics_events unchanged|OK 0 -> OK 0
+PASS|e02 u_sa analytics_events unchanged|OK 0 -> OK 0
+PASS|e02 anon audit_logs unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a audit_logs unchanged|OK 0 -> OK 0
+PASS|e02 u_g audit_logs unchanged|OK 0 -> OK 0
+PASS|e02 u_i audit_logs unchanged|OK 0 -> OK 0
+PASS|e02 u_sa audit_logs unchanged|OK 0 -> OK 0
+PASS|e02 anon checklist_template_items unchanged, no error|ERR 42501 permission denied for table checklist_template_items -> ERR 42501 permission denied for table checklist_template_items
+PASS|e02 u_a checklist_template_items unchanged|OK 0 -> OK 0
+PASS|e02 u_g checklist_template_items unchanged|OK 0 -> OK 0
+PASS|e02 u_i checklist_template_items unchanged|OK 0 -> OK 0
+PASS|e02 u_sa checklist_template_items unchanged|OK 0 -> OK 0
+PASS|e02 anon checklist_templates unchanged, no error|ERR 42501 permission denied for table checklist_templates -> ERR 42501 permission denied for table checklist_templates
+PASS|e02 u_a checklist_templates unchanged|OK 1 -> OK 1
+PASS|e02 u_g checklist_templates unchanged|OK 1 -> OK 1
+PASS|e02 u_i checklist_templates unchanged|OK 0 -> OK 0
+PASS|e02 u_sa checklist_templates unchanged|OK 0 -> OK 0
+PASS|e02 anon credit_ledger unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a credit_ledger unchanged|OK 0 -> OK 0
+PASS|e02 u_g credit_ledger unchanged|OK 0 -> OK 0
+PASS|e02 u_i credit_ledger unchanged|OK 0 -> OK 0
+PASS|e02 u_sa credit_ledger unchanged|OK 0 -> OK 0
+PASS|e02 anon devices unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a devices unchanged|OK 0 -> OK 0
+PASS|e02 u_g devices unchanged|OK 0 -> OK 0
+PASS|e02 u_i devices unchanged|OK 0 -> OK 0
+PASS|e02 u_sa devices unchanged|OK 0 -> OK 0
+PASS|e02 anon email_delivery_queue unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a email_delivery_queue unchanged|OK 0 -> OK 0
+PASS|e02 u_g email_delivery_queue unchanged|OK 0 -> OK 0
+PASS|e02 u_i email_delivery_queue unchanged|OK 0 -> OK 0
+PASS|e02 u_sa email_delivery_queue unchanged|OK 0 -> OK 0
+PASS|e02 anon impersonation_sessions unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a impersonation_sessions unchanged|OK 0 -> OK 0
+PASS|e02 u_g impersonation_sessions unchanged|OK 0 -> OK 0
+PASS|e02 u_i impersonation_sessions unchanged|OK 0 -> OK 0
+PASS|e02 u_sa impersonation_sessions unchanged|OK 0 -> OK 0
+PASS|e02 anon individual_invitations unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a individual_invitations unchanged|OK 0 -> OK 0
+PASS|e02 u_g individual_invitations unchanged|OK 0 -> OK 0
+PASS|e02 u_i individual_invitations unchanged|OK 0 -> OK 0
+PASS|e02 u_sa individual_invitations unchanged|OK 0 -> OK 0
+PASS|e02 anon internal_roles unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a internal_roles unchanged|OK 0 -> OK 0
+PASS|e02 u_g internal_roles unchanged|OK 0 -> OK 0
+PASS|e02 u_i internal_roles unchanged|OK 1 -> OK 1
+PASS|e02 u_sa internal_roles unchanged|OK 2 -> OK 2
+PASS|e02 anon licenses unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a licenses unchanged|OK 0 -> OK 0
+PASS|e02 u_g licenses unchanged|OK 0 -> OK 0
+PASS|e02 u_i licenses unchanged|OK 0 -> OK 0
+PASS|e02 u_sa licenses unchanged|OK 0 -> OK 0
+PASS|e02 anon organization_members unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a organization_members unchanged|OK 7 -> OK 7
+PASS|e02 u_g organization_members unchanged|OK 7 -> OK 7
+PASS|e02 u_i organization_members unchanged|OK 11 -> OK 11
+PASS|e02 u_sa organization_members unchanged|OK 11 -> OK 11
+PASS|e02 anon organization_plans unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a organization_plans unchanged|OK 1 -> OK 1
+PASS|e02 u_g organization_plans unchanged|OK 1 -> OK 1
+PASS|e02 u_i organization_plans unchanged|OK 4 -> OK 4
+PASS|e02 u_sa organization_plans unchanged|OK 4 -> OK 4
+PASS|e02 anon organizations unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a organizations unchanged|OK 1 -> OK 1
+PASS|e02 u_g organizations unchanged|OK 1 -> OK 1
+PASS|e02 u_i organizations unchanged|OK 4 -> OK 4
+PASS|e02 u_sa organizations unchanged|OK 4 -> OK 4
+PASS|e02 anon payment_intents unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a payment_intents unchanged|OK 0 -> OK 0
+PASS|e02 u_g payment_intents unchanged|OK 0 -> OK 0
+PASS|e02 u_i payment_intents unchanged|OK 0 -> OK 0
+PASS|e02 u_sa payment_intents unchanged|OK 0 -> OK 0
+PASS|e02 anon pending_internal_invitations unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a pending_internal_invitations unchanged|OK 0 -> OK 0
+PASS|e02 u_g pending_internal_invitations unchanged|OK 0 -> OK 0
+PASS|e02 u_i pending_internal_invitations unchanged|OK 0 -> OK 0
+PASS|e02 u_sa pending_internal_invitations unchanged|OK 0 -> OK 0
+PASS|e02 anon stripe_customers unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a stripe_customers unchanged|OK 0 -> OK 0
+PASS|e02 u_g stripe_customers unchanged|OK 0 -> OK 0
+PASS|e02 u_i stripe_customers unchanged|OK 0 -> OK 0
+PASS|e02 u_sa stripe_customers unchanged|OK 0 -> OK 0
+PASS|e02 anon support_ticket_backlog_links read: 0 rows or 42501|OK 0 -> OK 0
+PASS|e02 u_a support_ticket_backlog_links unchanged|OK 0 -> OK 0
+PASS|e02 u_g support_ticket_backlog_links unchanged|OK 0 -> OK 0
+PASS|e02 u_i support_ticket_backlog_links unchanged|OK 1 -> OK 1
+PASS|e02 u_sa support_ticket_backlog_links unchanged|OK 1 -> OK 1
+PASS|e02 anon transaction_unlocks unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a transaction_unlocks unchanged|OK 0 -> OK 0
+PASS|e02 u_g transaction_unlocks unchanged|OK 0 -> OK 0
+PASS|e02 u_i transaction_unlocks unchanged|OK 0 -> OK 0
+PASS|e02 u_sa transaction_unlocks unchanged|OK 0 -> OK 0
+PASS|e02 anon user_preferences unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a user_preferences unchanged|OK 0 -> OK 0
+PASS|e02 u_g user_preferences unchanged|OK 0 -> OK 0
+PASS|e02 u_i user_preferences unchanged|OK 0 -> OK 0
+PASS|e02 u_sa user_preferences unchanged|OK 0 -> OK 0
+PASS|e02 anon users unchanged, no error|OK 0 -> OK 0
+PASS|e02 u_a users unchanged|OK 7 -> OK 7
+PASS|e02 u_g users unchanged|OK 7 -> OK 7
+PASS|e02 u_i users unchanged|OK 12 -> OK 12
+PASS|e02 u_sa users unchanged|OK 12 -> OK 12
+PASS|e02 fingerprint pairs = 130|130
+PASS|e02 staff sees admin_roles rows|OK 2
+PASS|e02 agent sees own org roster|OK 7
+CHECKS|e02-visibility|133
+== e03-writes-rpcs
+PASS|e03 super admin grants an internal role|OK rows=1
+PASS|e03 non-super staff cannot grant an internal role|ERR 42501 new row violates row-level security policy for table "internal_roles"
+PASS|e03 anon cannot grant an internal role|ERR 42501 new row violates row-level security policy for table "internal_roles"
+PASS|e03 staff creates internal invitation|OK rows=1
+PASS|e03 agent cannot create internal invitation|ERR 42501 new row violates row-level security policy for table "pending_internal_invitations"
+PASS|e03 org admin edits a member (is_org_admin policy + invite trigger)|OK rows=1
+PASS|e03 agent cannot edit a member|OK rows=0
+PASS|e03 staff admin_search_users works|OK true
+PASS|e03 agent admin_search_users refused|ERR P0001 Unauthorized: internal role required
+PASS|e03 staff admin_get_org_plan passes permission gate|OK <null>
+PASS|e03 staff without plans.view refused by admin_get_org_plan|OK insufficient_permissions
+PASS|e03 staff admin_list_user_devices works|OK array
+PASS|e03 agent admin_list_user_devices refused|ERR P0001 Unauthorized
+CHECKS|e03-writes-rpcs|13
+== e04-catalog
+FAIL|e04 no TO public/anon policy calls an identity helper|22 devices.devices_select_public, admin_audit_logs.Internal users can view admin audit logs, admin_permissions.Internal users can view permissions, admin_role_permissions.Internal users can view role permissions, admin_roles.Internal users can view roles, impersonation_sessions.Internal users can view their own sessions, internal_roles.Super admins can manage internal roles, analytics_events.analytics_events_select_own_or_internal, audit_logs.audit_logs_select_public, credit_ledger.credit_ledger_select_own, pending_internal_invitations.internal_users_can_manage_invitations, individual_invitations.internal_users_can_read_individual_invitations, organization_plans.internal_users_can_read_org_plans, licenses.licenses_select_public, organization_members.organization_members_all_public, organization_members.organization_members_select_public, organizations.organizations_select_public, payment_intents.payment_intents_select_own, transaction_unlocks.transaction_unlocks_select_own, users.users_select_public, user_preferences.user_preferences_select_internal, stripe_customers.stripe_customers_select_own
+FAIL|e04 anon (incl. PUBLIC) cannot execute any of the 7 helpers|5 get_user_org_ids,get_user_permissions,has_internal_role,is_org_admin,is_super_admin
+PASS|e04 7 helpers: authenticated+service_role EXECUTE, DEFINER, STABLE, search_path kept|7
+PASS|e04 get_user_org_ids keeps DEFINER, STABLE, search_path=public|get_user_org_ids|true
+PASS|e04 get_user_permissions keeps DEFINER, STABLE, search_path=public|get_user_permissions|true
+PASS|e04 has_any_permission keeps DEFINER, STABLE, search_path=public|has_any_permission|true
+PASS|e04 has_internal_role keeps DEFINER, STABLE, search_path=public|has_internal_role|true
+PASS|e04 has_permission keeps DEFINER, STABLE, search_path=public|has_permission|true
+PASS|e04 is_org_admin keeps DEFINER, STABLE, search_path=public|is_org_admin|true
+PASS|e04 is_super_admin keeps DEFINER, STABLE, search_path=public|is_super_admin|true
+FAIL|e04 anon holds no privilege on support_ticket_backlog_links|DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE
+FAIL|e04 authenticated holds exactly DELETE,INSERT,SELECT on links|DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE
+CHECKS|e04-catalog|12
+== e05-links
+PASS|e05 staff inserts a link|OK rows=1
+PASS|e05 staff reads links|OK 1
+PASS|e05 staff deletes a link|OK rows=1
+PASS|e05 brokerage admin insert refused|ERR 42501 new row violates row-level security policy for table "support_ticket_backlog_links"
+PASS|e05 anon insert refused|ERR 42501 new row violates row-level security policy for table "support_ticket_backlog_links"
+FAIL|e05 anon delete refused (grant, not just RLS)|OK rows=0
+FAIL|e05 update not granted to signed-in (unused by admin-portal)|OK rows=0
+CHECKS|e05-links|7
+== e06-strict
+FAIL|e06 orgadmin has_internal_role(staff) = false|OK true
+FAIL|e06 orgadmin has_permission(staff) = false|OK true
+FAIL|e06 orgadmin has_any_permission(staff) = false|OK true
+FAIL|e06 orgadmin get_user_permissions(staff) = 0|OK 3
+FAIL|e06 orgadmin is_super_admin(super) = false|OK true
+PASS|e06 staff has_internal_role(orgadmin) = false|OK false
+PASS|e06 staff has_permission(super w/o perm) = false|OK false
+PASS|e06 staff has_any_permission(super w/o perm) = false|OK false
+PASS|e06 staff get_user_permissions(super w/o perm) = 0|OK 0
+PASS|e06 super is_super_admin(orgadmin) = false|OK false
+FAIL|e06 anon exec has_internal_role = 42501|OK true
+FAIL|e06 anon exec is_super_admin = 42501|OK true
+FAIL|e06 anon exec get_user_permissions = 42501|OK 3
+PASS|e06 anon exec has_permission = 42501|ERR 42501 permission denied for function has_permission
+PASS|e06 anon exec has_any_permission = 42501|ERR 42501 permission denied for function has_any_permission
+FAIL|e06 anon exec get_user_org_ids = 42501|OK 0
+FAIL|e06 anon exec is_org_admin = 42501|OK false
+FAIL|e06 service_role has_permission(staff) = false|OK true
+FAIL|e06 service_role has_internal_role(staff) = false|OK true
+FAIL|e06 service_role get_user_permissions(staff) = 0|OK 3
+FAIL|e06 service_role has_any_permission(staff) = false|OK true
+FAIL|e06 service_role is_super_admin(super) = false|OK true
+FAIL|e06 anon select links = 42501|OK 0
+CHECKS|e06-strict|23
+CONTROLS: pass=2 fail=4 error=0 checks=213 failed_checks=33

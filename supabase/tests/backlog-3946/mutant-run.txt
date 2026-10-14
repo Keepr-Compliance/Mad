@@ -1,0 +1,179 @@
+-- baseline: every control against the unmutated migrations
+CONTROLS: pass=6 fail=0 error=0 checks=213 failed_checks=0
+MUTATION APPLIED mA1-hir-guard-dropped
+== mA1-hir-guard-dropped  MUTATION APPLIED: <       AND check_user_id = (SELECT auth.uid()) 
+     FAIL|e01 agent has_internal_role(staff) closed|OK true
+     FAIL|e01 super has_internal_role(fellow staff) closed|OK true
+     FAIL|e06 orgadmin has_internal_role(staff) = false|OK true
+     FAIL|e06 service_role has_internal_role(staff) = false|OK true
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=4
+KILLED|mA1-hir-guard-dropped
+MUTATION APPLIED mA2-hp-guard-dropped
+== mA2-hp-guard-dropped  MUTATION APPLIED: <     AND check_user_id = (SELECT auth.uid()) 
+     FAIL|e01 agent has_permission(staff) closed|OK true
+     FAIL|e06 orgadmin has_permission(staff) = false|OK true
+     FAIL|e06 service_role has_permission(staff) = false|OK true
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=3
+KILLED|mA2-hp-guard-dropped
+MUTATION APPLIED mA3-hap-guard-dropped
+== mA3-hap-guard-dropped  MUTATION APPLIED: <       AND check_user_id = (SELECT auth.uid()) 
+     FAIL|e01 agent has_any_permission(staff) closed|OK true
+     FAIL|e06 orgadmin has_any_permission(staff) = false|OK true
+     FAIL|e06 service_role has_any_permission(staff) = false|OK true
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=3
+KILLED|mA3-hap-guard-dropped
+MUTATION APPLIED mA4-isa-guard-dropped
+== mA4-isa-guard-dropped  MUTATION APPLIED: <     WHERE ir.user_id = check_user_id AND check_user_id = (SELECT auth.uid()) AND ar.is_system = true >     WHERE ir.user_id = check_user_id AND ar.is_system = true 
+     FAIL|e01 agent is_super_admin(super) closed|OK true
+     FAIL|e01 staff is_super_admin(super) closed|OK true
+     FAIL|e06 orgadmin is_super_admin(super) = false|OK true
+     FAIL|e06 service_role is_super_admin(super) = false|OK true
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=4
+KILLED|mA4-isa-guard-dropped
+MUTATION APPLIED mA5-gup-guard-dropped
+== mA5-gup-guard-dropped  MUTATION APPLIED: <   WHERE ir.user_id = check_user_id <     AND check_user_id = (SELECT auth.uid()); >   WHERE ir.user_id = check_user_id; 
+     FAIL|e01 agent get_user_permissions(staff) closed|OK 3
+     FAIL|e01 super get_user_permissions(fellow staff) closed|OK 3
+     FAIL|e06 orgadmin get_user_permissions(staff) = 0|OK 3
+     FAIL|e06 service_role get_user_permissions(staff) = 0|OK 3
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=4
+KILLED|mA5-gup-guard-dropped
+MUTATION APPLIED mA6-hir-guard-not-null
+== mA6-hir-guard-not-null  MUTATION APPLIED: <       AND check_user_id = (SELECT auth.uid()) >       AND (SELECT auth.uid()) IS NOT NULL 
+     FAIL|e01 agent has_internal_role(staff) closed|OK true
+     FAIL|e01 super has_internal_role(fellow staff) closed|OK true
+     FAIL|e06 orgadmin has_internal_role(staff) = false|OK true
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=3
+KILLED|mA6-hir-guard-not-null
+MUTATION APPLIED mA7-hir-param-ignored
+== mA7-hir-param-ignored  MUTATION APPLIED: <     WHERE user_id = check_user_id <       AND check_user_id = (SELECT auth.uid()) >     WHERE user_id = (SELECT auth.uid()) 
+     FAIL|e01 staff has_internal_role(agent) = false|OK true
+     FAIL|e01 super has_internal_role(fellow staff) closed|OK true
+     FAIL|e06 staff has_internal_role(orgadmin) = false|OK true
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=3
+KILLED|mA7-hir-param-ignored
+MUTATION APPLIED mA8-hp-param-ignored
+== mA8-hp-param-ignored  MUTATION APPLIED: <     WHERE ir.user_id = check_user_id <     AND check_user_id = (SELECT auth.uid()) >     WHERE ir.user_id = (SELECT auth.uid()) 
+     FAIL|e01 staff has_permission(agent) = false|OK true
+     FAIL|e06 staff has_permission(super w/o perm) = false|OK true
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=2
+KILLED|mA8-hp-param-ignored
+MUTATION APPLIED mA9-gup-param-ignored
+== mA9-gup-param-ignored  MUTATION APPLIED: <   WHERE ir.user_id = check_user_id <     AND check_user_id = (SELECT auth.uid()); >   WHERE ir.user_id = (SELECT auth.uid()); 
+     FAIL|e01 staff get_user_permissions(agent) = 0|OK 3
+     FAIL|e06 staff get_user_permissions(super w/o perm) = 0|OK 3
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=2
+KILLED|mA9-gup-param-ignored
+MUTATION APPLIED mA10-isa-param-ignored
+== mA10-isa-param-ignored  MUTATION APPLIED: <     WHERE ir.user_id = check_user_id AND check_user_id = (SELECT auth.uid()) AND ar.is_system = true >     WHERE ir.user_id = (SELECT auth.uid()) AND ar.is_system = true 
+     FAIL|e01 super is_super_admin(staff) = false|OK true
+     FAIL|e06 super is_super_admin(orgadmin) = false|OK true
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=2
+KILLED|mA10-isa-param-ignored
+MUTATION APPLIED mB1-hir-revoke-dropped
+== mB1-hir-revoke-dropped  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.has_internal_role(uuid) FROM PUBLIC, anon; 
+     FAIL|e04 anon (incl. PUBLIC) cannot execute any of the 7 helpers|1 has_internal_role
+     FAIL|e06 anon exec has_internal_role = 42501|OK false
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=2
+KILLED|mB1-hir-revoke-dropped
+MUTATION APPLIED mB2-hir-revoke-anon-only
+== mB2-hir-revoke-anon-only  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.has_internal_role(uuid) FROM PUBLIC, anon; > REVOKE EXECUTE ON FUNCTION public.has_internal_role(uuid) FROM anon; 
+     FAIL|e04 anon (incl. PUBLIC) cannot execute any of the 7 helpers|1 has_internal_role
+     FAIL|e06 anon exec has_internal_role = 42501|OK false
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=2
+KILLED|mB2-hir-revoke-anon-only
+MUTATION APPLIED mB3-internal_roles-policy-not-moved
+== mB3-internal_roles-policy-not-moved  MUTATION APPLIED: < ALTER POLICY "Super admins can manage internal roles" ON public.internal_roles TO authenticated; 
+     FAIL|e02 anon internal_roles unchanged, no error|OK 0 -> ERR 42501 permission denied for function is_super_admin
+     FAIL|e04 no TO public/anon policy calls an identity helper|1 internal_roles.Super admins can manage internal roles
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=2
+KILLED|mB3-internal_roles-policy-not-moved
+MUTATION APPLIED mB4-users-policy-not-moved
+== mB4-users-policy-not-moved  MUTATION APPLIED: < ALTER POLICY users_select_public ON public.users TO authenticated; 
+     FAIL|e02 anon users unchanged, no error|OK 0 -> ERR 42501 permission denied for function has_internal_role
+     FAIL|e04 no TO public/anon policy calls an identity helper|1 users.users_select_public
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=2
+KILLED|mB4-users-policy-not-moved
+MUTATION APPLIED mB5-om-all-not-moved
+== mB5-om-all-not-moved  MUTATION APPLIED: < ALTER POLICY organization_members_all_public ON public.organization_members TO authenticated; 
+     FAIL|e02 anon organization_members unchanged, no error|OK 0 -> ERR 42501 permission denied for function is_org_admin
+     FAIL|e04 no TO public/anon policy calls an identity helper|1 organization_members.organization_members_all_public
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=2
+KILLED|mB5-om-all-not-moved
+MUTATION APPLIED mB6-isa-revoke-dropped
+== mB6-isa-revoke-dropped  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.is_super_admin(uuid) FROM PUBLIC, anon; 
+     FAIL|e04 anon (incl. PUBLIC) cannot execute any of the 7 helpers|1 is_super_admin
+     FAIL|e06 anon exec is_super_admin = 42501|OK false
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=2
+KILLED|mB6-isa-revoke-dropped
+MUTATION APPLIED mC1-anon-revoke-dropped
+== mC1-anon-revoke-dropped  MUTATION APPLIED: < REVOKE ALL ON TABLE public.support_ticket_backlog_links FROM anon; 
+     FAIL|e04 anon holds no privilege on support_ticket_backlog_links|DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE
+     FAIL|e05 anon delete refused (grant, not just RLS)|OK rows=0
+     FAIL|e06 anon select links = 42501|OK 0
+CONTROLS: pass=3 fail=3 error=0 checks=213 failed_checks=3
+KILLED|mC1-anon-revoke-dropped
+MUTATION APPLIED mC2-authenticated-revoke-all
+== mC2-authenticated-revoke-all  MUTATION APPLIED: < REVOKE UPDATE, REFERENCES, TRIGGER, TRUNCATE ON TABLE public.support_ticket_backlog_links FROM authenticated; > REVOKE ALL ON TABLE public.support_ticket_backlog_links FROM authenticated; 
+     FAIL|e02 u_a support_ticket_backlog_links unchanged|OK 0 -> ERR 42501 permission denied for table support_ticket_backlog_links
+     FAIL|e02 u_g support_ticket_backlog_links unchanged|OK 0 -> ERR 42501 permission denied for table support_ticket_backlog_links
+     FAIL|e02 u_i support_ticket_backlog_links unchanged|OK 1 -> ERR 42501 permission denied for table support_ticket_backlog_links
+     FAIL|e02 u_sa support_ticket_backlog_links unchanged|OK 1 -> ERR 42501 permission denied for table support_ticket_backlog_links
+     FAIL|e04 authenticated holds exactly DELETE,INSERT,SELECT on links|<none>
+     FAIL|e05 staff inserts a link|ERR 42501 permission denied for table support_ticket_backlog_links
+     FAIL|e05 staff reads links|ERR 42501 permission denied for table support_ticket_backlog_links
+     FAIL|e05 staff deletes a link|ERR 42501 permission denied for table support_ticket_backlog_links
+CONTROLS: pass=3 fail=3 error=0 checks=213 failed_checks=8
+KILLED|mC2-authenticated-revoke-all
+MUTATION APPLIED mC3-anon-writes-only
+== mC3-anon-writes-only  MUTATION APPLIED: < REVOKE ALL ON TABLE public.support_ticket_backlog_links FROM anon; > REVOKE INSERT, UPDATE, DELETE ON TABLE public.support_ticket_backlog_links FROM anon; 
+     FAIL|e04 anon holds no privilege on support_ticket_backlog_links|REFERENCES,SELECT,TRIGGER
+     FAIL|e06 anon select links = 42501|OK 0
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=2
+KILLED|mC3-anon-writes-only
+MUTATION APPLIED mC4-authenticated-untouched
+== mC4-authenticated-untouched  MUTATION APPLIED: < REVOKE UPDATE, REFERENCES, TRIGGER, TRUNCATE ON TABLE public.support_ticket_backlog_links FROM authenticated; 
+     FAIL|e04 authenticated holds exactly DELETE,INSERT,SELECT on links|DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE
+     FAIL|e05 update not granted to signed-in (unused by admin-portal)|OK rows=0
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=2
+KILLED|mC4-authenticated-untouched
+MUTATION APPLIED mS1-hir-invoker-no-guard
+== mS1-hir-invoker-no-guard  MUTATION APPLIED: <  STABLE SECURITY DEFINER >  STABLE SECURITY INVOKER <       AND check_user_id = (SELECT auth.uid()) 
+     FAIL|e01 super has_internal_role(fellow staff) closed|OK true
+     FAIL|e04 7 helpers: authenticated+service_role EXECUTE, DEFINER, STABLE, search_path kept|6
+     FAIL|e04 has_internal_role keeps DEFINER, STABLE, search_path=public|has_internal_role|false
+     FAIL|e06 service_role has_internal_role(staff) = false|OK true
+CONTROLS: pass=3 fail=3 error=0 checks=213 failed_checks=4
+KILLED|mS1-hir-invoker-no-guard
+MUTATION APPLIED mS2-gup-definer-dropped
+== mS2-gup-definer-dropped  MUTATION APPLIED: <  STABLE SECURITY DEFINER >  STABLE 
+     FAIL|e04 7 helpers: authenticated+service_role EXECUTE, DEFINER, STABLE, search_path kept|6
+     FAIL|e04 get_user_permissions keeps DEFINER, STABLE, search_path=public|get_user_permissions|false
+CONTROLS: pass=5 fail=1 error=0 checks=213 failed_checks=2
+KILLED|mS2-gup-definer-dropped
+MUTATION APPLIED mS3-hp-service-role-exemption
+== mS3-hp-service-role-exemption  MUTATION APPLIED: <     AND check_user_id = (SELECT auth.uid()) >     AND (check_user_id = (SELECT auth.uid()) OR (SELECT auth.role()) = 'service_role') 
+     FAIL|e06 service_role has_permission(staff) = false|OK true
+CONTROLS: pass=5 fail=1 error=0 checks=213 failed_checks=1
+KILLED|mS3-hp-service-role-exemption
+MUTATION APPLIED mS4-hir-service-role-exemption
+== mS4-hir-service-role-exemption  MUTATION APPLIED: <       AND check_user_id = (SELECT auth.uid()) >       AND (check_user_id = (SELECT auth.uid()) OR (SELECT auth.role()) = 'service_role') 
+     FAIL|e06 service_role has_internal_role(staff) = false|OK true
+CONTROLS: pass=5 fail=1 error=0 checks=213 failed_checks=1
+KILLED|mS4-hir-service-role-exemption
+MUTATION APPLIED mS5-hap-service-role-exemption
+== mS5-hap-service-role-exemption  MUTATION APPLIED: <       AND check_user_id = (SELECT auth.uid()) >       AND (check_user_id = (SELECT auth.uid()) OR (SELECT auth.role()) = 'service_role') 
+     FAIL|e06 service_role has_any_permission(staff) = false|OK true
+CONTROLS: pass=5 fail=1 error=0 checks=213 failed_checks=1
+KILLED|mS5-hap-service-role-exemption
+MUTATION APPLIED mS6-isa-service-role-exemption
+== mS6-isa-service-role-exemption  MUTATION APPLIED: <     WHERE ir.user_id = check_user_id AND check_user_id = (SELECT auth.uid()) AND ar.is_system = true >     WHERE ir.user_id = check_user_id AND (check_user_id = (SELECT auth.uid()) OR (SELECT auth.role()) = 'service_role') AND ar.is_syste
+     FAIL|e06 service_role is_super_admin(super) = false|OK true
+CONTROLS: pass=5 fail=1 error=0 checks=213 failed_checks=1
+KILLED|mS6-isa-service-role-exemption
+MUTATION APPLIED mS7-gup-service-role-exemption
+== mS7-gup-service-role-exemption  MUTATION APPLIED: <     AND check_user_id = (SELECT auth.uid()); >     AND (check_user_id = (SELECT auth.uid()) OR (SELECT auth.role()) = 'service_role'); 
+     FAIL|e06 service_role get_user_permissions(staff) = 0|OK 3
+CONTROLS: pass=5 fail=1 error=0 checks=213 failed_checks=1
+KILLED|mS7-gup-service-role-exemption
+MUTANTS: killed=27 survived=0 invalid=0
