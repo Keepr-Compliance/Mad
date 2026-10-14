@@ -104,6 +104,7 @@ CREATE FUNCTION pg_temp.fp3917_md5() RETURNS text LANGUAGE sql AS $f$
   SELECT md5(string_agg(k || '=' || v, E'\n' ORDER BY k)) FROM pg_temp.fp3917() $f$;
 
 -- Production's fingerprint before 3917 (read 2026-10-13, prod ledger head 20261013020819).
+-- HISTORICAL (BACKLOG-3945, 2026-10-14): not production today. Checks the venue this harness builds.
 CREATE TEMP TABLE t3917_prod (k text PRIMARY KEY, v text) ON COMMIT DROP;
 INSERT INTO t3917_prod (k, v) VALUES
   ('fn add_submission_checklist_at_review(uuid,uuid)', '3ae3cec0e42576c84bf432d1d9a3246f'),

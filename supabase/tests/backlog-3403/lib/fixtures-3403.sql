@@ -82,6 +82,8 @@ INSERT INTO public.submission_checklists (submission_id, template_name) VALUES (
 
 -- Production fingerprint (lib/fp-3403.sql, run read-only on production
 -- 2026-10-04, ledger head 20261003195046): the state before the migration.
+-- HISTORICAL (BACKLOG-3945, 2026-10-14): not production today; production has moved past it.
+-- Checks the venue this harness builds.
 CREATE TEMP TABLE prod3403_before (k text, v text);
 INSERT INTO prod3403_before VALUES
   ('function:can_review_submission(p_org_id uuid)', '686faa4d11f82471fb7e11b173ba66ce'),
@@ -114,6 +116,8 @@ INSERT INTO prod3403_before VALUES
 
 -- The venue fingerprint AFTER the migration (lib/fp-after-3403.txt): the
 -- apply plan's post-check expects production to read exactly this.
+-- HISTORICAL (BACKLOG-3945, 2026-10-14): that post-check was for the 2026-10-04 apply
+-- (ledger 20261004192647); production has moved past it. Not production today.
 CREATE TEMP TABLE post3403_after (k text, v text);
 INSERT INTO post3403_after VALUES
   ('function:can_review_submission(p_org_id uuid)', '686faa4d11f82471fb7e11b173ba66ce'),

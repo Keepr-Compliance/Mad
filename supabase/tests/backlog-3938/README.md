@@ -7,6 +7,13 @@ Controls, wrong-fix variants, mutants and rollback checks for:
 | `supabase/migrations/20261014053520_backlog_3938_membership_helpers_caller_only.sql` | `get_user_org_ids(uuid)` and `is_org_admin(uuid, uuid)` answer only for the calling user (`AND user_uuid = (SELECT auth.uid())`). `broker_get_org_features(uuid)` returns `error: 'not_member'` with no features unless the caller holds a membership row in the organization (any status) or has submitted to it. Signatures, SECURITY DEFINER, `search_path`, volatility and grants unchanged. |
 | `supabase/migrations/20261014061621_backlog_3940_support_links_internal_only.sql` | `support_ticket_backlog_links`: one policy `FOR ALL TO authenticated` with `has_internal_role((SELECT auth.uid()))` in USING and WITH CHECK, replacing the two previous policies. |
 
+## Historical pins (BACKLOG-3945, 2026-10-14)
+
+"Production" in this harness means production as read 2026-10-14, before ledger 20261014053520
+(`lib/pins-3938.sql`, `lib/prod-bodies-3938.sql`, the rollbacks). Production has moved past that state; the pins are historical, not a
+production-today check. They check the venue this harness builds, and the rollback controls
+compare against them by design (a rollback's target is the pre-change state).
+
 Rollbacks: `rollback-3938.sql` (production's three function bodies, read 2026-10-14) and
 `rollback-3940.sql` (production's two policies, verbatim). Each runs alone.
 
@@ -15,14 +22,14 @@ the BACKLOG-3917 harness (`../backlog-3917/lib/harness-3917.sql`, venue parity, 
 preconditions, the 3917 migration), `lib/prod-bodies-3938.sql` (production's
 `_override_effective` and `broker_get_org_features`), `lib/fixtures-3938.sql`,
 `lib/pins-3938.sql` (21 objects — 8 function md5s, 4 ACLs, 8 policy role+md5s, the
-invite-guard trigger — must equal production, else ERROR), `lib/rollback-checks-3938.sql`,
+invite-guard trigger — must equal the historical production pins, else ERROR), `lib/rollback-checks-3938.sql`,
 the stack under test, the control.
 
 ```
-SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh precheck    # venue equals production on every pin
+SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh precheck    # venue equals the pre-3938 pins (historical; not production today)
 SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh controls    # both migrations
 SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh twice       # both migrations applied twice
-SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh base        # neither migration (production today): reds expected
+SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh base        # neither migration (pre-3938 state, historical): reds expected
 SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh variants    # wrong fixes in variants/: each must go red
 SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh mutants     # lib/mutants.py: each must go red
 SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh rollback    # each rollback alone, then both
@@ -43,7 +50,7 @@ Recorded runs (this directory, unedited): `control-run.txt`, `variants-run.txt`,
 | d06 | Grants pin: the three functions keep production's ACL (PUBLIC included); both `organization_members` policies still TO public; the links policy TO authenticated FOR ALL; SECURITY DEFINER / `search_path=public` / STABLE kept. |
 | r01 | `rollback-3938.sql` alone with 3940 applied: the three functions' md5 + ACL equal production; the 3940 policy is unchanged. |
 | r02 | `rollback-3940.sql` alone with 3938 applied: the links policies equal production; the 3938 functions are unchanged and are not production's. |
-| r03 | Both rollbacks: every pin in `lib/pins-3938.sql` equals production again. |
+| r03 | Both rollbacks: every pin in `lib/pins-3938.sql` equals the pre-3938 production pins again. |
 
 `rollback` also runs d01-d06 after r01 and r02 to show behaviour: after r01 the 3938
 checks (d01, d03) go red and the 3940 checks stay green; after r02 the reverse.

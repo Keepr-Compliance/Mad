@@ -13,6 +13,9 @@
 # Control header tags:
 #   -- harness: apply-twice   the migration runs twice; t3403_once holds the fingerprint after the first
 #   -- harness: rollback      rollback-3403.sql runs after the migration, before the control
+#
+# Production pins (lib/fixtures-*.sql) are as of 2026-10-04: historical, not
+# production today (BACKLOG-3945).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
@@ -96,5 +99,5 @@ case "${1:-}" in
       [ ${#details[@]} -gt 0 ] && printf '%s\n' "${details[@]}" | cut -c1-260
     done
     echo "mutants: $total run, $missed not as expected"; [ $total -gt 0 ] || exit 1; [ $missed -eq 0 ] || exit 1 ;;
-  *) sed -n '2,16p' "${BASH_SOURCE[0]}"; exit 2 ;;
+  *) sed -n '2,19p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac

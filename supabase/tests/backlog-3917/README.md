@@ -10,13 +10,14 @@ the 3917 file (or a mutant), the control. Client statements run through `pg_temp
 `pg_temp.as_role`: `SET ROLE authenticated` (or `anon`) with `request.jwt.claims`.
 
 ```
-SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh precheck   # venue equals production on every pin
+SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh precheck   # venue equals the pre-3917 pins (historical; not production today)
 SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh controls
 SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh base       # controls without the 3917 file
 SSH_HOST=<alias> PG_CONTAINER=<container> bash run.sh mutants
 ```
 
-Pinned (96 objects, production read 2026-10-13): every policy, trigger and RLS flag on
+Pinned (96 objects, production read 2026-10-13, before ledger 20261014002359; historical,
+not production today — BACKLOG-3945): every policy, trigger and RLS flag on
 organization_members, organizations, transaction_submissions, submission_comments,
 submission_attachments, submission_messages, submission_attempts, submission_checklist_*,
 submission_status_history, users, checklist_templates, checklist_template_items,

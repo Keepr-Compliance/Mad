@@ -3,14 +3,15 @@
 # ends with ROLLBACK, in this order:
 #   the BACKLOG-3917 harness layers (helpers, venue parity, fixtures, preconditions,
 #   the 3917 migration), lib/prod-bodies-3938.sql, lib/fixtures-3938.sql,
-#   lib/pins-3938.sql (every object 3938/3940 touches or calls equals production,
+#   lib/pins-3938.sql (every object 3938/3940 touches or calls equals production as
+#   read 2026-10-14 before ledger 20261014053520 -- historical, not production today --
 #   else ERROR), lib/rollback-checks-3938.sql, the stack under test, the control.
 # Nothing is ever committed.
 #
 #   SSH_HOST=<ssh alias|local> PG_CONTAINER=<container> bash run.sh precheck
 #   ... run.sh controls [fragment]   # both migrations
 #   ... run.sh twice    [fragment]   # both migrations applied twice
-#   ... run.sh base     [fragment]   # neither migration: production today
+#   ... run.sh base     [fragment]   # neither migration: the pre-3938 state (historical)
 #   ... run.sh variants              # wrong fixes in variants/ (each must go red)
 #   ... run.sh mutants  [fragment]   # lib/mutants.py (each must go red)
 #   ... run.sh rollback              # each rollback alone, then both

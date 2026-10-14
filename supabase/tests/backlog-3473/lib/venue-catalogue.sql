@@ -8,7 +8,8 @@
 -- the PostgREST probe's committed seed looks plans up by slug. Without this
 -- file the gate fails on 129 catalogue rows and every control is void.
 --
--- Transcribed from production, read-only, 2026-09-21. Every column a gate row
+-- Transcribed from production, read-only, 2026-09-21 (HISTORICAL per BACKLOG-3945,
+-- 2026-10-14: not production today). Every column a gate row
 -- or one of the three read functions reads is copied exactly: feature key,
 -- name, value_type, default_value, category, sort_order, min_tier, is_built;
 -- plan slug, name, tier, is_default, is_active, sort_order; plan_features

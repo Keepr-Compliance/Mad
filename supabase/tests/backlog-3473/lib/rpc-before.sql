@@ -1,6 +1,10 @@
 -- BACKLOG-3473: the three read functions exactly as production defines them
 -- BEFORE migration 1 (pg_get_functiondef, read-only via the Supabase MCP,
 -- 2026-09-21). lib/teardown.sql restores them from this file.
+-- HISTORICAL (BACKLOG-3945, 2026-10-14): not production today. run.sh apply's
+-- guard (lib/apply-guard.sql) requires the venue to hash to these md5s before
+-- file 1 commits, so this file is the venue's own pre-apply state at teardown.
+-- mutants/generate.mjs also reads it (m24a-c).
 --
 -- Each block below is byte-for-byte the pg_get_functiondef text, followed by a
 -- lone `;`. md5 of each block's text (from CREATE through the newline after the

@@ -12,7 +12,9 @@
 #   SSH_HOST=... PG_CONTAINER=... bash run.sh mutants  [fragment]
 #   SSH_HOST=... PG_CONTAINER=... bash run.sh base     [fragment]   # controls WITHOUT the 3917 file
 #
-# `base` runs the controls against production's definitions; the ones that
+# Production pins are as read 2026-10-13, before ledger 20261014002359: historical, not
+# production today (BACKLOG-3945).
+# `base` runs the controls against production's (pre-3917) definitions; the ones that
 # describe 3917's behaviour must FAIL there (each control can go red).
 # Output: PASS|label|detail / FAIL|label|detail per check, CHECKS|<n> per control.
 # A control with 0 checks or a psql error is ERROR. mutants: every edit in
