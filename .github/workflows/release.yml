@@ -393,9 +393,10 @@ jobs:
         shell: pwsh
 
       # BACKLOG-3927: the Store build carries no Apple driver folder at all (not
-      # even its README.md / version.txt). Nothing above put an installer there;
-      # this removes the folder so packaging cannot ship it, and the driver
-      # check after packaging is the gate.
+      # even its README.md / version.txt), and not resources\win\README.md, which
+      # describes extracting those drivers. Nothing above put an installer there;
+      # this removes both so packaging cannot ship them, and the driver check
+      # after packaging is the gate.
       - name: Store build - no Apple driver payload
         if: inputs.channel == 'store'
         shell: pwsh
@@ -406,6 +407,12 @@ jobs:
             exit 1
           }
           echo "Store build: resources\win\apple-drivers removed"
+          Remove-Item -Path "resources\win\README.md" -Force -ErrorAction SilentlyContinue
+          if (Test-Path "resources\win\README.md") {
+            echo "::error::resources\win\README.md still exists in the Store build"
+            exit 1
+          }
+          echo "Store build: resources\win\README.md removed"
 
       # Create .env.production with secrets for runtime use
       # The app loads credentials from this file at runtime (electron/main.ts)
@@ -641,12 +648,16 @@ jobs:
           # them explicitly to mirror the old external action exactly).
           # BACKLOG-3927: the Store build is marked in the asar's package.json
           # (read at runtime by electron/services/distributionChannelService.ts)
-          # and named apart from the website installer.
+          # and named apart from the website installer. Its NSIS script includes
+          # build/installer-store.nsh, which defines KEEPR_STORE_BUILD before
+          # including build/installer.nsh; the website build includes
+          # build/installer.nsh directly and never gets the define.
           $channelArgs = @()
           if ($env:KEEPR_CHANNEL -eq "store") {
             $channelArgs = @(
               "--config.extraMetadata.distributionChannel=store",
-              '--config.nsis.artifactName=${productName}-Setup-${version}-store.${ext}'
+              '--config.nsis.artifactName=${productName}-Setup-${version}-store.${ext}',
+              "--config.nsis.include=build/installer-store.nsh"
             )
             echo "Packaging the Microsoft Store build: $($channelArgs -join ' ')"
           }
