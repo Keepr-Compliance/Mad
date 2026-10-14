@@ -1,0 +1,92 @@
+-- baseline: every control against the unmutated migrations
+CONTROLS: pass=6 fail=0 error=0 checks=52 failed_checks=0
+== m1-no-guard-get_user_org_ids  MUTATION APPLIED: <      AND user_uuid = (SELECT auth.uid()) 
+     FAIL|d01 anon get_user_org_ids(other) closed|OK 1
+     FAIL|d01 signed-in get_user_org_ids(other) closed|OK 1
+     FAIL|d01 same-org admin get_user_org_ids(agent) closed|OK 1
+     FAIL|d01 same-org agent get_user_org_ids(admin) closed|OK 1
+CONTROLS: pass=5 fail=1 error=0 checks=52 failed_checks=4
+KILLED|m1-no-guard-get_user_org_ids
+== m2-no-guard-is_org_admin  MUTATION APPLIED: <     AND user_uuid = (SELECT auth.uid()) 
+     FAIL|d01 anon is_org_admin(other) closed|OK true
+     FAIL|d01 signed-in is_org_admin(other) closed|OK true
+     FAIL|d01 admin asks is_org_admin(fellow admin) closed|OK true
+     FAIL|d01 it_admin asks is_org_admin(fellow admin) closed|OK true
+CONTROLS: pass=5 fail=1 error=0 checks=52 failed_checks=4
+KILLED|m2-no-guard-is_org_admin
+== m3-guard-is-not-null-get_user_org_ids  MUTATION APPLIED: <      AND user_uuid = (SELECT auth.uid()) >      AND (SELECT auth.uid()) IS NOT NULL 
+     FAIL|d01 signed-in get_user_org_ids(other) closed|OK 1
+     FAIL|d01 same-org admin get_user_org_ids(agent) closed|OK 1
+     FAIL|d01 same-org agent get_user_org_ids(admin) closed|OK 1
+CONTROLS: pass=5 fail=1 error=0 checks=52 failed_checks=3
+KILLED|m3-guard-is-not-null-get_user_org_ids
+== m3b-guard-is-not-null-is_org_admin  MUTATION APPLIED: <     AND user_uuid = (SELECT auth.uid()) >     AND (SELECT auth.uid()) IS NOT NULL 
+     FAIL|d01 signed-in is_org_admin(other) closed|OK true
+     FAIL|d01 admin asks is_org_admin(fellow admin) closed|OK true
+     FAIL|d01 it_admin asks is_org_admin(fellow admin) closed|OK true
+CONTROLS: pass=5 fail=1 error=0 checks=52 failed_checks=3
+KILLED|m3b-guard-is-not-null-is_org_admin
+== s1-param-ignored-get_user_org_ids  MUTATION APPLIED: <    WHERE user_id = user_uuid <      AND user_uuid = (SELECT auth.uid()) 
+     FAIL|d01 signed-in get_user_org_ids(other) closed|OK 1
+     FAIL|d01 same-org admin get_user_org_ids(agent) closed|OK 1
+     FAIL|d01 same-org agent get_user_org_ids(admin) closed|OK 1
+CONTROLS: pass=5 fail=1 error=0 checks=52 failed_checks=3
+KILLED|s1-param-ignored-get_user_org_ids
+== s4-param-ignored-is_org_admin  MUTATION APPLIED: <     WHERE user_id = user_uuid <     AND user_uuid = (SELECT auth.uid()) 
+     FAIL|d01 admin asks is_org_admin(fellow admin) closed|OK true
+     FAIL|d01 it_admin asks is_org_admin(fellow admin) closed|OK true
+     FAIL|d01 admin asks is_org_admin(agent) = false|OK true
+CONTROLS: pass=5 fail=1 error=0 checks=52 failed_checks=3
+KILLED|s4-param-ignored-is_org_admin
+== m4-bgof-member-only  MUTATION APPLIED: <      AND NOT EXISTS (SELECT 1 FROM public.transaction_submissions s <                       WHERE s.organization_id = p_org_id AND s.submitted_by = auth.uid()
+     FAIL|d03 submitter with no membership row gets features|OK false
+CONTROLS: pass=5 fail=1 error=0 checks=52 failed_checks=1
+KILLED|m4-bgof-member-only
+== m5-bgof-active-only  MUTATION APPLIED: <                   WHERE m.organization_id = p_org_id AND m.user_id = auth.uid()) >                   WHERE m.organization_id = p_org_id AND m.user_id = auth.u
+     FAIL|d03 suspended member gets own org features|OK false
+CONTROLS: pass=5 fail=1 error=0 checks=52 failed_checks=1
+KILLED|m5-bgof-active-only
+== m6-bgof-via-is_org_admin  MUTATION APPLIED: <   IF NOT EXISTS (SELECT 1 FROM public.organization_members m <                   WHERE m.organization_id = p_org_id AND m.user_id = auth.uid()) 
+     FAIL|d03 active agent with no submission gets features|OK false
+     FAIL|d03 suspended member gets own org features|OK false
+CONTROLS: pass=5 fail=1 error=0 checks=52 failed_checks=2
+KILLED|m6-bgof-via-is_org_admin
+== m7-bgof-no-check  MUTATION APPLIED: <   IF NOT EXISTS (SELECT 1 FROM public.organization_members m >   IF false AND NOT EXISTS (SELECT 1 FROM public.organization_members m 
+     FAIL|d03 outsider refused (not_member)|OK <null>
+     FAIL|d03 outsider gets no features|OK false
+CONTROLS: pass=5 fail=1 error=0 checks=52 failed_checks=2
+KILLED|m7-bgof-no-check
+== s2-bgof-no-org-predicate  MUTATION APPLIED: <                   WHERE m.organization_id = p_org_id AND m.user_id = auth.uid()) >                   WHERE m.user_id = auth.uid()) 
+     FAIL|d03 outsider refused (not_member)|OK <null>
+     FAIL|d03 outsider gets no features|OK false
+CONTROLS: pass=5 fail=1 error=0 checks=52 failed_checks=2
+KILLED|s2-bgof-no-org-predicate
+== s3-bgof-any-submission  MUTATION APPLIED: <                       WHERE s.organization_id = p_org_id AND s.submitted_by = auth.uid()) THEN >                       WHERE s.organization_id = p_org_id) THE
+     FAIL|d03 outsider refused (not_member)|OK <null>
+     FAIL|d03 outsider gets no features|OK false
+CONTROLS: pass=5 fail=1 error=0 checks=52 failed_checks=2
+KILLED|s3-bgof-any-submission
+== n1-3940-with-check-old  MUTATION APPLIED: <   WITH CHECK (public.has_internal_role((SELECT auth.uid()))); >   WITH CHECK (EXISTS (SELECT 1 FROM public.organization_members om WHERE om.user_id = (SELECT 
+     FAIL|d04 brokerage admin insert refused|OK rows=1
+     FAIL|d04 internal insert lands|ERR 42501 new row violates row-level security policy for table "support_ticket_backlog_links"
+     FAIL|d05 links policy: ALL, authenticated, has_internal_role in USING and WITH CHECK|ALL {authenticated} has_internal_role(( SELECT auth.uid() AS uid)) / (EXISTS ( SELECT 1
+CONTROLS: pass=4 fail=2 error=0 checks=52 failed_checks=3
+KILLED|n1-3940-with-check-old
+== n2-3940-internal-or-admin  MUTATION APPLIED: <   USING (public.has_internal_role((SELECT auth.uid()))) <   WITH CHECK (public.has_internal_role((SELECT auth.uid()))); 
+     FAIL|d04 brokerage admin insert refused|OK rows=1
+     FAIL|d04 brokerage admin delete refused|OK rows=1
+     FAIL|d04 brokerage admin update refused|OK rows=1
+     FAIL|d05 links policy: ALL, authenticated, has_internal_role in USING and WITH CHECK|ALL {authenticated} (has_internal_role(( SELECT auth.uid() AS uid)) OR (EXISTS ( SELECT 1
+CONTROLS: pass=4 fail=2 error=0 checks=52 failed_checks=4
+KILLED|n2-3940-internal-or-admin
+== n3-3940-keep-read  MUTATION APPLIED: < DROP POLICY IF EXISTS "Authenticated users can read links" ON public.support_ticket_backlog_links; 
+     FAIL|d04 non-internal read: 0 rows|OK 1
+     FAIL|d05 links: exactly one policy|Authenticated users can read links,support_ticket_backlog_links_internal_all
+CONTROLS: pass=4 fail=2 error=0 checks=52 failed_checks=2
+KILLED|n3-3940-keep-read
+== n4-3940-to-public  MUTATION APPLIED: <   FOR ALL TO authenticated >   FOR ALL TO public 
+     FAIL|d05 links policy: ALL, authenticated, has_internal_role in USING and WITH CHECK|ALL {public} has_internal_role(( SELECT auth.uid() AS uid)) / has_internal_role(( SELECT auth.uid() AS uid))
+     FAIL|d06 links policy TO authenticated FOR ALL|support_ticket_backlog_links_internal_all ALL {public}
+CONTROLS: pass=4 fail=2 error=0 checks=52 failed_checks=2
+KILLED|n4-3940-to-public
+MUTANTS: killed=16 survived=0 invalid=0
