@@ -35,6 +35,7 @@ import { getImpersonationSession } from '@/lib/impersonation';
 import {
   PORTAL_MEMBERSHIP_SELECT,
   isPersonalMembership,
+  memberStatusGrantsAccess,
   pickBrokerageMembership,
   type PortalMembershipRow,
 } from '@/lib/auth/membership';
@@ -100,6 +101,9 @@ export async function requireChecklistAccess(): Promise<ChecklistAccess> {
 
   const membership = pickChecklistMembership(memberships);
   if (!membership) throw new Error('Not authorized');
+  // BACKLOG-3917: a row whose status does not grant access opens nothing,
+  // and there is no fall-through to the personal organization.
+  if (!memberStatusGrantsAccess(membership.license_status)) throw new Error('Not authorized');
 
   // Boolean only: the route and every action refuse when the database
   // refuses. The sidebar's grayed entry (lib/checklist-nav.ts, BACKLOG-3477)

@@ -180,7 +180,7 @@ describe('requireChecklistAccess — allows', () => {
     await requireChecklistAccess();
     expect(emu.state.selects).toContainEqual({
       table: 'organization_members',
-      columns: 'role, organization_id, organizations(*)',
+      columns: 'role, organization_id, license_status, organizations(*)',
     });
     expect(emu.state.orders.filter((o) => o.table === 'organization_members').map((o) => o.column)).toEqual([
       'created_at',

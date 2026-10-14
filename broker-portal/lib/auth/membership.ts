@@ -52,7 +52,21 @@
  * the caller reads `data: null`, i.e. "no membership", which is the same silent
  * demotion. The rows come back ordered and this module picks.
  */
-export const PORTAL_MEMBERSHIP_SELECT = 'role, organization_id, organizations(*)';
+export const PORTAL_MEMBERSHIP_SELECT = 'role, organization_id, license_status, organizations(*)';
+
+/**
+ * BACKLOG-3917: the membership `license_status` values that grant anything.
+ *
+ * An ALLOW-list, so a status this file has never heard of grants nothing.
+ * The database's `member_status_grants_access(text)` holds the same list;
+ * the two change together (BACKLOG-3851).
+ */
+export const PORTAL_GRANTING_LICENSE_STATUSES = ['active'] as const;
+
+/** Does this membership `license_status` grant portal rights? Missing / null = no. */
+export function memberStatusGrantsAccess(status: string | null | undefined): boolean {
+  return typeof status === 'string' && (PORTAL_GRANTING_LICENSE_STATUSES as readonly string[]).includes(status);
+}
 
 /** The embedded organization record, of which only one key is read here. */
 export interface EmbeddedOrganization {
@@ -71,6 +85,12 @@ export interface EmbeddedOrganization {
 export interface PortalMembershipRow {
   role: string;
   organization_id: string;
+  /**
+   * BACKLOG-3917. A base column (NOT NULL, CHECK pending|active|suspended|expired),
+   * so it is present in every response to {@link PORTAL_MEMBERSHIP_SELECT}.
+   * Optional in the type only so a row missing it reads as NOT granting.
+   */
+  license_status?: string | null;
   /**
    * Object on the wire; ARRAY in the type.
    *
@@ -163,7 +183,11 @@ export type PortalAccess =
   | { kind: 'full'; role: string; organizationId: string }
   | {
       kind: 'floor';
-      via: 'brokerage' | 'personal_owner';
+      /**
+       * deactivated (BACKLOG-3917): the first brokerage row's `license_status`
+       * does not grant access. Never falls through to a personal organization.
+       */
+      via: 'brokerage' | 'personal_owner' | 'deactivated';
       role: string;
       organizationId: string;
     }
@@ -175,8 +199,10 @@ export type PortalAccess =
  *
  * In order:
  *   1. Not an array (an error result) -> unknown.
- *   2. The first brokerage row decides: a full role -> full; ANY other role ->
- *      floor. An unrecognised role therefore fails closed to the floor.
+ *   2. The first brokerage row decides: a status that does not grant access
+ *      -> floor/deactivated (BACKLOG-3917; no fall-through to step 3); else a
+ *      full role -> full; ANY other role -> floor. An unrecognised role or
+ *      status therefore fails closed.
  *   3. Otherwise a personal organization whose owner IS this user -> floor.
  *      Equality with the session user, never mere presence of the owner key:
  *      a member of somebody else's personal organization is not its owner.
@@ -190,6 +216,14 @@ export function classifyPortalAccess(
 
   const brokerage = pickBrokerageMembership(rows);
   if (brokerage) {
+    if (!memberStatusGrantsAccess(brokerage.license_status)) {
+      return {
+        kind: 'floor',
+        via: 'deactivated',
+        role: brokerage.role,
+        organizationId: brokerage.organization_id,
+      };
+    }
     if ((FULL_PORTAL_ROLES as readonly string[]).includes(brokerage.role)) {
       return { kind: 'full', role: brokerage.role, organizationId: brokerage.organization_id };
     }
@@ -263,6 +297,8 @@ export function mayOpenDashboardPath(access: PortalAccess, pathname: string): bo
   for (const base of FLOOR_PATHS) {
     if (base !== '/dashboard' && isUnder(pathname, base)) return true;
   }
+  // BACKLOG-3917: a deactivated member opens the floor paths only.
+  if (access.kind === 'floor' && access.via === 'deactivated') return false;
   for (const base of OWN_GATE_PATHS) {
     if (isUnder(pathname, base)) return true;
   }

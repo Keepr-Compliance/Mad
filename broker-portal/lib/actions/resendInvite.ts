@@ -11,6 +11,7 @@ import * as Sentry from '@sentry/nextjs';
 import { createClient } from '@/lib/supabase/server';
 import { randomBytes } from 'crypto';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
+import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
 import { sendInviteEmail } from '@/lib/email';
 
 interface ResendInviteInput {
@@ -35,14 +36,10 @@ export async function resendInvite(input: ResendInviteInput): Promise<ResendInvi
     return { success: false, error: 'Not authenticated' };
   }
 
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('role, organization_id')
-    .eq('user_id', user.id)
-    .eq('organization_id', input.organizationId)
-    .maybeSingle();
+  // BACKLOG-3917: role, access-granting status and licence, in this organization.
+  const membership = await requireActiveOrgRole(supabase, user.id, input.organizationId, ['admin', 'it_admin']);
 
-  if (!membership || !['admin', 'it_admin'].includes(membership.role)) {
+  if (!membership.ok) {
     return { success: false, error: 'Not authorized' };
   }
 

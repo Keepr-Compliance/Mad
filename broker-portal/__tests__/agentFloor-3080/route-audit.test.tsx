@@ -473,6 +473,7 @@ const submissionChecklists = () => import('@/lib/actions/submissionChecklists');
 /** Everything above the floor. 6 user-admin + 11 in scim.ts. */
 const REFUSED_ACTIONS: Record<string, ActionEntry> = {
   'lib/actions/bulkUpdateRole.ts#bulkUpdateRole': act(users, 'bulkUpdateRole', {
+    organizationId: FIXTURE_BROKERAGE_ORG_ID,
     memberIds: [TARGET_MEMBER_ID],
     newRole: 'broker',
   }),

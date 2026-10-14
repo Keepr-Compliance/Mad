@@ -9,8 +9,11 @@
 import { createClient } from '@/lib/supabase/server';
 import type { Role } from '@/lib/types/users';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
+import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
 
 interface BulkUpdateRoleInput {
+  /** BACKLOG-3917: the organization the caller acts in; the caller's row there decides. */
+  organizationId: string;
   memberIds: string[];
   newRole: Role;
 }
@@ -38,13 +41,11 @@ export async function bulkUpdateRole(
     return { success: false, error: 'Not authenticated' };
   }
 
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('role, organization_id')
-    .eq('user_id', user.id)
-    .maybeSingle();
+  // BACKLOG-3917: the caller's row in the TARGET organization (was: any one row
+  // of theirs), with an access-granting status and a licence not suspended.
+  const membership = await requireActiveOrgRole(supabase, user.id, input.organizationId, ['admin', 'it_admin']);
 
-  if (!membership || !['admin', 'it_admin'].includes(membership.role)) {
+  if (!membership.ok) {
     return { success: false, error: 'Not authorized to update roles' };
   }
 
@@ -70,7 +71,7 @@ export async function bulkUpdateRole(
   const { data, error } = await supabase
     .from('organization_members')
     .update({ role: input.newRole, updated_at: new Date().toISOString() })
-    .eq('organization_id', membership.organization_id)
+    .eq('organization_id', input.organizationId)
     .in('id', memberIdsToUpdate)
     .neq('user_id', user.id) // Don't update own role
     .select('id');

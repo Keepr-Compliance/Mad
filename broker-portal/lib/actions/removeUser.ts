@@ -12,6 +12,7 @@
 import { createClient } from '@/lib/supabase/server';
 import type { Role } from '@/lib/types/users';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
+import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
 
 // ============================================================================
 // Types
@@ -60,25 +61,23 @@ export async function removeUser(input: RemoveInput): Promise<RemoveResult> {
     return { success: false, error: 'Member not found' };
   }
 
-  // Get current user's membership
-  const { data: currentMembership } = await supabase
-    .from('organization_members')
-    .select('role')
-    .eq('user_id', user.id)
-    .eq('organization_id', targetMember.organization_id)
-    .single();
+  // BACKLOG-3917: the caller's own row in the TARGET organization, with an
+  // access-granting status and a licence that is not suspended.
+  const currentMembership = await requireActiveOrgRole(supabase, user.id, targetMember.organization_id, [
+    'admin',
+    'it_admin',
+  ]);
 
-  if (!currentMembership) {
-    return { success: false, error: 'Not authorized' };
+  if (!currentMembership.ok) {
+    return {
+      success: false,
+      error: currentMembership.reason === 'role' ? 'Not authorized to remove users' : 'Not authorized',
+    };
   }
 
   // Permission checks
   const currentUserRole = currentMembership.role as Role;
 
-  // Only admin/it_admin can remove users
-  if (!['admin', 'it_admin'].includes(currentUserRole)) {
-    return { success: false, error: 'Not authorized to remove users' };
-  }
 
   // Cannot remove yourself
   if (targetMember.user_id === user.id) {

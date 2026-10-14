@@ -42,6 +42,10 @@ function makeClient(results: unknown[], userId: string | null) {
         ops.push(['single']);
         return result();
       };
+      builder.maybeSingle = () => {
+        ops.push(['maybeSingle']);
+        return result();
+      };
       builder.then = (ok: (_v: unknown) => unknown, bad?: (_e: unknown) => unknown) => result().then(ok, bad);
       return builder;
     },
@@ -50,6 +54,12 @@ function makeClient(results: unknown[], userId: string | null) {
 }
 
 const ADMIN = 'user-admin';
+/**
+ * BACKLOG-3917: the caller's licence, read alongside the membership (licenses
+ * 'status'; 'active' is a value prod holds). Membership is read first, then the
+ * licence, so each test queues them in that order.
+ */
+const LICENCE_ACTIVE = { data: { status: 'active' }, error: null };
 const ORG = 'org-1';
 const MEMBER = 'member-9';
 
@@ -64,7 +74,8 @@ describe('deactivateUser service-role write (BACKLOG-3843)', () => {
     const user = makeClient(
       [
         { data: { id: MEMBER, user_id: 'user-x', role: 'agent', organization_id: ORG, license_status: 'active' } },
-        { data: { role: 'admin' } },
+        { data: { role: 'admin', license_status: 'active' } },
+        LICENCE_ACTIVE,
       ],
       ADMIN
     );
@@ -97,6 +108,7 @@ describe('deactivateUser service-role write (BACKLOG-3843)', () => {
       [
         { data: { id: MEMBER, user_id: 'user-x', role: 'agent', organization_id: 'org-other', license_status: 'active' } },
         { data: null },
+        LICENCE_ACTIVE,
       ],
       ADMIN
     );
@@ -116,7 +128,8 @@ describe('deactivateUser service-role write (BACKLOG-3843)', () => {
     const user = makeClient(
       [
         { data: { id: MEMBER, user_id: 'user-x', role: 'agent', organization_id: ORG, license_status: 'active' } },
-        { data: { role: 'agent' } },
+        { data: { role: 'agent', license_status: 'active' } },
+        LICENCE_ACTIVE,
       ],
       'user-agent'
     );
