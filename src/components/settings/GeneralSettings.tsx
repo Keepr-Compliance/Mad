@@ -5,7 +5,11 @@ import { settingsService } from '../../services';
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
 import { InfoTooltip } from '../common/InfoTooltip';
+import { isStoreBuild } from '../../utils/platform';
 import type { PreferencesResult } from './types';
+
+/** BACKLOG-3927: Settings text in the Microsoft Store build. */
+const STORE_UPDATES_SETTINGS_TEXT = "Keepr updates through the Microsoft Store.";
 
 interface GeneralSettingsProps {
   userId: string;
@@ -184,7 +188,14 @@ export function GeneralSettings({ userId, initialPreferences }: GeneralSettingsP
           </button>
         </div>
 
-        {/* Auto-Download Updates */}
+        {/* Auto-Download Updates. BACKLOG-3927: the Store build updates through
+            the Microsoft Store, so it shows that instead of the in-app updater. */}
+        {isStoreBuild() ? (
+        <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+          <h4 className="text-sm font-medium text-gray-900">Updates</h4>
+          <p className="text-xs text-gray-600 mt-1">{STORE_UPDATES_SETTINGS_TEXT}</p>
+        </div>
+        ) : (
         <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
           <div className="flex items-center justify-between">
             <div className="flex-1">
@@ -225,6 +236,7 @@ export function GeneralSettings({ userId, initialPreferences }: GeneralSettingsP
              'Check for Updates'}
           </button>
         </div>
+        )}
 
         {/* Notifications */}
         <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
