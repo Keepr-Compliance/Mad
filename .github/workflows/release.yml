@@ -392,15 +392,20 @@ jobs:
           Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
         shell: pwsh
 
-      # BACKLOG-3927: the Store build carries no Apple installer. Nothing above
-      # put one there; this clears any that a future step might, and the
-      # driver check after packaging is the gate.
+      # BACKLOG-3927: the Store build carries no Apple driver folder at all (not
+      # even its README.md / version.txt). Nothing above put an installer there;
+      # this removes the folder so packaging cannot ship it, and the driver
+      # check after packaging is the gate.
       - name: Store build - no Apple driver payload
         if: inputs.channel == 'store'
         shell: pwsh
         run: |
-          Get-ChildItem -Path "resources\win\apple-drivers" -Filter "*.msi" -ErrorAction SilentlyContinue | Remove-Item -Force
-          Get-ChildItem -Path "resources\win\apple-drivers" | Format-Table Name, Length
+          Remove-Item -Path "resources\win\apple-drivers" -Recurse -Force -ErrorAction SilentlyContinue
+          if (Test-Path "resources\win\apple-drivers") {
+            echo "::error::resources\win\apple-drivers still exists in the Store build"
+            exit 1
+          }
+          echo "Store build: resources\win\apple-drivers removed"
 
       # Create .env.production with secrets for runtime use
       # The app loads credentials from this file at runtime (electron/main.ts)
