@@ -14,9 +14,10 @@ const config: Config = {
     './components/**/*.{js,ts,jsx,tsx,mdx}',
     './lib/**/*.{js,ts,jsx,tsx,mdx}',
     // Design-system primitives (still consumed directly for the Tier-2
-    // components) + the @keepr/ui component source, both paths (workspace
-    // symlink locally, standalone install on Vercel) so their classes
-    // survive purge.
+    // components) + the @keepr/ui component source, so their classes survive
+    // purge. Local and Vercel builds both install from the repo root (Vercel:
+    // `cd .. && npm ci`), so the source is under ../packages; the node_modules
+    // globs are a second path to the same files, kept as a harmless fallback.
     '../packages/design-system/src/**/*.{js,ts,jsx,tsx}',
     './node_modules/@keepr/design-system/src/**/*.{js,ts,jsx,tsx}',
     '../packages/ui/src/**/*.{js,ts,jsx,tsx}',
