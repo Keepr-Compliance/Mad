@@ -310,3 +310,118 @@ export function classifyPortalAccess(
 
   return { kind: 'none' };
 }
+
+// ===========================================================================
+// The one-line plan summary — BACKLOG-3859 (admin portal).
+// ===========================================================================
+//
+// Built ONLY from the functions above, so the admin portal shows exactly the
+// state the broker portal's Billing page computes. No price and no next-charge
+// date: founder question Q1 on 3859 is open and no price is stored anywhere
+// (price_book_price_id is NULL on every row; the price lives only in Stripe).
+// BACKLOG-3852 adds the amount behind a billing.view permission.
+
+export type PlanLineKind =
+  | 'brokerage'
+  | 'agent_unlimited'
+  | 'agent_ending'
+  | 'payment_failed'
+  | 'support_grant'
+  | 'support_grant_expired'
+  | 'pay_as_you_go'
+  | 'no_organization';
+
+export interface PlanLine {
+  kind: PlanLineKind;
+  text: string;
+  /** The line was read from a TEST-mode subscription row (only possible for a test-org user). */
+  test: boolean;
+  /** Set when the plan and Unlimited disagree, e.g. Unlimited on with no open subscription row. */
+  warning: string | null;
+}
+
+export interface PlanLineInput {
+  /** pickBrokerageMembership's row with its organization name, or null. */
+  brokerage: { orgName: string | null; licenseStatus: string | null | undefined } | null;
+  /** organizations.personal_owner_user_id = user (getPersonalOrganization's read). */
+  hasPersonalOrganization: boolean;
+  /** The user's Stripe mode: modeAllowsTestFlag on the personal organization's is_test. */
+  mode: StripeMode;
+  /** The user's billing_subscriptions rows IN `mode` (any status). */
+  rows: readonly AgentSubscriptionRow[];
+  /** feature_overrides.unlimited_transactions on the personal organization; undefined = key absent. */
+  override: UnlimitedOverride | undefined;
+  /** ANY licenses row of the user with status 'suspended'. */
+  suspended: boolean;
+  /** Credit balance, when the caller has it (detail page only). */
+  credits?: number;
+  now: Date;
+}
+
+/** YYYY-MM-DD of an ISO date-time, or null. Never reads the clock. */
+function isoDay(raw: unknown): string | null {
+  return typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : null;
+}
+
+/**
+ * Is Unlimited ON from this override, the way check_feature_access /
+ * get_org_features read it: present, _override_effective, and
+ * COALESCE(enabled, true). (The tier ceiling, _override_above_tier, is not
+ * mirrored: it needs the plan tier and only ever turns Unlimited OFF.)
+ */
+function overrideTurnsUnlimitedOn(override: UnlimitedOverride | undefined, now: Date): boolean {
+  if (override === undefined || override === null) return false;
+  if (!overrideEffective(override, now)) return false;
+  return override.enabled !== false;
+}
+
+export function planLine(input: PlanLineInput): PlanLine {
+  const prefix = input.suspended ? 'Suspended — ' : '';
+  const line = (kind: PlanLineKind, text: string, test = false, warning: string | null = null): PlanLine => ({
+    kind,
+    text: prefix + text,
+    test,
+    warning,
+  });
+
+  if (input.brokerage) {
+    const org = input.brokerage.orgName ?? 'unnamed organization';
+    const status = input.brokerage.licenseStatus ?? 'unknown';
+    if (memberStatusGrantsAccess(status)) return line('brokerage', `Brokerage ${org}, license assigned`);
+    if (status === 'pending') return line('brokerage', `Brokerage ${org}, invite pending`);
+    return line('brokerage', `Brokerage ${org}, no license (${status})`);
+  }
+
+  const row = pickAgentRow(input.rows);
+  const state = agentPlanState(row, input.override);
+  const fromTestRow = row !== null && input.mode === 'test';
+
+  switch (state) {
+    case 'active':
+      return line('agent_unlimited', 'Agent Unlimited, paid by Stripe', fromTestRow);
+    case 'cancel_pending': {
+      const day = isoDay(row?.current_period_end);
+      return line('agent_ending', `Agent Unlimited, paid by Stripe, ends ${day ?? 'at period end'}`, fromTestRow);
+    }
+    case 'payment_failed':
+      return line('payment_failed', 'Agent Unlimited, payment failed', fromTestRow);
+    case 'support_grant': {
+      if (!overrideEffective(input.override ?? null, input.now)) {
+        return line('support_grant_expired', 'Unlimited support grant (expired)');
+      }
+      const until = isoDay(input.override?.paid_through);
+      return line('support_grant', until ? `Unlimited support grant until ${until}` : 'Unlimited support grant');
+    }
+    case 'none':
+    default: {
+      if (!input.hasPersonalOrganization && input.rows.length === 0) {
+        return line('no_organization', 'No plan (no organization)');
+      }
+      const credits = typeof input.credits === 'number' ? `, ${input.credits} credits` : '';
+      const warning = overrideTurnsUnlimitedOn(input.override, input.now)
+        ? 'Unlimited is on, but no open subscription was found'
+        : null;
+      return line('pay_as_you_go', `Solo Pay as you go${credits}`, false, warning);
+    }
+  }
+}

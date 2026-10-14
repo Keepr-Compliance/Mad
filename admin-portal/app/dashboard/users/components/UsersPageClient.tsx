@@ -9,7 +9,7 @@
  * BACKLOG-1492: Added Invite User button gated on users.edit permission.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { PageHeader, Button } from '@keepr/design-system';
 import { UserSearchBar } from './UserSearchBar';
 import { UserResultsTable } from './UserResultsTable';
@@ -17,6 +17,8 @@ import { InviteUserDialog } from './InviteUserDialog';
 import { searchUsers, type AdminSearchUser } from '@/lib/admin-queries';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
 import { PERMISSIONS } from '@/lib/permissions';
+import { getPlanLines } from '@/lib/actions/planLines';
+import type { PlanCellState } from './UserResultsTable';
 
 export function UsersPageClient() {
   const [query, setQuery] = useState('');
@@ -24,6 +26,9 @@ export function UsersPageClient() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showInviteDialog, setShowInviteDialog] = useState(false);
+  const [planLines, setPlanLines] = useState<PlanCellState>({ status: 'idle' });
+  // Only the latest search may write the Plan column (a slow earlier answer must not).
+  const planRequest = useRef(0);
   const { hasPermission } = usePermissions();
 
   const canInvite = hasPermission(PERMISSIONS.USERS_EDIT);
@@ -40,6 +45,23 @@ export function UsersPageClient() {
       setUsers(data);
     }
     setIsLoading(false);
+
+    // BACKLOG-3859: one batched server action per result page (never per row).
+    const ids = (searchError ? [] : data ?? []).map((u) => u.id);
+    const req = ++planRequest.current;
+    if (ids.length === 0) {
+      setPlanLines({ status: 'idle' });
+      return;
+    }
+    setPlanLines({ status: 'loading' });
+    try {
+      const res = await getPlanLines(ids);
+      if (req !== planRequest.current) return;
+      setPlanLines(res.ok ? { status: 'ready', lines: res.lines } : { status: 'error' });
+    } catch {
+      if (req !== planRequest.current) return;
+      setPlanLines({ status: 'error' });
+    }
   }, []);
 
   useEffect(() => {
@@ -77,6 +99,7 @@ export function UsersPageClient() {
           query={query}
           isLoading={isLoading}
           error={error}
+          planLines={planLines}
         />
       </div>
 
