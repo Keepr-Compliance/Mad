@@ -331,6 +331,7 @@ export default function UserListClient({
       <BulkEditRoleModal
         isOpen={isBulkEditOpen}
         onClose={() => { setIsBulkEditOpen(false); setSelectedIds(new Set()); }}
+        organizationId={organizationId}
         memberIds={selectedNonSelf.map((m) => m.id)}
         memberCount={selectedNonSelf.length}
         currentUserRole={currentUserRole}

@@ -7,6 +7,7 @@ import { requireScimAccess, isScimProvisioningEnabled } from '@/lib/scim-access'
 import { requireJitAccess, isJitProvisioningEnabled } from '@/lib/jit-access';
 import { isFeatureEnabledFailClosed } from '@/lib/feature-gate';
 import { RETENTION_FEATURE_KEY } from '@/lib/org-settings-access';
+import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
 
 /**
  * BACKLOG-3087: the four SCIM-specific actions below (generateScimToken,
@@ -108,6 +109,10 @@ export async function getRetentionPolicy() {
     .single();
 
   if (!membership) throw new Error('Not authorized');
+  // BACKLOG-3917: status allow-list + licence, on that organization's row.
+  if (!(await requireActiveOrgRole(supabase, user.id, membership.organization_id, ['admin', 'it_admin'])).ok) {
+    throw new Error('Not authorized');
+  }
 
   const { data: org } = await supabase
     .from('organizations')
@@ -139,6 +144,10 @@ export async function updateRetentionPolicy(retentionYears: number) {
     .single();
 
   if (!membership) throw new Error('Not authorized');
+  // BACKLOG-3917: status allow-list + licence, on that organization's row.
+  if (!(await requireActiveOrgRole(supabase, user.id, membership.organization_id, ['admin', 'it_admin'])).ok) {
+    throw new Error('Not authorized');
+  }
 
   if (retentionYears < 1 || retentionYears > 10) {
     throw new Error('Retention must be between 1 and 10 years');
@@ -178,6 +187,10 @@ export async function getConsentStatus() {
     .single();
 
   if (!membership) throw new Error('Not authorized');
+  // BACKLOG-3917: status allow-list + licence, on that organization's row.
+  if (!(await requireActiveOrgRole(supabase, user.id, membership.organization_id, ['admin', 'it_admin'])).ok) {
+    throw new Error('Not authorized');
+  }
 
   const { data: org } = await supabase
     .from('organizations')

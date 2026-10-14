@@ -13,6 +13,8 @@ import { createClient } from '@/lib/supabase/server';
 import { createServiceClient } from '@/lib/supabase/service';
 import type { Role } from '@/lib/types/users';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
+import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
+import { PORTAL_GRANTING_LICENSE_STATUSES } from '@/lib/auth/membership';
 
 // ============================================================================
 // Types
@@ -66,25 +68,23 @@ export async function deactivateUser(input: DeactivateInput): Promise<Deactivate
     return { success: false, error: 'Cannot deactivate pending invitations. Use remove instead.' };
   }
 
-  // Get current user's membership
-  const { data: currentMembership } = await supabase
-    .from('organization_members')
-    .select('role')
-    .eq('user_id', user.id)
-    .eq('organization_id', targetMember.organization_id)
-    .single();
+  // BACKLOG-3917: the caller's own row in the TARGET organization, with an
+  // access-granting status and a licence that is not suspended.
+  const currentMembership = await requireActiveOrgRole(supabase, user.id, targetMember.organization_id, [
+    'admin',
+    'it_admin',
+  ]);
 
-  if (!currentMembership) {
-    return { success: false, error: 'Not authorized' };
+  if (!currentMembership.ok) {
+    return {
+      success: false,
+      error: currentMembership.reason === 'role' ? 'Not authorized to deactivate users' : 'Not authorized',
+    };
   }
 
   // Permission checks
   const currentUserRole = currentMembership.role as Role;
 
-  // Only admin/it_admin can deactivate users
-  if (!['admin', 'it_admin'].includes(currentUserRole)) {
-    return { success: false, error: 'Not authorized to deactivate users' };
-  }
 
   // Cannot deactivate yourself
   if (targetMember.user_id === user.id) {
@@ -103,7 +103,7 @@ export async function deactivateUser(input: DeactivateInput): Promise<Deactivate
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', targetMember.organization_id)
       .in('role', ['admin', 'it_admin'])
-      .eq('license_status', 'active')
+      .in('license_status', [...PORTAL_GRANTING_LICENSE_STATUSES])
       .neq('id', input.memberId);
 
     if (count === 0) {

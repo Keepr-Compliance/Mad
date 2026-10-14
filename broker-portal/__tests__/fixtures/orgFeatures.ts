@@ -204,8 +204,14 @@ export function makeQuery(result: TableResult) {
 export interface StubOptions {
   /** null => unauthenticated */
   user?: { id: string } | null;
-  /** null => no membership row matched (wrong role, or not a member) */
-  membership?: { organization_id: string; role?: string } | null;
+  /**
+   * null => no membership row matched (wrong role, or not a member).
+   * BACKLOG-3917: `license_status` defaults to 'active' — the value every writer
+   * that links a user_id sets (claim_pending_invite, jit_join_organization,
+   * auto_provision_it_admin, the OAuth callback invite link); prod holds no
+   * linked row with any other value (step-0 count, 2026-10-13).
+   */
+  membership?: { organization_id: string; role?: string; license_status?: string | null } | null;
   /** What supabase.rpc() resolves to. */
   rpc?: { data?: unknown; error?: unknown };
   /** Per-table terminal results for anything other than organization_members. */
@@ -222,7 +228,8 @@ export interface StubOptions {
  * nothing matched. The row carries the brokerage embed transcribed in
  * helpers/postgrestEmulator.ts, because that query selects `organizations(*)`.
  */
-function membershipQuery(membership: StubOptions['membership']) {
+function membershipQuery(input: StubOptions['membership']) {
+  const membership = input ? { license_status: 'active', ...input } : input;
   const q = makeQuery({ data: membership ?? null, error: null });
   const rows = membership
     ? [{ ...membership, organizations: { ...BROKERAGE_ORG_POST, id: membership.organization_id } }]

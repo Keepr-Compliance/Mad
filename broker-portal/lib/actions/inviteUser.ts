@@ -13,6 +13,7 @@ import * as Sentry from '@sentry/nextjs';
 import { createClient } from '@/lib/supabase/server';
 import { randomBytes } from 'crypto';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
+import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
 import { sendInviteEmail } from '@/lib/email';
 
 // ============================================================================
@@ -94,14 +95,10 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
     return { success: false, error: 'You cannot invite yourself' };
   }
 
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('role, organization_id')
-    .eq('user_id', user.id)
-    .eq('organization_id', input.organizationId)
-    .maybeSingle();
+  // BACKLOG-3917: role, access-granting status and licence, in this organization.
+  const membership = await requireActiveOrgRole(supabase, user.id, input.organizationId, ['admin', 'it_admin']);
 
-  if (!membership || !['admin', 'it_admin'].includes(membership.role)) {
+  if (!membership.ok) {
     return { success: false, error: 'Not authorized to invite users' };
   }
 
