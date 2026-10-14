@@ -44,6 +44,14 @@ const mockGetUser = jest.fn();
  * The feature half is taken as ON, the same convention as the forced-ON
  * feature-gate mock below. Reads the fixture rows directly so the read log the
  * refusal rows assert on is unchanged. Every other RPC answers null.
+ *
+ * BACKLOG-3917: production's definitions of this function,
+ * can_create_own_checklist_templates and can_review_submission now also
+ * require member_status_grants_access(license_status) (migration
+ * 20261014002359). The three emulations below KEEP the earlier shape on
+ * purpose: the BACKLOG-3917 block at the end of this file proves the portal
+ * refuses a deactivated member on its own, which is only observable while the
+ * emulated database would still have said yes.
  */
 const CHECKLIST_EDITOR_ROLES = ['broker', 'admin', 'it_admin'];
 function canEditChecklistTemplates(orgId: unknown): boolean {
