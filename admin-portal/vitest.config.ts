@@ -17,6 +17,10 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, '.'),
+      // BACKLOG-3859: @keepr/shared maps to THIS checkout's source (also matches
+      // '@keepr/shared/<sub>'). Without it, vitest follows node_modules/@keepr/shared,
+      // a symlink that in a git worktree points at the main checkout's packages/shared.
+      '@keepr/shared': path.resolve(__dirname, '../packages/shared/src'),
     },
   },
 });

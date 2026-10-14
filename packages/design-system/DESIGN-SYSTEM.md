@@ -13,7 +13,7 @@ bordered cards, sky-blue `primary` accents, lucide icons, and a `text-sm` body s
 ## Consuming the package
 
 Each portal wires the design system three ways (all three are required — see
-"Vercel constraint" below):
+"How Vercel installs" below):
 
 ```jsonc
 // <portal>/package.json
@@ -29,8 +29,8 @@ const config: Config = {
     './app/**/*.{js,ts,jsx,tsx,mdx}',
     './components/**/*.{js,ts,jsx,tsx,mdx}',
     './lib/**/*.{js,ts,jsx,tsx,mdx}',
-    // Both globs so primitive classes survive purge locally (workspace symlink)
-    // and on Vercel (standalone install):
+    // Both globs so primitive classes survive purge whichever path the
+    // package resolves through (source dir or the node_modules link):
     '../packages/design-system/src/**/*.{js,ts,jsx,tsx}',
     './node_modules/@keepr/design-system/src/**/*.{js,ts,jsx,tsx}',
   ],
@@ -49,15 +49,18 @@ webpack: (config) => {
 },
 ```
 
-**Vercel constraint (important):** each portal deploys as a separate Vercel project
-whose Root Directory is the portal folder, and `npm install` runs standalone there
-(see the committed `admin-portal/package-lock.json` and the historical
-"NOT from @keepr/shared per Vercel deploy limitation" comments). Workspace
-specifiers (`"*"`) 404 on Vercel; the `file:../packages/design-system` dependency
-works only when "Include source files outside of the Root Directory" is enabled in
-the Vercel project settings (the default for current projects). After changing a
-portal's `package.json`, regenerate `admin-portal/package-lock.json` standalone:
-`cd admin-portal && npm install --package-lock-only --ignore-scripts --workspaces=false`.
+**How Vercel installs (corrected BACKLOG-3859):** each portal deploys as a separate
+Vercel project whose Root Directory is the portal folder, but the install runs from
+the **repo root**: both `admin-portal/vercel.json` and `broker-portal/vercel.json`
+set `"installCommand": "cd .. && npm ci --ignore-scripts --include=dev"` (since
+2026-07-05). The root `package-lock.json` covers both portals and every
+`packages/*` workspace; neither portal has a lockfile of its own. So any package
+under `packages/` (`@keepr/design-system`, `@keepr/ui`, `@keepr/shared`) is
+available to a portal build. `scripts/vercel-ignore-build.sh` rebuilds a portal
+when `packages/` changes. Workspace packages ship raw TS, so a portal needs the
+tsconfig `paths` entry and the `transpilePackages` entry for each one it imports.
+The older text here (a standalone per-portal install and a committed
+`admin-portal/package-lock.json`) described the setup before that change.
 
 **lucide-react is a peer dependency** with range `>=0.468.0 <2.0.0` because admin
 ships 0.468.0 and broker 1.7.0. Any icon used inside the design system (or shared

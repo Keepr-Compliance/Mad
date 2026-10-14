@@ -27,11 +27,12 @@
  */
 
 import type { PortalAccess } from '@/lib/auth/membership';
+import type { AgentPlanState } from '@keepr/shared';
 
 export type BillingBlock = 'plan' | 'choose_plan' | 'seats' | 'credits' | 'payment' | 'invoices';
 
-/** The personal Agent plan as billing_subscriptions will report it (3847). */
-export type AgentPlanState = 'none' | 'active' | 'cancel_pending' | 'payment_failed' | 'support_grant';
+/** The personal Agent plan as billing_subscriptions will report it (3847). Declared once, in packages/shared (BACKLOG-3859). */
+export type { AgentPlanState } from '@keepr/shared';
 
 export type BillingPrimaryAction =
   | 'cancel_plan'
