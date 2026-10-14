@@ -27,8 +27,8 @@ PARITY=("$M/20261003160000_backlog_3673_onboarding_completed_backfill.sql"
         "$M/20261010150116_backlog_3843_org_member_client_write_lockdown.sql"
         "$H/lib/prod-bodies-3917.sql")
 MIG3917="$M/20261014002359_backlog_3917_member_status_allow_list.sql"
-MIG3938="${MIG3938_OVERRIDE:-$M/20261014120000_backlog_3938_membership_helpers_caller_only.sql}"
-MIG3940="${MIG3940_OVERRIDE:-$M/20261014120100_backlog_3940_support_links_internal_only.sql}"
+MIG3938="${MIG3938_OVERRIDE:-$M/20261014053520_backlog_3938_membership_helpers_caller_only.sql}"
+MIG3940="${MIG3940_OVERRIDE:-$M/20261014061621_backlog_3940_support_links_internal_only.sql}"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 psql_in() {
   if [ "$SSH_HOST" = local ]; then docker exec -i "$CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 -X -q -tA -f -
