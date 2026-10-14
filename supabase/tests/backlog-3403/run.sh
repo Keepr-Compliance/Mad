@@ -99,5 +99,5 @@ case "${1:-}" in
       [ ${#details[@]} -gt 0 ] && printf '%s\n' "${details[@]}" | cut -c1-260
     done
     echo "mutants: $total run, $missed not as expected"; [ $total -gt 0 ] || exit 1; [ $missed -eq 0 ] || exit 1 ;;
-  *) sed -n '2,19p' "${BASH_SOURCE[0]}"; exit 2 ;;
+  *) sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac
