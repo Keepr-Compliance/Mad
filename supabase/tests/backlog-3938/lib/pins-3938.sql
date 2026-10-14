@@ -1,4 +1,6 @@
 -- Every object 3938/3940 touches or calls must equal production (read 2026-10-14).
+-- HISTORICAL (BACKLOG-3945, 2026-10-14): production before ledger 20261014053520, not
+-- production today. Checks the venue this harness builds; r03 compares to it by design.
 DO $pin$ DECLARE bad text; BEGIN
   WITH prod(k, v) AS (VALUES
     ('fn broker_get_org_features(uuid)', 'b61e499f7c1c0ed83f551c0cc46707a0'),

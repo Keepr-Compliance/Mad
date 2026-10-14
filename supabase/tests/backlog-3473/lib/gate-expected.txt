@@ -1,4 +1,5 @@
 # BACKLOG-3473 venue gate: production's output of lib/gate-catalog.sql, read-only via the Supabase MCP, 2026-09-21, BEFORE migrations 1-3.
+# HISTORICAL (BACKLOG-3945, 2026-10-14): production before ledger 20260921101756, not production today. Checks the venue this harness replays onto.
 # key|value, 252 rows, sorted with COLLATE "C"; md5 of the rows joined by newlines plus a final newline = f49de2c3024d427245b2341d8eb42d0b.
 # Schema, function definitions, grants, and plan / feature catalogue data only; no organization, user or submission row.
 # run.sh gate compares the venue row by row; differences must be listed in gate-accepted.txt with a reason

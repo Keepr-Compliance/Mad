@@ -12,9 +12,12 @@
 # PSQL may name lib/ssh-psql.sh when the venue answers SSH only (see README).
 #
 # Commands, in the order the README runs them:
-#   gate          venue gate: role, server >= 14, catalog fingerprint vs production.
-#                 The three read functions must match production exactly (never
-#                 accepted), because teardown restores them from lib/rpc-before.sql.
+#   gate          venue gate: role, server >= 14, catalog fingerprint vs the pins in
+#                 lib/gate-expected.txt (production as of 2026-09-21, BEFORE ledger
+#                 20260921101756; historical, not production today). The three read
+#                 functions must match exactly (never accepted), because teardown
+#                 restores them from lib/rpc-before.sql. A venue key absent from
+#                 gate-expected.txt fails the gate (UNKNOWN).
 #   apply-prod    C21 (K3 order), ONE transaction, rolled back:
 #                 files 1->2->3, toggle team x transaction_checklists, S1,
 #                 files 1->2->3 again, S2, S1 = S2 both ways
@@ -24,20 +27,24 @@
 #   mutants       every mutants/m*.sql and f*.sql against the controls named on its
 #                 `-- targets:` line (MATRIX=1: against every control)
 #   apply         COMMITTED apply of files 1 and 2 (never 3) for the PostgREST probe,
-#                 each in one transaction, then NOTIFY pgrst
+#                 each in one transaction, then NOTIFY pgrst. File 1's transaction
+#                 starts with lib/apply-guard.sql: refuses unless the venue is at the
+#                 pre-3473 baseline, and writes the marker teardown requires
 #   probe-seed    postgrest/seed.sql (committed)
 #   probe         node postgrest/probe.mjs (needs SUPABASE_URL, SUPABASE_JWT_SECRET)
 #   probe-mutant  C22 mutant: REVOKE SELECT on checklist_templates from authenticated
 #                 (committed), probe must go RED, GRANT restored
 #   probe-cleanup postgrest/cleanup.sql
-#   teardown      lib/teardown.sql: restore the three read functions verbatim,
-#                 drop everything files 1 and 2 add, re-hash, remove history rows
+#   teardown      lib/teardown.sql: refuses without apply's marker; restore the three
+#                 read functions verbatim, drop everything files 1 and 2 add, re-hash,
+#                 remove history rows and the marker
 #   (then `gate` again: it must re-match)
 #
 # On a SCHEMA-ONLY venue (the NAS stack holds no rows), bracket the whole run:
 #   catalogue-seed      FIRST: lib/venue-catalogue.sql commits production's plan /
-#                       feature catalogue (refuses unless the 4 tables are empty;
-#                       re-hashes against production)
+#                       feature catalogue as of 2026-09-21 (historical; not production
+#                       today) (refuses unless the 4 tables are empty; re-hashes
+#                       against that pin)
 #   catalogue-teardown  LAST, after the re-gate: removes exactly that set again
 set -euo pipefail
 
@@ -64,7 +71,7 @@ export PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-15}"
 
 URL="${1:-}"; CMD="${2:-}"; ARG="${3:-}"
 if [ -z "$URL" ] || [ -z "$CMD" ]; then
-  sed -n '2,41p' "${BASH_SOURCE[0]}"; exit 2
+  sed -n '2,48p' "${BASH_SOURCE[0]}"; exit 2
 fi
 
 host="$(sed -E 's#^[a-z]+://([^@/]*@)?(\[[^]]+\]|[^:/?]+).*#\2#' <<<"$URL")"
@@ -188,8 +195,18 @@ case "$CMD" in
         fail=$((fail+1))
       fi
     done < "$HERE/lib/gate-expected.txt"
-    echo "gate: matched=$matched accepted=$accepted mismatched=$fail"
-    [ $fail -eq 0 ] || exit 1
+    # Keys the venue has and gate-expected.txt does not (the loop above reads
+    # expected keys only, so a new catalogue row would otherwise pass unseen).
+    unknown=0
+    while IFS= read -r key; do
+      [ -z "$key" ] && continue
+      echo "UNKNOWN   $key  -- on the venue, not in gate-expected.txt"
+      unknown=$((unknown+1))
+    done < <(LC_ALL=C comm -13 \
+               <(grep -v '^#' "$HERE/lib/gate-expected.txt" | cut -d'|' -f1 | LC_ALL=C sort -u) \
+               <(cut -d'|' -f1 <<<"$actual" | LC_ALL=C sort -u))
+    echo "gate: matched=$matched accepted=$accepted mismatched=$fail unknown=$unknown"
+    [ $fail -eq 0 ] && [ $unknown -eq 0 ] || exit 1
     ;;
 
   apply-prod)
@@ -296,7 +313,11 @@ case "$CMD" in
     ;;
 
   apply)
-    q -1 -f "$MIG1"
+    # File 1 runs in ONE transaction behind lib/apply-guard.sql: the guard refuses
+    # unless the venue is at the pre-3473 baseline, and writes the marker that
+    # teardown requires. Nothing commits unless the guard and all of file 1 pass.
+    { echo "BEGIN;"; echo "\\i $HERE/lib/apply-guard.sql"; echo "\\i $MIG1"; echo "COMMIT;"; } \
+      | "$PSQL" "$URL" -v ON_ERROR_STOP=1 -X -q
     q -c "insert into supabase_migrations.schema_migrations (version, name) values ('$STAMP1', 'backlog_3473_feature_reads_honour_min_tier') on conflict do nothing"
     q -1 -f "$MIG2"
     q -c "insert into supabase_migrations.schema_migrations (version, name) values ('$STAMP2', 'backlog_3473_transaction_checklists') on conflict do nothing"

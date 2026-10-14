@@ -1,5 +1,7 @@
 -- BACKLOG-3946: production's catalogue state for every object the three migrations touch or
 -- that calls one of the seven identity helpers (read 2026-10-14 via catalogue SELECT).
+-- HISTORICAL (BACKLOG-3945, 2026-10-14): production before ledger 20261014152722, not
+-- production today. Checks the venue this harness builds; r04 compares to it by design.
 --   fn  <regprocedure>      md5(prosrc)|sorted ACL|SECURITY DEFINER|volatility|proconfig
 --   pol <table>.<policy>    roles|cmd|md5(qual#with_check)
 -- pg_temp.prod3946() is that list; pg_temp.venue3946() reads the same keys from the venue.

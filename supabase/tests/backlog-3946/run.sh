@@ -4,14 +4,15 @@
 #   the BACKLOG-3917 harness layers (helpers, venue parity, fixtures, preconditions, the
 #   3917 migration), the BACKLOG-3938 libs (prod bodies, fixtures, pins), the 3938 and 3940
 #   migrations, lib/parity-3946.sql, lib/catalog-3946.sql, lib/pins-3946.sql (every helper
-#   and helper policy equals production, else ERROR), lib/fixtures-3946.sql,
+#   and helper policy equals production as read 2026-10-14 before ledger 20261014152722 --
+#   historical, not production today -- else ERROR), lib/fixtures-3946.sql,
 #   lib/capture-3946.sql (visibility fingerprint before), the stack under test, the control.
 # Nothing is ever committed. Run sets one at a time (they share fixture ids).
 #
 #   SSH_HOST=<ssh alias|local> PG_CONTAINER=<container> bash run.sh precheck
 #   ... run.sh controls [fragment]   # A + B + C
 #   ... run.sh twice    [fragment]   # A + B + C applied twice
-#   ... run.sh base     [fragment]   # none of them: production today (reds expected)
+#   ... run.sh base     [fragment]   # none of them: the pre-3946 state, historical (reds expected)
 #   ... run.sh variants              # wrong fixes (each must go red)
 #   ... run.sh mutants  [fragment]   # lib/mutants.py (each must go red)
 #   ... run.sh rollback              # each rollback alone, then all three

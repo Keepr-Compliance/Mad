@@ -11,6 +11,13 @@ Controls, wrong-fix variants, mutants and rollback checks for:
 Rollbacks: `rollback-A.sql` (production's five definitions, verbatim), `rollback-B.sql`
 (production's ACLs and policy roles), `rollback-C.sql` (production's table grants). Each runs alone.
 
+## Historical pins (BACKLOG-3945, 2026-10-14)
+
+"Production" in this harness means production as read 2026-10-14, before ledger 20261014152722
+(`lib/catalog-3946.sql`, the rollbacks). Production has moved past that state; the pins are historical, not a
+production-today check. They check the venue this harness builds, and the rollback controls
+compare against them by design (a rollback's target is the pre-change state).
+
 Every run is one transaction ending in ROLLBACK; nothing is committed. Layering per control:
 the BACKLOG-3917 harness (`../backlog-3917/lib/`, venue parity, fixtures, preconditions, the
 3917 migration), the BACKLOG-3938 libs (`../backlog-3938/lib/prod-bodies-3938.sql`,
@@ -23,10 +30,10 @@ catalogue state for 8 functions and 28 helper policies, read 2026-10-14), `lib/p
 Run sets one at a time: they share fixture ids.
 
 ```
-SSH_HOST=<alias|local> PG_CONTAINER=<container> bash run.sh precheck    # venue equals production on every pin
+SSH_HOST=<alias|local> PG_CONTAINER=<container> bash run.sh precheck    # venue equals the pre-3946 pins (historical; not production today)
 SSH_HOST=<alias|local> PG_CONTAINER=<container> bash run.sh controls    # A + B + C
 SSH_HOST=<alias|local> PG_CONTAINER=<container> bash run.sh twice       # A + B + C applied twice
-SSH_HOST=<alias|local> PG_CONTAINER=<container> bash run.sh base        # none applied (production today): reds expected
+SSH_HOST=<alias|local> PG_CONTAINER=<container> bash run.sh base        # none applied (pre-3946 state, historical): reds expected
 SSH_HOST=<alias|local> PG_CONTAINER=<container> bash run.sh variants    # wrong fixes: each must go red
 SSH_HOST=<alias|local> PG_CONTAINER=<container> bash run.sh mutants     # lib/mutants.py: each must go red
 SSH_HOST=<alias|local> PG_CONTAINER=<container> bash run.sh rollback    # each rollback alone, then all three
@@ -51,7 +58,7 @@ Recorded runs (this directory, unedited): `control-run.txt`, `twice-run.txt`, `b
 | r01 | `rollback-A.sql` alone after A + B + C: five bodies equal production; B's ACLs and policy roles and C's grants untouched. |
 | r02 | `rollback-B.sql` alone: seven ACLs and all 28 helper policies equal production; A's bodies and C's grants untouched. |
 | r03 | `rollback-C.sql` alone: links grants equal production; A and B untouched. |
-| r04 | All three rollbacks, then `lib/pins-3946.sql` again: every pin equals production. |
+| r04 | All three rollbacks, then `lib/pins-3946.sql` again: every pin equals the pre-3946 production pins. |
 
 `rollback` also runs e01-e06 after each rollback to show which checks go red; after all three
 the red set equals `base`. `rollback-negative-run.txt` runs r01-r04 with no rollback applied

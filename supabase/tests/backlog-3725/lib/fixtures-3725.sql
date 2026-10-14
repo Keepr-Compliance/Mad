@@ -1,6 +1,8 @@
 -- BACKLOG-3725 fixtures, loaded after the 3403 fixtures and the applied 3403 file.
 -- The venue fingerprint AFTER the 3725 file (lib/fp-after-3725.txt): the apply
 -- plan's post-check expects production to read exactly this.
+-- HISTORICAL (BACKLOG-3945, 2026-10-14): that post-check was for the 2026-10-04 apply
+-- (ledger 20261004213050); production has moved past it. Not production today.
 CREATE TEMP TABLE post3725_after (k text, v text);
 INSERT INTO post3725_after VALUES
   ('column:transaction_submissions.abandoned_at', '971bcf147236367f6be9b369c49f8ff4'),
