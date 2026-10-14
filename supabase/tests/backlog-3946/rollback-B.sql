@@ -1,0 +1,28 @@
+-- BACKLOG-3946 rollback B (undoes 20261014130100): production grants (PUBLIC+anon EXECUTE only where production had it) and TO public.
+GRANT EXECUTE ON FUNCTION public.has_internal_role(uuid) TO PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_user_org_ids(uuid) TO PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_org_admin(uuid, uuid) TO PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_super_admin(uuid) TO PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_user_permissions(uuid) TO PUBLIC, anon;
+ALTER POLICY "Internal users can view admin audit logs" ON public.admin_audit_logs TO public;
+ALTER POLICY "Internal users can view permissions" ON public.admin_permissions TO public;
+ALTER POLICY "Internal users can view role permissions" ON public.admin_role_permissions TO public;
+ALTER POLICY "Internal users can view roles" ON public.admin_roles TO public;
+ALTER POLICY analytics_events_select_own_or_internal ON public.analytics_events TO public;
+ALTER POLICY audit_logs_select_public ON public.audit_logs TO public;
+ALTER POLICY credit_ledger_select_own ON public.credit_ledger TO public;
+ALTER POLICY devices_select_public ON public.devices TO public;
+ALTER POLICY "Internal users can view their own sessions" ON public.impersonation_sessions TO public;
+ALTER POLICY internal_users_can_read_individual_invitations ON public.individual_invitations TO public;
+ALTER POLICY "Super admins can manage internal roles" ON public.internal_roles TO public;
+ALTER POLICY licenses_select_public ON public.licenses TO public;
+ALTER POLICY organization_members_all_public ON public.organization_members TO public;
+ALTER POLICY organization_members_select_public ON public.organization_members TO public;
+ALTER POLICY internal_users_can_read_org_plans ON public.organization_plans TO public;
+ALTER POLICY organizations_select_public ON public.organizations TO public;
+ALTER POLICY payment_intents_select_own ON public.payment_intents TO public;
+ALTER POLICY internal_users_can_manage_invitations ON public.pending_internal_invitations TO public;
+ALTER POLICY stripe_customers_select_own ON public.stripe_customers TO public;
+ALTER POLICY transaction_unlocks_select_own ON public.transaction_unlocks TO public;
+ALTER POLICY user_preferences_select_internal ON public.user_preferences TO public;
+ALTER POLICY users_select_public ON public.users TO public;
