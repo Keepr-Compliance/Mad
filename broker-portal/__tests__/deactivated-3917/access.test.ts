@@ -50,12 +50,20 @@ import {
   PORTAL_GRANTING_LICENSE_STATUSES,
   PORTAL_MEMBERSHIP_SELECT,
   classifyPortalAccess,
+  type PortalMembershipRow,
   mayOpenDashboardPath,
   memberStatusGrantsAccess,
 } from '@/lib/auth/membership';
 
 const ORIGIN = 'http://localhost:3000';
 const EMAIL = 'deactivated-3917@fixture.example.test';
+
+/**
+ * The fixture builders return the loose `Row`; every one of them sets `role` and
+ * `organization_id` (postgrestEmulator.ts), which is what PortalMembershipRow
+ * requires. The single cast lives here so each call site stays honest.
+ */
+const classify = (rows: Row[], userId: string) => classifyPortalAccess(rows as unknown as PortalMembershipRow[], userId);
 
 const withStatus = (row: Row, status: unknown): Row => ({ ...row, license_status: status });
 const suspendedAdmin = () => withStatus(brokerageMembership('admin'), 'suspended');
@@ -134,7 +142,7 @@ describe('classifyPortalAccess', () => {
   it.each(ROLES.flatMap((role) => REFUSING.map((s) => [role, s] as const)))(
     'brokerage %s with status %p -> floor/deactivated',
     (role, status) => {
-      expect(classifyPortalAccess([withStatus(brokerageMembership(role), status)], FIXTURE_USER_ID)).toEqual({
+      expect(classify([withStatus(brokerageMembership(role), status)], FIXTURE_USER_ID)).toEqual({
         kind: 'floor',
         via: 'deactivated',
         role,
@@ -145,15 +153,15 @@ describe('classifyPortalAccess', () => {
 
   it('a row with no license_status key at all -> floor/deactivated (fail closed)', () => {
     const { license_status: _drop, ...row } = brokerageMembership('admin');
-    expect(classifyPortalAccess([row as Row], FIXTURE_USER_ID)).toMatchObject({ kind: 'floor', via: 'deactivated' });
+    expect(classify([row as Row], FIXTURE_USER_ID)).toMatchObject({ kind: 'floor', via: 'deactivated' });
   });
 
   it.each(['admin', 'it_admin', 'broker'])('twin: an active brokerage %s is still full', (role) => {
-    expect(classifyPortalAccess([brokerageMembership(role)], FIXTURE_USER_ID)).toMatchObject({ kind: 'full', role });
+    expect(classify([brokerageMembership(role)], FIXTURE_USER_ID)).toMatchObject({ kind: 'full', role });
   });
 
   it('twin: an active brokerage agent is still floor/brokerage', () => {
-    expect(classifyPortalAccess([brokerageMembership('agent')], FIXTURE_USER_ID)).toMatchObject({
+    expect(classify([brokerageMembership('agent')], FIXTURE_USER_ID)).toMatchObject({
       kind: 'floor',
       via: 'brokerage',
     });
@@ -163,7 +171,7 @@ describe('classifyPortalAccess', () => {
     ['personal row first', () => [personalMembership(), suspendedAdmin()]],
     ['personal row last', () => [suspendedAdmin(), personalMembership()]],
   ])('never falls through to the personal organization (%s)', (_label, rows) => {
-    expect(classifyPortalAccess(rows(), FIXTURE_USER_ID)).toEqual({
+    expect(classify(rows(), FIXTURE_USER_ID)).toEqual({
       kind: 'floor',
       via: 'deactivated',
       role: 'admin',
@@ -172,12 +180,12 @@ describe('classifyPortalAccess', () => {
   });
 
   it('twin: the personal-org owner alone is still floor/personal_owner', () => {
-    expect(classifyPortalAccess([personalMembership()], FIXTURE_USER_ID)).toMatchObject({ via: 'personal_owner' });
+    expect(classify([personalMembership()], FIXTURE_USER_ID)).toMatchObject({ via: 'personal_owner' });
   });
 });
 
 describe('mayOpenDashboardPath for a deactivated member', () => {
-  const access = classifyPortalAccess([suspendedAdmin()], FIXTURE_USER_ID);
+  const access = classify([suspendedAdmin()], FIXTURE_USER_ID);
   it.each(['/dashboard', '/dashboard/account', '/dashboard/support', '/dashboard/support/new', '/dashboard/support/t-1'])(
     'opens %s',
     (path) => expect(mayOpenDashboardPath(access, path)).toBe(true)
