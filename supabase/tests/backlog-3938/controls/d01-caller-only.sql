@@ -1,5 +1,5 @@
 -- D01 (3938): no caller learns another user's memberships. "Closed" = 0 rows / false,
--- or a permission error on a direct call (either closes the oracle).
+-- or a permission error on a direct call (either one answers nothing about another user).
 DO $$ DECLARE m text; BEGIN
   m := pg_temp.as_role('anon', NULL, $q$select (select count(*) from public.get_user_org_ids('{u_s}'))$q$);
   PERFORM pg_temp.check('d01 anon get_user_org_ids(other) closed', m = 'OK 0' OR m LIKE 'ERR 42501%', m);
@@ -29,4 +29,6 @@ DO $$ DECLARE m text; BEGIN
   PERFORM pg_temp.check('d01 own is_org_admin = true', m = 'OK true', m);
   m := pg_temp.as_user('u_g', $q$select public.is_org_admin('{u_g}', '{org1}')$q$);
   PERFORM pg_temp.check('d01 own is_org_admin as agent = false', m = 'OK false', m);
+  m := pg_temp.as_user('u_s', $q$select public.is_org_admin('{u_s}', '{org1}')$q$);
+  PERFORM pg_temp.check('d01 own is_org_admin as suspended admin = false', m = 'OK false', m);
 END $$;

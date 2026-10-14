@@ -39,6 +39,10 @@ MUTANTS = {
     "m7-bgof-no-check": ("3938", [(IF_MEM, "  IF false AND NOT EXISTS (SELECT 1 FROM public.organization_members m\n" + MEM + "\n")]),
     "s2-bgof-no-org-predicate": ("3938", [(MEM, "                  WHERE m.user_id = auth.uid())")]),
     "s3-bgof-any-submission": ("3938", [(SUB_PRED, "WHERE s.organization_id = p_org_id) THEN")]),
+    # 3938: review additions
+    "sr5-is_org_admin-drops-3917-clause": ("3938", [("    AND role IN ('admin', 'it_admin')\n    AND public.member_status_grants_access(license_status)\n", "    AND role IN ('admin', 'it_admin')\n")]),
+    "sr6-bgof-and-to-or": ("3938", [(SUB_OLD, SUB_OLD.replace("     AND NOT EXISTS", "     OR NOT EXISTS"))]),
+    "sr8-guard-null-escape-get_user_org_ids": ("3938", [(G_OLD, "   WHERE user_id = user_uuid\n     AND (user_uuid = (SELECT auth.uid()) OR (SELECT auth.uid()) IS NULL)\n")]),
     # 3940: links policy
     "n1-3940-with-check-old": ("3940", [(CHECK, "  WITH CHECK (" + OM_ADMIN + ");")]),
     "n2-3940-internal-or-admin": ("3940", [
@@ -46,6 +50,7 @@ MUTANTS = {
         (CHECK, "  WITH CHECK (public.has_internal_role((SELECT auth.uid())) OR " + OM_ADMIN + ");")]),
     "n3-3940-keep-read": ("3940", [(DROP_READ, "")]),
     "n4-3940-to-public": ("3940", [("  FOR ALL TO authenticated\n", "  FOR ALL TO public\n")]),
+    "sr7-3940-check-on-created_by": ("3940", [(CHECK, "  WITH CHECK (public.has_internal_role(created_by));")]),
 }
 
 

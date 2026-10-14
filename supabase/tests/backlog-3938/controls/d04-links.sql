@@ -2,6 +2,8 @@
 DO $$ DECLARE m text; BEGIN
   m := pg_temp.as_user('u_ps', $q$insert into public.support_ticket_backlog_links (ticket_id, backlog_item_id, link_type) values ('{tk}', '{bl2}', 'fix')$q$);
   PERFORM pg_temp.check('d04 brokerage admin insert refused', pg_temp.refused(m), m);
+  m := pg_temp.as_user('u_ps', $q$insert into public.support_ticket_backlog_links (ticket_id, backlog_item_id, link_type, created_by) values ('{tk}', '{bl2}', 'fix', '{u_i}')$q$);
+  PERFORM pg_temp.check('d04 non-internal insert naming an internal created_by refused', pg_temp.refused(m), m);
   m := pg_temp.as_user('u_a', $q$delete from public.support_ticket_backlog_links where id = '{lnk}'$q$);
   PERFORM pg_temp.check('d04 brokerage admin delete refused', pg_temp.refused(m), m);
   m := pg_temp.as_user('u_a', $q$update public.support_ticket_backlog_links set link_type = 'related' where id = '{lnk}'$q$);

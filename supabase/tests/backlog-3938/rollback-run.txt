@@ -15,7 +15,7 @@ CHECKS|r01-rollback-3938-alone|4
      FAIL|d01 it_admin asks is_org_admin(fellow admin) closed|OK true
      FAIL|d03 outsider refused (not_member)|OK <null>
      FAIL|d03 outsider gets no features|OK false
-CONTROLS: pass=4 fail=2 error=0 checks=52 failed_checks=10
+CONTROLS: pass=4 fail=2 error=0 checks=54 failed_checks=10
 == r02: 3938 + 3940 applied, rollback-3940 alone
 PASS|r02 fixed links fingerprint differed from production|support_ticket_backlog_links_internal_all|ALL|{authenticated}|0a806b160be5bab0eb222f3dc64f719c
 PASS|r02 links policies equal production|Admins can manage links|ALL|{public}|84ac569390eb4ead7da1723cd89a0467;Authenticated users can read links|SELECT|{public}|97caa439c76824f55cc97930a41fb789
@@ -24,15 +24,16 @@ PASS|r02 3938 half is not production|broker_get_org_features(uuid)=703cbf1c3118a
 CHECKS|r02-rollback-3940-alone|4
    behaviour after r02 (3940 controls red, 3938 controls green expected):
      FAIL|d04 brokerage admin insert refused|OK rows=1
+     FAIL|d04 non-internal insert naming an internal created_by refused|OK rows=1
      FAIL|d04 brokerage admin delete refused|OK rows=1
      FAIL|d04 brokerage admin update refused|OK rows=1
      FAIL|d04 non-internal read: 0 rows|OK 1
      FAIL|d04 internal insert lands|ERR 42501 new row violates row-level security policy for table "support_ticket_backlog_links"
      FAIL|d04 internal delete lands|OK rows=0
-     FAIL|d05 links: exactly one policy|Authenticated users can read links,Admins can manage links
-     FAIL|d05 links policy: ALL, authenticated, has_internal_role in USING and WITH CHECK|SELECT {public} (( SELECT auth.uid() AS uid) IS NOT NULL) / ; ALL {public} (EXISTS ( SELECT 1
+     FAIL|d05 links: exactly one policy|Admins can manage links,Authenticated users can read links
+     FAIL|d05 links policy: ALL, authenticated, has_internal_role in USING and WITH CHECK|ALL {public} (EXISTS ( SELECT 1
      FAIL|d06 links policy TO authenticated FOR ALL|Admins can manage links ALL {public}; Authenticated users can read links SELECT {public}
-CONTROLS: pass=3 fail=3 error=0 checks=52 failed_checks=9
+CONTROLS: pass=3 fail=3 error=0 checks=54 failed_checks=10
 == r03: both rollbacks, then lib/pins-3938.sql again (every pin equals production)
 PASS|r03 functions equal production|broker_get_org_features(uuid)=b61e499f7c1c0ed83f551c0cc46707a0/{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres};get_user_org_ids(uuid)=46e19a432fe087843e6442f6da7e0e36/{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres};is_org_admin(uuid,uuid)=325f08f47d5266c3dceb85ca39ab1dba/{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
 PASS|r03 links policies equal production|Admins can manage links|ALL|{public}|84ac569390eb4ead7da1723cd89a0467;Authenticated users can read links|SELECT|{public}|97caa439c76824f55cc97930a41fb789
