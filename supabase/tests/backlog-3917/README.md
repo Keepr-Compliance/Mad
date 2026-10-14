@@ -1,6 +1,6 @@
 # BACKLOG-3917 harness
 
-Controls and mutants for `supabase/migrations/20261014100000_backlog_3917_member_status_allow_list.sql`.
+Controls and mutants for `supabase/migrations/20261014002359_backlog_3917_member_status_allow_list.sql`.
 
 Every run is one transaction ending in ROLLBACK; nothing is committed. Layering per control:
 `lib/harness-3917.sql` (helpers + production fingerprint), venue parity (repo migrations

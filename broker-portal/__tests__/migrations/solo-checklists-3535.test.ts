@@ -112,7 +112,7 @@ describe(`BACKLOG-3535 *${SUFFIX}`, () => {
   // membership license_status allow-list). A later definer is accepted only when it is
   // listed here AND still carries this file's rules: the owner clause inside the
   // membership EXISTS, the role list, and the check_feature_access decision.
-  const LATER_CAN_EDIT_DEFINERS = ['20261014100000_backlog_3917_member_status_allow_list.sql'];
+  const LATER_CAN_EDIT_DEFINERS = ['20261014002359_backlog_3917_member_status_allow_list.sql'];
   it('is the last migration that defines can_edit_checklist_templates, or a listed later file keeps its rules', () => {
     const definers = MIGRATION_FILES.filter((f) =>
       definerRe('can_edit_checklist_templates').test(stripSqlComments(readMigration(f)))

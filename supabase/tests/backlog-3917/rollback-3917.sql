@@ -1,5 +1,5 @@
 -- BACKLOG-3917 rollback: restores the definitions that production had before
--- 20261014100000_backlog_3917_member_status_allow_list.sql (read from production
+-- 20261014002359_backlog_3917_member_status_allow_list.sql (read from production
 -- 2026-10-13) and removes public.member_status_grants_access(text).
 -- CREATE OR REPLACE keeps each function's grants. Run as one transaction.
 BEGIN;
