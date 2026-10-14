@@ -4,8 +4,8 @@ Controls, wrong-fix variants, mutants and rollback checks for:
 
 | File | Change |
 |---|---|
-| `supabase/migrations/20261014120000_backlog_3938_membership_helpers_caller_only.sql` | `get_user_org_ids(uuid)` and `is_org_admin(uuid, uuid)` answer only for the calling user (`AND user_uuid = (SELECT auth.uid())`). `broker_get_org_features(uuid)` returns `error: 'not_member'` with no features unless the caller holds a membership row in the organization (any status) or has submitted to it. Signatures, SECURITY DEFINER, `search_path`, volatility and grants unchanged. |
-| `supabase/migrations/20261014120100_backlog_3940_support_links_internal_only.sql` | `support_ticket_backlog_links`: one policy `FOR ALL TO authenticated` with `has_internal_role((SELECT auth.uid()))` in USING and WITH CHECK, replacing the two previous policies. |
+| `supabase/migrations/20261014053520_backlog_3938_membership_helpers_caller_only.sql` | `get_user_org_ids(uuid)` and `is_org_admin(uuid, uuid)` answer only for the calling user (`AND user_uuid = (SELECT auth.uid())`). `broker_get_org_features(uuid)` returns `error: 'not_member'` with no features unless the caller holds a membership row in the organization (any status) or has submitted to it. Signatures, SECURITY DEFINER, `search_path`, volatility and grants unchanged. |
+| `supabase/migrations/20261014061621_backlog_3940_support_links_internal_only.sql` | `support_ticket_backlog_links`: one policy `FOR ALL TO authenticated` with `has_internal_role((SELECT auth.uid()))` in USING and WITH CHECK, replacing the two previous policies. |
 
 Rollbacks: `rollback-3938.sql` (production's three function bodies, read 2026-10-14) and
 `rollback-3940.sql` (production's two policies, verbatim). Each runs alone.
