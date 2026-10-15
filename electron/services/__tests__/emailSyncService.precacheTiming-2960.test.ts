@@ -615,9 +615,49 @@ describe("BACKLOG-2960 — the counts on the line are the run's own", () => {
     const result = await emailSyncService.precacheEmails(USER, undefined, { force: true });
 
     // The premise: the two sets really do differ on this run. Without this the
-    // assertion below could pass for the wrong reason.
-    expect(result.forceSwap?.providers).toEqual(["gmail"]);
+    // assertion below could pass for the wrong reason. BACKLOG-3910a: a force
+    // run with an unfinished mailbox now applies nothing, and names the
+    // mailbox that did not finish — Outlook, so only Gmail finished.
+    expect(result.forceSwap).toBeUndefined();
+    expect(result.forceNotApplied?.mailboxes.map((m) => m.provider)).toEqual(["outlook"]);
     expect(field(theTimingLine(), "providers")).toBe("outlook+gmail");
+  });
+
+  /**
+   * BACKLOG-3799: the founder's AVG PC logged `outcome=success written=0` for a
+   * run whose every Graph call failed with a certificate error. A run in which
+   * EVERY connected provider's fetch threw is reported as `error`; one that
+   * still fetched from some provider stays `success`.
+   *
+   * MUTATION: report `progressOutcome` unchanged -> P1 RED.
+   */
+  it("P1 reports outcome=error when every connected provider's fetch failed", async () => {
+    mockGetOAuthToken.mockImplementation(async (_u: string, provider: string) =>
+      provider === "microsoft" ? OUTLOOK_TOKEN : GMAIL_TOKEN,
+    );
+    mockGmailInit.mockResolvedValue(true);
+    const tls = new Error("unable to verify the first certificate");
+    mockOutlookSearch.mockRejectedValue(tls);
+    mockOutlookSearchAll.mockRejectedValue(tls);
+    mockGmailSearch.mockRejectedValue(tls);
+    mockGmailSearchAll.mockRejectedValue(tls);
+
+    await emailSyncService.precacheEmails(USER, undefined, { force: false });
+
+    expect(field(theTimingLine(), "outcome")).toBe("error");
+    expect(field(theTimingLine(), "written")).toBe("0");
+  });
+
+  it("P2 keeps outcome=success when only one provider failed", async () => {
+    mockGetOAuthToken.mockImplementation(async (_u: string, provider: string) =>
+      provider === "microsoft" ? OUTLOOK_TOKEN : GMAIL_TOKEN,
+    );
+    mockGmailInit.mockResolvedValue(true);
+    mockOutlookSearch.mockRejectedValue(new Error("unable to verify the first certificate"));
+
+    await emailSyncService.precacheEmails(USER, undefined, { force: false });
+
+    expect(field(theTimingLine(), "outcome")).toBe("success");
   });
 
   /**

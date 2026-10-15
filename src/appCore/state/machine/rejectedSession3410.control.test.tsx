@@ -87,7 +87,6 @@ const mockApi = {
   auth: {
     getCurrentUser: jest.fn(),
     preValidateSession: jest.fn(),
-    checkEmailOnboarding: jest.fn(),
   },
   system: {
     hasEncryptionKeyStore: jest.fn(),
@@ -116,7 +115,6 @@ beforeEach(() => {
   mockApi.system.onInitStage.mockReturnValue(jest.fn());
   mockApi.system.getInitStage.mockReturnValue(new Promise(() => {}));
   mockApi.user.getPhoneType.mockReturnValue(new Promise(() => {}));
-  mockApi.auth.checkEmailOnboarding.mockReturnValue(new Promise(() => {}));
   mockApi.system.checkAllConnections.mockReturnValue(new Promise(() => {}));
   mockApi.system.checkPermissions.mockReturnValue(new Promise(() => {}));
 });

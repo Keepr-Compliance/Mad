@@ -58,7 +58,7 @@ interface ElectronAPI {
   ) => () => void;
 
   // File System
-  openFolder: (folderPath: string) => Promise<{ success: boolean }>;
+  openFolder: (folderPath: string) => Promise<{ success: boolean; error?: string }>;
 
   // Auto-Update Event Listeners
   onUpdateAvailable: (callback: (info: unknown) => void) => () => void;
@@ -71,6 +71,8 @@ interface ElectronAPI {
     currentVersion: string;
     error?: string;
     translocationDetected?: boolean;
+    /** BACKLOG-3927: Store build — updates come from the Microsoft Store. */
+    storeBuild?: boolean;
   }>;
   /** Fires when macOS App Translocation is detected (app not in /Applications) */
   onTranslocationDetected: (callback: () => void) => () => void;
@@ -99,10 +101,6 @@ interface ElectronAPI {
   // iOS Backup Management (Windows only)
   backup?: {
     start: (options: { udid: string }) => Promise<{
-      success: boolean;
-      error?: string;
-    }>;
-    submitPassword: (options: { udid: string; password: string }) => Promise<{
       success: boolean;
       error?: string;
     }>;
@@ -142,6 +140,12 @@ interface ElectronAPI {
       version?: string;
       serviceRunning: boolean;
       error?: string;
+      /** BACKLOG-3927 */
+      installedVia?: "msi" | "apple-devices" | null;
+      /** BACKLOG-3927: present when the Apple Devices probe ran. */
+      appleDevices?: {
+        state: "not-installed" | "not-running" | "msi-service-stopped" | "usb-driver-missing" | "ready";
+      };
     }>;
     /** Check if bundled Apple drivers are available in the app */
     hasBundled: () => Promise<{ hasBundled: boolean }>;
@@ -154,6 +158,10 @@ interface ElectronAPI {
     }>;
     /** Open iTunes in Microsoft Store for manual installation */
     openITunesStore: () => Promise<{ success: boolean; error?: string }>;
+    /** BACKLOG-3927: open Apple Devices in the Microsoft Store (Store build). */
+    openAppleDevicesStore?: () => Promise<{ success: boolean; error?: string }>;
+    /** BACKLOG-3927: open Windows Settings > Windows Update. Opens Settings only. */
+    openWindowsUpdate?: (target: "check" | "optional") => Promise<{ success: boolean; error?: string }>;
     /** Check if a driver update is available */
     checkUpdate: () => Promise<{
       updateAvailable: boolean;

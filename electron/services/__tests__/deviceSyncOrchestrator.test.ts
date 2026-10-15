@@ -13,6 +13,13 @@
  * - check-disk-space
  */
 
+// BACKLOG-3816 S4-C: the kept backup's at-rest layer is not this suite's subject.
+jest.mock("../atRest/backupAtRest", () => ({
+  ...jest.requireActual("../atRest/backupAtRest"),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+}));
+
 import { EventEmitter } from "events";
 
 // Mock data for tests
@@ -82,7 +89,7 @@ class MockBackupService extends EventEmitter {
     };
   }
 
-  async startBackup(_options: { udid: string; password?: string; forceFullBackup?: boolean }) {
+  async startBackup(_options: { udid: string; forceFullBackup?: boolean }) {
     // Emit progress events
     this.emit("progress", {
       phase: "preparing",
@@ -129,6 +136,20 @@ class MockBackupService extends EventEmitter {
 
   cancelBackup() {
     // No-op for mock
+  }
+
+  // BACKLOG-3598: leftover cleanup. Inert here; proven in
+  // deviceSyncOrchestrator.failedSyncCleanup-3598.test.ts against a real folder.
+  async sweepLeftoverBackups() {
+    return { removed: 0, bytesFreed: 0, failures: [] };
+  }
+
+  async classifyBackupFolder(_udid: string) {
+    return "absent" as const;
+  }
+
+  async removeLeftoverBackup(_udid: string) {
+    return { outcome: "kept" as const, folder: "absent" as const };
   }
 }
 
@@ -270,7 +291,8 @@ jest.mock("better-sqlite3-multiple-ciphers", () => {
 jest.mock("electron", () => ({
   app: {
     isPackaged: false,
-    getPath: jest.fn().mockReturnValue("/tmp"),
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()),
   },
 }));
 
@@ -558,26 +580,15 @@ skipInCI("DeviceSyncOrchestrator", () => {
   });
 
   describe("encrypted backup handling", () => {
-    it("should require password for encrypted backups", async () => {
+    // BACKLOG-3881: Apple-encrypted backups are not supported; no password is taken.
+    it("stops with the turn-it-off message for an encrypted backup", async () => {
       mockBackupService.setMockBehavior(true, true);
 
       const result = await orchestrator.sync({ udid: "mock-udid" });
 
-      // Without password, should fail for encrypted backup
       expect(result.success).toBe(false);
-      expect(result.error).toContain("Password required");
-    });
-
-    it("should accept password for encrypted backup", async () => {
-      mockBackupService.setMockBehavior(true, true);
-
-      const result = await orchestrator.sync({
-        udid: "mock-udid",
-        password: "test-password",
-      });
-
-      // With password, should succeed
-      expect(result.success).toBe(true);
+      expect(result.appleEncryptedBackup).toBe(true);
+      expect(result.error).toContain("Encrypt local backup");
     });
   });
 
@@ -789,4 +800,10 @@ describe("DeviceSyncOrchestrator Skip Logic (TASK-908)", () => {
       expect(mockResult.skipReason).toBe("unchanged");
     });
   });
+});
+
+// BACKLOG-3816 S4-C (B1): this file's userData is a fresh directory under os.tmpdir().
+afterAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./helpers/testUserData").removeTestUserDataDir();
 });

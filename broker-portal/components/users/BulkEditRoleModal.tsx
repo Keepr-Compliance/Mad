@@ -84,6 +84,7 @@ export default function BulkEditRoleModal({
         <div>
           <Label htmlFor="bulk-role">New Role</Label>
           <Select
+            className="!text-base md:!text-sm"
             id="bulk-role"
             value={selectedRole}
             onChange={(e) => setSelectedRole(e.target.value as Role)}

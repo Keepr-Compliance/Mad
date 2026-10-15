@@ -15,6 +15,7 @@
  * render their single screen unchanged.
  */
 import React, { useEffect, useRef, useState } from "react";
+import { includeAnywayQuestion, outsideDatesSentence } from "../../utils/outsideAuditDatesCopy";
 import { ResponsiveModal } from "../../../common/ResponsiveModal";
 import {
   TransactionDatesFields,
@@ -95,6 +96,47 @@ export interface NotIncludedItem {
   filename: string | null;
   reason: NotIncludedReason;
   localAttachmentId: string | null;
+}
+
+/**
+ * BACKLOG-3764: one checklist group whose evidence this submission would not
+ * send. Mirrors `ChecklistLinkGap` in
+ * electron/services/submissionChecklistLinkGaps.ts (restated: the renderer
+ * cannot value-import across the boundary).
+ */
+export interface ChecklistLinkGapItem {
+  key: string;
+  linkId: string;
+  itemTitle: string;
+  label: string;
+  kind: "attachment" | "email";
+  reason: "outside_audit_dates" | "not_included";
+  detail: "not_on_transaction" | "cannot_be_sent" | "message_not_sent" | "not_sent" | null;
+  missingIds: string[];
+  sentAt: string | null;
+  auditStart: string | null;
+  auditEnd: string | null;
+}
+
+/** BACKLOG-3764: shown on success when evidence was dropped that was never listed. */
+export const CHECKLIST_LINKS_NOT_ATTACHED_COPY =
+  "Submitted, but some files or emails linked to checklist items were not attached to them.";
+
+/**
+ * BACKLOG-3764 (SR ruling §6): the line for evidence a yes cannot bring in.
+ * "Not included on this checklist item", never "will not be sent": a duplicate
+ * text's file may still be sent under the kept copy.
+ */
+export function checklistLinkGapLine(gap: ChecklistLinkGapItem): string {
+  const why =
+    gap.detail === "not_on_transaction"
+      ? "it is no longer on this transaction."
+      : gap.detail === "cannot_be_sent"
+        ? "it can't be sent (listed above)."
+        : gap.detail === "message_not_sent"
+          ? "the message it came with isn't in this submission."
+          : "it isn't in this submission.";
+  return `Not included on this checklist item (${gap.itemTitle}): ${gap.label} — ${why}`;
 }
 
 /** The heading over the list, before sending and after. */
@@ -330,6 +372,12 @@ interface SubmitForReviewModalProps {
   preflightItems?: NotIncludedItem[] | null;
   /** BACKLOG-3403: the list changed after the agent confirmed it. */
   preflightChanged?: boolean;
+  /** BACKLOG-3764: checklist evidence this submission would not send. */
+  preflightLinkGaps?: ChecklistLinkGapItem[];
+  /** BACKLOG-3764: "Include it" for a group outside the audit dates. */
+  onIncludeLinkGap?: (gap: ChecklistLinkGapItem) => void;
+  /** BACKLOG-3764: on success, evidence was dropped that was never listed. */
+  checklistLinksNotAttached?: boolean;
   /** BACKLOG-3403: Go back — nothing is sent. */
   onPreflightBack?: () => void;
   /** BACKLOG-3403: Continue anyway — send the rest. */
@@ -390,6 +438,9 @@ export function SubmitForReviewModal({
   isCheckingFiles = false,
   preflightItems = null,
   preflightChanged = false,
+  preflightLinkGaps = [],
+  onIncludeLinkGap,
+  checklistLinksNotAttached = false,
   onPreflightBack,
   onPreflightContinue,
   cancelled = false,
@@ -1063,6 +1114,15 @@ export function SubmitForReviewModal({
           BACKLOG-3599 — or a resubmit could not first download the
           checklists the broker added at review.
         */}
+        {isSuccess && checklistLinksNotAttached && (
+          <p
+            data-testid="submit-review-checklist-links-not-attached"
+            role="status"
+            className="text-sm text-amber-700 mb-4"
+          >
+            {CHECKLIST_LINKS_NOT_ATTACHED_COPY}
+          </p>
+        )}
         {isSuccess && checklistsNotSent && (
           <p
             data-testid="submit-review-checklists-not-sent"
@@ -1111,10 +1171,49 @@ export function SubmitForReviewModal({
                 Some attachments changed since you reviewed them, so nothing was sent yet.
               </p>
             )}
-            <p className="font-medium">{NOT_INCLUDED_HEADING_BEFORE}</p>
-            <NotIncludedList items={preflightItems} testId="submit-review-preflight-list" />
+            {preflightItems.length > 0 && (
+              <>
+                <p className="font-medium">{NOT_INCLUDED_HEADING_BEFORE}</p>
+                <NotIncludedList items={preflightItems} testId="submit-review-preflight-list" />
+              </>
+            )}
+            {/* BACKLOG-3764: checklist evidence this submission would not send. */}
+            {preflightLinkGaps.length > 0 && (
+              <ul className={`space-y-2 ${preflightItems.length > 0 ? "mt-3" : ""}`} data-testid="submit-review-link-gaps">
+                {preflightLinkGaps.map((gap) =>
+                  gap.reason === "outside_audit_dates" ? (
+                    <li key={gap.key} data-testid="submit-review-link-gap-outside">
+                      <p className="font-medium">{gap.itemTitle}: {gap.label}</p>
+                      <p>
+                        {outsideDatesSentence(
+                          gap.kind === "attachment" ? "file" : gap.missingIds.length > 1 ? "conversation" : "email",
+                          gap.sentAt,
+                          gap.auditStart,
+                          gap.auditEnd,
+                        )}{" "}
+                        {includeAnywayQuestion(1)}
+                      </p>
+                      <button
+                        type="button"
+                        className="mt-1 underline font-medium"
+                        onClick={() => onIncludeLinkGap?.(gap)}
+                        data-testid="submit-review-link-gap-include"
+                      >
+                        Include it
+                      </button>
+                    </li>
+                  ) : (
+                    <li key={gap.key} data-testid="submit-review-link-gap-not-included">
+                      {checklistLinkGapLine(gap)}
+                    </li>
+                  ),
+                )}
+              </ul>
+            )}
             <p className="mt-2">
-              Continue anyway to send everything else. Your broker will see which files weren't included.
+              {preflightItems.length > 0
+                ? "Continue anyway to send everything else. Your broker will see which files weren't included."
+                : "Continue anyway to send everything else."}
             </p>
           </div>
         )}

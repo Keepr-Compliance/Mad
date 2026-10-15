@@ -14,18 +14,24 @@ jest.mock('@/lib/email/queue', () => ({
   drainEmailQueue: (...args: unknown[]) => mockDrain(...args),
 }));
 
-jest.mock('@/lib/supabase/service', () => ({
-  createServiceClient: () => ({
-    from: () => ({
-      select: () => ({
-        eq: () => ({
-          lt: () => ({
-            limit: (...args: unknown[]) => mockLimit(...args),
-          }),
-        }),
+jest.mock('@/lib/supabase/service', () => {
+  // payment-reconcile filters on status and stripe_mode (BACKLOG-3845), so eq chains.
+  const filter: Record<string, unknown> = {};
+  filter.eq = () => filter;
+  filter.lt = () => ({
+    limit: (...args: unknown[]) => mockLimit(...args),
+  });
+  return {
+    createServiceClient: () => ({
+      from: () => ({
+        select: () => filter,
       }),
     }),
-  }),
+  };
+});
+
+jest.mock('@/lib/billing/mode', () => ({
+  currentStripeMode: () => 'test',
 }));
 
 jest.mock('@/lib/stripe', () => ({
@@ -35,10 +41,6 @@ jest.mock('@/lib/stripe', () => ({
 jest.mock('@/lib/payments/fulfillment', () => ({
   fulfillPaidUnlock: jest.fn(),
   emitPaymentSucceeded: jest.fn(),
-}));
-
-jest.mock('@/lib/payments/receipt', () => ({
-  dispatchReceiptEmail: jest.fn(),
 }));
 
 import { GET as emailRetry } from '../../../../app/api/cron/email-retry/route';

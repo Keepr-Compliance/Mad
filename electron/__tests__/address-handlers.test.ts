@@ -63,7 +63,7 @@ describe("Address Handlers", () => {
   });
 
   describe("address:initialize", () => {
-    it("should initialize with API key successfully", async () => {
+    it("initializes without using any renderer-supplied key (BACKLOG-3834)", async () => {
       mockAddressVerificationService.initialize.mockReturnValue(true);
 
       const handler = registeredHandlers.get("address:initialize");
@@ -71,36 +71,27 @@ describe("Address Handlers", () => {
 
       expect(result.success).toBe(true);
       expect(result.message).toContain("initialized");
-      expect(mockAddressVerificationService.initialize).toHaveBeenCalledWith(
-        "valid-api-key-1234567890",
-      );
+      expect(mockAddressVerificationService.initialize).toHaveBeenCalledWith();
     });
 
-    it("should handle initialization without API key", async () => {
-      mockAddressVerificationService.initialize.mockReturnValue(false);
+    it("initializes with no key at all", async () => {
+      mockAddressVerificationService.initialize.mockReturnValue(true);
 
       const handler = registeredHandlers.get("address:initialize");
       const result = await handler(mockEvent, undefined);
 
-      expect(result.success).toBe(false);
-      expect(result.message).toContain("No API key");
+      expect(result.success).toBe(true);
+      expect(mockAddressVerificationService.initialize).toHaveBeenCalledWith();
     });
 
-    it("should handle empty API key", async () => {
+    it("reports unavailable when the service cannot initialize", async () => {
       mockAddressVerificationService.initialize.mockReturnValue(false);
 
       const handler = registeredHandlers.get("address:initialize");
       const result = await handler(mockEvent, "");
 
       expect(result.success).toBe(false);
-    });
-
-    it("should reject API key that is too short", async () => {
-      const handler = registeredHandlers.get("address:initialize");
-      const result = await handler(mockEvent, "short");
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Validation error");
+      expect(result.message).toContain("unavailable");
     });
 
     it("should reject API key that is too long", async () => {

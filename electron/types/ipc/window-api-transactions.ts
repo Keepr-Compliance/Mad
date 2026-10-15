@@ -1,3 +1,5 @@
+import type { ReviewMatchReason } from "./reviewMatchReason";
+import type { TextPageCursor, TextThreadSummary, TextWindow } from "../textThreads";
 /**
  * WindowApi Transactions sub-interface
  * Transaction CRUD, linking, export, and submission methods
@@ -13,6 +15,7 @@ import type {
 // shape without gaining a dependency on main-process code. One definition
 // rather than a hand-copied mirror that drifts the first time a column moves.
 import type { TransactionContactResult } from "../../services/db/transactionContactDbService";
+import type { PickerMessage } from "../../services/db/messageDbService";
 // The one definition of the pre-cache fetch rounds. TYPE-ONLY, same ruling.
 import type { EmailPrecacheStage } from "./emailPrecacheStage";
 
@@ -76,6 +79,24 @@ export interface SubmissionScopeIpcResult {
   error?: string;
 }
 
+/**
+ * BACKLOG-3764: one checklist group whose evidence this submission would not
+ * send. Mirrors `ChecklistLinkGap` in electron/services/submissionChecklistLinkGaps.ts.
+ */
+export interface SubmitChecklistLinkGap {
+  key: string;
+  linkId: string;
+  itemTitle: string;
+  label: string;
+  kind: "attachment" | "email";
+  reason: "outside_audit_dates" | "not_included";
+  detail: "not_on_transaction" | "cannot_be_sent" | "message_not_sent" | "not_sent" | null;
+  missingIds: string[];
+  sentAt: string | null;
+  auditStart: string | null;
+  auditEnd: string | null;
+}
+
 /** The answer to `transactions:submit` / `transactions:resubmit`. */
 export interface SubmitIpcResult {
   success: boolean;
@@ -91,6 +112,10 @@ export interface SubmitIpcResult {
    * did not all reach the broker. Mirrors `SubmissionResult.checklistsNotSent`.
    */
   checklistsNotSent?: "not_in_plan" | "refused" | "brokerChecklistsNotDownloaded";
+  /** BACKLOG-3764: on `preflightChanged`, the checklist evidence to confirm again. */
+  checklistLinkGaps?: SubmitChecklistLinkGap[];
+  /** BACKLOG-3764: evidence was dropped that the pre-flight did not list. */
+  checklistLinksNotAttached?: boolean;
   /** BACKLOG-3398: the agent cancelled; nothing was sent. */
   cancelled?: boolean;
   /** BACKLOG-3403: the list of files that cannot be sent changed; confirm again. */
@@ -190,6 +215,16 @@ export interface ReviewItemDto {
   email_id: string | null;
   thread_id: string | null;
   found_at: string;
+  /**
+   * BACKLOG-3925: why this item is in Needs Review. Drives the All / Address match /
+   * Contact match / Folder / label tabs and the pill. "contact" for every row with no stored reason.
+   */
+  matchReason: ReviewMatchReason;
+  /**
+   * BACKLOG-3926: for a "folder" item, the folder / label it matched on, as shown on
+   * the title row ("Outlook folder: <path>" / "Gmail label: <path>").
+   */
+  matchFolder?: string;
   display: ReviewItemDisplayDto;
 }
 
@@ -474,6 +509,8 @@ export interface WindowApiTransactions {
   ) => Promise<{ success: boolean; cancelled?: boolean; error?: string }>;
   getDetails: (
     transactionId: string,
+    /** BACKLOG-3884: "email" = emails only (the texts are paged separately). */
+    channelFilter?: "email",
   ) => Promise<{
     success: boolean;
     transaction?: Transaction & {
@@ -522,6 +559,53 @@ export interface WindowApiTransactions {
     communications?: Communication[];
     error?: string;
   }>;
+  /**
+   * BACKLOG-3785: communications changed since the caller's copy — the rows it
+   * does not hold (`added`) and the ids it holds that are gone (`removedIds`).
+   */
+  getCommunicationsDelta: (
+    transactionId: string,
+    channelFilter: "email" | "text",
+    knownIds: string[],
+  ) => Promise<{
+    success: boolean;
+    added?: Communication[];
+    removedIds?: string[];
+    total?: number;
+    error?: string;
+  }>;
+  /** BACKLOG-3884: the Texts tab's conversation list. */
+  getTextThreads: (transactionId: string, window: TextWindow | null) => Promise<{
+    success: boolean;
+    threads?: TextThreadSummary[];
+    error?: string;
+  }>;
+  /** BACKLOG-3884: one page of one conversation, newest first. */
+  getTextThreadPage: (
+    transactionId: string,
+    threadKeys: string[],
+    window: TextWindow | null,
+    cursor: TextPageCursor | null,
+    limit: number,
+  ) => Promise<{
+    success: boolean;
+    rows?: Communication[];
+    nextCursor?: TextPageCursor | null;
+    error?: string;
+  }>;
+  /** BACKLOG-3884: the conversation a linked text belongs to. */
+  findTextThread: (transactionId: string, messageId: string) => Promise<{
+    success: boolean;
+    threadKey?: string | null;
+    error?: string;
+  }>;
+  /** BACKLOG-3884: remove whole conversations; `messageIds` null when too many for Undo. */
+  unlinkTextThreads: (transactionId: string, threadKeys: string[]) => Promise<{
+    success: boolean;
+    removed?: number;
+    messageIds?: string[] | null;
+    error?: string;
+  }>;
   getWithContacts: (transactionId: string) => Promise<{
     success: boolean;
     transaction?: Transaction;
@@ -547,7 +631,12 @@ export interface WindowApiTransactions {
   update: (
     transactionId: string,
     data: Record<string, unknown>,
-  ) => Promise<{ success: boolean; error?: string }>;
+  ) => Promise<{
+    success: boolean;
+    error?: string;
+    /** BACKLOG-3910d: set when the deal is locked and the main process refused. */
+    dealLocked?: "submitted" | "sealed";
+  }>;
   delete: (
     transactionId: string,
   ) => Promise<{ success: boolean; error?: string }>;
@@ -638,6 +727,8 @@ export interface WindowApiTransactions {
      */
     unlinkedIds?: string[];
     error?: string;
+    /** BACKLOG-3910: set when the deal is locked and the main process refused. */
+    dealLocked?: "submitted" | "sealed";
   }>;
   /**
    * BACKLOG-2319: Confirm "Needs review" email links (thread-aware) → Linked.
@@ -667,6 +758,8 @@ export interface WindowApiTransactions {
     updatedCount?: number;
     errors?: string[];
     error?: string;
+    /** BACKLOG-3910d: deals left unchanged because they are locked. */
+    refusedIds?: string[];
   }>;
 
   // ============================================
@@ -708,11 +801,18 @@ export interface WindowApiTransactions {
     success: boolean;
     contacts?: unknown[];
     error?: string;
+    /**
+     * BACKLOG-3837: names from the people found in messages are not resolved yet
+     * (read off the main thread). The roster itself is complete;
+     * `contacts.onMessageDerivedReady` fires when the names land.
+     */
+    /** BACKLOG-3837: `rosterPending` = the roster itself is not read yet; `contacts` is empty. */
+    contactsStatus?: { messageDerivedPending?: boolean; rosterPending?: boolean };
   }>;
   /** Gets unlinked messages for a specific contact */
   getMessagesByContact: (userId: string, contact: string) => Promise<{
     success: boolean;
-    messages?: unknown[];
+    messages?: PickerMessage[];
     error?: string;
   }>;
   /** Links messages to a transaction */
@@ -882,8 +982,26 @@ export interface WindowApiTransactions {
     forceSwap?: {
       emailsDeleted: number;
       emailsInserted: number;
+      /** BACKLOG-3910a: kept rows on no locked deal, updated in place (same id). */
+      emailsRefreshed: number;
+      /** BACKLOG-3910a: kept rows on a locked deal, left exactly as they were. */
+      emailsKeptLocked: number;
+      /** BACKLOG-3910a: kept rows no fresh copy arrived for. */
+      emailsKeptNoCopy: number;
       participantsInserted: number;
       providers: Array<"gmail" | "outlook">;
+    };
+    /**
+     * BACKLOG-3910a: a force run in which a connected mailbox did not finish
+     * applies nothing. Arrives only with `success: false`; one entry per
+     * unfinished mailbox, so the renderer can name it and the next step.
+     */
+    forceNotApplied?: {
+      mailboxes: Array<{
+        provider: "gmail" | "outlook";
+        mailbox: string;
+        tokenExpired: boolean;
+      }>;
     };
     /**
      * BACKLOG-2856: the user stopped the run. Arrives with `success: false` and
@@ -1113,6 +1231,8 @@ export interface WindowApiTransactions {
   submitPreflight: (transactionId: string) => Promise<{
     success: boolean;
     notIncluded?: SubmitNotIncludedItem[];
+    /** BACKLOG-3764: checklist evidence this submission would not send. */
+    checklistLinkGaps?: SubmitChecklistLinkGap[];
     error?: string;
   }>;
 
@@ -1172,6 +1292,10 @@ export interface WindowApiTransactions {
   getAuditCoverage: (
     userId: string,
     proposedStartISO: string,
+    /** BACKLOG-3892 S2: the user's import source (TextSource), checked even with no texts. */
+    chosenSource?: string | null,
+    /** BACKLOG-3892 W1: the proposed audit end (the End Date as entered); null/absent = open (today). */
+    proposedEndISO?: string | null,
   ) => Promise<AuditCoverageResult>;
 
   /**
@@ -1181,6 +1305,8 @@ export interface WindowApiTransactions {
   checkExportCompleteness: (
     transactionId: string,
     userId: string,
+    /** BACKLOG-3892 S2: the user's import source; "iphone" decides completeness by the deal's iPhone coverage. */
+    chosenSource?: string | null,
   ) => Promise<ExportCompletenessResult>;
   /** BACKLOG-3663: per-source text coverage for one transaction (the Texts tab). */
   getTextCoverage?: (

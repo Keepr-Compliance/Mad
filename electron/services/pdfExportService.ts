@@ -1,3 +1,4 @@
+import { devToolsPreference } from "../bootstrap/appMenu";
 import { BrowserWindow, app } from "electron";
 import path from "path";
 import fs from "fs/promises";
@@ -65,6 +66,7 @@ class PDFExportService {
         height: 1200,
         show: false, // Hidden window
         webPreferences: {
+          devTools: devToolsPreference(), // BACKLOG-3830
           nodeIntegration: false,
           contextIsolation: true,
           sandbox: true,

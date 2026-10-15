@@ -101,6 +101,22 @@ export interface BackupResult {
    * description are kept apart rather than pre-joined into a string.
    */
   failureCause?: BackupFailureCause;
+
+  /**
+   * BACKLOG-3814: how the backup tool started. Present only where the platform
+   * handles a held start (Windows). See electron/services/toolStartHold.ts.
+   */
+  toolStart?: ToolStartObservation;
+}
+
+/** BACKLOG-3814: spawn requested -> first output byte (or exit, if none). */
+export interface ToolStartObservation {
+  /** Milliseconds from just before `spawn()` to the first stdout/stderr byte, or to exit. */
+  delayMs: number;
+  /** `delayMs` reached the held-start threshold. */
+  delayed: boolean;
+  /** No run of this tool was recorded under the running app version. */
+  firstRunThisVersion: boolean;
 }
 
 /**
@@ -234,8 +250,13 @@ export interface BackupOptions {
   /** Force a full backup even if incremental is available. Default: false */
   forceFullBackup?: boolean;
   /** Skip application data to reduce backup size. Default: true */
-  /** Password for encrypted backup (TASK-007) */
-  password?: string;
+  /**
+   * BACKLOG-3816: measure the finished backup's size AFTER returning instead of before.
+   * The result then carries `backupSize: null`; the reading is collected with
+   * `takeDeferredSizeMeasurement(udid)`. Used by the sync so its end is not held up by
+   * a walk of every file in the backup.
+   */
+  deferSizeMeasurement?: boolean;
 }
 
 /**
@@ -321,6 +342,8 @@ export type BackupErrorCode =
   // `DEVICE_NOT_FOUND`: a malformed identifier is not a missing device.
   /** The UDID handed to `startBackup` is missing, not a string, the wrong length, or not hex. */
   | "INVALID_UDID"
+  // BACKLOG-3816: a password is saved for this phone but secure storage cannot unlock it.
+  | "BACKUP_PASSWORD_UNAVAILABLE"
   | "UNKNOWN_ERROR";
 
 /**
@@ -329,6 +352,12 @@ export type BackupErrorCode =
 export interface BackupEncryptionInfo {
   isEncrypted: boolean;
   needsPassword: boolean;
+  /**
+   * BACKLOG-3817: what the phone reported for com.apple.mobile.backup WillEncrypt.
+   * "unknown" when the query failed — never read as "off" (enabling encryption, or
+   * replacing a stored password, must not act on a failed read).
+   */
+  status?: "on" | "off" | "unknown";
 }
 
 /**

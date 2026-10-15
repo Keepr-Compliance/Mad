@@ -75,9 +75,6 @@ import type { SyncStep } from "./syncOutcome";
 /** Task identifier for the background sync task */
 export const BACKGROUND_SYNC_TASK = "keepr-sms-background-sync";
 
-/** Minimum interval between background fetches (seconds) */
-const BACKGROUND_FETCH_INTERVAL = 15 * 60; // 15 minutes
-
 /** Storage key for pairing info (matches pairing screen) */
 const PAIRING_STORAGE_KEY = "@keepr/pairing";
 
@@ -1121,7 +1118,6 @@ async function runSyncCycle(
   while (hasMore) {
     const batch = await dequeueBatch();
     if (batch.length === 0) {
-      hasMore = false;
       break;
     }
 

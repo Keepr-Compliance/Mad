@@ -42,6 +42,44 @@ export function DataPrivacySettings({ userId }: DataPrivacySettingsProps) {
   const [failureLogEntries, setFailureLogEntries] = useState<FailureLogEntry[]>([]);
   const [failureLogLoading, setFailureLogLoading] = useState<boolean>(false);
 
+  // BACKLOG-3801: "Send crash reports" switch. null until loaded.
+  const [crashReporting, setCrashReporting] = useState<{ enabled: boolean; wasEnabledAtLaunch: boolean } | null>(null);
+  const [crashReportingSaving, setCrashReportingSaving] = useState<boolean>(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.api.privacy?.getCrashReporting?.()
+      .then((result) => {
+        if (!cancelled && result?.success && typeof result.enabled === "boolean") {
+          setCrashReporting({ enabled: result.enabled, wasEnabledAtLaunch: result.wasEnabledAtLaunch ?? result.enabled });
+        }
+      })
+      .catch((err) => logger.error("Failed to load crash reporting setting:", err));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleCrashReportingToggle = async (): Promise<void> => {
+    if (!crashReporting || crashReportingSaving) return;
+    const next = !crashReporting.enabled;
+    setCrashReportingSaving(true);
+    try {
+      const result = await window.api.privacy?.setCrashReporting?.(next);
+      if (result && typeof result.enabled === "boolean") {
+        setCrashReporting({ enabled: result.enabled, wasEnabledAtLaunch: result.wasEnabledAtLaunch ?? crashReporting.wasEnabledAtLaunch });
+      }
+      if (!result?.success) {
+        notify.error("Could not save the crash report setting.");
+      }
+    } catch (err) {
+      logger.error("Failed to save crash reporting setting:", err);
+      notify.error("Could not save the crash report setting.");
+    } finally {
+      setCrashReportingSaving(false);
+    }
+  };
+
   // Load failure log
   const loadFailureLog = useCallback(async () => {
     setFailureLogLoading(true);
@@ -199,6 +237,41 @@ export function DataPrivacySettings({ userId }: DataPrivacySettingsProps) {
         Data & Privacy
       </h3>
       <div className="space-y-3">
+        {/* BACKLOG-3801: Send crash reports */}
+        {crashReporting && (
+          <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <div className="flex-1">
+              <h4 className="text-sm font-medium text-gray-900">
+                Send crash reports to help fix problems
+              </h4>
+              <p className="text-xs text-gray-600 mt-1">
+                When something goes wrong, Keepr sends error details to our crash reporting service. Turn this off to stop sending them.
+              </p>
+              {crashReporting.enabled && !crashReporting.wasEnabledAtLaunch && (
+                <p className="text-xs text-gray-600 mt-2" data-testid="crash-reporting-next-launch">
+                  Crash reports will start sending the next time you open Keepr.
+                </p>
+              )}
+            </div>
+            <button
+              onClick={handleCrashReportingToggle}
+              disabled={crashReportingSaving}
+              className={`ml-4 relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${
+                crashReporting.enabled ? "bg-blue-500" : "bg-gray-300"
+              }`}
+              role="switch"
+              aria-checked={crashReporting.enabled}
+              aria-label="Send crash reports"
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  crashReporting.enabled ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+        )}
+
         {/* Reindex Database */}
         <button
           onClick={handleReindexDatabase}

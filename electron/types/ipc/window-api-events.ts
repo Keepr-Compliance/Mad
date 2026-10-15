@@ -178,7 +178,7 @@ export interface WindowApiEvents {
    * Fired when callback URL is invalid, tokens are missing, or auth fails
    */
   onDeepLinkAuthError: (
-    callback: (data: { error: string; code: "MISSING_TOKENS" | "INVALID_URL" | "INVALID_TOKENS" | "UNKNOWN_ERROR" }) => void,
+    callback: (data: { error: string; code: "MISSING_TOKENS" | "INVALID_URL" | "INVALID_TOKENS" | "CONNECTION_FAILED" | "UNKNOWN_ERROR" }) => void,
   ) => () => void;
 
   /**

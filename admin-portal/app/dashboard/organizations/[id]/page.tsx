@@ -122,7 +122,7 @@ export default async function OrganizationDetailPage({
 
       {/* Organization header card */}
       <Card>
-        <div className="flex items-start gap-4">
+        <div className="flex items-start gap-4 max-md:flex-wrap">
           <div className="h-12 w-12 rounded-lg bg-primary-100 text-primary-700 flex items-center justify-center">
             <Building2 className="h-6 w-6" />
           </div>
@@ -153,7 +153,7 @@ export default async function OrganizationDetailPage({
       </Card>
 
       {/* Sub-navigation links */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 max-md:flex-wrap">
         <Link
           href={`/dashboard/organizations/${org.id}/identity-providers`}
           className="inline-flex items-center gap-2 rounded-md bg-white border border-gray-200 shadow-sm px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors"

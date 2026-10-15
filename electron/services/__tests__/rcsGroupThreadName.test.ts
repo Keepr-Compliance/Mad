@@ -26,7 +26,7 @@ jest.mock("../logService", () => {
 });
 
 import { setDb } from "../db/core/dbConnection";
-import { batchInsertMessages, findRcsContentDuplicates, getMessageIdMap, insertReactionRows, rcsClearDbOps, rcsAutoDeleteDbOps } from "../db/syncDbService";
+import { batchInsertMessages, findRcsContentDuplicates, getMessageIdsByExternalIds, insertReactionRows, rcsClearDbOps, rcsAutoDeleteDbOps } from "../db/syncDbService";
 import { recordRcsThreadName } from "../db/rcsChatPeopleDbService";
 import { getMessageContacts, getMessagesByContact } from "../db/messageDbService";
 import { getCommunicationsWithMessages } from "../db/communicationDbService";
@@ -50,7 +50,7 @@ let db: DatabaseType;
 
 const deps = {
   batchInsertMessages,
-  getMessageIdMap,
+  getMessageIdsByExternalIds,
   insertReactionRows,
   findContentDuplicates: findRcsContentDuplicates,
   recordThreadName: recordRcsThreadName,

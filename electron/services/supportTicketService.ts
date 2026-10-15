@@ -25,6 +25,8 @@ import { getRecentUpdaterFailure } from "./updaterFailureStore";
 import { deviceDetectionService } from "./deviceDetectionService";
 import type { IphoneSyncDiagnostic } from "./deviceDetectionService";
 import { checkAppleDrivers } from "./appleDriverService";
+import { getHostArchitecture } from "./diagnostics/hostArchitecture";
+import type { HostArchitecture } from "./diagnostics/hostArchitecture";
 import { pairingService } from "./pairingService";
 import localSyncService from "./localSyncService";
 import supabaseService from "./supabaseService";
@@ -56,6 +58,11 @@ import {
 export interface IphoneSyncDiagnostics {
   /** User's selected phone type (from user_preferences), or "unknown". */
   phone_type: "iphone" | "android" | "unknown";
+  /**
+   * BACKLOG-3418: iPhone checking was on for the account, so the device probes
+   * ran. False → the device fields below are defaults, not measurements.
+   */
+  iphone_checking_on: boolean;
   /** libimobiledevice CLI tools available. */
   libimobiledevice_available: boolean;
   /** libimobiledevice reachable on PATH/bundled (macOS-focused signal). */
@@ -81,6 +88,12 @@ export interface IphoneSyncDiagnostics {
     is_installed: boolean;
     service_running: boolean;
     version: string | null;
+    /** BACKLOG-3927: msi (Apple's installer) | apple-devices (Store build); null when not found. */
+    installed_via?: "msi" | "apple-devices" | null;
+    /** BACKLOG-3927: true only for a QA session that overrode the driver source. */
+    installed_via_override?: true;
+    /** BACKLOG-3927: Store build Apple Devices state; null on the website build. */
+    apple_devices_state?: "not-installed" | "not-running" | "msi-service-stopped" | "usb-driver-missing" | "ready" | null;
   };
   /**
    * Android WiFi-companion state. Populated best-effort for all users but most
@@ -145,6 +158,8 @@ export interface AppDiagnostics {
   os_platform: string;
   os_version: string;
   os_arch: string;
+  /** BACKLOG-3363: raw inputs behind the Windows-on-ARM decision. */
+  host_architecture?: HostArchitecture;
   node_version: string;
   db_initialized: boolean;
   db_encrypted: boolean;
@@ -232,6 +247,14 @@ export function composeDiagnosticsSummary(diag: AppDiagnostics): string {
   lines.push(
     `OS: ${diag.os_platform || "unknown"} ${diag.os_version || ""} (${diag.os_arch || "unknown"})`.trim()
   );
+  // BACKLOG-3363: the raw Windows-on-ARM inputs, verbatim.
+  if (diag.host_architecture) {
+    const h = diag.host_architecture;
+    lines.push(
+      `Host: arch=${h.arch}, arm64_translation=${String(h.running_under_arm64_translation)}, ` +
+        `machine=${h.os_machine ?? "unknown"}, windows_arm64=${yn(h.windows_arm64)}`
+    );
+  }
   lines.push(`DB: initialized=${yn(diag.db_initialized)}, encrypted=${yn(diag.db_encrypted)}`);
   lines.push(
     `Sync: running=${yn(diag.sync_status.is_running)}` +
@@ -275,12 +298,18 @@ function composeIphoneSyncLine(s: IphoneSyncDiagnostics): string {
   const yn = (v: boolean): string => (v ? "yes" : "no");
   const parts = [
     `phone_type=${s.phone_type}`,
+    // BACKLOG-3418: "no" → the iPhone helper did not run; devices/detected are not measurements.
+    `iphone_checking=${yn(s.iphone_checking_on)}`,
     `devices=${s.connected_device_count}`,
     `mounted=${yn(s.device_mounted)}`,
     `detected=${yn(s.device_detected)}`,
     `driver_missing_suspected=${yn(s.driver_missing_suspected)}`,
     `apple_driver.installed=${yn(s.apple_driver.is_installed)}`,
     `apple_driver.service_running=${yn(s.apple_driver.service_running)}`,
+    // BACKLOG-3927: present only when known.
+    ...(s.apple_driver.installed_via ? [`apple_driver.installed_via=${s.apple_driver.installed_via}`] : []),
+    ...(s.apple_driver.installed_via_override ? ["apple_driver.installed_via_override=true"] : []),
+    ...(s.apple_driver.apple_devices_state ? [`apple_devices.state=${s.apple_driver.apple_devices_state}`] : []),
     `iphone_sync_enabled=${s.user_settings.iphone_sync_enabled === null ? "unknown" : yn(s.user_settings.iphone_sync_enabled)}`,
     // BACKLOG-2408: which importer this user actually runs. "unset" means no
     // stored preference, so the app is using its platform default.
@@ -372,6 +401,11 @@ export async function collectDiagnostics(): Promise<AppDiagnostics> {
   }
   try {
     diagnostics.os_arch = process.arch;
+  } catch {
+    /* ignore */
+  }
+  try {
+    diagnostics.host_architecture = getHostArchitecture();
   } catch {
     /* ignore */
   }
@@ -575,6 +609,7 @@ function readIntlTimeZone(): string | null {
 function defaultIphoneSyncDiagnostics(): IphoneSyncDiagnostics {
   return {
     phone_type: "unknown",
+    iphone_checking_on: false,
     libimobiledevice_available: false,
     libimobiledevice_in_path: false,
     connected_device_count: 0,
@@ -613,6 +648,7 @@ async function collectIphoneSyncDiagnostics(): Promise<IphoneSyncDiagnostics> {
   try {
     const dev: IphoneSyncDiagnostic =
       await deviceDetectionService.collectIphoneSyncDiagnostics();
+    section.iphone_checking_on = dev.iphoneCheckingOn;
     section.libimobiledevice_available = dev.libimobiledeviceAvailable;
     section.libimobiledevice_in_path = dev.libimobiledeviceInPath;
     section.connected_device_count = dev.connectedDeviceCount;
@@ -644,6 +680,10 @@ async function collectIphoneSyncDiagnostics(): Promise<IphoneSyncDiagnostics> {
       is_installed: driver.isInstalled,
       service_running: driver.serviceRunning,
       version: driver.version,
+      // BACKLOG-3927: only when known (installed_via: msi | apple-devices).
+      ...(driver.installedVia ? { installed_via: driver.installedVia } : {}),
+      ...(driver.sourceOverridden ? { installed_via_override: true as const } : {}),
+      ...(driver.appleDevices ? { apple_devices_state: driver.appleDevices.state } : {}),
     };
   } catch {
     /* keep defaults */

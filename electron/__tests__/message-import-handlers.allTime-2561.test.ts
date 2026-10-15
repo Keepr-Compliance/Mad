@@ -136,10 +136,7 @@ jest.mock("../services/autoLinkService", () => ({
 // Imported after the mocks so the handler module binds to them.
 import { registerMessageImportHandlers } from "../handlers/messageImportHandlers";
 import macOSMessagesImportService from "../services/macOSMessagesImportService";
-import {
-  computeImportCutoffNano,
-  DEFAULT_LOOKBACK_MONTHS,
-} from "../services/macOSMessagesImportService/importHelpers";
+import { DEFAULT_LOOKBACK_MONTHS } from "../services/macOSMessagesImportService/importHelpers";
 import { MAC_EPOCH } from "../constants";
 
 const TEST_USER_ID = "11111111-2222-4333-8444-555555555555";
@@ -324,6 +321,32 @@ describe("BACKLOG-2561 · the label handler and the import handler agree", () =>
     capturedPlan = undefined;
     mockTransactionRows = [];
     mockGetPreferences.mockReset();
+    // BACKLOG-3915: each handler reads the clock on its own. Freeze `Date`
+    // (only `Date` — every timer and microtask stays real) so both reads
+    // return the same instant and the bounds can be compared exactly. With a
+    // live clock the two reads straddled a second boundary on loaded runners.
+    jest.useFakeTimers({
+      now: Date.now(),
+      doNotFake: [
+        "hrtime",
+        "nextTick",
+        "performance",
+        "queueMicrotask",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "requestIdleCallback",
+        "cancelIdleCallback",
+        "setImmediate",
+        "clearImmediate",
+        "setInterval",
+        "clearInterval",
+        "setTimeout",
+        "clearTimeout",
+      ],
+    });
+  });
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   /**
@@ -368,13 +391,9 @@ describe("BACKLOG-2561 · the label handler and the import handler agree", () =>
           TEST_USER_ID
         );
 
-        // Same instant, or both unbounded. Compared to the SECOND to absorb the
-        // sub-second drift between the two handlers' separate `new Date()` calls.
-        if (importBoundISO === null || label.effectiveCutoffISO === null) {
-          expect(label.effectiveCutoffISO).toBe(importBoundISO);
-        } else {
-          expect(label.effectiveCutoffISO.slice(0, 19)).toBe(importBoundISO.slice(0, 19));
-        }
+        // Same instant, or both unbounded. Exact: `Date` is frozen for this
+        // describe, so the two handlers' separate clock reads agree.
+        expect(label.effectiveCutoffISO).toBe(importBoundISO);
 
         /*
          * BACKLOG-2749: `source` too, and this half is NEW.
@@ -411,12 +430,6 @@ describe("BACKLOG-2561 · the label handler and the import handler agree", () =>
  * ID-set assertions quietly testing a predicate production no longer uses.
  */
 describe("BACKLOG-2561 · the production date filter has not changed shape", () => {
-  const servicePath = path.join(
-    __dirname,
-    "../services/macOSMessagesImportService/importHelpers.ts"
-  );
-  const source = fs.readFileSync(servicePath, "utf8");
-
   /*
    * BACKLOG-3062 rewrote these three, and the rewrite is why the guard is now
    * stronger again.

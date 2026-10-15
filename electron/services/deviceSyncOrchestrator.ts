@@ -26,8 +26,34 @@ import {
   deviceDetectionService,
 } from "./deviceDetectionService";
 import { BackupService } from "./backupService";
-import type { PriorBackupState } from "../types/ipc/window-api-platform";
+import type { LeftoverRemoval } from "./backupService";
+import type { DeferredBackupSize } from "./backupSizeRecord";
+import type { PriorBackupState, SyncCancelTrigger } from "../types/ipc/window-api-platform";
+import { isSyncCancelTrigger } from "./syncCancelTrigger";
+import {
+  TOOL_HOLD_RETRY_DELAY_MS,
+  TOOL_START_HOLD_FAILED_MESSAGE,
+  TOOL_START_HOLD_STATUS_MESSAGE,
+  shouldRetryAfterToolStartHold,
+} from "./toolStartHold";
 import { BackupDecryptionService } from "./backupDecryptionService";
+import {
+  BackupAtRestRefusal,
+  FORCE_FULL_REASON_DELTA_TOOL_FAILED,
+  describeBackupAtRestProgress,
+  getBackupAtRest,
+  type BackupAtRest,
+  type BackupAtRestProgress,
+  type BackupSyncSession,
+} from "./atRest/backupAtRest";
+import {
+  BACKUP_DAMAGED_QUARANTINED_MESSAGE,
+  BACKUP_DAMAGED_REASON,
+  BACKUP_KEY_MISSING_QUARANTINED_MESSAGE,
+  backupProblemForRefusal,
+  type UnreadableKind,
+} from "./atRest/backupProblem";
+import { reportBackupProblem } from "./atRest/backupProblemReport";
 import { iOSMessagesParser } from "./iosMessagesParser";
 import { iOSContactsParser } from "./iosContactsParser";
 import {
@@ -39,17 +65,29 @@ import {
   formatUnknownBackupSizeError,
   formatMissingDriversError,
   formatDriverServiceStoppedError,
+  formatStoreAppleDevicesMissingError,
+  formatStoreAppleDevicesNotRunningError,
+  formatMsiServiceStoppedNeutralError,
 } from "./diagnostics/userFacingErrors";
 import { checkAppleDrivers } from "./appleDriverService";
-import { canUseLibimobiledevice } from "./libimobiledeviceService";
+import { isStoreBuild } from "./distributionChannelService";
+import { canUseLibimobiledevice, isMockMode } from "./libimobiledeviceService";
 import type { iOSDevice, DeviceStorageInfo } from "../types/device";
 import type { iOSMessage, iOSConversation } from "../types/iosMessages";
+import {
+  floorSourceOf,
+  readChatWithFloor,
+  type ChatFloorPlan,
+  type ParseFloorReport,
+} from "./iphoneChatFloors";
 import type { iOSContact } from "../types/iosContacts";
 import type {
   BackupProgress,
   BackupResult,
   BackupSnapshotState,
   BackupStatusReport,
+  BackupEncryptionInfo,
+  BackupErrorCode,
 } from "../types/backup";
 
 /**
@@ -446,6 +484,51 @@ export interface SyncResult {
   needsCleanup?: boolean;
   /** Unique session ID for ACID rollback on cancel (TASK-2110) */
   sessionId?: string;
+  /**
+   * BACKLOG-3817: message attachments in an encrypted backup that could not be decrypted.
+   * The sync still succeeds; the user is told how many could not be read.
+   */
+  attachmentsUndecryptable?: number;
+  /**
+   * BACKLOG-3881: this run stopped because the iPhone's backups are encrypted by Apple
+   * ("Encrypt local backup"). Nothing was transferred; `error` tells the user to turn
+   * that setting off. The user's next Sync is not a retry and must not wait out the
+   * sync cooldown.
+   */
+  appleEncryptedBackup?: boolean;
+  /**
+   * BACKLOG-3816: the classified cause of a failed backup, when one is known
+   * (`BackupResult.errorCode`; a device disconnect is `CONNECTION_LOST`). The renderer
+   * uses it to hold Try Again while the phone's backup service winds down.
+   */
+  errorCode?: BackupErrorCode;
+  /**
+   * BACKLOG-3892 S1 (SR D5): sms.db reads that FAILED in this run (a chat, its
+   * people, its senders, or the chat list). A failed read looks like an empty chat;
+   * S2 must not advance any coverage for a run where this is above zero.
+   */
+  chatReadFailures?: number;
+  /** BACKLOG-3892 S1: what the parse floors did (counts only); absent when no floor plan. */
+  parseFloors?: ParseFloorReport;
+  /**
+   * BACKLOG-3892 S2: what persistence needs to record iPhone coverage. Set ONLY by
+   * sync() (a fresh backup of one phone); absent on every other path, which then
+   * records no coverage.
+   *  - udid: the phone this run read (coverage is per phone, SR D4/D6);
+   *  - startedAtMs: when the run started, before the backup was taken — never later
+   *    than the snapshot, so it is a safe end for the covered interval;
+   *  - floorPlan: the plan the run APPLIED (SR C2), absent = every chat read in full;
+   *  - chatFloors: per chat ROWID, the floor actually applied (null = read in full),
+   *    including chats skipped as too old.
+   */
+  coverageRun?: {
+    udid: string;
+    startedAtMs: number;
+    floorPlan?: ChatFloorPlan;
+    chatFloors: ReadonlyArray<readonly [number, number | null]>;
+    /** BACKLOG-3892 W3b: the oldest text this phone holds (epoch ms); null = unknown. */
+    oldestTextMs?: number | null;
+  };
 }
 
 /**
@@ -454,10 +537,13 @@ export interface SyncResult {
 export interface SyncOptions {
   /** Device UDID to sync */
   udid: string;
-  /** Password for encrypted backups */
-  password?: string;
   /** Force full backup (no incremental) */
   forceFullBackup?: boolean;
+  /**
+   * BACKLOG-3892 S1: per-chat parse floors, resolved by syncHandlers (this class
+   * reads no preferences). Absent = every chat read in full (today's sync).
+   */
+  floorPlan?: ChatFloorPlan;
 }
 
 /**
@@ -476,6 +562,8 @@ export interface SyncProgress {
    * `emitProgress`. Call sites do not set it.
    */
   priorBackup?: PriorBackupState;
+  /** `cleanup` ticks: nothing is being sealed, so the "Securing your iPhone backup" line is hidden. */
+  hidden?: boolean;
 }
 
 /**
@@ -484,8 +572,6 @@ export interface SyncProgress {
 export interface ProcessBackupOptions {
   /** Device UDID */
   udid: string;
-  /** Password for encrypted backups */
-  password?: string;
   /** Force re-processing even if backup hasn't changed (TASK-908) */
   forceResync?: boolean;
 }
@@ -498,7 +584,6 @@ export interface ProcessBackupOptions {
  * - 'phase': SyncPhase - Phase changes
  * - 'device-connected': iOSDevice - Device connected
  * - 'device-disconnected': iOSDevice - Device disconnected
- * - 'password-required': void - Encrypted backup needs password
  * - 'error': Error - Error during sync
  * - 'complete': SyncResult - Sync completed
  *
@@ -509,14 +594,175 @@ export interface ProcessBackupOptions {
  * const result = await orchestrator.sync({ udid: '...' });
  * ```
  */
+/**
+ * BACKLOG-3598: the last sentence of the disk-guard message, following what happened
+ * to the unfinished backup. `null` means no removal was attempted because the sync
+ * started from a usable backup (or from an unknown reading), which is kept.
+ */
+function diskGuardCleanupSentence(cleanup: LeftoverRemoval | null): string {
+  if (cleanup?.outcome === "removed") {
+    return "The unfinished backup was removed to give that space back. Free up more space and sync again.";
+  }
+  if (cleanup?.outcome === "failed") {
+    return "The unfinished backup could not be removed yet; Keepr will try again at the next sync. Free up space and sync again.";
+  }
+  return "Your existing backup was kept. Free up space and sync again.";
+}
+
+/**
+ * BACKLOG-3598: the backup a sync frame has in flight. `udid` is the phone being backed
+ * up, so a disconnect of a different phone is ignored; `disconnected` is set once the
+ * phone being backed up went away and its backup process was told to stop.
+ */
+interface BackupInFlight {
+  udid: string;
+  disconnected: boolean;
+  /** A disconnect is being confirmed by a second listing; further events are ignored. */
+  confirming: boolean;
+}
+
+/**
+ * BACKLOG-3598 (SR B2): how many second listings to try before giving up on confirming
+ * an unplug. A listing idevice_id could not answer is "unknown" and is retried; after
+ * this many unknowns the backup is left running (the no-progress watchdog still applies).
+ */
+const DISCONNECT_CONFIRM_ATTEMPTS = 3;
+
+/**
+ * BACKLOG-3881: Keepr does not read backups the iPhone's owner has encrypted in Finder,
+ * Apple Devices or iTunes ("Encrypt local backup"). The sync stops before anything is
+ * transferred and the user is told how to turn that setting off. No password is asked
+ * for, used or kept. The renderer shows the same text with the steps as a list.
+ */
+export const APPLE_ENCRYPTED_BACKUP_MESSAGE =
+  "Your iPhone backups are password-protected by Apple. Keepr can't read password-protected backups. " +
+  "To continue: 1) open Finder (Mac) or Apple Devices (Windows) and select your iPhone; " +
+  "2) untick Encrypt local backup and enter that password when asked; " +
+  "3) come back and press Sync again. " +
+  "Your data stays protected: Keepr encrypts its own copy of your messages.";
+
+/** BACKLOG-3881: the timeline reasonCode for a sync stopped by an Apple-encrypted backup. */
+export const APPLE_ENCRYPTED_BACKUP_REASON = "APPLE_ENCRYPTED_BACKUP";
+
+/**
+ * BACKLOG-3598: what the user is told when the phone being backed up is unplugged.
+ * Deliberately does not contain "cancelled": the renderer treats a result containing
+ * that word as a clean idle and would drop it.
+ */
+export const BACKUP_DEVICE_DISCONNECTED_MESSAGE =
+  "Your iPhone was disconnected during the backup. Reconnect it and select Try Again.";
+
+/**
+ * BACKLOG-3816: failures caused by backup encryption, recorded as
+ * `endedBy=backup-encryption` with their own reasonCode so they are countable apart
+ * from device faults.
+ */
+export const ENCRYPTION_REASON_CODES: ReadonlySet<string> = new Set([
+  "PASSWORD_REQUIRED",
+  "INCORRECT_PASSWORD",
+  "DECRYPTION_FAILED",
+  "BACKUP_PASSWORD_UNAVAILABLE",
+  "APPLE_ENCRYPTED_BACKUP",
+]);
+
+function inMockMode(): boolean {
+  try {
+    return isMockMode();
+  } catch {
+    return false;
+  }
+}
+
+function isEncryptionReasonCode(code: string | undefined): boolean {
+  return code !== undefined && ENCRYPTION_REASON_CODES.has(code);
+}
+
+/**
+ * BACKLOG-3816 G3 / BACKLOG-3814: which backup-tool failures count towards "two in a row
+ * -> the next sync unseals everything (C-FULL)".
+ *
+ * G3 exists because under C-DELTA the tool may need a file that is still sealed, and a
+ * failure that damages nothing would then repeat on every sync. So only a failure that
+ * could come from the tool reading the kept files counts:
+ *  - BACKUP_FILE_MISSING (MBErrorDomain/4): the phone could not get a file it needed;
+ *  - UNKNOWN_ERROR: the device reported an unmapped code, or nothing at all said why;
+ *  - no code at all: the tool exited without a classified reason.
+ * The last two are what a tool tripping over a sealed file would look like, so they count.
+ *
+ * Everything with a NAMED non-file cause does not count: service unavailable (the
+ * phone's handshake; the 2.40.0-rc.1 PC tripped G3 with a held start + an unplug + one of
+ * these), connection lost / unplug, watchdog timeout, locked phone, cancel, quit,
+ * password, disk space, bad input, an Apple-encrypted backup. Before BACKLOG-3814 this
+ * was a deny-list, so every new code counted by default; it is an allow-list now so a
+ * new code does not.
+ */
+const DELTA_PLAUSIBLE_TOOL_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "BACKUP_FILE_MISSING",
+  "UNKNOWN_ERROR",
+]);
+
+function mayBeDeltaToolFailure(errorCode: string | undefined): boolean {
+  return errorCode === undefined || DELTA_PLAUSIBLE_TOOL_FAILURE_CODES.has(errorCode);
+}
+
+/** BACKLOG-3816: returned by `raceCancel` when the sync was cancelled first. */
+const PREFLIGHT_CANCELLED = Symbol("preflight-cancelled");
+const PROCESSING_CANCELLED = "Processing cancelled by user";
+
+/**
+ * BACKLOG-3816: settle with the step's value, or with PREFLIGHT_CANCELLED as soon as
+ * the sync is cancelled. Used only for read-only pre-flight steps: the step itself
+ * may keep running, but nothing waits for it. A step that rejects after a cancel is
+ * swallowed (no unhandled rejection).
+ */
+function raceCancel<T>(signal: AbortSignal, step: Promise<T>): Promise<T | typeof PREFLIGHT_CANCELLED> {
+  if (signal.aborted) {
+    step.catch(() => undefined);
+    return Promise.resolve(PREFLIGHT_CANCELLED);
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      step.catch(() => undefined);
+      resolve(PREFLIGHT_CANCELLED);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    step.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
 export class DeviceSyncOrchestrator extends EventEmitter {
   private deviceService: DeviceDetectionService;
   private backupService: BackupService;
   private decryptionService: BackupDecryptionService;
+  /** BACKLOG-3816 S4-C: test seam; production uses the process singleton. */
+  backupAtRest: BackupAtRest | null = null;
+  /** S4-C: a successful sync's chain, sealed by {@link completeBackupAtRest} after persistence. */
+  private pendingAtRestSession: BackupSyncSession | null = null;
+  /**
+   * BACKLOG-3816: the finished backup's size, waiting for the post-sync seal's listing
+   * (C-DELTA: the seal lists every file of the chain anyway). Whoever seals hands it on
+   * ({@link finishSyncWithSize}); anything that ends without that listing measures it.
+   */
+  private pendingBackupSize: DeferredBackupSize | null = null;
+  /** S4-C: set once {@link watchBackupAtRestProgress} has subscribed. */
+  private atRestProgressWatched = false;
+  /** S4-C: the seal started by the last sync's end (tests and quit diagnostics await it). */
+  lastAtRestSeal: Promise<void> | null = null;
   private messagesParser: iOSMessagesParser;
   private contactsParser: iOSContactsParser;
 
   private isRunning: boolean = false;
+  /** BACKLOG-3598: set once the app quit has stopped this run's backup process. */
+  private stoppedForQuit: boolean = false;
   private abortController: AbortController | null = null;
   private currentPhase: SyncPhase = "idle";
   private estimatedBackupSize: number = 0;
@@ -547,6 +793,42 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   private diskSpaceAtAbort: number = 0;
 
   /**
+   * BACKLOG-3598 (SR R1): set while a sync frame's backup process may still be alive
+   * — from the call to `startBackup` until that call has settled AND any cleanup of
+   * the unfinished backup has finished. Settling is the only true "the process has
+   * exited" signal: `BackupService.isRunning` is cleared by `cancelBackup` before the
+   * process exits, and the watchdog nulls `currentProcess` while it may still run.
+   *
+   * `forceReset()` deliberately does NOT clear this. It aborts the frame's controller
+   * but kills nothing, so after a "Try Again" the earlier idevicebackup2 can still be
+   * writing into `Backups/<udid>`; a new frame must not sweep that folder.
+   */
+  private backupInFlight: BackupInFlight | null = null;
+
+  /**
+   * BACKLOG-3814: the single automatic retry after a backup tool start held by a
+   * security scan. Windows only (test seam), like the detection in backupService.
+   */
+  toolHoldRetryEnabled: boolean = process.platform === "win32";
+  /** BACKLOG-3814: wait before that retry. Tests shorten this. */
+  toolHoldRetryDelayMs: number = TOOL_HOLD_RETRY_DELAY_MS;
+  /** BACKLOG-3814: set while that wait runs; a quit aborts it. */
+  private toolHoldRetryWait: AbortController | null = null;
+
+  /**
+   * BACKLOG-3598 (SR B2): wait before the second listing that confirms an unplug. The
+   * detector polls every 2 s and one failed or empty poll is enough for it to report a
+   * disconnect. Tests shorten this.
+   */
+  disconnectConfirmDelayMs = 2000;
+
+  /**
+   * BACKLOG-3598 (SR I2): true while an unfinished backup folder is being removed, so
+   * the status reads "cleaning up" instead of "backup in progress".
+   */
+  private removingUnfinishedBackup = false;
+
+  /**
    * Tracks the last successfully synced backup for skip detection (TASK-908)
    * Note: This is in-memory only; cross-session persistence is a future enhancement
    */
@@ -573,7 +855,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // it can be recorded. The timeline keeps a high-water mark and the timestamp of
       // the last increase; the pair is what separates "57 GB moving slowly" from "2 GB
       // and then nothing" — the distinction the 2026-09-16 incident could not make.
-      syncTimeline.recordBytesTransferred(progress.bytesTransferred);
+      //
+      // BACKLOG-3784: TRANSFER EVENTS ONLY. backupService re-emits the TOTAL backup size
+      // as `bytesTransferred` on its `decrypting` and `finishing` events (the renderer's
+      // bar needs that). Recorded here, that total overwrote the high-water mark, so an
+      // incremental run that moved a few MB reported the whole 71 GB backup — and
+      // `bytesLastIncreasedAt` jumped to the end of every run. `backupBytes` already
+      // carries the total.
+      if (progress.phase === "transferring") {
+        syncTimeline.recordBytesTransferred(progress.bytesTransferred);
+      }
 
       // Calculate progress based on bytes transferred if we have estimated size
       let calculatedProgress = progress.percentComplete;
@@ -598,10 +889,6 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       });
     });
 
-    // Forward password required events
-    this.backupService.on("password-required", () => {
-      this.emit("password-required");
-    });
 
     // BACKLOG-3440: FIRST SYNC OR INCREMENTAL, RECORDED THE MOMENT THE DEVICE SAYS SO.
     //
@@ -661,6 +948,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
     this.deviceService.on("device-disconnected", (device: iOSDevice) => {
       this.emit("device-disconnected", device);
+      this.abortBackupOnDisconnect(device);
     });
   }
 
@@ -668,21 +956,72 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * Start the sync process
    */
   async sync(options: SyncOptions): Promise<SyncResult> {
+    // BACKLOG-3817: the decrypted parse copy this run made, if any — removed on every
+    // failure path here; on success the handler removes it after persistence.
+    let parseCopyPath: string | null = null;
+    // BACKLOG-3816 S4-C: the at-rest session for the kept backup. Every exit after
+    // beginSync seals in this function's finally, except a success, whose chain the
+    // parsers and the attachment copier still read: that one is handed to
+    // completeBackupAtRest(), which syncHandlers calls when persistence ends.
+    let atRestSession: BackupSyncSession | null = null;
+    let atRestHandedOff = false;
+    // BACKLOG-3816: set once this sync's seal has started (C-DELTA: right after the parse copy).
+    let atRestSealStarted = false;
+    // Set when the backup tool itself failed (not a cancel, quit, disconnect, disk guard
+    // or password failure): the sealing step then makes the next sync of a C-DELTA phone C-FULL.
+    let forceFullNext: string | undefined;
+    // G3: the backup tool finished (resets the consecutive tool-failure count).
+    let backupToolOk = false;
+    // BACKLOG-3814: a backup tool start was held during this sync.
+    let heldToolStart = false;
+    // BACKLOG-3816: the backup's size walk was deferred and reports on its own.
+    let deferredSizePending = false;
     if (this.isRunning) {
       return this.errorResult("Sync already in progress");
     }
 
+    // BACKLOG-3598 (SR R1): an earlier frame's backup process may still be alive
+    // (after "Try Again", or a cancel whose process has not exited yet). This frame
+    // would throw "Backup already in progress" at `startBackup` anyway, and before
+    // that its leftover sweep would run against a folder that process is still
+    // writing. Fail fast instead. Returned directly, NOT through `errorResult`:
+    // `isRunning` is false here, so `errorResult` would close the sync timeline,
+    // which still belongs to the earlier frame — this frame never called `beginSync`.
+    if (this.backupInFlight !== null) {
+      log.warn(
+        "[DeviceSyncOrchestrator] Sync refused: the previous sync's backup is still stopping",
+      );
+      Sentry.addBreadcrumb({
+        category: "sync",
+        message: "Sync refused while a previous backup is still stopping",
+      });
+      return {
+        success: false,
+        messages: [],
+        contacts: [],
+        conversations: [],
+        error: "Sync already in progress",
+        duration: 0,
+      };
+    }
+
     this.isRunning = true;
+    this.stoppedForQuit = false;
     // BACKLOG-2907: a new run must establish its own answer. Without this reset the
     // early progress events of run 2 would carry run 1's prior-backup state.
     this.priorBackup = "unknown";
     this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
+    // BACKLOG-3816: this frame's own cancel token. Read from here on, never through
+    // `this.abortController`, which a later frame replaces.
+    const preflightSignal = this.abortController.signal;
     this.startTime = Date.now();
     this.estimatedBackupSize = 0;
 
     // BACKLOG-2898: open the phase timeline for this run.
     syncTimeline.beginSync({ platform: process.platform });
+    // BACKLOG-3816: the deferred size walk reports into this run only.
+    const timelineRunId = syncTimeline.currentRunId?.() ?? null;
 
     // BACKLOG-2914 (FIX 4): the HOST half of the outcome row's environment.
     //
@@ -707,9 +1046,20 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     log.info("[DeviceSyncOrchestrator] Starting sync", { udid: options.udid, sessionId });
 
     try {
+      // BACKLOG-3598: remove unfinished backups that earlier failed or cancelled syncs
+      // left behind (including ones left by builds before this one). BEFORE the disk
+      // check, so a leftover cannot fail the very check that would reclaim its space.
+      await this.sweepLeftoverBackups();
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "leftover-sweep");
+
       // TASK-2276: Pre-sync checks with user-facing error messages
       // Check disk space using the diagnostic utility (enriched errors for UI)
-      const diskCheck = await checkDiskSpaceForOperation("sync");
+      let diskCheck = await checkDiskSpaceForOperation("sync");
+      // A quarantined (unreadable) backup never blocks the sync: delete the oldest first.
+      while (!diskCheck.sufficient && (await this.deleteOldestQuarantined())) {
+        diskCheck = await checkDiskSpaceForOperation("sync");
+      }
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "disk-check");
       if (!diskCheck.sufficient) {
         const userError = formatDiskSpaceError(diskCheck.availableMB, diskCheck.requiredMB);
         log.warn("[DeviceSyncOrchestrator] Pre-sync disk space check failed", {
@@ -726,10 +1076,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       let serviceRunning = true;
       if (process.platform === "win32") {
         const driverStatus = await checkAppleDrivers();
+        if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "driver-check");
         driversInstalled = driverStatus.isInstalled;
         serviceRunning = driverStatus.serviceRunning;
+        // BACKLOG-3927: the Store build has no "Install Sync Tools" or repair
+        // button; its texts point at Apple Devices instead.
+        const storeBuild = isStoreBuild();
         if (!driverStatus.isInstalled) {
-          const userError = formatMissingDriversError();
+          const userError = storeBuild
+            ? formatStoreAppleDevicesMissingError()
+            : formatMissingDriversError();
           log.warn("[DeviceSyncOrchestrator] Apple drivers not installed");
           // BACKLOG-1354: Breadcrumb + captureMessage when pre-sync fails
           Sentry.addBreadcrumb({
@@ -747,7 +1103,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           return this.errorResult(userError.description);
         }
         if (!driverStatus.serviceRunning) {
-          const userError = formatDriverServiceStoppedError();
+          // BACKLOG-3927: the text follows the source that is installed.
+          // Apple Devices -> open the app (either build). Apple's MSI ->
+          // website keeps its Repair text; the Store build has no Repair
+          // button, so a neutral line.
+          const userError =
+            driverStatus.installedVia === "apple-devices"
+              ? formatStoreAppleDevicesNotRunningError()
+              : storeBuild
+                ? formatMsiServiceStoppedNeutralError()
+                : formatDriverServiceStoppedError();
           log.warn("[DeviceSyncOrchestrator] Apple Mobile Device Service not running");
           // BACKLOG-1354: Breadcrumb + captureMessage when pre-sync fails
           Sentry.addBreadcrumb({
@@ -806,7 +1171,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       });
 
       // Check if there's an existing backup (could be complete or interrupted)
-      const backupStatus = await this.backupService.checkBackupStatus(options.udid);
+      // BACKLOG-3816: on a large backup this walk takes minutes (576k files on the PC,
+      // ~135 s). It stops at the next file on cancel, and the sync does not wait for it.
+      const backupStatus = await raceCancel(
+        preflightSignal,
+        this.backupService.checkBackupStatus(options.udid, { signal: preflightSignal, useRecordedSize: true }),
+      );
+      if (backupStatus === PREFLIGHT_CANCELLED) {
+        return this.endCancelledPreflight(preflightSignal, "backup-status");
+      }
       // BACKLOG-2907 + BACKLOG-2917: record what this check actually established.
       //
       // #2413 wrote `backupStatus?.exists === true ? "exists" : "unknown"` and
@@ -887,6 +1260,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // established. Collapsing it to `true` or `false` is the BACKLOG-2917 defect, and
       // it would poison the very split this field exists to make.
       syncTimeline.setContext({ priorBackup: this.priorBackup });
+
+      // BACKLOG-3598: what THIS frame found at start, kept in a local so a later frame
+      // rewriting `this.priorBackup` cannot change this frame's decision. A failed or
+      // cancelled sync may remove the folder only if it was absent or unusable when
+      // the sync began; a usable prior backup is kept, and an unknown read decides
+      // nothing. (The removal itself re-reads the folder after the backup process has
+      // exited and deletes only when `Manifest.db` is missing.)
+      const mayRemoveUnfinishedBackup =
+        backupStatus.state === "absent" ||
+        (backupStatus.state === "present" && !usableAsPriorBackup);
 
 
       // BACKLOG-2917: `let existingBackupSize = 0` used to live here, and it was the
@@ -1040,7 +1423,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           });
 
           // Brief pause to let user see this message
-          await new Promise(resolve => setTimeout(resolve, 1500));
+          await raceCancel(preflightSignal, new Promise(resolve => setTimeout(resolve, 1500)));
 
           this.emitProgress({
             phase: "backup",
@@ -1157,6 +1540,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           message: "Preparing first sync (this may take a while)...",
         });
       }
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "prior-backup");
 
       // BACKLOG-2899: Refuse up front when free space is ALREADY below the
       // reserve the mid-transfer monitor defends. Same constant, same semantic:
@@ -1173,9 +1557,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // on the founder's run, so refusing up front there would cost a user
       // nothing while a mid-transfer abort costs a full 20-25 minute run. That
       // is filed separately; this change does not make it.
-      const reserveCheck = await this.checkAvailableDiskSpace(
-        SYNC_DISK_RESERVE_BYTES,
+      const reserveCheck = await this.reclaimQuarantineUntil(
+        await this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES),
+        () => this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES),
       );
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "reserve-check");
       // BACKLOG-2914 (FIX 4): host disk, from the reading the guard already took.
       if (!reserveCheck.unavailable) {
         syncTimeline.setContext({
@@ -1208,7 +1594,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       }
 
       // Step 1: Get device storage info to estimate backup size
-      const storageInfo = await this.deviceService.getDeviceStorageInfo(options.udid);
+      const storageInfoOrCancel = await raceCancel(
+        preflightSignal,
+        this.deviceService.getDeviceStorageInfo(options.udid),
+      );
+      if (storageInfoOrCancel === PREFLIGHT_CANCELLED) {
+        return this.endCancelledPreflight(preflightSignal, "storage-query");
+      }
+      const storageInfo = storageInfoOrCancel;
       // BACKLOG-2914 (FIX 4): what the phone itself is carrying. Already fetched for
       // the estimate; recorded rather than discarded.
       if (storageInfo) {
@@ -1333,6 +1726,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       const headroom = estimate.source === "existing-backup" ? 1.1 : 1.5;
       const requiredSpace = this.estimatedBackupSize * headroom;
       const diskSpaceCheck = await this.checkAvailableDiskSpace(requiredSpace);
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "estimate-disk-check");
 
       if (!diskSpaceCheck.hasEnoughSpace) {
         // THE RESIDUAL, NAMED. A KNOWN estimate that does not fit still only warns and
@@ -1355,7 +1749,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           message: `Low disk space (${availableGB} GB free). Backup may fail — consider freeing up space.`,
         });
         // Brief pause so user can see the warning
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await raceCancel(preflightSignal, new Promise(resolve => setTimeout(resolve, 3000)));
       } else {
         log.info(`[DeviceSyncOrchestrator] Disk space check passed: ${Math.round(diskSpaceCheck.availableSpace / 1024 / 1024 / 1024)} GB available`);
       }
@@ -1368,136 +1762,319 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         estimatedTotalBytes: this.estimatedBackupSize,
       });
 
+      // BACKLOG-3817: a parse copy left by a crash or a killed quit holds plaintext. No
+      // other sync can be running here (isRunning), so every copy is stale.
+      await this.sweepParseCopies();
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "parse-copy-sweep");
+
+      // BACKLOG-3881: Keepr does not read Apple-encrypted backups. A phone whose owner has
+      // "Encrypt local backup" on stops here, before the at-rest pause is requested and
+      // before anything is transferred. No password is asked for or used. "off" and
+      // "unknown" go on; a backup that still lands encrypted stops after the transfer.
+      const phoneEncryption = await this.readPhoneBackupEncryption(options.udid);
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "encryption-check");
+      if (phoneEncryption === "on") {
+        log.info("[DeviceSyncOrchestrator] Backup encryption is on for this iPhone; not syncing");
+        return this.stopForAppleEncryptedBackup();
+      }
+
+      // BACKLOG-3816 S4-C: unseal the kept chain for idevicebackup2 (strategy C-FULL /
+      // C-DELTA). Refused BEFORE anything is spawned when the data key is unavailable,
+      // the backup is being secured (launch migration or the seal after the previous
+      // sync), there is no room, or a sealed file will not open.
+      if (!inMockMode()) {
+        try {
+          atRestSession = await this.atRest().beginSync(options.udid, {
+            onProgress: (p) => this.emitAtRestProgress(p),
+            signal: preflightSignal,
+          });
+        } catch (error) {
+          if (!(error instanceof BackupAtRestRefusal)) throw error;
+          if (error.reason === "cancelled") {
+            // Cancelled while a background seal was pausing for it: a cancel, not a failure.
+            this.isRunning = false;
+            return this.errorResult("Sync cancelled by user");
+          }
+          return this.refuseForAtRest(error.message, error.reason, error.problem);
+        }
+        if (atRestSession.kind === "first" && atRestSession.quarantined) {
+          this.reportQuarantinedBackup(atRestSession.quarantined);
+        }
+      }
+
       // Step 1: Create backup
       this.setPhase("backup");
 
       // BACKLOG-2899: re-measure free space WHILE the transfer runs.
       let backupResult: BackupResult;
-      this.startDiskSpaceMonitor();
+      // BACKLOG-3598 (SR R1): see `backupInFlight`. Held until the backup has settled
+      // and any cleanup of its unfinished folder is done.
+      const backupInFlightToken: BackupInFlight = {
+        udid: options.udid,
+        disconnected: false,
+        confirming: false,
+      };
+      this.backupInFlight = backupInFlightToken;
       try {
-        backupResult = await this.backupService.startBackup({
-          udid: options.udid,
-          password: options.password,
-          forceFullBackup: options.forceFullBackup,
-        });
-      } finally {
-        this.stopDiskSpaceMonitor();
-      }
+        this.startDiskSpaceMonitor();
+        try {
+          const backupOptions = {
+            udid: options.udid,
+            forceFullBackup: options.forceFullBackup,
+            deferSizeMeasurement: true,
+          };
+          backupResult = await this.backupService.startBackup(backupOptions);
+          // BACKLOG-3814: a backup tool held at start (security scan on its first run
+          // after an update) and then refused by the phone's backup service gets ONE
+          // more try, after a wait, in this same frame: the at-rest session opened above
+          // and `backupInFlightToken` both carry over, so nothing is unsealed twice and
+          // Try Again stays refused while it runs. Never a second retry.
+          heldToolStart = backupResult.toolStart?.delayed === true;
+          if (
+            this.toolHoldRetryEnabled &&
+            shouldRetryAfterToolStartHold(backupResult) &&
+            (await this.waitBeforeToolHoldRetry(options.udid, preflightSignal, backupInFlightToken))
+          ) {
+            log.info("[DeviceSyncOrchestrator] Retrying the backup once after a held tool start", {
+              delayMs: backupResult.toolStart?.delayMs,
+              delayed: heldToolStart,
+              firstRunThisVersion: backupResult.toolStart?.firstRunThisVersion,
+            });
+            backupResult = await this.backupService.startBackup(backupOptions);
+            heldToolStart = heldToolStart || backupResult.toolStart?.delayed === true;
+            log.info("[DeviceSyncOrchestrator] Backup retry after a held tool start finished", {
+              success: backupResult.success,
+              errorCode: backupResult.errorCode ?? null,
+            });
+          }
+          if (
+            this.toolHoldRetryEnabled &&
+            heldToolStart &&
+            !backupResult.success &&
+            backupResult.errorCode === "SERVICE_UNAVAILABLE"
+          ) {
+            backupResult = { ...backupResult, error: TOOL_START_HOLD_FAILED_MESSAGE };
+          }
+          // BACKLOG-3814: a THROW from startBackup is not counted towards G3 any more. It
+          // happens before the tool runs (a second backup, the backup folder) or after it
+          // finished (reading the unsealed root plists) — never the tool failing on a
+          // sealed file (see DELTA_PLAUSIBLE_TOOL_FAILURE_CODES).
+        } finally {
+          this.stopDiskSpaceMonitor();
+        }
 
-      // BACKLOG-2899: the monitor cancelled the backup to protect the volume.
-      //
-      // The partial backup is deliberately left on disk — nothing on this path
-      // deletes `Backups/<udid>`, so the next run's checkBackupStatus still
-      // finds it. It does NOT follow that the next run continues from it:
-      // BACKLOG-2911 measured the next sync starting from zero. Do not promise
-      // resume in the message below until 2911 lands.
-      if (this.diskSpaceAborted) {
-        const freeGB = (this.diskSpaceAtAbort / 1024 / 1024 / 1024).toFixed(1);
-        const reserveGB = (SYNC_DISK_RESERVE_BYTES / 1024 / 1024 / 1024).toFixed(1);
-        const message =
-          `Sync stopped to protect your computer: free disk space fell to ${freeGB} GB ` +
-          `(below the ${reserveGB} GB this sync keeps in reserve) while the iPhone backup was running. ` +
-          `The partial backup was kept on disk. Free up space and sync again — the next sync currently starts over rather than continuing from it.`;
-        log.warn("[DeviceSyncOrchestrator] Sync aborted mid-transfer: disk space", {
-          availableBytes: this.diskSpaceAtAbort,
-          reserveBytes: SYNC_DISK_RESERVE_BYTES,
-          estimatedBackupSize: this.estimatedBackupSize,
-        });
-        Sentry.captureMessage("Sync aborted mid-transfer to protect disk space", {
-          level: "error",
-          tags: { service: "sync-orchestrator", failure_reason: "disk_space" },
-          extra: {
+        // BACKLOG-2899: the monitor cancelled the backup to protect the volume.
+        //
+        // BACKLOG-3598: an unfinished FIRST backup is removed here (it has no index,
+        // so the next sync could not reuse it anyway, and on a full disk it is the
+        // space the user needs back). A usable earlier backup is kept.
+        if (this.diskSpaceAborted) {
+          const cleanup = await this.removeUnfinishedBackup(
+            options.udid,
+            mayRemoveUnfinishedBackup,
+          );
+          const freeGB = (this.diskSpaceAtAbort / 1024 / 1024 / 1024).toFixed(1);
+          const reserveGB = (SYNC_DISK_RESERVE_BYTES / 1024 / 1024 / 1024).toFixed(1);
+          const message =
+            `Sync stopped to protect your computer: free disk space fell to ${freeGB} GB ` +
+            `(below the ${reserveGB} GB this sync keeps in reserve) while the iPhone backup was running. ` +
+            diskGuardCleanupSentence(cleanup);
+          log.warn("[DeviceSyncOrchestrator] Sync aborted mid-transfer: disk space", {
             availableBytes: this.diskSpaceAtAbort,
             reserveBytes: SYNC_DISK_RESERVE_BYTES,
             estimatedBackupSize: this.estimatedBackupSize,
-          },
-        });
-        // BACKLOG-3440: the app stopped this run to protect the volume. That is neither
-        // a user act nor a device fault, and the row can now say which it was.
-        //
-        // `endedBy` only, deliberately no `reasonCode`. `reason_code` carries the
-        // `BackupErrorCode` union and nothing else; inventing a fourteenth value here
-        // would be the same mistake BACKLOG-2953 found — a string outside the union,
-        // hidden from `tsc` — and `ended_by=host-guard` already identifies this
-        // completely.
-        syncTimeline.setContext({ endedBy: "host-guard" });
-        this.isRunning = false;
-        this.setPhase("error");
-        this.emit("error", { message });
-        return this.errorResult(message);
-      }
-
-      if (this.abortController?.signal.aborted) {
-        this.isRunning = false;
-        return this.errorResult("Sync cancelled by user");
-      }
-
-      // BACKLOG-2914 (FIX 4): recorded BEFORE the failure return, so a FAILED run
-      // carries the same dimensions as a successful one. A failure row missing the
-      // incremental flag cannot be compared with the success rows it is a fraction of,
-      // and BACKLOG-2952 reads both halves of that fraction from this one row.
-      //
-      // `backupModeSource=device-reported` means idevicebackup2 printed "Full backup
-      // mode." or "Incremental backup mode." and that is what the flag says.
-      // `inferred` means it never printed one and the flag is the old derivation from
-      // whether a directory existed — the derivation that reported `incremental=true`
-      // for a 61.2 GB, 52-minute transfer on 2026-08-28. Two facts of very different
-      // quality, and an aggregate that cannot separate them is worth less than one that
-      // can.
-      syncTimeline.setContext({
-        incremental: backupResult.isIncremental,
-        backupModeSource:
-          backupResult.deviceReportedBackupMode === null ||
-          backupResult.deviceReportedBackupMode === undefined
-            ? "inferred"
-            : "device-reported",
-        wasEncrypted: !!backupResult.isEncrypted,
-        ...(backupResult.backupSize === null
-          ? { backupBytesUnmeasured: true }
-          : { backupBytes: backupResult.backupSize }),
-      });
-
-      if (!backupResult.success || !backupResult.backupPath) {
-        const error = backupResult.error || "Backup failed";
-
-        // BACKLOG-3440: STOP DISCARDING THE CAUSE THAT WAS ALREADY ESTABLISHED.
-        //
-        // Since BACKLOG-2913 the backup path has parsed the device's own account of a
-        // failure — `MBErrorDomain/208` becomes `errorCode: "DEVICE_LOCKED"`, a broken
-        // usbmuxd pipe becomes `CONNECTION_LOST`, the 30-minute no-progress watchdog
-        // becomes `BACKUP_TIMEOUT` — and kept the numeric MBErrorDomain code beside it.
-        // Both were sitting on `backupResult` and neither reached the row: only
-        // `backupResult.error`, the sentence written for the user, was forwarded. So
-        // "her phone was locked" was observable at the moment it happened and then
-        // thrown away, and the founder had to ask the user instead.
-        //
-        // Nothing is classified here. The values are copied.
-        syncTimeline.setContext({
-          ...(backupResult.errorCode ? { reasonCode: backupResult.errorCode } : {}),
-          // `null` means "the device did not say", never "no error". Absent stays
-          // absent rather than becoming a zero code — the same rule the rest of this
-          // sync path already follows for an unmeasured backup size.
-          ...(typeof backupResult.failureCause?.deviceErrorCode === "number"
-            ? { deviceErrorCode: backupResult.failureCause.deviceErrorCode }
-            : {}),
-          // The watchdog killing an unresponsive process and the device reporting a
-          // fault are different events with different fixes; they were the same row.
-          endedBy: backupResult.errorCode === "BACKUP_TIMEOUT" ? "watchdog" : "device-error",
-        });
-
-        const isDiskSpaceError = /disk space|no space|ENOSPC|not enough space/i.test(error);
-        if (isDiskSpaceError) {
-          Sentry.captureMessage("Backup failed due to insufficient disk space", {
+          });
+          Sentry.captureMessage("Sync aborted mid-transfer to protect disk space", {
             level: "error",
             tags: { service: "sync-orchestrator", failure_reason: "disk_space" },
             extra: {
+              availableBytes: this.diskSpaceAtAbort,
+              reserveBytes: SYNC_DISK_RESERVE_BYTES,
               estimatedBackupSize: this.estimatedBackupSize,
-              error,
             },
           });
+          // BACKLOG-3440: the app stopped this run to protect the volume. That is neither
+          // a user act nor a device fault, and the row can now say which it was.
+          //
+          // `endedBy` only, deliberately no `reasonCode`. `reason_code` carries the
+          // `BackupErrorCode` union and nothing else; inventing a fourteenth value here
+          // would be the same mistake BACKLOG-2953 found — a string outside the union,
+          // hidden from `tsc` — and `ended_by=host-guard` already identifies this
+          // completely.
+          syncTimeline.setContext({ endedBy: "host-guard" });
+          this.isRunning = false;
+          this.setPhase("error");
+          this.emit("error", { message });
+          return this.errorResult(message);
         }
-        this.isRunning = false;
-        return this.errorResult(error);
+
+        // BACKLOG-3598: the phone being backed up was unplugged, and
+        // `abortBackupOnDisconnect` stopped the backup process. Before this exit, a
+        // disconnect left idevicebackup2 running and this frame waiting on it until the
+        // 30-minute watchdog, with every Try Again refused. Same shape as the disk-guard
+        // exit above: clean up, record why, end the run once. It returns BEFORE the
+        // `!success` block so that block's `endedBy` (device-error / watchdog) does not
+        // overwrite this one. SR B1: `abortBackupOnDisconnect` only acts while the
+        // process is alive; a backup that still came back complete is never discarded.
+        if (
+          backupInFlightToken.disconnected &&
+          !(backupResult.success && backupResult.backupPath)
+        ) {
+          await this.removeUnfinishedBackup(options.udid, mayRemoveUnfinishedBackup);
+          syncTimeline.setContext({ endedBy: "device-disconnect" });
+          this.isRunning = false;
+          this.setPhase("error");
+          this.emit("error", { message: BACKUP_DEVICE_DISCONNECTED_MESSAGE });
+          return this.errorResult(BACKUP_DEVICE_DISCONNECTED_MESSAGE, "CONNECTION_LOST");
+        }
+
+        // BACKLOG-3816: the finished backup's size is measured while the sync goes on
+        // (parse copy, seal, parse, store) instead of before it. Its figure reaches this
+        // run's row and the backup phase when the walk ends, if the run is still open.
+        const deferredSize = this.backupService.takeDeferredSizeMeasurement?.(options.udid) ?? null;
+        if (deferredSize) {
+          deferredSizePending = true;
+          // C-DELTA (Keepr-sealed chain): the seal right after the parse copy lists every
+          // file; its total is the size, so no separate walk runs. Every other case (C-FULL
+          // — its seal waits for persistence —, an Apple-encrypted or first backup) walks now.
+          if (atRestSession?.kind === "keepr" && atRestSession.strategy === "delta" && !backupResult.isEncrypted) {
+            this.measurePendingBackupSize();
+            this.pendingBackupSize = deferredSize;
+          } else {
+            deferredSize.measure();
+          }
+          const backupPhase = this.backupTimelinePhase;
+          void deferredSize.reading.then((reading) => {
+            if (timelineRunId === null || syncTimeline.currentRunId?.() !== timelineRunId) return;
+            syncTimeline.setContext(
+              reading.measured ? { backupBytes: reading.bytes } : { backupBytesUnmeasured: true },
+            );
+            syncTimeline.annotate(
+              backupPhase,
+              reading.measured ? { bytes: reading.bytes } : { bytesUnmeasured: true },
+            );
+          });
+        }
+
+        if (this.abortController?.signal.aborted) {
+          // BACKLOG-3598: a cancelled first sync leaves nothing behind.
+          await this.removeUnfinishedBackup(options.udid, mayRemoveUnfinishedBackup);
+          this.isRunning = false;
+          return this.errorResult("Sync cancelled by user");
+        }
+
+        // BACKLOG-2914 (FIX 4): recorded BEFORE the failure return, so a FAILED run
+        // carries the same dimensions as a successful one. A failure row missing the
+        // incremental flag cannot be compared with the success rows it is a fraction of,
+        // and BACKLOG-2952 reads both halves of that fraction from this one row.
+        //
+        // `backupModeSource=device-reported` means idevicebackup2 printed "Full backup
+        // mode." or "Incremental backup mode." and that is what the flag says.
+        // `inferred` means it never printed one and the flag is the old derivation from
+        // whether a directory existed — the derivation that reported `incremental=true`
+        // for a 61.2 GB, 52-minute transfer on 2026-08-28. Two facts of very different
+        // quality, and an aggregate that cannot separate them is worth less than one that
+        // can.
+        syncTimeline.setContext({
+          incremental: backupResult.isIncremental,
+          backupModeSource:
+            backupResult.deviceReportedBackupMode === null ||
+            backupResult.deviceReportedBackupMode === undefined
+              ? "inferred"
+              : "device-reported",
+          wasEncrypted: !!backupResult.isEncrypted,
+          // BACKLOG-3816: a deferred walk sets the size itself when it ends.
+          ...(deferredSize
+            ? {}
+            : backupResult.backupSize === null
+              ? { backupBytesUnmeasured: true }
+              : { backupBytes: backupResult.backupSize }),
+        });
+
+        backupToolOk = backupResult.success && !!backupResult.backupPath;
+        if (!backupResult.success || !backupResult.backupPath) {
+          const error = backupResult.error || "Backup failed";
+
+          // BACKLOG-3881: the backup is Apple-encrypted (the phone's setting read "unknown"
+          // before the transfer, or backupService found it on). Keepr has no password to
+          // give and never asks for one: the run stops with the turn-it-off message.
+          const appleEncrypted =
+            backupResult.errorCode === "PASSWORD_REQUIRED" || backupResult.errorCode === "INCORRECT_PASSWORD";
+
+          // BACKLOG-3440: STOP DISCARDING THE CAUSE THAT WAS ALREADY ESTABLISHED.
+          //
+          // Since BACKLOG-2913 the backup path has parsed the device's own account of a
+          // failure — `MBErrorDomain/208` becomes `errorCode: "DEVICE_LOCKED"`, a broken
+          // usbmuxd pipe becomes `CONNECTION_LOST`, the 30-minute no-progress watchdog
+          // becomes `BACKUP_TIMEOUT` — and kept the numeric MBErrorDomain code beside it.
+          // Both were sitting on `backupResult` and neither reached the row: only
+          // `backupResult.error`, the sentence written for the user, was forwarded. So
+          // "her phone was locked" was observable at the moment it happened and then
+          // thrown away, and the founder had to ask the user instead.
+          //
+          // Nothing is classified here. The values are copied.
+          // BACKLOG-3598: the app quit killed this backup. That is not a device fault
+          // (BACKLOG-3440 separated the two), so the row says `app-quit` and carries no
+          // reasonCode; the unfinished folder is left to the next sync's sweep.
+          if (this.stoppedForQuit) {
+            syncTimeline.setContext({ endedBy: "app-quit" });
+            this.isRunning = false;
+            return this.errorResult(error);
+          }
+          // The backup tool itself failed (the abort, quit, disconnect and disk-guard exits
+          // all returned above). Whether the next sync unseals everything is decided at seal time.
+          // BACKLOG-3814: only a failure that could come from the kept files counts
+          // (see DELTA_PLAUSIBLE_TOOL_FAILURE_CODES); a held start's service-unavailable
+          // failure never does.
+          if (
+            mayBeDeltaToolFailure(backupResult.errorCode) &&
+            !/disk space|no space|ENOSPC|not enough space/i.test(error)
+          ) {
+            forceFullNext = FORCE_FULL_REASON_DELTA_TOOL_FAILED;
+          }
+          syncTimeline.setContext({
+            ...(backupResult.errorCode ? { reasonCode: backupResult.errorCode } : {}),
+            // `null` means "the device did not say", never "no error". Absent stays
+            // absent rather than becoming a zero code — the same rule the rest of this
+            // sync path already follows for an unmeasured backup size.
+            ...(typeof backupResult.failureCause?.deviceErrorCode === "number"
+              ? { deviceErrorCode: backupResult.failureCause.deviceErrorCode }
+              : {}),
+            // The watchdog killing an unresponsive process and the device reporting a
+            // fault are different events with different fixes; they were the same row.
+            endedBy:
+              backupResult.errorCode === "BACKUP_TIMEOUT"
+                ? "watchdog"
+                : isEncryptionReasonCode(backupResult.errorCode)
+                  ? "backup-encryption"
+                  : "device-error",
+          });
+
+          // BACKLOG-3598: a failed first sync (device error, disconnect, watchdog,
+          // disk full) leaves nothing behind. A usable earlier backup is kept.
+          await this.removeUnfinishedBackup(options.udid, mayRemoveUnfinishedBackup);
+
+          const isDiskSpaceError = /disk space|no space|ENOSPC|not enough space/i.test(error);
+          if (isDiskSpaceError) {
+            Sentry.captureMessage("Backup failed due to insufficient disk space", {
+              level: "error",
+              tags: { service: "sync-orchestrator", failure_reason: "disk_space" },
+              extra: {
+                estimatedBackupSize: this.estimatedBackupSize,
+                error,
+              },
+            });
+          }
+          this.isRunning = false;
+          if (appleEncrypted) {
+            return this.stopForAppleEncryptedBackup();
+          }
+          return this.errorResult(error, backupResult.errorCode);
+        }
+      } finally {
+        if (this.backupInFlight === backupInFlightToken) {
+          this.backupInFlight = null;
+        }
       }
 
       // BACKLOG-2898/2894: what the backup phase produced. `incremental` is
@@ -1510,9 +2087,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // be annotated `bytes: 0`, which reads in the timeline — and in the aggregate
       // BACKLOG-2894 will build — as a run that transferred nothing.
       syncTimeline.annotate(this.backupTimelinePhase, {
-        ...(backupResult.backupSize === null
-          ? { bytesUnmeasured: true }
-          : { bytes: backupResult.backupSize }),
+        // BACKLOG-3816: a deferred walk annotates the size when it ends.
+        ...(deferredSizePending
+          ? {}
+          : backupResult.backupSize === null
+            ? { bytesUnmeasured: true }
+            : { bytes: backupResult.backupSize }),
         incremental: backupResult.isIncremental,
         encrypted: !!backupResult.isEncrypted,
       });
@@ -1520,38 +2100,35 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       let backupPath = backupResult.backupPath;
 
-      // Step 2: Decrypt if needed
+      // BACKLOG-3881: a backup that came back Apple-encrypted is never decrypted. Keepr has
+      // no password for it and does not ask for one.
       if (backupResult.isEncrypted) {
-        if (!options.password) {
-          this.isRunning = false;
-          this.emit("password-required");
-          return this.errorResult("Password required for encrypted backup");
+        return this.stopForAppleEncryptedBackup();
+      }
+
+      // BACKLOG-3816 S4-C, C-DELTA: unchanged files are still sealed, so the parsers and
+      // the attachment copier read a parse copy (decrypted to userData/at-rest-tmp) -
+      // removed after persistence / on failure / at launch, like the 3817 copy.
+      if (atRestSession?.kind === "keepr" && atRestSession.strategy === "delta" && !backupResult.isEncrypted) {
+        const copyDir = this.decryptionService.newParseCopyDir();
+        try {
+          await this.atRest().buildParseCopy(options.udid, copyDir);
+        } catch (error) {
+          await this.discardParseCopy(copyDir);
+          throw error;
         }
-
-        this.setPhase("decrypting");
-        this.emitProgress({
-          phase: "decrypting",
-          phaseProgress: 0,
-          overallProgress: this.calculateOverallProgress("decrypting", 0),
-          message: "Decrypting backup...",
-        });
-
-        const decryptResult = await this.decryptionService.decryptBackup(
-          backupPath,
-          options.password,
-        );
-
-        if (this.abortController?.signal.aborted) {
-          this.isRunning = false;
-          return this.errorResult("Sync cancelled by user");
-        }
-
-        if (!decryptResult.success || !decryptResult.decryptedPath) {
-          this.isRunning = false;
-          return this.errorResult(decryptResult.error || "Decryption failed");
-        }
-
-        backupPath = decryptResult.decryptedPath;
+        backupPath = copyDir;
+        parseCopyPath = copyDir;
+        // BACKLOG-3816: from here on this sync reads only the parse copy, never the chain.
+        // So the chain is sealed NOW, in the background (worker threads), while contacts
+        // and messages are parsed and stored — not after persistence. What the phone
+        // just wrote and the unsealed index files are sealed first (newest first).
+        // `cleanEnd`: the backup tool finished and its output is read, so this is a normal
+        // end — a chain proven sealed before the sync seals only this sync's delta and
+        // skips the verification walk (founder decision 2026-10-10). The finally below
+        // (unplug, cancel, error) never passes it.
+        this.lastAtRestSeal = this.finishSyncWithSize(atRestSession, { toolOk: true, cleanEnd: true });
+        atRestSealStarted = true;
       }
 
       // Step 3: Parse contacts
@@ -1579,6 +2156,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       if (this.abortController?.signal.aborted) {
         this.isRunning = false;
         this.contactsParser.close();
+        await this.discardParseCopy(parseCopyPath);
         return this.errorResult("Sync cancelled by user");
       }
 
@@ -1609,14 +2187,36 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         },
       );
 
-      // Load messages for each conversation using async method
+      // Load messages for each conversation using async method.
+      // BACKLOG-3892 S1: with a floor plan, a chat older than its floor is not read
+      // at all and the rest are read down to their floor only.
+      const floorPlan = options.floorPlan;
+      const floorReport: ParseFloorReport | undefined = floorPlan
+        ? {
+            floorSource: floorSourceOf(floorPlan),
+            settingsFloorMs: floorPlan.settingsFloorMs,
+            chatsSkippedOld: 0,
+            chatsWidened: 0,
+            messagesBelowFloor: 0,
+          }
+        : undefined;
+      const skippedChats = new Set<number>();
+      // BACKLOG-3892 S2 (SR C2): the floor each chat was actually read to.
+      const appliedChatFloors: Array<readonly [number, number | null]> = [];
       let loadedCount = 0;
       for (const conv of conversations) {
         if (this.abortController?.signal.aborted) {
           break;
         }
 
-        conv.messages = await this.messagesParser.getMessagesAsync(conv.chatId);
+        if (floorPlan && floorReport) {
+          if ((await readChatWithFloor(this.messagesParser, floorPlan, conv, floorReport)) === "skipped") {
+            skippedChats.add(conv.chatId);
+          }
+          appliedChatFloors.push([conv.chatId, conv.appliedFloorMs ?? null]);
+        } else {
+          conv.messages = await this.messagesParser.getMessagesAsync(conv.chatId);
+        }
         loadedCount++;
 
         // Report progress every 10 conversations (second 50%)
@@ -1634,18 +2234,47 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         }
       }
 
+      // BACKLOG-3892 W3b: how far back this phone's texts go (a new phone's coverage
+      // never starts before it). A failed read is unknown (null): no cap.
+      let oldestTextMs: number | null = null;
+      try {
+        oldestTextMs = this.messagesParser.getOldestMessageDateMs();
+      } catch {
+        oldestTextMs = null;
+      }
+
       if (this.abortController?.signal.aborted) {
         this.isRunning = false;
         this.messagesParser.close();
         this.contactsParser.close();
+        await this.discardParseCopy(parseCopyPath);
         return this.errorResult("Sync cancelled by user");
       }
+
+      // BACKLOG-3892 S1: a chat not read (older than its floor) is not a conversation of this run.
+      if (skippedChats.size > 0) {
+        for (let i = conversations.length - 1; i >= 0; i--) {
+          if (skippedChats.has(conversations[i].chatId)) conversations.splice(i, 1);
+        }
+      }
+      // BACKLOG-3892 S1 (D5): reads that failed; `?? 0` because test doubles of the parser omit it.
+      const chatReadFailures = this.messagesParser.readFailures ?? 0;
 
       // BACKLOG-2898/2894: what the parsing phase produced.
       syncTimeline.annotate("parsing-messages", {
         conversations: conversations.length,
         messages: conversations.reduce((sum, c) => sum + c.messages.length, 0),
+        chatReadFailures,
+        ...(floorReport
+          ? {
+              chatsSkippedOld: floorReport.chatsSkippedOld,
+              chatsWidened: floorReport.chatsWidened,
+              messagesBelowFloor: floorReport.messagesBelowFloor,
+            }
+          : {}),
       });
+      // Phase counts are numeric; the floor's source is run context (a label, no content).
+      syncTimeline.setContext({ floorSource: floorReport?.floorSource ?? "none" });
 
       // Step 5: Resolve contact names
       this.setPhase("resolving");
@@ -1675,7 +2304,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       // SPRINT-068: Don't cleanup decrypted files here - needed for attachment extraction
       // Cleanup will be triggered by sync-handlers after persistence is complete
-      const needsCleanup = backupResult.isEncrypted && backupPath !== backupResult.backupPath;
+      const needsCleanup = parseCopyPath !== null;
 
       // Calculate all messages from conversations
       const allMessages = resolvedConversations.flatMap((c) => c.messages);
@@ -1714,14 +2343,46 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         backupPath,  // SPRINT-068: Pass for attachment extraction
         needsCleanup, // SPRINT-068: Caller should cleanup after persistence
         sessionId,   // TASK-2110: For ACID rollback on cancel
+        chatReadFailures, // BACKLOG-3892 S1 (D5)
+        ...(floorReport ? { parseFloors: floorReport } : {}),
+        // BACKLOG-3892 S2: what persistence records iPhone coverage from.
+        coverageRun: {
+          udid: options.udid,
+          startedAtMs: this.startTime,
+          ...(floorPlan ? { floorPlan } : {}),
+          chatFloors: appliedChatFloors,
+          oldestTextMs,
+        },
       };
 
+      // BACKLOG-3816 S4-C: persistence still reads this chain; it is sealed when
+      // persistence ends (syncHandlers -> completeBackupAtRest). With no listener there
+      // is no persistence, so the finally below seals now.
+      if (atRestSession && !atRestSealStarted && this.listenerCount("complete") > 0) {
+        this.pendingAtRestSession = atRestSession;
+        atRestHandedOff = true;
+      }
+
+      // BACKLOG-3816: with no listener nothing persists and nothing will call
+      // cleanupBackup, so the plaintext parse copy would wait for the next sweep.
+      const nobodyCleansUp = needsCleanup && this.listenerCount("complete") === 0;
       this.emit("complete", result);
+      if (nobodyCleansUp) await this.discardParseCopy(parseCopyPath);
       return result;
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       log.error("[DeviceSyncOrchestrator] Sync failed", { error: errorMessage });
+      // BACKLOG-3892 E: a C-DELTA parse copy refused by the at-rest layer (the messages or
+      // contacts database could not be opened) is recorded like every other at-rest refusal.
+      if (error instanceof BackupAtRestRefusal) {
+        syncTimeline.setContext({
+          endedBy: "backup-at-rest",
+          reasonCode: error.problem === "damaged" ? BACKUP_DAMAGED_REASON : error.reason,
+        });
+        const sentryReason = backupProblemForRefusal(error.reason, error.problem);
+        if (sentryReason) reportBackupProblem(sentryReason);
+      }
       Sentry.captureException(error, {
         tags: { service: "sync-orchestrator", operation: "sync" },
       });
@@ -1733,26 +2394,436 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       } catch {
         // Ignore cleanup errors
       }
+      await this.discardParseCopy(parseCopyPath);
 
       this.isRunning = false;
       this.setPhase("error");
       this.emit("error", error);
 
       return this.errorResult(errorMessage);
+    } finally {
+      // BACKLOG-3816 S4-C: EVERY non-success end - error, cancel, disconnect, disk
+      // guard, watchdog, password failure - seals the chain. Not awaited: a 67 GB seal
+      // must not hold the sync's answer; the per-phone lock refuses a new sync until it
+      // ends. A quit (3 s cap) does not seal: the marker stays `syncing` and the next
+      // launch seals before any sync.
+      if (atRestSession && !atRestHandedOff && !atRestSealStarted) {
+        if (this.stoppedForQuit) {
+          log.info("[DeviceSyncOrchestrator] App quitting; the kept backup is sealed at next launch");
+          // G4: give the phone back, in case the quit does not happen after all.
+          this.atRest().releaseForQuit(atRestSession);
+        } else {
+          this.lastAtRestSeal = this.finishSyncWithSize(atRestSession, { forceFullNext, toolOk: backupToolOk });
+        }
+      }
+      // A size still waiting here gets no listing from this sync (quit, or the seal had
+      // already been started without it): walk.
+      this.measurePendingBackupSize();
+    }
+  }
+
+  /** finishSync, handing the seal's listing total to a waiting backup size (one walk, not two). */
+  private finishSyncWithSize(
+    session: BackupSyncSession,
+    opts: { forceFullNext?: string; toolOk?: boolean; cleanEnd?: boolean },
+  ): Promise<void> {
+    const size = this.pendingBackupSize;
+    this.pendingBackupSize = null;
+    if (!size) return this.atRest().finishSync(session, undefined, opts);
+    // A seal that did not list the chain (paused first, Apple-encrypted) leaves it unsupplied: walk.
+    return this.atRest()
+      .finishSync(session, undefined, { ...opts, onChainListed: (bytes) => size.supply(bytes) })
+      .finally(() => size.measure());
+  }
+
+  private measurePendingBackupSize(): void {
+    const size = this.pendingBackupSize;
+    this.pendingBackupSize = null;
+    size?.measure();
+  }
+
+  /**
+   * BACKLOG-3816 S4-C: seal a successful sync's chain once persistence has ended (ok,
+   * cancelled or failed). Called by syncHandlers in a finally. Never throws.
+   */
+  async completeBackupAtRest(succeeded = false): Promise<void> {
+    const session = this.pendingAtRestSession;
+    this.pendingAtRestSession = null;
+    if (!session) return;
+    if (this.stoppedForQuit) {
+      // Next launch seals (marker `syncing`). G4: the phone is given back now, in case
+      // the quit does not happen after all.
+      this.atRest().releaseForQuit(session);
+      return;
+    }
+    this.lastAtRestSeal = this.atRest().finishSync(session, undefined, { succeeded, toolOk: true });
+    await this.lastAtRestSeal;
+  }
+
+  private atRest(): BackupAtRest {
+    return this.backupAtRest ?? getBackupAtRest();
+  }
+
+  /** Deletes the oldest quarantined backup. Never throws (a double without the method counts as none). */
+  private async deleteOldestQuarantined(): Promise<boolean> {
+    try {
+      const atRest = this.atRest() as { deleteOldestQuarantined?: () => Promise<boolean> };
+      return typeof atRest.deleteOldestQuarantined === "function" ? await atRest.deleteOldestQuarantined() : false;
+    } catch {
+      return false;
     }
   }
 
   /**
-   * Cancel the current sync operation
+   * S4-C (founder decision): a quarantined copy is unreadable and must never block the
+   * fresh full backup. While a disk guard would refuse, delete the oldest quarantined
+   * copy and measure again.
    */
-  cancel(): void {
-    log.info("[DeviceSyncOrchestrator] Cancelling sync");
+  private async reclaimQuarantineUntil<T extends { hasEnoughSpace: boolean }>(
+    check: T,
+    measure: () => Promise<T>,
+  ): Promise<T> {
+    let current = check;
+    while (!current.hasEnoughSpace && (await this.deleteOldestQuarantined())) {
+      current = await measure();
+    }
+    return current;
+  }
+
+  /** S4-C: a sync refused by the at-rest layer, before anything was spawned. */
+  private refuseForAtRest(message: string, reason: string, problem?: UnreadableKind): SyncResult {
+    log.warn("[DeviceSyncOrchestrator] Sync refused by the backup at-rest layer", { reason });
+    syncTimeline.setContext({ endedBy: "backup-at-rest", reasonCode: problem === "damaged" ? BACKUP_DAMAGED_REASON : reason });
+    // BACKLOG-3892 E: one Sentry event per backup problem (not for busy / cancelled).
+    const sentryReason = backupProblemForRefusal(reason, problem);
+    if (sentryReason) reportBackupProblem(sentryReason);
+    this.isRunning = false;
+    this.setPhase("error");
+    this.emit("error", { message });
+    return this.errorResult(message);
+  }
+
+  private emitAtRestProgress(p: BackupAtRestProgress): void {
+    const { message, percent } = describeBackupAtRestProgress(p);
+    this.emitProgress({
+      phase: "backup",
+      phaseProgress: percent,
+      overallProgress: 0,
+      message,
+    });
+  }
+
+  /**
+   * BACKLOG-3816 S4-C: forward the seal after a sync and the launch migration — passes
+   * no sync is watching — as `progress` ("Securing your iPhone backup… N%"), so they
+   * reach the renderer through the existing `sync:progress` channel. Called once by
+   * syncHandlers when it wires this orchestrator. Idempotent.
+   */
+  watchBackupAtRestProgress(): void {
+    if (this.atRestProgressWatched) return;
+    const atRest = this.atRest();
+    if (typeof (atRest as { on?: unknown }).on !== "function") return; // a test double with no events
+    this.atRestProgressWatched = true;
+    atRest.on("progress", (p: BackupAtRestProgress) => {
+      const { message, percent } = describeBackupAtRestProgress(p);
+      // Nothing is being sealed (verification-only walk, or this sync's files are sealed
+      // and the walk goes on): tell the renderer to hide the line rather than show a number.
+      const hidden = (p.phase === "sealing" || p.phase === "migrating") && !p.sealing;
+      this.emitProgress({
+        phase: "cleanup",
+        phaseProgress: percent,
+        overallProgress: percent,
+        message,
+        ...(hidden ? { hidden: true } : {}),
+      });
+    });
+  }
+
+  /**
+   * B2: the kept backup could not be read and was moved to quarantine; this sync makes a
+   * full backup. Said plainly in the status line, and recorded for the timeline.
+   */
+  private reportQuarantinedBackup(quarantined: { reasonCode: string; kind: UnreadableKind }): void {
+    const { reasonCode, kind } = quarantined;
+    log.warn("[DeviceSyncOrchestrator] Kept backup was unreadable; quarantined it and making a full backup", {
+      reasonCode,
+    });
+    // BACKLOG-3892 E: `keptBackupReason` reaches sync_outcomes.source_metrics (admin report).
+    syncTimeline.setContext({ keptBackup: "quarantined", keptBackupReasonCode: reasonCode, keptBackupReason: kind });
+    reportBackupProblem(kind);
+    this.emitProgress({
+      phase: "backup",
+      phaseProgress: 0,
+      overallProgress: 0,
+      // A file that fails authentication is damaged; a key this computer does not hold
+      // reads "cannot decrypt ... on this computer" (founder wording, 2026-10-12).
+      message: kind === "damaged" ? BACKUP_DAMAGED_QUARANTINED_MESSAGE : BACKUP_KEY_MISSING_QUARANTINED_MESSAGE,
+    });
+  }
+
+  /**
+   * BACKLOG-3598: remove leftover unfinished backups at the start of a sync. Never
+   * throws — a cleanup problem must not stop the sync it runs in front of.
+   */
+  private async sweepLeftoverBackups(): Promise<void> {
+    try {
+      const sweep = await this.backupService.sweepLeftoverBackups(() => {
+        // SR R2: a large leftover can take minutes to delete. Say so, rather than
+        // sit silently at the start of a sync.
+        this.emitProgress({
+          phase: "backup",
+          phaseProgress: 0,
+          overallProgress: 0,
+          message: "Clearing an unfinished backup from an earlier sync...",
+        });
+      });
+      if (sweep.removed > 0 || sweep.failures.length > 0) {
+        log.info("[DeviceSyncOrchestrator] Leftover backup sweep", {
+          removed: sweep.removed,
+          bytesFreed: sweep.bytesFreed,
+          failures: sweep.failures,
+        });
+      }
+      if (sweep.removed > 0) {
+        this.recordLeftoverCleanup({ outcome: "removed", bytes: sweep.bytesFreed });
+      }
+      for (const errorCode of sweep.failures) {
+        this.recordLeftoverCleanup({ outcome: "failed", errorCode });
+      }
+    } catch (error) {
+      log.warn("[DeviceSyncOrchestrator] Leftover backup sweep failed; continuing", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      Sentry.captureException(error, {
+        tags: { service: "sync-orchestrator", operation: "leftoverCleanup" },
+      });
+    }
+  }
+
+  /**
+   * BACKLOG-3598: after a failed or cancelled backup, remove its unfinished folder so
+   * the sync leaves `Backups/<udid>` as it found it.
+   *
+   * `mayRemove` is this frame's own start reading (absent, or present but unusable).
+   * When it is false nothing is attempted: a usable earlier backup survives a failed
+   * incremental (BACKLOG-2911 measured `Manifest.db` unchanged by an interruption), and
+   * deleting it would turn every later sync into a full one. When it is true the
+   * service still re-reads the folder now that the backup process has exited, and
+   * deletes only if `Manifest.db` is missing.
+   *
+   * Returns what happened, or `null` if nothing was attempted. Never throws: the
+   * sync's own error is what the user needs to see.
+   */
+  private async removeUnfinishedBackup(
+    udid: string,
+    mayRemove: boolean,
+  ): Promise<LeftoverRemoval | null> {
+    if (!mayRemove) return null;
+    this.removingUnfinishedBackup = true;
+    try {
+      if ((await this.backupService.classifyBackupFolder(udid)) === "leftover") {
+        this.emitProgress({
+          phase: "backup",
+          phaseProgress: 0,
+          overallProgress: 0,
+          message: "Removing the unfinished backup to free up disk space...",
+        });
+      }
+      const removal = await this.backupService.removeLeftoverBackup(udid);
+      this.recordLeftoverCleanup(removal);
+      return removal;
+    } catch (error) {
+      log.warn("[DeviceSyncOrchestrator] Could not clean up the unfinished backup", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      Sentry.captureException(error, {
+        tags: { service: "sync-orchestrator", operation: "leftoverCleanup" },
+      });
+      return null;
+    } finally {
+      this.removingUnfinishedBackup = false;
+    }
+  }
+
+  /**
+   * BACKLOG-3598: put a cleanup on the outcome row. Bytes add up across the start
+   * sweep and the post-failure removal of one run; `leftoverCleanup` is `removed`
+   * unless any removal in the run failed, in which case the failure (errno code only,
+   * never a path) is what the row keeps.
+   */
+  private recordLeftoverCleanup(removal: LeftoverRemoval): void {
+    const context = syncTimeline.contextSnapshot();
+    if (removal.outcome === "removed") {
+      // An unmeasured size adds nothing rather than a stand-in.
+      if (removal.bytes !== null) {
+        const prior = context.leftoverBackupBytesCleared;
+        syncTimeline.setContext({
+          leftoverBackupBytesCleared: (typeof prior === "number" ? prior : 0) + removal.bytes,
+        });
+      }
+      if (typeof context.leftoverCleanup !== "string" || !context.leftoverCleanup.startsWith("failed:")) {
+        syncTimeline.setContext({ leftoverCleanup: "removed" });
+      }
+    } else if (removal.outcome === "failed") {
+      syncTimeline.setContext({ leftoverCleanup: `failed:${removal.errorCode}` });
+    }
+  }
+
+  /**
+   * BACKLOG-3598: the phone whose backup is running was unplugged. Stop the backup
+   * process now instead of leaving it to the no-progress watchdog.
+   *
+   * Gated on `backupInFlight`, not `isRunning`: `forceReset` clears `isRunning` but
+   * leaves the process alive, and that process still has to be stopped. Only the phone
+   * being backed up counts; another phone coming or going changes nothing. Acts once
+   * per backup. The sync frame waiting on `startBackup` sees the process exit and
+   * finishes through its device-disconnect exit.
+   *
+   * SR B1: only while the idevicebackup2 process is alive. `backupService` clears
+   * `isRunning` when the process closes, BEFORE `startBackup` measures and decrypts;
+   * an unplug after that point must not discard a backup that completed.
+   *
+   * SR B2: the detector reports a disconnect after ONE poll without the phone, and a
+   * failed `idevice_id` reads as an empty poll. Before stopping anything, a second
+   * listing must succeed and not contain the phone.
+   */
+  private abortBackupOnDisconnect(device: iOSDevice): void {
+    const inFlight = this.backupInFlight;
+    if (
+      inFlight === null ||
+      inFlight.disconnected ||
+      inFlight.confirming ||
+      inFlight.udid !== device.udid
+    ) {
+      return;
+    }
+    if (!this.backupService.getStatus().isRunning) {
+      log.info(
+        "[DeviceSyncOrchestrator] Device disconnected after the backup process finished; keeping the backup",
+      );
+      return;
+    }
+    inFlight.confirming = true;
+    void this.confirmDisconnectThenStop(inFlight).finally(() => {
+      inFlight.confirming = false;
+    });
+  }
+
+  /** BACKLOG-3598 (SR B2): see `abortBackupOnDisconnect`. Never throws. */
+  private async confirmDisconnectThenStop(inFlight: BackupInFlight): Promise<void> {
+    const stillThisBackup = (): boolean =>
+      this.backupInFlight === inFlight && this.backupService.getStatus().isRunning;
+    try {
+      for (let attempt = 1; attempt <= DISCONNECT_CONFIRM_ATTEMPTS; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, this.disconnectConfirmDelayMs));
+        if (!stillThisBackup()) return;
+
+        const udids = await this.deviceService.probeConnectedUdids();
+        if (udids === null) continue; // idevice_id could not answer: unknown, not gone
+        if (udids.includes(inFlight.udid)) {
+          log.info(
+            "[DeviceSyncOrchestrator] Device reported disconnected but is still listed; backup continues",
+          );
+          return;
+        }
+
+        // The process may have finished while the listing ran (SR B1).
+        if (!stillThisBackup()) return;
+        inFlight.disconnected = true;
+        log.warn("[DeviceSyncOrchestrator] Device being backed up was disconnected; stopping the backup");
+        Sentry.addBreadcrumb({
+          category: "sync",
+          message: "Backup stopped: the device being backed up was disconnected",
+        });
+        syncTimeline.noteEndedBy("device-disconnect");
+        this.backupService.cancelBackup();
+        return;
+      }
+      log.warn(
+        "[DeviceSyncOrchestrator] Could not confirm the device disconnect; backup left running",
+      );
+    } catch (error) {
+      log.warn("[DeviceSyncOrchestrator] Confirming the device disconnect failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * BACKLOG-3814: the wait before the single held-start retry. Resolves true only when
+   * the retry may run: not cancelled, not quitting, no disk-guard stop, and the phone
+   * still listed. `idevice_id` failing to answer (null) is "unknown", not "gone".
+   */
+  private async waitBeforeToolHoldRetry(
+    udid: string,
+    signal: AbortSignal,
+    inFlight: BackupInFlight,
+  ): Promise<boolean> {
+    this.emitProgress({
+      phase: "backup",
+      phaseProgress: 0,
+      overallProgress: 0,
+      message: TOOL_START_HOLD_STATUS_MESSAGE,
+    });
+    const waitAbort = new AbortController();
+    this.toolHoldRetryWait = waitAbort;
+    try {
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          signal.removeEventListener("abort", done);
+          waitAbort.signal.removeEventListener("abort", done);
+          resolve();
+        };
+        const timer = setTimeout(done, this.toolHoldRetryDelayMs);
+        signal.addEventListener("abort", done, { once: true });
+        waitAbort.signal.addEventListener("abort", done, { once: true });
+      });
+    } finally {
+      this.toolHoldRetryWait = null;
+    }
+    const stopped = () =>
+      signal.aborted || waitAbort.signal.aborted || this.stoppedForQuit || this.diskSpaceAborted || inFlight.disconnected;
+    if (stopped()) return false;
+    let udids: string[] | null;
+    try {
+      udids = await this.deviceService.probeConnectedUdids();
+    } catch {
+      udids = null;
+    }
+    if (stopped()) return false;
+    if (udids !== null && !udids.includes(udid)) {
+      log.warn("[DeviceSyncOrchestrator] Phone no longer listed; no retry after the held tool start");
+      inFlight.disconnected = true;
+      syncTimeline.noteEndedBy("device-disconnect");
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Cancel the current sync operation.
+   *
+   * BACKLOG-3816: `trigger` names the on-screen control that asked for it. Only a named
+   * control records `ended_by=user-cancel` (with the control as `reason_code`). A cancel
+   * with no trigger — or one that is not a known control — records
+   * `ended_by=cancel-unattributed`, so a cancel nobody can account for never reads as
+   * the user's.
+   */
+  cancel(trigger?: SyncCancelTrigger | null): void {
+    const known = isSyncCancelTrigger(trigger) ? trigger : null;
+    log.info("[DeviceSyncOrchestrator] Cancelling sync", { trigger: known ?? "unattributed" });
     // BACKLOG-3440: THE USER PRESSED CANCEL, and until now the row could not say so.
     // `outcome = cancelled` has only ever meant "the abort signal was set", and
     // `forceReset()` sets it too — so "I cancelled it" and "it hung, so I hit Try Again"
     // produced identical rows. Recorded here, at the act itself, rather than inferred
     // later from a string that both paths produce.
-    syncTimeline.noteEndedBy("user-cancel");
+    if (known) {
+      syncTimeline.setContext({ reasonCode: known });
+      syncTimeline.noteEndedBy("user-cancel");
+    } else {
+      syncTimeline.noteEndedBy("cancel-unattributed");
+    }
     this.abortController?.abort();
     // Don't null the controller -- sync() checks signal.aborted at checkpoints
     // and the next sync()/processExistingBackup() call creates a fresh controller.
@@ -1764,13 +2835,83 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   }
 
   /**
+   * BACKLOG-3598: the app is quitting — stop this orchestrator's own idevicebackup2.
+   * Not `cancel()`: that records a user cancel, which this is not. Records `endedBy=app-quit` only.
+   * Null when no backup process is alive.
+   */
+  stopBackupForQuit(timeoutMs?: number): Promise<"exited" | "killed"> | null {
+    // BACKLOG-3814: quitting during the wait before a held-start retry. No process is
+    // alive, so the quit goes ahead at once; the retry must not start.
+    if (this.toolHoldRetryWait) {
+      this.stoppedForQuit = true;
+      syncTimeline.noteEndedBy("app-quit");
+      this.toolHoldRetryWait.abort();
+    }
+    const stopping = this.backupService.stopForQuit(timeoutMs);
+    if (stopping) {
+      // Set before the child exits, so the sync's failure path (which runs when the
+      // killed backup's close handler resolves) records an app quit, not a device error.
+      this.stoppedForQuit = true;
+      syncTimeline.noteEndedBy("app-quit");
+    }
+    return stopping;
+  }
+
+  /**
+   * BACKLOG-3816: the app is quitting - remove every decrypted parse copy now, synchronously
+   * (a quit gives no time for an await). A copy that cannot be removed (a Windows lock) is
+   * logged and swept at the next launch. Never throws.
+   */
+  discardParseCopiesForQuit(): void {
+    try {
+      if (typeof this.decryptionService.sweepParseCopiesSync !== "function") return;
+      const { removed, failed } = this.decryptionService.sweepParseCopiesSync();
+      if (removed > 0 || failed > 0) {
+        log.info("[DeviceSyncOrchestrator] Quit: decrypted parse copies removed", { removed, failed });
+      }
+    } catch (error) {
+      log.warn("[DeviceSyncOrchestrator] Quit: parse-copy removal failed; the next launch sweeps it", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
    * Get current sync status
    */
-  getStatus(): { isRunning: boolean; phase: SyncPhase } {
+  getStatus(): { isRunning: boolean; phase: SyncPhase; removingUnfinishedBackup: boolean } {
     return {
       isRunning: this.isRunning,
       phase: this.currentPhase,
+      removingUnfinishedBackup: this.removingUnfinishedBackup,
     };
+  }
+
+  /** BACKLOG-3817: remove stale parse copies. Never throws. */
+  private async sweepParseCopies(): Promise<void> {
+    try {
+      if (typeof this.decryptionService.sweepParseCopies !== "function") return;
+      const removed = await this.decryptionService.sweepParseCopies();
+      if (removed > 0) log.info("[DeviceSyncOrchestrator] Removed stale decrypted parse copies", { removed });
+    } catch (error) {
+      log.warn("[DeviceSyncOrchestrator] Parse-copy sweep failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** BACKLOG-3817: remove this run's parse copy on a failure path. Never throws. */
+  private async discardParseCopy(parseCopyPath: string | null): Promise<void> {
+    if (!parseCopyPath) return;
+    try {
+      await this.decryptionService.cleanup(parseCopyPath);
+    } catch (error) {
+      // cleanup() logs and never throws. If it does, say so: the copy is plaintext and
+      // is removed by the next sweep (next sync, or launch) - never silently ignored.
+      log.warn("[DeviceSyncOrchestrator] Removing a decrypted parse copy failed; the next sweep removes it", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -2137,7 +3278,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       if (pollInFlight || this.diskSpaceAborted) return;
       pollInFlight = true;
 
-      void this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES, { quiet: true })
+      const measure = () => this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES, { quiet: true });
+      void measure()
+        .then((check) => this.reclaimQuarantineUntil(check, measure))
         .then((check) => {
           // A fail-open default is not a reading — do not log 0 GB free.
           if (!check.unavailable) {
@@ -2231,12 +3374,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    */
   async processExistingBackup(
     udidOrOptions: string | ProcessBackupOptions,
-    password?: string
   ): Promise<SyncResult> {
-    // Handle both legacy (string, string) and new options-based signatures
+    // Handle both legacy (udid string) and options-based signatures
     const options =
       typeof udidOrOptions === "string"
-        ? { udid: udidOrOptions, password, forceResync: false }
+        ? { udid: udidOrOptions, forceResync: false }
         : udidOrOptions;
 
     if (this.isRunning) {
@@ -2249,6 +3391,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.priorBackup = "unknown";
     this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
+    // BACKLOG-3816: this frame's own cancel token (see sync()).
+    const preflightSignal = this.abortController.signal;
     this.startTime = Date.now();
 
     // TASK-2110: Generate session ID for ACID rollback on cancel
@@ -2270,9 +3414,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       });
 
       // Check if backup exists
-      const backupStatus = await this.backupService.checkBackupStatus(
-        options.udid
+      // BACKLOG-3816: the size walk stops on cancel, and nothing waits for it.
+      const backupStatus = await raceCancel(
+        preflightSignal,
+        this.backupService.checkBackupStatus(options.udid, { signal: preflightSignal, useRecordedSize: true }),
       );
+      if (backupStatus === PREFLIGHT_CANCELLED) {
+        return this.endCancelledPreflight(preflightSignal, "backup-status", PROCESSING_CANCELLED);
+      }
       // BACKLOG-2917: "no backup found" and "we could not find out" are different
       // answers and now produce different errors. The old predicate reported a failed
       // check to the user as a confident "No existing backup found for this device",
@@ -2318,6 +3467,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // TASK-908: Check if backup should be processed or skipped
       if (!options.forceResync) {
         const shouldProcess = await this.shouldProcessBackup(backupPath);
+        if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "change-detection", PROCESSING_CANCELLED);
         if (!shouldProcess) {
           this.isRunning = false;
           this.setPhase("complete");
@@ -2345,37 +3495,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         );
       }
 
-      // Check if backup is encrypted and decrypt if needed
-      let extractionPath = backupPath;
+      // BACKLOG-3881: an Apple-encrypted backup is never decrypted — Keepr has no password
+      // for it and does not ask for one.
+      const extractionPath = backupPath;
       const isEncrypted =
         await this.decryptionService.isBackupEncrypted(backupPath);
-
+      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "encryption-check", PROCESSING_CANCELLED);
       if (isEncrypted) {
-        if (!options.password) {
-          this.isRunning = false;
-          this.emit("password-required", {});
-          return this.errorResult("Password required for encrypted backup");
-        }
-
-        this.setPhase("decrypting");
-        this.emitProgress({
-          phase: "decrypting",
-          phaseProgress: 0,
-          overallProgress: 10,
-          message: "Decrypting backup...",
-        });
-
-        const decryptResult = await this.decryptionService.decryptBackup(
-          backupPath,
-          options.password
-        );
-
-        if (!decryptResult.success || !decryptResult.decryptedPath) {
-          this.isRunning = false;
-          return this.errorResult(decryptResult.error || "Decryption failed");
-        }
-
-        extractionPath = decryptResult.decryptedPath;
+        return this.stopForAppleEncryptedBackup();
       }
 
       // Parse contacts
@@ -2387,6 +3514,10 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         message: "Reading contacts...",
       });
 
+      if (preflightSignal.aborted) {
+        if (extractionPath !== backupPath) await this.discardParseCopy(extractionPath);
+        return this.endCancelledPreflight(preflightSignal, "before-parse", PROCESSING_CANCELLED);
+      }
       await this.contactsParser.open(extractionPath);
       const contacts = this.contactsParser.getAllContacts();
 
@@ -2446,6 +3577,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       if (this.abortController?.signal.aborted) {
         this.messagesParser.close();
         this.contactsParser.close();
+        if (extractionPath !== backupPath) await this.discardParseCopy(extractionPath);
         return this.errorResult("Processing cancelled by user");
       }
 
@@ -2525,15 +3657,71 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   }
 
   /**
+   * BACKLOG-3881: the phone's "Encrypt local backup" setting. A read that fails is
+   * "unknown" — the sync goes on, and stops after the transfer if the backup is encrypted.
+   */
+  private async readPhoneBackupEncryption(udid: string): Promise<"on" | "off" | "unknown"> {
+    let status: BackupEncryptionInfo["status"];
+    try {
+      status = (await this.backupService.checkEncryptionStatus(udid)).status;
+    } catch {
+      status = "unknown";
+    }
+    const reading = status === "on" || status === "off" ? status : "unknown";
+    syncTimeline.setContext({ phoneBackupEncryption: reading });
+    return reading;
+  }
+
+  /**
+   * BACKLOG-3881: end the run because the iPhone's backups are Apple-encrypted. No
+   * password is asked for and nothing retries: the user turns the setting off and
+   * presses Sync again.
+   */
+  private stopForAppleEncryptedBackup(): SyncResult {
+    syncTimeline.setContext({ endedBy: "backup-encryption", reasonCode: APPLE_ENCRYPTED_BACKUP_REASON });
+    reportBackupProblem("apple-encrypted");
+    this.isRunning = false;
+    return { ...this.errorResult(APPLE_ENCRYPTED_BACKUP_MESSAGE), appleEncryptedBackup: true };
+  }
+
+  /**
    * Create an error result
    */
-  private errorResult(error: string): SyncResult {
+  /**
+   * BACKLOG-3816: a cancel noticed during pre-flight ends the frame at once. The run
+   * row closes now (at the cancel, not after the remaining checks). If a newer frame
+   * already owns the orchestrator, this frame touches nothing shared.
+   */
+  private endCancelledPreflight(
+    signal: AbortSignal,
+    step: string,
+    message: string = "Sync cancelled by user",
+  ): SyncResult {
+    log.info("[DeviceSyncOrchestrator] Sync cancelled during pre-flight; stopping", { step });
+    if (this.abortController?.signal !== signal) {
+      return {
+        success: false,
+        messages: [],
+        contacts: [],
+        conversations: [],
+        error: message,
+        duration: Date.now() - this.startTime,
+      };
+    }
+    this.isRunning = false;
+    return this.errorResult(message);
+  }
+
+  private errorResult(error: string, errorCode?: BackupErrorCode): SyncResult {
     // BACKLOG-2898: close the timeline on every failure and cancel path.
     // The guard distinguishes the ONE reentrant caller ("Sync already in
     // progress", reached while isRunning is still true for the OTHER sync)
     // from genuine terminations, which all clear isRunning first.
     if (!this.isRunning) {
-      syncTimeline.endSync(/cancelled/i.test(error) ? "cancelled" : "error");
+      // BACKLOG-3598: an app quit is a cancel, whatever words the error carries.
+      syncTimeline.endSync(
+        this.stoppedForQuit || /cancelled/i.test(error) ? "cancelled" : "error",
+      );
     }
 
     return {
@@ -2543,6 +3731,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       conversations: [],
       error,
       duration: Date.now() - this.startTime,
+      ...(errorCode ? { errorCode } : {}),
     };
   }
 }

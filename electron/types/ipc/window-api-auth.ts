@@ -118,17 +118,6 @@ export interface WindowApiAuth {
   completeEmailOnboarding: (
     userId: string,
   ) => Promise<{ success: boolean; error?: string }>;
-  checkEmailOnboarding: (
-    userId: string,
-  ) => Promise<{
-    success: boolean;
-    completed: boolean;
-    error?: string;
-    // BACKLOG-1842 (startup-resilience follow-up): DB still starting up —
-    // caller should retry, not treat as terminal.
-    transient?: boolean;
-    retryable?: boolean;
-  }>;
   // Complete pending login after keychain setup (login-first flow)
   completePendingLogin: (oauthData: unknown) => Promise<{
     success: boolean;
@@ -169,6 +158,10 @@ export interface WindowApiAuth {
 
   // TASK-2062: Remote session validation
   validateRemoteSession: () => Promise<{ valid: boolean }>;
+
+  // BACKLOG-3833: user-input heartbeat and idle sign-out notice
+  reportUserActivity: () => Promise<void>;
+  onIdleSessionExpired: (callback: () => void) => () => void;
 
   // TASK-2062: Active devices list
   getActiveDevices: (userId: string) => Promise<{

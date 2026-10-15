@@ -9,12 +9,15 @@ import type { Message } from "../../../types";
 
 // Mock the window.api for attachment fetching
 const mockGetMessageAttachmentsBatch = jest.fn();
+// BACKLOG-3763: image bytes are loaded per attachment, by id.
+const mockGetMessageAttachmentData = jest.fn();
 
 beforeAll(() => {
   Object.defineProperty(window, "api", {
     value: {
       messages: {
         getMessageAttachmentsBatch: mockGetMessageAttachmentsBatch,
+        getMessageAttachmentData: mockGetMessageAttachmentData,
       },
     },
     writable: true,
@@ -62,6 +65,7 @@ describe("ConversationViewModal", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetMessageAttachmentsBatch.mockResolvedValue({});
+    mockGetMessageAttachmentData.mockResolvedValue({ success: false, reason: "not_found" });
   });
 
   describe("Basic Rendering", () => {
@@ -498,7 +502,6 @@ describe("ConversationViewModal", () => {
             filename: "photo.jpg",
             mime_type: "image/jpeg",
             file_size_bytes: 12345,
-            data: "base64data",
           },
         ],
       });
@@ -599,7 +602,6 @@ describe("ConversationViewModal", () => {
             filename: "photo.heic",
             mime_type: "image/heic",
             file_size_bytes: 12345,
-            data: "base64data",
           },
         ],
       });
@@ -629,6 +631,11 @@ describe("ConversationViewModal", () => {
 
       const base64Data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
+      mockGetMessageAttachmentData.mockResolvedValue({
+        success: true,
+        data: base64Data,
+        mime_type: "image/png",
+      });
       mockGetMessageAttachmentsBatch.mockResolvedValue({
         "macos-image-123": [
           {
@@ -637,7 +644,6 @@ describe("ConversationViewModal", () => {
             filename: "test.png",
             mime_type: "image/png",
             file_size_bytes: 100,
-            data: base64Data,
           },
         ],
       });
@@ -669,6 +675,7 @@ describe("ConversationViewModal", () => {
         },
       ];
 
+      mockGetMessageAttachmentData.mockResolvedValue({ success: false, reason: "missing_file" });
       mockGetMessageAttachmentsBatch.mockResolvedValue({
         "macos-missing-123": [
           {
@@ -677,7 +684,6 @@ describe("ConversationViewModal", () => {
             filename: "missing.jpg",
             mime_type: "image/jpeg",
             file_size_bytes: 12345,
-            data: null, // File not found
           },
         ],
       });

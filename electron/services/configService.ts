@@ -21,7 +21,6 @@ export interface AppConfig {
   logLevel?: "debug" | "info" | "warn" | "error";
   dataDirectory?: string;
   maxLogFiles?: number;
-  enableTelemetry?: boolean;
   windowBounds?: {
     width: number;
     height: number;
@@ -51,7 +50,6 @@ export class ConfigService {
       autoUpdate: true,
       logLevel: "info",
       maxLogFiles: 10,
-      enableTelemetry: false,
     };
   }
 

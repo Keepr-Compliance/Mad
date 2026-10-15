@@ -76,6 +76,24 @@ export function isLinux(): boolean {
 }
 
 /**
+ * BACKLOG-3363: true on a Windows on ARM PC (e.g. Snapdragon), where iPhone
+ * USB sync can never work. Read synchronously from the preload bridge (main
+ * passes it via argv), so the first render already knows. Absent → false.
+ */
+export function isWindowsArm64(): boolean {
+  return window.api?.system?.isWindowsArm64 === true;
+}
+
+/**
+ * BACKLOG-3927: true in the Microsoft Store build. That build ships no Apple
+ * driver and never installs one; iPhone setup sends the user to Apple's
+ * "Apple Devices" app in the Microsoft Store. Absent → false (website build).
+ */
+export function isStoreBuild(): boolean {
+  return window.api?.system?.isStoreBuild === true;
+}
+
+/**
  * Returns true if running inside Electron (desktop app).
  * Checks for the presence of the Electron IPC bridge (window.api).
  * Returns false in browser environments (Android WebView, mobile browsers, etc.)

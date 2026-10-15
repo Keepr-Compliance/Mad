@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo, useContext } from "react";
 import Joyride from "react-joyride";
 import { useTour } from "../hooks/useTour";
 import { usePendingTransactionCount } from "../hooks/usePendingTransactionCount";
@@ -8,6 +8,7 @@ import StartNewAuditModal from "./StartNewAuditModal";
 import { FeatureGate } from "./common/FeatureGate";
 import { AlertBanner, AlertIcons } from "./common/AlertBanner";
 import { TransactionLimitModal } from "./common/TransactionLimitModal";
+import { TourTooltip, TourTooltipContext } from "./common/TourTooltip";
 import { useLicense } from "../contexts/LicenseContext";
 import { useFeatureGate } from "../hooks/useFeatureGate";
 import {
@@ -17,6 +18,7 @@ import {
 } from "../config/tourSteps";
 import type { Transaction } from "../types";
 import { useReconnectionSummary } from "../hooks/useReconnectionSummary";
+import AuthContext from "../contexts/AuthContext";
 
 interface DashboardActionProps {
   onAuditNew: () => void;
@@ -74,10 +76,17 @@ function Dashboard({
   // Get sync state from SyncOrchestrator (single source of truth for sync status)
   const { isRunning: isAnySyncing } = useSyncOrchestrator();
 
-  // Initialize the onboarding tour for first-time users
-  const { runTour, handleJoyrideCallback } = useTour(
-    true,
+  // Initialize the onboarding tour for first-time users.
+  // BACKLOG-3673: never over the terms screen -- the tour sits above it. It
+  // starts once the terms are accepted (AuthContext clears the flag).
+  const needsTermsAcceptance = useContext(AuthContext)?.needsTermsAcceptance === true;
+  const { runTour, handleJoyrideCallback, dontShowAgain, setDontShowAgain } = useTour(
+    !needsTermsAcceptance,
     "hasSeenDashboardTour",
+  );
+  const tourTooltipContext = useMemo(
+    () => ({ dontShowAgain, setDontShowAgain }),
+    [dontShowAgain, setDontShowAgain],
   );
 
   // Fetch pending auto-detected transaction count
@@ -187,17 +196,21 @@ function Dashboard({
   return (
     <div className="min-h-full bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center p-4 sm:p-8">
       {/* Onboarding Tour */}
-      <Joyride
-        steps={tourSteps}
-        run={runTour}
-        continuous
-        showProgress
-        showSkipButton
-        hideCloseButton
-        callback={handleJoyrideCallback}
-        styles={JOYRIDE_STYLES}
-        locale={JOYRIDE_LOCALE}
-      />
+      {/* BACKLOG-3674: the tooltip carries the "Don't show this again" box. */}
+      <TourTooltipContext.Provider value={tourTooltipContext}>
+        <Joyride
+          steps={tourSteps}
+          run={runTour}
+          continuous
+          showProgress
+          showSkipButton
+          hideCloseButton
+          callback={handleJoyrideCallback}
+          styles={JOYRIDE_STYLES}
+          locale={JOYRIDE_LOCALE}
+          tooltipComponent={TourTooltip}
+        />
+      </TourTooltipContext.Provider>
       <div className="max-w-5xl w-full">
         {/* Continue Setup Banner */}
         {showSetupPrompt && onContinueSetup && (

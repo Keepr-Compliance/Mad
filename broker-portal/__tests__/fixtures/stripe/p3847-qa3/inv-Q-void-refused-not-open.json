@@ -1,0 +1,7 @@
+{
+  "error": {
+    "message": "You can only pass in open invoices. This invoice isn't open.",
+    "request_log_url": "<stripped>",
+    "type": "invalid_request_error"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "id": "seti_1UPykQBg3cyTef3dL9NmSatv",
+  "object": "setup_intent",
+  "allowed_payment_method_types": null,
+  "application": null,
+  "automatic_payment_methods": null,
+  "cancellation_reason": null,
+  "client_secret": "<stripped>",
+  "created": 1791871178,
+  "customer": "cus_VQqQBPgvMpygpI",
+  "customer_account": null,
+  "description": null,
+  "excluded_payment_method_types": null,
+  "flow_directions": null,
+  "last_setup_error": null,
+  "latest_attempt": "setatt_1UPykQBg3cyTef3d0C19Shgz",
+  "livemode": false,
+  "managed_payments": {
+    "enabled": false
+  },
+  "mandate": null,
+  "metadata": {
+    "kind": "agent_card_update"
+  },
+  "next_action": null,
+  "on_behalf_of": null,
+  "payment_method": "pm_1UPykQBg3cyTef3dVwh4AjzY",
+  "payment_method_configuration_details": null,
+  "payment_method_options": {
+    "card": {
+      "mandate_options": null,
+      "network": null,
+      "request_three_d_secure": "automatic"
+    }
+  },
+  "payment_method_types": [
+    "card"
+  ],
+  "single_use_mandate": null,
+  "status": "succeeded",
+  "usage": "off_session",
+  "_note": "standalone"
+}

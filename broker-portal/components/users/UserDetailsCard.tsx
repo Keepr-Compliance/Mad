@@ -160,7 +160,9 @@ export default function UserDetailsCard({
       <Card>
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
-          <div className="flex items-center space-x-4">
+          {/* BACKLOG-3798: below md a long name/email truncates instead of
+              pushing the page sideways. max-md: only, so desktop is unchanged. */}
+          <div className="flex items-center space-x-4 max-md:min-w-0">
             {/* Avatar */}
             <div className="h-16 w-16 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0 overflow-hidden">
               {member.user?.avatar_url ? (
@@ -178,14 +180,16 @@ export default function UserDetailsCard({
               )}
             </div>
 
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">
+            <div className="max-md:min-w-0">
+              <h1 className="text-xl font-bold text-gray-900 max-md:truncate">
                 {displayName}
                 {isCurrentUser && (
                   <span className="text-gray-500 font-normal ml-2">(You)</span>
                 )}
               </h1>
-              <p className="text-gray-500">{email}</p>
+              <p className="text-gray-500 max-md:truncate" title={email || undefined}>
+                {email}
+              </p>
               <div className="flex flex-wrap gap-2 mt-2">
                 <Badge hue={ROLE_HUES[member.role]}>{ROLE_LABELS[member.role]}</Badge>
                 <Badge hue={STATUS_HUES[member.license_status]}>

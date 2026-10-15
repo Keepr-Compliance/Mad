@@ -7,18 +7,35 @@
  *
  * runtime=nodejs + req.text() for the RAW body BEFORE any parse: Stripe signature
  * verification needs the exact bytes.
+ *
+ * BACKLOG-3846: every handler takes only ids from the payload (whose shape
+ * follows the endpoint's API version) and re-fetches the object with the pinned
+ * client (E0). Agent subscription events are handled in lib/billing/sync.ts.
  */
 
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import * as Sentry from '@sentry/nextjs';
 import { getStripe } from '@/lib/stripe';
+import { currentStripeMode, eventStripeMode } from '@/lib/billing/mode';
+import { setDefaultPaymentMethod } from '@/lib/billing/customers';
 import { createServiceClient } from '@/lib/supabase/service';
+import {
+  type BillingContext,
+  handleInvoiceChargeRefunded,
+  handleInvoiceDispute,
+  handleInvoicePaid,
+  handleInvoicePaymentFailed,
+  handleSubscriptionCheckout,
+  handleSubscriptionEvent,
+  stripeId,
+} from '@/lib/billing/sync';
 import {
   fulfillPaidUnlock,
   recordRefund,
   emitPaymentSucceeded,
 } from '@/lib/payments/fulfillment';
-import { dispatchReceiptEmail } from '@/lib/payments/receipt';
+import { applyCardUpdate } from '@/lib/billing/cardUpdate';
 
 export const runtime = 'nodejs';
 // Never cache; each webhook is a unique event.
@@ -55,25 +72,56 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: 'invalid signature' }, { status: 400 });
   }
 
+  // BACKLOG-3845 (plan v3.2 E0): an event from the other Stripe mode is not
+  // processed. 200 so Stripe stops retrying; reported so a misrouted endpoint is seen.
+  const keyMode = currentStripeMode();
+  if (eventStripeMode(event) !== keyMode) {
+    console.error(
+      `[payments/webhook] ${event.type} ${event.id} livemode=${event.livemode} does not match key mode ${keyMode}; ignored`
+    );
+    Sentry.captureMessage('Stripe webhook event mode does not match key mode', {
+      level: 'warning',
+      tags: { billing_stage: 'webhook_mode', stripe_mode: keyMode },
+      extra: { event_id: event.id, event_type: event.type, livemode: event.livemode },
+    });
+    return NextResponse.json({ received: true, ignored: 'mode_mismatch' }, { status: 200 });
+  }
+
   const service = createServiceClient();
+  const ctx: BillingContext = { service, stripe: getStripe(), mode: keyMode, event };
+  // E0: the payload contributes only the object id.
+  const objectId = (event.data.object as { id: string }).id;
 
   try {
     switch (event.type) {
       case 'payment_intent.succeeded':
-        await handlePaymentIntentSucceeded(service, event);
+        await handlePaymentIntentSucceeded(ctx, objectId);
         break;
       case 'checkout.session.completed':
-        await handleCheckoutSessionCompleted(service, event);
+        await handleCheckoutSessionCompleted(ctx, objectId);
         break;
       case 'payment_intent.payment_failed':
         await handlePaymentFailed(service, event);
         break;
       case 'charge.refunded':
+        await handleChargeRefunded(ctx, objectId);
+        break;
       case 'refund.created':
-        await handleRefund(service, event);
+        await handleRefundCreated(ctx, objectId);
         break;
       case 'charge.dispute.created':
-        await handleDispute(service, event);
+        await handleDispute(ctx, objectId);
+        break;
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated':
+      case 'customer.subscription.deleted':
+        await handleSubscriptionEvent(ctx, objectId);
+        break;
+      case 'invoice.paid':
+        await handleInvoicePaid(ctx, objectId);
+        break;
+      case 'invoice.payment_failed':
+        await handleInvoicePaymentFailed(ctx, objectId);
         break;
       default:
         // Acknowledge unrelated events so Stripe stops retrying.
@@ -90,11 +138,15 @@ export async function POST(req: Request): Promise<Response> {
 }
 
 /** AUTHORITATIVE fulfillment. */
-async function handlePaymentIntentSucceeded(
-  service: ReturnType<typeof createServiceClient>,
-  event: Stripe.Event
-): Promise<void> {
-  const pi = event.data.object as Stripe.PaymentIntent;
+async function handlePaymentIntentSucceeded(ctx: BillingContext, piId: string): Promise<void> {
+  const { service, event } = ctx;
+  const pi = await ctx.stripe.paymentIntents.retrieve(piId);
+  // W-2: a subscription invoice's PaymentIntent never unlocks a transaction and
+  // never touches payment_intents; invoice.paid owns it.
+  if (stripeId(pi.invoice)) {
+    console.info(`[payments/webhook] payment_intent.succeeded ${pi.id} belongs to an invoice; ignored`);
+    return;
+  }
   const md = (pi.metadata ?? {}) as UnlockMetadata;
 
   if (!md.user_id || !md.local_transaction_id) {
@@ -133,8 +185,9 @@ async function handlePaymentIntentSucceeded(
     .update({ status: 'fulfilled', webhook_event_id: event.id, updated_at: new Date().toISOString() })
     .eq('stripe_payment_intent_id', pi.id);
 
-  // Emit the funnel event + send a receipt only on a NEW fulfillment (not a
-  // replay/short-circuit). Receipt dispatch is non-blocking (BACKLOG-2009).
+  // Emit the funnel event only on a NEW fulfillment (not a replay/short-circuit).
+  // No Keepr receipt: Stripe emails the receipt for the solo launch (founder
+  // 2026-10-13, BACKLOG-3648/3848), so Keepr's own one is switched off.
   if (result.unlocked && !result.alreadyFulfilled) {
     await emitPaymentSucceeded(service, md.user_id, {
       local_transaction_id: md.local_transaction_id,
@@ -142,20 +195,29 @@ async function handlePaymentIntentSucceeded(
       pricing_tier_id: md.pricing_tier_id ?? null,
       stripe_payment_intent_id: pi.id,
     });
-    await dispatchReceiptEmail(service, {
-      userId: md.user_id,
-      amountCents: unitPriceCents,
-      stripePaymentIntentId: pi.id,
-    });
   }
 }
 
 /** PM-save only. Does NOT fulfill (R4). */
-async function handleCheckoutSessionCompleted(
-  service: ReturnType<typeof createServiceClient>,
-  event: Stripe.Event
-): Promise<void> {
-  const session = event.data.object as Stripe.Checkout.Session;
+async function handleCheckoutSessionCompleted(ctx: BillingContext, sessionId: string): Promise<void> {
+  const { service, event } = ctx;
+  const session = await ctx.stripe.checkout.sessions.retrieve(sessionId);
+  // W-1: a subscription Checkout has no PaymentIntent. It must not touch the
+  // saved per-export card or payment_intents; it only mirrors the subscription.
+  if (session.mode === 'subscription') {
+    await handleSubscriptionCheckout(ctx, session);
+    return;
+  }
+  // BACKLOG-3848 (SR R1): EVERY setup-mode session ends here, whatever its
+  // metadata. A setup session has no PaymentIntent, so the per-export card save
+  // below would store null. applyCardUpdate() acts only on an Update-card
+  // session and refuses (logs, no write) anything else. A card decline while
+  // paying the failed renewal is an outcome, not a throw: this answers 200.
+  if (session.mode === 'setup') {
+    const out = await applyCardUpdate(ctx, session.id, { onPayError: 'throw' });
+    console.info(`[payments/webhook] setup session ${session.id}: ${out.kind === 'updated' ? `card updated, payment ${out.pay.kind}` : `ignored (${out.reason})`}`);
+    return;
+  }
   const md = (session.metadata ?? {}) as UnlockMetadata;
   const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id;
   const piId =
@@ -167,13 +229,11 @@ async function handleCheckoutSessionCompleted(
   if (customerId && md.user_id) {
     let pmId: string | null = null;
     if (piId) {
-      const pi = await getStripe().paymentIntents.retrieve(piId);
+      const pi = await ctx.stripe.paymentIntents.retrieve(piId);
       pmId = typeof pi.payment_method === 'string' ? pi.payment_method : pi.payment_method?.id ?? null;
     }
-    await service
-      .from('stripe_customers')
-      .update({ default_payment_method_id: pmId, updated_at: new Date().toISOString() })
-      .eq('user_id', md.user_id);
+    // The event's mode row only (RC9); the mode check in POST guarantees it is the key's mode.
+    await setDefaultPaymentMethod(service, md.user_id, eventStripeMode(event), pmId);
   }
 
   // Advance the intent (fulfillment still happens on payment_intent.succeeded).
@@ -198,19 +258,31 @@ async function handlePaymentFailed(
     .not('status', 'eq', 'fulfilled');
 }
 
-async function handleRefund(
-  service: ReturnType<typeof createServiceClient>,
-  event: Stripe.Event
-): Promise<void> {
-  // charge.refunded carries a Charge; refund.created carries a Refund. Resolve the PI.
-  const obj = event.data.object as Stripe.Charge | Stripe.Refund;
-  const piId =
-    typeof (obj as Stripe.Charge).payment_intent === 'string'
-      ? ((obj as Stripe.Charge).payment_intent as string)
-      : typeof (obj as Stripe.Refund).payment_intent === 'string'
-        ? ((obj as Stripe.Refund).payment_intent as string)
-        : null;
+/**
+ * charge.refunded. An invoice charge is an Agent subscription payment
+ * (lib/billing/sync.ts); any other charge keeps the per-export path.
+ */
+async function handleChargeRefunded(ctx: BillingContext, chargeId: string): Promise<void> {
+  const charge = await ctx.stripe.charges.retrieve(chargeId, { expand: ['invoice'] });
+  if (charge.invoice) {
+    await handleInvoiceChargeRefunded(ctx, charge, charge.invoice);
+    return;
+  }
+  await recordPerExportRefund(ctx, stripeId(charge.payment_intent));
+}
+
+/**
+ * refund.created. A Refund carries no invoice, so it only feeds the per-export
+ * path, which acts only when the PaymentIntent has a payment_intents row.
+ */
+async function handleRefundCreated(ctx: BillingContext, refundId: string): Promise<void> {
+  const refund = await ctx.stripe.refunds.retrieve(refundId);
+  await recordPerExportRefund(ctx, stripeId(refund.payment_intent));
+}
+
+async function recordPerExportRefund(ctx: BillingContext, piId: string | null): Promise<void> {
   if (!piId) return;
+  const { service, event } = ctx;
 
   // Resolve tx identity from the STORED payment_intents row (C-C), not Stripe metadata.
   const { data: row } = await service
@@ -226,10 +298,8 @@ async function handleRefund(
   });
 }
 
-async function handleDispute(
-  service: ReturnType<typeof createServiceClient>,
-  event: Stripe.Event
-): Promise<void> {
+async function handleDispute(ctx: BillingContext, disputeId: string): Promise<void> {
+  const { service } = ctx;
   // BACKLOG-2077 (founder 2026-07-16): a chargeback suspends the WHOLE account,
   // not just the disputed deal. Resolve the user from the STORED payment_intents
   // row (like handleRefund, C-C) -- never trust dispute metadata -- then flip
@@ -238,8 +308,8 @@ async function handleDispute(
   // enforces the block off licenses.status (blockReason='suspended').
   //
   // Dispute WON/LOST auto-lift is OUT for v1: support reinstates manually.
-  const dispute = event.data.object as Stripe.Dispute;
-  const piId = typeof dispute.payment_intent === 'string' ? dispute.payment_intent : null;
+  const dispute = await ctx.stripe.disputes.retrieve(disputeId);
+  const piId = stripeId(dispute.payment_intent);
   console.error(`[payments/webhook] chargeback opened for PI ${piId} (dispute ${dispute.id})`);
 
   if (!piId) {
@@ -268,10 +338,19 @@ async function handleDispute(
   }
 
   if (!row) {
-    // Genuinely no matching row (data:null, error:null). Retrying will not help,
-    // so take the benign log-and-200 path.
+    // BACKLOG-3846 (plan v3 R4): no per-export row. An Agent subscription
+    // invoice's PaymentIntent carries the invoice; that path suspends the
+    // stored Agent user and revokes.
+    const pi = await ctx.stripe.paymentIntents.retrieve(piId, { expand: ['invoice'] });
+    const invoice = pi.invoice && typeof pi.invoice !== 'string' ? pi.invoice : null;
+    if (invoice) {
+      await handleInvoiceDispute(ctx, dispute, piId, invoice);
+      return;
+    }
+    // Genuinely no matching row and no invoice. Retrying will not help, so take
+    // the benign log-and-200 path.
     console.error(
-      `[payments/webhook] dispute ${dispute.id}: no payment_intents row for PI ${piId}; nothing to suspend`
+      `[payments/webhook] dispute ${dispute.id}: no payment_intents row and no invoice for PI ${piId}; nothing to suspend`
     );
     return;
   }

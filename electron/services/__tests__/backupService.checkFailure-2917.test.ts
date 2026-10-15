@@ -324,3 +324,19 @@ describe("BACKLOG-2917: listBackups must not show a real backup at size 0", () =
     expect(backups[0].size).not.toBe(0);
   });
 });
+
+describe("BACKLOG-3816 S4-C: listBackups lists devices, not Keepr's own dot-folders", () => {
+  it("skips .quarantine, .keepr-at-rest and .keepr-replaced-* even when they hold a backup-shaped tree", async () => {
+    layDownCompleteBackup();
+    const root = path.join(userDataDir, "Backups");
+    for (const dot of [".quarantine", ".keepr-at-rest", ".keepr-replaced-" + UDID + "-1760000000000"]) {
+      fsSync.mkdirSync(path.join(root, dot, "a1"), { recursive: true });
+      fsSync.writeFileSync(path.join(root, dot, "Manifest.db"), Buffer.from(SQLITE_MAGIC));
+      fsSync.writeFileSync(path.join(root, dot, "Info.plist"), Buffer.from("<plist></plist>"));
+    }
+
+    const backups = await service.listBackups();
+
+    expect(backups.map((b) => path.basename(b.path))).toEqual([UDID]);
+  });
+});

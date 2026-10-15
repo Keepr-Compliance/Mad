@@ -14,6 +14,10 @@ import type { HealthIssue } from "./healthIssue";
 export interface WindowApiSystem {
   // Platform detection (migrated from window.electron.platform)
   platform: NodeJS.Platform;
+  /** BACKLOG-3363: true on a Windows on ARM PC (iPhone USB sync unsupported). */
+  isWindowsArm64?: boolean;
+  /** BACKLOG-3927: true in the Microsoft Store build (no bundled Apple driver). */
+  isStoreBuild?: boolean;
 
   // App info methods (migrated from window.electron)
   getAppInfo: () => Promise<{ version: string; name: string }>;
@@ -165,6 +169,14 @@ export interface WindowApiSystem {
     initialized: boolean;
   }>;
   // Support methods
+  /** BACKLOG-3819: save a decrypted, redacted copy of the desktop log to a user-chosen file. */
+  saveDiagnosticLog: () => Promise<{
+    success: boolean;
+    canceled?: boolean;
+    filePath?: string;
+    unreadable?: string[];
+    error?: string;
+  }>;
   contactSupport: (
     errorDetails?: string,
   ) => Promise<{ success: boolean; error?: string }>;

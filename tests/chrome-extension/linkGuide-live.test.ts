@@ -242,7 +242,7 @@ describe("the link window (popup.html?autolink=1) starts the link", () => {
       await Promise.resolve();
       expect(asked.slice(0, 3)).toEqual(["keepr-popup-state", "keepr-link-start", "keepr-popup-state"]);
       expect(asked.filter((t) => t === "keepr-link-start")).toHaveLength(1);
-      expect(document.querySelector('[data-keepr="code"]')!.textContent).toBe("482913") // the gap is CSS: a selection copies the 6 digits;
+      expect(document.querySelector('[data-keepr="code"]')!.textContent).toBe("482913"); // the gap is CSS: a selection copies the 6 digits
       expect(document.title).toBe("Link with Keepr");
     } finally {
       jest.useRealTimers();

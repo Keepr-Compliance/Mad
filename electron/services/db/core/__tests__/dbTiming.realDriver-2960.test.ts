@@ -35,13 +35,34 @@
  *     electron/services/db/core/__tests__/dbTiming.realDriver-2960.test.ts
  *
  * ---------------------------------------------------------------------------
- * TOLERANCES ARE PRE-REGISTERED, NOT FITTED
+ * THE DELAY CONTROLS RUN ON A CONTROLLED CLOCK (BACKLOG-3805)
  * ---------------------------------------------------------------------------
- * Every bound below was written before the suite was first run. They are loose
- * on the "should not move" side (2 ms) and loose on the "should move together"
- * side (15 ms), because a busy-wait on a shared machine overshoots and never
- * undershoots. A tolerance narrowed after seeing a failure would be a fitted
- * number, and is called out in review rather than adjusted.
+ * The five tests that plant a delay and assert WHERE it was charged — inside
+ * vs outside, a transaction counted once, a transaction's open span, a handle
+ * instrumented twice — run on `useControlledClock()`: `performance.now` is
+ * replaced by a counter that only `busyWait` advances. The driver is still the
+ * real one; only time is synthetic. Their assertions are exact.
+ *
+ * They used to run on the wall clock with tolerances (2 ms "should not move",
+ * 15 ms "should move together", a `< 90` ceiling over a 50 ms delay), and on
+ * the shared Windows runner each of those went red in turn:
+ *
+ *   OUTSIDE      |db delta| <= 2     received 43.83   run 37810238341
+ *   twice        dbMs < 90           received 118.95  run 37810242685
+ *   INSIDE       |wall - db| <= 15   received 20.43   run 37824216743
+ *
+ * None of those is clock resolution. Each is one scheduler or GC stall of
+ * 20-69 ms landing inside (or just outside) a measured span — a `SELECT 1`
+ * charged 44 ms with nothing in it. The instrument charges the wall time
+ * between a call's entry and exit, so a stall inside that span is charged,
+ * correctly; no tolerance survives a stall longer than itself, and a wider one
+ * only moves the flake. Reproduced locally: 2 of 20 runs red with every core
+ * saturated, 0 of 20 idle.
+ *
+ * What the controlled clock gives up is the claim that the REAL clock is the
+ * one read. The tests that keep real time hold that: "charges real work" (a
+ * lower bound, which a stall can only widen) and the BACKLOG-3166 resolution
+ * control, which is about `performance.now()`'s tick and must see a real one.
  */
 
 import * as nodePath from "path";
@@ -62,8 +83,34 @@ import type { Database as DatabaseType } from "better-sqlite3";
 
 import { instrumentDatabaseTiming, readDbTimeMs } from "../dbTiming";
 
-/** Blocks the thread for `ms`. Synchronous on purpose: a DB call cannot await. */
+/**
+ * The controlled clock's reading, or null when the test runs on real time.
+ * Starts above zero so a stray `0` from an unmocked read cannot pass for it.
+ */
+let controlledNow: number | null = null;
+let clockSpy: jest.SpyInstance | null = null;
+
+/**
+ * Replace `performance.now` — the clock `dbTiming`'s `now()` and `measure()`
+ * below both read — with a counter that moves only when `busyWait` moves it.
+ * Restored in `afterEach`.
+ */
+function useControlledClock(): void {
+  controlledNow = 1_000;
+  clockSpy = jest
+    .spyOn(performance, "now")
+    .mockImplementation(() => controlledNow as number);
+}
+
+/**
+ * Blocks the thread for `ms`. Synchronous on purpose: a DB call cannot await.
+ * Under the controlled clock it advances the clock by exactly `ms` instead.
+ */
 function busyWait(ms: number): void {
+  if (controlledNow !== null) {
+    controlledNow += ms;
+    return;
+  }
   const until = performance.now() + ms;
   while (performance.now() < until) {
     /* spin */
@@ -94,6 +141,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clockSpy?.mockRestore();
+  clockSpy = null;
+  controlledNow = null;
   db.close();
 });
 
@@ -191,6 +241,7 @@ describe("database time is non-zero and bounded by the span", () => {
 
 describe("a delay INSIDE the database moves both numbers together", () => {
   it("raises database time by the same amount it raises the wall clock", () => {
+    useControlledClock();
     db.function("keepr_busy_wait", (ms: unknown) => {
       busyWait(Number(ms));
       return 1;
@@ -206,9 +257,10 @@ describe("a delay INSIDE the database moves both numbers together", () => {
     const wallRise = delayed.wallMs - baseline.wallMs;
     const dbRise = delayed.dbMs - baseline.dbMs;
 
-    expect(dbRise).toBeGreaterThanOrEqual(45);
-    // Both rise, and by the same amount: the delay is inside the measured region.
-    expect(Math.abs(wallRise - dbRise)).toBeLessThanOrEqual(15);
+    // Both rise, and by exactly the planted amount: the delay is inside the
+    // measured region, and nothing else on the controlled clock moved.
+    expect(wallRise).toBe(50);
+    expect(dbRise).toBe(50);
   });
 });
 
@@ -222,6 +274,7 @@ describe("a delay OUTSIDE the database moves only the wall clock", () => {
     // — "database time" that is really elapsed time — reports the same number as
     // a correct one when the delay trails the final call, and this suite would
     // not notice. Between two calls, it has to charge the gap or not.
+    useControlledClock();
     const baseline = measure(() => {
       db.prepare("SELECT 1 AS one").get();
       db.prepare("SELECT 2 AS two").get();
@@ -232,13 +285,14 @@ describe("a delay OUTSIDE the database moves only the wall clock", () => {
       db.prepare("SELECT 2 AS two").get();
     });
 
-    expect(delayed.wallMs - baseline.wallMs).toBeGreaterThanOrEqual(45);
-    expect(Math.abs(delayed.dbMs - baseline.dbMs)).toBeLessThanOrEqual(2);
+    expect(delayed.wallMs - baseline.wallMs).toBe(50);
+    expect(delayed.dbMs - baseline.dbMs).toBe(0);
   });
 });
 
 describe("transactions", () => {
   it("counts a transaction once rather than adding its statements on top", () => {
+    useControlledClock();
     db.function("keepr_busy_wait_tx", (ms: unknown) => {
       busyWait(Number(ms));
       return 1;
@@ -253,8 +307,7 @@ describe("transactions", () => {
       tx();
     });
 
-    expect(dbMs).toBeGreaterThanOrEqual(45);
-    expect(dbMs).toBeLessThan(90);
+    expect(dbMs).toBe(50);
   });
 
   it("charges the span the transaction is open, not merely its statements", () => {
@@ -264,6 +317,7 @@ describe("transactions", () => {
     // the two apart. What separates them is time inside the body that is not
     // itself a database call: BEGIN/COMMIT, and on the batch-insert path the
     // per-row encryption that runs with the write transaction open.
+    useControlledClock();
     const { dbMs } = measure(() => {
       const tx = db.transaction(() => {
         busyWait(50);
@@ -272,7 +326,7 @@ describe("transactions", () => {
       tx();
     });
 
-    expect(dbMs).toBeGreaterThanOrEqual(45);
+    expect(dbMs).toBe(50);
   });
 
   it("returns a callable that still carries better-sqlite3's transaction variants", () => {
@@ -321,13 +375,27 @@ describe("transactions", () => {
 
 describe("installation is safe to repeat and safe on partial handles", () => {
   it("does not stack a second wrapper when the same handle is instrumented twice", () => {
+    useControlledClock();
     db.function("keepr_busy_wait_twice", (ms: unknown) => {
       busyWait(Number(ms));
       return 1;
     });
 
+    const handle = db as unknown as Record<string, unknown>;
+    const before = {
+      prepare: handle.prepare,
+      exec: handle.exec,
+      transaction: handle.transaction,
+    };
+
     instrumentDatabaseTiming(db);
     instrumentDatabaseTiming(db);
+
+    // The claim in the title, observed directly: re-instrumenting leaves the
+    // methods `beforeEach` installed in place rather than wrapping them again.
+    expect(handle.prepare).toBe(before.prepare);
+    expect(handle.exec).toBe(before.exec);
+    expect(handle.transaction).toBe(before.transaction);
 
     const { dbMs } = measure(() => {
       db.prepare("SELECT keepr_busy_wait_twice(50) AS x").get();
@@ -337,8 +405,7 @@ describe("installation is safe to repeat and safe on partial handles", () => {
     // would be the only one charging (the inner sees depth > 0). The failure
     // this guards is unbounded wrapper growth across repeated setDb() calls, so
     // the observable claim is that the figure stays a single 50 ms.
-    expect(dbMs).toBeGreaterThanOrEqual(45);
-    expect(dbMs).toBeLessThan(90);
+    expect(dbMs).toBe(50);
   });
 
   it("leaves a jest-mocked database still usable as a mock", () => {

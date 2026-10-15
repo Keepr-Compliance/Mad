@@ -10,7 +10,7 @@ import { safeErrorMessage } from '../../utils/formatUtils';
 import { ResponsiveModal } from "../common/ResponsiveModal";
 import { ImportInfoPopover } from "./ImportInfoPopover";
 import { emailPrecacheStageDisplayFor } from "../../utils/emailPrecacheStageDisplay";
-import { ConnectionMenu } from "./ConnectionMenu";
+import { ConnectionControl } from "./ConnectionControl";
 import { LookbackMonthsSelect, forceWindowLine } from "./LookbackMonthsSelect";
 import { DEFAULT_EMAIL_CACHE_MONTHS } from "./messageImportPreferences";
 import type {
@@ -23,16 +23,37 @@ import type {
 // Refresh interval for connection status (60 seconds)
 const CONNECTION_REFRESH_INTERVAL = 60000;
 
-type ForceSwapSummary = {
+/**
+ * BACKLOG-2856 / 3910a: what a committed force swap did. Mirrors
+ * `ForceSwapResult` in `electron/services/emailSyncService.ts`.
+ *   emailsInserted    new rows (no kept row to pair with)
+ *   emailsRefreshed   kept rows on no locked deal, updated in place (same id)
+ *   emailsKeptLocked  kept rows on a submitted / under review / resubmitted /
+ *                     approved deal, left exactly as they were
+ *   emailsKeptNoCopy  kept rows no fresh copy arrived for (not reported)
+ */
+export type ForceSwapSummary = {
   emailsDeleted: number;
   emailsInserted: number;
+  emailsRefreshed: number;
+  emailsKeptLocked: number;
+  emailsKeptNoCopy: number;
   participantsInserted: number;
   providers: Array<"gmail" | "outlook">;
 };
 
-const MAILBOX_LABEL: Record<"gmail" | "outlook", string> = {
-  gmail: "Gmail",
-  outlook: "Outlook",
+/**
+ * BACKLOG-3910a: why a force run applied nothing — one entry per connected
+ * mailbox that did not finish. Mirrors `ForceNotApplied` in
+ * `electron/services/emailSyncService.ts`; arrives only with `success: false`.
+ */
+export type ForceNotAppliedSummary = {
+  mailboxes: Array<{
+    provider: "gmail" | "outlook";
+    /** The mailbox address, or "Outlook" / "Gmail" when none is stored. */
+    mailbox: string;
+    tokenExpired: boolean;
+  }>;
 };
 
 /**
@@ -89,35 +110,61 @@ export function describeCancelledRecache(
   return "Re-cache cancelled.";
 }
 
-export function describeForceRecache(
-  forceSwap: ForceSwapSummary | undefined,
-  connections: Connections,
-): string {
+export function describeForceRecache(forceSwap: ForceSwapSummary | undefined): string {
   if (!forceSwap) {
     return "Re-cache finished without replacing anything. Your emails and their transaction links are unchanged.";
   }
 
-  const connected: Array<"gmail" | "outlook"> = [
-    ...(connections.google?.connected ? (["gmail"] as const) : []),
-    ...(connections.microsoft?.connected ? (["outlook"] as const) : []),
-  ];
-  const skipped = connected.filter((p) => !forceSwap.providers.includes(p));
-
-  const headline = `Re-cached ${forceSwap.emailsInserted} email${
-    forceSwap.emailsInserted === 1 ? "" : "s"
-  }. Those emails were unlinked from their transactions.`;
-
-  // A partial success is the case most likely to mislead: the count looks
-  // healthy, and nothing on screen would otherwise say that a whole mailbox was
-  // left untouched because it could not be re-downloaded.
-  if (skipped.length > 0) {
-    const names = skipped.map((p) => MAILBOX_LABEL[p]).join(" and ");
-    return `${headline} ${names} could not be re-downloaded and ${
-      skipped.length === 1 ? "was" : "were"
-    } left unchanged — try again to re-cache ${skipped.length === 1 ? "it" : "them"}.`;
+  // BACKLOG-3910a: a force run no longer unlinks anything. Emails tied to a deal
+  // are kept; on an open deal they are updated IN PLACE (same id, so every link
+  // survives), on a locked deal they are not touched. "Re-cached" counts every
+  // email the swap wrote from the fresh download: the new rows plus the kept
+  // rows updated in place. There is no partial-mailbox sentence any more — a run
+  // in which a connected mailbox did not finish applies nothing
+  // (`describeForceNotApplied`).
+  const recached = forceSwap.emailsInserted + forceSwap.emailsRefreshed;
+  const parts = [`Re-cached ${recached} email${recached === 1 ? "" : "s"}.`];
+  if (forceSwap.emailsRefreshed > 0) {
+    parts.push(
+      `${forceSwap.emailsRefreshed} of them ${
+        forceSwap.emailsRefreshed === 1 ? "was" : "were"
+      } updated in place and kept ${forceSwap.emailsRefreshed === 1 ? "its" : "their"} links.`,
+    );
   }
+  if (forceSwap.emailsKeptLocked > 0) {
+    parts.push(
+      forceSwap.emailsKeptLocked === 1
+        ? "1 email on a submitted or approved deal was left unchanged."
+        : `${forceSwap.emailsKeptLocked} emails on submitted or approved deals were left unchanged.`,
+    );
+  }
+  return parts.join(" ");
+}
 
-  return headline;
+/**
+ * BACKLOG-3910a (SR decision 5 / S6): a force run in which a connected mailbox
+ * did not finish applies NOTHING. Name the mailbox, say nothing changed, and
+ * give the next step — reconnect when its token expired, otherwise retry.
+ *
+ * Falls back to the main process's own sentence when the field is empty.
+ */
+export function describeForceNotApplied(
+  notApplied: ForceNotAppliedSummary,
+  fallback: string,
+): string {
+  const mailboxes = notApplied.mailboxes;
+  if (mailboxes.length === 0) return fallback;
+  const names = (list: typeof mailboxes) => list.map((m) => m.mailbox).join(" and ");
+  const expired = mailboxes.filter((m) => m.tokenExpired);
+  const other = mailboxes.filter((m) => !m.tokenExpired);
+  const parts = [`Re-cache could not finish for ${names(mailboxes)}. Nothing was changed.`];
+  if (expired.length > 0) {
+    parts.push(`Reconnect ${names(expired)} in Settings, then run Re-cache again.`);
+  }
+  if (other.length > 0) {
+    parts.push("Check your connection and try again.");
+  }
+  return parts.join(" ");
 }
 
 /**
@@ -197,51 +244,7 @@ function ProviderConnectionControl({
   // one of the branches this change had to keep alive, so it moves with them.
   const offlineTitle = !isOnline ? "You are offline" : undefined;
 
-  if (loading) {
-    return (
-      <div className="text-xs text-gray-500" data-testid={`${testIdBase}-checking`}>
-        Checking...
-      </div>
-    );
-  }
-
-  if (connection?.connected) {
-    return (
-      <div className="flex items-center gap-2">
-        <div className="flex items-center gap-2">
-          <div
-            data-testid={`${testIdBase}-dot`}
-            className="w-2 h-2 bg-green-500 rounded-full"
-          ></div>
-          <span
-            data-testid={`${testIdBase}-status`}
-            className="text-xs text-green-600 font-medium"
-          >
-            {disconnecting ? "Disconnecting..." : "Connected"}
-          </span>
-        </div>
-        <ConnectionMenu
-          testId={testIdBase}
-          triggerAriaLabel={`${label} connection options`}
-          items={[
-            {
-              label: "Disconnect",
-              // Both rows show the same word, so the visible label alone would
-              // not tell a screen reader which account the item acts on.
-              ariaLabel: `Disconnect ${label}`,
-              onSelect: onRequestDisconnect,
-              testId: `${testIdBase}-disconnect`,
-              disabled: disconnecting || !isOnline,
-              title: offlineTitle,
-              tone: "destructive",
-            },
-          ]}
-        />
-      </div>
-    );
-  }
-
-  if (connection?.error && connection.error.type !== "NOT_CONNECTED") {
+  if (connection?.error && connection.error.type !== "NOT_CONNECTED" && !loading && !connection.connected) {
     return (
       <button
         onClick={onConnect}
@@ -255,16 +258,32 @@ function ProviderConnectionControl({
     );
   }
 
+  // BACKLOG-3156 stage G: the checking / connected / connect states are the
+  // shared ConnectionControl, which the Messages Sources card also uses.
   return (
-    <button
-      onClick={onConnect}
-      disabled={connecting || !isOnline}
-      title={offlineTitle}
-      data-testid={`${testIdBase}-connect`}
-      className="px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-    >
-      {connecting ? "Connecting..." : `Connect ${label}`}
-    </button>
+    <ConnectionControl
+      state={loading ? "checking" : connection?.connected ? "connected" : "disconnected"}
+      testIdBase={testIdBase}
+      connectedLabel={disconnecting ? "Disconnecting..." : "Connected"}
+      connectLabel={connecting ? "Connecting..." : `Connect ${label}`}
+      onConnect={onConnect}
+      connectDisabled={connecting || !isOnline}
+      connectTitle={offlineTitle}
+      menuAriaLabel={`${label} connection options`}
+      menuItems={[
+        {
+          label: "Disconnect",
+          // Both rows show the same word, so the visible label alone would
+          // not tell a screen reader which account the item acts on.
+          ariaLabel: `Disconnect ${label}`,
+          onSelect: onRequestDisconnect,
+          testId: `${testIdBase}-disconnect`,
+          disabled: disconnecting || !isOnline,
+          title: offlineTitle,
+          tone: "destructive",
+        },
+      ]}
+    />
   );
 }
 
@@ -272,7 +291,8 @@ interface EmailSettingsProps {
   userId: string;
   initialPreferences: PreferencesResult['preferences'];
   onEmailConnected?: (email: string, provider: "google" | "microsoft") => void;
-  onEmailDisconnected?: (provider: "google" | "microsoft") => void;
+  /** BACKLOG-3888: second argument = the other mailbox is still connected. */
+  onEmailDisconnected?: (provider: "google" | "microsoft", anyStillConnected?: boolean) => void;
   /** Report connection status changes to parent (for Contacts section) */
   onConnectionStatusChange?: (google: boolean, microsoft: boolean) => void;
 }
@@ -435,9 +455,9 @@ export function EmailSettings({
     try {
       const result = await authService.googleDisconnectMailbox(userId);
       if (result.success) {
-        await checkConnections();
+        const after = await checkConnections();
         if (onEmailDisconnected) {
-          onEmailDisconnected("google");
+          onEmailDisconnected("google", after?.microsoft?.connected === true);
         }
         emitEmailConnectionChanged({ connected: false, provider: "google" });
       }
@@ -453,9 +473,9 @@ export function EmailSettings({
     try {
       const result = await authService.microsoftDisconnectMailbox(userId);
       if (result.success) {
-        await checkConnections();
+        const after = await checkConnections();
         if (onEmailDisconnected) {
-          onEmailDisconnected("microsoft");
+          onEmailDisconnected("microsoft", after?.google?.connected === true);
         }
         emitEmailConnectionChanged({ connected: false, provider: "microsoft" });
       }
@@ -532,10 +552,9 @@ export function EmailSettings({
   }, []);
 
   // BACKLOG-2856: the Force Re-cache confirmation. Gated behind an explicit
-  // dialog because the run cascade-deletes every email<->transaction link, in
-  // parity with the macOS messages Force Re-import (founder decision,
-  // 2026-08-24: "the functionality of the force button on the msg should be the
-  // same as the emails").
+  // dialog because the run deletes the emails stored on this computer and
+  // downloads them again. BACKLOG-3910a: emails tied to a deal are kept (the
+  // 2026-08-24 parity decision with the messages Force Re-import is superseded).
   const [showForceWarning, setShowForceWarning] = useState(false);
 
   const handleRecacheEmails = async (force = false): Promise<void> => {
@@ -574,13 +593,19 @@ export function EmailSettings({
           // detached. `forceSwap` is present only when the swap actually
           // committed, so it is the only honest source for this sentence.
           message: force
-            ? describeForceRecache(result.forceSwap, connections)
+            ? describeForceRecache(result.forceSwap)
             : `Cached ${result.emailsStored ?? 0} new emails (${result.emailsFetched ?? 0} checked).`,
         });
       } else {
+        const errorText = safeErrorMessage(result.error, "Failed to re-cache emails.");
         setRecacheResult({
           success: false,
-          message: safeErrorMessage(result.error, "Failed to re-cache emails."),
+          // BACKLOG-3910a: a force run a connected mailbox did not finish
+          // applied nothing; the renderer adds the next step.
+          message:
+            force && result.forceNotApplied
+              ? describeForceNotApplied(result.forceNotApplied, errorText)
+              : errorText,
         });
       }
     } catch (error) {
@@ -656,7 +681,7 @@ export function EmailSettings({
         <div className="space-y-2">
         {/* Gmail Connection */}
         <div className={`p-3 rounded border ${
-          connections.google?.error && !connections.google?.connected && connections.google.error.type !== "NOT_CONNECTED"
+          connections.google?.error && (!connections.google?.connected || connections.google.error.type === "PROVIDER_UNREACHABLE") && connections.google.error.type !== "NOT_CONNECTED"
             ? "bg-yellow-50 border-yellow-200"
             : "bg-white border-gray-200"
         }`}>
@@ -690,7 +715,7 @@ export function EmailSettings({
               {typeof connections.google.email === 'string' ? connections.google.email : String(connections.google.email)}
             </p>
           )}
-          {connections.google?.error && !connections.google?.connected && connections.google.error.type !== "NOT_CONNECTED" && (
+          {connections.google?.error && (!connections.google?.connected || connections.google.error.type === "PROVIDER_UNREACHABLE") && connections.google.error.type !== "NOT_CONNECTED" && (
             <div className="mb-3 p-2 bg-yellow-100 rounded text-xs">
               <p className="text-yellow-800 font-medium">
                 {typeof connections.google.error.userMessage === 'string' ? connections.google.error.userMessage : String(connections.google.error.userMessage)}
@@ -706,7 +731,7 @@ export function EmailSettings({
 
         {/* Outlook Connection */}
         <div className={`p-3 rounded border ${
-          connections.microsoft?.error && !connections.microsoft?.connected && connections.microsoft.error.type !== "NOT_CONNECTED"
+          connections.microsoft?.error && (!connections.microsoft?.connected || connections.microsoft.error.type === "PROVIDER_UNREACHABLE") && connections.microsoft.error.type !== "NOT_CONNECTED"
             ? "bg-yellow-50 border-yellow-200"
             : "bg-white border-gray-200"
         }`}>
@@ -739,7 +764,7 @@ export function EmailSettings({
               {typeof connections.microsoft.email === 'string' ? connections.microsoft.email : String(connections.microsoft.email)}
             </p>
           )}
-          {connections.microsoft?.error && !connections.microsoft?.connected && connections.microsoft.error.type !== "NOT_CONNECTED" && (
+          {connections.microsoft?.error && (!connections.microsoft?.connected || connections.microsoft.error.type === "PROVIDER_UNREACHABLE") && connections.microsoft.error.type !== "NOT_CONNECTED" && (
             <div className="mb-3 p-2 bg-yellow-100 rounded text-xs">
               <p className="text-yellow-800 font-medium">
                 {typeof connections.microsoft.error.userMessage === 'string' ? connections.microsoft.error.userMessage : String(connections.microsoft.error.userMessage)}
@@ -871,11 +896,11 @@ export function EmailSettings({
                 to the rendered labels structurally, so the rename cannot land
                 without this following it.
 
-                Both claims in the force paragraph are true at source: the swap
-                deletes the force set with an ordinary DELETE so every cascade
-                fires — transaction links AND their pending-review siblings
-                (`electron/services/emailForceStaging.ts`, `deleteLiveForceSet`).
-                The confirmation dialog below already says the same thing. */}
+                BACKLOG-3910a: the force paragraph matches the swap — emails tied
+                to a deal are kept and stay attached, every other email of the
+                user is removed and downloaded again when it is in the window
+                (`electron/services/emailForceStaging.ts`). The confirmation
+                dialog below says the same thing. */}
             <ImportInfoPopover
               testId="emails-import-info"
               entries={[
@@ -887,7 +912,7 @@ export function EmailSettings({
                 {
                   heading: "Force Re-cache",
                   bodyTestId: "force-recache-description",
-                  body: "Re-downloads every email in your cache window and replaces what is stored. This unlinks your emails from their transactions and loses review decisions on them. Use after a fix to email importing.",
+                  body: "Re-downloads every email in your cache window and removes the rest. Emails attached to deals stay attached. Use after a fix to email importing.",
                 },
               ]}
             />
@@ -1031,14 +1056,22 @@ export function EmailSettings({
               Re-cache all emails?
             </h3>
           </div>
-          <p className="text-sm text-gray-600 mb-6">
-            This re-downloads every email in your cache window from scratch and
-            will <strong>unlink your emails from their transactions</strong> —
-            you&rsquo;ll need to re-attach them afterward. Links from checklist
-            items to those emails and their attachments are removed too. Any
-            review decisions on those emails are lost, and attachments are
-            re-downloaded when you next open or export them. This can take a
-            while.
+          {/* BACKLOG-3910a: every sentence matches the swap in
+              electron/services/emailForceStaging.ts — kept set (links,
+              rejections, checklist members), in-place refresh on open deals,
+              locked deals untouched, Needs Review does not protect. */}
+          <p className="text-sm text-gray-600 mb-6" data-testid="force-recache-dialog-body">
+            This deletes the emails stored on this computer and downloads them
+            again from your connected mailboxes. Emails attached to a deal or a
+            checklist item, and suggestions you rejected, are kept &mdash;
+            nothing is unlinked. Kept emails on open deals are updated from the
+            new download when it includes them. Emails on a deal that has been
+            submitted or approved are left exactly as they are. An email that is
+            only waiting in Needs Review is not kept: it is downloaded again if it
+            is within your Email History and its mailbox is connected, and its
+            suggestion is cleared. Emails from a mailbox that is no longer
+            connected are removed, apart from the kept emails described above.
+            This can take a while.
           </p>
           <p className="text-sm font-medium text-gray-800 -mt-4 mb-6" data-testid="force-window-line">
             {forceWindowLine(emailCacheDurationMonths, "emails")}
@@ -1052,7 +1085,7 @@ export function EmailSettings({
               data-testid="force-recache-confirm"
               className="px-4 py-2 bg-white border border-red-300 text-red-700 hover:bg-red-50 rounded-lg font-medium transition-all"
             >
-              Re-cache &amp; unlink
+              Re-cache
             </button>
             <button
               onClick={() => setShowForceWarning(false)}

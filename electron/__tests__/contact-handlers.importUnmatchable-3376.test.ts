@@ -236,7 +236,6 @@ import {
   __resetContactLinkingScheduler,
   cancelPendingContactLinking,
 } from "../services/contactLinkingScheduler";
-import { importRefusalReason } from "../utils/importableRecord";
 
 // RFC 4122 example value, not from any live row.
 const USER = "550e8400-e29b-41d4-a716-446655440000"; // pii-allow-uuid: RFC 4122 example value

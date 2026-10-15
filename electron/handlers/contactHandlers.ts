@@ -185,6 +185,7 @@ import type {
 } from "../types/handlerTypes";
 
 import { sendToMainWindow } from "../windowRegistry";
+import { notifyWhenMessageDerivedReady } from "../services/messageDerivedReadyNotice";
 
 // Type definitions
 interface ContactResponse {
@@ -828,7 +829,10 @@ function runOpportunisticLinking(userId: string): number {
  * pass.
  */
 async function runLinkingPassWithBackfill(userId: string): Promise<void> {
+  const startedAt = Date.now();
   const linksCreated = runOpportunisticLinking(userId);
+  // BACKLOG-3837: timing only, counts and milliseconds — no names, numbers or ids.
+  logService.info(`[Contacts] linking pass: ${linksCreated} link(s) created in ${Date.now() - startedAt} ms`, "Contacts");
   if (linksCreated === 0) return;
 
   backfilledUsers.delete(userId);
@@ -1194,8 +1198,11 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         // FK fix (live): people found in texts are NOT saved contacts — they
         // are offered in the address-book half (contacts:get-available), so
         // picking one imports it first. Never in the saved lists.
-        const importedContacts =
-          await databaseService.getImportedContactsByUserIdAsync(validatedUserId);
+        // BACKLOG-3837: the message-derived half is read only on a dedicated
+        // worker; while it is not ready the saved contacts come back alone,
+        // flagged pending (never an empty list standing for "not loaded").
+        const { contacts: importedContacts, messageDerivedPending } =
+          await databaseService.getImportedContactsWithStatusAsync(validatedUserId);
 
         logService.debug(
           `[PERF] contacts.getAll: ${Date.now() - t0}ms, ${importedContacts.length} contacts`,
@@ -1215,9 +1222,11 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
           logService.warn(`Background backfill failed: ${err}`, "Contacts");
         });
 
+        if (messageDerivedPending) notifyWhenMessageDerivedReady(validatedUserId);
         return {
           success: true,
           contacts: importedContacts,
+          ...(messageDerivedPending ? { contactsStatus: { messageDerivedPending: true } } : {}),
         };
       } catch (error) {
         logService.error("Get contacts failed", "Contacts", {
@@ -2406,14 +2415,15 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
             sanitizedContact.id &&
             !sanitizedContact.id.startsWith("contacts-app-")
           ) {
-            logService.warn(`[DIAG-1270] Import path: ${sanitizedContact.name || validatedData.name} → existingDB, allEmails=[${(sanitizedContact.allEmails || []).join(', ')}]`, 'Contacts');
+            // BACKLOG-3819: counts + contact id only — no names or addresses in logs.
+            logService.warn(`[DIAG-1270] Import path: ${sanitizedContact.id} → existingDB, emails=${(sanitizedContact.allEmails || []).length}`, 'Contacts');
             existingDbContacts.push({
               id: sanitizedContact.id,
               contact: sanitizedContact,
               source: storableSource,
             });
           } else {
-            logService.warn(`[DIAG-1270] Import path: ${sanitizedContact.name || validatedData.name} → newCreate, allEmails=[${(sanitizedContact.allEmails || []).join(', ')}]`, 'Contacts');
+            logService.warn(`[DIAG-1270] Import path: newCreate, emails=${(sanitizedContact.allEmails || []).length}`, 'Contacts');
             newContactsToCreate.push({
               user_id: validatedUserId,
               /**
@@ -2484,7 +2494,8 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
           // Mark existing DB contacts as imported and backfill any missing emails/phones
           // Also update source to "contacts_app" when importing from macOS Contacts
           for (const { id, contact, source: storedSource } of existingDbContacts) {
-            void logService.warn(`[DIAG-1270] DB contact backfill: ${contact.name}, contact.allEmails=[${(contact.allEmails || []).join(', ')}], contact.allPhones=[${(contact.allPhones || []).join(', ')}]`, 'Contacts');
+            // BACKLOG-3819: counts only — no names, emails or phone numbers in logs.
+            void logService.warn(`[DIAG-1270] DB contact backfill: ${id}, emails=${(contact.allEmails || []).length}, phones=${(contact.allPhones || []).length}`, 'Contacts');
             /**
              * BACKLOG-2481 — the THIRD write of `contacts.source`, and the third
              * that could hit the CHECK. This is an `UPDATE contacts SET source = ?`
@@ -2904,21 +2915,26 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
             })
           : undefined;
 
-        // Get only imported contacts sorted by activity
-        const importedContacts =
-          await databaseService.getContactsSortedByActivity(
+        // Get only imported contacts sorted by activity.
+        // BACKLOG-3837: the message-derived half is read only on a dedicated
+        // worker; while it is not ready the saved contacts come back alone,
+        // flagged pending (never an empty list standing for "not loaded").
+        const { contacts: importedContacts, messageDerivedPending } =
+          await databaseService.getContactsSortedByActivityWithStatus(
             validatedUserId,
             validatedAddress ?? undefined,
           );
 
         logService.info(
-          `[Main] Returning ${importedContacts.length} imported contacts sorted by activity`,
+          `[Main] Returning ${importedContacts.length} imported contacts sorted by activity${messageDerivedPending ? " (message-derived pending)" : ""}`,
           "Contacts",
         );
 
+        if (messageDerivedPending) notifyWhenMessageDerivedReady(validatedUserId);
         return {
           success: true,
           contacts: importedContacts,
+          ...(messageDerivedPending ? { contactsStatus: { messageDerivedPending: true } } : {}),
         };
       } catch (error) {
         logService.error("[Main] Get sorted contacts failed:", "Contacts", {
@@ -2949,7 +2965,8 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
       try {
         // DIAG-1270: Log raw input to contacts:create
         const rawInput = contactData as Record<string, unknown>;
-        logService.warn(`[DIAG-1270] contacts:create raw input: allEmails=${JSON.stringify(rawInput?.allEmails)}, allPhones=${JSON.stringify(rawInput?.allPhones)}, name=${rawInput?.name}`, "Contacts");
+        // BACKLOG-3819: counts only — no names, emails or phone numbers in logs.
+        logService.warn(`[DIAG-1270] contacts:create raw input: emails=${Array.isArray(rawInput?.allEmails) ? rawInput.allEmails.length : 0}, phones=${Array.isArray(rawInput?.allPhones) ? rawInput.allPhones.length : 0}`, "Contacts");
 
         // BACKLOG-551: Validate user ID exists in local DB
         const validatedUserId = await getValidUserId(userId, "Contacts");

@@ -1,0 +1,101 @@
+== k02-admin-actions-work
+PASS|k02 admin Edit role|OK rows=1
+PASS|k02 admin Bulk role|OK rows=1
+PASS|k02 admin Deactivate|OK rows=1
+PASS|k02 admin Resend invite|OK rows=1
+PASS|k02 admin of another org refused|OK rows=0
+== k03-invitee-callback-accepts
+PASS|k03 callback finds the pending invite|OK {inv_a}
+PASS|k03 callback UPDATE links the invite|OK rows=1
+PASS|k03 linked row: caller, same role/org, active, token cleared|{"id": "{inv_a}", "role": "agent", "user_id": "{u_a}", "joined_at": "2026-10-07T19:37:59.379468+00:00", "created_at": "2026-10-07T19:37:59.379468+00:00", "idp_groups": null, "invited_at": "2026-10-07T19:37:59.379468+00:00", "invited_by": "{u_c}", "updated_at": "2026-10-07T19:37:59.379468+00:00", "invited_email": "invitee-3679@example.test", "license_status": "active", "provisioned_at": null, "provisioned_by": "invite", "scim_synced_at": null, "last_invited_at": null, "organization_id": "{org1}", "invitation_token": null, "group_sync_enabled": false, "invitation_expires_at": "2026-10-14T19:37:59.379468+00:00", "provisioning_metadata": null}
+PASS|k03 personal membership retired by existing trigger|
+PASS|k03 linked invitee cannot then change role|OK rows=0
+== k04-invitee-attacks-refused
+PASS|k04 (a) by id: user_id=self, role=admin|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 (a) no WHERE: user_id=self, role=admin|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 (a) role only|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 (b) by id: organization -> O2 + self|ERR 42501 organization_id cannot be changed
+PASS|k04 (b) no WHERE: organization -> O2|ERR 42501 organization_id cannot be changed
+PASS|k04 (c) by id: license_status=suspended|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 (c) link self + license_status=expired|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 (c) no WHERE: license_status=active (no link)|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 link self + new invitation_token|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 link self + extend expiry|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 link self + invited_by|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 link self + provisioning_metadata|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 link someone else|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 link self + change invited_email|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 change invited_email to keep access|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 invite row unchanged after all attempts|
+PASS|k04 cross-policy: admin of O2 moves own O1 invite into O2|ERR 42501 organization_id cannot be changed
+PASS|k04 cross-policy: admin of O2 links own O1 invite as admin|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k04 cross-policy: same user can still accept normally|OK rows=1
+== k05-other-user-refused
+PASS|k05 other user cannot see the invite|OK 0
+PASS|k05 other user cannot accept it|OK rows=0
+PASS|k05 other user no-WHERE update touches nothing|OK rows=0
+PASS|k05 claims email but links a different user id|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k05 anon touches nothing|OK rows=0
+PASS|k05 invite row unchanged|
+== k06-expired-and-case
+PASS|k06 expired invite not visible|OK 0
+PASS|k06 expired invite not acceptable|OK rows=0
+PASS|k06 no-WHERE acceptance links only the unexpired invite|OK rows=1
+PASS|k06 expired invite still unclaimed|
+PASS|k06 claim email differing in case/spaces still accepts|OK rows=1
+== k07-definer-and-service-paths
+PASS|k07 claim_pending_invite() accepts|OK {"role": "agent", "success": true, "organization_id": "{org1}"}
+PASS|k07 service_role update unrestricted|OK rows=1
+PASS|k07 postgres update unrestricted|OK rows=1
+== k08-auth-users-stays-closed
+PASS|k08 anon has no SELECT on auth.users|
+PASS|k08 anon cannot execute guard_invite_acceptance()|
+PASS|k08 authenticated has no SELECT on auth.users|
+PASS|k08 authenticated cannot execute guard_invite_acceptance()|
+PASS|k08 no organization_members policy reads auth.users|
+PASS|k08 guard trigger present and enabled|
+PASS|k08 accept policy is TO authenticated with a WITH CHECK|
+PASS|k08 with auth.users opened: no-WHERE role escalation still refused|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k08 with auth.users opened: no-WHERE org move still refused|ERR 42501 organization_id cannot be changed
+== k99-organization-unchanged
+PASS|k99 pre: C is not admin of O2|
+PASS|k99 admin edit of a member row keeps its organization|ERR 42501 organization_id cannot be changed
+PASS|k99 admin edit of a pending invite keeps its organization|ERR 42501 organization_id cannot be changed
+PASS|k99 admin edit changing only the organization|ERR 42501 organization_id cannot be changed
+PASS|k99 rows unchanged|
+PASS|k99b admin of the target organization cannot pull a row in|ERR 42501 organization_id cannot be changed
+PASS|k99c admin edit of a member row keeps its user_id|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k99c admin edit of a pending invite keeps its user_id|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k99c admin edit clearing user_id|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k99c rows and the other personal membership unchanged|
+PASS|k99c admin role edit still works|OK rows=1
+PASS|k99d admin of both organizations cannot move a member row|ERR 42501 organization_id cannot be changed
+PASS|k99d admin of both organizations cannot move a pending invite|ERR 42501 organization_id cannot be changed
+== k11-accept-pins-joined-at
+PASS|k11 accept sending joined_at=2020-01-01 succeeds|OK rows=1
+PASS|k11 stored joined_at = now() of the accepting transaction|2026-10-07 19:38:00.698144+00 vs 2026-10-07 19:38:00.698144+00
+PASS|k11 info: guard definition md5 after 3538|a3eb55b807448a50e1c5f4228ef4e3b5
+== k12-anon-cannot-claim
+PASS|k12 anon executing claim_pending_invite() is refused|ERR 42501 permission denied for function claim_pending_invite
+PASS|k12 anon has no EXECUTE (incl. through PUBLIC)|
+PASS|k12 authenticated keeps EXECUTE|
+PASS|k12 service_role keeps EXECUTE|
+PASS|k12 ACL is postgres, authenticated, service_role only|authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres
+== k13-link-function-dropped
+PASS|k13 handle_new_user_invitation_link() dropped|
+== k14-other-writers-keep-joined-at
+PASS|k14 admin: role edit succeeds|OK rows=1
+PASS|k14 admin: role edit keeps joined_at|2021-05-05 00:00:00+00
+PASS|k14 service_role: update succeeds|OK rows=1
+PASS|k14 service_role: update keeps joined_at|2021-05-05 00:00:00+00
+== k15-apply-twice
+PASS|k15 after applying twice: one guard trigger|
+PASS|k15 after applying twice: anon has no EXECUTE on claim_pending_invite()|
+PASS|k15 after applying twice: link function absent|
+PASS|k15 after applying twice: accept pins joined_at|OK rows=1
+== k16-rollback
+PASS|k16 catalogue fingerprint restored|8eab8901240ac052c942cbbf623da9e5 1a135bdab91cf796afb067a98dd236c8 vs 8eab8901240ac052c942cbbf623da9e5 1a135bdab91cf796afb067a98dd236c8
+PASS|k16 anon can execute claim_pending_invite() again|
+PASS|k16 link function restored (definition md5 as in production)|
+PASS|k16 after rollback: client joined_at kept again (3679 behaviour)|OK rows=1
+CONTROLS: pass=14 fail=0 error=0

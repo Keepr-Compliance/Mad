@@ -499,7 +499,7 @@ export function ChecklistReview({
                   aria-expanded={isOpen}
                   aria-controls={bodyId}
                   onClick={() => toggle(section.id)}
-                  className="flex w-full items-center justify-between gap-3 bg-gray-50 px-6 py-[15px] text-left transition-colors hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
+                  className="flex w-full flex-col items-start gap-2 md:flex-row md:items-center md:justify-between md:gap-3 bg-gray-50 px-6 py-[15px] text-left transition-colors hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
                 >
                   <span className="flex min-w-0 items-center gap-2.5">
                     <ChevronRight

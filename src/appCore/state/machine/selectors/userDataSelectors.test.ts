@@ -41,6 +41,7 @@ describe("userDataSelectors", () => {
       hasEmailConnected: true,
       needsDriverSetup: false,
       fda: "granted",
+      setup: "finished",
     },
   };
 
@@ -345,6 +346,7 @@ describe("userDataSelectors", () => {
           hasEmailConnected: false,
           needsDriverSetup: false,
           fda: "not-asked",
+          setup: "finished",
           ...userData,
         },
       };

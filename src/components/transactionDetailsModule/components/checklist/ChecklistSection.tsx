@@ -51,6 +51,8 @@ export interface ChecklistSectionProps {
   onOpenPicker: (item: ChecklistItem) => void;
   onRemoveLink: (linkId: string) => Promise<void>;
   viewer: ChecklistLinkViewer;
+  /** BACKLOG-3910 (slice d): set on a locked deal; each tick's tooltip. */
+  lockedTooltip?: string;
 }
 
 export function ChecklistSection({
@@ -60,6 +62,7 @@ export function ChecklistSection({
   readOnly,
   canRemove,
   busy,
+  lockedTooltip,
   pendingItemIds,
   attachmentsById,
   threads,
@@ -176,6 +179,7 @@ export function ChecklistSection({
                 onOpenPicker={onOpenPicker}
                 onRemoveLink={onRemoveLink}
                 viewer={viewer}
+                lockedTooltip={lockedTooltip}
               />
             ))}
         </div>

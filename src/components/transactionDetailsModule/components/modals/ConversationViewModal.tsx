@@ -20,7 +20,9 @@ import logger from '../../../../utils/logger';
 import type { HideFromExportState } from "../../../../hooks/useHideFromExportState";
 
 /**
- * Attachment info for display (TASK-1012)
+ * Attachment metadata for display (TASK-1012).
+ * BACKLOG-3763: no file bytes. An image's bytes are loaded by attachment id
+ * when it scrolls into view (`getMessageAttachmentData`).
  */
 interface MessageAttachmentInfo {
   id: string;
@@ -28,8 +30,19 @@ interface MessageAttachmentInfo {
   filename: string;
   mime_type: string | null;
   file_size_bytes: number | null;
-  data: string | null;
 }
+
+/** Resolves an attachment to a `data:` URL, or null when it cannot be shown. */
+type AttachmentDataLoader = (attachment: MessageAttachmentInfo) => Promise<string | null>;
+
+/**
+ * BACKLOG-3763: how many loaded images one open conversation keeps. Oldest are
+ * dropped first; a dropped image reloads if it scrolls back into view.
+ */
+const ATTACHMENT_DATA_CACHE_LIMIT = 150;
+
+/** Start loading an image this far before it reaches the visible area. */
+const ATTACHMENT_PRELOAD_MARGIN = "300px";
 
 interface ConversationViewModalProps {
   /** Messages in the thread */
@@ -69,6 +82,28 @@ interface ConversationViewModalProps {
    * export is never gated. Defaults to "blocked".
    */
   hideFromExportState?: HideFromExportState;
+  /**
+   * BACKLOG-3910: set when the deal is locked (read-only). The Hide / Unhide
+   * control stays visible but disabled, with this text as its tooltip.
+   */
+  hideLockedTooltip?: string;
+  /**
+   * BACKLOG-3884: the conversation arrives a page at a time (the linked cards on
+   * the Texts tab). `messages` holds the pages loaded so far; the list ends with
+   * "Load earlier messages" while more exist, and the header counts against
+   * `totalCount` (texts in what is shown: the window, or all history when the
+   * toggle is on), so nothing is cut off silently. Absent = the whole thread is
+   * in `messages`, as before.
+   */
+  pagination?: {
+    hasMore: boolean;
+    loading: boolean;
+    loadMore: () => void;
+    /** Non-reaction texts in the current scope (window, or all history when the toggle is on). */
+    totalCount: number;
+  };
+  /** BACKLOG-3884: told when the before/after toggle changes (the pager re-reads its scope). */
+  onShowOutOfRangeChange?: (show: boolean) => void;
 }
 
 // normalizePhoneForLookup and getSenderPhone imported from src/utils/phoneNormalization.ts (TASK-2027)
@@ -105,31 +140,92 @@ function getAttachmentLabel(mimeType: string | null, filename: string): string {
 }
 
 /**
- * Attachment image component with loading state and error handling
+ * Attachment image component with loading state and error handling.
+ * BACKLOG-3763: the bytes are requested only once the image is near the
+ * visible area of the conversation.
  */
 function AttachmentImage({
   attachment,
   isOutbound,
+  loadData,
 }: {
   attachment: MessageAttachmentInfo;
   isOutbound: boolean;
+  loadData: AttachmentDataLoader;
 }): React.ReactElement | null {
   const [imageError, setImageError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isNearView, setIsNearView] = useState(false);
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [dataFailed, setDataFailed] = useState(false);
+  const placeholderRef = useRef<HTMLDivElement>(null);
 
-  if (!attachment.data || imageError) {
+  useEffect(() => {
+    if (isNearView) return;
+    const node = placeholderRef.current;
+    if (typeof IntersectionObserver === "undefined" || !node) {
+      setIsNearView(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setIsNearView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: ATTACHMENT_PRELOAD_MARGIN },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [isNearView]);
+
+  useEffect(() => {
+    if (!isNearView) return;
+    let cancelled = false;
+    loadData(attachment).then((url) => {
+      if (cancelled) return;
+      if (url) {
+        setDataUrl(url);
+      } else {
+        setDataFailed(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isNearView, attachment, loadData]);
+
+  if (!dataUrl && !dataFailed && !imageError) {
+    return (
+      <div
+        ref={placeholderRef}
+        data-testid="attachment-image-pending"
+        data-attachment-id={attachment.id}
+        aria-busy="true"
+        className="w-48 h-32 flex items-center justify-center bg-gray-100 rounded-lg"
+      >
+        <div
+          data-testid="attachment-image-spinner"
+          role="status"
+          aria-label="Loading image"
+          className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin"
+        />
+      </div>
+    );
+  }
+
+  if (!dataUrl || imageError) {
     // Show placeholder for missing/failed attachments
     return (
       <div
-        className={`text-xs italic ${isOutbound ? "text-green-100" : "text-gray-400"}`}
+        data-testid="attachment-image-failed"
+        className={`w-48 h-32 flex items-center justify-center text-center px-2 text-xs italic rounded-lg ${isOutbound ? "text-green-100" : "text-gray-400 bg-gray-100"}`}
       >
         [Image: {attachment.filename || "attachment"}]
       </div>
     );
   }
-
-  const mimeType = attachment.mime_type || "image/jpeg";
-  const dataUrl = `data:${mimeType};base64,${attachment.data}`;
 
   return (
     <div className="relative">
@@ -251,6 +347,9 @@ export function ConversationViewModal({
   onSeeTransaction,
   onSetHiddenFromExport,
   hideFromExportState = "blocked",
+  hideLockedTooltip,
+  pagination,
+  onShowOutOfRangeChange,
 }: ConversationViewModalProps): React.ReactElement {
   // BACKLOG-2280: split reaction rows out of the bubble list and key them to
   // their parent message guid. Reactions render as pills under their parent, not
@@ -265,6 +364,35 @@ export function ConversationViewModal({
   >({});
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
   const loadedAttachmentsKeyRef = useRef<string>("");
+  // BACKLOG-3763: images loaded so far in this open conversation, by
+  // attachment id. Holding the promise also joins a second request for an
+  // image whose first request is still in flight.
+  const attachmentDataCacheRef = useRef(new Map<string, Promise<string | null>>());
+  const loadAttachmentData = React.useCallback<AttachmentDataLoader>((attachment) => {
+    const cache = attachmentDataCacheRef.current;
+    const cached = cache.get(attachment.id);
+    if (cached) return cached;
+    const pending = (async (): Promise<string | null> => {
+      try {
+        const getData = window.api?.messages?.getMessageAttachmentData;
+        if (!getData) return null;
+        const result = await getData(attachment.id);
+        if (!result.success) return null;
+        const mimeType = result.mime_type || attachment.mime_type || "image/jpeg";
+        return `data:${mimeType};base64,${result.data}`;
+      } catch (error) {
+        logger.error("Failed to load attachment image:", error);
+        return null;
+      }
+    })();
+    cache.set(attachment.id, pending);
+    while (cache.size > ATTACHMENT_DATA_CACHE_LIMIT) {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) break;
+      cache.delete(oldest);
+    }
+    return pending;
+  }, []);
 
   // TASK-1157 / BACKLOG-2295: Audit date state.
   // BACKLOG-2277: parse the audit boundaries as LOCAL calendar days so the modal
@@ -289,7 +417,14 @@ export function ConversationViewModal({
   // old default-ON filter). The toggle is INDEPENDENT of the Texts-tab toggle —
   // the modal now always receives the full, uncropped thread (see fullMessages in
   // MessageThreadCard / TransactionMessagesTab).
-  const [showOutOfRange, setShowOutOfRange] = useState<boolean>(false);
+  const [showOutOfRange, setShowOutOfRangeState] = useState<boolean>(false);
+  const setShowOutOfRange = React.useCallback(
+    (show: boolean) => {
+      setShowOutOfRangeState(show);
+      onShowOutOfRangeChange?.(show);
+    },
+    [onShowOutOfRangeChange],
+  );
 
   // BACKLOG-3366: the text whose hide/unhide request is in flight, so its pill
   // cannot be clicked twice.
@@ -463,10 +598,22 @@ export function ConversationViewModal({
             <h4 className="text-white font-semibold">
               {isGroupChat ? getGroupChatTitle() : (contactName || phoneNumber)}
             </h4>
-            <p className="text-green-100 text-xs">
-              {visibleMessages.length} message{visibleMessages.length !== 1 ? "s" : ""}
-              {hasAuditDates && visibleMessages.length !== sortedMessages.length && (
-                <span className="ml-1">of {sortedMessages.length}</span>
+            <p className="text-green-100 text-xs" data-testid="conversation-count">
+              {pagination ? (
+                // BACKLOG-3884: loaded so far, of everything in scope.
+                <>
+                  {visibleMessages.length} message{visibleMessages.length !== 1 ? "s" : ""}
+                  {pagination.totalCount > visibleMessages.length && (
+                    <span className="ml-1">of {pagination.totalCount}</span>
+                  )}
+                </>
+              ) : (
+                <>
+                  {visibleMessages.length} message{visibleMessages.length !== 1 ? "s" : ""}
+                  {hasAuditDates && visibleMessages.length !== sortedMessages.length && (
+                    <span className="ml-1">of {sortedMessages.length}</span>
+                  )}
+                </>
               )}
             </p>
           </div>
@@ -619,6 +766,7 @@ export function ConversationViewModal({
                           key={att.id}
                           attachment={att}
                           isOutbound={bubbleIsDark}
+                          loadData={loadAttachmentData}
                         />
                       ))}
                     </div>
@@ -700,10 +848,10 @@ export function ConversationViewModal({
                           e.stopPropagation();
                           void handleSetHiddenFromExport(hiddenFromExportTargetId, !isHiddenFromExport);
                         }}
-                        disabled={pendingHiddenFromExportId === hiddenFromExportTargetId}
+                        disabled={pendingHiddenFromExportId === hiddenFromExportTargetId || !!hideLockedTooltip}
                         aria-pressed={isHiddenFromExport}
                         aria-label={isHiddenFromExport ? "Unhide" : "Hide from export"}
-                        title={isHiddenFromExport ? "Unhide" : "Hide from export"}
+                        title={hideLockedTooltip ?? (isHiddenFromExport ? "Unhide" : "Hide from export")}
                         className={`inline-flex items-center justify-center flex-shrink-0 rounded-full p-1 transition-colors disabled:opacity-50 ${
                           bubbleIsDark
                             ? "text-green-100 hover:bg-white hover:bg-opacity-20"
@@ -778,6 +926,20 @@ export function ConversationViewModal({
               </div>
             );
           })}
+          {/* BACKLOG-3884: older texts load on request; never cut off silently. */}
+          {pagination && (pagination.hasMore || pagination.loading) && (
+            <div className="flex justify-center pt-1">
+              <button
+                type="button"
+                onClick={() => pagination.loadMore()}
+                disabled={pagination.loading}
+                className="text-sm font-medium text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                data-testid="load-earlier-messages"
+              >
+                {pagination.loading ? "Loading..." : "Load earlier messages"}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* BACKLOG-2295: exclusion legend — only while out-of-range messages are

@@ -24,7 +24,9 @@ import {
 } from "./utils/platformInit";
 import { waitForApi } from "./utils/waitForApi";
 import { useAuth } from "../../../contexts";
+import { authService } from "@/services";
 import { fdaFromProbe, unknownFdaFor } from "./fdaState";
+import { readAccountSetup } from "./routing/readAccountSetup";
 import type { PlatformInfo, User, UserData } from "./types";
 import logger from "../../../utils/logger";
 
@@ -78,7 +80,7 @@ export function LoadingOrchestrator({
   children,
 }: LoadingOrchestratorProps): React.ReactElement {
   const { state, dispatch, loadingPhase } = useAppState();
-  const { login } = useAuth();
+  const { login, logout, sessionToken } = useAuth();
 
   // Track auth data across phases (needed for USER_DATA_LOADED context)
   const authDataRef = useRef<{
@@ -103,6 +105,20 @@ export function LoadingOrchestrator({
     },
     [dispatch]
   );
+
+  // BACKLOG-3673: Sign out from the "Couldn't load your account settings"
+  // screen. With a session token, the normal logout. Without one (the relaunch
+  // fallback in handleGetCurrentUser returns no sessionToken), logout() would
+  // only clear renderer state and the next launch would sign the user straight
+  // back in, so main is asked to force the sign-out first. logout() still runs
+  // to clear AuthContext.
+  const handleSignOut = useCallback(async () => {
+    if (!sessionToken) {
+      await authService.forceLogout();
+    }
+    await logout();
+    dispatch({ type: "LOGOUT" });
+  }, [sessionToken, logout, dispatch]);
 
   // Get full platform info including hasIPhone (determined during onboarding)
   const getPlatformInfo = (): PlatformInfo => ({
@@ -646,7 +662,7 @@ export function LoadingOrchestrator({
       // Load all user data in parallel for faster loading
       const [
         phoneTypeResult,
-        emailOnboardingResult,
+        accountSetupResult,
         connectionsResult,
         permissionsResult,
         onboardingPrefsResult,
@@ -657,13 +673,14 @@ export function LoadingOrchestrator({
             phoneType: null as "iphone" | "android" | null,
           })),
 
-          // Check if email onboarding is completed
-          window.api.auth
-            .checkEmailOnboarding(userId)
-            .catch(() => ({
-              success: false,
-              completed: false,
-            })),
+          // BACKLOG-3673: the per-account "setup finished" record and the
+          // account's recorded answers, read by main for the SESSION user from
+          // the server (or its offline cache). Wrapped like the preferences
+          // read below: a missing bridge or a rejection means "unknown", which
+          // routes to the account-settings error screen (never setup).
+          Promise.resolve()
+            .then(() => window.api.user.getAccountSetup?.())
+            .catch(() => undefined),
 
           // Check if email is connected (any provider)
           window.api.system.checkAllConnections(userId).catch(() => ({
@@ -682,8 +699,10 @@ export function LoadingOrchestrator({
 
           // BACKLOG-3212: read the persisted "Skip for now" choice for Full
           // Disk Access (Supabase user_preferences `onboarding.fdaSkipped`,
-          // written by PermissionsStep via preferences:update). macOS only —
+          // written by PermissionsStep via preferences:update). macOS only --
           // the flag has no meaning elsewhere, so Windows pays nothing.
+          // (BACKLOG-3673 reads the contacts answer through getAccountSetup
+          // above, so this read stays macOS-only.)
           //
           // Cloud-backed, matching phoneType/contactSources/the 1842 resume
           // marker: readable without local DB init, which matters because this
@@ -724,12 +743,12 @@ export function LoadingOrchestrator({
         (connectionsResult.google?.connected === true ||
           connectionsResult.microsoft?.connected === true);
 
-      // Determine if email onboarding is completed
-      // If email is connected, consider onboarding complete (for returning users
-      // who connected email before the hasCompletedEmailOnboarding flag existed)
-      const hasCompletedEmailOnboarding =
-        (emailOnboardingResult.success && emailOnboardingResult.completed) ||
-        hasEmailConnected;
+      // BACKLOG-3673: the account record. Anything but a well-formed answer is
+      // "unknown" (routes to the account-settings error screen). The email-step and contacts answers only
+      // seed the setup queue; neither is a routing input, and a connected
+      // mailbox no longer stands in for either.
+      const accountSetup = readAccountSetup(accountSetupResult);
+      const hasCompletedEmailOnboarding = accountSetup.emailStepAnswered;
 
       // Determine permissions status (macOS only)
       const probeGranted =
@@ -776,8 +795,15 @@ export function LoadingOrchestrator({
         phoneType,
         hasCompletedEmailOnboarding,
         hasEmailConnected,
+        // BACKLOG-3888: whether this account has ever connected a mailbox
+        // (cloud preferences.emailProviders), carried by the account-setup
+        // read under its 8 s timeout. Unreadable = no record, so texts-only
+        // users are never nagged.
+        hasRecordedEmailProvider: accountSetup.hasRecordedEmailProvider,
         needsDriverSetup,
         fda,
+        setup: accountSetup.setup,
+        contactSourceAnswered: accountSetup.contactSourceAnswered,
       };
     };
 
@@ -804,7 +830,8 @@ export function LoadingOrchestrator({
           if (cancelled) return;
           // console.error("[LoadingOrchestrator] Failed to load user data:", error);
 
-          // Fallback to empty user data - will trigger onboarding
+          // Fallback to empty user data. setup "unknown" shows the
+          // account-settings error screen (BACKLOG-3673), not onboarding.
           const fallbackData: UserData = {
             phoneType: null,
             hasCompletedEmailOnboarding: false,
@@ -814,6 +841,10 @@ export function LoadingOrchestrator({
             // recorded decline. We could not read preferences, so we do not
             // know — and "ask again" is the safe direction to be wrong in.
             fda: unknownFdaFor(platform),
+            // BACKLOG-3673: we could not read the account record -> the
+            // account-settings error screen (Retry / Sign out), never setup.
+            setup: "unknown",
+            contactSourceAnswered: false,
           };
 
           dispatch({
@@ -961,6 +992,9 @@ export function LoadingOrchestrator({
       <ErrorScreen
         error={state.error}
         onRetry={state.recoverable ? () => dispatch({ type: "RETRY" }) : undefined}
+        onSignOut={
+          state.error.code === "ACCOUNT_SETUP_UNAVAILABLE" ? handleSignOut : undefined
+        }
       />
     );
   }

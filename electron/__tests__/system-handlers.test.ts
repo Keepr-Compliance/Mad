@@ -17,6 +17,9 @@ import type { IpcMainInvokeEvent } from "electron";
 const mockIpcHandle = jest.fn();
 const mockShellOpenExternal = jest.fn();
 const mockShellShowItemInFolder = jest.fn();
+const mockShellOpenPath = jest.fn();
+// BACKLOG-3803: dev path of the third-party notices resolves against the repo root.
+const mockGetAppPath = jest.fn();
 
 // Mock os module to simulate macOS for health check tests
 jest.mock("os", () => ({
@@ -34,6 +37,7 @@ jest.mock("electron", () => ({
     setAsDefaultProtocolClient: jest.fn(),
     requestSingleInstanceLock: jest.fn().mockReturnValue(true),
     isPackaged: false,
+    getAppPath: mockGetAppPath,
     quit: jest.fn(),
     on: jest.fn(),
     whenReady: jest.fn().mockResolvedValue(undefined),
@@ -41,6 +45,7 @@ jest.mock("electron", () => ({
   shell: {
     openExternal: mockShellOpenExternal,
     showItemInFolder: mockShellShowItemInFolder,
+    openPath: mockShellOpenPath,
   },
   BrowserWindow: jest.fn(),
   dialog: { showErrorBox: jest.fn() },
@@ -1191,6 +1196,41 @@ describe("System Handlers", () => {
   });
 
   describe("Shell Operations", () => {
+    // BACKLOG-3803: Settings > About "Third-Party Notices"
+    describe("shell:open-third-party-notices", () => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const path = require("path") as typeof import("path");
+      const repoRoot = path.resolve(__dirname, "..", "..");
+
+      it("opens the repo's notices file in development and takes no renderer path", async () => {
+        mockGetAppPath.mockReturnValue(repoRoot);
+        mockShellOpenPath.mockResolvedValue("");
+        const handler = registeredHandlers.get("shell:open-third-party-notices");
+        const result = await handler(mockEvent, "/etc/passwd");
+        expect(result).toEqual({ success: true });
+        expect(mockShellOpenPath).toHaveBeenCalledTimes(1);
+        expect(mockShellOpenPath).toHaveBeenCalledWith(
+          path.join(repoRoot, "resources", "third-party", "THIRD_PARTY_NOTICES.txt"),
+        );
+      });
+
+      it("reports failure without opening anything when the file is absent", async () => {
+        mockGetAppPath.mockReturnValue("/nonexistent-3803");
+        const handler = registeredHandlers.get("shell:open-third-party-notices");
+        const result = await handler(mockEvent);
+        expect(result.success).toBe(false);
+        expect(mockShellOpenPath).not.toHaveBeenCalled();
+      });
+
+      it("passes the OS error back when the file cannot be opened", async () => {
+        mockGetAppPath.mockReturnValue(repoRoot);
+        mockShellOpenPath.mockResolvedValue("No application is associated");
+        const handler = registeredHandlers.get("shell:open-third-party-notices");
+        const result = await handler(mockEvent);
+        expect(result).toEqual({ success: false, error: "No application is associated" });
+      });
+    });
+
     describe("shell:open-external", () => {
       beforeEach(() => {
         mockShellOpenExternal.mockReset();
@@ -1261,24 +1301,39 @@ describe("System Handlers", () => {
       });
     });
 
+    // BACKLOG-3808: only a location the main process wrote is revealed.
     describe("system:show-in-folder", () => {
-      beforeEach(() => {
+      const realFs = jest.requireActual("fs") as typeof import("fs");
+      const realOs = jest.requireActual("os") as typeof import("os");
+      const realPathMod = jest.requireActual("path") as typeof import("path");
+      const openable = jest.requireActual("../services/openablePaths") as typeof import("../services/openablePaths");
+      let tmp: string;
+      let exportFile: string;
+      let spacedFile: string;
+
+      beforeEach(async () => {
         mockShellShowItemInFolder.mockReset();
+        openable.clearOpenablePathsForTests();
+        tmp = realFs.realpathSync.native(realFs.mkdtempSync(realPathMod.join(realOs.tmpdir(), "keepr-3808-sif-")));
+        exportFile = realPathMod.join(tmp, "export.pdf");
+        realFs.writeFileSync(exportFile, "%PDF");
+        spacedFile = realPathMod.join(tmp, "My Documents", "export file.pdf");
+        realFs.mkdirSync(realPathMod.dirname(spacedFile));
+        realFs.writeFileSync(spacedFile, "%PDF");
+        await openable.rememberOpenablePath(exportFile);
+        await openable.rememberOpenablePath(spacedFile);
       });
 
-      it("should show file in folder successfully", async () => {
-        mockShellShowItemInFolder.mockReturnValue(undefined);
+      afterEach(() => {
+        realFs.rmSync(tmp, { recursive: true, force: true });
+      });
 
+      it("should show a file the app exported", async () => {
         const handler = registeredHandlers.get("system:show-in-folder");
-        const result = await handler(
-          mockEvent,
-          "/Users/test/Documents/export.pdf",
-        );
+        const result = await handler(mockEvent, exportFile);
 
         expect(result.success).toBe(true);
-        expect(mockShellShowItemInFolder).toHaveBeenCalledWith(
-          "/Users/test/Documents/export.pdf",
-        );
+        expect(mockShellShowItemInFolder).toHaveBeenCalledWith(exportFile);
       });
 
       it("should handle empty file path", async () => {
@@ -1290,34 +1345,31 @@ describe("System Handlers", () => {
         expect(mockShellShowItemInFolder).not.toHaveBeenCalled();
       });
 
-      it("should handle Windows-style paths", async () => {
-        mockShellShowItemInFolder.mockReturnValue(undefined);
-
+      it("should refuse a path the app did not write", async () => {
+        const other = realPathMod.join(tmp, "other.pdf");
+        realFs.writeFileSync(other, "x");
         const handler = registeredHandlers.get("system:show-in-folder");
-        const result = await handler(
-          mockEvent,
-          "C:\\Users\\test\\Documents\\export.pdf",
-        );
+        const result = await handler(mockEvent, other);
 
-        expect(result.success).toBe(true);
-        expect(mockShellShowItemInFolder).toHaveBeenCalledWith(
-          "C:\\Users\\test\\Documents\\export.pdf",
-        );
+        expect(result.success).toBe(false);
+        expect(result.error).toBe(openable.OPEN_REFUSED_MESSAGE);
+        expect(mockShellShowItemInFolder).not.toHaveBeenCalled();
+      });
+
+      it("should refuse a path that does not exist", async () => {
+        const handler = registeredHandlers.get("system:show-in-folder");
+        const result = await handler(mockEvent, "C:\\Users\\test\\Documents\\export.pdf");
+
+        expect(result.success).toBe(false);
+        expect(mockShellShowItemInFolder).not.toHaveBeenCalled();
       });
 
       it("should handle paths with spaces", async () => {
-        mockShellShowItemInFolder.mockReturnValue(undefined);
-
         const handler = registeredHandlers.get("system:show-in-folder");
-        const result = await handler(
-          mockEvent,
-          "/Users/test/My Documents/export file.pdf",
-        );
+        const result = await handler(mockEvent, spacedFile);
 
         expect(result.success).toBe(true);
-        expect(mockShellShowItemInFolder).toHaveBeenCalledWith(
-          "/Users/test/My Documents/export file.pdf",
-        );
+        expect(mockShellShowItemInFolder).toHaveBeenCalledWith(spacedFile);
       });
     });
   });

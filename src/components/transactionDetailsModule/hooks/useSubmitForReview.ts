@@ -13,10 +13,12 @@
  */
 import { useState, useCallback, useEffect, useRef } from "react";
 import type {
+  ChecklistLinkGapItem,
   ChecklistsNotSentReason,
   NotIncludedItem,
   SubmitProgress,
 } from "../components/modals/SubmitForReviewModal";
+import { checklistService } from "../../../services/checklistService";
 
 interface UseSubmitForReviewOptions {
   transactionId: string;
@@ -49,6 +51,21 @@ interface UseSubmitForReviewReturn {
   preflightItems: NotIncludedItem[] | null;
   /** BACKLOG-3403: the list changed after the agent confirmed it. */
   preflightChanged: boolean;
+  /**
+   * BACKLOG-3764: checklist evidence this submission would not send, shown
+   * with the pre-flight. Empty when there is none.
+   */
+  preflightLinkGaps: ChecklistLinkGapItem[];
+  /**
+   * BACKLOG-3764: on a SUCCESSFUL submission, checklist evidence was dropped
+   * that the pre-flight did not list.
+   */
+  checklistLinksNotAttached: boolean;
+  /**
+   * BACKLOG-3764: "Include it" for a group outside the audit dates — stores
+   * the answer, then checks again.
+   */
+  includeLinkGap: (gap: ChecklistLinkGapItem) => Promise<void>;
   /** BACKLOG-3398: the agent cancelled and nothing was sent. */
   cancelled: boolean;
   /** BACKLOG-3398: a cancel was requested and is being carried out. */
@@ -70,6 +87,10 @@ function toItems(value: unknown): NotIncludedItem[] {
   return Array.isArray(value) ? (value as NotIncludedItem[]) : [];
 }
 
+function toGaps(value: unknown): ChecklistLinkGapItem[] {
+  return Array.isArray(value) ? (value as ChecklistLinkGapItem[]) : [];
+}
+
 export function useSubmitForReview({
   transactionId,
   isResubmit = false,
@@ -85,6 +106,8 @@ export function useSubmitForReview({
   const [isCheckingFiles, setIsCheckingFiles] = useState(false);
   const [preflightItems, setPreflightItems] = useState<NotIncludedItem[] | null>(null);
   const [preflightChanged, setPreflightChanged] = useState(false);
+  const [preflightLinkGaps, setPreflightLinkGaps] = useState<ChecklistLinkGapItem[]>([]);
+  const [checklistLinksNotAttached, setChecklistLinksNotAttached] = useState(false);
   const [cancelled, setCancelled] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
 
@@ -133,11 +156,13 @@ export function useSubmitForReview({
       setIsSubmitting(true);
       setError(null);
       setChecklistsNotSent(null);
+      setChecklistLinksNotAttached(false);
       setNotIncluded([]);
       setCancelled(false);
       setIsCancelling(false);
       setPreflightItems(null);
       setPreflightChanged(false);
+      setPreflightLinkGaps([]);
       setProgress({
         stage: "preparing",
         stageProgress: 0,
@@ -158,6 +183,7 @@ export function useSubmitForReview({
 
         if (result.success) {
           setChecklistsNotSent(result.checklistsNotSent ?? null);
+          setChecklistLinksNotAttached(result.checklistLinksNotAttached === true);
           setNotIncluded(toItems(result.notIncluded));
           setProgress({
             stage: "complete",
@@ -177,6 +203,7 @@ export function useSubmitForReview({
           // BACKLOG-3403: nothing was sent; ask again with the new list.
           setProgress(null);
           setPreflightItems(toItems(result.notIncluded));
+          setPreflightLinkGaps(toGaps(result.checklistLinkGaps));
           setPreflightChanged(true);
         } else {
           fail(result.error || "Submission failed");
@@ -201,8 +228,10 @@ export function useSubmitForReview({
     setCancelled(false);
     setPreflightItems(null);
     setPreflightChanged(false);
+    setPreflightLinkGaps([]);
     setIsCheckingFiles(true);
     let items: NotIncludedItem[] = [];
+    let gaps: ChecklistLinkGapItem[] = [];
     try {
       const api = window.api?.transactions;
       if (!api?.submitPreflight) {
@@ -216,6 +245,7 @@ export function useSubmitForReview({
         return;
       }
       items = toItems(answer.notIncluded);
+      gaps = toGaps(answer.checklistLinkGaps);
     } catch (err) {
       if (run !== runRef.current) return;
       setIsCheckingFiles(false);
@@ -223,22 +253,40 @@ export function useSubmitForReview({
       return;
     }
     setIsCheckingFiles(false);
-    if (items.length > 0) {
+    if (items.length > 0 || gaps.length > 0) {
       setPreflightItems(items);
+      setPreflightLinkGaps(gaps);
       return;
     }
     await send([]);
   }, [transactionId, send, fail]);
 
   const confirmPreflight = useCallback(async () => {
-    const keys = (preflightItems ?? []).map((item) => item.key);
+    const keys = [
+      ...(preflightItems ?? []).map((item) => item.key),
+      ...preflightLinkGaps.map((gap) => gap.key),
+    ];
     await send(keys);
-  }, [preflightItems, send]);
+  }, [preflightItems, preflightLinkGaps, send]);
 
   const dismissPreflight = useCallback(() => {
     setPreflightItems(null);
     setPreflightChanged(false);
+    setPreflightLinkGaps([]);
   }, []);
+
+  const includeLinkGap = useCallback(
+    async (gap: ChecklistLinkGapItem) => {
+      const result = await checklistService.includeLinkOutsideDates(transactionId, gap.linkId);
+      if (!result.success) {
+        fail(result.error || "Could not include it");
+        return;
+      }
+      // Check again: the list changes once the answer is stored.
+      await submit();
+    },
+    [transactionId, fail, submit]
+  );
 
   const cancel = useCallback(async (): Promise<boolean> => {
     const api = window.api?.transactions;
@@ -267,6 +315,8 @@ export function useSubmitForReview({
     setIsCheckingFiles(false);
     setPreflightItems(null);
     setPreflightChanged(false);
+    setPreflightLinkGaps([]);
+    setChecklistLinksNotAttached(false);
     setCancelled(false);
     setIsCancelling(false);
   }, []);
@@ -280,6 +330,9 @@ export function useSubmitForReview({
     isCheckingFiles,
     preflightItems,
     preflightChanged,
+    preflightLinkGaps,
+    checklistLinksNotAttached,
+    includeLinkGap,
     cancelled,
     isCancelling,
     submit,

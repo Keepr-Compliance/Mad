@@ -90,6 +90,17 @@ function createSchema(db: DatabaseType): void {
       email_id TEXT,
       thread_id TEXT
     );
+    -- BACKLOG-3764: the readers send a checklist group's evidence the agent
+    -- chose to include regardless of the dates. The columns that query reads,
+    -- as in schema.sql.
+    CREATE TABLE transaction_checklists (id TEXT PRIMARY KEY, transaction_id TEXT NOT NULL);
+    CREATE TABLE transaction_checklist_items (id TEXT PRIMARY KEY, checklist_id TEXT NOT NULL);
+    CREATE TABLE transaction_checklist_links (
+      id TEXT PRIMARY KEY, item_id TEXT NOT NULL, include_outside_dates INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE transaction_checklist_link_members (
+      id TEXT PRIMARY KEY, link_id TEXT NOT NULL, attachment_id TEXT, email_id TEXT
+    );
   `);
 }
 

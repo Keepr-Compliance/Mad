@@ -11,27 +11,41 @@
 import { useState, useEffect } from "react";
 import { usePlatform } from "../contexts/PlatformContext";
 import { settingsService, type ImportSource } from "../services/settingsService";
-import { effectiveImportSource } from "../services/importSourcePolicy";
+import { loadChosenImportSource } from "../services/importSourcePolicy";
 
+/**
+ * BACKLOG-3418: returns `null` when the user has chosen no source
+ * (Windows/Linux) — the Dashboard then shows no import button, matching iPhone
+ * detection, which is also off for that user. The value comes from the one
+ * shared derivation (`chosenImportSource`) that the detection gate and Settings
+ * use. Before the preferences are read it is the platform's starting value:
+ * `macos-native` on macOS (unchanged), `null` elsewhere.
+ */
 export function useImportSource(
   userId: string | undefined,
   showSettings: boolean
-): ImportSource {
+): ImportSource | null {
   const { isMacOS } = usePlatform();
-  const [importSource, setImportSource] = useState<ImportSource>(
-    isMacOS ? "macos-native" : "iphone-sync"
+  const [importSource, setImportSource] = useState<ImportSource | null>(
+    isMacOS ? "macos-native" : null
   );
 
   useEffect(() => {
     if (!userId) return;
-    settingsService.getPreferences(userId).then((result) => {
-      if (result.success && result.data?.messages?.source) {
-        // BACKLOG-3749: a value this build does not know → the platform default.
-        setImportSource(effectiveImportSource(result.data.messages.source, isMacOS));
-      }
+    let cancelled = false;
+    settingsService.getPreferences(userId).then(async (result) => {
+      const chosen = await loadChosenImportSource(
+        result.success ? (result.data as Parameters<typeof loadChosenImportSource>[0]) : undefined,
+        isMacOS,
+        () => settingsService.getPhoneType(userId),
+      );
+      if (!cancelled) setImportSource(chosen);
     }).catch(() => {
-      // Silently ignore — keep platform default
+      // Silently ignore — keep the current value
     });
+    return () => {
+      cancelled = true;
+    };
   }, [userId, showSettings, isMacOS]);
 
   return importSource;

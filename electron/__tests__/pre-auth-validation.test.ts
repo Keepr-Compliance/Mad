@@ -348,10 +348,12 @@ describe("handlePreAuthValidation", () => {
   });
 
   // ------------------------------------------
-  // Network error during validation (falls back to grace period)
+  // getUser THROWS (the catch path). auth-js RETURNS network errors rather than
+  // throwing them; the returned-error network case is in
+  // pre-auth-network-3768.test.ts (BACKLOG-3768).
   // ------------------------------------------
 
-  describe("network error during validation", () => {
+  describe("getUser throws (catch path, falls back to grace period)", () => {
     it("falls back to grace period check when getUser throws", async () => {
       mockLoadSession.mockResolvedValue({
         ...mockSession,

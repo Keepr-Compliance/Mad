@@ -68,7 +68,11 @@ export interface RcsMediaDeps {
   /** Runs the attachment row + has_attachments update as ONE transaction. */
   dbTransaction: <T>(fn: () => T) => T;
   fileExists: (filePath: string) => Promise<boolean>;
-  writeFile: (filePath: string, data: Buffer) => Promise<void>;
+  /**
+   * BACKLOG-3816: stores `data` at `filePath` as KEPRENC ciphertext
+   * (atRest/attachmentWriter.sealBufferToFile). Never a plaintext write.
+   */
+  writeSealed: (filePath: string, data: Buffer) => Promise<void>;
   mkdir: (dir: string) => Promise<void>;
 }
 
@@ -133,7 +137,7 @@ export async function storeImage(
     const storagePath = path.join(dir, `${hash}${path.extname(filename)}`);
     await deps.mkdir(dir);
     if (!(await deps.fileExists(storagePath))) {
-      await deps.writeFile(storagePath, bytes);
+      await deps.writeSealed(storagePath, bytes);
     }
     const attachment = {
       id: crypto.randomUUID(),

@@ -18,6 +18,42 @@ import {
 } from "../services/updaterAssetUrl";
 
 import { getMainWindow } from "../windowRegistry";
+import { stopBackupForQuit } from "./syncHandlers";
+import { getBackupAtRest } from "../services/atRest/backupAtRest";
+import { waitForLinksToFinish } from "../utils/linkInFlight";
+import { noteSystemQuit } from "../utils/sealQuitPrompt";
+import { isSelfUpdateDisabled, STORE_UPDATES_MESSAGE } from "../services/selfUpdatePolicy";
+
+/**
+ * BACKLOG-3785: on Windows `quitAndInstall` launches the installer BEFORE the quit,
+ * and the installer force-kills the app about 2.6 s later, so the before-quit
+ * deferral cannot help. Wait here, first, for in-flight links (60 s bound) and stop
+ * a running iPhone backup (its own bound, BACKLOG-3598). Never rejects.
+ *
+ * BACKLOG-3816 (audit G5): then, once the backup has stopped, seal the kept backup's
+ * index files that a sync unsealed (`sealIndexForQuit`, its own 15 s bound) — the same
+ * step the before-quit deferral runs, which the Windows installer's kill can cut off.
+ */
+export function waitForQuitBlockers(): Promise<unknown> {
+  const waits: Array<Promise<unknown>> = [];
+  let backup: Promise<unknown> | null = null;
+  try {
+    backup = stopBackupForQuit();
+  } catch {
+    /* a failing stop must not block the install */
+  }
+  waits.push(
+    Promise.resolve(backup)
+      .catch(() => undefined)
+      .then(() => getBackupAtRest().sealIndexForQuit() ?? undefined)
+      .catch(() => undefined),
+  );
+  const links = waitForLinksToFinish(undefined, () =>
+    console.warn("[Updater] link still running after the max wait; installing anyway"),
+  );
+  if (links) waits.push(links);
+  return Promise.all(waits);
+}
 
 // Track registration to prevent duplicate handlers
 let handlersRegistered = false;
@@ -76,6 +112,16 @@ export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
     try {
       if (!app.isPackaged) {
         return { updateAvailable: false, currentVersion: app.getVersion() };
+      }
+
+      // BACKLOG-3927: the Store build never contacts the update feed.
+      if (isSelfUpdateDisabled()) {
+        return {
+          updateAvailable: false,
+          currentVersion: app.getVersion(),
+          error: STORE_UPDATES_MESSAGE,
+          storeBuild: true,
+        };
       }
 
       // macOS App Translocation: skip update check when running from a translocated
@@ -140,15 +186,23 @@ export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
 
   // Install update and restart
   ipcMain.on("install-update", () => {
+    // BACKLOG-3927: nothing is downloaded in the Store build; never install.
+    if (isSelfUpdateDisabled()) {
+      logService.warn("install-update ignored: Store build", "UpdaterHandlers");
+      return;
+    }
     logService.info("Installing update...", "UpdaterHandlers");
     // TASK-2330: Track when user triggers install so Sentry breadcrumb trail
     // shows the full lifecycle: check -> available -> downloaded -> install
     Sentry.addBreadcrumb({ category: "auto-updater", message: "User triggered install-update", level: "info" });
+    // BACKLOG-3816: Restart to update does not ask about securing the iPhone backup;
+    // waitForQuitBlockers seals the index files first.
+    noteSystemQuit("update");
 
     // Ensure app relaunches after update
     // Parameters: isSilent, isForceRunAfter
     // false = show installer, true = force run after install
-    setImmediate(() => {
+    void waitForQuitBlockers().then(() => setImmediate(() => {
       app.removeAllListeners("window-all-closed");
       // BACKLOG-3454: the live window. The captured one may be destroyed after a
       // macOS Dock reopen, and `close()` on a destroyed window throws.
@@ -157,8 +211,10 @@ export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
         liveWindow.removeAllListeners("close");
         liveWindow.close();
       }
+      // Re-armed here: the wait above can outlast the reset window.
+      noteSystemQuit("update");
       autoUpdater.quitAndInstall(false, true);
-    });
+    }));
   });
 
   // BACKLOG-1905: one-click, platform-correct manual installer.
@@ -168,6 +224,11 @@ export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
   // dead-end. Target version comes from the most recent failure (10-min window)
   // and falls back to the current version.
   ipcMain.handle("app:open-manual-installer", async () => {
+    // BACKLOG-3927: that installer is the website build; the Store build
+    // takes its updates from the Store.
+    if (isSelfUpdateDisabled()) {
+      return { success: false, error: STORE_UPDATES_MESSAGE };
+    }
     try {
       const publish = readGithubPublishConfig();
       if (!publish?.owner || !publish?.repo) {

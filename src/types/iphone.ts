@@ -6,7 +6,7 @@
 // BACKLOG-2907: the prior-backup signal is produced in the main process and
 // crosses IPC, so its type lives with the other IPC surface types. Type-only
 // import — erased at build, same pattern as `src/window.d.ts`.
-import type { PriorBackupState } from "../../electron/types/ipc/window-api-platform";
+import type { PriorBackupState, SyncCancelTrigger } from "../../electron/types/ipc/window-api-platform";
 
 export type { PriorBackupState };
 
@@ -28,6 +28,25 @@ export interface iOSDevice {
  * Used across IPC boundaries for typed trust error handling.
  */
 export type TrustErrorReason = "locked" | "trust_pending" | "unknown";
+
+/**
+ * BACKLOG-3927 (Microsoft Store build): Apple Devices readiness, in the order
+ * the user has to fix it. Mirrors AppleDevicesState in
+ * electron/services/appleDriverService.ts.
+ */
+export type AppleDevicesState =
+  | "not-installed"
+  | "not-running"
+  | "msi-service-stopped"
+  | "usb-driver-missing"
+  | "ready";
+
+/**
+ * BACKLOG-3927: the iPhone's USB driver as the main-process probe saw it.
+ * "no-device" = no iPhone plugged in, so the driver could not be checked.
+ * Mirrors AppleUsbDriverState in electron/services/appleDevicesProbe.ts.
+ */
+export type AppleUsbDriverState = "bound" | "missing" | "no-device";
 
 // ============================================
 // BACKUP TYPES
@@ -119,19 +138,31 @@ export interface ConnectionStatusProps {
   isInstallingDriver?: boolean;
   /** BACKLOG-1919: Error message from a failed/cancelled inline driver install. */
   driverInstallError?: string | null;
+  /**
+   * BACKLOG-3363: Windows on ARM PC — iPhone USB sync can never work. Takes
+   * precedence over every other view (including driverMissing).
+   */
+  isWindowsArm64?: boolean;
+  /**
+   * BACKLOG-3927: Microsoft Store build. When the driver is missing, the
+   * disconnected view shows the Apple Devices guide instead of an Install
+   * button (this build never installs a driver).
+   */
+  isStoreBuild?: boolean;
+  /** BACKLOG-3927: re-detect Apple Devices; resolves with the new state. */
+  onRecheckDriver?: () => Promise<AppleDevicesState>;
+  /** BACKLOG-3927: Store build — the Apple Devices state last detected. */
+  appleDevicesState?: AppleDevicesState | null;
+  /** BACKLOG-3927: Store build — the iPhone's USB driver as last probed (null = not probed). */
+  appleUsbDriver?: AppleUsbDriverState | null;
+  /** BACKLOG-3816: the sync request is being prepared — the button shows "Getting ready…". */
+  isStarting?: boolean;
+  /** BACKLOG-3816: epoch ms until which the Sync button stays disabled (hold after a failure). */
+  retryAvailableAt?: number | null;
 }
 
 export interface DeviceInfoProps {
   device: iOSDevice;
-}
-
-export interface BackupPasswordModalProps {
-  isOpen: boolean;
-  deviceName: string;
-  onSubmit: (password: string) => void;
-  onCancel: () => void;
-  error?: string;
-  isLoading?: boolean;
 }
 
 export interface SyncProgressProps {
@@ -170,7 +201,8 @@ export interface UseIPhoneSyncReturn {
   error: string | null;
   /** TASK-2276: Structured error for rich UI display (title + description + suggestion) */
   userError: UserFacingError | null;
-  needsPassword: boolean;
+  /** BACKLOG-3881: the last sync stopped because this iPhone's backups are Apple-encrypted. */
+  appleEncryptedBackup: boolean;
   /** Last sync time for this device (from backup status) */
   lastSyncTime: Date | null;
   /** Whether the sync is waiting for the user to enter their iPhone passcode */
@@ -205,9 +237,35 @@ export interface UseIPhoneSyncReturn {
    * state and clears `driverMissing` so device enumeration/sync can proceed.
    */
   recoverInstallDriver: () => Promise<void>;
+  /**
+   * BACKLOG-3927: re-check Apple Devices (Store build "Check again") and
+   * update `driverMissing`. Resolves with the new state.
+   */
+  recheckDriver: () => Promise<AppleDevicesState>;
+  /**
+   * BACKLOG-3927: the Connect-iPhone screen reports whether it is shown. The Store
+   * build's periodic / focus Apple Devices re-check runs only while it is.
+   */
+  setConnectScreenActive: (active: boolean) => void;
+  /** BACKLOG-3927: Store build — the Apple Devices state last detected (null on the website build). */
+  appleDevicesState: AppleDevicesState | null;
+  /** BACKLOG-3927: Store build — the iPhone's USB driver as last probed (null = not probed). */
+  appleUsbDriver: AppleUsbDriverState | null;
+  /**
+   * BACKLOG-3816: a Sync / Try Again request is being prepared and has not yet been
+   * handed to the main process or refused. The buttons show "Getting ready…".
+   */
+  isStarting: boolean;
+  /**
+   * BACKLOG-3816: epoch ms until which Sync / Try Again stay disabled, because the
+   * last sync ended with the connection dropping or the phone's backup service
+   * refusing (`CONNECTION_LOST`, `SERVICE_UNAVAILABLE`, or a disconnect). `null` = no hold.
+   * Lives in the hook (App-root provider), so it survives closing and reopening the modal.
+   */
+  retryAvailableAt: number | null;
   startSync: () => Promise<void>;
-  submitPassword: (password: string) => void;
-  cancelSync: () => Promise<void>;
+  /** BACKLOG-3816: `trigger` names the on-screen control that asked for the cancel. */
+  cancelSync: (trigger: SyncCancelTrigger) => Promise<void>;
   /** Reset state after user acknowledges sync completion */
   dismissSync: () => void;
   /**

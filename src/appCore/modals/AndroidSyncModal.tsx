@@ -10,7 +10,7 @@
 import React, { useEffect } from "react";
 import { ResponsiveModal } from "../../components/common/ResponsiveModal";
 import { GoogleMessagesSyncFlow } from "../../components/settings/android/GoogleMessagesSyncFlow";
-import { GM_LOOKBACK_TARGET } from "../../components/settings/android/googleMessagesSyncSteps";
+import { TEXTS_LOOKBACK_TARGET } from "../../components/settings/textsLookback";
 import logger from "../../utils/logger";
 
 interface AndroidSyncModalProps {
@@ -59,7 +59,8 @@ export function AndroidSyncModal({ userId, onClose, onOpenSettings, startAtLink 
                 onOpenSettings
                   ? () => {
                       onClose();
-                      onOpenSettings(GM_LOOKBACK_TARGET);
+                      // BACKLOG-3892 S3: the shared "How far back to import texts" picker.
+                      onOpenSettings(TEXTS_LOOKBACK_TARGET);
                     }
                   : undefined
               }

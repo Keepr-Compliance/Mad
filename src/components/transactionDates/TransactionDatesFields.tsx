@@ -62,6 +62,11 @@ interface TransactionDatesFieldsProps {
   commission?: CommissionForm;
   /** Which route hosts the block; selects the wording of the empty-commission warning. */
   commissionRoute?: "submit" | "export";
+  /**
+   * BACKLOG-3910 (slice d): set on a locked deal (with the broker, or sealed).
+   * Every input is disabled with this tooltip; the host must not save them.
+   */
+  lockedTooltip?: string;
 }
 
 /**
@@ -97,6 +102,7 @@ export function TransactionDatesFields({
   hideHeading = false,
   commission,
   commissionRoute = "submit",
+  lockedTooltip,
 }: TransactionDatesFieldsProps): React.ReactElement {
   return (
     <div className="space-y-4">
@@ -147,6 +153,9 @@ export function TransactionDatesFields({
             type="date"
             value={dates.startDate}
             onChange={(e) => onDateChange("startDate", e.target.value)}
+            disabled={!!lockedTooltip}
+            title={lockedTooltip}
+            data-testid="transaction-date-startDate"
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"
           />
         </div>
@@ -173,6 +182,9 @@ export function TransactionDatesFields({
             type="date"
             value={dates.closingDate}
             onChange={(e) => onDateChange("closingDate", e.target.value)}
+            disabled={!!lockedTooltip}
+            title={lockedTooltip}
+            data-testid="transaction-date-closingDate"
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"
           />
         </div>
@@ -186,12 +198,17 @@ export function TransactionDatesFields({
             type="date"
             value={dates.endDate}
             onChange={(e) => onDateChange("endDate", e.target.value)}
+            disabled={!!lockedTooltip}
+            title={lockedTooltip}
+            data-testid="transaction-date-endDate"
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"
           />
         </div>
       </div>
 
-      {commission && <CommissionFields commission={commission} route={commissionRoute} />}
+      {commission && (
+        <CommissionFields commission={commission} route={commissionRoute} lockedTooltip={lockedTooltip} />
+      )}
     </div>
   );
 }

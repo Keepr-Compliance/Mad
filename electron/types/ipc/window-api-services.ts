@@ -168,6 +168,39 @@ export interface WindowApiUser {
   syncPhoneTypeFromCloud: (
     userId: string,
   ) => Promise<{ success: boolean; error?: string }>;
+  /**
+   * BACKLOG-3673: the per-account "setup finished" record
+   * (`users.onboarding_completed_at`) plus the account's recorded answers, for
+   * the SESSION user (main ignores any renderer-supplied id). When the server
+   * cannot be read, main answers from the session-file cache, else "unknown".
+   * Bridge: settingsBridge.ts. Handler: accountSetupHandlers.ts.
+   */
+  getAccountSetup: () => Promise<{
+    success: boolean;
+    setup: "finished" | "not-finished" | "unknown";
+    emailStepAnswered: boolean;
+    contactSourceAnswered: boolean;
+    /** BACKLOG-3888: recorded mailbox providers ("outlook" / "gmail"). */
+    emailProviders?: string[];
+    error?: string;
+  }>;
+  /**
+   * BACKLOG-3673: write `users.onboarding_completed_at` once, for the SESSION
+   * user. Called only when the setup queue completes (OnboardingFlow).
+   */
+  completeAccountSetup: () => Promise<{ success: boolean; error?: string }>;
+  /**
+   * BACKLOG-3674: the per-account "dashboard tour dismissed" record
+   * (`users.tour_dismissed_at`) for the SESSION user. "unknown" when the server
+   * cannot be read (no local copy exists). Handler: tourStateHandlers.ts.
+   */
+  getTourState: () => Promise<{
+    success: boolean;
+    tour: "dismissed" | "not-dismissed" | "unknown";
+    error?: string;
+  }>;
+  /** BACKLOG-3674: set `users.tour_dismissed_at` (first value kept) for the SESSION user. */
+  dismissTour: () => Promise<{ success: boolean; error?: string }>;
   /** TASK-1600: sets phone type in Supabase cloud storage. */
   setPhoneTypeCloud: (
     userId: string,
@@ -221,7 +254,9 @@ export interface WindowApiAddress {
 export interface WindowApiShell {
   openExternal: (url: string) => Promise<void>;
   openPopup: (url: string, title?: string) => Promise<{ success: boolean }>;
-  openFolder: (folderPath: string) => Promise<{ success: boolean }>;
+  openFolder: (folderPath: string) => Promise<{ success: boolean; error?: string }>;
+  /** BACKLOG-3803: open the bundled third-party notices file. */
+  openThirdPartyNotices: () => Promise<{ success: boolean; error?: string }>;
 }
 
 /**
@@ -280,6 +315,8 @@ export interface WindowApiUpdate {
     currentVersion: string;
     error?: string;
     translocationDetected?: boolean;
+    /** BACKLOG-3927: Store build — updates come from the Microsoft Store. */
+    storeBuild?: boolean;
   }>;
   /** Fires when macOS App Translocation is detected (app not in /Applications) */
   onTranslocationDetected: (callback: () => void) => () => void;

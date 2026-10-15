@@ -41,7 +41,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { ContactsSettings } from "../ContactsSettings";
 import { PlatformProvider } from "../../../contexts/PlatformContext";
@@ -146,21 +146,6 @@ function prefs(direct: Record<string, boolean>, phoneType = "iphone") {
 }
 
 const ANDROID_SWITCH = "Android Phone Contacts import";
-
-/**
- * The number rendered in the ANDROID cell specifically.
- *
- * Scoped rather than a bare `getByText("389")` because the assertions that
- * matter are identity assertions: "0" and small counts appear in several cells,
- * and a mutation that pointed the Android cell at another source's count must
- * fail here rather than find its number somewhere else on the panel. The cell
- * is `<div><div>{count}</div><div>Android</div></div>`, so the count is the
- * label's first sibling.
- */
-async function androidCellCount(): Promise<string | null> {
-  const label = await screen.findByText("Android");
-  return label.parentElement?.firstElementChild?.textContent ?? null;
-}
 
 beforeEach(() => {
   mockUpdatePreferences.mockClear();

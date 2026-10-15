@@ -133,7 +133,7 @@
  * `confidence` is NULL.
  */
 
-import { dbAll, dbGet } from "./db/core/dbConnection";
+import { dbAll, dbGet, dbTransaction } from "./db/core/dbConnection";
 import { CONTACT_DISPLAY_NAME_SQL } from "./db/contactLinkEvidenceSql";
 import {
   ALL_KEYED_EXTERNAL_RECORDS_SQL,
@@ -157,6 +157,9 @@ import { toMatchingKey } from "../utils/phoneNormalization";
 import { realContactName } from "../utils/contactDisplayLabel";
 import { nameSupportForAutoLink } from "../utils/autoLinkNameGuard";
 import logService from "./logService";
+
+/** BACKLOG-3837: source records resolved per transaction in a linking pass. */
+const LINK_WRITE_SLICE = 100;
 
 /** A source record offered for linking. */
 export interface SourceRecordCandidate {
@@ -863,26 +866,35 @@ export function linkSourceRecords(
     resolutions: [],
   };
 
-  for (const candidate of candidates) {
-    if (!candidate.sourceRecordId) continue;
-    const resolution = resolveSourceRecord(userId, candidate, index);
-    summary.resolutions.push(resolution);
-    switch (resolution.outcome) {
-      case "already_linked":
-        summary.idMatched++;
-        break;
-      case "linked":
-        summary.contentMatched++;
-        break;
-      case "flagged":
-        summary.flagged++;
-        break;
-      case "declined":
-        summary.declined++;
-        break;
-      default:
-        summary.unmatched++;
-    }
+  // BACKLOG-3837: a first pass creating ~1,000 links issued ~1,000 autocommit
+  // writes (one journal commit each). Batched per LINK_WRITE_SLICE records, one
+  // transaction per slice. The pass is synchronous, so there is no yield between
+  // slices here; the saving is the per-statement commit cost.
+  for (let start = 0; start < candidates.length; start += LINK_WRITE_SLICE) {
+    const slice = candidates.slice(start, start + LINK_WRITE_SLICE);
+    dbTransaction(() => {
+      for (const candidate of slice) {
+        if (!candidate.sourceRecordId) continue;
+        const resolution = resolveSourceRecord(userId, candidate, index);
+        summary.resolutions.push(resolution);
+        switch (resolution.outcome) {
+          case "already_linked":
+            summary.idMatched++;
+            break;
+          case "linked":
+            summary.contentMatched++;
+            break;
+          case "flagged":
+            summary.flagged++;
+            break;
+          case "declined":
+            summary.declined++;
+            break;
+          default:
+            summary.unmatched++;
+        }
+      }
+    });
   }
 
   return summary;

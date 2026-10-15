@@ -102,7 +102,7 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildT
         UNION
         SELECT m2.id
         FROM messages m2
-        JOIN communications comm2 ON comm2.thread_id = m2.thread_id AND m2.user_id = comm2.user_id
+        JOIN communications comm2 ON comm2.thread_id = m2.thread_id AND +m2.user_id = comm2.user_id
         WHERE comm2.transaction_id = ?
           AND comm2.message_id IS NULL
           AND comm2.email_id IS NULL

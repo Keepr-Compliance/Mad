@@ -61,16 +61,29 @@ export interface ContactBlockingTransaction extends Transaction {
 }
 
 /**
+ * BACKLOG-3837: `contacts:get-all` / `contacts:get-sorted-by-activity`.
+ * `contactsStatus.messageDerivedPending` = the people found in messages are NOT
+ * in `contacts` yet (read off the main thread, still running or failed); the
+ * saved contacts are all there. `onMessageDerivedReady` fires when they land.
+ */
+export interface SavedContactListResponse {
+  success: boolean;
+  contacts?: Contact[];
+  error?: string;
+  contactsStatus?: { messageDerivedPending?: boolean };
+}
+
+/**
  * Contact methods on window.api
  */
 export interface WindowApiContacts {
   getAll: (
     userId: string,
-  ) => Promise<{ success: boolean; contacts?: Contact[]; error?: string }>;
+  ) => Promise<SavedContactListResponse>;
   getSortedByActivity: (
     userId: string,
     propertyAddress?: string,
-  ) => Promise<{ success: boolean; contacts?: Contact[]; error?: string }>;
+  ) => Promise<SavedContactListResponse>;
   getAvailable: (
     userId: string,
   ) => Promise<{ success: boolean; contacts?: Contact[]; error?: string }>;
@@ -330,6 +343,8 @@ export interface WindowApiContacts {
    * picker mid-import and invalidate its selection against new contact ids.
    */
   onLinkReviewUpdated: (callback: () => void) => () => void;
+  /** BACKLOG-3837: the message-derived people of a pending list are ready (see SavedContactListResponse). */
+  onMessageDerivedReady: (callback: (payload: { userId: string }) => void) => () => void;
 
   // ---- BACKLOG-2410: contact-level review queue --------------------------
   /** How many identity questions are waiting — the number on the button. */

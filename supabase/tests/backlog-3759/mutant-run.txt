@@ -1,0 +1,165 @@
+FILES|migration 20261008120000_backlog_3759_function_grants.sql md5=ae50fb964eb69286fe82b3b79cbb5835|rollback md5=d3141ada88cc495793f8b2721ee22a2d
+VENUE|PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 13.2.0, 64-bit | ledger max=20261004232511 rows=104
+-- baseline: every control against the unmutated migration
+== c0-baseline.sql
+PASS|fixtures: 3 submissions, 1 message, 1 attachment, 1 comment, 1 object|
+PASS|c0 ledger head is the production head 20261004232511|ledger max 20261004232511, rows 104
+PASS|c0 read rules are {public} with the production USING md5s|submission_attachments.attachment_access_via_submission {public} aadbffd22c8c8f2e7a7d440c3f45ddb7; submission_messages.message_access_via_submission {public} 1363e5e79110edb649e6f63f8633652d; transaction_submissions.transaction_submissions_select_public {public} eb31142ae1935bb013b94c5a837812a8
+PASS|c0 anon can execute can_review_submission|{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c0 PUBLIC cannot execute can_review_submission|
+PASS|c0 can_edit_checklist_templates already anon=f PUBLIC=f authenticated=t service_role=t|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c0 postgres and service_role bypass RLS|
+PASS|c0 anon desktop poll today|want OK rows=0 got OK rows=0
+== c1-grants.sql
+PASS|fixtures: 3 submissions, 1 message, 1 attachment, 1 comment, 1 object|
+PASS|c1 public.can_review_submission(uuid) anon = false|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c1 public.can_edit_checklist_templates(uuid) anon = false|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c1 public.can_review_submission(uuid) PUBLIC = false|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c1 public.can_edit_checklist_templates(uuid) PUBLIC = false|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c1 public.can_review_submission(uuid) authenticated = true|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c1 public.can_edit_checklist_templates(uuid) authenticated = true|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c1 public.can_review_submission(uuid) service_role = true|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c1 public.can_edit_checklist_templates(uuid) service_role = true|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c1 read rules are {authenticated} with unchanged USING md5s|submission_attachments.attachment_access_via_submission {authenticated} aadbffd22c8c8f2e7a7d440c3f45ddb7; submission_messages.message_access_via_submission {authenticated} 1363e5e79110edb649e6f63f8633652d; transaction_submissions.transaction_submissions_select_public {authenticated} eb31142ae1935bb013b94c5a837812a8
+PASS|c1 anon calling can_review_submission is refused|want ~^ERR 42501 permission denied for function can_review_submission got ERR 42501 permission denied for function can_review_submission
+PASS|c1 anon calling can_edit_checklist_templates is refused|want ~^ERR 42501 permission denied for function can_edit_checklist_templates got ERR 42501 permission denied for function can_edit_checklist_templates
+== c2-anon-reads.sql
+PASS|fixtures: 3 submissions, 1 message, 1 attachment, 1 comment, 1 object|
+PASS|c2 anon transaction_submissions select *|want OK rows=0 got OK rows=0
+PASS|c2 anon desktop status poll (id = ANY)|want OK rows=0 got OK rows=0
+PASS|c2 anon resubmit lookup (parent_submission_id)|want OK rows=0 got OK rows=0
+PASS|c2 anon submission_messages|want OK rows=0 got OK rows=0
+PASS|c2 anon submission_attachments|want OK rows=0 got OK rows=0
+PASS|c2 anon submission_comments|want OK rows=0 got OK rows=0
+PASS|c2 anon storage.objects in submission-attachments|want OK rows=0 got OK rows=0
+PASS|c2 anon UPDATE transaction_submissions|want OK rows=0 got OK rows=0
+PASS|c2 anon UPDATE uploading submission|want OK rows=0 got OK rows=0
+PASS|c2 anon DELETE uploading submission|want OK rows=0 got OK rows=0
+PASS|c2 authenticated without uid transaction_submissions|want OK rows=0 got OK rows=0
+PASS|c2 authenticated without uid submission_messages|want OK rows=0 got OK rows=0
+PASS|c2 authenticated without uid submission_attachments|want OK rows=0 got OK rows=0
+== c3-signed-in-reads.sql
+PASS|fixtures: 3 submissions, 1 message, 1 attachment, 1 comment, 1 object|
+PASS|c3 u_agent transaction_submissions|want OK rows=3 got OK rows=3
+PASS|c3 u_broker transaction_submissions|want OK rows=3 got OK rows=3
+PASS|c3 u_outsider transaction_submissions|want OK rows=0 got OK rows=0
+PASS|c3 u_agent submission_messages|want OK rows=1 got OK rows=1
+PASS|c3 u_broker submission_messages|want OK rows=1 got OK rows=1
+PASS|c3 u_outsider submission_messages|want OK rows=0 got OK rows=0
+PASS|c3 u_agent submission_attachments|want OK rows=1 got OK rows=1
+PASS|c3 u_broker submission_attachments|want OK rows=1 got OK rows=1
+PASS|c3 u_outsider submission_attachments|want OK rows=0 got OK rows=0
+PASS|c3 u_agent submission_comments|want OK rows=1 got OK rows=1
+PASS|c3 u_broker submission_comments|want OK rows=1 got OK rows=1
+PASS|c3 u_outsider submission_comments|want OK rows=0 got OK rows=0
+PASS|c3 u_agent storage object|want OK rows=1 got OK rows=1
+PASS|c3 u_broker storage object|want OK rows=1 got OK rows=1
+PASS|c3 u_outsider storage object|want OK rows=0 got OK rows=0
+PASS|c3 broker can_review_submission(o_main) = true|want OK rows=1 got OK rows=1
+PASS|c3 outsider can_review_submission(o_main) = false|want OK rows=0 got OK rows=0
+== c4-nested-writes.sql
+PASS|fixtures: 3 submissions, 1 message, 1 attachment, 1 comment, 1 object|
+PASS|c4 agent adds a message to its uploading submission|want OK rows=1 got OK rows=1
+PASS|c4 agent adds an attachment to its uploading submission|want OK rows=1 got OK rows=1
+PASS|c4 broker comments on a submission|want OK rows=1 got OK rows=1
+PASS|c4 agent updates its uploading submission|want OK rows=1 got OK rows=1
+== c5-reviewer-update.sql
+PASS|fixtures: 3 submissions, 1 message, 1 attachment, 1 comment, 1 object|
+PASS|c5 broker moves a submission to under_review, naming itself|want OK rows=1 got OK rows=1
+PASS|c5 outsider cannot write review fields|want OK rows=0 got OK rows=0
+== c6-checklist-callers.sql
+PASS|fixtures: 3 submissions, 1 message, 1 attachment, 1 comment, 1 object|
+PASS|c6 broker can_edit_checklist_templates runs|want OK rows=1 got OK rows=1
+PASS|c6 broker can_write_checklist_template runs|want OK rows=1 got OK rows=1
+PASS|c6 broker save_checklist_template reaches its own checks|ERR 42501 not_authorized
+PASS|c6 anon can_edit_checklist_templates refused|want ~^ERR 42501 permission denied for function got ERR 42501 permission denied for function can_edit_checklist_templates
+== c7-apply-twice.sql
+PASS|fixtures: 3 submissions, 1 message, 1 attachment, 1 comment, 1 object|
+PASS|c7 read rules {authenticated}, USING unchanged after two applies|submission_attachments.attachment_access_via_submission {authenticated} aadbffd22c8c8f2e7a7d440c3f45ddb7; submission_messages.message_access_via_submission {authenticated} 1363e5e79110edb649e6f63f8633652d; transaction_submissions.transaction_submissions_select_public {authenticated} eb31142ae1935bb013b94c5a837812a8
+PASS|c7 ACLs after two applies|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c7 anon poll after two applies|want OK rows=0 got OK rows=0
+== c8-rollback.sql
+PASS|fixtures: 3 submissions, 1 message, 1 attachment, 1 comment, 1 object|
+PASS|c8 read rules back to {public}, USING unchanged|submission_attachments.attachment_access_via_submission {public} aadbffd22c8c8f2e7a7d440c3f45ddb7; submission_messages.message_access_via_submission {public} 1363e5e79110edb649e6f63f8633652d; transaction_submissions.transaction_submissions_select_public {public} eb31142ae1935bb013b94c5a837812a8
+PASS|c8 anon EXECUTE on can_review_submission restored, PUBLIC still absent|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres,anon=X/postgres}
+PASS|c8 anon poll after rollback|want OK rows=0 got OK rows=0
+PASS|c8 broker reads after rollback|want OK rows=3 got OK rows=3
+== c9-drift-aborts.sql
+PASS|fixtures: 3 submissions, 1 message, 1 attachment, 1 comment, 1 object|
+PASS|c9 migration refused the drifted rule|3759 pre-check: read rule transaction_submissions.transaction_submissions_select_public has a different USING expression (md5 c34685b8b9f3bdba96886fc44e859a73)
+PASS|c9 nothing changed: anon still has EXECUTE|{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+CONTROLS: pass=10 fail=0 error=0
+== m01-revoke-only  MUTATION APPLIED: < ALTER POLICY transaction_submissions_select_public ON public.transaction_submissions TO authenticated; < ALTER POLICY message_access_via_submission ON public.submission_messages TO authenticated; 
+FAIL|migration post-check: a read rule is not authenticated-only with its original USING|
+FAIL|c2 anon transaction_submissions select *|want OK rows=0 got ERR 42501 permission denied for function can_review_submission
+FAIL|c2 anon desktop status poll (id = ANY)|want OK rows=0 got ERR 42501 permission denied for function can_review_submission
+FAIL|c2 anon resubmit lookup (parent_submission_id)|want OK rows=0 got ERR 42501 permission denied for function can_review_submission
+FAIL|c2 anon submission_messages|want OK rows=0 got ERR 42501 permission denied for function can_review_submission
+FAIL|c2 anon submission_attachments|want OK rows=0 got ERR 42501 permission denied for function can_review_submission
+FAIL|c2 anon submission_comments|want OK rows=0 got ERR 42501 permission denied for function can_review_submission
+FAIL|c2 anon storage.objects in submission-attachments|want OK rows=0 got ERR 42501 permission denied for function can_review_submission
+KILLED|m01-revoke-only
+== m02-only-submissions-rule  MUTATION APPLIED: < ALTER POLICY message_access_via_submission ON public.submission_messages TO authenticated; < ALTER POLICY attachment_access_via_submission ON public.submission_attachments TO authenticated; 
+FAIL|migration post-check: a read rule is not authenticated-only with its original USING|
+FAIL|c2 anon submission_messages|want OK rows=0 got ERR 42501 permission denied for function can_review_submission
+FAIL|c2 anon submission_attachments|want OK rows=0 got ERR 42501 permission denied for function can_review_submission
+KILLED|m02-only-submissions-rule
+== m03-revoke-omits-anon  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.can_review_submission(uuid) FROM PUBLIC, anon; > REVOKE EXECUTE ON FUNCTION public.can_review_submission(uuid) FROM PUBLIC; 
+FAIL|migration post-check: anon can execute a function|
+FAIL|c1 public.can_review_submission(uuid) anon = false|{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+FAIL|c1 anon calling can_review_submission is refused|want ~^ERR 42501 permission denied for function can_review_submission got OK rows=1
+KILLED|m03-revoke-omits-anon
+== m04a-review-check-off-for-authenticated  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.can_review_submission(uuid) FROM PUBLIC, anon; < GRANT EXECUTE ON FUNCTION public.can_review_submission(uuid) TO authenticated, service_role; 
+FAIL|migration post-check: authenticated cannot execute a function|
+FAIL|c3 u_agent transaction_submissions|want OK rows=3 got ERR 42501 permission denied for function can_review_submission
+FAIL|c3 u_broker transaction_submissions|want OK rows=3 got ERR 42501 permission denied for function can_review_submission
+FAIL|c3 u_outsider transaction_submissions|want OK rows=0 got ERR 42501 permission denied for function can_review_submission
+FAIL|c3 u_agent submission_messages|want OK rows=1 got ERR 42501 permission denied for function can_review_submission
+FAIL|c3 u_broker submission_messages|want OK rows=1 got ERR 42501 permission denied for function can_review_submission
+FAIL|c3 u_outsider submission_messages|want OK rows=0 got ERR 42501 permission denied for function can_review_submission
+FAIL|c3 u_agent submission_attachments|want OK rows=1 got ERR 42501 permission denied for function can_review_submission
+FAIL|migration post-check: authenticated cannot execute a function|
+FAIL|c4 agent adds a message to its uploading submission|want OK rows=1 got ERR 42501 permission denied for function can_review_submission
+FAIL|c4 agent adds an attachment to its uploading submission|want OK rows=1 got ERR 42501 permission denied for function can_review_submission
+FAIL|c4 broker comments on a submission|want OK rows=1 got ERR 42501 permission denied for function can_review_submission
+FAIL|c4 agent updates its uploading submission|want OK rows=1 got ERR 42501 permission denied for function can_review_submission
+FAIL|migration post-check: authenticated cannot execute a function|
+FAIL|c5 broker moves a submission to under_review, naming itself|want OK rows=1 got ERR 42501 permission denied for function can_review_submission
+FAIL|c5 outsider cannot write review fields|want OK rows=0 got ERR 42501 permission denied for function can_review_submission
+KILLED|m04a-review-check-off-for-authenticated
+== m04b-template-check-off-for-authenticated  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.can_edit_checklist_templates(uuid) FROM PUBLIC, anon; < GRANT EXECUTE ON FUNCTION public.can_edit_checklist_templates(uuid) TO authenticated, service_role; 
+FAIL|migration post-check: authenticated cannot execute a function|
+FAIL|c6 broker can_edit_checklist_templates runs|want OK rows=1 got ERR 42501 permission denied for function can_edit_checklist_templates
+FAIL|c6 broker can_write_checklist_template runs|want OK rows=1 got ERR 42501 permission denied for function can_edit_checklist_templates
+FAIL|c6 broker save_checklist_template reaches its own checks|ERR 42501 permission denied for function can_edit_checklist_templates
+KILLED|m04b-template-check-off-for-authenticated
+== m05-service-role-revoked  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.can_review_submission(uuid) FROM PUBLIC, anon; < GRANT EXECUTE ON FUNCTION public.can_review_submission(uuid) TO authenticated, service_role; 
+FAIL|migration post-check: service_role cannot execute a function|
+FAIL|c1 public.can_review_submission(uuid) service_role = true|{postgres=X/postgres,authenticated=X/postgres}
+KILLED|m05-service-role-revoked
+== m06-drop-create-restated  MUTATION APPLIED: < ALTER POLICY transaction_submissions_select_public ON public.transaction_submissions TO authenticated; > DROP POLICY transaction_submissions_select_public ON public.transaction_submissions; 
+FAIL|migration post-check: a read rule is not authenticated-only with its original USING|
+FAIL|c3 u_broker transaction_submissions|want OK rows=3 got OK rows=0
+FAIL|c3 u_broker submission_messages|want OK rows=1 got OK rows=0
+FAIL|c3 u_broker submission_attachments|want OK rows=1 got OK rows=0
+FAIL|c3 u_broker submission_comments|want OK rows=1 got OK rows=0
+FAIL|c3 u_broker storage object|want OK rows=1 got OK rows=0
+FAIL|migration post-check: a read rule is not authenticated-only with its original USING|
+FAIL|c1 read rules are {authenticated} with unchanged USING md5s|submission_attachments.attachment_access_via_submission {authenticated} aadbffd22c8c8f2e7a7d440c3f45ddb7; submission_messages.message_access_via_submission {authenticated} 1363e5e79110edb649e6f63f8633652d; transaction_submissions.transaction_submissions_select_public {authenticated} c34685b8b9f3bdba96886fc44e859a73
+KILLED|m06-drop-create-restated
+== m07-precheck-rejects-applied-state  MUTATION APPLIED: <     IF v_roles NOT IN ('{public}', '{authenticated}') THEN >     IF v_roles NOT IN ('{public}') THEN 
+FAIL|apply-twice: second apply raised|P0001 3759 pre-check: read rule transaction_submissions.transaction_submissions_select_public has roles {authenticated}
+KILLED|m07-precheck-rejects-applied-state
+== m08-precheck-ignores-using  MUTATION APPLIED: <     IF v_md5 IS DISTINCT FROM r.expected_md5 THEN >     IF false THEN 
+FAIL|migration post-check: a read rule is not authenticated-only with its original USING|
+FAIL|c9 migration refused the drifted rule|<no error>
+FAIL|c9 nothing changed: anon still has EXECUTE|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+KILLED|m08-precheck-ignores-using
+== r01-rollback-keeps-anon-revoked  MUTATION APPLIED: < GRANT EXECUTE ON FUNCTION public.can_review_submission(uuid) TO anon; 
+FAIL|c8 anon EXECUTE on can_review_submission restored, PUBLIC still absent|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+FAIL|c8 anon poll after rollback|want OK rows=0 got ERR 42501 permission denied for function can_review_submission
+KILLED|r01-rollback-keeps-anon-revoked
+== r02-rollback-misses-messages-rule  MUTATION APPLIED: < ALTER POLICY message_access_via_submission ON public.submission_messages TO public; 
+FAIL|c8 read rules back to {public}, USING unchanged|submission_attachments.attachment_access_via_submission {public} aadbffd22c8c8f2e7a7d440c3f45ddb7; submission_messages.message_access_via_submission {authenticated} 1363e5e79110edb649e6f63f8633652d; transaction_submissions.transaction_submissions_select_public {public} eb31142ae1935bb013b94c5a837812a8
+KILLED|r02-rollback-misses-messages-rule
+MUTANTS: killed=11 survived=0 invalid=0

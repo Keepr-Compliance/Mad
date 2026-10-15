@@ -3,6 +3,7 @@
  * Handles Google OAuth login and Gmail mailbox connection flows
  */
 
+import { devToolsPreference } from "../bootstrap/appMenu";
 import { ipcMain, BrowserWindow, Event as ElectronEvent } from "electron";
 import os from "os";
 import crypto from "crypto";
@@ -20,6 +21,7 @@ import sessionService from "../services/sessionService";
 import { provisionLogin } from "../services/loginProvisioningService";
 import rateLimitService from "../services/rateLimitService";
 import auditService from "../services/auditService";
+import { recordEmailProvider } from "../services/emailProviderRecord";
 import logService from "../services/logService";
 import { importEnabledEmptyContactSources } from "../services/postConnectContactImport";
 
@@ -144,6 +146,7 @@ export async function handleGoogleLogin(
       width: 500,
       height: 700,
       webPreferences: {
+        devTools: devToolsPreference(), // BACKLOG-3830
         nodeIntegration: false,
         contextIsolation: true,
         // webSecurity defaults to true - do not disable
@@ -762,6 +765,10 @@ export async function handleGoogleConnectMailbox(
           success: true,
         });
 
+        // BACKLOG-3888: remember that this account chose this mailbox provider
+        // (cloud preferences.emailProviders). Never blocks or fails the connect.
+        void recordEmailProvider(validatedUserId, "google");
+
         // BACKLOG-3394: bring the app forward OURSELVES. The user is looking at
         // a browser tab; before this the served page asked them to click
         // "Return to Application", which fired `keepr://focus` and made the
@@ -905,6 +912,7 @@ export async function handleGoogleConnectMailboxPending(
       width: 500,
       height: 700,
       webPreferences: {
+        devTools: devToolsPreference(), // BACKLOG-3830
         nodeIntegration: false,
         contextIsolation: true,
         // webSecurity defaults to true - do not disable

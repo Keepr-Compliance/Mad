@@ -20,6 +20,9 @@ import type { PendingFile } from '@/app/support/components/FileUpload';
 import { useBrowserDiagnostics, BrowserDiagnostics } from '@/app/support/components/BrowserDiagnostics';
 import html2canvas from 'html2canvas';
 
+// iOS Safari zooms on focus when a field's font-size is under 16px: 16px below md, 14px from md up.
+const fieldClasses = `${inputClasses} !text-base md:!text-sm`;
+
 export function SupportWidget() {
   const [open, setOpen] = useState(false);
   const [capturing, setCapturing] = useState(false);
@@ -208,7 +211,7 @@ export function SupportWidget() {
       <button
         onClick={handleOpen}
         disabled={capturing}
-        className="fixed bottom-6 left-[calc(var(--sidebar-w,0px)_+_1.5rem)] z-50 w-12 h-12 bg-primary-600 text-white rounded-full shadow-lg hover:bg-primary-700 transition-all hover:scale-105 flex items-center justify-center text-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-70"
+        className="fixed bottom-[calc(var(--review-bar-h,0px)_+_1rem)] left-4 right-auto md:bottom-6 md:left-[calc(var(--sidebar-w,0px)_+_1.5rem)] z-50 w-12 h-12 bg-primary-600 text-white rounded-full shadow-lg hover:bg-primary-700 transition-all hover:scale-105 flex items-center justify-center text-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-70"
         title="Contact Support"
         aria-label="Contact Support"
       >
@@ -275,7 +278,7 @@ export function SupportWidget() {
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       readOnly={isAuthenticated}
-                      className={`${inputClasses} read-only:bg-gray-50 read-only:text-gray-500`}
+                      className={`${fieldClasses} read-only:bg-gray-50 read-only:text-gray-500`}
                       placeholder="Your name"
                     />
                   </div>
@@ -290,7 +293,7 @@ export function SupportWidget() {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       readOnly={isAuthenticated}
-                      className={`${inputClasses} read-only:bg-gray-50 read-only:text-gray-500`}
+                      className={`${fieldClasses} read-only:bg-gray-50 read-only:text-gray-500`}
                       placeholder="you@example.com"
                     />
                   </div>
@@ -304,7 +307,7 @@ export function SupportWidget() {
                       id="widget-category"
                       value={categoryId}
                       onChange={(e) => { setCategoryId(e.target.value); setSubcategoryId(''); }}
-                      className={inputClasses}
+                      className={fieldClasses}
                     >
                       <option value="">Select...</option>
                       {categories.map((cat) => (
@@ -318,7 +321,7 @@ export function SupportWidget() {
                       id="widget-priority"
                       value={priority}
                       onChange={(e) => setPriority(e.target.value as TicketPriority)}
-                      className={inputClasses}
+                      className={fieldClasses}
                     >
                       {(Object.entries(PRIORITY_LABELS) as [TicketPriority, string][]).map(([key, label]) => (
                         <option key={key} value={key}>{label}</option>
@@ -335,7 +338,7 @@ export function SupportWidget() {
                       id="widget-subcategory"
                       value={subcategoryId}
                       onChange={(e) => setSubcategoryId(e.target.value)}
-                      className={inputClasses}
+                      className={fieldClasses}
                     >
                       <option value="">Select...</option>
                       {selectedCategory.children.map((sub) => (
@@ -363,7 +366,7 @@ export function SupportWidget() {
                     minLength={3}
                     value={subject}
                     onChange={(e) => setSubject(e.target.value)}
-                    className={inputClasses}
+                    className={fieldClasses}
                     placeholder="Brief summary of your issue"
                   />
                 </div>
@@ -380,7 +383,7 @@ export function SupportWidget() {
                     rows={3}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    className={`${inputClasses} resize-none`}
+                    className={`${fieldClasses} resize-none`}
                     placeholder="Describe your issue..."
                   />
                 </div>

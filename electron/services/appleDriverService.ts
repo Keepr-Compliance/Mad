@@ -7,14 +7,27 @@
  * The drivers are bundled with the app but only installed with user consent.
  */
 
+// BACKLOG-3806: every Apple installer is checked before Windows runs it.
+import { powershellPath, verifyAppleSignature } from "./appleInstallerSignature";
 import { exec, execFile, spawn } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import fs from "fs";
-import https from "https";
 import { app } from "electron";
 import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
+import { isWindowsArm64 } from "../utils/windowsArm64";
+import { mainNetFetch } from "./mainNetFetch";
+import { getAppleDriverSource, isStoreBuild } from "./distributionChannelService";
+import {
+  probeAppleDevices,
+  probeUsbmux,
+  type AppleUsbDriverState,
+} from "./appleDevicesProbe";
+import {
+  APPLE_DEVICES_STORE_URL,
+  APPLE_DEVICES_WEB_URL,
+} from "../utils/distributionChannel";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -28,6 +41,29 @@ function getDownloadedDriversPath(): string {
 }
 
 /**
+ * BACKLOG-3927: where Apple Mobile Device Support stands, in the order the user
+ * has to fix it.
+ */
+export type AppleDevicesState =
+  | "not-installed" // neither Apple Devices nor Apple's MSI
+  | "not-running" // Apple Devices present, Apple Mobile Device Support not answering
+  | "msi-service-stopped" // only Apple's MSI present, its Windows service stopped
+  | "usb-driver-missing" // iPhone plugged in but not on Apple's USB driver
+  | "ready";
+
+export interface AppleDevicesStatus {
+  state: AppleDevicesState;
+  packageInstalled: boolean;
+  amdsRunning: boolean;
+  /** null when not asked (the process check already answered). */
+  usbmuxReachable: boolean | null;
+  usbDriver: AppleUsbDriverState;
+}
+
+/** Which route made Apple Mobile Device Support available. */
+export type AppleDriverInstalledVia = "msi" | "apple-devices";
+
+/**
  * Status of Apple drivers on the system
  */
 export interface AppleDriverStatus {
@@ -39,6 +75,25 @@ export interface AppleDriverStatus {
   serviceRunning: boolean;
   /** Error message if check failed */
   error: string | null;
+  /** BACKLOG-3927: msi (registry / Common Files / service) or apple-devices (Store build). */
+  installedVia?: AppleDriverInstalledVia | null;
+  /** BACKLOG-3927: set (true) only when a QA source override narrowed this check; absent otherwise. */
+  sourceOverridden?: true;
+  /** BACKLOG-3927: present when the Apple Devices probe ran (MSI route not running). */
+  appleDevices?: AppleDevicesStatus;
+}
+
+/** BACKLOG-3927: derive the state. Exported for tests. */
+export function appleDevicesState(
+  installed: boolean,
+  running: boolean,
+  usbDriver: AppleUsbDriverState,
+  installedVia: AppleDriverInstalledVia | null = "apple-devices",
+): AppleDevicesState {
+  if (!installed) return "not-installed";
+  if (!running) return installedVia === "msi" ? "msi-service-stopped" : "not-running";
+  if (usbDriver === "missing") return "usb-driver-missing";
+  return "ready";
 }
 
 /**
@@ -73,6 +128,7 @@ export type DriverFailureReason =
   | "network_error"
   | "extraction_failed"
   | "msi_not_found"
+  | "signature_invalid"
   | "user_cancelled"
   | "unknown";
 
@@ -144,6 +200,38 @@ export async function getDriverDiagnostics(): Promise<DriverDiagnostics> {
 }
 
 /**
+ * BACKLOG-3927: the last source/state line written to main.log. The PC test
+ * (2026-10-12) found no log line naming the detected source, so each check
+ * whose source/state differs from the previous one writes ONE line. Enums only:
+ * no UDID, serial or device name.
+ */
+let lastDriverStateLine: string | null = null;
+
+/** BACKLOG-3927: test hook — forget the last logged line. */
+export function resetDriverStateLogForTests(): void {
+  lastDriverStateLine = null;
+}
+
+/** BACKLOG-3927: the one-line summary of a check, both branches. Exported for tests. */
+export function driverStateLine(result: AppleDriverStatus, store: boolean): string {
+  const state =
+    result.appleDevices?.state ??
+    appleDevicesState(result.isInstalled, result.serviceRunning, "no-device", result.installedVia ?? "msi");
+  const usbDriver = result.appleDevices?.usbDriver ?? "not-probed";
+  return (
+    `channel=${store ? "store" : "website"} source=${result.installedVia ?? "none"} state=${state} ` +
+    `usbDriver=${usbDriver} service=${result.serviceRunning ? "running" : "not-running"}`
+  );
+}
+
+function logDriverStateChange(result: AppleDriverStatus, store: boolean): void {
+  const line = driverStateLine(result, store);
+  if (line === lastDriverStateLine) return;
+  lastDriverStateLine = line;
+  log.info(`[AppleDriverService] Apple driver source/state: ${line}`);
+}
+
+/**
  * Check if Apple Mobile Device Support drivers are installed
  */
 export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
@@ -163,18 +251,86 @@ export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
     // Check if the service exists and is running
     const serviceStatus = await checkAppleMobileDeviceService();
 
-    const result: AppleDriverStatus = {
-      isInstalled: registryCheck.installed,
-      version: registryCheck.version,
-      serviceRunning: serviceStatus,
-      error: null,
-    };
+    // BACKLOG-3927: Apple Mobile Device Support can come from either of two
+    // sources, and BOTH builds accept either:
+    //  - "msi": Apple's installer (the website build bundles it) — HKLM key /
+    //    Common Files path + the "Apple Mobile Device Service" Windows service.
+    //  - "apple-devices": Apple's "Apple Devices" Store app (MSIX). Measured on
+    //    a real PC (PC TEST rows on BACKLOG-3927): no HKLM key, no Common Files
+    //    path, no Windows service — per-user AppleMobileDeviceProcess instead.
+    // When the MSI route is installed and its service runs, nothing else is
+    // asked. Otherwise one PowerShell probe looks for Apple Devices and the
+    // iPhone's USB driver; usbmux (`idevice_id -l`) is asked only when an
+    // iPhone is plugged in and no process/service answered.
+    // KEEPR_APPLE_DRIVER_SOURCE (tests only, gated) narrows which source counts.
+    const store = isStoreBuild();
+    const source = getAppleDriverSource();
+    const msiCounts = source !== "appledevices";
+    const appleDevicesCounts = source !== "msi";
+    const msiInstalled = msiCounts && registryCheck.installed;
+    const msiRunning = msiInstalled && serviceStatus;
+    let result: AppleDriverStatus;
+    if (msiRunning || !appleDevicesCounts) {
+      result = {
+        isInstalled: msiInstalled,
+        version: msiInstalled ? registryCheck.version : null,
+        serviceRunning: msiRunning,
+        error: null,
+        installedVia: msiInstalled ? "msi" : null,
+      };
+    } else {
+      const probe = await probeAppleDevices();
+      // BACKLOG-3927: the running AppleMobileDeviceProcess is itself proof that
+      // Apple Devices is installed. Measured on a PC where Get-AppxPackage threw:
+      // `packages=` empty, `amds=True`, iPhone on Apple's USB driver — the old
+      // package-only test read that as "not installed" and blocked sync with the
+      // install-drivers text. Apple's USB driver alone does NOT count: Windows
+      // Update can supply it without Apple Mobile Device Support.
+      const appleDevicesPresent = probe.packageInstalled || probe.amdsRunning;
+      const anyInstalled = msiInstalled || appleDevicesPresent;
+      let usbmuxReachable: boolean | null = null;
+      if (anyInstalled && !probe.amdsRunning && probe.usbDriver !== "no-device") {
+        usbmuxReachable = await probeUsbmux();
+      }
+      const appleDevicesRunning = probe.amdsRunning;
+      // usbmux listing the iPhone proves Apple Mobile Device Support answers,
+      // whichever source started it.
+      const running = appleDevicesRunning || usbmuxReachable === true;
+      const installedVia: AppleDriverInstalledVia | null = appleDevicesRunning
+        ? "apple-devices"
+        : msiInstalled && !probe.packageInstalled
+          ? "msi"
+          : appleDevicesPresent
+            ? "apple-devices"
+            : null;
+      result = {
+        isInstalled: anyInstalled,
+        version: msiInstalled ? registryCheck.version : null,
+        serviceRunning: anyInstalled && running,
+        error: null,
+        installedVia,
+        appleDevices: {
+          state: appleDevicesState(anyInstalled, running, probe.usbDriver, installedVia),
+          packageInstalled: probe.packageInstalled,
+          amdsRunning: probe.amdsRunning,
+          usbmuxReachable,
+          usbDriver: probe.usbDriver,
+        },
+      };
+    }
+
+    if (source !== "auto") result.sourceOverridden = true;
+
+    logDriverStateChange(result, store);
 
     // Persist driver state on Sentry scope for enrichment of future events
     Sentry.setContext("apple_drivers", {
       isInstalled: result.isInstalled,
       version: result.version,
       serviceRunning: result.serviceRunning,
+      distributionChannel: store ? "store" : "website",
+      installedVia: result.installedVia ?? null,
+      appleDevicesState: result.appleDevices?.state ?? null,
     });
 
     // BACKLOG-1354: Enhanced breadcrumb with full driver diagnostic context
@@ -308,20 +464,17 @@ async function checkAppleMobileDeviceService(): Promise<boolean> {
 
 /**
  * Get path to bundled Apple driver MSI
- * Checks both bundled resources and previously downloaded drivers
+ * Checks the copy shipped with the app first, then previously downloaded
+ * drivers (BACKLOG-3806: bundled first). Whichever is chosen is
+ * signature-checked before it is installed.
  */
 export function getBundledDriverPath(): string | null {
-  // First, check for previously downloaded drivers
-  const downloadedPath = getDownloadedDriverPath();
-  if (downloadedPath) {
-    log.info(
-      "[AppleDriverService] Using downloaded driver at:",
-      downloadedPath,
-    );
-    return downloadedPath;
+  // BACKLOG-3927: the Store build has no Apple installer to offer — neither a
+  // bundled one nor one downloaded earlier into userData.
+  if (isStoreBuild()) {
+    return null;
   }
 
-  // Then check bundled resources
   const isDev = !app.isPackaged;
 
   let basePath: string;
@@ -341,6 +494,16 @@ export function getBundledDriverPath(): string | null {
   const altPath = path.join(basePath, "AppleMobileDeviceSupport.msi");
   if (fs.existsSync(altPath)) {
     return altPath;
+  }
+
+  // Then previously downloaded drivers
+  const downloadedPath = getDownloadedDriverPath();
+  if (downloadedPath) {
+    log.info(
+      "[AppleDriverService] Using downloaded driver at:",
+      downloadedPath,
+    );
+    return downloadedPath;
   }
 
   log.warn("[AppleDriverService] No driver MSI found (bundled or downloaded)");
@@ -365,6 +528,39 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
     return {
       success: false,
       error: "Driver installation only supported on Windows",
+      rebootRequired: false,
+    };
+  }
+
+  // BACKLOG-3363: Apple's driver is x64-only and cannot load on Windows on ARM.
+  // Refuse before any installer runs. Not a driver failure, so nothing is
+  // reported to Sentry and no install breadcrumb is emitted. The renderer
+  // never offers Install on these PCs; this is the main-process backstop.
+  if (
+    isWindowsArm64(
+      process.platform,
+      process.arch,
+      app?.runningUnderARM64Translation,
+    )
+  ) {
+    log.info(
+      "[AppleDriverService] Windows on ARM: Apple driver install not supported, skipping",
+    );
+    return {
+      success: false,
+      error: "iPhone USB sync isn't supported on this PC",
+      rebootRequired: false,
+    };
+  }
+
+  // BACKLOG-3927: the Microsoft Store build never installs a non-Microsoft
+  // driver (Store policy 10.2.4.2). The renderer shows the Apple Devices guide
+  // instead of an Install button; this is the main-process backstop.
+  if (isStoreBuild()) {
+    log.info("[AppleDriverService] Store build: Apple driver install not offered");
+    return {
+      success: false,
+      error: STORE_INSTALL_REFUSAL_MESSAGE,
       rebootRequired: false,
     };
   }
@@ -394,19 +590,61 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
 
   log.info("[AppleDriverService] Installing Apple drivers from:", msiPath);
 
-  Sentry.addBreadcrumb({
-    category: "driver.install",
-    message: "Running MSI installer",
-    level: "info",
-    data: { msiPathAvailable: true },
-  });
+  // BACKLOG-3806: install from a private copy, and check the signature of
+  // that exact copy - the same path is then handed to msiexec.
+  let stagingDir: string | null = null;
+  let installPath: string;
+  try {
+    const staged = stageInstallerCopy(msiPath);
+    stagingDir = staged.dir;
+    installPath = staged.file;
+  } catch (error) {
+    // Node fs errors embed full paths (including the Windows user name), so
+    // nothing from the error is logged to Sentry or returned to the user.
+    log.error("[AppleDriverService] Could not prepare installer copy:", error);
+    Sentry.addBreadcrumb({
+      category: "driver.install",
+      message: STAGING_FAILURE_MESSAGE,
+      level: "error",
+    });
+    const stagingFailure: DriverInstallResult = {
+      success: false,
+      error: STAGING_FAILURE_MESSAGE,
+      rebootRequired: false,
+    };
+    reportInstallFailure(stagingFailure, msiPath);
+    return stagingFailure;
+  }
 
   try {
+
+    const signature = await verifyAppleSignature(installPath);
+    if (!signature.ok) {
+      log.error(
+        "[AppleDriverService] Refusing to install: installer is not validly signed by Apple",
+        { reason: signature.reason, status: signature.status, subject: signature.subject },
+      );
+      const refused: DriverInstallResult = {
+        success: false,
+        error: SIGNATURE_REFUSAL_MESSAGE,
+        rebootRequired: false,
+      };
+      reportSignatureRefusal("install", signature);
+      return refused;
+    }
+
+    Sentry.addBreadcrumb({
+      category: "driver.install",
+      message: "Running MSI installer",
+      level: "info",
+      data: { msiPathAvailable: true },
+    });
+
     // Run MSI installer silently
     // /qn = quiet, no UI
     // /norestart = don't restart automatically
     // REBOOT=ReallySuppress = suppress reboot prompts
-    const result = await runMsiInstaller(msiPath);
+    const result = await runMsiInstaller(installPath);
 
     if (result.success) {
       log.info("[AppleDriverService] Installer reported success, verifying...");
@@ -480,43 +718,88 @@ export async function installAppleDrivers(): Promise<DriverInstallResult> {
     };
     reportInstallFailure(errorResult, msiPath);
     return errorResult;
+  } finally {
+    if (stagingDir) removeDirQuietly(stagingDir);
   }
+}
+
+/** BACKLOG-3927: returned when the Store build is asked to install or download the Apple driver. */
+export const STORE_INSTALL_REFUSAL_MESSAGE =
+  "Install Apple Devices from the Microsoft Store to set up your iPhone.";
+
+/** Fixed text for a failure to copy the installer (BACKLOG-3806); never includes error text or paths. */
+export const STAGING_FAILURE_MESSAGE = "Could not prepare the installer copy.";
+
+/** Shown when an installer fails the Apple signature check (BACKLOG-3806). */
+export const SIGNATURE_REFUSAL_MESSAGE =
+  "The Apple driver installer could not be verified as signed by Apple, so it was not installed. Please install iTunes from the Microsoft Store instead.";
+
+/**
+ * Copy the installer into a new, randomly named directory Keepr has just
+ * created. The copy is what gets checked and installed.
+ */
+function stageInstallerCopy(sourcePath: string): { dir: string; file: string } {
+  const dir = fs.mkdtempSync(path.join(app.getPath("temp"), "keepr-amds-"));
+  const file = path.join(dir, path.basename(sourcePath));
+  try {
+    fs.copyFileSync(sourcePath, file);
+  } catch (error) {
+    removeDirQuietly(dir);
+    throw error;
+  }
+  return { dir, file };
+}
+
+function removeDirQuietly(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (error) {
+    log.warn("[AppleDriverService] Could not remove temporary installer copy:", error);
+  }
+}
+
+function reportSignatureRefusal(
+  phase: "install" | "download" | "extract",
+  check: { reason: string; status: string | null; subject: string | null },
+): void {
+  if (process.platform !== "win32") return;
+  Sentry.captureMessage("Apple driver installer failed signature check", {
+    level: "error",
+    tags: {
+      component: "apple_driver",
+      platform: "win32",
+      failureReason: "signature_invalid",
+    },
+    extra: {
+      phase,
+      reason: check.reason,
+      status: check.status,
+      subject: check.subject,
+    },
+  });
 }
 
 /**
  * Run MSI installer with elevated privileges using PowerShell
  * This triggers the UAC prompt for admin elevation
  *
- * SECURITY AUDIT (TASK-601):
- * This function uses spawn("powershell", ...) with msiPath embedded in the command.
- *
- * RISK ANALYSIS:
- * - msiPath comes from getBundledDriverPath() which returns paths from:
- *   1. getDownloadedDriverPath() - paths within app.getPath("userData")
- *   2. Bundled resources (process.resourcesPath or __dirname)
- * - The path is NOT user-controlled - it's constructed internally from known directories
- * - The path is validated by fs.existsSync() before being used
- *
- * CONCLUSION: SAFE - No user-controlled input flows into the spawn command.
- * The msiPath is always from trusted internal sources (bundled resources or app's
- * userData directory with fixed subdirectory structure).
- *
- * DEFENSE-IN-DEPTH: The path is quoted in the PowerShell command to handle
- * paths with spaces, and msiexec.exe is the target executable (a known Windows binary).
+ * The MSI path reaches PowerShell only through an environment variable, never
+ * as command text, and has been signature-checked by the caller (BACKLOG-3806).
  */
+/** Environment variable that carries the MSI path to PowerShell. */
+export const MSI_PATH_ENV = "KEEPR_MSI_PATH";
+
 function runMsiInstaller(msiPath: string): Promise<DriverInstallResult> {
   return new Promise((resolve) => {
-    // Build msiexec arguments
-    // SECURITY: msiPath is from trusted internal sources (bundled or userData)
-    const msiArgs = `/i "${msiPath}" /qn /norestart REBOOT=ReallySuppress`;
-
     // Use PowerShell Start-Process with -Verb RunAs to trigger UAC elevation
     // -Wait ensures we wait for the installation to complete
     // -PassThru returns the process object so we can get the exit code
     // Wrap in try-catch to properly handle UAC decline (which throws an exception)
     const psCommand = `
       try {
-        $process = Start-Process -FilePath "msiexec.exe" -ArgumentList '${msiArgs}' -Verb RunAs -Wait -PassThru -ErrorAction Stop
+        $msiexec = Join-Path $env:SystemRoot 'System32\\msiexec.exe'
+        $msiArgs = '/i "' + $env:${MSI_PATH_ENV} + '" /qn /norestart REBOOT=ReallySuppress'
+        $process = Start-Process -FilePath $msiexec -ArgumentList $msiArgs -Verb RunAs -Wait -PassThru -ErrorAction Stop
         exit $process.ExitCode
       } catch {
         # UAC declined or other error starting the elevated process
@@ -526,11 +809,16 @@ function runMsiInstaller(msiPath: string): Promise<DriverInstallResult> {
     `.trim();
 
     log.info("[AppleDriverService] Running elevated installer via PowerShell");
-    log.info("[AppleDriverService] msiexec args:", msiArgs);
+    log.info("[AppleDriverService] msiexec package:", msiPath);
 
-    const installer = spawn("powershell", ["-Command", psCommand], {
-      shell: false,
-    });
+    const installer = spawn(
+      powershellPath(),
+      ["-NoProfile", "-NonInteractive", "-Command", psCommand],
+      {
+        shell: false,
+        env: { ...process.env, [MSI_PATH_ENV]: msiPath },
+      },
+    );
 
     let stderr = "";
     let stdout = "";
@@ -627,63 +915,48 @@ async function startAppleMobileDeviceService(): Promise<void> {
 }
 
 /**
- * Download a file from URL to destination
+ * Download a file from URL to destination.
+ *
+ * BACKLOG-3799: over Electron net.fetch (Chromium TLS + OS certificate
+ * store), not Node's `https`, so a TLS-inspecting antivirus does not break
+ * the driver download. Redirects are followed by the transport.
  */
-function downloadFile(
+async function downloadFile(
   url: string,
   destPath: string,
   onProgress?: (percent: number) => void,
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(destPath);
+  const response = await mainNetFetch(url, { redirect: "follow" });
+  if (response.status !== 200 || !response.body) {
+    throw new Error(`Failed to download: HTTP ${response.status}`);
+  }
 
-    const request = https.get(url, (response) => {
-      // Handle redirects
-      if (response.statusCode === 301 || response.statusCode === 302) {
-        const redirectUrl = response.headers.location;
-        if (redirectUrl) {
-          file.close();
-          fs.unlinkSync(destPath);
-          downloadFile(redirectUrl, destPath, onProgress)
-            .then(resolve)
-            .catch(reject);
-          return;
-        }
+  const totalSize = parseInt(response.headers.get("content-length") || "0", 10);
+  let downloadedSize = 0;
+  const file = fs.createWriteStream(destPath);
+  const reader = response.body.getReader();
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      downloadedSize += value.length;
+      if (!file.write(value)) {
+        await new Promise<void>((resolve) => file.once("drain", resolve));
       }
-
-      if (response.statusCode !== 200) {
-        reject(new Error(`Failed to download: HTTP ${response.statusCode}`));
-        return;
+      if (onProgress && totalSize > 0) {
+        onProgress(Math.round((downloadedSize / totalSize) * 100));
       }
-
-      const totalSize = parseInt(response.headers["content-length"] || "0", 10);
-      let downloadedSize = 0;
-
-      response.on("data", (chunk) => {
-        downloadedSize += chunk.length;
-        if (onProgress && totalSize > 0) {
-          onProgress(Math.round((downloadedSize / totalSize) * 100));
-        }
-      });
-
-      response.pipe(file);
-
-      file.on("finish", () => {
-        file.close();
-        resolve();
-      });
+    }
+    await new Promise<void>((resolve, reject) => {
+      file.once("error", reject);
+      file.end(() => resolve());
     });
-
-    request.on("error", (err) => {
-      fs.unlink(destPath, () => {}); // Delete partial file
-      reject(err);
-    });
-
-    file.on("error", (err) => {
-      fs.unlink(destPath, () => {}); // Delete partial file
-      reject(err);
-    });
-  });
+  } catch (err) {
+    file.destroy();
+    fs.unlink(destPath, () => {}); // Delete partial file
+    throw err;
+  }
 }
 
 /**
@@ -782,7 +1055,11 @@ function findFilesRecursive(
  */
 function validateShellPath(p: string): string {
   // Only allow alphanumeric, path separators, dots, hyphens, underscores, spaces
-  if (/[`$|;&<>(){}!\[\]'"\\*?~#]/.test(p)) {
+  // A backslash is the path separator on Windows (traversal is checked below),
+  // so it is only rejected where it is not one.
+  const unsafe =
+    path.sep === "\\" ? /[`$|;&<>(){}!\[\]'"*?~#]/ : /[`$|;&<>(){}!\[\]'"\\*?~#]/;
+  if (unsafe.test(p)) {
     throw new Error(`Unsafe characters in path: ${p}`);
   }
   // Reject path traversal sequences (.. as a path component)
@@ -928,6 +1205,12 @@ export async function downloadAppleDrivers(
     percent: number;
   }) => void,
 ): Promise<{ success: boolean; msiPath?: string; error?: string }> {
+  // BACKLOG-3927: the Store build never fetches Apple's installer.
+  if (isStoreBuild()) {
+    log.info("[AppleDriverService] Store build: Apple driver download not offered");
+    return { success: false, error: STORE_INSTALL_REFUSAL_MESSAGE };
+  }
+
   const driversDir = getDownloadedDriversPath();
   const installerPath = path.join(driversDir, "iTunes64Setup.exe");
   const extractDir = path.join(driversDir, "extracted");
@@ -953,6 +1236,25 @@ export async function downloadAppleDrivers(
     await downloadFile(ITUNES_DOWNLOAD_URL, installerPath, (percent) =>
       onProgress?.({ phase: "downloading", percent }),
     );
+
+    // BACKLOG-3806: check the downloaded installer before anything opens or
+    // runs it; an unverified file is deleted, never extracted.
+    if (process.platform === "win32") {
+      const installerCheck = await verifyAppleSignature(installerPath);
+      if (!installerCheck.ok) {
+        log.error(
+          "[AppleDriverService] Downloaded installer is not validly signed by Apple; deleting it",
+          { reason: installerCheck.reason, status: installerCheck.status, subject: installerCheck.subject },
+        );
+        try {
+          fs.unlinkSync(installerPath);
+        } catch {
+          // Ignore cleanup errors
+        }
+        reportSignatureRefusal("download", installerCheck);
+        return { success: false, error: SIGNATURE_REFUSAL_MESSAGE };
+      }
+    }
 
     log.info("[AppleDriverService] Download complete, extracting...");
     onProgress?.({ phase: "extracting", percent: 0 });
@@ -986,6 +1288,21 @@ export async function downloadAppleDrivers(
         error:
           "Could not extract Apple drivers from installer. Please install iTunes manually.",
       };
+    }
+
+    // BACKLOG-3806: the extracted MSI is checked too; a failure removes
+    // everything extracted so it is never picked up later.
+    if (process.platform === "win32") {
+      const msiCheck = await verifyAppleSignature(msiPath);
+      if (!msiCheck.ok) {
+        log.error(
+          "[AppleDriverService] Extracted MSI is not validly signed by Apple; deleting extracted files",
+          { reason: msiCheck.reason, status: msiCheck.status, subject: msiCheck.subject },
+        );
+        removeDirQuietly(extractDir);
+        reportSignatureRefusal("extract", msiCheck);
+        return { success: false, error: SIGNATURE_REFUSAL_MESSAGE };
+      }
     }
 
     onProgress?.({ phase: "complete", percent: 100 });
@@ -1051,6 +1368,16 @@ function getDownloadedDriverPath(): string | null {
 export function getITunesDownloadUrl(): string {
   // Microsoft Store link - easiest for users
   return "ms-windows-store://pdp/?ProductId=9PB2MZ1ZMB1S";
+}
+
+/** BACKLOG-3927: Apple Devices product page in the Microsoft Store app. */
+export function getAppleDevicesStoreUrl(): string {
+  return APPLE_DEVICES_STORE_URL;
+}
+
+/** BACKLOG-3927: Apple Devices product page on the web (fallback). */
+export function getAppleDevicesWebUrl(): string {
+  return APPLE_DEVICES_WEB_URL;
 }
 
 /**

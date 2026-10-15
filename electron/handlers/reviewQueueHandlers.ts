@@ -15,10 +15,12 @@ import {
   syncReviewQueueForTransaction,
   approveReviewItems,
   rejectReviewItems,
+  getReviewItemTransactionIds,
   type ReviewState,
   type PendingSyncResult,
   type PendingSyncReason,
 } from "../services/reviewStateService";
+import { refuseIfAnyDealLocked } from "../services/dealLockState";
 import logService from "../services/logService";
 import { wrapHandler } from "../utils/wrapHandler";
 import { ValidationError, validateTransactionId } from "../utils/validation";
@@ -90,7 +92,14 @@ export function registerReviewQueueHandlers(): void {
       async (
         _event: IpcMainInvokeEvent,
         itemIds: string[],
-      ): Promise<{ approved: number }> => approveReviewItems(requireItemIds(itemIds)),
+      ): Promise<{ approved: number }> => {
+        const ids = requireItemIds(itemIds);
+        // BACKLOG-3910: a locked deal (submitted or sealed) is fully read-only,
+        // so approving a Needs Review item (which links it) is refused.
+        const lockedRefusal = refuseIfAnyDealLocked(getReviewItemTransactionIds(ids), "approve-review");
+        if (lockedRefusal) return { approved: 0, ...lockedRefusal };
+        return approveReviewItems(ids);
+      },
     ),
   );
 
@@ -101,7 +110,14 @@ export function registerReviewQueueHandlers(): void {
       async (
         _event: IpcMainInvokeEvent,
         itemIds: string[],
-      ): Promise<{ rejected: number }> => rejectReviewItems(requireItemIds(itemIds)),
+      ): Promise<{ rejected: number }> => {
+        const ids = requireItemIds(itemIds);
+        // BACKLOG-3910: rejecting changes a locked deal too (it writes a
+        // suppression row and can delete a link), so it is refused.
+        const lockedRefusal = refuseIfAnyDealLocked(getReviewItemTransactionIds(ids), "reject-review");
+        if (lockedRefusal) return { rejected: 0, ...lockedRefusal };
+        return rejectReviewItems(ids);
+      },
     ),
   );
 }

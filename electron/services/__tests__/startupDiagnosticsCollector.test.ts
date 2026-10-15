@@ -316,6 +316,28 @@ describe("startupDiagnosticsCollector", () => {
       });
     });
 
+    it("BACKLOG-3927: startup diagnostics carry installedViaOverride only for an override session", async () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      mockCheckAppleDrivers.mockResolvedValue({
+        isInstalled: true,
+        version: "14.0.0",
+        serviceRunning: true,
+        error: null,
+        installedVia: "msi",
+        sourceOverridden: true,
+      });
+
+      const result = await collectStartupDiagnostics();
+
+      expect(result.appleDrivers).toEqual({
+        isInstalled: true,
+        version: "14.0.0",
+        serviceRunning: true,
+        installedVia: "msi",
+        installedViaOverride: true,
+      });
+    });
+
     it("should handle Apple driver check failure gracefully on win32", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       mockCheckAppleDrivers.mockRejectedValue(

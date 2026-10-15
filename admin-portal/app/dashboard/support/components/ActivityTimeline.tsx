@@ -230,8 +230,8 @@ function MessageCard({
           : 'bg-white border border-gray-200'
       }`}
     >
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between mb-2 max-md:flex-col max-md:items-start max-md:gap-1">
+        <div className="flex items-center gap-2 max-md:flex-wrap">
           {isNote && (
             <div className="flex items-center gap-1 text-amber-600 text-xs font-medium">
               <Lock className="h-3 w-3" />
@@ -242,22 +242,22 @@ function MessageCard({
             {message.sender_name || message.sender_email || 'System'}
           </span>
           {message.sender_email && message.sender_name && (
-            <span className="text-xs text-gray-400">{message.sender_email}</span>
+            <span className="text-xs text-gray-400 max-md:break-all">{message.sender_email}</span>
           )}
         </div>
         <div className="flex items-center gap-2">
           {canModify && !editing && !confirmDelete && (
-            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 max-md:opacity-100 transition-opacity">
               <button
                 onClick={() => { setEditText(message.body); setEditing(true); }}
-                className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                className="p-1 text-gray-400 hover:text-gray-600 transition-colors max-md:min-h-[44px] max-md:min-w-[44px] max-md:inline-flex max-md:items-center max-md:justify-center"
                 title="Edit note"
               >
                 <Pencil className="h-3.5 w-3.5" />
               </button>
               <button
                 onClick={() => setConfirmDelete(true)}
-                className="p-1 text-gray-400 hover:text-red-500 transition-colors"
+                className="p-1 text-gray-400 hover:text-red-500 transition-colors max-md:min-h-[44px] max-md:min-w-[44px] max-md:inline-flex max-md:items-center max-md:justify-center"
                 title="Delete note"
               >
                 <Trash2 className="h-3.5 w-3.5" />

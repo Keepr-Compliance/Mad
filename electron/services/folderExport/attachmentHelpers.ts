@@ -16,6 +16,7 @@ import fsSync from "fs";
 import { net } from "electron";
 import databaseService from "../databaseService";
 import logService from "../logService";
+import { decryptStoredAttachmentTo } from "../atRest/attachmentReader";
 import emailAttachmentService from "../emailAttachmentService";
 import gmailFetchService from "../gmailFetchService";
 import outlookFetchService from "../outlookFetchService";
@@ -379,8 +380,9 @@ export async function exportEmailAttachmentsToThreadDirs(
           const destPath = path.join(attachDir, exportFilename);
           const relativePath = path.join(threadDirName, "attachments", exportFilename);
 
-          // Copy file (streaming via fs.copyFile -- no buffering in memory)
-          await fs.copyFile(att.storage_path, destPath);
+          // BACKLOG-3816 S2: decrypt into the export folder (streamed, all-or-nothing).
+          // The export is plaintext by design — the user chose where it goes.
+          await decryptStoredAttachmentTo(att.storage_path, destPath);
 
           const fileSize = att.file_size_bytes || 0;
           result.exported++;

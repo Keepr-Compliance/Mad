@@ -22,6 +22,7 @@ import { getDataClient } from '@/lib/impersonation-guards';
 import { PageHeader } from '@keepr/design-system';
 import { AlertBanner } from '@keepr/ui';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 
 interface AccessCheckResult {
   allowed: true;
@@ -46,7 +47,8 @@ async function checkUserAccess(): Promise<AccessCheck> {
 
   // Only admin and it_admin can access users management
   const allowedRoles: Role[] = ['admin', 'it_admin'];
-  if (access.kind !== 'full' || !allowedRoles.includes(access.role as Role)) {
+  // BACKLOG-3878: a suspended account keeps My Account and Support only.
+  if (access.kind !== 'full' || !allowedRoles.includes(access.role as Role) || portal.suspended === true) {
     return { allowed: false, reason: 'unauthorized' };
   }
 
@@ -215,14 +217,17 @@ export default async function UsersPage() {
     const members = await getImpersonationMembers(organizationId, client);
 
     return (
-      <div className="max-w-7xl mx-auto space-y-6">
+      <div className="max-w-7xl mx-auto space-y-6 max-md:space-y-3 max-md:[&>:nth-child(3)]:!mt-0">
         {/* Read-only banner */}
         <AlertBanner variant="warning">Read-only during support session</AlertBanner>
 
         {/* Header */}
         <PageHeader
-          title="Users Management"
+          phoneHideTitle
+          phoneHideSubtitle
+          title={PAGE_TITLES.users}
           subtitle="Manage your organization's team members"
+          className="max-md:mb-0"
         />
 
         {/* User List (read-only) */}
@@ -247,11 +252,14 @@ export default async function UsersPage() {
   const members = await getOrganizationMembers(access.organizationId);
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
+    <div className="max-w-7xl mx-auto space-y-6 max-md:space-y-3 max-md:[&>:nth-child(2)]:!mt-0">
       {/* Header */}
       <PageHeader
-        title="Users Management"
+        phoneHideTitle
+        phoneHideSubtitle
+        title={PAGE_TITLES.users}
         subtitle="Manage your organization's team members"
+        className="max-md:mb-0"
       />
 
       {/* User List */}

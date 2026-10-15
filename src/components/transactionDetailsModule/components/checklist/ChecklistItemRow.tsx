@@ -38,6 +38,8 @@ interface ChecklistItemRowProps {
   onRemoveLink: (linkId: string) => Promise<void>;
   /** How a chip's View opens its evidence. */
   viewer: ChecklistLinkViewer;
+  /** BACKLOG-3910 (slice d): set on a locked deal; the tick's tooltip. */
+  lockedTooltip?: string;
 }
 
 export function ChecklistItemRow({
@@ -52,6 +54,7 @@ export function ChecklistItemRow({
   onOpenPicker,
   onRemoveLink,
   viewer,
+  lockedTooltip,
 }: ChecklistItemRowProps): React.ReactElement {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -88,6 +91,7 @@ export function ChecklistItemRow({
         dimmed={pending}
         onClick={() => onToggle(item)}
         testId={`checklist-check-${item.id}`}
+        title={lockedTooltip}
       />
 
       <div className="flex-1 min-w-0">

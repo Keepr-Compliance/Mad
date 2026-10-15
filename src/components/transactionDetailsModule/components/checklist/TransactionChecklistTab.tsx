@@ -72,6 +72,12 @@ export interface TransactionChecklistTabProps {
   onShowSuccess: (message: string) => void;
   onShowError: (message: string) => void;
   nameMap?: ReadonlyMap<string, string>;
+  /**
+   * BACKLOG-3910 (slice d, founder 2026-10-12): set when the deal is locked
+   * (with the broker, or sealed). Every checklist write is then off: the main
+   * process refuses them too (`refuseIfDealLocked`).
+   */
+  lockedTooltip?: string;
 }
 
 /**
@@ -92,12 +98,17 @@ export function TransactionChecklistTab({
   onShowSuccess,
   onShowError,
   nameMap,
+  lockedTooltip,
 }: TransactionChecklistTabProps): React.ReactElement | null {
   const { state, data } = checklist;
   // The Emails tab's source for "You" in a thread (TransactionEmailsTab).
   const { currentUser } = useAuth();
   const userEmail = currentUser?.email;
-  const readOnly = gate !== "allowed";
+  // The plan's read-only (gate) and the deal's (lock) are separate: the plan's
+  // keeps Remove (the unhide rule), the lock refuses every write.
+  const planReadOnly = gate !== "allowed";
+  const locked = !!lockedTooltip;
+  const readOnly = planReadOnly || locked;
   const [chooser, setChooser] = useState<ChooserState>(null);
   const [busy, setBusy] = useState(false);
   const [templatesRefreshKey, setTemplatesRefreshKey] = useState(0);
@@ -315,7 +326,7 @@ export function TransactionChecklistTab({
   // Without the plan there is nothing to start; with none on the transaction
   // the tab is hidden in that case, so this only guards a render between two
   // answers.
-  if (details.length === 0 && readOnly) return null;
+  if (details.length === 0 && planReadOnly) return null;
 
   if (!readOnly && (chooser || details.length === 0)) {
     // ONE render site, so the chooser is never remounted mid-batch when the
@@ -341,7 +352,14 @@ export function TransactionChecklistTab({
 
   return (
     <div data-testid="checklist-panel">
-      {readOnly && (
+      {locked ? (
+        <div
+          className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800"
+          data-testid="checklist-locked-notice"
+        >
+          {lockedTooltip} Checklists can&rsquo;t be changed.
+        </div>
+      ) : readOnly && (
         <div
           className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800"
           data-testid="checklist-readonly-notice"
@@ -354,12 +372,13 @@ export function TransactionChecklistTab({
 
       <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
         <h4 className="text-lg font-semibold text-gray-900">Checklists</h4>
-        {!readOnly && (
+        {!planReadOnly && (
           <button
             type="button"
             onClick={() => setChooser({ mode: "add" })}
-            disabled={busy}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg"
+            disabled={busy || locked}
+            title={lockedTooltip}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="checklist-add"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -387,7 +406,7 @@ export function TransactionChecklistTab({
             expanded={isExpanded(detail)}
             onToggleExpanded={toggleExpanded}
             readOnly={readOnly}
-            canRemove={gate === "allowed" || gate === "blocked"}
+            canRemove={!locked && (gate === "allowed" || gate === "blocked")}
             busy={busy}
             pendingItemIds={checklist.pendingItemIds}
             attachmentsById={attachmentsById}
@@ -398,6 +417,7 @@ export function TransactionChecklistTab({
             onOpenPicker={setPickerItem}
             onRemoveLink={handleRemoveLink}
             viewer={viewer}
+            lockedTooltip={lockedTooltip}
           />
         ))}
       </div>

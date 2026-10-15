@@ -32,7 +32,6 @@ import type {
   BackupResult,
   BackupListEntry,
   AppleDriverStatus,
-  SyncResult,
   SyncStatus,
 } from "../deviceService";
 
@@ -52,13 +51,11 @@ const mockDeviceOnDisconnected = jest.fn();
 const mockBackupGetCapabilities = jest.fn();
 const mockBackupGetStatus = jest.fn();
 const mockBackupStart = jest.fn();
-const mockBackupStartWithPassword = jest.fn();
 const mockBackupCancel = jest.fn();
 const mockBackupList = jest.fn();
 const mockBackupDelete = jest.fn();
 const mockBackupCleanup = jest.fn();
 const mockBackupCheckEncryption = jest.fn();
-const mockBackupVerifyPassword = jest.fn();
 const mockBackupIsEncrypted = jest.fn();
 const mockBackupOnProgress = jest.fn();
 const mockBackupOnComplete = jest.fn();
@@ -85,7 +82,6 @@ const mockSyncOnProgress = jest.fn();
 const mockSyncOnPhase = jest.fn();
 const mockSyncOnDeviceConnected = jest.fn();
 const mockSyncOnDeviceDisconnected = jest.fn();
-const mockSyncOnPasswordRequired = jest.fn();
 const mockSyncOnError = jest.fn();
 const mockSyncOnComplete = jest.fn();
 const mockSyncOnWaitingForPasscode = jest.fn();
@@ -107,13 +103,11 @@ function setupFullApiMock() {
         getCapabilities: mockBackupGetCapabilities,
         getStatus: mockBackupGetStatus,
         start: mockBackupStart,
-        startWithPassword: mockBackupStartWithPassword,
         cancel: mockBackupCancel,
         list: mockBackupList,
         delete: mockBackupDelete,
         cleanup: mockBackupCleanup,
         checkEncryption: mockBackupCheckEncryption,
-        verifyPassword: mockBackupVerifyPassword,
         isEncrypted: mockBackupIsEncrypted,
         onProgress: mockBackupOnProgress,
         onComplete: mockBackupOnComplete,
@@ -136,7 +130,6 @@ function setupFullApiMock() {
         onPhase: mockSyncOnPhase,
         onDeviceConnected: mockSyncOnDeviceConnected,
         onDeviceDisconnected: mockSyncOnDeviceDisconnected,
-        onPasswordRequired: mockSyncOnPasswordRequired,
         onError: mockSyncOnError,
         onComplete: mockSyncOnComplete,
         onWaitingForPasscode: mockSyncOnWaitingForPasscode,
@@ -232,13 +225,6 @@ const mockAppleDriverStatus: AppleDriverStatus = {
   version: "12.0.0.0",
   serviceRunning: true,
   error: null,
-};
-
-const mockSyncResult: SyncResult = {
-  messages: [{ id: "msg1" }, { id: "msg2" }],
-  contacts: [{ id: "contact1" }],
-  conversations: [{ id: "conv1" }],
-  duration: 60,
 };
 
 const mockSyncStatusData: SyncStatus = {
@@ -658,56 +644,6 @@ describe("deviceService", () => {
       });
     });
 
-    describe("startBackupWithPassword", () => {
-      const passwordOptions = {
-        udid: "device-udid-123",
-        password: "backup-password",
-      };
-
-      it("should start encrypted backup on success", async () => {
-        mockBackupStartWithPassword.mockResolvedValue({
-          success: true,
-          backupPath: "/backups/encrypted/2024-01-01",
-        });
-
-        const result = await deviceService.startBackupWithPassword(passwordOptions);
-
-        expect(result.success).toBe(true);
-        expect(result.data?.backupPath).toBe("/backups/encrypted/2024-01-01");
-        expect(mockBackupStartWithPassword).toHaveBeenCalledWith(passwordOptions);
-      });
-
-      it("should return error when API returns failure", async () => {
-        mockBackupStartWithPassword.mockResolvedValue({
-          success: false,
-          error: "Invalid password",
-        });
-
-        const result = await deviceService.startBackupWithPassword(passwordOptions);
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Invalid password");
-      });
-
-      it("should catch and return error when API throws exception", async () => {
-        mockBackupStartWithPassword.mockRejectedValue(new Error("Encryption failed"));
-
-        const result = await deviceService.startBackupWithPassword(passwordOptions);
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Encryption failed");
-      });
-
-      it("should return error when backup API is not available", async () => {
-        removeApiDomain("backup");
-
-        const result = await deviceService.startBackupWithPassword(passwordOptions);
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Backup API not available");
-      });
-    });
-
     describe("cancelBackup", () => {
       it("should cancel backup successfully", async () => {
         mockBackupCancel.mockResolvedValue({ success: true });
@@ -905,63 +841,6 @@ describe("deviceService", () => {
         removeApiDomain("backup");
 
         const result = await deviceService.checkBackupEncryption("device-udid-123");
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Backup API not available");
-      });
-    });
-
-    describe("verifyBackupPassword", () => {
-      it("should verify password successfully", async () => {
-        mockBackupVerifyPassword.mockResolvedValue({
-          success: true,
-          valid: true,
-        });
-
-        const result = await deviceService.verifyBackupPassword("/backups/encrypted", "password");
-
-        expect(result.success).toBe(true);
-        expect(result.data?.valid).toBe(true);
-        expect(mockBackupVerifyPassword).toHaveBeenCalledWith("/backups/encrypted", "password");
-      });
-
-      it("should return valid false for incorrect password", async () => {
-        mockBackupVerifyPassword.mockResolvedValue({
-          success: true,
-          valid: false,
-        });
-
-        const result = await deviceService.verifyBackupPassword("/backups/encrypted", "wrong");
-
-        expect(result.success).toBe(true);
-        expect(result.data?.valid).toBe(false);
-      });
-
-      it("should return error when API returns failure", async () => {
-        mockBackupVerifyPassword.mockResolvedValue({
-          success: false,
-          error: "Backup not found",
-        });
-
-        const result = await deviceService.verifyBackupPassword("/invalid/path", "password");
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Backup not found");
-      });
-
-      it("should catch and return error when API throws exception", async () => {
-        mockBackupVerifyPassword.mockRejectedValue(new Error("Verify failed"));
-
-        const result = await deviceService.verifyBackupPassword("/backups/encrypted", "password");
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Verify failed");
-      });
-
-      it("should return error when backup API is not available", async () => {
-        removeApiDomain("backup");
-
-        const result = await deviceService.verifyBackupPassword("/backups/encrypted", "password");
 
         expect(result.success).toBe(false);
         expect(result.error).toBe("Backup API not available");
@@ -1300,85 +1179,11 @@ describe("deviceService", () => {
   // ============================================
 
   describe("Sync Methods", () => {
-    describe("startSync", () => {
-      const syncOptions = { udid: "device-udid-123" };
-
-      it("should start sync and return result on success", async () => {
-        mockSyncStart.mockResolvedValue({
-          success: true,
-          ...mockSyncResult,
-        });
-
-        const result = await deviceService.startSync(syncOptions);
-
-        expect(result.success).toBe(true);
-        expect(result.data).toEqual(mockSyncResult);
-        expect(mockSyncStart).toHaveBeenCalledWith(syncOptions);
-      });
-
-      it("should pass all options to API", async () => {
-        const fullOptions = {
-          udid: "device-udid-123",
-          password: "backup-password",
-          forceFullBackup: true,
-        };
-        mockSyncStart.mockResolvedValue({
-          success: true,
-          ...mockSyncResult,
-        });
-
-        await deviceService.startSync(fullOptions);
-
-        expect(mockSyncStart).toHaveBeenCalledWith(fullOptions);
-      });
-
-      it("should return error when API returns failure", async () => {
-        mockSyncStart.mockResolvedValue({
-          success: false,
-          error: "Device locked",
-        });
-
-        const result = await deviceService.startSync(syncOptions);
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Device locked");
-      });
-
-      it("should return 'Sync failed' when error is undefined", async () => {
-        mockSyncStart.mockResolvedValue({
-          success: false,
-        });
-
-        const result = await deviceService.startSync(syncOptions);
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Sync failed");
-      });
-
-      it("should catch and return error when API throws exception", async () => {
-        mockSyncStart.mockRejectedValue(new Error("Sync error"));
-
-        const result = await deviceService.startSync(syncOptions);
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Sync error");
-      });
-
-      it("should return error when sync API is not available", async () => {
-        removeApiDomain("sync");
-
-        const result = await deviceService.startSync(syncOptions);
-
-        expect(result.success).toBe(false);
-        expect(result.error).toBe("Sync API not available");
-      });
-    });
-
     describe("cancelSync", () => {
       it("should cancel sync successfully", async () => {
         mockSyncCancel.mockResolvedValue({ success: true });
 
-        const result = await deviceService.cancelSync();
+        const result = await deviceService.cancelSync("progress-cancel");
 
         expect(result.success).toBe(true);
       });
@@ -1386,7 +1191,7 @@ describe("deviceService", () => {
       it("should catch and return error when API throws exception", async () => {
         mockSyncCancel.mockRejectedValue(new Error("Cancel failed"));
 
-        const result = await deviceService.cancelSync();
+        const result = await deviceService.cancelSync("progress-cancel");
 
         expect(result.success).toBe(false);
         expect(result.error).toBe("Cancel failed");
@@ -1395,7 +1200,7 @@ describe("deviceService", () => {
       it("should return error when sync API is not available", async () => {
         removeApiDomain("sync");
 
-        const result = await deviceService.cancelSync();
+        const result = await deviceService.cancelSync("progress-cancel");
 
         expect(result.success).toBe(false);
         expect(result.error).toBe("Sync API not available");
@@ -1633,31 +1438,6 @@ describe("deviceService", () => {
         const callback = jest.fn();
 
         const unsubscribe = deviceService.onSyncDeviceDisconnected(callback);
-
-        expect(typeof unsubscribe).toBe("function");
-        unsubscribe();
-      });
-    });
-
-    describe("onPasswordRequired", () => {
-      it("should return unsubscribe function when API is available", () => {
-        const mockUnsubscribe = jest.fn();
-        mockSyncOnPasswordRequired.mockReturnValue(mockUnsubscribe);
-        const callback = jest.fn();
-
-        const unsubscribe = deviceService.onPasswordRequired(callback);
-
-        expect(mockSyncOnPasswordRequired).toHaveBeenCalledWith(callback);
-        expect(typeof unsubscribe).toBe("function");
-        unsubscribe();
-        expect(mockUnsubscribe).toHaveBeenCalled();
-      });
-
-      it("should return no-op function when sync API is not available", () => {
-        removeApiDomain("sync");
-        const callback = jest.fn();
-
-        const unsubscribe = deviceService.onPasswordRequired(callback);
 
         expect(typeof unsubscribe).toBe("function");
         unsubscribe();

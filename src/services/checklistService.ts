@@ -146,11 +146,27 @@ export const checklistService = {
     itemId: string,
     kind: ChecklistLinkKind,
     targetIds: string[],
+    includeOutsideDates?: boolean,
   ): Promise<ApiResult<AddChecklistLinkResult>> {
     try {
-      const result = await window.api.checklists.addLink({ itemId, kind, targetIds });
+      const result = await window.api.checklists.addLink(
+        includeOutsideDates ? { itemId, kind, targetIds, includeOutsideDates } : { itemId, kind, targetIds },
+      );
       if (result.success && result.result) {
         return { success: true, data: result.result };
+      }
+      return { success: false, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /** BACKLOG-3764: "Include it" for an existing group, from the submit pre-flight. */
+  async includeLinkOutsideDates(transactionId: string, linkId: string): Promise<ApiResult<boolean>> {
+    try {
+      const result = await window.api.checklists.includeLinkOutsideDates({ transactionId, linkId });
+      if (result.success) {
+        return { success: true, data: !!result.changed };
       }
       return { success: false, error: result.error };
     } catch (error) {

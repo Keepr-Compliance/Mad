@@ -3,6 +3,7 @@
  * Handles Microsoft OAuth login and Outlook mailbox connection flows
  */
 
+import { devToolsPreference } from "../bootstrap/appMenu";
 import { ipcMain, BrowserWindow, Event as ElectronEvent } from "electron";
 import os from "os";
 import crypto from "crypto";
@@ -20,6 +21,7 @@ import sessionService from "../services/sessionService";
 import { provisionLogin } from "../services/loginProvisioningService";
 import rateLimitService from "../services/rateLimitService";
 import auditService from "../services/auditService";
+import { recordEmailProvider } from "../services/emailProviderRecord";
 import logService from "../services/logService";
 import { importEnabledEmptyContactSources } from "../services/postConnectContactImport";
 import { setSyncUserId } from "./syncHandlers";
@@ -118,6 +120,7 @@ export async function handleMicrosoftLogin(
       height: 700,
       show: true,
       webPreferences: {
+        devTools: devToolsPreference(), // BACKLOG-3830
         nodeIntegration: false,
         contextIsolation: true,
         // webSecurity defaults to true - do not disable
@@ -640,6 +643,10 @@ export async function handleMicrosoftConnectMailbox(
           success: true,
         });
 
+        // BACKLOG-3888: remember that this account chose this mailbox provider
+        // (cloud preferences.emailProviders). Never blocks or fails the connect.
+        void recordEmailProvider(validatedUserId, "microsoft");
+
         // BACKLOG-3394: bring the app forward OURSELVES — see the matching
         // comment in googleAuthHandlers.ts, including why the focus ordering is
         // an UNTRACED LEAD rather than a known fix for BACKLOG-1709's lost
@@ -755,6 +762,7 @@ export async function handleMicrosoftConnectMailboxPending(
       height: 700,
       show: true,
       webPreferences: {
+        devTools: devToolsPreference(), // BACKLOG-3830
         nodeIntegration: false,
         contextIsolation: true,
         // webSecurity defaults to true - do not disable

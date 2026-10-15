@@ -115,6 +115,27 @@ export async function validateSession(
 /**
  * Delete a session (logout)
  */
+/** BACKLOG-3833: what the idle check needs about a session row. */
+export interface SessionTimes {
+  user_id: string;
+  created_at: string;
+  last_accessed_at: string;
+  expires_at: string;
+}
+
+/**
+ * BACKLOG-3833: read-only session lookup for the once-a-minute idle check.
+ * Unlike validateSession it never writes (no last_accessed_at UPDATE, no
+ * delete of an expired row) — the caller decides what an expired row means.
+ */
+export function getSessionTimes(sessionToken: string): SessionTimes | null {
+  const row = dbGet<SessionTimes>(
+    sql`SELECT user_id, created_at, last_accessed_at, expires_at FROM sessions WHERE session_token = ?`,
+    [sessionToken],
+  );
+  return row ?? null;
+}
+
 export async function deleteSession(sessionToken: string): Promise<void> {
   const statement = sql`DELETE FROM sessions WHERE session_token = ?`;
   dbRun(statement, [sessionToken]);

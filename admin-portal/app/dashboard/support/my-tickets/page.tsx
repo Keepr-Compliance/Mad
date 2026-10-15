@@ -152,7 +152,7 @@ export default function MyTicketsPage() {
       </div>
 
       {/* Filters + Column Selector */}
-      <div className="mb-4 flex items-start justify-between gap-4">
+      <div className="mb-4 flex items-start justify-between gap-4 max-md:flex-col max-md:gap-3">
         <TicketFilters
           status={statusFilter}
           priority={priorityFilter}
@@ -161,7 +161,7 @@ export default function MyTicketsPage() {
           onPriorityChange={handlePriorityChange}
           onCategoryChange={handleCategoryChange}
         />
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 max-md:flex-wrap">
           <SavedViewSelector
             currentFilters={currentFilters}
             onLoadView={handleLoadView}

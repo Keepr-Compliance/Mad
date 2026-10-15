@@ -12,6 +12,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { formatUserDisplayName } from '@/lib/utils/userDisplay';
 import type { NameMap } from './history';
+import type { Identity } from './dealList';
 
 interface UserNameRow {
   id: string;
@@ -48,4 +49,33 @@ export async function resolveUserNames(
     names.set(row.id, formatUserDisplayName(row, row.email));
   }
   return names;
+}
+
+/**
+ * Resolve user ids to a name AND email — BACKLOG-3904 (the broker list's
+ * search matches either). Same read and same null-on-failure contract as
+ * resolveUserNames; the caller passes only ids already in its own scope.
+ */
+export async function resolveUserIdentities(
+  client: SupabaseClient,
+  ids: Iterable<string | null | undefined>
+): Promise<Map<string, Identity> | null> {
+  const unique = Array.from(new Set(Array.from(ids).filter((id): id is string => !!id)));
+  if (unique.length === 0) return new Map();
+
+  const { data, error } = await client
+    .from('users')
+    .select('id, display_name, first_name, last_name, email')
+    .in('id', unique);
+
+  if (error || !Array.isArray(data)) {
+    console.error('[submissions] submitter identities unavailable:', error?.message);
+    return null;
+  }
+
+  const identities = new Map<string, Identity>();
+  for (const row of data as UserNameRow[]) {
+    identities.set(row.id, { name: formatUserDisplayName(row, row.email), email: row.email });
+  }
+  return identities;
 }

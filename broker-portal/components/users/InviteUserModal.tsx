@@ -172,6 +172,7 @@ export default function InviteUserModal({
           <div>
             <Label htmlFor="invite-email">Email Address</Label>
             <Input
+              className="!text-base md:!text-sm"
               type="email"
               id="invite-email"
               value={email}
@@ -186,6 +187,7 @@ export default function InviteUserModal({
           <div>
             <Label htmlFor="invite-role">Role</Label>
             <Select
+              className="!text-base md:!text-sm"
               id="invite-role"
               value={role}
               onChange={(e) => setRole(e.target.value as InvitableRole)}

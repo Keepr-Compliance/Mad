@@ -5,6 +5,8 @@
 
 import { ipcMain, BrowserWindow } from "electron";
 import { MESSAGE_IMPORT_SUMMARY_SQL } from "../services/db/messageImportStatsSql";
+import type { MessageSourceStats } from "../services/db/messageSourceStatsDb";
+import { queryContacts } from "../workers/contactWorkerPool";
 import type { IpcMainInvokeEvent } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import logService from "../services/logService";
@@ -39,8 +41,12 @@ import type {
 } from "../types/ipc/window-api-messages";
 // BACKLOG-2748: ONE spelling of the cancel channel, shared with the preload bridge.
 import { MESSAGES_IMPORT_CANCEL_CHANNEL } from "../types/ipc/messageChannels";
+import { getTextAttachmentData } from "../services/textAttachmentDataService";
+import type { MessageAttachmentMeta, TextAttachmentDataResult } from "../types/ipc/common";
 
 import { sendToMainWindow } from "../windowRegistry";
+import { handleBusy } from "../utils/busyIpc";
+import { recordMacImportRun } from "../services/macImportMarker";
 
 /**
  * Attachment info with base64 data for IPC transfer (TASK-1012)
@@ -146,7 +152,7 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
    * @param forceReimport - If true, delete existing messages first
    * @returns Import result with counts and status
    */
-  ipcMain.handle(
+  handleBusy(
     "messages:import-macos",
     async (
       _event: IpcMainInvokeEvent,
@@ -250,6 +256,8 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
         );
 
         if (result.success) {
+          // BACKLOG-3892 W1: when this completed run started = Mac's "last synced".
+          recordMacImportRun(validUserId, importStartTime ?? Date.now());
           Sentry.addBreadcrumb({
             category: 'sync',
             message: 'macOS Messages import completed',
@@ -518,16 +526,18 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
     ): Promise<MessageAttachmentInfo[]> => {
       try {
         const attachments = macOSMessagesImportService.getAttachmentsByMessageId(messageId);
-        return attachments.map((att) => ({
-          id: att.id,
-          message_id: att.message_id,
-          filename: att.filename,
-          mime_type: att.mime_type,
-          file_size_bytes: att.file_size_bytes,
-          data: att.storage_path
-            ? macOSMessagesImportService.getAttachmentAsBase64(att.storage_path)
-            : null,
-        }));
+        return await Promise.all(
+          attachments.map(async (att) => ({
+            id: att.id,
+            message_id: att.message_id,
+            filename: att.filename,
+            mime_type: att.mime_type,
+            file_size_bytes: att.file_size_bytes,
+            data: att.storage_path
+              ? await macOSMessagesImportService.getAttachmentAsBase64(att.storage_path)
+              : null,
+          })),
+        );
       } catch (error) {
         logService.error(
           `Failed to get attachments: ${error instanceof Error ? error.message : "Unknown"}`,
@@ -550,18 +560,23 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
    * Get attachments for multiple messages at once (TASK-1012)
    * IPC: messages:get-attachments-batch
    *
+   * BACKLOG-3763: METADATA ONLY. This used to read every file of the
+   * conversation on the main thread and return all of them as base64 in one
+   * reply. The conversation view now asks for each image's bytes when it
+   * scrolls into view, through `messages:get-attachment-data`.
+   *
    * @param messageIds - Array of message IDs
-   * @returns Record of message ID to attachments
+   * @returns Record of message ID to attachment metadata
    */
   ipcMain.handle(
     "messages:get-attachments-batch",
     async (
       _event: IpcMainInvokeEvent,
       messageIds: string[]
-    ): Promise<Record<string, MessageAttachmentInfo[]>> => {
+    ): Promise<Record<string, MessageAttachmentMeta[]>> => {
       try {
         const attachmentsMap = macOSMessagesImportService.getAttachmentsByMessageIds(messageIds);
-        const result: Record<string, MessageAttachmentInfo[]> = {};
+        const result: Record<string, MessageAttachmentMeta[]> = {};
 
         for (const [msgId, attachments] of attachmentsMap) {
           result[msgId] = attachments.map((att) => ({
@@ -570,9 +585,6 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
             filename: att.filename,
             mime_type: att.mime_type,
             file_size_bytes: att.file_size_bytes,
-            data: att.storage_path
-              ? macOSMessagesImportService.getAttachmentAsBase64(att.storage_path)
-              : null,
           }));
         }
 
@@ -591,6 +603,36 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
           },
         });
         return {};
+      }
+    }
+  );
+
+  /**
+   * BACKLOG-3763: one text attachment's bytes, by attachment id.
+   * IPC: messages:get-attachment-data
+   *
+   * Takes an id, never a path. Served only for an attachment of a text owned
+   * by the signed-in user; see textAttachmentDataService.
+   */
+  ipcMain.handle(
+    "messages:get-attachment-data",
+    async (
+      _event: IpcMainInvokeEvent,
+      attachmentId: unknown
+    ): Promise<TextAttachmentDataResult> => {
+      try {
+        return await getTextAttachmentData(attachmentId);
+      } catch (error) {
+        logService.error(
+          `Failed to get attachment data: ${error instanceof Error ? error.message : "Unknown"}`,
+          "MessageImportHandlers"
+        );
+        Sentry.captureException(error, {
+          tags: { sync_type: "message_import" },
+          level: "warning",
+          extra: { handler: "messages:get-attachment-data" },
+        });
+        return { success: false, reason: "not_found" };
       }
     }
   );
@@ -683,6 +725,39 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
         messageCount: result?.count ?? 0,
         lastImportAt: result?.last_import_at ?? null,
       };
+    }, { module: "MessageImportHandlers" }),
+  );
+
+  /**
+   * BACKLOG-3156 stage G: Settings > Messages "Stored on this computer" — texts,
+   * chats and the oldest text for macOS Messages, iPhone and Google Messages.
+   * Runs on the contact query worker, never on main: ~250 ms at 100k texts,
+   * measured (messageSourceStatsDb-3156 test). No main-thread fallback — when
+   * the worker is unavailable the panel shows dashes.
+   * IPC: messages:get-source-stats
+   */
+  ipcMain.handle(
+    "messages:get-source-stats",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      userId: string
+    ): Promise<{ success: boolean; stats?: MessageSourceStats; error?: string }> => {
+      if (typeof userId !== "string" || userId.length === 0) {
+        return { success: false, error: "userId required" };
+      }
+      if (!databaseService.isInitialized()) {
+        return { success: false, error: "Database not ready" };
+      }
+      try {
+        const rows = await queryContacts("messageSourceStats", userId, 30_000);
+        const stats = rows[0] as MessageSourceStats | undefined;
+        return stats ? { success: true, stats } : { success: false, error: "No result" };
+      } catch (error) {
+        logService.warn("[BACKLOG-3156] message source stats read failed", "MessageImportHandlers", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return { success: false, error: "Could not read stored counts" };
+      }
     }, { module: "MessageImportHandlers" }),
   );
 

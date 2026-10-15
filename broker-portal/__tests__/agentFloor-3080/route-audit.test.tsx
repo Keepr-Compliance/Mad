@@ -127,6 +127,13 @@ jest.mock('@sentry/nextjs', () => ({
   addBreadcrumb: jest.fn(),
 }));
 jest.mock('next/cache', () => ({ revalidatePath: jest.fn() }));
+// BACKLOG-3847: the billing page and actions read Agent prices from Stripe; no network.
+jest.mock('stripe', () => ({
+  __esModule: true,
+  default: jest.fn().mockImplementation(() => ({
+    prices: { list: jest.fn(async () => ({ object: 'list', data: [], has_more: false, url: '/v1/prices' })) },
+  })),
+}));
 // Presentation only: these submission-detail components pull browser-only
 // modules at import time. The gate under test runs before any of them.
 jest.mock('@/components/submission/MessageList', () => ({ MessageList: () => null }));
@@ -431,6 +438,14 @@ const PLAN_GATED_PAGES: Record<string, PageEntry> = {
     refused: { notFound: true },
   },
 };
+/** BACKLOG-3844: the page refuses everyone but a personal-org owner and a full-portal user. */
+const BILLING_PAGES: Record<string, PageEntry> = {
+  'app/dashboard/billing/page.tsx': {
+    invoke: async () => (await import('@/app/dashboard/billing/page')).default({}),
+    refused: { notFound: true },
+  },
+};
+
 const PLAN_GATED_ADMITTED = {
   'brokerage agent': [brokerageMembership('agent')],
   '[brokerage agent, personal-org owner]': [brokerageMembership('agent'), personalMembership()],
@@ -632,7 +647,7 @@ function refusalFor(name: string, persona: Persona): Outcome {
  * before the role check).
  */
 const READS_BEFORE_REFUSAL: Record<string, string[]> = {
-  'lib/actions/inviteUser.ts#inviteUser': ['organization_members', 'users'],
+  'lib/actions/inviteUser.ts#inviteUser': ['licenses', 'organization_members', 'users'],
 };
 
 /** Open to every signed-in person: their own devices, and the desktop sign-in flow. */
@@ -644,6 +659,26 @@ const FLOOR_ACTIONS = [
   // BACKLOG-3543: verifies the access token it stores and binds the claim to its owner.
   'lib/actions/createTokenClaim.ts#createTokenClaim',
 ];
+
+/**
+ * BACKLOG-3847: the Agent plan actions. Their own gate (lib/actions/agentPlan.ts):
+ * flag, then a signed-in personal-org OWNER, then billingCapabilities. Every
+ * brokerage persona is refused before any billing table is read.
+ */
+const agentPlan = () => import('@/lib/actions/agentPlan');
+const billingCard = () => import('@/lib/actions/billingCard');
+const BILLING_ACTIONS: Record<string, ActionEntry> = {
+  'lib/actions/agentPlan.ts#startAgentCheckout': act(agentPlan, 'startAgentCheckout', 'month'),
+  'lib/actions/agentPlan.ts#endAgentPlanAtPeriodEnd': act(agentPlan, 'endAgentPlanAtPeriodEnd'),
+  'lib/actions/agentPlan.ts#keepAgentPlan': act(agentPlan, 'keepAgentPlan'),
+  'lib/actions/agentPlan.ts#confirmAgentCheckout': act(agentPlan, 'confirmAgentCheckout', 'cs_test_route_audit'),
+  // BACKLOG-3848: same gate (lib/billing/personalActionContext.ts).
+  'lib/actions/agentPlan.ts#endAgentPlanNow': act(agentPlan, 'endAgentPlanNow'),
+  'lib/actions/billingCard.ts#startCardUpdate': act(billingCard, 'startCardUpdate'),
+  'lib/actions/billingCard.ts#confirmCardUpdate': act(billingCard, 'confirmCardUpdate', 'cs_test_route_audit'),
+  'lib/actions/billingCard.ts#updateBillingContact': act(billingCard, 'updateBillingContact', { name: 'Audit', email: 'audit@example.invalid' }),
+};
+const BILLING_ACTION_REFUSED: Outcome = { returned: { error: 'Billing is not available for this account.' } };
 
 /** Helpers exported from a 'use server' file; the org-scoped callers above decide. */
 const HELPER_ACTIONS = [
@@ -683,6 +718,9 @@ const KNOWN_ROUTE_HANDLERS = [
   'app/api/email/ticket-notification/route.ts',
   'app/api/email/ticket-resolved/route.ts',
   'app/api/impersonation/end/route.ts',
+  // BACKLOG-3849: billing outbox drain, called by a database cron job with a
+  // secret header; no user session, no request-supplied ids.
+  'app/api/internal/billing/drain/route.ts',
   'app/api/invite/validate/route.ts',
   'app/api/payments/charge/route.ts',
   'app/api/payments/checkout-session/route.ts',
@@ -843,7 +881,7 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(16);
+    expect(pages.length).toBe(17);
   });
 
   it('finds route handlers, keyed POSIX on any OS (R8)', () => {
@@ -862,7 +900,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(21);
+    expect(handlers.length).toBe(22);
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {
@@ -882,7 +920,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(36); // BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview
+    expect(actions.length).toBe(44); // BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 
@@ -893,6 +931,7 @@ describe('set completeness', () => {
       ...FLOOR_PAGES,
       ...Object.keys(OWN_GATE_PAGES),
       ...Object.keys(PLAN_GATED_PAGES),
+      ...Object.keys(BILLING_PAGES),
     ];
     expect(new Set(classified).size).toBe(classified.length);
     expect(discoverDashboardPages()).toEqual([...classified].sort());
@@ -905,6 +944,7 @@ describe('set completeness', () => {
       ...Object.keys(REVIEWER_ACTIONS),
       ...FLOOR_ACTIONS,
       ...HELPER_ACTIONS,
+      ...Object.keys(BILLING_ACTIONS),
     ];
     expect(new Set(classified).size).toBe(classified.length);
     expect(Object.keys(REFUSALS).sort()).toEqual(Object.keys(REFUSED_ACTIONS).sort());
@@ -954,7 +994,9 @@ describe('refused pages', () => {
   it.each(cases)('%s refuses the %s before reading anything else', async (_page, persona, entry) => {
     given(PERSONAS[persona]);
     expect(await run(entry.invoke)).toEqual(entry.refused);
-    expect(tablesRead()).toEqual(['organization_members']);
+    // BACKLOG-3878: the shared portal access read also reads the licence; the SCIM
+    // page keeps its own membership-only gate.
+    expect(tablesRead().filter((t) => t !== 'licenses')).toEqual(['organization_members']);
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
@@ -1045,7 +1087,7 @@ describe('own-gate server actions (D4)', () => {
     expect(await run(OWN_GATE_ACTIONS[name])).toEqual(AGENT_ACTION_OUTCOMES[name]);
     expect(mockEmulator.state.writes).toEqual([]);
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_checklist_template');
-    for (const table of tablesRead()) expect(['organization_members', 'checklist_templates']).toContain(table);
+    for (const table of tablesRead()) expect(['licenses', 'organization_members', 'checklist_templates']).toContain(table);
   });
 
   it.each(['lib/actions/checklists.ts#archiveChecklistTemplate', 'lib/actions/checklists.ts#restoreChecklistTemplate'])(
@@ -1103,7 +1145,7 @@ describe('refused server actions', () => {
     given(PERSONAS[persona]);
     expect(await run(REFUSED_ACTIONS[name])).toEqual(refusalFor(name, persona));
     expect(mockEmulator.state.writes).toEqual([]);
-    const allowed = READS_BEFORE_REFUSAL[name] ?? ['organization_members'];
+    const allowed = READS_BEFORE_REFUSAL[name] ?? ['licenses', 'organization_members'];
     for (const table of tablesRead()) expect(allowed).toContain(table);
   });
 
@@ -1128,7 +1170,7 @@ describe('plan-gated pages: My Transactions (BACKLOG-3080, R7)', () => {
   it.each(refusedCases)('%s refuses the %s before reading anything else', async (_page, persona, entry) => {
     given(PLAN_GATED_REFUSED[persona]);
     expect(await run(entry.invoke)).toEqual(entry.refused);
-    expect(tablesRead()).toEqual(['organization_members']);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
@@ -1150,7 +1192,94 @@ describe('plan-gated pages: My Transactions (BACKLOG-3080, R7)', () => {
     async (page) => {
       given(PLAN_GATED_ADMITTED['brokerage agent']);
       expect(await run(REFUSED_PAGES[page].invoke)).toEqual({ redirect: '/dashboard' });
-      expect(tablesRead()).toEqual(['organization_members']);
+      expect(tablesRead()).toEqual(['licenses', 'organization_members']);
     }
   );
+});
+
+/**
+ * BACKLOG-3844 (SR R1): the billing page is its own gate. Middleware is not in
+ * this path (pages are invoked directly), and a request carrying any
+ * impersonation cookie skips middleware's membership check in production too,
+ * so the refusals below are the page's own. The flag is forced ON so a refusal
+ * can only be the access rule. A failed membership read and a real
+ * impersonation session are covered in __tests__/app/dashboard/billing/.
+ */
+describe('billing page (BACKLOG-3844)', () => {
+  const OLD = process.env.BILLING_ENABLED;
+  const OLD_KEY = process.env.STRIPE_SECRET_KEY;
+  beforeAll(() => {
+    process.env.BILLING_ENABLED = 'true';
+    process.env.STRIPE_SECRET_KEY = 'sk_test_route_audit';
+  });
+  afterAll(() => {
+    if (OLD === undefined) delete process.env.BILLING_ENABLED;
+    else process.env.BILLING_ENABLED = OLD;
+    if (OLD_KEY === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = OLD_KEY;
+  });
+  const page = BILLING_PAGES['app/dashboard/billing/page.tsx'];
+
+  it.each([
+    ['brokerage agent', PERSONAS['brokerage agent']],
+    ['[agent, broker] (two brokerage rows)', PERSONAS['[agent, broker] (two brokerage rows)']],
+    ['[brokerage agent, personal-org owner]', [brokerageMembership('agent'), personalMembership()]],
+  ] as const)('refuses the %s before reading anything else, and writes nothing', async (_n, rows) => {
+    given(rows);
+    expect(await run(page.invoke)).toEqual(page.refused);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+
+  it.each([
+    ['personal-org owner', PERSONAS['personal-org owner']],
+    ['brokerage admin', ADMIN],
+  ] as const)('admits the %s, and writes nothing', async (_n, rows) => {
+    given(rows);
+    expect(await run(page.invoke)).toEqual({ element: 'BillingPage' });
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+});
+
+/**
+ * BACKLOG-3847: the Agent plan actions refuse every brokerage persona (and a
+ * brokerage admin, whose billing page is the organization's) before reading
+ * any billing table, and write nothing. The personal-org owner passes the gate.
+ */
+describe('Agent plan actions (BACKLOG-3847)', () => {
+  const OLD = process.env.BILLING_ENABLED;
+  const OLD_KEY = process.env.STRIPE_SECRET_KEY;
+  beforeAll(() => {
+    process.env.BILLING_ENABLED = 'true';
+    process.env.STRIPE_SECRET_KEY = 'sk_test_route_audit';
+  });
+  afterAll(() => {
+    if (OLD === undefined) delete process.env.BILLING_ENABLED;
+    else process.env.BILLING_ENABLED = OLD;
+    if (OLD_KEY === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = OLD_KEY;
+  });
+  const refusedPersonas = {
+    'brokerage agent': PERSONAS['brokerage agent'],
+    '[agent, broker] (two brokerage rows)': PERSONAS['[agent, broker] (two brokerage rows)'],
+    '[brokerage agent, personal-org owner]': [brokerageMembership('agent'), personalMembership()],
+    'brokerage admin': ADMIN,
+  } as const;
+  const cases = Object.keys(BILLING_ACTIONS).flatMap((name) =>
+    (Object.keys(refusedPersonas) as (keyof typeof refusedPersonas)[]).map((persona) => [name, persona] as const)
+  );
+
+  it.each(cases)('%s refuses the %s before reading anything else', async (name, persona) => {
+    given(refusedPersonas[persona]);
+    expect(await run(BILLING_ACTIONS[name])).toEqual(BILLING_ACTION_REFUSED);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+
+  it.each(Object.keys(BILLING_ACTIONS))('%s admits the personal-org owner past the gate', async (name) => {
+    given(PERSONAS['personal-org owner']);
+    const outcome = await run(BILLING_ACTIONS[name]);
+    expect(outcome).not.toEqual(BILLING_ACTION_REFUSED);
+    expect(outcome).not.toHaveProperty('threw');
+  });
 });

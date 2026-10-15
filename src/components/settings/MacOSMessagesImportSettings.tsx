@@ -12,6 +12,8 @@
  * @module settings/MacOSMessagesImportSettings
  */
 
+import { ToggleSwitch } from "./ToggleSwitch";
+import { MessagesStoredBlock } from "./MessagesStoredBlock";
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { ResponsiveModal } from "../common/ResponsiveModal";
 import { ImportInfoPopover } from "./ImportInfoPopover";
@@ -35,7 +37,8 @@ import {
   type ImportPhaseDisplay,
 } from "../../utils/importPhaseDisplay";
 import { FdaHelpSheet } from "../permissions/FdaHelpSheet";
-import { LookbackMonthsSelect, forceWindowLine, lastMonthsPhrase, lookbackOptionLabel } from "./LookbackMonthsSelect";
+import { forceWindowLine, lastMonthsPhrase, lookbackOptionLabel } from "./LookbackMonthsSelect";
+import { useTextsLookback } from "./textsLookback";
 import { usePlatform } from "../../contexts/PlatformContext";
 import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
 import { settingsService, systemService } from '../../services';
@@ -49,9 +52,7 @@ import { parseLocalCalendarDay } from '../../utils/dateRangeUtils';
 // This panel's preference KEY is unchanged: `messageImport.filters`, which is
 // what the main process imports with.
 import {
-  DEFAULT_LOOKBACK_MONTHS,
   DEFAULT_MAX_MESSAGES,
-  resolveStoredLookbackMonths,
   resolveStoredMaxMessages,
 } from './messageImportPreferences';
 
@@ -137,6 +138,12 @@ interface MacOSMessagesImportSettingsProps {
    * active import source (e.g. "…set to iPhone — switch to macOS above…").
    */
   disabledReason?: string;
+  /**
+   * BACKLOG-3892 (founder QA 2026-10-12): the shared "Import messages from"
+   * picker, rendered as a row of Import Preferences directly under "Maximum
+   * messages". Settings supplies it only while this panel is the live source.
+   */
+  lookbackPicker?: React.ReactNode;
 }
 
 /**
@@ -177,6 +184,7 @@ export function MacOSMessagesImportSettings({
   userId,
   enabled = true,
   disabledReason,
+  lookbackPicker,
 }: MacOSMessagesImportSettingsProps) {
   const { isMacOS } = usePlatform();
   const { queue, requestSync, markCancelRequested, getQueueItem } = useSyncOrchestrator();
@@ -271,10 +279,6 @@ export function MacOSMessagesImportSettings({
      */
     coalesced?: boolean;
   } | null>(null);
-  const [importStatus, setImportStatus] = useState<{
-    messageCount?: number;
-    lastImportAt?: string | null;
-  } | null>(null);
 
   // BACKLOG-2748: the cancel has been sent and the import has not stopped yet.
   // The main process honours cancellation at the next batch/attachment
@@ -290,9 +294,12 @@ export function MacOSMessagesImportSettings({
   const cancelRequested = messagesItem?.cancelRequested === true;
 
   // TASK-1952: Import filter state
-  const [lookbackMonths, setLookbackMonths] = useState<number | null>(
-    DEFAULT_LOOKBACK_MONTHS
-  );
+  // BACKLOG-3892 S3: the lookback is the SHARED "How far back to import texts"
+  // value (TextsLookbackSettings, under the source selection). This panel no
+  // longer holds its own copy: a local copy is what left the estimate and the
+  // window label describing the old window after the shared picker changed.
+  const textsLookback = useTextsLookback(userId);
+  const lookbackMonths = textsLookback.months;
   const [maxMessages, setMaxMessages] = useState<number | null>(
     DEFAULT_MAX_MESSAGES
   );
@@ -491,7 +498,8 @@ export function MacOSMessagesImportSettings({
    */
   const [prefsSettled, setPrefsSettled] = useState(false);
   const [windowSettled, setWindowSettled] = useState(false);
-  const estimateInputsReady = prefsSettled && windowSettled;
+  // BACKLOG-3892 S3: the shared lookback is a third async input.
+  const estimateInputsReady = prefsSettled && windowSettled && textsLookback.settled;
 
   // BACKLOG-2743: "Import without attachments" — the escape hatch that makes a
   // refusal actionable. Message text is a small fraction of attachment size, so
@@ -542,7 +550,6 @@ export function MacOSMessagesImportSettings({
   // Load import status and filter preferences on mount
   useEffect(() => {
     if (!isMacOS || !userId) return;
-    loadImportStatus();
     loadFilterPreferences();
     loadEffectiveWindow();
   }, [isMacOS, userId]);
@@ -836,20 +843,6 @@ export function MacOSMessagesImportSettings({
     setRestartUnavailable(suppressed);
   }, []);
 
-  const loadImportStatus = async () => {
-    try {
-      const result = await window.api.messages.getImportStatus(userId);
-      if (result.success) {
-        setImportStatus({
-          messageCount: result.messageCount,
-          lastImportAt: result.lastImportAt,
-        });
-      }
-    } catch (error) {
-      logger.error("Failed to load import status:", error);
-    }
-  };
-
   // BACKLOG-2286: Load the effective (audit-aware) import window for the label.
   // Read-only; failures leave the label on the plain lookback-preference copy.
   const loadEffectiveWindow = async () => {
@@ -894,7 +887,7 @@ export function MacOSMessagesImportSettings({
           // the message cap writes `{ maxMessages: N }` and the preferences
           // deep-merge leaves `lookbackMonths` absent. Only an explicit `null`
           // (what this dropdown writes for "All time") means unbounded.
-          setLookbackMonths(resolveStoredLookbackMonths(messageImport.filters));
+          // BACKLOG-3892 S3: the lookback itself is read by useTextsLookback.
           // BACKLOG-2749: an ABSENT key is "no preference", not "Unlimited" —
           // the same distinction BACKLOG-2561 drew for the lookback and
           // BACKLOG-2733 drew inside the resolver. `?? null` showed
@@ -937,39 +930,42 @@ export function MacOSMessagesImportSettings({
    * it even with the `catch` removed. Both are handled here; testing only the
    * throw would leave the reachable one open.
    */
-  const handleLookbackChange = async (value: string): Promise<boolean> => {
-    const months = value === "all" ? null : Number(value);
-    const previous = lookbackMonths;
-    setLookbackMonths(months);
+  const handleLookbackChange = (value: string): Promise<boolean> =>
+    // BACKLOG-3892 S3: through the shared value, so the shared picker shows what
+    // the dialog saved. It saves, reverts on failure, and reports whether the
+    // save landed; the effect below refreshes the window label.
+    textsLookback.change(value);
+
+  /**
+   * BACKLOG-3892 S3: the lookback can now change from OUTSIDE this panel (the
+   * shared picker). Whatever changed it, the last result no longer describes
+   * the window and the effective-window label must be re-read (BACKLOG-2286:
+   * the pref is a floor the audit period can widen past). The first settled
+   * value is the stored one, already covered by the mount load.
+   */
+  const seenLookbackRef = useRef<{ months: number | null } | null>(null);
+  useEffect(() => {
+    if (!isMacOS || !textsLookback.settled) return;
+    if (seenLookbackRef.current === null) {
+      seenLookbackRef.current = { months: lookbackMonths };
+      return;
+    }
+    if (seenLookbackRef.current.months === lookbackMonths) return;
+    seenLookbackRef.current = { months: lookbackMonths };
     setLastResult(null);
+  }, [isMacOS, textsLookback.settled, lookbackMonths]);
 
-    let saved = false;
-    try {
-      const result = await settingsService.updatePreferences(userId, {
-        messageImport: {
-          filters: {
-            lookbackMonths: months,
-          },
-        },
-      });
-      saved = result?.success !== false;
-    } catch {
-      saved = false;
-    }
-
-    if (!saved) {
-      // The setting did not save, so the panel must not display it as though it
-      // had: a dropdown reading "Last 12 months" over a stored "All time" is
-      // the same lie in a smaller font, and the estimate would then describe a
-      // window no run would use.
-      setLookbackMonths(previous);
-    }
-
-    // BACKLOG-2286: Refresh the effective window (the pref is a floor the audit
-    // period can widen past) after the save lands so the label stays truthful.
+  // The effective window is read from the STORE (main), so it can only be
+  // re-read once the save has landed — reading on the optimistic value change
+  // beats the write and keeps the old label. One read per landed save.
+  const seenSaveCountRef = useRef(textsLookback.saveCount);
+  useEffect(() => {
+    if (seenSaveCountRef.current === textsLookback.saveCount) return;
+    seenSaveCountRef.current = textsLookback.saveCount;
+    if (!isMacOS) return;
     loadEffectiveWindow();
-    return saved;
-  };
+    // loadEffectiveWindow is a plain per-render function; re-run on the save only.
+  }, [isMacOS, textsLookback.saveCount]);
 
   // TASK-1952: Save max messages filter
   const handleMaxMessagesChange = async (value: string) => {
@@ -1173,24 +1169,6 @@ export function MacOSMessagesImportSettings({
     const gb = bytes / 1e9;
     if (gb < 0.1) return `${Math.max(1, Math.round(bytes / 1e6))} MB`;
     return `${gb.toFixed(1)} GB`;
-  };
-
-  // Format the last import time for display
-  const formatLastImport = (lastImportAt: string | null | undefined): string => {
-    if (!lastImportAt) return "Never imported";
-
-    const importDate = new Date(lastImportAt);
-    const now = new Date();
-    const diffMs = now.getTime() - importDate.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMins < 1) return "Just now";
-    if (diffMins < 60) return `${diffMins} minute${diffMins > 1 ? "s" : ""} ago`;
-    if (diffHours < 24)
-      return `${diffHours} hour${diffHours > 1 ? "s" : ""} ago`;
-    return `${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
   };
 
   // BACKLOG-2286: Format the effective-window cutoff as a local calendar day
@@ -1645,7 +1623,6 @@ export function MacOSMessagesImportSettings({
       return;
     }
     if (messagesItem?.status === 'complete') {
-      loadImportStatus();
       loadEffectiveWindow();
       // BACKLOG-2329: report the ACTUAL imported count carried by the queue item
       // (previously hard-coded to 0). Fall back to 0 only when the count is
@@ -1830,7 +1807,7 @@ export function MacOSMessagesImportSettings({
 
           No <h1>-<h6> in here on purpose — `settingsBlockShape-3156` reds on
           any heading a block does not declare, and this notice declares none. */}
-      {isMacOS && enabled && fdaStatus === "denied" && (
+      {enabled && fdaStatus === "denied" && (
         <div
           data-testid="macos-fda-denied-notice"
           className="mb-3 p-3 rounded text-xs bg-amber-50 text-amber-800 border border-amber-200"
@@ -1900,7 +1877,7 @@ export function MacOSMessagesImportSettings({
           same class of notice. No <h1>-<h6> in here on purpose —
           `settingsBlockShape-3156` reds on any heading a block does not
           declare, and this notice declares none. */}
-      {isMacOS && enabled && fdaStatus === "absent" && (
+      {enabled && fdaStatus === "absent" && (
         <div
           data-testid="macos-messages-absent-notice"
           className="mb-3 p-3 rounded text-xs bg-amber-50 text-amber-800 border border-amber-200"
@@ -1924,7 +1901,7 @@ export function MacOSMessagesImportSettings({
           re-check. Settings is somewhere the user is in the middle of
           something else; an app that quit itself out from under them there
           would be a worse bug than the one this fixes. */}
-      {isMacOS && enabled && fdaStatus === "granted" && fdaWasDenied && (
+      {enabled && fdaStatus === "granted" && fdaWasDenied && (
         <div
           data-testid="macos-fda-restart-notice"
           className="mb-3 p-3 rounded text-xs bg-blue-50 text-blue-800 border border-blue-200"
@@ -1957,15 +1934,6 @@ export function MacOSMessagesImportSettings({
       {/* BACKLOG-2335: Mute the controls region while inactive (the note above
           stays full-strength so the reason is always legible). */}
       <div className={enabled ? "" : "opacity-60"}>
-      {/* Import status display */}
-      {importStatus && (
-        <div className="mt-1 text-xs text-gray-500">
-          Last imported: {formatLastImport(importStatus.lastImportAt)}
-          {importStatus.messageCount !== undefined && (
-            <> | {importStatus.messageCount.toLocaleString()} messages</>
-          )}
-        </div>
-      )}
       </div>
       </div>{/* /panel identity group */}
 
@@ -1999,16 +1967,9 @@ export function MacOSMessagesImportSettings({
         Import messages from the macOS Messages app to enable linking with your
         transactions.
       </p>
-        {/* Date Range Filter */}
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-gray-600">Import messages from</span>
-          <LookbackMonthsSelect
-            value={lookbackMonths}
-            onChange={(v) => handleLookbackChange(v)}
-            disabled={controlsDisabled}
-          />
-        </div>
-
+        {/* BACKLOG-3892 S3: the date range is the shared "How far back to
+            import texts" picker under the source selection; the line below
+            still states it. */}
         {/* Message Count Cap */}
         <div className="flex items-center justify-between">
           <span className="text-xs text-gray-600">Maximum messages</span>
@@ -2026,6 +1987,7 @@ export function MacOSMessagesImportSettings({
             <option value="unlimited">Unlimited</option>
           </select>
         </div>
+        {lookbackPicker}
 
         {/* Active filter / effective-window indicator (BACKLOG-2286)
             ────────────────────────────────────────────────────────────────
@@ -2149,19 +2111,28 @@ export function MacOSMessagesImportSettings({
 
         {/* BACKLOG-2743: Import without attachments. Also reachable from the
             block below; kept here so it is a normal, always-available choice. */}
-        <label className="flex items-center gap-2 mt-2 text-xs text-gray-600">
-          <input
-            type="checkbox"
+        {/* BACKLOG-3156 stage G (founder 2026-10-13): a switch, the one the
+            iPhone Sync (USB) row uses — same label, same setting and save. */}
+        <div className="flex items-center justify-between gap-3 mt-2">
+          <span className="text-xs text-gray-600">
+            Import message text only (no attachment files)
+          </span>
+          <ToggleSwitch
             checked={skipAttachments}
-            onChange={(e) => handleSkipAttachmentsChange(e.target.checked)}
+            onChange={(next) => handleSkipAttachmentsChange(next)}
             disabled={controlsDisabled}
-            data-testid="skip-attachments-toggle"
-            className="rounded border-gray-300"
+            testId="skip-attachments-toggle"
+            ariaLabel="Import message text only (no attachment files)"
           />
-          Import message text only (no attachment files)
-        </label>
+        </div>
       </div>
       </div>{/* /BACKLOG-3156 stage E — Import Preferences block (its own card) */}
+
+      {/* BACKLOG-3156 stage G: block 3 — Stored on this computer (texts from
+          macOS Messages only). */}
+      <div className={enabled ? "" : "opacity-60"}>
+        <MessagesStoredBlock userId={userId} source="macos" testId="messages-block-stored" />
+      </div>
 
       {/* BACKLOG-3156 stage E: the run's own feedback — a space refusal, the
           result of the last run, and the plan dialog. None of it is a settings

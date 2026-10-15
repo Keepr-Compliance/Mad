@@ -2,6 +2,7 @@
  * WindowApi Platform sub-interfaces
  * Device detection, backup, drivers, and sync (primarily Windows)
  */
+import type { BackfillAvailability, BackfillProgress, BackfillResult } from "../iphoneBackfill";
 
 /**
  * BACKLOG-2907: what the host knows about a prior backup for this device.
@@ -129,16 +130,6 @@ export interface WindowApiBackup {
      */
     backupSize: number | null;
   }>;
-  startWithPassword: (options: {
-    udid: string;
-    password: string;
-    outputPath?: string;
-  }) => Promise<{
-    success: boolean;
-    backupPath?: string;
-    error?: string;
-    errorCode?: string;
-  }>;
   cancel: () => Promise<{ success: boolean }>;
   list: () => Promise<
     Array<{
@@ -168,10 +159,6 @@ export interface WindowApiBackup {
     needsPassword?: boolean;
     error?: string;
   }>;
-  verifyPassword: (
-    backupPath: string,
-    password: string,
-  ) => Promise<{ success: boolean; valid?: boolean; error?: string }>;
   isEncrypted: (
     backupPath: string,
   ) => Promise<{ success: boolean; isEncrypted?: boolean; error?: string }>;
@@ -211,6 +198,12 @@ export interface WindowApiDrivers {
     version: string | null;
     serviceRunning: boolean;
     error: string | null;
+    /** BACKLOG-3927 */
+    installedVia?: "msi" | "apple-devices" | null;
+    /** BACKLOG-3927: present when the Apple Devices probe ran. */
+    appleDevices?: {
+      state: "not-installed" | "not-running" | "msi-service-stopped" | "usb-driver-missing" | "ready";
+    };
   }>;
   hasBundled: () => Promise<{ available: boolean }>;
   installApple: () => Promise<{
@@ -219,7 +212,49 @@ export interface WindowApiDrivers {
     rebootRequired: boolean;
   }>;
   openITunesStore: () => Promise<{ success: boolean; error?: string }>;
+  /** BACKLOG-3927: open Apple Devices in the Microsoft Store (Store build). */
+  openAppleDevicesStore?: () => Promise<{ success: boolean; error?: string }>;
+  /** BACKLOG-3927: open Windows Settings > Windows Update. Opens Settings only. */
+  openWindowsUpdate?: (target: "check" | "optional") => Promise<{ success: boolean; error?: string }>;
 }
+
+/**
+ * BACKLOG-3785: the reply to `sync:start` / `sync:process-existing`. Counts and
+ * scalars only. The messages, contacts and conversations never cross IPC in the
+ * reply: persistence reads them in main from the orchestrator's "complete" event.
+ * Returning the arrays cost 179 MB of structured clone for 670k messages and
+ * blocked the renderer for 83.6 s while it was decoded.
+ */
+export interface SyncStartReply {
+  success: boolean;
+  error: string | null;
+  duration: number;
+  messageCount: number;
+  contactCount: number;
+  conversationCount: number;
+  skipped?: boolean;
+  skipReason?: "unchanged" | "force-resync";
+  rateLimited?: boolean;
+  /** BACKLOG-3881: stopped because the iPhone's backups are Apple-encrypted. */
+  appleEncryptedBackup?: boolean;
+  attachmentsUndecryptable?: number;
+  /**
+   * BACKLOG-3816: the classified cause of a failed backup (`BackupErrorCode`), when
+   * known. `CONNECTION_LOST` / `SERVICE_UNAVAILABLE` hold Try Again for 30 s.
+   */
+  errorCode?: string;
+}
+
+/**
+ * BACKLOG-3816: which on-screen control asked the iPhone sync to stop. Every caller
+ * of `sync.cancel` names one, so a cancelled run's row says which button ended it.
+ * A cancel that arrives without one is recorded as `cancel-unattributed`, never as
+ * `user-cancel`.
+ */
+export type SyncCancelTrigger =
+  | "progress-cancel"
+  | "error-close"
+  | "try-again-no-device";
 
 /**
  * Sync methods (Windows)
@@ -227,17 +262,9 @@ export interface WindowApiDrivers {
 export interface WindowApiSync {
   start: (options: {
     udid: string;
-    password?: string;
     forceFullBackup?: boolean;
-  }) => Promise<{
-    success: boolean;
-    messages: unknown[];
-    contacts: unknown[];
-    conversations: unknown[];
-    error: string | null;
-    duration: number;
-  }>;
-  cancel: () => Promise<{ success: boolean }>;
+  }) => Promise<SyncStartReply>;
+  cancel: (trigger: SyncCancelTrigger) => Promise<{ success: boolean }>;
   status: () => Promise<{ isRunning: boolean; phase: string }>;
   devices: () => Promise<
     Array<{
@@ -264,9 +291,13 @@ export interface WindowApiSync {
   onPhase: (callback: (phase: string) => void) => () => void;
   onDeviceConnected: (callback: (device: unknown) => void) => () => void;
   onDeviceDisconnected: (callback: (device: unknown) => void) => () => void;
-  onPasswordRequired: (callback: () => void) => () => void;
   onError: (callback: (error: { message: string }) => void) => () => void;
   onComplete: (callback: (result: unknown) => void) => () => void;
   onWaitingForPasscode: (callback: () => void) => () => void;
   onPasscodeEntered: (callback: () => void) => () => void;
+  /** BACKLOG-3892 S5: "Get older texts" from the iPhone backup kept on this computer. */
+  backfillAvailability?: (transactionId: string) => Promise<BackfillAvailability>;
+  backfillOlder?: (transactionId: string) => Promise<BackfillResult>;
+  cancelBackfill?: () => Promise<{ success: boolean }>;
+  onBackfillProgress?: (callback: (progress: BackfillProgress) => void) => () => void;
 }

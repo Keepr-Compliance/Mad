@@ -45,7 +45,10 @@ describe("the extension version", () => {
       doc: document,
       extensionVersion: "0.3.10",
       getLocation: () => ({ pathname: "/web/welcome", href: "https://messages.google.com/web/welcome" }),
-      api: async () => ({ ok: true, status: 200, body: { ok: true } }),
+      // BACKLOG-3924: an older Keepr (no /waiting: 404 not_found, the bridge's
+      // router) — the sign-in card with its extras at once, as before.
+      api: async (_m: string, p: string) =>
+        p.endsWith("/waiting") ? { ok: false, status: 404, body: { error: "not_found" } } : { ok: true, status: 200, body: { ok: true } },
       overlay: { show: (_t: string, _e: boolean, x?: { version?: string; copy?: string }) => shown.push(x) },
       sleep: async () => {},
       pageTimeoutMs: 0,

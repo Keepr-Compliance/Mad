@@ -28,6 +28,8 @@ import logger from '../../utils/logger';
 import * as Sentry from '@sentry/electron/renderer';
 import { reportDriverStillMissingAtCompletion } from './sentryOnboarding';
 import { usePlatform } from '../../contexts/PlatformContext';
+import { useIPhoneSyncEnabled } from '../../contexts/IPhoneSyncContext';
+import { importSourceForPhoneType } from '../../utils/iphoneSyncEnabled';
 
 /**
  * Props for the OnboardingFlow component.
@@ -186,6 +188,12 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
   // because the renderer runs with nodeIntegration:false/contextIsolation:true.
   const { isMacOS, isWindows } = usePlatform();
 
+  // BACKLOG-3418: the phone-type answer re-gates iPhone device detection live.
+  // IPhoneSyncProvider sits above this flow (App.tsx -> AppRouter), while the
+  // save that persists the answer (usePhoneTypeApi) runs above the provider and
+  // cannot reach it — so the re-gate is issued here, where the answer arrives.
+  const { applyImportSource } = useIPhoneSyncEnabled();
+
   // Track if we're waiting for DB init to complete after clicking Continue on secure-storage.
   // Event-driven: subscribes to onInitStage events instead of polling.
   const [waitingForDbInit, setWaitingForDbInit] = useState(false);
@@ -310,6 +318,14 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
     (action: StepAction) => {
       switch (action.type) {
         case "SELECT_PHONE":
+          // BACKLOG-3418: re-gate first, synchronously, so an Android answer
+          // stops device detection at once rather than at the next app start.
+          // Both answers are applied: after Android -> back -> iPhone, the
+          // iPhone answer must turn detection back on. The value is the one
+          // usePhoneTypeApi persists (same function), so the two cannot drift.
+          applyImportSource(
+            importSourceForPhoneType(action.payload.phoneType, isMacOS)
+          );
           if (action.payload.phoneType === "iphone") {
             app.handleSelectIPhone();
           } else {
@@ -387,15 +403,24 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
           break;
       }
     },
-    [app, appState.isDatabaseInitialized, machineState]
+    [app, appState.isDatabaseInitialized, machineState, applyImportSource, isMacOS]
   );
 
   // Handle onboarding completion - dispatches ONBOARDING_QUEUE_DONE
   // The queue tracks step completion via isComplete predicates, so we only
   // need to dispatch the single ONBOARDING_QUEUE_DONE action to transition
   // the state machine from "onboarding" to "ready".
+  //
+  // BACKLOG-3673: this is the ONLY way out of setup, and it has TWO callers --
+  // the queue's onComplete and the isComplete effect below. Both can fire for
+  // one completion (macOS: granting FDA on the last visible step both advances
+  // the queue and flips isComplete), so one ref guards both, and the
+  // per-account "setup finished" record is written exactly once.
+  const completionStartedRef = useRef(false);
   const handleComplete = useCallback(() => {
     if (!machineState || machineState.state.status !== "onboarding") return;
+    if (completionStartedRef.current) return;
+    completionStartedRef.current = true;
 
     const { dispatch } = machineState;
 
@@ -470,6 +495,25 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
       }
     }
 
+    // BACKLOG-3673: write users.onboarding_completed_at BEFORE leaving setup.
+    // Fire-and-log: a failed write never holds the user in setup. It is logged
+    // (and reported by main), and the next launch reads "not-finished", the
+    // queue completes at once with every answer seeded, and the write retries.
+    try {
+      void window.api.user
+        .completeAccountSetup()
+        .then((result) => {
+          if (!result?.success) {
+            logger.warn("[OnboardingFlow] Setup-finished record was not written:", result?.error);
+          }
+        })
+        .catch((err: unknown) => {
+          logger.warn("[OnboardingFlow] Setup-finished record write failed:", err);
+        });
+    } catch (err) {
+      logger.warn("[OnboardingFlow] Setup-finished record write could not start:", err);
+    }
+
     logger.info("[OnboardingFlow] Queue complete — dispatching ONBOARDING_QUEUE_DONE");
     dispatch({ type: "ONBOARDING_QUEUE_DONE" });
   }, [machineState, appState.phoneType, driverSkipped, isWindows, isMacOS, app]);
@@ -498,27 +542,37 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
   // `permissionsGranted === true` and is untouched; this is the same
   // "already answered, move on" semantic the manual-advance path already has.
   //
-  // Note this is the SECOND line of defence, not the fix. The reducer keeps a
-  // user who declined FDA out of onboarding entirely (isOnboardingComplete).
-  // This covers the case where they re-enter onboarding for an unrelated
-  // reason — no mailbox connected yet — and must not be re-asked on the way
-  // through.
+  // BACKLOG-3673: the account's recorded answers (loaded in Phase 4 from the
+  // server, carried on onboarding state as `accountAnswers`) seed their steps
+  // on EVERY entry into setup, on any computer -- not only after an FDA
+  // relaunch. So the contacts question and the email step are never asked
+  // again once answered, and data-sync is skipped when both are.
   const initialManuallyCompletedIds = useMemo(() => {
-    const fdaAlreadyDeclined =
-      machineState.state.status === "onboarding" && machineState.state.fda === "declined";
+    const onboardingState =
+      machineState.state.status === "onboarding" ? machineState.state : undefined;
+    const fdaAlreadyDeclined = onboardingState?.fda === "declined";
+    const answers = onboardingState?.accountAnswers;
 
-    if (!resumeBundle.isResuming) {
-      return fdaAlreadyDeclined ? ["permissions"] : undefined;
+    const ids = new Set<string>();
+    if (resumeBundle.isResuming) {
+      ids.add("data-sync");
+      if (resumeBundle.contactSourceSelected) {
+        ids.add("contact-source");
+      }
     }
-
-    const ids: string[] = ["data-sync"];
-    if (resumeBundle.contactSourceSelected) {
-      ids.push("contact-source");
+    if (answers?.contactSource) {
+      ids.add("contact-source");
+    }
+    if (answers?.emailStep) {
+      ids.add("email-connect");
+    }
+    if (answers?.contactSource && answers?.emailStep) {
+      ids.add("data-sync");
     }
     if (fdaAlreadyDeclined) {
-      ids.push("permissions");
+      ids.add("permissions");
     }
-    return ids;
+    return ids.size > 0 ? [...ids] : undefined;
   }, []);
 
   // Initialize the queue hook
@@ -632,11 +686,13 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
   }, [waitingForDbInit]);
 
   // When queue reports complete but state machine is still in onboarding,
-  // trigger completion
-  const hasNavigatedRef = useRef(false);
+  // trigger completion. BACKLOG-3673: this path is load-bearing -- a queue that
+  // is already complete at mount (every answer seeded) or whose last step
+  // drops out (the data-source floor satisfied by connecting email on it)
+  // never calls onComplete. handleComplete's own ref makes a second call a
+  // no-op, so this effect needs no guard of its own.
   useEffect(() => {
-    if (isComplete && !hasNavigatedRef.current && machineState) {
-      hasNavigatedRef.current = true;
+    if (isComplete && machineState) {
       handleComplete();
     }
   }, [isComplete, machineState, handleComplete]);

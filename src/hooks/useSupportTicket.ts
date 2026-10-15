@@ -19,6 +19,8 @@ export type TicketPriority = "low" | "normal" | "high" | "urgent";
  */
 export interface IphoneSyncDiagnostics {
   phone_type: "iphone" | "android" | "unknown";
+  /** BACKLOG-3418: false → iPhone checking was off; the device probes did not run. */
+  iphone_checking_on?: boolean;
   libimobiledevice_available: boolean;
   libimobiledevice_in_path: boolean;
   connected_device_count: number;

@@ -26,6 +26,7 @@ const emailItem: ReviewItemDto = {
   id: "pending:e1", rowId: "e1", origin: "pending", kind: "email",
   transaction_id: "tx-1", email_id: "e1", thread_id: null,
   found_at: "2026-08-01T00:00:00.000Z",
+  matchReason: "contact",
   display: {
     title: "Quick question", subtitle: "jane@example.com", snippet: "hi",
     occurredAt: "2026-06-01T00:00:00.000Z", itemCount: 1,

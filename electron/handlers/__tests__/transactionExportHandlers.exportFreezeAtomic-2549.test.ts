@@ -83,6 +83,7 @@ import fs from "fs";
 import path from "path";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+const mockShellOpenPath = jest.fn();
 
 jest.mock("electron", () => ({
   ipcMain: {
@@ -93,6 +94,7 @@ jest.mock("electron", () => ({
   },
   BrowserWindow: class {},
   app: { getPath: jest.fn(() => "/tmp"), getVersion: jest.fn(() => "0.0.0-test") },
+  shell: { openPath: (...a: unknown[]) => mockShellOpenPath(...a) },
 }));
 
 jest.mock("@sentry/electron/main", () => ({
@@ -165,6 +167,12 @@ import { setDb } from "../../services/db/core/dbConnection";
 import { FROZEN_IDENTITY_FIELDS } from "../../services/transactionFreezePolicy";
 import transactionService from "../../services/transactionService";
 import { registerTransactionExportHandlers } from "../transactionExportHandlers";
+import enhancedExportService from "../../services/enhancedExportService";
+import folderExportService from "../../services/folderExportService";
+import {
+  resolveOpenablePath,
+  clearOpenablePathsForTests,
+} from "../../services/openablePaths";
 
 const SCHEMA = fs.readFileSync(
   path.join(__dirname, "..", "..", "database", "schema.sql"),
@@ -421,6 +429,94 @@ describe("BACKLOG-2549 — export status and the freeze stamp flip together", ()
       await invoke(channel, options);
 
       expect(stampSpy).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3808 — the "Open Audit" button opens exactly what the export wrote.
+// The export handlers register their output; open-folder accepts only that.
+// ---------------------------------------------------------------------------
+describe("BACKLOG-3808 — a finished export is registered as openable", () => {
+  let outDir: string;
+
+  beforeEach(() => {
+    clearOpenablePathsForTests();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const realOs = require("os") as typeof import("os");
+    outDir = fs.realpathSync.native(fs.mkdtempSync(path.join(realOs.tmpdir(), "keepr-3808-exp-")));
+  });
+
+  afterEach(() => {
+    fs.rmSync(outDir, { recursive: true, force: true });
+  });
+
+  it("enhanced export: the returned file can be opened", async () => {
+    seed({ frozen: false });
+    const file = path.join(outDir, "Audit.xlsx");
+    fs.writeFileSync(file, "x");
+    (enhancedExportService.exportTransaction as jest.Mock).mockResolvedValueOnce(file);
+
+    const result = (await invoke("transactions:export-enhanced", CHANNELS[0].options)) as {
+      success: boolean;
+      path?: string;
+    };
+
+    expect(result).toMatchObject({ success: true, path: file });
+    await expect(resolveOpenablePath(result.path)).resolves.toEqual({
+      ok: true,
+      realPath: file,
+      kind: "file",
+    });
+  });
+
+  it("folder export: the returned folder can be opened", async () => {
+    seed({ frozen: false });
+    const dir = path.join(outDir, "Audit folder");
+    fs.mkdirSync(dir);
+    (folderExportService.exportTransactionToFolder as jest.Mock).mockResolvedValueOnce(dir);
+
+    const result = (await invoke("transactions:export-folder", CHANNELS[1].options)) as {
+      success: boolean;
+      path?: string;
+    };
+
+    expect(result).toMatchObject({ success: true, path: dir });
+    await expect(resolveOpenablePath(result.path)).resolves.toEqual({
+      ok: true,
+      realPath: dir,
+      kind: "dir",
+    });
+  });
+
+  it("export-pdf to a renderer-chosen path: open-folder refuses that path", async () => {
+    seed({ frozen: false });
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { registerConversationHandlers } = require("../conversationHandlers");
+    if (!handlers.has("open-folder")) registerConversationHandlers({} as never);
+    mockShellOpenPath.mockReset();
+    mockShellOpenPath.mockResolvedValue("");
+
+    const chosen = path.join(outDir, "chosen.pdf");
+    fs.writeFileSync(chosen, "%PDF");
+    (folderExportService.exportTransactionToCombinedPDF as jest.Mock).mockResolvedValueOnce(chosen);
+
+    const handler = handlers.get("transactions:export-pdf");
+    if (!handler) throw new Error("handler not registered: transactions:export-pdf");
+    const result = (await handler({} as never, TXN, chosen)) as { success: boolean; path?: string };
+    expect(result).toMatchObject({ success: true, path: chosen });
+
+    const openFolder = handlers.get("open-folder");
+    if (!openFolder) throw new Error("handler not registered: open-folder");
+    const opened = (await openFolder({} as never, chosen)) as { success: boolean; error?: string };
+    expect(opened.success).toBe(false);
+    expect(mockShellOpenPath).not.toHaveBeenCalled();
+  });
+
+  it("a path no export returned is not openable", async () => {
+    await expect(resolveOpenablePath(outDir)).resolves.toEqual({
+      ok: false,
+      reason: "not_registered",
     });
   });
 });

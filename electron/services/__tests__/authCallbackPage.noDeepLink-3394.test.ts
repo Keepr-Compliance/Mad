@@ -126,7 +126,12 @@ describe("BACKLOG-3394: the served post-connect page fires no keepr:// URL", () 
     it("tells the user the tab is finished", async () => {
       const page = await getServedCallbackPage(getService());
 
-      expect(page).toContain("Connected");
+      // BACKLOG-3799: the page is served BEFORE the token exchange runs, so it
+      // must not claim the connection succeeded; the Keepr window reports that.
+      expect(page).toContain("Finish in Keepr");
+      expect(page).toContain("The Keepr window shows whether it worked");
+      expect(page).not.toMatch(/>Connected</);
+      expect(page).not.toContain("already picked this up");
       expect(page).toContain("You can close this tab");
     });
   });

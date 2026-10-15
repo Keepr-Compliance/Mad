@@ -9,6 +9,7 @@
 import crypto from "crypto";
 import Database from "better-sqlite3-multiple-ciphers";
 import path from "path";
+import { performance } from "perf_hooks";
 import log from "electron-log";
 import { extractTextFromAttributedBody } from "../utils/messageParser";
 
@@ -19,9 +20,18 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-// Async processing constants
-const CHAT_YIELD_INTERVAL = 50; // Yield every N chats processed
-const MESSAGE_YIELD_INTERVAL = 500; // Yield every N messages processed
+/**
+ * BACKLOG-3785: longest stretch of parsing work (ms) between two event-loop yields.
+ *
+ * The yield used to be counted: every 50 chats and every 500 messages INSIDE one
+ * chat. The sync loads chats one after another, and a chat with fewer than 500
+ * messages never yielded, so a run of small chats was one continuous block of the
+ * main thread (generated 668k-message sms.db: 2,866 small chats in a row = 4.3 s
+ * on an arm64 Mac; the PC logged 15.7 s). The budget is now time-based and spans
+ * chats: whichever call is running yields once this much time has passed since
+ * the last yield.
+ */
+export const PARSE_YIELD_BUDGET_MS = 25;
 import {
   iOSMessage,
   iOSAttachment,
@@ -36,10 +46,13 @@ import {
   AUDIO_TRANSCRIPT_COLUMN_PROBE_SQL,
   CHAT_BY_ROWID_SQL,
   CHAT_LAST_MESSAGE_DATE_SQL,
+  OLDEST_MESSAGE_DATE_SQL,
   CHAT_MESSAGE_COUNT_SQL,
   CHAT_PARTICIPANT_HANDLES_SQL,
+  CHAT_SENDER_HANDLES_SQL,
   HANDLE_ID_BY_ROWID_SQL,
   MESSAGE_ATTACHMENTS_SQL,
+  appleDateToMs,
   searchMessagesByText,
   selectChatMessages,
 } from "./db/appleSmsDbSql";
@@ -70,6 +83,33 @@ export class iOSMessagesParser {
   private db: Database.Database | null = null;
   private backupPath: string = "";
   private hasAudioTranscriptColumn: boolean | null = null;
+  /** BACKLOG-3785: when this parser last let the event loop run (performance.now()). */
+  private lastYieldAt = performance.now();
+  /**
+   * BACKLOG-3892 S1 (SR D5): reads that failed since open(). Every read below
+   * returns [] on failure, which looks like an empty chat; this count is how a
+   * run tells "nothing there" from "could not read it".
+   */
+  private failedReads = 0;
+
+  /** BACKLOG-3892 S1 (D5): reads that failed since the database was opened. */
+  get readFailures(): number {
+    return this.failedReads;
+  }
+
+  /**
+   * BACKLOG-3785: true once PARSE_YIELD_BUDGET_MS have passed since the last yield
+   * (then the caller awaits yieldNow()). Shared by every async read of this parser, so the budget holds
+   * across chats, not just inside one.
+   */
+  private yieldDue(): boolean {
+    return performance.now() - this.lastYieldAt >= PARSE_YIELD_BUDGET_MS;
+  }
+
+  private async yieldNow(): Promise<void> {
+    await yieldToEventLoop();
+    this.lastYieldAt = performance.now();
+  }
 
   // The sms.db hash in iOS backups (SHA-1 of domain + path)
   static readonly SMS_DB_HASH = "3d0d7e5fb2ce288813306e4d4636395e047a3d28";
@@ -85,6 +125,138 @@ export class iOSMessagesParser {
     return crypto.createHash("sha1").update(fullPath).digest("hex");
   }
 
+  /** Path prefixes iOS writes for Messages attachments, mapped onto MediaDomain. */
+  private static readonly ATTACHMENT_PATH_PREFIXES: readonly string[] = [
+    "~/",
+    "/var/mobile/",
+  ];
+
+  /**
+   * The MediaDomain subtrees an attachment path may point into: message
+   * attachments and sticker images. Both are backed up in MediaDomain with the
+   * same relative path sms.db records.
+   */
+  private static readonly ATTACHMENT_ROOTS: readonly string[] = [
+    "Library/SMS/Attachments/",
+    "Library/SMS/StickerCache/",
+  ];
+
+  /**
+   * Rules that mean the path tried to leave the attachment roots. Each one is
+   * logged individually (sanitized, up to ATTACK_LOG_LIMIT per summary window);
+   * every other rule is only counted in the summary.
+   */
+  private static readonly ATTACK_RULES: ReadonlySet<string> = new Set([
+    "backslash",
+    "nul",
+    "dot-segment",
+    "absolute",
+  ]);
+
+  /** Individually logged attack-class rejections per summary window. */
+  static readonly ATTACK_LOG_LIMIT = 5;
+
+  /** Rejected attachment paths since the last summary, counted by rule. */
+  private static rejectedPathCounts = new Map<string, number>();
+  private static attackLinesLogged = 0;
+  private static attackLinesSuppressed = 0;
+
+  /**
+   * Describe a rejected path without exposing names: up to the first two
+   * segments (never the last one), the segment count, and the index of the
+   * segment that failed.
+   */
+  private static sanitizePath(
+    originalPath: string,
+    failedSegment: number,
+  ): { head: string; segments: number; failedSegment: number } {
+    const parts = originalPath.split("/");
+    const shown = parts
+      .slice(0, Math.min(2, parts.length - 1))
+      // eslint-disable-next-line no-control-regex
+      .map((part) => part.replace(/[\x00-\x1f\\]/g, "?").slice(0, 32));
+    return { head: shown.join("/"), segments: parts.length, failedSegment };
+  }
+
+  /**
+   * Log one summary line of attachment paths rejected since the last call,
+   * counted by rule (plus how many attack-class lines were logged and
+   * suppressed), then reset. No-op when nothing was rejected.
+   * @returns the counts that were logged
+   */
+  static flushRejectedPathSummary(): Record<string, number> {
+    const counts: Record<string, number> = Object.fromEntries(
+      iOSMessagesParser.rejectedPathCounts,
+    );
+    const hadRejections = Object.keys(counts).length > 0;
+    if (iOSMessagesParser.attackLinesSuppressed > 0) {
+      counts.attackLinesSuppressed = iOSMessagesParser.attackLinesSuppressed;
+    }
+    iOSMessagesParser.rejectedPathCounts = new Map();
+    iOSMessagesParser.attackLinesLogged = 0;
+    iOSMessagesParser.attackLinesSuppressed = 0;
+    if (hadRejections) {
+      log.warn("iOSMessagesParser: Rejected attachment paths", counts);
+    }
+    return counts;
+  }
+
+  /** Index of the first `/`-separated segment matching the predicate, or -1. */
+  private static findSegment(p: string, test: (segment: string) => boolean): number {
+    return p.split("/").findIndex(test);
+  }
+
+  /**
+   * Convert an attachment path from sms.db into its MediaDomain relative path.
+   * Accepts only `~/` or `/var/mobile/` followed by `Library/SMS/Attachments/...`
+   * or `Library/SMS/StickerCache/...`. Dots inside a name (`Offer...pdf`) are
+   * allowed; `.`/`..` segments, backslashes, NUL and absolute paths elsewhere
+   * are attack-class rejections and are logged individually (sanitized,
+   * throttled). Other rejections (unknown prefix or root, empty segment) are
+   * only counted; flushRejectedPathSummary() logs the per-sync totals.
+   * @returns the relative path (e.g. `Library/SMS/Attachments/ab/01/x.jpg`), or null
+   */
+  static toMediaDomainRelativePath(originalPath: string): string | null {
+    const reject = (rule: string, failedSegment = -1): null => {
+      const counts = iOSMessagesParser.rejectedPathCounts;
+      counts.set(rule, (counts.get(rule) ?? 0) + 1);
+      if (iOSMessagesParser.ATTACK_RULES.has(rule)) {
+        if (iOSMessagesParser.attackLinesLogged < iOSMessagesParser.ATTACK_LOG_LIMIT) {
+          iOSMessagesParser.attackLinesLogged++;
+          log.warn("iOSMessagesParser: Rejected attachment path", {
+            rule,
+            ...iOSMessagesParser.sanitizePath(originalPath, failedSegment),
+          });
+        } else {
+          iOSMessagesParser.attackLinesSuppressed++;
+        }
+      }
+      return null;
+    };
+
+    const backslashAt = iOSMessagesParser.findSegment(originalPath, (seg) => seg.includes("\\"));
+    if (backslashAt !== -1) return reject("backslash", backslashAt);
+    const nulAt = iOSMessagesParser.findSegment(originalPath, (seg) => seg.includes("\0"));
+    if (nulAt !== -1) return reject("nul", nulAt);
+    const dotAt = iOSMessagesParser.findSegment(originalPath, (seg) => seg === "." || seg === "..");
+    if (dotAt !== -1) return reject("dot-segment", dotAt);
+
+    const prefix = iOSMessagesParser.ATTACHMENT_PATH_PREFIXES.find((p) =>
+      originalPath.startsWith(p),
+    );
+    if (prefix === undefined) {
+      return originalPath.startsWith("/") ? reject("absolute", 0) : reject("prefix");
+    }
+    const relativePath = originalPath.slice(prefix.length);
+
+    if (!iOSMessagesParser.ATTACHMENT_ROOTS.some((root) => relativePath.startsWith(root))) {
+      return reject("root");
+    }
+    if (relativePath.split("/").includes("")) return reject("empty-segment");
+
+    return relativePath;
+  }
+
   /**
    * Resolve an attachment's original path to its location in the iOS backup.
    * @param backupPath Path to the iOS backup directory
@@ -94,22 +266,8 @@ export class iOSMessagesParser {
   static resolveAttachmentPath(backupPath: string, originalPath: string): string | null {
     if (!originalPath) return null;
 
-    // iOS attachment paths are like ~/Library/SMS/Attachments/...
-    // Remove the ~/ prefix to get the relative path
-    let relativePath = originalPath;
-    if (relativePath.startsWith("~/")) {
-      relativePath = relativePath.slice(2);
-    } else if (relativePath.startsWith("/var/mobile/")) {
-      // Some paths may be absolute /var/mobile/Library/...
-      relativePath = relativePath.replace("/var/mobile/", "");
-    }
-
-    // Security: Validate path doesn't contain traversal sequences
-    // This prevents malicious paths like "../../etc/passwd" from escaping the backup
-    if (relativePath.includes("..") || relativePath.includes("\\")) {
-      log.warn("iOSMessagesParser: Rejected potentially malicious path", {
-        originalPath: originalPath.substring(0, 50),
-      });
+    const relativePath = iOSMessagesParser.toMediaDomainRelativePath(originalPath);
+    if (relativePath === null) {
       return null;
     }
 
@@ -152,6 +310,7 @@ export class iOSMessagesParser {
     try {
       this.db = new Database(dbPath, { readonly: true });
       this.backupPath = backupPath;
+      this.failedReads = 0;
       log.info("iOSMessagesParser: Opened database", { backupPath });
     } catch (error) {
       log.error("iOSMessagesParser: Failed to open database", {
@@ -220,6 +379,23 @@ export class iOSMessagesParser {
     });
 
     return this.hasAudioTranscriptColumn;
+  }
+
+  /**
+   * BACKLOG-3892 W3b: the oldest dated text this phone holds, as epoch ms; null when
+   * there is none or the read fails (null = unknown: no coverage cap).
+   */
+  getOldestMessageDateMs(): number | null {
+    this.ensureOpen();
+    try {
+      const row = this.db!.prepare(OLDEST_MESSAGE_DATE_SQL).get() as { oldest: number | bigint | null } | undefined;
+      return appleDateToMs(row?.oldest ?? null);
+    } catch (error) {
+      log.warn("iOSMessagesParser: oldest message date read failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
   }
 
     /**
@@ -333,22 +509,31 @@ export class iOSMessagesParser {
 
       log.info(`iOSMessagesParser: Processing ${chats.length} chats async`);
 
+      const lastDateStmt = this.db!.prepare(CHAT_LAST_MESSAGE_DATE_SQL);
+      lastDateStmt.safeIntegers(true);
+
       const conversations: iOSConversation[] = [];
 
       for (let i = 0; i < chats.length; i++) {
         const chat = chats[i];
 
         try {
-          // Get participants for this chat
-          const participants = this.getParticipants(chat.ROWID);
+          // Get participants for this chat (null = the read failed, D5)
+          const read = this.readParticipants(chat.ROWID);
+          const participants = read ?? [];
 
-          // Get last message date
-          const lastMessageRow = this.db!.prepare(
-            CHAT_LAST_MESSAGE_DATE_SQL,
-          ).get(chat.ROWID) as { last_date: number | null } | undefined;
+          // Get last message date, read as a BigInt (BACKLOG-3892 S1): the parse
+          // floor compares it exactly, in the unit it is stored in.
+          const lastMessageRow = lastDateStmt.get(chat.ROWID) as
+            | { last_date: bigint | number | null; undated?: bigint | number | null }
+            | undefined;
+          // BACKLOG-3892 S2 (SR C3): undated rows this chat holds.
+          const undatedCount = Number(lastMessageRow?.undated ?? 0) || 0;
+          const lastDate = lastMessageRow?.last_date ?? null;
+          const lastDateRaw = lastDate === null ? null : String(lastDate);
 
           const lastMessageDate = convertAppleTimestamp(
-            lastMessageRow?.last_date || null,
+            lastDate === null ? null : Number(lastDate) || null,
           );
 
           // Skip chats with no messages
@@ -369,8 +554,12 @@ export class iOSMessagesParser {
             messages: [], // Messages loaded separately via getMessagesAsync()
             lastMessage: lastMessageDate,
             isGroupChat,
+            lastDateRaw,
+            ...(undatedCount > 0 ? { undatedCount } : {}),
+            ...(read === null ? { participantsReadFailed: true } : {}),
           });
         } catch (chatError) {
+          this.failedReads++;
           log.error("iOSMessagesParser: Error processing chat", {
             chatId: chat.ROWID,
             error:
@@ -381,11 +570,9 @@ export class iOSMessagesParser {
           // Continue with next chat
         }
 
-        // Yield to event loop periodically
-        if ((i + 1) % CHAT_YIELD_INTERVAL === 0) {
-          onProgress?.(i + 1, chats.length);
-          await yieldToEventLoop();
-        }
+        // Progress every 50 chats; yield whenever the time budget is spent (BACKLOG-3785).
+        if ((i + 1) % 50 === 0) onProgress?.(i + 1, chats.length);
+        if (this.yieldDue()) await this.yieldNow();
       }
 
       // Final progress callback
@@ -402,10 +589,50 @@ export class iOSMessagesParser {
 
       return conversations;
     } catch (error) {
+      this.failedReads++;
       log.error("iOSMessagesParser: Error getting conversations async", {
         error: error instanceof Error ? error.message : String(error),
       });
       return [];
+    }
+  }
+
+  /**
+   * BACKLOG-3892 S1: participants of a chat, or null when the read failed
+   * (counted in readFailures).
+   */
+  private readParticipants(chatId: number): string[] | null {
+    this.ensureOpen();
+    try {
+      const rows = this.db!.prepare(CHAT_PARTICIPANT_HANDLES_SQL).all(chatId) as Array<{ id: string }>;
+      return rows.map((row) => row.id);
+    } catch (error) {
+      this.failedReads++;
+      log.error("iOSMessagesParser: Error getting participants", {
+        chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * BACKLOG-3892 S1 (SR D7d): every handle that sent a message in a chat — this
+   * includes members who have since left a group. null when the read failed
+   * (counted in readFailures).
+   */
+  getChatSenderHandles(chatId: number): string[] | null {
+    this.ensureOpen();
+    try {
+      const rows = this.db!.prepare(CHAT_SENDER_HANDLES_SQL).all(chatId) as Array<{ id: string }>;
+      return rows.map((row) => row.id);
+    } catch (error) {
+      this.failedReads++;
+      log.error("iOSMessagesParser: Error getting chat senders", {
+        chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
     }
   }
 
@@ -480,22 +707,39 @@ export class iOSMessagesParser {
    * @param chatId The chat ID to get messages for
    * @param limit Optional limit on number of messages (for pagination)
    * @param offset Optional offset for pagination
+   * @param sinceMs BACKLOG-3892 S1: only messages dated at or after this (epoch ms,
+   *   inclusive; undated rows kept). Absent = every message.
+   * @param untilMs BACKLOG-3892 S5: only DATED messages before this (epoch ms, exclusive).
+   *
+   * A failed read still returns [] (callers rely on it) but is counted in
+   * readFailures (D5).
    */
   async getMessagesAsync(
     chatId: number,
     limit?: number,
     offset?: number,
+    sinceMs?: number,
+    untilMs?: number,
   ): Promise<iOSMessage[]> {
     this.ensureOpen();
 
     try {
+      // BACKLOG-3785: callers load chat after chat; the budget carries over from the
+      // previous chat, so a run of small chats yields too.
+      if (this.yieldDue()) await this.yieldNow();
+
       // Page bounds BIND as clamped integers; the clamp and the bind are
       // computed together in db/ so they cannot drift apart.
       const rows = await selectChatMessages<RawMessageRow>(
         this.db!,
         this.checkAudioTranscriptColumn(),
         chatId,
-        { limit, offset },
+        {
+          limit,
+          offset,
+          ...(sinceMs === undefined ? {} : { sinceMs }),
+          ...(untilMs === undefined ? {} : { untilMs }),
+        },
       );
 
       const messages: iOSMessage[] = [];
@@ -522,14 +766,13 @@ export class iOSMessagesParser {
 
         messages.push(this.mapMessage(row, parsedText));
 
-        // Yield to event loop periodically
-        if ((i + 1) % MESSAGE_YIELD_INTERVAL === 0) {
-          await yieldToEventLoop();
-        }
+        // Yield whenever the time budget is spent (BACKLOG-3785).
+        if (this.yieldDue()) await this.yieldNow();
       }
 
       return messages;
     } catch (error) {
+      this.failedReads++;
       log.error("iOSMessagesParser: Error getting messages async", {
         chatId,
         limit,

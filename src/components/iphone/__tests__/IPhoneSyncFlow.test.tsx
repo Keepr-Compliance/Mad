@@ -31,7 +31,7 @@ const mockSyncReturn: UseIPhoneSyncReturn = {
   progress: null,
   error: null,
   userError: null,
-  needsPassword: false,
+  appleEncryptedBackup: false,
   lastSyncTime: null,
   isWaitingForPasscode: false,
   syncLocked: false,
@@ -44,12 +44,17 @@ const mockSyncReturn: UseIPhoneSyncReturn = {
   installDriverStatus: "idle",
   installDriverError: null,
   recoverInstallDriver: jest.fn(),
+  recheckDriver: jest.fn(),
+  setConnectScreenActive: jest.fn(),
+  appleDevicesState: null,
+  appleUsbDriver: null,
   startSync: jest.fn(),
-  submitPassword: jest.fn(),
   cancelSync: jest.fn(),
   dismissSync: jest.fn(),
   checkSyncStatus: jest.fn(),
   requestTrust: jest.fn(),
+  isStarting: false,
+  retryAvailableAt: null,
 };
 
 let mockContextValue: UseIPhoneSyncReturn = { ...mockSyncReturn };
@@ -71,10 +76,6 @@ jest.mock("../SyncProgress", () => ({
   SyncProgress: () => <div data-testid="sync-progress">Progress</div>,
 }));
 
-jest.mock("../BackupPasswordModal", () => ({
-  BackupPasswordModal: ({ isOpen }: { isOpen: boolean }) =>
-    isOpen ? <div data-testid="password-modal">Password</div> : null,
-}));
 
 jest.mock("../../sync/SyncLockBanner", () => ({
   SyncLockBanner: () => <div data-testid="sync-lock-banner">Locked</div>,

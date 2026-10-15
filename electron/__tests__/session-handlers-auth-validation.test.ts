@@ -65,12 +65,14 @@ const mockDbGetUserByEmail = jest.fn();
 const mockDbGetUserByOAuthId = jest.fn();
 const mockDbCreateUser = jest.fn();
 const mockDbUpdateUser = jest.fn();
+const mockDbGetSessionTimes = jest.fn();
 
 jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: {
     isInitialized: mockDbIsInitialized,
     validateSession: mockDbValidateSession,
+    getSessionTimes: mockDbGetSessionTimes,
     deleteSession: mockDbDeleteSession,
     getUserById: mockDbGetUserById,
     getUserByEmail: mockDbGetUserByEmail,
@@ -104,10 +106,12 @@ jest.mock("../services/initializationBroadcaster", () => ({
 const mockLoadSession = jest.fn();
 const mockClearSession = jest.fn();
 const mockUpdateSession = jest.fn();
+const mockPeekSession = jest.fn();
 
 jest.mock("../services/sessionService", () => ({
   __esModule: true,
   default: {
+    peekSession: mockPeekSession,
     loadSession: mockLoadSession,
     clearSession: mockClearSession,
     updateSession: mockUpdateSession,
@@ -186,7 +190,7 @@ jest.mock("../constants/legalVersions", () => ({
   CURRENT_PRIVACY_POLICY_VERSION: "1.0",
 }));
 
-import { registerSessionHandlers } from "../handlers/sessionHandlers";
+import { registerSessionHandlers, resetUserActivityThrottleForTests } from "../handlers/sessionHandlers";
 
 // Helper to create a mock session object
 function createMockSession(overrides: Record<string, unknown> = {}) {
@@ -374,8 +378,10 @@ describe("TASK-2085: Server-side auth token validation in handleGetCurrentUser",
     });
   });
 
-  describe("network error (proceeds optimistically)", () => {
-    it("should return success when auth.getUser() throws a network error", async () => {
+  // getUser THROWS (the catch path). auth-js RETURNS network errors rather than
+  // throwing them; that case is in session-handlers-network-3768.test.ts (BACKLOG-3768).
+  describe("getUser throws (catch path, proceeds optimistically)", () => {
+    it("should return success when auth.getUser() throws", async () => {
       setupReturningUserMocks();
 
       // Network error -- getUser throws
@@ -537,5 +543,130 @@ describe("TASK-2085: Server-side auth token validation in handleGetCurrentUser",
       expect(result.user!.id).toBe("supa-123");
       expect(result.user!.email).toBe("user@example.com");
     });
+  });
+});
+
+describe("BACKLOG-3833: session:user-activity (renderer input heartbeat)", () => {
+  const handlers: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const security = require("../services/sessionSecurityService").default as {
+    recordActivity: jest.Mock;
+  };
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const audit = require("../services/auditService").default as { log: jest.Mock };
+  const win = (id: number) => ({ sender: { id } });
+  const ROW = {
+    user_id: "user-local-1",
+    created_at: "2024-01-01T00:00:00Z",
+    last_accessed_at: "2024-01-01T00:00:00Z",
+    expires_at: "2999-01-01T00:00:00Z",
+  };
+  const signedIn = () => {
+    mockDbIsInitialized.mockReturnValue(true);
+    mockPeekSession.mockResolvedValue({ status: "ok", session: createMockSession() });
+    mockDbGetSessionTimes.mockReturnValue(ROW);
+    mockCheckSessionValidity.mockResolvedValue({ valid: true });
+  };
+
+  beforeAll(() => {
+    registerSessionHandlers();
+    for (const [channel, handler] of mockIpcHandle.mock.calls) handlers[channel] = handler;
+  });
+  beforeEach(() => {
+    jest.clearAllMocks();
+    resetUserActivityThrottleForTests();
+  });
+
+  it("checks validity before recording activity, with no renderer argument", async () => {
+    signedIn();
+    await handlers["session:user-activity"](win(1));
+    expect(mockCheckSessionValidity).toHaveBeenCalledWith(
+      expect.objectContaining({ created_at: "2024-01-01T00:00:00Z" }),
+      "test-session-token",
+    );
+    expect(security.recordActivity).toHaveBeenCalledWith("test-session-token");
+    expect(mockCheckSessionValidity.mock.invocationCallOrder[0]).toBeLessThan(
+      security.recordActivity.mock.invocationCallOrder[0],
+    );
+    // read-only: never validateSession (it UPDATEs last_accessed_at)
+    expect(mockDbValidateSession).not.toHaveBeenCalled();
+  });
+
+  it("an idle-expired session is signed out (shared logout), not revived", async () => {
+    signedIn();
+    mockCheckSessionValidity.mockResolvedValue({ valid: false, reason: "idle" });
+    await handlers["session:user-activity"](win(1));
+    expect(security.recordActivity).not.toHaveBeenCalled();
+    expect(mockDbDeleteSession).toHaveBeenCalledWith("test-session-token");
+    expect(mockClearSession).toHaveBeenCalled();
+    expect(mockCleanupSession).toHaveBeenCalledWith("test-session-token");
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "user-local-1", action: "LOGOUT", metadata: { reason: "idle" } }),
+    );
+  });
+
+  it("the renderer's logout after an idle sign-out does not write a second LOGOUT entry", async () => {
+    signedIn();
+    mockCheckSessionValidity.mockResolvedValue({ valid: false, reason: "idle" });
+    await handlers["session:user-activity"](win(1));
+    expect(audit.log).toHaveBeenCalledTimes(1);
+    mockDbValidateSession.mockResolvedValue(null); // row already deleted
+    const res = await handlers["auth:logout"]({}, "test-session-token");
+    expect(res).toEqual({ success: true });
+    expect(audit.log).toHaveBeenCalledTimes(1);
+  });
+
+  it("user logout runs the same sign-out, audit has the account id", async () => {
+    mockDbValidateSession.mockResolvedValue(createMockDbUser({ user_id: "user-local-2" }));
+    const res = await handlers["auth:logout"]({}, "other-token");
+    expect(res).toEqual({ success: true });
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "user-local-2", action: "LOGOUT", metadata: { reason: "user" } }),
+    );
+    expect(mockDbDeleteSession).toHaveBeenCalledWith("other-token");
+    expect(mockClearSession).toHaveBeenCalled();
+    expect(mockCleanupSession).toHaveBeenCalledWith("other-token");
+  });
+
+  it("user logout still runs cleanup + LOGOUT audit when the DB row is already expired/missing", async () => {
+    // Row past its expiry (or gone for any reason), session file still present, token NOT signed out here.
+    mockDbValidateSession.mockResolvedValue(null);
+    const res = await handlers["auth:logout"]({}, "expired-row-token");
+    expect(res).toEqual({ success: true });
+    expect(audit.log).toHaveBeenCalledTimes(1);
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "unknown", action: "LOGOUT", metadata: { reason: "user" } }),
+    );
+    expect(mockDbDeleteSession).toHaveBeenCalledWith("expired-row-token");
+    expect(mockClearSession).toHaveBeenCalled();
+    expect(mockCleanupSession).toHaveBeenCalledWith("expired-row-token");
+  });
+
+  it("main accepts at most one heartbeat per minute per window", async () => {
+    jest.useFakeTimers();
+    try {
+      jest.setSystemTime(Date.parse("2026-10-08T12:00:00Z"));
+      signedIn();
+      for (let i = 0; i < 20; i++) await handlers["session:user-activity"](win(1));
+      expect(mockPeekSession).toHaveBeenCalledTimes(1);
+      await handlers["session:user-activity"](win(2)); // another window counts on its own
+      expect(mockPeekSession).toHaveBeenCalledTimes(2);
+      jest.setSystemTime(Date.parse("2026-10-08T12:00:59Z"));
+      await handlers["session:user-activity"](win(1));
+      expect(mockPeekSession).toHaveBeenCalledTimes(2);
+      jest.setSystemTime(Date.parse("2026-10-08T12:01:00Z"));
+      await handlers["session:user-activity"](win(1));
+      expect(mockPeekSession).toHaveBeenCalledTimes(3);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("is a no-op when signed out", async () => {
+    mockDbIsInitialized.mockReturnValue(true);
+    mockPeekSession.mockResolvedValue({ status: "none" });
+    await handlers["session:user-activity"](win(1));
+    expect(mockCheckSessionValidity).not.toHaveBeenCalled();
+    expect(security.recordActivity).not.toHaveBeenCalled();
   });
 });

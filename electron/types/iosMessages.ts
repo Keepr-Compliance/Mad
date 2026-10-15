@@ -42,6 +42,26 @@ export interface iOSConversation {
   messages: iOSMessage[];
   lastMessage: Date;
   isGroupChat: boolean;
+  /**
+   * BACKLOG-3892 S1: the chat's newest `message.date` exactly as sms.db stores it
+   * (seconds before iOS 11, nanoseconds after), as a decimal string — exact past
+   * 2^53 and safe to serialize, unlike a BigInt. The parse floor compares this,
+   * never `lastMessage` (which assumes nanoseconds). Set by getConversationsAsync.
+   */
+  lastDateRaw?: string | null;
+  /** BACKLOG-3892 S1 (D5): the participants read failed, so `participants` is incomplete. */
+  participantsReadFailed?: boolean;
+  /**
+   * BACKLOG-3892 S2 (SR C3): rows in this chat with no date (NULL / <= 0). A chat
+   * holding any is never skipped as too old; its floored read keeps them.
+   */
+  undatedCount?: number;
+  /**
+   * BACKLOG-3892 S2 (SR C2): the floor this run ACTUALLY applied to the chat
+   * (epoch ms); null = read in full; absent = no floor plan. Coverage is recorded
+   * from this, never from the intended plan.
+   */
+  appliedFloorMs?: number | null;
 }
 
 /**

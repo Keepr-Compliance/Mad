@@ -258,32 +258,33 @@ describe("BACKLOG-3423: import source gates iPhone USB detection", () => {
     });
   });
 
-  describe("Windows, where detection starts before preferences are known", () => {
+  // BACKLOG-3418 (founder decision 2026-09-21, pm_comments f59ce258): this
+  // describe used to assert that a Windows user's detection STARTED before
+  // preferences were read and stopped once the Android source resolved — the
+  // BACKLOG-1706 "Windows/Linux always on" rule, kept by 3423 for an unknown
+  // source. The decision is that no detection runs until preferences are
+  // loaded, on every platform, so it is rewritten deliberately: an Android
+  // Windows user never starts detection at all. The signed-out, loading and
+  // re-gate cases live in iphoneSyncDetectorGate-3418.test.tsx.
+  describe("Windows Android-source user", () => {
     beforeEach(() => {
       currentPlatform = "windows";
       setStoredPreferences({ messages: { source: "android-companion" as ImportSource } });
     });
 
-    it("starts once on the platform default, then stops once the Android source resolves", async () => {
+    it("never starts device detection — not even before the Android source resolves", async () => {
       renderProvider(<IphoneSyncSettings disabled />);
 
-      // Windows/Linux stay ON while the source is unknown (their primary import
-      // path must not wait on an IPC round-trip), so detection does start.
-      expect(syncApi().startDetection).toHaveBeenCalled();
+      // Nothing may start before the preferences are read...
+      expect(syncApi().startDetection).not.toHaveBeenCalled();
 
-      // BACKLOG-3437: StrictMode mounts the detection effect, tears it down and
-      // remounts it, and that teardown ALREADY calls stopDetection once — so
-      // "stopDetection has been called" is true before the source has resolved
-      // and waiting on it waits for nothing. Wait for the gated state itself,
-      // and require a stop BEYOND the StrictMode one, which is what the Android
-      // source actually produces.
-      const stopsAtMount = syncApi().stopDetection.mock.calls.length;
-      await waitFor(() => {
-        expect(toggle()).toHaveAttribute("aria-checked", "false");
-        expect(syncApi().stopDetection.mock.calls.length).toBeGreaterThan(
-          stopsAtMount,
-        );
-      });
+      // ...nor once they are.
+      await waitFor(() => expect(prefsApi().get).toHaveBeenCalled());
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(toggle()).toHaveAttribute("aria-checked", "false");
+      expect(syncApi().startDetection).not.toHaveBeenCalled();
+      expect(syncApi().getUnifiedStatus).not.toHaveBeenCalled();
     });
   });
 });

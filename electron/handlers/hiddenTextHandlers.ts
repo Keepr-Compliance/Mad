@@ -24,6 +24,7 @@ import {
   unhideTextFromExport,
 } from "../services/db/hiddenTextDbService";
 import logService from "../services/logService";
+import { refuseIfDealLocked } from "../services/dealLockState";
 import { wrapHandler } from "../utils/wrapHandler";
 import { ValidationError, validateTransactionId } from "../utils/validation";
 // BACKLOG-3365: the real fail-closed plan check. Only the hide channel may use
@@ -71,6 +72,11 @@ export function registerHiddenTextHandlers(): void {
       ): Promise<HiddenTextResponse> => {
         const validatedTransactionId = requireTransactionId(transactionId);
         const validatedMessageId = requireMessageId(messageId);
+
+        // BACKLOG-3910: a locked deal is read-only, and what a deal exports is
+        // part of it. Hiding and unhiding are both refused, before any read.
+        const lockedRefusal = refuseIfDealLocked(validatedTransactionId, "hide-text");
+        if (lockedRefusal) return lockedRefusal;
 
         // The renderer hides the control when hiding is not allowed, but the
         // renderer is not the authority. Refused here, before any read or write.
@@ -131,8 +137,8 @@ export function registerHiddenTextHandlers(): void {
     ),
   );
 
-  // Never gated, never frozen: putting a text back into the export is always
-  // allowed, including after the entitlement is lost or the deal is exported.
+  // Never gated by the plan entitlement: putting a text back is allowed after the
+  // plan is lost. A locked deal (BACKLOG-3910) is still read-only, so it refuses.
   ipcMain.handle(
     "transactions:unhide-text-from-export",
     wrapHandler(
@@ -143,6 +149,11 @@ export function registerHiddenTextHandlers(): void {
       ): Promise<HiddenTextResponse> => {
         const validatedTransactionId = requireTransactionId(transactionId);
         const validatedMessageId = requireMessageId(messageId);
+
+        // BACKLOG-3910: a locked deal is read-only, and what a deal exports is
+        // part of it. Hiding and unhiding are both refused, before any read.
+        const lockedRefusal = refuseIfDealLocked(validatedTransactionId, "unhide-text");
+        if (lockedRefusal) return lockedRefusal;
 
         const transaction = await databaseService.getTransactionById(validatedTransactionId);
         if (!transaction) {

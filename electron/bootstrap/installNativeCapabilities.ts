@@ -113,6 +113,7 @@ import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
 
 import { recordStartupFailure } from "./startupFailure";
+import { getLogSink } from "../services/sealedLogSink";
 import { installLogger } from "../capabilities/loggerProvider";
 import { ElectronLogger } from "../capabilities/electron/electronLogger";
 import { installErrorReporter } from "../capabilities/errorReporterProvider";
@@ -222,6 +223,9 @@ try {
     })
     .then(() => {
       dialog.showErrorBox(STARTUP_FAILURE_TITLE, message);
+      // BACKLOG-3819: the data key never opened on this path, so the log lines
+      // above are still in memory. Put them on disk (redacted) before exit.
+      getLogSink().flushAtExit();
       app.exit(1);
     });
 }

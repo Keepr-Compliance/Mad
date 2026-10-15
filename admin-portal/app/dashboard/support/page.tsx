@@ -115,6 +115,7 @@ export default function SupportPage() {
       <PageHeader
         title="Support"
         subtitle="Manage support tickets"
+        className="max-md:flex-wrap max-md:gap-3"
         actions={
           <Button onClick={() => setShowCreateDialog(true)}>
             <Plus className="h-4 w-4" />
@@ -132,7 +133,7 @@ export default function SupportPage() {
       </div>
 
       {/* Filters + Column Selector */}
-      <div className="mb-4 flex items-start justify-between gap-4">
+      <div className="mb-4 flex items-start justify-between gap-4 max-md:flex-col max-md:gap-3">
         <TicketFilters
           status={statusFilter}
           priority={priorityFilter}
@@ -143,7 +144,7 @@ export default function SupportPage() {
           onCategoryChange={handleCategoryChange}
           onAssigneeChange={handleAssigneeChange}
         />
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 max-md:flex-wrap">
           <SavedViewSelector
             currentFilters={currentFilters}
             onLoadView={handleLoadView}

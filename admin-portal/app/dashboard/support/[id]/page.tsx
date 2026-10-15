@@ -126,25 +126,25 @@ export default function TicketDetailPage() {
       <div className="mb-6">
         <button
           onClick={() => router.push('/dashboard/support')}
-          className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-3"
+          className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-3 max-md:min-h-[44px]"
         >
           <ArrowLeft className="h-4 w-4" />
           Back to Queue
         </button>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between max-md:flex-col max-md:items-start max-md:gap-2">
+          <div className="flex items-center gap-3 max-md:flex-wrap max-md:gap-2">
             <div className="flex items-center gap-1.5 text-gray-400">
               <Hash className="h-5 w-5" />
               <span className="text-lg font-mono">{ticket.ticket_number}</span>
             </div>
-            <h1 className="text-xl font-bold text-gray-900">{ticket.subject}</h1>
+            <h1 className="text-xl font-bold text-gray-900 max-md:break-words max-md:w-full">{ticket.subject}</h1>
             <StatusBadge status={ticket.status} />
           </div>
           <div className="flex items-center gap-3">
             {attachments.length > 0 && (
               <button
                 onClick={() => setShowAttachments(!showAttachments)}
-                className="inline-flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                className="inline-flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors max-md:min-h-[44px]"
               >
                 {showAttachments ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                 {showAttachments ? 'Hide' : 'Show'} attachments
@@ -154,7 +154,7 @@ export default function TicketDetailPage() {
             {hasPermission(PERMISSIONS.SUPPORT_ADMIN) && (
               <button
                 onClick={() => setShowDeleteConfirm(true)}
-                className="inline-flex items-center gap-1.5 text-xs text-red-500 hover:text-red-700 transition-colors"
+                className="inline-flex items-center gap-1.5 text-xs text-red-500 hover:text-red-700 transition-colors max-md:min-h-[44px]"
                 title="Delete ticket"
               >
                 <Trash2 className="h-3.5 w-3.5" />

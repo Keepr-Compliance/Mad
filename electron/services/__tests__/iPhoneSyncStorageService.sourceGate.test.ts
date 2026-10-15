@@ -70,7 +70,7 @@ jest.mock("fs", () => {
 jest.mock("../databaseService");
 jest.mock("../db/externalContactDbService");
 jest.mock("../iosMessagesParser", () => ({
-  iOSMessagesParser: { resolveAttachmentPath: jest.fn() },
+  iOSMessagesParser: { resolveAttachmentPath: jest.fn(), flushRejectedPathSummary: jest.fn() },
 }));
 jest.mock("../../utils/messageTypeDetector", () => ({
   detectMessageType: jest.fn().mockReturnValue("text"),
@@ -143,7 +143,7 @@ function setPlatform(platform: "darwin" | "win32"): void {
   Object.defineProperty(process, "platform", { value: platform, configurable: true });
 }
 
-async function runSync(): Promise<void> {
+async function runSync(): Promise<any> {
   const syncResult: SyncResult = {
     success: true,
     messages: [],
@@ -152,7 +152,7 @@ async function runSync(): Promise<void> {
     error: null,
     duration: 100,
   } as unknown as SyncResult;
-  await iPhoneSyncStorageService.persistSyncResult(USER, syncResult, "/mock/backup");
+  return iPhoneSyncStorageService.persistSyncResult(USER, syncResult, "/mock/backup");
 }
 
 beforeEach(() => {
@@ -286,4 +286,47 @@ describe("BACKLOG-2486 — the read-failure path still fails OPEN", () => {
 
     expect(storedRecordIds()).toEqual(ALL);
   });
+});
+
+// ===========================================================================
+describe("BACKLOG-3791 — source-off skip reports the right reason per platform", () => {
+  const log = jest.requireMock("electron-log");
+  // The read-failure case above leaves getPreferences rejecting (clearAllMocks
+  // keeps implementations); restore the suite's own before each case here.
+  beforeEach(() => {
+    jest.requireMock("../supabaseService").default.getPreferences.mockImplementation(() =>
+      Promise.resolve(mockPreferences),
+    );
+  });
+  const skipLine = (): string =>
+    (log.info.mock.calls as string[][]).map((c) => c[0]).find((m) => m.includes("contacts storage skipped")) ?? "";
+
+  it("macOS: keeps the iCloud explanation and flags source off", async () => {
+    setPlatform("darwin");
+    mockPreferences = prefs({ iphoneContacts: false });
+    const result = await runSync();
+    expect(skipLine()).toContain("via iCloud");
+    expect(result.contactsSourceOff).toBe(true);
+    expect(result.contactsStored).toBe(0);
+  });
+
+  it("Windows: no Mac wording, points at Settings, flags source off", async () => {
+    setPlatform("win32");
+    mockPreferences = prefs({ iphoneContacts: false });
+    const result = await runSync();
+    expect(skipLine()).toContain("source is off");
+    expect(skipLine()).toContain("Settings");
+    expect(skipLine()).not.toMatch(/macOS|Mac address book|iCloud/);
+    expect(result.contactsSourceOff).toBe(true);
+  });
+
+  for (const platform of ["darwin", "win32"] as const) {
+    it(`${platform}: source on -> not flagged off, no skip line`, async () => {
+      setPlatform(platform);
+      mockPreferences = prefs({ iphoneContacts: true });
+      const result = await runSync();
+      expect(result.contactsSourceOff).toBe(false);
+      expect(skipLine()).toBe("");
+    });
+  }
 });

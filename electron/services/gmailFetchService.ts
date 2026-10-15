@@ -1,4 +1,5 @@
 import { google, gmail_v1, Auth } from "googleapis";
+import { gaxiosNetFetch } from "./mainNetFetch";
 import {
   FetchCancelledError,
   isFetchCancelledError,
@@ -251,9 +252,13 @@ class GmailFetchService {
         await databaseService.getOAuthToken(userId, "google", "mailbox");
 
       if (!tokenRecord) {
-        throw new Error(
-          "No Gmail OAuth token found. User needs to connect Gmail first.",
-        );
+        // BACKLOG-3867: no Gmail mailbox connected is a normal state, not a
+        // failure. Callers treat `false` as "skip Gmail"; only a connected
+        // mailbox whose setup fails reaches the error path below.
+        this.gmail = null;
+        this.oauth2Client = null;
+        logService.debug("No Gmail mailbox connected; skipping", "GmailFetch");
+        return false;
       }
 
       // Session-only OAuth: tokens stored unencrypted in encrypted database
@@ -262,11 +267,14 @@ class GmailFetchService {
 
       // Initialize OAuth2 client for Gmail API calls
       // Token refresh is handled by googleAuthService; this client is for API calls only
-      const oauth2Client = new google.auth.OAuth2(
-        process.env.GOOGLE_CLIENT_ID,
-        process.env.GOOGLE_CLIENT_SECRET,
-        process.env.GOOGLE_REDIRECT_URI,
-      );
+      // BACKLOG-3799: token refresh AND Gmail API calls ride Electron net.fetch
+      // (OS certificate store), not gaxios's node-fetch over Node TLS.
+      const oauth2Client = new google.auth.OAuth2({
+        clientId: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        redirectUri: process.env.GOOGLE_REDIRECT_URI,
+        transporterOptions: { fetchImplementation: gaxiosNetFetch },
+      });
 
       // Set credentials
       oauth2Client.setCredentials({
@@ -303,7 +311,9 @@ class GmailFetchService {
       logService.debug("Initialized successfully", "GmailFetch");
       return true;
     } catch (error) {
-      logService.error("Initialization failed", "GmailFetch", { error });
+      logService.error("Initialization failed", "GmailFetch", {
+        errorClass: error instanceof Error ? error.name : typeof error,
+      });
       Sentry.captureException(error, {
         tags: { service: "gmail-fetch", operation: "initialize" },
       });
@@ -924,6 +934,40 @@ class GmailFetchService {
    */
   private static readonly EXCLUDED_LABEL_PREFIXES = ["CATEGORY_"];
 
+  /** BACKLOG-3926: the last `labels.list` response, reduced to id / name / type. */
+  private lastListedLabels: {
+    at: number;
+    labels: Array<{ id: string | null; name: string | null; type: string | null }>;
+  } | null = null;
+
+  /**
+   * BACKLOG-3926: the last `labels.list` response, or null — no network. The catalogue
+   * refresh compares it with what it last catalogued to notice a new / renamed label.
+   */
+  peekLabelCatalogSource(): Array<{ id: string | null; name: string | null; type: string | null }> | null {
+    return this.lastListedLabels?.labels ?? null;
+  }
+
+  /**
+   * BACKLOG-3926: every label of the mailbox with its `type` ("system" | "user") —
+   * one `labels.list`, reused when a walk listed them less than `maxAgeMs` ago.
+   */
+  async listLabelCatalogSource(
+    maxAgeMs: number,
+  ): Promise<Array<{ id: string | null; name: string | null; type: string | null }>> {
+    const cached = this.lastListedLabels;
+    if (cached && Date.now() - cached.at <= maxAgeMs) return cached.labels;
+    if (!this.gmail) throw new Error("Gmail API not initialized. Call initialize() first.");
+    const response = await this._throttledCall(() => this.gmail!.users.labels.list({ userId: "me" }));
+    const labels = (response.data.labels || []).map((l) => ({
+      id: l.id ?? null,
+      name: l.name ?? null,
+      type: l.type ?? null,
+    }));
+    this.lastListedLabels = { at: Date.now(), labels };
+    return labels;
+  }
+
   /**
    * Discover all syncable Gmail labels (TASK-2046)
    *
@@ -953,6 +997,12 @@ class GmailFetchService {
       }
 
       const allLabels = response.data.labels || [];
+      // BACKLOG-3926: keep the full list (system labels included, with their `type`)
+      // so the label-name catalogue refresh after this fetch needs no second call.
+      this.lastListedLabels = {
+        at: Date.now(),
+        labels: allLabels.map((l) => ({ id: l.id ?? null, name: l.name ?? null, type: l.type ?? null })),
+      };
 
       const syncableLabels = allLabels.filter((label) => {
         if (!label.id) return false;

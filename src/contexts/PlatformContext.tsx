@@ -12,6 +12,7 @@ import {
   getPlatform,
   isFeatureAvailable,
   isElectron as checkIsElectron,
+  isWindowsArm64 as checkIsWindowsArm64,
   FeatureName,
 } from "../utils/platform";
 
@@ -28,6 +29,8 @@ interface PlatformContextType {
   isLinux: boolean;
   /** True if running inside Electron (desktop app) */
   isElectron: boolean;
+  /** BACKLOG-3363: true on a Windows on ARM PC (iPhone USB sync unsupported) */
+  isWindowsArm64: boolean;
 }
 
 const PlatformContext = createContext<PlatformContextType | null>(null);
@@ -50,6 +53,7 @@ export function PlatformProvider({ children }: PlatformProviderProps) {
       isWindows: platform === "windows",
       isLinux: platform === "linux",
       isElectron: checkIsElectron(),
+      isWindowsArm64: checkIsWindowsArm64(),
     };
   }, []);
 

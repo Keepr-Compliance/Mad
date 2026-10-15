@@ -76,6 +76,12 @@ export interface ChecklistLink {
   /** Derived in the main process from the target rows, never taken from the renderer. */
   label: string;
   sortOrder: number;
+  /**
+   * BACKLOG-3764: the agent chose to send this group although its evidence is
+   * dated outside the deal's audit dates. Covers the whole group, including
+   * members that fall outside later because the dates changed.
+   */
+  includeOutsideDates: boolean;
   members: ChecklistLinkMember[];
 }
 
@@ -206,6 +212,19 @@ export interface AddChecklistLinkInput {
   kind: ChecklistLinkKind;
   /** `attachments.id` or `emails.id`, depending on `kind`. At least one. */
   targetIds: string[];
+  /**
+   * BACKLOG-3764: the agent answered "Include it" to the outside-the-dates
+   * question. Without it, a group with any target dated outside the deal's
+   * audit dates is refused as `outside_dates` and nothing is written.
+   */
+  includeOutsideDates?: boolean;
+}
+
+/** BACKLOG-3764: one target dated outside the deal's audit dates. */
+export interface OutsideAuditDatesTarget {
+  id: string;
+  /** The date that puts it outside (an email's, or the message a file came with). Null when it has none. */
+  sentAt: string | null;
 }
 
 export type AddChecklistLinkResult =
@@ -223,4 +242,17 @@ export type AddChecklistLinkResult =
    * At least one target is not evidence of this item's transaction. Nothing is
    * written — not even the targets that WOULD have been valid.
    */
-  | { status: "targets_not_in_transaction"; rejectedIds: string[] };
+  | { status: "targets_not_in_transaction"; rejectedIds: string[] }
+  /**
+   * BACKLOG-3764: at least one target is dated outside the deal's audit dates
+   * and the request did not say to include it. Nothing is written. The
+   * renderer asks the agent and repeats the request with
+   * `includeOutsideDates: true` on a yes. `auditStart` / `auditEnd` are the
+   * deal's dates as stored (for the question's wording only).
+   */
+  | {
+      status: "outside_dates";
+      outside: OutsideAuditDatesTarget[];
+      auditStart: string | null;
+      auditEnd: string | null;
+    };

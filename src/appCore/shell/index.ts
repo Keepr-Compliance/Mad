@@ -7,3 +7,4 @@
 export { OfflineBanner } from "./OfflineBanner";
 export { VersionPopup } from "./VersionPopup";
 export { WindowDragStrip, DRAG_STRIP_HEIGHT_PX } from "./WindowDragStrip";
+export { ShellBanners } from "./ShellBanners";

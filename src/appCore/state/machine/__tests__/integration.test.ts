@@ -677,56 +677,6 @@ describe("AppState Integration Tests", () => {
   // ONBOARDING SKIP BEHAVIOR
   // ============================================
 
-  describe("Onboarding Skip", () => {
-    it("skipping step advances to next step", async () => {
-      setupNewUserAfterOAuth();
-
-      const { result } = renderAppStateHook();
-
-      await waitFor(() => {
-        expect(result.current.state.status).toBe("onboarding");
-      });
-
-      expect(result.current.onboardingStep).toBe("phone-type");
-
-      // Skip instead of complete
-      act(() => {
-        result.current.dispatch({
-          type: "ONBOARDING_SKIP",
-          step: "phone-type",
-        });
-      });
-
-      // Should advance to next step
-      await waitFor(() => {
-        expect(result.current.onboardingStep).not.toBe("phone-type");
-      });
-    });
-
-    it("skip is tracked as completed step", async () => {
-      setupNewUserAfterOAuth();
-
-      const { result } = renderAppStateHook();
-
-      await waitFor(() => {
-        expect(result.current.state.status).toBe("onboarding");
-      });
-
-      // Skip phone-type
-      act(() => {
-        result.current.dispatch({
-          type: "ONBOARDING_SKIP",
-          step: "phone-type",
-        });
-      });
-
-      // Verify it's in completedSteps
-      if (result.current.state.status === "onboarding") {
-        expect(result.current.state.completedSteps).toContain("phone-type");
-      }
-    });
-  });
-
   // ============================================
   // DERIVED STATE SELECTORS
   // ============================================

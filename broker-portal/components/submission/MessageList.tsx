@@ -569,7 +569,7 @@ function ThreadCard({
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors">
-      <div className="px-4 py-3 flex items-center justify-between">
+      <div className="px-4 py-3 flex flex-col items-stretch gap-2 md:flex-row md:items-center md:justify-between md:gap-0">
         <div className="flex items-center gap-3 min-w-0 flex-1">
           {/* Avatar */}
           {isGroupChat ? (
@@ -641,7 +641,7 @@ function ThreadCard({
         {/* View Full button */}
         <button
           onClick={onViewFull}
-          className="inline-flex items-center gap-1 text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors whitespace-nowrap flex-shrink-0 ml-4"
+          className="inline-flex items-center gap-1 text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors whitespace-nowrap flex-shrink-0 self-end md:self-auto md:ml-4"
         >
           View Full
           <ChevronRight className="h-4 w-4" />
@@ -683,19 +683,20 @@ export function MessageList({ messages, attachmentsByMessage }: MessageListProps
       <div className="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
         {/* Header with tabs */}
         <div className="px-6 py-4 border-b border-gray-200">
-          <div className="flex items-center justify-between">
+          {/* BACKLOG-3798: below md the title and the filter pills stack and wrap. */}
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between md:gap-0">
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Messages ({filteredMessages.length})</h2>
               <p className="text-sm text-gray-500">
                 in {threads.length} conversation{threads.length !== 1 ? 's' : ''}
               </p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 md:flex-nowrap">
               {tabs.map(({ value, label, count }) => (
                 <button
                   key={value}
                   onClick={() => setFilter(value)}
-                  className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                  className={`px-4 py-2 min-h-[36px] md:min-h-0 rounded-full text-sm font-medium transition-colors ${
                     filter === value
                       ? 'bg-primary-600 text-white'
                       : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'

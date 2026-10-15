@@ -37,7 +37,7 @@
 import * as crypto from "crypto";
 import * as path from "path";
 
-import type { RcsChatPeople, RcsImportResult, RcsIncomingChat, RcsIncomingMessage } from "./rcsImportStore";
+import { lookupMessageIds, RCS_LOOKUP_CHUNK, type RcsChatPeople, type RcsImportResult, type RcsIncomingChat, type RcsIncomingMessage } from "./rcsImportStore";
 import { RCS_ALLOWED_IMAGE_MIME, RCS_MAX_IMAGE_BYTES, rcsImageExt, type RcsImageResult, type RcsIncomingImage } from "./rcsImportMedia";
 import { scrubRcsText } from "../utils/redactSensitive";
 
@@ -111,7 +111,12 @@ export interface RcsStagingFs {
   /** `<userData>/message-attachments`. */
   attachmentsDir: string;
   mkdir(dir: string): Promise<void>;
-  writeFile(filePath: string, data: Buffer): Promise<void>;
+  /**
+   * BACKLOG-3816: stores `data` as KEPRENC ciphertext (atRest/attachmentWriter).
+   * Staged files are ciphertext, so the commit's move into message-attachments
+   * is a rename of ciphertext.
+   */
+  writeSealed(filePath: string, data: Buffer): Promise<void>;
   exists(filePath: string): Promise<boolean>;
   /** Move a staged file into place (same volume: a rename). */
   move(from: string, to: string): Promise<void>;
@@ -127,10 +132,14 @@ export interface RcsStagingFs {
 export interface RcsCommitWriter {
   /** Store one chat for the user: synchronous (it runs inside the transaction). */
   storeChat(chat: RcsIncomingChat, userId: string, people: RcsChatPeople): RcsImportResult;
-  /** external_id -> id for this user (read once, after every chat is stored). */
-  getMessageIdMap(userId: string): Map<string, string>;
-  /** `${message_id}:${filename}` of every attachment (read once). */
-  getExistingAttachmentRecords(): Set<string>;
+  /**
+   * BACKLOG-3924: external_id -> id for these external ids of the user (one
+   * chunk). Keyed: the commit runs it per chat, so a full read of the user's
+   * messages here costs seconds per chat on a large history.
+   */
+  getMessageIdsByExternalIds(userId: string, externalIds: readonly string[]): Map<string, string>;
+  /** BACKLOG-3924: `${message_id}:${filename}` of the attachments of these messages (one chunk). */
+  getExistingAttachmentRecordsForMessages(messageIds: readonly string[]): Set<string>;
   insertAttachment(params: {
     id: string;
     messageId: string;
@@ -196,6 +205,12 @@ export interface CacheCommitResult {
   stopped?: boolean;
   /** 3671 P3: every chat was saved but the run's own records (hooks.runDone) were not. */
   runRecordFailed?: boolean;
+  /**
+   * BACKLOG-3892 E: a deal chat this run asked to read back to its deal floor came back
+   * short (the page did not reach the floor): the latest of those chats' oldest saved
+   * text, ms. Set by the caller (rcsImportHandlers.commitCacheStaging).
+   */
+  onlyBackToMs?: number;
 }
 
 /** 3671 P3: what the caller adds to a per-chat commit. */
@@ -203,7 +218,7 @@ export interface CacheCommitHooks {
   /** Re-checked per chat at commit time: a chat switched to Don't sync since is skipped. */
   chatExcluded?: (userId: string, chatHash: string, conversationId: string) => boolean;
   /** INSIDE each chat's transaction, after its rows (its coverage, its read record). */
-  perChat?: (chat: { chatHash: string; conversationId: string; meta: StagedChatMeta | null }) => void;
+  perChat?: (chat: { chatHash: string; conversationId: string; meta: StagedChatMeta | null; oldestKeptMs?: number | null }) => void;
   /** In one last transaction, ONLY when the run is complete and every chat was saved. */
   runDone?: (result: CacheCommitResult) => void;
   log?: (message: string) => void;
@@ -273,6 +288,16 @@ export function selectForCommit(keys: readonly StagedMessageKey[], limits: Cache
     kept.add(keyOf(k.chatHash, k.msgId));
   }
   return { kept, staged: keys.length, droppedByDate, droppedByCap };
+}
+
+/** BACKLOG-3892 E: the oldest dated message in a chat's kept messages, ms (null: none dated). */
+export function oldestSentMs(messages: ReadonlyArray<{ sentAt: string }>): number | null {
+  let oldest: number | null = null;
+  for (const m of messages) {
+    const t = Date.parse(m.sentAt);
+    if (Number.isFinite(t) && (oldest === null || t < oldest)) oldest = t;
+  }
+  return oldest;
 }
 
 /** A staged message's reply to the page: the /chat contract, nothing stored yet. */
@@ -400,7 +425,7 @@ export class RcsCacheStaging {
     const dir = this.jobDir(jobId);
     const tempPath = path.join(dir, `${slot}${ext}`);
     await this.files.mkdir(dir);
-    await this.files.writeFile(tempPath, bytes);
+    await this.files.writeSealed(tempPath, bytes);
     if (this.ended.has(jobId)) {
       // The job ended while the bytes were written: nothing stays.
       await this.files.unlink(tempPath);
@@ -512,8 +537,19 @@ export class RcsCacheStaging {
               r.reactions = s.reactionsStored ?? 0;
             }
             if (images.length > 0) {
-              const ids = writer.getMessageIdMap(userId);
-              const existing = writer.getExistingAttachmentRecords();
+              // BACKLOG-3924: this chat's ids and attachment records only (keyed, chunked).
+              const ids = lookupMessageIds(
+                (u, keys) => writer.getMessageIdsByExternalIds(u, keys),
+                userId,
+                images.map((img) => writer.externalId(img.chatHash, img.msgId)),
+              );
+              const messageIds = [...new Set(ids.values())];
+              const existing = new Set<string>();
+              for (let start = 0; start < messageIds.length; start += RCS_LOOKUP_CHUNK) {
+                for (const rec of writer.getExistingAttachmentRecordsForMessages(messageIds.slice(start, start + RCS_LOOKUP_CHUNK))) {
+                  existing.add(rec);
+                }
+              }
               for (const img of images) {
                 const externalId = writer.externalId(img.chatHash, img.msgId);
                 const messageId = ids.get(externalId);
@@ -541,7 +577,12 @@ export class RcsCacheStaging {
                 writer.markMessageHasAttachments(messageId);
               }
             }
-            h.perChat?.({ chatHash: row.chatHash, conversationId: row.conversationId, meta: meta.get(row.chatHash) ?? null });
+            h.perChat?.({
+              chatHash: row.chatHash,
+              conversationId: row.conversationId,
+              meta: meta.get(row.chatHash) ?? null,
+              oldestKeptMs: oldestSentMs(messages),
+            });
             return r;
           });
           // Committed: this chat's files are referenced now; its journal is done with.
@@ -564,6 +605,10 @@ export class RcsCacheStaging {
           out.chatsFailed = (out.chatsFailed ?? 0) + 1;
           h.log?.(`[RcsCache] A chat could not be saved (the others are kept): ${scrubRcsText(err)}`);
         }
+        // BACKLOG-3924: let the main process breathe between chats (each chat's
+        // transaction is already closed here). Text-only chats have no await of
+        // their own, so without this a large commit ran start to end in one turn.
+        await new Promise<void>((resolve) => setImmediate(resolve));
       }
       // A complete run: the run-level records, in one last transaction.
       if (complete && !out.stopped && (out.chatsFailed ?? 0) === 0 && h.runDone) {

@@ -50,6 +50,12 @@ export interface StartupDiagnostics {
     isInstalled: boolean;
     version: string | null;
     serviceRunning: boolean;
+    /** BACKLOG-3927: msi | apple-devices (Store build). */
+    installedVia?: "msi" | "apple-devices" | null;
+    /** BACKLOG-3927: true only for a QA session that overrode the driver source. */
+    installedViaOverride?: true;
+    /** BACKLOG-3927: Store build Apple Devices state. */
+    appleDevicesState?: string | null;
   };
 }
 
@@ -112,6 +118,10 @@ export async function collectStartupDiagnostics(): Promise<StartupDiagnostics> {
           isInstalled: driverStatus.isInstalled,
           version: driverStatus.version,
           serviceRunning: driverStatus.serviceRunning,
+          // BACKLOG-3927: only when known, so a website build's payload is unchanged.
+          ...(driverStatus.installedVia ? { installedVia: driverStatus.installedVia } : {}),
+          ...(driverStatus.sourceOverridden ? { installedViaOverride: true as const } : {}),
+          ...(driverStatus.appleDevices ? { appleDevicesState: driverStatus.appleDevices.state } : {}),
         };
       } catch (err) {
         log.warn("[StartupDiagnostics] Failed to check Apple drivers:", err);

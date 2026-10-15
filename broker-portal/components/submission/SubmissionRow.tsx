@@ -4,12 +4,14 @@
  * A submissions-table row that opens its submission when clicked anywhere,
  * matching the dashboard's "Recent Submissions" list, where each row is one
  * block link (app/dashboard/page.tsx). A <tr> cannot be wrapped in an anchor,
- * so the click is handled here; the row's own "Review" link stays the
- * keyboard path (one tab stop per row, Enter opens it) — BACKLOG-3609.
+ * so the click is handled here; the street <Link> in the list page
+ * (app/dashboard/submissions/page.tsx) is the keyboard path (one tab stop per
+ * row, Enter opens it) — BACKLOG-3609, BACKLOG-3904.
  */
 
 import { useRouter } from 'next/navigation';
 import type { MouseEvent, ReactNode } from 'react';
+import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
 
 /** Clicks that start on one of these keep that element's own action. */
 const INTERACTIVE = 'a, button, input, select, textarea, label, [role="button"]';
@@ -35,6 +37,9 @@ export function SubmissionRow({ href, className, children }: SubmissionRowProps)
       window.open(href, '_blank', 'noopener');
       return;
     }
+    // Top loading bar: router.push is invisible to the anchor-click listener
+    // (BACKLOG-3893).
+    startNavigationProgress();
     router.push(href);
   };
 

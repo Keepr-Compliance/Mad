@@ -12,6 +12,7 @@
 import { Card, PageHeader } from '@keepr/design-system';
 import { TicketForm } from '@/app/support/components/TicketForm';
 import { resolveTicketPreset } from '@/lib/support/ticketPresets';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 
 interface PageProps {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -23,7 +24,9 @@ export default async function DashboardNewTicketPage({ searchParams }: PageProps
   return (
     <div className="max-w-4xl mx-auto">
       <PageHeader
-        title="Submit a Support Request"
+        phoneHideTitle
+        phoneHideSubtitle
+        title={PAGE_TITLES.supportNew}
         subtitle="Fill out the form below and we will get back to you as soon as possible."
       />
 

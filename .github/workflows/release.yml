@@ -4,11 +4,23 @@ name: Release
 on:
   push:
     branches: [main]
-  # No inputs. A dispatch behaves exactly like a push to main: what gets
-  # published is decided by the create-release job's github.ref guard alone.
-  # The former `publish` input was declared and read nowhere, so it read as a
-  # safety control while being none (BACKLOG-3192).
+  # One input, and it is read (BACKLOG-3927). What gets published is still
+  # decided by the create-release job's github.ref guard. (The former
+  # `publish` input was declared and read nowhere, so it read as a safety
+  # control while being none -- BACKLOG-3192.)
+  #
+  # channel: website (default; also every push) builds both platforms and the
+  #          website Windows installer, which bundles Apple Mobile Device
+  #          Support. store builds ONLY the Microsoft Store Windows installer:
+  #          no Apple driver payload, marked distributionChannel=store, artifact
+  #          `release-windows-store`, never published. Refused on main.
   workflow_dispatch:
+    inputs:
+      channel:
+        description: "Distribution channel (store = Microsoft Store Windows installer only, never published)"
+        type: choice
+        options: [website, store]
+        default: website
 
 # Required permissions for creating releases
 permissions:
@@ -19,6 +31,8 @@ jobs:
   release-macos:
     name: Release macOS
     runs-on: macos-latest
+    # BACKLOG-3927: a Store run builds Windows only.
+    if: inputs.channel != 'store'
 
     steps:
       - name: Checkout code
@@ -31,6 +45,10 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
+      # BACKLOG-3675: refuse to release with the placeholder (empty) offline pass key map.
+      - name: Verify offline pass public key is set
+        run: node scripts/ci/check-offline-pass-keys.mjs
 
       - name: Build application
         run: npm run build
@@ -97,7 +115,6 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
           MICROSOFT_CLIENT_ID: ${{ secrets.MICROSOFT_CLIENT_ID }}
           MICROSOFT_TENANT_ID: ${{ secrets.MICROSOFT_TENANT_ID }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
@@ -108,7 +125,6 @@ jobs:
             echo "SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}"
             echo "GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}"
             echo "GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}"
-            echo "GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}"
             echo "MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID}"
             echo "MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID}"
             echo "BROKER_PORTAL_URL=https://app.keeprcompliance.com"
@@ -143,7 +159,6 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
           MICROSOFT_CLIENT_ID: ${{ secrets.MICROSOFT_CLIENT_ID }}
           MICROSOFT_TENANT_ID: ${{ secrets.MICROSOFT_TENANT_ID }}
         run: |
@@ -156,7 +171,6 @@ jobs:
             echo "SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}"
             echo "GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}"
             echo "GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}"
-            echo "GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}"
             echo "MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID}"
             echo "MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID}"
             echo "BROKER_PORTAL_URL=https://app.keeprcompliance.com"
@@ -268,6 +282,18 @@ jobs:
             --output-dir release --max-content-mb 400 --max-ratio 1.5 \
             release/mac-arm64/Keepr.app release/mac/Keepr.app
 
+      - name: Verify the packages contain the third-party licence files (BACKLOG-3803)
+        run: |
+          for app in release/mac-arm64/Keepr.app release/mac/Keepr.app; do
+            node scripts/ci/check-packaged-notices.mjs mac "$app"
+          done
+
+      - name: Verify the packages ship no Google Maps key (BACKLOG-3834)
+        run: |
+          for app in release/mac-arm64/Keepr.app release/mac/Keepr.app; do
+            node scripts/ci/check-packaged-secrets.mjs mac "$app"
+          done
+
       - name: Upload macOS Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -289,6 +315,15 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      # BACKLOG-3927: the Store installer is never published, so it is never
+      # built from main (where create-release would publish this run).
+      - name: Refuse a Store build on main
+        if: inputs.channel == 'store' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          echo "::error::channel=store must be dispatched from a branch other than main"
+          exit 1
+
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -300,11 +335,23 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # BACKLOG-3675: refuse to release with the placeholder (empty) offline pass key map.
+      - name: Verify offline pass public key is set
+        run: node scripts/ci/check-offline-pass-keys.mjs
+
+      # BACKLOG-3814. The iPhone tools in resources/win/libimobiledevice are the signed
+      # copies from the 2.40.0 installer, reused byte-for-byte every release. Fail before
+      # packaging if the checkout differs from resources/pinned/libimobiledevice.manifest.json.
+      - name: Verify the pinned iPhone tools match the manifest (BACKLOG-3814)
+        run: node scripts/release/pinnedIphoneTools.js --repo
+
       - name: Build application
         run: npm run build
 
-      # Download Apple drivers for Windows build
+      # Download Apple drivers for the website Windows build. Skipped for the
+      # Microsoft Store build (BACKLOG-3927, Store policy 10.2.4.2).
       - name: Download Apple Drivers
+        if: inputs.channel != 'store'
         run: |
           echo "Downloading iTunes installer to extract Apple Mobile Device Support..."
 
@@ -345,6 +392,28 @@ jobs:
           Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
         shell: pwsh
 
+      # BACKLOG-3927: the Store build carries no Apple driver folder at all (not
+      # even its README.md / version.txt), and not resources\win\README.md, which
+      # describes extracting those drivers. Nothing above put an installer there;
+      # this removes both so packaging cannot ship them, and the driver check
+      # after packaging is the gate.
+      - name: Store build - no Apple driver payload
+        if: inputs.channel == 'store'
+        shell: pwsh
+        run: |
+          Remove-Item -Path "resources\win\apple-drivers" -Recurse -Force -ErrorAction SilentlyContinue
+          if (Test-Path "resources\win\apple-drivers") {
+            echo "::error::resources\win\apple-drivers still exists in the Store build"
+            exit 1
+          }
+          echo "Store build: resources\win\apple-drivers removed"
+          Remove-Item -Path "resources\win\README.md" -Force -ErrorAction SilentlyContinue
+          if (Test-Path "resources\win\README.md") {
+            echo "::error::resources\win\README.md still exists in the Store build"
+            exit 1
+          }
+          echo "Store build: resources\win\README.md removed"
+
       # Create .env.production with secrets for runtime use
       # The app loads credentials from this file at runtime (electron/main.ts)
       # NOTE: SUPABASE_SERVICE_KEY is intentionally excluded - it's server-side only
@@ -354,7 +423,6 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
           MICROSOFT_CLIENT_ID: ${{ secrets.MICROSOFT_CLIENT_ID }}
           MICROSOFT_TENANT_ID: ${{ secrets.MICROSOFT_TENANT_ID }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
@@ -364,7 +432,6 @@ jobs:
             "SUPABASE_ANON_KEY=$env:SUPABASE_ANON_KEY",
             "GOOGLE_CLIENT_ID=$env:GOOGLE_CLIENT_ID",
             "GOOGLE_CLIENT_SECRET=$env:GOOGLE_CLIENT_SECRET",
-            "GOOGLE_MAPS_API_KEY=$env:GOOGLE_MAPS_API_KEY",
             "MICROSOFT_CLIENT_ID=$env:MICROSOFT_CLIENT_ID",
             "MICROSOFT_TENANT_ID=$env:MICROSOFT_TENANT_ID",
             "BROKER_PORTAL_URL=https://app.keeprcompliance.com",
@@ -374,6 +441,110 @@ jobs:
           Add-Content -Path .env.production -Value ""
           echo ".env.production created with $($content.Split("`n").Count) lines"
         shell: pwsh
+
+      # BACKLOG-3533. makensis embeds its plugin DLLs into the installer and the
+      # uninstaller verbatim, and electron-builder has no option to sign them. This
+      # step resolves the same two NSIS bundles electron-builder would use (through
+      # its own downloader, which verifies the pinned sha256), copies them to
+      # RUNNER_TEMP, signs the plugin DLLs the installer uses, and points
+      # electron-builder at the copies via ELECTRON_BUILDER_NSIS_DIR and
+      # ELECTRON_BUILDER_NSIS_RESOURCES_DIR. The PE signature check after packaging
+      # fails if any plugin DLL in the installer or uninstaller is left unsigned.
+      - name: Sign NSIS plugin DLLs (BACKLOG-3533)
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_ENDPOINT: ${{ secrets.AZURE_ENDPOINT }}
+          AZURE_CODE_SIGNING_ACCOUNT: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          foreach ($v in "AZURE_TENANT_ID","AZURE_CLIENT_ID","AZURE_CLIENT_SECRET","AZURE_ENDPOINT","AZURE_CODE_SIGNING_ACCOUNT","AZURE_CERT_PROFILE") {
+            if (-not (Test-Path "env:$v") -or [string]::IsNullOrEmpty((Get-Item "env:$v").Value)) {
+              echo "::error::Missing required Azure Trusted Signing secret: $v"
+              exit 1
+            }
+          }
+
+          # The bundles this step signs must be the ones electron-builder is pinned
+          # to. If an upgrade changes a pin, stop here instead of signing stale copies.
+          $pins = @(
+            "9877df902530f96357d13a7a31ae2b9df67f48b11ffc9a1700a7c961574ec5fa",  # nsis-3.0.4.1.7z
+            "593a9a92ef958321293ac6a2ee61e64bf1bd543142a5bd6b3d310709cc924103"   # nsis-resources-3.4.1.7z
+          )
+          $toolset = Get-Content -Raw node_modules/app-builder-lib/out/toolsets/windows.js
+          foreach ($p in $pins) {
+            if (-not $toolset.Contains($p)) {
+              echo "::error::electron-builder's NSIS pin $p is gone from toolsets/windows.js -- update this step"
+              exit 1
+            }
+          }
+
+          # Resolve (download + checksum-verify) both bundles with electron-builder's
+          # own code, exactly as the packaging step would.
+          $json = node -e "require('app-builder-lib'); const w = require('app-builder-lib/out/toolsets/windows.js'); (async () => { const m = await w.getMakeNsisPath(undefined, undefined); const p = await w.getNsisPluginsPath(undefined, undefined); console.log('NSIS_PATHS=' + JSON.stringify({ nsisDir: m.env.NSISDIR, pluginsDir: p })); })().catch(e => { console.error(e); process.exit(1); })"
+          if ($LASTEXITCODE -ne 0) { Write-Error "Could not resolve the NSIS bundles"; exit 1 }
+          $line = @($json | Where-Object { $_ -like "NSIS_PATHS=*" })
+          if ($line.Count -ne 1) { Write-Error "NSIS path resolution printed no result"; exit 1 }
+          $paths = $line[0].Substring("NSIS_PATHS=".Length) | ConvertFrom-Json
+          $srcNsis = $paths.nsisDir
+          $srcRes = Split-Path -Parent $paths.pluginsDir
+          echo "NSIS bundle:           $srcNsis"
+          echo "NSIS resources bundle: $srcRes"
+
+          $root = Join-Path $env:RUNNER_TEMP "nsis-signed"
+          $dstNsis = Join-Path $root "nsis"
+          $dstRes = Join-Path $root "nsis-resources"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          Copy-Item -LiteralPath $srcNsis -Destination $dstNsis -Recurse
+          Copy-Item -LiteralPath $srcRes -Destination $dstRes -Recurse
+          if (-not (Test-Path -LiteralPath (Join-Path $dstNsis "Bin/makensis.exe"))) { Write-Error "Bin/makensis.exe missing from the copied NSIS bundle"; exit 1 }
+
+          # The plugins the installer and uninstaller embed (measured on v2.38.1).
+          $targets = @(
+            (Join-Path $dstNsis "Plugins/x86-unicode/nsExec.dll"),
+            (Join-Path $dstNsis "Plugins/x86-unicode/System.dll"),
+            (Join-Path $dstRes "plugins/x86-unicode/nsis7z.dll"),
+            (Join-Path $dstRes "plugins/x86-unicode/SpiderBanner.dll"),
+            (Join-Path $dstRes "plugins/x86-unicode/StdUtils.dll"),
+            (Join-Path $dstRes "plugins/x86-unicode/WinShell.dll")
+          )
+          foreach ($t in $targets) {
+            if (-not (Test-Path -LiteralPath $t -PathType Leaf)) { Write-Error "Plugin not found: $t"; exit 1 }
+          }
+
+          try {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+          } catch {
+            echo "NuGet provider install skipped: $($_.Exception.Message)"
+          }
+          Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -Repository PSGallery -Scope CurrentUser
+
+          Invoke-TrustedSigning `
+            -Endpoint $env:AZURE_ENDPOINT `
+            -CodeSigningAccountName $env:AZURE_CODE_SIGNING_ACCOUNT `
+            -CertificateProfileName $env:AZURE_CERT_PROFILE `
+            -FileDigest SHA256 `
+            -TimestampRfc3161 "http://timestamp.acs.microsoft.com" `
+            -TimestampDigest SHA256 `
+            -Files ($targets -join ",")
+
+          # Invoke-TrustedSigning can report a failure without throwing; check here.
+          $failed = 0
+          foreach ($t in $targets) {
+            $sig = Get-AuthenticodeSignature -LiteralPath $t
+            $signer = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { "" }
+            echo ("{0,-10} {1}  | {2}" -f $sig.Status, $t, $signer)
+            if ($sig.Status -ne "Valid") { $failed++ }
+          }
+          if ($failed -gt 0) { Write-Error "$failed NSIS plugin DLL(s) are not Valid after signing"; exit 1 }
+
+          "ELECTRON_BUILDER_NSIS_DIR=$dstNsis" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ELECTRON_BUILDER_NSIS_RESOURCES_DIR=$dstRes" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "electron-builder will use the signed NSIS bundles in $root"
 
       # BACKLOG-1921: full-chain Windows signing DURING the electron-builder build.
       # Previously we packaged UNSIGNED here and signed only the outer installer in a
@@ -412,12 +583,13 @@ jobs:
           AZURE_ENDPOINT: ${{ secrets.AZURE_ENDPOINT }}
           AZURE_CODE_SIGNING_ACCOUNT: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT }}
           AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+          # BACKLOG-3927: website | store
+          KEEPR_CHANNEL: ${{ inputs.channel == 'store' && 'store' || 'website' }}
           # Secrets for .env.production recreation after build
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
           MICROSOFT_CLIENT_ID: ${{ secrets.MICROSOFT_CLIENT_ID }}
           MICROSOFT_TENANT_ID: ${{ secrets.MICROSOFT_TENANT_ID }}
         run: |
@@ -441,7 +613,6 @@ jobs:
             "SUPABASE_ANON_KEY=$env:SUPABASE_ANON_KEY",
             "GOOGLE_CLIENT_ID=$env:GOOGLE_CLIENT_ID",
             "GOOGLE_CLIENT_SECRET=$env:GOOGLE_CLIENT_SECRET",
-            "GOOGLE_MAPS_API_KEY=$env:GOOGLE_MAPS_API_KEY",
             "MICROSOFT_CLIENT_ID=$env:MICROSOFT_CLIENT_ID",
             "MICROSOFT_TENANT_ID=$env:MICROSOFT_TENANT_ID",
             "BROKER_PORTAL_URL=https://app.keeprcompliance.com",
@@ -475,7 +646,23 @@ jobs:
           # -TimestampRfc3161 / -TimestampDigest / -FileDigest, so the signature IS
           # timestamped (defaults http://timestamp.acs.microsoft.com + SHA256; we pass
           # them explicitly to mirror the old external action exactly).
-          npx electron-builder --publish never `
+          # BACKLOG-3927: the Store build is marked in the asar's package.json
+          # (read at runtime by electron/services/distributionChannelService.ts)
+          # and named apart from the website installer. Its NSIS script includes
+          # build/installer-store.nsh, which defines KEEPR_STORE_BUILD before
+          # including build/installer.nsh; the website build includes
+          # build/installer.nsh directly and never gets the define.
+          $channelArgs = @()
+          if ($env:KEEPR_CHANNEL -eq "store") {
+            $channelArgs = @(
+              "--config.extraMetadata.distributionChannel=store",
+              '--config.nsis.artifactName=${productName}-Setup-${version}-store.${ext}',
+              "--config.nsis.include=build/installer-store.nsh"
+            )
+            echo "Packaging the Microsoft Store build: $($channelArgs -join ' ')"
+          }
+
+          npx electron-builder --publish never @channelArgs `
             --config.win.azureSignOptions.endpoint="$env:AZURE_ENDPOINT" `
             --config.win.azureSignOptions.codeSigningAccountName="$env:AZURE_CODE_SIGNING_ACCOUNT" `
             --config.win.azureSignOptions.certificateProfileName="$env:AZURE_CERT_PROFILE" `
@@ -562,10 +749,66 @@ jobs:
             release/win-unpacked
           if ($LASTEXITCODE -ne 0) { Write-Error "Package sanity check failed"; exit 1 }
 
+      - name: Verify the package contains the third-party licence files (BACKLOG-3803)
+        shell: pwsh
+        run: |
+          node scripts/ci/check-packaged-notices.mjs win release/win-unpacked
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Verify the package ships no Google Maps key (BACKLOG-3834)
+        shell: pwsh
+        run: |
+          node scripts/ci/check-packaged-secrets.mjs win release/win-unpacked
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # BACKLOG-3533. Unpacks the installer, the app archive inside it and the
+      # uninstaller, finds every PE file by header, and requires
+      # Get-AuthenticodeSignature = Valid for each one. Prints one row per file
+      # (status, certificate-table size, path, signer) before failing.
+      - name: Verify every PE file is signed (BACKLOG-3533)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = @(Get-ChildItem -Path release -Filter "*-Setup-*.exe")
+          if ($exe.Count -ne 1) { Write-Error "Expected exactly 1 installer in release/, found $($exe.Count)"; exit 1 }
+          ./scripts/ci/check-pe-signatures.ps1 `
+            -Installer $exe[0].FullName `
+            -WorkDir (Join-Path $env:RUNNER_TEMP "pe-signature-check")
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # BACKLOG-3927. Store build: no driver payload anywhere and marked store.
+      # Website build: Apple's installer still present. Checks both the
+      # unpacked app and the app unpacked FROM the built installer (left in the
+      # PE check's WorkDir), so what ships is what is checked.
+      - name: Verify the Apple driver payload for this channel (BACKLOG-3927)
+        shell: pwsh
+        env:
+          KEEPR_CHANNEL: ${{ inputs.channel == 'store' && 'store' || 'website' }}
+        run: |
+          $installerApp = Join-Path $env:RUNNER_TEMP "pe-signature-check/app"
+          foreach ($dir in @("release/win-unpacked", $installerApp)) {
+            node scripts/ci/check-packaged-drivers.mjs $dir $env:KEEPR_CHANNEL
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
+      # BACKLOG-3814. The signing above must not have touched the pinned iPhone tools:
+      # package.json leaves them out of extraResources and scripts/afterPack.js places
+      # them after electron-builder's signing copy. Check the unpacked app AND the app
+      # archive inside the installer (unpacked by the step above) against the manifest:
+      # a re-signed file has a new sha256 and fails here.
+      - name: Verify the pinned iPhone tools shipped byte-identical (BACKLOG-3814)
+        shell: pwsh
+        run: |
+          node scripts/release/pinnedIphoneTools.js --packaged release/win-unpacked
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          node scripts/release/pinnedIphoneTools.js --packaged (Join-Path $env:RUNNER_TEMP "pe-signature-check/app")
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-windows
+          # BACKLOG-3927: a Store run uploads under its own name.
+          name: ${{ inputs.channel == 'store' && 'release-windows-store' || 'release-windows' }}
           path: |
             release/*.exe
             release/*.blockmap
@@ -588,8 +831,11 @@ jobs:
     #    A dispatch from any other branch must never reach those steps.
     #  - BOTH platforms must succeed. This was `||`, so a run with one platform
     #    dead still drafted a release advertising downloads that did not exist.
+    #  - BACKLOG-3927: a Store run (Windows only, never published) never
+    #    reaches this job; the Windows job also refuses store on main.
     if: >-
       always() && github.ref == 'refs/heads/main' &&
+      inputs.channel != 'store' &&
       needs.release-macos.result == 'success' &&
       needs.release-windows.result == 'success'
 

@@ -33,7 +33,7 @@ import {
   fireEvent,
   act,
 } from '@testing-library/react-native';
-import { Alert, AppState } from 'react-native';
+import { Alert } from 'react-native';
 import type { SyncOperationResult } from '../../../services/backgroundSync';
 
 jest.mock('expo-router', () => ({

@@ -1,0 +1,32 @@
+{
+  "id": "cus_VQgXaqEk9u2nCF",
+  "object": "customer",
+  "address": null,
+  "balance": 0,
+  "created": 1791834328,
+  "currency": null,
+  "customer_account": null,
+  "default_source": null,
+  "delinquent": false,
+  "description": "3847 build probe",
+  "discount": null,
+  "email": null,
+  "invoice_prefix": "KAQQQZY1",
+  "invoice_settings": {
+    "custom_fields": null,
+    "default_payment_method": null,
+    "footer": null,
+    "rendering_options": null
+  },
+  "livemode": false,
+  "metadata": {
+    "probe": "3847-build"
+  },
+  "name": null,
+  "next_invoice_sequence": 1,
+  "phone": null,
+  "preferred_locales": [],
+  "shipping": null,
+  "tax_exempt": "none",
+  "test_clock": null
+}

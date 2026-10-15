@@ -49,6 +49,8 @@ import {
 } from "../services/exportPlan";
 
 import { sendToMainWindow } from "../windowRegistry";
+import { handleBusy } from "../utils/busyIpc";
+import { rememberOpenablePath } from "../services/openablePaths";
 
 interface ExportOptions {
   exportFormat?: string;
@@ -145,6 +147,10 @@ function toSubmitResponse(result: SubmissionResult): TransactionResponse {
     // BACKLOG-3600: the checklists did not reach the broker on a submission
     // that otherwise succeeded. Absent when there is nothing to say.
     checklistsNotSent: result.checklistsNotSent,
+    // BACKLOG-3764: checklist evidence to confirm again (with
+    // preflightChanged), and evidence dropped that was never listed.
+    checklistLinkGaps: result.checklistLinkGaps,
+    checklistLinksNotAttached: result.checklistLinksNotAttached,
     // BACKLOG-3398 / 3403: the three non-success outcomes that are not errors
     // of the app: cancelled, the list changed, the answer was lost.
     cancelled: result.cancelled,
@@ -158,7 +164,7 @@ export function registerTransactionExportHandlers(
   _mainWindow: BrowserWindow | null,
 ): void {
   // Export transaction to PDF
-  ipcMain.handle(
+  handleBusy(
     "transactions:export-pdf",
     wrapHandler(async (
       event: IpcMainInvokeEvent,
@@ -282,6 +288,8 @@ export function registerTransactionExportHandlers(
         path: generatedPath,
       });
 
+      // BACKLOG-3808: deliberately NOT recorded as openable (see pm_comments).
+
       return {
         success: true,
         path: generatedPath,
@@ -290,7 +298,7 @@ export function registerTransactionExportHandlers(
   );
 
   // Enhanced export with options
-  ipcMain.handle(
+  handleBusy(
     "transactions:export-enhanced",
     wrapHandler(async (
       event: IpcMainInvokeEvent,
@@ -434,6 +442,9 @@ export function registerTransactionExportHandlers(
         path: exportPath,
       });
 
+      // BACKLOG-3808: the renderer may later ask to open this export.
+      await rememberOpenablePath(exportPath);
+
       return {
         success: true,
         path: exportPath,
@@ -442,7 +453,7 @@ export function registerTransactionExportHandlers(
   );
 
   // Export transaction to organized folder structure
-  ipcMain.handle(
+  handleBusy(
     "transactions:export-folder",
     wrapHandler(async (
       event: IpcMainInvokeEvent,
@@ -628,6 +639,9 @@ export function registerTransactionExportHandlers(
         path: exportPath,
       });
 
+      // BACKLOG-3808: the renderer may later ask to open this export.
+      await rememberOpenablePath(exportPath);
+
       return {
         success: true,
         path: exportPath,
@@ -801,6 +815,7 @@ export function registerTransactionExportHandlers(
       return {
         success: result.success,
         notIncluded: result.notIncluded,
+        checklistLinkGaps: result.checklistLinkGaps ?? [],
         error: result.error,
       };
     }, { module: "Transactions" }),

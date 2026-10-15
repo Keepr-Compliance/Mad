@@ -48,6 +48,7 @@ function classOf(code: BackupErrorCode): "input" | "device" | "link" | "host" | 
     case "PASSWORD_REQUIRED":
     case "INCORRECT_PASSWORD":
     case "INVALID_UDID":
+    case "BACKUP_PASSWORD_UNAVAILABLE":
       return "input";
     case "DEVICE_NOT_FOUND":
     case "DEVICE_LOCKED":
