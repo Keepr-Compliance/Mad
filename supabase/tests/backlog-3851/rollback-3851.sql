@@ -1,4 +1,4 @@
--- BACKLOG-3851 rollback: undoes M2 (20261016100100) and M1 (20261016100000).
+-- BACKLOG-3851 rollback: undoes M2 (20261016100100) and M1 (20261015152446).
 -- Runs after M1 alone or after M1 + M2. One transaction; run with psql, not as a migration.
 -- Order (plan §4, R7):
 --   1. the two new triggers out first, so nothing below fires them;

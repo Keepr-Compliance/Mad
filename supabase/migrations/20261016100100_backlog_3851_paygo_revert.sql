@@ -1,6 +1,6 @@
 -- BACKLOG-3851 M2: a deactivated brokerage member reverts to individual pay-as-you-go.
 --
--- APPLY ORDER: only after M1 (20261016100000) AND only after the production broker portal
+-- APPLY ORDER: only after M1 (20261015152446) AND only after the production broker portal
 -- reads a user with two membership rows (PR-2a deployed on main). Before that, the
 -- portal's single-row readers fail for a user holding a deactivated brokerage row and a
 -- personal row. The precondition below refuses to run without M1.
@@ -22,7 +22,7 @@ DECLARE
   bad text;
 BEGIN
   IF to_regprocedure('public.member_status_is_deactivated(text)') IS NULL THEN
-    RAISE EXCEPTION 'BACKLOG-3851 M2: M1 (20261016100000) is not applied';
+    RAISE EXCEPTION 'BACKLOG-3851 M2: M1 (20261015152446) is not applied';
   END IF;
   -- old = production body (read 2026-10-14); new = this file's body (a second apply).
   SELECT string_agg(v.fn || ' actual=' || coalesce(md5(p.prosrc), '<missing>'), '; ')

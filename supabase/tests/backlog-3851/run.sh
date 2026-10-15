@@ -34,7 +34,7 @@ MIG3940="$M/20261014061621_backlog_3940_support_links_internal_only.sql"
 MIG3946=("$M/20261014152722_backlog_3946_staff_helpers_caller_only.sql"
          "$M/20261014152839_backlog_3946_identity_helpers_signed_in_only.sql"
          "$M/20261014152904_backlog_3946_support_links_table_grants.sql")
-M1="${M1_OVERRIDE:-$M/20261016100000_backlog_3851_license_model.sql}"
+M1="${M1_OVERRIDE:-$M/20261015152446_backlog_3851_license_model.sql}"
 M2="${M2_OVERRIDE:-$M/20261016100100_backlog_3851_paygo_revert.sql}"
 RB="$HERE/rollback-3851.sql"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
@@ -138,10 +138,10 @@ case "$mode" in
       if [ -z "$changed" ]; then echo "INVALID|$name|mutant changed nothing"; invalid=$((invalid+1)); continue; fi
       echo "== $name  MUTATION APPLIED: $changed"
       if [ "$part" = M1 ]; then export M1_OVERRIDE="$tmp/m.sql"; else export M2_OVERRIDE="$tmp/m.sql"; fi
-      M1="${M1_OVERRIDE:-$M/20261016100000_backlog_3851_license_model.sql}"; M2="${M2_OVERRIDE:-$M/20261016100100_backlog_3851_paygo_revert.sql}"
+      M1="${M1_OVERRIDE:-$M/20261015152446_backlog_3851_license_model.sql}"; M2="${M2_OVERRIDE:-$M/20261016100100_backlog_3851_paygo_revert.sql}"
       if run_set "$want" 1 normal; then echo "SURVIVED|$name|controls $want"; survived=$((survived+1)); else echo "KILLED|$name|controls $want"; killed=$((killed+1)); fi
       unset M1_OVERRIDE M2_OVERRIDE
-      M1="$M/20261016100000_backlog_3851_license_model.sql"; M2="$M/20261016100100_backlog_3851_paygo_revert.sql"
+      M1="$M/20261015152446_backlog_3851_license_model.sql"; M2="$M/20261016100100_backlog_3851_paygo_revert.sql"
     done < <(python3 "$HERE/lib/mutants.py" list "$frag")
     echo "MUTANTS: killed=$killed survived=$survived invalid=$invalid"
     [ "$survived" = 0 ] && [ "$invalid" = 0 ] && [ "$killed" -gt 0 ] ;;
