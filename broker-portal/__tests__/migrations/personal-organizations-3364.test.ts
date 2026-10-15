@@ -173,6 +173,9 @@ describe('BACKLOG-3364 backfill stays parked', () => {
       // deactivation. It must not loop over users. Tested by supabase/tests/backlog-3851/.
       if (f.endsWith(PAYGO_REVERT_3851_SUFFIX)) {
         expect(sql).not.toMatch(/\bFOR\s+\w+\s+IN\b/i);
+        // Exactly two call-shaped mentions: the definition and the per-row PERFORM. A
+        // set-based `SELECT _ensure...(u.id) FROM users u` would add a third.
+        expect(sql.match(/_ensure_personal_organization_for\(/g)).toHaveLength(2);
         expect(sql).toMatch(/AFTER UPDATE OF license_status ON public\.organization_members\s+FOR EACH ROW/);
         continue;
       }
