@@ -149,6 +149,7 @@ describe(MIGRATION_NAME, () => {
 
 // Matched by suffix: the version prefix is whatever apply_migration records.
 const BACKFILL_3858_SUFFIX = '_backlog_3858_personal_orgs_for_licensed_users.sql';
+const PAYGO_REVERT_3851_SUFFIX = '_backlog_3851_paygo_revert.sql';
 
 describe('BACKLOG-3364 backfill stays parked', () => {
   it('exists under supabase/parked/backlog-3364/', () => {
@@ -166,6 +167,13 @@ describe('BACKLOG-3364 backfill stays parked', () => {
       if (f.endsWith(BACKFILL_3858_SUFFIX)) {
         expect(sql).toMatch(/v_expected_fp text := '[0-9a-f]{32}'/);
         expect(sql).toMatch(/IF v_fp IS DISTINCT FROM v_expected_fp THEN\s+RAISE EXCEPTION/);
+        continue;
+      }
+      // BACKLOG-3851 M2: re-creates the function and calls it from a per-row trigger on
+      // deactivation. It must not loop over users. Tested by supabase/tests/backlog-3851/.
+      if (f.endsWith(PAYGO_REVERT_3851_SUFFIX)) {
+        expect(sql).not.toMatch(/\bFOR\s+\w+\s+IN\b/i);
+        expect(sql).toMatch(/AFTER UPDATE OF license_status ON public\.organization_members\s+FOR EACH ROW/);
         continue;
       }
       expect(sql).not.toMatch(/_ensure_personal_organization_for/);
