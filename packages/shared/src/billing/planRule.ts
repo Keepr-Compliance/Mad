@@ -1,5 +1,5 @@
 /**
- * The plan rule — BACKLOG-3859.
+ * The plan rule (BACKLOG-3859) -- control.
  *
  * ONE copy of the pure rule that decides which plan a user is on, shared by
  * the broker portal (Billing page, billing actions, routing) and the admin
