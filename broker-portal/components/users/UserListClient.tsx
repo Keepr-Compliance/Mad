@@ -20,6 +20,7 @@ import { Button } from '@keepr/ui';
 import UserCard from './UserCard';
 import UserTableRow from './UserTableRow';
 import UserSearchFilter from './UserSearchFilter';
+import UserPhoneFilters from './UserPhoneFilters';
 import InviteUserModal from './InviteUserModal';
 import EditRoleModal from './EditRoleModal';
 import BulkEditRoleModal from './BulkEditRoleModal';
@@ -27,6 +28,7 @@ import DeactivateUserModal from './DeactivateUserModal';
 import RemoveUserModal from './RemoveUserModal';
 import { EmptyState, SearchIcon } from '@/components/ui/EmptyState';
 import { formatUserDisplayName } from '@/lib/utils/userDisplay';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { resendInvite } from '@/lib/actions/resendInvite';
 import type { OrganizationMember, Role } from '@/lib/types/users';
 
@@ -72,9 +74,10 @@ export default function UserListClient({
     }
   }, [organizationId]);
 
-  const filteredMembers = useMemo(() => {
-    return initialMembers.filter((member) => {
-      const searchLower = searchQuery.toLowerCase();
+  // The one match rule, shared by the list and by the phone sheets' "Show N".
+  const matchesMember = useCallback(
+    (member: OrganizationMember, search: string, role: string, status: string) => {
+      const searchLower = search.toLowerCase();
       const displayName =
         member.user?.display_name ||
         `${member.user?.first_name || ''} ${member.user?.last_name || ''}`.trim() ||
@@ -83,21 +86,33 @@ export default function UserListClient({
       const invitedEmail = member.invited_email || '';
 
       const matchesSearch =
-        !searchQuery ||
+        !search ||
         displayName.toLowerCase().includes(searchLower) ||
         email.toLowerCase().includes(searchLower) ||
         invitedEmail.toLowerCase().includes(searchLower);
 
-      const matchesRole = roleFilter === 'all' || member.role === roleFilter;
-      const matchesStatus =
-        statusFilter === 'all' || member.license_status === statusFilter;
+      const matchesRole = role === 'all' || member.role === role;
+      const matchesStatus = status === 'all' || member.license_status === status;
 
       return matchesSearch && matchesRole && matchesStatus;
-    });
-  }, [initialMembers, searchQuery, roleFilter, statusFilter]);
+    },
+    []
+  );
+
+  const filteredMembers = useMemo(
+    () => initialMembers.filter((m) => matchesMember(m, searchQuery, roleFilter, statusFilter)),
+    [initialMembers, searchQuery, roleFilter, statusFilter, matchesMember]
+  );
+
+  const countFor = useCallback(
+    (role: string, status: string) =>
+      initialMembers.filter((m) => matchesMember(m, searchQuery, role, status)).length,
+    [initialMembers, searchQuery, matchesMember]
+  );
 
   const hasFilters =
     searchQuery !== '' || roleFilter !== 'all' || statusFilter !== 'all';
+  const hasChipFilters = roleFilter !== 'all' || statusFilter !== 'all';
   const canManage =
     !readOnly && (currentUserRole === 'admin' || currentUserRole === 'it_admin');
 
@@ -127,12 +142,19 @@ export default function UserListClient({
     (m) => selectedIds.has(m.id) && m.user_id !== currentUserId
   );
 
+  // BACKLOG-3798: below md the table does not fit, so cards are forced and the
+  // view toggle is hidden. Bulk select lives in the table, so it is not
+  // available below md.
+  const narrow = useMediaQuery('(max-width: 767px)');
+  const effectiveView = narrow ? 'cards' : viewMode;
+
   return (
-    <div className="space-y-4">
-      {/* Action bar */}
-      <div className="flex items-center justify-between">
+    <div className="space-y-4 max-md:space-y-3 max-md:[&>:nth-child(2)]:!mt-0">
+      {/* Action bar. Below md the bar is empty but for Invite, which moves into the
+          phone results row; bulk select and the view toggle are md and up only. */}
+      <div className="flex items-center justify-between max-md:hidden">
         {/* View toggle */}
-        <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+        <div className="hidden md:flex items-center gap-1 bg-gray-100 rounded-lg p-1">
           <button
             onClick={() => setViewMode('list')}
             className={`p-2 rounded-md transition-colors ${viewMode === 'list' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
@@ -151,7 +173,7 @@ export default function UserListClient({
           </button>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 max-md:ml-auto">
           {/* Bulk actions */}
           {canManage && selectedNonSelf.length > 0 && (
             <div className="flex items-center rounded-lg bg-primary-50 border border-primary-200 px-4 py-2.5">
@@ -181,14 +203,34 @@ export default function UserListClient({
         </div>
       )}
 
-      <UserSearchFilter
+      <UserPhoneFilters
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         roleFilter={roleFilter}
         onRoleChange={setRoleFilter}
         statusFilter={statusFilter}
         onStatusChange={setStatusFilter}
+        shown={filteredMembers.length}
+        total={initialMembers.length}
+        countFor={countFor}
+        hasFilters={hasChipFilters}
+        onClearAll={() => {
+          setRoleFilter('all');
+          setStatusFilter('all');
+        }}
+        onInvite={canManage ? () => setIsInviteModalOpen(true) : undefined}
       />
+
+      <div className="max-md:hidden">
+        <UserSearchFilter
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          roleFilter={roleFilter}
+          onRoleChange={setRoleFilter}
+          statusFilter={statusFilter}
+          onStatusChange={setStatusFilter}
+        />
+      </div>
 
       {filteredMembers.length === 0 ? (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200">
@@ -205,14 +247,14 @@ export default function UserListClient({
       ) : (
         <>
           {/* Results count */}
-          <div className="text-sm text-gray-500">
+          <div className="text-sm text-gray-500 max-md:hidden">
             Showing {filteredMembers.length} of {initialMembers.length} user
             {initialMembers.length !== 1 ? 's' : ''}
           </div>
 
-          {viewMode === 'cards' ? (
-            /* Card grid view */
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {effectiveView === 'cards' ? (
+            /* Card grid view. grid-cols-1 = minmax(0,1fr), so long emails truncate. */
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 max-md:!grid-cols-1">
               {filteredMembers.map((member) => (
                 <UserCard
                   key={member.id}

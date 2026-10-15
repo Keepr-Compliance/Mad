@@ -118,6 +118,95 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
       "is not declared separately and cannot be omitted.",
     ref: "BACKLOG-3366",
   },
+  {
+    key: "TABLE:pending_review_match_reasons",
+    what: "New table recording why an email is in Needs Review ('address' | 'contact' | 'folder').",
+    why:
+      "BACKLOG-3925: Needs Review gains address-only matches from the local email " +
+      "cache, and each row shows why it is there. Keyed by (transaction_id, email_id) " +
+      "so the reason survives reject -> restore. A new table is fully IF NOT EXISTS, " +
+      "so schema.sql's exec on every open creates it on fresh and upgraded databases " +
+      "alike; no migration entry is needed.",
+    ref: "BACKLOG-3925",
+  },
+  {
+    key: "INDEX:idx_pending_review_match_reasons_email",
+    what: "Index on pending_review_match_reasons (email_id).",
+    why:
+      "BACKLOG-3925: the email foreign key's check on every email delete looks rows " +
+      "up by email_id; without the index it scans the table once per deleted email. " +
+      "IF NOT EXISTS, created by schema.sql's exec on every open.",
+    ref: "BACKLOG-3925",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_pending_review_match_reasons_1",
+    what: "SQLite's automatic index for the (transaction_id, email_id) primary key.",
+    why:
+      "BACKLOG-3925: produced by the composite PRIMARY KEY on the new table; it " +
+      "is not declared separately and cannot be omitted.",
+    ref: "BACKLOG-3925",
+  },
+  {
+    key: "TABLE:mail_folder_refs",
+    what: "New table: which Outlook folder / Gmail labels each fetched message sits in.",
+    why:
+      "BACKLOG-3926: Needs Review gains folder / label matches. Keyed by the provider " +
+      "message id (account_id, external_id, folder_id) so it is written for every fetched " +
+      "message and is independent of the force re-cache staging. IF NOT EXISTS, created " +
+      "by schema.sql's exec on every open; no migration entry.",
+    ref: "BACKLOG-3926",
+  },
+  {
+    key: "TABLE:mail_folder_names",
+    what: "New table: folder / label id -> display path, per mailbox account, with a system flag.",
+    why:
+      "BACKLOG-3926: folder / label names to match against the deal address. IF NOT " +
+      "EXISTS, created by schema.sql's exec on every open; no migration entry.",
+    ref: "BACKLOG-3926",
+  },
+  {
+    key: "INDEX:idx_mail_folder_refs_folder",
+    what: "Index on mail_folder_refs (account_id, folder_id).",
+    why: "BACKLOG-3926: the folder-match candidate read starts from the matching folders.",
+    ref: "BACKLOG-3926",
+  },
+  {
+    key: "INDEX:idx_mail_folder_refs_external",
+    what: "Index on mail_folder_refs (external_id).",
+    why:
+      "BACKLOG-3926: the read-time folder label lookup goes email -> refs by external_id; " +
+      "without it getReviewState measured 2.4 s at 60k emails (folderMatchWorker-3926).",
+    ref: "BACKLOG-3926",
+  },
+  {
+    key: "INDEX:idx_mail_folder_names_user",
+    what: "Index on mail_folder_names (user_id).",
+    why: "BACKLOG-3926: the per-deal catalogue read is by user.",
+    ref: "BACKLOG-3926",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_mail_folder_refs_1",
+    what: "SQLite's automatic index for mail_folder_refs' composite primary key.",
+    why: "BACKLOG-3926: produced by the composite PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-3926",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_mail_folder_names_1",
+    what: "SQLite's automatic index for mail_folder_names' composite primary key.",
+    why: "BACKLOG-3926: produced by the composite PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-3926",
+  },
+  {
+    key: "INDEX:idx_messages_thread_sent",
+    what: "Index on messages (thread_id, sent_at).",
+    why:
+      "BACKLOG-3884: the Texts tab pages one linked conversation newest-first. " +
+      "With only idx_messages_thread_id every page read and sorted every row of " +
+      "the thread (a whole phone history on the PC). IF NOT EXISTS, so " +
+      "schema.sql's exec on every open creates it on fresh and existing " +
+      "databases; no migration entry.",
+    ref: "BACKLOG-3884",
+  },
 
   // -------------------------------------------------------------------------
   // BACKLOG-3475 — transaction checklists (local half). Four new tables, four
@@ -166,7 +255,11 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     why:
       "BACKLOG-3475: the group id is the stable key a submission snapshot maps " +
       "through. UNIQUE (id, kind) exists so a member can carry a composite FK " +
-      "and cannot disagree with its group's kind.",
+      "and cannot disagree with its group's kind. BACKLOG-3764 adds " +
+      "include_outside_dates (INTEGER NOT NULL DEFAULT 0; migration v75 adds it to " +
+      "existing databases). The table is already a whole-table divergence here, so " +
+      "the fingerprint emits no separate COLUMN key for it; v75's own upgrade test " +
+      "(databaseService.migration-v75.test.ts) is the guard for the column.",
     ref: "BACKLOG-3475",
   },
   {
@@ -577,6 +670,75 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     what: "SQLite's automatic index for rcs_pending_media's primary key / unique constraint.",
     why: "BACKLOG-3619: the Google Messages import's local tables (cache, staging, pairing, consent, people, coverage). All `IF NOT EXISTS` in schema.sql AND folded into versioned migration v74 (migrationV74Sql.ts); databaseService.migration-v74.test.ts holds the two identical.",
     ref: "BACKLOG-3619",
+  },  {
+    key: "TABLE:iphone_device_coverage",
+    what: "New table iphone_device_coverage.",
+    why:
+      "BACKLOG-3892 S2: iPhone text coverage per phone (udid) — the device interval, per-chat and per-handle rows that replace MIN(sent_at) " +
+      "as the iPhone 'covered since' once sync reads only the lookback. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch, so existing " +
+      "databases get the tables on the next start (the BACKLOG-3884 index precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_iphone_device_coverage_1",
+    what: "SQLite's automatic index for iphone_device_coverage's primary key.",
+    why:
+      "BACKLOG-3892 S2: iPhone text coverage per phone (udid) — the device interval, per-chat and per-handle rows that replace MIN(sent_at) " +
+      "as the iPhone 'covered since' once sync reads only the lookback. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch, so existing " +
+      "databases get the tables on the next start (the BACKLOG-3884 index precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
+  {
+    key: "TABLE:iphone_chat_coverage",
+    what: "New table iphone_chat_coverage.",
+    why:
+      "BACKLOG-3892 S2: iPhone text coverage per phone (udid) — the device interval, per-chat and per-handle rows that replace MIN(sent_at) " +
+      "as the iPhone 'covered since' once sync reads only the lookback. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch, so existing " +
+      "databases get the tables on the next start (the BACKLOG-3884 index precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_iphone_chat_coverage_1",
+    what: "SQLite's automatic index for iphone_chat_coverage's primary key.",
+    why:
+      "BACKLOG-3892 S2: iPhone text coverage per phone (udid) — the device interval, per-chat and per-handle rows that replace MIN(sent_at) " +
+      "as the iPhone 'covered since' once sync reads only the lookback. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch, so existing " +
+      "databases get the tables on the next start (the BACKLOG-3884 index precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
+  {
+    key: "TABLE:iphone_handle_coverage",
+    what: "New table iphone_handle_coverage.",
+    why:
+      "BACKLOG-3892 S2: iPhone text coverage per phone (udid) — the device interval, per-chat and per-handle rows that replace MIN(sent_at) " +
+      "as the iPhone 'covered since' once sync reads only the lookback. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch, so existing " +
+      "databases get the tables on the next start (the BACKLOG-3884 index precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_iphone_handle_coverage_1",
+    what: "SQLite's automatic index for iphone_handle_coverage's primary key.",
+    why:
+      "BACKLOG-3892 S2: iPhone text coverage per phone (udid) — the device interval, per-chat and per-handle rows that replace MIN(sent_at) " +
+      "as the iPhone 'covered since' once sync reads only the lookback. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch, so existing " +
+      "databases get the tables on the next start (the BACKLOG-3884 index precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
+  {
+    key: "TABLE:iphone_device_span",
+    what: "New table iphone_device_span.",
+    why:
+      "BACKLOG-3892 W3b: the oldest text each phone holds (sms.db MIN date), recorded at sync, so a new phone's coverage never starts before " +
+      "its own oldest text. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch (the S2 precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_iphone_device_span_1",
+    what: "SQLite's automatic index for iphone_device_span's primary key.",
+    why:
+      "BACKLOG-3892 W3b: the oldest text each phone holds (sms.db MIN date), recorded at sync, so a new phone's coverage never starts before " +
+      "its own oldest text. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch (the S2 precedent). Additive only: no existing table changes.",
+    ref: "BACKLOG-3892",
   },
 ];
 

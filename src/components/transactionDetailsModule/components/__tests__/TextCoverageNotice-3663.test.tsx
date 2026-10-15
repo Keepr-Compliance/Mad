@@ -15,6 +15,7 @@ import type { SourceCoverageGap } from "../../../../../electron/types/auditCover
 
 let changed: (() => void) | null = null;
 let mockSource: string | undefined = "android-messages-web";
+let mockPhoneType: string | null = null;
 
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
@@ -35,6 +36,7 @@ jest.mock("../../../../utils/platform", () => ({
 jest.mock("../../../../services/settingsService", () => ({
   settingsService: {
     getPreferences: async () => ({ success: true, data: { messages: { source: mockSource } } }),
+    getPhoneType: async () => ({ success: true, data: mockPhoneType }),
   },
 }));
 
@@ -48,6 +50,7 @@ const getTextCoverage = jest.fn();
 beforeEach(() => {
   jest.clearAllMocks();
   mockSource = "android-messages-web";
+  mockPhoneType = null;
   (window as unknown as { api: unknown }).api = {
     transactions: { getTextCoverage, ensureMessagesCoverage: jest.fn(async () => ({ success: true })) },
   };
@@ -69,10 +72,13 @@ describe("TextCoverageNotice", () => {
     expect(chosenTextSource(undefined)).toBeNull();
   });
 
-  // BACKLOG-3749: a stored value this build does not know asks with the
-  // platform default's source (Mac: mac, else iPhone), never with nothing.
-  // Mutation: the raw value passed to chosenTextSource → red.
-  it("an unknown stored source asks with the platform default (BACKLOG-3749)", async () => {
+  // BACKLOG-3418 (founder, 2026-10-07; supersedes the Windows half of 3749): on
+  // Windows/Linux an unknown stored value is NOT a choice of iPhone. The phone type
+  // decides (iphone -> "iphone"), else nothing is chosen (null). macOS keeps the
+  // BACKLOG-3749 reading: an unknown value is the platform default ("mac").
+  // Mutation: an unknown value on Windows resolves to the platform default
+  // (effectiveImportSource) -> the no-phone-type case asks with "iphone", not null -> red.
+  it("an unknown stored source: Mac asks with mac; Windows asks with nothing unless the phone type is iPhone (BACKLOG-3418)", async () => {
     getTextCoverage.mockResolvedValue({ success: true, auditStartISO: "2026-05-01T00:00:00.000Z", gaps: [] });
     mockSource = "some-future-source";
     mockIsMac = true;
@@ -81,6 +87,11 @@ describe("TextCoverageNotice", () => {
     unmount();
     getTextCoverage.mockClear();
     mockIsMac = false;
+    const win = render(<TextCoverageNotice transactionId="tx-1" userId="user-1" />);
+    await waitFor(() => expect(getTextCoverage).toHaveBeenCalledWith("tx-1", "user-1", null));
+    win.unmount();
+    getTextCoverage.mockClear();
+    mockPhoneType = "iphone";
     render(<TextCoverageNotice transactionId="tx-1" userId="user-1" />);
     await waitFor(() => expect(getTextCoverage).toHaveBeenCalledWith("tx-1", "user-1", "iphone"));
     mockIsMac = true;
@@ -91,7 +102,9 @@ describe("TextCoverageNotice", () => {
     const { unmount } = render(<TextCoverageNotice transactionId="tx-1" userId="user-1" />);
     const soft = await screen.findByTestId("text-coverage-notice");
     expect(soft.className).toMatch(/bg-gray-50/);
-    expect(soft).toHaveTextContent("from the oldest text Keepr has");
+    // BACKLOG-3892 W: an iPhone "later" gap reads the founder-approved start line (an
+    // approximate interval is still soft, above); other sources keep the approximate note.
+    expect(soft).toHaveTextContent("Older texts may be missing.");
     unmount();
     getTextCoverage.mockResolvedValue({ success: true, auditStartISO: "2026-05-01T00:00:00.000Z", gaps: [iphone, gm] });
     render(<TextCoverageNotice transactionId="tx-1" userId="user-1" />);

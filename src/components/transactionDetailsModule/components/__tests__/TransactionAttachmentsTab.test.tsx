@@ -228,6 +228,25 @@ describe("TransactionAttachmentsTab (BACKLOG-322)", () => {
     expect(screen.queryByTestId("preview-modal")).not.toBeInTheDocument();
   });
 
+  it("BACKLOG-3884: a failed download offers Retry, which downloads again and previews", async () => {
+    ensureEmailAttachmentDownloaded
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce({
+        success: true,
+        data: [{ id: "img1", filename: "photo.jpg", mime_type: "image/jpeg", file_size_bytes: 1024, storage_path: "/data/photo.jpg" }],
+      });
+    render(<TransactionAttachmentsTab attachments={ATTACHMENTS} loading={false} error={null} />);
+
+    fireEvent.click(screen.getByTestId("attachment-card-img1"));
+    const banner = await screen.findByTestId("attachments-download-message");
+    expect(banner).toHaveTextContent("This attachment could not be downloaded.");
+
+    fireEvent.click(within(banner).getByTestId("attachment-open-retry"));
+
+    expect(await screen.findByTestId("preview-modal")).toHaveTextContent("photo.jpg");
+    expect(ensureEmailAttachmentDownloaded).toHaveBeenCalledTimes(2);
+  });
+
   /**
    * BACKLOG-3730 — the tab shows only attachments main placed inside the
    * transaction dates, with a "Show all" toggle. Membership is the id set only.

@@ -9,7 +9,7 @@
  *             count over 3 scrolls, or the item cap).
  * Control 11: Details is closed with Done, and its participant rows are gone,
  *             before the scan moves on.
- * Control 12: on the sign-in page the job reports not_signed_in and scans nothing.
+ * Control 12: on the sign-in page the job waits for sign-in (BACKLOG-3924) and scans nothing.
  */
 
 import * as fs from "fs";
@@ -327,7 +327,11 @@ describe("job runner", () => {
     expect(job.jobIdFromHash("#other")).toBeNull();
   });
 
-  it("control 12: on the sign-in page it reports not_signed_in, shows the message, and scans nothing", async () => {
+  // BACKLOG-3924 (founder, 2026-10-12): on the sign-in page the job no longer
+  // fails at once — it tells Keepr it waits for sign-in (POST /waiting), shows
+  // the waiting card, and scans nothing. Here Keepr's Stop (410, transcribed
+  // from RcsJobRegistry.check) ends the wait. The full wait: signInWait-3924.test.ts.
+  it("control 12: on the sign-in page it waits for sign-in (no /error), shows the card, and scans nothing", async () => {
     document.body.innerHTML = "<mw-welcome-page-container><button data-e2e-welcome-page-sign-in-button>Sign in</button></mw-welcome-page-container>";
     const calls: Array<[string, string, unknown]> = [];
     const shown: Array<[string, boolean]> = [];
@@ -337,20 +341,17 @@ describe("job runner", () => {
       getLocation: () => ({ pathname: "/web/welcome", href: "https://messages.google.com/web/welcome?redirectUrl=x" }),
       api: async (method: string, p: string, body: unknown): Promise<ApiReply> => {
         calls.push([method, p, body]);
-        return { ok: true, status: 200, body: { ok: true } };
+        return { ok: false, status: 410, body: { error: "job_over", message: "This Keepr sync has ended. Click Sync in Keepr again." } };
       },
       overlay: { show: (text: string, isError: boolean) => shown.push([text, isError]) },
       sleep: noSleep,
       pageTimeoutMs: 1000,
       scan: { ...scan, collectConversations: collect },
     });
-    expect(outcome.outcome).toBe("not_signed_in");
-    expect(calls).toEqual([
-      ["POST", `/job/${JOB}/error`, { code: "not_signed_in", message: job.NOT_SIGNED_IN }],
-    ]);
+    expect(outcome.outcome).toBe("job_gone");
+    expect(calls).toEqual([["POST", `/job/${JOB}/waiting`, { reason: "sign_in" }]]);
     expect(job.NOT_SIGNED_IN).toBe("Sign in to Google Messages, then click Sync in Keepr again");
-    // Storyboard I01: its own card ("Sign in to Google Messages"), not an error.
-    expect(shown).toEqual([["Sign in to Google Messages", false]]);
+    expect(shown).toEqual([["Sync cancelled in Keepr", true]]);
     expect(collect).not.toHaveBeenCalled();
   });
 

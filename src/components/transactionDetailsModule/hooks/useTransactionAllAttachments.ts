@@ -7,7 +7,7 @@
  * IPC handler, so it does not depend on the Emails/Texts communications being
  * pre-loaded.
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import logger from "../../../utils/logger";
 
 /**
@@ -61,6 +61,15 @@ interface UseTransactionAllAttachmentsResult {
 export interface AttachmentWindow {
   startedAt?: string | null;
   closedAt?: string | null;
+  /**
+   * BACKLOG-3884: load only once this is true. The reader runs synchronously on
+   * main (two reads per load; reads from the attachments side, tens of ms on a
+   * 668k-text database), so TransactionDetails enables it only when a tab that
+   * shows attachments is opened. While false,
+   * nothing is fetched and `refresh` is a no-op: the first enabled load reads
+   * the current state anyway. Default true (load on mount, as before).
+   */
+  enabled?: boolean;
 }
 
 /**
@@ -83,10 +92,16 @@ export function useTransactionAllAttachments(
   const [inWindowIds, setInWindowIds] = useState<Set<string> | null>(null);
   const windowStart = scope?.startedAt || undefined;
   const windowEnd = scope?.closedAt || undefined;
+  const enabled = scope?.enabled ?? true;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadAttachments = useCallback(async (): Promise<void> => {
+  const fetchAttachments = useCallback(async (): Promise<void> => {
+    // BACKLOG-3884: not shown yet -> nothing to refresh; the first enabled load
+    // reads the current state.
+    if (!enabledRef.current) return;
     if (!transactionId) {
       setAttachments([]);
       setInWindowIds(null);
@@ -98,6 +113,7 @@ export function useTransactionAllAttachments(
     setError(null);
 
     try {
+      const startedAt = Date.now();
       const hasWindow = Boolean(windowStart || windowEnd);
       const [result, windowed] = await Promise.all([
         window.api.transactions.getAllAttachments(
@@ -114,6 +130,11 @@ export function useTransactionAllAttachments(
           : Promise.resolve(null),
       ]);
 
+      // BACKLOG-3884: duration and row count only.
+      logger.info(
+        `[TxnOpen] attachments fetched ms=${Date.now() - startedAt}` +
+          ` rows=${Array.isArray(result?.data) ? result.data.length : 0} windowed=${hasWindow}`,
+      );
       if (result.success && result.data) {
         if (windowed && !(windowed.success && windowed.data)) {
           setError(windowed.error || "Failed to load attachments");
@@ -142,9 +163,38 @@ export function useTransactionAllAttachments(
     }
   }, [transactionId, auditStart, auditEnd, windowStart, windowEnd]);
 
+  // BACKLOG-3884: one read at a time. A refresh while a read is in flight does
+  // not start a second, parallel read (each one runs on main); it marks ONE
+  // trailing read that starts when the current one ends, so N overlapping
+  // refreshes cost one extra read, and a write made before the refresh is
+  // always read. Joining the in-flight read instead could return data read
+  // before that write.
+  const inFlightRef = useRef<Promise<void> | null>(null);
+  const trailingRef = useRef<Promise<void> | null>(null);
+  const fetchRef = useRef(fetchAttachments);
+  fetchRef.current = fetchAttachments;
+  const loadAttachments = useCallback((): Promise<void> => {
+    if (inFlightRef.current) {
+      if (!trailingRef.current) {
+        trailingRef.current = inFlightRef.current.then(() => {
+          trailingRef.current = null;
+          return loadAttachments();
+        });
+      }
+      return trailingRef.current;
+    }
+    const run = fetchRef.current().finally(() => {
+      if (inFlightRef.current === run) inFlightRef.current = null;
+    });
+    inFlightRef.current = run;
+    return run;
+  }, []);
+
+  // `fetchAttachments` changes with the transaction / dates: reload then.
   useEffect(() => {
+    if (!enabled) return;
     loadAttachments();
-  }, [loadAttachments]);
+  }, [loadAttachments, fetchAttachments, enabled]);
 
   return {
     attachments,

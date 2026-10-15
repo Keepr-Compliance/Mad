@@ -68,6 +68,7 @@ const createReadyState = (): ReadyState => ({
     hasEmailConnected: true,
     needsDriverSetup: false,
     fda: "granted",
+    setup: "finished",
   },
 });
 

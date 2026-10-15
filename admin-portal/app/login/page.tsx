@@ -205,8 +205,10 @@ function LoginLoading() {
 // Main page component with Suspense boundary (required for useSearchParams)
 export default function LoginPage() {
   return (
-    <Suspense fallback={<LoginLoading />}>
-      <LoginForm />
-    </Suspense>
+    <main>
+      <Suspense fallback={<LoginLoading />}>
+        <LoginForm />
+      </Suspense>
+    </main>
   );
 }

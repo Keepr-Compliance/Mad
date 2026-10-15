@@ -173,7 +173,7 @@ describe("BACKLOG-2838 Half B: attach and unlink tell the list its counters move
    */
   const settleMount = async (): Promise<void> => {
     await waitFor(() =>
-      expect(window.api.transactions.getAllAttachments).toHaveBeenCalled(),
+      expect(window.api.transactions.getDetails).toHaveBeenCalled(),
     );
     expect(onTransactionUpdated).not.toHaveBeenCalled();
   };

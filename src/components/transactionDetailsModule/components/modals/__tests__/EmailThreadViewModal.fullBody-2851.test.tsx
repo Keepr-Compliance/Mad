@@ -180,6 +180,7 @@ function reviewThread(bodyText: string): EmailThread {
     email_id: EMAIL_ID,
     thread_id: null,
     found_at: "2026-08-01T00:00:00.000Z",
+    matchReason: "contact",
     display: {
       title: "Inspection Thursday",
       subtitle: "sam@example.com",

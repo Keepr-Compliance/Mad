@@ -7,18 +7,18 @@
  * them, applies exponential backoff per attempt, and dead-letters at
  * max_attempts.
  *
- * Auth: CRON_SECRET bearer (same pattern as /api/cron/payment-reconcile).
+ * Auth: CRON_SECRET bearer via lib/auth/cronAuth (refuses when CRON_SECRET is unset).
  */
 
 import { NextResponse } from 'next/server';
 import { drainEmailQueue } from '@/lib/email/queue';
+import { isAuthorizedCronRequest } from '@/lib/auth/cronAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request): Promise<Response> {
-  const authHeader = req.headers.get('authorization');
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (!isAuthorizedCronRequest(req.headers.get('authorization'))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

@@ -146,3 +146,37 @@ describe("TierProgressBar", () => {
     expect(screen.getByTestId("custom-bar")).toBeInTheDocument();
   });
 });
+
+// ── Flat price (BACKLOG-3862) ────────────────────────────────────────────────
+// Quote rows TRANSCRIBED from get_next_unlock_quote on the test database after
+// the flat-price migration (supabase/tests/backlog-3862, control c3), for
+// users whose next unlock is unit 1, 4, 11 and 26. Every row was:
+//   unit_price_cents 1499, currency "usd", current_band_max_units null,
+//   units_until_next_band null, next_band_unit_price_cents null,
+//   next_band_currency null, base_unit_price_cents 1499
+// mapped the way entitlementService.getNextUnlockQuote maps them.
+describe("TierProgressBar on the flat price (BACKLOG-3862)", () => {
+  const flatQuote = (nextUnitIndex: number): UnlockQuote => ({
+    nextUnitIndex,
+    unitPriceCents: 1499,
+    currency: "usd",
+    pricingTierId: "flat-tier",
+    currentBandMaxUnits: null,
+    unitsUntilNextBand: null,
+    nextBandUnitPriceCents: null,
+    nextBandCurrency: null,
+    baseUnitPriceCents: 1499,
+  });
+
+  it.each([1, 4, 11, 26])(
+    "unit %i ⇒ quiet best-price line, no 'drops to', no savings claim",
+    (unit) => {
+      render(<TierProgressBar quote={flatQuote(unit)} />);
+      const bar = screen.getByTestId("tier-progress-bar");
+      expect(bar).toHaveAttribute("data-tier-state", "best");
+      expect(bar).toHaveTextContent("You're at your best per-deal price.");
+      expect(bar).not.toHaveTextContent(/drops to/i);
+      expect(bar).not.toHaveTextContent(/saving|%|\$|NaN|null/i);
+    },
+  );
+});

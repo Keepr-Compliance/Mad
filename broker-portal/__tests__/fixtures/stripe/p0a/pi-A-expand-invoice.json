@@ -1,0 +1,317 @@
+{
+  "id": "pi_3UPcU7Bg3cyTef3d0SK3DJhf",
+  "object": "payment_intent",
+  "allowed_payment_method_types": null,
+  "amount": 1999,
+  "amount_capturable": 0,
+  "amount_details": {
+    "tip": {}
+  },
+  "amount_received": 1999,
+  "application": null,
+  "application_fee_amount": null,
+  "automatic_payment_methods": null,
+  "canceled_at": null,
+  "cancellation_reason": null,
+  "capture_method": "automatic",
+  "client_secret": "<stripped>",
+  "confirmation_method": "automatic",
+  "created": 1791785599,
+  "currency": "usd",
+  "customer": "cus_VQTQpSw7FMwJWi",
+  "customer_account": null,
+  "description": "Subscription creation",
+  "excluded_payment_method_types": null,
+  "invoice": {
+    "id": "in_1UPcU7Bg3cyTef3dpnGWsUyL",
+    "object": "invoice",
+    "account_country": "US",
+    "account_name": "Keepr sandbox",
+    "account_tax_ids": null,
+    "amount_due": 1999,
+    "amount_overpaid": 0,
+    "amount_paid": 1999,
+    "amount_remaining": 0,
+    "amount_shipping": 0,
+    "application": null,
+    "application_fee_amount": null,
+    "attempt_count": 1,
+    "attempted": true,
+    "auto_advance": false,
+    "automatic_tax": {
+      "disabled_reason": null,
+      "enabled": false,
+      "liability": null,
+      "provider": null,
+      "status": null
+    },
+    "automatically_finalizes_at": null,
+    "billing_reason": "subscription_create",
+    "charge": "ch_3UPcU7Bg3cyTef3d0idhtUZD",
+    "collection_method": "charge_automatically",
+    "created": 1791785599,
+    "currency": "usd",
+    "custom_fields": null,
+    "customer": "cus_VQTQpSw7FMwJWi",
+    "customer_account": null,
+    "customer_address": null,
+    "customer_email": "p3846-dispute@example.com",
+    "customer_name": null,
+    "customer_phone": null,
+    "customer_shipping": null,
+    "customer_tax_exempt": "none",
+    "customer_tax_ids": [],
+    "default_payment_method": null,
+    "default_source": null,
+    "default_tax_rates": [],
+    "description": null,
+    "discount": null,
+    "discounts": [],
+    "due_date": null,
+    "effective_at": 1791785599,
+    "ending_balance": 0,
+    "footer": null,
+    "from_invoice": null,
+    "hosted_invoice_url": "<stripped>",
+    "invoice_pdf": "<stripped>",
+    "issuer": {
+      "type": "self"
+    },
+    "last_finalization_error": null,
+    "latest_revision": null,
+    "lines": {
+      "object": "list",
+      "data": [
+        {
+          "id": "il_1UPcU7Bg3cyTef3dQ6AprEkg",
+          "object": "line_item",
+          "amount": 1999,
+          "amount_excluding_tax": 1999,
+          "currency": "usd",
+          "description": "1 \u00d7 p0a agent plan (at $19.99 / month)",
+          "discount_amounts": [],
+          "discountable": true,
+          "discounts": [],
+          "invoice": "in_1UPcU7Bg3cyTef3dpnGWsUyL",
+          "livemode": false,
+          "metadata": {
+            "spike": "backlog-3846",
+            "user_id": "p3846-dispute"
+          },
+          "parent": {
+            "invoice_item_details": null,
+            "license_fee_subscription_details": null,
+            "subscription_item_details": {
+              "invoice_item": null,
+              "proration": false,
+              "proration_details": {
+                "credited_items": null
+              },
+              "subscription": "sub_1UPcU7Bg3cyTef3deIIABygA",
+              "subscription_item": "si_VQTQFNJ8VUKTty"
+            },
+            "type": "subscription_item_details"
+          },
+          "period": {
+            "end": 1794463999,
+            "start": 1791785599
+          },
+          "plan": {
+            "id": "price_1UP5JHBg3cyTef3d0RssAoQj",
+            "object": "plan",
+            "active": true,
+            "aggregate_usage": null,
+            "amount": 1999,
+            "amount_decimal": "1999",
+            "billing_scheme": "per_unit",
+            "created": 1791658075,
+            "currency": "usd",
+            "interval": "month",
+            "interval_count": 1,
+            "livemode": false,
+            "metadata": {
+              "spike": "backlog-3648-p0a"
+            },
+            "meter": null,
+            "nickname": "p0a agent monthly",
+            "product": "prod_VPv4rgGcFlKYnC",
+            "tiers_mode": null,
+            "transform_usage": null,
+            "trial_period_days": null,
+            "usage_type": "licensed"
+          },
+          "pretax_credit_amounts": [],
+          "price": {
+            "id": "price_1UP5JHBg3cyTef3d0RssAoQj",
+            "object": "price",
+            "active": true,
+            "billing_scheme": "per_unit",
+            "created": 1791658075,
+            "currency": "usd",
+            "custom_unit_amount": null,
+            "livemode": false,
+            "lookup_key": null,
+            "metadata": {
+              "spike": "backlog-3648-p0a"
+            },
+            "nickname": "p0a agent monthly",
+            "product": "prod_VPv4rgGcFlKYnC",
+            "recurring": {
+              "aggregate_usage": null,
+              "interval": "month",
+              "interval_count": 1,
+              "meter": null,
+              "trial_period_days": null,
+              "usage_type": "licensed"
+            },
+            "tax_behavior": "unspecified",
+            "tiers_mode": null,
+            "transform_quantity": null,
+            "type": "recurring",
+            "unit_amount": 1999,
+            "unit_amount_decimal": "1999"
+          },
+          "pricing": {
+            "price_details": {
+              "price": "price_1UP5JHBg3cyTef3d0RssAoQj",
+              "product": "prod_VPv4rgGcFlKYnC"
+            },
+            "type": "price_details",
+            "unit_amount_decimal": "1999"
+          },
+          "proration": false,
+          "proration_details": {
+            "credited_items": null
+          },
+          "quantity": 1,
+          "quantity_decimal": "1",
+          "subscription": "sub_1UPcU7Bg3cyTef3deIIABygA",
+          "subscription_item": "si_VQTQFNJ8VUKTty",
+          "subtotal": 1999,
+          "tax_amounts": [],
+          "tax_rates": [],
+          "taxes": [],
+          "type": "subscription",
+          "unit_amount_excluding_tax": "1999"
+        }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "<stripped>"
+    },
+    "livemode": false,
+    "metadata": {},
+    "next_payment_attempt": null,
+    "number": "JJMAWXV1-0001",
+    "on_behalf_of": null,
+    "paid": true,
+    "paid_out_of_band": false,
+    "parent": {
+      "quote_details": null,
+      "subscription_details": {
+        "metadata": {
+          "spike": "backlog-3846",
+          "user_id": "p3846-dispute"
+        },
+        "subscription": "sub_1UPcU7Bg3cyTef3deIIABygA"
+      },
+      "type": "subscription_details"
+    },
+    "payment_intent": "pi_3UPcU7Bg3cyTef3d0SK3DJhf",
+    "payment_settings": {
+      "default_mandate": null,
+      "payment_method_options": null,
+      "payment_method_types": null
+    },
+    "period_end": 1791785599,
+    "period_start": 1791785599,
+    "post_payment_credit_notes_amount": 0,
+    "pre_payment_credit_notes_amount": 0,
+    "quote": null,
+    "receipt_number": null,
+    "rendering": null,
+    "shipping_cost": null,
+    "shipping_details": null,
+    "starting_balance": 0,
+    "statement_descriptor": null,
+    "status": "paid",
+    "status_transitions": {
+      "finalized_at": 1791785599,
+      "marked_uncollectible_at": null,
+      "paid_at": 1791785599,
+      "voided_at": null
+    },
+    "subscription": "sub_1UPcU7Bg3cyTef3deIIABygA",
+    "subscription_details": {
+      "metadata": {
+        "spike": "backlog-3846",
+        "user_id": "p3846-dispute"
+      }
+    },
+    "subtotal": 1999,
+    "subtotal_excluding_tax": 1999,
+    "tax": null,
+    "test_clock": null,
+    "total": 1999,
+    "total_discount_amounts": [],
+    "total_excluding_tax": 1999,
+    "total_pretax_credit_amounts": [],
+    "total_tax_amounts": [],
+    "total_taxes": [],
+    "transfer_data": null,
+    "webhooks_delivered_at": 1791785599
+  },
+  "last_payment_error": null,
+  "latest_charge": "ch_3UPcU7Bg3cyTef3d0idhtUZD",
+  "livemode": false,
+  "managed_payments": {
+    "enabled": false
+  },
+  "metadata": {},
+  "next_action": null,
+  "on_behalf_of": null,
+  "payment_details": {
+    "customer_reference": null,
+    "order_reference": "in_1UPcU7Bg3cyTef3dpnGWsUyL"
+  },
+  "payment_method": "pm_1UPcU6Bg3cyTef3dEf7lDFzQ",
+  "payment_method_configuration_details": null,
+  "payment_method_options": {
+    "amazon_pay": {
+      "express_checkout_element_session_id": null
+    },
+    "card": {
+      "installments": null,
+      "mandate_options": null,
+      "network": null,
+      "request_three_d_secure": "automatic"
+    },
+    "cashapp": {},
+    "klarna": {
+      "preferred_locale": null
+    },
+    "link": {
+      "persistent_token": null
+    }
+  },
+  "payment_method_types": [
+    "amazon_pay",
+    "card",
+    "cashapp",
+    "klarna",
+    "link"
+  ],
+  "payment_record": null,
+  "processing": null,
+  "receipt_email": null,
+  "review": null,
+  "setup_future_usage": "off_session",
+  "shared_payment_granted_token": null,
+  "shipping": null,
+  "source": null,
+  "statement_descriptor": null,
+  "statement_descriptor_suffix": null,
+  "status": "succeeded",
+  "transfer_data": null,
+  "transfer_group": null
+}

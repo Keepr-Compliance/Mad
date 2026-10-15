@@ -187,6 +187,8 @@ function TransactionList({
     isBulkExporting,
     isBulkUpdating,
     bulkActionSuccess,
+    bulkExportNotice,
+    dismissBulkExportNotice,
     handleBulkDelete,
     handleBulkExport,
     handleBulkStatusChange,
@@ -386,6 +388,8 @@ function TransactionList({
         error={error}
         quickExportSuccess={quickExportSuccess}
         bulkActionSuccess={bulkActionSuccess}
+        bulkExportNotice={bulkExportNotice}
+        onDismissBulkExportNotice={dismissBulkExportNotice}
         creditRefreshSignal={creditRefreshSignal}
       />
 

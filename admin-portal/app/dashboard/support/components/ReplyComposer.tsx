@@ -290,7 +290,7 @@ export function ReplyComposer({ ticketId, onMessageSent, requesterName, ticketNu
         {uploadProgress && <div className="mb-2 text-sm text-blue-600">{uploadProgress}</div>}
 
         {/* Actions */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between max-md:flex-col max-md:items-stretch max-md:gap-2">
           <div className="flex items-center gap-2">
             <TemplatePicker
               onSelect={(text) => setBody(text)}
@@ -306,7 +306,7 @@ export function ReplyComposer({ ticketId, onMessageSent, requesterName, ticketNu
           <button
             onClick={handleSend}
             disabled={(!body.trim() && validFiles.length === 0) || sending}
-            className={`inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            className={`inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed max-md:min-h-[44px] max-md:justify-center ${
               isNote
                 ? 'bg-amber-600 hover:bg-amber-700'
                 : 'bg-primary-600 hover:bg-primary-700'

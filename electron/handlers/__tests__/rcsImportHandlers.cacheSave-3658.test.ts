@@ -313,20 +313,28 @@ describe("a cache Sync being saved (SR B1, S1)", () => {
 
   // Founder (2026-10-01): done or failed → Keepr comes to the front by itself
   // (the /focus mechanism, incl. the taskbar flash); never on a cancel.
+  // BACKLOG-3924: a failure with code not_signed_in must NOT bounce Keepr to the
+  // front (the user is signing in to Google Messages); the call site has to pass
+  // the error code, not just the state.
   it.each([
-    ["finished", "cache", 1],
-    ["failed", "cache", 1],
-    ["finished", "transaction", 1],
-    ["failed", "transaction", 1],
-    ["cancelled", "cache", 0],
-    ["cancelled", "transaction", 0],
-  ] as const)("comes to the front: %s %s job → %i (F1)", async (state, kind, times) => {
+    ["finished", undefined, "cache", 1],
+    ["failed", undefined, "cache", 1],
+    ["finished", undefined, "transaction", 1],
+    ["failed", undefined, "transaction", 1],
+    ["cancelled", undefined, "cache", 0],
+    ["cancelled", undefined, "transaction", 0],
+    ["failed", "not_signed_in", "cache", 0],
+    ["failed", "not_signed_in", "transaction", 0],
+  ] as const)("comes to the front: %s (%s) %s job → %i (F1)", async (state, code, kind, times) => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const front = require("../../utils/bringAppToFront") as { bringAppToFrontOrFlash: jest.Mock };
     front.bringAppToFrontOrFlash.mockClear();
     bridgeOptions.onJobEnded({
       kind, userId: "user-1", detectedOwnNumber: null,
-      snapshot: { state, jobId: "job-1", createdAt: "2026-10-01T10:00:00.000Z" },
+      snapshot: {
+        state, jobId: "job-1", createdAt: "2026-10-01T10:00:00.000Z",
+        ...(code ? { error: { code, message: "x" } } : {}),
+      },
     });
     expect(front.bringAppToFrontOrFlash).toHaveBeenCalledTimes(times);
     releaseCommit?.();

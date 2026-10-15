@@ -89,7 +89,6 @@ import {
 } from "./db/contactLinkReviewDbService";
 import {
   getAllForUser,
-  search as searchExternalContacts,
   type ExternalContact,
   type ExternalContactSource,
 } from "./db/externalContactDbService";

@@ -70,7 +70,10 @@ describe("LookbackMonthsSelect", () => {
 
   it("forceWindowLine: what a Force run keeps", () => {
     expect(forceWindowLine(1.5, "texts")).toBe("Keeps texts from the last 1.5 months; older texts not in an audit period are removed.");
-    expect(forceWindowLine(12, "emails")).toBe("Keeps emails from the last year; older emails are removed from this computer.");
+    // BACKLOG-3910a: emails tied to a deal are kept whatever their age.
+    expect(forceWindowLine(12, "emails")).toBe(
+      "Keeps emails from the last year; older emails are removed from this computer unless they are attached to a deal.",
+    );
     expect(forceWindowLine(null, "texts")).toBe("Keeps all your texts.");
   });
 

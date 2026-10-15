@@ -208,11 +208,13 @@ export function AttachmentList({ attachments, sources }: AttachmentListProps) {
       <div className="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
         {/* Header with tabs */}
         <div className="px-6 py-4 border-b border-gray-200">
-          <div className="flex items-center justify-between">
+          {/* BACKLOG-3798: below md the title and the tabs stack, and the tabs
+              wrap so the active one stays visible. md: restores the row. */}
+          <div className="flex flex-col items-start gap-3 md:flex-row md:items-center md:justify-between md:gap-0">
             <h2 className="text-lg font-semibold text-gray-900">
               Attachments ({attachments.length})
             </h2>
-            <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+            <div className="flex flex-wrap md:flex-nowrap gap-1 bg-gray-100 rounded-lg p-1">
               {tabs.map(({ value, label, count }) => (
                 <button
                   key={value}

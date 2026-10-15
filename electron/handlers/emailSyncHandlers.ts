@@ -8,6 +8,7 @@
 //            Handler is now a thin wrapper (validation + rate limit + delegate)
 // ============================================
 
+import { dealLockReason } from "../services/transactionEligibility";
 import { ipcMain } from "electron";
 import type { BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
@@ -41,6 +42,7 @@ import {
 } from "../services/emailPrecacheProgress";
 
 import { sendToMainWindow } from "../windowRegistry";
+import { handleBusy } from "../utils/busyIpc";
 
 interface ScanOptions {
   onProgress?: (progress: unknown) => void;
@@ -147,7 +149,7 @@ export function registerEmailSyncHandlers(
   // Scan and extract transactions from emails
   // Rate limited: 5 second cooldown per user to prevent scan spam.
   // Scans hit external email APIs (Gmail, Outlook).
-  ipcMain.handle(
+  handleBusy(
     "transactions:scan",
     wrapHandler(async (
       event: IpcMainInvokeEvent,
@@ -271,7 +273,7 @@ export function registerEmailSyncHandlers(
   // Sync emails from email provider (Gmail/Outlook) for a transaction
   // This fetches NEW emails from the provider, stores them, then runs auto-link
   // Rate limited: 10 second cooldown per transaction to prevent sync spam.
-  ipcMain.handle(
+  handleBusy(
     "transactions:sync-and-fetch-emails",
     wrapHandler(async (
       event: IpcMainInvokeEvent,
@@ -327,6 +329,20 @@ export function registerEmailSyncHandlers(
         return {
           success: false,
           error: "Transaction not found",
+        };
+      }
+
+      // BACKLOG-3910: a locked deal (with the broker, or sealed) is not searched and
+      // gets nothing new. The deal screen disables this button; this is the backstop.
+      const lockReason = dealLockReason(transactionDetails.submission_status);
+      if (lockReason) {
+        return {
+          success: true,
+          skipped: lockReason,
+          emailsFetched: 0,
+          emailsStored: 0,
+          totalEmailsLinked: 0,
+          totalMessagesLinked: 0,
         };
       }
 
@@ -529,6 +545,9 @@ export function registerEmailSyncHandlers(
           success: false,
           error: result.error,
           ...(result.providerError ? { providerError: result.providerError } : {}),
+          // BACKLOG-3910a: which mailbox stopped a force run, and whether its
+          // token expired — the renderer words the next step from this.
+          ...(result.forceNotApplied ? { forceNotApplied: result.forceNotApplied } : {}),
           emailsFetched: result.fetched,
           emailsStored: result.stored,
         };

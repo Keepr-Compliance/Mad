@@ -21,6 +21,23 @@
   var SIGN_IN_TITLE = "Sign in to Google Messages";
   var SIGN_IN_BEFORE = "Sign in or scan the QR code, then ";
   var SIGN_IN_AFTER = " in Keepr.";
+  /**
+   * BACKLOG-3924 S2–S6 (founder-approved 2026-10-12): the page waits for the
+   * user to sign in, then starts the Sync by itself.
+   */
+  var SIGN_IN_BODY = "Scan the QR code with your phone, or sign in. Keepr starts the Sync when you're done.";
+  var SIGN_IN_TIP = "Turn on \"Remember this computer\" so you only do this once.";
+  var SIGN_IN_START = "I'm signed in \u2014 start Sync";
+  var SIGN_IN_NOT_YET = "Google Messages isn't signed in yet. Finish signing in, then click again.";
+  var SIGN_IN_TIMED_OUT = "Sign-in took too long. Click Sync in Keepr to try again.";
+  /** BACKLOG-3924: how long the page waits for sign-in (Keepr's own limit is the same, from its start). */
+  var SIGN_IN_WAIT_MS = 15 * 60000;
+  /** How often the page looks for the signed-in chat list while it waits. */
+  var SIGN_IN_POLL_MS = 1000;
+  /** How often the page tells Keepr it is still waiting (Keepr keeps the job 5 min a message). */
+  var SIGN_IN_HEARTBEAT_MS = 15000;
+  /** Google's sign-in page, observed live 2026-09-29 (BACKLOG-3620): either marker is enough. */
+  var SIGNED_OUT_MARKERS = "mw-welcome-page-container, button[data-e2e-welcome-page-sign-in-button]";
   var JOB_HASH_RE = /(?:^#|&)keepr-job=([0-9a-fA-F-]{36})(?:&|$)/;
   /** Keepr's "Open Google Messages" on its link screen (see background.js routeLink). */
   var LINK_HASH_RE = /(?:^#|&)keepr-link(?:&|$)/;
@@ -52,15 +69,112 @@
     for (;;) {
       var state = env.scan.signInState(env.getLocation().pathname);
       if (state === "not_signed_in") return "not_signed_in";
-      if (env.doc.querySelector(LIST_ITEM)) return "ready";
-      // A narrow window with a chat open shows no list (BACKLOG-3629): the
-      // chat header on a signed-in path proves the page is loaded too.
-      if (state === "signed_in" && env.scan.SELECTORS && env.doc.querySelector(env.scan.SELECTORS.headerTitle)) {
-        return "ready";
-      }
+      if (pageReady(env)) return "ready";
+      // BACKLOG-3924: Google's sign-in page under a path we do not know yet.
+      if (state !== "signed_in" && env.doc.querySelector(SIGNED_OUT_MARKERS)) return "not_signed_in";
       if (waited >= timeoutMs) return "timeout";
       await env.sleep(250);
       waited += 250;
+    }
+  }
+
+  /**
+   * Signed in and loaded: the chat list is there, or (a narrow window with a
+   * chat open shows no list, BACKLOG-3629) the chat header on a signed-in
+   * path. BACKLOG-3924: a signed-in PATH alone is not enough — the list may
+   * still be empty, and a Sync started then ends as list_not_reachable.
+   */
+  function pageReady(env) {
+    if (env.doc.querySelector(LIST_ITEM)) return true;
+    var state = env.scan.signInState(env.getLocation().pathname);
+    return state === "signed_in" && !!env.scan.SELECTORS && !!env.doc.querySelector(env.scan.SELECTORS.headerTitle);
+  }
+
+  /**
+   * BACKLOG-3924: tell Keepr the page waits for sign-in. → "ok" | "old_keepr"
+   * (an older Keepr has no such route: it answers 404 not_found) | "claimed"
+   * (409: another tab claimed it). Keepr gone or the job over (Stop in Keepr:
+   * 410) throws, as every job call does. Sent with env.api, not call(): call()
+   * reads ANY 404 as "the job is over", which would hide an older Keepr.
+   */
+  async function sendWaiting(env, base, reason) {
+    var reply = await env.api("POST", base + "/waiting", { reason: reason });
+    if (reply && reply.status === 0) {
+      await env.sleep(TRANSPORT_RETRY_MS);
+      reply = await env.api("POST", base + "/waiting", { reason: reason });
+    }
+    if (reply && reply.ok) return { kind: "ok", body: reply.body || {} };
+    if (reply && reply.status === 404 && reply.body && reply.body.error === "not_found") return { kind: "old_keepr" };
+    if (reply && (reply.status === 400 || reply.status === 405)) return { kind: "old_keepr" };
+    var lost = transportKind(reply);
+    if (lost) throw KeeprLostError(lost);
+    if (reply && reply.status === 410) throw JobGoneError();
+    if (reply && reply.status === 409) return { kind: "claimed" };
+    // Anything else (a busy 429, a 5xx): keep waiting; the next message retries.
+    return { kind: "ok", body: {} };
+  }
+
+  /**
+   * BACKLOG-3924 (founder, 2026-10-12): Google Messages is not signed in —
+   * the page waits (up to 15 min) for the user to scan the QR code or sign
+   * in, and starts the Sync by itself once the chat list is there. The card's
+   * "I'm signed in — start Sync" checks at once (never claims on the click
+   * alone). → { ready: true } | { fallback: true } (an older Keepr: today's
+   * card and /error) | { outcome } (gave up).
+   */
+  async function waitForSignIn(env, base, log, extras) {
+    var nowMs = function () { return (env.now ? env.now() : new Date()).getTime(); };
+    var startedAt = nowMs();
+    var first = await sendWaiting(env, base, "sign_in");
+    if (first.kind === "old_keepr") return { fallback: true };
+    if (first.kind === "claimed") return { ready: true };
+    // Keepr's own limit runs from ITS start: end the wait just before it, so
+    // the page says "took too long" rather than "cancelled".
+    var giveUpAt = startedAt + SIGN_IN_WAIT_MS;
+    var left = first.body && typeof first.body.waitLeftMs === "number" ? first.body.waitLeftMs : null;
+    if (left !== null && isFinite(left)) giveUpAt = Math.min(giveUpAt, startedAt + Math.max(0, left - 2000));
+    var notYet = false;
+    var startAsked = false;
+    function show() {
+      env.overlay.show(SIGN_IN_TITLE, false, Object.assign({}, extras, { signIn: { waiting: true, notYet: notYet, start: startNow } }));
+    }
+    function startNow() {
+      if (pageReady(env)) {
+        startAsked = true;
+        return true;
+      }
+      notYet = true;
+      show();
+      return false;
+    }
+    log("stage: waiting for sign-in");
+    if (env.setWaitingForSignIn) env.setWaitingForSignIn(true);
+    try {
+      show();
+      var lastBeat = startedAt;
+      for (;;) {
+        if (startAsked || pageReady(env)) {
+          log("page: signed in" + (startAsked ? " (start clicked)" : ""));
+          return { ready: true };
+        }
+        var t = nowMs();
+        if (t >= giveUpAt) {
+          log("failed: not_signed_in (sign-in took too long)");
+          env.overlay.show(SIGN_IN_TITLE, false, Object.assign({}, extras, { signIn: { timedOut: true } }));
+          try {
+            await env.api("POST", base + "/error", { code: "not_signed_in", message: NOT_SIGNED_IN });
+          } catch (_e) { /* Keepr has its own limit */ }
+          return { outcome: "not_signed_in" };
+        }
+        if (t - lastBeat >= SIGN_IN_HEARTBEAT_MS) {
+          lastBeat = t;
+          var beat = await sendWaiting(env, base, "sign_in");
+          if (beat.kind === "claimed") return { ready: true };
+        }
+        await env.sleep(SIGN_IN_POLL_MS);
+      }
+    } finally {
+      if (env.setWaitingForSignIn) env.setWaitingForSignIn(false);
     }
   }
 
@@ -1364,11 +1478,19 @@
       return { outcome: code };
     }
 
-    // 1. Signed in? (founder decision: no waiting for sign-in, no auto-resume)
+    // 1. Signed in? BACKLOG-3924 (founder, 2026-10-12): not signed in, the
+    // page waits for sign-in and starts by itself (the 2026-09-29 "no
+    // waiting, no auto-resume" ruling is reversed for this case only).
     log("stage: job found, waiting for Messages for Web");
     var pageState = await waitForPageState(env, env.pageTimeoutMs == null ? 20000 : env.pageTimeoutMs);
     log("page: " + pageState);
     if (pageState === "not_signed_in") {
+      var signIn = await waitForSignIn(env, base, log, await overlayExtras());
+      if (signIn.ready) pageState = "ready";
+      else if (signIn.outcome) return { outcome: signIn.outcome };
+    }
+    if (pageState === "not_signed_in") {
+      // An older Keepr (no /waiting): today's card and /error.
       // Storyboard I01: its own card (Keepr still records the failure).
       log("failed: not_signed_in");
       // (Copy details still carries the diagnostics and the version.)
@@ -1404,6 +1526,11 @@
       return { outcome: "claim_refused" };
     }
     log("claimed");
+    // BACKLOG-3924 E3: from here a reload must not run this job again (until
+    // now it may: a reload after sign-in resumes the wait or starts the Sync).
+    if (env.onClaimed) {
+      try { env.onClaimed(); } catch (_e) { /* ignore */ }
+    }
     // BACKLOG-3658: every chat, history back to `since`.
     if (typeof env.chromeVersion === "function") {
       try {
@@ -1909,12 +2036,10 @@
         // P02: a chat finished (read, skipped or failed) — the bar advances, never back.
         if (item.attempt === 0) run.done = Math.min(run.total, run.done + 1);
         if (item.attempt === 0 && !gone) tm.chatMs.push(Math.max(0, clock() - chatAt));
-        if (chatTiming) {
-          log(timingLine(chatTiming, clock() - chatAt, hiddenStats.peek().ms - chatTiming.hiddenAt));
-          if (chatTiming.photoRead.length > 0) log(photoTimingLine(chatTiming));
-          addSteps(chatTiming);
-          chatTiming = null;
-        }
+        log(timingLine(chatTiming, clock() - chatAt, hiddenStats.peek().ms - chatTiming.hiddenAt));
+        if (chatTiming.photoRead.length > 0) log(photoTimingLine(chatTiming));
+        addSteps(chatTiming);
+        chatTiming = null;
       }
       // Also the cancel check between chats: a job Keepr dropped answers 404/410.
       if (i + 1 < candidates.length) run.index = i + 2;
@@ -2017,7 +2142,7 @@
     if (!finished || !finished.ok) {
       return fail("finish_refused", messageOf(finished, "Keepr could not finish this Sync."));
     }
-    if (finished && finished.body && Object.prototype.hasOwnProperty.call(finished.body, "saved")) {
+    if (finished.body && Object.prototype.hasOwnProperty.call(finished.body, "saved")) {
       saved = finished.body.saved;
     }
     log("done: listed " + progress.listed + ", candidates " + progress.candidates + ", checked " + progress.checked +
@@ -2437,8 +2562,14 @@
       return;
     }
 
-    /** Storyboard I01: Google Messages is not signed in — one line, no button. */
+    /**
+     * Storyboard I01: Google Messages is not signed in — one line, no button
+     * (an older Keepr). BACKLOG-3924: waiting for sign-in — S2, the tip S3,
+     * S4 (start now), S5 after a click while still signed out; S6 when the
+     * wait gave up.
+     */
     function renderSignIn() {
+      var signIn = extras && typeof extras.signIn === "object" ? extras.signIn : null;
       var row = el("div", "header", { display: "flex", alignItems: "center", gap: "10px" });
       var mark = el("div", "drag-handle", { flex: "0 0 30px", width: "30px", height: "30px", cursor: "grab", touchAction: "none", userSelect: "none" });
       mark.appendChild(brandMark(doc, 30));
@@ -2451,6 +2582,21 @@
         row.appendChild(x);
       }
       box.appendChild(row);
+      if (signIn && signIn.timedOut) {
+        box.appendChild(el("div", "progress", bodyStyle, SIGN_IN_TIMED_OUT));
+        return;
+      }
+      if (signIn && signIn.waiting) {
+        box.appendChild(el("div", "progress", bodyStyle, SIGN_IN_BODY));
+        box.appendChild(el("div", "sign-in-tip", { fontSize: "12px", lineHeight: "16px", color: p.muted }, SIGN_IN_TIP));
+        if (signIn.notYet) box.appendChild(el("div", "sign-in-not-yet", bodyStyle, SIGN_IN_NOT_YET));
+        var startBtn = button("sign-in-start", SIGN_IN_START, "primary");
+        startBtn.addEventListener("click", function () {
+          if (typeof signIn.start === "function") signIn.start();
+        });
+        box.appendChild(bottomRow(null, [startBtn]));
+        return;
+      }
       var line = el("div", "progress", bodyStyle);
       line.appendChild(doc.createTextNode(SIGN_IN_BEFORE));
       line.appendChild(el("b", null, null, "Sync now"));
@@ -3083,6 +3229,19 @@
     return { jobId: null, ask: false, idle: true };
   }
 
+  /**
+   * C5 / BACKLOG-3924: what the page tells Keepr when it goes away (closed,
+   * reloaded, navigated). A running Sync: page_gone (Keepr saves what is
+   * done). Waiting for sign-in: NOT a failure — the "Sign in" button leaves
+   * for accounts.google.com, and pairing may reload the page — one /waiting
+   * that buys Keepr's grace instead. → { path, body } | null.
+   */
+  function pageHideReport(s) {
+    if (!s || !s.jobId || !s.running) return null;
+    if (s.waitingForSignIn) return { path: "/job/" + s.jobId + "/waiting", body: { reason: "sign_in_redirect" } };
+    return { path: "/job/" + s.jobId + "/error", body: { code: "page_gone", message: PAGE_GONE_MESSAGE, metrics: s.metrics } };
+  }
+
   /** The drag handle inside the box (renderOverlay's badge). */
   var DRAG_HANDLE = '[data-keepr="drag-handle"]';
 
@@ -3175,6 +3334,14 @@
     jobIdFromHash: jobIdFromHash,
     waitForPageState: waitForPageState,
     NOT_SIGNED_IN: NOT_SIGNED_IN,
+    SIGN_IN_BODY: SIGN_IN_BODY,
+    SIGN_IN_TIP: SIGN_IN_TIP,
+    SIGN_IN_START: SIGN_IN_START,
+    SIGN_IN_NOT_YET: SIGN_IN_NOT_YET,
+    SIGN_IN_TIMED_OUT: SIGN_IN_TIMED_OUT,
+    SIGN_IN_WAIT_MS: SIGN_IN_WAIT_MS,
+    SIGN_IN_HEARTBEAT_MS: SIGN_IN_HEARTBEAT_MS,
+    pageHideReport: pageHideReport,
     DONE_LINE: DONE_LINE,
     floorKind: floorKind,
     historyDepthLine: historyDepthLine,
@@ -3283,7 +3450,7 @@
   /** The box's remembered place (chrome.storage.local), once read. */
   var savedPosition = null;
   /** SR: read the place from the extension's storage; drop what an older build left in the page's. */
-  var positionLoaded = (function () {
+  void (function () {
     try { localStorage.removeItem(POSITION_KEY); } catch (_e) { /* nothing left */ }
     return new Promise(function (resolve) {
       try {
@@ -3470,7 +3637,7 @@
         launchKeepr(document, "keepr://open");
         return false;
       }
-      var jobId = r && r.ok && r.body && typeof r.body.jobId === "string" ? r.body.jobId : null;
+      var jobId = r.ok && r.body && typeof r.body.jobId === "string" ? r.body.jobId : null;
       if (!jobId || running) return false;
       idleExpanded = false;
       void start(jobId);
@@ -3482,12 +3649,15 @@
   // failure — Keepr is told at once (it saves the chats already finished),
   // instead of waiting on a time limit.
   root.addEventListener("pagehide", function () {
-    if (!currentJobId || !running) return;
-    void toWorker({
-      type: "keepr-job-api", method: "POST", path: "/job/" + currentJobId + "/error",
-      body: { code: "page_gone", message: PAGE_GONE_MESSAGE, metrics: currentRunMetrics() },
+    var report = pageHideReport({
+      jobId: currentJobId, running: running, waitingForSignIn: waitingForSignIn,
+      metrics: waitingForSignIn ? undefined : currentRunMetrics(),
     });
+    if (!report) return;
+    void toWorker({ type: "keepr-job-api", method: "POST", path: report.path, body: report.body });
   });
+  /** BACKLOG-3924: the job waits for the user to sign in to Google Messages. */
+  var waitingForSignIn = false;
 
   /** The page's Cancel: POST /job/<this job>/cancel through the worker. */
   var currentJobId = null;
@@ -3755,7 +3925,16 @@
       visibility: visibility,
       // Not discarded by Chrome while the run is on (the worker sets it on this tab).
       keepTab: function (keep) { void toWorker({ type: "keepr-keep-tab", keep: keep === true }); },
+      // BACKLOG-3924: the wait for sign-in (pagehide must not fail it).
+      setWaitingForSignIn: function (on) { waitingForSignIn = on === true; },
+      // BACKLOG-3924 E3: this tab's copy of the job goes once it is claimed.
+      onClaimed: forgetStoredJob,
     };
+  }
+
+  /** BACKLOG-3924 E3: a later visit to this tab never runs this job again. */
+  function forgetStoredJob() {
+    try { sessionStorage.removeItem(STORAGE_KEY); } catch (_e) { /* ignore */ }
   }
 
   async function start(jobId) {
@@ -3763,7 +3942,9 @@
     setRunning(true);
     currentJobId = jobId;
     stoppedHere = false;
-    try { sessionStorage.removeItem(STORAGE_KEY); } catch (_e) { /* ignore */ }
+    // BACKLOG-3924 E3: the tab's copy of the job is kept until the claim (a
+    // reload after sign-in resumes it), and goes when the run ends however
+    // it ends (see finally).
     if (!document.body) {
       await new Promise(function (r) { document.addEventListener("DOMContentLoaded", r, { once: true }); });
     }
@@ -3789,6 +3970,8 @@
       }
       currentJobId = null;
       runMetricsFn = null;
+      waitingForSignIn = false;
+      forgetStoredJob();
       setRunning(false);
     }
   }

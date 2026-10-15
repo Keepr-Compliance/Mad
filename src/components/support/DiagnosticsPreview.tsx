@@ -199,9 +199,15 @@ function IphoneSyncSection({
 }): React.ReactElement {
   const yesNo = (v: boolean): string => (v ? "Yes" : "No");
 
-  const detectionValue = `Mounted: ${yesNo(iphoneSync.device_mounted)}, Detected: ${yesNo(
-    iphoneSync.device_detected
-  )} (${iphoneSync.connected_device_count})`;
+  // BACKLOG-3418: with iPhone checking off the device probes do not run, so
+  // their fields are defaults — say so rather than show "Missing".
+  const notChecked = iphoneSync.iphone_checking_on === false;
+  const NOT_CHECKED = "Not checked (iPhone checking is off)";
+  const detectionValue = notChecked
+    ? NOT_CHECKED
+    : `Mounted: ${yesNo(iphoneSync.device_mounted)}, Detected: ${yesNo(
+        iphoneSync.device_detected
+      )} (${iphoneSync.connected_device_count})`;
 
   return (
     <div className="mt-1 border-t border-gray-200 pt-2">
@@ -210,7 +216,13 @@ function IphoneSyncSection({
         <DiagRow label="Phone Type" value={iphoneSync.phone_type} />
         <DiagRow
           label="libimobiledevice"
-          value={iphoneSync.libimobiledevice_available ? "Available" : "Missing"}
+          value={
+            notChecked
+              ? NOT_CHECKED
+              : iphoneSync.libimobiledevice_available
+                ? "Available"
+                : "Missing"
+          }
         />
         <DiagRow label="Detection" value={detectionValue} />
         {iphoneSync.driver_missing_suspected && (

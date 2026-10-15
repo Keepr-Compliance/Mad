@@ -82,6 +82,7 @@ describe("useOptionalMachineState", () => {
           hasEmailConnected: true,
           needsDriverSetup: false,
           fda: "granted",
+          setup: "finished",
         },
       };
 

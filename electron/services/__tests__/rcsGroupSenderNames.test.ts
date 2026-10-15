@@ -47,7 +47,7 @@ jest.mock("../databaseService", () => {
 });
 
 import { setDb } from "../db/core/dbConnection";
-import { batchInsertMessages, findRcsContentDuplicates, getMessageIdMap, insertReactionRows } from "../db/syncDbService";
+import { batchInsertMessages, findRcsContentDuplicates, getMessageIdsByExternalIds, insertReactionRows } from "../db/syncDbService";
 import { getRcsPeopleNamesByDigits, recordRcsChatPeople } from "../db/rcsChatPeopleDbService";
 import { peopleFrom, rcsChatHash, storeCacheChatSync, type RcsIncomingChat } from "../rcsImportStore";
 import { extractParticipantHandles, resolveGroupChatParticipants, resolveHandles, resolvePhoneNames } from "../contactResolutionService";
@@ -139,7 +139,7 @@ describe("group-sender names from Google Messages (Source 4)", () => {
   it("a stored group: the Texts tab's and the export's resolution name the sender", async () => {
     const storeDeps = {
       batchInsertMessages,
-      getMessageIdMap,
+      getMessageIdsByExternalIds,
       insertReactionRows,
       findContentDuplicates: findRcsContentDuplicates,
       recordPeople: recordRcsChatPeople,

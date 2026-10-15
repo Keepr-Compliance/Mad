@@ -14,6 +14,7 @@
  *    on a value it just read, rather than on a render-stale prop.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { logOpenPath, nowMs } from "../../../utils/openPathTiming";
 import { logger } from "../../../utils/logger";
 import type { ReviewItemDto, ReviewStateResult } from "../../../../electron/types/ipc/window-api-transactions";
 import { groupReviewItemsByThread } from "../utils/reviewThreads";
@@ -38,6 +39,12 @@ export interface UseReviewQueueResult {
    */
   threadCount: number;
   isLoading: boolean;
+  /**
+   * BACKLOG-3832: a discovery sweep this screen started (`runSync`) is still
+   * running. On a deal with many contacts it takes seconds before the
+   * "N found" popup can appear; this drives the status row that says so.
+   */
+  isSyncing: boolean;
   /** Items added by the most recent sync — drives the popup (0 = silent). */
   lastAdded: number;
   /** Items LINKED outright by the most recent sync — the popup's "L". */
@@ -78,6 +85,11 @@ const EMPTY: ReviewStateResult = { items: [], count: 0 };
 export function useReviewQueue(transactionId: string | null): UseReviewQueueResult {
   const [state, setState] = useState<ReviewStateResult>(EMPTY);
   const [isLoading, setIsLoading] = useState(false);
+  // BACKLOG-3832: sweeps in flight for the CURRENT deal. A count, not a boolean:
+  // StrictMode runs the on-open sweep twice, and the first to finish must not
+  // clear the indicator while the second is still running.
+  const syncsInFlightRef = useRef(0);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [lastAdded, setLastAdded] = useState(0);
   const [lastLinked, setLastLinked] = useState(0);
   const [changeToken, setChangeToken] = useState(0);
@@ -88,6 +100,8 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
   // refresh changes identity every render and re-subscribes the event listener).
   const stateRef = useRef<ReviewStateResult>(EMPTY);
   const hasLoadedRef = useRef(false);
+  // BACKLOG-3884: [TxnOpen] timing for the first review-state read per transaction.
+  const openTimedForRef = useRef<string | null>(null);
 
   const activeId = useRef<string | null>(transactionId);
   useEffect(() => {
@@ -105,8 +119,16 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
     if (!transactionId) return EMPTY;
     setIsLoading(true);
     try {
+      const startedAt = nowMs();
       const next = await window.api.transactions.getReviewState(transactionId);
       const safe: ReviewStateResult = next ?? EMPTY;
+      if (openTimedForRef.current !== transactionId) {
+        openTimedForRef.current = transactionId;
+        logOpenPath(
+          `review state read ms=${Math.round(nowMs() - startedAt)}` +
+            ` count=${safe.count ?? 0} items=${safe.items?.length ?? 0}`,
+        );
+      }
       stateRef.current = safe;
       hasLoadedRef.current = true;
       setChangeToken((t) => t + 1);
@@ -133,13 +155,22 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
   const runSync = useCallback(
     async (reason: "open" | "contact-change", contactIds?: string[]): Promise<number> => {
       if (!transactionId) return 0;
+      syncsInFlightRef.current += 1;
+      setIsSyncing(true);
       try {
+        const startedAt = nowMs();
         const result = await window.api.transactions.syncReviewQueue(
           transactionId,
           reason,
           contactIds,
         );
         const added = result?.added ?? 0;
+        // BACKLOG-3884: renderer-side wall time, so it includes any wait for
+        // main before the handler ran.
+        logOpenPath(
+          `review sync ms=${Math.round(nowMs() - startedAt)} reason=${reason}` +
+            ` added=${added} linked=${result?.linked ?? 0}`,
+        );
         // MAX, not overwrite — and this is load-bearing under StrictMode.
         //
         // StrictMode is ON (src/main.tsx), so the on-open effect fires TWICE per
@@ -167,6 +198,9 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
         // the single most reassuring thing this UI can say.
         logger.error("Review queue sync failed", error);
         return 0;
+      } finally {
+        syncsInFlightRef.current = Math.max(0, syncsInFlightRef.current - 1);
+        if (syncsInFlightRef.current === 0) setIsSyncing(false);
       }
     },
     [transactionId, refresh],
@@ -175,7 +209,9 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
   const approve = useCallback(
     async (itemIds: string[]): Promise<void> => {
       if (itemIds.length === 0) return;
-      await window.api.transactions.approveReviewItems(itemIds);
+      const result = (await window.api.transactions.approveReviewItems(itemIds)) as { success?: boolean; error?: string };
+      // BACKLOG-3910: a locked deal refuses; surface it instead of reporting success.
+      if (result?.success === false) throw new Error(result.error || "Deal is read-only");
       await refresh();
     },
     [refresh],
@@ -184,7 +220,9 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
   const reject = useCallback(
     async (itemIds: string[]): Promise<void> => {
       if (itemIds.length === 0) return;
-      await window.api.transactions.rejectReviewItems(itemIds);
+      const result = (await window.api.transactions.rejectReviewItems(itemIds)) as { success?: boolean; error?: string };
+      // BACKLOG-3910: a locked deal refuses; surface it instead of reporting success.
+      if (result?.success === false) throw new Error(result.error || "Deal is read-only");
       await refresh();
     },
     [refresh],
@@ -240,6 +278,7 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
     count: state.count,
     threadCount: groupReviewItemsByThread(state.items).length,
     isLoading,
+    isSyncing,
     lastAdded,
     lastLinked,
     lastFound: lastAdded + lastLinked,

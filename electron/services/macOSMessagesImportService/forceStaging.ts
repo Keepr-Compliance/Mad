@@ -68,8 +68,6 @@ import { UPDATE_ATTACHMENT_MESSAGE_ID_SQL } from "../db/messageImportSql";
 import * as crypto from "crypto";
 import {
   columnList,
-  deriveStagingIndexDdl,
-  deriveStagingTableDdl,
   checkedStagingTable,
   countStagingRows,
   createStagingTable,
@@ -77,7 +75,6 @@ import {
   mirrorStagingIndexes,
   sweepStaleStagingTables,
   type StagingTableName,
-  messageTableDdl as tableDdl,
 } from "../db/stagingDdlSql";
 
 /** Prefix every ephemeral table shares, so a crashed run's leftovers are findable. */

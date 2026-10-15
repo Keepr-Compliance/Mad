@@ -94,6 +94,19 @@ export function resolveAppDataDir(input: AppDataDirInput): string | null {
   return path.join(input.appDataPath, DEV_DIR_NAME);
 }
 
+/**
+ * BACKLOG-3819 (founder decision dc27e73c): desktop logs are sealed at rest only
+ * in the installed app. Unpackaged dev builds write REDACTED PLAINTEXT logs.
+ *
+ * The same `isPackaged` test as step 3 of {@link resolveAppDataDir}: packaged is
+ * the installed app's profile (sealed), unpackaged is the dev profile (plain).
+ * A packaged QA build pointed elsewhere with `KEEPR_USER_DATA_DIR` is still
+ * packaged and still seals.
+ */
+export function logsSealedAtRest(input: { isPackaged: boolean }): boolean {
+  return input.isPackaged;
+}
+
 export interface AppliedAppDataPaths {
   /** The directory now backing userData. */
   dir: string;

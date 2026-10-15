@@ -87,11 +87,6 @@ const ELECTRON_ENV_RULES: EnvRule[] = [
     hint: "Required for Gmail integration",
   },
   {
-    name: "GOOGLE_MAPS_API_KEY",
-    required: false,
-    hint: "Required for address verification",
-  },
-  {
     name: "SENTRY_DSN",
     required: false,
     hint: "Required for error tracking",

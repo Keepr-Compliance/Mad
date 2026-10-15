@@ -10,6 +10,8 @@
  * - Various modal dialogs
  */
 import React, { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
+import { logAfterNextPaint, logOpenPath, nowMs } from "../utils/openPathTiming";
+import { getRendererStallPhase, setRendererStallPhase } from "../utils/rendererStallLogger";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import type { Transaction } from "@/types";
 import { transactionService } from '../services';
@@ -52,8 +54,12 @@ import { ReviewNotesPanel } from "./transactionDetailsModule/components/ReviewNo
 import { SubmitForReviewModal } from "./transactionDetailsModule/components/modals/SubmitForReviewModal";
 // BACKLOG-2791 / BACKLOG-2792: the Needs Review queue and the merged Complete flow.
 import { useReviewQueue } from "./transactionDetailsModule/hooks/useReviewQueue";
+import { useTextThreads } from "./transactionDetailsModule/hooks/useTextThreads";
 import { useResolvedContactNames } from "./transactionDetailsModule/hooks/useResolvedContactNames";
 import { useCompleteTransaction } from "./transactionDetailsModule/hooks/useCompleteTransaction";
+import { useDealLock } from "./transactionDetailsModule/hooks/useDealLock";
+import { DealLockNotice } from "./transactionDetailsModule/components/DealLockNotice";
+import { DEAL_LOCK_EDIT_TOOLTIP, DEAL_LOCK_SYNC_TOOLTIP } from "../utils/dealLock";
 import { NeedsReviewScreen } from "./transactionDetailsModule/components/NeedsReviewScreen";
 import { ReviewPromptDialog } from "./transactionDetailsModule/components/ReviewPromptDialog";
 import { ChecklistWarningDialog } from "./transactionDetailsModule/components/ChecklistWarningDialog";
@@ -129,6 +135,21 @@ function TransactionDetails({
     setTransaction(transactionProp);
   }, [transactionProp]);
 
+  // BACKLOG-3884: open-path timing in main.log — mount -> first paint, and
+  // mount -> the Overview contacts painted. A renderer stall in between is
+  // attributed to phase "transaction-open".
+  const mountedAtRef = useRef<number>(nowMs());
+  const overviewPaintLoggedRef = useRef(false);
+  useEffect(() => {
+    setRendererStallPhase("transaction-open");
+    logOpenPath(`details mount tab=${initialTab}`);
+    logAfterNextPaint("details first paint", mountedAtRef.current);
+    // once per open (initialTab is the tab it opened on)
+    return () => {
+      if (getRendererStallPhase() === "transaction-open") setRendererStallPhase(null);
+    };
+  }, []);
+
   // BACKLOG-1762: address -> contact display_name map, resolves From/To names
   // from Contacts when the email header carries no name.
   const emailNameMap = useContactNameMap(userId ?? transaction?.user_id);
@@ -149,7 +170,7 @@ function TransactionDetails({
     contactAssignments,
     resolvedSuggestions,
     loading,
-    loadDetails,
+    loadDetails: loadDetailsEmails,
     loadCommunications,
     refreshCommunicationsSilently,
     refreshContactsSilently,
@@ -157,6 +178,12 @@ function TransactionDetails({
     updateSuggestedContacts,
     removeCommunicationsByIds,
   } = useTransactionDetails(transaction);
+
+  useEffect(() => {
+    if (loading || overviewPaintLoggedRef.current) return;
+    overviewPaintLoggedRef.current = true;
+    logAfterNextPaint("overview painted", mountedAtRef.current, "transaction-open");
+  }, [loading]);
 
   // Tab state hook - use initialTab prop
   const { activeTab, setActiveTab } = useTransactionTabs(initialTab);
@@ -209,6 +236,21 @@ function TransactionDetails({
   // transaction. Every caller of ensureEmailsLoaded awaits THIS promise, so a
   // second caller never resolves before the data arrives.
   const emailLoadRef = React.useRef<Promise<void> | null>(null);
+
+  // BACKLOG-3884: the Texts tab reads a conversation list and pages, never every
+  // linked text (183k rows / ~152 MB in one reply on the PC). Loaded the first
+  // time the tab is shown; every later text change re-reads the list in place.
+  const textThreads = useTextThreads(transaction.id, transaction.started_at, transaction.closed_at);
+  const refreshTextThreads = textThreads.refresh;
+  const refreshTextThreadsIfLoaded = useCallback(async (): Promise<void> => {
+    if (loadedChannelsRef.current.has("text")) await refreshTextThreads();
+  }, [refreshTextThreads]);
+  // The details reload (after a sync, a contact edit) reads emails only; the
+  // texts follow through the list.
+  const loadDetails = useCallback(async (): Promise<void> => {
+    await loadDetailsEmails();
+    await refreshTextThreadsIfLoaded();
+  }, [loadDetailsEmails, refreshTextThreadsIfLoaded]);
   // BACKLOG-1888: StrictMode-safe highlight reset — compare the previous transaction
   // id rather than counting effect runs. The old boolean guard (didMountRef) flipped
   // to true after StrictMode's first run, so run 2 was misinterpreted as a real
@@ -238,11 +280,11 @@ function TransactionDetails({
       emailLoadRef.current = loadCommunications("email");
     } else if (activeTab === "messages" && !loadedChannelsRef.current.has("text")) {
       loadedChannelsRef.current.add("text");
-      loadCommunications("text");
+      void textThreads.load();
     }
     // BACKLOG-322: the Attachments tab no longer piggybacks on email
     // communications — useTransactionAllAttachments loads its own unified data.
-  }, [activeTab, loadCommunications]);
+  }, [activeTab, loadCommunications, textThreads.load]);
 
   // BACKLOG-3476 (SR condition 1): the checklist link picker needs the emails
   // even when the Emails tab was never opened. SILENT on purpose:
@@ -301,9 +343,16 @@ function TransactionDetails({
   // Messages hook — uses pre-loaded communications to avoid duplicate getDetails call
   const {
     messages: textMessages,
-    loading: messagesLoading,
     error: messagesError,
   } = useTransactionMessages(transaction, communications);
+
+  // BACKLOG-3884: sticky "a tab that shows attachments has been opened".
+  // Idempotent render-time write: it only ever flips false -> true.
+  const attachmentsWantedRef = useRef(false);
+  if (activeTab === "attachments" || activeTab === "checklist") {
+    attachmentsWantedRef.current = true;
+  }
+  const attachmentsWanted = attachmentsWantedRef.current;
 
   // BACKLOG-322 Phase A: unified attachments hook — loads ALL attachments (email
   // + text/iMessage) for the transaction via a dedicated IPC query, independent
@@ -320,6 +369,11 @@ function TransactionDetails({
   } = useTransactionAllAttachments(transaction.id, undefined, undefined, {
     startedAt: transaction.started_at,
     closedAt: transaction.closed_at,
+    // BACKLOG-3884: only the Attachments and Checklist tabs read these, and the
+    // reader blocks main for ~0.8 s per open on a large deal. Load the first
+    // time either tab is shown, then keep it loaded (and refreshable) for the
+    // rest of this open.
+    enabled: attachmentsWanted,
   });
 
   // Refresh messages by reloading text communications from the parent state.
@@ -329,12 +383,25 @@ function TransactionDetails({
   // BACKLOG-322: also refetch the unified attachments so the Attachments tab
   // reflects a just-attached (or unlinked) text without a manual reload.
   const refreshMessages = useCallback(async () => {
-    await loadCommunications("text");
+    await refreshTextThreads();
     refreshAttachments();
     // BACKLOG-2838: the text counter on the card behind this modal counts the
     // linked set that just moved. See notifyCardCounters below.
     onTransactionUpdated?.();
-  }, [loadCommunications, refreshAttachments, onTransactionUpdated]);
+  }, [refreshTextThreads, refreshAttachments, onTransactionUpdated]);
+
+  // BACKLOG-3785: after Attach Messages, fetch only the texts that changed
+  // instead of every linked text (107 MB / multi-second freeze on a 106k-text
+  // deal). Falls back to the full reload when there is nothing held to diff
+  // against. Attachments and the card counter refresh exactly as above.
+  // BACKLOG-3884: the texts are no longer held, so there is nothing to diff:
+  // the conversation list is re-read (a few KB) and open conversations re-read
+  // their pages.
+  const refreshMessagesAfterAttach = useCallback(async () => {
+    await refreshTextThreads();
+    refreshAttachments();
+    onTransactionUpdated?.();
+  }, [refreshTextThreads, refreshAttachments, onTransactionUpdated]);
 
   // Accurate attachment counts from database (TASK-1781)
   // PERF: Lazy-loaded — only fetched when Submit modal opens (takes ~1.3s)
@@ -372,6 +439,13 @@ function TransactionDetails({
   const [showEditModal, setShowEditModal] = useState<boolean>(false);
   const [showEditContactsModal, setShowEditContactsModal] = useState<boolean>(false);
   const [syncingCommunications, setSyncingCommunications] = useState<boolean>(false);
+  // BACKLOG-3910: a locked deal (with the broker, or sealed) gets nothing automatic,
+  // so its Sync buttons are disabled with this tooltip and one notice explains why.
+  const dealLock = useDealLock(transaction);
+  const syncLockedTooltip = dealLock.reason ? DEAL_LOCK_SYNC_TOOLTIP[dealLock.reason] : undefined;
+  // BACKLOG-3910 (founder 2026-10-11): a locked deal is read-only, so Edit contacts
+  // and Attach are disabled too. The main-process handlers refuse as well.
+  const editLockedTooltip = dealLock.reason ? DEAL_LOCK_EDIT_TOOLTIP[dealLock.reason] : undefined;
   const [syncingMessages, setSyncingMessages] = useState<boolean>(false);
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
 
@@ -662,14 +736,12 @@ function TransactionDetails({
     const unsub = window.api.transactions.onMessagesSyncComplete((data) => {
       if (!data.ran) return;
       if (data.transactionId && data.transactionId !== transaction.id) return;
-      if (loadedChannelsRef.current.has("text")) {
-        void refreshCommunicationsSilently("text");
-      }
+      void refreshTextThreadsIfLoaded();
     });
     return () => {
       unsub();
     };
-  }, [transaction.id, refreshCommunicationsSilently]);
+  }, [transaction.id, refreshTextThreadsIfLoaded]);
 
   // BACKLOG-2294: reflect a BACKGROUND messages sync as "working" on the Texts sync
   // button. The macOS Messages importer streams `messages:import-progress` while it
@@ -727,6 +799,9 @@ function TransactionDetails({
     isCheckingFiles: submitCheckingFiles,
     preflightItems: submitPreflightItems,
     preflightChanged: submitPreflightChanged,
+    preflightLinkGaps: submitPreflightLinkGaps,
+    checklistLinksNotAttached: submitChecklistLinksNotAttached,
+    includeLinkGap: includeSubmitLinkGap,
     cancelled: submitCancelled,
     isCancelling: submitCancelling,
     submit: handleSubmitForReview,
@@ -742,6 +817,14 @@ function TransactionDetails({
       // Refresh transaction data
       loadDetails();
       onTransactionUpdated?.();
+      // BACKLOG-3910d: re-read the row so the lock notice and disabled controls
+      // show now, not after the deal is reopened.
+      void transactionService
+        .getDetails(transaction.id)
+        .then((refreshed) => {
+          if (refreshed.success && refreshed.data) setTransaction(refreshed.data);
+        })
+        .catch((err) => logger.error("Failed to refresh transaction after submit:", err));
     },
     onError: (error) => {
       showError(`Submission failed: ${error}`);
@@ -1058,18 +1141,18 @@ function TransactionDetails({
   // path on the Messages tab — mirrors handleRefreshEmailsSilently so a restored
   // conversation reappears in place without a loading cycle or scroll jump.
   const handleRefreshMessagesSilently = useCallback(async () => {
-    await refreshCommunicationsSilently("text");
+    await refreshTextThreads();
     // BACKLOG-322: a restored conversation brings its attachments back — refetch.
     refreshAttachments();
     // BACKLOG-2838: a restored conversation is back in the text thread count.
     onTransactionUpdated?.();
-  }, [refreshCommunicationsSilently, refreshAttachments, onTransactionUpdated]);
+  }, [refreshTextThreads, refreshAttachments, onTransactionUpdated]);
 
   // BACKLOG-3366: hiding a text from export changes only its marker — not the
   // link, the attachments or any count — so only the texts are refetched.
   const handleHiddenFromExportChanged = useCallback(async () => {
-    await refreshCommunicationsSilently("text");
-  }, [refreshCommunicationsSilently]);
+    await refreshTextThreads();
+  }, [refreshTextThreads]);
 
   // BACKLOG-2791 — THE LINKED LIST HEARS THE REVIEW NOTIFICATION TOO.
   //
@@ -1104,14 +1187,13 @@ function TransactionDetails({
     if (lastReviewTokenRef.current === reviewQueue.changeToken) return;
     lastReviewTokenRef.current = reviewQueue.changeToken;
     void (async () => {
-      for (const channel of ["email", "text"] as const) {
-        if (!loadedChannelsRef.current.has(channel)) continue;
-        await refreshCommunicationsSilently(channel);
-      }
+      if (loadedChannelsRef.current.has("email")) await refreshCommunicationsSilently("email");
+      // BACKLOG-3884: texts are a conversation list now.
+      await refreshTextThreadsIfLoaded();
       // A newly linked communication brings its attachments with it.
       refreshAttachments();
     })();
-  }, [reviewQueue.changeToken, refreshCommunicationsSilently, refreshAttachments]);
+  }, [reviewQueue.changeToken, refreshCommunicationsSilently, refreshTextThreadsIfLoaded, refreshAttachments]);
 
   // Suggested contacts handlers with callbacks
   const suggestionCallbacks = {
@@ -1348,11 +1430,27 @@ function TransactionDetails({
           showChecklist={showChecklist}
         />
 
+        {/* BACKLOG-3832: the on-open discovery sweep can take seconds on a deal
+            with many contacts, and the "N found" popup waits for it. Say that
+            Keepr is looking; nothing is blocked while it does. */}
+        {reviewQueue.isSyncing && (
+          <div
+            className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 bg-blue-50 border-b border-blue-100"
+            role="status"
+            data-testid="review-discovery-status"
+          >
+            <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            Finding messages and emails&hellip;
+          </div>
+        )}
+
         <OfflineNotice />
 
         {/* Content */}
         <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-3 sm:p-6">
           {/* Review Notes Panel - shown when broker requests changes (BACKLOG-395) */}
+          {/* BACKLOG-3910: one notice on a locked deal (with the broker, or sealed). */}
+          <DealLockNotice reason={dealLock.reason} />
           {transaction.submission_status === "needs_changes" && transaction.last_review_notes && (
             <ReviewNotesPanel
               reviewNotes={transaction.last_review_notes}
@@ -1377,6 +1475,8 @@ function TransactionDetails({
               onSyncCommunications={handleSyncCommunications}
               syncingCommunications={syncingCommunications}
               globalSyncRunning={globalSyncRunning}
+              syncLockedTooltip={syncLockedTooltip}
+              editLockedTooltip={editLockedTooltip}
               isOnline={isOnline}
               onContactUpdated={loadDetails}
               onNavigateToTab={handleNavigateToTab}
@@ -1411,6 +1511,7 @@ function TransactionDetails({
                   kind="email"
                   onApprove={handleApproveReview}
                   onReject={handleRejectReview}
+                  actionsLockedTooltip={editLockedTooltip}
                   onViewEmail={setViewingEmail}
                   nameMap={emailNameMap}
                 />
@@ -1425,6 +1526,8 @@ function TransactionDetails({
               onSyncCommunications={handleSyncCommunications}
               syncingCommunications={syncingCommunications}
               globalSyncRunning={globalSyncRunning}
+              syncLockedTooltip={syncLockedTooltip}
+              editLockedTooltip={editLockedTooltip}
               isOnline={isOnline}
               hasContacts={contactAssignments.length > 0}
               userId={userId}
@@ -1467,17 +1570,22 @@ function TransactionDetails({
                   kind="text"
                   onApprove={handleApproveReview}
                   onReject={handleRejectReview}
+                  actionsLockedTooltip={editLockedTooltip}
                   auditStartDate={transaction.started_at}
                   auditEndDate={transaction.closed_at}
                 />
               }
               messages={textMessages}
-              loading={messagesLoading || loading}
-              error={messagesError}
+              // BACKLOG-3884: the conversation list; each card pages its texts.
+              threads={textThreads.threads}
+              threadsVersion={textThreads.version}
+              loading={textThreads.loading || (textThreads.threads === null && !textThreads.error)}
+              error={textThreads.error ?? messagesError}
               userId={userId}
               transactionId={transaction.id}
               propertyAddress={transaction.property_address}
               onMessagesChanged={refreshMessages}
+              onMessagesAttached={refreshMessagesAfterAttach}
               // BACKLOG-1793: restore uses a silent refresh — no loading cycle,
               // no spinner, scroll never moves (parallels the Emails tab).
               onRestoreComplete={handleRefreshMessagesSilently}
@@ -1492,6 +1600,8 @@ function TransactionDetails({
               onSyncMessages={handleSyncMessages}
               syncingMessages={syncingMessages}
               globalSyncRunning={globalSyncRunning}
+              syncLockedTooltip={syncLockedTooltip}
+              editLockedTooltip={editLockedTooltip}
               messagesSyncInFlight={messagesSyncInFlight}
               isOnline={isOnline}
               hasContacts={contactAssignments.length > 0}
@@ -1527,6 +1637,7 @@ function TransactionDetails({
               onShowSuccess={showSuccess}
               onShowError={showError}
               nameMap={emailNameMap}
+              lockedTooltip={editLockedTooltip}
             />
           )}
         </div>
@@ -1681,6 +1792,7 @@ function TransactionDetails({
           isLoading={reviewQueue.isLoading}
           onApprove={handleApproveReview}
           onReject={handleRejectReview}
+          actionsLockedTooltip={editLockedTooltip}
           onClose={() => setShowNeedsReview(false)}
           /* Same props the tabs pass their cards, so the screen behaves
              identically — including click-to-preview. Text names resolve here
@@ -1748,6 +1860,11 @@ function TransactionDetails({
           isCheckingFiles={submitCheckingFiles}
           preflightItems={submitPreflightItems}
           preflightChanged={submitPreflightChanged}
+          preflightLinkGaps={submitPreflightLinkGaps}
+          onIncludeLinkGap={(gap) => {
+            void includeSubmitLinkGap(gap);
+          }}
+          checklistLinksNotAttached={submitChecklistLinksNotAttached}
           onPreflightBack={dismissSubmitPreflight}
           onPreflightContinue={() => {
             void confirmSubmitPreflight();

@@ -13,6 +13,8 @@ import { BULK_MAIL_HEADER_JSON_KEYS } from "../../utils/bulkMailHeaders";
 import { computeEmailHash } from "../../utils/emailHash";
 import type { OAuthToken } from "../../types/models";
 import { google } from "googleapis";
+import * as Sentry from "@sentry/electron/main";
+import logService from "../logService";
 import {
   startOfLocalDayISO,
   endOfLocalDayISO,
@@ -102,12 +104,34 @@ describe("GmailFetchService", () => {
       });
     });
 
-    it("should throw error when no token found", async () => {
+    it("returns false without error log or Sentry when no mailbox is connected (BACKLOG-3867)", async () => {
       mockDatabaseService.getOAuthToken.mockResolvedValue(null);
+      const errSpy = jest.spyOn(logService, "error").mockResolvedValue(undefined);
 
-      await expect(gmailFetchService.initialize(mockUserId)).rejects.toThrow(
-        "No Gmail OAuth token found",
-      );
+      const result = await gmailFetchService.initialize(mockUserId);
+
+      expect(result).toBe(false);
+      expect(errSpy).not.toHaveBeenCalled();
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+      expect(google.gmail).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+
+    it("logs an error (class only) and throws when a connected mailbox fails to initialize (BACKLOG-3867)", async () => {
+      mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
+      (google.auth.OAuth2 as unknown as jest.Mock).mockImplementation(() => {
+        throw new TypeError("boom access_token=SECRET");
+      });
+      const errSpy = jest.spyOn(logService, "error").mockResolvedValue(undefined);
+
+      await expect(gmailFetchService.initialize(mockUserId)).rejects.toThrow("boom");
+
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(errSpy).toHaveBeenCalledWith("Initialization failed", "GmailFetch", {
+        errorClass: "TypeError",
+      });
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+      errSpy.mockRestore();
     });
 
     it("should handle token without refresh token", async () => {

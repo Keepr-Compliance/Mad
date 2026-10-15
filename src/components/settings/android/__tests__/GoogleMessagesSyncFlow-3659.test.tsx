@@ -15,7 +15,7 @@
  */
 
 import React from "react";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { RcsExtensionState, RcsJobInfo } from "../../../../../electron/types/ipc/window-api-rcs-import";
 import { googleMessagesStep } from "../googleMessagesSyncSteps";
@@ -30,7 +30,6 @@ const mockConsent = jest.fn();
 let mockCurrentJob: RcsJobInfo | null = null;
 let mockLinkState = (): unknown => ({ success: true, data: { link: { state: "none", intrusion: false }, linked: false } });
 
-const mockPairCode = jest.fn();
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
     getExtensionState: async () => ({ success: true, data: mockState }),
@@ -326,6 +325,40 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(screen.getByTestId("gm-stage")).toHaveTextContent("Chat 5 of 21");
   });
 
+  // BACKLOG-3892 E (founder 2026-10-11): a deal chat Google Messages returned only part
+  // of: its own line under the counts, the date from the saved result.
+  it("done: a deal chat came back short -> \"Google Messages on the web only returned texts back to <date>.\"", async () => {
+    mockState = INSTALLED;
+    mockCurrentJob = job({ jobId: "job-live", state: "running", stage: "Chat 4 of 21" });
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-stage")).toHaveTextContent("Chat 4 of 21");
+    act(() => {
+      progressListener?.(
+        job({
+          jobId: "job-live",
+          state: "finished",
+          saved: { chats: 2, messages: 3, newMessages: 3, onlyBackTo: "2024-02-01T10:00:00.000Z" },
+        } as Partial<RcsJobInfo>),
+      );
+    });
+    expect(screen.getByTestId("gm-done-summary")).toHaveTextContent(/^2 chats · 3 messages \(3 new\)$/);
+    expect(screen.getByTestId("gm-done-only-back-to")).toHaveTextContent(
+      /^Google Messages on the web only returned texts back to Feb 1, 2024\.$/,
+    );
+  });
+
+  it("done: no short chat -> no such line", async () => {
+    mockState = INSTALLED;
+    mockCurrentJob = job({ jobId: "job-live", state: "running", stage: "Chat 4 of 21" });
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-stage")).toHaveTextContent("Chat 4 of 21");
+    act(() => {
+      progressListener?.(job({ jobId: "job-live", state: "finished", saved: { chats: 2, messages: 3, newMessages: 3 } } as Partial<RcsJobInfo>));
+    });
+    expect(screen.getByTestId("gm-done-summary")).toHaveTextContent(/^2 chats · 3 messages \(3 new\)$/);
+    expect(screen.queryByTestId("gm-done-only-back-to")).toBeNull();
+  });
+
   it("reopened after a Sync ended (and was saved): the normal start, not the old run", async () => {
     mockState = INSTALLED;
     mockCurrentJob = job({ jobId: "job-old", state: "finished", saved: { chats: 1, messages: 1, newMessages: 1 } } as Partial<RcsJobInfo>);
@@ -448,6 +481,38 @@ describe("GoogleMessagesSyncFlow", () => {
     fireEvent.click(screen.getByTestId("gm-try-again"));
     expect(await screen.findByTestId("gm-step-connect")).toBeInTheDocument();
     expect(mockRetryCache).not.toHaveBeenCalled();
+  });
+
+  // BACKLOG-3924 C2 (S8–S10, founder 2026-10-12): not signed in → what to do
+  // and where, and "Sync again" starts a NEW Sync (nothing was claimed, so
+  // there is no failed run to retry). Every other failure keeps "Sync failed"
+  // and Try again. Mutations: the branch reverted → red; Sync again wired to
+  // the retry → red; page_gone shown with the sign-in wording → red.
+  it("C2: failed as not_signed_in: S8 title, S9 body, Sync again starts a new Sync", async () => {
+    mockState = INSTALLED;
+    // The error as Keepr records it (rcsImportJob RCS_NOT_SIGNED_IN_MESSAGE / the page's /error body).
+    await failedRun({ state: "failed", error: { code: "not_signed_in", message: "Sign in to Google Messages, then click Sync in Keepr again" } } as Partial<RcsJobInfo>);
+    const step = await screen.findByTestId("gm-step-failed");
+    expect(step).toHaveTextContent("Sign in to Google Messages first");
+    expect(step).toHaveTextContent("Open Messages for Web in Chrome, scan the QR code with your phone, then click Sync again.");
+    expect(step).not.toHaveTextContent("Sync failed");
+    const button = screen.getByTestId("gm-try-again");
+    expect(button).toHaveTextContent(/^Sync again$/);
+    mockStartCache.mockResolvedValue({ success: true, data: job({ jobId: "job-2", state: "created" }) });
+    fireEvent.click(button);
+    await waitFor(() => expect(mockStartCache).toHaveBeenCalledTimes(1));
+    expect(mockRetryCache).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("gm-step-syncing")).toBeInTheDocument();
+  });
+
+  it("C2: every other failure keeps 'Sync failed' and Try again", async () => {
+    mockState = INSTALLED;
+    await failedRun({ state: "failed", error: { code: "page_gone", message: "x" } } as Partial<RcsJobInfo>);
+    const step = await screen.findByTestId("gm-step-failed");
+    expect(step).toHaveTextContent("Sync failed");
+    expect(step).toHaveTextContent("The Messages tab was closed.");
+    expect(step).not.toHaveTextContent("Sign in to Google Messages first");
+    expect(screen.getByTestId("gm-try-again")).toHaveTextContent(/^Try again$/);
   });
 
   // Founder (B2): the linked screen — the row and Sync now centred in the

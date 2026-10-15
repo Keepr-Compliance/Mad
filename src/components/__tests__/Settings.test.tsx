@@ -11,6 +11,7 @@ import Settings from "../Settings";
 import { PlatformProvider } from "../../contexts/PlatformContext";
 import { NotificationProvider } from "../../contexts/NotificationContext";
 import { IPhoneSyncProvider } from "../../contexts/IPhoneSyncContext";
+import { rcsImportService } from "../../services/rcsImportService";
 
 // Polyfill Element.scrollTo for jsdom (SettingsTabBar uses it)
 if (typeof Element.prototype.scrollTo !== "function") {
@@ -73,7 +74,7 @@ jest.mock("../../contexts/NetworkContext", () => ({
 }));
 
 // Wrap Settings in PlatformProvider for tests
-const renderSettings = async (props: { onClose: () => void; userId: string }) => {
+const renderSettings = async (props: { onClose: () => void; userId: string; onImportIphone?: () => void }) => {
   const result = render(
     <NotificationProvider>
       <PlatformProvider>
@@ -712,6 +713,68 @@ describe("Settings", () => {
     });
   });
 
+  // BACKLOG-3156 stage G (SR review, required changes 1-3).
+  describe("Messages panes: wiring guards (BACKLOG-3156 G)", () => {
+    const withSource = (source: string) =>
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: { export: { defaultFormat: "combined-pdf" }, messages: { source } },
+      });
+
+    // Founder: the macOS pane no longer shows "Last imported: <date> | N messages".
+    // The status IS available from the bridge here, so a pane that still read and
+    // printed it would show the line. Mutation: the line re-added -> red.
+    it("macOS pane: no 'Last imported' line, even when an import status exists", async () => {
+      (window.api.messages as unknown as { getImportStatus: jest.Mock }).getImportStatus = jest
+        .fn()
+        .mockResolvedValue({ success: true, messageCount: 1234, lastImportAt: new Date().toISOString() });
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      await screen.findByTestId("macos-messages-import");
+      await waitFor(() => expect(screen.getByTestId("messages-block-stored")).toBeInTheDocument());
+      expect(document.body.textContent).not.toMatch(/last imported/i);
+      expect(document.body.textContent).not.toMatch(/1,234 messages/);
+    });
+
+    // SR M7: Settings dropped onImportIphone and the whole suite stayed green.
+    it("iPhone source: Import from iPhone is in the Messages section and calls onImportIphone once", async () => {
+      withSource("iphone-sync");
+      const onImportIphone = jest.fn();
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose, onImportIphone });
+      const button = await screen.findByTestId("iphone-import");
+      expect(container.querySelector("#settings-messages")!.contains(button)).toBe(true);
+      await userEvent.click(button);
+      expect(onImportIphone).toHaveBeenCalledTimes(1);
+    });
+
+    // SR M10: the Google pane re-read the link state on mount and nothing noticed.
+    it("Google source: the extension state is read exactly once per Settings open", async () => {
+      withSource("android-messages-web");
+      const read = jest.spyOn(rcsImportService, "getExtensionState").mockResolvedValue({
+        success: true,
+        data: {
+          extensionVersion: "0.3.4",
+          extensionSeenAt: "2026-10-01T10:00:00.000Z",
+          pairedAt: "2026-10-01T10:00:00.000Z",
+          optedIn: true,
+          lastCacheFinishedAt: "2026-10-01T11:00:00.000Z",
+          consentVersion: 1,
+          consentRequired: 1,
+          consentAt: "2026-10-01T09:00:00.000Z",
+          autoDeleteDays: null,
+        },
+      });
+      try {
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        await screen.findByTestId("google-messages-settings");
+        await waitFor(() => expect(read).toHaveBeenCalled());
+        await new Promise((r) => setTimeout(r, 50));
+        expect(read).toHaveBeenCalledTimes(1);
+      } finally {
+        read.mockRestore();
+      }
+    });
+  });
+
   describe("Export Settings", () => {
     it("should show export format section with card buttons", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
@@ -1344,58 +1407,41 @@ describe("Settings", () => {
       expect(within(tabStrip).queryByRole("tab", { name: "Sync" })).not.toBeInTheDocument();
     });
 
-    it("still shows the iPhone Sync section heading on the page (BACKLOG-3423)", async () => {
-      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+    // BACKLOG-3156 stage G (founder approved 2026-10-13): the iPhone USB toggle
+    // moved into the Messages section's iPhone pane, shown only while iPhone is
+    // the selected source. #settings-iphone-sync remains on Windows only, for the
+    // Apple driver tools, still grayed out unless the source is iPhone.
+    it("macOS: no separate iPhone Sync section; Windows: the section and its heading remain (BACKLOG-3423 / 3156 G)", async () => {
+      const first = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      expect(first.container.querySelector("#settings-iphone-sync")).toBeNull();
+      expect(first.container.querySelector("#settings-sync")).toBeNull();
+      first.unmount();
 
-      const section = container.querySelector<HTMLElement>("#settings-iphone-sync");
-      expect(section).toBeInTheDocument();
-
-      // The section's own heading, scoped inside the section. `name` is an
-      // exact string match, so the <h4>iPhone Sync (USB)</h4> that the toggle
-      // renders inside this same section does NOT satisfy it.
-      expect(
-        within(section as HTMLElement).getByRole("heading", { name: "iPhone Sync" }),
-      ).toBeInTheDocument();
+      const sys = window.api.system as unknown as { platform: string };
+      const before = sys.platform;
+      sys.platform = "win32";
+      try {
+        const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        const section = container.querySelector<HTMLElement>("#settings-iphone-sync");
+        expect(section).toBeInTheDocument();
+        expect(within(section as HTMLElement).getByRole("heading", { name: "iPhone Sync" })).toBeInTheDocument();
+        expect(within(section as HTMLElement).getByText(/available when your import source is set to iphone/i)).toBeInTheDocument();
+        // The USB toggle is not in this section any more.
+        expect(within(section as HTMLElement).queryByRole("switch", { name: /enable iphone sync over usb/i })).toBeNull();
+      } finally {
+        sys.platform = before;
+      }
     });
 
-    it("should render the iPhone Sync category section anchor", async () => {
-      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
-
-      expect(container.querySelector("#settings-iphone-sync")).toBeInTheDocument();
-      // Old anchor removed
-      expect(container.querySelector("#settings-sync")).not.toBeInTheDocument();
-    });
-
-    it("should NOT render the iPhone USB toggle inside the Messages section", async () => {
-      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
-
-      const messagesSection = container.querySelector("#settings-messages");
-      expect(messagesSection).toBeInTheDocument();
-      // The USB toggle now lives only in the iPhone Sync category
-      expect(messagesSection?.textContent).not.toContain("iPhone Sync (USB)");
-    });
-
-    it("should gray out and disable the toggle when import source is macOS native (not iPhone)", async () => {
+    it("macOS native selected: no iPhone USB toggle anywhere (it is the iPhone pane's)", async () => {
       // Default test platform is macOS; no saved source → defaults to macos-native
-      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
-
-      await waitFor(() => {
-        expect(screen.getByText("iPhone Sync (USB)")).toBeInTheDocument();
-      });
-
-      // Hint shown
-      expect(
-        screen.getByText(/available when your import source is set to iphone/i),
-      ).toBeInTheDocument();
-
-      // Toggle disabled
-      const toggle = screen.getByRole("switch", {
-        name: /enable iphone sync over usb/i,
-      });
-      expect(toggle).toBeDisabled();
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      await waitFor(() => expect(screen.getByTestId("messages-block-preferences")).toBeInTheDocument());
+      expect(container.querySelector("#settings-messages")?.textContent).not.toContain("iPhone Sync (USB)");
+      expect(screen.queryByRole("switch", { name: /enable iphone sync over usb/i })).toBeNull();
     });
 
-    it("should gray out when import source is android-companion", async () => {
+    it("a stored android-companion (shown as Google Messages): no iPhone USB toggle", async () => {
       jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
@@ -1405,20 +1451,11 @@ describe("Settings", () => {
       });
 
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
-
-      await waitFor(() => {
-        expect(
-          screen.getByText(/available when your import source is set to iphone/i),
-        ).toBeInTheDocument();
-      });
-
-      const toggle = screen.getByRole("switch", {
-        name: /enable iphone sync over usb/i,
-      });
-      expect(toggle).toBeDisabled();
+      await waitFor(() => expect(screen.getByTestId("google-messages-settings")).toBeInTheDocument());
+      expect(screen.queryByRole("switch", { name: /enable iphone sync over usb/i })).toBeNull();
     });
 
-    it("should enable the toggle and hide the hint when import source is iPhone", async () => {
+    it("iPhone selected: the enabled USB toggle is in the Messages section's iPhone pane", async () => {
       jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
@@ -1427,19 +1464,111 @@ describe("Settings", () => {
         },
       });
 
-      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
       await waitFor(() => {
         const toggle = screen.getByRole("switch", {
           name: /enable iphone sync over usb/i,
         });
         expect(toggle).not.toBeDisabled();
+        expect(container.querySelector("#settings-messages")!.contains(toggle)).toBe(true);
       });
 
       // Hint should NOT be shown when active
       expect(
         screen.queryByText(/available when your import source is set to iphone/i),
       ).not.toBeInTheDocument();
+    });
+  });
+
+  // BACKLOG-3418 Q3 (founder 2026-10-07, pm_comments 66f5b114): a Windows user
+  // who chose no phone and no source sees NO source selected, and the iPhone
+  // Sync (USB) toggle stays disabled. Settings, the source radio, the Dashboard
+  // button and detection all read one rule (importSourcePolicy
+  // `chosenImportSource`, SR C-1). Fixtures: `preferences:get` returns the
+  // Supabase `preferences` jsonb (which carries `phone_type`); `user:get-phone-type`
+  // returns `{ success, phoneType }` from users_local.
+  describe("BACKLOG-3418: the chosen source on Windows (Q3)", () => {
+    const checkedSources = (container: HTMLElement) =>
+      Array.from(
+        container.querySelectorAll<HTMLInputElement>('#settings-messages input[type="radio"]'),
+      )
+        .filter((r) => r.checked)
+        .map((r) => r.value);
+    let platformBefore: string;
+
+    beforeEach(() => {
+      const sys = window.api.system as unknown as { platform: string };
+      platformBefore = sys.platform;
+      sys.platform = "win32";
+    });
+    afterEach(() => {
+      (window.api.system as unknown as { platform: string }).platform = platformBefore;
+      // window.api is built once per file (tests/setup.js): restore the default.
+      jest
+        .mocked(window.api.user.getPhoneType)
+        .mockResolvedValue({ success: true, phoneType: null } as Awaited<
+          ReturnType<typeof window.api.user.getPhoneType>
+        >);
+    });
+
+    const servePhoneType = (phoneType: "iphone" | "android" | null) =>
+      jest
+        .mocked(window.api.user.getPhoneType)
+        .mockResolvedValue({ success: true, phoneType } as Awaited<
+          ReturnType<typeof window.api.user.getPhoneType>
+        >);
+
+    it("no source and no phone type: no radio checked, no USB toggle", async () => {
+      servePhoneType(null);
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      // Barrier: both readers consulted the phone type (the "nothing" is an
+      // answer, not a read that has not finished).
+      await waitFor(() =>
+        expect(jest.mocked(window.api.user.getPhoneType).mock.calls.length).toBeGreaterThanOrEqual(2),
+      );
+      // Anti-vacuity: the radios rendered (Windows: iPhone Sync + Google Messages).
+      await waitFor(() =>
+        expect(
+          container.querySelectorAll('#settings-messages input[type="radio"]').length,
+        ).toBe(2),
+      );
+      await waitFor(() =>
+        expect(screen.queryByText(/available when your import source is set to iphone/i)).toBeInTheDocument(),
+      );
+      expect(checkedSources(container)).toEqual([]);
+      // BACKLOG-3156 stage G: no source chosen → no iPhone pane, so no USB toggle at all.
+      expect(screen.queryByRole("switch", { name: /enable iphone sync over usb/i })).toBeNull();
+    });
+
+    it.each([
+      ["a local iPhone phone type", {}, "iphone" as const],
+      ["only a cloud phone_type of iphone", { phone_type: "iphone" }, null],
+    ])(
+      "no source, %s: iPhone Sync checked and the USB toggle enabled (the 4 production users)",
+      async (_label, extra, local) => {
+        jest.mocked(window.api.preferences.get).mockResolvedValue({
+          success: true,
+          preferences: { export: { defaultFormat: "combined-pdf" }, ...extra },
+        });
+        servePhoneType(local);
+        const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+        await waitFor(() => expect(checkedSources(container)).toEqual(["iphone-sync"]));
+        await waitFor(() =>
+          expect(screen.getByRole("switch", { name: /enable iphone sync over usb/i })).not.toBeDisabled(),
+        );
+      },
+    );
+
+    it("macOS unchanged: no source, no phone type -> macOS Messages checked, no USB toggle", async () => {
+      (window.api.system as unknown as { platform: string }).platform = "darwin";
+      servePhoneType(null);
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      await waitFor(() => expect(checkedSources(container)).toEqual(["macos-native"]));
+      expect(screen.queryByRole("switch", { name: /enable iphone sync over usb/i })).toBeNull();
     });
   });
 
@@ -1510,8 +1639,10 @@ describe("Settings", () => {
     it("starts detection when the source changes to iPhone, and stops it on the way back", async () => {
       await renderWithSyncProvider();
 
-      // macOS Messages + stored ON: nothing may be detecting.
-      await waitFor(() => expect(usbToggle()).toHaveAttribute("aria-checked", "false"));
+      // macOS Messages + stored ON: nothing may be detecting. BACKLOG-3156
+      // stage G: the USB toggle is the iPhone pane's, so it is not on screen.
+      await waitFor(() => expect(screen.getByRole("radio", { name: /macOS Messages/i })).toBeChecked());
+      expect(screen.queryByRole("switch", { name: /enable iphone sync over usb/i })).toBeNull();
       expect(syncApi().startDetection).not.toHaveBeenCalled();
 
       await userEvent.click(screen.getByRole("radio", { name: /iPhone Sync/i }));
@@ -1522,7 +1653,7 @@ describe("Settings", () => {
       await userEvent.click(screen.getByRole("radio", { name: /macOS Messages/i }));
 
       await waitFor(() => expect(syncApi().stopDetection).toHaveBeenCalled());
-      expect(usbToggle()).toHaveAttribute("aria-checked", "false");
+      expect(screen.queryByRole("switch", { name: /enable iphone sync over usb/i })).toBeNull();
     });
 
     it("writes only the source — the stored iPhone-sync opt-in is left alone", async () => {
@@ -1673,6 +1804,184 @@ describe("Settings", () => {
       // Done button should remain enabled
       const doneButton = screen.getByRole("button", { name: /done/i });
       expect(doneButton).not.toBeDisabled();
+    });
+  });
+
+  /**
+   * BACKLOG-3892 S3 — C1 + C4. ONE "How far back to import texts" picker under
+   * the source selection, for every source on Mac AND Windows, outside the
+   * per-source panels. The likely wrong build is mounting it inside the macOS
+   * panel, which renders nothing off a Mac (`if (!isMacOS) return null`) — so the
+   * Windows rows are the ones that matter. Each row: the picker is present once,
+   * is the deep-link target (#settings-texts-lookback, C4), and saves
+   * `messageImport.filters.lookbackMonths` — the key all three sources read.
+   */
+  describe("BACKLOG-3892 S3: the shared texts lookback picker (C1, C4)", () => {
+    let platformBefore: string;
+    beforeEach(() => {
+      platformBefore = (window.api.system as unknown as { platform: string }).platform;
+    });
+    afterEach(() => {
+      (window.api.system as unknown as { platform: string }).platform = platformBefore;
+    });
+
+    /**
+     * BACKLOG-3156 stage F: the iPhone picker sits in a different section from
+     * the Messages panels, and must still share their ONE value. Observable
+     * through the (greyed) macOS panel, which re-reads its effective window
+     * once per save that lands on the shared value. A second, private copy of
+     * the value under the iPhone section would save the same key but never
+     * tell the macOS panel.
+     */
+    // BACKLOG-3156 stage G: the macOS panel is not mounted while iPhone is the
+    // source (one pane per source); the shared value reaches it when the user
+    // switches back.
+    it("darwin, source iphone-sync: a change in the iPhone picker reaches the macOS pane", async () => {
+      (window.api.system as unknown as { platform: string }).platform = "darwin";
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: { source: "iphone-sync" },
+          messageImport: { filters: { lookbackMonths: 6 } },
+        },
+      });
+      jest.mocked(window.api.preferences.update).mockResolvedValue({ success: true });
+
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const block = await screen.findByTestId("iphone-block-preferences");
+      expect(screen.queryByTestId("macos-messages-import")).toBeNull();
+      const select = await within(block).findByRole("combobox", { name: "Import messages from" });
+      await waitFor(() => expect(select).not.toBeDisabled());
+
+      await userEvent.selectOptions(select, "3");
+      await waitFor(() =>
+        expect(window.api.preferences.update).toHaveBeenCalledWith(mockUserId, {
+          messageImport: { filters: { lookbackMonths: 3 } },
+        }),
+      );
+      await userEvent.click(screen.getByRole("radio", { name: /macOS Messages/i }));
+      const macBlock = await screen.findByTestId("messages-block-preferences");
+      const macSelect = await within(macBlock).findByRole("combobox", { name: "Import messages from" });
+      await waitFor(() => expect((macSelect as HTMLSelectElement).value).toBe("3"));
+    });
+
+    /**
+     * BACKLOG-3156 stage F: the picker is a row of the LIVE source panel's
+     * Import Preferences — macOS Messages (Mac), Google Messages, iPhone. Only
+     * with no such panel (Windows with no source, or a stored macos-native off
+     * a Mac, which `isKnownImportSource` lets through and the macOS panel
+     * renders nothing for) is it the standalone card. Counted across the WHOLE
+     * page, because the iPhone panel is a separate section.
+     */
+    it.each([
+      ["darwin", "macos-native", "messages-block-preferences"],
+      ["darwin", "iphone-sync", "iphone-block-preferences"],
+      ["darwin", "android-messages-web", "gm-block-preferences"],
+      ["win32", "iphone-sync", "iphone-block-preferences"],
+      ["win32", "android-messages-web", "gm-block-preferences"],
+      ["win32", "macos-native", null],
+      ["win32", undefined, null],
+    ])("%s, source %s: one picker, in %s, saving messageImport.filters", async (platform, source, home) => {
+      (window.api.system as unknown as { platform: string }).platform = platform;
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: source ? { source } : {},
+          messageImport: { filters: { lookbackMonths: 6 } },
+        },
+      });
+
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      // Anti-vacuity: the per-source branch for THIS source rendered.
+      if (source === "android-messages-web") {
+        expect(await screen.findByTestId("google-messages-settings")).toBeInTheDocument();
+      }
+      if (home !== null) {
+        await screen.findByTestId(home);
+        await waitFor(() =>
+          expect(within(screen.getByTestId(home)).queryByTestId("texts-lookback")).not.toBeNull(),
+        );
+      }
+      const target = container.querySelector<HTMLElement>("#settings-texts-lookback");
+      expect(target).not.toBeNull();
+
+      // Exactly one months picker on the whole page.
+      expect(within(container).getAllByRole("combobox", { name: "Import messages from" })).toHaveLength(1);
+      expect(container.querySelectorAll("#settings-texts-lookback")).toHaveLength(1);
+
+      // Where it is: inside the owning Import Preferences block, or standalone.
+      const blocks = [
+        "messages-block-preferences",
+        "gm-block-preferences",
+        "iphone-block-preferences",
+      ].filter((id) => screen.queryByTestId(id)?.contains(target!));
+      expect(`picker inside: ${JSON.stringify(blocks)}`).toBe(
+        `picker inside: ${JSON.stringify(home === null ? [] : [home])}`,
+      );
+      if (home === null) {
+        expect(within(target!).getByText("How far back to import texts")).toBeInTheDocument();
+        expect(container.querySelector("#settings-messages")!.contains(target!)).toBe(true);
+      } else {
+        expect(within(target!).queryByText("How far back to import texts")).toBeNull();
+      }
+      if (home === "messages-block-preferences") {
+        const prefs = screen.getByTestId(home);
+        const maxRow = within(prefs).getByText("Maximum messages").parentElement!;
+        expect(`picker is the row right after Maximum messages: ${maxRow.nextElementSibling === target}`).toBe(
+          "picker is the row right after Maximum messages: true",
+        );
+      }
+
+      // BACKLOG-3156 stage F sweep: every setting control in the Messages and
+      // iPhone Sync sections sits in a block card that opens with one of the
+      // three block labels — so a panel added later cannot put its settings
+      // outside the shape without this going red. The one exception is the
+      // standalone picker card, which exists only when no source panel can
+      // host the picker (asserted above), and is named by its id.
+      const BLOCK_LABELS = ["Sources", "Import Preferences", "Stored on this computer"];
+      const isLabelledBlock = (el: Element) =>
+        el.tagName === "DIV" &&
+        /(^|\s)rounded-lg(\s|$)/.test(el.className) &&
+        /(^|\s)border(\s|$)/.test(el.className) &&
+        (el.firstElementChild?.matches("p.text-xs.font-medium.text-gray-500.uppercase.tracking-wide") ?? false) &&
+        BLOCK_LABELS.includes((el.firstElementChild?.textContent ?? "").trim());
+      const controlsOutsideBlocks = ["#settings-messages", "#settings-iphone-sync"]
+        // BACKLOG-3156 stage G: #settings-iphone-sync is Windows-only now (driver tools).
+        .flatMap((sel) => {
+          const section = container.querySelector(sel);
+          return section
+            ? Array.from(
+                section.querySelectorAll("select, textarea, input:not([type=hidden]), [role=switch], [role=checkbox], [role=radio], button[aria-pressed]"),
+              )
+            : [];
+        })
+        .filter((control) => {
+          if (home === null && target!.contains(control)) return false;
+          const want = control.matches("input[type=radio], [role=radio]") ? "Sources" : "Import Preferences";
+          for (let node = control.parentElement; node; node = node.parentElement) {
+            if (isLabelledBlock(node)) return (node.firstElementChild?.textContent ?? "").trim() !== want;
+          }
+          return true;
+        })
+        .map((control) => control.getAttribute("aria-label") ?? control.getAttribute("data-testid") ?? control.outerHTML.slice(0, 60));
+      expect(`setting controls outside a labelled block: ${JSON.stringify(controlsOutsideBlocks)}`).toBe(
+        "setting controls outside a labelled block: []",
+      );
+
+      const select = within(target!).getByRole("combobox", { name: "Import messages from" }) as HTMLSelectElement;
+      await waitFor(() => expect(select).not.toBeDisabled());
+      expect(select.value).toBe("6");
+
+      await userEvent.selectOptions(select, "3");
+      await waitFor(() =>
+        expect(window.api.preferences.update).toHaveBeenCalledWith(mockUserId, {
+          messageImport: { filters: { lookbackMonths: 3 } },
+        }),
+      );
+      expect(select.value).toBe("3");
     });
   });
 });

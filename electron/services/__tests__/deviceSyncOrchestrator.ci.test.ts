@@ -10,10 +10,17 @@
 import { EventEmitter } from "events";
 
 // Mock all dependencies before importing
+// BACKLOG-3816 S4-C: the kept backup's at-rest layer is not this suite's subject.
+jest.mock("../atRest/backupAtRest", () => ({
+  ...jest.requireActual("../atRest/backupAtRest"),
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  getBackupAtRest: () => require("./helpers/passThroughBackupAtRest").passThroughBackupAtRest,
+}));
 jest.mock("electron", () => ({
   app: {
     isPackaged: false,
-    getPath: jest.fn().mockReturnValue("/tmp"),
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    getPath: jest.fn(() => require("./helpers/testUserData").testUserDataDir()),
   },
 }));
 
@@ -60,6 +67,11 @@ jest.mock("../backupService", () => ({
     }),
     startBackup: jest.fn(),
     cancelBackup: jest.fn(),
+    // BACKLOG-3598: leftover cleanup. Inert here; the cleanup itself is proven in
+    // deviceSyncOrchestrator.failedSyncCleanup-3598.test.ts against a real folder.
+    sweepLeftoverBackups: jest.fn().mockResolvedValue({ removed: 0, bytesFreed: 0, failures: [] }),
+    classifyBackupFolder: jest.fn().mockResolvedValue("absent"),
+    removeLeftoverBackup: jest.fn().mockResolvedValue({ outcome: "kept", folder: "absent" }),
   })),
 }));
 
@@ -182,12 +194,10 @@ describe("DeviceSyncOrchestrator - Type Exports", () => {
   it("should export SyncOptions type", () => {
     const options: SyncOptions = {
       udid: "test-udid",
-      password: "optional-password",
       forceFullBackup: true,
     };
 
     expect(options.udid).toBe("test-udid");
-    expect(options.password).toBe("optional-password");
     expect(options.forceFullBackup).toBe(true);
   });
 });
@@ -495,4 +505,10 @@ describe("DeviceSyncOrchestrator - Progress Calculation", () => {
 
     expect(progressWithEstimate.estimatedTotalBytes).toBe(50 * 1024 * 1024 * 1024);
   });
+});
+
+// BACKLOG-3816 S4-C (B1): this file's userData is a fresh directory under os.tmpdir().
+afterAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("./helpers/testUserData").removeTestUserDataDir();
 });

@@ -29,6 +29,16 @@ export interface ExportProgress {
   progress: number;
 }
 
+/** BACKLOG-3801: crash reporting switch state. */
+export interface CrashReportingResult {
+  success: boolean;
+  /** The saved choice. */
+  enabled?: boolean;
+  /** Whether this session started with crash reporting on. */
+  wasEnabledAtLaunch?: boolean;
+  error?: string;
+}
+
 /**
  * Privacy bridge for renderer process
  */
@@ -45,6 +55,14 @@ export const privacyBridge = {
    */
   exportData: (userId: string): Promise<ExportDataResult> =>
     ipcRenderer.invoke("privacy:export-data", userId),
+
+  /** BACKLOG-3801: read the "Send crash reports" switch. */
+  getCrashReporting: (): Promise<CrashReportingResult> =>
+    ipcRenderer.invoke("privacy:get-crash-reporting"),
+
+  /** BACKLOG-3801: turn crash reporting on or off. */
+  setCrashReporting: (enabled: boolean): Promise<CrashReportingResult> =>
+    ipcRenderer.invoke("privacy:set-crash-reporting", enabled),
 
   /**
    * Listen for export progress updates.

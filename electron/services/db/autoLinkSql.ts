@@ -73,8 +73,9 @@ export const AUTOLINK_CONTACT_PHONES_SQL = sql`
   `;
 
 /**
- * The transaction fields the auto-linker needs: its window, its addresses, and whether
- * address filtering is switched off for it. One bound parameter: transaction id.
+ * The transaction fields the auto-linker needs: its window, its addresses, whether
+ * address filtering is switched off for it, and its submission status (BACKLOG-3910:
+ * a locked deal gets nothing automatically). One bound parameter: transaction id.
  */
 export const TRANSACTION_AUTOLINK_WINDOW_SQL = sql`
     SELECT
@@ -84,7 +85,8 @@ export const TRANSACTION_AUTOLINK_WINDOW_SQL = sql`
       closed_at,
       property_address,
       property_street,
-      skip_address_filter
+      skip_address_filter,
+      submission_status
     FROM transactions
     WHERE id = ?
   `;
@@ -206,6 +208,30 @@ export function candidateMessageThreadsSql(phoneCount: number): SafeSql {
   `;
 }
 
+/**
+ * BACKLOG-3868: the candidate read on a caller-supplied connection (the contact query
+ * worker's own connection), so the statement stays in electron/services/db.
+ */
+export function readCandidateMessageThreadsOn(
+  db: { prepare(sql: string): { all(...params: unknown[]): unknown[] } },
+  phoneCount: number,
+  params: unknown[],
+): unknown[] {
+  return db.prepare(candidateMessageThreadsSql(phoneCount)).all(...params);
+}
+
+/**
+ * BACKLOG-3883: the candidate-email read on a caller-supplied connection (the contact
+ * query worker's own connection). Same statement and parameters as on the main thread.
+ */
+export function readCandidateEmailsOn(
+  db: { prepare(sql: string): { all(...params: unknown[]): unknown[] } },
+  addressCount: number,
+  params: unknown[],
+): unknown[] {
+  return db.prepare(candidateEmailsSql(addressCount)).all(...params);
+}
+
 /** Is this email already linked to this transaction? Bound: email id, transaction id. */
 export const EXISTING_EMAIL_COMMUNICATION_SQL = sql`
     SELECT id, transaction_id FROM communications
@@ -276,32 +302,39 @@ export const THREAD_DIRECTION_PARTICIPANTS_SQL = sql`SELECT thread_id, direction
 /**
  * Unlinked messages in one thread — the siblings that should follow when one message in
  * the thread is linked. Bound: user id, thread id.
+ *
+ * BACKLOG-3868: the unary `+` on every term but thread_id keeps SQLite on
+ * idx_messages_thread_id. Without table statistics (production never runs ANALYZE) it
+ * otherwise picks idx_messages_user_sent (every message of the user, once per attached
+ * thread: 5.5 s of main-thread stall for 5 attached threads on an encrypted 671k-message
+ * store, measured on a Mac) or idx_messages_transaction_id (every unlinked message).
+ * Pinned by threadIdentityQueryPlan.test.ts.
  */
 export const UNLINKED_SIBLINGS_IN_THREAD_SQL = sql`
           SELECT m.id AS id, m.thread_id AS thread_id
           FROM messages m
-          WHERE m.user_id = ?
+          WHERE +m.user_id = ?
             AND m.thread_id = ?
-            AND m.transaction_id IS NULL
-            AND m.channel IN ('sms', 'imessage')
-            AND m.duplicate_of IS NULL
+            AND +m.transaction_id IS NULL
+            AND +m.channel IN ('sms', 'imessage')
+            AND +m.duplicate_of IS NULL
             AND ${reactionExclusion("m")}
         `;
 
 /**
  * The same, across several threads at once. Bound: user id, then one thread id per
- * placeholder.
+ * placeholder. The unary `+` terms for the same reason (BACKLOG-3868).
  */
 export function unlinkedMessagesInThreadsSql(threadCount: number): SafeSql {
   const placeholders = placeholderList(threadCount);
   return sql`
             SELECT m.id AS id, m.thread_id AS thread_id
             FROM messages m
-            WHERE m.user_id = ?
+            WHERE +m.user_id = ?
               AND m.thread_id IN (${placeholders})
-              AND m.transaction_id IS NULL
-              AND m.channel IN ('sms', 'imessage')
-              AND m.duplicate_of IS NULL
+              AND +m.transaction_id IS NULL
+              AND +m.channel IN ('sms', 'imessage')
+              AND +m.duplicate_of IS NULL
               AND ${reactionExclusion("m")}
           `;
 }

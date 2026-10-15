@@ -74,4 +74,30 @@ describe("Login — deep link auth error copy (BACKLOG-2173b)", () => {
     expect(screen.getByText("Missing tokens in callback URL")).toBeInTheDocument();
     expect(screen.queryByText(/multiple attempts/i)).not.toBeInTheDocument();
   });
+
+  // BACKLOG-3768 L1: main's copy is shown verbatim AND the Try Again button.
+  it.each([
+    "Can't connect securely. Check your antivirus or network, then try again.",
+    "Can't connect to Keepr. Check your network, then try again.",
+  ])("CONNECTION_FAILED shows main's message and a Try Again button: %s", (copy) => {
+    render(<Login onLoginSuccess={jest.fn()} />);
+
+    expect(deepLinkErrorHandler).not.toBeNull();
+    act(() => {
+      deepLinkErrorHandler?.({ error: copy, code: "CONNECTION_FAILED" });
+    });
+
+    expect(screen.getByText(copy)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+    expect(screen.queryByText(/taking longer than expected/i)).not.toBeInTheDocument();
+  });
+
+  it("BACKLOG-3768: INVALID_TOKENS still shows no Try Again button", () => {
+    render(<Login onLoginSuccess={jest.fn()} />);
+    act(() => {
+      deepLinkErrorHandler?.({ error: "Invalid authentication tokens", code: "INVALID_TOKENS" });
+    });
+    expect(screen.getByText("Invalid authentication tokens")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
+  });
 });

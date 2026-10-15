@@ -27,6 +27,7 @@ import { formatDateRangeLabel, parseLocalCalendarDay, isTimestampInAuditPeriod }
 import { isReactionRow } from "../../../utils/reactionUtils";
 import { useHideFromExportState } from "../../../hooks/useHideFromExportState";
 import { transactionService } from "../../../services/transactionService";
+import { auditWindowMs, type TextThreadSummary } from "../hooks/useTextThreads";
 import logger from '../../../utils/logger';
 
 /**
@@ -47,8 +48,17 @@ function isMessageInAuditPeriod(
 }
 
 interface TransactionMessagesTabProps {
-  /** Text messages linked to the transaction */
+  /** Text messages linked to the transaction (legacy: the whole set held). */
   messages: Communication[];
+  /**
+   * BACKLOG-3884: the conversation list (counts + header rows). When given, the
+   * tab never holds the texts: each card reads its conversation a page at a time,
+   * and removing a conversation goes through main by thread. `messages` is then
+   * ignored. `null` = not loaded yet.
+   */
+  threads?: TextThreadSummary[] | null;
+  /** BACKLOG-3884: bumped when the deal's texts changed; open conversations re-read. */
+  threadsVersion?: number;
   /** Whether messages are being loaded */
   loading: boolean;
   /** Error message if loading failed */
@@ -61,6 +71,11 @@ interface TransactionMessagesTabProps {
   propertyAddress?: string;
   /** Callback when messages are modified (attached/unlinked). Can be async for refresh. */
   onMessagesChanged?: () => void | Promise<void>;
+  /**
+   * BACKLOG-3785: refresh after Attach Messages that fetches only the newly
+   * linked texts. When absent, attach falls back to onMessagesChanged.
+   */
+  onMessagesAttached?: () => void | Promise<void>;
   /**
    * BACKLOG-1793: SILENT refresh after a removed conversation is restored
    * (refreshCommunicationsSilently("text")) — no loading flag, no spinner, the
@@ -86,6 +101,16 @@ interface TransactionMessagesTabProps {
   syncingMessages?: boolean;
   /** Whether a global sync (from dashboard) is in progress */
   globalSyncRunning?: boolean;
+  /**
+   * BACKLOG-3910: set when the deal is locked (with the broker, or sealed). Sync is
+   * disabled and this is its tooltip.
+   */
+  syncLockedTooltip?: string;
+  /**
+   * BACKLOG-3910: set when the deal is locked (with the broker, or sealed). The deal
+   * is read-only: Attach is disabled and this is its tooltip.
+   */
+  editLockedTooltip?: string;
   /**
    * BACKLOG-2294: true while a BACKGROUND messages sync/import is in flight
    * (audit-date-change auto-import, create auto-import, or the 2293 re-sync
@@ -125,13 +150,16 @@ interface TransactionMessagesTabProps {
 // extractAllHandles imported from src/utils/phoneNormalization.ts (TASK-2027)
 
 export function TransactionMessagesTab({
-  messages,
+  messages: heldMessages,
+  threads,
+  threadsVersion = 0,
   loading,
   error,
   userId,
   transactionId,
   propertyAddress,
   onMessagesChanged,
+  onMessagesAttached,
   onRestoreComplete,
   onRemoveMessagesByIds,
   onShowSuccess,
@@ -141,6 +169,8 @@ export function TransactionMessagesTab({
   onSyncMessages,
   syncingMessages = false,
   globalSyncRunning = false,
+  syncLockedTooltip,
+  editLockedTooltip,
   messagesSyncInFlight = false,
   isOnline = true,
   hasContacts = false,
@@ -151,6 +181,25 @@ export function TransactionMessagesTab({
   reviewRefreshKey = 0,
   onHiddenFromExportChanged,
 }: TransactionMessagesTabProps): React.ReactElement {
+  // BACKLOG-3884: paged mode — the cards carry header rows only.
+  const pagedMode = threads !== undefined;
+  const summaryById = useMemo(() => {
+    const m = new Map<string, TextThreadSummary>();
+    for (const t of threads ?? []) m.set(t.threadId, t);
+    return m;
+  }, [threads]);
+  // What the tab groups and names: every held text (legacy), or every header row.
+  const messages: Communication[] = useMemo(
+    () => (pagedMode ? (threads ?? []).flatMap((t) => t.samples) : heldMessages),
+    [pagedMode, threads, heldMessages],
+  );
+  const auditWindow = useMemo(() => auditWindowMs(auditStartDate, auditEndDate), [auditStartDate, auditEndDate]);
+  const sumCounts = useCallback(
+    (ids: string[] | undefined, key: "totalCount" | "inWindowCount"): number =>
+      (ids ?? []).reduce((n, id) => n + (summaryById.get(id)?.[key] ?? 0), 0),
+    [summaryById],
+  );
+
   // BACKLOG-3366: read ONCE here and passed down to each linked conversation.
   // Stand-in until BACKLOG-3365: always "blocked", so only Unhide can render.
   const hideFromExportState = useHideFromExportState();
@@ -160,6 +209,8 @@ export function TransactionMessagesTab({
   // and linked (SR S1: data-changed), and when Force re-import cleared them.
   const onMessagesChangedRef = useRef(onMessagesChanged);
   onMessagesChangedRef.current = onMessagesChanged;
+  // BACKLOG-3892 S6: "Get older texts" stored texts (it broadcasts no data-changed).
+  const reloadAfterBackfill = useCallback(() => onMessagesChangedRef.current?.(), []);
   useEffect(() => {
     const offChanged = rcsImportService.onDataChanged(() => void onMessagesChangedRef.current?.());
     const offCleared = rcsImportService.onDataCleared(() => void onMessagesChangedRef.current?.());
@@ -175,8 +226,10 @@ export function TransactionMessagesTab({
   // SAME spinner + "Syncing…" affordance instead of a dead disabled gray, and keep the button
   // non-clickable while it runs (a manual re-sync would only coalesce onto the in-flight one).
   const syncActive = syncingMessages || globalSyncRunning || messagesSyncInFlight;
-  const syncDisabled = !isOnline || syncActive;
-  const syncTooltip = !isOnline
+  const syncDisabled = !isOnline || syncActive || !!syncLockedTooltip;
+  const syncTooltip = syncLockedTooltip
+    ? syncLockedTooltip
+    : !isOnline
     ? "You are offline"
     : globalSyncRunning
     ? "A sync is already in progress from the dashboard"
@@ -294,8 +347,10 @@ export function TransactionMessagesTab({
 
   // Handle attach button click
   const handleAttachClick = useCallback(() => {
+    // BACKLOG-3910: a locked deal is read-only (the main process refuses too).
+    if (editLockedTooltip) return;
     setShowAttachModal(true);
-  }, []);
+  }, [editLockedTooltip]);
 
   // BACKLOG-2390: Undo a just-completed attach. Removes the EXACT message ids that
   // were linked via the symmetric `unlinkMessages` IPC (the same call the remove
@@ -392,14 +447,15 @@ export function TransactionMessagesTab({
   // Handle messages attached successfully
   const handleAttached = useCallback(
     (attachedMessageIds: string[]) => {
-      onMessagesChanged?.();
+      if (onMessagesAttached) void onMessagesAttached();
+      else void onMessagesChanged?.();
       const undoAction: NotificationAction | undefined =
         transactionId && attachedMessageIds.length > 0
           ? { label: "Undo", onClick: () => void undoAttachMessages(attachedMessageIds) }
           : undefined;
       onShowSuccess?.("Messages attached successfully", { action: undoAction });
     },
-    [onMessagesChanged, onShowSuccess, transactionId, undoAttachMessages]
+    [onMessagesAttached, onMessagesChanged, onShowSuccess, transactionId, undoAttachMessages]
   );
 
   // BACKLOG-3366: hide one text from (or put it back into) this transaction's
@@ -427,6 +483,18 @@ export function TransactionMessagesTab({
   // TASK-2025: Updated to accept originalThreadIds for merged threads
   const handleUnlinkClick = useCallback(
     (threadId: string, originalThreadIds?: string[]) => {
+      if (pagedMode) {
+        // BACKLOG-3884: the card holds header rows only; the count is main's.
+        const ids = originalThreadIds && originalThreadIds.length > 0 ? originalThreadIds : [threadId];
+        const headers = ids.flatMap((id) => (summaryById.get(id)?.samples ?? []) as MessageLike[]);
+        setUnlinkTarget({
+          threadId,
+          phoneNumber: extractPhoneFromThread(headers),
+          messageCount: sumCounts(ids, "totalCount"),
+          originalThreadIds: ids,
+        });
+        return;
+      }
       // For merged threads, collect all messages from all original thread IDs
       const rawThreads = groupMessagesByThread(messages);
       const idsToCollect = originalThreadIds && originalThreadIds.length > 1
@@ -452,7 +520,37 @@ export function TransactionMessagesTab({
         });
       }
     },
-    [messages]
+    [messages, pagedMode, summaryById, sumCounts]
+  );
+
+  /**
+   * BACKLOG-3884: remove whole conversations through main (it collects every
+   * linked message of each thread, all history — what remove has always meant),
+   * then re-read the conversation list. Undo carries the exact ids when main sent
+   * them back (it does not for a very large conversation).
+   */
+  const removeThreadsPaged = useCallback(
+    async (threadKeys: string[], successMessage: string): Promise<boolean> => {
+      if (!transactionId) return false;
+      const result = await transactionService.unlinkTextThreads(transactionId, threadKeys);
+      if (!result.success) {
+        onShowError?.(result.error || "Failed to remove messages");
+        return false;
+      }
+      const movedIds = result.messageIds ?? null;
+      onShowSuccess?.(
+        movedIds === null
+          ? `${successMessage}. Undo is not available for a conversation this large; restore it from Show removed.`
+          : successMessage,
+        movedIds && movedIds.length > 0
+          ? { action: { label: "Undo", onClick: () => void undoRemoveMessages(movedIds) } }
+          : undefined,
+      );
+      await onMessagesChanged?.();
+      setRemovedSectionRefreshKey((k) => k + 1);
+      return true;
+    },
+    [transactionId, onShowError, onShowSuccess, onMessagesChanged, undoRemoveMessages],
   );
 
   // Handle unlink confirmation
@@ -462,6 +560,20 @@ export function TransactionMessagesTab({
     if (!unlinkTarget || !transactionId) return;
 
     setIsUnlinking(true);
+    if (pagedMode) {
+      try {
+        const keys = unlinkTarget.originalThreadIds && unlinkTarget.originalThreadIds.length > 0
+          ? unlinkTarget.originalThreadIds
+          : [unlinkTarget.threadId];
+        if (await removeThreadsPaged(keys, "Messages removed from transaction")) setUnlinkTarget(null);
+      } catch (err) {
+        logger.error("Failed to unlink messages:", err);
+        onShowError?.(err instanceof Error ? err.message : "Failed to remove messages");
+      } finally {
+        setIsUnlinking(false);
+      }
+      return;
+    }
     try {
       // Get all message IDs for this thread (or merged group of threads)
       const rawThreads = groupMessagesByThread(messages);
@@ -519,7 +631,7 @@ export function TransactionMessagesTab({
     } finally {
       setIsUnlinking(false);
     }
-  }, [unlinkTarget, messages, transactionId, onRemoveMessagesByIds, onMessagesChanged, onShowSuccess, onShowError, undoRemoveMessages]);
+  }, [unlinkTarget, messages, transactionId, onRemoveMessagesByIds, onMessagesChanged, onShowSuccess, onShowError, undoRemoveMessages, pagedMode, removeThreadsPaged]);
 
   // Handle cancel unlink
   const handleUnlinkCancel = useCallback(() => {
@@ -529,10 +641,13 @@ export function TransactionMessagesTab({
   // Group messages by thread and sort by most recent
   // NOTE: These computations and useMemo MUST be called before any early returns
   // to comply with React's Rules of Hooks
-  const sortedThreads = useMemo(() => {
-    const threads = groupMessagesByThread(messages);
-    return sortThreadsByRecent(threads);
-  }, [messages]);
+  const sortedThreads = useMemo((): [string, MessageLike[]][] => {
+    // BACKLOG-3884: paged — one entry per conversation in main's order (newest
+    // first), carrying its header rows.
+    if (pagedMode) return (threads ?? []).map((t) => [t.threadId, t.samples as MessageLike[]]);
+    const grouped = groupMessagesByThread(messages);
+    return sortThreadsByRecent(grouped);
+  }, [pagedMode, threads, messages]);
 
   // TASK-2025: Merge threads from the same contact (display-layer only)
   // This combines SMS, iMessage, and iCloud email threads into one per contact.
@@ -550,6 +665,23 @@ export function TransactionMessagesTab({
   // only non-reaction rows and keep only threads with ≥1 real message, while still
   // passing the full (reaction-carrying) arrays down to the cards.
   const { filteredThreads, filteredMessageCount, totalMessageCount, filteredConversationCount, totalConversationCount } = useMemo(() => {
+    // BACKLOG-3884: paged — the counts come from main (de-duplicated, reactions
+    // excluded, the same rule as below); a conversation is in the audit view when
+    // it has a text in the window.
+    if (pagedMode) {
+      const auditOnly = showAuditPeriodOnly && hasAuditDates;
+      const visibleAll = mergedThreads.filter(([, , ids]) => sumCounts(ids, "totalCount") > 0);
+      const shown = auditOnly ? visibleAll.filter(([, , ids]) => sumCounts(ids, "inWindowCount") > 0) : visibleAll;
+      const total = visibleAll.reduce((n, [, , ids]) => n + sumCounts(ids, "totalCount"), 0);
+      const inView = auditOnly ? shown.reduce((n, [, , ids]) => n + sumCounts(ids, "inWindowCount"), 0) : total;
+      return {
+        filteredThreads: shown,
+        filteredMessageCount: inView,
+        totalMessageCount: total,
+        filteredConversationCount: shown.length,
+        totalConversationCount: visibleAll.length,
+      };
+    }
     const realCount = (msgs: MessageLike[]): number =>
       msgs.reduce((n, m) => (isReactionRow(m) ? n : n + 1), 0);
     const totalRealMessages = messages.reduce((n, m) => (isReactionRow(m) ? n : n + 1), 0);
@@ -593,7 +725,7 @@ export function TransactionMessagesTab({
       filteredConversationCount: filtered.length,
       totalConversationCount: visibleTotal,
     };
-  }, [mergedThreads, messages, showAuditPeriodOnly, hasAuditDates, parsedStartDate, parsedEndDate]);
+  }, [pagedMode, sumCounts, mergedThreads, messages, showAuditPeriodOnly, hasAuditDates, parsedStartDate, parsedEndDate]);
 
   // BACKLOG-1719: selectable conversations = the currently visible (filtered)
   // display threads, keyed by their display threadId.
@@ -619,7 +751,18 @@ export function TransactionMessagesTab({
   // raw (unfiltered) thread grouping via originalThreadIds so merged/contact-
   // combined threads remove every constituent message — matching the single
   // unlink flow (which also unlinks the whole thread, not just the audit window).
+  // BACKLOG-3884 (paged): the selected conversations' thread keys and their texts.
+  const { selectedThreadKeys, selectedTextCount } = useMemo(() => {
+    const keys: string[] = [];
+    for (const [threadId, , originalThreadIds] of filteredThreads) {
+      if (!selectedThreadIds.has(threadId)) continue;
+      keys.push(...(originalThreadIds && originalThreadIds.length > 0 ? originalThreadIds : [threadId]));
+    }
+    return { selectedThreadKeys: keys, selectedTextCount: sumCounts(keys, "totalCount") };
+  }, [filteredThreads, selectedThreadIds, sumCounts]);
+
   const selectedMessageIds = useMemo(() => {
+    if (pagedMode) return [];
     const rawThreads = groupMessagesByThread(messages);
     const ids: string[] = [];
     const seen = new Set<string>();
@@ -639,7 +782,7 @@ export function TransactionMessagesTab({
       }
     }
     return ids;
-  }, [messages, filteredThreads, selectedThreadIds]);
+  }, [pagedMode, messages, filteredThreads, selectedThreadIds]);
 
   // BACKLOG-1869: When a highlight target arrives, locate the matching conversation
   // card (searching the full merged list so audit-period-filtered threads can still
@@ -680,11 +823,31 @@ export function TransactionMessagesTab({
     };
   }, []); // empty deps — fires on unmount + StrictMode fake-unmount
 
+  // BACKLOG-3884 (paged): the cards do not hold the texts, so the target's
+  // conversation is asked of main.
+  const [resolvedHighlight, setResolvedHighlight] = useState<{ id: string; key: string | null } | null>(null);
+  const highlightTextId = highlightTarget?.type === "text" ? (highlightTarget.communicationId ?? null) : null;
+  useEffect(() => {
+    if (!pagedMode || !highlightTextId || !transactionId) return;
+    if (resolvedHighlight?.id === highlightTextId) return;
+    let cancelled = false;
+    void transactionService
+      .findTextThread(transactionId, highlightTextId)
+      .catch(() => null)
+      .then((key) => {
+        if (!cancelled) setResolvedHighlight({ id: highlightTextId, key });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pagedMode, highlightTextId, transactionId, resolvedHighlight]);
+
   useEffect(() => {
     const targetId = highlightTarget?.type === "text" ? (highlightTarget.communicationId ?? null) : null;
 
     if (!targetId) { activeTextIdRef.current = null; return; }
     if (loading) return;
+    if (pagedMode && resolvedHighlight?.id !== targetId) return;
 
     // Same id already being animated — card still shows ring via React state; no-op.
     if (activeTextIdRef.current === targetId) return;
@@ -697,9 +860,12 @@ export function TransactionMessagesTab({
 
     // Search visible (filtered) threads first; fall back to all merged threads so a
     // card hidden by the audit-period filter still scrolls into view if rendered.
-    const entry =
-      filteredThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId)) ??
-      mergedThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId));
+    const resolvedKey = resolvedHighlight?.key ?? null;
+    const holds = pagedMode
+      ? ([threadId, , ids]: MergedThreadEntry): boolean =>
+          resolvedKey !== null && (ids && ids.length > 0 ? ids : [threadId]).includes(resolvedKey)
+      : ([, msgs]: MergedThreadEntry): boolean => msgs.some((m) => m.id === targetId);
+    const entry = filteredThreadsRef.current.find(holds) ?? mergedThreadsRef.current.find(holds);
     if (!entry) {
       // No threads yet: data may still be staging on first open — wait for the length dep
       // to re-trigger the effect rather than consuming the target prematurely.
@@ -754,7 +920,7 @@ export function TransactionMessagesTab({
     };
   // messages.length: primitive dep so data arrival (0→N on first open) re-fires the
   // effect without reacting to re-sorts. onHighlightConsumed via ref (stable).
-  }, [highlightTarget?.communicationId ?? null, loading, messages.length]);
+  }, [highlightTarget?.communicationId ?? null, loading, messages.length, resolvedHighlight]);
 
   // Selection-mode entry/exit (matches the transaction window).
   const handleToggleSelectionMode = useCallback(() => {
@@ -772,6 +938,28 @@ export function TransactionMessagesTab({
   // conversation's message IDs aggregated, then a single in-place removal +
   // one toast (mirrors handleUnlinkConfirm's optimistic path).
   const handleBulkRemoveConfirm = useCallback(async () => {
+    if (pagedMode) {
+      if (!transactionId || selectedThreadKeys.length === 0) return;
+      setIsBulkRemoving(true);
+      try {
+        const convCount = selectedThreadIds.size;
+        const ok = await removeThreadsPaged(
+          selectedThreadKeys,
+          convCount > 1 ? `${convCount} conversations removed` : "Messages removed from transaction",
+        );
+        if (ok) {
+          deselectAllThreads();
+          setSelectionMode(false);
+        }
+      } catch (err) {
+        logger.error("Failed to bulk-unlink messages:", err);
+        onShowError?.(err instanceof Error ? err.message : "Failed to remove messages");
+      } finally {
+        setIsBulkRemoving(false);
+        setShowBulkRemoveConfirm(false);
+      }
+      return;
+    }
     if (!transactionId || selectedMessageIds.length === 0) return;
     setIsBulkRemoving(true);
     try {
@@ -802,7 +990,7 @@ export function TransactionMessagesTab({
       setIsBulkRemoving(false);
       setShowBulkRemoveConfirm(false);
     }
-  }, [transactionId, selectedMessageIds, selectedThreadIds, onRemoveMessagesByIds, onMessagesChanged, onShowSuccess, onShowError, deselectAllThreads, undoRemoveMessages]);
+  }, [transactionId, selectedMessageIds, selectedThreadIds, onRemoveMessagesByIds, onMessagesChanged, onShowSuccess, onShowError, deselectAllThreads, undoRemoveMessages, pagedMode, selectedThreadKeys, removeThreadsPaged]);
 
   // Loading state (placed after hooks to comply with Rules of Hooks)
   if (loading) {
@@ -843,11 +1031,11 @@ export function TransactionMessagesTab({
   //
   // BACKLOG-2791 (founder, 2026-08-22): "no text messages linked" must mean
   // genuinely nothing — no linked messages AND nothing waiting in Needs review.
-  if (messages.length === 0 && !hasReviewItems) {
+  if ((pagedMode ? (threads ?? []).length === 0 : messages.length === 0) && !hasReviewItems) {
     return (
       <div>
         {/* BACKLOG-3663: a source that does not reach back to the audit start. */}
-        {userId && transactionId && <TextCoverageNotice transactionId={transactionId} userId={userId} />}
+        {userId && transactionId && <TextCoverageNotice transactionId={transactionId} userId={userId} onTextsAdded={reloadAfterBackfill} />}
         <div className="bg-gray-50 rounded-lg p-6 text-center">
           <svg
             className="w-12 h-12 text-gray-300 mx-auto mb-3"
@@ -897,7 +1085,9 @@ export function TransactionMessagesTab({
             {userId && transactionId && (
               <button
                 onClick={handleAttachClick}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                disabled={!!editLockedTooltip}
+                title={editLockedTooltip}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="attach-messages-button"
               >
                 <svg
@@ -923,6 +1113,7 @@ export function TransactionMessagesTab({
         {transactionId && (
           <RemovedMessagesSection
             transactionId={transactionId}
+            restoreLockedTooltip={editLockedTooltip}
             userId={userId}
             contactNames={contactNames}
             onMessagesChanged={onMessagesChanged}
@@ -953,7 +1144,7 @@ export function TransactionMessagesTab({
   return (
     <div>
       {/* BACKLOG-3663: a source that does not reach back to the audit start. */}
-      {userId && transactionId && <TextCoverageNotice transactionId={transactionId} userId={userId} />}
+      {userId && transactionId && <TextCoverageNotice transactionId={transactionId} userId={userId} onTextsAdded={reloadAfterBackfill} />}
       {/* Header with message count and filter toggle */}
       <div className="flex items-center justify-between mb-4">
         <div>
@@ -974,7 +1165,9 @@ export function TransactionMessagesTab({
           {userId && transactionId && (
             <button
               onClick={handleAttachClick}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors"
+              disabled={!!editLockedTooltip}
+              title={editLockedTooltip}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               data-testid="attach-messages-button"
             >
               <svg
@@ -1055,12 +1248,14 @@ export function TransactionMessagesTab({
       <div className="flex items-center gap-2 mb-4">
         <button
           onClick={handleToggleSelectionMode}
-          className={`flex items-center gap-1.5 px-3 h-10 text-sm font-medium rounded-lg transition-colors flex-shrink-0 ${
+          className={`flex items-center gap-1.5 px-3 h-10 text-sm font-medium rounded-lg transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${
             selectionMode
               ? "bg-blue-500 text-white hover:bg-blue-600"
               : "bg-gray-200 text-gray-700 hover:bg-gray-300"
           }`}
           data-testid="select-messages-button"
+          disabled={!!editLockedTooltip}
+          title={editLockedTooltip}
         >
           <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
@@ -1131,6 +1326,19 @@ export function TransactionMessagesTab({
                  removed list and the review queue below never receive it. */
               onSetHiddenFromExport={transactionId ? handleSetHiddenFromExport : undefined}
               hideFromExportState={hideFromExportState}
+              actionsLockedTooltip={editLockedTooltip}
+              paged={
+                pagedMode && transactionId
+                  ? {
+                      transactionId,
+                      threadKeys: originalThreadIds && originalThreadIds.length > 0 ? originalThreadIds : [threadId],
+                      auditWindow,
+                      inWindowCount: sumCounts(originalThreadIds ?? [threadId], "inWindowCount"),
+                      totalCount: sumCounts(originalThreadIds ?? [threadId], "totalCount"),
+                      version: threadsVersion,
+                    }
+                  : undefined
+              }
             />
           );
         })}
@@ -1169,6 +1377,7 @@ export function TransactionMessagesTab({
       {transactionId && (
         <RemovedMessagesSection
           transactionId={transactionId}
+          restoreLockedTooltip={editLockedTooltip}
           userId={userId}
           contactNames={contactNames}
           onMessagesChanged={onMessagesChanged}
@@ -1223,7 +1432,7 @@ export function TransactionMessagesTab({
       {showBulkRemoveConfirm && (
         <BulkRemoveConfirmModal
           conversationCount={selectedCount}
-          itemCount={selectedMessageIds.length}
+          itemCount={pagedMode ? selectedTextCount : selectedMessageIds.length}
           itemNoun="text"
           isProcessing={isBulkRemoving}
           onCancel={() => setShowBulkRemoveConfirm(false)}

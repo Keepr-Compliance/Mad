@@ -13,7 +13,6 @@ import crypto from "crypto";
 import * as Sentry from "@sentry/electron/main";
 import { dbGet, dbAll, dbRun, getRawDatabase } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
-import { DatabaseError } from "../../types";
 import type { ParsedParticipant } from "../../types/models";
 // BACKLOG-3067: a successful read mints the brand — see electron/types/ids.ts.
 import type { EmailRow } from "../../types/ids";

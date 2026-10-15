@@ -10,6 +10,7 @@ import { ChecklistCheckbox } from "./checklist/ChecklistCheckbox";
 import { normalizePhoneForLookup } from "../../../utils/phoneNormalization";
 import { getContactAvatarInitial } from "../../../utils/avatarUtils";
 import type { HideFromExportState } from "../../../hooks/useHideFromExportState";
+import { useTextThreadPages, type TextWindow } from "../hooks/useTextThreads";
 
 /**
  * Union type for messages - can be from messages table or communications table
@@ -50,6 +51,8 @@ export interface MessageThreadCardProps {
   onConfirm?: (threadId: string) => void;
   /** Whether the confirm action is in flight. */
   isConfirming?: boolean;
+  /** BACKLOG-3910: locked deal — approve and reject are disabled and show this text. */
+  actionsLockedTooltip?: string;
   /** Map of phone number -> contact name for resolving senders */
   contactNames?: Record<string, string>;
   /** Audit period start date for filtering (TASK-1157) */
@@ -60,6 +63,8 @@ export interface MessageThreadCardProps {
   isRemoved?: boolean;
   /** Callback when restore button is clicked (only shown when isRemoved) */
   onRestore?: (threadId: string) => void;
+  /** BACKLOG-3910: locked deal — the Restore button is disabled and shows this text. */
+  restoreLockedTooltip?: string;
   /** Whether restore is in progress */
   isRestoring?: boolean;
   /**
@@ -87,7 +92,25 @@ export interface MessageThreadCardProps {
   onSetHiddenFromExport?: (messageId: string, hide: boolean) => void | Promise<void>;
   /** BACKLOG-3366: whether hiding is allowed, forwarded to the modal. */
   hideFromExportState?: HideFromExportState;
+  /**
+   * BACKLOG-3884: the Texts tab's linked cards hold only a few header rows
+   * (`messages`); the conversation is read a page at a time when it is opened.
+   * `threadKeys` are the threads this card shows (several when merged by contact).
+   */
+  paged?: {
+    transactionId: string;
+    threadKeys: string[];
+    /** The audit window the modal starts in; null = the deal has no dates. */
+    auditWindow: TextWindow | null;
+    /** Non-reaction texts in the window and in all history. */
+    inWindowCount: number;
+    totalCount: number;
+    /** Bumped when the deal's texts change: an open conversation re-reads. */
+    version: number;
+  };
 }
+
+const NO_KEYS: string[] = [];
 
 /**
  * BACKLOG-2814: the group conversation's user-visible name (Apple's
@@ -269,11 +292,13 @@ export function MessageThreadCard({
   onUnlink,
   onConfirm,
   isConfirming,
+  actionsLockedTooltip,
   contactNames = {},
   auditStartDate,
   auditEndDate,
   isRemoved = false,
   onRestore,
+  restoreLockedTooltip,
   isRestoring = false,
   selectionMode = false,
   isSelected = false,
@@ -281,8 +306,19 @@ export function MessageThreadCard({
   isHighlighted = false,
   onSetHiddenFromExport,
   hideFromExportState,
+  paged,
 }: MessageThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
+  // BACKLOG-3884: the modal's before/after toggle decides the pager's scope.
+  const [showOutOfRange, setShowOutOfRange] = useState(false);
+  const pagedWindow = paged && paged.auditWindow && !showOutOfRange ? paged.auditWindow : null;
+  const pages = useTextThreadPages(
+    paged?.transactionId,
+    paged?.threadKeys ?? NO_KEYS,
+    pagedWindow,
+    !!paged && showModal,
+    paged?.version ?? 0,
+  );
 
   // BACKLOG-1719: selection UX only applies to active cards, never to removed ones.
   const showSelection = selectionMode && !isRemoved;
@@ -413,10 +449,10 @@ export function MessageThreadCard({
             {!showSelection && onConfirm && (
               <button
                 onClick={(e) => { e.stopPropagation(); onConfirm(threadId); }}
-                disabled={isConfirming}
+                disabled={isConfirming || !!actionsLockedTooltip}
                 className="text-gray-400 hover:text-green-600 hover:bg-green-50 rounded p-1 transition-all disabled:opacity-50"
                 data-testid="confirm-thread-button"
-                title="Keep this conversation on the transaction"
+                title={actionsLockedTooltip ?? "Keep this conversation on the transaction"}
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -427,10 +463,10 @@ export function MessageThreadCard({
             {showSelection ? null : isRemoved && onRestore ? (
               <button
                 onClick={() => onRestore(threadId)}
-                disabled={isRestoring}
+                disabled={isRestoring || !!restoreLockedTooltip}
                 className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-green-600 hover:text-green-800 hover:bg-green-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="restore-removed-message"
-                title="Restore this conversation to the transaction"
+                title={restoreLockedTooltip ?? "Restore this conversation to the transaction"}
               >
                 {isRestoring ? (
                   <>
@@ -449,8 +485,9 @@ export function MessageThreadCard({
             ) : onUnlink ? (
               <button
                 onClick={() => onUnlink(threadId)}
-                className="text-gray-400 hover:text-red-600 hover:bg-red-50 rounded p-1 transition-all"
-                title="Remove from transaction"
+                disabled={!!actionsLockedTooltip}
+                className="text-gray-400 hover:text-red-600 hover:bg-red-50 rounded p-1 transition-all disabled:opacity-50"
+                title={actionsLockedTooltip ?? "Remove from transaction"}
                 data-testid="unlink-thread-button"
               >
                 {/* BACKLOG-1793: trash icon (matches EmailThreadCard) instead of
@@ -479,15 +516,30 @@ export function MessageThreadCard({
         <ConversationViewModal
           /* BACKLOG-2295: the modal receives the FULL (uncropped) thread so its
              own audit toggle is independent of the Texts-tab toggle. */
-          messages={fullMessages ?? messages}
+          messages={paged ? pages.messages : (fullMessages ?? messages)}
           contactName={contactName}
           phoneNumber={phoneNumber}
           contactNames={contactNames}
           auditStartDate={auditStartDate}
           auditEndDate={auditEndDate}
-          onClose={() => setShowModal(false)}
+          onClose={() => {
+            setShowModal(false);
+            setShowOutOfRange(false);
+          }}
           onSetHiddenFromExport={onSetHiddenFromExport}
           hideFromExportState={hideFromExportState}
+          hideLockedTooltip={actionsLockedTooltip}
+          pagination={
+            paged
+              ? {
+                  hasMore: pages.hasMore,
+                  loading: pages.loading,
+                  loadMore: () => void pages.loadMore(),
+                  totalCount: pagedWindow ? paged.inWindowCount : paged.totalCount,
+                }
+              : undefined
+          }
+          onShowOutOfRangeChange={paged ? setShowOutOfRange : undefined}
         />
       )}
     </>

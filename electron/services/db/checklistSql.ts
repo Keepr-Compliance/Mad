@@ -135,7 +135,7 @@ export const GET_CHECKLIST_ITEMS_SQL = sql`
  * (the checklist id).
  */
 export const GET_CHECKLIST_LINKS_SQL = sql`
-  SELECT l.id, l.item_id, l.kind, l.label, l.sort_order
+  SELECT l.id, l.item_id, l.kind, l.label, l.sort_order, l.include_outside_dates
   FROM transaction_checklist_links l
   JOIN transaction_checklist_items i ON i.id = l.item_id
   WHERE i.checklist_id = ?
@@ -240,11 +240,82 @@ export const NEXT_LINK_SORT_ORDER_SQL = sql`
   WHERE item_id = ?
 `;
 
-/** Insert one evidence group. Five bound parameters: id, item id, kind, label, sort_order. */
+/**
+ * Insert one evidence group. Six bound parameters: id, item id, kind, label,
+ * sort_order, include_outside_dates (0/1, BACKLOG-3764).
+ */
 export const INSERT_CHECKLIST_LINK_SQL = sql`
-  INSERT INTO transaction_checklist_links (id, item_id, kind, label, sort_order)
-  VALUES (?, ?, ?, ?, ?)
+  INSERT INTO transaction_checklist_links (id, item_id, kind, label, sort_order, include_outside_dates)
+  VALUES (?, ?, ?, ?, ?, ?)
 `;
+
+/** BACKLOG-3764: the deal's audit dates as stored. One bound parameter. */
+export const GET_TRANSACTION_AUDIT_DATES_SQL = sql`
+  SELECT started_at, closed_at FROM transactions WHERE id = ?
+`;
+
+/**
+ * BACKLOG-3764: the agent answered "Include it" at the submit pre-flight. Sets
+ * the flag on ONE group, only if it belongs to this transaction. Two bound
+ * parameters, in order: link id, transaction id.
+ */
+export const SET_LINK_INCLUDE_OUTSIDE_DATES_SQL = sql`
+  UPDATE transaction_checklist_links SET include_outside_dates = 1
+  WHERE id = ?
+    AND item_id IN (
+      SELECT i.id FROM transaction_checklist_items i
+      JOIN transaction_checklists c ON c.id = i.checklist_id
+      WHERE c.transaction_id = ?
+    )
+`;
+
+/**
+ * BACKLOG-3764 — which of these targets are dated OUTSIDE the deal's audit
+ * dates, with the date that puts them there. One `id, sent_at` row per such
+ * target.
+ *
+ * "Inside" is the submit's own test, term for term
+ * (`submissionDbService.getTransactionEmails` / `getTransactionAttachments`):
+ * `sent_at >= start` when there is a start, `sent_at <= end` when there is an
+ * end, with the same bound strings (`auditWindowStart`, `auditWindowEnd`,
+ * `toISOString`). A row with no date fails the test the way the submit's
+ * filter fails it, so it counts as outside. An email attachment takes its
+ * email's date; a text attachment its text's, through `message_id` or, for
+ * an Apple-id row, `external_message_id`.
+ *
+ * Bound parameters, in order: the N target ids, then start, start, end, end
+ * (each NULL when the deal has no such date).
+ */
+export function outsideAuditDatesSql(kind: ChecklistLinkKind, count: number): SafeSql {
+  const ids = placeholderList(count);
+  if (kind === "email") {
+    return sql`
+      SELECT id, sent_at FROM (
+        SELECT e.id AS id, e.sent_at AS sent_at FROM emails e WHERE e.id IN (${ids})
+      ) t
+      WHERE NOT COALESCE((? IS NULL OR t.sent_at >= ?) AND (? IS NULL OR t.sent_at <= ?), 0)
+      ORDER BY t.sent_at, t.id
+    `;
+  }
+  return sql`
+    SELECT id, sent_at FROM (
+      SELECT a.id AS id,
+             CASE
+               WHEN a.email_id IS NOT NULL THEN (SELECT e.sent_at FROM emails e WHERE e.id = a.email_id)
+               ELSE COALESCE(
+                 (SELECT m.sent_at FROM messages m WHERE m.id = a.message_id),
+                 (SELECT mx.sent_at FROM messages mx
+                   WHERE a.external_message_id IS NOT NULL AND mx.external_id = a.external_message_id
+                   ORDER BY mx.sent_at LIMIT 1)
+               )
+             END AS sent_at
+      FROM attachments a
+      WHERE a.id IN (${ids})
+    ) t
+    WHERE NOT COALESCE((? IS NULL OR t.sent_at >= ?) AND (? IS NULL OR t.sent_at <= ?), 0)
+    ORDER BY t.sent_at, t.id
+  `;
+}
 
 /** Insert one attachment member. Three bound parameters: id, link id, attachment id. */
 export const INSERT_ATTACHMENT_MEMBER_SQL = sql`

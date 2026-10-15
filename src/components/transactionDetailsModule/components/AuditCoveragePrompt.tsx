@@ -19,8 +19,22 @@
 import React from "react";
 import { ResponsiveModal } from "../../common/ResponsiveModal";
 import type { CoverageImportProgress } from "../../../hooks/useAuditCoverageCheck";
-import type { SourceCoverageGap, TextSource } from "../../../../electron/types/auditCoverage";
-import { gapLine, googleMessagesGapLine } from "./TextCoverageNotice";
+import type { AuditCoverageResult, SourceCoverageGap, TextSource } from "../../../../electron/types/auditCoverage";
+import { coverageLine, gapKey } from "./coverageCopy";
+
+/**
+ * BACKLOG-3837: the prompt's source lines from a coverage result. A result whose
+ * per-source floors are still being read is PENDING — not "no gaps" — and the prompt
+ * says so. A missing result (the check itself failed) shows neither.
+ */
+export function sourceLinesFromCoverage(
+  coverage: Pick<AuditCoverageResult, "sourceGaps" | "sourceCoveragePending"> | null | undefined,
+): { sourceGaps: SourceCoverageGap[]; sourceCoveragePending: boolean } {
+  return {
+    sourceGaps: coverage?.sourceGaps ?? [],
+    sourceCoveragePending: coverage?.sourceCoveragePending === true,
+  };
+}
 
 export interface AuditCoveragePromptProps {
   /** New range extends earlier than the imported messages OR email floor. */
@@ -53,6 +67,11 @@ export interface AuditCoveragePromptProps {
    * changes the actions.
    */
   sourceGaps?: SourceCoverageGap[];
+  /**
+   * BACKLOG-3837: how far back the texts go is still being checked (off the main
+   * process). One soft line for the chosen non-Mac source instead of silence.
+   */
+  sourceCoveragePending?: boolean;
   /** The proposed start, for those lines. */
   proposedStartISO?: string | null;
   /**
@@ -74,13 +93,17 @@ export function AuditCoveragePrompt({
   onSkip,
   onCancel,
   sourceGaps = [],
+  sourceCoveragePending = false,
   proposedStartISO = null,
   chosenSource,
 }: AuditCoveragePromptProps): React.ReactElement {
   // One gap line, one action: the Mac lines for the Mac source; otherwise
-  // only the chosen source's line.
+  // only the chosen source's line. BACKLOG-3892 W1: the Mac END line (newer texts)
+  // shows here too — the Mac lines above are about the start only.
   const macSource = chosenSource === "mac";
-  const otherGaps = macSource ? [] : sourceGaps.filter((g) => g.source === chosenSource);
+  const otherGaps = macSource
+    ? sourceGaps.filter((g) => g.source === "mac" && g.kind === "newer")
+    : sourceGaps.filter((g) => g.source === chosenSource);
   const canImport = hasGap && importerAvailable;
   const percent = progress ? Math.max(0, Math.min(100, Math.round(progress.percent))) : 0;
   // BACKLOG-2305: fall back to indeterminate whenever we lack a trustworthy
@@ -150,13 +173,23 @@ export function AuditCoveragePrompt({
         {otherGaps.length > 0 && (
           <ul className="text-sm text-gray-700 mb-3 space-y-1" data-testid="audit-coverage-source-gaps">
             {otherGaps.map((g) => (
-              <li key={g.source} data-testid={`audit-coverage-gap-${g.source}`}>
-                {/* Founder: the Google Messages line is the one the Texts tab shows. */}
-                {googleMessagesGapLine(g) ??
-                  `${gapLine(g, proposedStartISO)} ${g.source === "iphone" ? "Click Sync iPhone on the dashboard." : "Click Sync Android on the dashboard."}`}
+              <li key={gapKey(g)} data-testid={`audit-coverage-gap-${gapKey(g)}`}>
+                {/* BACKLOG-3892 W: every line from coverageCopy (the Texts tab's lines). */}
+                {coverageLine(
+                  g,
+                  proposedStartISO,
+                  g.source === "iphone" ? "Click Sync iPhone on the dashboard." : "Click Sync Android on the dashboard.",
+                )}
               </li>
             ))}
           </ul>
+        )}
+
+        {/* BACKLOG-3837: the source floors are still being read — say so, not nothing. */}
+        {sourceCoveragePending && !macSource && chosenSource && (
+          <p className="text-sm text-gray-600 mb-3" data-testid="audit-coverage-source-pending">
+            Still checking how far back your texts go. This does not stop you from continuing.
+          </p>
         )}
 
         {/* Inline progress while importing. */}

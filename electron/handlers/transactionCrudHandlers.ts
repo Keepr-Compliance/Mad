@@ -8,6 +8,7 @@ import type { BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import transactionService from "../services/transactionService";
 import { getEarliestCommunicationDate } from "../services/transactionService";
+import { computeCommunicationsDelta } from "../services/transactionService/communicationsDelta";
 import type { AuditedTransactionData } from "../services/transactionService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
@@ -15,6 +16,13 @@ import emailSyncService from "../services/emailSyncService";
 // BACKLOG-1802: automatic per-transaction email sync on create/open/date-change.
 // BACKLOG-1832: isAutoSyncInFlight supports mount-time spinner state query.
 import { triggerTransactionSyncInBackground, isAutoSyncInFlight } from "../services/transactionSyncTrigger";
+import {
+  refuseIfDealLocked,
+  refuseIfAnyDealLocked,
+  refuseUpdateIfDealLocked,
+  refuseStatusChangeIfDealLocked,
+  getCommunicationTransactionId,
+} from "../services/dealLockState";
 import { isAuditWindowExtended } from "../utils/emailDateRange";
 // BACKLOG-2292: automatic audit-window MESSAGES sync (the messages twin) + the
 // coverage-detection reads that drive the date-selection popup and export gate.
@@ -26,9 +34,56 @@ import {
 import {
   getAuditCoverage,
   checkExportCompleteness,
-  getTransactionTextCoverage,
 } from "../services/auditCoverageService";
+import { getTransactionTextCoverageAsync } from "../services/textCoverageAsync";
+import {
+  findTextThread,
+  getTransactionTextPage,
+  getTransactionTextThreads,
+  unlinkTextThreads,
+} from "../services/transactionTextThreadsService";
+import type { TextPageCursor, TextWindow } from "../services/db/transactionTextPagingDb";
+
+/** BACKLOG-3884: the audit window the Texts tab sends (epoch ms, null = open). */
+function validateTextWindow(value: unknown): TextWindow | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object") throw new ValidationError("window must be an object or null", "window");
+  const v = value as { startMs?: unknown; endMs?: unknown };
+  const ms = (x: unknown, field: string): number | null => {
+    if (x === null || x === undefined) return null;
+    if (typeof x !== "number" || !Number.isFinite(x)) throw new ValidationError(`${field} must be a number or null`, field);
+    return x;
+  };
+  return { startMs: ms(v.startMs, "startMs"), endMs: ms(v.endMs, "endMs") };
+}
+
+/** BACKLOG-3884: conversation keys (thread ids). */
+function validateThreadKeys(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 200) {
+    throw new ValidationError("threadKeys must be a non-empty array (max 200)", "threadKeys");
+  }
+  if (value.some((k) => typeof k !== "string" || k.length === 0 || k.length > 500)) {
+    throw new ValidationError("threadKeys must be non-empty strings", "threadKeys");
+  }
+  return value as string[];
+}
+
+/** BACKLOG-3884: a page cursor as returned by get-text-thread-page. */
+function validateTextCursor(value: unknown): TextPageCursor | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object") throw new ValidationError("cursor must be an object or null", "cursor");
+  const v = value as { sk?: unknown; afterId?: unknown };
+  const okStr = (x: unknown): boolean => x === null || (typeof x === "string" && x.length <= 500);
+  if (!okStr(v.sk) || !okStr(v.afterId)) throw new ValidationError("cursor is malformed", "cursor");
+  return { sk: (v.sk as string | null) ?? null, afterId: (v.afterId as string | null) ?? null };
+}
 import type { TextCoverageResult, TextSource } from "../types/auditCoverage";
+
+/** BACKLOG-3663/3892: a renderer-sent import source, or null when it is not one we know. */
+function toTextSource(value: unknown): TextSource | null {
+  const known: readonly string[] = ["iphone", "mac", "android_companion", "google_messages"];
+  return typeof value === "string" && known.includes(value) ? (value as TextSource) : null;
+}
 import type { ImportProgressCallback } from "../services/macOSMessagesImportService";
 import type {
   AuditCoverageResult,
@@ -233,6 +288,7 @@ export function registerTransactionCrudHandlers(
     wrapHandler(async (
       event: IpcMainInvokeEvent,
       transactionId: string,
+      channelFilter?: unknown,
     ): Promise<TransactionResponse> => {
       // Validate input
       const validatedTransactionId = validateTransactionId(transactionId);
@@ -242,10 +298,16 @@ export function registerTransactionCrudHandlers(
           "transactionId",
         );
       }
+      // BACKLOG-3884: the details screen asks for its emails only; its texts come
+      // through the paged Texts-tab reads. Omitted = every communication, as before.
+      if (channelFilter !== undefined && channelFilter !== null && channelFilter !== "email") {
+        throw new ValidationError("channelFilter must be 'email' when given", "channelFilter");
+      }
 
       const t0 = Date.now();
       const details = await transactionService.getTransactionDetails(
         validatedTransactionId,
+        channelFilter === "email" ? "email" : undefined,
       );
       const t1 = Date.now();
 
@@ -312,6 +374,123 @@ export function registerTransactionCrudHandlers(
     }, { module: "Transactions" }),
   );
 
+  // BACKLOG-3785: only what changed since the caller's copy. Same reader as
+  // transactions:get-communications (so the same de-duplication), but the reply
+  // carries the rows the caller does not hold plus the ids it should drop —
+  // not every linked communication again.
+  ipcMain.handle(
+    "transactions:get-communications-delta",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: string,
+      channelFilter: "email" | "text",
+      knownIds: string[],
+    ): Promise<TransactionResponse> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+      if (channelFilter !== "email" && channelFilter !== "text") {
+        throw new ValidationError(
+          "channelFilter must be 'email' or 'text'",
+          "channelFilter",
+        );
+      }
+      if (!Array.isArray(knownIds) || knownIds.some((id) => typeof id !== "string")) {
+        throw new ValidationError("knownIds must be an array of strings", "knownIds");
+      }
+      const t0 = Date.now();
+      const details = await transactionService.getTransactionDetails(
+        validatedTransactionId,
+        channelFilter,
+      );
+      if (!details) {
+        return { success: false, error: "Transaction not found" };
+      }
+      const delta = computeCommunicationsDelta(details.communications ?? [], knownIds);
+      logService.debug(
+        `[PERF] getCommunicationsDelta(${channelFilter}): ${Date.now() - t0}ms, ` +
+          `${delta.added.length} added, ${delta.removedIds.length} removed, ${delta.total} total`,
+        "Transactions",
+      );
+      return { success: true, ...delta };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-3884: the Texts tab reads a conversation list and pages of one
+  // conversation, never every linked text at once.
+  ipcMain.handle(
+    "transactions:get-text-threads",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: string,
+      window: unknown,
+    ) => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+      const threads = await getTransactionTextThreads(validatedTransactionId, validateTextWindow(window));
+      return { success: true, threads };
+    }, { module: "Transactions" }),
+  );
+
+  ipcMain.handle(
+    "transactions:get-text-thread-page",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: string,
+      threadKeys: unknown,
+      window: unknown,
+      cursor: unknown,
+      limit: unknown,
+    ) => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+      const t0 = Date.now();
+      const page = getTransactionTextPage(
+        validatedTransactionId,
+        validateThreadKeys(threadKeys),
+        validateTextWindow(window),
+        validateTextCursor(cursor),
+        typeof limit === "number" && Number.isFinite(limit) ? limit : 0,
+      );
+      logService.debug(`[PERF] getTextThreadPage: ${Date.now() - t0}ms, ${page.rows.length} rows`, "Transactions");
+      return { success: true, ...page };
+    }, { module: "Transactions" }),
+  );
+
+  ipcMain.handle(
+    "transactions:find-text-thread",
+    wrapHandler(async (_event: IpcMainInvokeEvent, transactionId: string, messageId: unknown) => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+      if (typeof messageId !== "string" || messageId.length === 0 || messageId.length > 200) {
+        throw new ValidationError("messageId must be a non-empty string", "messageId");
+      }
+      return { success: true, threadKey: findTextThread(validatedTransactionId, messageId) };
+    }, { module: "Transactions" }),
+  );
+
+  ipcMain.handle(
+    "transactions:unlink-text-threads",
+    wrapHandler(async (_event: IpcMainInvokeEvent, transactionId: string, threadKeys: unknown) => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+      // BACKLOG-3910: a locked deal (submitted or sealed) is fully read-only.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId, "remove-texts");
+      if (lockedRefusal) return lockedRefusal;
+      const result = await unlinkTextThreads(validatedTransactionId, validateThreadKeys(threadKeys));
+      return { success: true, ...result };
+    }, { module: "Transactions" }),
+  );
+
   // PERF: Lightweight overview -- contacts only, no communications
   ipcMain.handle(
     "transactions:get-overview",
@@ -352,6 +531,12 @@ export function registerTransactionCrudHandlers(
           "transactionId",
         );
       }
+      // BACKLOG-3910 (slice d, founder 2026-10-12): a locked deal is read-only,
+      // every field included (audit dates, address, price, status).
+      // Founder 2026-10-12: the one allowance is closing an APPROVED deal (status only).
+      const lockedRefusal = refuseUpdateIfDealLocked(validatedTransactionId, updates);
+      if (lockedRefusal) return lockedRefusal;
+
       const sanitizedUpdates = sanitizeObject(updates || {});
       const validatedUpdates = validateTransactionData(
         sanitizedUpdates,
@@ -632,12 +817,17 @@ export function registerTransactionCrudHandlers(
       _event: IpcMainInvokeEvent,
       userId: string,
       proposedStartISO: string,
+      chosenSource?: string | null,
+      proposedEndISO?: string | null,
     ): Promise<AuditCoverageResult> => {
       const validatedUserId = validateUserId(userId);
       if (!validatedUserId) {
         throw new ValidationError("User ID validation failed", "userId");
       }
-      return getAuditCoverage(validatedUserId as string, proposedStartISO);
+      // BACKLOG-3892 S2: the user's import source (an unknown value is ignored).
+      // BACKLOG-3892 W1: the proposed end, for the end check (a non-string is ignored).
+      const end = typeof proposedEndISO === "string" && proposedEndISO.length > 0 ? proposedEndISO : null;
+      return getAuditCoverage(validatedUserId as string, proposedStartISO, toTextSource(chosenSource), end);
     }, { module: "Transactions" }),
   );
 
@@ -667,9 +857,9 @@ export function registerTransactionCrudHandlers(
       if (!validatedUserId) {
         throw new ValidationError("User ID validation failed", "userId");
       }
-      const known: readonly string[] = ["iphone", "mac", "android_companion", "google_messages"];
-      const chosen = typeof chosenSource === "string" && known.includes(chosenSource) ? (chosenSource as TextSource) : null;
-      return getTransactionTextCoverage(validatedTransactionId, validatedUserId as string, chosen);
+      const chosen = toTextSource(chosenSource);
+      // BACKLOG-3884: off main (the floors read runs on a worker, cached per user).
+      return getTransactionTextCoverageAsync(validatedTransactionId, validatedUserId as string, chosen);
     }, { module: "Transactions" }),
   );
 
@@ -679,6 +869,7 @@ export function registerTransactionCrudHandlers(
       _event: IpcMainInvokeEvent,
       transactionId: string,
       userId: string,
+      chosenSource?: string | null,
     ): Promise<ExportCompletenessResult> => {
       const validatedTransactionId = validateTransactionId(transactionId);
       if (!validatedTransactionId) {
@@ -688,7 +879,7 @@ export function registerTransactionCrudHandlers(
       if (!validatedUserId) {
         throw new ValidationError("User ID validation failed", "userId");
       }
-      return checkExportCompleteness(validatedTransactionId, validatedUserId as string);
+      return checkExportCompleteness(validatedTransactionId, validatedUserId as string, toTextSource(chosenSource));
     }, { module: "Transactions" }),
   );
 
@@ -826,6 +1017,10 @@ export function registerTransactionCrudHandlers(
       const validatedNotes =
         notes && typeof notes === "string" ? notes.trim() : null;
 
+      // BACKLOG-3910: no contact may be added to a locked deal (submitted or sealed).
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId as string, "add-contact");
+      if (lockedRefusal) return lockedRefusal;
+
       // TASK-1031: assignContactToTransaction now auto-links communications
       // for the newly added contact
       const result = await transactionService.assignContactToTransaction(
@@ -875,6 +1070,10 @@ export function registerTransactionCrudHandlers(
         );
       }
       const validatedContactId = validateContactId(contactId);
+
+      // BACKLOG-3910: a locked deal (submitted or sealed) is fully read-only.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId as string, "remove-contact");
+      if (lockedRefusal) return lockedRefusal;
 
       await transactionService.removeContactFromTransaction(
         validatedTransactionId as string,
@@ -945,6 +1144,10 @@ export function registerTransactionCrudHandlers(
       if (!validatedContactId) {
         throw new ValidationError("Contact ID validation failed", "contactId");
       }
+
+      // BACKLOG-3910: putting a removed party back is adding a contact.
+      const lockedRefusal = refuseIfDealLocked(validatedTransactionId as string, "add-contact");
+      if (lockedRefusal) return lockedRefusal;
 
       const restored = await databaseService.restoreContactToTransaction(
         validatedTransactionId as string,
@@ -1059,6 +1262,17 @@ export function registerTransactionCrudHandlers(
         };
       });
 
+      // BACKLOG-3910: a batch is refused whole on a
+      // locked deal (submitted or sealed), so nothing in it is half-applied.
+      // A remove-only batch is refused too: a locked deal is read-only.
+      {
+        const lockedRefusal = refuseIfDealLocked(
+          validatedTransactionId as string,
+          validatedOperations.some((op) => op.action === "add") ? "add-contact" : "remove-contact",
+        );
+        if (lockedRefusal) return lockedRefusal;
+      }
+
       await transactionService.batchUpdateContactAssignments(
         validatedTransactionId as string,
         validatedOperations,
@@ -1097,7 +1311,9 @@ export function registerTransactionCrudHandlers(
       // window: bounded enough to await. The multi-deal loop in contacts:update
       // is NOT awaited for exactly this reason. The provider fetch below stays
       // fire-and-forget, so the 820 regression cannot return.
-      let review: { added: number; linked: number; outstanding: number } | undefined;
+      let review:
+        | { added: number; linked: number; outstanding: number; skipped?: "submitted" | "sealed" }
+        | undefined;
       if (addOperations.length > 0) {
         try {
           const { autoLinkCommunicationsForContact } = await import(
@@ -1106,8 +1322,11 @@ export function registerTransactionCrudHandlers(
           const { countReviewItems } = await import("../services/reviewStateService");
           let linked = 0;
           let added = 0;
+          // BACKLOG-3910: set when the deal is locked and discovery added nothing.
+          let skipped: "submitted" | "sealed" | undefined;
           for (const op of addOperations) {
             const r = await autoLinkCommunicationsForContact({
+              caller: "addContact",
               contactId: op.contactId,
               transactionId: validatedTransactionId as string,
               // BACKLOG-2791: develop's split — confident emails and every text
@@ -1116,11 +1335,13 @@ export function registerTransactionCrudHandlers(
             });
             linked += r.emailsLinked + r.messagesLinked;
             added += r.queuedForReview ?? 0;
+            if (r.skippedLocked) skipped = r.skippedLocked;
           }
           review = {
             added,
             linked,
             outstanding: countReviewItems(validatedTransactionId as string),
+            ...(skipped ? { skipped } : {}),
           };
         } catch (error) {
           logService.warn("[BACKLOG-2791] discovery failed after contact save", "Transactions", {
@@ -1213,6 +1434,13 @@ export function registerTransactionCrudHandlers(
           error: "Invalid communication ID",
         };
       }
+
+      // BACKLOG-3910: a locked deal (submitted or sealed) is fully read-only.
+      const lockedRefusal = refuseIfAnyDealLocked(
+        [getCommunicationTransactionId(communicationId.trim())],
+        "remove-emails",
+      );
+      if (lockedRefusal) return lockedRefusal;
 
       // BACKLOG-1778: capture the removed communication ids (clicked row +
       // thread siblings) so the renderer can drop exactly those rows in place
@@ -1426,8 +1654,15 @@ export function registerTransactionCrudHandlers(
       // Update each transaction
       let updatedCount = 0;
       const errors: string[] = [];
+      // BACKLOG-3910d: locked deals are skipped one by one (an approved deal
+      // may still be set to closed) and reported, never silently.
+      const refusedIds: string[] = [];
 
       for (const transactionId of validatedIds) {
+        if (refuseStatusChangeIfDealLocked(transactionId, status)) {
+          refusedIds.push(transactionId);
+          continue;
+        }
         try {
           // Get transaction before update for audit logging
           const existingTransaction =
@@ -1468,9 +1703,15 @@ export function registerTransactionCrudHandlers(
       });
 
       return {
-        success: errors.length === 0,
+        success: errors.length === 0 && refusedIds.length === 0,
         updatedCount,
         errors: errors.length > 0 ? errors : undefined,
+        ...(refusedIds.length > 0
+          ? {
+              refusedIds,
+              error: `${refusedIds.length} locked deal${refusedIds.length > 1 ? "s were" : " was"} not changed. A deal with your broker, or a sealed deal, can't be changed (an approved deal can still be closed).`,
+            }
+          : {}),
       };
     }, { module: "Transactions" }),
   );

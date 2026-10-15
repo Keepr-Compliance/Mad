@@ -9,6 +9,7 @@
  */
 
 import { type ApiResult, getErrorMessage } from "./index";
+import type { SyncCancelTrigger } from "../../electron/types/ipc/window-api-platform";
 
 // ============================================
 // DEVICE TYPES
@@ -73,15 +74,6 @@ export interface BackupStartOptions {
 }
 
 /**
- * Backup with password options
- */
-export interface BackupWithPasswordOptions {
-  udid: string;
-  password: string;
-  outputPath?: string;
-}
-
-/**
  * Backup result
  */
 export interface BackupResult {
@@ -131,25 +123,6 @@ export interface DriverInstallResult {
 // ============================================
 // SYNC TYPES
 // ============================================
-
-/**
- * Sync start options
- */
-export interface SyncStartOptions {
-  udid: string;
-  password?: string;
-  forceFullBackup?: boolean;
-}
-
-/**
- * Sync result
- */
-export interface SyncResult {
-  messages: unknown[];
-  contacts: unknown[];
-  conversations: unknown[];
-  duration: number;
-}
 
 /**
  * Sync status
@@ -326,26 +299,6 @@ export const deviceService = {
   },
 
   /**
-   * Start a backup with encryption password
-   */
-  async startBackupWithPassword(
-    options: BackupWithPasswordOptions
-  ): Promise<ApiResult<{ backupPath?: string }>> {
-    try {
-      if (!window.api.backup) {
-        return { success: false, error: "Backup API not available" };
-      }
-      const result = await window.api.backup.startWithPassword(options);
-      if (result.success) {
-        return { success: true, data: { backupPath: result.backupPath } };
-      }
-      return { success: false, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
    * Cancel the current backup
    */
   async cancelBackup(): Promise<ApiResult> {
@@ -424,27 +377,6 @@ export const deviceService = {
             needsPassword: result.needsPassword,
           },
         };
-      }
-      return { success: false, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
-   * Verify backup password
-   */
-  async verifyBackupPassword(
-    backupPath: string,
-    password: string
-  ): Promise<ApiResult<{ valid?: boolean }>> {
-    try {
-      if (!window.api.backup) {
-        return { success: false, error: "Backup API not available" };
-      }
-      const result = await window.api.backup.verifyPassword(backupPath, password);
-      if (result.success) {
-        return { success: true, data: { valid: result.valid } };
       }
       return { success: false, error: result.error };
     } catch (error) {
@@ -582,45 +514,51 @@ export const deviceService = {
     }
   },
 
-  // ============================================
-  // SYNC METHODS
-  // ============================================
-
   /**
-   * Start iPhone sync
+   * BACKLOG-3927: open Apple's "Apple Devices" app in the Microsoft Store
+   * (Store build iPhone setup).
    */
-  async startSync(options: SyncStartOptions): Promise<ApiResult<SyncResult>> {
+  async openAppleDevicesStore(): Promise<ApiResult> {
     try {
-      if (!window.api.sync) {
-        return { success: false, error: "Sync API not available" };
+      if (!window.api.drivers?.openAppleDevicesStore) {
+        return { success: false, error: "Drivers API not available" };
       }
-      const result = await window.api.sync.start(options);
-      if (result.success) {
-        return {
-          success: true,
-          data: {
-            messages: result.messages,
-            contacts: result.contacts,
-            conversations: result.conversations,
-            duration: result.duration,
-          },
-        };
-      }
-      return { success: false, error: result.error || "Sync failed" };
+      const result = await window.api.drivers.openAppleDevicesStore();
+      return { success: result.success, error: result.error };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
   },
 
   /**
+   * BACKLOG-3927: open Windows Settings > Windows Update (USB driver guide).
+   * Only opens Settings; installs nothing.
+   */
+  async openWindowsUpdate(target: "check" | "optional"): Promise<ApiResult> {
+    try {
+      if (!window.api.drivers?.openWindowsUpdate) {
+        return { success: false, error: "Drivers API not available" };
+      }
+      const result = await window.api.drivers.openWindowsUpdate(target);
+      return { success: result.success, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  // ============================================
+  // SYNC METHODS
+  // ============================================
+
+  /**
    * Cancel the current sync
    */
-  async cancelSync(): Promise<ApiResult> {
+  async cancelSync(trigger: SyncCancelTrigger): Promise<ApiResult> {
     try {
       if (!window.api.sync) {
         return { success: false, error: "Sync API not available" };
       }
-      const result = await window.api.sync.cancel();
+      const result = await window.api.sync.cancel(trigger);
       return { success: result.success };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
@@ -725,16 +663,6 @@ export const deviceService = {
       return () => {};
     }
     return window.api.sync.onDeviceDisconnected(callback);
-  },
-
-  /**
-   * Subscribe to password required events
-   */
-  onPasswordRequired(callback: () => void): () => void {
-    if (!window.api.sync) {
-      return () => {};
-    }
-    return window.api.sync.onPasswordRequired(callback);
   },
 
   /**

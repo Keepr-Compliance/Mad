@@ -66,8 +66,8 @@ export function SuspendDialog({ userId, userName, isSuspended }: SuspendDialogPr
         onClick={openDialog}
         className={
           isSuspended
-            ? 'inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-success-600 hover:bg-success-700 transition-colors'
-            : 'inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-danger-600 hover:bg-danger-700 transition-colors'
+            ? 'inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-success-600 hover:bg-success-700 transition-colors max-md:min-h-[44px]'
+            : 'inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-danger-600 hover:bg-danger-700 transition-colors max-md:min-h-[44px]'
         }
       >
         {action} User

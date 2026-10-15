@@ -16,6 +16,7 @@ import logger from '../../../utils/logger';
 export interface UsePermissionsFlowOptions {
   isWindows: boolean;
   onSetShowMoveAppPrompt: (show: boolean) => void;
+  /** Unused since BACKLOG-3673 (granting FDA never leaves setup). Kept so callers compile. */
   onSetCurrentStep: (step: AppStep) => void;
   stateMachineDispatch?: React.Dispatch<AppAction>;
 }
@@ -36,7 +37,6 @@ export interface UsePermissionsFlowReturn {
 export function usePermissionsFlow({
   isWindows,
   onSetShowMoveAppPrompt,
-  onSetCurrentStep,
   stateMachineDispatch,
 }: UsePermissionsFlowOptions): UsePermissionsFlowReturn {
   // Default to true to avoid flicker for returning users
@@ -93,9 +93,9 @@ export function usePermissionsFlow({
       stateMachineDispatch({ type: "FDA_GRANTED" });
       stateMachineDispatch({ type: "ONBOARDING_STEP_COMPLETE", step: "permissions" });
     }
-    // Legacy fallback (no-op if state machine is enabled)
-    onSetCurrentStep("dashboard");
-  }, [onSetCurrentStep, stateMachineDispatch]);
+    // BACKLOG-3673: no "go to dashboard" here. Granting Full Disk Access is
+    // one step; setup is left only when the setup queue completes.
+  }, [stateMachineDispatch]);
 
   return useMemo(
     () => ({

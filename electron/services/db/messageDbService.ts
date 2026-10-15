@@ -146,106 +146,48 @@ export function searchLocalEmailCache(userId: string, query: string, limit = 500
   }>;
 }
 
-/** A roster entry in the contact-first message picker. */
-export interface MessageContactRow {
-  contact: string;
-  messageCount: number;
-  lastMessageAt: string;
-  /**
-   * BACKLOG-2816: the user-visible names of the GROUP conversations this contact
-   * appears in ("Kingfisher Lane Closing"), so the picker's search box can match
-   * on a name the founder typed in Messages and not only on people and numbers.
-   * Empty for a contact with no named group — which is every 1:1 contact.
-   */
-  threadNames: string[];
-}
+// BACKLOG-3837: the roster read (MessageContactRow, both statements) moved to
+// messageRosterDb.ts so the dedicated worker runs the SAME text.
+export type { MessageContactRow } from "./messageRosterDb";
+import { runMessageRosterOn, type MessageContactRow } from "./messageRosterDb";
 
 /**
- * The roster's contact expression and its scope filter, written ONCE.
- *
- * BACKLOG-2816 added a second query over the same population (the group names
- * per contact). Both must see exactly the same rows: if the name query were
- * scoped even slightly differently, a group name would surface a contact the
- * roster does not list, and the picker would filter to an empty list.
- */
-const ROSTER_CONTACT_EXPR = `
-      COALESCE(
-        CASE
-          WHEN m.direction = 'inbound' THEN json_extract(m.participants, '$.from')
-          ELSE json_extract(m.participants, '$.to[0]')
-        END,
-        m.thread_id
-      )`;
-const ROSTER_SCOPE = `
-      m.user_id = ?
-      AND m.transaction_id IS NULL
-      AND m.channel IN ('sms', 'imessage')
-      AND m.participants IS NOT NULL
-      AND ${reactionExclusion("m")}`;
-const ROSTER_CONTACT_GUARD = `contact IS NOT NULL AND contact != 'me' AND contact != 'unknown' AND contact != ''`;
-
-/**
- * Get distinct contacts (phone numbers) with unlinked message counts
- * Used for contact-first message browsing
+ * Get distinct contacts (phone numbers) with unlinked message counts, ON THE CALLING
+ * THREAD. BACKLOG-3837: production reads the roster only on a dedicated worker
+ * (messageRosterCache.ts); this synchronous form remains as the test oracle.
  */
 export function getMessageContacts(userId: string): MessageContactRow[] {
-  const db = ensureDb();
-  const sql = `
-    SELECT
-      ${ROSTER_CONTACT_EXPR} as contact,
-      COUNT(*) as messageCount,
-      MAX(m.sent_at) as lastMessageAt
-    FROM messages m
-    WHERE ${ROSTER_SCOPE}
-    GROUP BY contact
-    HAVING ${ROSTER_CONTACT_GUARD}
-    ORDER BY lastMessageAt DESC
-  `;
-  const rows = db.prepare(sql).all(userId) as Array<{
-    contact: string;
-    messageCount: number;
-    lastMessageAt: string;
-  }>;
-
-  // BACKLOG-2816: group names, as a SECOND query rather than a join + aggregate
-  // on the one above. A `group_concat` would have to pick a separator, and a
-  // group name is user-typed text that can contain any separator worth picking;
-  // splitting it back apart would silently cut names in half. A second query
-  // also keeps `COUNT(*) as messageCount` provably untouched.
-  //
-  // The join key is `(user_id, thread_id)` — the table's PK. macOS thread ids
-  // are unique only per machine, so two users of one database can hold the same
-  // thread_id, and joining on thread_id alone would put one user's group name
-  // on another user's roster entry.
-  const namesSql = `
-    SELECT contact, threadName
-    FROM (
-      SELECT
-        ${ROSTER_CONTACT_EXPR} as contact,
-        tn.display_name as threadName
-      FROM messages m
-      JOIN message_thread_names tn
-        ON tn.thread_id = m.thread_id AND tn.user_id = m.user_id
-      WHERE ${ROSTER_SCOPE}
-    )
-    WHERE ${ROSTER_CONTACT_GUARD}
-      AND threadName IS NOT NULL AND TRIM(threadName) != ''
-    GROUP BY contact, threadName
-  `;
-  const nameRows = db.prepare(namesSql).all(userId) as Array<{
-    contact: string;
-    threadName: string;
-  }>;
-
-  const namesByContact = new Map<string, string[]>();
-  for (const { contact, threadName } of nameRows) {
-    const list = namesByContact.get(contact);
-    if (list) list.push(threadName);
-    else namesByContact.set(contact, [threadName]);
-  }
-
-  return rows.map((r) => ({ ...r, threadNames: namesByContact.get(r.contact) ?? [] }));
+  return runMessageRosterOn(ensureDb(), userId);
 }
+
+/**
+ * BACKLOG-3785: the columns the Attach Messages picker gets back, instead of
+ * `m.*`. Picking 150 chats (30,703 messages) returned 33 MB to the renderer;
+ * structured clone writes every key of every row, so columns nothing in the
+ * renderer reads still cost bytes and decode time. Dropped here, none of them
+ * read from a message anywhere in src/: metadata, llm_analysis, classification_*,
+ * classified_at, false_positive_reason, stage_hint*, transaction_link_*,
+ * is_transaction_related, message_id_header, content_hash, duplicate_of,
+ * channel_account_id, sync_session_id, is_false_positive. Ids are untouched — Attach and Undo
+ * link exactly the ids shown.
+ */
+const PICKER_MESSAGE_COLUMNS = `
+      m.id, m.user_id, m.external_id, m.channel, m.direction, m.subject,
+      m.body_html, m.body_text, m.participants, m.participants_flat,
+      m.thread_id, m.sent_at, m.received_at, m.has_attachments,
+      m.transaction_id, m.message_type,
+      m.associated_message_type, m.associated_message_guid, m.created_at`;
+
+/** The fields `PICKER_MESSAGE_COLUMNS` returns (plus the joined thread name) — and no others. */
+export type PickerMessage = Pick<
+  Message,
+  | "id" | "user_id" | "external_id" | "channel" | "direction" | "subject"
+  | "body_html" | "body_text" | "participants" | "participants_flat"
+  | "thread_id" | "sent_at" | "received_at" | "has_attachments"
+  | "transaction_id" | "message_type"
+  | "associated_message_type" | "associated_message_guid" | "created_at"
+  | "thread_display_name"
+>;
 
 /**
  * Get unlinked messages for a specific contact (phone number)
@@ -255,7 +197,7 @@ export function getMessageContacts(userId: string): MessageContactRow[] {
  * ALL messages from those threads. This ensures group chats are fully captured
  * even when individual messages have different handles.
  */
-export function getMessagesByContact(userId: string, contact: string): Message[] {
+export function getMessagesByContact(userId: string, contact: string): PickerMessage[] {
   const db = ensureDb();
 
   // Step 1: Find all thread_ids where the contact appears in any message
@@ -282,7 +224,7 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
   // message_thread_names join on (user_id, thread_id).
   if (threadIds.length === 0) {
     const fallbackSql = `
-      SELECT m.*, tn.display_name AS thread_display_name FROM messages m
+      SELECT ${PICKER_MESSAGE_COLUMNS}, tn.display_name AS thread_display_name FROM messages m
       LEFT JOIN message_thread_names tn ON tn.thread_id = m.thread_id AND tn.user_id = m.user_id
       WHERE m.user_id = ?
         AND m.transaction_id IS NULL
@@ -293,13 +235,13 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
         )
       ORDER BY m.sent_at DESC
     `;
-    const rows = db.prepare(fallbackSql).all(userId, contact, contact) as Message[];
+    const rows = db.prepare(fallbackSql).all(userId, contact, contact) as PickerMessage[];
     return rows.filter((m) => !isReactionRow(m));
   }
 
   const placeholders = threadIds.map(() => '?').join(', ');
   const messagesSql = `
-    SELECT m.*, tn.display_name AS thread_display_name FROM messages m
+    SELECT ${PICKER_MESSAGE_COLUMNS}, tn.display_name AS thread_display_name FROM messages m
     LEFT JOIN message_thread_names tn ON tn.thread_id = m.thread_id AND tn.user_id = m.user_id
     WHERE m.user_id = ?
       AND m.transaction_id IS NULL
@@ -307,7 +249,7 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
       AND m.thread_id IN (${placeholders})
     ORDER BY m.sent_at DESC
   `;
-  const rows = db.prepare(messagesSql).all(userId, ...threadIds) as Message[];
+  const rows = db.prepare(messagesSql).all(userId, ...threadIds) as PickerMessage[];
   return rows.filter((m) => !isReactionRow(m));
 }
 

@@ -52,6 +52,7 @@ const mockUserData: UserData = {
   hasEmailConnected: true,
   needsDriverSetup: false,
   fda: "granted",
+  setup: "finished",
 };
 
 const mockReadyState: ReadyState = {

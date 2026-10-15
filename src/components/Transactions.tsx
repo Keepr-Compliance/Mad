@@ -129,7 +129,6 @@ function Transactions({
     openAuditCreate,
     closeAuditCreate,
     quickExportTransaction,
-    openQuickExport,
     closeQuickExport,
     quickExportSuccess,
     setQuickExportSuccess,
@@ -168,6 +167,8 @@ function Transactions({
     isBulkExporting,
     isBulkUpdating,
     bulkActionSuccess,
+    bulkExportNotice,
+    dismissBulkExportNotice,
     handleBulkDelete,
     handleBulkExport,
     handleBulkStatusChange,
@@ -364,6 +365,8 @@ function Transactions({
         error={error}
         quickExportSuccess={quickExportSuccess}
         bulkActionSuccess={bulkActionSuccess}
+    bulkExportNotice={bulkExportNotice}
+    onDismissBulkExportNotice={dismissBulkExportNotice}
       />
 
       {/* Transactions List */}

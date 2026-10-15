@@ -6,6 +6,7 @@ import React, { useState } from "react";
 import type { Transaction } from "../../../../electron/types/models";
 import { FeatureGate } from "../../common/FeatureGate";
 import { TransactionLimitModal } from "../../common/TransactionLimitModal";
+import { BulkExportNotice } from "../../common/BulkExportNotice";
 import { useLicense } from "../../../contexts/LicenseContext";
 
 // ============================================
@@ -45,6 +46,9 @@ export interface TransactionsToolbarProps {
   error: string | null;
   quickExportSuccess: string | null;
   bulkActionSuccess: string | null;
+  /** BACKLOG-3828: show the exported-files-aren't-encrypted notice */
+  bulkExportNotice?: boolean;
+  onDismissBulkExportNotice?: () => void;
 }
 
 // ============================================
@@ -68,6 +72,8 @@ export function TransactionsToolbar({
   error,
   quickExportSuccess,
   bulkActionSuccess,
+  bulkExportNotice,
+  onDismissBulkExportNotice,
 }: TransactionsToolbarProps): React.ReactElement {
   const { canCreateTransaction, transactionCount: licenseTransactionCount, transactionLimit } = useLicense();
   const [showLimitModal, setShowLimitModal] = useState(false);
@@ -378,6 +384,10 @@ export function TransactionsToolbar({
           </div>
         </div>
       )}
+
+        {bulkExportNotice && onDismissBulkExportNotice && (
+          <BulkExportNotice onDismiss={onDismissBulkExportNotice} />
+        )}
     {showLimitModal && (
         <TransactionLimitModal
           transactionCount={licenseTransactionCount}

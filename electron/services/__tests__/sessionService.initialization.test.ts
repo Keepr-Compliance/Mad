@@ -35,6 +35,7 @@ jest.mock("electron", () => ({
 // Mock fs promises module
 const mockFs = {
   writeFile: jest.fn(),
+    rename: jest.fn(), // BACKLOG-3833: session.json is written tmp + rename
   readFile: jest.fn(),
   unlink: jest.fn(),
 };
@@ -122,7 +123,7 @@ describe("SessionService - Initialization Bug Fix", () => {
 
       // And the file should be written to the correct path
       expect(mockFs.writeFile).toHaveBeenCalledWith(
-        path.join("/mock/user/data", "session.json"),
+        path.join("/mock/user/data", "session.json.tmp"),
         expect.any(String),
         "utf8",
       );
@@ -272,7 +273,7 @@ describe("SessionService - Initialization Bug Fix", () => {
       await sessionService.saveSession(sessionData);
 
       expect(mockFs.writeFile).toHaveBeenCalledWith(
-        path.join("/different/user/path", "session.json"),
+        path.join("/different/user/path", "session.json.tmp"),
         expect.any(String),
         "utf8",
       );
@@ -309,10 +310,11 @@ describe("SessionService - Initialization Bug Fix", () => {
       // All operations should use the same path
       const expectedPath = path.join("/mock/user/data", "session.json");
       expect(mockFs.writeFile).toHaveBeenCalledWith(
-        expectedPath,
+        `${expectedPath}.tmp`,
         expect.any(String),
         "utf8",
       );
+      expect(mockFs.rename).toHaveBeenCalledWith(`${expectedPath}.tmp`, expectedPath);
       expect(mockFs.readFile).toHaveBeenCalledWith(expectedPath, "utf8");
       expect(mockFs.unlink).toHaveBeenCalledWith(expectedPath);
     });

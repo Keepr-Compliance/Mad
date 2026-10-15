@@ -13,6 +13,8 @@ import axios from "axios";
 import type { StoreableEmail } from "../emailSyncService";
 import { BULK_MAIL_HEADER_JSON_KEYS } from "../../utils/bulkMailHeaders";
 import type { OAuthToken } from "../../types/models";
+import * as Sentry from "@sentry/electron/main";
+import logService from "../logService";
 
 // Mock dependencies
 jest.mock("../databaseService");
@@ -69,12 +71,30 @@ describe("OutlookFetchService", () => {
       // Session-only OAuth: tokens used directly, no decryption needed
     });
 
-    it("should throw error when no token found", async () => {
+    it("returns false without error log or Sentry when no mailbox is connected (BACKLOG-3879)", async () => {
       mockDatabaseService.getOAuthToken.mockResolvedValue(null);
+      const errSpy = jest.spyOn(logService, "error").mockResolvedValue(undefined);
 
-      await expect(outlookFetchService.initialize(mockUserId)).rejects.toThrow(
-        "No Outlook OAuth token found",
-      );
+      const result = await outlookFetchService.initialize(mockUserId);
+
+      expect(result).toBe(false);
+      expect(errSpy).not.toHaveBeenCalled();
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+
+    it("still initializes when the mailbox token is expired so reconnect can run (BACKLOG-3879)", async () => {
+      mockDatabaseService.getOAuthToken.mockResolvedValue({
+        ...mockTokenRecord,
+        token_expires_at: new Date(Date.now() - 3600000).toISOString(),
+      } as OAuthToken);
+      const errSpy = jest.spyOn(logService, "error").mockResolvedValue(undefined);
+
+      const result = await outlookFetchService.initialize(mockUserId);
+
+      expect(result).toBe(true);
+      expect(errSpy).not.toHaveBeenCalled();
+      errSpy.mockRestore();
     });
 
     it("should handle database errors", async () => {
@@ -85,6 +105,17 @@ describe("OutlookFetchService", () => {
       await expect(outlookFetchService.initialize(mockUserId)).rejects.toThrow(
         "Database error",
       );
+    });
+
+    it("logs an error and Sentry once and rethrows when the lookup fails (BACKLOG-3879)", async () => {
+      mockDatabaseService.getOAuthToken.mockRejectedValue(new Error("Database error"));
+      const errSpy = jest.spyOn(logService, "error").mockResolvedValue(undefined);
+
+      await expect(outlookFetchService.initialize(mockUserId)).rejects.toThrow("Database error");
+
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+      errSpy.mockRestore();
     });
   });
 

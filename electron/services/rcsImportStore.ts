@@ -304,8 +304,12 @@ export interface RcsImportDeps {
     rows: RcsInsertRow[],
     batchSize: number,
   ) => { stored: number; skipped: number };
-  /** external_id -> id for this user. */
-  getMessageIdMap: (userId: string) => Map<string, string>;
+  /**
+   * BACKLOG-3924: external_id -> id for THESE external ids of the user (one
+   * chunk; absent = not stored). Never the whole table — the cache commit
+   * calls it once per chat on users with hundreds of thousands of rows.
+   */
+  getMessageIdsByExternalIds: (userId: string, externalIds: readonly string[]) => Map<string, string>;
   insertReactionRows: (rows: RcsReactionRow[]) => { stored: number; skipped: number };
   /**
    * BACKLOG-3630: for rows about to be inserted, the id of an EXISTING gmweb2
@@ -449,10 +453,34 @@ export function mapChatToReactionRows(
   return rows;
 }
 
+/**
+ * BACKLOG-3924: ids per keyed lookup — well under SQLite's bound-variable
+ * limit (the same chunk as BACKLOG-3785's iPhone lookups).
+ */
+export const RCS_LOOKUP_CHUNK = 500;
+
+/**
+ * BACKLOG-3924: run a keyed lookup over `keys` in chunks of
+ * {@link RCS_LOOKUP_CHUNK}, synchronously (callers are inside a database
+ * transaction), and merge the results. Duplicate keys are looked up once.
+ */
+export function lookupMessageIds(
+  lookup: (userId: string, externalIds: readonly string[]) => Map<string, string>,
+  userId: string,
+  keys: readonly string[],
+): Map<string, string> {
+  const unique = [...new Set(keys)];
+  const out = new Map<string, string>();
+  for (let start = 0; start < unique.length; start += RCS_LOOKUP_CHUNK) {
+    for (const [k, v] of lookup(userId, unique.slice(start, start + RCS_LOOKUP_CHUNK))) out.set(k, v);
+  }
+  return out;
+}
+
 /** The writers a cache chat uses (all synchronous). */
 export type RcsCacheChatDeps = Pick<
   RcsImportDeps,
-  "batchInsertMessages" | "getMessageIdMap" | "insertReactionRows" | "findContentDuplicates" | "recordPeople"
+  "batchInsertMessages" | "getMessageIdsByExternalIds" | "insertReactionRows" | "findContentDuplicates" | "recordPeople"
 > & {
   /** Live (founder): a group's name in message_thread_names (null → none). */
   recordThreadName?: (userId: string, threadId: string, name: string | null) => void;
@@ -507,7 +535,7 @@ export function storeCacheChatSync(
 ): RcsImportResult {
   if (people.numbers.length === 0) throw new Error(RCS_NO_NUMBER_MESSAGE);
   const rows = mapChatToRows(chat, userId, people, RCS_CACHE_SOURCE);
-  const before = deps.getMessageIdMap(userId);
+  const before = lookupMessageIds(deps.getMessageIdsByExternalIds, userId, rows.map((r) => r.externalId));
   const fresh = rows.filter((r) => !before.has(r.externalId));
   const sameContent = deps.findContentDuplicates && fresh.length > 0
     ? deps.findContentDuplicates(userId, fresh)

@@ -1,0 +1,509 @@
+/**
+ * BACKLOG-3798 layout harness — markup dumps (NOT a CI test).
+ *
+ * Renders the real components in jsdom and writes each container's HTML to
+ * $DUMP_DIR/<name>.html. run.sh then compiles the real Tailwind CSS for that
+ * markup and measures it in Chromium at several widths (measure.cjs).
+ *
+ * Run through run.sh only. Uses its own jest config (jest.harness.config.js),
+ * so the portal's CI jest run never picks this file up.
+ *
+ * Every id, name and address is invented. The member shape follows the select
+ * in app/dashboard/users/page.tsx; submission rows come from
+ * __tests__/helpers/submissionRows.ts.
+ */
+
+import { render, fireEvent, act } from '@testing-library/react';
+import { writeFileSync } from 'fs';
+import { join } from 'path';
+import React from 'react';
+import {
+  FIXTURE_BROKERAGE_ORG_ID,
+  createPostgrestEmulator,
+  type Row,
+} from '../../__tests__/helpers/postgrestEmulator';
+import { submissionRow } from '../../__tests__/helpers/submissionRows';
+import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../../__tests__/fixtures/orgFeatures';
+
+const mockEmulator = createPostgrestEmulator();
+let mockPath = '/dashboard/submissions/sub-1';
+
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh: jest.fn(), push: jest.fn() }),
+  usePathname: () => mockPath,
+  useSearchParams: () => new URLSearchParams(),
+  redirect: (to: string) => {
+    throw new Error(`redirect:${to}`);
+  },
+}));
+jest.mock('next/link', () => ({
+  __esModule: true,
+  default: ({ children, href, ...rest }: { children: React.ReactNode; href: string }) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
+  ),
+}));
+jest.mock('next/image', () => ({
+  __esModule: true,
+  // eslint-disable-next-line @next/next/no-img-element
+  default: (p: { src: string; alt: string }) => <img src={p.src} alt={p.alt} />,
+}));
+jest.mock('@/lib/supabase/client', () => ({
+  createClient: () => ({
+    auth: {
+      getUser: async () => ({ data: { user: null } }),
+      getSession: async () => ({ data: { session: null } }),
+    },
+    storage: { from: () => ({ createSignedUrl: async () => ({ data: { signedUrl: 'about:blank' }, error: null }) }) },
+  }),
+}));
+jest.mock('@/lib/support-queries', () => ({
+  createTicket: jest.fn(),
+  getCategories: jest.fn(async () => []),
+  buildCategoryTree: () => [],
+  uploadAttachment: jest.fn(),
+}));
+jest.mock('html2canvas', () => jest.fn());
+jest.mock('heic2any', () => jest.fn());
+jest.mock('@/components/ImpersonationBanner', () => ({ ImpersonationBanner: () => null }));
+jest.mock('@/components/submission/AttachmentViewerModal', () => ({ AttachmentViewerModal: () => null }));
+jest.mock('@/lib/actions/submissionChecklists', () => ({
+  setReviewerCheck: jest.fn(),
+  addChecklistAtReview: jest.fn(),
+  removeChecklistAtReview: jest.fn(),
+  restoreChecklistAtReview: jest.fn(),
+}));
+jest.mock('@/lib/impersonation-guards', () => ({
+  getDataClient: jest.fn(async () => ({
+    client: { from: (t: string) => mockEmulator.from(t) },
+    impersonation: null,
+    organizationId: null,
+  })),
+  getTargetOrganizationId: (id: string | null) => id || undefined,
+}));
+jest.mock('@/lib/feature-gate', () => {
+  const actual = jest.requireActual('@/lib/feature-gate');
+  return {
+    ...actual,
+    getOrgFeatures: jest.fn(async (orgId: string) =>
+      withFeature({ ...ORG_WITHOUT_PLAN_FEATURES, org_id: orgId }, 'broker_portal_access', true)
+    ),
+  };
+});
+jest.mock('@/lib/auth/portalAccess', () => ({
+  requireFullPortalAccess: jest.fn(async () => ({ ok: true })),
+  getPortalAccess: jest.fn(async () => ({
+    user: { email: 'alex@example.test', user_metadata: {} },
+    access: { kind: 'full', role: 'broker' },
+  })),
+}));
+jest.mock('@/components/submission/SubmissionListClient', () => ({
+  SubmissionListClient: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+import { DashboardShell } from '@/components/layout/DashboardShell';
+import { ReviewActions } from '@/components/submission/ReviewActions';
+import { MessageList, type Message } from '@/components/submission/MessageList';
+import { AttachmentList } from '@/components/submission/AttachmentList';
+import { ChecklistReview } from '@/components/submission/ChecklistReview';
+import type { ChecklistSectionView } from '@/lib/submissions/checklistModel';
+import { PageHeader } from '@keepr/design-system';
+import UserListClient from '@/components/users/UserListClient';
+import UserDetailsCard, { type MemberDetailsData } from '@/components/users/UserDetailsCard';
+import SubmissionsPage from '@/app/dashboard/submissions/page';
+import DashboardPage from '@/app/dashboard/page';
+
+const DIR = process.env.DUMP_DIR as string;
+const dump = (name: string, html: string) => writeFileSync(join(DIR, `${name}.html`), html);
+
+const LONG_EMAIL = 'agent.a.longer-address-for-width@example-brokerage.com';
+
+function setMatchMedia(matches: boolean | null) {
+  if (matches === null) {
+    // jsdom default: no matchMedia at all
+    delete (window as unknown as { matchMedia?: unknown }).matchMedia;
+    return;
+  }
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
+afterEach(() => setMatchMedia(null));
+
+function shell(children: React.ReactNode) {
+  return (
+    <DashboardShell
+      role="broker"
+      isImpersonating={false}
+      displayName="Broker Name"
+      displayEmail="broker@example.com"
+      displayRole="broker"
+    >
+      {children}
+    </DashboardShell>
+  );
+}
+
+const reviewPage = (
+  <div className="max-w-7xl mx-auto space-y-6 pb-24">
+    <h1>Submission</h1>
+    <ReviewActions submission={{ id: 'sub-1', status: 'under_review', organization_id: 'org-1' }} showChecklistHint />
+  </div>
+);
+
+// BACKLOG-3896: the shell dumps are WHOLE-BODY dumps. A Radix drawer portals to
+// document.body, outside the render container; a container dump would silently
+// drop it and leave the phone drawer unmeasured. Run on both sides of a
+// comparison (base and branch) so the harness change cancels out.
+const bodyDump = () => document.body.innerHTML;
+
+it('shell-expanded / shell-collapsed / shell-drawer / support-dialog', async () => {
+  const { getByRole } = render(shell(reviewPage));
+  dump('shell-expanded', bodyDump());
+
+  fireEvent.click(getByRole('button', { name: 'Collapse sidebar' }));
+  dump('shell-collapsed', bodyDump());
+  fireEvent.click(getByRole('button', { name: 'Expand sidebar' }));
+
+  fireEvent.click(getByRole('button', { name: 'Open menu' }));
+  await act(async () => {});
+  // The drawer must be in the dump, or shell-drawer measures nothing.
+  if (!document.getElementById('mobile-nav')) throw new Error('shell-drawer: #mobile-nav not in document.body');
+  dump('shell-drawer', bodyDump());
+  fireEvent.click(getByRole('button', { name: 'Close menu' }));
+  await act(async () => {});
+  if (document.getElementById('mobile-nav')) throw new Error('shell-drawer: #mobile-nav still open after Close');
+
+  await act(async () => {
+    fireEvent.click(getByRole('button', { name: 'Contact Support' }));
+  });
+  dump('support-dialog', bodyDump());
+});
+
+const MEMBERS = [1, 2, 3].map((i) => ({
+  id: `m${i}`,
+  organization_id: 'org-1',
+  user_id: `u${i}`,
+  role: 'agent',
+  license_status: 'active',
+  invited_email: null,
+  invitation_token: null,
+  invitation_expires_at: null,
+  invited_by: null,
+  invited_at: null,
+  joined_at: '2024-01-01T00:00:00Z',
+  last_invited_at: null,
+  created_at: '2024-01-01T00:00:00Z',
+  updated_at: '2024-01-01T00:00:00Z',
+  user: { id: `u${i}`, email: LONG_EMAIL, first_name: 'Agent', last_name: `Number${i}`, display_name: null, avatar_url: null },
+}));
+
+it('users-wide / users-narrow', () => {
+  for (const [name, narrow] of [
+    ['users-wide', false],
+    ['users-narrow', true],
+  ] as const) {
+    setMatchMedia(narrow);
+    const { container, unmount } = render(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      <UserListClient initialMembers={MEMBERS as any} currentUserId="u0" currentUserRole="admin" organizationId="org-1" />
+    );
+    dump(name, container.innerHTML);
+    unmount();
+  }
+});
+
+it('user-details', () => {
+  const member: MemberDetailsData = {
+    id: 'm1',
+    user_id: 'u1',
+    role: 'agent',
+    license_status: 'active',
+    invited_email: null,
+    invited_at: null,
+    joined_at: '2024-01-01T00:00:00Z',
+    provisioned_by: null,
+    provisioned_at: null,
+    scim_synced_at: null,
+    provisioning_metadata: null,
+    idp_groups: null,
+    invited_by: null,
+    last_invited_at: null,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
+    user: {
+      id: 'u1',
+      email: LONG_EMAIL,
+      first_name: 'Agentwithaverylongfirstname',
+      last_name: 'Andaverylonglastname',
+      display_name: null,
+      avatar_url: null,
+      last_login_at: null,
+      created_at: '2024-01-01T00:00:00Z',
+      last_sso_login_at: null,
+      last_sso_provider: null,
+      is_managed: false,
+    },
+  };
+  const { container } = render(<UserDetailsCard member={member} currentUserId="u0" currentUserRole="admin" />);
+  dump('user-details', container.innerHTML);
+});
+
+const MESSAGES: Message[] = [
+  {
+    id: 'msg-1',
+    channel: 'email',
+    direction: 'inbound',
+    subject: 'Signed purchase contract and addenda for the invented property',
+    body_text: 'Attached are the signed documents.',
+    sent_at: '2026-10-02T22:15:00+00:00',
+    has_attachments: false,
+    attachment_count: 0,
+    thread_id: 't1',
+    message_type: 'email',
+    participants: { from: 'Avery Example <avery@fixture.example.test>', to: ['agent@fixture.example.test'] },
+  },
+  {
+    id: 'msg-2',
+    channel: 'sms',
+    direction: 'outbound',
+    subject: null,
+    body_text: 'On my way to the inspection now.',
+    sent_at: '2026-10-03T16:05:00+00:00',
+    has_attachments: false,
+    attachment_count: 0,
+    thread_id: 't2',
+    message_type: 'text',
+    participants: { from: '+12065550142', chat_members: ['+12065550143'] },
+  },
+];
+
+const ATTACHMENTS = [
+  { id: 'a1', filename: 'Purchase-Agreement-Signed.pdf', mime_type: 'application/pdf', file_size_bytes: 120000, storage_path: 'x/a1', document_type: null },
+  { id: 'a2', filename: 'inspection-photo.jpg', mime_type: 'image/jpeg', file_size_bytes: 300000, storage_path: 'x/a2', document_type: null },
+];
+
+it('messages / attachments / checklist', () => {
+  let r = render(<MessageList messages={MESSAGES} />);
+  dump('messages', r.container.innerHTML);
+  r.unmount();
+
+  r = render(<AttachmentList attachments={ATTACHMENTS} />);
+  dump('attachments', r.container.innerHTML);
+  r.unmount();
+
+  const sections: ChecklistSectionView[] = [
+    {
+      id: 'hdr-contract',
+      templateId: 'tpl-contract',
+      name: 'Contract documents for a purchase transaction',
+      addedAtReviewBy: null,
+      addedAtReviewAt: null,
+      items: [
+        {
+          id: 'i-buyer',
+          title: 'Buyer representation agreement',
+          description: null,
+          isRequired: true,
+          isChecked: true,
+          note: null,
+          reviewerChecked: false,
+          reviewerCheckedBy: null,
+          reviewerCheckedAt: null,
+          clearedReviewerId: null,
+          clearedAt: null,
+          links: [],
+        },
+      ],
+    } as ChecklistSectionView,
+  ];
+  r = render(
+    <ChecklistReview
+      submissionId="sub-1"
+      status="under_review"
+      sections={sections}
+      names={null}
+      canTick
+      canDecide
+      templates={[]}
+      messages={[]}
+      attachments={[]}
+    />
+  );
+  dump('checklist', r.container.innerHTML);
+  r.unmount();
+});
+
+it('submissions-list', async () => {
+  const rows: Row[] = [
+    { ...submissionRow({ id: 's1', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'submitted', parentSubmissionId: null, createdAt: '2026-09-02T00:00:00Z', address: '1234 Invented Boulevard Northwest, Fixture City, CA 90000, USA' }), version: 1 },
+    { ...submissionRow({ id: 's2', organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status: 'approved', parentSubmissionId: null, createdAt: '2026-09-01T00:00:00Z', address: '34 Fictional Road, Unit 2, Fixture City, CA 90000, USA' }), version: 1 },
+  ];
+  mockEmulator.reset();
+  mockEmulator.set({ rows: { transaction_submissions: rows } });
+  const element = await SubmissionsPage({ searchParams: Promise.resolve({}) });
+  const { container } = render(element);
+  dump('submissions-list', container.innerHTML);
+});
+
+// BACKLOG-3896 fix-up: page title in the phone top bar. Each dump is the real shell
+// at a real route path, with the real PageHeader and the props that page passes.
+// The phone-only props are spread from an untyped object so this file type-checks
+// and runs unchanged on the base side (where PageHeader ignores them and the shell
+// passes no title).
+const PH = { phoneHideTitle: true, phoneHideSubtitle: true } as object;
+const PH_TITLE_ONLY = { phoneHideTitle: true } as object;
+
+it('title-* (page title in the top bar)', () => {
+  const cases: Array<[string, string, React.ReactNode]> = [
+    ['title-users', '/dashboard/users', <PageHeader key="h" title="Users Management" subtitle="Manage your organization's team members" {...PH} />],
+    ['title-support', '/dashboard/support', <PageHeader key="h" title="Support" subtitle="View and track your support requests" actions={<button type="button">New Ticket</button>} {...PH} />],
+    ['title-mytx', '/dashboard/my-transactions', <PageHeader key="h" title="My Transactions" subtitle="3 submissions" {...PH_TITLE_ONLY} />],
+    ['title-dashboard', '/dashboard', <PageHeader key="h" title="Welcome, Alex" subtitle="Overview of transaction submissions" {...PH} />],
+    ['title-detail', '/dashboard/users/u1', <h1 key="h" className="text-xl font-bold text-gray-900">Agent Number1</h1>],
+    ['title-submissions', '/dashboard/submissions', <PageHeader key="h" title="Submissions" subtitle="2 submissions" className="max-md:mb-3" {...PH} />],
+    ['title-submission-detail', '/dashboard/submissions/s1', <h1 key="h" className="text-2xl font-bold text-gray-900">1234 Invented Boulevard Northwest</h1>],
+  ];
+  for (const [name, p, header] of cases) {
+    mockPath = p;
+    const { unmount } = render(
+      shell(
+        <div className="max-w-7xl mx-auto">
+          {header}
+          <p>Body content</p>
+          <button type="button">Body action</button>
+        </div>
+      )
+    );
+    dump(name, document.body.innerHTML);
+    unmount();
+  }
+  mockPath = '/dashboard/submissions/sub-1';
+});
+
+// BACKLOG-3904 fix-up: the dashboard's four stat cards, from the REAL page. Runs
+// unchanged on the base (cards were plain boxes) and on the branch (links).
+it('dashboard-cards', async () => {
+  const mk = (id: string, status: string, parent: string | null, createdAt: string): Row => ({
+    ...submissionRow({ id, organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status, parentSubmissionId: parent, createdAt }),
+    version: 1,
+  });
+  mockEmulator.reset();
+  mockEmulator.set({
+    rows: {
+      transaction_submissions: [
+        mk('s1', 'submitted', null, '2026-09-03T00:00:00Z'),
+        mk('s2', 'under_review', null, '2026-09-03T01:00:00Z'),
+        mk('s3', 'needs_changes', null, '2026-09-03T02:00:00Z'),
+        mk('s4', 'approved', null, '2026-09-03T03:00:00Z'),
+        mk('s5', 'approved', null, '2026-09-03T04:00:00Z'),
+        mk('s6', 'rejected', null, '2026-09-03T05:00:00Z'),
+      ],
+    },
+  });
+  const { container } = render(await DashboardPage());
+  dump('dashboard-cards', container.innerHTML);
+});
+
+// BACKLOG-3904 fix-up: the real dashboard and submissions pages inside the real
+// shell (whole-body dumps), to measure the gap from the phone top bar to the
+// first content (stat cards / search field) and the Clear filters row.
+async function gapDump(name: string, path: string, element: React.ReactNode) {
+  mockPath = path;
+  const { unmount } = render(shell(element));
+  dump(name, document.body.innerHTML);
+  unmount();
+}
+
+it('gap-* (top bar to first content)', async () => {
+  const mk = (id: string, status: string, createdAt: string): Row => ({
+    ...submissionRow({ id, organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status, parentSubmissionId: null, createdAt, address: '34 Fictional Road' }),
+    version: 1,
+  });
+  mockEmulator.reset();
+  mockEmulator.set({
+    rows: {
+      transaction_submissions: [
+        mk('s1', 'submitted', '2026-09-03T00:00:00Z'),
+        mk('s2', 'approved', '2026-09-03T01:00:00Z'),
+      ],
+    },
+  });
+  await gapDump('gap-dashboard', '/dashboard', await DashboardPage());
+  await gapDump('gap-submissions', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({}) }));
+  await gapDump('gap-submissions-filtered', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ status: 'approved' }) }));
+});
+
+// BACKLOG-3914: the desktop status board (view=board) inside the real shell: deals in
+// two open lanes, one long enough for nothing, and the closed lanes shown. Below md the
+// board is display:none and the page is the list.
+it('board-* (desktop status board)', async () => {
+  const mk = (id: string, status: string, createdAt: string): Row => ({
+    ...submissionRow({ id, organizationId: FIXTURE_BROKERAGE_ORG_ID, submittedBy: 'a1', status, parentSubmissionId: null, createdAt, address: '34 Fictional Road, Fixture City, CA 90000, USA' }),
+    version: 1,
+  });
+  mockEmulator.reset();
+  mockEmulator.set({
+    rows: {
+      transaction_submissions: [
+        mk('s1', 'submitted', '2026-09-03T00:00:00Z'),
+        mk('s2', 'needs_changes', '2026-09-03T01:00:00Z'),
+        mk('s3', 'approved', '2026-09-03T02:00:00Z'),
+      ],
+    },
+  });
+  await gapDump('board-desktop', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ view: 'board' }) }));
+  await gapDump('board-desktop-closed', '/dashboard/submissions', await SubmissionsPage({ searchParams: Promise.resolve({ view: 'board', closed: '1' }) }));
+});
+
+// BACKLOG-3904 fix-up: the Users page composition (page.tsx: PageHeader + UserListClient)
+// inside the real shell, unfiltered and with a search typed, to measure the
+// controls block and the gap under the top bar. Phone only (matchMedia true).
+async function usersGapDump(name: string, search: string | null) {
+  mockPath = '/dashboard/users';
+  setMatchMedia(true);
+  const { unmount } = render(
+    shell(
+      <div className="max-w-7xl mx-auto space-y-6 max-md:space-y-3 max-md:[&>:nth-child(2)]:!mt-0">
+        <PageHeader
+          phoneHideTitle
+          phoneHideSubtitle
+          title="Users Management"
+          subtitle="Manage your organization's team members"
+          className="max-md:mb-0"
+        />
+        <UserListClient
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          initialMembers={MEMBERS as any}
+          currentUserId="u0"
+          currentUserRole="admin"
+          organizationId="org-1"
+        />
+      </div>
+    )
+  );
+  if (search !== null) {
+    const input = (document.querySelector('#user-search-phone') ?? document.querySelector('#user-search')) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: search } });
+  }
+  dump(name, document.body.innerHTML);
+  unmount();
+}
+
+it('gap-users*', async () => {
+  await usersGapDump('gap-users', null);
+  await usersGapDump('gap-users-filtered', 'Number1');
+});

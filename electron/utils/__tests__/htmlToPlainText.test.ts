@@ -25,6 +25,7 @@
  * `emails.body_plain` for every Outlook email.
  */
 
+import { performance } from "perf_hooks";
 import { htmlToPlainText } from "../htmlToPlainText";
 
 /**
@@ -249,5 +250,48 @@ describe("htmlToPlainText — pathological input must not stall the main process
       expect(elapsed).toBeLessThan(2000);
     },
     60_000,
+  );
+});
+
+describe("htmlToPlainText — conversion time grows linearly with input size (BACKLOG-3774)", () => {
+  /**
+   * BACKLOG-3774 — steps 1, 2 and 5 each ran an unanchored regex whose failed
+   * attempts rescan to end of input, so some bodies cost O(n^2). Each shape
+   * below exercised one of them. The fix restricts each scan to the prefix in
+   * which a match can exist; `htmlToPlainText.equivalence.test.ts` proves the
+   * output is unchanged.
+   *
+   * THE GATE is absolute: 200,000 characters (400,000 for the comment shape)
+   * must convert in under 1 s. The fixed code does each in a few ms, so the
+   * green margin is >100x. Reverting any ONE of the three steps turns at least
+   * one shape red by >2x (measured pre-merge: 2-60 s), so this cannot pass on
+   * a partial regression. Timing uses `performance.now()` after one warm-up.
+   *
+   * Each input contains no `>`, so the correct output is the input with
+   * whitespace collapsed and trimmed; asserting it keeps the test honest if a
+   * future "optimization" simply skips work.
+   */
+  it.each([
+    ["<", "<".repeat(200_000)],
+    ["<script ", "<script ".repeat(25_000)],
+    ["<style ", "<style ".repeat(28_572)],
+    ["<!--", "<!--".repeat(100_000)],
+    ["<br ", "<br ".repeat(50_000)],
+    ["</p ", "</p ".repeat(50_000)],
+  ])(
+    "converts %j repeated (no closing '>') in under 1 second",
+    (_label, html) => {
+      expect(html.length).toBeGreaterThanOrEqual(200_000);
+      const expected = html.replace(/\s+/g, " ").trim();
+
+      htmlToPlainText(html.slice(0, 1_000)); // warm-up
+      const started = performance.now();
+      const out = htmlToPlainText(html);
+      const elapsed = performance.now() - started;
+
+      expect(out).toBe(expected);
+      expect(elapsed).toBeLessThan(1000);
+    },
+    120_000,
   );
 });

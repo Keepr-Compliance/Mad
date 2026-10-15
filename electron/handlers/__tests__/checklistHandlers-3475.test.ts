@@ -515,7 +515,7 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
    * this list does not classify fails the first assertion instead of quietly
    * escaping the sweep.
    */
-  it("exactly seven channels refuse when the plan cannot be read, and four answer", async () => {
+  it("exactly eight channels refuse when the plan cannot be read, and four answer", async () => {
     const checklistId = await seedChecklist();
     const itemId = itemIds()[0];
     const added = await invoke("checklists:add-link", {
@@ -541,6 +541,8 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
       ["checklists:set-item-note", { itemId, note: "signed 3 Mar" }],
       ["checklists:add-link", { itemId, kind: "email", targetIds: ["e-mine"] }],
       ["checklists:remove-link", { linkId }],
+      // BACKLOG-3764: writes the "Include it" answer, so gated like add-link.
+      ["checklists:include-link-outside-dates", { transactionId: TRANSACTION, linkId }],
       // BACKLOG-3617: asks the cloud about the organization, so gated.
       ["checklists:can-edit-templates", undefined],
       // The ungated ones last, and `remove` after `get`: it clears the rows
@@ -578,6 +580,7 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
       "checklists:set-item-note",
       "checklists:add-link",
       "checklists:remove-link",
+      "checklists:include-link-outside-dates",
       "checklists:can-edit-templates",
     ]);
     expect(answered).toEqual([

@@ -152,6 +152,8 @@ import {
 } from "../../utils/diskSpace";
 import { readLocalSnapshotCount } from "../../utils/localSnapshots";
 import { DISK_SPACE_THRESHOLDS } from "../diagnostics/diskSpaceDiagnostics";
+import { isAtRestWriteRefused, sealFileFrom } from "../atRest/attachmentWriter";
+import { readStoredAttachment } from "../atRest/attachmentReader";
 
 /**
  * macOS Messages Import Service
@@ -170,6 +172,42 @@ class MacOSMessagesImportService {
   private forceReimportInProgress = false;
   /** Max import duration before auto-reset (10 minutes) */
   private static readonly MAX_IMPORT_DURATION_MS = 10 * 60 * 1000;
+
+  /** BACKLOG-3892 S5: a texts force re-import is running (the iPhone backfill waits for it). */
+  isForceReimportInProgress(): boolean {
+    return this.forceReimportInProgress;
+  }
+
+  /**
+   * BACKLOG-3892 S5 (SR S3): other work a force re-import may not overlap — the iPhone
+   * "Get older texts" backfill. Set by syncHandlers (this module cannot import it).
+   * Returns what is running, or null. The backfill refuses during a force re-import; a
+   * force re-import refuses during a backfill (the same direction both ways).
+   */
+  private reprocessBlocker: () => string | null = () => null;
+
+  setReprocessBlocker(blocker: () => string | null): void {
+    this.reprocessBlocker = blocker;
+  }
+
+  /** The refusal a force re-import gets while a backfill runs (a plain failure, not a coalesce: nothing re-imported). */
+  private reprocessBlockedResult(blockedBy: string): MacOSImportResult {
+    logService.warn(
+      "Force reimport refused: other work is running",
+      MacOSMessagesImportService.SERVICE_NAME,
+      { blockedBy }
+    );
+    return {
+      success: false,
+      messagesImported: 0,
+      messagesSkipped: 0,
+      attachmentsImported: 0,
+      attachmentsUpdated: 0,
+      attachmentsSkipped: 0,
+      duration: 0,
+      error: "Older iPhone texts are being added. Try the re-import again when that finishes.",
+    };
+  }
   /**
    * BACKLOG-2776: when a cancel arrived with no import in flight, the epoch ms
    * at which it arrived. Null once consumed or expired.
@@ -246,6 +284,13 @@ class MacOSMessagesImportService {
       };
     }
 
+    // BACKLOG-3892 S5: a force re-import never overlaps an iPhone backfill (checked
+    // before it cancels anything).
+    if (forceReimport) {
+      const blockedBy = this.reprocessBlocker();
+      if (blockedBy) return this.reprocessBlockedResult(blockedBy);
+    }
+
     // Force reimport takes priority - cancel any running import
     if (forceReimport && this.isImporting) {
       logService.warn(
@@ -296,6 +341,12 @@ class MacOSMessagesImportService {
         error: "Import already in progress",
         alreadyInProgress: true,
       };
+    }
+
+    // BACKLOG-3892 S5: again after the wait above, a backfill may have started in it.
+    if (forceReimport) {
+      const blockedBy = this.reprocessBlocker();
+      if (blockedBy) return this.reprocessBlockedResult(blockedBy);
     }
 
     this.isImporting = true;
@@ -1213,7 +1264,8 @@ class MacOSMessagesImportService {
        * value: the useful number is what the disk holds NOW, at the failure, not
        * what it held before the run started.
        */
-      let errorMessage = rawErrorMessage;
+      // BACKLOG-3816: attachments fail closed without the file-data key; say so plainly.
+      let errorMessage = isAtRestWriteRefused(error) ? error.userMessage : rawErrorMessage;
       let refusedForDiskSpace: ImportRefusedForDiskSpace | undefined;
       if (isDiskFullError(error)) {
         const availableBytes = await getAvailableDiskBytes(
@@ -1847,7 +1899,6 @@ class MacOSMessagesImportService {
      * own user — so a read is bound with it in force mode and with nothing in
      * delta mode, where the query is the original unscoped one.
      */
-    const attachmentsTable = staging ? `"${staging.attachmentsTable}"` : "attachments";
     const target: ImportTarget = staging
       ? {
           mode: "force",
@@ -2208,7 +2259,13 @@ class MacOSMessagesImportService {
         // Copy file to app data directory with hash as filename (async)
         const ext = path.extname(filename!);
         const destPath = path.join(attachmentsDir, `${contentHash}${ext}`);
-        await fs.promises.copyFile(sourcePath, destPath);
+        // BACKLOG-3816: store the KEPRENC ciphertext, never a plaintext copy.
+        const sealed = await sealFileFrom(sourcePath, destPath);
+        if (sealed.sha256 !== contentHash) {
+          // The source changed between the hash and the copy: the name would lie.
+          await fs.promises.unlink(destPath).catch(() => undefined);
+          throw new Error("attachment source changed while it was being stored");
+        }
 
         // Insert attachment record
         // TASK-1110: Include external_message_id (macOS message GUID) for stable linking
@@ -2228,6 +2285,9 @@ class MacOSMessagesImportService {
         processed++;
         existingHashes.add(contentHash);
       } catch (error) {
+        // BACKLOG-3816: a refused write (no file-data key) stops the import —
+        // swallowing it here would report success with every attachment skipped.
+        if (isAtRestWriteRefused(error)) throw error;
         // Expected, normal-for-old-messages errors are silent:
         // - FOREIGN KEY: messages that were skipped
         // - ENOENT: attachment files that have been deleted
@@ -2678,12 +2738,14 @@ class MacOSMessagesImportService {
    * Read an attachment file as base64 for display (TASK-1012)
    * Returns null if file doesn't exist
    */
-  getAttachmentAsBase64(storagePath: string): string | null {
+  async getAttachmentAsBase64(storagePath: string): Promise<string | null> {
     try {
       if (!fs.existsSync(storagePath)) {
         return null;
       }
-      const buffer = fs.readFileSync(storagePath);
+      // BACKLOG-3816: the shared attachment reader — structural detection on one handle,
+      // pre-migration plaintext passes through until the scope is marked done.
+      const buffer = await readStoredAttachment(storagePath);
       return buffer.toString("base64");
     } catch (error) {
       logService.warn(

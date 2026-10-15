@@ -167,24 +167,6 @@ export const backupBridge = {
     ipcRenderer.invoke("backup:check-encryption", udid),
 
   /**
-   * Start a backup with password (for encrypted backups)
-   * @param options - Backup options including password
-   */
-  startWithPassword: (options: {
-    udid: string;
-    password: string;
-    outputPath?: string;
-  }) => ipcRenderer.invoke("backup:start-with-password", options),
-
-  /**
-   * Verify a backup password without starting backup
-   * @param backupPath - Path to the backup
-   * @param password - Password to verify
-   */
-  verifyPassword: (backupPath: string, password: string) =>
-    ipcRenderer.invoke("backup:verify-password", backupPath, password),
-
-  /**
    * Check if an existing backup is encrypted
    * @param backupPath - Path to the backup
    */
@@ -253,6 +235,13 @@ export const driverBridge = {
   openITunesStore: () => ipcRenderer.invoke("drivers:open-itunes-store"),
 
   /**
+   * BACKLOG-3927: open Apple's "Apple Devices" app in the Microsoft Store
+   * (Store build iPhone setup)
+   */
+  openAppleDevicesStore: () => ipcRenderer.invoke("drivers:open-apple-devices-store"),
+  openWindowsUpdate: (target: "check" | "optional") => ipcRenderer.invoke("drivers:open-windows-update", target),
+
+  /**
    * Check if a driver update is available
    */
   checkUpdate: () => ipcRenderer.invoke("drivers:check-update"),
@@ -270,7 +259,6 @@ export const syncBridge = {
    */
   start: (options: {
     udid: string;
-    password?: string;
     forceFullBackup?: boolean;
   }) => ipcRenderer.invoke("sync:start", options),
 
@@ -278,7 +266,7 @@ export const syncBridge = {
    * Cancels an in-progress sync operation
    * @returns Cancellation result
    */
-  cancel: () => ipcRenderer.invoke("sync:cancel"),
+  cancel: (trigger: string) => ipcRenderer.invoke("sync:cancel", trigger),
 
   /**
    * Gets current sync status
@@ -318,7 +306,7 @@ export const syncBridge = {
    * @param options - Processing options
    * @returns Processing result
    */
-  processExisting: (options: { udid: string; password?: string }) =>
+  processExisting: (options: { udid: string }) =>
     ipcRenderer.invoke("sync:process-existing", options),
 
   /**
@@ -366,18 +354,6 @@ export const syncBridge = {
     ipcRenderer.on("sync:device-disconnected", listener);
     return () =>
       ipcRenderer.removeListener("sync:device-disconnected", listener);
-  },
-
-  /**
-   * Subscribes to password required events (encrypted backup)
-   * @param callback - Callback when password is needed
-   * @returns Cleanup function to remove listener
-   */
-  onPasswordRequired: (callback: () => void) => {
-    const listener = () => callback();
-    ipcRenderer.on("sync:password-required", listener);
-    return () =>
-      ipcRenderer.removeListener("sync:password-required", listener);
   },
 
   /**
@@ -436,17 +412,38 @@ export const syncBridge = {
     callback: (result: {
       messagesStored: number;
       contactsStored: number;
+      contactsSourceOff?: boolean;
+      attachmentsUndecryptable?: number;
       duration: number;
     }) => void
   ) => {
     const listener = (_: IpcRendererEvent, result: {
       messagesStored: number;
       contactsStored: number;
+      contactsSourceOff?: boolean;
+      attachmentsUndecryptable?: number;
       duration: number;
     }) => callback(result);
     ipcRenderer.on("sync:storage-complete", listener);
     return () =>
       ipcRenderer.removeListener("sync:storage-complete", listener);
+  },
+
+  /**
+   * BACKLOG-3784: tells main the sync completion UI was shown. Telemetry only.
+   * @param ack - renderer wall-clock stamps (ms): storage-complete received, completion shown
+   */
+  reportCompletionShown: (ack: { receivedAt: number; shownAt: number }) => {
+    ipcRenderer.send("sync:completion-shown", ack);
+  },
+
+  /**
+   * BACKLOG-3784: renderer heartbeat while an iPhone sync is showing. Telemetry only.
+   * @param tick - first: first tick of this sync; hidden: document is hidden;
+   *   stopped (BACKLOG-3785): the heartbeat stopped on purpose; screen: the screen NAME shown
+   */
+  rendererTick: (tick: { first: boolean; hidden: boolean; stopped?: boolean; screen?: string }) => {
+    ipcRenderer.send("sync:renderer-tick", tick);
   },
 
   /**
@@ -468,4 +465,23 @@ export const syncBridge = {
    */
   getIPhoneLastSyncTime: (udid: string): Promise<{ lastSyncTime: string | null }> =>
     ipcRenderer.invoke("sync:get-iphone-last-sync-time", udid),
+
+  /**
+   * BACKLOG-3892 S5: can this deal's older texts be read from the iPhone backup kept on
+   * this computer? (S6 shows "Get older texts" only when `available`.)
+   */
+  backfillAvailability: (transactionId: string) => ipcRenderer.invoke("sync:backfill-availability", transactionId),
+
+  /** BACKLOG-3892 S5: read this deal's older texts from the kept backup. Resolves when done. */
+  backfillOlder: (transactionId: string) => ipcRenderer.invoke("sync:backfill-older", transactionId),
+
+  /** BACKLOG-3892 S5: stop the running backfill (nothing it stored is kept). */
+  cancelBackfill: () => ipcRenderer.invoke("sync:backfill-cancel"),
+
+  /** BACKLOG-3892 S5: backfill progress. Returns the unsubscribe function. */
+  onBackfillProgress: (callback: (progress: unknown) => void) => {
+    const listener = (_: IpcRendererEvent, progress: unknown) => callback(progress);
+    ipcRenderer.on("sync:backfill-progress", listener);
+    return () => ipcRenderer.removeListener("sync:backfill-progress", listener);
+  },
 };

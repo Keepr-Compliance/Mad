@@ -9,10 +9,12 @@
  * lookups) and delegates all interactive chrome to this component.
  */
 
-import { useEffect, useState } from 'react';
-import type { CSSProperties } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { ImpersonationBanner } from '@/components/ImpersonationBanner';
+import { MobileTopBar } from '@keepr/ui';
 import { Sidebar } from '@/components/layout/Sidebar';
+import { getPhoneTitle } from '@/lib/dashboard-page-titles';
 import { SupportWidget } from '@/app/dashboard/components/SupportWidget';
 
 export interface DashboardShellProps {
@@ -29,6 +31,10 @@ export interface DashboardShellProps {
   showMyTransactions?: boolean;
   /** BACKLOG-3080: not a full-portal user; the Sidebar shows the floor only. */
   floorOnly?: boolean;
+  /** BACKLOG-3844: lib/billing/capabilities.ts billingNavVisible, via the layout. */
+  showBilling?: boolean;
+  /** BACKLOG-3878: the account is suspended; the Sidebar shows Billing / Support / My Account only. */
+  suspended?: boolean;
 }
 
 export function DashboardShell({
@@ -42,8 +48,20 @@ export function DashboardShell({
   checklistsUnavailableLabel,
   showMyTransactions,
   floorOnly,
+  showBilling,
+  suspended,
 }: DashboardShellProps) {
   const [collapsed, setCollapsed] = useState(false);
+  // BACKLOG-3798: the phone drawer (below md). Separate from `collapsed`, which
+  // only drives the desktop aside.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const pathname = usePathname();
+
+  // A route change closes the drawer.
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [pathname]);
 
   // Start collapsed on small screens so content keeps usable width (the old
   // top-nav hid its links below sm; the sidebar equivalent is the icon rail).
@@ -54,10 +72,13 @@ export function DashboardShell({
 
   return (
     <div
-      className="flex min-h-screen"
       // Fixed-position elements in the content area (ReviewActions bar,
       // SupportWidget FAB) offset themselves past the sidebar with this var.
-      style={{ '--sidebar-w': collapsed ? '4rem' : '16rem' } as CSSProperties}
+      // BACKLOG-3798: class-driven, 0 below md (no rail there; the drawer
+      // overlays). Must not be an inline style: inline beats every class.
+      className={`flex min-h-screen [--sidebar-w:0px] ${
+        collapsed ? 'md:[--sidebar-w:4rem]' : 'md:[--sidebar-w:16rem]'
+      }`}
     >
       <Sidebar
         collapsed={collapsed}
@@ -71,11 +92,25 @@ export function DashboardShell({
         checklistsUnavailableLabel={checklistsUnavailableLabel}
         showMyTransactions={showMyTransactions}
         floorOnly={floorOnly}
+        showBilling={showBilling}
+        suspended={suspended}
+        mobileOpen={menuOpen}
+        // BACKLOG-3896: the kit Drawer returns focus to this ref on close. No
+        // focus() here: a second restore would mask a missing ref.
+        onMobileClose={() => setMenuOpen(false)}
+        mobileReturnFocusRef={menuButtonRef}
       />
       <div className="flex-1 flex flex-col min-w-0">
+        <MobileTopBar
+          ref={menuButtonRef}
+          qualifier="Broker"
+          title={getPhoneTitle(pathname)}
+          menuOpen={menuOpen}
+          onOpenMenu={() => setMenuOpen(true)}
+        />
         {/* Impersonation banner spans the content column so it never covers the sidebar */}
         <ImpersonationBanner />
-        <main className="flex-1 p-6 bg-gray-50 overflow-auto">{children}</main>
+        <main className="flex-1 p-4 md:p-6 bg-gray-50 overflow-auto">{children}</main>
       </div>
 
       {/* Floating Support Widget */}

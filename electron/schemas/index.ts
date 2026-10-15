@@ -77,6 +77,7 @@ export {
   SetChecklistItemNoteArgsSchema,
   AddChecklistLinkArgsSchema,
   RemoveChecklistLinkArgsSchema,
+  IncludeChecklistLinkOutsideDatesArgsSchema,
 } from './checklist';
 export type {
   CloudChecklistTemplate,
@@ -88,4 +89,5 @@ export type {
   SetChecklistItemNoteArgs,
   AddChecklistLinkArgs,
   RemoveChecklistLinkArgs,
+  IncludeChecklistLinkOutsideDatesArgs,
 } from './checklist';

@@ -67,6 +67,7 @@ import {
   pairingBridge,
   localSyncBridge,
   logBridge,
+  atRestBridge,
 } from "./preload/index";
 
 // Expose protected methods that allow the renderer process to use
@@ -179,4 +180,7 @@ contextBridge.exposeInMainWorld("api", {
 
   // Renderer log relay — pipes to main process log file
   log: logBridge,
+
+  // Background encryption of files saved before 2.40 (BACKLOG-3816)
+  atRest: atRestBridge,
 });

@@ -37,6 +37,8 @@
 import { randomUUID } from "crypto";
 
 import { dbAll, dbGet, dbRun, dbTransaction } from "./core/dbConnection";
+import { auditPeriodFromRow } from "../submissionAuditPeriod";
+import { auditWindowEnd } from "../exportPlan";
 import {
   attachmentLabelSql,
   DELETE_CHECKLIST_IN_TRANSACTION_SQL,
@@ -49,6 +51,7 @@ import {
   GET_CHECKLIST_LINKS_SQL,
   GET_CHECKLISTS_BY_TRANSACTION_SQL,
   GET_ITEM_CONTEXT_SQL,
+  GET_TRANSACTION_AUDIT_DATES_SQL,
   INSERT_ATTACHMENT_MEMBER_SQL,
   INSERT_CHECKLIST_ITEM_SQL,
   INSERT_CHECKLIST_LINK_SQL,
@@ -56,6 +59,8 @@ import {
   INSERT_EMAIL_MEMBER_SQL,
   NEXT_CHECKLIST_SORT_ORDER_SQL,
   NEXT_LINK_SORT_ORDER_SQL,
+  outsideAuditDatesSql,
+  SET_LINK_INCLUDE_OUTSIDE_DATES_SQL,
   SET_CHECKLIST_ITEM_CHECKED_SQL,
   SET_CHECKLIST_ITEM_NOTE_SQL,
   targetsInTransactionSql,
@@ -69,6 +74,7 @@ import type {
   ChecklistLink,
   ChecklistLinkMember,
   ChecklistsForTransaction,
+  OutsideAuditDatesTarget,
   SelectChecklistTemplateInput,
   SelectChecklistTemplateResult,
   TransactionChecklist,
@@ -107,6 +113,7 @@ interface LinkRow {
   kind: string;
   label: string;
   sort_order: number;
+  include_outside_dates: number;
 }
 
 interface MemberRow {
@@ -313,6 +320,7 @@ function loadChecklistDetail(checklistRow: ChecklistRow): ChecklistDetail {
       kind: row.kind === "email" ? "email" : "attachment",
       label: row.label,
       sortOrder: row.sort_order,
+      includeOutsideDates: row.include_outside_dates === 1,
       members: membersByLinkId.get(row.id) ?? [],
     };
     const bucket = linksByItemId[row.item_id];
@@ -403,6 +411,25 @@ export function addChecklistLink(input: AddChecklistLinkInput): Promise<AddCheck
       return { status: "targets_not_in_transaction", rejectedIds };
     }
 
+    // BACKLOG-3764: main decides "outside the dates", never the renderer, and
+    // with the submit's own bounds. Asked before anything is written.
+    const dates = dbGet<{ started_at: string | null; closed_at: string | null }>(
+      GET_TRANSACTION_AUDIT_DATES_SQL,
+      [context.transaction_id],
+    );
+    const outside = outsideAuditDates(input.kind, targetIds, dates?.started_at, dates?.closed_at);
+    if (outside.length > 0 && input.includeOutsideDates !== true) {
+      return {
+        status: "outside_dates",
+        outside,
+        auditStart: dates?.started_at ?? null,
+        auditEnd: dates?.closed_at ?? null,
+      };
+    }
+    // The answer is stored only when there was a question: a group made inside
+    // the dates is asked like any other if the dates later move.
+    const includeOutsideDates = outside.length > 0 ? 1 : 0;
+
     const labelSql =
       input.kind === "email"
         ? emailLabelSql(targetIds.length)
@@ -424,7 +451,14 @@ export function addChecklistLink(input: AddChecklistLinkInput): Promise<AddCheck
         ?.next_sort_order ?? 0;
 
     const linkId = randomUUID();
-    dbRun(INSERT_CHECKLIST_LINK_SQL, [linkId, input.itemId, input.kind, label, sortOrder]);
+    dbRun(INSERT_CHECKLIST_LINK_SQL, [
+      linkId,
+      input.itemId,
+      input.kind,
+      label,
+      sortOrder,
+      includeOutsideDates,
+    ]);
     for (const targetId of targetIds) {
       dbRun(
         input.kind === "email" ? INSERT_EMAIL_MEMBER_SQL : INSERT_ATTACHMENT_MEMBER_SQL,
@@ -435,6 +469,51 @@ export function addChecklistLink(input: AddChecklistLinkInput): Promise<AddCheck
     return { status: "added", linkId, memberCount: targetIds.length };
   });
   return Promise.resolve(result);
+}
+
+/**
+ * BACKLOG-3764 — the targets dated outside these audit dates. The bounds are
+ * the submit's (`auditPeriodFromRow`, then `auditWindowEnd` for the closing
+ * day), so the question at link time and the filter at submit time cannot
+ * disagree on a boundary. No dates at all: nothing is outside.
+ */
+export function outsideAuditDates(
+  kind: AddChecklistLinkInput["kind"],
+  targetIds: string[],
+  startedAt: string | null | undefined,
+  closedAt: string | null | undefined,
+): OutsideAuditDatesTarget[] {
+  if (targetIds.length === 0) return [];
+  const { auditStartDate, auditEndDate } = auditPeriodFromRow({
+    started_at: startedAt ?? null,
+    closed_at: closedAt ?? null,
+  });
+  // An unparseable stored date is no bound here (the submit's own reader
+  // throws on it, so that submit fails loudly rather than sending anything).
+  const iso = (d: Date | null): string | null => (d && !isNaN(d.getTime()) ? d.toISOString() : null);
+  const start = iso(auditStartDate);
+  const end = iso(auditWindowEnd(auditEndDate));
+  if (start === null && end === null) return [];
+  return dbAll<{ id: string; sent_at: string | null }>(outsideAuditDatesSql(kind, targetIds.length), [
+    ...targetIds,
+    start,
+    start,
+    end,
+    end,
+  ]).map((row) => ({ id: row.id, sentAt: row.sent_at }));
+}
+
+/**
+ * BACKLOG-3764 — the agent answered "Include it" for an existing group at the
+ * submit pre-flight. Resolves true when the group is on this transaction and
+ * was updated.
+ */
+export function setChecklistLinkIncludeOutsideDates(
+  transactionId: string,
+  linkId: string,
+): Promise<boolean> {
+  const result = dbRun(SET_LINK_INCLUDE_OUTSIDE_DATES_SQL, [linkId, transactionId]);
+  return Promise.resolve(result.changes > 0);
 }
 
 /**

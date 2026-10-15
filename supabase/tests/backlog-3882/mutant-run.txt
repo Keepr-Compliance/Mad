@@ -1,0 +1,143 @@
+FILES|migration 20261010165424_backlog_3882_tenant_from_identity.sql md5=d33bca5188b47d88b51a245d547f79c4|rollback md5=92321cbe36e3d9591026cfb20bddb6f5
+VENUE|PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 13.2.0, 64-bit | ledger max=20261004232511 rows=104
+-- baseline: every control against the unmutated migration
+== c0-baseline.sql
+PASS|c0 it_admin body md5 is production's|want b0541c6347baf9457cf949f5ec5be1e5 got b0541c6347baf9457cf949f5ec5be1e5
+PASS|c0 google body md5 is production's|want 621ee65d5283a0224ee05826e5f16eb5 got 621ee65d5283a0224ee05826e5f16eb5
+PASS|c0 it_admin grants are production's|want public=true anon=true authenticated=true service_role=true got public=true anon=true authenticated=true service_role=true
+PASS|c0 google grants are production's|want public=true anon=true authenticated=true service_role=true got public=true anon=true authenticated=true service_role=true
+PASS|c0 baseline: caller with a different tenant gets success|want ~^OK .*"success": true got OK {"role": "agent", "success": true, "user_id": "{u_x}", "organization_id": "{org_b}"}
+PASS|c0 baseline: caller has role agent in org_b|want agent got agent
+== c1-other-tenant-existing-org.sql
+PASS|c1 refused with 42501|want ~^ERR 42501 tenant does not match got ERR 42501 tenant does not match the signed-in identity
+PASS|c1 no membership in org_b|want <none> got <none>
+PASS|c1 org_b still has one member|want 1 got 1
+PASS|c1 no public.users row written for the caller|want 0 got 0
+== c10-rollback.sql
+PASS|c10 rollback restores the production body|want b0541c6347baf9457cf949f5ec5be1e5 got b0541c6347baf9457cf949f5ec5be1e5
+PASS|c10 rollback restores it_admin grants|want public=true anon=true authenticated=true service_role=true got public=true anon=true authenticated=true service_role=true
+PASS|c10 rollback restores google grants|want public=true anon=true authenticated=true service_role=true got public=true anon=true authenticated=true service_role=true
+== c11-drift-aborts.sql
+PASS|c11 migration aborts on an unexpected body|want ~^3882 pre-check: auto_provision_it_admin body differs got 3882 pre-check: auto_provision_it_admin body differs from the expected one (md5 58a484ee3241558464bbf974a081645f)
+PASS|c11 drifted body left in place|58a484ee3241558464bbf974a081645f
+PASS|c11 google grants untouched|want public=true anon=true authenticated=true service_role=true got public=true anon=true authenticated=true service_role=true
+== c2-other-tenant-no-org.sql
+PASS|c2 refused with 42501|want ~^ERR 42501  got ERR 42501 tenant does not match the signed-in identity
+PASS|c2 no org created for t_a|want 0 got 0
+== c3-metadata-not-trusted.sql
+PASS|c3 fixture: metadata tid is t_b|want {t_b} got {t_b}
+PASS|c3 refused with 42501|want ~^ERR 42501  got ERR 42501 tenant does not match the signed-in identity
+PASS|c3 no membership in org_b|want <none> got <none>
+== c4-case-and-canonical-tenant.sql
+PASS|c4 upper-case tenant accepted|want ~^OK .*"role": "admin" got OK {"role": "admin", "success": true, "user_id": "{u_a1}", "organization_id": "<generated>"}
+PASS|c4 org stored under the identity tid|want {t_a} got {t_a}
+PASS|c4 padded tenant accepted|want ~^OK .*"role": "agent" got OK {"role": "agent", "success": true, "user_id": "{u_a2}", "organization_id": "<generated>"}
+PASS|c4 one org for t_a|want 1 got 1
+== c5-provider-id-not-a-tenant.sql
+PASS|c5 azure provider_id as tenant refused|want ~^ERR 42501  got ERR 42501 tenant does not match the signed-in identity
+PASS|c5 no org for the azure provider_id|want 0 got 0
+PASS|c5 no org for the caller's real tenant either|want 0 got 0
+PASS|c5 google-only user refused|want ~^ERR 42501  got ERR 42501 tenant does not match the signed-in identity
+PASS|c5 no org for the google sub|want 0 got 0
+== c6-consumer-tenant.sql
+PASS|c6 consumer tenant refused|want ~^ERR 42501 personal Microsoft accounts got ERR 42501 personal Microsoft accounts cannot provision an organization
+PASS|c6 no org for the consumer tenant|want 0 got 0
+== c7-apply-twice-and-grants.sql
+PASS|c7 it_admin body is the migration's|want a88466cc17f1f28a9824ec62c73a2589 got a88466cc17f1f28a9824ec62c73a2589
+PASS|c7 it_admin grants|want public=false anon=false authenticated=true service_role=true got public=false anon=false authenticated=true service_role=true
+PASS|c7 it_admin definer/config/return unchanged|want secdef=true cfg={search_path=public} ret=jsonb got secdef=true cfg={search_path=public} ret=jsonb
+PASS|c7 anon call refused|want ~^ERR 42501 permission denied got ERR 42501 permission denied for function auto_provision_it_admin
+PASS|c7 authenticated matching caller still works|want ~^OK .*"success": true got OK {"role": "admin", "success": true, "user_id": "{u_a1}", "organization_id": "<generated>"}
+== c8-first-user-wins.sql
+PASS|c8 first caller admin|want ~^OK .*"role": "admin" got OK {"role": "admin", "success": true, "user_id": "{u_a1}", "organization_id": "<generated>"}
+PASS|c8 second colleague gets the default role|want ~^OK .*"role": "agent" got OK {"role": "agent", "success": true, "user_id": "{u_a2}", "organization_id": "<generated>"}
+PASS|c8 stored roles|want admin,agent got admin,agent
+PASS|c8 pre-created org with unclaimed invites: first caller admin|want ~^OK .*"role": "admin" got OK {"role": "admin", "success": true, "user_id": "{u_p}", "organization_id": "{org_p}"}
+PASS|c8 existing admin of org_b keeps admin|want ~^OK .*"role": "admin" got OK {"role": "admin", "success": true, "user_id": "{u_badmin}", "organization_id": "{org_b}"}
+PASS|c8 org_b still one member|want 1 got 1
+== c9-google-revoked.sql
+PASS|c9 google body unchanged|want 621ee65d5283a0224ee05826e5f16eb5 got 621ee65d5283a0224ee05826e5f16eb5
+PASS|c9 google grants|want public=false anon=false authenticated=false service_role=true got public=false anon=false authenticated=false service_role=true
+PASS|c9 authenticated call refused|want ~^ERR 42501 permission denied got ERR 42501 permission denied for function auto_provision_google_it_admin
+CONTROLS: pass=12 fail=0 error=0
+PASS|race A provisioned as admin (transaction open)|A|OK {"role": "admin", "success": true, "user_id": "{u_r}", "organization_id": "{org_r}"}
+PASS|race B cannot lock org_r while A is open (FOR UPDATE held)|psql:<stdin>:1: ERROR:  could not obtain lock on row in relation "organizations"
+CHECKS|2
+== m01-no-tenant-check  MUTATION APPLIED: <   SELECT lower(i.identity_data->'custom_claims'->>'tid') <   INTO v_identity_tid 
+FAIL|c1 refused with 42501|want ~^ERR 42501 tenant does not match got OK {"role": "agent", "success": true, "user_id": "{u_x}", "organization_id": "{org_b}"}
+FAIL|c1 no membership in org_b|want <none> got agent
+FAIL|c1 org_b still has one member|want 1 got 2
+FAIL|c1 no public.users row written for the caller|want 0 got 1
+FAIL|c2 refused with 42501|want ~^ERR 42501  got OK {"role": "admin", "success": true, "user_id": "{u_x}", "organization_id": "<generated>"}
+FAIL|c2 no org created for t_a|want 0 got 1
+KILLED|m01-no-tenant-check
+== m02-check-after-org-insert  MUTATION APPLIED: <   SELECT lower(i.identity_data->'custom_claims'->>'tid') <   INTO v_identity_tid 
+FAIL|c2 refused with 42501|want ~^ERR 42501  got OK {"error": "tenant_mismatch", "success": false}
+FAIL|c2 no org created for t_a|want 0 got 1
+KILLED|m02-check-after-org-insert
+== m03-tid-from-user-metadata  MUTATION APPLIED: <   SELECT lower(i.identity_data->'custom_claims'->>'tid') >   SELECT lower(u.raw_user_meta_data->'custom_claims'->>'tid') 
+FAIL|c3 refused with 42501|want ~^ERR 42501  got OK {"role": "agent", "success": true, "user_id": "{u_x}", "organization_id": "{org_b}"}
+FAIL|c3 no membership in org_b|want <none> got agent
+KILLED|m03-tid-from-user-metadata
+== m04a-case-sensitive-compare  MUTATION APPLIED: <     AND lower(i.identity_data->'custom_claims'->>'tid') = lower(btrim(p_tenant_id)) >     AND lower(i.identity_data->'custom_claims'->>'tid') = btrim(p_tenant_id) 
+FAIL|c4 upper-case tenant accepted|want ~^OK .*"role": "admin" got ERR 42501 tenant does not match the signed-in identity
+FAIL|c4 org stored under the identity tid|want {t_a} got <null>
+FAIL|c4 padded tenant accepted|want ~^OK .*"role": "agent" got OK {"role": "admin", "success": true, "user_id": "{u_a2}", "organization_id": "<generated>"}
+KILLED|m04a-case-sensitive-compare
+== m04b-no-trim  MUTATION APPLIED: <     AND lower(i.identity_data->'custom_claims'->>'tid') = lower(btrim(p_tenant_id)) >     AND lower(i.identity_data->'custom_claims'->>'tid') = lower(p_tenant_id) 
+FAIL|c4 padded tenant accepted|want ~^OK .*"role": "agent" got ERR 42501 tenant does not match the signed-in identity
+KILLED|m04b-no-trim
+== m04c-org-keyed-on-caller-value  MUTATION APPLIED: <   p_tenant_id := v_identity_tid; 
+FAIL|c4 org stored under the identity tid|want {t_a} got {T_A}
+FAIL|c4 padded tenant accepted|want ~^OK .*"role": "agent" got ERR 23505 duplicate key value violates unique constraint "organizations_slug_key"
+KILLED|m04c-org-keyed-on-caller-value
+== m05-match-provider-id  MUTATION APPLIED: <     AND lower(i.identity_data->'custom_claims'->>'tid') = lower(btrim(p_tenant_id)) >     AND i.provider_id = btrim(p_tenant_id) 
+FAIL|c5 azure provider_id as tenant refused|want ~^ERR 42501  got OK {"role": "admin", "success": true, "user_id": "{u_x}", "organization_id": "<generated>"}
+FAIL|c5 no org for the caller's real tenant either|want 0 got 1
+KILLED|m05-match-provider-id
+== m06-no-consumer-guard  MUTATION APPLIED: <   IF v_identity_tid = '9188040d-6c67-4c5b-b112-36a304b66dad' THEN -- pii-allow-uuid: Microsoft's public personal-account tenant constant <     RAISE EXCEPTION 'personal Microsoft accounts cannot provision an organization' USING ERRCODE = '42501'; 
+FAIL|c6 consumer tenant refused|want ~^ERR 42501 personal Microsoft accounts got OK {"role": "admin", "success": true, "user_id": "{u_cons}", "organization_id": "<generated>"}
+FAIL|c6 no org for the consumer tenant|want 0 got 1
+KILLED|m06-no-consumer-guard
+== m07a-no-revoke  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.auto_provision_it_admin(text, text, text) FROM PUBLIC, anon; 
+FAIL|c7 it_admin grants|want public=false anon=false authenticated=true service_role=true got public=true anon=true authenticated=true service_role=true
+FAIL|c7 anon call refused|want ~^ERR 42501 permission denied got OK {"error": "Not authenticated", "success": false}
+KILLED|m07a-no-revoke
+== m07b-revoke-anon-only  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.auto_provision_it_admin(text, text, text) FROM PUBLIC, anon; > REVOKE EXECUTE ON FUNCTION public.auto_provision_it_admin(text, text, text) FROM anon; 
+FAIL|c7 it_admin grants|want public=false anon=false authenticated=true service_role=true got public=true anon=true authenticated=true service_role=true
+FAIL|c7 anon call refused|want ~^ERR 42501 permission denied got OK {"error": "Not authenticated", "success": false}
+KILLED|m07b-revoke-anon-only
+== m07c-authenticated-revoked  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.auto_provision_it_admin(text, text, text) FROM PUBLIC, anon; < GRANT EXECUTE ON FUNCTION public.auto_provision_it_admin(text, text, text) TO authenticated, service_role; 
+FAIL|c7 it_admin grants|want public=false anon=false authenticated=true service_role=true got public=false anon=false authenticated=false service_role=true
+FAIL|c7 authenticated matching caller still works|want ~^OK .*"success": true got ERR 42501 permission denied for function auto_provision_it_admin
+KILLED|m07c-authenticated-revoked
+== m07d-precheck-rejects-applied-body  MUTATION APPLIED: <   IF v_md5 IS NULL OR v_md5 NOT IN ('b0541c6347baf9457cf949f5ec5be1e5', 'a88466cc17f1f28a9824ec62c73a2589') THEN >   IF v_md5 IS NULL OR v_md5 NOT IN ('b0541c6347baf9457cf949f5ec5be1e5') THEN 
+FAIL|apply-twice: second apply raised|P0001 3882 pre-check: auto_provision_it_admin body differs from the expected one (md5 a88466cc17f1f28a9824ec62c73a2589)
+KILLED|m07d-precheck-rejects-applied-body
+== m08a-no-row-lock  MUTATION APPLIED: <   WHERE id = v_org_id <   FOR UPDATE; 
+FAIL|race B cannot lock org_r while A is open (FOR UPDATE held)|B|got the row
+CHECKS|2
+KILLED|m08a-no-row-lock
+== m08b-every-caller-admin  MUTATION APPLIED: <                 ELSE v_default_role >                 ELSE 'admin' 
+FAIL|c8 second colleague gets the default role|want ~^OK .*"role": "agent" got OK {"role": "admin", "success": true, "user_id": "{u_a2}", "organization_id": "<generated>"}
+FAIL|c8 stored roles|want admin,agent got admin,admin
+KILLED|m08b-every-caller-admin
+== m08c-unclaimed-invites-counted  MUTATION APPLIED: <                     AND user_id IS NOT NULL 
+FAIL|c8 pre-created org with unclaimed invites: first caller admin|want ~^OK .*"role": "admin" got OK {"role": "agent", "success": true, "user_id": "{u_p}", "organization_id": "{org_p}"}
+KILLED|m08c-unclaimed-invites-counted
+== m09-no-google-revoke  MUTATION APPLIED: < REVOKE EXECUTE ON FUNCTION public.auto_provision_google_it_admin(text, text, text) FROM PUBLIC, anon, authenticated; 
+FAIL|c9 google grants|want public=false anon=false authenticated=false service_role=true got public=true anon=true authenticated=true service_role=true
+FAIL|c9 authenticated call refused|want ~^ERR 42501 permission denied got OK {"success": true, "user_id": "{u_g}", "organization_id": "<generated>"}
+KILLED|m09-no-google-revoke
+== m10-precheck-ignores-body  MUTATION APPLIED: <   IF v_md5 IS NULL OR v_md5 NOT IN ('b0541c6347baf9457cf949f5ec5be1e5', 'a88466cc17f1f28a9824ec62c73a2589') THEN >   IF false AND v_md5 NOT IN ('b0541c6347baf9457cf949f5ec5be1e5', 'a88466cc17f1f28a9824ec62c73a2589') THEN 
+FAIL|c11 migration aborts on an unexpected body|want ~^3882 pre-check: auto_provision_it_admin body differs got <null>
+FAIL|c11 drifted body left in place|a88466cc17f1f28a9824ec62c73a2589
+FAIL|c11 google grants untouched|want public=true anon=true authenticated=true service_role=true got public=false anon=false authenticated=false service_role=true
+KILLED|m10-precheck-ignores-body
+== r01-rollback-keeps-revoke  MUTATION APPLIED: < GRANT EXECUTE ON FUNCTION public.auto_provision_it_admin(text, text, text) TO PUBLIC, anon, authenticated, service_role; 
+FAIL|c10 rollback restores it_admin grants|want public=true anon=true authenticated=true service_role=true got public=false anon=false authenticated=true service_role=true
+KILLED|r01-rollback-keeps-revoke
+== r02-rollback-keeps-google-revoke  MUTATION APPLIED: < GRANT EXECUTE ON FUNCTION public.auto_provision_google_it_admin(text, text, text) TO PUBLIC, anon, authenticated, service_role; 
+FAIL|c10 rollback restores google grants|want public=true anon=true authenticated=true service_role=true got public=false anon=false authenticated=false service_role=true
+KILLED|r02-rollback-keeps-google-revoke
+MUTANTS: killed=19 survived=0 invalid=0

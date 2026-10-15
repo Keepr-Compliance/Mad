@@ -80,20 +80,65 @@ import {
 // ============================================
 
 /**
- * Get existing message external_ids for a user (for deduplication).
+ * BACKLOG-3868: one page of the user's stored message external_ids, in
+ * external_id order, strictly after `after` (null = from the start). The iPhone
+ * sync's duplicate check reads every page and yields between them; this replaces
+ * one synchronous read of every id. Keyset paging over the covering
+ * idx_messages_user_external_id, so each page is a range read, and the pages
+ * together are exactly `WHERE user_id = ? AND external_id IS NOT NULL`.
  */
-export function getExistingMessageExternalIds(userId: string): Set<string> {
+export const MESSAGE_EXTERNAL_IDS_FIRST_PAGE_SQL =
+  `SELECT external_id FROM messages WHERE user_id = ? AND external_id IS NOT NULL ORDER BY external_id LIMIT ?`;
+export const MESSAGE_EXTERNAL_IDS_NEXT_PAGE_SQL =
+  `SELECT external_id FROM messages WHERE user_id = ? AND external_id IS NOT NULL AND external_id > ? ORDER BY external_id LIMIT ?`;
+
+export function getMessageExternalIdsPage(userId: string, after: string | null, limit: number): string[] {
   const db = ensureDb();
-  const rows = db
-    .prepare(
-      `SELECT external_id FROM messages WHERE user_id = ? AND external_id IS NOT NULL`
-    )
-    .all(userId) as { external_id: string }[];
-  const ids = new Set<string>();
-  for (const row of rows) {
-    ids.add(row.external_id);
-  }
-  return ids;
+  const rows = (
+    after === null
+      ? db.prepare(MESSAGE_EXTERNAL_IDS_FIRST_PAGE_SQL).all(userId, limit)
+      : db.prepare(MESSAGE_EXTERNAL_IDS_NEXT_PAGE_SQL).all(userId, after, limit)
+  ) as { external_id: string }[];
+  return rows.map((row) => row.external_id);
+}
+
+/**
+ * BACKLOG-3892 S7: one page of the user's stored message external_ids SENT AT OR
+ * AFTER `sinceIso`, in (sent_at, rowid) order, strictly after the `after` key
+ * (null = from the start). Keyset paging over idx_messages_user_sent, so the read
+ * covers only the window a sync can still hand over, not the user's whole history.
+ */
+export const MESSAGE_EXTERNAL_IDS_SINCE_FIRST_PAGE_SQL =
+  `SELECT rowid AS rid, sent_at, external_id FROM messages
+   WHERE user_id = ? AND sent_at >= ? AND external_id IS NOT NULL
+   ORDER BY sent_at, rowid LIMIT ?`;
+export const MESSAGE_EXTERNAL_IDS_SINCE_NEXT_PAGE_SQL =
+  `SELECT rowid AS rid, sent_at, external_id FROM messages
+   WHERE user_id = ? AND sent_at >= ? AND external_id IS NOT NULL AND (sent_at, rowid) > (?, ?)
+   ORDER BY sent_at, rowid LIMIT ?`;
+
+export interface ExternalIdsSinceKey {
+  sentAt: string;
+  rowid: number;
+}
+
+export function getMessageExternalIdsSincePage(
+  userId: string,
+  sinceIso: string,
+  after: ExternalIdsSinceKey | null,
+  limit: number,
+): { ids: string[]; next: ExternalIdsSinceKey | null } {
+  const db = ensureDb();
+  const rows = (
+    after === null
+      ? db.prepare(MESSAGE_EXTERNAL_IDS_SINCE_FIRST_PAGE_SQL).all(userId, sinceIso, limit)
+      : db.prepare(MESSAGE_EXTERNAL_IDS_SINCE_NEXT_PAGE_SQL).all(userId, sinceIso, after.sentAt, after.rowid, limit)
+  ) as { rid: number; sent_at: string; external_id: string }[];
+  const last = rows[rows.length - 1];
+  return {
+    ids: rows.map((row) => row.external_id),
+    next: last ? { sentAt: last.sent_at, rowid: last.rid } : null,
+  };
 }
 
 /**
@@ -193,6 +238,48 @@ export function getMessageIdMap(userId: string): Map<string, string> {
     map.set(row.external_id, row.id);
   }
   return map;
+}
+
+/**
+ * BACKLOG-3785: internal message id for each of the given external ids (one
+ * chunk). Callers pass a bounded chunk (<= a few hundred ids) and yield between
+ * chunks; this replaces loading every message row of the user just to resolve
+ * the ids an iPhone sync's attachments point at. Uses
+ * idx_messages_user_external_id. Ids not stored are simply absent from the map.
+ */
+export function getMessageIdsByExternalIds(userId: string, externalIds: readonly string[]): Map<string, string> {
+  const map = new Map<string, string>();
+  if (externalIds.length === 0) return map;
+  const db = ensureDb();
+  const placeholders = externalIds.map(() => "?").join(", ");
+  const rows = db
+    .prepare(
+      `SELECT id, external_id FROM messages WHERE user_id = ? AND external_id IN (${placeholders})`
+    )
+    .all(userId, ...externalIds) as { id: string; external_id: string }[];
+  for (const row of rows) {
+    map.set(row.external_id, row.id);
+  }
+  return map;
+}
+
+/**
+ * BACKLOG-3785: existing attachment records (`message_id:filename`) for the given
+ * message ids only (one chunk) — the scoped counterpart of
+ * getExistingAttachmentRecords. Uses idx_attachments_message_id.
+ */
+export function getExistingAttachmentRecordsForMessages(messageIds: readonly string[]): Set<string> {
+  const records = new Set<string>();
+  if (messageIds.length === 0) return records;
+  const db = ensureDb();
+  const placeholders = messageIds.map(() => "?").join(", ");
+  const rows = db
+    .prepare(`SELECT message_id, filename FROM attachments WHERE message_id IN (${placeholders})`)
+    .all(...messageIds) as { message_id: string; filename: string }[];
+  for (const row of rows) {
+    records.add(`${row.message_id}:${row.filename}`);
+  }
+  return records;
 }
 
 /**

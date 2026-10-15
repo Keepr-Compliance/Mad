@@ -125,6 +125,7 @@ jest.mock("../connectionStatusService", () => ({
 jest.mock("../deviceDetectionService", () => ({
   deviceDetectionService: {
     collectIphoneSyncDiagnostics: jest.fn().mockResolvedValue({
+      iphoneCheckingOn: true,
       libimobiledeviceAvailable: true,
       libimobiledeviceInPath: true,
       connectedDeviceCount: 0,

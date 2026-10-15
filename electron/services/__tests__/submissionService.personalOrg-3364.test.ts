@@ -58,6 +58,11 @@ jest.mock("../supabaseStorageService", () => ({
 }));
 
 jest.mock("../databaseService");
+// BACKLOG-3764: the gather reads the transaction's checklists; this deal has none.
+jest.mock("../db/checklistDbService", () => ({
+  getChecklistsForTransaction: jest.fn().mockResolvedValue({ checklists: [], requiredDone: 0, requiredTotal: 0 }),
+  outsideAuditDates: jest.fn(() => []),
+}));
 jest.mock("../logService", () => ({
   __esModule: true,
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },

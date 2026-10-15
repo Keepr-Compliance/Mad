@@ -509,6 +509,26 @@ describe("LicenseService", () => {
       expect(result.blockReason).toBe("suspended");
     });
 
+    it("blocks the row create_active_individual_license now creates for a suspended user (BACKLOG-3856)", () => {
+      // Transcribed from the BACKLOG-3856 SQL control k1 output (NAS test DB):
+      // the row the RPC inserts for a user whose users.status = 'suspended'.
+      const result = licenseService.calculateLicenseStatus(
+        makeLicense({
+          status: "suspended",
+          license_type: "individual",
+          trial_status: null,
+          trial_expires_at: null,
+          expires_at: null,
+          max_devices: 2,
+          transaction_limit: 99999,
+          transaction_count: 0,
+        }),
+        0
+      );
+      expect(result.isValid).toBe(false);
+      expect(result.blockReason).toBe("suspended");
+    });
+
     // BACKLOG-2148 (case d): the fail-open fix must NOT regress genuine trial expiry.
     // A real trial that has actually expired is still terminally blocked with 'expired'.
     it("still blocks a genuinely-expired real trial with blockReason='expired'", () => {

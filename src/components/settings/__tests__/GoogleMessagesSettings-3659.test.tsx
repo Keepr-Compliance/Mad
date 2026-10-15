@@ -15,7 +15,7 @@
  *   E2 (P3c) the modal not read-only (an action back), or no eye hint          → "read-only modal"
  */
 import React from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { RcsExtensionState } from "../../../../electron/types/ipc/window-api-rcs-import";
 
@@ -36,12 +36,13 @@ jest.mock("../../../services", () => ({
 }));
 
 const mockForget = jest.fn(async () => undefined);
+const mockGetState = jest.fn(async () => ({ success: true, data: mockState }));
 const mockSetConsent = jest.fn(async (_v: number | null) => ({ success: true }));
 jest.mock("../../../services/rcsImportService", () => ({
   rcsImportService: {
     linkForget: () => mockForget(),
     setCacheConsent: (v: number | null) => mockSetConsent(v),
-    getExtensionState: async () => ({ success: true, data: mockState }),
+    getExtensionState: () => mockGetState(),
     clearTexts: (...a: unknown[]) => mockClear(...a),
     setMediaOptions: (...a: unknown[]) => mockSetMedia(...a),
     // C1: the reversed link panel (nothing pending).
@@ -55,6 +56,8 @@ jest.mock("../../../services/rcsImportService", () => ({
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { GoogleMessagesSettings } = require("../GoogleMessagesSettings") as typeof import("../GoogleMessagesSettings");
+const { TextsLookbackSettings } = require("../TextsLookbackSettings") as typeof import("../TextsLookbackSettings");
+const { TextsLookbackProvider } = require("../textsLookback") as typeof import("../textsLookback");
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -73,38 +76,57 @@ beforeEach(() => {
 });
 
 describe("GoogleMessagesSettings", () => {
-  it("shows the extension, the pairing and the last sync; no consent line (S4)", async () => {
+  // BACKLOG-3156 stage G (founder approved 2026-10-13): the extension / connected
+  // / last-sync lines and the link row moved to the Sources card's Android row
+  // (messagesSourcesAndroid-3156); the "Copying texts from…" card is gone.
+  // Mutation: any of the three cards back in this pane → red.
+  it("the pane holds no status card, no link row, no 'Copying texts' card; no consent line (S4)", async () => {
     render(<GoogleMessagesSettings userId="user-1" />);
-    expect(await screen.findByTestId("gm-settings-extension")).toHaveTextContent("installed (version 0.3.4)");
+    await screen.findByTestId("gm-block-preferences");
+    await waitFor(() => expect(mockGetState).toHaveBeenCalled());
+    expect(screen.queryByTestId("gm-settings-extension")).toBeNull();
+    expect(screen.queryByTestId("gm-pairing")).toBeNull();
+    expect(screen.queryByTestId("gm-lookback")).toBeNull();
+    expect(screen.queryByText(/Copying texts from|Copying all your texts/)).toBeNull();
+    expect(screen.queryByText(/Keepr extension:|Last sync:/)).toBeNull();
     expect(screen.queryByTestId("gm-settings-consent")).toBeNull();
     expect(screen.queryByText(/Copying your texts/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Withdraw" })).toBeNull();
   });
 
+  // BACKLOG-3892 S3: the months control is the shared "How far back to import
+  // texts" picker now, outside this panel; L1/L2 are re-pinned to it, rendered
+  // the way Settings composes it (one provider around the picker and the panel).
+  // BACKLOG-3156 stage G: the panel's "Copying texts from …" line is gone; the picker states the window.
+  const renderWithSharedPicker = () =>
+    render(
+      <TextsLookbackProvider userId="user-1">
+        <TextsLookbackSettings userId="user-1" />
+        <GoogleMessagesSettings userId="user-1" />
+      </TextsLookbackProvider>,
+    );
+
   it("months control: absent → the default 1.5 months; the stored value; null → All time (L1)", async () => {
-    const view = render(<GoogleMessagesSettings userId="user-1" />);
+    const view = renderWithSharedPicker();
     const select = (await screen.findByRole("combobox", { name: "Import messages from" })) as HTMLSelectElement;
     await waitFor(() => expect(select.disabled).toBe(false));
     expect(select.value).toBe("1.5");
     expect(select.selectedOptions[0].textContent).toBe("Last 1.5 months (default)");
-    expect(screen.getByTestId("gm-lookback-line")).toHaveTextContent("Copying texts from the last 1.5 months");
     view.unmount();
     mockPrefs = { messageImport: { filters: { lookbackMonths: null } } };
-    render(<GoogleMessagesSettings userId="user-1" />);
+    renderWithSharedPicker();
     await waitFor(() => expect((screen.getByRole("combobox", { name: "Import messages from" }) as HTMLSelectElement).value).toBe("all"));
-    expect(screen.getByTestId("gm-lookback-line")).toHaveTextContent("Copying all your texts");
   });
 
   it("months control: a change is saved to messageImport.filters; a failed save reverts (L2)", async () => {
     mockPrefs = { messageImport: { filters: { lookbackMonths: 6 } } };
-    render(<GoogleMessagesSettings userId="user-1" />);
+    renderWithSharedPicker();
     const select = (await screen.findByRole("combobox", { name: "Import messages from" })) as HTMLSelectElement;
     await waitFor(() => expect(select.value).toBe("6"));
     fireEvent.change(select, { target: { value: "12" } });
     await waitFor(() =>
       expect(mockUpdatePrefs).toHaveBeenCalledWith("user-1", { messageImport: { filters: { lookbackMonths: 12 } } }),
     );
-    expect(screen.getByTestId("gm-lookback-line")).toHaveTextContent("Copying texts from the last year");
     mockUpdatePrefs.mockResolvedValue({ success: false });
     fireEvent.change(select, { target: { value: "3" } });
     await waitFor(() => expect(select.value).toBe("12"));
@@ -227,12 +249,20 @@ describe("GoogleMessagesSettings", () => {
   // SR M: "Download photos / videos from all chats". Photos ON and videos OFF
   // by default; videos ask first, with the storage estimate. Mutations: the
   // defaults inverted, videos switched on without asking, no estimate → red.
-  it("media toggles: photos on by default; videos ask first with the storage estimate (M5)", async () => {
+  // BACKLOG-3156 stage G (founder 2026-10-13): both are switches (the iPhone
+  // Sync row's ToggleSwitch), descriptions kept underneath. Mutations: a
+  // checkbox back; videos switched on without the confirm → red.
+  it("media toggles: switches; photos on by default; videos ask first with the storage estimate (M5)", async () => {
     render(<GoogleMessagesSettings userId="user-1" />);
-    const photos = (await screen.findByTestId("gm-photos-all")) as HTMLInputElement;
-    const videos = screen.getByTestId("gm-videos-all") as HTMLInputElement;
-    expect(photos.checked).toBe(true);
-    expect(videos.checked).toBe(false);
+    const photos = await screen.findByRole("switch", { name: "Download photos from all chats" });
+    const videos = screen.getByRole("switch", { name: "Download videos from all chats" });
+    expect(photos).toBe(screen.getByTestId("gm-photos-all"));
+    expect(videos).toBe(screen.getByTestId("gm-videos-all"));
+    expect(screen.queryByRole("checkbox", { name: /Download (photos|videos)/ })).toBeNull();
+    expect(screen.getByTestId("gm-photos-row")).toHaveTextContent("On: photos are saved for every chat in the period.");
+    expect(screen.getByTestId("gm-videos-row")).toHaveTextContent("Off by default. Videos take much more space than photos.");
+    expect(photos).toHaveAttribute("aria-checked", "true");
+    expect(videos).toHaveAttribute("aria-checked", "false");
     fireEvent.click(photos);
     await waitFor(() => expect(mockSetMedia).toHaveBeenCalledWith({ photosAllChats: false }));
     mockSetMedia.mockClear();
@@ -254,59 +284,9 @@ describe("GoogleMessagesSettings", () => {
     expect(videoEstimateText(null)).toContain("Sync once");
   });
 
-  // C1 (UX redesign): Settings says whether the extension is linked and
-  // always shows the link panel (the code comes from the extension's popup;
-  // Keepr makes none). Mutations: the line wrong; the panel missing; a
-  // Keepr-made code shown → red.
-  // Founder (2026-10-04): Settings hosts no copy of a flow screen — one row
-  // in this screen's style: the status, and Link / Relink, which open the
-  // SAME Sync Android modal at its link step (Forget link when linked).
-  // Mutations: the panel / a code field back; Link not opening the modal at
-  // the link step; the button not in the screen's style → red.
-  it("link row: status + Link / Relink open the Sync Android modal at the link step; no code field here", async () => {
-    const onOpen = jest.fn();
-    const view = render(<GoogleMessagesSettings userId="user-1" onOpenSyncAndroid={onOpen} />);
-    expect(await screen.findByTestId("gm-pairing-line")).toHaveTextContent(/^Not linked$/);
-    expect(screen.queryByTestId("gm-link-panel")).toBeNull();
-    expect(screen.queryByTestId("gm-link-code")).toBeNull();
-    expect(document.querySelector('input[inputmode="numeric"]')).toBeNull();
-    expect(screen.queryByTestId("gm-link-forget")).toBeNull();
-    const link = screen.getByTestId("gm-link-open");
-    expect(link).toHaveTextContent(/^Link$/);
-    // The screen's own button (as Force Re-import).
-    expect(link.className).toBe(screen.getByRole("button", { name: "Force Re-import" }).className);
-    fireEvent.click(link);
-    expect(onOpen).toHaveBeenCalledTimes(1);
-    view.unmount();
-    mockState = { ...mockState, extensionPaired: true };
-    render(<GoogleMessagesSettings userId="user-1" onOpenSyncAndroid={onOpen} />);
-    await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent(/^Linked$/));
-    expect(screen.getByTestId("gm-link-open")).toHaveTextContent(/^Relink$/);
-    fireEvent.click(screen.getByTestId("gm-link-open"));
-    expect(onOpen).toHaveBeenCalledTimes(2);
-  });
-
-  // SR: Forget link uses the screen's link style (no hex classes) and asks
-  // first, worded as the popup's Unlink. Mutations: forgets on the first
-  // click; another wording; a one-off style → red.
-  it("Forget link: the screen's link style; asks first (as the popup's Unlink); Cancel keeps the link", async () => {
-    mockState = { ...mockState, extensionPaired: true };
-    render(<GoogleMessagesSettings userId="user-1" onOpenSyncAndroid={jest.fn()} />);
-    const forget = await screen.findByTestId("gm-link-forget");
-    expect(forget.className).toBe("text-sm text-indigo-700 hover:text-indigo-900 font-medium");
-    expect(forget.className).not.toMatch(/#/);
-    fireEvent.click(forget);
-    expect(mockForget).not.toHaveBeenCalled();
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const popup = require("../../../../chrome-extension/popup.js") as { COPY: { unlinkAsk: string } };
-    expect(screen.getByTestId("gm-forget-confirm")).toHaveTextContent(popup.COPY.unlinkAsk);
-    fireEvent.click(screen.getByTestId("gm-forget-cancel"));
-    expect(screen.queryByTestId("gm-forget-confirm")).toBeNull();
-    expect(mockForget).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("gm-link-forget"));
-    fireEvent.click(screen.getByTestId("gm-forget-yes"));
-    await waitFor(() => expect(mockForget).toHaveBeenCalledTimes(1));
-  });
+  // BACKLOG-3156 stage G: the link row tests (status, Link / Relink, Unlink's
+  // confirm, the post-start "Checking the browser…") moved with the control to
+  // the Sources card: messagesSourcesAndroid-3156.test.tsx.
 
   // Founder (2026-10-04): "Beta extension install" is HIDDEN while the
   // extension is not published (everyone gets the beta then); once published
@@ -326,9 +306,10 @@ describe("GoogleMessagesSettings", () => {
     const box = (await screen.findByTestId("gm-beta-install")) as HTMLInputElement;
     expect(box.disabled).toBe(false);
     expect(box.closest("label")).toHaveTextContent("Beta extension install");
-    const photos = screen.getByTestId("gm-photos-all");
-    expect(box.closest("label")!.className).toBe(photos.closest("label")!.className);
-    expect(box.className).toBe(photos.className);
+    // BACKLOG-3156 stage G: photos / videos became switches, so the comparator
+    // is the checkbox-row style they used to share (written out).
+    expect(box.closest("label")!.className).toBe("mt-3 flex items-start gap-3 cursor-pointer");
+    expect(box.className).toBe("mt-0.5 w-5 h-5");
     await waitFor(() => expect(box.checked).toBe(false));
     fireEvent.click(box);
     await waitFor(() =>
@@ -372,33 +353,9 @@ describe("consent (C7)", () => {
   it("no consent: no row", async () => {
     mockState = { ...mockState, optedIn: false, consentVersion: null };
     render(<GoogleMessagesSettings userId="user-1" />);
-    await screen.findByTestId("gm-pairing");
+    await screen.findByTestId("gm-block-preferences");
+    await waitFor(() => expect(mockGetState).toHaveBeenCalled());
+    await act(async () => undefined);
     expect(screen.queryByTestId("gm-consent")).toBeNull();
-  });
-});
-
-// Live (0.3.76): the same rule as the Sync Android modal (browserLinkState):
-// right after Keepr starts, a saved, not-disowned link reads "Checking the
-// browser…" briefly, then Linked — never "Not linked". Mutations: Settings
-// on extensionPaired alone again → red; "no link here" ignored → red.
-describe("the link line right after Keepr starts (0.3.76)", () => {
-  it("a saved, unproven link: 'Checking the browser…', then Linked (Forget link, Relink)", async () => {
-    mockState = { ...mockState, extensionPaired: false, pairingSaved: true, linkNotHere: false };
-    render(<GoogleMessagesSettings userId="user-1" onOpenSyncAndroid={() => undefined} linkCheckMs={150} />);
-    expect(await screen.findByTestId("gm-pairing-checking")).toHaveTextContent("Checking the browser…");
-    await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent(/^Linked$/), { timeout: 2000 });
-    expect(screen.getByTestId("gm-link-forget")).toBeInTheDocument();
-    expect(screen.getByTestId("gm-link-open")).toHaveTextContent("Relink");
-  });
-
-  it("nothing saved, or an extension said 'no link here': Not linked at once", async () => {
-    mockState = { ...mockState, extensionPaired: false, pairingSaved: false };
-    const a = render(<GoogleMessagesSettings userId="user-1" onOpenSyncAndroid={() => undefined} linkCheckMs={60_000} />);
-    await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent(/^Not linked$/));
-    expect(screen.queryByTestId("gm-pairing-checking")).toBeNull();
-    a.unmount();
-    mockState = { ...mockState, extensionPaired: false, pairingSaved: true, linkNotHere: true };
-    render(<GoogleMessagesSettings userId="user-1" onOpenSyncAndroid={() => undefined} linkCheckMs={60_000} />);
-    await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent(/^Not linked$/));
   });
 });

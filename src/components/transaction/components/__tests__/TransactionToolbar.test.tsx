@@ -77,6 +77,17 @@ describe("TransactionToolbar", () => {
     jest.clearAllMocks();
   });
 
+  describe("bulk export notice (BACKLOG-3828)", () => {
+    it("renders the notice under the success banner only when asked", () => {
+      mockIsAllowed.mockReturnValue(true);
+      const base = { ...createDefaultProps(), bulkActionSuccess: "Successfully exported 2 transactions" };
+      const { rerender } = render(<TransactionToolbar {...base} />);
+      expect(screen.queryByTestId("bulk-export-notice")).toBeNull();
+      rerender(<TransactionToolbar {...base} bulkExportNotice onDismissBulkExportNotice={jest.fn()} />);
+      expect(screen.getByTestId("bulk-export-notice")).toHaveTextContent("Exported files aren't encrypted");
+    });
+  });
+
   describe("Rejected filter tab AI gating (BACKLOG-462)", () => {
     it("should show Rejected tab when ai_detection feature is allowed", () => {
       mockIsAllowed.mockReturnValue(true); // All features allowed

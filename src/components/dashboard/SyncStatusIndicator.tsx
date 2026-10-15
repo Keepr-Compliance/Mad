@@ -125,6 +125,9 @@ export function SyncStatusIndicator({
   // completion card can render a provider-aware "Reconnect" CTA that routes to
   // the same Settings navigation as the SystemHealthMonitor banner.
   const reconnectProviderDuringSync = useRef<ReconnectProvider | null>(null);
+  // BACKLOG-3885: typed tracking for the iPhone-unplugged card.
+  const deviceDisconnectedDuringSync = useRef(false);
+  const otherErrorDuringSync = useRef(false);
   const autoDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // BACKLOG-2330: an external sync (e.g. iPhone) cancel empties the orchestrator
   // queue exactly like a genuine completion would, so the running->done
@@ -197,6 +200,8 @@ export function SyncStatusIndicator({
         errorMessagesDuringSync.current = [];
         summariesDuringSync.current = [];
         reconnectProviderDuringSync.current = null;
+        deviceDisconnectedDuringSync.current = false;
+        otherErrorDuringSync.current = false;
         // BACKLOG-2748: a cancel belongs to the run it stopped, not the next one.
         cancelledDuringSync.current = false;
         // BACKLOG-2330: baseline the cancel counter so a cancel during THIS
@@ -220,6 +225,8 @@ export function SyncStatusIndicator({
         if (item.status === 'error' && !errorItemsDuringSync.current.includes(item.type)) {
           hadErrorsDuringSync.current = true;
           errorItemsDuringSync.current.push(item.type);
+          if (item.errorKind === 'device_disconnected') deviceDisconnectedDuringSync.current = true;
+          else otherErrorDuringSync.current = true;
           // BACKLOG-2127: keep the provider-specific message for the subtitle.
           if (item.error) errorMessagesDuringSync.current.push(item.error);
           // BACKLOG-2127: keep the TYPED reconnect provider (first one wins) so
@@ -268,6 +275,8 @@ export function SyncStatusIndicator({
         if (item.status === 'error' && !errorItemsDuringSync.current.includes(item.type)) {
           hadErrorsDuringSync.current = true;
           errorItemsDuringSync.current.push(item.type);
+          if (item.errorKind === 'device_disconnected') deviceDisconnectedDuringSync.current = true;
+          else otherErrorDuringSync.current = true;
           // BACKLOG-2127: keep the provider-specific message for the subtitle.
           if (item.error) errorMessagesDuringSync.current.push(item.error);
           // BACKLOG-2127: keep the TYPED reconnect provider (first one wins) so
@@ -414,13 +423,22 @@ export function SyncStatusIndicator({
       errorItemsDuringSync.current.length === 1 &&
       errorItemsDuringSync.current[0] === GOOGLE_MESSAGES_SYNC_TYPE;
 
+    // BACKLOG-3885: an unplugged iPhone is a stop, not a fault. Only when every
+    // error this run is that disconnect; any other error keeps the generic card.
+    const deviceStopped =
+      completionVariant === 'error' &&
+      deviceDisconnectedDuringSync.current &&
+      !otherErrorDuringSync.current;
+
     const completionTitle =
+      deviceStopped ? 'Last sync stopped' :
       gmFailed ? 'Sync failed' :
       completionVariant === 'error' ? 'Sync Completed with Errors' :
       completionVariant === 'pending' ? `${pendingCount} transaction${pendingCount !== 1 ? "s" : ""} found` :
       'Sync Complete';
 
     const completionSubtitle =
+      deviceStopped ? 'Your iPhone was disconnected. Reconnect it and sync again.' :
       completionVariant === 'error'
         // BACKLOG-2127: prefer the provider-specific reconnect message
         // (e.g. "Outlook connection expired — reconnect to sync email") over
@@ -509,7 +527,7 @@ export function SyncStatusIndicator({
               {gmRetryError && (
                 <p className="text-xs text-amber-800 mt-1" role="alert" data-testid="sync-gm-retry-error">{gmRetryError}</p>
               )}
-              {completionVariant === 'error' && !gmFailed && (
+              {completionVariant === 'error' && !gmFailed && !deviceStopped && (
                 <p className="text-xs text-amber-600 mt-1">
                   If this persists, please <button type="button" onClick={() => window.dispatchEvent(new CustomEvent('open-support-widget', { detail: { subject: `Sync Error: ${errorItemsDuringSync.current.join(', ')}` } }))} className="underline hover:text-amber-800">submit a support ticket</button>.
                 </p>

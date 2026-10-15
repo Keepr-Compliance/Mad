@@ -26,6 +26,7 @@ import { dbTransaction } from "../services/db/core/dbConnection";
 import databaseService from "../services/databaseService";
 import logService from "../services/logService";
 import { RcsExtensionBridge } from "../services/rcsExtensionBridge";
+import { sealBufferToFile } from "../services/atRest/attachmentWriter";
 import type { RcsJobSnapshot } from "../services/rcsImportJob";
 import { rcsImageFilename, type RcsMediaDeps } from "../services/rcsImportMedia";
 import { rcsChatHash, rcsExternalId, storeCacheChatSync, type RcsCacheChatDeps } from "../services/rcsImportStore";
@@ -57,7 +58,9 @@ import {
   recordChatCoverage,
 } from "../services/db/rcsChatCoverageDbService";
 import { RCS_DEAL_CHATS_MAX } from "../services/rcsImportJob";
-import { forgetSourceCoverage, getSourceCoverage, recordSourceCoverage } from "../services/auditCoverageService";
+import { forgetSourceCoverage, recordSourceCoverage } from "../services/auditCoverageService";
+// BACKLOG-3785: index-bounded reads in place of the full per-source coverage scan.
+import { hasCompanionTexts, recordedCoveredSince } from "../services/db/rcsSourcePresenceDb";
 import {
   CHROME_EXTENSIONS_ADDRESS,
   chromeCandidates,
@@ -71,7 +74,7 @@ import {
   type DeliveryFs,
 } from "../services/rcsExtensionDelivery";
 import {
-  backfillCoverageFrom,
+  backfillCoverageRecord,
   cacheRunCoverage,
   cacheRunReadNothing,
   chatFloorDecision,
@@ -81,6 +84,7 @@ import {
   type CacheEndSnapshot,
   consentIsCurrent,
   cacheSavedFromCommit,
+  chatOnlyBackToMs,
   consentToRecordOnSync,
   RCS_CONSENT_VERSION,
   cancelOnSessionChange,
@@ -149,7 +153,7 @@ export const RCS_SAVING_MESSAGE = "Keepr is still saving the last Sync. Try agai
 
 const deps: RcsCacheChatDeps = {
   batchInsertMessages: (rows, batchSize) => databaseService.batchInsertMessages(rows, batchSize),
-  getMessageIdMap: (userId) => databaseService.getMessageIdMap(userId),
+  getMessageIdsByExternalIds: (userId, externalIds) => databaseService.getMessageIdsByExternalIds(userId, externalIds),
   insertReactionRows: (rows) => databaseService.insertReactionRows(rows),
   // BACKLOG-3630: the content guard (same sent_at + direction + body).
   findContentDuplicates: (userId, rows) => databaseService.findRcsContentDuplicates(userId, rows),
@@ -161,7 +165,8 @@ const deps: RcsCacheChatDeps = {
   recordThreadName: (userId, threadId, name) => databaseService.recordRcsThreadName(userId, threadId, name),
 };
 
-const mediaDeps: RcsMediaDeps = {
+/** Exported for the BACKLOG-3816 writer controls. */
+export const mediaDeps: RcsMediaDeps = {
   attachmentsDir: () => path.join(app.getPath("userData"), "message-attachments"),
   getMessageIdMap: (userId) => databaseService.getMessageIdMap(userId),
   getExistingAttachmentRecords: () => databaseService.getExistingAttachmentRecords(),
@@ -176,7 +181,10 @@ const mediaDeps: RcsMediaDeps = {
       return false;
     }
   },
-  writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
+  // BACKLOG-3816: RCS images are stored as KEPRENC ciphertext.
+  writeSealed: async (filePath, data) => {
+    await sealBufferToFile(filePath, data);
+  },
   mkdir: async (dir) => {
     await fs.promises.mkdir(dir, { recursive: true });
   },
@@ -197,8 +205,9 @@ function cacheStaging(): RcsCacheStaging {
     mkdir: async (dir) => {
       await fs.promises.mkdir(dir, { recursive: true });
     },
-    writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
+    writeSealed: mediaDeps.writeSealed,
     exists: mediaDeps.fileExists,
+    // Moves staged CIPHERTEXT into message-attachments (rename; copy across volumes).
     move: async (from, to) => {
       try {
         await fs.promises.rename(from, to);
@@ -245,8 +254,8 @@ export const commitWriter: RcsCommitWriter = {
     clearPendingFullRead(userId, chat.conversationId, rcsChatHash(people.numbers));
     return r;
   },
-  getMessageIdMap: (userId) => databaseService.getMessageIdMap(userId),
-  getExistingAttachmentRecords: () => databaseService.getExistingAttachmentRecords(),
+  getMessageIdsByExternalIds: (userId, externalIds) => databaseService.getMessageIdsByExternalIds(userId, externalIds),
+  getExistingAttachmentRecordsForMessages: (messageIds) => databaseService.getExistingAttachmentRecordsForMessages(messageIds),
   insertAttachment: (params) => databaseService.insertAttachment(params),
   markMessageHasAttachments: (messageId) => databaseService.markMessageHasAttachments(messageId),
   externalId: rcsExternalId,
@@ -517,11 +526,15 @@ export async function commitCacheStaging(
   const readNothing = !!run.snapshot && cacheRunReadNothing(run.snapshot);
   // Live (founder): counts only — how many chats recorded their coverage.
   let coverageRecorded = 0;
+  // BACKLOG-3892 E: the latest "only back to" date over the deal chats that came back short.
+  let onlyBackToMs: number | null = null;
   const r = await cacheStaging().commit(jobId, userId, limits, commitWriter, {
     // SR: a chat switched to Don't sync since it was read is not saved.
     chatExcluded: (u, hash, conversationId) => databaseService.checkRcsExclusion(u, hash, conversationId),
     perChat: (chat) => {
       if (cacheChatCommitted(userId, chat)) coverageRecorded += 1;
+      const short = chatOnlyBackToMs(chat.meta, chat.oldestKeptMs);
+      if (short !== null && (onlyBackToMs === null || short > onlyBackToMs)) onlyBackToMs = short;
     },
     runDone: () => {
       if (readNothing) {
@@ -536,7 +549,7 @@ export async function commitCacheStaging(
   // timeout): the next run is "Try again" — it skips the chats this one finished.
   if (!run.complete || (r.chatsFailed ?? 0) > 0 || r.stopped || r.runRecordFailed) setFailedRun(userId, run.startedAt);
   void logService.info(`[RcsCache] chat coverage recorded: ${coverageRecorded}`, LOG_TAG);
-  return r;
+  return onlyBackToMs === null ? r : { ...r, onlyBackToMs };
 }
 
 async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEndSnapshot): Promise<void> {
@@ -854,12 +867,12 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   const plan = await resolveImportPlanForUser({ userId: decision.userId, mode: "delta" });
   // L2: no coverage recorded yet → backfill it from the previous run's floor,
   // only when that run was a full read with a normal list stop that reached it.
-  let coveredSince = getSourceCoverage(decision.userId).find((c) => c.source === "google_messages")?.coveredSince ?? null;
+  let coveredSince = recordedCoveredSince(decision.userId, "google_messages");
   if (!coveredSince) {
-    const backfill = backfillCoverageFrom(getRcsCacheRun(decision.userId));
+    const backfill = backfillCoverageRecord(getRcsCacheRun(decision.userId));
     if (backfill) {
-      recordSourceCoverage(decision.userId, "google_messages", backfill, new Date().toISOString());
-      coveredSince = backfill;
+      recordSourceCoverage(decision.userId, "google_messages", backfill.coveredSince, backfill.lastSyncAt);
+      coveredSince = backfill.coveredSince;
     }
   }
   const window = cacheWindow({
@@ -1066,7 +1079,8 @@ const bridge = new RcsExtensionBridge({
     // Founder (2026-10-01): a Sync that is done or failed brings Keepr to the
     // front by itself (the page's "Open Keepr" stays as the fallback); a
     // cancel does not. The /focus route's mechanism, incl. the taskbar flash.
-    if (shouldFocusKeeprOnJobEnd(ended.snapshot.state)) focusKeeprFromBrowser();
+    // BACKLOG-3924: not when the Sync failed as not signed in (Chrome stays in front).
+    if (shouldFocusKeeprOnJobEnd(ended.snapshot)) focusKeeprFromBrowser();
     if (ended.kind !== "cache") return;
     // SR F2: a STOP (cancel) is final at once — the job's record goes now,
     // synchronously, so a quit before the async discard can never let the
@@ -1513,7 +1527,8 @@ export function registerRcsImportHandlers(): void {
           pairingSaved: userId ? pairingAuth.isPaired(userId) : false,
           linkNotHere: userId ? pairingAuth.linkNotHere(userId) : false,
           // SR (C6 review): the Android Companion's texts exist (Force re-import names it only then).
-          companionData: userId ? getSourceCoverage(userId).some((c) => c.source === "android_companion") : false,
+          // BACKLOG-3785: polled every 3 s — an index-bounded read, never the per-source scan.
+          companionData: userId ? hasCompanionTexts(userId) : false,
           // SR: the pairing code shown was used up by wrong attempts.
         },
       };

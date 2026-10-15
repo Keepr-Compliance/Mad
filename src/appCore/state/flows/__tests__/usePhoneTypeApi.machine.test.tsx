@@ -82,6 +82,7 @@ const readyStateIPhone: ReadyState = {
     hasEmailConnected: true,
     needsDriverSetup: false,
     fda: "granted",
+    setup: "finished",
   },
 };
 
@@ -95,6 +96,7 @@ const readyStateAndroid: ReadyState = {
     hasEmailConnected: true,
     needsDriverSetup: false,
     fda: "granted",
+    setup: "finished",
   },
 };
 
@@ -109,6 +111,7 @@ const readyStateWindowsIPhoneNeedsDriver: ReadyState = {
     hasEmailConnected: true,
     needsDriverSetup: true,
     fda: "granted",
+    setup: "finished",
   },
 };
 

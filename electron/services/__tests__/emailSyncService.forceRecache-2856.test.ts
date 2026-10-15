@@ -28,7 +28,12 @@
  *   1. high-water-mark bypass    -> restore the `MAX(sent_at)` clamp on force runs
  *   2. dedup read view           -> point the dedup reads back at live `emails`
  *   3. interruption atomicity    -> run the swap steps outside one transaction
- *   4. force-set scope           -> widen the predicate (drop `source` / `sent_at`)
+ *   4. force-set scope           -> BACKLOG-3910a: every unprotected row of the
+ *                                   user is replaced; put back a `source` /
+ *                                   `sent_at` / `external_id` term -> red
+ *
+ * The BACKLOG-3910a controls (deal-linked emails are kept, refreshed in place
+ * or frozen) live in `emailSyncService.forceRecacheKeepsDeals-3910a.test.ts`.
  *   5. derivation + body_plain   -> stamp a literal 0 instead of the constant
  */
 
@@ -382,6 +387,9 @@ describe("BACKLOG-2856 — force re-cache re-fetches the whole window", () => {
     expect(result.forceSwap).toEqual({
       emailsDeleted: 3,
       emailsInserted: 3,
+      emailsRefreshed: 0,
+      emailsKeptLocked: 0,
+      emailsKeptNoCopy: 0,
       participantsInserted: 6,
       providers: ["outlook"],
     });
@@ -438,17 +446,16 @@ describe("BACKLOG-2856 — force re-cache re-fetches the whole window", () => {
 
 describe("BACKLOG-2856 — what a force re-cache leaves alone", () => {
   /**
-   * CONTROL 4 — the force set is scoped, asserted BY IDENTITY.
+   * CONTROL 4 / C4' (BACKLOG-3910a) — the force set is every UNPROTECTED email
+   * of the user, asserted BY IDENTITY. Founder rule 1 (2026-10-11): any
+   * account, any age, connected or not. Each `gone-*` row is one the OLD scope
+   * spared; the other user's row is the only survivor.
    *
-   * Each of these rows is one thing this run cannot put back, and the 2796
-   * incident is what they are here for: an unscoped force set deleted everything
-   * the user had and rebuilt only what one source could supply.
-   *
-   * MUTATION: drop the `source IN (…)` clause -> the disconnected-Gmail row
-   * disappears. Drop `sent_at >= ?` -> the out-of-window row disappears. Drop
-   * `external_id IS NOT NULL` -> the manual row disappears.
+   * MUTATION: put back `sent_at >= ?` -> gone-out-of-window survives; put back
+   * `source IN (…)` -> gone-gmail-disconnected survives; put back
+   * `external_id IS NOT NULL` -> gone-null-external survives. Each red.
    */
-  it("leaves other users, null-external-id, out-of-window and other-provider rows untouched", async () => {
+  it("C4': removes unprotected rows of any age, account and provider id; other users untouched", async () => {
     seedEmail({
       id: "keep-other-user",
       userId: OTHER_USER,
@@ -456,24 +463,11 @@ describe("BACKLOG-2856 — what a force re-cache leaves alone", () => {
       source: "outlook",
       sentAt: "2026-03-01T10:00:00Z",
     });
-    seedEmail({
-      id: "keep-null-external",
-      externalId: null,
-      source: "outlook",
-      sentAt: "2026-03-01T10:00:00Z",
-    });
-    seedEmail({
-      id: "keep-out-of-window",
-      externalId: "ext-old",
-      source: "outlook",
-      sentAt: "2025-06-01T10:00:00Z",
-    });
-    seedEmail({
-      id: "keep-gmail-disconnected",
-      externalId: "ext-g1",
-      source: "gmail",
-      sentAt: "2026-03-01T10:00:00Z",
-    });
+    seedEmail({ id: "gone-null-external", externalId: null, source: "outlook", sentAt: "2026-03-01T10:00:00Z" });
+    seedEmail({ id: "gone-null-sent", externalId: "ext-ns", source: "outlook", sentAt: null });
+    seedEmail({ id: "gone-out-of-window", externalId: "ext-old", source: "outlook", sentAt: "2025-06-01T10:00:00Z" });
+    seedEmail({ id: "gone-gmail-disconnected", externalId: "ext-g1", source: "gmail", sentAt: "2026-03-01T10:00:00Z" });
+    seedEmail({ id: "gone-gmail-old", externalId: "ext-g0", source: "gmail", sentAt: "2024-03-01T10:00:00Z" });
     seedEmail({
       id: "replace-me",
       externalId: "ext-1",
@@ -484,17 +478,14 @@ describe("BACKLOG-2856 — what a force re-cache leaves alone", () => {
 
     mockOutlookSearch.mockResolvedValue([providerEmail(1)]);
 
-    await emailSyncService.precacheEmails(USER, undefined, { force: true });
+    const result = await emailSyncService.precacheEmails(USER, undefined, { force: true });
 
-    // By identity, not by count.
+    expect(result.error).toBeUndefined();
     expect(emailIdSet(OTHER_USER)).toEqual(["keep-other-user"]);
-    const survivors = emailIdSet().filter((id) => id.startsWith("keep-"));
-    expect(survivors).toEqual([
-      "keep-gmail-disconnected",
-      "keep-null-external",
-      "keep-out-of-window",
-    ]);
+    // Exactly one row of the user: the fresh copy of ext-1, under a new id.
+    expect(externalIdSet()).toEqual(["ext-1"]);
     expect(emailIdSet()).not.toContain("replace-me");
+    expect(result.forceSwap?.emailsDeleted).toBe(6);
   });
 
   /**
@@ -523,7 +514,8 @@ describe("BACKLOG-2856 — what a force re-cache leaves alone", () => {
     // Nothing was rebuilt, so there was nothing to swap in — and that is
     // reported as an error rather than a green "0 re-cached".
     expect(result.forceSwap).toBeUndefined();
-    expect(result.error).toMatch(/could not complete/i);
+    // BACKLOG-3910a S6: the message names the mailbox that did not finish.
+    expect(result.error).toBe("Re-cache could not finish for me@example.com. Nothing was changed.");
     expect(stagingTables()).toEqual([]);
   });
 });
@@ -544,29 +536,18 @@ describe("BACKLOG-2856 — one provider succeeds while the other does not", () =
   });
 
   /**
-   * THE BRANCH THIS TEST EXISTS FOR: `restrictForceSetToRebuiltProviders`
-   * actually pruning staged rows.
+   * C8 (BACKLOG-3910a, SR decision 5) — ALL OR NOTHING.
    *
-   * Every other force test here runs Outlook-only, and the partial-failure test
-   * above ends with NO provider rebuilt — which returns `null` before the
-   * pruning loop ever runs. So the deletes, the participants-before-emails
-   * ordering, and the `attachmentMeta` splice were all unexecuted code until
-   * this test. That is the whole reason the loop was written.
+   * Outlook completes both rounds; Gmail's all-labels round fails after its
+   * inbox round staged a copy. The removal is no longer per mailbox, so a
+   * partial apply would remove Gmail's unprotected mail and put nothing back.
+   * Nothing is applied: every live row is identical, and the result names the
+   * mailbox (and that its token did not expire) for the UI's next-step line.
    *
-   * The scenario is the mixed one: Outlook completes both rounds, Gmail's
-   * all-labels round fails. Gmail's live rows must survive, and this run has
-   * ALREADY STAGED replacements for them from the Gmail inbox round. Those
-   * staged rows must be thrown away, because their `external_id` is now held by
-   * a surviving live row under the same `account_id` — which is precisely what
-   * `idx_emails_account_external` forbids.
-   *
-   * MUTATION: delete the pruning loop from `restrictForceSetToRebuiltProviders`
-   * -> the swap's plain INSERT hits UNIQUE, the whole swap rolls back, and the
-   * run reports "could not be applied" in exactly the case the code exists to
-   * rescue. Live stays intact either way (the safe direction), so nothing but
-   * this test distinguishes the two.
+   * MUTATION: swap anyway when only some providers rebuilt (the old narrowing)
+   * -> outlook-live is replaced and gmail-live removed, red.
    */
-  it("swaps in the provider that finished and leaves the failed provider's rows alone", async () => {
+  it("C8: one connected mailbox not finishing applies nothing and names the mailbox", async () => {
     seedEmail({
       id: "outlook-live",
       externalId: "ext-1",
@@ -581,41 +562,43 @@ describe("BACKLOG-2856 — one provider succeeds while the other does not", () =
       sentAt: "2026-03-02T10:00:00.000Z",
       messageIdHeader: "<gmsg-1@example.com>",
     });
+    const snapshot = (): unknown[] =>
+      db.prepare(`SELECT * FROM emails ORDER BY id`).all();
+    const before = snapshot();
 
     mockOutlookSearch.mockResolvedValue([providerEmail(1)]);
     mockOutlookSearchAll.mockResolvedValue([]);
-
-    // Gmail's inbox round SUCCEEDS and stages a replacement carrying the same
-    // provider id as the surviving live row...
     mockGmailSearch.mockResolvedValue([
       { ...providerEmail(1), id: "gext-1", messageIdHeader: "<gmsg-1@example.com>" },
     ]);
-    // ...and then its all-labels round fails (non-network, so the Gmail block
-    // completes and the run reaches the swap).
     mockGmailSearchAll.mockRejectedValue(new Error("Gmail 403 on label list"));
 
     const result = await emailSyncService.precacheEmails(USER, undefined, { force: true });
 
-    // The swap happened, for Outlook only.
-    expect(result.forceSwap).toEqual({
-      emailsDeleted: 1,
-      emailsInserted: 1,
-      participantsInserted: 2,
-      providers: ["outlook"],
+    expect(result.forceSwap).toBeUndefined();
+    expect(result.error).toBe("Re-cache could not finish for me@example.net. Nothing was changed.");
+    expect(result.forceNotApplied).toEqual({
+      mailboxes: [{ provider: "gmail", mailbox: "me@example.net", tokenExpired: false }],
     });
-    expect(result.error).toBeUndefined();
-
-    // Gmail's row survives BY IDENTITY — same local id, never replaced.
-    expect(emailIdSet()).toContain("gmail-live");
-    // Outlook's row was replaced: same provider id, a new local id.
-    expect(emailIdSet()).not.toContain("outlook-live");
-    expect(externalIdSet()).toEqual(["ext-1", "gext-1"]);
-    // And exactly one row holds the Gmail provider id — the staged duplicate was
-    // pruned rather than inserted alongside it.
-    expect(
-      db.prepare(`SELECT COUNT(*) AS c FROM emails WHERE external_id = 'gext-1'`).get(),
-    ).toEqual({ c: 1 });
+    expect(snapshot()).toEqual(before);
     expect(stagingTables()).toEqual([]);
+  });
+
+  /** C8, token half: an expired token is reported per mailbox for the reconnect line. */
+  it("C8: reports tokenExpired for a mailbox whose token expired", async () => {
+    seedEmail({ id: "gmail-live", externalId: "gext-1", source: "gmail", sentAt: "2026-03-02T10:00:00.000Z" });
+    mockOutlookSearch.mockResolvedValue([providerEmail(1)]);
+    mockGmailSearch.mockRejectedValue(
+      Object.assign(new Error("invalid_grant: Token has been expired or revoked."), { code: 401 }),
+    );
+
+    const result = await emailSyncService.precacheEmails(USER, undefined, { force: true });
+
+    expect(result.forceSwap).toBeUndefined();
+    expect(emailIdSet()).toEqual(["gmail-live"]);
+    expect(result.forceNotApplied?.mailboxes).toEqual([
+      { provider: "gmail", mailbox: "me@example.net", tokenExpired: true },
+    ]);
   });
 });
 
@@ -766,41 +749,5 @@ describe("BACKLOG-2856 — an interrupted force re-cache changes nothing", () =>
     mockOutlookSearchAll.mockResolvedValue([]);
     await emailSyncService.precacheEmails(USER, undefined, { force: true });
     expect(stagingTables()).toEqual([]);
-  });
-
-  /**
-   * Link loss is the AGREED behaviour, so it is pinned rather than left implicit.
-   *
-   * Founder, 2026-08-24: parity with the messages force re-import, including
-   * losing every email<->transaction link. If a future change quietly starts
-   * preserving links via `message_id_header`, this test is what says the change
-   * was a decision and not an accident — and the UI copy would need to change
-   * with it.
-   */
-  it("cascade-deletes the communications rows of replaced emails (agreed parity cost)", async () => {
-    seedEmail({
-      id: "live-1",
-      externalId: "ext-1",
-      source: "outlook",
-      sentAt: "2026-03-01T10:00:00Z",
-      messageIdHeader: "<msg-1@example.com>",
-    });
-    db.prepare(
-      `INSERT INTO transactions (id, user_id, property_address) VALUES ('txn-1', ?, '1 Main St')`,
-    ).run(USER);
-    // Columns transcribed from `schema.sql` communications, not invented: the
-    // first draft of this fixture used `type` and `occurred_at`, which the table
-    // does not have. It failed loudly here rather than quietly proving nothing,
-    // which is the argument for running fixtures against the real schema.
-    db.prepare(
-      `INSERT INTO communications (id, user_id, transaction_id, email_id, link_source)
-       VALUES ('comm-1', ?, 'txn-1', 'live-1', 'manual')`,
-    ).run(USER);
-    expect(db.prepare(`SELECT COUNT(*) AS c FROM communications`).get()).toEqual({ c: 1 });
-
-    mockOutlookSearch.mockResolvedValue([providerEmail(1)]);
-    await emailSyncService.precacheEmails(USER, undefined, { force: true });
-
-    expect(db.prepare(`SELECT COUNT(*) AS c FROM communications`).get()).toEqual({ c: 0 });
   });
 });

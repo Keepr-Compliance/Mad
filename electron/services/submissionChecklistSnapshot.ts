@@ -46,7 +46,14 @@
  *                 column is not unique)
  *   email      -> submission_messages.local_message_id with channel 'email'
  * A local id with no uploaded counterpart is dropped by the function, and the
- * dropped counts come back in the result and are logged here.
+ * dropped counts come back in the result.
+ *
+ * BACKLOG-3764: with `sent` given (the submit always gives it), only the local
+ * ids this submission uploads are sent; a group left with none is not sent.
+ * Every member held back that way was listed in the submit pre-flight and
+ * confirmed by the agent (`sent.acceptedMembers`). A member held back WITHOUT
+ * that, or any member the function still drops, is a defect: it is reported to
+ * Sentry and the outcome says `linksNotAttached`, which the agent is told.
  */
 
 import * as Sentry from "@sentry/electron/main";
@@ -112,9 +119,24 @@ export interface SnapshotResultCounts {
  */
 export type SnapshotFailureKind = "transient" | "not_in_plan" | "refused";
 
+/**
+ * BACKLOG-3764: what this submission uploads, and the group members the agent
+ * confirmed would not be sent (`linkId:localId`).
+ */
+export interface SnapshotSentSets {
+  emailIds: ReadonlySet<string>;
+  attachmentIds: ReadonlySet<string>;
+  acceptedMembers: ReadonlySet<string>;
+}
+
 export type SnapshotOutcome =
   | { status: "none" }
-  | { status: "written"; counts: SnapshotResultCounts | null }
+  | {
+      status: "written";
+      counts: SnapshotResultCounts | null;
+      /** BACKLOG-3764: evidence was dropped that the agent was not told about. */
+      linksNotAttached?: boolean;
+    }
   | {
       status: "failed";
       kind: SnapshotFailureKind;
@@ -193,8 +215,13 @@ export interface SnapshotRpcClient {
  * in display order. Reviewer fields are never sent — the function refuses them.
  */
 export function buildChecklistSnapshotPayload(
-  local: ChecklistsForTransaction
+  local: ChecklistsForTransaction,
+  sent?: SnapshotSentSets,
+  /** Filled with `linkId:localId` of every member held back. */
+  withheld?: string[]
 ): SnapshotChecklistPayload[] {
+  const isSent = (kind: "attachment" | "email", id: string): boolean =>
+    !sent || (kind === "attachment" ? sent.attachmentIds.has(id) : sent.emailIds.has(id));
   return local.checklists.map((detail) => ({
     template_id: detail.checklist.templateId || null,
     template_name: detail.checklist.templateName,
@@ -208,14 +235,22 @@ export function buildChecklistSnapshotPayload(
       is_checked: item.isChecked,
       note: item.note,
       sort_order: item.sortOrder,
-      links: (detail.linksByItemId[item.id] ?? []).map((link) => ({
-        kind: link.kind,
-        label: link.label,
-        sort_order: link.sortOrder,
-        local_ids: link.members
-          .map((member) => (link.kind === "attachment" ? member.attachmentId : member.emailId))
-          .filter((id): id is string => typeof id === "string" && id.length > 0),
-      })),
+      links: (detail.linksByItemId[item.id] ?? [])
+        .map((link) => {
+          const ids = link.members
+            .map((member) => (link.kind === "attachment" ? member.attachmentId : member.emailId))
+            .filter((id): id is string => typeof id === "string" && id.length > 0);
+          for (const id of ids) if (!isSent(link.kind, id)) withheld?.push(`${link.id}:${id}`);
+          return {
+            kind: link.kind,
+            label: link.label,
+            sort_order: link.sortOrder,
+            local_ids: ids.filter((id) => isSent(link.kind, id)),
+          };
+        })
+        // BACKLOG-3764: a group with nothing uploaded is not sent (the cloud
+        // would drop it anyway); the pre-flight listed it.
+        .filter((link) => !sent || link.local_ids.length > 0),
     })),
   }));
 }
@@ -229,15 +264,17 @@ export function buildChecklistSnapshotPayload(
 export async function snapshotSubmissionChecklists(
   client: SnapshotRpcClient,
   submissionId: string,
-  transactionId: string
+  transactionId: string,
+  sent?: SnapshotSentSets
 ): Promise<SnapshotOutcome> {
   let payload: SnapshotChecklistPayload[];
+  const withheld: string[] = [];
   try {
     const local = await getChecklistsForTransaction(transactionId);
     // BACKLOG-3607: a transaction with no checklist still sends [] - the
     // snapshot is the agent's whole set, and the server records a checklist
     // the agent removed since the previous version only when it is told.
-    payload = buildChecklistSnapshotPayload(local);
+    payload = buildChecklistSnapshotPayload(local, sent, withheld);
   } catch (err) {
     // The local read is not retried: the rest of the submit reads the same DB.
     return recordFailure(
@@ -274,7 +311,13 @@ export async function snapshotSubmissionChecklists(
           LOG_CONTEXT,
           { transactionId, sent: payload.length, counts, attempt }
         );
-        return { status: "written", counts };
+        const linksNotAttached = reportUnconfirmedDrops(
+          submissionId,
+          transactionId,
+          counts,
+          withheld.filter((member) => !sent?.acceptedMembers.has(member)).length
+        );
+        return linksNotAttached ? { status: "written", counts, linksNotAttached } : { status: "written", counts };
       }
       code = error.code ? error.code : null;
       message = error.message;
@@ -325,6 +368,33 @@ export async function snapshotSubmissionChecklists(
   }
 
   return recordFailure(submissionId, transactionId, "transient", lastCode, lastMessage);
+}
+
+/**
+ * BACKLOG-3764 — the backstop. Nothing the agent was not told about may be
+ * dropped: a member held back here without his confirmation, or any member
+ * the cloud function dropped, is a defect. Reported to Sentry (counts only),
+ * and the caller tells the agent. Returns whether there was one.
+ */
+function reportUnconfirmedDrops(
+  submissionId: string,
+  transactionId: string,
+  counts: SnapshotResultCounts | null,
+  unconfirmedWithheld: number
+): boolean {
+  const droppedMembers = counts?.dropped_members ?? 0;
+  const droppedLinks = counts?.dropped_links ?? 0;
+  if (droppedMembers === 0 && droppedLinks === 0 && unconfirmedWithheld === 0) return false;
+  logService.warn(
+    `[Submission] Checklist evidence on submission ${submissionId} was not attached`,
+    LOG_CONTEXT,
+    { transactionId, droppedMembers, droppedLinks, unconfirmedWithheld }
+  );
+  Sentry.captureException(new Error("Checklist evidence was not attached at submission"), {
+    tags: { area: "submission_checklist_snapshot", code: "links_not_attached" },
+    extra: { submissionId, droppedMembers, droppedLinks, unconfirmedWithheld },
+  });
+  return true;
 }
 
 function recordFailure(

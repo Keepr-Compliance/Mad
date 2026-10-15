@@ -14,6 +14,10 @@ import {
   resolveContactName,
 } from "../services/contactsService";
 import logService from "../services/logService";
+import {
+  resolveOpenablePath,
+  OPEN_REFUSED_MESSAGE,
+} from "../services/openablePaths";
 import { getConversationsFromMessages } from "../services/db/messageDbService";
 // BACKLOG-2403: chat.db lives behind Full Disk Access, so "unreadable" is a
 // normal state during onboarding. A bare `new sqlite3.Database(path, mode)`
@@ -476,11 +480,23 @@ export function registerConversationHandlers(_mainWindow: BrowserWindow): void {
     }, { module: "ConversationHandlers" }),
   );
 
-  // Open folder in Finder
+  // Open an export in Finder/Explorer. BACKLOG-3808: only a location the main
+  // process itself wrote is opened; anything else is refused without opening.
   ipcMain.handle(
     "open-folder",
-    wrapHandler(async (event: IpcMainInvokeEvent, folderPath: string) => {
-      await shell.openPath(folderPath);
+    wrapHandler(async (event: IpcMainInvokeEvent, folderPath: unknown) => {
+      const resolved = await resolveOpenablePath(folderPath);
+      if (!resolved.ok) {
+        logService.warn("open-folder refused", "ConversationHandlers", {
+          reason: resolved.reason,
+        });
+        return { success: false, error: OPEN_REFUSED_MESSAGE };
+      }
+      // shell.openPath resolves to "" on success, or an error message.
+      const openError = await shell.openPath(resolved.realPath);
+      if (openError) {
+        return { success: false, error: openError };
+      }
       return { success: true };
     }, { module: "ConversationHandlers" }),
   );

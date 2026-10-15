@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "invoice_payment_intent_requires_action",
+    "doc_url": "<stripped>",
+    "message": "The invoice payment requires additional action. Retrieve the invoice's PaymentIntent, then use `client_secret` and `next_action` to complete it: <stripped>",
+    "request_log_url": "<stripped>",
+    "type": "card_error"
+  }
+}

@@ -450,10 +450,11 @@ describe("BACKLOG-2913: backup failures report the cause the device gave", () =>
     // Asserting one full string would let a copy tweak silently drop a clause.
     // Each of these cost the founder real time on 2026-08-27.
 
-    it("names THIS MAC, because the device's own wording names no drive", () => {
+    it("names THIS COMPUTER, because the device's own wording names no drive", () => {
       // "Insufficient free disk space on drive to back up" sent him to his
       // iPhone's storage screen, where he saw 80 GB free.
-      expect(BACKUP_HOST_DISK_FULL_MESSAGE).toMatch(/this Mac/i);
+      expect(BACKUP_HOST_DISK_FULL_MESSAGE).toMatch(/this computer/i);
+      expect(BACKUP_HOST_DISK_FULL_MESSAGE).not.toMatch(/\bmac\b|macos/i);
     });
 
     it("warns that macOS counts snapshot space the backup cannot use", () => {

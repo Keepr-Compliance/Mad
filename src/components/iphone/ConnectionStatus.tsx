@@ -1,7 +1,11 @@
 import React, { useEffect } from "react";
 import type { ConnectionStatusProps } from "../../types/iphone";
 import { TrustComputerHint } from "./TrustComputerHint";
+import { WindowsArm64Unsupported } from "./WindowsArm64Unsupported";
+import { IPhoneSetupChecklist } from "./IPhoneSetupChecklist";
 import logger from "../../utils/logger";
+import { useRetryCountdown } from "../../utils/syncRetryCooldown";
+import { RetryCooldownNotice, SyncStartButtonContent } from "./SyncStartButtonContent";
 
 /**
  * ConnectionStatus Component
@@ -41,18 +45,48 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   onInstallDriver,
   isInstallingDriver = false,
   driverInstallError = null,
+  isWindowsArm64 = false,
+  isStoreBuild = false,
+  onRecheckDriver,
+  appleDevicesState = null,
+  appleUsbDriver = null,
+  isStarting = false,
+  retryAvailableAt = null,
 }) => {
+  // BACKLOG-3816: hold after a dropped connection / refused backup service.
+  const retrySecondsLeft = useRetryCountdown(retryAvailableAt);
   useEffect(() => {
     logger.info("[ConnectionStatus] Mounted", { isConnected, device: device?.name, lastSyncTime });
     return () => logger.info("[ConnectionStatus] Unmounted");
   }, []);
+  // BACKLOG-3363: on Windows on ARM no iPhone can be detected or synced. This
+  // view wins over driverMissing, the connect prompt and the Trust hint.
+  if (isWindowsArm64) {
+    return <WindowsArm64Unsupported />;
+  }
   if (!isConnected) {
     // BACKLOG-1919: Driver-absent recovery view. When no device is detected AND
     // the Apple Mobile Device Support driver is missing (Windows), replace the
     // silent "Connect your iPhone" text with an inline one-click install button
     // that triggers the UAC admin prompt directly from this screen. Previously
     // the user was stuck here with zero guidance (root cause of ticket #64).
-    if (driverMissing && onInstallDriver) {
+    // BACKLOG-3927: Microsoft Store build — no driver install from Keepr. Once
+    // the Apple Devices state is known and setup is unfinished, the self-ticking
+    // two-row setup checklist replaces this screen. "ready" (both rows met) and
+    // unknown (null) keep the plain connect view below (unlock / Trust steps).
+    // The hook already re-checks on focus here (throttled), so the checklist's
+    // own focus re-check is off.
+    if (isStoreBuild && onRecheckDriver && appleDevicesState !== null && appleDevicesState !== "ready") {
+      return (
+        <IPhoneSetupChecklist
+          onCheckAgain={onRecheckDriver}
+          state={appleDevicesState}
+          usbDriver={appleUsbDriver}
+          recheckOnFocus={false}
+        />
+      );
+    }
+    if (driverMissing && onInstallDriver && !isStoreBuild) {
       return (
         <div className="flex flex-col items-center justify-center p-8 text-center">
           {/* Driver-missing icon (amber warning) */}
@@ -188,10 +222,15 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
 
       <button
         onClick={() => { logger.info("[ConnectionStatus] Sync iPhone clicked"); onSyncClick(); }}
-        className="mt-6 px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-all shadow-md hover:shadow-lg"
+        disabled={isStarting || retrySecondsLeft > 0}
+        className="mt-6 px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-all shadow-md hover:shadow-lg disabled:opacity-60 disabled:cursor-not-allowed"
       >
-        {lastSyncTime ? "Sync New Data" : "Sync Messages & Contacts"}
+        <SyncStartButtonContent
+          isStarting={isStarting}
+          label={lastSyncTime ? "Sync New Data" : "Sync Messages & Contacts"}
+        />
       </button>
+      <RetryCooldownNotice secondsLeft={retrySecondsLeft} />
 
       {/* Sync time note - different message for first vs subsequent syncs */}
       <div className="mt-4 flex items-start gap-2 text-left max-w-sm">

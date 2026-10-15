@@ -48,10 +48,6 @@ jest.mock("../../../contexts/IPhoneSyncContext", () => ({
 jest.mock("../SyncProgress", () => ({
   SyncProgress: () => <div data-testid="sync-progress">Progress</div>,
 }));
-jest.mock("../BackupPasswordModal", () => ({
-  BackupPasswordModal: ({ isOpen }: { isOpen: boolean }) =>
-    isOpen ? <div data-testid="password-modal">Password</div> : null,
-}));
 jest.mock("../../sync/SyncLockBanner", () => ({
   SyncLockBanner: () => <div data-testid="sync-lock-banner">Locked</div>,
 }));
@@ -62,7 +58,7 @@ const applyCancelSyncReset = () => {
     ...mockContextValue,
     syncStatus: "idle",
     progress: null,
-    needsPassword: false,
+    appleEncryptedBackup: false,
     error: null,
     userError: null,
     syncLocked: false,
@@ -82,7 +78,7 @@ const makeErrorState = (isConnected: boolean): UseIPhoneSyncReturn => ({
   progress: { phase: "backing_up", percent: 42, message: "Backing up iPhone..." },
   error: "Device disconnected during sync",
   userError: null,
-  needsPassword: false,
+  appleEncryptedBackup: false,
   lastSyncTime: null,
   isWaitingForPasscode: false,
   syncLocked: false,
@@ -94,8 +90,11 @@ const makeErrorState = (isConnected: boolean): UseIPhoneSyncReturn => ({
   installDriverStatus: "idle",
   installDriverError: null,
   recoverInstallDriver: jest.fn(),
+  recheckDriver: jest.fn(),
+  setConnectScreenActive: jest.fn(),
+  appleDevicesState: null,
+  appleUsbDriver: null,
   startSync: jest.fn(),
-  submitPassword: jest.fn(),
   cancelSync: jest.fn(() => {
     applyCancelSyncReset();
     return Promise.resolve();
@@ -103,6 +102,8 @@ const makeErrorState = (isConnected: boolean): UseIPhoneSyncReturn => ({
   dismissSync: jest.fn(),
   checkSyncStatus: jest.fn(),
   requestTrust: jest.fn(),
+  isStarting: false,
+  retryAvailableAt: null,
 });
 
 const CONNECT_STEP_COPY =

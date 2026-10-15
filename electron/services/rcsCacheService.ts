@@ -224,7 +224,25 @@ export function cacheSavedFromCommit(r: CacheCommitResult): RcsCacheSaved {
     chats: r.chats, messages: r.stored + r.alreadyPresent, newMessages: r.stored,
     reactions: r.reactionsKept ?? r.reactions, newReactions: r.reactions,
     photos: r.imagesStored + (r.imagesAlreadyThere ?? 0),
+    ...(typeof r.onlyBackToMs === "number" ? { onlyBackTo: new Date(r.onlyBackToMs).toISOString() } : {}),
   };
+}
+
+/**
+ * BACKLOG-3892 E (founder 2026-10-11): a deal chat Google Messages did not return back
+ * to the date the deal needs. Only a chat this run asked to read down to its DEAL floor
+ * (readFloorMs = chatFloorMs; a delta or settings-floor read is not judged here) that
+ * the page did not reach (extension depthKind "partial": not settled, a gap, a cap —
+ * NOT "start of the chat", which counts as reached). Returns the oldest text saved for
+ * it when that is more than a day after the floor; null otherwise.
+ */
+export function chatOnlyBackToMs(
+  meta: { chatFloorMs: number | null; readFloorMs: number | null; reachedFloor: boolean } | null,
+  oldestKeptMs: number | null | undefined,
+): number | null {
+  if (!meta || meta.reachedFloor || meta.chatFloorMs === null || meta.readFloorMs !== meta.chatFloorMs) return null;
+  if (typeof oldestKeptMs !== "number" || !Number.isFinite(oldestKeptMs)) return null;
+  return oldestKeptMs - meta.chatFloorMs > CHAT_COVERAGE_TOLERANCE_MS ? oldestKeptMs : null;
 }
 
 /**
@@ -315,9 +333,13 @@ export function decideCacheStart(input: {
 /**
  * Founder (2026-10-01): when a Sync ends done or failed, Keepr comes to the
  * front by itself; a cancel (from Keepr, the page, or a user switch) does not.
+ * BACKLOG-3924 (founder, 2026-10-12): a Sync that failed because Google
+ * Messages is not signed in does NOT — Chrome stays in front, where the QR
+ * code and the page's sign-in card are. Every other failure still does.
  */
-export function shouldFocusKeeprOnJobEnd(state: string): boolean {
-  return state === "finished" || state === "failed";
+export function shouldFocusKeeprOnJobEnd(ended: { state: string; error?: { code: string } | null }): boolean {
+  if (ended.state === "failed" && ended.error?.code === "not_signed_in") return false;
+  return ended.state === "finished" || ended.state === "failed";
 }
 
 /** BACKLOG-3658: an extension report is written to the database at most once a minute per user. */
@@ -420,6 +442,18 @@ export function cacheRunCoverage(fullRead: boolean, snapshot: CacheEndSnapshot):
 export function backfillCoverageFrom(run: { floorISO: string; fullRead: boolean; listStop: string | null; reachedFloor: boolean } | null): string | null {
   if (!run || !run.fullRead || !run.reachedFloor || !isNormalListStop(run.listStop)) return null;
   return Number.isFinite(Date.parse(run.floorISO)) ? run.floorISO : null;
+}
+
+/**
+ * The row the L2 backfill records: the previous run's floor as the coverage, and that
+ * run's FINISH as the last sync (the end check reads it, so a Sync that has not
+ * finished yet must not count as one). Null when the run backfills nothing.
+ */
+export function backfillCoverageRecord(
+  run: { floorISO: string; fullRead: boolean; listStop: string | null; reachedFloor: boolean; finishedAt: string } | null,
+): { coveredSince: string; lastSyncAt: string } | null {
+  const coveredSince = backfillCoverageFrom(run);
+  return run && coveredSince ? { coveredSince, lastSyncAt: run.finishedAt } : null;
 }
 
 /**

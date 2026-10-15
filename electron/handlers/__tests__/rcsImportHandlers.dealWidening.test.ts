@@ -51,14 +51,23 @@ jest.mock("../../capabilities/windowsProvider", () => ({ hostWindows: { broadcas
 jest.mock("../../windowRegistry", () => ({ getMainWindow: () => null }));
 jest.mock("../../utils/bringAppToFront", () => ({ bringAppToFront: jest.fn(), bringAppToFrontOrFlash: jest.fn() }));
 jest.mock("../../services/autoLinkService", () => ({ autoLinkNewMessagesForUser: jest.fn() }));
+// BACKLOG-3837: the per-source floors are read only on a dedicated worker. Stand-in: the
+// worker's own runner (runSourceFloorsOn) on this test's database.
+jest.mock("../../workers/contactWorkerPool", () => ({
+  ...jest.requireActual("../../workers/contactWorkerPool"),
+  queryOnDedicatedWorker: jest.fn(),
+}));
 jest.mock("../../services/sessionService", () => ({ __esModule: true, default: { loadSession: async () => null } }));
 
 import { setDb } from "../../services/db/core/dbConnection";
+import { queryOnDedicatedWorker } from "../../workers/contactWorkerPool";
+import { runSourceFloorsOn } from "../../services/db/wizardMessageScansDb";
 import { rcsStagingDbOps } from "../../services/db/syncDbService";
 import { RcsCacheStaging, type RcsStagingFs } from "../../services/rcsCacheStaging";
 import { peopleFrom, rcsChatHash, type RcsIncomingChat } from "../../services/rcsImportStore";
 import { getChatCoverage, recordChatCoverage } from "../../services/db/rcsChatCoverageDbService";
 import { checkExportCompleteness, getSourceCoverage, getTransactionTextCoverage, recordSourceCoverage } from "../../services/auditCoverageService";
+import { cacheSavedFromCommit } from "../../services/rcsCacheService";
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const {
@@ -128,7 +137,7 @@ const threadRows = (hash: string) =>
     .map((r) => r.sent_at);
 
 /** Stage both chats as the page sent them, then commit like commitCacheJob. */
-async function syncBoth(reachedA: boolean, reachedB: boolean): Promise<void> {
+async function syncBoth(reachedA: boolean, reachedB: boolean): Promise<Awaited<ReturnType<typeof commitCacheStaging>>> {
   const chatFloors = track();
   expect(cacheChatFloorFor(JOB, USER, "conv-a", pplA.numbers)).toBe(JANUARY);
   expect(cacheChatFloorFor(JOB, USER, "conv-b", pplB.numbers)).toBeNull();
@@ -139,7 +148,7 @@ async function syncBoth(reachedA: boolean, reachedB: boolean): Promise<void> {
   const limits = { floorMs: SETTINGS_FLOOR, cap: null, protectedSpans: [], chatFloorsMs: chatFloors };
   takeCacheChats(JOB);
   // 3671 P3: chat by chat, the chat floors and reached flags from the staging.
-  await commitCacheStaging(JOB, USER, limits, { fullRead: true, floorISO: SETTINGS_FLOOR_ISO }, {
+  return commitCacheStaging(JOB, USER, limits, { fullRead: true, floorISO: SETTINGS_FLOOR_ISO }, {
     complete: true,
     startedAt: "2026-10-01T00:00:00.000Z",
     snapshot: { state: "finished", jobId: JOB, listStop: "since", progress: { notChecked: 0 }, notReached: [] },
@@ -154,7 +163,7 @@ beforeEach(() => {
     stagingRoot: nodePath.join(tmp, "staging"),
     attachmentsDir: nodePath.join(tmp, "attachments"),
     mkdir: async (d) => void (await fs.promises.mkdir(d, { recursive: true })),
-    writeFile: (p, data) => fs.promises.writeFile(p, data),
+    writeSealed: (p, data) => fs.promises.writeFile(p, data),
     exists: async (p) => fs.existsSync(p),
     move: (from, to) => fs.promises.rename(from, to),
     unlink: async (p) => void (await fs.promises.unlink(p).catch(() => undefined)),
@@ -167,6 +176,11 @@ beforeEach(() => {
   db.pragma("foreign_keys = ON");
   db.prepare("INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, 'agent-widen@example.test', 'google', 'oauth-widen')").run(USER);
   setDb(db);
+  const floorsDb = db;
+  jest.mocked(queryOnDedicatedWorker).mockImplementation(async (type, userId) => {
+    if (type !== "sourceCoverageFloors") throw new Error(`unexpected dedicated query ${type}`);
+    return runSourceFloorsOn(floorsDb, userId);
+  });
   staging = new RcsCacheStaging(rcsStagingDbOps(), files);
   deal("t-jan", JANUARY_ISO, "active", DEAL_NUM);
   deal("t-dead", "2025-01-01T00:00:00.000Z", "rejected", REJECTED_NUM);
@@ -176,6 +190,44 @@ afterEach(() => {
   takeCacheChats(JOB);
   db?.close();
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+describe("BACKLOG-3892 E: Google Messages returned a deal chat only back to a date", () => {
+  it("the deal chat came back short: the date is its oldest SAVED text (Feb 1), not the deal floor (Jan 10)", async () => {
+    const r = await syncBoth(false, true);
+    expect(r.onlyBackToMs).toBe(Date.parse("2026-02-01T10:00:00.000Z"));
+    expect(cacheSavedFromCommit(r).onlyBackTo).toBe("2026-02-01T10:00:00.000Z");
+  });
+  it("the deal chat reached its floor: no date", async () => {
+    const r = await syncBoth(true, true);
+    expect(r.onlyBackToMs).toBeUndefined();
+    expect(cacheSavedFromCommit(r)).not.toHaveProperty("onlyBackTo");
+  });
+  it("two deal chats came back short: the LATER oldest saved text wins; a text older than its chat's floor is not counted", async () => {
+    // conv-b's deal starts in March: its Feb 1 text is below that floor (not saved), so
+    // its oldest saved text is Sep 20. conv-a's is Feb 1. The line names Sep 20.
+    deal("t-mar", "2026-03-01T00:00:00.000Z", "active", OTHER_NUM);
+    const chatFloors = track();
+    expect(cacheChatFloorFor(JOB, USER, "conv-a", pplA.numbers)).toBe(JANUARY);
+    expect(cacheChatFloorFor(JOB, USER, "conv-b", pplB.numbers)).toBe(Date.parse("2026-03-01T00:00:00.000Z"));
+    staging.stageChat(JOB, USER, chat("conv-a", false), pplA, HASH_A);
+    noteCacheChatRead(JOB, pplA.numbers, false);
+    staging.stageChat(JOB, USER, chat("conv-b", false), pplB, HASH_B);
+    noteCacheChatRead(JOB, pplB.numbers, false);
+    takeCacheChats(JOB);
+    const r = await commitCacheStaging(JOB, USER, { floorMs: SETTINGS_FLOOR, cap: null, protectedSpans: [], chatFloorsMs: chatFloors }, { fullRead: true, floorISO: SETTINGS_FLOOR_ISO }, {
+      complete: true,
+      startedAt: "2026-10-01T00:00:00.000Z",
+      snapshot: { state: "finished", jobId: JOB, listStop: "since", progress: { notChecked: 0 }, notReached: [] },
+    });
+    expect(threadRows(HASH_B)).toEqual(["2026-09-20T10:00:00.000Z"]);
+    expect(r.onlyBackToMs).toBe(Date.parse("2026-09-20T10:00:00.000Z"));
+  });
+
+  it("only a chat with no deal came back short: no date (its floor is the months setting)", async () => {
+    const r = await syncBoth(true, false);
+    expect(r.onlyBackToMs).toBeUndefined();
+  });
 });
 
 describe("per-chat widening for deals (SR 2026-10-02)", () => {
@@ -262,4 +314,36 @@ describe("per-chat widening for deals (SR 2026-10-02)", () => {
     expect(gm(getTransactionTextCoverage("t-jan", USER, null).gaps)).toEqual([]);
     expect(gm((await checkExportCompleteness("t-jan", USER)).sourceGaps)).toEqual([]);
   });
+});
+
+describe("delta read of a covered deal chat (BACKLOG-3892 E, SR review)", () => {
+  // The deal chat was already read back to its deal start (coverage = January), so it is
+  // not widened this run; the page stops short of its floor. The chat's read floor is its
+  // own, so the commit must not report "only returned texts back to <date>" after a routine
+  // Sync. Mutation: noteCacheChatRead falling back to the chat floor for the read floor.
+  for (const fullRead of [false, true]) {
+    it(`fullRead=${fullRead}: no only-back-to date, coverage unchanged`, async () => {
+      recordChatCoverage(USER, HASH_A, JANUARY_ISO);
+      const chatFloors = track({ fullRead });
+      expect(cacheChatFloorFor(JOB, USER, "conv-a", pplA.numbers)).toBeNull();
+      expect(chatFloors.get(HASH_A)).toBe(JANUARY);
+      staging.stageChat(JOB, USER, chat("conv-a", false), pplA, HASH_A);
+      noteCacheChatRead(JOB, pplA.numbers, false);
+      takeCacheChats(JOB);
+      const r = await commitCacheStaging(
+        JOB,
+        USER,
+        { floorMs: SETTINGS_FLOOR, cap: null, protectedSpans: [], chatFloorsMs: chatFloors },
+        { fullRead, floorISO: SETTINGS_FLOOR_ISO },
+        {
+          complete: true,
+          startedAt: "2026-10-01T00:00:00.000Z",
+          snapshot: { state: "finished", jobId: JOB, listStop: "since", progress: { notChecked: 0 }, notReached: [] },
+        },
+      );
+      expect(threadRows(HASH_A)).toContain("2026-02-01T10:00:00.000Z");
+      expect(r.onlyBackToMs).toBeUndefined();
+      expect(getChatCoverage(USER).get(HASH_A)).toBe(JANUARY_ISO);
+    });
+  }
 });

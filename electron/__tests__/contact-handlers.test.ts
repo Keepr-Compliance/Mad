@@ -40,14 +40,23 @@ const mockMainWindow = {
 
 // Mock services - inline factories since jest.mock is hoisted
 // Note: getUserById returns the user only for TEST_USER_ID, null for empty/invalid IDs
-jest.mock("../services/databaseService", () => ({
-  __esModule: true,
-  default: {
+jest.mock("../services/databaseService", () => {
+  const db: Record<string, jest.Mock> = {
     getImportedContactsByUserId: jest.fn(),
     getImportedContactsByUserIdAsync: jest.fn(),
     getRemovedContactIdentifiers: jest.fn(() => Promise.resolve([])),
     getUnimportedContactsByUserId: jest.fn(),
     getContactsSortedByActivity: jest.fn(),
+    // BACKLOG-3837: the two list handlers read the list with its pending state;
+    // these route to the mocks above so each case keeps configuring those.
+    getImportedContactsWithStatusAsync: jest.fn(async (...a: unknown[]) => ({
+      contacts: await db.getImportedContactsByUserIdAsync(...a),
+      messageDerivedPending: false,
+    })),
+    getContactsSortedByActivityWithStatus: jest.fn(async (...a: unknown[]) => ({
+      contacts: await db.getContactsSortedByActivity(...a),
+      messageDerivedPending: false,
+    })),
     createContact: jest.fn(),
     createContactsBatch: jest.fn(),
     updateContact: jest.fn(),
@@ -86,8 +95,9 @@ jest.mock("../services/databaseService", () => ({
     getContactNamesByPhones: jest.fn().mockResolvedValue(new Map()),
     getLastMessageDatesForPhones: jest.fn().mockReturnValue(new Map()),
     backfillPhoneLastMessageTable: jest.fn().mockResolvedValue(0),
-  },
-}));
+  };
+  return { __esModule: true, default: db };
+});
 
 jest.mock("../services/contactsService", () => ({
   __esModule: true,
@@ -199,6 +209,15 @@ jest.mock("../services/db/contactDbService", () => ({
 // This suite has no database and asserts wiring, not atomicity (that proof is
 // `contact-handlers.importAtomic-3220.test.ts`), so the callback runs directly —
 // but a promise-returning callback is refused, as better-sqlite3 refuses it.
+// BACKLOG-3837: a pending list joins the dedicated read and, when it lands, tells the window.
+jest.mock("../services/db/messageDerivedContactsCache", () => ({
+  joinMessageDerivedRead: jest.fn(() => Promise.resolve([])),
+}));
+jest.mock("../windowRegistry", () => ({
+  ...jest.requireActual("../windowRegistry"),
+  sendToMainWindow: jest.fn(() => true),
+}));
+
 jest.mock("../services/db/core/dbConnection", () => ({
   ...jest.requireActual("../services/db/core/dbConnection"),
   dbTransaction: <T>(fn: () => T): T => {
@@ -235,6 +254,7 @@ import type {
 import auditService from "../services/auditService";
 import logService from "../services/logService";
 import contactSyncService from "../services/contactSyncService";
+import { sendToMainWindow } from "../windowRegistry";
 import type { Contact } from "../types/models";
 import type {
   ContactWithActivity,
@@ -1690,6 +1710,43 @@ describe("Contact Handlers", () => {
       expect(
         mockDatabaseService.getContactsSortedByActivity,
       ).toHaveBeenCalledWith(TEST_USER_ID, "123 Main St");
+    });
+
+    it("BACKLOG-3837: message-derived people pending -> every saved contact, flagged pending; the window is told when they land", async () => {
+      const savedRows = [
+        { id: "contact-1", name: "Saved One" },
+        { id: "contact-2", name: "Saved Two" },
+      ] as unknown as ContactWithActivity[];
+      jest.mocked(mockDatabaseService.getContactsSortedByActivityWithStatus).mockResolvedValueOnce({
+        contacts: savedRows,
+        messageDerivedPending: true,
+      });
+      const handler = registeredHandlers.get("contacts:get-sorted-by-activity");
+      const result = await handler(mockEvent, TEST_USER_ID, "123 Main St");
+      expect(result.success).toBe(true);
+      expect(result.contacts.map((c: { id: string }) => c.id)).toEqual(["contact-1", "contact-2"]);
+      expect(result.contactsStatus).toEqual({ messageDerivedPending: true });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(jest.mocked(sendToMainWindow)).toHaveBeenCalledWith("contacts:message-derived-ready", { userId: TEST_USER_ID });
+
+      const getAll = registeredHandlers.get("contacts:get-all");
+      jest.mocked(mockDatabaseService.getImportedContactsWithStatusAsync).mockResolvedValueOnce({
+        contacts: savedRows,
+        messageDerivedPending: true,
+      });
+      const all = await getAll(mockEvent, TEST_USER_ID);
+      expect(all.contacts).toHaveLength(2);
+      expect(all.contactsStatus).toEqual({ messageDerivedPending: true });
+    });
+
+    it("BACKLOG-3837: not pending -> no contactsStatus, nothing sent", async () => {
+      mockDatabaseService.getContactsSortedByActivity.mockResolvedValue([]);
+      jest.mocked(sendToMainWindow).mockClear();
+      const handler = registeredHandlers.get("contacts:get-sorted-by-activity");
+      const result = await handler(mockEvent, TEST_USER_ID, null);
+      expect("contactsStatus" in result).toBe(false);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(jest.mocked(sendToMainWindow)).not.toHaveBeenCalledWith("contacts:message-derived-ready", expect.anything());
     });
 
     it("should work without property address", async () => {

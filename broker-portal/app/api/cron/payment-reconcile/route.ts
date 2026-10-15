@@ -7,14 +7,21 @@
  * Stripe, and re-runs finalize_paid_unlock (idempotent) using the STORED
  * local_transaction_id (C-C — not re-parsed Stripe metadata).
  *
- * Auth: CRON_SECRET bearer (same pattern as admin-portal/app/api/cron/storage-check).
+ * Auth: CRON_SECRET bearer via lib/auth/cronAuth (refuses when CRON_SECRET is unset).
+ *
+ * BACKLOG-3849: after the PaymentIntent loop, and only while BILLING_ENABLED is
+ * on, the Agent-subscription reconcile and the billing queue check run, each
+ * in its own try/catch so neither can affect the other or the loop above.
  */
 
 import { NextResponse } from 'next/server';
 import { getStripe } from '@/lib/stripe';
+import { currentStripeMode } from '@/lib/billing/mode';
 import { createServiceClient } from '@/lib/supabase/service';
 import { fulfillPaidUnlock, emitPaymentSucceeded } from '@/lib/payments/fulfillment';
-import { dispatchReceiptEmail } from '@/lib/payments/receipt';
+import { isAuthorizedCronRequest } from '@/lib/auth/cronAuth';
+import { billingEnabled } from '@/lib/billing/flag';
+import { reconcileAgentSubscriptions, reportOutboxHealth } from '@/lib/billing/reconcile';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,19 +32,22 @@ const GRACE_MINUTES = 5;
 const BATCH_LIMIT = 50;
 
 export async function GET(req: Request): Promise<Response> {
-  const authHeader = req.headers.get('authorization');
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (!isAuthorizedCronRequest(req.headers.get('authorization'))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const service = createServiceClient();
   const stripe = getStripe();
   const cutoff = new Date(Date.now() - GRACE_MINUTES * 60_000).toISOString();
+  // BACKLOG-3845 (RC8): only this key's mode — the other mode's PaymentIntents
+  // do not exist for this key, and retrieving them fails.
+  const mode = currentStripeMode();
 
   const { data: stuck, error } = await service
     .from('payment_intents')
     .select('id, user_id, local_transaction_id, quoted_unit_price_cents, pricing_tier_id, stripe_payment_intent_id, stripe_checkout_session_id')
     .eq('status', 'succeeded')
+    .eq('stripe_mode', mode)
     .lt('updated_at', cutoff)
     .limit(BATCH_LIMIT);
 
@@ -83,12 +93,7 @@ export async function GET(req: Request): Promise<Response> {
           pricing_tier_id: row.pricing_tier_id,
           stripe_payment_intent_id: piId,
         });
-        // Receipt on the reconciliation-recovered fulfillment (BACKLOG-2009).
-        await dispatchReceiptEmail(service, {
-          userId: row.user_id,
-          amountCents: row.quoted_unit_price_cents,
-          stripePaymentIntentId: piId,
-        });
+        // No Keepr receipt: Stripe sends it (founder 2026-10-13, BACKLOG-3648/3848).
       }
       fulfilled++;
     } catch (err) {
@@ -97,7 +102,31 @@ export async function GET(req: Request): Promise<Response> {
     }
   }
 
-  return NextResponse.json({ reconciled: fulfilled, skipped, scanned: stuck?.length ?? 0 });
+  const billing = await runBillingChecks(service, stripe, mode);
+
+  return NextResponse.json({ reconciled: fulfilled, skipped, scanned: stuck?.length ?? 0, billing });
+}
+
+async function runBillingChecks(
+  service: ReturnType<typeof createServiceClient>,
+  stripe: ReturnType<typeof getStripe>,
+  mode: ReturnType<typeof currentStripeMode>
+): Promise<Record<string, unknown>> {
+  if (!billingEnabled()) return { disabled: true };
+  const out: Record<string, unknown> = {};
+  try {
+    out.subscriptions = await reconcileAgentSubscriptions({ service, stripe, mode });
+  } catch (err) {
+    console.error('[cron/payment-reconcile] subscription reconcile failed:', (err as Error).message);
+    out.subscriptions = { error: true };
+  }
+  try {
+    out.outbox = await reportOutboxHealth({ service, stripe, mode });
+  } catch (err) {
+    console.error('[cron/payment-reconcile] outbox check failed:', (err as Error).message);
+    out.outbox = { error: true };
+  }
+  return out;
 }
 
 async function resolvePaymentIntentId(

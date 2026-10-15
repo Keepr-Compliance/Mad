@@ -73,12 +73,19 @@ import {
   selectChecklistTemplate,
   setChecklistItemChecked,
   setChecklistItemNote,
+  setChecklistLinkIncludeOutsideDates,
 } from "../services/db/checklistDbService";
 import logService from "../services/logService";
+import {
+  getChecklistItemTransactionId,
+  getChecklistLinkTransactionId,
+  refuseIfDealLocked,
+} from "../services/dealLockState";
 import supabaseService from "../services/supabaseService";
 import {
   AddChecklistLinkArgsSchema,
   GetChecklistArgsSchema,
+  IncludeChecklistLinkOutsideDatesArgsSchema,
   RemoveChecklistArgsSchema,
   RemoveChecklistLinkArgsSchema,
   SelectChecklistTemplateArgsSchema,
@@ -316,6 +323,18 @@ async function auditChecklistAct(
   });
 }
 
+/**
+ * BACKLOG-3910 (slice d): the lock gate for a channel that names an item or a
+ * group rather than a deal. An id with no row resolves to no deal, and the
+ * write that follows matches no row either, so nothing is written.
+ */
+function refuseIfChecklistDealLocked(
+  transactionId: string | null,
+  edit: Parameters<typeof refuseIfDealLocked>[1],
+): ReturnType<typeof refuseIfDealLocked> {
+  return transactionId ? refuseIfDealLocked(transactionId, edit) : null;
+}
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -370,6 +389,10 @@ export function registerChecklistHandlers(): void {
         payload: unknown,
       ): Promise<SelectChecklistTemplateResponse> => {
         const args = parseArgs(SelectChecklistTemplateArgsSchema, payload, "payload");
+
+        // BACKLOG-3910 (slice d): a locked deal is read-only.
+        const lockedRefusal = refuseIfDealLocked(args.transactionId, "add-checklist");
+        if (lockedRefusal) return lockedRefusal;
 
         if (!(await isChecklistsAllowed())) {
           return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
@@ -447,6 +470,8 @@ export function registerChecklistHandlers(): void {
     wrapHandler(
       async (_event: IpcMainInvokeEvent, payload: unknown): Promise<ChecklistWriteResponse> => {
         const args = parseArgs(SetChecklistItemCheckedArgsSchema, payload, "payload");
+        const lockedRefusal = refuseIfChecklistDealLocked(getChecklistItemTransactionId(args.itemId), "tick-checklist-item");
+        if (lockedRefusal) return lockedRefusal;
         if (!(await isChecklistsAllowed())) {
           return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
         }
@@ -462,6 +487,8 @@ export function registerChecklistHandlers(): void {
     wrapHandler(
       async (_event: IpcMainInvokeEvent, payload: unknown): Promise<ChecklistWriteResponse> => {
         const args = parseArgs(SetChecklistItemNoteArgsSchema, payload, "payload");
+        const lockedRefusal = refuseIfChecklistDealLocked(getChecklistItemTransactionId(args.itemId), "edit-checklist-note");
+        if (lockedRefusal) return lockedRefusal;
         if (!(await isChecklistsAllowed())) {
           return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
         }
@@ -484,6 +511,8 @@ export function registerChecklistHandlers(): void {
     wrapHandler(
       async (_event: IpcMainInvokeEvent, payload: unknown): Promise<AddChecklistLinkResponse> => {
         const args = parseArgs(AddChecklistLinkArgsSchema, payload, "payload");
+        const lockedRefusal = refuseIfChecklistDealLocked(getChecklistItemTransactionId(args.itemId), "link-checklist-item");
+        if (lockedRefusal) return lockedRefusal;
         if (!(await isChecklistsAllowed())) {
           return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
         }
@@ -491,8 +520,31 @@ export function registerChecklistHandlers(): void {
           itemId: args.itemId,
           kind: args.kind,
           targetIds: args.targetIds,
+          includeOutsideDates: args.includeOutsideDates,
         });
         return { success: true, result };
+      },
+      { module: "Checklists" },
+    ),
+  );
+
+  /**
+   * BACKLOG-3764: the agent answered "Include it" at the submit pre-flight for
+   * a group dated outside the deal's audit dates. Only a group on this
+   * transaction is changed.
+   */
+  ipcMain.handle(
+    "checklists:include-link-outside-dates",
+    wrapHandler(
+      async (_event: IpcMainInvokeEvent, payload: unknown): Promise<ChecklistWriteResponse> => {
+        const args = parseArgs(IncludeChecklistLinkOutsideDatesArgsSchema, payload, "payload");
+        const lockedRefusal = refuseIfDealLocked(args.transactionId, "include-outside-dates");
+        if (lockedRefusal) return lockedRefusal;
+        if (!(await isChecklistsAllowed())) {
+          return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
+        }
+        const changed = await setChecklistLinkIncludeOutsideDates(args.transactionId, args.linkId);
+        return { success: true, changed };
       },
       { module: "Checklists" },
     ),
@@ -503,6 +555,8 @@ export function registerChecklistHandlers(): void {
     wrapHandler(
       async (_event: IpcMainInvokeEvent, payload: unknown): Promise<ChecklistWriteResponse> => {
         const args = parseArgs(RemoveChecklistLinkArgsSchema, payload, "payload");
+        const lockedRefusal = refuseIfChecklistDealLocked(getChecklistLinkTransactionId(args.linkId), "unlink-checklist-item");
+        if (lockedRefusal) return lockedRefusal;
         if (!(await isChecklistsAllowed())) {
           return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
         }
@@ -525,6 +579,9 @@ export function registerChecklistHandlers(): void {
     wrapHandler(
       async (_event: IpcMainInvokeEvent, payload: unknown): Promise<ChecklistWriteResponse> => {
         const args = parseArgs(RemoveChecklistArgsSchema, payload, "payload");
+        // BACKLOG-3910 (slice d): ungated by the plan, but not by the lock.
+        const lockedRefusal = refuseIfDealLocked(args.transactionId, "take-off-checklist");
+        if (lockedRefusal) return lockedRefusal;
         const removed = await removeChecklist(args.transactionId, args.checklistId);
         if (removed) {
           await auditChecklistAct(args.transactionId, "checklist_removed", {

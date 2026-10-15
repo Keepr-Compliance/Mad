@@ -14,12 +14,18 @@
  * forceReimport)`) and contacts (`contacts:forceReimport`) both had a force
  * option; emails had none.
  *
- * Founder decision 2026-08-24: build it to PARITY with the messages force
- * re-import, link loss included. "I want the mental model to not be complicated
- * so the functionality of the force button on the msg should be the same as the
- * emails." Re-pointing `communications.email_id` through the stable
- * `message_id_header` is technically possible and is deliberately NOT done —
- * one force button, one behaviour, no per-source exception to remember.
+ * WHAT IT REPLACES (BACKLOG-3910a, founder rules 2026-10-11 — these supersede
+ * the 2026-08-24 "parity with messages, link loss included" decision):
+ *   - every email of the user is replaced, whatever its account, provider, age
+ *     or provider id — EXCEPT emails tied to a deal (a transaction link, a
+ *     rejected suggestion, or a checklist member on the email or one of its
+ *     attachments). Those are never removed, so their links never cascade.
+ *   - a kept email on an OPEN deal is refreshed IN PLACE from its fresh copy
+ *     (same id, so nothing that points at it changes);
+ *   - a kept email on a LOCKED deal (submitted / under review / resubmitted /
+ *     approved) is left exactly as it is, and its fresh copy is thrown away;
+ *   - all or nothing: if any connected mailbox did not finish its fetch,
+ *     nothing is applied.
  *
  * ---------------------------------------------------------------------------
  * WHY STAGE-AND-SWAP, AND WHY NOT THE OLDER SHAPES
@@ -38,23 +44,19 @@
  * whole cache window — minutes at best — so that window would be even wider here
  * than it was for messages.
  *
- * NOT `ALTER TABLE RENAME`. All three of `forceStaging.ts`'s reasons apply:
- *   - `emails` is SHARED. The force set is a strict subset — other users' rows,
- *     rows with a NULL `external_id`, rows from a provider this run cannot
- *     rebuild, and rows older than the cache window all have to survive.
- *   - FIVE tables reference `emails(id)` with ON DELETE CASCADE — attachments,
+ * NOT `ALTER TABLE RENAME`:
+ *   - `emails` is SHARED. Other users' rows, and this user's protected rows,
+ *     have to survive with their ids.
+ *   - SIX tables reference `emails(id)` with ON DELETE CASCADE — attachments,
  *     the participants junction, the transaction-link table and its ignored and
- *     pending-review siblings — plus a set of indexes. Those are bound by NAME;
- *     a rename re-points or orphans them. (Named in prose rather than spelled
- *     as identifiers on purpose: the BACKLOG-2791 one-read-path guard greps raw
- *     file text without stripping comments, so a doc comment that spells the
- *     review table's name reads to it as a second read path. That guard is
- *     over-broad — filed separately — but a comment is not worth breaking CI
- *     over, and relaxing a guard from inside the PR it blocks is exactly the
- *     move that guard exists to prevent.)
- *   - Those cascades are the POINT here, not an obstacle: deleting the force set
- *     with an ordinary DELETE is what makes link loss happen exactly as it does
- *     for messages, which is the parity the founder asked for.
+ *     pending-review siblings, and the checklist link members — plus a set of
+ *     indexes. Those are bound by NAME; a rename re-points or orphans them.
+ *     (Named in prose rather than spelled as identifiers on purpose: the
+ *     BACKLOG-2791 one-read-path guard greps raw file text without stripping
+ *     comments, so a comment that spells the review table's name reads to it as
+ *     a second read path.)
+ *   - The cascades are why a kept email is refreshed with an UPDATE on its own
+ *     id and never removed and re-inserted: a removal fires them.
  *
  * ---------------------------------------------------------------------------
  * SEPARATE PREFIX FROM THE MESSAGES STAGING, DELIBERATELY
@@ -71,26 +73,28 @@ import * as crypto from "crypto";
 import { UPDATE_EMAIL_IDENTITY_SQL } from "./db/emailSyncSql";
 import {
   createStagingTable,
-  deleteStagedProviderRows,
+  discardStagedEmails,
   dropStagingTable,
   insertStagedEmails,
   insertStagedParticipants,
+  liveEmailIdentityTaken,
   mirrorStagingIndexes,
-  selectStagedIdsBySource,
+  refreshLiveEmailFromStaged,
+  selectEmailAttachmentFilenames,
+  selectStagedIdentities,
   STALE_STAGING_TABLES_SQL,
+  type StagedEmailIdentity,
 } from "./db/emailStagingSql";
 import {
-  assertRebuildableProviders,
   deleteLiveForceSet as dbDeleteLiveForceSet,
+  selectProtectedLiveEmails,
   type EmailForceSet,
+  type ProtectedLiveEmail,
 } from "./db/emailForceSetSql";
+import { LOCKED_SUBMISSION_STATUSES } from "./transactionEligibility";
 import {
-  columnList,
-  deriveStagingIndexDdl,
-  deriveStagingTableDdl,
   checkedStagingTable,
   type StagingTableName,
-  emailTableDdl as tableDdl,
 } from "./db/stagingDdlSql";
 
 /** Prefix every ephemeral table shares, so a crashed run's leftovers are findable. */
@@ -99,72 +103,16 @@ export const EMAIL_STAGING_TABLE_PREFIX = "staging_emailrecache_";
 /** The providers `precacheEmails` can fetch from; `emails.source` holds exactly these. */
 export type EmailForceProvider = "gmail" | "outlook";
 
-const ALLOWED_PROVIDERS: readonly EmailForceProvider[] = ["gmail", "outlook"];
-
 /**
- * The force set, as ONE definition: the rows an email Force Re-cache replaces.
- *
- * Both the swap's DELETE and the rebuild's "what will still be there" reads are
- * built from this. Two spellings would be two different answers to "what does a
- * force re-cache replace", and the drift would be silent — the swap would delete
- * rows the rebuild assumed were still there, or keep rows it assumed were gone.
- *
- * ---------------------------------------------------------------------------
- * SCOPE — the BACKLOG-2796 rule, applied to emails
- * ---------------------------------------------------------------------------
- * The scope answers one question: what can THIS run put back? Anything it cannot
- * re-fetch must survive, because deleting it would be a pure loss with nothing
- * to replace it. That is the lesson 2796 paid for on the messages side, where an
- * unscoped force set deleted every row the user had from any source and rebuilt
- * only what chat.db could supply.
- *
- *   - `external_id IS NOT NULL` — provider-sourced rows only, matching the
- *     messages predicate. A row with no provider id is not something a provider
- *     fetch can reproduce.
- *   - `source IN (…)` — ALLOW-LIST of the providers that actually completed a
- *     fetch on this run. Not "every provider the schema allows": if only Gmail
- *     is connected, or Outlook is connected but its token has expired, the
- *     Outlook rows cannot be rebuilt and so must not be deleted. A user who
- *     disconnected Outlook and clicks Re-cache must not lose their Outlook mail.
- *   - `sent_at >= @cacheSince` — the fetch is bounded by the user's cache-window
- *     preference (`computeEmailCacheSinceDate`). Rows older than that window are
- *     outside what this run downloads, so they are scoped OUT rather than
- *     silently trimmed off the back of the corpus.
- *
- * Allow-list rather than deny-list, deliberately, for the same reason as 2796:
- * listing the sources to SPARE re-plants the bug the moment somebody adds a
- * third one. An unrecognised row survives by default, which is the only
- * defensible default for a predicate whose failure mode is deleting the user's
- * mail.
- *
- * Parameters are POSITIONAL (`?`) rather than named, because every caller
- * splices this into a query that already binds positionally through `dbAll`.
- * `params` is returned alongside the SQL so the two cannot drift apart, and the
- * provider list is spliced as quoted literals — safe because every element is
- * checked against `ALLOWED_PROVIDERS` first, and a value that fails that check
- * throws rather than reaching the SQL.
+ * The force set: whose mail a Force Re-cache replaces. See `db/emailForceSetSql`
+ * for the rule (every email of the user except the protected ones) and every
+ * statement built from it.
  */
 export type { EmailForceSet } from "./db/emailForceSetSql";
 
-/**
- * Build a force set.
- *
- * BACKLOG-2989 commit A2: this used to return an `EmailForceSetPredicate`
- * carrying `sql`, `survivingSql` and `params` — so a predicate built here
- * travelled as TEXT into a read view, a DELETE and a UNION source, three files
- * away from the guard that made it safe. It now returns DATA, and every
- * statement is built in `db/emailForceSetSql` from that data.
- *
- * The provider allow-list moved with the construction it protects.
- */
-export function buildEmailForceSet(params: {
-  userId: string;
-  providers: readonly EmailForceProvider[];
-  cacheSinceIso: string;
-}): EmailForceSet {
-  const { userId, providers, cacheSinceIso } = params;
-  assertRebuildableProviders(providers);
-  return { userId, providers, cacheSinceIso };
+/** Build a force set. DATA only — every statement is built in `db/`. */
+export function buildEmailForceSet(params: { userId: string }): EmailForceSet {
+  return { userId: params.userId };
 }
 
 /**
@@ -264,19 +212,13 @@ export interface EmailForceStaging {
    */
   readonly emailsTable: StagingTableName;
   readonly participantsTable: StagingTableName;
-  /**
-   * The force-set predicate; the swap deletes exactly it.
-   *
-   * Mutable because the set can only be NARROWED between the rebuild and the
-   * swap — see `restrictForceSetToRebuiltProviders`. It starts as the optimistic
-   * set (every connected provider) so the rebuild's dedup reads treat those rows
-   * as "about to be replaced" and stage their re-fetched copies.
-   */
-  forceSet: EmailForceSet;
+  /** Whose mail the swap replaces; the run's dedup reads hide all of it. */
+  readonly forceSet: EmailForceSet;
   /**
    * Resurrection remaps (BACKLOG-1769) that target rows in the REAL `emails`
-   * table rather than in staging — i.e. SURVIVORS, since a force-set row is no
-   * longer visible to the dedup read and comes back as a plain staged insert.
+   * table rather than in staging. BACKLOG-3910a: the read view hides every live
+   * row of this user, so on a force run nothing can match and this stays empty;
+   * the path is kept for the shape it shares with the incremental sync.
    * Buffered and applied as the swap's last step, mirroring
    * `forceStaging.messageIdRepairs`: today that UPDATE would run inside the
    * transaction and become visible only at COMMIT, and buffering reproduces
@@ -290,9 +232,26 @@ export interface EmailForceStaging {
   drop(): void;
 }
 
+/**
+ * What the swap did. The three "kept" buckets partition the protected emails:
+ *
+ *   emailsRefreshed    protected, on no locked deal, paired with a fresh copy
+ *                      and refreshed in place.
+ *   emailsKeptLocked   protected AND part of a locked deal's record — whether
+ *                      or not a fresh copy arrived. Never changed.
+ *   emailsKeptNoCopy   protected, on no locked deal, and no fresh copy arrived
+ *                      (outside the window, from a mailbox not connected, or a
+ *                      losing duplicate in the pairing). Kept unchanged.
+ *
+ * `emailsDeleted` counts the unprotected rows removed (it includes rows whose
+ * fresh copy is among `emailsInserted`).
+ */
 export interface EmailForceSwapCounts {
   emailsDeleted: number;
   emailsInserted: number;
+  emailsRefreshed: number;
+  emailsKeptLocked: number;
+  emailsKeptNoCopy: number;
   participantsInserted: number;
   resurrectionsRepaired: number;
   attachmentMetaApplied: number;
@@ -364,64 +323,135 @@ export const emailForceStagingLifecycle = {
 };
 
 /**
- * Narrow the force set to the providers that actually finished a rebuild, and
- * throw away the staged rows of the ones that did not.
+ * The connected providers that did NOT finish a full rebuild (BACKLOG-3910a,
+ * SR decision 5: apply nothing).
  *
- * A provider can drop out after the rebuild has already staged some of its mail:
- * an expired token, a network failure, or — the case that matters most — a
- * partial fetch, where the inbox round succeeded and the all-folders round did
- * not. Deleting a provider's live rows when this run holds only PART of its mail
- * would trim the corpus to whatever happened to arrive before the failure, which
- * is a silent data loss dressed as a successful re-cache.
- *
- * NARROWING ONLY, and the direction is what makes this safe. The rebuild's dedup
- * reads ran against the optimistic predicate, i.e. they assumed those rows would
- * be gone. Narrowing means MORE rows survive than the rebuild assumed, so the
- * one hazard is a staged row colliding with the survivor it was meant to
- * replace — which is why the staged rows of a dropped provider are deleted here
- * rather than left for the swap's plain INSERT to throw on. Widening would be
- * the opposite and is never done: it would delete rows the rebuild never staged
- * a replacement for.
- *
- * Returns `null` when nothing can be rebuilt, which the caller must treat as
- * "do not swap at all" — with no provider rebuilt there is nothing to put back,
- * and a swap would be a pure deletion.
+ * The removal is no longer per mailbox — it is every unprotected email of the
+ * user — so applying a run where one mailbox stopped part-way would remove that
+ * mailbox's mail and put nothing back. Any entry here means: do not swap.
  */
-export function restrictForceSetToRebuiltProviders(
-  db: DatabaseType,
-  staging: EmailForceStaging,
+export function providersNotRebuilt(
+  connectedProviders: readonly EmailForceProvider[],
   rebuiltProviders: readonly EmailForceProvider[],
-  cacheSinceIso: string,
-): EmailForceSet | null {
-  if (rebuiltProviders.length === 0) return null;
+): EmailForceProvider[] {
+  if (connectedProviders.length === 0) return [];
+  return connectedProviders.filter((p) => !rebuiltProviders.includes(p));
+}
 
-  const dropped = ALLOWED_PROVIDERS.filter((p) => !rebuiltProviders.includes(p));
-  for (const provider of dropped) {
-    // The buffered attachment metadata points at staged email ids that are about
-    // to stop existing. Left in place it would reach the swap and fail the
-    // `REFERENCES emails(id)` foreign key, aborting a re-cache that is otherwise
-    // perfectly valid for the provider that DID succeed.
-    const orphanedIds = new Set(
-      selectStagedIdsBySource(db, staging.emailsTable, provider).map((r) => r.id),
-    );
-    for (let i = staging.attachmentMeta.length - 1; i >= 0; i--) {
-      if (orphanedIds.has(staging.attachmentMeta[i].emailId)) {
-        staging.attachmentMeta.splice(i, 1);
-      }
+/** One protected live email matched to its fresh staged copy. */
+export interface EmailForcePair {
+  readonly kept: ProtectedLiveEmail;
+  readonly staged: StagedEmailIdentity;
+}
+
+export interface EmailForcePairing {
+  /** Pairs whose kept email is on no locked deal — refreshed in place. */
+  readonly open: EmailForcePair[];
+  /** Pairs whose kept email is on a locked deal — the copy is discarded. */
+  readonly frozen: EmailForcePair[];
+  /** Protected emails no fresh copy was paired with. */
+  readonly unpaired: ProtectedLiveEmail[];
+}
+
+/**
+ * Pair fresh staged copies with protected live emails, 1:1 and deterministic
+ * (BACKLOG-3910a, SR S2).
+ *
+ *   pass 1  same provider id AND same source; across DIFFERENT accounts the
+ *           Message-ID must also agree where both carry one;
+ *   pass 2  same Message-ID, among what pass 1 left.
+ *
+ * USER-scoped, not account-scoped: `account_id` is `oauth_tokens.id`, so a
+ * reconnected mailbox — or a legacy row with NULL account — gives the fresh
+ * copy a different account. An account-scoped match would leave the kept row
+ * AND insert the copy beside it: a silent duplicate.
+ *
+ * When two kept emails match one copy, the tiebreak is: same account_id, then
+ * same source, then the oldest `created_at` (then id, for determinism). The
+ * loser is untouched — never merged — and counted as kept with no copy.
+ */
+export function pairStagedWithProtected(
+  staged: readonly StagedEmailIdentity[],
+  kept: readonly ProtectedLiveEmail[],
+): EmailForcePairing {
+  const pairedKept = new Set<string>();
+  const pairedStaged = new Set<string>();
+  const pairs: EmailForcePair[] = [];
+
+  const rank = (s: StagedEmailIdentity, k: ProtectedLiveEmail): Array<string | number> => [
+    s.account_id !== null && s.account_id === k.account_id ? 0 : 1,
+    s.source !== null && s.source === k.source ? 0 : 1,
+    k.created_at ?? "\uffff",
+    k.id,
+    s.id,
+  ];
+  const compare = (x: Array<string | number>, y: Array<string | number>): number => {
+    for (let i = 0; i < x.length; i++) {
+      if (x[i] < y[i]) return -1;
+      if (x[i] > y[i]) return 1;
     }
+    return 0;
+  };
+  const assign = (edges: EmailForcePair[]): void => {
+    const ranked = edges
+      .map((e) => ({ e, r: rank(e.staged, e.kept) }))
+      .sort((x, y) => compare(x.r, y.r));
+    for (const { e } of ranked) {
+      if (pairedKept.has(e.kept.id) || pairedStaged.has(e.staged.id)) continue;
+      pairedKept.add(e.kept.id);
+      pairedStaged.add(e.staged.id);
+      pairs.push(e);
+    }
+  };
 
-    // Participants first: they reference the staged email rows. Both deletes
-    // travel together in db/ so a caller cannot do half of the pair.
-    deleteStagedProviderRows(db, staging.emailsTable, staging.participantsTable, provider);
+  const byExternal = new Map<string, ProtectedLiveEmail[]>();
+  const byHeader = new Map<string, ProtectedLiveEmail[]>();
+  for (const k of kept) {
+    if (k.external_id !== null) {
+      byExternal.set(k.external_id, [...(byExternal.get(k.external_id) ?? []), k]);
+    }
+    if (k.message_id_header !== null) {
+      byHeader.set(k.message_id_header, [...(byHeader.get(k.message_id_header) ?? []), k]);
+    }
   }
 
-  const restricted = buildEmailForceSet({
-    userId: staging.userId,
-    providers: rebuiltProviders,
-    cacheSinceIso,
-  });
-  staging.forceSet = restricted;
-  return restricted;
+  const pass1: EmailForcePair[] = [];
+  for (const s of staged) {
+    if (s.external_id === null) continue;
+    for (const k of byExternal.get(s.external_id) ?? []) {
+      const sameSource = s.source !== null && s.source === k.source;
+      // Same account + same provider id is ONE identity by the partial unique
+      // index `idx_emails_account_external` (account_id, external_id), so it
+      // pairs whatever the Message-ID says: refusing it would leave the copy
+      // unpaired, its insert would hit that index, and the whole re-cache
+      // would roll back — on every later run too, because nothing rewrites a
+      // stored Message-ID. Across accounts the Message-ID must agree where
+      // both carry one (SR S2).
+      const sameAccount = s.account_id !== null && s.account_id === k.account_id;
+      const headersAgree =
+        sameAccount ||
+        s.message_id_header === null ||
+        k.message_id_header === null ||
+        s.message_id_header === k.message_id_header;
+      if (sameSource && headersAgree) pass1.push({ kept: k, staged: s });
+    }
+  }
+  assign(pass1);
+
+  const pass2: EmailForcePair[] = [];
+  for (const s of staged) {
+    if (s.message_id_header === null || pairedStaged.has(s.id)) continue;
+    for (const k of byHeader.get(s.message_id_header) ?? []) {
+      if (!pairedKept.has(k.id)) pass2.push({ kept: k, staged: s });
+    }
+  }
+  assign(pass2);
+
+  return {
+    open: pairs.filter((p) => p.kept.frozen !== 1),
+    frozen: pairs.filter((p) => p.kept.frozen === 1),
+    unpaired: kept.filter((k) => !pairedKept.has(k.id)),
+  };
 }
 
 /**
@@ -429,46 +459,108 @@ export function restrictForceSetToRebuiltProviders(
  *
  * Separate and individually addressable ON PURPOSE: the property that matters is
  * that all of them happen together or none of them does, and a control can only
- * demonstrate that by interrupting BETWEEN them. Injecting a failure at the seam
- * must leave the store untouched; running the same steps in separate
- * transactions must leave it emptied. That is the mutation that proves the
- * atomicity claim, and it needs the seam to exist.
+ * demonstrate that by interrupting BETWEEN them.
  */
 export const emailForceSwapSteps = {
   /**
-   * Delete the force set from live.
-   *
-   * An ordinary DELETE, so every ON DELETE CASCADE fires: the participants
-   * junction, attachments, and the three link tables (transaction links, plus
-   * their ignored and pending-review siblings — see the header for why these are
-   * named in prose). Losing those links is the AGREED behaviour (founder,
-   * 2026-08-24: parity with messages), not an accident, and it is why the
-   * confirmation dialog has to say so before the run starts.
+   * The protected emails and their frozen flag. Called INSIDE the swap
+   * transaction, so no link can be added or removed between this read and the
+   * removal that relies on it.
+   */
+  readProtected(db: DatabaseType, staging: EmailForceStaging): ProtectedLiveEmail[] {
+    return selectProtectedLiveEmails(db, staging.forceSet, LOCKED_SUBMISSION_STATUSES);
+  },
+
+  /** Pair the fresh copies with the protected emails (see `pairStagedWithProtected`). */
+  pair(
+    db: DatabaseType,
+    staging: EmailForceStaging,
+    kept: readonly ProtectedLiveEmail[],
+  ): EmailForcePairing {
+    return pairStagedWithProtected(selectStagedIdentities(db, staging.emailsTable), kept);
+  },
+
+  /**
+   * A locked deal's email is left exactly as it is: its fresh copy, the copy's
+   * participants and its buffered attachment details are all thrown away.
+   */
+  discardFrozenCopies(
+    db: DatabaseType,
+    staging: EmailForceStaging,
+    pairing: EmailForcePairing,
+  ): number {
+    const stagedIds = pairing.frozen.map((p) => p.staged.id);
+    const discarded = new Set(stagedIds);
+    for (let i = staging.attachmentMeta.length - 1; i >= 0; i--) {
+      if (discarded.has(staging.attachmentMeta[i].emailId)) staging.attachmentMeta.splice(i, 1);
+    }
+    discardStagedEmails(db, staging.emailsTable, staging.participantsTable, stagedIds);
+    return stagedIds.length;
+  },
+
+  /**
+   * Remove every UNPROTECTED email of the user. Runs BEFORE the refresh, so a
+   * refreshed email's new identity cannot collide with an unprotected copy of
+   * the same message.
    */
   deleteLiveForceSet(db: DatabaseType, staging: EmailForceStaging): number {
     return dbDeleteLiveForceSet(db, staging.forceSet);
   },
 
   /**
+   * Refresh each open pair in place, then re-point its buffered attachment
+   * details at the live id.
+   *
+   * The identity columns are written only when no other live email holds them
+   * (a collision must not fail the re-cache); otherwise content only.
+   *
+   * SR S3: when the pair's account changes (a reconnected mailbox), the kept
+   * attachment rows carry the OLD provider attachment id, so the fresh details
+   * would miss them and insert a same-named duplicate. For those pairs a fresh
+   * detail whose filename the kept email already has is matched by filename.
+   * Narrow to account-changed pairs on purpose: filename alone is not an
+   * identity (`image001.png` repeats), which is why the normal path keys on the
+   * provider id.
+   */
+  refreshKept(db: DatabaseType, staging: EmailForceStaging, pairing: EmailForcePairing): number {
+    for (const { kept, staged } of pairing.open) {
+      const writeIdentity = !liveEmailIdentityTaken(db, kept.id, {
+        accountId: staged.account_id,
+        externalId: staged.external_id,
+        messageIdHeader: staged.message_id_header,
+      });
+      refreshLiveEmailFromStaged(db, staging.emailsTable, staging.participantsTable, {
+        liveId: kept.id,
+        stagedId: staged.id,
+        writeIdentity,
+        previousThreadId: kept.thread_id,
+      });
+
+      const accountChanged = staged.account_id !== kept.account_id;
+      const keptFilenames = accountChanged
+        ? new Set(selectEmailAttachmentFilenames(db, kept.id))
+        : new Set<string>();
+      for (let i = 0; i < staging.attachmentMeta.length; i++) {
+        const meta = staging.attachmentMeta[i];
+        if (meta.emailId !== staged.id) continue;
+        staging.attachmentMeta[i] = {
+          ...meta,
+          emailId: kept.id,
+          providerAttachmentId: keptFilenames.has(meta.filename) ? null : meta.providerAttachmentId,
+        };
+      }
+    }
+    return pairing.open.length;
+  },
+
+  /**
    * Emails before participants, so `email_participants.email_id`'s foreign key
-   * finds its row.
+   * finds its row. What is left in staging now is fresh mail with no kept
+   * counterpart.
    *
-   * Plain `INSERT`, not `INSERT OR IGNORE`. A uniqueness conflict here means the
-   * force set and the rebuild disagree about what a force re-cache replaces, and
-   * throwing is the right answer to a disagreement: it aborts the whole swap and
-   * leaves the user's store exactly as it was, which `OR IGNORE` would turn into
-   * a silent partial re-cache.
-   *
-   * The rebuild already avoids staging a survivor's `external_id` — the dedup
-   * read unions the survivors in, so a survivor's id is skipped rather than
-   * staged. The residue is a mid-run write from `syncTransactionEmails`, which
-   * also writes `emails` and is not behind `precacheInProgress`. That is left to
-   * throw deliberately rather than yielding like the messages path does: the
-   * messages yield exists because TWO other services (Android, iPhone) write
-   * into that id space from inbound handlers nothing in this process controls,
-   * whereas an email row landing inside this user's force set mid-run is the
-   * same app's own transaction sync, is rare, and rolling the whole swap back is
-   * the safe outcome — live is untouched and the user can re-run.
+   * Plain `INSERT`, not `INSERT OR IGNORE`: a uniqueness conflict means the
+   * pairing and the rebuild disagree, and throwing aborts the whole swap and
+   * leaves the user's store exactly as it was.
    */
   insertFromStaging(
     db: DatabaseType,
@@ -483,9 +575,7 @@ export const emailForceSwapSteps = {
   /** BACKLOG-1769 resurrection remaps against live rows the rebuild left alone. */
   applyResurrectionRepairs(db: DatabaseType, staging: EmailForceStaging): number {
     if (staging.resurrectionRepairs.length === 0) return 0;
-    // The same statement the incremental sync path uses — one const in db/,
-    // imported by both, so a change to the resurrection remap cannot reach one
-    // caller and not the other.
+    // The same statement the incremental sync path uses — one const in db/.
     const update = db.prepare(UPDATE_EMAIL_IDENTITY_SQL);
     let repaired = 0;
     for (const repair of staging.resurrectionRepairs) {
@@ -495,12 +585,12 @@ export const emailForceSwapSteps = {
   },
 
   /**
-   * BACKLOG-1870 metadata for the rows just inserted into live.
+   * BACKLOG-1870 metadata for the rows just inserted or refreshed. The writer
+   * adds missing rows and fills NULL details only — it never overwrites or
+   * removes an existing attachment row, so a kept email's stored files stay.
    *
-   * The writer is injected rather than imported. `emailForceStaging` is reached
-   * from `emailSyncService`, which already imports `databaseService`; importing
-   * it back the other way to reach one upsert would close a cycle for no gain,
-   * and passing the function keeps this file testable against a plain spy.
+   * The writer is injected rather than imported, to avoid an import cycle with
+   * `databaseService`.
    */
   applyAttachmentMeta(
     staging: EmailForceStaging,
@@ -518,25 +608,20 @@ export const emailForceSwapSteps = {
 /**
  * Put the rebuild in place.
  *
- * ONE synchronous `db.transaction()` callback, containing no `await` and no
- * possibility of one. That is the whole safety argument: better-sqlite3 is
- * synchronous on a single shared connection, so while this callback runs no
- * other code in this process runs at all. Nothing can observe the half-swapped
- * state, and nothing can accidentally join the transaction and be rolled back
- * with it.
+ * ONE synchronous `db.transaction()` callback, containing no `await`. That is
+ * the whole safety argument: better-sqlite3 is synchronous on a single shared
+ * connection, so while this callback runs no other code in this process runs.
+ * Nothing can observe the half-swapped state.
  *
- * THE BOUNDARY OF THAT CLAIM. "Nothing else can lose its write" holds for every
- * write OUTSIDE the force set, which is every other writer in the app: the force
- * set is one user's provider-sourced mail inside the cache window, and no audit,
- * submission, or transaction writer touches it. A write INSIDE the force set
- * landing mid-rebuild is deleted by the swap on the success path — the one
- * writer that can do that is `syncTransactionEmails`, which shares the `emails`
- * table and is not behind `precacheInProgress`. Its rows are re-fetched by this
- * run anyway (same providers, same window), so the loss is a re-download rather
- * than data.
+ * The protected set is read INSIDE the transaction (step 1), so there is no gap
+ * between deciding what to keep and removing the rest.
  *
- * If any step throws — a full disk, a constraint the rebuild violated — the
- * transaction rolls back and the user's store is the one they started with.
+ * Other writers during the run: `syncTransactionEmails` writes live `emails` and
+ * is not behind `precacheInProgress`. An unprotected row it wrote mid-run is
+ * removed here; a protected one is kept and paired like any other.
+ *
+ * If any step throws, the transaction rolls back and the user's store is the
+ * one they started with.
  */
 export function swapEmailStagingIntoLive(
   db: DatabaseType,
@@ -544,14 +629,27 @@ export function swapEmailStagingIntoLive(
   hooks: { persistAttachmentMeta: (meta: PendingAttachmentMeta) => void },
 ): EmailForceSwapCounts {
   const swap = db.transaction((): EmailForceSwapCounts => {
+    const kept = emailForceSwapSteps.readProtected(db, staging);
+    const pairing = emailForceSwapSteps.pair(db, staging, kept);
+    emailForceSwapSteps.discardFrozenCopies(db, staging, pairing);
     const emailsDeleted = emailForceSwapSteps.deleteLiveForceSet(db, staging);
+    const emailsRefreshed = emailForceSwapSteps.refreshKept(db, staging, pairing);
     const inserted = emailForceSwapSteps.insertFromStaging(db, staging);
     const resurrectionsRepaired = emailForceSwapSteps.applyResurrectionRepairs(db, staging);
     const attachmentMetaApplied = emailForceSwapSteps.applyAttachmentMeta(
       staging,
       hooks.persistAttachmentMeta,
     );
-    return { emailsDeleted, ...inserted, resurrectionsRepaired, attachmentMetaApplied };
+    const emailsKeptLocked = kept.filter((k) => k.frozen === 1).length;
+    return {
+      emailsDeleted,
+      ...inserted,
+      emailsRefreshed,
+      emailsKeptLocked,
+      emailsKeptNoCopy: pairing.unpaired.filter((k) => k.frozen !== 1).length,
+      resurrectionsRepaired,
+      attachmentMetaApplied,
+    };
   });
 
   return swap();

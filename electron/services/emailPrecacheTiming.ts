@@ -69,6 +69,28 @@ export type EmailPrecacheMode = "cache" | "re-cache" | "force";
  */
 export type EmailPrecacheTimingOutcome = "success" | "error" | "cancelled";
 
+/**
+ * BACKLOG-3799: the outcome the timing line reports. A run whose every
+ * connected provider's fetch THREW still finishes the progress channel as
+ * "success" (BACKLOG-2127 keeps transient failures green for the UI), but a
+ * timing line reading `outcome=success written=0` for a run that fetched
+ * nothing is a false baseline. Such a run is reported as "error".
+ */
+export function precacheTimingOutcome(
+  progressOutcome: EmailPrecacheTimingOutcome,
+  attemptedProviders: readonly string[],
+  failedProviders: ReadonlySet<string>,
+): EmailPrecacheTimingOutcome {
+  if (
+    progressOutcome === "success" &&
+    attemptedProviders.length > 0 &&
+    attemptedProviders.every((p) => failedProviders.has(p))
+  ) {
+    return "error";
+  }
+  return progressOutcome;
+}
+
 export interface EmailPrecacheTimingRecord {
   mode: EmailPrecacheMode;
   outcome: EmailPrecacheTimingOutcome;

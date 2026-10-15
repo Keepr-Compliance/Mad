@@ -9,7 +9,7 @@
  * TASK-1809: User list component implementation
  */
 
-import { Card, SearchInput, Select } from '@keepr/design-system';
+import ListFilterCard from '@/components/ui/ListFilterCard';
 import { ROLE_LABELS, LICENSE_STATUS_LABELS } from '@/lib/types/users';
 
 interface UserSearchFilterProps {
@@ -43,58 +43,18 @@ export default function UserSearchFilter({
   onStatusChange,
 }: UserSearchFilterProps) {
   return (
-    <Card padding="sm">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-        {/* Search Input */}
-        <div className="flex-1">
-          <label htmlFor="user-search" className="sr-only">
-            Search users
-          </label>
-          <SearchInput
-            id="user-search"
-            type="text"
-            placeholder="Search by name or email..."
-            value={searchQuery}
-            onChange={(e) => onSearchChange(e.target.value)}
-          />
-        </div>
-
-        {/* Role Filter */}
-        <div className="sm:w-40">
-          <label htmlFor="role-filter" className="sr-only">
-            Filter by role
-          </label>
-          <Select
-            id="role-filter"
-            value={roleFilter}
-            onChange={(e) => onRoleChange(e.target.value)}
-          >
-            {ROLE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </Select>
-        </div>
-
-        {/* Status Filter */}
-        <div className="sm:w-40">
-          <label htmlFor="status-filter" className="sr-only">
-            Filter by status
-          </label>
-          <Select
-            id="status-filter"
-            value={statusFilter}
-            onChange={(e) => onStatusChange(e.target.value)}
-          >
-            {STATUS_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </Select>
-        </div>
-      </div>
-    </Card>
+    <ListFilterCard
+      search={{
+        id: 'user-search',
+        label: 'Search users',
+        placeholder: 'Search by name or email...',
+        value: searchQuery,
+        onChange: onSearchChange,
+      }}
+      filters={[
+        { id: 'role-filter', label: 'Filter by role', value: roleFilter, onChange: onRoleChange, options: ROLE_OPTIONS },
+        { id: 'status-filter', label: 'Filter by status', value: statusFilter, onChange: onStatusChange, options: STATUS_OPTIONS },
+      ]}
+    />
   );
 }

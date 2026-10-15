@@ -36,6 +36,12 @@
  * `parity: warm and cold pool return the same people` is therefore a
  * reproduction of a state he has been in, not a synthetic edge case.
  *
+ * BACKLOG-3837 follow-up: the cold-pool fork no longer reaches the sync
+ * producer. Warm or cold, the message-derived half comes from the same
+ * dedicated-worker runner (faked below), so this now proves the two forks
+ * cannot differ in who appears; only the imported half still forks (worker vs
+ * main, the same shared statement).
+ *
  * ===========================================================================
  * ASSERTIONS ARE EXACT ID SETS
  * ===========================================================================
@@ -116,7 +122,22 @@ jest.mock("../logService", () => {
 jest.mock("../../workers/contactWorkerPool", () => ({
   __esModule: true,
   isPoolReady: () => poolReady,
-  queryContacts: (_type: string, userId: string) => {
+  // BACKLOG-3837 follow-up: the message-derived read runs ONLY on a dedicated worker,
+  // warm pool or cold — so both forks get the same people from the same runner.
+  queryOnDedicatedWorker: (type: string, userId: string) => {
+    if (type !== "messageDerived") return Promise.reject(new Error(`unexpected dedicated query ${type}`));
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { runMessageDerivedQueryOn } = require("../db/wizardMessageScansDb");
+    return Promise.resolve(runMessageDerivedQueryOn(mockDb!, userId));
+  },
+  queryContacts: (type: string, userId: string) => {
+    // BACKLOG-3837: the message-derived read moved to the worker too; the fake
+    // runs the SAME shared runner the worker runs.
+    if (type === "messageDerived") {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { runMessageDerivedQueryOn } = require("../db/wizardMessageScansDb");
+      return Promise.resolve(runMessageDerivedQueryOn(mockDb!, userId));
+    }
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { IMPORTED_CONTACTS_SELECT_SQL } = require("../db/contactProjectionSql");
     return Promise.resolve(mockDb!.prepare(IMPORTED_CONTACTS_SELECT_SQL).all(userId));

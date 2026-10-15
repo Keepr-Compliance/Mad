@@ -189,7 +189,15 @@ export interface SyncItem {
    * — consumers must NOT parse `error` text to decide whether to show it.
    */
   reconnectProvider?: ReconnectProvider;
+  /**
+   * BACKLOG-3885: typed reason for an error that is not a fault. The iPhone was
+   * unplugged mid-transfer, so the run stopped. Drives the "Last sync stopped"
+   * completion card (no support-ticket line). Consumers must NOT parse `error`.
+   */
+  errorKind?: SyncErrorKind;
 }
+
+export type SyncErrorKind = 'device_disconnected';
 
 export interface SyncOrchestratorState {
   isRunning: boolean;
@@ -509,13 +517,13 @@ class SyncOrchestratorServiceClass {
             logger.info('[SyncOrchestrator] Outlook contacts synced:', outlookResult.count);
           } else if (outlookResult.tokenExpired) {
             logger.warn('[SyncOrchestrator] Outlook contacts token expired — reconnect required');
-            contactsReconnect = contactsReconnect ?? { provider: 'microsoft', cause: 'token-expired' };
+            contactsReconnect = { provider: 'microsoft', cause: 'token-expired' };
           } else if (outlookResult.reconnectRequired) {
             // BACKLOG-3203: log the provider's OWN error rather than naming a
             // cause this branch has not established — `reconnectRequired`
             // covers a missing Contacts.Read grant and a 403 at fetch alike.
             logger.warn('[SyncOrchestrator] Outlook contacts need reconnection:', outlookResult.error);
-            contactsReconnect = contactsReconnect ?? { provider: 'microsoft', cause: 'reconnect-required' };
+            contactsReconnect = { provider: 'microsoft', cause: 'reconnect-required' };
           } else {
             logger.warn('[SyncOrchestrator] Outlook contacts sync returned error:', outlookResult.error);
           }
@@ -1212,7 +1220,7 @@ class SyncOrchestratorServiceClass {
    * Mark an external sync as complete or error.
    * After completion, recalculates isRunning from remaining queue items.
    */
-  completeExternalSync(type: SyncType, result: { status: 'complete' | 'error'; error?: string; summary?: string }): void {
+  completeExternalSync(type: SyncType, result: { status: 'complete' | 'error'; error?: string; errorKind?: SyncErrorKind; summary?: string }): void {
     const existing = this.state.queue.find((item) => item.type === type && item.external);
     if (!existing) return;
 
@@ -1222,6 +1230,7 @@ class SyncOrchestratorServiceClass {
       status: result.status,
       progress: result.status === 'complete' ? 100 : existing.progress,
       error: result.error,
+      errorKind: result.errorKind,
       phase: undefined,
       ...(result.summary ? { summary: result.summary } : {}),
     });

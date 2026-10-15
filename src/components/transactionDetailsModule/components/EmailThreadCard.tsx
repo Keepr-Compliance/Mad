@@ -81,6 +81,18 @@ export interface EmailThreadCardProps {
   onConfirm?: (thread: EmailThread) => void;
   /** BACKLOG-2319: whether this thread's confirm action is in progress. */
   isConfirming?: boolean;
+  /** BACKLOG-3910: locked deal — approve and reject are disabled and show this text. */
+  actionsLockedTooltip?: string;
+  /**
+   * BACKLOG-3925: rendered inline right after the subject (the Needs Review match
+   * pill). When absent the subject markup is unchanged.
+   */
+  subjectBadge?: React.ReactNode;
+  /**
+   * BACKLOG-3926: rendered on the title row after the badge (the folder / label a
+   * Needs Review folder match was found in). Shown with or without a badge.
+   */
+  subjectNote?: React.ReactNode;
 }
 
 /**
@@ -101,6 +113,9 @@ export function EmailThreadCard({
   variant = "linked",
   onConfirm,
   isConfirming = false,
+  actionsLockedTooltip,
+  subjectBadge,
+  subjectNote,
 }: EmailThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
   const isNeedsReview = variant === "needsReview";
@@ -181,9 +196,19 @@ export function EmailThreadCard({
             {/* Thread info: Subject and participants */}
             <div className="min-w-0 flex-1">
               <div data-testid="thread-subject">
-                <span className="font-semibold text-gray-900 block truncate text-sm sm:text-base">
-                  {thread.subject || "(No Subject)"}
-                </span>
+                {subjectBadge || subjectNote ? (
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-semibold text-gray-900 truncate text-sm sm:text-base min-w-0">
+                      {thread.subject || "(No Subject)"}
+                    </span>
+                    {subjectBadge ? <span className="flex-shrink-0">{subjectBadge}</span> : null}
+                    {subjectNote}
+                  </div>
+                ) : (
+                  <span className="font-semibold text-gray-900 block truncate text-sm sm:text-base">
+                    {thread.subject || "(No Subject)"}
+                  </span>
+                )}
                 <span className="font-normal text-gray-500 text-xs sm:text-sm block truncate">
                   {formatParticipants(otherParticipants, 2, nameMap)}
                   {isMultipleEmails && (
@@ -238,9 +263,9 @@ export function EmailThreadCard({
                   e.stopPropagation();
                   onConfirm(thread);
                 }}
-                disabled={isConfirming || isUnlinking}
+                disabled={isConfirming || isUnlinking || !!actionsLockedTooltip}
                 className="text-gray-400 hover:text-green-600 hover:bg-green-50 rounded p-1 transition-all disabled:opacity-50"
-                title="Keep — confirm this conversation belongs to the transaction"
+                title={actionsLockedTooltip ?? "Keep — confirm this conversation belongs to the transaction"}
                 data-testid="confirm-thread-button"
               >
                 {isConfirming ? (
@@ -284,9 +309,9 @@ export function EmailThreadCard({
                   e.stopPropagation();
                   onUnlink(thread);
                 }}
-                disabled={isUnlinking}
+                disabled={isUnlinking || !!actionsLockedTooltip}
                 className="text-gray-400 hover:text-red-600 hover:bg-red-50 rounded p-1 transition-all disabled:opacity-50"
-                title="Remove from transaction"
+                title={actionsLockedTooltip ?? "Remove from transaction"}
                 data-testid="unlink-thread-button"
               >
                 {isUnlinking ? (

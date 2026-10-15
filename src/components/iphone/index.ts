@@ -8,7 +8,6 @@
 export { ConnectionStatus } from "./ConnectionStatus";
 export { TrustComputerHint } from "./TrustComputerHint";
 export { DeviceInfo } from "./DeviceInfo";
-export { BackupPasswordModal } from "./BackupPasswordModal";
 export { SyncProgress } from "./SyncProgress";
 export { IPhoneSyncFlow } from "./IPhoneSyncFlow";
 
@@ -19,7 +18,6 @@ export type {
   SyncStatus,
   ConnectionStatusProps,
   DeviceInfoProps,
-  BackupPasswordModalProps,
   SyncProgressProps,
   UseIPhoneSyncReturn,
 } from "../../types/iphone";

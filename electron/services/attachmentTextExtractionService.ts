@@ -44,6 +44,7 @@ import type { FileHandle } from "fs/promises";
 import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
 import logService from "./logService";
+import { readOpenAttachment, statOpenAttachment } from "./atRest/attachmentReader";
 
 const SERVICE_NAME = "AttachmentTextExtraction";
 
@@ -233,7 +234,9 @@ export async function extractTextForAttachment(
   try {
     // Size cap: don't parse huge files. fstat via the OPEN handle (bound to the exact
     // file we read below). Persist "" so the row drains (attempted).
-    const { size: sizeBytes } = await fileHandle.stat();
+    // BACKLOG-3816 S2: the size is the PLAINTEXT size, from the KEPRENC header read
+    // through the same handle (a plaintext file reports its fstat size).
+    const { size: sizeBytes } = await statOpenAttachment(storagePath, fileHandle);
 
     if (sizeBytes > maxSizeBytes) {
       logService.info(
@@ -246,7 +249,8 @@ export async function extractTextForAttachment(
     }
 
     // Read from the SAME handle — not a fresh open of the path (no re-check/re-resolve).
-    const buffer = await fileHandle.readFile();
+    // BACKLOG-3816 S2: decrypted on read; plaintext passes through until the scope is migrated.
+    const buffer = await readOpenAttachment(storagePath, fileHandle);
 
     const raw =
       mime === "application/pdf"

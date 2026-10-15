@@ -14,7 +14,10 @@ interface UseEmailSettingsCallbacksOptions {
 
 interface UseEmailSettingsCallbacksResult {
   handleEmailConnectedFromSettings: (email: string, provider: "google" | "microsoft") => void;
-  handleEmailDisconnectedFromSettings: (provider: "google" | "microsoft") => void;
+  handleEmailDisconnectedFromSettings: (
+    provider: "google" | "microsoft",
+    anyStillConnected?: boolean
+  ) => void;
 }
 
 export function useEmailSettingsCallbacks({
@@ -31,8 +34,10 @@ export function useEmailSettingsCallbacks({
 
   // TASK-1730: Callback for when email is disconnected from Settings
   const handleEmailDisconnectedFromSettings = useCallback(
-    (provider: "google" | "microsoft") => {
-      setHasEmailConnected(false, undefined, provider);
+    (provider: "google" | "microsoft", anyStillConnected?: boolean) => {
+      // BACKLOG-3888: pass whether the OTHER mailbox is still connected, so
+      // disconnecting one of two does not read as "no mailbox".
+      setHasEmailConnected(false, undefined, provider, anyStillConnected);
     },
     [setHasEmailConnected]
   );

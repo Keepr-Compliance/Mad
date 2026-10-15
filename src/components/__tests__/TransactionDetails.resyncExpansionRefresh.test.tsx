@@ -132,6 +132,7 @@ describe("TransactionDetails — re-sync refreshes on expansion-only link (BACKL
         onClose={jest.fn()}
         onTransactionUpdated={jest.fn()}
         onShowSuccess={showSuccess}
+        initialTab="attachments"
       />,
     );
 

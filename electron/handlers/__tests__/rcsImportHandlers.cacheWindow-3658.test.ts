@@ -106,9 +106,13 @@ let mockLastRun: unknown = null;
 let mockCoveredSince: string | null = null;
 const mockCoverageWrites: unknown[][] = [];
 jest.mock("../../services/auditCoverageService", () => ({
-  getSourceCoverage: () => (mockCoveredSince ? [{ source: "google_messages", coveredSince: mockCoveredSince }] : []),
   recordSourceCoverage: (...a: unknown[]) => void mockCoverageWrites.push(a),
   forgetSourceCoverage: jest.fn(),
+}));
+// BACKLOG-3785: the recorded Google Messages coverage, read directly.
+jest.mock("../../services/db/rcsSourcePresenceDb", () => ({
+  recordedCoveredSince: (_u: string, source: string) => (source === "google_messages" ? mockCoveredSince : null),
+  hasCompanionTexts: () => false,
 }));
 const mockRunRecords: unknown[] = [];
 let mockPendingFull: string[] = [];
@@ -342,7 +346,7 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
     mockCoverageWrites.length = 0;
     mockLastRun = { floorISO: "2026-06-01T00:00:00.000Z", fullRead: true, listStop: "stable", reachedFloor: true, notSettledChats: 0, finishedAt: "2026-09-30T00:00:00.000Z" };
     expect((await start()).success).toBe(true);
-    expect(mockCoverageWrites).toEqual([["user-1", "google_messages", "2026-06-01T00:00:00.000Z", expect.any(String)]]);
+    expect(mockCoverageWrites).toEqual([["user-1", "google_messages", "2026-06-01T00:00:00.000Z", "2026-09-30T00:00:00.000Z"]]);
     mockCoverageWrites.length = 0;
     mockLastRun = { floorISO: "2026-06-01T00:00:00.000Z", fullRead: true, listStop: "max_time", reachedFloor: true, notSettledChats: 0, finishedAt: "2026-09-30T00:00:00.000Z" };
     expect((await start()).success).toBe(true);

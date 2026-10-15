@@ -17,6 +17,7 @@ import type {
 } from "@electron/types/ipc/window-api-messages";
 // BACKLOG-2832: the phase union, from the same leaf the contract uses.
 import type { ImportPhase } from "@electron/types/ipc/importPhase";
+import type { MessageSourceStats } from "@electron/services/db/messageSourceStatsDb";
 
 /**
  * Message import status (from getImportStatus)
@@ -108,6 +109,21 @@ export const messageService = {
         return { success: false, error: "Messages API not available" };
       }
       return await window.api.messages.getImportStatus(userId);
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /**
+   * BACKLOG-3156 stage G: texts / chats / oldest text stored per messages source
+   * (Settings > Messages "Stored on this computer"). Never throws.
+   */
+  async getSourceStats(userId: string): Promise<{ success: boolean; stats?: MessageSourceStats; error?: string }> {
+    try {
+      if (!window.api.messages?.getSourceStats) {
+        return { success: false, error: "Messages API not available" };
+      }
+      return await window.api.messages.getSourceStats(userId);
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
