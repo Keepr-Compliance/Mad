@@ -8,6 +8,7 @@ import {
 import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
 import logService from "./logService";
+import { OUTLOOK_SYSTEM_WELL_KNOWN_NAMES } from "../utils/mailFolderCatalog";
 import microsoftAuthService from "./microsoftAuthService";
 // BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
 // granted a support window covering the email-sync scope.
@@ -1695,6 +1696,48 @@ class OutlookFetchService {
     "outbox",
   ];
 
+  /** BACKLOG-3926: the last full folder walk (top-level discoverFolders call). */
+  private lastDiscoveredFolders: {
+    at: number;
+    folders: Array<{ id: string; displayName: string; parentFolderId?: string }>;
+  } | null = null;
+
+  /**
+   * BACKLOG-3926: the last full folder walk, or null — no network. The catalogue
+   * refresh compares it with what it last catalogued to notice a new / renamed folder.
+   */
+  peekFolderCatalogSource(): Array<{ id: string; displayName: string; parentFolderId?: string }> | null {
+    return this.lastDiscoveredFolders?.folders ?? null;
+  }
+
+  /**
+   * BACKLOG-3926: the raw material of the folder-name catalogue — every syncable
+   * folder (reusing a walk younger than `maxAgeMs`) and the ids of Outlook's own
+   * folders, resolved by WELL-KNOWN NAME in one `$batch` (never by display name, which
+   * is localized). A well-known folder the mailbox lacks answers 404 and is skipped.
+   */
+  async listFolderCatalogSource(maxAgeMs: number): Promise<{
+    folders: Array<{ id: string; displayName: string; parentFolderId?: string }>;
+    systemFolderIds: string[];
+  }> {
+    const cached = this.lastDiscoveredFolders;
+    const folders =
+      cached && Date.now() - cached.at <= maxAgeMs ? cached.folders : await this.discoverFolders();
+    const requests = OUTLOOK_SYSTEM_WELL_KNOWN_NAMES.map((name, idx) => ({
+      id: String(idx),
+      method: "GET",
+      url: `/me/mailFolders/${name}?$select=id`,
+    }));
+    const resp = await this._graphRequest<{
+      responses?: Array<{ id: string; status: number; body?: { id?: string } }>;
+    }>("/$batch", "POST", { requests });
+    const systemFolderIds: string[] = [];
+    for (const r of resp?.responses ?? []) {
+      if (r.status === 200 && typeof r.body?.id === "string") systemFolderIds.push(r.body.id);
+    }
+    return { folders, systemFolderIds };
+  }
+
   /**
    * Discover all syncable mail folders including child folders (TASK-2046)
    *
@@ -1796,7 +1839,8 @@ class OutlookFetchService {
             allFolders.push(...childFolders);
           } catch (childError) {
             logService.warn(
-              `Failed to discover child folders for "${folder.displayName}"`,
+              // BACKLOG-3926: folder names are user data — not logged.
+              "Failed to discover child folders for one folder",
               "OutlookFetch",
               {
                 error:
@@ -1814,6 +1858,9 @@ class OutlookFetchService {
           `Discovered ${allFolders.length} syncable folders (from ${folders.length} top-level)`,
           "OutlookFetch"
         );
+        // BACKLOG-3926: keep the walk's result so the folder-name catalogue refresh
+        // after this fetch does not walk the tree a second time.
+        if (!signal?.aborted) this.lastDiscoveredFolders = { at: Date.now(), folders: allFolders };
       }
 
       return allFolders;

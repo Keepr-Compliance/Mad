@@ -1710,7 +1710,8 @@ describe("progress", () => {
       age(allContentFiles());
       const seen: BackupAtRestProgress[] = [];
       await s.seal(UDID, (p) => seen.push(p));
-      const whole = allContentFiles().reduce((n, f) => n + fs.statSync(f).size + W, 0);
+      // 0-byte files are not work and are not in the estimate (BACKLOG-3816 b2).
+      const whole = allContentFiles().reduce((n, f) => (fs.statSync(f).size > 0 ? n + fs.statSync(f).size + W : n), 0);
       expect(seen[0].totalUnits).toBe(whole);
       // everything was sealed already: the verdicts take the total down to nothing
       const last = seen[seen.length - 1];

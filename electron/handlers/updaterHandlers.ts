@@ -22,6 +22,7 @@ import { stopBackupForQuit } from "./syncHandlers";
 import { getBackupAtRest } from "../services/atRest/backupAtRest";
 import { waitForLinksToFinish } from "../utils/linkInFlight";
 import { noteSystemQuit } from "../utils/sealQuitPrompt";
+import { isSelfUpdateDisabled, STORE_UPDATES_MESSAGE } from "../services/selfUpdatePolicy";
 
 /**
  * BACKLOG-3785: on Windows `quitAndInstall` launches the installer BEFORE the quit,
@@ -113,6 +114,16 @@ export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
         return { updateAvailable: false, currentVersion: app.getVersion() };
       }
 
+      // BACKLOG-3927: the Store build never contacts the update feed.
+      if (isSelfUpdateDisabled()) {
+        return {
+          updateAvailable: false,
+          currentVersion: app.getVersion(),
+          error: STORE_UPDATES_MESSAGE,
+          storeBuild: true,
+        };
+      }
+
       // macOS App Translocation: skip update check when running from a translocated
       // path — Squirrel.Mac cannot write to the app bundle in this state
       if (process.platform === "darwin" && process.execPath.includes("/AppTranslocation/")) {
@@ -175,6 +186,11 @@ export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
 
   // Install update and restart
   ipcMain.on("install-update", () => {
+    // BACKLOG-3927: nothing is downloaded in the Store build; never install.
+    if (isSelfUpdateDisabled()) {
+      logService.warn("install-update ignored: Store build", "UpdaterHandlers");
+      return;
+    }
     logService.info("Installing update...", "UpdaterHandlers");
     // TASK-2330: Track when user triggers install so Sentry breadcrumb trail
     // shows the full lifecycle: check -> available -> downloaded -> install
@@ -208,6 +224,11 @@ export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
   // dead-end. Target version comes from the most recent failure (10-min window)
   // and falls back to the current version.
   ipcMain.handle("app:open-manual-installer", async () => {
+    // BACKLOG-3927: that installer is the website build; the Store build
+    // takes its updates from the Store.
+    if (isSelfUpdateDisabled()) {
+      return { success: false, error: STORE_UPDATES_MESSAGE };
+    }
     try {
       const publish = readGithubPublishConfig();
       if (!publish?.owner || !publish?.repo) {

@@ -39,7 +39,9 @@ type QueryType =
   // BACKLOG-3837: the Attach Messages roster.
   | "messageRoster"
   // BACKLOG-3925: the address-only Needs Review candidates.
-  | "addressMatchCandidates";
+  | "addressMatchCandidates"
+  // BACKLOG-3926: the folder / label match candidates.
+  | "folderMatchCandidates";
 
 /**
  * Per-type payload carried alongside `{ id, type, userId }` (BACKLOG-1717).

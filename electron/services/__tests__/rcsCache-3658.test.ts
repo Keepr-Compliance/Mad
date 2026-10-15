@@ -34,7 +34,7 @@ import { cacheSince, handleCacheJobEnded } from "../rcsCacheService";
 import {
   batchInsertMessages,
   findRcsContentDuplicates,
-  getMessageIdMap,
+  getMessageIdsByExternalIds,
   insertReactionRows,
   getRcsCacheState,
   rcsNumbersMatchLiveContact,
@@ -155,7 +155,7 @@ describe("rcs_cache_state (bound to the user)", () => {
 // closed) is simply run again: it reads the same window (nothing saved), and
 // what the first run stored is not stored twice.
 describe("an interrupted cache Sync resumes without duplicates (S6, S7)", () => {
-  const storeDeps = { batchInsertMessages, getMessageIdMap, insertReactionRows, findContentDuplicates: findRcsContentDuplicates };
+  const storeDeps = { batchInsertMessages, getMessageIdsByExternalIds, insertReactionRows, findContentDuplicates: findRcsContentDuplicates };
   const people = peopleFrom([{ name: "", number: NUM }], [NUM]);
   const msg = (n: number) => ({
     msgId: `m${n}`, direction: "inbound" as const, sender: "x", text: `text ${n}`,

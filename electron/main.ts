@@ -278,6 +278,7 @@ import { getHostArchitecture } from "./services/diagnostics/hostArchitecture";
 import { WINDOWS_ARM64_ARGV_TOKEN } from "./utils/windowsArm64";
 import { STORE_BUILD_ARGV_TOKEN } from "./utils/distributionChannel";
 import { isStoreBuild } from "./services/distributionChannelService";
+import { checkForUpdatesUnlessStore } from "./services/selfUpdatePolicy";
 import sessionSecurityService from "./services/sessionSecurityService";
 import {
   WindowResponsivenessTracker,
@@ -1324,9 +1325,9 @@ function createWindow(): void {
         // user-facing surfacing already happens via the tagged autoUpdater
         // "error" event → handleUpdaterError → surfaceUpdaterError. These
         // catches ONLY prevent the untagged/unscrubbed duplicate capture.
-        autoUpdater
-          .checkForUpdates()
-          .then((result) => {
+        // BACKLOG-3927: no feed contact in the Store build.
+        checkForUpdatesUnlessStore(autoUpdater, "startup")
+          ?.then((result) => {
             result?.downloadPromise?.catch(() => {
               /* surfaced via the tagged autoUpdater "error" event */
             });
@@ -2074,9 +2075,9 @@ app.whenReady().then(async () => {
   // Check for updates every 4 hours (production only)
   if (app.isPackaged) {
     const updateInterval = setInterval(() => {
-      autoUpdater
-        .checkForUpdates()
-        .then((result) => {
+      // BACKLOG-3927: no feed contact in the Store build.
+      checkForUpdatesUnlessStore(autoUpdater, "periodic")
+        ?.then((result) => {
           // BACKLOG-1903/1905 (B2, organic path): also handle the auto-download
           // promise rejection so a failed periodic download can't leak a raw
           // signed-URL token via the untagged unhandledRejection capture. The

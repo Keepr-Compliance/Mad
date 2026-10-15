@@ -63,6 +63,9 @@ async function websiteBuild() {
   put("resources/win/apple-drivers/AppleMobileDeviceSupport64.msi", "msi bytes");
   put("resources/win/apple-drivers/version.txt", "19.4.0.10");
   put("resources/win/apple-drivers/README.md", "readme");
+  // package.json win.extraResources copies resources/win/**/* (minus
+  // libimobiledevice), so the website build ships resources/win/README.md.
+  put("resources/win/README.md", "readme");
   put("resources/win/libimobiledevice/idevice_id.exe");
   put("resources/win/libimobiledevice/libimobiledevice-1.0.dll");
 }
@@ -71,8 +74,7 @@ async function websiteBuild() {
 async function storeBuild() {
   await packAsar({ name: "keepr", version: "2.41.0", distributionChannel: "store" });
   put("Keepr.exe");
-  put("resources/win/apple-drivers/version.txt", "unknown");
-  put("resources/win/apple-drivers/README.md", "readme");
+  // BACKLOG-3927 (2.41): no resources/win/apple-drivers/ at all.
   put("resources/win/libimobiledevice/idevice_id.exe");
   put("resources/win/libimobiledevice/libimobiledevice-1.0.dll");
 }
@@ -106,6 +108,34 @@ describe("store", () => {
     const r = run("store");
     expect(r.status).toBe(1);
     expect(r.stderr).toContain(`driver payload in a Store build: ${rel}`);
+  });
+
+  it.each([
+    "resources/win/apple-drivers/README.md",
+    "resources/win/apple-drivers/version.txt",
+  ])("fails a Store build that still ships %s (the folder must not ship)", async (rel) => {
+    await storeBuild();
+    put(rel);
+    const r = run("store");
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`Apple driver folder in a Store build: ${rel}`);
+  });
+
+  it("fails a Store build that ships resources/win/README.md", async () => {
+    await storeBuild();
+    put("resources/win/README.md", "readme");
+    const r = run("store");
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("Apple driver README in a Store build: resources/win/README.md");
+  });
+
+  it("does not flag other files under resources/win in a Store build", async () => {
+    await storeBuild();
+    put("resources/win/libimobiledevice/README.md", "readme");
+    put("resources/win/notes/README.md", "readme");
+    const r = run("store");
+    expect(r.stderr).toBe("");
+    expect(r.status).toBe(0);
   });
 
   it("fails a Store build whose app.asar is not marked store", async () => {

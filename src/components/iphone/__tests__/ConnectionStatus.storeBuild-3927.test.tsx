@@ -26,6 +26,10 @@ import {
   CHECKLIST_USB_DRIVER_BODY,
 } from "../../../constants/appleDevicesStoreCopy";
 
+/** BACKLOG-3927 (2.41): the Apple USB driver step, exact text. */
+const USB_DRIVER_INSTRUCTION_EXACT =
+  'Click Check for updates and wait for it to finish. Then open Optional updates, tick "Apple, Inc. - USBDevice", and click Download & install. If Windows shows Restart now, click it, then reopen Keepr.';
+
 const base = { isConnected: false, device: null, onSyncClick: jest.fn(), driverMissing: true };
 
 beforeEach(() => jest.clearAllMocks());
@@ -131,7 +135,8 @@ describe("Store build guidance follows the Apple Devices state", () => {
     (window.api.drivers!.openWindowsUpdate as jest.Mock).mockResolvedValue({ success: true });
     renderState("usb-driver-missing");
     for (const step of APPLE_USB_DRIVER_STEPS) expect(step).not.toMatch(/Device Manager/);
-    expect(APPLE_USB_DRIVER_STEPS.join(" ")).toMatch(/restart may be needed/);
+    // BACKLOG-3927 (2.41): exact founder wording, pinned as a literal.
+    expect(APPLE_USB_DRIVER_STEPS).toEqual([USB_DRIVER_INSTRUCTION_EXACT]);
     await userEvent.click(screen.getByRole("button", { name: APPLE_WU_CHECK_BUTTON }));
     expect(window.api.drivers!.openWindowsUpdate).toHaveBeenLastCalledWith("check");
     await userEvent.click(screen.getByRole("button", { name: APPLE_WU_OPTIONAL_BUTTON }));
@@ -160,7 +165,9 @@ describe("Store build guidance follows the Apple Devices state", () => {
     renderState("usb-driver-missing");
     expect(screen.getByText(CHECKLIST_USB_DRIVER_BODY)).toBeInTheDocument();
     expect(CHECKLIST_USB_DRIVER_BODY).not.toMatch(/Device Manager/);
-    expect(CHECKLIST_USB_DRIVER_BODY).toMatch(/restart may be needed/);
+    expect(CHECKLIST_USB_DRIVER_BODY).toBe(USB_DRIVER_INSTRUCTION_EXACT);
+    expect(screen.getByText(USB_DRIVER_INSTRUCTION_EXACT)).toBeInTheDocument();
+    expect(screen.queryByText(/Apple Inc\. - USBDevice|restart may be needed/)).not.toBeInTheDocument();
     expect(screen.queryByText(CHECKLIST_APPLE_DEVICES_INSTALL)).not.toBeInTheDocument();
     expect(screen.queryByText(APPLE_DEVICES_BODY)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: APPLE_DEVICES_CHECK_BUTTON }));
@@ -170,7 +177,9 @@ describe("Store build guidance follows the Apple Devices state", () => {
 
   it("SR: 'ready' never shows the not-installed copy (neutral connect text)", () => {
     renderState("ready");
-    expect(screen.getByTestId("setup-row-iphone")).toHaveAttribute("data-status", "open");
+    // Both setup rows met: the normal Connect screen (unlock / Trust steps), no checklist.
+    expect(screen.queryByTestId("iphone-setup-checklist")).not.toBeInTheDocument();
+    expect(screen.getByText("Connect Your iPhone")).toBeInTheDocument();
     expect(screen.queryByText(CHECKLIST_APPLE_DEVICES_INSTALL)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: APPLE_DEVICES_OPEN_BUTTON })).not.toBeInTheDocument();
   });

@@ -429,3 +429,28 @@
 
   keepr_migrate_done:
 !macroend
+
+; ---------------------------------------------------------------------------
+; MICROSOFT STORE BUILD: NO APPLE DRIVER FOLDER (BACKLOG-3927)
+;
+; The Store package carries no resources\win\apple-drivers folder (release.yml
+; removes it before packaging; scripts/ci/check-packaged-drivers.mjs gates it).
+; A Store install over an earlier website install normally loses that folder
+; when the old uninstaller runs. When there is no old uninstaller to run, the
+; folder from the earlier install stays behind, so the Store installer removes
+; it itself.
+;
+; KEEPR_STORE_BUILD is defined ONLY by build/installer-store.nsh, which the
+; store run of release.yml selects with --config.nsis.include. The website build
+; includes this file directly, never sees the define, and so has no
+; customInstall macro at all: its installer is compiled exactly as before.
+;
+; customInstall runs at installSection.nsh:81-82, after installApplicationFiles
+; (:66) has written the new files, so $INSTDIR is final and the only content in
+; this folder is stale.
+; ---------------------------------------------------------------------------
+!ifdef KEEPR_STORE_BUILD
+!macro customInstall
+  RMDir /r "$INSTDIR\resources\win\apple-drivers"
+!macroend
+!endif
