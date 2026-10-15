@@ -358,11 +358,6 @@ export interface PlanLineInput {
   now: Date;
 }
 
-/** YYYY-MM-DD of an ISO date-time, or null. Never reads the clock. */
-function isoDay(raw: unknown): string | null {
-  return typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : null;
-}
-
 /**
  * "Nov 12, 2026" of an ISO date-time, in UTC (so server and browser agree), or
  * null. Same format and timezone as broker-portal formatDay (PlanBlock.tsx).
@@ -422,7 +417,7 @@ export function planLine(input: PlanLineInput): PlanLine {
       if (!overrideEffective(input.override ?? null, input.now)) {
         return line('support_grant_expired', 'Unlimited support grant (expired)');
       }
-      const until = isoDay(input.override?.paid_through);
+      const until = longDay(input.override?.paid_through);
       return line('support_grant', until ? `Unlimited support grant until ${until}` : 'Unlimited support grant');
     }
     case 'none':

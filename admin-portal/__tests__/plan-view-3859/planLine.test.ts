@@ -86,7 +86,7 @@ describe('planLine: literal table', () => {
     expect(planLine(input({ override: { enabled: true } }))).toMatchObject({ kind: 'support_grant', text: 'Unlimited support grant' });
     expect(planLine(input({ override: { enabled: true, paid_through: '2026-12-01T00:00:00+00:00' } }))).toMatchObject({
       kind: 'support_grant',
-      text: 'Unlimited support grant until 2026-12-01',
+      text: 'Unlimited support grant until Dec 1, 2026',
     });
     expect(planLine(input({ override: { enabled: true, paid_through: '2026-01-01T00:00:00+00:00' } }))).toMatchObject({
       kind: 'support_grant_expired',
