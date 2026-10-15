@@ -75,7 +75,26 @@ describe("installer.nsh: store-only customInstall (BACKLOG-3927)", () => {
 
 describe("installer-store.nsh: defines the symbol, then includes installer.nsh", () => {
   it("is exactly the define followed by the include", () => {
-    expect(STORE_NSH).toEqual([`!define ${DEFINE}`, '!include "installer.nsh"']);
+    expect(STORE_NSH).toEqual([`!define ${DEFINE}`, '!include "${__FILEDIR__}\\installer.nsh"']);
+  });
+
+  // electron-builder puts app-builder-lib's own templates/nsis/include on the include path
+  // ahead of build/. A bare `!include "installer.nsh"` therefore resolves to the template's
+  // file, which installSection.nsh includes again -> makensis "macro named
+  // extractEmbeddedAppPackage already exists" (Store build failure after #3028).
+  it("never includes installer.nsh by bare name (template file of the same name wins)", () => {
+    const templateInstaller = path.join(
+      REPO,
+      "node_modules",
+      "app-builder-lib",
+      "templates",
+      "nsis",
+      "include",
+      "installer.nsh",
+    );
+    expect(fs.existsSync(templateInstaller)).toBe(true);
+    const bare = STORE_NSH.filter((l) => /^!include\s+"?installer\.nsh"?\s*$/i.test(l));
+    expect(bare).toEqual([]);
   });
 });
 
