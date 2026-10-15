@@ -71,6 +71,8 @@ interface ElectronAPI {
     currentVersion: string;
     error?: string;
     translocationDetected?: boolean;
+    /** BACKLOG-3927: Store build — updates come from the Microsoft Store. */
+    storeBuild?: boolean;
   }>;
   /** Fires when macOS App Translocation is detected (app not in /Applications) */
   onTranslocationDetected: (callback: () => void) => () => void;

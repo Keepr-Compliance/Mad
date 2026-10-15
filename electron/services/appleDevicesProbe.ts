@@ -60,8 +60,14 @@ export function matchesAppleIosUsbInstance(instanceId: string): boolean {
 export const APPLE_DEVICES_PROBE_SCRIPT = [
   "$ErrorActionPreference = 'SilentlyContinue'",
   `$names = @(${APPLE_STORE_PACKAGE_NAMES.map((n) => `'${n}'`).join(", ")})`,
-  "$pkgs = @(Get-AppxPackage | Where-Object { $names -contains $_.Name } | ForEach-Object { $_.Name })",
+  // BACKLOG-3927: Get-AppxPackage can throw (measured on a PC: "Illegal operation
+  // attempted on a registry key that has been marked for deletion"). Under
+  // SilentlyContinue that printed an empty `packages=` with the cause hidden.
+  // Stop + catch, and report the message on its own line.
+  "$pkgErr = ''",
+  "try { $pkgs = @(Get-AppxPackage -ErrorAction Stop | Where-Object { $names -contains $_.Name } | ForEach-Object { $_.Name }) } catch { $pkgs = @(); $pkgErr = [string]$_.Exception.Message }",
   "'packages=' + ($pkgs -join ';')",
+  "if ($pkgErr) { 'packagesError=' + ($pkgErr -replace '[\\r\\n]+', ' ') }",
   `'amds=' + [bool](Get-Process -Name ${APPLE_DEVICES_AMDS_PROCESS} -ErrorAction SilentlyContinue)`,
   `Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like '${APPLE_IOS_USB_INSTANCE_PATTERN}' } | ForEach-Object { 'usbProvider=' + (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_DriverProvider').Data }`,
   "exit 0",
@@ -77,12 +83,18 @@ export interface AppleDevicesProbeResult {
   amdsRunning: boolean;
   /** Present Apple-VID USB devices vs Apple's own USB driver. */
   usbDriver: AppleUsbDriverState;
+  /**
+   * BACKLOG-3927: Get-AppxPackage failed with this message, so `packageInstalled`
+   * is unknown rather than false. Absent when the package query ran.
+   */
+  packagesError?: string;
 }
 
 /** Parse the probe's `key=value` lines. Exported for tests. */
 export function parseAppleDevicesProbe(stdout: string): AppleDevicesProbeResult {
   let packageInstalled = false;
   let amdsRunning = false;
+  let packagesError: string | undefined;
   const providers: string[] = [];
   for (const raw of stdout.split(/\r?\n/)) {
     const line = raw.trim();
@@ -94,6 +106,8 @@ export function parseAppleDevicesProbe(stdout: string): AppleDevicesProbeResult 
       packageInstalled = value
         .split(";")
         .some((n) => (APPLE_STORE_PACKAGE_NAMES as readonly string[]).includes(n.trim()));
+    } else if (key === "packagesError") {
+      if (value !== "") packagesError = value;
     } else if (key === "amds") {
       amdsRunning = value.toLowerCase() === "true";
     } else if (key === "usbProvider") {
@@ -104,7 +118,16 @@ export function parseAppleDevicesProbe(stdout: string): AppleDevicesProbeResult 
   if (providers.length > 0) {
     usbDriver = providers.some((p) => /apple/i.test(p)) ? "bound" : "missing";
   }
-  return { packageInstalled, amdsRunning, usbDriver };
+  const result: AppleDevicesProbeResult = { packageInstalled, amdsRunning, usbDriver };
+  if (packagesError !== undefined) result.packagesError = packagesError;
+  return result;
+}
+
+function logPackagesError(result: AppleDevicesProbeResult): AppleDevicesProbeResult {
+  if (result.packagesError) {
+    log.warn(`[AppleDevicesProbe] Get-AppxPackage failed: ${result.packagesError}`);
+  }
+  return result;
 }
 
 export async function probeAppleDevices(): Promise<AppleDevicesProbeResult> {
@@ -114,14 +137,14 @@ export async function probeAppleDevices(): Promise<AppleDevicesProbeResult> {
       ["-NoProfile", "-NonInteractive", "-Command", APPLE_DEVICES_PROBE_SCRIPT],
       { timeout: 15000, windowsHide: true },
     );
-    return parseAppleDevicesProbe(String(stdout));
+    return logPackagesError(parseAppleDevicesProbe(String(stdout)));
   } catch (error) {
     log.warn("[AppleDevicesProbe] Probe failed:", error);
     // SR review D1: a non-zero exit still carries the lines printed before the
     // failing statement. Use them rather than reading everything as absent.
     const partial = (error as { stdout?: unknown } | null)?.stdout;
     if (partial !== undefined && partial !== null && String(partial).trim() !== "") {
-      return parseAppleDevicesProbe(String(partial));
+      return logPackagesError(parseAppleDevicesProbe(String(partial)));
     }
     return { packageInstalled: false, amdsRunning: false, usbDriver: "no-device" };
   }

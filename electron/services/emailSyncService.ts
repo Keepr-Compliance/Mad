@@ -55,6 +55,7 @@ import {
   type EmailPrecacheMode,
 } from "./emailPrecacheTiming";
 import { getRawDatabase } from "./db/core/dbConnection";
+import { recordMailFoldersForFetchedEmails } from "./mailFolderCaptureService";
 import { selectForceRemovableAttachmentPaths } from "./db/emailForceSetSql";
 import { removeOrphanedAttachmentFiles } from "./emailForceOrphanFiles";
 // BACKLOG-2960 — imported from `dbTiming`, not `dbConnection`, on purpose: the
@@ -375,6 +376,12 @@ export interface StoreableEmail {
   contentHash?: string | null;
   /** Gmail labels / Outlook categories; JSON-encoded into `emails.labels`. */
   labels?: string[];
+  /**
+   * BACKLOG-3926: the Outlook folder the message sits in (Graph `parentFolderId`,
+   * already in every `$select`). Stored per message in `mail_folder_refs`, never on
+   * the emails row. Absent for Gmail (its labels carry the same information).
+   */
+  parentFolderId?: string | null;
   /**
    * BACKLOG-2513: retained bulk-mail headers (List-Unsubscribe, Precedence,
    * Auto-Submitted, Authentication-Results), JSON-encoded into
@@ -1033,6 +1040,15 @@ async function fetchStoreAndDedup(params: {
         attempted: emailsToInsert.length,
       });
     }
+  }
+
+  // BACKLOG-3926: record which Outlook folder / Gmail labels every fetched message
+  // sits in — new AND already-cached ones, so a regular sync fills in mail cached
+  // before this existed — and refresh the account's folder / label names. Keyed by
+  // the provider message id, so a force re-cache's staging needs nothing extra.
+  // Never throws; never writes after a disconnect (BACKLOG-3903).
+  if (accountId && newEmails.length > 0 && !isMailboxGenerationStale(mailboxProvider, mailboxGeneration)) {
+    await recordMailFoldersForFetchedEmails({ provider, userId, accountId, emails: newEmails, forceRun: force });
   }
 
   // BACKLOG-1831: cache hits = exact duplicates + resurrection remaps (both mean

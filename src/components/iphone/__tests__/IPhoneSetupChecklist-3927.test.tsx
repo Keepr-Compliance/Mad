@@ -20,7 +20,8 @@ import {
   CHECKLIST_APPLE_DEVICES_INSTALL,
   CHECKLIST_APPLE_DEVICES_STARTING,
   CHECKLIST_DONE_LABEL,
-  CHECKLIST_IPHONE_BODY,
+  CHECKLIST_ROW_APPLE_DEVICES,
+  CHECKLIST_ROW_USB_DRIVER,
   CHECKLIST_USB_DRIVER_BODY,
   CHECKLIST_USB_DRIVER_UNCHECKED,
 } from "../../../constants/appleDevicesStoreCopy";
@@ -53,12 +54,12 @@ beforeEach(() => {
 });
 
 describe("checklistRows — every state x every USB-driver value", () => {
-  const expected: Record<AppleDevicesState, [string, string, string]> = {
-    "not-installed": ["open", "waiting", "waiting"],
-    "not-running": ["open", "waiting", "waiting"],
-    "msi-service-stopped": ["open", "waiting", "waiting"],
-    "usb-driver-missing": ["done", "open", "waiting"],
-    ready: ["done", "unchecked", "open"],
+  const expected: Record<AppleDevicesState, [string, string]> = {
+    "not-installed": ["open", "waiting"],
+    "not-running": ["open", "waiting"],
+    "msi-service-stopped": ["open", "waiting"],
+    "usb-driver-missing": ["done", "open"],
+    ready: ["done", "unchecked"],
   };
   for (const state of STATES) {
     for (const usb of USB) {
@@ -66,32 +67,47 @@ describe("checklistRows — every state x every USB-driver value", () => {
         const rows = checklistRows(state, usb);
         const want = [...expected[state]];
         if (state === "ready" && usb === "bound") want[1] = "done";
-        expect([rows.appleDevices, rows.usbDriver, rows.iphone]).toEqual(want);
-        expect(Object.values(rows).filter((s) => s === "open")).toHaveLength(1);
+        expect(Object.keys(rows)).toEqual(["appleDevices", "usbDriver"]);
+        expect([rows.appleDevices, rows.usbDriver]).toEqual(want);
+        // Only the first unmet row is open; "ready" has none (Connect screen takes over).
+        expect(Object.values(rows).filter((s) => s === "open")).toHaveLength(state === "ready" ? 0 : 1);
       });
     }
   }
 });
 
 describe("rendered rows tick from the state; only the first unmet row is expanded", () => {
-  const cases: [AppleDevicesState, AppleUsbDriverState | null, string, string, string, string][] = [
-    ["not-installed", null, "open", "waiting", "waiting", "setup-row-appleDevices-body"],
-    ["not-running", null, "open", "waiting", "waiting", "setup-row-appleDevices-body"],
-    ["msi-service-stopped", null, "open", "waiting", "waiting", "setup-row-appleDevices-body"],
-    ["usb-driver-missing", "missing", "done", "open", "waiting", "setup-row-usbDriver-body"],
-    ["ready", "no-device", "done", "unchecked", "open", "setup-row-iphone-body"],
-    ["ready", "bound", "done", "done", "open", "setup-row-iphone-body"],
-    ["ready", null, "done", "unchecked", "open", "setup-row-iphone-body"],
+  const cases: [AppleDevicesState, AppleUsbDriverState | null, string, string, string | null][] = [
+    ["not-installed", null, "open", "waiting", "setup-row-appleDevices-body"],
+    ["not-running", null, "open", "waiting", "setup-row-appleDevices-body"],
+    ["msi-service-stopped", null, "open", "waiting", "setup-row-appleDevices-body"],
+    ["usb-driver-missing", "missing", "done", "open", "setup-row-usbDriver-body"],
+    ["ready", "no-device", "done", "unchecked", null],
+    ["ready", "bound", "done", "done", null],
+    ["ready", null, "done", "unchecked", null],
   ];
-  for (const [state, usb, r1, r2, r3, body] of cases) {
+  for (const [state, usb, r1, r2, body] of cases) {
     it(`${state} / usbDriver=${usb}`, () => {
       render(<IPhoneSetupChecklist state={state} usbDriver={usb} onCheckAgain={jest.fn()} />);
-      expect([rowStatus("appleDevices"), rowStatus("usbDriver"), rowStatus("iphone")]).toEqual([r1, r2, r3]);
-      expect(openBodies()).toEqual([body]);
-      const doneCount = [r1, r2, r3].filter((s) => s === "done").length;
+      expect([rowStatus("appleDevices"), rowStatus("usbDriver")]).toEqual([r1, r2]);
+      expect(openBodies()).toEqual(body ? [body] : []);
+      expect(screen.queryByTestId("setup-row-iphone")).not.toBeInTheDocument();
+      expect(screen.getAllByTestId(/^setup-row-[A-Za-z]+$/)).toHaveLength(2);
+      const doneCount = [r1, r2].filter((s) => s === "done").length;
       expect(screen.queryAllByRole("img", { name: CHECKLIST_DONE_LABEL })).toHaveLength(doneCount);
     });
   }
+});
+
+describe("row titles (founder-approved 2026-10-13)", () => {
+  it("row 1 is 'Apple iPhone support installed', row 2 'Apple iPhone USB driver'; no third row", () => {
+    render(<IPhoneSetupChecklist state="not-installed" onCheckAgain={jest.fn()} />);
+    const titles = screen.getAllByTestId(/^setup-row-[A-Za-z]+$/).map((li) => li.querySelector("span.text-sm")?.textContent);
+    expect(titles).toEqual(["Apple iPhone support installed", "Apple iPhone USB driver"]);
+    expect(CHECKLIST_ROW_APPLE_DEVICES).toBe("Apple iPhone support installed");
+    expect(CHECKLIST_ROW_USB_DRIVER).toBe("Apple iPhone USB driver");
+    expect(screen.queryByText("iPhone connected and trusted")).not.toBeInTheDocument();
+  });
 });
 
 describe("row 1 — Apple Devices", () => {
@@ -145,28 +161,18 @@ describe("row 2 — Apple iPhone USB driver", () => {
     expect(row2.querySelector(`[aria-label="${CHECKLIST_DONE_LABEL}"]`)).toBeNull();
   });
 
+  it("ready with the probe not run (usbDriver null, MSI route): no 'checked when plugged in' note", () => {
+    render(<IPhoneSetupChecklist state="ready" usbDriver={null} onCheckAgain={jest.fn()} />);
+    expect(screen.queryByText(CHECKLIST_USB_DRIVER_UNCHECKED)).not.toBeInTheDocument();
+    const row2 = screen.getByTestId("setup-row-usbDriver");
+    expect(row2.querySelector(`[aria-label="${CHECKLIST_DONE_LABEL}"]`)).toBeNull();
+  });
+
   it("ready with the iPhone on Apple's driver: ticked, no 'checked when plugged in' note", () => {
     render(<IPhoneSetupChecklist state="ready" usbDriver="bound" onCheckAgain={jest.fn()} />);
     expect(screen.queryByText(CHECKLIST_USB_DRIVER_UNCHECKED)).not.toBeInTheDocument();
     const row2 = screen.getByTestId("setup-row-usbDriver");
     expect(row2.querySelector(`[aria-label="${CHECKLIST_DONE_LABEL}"]`)).not.toBeNull();
-  });
-});
-
-describe("row 3 — iPhone connected and trusted", () => {
-  it("ready: plug in + the unlock / Trust hint", () => {
-    render(<IPhoneSetupChecklist state="ready" usbDriver="no-device" onCheckAgain={jest.fn()} />);
-    expect(screen.getByText(CHECKLIST_IPHONE_BODY)).toBeInTheDocument();
-    expect(screen.getByText("1. Unlock your iPhone")).toBeInTheDocument();
-    expect(screen.getByText(/Tap "Trust" when prompted/)).toBeInTheDocument();
-  });
-
-  it("not shown expanded before rows 1 and 2 are done", () => {
-    for (const st of ["not-installed", "not-running", "msi-service-stopped", "usb-driver-missing"] as const) {
-      const { unmount } = render(<IPhoneSetupChecklist state={st} onCheckAgain={jest.fn()} />);
-      expect(screen.queryByText(CHECKLIST_IPHONE_BODY)).not.toBeInTheDocument();
-      unmount();
-    }
   });
 });
 

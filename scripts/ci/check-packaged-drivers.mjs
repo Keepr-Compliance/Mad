@@ -13,8 +13,11 @@
  *           installer) — it contains resources/app.asar.
  *
  * store   fails when, anywhere under appDir, a file is a driver payload
- *         (.msi .sys .inf .cat) or is named AppleMobileDeviceSupport*, or when
- *         app.asar's package.json does not say distributionChannel "store".
+ *         (.msi .sys .inf .cat) or is named AppleMobileDeviceSupport*, when
+ *         any file sits under resources/win/apple-drivers/ (the folder must
+ *         not ship at all), when resources/win/README.md ships (it describes
+ *         extracting the Apple drivers), or when app.asar's package.json does
+ *         not say distributionChannel "store".
  * website fails when resources/win/apple-drivers/AppleMobileDeviceSupport64.msi
  *         is absent or empty, or when app.asar's package.json says "store".
  */
@@ -31,6 +34,8 @@ const require = createRequire(import.meta.url);
 export const DRIVER_EXTENSIONS = [".msi", ".sys", ".inf", ".cat"];
 export const APPLE_DRIVER_NAME_RE = /^AppleMobileDeviceSupport/i;
 export const WEBSITE_MSI = "resources/win/apple-drivers/AppleMobileDeviceSupport64.msi";
+export const APPLE_DRIVERS_DIR = "resources/win/apple-drivers/";
+export const WIN_DRIVER_README = "resources/win/README.md";
 export const CHANNEL_FIELD = "distributionChannel";
 
 /** Report paths with "/" on every platform (Windows path.relative uses "\\"). */
@@ -78,8 +83,13 @@ export function checkPackagedDrivers(appDir, channel) {
     for (const file of files) {
       const base = path.basename(file);
       const ext = path.extname(base).toLowerCase();
+      const rel = toPosixRelative(appDir, file);
       if (DRIVER_EXTENSIONS.includes(ext) || APPLE_DRIVER_NAME_RE.test(base)) {
-        problems.push(`driver payload in a Store build: ${toPosixRelative(appDir, file)}`);
+        problems.push(`driver payload in a Store build: ${rel}`);
+      } else if (rel.startsWith(APPLE_DRIVERS_DIR)) {
+        problems.push(`Apple driver folder in a Store build: ${rel}`);
+      } else if (rel === WIN_DRIVER_README) {
+        problems.push(`Apple driver README in a Store build: ${rel}`);
       }
     }
     if (!pkg.error && pkg.value !== "store") {

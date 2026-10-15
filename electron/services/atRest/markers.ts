@@ -53,8 +53,16 @@ export interface BackupMarker {
    * decision 2026-10-10, BACKLOG-3816). Written only together with `encrypted` and
    * dropped by every other state write, so a sync, a crash, a seal failure or an
    * update (a different version) makes the next sync walk the whole chain again.
+   * Since BACKLOG-3816 (2.41) the walk-skip decision reads `sealFormat`, not this; it is kept
+   * for diagnostics and for markers written before `sealFormat` existed.
    */
   verifiedBy?: string;
+  /**
+   * The seal format (sealEngine's SEAL_FORMAT_VERSION) the proof was made under. Written
+   * and dropped exactly like `verifiedBy`. Absent on markers from 2.40.0-rc.1 / 2.41.0
+   * builds before this field; see BackupAtRest.recordWalkSkipEligibility for how those read.
+   */
+  sealFormat?: number;
 }
 
 export interface ScopeEntry {
@@ -103,9 +111,9 @@ export interface MarkerStore {
   readBackupMarker(udid: string): Promise<BackupMarker | null>;
   /**
    * Writes the state; keeps `nextStrategy`/`reasonCode`/`toolFailures` already recorded for
-   * the phone. `verifiedBy` is never kept: it is written only when passed (with `encrypted`).
+   * the phone. `verifiedBy` / `sealFormat` are never kept: written only when passed (with `encrypted`).
    */
-  writeBackupMarker(udid: string, state: BackupAtRestState, opts?: { verifiedBy?: string }): Promise<BackupMarker>;
+  writeBackupMarker(udid: string, state: BackupAtRestState, opts?: { verifiedBy?: string; sealFormat?: number }): Promise<BackupMarker>;
   /** Records (reasonCode) or clears (null) "the next sync is C-FULL" on an existing marker. No marker = no-op. */
   setNextStrategy(udid: string, reasonCode: string | null): Promise<void>;
   /** Sets the consecutive tool-failure count (0 removes it) on an existing marker. No marker = no-op. */
@@ -164,7 +172,10 @@ export function createMarkerStore(deps: MarkerStoreDeps): MarkerStore {
       } catch {
         // an unreadable marker is being replaced; there is nothing to keep
       }
-      const verified = state === "encrypted" && opts?.verifiedBy ? { verifiedBy: opts.verifiedBy } : {};
+      const verified =
+        state === "encrypted" && opts?.verifiedBy
+          ? { verifiedBy: opts.verifiedBy, ...(typeof opts.sealFormat === "number" ? { sealFormat: opts.sealFormat } : {}) }
+          : {};
       const marker: BackupMarker = { udid, state, updatedAt: now().toISOString(), ...kept, ...verified };
       await writeFileAtomic(backupMarkerPath(udid), JSON.stringify(marker, null, 2));
       return marker;

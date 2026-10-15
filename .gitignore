@@ -12,6 +12,7 @@ build/
 !build/icon.icns
 !build/icon.ico
 !build/installer.nsh
+!build/installer-store.nsh
 
 # Test coverage
 coverage/

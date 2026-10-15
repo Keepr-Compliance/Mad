@@ -331,6 +331,34 @@ maybe("BACKLOG-3883 — one full auto-link sweep per deal per input state", () =
       },
       { trigger: "keepr_al_contact_del", op: () => run("DELETE FROM contacts WHERE id = 'c-spare2'") },
       { trigger: "keepr_al_user_upd", op: () => run("UPDATE users_local SET email = 'owner.new@example.test' WHERE id = ?", USER) },
+      // BACKLOG-3926: folder / label match inputs.
+      {
+        trigger: "keepr_al_mfr_ins", // a message's folder recorded / changed
+        prepare: () => run("INSERT OR IGNORE INTO oauth_tokens (id, user_id, provider, purpose) VALUES ('acct-mf', ?, 'microsoft', 'mailbox')", USER),
+        op: () => run("INSERT INTO mail_folder_refs (user_id, account_id, external_id, folder_id) VALUES (?, 'acct-mf', 'x-1', 'F1')", USER),
+      },
+      {
+        trigger: "keepr_al_mfr_del", // a message moved out of a folder
+        prepare: () => {
+          run("INSERT OR IGNORE INTO oauth_tokens (id, user_id, provider, purpose) VALUES ('acct-mf', ?, 'microsoft', 'mailbox')", USER);
+          run("INSERT INTO mail_folder_refs (user_id, account_id, external_id, folder_id) VALUES (?, 'acct-mf', 'x-1', 'F1')", USER);
+        },
+        op: () => run("DELETE FROM mail_folder_refs WHERE external_id = 'x-1'"),
+      },
+      {
+        trigger: "keepr_al_mfn_ins", // a folder / label (re)named
+        prepare: () => run("INSERT OR IGNORE INTO oauth_tokens (id, user_id, provider, purpose) VALUES ('acct-mf', ?, 'microsoft', 'mailbox')", USER),
+        op: () =>
+          run("INSERT INTO mail_folder_names (account_id, user_id, provider, folder_id, display_path, segments) VALUES ('acct-mf', ?, 'outlook', 'F1', 'Probe', '[\"Probe\"]')", USER),
+      },
+      {
+        trigger: "keepr_al_mfn_del",
+        prepare: () => {
+          run("INSERT OR IGNORE INTO oauth_tokens (id, user_id, provider, purpose) VALUES ('acct-mf', ?, 'microsoft', 'mailbox')", USER);
+          run("INSERT INTO mail_folder_names (account_id, user_id, provider, folder_id, display_path, segments) VALUES ('acct-mf', ?, 'outlook', 'F1', 'Probe', '[\"Probe\"]')", USER);
+        },
+        op: () => run("DELETE FROM mail_folder_names WHERE folder_id = 'F1'"),
+      },
     ];
 
     it("lists every trigger the tracker installs (a new trigger needs a class here)", () => {

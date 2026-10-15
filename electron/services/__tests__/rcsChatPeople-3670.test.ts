@@ -35,7 +35,7 @@ import { setDb } from "../db/core/dbConnection";
 import {
   batchInsertMessages,
   findRcsContentDuplicates,
-  getMessageIdMap,
+  getMessageIdsByExternalIds,
   insertReactionRows,
   rcsAutoDeleteDbOps,
   rcsClearDbOps,
@@ -61,7 +61,7 @@ const record = (u: string, h: string, rows: Array<{ number: string; name: string
 
 const storeDeps = {
   batchInsertMessages,
-  getMessageIdMap,
+  getMessageIdsByExternalIds,
   insertReactionRows,
   findContentDuplicates: findRcsContentDuplicates,
   recordPeople: record,

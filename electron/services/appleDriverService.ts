@@ -280,12 +280,19 @@ export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
       };
     } else {
       const probe = await probeAppleDevices();
-      const anyInstalled = msiInstalled || probe.packageInstalled;
+      // BACKLOG-3927: the running AppleMobileDeviceProcess is itself proof that
+      // Apple Devices is installed. Measured on a PC where Get-AppxPackage threw:
+      // `packages=` empty, `amds=True`, iPhone on Apple's USB driver — the old
+      // package-only test read that as "not installed" and blocked sync with the
+      // install-drivers text. Apple's USB driver alone does NOT count: Windows
+      // Update can supply it without Apple Mobile Device Support.
+      const appleDevicesPresent = probe.packageInstalled || probe.amdsRunning;
+      const anyInstalled = msiInstalled || appleDevicesPresent;
       let usbmuxReachable: boolean | null = null;
       if (anyInstalled && !probe.amdsRunning && probe.usbDriver !== "no-device") {
         usbmuxReachable = await probeUsbmux();
       }
-      const appleDevicesRunning = probe.packageInstalled && probe.amdsRunning;
+      const appleDevicesRunning = probe.amdsRunning;
       // usbmux listing the iPhone proves Apple Mobile Device Support answers,
       // whichever source started it.
       const running = appleDevicesRunning || usbmuxReachable === true;
@@ -293,7 +300,7 @@ export async function checkAppleDrivers(): Promise<AppleDriverStatus> {
         ? "apple-devices"
         : msiInstalled && !probe.packageInstalled
           ? "msi"
-          : probe.packageInstalled
+          : appleDevicesPresent
             ? "apple-devices"
             : null;
       result = {

@@ -512,4 +512,48 @@ describe("ImportSourceSettings", () => {
       expect(screen.getByTestId("import-source-android-row")).toHaveClass("border-blue-500", "ring-1", "ring-blue-500");
     });
   });
+
+  // BACKLOG-3156 (founder QA 2026-10-13): the Android connection control (Link,
+  // or Connected + kebab) shows only while Android is the selected source, like
+  // "Show connection details". Mutation: drop the source gate → red.
+  describe("Android connection control visibility", () => {
+    const controlIds = ["gm-connection-connect", "gm-connection-status", "gm-connection-checking"];
+    const noControl = () => {
+      for (const id of controlIds) expect(screen.queryByTestId(id)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^link$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /google messages connection options/i })).not.toBeInTheDocument();
+    };
+
+    it.each(["macos-native", "iphone-sync"])("%s selected: no Link button or kebab", async (source) => {
+      jest.mocked(window.api.preferences.get).mockResolvedValue({ success: true, preferences: { messages: { source } } });
+      render(<ImportSourceSettings userId={mockUserId} />);
+      await screen.findByTestId("import-source-android-row");
+      await waitFor(() => expect(screen.getByRole("radio", { name: /android: google messages/i })).not.toBeChecked());
+      noControl();
+    });
+
+    it("Android selected: the control is present and Link works", async () => {
+      const onLink = jest.fn();
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: { messages: { source: "android-messages-web" } },
+      });
+      const user = userEvent.setup();
+      render(<ImportSourceSettings userId={mockUserId} onLinkGoogleMessages={onLink} />);
+      await waitFor(() => expect(screen.getByRole("radio", { name: /android: google messages/i })).toBeChecked());
+      // Not linked in the test environment: the disconnected state offers Link.
+      const link = await screen.findByRole("button", { name: /^link$/i });
+      await user.click(link);
+      expect(onLink).toHaveBeenCalledTimes(1);
+    });
+
+    it("selecting Android reveals the control", async () => {
+      const user = userEvent.setup();
+      render(<ImportSourceSettings userId={mockUserId} />);
+      await screen.findByTestId("import-source-android-row");
+      noControl();
+      await user.click(await screen.findByRole("radio", { name: /android: google messages/i }));
+      expect(await screen.findByRole("button", { name: /^link$/i })).toBeInTheDocument();
+    });
+  });
 });

@@ -91,7 +91,10 @@ export function useTextThreads(
       logger.error("Failed to load text conversations:", err);
       setError("Failed to load messages");
     } finally {
-      if (seq === seqRef.current && loud) setLoading(false);
+      // BACKLOG-3884: the latest call to settle clears the spinner, loud or silent.
+      // A silent refresh that supersedes a loud load would otherwise leave it on
+      // forever (the load returns superseded; the refresh never cleared it).
+      if (seq === seqRef.current) setLoading(false);
     }
   }, [transactionId]);
 

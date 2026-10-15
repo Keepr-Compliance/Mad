@@ -18,9 +18,7 @@ import {
   CHECKLIST_APPLE_DEVICES_STARTING,
   CHECKLIST_DONE_LABEL,
   CHECKLIST_HEADING,
-  CHECKLIST_IPHONE_BODY,
   CHECKLIST_ROW_APPLE_DEVICES,
-  CHECKLIST_ROW_IPHONE,
   CHECKLIST_ROW_USB_DRIVER,
   CHECKLIST_TODO_LABEL,
   CHECKLIST_USB_DRIVER_BODY,
@@ -28,21 +26,23 @@ import {
 } from "../../constants/appleDevicesStoreCopy";
 import type { AppleDevicesState, AppleUsbDriverState } from "../../types/iphone";
 import { deviceService } from "../../services/deviceService";
-import { TrustComputerHint } from "./TrustComputerHint";
 import logger from "../../utils/logger";
 
 /**
  * BACKLOG-3927 (Microsoft Store build only): self-ticking iPhone setup
- * checklist. Three rows, in the order the user has to finish them:
+ * checklist. Two rows, in the order the user has to finish them:
  *
- *   1. Apple Devices installed (and its iPhone support running)
+ *   1. Apple iPhone support installed (and running)
  *   2. Apple iPhone USB driver (Windows Update)
- *   3. iPhone connected and trusted
+ *
+ * Once both are met the normal Connect screen takes over (it has the unlock /
+ * Trust steps), so the checklist has no third row.
  *
  * Each row ticks from the Apple Devices state the main process reports. Only
  * the first unmet row is expanded. Row 2 can only be checked against a
  * plugged-in iPhone: when the probe saw no iPhone it reads "checked when your
- * iPhone is plugged in" instead of a tick it cannot prove.
+ * iPhone is plugged in" instead of a tick it cannot prove. When the probe did
+ * not run at all (usbDriver null, e.g. the MSI route) the note is hidden.
  *
  * The website build never renders this (its Settings path for an Apple Devices
  * source keeps AppleDevicesStoreGuide).
@@ -52,24 +52,22 @@ export type ChecklistRowStatus = "done" | "open" | "waiting" | "unchecked";
 export interface ChecklistRows {
   appleDevices: ChecklistRowStatus;
   usbDriver: ChecklistRowStatus;
-  iphone: ChecklistRowStatus;
 }
 
-/** Row statuses for a state. Exactly one row is "open". Exported for tests. */
+/** Row statuses for a state. At most one row is "open". Exported for tests. */
 export function checklistRows(
   state: AppleDevicesState,
   usbDriver: AppleUsbDriverState | null | undefined,
 ): ChecklistRows {
   if (state === "not-installed" || state === "not-running" || state === "msi-service-stopped") {
-    return { appleDevices: "open", usbDriver: "waiting", iphone: "waiting" };
+    return { appleDevices: "open", usbDriver: "waiting" };
   }
   if (state === "usb-driver-missing") {
-    return { appleDevices: "done", usbDriver: "open", iphone: "waiting" };
+    return { appleDevices: "done", usbDriver: "open" };
   }
   return {
     appleDevices: "done",
     usbDriver: usbDriver === "bound" ? "done" : "unchecked",
-    iphone: "open",
   };
 }
 
@@ -267,13 +265,6 @@ export function IPhoneSetupChecklist({
     </>
   );
 
-  const iphoneBody = (
-    <>
-      <p>{CHECKLIST_IPHONE_BODY}</p>
-      <TrustComputerHint />
-    </>
-  );
-
   const row = (
     key: keyof ChecklistRows,
     title: string,
@@ -319,8 +310,12 @@ export function IPhoneSetupChecklist({
       )}
       <ol className="list-none p-0 m-0">
         {row("appleDevices", CHECKLIST_ROW_APPLE_DEVICES, appleDevicesBody)}
-        {row("usbDriver", CHECKLIST_ROW_USB_DRIVER, usbDriverBody, CHECKLIST_USB_DRIVER_UNCHECKED)}
-        {row("iphone", CHECKLIST_ROW_IPHONE, iphoneBody)}
+        {row(
+          "usbDriver",
+          CHECKLIST_ROW_USB_DRIVER,
+          usbDriverBody,
+          usbDriver === "no-device" ? CHECKLIST_USB_DRIVER_UNCHECKED : undefined,
+        )}
       </ol>
       <button
         type="button"

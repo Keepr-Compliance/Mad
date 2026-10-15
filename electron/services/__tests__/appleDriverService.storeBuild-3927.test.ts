@@ -521,3 +521,96 @@ describe("driver source/state log line (BACKLOG-3927)", () => {
     expect(logMock.info.mock.calls.flat().join(" ")).not.toContain(UDID);
   });
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3927 (2.41 rebuild): Get-AppxPackage failed on a real PC, so the probe
+// printed an empty package list while Apple Devices was running and both iPhone
+// USB nodes were on Apple's driver. Transcribed from that PC's probe output
+// (exit 0), line for line:
+// ---------------------------------------------------------------------------
+const PROBE_REAL_PACKAGES_EMPTY = [
+  "packages=",
+  "amds=True",
+  "usbProvider=Apple, Inc.",
+  "usbProvider=Apple, Inc.",
+].join("\r\n");
+// UNVERIFIED: the `packagesError=` line is new in this change; its shape comes
+// from the script (one line, CR/LF stripped), not from a captured run.
+const PROBE_PACKAGES_ERROR_LINE =
+  "packagesError=Illegal operation attempted on a registry key that has been marked for deletion.";
+const PROBE_REAL_WITH_ERROR = ["packages=", PROBE_PACKAGES_ERROR_LINE, "amds=True", "usbProvider=Apple, Inc.", "usbProvider=Apple, Inc."].join("\r\n");
+// UNVERIFIED (inferred): Apple's USB driver from Windows Update, no Apple Devices.
+const PROBE_USB_DRIVER_ONLY = ["packages=", "amds=False", "usbProvider=Apple, Inc."].join("\r\n");
+
+describe("package list unreadable but Apple Devices running (BACKLOG-3927 rebuild)", () => {
+  beforeEach(() => {
+    fsMock.existsSync.mockReturnValue(false);
+    mockProbeConnectedUdids.mockResolvedValue([]);
+    mockDetectionRequested = true;
+  });
+
+  it.each([true, false])(
+    "REAL PC output (packages= empty, amds=True, Apple USB driver x2): installed and running, ready via apple-devices (store=%s)",
+    async (store) => {
+      mockStore = store;
+      probeStdout(PROBE_REAL_PACKAGES_EMPTY);
+      const status = await checkAppleDrivers();
+      expect(status).toMatchObject({ isInstalled: true, serviceRunning: true, installedVia: "apple-devices" });
+      expect(status.appleDevices).toMatchObject({
+        state: "ready",
+        packageInstalled: false,
+        amdsRunning: true,
+        usbDriver: "bound",
+      });
+    },
+  );
+
+  it("process running, phone unplugged, package list empty: still installed (any Apple signal counts)", async () => {
+    mockStore = true;
+    probeStdout(["packages=", "amds=True"].join("\r\n"));
+    const status = await checkAppleDrivers();
+    expect(status).toMatchObject({ isInstalled: true, serviceRunning: true });
+    expect(status.appleDevices?.state).toBe("ready");
+  });
+
+  it("Apple USB driver alone (no Apple Devices, no process): not-installed — the driver does not bring Apple Mobile Device Support", async () => {
+    mockStore = true;
+    probeStdout(PROBE_USB_DRIVER_ONLY);
+    const status = await checkAppleDrivers();
+    expect(status).toMatchObject({ isInstalled: false, installedVia: null });
+    expect(status.appleDevices?.state).toBe("not-installed");
+  });
+
+  it("a packagesError line is parsed, logged, and does not stop the process signal from counting", async () => {
+    mockStore = true;
+    probeStdout(PROBE_REAL_WITH_ERROR);
+    const status = await checkAppleDrivers();
+    expect(status.appleDevices?.state).toBe("ready");
+    const logMock = jest.requireMock("electron-log") as { warn: jest.Mock };
+    expect(logMock.warn).toHaveBeenCalledWith(
+      "[AppleDevicesProbe] Get-AppxPackage failed: Illegal operation attempted on a registry key that has been marked for deletion.",
+    );
+  });
+});
+
+describe("probe script reports a failed package query (BACKLOG-3927 rebuild)", () => {
+  it("Get-AppxPackage runs with -ErrorAction Stop inside try/catch and prints packagesError=", () => {
+    expect(APPLE_DEVICES_PROBE_SCRIPT).toMatch(/try \{ \$pkgs = @\(Get-AppxPackage -ErrorAction Stop/);
+    expect(APPLE_DEVICES_PROBE_SCRIPT).toMatch(/catch \{[^}]*\$pkgErr = /);
+    expect(APPLE_DEVICES_PROBE_SCRIPT).toContain("'packagesError=' + ");
+  });
+
+  it("parser: packagesError= is returned; absent when the query ran", () => {
+    expect(parseAppleDevicesProbe(PROBE_REAL_WITH_ERROR)).toEqual({
+      packageInstalled: false,
+      amdsRunning: true,
+      usbDriver: "bound",
+      packagesError: "Illegal operation attempted on a registry key that has been marked for deletion.",
+    });
+    expect(parseAppleDevicesProbe(PROBE_REAL_PACKAGES_EMPTY)).toEqual({
+      packageInstalled: false,
+      amdsRunning: true,
+      usbDriver: "bound",
+    });
+  });
+});

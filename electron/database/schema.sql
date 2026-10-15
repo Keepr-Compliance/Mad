@@ -1206,6 +1206,42 @@ CREATE TABLE IF NOT EXISTS pending_review_match_reasons (
 -- index it scans the table once per deleted email.
 CREATE INDEX IF NOT EXISTS idx_pending_review_match_reasons_email ON pending_review_match_reasons(email_id);
 
+-- BACKLOG-3926: which Outlook folder / Gmail labels each fetched message sits in.
+-- Keyed by the PROVIDER message id (emails.external_id), not by emails.id, so it is
+-- written for every fetched message (new, already cached, or staged by a force
+-- re-cache) and survives the force re-cache swap untouched. A message's rows are
+-- replaced by its current set each time it is fetched. New table: this file's exec on
+-- every open creates it on fresh and existing databases alike; no migration entry.
+CREATE TABLE IF NOT EXISTS mail_folder_refs (
+  user_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  folder_id TEXT NOT NULL,
+  PRIMARY KEY (account_id, external_id, folder_id),
+  FOREIGN KEY (account_id) REFERENCES oauth_tokens(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_mail_folder_refs_folder ON mail_folder_refs(account_id, folder_id);
+-- The read-time label lookup (getReviewState) goes email -> its refs by external_id.
+CREATE INDEX IF NOT EXISTS idx_mail_folder_refs_external ON mail_folder_refs(external_id);
+
+-- BACKLOG-3926: folder / label id -> name, per mailbox account. Refreshed after a
+-- fetch (throttled). is_system = Inbox/Sent/Archive/Spam/Trash/Drafts/CATEGORY_* etc.,
+-- which never count as a match. display_path is "Parent / Child" for nested Outlook
+-- folders and the label name ("Parent/Child") for Gmail. User data: never logged.
+CREATE TABLE IF NOT EXISTS mail_folder_names (
+  account_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('gmail', 'outlook')),
+  folder_id TEXT NOT NULL,
+  display_path TEXT NOT NULL,
+  segments TEXT NOT NULL,              -- JSON array of the path's matchable (non-system) names
+  is_system INTEGER NOT NULL DEFAULT 0,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (account_id, folder_id),
+  FOREIGN KEY (account_id) REFERENCES oauth_tokens(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_mail_folder_names_user ON mail_folder_names(user_id);
+
 CREATE TABLE IF NOT EXISTS phone_last_message (
   phone_normalized TEXT NOT NULL,
   user_id TEXT NOT NULL,

@@ -12,7 +12,7 @@ import { NeedsReviewScreen } from "../NeedsReviewScreen";
 import type { ReviewItemDto } from "../../../../../electron/types/ipc/window-api-transactions";
 import type { ReviewMatchReason } from "../../../../../electron/types/ipc/reviewMatchReason";
 import { REVIEW_MATCH_REASON_PRECEDENCE } from "../../../../../electron/types/ipc/reviewMatchReason";
-import { REVIEW_MATCH_KINDS } from "../../utils/reviewMatchReasons";
+import { REVIEW_MATCH_KINDS, REVIEW_MATCH_PRECEDENCE } from "../../utils/reviewMatchReasons";
 
 function item(id: string, threadId: string, title: string, matchReason: ReviewMatchReason, kind: "email" | "text" = "email"): ReviewItemDto {
   return {
@@ -67,8 +67,15 @@ function renderScreen(items = ITEMS, onApprove = jest.fn().mockResolvedValue(und
 }
 
 describe("BACKLOG-3925 Emails-tab Needs Review section: no tabs, every item, pills", () => {
-  it("renderer kind table is in the main-process precedence order (mirror parity)", () => {
-    expect(REVIEW_MATCH_KINDS.map((k) => k.reason)).toEqual([...REVIEW_MATCH_REASON_PRECEDENCE]);
+  // BACKLOG-3926: precedence (folder > address > contact) and tab order (mock v5:
+  // Address, Contact, Folder / label) are now different lists.
+  it("renderer precedence mirrors the main-process precedence (mirror parity)", () => {
+    expect([...REVIEW_MATCH_PRECEDENCE]).toEqual([...REVIEW_MATCH_REASON_PRECEDENCE]);
+  });
+
+  it("renderer kind table covers exactly the precedence kinds, in mock tab order", () => {
+    expect(REVIEW_MATCH_KINDS.map((k) => k.reason)).toEqual(["address", "contact", "folder"]);
+    expect([...REVIEW_MATCH_KINDS.map((k) => k.reason)].sort()).toEqual([...REVIEW_MATCH_REASON_PRECEDENCE].sort());
   });
 
   it("has NO tabs, lists every thread with its pill", () => {

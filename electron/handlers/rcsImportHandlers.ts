@@ -153,7 +153,7 @@ export const RCS_SAVING_MESSAGE = "Keepr is still saving the last Sync. Try agai
 
 const deps: RcsCacheChatDeps = {
   batchInsertMessages: (rows, batchSize) => databaseService.batchInsertMessages(rows, batchSize),
-  getMessageIdMap: (userId) => databaseService.getMessageIdMap(userId),
+  getMessageIdsByExternalIds: (userId, externalIds) => databaseService.getMessageIdsByExternalIds(userId, externalIds),
   insertReactionRows: (rows) => databaseService.insertReactionRows(rows),
   // BACKLOG-3630: the content guard (same sent_at + direction + body).
   findContentDuplicates: (userId, rows) => databaseService.findRcsContentDuplicates(userId, rows),
@@ -254,8 +254,8 @@ export const commitWriter: RcsCommitWriter = {
     clearPendingFullRead(userId, chat.conversationId, rcsChatHash(people.numbers));
     return r;
   },
-  getMessageIdMap: (userId) => databaseService.getMessageIdMap(userId),
-  getExistingAttachmentRecords: () => databaseService.getExistingAttachmentRecords(),
+  getMessageIdsByExternalIds: (userId, externalIds) => databaseService.getMessageIdsByExternalIds(userId, externalIds),
+  getExistingAttachmentRecordsForMessages: (messageIds) => databaseService.getExistingAttachmentRecordsForMessages(messageIds),
   insertAttachment: (params) => databaseService.insertAttachment(params),
   markMessageHasAttachments: (messageId) => databaseService.markMessageHasAttachments(messageId),
   externalId: rcsExternalId,

@@ -2,7 +2,7 @@
  * BACKLOG-3927: the one place the Microsoft Store build's iPhone setup copy
  * lives. Every screen that shows it imports from here — edit the words here only.
  *
- * ALL TEXT IS DRAFT awaiting founder sign-off (OPEN QUESTION on BACKLOG-3927).
+ * Checklist wording approved by the founder 2026-10-13 (BACKLOG-3927).
  * Each screen picks its text from the Apple Devices state (not-installed,
  * not-running, usb-driver-missing).
  *
@@ -62,18 +62,20 @@ export const APPLE_DEVICES_STILL_NOT_RUNNING =
  */
 export const APPLE_USB_DRIVER_HEADING = "Install Apple's iPhone USB driver";
 
-// DRAFT (founder approval pending, BACKLOG-3927): every sentence in this block.
 // Measured on a live PC 2026-10-12: Device Manager > Update driver answers "best
 // drivers already installed (MTP)"; the driver arrives through Windows Update >
-// Optional updates as "Apple Inc. - USBDevice", and a restart may be needed.
+// Optional updates as "Apple, Inc. - USBDevice".
 export const APPLE_USB_DRIVER_BODY =
-  "Windows sees your iPhone, but it isn't using Apple's USB driver yet. Windows Update provides this driver, and a restart may be needed.";
+  "Windows sees your iPhone, but it isn't using Apple's USB driver yet. Windows Update provides this driver.";
 
-export const APPLE_USB_DRIVER_STEPS: readonly string[] = [
-  'Click "Check for updates" below and let Windows finish checking.',
-  'Click "Optional updates" below and install "Apple Inc. - USBDevice".',
-  "A restart may be needed. Then unplug your iPhone, plug it back in and click Check again.",
-];
+/**
+ * BACKLOG-3927 (2.41): the Apple USB driver instruction, exact founder wording.
+ * Used by the Store guide and the setup checklist.
+ */
+export const APPLE_USB_DRIVER_INSTRUCTION =
+  'Click Check for updates and wait for it to finish. Then open Optional updates, tick "Apple, Inc. - USBDevice", and click Download & install. If Windows shows Restart now, click it, then reopen Keepr.';
+
+export const APPLE_USB_DRIVER_STEPS: readonly string[] = [APPLE_USB_DRIVER_INSTRUCTION];
 
 /** Both buttons only open Windows Settings; nothing is installed by Keepr. */
 export const APPLE_WU_CHECK_BUTTON = "Check for updates";
@@ -131,17 +133,15 @@ export const APPLE_DEVICES_READY_STILL =
 
 // ---------------------------------------------------------------------------
 // BACKLOG-3927 round 5: Store-build self-ticking setup checklist.
-// DRAFT — every string below awaits founder sign-off (OPEN QUESTION on
-// BACKLOG-3927). Expanded-row bodies reuse the strings above where they fit.
+// Founder-approved 2026-10-13. Expanded-row bodies reuse the strings above where they fit.
 // ---------------------------------------------------------------------------
 
 /** Checklist heading. */
 export const CHECKLIST_HEADING = "Set up iPhone sync";
 
-/** Row titles, in the order the user has to finish them. */
-export const CHECKLIST_ROW_APPLE_DEVICES = "Apple Devices installed";
+/** Row titles (two rows), in the order the user has to finish them. */
+export const CHECKLIST_ROW_APPLE_DEVICES = "Apple iPhone support installed";
 export const CHECKLIST_ROW_USB_DRIVER = "Apple iPhone USB driver";
-export const CHECKLIST_ROW_IPHONE = "iPhone connected and trusted";
 
 /** Row 1: Apple Devices not installed. */
 export const CHECKLIST_APPLE_DEVICES_INSTALL =
@@ -156,18 +156,13 @@ export const CHECKLIST_APPLE_DEVICES_STARTING =
   "Apple Devices is installed but hasn't started yet. It starts on its own a few minutes after your computer starts, or you can open the Apple Devices app now.";
 
 /** Row 2: shown under the two Windows Update buttons. */
-export const CHECKLIST_USB_DRIVER_BODY =
-  'Windows Update provides this driver. Check for updates, then install "Apple Inc. - USBDevice" from Optional updates. A restart may be needed.';
+export const CHECKLIST_USB_DRIVER_BODY = APPLE_USB_DRIVER_INSTRUCTION;
 
 /**
  * Row 2 when no iPhone is plugged in: the driver can only be checked against a
  * plugged-in iPhone, so the row is neither ticked nor marked missing.
  */
 export const CHECKLIST_USB_DRIVER_UNCHECKED = "Checked when your iPhone is plugged in.";
-
-/** Row 3: no iPhone seen yet (the Trust prompt hint is TrustComputerHint). */
-export const CHECKLIST_IPHONE_BODY =
-  "Plug your iPhone into this computer with a USB cable.";
 
 /** Screen-reader labels for the row markers. */
 export const CHECKLIST_DONE_LABEL = "Done";
