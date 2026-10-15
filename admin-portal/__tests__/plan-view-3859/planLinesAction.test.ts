@@ -22,6 +22,7 @@ import { makeClient, type CallLog } from './emulator';
 import {
   ALL_USERS,
   BASE_TABLES,
+  BROKERAGE_ORG,
   NOW,
   STAFF,
   U_AGENT,
@@ -277,9 +278,11 @@ describe('C4: reads are batched — the count does not grow with the number of u
         ...BASE_TABLES,
         organizations: ids.map((u, i) => ({ id: `p-${i}`, personal_owner_user_id: u, is_test: true })),
         organization_plans: [],
-        organization_members: [],
-        billing_subscriptions: [],
-        licenses: [],
+        // One row of each kind per user, so a loop over ROWS (not only over ids)
+        // adds calls at 100 users. Shapes copied from BASE_TABLES rows.
+        organization_members: ids.map((u, i) => ({ id: `m-${i}`, user_id: u, role: 'agent', organization_id: BROKERAGE_ORG, license_status: 'active', created_at: '2026-10-10T16:27:11.72815+00:00', organizations: { name: null, personal_owner_user_id: null } })),
+        billing_subscriptions: ids.map((u) => ({ user_id: u, stripe_mode: 'test', stripe_subscription_id: 'sub_fx_many', status: 'active', interval: 'month', current_period_end: '2026-11-12T19:45:47+00:00', cancel_at_period_end: false, canceled_at: null })),
+        licenses: ids.map((u) => ({ user_id: u, status: 'suspended' })),
       },
     };
   }
