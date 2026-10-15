@@ -10,8 +10,9 @@ const nextConfig = {
   reactStrictMode: true,
 
   // Transpile shared types from parent directory + the design-system and
-  // component-library packages (raw TS source, see packages/*/README/*.md)
-  transpilePackages: ['@shared', '@keepr/design-system', '@keepr/ui'],
+  // component-library packages (raw TS source, see packages/*/README/*.md).
+  // @keepr/shared (raw TS source) holds the plan rule, BACKLOG-3859.
+  transpilePackages: ['@shared', '@keepr/shared', '@keepr/design-system', '@keepr/ui'],
 
   webpack: (config) => {
     // @keepr/design-system is linked from ../packages (outside this app dir);

@@ -20,10 +20,13 @@ INSERT INTO public.users (id, email, oauth_provider, oauth_id) VALUES
 INSERT INTO public.organizations (id, name, slug) VALUES
  (pg_temp.id('o_main'),  'Org 3759 main',  'org-3759-main'),
  (pg_temp.id('o_other'), 'Org 3759 other', 'org-3759-other');
-INSERT INTO public.organization_members (organization_id, user_id, role) VALUES
- (pg_temp.id('o_main'),  pg_temp.id('u_agent'),    'agent'),
- (pg_temp.id('o_main'),  pg_temp.id('u_broker'),   'broker'),
- (pg_temp.id('o_other'), pg_temp.id('u_outsider'), 'broker');
+-- license_status 'active': every writer that links a user_id to a membership sets 'active'
+-- (claim_pending_invite, jit_join_organization, auto_provision_it_admin, the portal auth
+-- callback, directory-sync); the column default 'pending' is only for unclaimed invites.
+INSERT INTO public.organization_members (organization_id, user_id, role, license_status) VALUES
+ (pg_temp.id('o_main'),  pg_temp.id('u_agent'),    'agent',  'active'),
+ (pg_temp.id('o_main'),  pg_temp.id('u_broker'),   'broker', 'active'),
+ (pg_temp.id('o_other'), pg_temp.id('u_outsider'), 'broker', 'active');
 INSERT INTO public.transaction_submissions
   (id, organization_id, submitted_by, local_transaction_id, property_address, status, parent_submission_id, version) VALUES
  (pg_temp.id('s_upl'), pg_temp.id('o_main'), pg_temp.id('u_agent'), 'lt-3759-upl', '1 Test St', 'uploading',   NULL, 1),

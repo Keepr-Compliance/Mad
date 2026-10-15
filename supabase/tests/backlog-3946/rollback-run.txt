@@ -1,0 +1,112 @@
+== r01-rollback-A-alone
+PASS|r01 fn get_user_permissions(uuid) body equals production|4717f97631e5a1415f85159f29d4b1fe
+PASS|r01 fn get_user_permissions(uuid) ACL still signed-in only|{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}
+PASS|r01 fn has_any_permission(uuid,text[]) body equals production|a24e9b03aeecfaf8c5884cf81da6d5a4
+PASS|r01 fn has_any_permission(uuid,text[]) ACL still signed-in only|{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}
+PASS|r01 fn has_internal_role(uuid) body equals production|e05a0db9fcbbb8d19bc8c17cc9e24ed7
+PASS|r01 fn has_internal_role(uuid) ACL still signed-in only|{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}
+PASS|r01 fn has_permission(uuid,text) body equals production|b5af01878cfcdaf4ef1a3d40f4b617e9
+PASS|r01 fn has_permission(uuid,text) ACL still signed-in only|{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}
+PASS|r01 fn is_super_admin(uuid) body equals production|0cdf6aca14b003cde0936fe1aec5be07
+PASS|r01 fn is_super_admin(uuid) ACL still signed-in only|{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}
+PASS|r01 no helper policy is TO public (B untouched)|0
+PASS|r01 links grants unchanged by rollback-A|authenticated:DELETE,INSERT,SELECT
+CHECKS|r01-rollback-A-alone|12
+   behaviour after r01-rollback-A-alone (reds expected only for the part rolled back):
+     FAIL|e01 agent has_internal_role(staff) closed|OK true
+     FAIL|e01 agent has_permission(staff) closed|OK true
+     FAIL|e01 agent has_any_permission(staff) closed|OK true
+     FAIL|e01 agent is_super_admin(super) closed|OK true
+     FAIL|e01 agent get_user_permissions(staff) closed|OK 3
+     FAIL|e01 super has_internal_role(fellow staff) closed|OK true
+     FAIL|e01 super get_user_permissions(fellow staff) closed|OK 3
+     FAIL|e01 staff is_super_admin(super) closed|OK true
+     FAIL|e06 orgadmin has_internal_role(staff) = false|OK true
+     FAIL|e06 orgadmin has_permission(staff) = false|OK true
+     FAIL|e06 orgadmin has_any_permission(staff) = false|OK true
+     FAIL|e06 orgadmin get_user_permissions(staff) = 0|OK 3
+     FAIL|e06 orgadmin is_super_admin(super) = false|OK true
+     FAIL|e06 service_role has_permission(staff) = false|OK true
+     FAIL|e06 service_role has_internal_role(staff) = false|OK true
+     FAIL|e06 service_role get_user_permissions(staff) = 0|OK 3
+     FAIL|e06 service_role has_any_permission(staff) = false|OK true
+     FAIL|e06 service_role is_super_admin(super) = false|OK true
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=18
+== r02-rollback-B-alone
+PASS|r02 fn get_user_org_ids(uuid) ACL equals production|{=X/postgres,anon=X/postgres,authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}
+PASS|r02 fn get_user_permissions(uuid) ACL equals production|{=X/postgres,anon=X/postgres,authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}
+PASS|r02 fn get_user_permissions(uuid) body still guarded (A untouched)|89efcdd330cd1c20e61563bf674a0269
+PASS|r02 fn has_any_permission(uuid,text[]) ACL equals production|{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}
+PASS|r02 fn has_any_permission(uuid,text[]) body still guarded (A untouched)|295eda866f454253aef964b4a2c7f06a
+PASS|r02 fn has_internal_role(uuid) ACL equals production|{=X/postgres,anon=X/postgres,authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}
+PASS|r02 fn has_internal_role(uuid) body still guarded (A untouched)|221786001ca8ce4767112e1175cc6ece
+PASS|r02 fn has_permission(uuid,text) ACL equals production|{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}
+PASS|r02 fn has_permission(uuid,text) body still guarded (A untouched)|cfc4ffb201632d3df5aad1f349c18b8e
+PASS|r02 fn is_org_admin(uuid,uuid) ACL equals production|{=X/postgres,anon=X/postgres,authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}
+PASS|r02 fn is_super_admin(uuid) ACL equals production|{=X/postgres,anon=X/postgres,authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}
+PASS|r02 fn is_super_admin(uuid) body still guarded (A untouched)|4f91c05876c138d00de9feef019ed657
+PASS|r02 every helper policy equals production|
+PASS|r02 links grants unchanged by rollback-B|authenticated:DELETE,INSERT,SELECT
+CHECKS|r02-rollback-B-alone|14
+   behaviour after r02-rollback-B-alone (reds expected only for the part rolled back):
+     FAIL|e04 no TO public/anon policy calls an identity helper|22 users.users_select_public, admin_audit_logs.Internal users can view admin audit logs, admin_permissions.Internal users can view permissions, admin_role_permissions.Internal users can view role permissions, admin_roles.Internal users can view roles, analytics_events.analytics_events_select_own_or_internal, audit_logs.audit_logs_select_public, credit_ledger.credit_ledger_select_own, devices.devices_select_public, impersonation_sessions.Internal users can view their own sessions, individual_invitations.internal_users_can_read_individual_invitations, internal_roles.Super admins can manage internal roles, licenses.licenses_select_public, organization_members.organization_members_all_public, organization_members.organization_members_select_public, organization_plans.internal_users_can_read_org_plans, organizations.organizations_select_public, payment_intents.payment_intents_select_own, pending_internal_invitations.internal_users_can_manage_invitations, stripe_customers.stripe_customers_select_own, transaction_unlocks.transaction_unlocks_select_own, user_preferences.user_preferences_select_internal
+     FAIL|e04 anon (incl. PUBLIC) cannot execute any of the 7 helpers|5 get_user_org_ids,get_user_permissions,has_internal_role,is_org_admin,is_super_admin
+     FAIL|e06 anon exec has_internal_role = 42501|OK false
+     FAIL|e06 anon exec is_super_admin = 42501|OK false
+     FAIL|e06 anon exec get_user_permissions = 42501|OK 0
+     FAIL|e06 anon exec get_user_org_ids = 42501|OK 0
+     FAIL|e06 anon exec is_org_admin = 42501|OK false
+CONTROLS: pass=4 fail=2 error=0 checks=213 failed_checks=7
+== r03-rollback-C-alone
+PASS|r03 links grants equal production|anon:DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE authenticated:DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE
+PASS|r03 five helper bodies still guarded (A untouched)|5
+PASS|r03 seven helper ACLs still signed-in only (B untouched)|7
+PASS|r03 no helper policy is TO public (B untouched)|0
+CHECKS|r03-rollback-C-alone|4
+   behaviour after r03-rollback-C-alone (reds expected only for the part rolled back):
+     FAIL|e04 anon holds no privilege on support_ticket_backlog_links|DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE
+     FAIL|e04 authenticated holds exactly DELETE,INSERT,SELECT on links|DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE
+     FAIL|e05 anon delete refused (grant, not just RLS)|OK rows=0
+     FAIL|e05 update not granted to signed-in (unused by admin-portal)|OK rows=0
+     FAIL|e06 anon select links = 42501|OK 0
+CONTROLS: pass=3 fail=3 error=0 checks=213 failed_checks=5
+== r04-rollback-all (then lib/pins-3946.sql again)
+PASS|r04 links grants equal production|anon:DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE authenticated:DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE
+PASS|r04 every pin equals production|0
+CHECKS|r04-rollback-all|2
+   behaviour after all three rollbacks (= base):
+     FAIL|e01 anon has_internal_role(staff) closed|OK true
+     FAIL|e01 anon is_super_admin(super) closed|OK true
+     FAIL|e01 anon get_user_permissions(staff) closed|OK 3
+     FAIL|e01 agent has_internal_role(staff) closed|OK true
+     FAIL|e01 agent has_permission(staff) closed|OK true
+     FAIL|e01 agent has_any_permission(staff) closed|OK true
+     FAIL|e01 agent is_super_admin(super) closed|OK true
+     FAIL|e01 agent get_user_permissions(staff) closed|OK 3
+     FAIL|e01 super has_internal_role(fellow staff) closed|OK true
+     FAIL|e01 super get_user_permissions(fellow staff) closed|OK 3
+     FAIL|e01 staff is_super_admin(super) closed|OK true
+     FAIL|e04 no TO public/anon policy calls an identity helper|22 transaction_unlocks.transaction_unlocks_select_own, users.users_select_public, licenses.licenses_select_public, payment_intents.payment_intents_select_own, admin_audit_logs.Internal users can view admin audit logs, admin_permissions.Internal users can view permissions, admin_role_permissions.Internal users can view role permissions, admin_roles.Internal users can view roles, analytics_events.analytics_events_select_own_or_internal, audit_logs.audit_logs_select_public, credit_ledger.credit_ledger_select_own, devices.devices_select_public, impersonation_sessions.Internal users can view their own sessions, individual_invitations.internal_users_can_read_individual_invitations, internal_roles.Super admins can manage internal roles, organization_members.organization_members_all_public, organization_members.organization_members_select_public, organization_plans.internal_users_can_read_org_plans, organizations.organizations_select_public, pending_internal_invitations.internal_users_can_manage_invitations, stripe_customers.stripe_customers_select_own, user_preferences.user_preferences_select_internal
+     FAIL|e04 anon (incl. PUBLIC) cannot execute any of the 7 helpers|5 get_user_org_ids,get_user_permissions,has_internal_role,is_org_admin,is_super_admin
+     FAIL|e04 anon holds no privilege on support_ticket_backlog_links|DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE
+     FAIL|e04 authenticated holds exactly DELETE,INSERT,SELECT on links|DELETE,INSERT,REFERENCES,SELECT,TRIGGER,UPDATE
+     FAIL|e05 anon delete refused (grant, not just RLS)|OK rows=0
+     FAIL|e05 update not granted to signed-in (unused by admin-portal)|OK rows=0
+     FAIL|e06 orgadmin has_internal_role(staff) = false|OK true
+     FAIL|e06 orgadmin has_permission(staff) = false|OK true
+     FAIL|e06 orgadmin has_any_permission(staff) = false|OK true
+     FAIL|e06 orgadmin get_user_permissions(staff) = 0|OK 3
+     FAIL|e06 orgadmin is_super_admin(super) = false|OK true
+     FAIL|e06 anon exec has_internal_role = 42501|OK true
+     FAIL|e06 anon exec is_super_admin = 42501|OK true
+     FAIL|e06 anon exec get_user_permissions = 42501|OK 3
+     FAIL|e06 anon exec get_user_org_ids = 42501|OK 0
+     FAIL|e06 anon exec is_org_admin = 42501|OK false
+     FAIL|e06 service_role has_permission(staff) = false|OK true
+     FAIL|e06 service_role has_internal_role(staff) = false|OK true
+     FAIL|e06 service_role get_user_permissions(staff) = 0|OK 3
+     FAIL|e06 service_role has_any_permission(staff) = false|OK true
+     FAIL|e06 service_role is_super_admin(super) = false|OK true
+     FAIL|e06 anon select links = 42501|OK 0
+CONTROLS: pass=2 fail=4 error=0 checks=213 failed_checks=33
+ROLLBACK: OK

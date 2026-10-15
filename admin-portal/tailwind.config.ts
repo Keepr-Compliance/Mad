@@ -13,8 +13,10 @@ const config: Config = {
     './app/**/*.{js,ts,jsx,tsx,mdx}',
     './components/**/*.{js,ts,jsx,tsx,mdx}',
     './lib/**/*.{js,ts,jsx,tsx,mdx}',
-    // Shared package primitives (both paths: workspace symlink locally,
-    // standalone install on Vercel) so their classes survive purge.
+    // Shared package primitives, so their classes survive purge. Local and
+    // Vercel builds both install from the repo root (Vercel: `cd .. && npm ci`),
+    // so the package source is under ../packages; the node_modules glob is a
+    // second path to the same files, kept as a harmless fallback.
     '../packages/design-system/src/**/*.{js,ts,jsx,tsx}',
     './node_modules/@keepr/design-system/src/**/*.{js,ts,jsx,tsx}',
     '../packages/ui/src/**/*.{js,ts,jsx,tsx}',

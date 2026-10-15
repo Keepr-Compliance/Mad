@@ -1,0 +1,44 @@
+MUTATION APPLIED|W2_no_lock|1 edit(s)
+== W2_no_lock  MUTATION APPLIED: <     FROM public.organizations o WHERE o.id = NEW.organization_id <     FOR NO KEY UPDATE; >     FROM public.organizations o WHERE o.id = NEW.organization_id; 
+SETUP|lockline|none count_before_lock=false
+FAIL|c04r B times out on the organization lock while A holds the last seat|289ms 
+FAIL|c04r after A rolls back, B takes the seat|psql:<stdin>:1: ERROR:  seat_limit_reached
+PASS|c04r seats used = max|2/2
+CHECKS|3
+KILLED|W2_no_lock|c04r
+MUTATION APPLIED|W2_no_lock_commit|1 edit(s)
+== W2_no_lock_commit  MUTATION APPLIED: <     FROM public.organizations o WHERE o.id = NEW.organization_id <     FOR NO KEY UPDATE; >     FROM public.organizations o WHERE o.id = NEW.organization_id; 
+SETUP|lockline|none count_before_lock=false
+FAIL|c04c B blocked until A commits|219ms
+FAIL|c04c B refused seat_limit_reached after A commits|<B inserted>
+FAIL|c04c seats used = max|3/2
+CHECKS|3
+KILLED|W2_no_lock_commit|c04c
+MUTATION APPLIED|R2_count_before_lock|1 edit(s)
+== R2_count_before_lock  MUTATION APPLIED: >   SELECT count(*) INTO v_used >     FROM public.organization_members m >    WHERE m.organization_id = NEW.organization_id >      AND m.id <> NEW.id 
+SETUP|lockline|no_key_update count_before_lock=true
+PASS|c04c B blocked until A commits|2581ms
+FAIL|c04c B refused seat_limit_reached after A commits|<B inserted>
+FAIL|c04c seats used = max|3/2
+CHECKS|3
+KILLED|R2_count_before_lock|c04c
+MUTATION APPLIED|R1_for_update|1 edit(s)
+== R1_for_update  MUTATION APPLIED: <     FOR NO KEY UPDATE; >     FOR UPDATE; 
+SETUP|lockline|for_update count_before_lock=false
+FAIL|c15 FK child insert completes while the seat lock is held|1220ms psql:<stdin>:1: ERROR:  canceling statement due to lock timeout
+CHECKS|1
+KILLED|R1_for_update|c15
+MUTATION APPLIED|W14_r4_before_lock|2 edit(s)
+== W14_r4_before_lock  MUTATION APPLIED: >   IF NEW.user_id IS NOT NULL AND NOT EXISTS ( >     SELECT 1 FROM public.organization_members m >      WHERE m.organization_id = NEW.organization_id >        AND m.id <> NEW.id 
+SETUP|lockline|no_key_update count_before_lock=false
+FAIL|c12b two concurrent first-claimed IdP rows: one active, one unassigned|active,active 
+CHECKS|1
+KILLED|W14_r4_before_lock|c12b
+MUTATION APPLIED|R11_rpc_no_lock|1 edit(s)
+== R11_rpc_no_lock  MUTATION APPLIED: <     FROM public.organizations o WHERE o.id = v_org_id <     FOR NO KEY UPDATE; >     FROM public.organizations o WHERE o.id = v_org_id; 
+SETUP|lockline|no_key_update count_before_lock=false
+FAIL|c14 exactly one of two mutual unassigns succeeds|A: "success": true  B: "success": true 
+FAIL|c14 organization keeps an access-granting manager|0
+CHECKS|2
+KILLED|R11_rpc_no_lock|c14
+RACE MUTANTS: killed=6 survived=0 invalid=0

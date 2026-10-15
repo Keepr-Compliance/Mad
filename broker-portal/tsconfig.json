@@ -29,6 +29,12 @@
       "@shared/*": [
         "../shared/*"
       ],
+      "@keepr/shared": [
+        "../packages/shared/src/index.ts"
+      ],
+      "@keepr/shared/*": [
+        "../packages/shared/src/*"
+      ],
       "@keepr/design-system": [
         "../packages/design-system/src/index.ts"
       ],

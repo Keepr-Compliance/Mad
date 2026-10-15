@@ -12,8 +12,9 @@ const nextConfig = {
   },
 
   // The design-system and ui packages ship raw TS source (see
-  // packages/design-system/DESIGN-SYSTEM.md and packages/ui/README.md)
-  transpilePackages: ['@keepr/design-system', '@keepr/ui'],
+  // packages/design-system/DESIGN-SYSTEM.md and packages/ui/README.md).
+  // @keepr/shared (raw TS source) holds the plan rule, BACKLOG-3859.
+  transpilePackages: ['@keepr/shared', '@keepr/design-system', '@keepr/ui'],
 
   webpack: (config) => {
     // @keepr/design-system is linked from ../packages (outside this app dir);

@@ -21,13 +21,25 @@ const mockWrites: unknown[] = [];
 jest.mock('@/lib/supabase/server', () => ({
   createClient: jest.fn(async () => ({
     auth: { getUser: async () => ({ data: { user: { id: 'reviewer-id' } } }) },
-    from: () => ({
-      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: mockSubmissionRow, error: null }) }) }),
-      update: (values: unknown) => {
-        mockWrites.push(values);
-        return { eq: () => ({ select: async () => mockUpdateResult }) };
-      },
-    }),
+    from: (table: string) => {
+      // BACKLOG-3917: the reviewer gate's own reads. Row shapes as PostgREST
+      // returns the two selects: organization_members 'role, license_status'
+      // and licenses 'status'. 'active' is what every linking writer sets.
+      if (table === 'organization_members') {
+        const one = { maybeSingle: async () => ({ data: { role: 'broker', license_status: 'active' }, error: null }) };
+        return { select: () => ({ eq: () => ({ eq: () => one }) }) };
+      }
+      if (table === 'licenses') {
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { status: 'active' }, error: null }) }) }) };
+      }
+      return {
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: mockSubmissionRow, error: null }) }) }),
+        update: (values: unknown) => {
+          mockWrites.push(values);
+          return { eq: () => ({ select: async () => mockUpdateResult }) };
+        },
+      };
+    },
     rpc: (...a: unknown[]) => mockRpc(...a),
   })),
 }));

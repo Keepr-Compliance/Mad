@@ -5,6 +5,7 @@ import { ArrowLeft } from 'lucide-react';
 import { UserProfileCard } from './components/UserProfileCard';
 import { OrganizationCard } from './components/OrganizationCard';
 import { LicenseCard } from './components/LicenseCard';
+import { PlanCard } from './components/PlanCard';
 import { DevicesTable } from './components/DevicesTable';
 import { AuditLogTable } from './components/AuditLogTable';
 import { BillingCreditsCard } from './components/BillingCreditsCard';
@@ -12,6 +13,9 @@ import { SentryErrorsCard } from './components/SentryErrorsCard';
 import { createServiceClient } from '@/lib/supabase/server';
 import { getBillingData } from '@/lib/billing-queries';
 import { getSuspensionStatus } from '@/lib/suspension-queries';
+import { readPlanLines, validPlanLineIds } from '@/lib/planLines';
+import type { PlanLine } from '@keepr/shared';
+import * as Sentry from '@sentry/nextjs';
 
 export const dynamic = 'force-dynamic';
 
@@ -72,7 +76,7 @@ export default async function UserDetailPage({
         .eq('user_id', id),
       supabase
         .from('licenses')
-        .select('id, license_type, license_key, status, trial_status, trial_expires_at, transaction_count, transaction_limit, expires_at, created_at')
+        .select('id, license_type, license_key, status, max_devices, expires_at, created_at')
         .eq('user_id', id),
       supabase.rpc('admin_list_user_devices', {
         p_user_id: id,
@@ -100,6 +104,22 @@ export default async function UserDetailPage({
   }
 
   const profile = profileResult.data;
+
+  // BACKLOG-3859: the plan line. Gated above (session has_permission users.view)
+  // before the service client was created. Credits come from getBillingData's
+  // get_credit_balance read, so no second read of the balance; when that read
+  // failed (creditBalance then defaults to 0) the count is left out, not shown as 0.
+  const balanceFailed = billingData.errorMessages.some((m) => m.startsWith('Credit balance:'));
+  let planLineForUser: PlanLine | null = null;
+  const planIds = validPlanLineIds([id]);
+  if (planIds) {
+    try {
+      const lines = await readPlanLines(serviceSupabase, planIds, new Date(), balanceFailed ? undefined : { [id]: billingData.creditBalance });
+      planLineForUser = lines[id] ?? null;
+    } catch (err) {
+      Sentry.captureException(err, { tags: { area: 'admin-plan-lines' } });
+    }
+  }
 
   // Transform org memberships to include org name and plan info
   const orgMemberships = (orgsResult.data ?? []).map((m) => {
@@ -140,7 +160,10 @@ export default async function UserDetailPage({
         isOwnProfile={adminUser.id === id}
       />
 
-      {/* Two-column grid for org + license */}
+      {/* Plan (BACKLOG-3859) */}
+      <PlanCard line={planLineForUser} />
+
+      {/* Two-column grid for org + account */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <OrganizationCard memberships={orgMemberships} />
         <LicenseCard licenses={licensesResult.data ?? []} />

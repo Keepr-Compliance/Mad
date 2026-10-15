@@ -81,7 +81,10 @@ export async function GET(request: Request) {
         return NextResponse.redirect(`${origin}${next}`);
       }
 
-      if (access.kind === 'floor' && access.via === 'brokerage') {
+      // BACKLOG-3917: a deactivated brokerage member is placed too. They land on
+      // `next` and middleware floors them; they never reach the invite-link or
+      // JIT-join paths below, and never their personal organization.
+      if (access.kind === 'floor' && (access.via === 'brokerage' || access.via === 'deactivated')) {
         // A brokerage agent (or any non-full role): the portal floor.
         return NextResponse.redirect(`${origin}${next}`);
       }

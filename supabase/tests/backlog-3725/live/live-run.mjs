@@ -66,9 +66,9 @@ async function people() {
   psql(`
     insert into public.organizations(id) values ('${ORG}'), ('${ORG2}') on conflict do nothing;
     delete from public.organization_members where organization_id in ('${ORG}', '${ORG2}');
-    insert into public.organization_members(organization_id, user_id, role) values
-      ('${ORG}', '${A.id}', 'agent'), ('${ORG}', '${B.id}', 'agent'), ('${ORG}', '${K.id}', 'broker'),
-      ('${ORG2}', '${O.id}', 'agent');
+    insert into public.organization_members(organization_id, user_id, role, license_status) values
+      ('${ORG}', '${A.id}', 'agent', 'active'), ('${ORG}', '${B.id}', 'agent', 'active'), ('${ORG}', '${K.id}', 'broker', 'active'),
+      ('${ORG2}', '${O.id}', 'agent', 'active');
     delete from public.internal_roles where user_id = '${Z.id}';
     insert into public.internal_roles(user_id) values ('${Z.id}');`);
   return { A, B, K, O, Z };

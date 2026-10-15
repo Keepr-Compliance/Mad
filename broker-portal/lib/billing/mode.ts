@@ -10,7 +10,10 @@
  * memo would make the value depend on which call happened first.
  */
 
-export type StripeMode = 'test' | 'live';
+import type { StripeMode } from '@keepr/shared';
+
+// BACKLOG-3859: declared once, in packages/shared/src/billing/planRule.ts.
+export type { StripeMode } from '@keepr/shared';
 
 /** Mode of a Stripe secret or restricted key. Throws on anything else — never guesses. */
 export function stripeModeFromKey(key: string | undefined | null): StripeMode {

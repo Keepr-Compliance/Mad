@@ -37,12 +37,16 @@
  * key → not personal → precisely today's behaviour.
  *
  * ---------------------------------------------------------------------------
- * No imports, deliberately.
+ * One import, deliberately: `@keepr/shared`.
  * ---------------------------------------------------------------------------
  * `middleware.ts` runs in the Edge runtime. Anything reached from here that
  * pulls `next/headers` (which `@/lib/supabase/server` does) fails the Edge
- * build, and nothing in the local test suite would say so.
+ * build, and nothing in the local test suite would say so. The only module
+ * this file reaches is `@keepr/shared`, whose source files import nothing
+ * (BACKLOG-3859). Guarded by __tests__/agentFloor-3080/classify.test.ts.
  */
+
+import type { PortalAccess } from '@keepr/shared';
 
 /**
  * The select string every portal membership read uses.
@@ -52,169 +56,20 @@
  * the caller reads `data: null`, i.e. "no membership", which is the same silent
  * demotion. The rows come back ordered and this module picks.
  */
-export const PORTAL_MEMBERSHIP_SELECT = 'role, organization_id, organizations(*)';
+export const PORTAL_MEMBERSHIP_SELECT = 'role, organization_id, license_status, organizations(*)';
 
-/** The embedded organization record, of which only one key is read here. */
-export interface EmbeddedOrganization {
-  /** Present only once BACKLOG-3364's migration has been applied. */
-  personal_owner_user_id?: string | null;
-}
-
-/**
- * One row of {@link PORTAL_MEMBERSHIP_SELECT}.
- *
- * `role` and `organization_id` are NOT NULL columns, so they are declared
- * required: callers that build a consent URL out of the organization id would
- * otherwise have to widen for a value the database cannot produce. The embed is
- * optional because it is what the pre-migration database omits.
- */
-export interface PortalMembershipRow {
-  role: string;
-  organization_id: string;
-  /**
-   * Object on the wire; ARRAY in the type.
-   *
-   * PostgREST returns a single object for this embed — a many-to-one
-   * relationship — and that is what the transcribed responses in
-   * supabase/tests/backlog-3364/fixtures/ contain. But this portal's Supabase
-   * client is built without a generated `Database` type, so supabase-js cannot
-   * know the cardinality and infers `any[]` from the select string alone.
-   *
-   * Both are declared, and `embeddedOrganization` below takes either. Narrowing
-   * this to the object alone is what `npm run build` rejects; narrowing it to
-   * the array alone would compile and then read `undefined` at runtime, which
-   * silently makes every organization non-personal — the exact failure this
-   * module exists to prevent, and one no type error would report.
-   */
-  organizations?: EmbeddedOrganization | EmbeddedOrganization[] | null;
-}
-
-/** The embedded record, whichever of the two shapes it arrived in. */
-function embeddedOrganization(
-  row: PortalMembershipRow | null | undefined
-): EmbeddedOrganization | null {
-  const embed = row?.organizations;
-  if (!embed) return null;
-  return Array.isArray(embed) ? (embed[0] ?? null) : embed;
-}
-
-/**
- * Is this membership row the user's own personal organization?
- *
- * A null, empty or missing embed reads as NOT personal. That is the
- * pre-migration answer and the safe one: it can only ever leave today's
- * behaviour in place.
- */
-export function isPersonalMembership(row: PortalMembershipRow | null | undefined): boolean {
-  return !!embeddedOrganization(row)?.personal_owner_user_id;
-}
-
-/**
- * The brokerage membership this user should be routed on, or null.
- *
- * Takes the first non-personal row in the order the query returned them, so the
- * caller must order deterministically (`created_at`, then `id` — both base
- * columns of `organization_members`, so neither names the new column). SCIM and
- * directory sync can both write, so "two brokerage rows" is reachable and must
- * not resolve arbitrarily.
- *
- * Anything that is not an array — `null` from an error result included — is no
- * membership. That is what the caller did with an error before this change.
- */
-export function pickBrokerageMembership(
-  rows: PortalMembershipRow[] | null | undefined
-): PortalMembershipRow | null {
-  if (!Array.isArray(rows)) return null;
-  for (const row of rows) {
-    if (row && !isPersonalMembership(row)) return row;
-  }
-  return null;
-}
-
-// ===========================================================================
-// Portal access — BACKLOG-3080.
-// ===========================================================================
-//
-// ONE classifier, used by every place that decides what a signed-in person may
-// open: the OAuth callback, middleware, the dashboard layout, each page and the
-// settings/users gates. They cannot drift apart because there is only one rule.
-//
-// Every gate calls it on the session it is handed. A portal session is not only
-// created by /auth/callback, so the callback alone cannot decide who gets in.
-//
-// Still zero imports: middleware (Edge) calls these two functions directly.
-
-/** Roles that open the whole portal. Everything else gets the floor. */
-export const FULL_PORTAL_ROLES = ['broker', 'admin', 'it_admin'] as const;
-
-/**
- * What a signed-in person may open.
- *
- *   full    - a brokerage broker / admin / it_admin: the whole portal.
- *   floor   - a brokerage member with any other role (agent, or a role this
- *             file has never heard of), or the OWNER of a personal
- *             organization: welcome dashboard, own support tickets, My Account.
- *   unknown - the membership read failed. Floor for this request, and never a
- *             sign-out: a transient read error must not sign every broker out.
- *   none    - no brokerage membership and no personal organization of their
- *             own. Not a portal user.
- */
-export type PortalAccess =
-  | { kind: 'full'; role: string; organizationId: string }
-  | {
-      kind: 'floor';
-      via: 'brokerage' | 'personal_owner';
-      role: string;
-      organizationId: string;
-    }
-  | { kind: 'unknown' }
-  | { kind: 'none' };
-
-/**
- * Classify the rows of {@link PORTAL_MEMBERSHIP_SELECT} for `userId`.
- *
- * In order:
- *   1. Not an array (an error result) -> unknown.
- *   2. The first brokerage row decides: a full role -> full; ANY other role ->
- *      floor. An unrecognised role therefore fails closed to the floor.
- *   3. Otherwise a personal organization whose owner IS this user -> floor.
- *      Equality with the session user, never mere presence of the owner key:
- *      a member of somebody else's personal organization is not its owner.
- *   4. Otherwise -> none.
- */
-export function classifyPortalAccess(
-  rows: PortalMembershipRow[] | null | undefined,
-  userId: string
-): PortalAccess {
-  if (!Array.isArray(rows)) return { kind: 'unknown' };
-
-  const brokerage = pickBrokerageMembership(rows);
-  if (brokerage) {
-    if ((FULL_PORTAL_ROLES as readonly string[]).includes(brokerage.role)) {
-      return { kind: 'full', role: brokerage.role, organizationId: brokerage.organization_id };
-    }
-    return {
-      kind: 'floor',
-      via: 'brokerage',
-      role: brokerage.role,
-      organizationId: brokerage.organization_id,
-    };
-  }
-
-  for (const row of rows) {
-    const owner = embeddedOrganization(row)?.personal_owner_user_id;
-    if (owner && owner === userId) {
-      return {
-        kind: 'floor',
-        via: 'personal_owner',
-        role: row.role,
-        organizationId: row.organization_id,
-      };
-    }
-  }
-
-  return { kind: 'none' };
-}
+// BACKLOG-3859: the classifier and its pieces moved, verbatim, to
+// packages/shared/src/billing/planRule.ts, so the admin portal reads the same
+// rule. Re-exported here so every importer of this file is unchanged.
+export {
+  PORTAL_GRANTING_LICENSE_STATUSES,
+  memberStatusGrantsAccess,
+  isPersonalMembership,
+  pickBrokerageMembership,
+  FULL_PORTAL_ROLES,
+  classifyPortalAccess,
+} from '@keepr/shared';
+export type { EmbeddedOrganization, PortalMembershipRow, PortalAccess } from '@keepr/shared';
 
 /** The dashboard paths the floor opens. Each also opens its sub-paths. */
 export const FLOOR_PATHS = ['/dashboard', '/dashboard/account', '/dashboard/support'] as const;
@@ -263,6 +118,8 @@ export function mayOpenDashboardPath(access: PortalAccess, pathname: string): bo
   for (const base of FLOOR_PATHS) {
     if (base !== '/dashboard' && isUnder(pathname, base)) return true;
   }
+  // BACKLOG-3917: a deactivated member opens the floor paths only.
+  if (access.kind === 'floor' && access.via === 'deactivated') return false;
   for (const base of OWN_GATE_PATHS) {
     if (isUnder(pathname, base)) return true;
   }
@@ -286,7 +143,7 @@ export function mayOpenDashboardPath(access: PortalAccess, pathname: string): bo
 // Suspended means `licenses.status = 'suspended'` (both suspension paths write
 // it; users.status is written by one path only). The licence is read by
 // lib/auth/suspension.ts; these two functions only decide WHERE a suspended
-// person may go. Still zero imports: middleware calls them.
+// person may go. Middleware calls them.
 //
 //   - the OWNER of a personal organization: Billing (only while billing is on;
 //     the page 404s otherwise), My Account, Support;

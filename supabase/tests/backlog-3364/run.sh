@@ -11,7 +11,8 @@
 # migrations as). The gate checks that.
 #
 # Commands, in the order the README runs them:
-#   gate       venue gate: role, supautils, catalog fingerprint vs production
+#   gate       venue gate: role, supautils, catalog fingerprint vs production as of
+#              2026-09-15 (lib/gate-expected.txt; historical, not production today)
 #   seed       lib/seed-storage.sql (production's bucket + 4 storage policies)
 #   txn        one-transaction control: a copy with a failing LAST statement
 #              must exit non-zero and leave the fingerprint unchanged
@@ -35,7 +36,7 @@ export PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-15}"
 
 URL="${1:-}"; CMD="${2:-}"
 if [ -z "$URL" ] || [ -z "$CMD" ]; then
-  sed -n '2,25p' "${BASH_SOURCE[0]}"; exit 2
+  sed -n '2,26p' "${BASH_SOURCE[0]}"; exit 2
 fi
 
 host="$(sed -E 's#^[a-z]+://([^@/]*@)?(\[[^]]+\]|[^:/?]+).*#\2#' <<<"$URL")"

@@ -1,4 +1,5 @@
 # BACKLOG-3364 venue gate: production's output of lib/gate-catalog.sql, read-only via the Supabase MCP, 2026-09-15, BEFORE migration 1.
+# HISTORICAL (BACKLOG-3945, 2026-10-14): production before ledger 20260915160637, not production today. Checks the venue this harness replays onto.
 # key|value. run.sh gate compares the venue row by row; differences must be listed in gate-accepted.txt with a reason.
 bucket:submission-attachments|submission-attachments/false
 cols:public.licenses|600d3fb63c152a48e2d24fcbcc36bffe

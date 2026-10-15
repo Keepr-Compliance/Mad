@@ -1,0 +1,92 @@
+== c01-rpc-matrix
+psql:<stdin>:2595: ERROR:  new row for relation "organization_members" violates check constraint "organization_members_license_status_check"
+ERROR|c01-rpc-matrix.sql|psql failed
+== c02-seat-refusal
+psql:<stdin>:2591: ERROR:  new row for relation "organization_members" violates check constraint "organization_members_license_status_check"
+ERROR|c02-seat-refusal.sql|psql failed
+== c03-idp-overflow
+psql:<stdin>:2598: ERROR:  column "license_assigned_at" does not exist
+ERROR|c03-idp-overflow.sql|psql failed
+== c05-feature-lookups
+psql:<stdin>:2591: ERROR:  new row for relation "organization_members" violates check constraint "organization_members_license_status_check"
+ERROR|c05-feature-lookups.sql|psql failed
+== c07-helpers
+psql:<stdin>:2618: ERROR:  function public.member_status_holds_seat(text) does not exist
+ERROR|c07-helpers.sql|psql failed
+== c08-catalog
+FAIL|c08 public.member_status_holds_seat(text) exists|
+FAIL|c08 public.member_status_is_deactivated(text) exists|
+FAIL|c08 public.member_origin_is_idp(text) exists|
+FAIL|c08 public.member_row_holds_seat(text,timestamp with time zone,uuid) exists|
+FAIL|c08 public._enforce_member_seat_limit() exists|
+FAIL|c08 public.set_member_license(uuid,text) exists|
+PASS|c08 public.guard_invite_acceptance() ACL unchanged|{postgres=X/postgres,service_role=X/postgres}
+PASS|c08 public.admin_invite_user(uuid,text,text,uuid,text,uuid) ACL unchanged|{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.get_org_features(uuid) ACL unchanged|{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.check_feature_access(uuid,text) ACL unchanged|{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+FAIL|c08 anon calling set_member_license is refused (42501)|
+FAIL|c08 BEFORE triggers on organization_members in order|guard_invite_acceptance,update_org_members_updated_at
+FAIL|c08 license_status CHECK = pending, active, suspended, expired, unassigned|CHECK (((license_status)::text = ANY ((ARRAY['pending'::character varying, 'active'::character varying, 'suspended'::character varying, 'expired'::character varying])::text[])))
+FAIL|c08 license_assigned_at timestamptz NULL, no default|
+PASS|c08 untouched object equals production: fn _ensure_personal_organization_for(uuid)|849314911f1e4622096bd0102723f793
+PASS|c08 untouched object equals production: fn _guard_personal_owner_user_id()|fa0dc8d6dc997822053021b15b3b05ea
+PASS|c08 untouched object equals production: fn _retire_personal_membership()|26f5fb802a0e8e8b217f0e33bf2490ee
+PASS|c08 untouched object equals production: fn auto_provision_google_it_admin(text,text,text)|5e88920962967b861c5817aec328325e
+PASS|c08 untouched object equals production: fn auto_provision_it_admin(text,text,text)|11d8619f8dc65e22f53e668e8eade957
+PASS|c08 untouched object equals production: fn broker_get_org_features(uuid)|ea48082497e2d44ed912caf2cd71d011
+PASS|c08 untouched object equals production: fn claim_pending_invite()|f5a006ac110f1f6d817e0b01b9da12ea
+PASS|c08 untouched object equals production: fn ensure_personal_organization()|1f722dc8b511a40cc9e78f271b1d78a6
+PASS|c08 untouched object equals production: fn guard_organization_client_update()|8c931ae0c7674fd65a51720d7f2376ac
+PASS|c08 untouched object equals production: fn jit_join_organization(text)|6b0f4c93bbd7671e916c05e214c40a5b
+PASS|c08 untouched object equals production: fn member_status_grants_access(text)|d407b02e2aa222e9af003f66506e2480
+PASS|c08 untouched object equals production: fn update_updated_at_column()|9e2677705d54938c11504cf340bae4e4
+PASS|c08 untouched object equals production: con organization_members_invitation_token_key|bd859f6b53564282feac2f0e7fee1056
+PASS|c08 untouched object equals production: con organization_members_invited_by_fkey|ec8bea94f39fae677581fcfd9b20c4c9
+PASS|c08 untouched object equals production: con organization_members_organization_id_fkey|3c702b28ccc97a0ac52c0acefcdea477
+PASS|c08 untouched object equals production: con organization_members_organization_id_user_id_key|0522fd08870e800988ad0017c5465df8
+PASS|c08 untouched object equals production: con organization_members_pkey|4c6419b3704337bbfe50f018842a9ad3
+PASS|c08 untouched object equals production: con organization_members_provisioned_by_check|810b8cfd4f600c778e4589adc360c616
+PASS|c08 untouched object equals production: con organization_members_role_check|1001427b5b028f4c0c37b09d3e5deb80
+PASS|c08 untouched object equals production: con organization_members_user_id_fkey|85d8b2f5f0c0f6b4dcb854efb61a8cb1
+PASS|c08 untouched object equals production: con organization_members_user_id_public_users_fkey|e208476b0e6d80576b69508e9d165e3f
+PASS|c08 untouched object equals production: trg organization_members.update_org_members_updated_at|7f7cbe08356763dcf9c0110a2a20d150
+PASS|c08 untouched object equals production: trg organizations.update_organizations_updated_at|18d1ba39339173ebb60ab85e8f9af0dd
+PASS|c08 untouched object equals production: trg organizations.guard_personal_owner_user_id|817c707b844bba42b3fea695e44247c2
+PASS|c08 untouched object equals production: trg organization_members.retire_personal_membership|7114babde1c6464af54438a0824765d5
+PASS|c08 untouched object equals production: trg organizations.guard_organization_client_update|fe0492e0373d142a59a0f582aeaa1ddc
+PASS|c08 untouched object equals production: trg organization_members.guard_invite_acceptance|8b4b45054ed050e29fb1a4bc20932603
+PASS|c08 untouched object equals production: cols organizations|c193cc73f168cf8b3542444b537c9261
+CHECKS|c08-catalog|42
+== c11-update-never-rewritten
+psql:<stdin>:2591: ERROR:  new row for relation "organization_members" violates check constraint "organization_members_license_status_check"
+ERROR|c11-update-never-rewritten.sql|psql failed
+== c12-first-member
+psql:<stdin>:2597: ERROR:  column "license_assigned_at" does not exist
+ERROR|c12-first-member.sql|psql failed
+== c16-resend-expired
+psql:<stdin>:2602: ERROR:  function public.set_member_license(uuid, text) does not exist
+ERROR|c16-resend-expired.sql|psql failed
+== c16b-invite-after-expiry
+PASS|c16b x_org: one seat used|1
+FAIL|c16b portal invite (client admin) allowed|ERR 42501 Organization has reached maximum seats
+FAIL|c16b staff invite (admin_invite_user) allowed|OK {"error": "seat_limit_reached", "success": false}
+FAIL|c16b keep one portal invite|
+PASS|c16b next portal invite refused (now full)|
+PASS|c16b next staff invite refused (now full)|
+CHECKS|c16b-invite-after-expiry|6
+== c18-setup-with-own-invite
+PASS|c18 A /setup with own invite: jit row active beside the pending invite|active:jit:true,pending:invite:false
+PASS|c18 A both rows hold a seat until the claim|
+PASS|c18 A claim keeps the jit row and deletes the invite|active:jit
+PASS|c18 A seat count back to +1|
+FAIL|c18 B /setup in a full org whose seat is the user's own invite -> unassigned|active
+FAIL|c18 B claim deletes the invite; the user stays unassigned; one seat free (no auto-assign, Q5)|after=active claim=OK existing_membership_kept invite=0 jit=active prov=true seats=4
+CHECKS|c18-setup-with-own-invite|6
+== m06-paygo-revert
+psql:<stdin>:2595: ERROR:  new row for relation "organization_members" violates check constraint "organization_members_license_status_check"
+ERROR|m06-paygo-revert.sql|psql failed
+== m13-revert-never-blocks
+PASS|m13 deactivation commits although the revert raises|OK 1
+PASS|m13 row is suspended|suspended
+CHECKS|m13-revert-never-blocks|2
+CONTROLS: pass=1 fail=3 error=9 checks=56 failed_checks=15

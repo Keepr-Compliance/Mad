@@ -28,6 +28,7 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { isFeatureEnabledFailClosed } from '@/lib/feature-gate';
+import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
 
 /** feature_definitions.key seeded by 20260904_backlog_3094_jit_provisioning_feature.sql */
 export const JIT_FEATURE_KEY = 'jit_provisioning';
@@ -68,6 +69,12 @@ export async function requireJitAccess(): Promise<JitAccess> {
     .single();
 
   if (!membership) throw new Error('Not authorized');
+
+  // BACKLOG-3917: that row must grant access (status allow-list) and the
+  // caller's licence must not be suspended.
+  if (!(await requireActiveOrgRole(supabase, user.id, membership.organization_id, JIT_ADMIN_ROLES)).ok) {
+    throw new Error('Not authorized');
+  }
 
   const enabled = await isFeatureEnabledFailClosed(
     membership.organization_id,
