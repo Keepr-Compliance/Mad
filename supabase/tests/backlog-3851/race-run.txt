@@ -1,0 +1,17 @@
+NOTICE:  database "race3851" does not exist, skipping
+SETUP|PINS3851 OK
+SETUP|FIXTURES3851 OK
+SETUP|SEEDED|36378addf67c120c00e4aa5a4afeb662
+SETUP|lockline|no_key_update count_before_lock=false
+PASS|c04r B times out on the organization lock while A holds the last seat|1216ms
+PASS|c04r after A rolls back, B takes the seat|
+PASS|c04r seats used = max|2/2
+PASS|c04c B blocked until A commits|2636ms
+PASS|c04c B refused seat_limit_reached after A commits|
+PASS|c04c seats used = max|2/2
+PASS|c15 FK child insert completes while the seat lock is held|182ms
+PASS|c12b two concurrent first-claimed IdP rows: one active, one unassigned|active,unassigned
+PASS|c14 exactly one of two mutual unassigns succeeds|A: "success": true  B: "error": "not_authorized" "success": false 
+PASS|c14 organization keeps an access-granting manager|1
+CHECKS|10
+CLEANUP|race3851 dropped

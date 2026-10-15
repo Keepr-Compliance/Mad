@@ -1,0 +1,491 @@
+== c01-rpc-matrix
+PASS|c01 cell u_fad assign o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad bogus o_ad|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_fad reactivate o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad unassign o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad assign o_tact|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad bogus o_tact|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_fad reactivate o_tact|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad unassign o_tact|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad assign o_tbr|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad bogus o_tbr|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_fad reactivate o_tbr|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad unassign o_tbr|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad assign o_texp|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad bogus o_texp|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_fad reactivate o_texp|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad unassign o_texp|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad assign o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad bogus o_tit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_fad reactivate o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad unassign o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad assign o_tpen|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad bogus o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_fad reactivate o_tpen|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad unassign o_tpen|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad assign o_tsus|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad bogus o_tsus|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_fad reactivate o_tsus|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad unassign o_tsus|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad assign o_tun|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad bogus o_tun|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_fad reactivate o_tun|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad unassign o_tun|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad assign o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad bogus o_tunit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_fad reactivate o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_fad unassign o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oad assign o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oad bogus o_ad|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad reactivate o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oad unassign o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oad assign o_tact|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad bogus o_tact|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad reactivate o_tact|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad unassign o_tact|expected <null> got OK <null>
+PASS|c01 cell u_oad assign o_tbr|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad bogus o_tbr|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad reactivate o_tbr|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad unassign o_tbr|expected <null> got OK <null>
+PASS|c01 cell u_oad assign o_texp|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad bogus o_texp|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad reactivate o_texp|expected <null> got OK <null>
+PASS|c01 cell u_oad unassign o_texp|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad assign o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oad bogus o_tit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad reactivate o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oad unassign o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oad assign o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad bogus o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad reactivate o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad unassign o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad assign o_tsus|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad bogus o_tsus|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad reactivate o_tsus|expected <null> got OK <null>
+PASS|c01 cell u_oad unassign o_tsus|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad assign o_tun|expected <null> got OK <null>
+PASS|c01 cell u_oad bogus o_tun|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad reactivate o_tun|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad unassign o_tun|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad assign o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oad bogus o_tunit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oad reactivate o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oad unassign o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag assign o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag bogus o_ad|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oag reactivate o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag unassign o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag assign o_tact|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag bogus o_tact|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oag reactivate o_tact|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag unassign o_tact|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag assign o_tbr|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag bogus o_tbr|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oag reactivate o_tbr|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag unassign o_tbr|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag assign o_texp|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag bogus o_texp|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oag reactivate o_texp|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag unassign o_texp|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag assign o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag bogus o_tit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oag reactivate o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag unassign o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag assign o_tpen|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag bogus o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oag reactivate o_tpen|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag unassign o_tpen|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag assign o_tsus|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag bogus o_tsus|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oag reactivate o_tsus|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag unassign o_tsus|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag assign o_tun|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag bogus o_tun|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oag reactivate o_tun|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag unassign o_tun|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag assign o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag bogus o_tunit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oag reactivate o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oag unassign o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_obr assign o_ad|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr bogus o_ad|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr reactivate o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_obr unassign o_ad|expected <null> got OK <null>
+PASS|c01 cell u_obr assign o_tact|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr bogus o_tact|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr reactivate o_tact|expected not_authorized got OK not_authorized
+PASS|c01 cell u_obr unassign o_tact|expected <null> got OK <null>
+PASS|c01 cell u_obr assign o_tbr|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr bogus o_tbr|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr reactivate o_tbr|expected not_authorized got OK not_authorized
+PASS|c01 cell u_obr unassign o_tbr|expected <null> got OK <null>
+PASS|c01 cell u_obr assign o_texp|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr bogus o_texp|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr reactivate o_texp|expected not_authorized got OK not_authorized
+PASS|c01 cell u_obr unassign o_texp|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr assign o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_obr bogus o_tit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr reactivate o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_obr unassign o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_obr assign o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr bogus o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr reactivate o_tpen|expected not_authorized got OK not_authorized
+PASS|c01 cell u_obr unassign o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr assign o_tsus|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr bogus o_tsus|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr reactivate o_tsus|expected not_authorized got OK not_authorized
+PASS|c01 cell u_obr unassign o_tsus|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr assign o_tun|expected <null> got OK <null>
+PASS|c01 cell u_obr bogus o_tun|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr reactivate o_tun|expected not_authorized got OK not_authorized
+PASS|c01 cell u_obr unassign o_tun|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr assign o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_obr bogus o_tunit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_obr reactivate o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_obr unassign o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_oit assign o_ad|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit bogus o_ad|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit reactivate o_ad|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit unassign o_ad|expected <null> got OK <null>
+PASS|c01 cell u_oit assign o_tact|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit bogus o_tact|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit reactivate o_tact|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit unassign o_tact|expected <null> got OK <null>
+PASS|c01 cell u_oit assign o_tbr|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit bogus o_tbr|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit reactivate o_tbr|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit unassign o_tbr|expected <null> got OK <null>
+PASS|c01 cell u_oit assign o_texp|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit bogus o_texp|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit reactivate o_texp|expected <null> got OK <null>
+PASS|c01 cell u_oit unassign o_texp|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit assign o_tit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit bogus o_tit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit reactivate o_tit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit unassign o_tit|expected <null> got OK <null>
+PASS|c01 cell u_oit assign o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit bogus o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit reactivate o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit unassign o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit assign o_tsus|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit bogus o_tsus|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit reactivate o_tsus|expected <null> got OK <null>
+PASS|c01 cell u_oit unassign o_tsus|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit assign o_tun|expected <null> got OK <null>
+PASS|c01 cell u_oit bogus o_tun|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit reactivate o_tun|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit unassign o_tun|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit assign o_tunit|expected <null> got OK <null>
+PASS|c01 cell u_oit bogus o_tunit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit reactivate o_tunit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_oit unassign o_tunit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_osad assign o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad bogus o_ad|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_osad reactivate o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad unassign o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad assign o_tact|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad bogus o_tact|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_osad reactivate o_tact|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad unassign o_tact|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad assign o_tbr|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad bogus o_tbr|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_osad reactivate o_tbr|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad unassign o_tbr|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad assign o_texp|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad bogus o_texp|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_osad reactivate o_texp|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad unassign o_texp|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad assign o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad bogus o_tit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_osad reactivate o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad unassign o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad assign o_tpen|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad bogus o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_osad reactivate o_tpen|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad unassign o_tpen|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad assign o_tsus|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad bogus o_tsus|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_osad reactivate o_tsus|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad unassign o_tsus|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad assign o_tun|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad bogus o_tun|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_osad reactivate o_tun|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad unassign o_tun|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad assign o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad bogus o_tunit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_osad reactivate o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_osad unassign o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc assign o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc bogus o_ad|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_ounc reactivate o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc unassign o_ad|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc assign o_tact|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc bogus o_tact|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_ounc reactivate o_tact|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc unassign o_tact|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc assign o_tbr|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc bogus o_tbr|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_ounc reactivate o_tbr|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc unassign o_tbr|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc assign o_texp|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc bogus o_texp|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_ounc reactivate o_texp|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc unassign o_texp|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc assign o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc bogus o_tit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_ounc reactivate o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc unassign o_tit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc assign o_tpen|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc bogus o_tpen|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_ounc reactivate o_tpen|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc unassign o_tpen|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc assign o_tsus|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc bogus o_tsus|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_ounc reactivate o_tsus|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc unassign o_tsus|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc assign o_tun|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc bogus o_tun|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_ounc reactivate o_tun|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc unassign o_tun|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc assign o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc bogus o_tunit|expected invalid_transition got OK invalid_transition
+PASS|c01 cell u_ounc reactivate o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 cell u_ounc unassign o_tunit|expected not_authorized got OK not_authorized
+PASS|c01 matrix size|252
+PASS|c01 matrix has successes of each action|
+PASS|c01 signed-out (anon) cannot execute|ERR 42501 permission denied for function set_member_license
+PASS|c01 service_role (no user) is not_authorized|OK not_authorized
+PASS|c01 unknown member id is not_authorized|
+PASS|c01 reactivate in a full organization -> seat_limit_reached|OK seat_limit_reached
+PASS|c01 refused reactivate leaves the row suspended|suspended
+PASS|c01 reactivate in room: row becomes active|active
+CHECKS|c01-rpc-matrix|260
+== c02-seat-refusal
+PASS|c02 fixture f_org starts full|4
+PASS|c02 client admin invite into a full org refused (guard 42501)|ERR 42501 Organization has reached maximum seats
+PASS|c02 service_role invite into a full org refused (P0001 seat_limit_reached)|
+PASS|c02 postgres UPDATE suspended->active in a full org refused|ERR P0001 seat_limit_reached
+PASS|c02 admin_invite_user (definer) into a full org -> seat_limit_reached|OK seat_limit_reached
+PASS|c02 unassign the broker|
+PASS|c02 unassign cleared license_assigned_at|
+PASS|c02 seats 3 after unassign|3
+PASS|c02 assign the unassigned member into the freed seat|active
+PASS|c02 assign set license_assigned_at|
+PASS|c02 seats 4 after assign|4
+PASS|c02 active->active keeps license_assigned_at (not forgeable)|
+PASS|c02 client invite carrying a forged license_assigned_at is accepted|OK rows=1
+PASS|c02 ... and stored without it|
+PASS|c02 pending rows carry no license_assigned_at|
+PASS|c02 claim_pending_invite in a full org succeeds|OK {"success": false}
+PASS|c02 claimed row active with license_assigned_at|active
+PASS|c02 seats still 4 after the claim|4
+PASS|c02 personal org: second active member not refused|
+PASS|c02 max_seats 0 = no limit|
+PASS|c02 max_seats NULL = no limit|
+CHECKS|c02-seat-refusal|21
+== c03-idp-overflow
+PASS|c03 f_org full|
+PASS|c03 /setup join into a full org succeeds|{"role": "agent", "success": true, "user_id": "{u_x1}", "organization_id": "{f_org}"}
+PASS|c03 ... as unassigned, no license_assigned_at|unassigned
+PASS|c03 seats unchanged|4
+PASS|c03 /setup join with a free seat -> active with license_assigned_at|{"role": "agent", "success": true, "user_id": "{u_x2}", "organization_id": "{o_org}"}
+PASS|c03 service_role scim INSERT accepted|
+PASS|c03 ... written unassigned|
+PASS|c03 jit_join_organization into the full org succeeds|
+PASS|c03 ... written unassigned|
+PASS|c03 service_role manual-origin active INSERT into the full org refused|
+PASS|c03 service_role NULL-origin active INSERT into the full org refused|
+PASS|c03 seats still 4|4
+CHECKS|c03-idp-overflow|12
+== c05-feature-lookups
+PASS|c05 get_org_features as u_oag|OK <null>
+PASS|c05 get_org_features as u_oad|OK <null>
+PASS|c05 get_org_features as u_otsus|OK not_authorized
+PASS|c05 get_org_features as u_otexp|OK not_authorized
+PASS|c05 get_org_features as u_otun|OK not_authorized
+PASS|c05 get_org_features as u_fad|OK not_authorized
+PASS|c05 check_feature_access as u_oag|OK unknown_feature
+PASS|c05 check_feature_access as u_oad|OK unknown_feature
+PASS|c05 check_feature_access as u_otsus|OK not_authorized
+PASS|c05 check_feature_access as u_otexp|OK not_authorized
+PASS|c05 check_feature_access as u_otun|OK not_authorized
+PASS|c05 check_feature_access as u_fad|OK not_authorized
+PASS|c05 active answer carries features|
+PASS|c05 personal org member still answered|
+CHECKS|c05-feature-lookups|14
+== c07-helpers
+PASS|c07 grants_access(<null>)|got false
+PASS|c07 grants_access(active)|got true
+PASS|c07 grants_access(bogus)|got false
+PASS|c07 grants_access(expired)|got false
+PASS|c07 grants_access(pending)|got false
+PASS|c07 grants_access(suspended)|got false
+PASS|c07 grants_access(unassigned)|got false
+PASS|c07 holds_seat(<null>)|got false
+PASS|c07 holds_seat(active)|got true
+PASS|c07 holds_seat(bogus)|got false
+PASS|c07 holds_seat(expired)|got false
+PASS|c07 holds_seat(pending)|got true
+PASS|c07 holds_seat(suspended)|got false
+PASS|c07 holds_seat(unassigned)|got false
+PASS|c07 is_deactivated(<null>)|got false
+PASS|c07 is_deactivated(active)|got false
+PASS|c07 is_deactivated(bogus)|got false
+PASS|c07 is_deactivated(expired)|got true
+PASS|c07 is_deactivated(pending)|got false
+PASS|c07 is_deactivated(suspended)|got true
+PASS|c07 is_deactivated(unassigned)|got false
+PASS|c07 origin_is_idp(<null>)|got false
+PASS|c07 origin_is_idp(bogus)|got false
+PASS|c07 origin_is_idp(directory_sync)|got true
+PASS|c07 origin_is_idp(invite)|got false
+PASS|c07 origin_is_idp(jit)|got true
+PASS|c07 origin_is_idp(manual)|got false
+PASS|c07 origin_is_idp(scim)|got true
+PASS|c07 row_holds_seat(active, unclaimed, expired)|got true
+PASS|c07 row_holds_seat(bogus status)|got false
+PASS|c07 row_holds_seat(expired)|got false
+PASS|c07 row_holds_seat(NULL status)|got false
+PASS|c07 row_holds_seat(pending, claimed, -3 days)|got true
+PASS|c07 row_holds_seat(pending, unclaimed, -1 second)|got false
+PASS|c07 row_holds_seat(pending, unclaimed, -3 days)|got false
+PASS|c07 row_holds_seat(pending, unclaimed, +1 hour)|got true
+PASS|c07 row_holds_seat(pending, unclaimed, +3 days)|got true
+PASS|c07 row_holds_seat(pending, unclaimed, no expiry)|got true
+PASS|c07 row_holds_seat(suspended)|got false
+PASS|c07 row_holds_seat(unassigned)|got false
+CHECKS|c07-helpers|40
+== c08-catalog
+PASS|c08 public.member_status_holds_seat(text) exists|
+PASS|c08 public.member_status_is_deactivated(text) exists|
+PASS|c08 public.member_origin_is_idp(text) exists|
+PASS|c08 public.member_row_holds_seat(text,timestamp with time zone,uuid) exists|
+PASS|c08 public._enforce_member_seat_limit() exists|
+PASS|c08 public.set_member_license(uuid,text) exists|
+PASS|c08 public.member_status_holds_seat(text) no PUBLIC / anon EXECUTE|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.member_status_is_deactivated(text) no PUBLIC / anon EXECUTE|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.member_origin_is_idp(text) no PUBLIC / anon EXECUTE|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.member_row_holds_seat(text,timestamp with time zone,uuid) no PUBLIC / anon EXECUTE|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public._enforce_member_seat_limit() no PUBLIC / anon EXECUTE|{postgres=X/postgres,service_role=X/postgres}
+PASS|c08 public.set_member_license(uuid,text) no PUBLIC / anon EXECUTE|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.member_status_holds_seat(text) authenticated EXECUTE = true|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.member_status_is_deactivated(text) authenticated EXECUTE = true|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.member_origin_is_idp(text) authenticated EXECUTE = true|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.member_row_holds_seat(text,timestamp with time zone,uuid) authenticated EXECUTE = true|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public._enforce_member_seat_limit() authenticated EXECUTE = false|{postgres=X/postgres,service_role=X/postgres}
+PASS|c08 public.set_member_license(uuid,text) authenticated EXECUTE = true|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.member_status_holds_seat(text) service_role EXECUTE|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.member_status_is_deactivated(text) service_role EXECUTE|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.member_origin_is_idp(text) service_role EXECUTE|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.member_row_holds_seat(text,timestamp with time zone,uuid) service_role EXECUTE|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public._enforce_member_seat_limit() service_role EXECUTE|{postgres=X/postgres,service_role=X/postgres}
+PASS|c08 public.set_member_license(uuid,text) service_role EXECUTE|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.member_status_holds_seat(text) definer=false volatility=i search_path=''|false i {"search_path=\"\""}
+PASS|c08 public.member_status_is_deactivated(text) definer=false volatility=i search_path=''|false i {"search_path=\"\""}
+PASS|c08 public.member_origin_is_idp(text) definer=false volatility=i search_path=''|false i {"search_path=\"\""}
+PASS|c08 public.member_row_holds_seat(text,timestamp with time zone,uuid) definer=false volatility=s search_path=''|false s {"search_path=\"\""}
+PASS|c08 public._enforce_member_seat_limit() definer=true volatility=v search_path=''|true v {"search_path=\"\""}
+PASS|c08 public.set_member_license(uuid,text) definer=true volatility=v search_path=''|true v {"search_path=\"\""}
+PASS|c08 public.guard_invite_acceptance() ACL unchanged|{postgres=X/postgres,service_role=X/postgres}
+PASS|c08 public.admin_invite_user(uuid,text,text,uuid,text,uuid) ACL unchanged|{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.get_org_features(uuid) ACL unchanged|{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 public.check_feature_access(uuid,text) ACL unchanged|{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+PASS|c08 anon calling set_member_license is refused (42501)|
+PASS|c08 BEFORE triggers on organization_members in order|guard_invite_acceptance,seat_limit_enforce,update_org_members_updated_at
+PASS|c08 seat trigger definition|CREATE TRIGGER seat_limit_enforce BEFORE INSERT OR UPDATE OF license_status, organization_id, invitation_expires_at, user_id, license_assigned_at ON public.organization_members FOR EACH ROW EXECUTE FUNCTION _enforce_member_seat_limit()
+PASS|c08 seat lock is FOR NO KEY UPDATE, taken before the count|
+PASS|c08 set_member_license locks the organization FOR NO KEY UPDATE before the caller check|
+PASS|c08 license_status CHECK = pending, active, suspended, expired, unassigned|CHECK (((license_status)::text = ANY ((ARRAY['pending'::character varying, 'active'::character varying, 'suspended'::character varying, 'expired'::character varying, 'unassigned'::character varying])::text[])))
+PASS|c08 license_assigned_at timestamptz NULL, no default|
+PASS|c08 untouched object equals production: fn _ensure_personal_organization_for(uuid)|849314911f1e4622096bd0102723f793
+PASS|c08 untouched object equals production: fn _guard_personal_owner_user_id()|fa0dc8d6dc997822053021b15b3b05ea
+PASS|c08 untouched object equals production: fn _retire_personal_membership()|26f5fb802a0e8e8b217f0e33bf2490ee
+PASS|c08 untouched object equals production: fn auto_provision_google_it_admin(text,text,text)|5e88920962967b861c5817aec328325e
+PASS|c08 untouched object equals production: fn auto_provision_it_admin(text,text,text)|11d8619f8dc65e22f53e668e8eade957
+PASS|c08 untouched object equals production: fn broker_get_org_features(uuid)|ea48082497e2d44ed912caf2cd71d011
+PASS|c08 untouched object equals production: fn claim_pending_invite()|f5a006ac110f1f6d817e0b01b9da12ea
+PASS|c08 untouched object equals production: fn ensure_personal_organization()|1f722dc8b511a40cc9e78f271b1d78a6
+PASS|c08 untouched object equals production: fn guard_organization_client_update()|8c931ae0c7674fd65a51720d7f2376ac
+PASS|c08 untouched object equals production: fn jit_join_organization(text)|6b0f4c93bbd7671e916c05e214c40a5b
+PASS|c08 untouched object equals production: fn member_status_grants_access(text)|d407b02e2aa222e9af003f66506e2480
+PASS|c08 untouched object equals production: fn update_updated_at_column()|9e2677705d54938c11504cf340bae4e4
+PASS|c08 untouched object equals production: con organization_members_provisioned_by_check|810b8cfd4f600c778e4589adc360c616
+PASS|c08 untouched object equals production: con organization_members_invitation_token_key|bd859f6b53564282feac2f0e7fee1056
+PASS|c08 untouched object equals production: con organization_members_organization_id_user_id_key|0522fd08870e800988ad0017c5465df8
+PASS|c08 untouched object equals production: con organization_members_pkey|4c6419b3704337bbfe50f018842a9ad3
+PASS|c08 untouched object equals production: con organization_members_invited_by_fkey|ec8bea94f39fae677581fcfd9b20c4c9
+PASS|c08 untouched object equals production: con organization_members_organization_id_fkey|3c702b28ccc97a0ac52c0acefcdea477
+PASS|c08 untouched object equals production: con organization_members_user_id_fkey|85d8b2f5f0c0f6b4dcb854efb61a8cb1
+PASS|c08 untouched object equals production: con organization_members_user_id_public_users_fkey|e208476b0e6d80576b69508e9d165e3f
+PASS|c08 untouched object equals production: con organization_members_role_check|1001427b5b028f4c0c37b09d3e5deb80
+PASS|c08 untouched object equals production: trg organization_members.update_org_members_updated_at|7f7cbe08356763dcf9c0110a2a20d150
+PASS|c08 untouched object equals production: trg organizations.update_organizations_updated_at|18d1ba39339173ebb60ab85e8f9af0dd
+PASS|c08 untouched object equals production: trg organizations.guard_personal_owner_user_id|817c707b844bba42b3fea695e44247c2
+PASS|c08 untouched object equals production: trg organization_members.retire_personal_membership|7114babde1c6464af54438a0824765d5
+PASS|c08 untouched object equals production: trg organizations.guard_organization_client_update|fe0492e0373d142a59a0f582aeaa1ddc
+PASS|c08 untouched object equals production: trg organization_members.guard_invite_acceptance|8b4b45054ed050e29fb1a4bc20932603
+PASS|c08 untouched object equals production: cols organizations|c193cc73f168cf8b3542444b537c9261
+CHECKS|c08-catalog|69
+== c11-update-never-rewritten
+PASS|c11 assign a jit-origin unassigned member into a full org -> seat_limit_reached|OK seat_limit_reached
+PASS|c11 RPC result success=false|
+PASS|c11 row unchanged|unassigned
+PASS|c11 service_role UPDATE unassigned->active (jit origin) refused, not rewritten|ERR P0001 seat_limit_reached
+PASS|c11 service_role UPDATE suspended->active (scim-style reactivate) refused|
+CHECKS|c11-update-never-rewritten|5
+== c12-first-member
+PASS|c12 w_org full of unclaimed invites|
+PASS|c12 first /setup caller -> admin|{"role": "admin", "success": true, "user_id": "{u_w1}", "organization_id": "{w_org}"}
+PASS|c12 ... active with license_assigned_at (over the limit by one)|
+PASS|c12 seats = max_seats + 1|3
+PASS|c12 second /setup caller -> unassigned|{"role": "agent", "success": true, "user_id": "{u_w2}", "organization_id": "{w_org}"}
+PASS|c12 seats still max_seats + 1|
+PASS|c12 w2_org (only a suspended claimed member): first /setup caller active|{"role": "agent", "success": true, "user_id": "{u_w3}", "organization_id": "{w2_org}"}
+PASS|c12 reactivate in w2_org after the first member -> refused|
+CHECKS|c12-first-member|8
+== c16-resend-expired
+PASS|c16 f_org full; f_ie expired holds no seat|
+PASS|c16 client admin Resend of the expired invite -> seat_limit_reached|ERR P0001 seat_limit_reached
+PASS|c16 ... row unchanged (still expired)|
+PASS|c16 service_role Resend of the expired invite -> seat_limit_reached|
+PASS|c16 Resend of the live invite in the same full org succeeds|OK rows=1
+PASS|c16 unassign frees a seat|
+PASS|c16 Resend of the expired invite with a free seat succeeds|
+PASS|c16 ... and holds the seat|4
+CHECKS|c16-resend-expired|8
+== c16b-invite-after-expiry
+PASS|c16b x_org: one seat used|1
+PASS|c16b portal invite (client admin) allowed|OK rows=1
+PASS|c16b staff invite (admin_invite_user) allowed|OK {"success": true, "org_name": "Happyhomey Test 3851 X", "invitation_token": "71244a61962652659d276c39a6d33fd7cfa228fa915877911fa2e18f91d0904a"}
+PASS|c16b keep one portal invite|
+PASS|c16b next portal invite refused (now full)|
+PASS|c16b next staff invite refused (now full)|
+CHECKS|c16b-invite-after-expiry|6
+== c18-setup-with-own-invite
+PASS|c18 A /setup with own invite: jit row active beside the pending invite|active:jit:true,pending:invite:false
+PASS|c18 A both rows hold a seat until the claim|
+PASS|c18 A claim keeps the jit row and deletes the invite|active:jit
+PASS|c18 A seat count back to +1|
+PASS|c18 B /setup in a full org whose seat is the user's own invite -> unassigned|unassigned
+PASS|c18 B claim deletes the invite; the user stays unassigned; one seat free (no auto-assign, Q5)|after=unassigned claim=OK existing_membership_kept invite=0 jit=unassigned prov=true seats=3
+CHECKS|c18-setup-with-own-invite|6
+== m06-paygo-revert
+PASS|m06 deactivate o_tact|
+PASS|m06 deactivated member now has an active personal membership|active
+PASS|m06 brokerage row stays suspended|
+PASS|m06 suspended -> expired|
+PASS|m06 personal row survives suspended -> expired|active
+PASS|m06 reactivate via set_member_license|
+PASS|m06 reactivation retired the personal membership|<none>
+PASS|m06 unassigned member: ensure_personal_organization -> has_membership|OK has_membership
+PASS|m06 deactivated member: ensure_personal_organization -> created|OK created
+PASS|m06 deactivate o_ag (still active in x_org)|
+PASS|m06 ... no personal org while another brokerage membership is active|<none>
+PASS|m06 deactivate o_tbr (no licence) commits|
+PASS|m06 ... and no personal org|
+CHECKS|m06-paygo-revert|13
+== m13-revert-never-blocks
+PASS|m13 deactivation commits although the revert raises|OK 1
+PASS|m13 row is suspended|suspended
+CHECKS|m13-revert-never-blocks|2
+CONTROLS: pass=13 fail=0 error=0 checks=464 failed_checks=0
