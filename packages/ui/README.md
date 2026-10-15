@@ -52,8 +52,9 @@ const config: Config = {
   content: [
     './app/**/*.{js,ts,jsx,tsx,mdx}',
     './components/**/*.{js,ts,jsx,tsx,mdx}',
-    // Both globs so @keepr/ui classes survive purge locally (symlink) and on
-    // Vercel (standalone install):
+    // @keepr/ui classes survive purge. Local and Vercel builds both install
+    // from the repo root, so ../packages is the source; the node_modules glob
+    // is a second path to the same files:
     '../packages/ui/src/**/*.{js,ts,jsx,tsx}',
     './node_modules/@keepr/ui/src/**/*.{js,ts,jsx,tsx}',
   ],

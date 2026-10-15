@@ -21,12 +21,48 @@ import {
 } from '@keepr/design-system';
 import { getUserDisplayName, type AdminSearchUser } from '@/lib/admin-queries';
 import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
+import type { PlanLine } from '@keepr/shared';
+
+/** BACKLOG-3859: the Plan column's data, read once per result page. */
+export type PlanCellState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'error' }
+  | { status: 'ready'; lines: Record<string, PlanLine> };
 
 interface UserResultsTableProps {
   users: AdminSearchUser[] | null;
   query: string;
   isLoading: boolean;
   error: string | null;
+  planLines?: PlanCellState;
+}
+
+/** The plan line for one user. Never a price (the line carries none). */
+export function PlanCell({ userId, state }: { userId: string; state: PlanCellState | undefined }) {
+  if (!state || state.status === 'idle' || state.status === 'loading') {
+    return <span className="text-gray-400">&mdash;</span>;
+  }
+  if (state.status === 'error') {
+    return <span className="text-gray-400">Plan unavailable</span>;
+  }
+  const line = state.lines[userId];
+  if (!line) return <span className="text-gray-400">&mdash;</span>;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      <span>{line.text}</span>
+      {line.test && (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-warning-50 text-warning-600">
+          TEST
+        </span>
+      )}
+      {line.warning && (
+        <span className="text-warning-600" title={line.warning} aria-label={line.warning}>
+          !
+        </span>
+      )}
+    </span>
+  );
 }
 
 function UserAvatar({ name, avatarUrl }: { name: string | null; avatarUrl: string | null }) {
@@ -141,13 +177,16 @@ function SkeletonRows() {
           <td className="px-6 py-4 whitespace-nowrap">
             <div className="h-4 w-20 bg-gray-200 rounded" />
           </td>
+          <td className="px-6 py-4 whitespace-nowrap">
+            <div className="h-4 w-28 bg-gray-200 rounded" />
+          </td>
         </tr>
       ))}
     </>
   );
 }
 
-export function UserResultsTable({ users, query, isLoading, error }: UserResultsTableProps) {
+export function UserResultsTable({ users, query, isLoading, error, planLines }: UserResultsTableProps) {
   const router = useRouter();
 
   // Error state
@@ -193,6 +232,9 @@ export function UserResultsTable({ users, query, isLoading, error }: UserResults
               Status
             </Th>
             <Th>
+              Plan
+            </Th>
+            <Th>
               Last Login
             </Th>
           </Tr>
@@ -231,12 +273,15 @@ export function UserResultsTable({ users, query, isLoading, error }: UserResults
                   <StatusBadge status={user.status} />
                 </Td>
                 <Td>
+                  <PlanCell userId={user.id} state={planLines} />
+                </Td>
+                <Td>
                   {formatLastLogin(user.last_login_at)}
                 </Td>
               </Tr>
             ))
           ) : (
-            <TableEmptyRow colSpan={6}>
+            <TableEmptyRow colSpan={7}>
               No users found for &apos;{query}&apos;
             </TableEmptyRow>
           )}

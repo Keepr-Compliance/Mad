@@ -1,7 +1,10 @@
 /**
- * LicenseCard - Displays user's license/subscription information
+ * LicenseCard - the user's account standing (BACKLOG-3859: titled "Account").
  *
- * Shows license tier, status, and expiry. Edit button is on the card header.
+ * Shows account status and device limit per license row. License type, trial
+ * fields, expiry and transaction counts are no longer shown: the plan a user
+ * is on is the Plan card's job, and those columns are vestigial. license_type
+ * and expires_at are still read, for the Edit dialog only.
  */
 
 import { Shield } from 'lucide-react';
@@ -14,10 +17,7 @@ interface License {
   license_type: string | null;
   license_key: string | null;
   status: string | null;
-  trial_status: string | null;
-  trial_expires_at: string | null;
-  transaction_count: number | null;
-  transaction_limit: number | null;
+  max_devices: number | null;
   expires_at: string | null;
   created_at: string;
 }
@@ -28,7 +28,7 @@ function getStatusColor(status: string | null): string {
       return 'bg-success-50 text-success-600';
     case 'expired':
       return 'bg-danger-50 text-danger-600';
-    case 'trial':
+    case 'suspended':
       return 'bg-warning-50 text-warning-600';
     default:
       return 'bg-gray-100 text-gray-600';
@@ -44,7 +44,7 @@ export function LicenseCard({ licenses }: { licenses: License[] }) {
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider flex items-center gap-2">
           <Shield className="h-4 w-4 text-gray-400" />
-          Licenses
+          Account
         </h3>
         {primaryLicense && (
           <EditLicenseDialog
@@ -69,9 +69,7 @@ export function LicenseCard({ licenses }: { licenses: License[] }) {
             >
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-medium text-gray-900 capitalize">
-                    {lic.license_type || 'Standard'}
-                  </p>
+                  <p className="text-sm font-medium text-gray-900">Account status</p>
                   {lic.license_key && (
                     <p className="text-xs text-gray-400 font-mono">{lic.license_key}</p>
                   )}
@@ -83,19 +81,8 @@ export function LicenseCard({ licenses }: { licenses: License[] }) {
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-500">
-                <span>Expires: {lic.expires_at ? formatDate(lic.expires_at, 'N/A') : 'No expiration'}</span>
-                <span>
-                  Transactions: {lic.transaction_count ?? 0}
-                  {lic.transaction_limit && lic.transaction_limit < 999999
-                    ? ` / ${lic.transaction_limit.toLocaleString()}`
-                    : ' (unlimited)'}
-                </span>
-                {lic.trial_status && (
-                  <>
-                    <span>Trial: {lic.trial_status}</span>
-                    <span>Trial expires: {formatDate(lic.trial_expires_at, 'N/A')}</span>
-                  </>
-                )}
+                <span>Device limit: {lic.max_devices ?? 'not set'}</span>
+                <span>Since: {formatDate(lic.created_at, 'N/A')}</span>
               </div>
             </li>
           ))}

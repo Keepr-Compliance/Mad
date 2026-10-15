@@ -170,8 +170,14 @@ describe('lib/auth/membership.ts stays importable from the Edge runtime', () => 
   // source file of that package must itself import nothing outside the package.
   const SHARED_SRC = join(__dirname, '../../../packages/shared/src');
 
+  // Every module specifier a file can load: `import/export ... from 'x'`, a bare
+  // side-effect `import 'x'`, and a dynamic `import('x')` / `import(expr)`.
+  // A dynamic import with a non-literal argument is reported as '<dynamic>'.
   function specifiers(source: string): string[] {
-    return [...source.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+    const fromSpecs = [...source.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+    const bareSpecs = [...source.matchAll(/^\s*import\s*['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+    const dynamicSpecs = [...source.matchAll(/\bimport\s*\(\s*(?:['"]([^'"]+)['"])?/g)].map((m) => m[1] ?? '<dynamic>');
+    return [...fromSpecs, ...bareSpecs, ...dynamicSpecs];
   }
 
   function sharedSources(dir: string): string[] {
