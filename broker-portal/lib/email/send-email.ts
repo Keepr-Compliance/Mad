@@ -62,7 +62,11 @@ export class EmailNotConfiguredError extends Error {
 
 /** Collapse whitespace (including CR/LF) in a display name; '' when empty. */
 function cleanDisplayName(name: string | null | undefined): string {
-  return (name ?? '').replace(/[\s\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 200);
+  const spaced = Array.from(name ?? '', (ch) => {
+    const code = ch.charCodeAt(0);
+    return code < 0x20 || code === 0x7f ? ' ' : ch;
+  }).join('');
+  return spaced.replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
 /**
