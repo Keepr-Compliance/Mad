@@ -5,8 +5,11 @@
  * any other role) signs in with Microsoft to accept the invitation, and an
  * admin's sign-in links the brokerage to their Microsoft organization.
  * Validates Azure provider, blocks consumer accounts, extracts email with the
- * fallback chain, then calls auto_provision_it_admin. /setup never creates a
- * brokerage: without an invitation the RPC returns no_invite.
+ * fallback chain. With the keepr_invite cookie that /setup?token= set
+ * (BACKLOG-3684), accepts exactly that invitation through accept_invitation and
+ * links the tenant; without it, calls auto_provision_it_admin, which only links
+ * the tenant for an admin already in a brokerage. /setup never creates a
+ * brokerage and never accepts an invitation by email alone (no_invite).
  */
 
 import { createClient } from '@/lib/supabase/server';
@@ -14,6 +17,7 @@ import { NextResponse } from 'next/server';
 import { extractEmail } from '@/lib/auth/helpers';
 import { PORTAL_MEMBERSHIP_SELECT, pickBrokerageMembership } from '@/lib/auth/membership';
 import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
+import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
 
 // Microsoft consumer tenant ID (personal Outlook/Hotmail accounts)
 const CONSUMER_TENANT_ID = '9188040d-6c67-4c5b-b112-36a304b66dad';
@@ -41,10 +45,25 @@ type SetupRejection =
   | 'no_invite'
   | 'tenant_in_use'
   | 'tenant_mismatch'
+  | 'invalid_invite'
+  | 'email_mismatch'
+  | 'expired'
+  | 'already_placed'
   | 'provision_failed';
 
-/** auto_provision_it_admin refusals that have their own /setup message. */
-const RPC_REJECTIONS: readonly SetupRejection[] = ['no_invite', 'tenant_in_use', 'tenant_mismatch'];
+/**
+ * auto_provision_it_admin and accept_invitation refusals that have their own
+ * /setup message.
+ */
+const RPC_REJECTIONS: readonly SetupRejection[] = [
+  'no_invite',
+  'tenant_in_use',
+  'tenant_mismatch',
+  'invalid_invite',
+  'email_mismatch',
+  'expired',
+  'already_placed',
+];
 
 /** The /setup code for an RPC refusal; anything unrecognised is provision_failed. */
 function rejectionFor(error: unknown): SetupRejection {
@@ -63,17 +82,25 @@ async function rejectSetup(
   code: SetupRejection
 ): Promise<NextResponse> {
   await signOutLocal(supabase);
-  const response = NextResponse.redirect(`${origin}/setup?error=${code}`);
+  const response = finish(`${origin}/setup?error=${code}`);
   clearAuthCookies(request, response);
+  return response;
+}
+
+/** Every exit of this route: a redirect that also deletes the invite cookie. */
+function finish(location: string): NextResponse {
+  const response = NextResponse.redirect(location);
+  clearInviteCookie(response);
   return response;
 }
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
+  const inviteToken = readInviteToken(request, 'setup');
 
   if (!code) {
-    return NextResponse.redirect(`${origin}/setup?error=auth_failed`);
+    return finish(`${origin}/setup?error=auth_failed`);
   }
 
   const supabase = await createClient();
@@ -81,7 +108,7 @@ export async function GET(request: Request) {
 
   if (error) {
     console.error('Setup auth exchange error:', error.message);
-    return NextResponse.redirect(`${origin}/setup?error=auth_failed`);
+    return finish(`${origin}/setup?error=auth_failed`);
   }
 
   const {
@@ -89,7 +116,7 @@ export async function GET(request: Request) {
   } = await supabase.auth.getUser();
 
   if (!user) {
-    return NextResponse.redirect(`${origin}/setup?error=auth_failed`);
+    return finish(`${origin}/setup?error=auth_failed`);
   }
 
   // Validate Azure provider (reject Google or other providers)
@@ -163,34 +190,38 @@ export async function GET(request: Request) {
           return rejectSetup(request, supabase, origin, rejectionFor(linked?.error));
         }
         if (!org.graph_admin_consent_granted) {
-          return NextResponse.redirect(
+          return finish(
             `${origin}/setup/consent?tenant=${encodeURIComponent(tenantId)}&org=${encodeURIComponent(membership.organization_id)}`
           );
         }
-        return NextResponse.redirect(`${origin}/dashboard`);
+        return finish(`${origin}/dashboard`);
       }
 
       if (org && !org.graph_admin_consent_granted) {
-        return NextResponse.redirect(
+        return finish(
           `${origin}/setup/consent?tenant=${encodeURIComponent(org.microsoft_tenant_id || tenantId)}&org=${encodeURIComponent(membership.organization_id)}`
         );
       }
     }
 
-    return NextResponse.redirect(`${origin}/dashboard`);
+    return finish(`${origin}/dashboard`);
   }
 
-  // BACKLOG-3851: accept the caller's invitation. The RPC creates no
-  // organization; p_org_name / p_org_slug are kept for its signature only.
+  // BACKLOG-3684: accept the invitation whose link (/setup?token=) the caller
+  // started from, and link the tenant, in one call. The bind is checked before
+  // the claim, so a tenant refusal leaves the invitation pending. Without the
+  // link the RPC below accepts nothing for an unplaced caller (no_invite).
   if (process.env.NODE_ENV === 'development') {
     console.log(`Setup: completing invitation for ${email}, tenant: ${tenantId}`);
   }
 
-  const { data, error: rpcError } = await supabase.rpc('auto_provision_it_admin', {
-    p_tenant_id: tenantId,
-    p_org_name: '',
-    p_org_slug: '',
-  });
+  const { data, error: rpcError } = inviteToken
+    ? await supabase.rpc('accept_invitation', { p_token: inviteToken, p_tenant_id: tenantId })
+    : await supabase.rpc('auto_provision_it_admin', {
+        p_tenant_id: tenantId,
+        p_org_name: '',
+        p_org_slug: '',
+      });
 
   if (rpcError) {
     console.error('Setup provision RPC failed:', rpcError.message);
@@ -227,11 +258,11 @@ export async function GET(request: Request) {
     // sent every non-admin to /download, which was wrong for a broker.
     //
     // So there is ONE destination here and ONE routing authority.
-    return NextResponse.redirect(`${origin}/dashboard`);
+    return finish(`${origin}/dashboard`);
   }
 
   // An admin can pre-approve Graph API permissions for all tenant users.
-  return NextResponse.redirect(
+  return finish(
     `${origin}/setup/consent?tenant=${encodeURIComponent(tenantId)}&org=${encodeURIComponent(data.organization_id)}`
   );
 }

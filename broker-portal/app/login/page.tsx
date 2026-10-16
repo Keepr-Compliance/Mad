@@ -20,6 +20,17 @@ const ERROR_MESSAGES: Record<string, string> = {
     'Your account is not authorized to access the broker portal. Contact your administrator.',
   org_not_setup: 'org_not_setup', // Special case: rendered with links below
   jit_disabled: 'jit_disabled', // Special case: rendered with links below
+  // BACKLOG-3684: invitations are accepted only through the invitation link.
+  invite_link_required:
+    "You have a Keepr invitation waiting. Open the invitation link in the email Keepr sent you and sign in from there. Can't find it? Ask your brokerage admin to send it again.",
+  invalid_invite:
+    'This invitation link is no longer valid. It may have been used already or replaced by a newer one. Ask your brokerage admin to send a new invitation.',
+  email_mismatch:
+    'This invitation was sent to a different email address. Sign in with the account that received the invitation.',
+  expired: 'This invitation has expired. Ask your brokerage admin to send a new one.',
+  already_placed:
+    "You're already a member of a Keepr brokerage, so this invitation was not accepted. To join a different brokerage, ask your current brokerage admin to remove you first, then open the invitation link again.",
+  invite_failed: "We couldn't accept your invitation. Open the invitation link again and try once more.",
 };
 
 // Option A brand palette (matches the app mark + landing; not in the sky-blue
@@ -256,7 +267,8 @@ function LoginForm() {
           Only authorized brokers can access this portal.
         </p>
         <p className="text-xs" style={{ color: '#9297A6' }}>
-          Invited as a brokerage admin or IT admin?{' '}
+          Invited as a brokerage admin or IT admin? Start from the link in your invitation email.
+          Already set up?{' '}
           <a href="/setup" className="text-primary-600 hover:text-primary-700">
             Connect your brokerage
           </a>

@@ -4,7 +4,8 @@
  * Handles the OAuth redirect from Supabase Auth:
  * 1. Exchanges authorization code for session
  * 2. Routes a brokerage member (full portal or floor) to `next`
- * 3. Links a pending invite
+ * 3. Accepts the invitation whose link the user signed in from (BACKLOG-3684:
+ *    only through the link; a pending invite without it is not accepted)
  * 4. JIT-joins users to their existing org (Azure AD by tenant, Google by domain)
  * 5. Admits the OWNER of a personal organization to the floor
  * 6. Otherwise signs this browser out and returns to login with an error
@@ -17,15 +18,53 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { extractEmail } from '@/lib/auth/helpers';
-import { signOutLocal } from '@/lib/auth/signOutLocal';
+import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
+import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
 import {
   PORTAL_MEMBERSHIP_SELECT,
   classifyPortalAccess,
   type PortalMembershipRow,
 } from '@/lib/auth/membership';
 
+/** accept_invitation refusals that have their own /login message. */
+const INVITE_REFUSALS = ['invalid_invite', 'email_mismatch', 'expired', 'already_placed'] as const;
+
+/** The /login code for an accept_invitation refusal; anything else is invite_failed. */
+function inviteRefusalFor(error: unknown): string {
+  return INVITE_REFUSALS.find((code) => code === error) ?? 'invite_failed';
+}
+
+/**
+ * Every exit of this route: a redirect that also deletes the invite cookie, so
+ * a token is never left behind for a later sign-in to use.
+ */
+function finish(location: string): NextResponse {
+  const response = NextResponse.redirect(location);
+  clearInviteCookie(response);
+  return response;
+}
+
+/**
+ * BACKLOG-3684: signs this browser out (local scope only) and sends the caller
+ * to /login with `code`. The auth cookies are deleted on the response too, so a
+ * sign-out that fails cannot leave a session that middleware would bounce off
+ * /login (the rejectSetup shape, BACKLOG-3601).
+ */
+async function refuse(
+  request: Request,
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  origin: string,
+  code: string
+): Promise<NextResponse> {
+  await signOutLocal(supabase);
+  const response = finish(`${origin}/login?error=${code}`);
+  clearAuthCookies(request, response);
+  return response;
+}
+
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
+  const inviteToken = readInviteToken(request, 'invite');
   const code = searchParams.get('code');
   const rawNext = searchParams.get('next') ?? '/dashboard';
   const next = /^\/[a-zA-Z0-9\-_/?&=#.]+$/.test(rawNext) ? rawNext : '/dashboard';
@@ -36,7 +75,7 @@ export async function GET(request: Request) {
 
     if (error) {
       console.error('Auth exchange error:', error);
-      return NextResponse.redirect(`${origin}/login?error=auth_failed`);
+      return finish(`${origin}/login?error=auth_failed`);
     }
 
     // Get authenticated user
@@ -71,14 +110,14 @@ export async function GET(request: Request) {
             .single();
 
           if (org && !org.graph_admin_consent_granted && org.microsoft_tenant_id) {
-            return NextResponse.redirect(
+            return finish(
               `${origin}/setup/consent?tenant=${encodeURIComponent(org.microsoft_tenant_id)}&org=${encodeURIComponent(access.organizationId)}`
             );
           }
         }
 
         // User has valid role - redirect to dashboard
-        return NextResponse.redirect(`${origin}${next}`);
+        return finish(`${origin}${next}`);
       }
 
       // BACKLOG-3917: a deactivated brokerage member is placed too. They land on
@@ -86,33 +125,31 @@ export async function GET(request: Request) {
       // JIT-join paths below, and never their personal organization.
       if (access.kind === 'floor' && (access.via === 'brokerage' || access.via === 'deactivated')) {
         // A brokerage agent (or any non-full role): the portal floor.
-        return NextResponse.redirect(`${origin}${next}`);
+        return finish(`${origin}${next}`);
       }
 
-      // No membership by user_id - check if there's a pending invite for this email
-      const userEmail = extractEmail(user);
-      if (userEmail) {
-        const { data: pendingInvite } = await supabase
-          .from('organization_members')
-          .select('id, role, organization_id')
-          .eq('invited_email', userEmail)
-          .is('user_id', null)
-          .limit(1)
-          .single();
-
-        if (pendingInvite) {
-          // Found pending invite - link user to the membership
-          if (process.env.NODE_ENV === 'development') {
-            console.log(`Linking user to pending invite for ${userEmail}`);
-          }
-
-          // First ensure user exists in users table
+      // BACKLOG-3684: an invitation is accepted only through its link. The
+      // invitation page put the link's token in the keepr_invite cookie; the
+      // database accepts it only for the account the invitation was sent to.
+      if (inviteToken) {
+        const { data: accepted, error: acceptError } = await supabase.rpc('accept_invitation', {
+          p_token: inviteToken,
+        });
+        if (acceptError) {
+          console.error('accept_invitation RPC failed:', acceptError.message);
+          return refuse(request, supabase, origin, 'invite_failed');
+        }
+        if (!accepted?.success) {
+          return refuse(request, supabase, origin, inviteRefusalFor(accepted?.error));
+        }
+        // accept_invitation wrote a minimal users row if there was none; fill in
+        // the profile fields as this route always has.
+        const userEmail = extractEmail(user);
+        if (userEmail) {
           const provider = user.app_metadata?.provider || 'email';
           const oauthId = user.user_metadata?.provider_id || user.id;
-
-          const { error: upsertError } = await supabase
-            .from('users')
-            .upsert({
+          const { error: upsertError } = await supabase.from('users').upsert(
+            {
               id: user.id,
               email: userEmail,
               oauth_provider: provider,
@@ -120,32 +157,29 @@ export async function GET(request: Request) {
               display_name: user.user_metadata?.full_name || user.user_metadata?.name || null,
               first_name: user.user_metadata?.given_name || null,
               last_name: user.user_metadata?.family_name || null,
-            }, { onConflict: 'id' });
-
+            },
+            { onConflict: 'id' }
+          );
           if (upsertError) {
             console.error('Error creating user record:', upsertError);
           }
+        }
 
-          // Update the membership to link user_id and mark as joined
-          const { error: updateError } = await supabase
-            .from('organization_members')
-            .update({
-              user_id: user.id,
-              license_status: 'active',
-              joined_at: new Date().toISOString(),
-              invitation_token: null, // Clear the token
-            })
-            .eq('id', pendingInvite.id);
+        // Every accepted member lands on `next`; middleware floors an agent.
+        return finish(`${origin}${next}`);
+      }
 
-          if (updateError) {
-            console.error('Error linking invite:', updateError);
-          } else {
-            if (process.env.NODE_ENV === 'development') {
-              console.log('Successfully linked invite to user');
-            }
-            // Every linked member lands on `next`; middleware floors an agent.
-            return NextResponse.redirect(`${origin}${next}`);
-          }
+      // No link: a pending invitation for this account is not accepted here.
+      // Except the owner of a personal organization (founder question open;
+      // option a): they keep their floor below and the invite stays pending.
+      if (access.kind !== 'floor') {
+        const { data: hasPendingInvite, error: detectError } = await supabase.rpc(
+          'caller_has_pending_invite'
+        );
+        if (detectError) {
+          console.error('caller_has_pending_invite RPC failed:', detectError.message);
+        } else if (hasPendingInvite === true) {
+          return refuse(request, supabase, origin, 'invite_link_required');
         }
       }
 
@@ -196,7 +230,7 @@ export async function GET(request: Request) {
           if (process.env.NODE_ENV === 'development') {
             console.log(`JIT joined org ${jitResult.organization_id} with role ${jitResult.role}`);
           }
-          return NextResponse.redirect(`${origin}${next}`);
+          return finish(`${origin}${next}`);
         }
         if (jitError) {
           console.error('JIT join RPC failed:', jitError);
@@ -210,7 +244,7 @@ export async function GET(request: Request) {
       // OWNS — a brokerage floor returned above. A failed membership read is
       // `unknown`, not `floor`, and is signed out below as before.
       if (access.kind === 'floor') {
-        return NextResponse.redirect(`${origin}${next}`);
+        return finish(`${origin}${next}`);
       }
 
       // User not authorized - sign this browser out. `local` ends only the
@@ -219,10 +253,10 @@ export async function GET(request: Request) {
         console.warn('User attempted portal access without valid role');
       }
       await signOutLocal(supabase);
-      return NextResponse.redirect(`${origin}/login?error=${jitErrorCode ?? 'not_authorized'}`);
+      return finish(`${origin}/login?error=${jitErrorCode ?? 'not_authorized'}`);
     }
   }
 
   // No code provided or auth failed
-  return NextResponse.redirect(`${origin}/login?error=auth_failed`);
+  return finish(`${origin}/login?error=auth_failed`);
 }
