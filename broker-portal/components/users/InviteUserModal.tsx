@@ -16,6 +16,7 @@ import { AlertTriangle, Check } from 'lucide-react';
 import { Input, Label, Modal, ModalFooter, Select } from '@keepr/design-system';
 import { AlertBanner, Button } from '@keepr/ui';
 import { inviteUser } from '@/lib/actions/inviteUser';
+import OutOfLicensesNotice from './OutOfLicensesNotice';
 import { ASSIGNABLE_ROLES_BY_ADMIN, ROLE_LABELS } from '@/lib/types/users';
 import type { Role } from '@/lib/types/users';
 
@@ -27,6 +28,8 @@ interface InviteUserModalProps {
   isOpen: boolean;
   onClose: () => void;
   organizationId: string;
+  /** BACKLOG-3851: the caller's role picks the out-of-licenses wording. */
+  callerRole?: string;
 }
 
 // Roles that can be assigned via invite (excludes it_admin)
@@ -40,6 +43,7 @@ export default function InviteUserModal({
   isOpen,
   onClose,
   organizationId,
+  callerRole = 'admin',
 }: InviteUserModalProps) {
   const router = useRouter();
   const [email, setEmail] = useState('');
@@ -49,11 +53,13 @@ export default function InviteUserModal({
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [emailSent, setEmailSent] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [outOfSeats, setOutOfSeats] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     setError(null);
+    setOutOfSeats(false);
 
     try {
       const result = await inviteUser({
@@ -62,7 +68,10 @@ export default function InviteUserModal({
         organizationId,
       });
 
-      if (result.error) {
+      if (result.outOfSeats) {
+        // BACKLOG-3851: the form stays open; no invite was created.
+        setOutOfSeats(true);
+      } else if (result.error) {
         setError(result.error);
       } else if (result.inviteLink) {
         setInviteLink(result.inviteLink);
@@ -80,6 +89,7 @@ export default function InviteUserModal({
     setEmail('');
     setRole('agent');
     setError(null);
+    setOutOfSeats(false);
     setInviteLink(null);
     setEmailSent(false);
     setCopied(false);
@@ -201,6 +211,7 @@ export default function InviteUserModal({
           </div>
 
           {/* Error message */}
+          {outOfSeats && <OutOfLicensesNotice callerRole={callerRole} />}
           {error && <AlertBanner variant="destructive">{error}</AlertBanner>}
 
           {/* Buttons */}

@@ -21,6 +21,7 @@ import type { OrganizationMember, Role, MemberLicenseStatus } from '@/lib/types/
 import { ROLE_LABELS, LICENSE_STATUS_LABELS } from '@/lib/types/users';
 import { formatUserDisplayName, getUserInitials } from '@/lib/utils/userDisplay';
 import { formatDate } from '@/lib/utils';
+import type { MemberLicenseAction } from '@/lib/users/memberLicenseActions';
 
 interface UserCardProps {
   member: OrganizationMember;
@@ -30,6 +31,8 @@ interface UserCardProps {
   onResendInvite?: (member: OrganizationMember) => void;
   onDeactivate?: (member: OrganizationMember) => void;
   onRemove?: (member: OrganizationMember) => void;
+  callerRole?: string;
+  onLicenseAction?: (member: OrganizationMember, action: MemberLicenseAction) => void;
 }
 
 const ROLE_HUES: Record<Role, BadgeHue> = {
@@ -55,6 +58,8 @@ export default function UserCard({
   onResendInvite,
   onDeactivate,
   onRemove,
+  callerRole,
+  onLicenseAction,
 }: UserCardProps) {
   // Convert undefined to null for utility functions
   const userOrNull = member.user ?? null;
@@ -112,6 +117,10 @@ export default function UserCard({
             onResendInvite={() => onResendInvite?.(member)}
             onDeactivate={() => onDeactivate?.(member)}
             onRemove={() => onRemove?.(member)}
+            memberLicenseStatus={member.license_status}
+            targetRole={member.role}
+            callerRole={callerRole}
+            onLicenseAction={onLicenseAction ? (action) => onLicenseAction(member, action) : undefined}
           />
         )}
       </div>

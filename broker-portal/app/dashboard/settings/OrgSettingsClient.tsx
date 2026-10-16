@@ -71,7 +71,8 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
   const [savedRetention, setSavedRetention] = useState(7);
   const [savingRetention, setSavingRetention] = useState(false);
   const [retentionSaved, setRetentionSaved] = useState(false);
-  const [jitEnabled, setJitEnabled] = useState(true);
+  // BACKLOG-3851: starts off (the column default); getJitStatus sets the real value.
+  const [jitEnabled, setJitEnabled] = useState(false);
   const [savingJit, setSavingJit] = useState(false);
 
   const desktopClientId = process.env.NEXT_PUBLIC_DESKTOP_CLIENT_ID || '';
