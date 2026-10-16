@@ -419,8 +419,13 @@ async function suspendedSafetyNet(deps: ReconcileDeps, result: ReconcileResult):
   return found;
 }
 
-/** BACKLOG-3934: organization_members.license_status values that count as a brokerage member. */
-export const BROKERAGE_MEMBER_STATUSES = ['active'] as const;
+/**
+ * BACKLOG-3934: organization_members.license_status values that count as a
+ * brokerage member. BACKLOG-3851: 'unassigned' too — placed in the brokerage
+ * with no license, and (unlike a deactivated member) no personal organization
+ * to pay for. 'pending' stays out.
+ */
+export const BROKERAGE_MEMBER_STATUSES = ['active', 'unassigned'] as const;
 /** BACKLOG-3934: Agent subscription statuses that still charge the user. */
 export const BROKERAGE_ALERT_SUB_STATUSES = new Set(['active', 'trialing', 'past_due']);
 

@@ -15,7 +15,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { extractEmail } from '@/lib/auth/helpers';
-import { PORTAL_MEMBERSHIP_SELECT, pickBrokerageMembership } from '@/lib/auth/membership';
+import { PORTAL_MEMBERSHIP_SELECT, memberStatusGrantsAccess, pickBrokerageMembership } from '@/lib/auth/membership';
 import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
 import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
 
@@ -162,6 +162,13 @@ export async function GET(request: Request) {
   const membership = pickBrokerageMembership(memberships);
 
   if (membership) {
+    // BACKLOG-3851: a brokerage row that does not grant access (deactivated,
+    // no license assigned, pending) links no tenant and is sent to no consent
+    // page. /dashboard; middleware decides what it opens.
+    if (!memberStatusGrantsAccess(membership.license_status)) {
+      return finish(`${origin}/dashboard`);
+    }
+
     // If IT admin and consent not yet granted, redirect to consent page
     if (canGrantAdminConsent(membership.role)) {
       const { data: org } = await supabase

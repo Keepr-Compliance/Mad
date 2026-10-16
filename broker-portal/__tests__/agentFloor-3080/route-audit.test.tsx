@@ -135,6 +135,15 @@ jest.mock('@sentry/nextjs', () => ({
   addBreadcrumb: jest.fn(),
 }));
 jest.mock('next/cache', () => ({ revalidatePath: jest.fn() }));
+// BACKLOG-3851: a pass-through spy on the plan view every billing action acts
+// on, so a case can assert WHICH organization it resolved (the real function
+// runs; nothing is stubbed).
+const mockGetAgentPlanView = jest.fn();
+jest.mock('@/lib/billing/agentPlan', () => {
+  const actual = jest.requireActual('@/lib/billing/agentPlan');
+  mockGetAgentPlanView.mockImplementation(actual.getAgentPlanView);
+  return { ...actual, getAgentPlanView: (...a: unknown[]) => mockGetAgentPlanView(...a) };
+});
 // BACKLOG-3847: the billing page and actions read Agent prices from Stripe; no network.
 jest.mock('stripe', () => ({
   __esModule: true,
@@ -1332,6 +1341,14 @@ const DEACTIVATED_PERSONAS = {
 } as const;
 type DeactivatedPersona = keyof typeof DEACTIVATED_PERSONAS;
 const deactivatedNames = Object.keys(DEACTIVATED_PERSONAS) as DeactivatedPersona[];
+/**
+ * BACKLOG-3851: the reverted persona (deactivated AND owns a personal row) is
+ * back on individual pay-as-you-go, so Billing and their OWN checklists open
+ * for them exactly as for a solo user; the BACKLOG-3851 block below pins that.
+ * Every brokerage surface keeps refusing them (the loops above still include it).
+ */
+const REVERTED_PERSONA: DeactivatedPersona = '[personal-org owner, suspended brokerage admin]';
+const notReverted = deactivatedNames.filter((p) => p !== REVERTED_PERSONA);
 
 /** An ACTIVE brokerage admin whose own licence is suspended (BACKLOG-3878 scope add). */
 function givenLicenceSuspendedAdmin(): void {
@@ -1353,8 +1370,8 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
     else process.env.STRIPE_SECRET_KEY = OLD_KEY;
   });
 
-  const pageCases = (pages: Record<string, PageEntry>) =>
-    Object.entries(pages).flatMap(([page, entry]) => deactivatedNames.map((p) => [page, p, entry] as const));
+  const pageCases = (pages: Record<string, PageEntry>, names: DeactivatedPersona[] = deactivatedNames) =>
+    Object.entries(pages).flatMap(([page, entry]) => names.map((p) => [page, p, entry] as const));
 
   it.each(pageCases(REFUSED_PAGES))('%s refuses the %s', async (_page, persona, entry) => {
     given(DEACTIVATED_PERSONAS[persona]);
@@ -1362,7 +1379,7 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
-  it.each(pageCases(OWN_GATE_PAGES))('checklists: %s refuses the %s', async (_page, persona, entry) => {
+  it.each(pageCases(OWN_GATE_PAGES, notReverted))('checklists: %s refuses the %s', async (_page, persona, entry) => {
     given(DEACTIVATED_PERSONAS[persona]);
     expect(await run(entry.invoke)).toEqual(entry.refused);
     if (entry.invokeAsOwner) expect(await run(entry.invokeAsOwner)).toEqual(entry.refused);
@@ -1375,7 +1392,7 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
     expect(tablesRead().filter((t) => t !== 'licenses')).toEqual(['organization_members']);
   });
 
-  it.each(pageCases(BILLING_PAGES))('billing: %s refuses the %s', async (_page, persona, entry) => {
+  it.each(pageCases(BILLING_PAGES, notReverted))('billing: %s refuses the %s', async (_page, persona, entry) => {
     given(DEACTIVATED_PERSONAS[persona]);
     expect(await run(entry.invoke)).toEqual(entry.refused);
   });
@@ -1393,7 +1410,8 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
     }
   );
 
-  const actionCases = (names: string[]) => names.flatMap((name) => deactivatedNames.map((p) => [name, p] as const));
+  const actionCases = (names: string[], personas: DeactivatedPersona[] = deactivatedNames) =>
+    names.flatMap((name) => personas.map((p) => [name, p] as const));
 
   it.each(actionCases(Object.keys(REFUSED_ACTIONS)))('%s refuses the %s, and writes nothing', async (name, persona) => {
     given(DEACTIVATED_PERSONAS[persona]);
@@ -1407,7 +1425,7 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
-  it.each(actionCases(Object.keys(OWN_GATE_ACTIONS)))('checklists: %s refuses the %s', async (name, persona) => {
+  it.each(actionCases(Object.keys(OWN_GATE_ACTIONS), notReverted))('checklists: %s refuses the %s', async (name, persona) => {
     given(DEACTIVATED_PERSONAS[persona]);
     expect(await run(OWN_GATE_ACTIONS[name])).toEqual(OWN_GATE_REFUSALS[name]);
     expect(mockEmulator.state.writes).toEqual([]);
@@ -1429,15 +1447,12 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
     expect(mockRpc.mock.calls.map((c) => c[0]).filter((n) => n !== 'can_review_submission')).toEqual([]);
   });
 
-  it.each(Object.keys(BILLING_ACTIONS))(
-    'billing: %s refuses a suspended brokerage admin who also owns a personal organization',
-    async (name) => {
-      given(DEACTIVATED_PERSONAS['[personal-org owner, suspended brokerage admin]']);
-      expect(await run(BILLING_ACTIONS[name])).toEqual(BILLING_ACTION_REFUSED);
-      expect(tablesRead()).toEqual(['licenses', 'organization_members']);
-      expect(mockEmulator.state.writes).toEqual([]);
-    }
-  );
+  it.each(Object.keys(BILLING_ACTIONS))('billing: %s refuses a suspended brokerage admin (no personal row)', async (name) => {
+    given(DEACTIVATED_PERSONAS['suspended brokerage admin']);
+    expect(await run(BILLING_ACTIONS[name])).toEqual(BILLING_ACTION_REFUSED);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
 
   // Positive twins: the same rows with license_status 'active' are admitted, so
   // the refusals above are about the status and nothing else.
@@ -1448,5 +1463,114 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
   it.each(Object.keys(REVIEWER_ACTIONS))('review: %s still admits an ACTIVE brokerage admin (twin)', async (name) => {
     given([deactivated('admin', 'active')]);
     expect(await run(REVIEWER_ACTIONS[name])).not.toEqual(REVIEWER_REFUSED);
+  });
+});
+
+// ===========================================================================
+// BACKLOG-3851: a deactivated member back on individual pay-as-you-go.
+// ===========================================================================
+//
+// Founder ruling (BACKLOG-3851 PR-2a, QA-2 a): a member deactivated by their
+// brokerage (suspended / expired) who holds their own personal row — the M2
+// revert trigger attaches it — gets exactly what a solo user gets: Billing and
+// their own Checklists page. The rows are the persona BACKLOG-3917 refused;
+// each case below compares against the plain personal-org owner on the same
+// entry, so "admitted" means "treated as the solo user", not merely "not
+// refused". Brokerage surfaces keep refusing them (BACKLOG-3917 block above).
+
+const REVERTED_ROWS = {
+  'suspended, personal row first': [personalMembership(), deactivated('admin', 'suspended')],
+  'suspended, personal row last': [deactivated('admin', 'suspended'), personalMembership()],
+  'expired agent, personal row last': [deactivated('agent', 'expired'), personalMembership()],
+} as const;
+const revertedNames = Object.keys(REVERTED_ROWS) as (keyof typeof REVERTED_ROWS)[];
+/** getPersonalOrganization's row (lib/billing/customers.ts reads id, is_test by personal_owner_user_id). */
+const PERSONAL_ORG_ROW: Row = { id: FIXTURE_PERSONAL_ORG_ID, personal_owner_user_id: FIXTURE_USER_ID, is_test: true };
+
+function givenWithPersonalOrg(rows: readonly Row[]): void {
+  given(rows);
+  mockEmulator.state.rows.organizations = [...(mockEmulator.state.rows.organizations ?? []), PERSONAL_ORG_ROW];
+}
+
+describe('BACKLOG-3851: deactivated member back on pay-as-you-go', () => {
+  const OLD = process.env.BILLING_ENABLED;
+  const OLD_KEY = process.env.STRIPE_SECRET_KEY;
+  beforeAll(() => {
+    process.env.BILLING_ENABLED = 'true';
+    process.env.STRIPE_SECRET_KEY = 'sk_test_route_audit';
+  });
+  afterAll(() => {
+    if (OLD === undefined) delete process.env.BILLING_ENABLED;
+    else process.env.BILLING_ENABLED = OLD;
+    if (OLD_KEY === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = OLD_KEY;
+  });
+
+  /** The same entry run as the plain personal-org owner: outcome, tables read, writes. */
+  async function asSoloOwner(entry: () => Promise<unknown>) {
+    givenWithPersonalOrg(PERSONAS['personal-org owner']);
+    mockGetAgentPlanView.mockClear();
+    const outcome = await run(entry);
+    return { outcome, tables: tablesRead(), writes: writesNoClock() };
+  }
+
+  /** The writes with clock values (e.g. archived_at = now) masked, so two runs compare. */
+  function writesNoClock() {
+    return JSON.parse(
+      JSON.stringify(mockEmulator.state.writes).replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/g, '<now>')
+    );
+  }
+
+  const pageCases = (pages: Record<string, PageEntry>) =>
+    Object.entries(pages).flatMap(([page, entry]) => revertedNames.map((p) => [page, p, entry] as const));
+
+  it.each(pageCases(BILLING_PAGES))('billing: %s treats the %s member as the solo owner', async (_page, persona, entry) => {
+    const solo = await asSoloOwner(entry.invoke);
+    expect(solo.outcome).not.toEqual(entry.refused);
+    givenWithPersonalOrg(REVERTED_ROWS[persona]);
+    expect(await run(entry.invoke)).toEqual(solo.outcome);
+  });
+
+  const actionCases = Object.keys(BILLING_ACTIONS).flatMap((name) => revertedNames.map((p) => [name, p] as const));
+  it.each(actionCases)('billing: %s acts on the personal organization of the %s member', async (name, persona) => {
+    const solo = await asSoloOwner(BILLING_ACTIONS[name]);
+    givenWithPersonalOrg(REVERTED_ROWS[persona]);
+    mockGetAgentPlanView.mockClear();
+    const outcome = await run(BILLING_ACTIONS[name]);
+    expect(outcome).not.toEqual(BILLING_ACTION_REFUSED);
+    // No 'threw' check here: with the personal organization seeded, two card
+    // actions reach Stripe calls this file's Stripe stub does not provide, and
+    // throw there — past the gate, identically for the solo owner (toEqual below).
+    // The plan view the action acts on is the caller's personal organization.
+    expect(mockGetAgentPlanView).toHaveBeenCalledTimes(1);
+    expect(mockGetAgentPlanView.mock.calls[0][1]).toBe(FIXTURE_USER_ID);
+    const view = (await mockGetAgentPlanView.mock.results[0].value) as { personalOrganizationId: string | null };
+    expect(view.personalOrganizationId).toBe(FIXTURE_PERSONAL_ORG_ID);
+    // Deliberately changed from ['licenses', 'organization_members']: the same
+    // reads and writes as the solo owner.
+    expect(outcome).toEqual(solo.outcome);
+    expect(tablesRead()).toEqual(solo.tables);
+    expect(writesNoClock()).toEqual(solo.writes);
+  });
+
+  it.each(pageCases(OWN_GATE_PAGES))('checklists: %s treats the %s member as the solo owner', async (_page, persona, entry) => {
+    const solo = await asSoloOwner(entry.invokeAsOwner ?? entry.invoke);
+    expect(solo.outcome).not.toEqual(entry.refused);
+    givenWithPersonalOrg(REVERTED_ROWS[persona]);
+    expect(await run(entry.invokeAsOwner ?? entry.invoke)).toEqual(solo.outcome);
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+
+  it.each(revertedNames)('checklists: the brokerage template editor still refuses the %s member', async (persona) => {
+    givenWithPersonalOrg(REVERTED_ROWS[persona]);
+    expect(await run(OWN_GATE_PAGES['app/dashboard/checklists/[id]/page.tsx'].invoke)).toEqual({ notFound: true });
+  });
+
+  const ownActionCases = Object.keys(OWN_GATE_ACTIONS).flatMap((name) => revertedNames.map((p) => [name, p] as const));
+  it.each(ownActionCases)('checklists: %s treats the %s member as the solo owner', async (name, persona) => {
+    const solo = await asSoloOwner(OWN_GATE_ACTIONS[name]);
+    givenWithPersonalOrg(REVERTED_ROWS[persona]);
+    expect(await run(OWN_GATE_ACTIONS[name])).toEqual(solo.outcome);
+    expect(writesNoClock()).toEqual(solo.writes);
   });
 });

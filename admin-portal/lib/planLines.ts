@@ -25,6 +25,7 @@ import {
   ROW_PRIORITY,
   modeAllowsTestFlag,
   pickBrokerageMembership,
+  classifyPortalAccess,
   planLine,
   type AgentSubscriptionRow,
   type PlanLine,
@@ -137,12 +138,20 @@ export async function readPlanLines(
 
   const out: Record<string, PlanLine> = {};
   for (const id of ids) {
-    const brokerage = pickBrokerageMembership(membersByUser.get(id) ?? []) as MemberRow | null;
+    const memberRows = membersByUser.get(id) ?? [];
+    const brokerageRow = pickBrokerageMembership(memberRows) as MemberRow | null;
+    // BACKLOG-3851: a deactivated member the broker portal routes on their own
+    // personal organization (pay-as-you-go) gets the personal line, with the
+    // brokerage named in the warning. Same classifier as the broker portal.
+    const access = classifyPortalAccess(memberRows, id);
+    const reverted = brokerageRow !== null && access.kind === 'floor' && access.via === 'personal_owner';
+    const brokerage = reverted ? null : brokerageRow;
     const personal = personalByUser.get(id) ?? null;
     // isModeAllowedForUser's rule: a test-org user's rows are test mode, everyone else's live.
     const mode: StripeMode = modeAllowsTestFlag('test', personal?.is_test === true) ? 'test' : 'live';
     out[id] = planLine({
       brokerage: brokerage ? { orgName: orgName(brokerage), licenseStatus: brokerage.license_status } : null,
+      deactivatedFrom: reverted && brokerageRow ? (orgName(brokerageRow) ?? '') : null,
       hasPersonalOrganization: personal !== null,
       mode,
       rows: (subsByUser.get(id) ?? []).filter((r) => r.stripe_mode === mode),

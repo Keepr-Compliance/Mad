@@ -928,8 +928,17 @@ describe('3934: open Agent subscription + brokerage membership -> one alert per 
   }
   const brokerageAlerts = () => alerts('agent_subscription_brokerage_member');
 
-  it('statuses that count as a member: active only', () => {
-    expect([...BROKERAGE_MEMBER_STATUSES]).toEqual(['active']);
+  it('statuses that count as a member: active and unassigned (BACKLOG-3851)', () => {
+    expect([...BROKERAGE_MEMBER_STATUSES]).toEqual(['active', 'unassigned']);
+  });
+
+  // C10 (BACKLOG-3851): an 'unassigned' member is placed in the brokerage and,
+  // unlike a deactivated one, has no pay-as-you-go to revert to.
+  it('unassigned brokerage member + open Agent plan -> ONE alert (C10)', async () => {
+    payingAgent(SUB_VOID, [member(USER, BRK, 'unassigned')]);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(brokerageAlerts()).toEqual([{ count: 1, subscription_ids: SUB_VOID.id }]);
+    expect(r.brokerageMembers).toBe(1);
   });
 
   // [COMPOSED: kind absent] SUB_VOID (transcribed) with metadata.kind removed: the same predicate as

@@ -15,6 +15,8 @@ import { createServiceClient } from './supabase/service';
 import { createClient } from './supabase/server';
 import { createScopedClient } from './scoped-client';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { PORTAL_MEMBERSHIP_SELECT, type PortalMembershipRow } from './auth/membership';
+import { routedMembership } from './auth/routedMembership';
 
 /**
  * Returns the appropriate Supabase client for data loading.
@@ -40,14 +42,17 @@ export async function getDataClient(): Promise<{
     const serviceClient = createServiceClient();
     const targetUserId = impersonation.target_user_id;
 
-    // Resolve the target user's organization (needed for scoping)
-    const { data: membership } = await serviceClient
+    // Resolve the target user's organization (needed for scoping): the one the
+    // portal routes them on (BACKLOG-3851; a reverted member holds two rows).
+    const { data: memberships } = await serviceClient
       .from('organization_members')
-      .select('organization_id')
+      .select(PORTAL_MEMBERSHIP_SELECT)
       .eq('user_id', targetUserId)
-      .maybeSingle();
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true });
 
-    const organizationId = membership?.organization_id || null;
+    const organizationId =
+      routedMembership(memberships as PortalMembershipRow[] | null, targetUserId)?.organization_id || null;
 
     if (!organizationId) {
       // If user has no organization, return a client that blocks everything.

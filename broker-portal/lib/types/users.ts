@@ -21,7 +21,7 @@ export type Role = 'agent' | 'broker' | 'admin' | 'it_admin';
  * License status for organization members.
  * Maps to: organization_members.license_status CHECK constraint.
  */
-export type MemberLicenseStatus = 'pending' | 'active' | 'suspended' | 'expired';
+export type MemberLicenseStatus = 'pending' | 'active' | 'suspended' | 'expired' | 'unassigned';
 
 /**
  * How a user/member was provisioned
@@ -197,6 +197,7 @@ export const LICENSE_STATUS_LABELS: Record<MemberLicenseStatus, string> = {
   active: 'Active',
   suspended: 'Suspended',
   expired: 'Expired',
+  unassigned: 'No license',
 };
 
 /**
