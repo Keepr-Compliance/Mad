@@ -655,7 +655,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       // says so; it ends with the support line; it never says "restored".
       const dialogArg = mockShowMessageBox.mock.calls[0][0] as { detail: string };
       expect(dialogArg.detail).toBe(
-        "Your data was not changed.\n\n" +
+        "Keepr did not replace or delete your data file.\n\n" +
           "Database: /mock/userData/mad.db\n\n" +
           "If this keeps happening, contact support.",
       );

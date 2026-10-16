@@ -129,16 +129,20 @@ function readonlyError(): Error {
   return e;
 }
 
-const NOT_WRITABLE_DIALOG = {
+/** Phase "open" changed nothing; phase "migration" may follow committed migrations. */
+const NOT_WRITABLE_DIALOG = (phase: "open" | "migration") => ({
   type: "warning",
   title: "Keepr can't open your data yet",
   message: "Keepr can't write to your data yet.",
   detail:
-    "Nothing was changed. Another program may still be checking Keepr's files, " +
+    (phase === "open"
+      ? "Nothing was changed. "
+      : "Keepr did not replace or delete your data file. ") +
+    "Another program may still be checking Keepr's files, " +
     "which can happen right after an update. Choose Try again to keep waiting.\n\n" +
     "If this keeps happening, contact support.",
   buttons: ["Try again", "Quit"],
-};
+});
 
 describe("BACKLOG-3952 — read-only database at startup", () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -278,7 +282,7 @@ describe("BACKLOG-3952 — read-only database at startup", () => {
     expect(out.error).toBeInstanceOf(DbNotWritableError);
     expect((out.error as DbNotWritableError).errorCode).toBe("SQLITE_READONLY");
     expect(mockShowMessageBox).toHaveBeenCalledTimes(1);
-    expect(mockShowMessageBox).toHaveBeenCalledWith(NOT_WRITABLE_DIALOG);
+    expect(mockShowMessageBox).toHaveBeenCalledWith(NOT_WRITABLE_DIALOG("open"));
     expect(JSON.stringify(mockShowMessageBox.mock.calls)).not.toMatch(/restored/i);
     expect(copiesOntoLiveDb()).toHaveLength(0);
     expect(mockRenameSync).not.toHaveBeenCalled();
@@ -338,7 +342,7 @@ describe("BACKLOG-3952 — read-only database at startup", () => {
     expect(copiesOntoLiveDb()).toHaveLength(0);
     expect(mockRenameSync).not.toHaveBeenCalled();
     expect(mockShowMessageBox).toHaveBeenCalledTimes(1);
-    expect(mockShowMessageBox).toHaveBeenCalledWith(NOT_WRITABLE_DIALOG);
+    expect(mockShowMessageBox).toHaveBeenCalledWith(NOT_WRITABLE_DIALOG("migration"));
     expect(mockCloseDb).toHaveBeenCalled();
     expect(service.isInitialized()).toBe(false);
     // R4: the migration_failure event carries the code.

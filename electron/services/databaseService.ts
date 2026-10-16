@@ -495,7 +495,7 @@ class DatabaseService implements IDatabaseService {
               detail:
                 (restoreResult.keptPreviousAs
                   ? `Your previous database was kept as ${path.basename(restoreResult.keptPreviousAs)}.\n\n`
-                  : "Your data was not changed.\n\n") +
+                  : "Keepr did not replace or delete your data file.\n\n") +
                 `Database: ${this.dbPath ?? "unknown"}\n\n` +
                 "If this keeps happening, contact support.",
               buttons: ["OK"],
@@ -1238,8 +1238,9 @@ class DatabaseService implements IDatabaseService {
    * startup flag the caller just gets DbNotWritableError. With it, the user
    * chooses: "Try again" returns, "Quit" exits.
    *
-   * Nothing was changed on disk on either phase, and the copy says so. It
-   * never says "restored".
+   * Phase "open" changed nothing on disk and the copy says so; phase
+   * "migration" may follow committed migrations, so its copy only says the
+   * data file was not replaced or deleted. It never says "restored".
    */
   private async _handleDbNotWritable(
     err: unknown,
@@ -1286,7 +1287,10 @@ class DatabaseService implements IDatabaseService {
       title: "Keepr can't open your data yet",
       message: "Keepr can't write to your data yet.",
       detail:
-        "Nothing was changed. Another program may still be checking Keepr's files, " +
+        (phase === "open"
+          ? "Nothing was changed. "
+          : "Keepr did not replace or delete your data file. ") +
+        "Another program may still be checking Keepr's files, " +
         "which can happen right after an update. Choose Try again to keep waiting.\n\n" +
         "If this keeps happening, contact support.",
       buttons: ["Try again", "Quit"],
