@@ -1615,10 +1615,9 @@ class SupabaseService {
 
       logService.info(`[Supabase] Synced ${entries.length} audit logs to cloud`, "Supabase");
     } catch (error) {
+      // BACKLOG-3987: no Sentry report here. The only caller retries every
+      // minute and reports once per run of failures (auditService.syncToCloud).
       logService.error("[Supabase] Failed to sync audit logs:", "Supabase", { error });
-      Sentry.captureException(error, {
-        tags: { service: "supabase-service", operation: "batchInsertAuditLogs" },
-      });
       throw error;
     }
   }

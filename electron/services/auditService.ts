@@ -173,7 +173,10 @@ export interface ISupportAccessGate {
  */
 interface IDatabaseService {
   insertAuditLog(entry: AuditLogEntry): Promise<void>;
-  getUnsyncedAuditLogs(limit?: number): Promise<AuditLogEntry[]>;
+  // BACKLOG-3987: scoped to one user. The cloud insert policy only accepts
+  // rows whose user_id is the signed-in account, so a batch that mixes in
+  // another local account's row is rejected whole.
+  getUnsyncedAuditLogs(limit: number, userId: string): Promise<AuditLogEntry[]>;
   markAuditLogsSynced(ids: string[]): Promise<void>;
   // BACKLOG-2149: audit writes race DB init on the deep-link path — gate on this.
   isInitialized(): boolean;
@@ -184,6 +187,8 @@ interface IDatabaseService {
  */
 interface ISupabaseService {
   batchInsertAuditLogs(entries: AuditLogEntry[]): Promise<void>;
+  // BACKLOG-3987: who is signed in. Only that user's entries are sent.
+  getAuthSession(): Promise<{ userId: string } | null>;
 }
 
 // ============================================
@@ -193,6 +198,11 @@ interface ISupabaseService {
 class AuditService {
   private pendingSyncQueue: AuditLogEntry[] = [];
   private syncInProgress = false;
+  // BACKLOG-3987: true after a failed cloud send, until the next success.
+  // A failure is reported to Sentry once per run of failures, not per attempt.
+  private cloudSyncFailing = false;
+  // BACKLOG-3987: the send attempt in flight, if any (see syncBatch).
+  private currentSync: Promise<number> | null = null;
   private syncIntervalId: NodeJS.Timeout | null = null;
   private databaseService: IDatabaseService | null = null;
   private supabaseService: ISupabaseService | null = null;
@@ -535,34 +545,78 @@ class AuditService {
   }
 
   /**
-   * Sync pending audit logs to cloud
+   * Sync pending audit logs to cloud.
+   *
+   * BACKLOG-3987: two sources, in order. First the in-memory queue (entries
+   * written this run). When that is empty, rows in the local table that were
+   * never marked synced: entries from a previous run whose send failed, or
+   * that were still queued when the app quit. The queue does not survive a
+   * restart, so before this fix those rows were never sent — the function
+   * returned early on an empty queue and the database branch could not run.
+   *
+   * Only the signed-in user's entries are sent. The cloud insert policy
+   * rejects a row whose user_id is not the session user, and it rejects the
+   * whole batch with it, so one other-account row at the head of the table
+   * would block every later row on every attempt.
    */
   async syncToCloud(): Promise<void> {
-    if (this.syncInProgress || this.pendingSyncQueue.length === 0) {
-      return;
+    await this.syncBatch();
+  }
+
+  /**
+   * One send attempt. Returns how many entries reached the cloud. A call made
+   * while an attempt is in flight joins that attempt instead of starting a
+   * second one, so `flushPendingLogs` waits for a send `log()` already kicked.
+   */
+  private syncBatch(): Promise<number> {
+    if (this.currentSync) return this.currentSync;
+    const run = this.runSyncBatch().finally(() => {
+      this.currentSync = null;
+    });
+    this.currentSync = run;
+    return run;
+  }
+
+  private async runSyncBatch(): Promise<number> {
+    if (this.syncInProgress) {
+      return 0;
     }
 
     if (!this.supabaseService || !this.databaseService) {
-      return;
+      return 0;
     }
 
     this.syncInProgress = true;
 
     try {
-      // Get entries to sync (from queue or database)
+      const session = await this.supabaseService.getAuthSession();
+      const userId = session?.userId;
+      if (!userId) {
+        // Not signed in: nothing can be accepted. Rows stay unsynced locally.
+        return 0;
+      }
+
+      // Entries for another account stay in the local table, unsynced, and
+      // are sent when that account signs in. They leave the queue so they
+      // cannot hold it.
+      this.pendingSyncQueue = this.pendingSyncQueue.filter(
+        (e) => e.userId === userId,
+      );
+
       let entriesToSync: AuditLogEntry[] = [];
 
       if (this.pendingSyncQueue.length > 0) {
         entriesToSync = this.pendingSyncQueue.slice(0, this.SYNC_BATCH_SIZE);
       } else {
-        // Check database for any unsynced entries
-        entriesToSync = await this.databaseService.getUnsyncedAuditLogs(
-          this.SYNC_BATCH_SIZE,
-        );
+        entriesToSync =
+          (await this.databaseService.getUnsyncedAuditLogs(
+            this.SYNC_BATCH_SIZE,
+            userId,
+          )) ?? [];
       }
 
       if (entriesToSync.length === 0) {
-        return;
+        return 0;
       }
 
       // Sync to cloud.
@@ -581,27 +635,47 @@ class AuditService {
       this.pendingSyncQueue = this.pendingSyncQueue.filter(
         (e) => !ids.includes(e.id),
       );
+      this.cloudSyncFailing = false;
 
       logService.info(
         `Synced ${entriesToSync.length} audit logs to cloud`,
         "AuditService",
       );
+      return entriesToSync.length;
     } catch (error) {
       // Will retry on next sync attempt
       logService.warn("Failed to sync audit logs to cloud", "AuditService", {
         error: error instanceof Error ? error.message : "Unknown error",
       });
+      // BACKLOG-3987: report the first failure of a run, not every retry.
+      // A machine whose connection to the cloud keeps failing retries every
+      // minute and on every new entry; reporting each attempt sent one user's
+      // retries to Sentry 1,416 times.
+      if (!this.cloudSyncFailing) {
+        this.cloudSyncFailing = true;
+        Sentry.captureException(error, {
+          tags: { service: "audit-service", operation: "syncToCloud" },
+        });
+      }
+      return 0;
     } finally {
       this.syncInProgress = false;
     }
   }
 
   /**
-   * Force sync all pending logs (useful before app shutdown)
+   * Send everything still unsynced for the signed-in user: the queue, then
+   * the local table (BACKLOG-3987). Stops at the first pass that sends
+   * nothing, so an offline machine returns instead of retrying forever.
    */
   async flushPendingLogs(): Promise<void> {
-    while (this.pendingSyncQueue.length > 0) {
-      await this.syncToCloud();
+    // Backstop against a backlog large enough to stall the caller.
+    const MAX_PASSES = 50;
+    // An attempt already in flight (kicked by log() or the interval) is
+    // waited out first; its result does not end the flush.
+    if (this.currentSync) await this.currentSync;
+    for (let pass = 0; pass < MAX_PASSES; pass++) {
+      if ((await this.syncBatch()) === 0) return;
     }
   }
 

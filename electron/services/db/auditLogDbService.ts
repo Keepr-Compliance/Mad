@@ -46,17 +46,24 @@ export async function insertAuditLog(entry: AuditLogEntry): Promise<void> {
 }
 
 /**
- * Get audit logs that haven't been synced to cloud
+ * Get one user's audit logs that haven't been synced to cloud.
+ *
+ * BACKLOG-3987: scoped by user. The cloud accepts only the signed-in user's
+ * rows and rejects a mixed batch whole, so an unscoped oldest-first query lets
+ * one other-account row block the trail on every attempt.
  */
-export async function getUnsyncedAuditLogs(limit: number = 100): Promise<AuditLogEntry[]> {
+export async function getUnsyncedAuditLogs(
+  limit: number,
+  userId: string,
+): Promise<AuditLogEntry[]> {
   const statement = sql`
     SELECT * FROM audit_logs
-    WHERE synced_at IS NULL
+    WHERE synced_at IS NULL AND user_id = ?
     ORDER BY timestamp ASC
     LIMIT ?
   `;
 
-  const rows = dbAll<AuditLogDbRow>(statement, [limit]);
+  const rows = dbAll<AuditLogDbRow>(statement, [userId, limit]);
   return rows.map(mapAuditLogRowToEntry);
 }
 
