@@ -796,12 +796,15 @@ jobs:
       # them after electron-builder's signing copy. Check the unpacked app AND the app
       # archive inside the installer (unpacked by the step above) against the manifest:
       # a re-signed file has a new sha256 and fails here.
+      # BACKLOG-3927: a Store run checks the Store set (manifest store.files only).
       - name: Verify the pinned iPhone tools shipped byte-identical (BACKLOG-3814)
         shell: pwsh
+        env:
+          KEEPR_CHANNEL: ${{ inputs.channel == 'store' && 'store' || 'website' }}
         run: |
-          node scripts/release/pinnedIphoneTools.js --packaged release/win-unpacked
+          node scripts/release/pinnedIphoneTools.js --packaged release/win-unpacked --channel $env:KEEPR_CHANNEL
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          node scripts/release/pinnedIphoneTools.js --packaged (Join-Path $env:RUNNER_TEMP "pe-signature-check/app")
+          node scripts/release/pinnedIphoneTools.js --packaged (Join-Path $env:RUNNER_TEMP "pe-signature-check/app") --channel $env:KEEPR_CHANNEL
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Upload Windows Artifacts
