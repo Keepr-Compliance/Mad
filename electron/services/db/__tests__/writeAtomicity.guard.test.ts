@@ -390,8 +390,12 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
     "BACKLOG-2550 @0dca6beb1 (:386, junction INSERT loop then one bulk messages UPDATE): junction rows with messages.transaction_id still NULL, so the message is re-offered as unlinked and the re-link is blocked only by the unique index",
   "electron/services/messageMatchingService.ts::autoLinkEmailsToTransaction":
     "BACKLOG-2550 @0dca6beb1 (:645, same shape on the email path): the pointer set with no junction row leaves the message invisible to every reader that joins through communications, while the messages table claims it is linked",
-  "electron/services/autoLinkService.ts::expandAttachedThreadsForUser":
-    "BACKLOG-2550 @0dca6beb1 (:1501, linkMessageToTransaction + createCommunicationReference): a thread expansion that half-ran leaves some messages of one attached conversation linked and the rest not, which reads to the user as a conversation that imported incompletely",
+  // `autoLinkService.ts::expandAttachedThreadsForUser` was removed by a
+  // wrapper refactor, NOT by the link fix. Its "2 writes" were the wrapper's
+  // two call sites of the non-exported helper `expandAttachedThreadsForUserOnce`
+  // (each local call counts as one write). This guard never sees the helper
+  // itself, so it cannot see the pointer/junction pair either. The proof of
+  // that fix is `expandAttachedThreads.linkAtomicity-2550.test.ts`.
 
   // --- BACKLOG-2845 (open): review queue approve/reject -------------------
   "electron/services/reviewStateService.ts::approveReviewItems":

@@ -1815,11 +1815,13 @@ export function expandAttachedThreadsForUser(userId: string): Promise<ExpandAtta
   expansionByUser.set(userId, entry);
   entry.promise = (async () => {
     try {
-      let last = await expandAttachedThreadsForUserOnce(userId);
-      while (entry.rerun) {
+      // One call site for the helper (BACKLOG-2550). `rerun` is false on entry, so this
+      // do/while runs exactly what the former call-then-while ran.
+      let last: ExpandAttachedThreadsResult;
+      do {
         entry.rerun = false;
         last = await expandAttachedThreadsForUserOnce(userId);
-      }
+      } while (entry.rerun);
       return last;
     } finally {
       expansionByUser.delete(userId);
