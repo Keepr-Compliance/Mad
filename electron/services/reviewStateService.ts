@@ -68,7 +68,7 @@
 
 import crypto from "crypto";
 import { hostWindows } from "../capabilities/windowsProvider";
-import { dbGet, dbAll, dbRun } from "./db/core/dbConnection";
+import { dbGet, dbAll, dbRun, dbTransaction } from "./db/core/dbConnection";
 import {
   ADDRESS_MISSING_COMMUNICATIONS_BY_TRANSACTION_SQL,
   ADDRESS_MISSING_COMMUNICATION_BY_ID_SQL,
@@ -1309,9 +1309,9 @@ export async function syncReviewQueueForTransaction(opts: {
 /**
  * Restore a REJECTED item back into the review queue.
  *
- * Returns true when the ignored row was a review rejection and has been put back
- * on the queue (its suppression row removed), false when it is an ordinary
- * removal the caller should restore its own way.
+ * Returns how many items went back on the queue (their suppression rows
+ * removed), or 0 when the ignored row is an ordinary removal the caller should
+ * restore its own way.
  *
  * WHY THIS EXISTS
  * ---------------
@@ -1328,67 +1328,99 @@ export async function syncReviewQueueForTransaction(opts: {
  * of "returns to needs-review", and it makes both halves behave identically.
  */
 export async function restoreRejectedToQueue(ignoredCommId: string): Promise<number> {
-  const row = dbGet<{
-    id: string;
-    user_id: string;
-    transaction_id: string;
-    email_id: string | null;
-    thread_id: string | null;
-    match_reason: string | null;
-    reason: string | null;
-  }>(
-    IGNORED_COMMUNICATION_BY_ID_SQL,
-    [ignoredCommId],
-  );
-  if (!row) return 0;
-
-  // `reason` is the discriminator: only this service writes
-  // REVIEW_REJECTION_REASON (BACKLOG-2818). match_reason alone would also match
-  // a legacy 2319 removal, whose restore must keep its existing link-recreating
-  // behaviour.
-  if (row.reason !== REVIEW_REJECTION_REASON) return 0;
-
-  // THREAD-AWARE, matching restoreRemovedEmailThread.
-  //
-  // BACKLOG-2791: this used to restore exactly ONE row. Show removed groups by
-  // thread_id (BACKLOG-1766) and hands the restore a single representative,
-  // because the ordinary restore path expands to siblings itself. This
-  // short-circuit did not, so a "(2 emails)" card restored one email and left
-  // the other to reappear on its own — the founder's case was two recurring
-  // calendar invites, which the provider threads into one conversation.
-  //
-  // Siblings are found through the EMAIL's thread, not the ignored row's
-  // thread_id, which is NULL for a queued email (the queue keys emails by id).
-  const siblings = row.email_id
-    ? dbAll<{ id: string; email_id: string | null; thread_id: string | null }>(
-        IGNORED_SIBLINGS_IN_THREAD_SQL,
-        // BACKLOG-2818: BOUND, not interpolated. The sibling sweep has to agree
-        // with the single-row check four lines up; when both were spelled out as
-        // literals they could disagree, and a card would restore one email and
-        // leave its thread-mate behind.
-        [row.transaction_id, REVIEW_REJECTION_REASON, row.email_id],
-      )
-    : [];
-
-  const toRestore = siblings.length > 0
-    ? siblings
-    : [{ id: row.id, email_id: row.email_id, thread_id: row.thread_id }];
-
-  for (const item of toRestore) {
-    dbRun(
-      INSERT_PENDING_REVIEW_WITH_THREAD_SQL,
-      [crypto.randomUUID(), row.user_id, row.transaction_id, item.email_id, item.thread_id],
-    );
-    dbRun(DELETE_IGNORED_COMMUNICATION_SQL, [item.id]);
-  }
+  // BACKLOG-3320: every write happens inside restoreRejectedToQueueSync's one
+  // transaction. The log and the broadcast run only after it has committed; a
+  // throw propagates past both, so nothing announces a restore that rolled back.
+  const { count, transactionId, kind } = restoreRejectedToQueueSync(ignoredCommId);
+  if (count === 0 || transactionId === null) return 0;
 
   await logService.debug("Restored a rejected item to the review queue", MODULE, {
     ignoredCommId,
-    transactionId: row.transaction_id,
-    kind: row.email_id ? "email" : "text",
+    transactionId,
+    kind,
   });
-  notifyReviewStateChanged(row.transaction_id);
-  return toRestore.length;
+  notifyReviewStateChanged(transactionId);
+  return count;
+}
+
+/**
+ * BACKLOG-3320 — the restore as ONE unit: the rejection row, its thread
+ * siblings, and every INSERT/DELETE pair commit together or not at all.
+ *
+ * The unit is the whole sibling set, not a row. A "(2 emails)" card is one
+ * representative and one restore; a transaction per row would let a crash
+ * restore one thread-mate and leave the other rejected, which is the
+ * BACKLOG-2791 split reintroduced by a crash instead of by selection.
+ *
+ * The two reads sit inside the transaction on purpose: `dbTransaction` rejects
+ * an async body at compile time, so no `await` can later be placed between
+ * "which siblings" and "restore them".
+ *
+ * No try/catch, no logging, no broadcast in here — see the async wrapper above.
+ */
+export function restoreRejectedToQueueSync(ignoredCommId: string): { count: number; transactionId: string | null; kind: "email" | "text" | null } {
+  return dbTransaction(() => {
+    const row = dbGet<{
+      id: string;
+      user_id: string;
+      transaction_id: string;
+      email_id: string | null;
+      thread_id: string | null;
+      match_reason: string | null;
+      reason: string | null;
+    }>(
+      IGNORED_COMMUNICATION_BY_ID_SQL,
+      [ignoredCommId],
+    );
+    const none = { count: 0, transactionId: null, kind: null };
+    if (!row) return none;
+
+    // `reason` is the discriminator: only this service writes
+    // REVIEW_REJECTION_REASON (BACKLOG-2818). match_reason alone would also match
+    // a legacy 2319 removal, whose restore must keep its existing link-recreating
+    // behaviour.
+    if (row.reason !== REVIEW_REJECTION_REASON) return none;
+
+    // THREAD-AWARE, matching restoreRemovedEmailThread.
+    //
+    // BACKLOG-2791: this used to restore exactly ONE row. Show removed groups by
+    // thread_id (BACKLOG-1766) and hands the restore a single representative,
+    // because the ordinary restore path expands to siblings itself. This
+    // short-circuit did not, so a "(2 emails)" card restored one email and left
+    // the other to reappear on its own — the founder's case was two recurring
+    // calendar invites, which the provider threads into one conversation.
+    //
+    // Siblings are found through the EMAIL's thread, not the ignored row's
+    // thread_id, which is NULL for a queued email (the queue keys emails by id).
+    const siblings = row.email_id
+      ? dbAll<{ id: string; email_id: string | null; thread_id: string | null }>(
+          IGNORED_SIBLINGS_IN_THREAD_SQL,
+          // BACKLOG-2818: BOUND, not interpolated. The sibling sweep has to agree
+          // with the single-row check four lines up; when both were spelled out as
+          // literals they could disagree, and a card would restore one email and
+          // leave its thread-mate behind.
+          [row.transaction_id, REVIEW_REJECTION_REASON, row.email_id],
+        )
+      : [];
+
+    const toRestore = siblings.length > 0
+      ? siblings
+      : [{ id: row.id, email_id: row.email_id, thread_id: row.thread_id }];
+
+    for (const item of toRestore) {
+      dbRun(
+        INSERT_PENDING_REVIEW_WITH_THREAD_SQL,
+        [crypto.randomUUID(), row.user_id, row.transaction_id, item.email_id, item.thread_id],
+      );
+      dbRun(DELETE_IGNORED_COMMUNICATION_SQL, [item.id]);
+    }
+
+    return {
+      count: toRestore.length,
+      transactionId: row.transaction_id,
+      kind: row.email_id ? "email" as const : "text" as const,
+    };
+  });
 }
 
 /* ------------------------------------------------------------------ *
