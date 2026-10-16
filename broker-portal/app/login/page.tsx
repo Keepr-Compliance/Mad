@@ -168,9 +168,7 @@ function LoginForm() {
           >
             {displayError === 'org_not_setup' ? (
               <p>
-                Your organization hasn&apos;t been set up yet. Ask your IT administrator to visit the{' '}
-                <a href="/setup" className="font-medium underline hover:text-red-600">setup page</a>
-                , or{' '}
+                Your brokerage hasn&apos;t added you to Keepr yet. Ask your brokerage admin to invite you, or{' '}
                 <a href="/download" className="font-medium underline hover:text-red-600">sign up for an individual account</a>.
                 {' '}If you have an agent license,{' '}
                 <a href="/auth/desktop" className="font-medium underline hover:text-red-600">sign in to the desktop app here</a>.
@@ -258,9 +256,9 @@ function LoginForm() {
           Only authorized brokers can access this portal.
         </p>
         <p className="text-xs" style={{ color: '#9297A6' }}>
-          Need to set up a new organization?{' '}
+          Invited as a brokerage admin or IT admin?{' '}
           <a href="/setup" className="text-primary-600 hover:text-primary-700">
-            Get started here
+            Connect your brokerage
           </a>
         </p>
       </div>

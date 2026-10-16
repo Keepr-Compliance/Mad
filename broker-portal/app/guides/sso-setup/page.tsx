@@ -37,14 +37,14 @@ export default function SSOSetupGuidePage() {
           <section className="mb-10">
             <h2 className="text-xl font-semibold text-gray-900">How SSO works</h2>
             <p className="mt-3 text-gray-700">
-              SSO is enabled automatically when your organization is created. During the{' '}
-              <Link href="/setup" className="text-primary-600 hover:underline">/setup</Link>{' '}
-              flow, Keepr links your Microsoft Entra ID tenant to your organization. After that, anyone with a work account from that same tenant can sign in at{' '}
+              During{' '}
+              <Link href="/setup" className="text-primary-600 hover:underline">/setup</Link>
+              , Keepr links your Microsoft Entra ID tenant to the brokerage you were invited to. After that, people your brokerage invites can sign in at{' '}
               <Link href="/login" className="text-primary-600 hover:underline">/login</Link>{' '}
               using <strong>Sign in with Microsoft</strong>.
             </p>
             <p className="mt-3 text-gray-700">
-              There is no separate SSO configuration step. If your organization exists in Keepr, SSO is already active.
+              There is no separate SSO configuration step. Once your brokerage admin has completed setup, SSO is active.
             </p>
           </section>
 
@@ -162,9 +162,7 @@ export default function SSOSetupGuidePage() {
                   &quot;Organization Not Set Up&quot; error on the login page
                 </h3>
                 <p className="mt-1 text-sm text-gray-700">
-                  No one from your company has completed the setup flow yet. An IT administrator from your organization needs to visit{' '}
-                  <Link href="/setup" className="text-primary-600 hover:underline">/setup</Link>{' '}
-                  to create the organization. Alternatively, you can{' '}
+                  Your brokerage hasn&apos;t invited you yet. Ask your brokerage admin for an invitation, or{' '}
                   <Link href="/download" className="text-primary-600 hover:underline">sign up for an individual account</Link>{' '}
                   if your company doesn&apos;t use Keepr yet.
                 </p>

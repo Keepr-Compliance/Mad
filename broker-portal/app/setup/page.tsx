@@ -1,11 +1,12 @@
 'use client';
 
 /**
- * IT Admin Setup Page
+ * Brokerage setup page (BACKLOG-3851)
  *
- * Dedicated page for first-time IT admin onboarding.
- * Microsoft-only (enterprise feature), uses consent prompt
- * to ensure email/profile scopes are granted.
+ * A person their brokerage invited signs in with Microsoft to accept the
+ * invitation; an admin's sign-in also links the brokerage to their Microsoft
+ * organization. It never creates a brokerage. Microsoft-only, uses the consent
+ * prompt to ensure email/profile scopes are granted.
  */
 
 import { useState, useEffect, Suspense } from 'react';
@@ -20,7 +21,13 @@ const ERROR_MESSAGES: Record<string, string> = {
   no_tenant: 'Could not verify your Microsoft organization. Please contact support.',
   no_email:
     'Microsoft did not return your email address. Check your Azure AD app permissions (email claim must be enabled).',
-  provision_failed: 'Failed to create your organization. Please try again or contact support.',
+  no_invite:
+    "We couldn't find a Keepr invitation for this Microsoft account. Ask your brokerage admin to invite you, then try again. If you use Keepr on your own, sign in instead.",
+  tenant_in_use:
+    "This Microsoft organization is already connected to a different brokerage in Keepr. Contact Keepr support and we'll sort it out.",
+  tenant_mismatch:
+    'Your brokerage is connected to a different Microsoft organization than the account you signed in with. Sign in with your work account for that brokerage, or contact Keepr support.',
+  provision_failed: "We couldn't finish setting up your account. Please try again or contact support.",
   consumer_account: 'Personal Microsoft accounts are not supported. Please use your work account.',
 };
 
@@ -87,9 +94,11 @@ function SetupForm() {
       <div className="max-w-md w-full space-y-8">
         <div className="text-center">
           <h1 className="text-3xl font-bold text-gray-900"><Wordmark /></h1>
-          <h2 className="mt-2 text-xl text-gray-600">Set Up Your Organization</h2>
+          <h2 className="mt-2 text-xl text-gray-600">Connect your brokerage</h2>
           <p className="mt-4 text-gray-500">
-            Sign in with a Microsoft work account from the organization you want to set up.
+            Use this page if your brokerage invited you to Keepr as an admin or IT admin. Sign in
+            with your Microsoft work account to accept the invitation and connect your
+            brokerage&apos;s Microsoft account.
           </p>
         </div>
 
@@ -124,13 +133,14 @@ function SetupForm() {
 
         <div className="text-center space-y-2">
           <p className="text-sm text-gray-500">
-            This creates your organization and sets you up as IT administrator.
+            Setup completes an invitation from your brokerage. It does not create a new brokerage.
           </p>
           <p className="text-sm text-gray-400">
-            Already have an account?{' '}
+            Working on your own? You don&apos;t need setup -{' '}
             <a href="/login" className="text-primary-600 hover:text-primary-700">
-              Sign in
+              sign in instead
             </a>
+            .
           </p>
         </div>
       </div>
