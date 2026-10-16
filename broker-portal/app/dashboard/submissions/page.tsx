@@ -416,7 +416,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
           left and right edges are the search field's; the frame stays from md up. */}
       {/* BACKLOG-3914: on the board, the list below is the phone's only (md:hidden). */}
       <div
-        className={`bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden${
+        className={`bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden md:overflow-x-auto${
           displaySubmissions.length > 0 ? ' max-md:overflow-visible max-md:rounded-none max-md:border-0 max-md:bg-transparent max-md:shadow-none' : ''
         }${board ? ' md:hidden' : ''}`}
       >

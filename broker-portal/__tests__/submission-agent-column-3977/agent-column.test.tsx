@@ -165,4 +165,11 @@ describe('BACKLOG-3977 Agent column', () => {
     expect((document.querySelector('table') as HTMLElement).className.split(' ')).toContain('max-md:hidden');
     expect((document.querySelector('[data-slot=submission-cards]') as HTMLElement).className.split(' ')).toContain('md:hidden');
   });
+
+  it('at tablet widths the six-column table scrolls sideways instead of clipping', async () => {
+    given();
+    await renderList();
+    const frame = (document.querySelector('table') as HTMLElement).parentElement as HTMLElement;
+    expect(frame.className.split(' ')).toContain('md:overflow-x-auto');
+  });
 });
