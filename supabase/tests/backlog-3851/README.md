@@ -62,7 +62,7 @@ whether the count precedes the lock from the installed function (proof the mutan
 |---|---|
 | c01 | `set_member_license`: 7 callers x 9 targets x 4 actions (252 cells) against an independent spec; anon refused by grant; service_role and unknown ids `not_authorized`; reactivate in a full org returns `seat_limit_reached` (Q3) and leaves the row. |
 | c02 | Seat limit for every writer: client invite (guard 42501), service_role (P0001), postgres (no `current_user` exemption), `admin_invite_user`; unassign frees at once, assign takes it; `license_assigned_at` set / cleared / not forgeable; claim (pending→active) neutral in a full org; personal org and `max_seats` 0 / NULL have no limit. |
-| c03 | IdP INSERT overflow → `'unassigned'` via `auto_provision_it_admin` (the live /setup join), service_role scim insert, `jit_join_organization`; free seat → `'active'`; manual / NULL-origin INSERT refused. |
+| c03 | IdP INSERT overflow → `'unassigned'` via `auto_provision_it_admin` (the live /setup join), service_role scim insert, `jit_join_organization`; free seat → `'active'`; manual / NULL-origin INSERT refused. **SUPERSEDED** once 20261016130000 is applied (/setup with no invite returns `no_invite`; /setup with an own invite claims it). Superseded by BACKLOG-3851 PR-2 piece 1 (`supabase/migrations/20261016130000_backlog_3851_setup_completes_invite.sql`, harness `supabase/tests/backlog-3851-setup/`). |
 | c05 | `get_org_features` / `check_feature_access`: active answered; suspended, expired, unassigned, other-org → `not_authorized`. |
 | c07 | Helper truth tables incl. NULL, unknown values, `directory_sync`, invite expiry on both sides of now(). |
 | c08 | Catalogue: new-function grants (no PUBLIC/anon), definer flags, `search_path ''`, volatility; replaced functions keep production ACLs; trigger order and columns; lock clause and its position; CHECK; new column; every untouched fingerprint row = production. |
@@ -70,7 +70,7 @@ whether the count precedes the lock from the installed function (proof the mutan
 | c12 | First claimed member of an org with no access-granting claimed member gets a seat (max+1); the next is unassigned; a deactivated claimed member does not count; UPDATE obeys the same max+1. |
 | c16 | Resend of an expired invite in a full org refused; live invite Resend neutral; with a free seat the expired invite's Resend takes it. |
 | c16b | Q4 on the invite paths: an org full only by an expired invite accepts one portal invite and one staff invite, then refuses. |
-| c18 | /setup for a user who also holds their own unclaimed invite (trace, see below). |
+| c18 | /setup for a user who also holds their own unclaimed invite (trace, see below). **SUPERSEDED** once 20261016130000 is applied (/setup with no invite returns `no_invite`; /setup with an own invite claims it). Superseded by BACKLOG-3851 PR-2 piece 1 (`supabase/migrations/20261016130000_backlog_3851_setup_completes_invite.sql`, harness `supabase/tests/backlog-3851-setup/`). |
 | m06 | (M1 + M2) deactivation attaches a personal org; later status change keeps it; reactivation retires it; unassigned is still in the brokerage; desktop self-heal for a deactivated member; active elsewhere → no personal org; no licence → deactivation still commits. |
 | m13 | (M1 + M2) a raising revert never blocks the deactivation. |
 | race c04r / c04c | B blocks on the org lock; after A rolls back B succeeds; after A commits B gets `seat_limit_reached`; seats = max. |
@@ -89,3 +89,7 @@ BACKLOG-3950); portal jest controls and mutants W5, W9–W12 (PR-2a/2b/2c).
 `claim_pending_invite` deletes the invite (`existing_membership_kept`). In a full org whose last seat
 is the user's own invite, the `jit` row is written `'unassigned'`; the later claim deletes the invite
 and frees a seat, but the user stays `'unassigned'` until an admin assigns it (no auto-assign, Q5).
+
+## After 20261016130000 (BACKLOG-3851 PR-2 piece 1)
+
+Superseded by BACKLOG-3851 PR-2 piece 1 (`supabase/migrations/20261016130000_backlog_3851_setup_completes_invite.sql`, harness `supabase/tests/backlog-3851-setup/`) changes `auto_provision_it_admin`. Once it is applied to production, `lib/pins-3851.sql` row `fn auto_provision_it_admin(text,text,text)` (`11d8619f8dc65e22f53e668e8eade957`) no longer matches production by design, and this harness's prelude must be re-pinned before it is used as a pre-apply gate again. The pin is NOT changed here: every run of the new harness loads this prelude against the pre-apply venue. Controls c03 and c18 encode the pre-apply /setup behaviour.

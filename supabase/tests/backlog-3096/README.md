@@ -1,5 +1,7 @@
 # BACKLOG-3096 controls — `/setup` must not hand admin to every employee
 
+> **SUPERSEDED** once `supabase/migrations/20261016130000_backlog_3851_setup_completes_invite.sql` (BACKLOG-3851 PR-2 piece 1) is applied: `/setup` no longer creates an organization or adds a caller without an invite, so first-user-wins no longer applies. Kept as the record of the 3096 body. Current controls: `supabase/tests/backlog-3851-setup/`.
+
 These files execute the fix in
 `supabase/migrations/20260905120000_backlog_3096_setup_first_user_wins.sql`.
 
