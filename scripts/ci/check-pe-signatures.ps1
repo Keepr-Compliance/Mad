@@ -17,6 +17,10 @@
   Per-root floors stop an empty or partial unpack from passing green. The
   measured counts for v2.38.1 are outer 7, app 64, uninst 4 (+1 installer).
   BACKLOG-3812 removed 5 PE files from the iPhone tools folder: app 64 -> 59.
+  BACKLOG-3927: the Store build trims the libimobiledevice folder from 45 files
+  to 11 (34 fewer PE files; see scripts/release/pinnedIphoneTools.js), so the
+  Store app root measures 25 against 59 for the website. Floors are per channel:
+  website app 55 (59 measured), store app 21 (25 measured); both keep a margin of 4.
 
   Exit code: 0 = every file Valid and every floor met; 1 = anything else.
 
@@ -26,6 +30,8 @@
   Scratch directory for the unpacked trees. Must not exist or must be empty.
 .PARAMETER SevenZip
   7-Zip executable. Default "7z" (present on windows-latest runners).
+.PARAMETER Channel
+  "website" (default) or "store". Selects the app-root floor (BACKLOG-3927).
 .PARAMETER HeaderOnly
   Skip Get-AuthenticodeSignature and report only whether each file carries a
   certificate table. For running the enumeration half off Windows. Never used
@@ -36,7 +42,8 @@ param(
   [Parameter(Mandatory = $true)][string]$Installer,
   [Parameter(Mandatory = $true)][string]$WorkDir,
   [string]$SevenZip = "7z",
-  [switch]$HeaderOnly
+  [switch]$HeaderOnly,
+  [ValidateSet("website", "store")][string]$Channel = "website"
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +52,8 @@ Set-StrictMode -Version Latest
 # Minimum PE files each unpack root must contribute (v2.38.1 measured 7 / 64 / 4;
 # app is 59 after BACKLOG-3812).
 $Floors = [ordered]@{ outer = 7; app = 55; uninst = 4 }
+# Store app root: 25 measured (BACKLOG-3927), floor 21 = measured - 4, the same margin as website (59 - 4 = 55).
+if ($Channel -eq "store") { $Floors.app = 21 }
 
 function Fail([string]$msg) {
   Write-Host "::error::$msg"

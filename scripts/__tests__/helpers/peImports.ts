@@ -50,13 +50,50 @@ export function peImports(file: string): string[] {
   return [...out];
 }
 
-/** Tools the app spawns: every getCommand("name") in non-test electron/services sources. */
-export function spawnedTools(servicesDir: string): string[] {
-  const names = new Set<string>();
-  for (const f of readdirSync(servicesDir)) {
-    if (!f.endsWith(".ts") || f.endsWith(".test.ts")) continue;
-    for (const m of readFileSync(path.join(servicesDir, f), "utf8").matchAll(/getCommand\("([^"]+)"\)/g)) names.add(m[1]);
+/** Functions that turn a tool name into a path or command; every call site is a spawn. */
+const TOOL_RESOLVERS = ["getCommand", "getExecutablePath"];
+/** The file that defines the resolvers; its own definitions and delegation (getCommand -> getExecutablePath) are not spawn sites. */
+const RESOLVER_FILE = "libimobiledeviceService.ts";
+
+/** Non-test .ts/.tsx source files under `dir`, recursively. */
+function sourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === "__tests__" || e.name === "node_modules") continue;
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...sourceFiles(full));
+    else if (/\.tsx?$/.test(e.name) && !/\.test\./.test(e.name) && !e.name.endsWith(".d.ts")) out.push(full);
   }
+  return out;
+}
+
+/**
+ * Tools the app spawns: the string-literal argument of every getCommand(...) / getExecutablePath(...)
+ * call in non-test sources under `electronDir` (recursive, either quote style). Throws when a call's
+ * argument is not a plain string literal, since the tool it names cannot be known.
+ */
+export function spawnedTools(electronDir: string): string[] {
+  const names = new Set<string>();
+  const nonLiteral: string[] = [];
+  const call = new RegExp(`\\b(${TOOL_RESOLVERS.join("|")})\\s*\\(\\s*([^)]*)\\)`, "g");
+  const literal = /^(["'])([A-Za-z0-9_-]+)\1$/;
+  for (const f of sourceFiles(electronDir)) {
+    const src = readFileSync(f, "utf8");
+    const isResolverFile = path.basename(f) === RESOLVER_FILE;
+    for (const m of src.matchAll(call)) {
+      const before = src.slice(Math.max(0, (m.index as number) - 20), m.index as number);
+      if (/function\s+$/.test(before)) continue; // the definition
+      const arg = m[2].trim();
+      const lit = literal.exec(arg);
+      if (lit) {
+        names.add(lit[2]);
+      } else if (!isResolverFile) {
+        const line = src.slice(0, m.index).split("\n").length;
+        nonLiteral.push(`${path.relative(electronDir, f)}:${line} ${m[1]}(${arg})`);
+      }
+    }
+  }
+  if (nonLiteral.length) throw new Error(`tool resolver called with a non-literal argument:\n${nonLiteral.join("\n")}`);
   return [...names].sort();
 }
 
