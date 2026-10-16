@@ -49,6 +49,15 @@ interface ConsentInfo {
   consentGrantedAt: string | null;
 }
 
+/**
+ * BACKLOG-3851 PR-2d: the Desktop App Permissions card's link action and the
+ * line above it. Named for the company account, not the provider, so a Google
+ * Workspace path can use the same button later. Microsoft only today.
+ */
+const CONNECT_COMPANY_ACCOUNT_LABEL = 'Connect company account';
+const CONNECT_COMPANY_ACCOUNT_LINE =
+  "Connect your brokerage's Microsoft 365 account so team members can connect their Outlook in the desktop app. Google Workspace support is coming.";
+
 const RETENTION_OPTIONS = [
   { value: 1, label: '1 year' },
   { value: 2, label: '2 years' },
@@ -203,7 +212,25 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
                     Team members will be prompted to request admin approval when connecting Outlook
                   </span>
                 </div>
-                {consent.tenantId && desktopClientId ? (
+                {!consent.tenantId ? (
+                  // BACKLOG-3851 PR-2d: an admin links the Microsoft organization
+                  // on /setup. Middleware sends a signed-in user away from /setup,
+                  // so this signs out first (/auth/logout clears the auth cookies)
+                  // and the logout route sends the browser on to /setup.
+                  <div className="space-y-3">
+                    <p className="text-sm text-gray-500">
+                      {CONNECT_COMPANY_ACCOUNT_LINE}
+                    </p>
+                    <Button
+                      onClick={() => {
+                        window.location.href = '/auth/logout?next=setup';
+                      }}
+                      disabled={isImpersonating}
+                    >
+                      {CONNECT_COMPANY_ACCOUNT_LABEL}
+                    </Button>
+                  </div>
+                ) : desktopClientId ? (
                   <Button
                     onClick={() => {
                       const redirectUri = `${window.location.origin}/setup/consent/callback`;
@@ -222,7 +249,7 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
                   </Button>
                 ) : (
                   <p className="text-sm text-gray-400">
-                    Microsoft tenant not configured. Please contact support.
+                    Desktop app permissions are not configured for this portal. Please contact support.
                   </p>
                 )}
               </div>
