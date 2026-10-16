@@ -10,7 +10,7 @@ import type { IpcMainInvokeEvent } from "electron";
 import transactionService from "../services/transactionService";
 import logService from "../services/logService";
 import { createEmailSync, getEmailById, getEmailByExternalId, getCachedEmails } from "../services/db/emailDbService";
-import { createCommunicationSync, removeIgnoredCommunication, confirmEmailLinksByEmailIds } from "../services/db/communicationDbService";
+import { createCommunicationSync, confirmEmailLinksByEmailIds } from "../services/db/communicationDbService";
 import { dbAll, dbTransaction } from "../services/db/core/dbConnection";
 import {
   REMOVED_EMAILS_SQL,
@@ -907,11 +907,10 @@ export function registerEmailLinkingHandlers(): void {
         return { success: true };
       }
 
-      // Step 1: Remove the suppression record so auto-link does not suppress again
-      await removeIgnoredCommunication(ignoredCommId);
-
-      // Step 2: Re-link the messages to the transaction
-      await transactionService.linkMessages(messageIds, validatedTransactionId);
+      // BACKLOG-3310: re-link the messages AND clear the suppression record in
+      // the same transaction (the last chunk's), so a crash can never leave the
+      // thread neither removed nor linked.
+      await transactionService.linkMessages(messageIds, validatedTransactionId, ignoredCommId);
       notifyText(validatedTransactionId);
 
       logService.info("Removed message restored", "Transactions", {

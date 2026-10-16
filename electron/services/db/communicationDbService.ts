@@ -346,8 +346,11 @@ export function confirmEmailLinksByEmailIds(
 
 /**
  * Delete communication
+ *
+ * BACKLOG-3309: synchronous so `unlinkCommunication` can call it inside one
+ * `dbTransaction` with the suppression insert.
  */
-export async function deleteCommunication(communicationId: string): Promise<void> {
+export function deleteCommunicationSync(communicationId: string): void {
   // BACKLOG-506 (TASK-1307): Get the transaction ID and message_id before deleting.
   // We need to check if the linked message is a text type to update thread count.
   const comm = dbGet<{ transaction_id: string | null; message_id: string | null; thread_id: string | null }>(
@@ -375,6 +378,12 @@ export async function deleteCommunication(communicationId: string): Promise<void
       }
     }
   }
+}
+
+/** BACKLOG-3309 — promise seam over `deleteCommunicationSync`. Plain, not
+ *  `async`; see `deleteCommunicationByMessageId` for the measurement. */
+export function deleteCommunication(communicationId: string): Promise<void> {
+  return Promise.resolve(deleteCommunicationSync(communicationId));
 }
 
 /**
@@ -663,10 +672,19 @@ export async function isEmailIgnoredByUser(
 
 /**
  * Remove an ignored communication (re-allow it to be linked)
+ *
+ * BACKLOG-3310: synchronous so a restore can clear the suppression row in the
+ * same `dbTransaction` as the link it restores.
  */
-export async function removeIgnoredCommunication(ignoredCommId: string): Promise<void> {
+export function removeIgnoredCommunicationSync(ignoredCommId: string): void {
   const statement = sql`DELETE FROM ignored_communications WHERE id = ?`;
   dbRun(statement, [ignoredCommId]);
+}
+
+/** BACKLOG-3310 — promise seam over `removeIgnoredCommunicationSync`. Plain,
+ *  not `async`; see `deleteCommunicationByMessageId` for the measurement. */
+export function removeIgnoredCommunication(ignoredCommId: string): Promise<void> {
+  return Promise.resolve(removeIgnoredCommunicationSync(ignoredCommId));
 }
 
 /**
