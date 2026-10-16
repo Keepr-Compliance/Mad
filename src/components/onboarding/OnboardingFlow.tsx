@@ -30,6 +30,7 @@ import { reportDriverStillMissingAtCompletion } from './sentryOnboarding';
 import { usePlatform } from '../../contexts/PlatformContext';
 import { useIPhoneSyncEnabled } from '../../contexts/IPhoneSyncContext';
 import { importSourceForPhoneType } from '../../utils/iphoneSyncEnabled';
+import { toOnboardingAuthProvider } from '../../utils/authProvider';
 
 /**
  * Props for the OnboardingFlow component.
@@ -280,7 +281,8 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
         hasSecureStorage: app.hasSecureStorageSetup,
         driverSetupComplete: !app.needsDriverSetup,
         termsAccepted: !app.needsTermsAcceptance,
-        authProvider: (app.pendingOAuthData?.provider ?? app.authProvider) as "google" | "microsoft" ?? "google",
+        // BACKLOG-3956: narrowed here and only here; no provider fallback.
+        authProvider: toOnboardingAuthProvider(app.pendingOAuthData?.provider ?? app.authProvider),
         isNewUser: app.isNewUserFlow,
         isDatabaseInitialized,
         userId: app.currentUser?.id ?? null,
@@ -302,7 +304,8 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
       hasSecureStorage: app.hasSecureStorageSetup,
       driverSetupComplete: !app.needsDriverSetup,
       termsAccepted: !app.needsTermsAcceptance,
-      authProvider: (app.pendingOAuthData?.provider ?? app.authProvider) as "google" | "microsoft" ?? "google",
+      // BACKLOG-3956: narrowed here and only here; no provider fallback.
+      authProvider: toOnboardingAuthProvider(app.pendingOAuthData?.provider ?? app.authProvider),
       isNewUser: app.isNewUserFlow,
       isDatabaseInitialized: app.isDatabaseInitialized,
       userId: app.currentUser?.id ?? null,

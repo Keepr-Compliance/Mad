@@ -11,6 +11,7 @@ import type { Subscription } from "../../../../../electron/types/models";
 import type { AppStep } from "../../types";
 import type { User, PlatformInfo, AppAction } from "../../machine/types";
 import logger from '../../../../utils/logger';
+import { normalizeAuthProvider } from '../../../../utils/authProvider';
 
 export interface UseLoginHandlersOptions {
   login: (
@@ -85,7 +86,10 @@ export function useLoginHandlers({
       if (data.user) {
         login(
           { id: data.user.id, email: data.user.email || "", display_name: data.user.name },
-          data.accessToken, data.provider || "google", undefined, isNewUser,
+          // BACKLOG-3956: "azure" -> "microsoft"; every other value kept as-is.
+          // The "google" stand-in covers only an absent value, which the main
+          // process never sends (it defaults before sending).
+          data.accessToken, normalizeAuthProvider(data.provider) ?? "google", undefined, isNewUser,
         );
         dispatchLoginSuccess(stateMachineDispatch, platform,
           { id: data.user.id, email: data.user.email || "", displayName: data.user.name }, isNewUser);
