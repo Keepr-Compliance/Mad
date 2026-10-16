@@ -61,6 +61,8 @@ function classOf(code: BackupErrorCode): "input" | "device" | "link" | "host" | 
       return "link";
     case "INSUFFICIENT_SPACE":
     case "BACKUP_CANCELLED":
+    // BACKLOG-3953: an iPhone tool on this computer never started.
+    case "TOOL_BLOCKED":
       return "host";
     case "UNKNOWN_ERROR":
       return "unknown";

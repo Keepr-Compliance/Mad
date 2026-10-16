@@ -73,6 +73,19 @@ export const deviceBridge = {
   },
 
   /**
+   * BACKLOG-3953: Subscribe to tools-blocked events.
+   * Fires on Windows when an iPhone tool never started (a required file is gone, or
+   * Windows refused to launch it). Carries the message to show.
+   */
+  onToolsBlocked: (
+    callback: (data: { userError: { title: string; description: string; actionSuggestion: string; code: string } }) => void,
+  ) => {
+    const listener = (_: IpcRendererEvent, data: { userError: { title: string; description: string; actionSuggestion: string; code: string } }) => callback(data);
+    ipcRenderer.on("device:tools-blocked", listener);
+    return () => ipcRenderer.removeListener("device:tools-blocked", listener);
+  },
+
+  /**
    * Subscribes to device connected events
    * @param callback - Callback function when device connects
    * @returns Cleanup function to remove listener

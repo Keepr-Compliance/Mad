@@ -35,8 +35,11 @@ import {
   BackupStatusReport,
   BackupFailureCause,
   ToolStartObservation,
+  ToolBlock,
 } from "../types/backup";
 import { validateDeviceUdid, ValidationError } from "../utils/validation";
+import { detectToolBlock } from "./iphoneToolBlock";
+import { formatToolBlockedError } from "./diagnostics/userFacingErrors";
 
 /**
  * BACKLOG-2917: a short, log-safe description of a caught value.
@@ -1082,14 +1085,28 @@ export class BackupService extends EventEmitter {
         // "WillEncrypt")). Queried without the domain it is not found, which read as "off".
         // BACKLOG-3814: timed from before spawn(), which a security scan can hold.
         const spawnRequestedAt = Date.now();
-        const proc = spawn(ideviceinfo, [
-          "-u",
-          validatedUdid,
-          "-q",
-          "com.apple.mobile.backup",
-          "-k",
-          "WillEncrypt",
-        ]);
+        // BACKLOG-3953: on Windows spawn() THROWS for EPERM / UNKNOWN (see
+        // iphoneToolBlock.ts). Inside this executor that became a rejection, and the
+        // surrounding try/catch never saw it: the sync failed with "spawn EPERM".
+        let proc: ChildProcess;
+        try {
+          proc = spawn(ideviceinfo, [
+            "-u",
+            validatedUdid,
+            "-q",
+            "com.apple.mobile.backup",
+            "-k",
+            "WillEncrypt",
+          ]);
+        } catch (spawnError) {
+          const toolBlock = detectToolBlock("ideviceinfo", { error: spawnError });
+          log.error("[BackupService] Could not start ideviceinfo for the encryption check:", spawnError);
+          if (toolBlock) {
+            resolve({ ...unknown, toolBlock });
+            return;
+          }
+          throw spawnError;
+        }
         let output = "";
         let errorOutput = "";
 
@@ -1101,9 +1118,21 @@ export class BackupService extends EventEmitter {
           errorOutput += data.toString();
         });
 
+        let encryptionSpawnError: Error | null = null;
         proc.on("close", (code) => {
           const ranMs = Date.now() - spawnRequestedAt;
           if (ranMs >= TOOL_START_DELAYED_MS) logToolStartDelay("ideviceinfo", ranMs);
+          // BACKLOG-3953: the tool never started (file gone / launch refused).
+          if (code !== 0) {
+            const toolBlock = detectToolBlock(
+              "ideviceinfo",
+              encryptionSpawnError ? { error: encryptionSpawnError } : { exitCode: code },
+            );
+            if (toolBlock) {
+              resolve({ ...unknown, toolBlock });
+              return;
+            }
+          }
           const value = output.trim().toLowerCase();
           // An absent key (encryption never configured) prints nothing and exits 0.
           if (code === 0 && (value === "true" || value === "false" || value === "")) {
@@ -1125,7 +1154,9 @@ export class BackupService extends EventEmitter {
 
         proc.on("error", (error) => {
           log.error("[BackupService] Error checking encryption status:", error);
-          resolve(unknown);
+          encryptionSpawnError = error;
+          const toolBlock = detectToolBlock("ideviceinfo", { error });
+          resolve(toolBlock ? { ...unknown, toolBlock } : unknown);
         });
       });
     } catch (error) {
@@ -1195,6 +1226,12 @@ export class BackupService extends EventEmitter {
     // Check encryption status (TASK-007)
     // Note: checkEncryptionStatus also validates UDID, but we already validated above
     const encryptionInfo = await this.checkEncryptionStatus(validatedUdid);
+
+    // BACKLOG-3953: ideviceinfo never started, so idevicebackup2 (same folder, same
+    // DLLs) would not either. Stop here with the cause instead of an unnamed failure.
+    if (encryptionInfo.toolBlock) {
+      return this.toolBlockedResult(options.udid, encryptionInfo.toolBlock, 0);
+    }
 
     // BACKLOG-3881: Keepr does not read Apple-encrypted backups and never takes a password.
     // A phone with "Encrypt local backup" on is refused before anything is transferred.
@@ -1311,9 +1348,25 @@ export class BackupService extends EventEmitter {
         this.toolStartNoticeTimer = null;
       }
 
-      this.currentProcess = spawn(idevicebackup2, args, {
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      // BACKLOG-3953: spawn() THROWS on Windows for EPERM / UNKNOWN. isRunning is already
+      // true and no watchdog exists yet, so a throw here used to leave the service
+      // "Backup already in progress" for every later sync until the app restarted.
+      try {
+        this.currentProcess = spawn(idevicebackup2, args, {
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+      } catch (spawnError) {
+        this.isRunning = false;
+        this.currentDeviceUdid = null;
+        this.currentProcess = null;
+        log.error("[BackupService] Could not start idevicebackup2:", spawnError);
+        const toolBlock = detectToolBlock("idevicebackup2", { error: spawnError });
+        if (toolBlock) {
+          resolve(this.toolBlockedResult(options.udid, toolBlock, Date.now() - this.startTime));
+          return;
+        }
+        throw spawnError;
+      }
 
       // BACKLOG-2911 (FIX 2): ONE start path, here, covering the whole run.
       //
@@ -1519,8 +1572,12 @@ export class BackupService extends EventEmitter {
         }
       });
 
+      // BACKLOG-3953: kept for the close handler. A spawn ENOENT / EACCES arrives here
+      // and is followed by 'close' with a negative errno as the code.
+      let backupSpawnError: Error | null = null;
       this.currentProcess.on("error", (error: Error) => {
         log.error("[BackupService] Process error:", error);
+        backupSpawnError = error;
         this.emit("error", error);
       });
 
@@ -1739,14 +1796,25 @@ export class BackupService extends EventEmitter {
               exitCode: code,
             };
           } else {
-            const classification = this.classifyFailure(
-              code,
-              stdoutBuffer,
-              stderrBuffer,
+            // BACKLOG-3953: a tool that never started is named before anything reads
+            // its (empty) output. A tool that ran and failed is classified as before.
+            const toolBlock = detectToolBlock(
+              "idevicebackup2",
+              backupSpawnError ? { error: backupSpawnError } : { exitCode: code },
             );
-            errorMessage = classification.message;
-            errorCode = classification.errorCode;
-            failureCause = classification.cause;
+            if (toolBlock) {
+              errorMessage = formatToolBlockedError().description;
+              errorCode = "TOOL_BLOCKED";
+            } else {
+              const classification = this.classifyFailure(
+                code,
+                stdoutBuffer,
+                stderrBuffer,
+              );
+              errorMessage = classification.message;
+              errorCode = classification.errorCode;
+              failureCause = classification.cause;
+            }
           }
         }
 
@@ -1787,6 +1855,22 @@ export class BackupService extends EventEmitter {
         void onProcessClose(code);
       });
     });
+  }
+
+  /** BACKLOG-3953: the result for a backup whose tool never started. */
+  private toolBlockedResult(udid: string, toolBlock: ToolBlock, duration: number): BackupResult {
+    return {
+      success: false,
+      backupPath: null,
+      error: formatToolBlockedError().description,
+      errorCode: "TOOL_BLOCKED",
+      duration,
+      deviceUdid: udid,
+      isIncremental: false,
+      backupSize: 0,
+      isEncrypted: false,
+      toolBlock,
+    };
   }
 
   /**
