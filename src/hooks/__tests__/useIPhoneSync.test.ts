@@ -1285,6 +1285,49 @@ describe("useIPhoneSync", () => {
     });
   });
 
+  // BACKLOG-3953: main sends tools-blocked (Windows) when an iPhone tool never started.
+  // This listener is the renderer caller of `device:tools-blocked`.
+  describe("tools-blocked user error (BACKLOG-3953)", () => {
+    it("shows main's restore steps, never the install-iTunes text", () => {
+      let blockedCallback: ((d: { userError: { title: string; description: string; actionSuggestion: string; code: string } }) => void) | null = null;
+      (window as any).api = {
+        device: {
+          startDetection: jest.fn(),
+          stopDetection: jest.fn(),
+          onConnected: jest.fn(() => jest.fn()),
+          onDisconnected: jest.fn(() => jest.fn()),
+          onToolsMissing: jest.fn(() => jest.fn()),
+          onToolsBlocked: jest.fn((cb: typeof blockedCallback) => {
+            blockedCallback = cb;
+            return jest.fn();
+          }),
+          onToolsAvailable: jest.fn(() => jest.fn()),
+        },
+        backup: {
+          start: jest.fn(),
+          startWithPassword: jest.fn(),
+          cancel: jest.fn(),
+          onProgress: jest.fn(() => jest.fn()),
+          onError: jest.fn(() => jest.fn()),
+          checkStatus: jest.fn().mockResolvedValue({ success: true, lastSyncTime: null }),
+        },
+      };
+      setMockPlatform("windows");
+      const { result } = renderHook(() => useIPhoneSync());
+      const userError = {
+        code: "SECURITY_SOFTWARE_BLOCKED",
+        title: "Your antivirus blocked Keepr's iPhone tools",
+        description: "d",
+        actionSuggestion: "1. a\nIf this keeps happening, contact support.",
+      };
+      act(() => {
+        blockedCallback?.({ userError });
+      });
+      expect(result.current.userError).toEqual(userError);
+      expect(result.current.userError?.actionSuggestion).not.toMatch(/iTunes/);
+    });
+  });
+
   // BACKLOG-1702: tools-missing prompt must be platform-correct.
   // On macOS it should point at libimobiledevice (brew); on Windows it should
   // keep the existing iTunes / Microsoft Store guidance.
