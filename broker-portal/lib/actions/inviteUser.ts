@@ -39,11 +39,27 @@ interface InviteUserResult {
    */
   emailOutcome?: 'sent' | 'queued' | 'skipped' | 'failed';
   error?: string;
+  /** BACKLOG-3851: the organization has no free licence; show the out-of-licenses prompt. */
+  outOfSeats?: boolean;
 }
 
 // ============================================================================
 // Validation Helpers
 // ============================================================================
+
+/**
+ * BACKLOG-3851: the two database refusals that mean "no free licence" on an
+ * invite insert. Matched on code AND message: 42501 is also used for other
+ * refusals (a malformed row, row-level security), which stay errors.
+ *   - insert guard (guard_invite_acceptance): 42501 'Organization has reached maximum seats'
+ *   - seat trigger, a race loser under the lock: P0001 'seat_limit_reached'
+ */
+function isInviteSeatRefusal(error: { code?: string; message?: string }): boolean {
+  return (
+    (error.code === '42501' && error.message === 'Organization has reached maximum seats') ||
+    (error.code === 'P0001' && error.message === 'seat_limit_reached')
+  );
+}
 
 /**
  * Basic email format validation
@@ -134,25 +150,15 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
     }
   }
 
-  // Check organization seat limits (optional - get org info)
+  // Organization name, for the invite email.
+  // BACKLOG-3851: no portal seat count here. The database decides, with its own
+  // rule (an expired, unclaimed invite holds no seat): the insert guard refuses
+  // a full organization, and the seat trigger refuses again under the lock.
   const { data: organization } = await supabase
     .from('organizations')
-    .select('name, max_seats')
+    .select('name')
     .eq('id', input.organizationId)
     .maybeSingle();
-
-  if (organization?.max_seats) {
-    // Count current members (active + pending)
-    const { count: memberCount } = await supabase
-      .from('organization_members')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', input.organizationId)
-      .in('license_status', ['active', 'pending']);
-
-    if (memberCount && memberCount >= organization.max_seats) {
-      return { success: false, error: 'Organization has reached maximum seats' };
-    }
-  }
 
   // Generate secure invitation token
   const invitationToken = randomBytes(32).toString('hex');
@@ -175,6 +181,9 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
     });
 
   if (insertError) {
+    if (isInviteSeatRefusal(insertError)) {
+      return { success: false, outOfSeats: true };
+    }
     Sentry.captureException(insertError, {
       tags: { action: 'invite_user' },
       extra: { email: normalizedEmail, organizationId: input.organizationId },

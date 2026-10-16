@@ -18,6 +18,11 @@ import { Card } from '@/components/ui/Card';
 import EditRoleModal from './EditRoleModal';
 import DeactivateUserModal from './DeactivateUserModal';
 import RemoveUserModal from './RemoveUserModal';
+import ReactivateUserModal from './ReactivateUserModal';
+import UnassignLicenseModal from './UnassignLicenseModal';
+import OutOfLicensesNotice from './OutOfLicensesNotice';
+import { setMemberLicense } from '@/lib/actions/memberLicense';
+import { MEMBER_LICENSE_ACTION_LABELS, memberRowActions } from '@/lib/users/memberLicenseActions';
 import type { Role, MemberLicenseStatus, ProvisioningSource } from '@/lib/types/users';
 import { ROLE_LABELS, LICENSE_STATUS_LABELS, PROVISIONING_SOURCE_LABELS } from '@/lib/types/users';
 import { formatUserDisplayName, getUserInitials } from '@/lib/utils/userDisplay';
@@ -134,11 +139,36 @@ export default function UserDetailsCard({
   const [showEditRole, setShowEditRole] = useState(false);
   const [showDeactivate, setShowDeactivate] = useState(false);
   const [showRemove, setShowRemove] = useState(false);
+  const [showReactivate, setShowReactivate] = useState(false);
+  const [showUnassign, setShowUnassign] = useState(false);
+  const [assignOutOfSeats, setAssignOutOfSeats] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
 
   const isCurrentUser = member.user_id === currentUserId;
   const isPending = !member.user_id;
   const canManage = ['admin', 'it_admin'].includes(currentUserRole) && !isCurrentUser;
-  const isSuspended = member.license_status === 'suspended';
+  // BACKLOG-3851: the same rule as the list menu (lib/users/memberLicenseActions.ts).
+  const { licenseAction, showDeactivate: deactivateAllowed } = memberRowActions({
+    licenseStatus: member.license_status,
+    isClaimed: !isPending,
+    targetRole: member.role,
+    callerRole: currentUserRole,
+  });
+
+  const handleAssign = async () => {
+    setAssignOutOfSeats(false);
+    setAssignError(null);
+    const result = await setMemberLicense({ memberId: member.id, action: 'assign' });
+    if (result.success) router.refresh();
+    else if (result.outOfSeats) setAssignOutOfSeats(true);
+    else setAssignError(result.error ?? 'An unexpected error occurred');
+  };
+
+  const handleLicenseAction = () => {
+    if (licenseAction === 'assign') void handleAssign();
+    else if (licenseAction === 'unassign') setShowUnassign(true);
+    else if (licenseAction === 'reactivate') setShowReactivate(true);
+  };
 
   // Format display values
   const userOrNull = member.user ?? null;
@@ -151,6 +181,8 @@ export default function UserDetailsCard({
     setShowEditRole(false);
     setShowDeactivate(false);
     setShowRemove(false);
+    setShowReactivate(false);
+    setShowUnassign(false);
     if (shouldRefresh) {
       router.refresh();
     }
@@ -209,7 +241,12 @@ export default function UserDetailsCard({
               <Button onClick={() => setShowEditRole(true)}>
                 Change Role
               </Button>
-              {!isPending && !isSuspended && (
+              {licenseAction && (
+                <Button variant="secondary" onClick={handleLicenseAction}>
+                  {MEMBER_LICENSE_ACTION_LABELS[licenseAction]}
+                </Button>
+              )}
+              {deactivateAllowed && (
                 <Button variant="warning" onClick={() => setShowDeactivate(true)}>
                   Deactivate
                 </Button>
@@ -220,6 +257,17 @@ export default function UserDetailsCard({
             </div>
           )}
         </div>
+
+        {assignOutOfSeats && (
+          <div className="mb-6">
+            <OutOfLicensesNotice callerRole={currentUserRole} />
+          </div>
+        )}
+        {assignError && (
+          <p className="mb-6 text-sm text-red-600" role="alert">
+            {assignError}
+          </p>
+        )}
 
         {/* Details Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -349,6 +397,19 @@ export default function UserDetailsCard({
       />
       <DeactivateUserModal
         isOpen={showDeactivate}
+        onClose={() => handleModalClose()}
+        memberId={member.id}
+        memberName={displayName}
+      />
+      <ReactivateUserModal
+        isOpen={showReactivate}
+        onClose={() => handleModalClose()}
+        memberId={member.id}
+        memberName={displayName}
+        callerRole={currentUserRole}
+      />
+      <UnassignLicenseModal
+        isOpen={showUnassign}
         onClose={() => handleModalClose()}
         memberId={member.id}
         memberName={displayName}

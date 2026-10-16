@@ -16,6 +16,7 @@ import { ROLE_LABELS, LICENSE_STATUS_LABELS } from '@/lib/types/users';
 import type { MemberLicenseStatus, OrganizationMember, Role } from '@/lib/types/users';
 import { formatUserDisplayName, getUserInitials } from '@/lib/utils/userDisplay';
 import { formatDate } from '@/lib/utils';
+import type { MemberLicenseAction } from '@/lib/users/memberLicenseActions';
 
 interface UserTableRowProps {
   member: OrganizationMember;
@@ -27,6 +28,8 @@ interface UserTableRowProps {
   onResendInvite: () => void;
   onDeactivate: () => void;
   onRemove: () => void;
+  callerRole?: string;
+  onLicenseAction?: (action: MemberLicenseAction) => void;
 }
 
 const ROLE_HUES: Record<Role, BadgeHue> = {
@@ -54,6 +57,8 @@ export default function UserTableRow({
   onResendInvite,
   onDeactivate,
   onRemove,
+  callerRole,
+  onLicenseAction,
 }: UserTableRowProps) {
   const userOrNull = member.user ?? null;
   const displayName = formatUserDisplayName(userOrNull, member.invited_email);
@@ -125,6 +130,10 @@ export default function UserTableRow({
               onResendInvite={onResendInvite}
               onDeactivate={onDeactivate}
               onRemove={onRemove}
+              memberLicenseStatus={member.license_status}
+              targetRole={member.role}
+              callerRole={callerRole}
+              onLicenseAction={onLicenseAction}
             />
           )}
         </td>

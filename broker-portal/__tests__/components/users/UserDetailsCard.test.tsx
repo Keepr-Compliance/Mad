@@ -399,25 +399,6 @@ describe('UserDetailsCard Logic', () => {
     });
   });
 
-  describe('suspended user handling', () => {
-    it('should detect suspended users', () => {
-      const member = createMockMemberDetails({ license_status: 'suspended' });
-
-      const isSuspended = member.license_status === 'suspended';
-      expect(isSuspended).toBe(true);
-    });
-
-    it('should not show deactivate button for already suspended users', () => {
-      const member = createMockMemberDetails({ license_status: 'suspended' });
-
-      const isSuspended = member.license_status === 'suspended';
-      const isPending = !member.user_id;
-      const showDeactivate = !isPending && !isSuspended;
-
-      expect(showDeactivate).toBe(false);
-    });
-  });
-
   describe('role colors mapping', () => {
     const ROLE_COLORS: Record<Role, string> = {
       admin: 'bg-purple-100 text-purple-800',

@@ -22,6 +22,8 @@ interface ResendInviteInput {
 interface ResendInviteResult {
   success: boolean;
   error?: string;
+  /** BACKLOG-3851: the organization has no free licence; show the out-of-licenses prompt. */
+  outOfSeats?: boolean;
 }
 
 export async function resendInvite(input: ResendInviteInput): Promise<ResendInviteResult> {
@@ -73,6 +75,12 @@ export async function resendInvite(input: ResendInviteInput): Promise<ResendInvi
     .eq('id', input.memberId);
 
   if (updateError) {
+    // BACKLOG-3851: an expired invite holds no seat, so renewing it in a full
+    // organization is refused by the seat trigger. Only that refusal is the
+    // out-of-licenses prompt; the insert guard does not count seats on update.
+    if (updateError.code === 'P0001' && updateError.message === 'seat_limit_reached') {
+      return { success: false, outOfSeats: true };
+    }
     Sentry.captureException(updateError, {
       tags: { action: 'resend_invite' },
       extra: { memberId: input.memberId, organizationId: input.organizationId },
