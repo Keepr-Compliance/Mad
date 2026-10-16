@@ -888,11 +888,25 @@ export function LoadingOrchestrator({
       const getInitStage = window.api?.system?.getInitStage;
       if (!getInitStage) return;
       const DB_READY_STAGES = new Set(["db-ready", "complete"]);
-      const IN_PROGRESS_STAGES = new Set(["starting", "db-opening", "migrating", "creating-user"]);
+      const IN_PROGRESS_STAGES = new Set([
+        "starting",
+        "db-opening",
+        "db-waiting", // BACKLOG-3952: waiting for a read-only database
+        "migrating",
+        "creating-user",
+      ]);
       const POLL_INTERVAL_MS = 250;
       const MAX_WAIT_MS = 10_000;
+      // BACKLOG-3952: while the main process reports "db-waiting" (a read-only
+      // database it keeps retrying), the bound stretches to this. Must be >=
+      // DB_WAIT_DEPENDENT_TIMEOUT_MS in electron/services/db/dbWriteRetry.ts
+      // (120 s = 90 s retry budget + 30 s); the renderer cannot import from
+      // electron/, so the number is repeated here. A hung IPC call never
+      // reports db-waiting, so it still ends at MAX_WAIT_MS.
+      const DB_WAITING_MAX_WAIT_MS = 120_000;
       const PER_CALL_TIMEOUT_MS = 2_000;
-      const deadline = Date.now() + MAX_WAIT_MS;
+      const startedAt = Date.now();
+      let deadline = startedAt + MAX_WAIT_MS;
 
       // BACKLOG-2171: getInitStage() is an IPC round-trip; if it never
       // settles, a bare `await` inside the loop would block past `deadline`
@@ -922,6 +936,9 @@ export function LoadingOrchestrator({
         if (DB_READY_STAGES.has(result.stage) || result.stage === "error") return;
         if (IN_PROGRESS_STAGES.has(result.stage)) {
           sawInProgress = true;
+          if (result.stage === "db-waiting") {
+            deadline = Math.max(deadline, startedAt + DB_WAITING_MAX_WAIT_MS);
+          }
         } else if (!sawInProgress) {
           // Still idle and never observed to be in progress — deferred init
           // (or init that hasn't started yet). Don't wait for a broadcast

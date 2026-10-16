@@ -45,6 +45,13 @@ import {
   OPEN_REFUSED_MESSAGE,
 } from "../services/openablePaths";
 import type { User, OAuthProvider } from "../types/models";
+import { DB_WAIT_DEPENDENT_TIMEOUT_MS } from "../services/db/dbWriteRetry";
+
+// BACKLOG-3952: a second caller waits as long as anything else that waits on
+// database startup (was 100 polls = 10 s, shorter than the read-only retry
+// budget). See the header of services/db/dbWriteRetry.ts.
+const DUPLICATE_INIT_POLL_MS = 100;
+const DUPLICATE_INIT_WAIT_POLLS = Math.ceil(DB_WAIT_DEPENDENT_TIMEOUT_MS / DUPLICATE_INIT_POLL_MS);
 
 // ============================================
 // SHARED STATE
@@ -502,8 +509,8 @@ export function registerSystemHandlers(): void {
         );
         // Wait for current initialization to complete (poll every 100ms)
         let waitCount = 0;
-        while (isInitializing && waitCount < 100) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
+        while (isInitializing && waitCount < DUPLICATE_INIT_WAIT_POLLS) {
+          await new Promise((resolve) => setTimeout(resolve, DUPLICATE_INIT_POLL_MS));
           waitCount++;
         }
         return {
@@ -774,8 +781,8 @@ export function registerSystemHandlers(): void {
           "System",
         );
         let waitCount = 0;
-        while (isInitializing && waitCount < 100) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
+        while (isInitializing && waitCount < DUPLICATE_INIT_WAIT_POLLS) {
+          await new Promise((resolve) => setTimeout(resolve, DUPLICATE_INIT_POLL_MS));
           waitCount++;
         }
         return {

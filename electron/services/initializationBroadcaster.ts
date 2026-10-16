@@ -11,6 +11,7 @@
 import { hostLogger } from "../capabilities/loggerProvider";
 import { hostErrorReporter } from "../capabilities/errorReporterProvider";
 import { hostWindows } from "../capabilities/windowsProvider";
+import { DB_WAIT_DEPENDENT_TIMEOUT_MS } from "./db/dbWriteRetry";
 
 // ============================================
 // TYPE DEFINITIONS
@@ -20,6 +21,7 @@ export type InitStage =
   | "idle"
   | "starting"
   | "db-opening"
+  | "db-waiting"
   | "migrating"
   | "db-ready"
   | "creating-user"
@@ -56,7 +58,11 @@ export const INIT_STAGE_CHANNEL = "system:init-stage";
  * (memory-pressured) inits should still finish well under this; the bound only
  * exists so a stuck init surfaces a real outcome rather than a hang.
  */
-export const DEFAULT_DB_READY_TIMEOUT_MS = 30_000;
+export const DEFAULT_DB_READY_TIMEOUT_MS = DB_WAIT_DEPENDENT_TIMEOUT_MS;
+// BACKLOG-3952: was 30 s. Opening can now wait up to DB_WRITE_RETRY_BUDGET_MS
+// (90 s) for a read-only database; this bound is that budget plus the old
+// 30 s, so a waiter is still waiting when the retry loop finishes. See the
+// header of db/dbWriteRetry.ts for how the limits relate.
 
 /** Result of awaiting the DB-ready signal. */
 export interface DbReadyResult {
@@ -85,6 +91,10 @@ const DB_QUERYABLE_STAGES: ReadonlySet<InitStage> = new Set<InitStage>([
 const DB_IN_PROGRESS_STAGES: ReadonlySet<InitStage> = new Set<InitStage>([
   "starting",
   "db-opening",
+  // BACKLOG-3952 (SR R1): opening is waiting for a read-only database. Init is
+  // in flight; without this entry every db-ready waiter would get
+  // { ready: false } at once and fall back (the BACKLOG-1842 shape).
+  "db-waiting",
   "migrating",
   "creating-user",
 ]);
