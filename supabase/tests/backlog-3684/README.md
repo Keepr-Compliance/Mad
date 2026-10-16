@@ -4,10 +4,12 @@ Controls, mutants, drift, rollback for:
 
 | File | Role |
 |---|---|
-| `20261016140000_backlog_3684_accept_invitation.sql` (A) | additive: `accept_invitation(text, text)`, `_invite_bind_tenant(uuid, text)`, `caller_has_pending_invite()` |
-| `20261016140100_backlog_3684_email_claims_off.sql` (B) | subtractive: `auto_provision_it_admin` accepts no invitation; `claim_pending_invite()` EXECUTE withdrawn from `authenticated`; policies `users_can_accept_invite` and `users_can_view_own_invite` set to `false` |
+| `20261016075118_backlog_3684_accept_invitation.sql` (A) | additive: `accept_invitation(text, text)`, `_invite_bind_tenant(uuid, text)`, `caller_has_pending_invite()` |
+| `20261016075231_backlog_3684_email_claims_off.sql` (B) | subtractive: `auto_provision_it_admin` accepts no invitation; `claim_pending_invite()` EXECUTE withdrawn from `authenticated`; policies `users_can_accept_invite` and `users_can_view_own_invite` set to `false` |
 
 Apply order: A, then the portal that calls it, then B. B's pre-check aborts without A.
+The file versions are the ones `apply_migration` stamped on keepr-test (2026-10-16); the
+claims recorded on the item were 20261016140000 / 20261016140100.
 
 ## Venue
 

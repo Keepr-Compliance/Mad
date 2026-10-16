@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # BACKLOG-3684 harness: an invitation is accepted through its invitation link.
-#   A = supabase/migrations/20261016140000_backlog_3684_accept_invitation.sql (additive)
-#   B = supabase/migrations/20261016140100_backlog_3684_email_claims_off.sql (subtractive)
+#   A = supabase/migrations/20261016075118_backlog_3684_accept_invitation.sql (additive)
+#   B = supabase/migrations/20261016075231_backlog_3684_email_claims_off.sql (subtractive)
 #
 # A thin wrapper over ../backlog-3851/run.sh `one` / `sql`: every run is ONE transaction
 # that ends in ROLLBACK, after the 3851 prelude. Stack: M1, ../backlog-3851-setup/lib/
@@ -24,8 +24,8 @@ SET="$REPO/supabase/tests/backlog-3851-setup"
 M1="$M/20261015152446_backlog_3851_license_model.sql"
 M2="$M/20261016100100_backlog_3851_paygo_revert.sql"
 S="$M/20261016054316_backlog_3851_setup_completes_invite.sql"
-A_SRC="$M/20261016140000_backlog_3684_accept_invitation.sql"
-B_SRC="$M/20261016140100_backlog_3684_email_claims_off.sql"
+A_SRC="$M/20261016075118_backlog_3684_accept_invitation.sql"
+B_SRC="$M/20261016075231_backlog_3684_email_claims_off.sql"
 A="${A_OVERRIDE:-$A_SRC}"; B="${B_OVERRIDE:-$B_SRC}"
 PIN="$SET/lib/pin-setup.sql"; HLP="$SET/lib/helpers-setup.sql"; H84="$HERE/lib/helpers-3684.sql"
 RBA="$HERE/rollback-3684-a.sql"; RBB="$HERE/rollback-3684-b.sql"

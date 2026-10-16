@@ -1,7 +1,7 @@
 -- BACKLOG-3684 (file A of 2, additive): an invitation is accepted through its invitation link.
 --
 -- Adds three functions. Changes nothing that exists, so applying this file changes no
--- behaviour for anyone. File B (20261016140100) withdraws the email-only paths and must
+-- behaviour for anyone. File B (20261016075231) withdraws the email-only paths and must
 -- be applied only after the portal that calls these functions is live.
 --
 -- 1. Pre-check: each of the three functions is absent, or present with exactly this

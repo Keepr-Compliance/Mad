@@ -1,7 +1,7 @@
 -- BACKLOG-3684 (file B of 2, subtractive): an invitation is no longer accepted by email alone.
 --
 -- Apply ONLY after the portal that calls public.accept_invitation is live (file A,
--- 20261016140000, must already be applied; the pre-check aborts otherwise).
+-- *_backlog_3684_accept_invitation.sql, must already be applied; the pre-check aborts otherwise).
 --
 -- 1. Pre-check, aborts on anything else:
 --    auto_provision_it_admin md5 = 0ca68b8cee9820322274e1f1a4817b0a (20261016054316) or this
@@ -70,7 +70,7 @@ BEGIN
        IS DISTINCT FROM 'fba28792ffecd1f21a98ba0c931b515f'
      OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.caller_has_pending_invite()'))
        IS DISTINCT FROM '93d54ab5f4f1d9c81347dcb66a698cd2' THEN
-    RAISE EXCEPTION '3684 B pre-check: file A (20261016140000) is not applied with its expected bodies';
+    RAISE EXCEPTION '3684 B pre-check: file A (backlog_3684_accept_invitation) is not applied with its expected bodies';
   END IF;
 END $pre$;
 

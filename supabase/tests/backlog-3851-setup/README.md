@@ -66,7 +66,7 @@ X6 no unique_violation handler → s14 (race.sh); X7 no inactive check → s19; 
 s19; X8 case-sensitive held check → s20; X9 unconditional users INSERT → s18; X10 no
 personal-organization filter → s15.
 
-## Superseded by BACKLOG-3684 file B (20261016140100)
+## Superseded by BACKLOG-3684 file B (20261016075231)
 
 After B, `auto_provision_it_admin` accepts no invitation; s03, s04, s05, s06, s07, s08, s09,
 s13 (c4 leg), s15, s16, s17 and s20 go red by design. See `../backlog-3684/README.md`.

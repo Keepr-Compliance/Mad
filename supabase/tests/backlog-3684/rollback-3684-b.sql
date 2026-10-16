@@ -1,4 +1,4 @@
--- BACKLOG-3684 rollback of file B (20261016140100). Restores, verbatim:
+-- BACKLOG-3684 rollback of file B (20261016075231). Restores, verbatim:
 --   auto_provision_it_admin body of 20261016054316 (md5 0ca68b8cee9820322274e1f1a4817b0a);
 --   EXECUTE on claim_pending_invite() for authenticated;
 --   policy users_can_accept_invite USING + WITH CHECK, and users_can_view_own_invite USING,

@@ -1,4 +1,4 @@
--- BACKLOG-3684 rollback of file A (20261016140000). Removes the three functions file A
+-- BACKLOG-3684 rollback of file A (20261016075118). Removes the three functions file A
 -- added (new objects only). Refuses while file B is in force: run rollback-3684-b.sql first.
 
 DO $pre$
