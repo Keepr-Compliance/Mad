@@ -119,7 +119,7 @@ const EMAIL_COLUMNS_LIGHT = sql`id, user_id, external_id, source, account_id, di
  * @param emailData - The email content to store
  * @returns The created email with generated ID
  */
-export async function createEmail(emailData: NewEmail): Promise<Email> {
+export function createEmailSync(emailData: NewEmail): Email {
   const id = crypto.randomUUID();
 
   const statement = sql`
@@ -281,6 +281,18 @@ export async function createEmail(emailData: NewEmail): Promise<Email> {
   };
 
   return email;
+}
+
+/**
+ * BACKLOG-3221 — the promise-returning seam over `createEmailSync`.
+ *
+ * PLAIN `Promise.resolve`, NOT `async`, for the reason documented at
+ * `deleteCommunicationByMessageId` in communicationDbService.ts (BACKLOG-2547):
+ * an unawaited call inside a transaction body must throw synchronously so
+ * SQLite rolls back, rather than reject and let the transaction commit.
+ */
+export function createEmail(emailData: NewEmail): Promise<Email> {
+  return Promise.resolve(createEmailSync(emailData));
 }
 
 /**

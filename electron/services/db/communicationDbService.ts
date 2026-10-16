@@ -80,9 +80,9 @@ import { dealLockReason } from "../transactionEligibility";
  * 1. Messages already exist in messages table (imported from device)
  * 2. Call this function with message_id or thread_id set
  */
-export async function createCommunication(
+export function createCommunicationSync(
   communicationData: NewCommunication,
-): Promise<CommunicationRow> {
+): CommunicationRow {
   const id = crypto.randomUUID();
 
   // BACKLOG-506: Pure junction table.
@@ -169,6 +169,20 @@ export async function createCommunication(
   }
 
   return communication;
+}
+
+/**
+ * BACKLOG-3221 — the promise-returning seam over `createCommunicationSync`.
+ *
+ * PLAIN `Promise.resolve`, NOT `async`, for the reason documented at
+ * `deleteCommunicationByMessageId` in communicationDbService.ts (BACKLOG-2547):
+ * an unawaited call inside a transaction body must throw synchronously so
+ * SQLite rolls back, rather than reject and let the transaction commit.
+ */
+export function createCommunication(
+  communicationData: NewCommunication,
+): Promise<CommunicationRow> {
+  return Promise.resolve(createCommunicationSync(communicationData));
 }
 
 /**
