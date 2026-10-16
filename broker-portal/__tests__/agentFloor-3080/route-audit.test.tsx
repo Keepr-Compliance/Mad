@@ -736,6 +736,9 @@ const KNOWN_ROUTE_HANDLERS = [
   'app/api/cron/payment-reconcile/route.ts',
   'app/api/download/route.ts',
   'app/api/email/internal-invite/route.ts',
+  // BACKLOG-3851 PR-2c: POST only, x-api-secret callers only (the scim Edge
+  // Function); no session path, no request-supplied ids.
+  'app/api/email/seat-limit-reached/route.ts',
   'app/api/email/send-download-invite/route.ts',
   'app/api/email/send-invite/route.ts',
   'app/api/email/ticket-confirmation/route.ts',
@@ -927,7 +930,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(23);
+    expect(handlers.length).toBe(24); // BACKLOG-3851 PR-2c: + email/seat-limit-reached
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {
