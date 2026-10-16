@@ -46,12 +46,14 @@ export {
   resetContactLinkingOnLogout,
   resetFeatureGateOnLogout,
   resetChecklistTemplatesOnLogout,
+  resetMailboxReachabilityOnLogout,
 } from "./sessionSignOut";
 import {
   stopShadowDeltaSyncOnLogout,
   resetContactLinkingOnLogout,
   resetFeatureGateOnLogout,
   resetChecklistTemplatesOnLogout,
+  resetMailboxReachabilityOnLogout,
   signOutLocalSession,
   wasSignedOutHere,
 } from "./sessionSignOut";
@@ -1128,6 +1130,7 @@ async function handleForceLogout(): Promise<AuthResponse> {
     resetContactLinkingOnLogout();
     resetFeatureGateOnLogout();
     resetChecklistTemplatesOnLogout();
+    resetMailboxReachabilityOnLogout();
 
     await logService.info("Force logout completed successfully", "AuthHandlers");
     return { success: true };
@@ -1210,6 +1213,7 @@ async function handleSignOutAllDevices(): Promise<AuthResponse> {
     stopShadowDeltaSyncOnLogout();
     resetFeatureGateOnLogout();
     resetChecklistTemplatesOnLogout();
+    resetMailboxReachabilityOnLogout();
 
     await logService.info("Global sign-out completed successfully", "SessionHandlers");
     return { success: true };

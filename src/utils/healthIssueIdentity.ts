@@ -64,9 +64,16 @@ import type { HealthIssue } from "../../electron/types/ipc/healthIssue";
  * "reconnect", two different rows for one provider would collapse to one
  * identity and dismissing one would hide the other. At that point the identity
  * must include the action, or the variant must split.
+ *
+ * BACKLOG-3954 split the first such variant: PROVIDER_UNREACHABLE ("Can't reach
+ * Microsoft") has no button at all. Sharing `connection:<provider>` with the
+ * Reconnect row would let a dismissed "Can't reach" hide a later Reconnect
+ * row, so it gets `connection:<provider>:unreachable`.
  */
-function connectionIdentity(provider: "google" | "microsoft"): string {
-  return `connection:${provider}`;
+function connectionIdentity(provider: "google" | "microsoft", type: unknown): string {
+  return type === "PROVIDER_UNREACHABLE"
+    ? `connection:${provider}:unreachable`
+    : `connection:${provider}`;
 }
 
 /**
@@ -82,7 +89,7 @@ function connectionIdentity(provider: "google" | "microsoft"): string {
 export function identityOf(issue: HealthIssue): string | null {
   // Checked first: a connection issue carries `type` as well, and provider is
   // the discriminator that matters for it.
-  if (issue.provider) return connectionIdentity(issue.provider);
+  if (issue.provider) return connectionIdentity(issue.provider, issue.type);
   if (issue.errorCode) return `permission:${issue.errorCode}`;
   if (issue.type) return `probe:${issue.type}`;
   return null;

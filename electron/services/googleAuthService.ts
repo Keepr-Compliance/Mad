@@ -16,7 +16,11 @@ import * as Sentry from "@sentry/electron/main";
 import axios, { AxiosError } from "axios";
 import crypto from "crypto";
 import http from "http";
-import { isTransientRefreshFailure } from "./oauthRefreshFailure";
+import {
+  isTransientRefreshFailure,
+  refreshFailureCause,
+  type RefreshAccessTokenResult,
+} from "./oauthRefreshFailure";
 import url from "url";
 import databaseService from "./databaseService";
 import logService from "./logService";
@@ -694,7 +698,12 @@ class GoogleAuthService {
       logService.error("[GoogleAuth] Token refresh failed:", "GoogleAuth", {
         error: axiosError.response?.data || axiosError.message || error,
       });
-      Sentry.captureException(error, { tags: { service: "google-auth", operation: "refreshToken" } });
+      // BACKLOG-3954: a refresh that could not REACH the provider is counted by
+      // connectionStatusService, which reports once per streak. Only a real
+      // rejection is captured here, so a 2-minute poll no longer sends one event per poll.
+      if (!isTransientRefreshFailure(error)) {
+        Sentry.captureException(error, { tags: { service: "google-auth", operation: "refreshToken" } });
+      }
       throw error;
     }
   }
@@ -706,7 +715,7 @@ class GoogleAuthService {
    */
   async refreshAccessToken(
     userId: string,
-  ): Promise<{ success: boolean; error?: string; unreachable?: boolean }> {
+  ): Promise<RefreshAccessTokenResult> {
     try {
       logService.info("[GoogleAuth] Refreshing access token for user:", "GoogleAuth", { userId });
 
@@ -753,6 +762,8 @@ class GoogleAuthService {
         error: error instanceof Error ? error.message : "Unknown error",
         // BACKLOG-3799: network / TLS / 5xx — the grant is still good.
         unreachable: isTransientRefreshFailure(error),
+        // BACKLOG-3954: allow-listed network code for the once-per-streak report.
+        cause: refreshFailureCause(error),
       };
     }
   }
