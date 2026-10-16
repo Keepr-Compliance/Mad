@@ -19,7 +19,7 @@ const PASS_THROUGH_ERRORS = new Set(['not_authorized']);
 
 /**
  * BACKLOG-3851 PR-2d: `?next=setup` sends the signed-out browser to /setup
- * instead of /login. The Settings page "Connect Microsoft" button uses it: an
+ * instead of /login. The Settings page "Connect company account" button uses it: an
  * admin whose brokerage has no Microsoft organization linked signs in on /setup,
  * whose callback links it. Middleware sends a signed-in user away from /setup,
  * so the sign-out has to come first. Only this one value is accepted.

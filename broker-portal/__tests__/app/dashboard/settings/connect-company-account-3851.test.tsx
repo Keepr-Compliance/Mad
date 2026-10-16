@@ -1,9 +1,10 @@
 /**
- * Desktop App Permissions card — "Connect Microsoft". BACKLOG-3851 PR-2d.
+ * Desktop App Permissions card — "Connect company account". BACKLOG-3851 PR-2d.
  *
  * An admin whose brokerage has no Microsoft organization linked used to see
  * "Microsoft tenant not configured. Please contact support." Since /setup links
- * the organization for an admin, the card offers "Connect Microsoft" instead:
+ * the organization for an admin, the card offers "Connect company account"
+ * (Microsoft only today; the label leaves room for Google Workspace) instead:
  * it sends the browser to /auth/logout?next=setup, which signs out and opens
  * /setup (middleware sends a signed-in user away from /setup). The logout half
  * is tested in __tests__/agentFloor-3080/logout.test.ts.
@@ -48,7 +49,10 @@ const VIEW: OrgSettingsFeatureView = {
 };
 
 const HEADING = 'Desktop App Permissions';
-const CONNECT = /connect microsoft/i;
+// Literal on purpose: the test pins the founder's copy, not the constant.
+const CONNECT = 'Connect company account';
+const LINE =
+  "Connect your brokerage's Microsoft 365 account so team members can connect their Outlook in the desktop app. Google Workspace support is coming.";
 const GRANT = /grant permissions with microsoft/i;
 const OLD_COPY = 'Microsoft tenant not configured. Please contact support.';
 const ORIGINAL_CLIENT_ID = process.env.NEXT_PUBLIC_DESKTOP_CLIENT_ID;
@@ -73,19 +77,17 @@ afterAll(() => {
   process.env.NEXT_PUBLIC_DESKTOP_CLIENT_ID = ORIGINAL_CLIENT_ID;
 });
 
-describe('Desktop App Permissions — Connect Microsoft (BACKLOG-3851 PR-2d)', () => {
-  it('no Microsoft organization linked: shows Connect Microsoft and the new line, not the old copy', async () => {
+describe('Desktop App Permissions — Connect company account (BACKLOG-3851 PR-2d)', () => {
+  it('no Microsoft organization linked: shows Connect company account and the line, not the old copy', async () => {
     render(<OrgSettingsClient features={VIEW} />);
     await screen.findByText(HEADING);
     expect(screen.getByRole('button', { name: CONNECT })).toBeEnabled();
-    expect(
-      screen.getByText('Connect your brokerage to Microsoft to grant desktop permissions.')
-    ).toBeInTheDocument();
+    expect(screen.getByText(LINE)).toBeInTheDocument();
     expect(screen.queryByText(OLD_COPY)).toBeNull();
     expect(screen.queryByRole('button', { name: GRANT })).toBeNull();
   });
 
-  it('organization linked: shows Grant, no Connect Microsoft', async () => {
+  it('organization linked: shows Grant, no Connect company account', async () => {
     mockConsent = { ...mockConsent, tenantId: 'tenant-fixture' };
     render(<OrgSettingsClient features={VIEW} />);
     await screen.findByText(HEADING);
@@ -93,7 +95,7 @@ describe('Desktop App Permissions — Connect Microsoft (BACKLOG-3851 PR-2d)', (
     expect(screen.queryByRole('button', { name: CONNECT })).toBeNull();
   });
 
-  it('organization linked but no desktop client id: no Connect Microsoft, no Grant', async () => {
+  it('organization linked but no desktop client id: no Connect company account, no Grant', async () => {
     mockConsent = { ...mockConsent, tenantId: 'tenant-fixture' };
     process.env.NEXT_PUBLIC_DESKTOP_CLIENT_ID = '';
     render(<OrgSettingsClient features={VIEW} />);
@@ -105,7 +107,7 @@ describe('Desktop App Permissions — Connect Microsoft (BACKLOG-3851 PR-2d)', (
     ).toBeInTheDocument();
   });
 
-  it('consent already granted: no Connect Microsoft', async () => {
+  it('consent already granted: no Connect company account', async () => {
     mockConsent = { ...mockConsent, tenantId: 'tenant-fixture', consentGranted: true };
     render(<OrgSettingsClient features={VIEW} />);
     await screen.findByText(HEADING);

@@ -49,6 +49,15 @@ interface ConsentInfo {
   consentGrantedAt: string | null;
 }
 
+/**
+ * BACKLOG-3851 PR-2d: the Desktop App Permissions card's link action and the
+ * line above it. Named for the company account, not the provider, so a Google
+ * Workspace path can use the same button later. Microsoft only today.
+ */
+const CONNECT_COMPANY_ACCOUNT_LABEL = 'Connect company account';
+const CONNECT_COMPANY_ACCOUNT_LINE =
+  "Connect your brokerage's Microsoft 365 account so team members can connect their Outlook in the desktop app. Google Workspace support is coming.";
+
 const RETENTION_OPTIONS = [
   { value: 1, label: '1 year' },
   { value: 2, label: '2 years' },
@@ -210,7 +219,7 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
                   // and the logout route sends the browser on to /setup.
                   <div className="space-y-3">
                     <p className="text-sm text-gray-500">
-                      Connect your brokerage to Microsoft to grant desktop permissions.
+                      {CONNECT_COMPANY_ACCOUNT_LINE}
                     </p>
                     <Button
                       onClick={() => {
@@ -218,7 +227,7 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
                       }}
                       disabled={isImpersonating}
                     >
-                      Connect Microsoft
+                      {CONNECT_COMPANY_ACCOUNT_LABEL}
                     </Button>
                   </div>
                 ) : desktopClientId ? (
