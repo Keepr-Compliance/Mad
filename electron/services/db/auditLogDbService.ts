@@ -16,10 +16,17 @@ import { dbAll, dbRun, ensureDb } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
 
 /**
- * Insert an audit log entry (append-only)
+ * Insert an audit log entry (append-only), synchronously.
  * Note: The audit_logs table has triggers that prevent UPDATE and DELETE
+ *
+ * BACKLOG-3339: the synchronous primitive, so an audit entry can be written
+ * INSIDE the transaction of the change it records (`auditService.recordInTransaction`).
+ * A throw here propagates into that transaction and rolls the change back.
+ * Never call the promise-returning `insertAuditLog` from a transaction body:
+ * its throw becomes a rejection after the COMMIT, so the change commits even
+ * though the audit entry was not written.
  */
-export async function insertAuditLog(entry: AuditLogEntry): Promise<void> {
+export function insertAuditLogSync(entry: AuditLogEntry): void {
   const statement = sql`
     INSERT INTO audit_logs (
       id, timestamp, user_id, session_id, action, resource_type,
@@ -43,6 +50,14 @@ export async function insertAuditLog(entry: AuditLogEntry): Promise<void> {
   ];
 
   dbRun(statement, params);
+}
+
+/**
+ * Insert an audit log entry (append-only). Promise-returning wrapper over
+ * `insertAuditLogSync`, for callers outside a transaction.
+ */
+export function insertAuditLog(entry: AuditLogEntry): Promise<void> {
+  return Promise.resolve(insertAuditLogSync(entry));
 }
 
 /**

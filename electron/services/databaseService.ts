@@ -2587,6 +2587,12 @@ class DatabaseService implements IDatabaseService {
     return auditDb.insertAuditLog(entry);
   }
 
+  // BACKLOG-3339: for auditService.recordInTransaction — the entry is written
+  // inside the caller's transaction, so the call must stay synchronous.
+  insertAuditLogSync(entry: AuditLogEntry): void {
+    auditDb.insertAuditLogSync(entry);
+  }
+
   /**
    * BACKLOG-3339: is a transaction open on the connection the audit INSERT
    * runs on? Throws when the database is not initialised.

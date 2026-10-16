@@ -19,7 +19,7 @@ import type { Database as DatabaseType } from "better-sqlite3";
 import { getRawDatabase, setDb } from "../../core/dbConnection";
 import {
   getUnsyncedAuditLogs,
-  insertAuditLog,
+  insertAuditLogSync,
   markAuditLogsSynced,
 } from "../../auditLogDbService";
 import type { AuditLogEntry } from "../../../auditService";
@@ -81,8 +81,9 @@ export function forceAuditInsertFailure(db: DatabaseType): void {
  */
 export const realAuditDb = {
   insertAuditLog: async (entry: AuditLogEntry): Promise<void> => {
-    await insertAuditLog(entry);
+    insertAuditLogSync(entry);
   },
+  insertAuditLogSync,
   getUnsyncedAuditLogs,
   markAuditLogsSynced,
   isInitialized: () => true,
