@@ -5,7 +5,7 @@
  *
  * Runs the real script under pwsh with -HeaderOnly and a fake 7z that "unpacks" a synthetic
  * tree. -HeaderOnly always exits 1, so the assertion is on the floor error line, not the
- * exit code. Skipped when pwsh is absent; the static wiring checks always run.
+ * exit code. Skipped when pwsh is absent or on Windows; the static wiring checks always run.
  */
 import { spawnSync } from "child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
@@ -15,7 +15,8 @@ import path from "path";
 const REPO = path.resolve(__dirname, "..", "..");
 const SCRIPT = path.join(REPO, "scripts", "ci", "check-pe-signatures.ps1");
 const RELEASE = readFileSync(path.join(REPO, ".github", "workflows", "release.yml"), "utf8");
-const pwsh = spawnSync("pwsh", ["-NoProfile", "-Command", "1"]).status === 0;
+// The fake 7z is a bash script, so the behavioural half runs on POSIX runners only.
+const pwsh = process.platform !== "win32" && spawnSync("pwsh", ["-NoProfile", "-Command", "1"]).status === 0;
 
 // Fake 7z: "x -y -o<dest> -- <archive>". Builds the tree the script expects.
 const FAKE_7Z = `#!/bin/bash
