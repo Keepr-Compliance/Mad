@@ -93,3 +93,21 @@ and frees a seat, but the user stays `'unassigned'` until an admin assigns it (n
 ## After 20261016054316 (BACKLOG-3851 PR-2 piece 1)
 
 Superseded by BACKLOG-3851 PR-2 piece 1 (`supabase/migrations/20261016054316_backlog_3851_setup_completes_invite.sql`, harness `supabase/tests/backlog-3851-setup/`) changes `auto_provision_it_admin`. Once it is applied to production, `lib/pins-3851.sql` row `fn auto_provision_it_admin(text,text,text)` (`11d8619f8dc65e22f53e668e8eade957`) no longer matches production by design, and this harness's prelude must be re-pinned before it is used as a pre-apply gate again. The pin is NOT changed here: every run of the new harness loads this prelude against the pre-apply venue. Controls c03 and c18 encode the pre-apply /setup behaviour. Production after the apply (read 2026-10-16, ledger version 20261016054316): the same fingerprint expression (`md5(pg_get_functiondef(oid) || '|' || coalesce(proacl::text, ''))`) gives `b7be86df338cf4de781cd65b4f53bd02` for `auto_provision_it_admin(text,text,text)`; `md5(prosrc)` is `0ca68b8cee9820322274e1f1a4817b0a`. That value replaces `11d8619f…` only when this prelude is used as a post-apply venue; in place it makes every control of `backlog-3851-setup` stop at `PINS3851 MISMATCH`, because the pin is loaded before the new migration.
+
+## M3 (20261016200000, BACKLOG-3851 PR-2c): SCIM INSERT into a full brokerage is refused
+
+- Stack: c-controls run on M1 + M3, m-controls on M1 + M2 + M3 (`twice` applies each twice).
+  M3 replaces the seat-trigger body; its pre-check accepts only the M1 body (md5 36378add…) or
+  its own (md5 2080be6b…).
+- c19: every SCIM write the edge function makes (insert, invite claim live/expired, reactivate,
+  suspend, the brand-new-email shape whose membership the auth.users key refuses), plus the
+  helper's corpus, grants and the trigger's md5. c03's scim leg now expects the refusal.
+- r05 (in `rollback`): M1 + M3 + `rollback-3851-m3.sql` restores the M1 body and drops the
+  helper; a negative run without the rollback must go red, and M3 applied over a drifted body
+  (`lib/drift-seat-trigger-3851.sql`) must stop at its pre-check.
+- Unwinding further: run `rollback-3851-m3.sql` before `rollback-3851-m2.sql` / `rollback-3851.sql`
+  (r01–r04 are measured without M3).
+- Mutants: an M1 seat-trigger mutant is carried into M3 (`mutants.py carry`: M3 without its
+  pre-check, with each of the mutant's edits that occurs in M3), so the pre-check cannot "kill"
+  it. `IDP_origin_any` is now seen by c07 (the trigger no longer reads `member_origin_is_idp`);
+  `M3_helper_any` is its trigger-level twin. Measured 2026-10-16: killed=44 survived=0 invalid=0.
