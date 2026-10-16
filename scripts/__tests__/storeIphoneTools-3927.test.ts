@@ -7,7 +7,7 @@
  * --config.extraMetadata.distributionChannel=store (release.yml's store run).
  *
  * The Store subset is not trusted as written: it must equal the tools the app spawns (the
- * getCommand("...") call sites) plus every DLL they load, read from the real PE import and
+ * getCommand("...") / getExecutablePath("...") call sites anywhere under electron/) plus every DLL they load, read from the real PE import and
  * delay-import tables of the pinned binaries. Reads bytes only; nothing is executed.
  */
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
@@ -21,7 +21,7 @@ const pinned = require("../release/pinnedIphoneTools");
 
 const REPO = path.resolve(__dirname, "..", "..");
 const TOOLS = path.join(REPO, "resources", "win", "libimobiledevice");
-const SERVICES = path.join(REPO, "electron", "services");
+const ELECTRON = path.join(REPO, "electron");
 const SCRIPT = path.join(REPO, "scripts", "release", "pinnedIphoneTools.js");
 
 interface Manifest {
@@ -70,7 +70,7 @@ const sorted = (xs: string[]): string[] => [...xs].sort((a, b) => a.localeCompar
 describe("Store iPhone tools set (BACKLOG-3927)", () => {
   describe("the manifest's store.files", () => {
     it("is exactly the spawned tools plus every DLL they load (from the PE tables)", () => {
-      const { closure, missing } = importClosure(TOOLS, spawnedTools(SERVICES));
+      const { closure, missing } = importClosure(TOOLS, spawnedTools(ELECTRON));
       expect(missing).toEqual([]);
       expect(sorted(manifest.store.files.map((f) => f.toLowerCase()))).toEqual(closure);
     });
@@ -87,6 +87,31 @@ describe("Store iPhone tools set (BACKLOG-3927)", () => {
       const p = path.join(tmp(), "m.json");
       writeFileSync(p, JSON.stringify({ ...manifest, store: { files: [...manifest.store.files, "nope.dll"] } }));
       expect(() => pinned.loadManifest(p)).toThrow("manifest store.files names nope.dll, which is not a pinned file");
+    });
+  });
+
+  describe("spawnedTools scan", () => {
+    function electronWith(files: Record<string, string>): string {
+      const d = tmp();
+      for (const [rel, body] of Object.entries(files)) {
+        mkdirSync(path.dirname(path.join(d, rel)), { recursive: true });
+        writeFileSync(path.join(d, rel), body);
+      }
+      return d;
+    }
+    it("finds both quote styles, getExecutablePath, subfolders; skips tests", () => {
+      const d = electronWith({
+        "services/a.ts": 'getCommand("one");',
+        "handlers/b.ts": "getCommand('two');",
+        "handlers/deep/c.tsx": 'getExecutablePath("three");',
+        "handlers/__tests__/d.ts": 'getCommand("skipped1");',
+        "handlers/e.test.ts": 'getCommand("skipped2");',
+      });
+      expect(spawnedTools(d)).toEqual(["one", "three", "two"]);
+    });
+    it("fails on a non-literal argument", () => {
+      expect(() => spawnedTools(electronWith({ "handlers/x.ts": "getCommand(tool);" }))).toThrow(/non-literal.*x\.ts:1 getCommand\(tool\)/s);
+      expect(() => spawnedTools(electronWith({ "x.ts": "getExecutablePath(`${n}`);" }))).toThrow(/non-literal/);
     });
   });
 
