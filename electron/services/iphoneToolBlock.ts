@@ -149,7 +149,6 @@ export function detectToolBlock(
   tool: string,
   failure: { error?: unknown; exitCode?: number | null },
 ): ToolBlock | null {
-  if (process.platform !== "win32") return null;
   try {
     let block: ToolBlock | null = null;
     if (failure.error !== undefined && failure.error !== null) {
