@@ -732,15 +732,7 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
         const client = supabaseService.getClient();
         const { data: { session: supaSession } } = await client.auth.getSession();
         if (supaSession?.user) {
-          const meta = supaSession.user.user_metadata || {};
-          return {
-            success: true,
-            user: {
-              id: supaSession.user.id,
-              email: supaSession.user.email || meta.email || "",
-              display_name: meta.full_name || meta.name || supaSession.user.email || "",
-            } as never,
-          };
+          return buildSupabaseFallbackUserResponse(supaSession.user);
         }
         return {
           success: false,
