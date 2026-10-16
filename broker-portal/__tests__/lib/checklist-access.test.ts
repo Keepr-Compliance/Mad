@@ -52,6 +52,7 @@ import {
   brokerageMembership,
   createPostgrestEmulator,
   personalMembership,
+  personalMembershipOwnedBy,
   type Row,
 } from '../helpers/postgrestEmulator';
 
@@ -202,10 +203,76 @@ describe('BACKLOG-3535 — solo owner (personal organization only)', () => {
   });
 
   it('pickChecklistMembership: brokerage row wins, else the personal row, else null', () => {
-    expect(pickChecklistMembership([personalMembership(), brokerageMembership('agent')] as never)?.organization_id).toBe(B);
-    expect(pickChecklistMembership([personalMembership()] as never)?.organization_id).toBe(P);
-    expect(pickChecklistMembership([] as never)).toBeNull();
-    expect(pickChecklistMembership(null)).toBeNull();
+    expect(pickChecklistMembership([personalMembership(), brokerageMembership('agent')] as never, FIXTURE_USER_ID)?.organization_id).toBe(B);
+    expect(pickChecklistMembership([personalMembership()] as never, FIXTURE_USER_ID)?.organization_id).toBe(P);
+    expect(pickChecklistMembership([] as never, FIXTURE_USER_ID)).toBeNull();
+    expect(pickChecklistMembership(null, FIXTURE_USER_ID)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3851 (C6): a deactivated member who reverted to pay-as-you-go holds a
+// suspended / expired brokerage row AND their own personal row (the M2 revert
+// trigger attaches it). Founder QA-2 (a): the solo user's own Checklists page,
+// on the personal organization. Brokerage checklists stay closed. 'unassigned'
+// and the other non-granting statuses never fall through.
+// ---------------------------------------------------------------------------
+describe('BACKLOG-3851 — deactivated member back on pay-as-you-go (C6)', () => {
+  const withStatus = (row: Row, status: unknown): Row => ({ ...row, license_status: status });
+
+  it.each([
+    ['suspended', 'brokerage row first'],
+    ['suspended', 'personal row first'],
+    ['expired', 'brokerage row first'],
+    ['expired', 'personal row first'],
+  ])('%s admin (%s) is routed on the personal organization', async (status, order) => {
+    const broker = withStatus(brokerageMembership('admin'), status);
+    const rows = order === 'brokerage row first' ? [broker, personalMembership()] : [personalMembership(), broker];
+    const { rpc } = setup({ memberships: rows, canEdit: { [B]: true, [P]: true } });
+    await expect(requireChecklistAccess()).resolves.toMatchObject({
+      organizationId: P,
+      role: 'agent',
+      personalOrg: true,
+      canEditOrg: true,
+    });
+    expect(rpc.mock.calls.map((c) => c[1])).toEqual([{ p_org_id: P }]);
+  });
+
+  it.each(['unassigned', 'pending', 'bogus', null])(
+    'a %p brokerage row with an own personal row is refused (no fall-through)',
+    async (status) => {
+      const { rpc } = setup({
+        memberships: [withStatus(brokerageMembership('admin'), status), personalMembership()],
+        canEdit: { [B]: true, [P]: true },
+      });
+      await expect(requireChecklistAccess()).rejects.toThrow('Not authorized');
+      expect(rpc).not.toHaveBeenCalled();
+    }
+  );
+
+  it('a suspended member WITHOUT a personal row is refused', async () => {
+    const { rpc } = setup({ memberships: [withStatus(brokerageMembership('admin'), 'suspended')], canEdit: { [B]: true } });
+    await expect(requireChecklistAccess()).rejects.toThrow('Not authorized');
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("a suspended member in somebody else's personal organization is refused (owner equality)", async () => {
+    const { rpc } = setup({
+      memberships: [withStatus(brokerageMembership('admin'), 'suspended'), personalMembershipOwnedBy()],
+      canEdit: { [B]: true, [P]: true },
+    });
+    await expect(requireChecklistAccess()).rejects.toThrow('Not authorized');
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('pickChecklistMembership returns the personal row for a reverted member, the brokerage row otherwise', () => {
+    const sus = withStatus(brokerageMembership('agent'), 'suspended');
+    expect(pickChecklistMembership([sus, personalMembership()] as never, FIXTURE_USER_ID)?.organization_id).toBe(P);
+    expect(pickChecklistMembership([sus] as never, FIXTURE_USER_ID)?.organization_id).toBe(B);
+    expect(
+      pickChecklistMembership([withStatus(brokerageMembership('agent'), 'unassigned'), personalMembership()] as never, FIXTURE_USER_ID)
+        ?.organization_id
+    ).toBe(B);
   });
 });
 

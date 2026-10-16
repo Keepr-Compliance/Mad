@@ -44,6 +44,7 @@ const STATUS_HUES: Record<MemberLicenseStatus, BadgeHue> = {
   pending: 'yellow',
   suspended: 'red',
   expired: 'gray',
+  unassigned: 'blue',
 };
 
 export default function UserCard({

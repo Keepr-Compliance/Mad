@@ -13,8 +13,10 @@
  *   while impersonating" is not something to rely on.
  * - Which organization: a brokerage row wins whatever its role
  *   (pickBrokerageMembership, lib/auth/membership.ts). Only a user with no
- *   brokerage row is routed on their personal organization. There is no
- *   fall-through to the personal organization.
+ *   brokerage row is routed on their personal organization — and, BACKLOG-3851,
+ *   a DEACTIVATED (suspended / expired) member who owns a personal row, whom
+ *   classifyPortalAccess routes there (pay-as-you-go, like any solo user). Any
+ *   other non-granting status has no fall-through.
  * - Whether, in two questions to the database, in this order:
  *   1. can_edit_checklist_templates(org): may edit the organization's own
  *      templates (broker / admin / it_admin, or a personal organization's
@@ -34,6 +36,7 @@ import { createClient } from '@/lib/supabase/server';
 import { getImpersonationSession } from '@/lib/impersonation';
 import {
   PORTAL_MEMBERSHIP_SELECT,
+  classifyPortalAccess,
   isPersonalMembership,
   memberStatusGrantsAccess,
   pickBrokerageMembership,
@@ -59,14 +62,22 @@ export interface ChecklistAccess {
 
 /**
  * The membership a user edits checklists through. A brokerage row wins
- * whatever its role; only a user with no brokerage row is routed on their
- * personal organization.
+ * whatever its role, except for a deactivated member the classifier routes on
+ * their own personal row (BACKLOG-3851); only a user with no brokerage row is
+ * otherwise routed on their personal organization.
  */
 export function pickChecklistMembership(
-  rows: PortalMembershipRow[] | null | undefined
+  rows: PortalMembershipRow[] | null | undefined,
+  userId: string
 ): PortalMembershipRow | null {
   const brokerage = pickBrokerageMembership(rows);
-  if (brokerage) return brokerage;
+  if (brokerage) {
+    const access = classifyPortalAccess(rows, userId);
+    if (access.kind === 'floor' && access.via === 'personal_owner' && Array.isArray(rows)) {
+      return rows.find((row) => row && row.organization_id === access.organizationId) ?? brokerage;
+    }
+    return brokerage;
+  }
   if (!Array.isArray(rows)) return null;
   return rows.find((row) => row && isPersonalMembership(row)) ?? null;
 }
@@ -99,7 +110,7 @@ export async function requireChecklistAccess(): Promise<ChecklistAccess> {
   // checklist write. FAIL-CLOSED: a failed licence read refuses too.
   if (suspended !== false) throw new Error('Not authorized');
 
-  const membership = pickChecklistMembership(memberships);
+  const membership = pickChecklistMembership(memberships, user.id);
   if (!membership) throw new Error('Not authorized');
   // BACKLOG-3917: a row whose status does not grant access opens nothing,
   // and there is no fall-through to the personal organization.

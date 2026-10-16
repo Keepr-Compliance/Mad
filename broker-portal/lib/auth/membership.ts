@@ -64,6 +64,8 @@ export const PORTAL_MEMBERSHIP_SELECT = 'role, organization_id, license_status, 
 export {
   PORTAL_GRANTING_LICENSE_STATUSES,
   memberStatusGrantsAccess,
+  MEMBER_DEACTIVATED_STATUSES,
+  memberStatusIsDeactivated,
   isPersonalMembership,
   pickBrokerageMembership,
   FULL_PORTAL_ROLES,
@@ -118,8 +120,10 @@ export function mayOpenDashboardPath(access: PortalAccess, pathname: string): bo
   for (const base of FLOOR_PATHS) {
     if (base !== '/dashboard' && isUnder(pathname, base)) return true;
   }
-  // BACKLOG-3917: a deactivated member opens the floor paths only.
-  if (access.kind === 'floor' && access.via === 'deactivated') return false;
+  // BACKLOG-3917: a deactivated member opens the floor paths only. So does a
+  // member with no license assigned (BACKLOG-3851). A deactivated member who
+  // reverted to pay-as-you-go is personal_owner, not this.
+  if (access.kind === 'floor' && (access.via === 'deactivated' || access.via === 'unlicensed')) return false;
   for (const base of OWN_GATE_PATHS) {
     if (isUnder(pathname, base)) return true;
   }

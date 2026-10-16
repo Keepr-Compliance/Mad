@@ -165,6 +165,8 @@ MUTANTS = {
   "REVERT_trigger_dropped":("M2", "m06",
                             [("CREATE TRIGGER revert_deactivated_member\n  AFTER UPDATE OF license_status ON public.organization_members\n  FOR EACH ROW\n  EXECUTE FUNCTION public._revert_deactivated_member_to_paygo();",
                               "")]),
+  "JIT_default_dropped":   ("M2", "m14",
+                            [("ALTER TABLE public.organizations ALTER COLUMN jit_provisioning_enabled SET DEFAULT false;", "")]),
   "R8_no_exception_guard": ("M2", "m13",
                             [(REVERT_GUARDED, "  PERFORM public._ensure_personal_organization_for(NEW.user_id);")]),
 }

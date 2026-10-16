@@ -23,6 +23,7 @@ import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
 import {
   PORTAL_MEMBERSHIP_SELECT,
   classifyPortalAccess,
+  pickBrokerageMembership,
   type PortalMembershipRow,
 } from '@/lib/auth/membership';
 
@@ -120,11 +121,14 @@ export async function GET(request: Request) {
         return finish(`${origin}${next}`);
       }
 
-      // BACKLOG-3917: a deactivated brokerage member is placed too. They land on
-      // `next` and middleware floors them; they never reach the invite-link or
-      // JIT-join paths below, and never their personal organization.
-      if (access.kind === 'floor' && (access.via === 'brokerage' || access.via === 'deactivated')) {
-        // A brokerage agent (or any non-full role): the portal floor.
+      // BACKLOG-3917 / 3851: ANY brokerage row that does not open the full
+      // portal places the member: an agent, a deactivated member, one with no
+      // license assigned, and a deactivated member the classifier routes on
+      // their own personal organization (pay-as-you-go). They land on `next`
+      // and middleware decides; they never reach the invite-link or JIT-join
+      // paths below. Read from the brokerage row itself, not from `access`,
+      // because a reverted member's access is personal_owner.
+      if (pickBrokerageMembership(memberships as PortalMembershipRow[] | null)) {
         return finish(`${origin}${next}`);
       }
 

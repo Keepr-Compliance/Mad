@@ -12,7 +12,8 @@
 #   ... run.sh twice    [fragment]   # M1 and M2 each applied twice
 #   ... run.sh base     [fragment]   # neither applied (reds expected)
 #   ... run.sh mutants  [fragment]   # lib/mutants.py (each must go red)
-#   ... run.sh rollback              # rollback-3851.sql after M1 + M2, then the pins again
+#   ... run.sh rollback              # rollback-3851.sql after M1 + M2, then the pins again;
+#                                    # rollback-3851-m2.sql (r03) and its cleanup (r04)
 #   ... run.sh one <control> <stack files...>
 #
 # Output: PASS|label|detail / FAIL|label|detail per check, CHECKS|<control>|<n>.
@@ -37,6 +38,7 @@ MIG3946=("$M/20261014152722_backlog_3946_staff_helpers_caller_only.sql"
 M1="${M1_OVERRIDE:-$M/20261015152446_backlog_3851_license_model.sql}"
 M2="${M2_OVERRIDE:-$M/20261016100100_backlog_3851_paygo_revert.sql}"
 RB="$HERE/rollback-3851.sql"
+RB2="$HERE/rollback-3851-m2.sql"; RBC="$HERE/rollback-3851-m2-paygo-cleanup.sql"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 PGDB="${PGDB:-postgres}"
 psql_in() {
@@ -153,6 +155,15 @@ case "$mode" in
     run_one "$HERE/controls/r02-rollback-m1-only.sql" "$M1" "$HERE/lib/seed-rollback-3851.sql" "$RB" || rc_all=1
     echo "== negative: r01 with NO rollback applied (must go red)"
     if run_one "$HERE/controls/r01-rollback.sql" "$M1" "$M2" "$HERE/lib/seed-rollback-3851.sql" >/dev/null; then echo "FAIL|negative r01 stayed green without the rollback"; rc_all=1; else echo "PASS|negative r01 red without the rollback"; fi
+    SNAP="$HERE/lib/snapshot-m1-3851.sql"; CNT="$HERE/lib/count-before-cleanup-3851.sql"
+    echo "== r03-rollback-m2 (M1, snapshot, M2, seed, rollback-3851-m2.sql)"
+    run_one "$HERE/controls/r03-rollback-m2.sql" "$M1" "$SNAP" "$M2" "$HERE/lib/seed-rollback-3851.sql" "$RB2" || rc_all=1
+    echo "== negative: r03 with NO rollback applied (must go red)"
+    if run_one "$HERE/controls/r03-rollback-m2.sql" "$M1" "$SNAP" "$M2" "$HERE/lib/seed-rollback-3851.sql" >/dev/null; then echo "FAIL|negative r03 stayed green without the rollback"; rc_all=1; else echo "PASS|negative r03 red without the rollback"; fi
+    echo "== r04-rollback-m2-cleanup (r03 stack + count + rollback-3851-m2-paygo-cleanup.sql)"
+    run_one "$HERE/controls/r04-rollback-m2-cleanup.sql" "$M1" "$SNAP" "$M2" "$HERE/lib/seed-rollback-3851.sql" "$RB2" "$CNT" "$RBC" || rc_all=1
+    echo "== negative: r04 without the cleanup (must go red)"
+    if run_one "$HERE/controls/r04-rollback-m2-cleanup.sql" "$M1" "$SNAP" "$M2" "$HERE/lib/seed-rollback-3851.sql" "$RB2" "$CNT" >/dev/null; then echo "FAIL|negative r04 stayed green without the cleanup"; rc_all=1; else echo "PASS|negative r04 red without the cleanup"; fi
     echo "ROLLBACK: $([ $rc_all = 0 ] && echo OK || echo FAILED)"; exit $rc_all ;;
   race) shift; bash "$HERE/race.sh" "${1:-all}" ;;
   race-mutants)  # each two-session mutant against its scenario in race.sh; each must go red

@@ -127,6 +127,11 @@ function brokerageRow(role: string): Record<string, unknown> {
     user_id: USER_ID,
     role,
     organization_id: ORG_ID,
+    // BACKLOG-3917: always present in a PORTAL_MEMBERSHIP_SELECT response.
+    // BACKLOG-3851: the setup callback now reads it (a row that does not grant
+    // access goes to /dashboard), so a fixture without it describes a member
+    // the database cannot return.
+    license_status: 'active',
     // BACKLOG-3364: the embedded organization record the query now asks for,
     // transcribed from a real PostgREST response. `personal_owner_user_id` is
     // null here — this is a brokerage.
@@ -448,14 +453,38 @@ describe('BACKLOG-3851 — /setup completes an invitation', () => {
     ['suspended', 'suspended'],
     ['unassigned', 'unassigned'],
     ['NULL', null],
-  ])('J6 a %s admin of a brokerage with no tenant: no RPC, routing unchanged', async (_label, status) => {
+  ])('J6 a %s admin of a brokerage with no tenant: no RPC, /dashboard (BACKLOG-3851 PR-2a)', async (_label, status) => {
     signedInAzureUser();
     placedMember('admin', status, null);
 
     const location = await callbackRedirect();
 
     expect(mockRpc).not.toHaveBeenCalled();
-    expect(location).toContain('/setup/consent');
+    expect(location).toBe(`${ORIGIN}/dashboard`);
+  });
+
+  // C5 (BACKLOG-3851 PR-2a): a brokerage row that does not grant access is
+  // routed to /dashboard, never to the consent page, whatever the tenant and
+  // consent state. Middleware then floors them (or, deactivated with a
+  // personal row, gives them the pay-as-you-go portal).
+  it.each(
+    ['suspended', 'expired', 'unassigned', 'pending', null].flatMap((status) =>
+      ['it_admin', 'admin'].map((role) => [role, status] as const)
+    )
+  )('C5 a %s with status %p, tenant linked, consent NOT granted: /dashboard, no RPC', async (role, status) => {
+    signedInAzureUser();
+    placedMember(role, status, TENANT_ID, false);
+
+    expect(await callbackRedirect()).toBe(`${ORIGIN}/dashboard`);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('C5 twin: an ACTIVE it_admin, tenant linked, consent not granted: the consent page', async () => {
+    signedInAzureUser();
+    placedMember('it_admin', 'active', TENANT_ID, false);
+
+    expect(await callbackRedirect()).toContain('/setup/consent');
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 
   it('J6b an active agent of a brokerage with no tenant: no RPC, /dashboard', async () => {
