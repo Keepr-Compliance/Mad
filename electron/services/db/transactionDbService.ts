@@ -357,7 +357,7 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
   first_exported_at: {
     insert: "db-default",
     update: "writable",
-    why: "BACKLOG-2013 freeze marker. Set write-once at the SQL layer by TWO writers — `recordExportCompletion` folds it into the export-completion UPDATE (BACKLOG-2549; the enhanced and folder paths) and `stampFirstExportedAt` sets it alone (the PDF path) — and cleared by admin unfreeze via the override path below. Both enforce write-once in SQL, one with COALESCE and one with a NULL predicate. A brand-new deal has never been exported.",
+    why: "BACKLOG-2013 freeze marker. Set write-once at the SQL layer by TWO writers — `recordExportCompletion` folds it into the export-completion UPDATE (BACKLOG-2549; called from `completeExport` in `exportCompletion.ts` for the enhanced and folder paths, BACKLOG-3303) and `stampFirstExportedAt` sets it alone (the PDF path) — and cleared by admin unfreeze via the override path below. Both enforce write-once in SQL, one with COALESCE and one with a NULL predicate. A brand-new deal has never been exported.",
   },
   detection_source: {
     insert: "writable",
