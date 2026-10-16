@@ -19,6 +19,8 @@ import {
 // Mock dependencies
 const mockDatabaseService = {
   insertAuditLog: jest.fn(),
+  // BACKLOG-3339
+  isInTransaction: jest.fn(() => false),
   getUnsyncedAuditLogs: jest.fn(),
   markAuditLogsSynced: jest.fn(),
   // BACKLOG-2149: audit writes now gate on DB readiness. Default to ready.
@@ -230,54 +232,69 @@ describe("AuditService", () => {
     });
   });
 
-  describe("withAudit", () => {
+  // BACKLOG-3339: withAudit (0 product callers) was deleted; recordFailure
+  // (after a rollback) replaces its failure half.
+  describe("recordFailure (BACKLOG-3339)", () => {
     beforeEach(() => {
+      mockDatabaseService.isInTransaction.mockReset();
       auditService.initialize(
         mockDatabaseService as any,
         mockSupabaseService as any,
       );
     });
 
-    it("should log successful operations", async () => {
-      const operation = jest.fn().mockResolvedValue({ result: "success" });
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-      const result = await auditService.withAudit(
-        {
-          userId: "user-123",
-          sessionId: "session-456",
-          action: "TRANSACTION_CREATE",
-          resourceType: "TRANSACTION",
-          resourceId: "txn-789",
-        },
-        operation,
-      );
-
-      expect(result).toEqual({ result: "success" });
-      expect(operation).toHaveBeenCalledTimes(1);
-
-      const insertedEntry = mockDatabaseService.insertAuditLog.mock.calls[0][0];
-      expect(insertedEntry.success).toBe(true);
-      expect(insertedEntry.action).toBe("TRANSACTION_CREATE");
+    it("recordFailure writes a success:false entry and queues it", async () => {
+      mockDatabaseService.isInTransaction.mockReturnValue(false);
+      mockSupabaseService.getAuthSession.mockImplementation(async () => null as never);
+      auditService.recordFailure({
+        userId: "user-123",
+        action: "TRANSACTION_CREATE",
+        resourceType: "TRANSACTION",
+        errorMessage: "Operation failed",
+      });
+      await settle();
+      const written = mockDatabaseService.insertAuditLog.mock.calls[0][0];
+      expect(written.success).toBe(false);
+      expect(written.errorMessage).toBe("Operation failed");
+      expect(auditService.getPendingSyncCount()).toBe(1);
     });
 
-    it("should log failed operations and re-throw error", async () => {
-      const error = new Error("Operation failed");
-      const operation = jest.fn().mockRejectedValue(error);
-
-      await expect(
-        auditService.withAudit(
-          {
+    it("recordFailure never throws when its own write fails, and reports once to Sentry", async () => {
+      mockDatabaseService.isInTransaction.mockReturnValue(false);
+      mockDatabaseService.insertAuditLog.mockRejectedValueOnce(new Error("disk I/O error"));
+      const original = new Error("the user's real error");
+      const run = () => {
+        try {
+          throw original;
+        } catch (err) {
+          auditService.recordFailure({
             userId: "user-123",
             action: "TRANSACTION_CREATE",
             resourceType: "TRANSACTION",
-          },
-          operation,
-        ),
-      ).rejects.toThrow("Operation failed");
+            errorMessage: (err as Error).message,
+          });
+          throw err;
+        }
+      };
+      expect(run).toThrow(original);
+      await settle();
+      expect(mockDatabaseService.insertAuditLog).toHaveBeenCalledTimes(1);
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+      expect((Sentry.captureException as jest.Mock).mock.calls[0][0].message).toBe("disk I/O error");
+    });
 
-      const insertedEntry = mockDatabaseService.insertAuditLog.mock.calls[0][0];
-      expect(insertedEntry.success).toBe(false);
-      expect(insertedEntry.errorMessage).toBe("Operation failed");
+    it("recordFailure refuses to write inside a transaction", async () => {
+      mockDatabaseService.isInTransaction.mockReturnValue(true);
+      auditService.recordFailure({
+        userId: "user-123",
+        action: "TRANSACTION_CREATE",
+        resourceType: "TRANSACTION",
+      });
+      await settle();
+      expect(mockDatabaseService.insertAuditLog).not.toHaveBeenCalled();
+      expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
     });
   });
 

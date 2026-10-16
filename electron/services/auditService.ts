@@ -149,6 +149,34 @@ export const AUDIT_PII_METADATA_KEYS = [
 ] as const;
 
 /**
+ * BACKLOG-3339: free-text fields of an audit entry that do not leave this
+ * machine outside a support-access window. Applies to every entry, live sends
+ * and the BACKLOG-3987 table backfill alike — both go through
+ * `stripPiiForCloud`, the one egress point.
+ *
+ * `errorMessage` is written from raw `err.message` at a dozen sites (provider
+ * errors, database errors); it can carry whatever the failing call put in it.
+ * The local row keeps it; the uploaded copy says only that the attempt failed
+ * (`success: false`) and what it was.
+ */
+export const AUDIT_FREE_TEXT_FIELDS = [
+  "errorMessage",
+  "ipAddress",
+  "userAgent",
+] as const;
+
+/**
+ * BACKLOG-3339: every metadata key stripped from the uploaded copy. The
+ * 3052 identity keys, plus `error`, which one producer fills with a raw
+ * error message (`microsoftAuthHandlers` LOGIN_FAILED). A fixed code at the
+ * producer is the way to keep a reason in the cloud.
+ */
+export const AUDIT_CLOUD_STRIPPED_METADATA_KEYS = [
+  ...AUDIT_PII_METADATA_KEYS,
+  "error",
+] as const;
+
+/**
  * BACKLOG-3052: the support-access grant, read at cloud-sync time.
  *
  * Injected rather than imported. `services/supportAccess` is a barrel that
@@ -173,6 +201,8 @@ export interface ISupportAccessGate {
  */
 interface IDatabaseService {
   insertAuditLog(entry: AuditLogEntry): Promise<void>;
+  // BACKLOG-3339: is a transaction open on the audit connection right now?
+  isInTransaction(): boolean;
   // BACKLOG-3987: scoped to one user. The cloud insert policy only accepts
   // rows whose user_id is the signed-in account, so a batch that mixes in
   // another local account's row is rejected whole.
@@ -218,6 +248,8 @@ class AuditService {
   // never comes up can't grow this without limit.
   private pendingLocalWrites: AuditLogEntry[] = [];
   private flushingPendingWrites = false;
+  // BACKLOG-3339: entries dropped from that buffer this run (it is bounded).
+  private droppedPendingWrites = 0;
 
   private readonly SYNC_INTERVAL_MS = 60000; // 1 minute
   private readonly SYNC_BATCH_SIZE = 100;
@@ -368,57 +400,102 @@ class AuditService {
           userId: entry.userId ? entry.userId.substring(0, 8) + "..." : "unknown",
         },
       });
+      // BACKLOG-3339: a breadcrumb alone is only seen when some later error is
+      // reported, so local insert failures were never counted. Report them.
+      // log() never throws, so neither may its reporting.
+      try {
+        Sentry.captureMessage("Audit log local INSERT failed", {
+          level: "error",
+          tags: { service: "audit-service", operation: "log", action: entry.action },
+        });
+      } catch {
+        // reporting is best-effort
+      }
     }
   }
 
   /**
-   * Audit wrapper for handlers - logs success or failure
-   * @param params - Audit parameters
-   * @param operation - The operation to wrap
-   * @returns The result of the operation
+   * BACKLOG-3339: record a FAILED attempt, as a separate write after the
+   * change's transaction has rolled back.
+   *
+   * Never throws: the caller is already handling the original error and must
+   * rethrow THAT one, not an audit error. If this write fails too, it is
+   * reported to Sentry and the log — the trail cannot record its own failure.
+   *
+   * Refuses to write inside a transaction: the entry would roll back with the
+   * change it is meant to outlive. That is reported, not thrown.
    */
-  async withAudit<T>(
-    params: {
-      userId: string;
-      sessionId?: string;
-      action: AuditAction;
-      resourceType: ResourceType;
-      resourceId?: string;
-      metadata?: Record<string, unknown>;
-    },
-    operation: () => Promise<T>,
-  ): Promise<T> {
-    const { userId, sessionId, action, resourceType, resourceId, metadata } =
-      params;
-
+  recordFailure(entry: Omit<NewAuditLogEntry, "success">): void {
+    const fullEntry = this.buildEntry({ ...entry, success: false });
+    const report = (error: unknown): void => {
+      logService.error("Failed to write audit failure entry", "AuditService", {
+        action: entry.action,
+        resourceType: entry.resourceType,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+      Sentry.captureException(error, {
+        tags: { service: "audit-service", operation: "recordFailure", action: entry.action },
+      });
+    };
     try {
-      const result = await operation();
-
-      await this.log({
-        userId,
-        sessionId,
-        action,
-        resourceType,
-        resourceId,
-        metadata,
-        success: true,
-      });
-
-      return result;
+      const db = this.databaseService;
+      if (db && db.isInitialized() && db.isInTransaction()) {
+        logService.error(
+          "recordFailure called inside a transaction; entry not written",
+          "AuditService",
+          { action: entry.action, resourceType: entry.resourceType },
+        );
+        Sentry.captureMessage("auditService.recordFailure called inside a transaction", {
+          level: "error",
+          tags: { service: "audit-service", operation: "recordFailure", action: entry.action },
+        });
+        return;
+      }
     } catch (error) {
-      await this.log({
-        userId,
-        sessionId,
-        action,
-        resourceType,
-        resourceId,
-        metadata,
-        success: false,
-        errorMessage: error instanceof Error ? error.message : "Unknown error",
-      });
-
-      throw error;
+      report(error);
+      return;
     }
+    // Same path as log(): buffered while the database is not up, queued for
+    // the cloud once written. Unlike log(), a failed write is reported to
+    // Sentry, and nothing is returned for the caller to await or drop.
+    this.writeToLocal(fullEntry).then(
+      (written) => {
+        if (!written) return; // buffered; the flush queues it
+        this.pendingSyncQueue.push(fullEntry);
+        void this.kickSync();
+      },
+      report,
+    );
+  }
+
+  /**
+   * BACKLOG-3339: send unsynced entries now. Never rejects.
+   *
+   * Skipped while a transaction is open on the audit connection: marking rows
+   * synced writes on that connection, and a rollback of someone else's
+   * transaction would undo the marks (BACKLOG-2775). The 60 s tick and the
+   * next launch (BACKLOG-3987) still send the rows.
+   */
+  async kickSync(): Promise<void> {
+    try {
+      if (this.databaseService?.isInTransaction()) return;
+      await this.syncToCloud();
+    } catch {
+      // syncToCloud reports its own failures; retried on the next tick.
+    }
+  }
+
+  /** id, timestamp and sanitised metadata, as `log()` builds them. */
+  private buildEntry(entry: NewAuditLogEntry): AuditLogEntry {
+    const fullEntry: AuditLogEntry = {
+      ...entry,
+      id: crypto.randomUUID(),
+      timestamp: new Date(),
+    };
+    if (fullEntry.metadata) {
+      fullEntry.metadata = this.sanitizeMetadata(fullEntry.metadata);
+    }
+    return fullEntry;
   }
 
   /**
@@ -434,7 +511,7 @@ class AuditService {
    * branch earlier and jumped straight over the buffer, so the entry was lost.
    * Both states now take the same route.
    */
-  private async writeToLocal(entry: AuditLogEntry): Promise<void> {
+  private async writeToLocal(entry: AuditLogEntry): Promise<boolean> {
     if (!this.databaseService) {
       // BACKLOG-3008: initialize() has not run yet. Every IPC handler is
       // registered and callable before the renderer asks for database init, and
@@ -448,7 +525,7 @@ class AuditService {
         { action: entry.action, resourceType: entry.resourceType },
       );
       this.bufferPendingWrite(entry);
-      return;
+      return false;
     }
 
     if (!this.databaseService.isInitialized()) {
@@ -461,13 +538,14 @@ class AuditService {
       );
       if (!result.ready) {
         this.bufferPendingWrite(entry);
-        return;
+        return false;
       }
     }
 
     await this.databaseService.insertAuditLog(entry);
     // A successful write means the DB is up — drain anything we buffered earlier.
     void this.flushPendingLocalWrites();
+    return true;
   }
 
   /**
@@ -479,11 +557,20 @@ class AuditService {
     this.pendingLocalWrites.push(entry);
     if (this.pendingLocalWrites.length > this.MAX_PENDING_LOCAL_WRITES) {
       const dropped = this.pendingLocalWrites.shift();
+      this.droppedPendingWrites++;
       logService.warn(
         "Audit pending-write buffer full, dropped oldest entry",
         "AuditService",
         { action: dropped?.action, resourceType: dropped?.resourceType },
       );
+      // BACKLOG-3339: a dropped entry is a lost audit record. Report the first
+      // drop of a run to Sentry; the counter says how many followed.
+      if (this.droppedPendingWrites === 1) {
+        Sentry.captureMessage("Audit pending-write buffer full; entries dropped", {
+          level: "error",
+          tags: { service: "audit-service", operation: "bufferPendingWrite" },
+        });
+      }
     }
     // Flush when the DB is ready (best-effort; never throws).
     void import("./initializationBroadcaster").then(
@@ -745,18 +832,32 @@ class AuditService {
     }
 
     return entries.map((entry) => {
+      let out: AuditLogEntry = entry;
+
+      // BACKLOG-3339: raw free text. `errorMessage` is usually an error's
+      // `.message`, which can carry a name, an address or a provider's
+      // response; `ipAddress` and `userAgent` have no writer today and are
+      // stripped so a future one cannot leak by default. Kept on the local row.
+      for (const field of AUDIT_FREE_TEXT_FIELDS) {
+        if (out[field] !== undefined && out[field] !== null) {
+          if (out === entry) out = { ...entry };
+          delete out[field];
+        }
+      }
+
       const metadata = entry.metadata;
-      if (!metadata) return entry;
+      if (!metadata) return out;
 
       let stripped: Record<string, unknown> | null = null;
-      for (const key of AUDIT_PII_METADATA_KEYS) {
+      for (const key of AUDIT_CLOUD_STRIPPED_METADATA_KEYS) {
         if (Object.prototype.hasOwnProperty.call(metadata, key)) {
           if (!stripped) stripped = { ...metadata };
           delete stripped[key];
         }
       }
 
-      return stripped ? { ...entry, metadata: stripped } : entry;
+      if (!stripped) return out;
+      return { ...out, metadata: stripped };
     });
   }
 
@@ -793,6 +894,11 @@ class AuditService {
     }
 
     return sanitized;
+  }
+
+  /** BACKLOG-3339: entries dropped from the pre-init buffer this run. */
+  getDroppedPendingWriteCount(): number {
+    return this.droppedPendingWrites;
   }
 
   /**
