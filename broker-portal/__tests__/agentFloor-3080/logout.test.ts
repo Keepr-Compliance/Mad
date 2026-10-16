@@ -74,6 +74,43 @@ describe('/auth/logout', () => {
     ]);
   });
 
+  // BACKLOG-3851 PR-2d: the Settings "Connect Microsoft" button.
+  it('?next=setup ends only this browser session, clears auth cookies, then /setup', async () => {
+    const response = await GET(
+      new Request(`${ORIGIN}/auth/logout?next=setup`, {
+        headers: { cookie: 'sb-fixture-auth-token=abc; sb-fixture-auth-token.1=def; theme=dark' },
+      })
+    );
+    expect(mockSignOut).toHaveBeenCalledTimes(1);
+    expect(mockSignOut.mock.calls[0]).toEqual([{ scope: 'local' }]);
+    expect(response.headers.get('location')).toBe(`${ORIGIN}/setup`);
+    const cleared = response.headers
+      .getSetCookie()
+      .map((c) => c.split('=')[0])
+      .sort();
+    expect(cleared).toEqual(['sb-fixture-auth-token', 'sb-fixture-auth-token.1']);
+  });
+
+  it('?next=setup with a failed sign-out still clears the auth cookies', async () => {
+    mockSignOut.mockResolvedValue({ error: { message: 'fixture failure' } });
+    const response = await GET(
+      new Request(`${ORIGIN}/auth/logout?next=setup`, { headers: { cookie: 'sb-fixture-auth-token=abc' } })
+    );
+    expect(response.headers.get('location')).toBe(`${ORIGIN}/setup`);
+    expect(response.headers.getSetCookie().map((c) => c.split('=')[0])).toEqual([
+      'sb-fixture-auth-token',
+    ]);
+  });
+
+  it('any other next value goes to /login', async () => {
+    for (const next of ['dashboard', '//evil.example', 'https://evil.example', '/setup', 'constructor']) {
+      mockSignOut.mockClear();
+      const response = await GET(new Request(`${ORIGIN}/auth/logout?next=${encodeURIComponent(next)}`));
+      expect(mockSignOut).toHaveBeenCalledTimes(1);
+      expect(response.headers.get('location')).toBe(`${ORIGIN}/login`);
+    }
+  });
+
   it('does not pass through an error value it does not know', async () => {
     const response = await GET(new Request(`${ORIGIN}/auth/logout?error=x`));
     expect(mockSignOut).toHaveBeenCalledTimes(1);

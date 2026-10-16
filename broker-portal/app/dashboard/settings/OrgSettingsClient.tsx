@@ -203,7 +203,25 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
                     Team members will be prompted to request admin approval when connecting Outlook
                   </span>
                 </div>
-                {consent.tenantId && desktopClientId ? (
+                {!consent.tenantId ? (
+                  // BACKLOG-3851 PR-2d: an admin links the Microsoft organization
+                  // on /setup. Middleware sends a signed-in user away from /setup,
+                  // so this signs out first (/auth/logout clears the auth cookies)
+                  // and the logout route sends the browser on to /setup.
+                  <div className="space-y-3">
+                    <p className="text-sm text-gray-500">
+                      Connect your brokerage to Microsoft to grant desktop permissions.
+                    </p>
+                    <Button
+                      onClick={() => {
+                        window.location.href = '/auth/logout?next=setup';
+                      }}
+                      disabled={isImpersonating}
+                    >
+                      Connect Microsoft
+                    </Button>
+                  </div>
+                ) : desktopClientId ? (
                   <Button
                     onClick={() => {
                       const redirectUri = `${window.location.origin}/setup/consent/callback`;
@@ -222,7 +240,7 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
                   </Button>
                 ) : (
                   <p className="text-sm text-gray-400">
-                    Microsoft tenant not configured. Please contact support.
+                    Desktop app permissions are not configured for this portal. Please contact support.
                   </p>
                 )}
               </div>
