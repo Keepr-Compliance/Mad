@@ -1,6 +1,6 @@
 const { flipFuses, FuseVersion, FuseV1Options } = require('@electron/fuses');
 const { resolveFuseGate, writeQaMarker } = require('./afterPack.fuse-gate');
-const { placePinnedTools } = require('./release/pinnedIphoneTools');
+const { placePinnedTools, channelOf } = require('./release/pinnedIphoneTools');
 
 /**
  * afterPack hook for electron-builder.
@@ -35,7 +35,9 @@ module.exports = async function afterPack(context) {
   // runs after extraResources and before signApp (which never walks resources/win), so these
   // files reach the installer byte-identical to the manifest. Every platform: the macOS app
   // has always carried the same folder. Throws on any hash mismatch, missing or extra file.
-  placePinnedTools(context.packager.getResourcesDir(context.appOutDir));
+  // BACKLOG-3927: the Microsoft Store build (distributionChannel "store") gets only the tools
+  // the app runs and the DLLs they load (manifest.store.files); every other build gets all.
+  placePinnedTools(context.packager.getResourcesDir(context.appOutDir), { channel: channelOf(context) });
 
   // Hard release-channel guard (BACKLOG-1885): refuse to enable the inspect fuse for a publish/
   // release build. Throws before any fuse is flipped when KEEPR_QA_BUILD=1 meets CI/--publish.

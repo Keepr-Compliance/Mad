@@ -51,7 +51,11 @@ describe("installer.nsh: store-only customInstall (BACKLOG-3927)", () => {
     const start = NSH.indexOf("!macro customInstall");
     expect(start).toBeGreaterThanOrEqual(0);
     const end = NSH.findIndex((l, i) => i > start && l === "!macroend");
-    expect(NSH.slice(start + 1, end)).toEqual([REMOVAL]);
+    const body = NSH.slice(start + 1, end);
+    expect(body[0]).toBe(REMOVAL);
+    // The rest deletes the iPhone tool files the Store build does not ship; the exact list is
+    // checked against the manifest in storeIphoneTools-3927.test.ts.
+    expect(body.slice(1).filter((l) => !/^Delete "\$INSTDIR\\resources\\win\\libimobiledevice\\[^"\\]+"$/.test(l))).toEqual([]);
   });
 
   it("the whole customInstall macro sits inside !ifdef KEEPR_STORE_BUILD (website gets none)", () => {
