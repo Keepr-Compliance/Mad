@@ -503,8 +503,6 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // shape. The bullet was split out of 2554's scope for exactly that reason.
   "electron/services/failureLogService.ts::pruneOldEntries":
     "BACKLOG-3319 — the age DELETE commits and the cap DELETE does not, so the failure log keeps rows above the 500-row cap until the next startup prunes again. Diagnostics only — no user-visible record is lost. That is why this is low despite inheriting from a critical batch.",
-  "electron/services/reviewStateService.ts::restoreRejectedToQueue":
-    "BACKLOG-3320 — a crash after the INSERT and before the DELETE leaves the item queued for review AND still listed as rejected: it appears twice, in two places that contradict each other. It loops per sibling, so a multi-email thread can end up part-restored. The MIRROR of BACKLOG-3310, not the same failure — that one writes in the opposite order and leaves NEITHER.",
 
   // ==========================================================================
   // BACKLOG-3239 — SURFACED BY THE BRANCH-EXCLUSIVITY FIX
