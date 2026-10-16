@@ -87,9 +87,9 @@ describe('desktop columns', () => {
   it('has no Docs or Review/Actions column, and no msgs/files counts', async () => {
     const { container } = await renderList();
     const heads = Array.from(container.querySelectorAll('thead th')).map((th) => th.textContent?.trim());
-    expect(heads).toEqual(['Property', 'Type', 'Price', 'Status', 'Submitted']);
+    expect(heads).toEqual(['Property', 'Agent', 'Type', 'Price', 'Status', 'Submitted']); // Agent: BACKLOG-3977
     expect(container.textContent).not.toMatch(/\bmsgs\b|\bfiles\b|Review\b/);
-    expect(container.querySelectorAll('tbody tr:first-child > td:not(.hidden)')).toHaveLength(5);
+    expect(container.querySelectorAll('tbody tr:first-child > td:not(.hidden)')).toHaveLength(6);
   });
 
   it('shows the street on line 1 and "City, ST ZIP" on line 2, with no USA', async () => {

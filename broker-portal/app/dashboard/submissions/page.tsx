@@ -446,6 +446,9 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                     Property
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Agent
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Type
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -462,6 +465,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
               <tbody className="bg-white divide-y divide-gray-200">
                 {displaySubmissions.map((submission) => {
                   const href = `/dashboard/submissions/${submission.id}`;
+                  const agent = (submission.submitted_by && agentLabels.get(submission.submitted_by)) || '—';
                   const { street, cityLine } = formatUsAddress(
                     submission.property_address,
                     submission.property_city,
@@ -485,6 +489,13 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                         </Link>
                       </div>
                       {cityLine && <div className="text-sm text-gray-500">{cityLine}</div>}
+                    </td>
+                    {/* BACKLOG-3977: the submitter, labelled as in the agent filter and the
+                        phone card (a support session gets neutral "Agent N" labels). */}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700" data-slot="submission-agent">
+                      <span className="block max-w-[12rem] truncate" title={agent}>
+                        {agent}
+                      </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className="capitalize text-sm text-gray-700">
