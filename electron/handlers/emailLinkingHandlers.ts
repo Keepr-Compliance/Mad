@@ -9,9 +9,9 @@ import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import transactionService from "../services/transactionService";
 import logService from "../services/logService";
-import { createEmail, getEmailById, getEmailByExternalId, getCachedEmails } from "../services/db/emailDbService";
-import { createCommunication, removeIgnoredCommunication, confirmEmailLinksByEmailIds } from "../services/db/communicationDbService";
-import { dbAll } from "../services/db/core/dbConnection";
+import { createEmailSync, getEmailById, getEmailByExternalId, getCachedEmails } from "../services/db/emailDbService";
+import { createCommunicationSync, removeIgnoredCommunication, confirmEmailLinksByEmailIds } from "../services/db/communicationDbService";
+import { dbAll, dbTransaction } from "../services/db/core/dbConnection";
 import {
   REMOVED_EMAILS_SQL,
   REMOVED_MESSAGES_SQL,
@@ -287,16 +287,21 @@ export function registerEmailLinkingHandlers(): void {
           // Create junction link in communications table.
           // BACKLOG-1718 (R3): pass thread_id so unlinkCommunication can expand
           // the deletion to all sibling emails in the same thread.
-          await createCommunication({
-            user_id: transaction.user_id,
-            transaction_id: validatedTransactionId,
-            email_id: emailRecord.id,
-            thread_id: emailRecord.thread_id || undefined,
-            communication_type: "email",
-            link_source: "manual",
-            link_confidence: 1.0,
-            has_attachments: emailRecord.has_attachments || false,
-            is_false_positive: false,
+          // BACKLOG-3221: the junction row and the thread-count update it
+          // triggers commit together or not at all. Only *Sync writers inside.
+          const linkedEmail = emailRecord;
+          dbTransaction(() => {
+            createCommunicationSync({
+              user_id: transaction.user_id,
+              transaction_id: validatedTransactionId,
+              email_id: linkedEmail.id,
+              thread_id: linkedEmail.thread_id || undefined,
+              communication_type: "email",
+              link_source: "manual",
+              link_confidence: 1.0,
+              has_attachments: linkedEmail.has_attachments || false,
+              is_false_positive: false,
+            });
           });
           linkedCount++;
         } catch (emailError) {
@@ -315,14 +320,19 @@ export function registerEmailLinkingHandlers(): void {
               try {
                 const email = await gmailFetchService.getEmailById(messageId);
 
-                // BACKLOG-506: Check if email already exists (dedup by external_id)
-                let emailRecord = await getEmailByExternalId(transaction.user_id, messageId);
+                // BACKLOG-506: Check if email already exists (dedup by external_id).
+                // BACKLOG-3221: the lookup stays outside the transaction (SR ruling).
+                const existing = await getEmailByExternalId(transaction.user_id, messageId);
 
-                if (!emailRecord) {
+                // BACKLOG-3221: the email row (+ participants), the junction row
+                // and the thread-count update commit together or not at all.
+                // Only *Sync writers inside; createEmailSync's own transaction
+                // nests as a savepoint.
+                dbTransaction(() => {
                   // Create email in emails table (content store)
                   // BACKLOG-1722: pass `participants` so the junction is
                   // populated atomically (fetchService now builds them).
-                  emailRecord = await createEmail({
+                  const emailRecord = existing ?? createEmailSync({
                     user_id: transaction.user_id,
                     external_id: messageId,
                     source: "gmail",
@@ -339,21 +349,21 @@ export function registerEmailLinkingHandlers(): void {
                     attachment_count: email.attachmentCount || 0,
                     participants: email.participants,
                   });
-                }
 
-                // Create junction link in communications table.
-                // BACKLOG-1718 (R3): pass thread_id so unlinkCommunication can
-                // expand the deletion to all sibling emails in the same thread.
-                await createCommunication({
-                  user_id: transaction.user_id,
-                  transaction_id: validatedTransactionId,
-                  email_id: emailRecord.id,
-                  thread_id: emailRecord.thread_id || undefined,
-                  communication_type: "email",
-                  link_source: "manual",
-                  link_confidence: 1.0,
-                  has_attachments: emailRecord.has_attachments || false,
-                  is_false_positive: false,
+                  // Create junction link in communications table.
+                  // BACKLOG-1718 (R3): pass thread_id so unlinkCommunication can
+                  // expand the deletion to all sibling emails in the same thread.
+                  createCommunicationSync({
+                    user_id: transaction.user_id,
+                    transaction_id: validatedTransactionId,
+                    email_id: emailRecord.id,
+                    thread_id: emailRecord.thread_id || undefined,
+                    communication_type: "email",
+                    link_source: "manual",
+                    link_confidence: 1.0,
+                    has_attachments: emailRecord.has_attachments || false,
+                    is_false_positive: false,
+                  });
                 });
                 linkedCount++;
               } catch (emailError) {
@@ -379,14 +389,19 @@ export function registerEmailLinkingHandlers(): void {
               try {
                 const email = await outlookFetchService.getEmailById(messageId);
 
-                // BACKLOG-506: Check if email already exists (dedup by external_id)
-                let emailRecord = await getEmailByExternalId(transaction.user_id, messageId);
+                // BACKLOG-506: Check if email already exists (dedup by external_id).
+                // BACKLOG-3221: the lookup stays outside the transaction (SR ruling).
+                const existing = await getEmailByExternalId(transaction.user_id, messageId);
 
-                if (!emailRecord) {
+                // BACKLOG-3221: the email row (+ participants), the junction row
+                // and the thread-count update commit together or not at all.
+                // Only *Sync writers inside; createEmailSync's own transaction
+                // nests as a savepoint.
+                dbTransaction(() => {
                   // Create email in emails table (content store)
                   // BACKLOG-1722: pass `participants` so the junction is
                   // populated atomically (fetchService now builds them).
-                  emailRecord = await createEmail({
+                  const emailRecord = existing ?? createEmailSync({
                     user_id: transaction.user_id,
                     external_id: messageId,
                     source: "outlook",
@@ -403,21 +418,21 @@ export function registerEmailLinkingHandlers(): void {
                     attachment_count: email.attachmentCount || 0,
                     participants: email.participants,
                   });
-                }
 
-                // Create junction link in communications table.
-                // BACKLOG-1718 (R3): pass thread_id so unlinkCommunication can
-                // expand the deletion to all sibling emails in the same thread.
-                await createCommunication({
-                  user_id: transaction.user_id,
-                  transaction_id: validatedTransactionId,
-                  email_id: emailRecord.id,
-                  thread_id: emailRecord.thread_id || undefined,
-                  communication_type: "email",
-                  link_source: "manual",
-                  link_confidence: 1.0,
-                  has_attachments: emailRecord.has_attachments || false,
-                  is_false_positive: false,
+                  // Create junction link in communications table.
+                  // BACKLOG-1718 (R3): pass thread_id so unlinkCommunication can
+                  // expand the deletion to all sibling emails in the same thread.
+                  createCommunicationSync({
+                    user_id: transaction.user_id,
+                    transaction_id: validatedTransactionId,
+                    email_id: emailRecord.id,
+                    thread_id: emailRecord.thread_id || undefined,
+                    communication_type: "email",
+                    link_source: "manual",
+                    link_confidence: 1.0,
+                    has_attachments: emailRecord.has_attachments || false,
+                    is_false_positive: false,
+                  });
                 });
                 linkedCount++;
               } catch (emailError) {
