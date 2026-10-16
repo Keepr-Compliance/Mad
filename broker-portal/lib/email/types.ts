@@ -216,3 +216,20 @@ export interface TicketResolvedParams {
   /** The new status: 'resolved' or 'closed' */
   newStatus: 'resolved' | 'closed';
 }
+
+// ---------------------------------------------------------------------------
+// Seat-limit email (BACKLOG-3851 PR-2c)
+// ---------------------------------------------------------------------------
+
+export interface SeatLimitReachedParams {
+  /** Recipient (an IT admin, admin or broker of the brokerage) */
+  recipientEmail: string;
+  /** Name or email of the person who was not added / re-activated */
+  personLabel: string;
+  brokerageName: string;
+  /** Seats in use */
+  used: number;
+  /** The brokerage's seat count; null when unknown */
+  maxSeats: number | null;
+  kind: 'add' | 'reactivate';
+}
