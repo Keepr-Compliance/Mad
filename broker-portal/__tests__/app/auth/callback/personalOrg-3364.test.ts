@@ -104,6 +104,11 @@ describe('a solo user holding only a personal organization', () => {
   it('without the invitation link: keeps their floor, accepts nothing, writes nothing', async () => {
     signedIn();
     given([personalMembership(), pendingInvite(EMAIL, 'agent')]);
+    // The database reports the pending invite (measured on keepr-test, XPP);
+    // the route must still not act on it for a personal-org owner.
+    mockRpc.mockImplementation(async (name: string) =>
+      name === 'caller_has_pending_invite' ? { data: true, error: null } : { data: null, error: null }
+    );
 
     const location = await callbackRedirect();
 

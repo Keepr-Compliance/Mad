@@ -157,6 +157,9 @@ describe('(c) personal-org owner with a pending invite', () => {
   it('without the link: accepts nothing, writes nothing, keeps the floor', async () => {
     signedIn('azure');
     given([personalMembership(), pendingInvite(EMAIL, 'agent')]);
+    mockRpc.mockImplementation(async (name: string) =>
+      name === 'caller_has_pending_invite' ? { data: true, error: null } : { data: null, error: null }
+    );
 
     expect(await callbackRedirect()).toBe(DASHBOARD);
     expect(mockEmulator.state.writes).toHaveLength(0);
