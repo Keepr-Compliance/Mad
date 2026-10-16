@@ -416,7 +416,7 @@ describe("BACKLOG-3952 — read-only database at startup", () => {
     // Real timers and short delays: a synchronous sleep would starve this
     // interval until initialize() returned.
     jest.spyOn(dbWriteRetry, "retryDelayMs").mockReturnValue(20);
-    probeFailuresLeft = 5;
+    probeFailuresLeft = 8;
     let ticks = 0;
     const interval = setInterval(() => {
       ticks++;
@@ -430,6 +430,8 @@ describe("BACKLOG-3952 — read-only database at startup", () => {
       clearInterval(interval);
     }
     expect(service.isInitialized()).toBe(true);
-    expect(ticksAtResolve).toBeGreaterThanOrEqual(5);
+    // A synchronous sleep yields 0 ticks. >= 2 leaves room for the coarse
+    // Windows timer (~15.6 ms) on CI.
+    expect(ticksAtResolve).toBeGreaterThanOrEqual(2);
   });
 });

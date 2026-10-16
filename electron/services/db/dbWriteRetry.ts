@@ -27,8 +27,10 @@
  * the rest of startup is unchanged. The waits that use it:
  *   - initializationBroadcaster.DEFAULT_DB_READY_TIMEOUT_MS (imports it)
  *   - systemHandlers.ts, the two "initialization already in progress" waits (import it)
- *   - LoadingOrchestrator.tsx MAX_WAIT_MS (renderer; cannot import from
- *     electron/, so it repeats the number and names this constant)
+ *   - LoadingOrchestrator.tsx DB_WAITING_MAX_WAIT_MS (renderer; cannot import
+ *     from electron/, so it repeats the number and names this constant). It
+ *     applies only while the stage is "db-waiting"; the normal 10 s bound
+ *     (MAX_WAIT_MS) is unchanged.
  */
 
 import type { Database as DatabaseType } from "better-sqlite3";
