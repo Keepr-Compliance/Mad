@@ -60,6 +60,21 @@ jest.mock("../db/core/dbConnection", () => ({
   dbAll: (...args: unknown[]) => mockDbAll(...args),
   dbGet: (...args: unknown[]) => mockDbGet(...args),
   dbRun: jest.fn(),
+  // BACKLOG-3309/3310: the write paths now run inside `dbTransaction`. A
+  // passthrough is enough here: this suite pins WHICH writes are issued, and
+  // atomicity is proven against a real handle in
+  // transactionService.unlinkRestoreAtomicity-3309.test.ts.
+  dbTransaction: <T,>(fn: () => T): T => fn(),
+}));
+
+// BACKLOG-3309/3310: the transaction bodies call these `*Sync` primitives
+// directly, not the databaseService facades; route them to the same mocks.
+jest.mock("../db/communicationDbService", () => ({
+  ...jest.requireActual("../db/communicationDbService"),
+  deleteCommunicationSync: (...args: unknown[]) => mockDelete(...args),
+  addIgnoredCommunicationSync: (...args: unknown[]) => mockAddIgnored(...args),
+  removeIgnoredCommunicationSync: (...args: unknown[]) => mockRemoveIgnored(...args),
+  createCommunicationSync: (...args: unknown[]) => mockCreateComm(...args),
 }));
 
 jest.mock("../logService", () => ({

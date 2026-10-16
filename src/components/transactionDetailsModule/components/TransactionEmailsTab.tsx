@@ -473,6 +473,9 @@ export function TransactionEmailsTab({
 
       const allUnlinkedIds: string[] = [];
       let succeededCount = 0;
+      // BACKLOG-3309: a failed conversation is now rolled back whole and comes
+      // back as success:false, so count it — never drop it silently.
+      let failedCount = 0;
       let firstRefusal: string | undefined;
       for (const cid of repCommIds) {
         try {
@@ -480,11 +483,15 @@ export function TransactionEmailsTab({
           if (r.success) {
             succeededCount += 1;
             if (r.unlinkedIds) allUnlinkedIds.push(...r.unlinkedIds);
-          } else if (!firstRefusal) {
-            firstRefusal = r.error;
+          } else {
+            failedCount += 1;
+            // BACKLOG-3910: only a locked-deal refusal carries a reason worth
+            // showing; any other error text is internal (e.g. a SQLite message).
+            if (!firstRefusal && r.dealLocked && r.error) firstRefusal = r.error;
           }
         } catch {
           // Non-blocking: one constituent failing shouldn't abort the batch.
+          failedCount += 1;
         }
       }
 
@@ -515,8 +522,12 @@ export function TransactionEmailsTab({
         removedEmailContentIds.length > 0
           ? { label: "Undo", onClick: () => void undoBulkRemoveEmails(removedEmailContentIds) }
           : undefined;
+      const failedNote =
+        failedCount > 0
+          ? ` — ${failedCount} conversation${failedCount === 1 ? "" : "s"} couldn't be removed`
+          : "";
       onShowSuccess?.(
-        n > 1 ? `${n} emails removed` : "Email removed from transaction",
+        (n > 1 ? `${n} emails removed` : "Email removed from transaction") + failedNote,
         { action: undoAction }
       );
       // Refresh the removed-emails count in place.

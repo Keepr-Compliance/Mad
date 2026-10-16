@@ -5,7 +5,7 @@
  *
  * Verifies:
  *   1. Clicking unlink on one email in a multi-email thread removes ALL
- *      thread emails from the transaction (atomic per-row).
+ *      thread emails from the transaction (one transaction for the conversation, BACKLOG-3309).
  *   2. Single-email threads still work (1 in, 1 out).
  *   3. Restore symmetry: each removed row writes an ignored_communications
  *      entry, so restore-from-removed can reverse it.
@@ -37,6 +37,19 @@ jest.mock("../db/core/dbConnection", () => ({
   dbAll: (...args: unknown[]) => mockDbAll(...args),
   dbGet: (...args: unknown[]) => mockDbGet(...args),
   dbRun: jest.fn(),
+  // BACKLOG-3309/3310: the write paths now run inside `dbTransaction`. A
+  // passthrough is enough here: this suite pins WHICH writes are issued, and
+  // atomicity is proven against a real handle in
+  // transactionService.unlinkRestoreAtomicity-3309.test.ts.
+  dbTransaction: <T,>(fn: () => T): T => fn(),
+}));
+
+// BACKLOG-3309/3310: the transaction bodies call these `*Sync` primitives
+// directly, not the databaseService facades; route them to the same mocks.
+jest.mock("../db/communicationDbService", () => ({
+  ...jest.requireActual("../db/communicationDbService"),
+  deleteCommunicationSync: (...args: unknown[]) => mockDelete(...args),
+  addIgnoredCommunicationSync: (...args: unknown[]) => mockAddIgnored(...args),
 }));
 
 jest.mock("../logService", () => ({

@@ -968,12 +968,20 @@ function TransactionDetails({
         async ({ unlinkedIds: firstIds }) => {
           // Unlink additional constituents (if merged card had multiple threads).
           const allUnlinkedIds: string[] = [...(firstIds ?? [])];
+          // BACKLOG-3309: a constituent that fails is rolled back whole and comes
+          // back as success:false — count it so the toast says so.
+          let failedCount = 0;
           for (const cid of extraCommIds) {
             try {
               const r = await window.api.transactions.unlinkCommunication(cid);
-              if (r.success && r.unlinkedIds) allUnlinkedIds.push(...r.unlinkedIds);
+              if (r.success) {
+                if (r.unlinkedIds) allUnlinkedIds.push(...r.unlinkedIds);
+              } else {
+                failedCount += 1;
+              }
             } catch {
               // non-blocking: one constituent failing shouldn't break the whole action
+              failedCount += 1;
             }
           }
 
@@ -988,8 +996,12 @@ function TransactionDetails({
             removedEmailContentIds.length > 0
               ? { label: "Undo", onClick: () => void undoRestoreEmails(removedEmailContentIds) }
               : undefined;
+          const failedNote =
+            failedCount > 0
+              ? ` — ${failedCount} conversation${failedCount === 1 ? "" : "s"} couldn't be removed`
+              : "";
           showSuccess(
-            n > 1 ? `${n} emails removed` : "Email unlinked from transaction",
+            (n > 1 ? `${n} emails removed` : "Email unlinked from transaction") + failedNote,
             { action: undoAction },
           );
           setShowUnlinkThread(null);

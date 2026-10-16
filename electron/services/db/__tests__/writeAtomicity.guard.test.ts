@@ -450,10 +450,6 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
     "BACKLOG-3307 — every unchanged contact row keeps an older synced_at and reads as 'not present in the latest sync', so the identity crosswalk's reassignment guard is silently disabled for android_sync and a phone number that has moved between two people binds to the WRONG contact and is never flagged. Persists until the next full snapshot.",
   "electron/services/transactionService/transactionService.ts::_saveCommunications":
     "BACKLOG-3308 — an emails row with no communications row: the email is stored but not attached to the transaction, so it does not appear on it. Partially self-healing, but only if a scan re-runs and nothing schedules one on this condition.",
-  "electron/services/transactionService/transactionService.ts::unlinkCommunication":
-    "BACKLOG-3309 — the email is simultaneously still linked (the communications row survives) and suppressed (the ignored_communications row exists); the next auto-link scan keeps it linked while it also sits in the ignore set. The email twin of BACKLOG-2547, at a site 2547 does not name.",
-  "electron/services/transactionService/transactionService.ts::restoreRemovedEmailThread":
-    "BACKLOG-3310 — the email is neither ignored nor linked: it disappears from 'Show removed emails' AND does not reappear on the transaction, so the user's route back to it is gone and nothing re-derives it.",
 
   // ==========================================================================
   // BACKLOG-3232 — SURFACED BY THE CLASS WIDENING, ALREADY-FILED SITES

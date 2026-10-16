@@ -217,7 +217,29 @@ describe("L4 bulk email remove when the main process refuses", () => {
       await userEvent.click(screen.getByTestId("bulk-remove-confirm-button"));
     });
     await waitFor(() => expect(onShowSuccess).toHaveBeenCalledTimes(1));
-    expect(onShowSuccess.mock.calls[0][0]).toBe("Email removed from transaction");
+    // BACKLOG-3309: the conversation that failed is named, not dropped.
+    expect(onShowSuccess.mock.calls[0][0]).toBe(
+      "Email removed from transaction — 1 conversation couldn't be removed",
+    );
+  });
+
+  it("BACKLOG-3309: a failure that is NOT a lock shows plain text, never the raw error", async () => {
+    (window.api.transactions.unlinkCommunication as jest.Mock).mockResolvedValue({
+      success: false,
+      error: "SQLITE_BUSY: database is locked",
+    });
+    const onShowSuccess = jest.fn();
+    const onShowError = jest.fn();
+    render(emailsTab({ onShowSuccess, onShowError, onRemoveEmailsByIds: jest.fn(() => 0) }));
+    await userEvent.click(screen.getByTestId("select-emails-button"));
+    for (const cb of screen.getAllByTestId("email-thread-select")) await userEvent.click(cb);
+    await userEvent.click(screen.getAllByTestId("emails-bulk-remove")[0]);
+    await act(async () => {
+      await userEvent.click(screen.getByTestId("bulk-remove-confirm-button"));
+    });
+    await waitFor(() => expect(onShowError).toHaveBeenCalledTimes(1));
+    expect(onShowError).toHaveBeenCalledWith("Couldn't remove the emails. Please try again.");
+    expect(onShowSuccess).not.toHaveBeenCalled();
   });
 });
 
