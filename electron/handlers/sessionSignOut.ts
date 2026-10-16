@@ -124,6 +124,27 @@ export function resetChecklistTemplatesOnLogout(): void {
     });
 }
 
+/**
+ * BACKLOG-3954: end the mailbox "can't reach" failure streaks on every logout
+ * path. They belong to the account that signed out; the next user on this
+ * profile starts from zero. (A different user is also caught at the next
+ * connection check, by user id.)
+ *
+ * Dynamic import and fail-closed, mirroring the resets above — this must
+ * NEVER throw into a logout path.
+ */
+export function resetMailboxReachabilityOnLogout(): void {
+  void import("../services/connectionStatusService")
+    .then((m) => m.default.resetUnreachableStreaks())
+    .catch((err) => {
+      logService.warn(
+        "[SessionHandlers] Mailbox reachability reset failed (non-fatal)",
+        "SessionHandlers",
+        { error: err instanceof Error ? err.message : "Unknown" },
+      );
+    });
+}
+
 export type SignOutReason = "user" | "idle" | "expired" | "invalid";
 
 /**
@@ -161,6 +182,7 @@ export async function signOutLocalSession(opts: {
   await step("contact linking", () => resetContactLinkingOnLogout());
   await step("feature gates", () => resetFeatureGateOnLogout());
   await step("checklist templates", () => resetChecklistTemplatesOnLogout());
+  await step("mailbox reachability", () => resetMailboxReachabilityOnLogout());
   await step("audit", () =>
     auditService.log({
       userId,

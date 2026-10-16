@@ -99,6 +99,9 @@ beforeEach(() => {
   mockDb.saveOAuthToken.mockResolvedValue(undefined as never);
 });
 
+// BACKLOG-3954: the can't-reach title changed to the founder's wording ("Keepr
+// will keep trying."); C1, C4 and O1 below pin the new text. What they prove is
+// unchanged: a network failure keeps the connection and is not a token-expiry error.
 describe("Settings / connection status after a failed refresh", () => {
   it("C1 Outlook: certificate failure keeps the connection and says can't reach Microsoft", async () => {
     mockNetFetch.mockImplementation(CERT_FAIL);
@@ -106,7 +109,7 @@ describe("Settings / connection status after a failed refresh", () => {
     expect(s.connected).toBe(true);
     expect(s.error?.type).toBe("PROVIDER_UNREACHABLE");
     expect(s.error?.userMessage).toBe(
-      "Can't reach Microsoft. Check your network or antivirus, then try again.",
+      "Can't reach Microsoft. Keepr will keep trying.",
     );
     expect(mockNetFetch).toHaveBeenCalled();
   });
@@ -133,7 +136,7 @@ describe("Settings / connection status after a failed refresh", () => {
     expect(s.connected).toBe(true);
     expect(s.error?.type).toBe("PROVIDER_UNREACHABLE");
     expect(s.error?.userMessage).toBe(
-      "Can't reach Google. Check your network or antivirus, then try again.",
+      "Can't reach Google. Keepr will keep trying.",
     );
   });
 
@@ -178,7 +181,7 @@ describe("Outlook mail fetch: Graph 401 -> refresh fails", () => {
     graph401ThenRefresh(CERT_FAIL);
     const err = await svc._graphRequest("/me/messages").catch((e: unknown) => e);
     expect((err as Error).message).toBe(
-      "Can't reach Microsoft. Check your network or antivirus, then try again.",
+      "Can't reach Microsoft. Keepr will keep trying.",
     );
     expect(isTokenExpiryError(err)).toBe(false);
   });
