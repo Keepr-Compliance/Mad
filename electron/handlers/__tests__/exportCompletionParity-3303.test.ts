@@ -203,17 +203,19 @@ async function invoke(channel: string, options: unknown): Promise<{ success: boo
 }
 
 const EXPORT_PDF = "transactions:export-pdf"; // BACKLOG-3302 removes it
-const PER_CHANNEL: Record<string, { options: unknown; recordedFormat: string; auditFormat: string }> = {
+const PER_CHANNEL: Record<string, { options: unknown; recordedFormat: string; auditFormat: string; returnedPath: string }> = {
   "transactions:export-enhanced": {
     options: { exportFormat: "excel", contentType: "both", attachmentType: "none" },
     recordedFormat: "excel",
     auditFormat: "excel",
+    returnedPath: "/tmp/export-2549.xlsx", // the exportTransaction mock return
   },
   "transactions:export-folder": {
     options: { contentType: "both", attachmentType: "none" },
     // The folder path leaves the column alone, so the seeded value survives.
     recordedFormat: "pdf",
     auditFormat: "folder",
+    returnedPath: "/tmp/export-2549-folder", // the exportTransactionToFolder mock return
   },
 };
 
@@ -320,7 +322,7 @@ describe("BACKLOG-3303 — every export channel finishes through completeExport"
           auditDataExport: 1,
           auditHiddenTextCountIsNumber: true,
           funnelForThisTxn: 1,
-          rememberedPaths: [expect.any(String)],
+          rememberedPaths: [cfg.returnedPath],
           export_format: cfg.recordedFormat,
           auditFormat: cfg.auditFormat,
         });
