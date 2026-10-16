@@ -26,7 +26,7 @@ const fetchMock = jest.fn();
 function respond(startOk: boolean, role = 'Admin') {
   fetchMock.mockImplementation(async (url: string) => {
     if (url.startsWith('/api/invite/validate')) {
-      return { ok: true, json: async () => ({ valid: true, email: 'x@fixture.example.test', orgName: 'Fixture Brokerage', role }) };
+      return { ok: true, json: async () => ({ valid: true, email: 'x@fixture.example.test', orgName: 'Happyhomey Test 3684', role }) };
     }
     if (url === '/api/invite/start') return { ok: startOk, status: startOk ? 204 : 400 };
     throw new Error(`unexpected fetch ${url}`);
