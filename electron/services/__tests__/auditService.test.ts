@@ -8,9 +8,11 @@
  * - Including all required fields
  */
 
+import * as Sentry from "@sentry/electron/main";
 import {
   auditService,
   AuditAction,
+  AuditLogEntry,
   ResourceType,
 } from "../auditService";
 
@@ -25,6 +27,8 @@ const mockDatabaseService = {
 
 const mockSupabaseService = {
   batchInsertAuditLogs: jest.fn(),
+  // BACKLOG-3987: only the signed-in user's entries are sent.
+  getAuthSession: jest.fn(async () => ({ userId: "user-123" })),
 };
 
 describe("AuditService", () => {
@@ -33,13 +37,21 @@ describe("AuditService", () => {
     // Reset audit service state
     (auditService as any).pendingSyncQueue = [];
     (auditService as any).syncInProgress = false;
+    (auditService as any).currentSync = null;
     (auditService as any).initialized = false;
     (auditService as any).databaseService = null;
     (auditService as any).supabaseService = null;
     // BACKLOG-2149: reset the DB-ready pending-write buffer between tests.
     (auditService as any).pendingLocalWrites = [];
     (auditService as any).flushingPendingWrites = false;
+    (auditService as any).cloudSyncFailing = false;
     mockDatabaseService.isInitialized.mockReturnValue(true);
+    mockSupabaseService.getAuthSession.mockImplementation(async () => ({
+      userId: "user-123",
+    }));
+    // BACKLOG-3987: the table fallback is live; default it to empty.
+    mockDatabaseService.getUnsyncedAuditLogs.mockReset();
+    mockDatabaseService.getUnsyncedAuditLogs.mockResolvedValue([]);
 
     // Stop any running sync interval
     auditService.stopSyncInterval();
@@ -381,8 +393,9 @@ describe("AuditService", () => {
       expect(mockSupabaseService.batchInsertAuditLogs).toHaveBeenCalledTimes(1);
     });
 
-    it("should sync from database when queue is empty but database has unsynced logs", async () => {
-      // Queue is empty, but database has unsynced logs
+    it("sends rows left unsynced by a previous run when the queue is empty (BACKLOG-3987)", async () => {
+      // A restart: the in-memory queue is gone, the rows are still in the
+      // local table with synced_at NULL.
       const unsyncedLogs = [
         {
           id: "log-1",
@@ -393,24 +406,150 @@ describe("AuditService", () => {
           success: true,
         },
       ];
-
       mockDatabaseService.getUnsyncedAuditLogs.mockResolvedValue(unsyncedLogs);
       mockSupabaseService.batchInsertAuditLogs.mockResolvedValue(undefined);
-
-      // Manually add to internal queue to trigger sync, then clear it
-      (auditService as any).pendingSyncQueue = [];
-
-      // Since queue is empty, syncToCloud should return early
-      // We need to test the branch where queue is empty but we check database
-      // This requires the queue to have items initially
-      (auditService as any).pendingSyncQueue = [unsyncedLogs[0]];
+      expect(auditService.getPendingSyncCount()).toBe(0);
 
       await auditService.syncToCloud();
 
+      expect(mockDatabaseService.getUnsyncedAuditLogs).toHaveBeenCalledWith(
+        100,
+        "user-123",
+      );
       expect(mockSupabaseService.batchInsertAuditLogs).toHaveBeenCalledTimes(1);
+      expect(
+        mockSupabaseService.batchInsertAuditLogs.mock.calls[0][0].map(
+          (e: AuditLogEntry) => e.id,
+        ),
+      ).toEqual(["log-1"]);
       expect(mockDatabaseService.markAuditLogsSynced).toHaveBeenCalledWith([
         "log-1",
       ]);
+    });
+
+    it("asks the table only for the signed-in user's rows (BACKLOG-3987)", async () => {
+      // The mock honours the userId argument the way the SQL does, so a
+      // query that drops it returns the other account's row first.
+      const rows: AuditLogEntry[] = [
+        {
+          id: "other-1",
+          timestamp: new Date("2026-01-01T00:00:00Z"),
+          userId: "user-other",
+          action: "LOGIN" as AuditAction,
+          resourceType: "SESSION" as ResourceType,
+          success: true,
+        },
+        {
+          id: "mine-1",
+          timestamp: new Date("2026-01-02T00:00:00Z"),
+          userId: "user-123",
+          action: "LOGIN" as AuditAction,
+          resourceType: "SESSION" as ResourceType,
+          success: true,
+        },
+      ];
+      mockDatabaseService.getUnsyncedAuditLogs.mockImplementation(
+        async (limit: number, userId?: string) =>
+          rows.filter((r) => userId === undefined || r.userId === userId).slice(0, limit),
+      );
+      mockSupabaseService.batchInsertAuditLogs.mockResolvedValue(undefined);
+
+      await auditService.syncToCloud();
+
+      const sent = mockSupabaseService.batchInsertAuditLogs.mock.calls.flatMap(
+        (c: AuditLogEntry[][]) => c[0].map((e) => e.id),
+      );
+      expect(sent).toEqual(["mine-1"]);
+      expect(mockDatabaseService.markAuditLogsSynced).toHaveBeenCalledWith([
+        "mine-1",
+      ]);
+    });
+
+    it("never sends another account's queued entry, and it does not hold the queue (BACKLOG-3987)", async () => {
+      const base = {
+        action: "LOGIN" as AuditAction,
+        resourceType: "SESSION" as ResourceType,
+        success: true,
+      };
+      // An account switch: the queue still holds the previous user's entry,
+      // ahead of the signed-in user's.
+      (auditService as any).pendingSyncQueue = [
+        { ...base, id: "other-q", timestamp: new Date(), userId: "user-other" },
+        { ...base, id: "mine-q", timestamp: new Date(), userId: "user-123" },
+      ];
+      mockSupabaseService.batchInsertAuditLogs.mockResolvedValue(undefined);
+
+      await auditService.syncToCloud();
+
+      const sent = mockSupabaseService.batchInsertAuditLogs.mock.calls.flatMap(
+        (c: AuditLogEntry[][]) => c[0].map((e) => e.id),
+      );
+      expect(sent).toEqual(["mine-q"]);
+      expect(mockDatabaseService.markAuditLogsSynced).not.toHaveBeenCalledWith(
+        expect.arrayContaining(["other-q"]),
+      );
+      expect(auditService.getPendingSyncCount()).toBe(0);
+    });
+
+    it("sends nothing when nobody is signed in (BACKLOG-3987)", async () => {
+      mockSupabaseService.getAuthSession.mockResolvedValue(null as never);
+      (auditService as any).pendingSyncQueue = [
+        {
+          id: "q-1",
+          timestamp: new Date(),
+          userId: "user-123",
+          action: "LOGIN",
+          resourceType: "SESSION",
+          success: true,
+        },
+      ];
+
+      await auditService.syncToCloud();
+
+      expect(mockSupabaseService.batchInsertAuditLogs).not.toHaveBeenCalled();
+      expect(mockDatabaseService.getUnsyncedAuditLogs).not.toHaveBeenCalled();
+      expect(auditService.getPendingSyncCount()).toBe(1);
+    });
+
+    it("reports a run of failed sends to Sentry once, not once per attempt (BACKLOG-3987)", async () => {
+      (Sentry.captureException as jest.Mock).mockClear();
+      mockSupabaseService.batchInsertAuditLogs.mockReset();
+      mockSupabaseService.batchInsertAuditLogs.mockRejectedValue(
+        new Error("fetch failed"),
+      );
+      (auditService as any).pendingSyncQueue = [
+        {
+          id: "q-1",
+          timestamp: new Date(),
+          userId: "user-123",
+          action: "LOGIN",
+          resourceType: "SESSION",
+          success: true,
+        },
+      ];
+
+      await auditService.syncToCloud();
+      await auditService.syncToCloud();
+      await auditService.syncToCloud();
+
+      expect(mockSupabaseService.batchInsertAuditLogs).toHaveBeenCalledTimes(3);
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+
+      // A success ends the run; the next failure is a new run and is reported.
+      mockSupabaseService.batchInsertAuditLogs.mockResolvedValueOnce(undefined);
+      await auditService.syncToCloud();
+      (auditService as any).pendingSyncQueue = [
+        {
+          id: "q-2",
+          timestamp: new Date(),
+          userId: "user-123",
+          action: "LOGIN",
+          resourceType: "SESSION",
+          success: true,
+        },
+      ];
+      await auditService.syncToCloud();
+      expect(Sentry.captureException).toHaveBeenCalledTimes(2);
     });
 
     it("should not sync when services are not initialized", async () => {
@@ -438,7 +577,7 @@ describe("AuditService", () => {
       // Add multiple entries
       for (let i = 0; i < 3; i++) {
         await auditService.log({
-          userId: `user-${i}`,
+          userId: "user-123",
           action: "LOGIN" as AuditAction,
           resourceType: "SESSION" as ResourceType,
           success: true,
@@ -446,10 +585,54 @@ describe("AuditService", () => {
       }
 
       mockSupabaseService.batchInsertAuditLogs.mockResolvedValue(undefined);
+      mockDatabaseService.getUnsyncedAuditLogs.mockResolvedValue([]);
 
       await auditService.flushPendingLogs();
 
       expect(auditService.getPendingSyncCount()).toBe(0);
+    });
+
+    it("also drains rows left in the table by a previous run (BACKLOG-3987)", async () => {
+      const row = {
+        id: "old-1",
+        timestamp: new Date(),
+        userId: "user-123",
+        action: "LOGIN" as AuditAction,
+        resourceType: "SESSION" as ResourceType,
+        success: true,
+      };
+      mockDatabaseService.getUnsyncedAuditLogs
+        .mockResolvedValueOnce([row])
+        .mockResolvedValue([]);
+      mockSupabaseService.batchInsertAuditLogs.mockResolvedValue(undefined);
+
+      await auditService.flushPendingLogs();
+
+      expect(mockDatabaseService.markAuditLogsSynced).toHaveBeenCalledWith([
+        "old-1",
+      ]);
+    });
+
+    it("returns when offline instead of retrying forever (BACKLOG-3987)", async () => {
+      (auditService as any).pendingSyncQueue = [
+        {
+          id: "q-1",
+          timestamp: new Date(),
+          userId: "user-123",
+          action: "LOGIN",
+          resourceType: "SESSION",
+          success: true,
+        },
+      ];
+      mockSupabaseService.batchInsertAuditLogs.mockReset();
+      mockSupabaseService.batchInsertAuditLogs.mockRejectedValue(
+        new Error("fetch failed"),
+      );
+
+      await auditService.flushPendingLogs();
+
+      expect(mockSupabaseService.batchInsertAuditLogs).toHaveBeenCalledTimes(1);
+      expect(auditService.getPendingSyncCount()).toBe(1);
     });
   });
 });
@@ -800,6 +983,7 @@ describe("AuditService - pre-initialization buffering (BACKLOG-3008)", () => {
     (auditService as any).supabaseService = null;
     (auditService as any).pendingSyncQueue = [];
     (auditService as any).syncInProgress = false;
+    (auditService as any).currentSync = null;
     (auditService as any).pendingLocalWrites = [];
     (auditService as any).flushingPendingWrites = false;
 

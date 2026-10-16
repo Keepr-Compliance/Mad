@@ -2586,8 +2586,8 @@ class DatabaseService implements IDatabaseService {
     return auditDb.insertAuditLog(entry);
   }
 
-  async getUnsyncedAuditLogs(limit: number = 100): Promise<AuditLogEntry[]> {
-    return auditDb.getUnsyncedAuditLogs(limit);
+  async getUnsyncedAuditLogs(limit: number, userId: string): Promise<AuditLogEntry[]> {
+    return auditDb.getUnsyncedAuditLogs(limit, userId);
   }
 
   async markAuditLogsSynced(ids: string[]): Promise<void> {
