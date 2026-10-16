@@ -60,6 +60,11 @@ export class EmailNotConfiguredError extends Error {
   }
 }
 
+/** Collapse whitespace (including CR/LF) in a display name; '' when empty. */
+function cleanDisplayName(name: string | null | undefined): string {
+  return (name ?? '').replace(/[\s\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 200);
+}
+
 /**
  * Send a single message via Microsoft Graph. Throws:
  *   - EmailNotConfiguredError when creds / sender address are missing.
@@ -83,10 +88,13 @@ export async function sendViaGraph(params: SendEmailParams): Promise<void> {
     );
   }
 
+  // BACKLOG-3974: a single recipient may carry a display name; without one,
+  // Exchange writes the bare address as the name.
+  const toName = Array.isArray(params.to) ? '' : cleanDisplayName(params.toName);
   const toRecipients = (
     Array.isArray(params.to) ? params.to : [params.to]
   ).map((address) => ({
-    emailAddress: { address },
+    emailAddress: toName ? { address, name: toName } : { address },
   }));
 
   const message: Record<string, unknown> = {

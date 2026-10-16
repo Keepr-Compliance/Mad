@@ -109,7 +109,7 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
     }
 
     // BACKLOG-1914: individual (no-org) invites now send a branded "Get Keepr"
-    // download email and provision a trial automatically on first sign-in —
+    // download email and provision a license automatically on first sign-in —
     // no plan/license is captured at invite time.
 
     setIsLoading(true);
@@ -176,7 +176,7 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
               <div className="rounded-md bg-green-50 border border-green-200 p-4">
                 <p className="text-sm text-green-800">
                   {successResult.flow === 'download'
-                    ? <>Download invitation sent to <strong>{email}</strong>. They&apos;ll download Keepr, sign in with this email, and a trial starts automatically.</>
+                    ? <>Download invitation sent to <strong>{email}</strong>. They&apos;ll download Keepr and sign in with this email.</>
                     : <>Invitation email sent successfully to <strong>{email}</strong>.</>}
                 </p>
               </div>
@@ -384,13 +384,13 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
                 Sends a branded <strong>Get Keepr</strong> download email.
               </p>
               <p className="mt-1 text-xs text-primary-700">
-                The invitee downloads Keepr, signs in with this email, and a 14-day
-                trial starts automatically — no plan or acceptance link needed.
+                The invitee downloads Keepr and signs in with this email — no plan
+                or acceptance link needed.
               </p>
             </div>
           )}
 
-          {/* License Status (org invites only — trial is auto-provisioned for individuals) */}
+          {/* License Status (org invites only — a license is auto-provisioned for individuals) */}
           {organizationId && (
             <div>
               <Label htmlFor="invite-license-status">

@@ -5,8 +5,10 @@
  * Instead of the old, dead `individual_invitations` token link (which the
  * acceptance side never resolved — 0/8 organic accepts), this email points the
  * invitee at the canonical download page. They download Keepr, sign in with
- * their email, and a 14-day trial is provisioned automatically on first
- * sign-in (create_trial_license). No per-invitee token is required.
+ * the invited email address, and an active individual license is provisioned on
+ * first sign-in (create_active_individual_license, BACKLOG-2180). No per-invitee
+ * token is required. BACKLOG-3974: step 2 names the invited address, and the
+ * stale trial wording is gone.
  *
  * Branding mirrors the existing transactional templates (invite.ts /
  * receipt.ts): the Keepr indigo (#4f46e5) header + CTA, table-based layout,
@@ -28,11 +30,12 @@ export function buildDownloadInviteEmail(
   params: DownloadInviteEmailParams,
 ): EmailContent {
   const downloadUrl = params.downloadUrl?.trim() || DEFAULT_DOWNLOAD_URL;
+  const email = params.recipientEmail.trim();
 
   const subject = "You've been invited to Keepr";
 
   const html = baseLayout({
-    preheader: 'Download Keepr and sign in with this email — your trial starts automatically.',
+    preheader: 'Download Keepr and sign in with this email address to get started.',
     body: `
       <h1 style="margin:0 0 16px 0; font-size:24px; font-weight:700; color:#111827; line-height:1.3;">
         You've been invited to Keepr
@@ -51,13 +54,8 @@ export function buildDownloadInviteEmail(
           </td>
         </tr>
         <tr>
-          <td style="padding:0 0 10px 0; font-size:15px; color:#374151; line-height:1.5;">
-            <strong style="color:#4f46e5;">2.</strong>&nbsp; Sign in with <strong>this email address</strong>.
-          </td>
-        </tr>
-        <tr>
           <td style="padding:0; font-size:15px; color:#374151; line-height:1.5;">
-            <strong style="color:#4f46e5;">3.</strong>&nbsp; Your free 14-day trial starts automatically.
+            <strong style="color:#4f46e5;">2.</strong>&nbsp; Sign in with <strong>${escapeHtml(email)}</strong>.
           </td>
         </tr>
       </table>
@@ -89,8 +87,7 @@ export function buildDownloadInviteEmail(
     '',
     'Getting started takes about a minute:',
     '  1. Download Keepr for your computer.',
-    '  2. Sign in with this email address.',
-    '  3. Your free 14-day trial starts automatically.',
+    `  2. Sign in with ${email}.`,
     '',
     `Get Keepr: ${downloadUrl}`,
     '',

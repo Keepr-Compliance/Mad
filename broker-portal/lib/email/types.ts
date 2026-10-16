@@ -14,6 +14,12 @@ export type EmailType = 'invite' | 'ticket_notification' | 'ticket_confirmation'
 export interface SendEmailParams {
   /** Recipient email address or array of addresses */
   to: string | string[];
+  /**
+   * Display name for a single `to` address (BACKLOG-3974). Ignored when `to`
+   * is an array. Not persisted by the retry queue, so a queued retry is sent
+   * with the address only.
+   */
+  toName?: string;
   /** Email subject line */
   subject: string;
   /** HTML body content */
@@ -121,14 +127,22 @@ export interface InviteEmailParams {
 export interface DownloadInviteEmailParams {
   /**
    * Recipient email address. The invitee downloads Keepr and signs in with
-   * THIS email — a 14-day trial is provisioned automatically on first sign-in
-   * (create_trial_license), so no per-invitee token/link is needed.
+   * THIS email (the email names it in step 2 — BACKLOG-3974). An active
+   * individual license is provisioned on first sign-in
+   * (create_active_individual_license, BACKLOG-2180), so no per-invitee
+   * token/link is needed.
    *
    * BACKLOG-1914: replaces the dead individual (no-org) invite link with a
    * branded "Get Keepr" download email. The old individual_invitations token
    * link was never resolvable on the acceptance side (0/8 organic accepts).
    */
   recipientEmail: string;
+  /**
+   * Invitee's name ("First Last"), sent as the To display name so the
+   * recipient line does not read as a bare address (BACKLOG-3974). Optional:
+   * omitted, the To header carries the address only.
+   */
+  recipientName?: string;
   /**
    * Canonical download / landing page URL. Defaults to
    * https://keeprcompliance.com when omitted.
