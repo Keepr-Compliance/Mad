@@ -20,7 +20,7 @@
   BACKLOG-3927: the Store build trims the libimobiledevice folder from 45 files
   to 11 (34 fewer PE files; see scripts/release/pinnedIphoneTools.js), so the
   Store app root measures 25 against 59 for the website. Floors are per channel:
-  website app 55 (59 measured), store app 25 (25 measured).
+  website app 55 (59 measured), store app 21 (25 measured); both keep a margin of 4.
 
   Exit code: 0 = every file Valid and every floor met; 1 = anything else.
 
@@ -52,8 +52,8 @@ Set-StrictMode -Version Latest
 # Minimum PE files each unpack root must contribute (v2.38.1 measured 7 / 64 / 4;
 # app is 59 after BACKLOG-3812).
 $Floors = [ordered]@{ outer = 7; app = 55; uninst = 4 }
-# Store app root: 25 measured (BACKLOG-3927), same margin rule as website.
-if ($Channel -eq "store") { $Floors.app = 25 }
+# Store app root: 25 measured (BACKLOG-3927), floor 21 = measured - 4, the same margin as website (59 - 4 = 55).
+if ($Channel -eq "store") { $Floors.app = 21 }
 
 function Fail([string]$msg) {
   Write-Host "::error::$msg"
