@@ -1,6 +1,6 @@
 /**
  * BACKLOG-3927: scripts/ci/check-pe-signatures.ps1 has a per-channel app-root floor.
- * website app floor 55 (59 measured), store app floor 25 (25 measured; the Store build
+ * website app floor 55 (59 measured), store app floor 21 (25 measured; the Store build
  * ships 34 fewer PE files in the iPhone tools folder).
  *
  * Runs the real script under pwsh with -HeaderOnly and a fake 7z that "unpacks" a synthetic
@@ -67,9 +67,9 @@ describe("check-pe-signatures per-channel app floor (BACKLOG-3927)", () => {
     it("explicit website behaves as the default", () => {
       expect(floorError(run("website", 25))).toBe("root 'app' has 25 PE files, floor is 55");
     });
-    it("store: 25 passes, 24 fails with floor 25", () => {
-      expect(floorError(run("store", 25))).toBeNull();
-      expect(floorError(run("store", 24))).toBe("root 'app' has 24 PE files, floor is 25");
+    it("store: 21 passes, 20 fails with floor 21", () => {
+      expect(floorError(run("store", 21))).toBeNull();
+      expect(floorError(run("store", 20))).toBe("root 'app' has 20 PE files, floor is 21");
     });
   });
 });
