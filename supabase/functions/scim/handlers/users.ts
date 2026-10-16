@@ -23,6 +23,14 @@ import {
 import { scimError } from "../shared/errors.ts";
 import { logScimOperation } from "../shared/auth.ts";
 import {
+  defaultSeatNotifyDeps,
+  isSeatLimitError,
+  notifySeatLimitReached,
+  SEAT_LIMIT_DETAIL,
+  SEAT_LIMIT_ERROR,
+  type SeatNotifyDeps,
+} from "../shared/seatLimit.ts";
+import {
   resolveRole,
   extractGroupRoleMapping,
 } from "../../_shared/groupRoleMapper.ts";
@@ -115,6 +123,150 @@ async function resolveRoleFromGroups(
 }
 
 // ---------------------------------------------------------------------------
+// Membership writes (BACKLOG-3851 PR-2c)
+// ---------------------------------------------------------------------------
+
+type DbError = { code?: string; message?: string } | null;
+
+/** "Given Family", display name, or the email: who the IT-admin email is about. */
+function personLabelOf(
+  email: string,
+  nameObj?: { givenName?: string; familyName?: string },
+  displayName?: string | null,
+): string {
+  const full = [nameObj?.givenName, nameObj?.familyName].filter(Boolean).join(" ").trim();
+  return full || (displayName ?? "").trim() || email;
+}
+
+/**
+ * Add the person to this brokerage: claim their unclaimed invite in it if one exists
+ * (case-insensitive email match; a live invite already holds the seat, an expired one
+ * takes one), otherwise insert a membership. The seat trigger refuses either write when
+ * it would exceed the brokerage's seats (P0001 seat_limit_reached).
+ */
+async function writeScimMembership(
+  supabaseAdmin: SupabaseClient,
+  p: {
+    orgId: string;
+    userId: string;
+    email: string;
+    role: string;
+    roleFromGroups: boolean;
+    groups: string[];
+  },
+): Promise<{ error: DbError; claimedInvite: boolean }> {
+  const now = new Date().toISOString();
+  const { data: invites, error: inviteError } = await supabaseAdmin
+    .from("organization_members")
+    .select("id, role, invited_email")
+    .eq("organization_id", p.orgId)
+    .is("user_id", null)
+    .eq("license_status", "pending");
+  if (inviteError) return { error: inviteError, claimedInvite: false };
+
+  const invite = ((invites ?? []) as Array<{ id: string; role: string; invited_email: string | null }>)
+    .find((m) => (m.invited_email ?? "").trim().toLowerCase() === p.email);
+
+  if (invite) {
+    const { data: claimed, error } = await supabaseAdmin
+      .from("organization_members")
+      .update({
+        user_id: p.userId,
+        role: p.roleFromGroups ? p.role : invite.role,
+        license_status: "active",
+        provisioned_by: "scim",
+        provisioned_at: now,
+        scim_synced_at: now,
+        joined_at: now,
+        invitation_token: null,
+        idp_groups: p.groups.length > 0 ? p.groups : null,
+        group_sync_enabled: p.roleFromGroups,
+      })
+      .eq("id", invite.id)
+      .is("user_id", null)
+      .select("id");
+    if (error) return { error, claimedInvite: true };
+    if (!Array.isArray(claimed) || claimed.length !== 1) {
+      return { error: { message: "invite was claimed concurrently" }, claimedInvite: true };
+    }
+    return { error: null, claimedInvite: true };
+  }
+
+  const { error } = await supabaseAdmin.from("organization_members").insert({
+    organization_id: p.orgId,
+    user_id: p.userId,
+    role: p.role,
+    license_status: "active",
+    provisioned_by: "scim",
+    provisioned_at: now,
+    scim_synced_at: now,
+    joined_at: now,
+    idp_groups: p.groups.length > 0 ? p.groups : null,
+    group_sync_enabled: p.roleFromGroups,
+  });
+  return { error, claimedInvite: false };
+}
+
+/** 403 for a seat refusal: email the IT admins (de-duped), then log, then answer. */
+async function refuseForSeats(
+  supabaseAdmin: SupabaseClient,
+  deps: SeatNotifyDeps,
+  auth: AuthResult,
+  p: {
+    operation: "CREATE" | "UPDATE";
+    resourceId?: string;
+    externalId?: string;
+    body: unknown;
+    personLabel: string;
+    kind: "add" | "reactivate";
+    excludeUserId?: string;
+  },
+): Promise<Response> {
+  await notifySeatLimitReached(supabaseAdmin, deps, {
+    orgId: auth.orgId,
+    personLabel: p.personLabel,
+    kind: p.kind,
+    excludeUserId: p.excludeUserId,
+  });
+  await logScimOperation(supabaseAdmin, {
+    organizationId: auth.orgId,
+    operation: p.operation,
+    resourceType: "User",
+    resourceId: p.resourceId,
+    externalId: p.externalId,
+    requestPayload: p.body,
+    responseStatus: 403,
+    errorMessage: SEAT_LIMIT_ERROR,
+    scimTokenId: auth.tokenId,
+  });
+  return scimError(403, SEAT_LIMIT_DETAIL);
+}
+
+/** The org's default role, overridden by IdP group mapping when it resolves. */
+async function resolveCreateRole(
+  supabaseAdmin: SupabaseClient,
+  orgId: string,
+  body: Record<string, unknown>,
+  email: string,
+): Promise<{ role: string; fromGroups: boolean; groups: string[] }> {
+  const { data: org } = await supabaseAdmin
+    .from("organizations")
+    .select("default_member_role")
+    .eq("id", orgId)
+    .single();
+  let role = org?.default_member_role || "agent";
+  const groups = extractGroupsFromScimPayload(body);
+  const groupRoleResult = await resolveRoleFromGroups(supabaseAdmin, orgId, groups);
+  if (groupRoleResult) {
+    role = groupRoleResult.role;
+    console.log(
+      `[scim] User ${email}: role resolved to '${role}' via group '${groupRoleResult.matchedGroup}'`,
+    );
+  }
+  return { role, fromGroups: groupRoleResult !== null, groups };
+}
+
+// ---------------------------------------------------------------------------
 // POST /scim/v2/Users -- Create a new user
 // ---------------------------------------------------------------------------
 
@@ -124,6 +276,7 @@ export async function handleCreateUser(
   auth: AuthResult,
   supabaseAdmin: SupabaseClient,
   baseUrl: string,
+  deps: SeatNotifyDeps = defaultSeatNotifyDeps(),
 ): Promise<Response> {
   if (!auth.permissions.canCreate) {
     return scimError(403, "Token does not have create permission");
@@ -158,6 +311,7 @@ export async function handleCreateUser(
   }
 
   const email = userName.toLowerCase();
+  const personLabel = personLabelOf(email, nameObj, displayName);
 
   // Check if user already exists by scim_external_id or email
   if (externalId) {
@@ -217,8 +371,119 @@ export async function handleCreateUser(
       );
     }
 
-    // User exists but not in this org -- update SCIM fields and add to org
-    await supabaseAdmin
+    // The person's memberships elsewhere decide whether SCIM may add them here.
+    const { data: otherMemberships, error: otherError } = await supabaseAdmin
+      .from("organization_members")
+      .select("organization_id")
+      .eq("user_id", existingByEmail.id);
+    const otherOrgIds = ((otherMemberships ?? []) as Array<{ organization_id: string }>)
+      .map((m) => m.organization_id)
+      .filter((id) => id !== auth.orgId);
+    let otherOrgs: Array<{ id: string; personal_owner_user_id: string | null }> = [];
+    let otherOrgsError: DbError = null;
+    if (!otherError && otherOrgIds.length > 0) {
+      const res = await supabaseAdmin
+        .from("organizations")
+        .select("id, personal_owner_user_id")
+        .in("id", otherOrgIds);
+      otherOrgs = (res.data ?? []) as typeof otherOrgs;
+      otherOrgsError = res.error;
+    }
+    if (otherError || otherOrgsError || otherOrgs.length !== otherOrgIds.length) {
+      await logScimOperation(supabaseAdmin, {
+        organizationId: auth.orgId,
+        operation: "CREATE",
+        resourceType: "User",
+        resourceId: existingByEmail.id,
+        externalId: externalId,
+        requestPayload: body,
+        responseStatus: 500,
+        errorMessage: "Failed to read the person's memberships",
+        scimTokenId: auth.tokenId,
+      });
+      return scimError(500, "Failed to create user");
+    }
+
+    // A person already in another brokerage is never moved (same rule as accepting an
+    // invitation, BACKLOG-3684 already_placed).
+    if (otherOrgs.some((o) => o.personal_owner_user_id === null)) {
+      await logScimOperation(supabaseAdmin, {
+        organizationId: auth.orgId,
+        operation: "CREATE",
+        resourceType: "User",
+        resourceId: existingByEmail.id,
+        externalId: externalId,
+        requestPayload: body,
+        responseStatus: 409,
+        errorMessage: "already_placed",
+        scimTokenId: auth.tokenId,
+      });
+      return scimError(
+        409,
+        "already_placed: this person already belongs to another brokerage in Keepr.",
+        "uniqueness",
+      );
+    }
+
+    // Q-F4, answer (b): a person whose only Keepr membership is their own personal
+    // account (solo Agent plan) is not moved by SCIM; the brokerage invites them and they
+    // accept. Answer (a) would be: remove this branch.
+    if (otherOrgs.length > 0) {
+      await logScimOperation(supabaseAdmin, {
+        organizationId: auth.orgId,
+        operation: "CREATE",
+        resourceType: "User",
+        resourceId: existingByEmail.id,
+        externalId: externalId,
+        requestPayload: body,
+        responseStatus: 409,
+        errorMessage: "personal_account",
+        scimTokenId: auth.tokenId,
+      });
+      return scimError(
+        409,
+        "personal_account: this person has their own Keepr account; this person must accept an invitation from the brokerage.",
+        "uniqueness",
+      );
+    }
+
+    const created = await resolveCreateRole(supabaseAdmin, auth.orgId, body, email);
+
+    // Membership first: a refused write must leave the person's users row untouched.
+    const { error: memberError } = await writeScimMembership(supabaseAdmin, {
+      orgId: auth.orgId,
+      userId: existingByEmail.id,
+      email,
+      role: created.role,
+      roleFromGroups: created.fromGroups,
+      groups: created.groups,
+    });
+    if (memberError) {
+      if (isSeatLimitError(memberError)) {
+        return refuseForSeats(supabaseAdmin, deps, auth, {
+          operation: "CREATE",
+          resourceId: existingByEmail.id,
+          externalId,
+          body,
+          personLabel,
+          kind: "add",
+        });
+      }
+      await logScimOperation(supabaseAdmin, {
+        organizationId: auth.orgId,
+        operation: "CREATE",
+        resourceType: "User",
+        resourceId: existingByEmail.id,
+        externalId: externalId,
+        requestPayload: body,
+        responseStatus: 500,
+        errorMessage: memberError.message || "Failed to add membership",
+        scimTokenId: auth.tokenId,
+      });
+      return scimError(500, "Failed to create user");
+    }
+
+    const { error: userUpdateError } = await supabaseAdmin
       .from("users")
       .update({
         scim_external_id: externalId || existingByEmail.id,
@@ -232,42 +497,20 @@ export async function handleCreateUser(
         updated_at: new Date().toISOString(),
       })
       .eq("id", existingByEmail.id);
-
-    // Get org's default role
-    const { data: org } = await supabaseAdmin
-      .from("organizations")
-      .select("default_member_role")
-      .eq("id", auth.orgId)
-      .single();
-
-    let role = org?.default_member_role || "agent";
-
-    // Extract groups from SCIM payload and resolve role via group mapping
-    const scimGroups = extractGroupsFromScimPayload(body);
-    const groupRoleResult = await resolveRoleFromGroups(
-      supabaseAdmin,
-      auth.orgId,
-      scimGroups,
-    );
-    if (groupRoleResult) {
-      role = groupRoleResult.role;
-      console.log(
-        `[scim] User ${email}: role resolved to '${role}' via group '${groupRoleResult.matchedGroup}'`,
-      );
+    if (userUpdateError) {
+      await logScimOperation(supabaseAdmin, {
+        organizationId: auth.orgId,
+        operation: "CREATE",
+        resourceType: "User",
+        resourceId: existingByEmail.id,
+        externalId: externalId,
+        requestPayload: body,
+        responseStatus: 500,
+        errorMessage: userUpdateError.message,
+        scimTokenId: auth.tokenId,
+      });
+      return scimError(500, "Failed to create user");
     }
-
-    await supabaseAdmin.from("organization_members").insert({
-      organization_id: auth.orgId,
-      user_id: existingByEmail.id,
-      role,
-      license_status: "active",
-      provisioned_by: "scim",
-      provisioned_at: new Date().toISOString(),
-      scim_synced_at: new Date().toISOString(),
-      joined_at: new Date().toISOString(),
-      idp_groups: scimGroups.length > 0 ? scimGroups : null,
-      group_sync_enabled: groupRoleResult !== null,
-    });
 
     // Fetch the updated user
     const { data: updatedUser } = await supabaseAdmin
@@ -300,7 +543,10 @@ export async function handleCreateUser(
     );
   }
 
-  // Create new user
+  // New email: no Keepr account. Provisioning a brand-new person is BACKLOG-3986; today
+  // the membership write fails (the seat rule in a full brokerage, otherwise the
+  // auth.users key), so the users row created here is removed and the answer is 403 or
+  // 500, never 201 over a person with no membership.
   const { data: newUser, error: createError } = await supabaseAdmin
     .from("users")
     .insert({
@@ -333,42 +579,47 @@ export async function handleCreateUser(
     return scimError(500, "Failed to create user");
   }
 
-  // Get org's default role
-  const { data: org2 } = await supabaseAdmin
-    .from("organizations")
-    .select("default_member_role")
-    .eq("id", auth.orgId)
-    .single();
+  const createdNew = await resolveCreateRole(supabaseAdmin, auth.orgId, body, email);
 
-  let newUserRole = org2?.default_member_role || "agent";
-
-  // Extract groups from SCIM payload and resolve role via group mapping
-  const newUserGroups = extractGroupsFromScimPayload(body);
-  const newUserGroupResult = await resolveRoleFromGroups(
-    supabaseAdmin,
-    auth.orgId,
-    newUserGroups,
-  );
-  if (newUserGroupResult) {
-    newUserRole = newUserGroupResult.role;
-    console.log(
-      `[scim] New user ${email}: role resolved to '${newUserRole}' via group '${newUserGroupResult.matchedGroup}'`,
-    );
-  }
-
-  // Create org membership
-  await supabaseAdmin.from("organization_members").insert({
-    organization_id: auth.orgId,
-    user_id: newUser.id,
-    role: newUserRole,
-    license_status: "active",
-    provisioned_by: "scim",
-    provisioned_at: new Date().toISOString(),
-    scim_synced_at: new Date().toISOString(),
-    joined_at: new Date().toISOString(),
-    idp_groups: newUserGroups.length > 0 ? newUserGroups : null,
-    group_sync_enabled: newUserGroupResult !== null,
+  const { error: newMemberError } = await writeScimMembership(supabaseAdmin, {
+    orgId: auth.orgId,
+    userId: newUser.id,
+    email,
+    role: createdNew.role,
+    roleFromGroups: createdNew.fromGroups,
+    groups: createdNew.groups,
   });
+
+  if (newMemberError) {
+    // Remove the fresh users row first, so Entra's retry is a clean new-email POST again.
+    const { error: removeError } = await supabaseAdmin
+      .from("users")
+      .delete()
+      .eq("id", newUser.id);
+    if (removeError) {
+      console.error(`[scim] could not remove users row ${newUser.id}:`, removeError.message);
+    }
+    if (isSeatLimitError(newMemberError)) {
+      return refuseForSeats(supabaseAdmin, deps, auth, {
+        operation: "CREATE",
+        externalId,
+        body,
+        personLabel,
+        kind: "add",
+      });
+    }
+    await logScimOperation(supabaseAdmin, {
+      organizationId: auth.orgId,
+      operation: "CREATE",
+      resourceType: "User",
+      externalId: externalId,
+      requestPayload: body,
+      responseStatus: 500,
+      errorMessage: newMemberError.message || "Failed to add membership",
+      scimTokenId: auth.tokenId,
+    });
+    return scimError(500, "Failed to create user");
+  }
 
   await logScimOperation(supabaseAdmin, {
     organizationId: auth.orgId,
@@ -560,6 +811,7 @@ export async function handlePatchUser(
   auth: AuthResult,
   supabaseAdmin: SupabaseClient,
   baseUrl: string,
+  deps: SeatNotifyDeps = defaultSeatNotifyDeps(),
 ): Promise<Response> {
   if (!auth.permissions.canUpdate) {
     return scimError(403, "Token does not have update permission");
@@ -575,7 +827,7 @@ export async function handlePatchUser(
   // Verify user belongs to this org (include group_sync_enabled + role for audit)
   const { data: member } = await supabaseAdmin
     .from("organization_members")
-    .select("user_id, group_sync_enabled, role")
+    .select("user_id, group_sync_enabled, role, license_status")
     .eq("organization_id", auth.orgId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -612,6 +864,8 @@ export async function handlePatchUser(
   const memberUpdates: Record<string, unknown> = {
     scim_synced_at: new Date().toISOString(),
   };
+  // The last active value in the PatchOp wins; applied after the loop.
+  let requestedActive: boolean | undefined;
 
   for (const op of operations) {
     const opType = op.op?.toLowerCase();
@@ -640,15 +894,7 @@ export async function handlePatchUser(
       }
 
       if (activeValue !== undefined) {
-        if (!activeValue) {
-          userUpdates.suspended_at = new Date().toISOString();
-          userUpdates.suspension_reason = "scim_deprovisioned";
-          memberUpdates.license_status = "suspended";
-        } else {
-          userUpdates.suspended_at = null;
-          userUpdates.suspension_reason = null;
-          memberUpdates.license_status = "active";
-        }
+        requestedActive = activeValue;
       }
 
       // Also handle name fields in the value object
@@ -713,6 +959,65 @@ export async function handlePatchUser(
     }
   }
 
+  // active:false deactivates from any status. active:true re-activates ONLY a
+  // deactivated (suspended / expired) member; an unassigned or pending member keeps its
+  // status (a licence is assigned in Keepr, not by the IdP).
+  const currentStatus = (member as { license_status?: string | null }).license_status ?? null;
+  const reactivating = requestedActive === true &&
+    (currentStatus === "suspended" || currentStatus === "expired");
+  if (requestedActive === false) {
+    userUpdates.suspended_at = new Date().toISOString();
+    userUpdates.suspension_reason = "scim_deprovisioned";
+    memberUpdates.license_status = "suspended";
+  } else if (requestedActive === true) {
+    userUpdates.suspended_at = null;
+    userUpdates.suspension_reason = null;
+    if (reactivating) memberUpdates.license_status = "active";
+  }
+
+  // Membership first (it carries scim_synced_at on every PATCH). A refused re-activation
+  // writes nothing, so the person stays deactivated (SCIM active = false) and the PATCH
+  // as a whole is not applied.
+  const { error: memberError } = await supabaseAdmin
+    .from("organization_members")
+    .update(memberUpdates)
+    .eq("organization_id", auth.orgId)
+    .eq("user_id", userId);
+
+  if (memberError) {
+    if (isSeatLimitError(memberError)) {
+      const { data: who } = await supabaseAdmin
+        .from("users")
+        .select("email, display_name, first_name, last_name")
+        .eq("id", userId)
+        .maybeSingle();
+      const whoEmail = (who?.email as string | undefined) ?? userId;
+      return refuseForSeats(supabaseAdmin, deps, auth, {
+        operation: "UPDATE",
+        resourceId: userId,
+        body,
+        personLabel: personLabelOf(
+          whoEmail,
+          { givenName: who?.first_name ?? undefined, familyName: who?.last_name ?? undefined },
+          who?.display_name ?? null,
+        ),
+        kind: "reactivate",
+        excludeUserId: userId,
+      });
+    }
+    await logScimOperation(supabaseAdmin, {
+      organizationId: auth.orgId,
+      operation: "UPDATE",
+      resourceType: "User",
+      resourceId: userId,
+      requestPayload: body,
+      responseStatus: 500,
+      errorMessage: memberError.message,
+      scimTokenId: auth.tokenId,
+    });
+    return scimError(500, "Failed to update user");
+  }
+
   // Apply user updates
   const { error: updateError } = await supabaseAdmin
     .from("users")
@@ -732,22 +1037,6 @@ export async function handlePatchUser(
     });
     return scimError(500, "Failed to update user");
   }
-
-  // Apply member updates if there are any beyond scim_synced_at
-  if (Object.keys(memberUpdates).length > 1) {
-    await supabaseAdmin
-      .from("organization_members")
-      .update(memberUpdates)
-      .eq("organization_id", auth.orgId)
-      .eq("user_id", userId);
-  }
-
-  // Also update scim_synced_at even if no other member changes
-  await supabaseAdmin
-    .from("organization_members")
-    .update({ scim_synced_at: new Date().toISOString() })
-    .eq("organization_id", auth.orgId)
-    .eq("user_id", userId);
 
   // Fetch updated user
   const { data: updatedUser } = await supabaseAdmin
@@ -810,8 +1099,17 @@ export async function handleDeleteUser(
     return scimError(404, "User not found");
   }
 
-  // Soft-delete: suspend the user, do NOT hard-delete
-  await supabaseAdmin
+  // Soft-delete: suspend the membership, then the user; do NOT hard-delete.
+  const { error: memberError } = await supabaseAdmin
+    .from("organization_members")
+    .update({
+      license_status: "suspended",
+      scim_synced_at: new Date().toISOString(),
+    })
+    .eq("organization_id", auth.orgId)
+    .eq("user_id", userId);
+
+  const { error: userError } = memberError ? { error: null } : await supabaseAdmin
     .from("users")
     .update({
       suspended_at: new Date().toISOString(),
@@ -820,15 +1118,18 @@ export async function handleDeleteUser(
     })
     .eq("id", userId);
 
-  // Update org membership status
-  await supabaseAdmin
-    .from("organization_members")
-    .update({
-      license_status: "suspended",
-      scim_synced_at: new Date().toISOString(),
-    })
-    .eq("organization_id", auth.orgId)
-    .eq("user_id", userId);
+  if (memberError || userError) {
+    await logScimOperation(supabaseAdmin, {
+      organizationId: auth.orgId,
+      operation: "DELETE",
+      resourceType: "User",
+      resourceId: userId,
+      responseStatus: 500,
+      errorMessage: (memberError ?? userError)?.message,
+      scimTokenId: auth.tokenId,
+    });
+    return scimError(500, "Failed to deactivate user");
+  }
 
   await logScimOperation(supabaseAdmin, {
     organizationId: auth.orgId,
