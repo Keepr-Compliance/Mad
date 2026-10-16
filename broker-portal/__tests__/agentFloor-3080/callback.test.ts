@@ -151,18 +151,17 @@ describe('(b) no membership', () => {
 
 // (c) The invite branch runs BEFORE the owner is admitted.
 describe('(c) personal-org owner with a pending invite', () => {
-  it('claims the invite for the session user, lands on /dashboard, never calls JIT', async () => {
+  // BACKLOG-3684: without the invitation link the invite is no longer accepted
+  // by email. The owner keeps their floor (founder question open; option a),
+  // the invite stays pending, and nothing is written.
+  it('without the link: accepts nothing, writes nothing, keeps the floor', async () => {
     signedIn('azure');
     given([personalMembership(), pendingInvite(EMAIL, 'agent')]);
 
     expect(await callbackRedirect()).toBe(DASHBOARD);
-    const writes = mockEmulator.state.writes;
-    expect(writes.map((w) => `${w.table}:${w.op}`)).toEqual([
-      'users:upsert',
-      'organization_members:update',
-    ]);
-    expect(writes[1].values).toMatchObject({ user_id: FIXTURE_USER_ID, license_status: 'active' });
-    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockEmulator.state.writes).toHaveLength(0);
+    expect(mockRpc).not.toHaveBeenCalledWith('accept_invitation', expect.anything());
+    expect(mockRpc).not.toHaveBeenCalledWith('caller_has_pending_invite');
     expect(mockSignOut).not.toHaveBeenCalled();
   });
 });

@@ -730,6 +730,9 @@ const KNOWN_ROUTE_HANDLERS = [
   // BACKLOG-3849: billing outbox drain, called by a database cron job with a
   // secret header; no user session, no request-supplied ids.
   'app/api/internal/billing/drain/route.ts',
+  // BACKLOG-3684: POST only, same-origin; validates the token read-only and sets
+  // the keepr_invite cookie. No session, no write.
+  'app/api/invite/start/route.ts',
   'app/api/invite/validate/route.ts',
   'app/api/payments/charge/route.ts',
   'app/api/payments/checkout-session/route.ts',
@@ -909,7 +912,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(22);
+    expect(handlers.length).toBe(23);
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {

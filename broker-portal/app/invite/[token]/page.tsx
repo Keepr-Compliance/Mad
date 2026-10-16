@@ -4,7 +4,9 @@
  * Invite Accept Page
  *
  * Validates an invitation token and prompts the user to sign in.
- * On sign-in, the OAuth callback will claim the pending invite.
+ * BACKLOG-3684: before the OAuth redirect, POST /api/invite/start stores this
+ * link's token in a short-lived cookie; the OAuth callback accepts exactly that
+ * invitation, and only for the account it was sent to.
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -26,6 +28,7 @@ export default function InviteAcceptPage() {
   const token = params.token as string;
   const [invite, setInvite] = useState<InviteInfo | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
 
   const validateToken = useCallback(async () => {
     try {
@@ -45,6 +48,24 @@ export default function InviteAcceptPage() {
     const { createClient } = await import('@/lib/supabase/client');
     const supabase = createClient();
     setLoading(provider);
+    setStartError(null);
+
+    let started = false;
+    try {
+      const res = await fetch('/api/invite/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, purpose: 'invite' }),
+      });
+      started = res.ok;
+    } catch {
+      started = false;
+    }
+    if (!started) {
+      setStartError('We could not start accepting this invitation. Reload the page and try again.');
+      setLoading(null);
+      return;
+    }
 
     await supabase.auth.signInWithOAuth({
       provider,
@@ -110,6 +131,12 @@ export default function InviteAcceptPage() {
           <p className="text-center text-sm text-gray-600">
             Sign in to accept your invitation
           </p>
+
+          {startError && (
+            <p role="alert" className="text-center text-sm text-red-600">
+              {startError}
+            </p>
+          )}
 
           <button
             onClick={() => handleSignIn('google')}
