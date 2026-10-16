@@ -32,7 +32,6 @@ jest.mock('@/lib/supabase/server', () => ({
 
 jest.mock('@/lib/auth/helpers', () => ({
   extractEmail: (...args: unknown[]) => mockExtractEmail(...args),
-  orgNameFromEmail: () => 'Fixture Org 3601',
 }));
 
 import { GET } from '@/app/auth/setup/callback/route';

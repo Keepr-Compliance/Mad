@@ -1,14 +1,17 @@
 /**
  * Setup Callback Route
  *
- * Dedicated callback for IT admin organization setup flow.
- * Validates Azure provider, blocks consumer accounts,
- * extracts email with fallback chain, and provisions org + IT admin.
+ * Callback for /setup: a person their brokerage invited (admin, IT admin or
+ * any other role) signs in with Microsoft to accept the invitation, and an
+ * admin's sign-in links the brokerage to their Microsoft organization.
+ * Validates Azure provider, blocks consumer accounts, extracts email with the
+ * fallback chain, then calls auto_provision_it_admin. /setup never creates a
+ * brokerage: without an invitation the RPC returns no_invite.
  */
 
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
-import { extractEmail, orgNameFromEmail } from '@/lib/auth/helpers';
+import { extractEmail } from '@/lib/auth/helpers';
 import { PORTAL_MEMBERSHIP_SELECT, pickBrokerageMembership } from '@/lib/auth/membership';
 import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
 
@@ -35,7 +38,18 @@ type SetupRejection =
   | 'no_tenant'
   | 'consumer_account'
   | 'no_email'
+  | 'no_invite'
+  | 'tenant_in_use'
+  | 'tenant_mismatch'
   | 'provision_failed';
+
+/** auto_provision_it_admin refusals that have their own /setup message. */
+const RPC_REJECTIONS: readonly SetupRejection[] = ['no_invite', 'tenant_in_use', 'tenant_mismatch'];
+
+/** The /setup code for an RPC refusal; anything unrecognised is provision_failed. */
+function rejectionFor(error: unknown): SetupRejection {
+  return RPC_REJECTIONS.find((code) => code === error) ?? 'provision_failed';
+}
 
 /**
  * BACKLOG-3601: signs this browser out (local scope only), then sends the
@@ -129,6 +143,33 @@ export async function GET(request: Request) {
         .eq('id', membership.organization_id)
         .single();
 
+      // BACKLOG-3851: an active admin whose brokerage has no Microsoft
+      // organization linked yet (e.g. they accepted the emailed invitation
+      // through /login) links it here. The RPC checks the tenant; a refusal
+      // gets its own /setup message. Members who are not active, and
+      // brokerages that already have a tenant, keep the routing below.
+      if (org && !org.microsoft_tenant_id && membership.license_status === 'active') {
+        const { data: linked, error: linkError } = await supabase.rpc('auto_provision_it_admin', {
+          p_tenant_id: tenantId,
+          p_org_name: '',
+          p_org_slug: '',
+        });
+        if (linkError) {
+          console.error('Setup tenant link RPC failed:', linkError.message);
+          return rejectSetup(request, supabase, origin, 'provision_failed');
+        }
+        if (!linked?.success) {
+          console.error('Setup tenant link failed:', linked?.error);
+          return rejectSetup(request, supabase, origin, rejectionFor(linked?.error));
+        }
+        if (!org.graph_admin_consent_granted) {
+          return NextResponse.redirect(
+            `${origin}/setup/consent?tenant=${encodeURIComponent(tenantId)}&org=${encodeURIComponent(membership.organization_id)}`
+          );
+        }
+        return NextResponse.redirect(`${origin}/dashboard`);
+      }
+
       if (org && !org.graph_admin_consent_granted) {
         return NextResponse.redirect(
           `${origin}/setup/consent?tenant=${encodeURIComponent(org.microsoft_tenant_id || tenantId)}&org=${encodeURIComponent(membership.organization_id)}`
@@ -139,18 +180,16 @@ export async function GET(request: Request) {
     return NextResponse.redirect(`${origin}/dashboard`);
   }
 
-  // Provision organization and IT admin
-  const orgName = orgNameFromEmail(email);
-  const slug = orgName.toLowerCase().replace(/\s+/g, '-');
-
+  // BACKLOG-3851: accept the caller's invitation. The RPC creates no
+  // organization; p_org_name / p_org_slug are kept for its signature only.
   if (process.env.NODE_ENV === 'development') {
-    console.log(`Setup provisioning: ${email}, tenant: ${tenantId}, org: ${orgName}`);
+    console.log(`Setup: completing invitation for ${email}, tenant: ${tenantId}`);
   }
 
   const { data, error: rpcError } = await supabase.rpc('auto_provision_it_admin', {
     p_tenant_id: tenantId,
-    p_org_name: orgName,
-    p_org_slug: slug,
+    p_org_name: '',
+    p_org_slug: '',
   });
 
   if (rpcError) {
@@ -160,7 +199,7 @@ export async function GET(request: Request) {
 
   if (!data?.success) {
     console.error('Setup provision failed:', data?.error);
-    return rejectSetup(request, supabase, origin, 'provision_failed');
+    return rejectSetup(request, supabase, origin, rejectionFor(data?.error));
   }
 
   if (process.env.NODE_ENV === 'development') {
@@ -169,11 +208,10 @@ export async function GET(request: Request) {
     );
   }
 
-  // BACKLOG-3096. Until first-user-wins landed, auto_provision_it_admin made
-  // EVERY caller an admin, so sending every fresh provision to the consent page
-  // was always right. It is not any more: the second employee through /setup
-  // now joins as the org's default role, and a plain agent cannot complete a
-  // tenant-wide Microsoft admin-consent grant. Sending them there is a dead end.
+  // The role is the invitation's role (BACKLOG-3851; first-user-wins, 3096,
+  // is gone). Only an admin can complete a tenant-wide Microsoft admin-consent
+  // grant, so anyone else goes to /dashboard; the consent page is a dead end
+  // for them.
   //
   // Branch on the role the RPC actually wrote — not a re-query — so the
   // callback and the database cannot disagree about which branch was taken.
