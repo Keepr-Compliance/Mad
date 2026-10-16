@@ -15,6 +15,7 @@ import React, {
 import type { OAuthProvider, Subscription } from "../../electron/types/models";
 import { authService } from "../services";
 import logger from '../utils/logger';
+import { normalizeAuthProvider } from '../utils/authProvider';
 
 // User interface
 export interface User {
@@ -101,7 +102,8 @@ export function AuthProvider({
           isLoading: false,
           currentUser: convertedUser,
           sessionToken: sessionToken ?? null,
-          authProvider: (provider ?? null) as OAuthProvider | null,
+          // BACKLOG-3956: azure -> microsoft; other values (e.g. "email") kept.
+          authProvider: normalizeAuthProvider(provider) as OAuthProvider | null,
           subscription: subscription ?? undefined,
           needsTermsAcceptance: isNewUser ?? false,
         });
@@ -135,7 +137,7 @@ export function AuthProvider({
         isLoading: false,
         currentUser: user,
         sessionToken: token,
-        authProvider: provider as OAuthProvider,
+        authProvider: normalizeAuthProvider(provider) as OAuthProvider,
         subscription,
         needsTermsAcceptance: isNewUser,
       });
