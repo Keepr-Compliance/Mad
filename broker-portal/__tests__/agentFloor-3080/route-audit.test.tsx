@@ -1511,7 +1511,14 @@ describe('BACKLOG-3851: deactivated member back on pay-as-you-go', () => {
     givenWithPersonalOrg(PERSONAS['personal-org owner']);
     mockGetAgentPlanView.mockClear();
     const outcome = await run(entry);
-    return { outcome, tables: tablesRead(), writes: mockEmulator.state.writes };
+    return { outcome, tables: tablesRead(), writes: writesNoClock() };
+  }
+
+  /** The writes with clock values (e.g. archived_at = now) masked, so two runs compare. */
+  function writesNoClock() {
+    return JSON.parse(
+      JSON.stringify(mockEmulator.state.writes).replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/g, '<now>')
+    );
   }
 
   const pageCases = (pages: Record<string, PageEntry>) =>
@@ -1543,7 +1550,7 @@ describe('BACKLOG-3851: deactivated member back on pay-as-you-go', () => {
     // reads and writes as the solo owner.
     expect(outcome).toEqual(solo.outcome);
     expect(tablesRead()).toEqual(solo.tables);
-    expect(mockEmulator.state.writes).toEqual(solo.writes);
+    expect(writesNoClock()).toEqual(solo.writes);
   });
 
   it.each(pageCases(OWN_GATE_PAGES))('checklists: %s treats the %s member as the solo owner', async (_page, persona, entry) => {
@@ -1564,6 +1571,6 @@ describe('BACKLOG-3851: deactivated member back on pay-as-you-go', () => {
     const solo = await asSoloOwner(OWN_GATE_ACTIONS[name]);
     givenWithPersonalOrg(REVERTED_ROWS[persona]);
     expect(await run(OWN_GATE_ACTIONS[name])).toEqual(solo.outcome);
-    expect(mockEmulator.state.writes).toEqual(solo.writes);
+    expect(writesNoClock()).toEqual(solo.writes);
   });
 });
