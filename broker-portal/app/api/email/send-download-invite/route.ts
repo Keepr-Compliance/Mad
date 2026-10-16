@@ -4,8 +4,9 @@
  * Called by the admin portal when an admin invites an INDIVIDUAL user (no
  * organization). Instead of the old dead individual_invitations token link,
  * this sends a branded "Get Keepr" download email pointing at the canonical
- * download page; the invitee signs in with their email and a 14-day trial is
- * provisioned automatically on first sign-in (create_trial_license).
+ * download page; the invitee signs in with their email and an active
+ * individual license is provisioned on first sign-in
+ * (create_active_individual_license, BACKLOG-2180).
  *
  * Authentication: shared secret via `x-api-secret` header (same pattern as
  * /api/email/send-invite and the ticket-notification routes).
@@ -19,6 +20,8 @@ import { sendDownloadInviteEmail } from '@/lib/email';
 
 interface SendDownloadInviteRequest {
   recipientEmail: string;
+  /** Optional invitee name, used as the To display name (BACKLOG-3974). */
+  recipientName?: string;
   /** Optional override for the canonical download page. */
   downloadUrl?: string;
 }
@@ -47,6 +50,7 @@ export async function POST(request: NextRequest) {
 
     const result = await sendDownloadInviteEmail({
       recipientEmail: body.recipientEmail,
+      recipientName: typeof body.recipientName === 'string' ? body.recipientName : undefined,
       downloadUrl: body.downloadUrl,
     });
 
