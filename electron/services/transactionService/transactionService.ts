@@ -2196,6 +2196,8 @@ class TransactionService {
    *   that, a crash in an earlier chunk keeps the suppression row: the thread
    *   stays on the Removed card and one retry completes it (linking is
    *   idempotent). It is never cleared while part of the thread is unlinked.
+   *   With an empty `messageIds` no chunk runs and the row is NOT cleared; the
+   *   only caller that passes it (restore-removed-message) rejects an empty list.
    */
   async linkMessages(
     messageIds: string[],
@@ -2249,10 +2251,6 @@ class TransactionService {
           }
           return chunkLinked;
         });
-      }
-      if (messageIds.length === 0 && unignoreId) {
-        // No chunk ran, so nothing above cleared the suppression row.
-        dbTransaction(() => removeIgnoredCommunicationSync(unignoreId));
       }
       if (linkedCount === 0) {
         // Unchanged from before: the row was always written once, even when every
