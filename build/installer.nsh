@@ -452,5 +452,43 @@
 !ifdef KEEPR_STORE_BUILD
 !macro customInstall
   RMDir /r "$INSTDIR\resources\win\apple-drivers"
+  ; BACKLOG-3927: iPhone tool files the Store build does not ship, left behind when it
+  ; installs over a website build. Exactly the pinned manifest's files and companions
+  ; minus store.files (scripts/__tests__/storeIphoneTools-3927.test.ts).
+  Delete "$INSTDIR\resources\win\libimobiledevice\bz2.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\iconv-2.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\ideviceactivation.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicebackup.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicecrashreport.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicedate.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicedebug.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicedebugserverproxy.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicediagnostics.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\ideviceenterrecovery.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\ideviceimagemounter.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicename.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicenotificationproxy.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\ideviceprovision.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicerestore.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicescreenshot.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicesyslog.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\imobiledevice-net-lighthouse.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\ios_webkit_debug_proxy.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\irecovery.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\irecovery.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\libcurl.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\libusb-1.0.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\libusb0.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\libxml2.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\lzma.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\pcre.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\pcreposix.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\plist_cmp.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\plist_test.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\plistutil.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\pthreadVC3.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\README.md"
+  Delete "$INSTDIR\resources\win\libimobiledevice\zip.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\zlib1.dll"
 !macroend
 !endif
