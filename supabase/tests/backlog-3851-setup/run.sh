@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # BACKLOG-3851 PR-2 piece 1 harness: /setup completes an invite
-# (supabase/migrations/20261016130000_backlog_3851_setup_completes_invite.sql = NEW).
+# (supabase/migrations/20261016054316_backlog_3851_setup_completes_invite.sql = NEW).
 #
 # A thin wrapper over ../backlog-3851/run.sh `one` / `sql`: every run is ONE transaction
 # that ends in ROLLBACK, after the 3851 prelude (venue = production pins, fixtures).
@@ -21,7 +21,7 @@ M="$REPO/supabase/migrations"
 H51="$REPO/supabase/tests/backlog-3851/run.sh"
 M1="$M/20261015152446_backlog_3851_license_model.sql"
 M2="$M/20261016100100_backlog_3851_paygo_revert.sql"
-NEW="${NEW_OVERRIDE:-$M/20261016130000_backlog_3851_setup_completes_invite.sql}"
+NEW="${NEW_OVERRIDE:-$M/20261016054316_backlog_3851_setup_completes_invite.sql}"
 PIN="$HERE/lib/pin-setup.sql"; HLP="$HERE/lib/helpers-setup.sql"; RB="$HERE/rollback-3851-setup.sql"
 : "${SSH_HOST:?set SSH_HOST}" "${PG_CONTAINER:?set PG_CONTAINER}"
 
@@ -52,9 +52,9 @@ case "$mode" in
     while IFS='|' read -r name want; do
       [ -n "$arg" ] && [ "$name" != "$arg" ] && continue
       case "$want" in race:*) continue;; esac
-      if ! python3 "$HERE/lib/mutants.py" apply "$name" "$M/20261016130000_backlog_3851_setup_completes_invite.sql" "$tmp/new.sql"; then
+      if ! python3 "$HERE/lib/mutants.py" apply "$name" "$M/20261016054316_backlog_3851_setup_completes_invite.sql" "$tmp/new.sql"; then
         echo "INVALID|$name|mutant did not apply"; invalid=$((invalid+1)); continue; fi
-      echo "numstat|$(git diff --no-index --numstat "$M/20261016130000_backlog_3851_setup_completes_invite.sql" "$tmp/new.sql" | cut -f1,2 || true)"
+      echo "numstat|$(git diff --no-index --numstat "$M/20261016054316_backlog_3851_setup_completes_invite.sql" "$tmp/new.sql" | cut -f1,2 || true)"
       out="$(run_set "" 1 "$M1" "$PIN" "$M2" "$HLP" "$tmp/new.sql" 2>&1 || true)"
       echo "$out"
       if echo "$out" | grep -q "^     ${want}[^:]*: FAIL|"; then echo "KILLED|$name|$want"; killed=$((killed+1))

@@ -9,7 +9,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 M="$REPO/supabase/migrations"
-NEWF="${1:-$M/20261016130000_backlog_3851_setup_completes_invite.sql}"
+NEWF="${1:-$M/20261016054316_backlog_3851_setup_completes_invite.sql}"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 DB=race3851s
 in_container() { ssh -o BatchMode=yes -o ConnectTimeout=20 "$SSH_HOST" "docker exec -i $CONTAINER bash -s"; }

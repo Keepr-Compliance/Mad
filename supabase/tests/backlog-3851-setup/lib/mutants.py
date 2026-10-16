@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BACKLOG-3851 setup mutants of supabase/migrations/20261016130000_backlog_3851_setup_completes_invite.sql.
+"""BACKLOG-3851 setup mutants of supabase/migrations/20261016054316_backlog_3851_setup_completes_invite.sql.
 Each edit is an exact-string replace that must match exactly once, else the mutant is
 INVALID (exit 1). `list` prints name|control fragment ('race:<scenario>' = race.sh).
 `apply <name> <src> <dst>` writes the mutant and prints MUTATION APPLIED plus each new line.

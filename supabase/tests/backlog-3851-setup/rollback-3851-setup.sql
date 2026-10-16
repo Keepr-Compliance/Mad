@@ -1,6 +1,6 @@
--- Rollback for supabase/migrations/20261016130000_backlog_3851_setup_completes_invite.sql.
+-- Rollback for supabase/migrations/20261016054316_backlog_3851_setup_completes_invite.sql.
 -- Restores the BACKLOG-3882 body of auto_provision_it_admin (md5 a88466cc17f1f28a9824ec62c73a2589,
--- = production before 20261016130000) verbatim, with the same grants. One transaction.
+-- = production before 20261016054316) verbatim, with the same grants. One transaction.
 -- Does NOT undo data the new body wrote: tenants it bound to organizations and invites it
 -- claimed stay as they are (both are ordinary rows the old body also reads).
 BEGIN;

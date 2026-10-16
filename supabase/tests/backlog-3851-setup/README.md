@@ -1,7 +1,7 @@
 # BACKLOG-3851 PR-2 piece 1 harness — `/setup` completes an invite
 
 Controls, mutants, drift, rollback and a two-session control for
-`supabase/migrations/20261016130000_backlog_3851_setup_completes_invite.sql` (NEW), which
+`supabase/migrations/20261016054316_backlog_3851_setup_completes_invite.sql` (NEW), which
 replaces the body of `auto_provision_it_admin(text,text,text)` (same signature, grants,
 SECURITY DEFINER, `search_path = public`; body md5 `a88466cc…` → `0ca68b8c…`).
 
@@ -71,4 +71,5 @@ personal-organization filter → s15.
 `backlog-3096/*` (first-user-wins), `backlog-3882` c8, `backlog-3851` c03 and c18,
 `backlog-3843` k24 (organization-creating leg). `backlog-3851/lib/pins-3851.sql` row
 `fn auto_provision_it_admin(text,text,text)` stops matching production after the apply (see that
-README). `backlog-3364/lib/gate-expected.txt` is a historical read (2026-09-15) and is unchanged.
+README, which records the post-apply value `b7be86df338cf4de781cd65b4f53bd02`). The row is deliberately left at
+the pre-apply value: the pin is loaded before the new migration in every run of this harness. `backlog-3364/lib/gate-expected.txt` is a historical read (2026-09-15) and is unchanged.
