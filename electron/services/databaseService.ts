@@ -120,7 +120,20 @@ import {
   DbKeyUnavailableError,
   SchemaBaselineRefusalError,
   MigrationRecoveryFailedError,
+  DbNotWritableError,
 } from "../types";
+import {
+  DB_NORMAL_BUSY_TIMEOUT_MS,
+  DB_PROBE_BUSY_TIMEOUT_MS,
+  DB_WRITE_MAX_ATTEMPTS,
+  DB_WRITE_RETRY_BUDGET_MS,
+  dbErrorCode,
+  isRetryableDbWriteError,
+  probeWritable,
+  retryDelayMs,
+  setBusyTimeout,
+  waitMs,
+} from "./db/dbWriteRetry";
 // BACKLOG-2993: the contactIdentitySchemaSql / contactValueProvenanceBackfill
 // imports lived here for the deleted migration chain (v57..v69). The identity
 // DDL's single definition (BACKLOG-2410) now reaches production through the
@@ -189,6 +202,12 @@ interface MigrationEntry {
 class DatabaseService implements IDatabaseService {
   private db: DatabaseType | null = null;
   private dbPath: string | null = null;
+  /**
+   * BACKLOG-3975 — the pre-migration backup written by THIS run of
+   * runMigrations(), or null. The only file _attemptAutoRestore may restore:
+   * an older backup would roll the user's data back to that date.
+   */
+  private sameLaunchBackupPath: string | null = null;
   private encryptionKey: string | null = null;
 
   // ============================================
@@ -250,6 +269,7 @@ class DatabaseService implements IDatabaseService {
     try {
       const userDataPath = hostAppPaths.userData();
       this.dbPath = path.join(userDataPath, "mad.db");
+      this.sameLaunchBackupPath = null;
 
       await logService.info("Initializing database", "DatabaseService", { path: this.dbPath });
 
@@ -309,171 +329,204 @@ class DatabaseService implements IDatabaseService {
       // ======================================================================
       this._enforceSchemaBaselineReadonly();
 
-      const openedDb = this._openDatabase();
-      try {
-        this._evaluateSchemaBaseline(openedDb, "read-write");
-      } catch (fenceError) {
+      // ======================================================================
+      // BACKLOG-3952 — open, PROVE THE HANDLE CAN WRITE, then migrate.
+      //
+      // _openWritableDatabase() retries, with async waits, while the database
+      // is read-only or locked, and asks the user (Try again / Quit) when the
+      // budget runs out. A read-only database must never reach
+      // _attemptAutoRestore: copying a backup over a file that cannot be
+      // written fixes nothing.
+      //
+      // The loop below repeats ONLY when the user chose "Try again" after a
+      // read-only error that surfaced inside runMigrations (the probe passed,
+      // then writes failed). That user-driven repeat takes a new pre-migration
+      // backup and runs migrations again; the automatic retries never do.
+      // ======================================================================
+      for (;;) {
+        const openedDb = await this._openWritableDatabase(options);
+        this.db = openedDb;
+
+        // Share connection with dbConnection module for sub-services
+        setDb(this.db);
+        setDbPath(this.dbPath);
+        setEncryptionKey(this.encryptionKey);
+
+        // Safety check: ensure failure_log table exists even if migration v31 failed
+        // (e.g., disk full during migration). Fixes Sentry ELECTRON-2P / ELECTRON-2X.
+        this._ensureFailureLogTable(this.db);
+
+        // BACKLOG-1381: Broadcast migrating stage before running migrations
+        initializationBroadcaster.broadcast({
+          stage: "migrating",
+          progress: 0,
+          message: "Updating database...",
+        });
+
         try {
-          openedDb.close();
-        } catch {
-          /* the refusal matters, not the close */
-        }
-        throw fenceError;
-      }
-      this.db = openedDb;
+          await this.runMigrations();
 
-      // Share connection with dbConnection module for sub-services
-      setDb(this.db);
-      setDbPath(this.dbPath);
-      setEncryptionKey(this.encryptionKey);
-
-      // Safety check: ensure failure_log table exists even if migration v31 failed
-      // (e.g., disk full during migration). Fixes Sentry ELECTRON-2P / ELECTRON-2X.
-      this._ensureFailureLogTable(this.db);
-
-      // BACKLOG-1381: Broadcast migrating stage before running migrations
-      initializationBroadcaster.broadcast({
-        stage: "migrating",
-        progress: 0,
-        message: "Updating database...",
-      });
-
-      try {
-        await this.runMigrations();
-
-        // BACKLOG-1381: Broadcast db-ready after successful migrations
-        initializationBroadcaster.broadcast({
-          stage: "db-ready",
-          message: "Database ready",
-        });
-      } catch (migrationError) {
-        // BACKLOG-1381: Broadcast error on migration failure
-        initializationBroadcaster.broadcast({
-          stage: "error",
-          error: {
-            message: migrationError instanceof Error ? migrationError.message : "Migration failed",
-            retryable: true,
-          },
-        });
-
-        // Migration failed -- attempt auto-restore from pre-migration backup
-        hostLogger.error("[DatabaseService] Migration FAILED:", migrationError instanceof Error ? migrationError.message : String(migrationError));
-        await logService.error("Migration failed, attempting auto-restore", "DatabaseService", {
-          error: migrationError instanceof Error ? migrationError.message : String(migrationError),
-        });
-
-        const restoreResult = await this._attemptAutoRestore(migrationError);
-
-        // Report to Sentry with migration failure tags
-        hostErrorReporter.captureException(migrationError, {
-          tags: {
-            service: "database-service",
-            operation: "runMigrations",
-            migration_failure: "true",
-            auto_restore: restoreResult.autoRestoreStatus,
-            backup_integrity: restoreResult.backupIntegrity,
-          },
-        });
-
-        // Ensure app is ready before showing dialog
-        if (!hostAppLifecycle.isReady()) {
-          await hostAppLifecycle.whenReady();
-        }
-
-        if (restoreResult.restored) {
-          // BACKLOG-2999 — DELIBERATELY NON-TERMINAL, and this boundary is
-          // load-bearing. The restore recovered something: the backup was
-          // copied over the database, reopened and probe-verified, so the
-          // user's data is open and readable. What is STILL wrong is that
-          // migrations are never re-run against the restored file — that is
-          // BACKLOG-2834's subject, not this item's. Widening the terminal
-          // path to cover it here would change a user-visible outcome ("the
-          // app opens on your data" -> "the app quits") on a branch with no
-          // 2999 defect behind it, in the same commit. Do not "fix" 2834 by
-          // deleting this boundary: the no-quit assertion in
-          // databaseService.migration-restore.test.ts pins it.
-          hostDialog.showMessageBox({
-            type: "warning",
-            title: "Database Update Notice",
-            message: "A database update failed, but your data has been restored.",
-            detail: "The app will continue with your existing data. Please contact support if this happens again.",
-            buttons: ["OK"],
+          // BACKLOG-1381: Broadcast db-ready after successful migrations
+          initializationBroadcaster.broadcast({
+            stage: "db-ready",
+            message: "Database ready",
           });
-        } else {
-          // ==============================================================
-          // BACKLOG-2999 — THE TERMINAL BRANCH. Nothing was recovered.
-          //
-          // `restored === false` is reached by FOUR routes and the wreckage
-          // each leaves differs: no backup and corrupt backup (the original
-          // handle is still open), the restore copy throwing (`this.db` is
-          // already null and dbConnection still holds a CLOSED handle), and
-          // the post-restore connectivity probe failing (`this.db = newDb`
-          // AND `setDb(newDb)` have already run, so every isInitialized()
-          // call site sees a perfectly initialized database). Before this
-          // branch existed all four fell through to `return true` below.
-          //
-          // ORDER IS LOAD-BEARING, mirroring the BACKLOG-2993 refusal path:
-          // tear the handle down, TELL the user (dialog AWAITED), flush the
-          // telemetry, then exit. Dropping the await would exit mid-dialog
-          // and the user would never learn why.
-          // ==============================================================
-
-          // Nothing usable is open, so drop the handle through BOTH
-          // predicates the app gates on — databaseService.isInitialized()
-          // and dbConnection.isInitialized() — rather than leaving a
-          // condemned database readable.
-          try {
-            await closeDb();
-          } catch {
-            // Already closed on the copy-throw route (_attemptAutoRestore
-            // closes at the top and never reassigns), and close() is
-            // unguarded. Swallowed on purpose: a throw here would replace
-            // the terminal error with the wrong one and skip the dialog and
-            // the exit — strictly worse than the bug being fixed. This is a
-            // terminal fall-through, not a data fallback.
-          }
-          this.db = null;
-
-          // AWAITED — see the order note above. The copy deliberately does
-          // NOT point at the cleanup scripts the way the BACKLOG-2993
-          // refusal does: that database provably has no upgrade path,
-          // whereas this user's data may well be recoverable and those
-          // scripts would destroy it. The path is appended because it is the
-          // first thing support asks for.
-          await hostDialog.showMessageBox({
-            type: "error",
-            title: "Database Update Failed",
-            message: "A database update failed and could not be automatically fixed.",
-            detail:
-              "Please contact support. Your data may need manual recovery.\n\n" +
-              `Database: ${this.dbPath ?? "unknown"}`,
-            buttons: ["OK"],
-          });
-
-          // Flush before any exit path so the migration_failure event
-          // survives it (BACKLOG-1576 precedent).
-          await hostErrorReporter.flush(2000);
-
-          // THE FLAG IS NOT THE FIX — THE THROW IS. Quitting is a
-          // startup-specific remedy and it defaults OFF. Forgetting the
-          // argument at a non-startup call site (sqliteBackupService's
-          // restore calls initialize() at step 5 and AGAIN from its own
-          // safety-copy recovery) would tear the process down mid-recovery
-          // and cost a user who explicitly asked to restore the database
-          // they still had. Forgetting it at startup costs only the exit:
-          // initialize() still rejects, the handler still returns
-          // success:false, and the renderer still lands on its error screen.
-          // Destructive beats annoying, so the destructive outcome is the
-          // one that has to be opted into.
-          if (options?.quitOnUnrecoverableFailure) {
-            hostAppLifecycle.quit();
+          break;
+        } catch (migrationError) {
+          if (isRetryableDbWriteError(migrationError)) {
+            // BACKLOG-3952: not a migration defect — the file cannot be
+            // written. Tear the handle down through BOTH predicates (setDb has
+            // run), then ask the user. Returning means "Try again".
+            try {
+              await closeDb();
+            } catch {
+              /* already closed; the dialog matters, not the close */
+            }
+            this.db = null;
+            await this._handleDbNotWritable(migrationError, 1, 0, "migration", options);
+            continue;
           }
 
-          throw new MigrationRecoveryFailedError(
-            "Database migration failed and could not be recovered from a backup",
-            restoreResult.autoRestoreStatus,
-            restoreResult.backupIntegrity,
-          );
+          // BACKLOG-1381: Broadcast error on migration failure
+          initializationBroadcaster.broadcast({
+            stage: "error",
+            error: {
+              message: migrationError instanceof Error ? migrationError.message : "Migration failed",
+              retryable: true,
+            },
+          });
+
+          // Migration failed -- attempt auto-restore from pre-migration backup
+          hostLogger.error("[DatabaseService] Migration FAILED:", migrationError instanceof Error ? migrationError.message : String(migrationError));
+          await logService.error("Migration failed, attempting auto-restore", "DatabaseService", {
+            error: migrationError instanceof Error ? migrationError.message : String(migrationError),
+          });
+
+          const restoreResult = await this._attemptAutoRestore(migrationError);
+
+          // Report to Sentry with migration failure tags
+          hostErrorReporter.captureException(migrationError, {
+            tags: {
+              service: "database-service",
+              operation: "runMigrations",
+              migration_failure: "true",
+              auto_restore: restoreResult.autoRestoreStatus,
+              backup_integrity: restoreResult.backupIntegrity,
+              // BACKLOG-3975: how many older backups were NOT used because they
+              // were not taken this launch (each would have been a rollback).
+              stale_backups_skipped: String(restoreResult.staleBackupsSkipped ?? 0),
+              // BACKLOG-3952 R4: every migration_failure event says which SQLite
+              // code it was, so the field shows codes outside the retry predicate.
+              error_code: dbErrorCode(migrationError),
+            },
+          });
+
+          // Ensure app is ready before showing dialog
+          if (!hostAppLifecycle.isReady()) {
+            await hostAppLifecycle.whenReady();
+          }
+
+          if (restoreResult.restored) {
+            // BACKLOG-2999 — DELIBERATELY NON-TERMINAL, and this boundary is
+            // load-bearing. The restore recovered something: the backup was
+            // copied over the database, reopened and probe-verified, so the
+            // user's data is open and readable. What is STILL wrong is that
+            // migrations are never re-run against the restored file — that is
+            // BACKLOG-2834's subject, not this item's. Widening the terminal
+            // path to cover it here would change a user-visible outcome ("the
+            // app opens on your data" -> "the app quits") on a branch with no
+            // 2999 defect behind it, in the same commit. Do not "fix" 2834 by
+            // deleting this boundary: the no-quit assertion in
+            // databaseService.migration-restore.test.ts pins it.
+            hostDialog.showMessageBox({
+              type: "warning",
+              title: "Database Update Notice",
+              message: "A database update failed, but your data has been restored.",
+              detail: "The app will continue with your existing data. Please contact support if this happens again.",
+              buttons: ["OK"],
+            });
+          } else {
+            // ==============================================================
+            // BACKLOG-2999 — THE TERMINAL BRANCH. Nothing was recovered.
+            //
+            // `restored === false` is reached by FOUR routes and the wreckage
+            // each leaves differs: no backup and corrupt backup (the original
+            // handle is still open), the restore copy throwing (`this.db` is
+            // already null and dbConnection still holds a CLOSED handle), and
+            // the post-restore connectivity probe failing (`this.db = newDb`
+            // AND `setDb(newDb)` have already run, so every isInitialized()
+            // call site sees a perfectly initialized database). Before this
+            // branch existed all four fell through to `return true` below.
+            //
+            // ORDER IS LOAD-BEARING, mirroring the BACKLOG-2993 refusal path:
+            // tear the handle down, TELL the user (dialog AWAITED), flush the
+            // telemetry, then exit. Dropping the await would exit mid-dialog
+            // and the user would never learn why.
+            // ==============================================================
+
+            // Nothing usable is open, so drop the handle through BOTH
+            // predicates the app gates on — databaseService.isInitialized()
+            // and dbConnection.isInitialized() — rather than leaving a
+            // condemned database readable.
+            try {
+              await closeDb();
+            } catch {
+              // Already closed on the copy-throw route (_attemptAutoRestore
+              // closes at the top and never reassigns), and close() is
+              // unguarded. Swallowed on purpose: a throw here would replace
+              // the terminal error with the wrong one and skip the dialog and
+              // the exit — strictly worse than the bug being fixed. This is a
+              // terminal fall-through, not a data fallback.
+            }
+            this.db = null;
+
+            // AWAITED — see the order note above. The copy deliberately does
+            // NOT point at the cleanup scripts the way the BACKLOG-2993
+            // refusal does: that database provably has no upgrade path,
+            // whereas this user's data may well be recoverable and those
+            // scripts would destroy it. The path is appended because it is the
+            // first thing support asks for.
+            await hostDialog.showMessageBox({
+              type: "error",
+              title: "Database Update Failed",
+              message: "A database update failed and could not be automatically fixed.",
+              // BACKLOG-3975: says what happened to the files, and nothing more.
+              // No restore claim: nothing usable was restored on this branch.
+              detail:
+                (restoreResult.keptPreviousAs
+                  ? `Your previous database was kept as ${path.basename(restoreResult.keptPreviousAs)}.\n\n`
+                  : "Keepr did not replace or delete your data file.\n\n") +
+                `Database: ${this.dbPath ?? "unknown"}\n\n` +
+                "If this keeps happening, contact support.",
+              buttons: ["OK"],
+            });
+
+            // Flush before any exit path so the migration_failure event
+            // survives it (BACKLOG-1576 precedent).
+            await hostErrorReporter.flush(2000);
+
+            // THE FLAG IS NOT THE FIX — THE THROW IS. Quitting is a
+            // startup-specific remedy and it defaults OFF. Forgetting the
+            // argument at a non-startup call site (sqliteBackupService's
+            // restore calls initialize() at step 5 and AGAIN from its own
+            // safety-copy recovery) would tear the process down mid-recovery
+            // and cost a user who explicitly asked to restore the database
+            // they still had. Forgetting it at startup costs only the exit:
+            // initialize() still rejects, the handler still returns
+            // success:false, and the renderer still lands on its error screen.
+            // Destructive beats annoying, so the destructive outcome is the
+            // one that has to be opted into.
+            if (options?.quitOnUnrecoverableFailure) {
+              hostAppLifecycle.quit();
+            }
+
+            throw new MigrationRecoveryFailedError(
+              "Database migration failed and could not be recovered from a backup",
+              restoreResult.autoRestoreStatus,
+              restoreResult.backupIntegrity,
+            );
+          }
+          break;
         }
       }
 
@@ -488,6 +541,17 @@ class DatabaseService implements IDatabaseService {
         initializationBroadcaster.broadcast({
           stage: "error",
           error: { message: error.message, retryable: true },
+        });
+        throw error;
+      }
+
+      if (error instanceof DbNotWritableError) {
+        // BACKLOG-3952 — already captured once by _handleDbNotWritable. The
+        // renderer stayed on "db-waiting" while the dialog was up; only now,
+        // when nothing more will be tried, does it get the error stage.
+        initializationBroadcaster.broadcast({
+          stage: "error",
+          error: { message: error.message, retryable: false },
         });
         throw error;
       }
@@ -847,7 +911,7 @@ class DatabaseService implements IDatabaseService {
     throw new SchemaBaselineRefusalError(refusal, foundVersion);
   }
 
-  private _openDatabase(): DatabaseType {
+  private _openDatabase(busyTimeoutMs: number = DB_NORMAL_BUSY_TIMEOUT_MS): DatabaseType {
     if (!this.dbPath) throw new DatabaseError("Database path is not set");
     if (!this.encryptionKey) throw new DatabaseError("Encryption key is not set");
 
@@ -870,7 +934,9 @@ class DatabaseService implements IDatabaseService {
     //     can read while the main process writes (TASK-1956/1965).
     //   synchronous = NORMAL: durable under WAL (fsync deferred to checkpoint,
     //     not every commit) and improves write throughput (TASK-1965).
-    openedDb.pragma("busy_timeout = 5000");
+    // BACKLOG-3952: the startup retry loop passes a short value so a locked
+    // file cannot block the main process for 5 s per attempt.
+    setBusyTimeout(openedDb, busyTimeoutMs);
     const journalMode = openedDb.pragma("journal_mode = WAL") as Array<{
       journal_mode: string;
     }>;
@@ -1081,67 +1147,308 @@ class DatabaseService implements IDatabaseService {
   }
 
   // ============================================
-  // MIGRATION FAILURE AUTO-RESTORE (TASK-2057)
+  // READ-ONLY DATABASE AT STARTUP (BACKLOG-3952)
   // ============================================
 
+  /**
+   * Open mad.db and prove the handle can write a page. While the error is
+   * read-only / busy / locked, close that handle, wait (async — the main
+   * process keeps running, so the window stays responsive), and open a NEW
+   * one: a handle that opened read-only stays read-only. When the budget in
+   * dbWriteRetry.ts runs out, _handleDbNotWritable asks the user; returning
+   * from it means "Try again", which starts a fresh round.
+   *
+   * Runs before this.db / setDb(), so no isInitialized() caller ever sees a
+   * handle that cannot write. Any other error is thrown unchanged.
+   */
+  private async _openWritableDatabase(options?: {
+    quitOnUnrecoverableFailure?: boolean;
+  }): Promise<DatabaseType> {
+    for (;;) {
+      const startedAt = Date.now();
+      let attempt = 0;
+      let lastError: unknown = null;
+      let announced = false;
+
+      for (;;) {
+        attempt++;
+        let candidate: DatabaseType | null = null;
+        try {
+          candidate = this._openDatabase(DB_PROBE_BUSY_TIMEOUT_MS);
+          this._evaluateSchemaBaseline(candidate, "read-write");
+          probeWritable(candidate);
+          setBusyTimeout(candidate, DB_NORMAL_BUSY_TIMEOUT_MS);
+          if (attempt > 1) {
+            const elapsedMs = Date.now() - startedAt;
+            await logService.info("Database became writable after waiting", "DatabaseService", {
+              attempts: attempt,
+              elapsedMs,
+            });
+            hostErrorReporter.addBreadcrumb({
+              category: "database",
+              message: "Database became writable after waiting",
+              level: "info",
+              data: { attempts: attempt, elapsedMs },
+            });
+          }
+          return candidate;
+        } catch (err) {
+          if (candidate) {
+            try {
+              candidate.close();
+            } catch {
+              /* the original error matters, not the close */
+            }
+          }
+          if (!isRetryableDbWriteError(err)) throw err;
+          lastError = err;
+        }
+
+        const delay = retryDelayMs(attempt);
+        const elapsed = Date.now() - startedAt;
+        if (attempt >= DB_WRITE_MAX_ATTEMPTS || elapsed + delay > DB_WRITE_RETRY_BUDGET_MS) break;
+
+        if (!announced) {
+          announced = true;
+          await logService.warn("Database is not writable yet; waiting", "DatabaseService", {
+            errorCode: dbErrorCode(lastError),
+          });
+          initializationBroadcaster.broadcast({
+            stage: "db-waiting",
+            message: "Waiting for access to your data...",
+          });
+        }
+        await waitMs(delay);
+      }
+
+      await this._handleDbNotWritable(
+        lastError,
+        attempt,
+        Date.now() - startedAt,
+        "open",
+        options,
+      );
+      // Returned: the user chose "Try again". Start a new round.
+    }
+  }
+
+  /**
+   * The retries ran out (phase "open"), or a write failed read-only inside
+   * runMigrations (phase "migration"). One Sentry event per call. Without the
+   * startup flag the caller just gets DbNotWritableError. With it, the user
+   * chooses: "Try again" returns, "Quit" exits.
+   *
+   * Phase "open" changed nothing on disk and the copy says so; phase
+   * "migration" may follow committed migrations, so its copy only says the
+   * data file was not replaced or deleted. It never says "restored".
+   */
+  private async _handleDbNotWritable(
+    err: unknown,
+    attempts: number,
+    elapsedMs: number,
+    phase: "open" | "migration",
+    options?: { quitOnUnrecoverableFailure?: boolean },
+  ): Promise<void> {
+    const errorCode = dbErrorCode(err);
+    await logService.error("Database is not writable", "DatabaseService", {
+      errorCode,
+      attempts,
+      elapsedMs,
+      phase,
+    });
+    hostErrorReporter.captureException(err, {
+      tags: {
+        service: "database-service",
+        operation: "initialize",
+        db_not_writable: "true",
+        error_code: errorCode,
+        attempts: String(attempts),
+        phase,
+        ...(phase === "migration"
+          ? { migration_failure: "true", auto_restore: "skipped_not_writable" }
+          : {}),
+        elapsed_s: String(Math.round(elapsedMs / 1000)),
+      },
+    });
+
+    const notWritable = new DbNotWritableError(
+      "The database could not be written to",
+      errorCode,
+      attempts,
+    );
+    if (!options?.quitOnUnrecoverableFailure) throw notWritable;
+
+    if (!hostAppLifecycle.isReady()) {
+      await hostAppLifecycle.whenReady();
+    }
+    // AWAITED: the user must answer before anything else happens.
+    const { response } = await hostDialog.showMessageBox({
+      type: "warning",
+      title: "Keepr can't open your data yet",
+      message: "Keepr can't write to your data yet.",
+      detail:
+        (phase === "open"
+          ? "Nothing was changed. "
+          : "Keepr did not replace or delete your data file. ") +
+        "Another program may still be checking Keepr's files, " +
+        "which can happen right after an update. Choose Try again to keep waiting.\n\n" +
+        "If this keeps happening, contact support.",
+      buttons: ["Try again", "Quit"],
+    });
+    if (response === 0) {
+      await logService.info("Retrying database open", "DatabaseService", { errorCode });
+      initializationBroadcaster.broadcast({
+        stage: "db-waiting",
+        message: "Waiting for access to your data...",
+      });
+      return;
+    }
+
+    // Flush before the exit so the event survives it (BACKLOG-1576 precedent).
+    await hostErrorReporter.flush(2000);
+    hostAppLifecycle.quit();
+    throw notWritable;
+  }
+
+  // ============================================
+  // MIGRATION FAILURE AUTO-RESTORE (TASK-2057, BACKLOG-3975)
+  // ============================================
+
+  /**
+   * BACKLOG-3975 — restore ONLY the backup runMigrations() wrote this launch,
+   * and keep the current file.
+   *
+   * A backup is taken only on launches that run a migration. Restoring the
+   * newest backup on any other launch copied an OLDER file over current data
+   * and told the user it was restored. Now, with no same-launch backup there
+   * is no restore. When there is one, mad.db (and its -wal / -shm) are renamed
+   * to mad-pre-restore-<time>.db first, so nothing the user had is lost; the
+   * name does not match the `-backup-` prune, so it is never deleted
+   * automatically.
+   */
   private async _attemptAutoRestore(
     _migrationError: unknown
   ): Promise<{
     restored: boolean;
     autoRestoreStatus: AutoRestoreStatus;
     backupIntegrity: BackupIntegrity;
+    /** Set when mad.db was moved aside and is still there under this path. */
+    keptPreviousAs?: string;
+    staleBackupsSkipped?: number;
   }> {
     if (!this.dbPath || !this.encryptionKey) {
       return { restored: false, autoRestoreStatus: "no_backup", backupIntegrity: "missing" };
     }
+    const dbPath = this.dbPath;
+    const dbDir = path.dirname(dbPath);
+    const dbName = path.basename(dbPath, ".db");
 
-    const dbDir = path.dirname(this.dbPath);
-    const dbName = path.basename(this.dbPath, ".db");
-
-    let backupFiles: string[] = [];
-    try {
-      backupFiles = fs
-        .readdirSync(dbDir)
-        .filter((f) => f.startsWith(`${dbName}-backup-`) && f.endsWith(".db"))
-        .sort()
-        .reverse();
-    } catch {
-      // Cannot read directory
+    const backupPath = this.sameLaunchBackupPath;
+    if (!backupPath) {
+      let staleBackupsSkipped = 0;
+      try {
+        staleBackupsSkipped = fs
+          .readdirSync(dbDir)
+          .filter((f) => f.startsWith(`${dbName}-backup-`) && f.endsWith(".db")).length;
+      } catch {
+        // Cannot read directory; the count is telemetry only.
+      }
+      await logService.warn(
+        "No backup from this launch; not restoring an older backup over current data",
+        "DatabaseService",
+        { staleBackupsSkipped },
+      );
+      return {
+        restored: false,
+        autoRestoreStatus: "no_backup",
+        backupIntegrity: "missing",
+        staleBackupsSkipped,
+      };
     }
 
-    if (backupFiles.length === 0) {
-      await logService.warn("No backup files found for auto-restore", "DatabaseService");
-      return { restored: false, autoRestoreStatus: "no_backup", backupIntegrity: "missing" };
-    }
-
-    const latestBackupPath = path.join(dbDir, backupFiles[0]);
-
-    const isValid = this._verifyBackupIntegrity(latestBackupPath, this.encryptionKey);
+    const isValid = this._verifyBackupIntegrity(backupPath, this.encryptionKey);
     if (!isValid) {
       await logService.error("Backup file failed integrity check, cannot auto-restore", "DatabaseService", {
-        backupPath: latestBackupPath,
+        backupPath,
       });
       return { restored: false, autoRestoreStatus: "failed", backupIntegrity: "corrupt" };
     }
 
     await logService.info("Backup integrity verified, proceeding with auto-restore", "DatabaseService", {
-      backupPath: latestBackupPath,
+      backupPath,
+    });
+
+    if (this.db) {
+      try { this.db.close(); } catch { /* May already be in a bad state */ }
+      this.db = null;
+    }
+
+    // Move the current files aside. All or nothing: a partial move is undone.
+    const timestamp = new Date().toISOString().replace(/[-:.]/g, "").slice(0, 15);
+    const asidePath = path.join(dbDir, `${dbName}-pre-restore-${timestamp}.db`);
+    const moved: Array<{ from: string; to: string }> = [];
+    const undoMoves = (): boolean => {
+      let ok = true;
+      for (const m of [...moved].reverse()) {
+        try {
+          fs.renameSync(m.to, m.from);
+        } catch {
+          ok = false;
+        }
+      }
+      return ok;
+    };
+    try {
+      for (const suffix of ["", "-wal", "-shm"]) {
+        const from = dbPath + suffix;
+        if (suffix !== "" && !fs.existsSync(from)) continue;
+        fs.renameSync(from, asidePath + suffix);
+        moved.push({ from, to: asidePath + suffix });
+      }
+    } catch (moveError) {
+      const undone = undoMoves();
+      await logService.error("Could not move the current database aside; not restoring", "DatabaseService", {
+        error: moveError instanceof Error ? moveError.message : String(moveError),
+        undone,
+      });
+      return {
+        restored: false,
+        autoRestoreStatus: "failed",
+        backupIntegrity: "valid",
+        keptPreviousAs: undone ? undefined : asidePath,
+      };
+    }
+
+    try {
+      fs.copyFileSync(backupPath, dbPath);
+    } catch (copyError) {
+      try {
+        if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+      } catch {
+        /* undoMoves below reports whether the original came back */
+      }
+      const undone = undoMoves();
+      await logService.error("Auto-restore copy failed", "DatabaseService", {
+        error: copyError instanceof Error ? copyError.message : String(copyError),
+        undone,
+      });
+      return {
+        restored: false,
+        autoRestoreStatus: "failed",
+        backupIntegrity: "valid",
+        keptPreviousAs: undone ? undefined : asidePath,
+      };
+    }
+    await logService.info("Backup restored; previous database kept", "DatabaseService", {
+      keptAs: path.basename(asidePath),
     });
 
     try {
-      if (this.db) {
-        try { this.db.close(); } catch { /* May already be in a bad state */ }
-        this.db = null;
-      }
-
-      fs.copyFileSync(latestBackupPath, this.dbPath);
-      await logService.info("Backup file restored over main database", "DatabaseService");
-
       const newDb = this._openDatabase();
       this.db = newDb;
 
       setDb(newDb);
-      setDbPath(this.dbPath);
+      setDbPath(dbPath);
       setEncryptionKey(this.encryptionKey);
 
       try {
@@ -1153,16 +1460,31 @@ class DatabaseService implements IDatabaseService {
         await logService.error("Post-restore connectivity check failed", "DatabaseService", {
           error: probeError instanceof Error ? probeError.message : String(probeError),
         });
-        return { restored: false, autoRestoreStatus: "failed", backupIntegrity: "valid" };
+        return {
+          restored: false,
+          autoRestoreStatus: "failed",
+          backupIntegrity: "valid",
+          keptPreviousAs: asidePath,
+        };
       }
 
       await logService.info("Auto-restore completed successfully", "DatabaseService");
-      return { restored: true, autoRestoreStatus: "succeeded", backupIntegrity: "valid" };
+      return {
+        restored: true,
+        autoRestoreStatus: "succeeded",
+        backupIntegrity: "valid",
+        keptPreviousAs: asidePath,
+      };
     } catch (restoreError) {
-      await logService.error("Auto-restore failed during file replacement or reopening", "DatabaseService", {
+      await logService.error("Auto-restore failed while reopening", "DatabaseService", {
         error: restoreError instanceof Error ? restoreError.message : String(restoreError),
       });
-      return { restored: false, autoRestoreStatus: "failed", backupIntegrity: "valid" };
+      return {
+        restored: false,
+        autoRestoreStatus: "failed",
+        backupIntegrity: "valid",
+        keptPreviousAs: asidePath,
+      };
     }
   }
 
@@ -1192,6 +1514,8 @@ class DatabaseService implements IDatabaseService {
 
   async runMigrations(): Promise<void> {
     const currentDb = this._ensureDb();
+    // BACKLOG-3975: only a backup written by this run counts as same-launch.
+    this.sameLaunchBackupPath = null;
     const schemaPath = path.join(__dirname, "../database/schema.sql");
     const schemaSql = fs.readFileSync(schemaPath, "utf8");
 
@@ -1265,6 +1589,7 @@ class DatabaseService implements IDatabaseService {
         try { currentDb.pragma("wal_checkpoint(TRUNCATE)"); } catch { /* WAL may not be enabled */ }
 
         fs.copyFileSync(this.dbPath, bkPath);
+        this.sameLaunchBackupPath = bkPath;
         await logService.info(`Pre-migration backup created: ${bkPath}`, "DatabaseService");
       } catch (backupError) {
         await logService.warn("Pre-migration backup failed", "DatabaseService", { error: backupError instanceof Error ? backupError.message : String(backupError) });
@@ -1326,7 +1651,12 @@ class DatabaseService implements IDatabaseService {
         error: error instanceof Error ? error.message : String(error),
       });
       hostErrorReporter.captureException(error, {
-        tags: { service: "database-service", operation: "runMigrations" },
+        tags: {
+          service: "database-service",
+          operation: "runMigrations",
+          // BACKLOG-3952 R4
+          error_code: dbErrorCode(error),
+        },
       });
       // BACKLOG-1576: Flush Sentry before re-throwing so the event
       // (with user context) is guaranteed to be sent even if the

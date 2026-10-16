@@ -404,6 +404,25 @@ export class MigrationRecoveryFailedError extends DatabaseError {
   }
 }
 
+/**
+ * BACKLOG-3952 — thrown by initialize() when the database stayed read-only
+ * (or locked) for the whole retry budget and the user chose Quit, or the
+ * caller did not opt into the startup dialog. Nothing was changed on disk.
+ *
+ * Distinct class so initialize()'s outer catch re-throws it without a second
+ * Sentry event (the exhaustion handler already captured one).
+ */
+export class DbNotWritableError extends DatabaseError {
+  constructor(
+    message: string,
+    public errorCode: string,
+    public attempts: number,
+  ) {
+    super(message, "DB_NOT_WRITABLE");
+    this.name = "DbNotWritableError";
+  }
+}
+
 export class ValidationError extends Error {
   constructor(
     message: string,

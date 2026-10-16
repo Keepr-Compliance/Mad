@@ -100,9 +100,12 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
   "electron/services/ccpaExportService.ts": { count: 1, reason: `${EXPORT} (CCPA data export)` },
   // --- database file management ---------------------------------------------------
   "electron/services/databaseService.ts": {
-    count: 6,
+    count: 8,
     reason:
-      `${SQLCIPHER} — 3 calls (restore from backup, pre-schema-migration backup, pre-junction-backfill snapshot). The other 3 are the one-time ` +
+      `${SQLCIPHER} — 3 calls (restore from backup, pre-schema-migration backup, pre-junction-backfill snapshot). ` +
+      "2 renames added by BACKLOG-3975: before a restore the current SQLCipher database (and its -wal/-shm) is renamed " +
+      "aside to mad-pre-restore-<time>.db, and renamed back if the copy fails — same encrypted files, same folder. " +
+      "The other 3 are the one-time " +
       "plaintext→SQLCipher migration (_migrateToEncryptedDatabase): one copies the PRE-ENCRYPTION PLAINTEXT " +
       "database to `.backup`, one moves the newly built SQLCipher file into place, one restores the plaintext " +
       "`.backup` if the migration fails. Allowed as a legacy path: it runs only on a database that is still " +
