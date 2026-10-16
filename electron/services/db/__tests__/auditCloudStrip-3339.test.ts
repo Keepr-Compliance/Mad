@@ -11,6 +11,7 @@
  *       raw `metadata.error`; the local row keeps both.
  *   S2  backfill (the BACKLOG-3987 table fallback): a row left unsynced by a
  *       previous run is uploaded without error_message.
+ *   S3  backfill: the same, for metadata.error.
  *
  * Mutation run at adoption (proven applied, see the item's pm_comment):
  *   remove "errorMessage" from AUDIT_FREE_TEXT_FIELDS        -> S1, S2 red
@@ -110,5 +111,25 @@ describe("free text does not reach the cloud (BACKLOG-3339 release gate)", () =>
     expect(sent[0].errorMessage).toBeUndefined();
     expect(JSON.stringify(sent)).not.toContain("Quakenbush");
     expect(auditRows(db).map((r) => r.error_message)).toEqual([RAW_ERROR]);
+  });
+
+  test("S3 backfill: metadata.error of a left-over row is stripped, the other keys are sent", async () => {
+    db.prepare(
+      "INSERT INTO audit_logs (id, user_id, action, resource_type, success, metadata, timestamp) " +
+        "VALUES ('prev-meta', ?, 'LOGIN_FAILED', 'SESSION', 0, ?, '2026-10-01T00:00:00.000Z')",
+    ).run(PROBE_USER, JSON.stringify({ provider: "microsoft", error: RAW_ERROR }));
+    expect(auditService.getPendingSyncCount()).toBe(0);
+
+    await auditService.syncToCloud();
+
+    const sent = uploads.flat();
+    expect(sent.map((e) => e.id)).toEqual(["prev-meta"]);
+    expect(sent[0].metadata).toEqual({ provider: "microsoft" });
+    expect(JSON.stringify(sent)).not.toContain("Quakenbush");
+    // The local row keeps it.
+    const local = db.prepare("SELECT metadata FROM audit_logs WHERE id = 'prev-meta'").get() as {
+      metadata: string;
+    };
+    expect(JSON.parse(local.metadata)).toEqual({ provider: "microsoft", error: RAW_ERROR });
   });
 });

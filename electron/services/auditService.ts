@@ -231,6 +231,10 @@ class AuditService {
   // BACKLOG-3987: true after a failed cloud send, until the next success.
   // A failure is reported to Sentry once per run of failures, not per attempt.
   private cloudSyncFailing = false;
+  // BACKLOG-3339: same shape for the LOCAL insert. A database that rejects
+  // every insert would otherwise send one Sentry event per audited action.
+  // Set on the first failure of a stretch, cleared by the next successful write.
+  private localInsertFailing = false;
   // BACKLOG-3987: the send attempt in flight, if any (see syncBatch).
   private currentSync: Promise<number> | null = null;
   private syncIntervalId: NodeJS.Timeout | null = null;
@@ -403,13 +407,17 @@ class AuditService {
       // BACKLOG-3339: a breadcrumb alone is only seen when some later error is
       // reported, so local insert failures were never counted. Report them.
       // log() never throws, so neither may its reporting.
-      try {
-        Sentry.captureMessage("Audit log local INSERT failed", {
-          level: "error",
-          tags: { service: "audit-service", operation: "log", action: entry.action },
-        });
-      } catch {
-        // reporting is best-effort
+      // Once per stretch of consecutive failures (see localInsertFailing).
+      if (!this.localInsertFailing) {
+        this.localInsertFailing = true;
+        try {
+          Sentry.captureMessage("Audit log local INSERT failed", {
+            level: "error",
+            tags: { service: "audit-service", operation: "log", action: entry.action },
+          });
+        } catch {
+          // reporting is best-effort
+        }
       }
     }
   }
@@ -433,6 +441,9 @@ class AuditService {
         resourceType: entry.resourceType,
         error: error instanceof Error ? error.message : "Unknown error",
       });
+      // Same stretch flag as log(): one report per run of failed local writes.
+      if (this.localInsertFailing) return;
+      this.localInsertFailing = true;
       Sentry.captureException(error, {
         tags: { service: "audit-service", operation: "recordFailure", action: entry.action },
       });
@@ -543,6 +554,8 @@ class AuditService {
     }
 
     await this.databaseService.insertAuditLog(entry);
+    // A successful local write ends a stretch of failures (BACKLOG-3339).
+    this.localInsertFailing = false;
     // A successful write means the DB is up — drain anything we buffered earlier.
     void this.flushPendingLocalWrites();
     return true;

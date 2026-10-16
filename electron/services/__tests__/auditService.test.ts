@@ -47,6 +47,7 @@ describe("AuditService", () => {
     (auditService as any).pendingLocalWrites = [];
     (auditService as any).flushingPendingWrites = false;
     (auditService as any).cloudSyncFailing = false;
+    (auditService as any).localInsertFailing = false;
     mockDatabaseService.isInitialized.mockReturnValue(true);
     mockSupabaseService.getAuthSession.mockImplementation(async () => ({
       userId: "user-123",
@@ -295,6 +296,133 @@ describe("AuditService", () => {
       await settle();
       expect(mockDatabaseService.insertAuditLog).not.toHaveBeenCalled();
       expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("Sentry reports on failed local writes (BACKLOG-3339)", () => {
+    beforeEach(() => {
+      mockDatabaseService.isInTransaction.mockReset();
+      mockDatabaseService.isInTransaction.mockReturnValue(false);
+      mockDatabaseService.insertAuditLog.mockReset();
+      (auditService as any).localInsertFailing = false;
+      (auditService as any).droppedPendingWrites = 0;
+      auditService.initialize(
+        mockDatabaseService as any,
+        mockSupabaseService as any,
+      );
+    });
+
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const RAW = "Contact Wilhelmina Quakenbush at 742 Evergreen Terrace";
+    const failing = () => ({
+      userId: "user-123",
+      action: "TRANSACTION_CREATE" as AuditAction,
+      resourceType: "TRANSACTION" as ResourceType,
+      resourceId: "txn-1",
+      metadata: { error: RAW },
+      success: false,
+      errorMessage: RAW,
+    });
+
+    it("log: reports a failed local INSERT, with no entry content in the event", async () => {
+      mockDatabaseService.insertAuditLog.mockRejectedValueOnce(new Error("disk I/O error"));
+      await auditService.log(failing());
+      expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+      const call = (Sentry.captureMessage as jest.Mock).mock.calls[0];
+      expect(call[0]).toBe("Audit log local INSERT failed");
+      expect(call[1].tags).toEqual({
+        service: "audit-service",
+        operation: "log",
+        action: "TRANSACTION_CREATE",
+      });
+      const wire = JSON.stringify(call);
+      expect(wire).not.toContain("Quakenbush");
+      expect(wire).not.toContain("Evergreen");
+      expect(wire).not.toContain("user-123");
+      expect(wire).not.toContain("txn-1");
+    });
+
+    it("log: one report per stretch of failures; a success starts a new stretch", async () => {
+      mockDatabaseService.insertAuditLog.mockRejectedValueOnce(new Error("disk I/O error"));
+      mockDatabaseService.insertAuditLog.mockRejectedValueOnce(new Error("disk I/O error"));
+      await auditService.log(failing());
+      await auditService.log(failing());
+      expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+
+      mockDatabaseService.insertAuditLog.mockResolvedValueOnce(undefined);
+      await auditService.log(failing());
+      expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+
+      mockDatabaseService.insertAuditLog.mockRejectedValueOnce(new Error("disk I/O error"));
+      await auditService.log(failing());
+      expect(Sentry.captureMessage).toHaveBeenCalledTimes(2);
+    });
+
+    it("recordFailure: one report per stretch of failures; a success starts a new stretch", async () => {
+      const { success: _s, ...entry } = failing();
+      mockDatabaseService.insertAuditLog.mockRejectedValueOnce(new Error("disk I/O error"));
+      mockDatabaseService.insertAuditLog.mockRejectedValueOnce(new Error("disk I/O error"));
+      auditService.recordFailure(entry);
+      await settle();
+      auditService.recordFailure(entry);
+      await settle();
+      expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+      const opts = (Sentry.captureException as jest.Mock).mock.calls[0][1];
+      expect(opts.tags).toEqual({
+        service: "audit-service",
+        operation: "recordFailure",
+        action: "TRANSACTION_CREATE",
+      });
+      expect(JSON.stringify(opts)).not.toContain("Quakenbush");
+
+      mockDatabaseService.insertAuditLog.mockResolvedValueOnce(undefined);
+      auditService.recordFailure(entry);
+      await settle();
+      mockDatabaseService.insertAuditLog.mockRejectedValueOnce(new Error("disk I/O error"));
+      auditService.recordFailure(entry);
+      await settle();
+      expect(Sentry.captureException).toHaveBeenCalledTimes(2);
+    });
+
+    it("log and recordFailure share one stretch", async () => {
+      mockDatabaseService.insertAuditLog.mockRejectedValueOnce(new Error("disk I/O error"));
+      mockDatabaseService.insertAuditLog.mockRejectedValueOnce(new Error("disk I/O error"));
+      await auditService.log(failing());
+      const { success: _s, ...entry } = failing();
+      auditService.recordFailure(entry);
+      await settle();
+      expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+      expect(Sentry.captureException).not.toHaveBeenCalled();
+    });
+
+    it("buffer drop: reports the first dropped entry of a run once, with no entry content", async () => {
+      const broadcaster = require("../initializationBroadcaster").initializationBroadcaster;
+      const spy = jest
+        .spyOn(broadcaster, "whenDbReady")
+        .mockResolvedValue({ ready: false, timedOut: false });
+      try {
+        const max: number = (auditService as any).MAX_PENDING_LOCAL_WRITES;
+        (auditService as any).databaseService = null; // not initialized: every log() buffers
+        (auditService as any).pendingLocalWrites = [];
+        for (let i = 0; i < max + 2; i++) {
+          await auditService.log(failing());
+        }
+        expect((auditService as any).droppedPendingWrites).toBe(2);
+        expect(Sentry.captureMessage).toHaveBeenCalledTimes(1);
+        const call = (Sentry.captureMessage as jest.Mock).mock.calls[0];
+        expect(call[0]).toBe("Audit pending-write buffer full; entries dropped");
+        expect(call[1].tags).toEqual({
+          service: "audit-service",
+          operation: "bufferPendingWrite",
+        });
+        const wire = JSON.stringify(call);
+        expect(wire).not.toContain("Quakenbush");
+        expect(wire).not.toContain("user-123");
+      } finally {
+        spy.mockRestore();
+        (auditService as any).pendingLocalWrites = [];
+        (auditService as any).droppedPendingWrites = 0;
+      }
     });
   });
 
