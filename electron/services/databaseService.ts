@@ -131,6 +131,7 @@ import {
   isRetryableDbWriteError,
   probeWritable,
   retryDelayMs,
+  setBusyTimeout,
   waitMs,
 } from "./db/dbWriteRetry";
 // BACKLOG-2993: the contactIdentitySchemaSql / contactValueProvenanceBackfill
@@ -935,7 +936,7 @@ class DatabaseService implements IDatabaseService {
     //     not every commit) and improves write throughput (TASK-1965).
     // BACKLOG-3952: the startup retry loop passes a short value so a locked
     // file cannot block the main process for 5 s per attempt.
-    openedDb.pragma(`busy_timeout = ${busyTimeoutMs}`);
+    setBusyTimeout(openedDb, busyTimeoutMs);
     const journalMode = openedDb.pragma("journal_mode = WAL") as Array<{
       journal_mode: string;
     }>;
@@ -1176,7 +1177,7 @@ class DatabaseService implements IDatabaseService {
           candidate = this._openDatabase(DB_PROBE_BUSY_TIMEOUT_MS);
           this._evaluateSchemaBaseline(candidate, "read-write");
           probeWritable(candidate);
-          candidate.pragma(`busy_timeout = ${DB_NORMAL_BUSY_TIMEOUT_MS}`);
+          setBusyTimeout(candidate, DB_NORMAL_BUSY_TIMEOUT_MS);
           if (attempt > 1) {
             const elapsedMs = Date.now() - startedAt;
             await logService.info("Database became writable after waiting", "DatabaseService", {

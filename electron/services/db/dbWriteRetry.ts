@@ -101,6 +101,11 @@ export function probeWritable(db: DatabaseType): void {
   }
 }
 
+/** Sets the handle's busy_timeout. The SQL text lives here (SQL boundary rule). */
+export function setBusyTimeout(db: DatabaseType, ms: number): void {
+  db.pragma(`busy_timeout = ${Math.max(0, Math.trunc(ms))}`);
+}
+
 /** Delay before attempt `attempt + 1` (attempt is 1-based). */
 export function retryDelayMs(attempt: number): number {
   const i = Math.min(attempt - 1, DB_WRITE_RETRY_DELAYS_MS.length - 1);
