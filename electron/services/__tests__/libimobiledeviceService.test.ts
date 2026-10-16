@@ -190,7 +190,9 @@ describe("libimobiledeviceService", () => {
       expect(REQUIRED_EXECUTABLES).toContain("idevice_id");
       expect(REQUIRED_EXECUTABLES).toContain("ideviceinfo");
       expect(REQUIRED_EXECUTABLES).toContain("idevicebackup2");
-      expect(REQUIRED_EXECUTABLES).toHaveLength(3);
+      // BACKLOG-3953: idevicepair is launched too (deviceDetectionService pairDevice).
+      expect(REQUIRED_EXECUTABLES).toContain("idevicepair");
+      expect(REQUIRED_EXECUTABLES).toHaveLength(4);
     });
   });
 });

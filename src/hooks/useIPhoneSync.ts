@@ -818,6 +818,15 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
         });
         cleanups.push(unsub);
       }
+      // BACKLOG-3953: an iPhone tool never started (Windows only; main sends it only
+      // there). Its own message — not the "install Apple's tools" text above.
+      if (deviceApi.onToolsBlocked) {
+        const unsub = deviceApi.onToolsBlocked((data) => {
+          logger.warn("[useIPhoneSync] iPhone tool blocked — showing the restore steps");
+          setUserError(data.userError);
+        });
+        cleanups.push(unsub);
+      }
       if (deviceApi.onToolsAvailable) {
         const unsub = deviceApi.onToolsAvailable(() => {
           logger.info("[useIPhoneSync] Tools now available — clearing missing state");

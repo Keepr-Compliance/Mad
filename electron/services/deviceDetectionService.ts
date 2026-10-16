@@ -15,6 +15,9 @@ import { isWindowsArm64 } from "../utils/windowsArm64";
 import * as Sentry from "@sentry/electron/main";
 import { iOSDevice, DeviceStorageInfo } from "../types/device";
 import { getCommand, canUseLibimobiledevice } from "./libimobiledeviceService";
+import { checkToolFilesForBlock, detectToolBlock, keeprInstallFolder } from "./iphoneToolBlock";
+import { formatToolBlockedError } from "./diagnostics/userFacingErrors";
+import type { ToolBlock } from "../types/backup";
 import { validateDeviceUdid, isValidDeviceUdid, ValidationError } from "../utils/validation";
 
 const execAsync = promisify(exec);
@@ -222,6 +225,14 @@ export class DeviceDetectionService extends EventEmitter {
       return false;
     }
 
+    // BACKLOG-3953: a removed tool file is named here. Through the shell below it read as
+    // "not recognized", which this method cached as "no tools" for the whole session.
+    const fileBlock = checkToolFilesForBlock("idevice_id");
+    if (fileBlock) {
+      this.handleToolBlock(fileBlock);
+      return false;
+    }
+
     try {
       const ideviceIdCmd = getCommand("idevice_id");
       log.info(`[DeviceDetection] Checking libimobiledevice at: ${ideviceIdCmd}`);
@@ -246,6 +257,24 @@ export class DeviceDetectionService extends EventEmitter {
       );
       return false;
     }
+  }
+
+  /**
+   * BACKLOG-3953: an iPhone tool never started (Windows). Same back-off as tools-missing
+   * — `toolsMissingEmitted` makes the availability check run again on every slow poll,
+   * so restoring the files clears it through `tools-available` — but a different event,
+   * because "install Apple's tools" is the wrong advice for a removed file.
+   */
+  private handleToolBlock(block: ToolBlock): void {
+    this.libimobiledeviceAvailable = false;
+    if (this.toolsMissingEmitted) return;
+    this.toolsMissingEmitted = true;
+    log.warn(
+      `[DeviceDetection] iPhone tool blocked (${block.kind}, ${block.tool}). ` +
+        "Emitting tools-blocked and backing off polling.",
+    );
+    this.emit("tools-blocked", { userError: formatToolBlockedError(keeprInstallFolder()) });
+    this.backOffPolling();
   }
 
   /**
@@ -824,20 +853,40 @@ export class DeviceDetectionService extends EventEmitter {
     return new Promise((resolve) => {
       const ideviceIdCmd = getCommand("idevice_id");
       // Don't log every poll - too noisy (runs every 2 seconds)
-      const proc = spawn(ideviceIdCmd, ["-l"]);
+      // BACKLOG-3953: spawn() THROWS on Windows for EPERM / UNKNOWN; that used to be an
+      // unhandled rejection of this promise, with nothing shown to the user.
+      let proc: ReturnType<typeof spawn>;
+      try {
+        proc = spawn(ideviceIdCmd, ["-l"]);
+      } catch (spawnError) {
+        log.error("[DeviceDetection] Could not start idevice_id:", spawnError);
+        const block = detectToolBlock("idevice_id", { error: spawnError });
+        if (block) this.handleToolBlock(block);
+        resolve({ udids: [], ok: false });
+        return;
+      }
       let stdout = "";
       let stderr = "";
 
-      proc.stdout.on("data", (data) => {
+      proc.stdout?.on("data", (data) => {
         stdout += data.toString();
       });
 
-      proc.stderr.on("data", (data) => {
+      proc.stderr?.on("data", (data) => {
         stderr += data.toString();
       });
 
+      let spawnFailed = false;
       proc.on("close", (code) => {
+        if (spawnFailed) {
+          // BACKLOG-3953: the 'error' handler below already resolved this poll.
+          return;
+        }
         if (code !== 0) {
+          // BACKLOG-3953: only the DLL-not-found exit with a stat miss counts here;
+          // every other exit (including -1 "Unable to retrieve device list") does not.
+          const block = detectToolBlock("idevice_id", { exitCode: code });
+          if (block) this.handleToolBlock(block);
           if (stderr.trim()) {
             log.debug(`[DeviceDetection] idevice_id stderr: ${stderr.trim()}`);
             Sentry.addBreadcrumb({
@@ -903,6 +952,7 @@ export class DeviceDetectionService extends EventEmitter {
       });
 
       proc.on("error", (err) => {
+        spawnFailed = true;
         log.error("[DeviceDetection] Failed to spawn idevice_id:", err);
         Sentry.addBreadcrumb({
           category: "iphone.detection",
@@ -911,8 +961,12 @@ export class DeviceDetectionService extends EventEmitter {
           data: { platform: process.platform },
         });
 
-        // BACKLOG-1621: Detect ENOENT (executable not found) and mark tools unavailable
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        // BACKLOG-3953: a removed file or a refused launch is named as a block (Windows).
+        const block = detectToolBlock("idevice_id", { error: err });
+        if (block) {
+          this.handleToolBlock(block);
+        } else if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          // BACKLOG-1621: Detect ENOENT (executable not found) and mark tools unavailable
           this.libimobiledeviceAvailable = false;
           if (!this.toolsMissingEmitted) {
             this.toolsMissingEmitted = true;

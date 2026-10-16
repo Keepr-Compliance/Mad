@@ -31,5 +31,7 @@ export {
   formatMsiServiceStoppedNeutralError,
   formatDeviceNotDetectedError,
   formatSyncFailedError,
+  formatToolBlockedError,
+  SUPPORT_CLOSING_LINE,
 } from "./userFacingErrors";
 export type { UserFacingError, UserErrorCode } from "./userFacingErrors";

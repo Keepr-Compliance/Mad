@@ -13,13 +13,42 @@ import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
 
 /**
- * List of required executable names for libimobiledevice functionality
+ * BACKLOG-3953: every file the app needs in the Windows tools folder at run time —
+ * the four tools it launches (getCommand call sites in electron/services) and every
+ * DLL they load (PE import tables, followed recursively; Windows system DLLs excluded).
+ *
+ * The packaging list is `store.files` in resources/pinned/libimobiledevice.manifest.json
+ * (BACKLOG-3927). That JSON cannot be imported here (rootDir is ./electron, and the
+ * manifest is not packaged), so this is a second copy, and
+ * electron/services/__tests__/iphoneToolFiles.parity-3953.test.ts fails if the two differ.
  */
-export const REQUIRED_EXECUTABLES = [
+export const REQUIRED_IPHONE_TOOL_EXECUTABLES = [
   "idevice_id",
   "ideviceinfo",
   "idevicebackup2",
+  "idevicepair",
 ] as const;
+
+export const REQUIRED_IPHONE_TOOL_DLLS = [
+  "getopt.dll",
+  "imobiledevice.dll",
+  "libcrypto-1_1-x64.dll",
+  "libssl-1_1-x64.dll",
+  "plist.dll",
+  "usbmuxd.dll",
+  "vcruntime140.dll",
+] as const;
+
+export const REQUIRED_IPHONE_TOOL_FILES: readonly string[] = [
+  ...REQUIRED_IPHONE_TOOL_EXECUTABLES.map((name) => `${name}.exe`),
+  ...REQUIRED_IPHONE_TOOL_DLLS,
+];
+
+/**
+ * List of required executable names for libimobiledevice functionality.
+ * BACKLOG-3953: derived from the one list above (it used to omit idevicepair).
+ */
+export const REQUIRED_EXECUTABLES = REQUIRED_IPHONE_TOOL_EXECUTABLES;
 
 export type LibimobiledeviceExecutable = (typeof REQUIRED_EXECUTABLES)[number];
 

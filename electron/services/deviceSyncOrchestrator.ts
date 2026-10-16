@@ -68,7 +68,9 @@ import {
   formatStoreAppleDevicesMissingError,
   formatStoreAppleDevicesNotRunningError,
   formatMsiServiceStoppedNeutralError,
+  formatToolBlockedError,
 } from "./diagnostics/userFacingErrors";
+import { checkToolFilesForBlock, keeprInstallFolder } from "./iphoneToolBlock";
 import { checkAppleDrivers } from "./appleDriverService";
 import { isStoreBuild } from "./distributionChannelService";
 import { canUseLibimobiledevice, isMockMode } from "./libimobiledeviceService";
@@ -1075,6 +1077,23 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       let driversInstalled = true;
       let serviceRunning = true;
       if (process.platform === "win32") {
+        // BACKLOG-3953: every file the iPhone tools need, checked BEFORE the driver
+        // check — that check can launch idevice_id, and a removed idevice_id there reads
+        // as "Apple Mobile Device Service not running", the wrong advice.
+        const toolBlock = checkToolFilesForBlock("pre-flight");
+        if (toolBlock) {
+          const userError = formatToolBlockedError(keeprInstallFolder());
+          log.warn("[DeviceSyncOrchestrator] iPhone tool files missing", {
+            missingFiles: toolBlock.missingFiles,
+          });
+          // SR R3: the pre-flight exits above and below record no reason, which is why
+          // a pre-flight failure reaches sync_outcomes with reason_code null.
+          syncTimeline.setContext({ endedBy: "tool-blocked", reasonCode: "TOOL_BLOCKED" });
+          this.isRunning = false;
+          this.emit("error", { message: userError.description, userError });
+          return this.errorResult(userError.description, "TOOL_BLOCKED");
+        }
+
         const driverStatus = await checkAppleDrivers();
         if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "driver-check");
         driversInstalled = driverStatus.isInstalled;
@@ -2045,9 +2064,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             endedBy:
               backupResult.errorCode === "BACKUP_TIMEOUT"
                 ? "watchdog"
-                : isEncryptionReasonCode(backupResult.errorCode)
-                  ? "backup-encryption"
-                  : "device-error",
+                : backupResult.errorCode === "TOOL_BLOCKED"
+                  ? "tool-blocked"
+                  : isEncryptionReasonCode(backupResult.errorCode)
+                    ? "backup-encryption"
+                    : "device-error",
           });
 
           // BACKLOG-3598: a failed first sync (device error, disconnect, watchdog,
@@ -2068,6 +2089,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           this.isRunning = false;
           if (appleEncrypted) {
             return this.stopForAppleEncryptedBackup();
+          }
+          // BACKLOG-3953: the steps reach the sync screen through the structured error.
+          if (backupResult.errorCode === "TOOL_BLOCKED") {
+            const userError = formatToolBlockedError(keeprInstallFolder());
+            this.emit("error", { message: userError.description, userError });
           }
           return this.errorResult(error, backupResult.errorCode);
         }

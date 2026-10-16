@@ -34,6 +34,8 @@ export type UserErrorCode =
   | "MISSING_DRIVERS"
   | "DRIVER_SERVICE_STOPPED"
   | "DEVICE_NOT_DETECTED"
+  /** BACKLOG-3953: an iPhone tool never started (Windows). See iphoneToolBlock.ts. */
+  | "SECURITY_SOFTWARE_BLOCKED"
   | "SYNC_FAILED";
 
 /**
@@ -201,5 +203,40 @@ export function formatSyncFailedError(message?: string): UserFacingError {
     actionSuggestion:
       "Try disconnecting and reconnecting your iPhone, then attempt the sync again. If the problem persists, restart the application.",
     code: "SYNC_FAILED",
+  };
+}
+
+/**
+ * BACKLOG-3953: the last line of a message that asks the user to fix something on their
+ * own computer. Founder requirement (2026-10-15), verbatim.
+ */
+export const SUPPORT_CLOSING_LINE = "If this keeps happening, contact support.";
+
+/**
+ * BACKLOG-3953: an iPhone tool never started on Windows — a required file is gone from
+ * the tools folder, or Windows refused to launch it (iphoneToolBlock.ts). Shown ONLY on
+ * that signal; a tool that started and then failed never produces this message.
+ *
+ * `actionSuggestion` holds the numbered steps, one per line, and ends with
+ * SUPPORT_CLOSING_LINE; the sync screen renders it line by line for this code.
+ *
+ * @param keeprFolder - the install folder to add as an exception, when known
+ */
+export function formatToolBlockedError(keeprFolder?: string | null): UserFacingError {
+  const steps = [
+    "Open your antivirus program.",
+    "Open its Quarantine list.",
+    "Restore Keepr's files from there.",
+    keeprFolder
+      ? `Add an exception for the Keepr folder: ${keeprFolder}`
+      : "Add an exception for the Keepr folder.",
+    "Close Keepr and open it again.",
+  ];
+  return {
+    title: "Your antivirus blocked Keepr's iPhone tools",
+    description:
+      "Security software on this computer blocked one of the tools Keepr uses to connect to your iPhone.",
+    actionSuggestion: [...steps.map((step, i) => `${i + 1}. ${step}`), SUPPORT_CLOSING_LINE].join("\n"),
+    code: "SECURITY_SOFTWARE_BLOCKED",
   };
 }

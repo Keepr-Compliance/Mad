@@ -8,6 +8,7 @@ import { isStoreBuild, isWindowsArm64 } from "../../utils/platform";
 import { SyncStepChangeLog } from "../../utils/syncStepLog";
 import { useRetryCountdown } from "../../utils/syncRetryCooldown";
 import { RetryCooldownNotice, SyncStartButtonContent } from "./SyncStartButtonContent";
+import { ToolBlockedNotice, isToolBlockedError } from "./ToolBlockedNotice";
 
 /**
  * BACKLOG-3816: the error screen never shows "Sync Failed" alone. The hook keeps a failed
@@ -55,6 +56,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     syncStatus,
     progress,
     error,
+    userError,
     appleEncryptedBackup,
     lastSyncTime,
     isWaitingForPasscode,
@@ -162,6 +164,14 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           `view` DEFAULT, so it also renders for any otherwise-unmatched state
           (e.g. a stale idle+progress carried over on reopen) instead of a blank
           screen, and after a cancel (which now resets to "idle"). */}
+      {/* BACKLOG-3953: the device poller found an iPhone tool blocked (Windows). The
+          steps sit above the Connect screen; nothing else on it changes. */}
+      {view === "connection" && isToolBlockedError(userError) && (
+        <div className="flex justify-center px-8 pt-8">
+          <ToolBlockedNotice userError={userError} />
+        </div>
+      )}
+
       {view === "connection" && (
         <ConnectionStatus
           isConnected={isConnected}
@@ -328,10 +338,18 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
               />
             </svg>
           </div>
-          <h3 className="text-xl font-semibold text-gray-800">Sync Failed</h3>
-          <p className="text-red-500 mt-2 max-w-sm" data-testid="sync-error-message">
-            {error || SYNC_FAILED_NO_REASON_MESSAGE}
-          </p>
+          {/* BACKLOG-3953: a blocked iPhone tool shows its restore steps; every other
+              failure keeps the one-line message. */}
+          {isToolBlockedError(userError) ? (
+            <ToolBlockedNotice userError={userError} />
+          ) : (
+            <>
+              <h3 className="text-xl font-semibold text-gray-800">Sync Failed</h3>
+              <p className="text-red-500 mt-2 max-w-sm" data-testid="sync-error-message">
+                {error || SYNC_FAILED_NO_REASON_MESSAGE}
+              </p>
+            </>
+          )}
           <div className="flex gap-3 mt-6">
             <button
               onClick={() => { logger.info("[IPhoneSyncFlow] Error Close clicked"); void cancelSync("error-close"); onClose?.(); }}

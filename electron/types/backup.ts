@@ -107,6 +107,9 @@ export interface BackupResult {
    * handles a held start (Windows). See electron/services/toolStartHold.ts.
    */
   toolStart?: ToolStartObservation;
+
+  /** BACKLOG-3953: present only with errorCode "TOOL_BLOCKED". */
+  toolBlock?: ToolBlock;
 }
 
 /** BACKLOG-3814: spawn requested -> first output byte (or exit, if none). */
@@ -344,6 +347,11 @@ export type BackupErrorCode =
   | "INVALID_UDID"
   // BACKLOG-3816: a password is saved for this phone but secure storage cannot unlock it.
   | "BACKUP_PASSWORD_UNAVAILABLE"
+  // BACKLOG-3953: an iPhone tool never started on Windows — a required file is gone
+  // from the tools folder, or Windows refused to launch it. Set only by
+  // `detectToolBlock` (electron/services/iphoneToolBlock.ts); a tool that started and
+  // then failed is never this code.
+  | "TOOL_BLOCKED"
   | "UNKNOWN_ERROR";
 
 /**
@@ -358,6 +366,38 @@ export interface BackupEncryptionInfo {
    * replacing a stored password, must not act on a failed read).
    */
   status?: "on" | "off" | "unknown";
+  /**
+   * BACKLOG-3953: the ideviceinfo query never started because the tool was blocked.
+   * Present only then; `status` is "unknown" alongside it.
+   */
+  toolBlock?: ToolBlock;
+}
+
+/**
+ * BACKLOG-3953: how an iPhone tool was kept from starting on Windows.
+ *
+ * - `file-missing`: a required file (exe or DLL) is gone from a tools folder that exists.
+ * - `dll-missing`: the tool exited with the Windows "DLL not found" status AND a required
+ *   DLL is gone. The exit status alone never counts.
+ * - `spawn-eperm` / `spawn-eacces` / `spawn-unknown`: Windows refused to start the file.
+ */
+export type ToolBlockKind =
+  | "file-missing"
+  | "dll-missing"
+  | "spawn-eperm"
+  | "spawn-eacces"
+  | "spawn-unknown";
+
+export interface ToolBlock {
+  kind: ToolBlockKind;
+  /** The tool that was being started, or "pre-flight" for the file check before a sync. */
+  tool: string;
+  /** Required file names (not paths) missing or empty at detection time. */
+  missingFiles: string[];
+  /** The spawn error's `code`, when the block came from a spawn failure. */
+  spawnCode?: string;
+  /** The exit code, when the block came from the DLL-not-found exit. */
+  exitCode?: number;
 }
 
 /**
