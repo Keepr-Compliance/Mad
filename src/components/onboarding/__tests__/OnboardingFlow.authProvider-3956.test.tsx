@@ -131,9 +131,9 @@ function prefsFor(authProvider: "google" | "microsoft" | null) {
 }
 
 // The legacy branch (machineState null) has no control here: OnboardingFlow
-// returns before OnboardingFlowInner mounts whenever
-// machineState is null (OnboardingFlow.tsx:157 returns null), so it cannot run. It gets the same narrowing
-// for consistency only. Verified: a describe.each over a null machineState
+// returns null at OnboardingFlow.tsx:157 before OnboardingFlowInner mounts
+// whenever machineState is null, so that branch cannot run. It gets the same
+// narrowing for consistency only. Verified: rendering with a null machineState
 // never reached useOnboardingQueue (4 of 4 timed out waiting for it).
 describe("OnboardingFlow authProvider — machine path (BACKLOG-3956)", () => {
   beforeEach(() => {
