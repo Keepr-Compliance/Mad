@@ -14,6 +14,11 @@
  *      every googleapis OAuth2 client passes `transporterOptions`.
  *  G3  main.ts installs the axios transport before any handler module, and
  *      the bootstrap really does point axios at net.fetch.
+ *  G4  BACKLOG-3969: no server listens beyond this machine. Every `.listen(`
+ *      in electron/ production code passes "localhost" or RCS_BRIDGE_HOST
+ *      (which must be "127.0.0.1") as its host. A `.listen(port)` with no host
+ *      binds every interface and fails. (The Android companion's LAN server,
+ *      which bound the machine's LAN address, is removed.)
  *
  * Sources are read as text; a file with a raw NUL byte would still be read.
  */
@@ -80,11 +85,10 @@ describe("G1 certificate checking is never weakened", () => {
   });
 });
 
-/** Inbound loopback servers (OAuth callback, local sync, RCS bridge). */
+/** Inbound loopback servers (OAuth callback, RCS bridge). */
 const HTTP_LOOPBACK_SERVERS = [
   "services/googleAuthService.ts",
   "services/microsoftAuthService.ts",
-  "services/localSyncService.ts",
   "services/rcsExtensionBridge.ts",
 ];
 
@@ -119,6 +123,67 @@ describe("G2 no outbound client on Node's TLS", () => {
       }
     }
     expect(missing).toEqual([]);
+  });
+});
+
+/** The argument list of the call whose "(" is at `open`, split on top-level commas. */
+function callArgs(c: string, open: number): string[] {
+  const args: string[] = [];
+  let depth = 0;
+  let start = open + 1;
+  for (let i = open; i < c.length; i++) {
+    const ch = c[i];
+    if (ch === "(" || ch === "[" || ch === "{") depth++;
+    else if (ch === ")" || ch === "]" || ch === "}") {
+      depth--;
+      if (depth === 0) {
+        args.push(c.slice(start, i).trim());
+        return args;
+      }
+    } else if (ch === "," && depth === 1) {
+      args.push(c.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  throw new Error("unterminated .listen( call");
+}
+
+/** Every `.listen(` call in production code, with its host argument (multi-line safe). */
+function listenCalls(): Array<{ rel: string; host: string | undefined }> {
+  const out: Array<{ rel: string; host: string | undefined }> = [];
+  for (const f of FILES) {
+    const c = code(f.text);
+    const re = /\.listen\s*\(/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(c))) {
+      const args = callArgs(c, m.index + m[0].length - 1);
+      out.push({ rel: f.rel, host: args[1] });
+    }
+  }
+  return out;
+}
+
+const LOOPBACK_HOSTS = ['"localhost"', "'localhost'", "RCS_BRIDGE_HOST"];
+
+describe("G4 no server listens beyond this machine (BACKLOG-3969)", () => {
+  it("finds the known listeners (the scan is not vacuous)", () => {
+    expect([...new Set(listenCalls().map((l) => l.rel))].sort()).toEqual([
+      "services/googleAuthService.ts",
+      "services/microsoftAuthService.ts",
+      "services/rcsExtensionBridge.ts",
+    ]);
+  });
+
+  it("every .listen( passes a loopback host", () => {
+    const offending = listenCalls()
+      .filter((l) => l.host === undefined || !LOOPBACK_HOSTS.includes(l.host))
+      .map((l) => `${l.rel}: host=${l.host ?? "(none: every interface)"}`);
+    expect(offending).toEqual([]);
+  });
+
+  it('RCS_BRIDGE_HOST is "127.0.0.1"', () => {
+    const bridge = FILES.find((f) => f.rel === "services/rcsExtensionBridge.ts")!.text;
+    expect(bridge).toMatch(/export const RCS_BRIDGE_HOST = "127\.0\.0\.1";/);
   });
 });
 

@@ -30,7 +30,6 @@ import { render, screen, waitFor, fireEvent, within } from "@testing-library/rea
 import "@testing-library/jest-dom";
 import { EmailSettings } from "../EmailSettings";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
-import { AndroidMessagesSettings } from "../AndroidMessagesSettings";
 import { ContactsSettings } from "../ContactsSettings";
 import { GoogleMessagesSettings } from "../GoogleMessagesSettings";
 import { IphoneSyncSettings } from "../IphoneSyncSettings";
@@ -366,19 +365,6 @@ describe("BACKLOG-3156 — Messages", () => {
       expect(settingsService.updatePreferences).toHaveBeenCalledWith("u", { messageImport: { filters: { skipAttachments: true } } }),
     );
     expect(toggle).toHaveAttribute("aria-checked", "true");
-  });
-
-  it("Android: Import Preferences precedes the actions, which sit outside the card", async () => {
-    render(<AndroidMessagesSettings userId="u" />);
-    await waitFor(() =>
-      expect(screen.getByTestId("android-block-actions")).toBeInTheDocument(),
-    );
-
-    expectInOrder(["android-block-preferences", "android-block-actions"]);
-
-    const actions = screen.getByTestId("android-block-actions");
-    expect(actions.closest(".bg-gray-50.rounded-lg")).toBeNull();
-    expect(actions.querySelector("h1,h2,h3,h4,h5,h6")).toBeNull();
   });
 });
 

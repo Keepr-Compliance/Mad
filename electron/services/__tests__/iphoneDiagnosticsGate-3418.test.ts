@@ -109,21 +109,6 @@ jest.mock("../appleDriverService", () => ({
     error: null,
   }),
 }));
-jest.mock("../pairingService", () => ({
-  pairingService: { getStatus: jest.fn().mockReturnValue({ isPaired: false, devices: [] }) },
-}));
-jest.mock("../localSyncService", () => ({
-  __esModule: true,
-  default: {
-    getStatus: jest.fn().mockReturnValue({
-      running: false,
-      port: null,
-      address: null,
-      totalMessagesReceived: 0,
-      lastSyncTimestamp: null,
-    }),
-  },
-}));
 jest.mock("../supabaseService", () => ({
   __esModule: true,
   default: { getPreferences: jest.fn().mockResolvedValue({}) },
