@@ -44,14 +44,6 @@ function makeDiagnostics(
         service_running: true,
         version: "1.2.3",
       },
-      android_companion: {
-        paired: false,
-        connected: false,
-        device_count: 0,
-        last_seen: null,
-        server_running: false,
-        last_sync_at: null,
-      },
       user_settings: {
         phone_type: "iphone",
         contact_sources_configured: true,
@@ -100,21 +92,10 @@ describe("DiagnosticsPreview - iPhone Sync section (BACKLOG-1918)", () => {
     expect(screen.getByText("Windows USB:")).toBeInTheDocument();
   });
 
-  it("renders the Android companion row for android users", () => {
-    renderExpanded(
-      makeDiagnostics({
-        phone_type: "android",
-        android_companion: {
-          paired: true,
-          connected: true,
-          device_count: 1,
-          last_seen: new Date().toISOString(),
-          server_running: true,
-          last_sync_at: new Date().toISOString(),
-        },
-      })
-    );
-    expect(screen.getByText("Android Companion:")).toBeInTheDocument();
+  // BACKLOG-3969: the Android companion server is gone, so there is no row for it.
+  it("renders no Android companion row for android users", () => {
+    renderExpanded(makeDiagnostics({ phone_type: "android" }));
+    expect(screen.queryByText("Android Companion:")).not.toBeInTheDocument();
   });
 
   it("does not render a Windows USB row on non-Windows (windows=null)", () => {

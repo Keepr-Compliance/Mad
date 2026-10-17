@@ -218,7 +218,7 @@ describe("userDataSelectors", () => {
       expect(completedSteps).toContain("email-connect");
       expect(completedSteps).toContain("permissions");
       expect(completedSteps).toContain("apple-driver");
-      expect(completedSteps).toContain("android-coming-soon");
+      expect(completedSteps).not.toContain("android-coming-soon");
     });
   });
 

@@ -134,25 +134,6 @@ jest.mock("../appleDriverService", () => ({
   }),
 }));
 
-jest.mock("../pairingService", () => ({
-  pairingService: {
-    getStatus: jest.fn().mockReturnValue({ isPaired: false, devices: [] }),
-  },
-}));
-
-jest.mock("../localSyncService", () => ({
-  __esModule: true,
-  default: {
-    getStatus: jest.fn().mockReturnValue({
-      running: false,
-      port: null,
-      address: null,
-      totalMessagesReceived: 0,
-      lastSyncTimestamp: null,
-    }),
-  },
-}));
-
 jest.mock("../supabaseService", () => ({
   __esModule: true,
   default: {
@@ -522,23 +503,10 @@ describe("supportTicketService", () => {
       expect(diagnostics.iphone_sync.windows).toBeNull();
     });
 
-    it("should reflect Android companion state and phone_type from user settings", async () => {
-      const { pairingService } = require("../pairingService");
+    // BACKLOG-3969: the Android companion server is gone, so the section no
+    // longer carries its pairing / server state.
+    it("should reflect phone_type from user settings for an Android user, with no companion block", async () => {
       const supabaseService = require("../supabaseService").default;
-      const localSyncService = require("../localSyncService").default;
-
-      const now = new Date().toISOString();
-      pairingService.getStatus.mockReturnValueOnce({
-        isPaired: true,
-        devices: [{ deviceId: "d1", deviceName: "Pixel", pairedAt: now, lastSeen: now }],
-      });
-      localSyncService.getStatus.mockReturnValueOnce({
-        running: true,
-        port: 8080,
-        address: "0.0.0.0",
-        totalMessagesReceived: 5,
-        lastSyncTimestamp: Date.now(),
-      });
       supabaseService.getPreferences.mockResolvedValueOnce({
         phone_type: "android",
         contactSources: { direct: { googleContacts: true } },
@@ -549,10 +517,7 @@ describe("supportTicketService", () => {
       const diagnostics = await collectDiagnostics();
 
       expect(diagnostics.iphone_sync.phone_type).toBe("android");
-      expect(diagnostics.iphone_sync.android_companion.paired).toBe(true);
-      expect(diagnostics.iphone_sync.android_companion.connected).toBe(true);
-      expect(diagnostics.iphone_sync.android_companion.device_count).toBe(1);
-      expect(diagnostics.iphone_sync.android_companion.server_running).toBe(true);
+      expect(diagnostics.iphone_sync).not.toHaveProperty("android_companion");
       expect(diagnostics.iphone_sync.user_settings.phone_type).toBe("android");
       expect(diagnostics.iphone_sync.user_settings.contact_sources_configured).toBe(true);
       expect(diagnostics.iphone_sync.user_settings.iphone_sync_enabled).toBe(false);
@@ -606,16 +571,12 @@ describe("supportTicketService", () => {
     it("should keep the default section when collection throws", async () => {
       const { deviceDetectionService } = require("../deviceDetectionService");
       const { checkAppleDrivers } = require("../appleDriverService");
-      const { pairingService } = require("../pairingService");
       const supabaseService = require("../supabaseService").default;
 
       deviceDetectionService.collectIphoneSyncDiagnostics.mockRejectedValueOnce(
         new Error("device probe failed")
       );
       checkAppleDrivers.mockRejectedValueOnce(new Error("driver check failed"));
-      pairingService.getStatus.mockImplementationOnce(() => {
-        throw new Error("pairing unavailable");
-      });
       supabaseService.getPreferences.mockRejectedValueOnce(new Error("no prefs"));
 
       const diagnostics = await collectDiagnostics();
@@ -678,14 +639,6 @@ describe("supportTicketService", () => {
             is_installed: false,
             service_running: false,
             version: null,
-          },
-          android_companion: {
-            paired: false,
-            connected: false,
-            device_count: 0,
-            last_seen: null,
-            server_running: false,
-            last_sync_at: null,
           },
           user_settings: {
             phone_type: "iphone",

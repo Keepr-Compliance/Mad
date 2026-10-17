@@ -36,9 +36,16 @@
  * "every green check reads source, none runs a bundler" trap. It is a
  * restatement, not shared code, and it cannot be anything else.
  *
- * What holds the three copies together is tests, on both sides:
- *   - here: `__tests__/AndroidMessagesSettings.allTime-2561.test.tsx`
+ * What holds the copies together is tests, on both sides:
+ *   - here: `__tests__/messageImportPreferences.perPlatform-2734.test.tsx`
+ *     (the Android resolver cases) and
+ *     `__tests__/MacOSMessagesImportSettings.allTime-2561.test.tsx` (the default)
  *   - companion: `android-companion/services/__tests__/syncWindow.mirror-2800.test.ts`
+ *
+ * BACKLOG-3969: the desktop Android companion panel (`AndroidMessagesSettings`)
+ * and its server were removed, so `resolveAndroidImportFilters` and
+ * `androidFilterPatch` have no desktop caller. They are kept on purpose while
+ * the companion app still restates them (its retirement is BACKLOG-3990).
  *
  * If you change the absent-vs-explicit-null rules below, change them there too.
  *
@@ -51,10 +58,10 @@
  * BACKLOG-2561: must equal `DEFAULT_LOOKBACK_MONTHS` in
  * `electron/services/macOSMessagesImportService/importHelpers.ts`, which is what
  * the main process actually imports with. Pinned by
- * `__tests__/MacOSMessagesImportSettings.allTime-2561.test.tsx` and
- * `__tests__/AndroidMessagesSettings.allTime-2561.test.tsx`, which assert the
- * dropdown reads "Last 3 months" for the exact preference shape the app writes
- * when only the message cap has ever been changed.
+ * `__tests__/MacOSMessagesImportSettings.allTime-2561.test.tsx`, which asserts
+ * the dropdown reads the default for the exact preference shape the app writes
+ * when only the message cap has ever been changed. (The Android half of that
+ * pin went with the Android companion panel, BACKLOG-3969.)
  */
 export const DEFAULT_LOOKBACK_MONTHS = 1.5;
 

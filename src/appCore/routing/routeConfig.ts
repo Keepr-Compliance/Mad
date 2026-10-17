@@ -19,7 +19,6 @@ export const USE_NEW_ONBOARDING = true;
  */
 export const ONBOARDING_STEPS: AppStep[] = [
   "phone-type-selection",
-  "android-coming-soon",
   "email-onboarding",
   "keychain-explanation",
   "permissions",

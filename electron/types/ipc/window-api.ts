@@ -29,8 +29,6 @@ import type { WindowApiRcsImport } from "./window-api-rcs-import";
 import type { WindowApiAtRest } from "./window-api-at-rest";
 import type { WindowApiEntitlement } from "./window-api-entitlement";
 import type { WindowApiPayment } from "./window-api-payment";
-import type { WindowApiPairing } from "./window-api-pairing";
-import type { WindowApiLocalSync } from "./window-api-local-sync";
 import type {
   WindowApiLicense,
   WindowApiDatabaseBackup,
@@ -93,8 +91,6 @@ export interface WindowApi extends WindowApiEvents {
   entitlement: WindowApiEntitlement;
   payment: WindowApiPayment;
   support: WindowApiSupport;
-  pairing: WindowApiPairing;
-  localSync: WindowApiLocalSync;
   atRest?: WindowApiAtRest;
 }
 
