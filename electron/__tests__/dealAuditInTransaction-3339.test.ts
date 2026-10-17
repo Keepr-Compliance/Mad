@@ -440,6 +440,13 @@ describe("transactions:bulk-delete", () => {
     ]);
   });
 
+  test("C1 the committed entries reach the cloud with no interval running", async () => {
+    const ids = [seedDeal("1 A St"), seedDeal("2 B St")];
+    await invoke("transactions:bulk-delete", ids);
+    await settle();
+    expect(uploads.flat().map((e) => [e.action, e.resourceId])).toEqual(ids.map((id) => ["TRANSACTION_DELETE", id]));
+  });
+
   test("K2 a crash at every entry deletes nothing", async () => {
     const ids = [seedDeal("1 A St"), seedDeal("2 B St")];
     crashAtEntry();
@@ -483,6 +490,13 @@ describe("transactions:bulk-update-status", () => {
       [b, 0, "audit_entry_not_written"],
       [c, 1, null],
     ]);
+  });
+
+  test("C1 the committed entries reach the cloud with no interval running", async () => {
+    const ids = [seedDeal("1 A St"), seedDeal("2 B St")];
+    await invoke("transactions:bulk-update-status", ids, "closed");
+    await settle();
+    expect(uploads.flat().map((e) => [e.action, e.resourceId])).toEqual(ids.map((id) => ["TRANSACTION_UPDATE", id]));
   });
 
   test("K2 a crash at every entry changes nothing", async () => {
