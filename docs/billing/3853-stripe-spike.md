@@ -52,7 +52,7 @@ Under a test clock, `event.created` is wall-clock time, not clock time. Order mu
 
 1. `invoice.payment_failed` fires when an ACH payment **needs verification**, not only on an ACH return. The brokerage handler must not alert the account manager on it without checking the PaymentIntent status (`requires_action` ≠ failure).
 2. Auto-reinstate (R8) is consistent with Stripe's own transition. `active` arrives only after the last overdue invoice is paid. Re-fetching the subscription on `invoice.paid` reads the final state, because the handlers re-fetch.
-3. `notify_org_overdue`: an attempted-but-unfinished payment kept the subscription `active` past the due date (#10), so no overdue event arrives for it.
+3. `notify_org_overdue`: in ONE run (#10), in the `requires_action` state only, an attempted-but-unfinished payment kept the subscription `active` past the due date and no overdue event arrived. A payment still `processing` across the due date was NOT measured (INFERRED: same behaviour). SR v1 rule: the overdue notification skips when the latest invoice's PaymentIntent is `processing` or `requires_action`.
 4. A deal saved on the 29th–31st bills on the last day of shorter months (#3).
 5. Two test clocks with ≤3 customers each are enough for the PR-2 harness (#15).
 
@@ -82,7 +82,7 @@ Both test clocks were deleted after the run, which deleted their customers, subs
 | Object | Id | State |
 |---|---|---|
 | Product "Keepr Team seat (spike 3853 PR-0)" | `prod_VSZ7s4JhRpHrrb` | archived (`active=false`) |
-| Test clock A / B | `clock_1URdz9Bg3cyTef3dxbWPNKds` / `clock_1URe3TBg3cyTef3dlgCm4n7Y` | deleted |
-| Customers | `cus_VSZ7P8iqRvHlbC` (A1), `cus_VSZBJXvPX99hjF` (B1), `cus_VSZBCDgHJxEg6x` (B2), `cus_VSZBy9rzFV18V1` (B3) | deleted with clocks |
-| Subscriptions | `sub_1URdzABg3cyTef3dViU6FCKO`, `sub_1URe3WBg3cyTef3dKjEHaVAo`, `sub_1URe3XBg3cyTef3djEjJkiYN`, `sub_1URe3hBg3cyTef3dczATGC5L` | deleted with clocks |
-| Search probe customer (no clock) | `cus_VSZCPBRCitf28z` | deleted |
+| Test clock A / B | two test clocks | deleted |
+| Customers | four customers (A1, B1, B2, B3) | deleted with clocks |
+| Subscriptions | four subscriptions | deleted with clocks |
+| Search probe customer (no clock) | one customer | deleted |
