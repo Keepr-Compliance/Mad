@@ -360,6 +360,9 @@ Review for:
 - [ ] Inefficient database queries
 - [ ] Inefficient use of state or APIs
 
+These bullets are a reminder, not a method. For anything touching the network, the database, a
+queue or a user-facing wait, apply the matching lens in `.claude/skills/sr-review/` (Phase 6.4).
+
 🤖 **LLM Assist**: Claude can spot performance issues and generate optimization suggestions without manual benchmarking.
 
 ---
@@ -798,6 +801,14 @@ Provide specific file:line references and suggested fixes.
 
 🤖 **LLM Assist**: This phase replaces manual pre-review and significantly increases PR quality.
 
+### 6.4 Reliability & Performance Lenses (MANDATORY when triggered)
+
+Route the diff through `.claude/skills/sr-review/SKILL.md`. It maps changed paths to the lenses
+they trigger: latency, load control, failure handling, data correctness (includes §6.2b and data
+distribution), async systems, performance, operability. Each lens has yes/no checks, one required
+control, and Do/Don't guidance with named sources. Load only the triggered lenses plus their
+cross-lens partners; report them in the "Lenses applied" table in the review summary.
+
 ---
 
 ## Phase 7: PR Creation
@@ -1131,6 +1142,7 @@ When reviewing PRs, verify:
 - [ ] **Phase 4a**: Test hygiene — behavioral changes have matching test updates (see below)
 - [ ] **Phase 5**: Type check + lint pass
 - [ ] **Phase 6**: Automated code review completed
+- [ ] **Phase 6.4**: Triggered `sr-review` lenses applied, controls run, "Lenses applied" table in the summary
 - [ ] **Phase 7**: Clear PR description
 - [ ] **Phase 7.5**: Target branch merged into feature branch (MANDATORY)
 - [ ] **Phase 8**: CI passes (after Phase 7.5 sync)
