@@ -221,32 +221,36 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
                     <p className="text-sm text-gray-500">
                       {CONNECT_COMPANY_ACCOUNT_LINE}
                     </p>
+                    <div className="flex justify-end" data-testid="permissions-actions">
+                      <Button
+                        onClick={() => {
+                          window.location.href = '/auth/logout?next=setup';
+                        }}
+                        disabled={isImpersonating}
+                      >
+                        {CONNECT_COMPANY_ACCOUNT_LABEL}
+                      </Button>
+                    </div>
+                  </div>
+                ) : desktopClientId ? (
+                  <div className="flex justify-end" data-testid="permissions-actions">
                     <Button
                       onClick={() => {
-                        window.location.href = '/auth/logout?next=setup';
+                        const redirectUri = `${window.location.origin}/setup/consent/callback`;
+                        const consentUrl = `https://login.microsoftonline.com/${consent.tenantId}/adminconsent?client_id=${desktopClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${consent.organizationId}`;
+                        window.location.href = consentUrl;
                       }}
                       disabled={isImpersonating}
                     >
-                      {CONNECT_COMPANY_ACCOUNT_LABEL}
+                      <svg className="h-4 w-4" viewBox="0 0 23 23">
+                        <path fill="#f35325" d="M1 1h10v10H1z" />
+                        <path fill="#81bc06" d="M12 1h10v10H12z" />
+                        <path fill="#05a6f0" d="M1 12h10v10H1z" />
+                        <path fill="#ffba08" d="M12 12h10v10H12z" />
+                      </svg>
+                      Grant permissions with Microsoft
                     </Button>
                   </div>
-                ) : desktopClientId ? (
-                  <Button
-                    onClick={() => {
-                      const redirectUri = `${window.location.origin}/setup/consent/callback`;
-                      const consentUrl = `https://login.microsoftonline.com/${consent.tenantId}/adminconsent?client_id=${desktopClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${consent.organizationId}`;
-                      window.location.href = consentUrl;
-                    }}
-                    disabled={isImpersonating}
-                  >
-                    <svg className="h-4 w-4" viewBox="0 0 23 23">
-                      <path fill="#f35325" d="M1 1h10v10H1z" />
-                      <path fill="#81bc06" d="M12 1h10v10H12z" />
-                      <path fill="#05a6f0" d="M1 12h10v10H1z" />
-                      <path fill="#ffba08" d="M12 12h10v10H12z" />
-                    </svg>
-                    Grant permissions with Microsoft
-                  </Button>
                 ) : (
                   <p className="text-sm text-gray-400">
                     Desktop app permissions are not configured for this portal. Please contact support.

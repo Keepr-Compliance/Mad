@@ -130,4 +130,20 @@ describe('Desktop App Permissions — Connect company account (BACKLOG-3851 PR-2
     await userEvent.click(screen.getByRole('button', { name: CONNECT }));
     expect(window.location.href).toBe('/auth/logout?next=setup');
   });
+
+  it('BACKLOG-3851 PR-2e: both action buttons sit in the right-aligned action row (flex justify-end)', async () => {
+    const { unmount } = render(<OrgSettingsClient features={VIEW} />);
+    await screen.findByText(HEADING);
+    const connectRow = screen.getByRole('button', { name: CONNECT }).closest('[data-testid="permissions-actions"]');
+    expect(connectRow).not.toBeNull();
+    expect(connectRow).toHaveClass('flex', 'justify-end');
+    unmount();
+
+    mockConsent = { ...mockConsent, tenantId: 'tenant-fixture' };
+    render(<OrgSettingsClient features={VIEW} />);
+    await screen.findByText(HEADING);
+    const grantRow = screen.getByRole('button', { name: GRANT }).closest('[data-testid="permissions-actions"]');
+    expect(grantRow).not.toBeNull();
+    expect(grantRow).toHaveClass('flex', 'justify-end');
+  });
 });
