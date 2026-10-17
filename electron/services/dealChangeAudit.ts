@@ -49,13 +49,36 @@ export function isAuditNotRecorded(err: unknown): boolean {
  */
 export function dealChangeFailureCode(err: unknown): string {
   if (err instanceof AuditNotRecordedError) return "audit_entry_not_written";
-  const name = err instanceof Error && /^[A-Za-z]+$/.test(err.name) ? err.name : "Error";
+  const raw = errorField(err, "name");
+  const name = raw !== undefined && /^[A-Za-z]+$/.test(raw) ? raw : "Error";
   return `change_failed:${name}`;
 }
 
-/** The error to rethrow to the user (see the file header). */
+/**
+ * The error to rethrow to the user (see the file header).
+ *
+ * Driver errors are read by shape, never by `instanceof Error`: the database
+ * driver creates its error class once per process, so an error it throws can
+ * come from a different `Error` than the one this module sees. `wrapHandler`
+ * shows only `instanceof Error` messages, so such an error is copied into a
+ * local `Error` with the same name and message (original kept as `cause`).
+ */
 export function dealChangeUserError(kind: DealChangeKind, err: unknown): unknown {
-  return err instanceof AuditNotRecordedError
-    ? new Error(DEAL_AUDIT_NOT_SAVED_MESSAGE[kind])
-    : err;
+  if (err instanceof AuditNotRecordedError) {
+    return new Error(DEAL_AUDIT_NOT_SAVED_MESSAGE[kind]);
+  }
+  if (err instanceof Error) return err;
+  const message = errorField(err, "message");
+  if (message === undefined) return err;
+  const copy: Error & { cause?: unknown } = new Error(message);
+  copy.cause = err;
+  const name = errorField(err, "name");
+  if (name !== undefined) copy.name = name;
+  return copy;
+}
+
+function errorField(err: unknown, key: "name" | "message"): string | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  const value = (err as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : undefined;
 }
