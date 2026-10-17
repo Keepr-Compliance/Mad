@@ -856,7 +856,14 @@ function TransactionDetails({
 
   const handleDelete = async (): Promise<void> => {
     try {
-      await transactionService.delete(transaction.id);
+      const result = await transactionService.delete(transaction.id);
+      // BACKLOG-3339: a refused delete keeps the deal; say so instead of
+      // closing as if it were gone.
+      if (!result.success) {
+        setShowDeleteConfirm(false);
+        showError(result.error || "Failed to delete transaction. Please try again.");
+        return;
+      }
       setShowDeleteConfirm(false);
       onClose();
       onTransactionUpdated?.();

@@ -39,6 +39,22 @@ export type AuditAction =
   | "MAILBOX_DISCONNECT";
 
 /**
+ * BACKLOG-3339: thrown by `recordInTransaction` when the audit INSERT itself
+ * fails. It is thrown inside the caller's transaction, so the change rolls
+ * back with it; the caller tells it apart from a failure of the change and
+ * shows the user a fixed message instead of the driver's text. The driver
+ * error is kept as `cause`.
+ */
+export class AuditNotRecordedError extends Error {
+  readonly cause: unknown;
+  constructor(cause: unknown) {
+    super("The audit entry could not be written");
+    this.name = "AuditNotRecordedError";
+    this.cause = cause;
+  }
+}
+
+/**
  * Resource types that can be audited
  */
 export type ResourceType =
@@ -469,7 +485,12 @@ class AuditService {
     }
 
     const fullEntry = this.buildEntry({ ...entry, success: true });
-    db.insertAuditLogSync(fullEntry);
+    try {
+      db.insertAuditLogSync(fullEntry);
+    } catch (cause) {
+      // Still a throw inside the transaction, so the change rolls back.
+      throw new AuditNotRecordedError(cause);
+    }
     this.scheduleKickAfterCommit();
     return fullEntry;
   }
