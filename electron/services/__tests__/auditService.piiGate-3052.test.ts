@@ -442,6 +442,81 @@ describe("auditService — third-party PII is gated on support access (BACKLOG-3
   });
 
   // -----------------------------------------------------------------------
+  // BACKLOG-3339: raw free text (error_message, and metadata.error) does not
+  // leave the machine outside a support window — live sends and the 3987
+  // table backfill alike. The real-driver backfill control is in
+  // db/__tests__/auditCloudStrip-3339.test.ts (S2).
+  // -----------------------------------------------------------------------
+  describe("free-text fields (BACKLOG-3339)", () => {
+    /** A raw error message of the shape a failed contact write produces. */
+    const RAW_ERROR = `Contact "${CONTACT_NAME}" at ${PROPERTY_ADDRESS} could not be saved`;
+
+    const logFailedLogin = async (): Promise<void> => {
+      await auditService.log({
+        userId: "user-1",
+        action: "LOGIN_FAILED" as AuditAction,
+        resourceType: "SESSION" as ResourceType,
+        metadata: { provider: "microsoft", error: RAW_ERROR },
+        success: false,
+        errorMessage: RAW_ERROR,
+      });
+      await auditService.syncToCloud();
+    };
+
+    it("live send: uploads the failed entry without error_message or metadata.error", async () => {
+      await logFailedLogin();
+      const [uploaded] = uploadedEntries();
+      expect(uploaded.action).toBe("LOGIN_FAILED");
+      expect(uploaded.userId).toBe("user-1");
+      expect(uploaded.success).toBe(false);
+      expect(uploaded.errorMessage).toBeUndefined();
+      expect(uploaded.metadata).toEqual({ provider: "microsoft" });
+      expect(JSON.stringify(uploaded)).not.toContain(CONTACT_NAME);
+    });
+
+    it("keeps error_message in the local audit record", async () => {
+      await logFailedLogin();
+      const local = mockDatabaseService.insertAuditLog.mock.calls[0][0] as AuditLogEntry;
+      expect(local.errorMessage).toBe(RAW_ERROR);
+      expect(local.metadata).toEqual({ provider: "microsoft", error: RAW_ERROR });
+    });
+
+    it("backfill: strips error_message from rows recovered from the table", async () => {
+      mockDatabaseService.getUnsyncedAuditLogs.mockResolvedValue([
+        {
+          id: "audit-recovered-err",
+          timestamp: new Date(T0),
+          userId: "user-1",
+          action: "CONTACT_CREATE" as AuditAction,
+          resourceType: "CONTACT" as ResourceType,
+          success: false,
+          errorMessage: RAW_ERROR,
+          ipAddress: "203.0.113.7",
+          userAgent: "fixture-agent",
+        } satisfies AuditLogEntry,
+      ]);
+      expect(auditService.getPendingSyncCount()).toBe(0);
+
+      await auditService.syncToCloud();
+
+      const [uploaded] = uploadedEntries();
+      expect(uploaded.id).toBe("audit-recovered-err");
+      expect(uploaded.success).toBe(false);
+      expect(uploaded.errorMessage).toBeUndefined();
+      expect(uploaded.ipAddress).toBeUndefined();
+      expect(uploaded.userAgent).toBeUndefined();
+      expect(JSON.stringify(uploaded)).not.toContain(CONTACT_NAME);
+    });
+
+    it("uploads error_message while a support-access window is open", async () => {
+      wireGate(await grant7d());
+      await logFailedLogin();
+      const [uploaded] = uploadedEntries();
+      expect(uploaded.errorMessage).toBe(RAW_ERROR);
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Fails closed, in both directions.
   // -----------------------------------------------------------------------
   describe("when the gate cannot answer", () => {

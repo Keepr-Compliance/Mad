@@ -180,6 +180,7 @@ beforeAll(() => {
   auditService.initialize(
     {
       insertAuditLog,
+      isInTransaction: () => false,
       getUnsyncedAuditLogs: async () => [],
       markAuditLogsSynced: async () => undefined,
       isInitialized: () => true,

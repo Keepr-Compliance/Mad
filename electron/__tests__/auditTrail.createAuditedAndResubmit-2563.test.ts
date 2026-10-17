@@ -121,6 +121,8 @@ jest.mock("electron", () => ({
 
 jest.mock("@sentry/electron/main", () => ({
   captureException: jest.fn(),
+  // BACKLOG-3339: auditService.log reports a failed local INSERT.
+  captureMessage: jest.fn(),
   setUser: jest.fn(),
   addBreadcrumb: jest.fn(),
   flush: jest.fn().mockResolvedValue(true),

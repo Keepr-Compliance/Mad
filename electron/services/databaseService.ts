@@ -34,6 +34,7 @@ import {
   setEncryptionKey,
   closeDb,
   vacuumDb,
+  getRawDatabase as getSharedConnection,
 } from "./db/core/dbConnection";
 import { SCHEMA_VERSION_SQL } from "./db/storageDiagnosticsSql";
 // BACKLOG-2551: migration v71's SQL text lives in the db layer and is imported, per
@@ -2584,6 +2585,14 @@ class DatabaseService implements IDatabaseService {
 
   async insertAuditLog(entry: AuditLogEntry): Promise<void> {
     return auditDb.insertAuditLog(entry);
+  }
+
+  /**
+   * BACKLOG-3339: is a transaction open on the connection the audit INSERT
+   * runs on? Throws when the database is not initialised.
+   */
+  isInTransaction(): boolean {
+    return getSharedConnection().inTransaction;
   }
 
   async getUnsyncedAuditLogs(limit: number, userId: string): Promise<AuditLogEntry[]> {
