@@ -218,8 +218,6 @@ import { registerPreAuthValidationHandler } from "./handlers/preAuthValidationHa
 import { registerSupportTicketHandlers } from "./handlers/supportTicketHandlers";
 import { registerSupportAccessHandlers } from "./handlers/supportAccessHandlers";
 import { initializeSupportAccess } from "./services/supportAccess";
-import { registerLocalSyncHandlers, cleanupLocalSyncHandlers } from "./handlers/localSyncHandlers";
-import { registerPairingHandlers, cleanupPairingHandlers } from "./handlers/pairingHandlers";
 import { LLMConfigService } from "./services/llm/llmConfigService";
 
 // Import license and device services for deep link auth validation (TASK-1507)
@@ -2009,10 +2007,6 @@ app.whenReady().then(async () => {
   void initializeSupportAccess().catch((error) => {
     log.warn(`[SupportAccess] Initialization failed: ${String(error)}`);
   });
-  registerLocalSyncHandlers();
-
-  // Android companion pairing (TASK-1428)
-  registerPairingHandlers();
 
   // DEV-ONLY: Manual deep link handler for testing when protocol handler fails
   // Usage from DevTools console: window.api.system.manualDeepLink("keepr://callback?access_token=...&refresh_token=...")
@@ -2145,10 +2139,6 @@ app.on("before-quit", (event) => {
   cleanupSyncHandlers();
   // Clean up transaction handlers (submission sync)
   cleanupTransactionHandlers();
-  // Clean up local sync server (TASK-1429: Android Companion)
-  cleanupLocalSyncHandlers();
-  // Clean up pairing sessions (TASK-1428)
-  cleanupPairingHandlers();
   // BACKLOG-3619: close the RCS import bridge.
   void stopRcsExtensionBridge();
   // BACKLOG-1831: stop the shadow delta sync poller timers (interval hygiene)

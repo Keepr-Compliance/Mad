@@ -27,5 +27,3 @@ export * from "./backup";
 // Re-export handler types
 export * from "./handlerTypes";
 
-// Re-export local sync types (TASK-1429: Android Companion)
-export * from "./localSync";
