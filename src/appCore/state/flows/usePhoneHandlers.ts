@@ -118,9 +118,6 @@ export function usePhoneHandlers({
     if (pendingOAuthData && !isAuthenticated) {
       setSelectedPhoneType("android");
       setPendingOnboardingData((prev) => ({ ...prev, phoneType: "android" }));
-      if (!USE_NEW_ONBOARDING) {
-        setCurrentStep("android-coming-soon");
-      }
       return;
     }
 
@@ -129,16 +126,10 @@ export function usePhoneHandlers({
     const success = await savePhoneType("android");
     if (success) {
       setHasSelectedPhoneType(true);
-      if (!USE_NEW_ONBOARDING) {
-        setCurrentStep("android-coming-soon");
-      }
     } else {
       // DB not initialized — store in pending data, let OnboardingFlow handle navigation
       setSelectedPhoneType("android");
       setPendingOnboardingData((prev) => ({ ...prev, phoneType: "android" }));
-      if (!USE_NEW_ONBOARDING) {
-        setCurrentStep("android-coming-soon");
-      }
     }
   }, [
     pendingOAuthData,

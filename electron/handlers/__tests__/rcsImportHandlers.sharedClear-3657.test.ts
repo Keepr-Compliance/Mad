@@ -3,18 +3,26 @@
  */
 /**
  * BACKLOG-3657 (founder re-confirmed 2026-10-01) — Android's Force re-import
- * is SHARED: from either Android section (Google Messages:
- * `rcs-import:clear-texts`; Android Companion: `sync:clear-android-data`) it
- * clears BOTH Android sources through ONE function (clearAllAndroidTexts):
- * the Google Messages texts first (with the cache's last sync and coverage
- * reset), then the companion's texts and contacts. iPhone / Mac are never
- * touched (real SQL: rcsClear-3657.test.ts F3).
+ * is SHARED: Google Messages' `rcs-import:clear-texts` clears BOTH Android
+ * sources through ONE function (clearAllAndroidTexts): the Google Messages
+ * texts first (with the cache's last sync and coverage reset), then the
+ * texts and contacts the retired Android companion app wrote. iPhone / Mac
+ * are never touched (real SQL: rcsClear-3657.test.ts F3).
+ *
+ * BACKLOG-3969: the companion app's desktop server is gone, so its own IPC
+ * (`sync:clear-android-data`) is gone too. Its two deletes moved unchanged
+ * into rcsImportHandlers.clearCompanionData; each is recorded here as its
+ * own entry, with its source literal, so either one going missing or being
+ * pointed at the wrong source is visible.
  *
  * Mutation controls (each turns a test red):
- *   F4 either IPC clearing one source only                  → "both IPCs clear both sources"
- *   F5 the Google Messages cache state / coverage not reset  → "both IPCs clear both sources"
+ *   F4 the IPC clearing one source only                      → "the IPC clears both sources"
+ *   F5 the Google Messages cache state / coverage not reset  → "the IPC clears both sources"
  *      (SR 2026-10-02: incl. the per-chat coverage, rcs_chat_coverage)
  *   F6 a refused Google Messages clear still clearing the companion → "a refusal clears nothing"
+ *   3969 (i) companion messages delete removed, (ii) companion contacts delete
+ *      removed, (iii) "android_wifi_sync" changed to "android_sync"
+ *                                                            → "the IPC clears both sources"
  */
 
 export {};
@@ -64,21 +72,21 @@ jest.mock("../../services/rcsClearService", () => {
     },
   };
 });
-jest.mock("../../services/localSyncService", () => ({
-  __esModule: true,
-  default: {
-    clearAndroidData: (userId: string) => {
-      calls.push(`clear companion ${userId}`);
-      return { messagesDeleted: 12, contactsDeleted: 3 };
-    },
+jest.mock("../../services/db/externalContactDbService", () => ({
+  deleteBySource: (userId: string, source: string) => {
+    calls.push(`delete contacts ${userId} ${source}`);
+    return 3;
   },
 }));
-jest.mock("../../services/firewallService", () => ({ checkInboundFirewallAllowed: jest.fn() }));
 jest.mock("../../services/databaseService", () => ({
   __esModule: true,
   default: {
     rcsClearDbOps: () => ({}),
     resetRcsCacheState: (userId: string) => void calls.push(`reset cache state ${userId}`),
+    deleteMessagesByMetadataSource: (userId: string, source: string) => {
+      calls.push(`delete messages ${userId} ${source}`);
+      return 12;
+    },
     rcsStagingDbOps: () => ({
       deleteAll: () => undefined, journalRows: () => [], jobs: () => [], putJob: () => undefined, putChatMeta: () => undefined,
       // 3671 P3 (SR): Force re-import drops every staged run and the placed-files journal.
@@ -140,12 +148,10 @@ jest.mock("../../utils/wrapHandler", () => ({
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { registerRcsImportHandlers } = require("../rcsImportHandlers") as typeof import("../rcsImportHandlers");
-const { registerLocalSyncHandlers } = require("../localSyncHandlers") as typeof import("../localSyncHandlers");
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 beforeAll(() => {
   registerRcsImportHandlers();
-  registerLocalSyncHandlers();
 });
 beforeEach(() => {
   calls.length = 0;
@@ -163,28 +169,27 @@ const BOTH = [
   "forget chat reads user-1",
   "forget failed run user-1",
   "resume",
-  "clear companion user-1",
+  "delete messages user-1 android_wifi_sync",
+  "delete contacts user-1 android_sync",
 ];
 
 describe("Android's shared Force re-import (BACKLOG-3657)", () => {
-  it("both IPCs clear both sources, Google Messages first (F4, F5)", async () => {
+  it("the IPC clears both sources, Google Messages first, then each companion delete (F4, F5, 3969)", async () => {
     const fromGoogleMessages = await handlers.get("rcs-import:clear-texts")!({});
     expect(calls).toEqual(BOTH);
     expect(fromGoogleMessages).toEqual({
       success: true, messagesDeleted: 50, linksDeleted: 4, filesDeleted: 2, androidMessagesDeleted: 12, contactsDeleted: 3,
     });
-    calls.length = 0;
-    const fromCompanion = await handlers.get("sync:clear-android-data")!({}, { userId: "user-1" });
-    expect(calls).toEqual(BOTH);
-    expect(fromCompanion).toEqual({
-      messagesDeleted: 12, contactsDeleted: 3, gmwebMessagesDeleted: 50, gmwebCleared: true, androidCleared: true,
-    });
+  });
+
+  it("the companion's own clear channel is gone (3969)", () => {
+    expect(handlers.has("sync:clear-android-data")).toBe(false);
   });
 
   it("a refusal clears nothing (F6)", async () => {
     gmwebThrows = new Error("Keepr is busy importing — try again in a moment.");
     const r = (await handlers.get("rcs-import:clear-texts")!({})) as { success: boolean; error?: string };
     expect(r).toEqual({ success: false, error: "Nothing was cleared. Keepr is busy importing — try again in a moment." });
-    expect(calls).not.toContain("clear companion user-1");
+    expect(calls.filter((c) => c.startsWith("delete "))).toEqual([]);
   });
 });

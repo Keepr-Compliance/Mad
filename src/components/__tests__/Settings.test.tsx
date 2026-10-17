@@ -18,16 +18,6 @@ if (typeof Element.prototype.scrollTo !== "function") {
   Element.prototype.scrollTo = jest.fn();
 }
 
-// BACKLOG-2289: the Android Sync wizard reuses AndroidDownloadStep, which imports
-// `qrcode` directly. Mock it so the Settings android-companion path renders
-// deterministically (no jsdom canvas).
-jest.mock("qrcode", () => ({
-  __esModule: true,
-  default: {
-    toDataURL: jest.fn().mockResolvedValue("data:image/png;base64,mock"),
-  },
-}));
-
 // Mock the useLicense hook (still used by some sub-components)
 jest.mock("@/contexts/LicenseContext", () => ({
   useLicense: jest.fn(() => ({

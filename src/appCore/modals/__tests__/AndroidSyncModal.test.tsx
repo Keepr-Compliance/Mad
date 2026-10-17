@@ -4,21 +4,15 @@
  * Focus: the modal SHELL — that the guided wizard sits flush in a body with a
  * scroll affordance so tall content is never clipped/unreachable in a narrow or
  * short viewport (the pre-2324 bug: everything below "I've Installed It" was
- * unreachable because the modal body did not scroll). The wizard internals are
- * covered by AndroidSyncSetup.test.tsx and stubbed here.
+ * unreachable because the modal body did not scroll). The Google Messages flow
+ * is stubbed here. (BACKLOG-3969: the old Companion wizard, AndroidSyncSetup, is
+ * deleted, so there is no second branch left to stub.)
  */
 
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { AndroidSyncModal } from "../AndroidSyncModal";
-
-// Isolate the modal shell from the wizard (window.api / QR generation / timers).
-jest.mock("../../../components/settings/android/AndroidSyncSetup", () => ({
-  AndroidSyncSetup: ({ userId }: { userId: string }) => (
-    <div data-testid="android-sync-setup-stub">wizard for {userId}</div>
-  ),
-}));
 
 jest.mock("../../../components/settings/android/GoogleMessagesSyncFlow", () => ({
   GoogleMessagesSyncFlow: ({ onOpenSettings }: { onOpenSettings?: () => void }) => (
@@ -39,7 +33,6 @@ describe("AndroidSyncModal", () => {
   it("always the Google Messages flow — never the Companion wizard", () => {
     render(<AndroidSyncModal userId="user-1" onClose={jest.fn()} />);
     expect(screen.getByTestId("gm-flow-stub")).toBeInTheDocument();
-    expect(screen.queryByTestId("android-sync-setup-stub")).not.toBeInTheDocument();
     expect(screen.queryByText(/another texting app/i)).not.toBeInTheDocument();
   });
 

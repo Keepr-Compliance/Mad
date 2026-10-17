@@ -101,7 +101,6 @@ describe("STEP_ORDER", () => {
       "data-sync",
       "permissions",
       "apple-driver",
-      "android-coming-soon",
     ]);
   });
 
@@ -278,25 +277,6 @@ describe("shouldSkipStep", () => {
     });
   });
 
-  describe("android-coming-soon step", () => {
-    it("should be skipped when phone type is iphone", () => {
-      expect(
-        shouldSkipStep("android-coming-soon", createMacOSPlatform(), "iphone")
-      ).toBe(true);
-    });
-
-    it("should not be skipped when phone type is android", () => {
-      expect(
-        shouldSkipStep("android-coming-soon", createMacOSPlatform(), "android")
-      ).toBe(false);
-    });
-
-    it("should be skipped when phone type is null", () => {
-      expect(
-        shouldSkipStep("android-coming-soon", createWindowsPlatform(), null)
-      ).toBe(true);
-    });
-  });
 });
 
 // =============================================================================
@@ -359,17 +339,9 @@ describe("deriveNextStep", () => {
       );
     });
 
-    it("should eventually reach android-coming-soon", () => {
-      // After permissions (which is not skipped on macOS)
-      expect(deriveNextStep("permissions", platform, phoneType)).toBe(
-        "android-coming-soon"
-      );
-    });
-
-    it("should return null after android-coming-soon", () => {
-      expect(
-        deriveNextStep("android-coming-soon", platform, phoneType)
-      ).toBeNull();
+    // BACKLOG-3969: the Android pairing step is gone; permissions is last.
+    it("should return null after permissions (last step)", () => {
+      expect(deriveNextStep("permissions", platform, phoneType)).toBeNull();
     });
   });
 
@@ -422,16 +394,9 @@ describe("deriveNextStep", () => {
       );
     });
 
-    it("should skip apple-driver and go from data-sync to android-coming-soon", () => {
-      expect(deriveNextStep("data-sync", platform, phoneType)).toBe(
-        "android-coming-soon"
-      );
-    });
-
-    it("should return null after android-coming-soon", () => {
-      expect(
-        deriveNextStep("android-coming-soon", platform, phoneType)
-      ).toBeNull();
+    // BACKLOG-3969: the Android pairing step is gone; data-sync is last.
+    it("should skip apple-driver and return null after data-sync", () => {
+      expect(deriveNextStep("data-sync", platform, phoneType)).toBeNull();
     });
   });
 
@@ -480,7 +445,6 @@ describe("isStepComplete", () => {
       expect(isStepComplete("email-connect", state)).toBe(true);
       expect(isStepComplete("permissions", state)).toBe(true);
       expect(isStepComplete("apple-driver", state)).toBe(true);
-      expect(isStepComplete("android-coming-soon", state)).toBe(true);
     });
   });
 
@@ -543,9 +507,9 @@ describe("getTotalSteps", () => {
   });
 
   describe("macOS with Android", () => {
-    it("should return 8 steps", () => {
-      // phone-type, secure-storage, account-verification, contact-source, email-connect, data-sync, permissions, android-coming-soon
-      expect(getTotalSteps(createMacOSPlatform(), "android")).toBe(8);
+    it("should return 7 steps", () => {
+      // phone-type, secure-storage, account-verification, contact-source, email-connect, data-sync, permissions
+      expect(getTotalSteps(createMacOSPlatform(), "android")).toBe(7);
     });
   });
 
@@ -557,14 +521,14 @@ describe("getTotalSteps", () => {
   });
 
   describe("Windows with Android", () => {
-    it("should return 6 steps", () => {
-      // phone-type, account-verification, contact-source, email-connect, data-sync, android-coming-soon
-      expect(getTotalSteps(createWindowsPlatform(), "android")).toBe(6);
+    it("should return 5 steps", () => {
+      // phone-type, account-verification, contact-source, email-connect, data-sync
+      expect(getTotalSteps(createWindowsPlatform(), "android")).toBe(5);
     });
   });
 
   describe("null phone type", () => {
-    it("should return 7 for macOS (no android-coming-soon, no apple-driver)", () => {
+    it("should return 7 for macOS (no apple-driver)", () => {
       // phone-type, secure-storage, account-verification, contact-source, email-connect, data-sync, permissions
       expect(getTotalSteps(createMacOSPlatform(), null)).toBe(7);
     });
@@ -676,15 +640,15 @@ describe("isLastStep", () => {
   });
 
   describe("with Android", () => {
-    it("should return true for android-coming-soon on macOS", () => {
+    it("should return true for permissions on macOS", () => {
       expect(
-        isLastStep("android-coming-soon", createMacOSPlatform(), "android")
+        isLastStep("permissions", createMacOSPlatform(), "android")
       ).toBe(true);
     });
 
-    it("should return true for android-coming-soon on Windows", () => {
+    it("should return true for data-sync on Windows", () => {
       expect(
-        isLastStep("android-coming-soon", createWindowsPlatform(), "android")
+        isLastStep("data-sync", createWindowsPlatform(), "android")
       ).toBe(true);
     });
   });

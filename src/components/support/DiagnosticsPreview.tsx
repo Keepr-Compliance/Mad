@@ -253,16 +253,6 @@ function IphoneSyncSection({
             )}, PnP: ${yesNo(iphoneSync.windows.pnp_iphone_present)}`}
           />
         )}
-        {iphoneSync.phone_type === "android" && (
-          <DiagRow
-            label="Android Companion"
-            value={`Paired: ${yesNo(
-              iphoneSync.android_companion.paired
-            )}, Connected: ${yesNo(iphoneSync.android_companion.connected)} (${
-              iphoneSync.android_companion.device_count
-            })`}
-          />
-        )}
         <DiagRow
           label="iPhone Sync Enabled"
           value={
