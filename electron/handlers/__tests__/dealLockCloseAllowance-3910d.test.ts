@@ -28,6 +28,8 @@ jest.mock("../../services/db/core/dbConnection", () => ({
   dbGet: jest.fn(),
   dbAll: jest.fn(() => []),
   dbRun: jest.fn(),
+  // BACKLOG-3339: a deal edit and its audit entry share one transaction.
+  dbTransaction: <T,>(fn: () => T): T => fn(),
 }));
 jest.mock("../../services/transactionService", () => ({
   __esModule: true,
@@ -38,7 +40,8 @@ jest.mock("../../services/transactionService", () => ({
     unlinkCommunication: jest.fn(() => Promise.resolve({ unlinkedIds: [] })),
     unlinkMessages: jest.fn(() => Promise.resolve()),
     linkMessages: jest.fn(() => Promise.resolve()),
-    getTransactionDetails: jest.fn(() => Promise.resolve(null)),
+    // BACKLOG-3339: the deal must exist (its owner is the audit entry's user).
+    getTransactionDetails: jest.fn((id: string) => Promise.resolve({ id, user_id: "user-3910d" })),
     updateTransaction: jest.fn(() => Promise.resolve()),
     getTransactionWithContacts: jest.fn(() => Promise.resolve(null)),
   },
@@ -49,9 +52,15 @@ jest.mock("../../services/databaseService", () => ({
   default: {
     restoreContactToTransaction: jest.fn(() => Promise.resolve(false)),
     getTransactionById: jest.fn(() => Promise.resolve(null)),
+    // BACKLOG-3339: the write transactions:update / bulk-update-status make.
+    updateTransactionSync: jest.fn(),
   },
 }));
-jest.mock("../../services/auditService", () => ({ __esModule: true, default: { log: jest.fn() } }));
+jest.mock("../../services/auditService", () => ({
+  __esModule: true,
+  default: { log: jest.fn(), recordInTransaction: jest.fn(), recordFailure: jest.fn() },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
+}));
 jest.mock("../../services/emailSyncService", () => ({
   __esModule: true,
   default: { fetchAndAutoLinkForContact: jest.fn() },
@@ -109,6 +118,9 @@ type Res = {
 };
 
 const update = () => jest.mocked(transactionService.updateTransaction) as unknown as jest.Mock;
+// BACKLOG-3339: transactions:update and bulk-update-status write through the
+// synchronous call inside their audit transaction.
+const writeSync = () => jest.mocked(databaseService.updateTransactionSync) as unknown as jest.Mock;
 
 beforeAll(() => {
   registerTransactionCrudHandlers(null);
@@ -130,14 +142,14 @@ describe("transactions:update on a locked deal", () => {
     statuses({ [A]: "approved" });
     const res = await call("transactions:update", A, { status: "closed" });
     expect(res.dealLocked).toBeUndefined();
-    expect(update()).toHaveBeenCalledTimes(1);
+    expect(writeSync()).toHaveBeenCalledTimes(1);
   });
 
   it.each(["submitted", "under_review", "resubmitted"])("%s + status closed: refused", async (s) => {
     statuses({ [A]: s });
     const res = await call("transactions:update", A, { status: "closed" });
     expect(res).toMatchObject({ success: false, dealLocked: "submitted", refusedEdit: "edit-deal-details" });
-    expect(update()).not.toHaveBeenCalled();
+    expect(writeSync()).not.toHaveBeenCalled();
   });
 
   it("approved + any other field, or status plus another field: refused", async () => {
@@ -146,7 +158,7 @@ describe("transactions:update on a locked deal", () => {
       const res = await call("transactions:update", A, u);
       expect(res).toMatchObject({ success: false, dealLocked: "sealed" });
     }
-    expect(update()).not.toHaveBeenCalled();
+    expect(writeSync()).not.toHaveBeenCalled();
   });
 });
 
@@ -158,21 +170,21 @@ describe("transactions:bulk-update-status", () => {
     expect(res.refusedIds).toEqual([C]);
     expect(res.success).toBe(false);
     expect(res.error).toMatch(/1 locked deal was not changed/);
-    expect(update().mock.calls.map((c) => c[0]).sort()).toEqual([A, B].sort());
+    expect(writeSync().mock.calls.map((c) => c[0]).sort()).toEqual([A, B].sort());
   });
 
   it("approved deal to a status other than closed: refused", async () => {
     statuses({ [A]: "approved" });
     const res = await call("transactions:bulk-update-status", [A], "active");
     expect(res.refusedIds).toEqual([A]);
-    expect(update()).not.toHaveBeenCalled();
+    expect(writeSync()).not.toHaveBeenCalled();
   });
 
   it("submitted deal to closed: refused", async () => {
     statuses({ [A]: "submitted" });
     const res = await call("transactions:bulk-update-status", [A], "closed");
     expect(res.refusedIds).toEqual([A]);
-    expect(update()).not.toHaveBeenCalled();
+    expect(writeSync()).not.toHaveBeenCalled();
   });
 
   it("only open deals: all change, success", async () => {

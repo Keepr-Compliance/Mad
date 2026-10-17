@@ -61,7 +61,18 @@ jest.mock("../services/dealLockState", () => ({
 
 jest.mock("../services/auditService", () => ({
   __esModule: true,
-  default: { log: jest.fn().mockResolvedValue(undefined) },
+  default: {
+    log: jest.fn().mockResolvedValue(undefined),
+    recordInTransaction: jest.fn(),
+    recordFailure: jest.fn(),
+  },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
+}));
+
+// BACKLOG-3339: each deal's status change and its audit entry share one
+// transaction; the body runs synchronously, as better-sqlite3 runs it.
+jest.mock("../services/db/core/dbConnection", () => ({
+  dbTransaction: <T,>(fn: () => T): T => fn(),
 }));
 
 jest.mock("../services/logService", () => ({
@@ -74,6 +85,8 @@ jest.mock("../services/databaseService", () => ({
   default: {
     databaseService: { updateTransaction: jest.fn() },
     isInitialized: jest.fn().mockReturnValue(true),
+    // BACKLOG-3339: the write the handler makes inside the transaction.
+    updateTransactionSync: jest.fn(),
   },
 }));
 
@@ -81,10 +94,12 @@ jest.mock("../services/databaseService", () => ({
 import { registerTransactionCrudHandlers } from "../handlers/transactionCrudHandlers";
 import { TransactionStatusSchema } from "../schemas/transaction";
 import transactionService from "../services/transactionService";
+import databaseService from "../services/databaseService";
 
 const mockTransactionService = transactionService as jest.Mocked<
   typeof transactionService
 >;
+const mockDatabaseService = databaseService as jest.Mocked<typeof databaseService>;
 
 describe("transactions:bulk-update-status — accepted status domain (BACKLOG-2755)", () => {
   let registeredHandlers: IpcHandlerRegistry;
@@ -139,17 +154,19 @@ describe("transactions:bulk-update-status — accepted status domain (BACKLOG-27
 
   /**
    * Drive the REAL handler once per candidate and report which values it
-   * accepted, judged by whether the update actually reached the service.
+   * accepted, judged by whether the update actually reached the database write
+   * (BACKLOG-3339: `databaseService.updateTransactionSync`, inside the
+   * transaction that also holds the audit entry).
    */
   async function acceptedSet(): Promise<string[]> {
     const accepted: string[] = [];
     for (const status of CANDIDATES) {
-      mockTransactionService.updateTransaction.mockClear();
+      mockDatabaseService.updateTransactionSync.mockClear();
       const handler = registeredHandlers.get("transactions:bulk-update-status");
       try {
         await handler(mockEvent, [TX_ID], status);
         if (
-          mockTransactionService.updateTransaction.mock.calls.some(
+          mockDatabaseService.updateTransactionSync.mock.calls.some(
             (call) => (call[1] as { status?: string })?.status === status,
           )
         ) {

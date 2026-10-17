@@ -32,7 +32,7 @@ import type { Database as DatabaseType } from "better-sqlite3";
 jest.mock("electron", () => ({ app: { getPath: jest.fn(() => "/mock/user/data") } }));
 
 import { dbTransaction } from "../core/dbConnection";
-import { auditService, type AuditLogEntry } from "../../auditService";
+import { auditService, AuditNotRecordedError, type AuditLogEntry } from "../../auditService";
 import {
   PROBE_USER,
   auditRows,
@@ -114,12 +114,18 @@ describe("recordInTransaction", () => {
 
   test("K1 a failed audit INSERT rolls the change back", () => {
     forceAuditInsertFailure(db);
-    expect(() =>
+    let thrown: unknown;
+    try {
       dbTransaction(() => {
         writeProbeChange(db, "p1");
         auditService.recordInTransaction(entry("p1"));
-      }),
-    ).toThrow("forced audit insert failure");
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    // Slice 1: the driver error arrives wrapped, as the cause.
+    expect(thrown).toBeInstanceOf(AuditNotRecordedError);
+    expect(String((thrown as AuditNotRecordedError).cause)).toContain("forced audit insert failure");
     expect(probeChangeIds(db)).toEqual([]);
     expect(auditRows(db)).toEqual([]);
   });

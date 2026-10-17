@@ -27,6 +27,16 @@ jest.mock("../db/core/dbConnection", () => ({
   dbGet: jest.fn(() => ({ first_exported_at: null })),
   dbAll: jest.fn(() => []),
   dbRun: jest.fn(),
+  // BACKLOG-3339: createAuditedTransaction writes the deal and its audit entry
+  // in one transaction; the body runs synchronously, as better-sqlite3 runs it.
+  dbTransaction: <T,>(fn: () => T): T => fn(),
+}));
+
+// BACKLOG-3339: the audit entry itself is not what this suite measures.
+jest.mock("../auditService", () => ({
+  __esModule: true,
+  default: { log: jest.fn(), recordInTransaction: jest.fn(), recordFailure: jest.fn() },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 
 // TASK-1951: Mock preferenceHelper

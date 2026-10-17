@@ -11,6 +11,7 @@
 import * as Sentry from "@sentry/electron/main";
 import {
   auditService,
+  AuditNotRecordedError,
   AuditAction,
   AuditLogEntry,
   ResourceType,
@@ -271,16 +272,24 @@ describe("AuditService", () => {
       expect(entry.success).toBe(true);
       expect(auditService.getPendingSyncCount()).toBe(0);
 
+      const driverError = new Error("CHECK constraint failed");
       mockDatabaseService.insertAuditLogSync.mockImplementation(() => {
-        throw new Error("CHECK constraint failed");
+        throw driverError;
       });
-      expect(() =>
+      // BACKLOG-3339 slice 1: rethrown as AuditNotRecordedError, so a caller can
+      // tell it apart from a failure of the change; the driver error is the cause.
+      let thrown: unknown;
+      try {
         auditService.recordInTransaction({
           userId: "user-123",
           action: "TRANSACTION_CREATE",
           resourceType: "TRANSACTION",
-        }),
-      ).toThrow("CHECK constraint failed");
+        });
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(AuditNotRecordedError);
+      expect((thrown as AuditNotRecordedError).cause).toBe(driverError);
     });
 
     const settle = () => new Promise((resolve) => setTimeout(resolve, 0));

@@ -474,8 +474,10 @@ class AuditService {
   ): AuditLogEntry {
     const db = this.databaseService;
     if (!db) {
-      throw new Error(
-        "auditService.recordInTransaction: audit service is not initialized",
+      // An audit failure like any other: the change is cancelled and the user
+      // gets the fixed message, not this text.
+      throw new AuditNotRecordedError(
+        new Error("auditService.recordInTransaction: audit service is not initialized"),
       );
     }
     if (!db.isInTransaction()) {
