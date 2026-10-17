@@ -2409,6 +2409,14 @@ class DatabaseService implements IDatabaseService {
   }
 
   /**
+   * BACKLOG-3339: the synchronous update, for a caller that writes the deal
+   * change and its audit entry in one `dbTransaction`.
+   */
+  updateTransactionSync(transactionId: string, updates: Partial<Transaction>): void {
+    transactionDb.updateTransactionSync(transactionId, updates);
+  }
+
+  /**
    * BACKLOG-2013 — write-once stamp of the export-freeze marker. Enforced in SQL
    * (`WHERE first_exported_at IS NULL`); returns true only when this call set it.
    */
@@ -2433,6 +2441,14 @@ class DatabaseService implements IDatabaseService {
 
   async deleteTransaction(transactionId: string): Promise<void> {
     return transactionDb.deleteTransaction(transactionId);
+  }
+
+  /**
+   * BACKLOG-3339: the synchronous delete, for a caller that writes the delete
+   * and its audit entry in one `dbTransaction`.
+   */
+  deleteTransactionSync(transactionId: string): void {
+    transactionDb.deleteTransactionSync(transactionId);
   }
 
   async findExistingTransactionsByAddresses(
@@ -2585,6 +2601,12 @@ class DatabaseService implements IDatabaseService {
 
   async insertAuditLog(entry: AuditLogEntry): Promise<void> {
     return auditDb.insertAuditLog(entry);
+  }
+
+  // BACKLOG-3339: for auditService.recordInTransaction — the entry is written
+  // inside the caller's transaction, so the call must stay synchronous.
+  insertAuditLogSync(entry: AuditLogEntry): void {
+    auditDb.insertAuditLogSync(entry);
   }
 
   /**

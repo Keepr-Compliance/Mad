@@ -71,7 +71,6 @@ const AUDIT_SERVICE_FILE = "electron/services/auditService.ts";
 const AUDITED_SITES_TOTAL = 39;
 
 type Reason = string;
-const R_SLICE1 = "BACKLOG-3339 slice 1 converts (deal create/edit/delete, bulk)";
 const R_EXPORT = "BACKLOG-3339 export slice; waits on the founder's export ruling";
 const R_SLICE2 = "BACKLOG-3339 slice 2 converts (deal detail toggles); seam check pending";
 const R_SLICE3 = "BACKLOG-3339 slice 3 converts (contacts, settings)";
@@ -85,11 +84,6 @@ const R_UNREACHABLE = "no UI caller; waits on the founder's wire/delete ruling (
 /** Shrink-only. Key -> exact number of `log(` calls, and why it may stay. */
 const ALLOWLIST: Record<string, { count: number; reason: Reason }> = {
   // A — deal / compliance
-  "electron/handlers/transactionCrudHandlers.ts::transactions:create-audited::TRANSACTION_CREATE": { count: 1, reason: R_SLICE1 },
-  "electron/handlers/transactionCrudHandlers.ts::transactions:update::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE1 },
-  "electron/handlers/transactionCrudHandlers.ts::transactions:delete::TRANSACTION_DELETE": { count: 1, reason: R_SLICE1 },
-  "electron/handlers/transactionCrudHandlers.ts::transactions:bulk-delete::TRANSACTION_DELETE": { count: 1, reason: R_SLICE1 },
-  "electron/handlers/transactionCrudHandlers.ts::transactions:bulk-update-status::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE1 },
   "electron/handlers/transactionCrudHandlers.ts::transactions:restore-contact::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE2 },
   "electron/services/exportCompletion.ts::completeExport::DATA_EXPORT": { count: 1, reason: R_EXPORT },
   "electron/handlers/hiddenTextHandlers.ts::transactions:hide-text-from-export::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE2 },

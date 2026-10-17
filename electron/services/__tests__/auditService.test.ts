@@ -11,6 +11,7 @@
 import * as Sentry from "@sentry/electron/main";
 import {
   auditService,
+  AuditNotRecordedError,
   AuditAction,
   AuditLogEntry,
   ResourceType,
@@ -20,6 +21,7 @@ import {
 const mockDatabaseService = {
   insertAuditLog: jest.fn(),
   // BACKLOG-3339
+  insertAuditLogSync: jest.fn(),
   isInTransaction: jest.fn(() => false),
   getUnsyncedAuditLogs: jest.fn(),
   markAuditLogsSynced: jest.fn(),
@@ -233,15 +235,61 @@ describe("AuditService", () => {
     });
   });
 
-  // BACKLOG-3339: withAudit (0 product callers) was deleted; recordFailure
-  // (after a rollback) replaces its failure half.
-  describe("recordFailure (BACKLOG-3339)", () => {
+  // BACKLOG-3339: withAudit (0 product callers) was deleted; recordInTransaction
+  // and recordFailure replace it. The real-driver controls are in
+  // db/__tests__/auditInTransaction-3339.test.ts.
+  describe("recordInTransaction / recordFailure (BACKLOG-3339)", () => {
     beforeEach(() => {
+      mockDatabaseService.insertAuditLogSync.mockReset();
       mockDatabaseService.isInTransaction.mockReset();
       auditService.initialize(
         mockDatabaseService as any,
         mockSupabaseService as any,
       );
+    });
+
+    it("recordInTransaction throws outside a transaction and writes nothing", () => {
+      mockDatabaseService.isInTransaction.mockReturnValue(false);
+      expect(() =>
+        auditService.recordInTransaction({
+          userId: "user-123",
+          action: "TRANSACTION_CREATE",
+          resourceType: "TRANSACTION",
+        }),
+      ).toThrow("must be called inside a database transaction");
+      expect(mockDatabaseService.insertAuditLogSync).not.toHaveBeenCalled();
+    });
+
+    it("recordInTransaction writes synchronously, does not catch, and does not queue", () => {
+      mockDatabaseService.isInTransaction.mockReturnValue(true);
+      const entry = auditService.recordInTransaction({
+        userId: "user-123",
+        action: "TRANSACTION_CREATE",
+        resourceType: "TRANSACTION",
+        resourceId: "txn-1",
+      });
+      expect(mockDatabaseService.insertAuditLogSync).toHaveBeenCalledWith(entry);
+      expect(entry.success).toBe(true);
+      expect(auditService.getPendingSyncCount()).toBe(0);
+
+      const driverError = new Error("CHECK constraint failed");
+      mockDatabaseService.insertAuditLogSync.mockImplementation(() => {
+        throw driverError;
+      });
+      // BACKLOG-3339 slice 1: rethrown as AuditNotRecordedError, so a caller can
+      // tell it apart from a failure of the change; the driver error is the cause.
+      let thrown: unknown;
+      try {
+        auditService.recordInTransaction({
+          userId: "user-123",
+          action: "TRANSACTION_CREATE",
+          resourceType: "TRANSACTION",
+        });
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(AuditNotRecordedError);
+      expect((thrown as AuditNotRecordedError).cause).toBe(driverError);
     });
 
     const settle = () => new Promise((resolve) => setTimeout(resolve, 0));

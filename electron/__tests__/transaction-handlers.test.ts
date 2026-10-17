@@ -67,7 +67,18 @@ jest.mock("../services/auditService", () => ({
   __esModule: true,
   default: {
     log: jest.fn().mockResolvedValue(undefined),
+    // BACKLOG-3339: deal create/edit/delete write their entry inside the
+    // change's transaction, and record a failed attempt after the rollback.
+    recordInTransaction: jest.fn(),
+    recordFailure: jest.fn(),
   },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
+}));
+
+// BACKLOG-3339: the handlers wrap the change and its audit entry in one
+// transaction. The body runs synchronously, as better-sqlite3 runs it.
+jest.mock("../services/db/core/dbConnection", () => ({
+  dbTransaction: <T,>(fn: () => T): T => fn(),
 }));
 
 jest.mock("../services/logService", () => ({
@@ -144,6 +155,9 @@ jest.mock("../services/databaseService", () => ({
       recordExportCompletion: jest.fn(),
     },
     updateTransaction: jest.fn(),
+    // BACKLOG-3339: the synchronous writes the handlers call inside the transaction.
+    updateTransactionSync: jest.fn(),
+    deleteTransactionSync: jest.fn(),
     stampFirstExportedAt: jest.fn().mockReturnValue(true),
     recordExportCompletion: jest.fn(),
     isInitialized: jest.fn().mockReturnValue(true),
@@ -198,6 +212,7 @@ const mockFolderExportService = folderExportService as jest.Mocked<
 const mockEnhancedExportService = enhancedExportService as jest.Mocked<
   typeof enhancedExportService
 >;
+const mockDatabaseService = databaseService as jest.Mocked<typeof databaseService>;
 const mockDatabaseServiceModule = {
   default: databaseService as jest.Mocked<typeof databaseService>,
 };
@@ -477,12 +492,17 @@ describe("Transaction Handlers", () => {
       });
 
       expect(result.success).toBe(true);
-      expect(mockAuditService.log).toHaveBeenCalledWith(
+      expect(mockDatabaseService.updateTransactionSync).toHaveBeenCalledWith(
+        TEST_TXN_ID,
+        { status: "closed" },
+      );
+      expect(mockAuditService.recordInTransaction).toHaveBeenCalledWith(
         expect.objectContaining({
           action: "TRANSACTION_UPDATE",
-          success: true,
+          resourceId: TEST_TXN_ID,
         }),
       );
+      expect(mockAuditService.recordFailure).not.toHaveBeenCalled();
     });
 
     it("should handle invalid transaction ID", async () => {
@@ -497,9 +517,9 @@ describe("Transaction Handlers", () => {
       mockTransactionService.getTransactionDetails.mockResolvedValue(
         existingTransaction,
       );
-      mockTransactionService.updateTransaction.mockRejectedValue(
-        new Error("Update failed"),
-      );
+      mockDatabaseService.updateTransactionSync.mockImplementationOnce(() => {
+        throw new Error("Update failed");
+      });
 
       const handler = registeredHandlers.get("transactions:update");
       const result = await handler(mockEvent, TEST_TXN_ID, {
@@ -507,7 +527,14 @@ describe("Transaction Handlers", () => {
       });
 
       expect(result.success).toBe(false);
+      expect(result.error).toBe("Update failed");
       expect(mockLogService.error).toHaveBeenCalled();
+      expect(mockAuditService.recordFailure).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "TRANSACTION_UPDATE",
+          errorMessage: "change_failed:Error",
+        }),
+      );
     });
   });
 
@@ -522,16 +549,15 @@ describe("Transaction Handlers", () => {
       mockTransactionService.getTransactionDetails.mockResolvedValue(
         existingTransaction,
       );
-      mockTransactionService.deleteTransaction.mockResolvedValue(undefined);
-
       const handler = registeredHandlers.get("transactions:delete");
       const result = await handler(mockEvent, TEST_TXN_ID);
 
       expect(result.success).toBe(true);
-      expect(mockAuditService.log).toHaveBeenCalledWith(
+      expect(mockDatabaseService.deleteTransactionSync).toHaveBeenCalledWith(TEST_TXN_ID);
+      expect(mockAuditService.recordInTransaction).toHaveBeenCalledWith(
         expect.objectContaining({
           action: "TRANSACTION_DELETE",
-          success: true,
+          resourceId: TEST_TXN_ID,
         }),
       );
     });
@@ -548,15 +574,19 @@ describe("Transaction Handlers", () => {
       mockTransactionService.getTransactionDetails.mockResolvedValue(
         existingTransaction,
       );
-      mockTransactionService.deleteTransaction.mockRejectedValue(
-        new Error("Delete failed"),
-      );
+      mockDatabaseService.deleteTransactionSync.mockImplementationOnce(() => {
+        throw new Error("Delete failed");
+      });
 
       const handler = registeredHandlers.get("transactions:delete");
       const result = await handler(mockEvent, TEST_TXN_ID);
 
       expect(result.success).toBe(false);
+      expect(result.error).toBe("Delete failed");
       expect(mockLogService.error).toHaveBeenCalled();
+      expect(mockAuditService.recordFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "TRANSACTION_DELETE" }),
+      );
     });
   });
 

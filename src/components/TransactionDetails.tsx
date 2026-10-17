@@ -434,6 +434,12 @@ function TransactionDetails({
   // Modal states
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
+  // BACKLOG-3339: one delete at a time. A second click while the first is in
+  // flight would reach a deal that is already gone and show "This deal no
+  // longer exists." after a successful delete. The ref blocks a click that
+  // lands before the button re-renders as disabled.
+  const deleteInFlightRef = useRef(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [showRejectReasonModal, setShowRejectReasonModal] = useState<boolean>(false);
   const [rejectReason, setRejectReason] = useState<string>("");
   const [showEditModal, setShowEditModal] = useState<boolean>(false);
@@ -855,14 +861,27 @@ function TransactionDetails({
   };
 
   const handleDelete = async (): Promise<void> => {
+    if (deleteInFlightRef.current) return;
+    deleteInFlightRef.current = true;
+    setIsDeleting(true);
     try {
-      await transactionService.delete(transaction.id);
+      const result = await transactionService.delete(transaction.id);
+      // BACKLOG-3339: a refused delete keeps the deal; say so instead of
+      // closing as if it were gone.
+      if (!result.success) {
+        setShowDeleteConfirm(false);
+        showError(result.error || "Failed to delete transaction. Please try again.");
+        return;
+      }
       setShowDeleteConfirm(false);
       onClose();
       onTransactionUpdated?.();
     } catch (err) {
       logger.error("Failed to delete transaction:", err);
       showError("Failed to delete transaction. Please try again.");
+    } finally {
+      deleteInFlightRef.current = false;
+      setIsDeleting(false);
     }
   };
 
@@ -1670,6 +1689,7 @@ function TransactionDetails({
           propertyAddress={transaction.property_address}
           onCancel={() => setShowDeleteConfirm(false)}
           onDelete={handleDelete}
+          isDeleting={isDeleting}
         />
       )}
 

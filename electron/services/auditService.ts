@@ -39,6 +39,22 @@ export type AuditAction =
   | "MAILBOX_DISCONNECT";
 
 /**
+ * BACKLOG-3339: thrown by `recordInTransaction` when the audit INSERT itself
+ * fails. It is thrown inside the caller's transaction, so the change rolls
+ * back with it; the caller tells it apart from a failure of the change and
+ * shows the user a fixed message instead of the driver's text. The driver
+ * error is kept as `cause`.
+ */
+export class AuditNotRecordedError extends Error {
+  readonly cause: unknown;
+  constructor(cause: unknown) {
+    super("The audit entry could not be written");
+    this.name = "AuditNotRecordedError";
+    this.cause = cause;
+  }
+}
+
+/**
  * Resource types that can be audited
  */
 export type ResourceType =
@@ -201,6 +217,8 @@ export interface ISupportAccessGate {
  */
 interface IDatabaseService {
   insertAuditLog(entry: AuditLogEntry): Promise<void>;
+  // BACKLOG-3339: the synchronous INSERT, for writes inside a transaction.
+  insertAuditLogSync(entry: AuditLogEntry): void;
   // BACKLOG-3339: is a transaction open on the audit connection right now?
   isInTransaction(): boolean;
   // BACKLOG-3987: scoped to one user. The cloud insert policy only accepts
@@ -254,6 +272,8 @@ class AuditService {
   private flushingPendingWrites = false;
   // BACKLOG-3339: entries dropped from that buffer this run (it is bounded).
   private droppedPendingWrites = 0;
+  // BACKLOG-3339: a post-commit cloud send is already scheduled.
+  private kickScheduled = false;
 
   private readonly SYNC_INTERVAL_MS = 60000; // 1 minute
   private readonly SYNC_BATCH_SIZE = 100;
@@ -423,6 +443,61 @@ class AuditService {
   }
 
   /**
+   * BACKLOG-3339: write an audit entry INSIDE the caller's transaction, so the
+   * entry and the change it records commit together or not at all.
+   *
+   *     dbTransaction(() => {
+   *       const t = createTransactionSync(...);
+   *       auditService.recordInTransaction({ ..., resourceId: t.id });
+   *     });
+   *
+   * - Throws when no transaction is open on the audit connection. Called
+   *   outside one, the entry would be committed on its own and the pairing
+   *   this method exists for would silently not hold.
+   * - Does NOT catch. A failed INSERT throws into the transaction and rolls
+   *   the change back; that is the point.
+   * - Synchronous on purpose. An async insert inside a transaction body turns
+   *   the throw into a rejection after COMMIT, so the change commits without
+   *   its entry (the WRONG_B probe in auditInTransaction-3339.test.ts).
+   * - Does NOT add the entry to the in-memory cloud queue: if the transaction
+   *   rolls back, a queued copy would send an entry that does not exist. The
+   *   row itself is the outbox. A cloud send is scheduled for after the
+   *   current synchronous work (the commit) and reads unsynced rows from the
+   *   table (BACKLOG-3987), so the entry reaches the cloud within seconds
+   *   instead of waiting for the next 60 s tick or the next launch.
+   *
+   * Always a success entry. A failed attempt is recorded with `recordFailure`
+   * after the rollback.
+   */
+  recordInTransaction(
+    entry: Omit<NewAuditLogEntry, "success" | "errorMessage">,
+  ): AuditLogEntry {
+    const db = this.databaseService;
+    if (!db) {
+      // An audit failure like any other: the change is cancelled and the user
+      // gets the fixed message, not this text.
+      throw new AuditNotRecordedError(
+        new Error("auditService.recordInTransaction: audit service is not initialized"),
+      );
+    }
+    if (!db.isInTransaction()) {
+      throw new Error(
+        "auditService.recordInTransaction must be called inside a database transaction",
+      );
+    }
+
+    const fullEntry = this.buildEntry({ ...entry, success: true });
+    try {
+      db.insertAuditLogSync(fullEntry);
+    } catch (cause) {
+      // Still a throw inside the transaction, so the change rolls back.
+      throw new AuditNotRecordedError(cause);
+    }
+    this.scheduleKickAfterCommit();
+    return fullEntry;
+  }
+
+  /**
    * BACKLOG-3339: record a FAILED attempt, as a separate write after the
    * change's transaction has rolled back.
    *
@@ -494,6 +569,21 @@ class AuditService {
     } catch {
       // syncToCloud reports its own failures; retried on the next tick.
     }
+  }
+
+  /**
+   * BACKLOG-3339: run `kickSync` once the current synchronous work is done.
+   * `recordInTransaction` is called from a synchronous transaction body, so by
+   * the time this callback runs the transaction has committed or rolled back.
+   * Several entries in one transaction schedule one send.
+   */
+  private scheduleKickAfterCommit(): void {
+    if (this.kickScheduled) return;
+    this.kickScheduled = true;
+    setTimeout(() => {
+      this.kickScheduled = false;
+      void this.kickSync();
+    }, 0);
   }
 
   /** id, timestamp and sanitised metadata, as `log()` builds them. */

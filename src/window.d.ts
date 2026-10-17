@@ -46,7 +46,7 @@ interface ElectronAPI {
     /** BACKLOG-1124: Lightweight count query for pending auto-detected transactions */
     getPendingCount: (userId: string) => Promise<{ success: boolean; count: number; error?: string }>;
     update: (id: string, data: unknown) => Promise<{ success: boolean }>;
-    delete: (id: string) => Promise<{ success: boolean }>;
+    delete: (id: string) => Promise<{ success: boolean; error?: string }>;
     bulkDelete: (transactionIds: string[]) => Promise<{ success: boolean; deletedCount?: number; error?: string }>;
     bulkUpdateStatus: (transactionIds: string[], status: "pending" | "active" | "closed" | "rejected") => Promise<{ success: boolean; updatedCount?: number; error?: string }>;
   };

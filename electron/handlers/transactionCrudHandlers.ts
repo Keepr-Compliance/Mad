@@ -11,6 +11,13 @@ import { getEarliestCommunicationDate } from "../services/transactionService";
 import { computeCommunicationsDelta } from "../services/transactionService/communicationsDelta";
 import type { AuditedTransactionData } from "../services/transactionService";
 import auditService from "../services/auditService";
+import {
+  bulkAuditNotSavedMessage,
+  dealChangeFailureCode,
+  dealChangeUserError,
+  isAuditNotRecorded,
+} from "../services/dealChangeAudit";
+import { dbTransaction } from "../services/db/core/dbConnection";
 import logService from "../services/logService";
 import emailSyncService from "../services/emailSyncService";
 // BACKLOG-1802: automatic per-transaction email sync on create/open/date-change.
@@ -548,22 +555,41 @@ export function registerTransactionCrudHandlers(
         await transactionService.getTransactionDetails(
           validatedTransactionId,
         );
-      const userId = existingTransaction?.user_id || "unknown";
+      // BACKLOG-3339: no "unknown" owner. The audit entry needs the deal's
+      // owner (a foreign key), and with no deal there is nothing to change.
+      if (!existingTransaction) {
+        return { success: false, error: "This deal no longer exists." };
+      }
+      const userId = existingTransaction.user_id;
+      const updatedFields = Object.keys(validatedUpdates);
 
-      await transactionService.updateTransaction(
-        validatedTransactionId,
-        validatedUpdates as unknown as Partial<UpdateTransaction>,
-      );
-
-      // Audit log transaction update
-      await auditService.log({
-        userId,
-        action: "TRANSACTION_UPDATE",
-        resourceType: "TRANSACTION",
-        resourceId: validatedTransactionId,
-        metadata: { updatedFields: Object.keys(validatedUpdates) },
-        success: true,
-      });
+      // BACKLOG-3339: the edit and its audit entry commit together or not at
+      // all. A failed entry cancels the edit.
+      try {
+        dbTransaction(() => {
+          databaseService.updateTransactionSync(
+            validatedTransactionId,
+            validatedUpdates as unknown as Partial<UpdateTransaction>,
+          );
+          auditService.recordInTransaction({
+            userId,
+            action: "TRANSACTION_UPDATE",
+            resourceType: "TRANSACTION",
+            resourceId: validatedTransactionId,
+            metadata: { updatedFields },
+          });
+        });
+      } catch (error) {
+        auditService.recordFailure({
+          userId,
+          action: "TRANSACTION_UPDATE",
+          resourceType: "TRANSACTION",
+          resourceId: validatedTransactionId,
+          metadata: { updatedFields },
+          errorMessage: dealChangeFailureCode(error),
+        });
+        throw dealChangeUserError("update", error);
+      }
 
       logService.info("Transaction updated", "Transactions", {
         userId,
@@ -578,7 +604,7 @@ export function registerTransactionCrudHandlers(
       const auditDateChanged =
         ("started_at" in updatesRecord && updatesRecord.started_at !== existingTransaction?.started_at) ||
         ("closed_at" in updatesRecord && updatesRecord.closed_at !== existingTransaction?.closed_at);
-      if (auditDateChanged && userId !== "unknown") {
+      if (auditDateChanged) {
         triggerTransactionSyncInBackground({
           transactionId: validatedTransactionId,
           userId,
@@ -686,21 +712,37 @@ export function registerTransactionCrudHandlers(
         await transactionService.getTransactionDetails(
           validatedTransactionId,
         );
-      const userId = existingTransaction?.user_id || "unknown";
-      const propertyAddress =
-        existingTransaction?.property_address || "unknown";
+      // BACKLOG-3339: no "unknown" owner (see transactions:update).
+      if (!existingTransaction) {
+        return { success: false, error: "This deal no longer exists." };
+      }
+      const userId = existingTransaction.user_id;
+      const propertyAddress = existingTransaction.property_address;
 
-      await transactionService.deleteTransaction(validatedTransactionId);
-
-      // Audit log transaction deletion
-      await auditService.log({
-        userId,
-        action: "TRANSACTION_DELETE",
-        resourceType: "TRANSACTION",
-        resourceId: validatedTransactionId,
-        metadata: { propertyAddress },
-        success: true,
-      });
+      // BACKLOG-3339: the delete and its audit entry commit together or not
+      // at all. A failed entry cancels the delete; the deal stays.
+      try {
+        dbTransaction(() => {
+          databaseService.deleteTransactionSync(validatedTransactionId);
+          auditService.recordInTransaction({
+            userId,
+            action: "TRANSACTION_DELETE",
+            resourceType: "TRANSACTION",
+            resourceId: validatedTransactionId,
+            metadata: { propertyAddress },
+          });
+        });
+      } catch (error) {
+        auditService.recordFailure({
+          userId,
+          action: "TRANSACTION_DELETE",
+          resourceType: "TRANSACTION",
+          resourceId: validatedTransactionId,
+          metadata: { propertyAddress },
+          errorMessage: dealChangeFailureCode(error),
+        });
+        throw dealChangeUserError("delete", error);
+      }
 
       logService.info("Transaction deleted", "Transactions", {
         userId,
@@ -745,32 +787,10 @@ export function registerTransactionCrudHandlers(
       // BACKLOG-1832: pass lifecycle callbacks so the renderer can show a
       // "fetching emails…" indicator and auto-refresh when the sync completes.
       if (transaction?.id) {
-        // BACKLOG-2563: audit the creation. `transactions:create` above logs
-        // TRANSACTION_CREATE at :199 and this path did not, so the compliance
-        // trail was missing the creation event for exactly the transactions
-        // that exist for compliance — this is the primary user path for
-        // creating an audited transaction (`useAuditSubmission.ts`).
-        //
-        // The verb stays inside the `audit_logs.action` CHECK and
-        // `metadata.reason` names the specific act — the same idiom as the
-        // contact-restore audit below, for the same reason spelled out there:
-        // an unpermitted verb would throw on the CHECK, be swallowed by
-        // `auditService.log`, and report success while writing nothing.
-        //
-        // Logged BEFORE the two fire-and-forget triggers so a background
-        // failure cannot reorder or drop the trail entry.
-        await auditService.log({
-          userId: validatedUserId as string,
-          action: "TRANSACTION_CREATE",
-          resourceType: "TRANSACTION",
-          resourceId: transaction.id,
-          metadata: {
-            propertyAddress: transaction.property_address,
-            reason: "audited_create",
-          },
-          success: true,
-        });
-
+        // BACKLOG-2563 / BACKLOG-3339: the creation's audit entry
+        // (TRANSACTION_CREATE, `metadata.reason` "audited_create") is written
+        // by `createAuditedTransaction` in the same database transaction as
+        // the deal, so it exists before either trigger below runs.
         triggerTransactionSyncInBackground({
           transactionId: transaction.id,
           userId: validatedUserId as string,
@@ -1541,27 +1561,46 @@ export function registerTransactionCrudHandlers(
       // Delete each transaction
       let deletedCount = 0;
       const errors: string[] = [];
+      let auditNotSavedCount = 0;
 
       for (const transactionId of validatedIds) {
         try {
           // Get transaction before delete for audit logging
           const existingTransaction =
             await transactionService.getTransactionDetails(transactionId);
-          const userId = existingTransaction?.user_id || "unknown";
-          const propertyAddress =
-            existingTransaction?.property_address || "unknown";
+          // BACKLOG-3339: no "unknown" owner (see transactions:update).
+          if (!existingTransaction) {
+            errors.push(`Failed to delete ${transactionId}: This deal no longer exists.`);
+            continue;
+          }
+          const userId = existingTransaction.user_id;
+          const propertyAddress = existingTransaction.property_address;
 
-          await transactionService.deleteTransaction(transactionId);
-
-          // Audit log transaction deletion
-          await auditService.log({
-            userId,
-            action: "TRANSACTION_DELETE",
-            resourceType: "TRANSACTION",
-            resourceId: transactionId,
-            metadata: { propertyAddress, bulkOperation: true },
-            success: true,
-          });
+          // BACKLOG-3339: one transaction per deal, holding the delete and its
+          // audit entry. A failed entry cancels this deal only.
+          try {
+            dbTransaction(() => {
+              databaseService.deleteTransactionSync(transactionId);
+              auditService.recordInTransaction({
+                userId,
+                action: "TRANSACTION_DELETE",
+                resourceType: "TRANSACTION",
+                resourceId: transactionId,
+                metadata: { propertyAddress, bulkOperation: true },
+              });
+            });
+          } catch (error) {
+            auditService.recordFailure({
+              userId,
+              action: "TRANSACTION_DELETE",
+              resourceType: "TRANSACTION",
+              resourceId: transactionId,
+              metadata: { propertyAddress, bulkOperation: true },
+              errorMessage: dealChangeFailureCode(error),
+            });
+            if (isAuditNotRecorded(error)) auditNotSavedCount++;
+            throw dealChangeUserError("delete", error);
+          }
 
           deletedCount++;
         } catch (err) {
@@ -1580,6 +1619,11 @@ export function registerTransactionCrudHandlers(
         success: errors.length === 0,
         deletedCount,
         errors: errors.length > 0 ? errors : undefined,
+        // BACKLOG-3339: the renderer shows `error`; without it a cancelled
+        // delete read only "Failed to delete transactions".
+        ...(auditNotSavedCount > 0
+          ? { error: bulkAuditNotSavedMessage("delete", auditNotSavedCount) }
+          : {}),
       };
     }, { module: "Transactions" }),
   );
@@ -1657,6 +1701,7 @@ export function registerTransactionCrudHandlers(
       // BACKLOG-3910d: locked deals are skipped one by one (an approved deal
       // may still be set to closed) and reported, never silently.
       const refusedIds: string[] = [];
+      let auditNotSavedCount = 0;
 
       for (const transactionId of validatedIds) {
         if (refuseStatusChangeIfDealLocked(transactionId, status)) {
@@ -1667,22 +1712,40 @@ export function registerTransactionCrudHandlers(
           // Get transaction before update for audit logging
           const existingTransaction =
             await transactionService.getTransactionDetails(transactionId);
-          const userId = existingTransaction?.user_id || "unknown";
+          // BACKLOG-3339: no "unknown" owner (see transactions:update).
+          if (!existingTransaction) {
+            throw new Error("This deal no longer exists.");
+          }
+          const userId = existingTransaction.user_id;
+          const metadata = { updatedFields: ["status"], newStatus: status, bulkOperation: true };
 
-          // No cast: `isTransactionStatus` above has already narrowed `status`
-          // to the schema-derived union. The literal union that used to sit
-          // here was a fifth restatement of the same domain (BACKLOG-2755).
-          await transactionService.updateTransaction(transactionId, { status });
-
-          // Audit log transaction update
-          await auditService.log({
-            userId,
-            action: "TRANSACTION_UPDATE",
-            resourceType: "TRANSACTION",
-            resourceId: transactionId,
-            metadata: { updatedFields: ["status"], newStatus: status, bulkOperation: true },
-            success: true,
-          });
+          // BACKLOG-3339: one transaction per deal, holding the status change
+          // and its audit entry. A failed entry cancels this deal only.
+          // No cast on `status`: `isTransactionStatus` above has already
+          // narrowed it to the schema-derived union (BACKLOG-2755).
+          try {
+            dbTransaction(() => {
+              databaseService.updateTransactionSync(transactionId, { status });
+              auditService.recordInTransaction({
+                userId,
+                action: "TRANSACTION_UPDATE",
+                resourceType: "TRANSACTION",
+                resourceId: transactionId,
+                metadata,
+              });
+            });
+          } catch (error) {
+            auditService.recordFailure({
+              userId,
+              action: "TRANSACTION_UPDATE",
+              resourceType: "TRANSACTION",
+              resourceId: transactionId,
+              metadata,
+              errorMessage: dealChangeFailureCode(error),
+            });
+            if (isAuditNotRecorded(error)) auditNotSavedCount++;
+            throw dealChangeUserError("update", error);
+          }
 
           updatedCount++;
         } catch (err) {
@@ -1711,7 +1774,9 @@ export function registerTransactionCrudHandlers(
               refusedIds,
               error: `${refusedIds.length} locked deal${refusedIds.length > 1 ? "s were" : " was"} not changed. A deal with your broker, or a sealed deal, can't be changed (an approved deal can still be closed).`,
             }
-          : {}),
+          : auditNotSavedCount > 0
+            ? { error: bulkAuditNotSavedMessage("update", auditNotSavedCount) }
+            : {}),
       };
     }, { module: "Transactions" }),
   );

@@ -43,6 +43,9 @@ const mockTransactionService = {
 
 const mockAuditService = {
   log: jest.fn().mockResolvedValue(undefined),
+  // BACKLOG-3339: deal edit/delete write their entry inside the change's transaction.
+  recordInTransaction: jest.fn(),
+  recordFailure: jest.fn(),
 };
 
 const mockLogService = {
@@ -76,6 +79,9 @@ const mockDatabaseService = {
     recordExportCompletion: jest.fn(),
   },
   updateTransaction: jest.fn(),
+  // BACKLOG-3339: the synchronous writes the handlers call inside the transaction.
+  updateTransactionSync: jest.fn(),
+  deleteTransactionSync: jest.fn(),
   stampFirstExportedAt: jest.fn().mockReturnValue(true),
   recordExportCompletion: jest.fn(),
   isInitialized: jest.fn().mockReturnValue(true),
@@ -89,6 +95,12 @@ jest.mock("../services/transactionService", () => ({
 jest.mock("../services/auditService", () => ({
   __esModule: true,
   default: mockAuditService,
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
+}));
+
+// BACKLOG-3339: the body runs synchronously, as better-sqlite3 runs it.
+jest.mock("../services/db/core/dbConnection", () => ({
+  dbTransaction: <T,>(fn: () => T): T => fn(),
 }));
 
 jest.mock("../services/logService", () => ({
@@ -428,12 +440,13 @@ describe("Transaction Handlers Integration Tests", () => {
       expect(updateResult.success).toBe(true);
       // BACKLOG-1786: the transactions:update handler returns only { success }
       // (it does not echo the updated row). Verify the update was applied by
-      // asserting the service was invoked with the validated changes.
-      expect(mockTransactionService.updateTransaction).toHaveBeenCalledWith(
+      // asserting the write was invoked with the validated changes
+      // (BACKLOG-3339: the synchronous write, inside the audit transaction).
+      expect(mockDatabaseService.updateTransactionSync).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ status: "active" }),
       );
-      expect(mockAuditService.log).toHaveBeenCalledWith(
+      expect(mockAuditService.recordInTransaction).toHaveBeenCalledWith(
         expect.objectContaining({ action: "TRANSACTION_UPDATE" }),
       );
 
@@ -466,7 +479,8 @@ describe("Transaction Handlers Integration Tests", () => {
       const deleteResult = await deleteHandler(mockEvent, TEST_TXN_ID);
 
       expect(deleteResult.success).toBe(true);
-      expect(mockAuditService.log).toHaveBeenCalledWith(
+      expect(mockDatabaseService.deleteTransactionSync).toHaveBeenCalledWith(TEST_TXN_ID);
+      expect(mockAuditService.recordInTransaction).toHaveBeenCalledWith(
         expect.objectContaining({ action: "TRANSACTION_DELETE" }),
       );
     });
@@ -491,7 +505,7 @@ describe("Transaction Handlers Integration Tests", () => {
 
       expect(result.success).toBe(true);
       // BACKLOG-1786: handler returns only { success }; assert the update call.
-      expect(mockTransactionService.updateTransaction).toHaveBeenCalledWith(
+      expect(mockDatabaseService.updateTransactionSync).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ status: "closed", closing_date_verified: 1 }),
       );

@@ -1031,6 +1031,21 @@ function normalizeFrozenFieldValue(field: string, value: unknown): string {
 }
 
 /**
+ * `createTransactionWithContactsSync`, for callers outside a transaction.
+ * Plain `Promise.resolve`, the BACKLOG-2960 seam shape. It exists because the
+ * sync core is now also called from inside a transaction body (BACKLOG-3339:
+ * `createAuditedTransaction` writes the deal and its audit entry together),
+ * and syncTwin.guard requires every reached `*Sync` export to have its
+ * promise-returning sibling.
+ */
+export function createTransactionWithContacts(
+  transactionData: NewTransaction,
+  assignments: TransactionContactData[],
+): Promise<Transaction> {
+  return Promise.resolve(createTransactionWithContactsSync(transactionData, assignments));
+}
+
+/**
  * Update transaction
  */
 export function updateTransactionSync(
@@ -1311,11 +1326,21 @@ export function recordExportCompletion(
 }
 
 /**
- * Delete transaction
+ * Delete transaction. Synchronous, so it can run inside the caller's
+ * transaction together with the audit entry that records it (BACKLOG-3339).
  */
-export async function deleteTransaction(transactionId: string): Promise<void> {
+export function deleteTransactionSync(transactionId: string): void {
   const statement = sql`DELETE FROM transactions WHERE id = ?`;
   dbRun(statement, [transactionId]);
+}
+
+/**
+ * Delete transaction, for callers outside a transaction. Plain
+ * `Promise.resolve` over `deleteTransactionSync`, the BACKLOG-2960 seam shape
+ * (see `updateTransaction` above).
+ */
+export function deleteTransaction(transactionId: string): Promise<void> {
+  return Promise.resolve(deleteTransactionSync(transactionId));
 }
 
 /**

@@ -64,6 +64,7 @@ import {
   removeIgnoredCommunicationSync,
 } from "../db/communicationDbService";
 import auditService from "../auditService";
+import { dealChangeFailureCode, dealChangeUserError } from "../dealChangeAudit";
 import { createEmail, getEmailByExternalId } from "../db/emailDbService";
 import emailAttachmentService from "../emailAttachmentService";
 import * as externalContactDb from "../db/externalContactDbService";
@@ -1172,46 +1173,73 @@ class TransactionService {
       // transaction: it is a long network-and-scan operation, and holding the
       // single SQLite write lock across it would block every other writer for
       // its duration. It is also re-runnable, where a half-written deal is not.
-      const transaction = databaseService.createTransactionWithContactsSync({
-        user_id: userId,
-        property_address,
-        property_street,
-        property_city,
-        property_state,
-        property_zip,
-        property_coordinates,
-        transaction_type,
-        status: "active",
-        started_at,
-        closed_at,
-        closing_deadline,
-        // BACKLOG-3614: optional; undefined (not entered) is skipped by the
-        // writer, so the column keeps its NULL default.
-        listing_price: listing_price ?? undefined,
-        // BACKLOG-2756: `false`, not `property_coordinates ? true : false`.
-        // Coordinates are a fact about the ADDRESS. This column means "a person
-        // confirmed the closing date", and the only thing that legitimately
-        // sets it is the export flow (ExportModal's `handleExport`), where the
-        // user is shown the dates and confirms them. Nothing has been confirmed
-        // at create time, so this states the same fact as the other creating
-        // paths. Stated rather than omitted: the value is a fact about this
-        // deal, not an absence.
-        closing_date_verified: false,
-        export_status: "not_exported",
-        export_count: 0,
-        communications_scanned: 0,
-        total_communications_count: 0,
-        offer_count: 0,
-        failed_offers_count: 0,
-      } as NewTransaction,
-      (contact_assignments ?? []).map((assignment) => ({
-        contact_id: assignment.contact_id,
-        role: assignment.role,
-        role_category: assignment.role_category,
-        specific_role: assignment.role,
-        is_primary: assignment.is_primary,
-        notes: assignment.notes,
-      })));
+      //
+      // BACKLOG-3339: the creation's audit entry is written in that same
+      // transaction (the inner one nests as a savepoint), so the deal exists
+      // only if its entry does. A failed entry cancels the create: the attempt
+      // is recorded after the rollback and the user gets a fixed message.
+      let transaction: Transaction;
+      try {
+        transaction = dbTransaction(() => {
+          const created = databaseService.createTransactionWithContactsSync({
+            user_id: userId,
+            property_address,
+            property_street,
+            property_city,
+            property_state,
+            property_zip,
+            property_coordinates,
+            transaction_type,
+            status: "active",
+            started_at,
+            closed_at,
+            closing_deadline,
+            // BACKLOG-3614: optional; undefined (not entered) is skipped by the
+            // writer, so the column keeps its NULL default.
+            listing_price: listing_price ?? undefined,
+            // BACKLOG-2756: `false`, not `property_coordinates ? true : false`.
+            // Coordinates are a fact about the ADDRESS. This column means "a person
+            // confirmed the closing date", and the only thing that legitimately
+            // sets it is the export flow (ExportModal's `handleExport`), where the
+            // user is shown the dates and confirms them. Nothing has been confirmed
+            // at create time, so this states the same fact as the other creating
+            // paths. Stated rather than omitted: the value is a fact about this
+            // deal, not an absence.
+            closing_date_verified: false,
+            export_status: "not_exported",
+            export_count: 0,
+            communications_scanned: 0,
+            total_communications_count: 0,
+            offer_count: 0,
+            failed_offers_count: 0,
+          } as NewTransaction,
+          (contact_assignments ?? []).map((assignment) => ({
+            contact_id: assignment.contact_id,
+            role: assignment.role,
+            role_category: assignment.role_category,
+            specific_role: assignment.role,
+            is_primary: assignment.is_primary,
+            notes: assignment.notes,
+          })));
+          auditService.recordInTransaction({
+            userId,
+            action: "TRANSACTION_CREATE",
+            resourceType: "TRANSACTION",
+            resourceId: created.id,
+            metadata: { propertyAddress: created.property_address, reason: "audited_create" },
+          });
+          return created;
+        });
+      } catch (error) {
+        auditService.recordFailure({
+          userId,
+          action: "TRANSACTION_CREATE",
+          resourceType: "TRANSACTION",
+          metadata: { reason: "audited_create" },
+          errorMessage: dealChangeFailureCode(error),
+        });
+        throw dealChangeUserError("create", error);
+      }
       const transactionId = transaction.id;
 
       if (contact_assignments && contact_assignments.length > 0) {
