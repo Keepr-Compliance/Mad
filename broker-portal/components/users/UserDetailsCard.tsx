@@ -92,6 +92,8 @@ interface UserDetailsCardProps {
   currentUserRole: Role;
   /** BACKLOG-3851 PR-2f: for the prefilled "more licenses" support request. */
   organizationName?: string | null;
+  /** BACKLOG-3851 PR-2g: the organization has a free licence (null = not known). */
+  orgHasFreeSeat?: boolean | null;
 }
 
 // ============================================================================
@@ -140,6 +142,7 @@ export default function UserDetailsCard({
   currentUserId,
   currentUserRole,
   organizationName,
+  orgHasFreeSeat = null,
 }: UserDetailsCardProps) {
   const router = useRouter();
   const [showEditRole, setShowEditRole] = useState(false);
@@ -412,6 +415,8 @@ export default function UserDetailsCard({
         memberId={member.id}
         memberName={displayName}
         callerRole={currentUserRole}
+        organizationName={organizationName}
+        orgHasFreeSeat={orgHasFreeSeat}
       />
       <UnassignLicenseModal
         isOpen={showUnassign}
