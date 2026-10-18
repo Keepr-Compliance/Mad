@@ -9,7 +9,7 @@ DECLARE
   v_n integer;
 BEGIN
   IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.accept_invitation(text,text)'))
-       = 'c418ef99a8b5a9c633f2a8054f436954'
+       = '37ce05772d72d25439d5ef2bdd5a2d08'
      OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.guard_invite_acceptance()'))
        = '3219e9d919260b2c5ac537efb3a57581'
      OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.public_validate_invitation_token(text)'))

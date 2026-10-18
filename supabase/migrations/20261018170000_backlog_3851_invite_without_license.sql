@@ -45,7 +45,7 @@ DECLARE
 BEGIN
   FOR r IN SELECT * FROM (VALUES
     ('public.guard_invite_acceptance()', '630480367fd00fbb23173e990ab6c494', '3219e9d919260b2c5ac537efb3a57581'),
-    ('public.accept_invitation(text,text)', '851f0b67ed7f31c99aecca5f557f60dc', 'c418ef99a8b5a9c633f2a8054f436954'),
+    ('public.accept_invitation(text,text)', '851f0b67ed7f31c99aecca5f557f60dc', '37ce05772d72d25439d5ef2bdd5a2d08'),
     ('public.caller_has_pending_invite()', '93d54ab5f4f1d9c81347dcb66a698cd2', '5fe92208a44700f75ab7553cf51df3aa'),
     ('public.public_validate_invitation_token(text)', '9501ad58da435df9c1ef142352ef267c', 'b5131a4dc978a10275b553123ea58e77')
   ) AS t(sig, old_md5, new_md5) LOOP
@@ -309,16 +309,12 @@ BEGIN
     );
   END IF;
 
-  -- BACKLOG-3851 S1: the names typed on the invitation fill blank names only.
+  -- BACKLOG-3851 S1: the names typed on the invitation fill blank first/last names only.
+  -- (display_name is left alone: handle_new_user always sets it at sign-up.)
   IF v_first IS NOT NULL OR v_last IS NOT NULL THEN
     UPDATE users
     SET first_name = COALESCE(NULLIF(btrim(first_name), ''), v_first),
-        last_name = COALESCE(NULLIF(btrim(last_name), ''), v_last),
-        display_name = COALESCE(
-          NULLIF(btrim(display_name), ''),
-          NULLIF(concat_ws(' ', COALESCE(NULLIF(btrim(first_name), ''), v_first),
-                                COALESCE(NULLIF(btrim(last_name), ''), v_last)), '')
-        )
+        last_name = COALESCE(NULLIF(btrim(last_name), ''), v_last)
     WHERE id = v_user_id;
   END IF;
 

@@ -3,7 +3,7 @@
 --   M4a + M4 (or a mutant of M4) + this file, as one execute_sql call.
 -- Every result is recorded in r; the final RAISE prints them:
 --   PR2F_RESULT {"C1": "PASS", ...}  -- any value other than PASS is a red.
--- Fixtures: two new organizations and eight new auth users (p2fc-*@example.test).
+-- Fixtures: three new organizations (+ one personal) and eight new auth users (p2fc-*@example.test).
 -- Test Brokerage Alpha/Beta and their members are never read or written.
 
 DO $ctl$
@@ -15,7 +15,7 @@ DECLARE
   ua uuid := gen_random_uuid(); ub uuid := gen_random_uuid();
   u1 uuid := gen_random_uuid(); u2 uuid := gen_random_uuid(); u3 uuid := gen_random_uuid();
   u4 uuid := gen_random_uuid(); uc uuid := gen_random_uuid(); ucadm uuid := gen_random_uuid();
-  v jsonb; s text; n int; n2 int; p_org uuid;
+  v jsonb; s text; n int; n2 int; n3 int; p_org uuid;
 BEGIN
   EXECUTE $f$CREATE FUNCTION pg_temp.as_user(u uuid, e text) RETURNS void LANGUAGE plpgsql AS $b$
   BEGIN
@@ -40,7 +40,8 @@ BEGIN
   SELECT x.id, x.e, 'email', x.id::text
   FROM (VALUES (ua, 'p2fc-a@example.test'), (ub, 'p2fc-b@example.test'), (uc, 'p2fc-c@example.test'), (ucadm, 'p2fc-cadm@example.test')) x(id, e)
   ON CONFLICT (id) DO NOTHING;
-  -- u2 already has a first name (fill-blank must keep it) and no last name.
+  -- u2 already has a first name (fill-blank must keep it) and no last name. display_name is
+  -- whatever handle_new_user (on auth.users insert) wrote: the email's local part.
   INSERT INTO public.users (id, email, oauth_provider, oauth_id, first_name, last_name)
   VALUES (u2, 'p2fc-u2@example.test', 'email', u2::text, 'Zed', NULL)
   ON CONFLICT (id) DO UPDATE SET first_name = 'Zed', last_name = NULL;
@@ -89,8 +90,10 @@ BEGIN
     END;
     EXECUTE 'RESET ROLE';
     r := r || jsonb_build_object('Sc_expired_pending_insert', 'admitted; ' || s);
-    DELETE FROM organization_members WHERE organization_id = o_full AND invited_email = 'p2fc-y@example.test';
-  EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; r := r || jsonb_build_object('Sc_expired_pending_insert', 'refused ' || SQLSTATE || ' ' || left(SQLERRM, 60)); END;
+    RAISE EXCEPTION 'p2fc-undo';  -- roll this block back: the fixture row must not stay
+  EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE';
+    IF SQLERRM <> 'p2fc-undo' THEN r := r || jsonb_build_object('Sc_expired_pending_insert', 'refused ' || SQLSTATE || ' ' || left(SQLERRM, 60)); END IF;
+  END;
 
   -- F4: the landing page validator reports licensed=false and the invited first name.
   v := public.public_validate_invitation_token('p2fc-tok-u1');
@@ -131,7 +134,7 @@ BEGIN
                                               AND pg_temp.row_of(o_full, 'p2fc-u1@example.test') = 'unassigned/claimed'
                                               AND pg_temp.seats(o_full) = 2
                                          THEN 'PASS' ELSE 'FAIL ' || v::text || ' row=' || coalesce(pg_temp.row_of(o_full, 'p2fc-u1@example.test'), 'none') END);
-    r := r || jsonb_build_object('N1_blank_filled', CASE WHEN s = 'Anne Lee / Anne Lee' THEN 'PASS' ELSE 'FAIL ' || s END);
+    r := r || jsonb_build_object('N1_blank_filled', CASE WHEN s = 'Anne Lee / p2fc-u1' THEN 'PASS' ELSE 'FAIL ' || s END);
   EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; r := r || jsonb_build_object('C3', 'FAIL ' || SQLSTATE || ' ' || left(SQLERRM, 80)); END;
 
   -- C2: in a FREE-seat org an unlicensed invitation is still accepted as 'unassigned'
@@ -147,7 +150,7 @@ BEGIN
     r := r || jsonb_build_object('C2', CASE WHEN (v->>'success')::boolean AND pg_temp.row_of(o_free, 'p2fc-u2@example.test') = 'unassigned/claimed'
                                          THEN 'PASS' ELSE 'FAIL ' || v::text || ' row=' || coalesce(pg_temp.row_of(o_free, 'p2fc-u2@example.test'), 'none') END);
     SELECT coalesce(first_name, '-') || ' ' || coalesce(last_name, '-') || ' / ' || coalesce(display_name, '-') INTO STRICT s FROM public.users WHERE id = u2;
-    r := r || jsonb_build_object('N2_existing_kept', CASE WHEN s = 'Zed Ray / Zed Ray' THEN 'PASS' ELSE 'FAIL ' || s END);
+    r := r || jsonb_build_object('N2_existing_kept', CASE WHEN s = 'Zed Ray / p2fc-u2' THEN 'PASS' ELSE 'FAIL ' || s END);
   EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; r := r || jsonb_build_object('C2', 'FAIL ' || SQLSTATE || ' ' || left(SQLERRM, 80)); END;
 
   -- C6b: a LICENSED invitation is still accepted as 'active'.
@@ -198,11 +201,13 @@ BEGIN
     PERFORM pg_temp.as_user(uc, 'p2fc-c@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
     SELECT count(*) INTO n FROM checklist_templates WHERE name LIKE 'P2FC%' AND organization_id = o_chk;
     SELECT count(*) INTO n2 FROM checklist_template_items i JOIN checklist_templates t ON t.id = i.template_id WHERE i.title = 'P2FC item' AND t.organization_id = o_chk;
+    -- Non-vacuous: the same session does see its own personal template.
+    SELECT count(*) INTO n3 FROM checklist_templates WHERE name = 'P2FC personal template';
     UPDATE checklist_templates SET name = name || ' x' WHERE organization_id = o_chk;
     EXECUTE 'RESET ROLE';
     SELECT count(*) INTO STRICT s FROM checklist_templates WHERE organization_id = o_chk AND name LIKE '% x';
-    r := r || jsonb_build_object('C21', CASE WHEN n = 0 AND n2 = 0 AND s = '0' THEN 'PASS' ELSE 'FAIL templates=' || n || ' items=' || n2 || ' updated=' || s END,
-                                 'C21_personal_visible_note', 'personal org ' || CASE WHEN p_org IS NULL THEN 'missing' ELSE 'present' END);
+    r := r || jsonb_build_object('C21', CASE WHEN n = 0 AND n2 = 0 AND s = '0' AND n3 = 1 THEN 'PASS'
+                                             ELSE 'FAIL templates=' || n || ' items=' || n2 || ' updated=' || s || ' own_personal_visible=' || n3 END);
   EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; r := r || jsonb_build_object('C21', 'FAIL ' || SQLSTATE || ' ' || left(SQLERRM, 120)); END;
 
   -- Bodies that actually ran (compare with body_md5.py on the file or mutant that was composed).
