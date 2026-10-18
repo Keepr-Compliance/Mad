@@ -762,7 +762,7 @@ BEGIN
     RETURN NEW;
   END IF;
   IF TG_OP = 'INSERT'
-     OR NEW.organization_id IS DISTINCT FROM OLD.organization_id
+     OR (TG_OP = 'UPDATE' AND NEW.organization_id IS DISTINCT FROM OLD.organization_id)
      OR (NEW.license_status IS DISTINCT FROM OLD.license_status
          AND NEW.license_status IN ('active', 'unassigned', 'pending'))
      OR (OLD.user_id IS NULL AND NEW.user_id IS NOT NULL)
