@@ -32,6 +32,31 @@ import { MEMBER_UNASSIGNED_STATUS, memberStatusIsDeactivated } from '@keepr/shar
  */
 export const MEMBER_LICENSE_ASSIGN_UNASSIGN_ENABLED = true;
 
+/**
+ * BACKLOG-3851 PR-2f: release switch for "Invite without a license", set PER
+ * ENVIRONMENT. The database change it needs (M4, 20261018170000) reaches
+ * production weeks after this code, so production keeps it OFF until M4 is
+ * applied there; a preview on keepr-test turns it on.
+ *
+ *   NEXT_PUBLIC_INVITE_WITHOUT_LICENSE_ENABLED = 'true'  -> on
+ *   anything else (unset by default)                     -> off
+ *
+ * It is ANDed with MEMBER_LICENSE_ASSIGN_UNASSIGN_ENABLED: a person who joins
+ * without a license needs the Assign button to ever get one.
+ */
+export const INVITE_WITHOUT_LICENSE_ENABLED =
+  process.env.NEXT_PUBLIC_INVITE_WITHOUT_LICENSE_ENABLED === 'true';
+
+export function inviteWithoutLicenseAvailable(
+  envEnabled: boolean = INVITE_WITHOUT_LICENSE_ENABLED,
+  assignUnassignEnabled: boolean = MEMBER_LICENSE_ASSIGN_UNASSIGN_ENABLED
+): boolean {
+  return envEnabled && assignUnassignEnabled;
+}
+
+/** Shown when an unlicensed invite is refused because the switch or the database is not ready. */
+export const INVITE_WITHOUT_LICENSE_UNAVAILABLE = 'Inviting without a license is not available yet.';
+
 export type MemberLicenseAction = 'assign' | 'unassign' | 'reactivate';
 
 export interface MemberLicenseRowInput {

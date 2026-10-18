@@ -4,6 +4,32 @@
 --   policy users_can_accept_invite USING + WITH CHECK, and users_can_view_own_invite USING,
 --   as pg_policies printed them on production 2026-10-16.
 -- File A's functions are left in place (rollback-3684-a.sql removes them).
+--
+-- BACKLOG-3851 PR-2f: REFUSES while 3851 M4 (20261018170000) is in force, i.e. while
+-- accept_invitation does not have file A's body, or while any unclaimed invitation without
+-- a license exists. Re-granting claim_pending_invite (no status filter, sets 'active') under
+-- M4 would let an unlicensed invitee take a seat. Order: rollback-m4 -> this file -> rollback-3684-a.
+
+--
+-- RUN IN ONE TRANSACTION: `psql --single-transaction -v ON_ERROR_STOP=1 -f rollback-3684-b.sql`,
+-- or paste the whole file as ONE execute_sql call. The refusal below is a separate DO
+-- statement: under a plain `psql -f` it raises and the statements after it still run
+-- (the auto_provision body and the EXECUTE permission on claim_pending_invite).
+
+DO $m4$
+DECLARE
+  v_n integer;
+BEGIN
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.accept_invitation(text,text)'))
+       IS DISTINCT FROM '851f0b67ed7f31c99aecca5f557f60dc' THEN
+    RAISE EXCEPTION '3684 rollback-b: accept_invitation is not file A''s body (3851 M4 in force?); run supabase/tests/backlog-3851/pr2f/rollback-m4.sql first';
+  END IF;
+  SELECT count(*) INTO v_n FROM public.organization_members
+   WHERE user_id IS NULL AND license_status = 'unassigned';
+  IF v_n > 0 THEN
+    RAISE EXCEPTION '3684 rollback-b: % unclaimed invitation(s) without a license exist; revoke them first', v_n;
+  END IF;
+END $m4$;
 
 CREATE OR REPLACE FUNCTION public.auto_provision_it_admin(
   p_tenant_id TEXT,

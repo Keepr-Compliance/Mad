@@ -141,7 +141,7 @@ function personLabelOf(
 /**
  * Add the person to this brokerage: claim their unclaimed invite in it if one exists
  * (case-insensitive email match; a live invite already holds the seat, an expired one
- * takes one), otherwise insert a membership. The seat trigger refuses either write when
+ * or one sent without a license takes one), otherwise insert a membership. The seat trigger refuses either write when
  * it would exceed the brokerage's seats (P0001 seat_limit_reached).
  */
 async function writeScimMembership(
@@ -161,7 +161,10 @@ async function writeScimMembership(
     .select("id, role, invited_email")
     .eq("organization_id", p.orgId)
     .is("user_id", null)
-    .eq("license_status", "pending");
+    // BACKLOG-3851 PR-2f: an invitation sent without a license ('unassigned') is claimed
+    // too, and like any SCIM join it takes a license (founder Q-1 = b): the claim below
+    // writes 'active', so in a full brokerage the seat trigger refuses it (403 + notice).
+    .in("license_status", ["pending", "unassigned"]);
   if (inviteError) return { error: inviteError, claimedInvite: false };
 
   const invite = ((invites ?? []) as Array<{ id: string; role: string; invited_email: string | null }>)

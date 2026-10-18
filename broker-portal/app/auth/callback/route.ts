@@ -20,6 +20,7 @@ import { NextResponse } from 'next/server';
 import { extractEmail } from '@/lib/auth/helpers';
 import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
 import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
+import { blankNameFill, idpProfileNames } from '@/lib/auth/profileNameFill';
 import {
   PORTAL_MEMBERSHIP_SELECT,
   classifyPortalAccess,
@@ -147,20 +148,29 @@ export async function GET(request: Request) {
           return refuse(request, supabase, origin, inviteRefusalFor(accepted?.error));
         }
         // accept_invitation wrote a minimal users row if there was none; fill in
-        // the profile fields as this route always has.
+        // the profile fields. BACKLOG-3851 PR-2f: the identity provider's names
+        // fill BLANK fields only, so a stored name (from the invitation, or set by
+        // an admin) is never overwritten.
         const userEmail = extractEmail(user);
         if (userEmail) {
           const provider = user.app_metadata?.provider || 'email';
           const oauthId = user.user_metadata?.provider_id || user.id;
+          const { data: storedNames, error: storedNamesError } = await supabase
+            .from('users')
+            .select('display_name, first_name, last_name')
+            .eq('id', user.id)
+            .maybeSingle();
+          // A failed read says nothing about what is stored: write no name fields.
+          const nameFill = storedNamesError
+            ? {}
+            : blankNameFill(storedNames, idpProfileNames(user.user_metadata));
           const { error: upsertError } = await supabase.from('users').upsert(
             {
               id: user.id,
               email: userEmail,
               oauth_provider: provider,
               oauth_id: oauthId,
-              display_name: user.user_metadata?.full_name || user.user_metadata?.name || null,
-              first_name: user.user_metadata?.given_name || null,
-              last_name: user.user_metadata?.family_name || null,
+              ...nameFill,
             },
             { onConflict: 'id' }
           );

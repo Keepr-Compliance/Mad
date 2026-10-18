@@ -28,6 +28,8 @@ interface UserDetailsResult {
   currentUserId: string;
   currentUserRole: Role;
   organizationId: string;
+  /** BACKLOG-3851 PR-2f: for the prefilled "more licenses" support request. */
+  organizationName: string | null;
 }
 
 interface NotFoundResult {
@@ -67,6 +69,8 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
       role,
       license_status,
       invited_email,
+      invited_first_name,
+      invited_last_name,
       invited_at,
       joined_at,
       provisioned_by,
@@ -129,6 +133,12 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
   // Supabase returns joined relations as arrays, extract first element
   const userData = Array.isArray(member.user) ? member.user[0] : member.user;
 
+  const { data: organization } = await supabase
+    .from('organizations')
+    .select('name')
+    .eq('id', currentMembership.organization_id)
+    .maybeSingle();
+
   return {
     member: {
       ...member,
@@ -138,6 +148,7 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
     currentUserId: user.id,
     currentUserRole: currentMembership.role as Role,
     organizationId: currentMembership.organization_id,
+    organizationName: organization?.name ?? null,
   };
 }
 
@@ -235,6 +246,7 @@ export default async function UserDetailsPage({ params }: PageProps) {
         member={data.member}
         currentUserId={data.currentUserId}
         currentUserRole={data.currentUserRole}
+        organizationName={data.organizationName}
       />
     </div>
   );
