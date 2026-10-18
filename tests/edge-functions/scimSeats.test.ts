@@ -301,6 +301,49 @@ describe('POST existing person', () => {
       provisioned_by: 'scim', invitation_token: null });
   });
 
+  // BACKLOG-3851 PR-2f C13: an invitation sent WITHOUT a license ('unassigned', user_id null).
+  // Founder Q-1 = (b): a SCIM claim takes a license. Shapes from keepr-test (SR L4): free seat ->
+  // the invite's own row active/claimed; full -> P0001 seat_limit_reached, row unchanged.
+  const UNLICENSED_INVITE = { id: 'm-unl', organization_id: ORG, user_id: null, role: 'broker', license_status: 'unassigned',
+    invited_email: 'Q@example.test', invitation_token: 'tok-unl', invitation_expires_at: '2026-10-20T00:00:00Z' };
+  const qTables = () => baseTables({ users: [...baseTables().users.filter((u) => u.id !== 'u-p'), { id: 'u-q', email: 'q@example.test' }] });
+
+  it('C13(i) free seat: claims the unlicensed invite itself, which becomes active; exactly one row for the email', async () => {
+    const t = qTables();
+    t.organization_members.push({ ...UNLICENSED_INVITE });
+    const db = makeDb(t, { authIds: ['u-q'] });
+    const res = await handleCreateUser(postReq('q@example.test'), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(201);
+    expect(memberWrites(db.writes).map((w) => w.op)).toEqual(['update']);
+    const rows = t.organization_members.filter((m) => m.user_id === 'u-q' || String(m.invited_email ?? '').toLowerCase() === 'q@example.test');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: 'm-unl', user_id: 'u-q', license_status: 'active', role: 'broker', invitation_token: null });
+  });
+
+  it('C13(ii) full org: 403 + one notice, the unlicensed invite stays unassigned and unclaimed, no new row', async () => {
+    const t = qTables();
+    t.organization_members.push({ ...UNLICENSED_INVITE });
+    const before = t.organization_members.length;
+    const db = makeDb(t, { full: true, authIds: ['u-q'] });
+    const { d, fetch } = deps();
+    const res = await handleCreateUser(postReq('q@example.test'), AUTH as never, db.client as never, BASE, d);
+    expect(res.status).toBe(403);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(t.organization_members).toHaveLength(before);
+    expect(t.organization_members.find((m) => m.id === 'm-unl')).toMatchObject({ user_id: null, license_status: 'unassigned' });
+    expect(userWrites(db.writes)).toEqual([]);
+  });
+
+  it('C13(iii) a licensed pending invite is claimed as before (active)', async () => {
+    const t = qTables();
+    t.organization_members.push({ ...UNLICENSED_INVITE, id: 'm-lic', license_status: 'pending' });
+    const db = makeDb(t, { authIds: ['u-q'] });
+    const res = await handleCreateUser(postReq('q@example.test'), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(201);
+    expect(t.organization_members.find((m) => m.id === 'm-lic')).toMatchObject({ user_id: 'u-q', license_status: 'active' });
+    expect(t.organization_members.filter((m) => m.user_id === 'u-q')).toHaveLength(1);
+  });
+
   it('an EXPIRED invite in a full org is a seat refusal (403), the invite stays unclaimed', async () => {
     const t = baseTables({ users: [...baseTables().users.filter((u) => u.id !== 'u-p'), { id: 'u-q', email: 'q@example.test' }] });
     t.organization_members.push({ id: 'm-inv', organization_id: ORG, user_id: null, role: 'agent', license_status: 'pending',

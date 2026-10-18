@@ -116,6 +116,10 @@ export interface InviteEmailParams {
   expiresInDays: number;
   /** Whether this is a resend of an existing invite (changes subject/heading) */
   isResend?: boolean;
+  /** BACKLOG-3851 PR-2f: the invitation carries no license. */
+  withoutLicense?: boolean;
+  /** BACKLOG-3851 PR-2f: first name typed on the invite; greets "Hi <first>,". */
+  recipientFirstName?: string;
 }
 
 export interface DownloadInviteEmailParams {

@@ -15,6 +15,11 @@ import { randomBytes } from 'crypto';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
 import { sendInviteEmail } from '@/lib/email';
+import { inviteNameTooLong, normalizeInviteName } from '@/lib/users/inviteNames';
+import {
+  INVITE_WITHOUT_LICENSE_UNAVAILABLE,
+  inviteWithoutLicenseAvailable,
+} from '@/lib/users/memberLicenseActions';
 
 // ============================================================================
 // Types
@@ -24,6 +29,11 @@ interface InviteUserInput {
   email: string;
   role: 'agent' | 'broker' | 'admin';
   organizationId: string;
+  /** BACKLOG-3851 PR-2f (I2): invite as 'unassigned' (no license, holds no seat). */
+  withoutLicense?: boolean;
+  /** BACKLOG-3851 PR-2f (S1): optional names; trimmed, empty -> null, <= 100 characters. */
+  firstName?: string;
+  lastName?: string;
 }
 
 interface InviteUserResult {
@@ -64,6 +74,18 @@ function isInviteSeatRefusal(error: { code?: string; message?: string }): boolea
 /**
  * Basic email format validation
  */
+/**
+ * BACKLOG-3851 PR-2f: an unlicensed insert refused by the insert guard's SHAPE check
+ * means the database does not accept unlicensed invitations yet (M4 not applied).
+ * Matched on code AND message, and only for an unlicensed insert.
+ */
+function isUnlicensedInviteUnsupported(error: { code?: string; message?: string }): boolean {
+  return (
+    error.code === '42501' &&
+    error.message === 'Only a pending invitation can be added from a client session'
+  );
+}
+
 function isValidEmail(email: string): boolean {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
@@ -93,6 +115,17 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
 
   // Normalize email
   const normalizedEmail = input.email.toLowerCase().trim();
+
+  const withoutLicense = input.withoutLicense === true;
+  if (withoutLicense && !inviteWithoutLicenseAvailable()) {
+    return { success: false, error: INVITE_WITHOUT_LICENSE_UNAVAILABLE };
+  }
+
+  const firstName = normalizeInviteName(input.firstName);
+  const lastName = normalizeInviteName(input.lastName);
+  if (inviteNameTooLong(firstName) || inviteNameTooLong(lastName)) {
+    return { success: false, error: 'Names must be 100 characters or fewer' };
+  }
 
   // Verify current user is admin/it_admin
   const { data: { user } } = await supabase.auth.getUser();
@@ -172,17 +205,23 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
       organization_id: input.organizationId,
       invited_email: normalizedEmail,
       role: input.role,
-      license_status: 'pending',
+      // BACKLOG-3851 PR-2f: an unlicensed invitation is 'unassigned' and holds no seat.
+      license_status: withoutLicense ? 'unassigned' : 'pending',
       invitation_token: invitationToken,
       invitation_expires_at: expiresAt.toISOString(),
       invited_by: user.id,
       invited_at: new Date().toISOString(),
       provisioned_by: 'invite',
+      invited_first_name: firstName,
+      invited_last_name: lastName,
     });
 
   if (insertError) {
     if (isInviteSeatRefusal(insertError)) {
       return { success: false, outOfSeats: true };
+    }
+    if (withoutLicense && isUnlicensedInviteUnsupported(insertError)) {
+      return { success: false, error: INVITE_WITHOUT_LICENSE_UNAVAILABLE };
     }
     Sentry.captureException(insertError, {
       tags: { action: 'invite_user' },
@@ -216,6 +255,8 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
       role: input.role,
       inviteLink,
       expiresInDays: 7,
+      withoutLicense,
+      recipientFirstName: firstName ?? undefined,
     });
 
     emailSent = emailResult.success;

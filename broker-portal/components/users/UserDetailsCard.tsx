@@ -24,8 +24,8 @@ import OutOfLicensesNotice from './OutOfLicensesNotice';
 import { setMemberLicense } from '@/lib/actions/memberLicense';
 import { MEMBER_LICENSE_ACTION_LABELS, memberRowActions } from '@/lib/users/memberLicenseActions';
 import type { Role, MemberLicenseStatus, ProvisioningSource } from '@/lib/types/users';
-import { ROLE_LABELS, LICENSE_STATUS_LABELS, PROVISIONING_SOURCE_LABELS } from '@/lib/types/users';
-import { formatUserDisplayName, getUserInitials } from '@/lib/utils/userDisplay';
+import { ROLE_LABELS, PROVISIONING_SOURCE_LABELS, memberStatusLabel } from '@/lib/types/users';
+import { formatUserDisplayName, getUserInitials, memberNameFields } from '@/lib/utils/userDisplay';
 import { formatDate } from '@/lib/utils';
 
 // ============================================================================
@@ -68,6 +68,9 @@ export interface MemberDetailsData {
   role: Role;
   license_status: MemberLicenseStatus;
   invited_email: string | null;
+  /** BACKLOG-3851 PR-2f (S1) */
+  invited_first_name?: string | null;
+  invited_last_name?: string | null;
   invited_at: string | null;
   joined_at: string | null;
   provisioned_by: ProvisioningSource | null;
@@ -87,6 +90,8 @@ interface UserDetailsCardProps {
   member: MemberDetailsData;
   currentUserId: string;
   currentUserRole: Role;
+  /** BACKLOG-3851 PR-2f: for the prefilled "more licenses" support request. */
+  organizationName?: string | null;
 }
 
 // ============================================================================
@@ -134,6 +139,7 @@ export default function UserDetailsCard({
   member,
   currentUserId,
   currentUserRole,
+  organizationName,
 }: UserDetailsCardProps) {
   const router = useRouter();
   const [showEditRole, setShowEditRole] = useState(false);
@@ -171,9 +177,8 @@ export default function UserDetailsCard({
   };
 
   // Format display values
-  const userOrNull = member.user ?? null;
-  const displayName = formatUserDisplayName(userOrNull, member.invited_email);
-  const initials = getUserInitials(userOrNull, member.invited_email);
+  const displayName = formatUserDisplayName(memberNameFields(member), member.invited_email);
+  const initials = getUserInitials(memberNameFields(member), member.invited_email);
   const email = member.user?.email || member.invited_email || '';
 
   // Handle modal close with refresh
@@ -226,7 +231,7 @@ export default function UserDetailsCard({
               <div className="flex flex-wrap gap-2 mt-2">
                 <Badge hue={ROLE_HUES[member.role]}>{ROLE_LABELS[member.role]}</Badge>
                 <Badge hue={STATUS_HUES[member.license_status]}>
-                  {isPending ? 'Invited' : LICENSE_STATUS_LABELS[member.license_status]}
+                  {memberStatusLabel(member)}
                 </Badge>
                 {member.user?.is_managed && (
                   <Badge hue="primary">IdP Managed</Badge>
@@ -260,7 +265,7 @@ export default function UserDetailsCard({
 
         {assignOutOfSeats && (
           <div className="mb-6">
-            <OutOfLicensesNotice callerRole={currentUserRole} />
+            <OutOfLicensesNotice callerRole={currentUserRole} organizationName={organizationName} />
           </div>
         )}
         {assignError && (

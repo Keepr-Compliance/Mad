@@ -9,6 +9,7 @@
 
 import { baseLayout } from './base-layout';
 import type { EmailContent, InviteEmailParams } from '../types';
+import { UNLICENSED_INVITE_LINE } from '@/lib/invite/validateResult';
 
 /**
  * Build the invite email content (subject, HTML, plain text).
@@ -23,7 +24,14 @@ export function buildInviteEmail(params: InviteEmailParams): EmailContent {
     inviteLink,
     expiresInDays,
     isResend = false,
+    withoutLicense = false,
+    recipientFirstName,
   } = params;
+
+  // BACKLOG-3851 PR-2f
+  const firstName = recipientFirstName?.trim() || '';
+  const greeting = firstName ? `Hi ${firstName},` : '';
+  const unlicensedLine = withoutLicense ? UNLICENSED_INVITE_LINE : '';
 
   const isOrgInvite = organizationName && organizationName !== 'Keepr';
 
@@ -46,6 +54,7 @@ export function buildInviteEmail(params: InviteEmailParams): EmailContent {
       <h1 style="margin:0 0 16px 0; font-size:24px; font-weight:700; color:#111827; line-height:1.3;">
         ${heading}
       </h1>
+      ${greeting ? `<p style="margin:0 0 8px 0; font-size:16px; color:#374151; line-height:1.6;">${escapeHtml(greeting)}</p>` : ''}
       <p style="margin:0 0 8px 0; font-size:16px; color:#374151; line-height:1.6;">
         ${isOrgInvite
           ? `${escapeHtml(inviterName)} has invited you to join <strong>${escapeHtml(organizationName)}</strong> on Keepr.`
@@ -56,6 +65,10 @@ export function buildInviteEmail(params: InviteEmailParams): EmailContent {
       <p style="margin:0 0 24px 0; font-size:14px; color:#6b7280; line-height:1.5;">
         Role: <strong>${escapeHtml(role)}</strong>
       </p>` : '<div style="margin:0 0 24px 0;"></div>'}
+      ${unlicensedLine ? `
+      <p style="margin:0 0 24px 0; font-size:14px; color:#374151; line-height:1.5;">
+        ${escapeHtml(unlicensedLine)}
+      </p>` : ''}
       <table cellpadding="0" cellspacing="0" border="0" style="margin:0 0 24px 0;">
         <tr>
           <td align="center" style="border-radius:6px; background-color:#4f46e5;">
@@ -79,12 +92,16 @@ export function buildInviteEmail(params: InviteEmailParams): EmailContent {
   const textLines = [
     subject,
     '',
+    ...(greeting ? [greeting, ''] : []),
     isOrgInvite
       ? `${inviterName} has invited you to join ${organizationName} on Keepr.`
       : `${inviterName} has invited you to join Keepr — the real estate transaction auditing platform.`,
   ];
   if (isOrgInvite && role) {
     textLines.push(`Role: ${role}`);
+  }
+  if (unlicensedLine) {
+    textLines.push('', unlicensedLine);
   }
   textLines.push(
     '',

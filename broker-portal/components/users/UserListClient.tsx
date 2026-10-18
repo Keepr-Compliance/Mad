@@ -45,6 +45,8 @@ interface UserListClientProps {
   currentUserId: string;
   currentUserRole: Role;
   organizationId: string;
+  /** BACKLOG-3851 PR-2f: for the prefilled "more licenses" support request. */
+  organizationName?: string | null;
   readOnly?: boolean;
 }
 
@@ -53,6 +55,7 @@ export default function UserListClient({
   currentUserId,
   currentUserRole,
   organizationId,
+  organizationName = null,
   readOnly = false,
 }: UserListClientProps) {
   const [searchQuery, setSearchQuery] = useState('');
@@ -243,7 +246,7 @@ export default function UserListClient({
       )}
 
       {/* BACKLOG-3851: no free licence for a resend or an assign */}
-      {outOfLicenses && <OutOfLicensesNotice callerRole={currentUserRole} />}
+      {outOfLicenses && <OutOfLicensesNotice callerRole={currentUserRole} organizationName={organizationName} />}
 
       {assignResult && (
         <div className={`rounded-md px-4 py-3 text-sm border ${assignResult.success ? 'bg-success-50 text-success-800 border-success-200' : 'bg-danger-50 text-danger-800 border-danger-200'}`}>
@@ -365,6 +368,7 @@ export default function UserListClient({
         isOpen={isInviteModalOpen}
         onClose={() => setIsInviteModalOpen(false)}
         organizationId={organizationId}
+        organizationName={organizationName}
         callerRole={currentUserRole}
       />
 
@@ -408,6 +412,7 @@ export default function UserListClient({
           memberId={reactivateMember.id}
           memberName={formatUserDisplayName(reactivateMember.user ?? null, reactivateMember.invited_email)}
           callerRole={currentUserRole}
+          organizationName={organizationName}
         />
       )}
       {unassignMember && (

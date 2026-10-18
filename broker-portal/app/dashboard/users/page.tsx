@@ -75,6 +75,8 @@ async function getOrganizationMembers(
       role,
       license_status,
       invited_email,
+      invited_first_name,
+      invited_last_name,
       invitation_token,
       invitation_expires_at,
       invited_by,
@@ -149,6 +151,8 @@ async function getImpersonationMembers(
       role,
       license_status,
       invited_email,
+      invited_first_name,
+      invited_last_name,
       invitation_token,
       invitation_expires_at,
       invited_by,
@@ -203,6 +207,13 @@ async function getImpersonationMembers(
   })) as OrganizationMember[];
 }
 
+/** BACKLOG-3851 PR-2f: the organization's name, for the prefilled "more licenses" support request. */
+async function getOrganizationName(organizationId: string): Promise<string | null> {
+  const supabase = await createClient();
+  const { data } = await supabase.from('organizations').select('name').eq('id', organizationId).maybeSingle();
+  return data?.name ?? null;
+}
+
 export default async function UsersPage() {
   const impersonation = await getImpersonationSession();
 
@@ -250,6 +261,7 @@ export default async function UsersPage() {
   }
 
   const members = await getOrganizationMembers(access.organizationId);
+  const organizationName = await getOrganizationName(access.organizationId);
 
   return (
     <div className="max-w-7xl mx-auto space-y-6 max-md:space-y-3 max-md:[&>:nth-child(2)]:!mt-0">
@@ -268,6 +280,7 @@ export default async function UsersPage() {
         currentUserId={access.userId}
         currentUserRole={access.role}
         organizationId={access.organizationId}
+        organizationName={organizationName}
       />
     </div>
   );

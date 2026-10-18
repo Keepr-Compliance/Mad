@@ -20,6 +20,8 @@ interface ReactivateUserModalProps {
   memberId: string;
   memberName: string;
   callerRole: string;
+  /** BACKLOG-3851 PR-2f: for the prefilled "more licenses" support request. */
+  organizationName?: string | null;
 }
 
 export default function ReactivateUserModal({
@@ -28,6 +30,7 @@ export default function ReactivateUserModal({
   memberId,
   memberName,
   callerRole,
+  organizationName,
 }: ReactivateUserModalProps) {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -72,7 +75,7 @@ export default function ReactivateUserModal({
         portal and Keepr again.
       </p>
 
-      {outOfSeats && <OutOfLicensesNotice callerRole={callerRole} />}
+      {outOfSeats && <OutOfLicensesNotice callerRole={callerRole} organizationName={organizationName} />}
 
       {error && (
         <p className="text-sm text-red-600 mt-4" role="alert">

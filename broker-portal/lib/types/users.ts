@@ -83,6 +83,9 @@ export interface OrganizationMember {
   license_status: MemberLicenseStatus;
   // Invitation fields
   invited_email: string | null;
+  /** BACKLOG-3851 PR-2f (S1): optional names typed on the invite (M4a). */
+  invited_first_name?: string | null;
+  invited_last_name?: string | null;
   invitation_token: string | null;
   invitation_expires_at: string | null;
   invited_by: string | null;
@@ -199,6 +202,21 @@ export const LICENSE_STATUS_LABELS: Record<MemberLicenseStatus, string> = {
   expired: 'Expired',
   unassigned: 'No license',
 };
+
+/** BACKLOG-3851 PR-2f: an unclaimed invitation without a license. */
+export const INVITED_NO_LICENSE_LABEL = 'Invited (no license)';
+
+/**
+ * The status label for a member row — ONE rule for the table row, the card and the
+ * detail page. An unclaimed row is an invitation: 'Invited', or 'Invited (no license)'
+ * when it was sent without one. A claimed row shows its licence status.
+ */
+export function memberStatusLabel(member: Pick<OrganizationMember, 'user_id' | 'license_status'>): string {
+  if (!member.user_id) {
+    return member.license_status === 'unassigned' ? INVITED_NO_LICENSE_LABEL : 'Invited';
+  }
+  return LICENSE_STATUS_LABELS[member.license_status];
+}
 
 /**
  * Human-readable provisioning source labels

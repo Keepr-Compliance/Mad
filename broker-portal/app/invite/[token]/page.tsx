@@ -14,6 +14,7 @@ import { useParams } from 'next/navigation';
 import { Spinner } from '@keepr/design-system';
 import { Wordmark } from '@keepr/ui';
 import { AlertCircle, Loader2 } from 'lucide-react';
+import { UNLICENSED_INVITE_LINE } from '@/lib/invite/validateResult';
 
 interface InviteInfo {
   valid: boolean;
@@ -21,6 +22,9 @@ interface InviteInfo {
   orgName?: string;
   role?: string;
   error?: string;
+  /** BACKLOG-3851 PR-2f: false for an invitation without a license. */
+  licensed?: boolean;
+  firstName?: string | null;
 }
 
 export default function InviteAcceptPage() {
@@ -115,6 +119,7 @@ export default function InviteAcceptPage() {
           <h1 className="text-3xl font-bold text-gray-900"><Wordmark /></h1>
           <h2 className="mt-2 text-xl text-gray-600">You&apos;re Invited</h2>
           <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200 p-6 space-y-2">
+            {invite.firstName && <p className="text-gray-700">Hi {invite.firstName},</p>}
             <p className="text-gray-700">
               You&apos;ve been invited to join <span className="font-semibold">{invite.orgName}</span>
             </p>
@@ -124,6 +129,9 @@ export default function InviteAcceptPage() {
             <p className="text-sm text-gray-500">
               for <span className="font-medium text-gray-700">{invite.email}</span>
             </p>
+            {invite.licensed === false && (
+              <p data-testid="invite-unlicensed" className="text-sm text-gray-700">{UNLICENSED_INVITE_LINE}</p>
+            )}
           </div>
         </div>
 
