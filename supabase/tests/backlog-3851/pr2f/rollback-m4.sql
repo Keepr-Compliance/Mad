@@ -9,6 +9,9 @@
 -- would be stranded. Revoke those invitations first.
 -- The name columns stay (rollback-m4a.sql removes them, after this file).
 -- Order: rollback-m4 -> rollback-m4a; and rollback-m4 -> rollback-3684-b -> rollback-3684-a.
+-- Before running: turn NEXT_PUBLIC_INVITE_WITHOUT_LICENSE_ENABLED off on the portal. After
+-- this rollback the guard refuses unlicensed inserts, and the portal would show "not
+-- available yet" while the switch is still on.
 -- Run in one transaction (BEGIN; \i rollback-m4.sql; COMMIT;).
 
 DO $pre$

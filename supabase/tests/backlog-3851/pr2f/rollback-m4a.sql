@@ -2,6 +2,10 @@
 -- Drops organization_members.invited_first_name / invited_last_name and their CHECKs.
 -- REFUSES while M4 is in force (its functions read the columns; run rollback-m4.sql first)
 -- or while any row carries an invited name (the names would be lost).
+-- Valid only BEFORE the PR-2f portal release ships (or together with a portal rollback):
+-- once that portal is live it selects and inserts these columns, so removing them makes the
+-- Users page, every invite and every resend fail. Its own guard also refuses once any
+-- invitation carries a name.
 -- Run in one transaction (BEGIN; \i rollback-m4a.sql; COMMIT;).
 
 DO $pre$

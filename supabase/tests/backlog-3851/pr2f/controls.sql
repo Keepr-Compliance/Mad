@@ -210,6 +210,17 @@ BEGIN
                                              ELSE 'FAIL templates=' || n || ' items=' || n2 || ' updated=' || s || ' own_personal_visible=' || n3 END);
   EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; r := r || jsonb_build_object('C21', 'FAIL ' || SQLSTATE || ' ' || left(SQLERRM, 120)); END;
 
+  -- SR probe X1: an unclaimed row whose status is neither 'pending' nor 'unassigned'
+  -- (CHECK allows suspended/expired) must not be accepted.
+  BEGIN
+    INSERT INTO organization_members (organization_id, invited_email, role, license_status, invitation_token, invitation_expires_at, invited_by, invited_at, provisioned_by)
+    VALUES (o_free, 'p2fc-u4@example.test', 'agent', 'suspended', 'p2fc-tok-sx', now() + interval '7 days', ub, now(), 'invite');
+    PERFORM pg_temp.as_user(u4, 'p2fc-u4@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
+    v := public.accept_invitation('p2fc-tok-sx');
+    EXECUTE 'RESET ROLE';
+    r := r || jsonb_build_object('X1_suspended_invite_refused', CASE WHEN v->>'error' = 'invalid_invite' THEN 'PASS' ELSE 'FAIL ' || v::text || ' row=' || coalesce(pg_temp.row_of(o_free, 'p2fc-u4@example.test'), 'none') END);
+  EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; r := r || jsonb_build_object('X1_suspended_invite_refused', 'FAIL ' || SQLSTATE || ' ' || left(SQLERRM, 80)); END;
+
   -- Bodies that actually ran (compare with body_md5.py on the file or mutant that was composed).
   r := r || jsonb_build_object('md5',
     (SELECT string_agg(p.proname || '=' || left(md5(p.prosrc), 8), ' ' ORDER BY p.proname) FROM pg_proc p

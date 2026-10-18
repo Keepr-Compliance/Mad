@@ -10,6 +10,12 @@
 -- a license exists. Re-granting claim_pending_invite (no status filter, sets 'active') under
 -- M4 would let an unlicensed invitee take a seat. Order: rollback-m4 -> this file -> rollback-3684-a.
 
+--
+-- RUN IN ONE TRANSACTION: `psql --single-transaction -v ON_ERROR_STOP=1 -f rollback-3684-b.sql`,
+-- or paste the whole file as ONE execute_sql call. The refusal below is a separate DO
+-- statement: under a plain `psql -f` it raises and the statements after it still run
+-- (the auto_provision body and the EXECUTE permission on claim_pending_invite).
+
 DO $m4$
 DECLARE
   v_n integer;

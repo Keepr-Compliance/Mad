@@ -21,7 +21,9 @@ diff count, and every controls run prints the md5 of the four bodies that actual
 
 ## Results (2026-10-18, keepr-test ledger head 20261016200000 before apply)
 
-Base (M4a + M4 + controls): C1, C2, C3, C4, C5, C6a, C6b, C21, F4 x2, N1, N2, G x2 = PASS (15/15);
+Base (live bodies, controls.sql incl. X1): every check PASS (15 PASS values plus the recorded Sc line);
+X1 = an unclaimed invitation with status neither 'pending' nor 'unassigned' ('suspended') is refused invalid_invite.
+X1 mutant (status line removed from the accept_invitation lookup, body md5 3c8e3606): only X1 red.
 `Sc_expired_pending_insert` = "admitted; resend refused P0001" (SR S-c: known behaviour).
 
 | Mutant (exact-once, line diff) | Reds |
