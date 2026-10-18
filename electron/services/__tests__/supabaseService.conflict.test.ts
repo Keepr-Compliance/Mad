@@ -60,6 +60,7 @@ describe("SupabaseService - Conflict Resolution", () => {
     delete: jest.fn().mockReturnThis(),
     upsert: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
+    or: jest.fn().mockReturnThis(),
     gte: jest.fn().mockReturnThis(),
     lte: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
@@ -126,6 +127,9 @@ describe("SupabaseService - Conflict Resolution", () => {
       const updateQuery1 = createQueryMock(updatedUserA);
       mockSupabaseClient.from
         .mockReturnValueOnce(findQuery1)
+        // BACKLOG-3991: fill-blank-only first_name / last_name updates
+        .mockReturnValueOnce(createQueryMock(null))
+        .mockReturnValueOnce(createQueryMock(null))
         .mockReturnValueOnce(updateQuery1);
       mockSupabaseClient.rpc.mockResolvedValue({ data: null, error: null });
 
@@ -137,6 +141,9 @@ describe("SupabaseService - Conflict Resolution", () => {
       const updateQuery2 = createQueryMock(updatedUserB);
       mockSupabaseClient.from
         .mockReturnValueOnce(findQuery2)
+        // BACKLOG-3991: fill-blank-only first_name / last_name updates
+        .mockReturnValueOnce(createQueryMock(null))
+        .mockReturnValueOnce(createQueryMock(null))
         .mockReturnValueOnce(updateQuery2);
 
       const result2 = await supabaseService.syncUser({
@@ -488,6 +495,8 @@ describe("SupabaseService - Conflict Resolution", () => {
 
       mockSupabaseClient.from
         .mockReturnValueOnce(findQuery)
+        // BACKLOG-3991: fill-blank-only first_name update (no last_name sent, so none for it)
+        .mockReturnValueOnce(createQueryMock(null))
         .mockReturnValueOnce(updateQuery);
 
       // RPC for incrementing login count

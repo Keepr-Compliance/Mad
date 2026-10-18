@@ -207,3 +207,4 @@ describe("BACKLOG-3991 syncUser fills blank names only", () => {
     mockSupabaseClient.from.mockImplementation(() => makeBuilder());
   });
 });
+export {};
