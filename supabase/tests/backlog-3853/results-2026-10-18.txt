@@ -1,0 +1,46 @@
+BACKLOG-3853 PR-1 DB controls, keepr-test (xiaobikzagpyubjcrcpb), M1 20261018230000 applied
+(ledger md5(statements) 2fb04bf3d9fde3658fb200d97b43056c = file). One call, 26 modes, each in its
+own subtransaction, whole call ended in RAISE (rolled back). Composed: compose.py <modes> --placeholders placeholders.json
+
+base: 47 checks, 47 PASS, 0 FAIL
+
+mode                          mutation (md5 before->after)                         reds
+no_unlock_gate                unlock_transaction b312f686->c0d7fb13                A3
+writer_split                  _billing_save_deal 4471a965->9911f424                A1
+writer_skips_signal           _billing_apply_org_entitlement 5608d9e3->8f4582bf    CS2
+purchase_any_org              billing_purchase_blocked 37caa1b3->fe223a66          C11
+no_finalize_gate              finalize_submission 6b2896ac->173941cd               A5
+no_insert_clause              agents_can_create_submissions.check f6ae9fb2->174667e5  A4a, Q7_keeps_own (extra row)
+sr_mutant_b_submitter_check   update_public.check 9f56c6cf->cf8c8884               A4b, A5 (already_final side effect)
+no_storage_clause             storage upload.check 000b9376->d1d5a426 (= pre-M1)   CG2s
+no_crs_gate                   can_review_submission d8f86fd1->bd63dbb2             A6, CG3r
+no_reviewer_clause            update_public qual 030ef0a2->d78b7f69 + check 9f56c6cf->b65fc913  A7b (rows=2)
+v2_self_carveout (SR P1)      update_public qual 030ef0a2->8f218a2c + check 9f56c6cf->4375d556  A7self (rows=1)
+no_comment_clause             users_can_create_comments.check 622e6086->5654bfea   Q7_member_comment
+sr_mutant_a_no_insert_branch  member trigger cbbb7229->a1b3f385                    A9s only (A9 stays green: R13 confirmed)
+trigger_no_claim_branch       member trigger cbbb7229->81d8312d                    Xu2 only
+trigger_no_resend_branch      member trigger cbbb7229->f904b3cb                    CG5r only
+trigger_no_claim_and_resend   member trigger cbbb7229->529f50e4                    Xu, Xu2, CG5r
+trigger_inert                 member trigger cbbb7229->f43992e5                    A8, A9, A9s, A10b, CG5r, Xu, Xu2, Xp
+seats_no_gate                 _billing_change_seats aa54324c->6de29cba             C_seats
+paid_lifts_any                _billing_auto_reinstate a6f4f1c2->24e5c9b3           A12
+paid_ignores_stripe           _billing_auto_reinstate a6f4f1c2->2b542492           C12db, A11
+reinstate_drops_prior         _billing_apply_org_entitlement 5608d9e3->3b272901    C7
+r4_no_status_check            _billing_suspend_org 493a5805->599a2986              C13_R4
+r14_guard_on_suspend_only     _billing_save_deal 4471a965->0ed634d5                C13_save_live (+2 downstream)
+r14_suspend_unguarded         _billing_suspend_org 493a5805->cbf2601c              C13_suspend_live
+admin_rpc_no_permission       admin_suspend_org 7e29986a->b394284f                 C13_suspend_needs_billing_suspend
+
+Notes:
+- Xu (accept_invitation on an 'unassigned' invite) is caught by two trigger branches (claim, and the
+  Resend branch because accept nulls the token); Xu2 (claim with no token change) isolates the claim branch.
+- First run (same day): C11 failed because the deactivate producer (_ensure_personal_organization_for)
+  needs a desktop licence row; CG3r was vacuous because transaction_checklists was off. Both fixtures fixed.
+
+Rollback control (one call, rolled back by the closing RAISE):
+- with one org_deals row inserted, the rollback pre-check refuses ("1 org_deals row(s) exist").
+- with none: md5(pg_get_functiondef) back to de52ee2e / 1f6f8a17 / 9e6fc264; policy md5 (qual/with_check)
+  back to the pre-M1 values (agents_can_create_submissions -/253296e0, update_public 477b9ae4/eb7c88e7,
+  users_can_create_comments -/2f869c09, storage upload -/d1d5a426); 0 functions, 0 tables, 0 trigger,
+  0 billing.* / account_suspended keys left.
+After both calls: M1 still in force (unlock_transaction b312f686, trigger present), 0 P3853 orgs / users, 0 org_deals.

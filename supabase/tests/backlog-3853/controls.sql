@@ -104,6 +104,11 @@ BEGIN
       $q$     OR (OLD.user_id IS NULL AND NEW.license_status IN ('pending', 'unassigned')
          AND (NEW.invitation_token IS DISTINCT FROM OLD.invitation_token
               OR NEW.invitation_expires_at IS DISTINCT FROM OLD.invitation_expires_at))$q$, '');
+    WHEN 'trigger_no_claim_and_resend' THEN RETURN pg_temp.mut_fn('public._billing_guard_member_while_suspended()',
+      $q$     OR (OLD.user_id IS NULL AND NEW.user_id IS NOT NULL)
+     OR (OLD.user_id IS NULL AND NEW.license_status IN ('pending', 'unassigned')
+         AND (NEW.invitation_token IS DISTINCT FROM OLD.invitation_token
+              OR NEW.invitation_expires_at IS DISTINCT FROM OLD.invitation_expires_at))$q$, '');
     WHEN 'trigger_inert' THEN RETURN pg_temp.mut_fn('public._billing_guard_member_while_suspended()',
       $q$IF NOT EXISTS (SELECT 1 FROM public.org_deals d$q$, $q$IF true OR NOT EXISTS (SELECT 1 FROM public.org_deals d$q$);
     WHEN 'seats_no_gate' THEN RETURN pg_temp.mut_fn('public._billing_change_seats(uuid,integer,uuid)',
@@ -166,7 +171,7 @@ BEGIN
     INSERT INTO public.organization_plans (organization_id, plan_id)
     SELECT x, v_team FROM unnest(ARRAY[o_b, o_l, o_l2, o_c, o_n]) x;
     -- a support grant present before billing takes the key (C-7 prior restore)
-    UPDATE public.organization_plans SET feature_overrides = '{"broker_submission":{"enabled":true,"source":"support"}}'::jsonb
+    UPDATE public.organization_plans SET feature_overrides = '{"broker_submission":{"enabled":true,"source":"support"},"transaction_checklists":{"enabled":true,"source":"support"}}'::jsonb
      WHERE organization_id = o_b;
 
     INSERT INTO public.organization_members (organization_id, user_id, role, license_status, joined_at, provisioned_by) VALUES
@@ -181,7 +186,9 @@ BEGIN
     INSERT INTO public.organization_members (organization_id, invited_email, role, license_status, invitation_token, invitation_expires_at, invited_by, invited_at, provisioned_by)
       VALUES (o_b, 'p3853-inu@example.test', 'agent', 'unassigned', 'p3853-tok-u', now() + interval '7 days', u_adm, now(), 'invite');
 
-    -- C-11 fixture from the real producer: deactivating ag3 moves them to a personal org (3851 M2 trigger)
+    -- C-11 fixture from the real producer: deactivating ag3 moves them to a personal org (3851 M2 trigger,
+    -- _ensure_personal_organization_for, which needs a desktop licence row first).
+    INSERT INTO public.licenses (user_id, license_key) VALUES (u_ag3, 'p3853-lic-' || u_ag3::text);
     UPDATE public.organization_members SET license_status = 'suspended' WHERE id = m_ag3;
 
     INSERT INTO public.transaction_submissions (organization_id, submitted_by, local_transaction_id, property_address, status)
@@ -218,7 +225,7 @@ BEGIN
       PERFORM public.set_submission_checklist_reviewer_check(v_item, true);
       EXECUTE 'RESET ROLE';
       r := r || jsonb_build_object('P0_checklist_review_rpc', 'PASS');
-    EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; r := r || jsonb_build_object('P0_checklist_review_rpc', 'RECORDED pre-suspension outcome ' || SQLSTATE || ' ' || left(SQLERRM, 60)); END;
+    EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; r := r || jsonb_build_object('P0_checklist_review_rpc', 'FAIL ' || SQLSTATE || ' ' || left(SQLERRM, 60)); END;
 
     BEGIN
       PERFORM pg_temp.as_user(u_agt, 'p3853-agt@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
@@ -371,14 +378,6 @@ BEGIN
     r := r || jsonb_build_object('A9s_insert_suspended_row_refused', CASE WHEN s = 'account_suspended' THEN 'PASS' ELSE 'FAIL ' || s END);
 
     BEGIN
-      PERFORM pg_temp.as_user(u_adm, 'p3853-adm@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
-      UPDATE public.organization_members SET invitation_token = 'p3853-tok-p2', invitation_expires_at = now() + interval '7 days' WHERE id = m_inp;
-      GET DIAGNOSTICS n = ROW_COUNT;
-      EXECUTE 'RESET ROLE'; s := 'rows=' || n;
-    EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; s := SQLERRM; END;
-    r := r || jsonb_build_object('CG5r_resend_refused', CASE WHEN s = 'account_suspended' THEN 'PASS' ELSE 'FAIL ' || s END);
-
-    BEGIN
       PERFORM pg_temp.as_user(u_inu, 'p3853-inu@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
       v := public.accept_invitation('p3853-tok-u');
       EXECUTE 'RESET ROLE'; s := v::text;
@@ -391,6 +390,21 @@ BEGIN
       EXECUTE 'RESET ROLE'; s := v::text;
     EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; s := SQLERRM; END;
     r := r || jsonb_build_object('Xp_pending_invite_accept_refused_Q8', CASE WHEN s = 'account_suspended' THEN 'PASS' ELSE 'FAIL ' || left(s, 120) END);
+
+    -- claim with no token or expiry change (isolates the claim branch from the Resend branch)
+    BEGIN
+      UPDATE public.organization_members SET user_id = u_inu WHERE organization_id = o_b AND invited_email = 'p3853-inu@example.test';
+      s := 'claimed';
+    EXCEPTION WHEN OTHERS THEN s := SQLERRM; END;
+    r := r || jsonb_build_object('Xu2_unassigned_claim_without_token_change_refused', CASE WHEN s = 'account_suspended' THEN 'PASS' ELSE 'FAIL ' || s END);
+
+    BEGIN
+      PERFORM pg_temp.as_user(u_adm, 'p3853-adm@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
+      UPDATE public.organization_members SET invitation_token = 'p3853-tok-p2', invitation_expires_at = now() + interval '7 days' WHERE id = m_inp;
+      GET DIAGNOSTICS n = ROW_COUNT;
+      EXECUTE 'RESET ROLE'; s := 'rows=' || n;
+    EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; s := SQLERRM; END;
+    r := r || jsonb_build_object('CG5r_resend_refused', CASE WHEN s = 'account_suspended' THEN 'PASS' ELSE 'FAIL ' || s END);
 
     BEGIN
       UPDATE public.organization_members SET license_status = 'suspended' WHERE id = m_agt; s := 'ok';
@@ -428,7 +442,9 @@ BEGIN
 
     INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status) VALUES (o_c, 'test', 3, 'canceled');
     PERFORM pg_temp.as_user(u_staff, 'p3853-staff@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
-    v := public.admin_suspend_org(o_c, 'non_payment', 'p3853');
+    BEGIN
+      v := public.admin_suspend_org(o_c, 'non_payment', 'p3853');
+    EXCEPTION WHEN OTHERS THEN v := jsonb_build_object('raised', SQLSTATE || ' ' || left(SQLERRM, 60)); END;
     f := public.admin_suspend_org(o_n, 'non_payment', 'p3853');
     EXECUTE 'RESET ROLE';
     r := r || jsonb_build_object('C13_R4_needs_active_deal', CASE WHEN v->>'error' = 'deal_not_active' AND f->>'error' = 'no_deal' THEN 'PASS' ELSE 'FAIL ' || v::text || ' ' || f::text END);
@@ -513,7 +529,8 @@ BEGIN
           'mutation', v_r->'mutation',
           'pass', (SELECT count(*) FROM jsonb_each_text(v_r->'checks') e WHERE e.value = 'PASS'),
           'fail', (SELECT count(*) FROM jsonb_each_text(v_r->'checks') e WHERE e.value <> 'PASS' AND e.value NOT LIKE 'RECORDED%'),
-          'reds', (SELECT coalesce(jsonb_object_agg(e.key, e.value), '{}'::jsonb) FROM jsonb_each_text(v_r->'checks') e WHERE e.value <> 'PASS'))
+          'reds', CASE WHEN v_m = 'base' THEN (SELECT coalesce(jsonb_object_agg(e.key, e.value), '{}'::jsonb) FROM jsonb_each_text(v_r->'checks') e WHERE e.value <> 'PASS')
+                       ELSE (SELECT coalesce(jsonb_agg(e.key || CASE WHEN e.value LIKE 'FAIL ERR%' OR length(e.value) < 40 THEN ':' || e.value ELSE '' END ORDER BY e.key), '[]'::jsonb) FROM jsonb_each_text(v_r->'checks') e WHERE e.value <> 'PASS') END)
           || CASE WHEN v_m = 'base' THEN jsonb_build_object('checks', v_r->'checks') ELSE '{}'::jsonb END);
       ELSE
         v_res := v_res || jsonb_build_object(v_m, 'ERROR ' || SQLSTATE || ' ' || left(SQLERRM, 200));
