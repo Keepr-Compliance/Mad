@@ -33,7 +33,7 @@ export function blankNameFill(stored: ProfileNames | null | undefined, idp: Prof
   for (const key of NAME_KEYS) {
     const storedValue = stored?.[key];
     const idpValue = idp[key];
-    if ((storedValue == null || storedValue.trim() === '') && idpValue) {
+    if ((storedValue === null || storedValue === undefined || storedValue.trim() === '') && idpValue) {
       fill[key] = idpValue;
     }
   }
