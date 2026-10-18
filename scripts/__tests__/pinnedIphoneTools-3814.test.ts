@@ -4,6 +4,8 @@
  * The committed folder must match the manifest exactly (no mismatch, no missing file, no
  * extra file); electron-builder must not copy the folder (its Windows extraResources copy
  * signs every .exe/.dll, which changes the bytes); afterPack must place and re-verify it.
+ * BACKLOG-3689: the committed folder is checked with verifyRepo (all 45 + README.md); a
+ * packaged folder with verifyDir (the 11 files every build ships).
  */
 import { spawnSync } from "child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
@@ -23,6 +25,7 @@ interface Manifest {
   packagedDir: string;
   companions: string[];
   files: Record<string, string>;
+  store: { files: string[] };
 }
 
 const manifest: Manifest = pinned.loadManifest();
@@ -56,7 +59,7 @@ function certTableSize(file: string): number {
 describe("BACKLOG-3814 pinned iPhone tools", () => {
   describe("the committed folder", () => {
     it("matches the manifest exactly", () => {
-      expect(pinned.verifyDir(TOOLS, manifest)).toEqual([]);
+      expect(pinned.verifyRepo(TOOLS, manifest)).toEqual([]);
     });
 
     it("pins all 45 tool files, each one already signed", () => {
@@ -75,14 +78,14 @@ describe("BACKLOG-3814 pinned iPhone tools", () => {
     });
   });
 
-  describe("verifyDir goes red", () => {
+  describe("verifyRepo goes red", () => {
     it("on a changed byte (what a re-sign does)", () => {
       const d = copyOfTools();
       const f = path.join(d, "ideviceinfo.exe");
       const b = readFileSync(f);
       b[b.length - 1] ^= 0xff;
       writeFileSync(f, b);
-      expect(pinned.verifyDir(d, manifest)).toEqual([
+      expect(pinned.verifyRepo(d, manifest)).toEqual([
         expect.stringMatching(/^sha256 mismatch: ideviceinfo\.exe is [0-9a-f]{64}, manifest pins /),
       ]);
     });
@@ -90,19 +93,19 @@ describe("BACKLOG-3814 pinned iPhone tools", () => {
     it("on a missing pinned file", () => {
       const d = copyOfTools();
       rmSync(path.join(d, "plist.dll"));
-      expect(pinned.verifyDir(d, manifest)).toEqual(["missing pinned file: plist.dll"]);
+      expect(pinned.verifyRepo(d, manifest)).toEqual(["missing pinned file: plist.dll"]);
     });
 
     it("on an extra file", () => {
       const d = copyOfTools();
       writeFileSync(path.join(d, "iproxy.exe"), "MZ");
-      expect(pinned.verifyDir(d, manifest)).toEqual(["extra file not in manifest: iproxy.exe"]);
+      expect(pinned.verifyRepo(d, manifest)).toEqual(["extra file not in manifest: iproxy.exe"]);
     });
 
     it("on a renamed file (missing AND extra)", () => {
       const d = copyOfTools();
       renameSync(path.join(d, "idevice_id.exe"), path.join(d, "idevice_id.old.exe"));
-      expect(pinned.verifyDir(d, manifest)).toEqual([
+      expect(pinned.verifyRepo(d, manifest)).toEqual([
         "extra file not in manifest: idevice_id.old.exe",
         "missing pinned file: idevice_id.exe",
       ]);
@@ -111,23 +114,24 @@ describe("BACKLOG-3814 pinned iPhone tools", () => {
     it("on a subfolder", () => {
       const d = copyOfTools();
       mkdirSync(path.join(d, "nested"));
-      expect(pinned.verifyDir(d, manifest)).toEqual(["not a regular file: nested"]);
+      expect(pinned.verifyRepo(d, manifest)).toEqual(["not a regular file: nested"]);
     });
 
     it("on a missing companion", () => {
       const d = copyOfTools();
       rmSync(path.join(d, "README.md"));
-      expect(pinned.verifyDir(d, manifest)).toEqual(["missing companion file: README.md"]);
+      expect(pinned.verifyRepo(d, manifest)).toEqual(["missing companion file: README.md"]);
     });
 
     it("on a folder that does not exist", () => {
-      const problems = pinned.verifyDir(path.join(tmp(), "absent"), manifest);
+      const problems = pinned.verifyRepo(path.join(tmp(), "absent"), manifest);
       expect(problems).toHaveLength(1);
       expect(problems[0]).toMatch(/^folder not readable: .*ENOENT/);
     });
 
     it("CLI exits 1 and names the problem", () => {
       const d = copyOfTools();
+      // --dir checks the shipped set, so the full repo copy also reports its 35 unused files.
       writeFileSync(path.join(d, "extra.dll"), "");
       const r = spawnSync(process.execPath, [SCRIPT, "--dir", d], { encoding: "utf8" });
       expect(r.status).toBe(1);
@@ -150,7 +154,7 @@ describe("BACKLOG-3814 pinned iPhone tools", () => {
       const dest = pinned.placePinnedTools(resources, { manifest, log: quiet });
       expect(dest).toBe(path.join(resources, "win", "libimobiledevice"));
       expect(pinned.verifyDir(dest, manifest)).toEqual([]);
-      expect(readdirSync(dest).sort()).toEqual([...Object.keys(manifest.files), ...manifest.companions].sort());
+      expect(readdirSync(dest).sort()).toEqual([...manifest.store.files].sort());
     });
 
     it("refuses when electron-builder already copied the folder (exclusion lost)", () => {
@@ -175,10 +179,10 @@ describe("BACKLOG-3814 pinned iPhone tools", () => {
       const resources = tmp();
       const copyFile = (from: string, to: string) => {
         copyFileSync(from, to);
-        if (path.basename(to) === "libusb-1.0.dll") writeFileSync(to, "corrupted in transit");
+        if (path.basename(to) === "plist.dll") writeFileSync(to, "corrupted in transit");
       };
       expect(() => pinned.placePinnedTools(resources, { manifest, log: quiet, copyFile })).toThrow(
-        /packaged .*\n  sha256 mismatch: libusb-1\.0\.dll/
+        /packaged .*\n  sha256 mismatch: plist\.dll/
       );
     });
 
@@ -246,7 +250,7 @@ describe("BACKLOG-3814 pinned iPhone tools", () => {
       `;
       const r = spawnSync(process.execPath, ["-e", harness], { encoding: "utf8", env: { ...process.env, CI: "" } });
       expect(r.stderr).toBe("");
-      expect(r.stdout).toContain("Placed 45 pinned iPhone tool files");
+      expect(r.stdout).toContain("Placed 11 pinned iPhone tool files");
       expect(r.stdout).toContain("FLIPS=1");
       expect(r.status).toBe(0);
       expect(pinned.verifyDir(path.join(appOutDir, "resources", "win", "libimobiledevice"), manifest)).toEqual([]);
