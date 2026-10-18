@@ -160,6 +160,12 @@ describe("BACKLOG-3991 syncUser fills blank names only", () => {
     expect(row).toMatchObject({ first_name: "Adminset", last_name: "Surname" });
   });
 
+  it("does not replace a NULL name with a whitespace-only provider value", async () => {
+    seed(null, null);
+    await service.syncUser({ ...signIn, first_name: "   ", last_name: "" });
+    expect(row).toMatchObject({ first_name: null, last_name: null });
+  });
+
   it("puts the blank test in the statement, with the filter proven on real PostgREST", async () => {
     seed("Adminset", "Surname");
     await service.syncUser(signIn);
