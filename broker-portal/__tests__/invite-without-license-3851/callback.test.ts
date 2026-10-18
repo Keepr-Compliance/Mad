@@ -25,12 +25,19 @@ const mockGetUser = jest.fn();
 const mockExchangeCodeForSession = jest.fn();
 const mockSignOut = jest.fn();
 const mockRpc = jest.fn();
+const mockUsersReadError = { current: false };
 
 jest.mock('@/lib/supabase/server', () => ({
   createClient: jest.fn(async () => ({
     auth: { exchangeCodeForSession: mockExchangeCodeForSession, getUser: mockGetUser, signOut: mockSignOut },
     rpc: mockRpc,
-    from: (table: string) => mockEmulator.from(table),
+    from: (table: string) =>
+      table === 'users' && mockUsersReadError.current
+        ? {
+            select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'fixture read error' } }) }) }),
+            upsert: (...args: unknown[]) => (mockEmulator.from('users') as any).upsert(...args), // eslint-disable-line @typescript-eslint/no-explicit-any
+          }
+        : mockEmulator.from(table),
   })),
 }));
 
@@ -73,6 +80,7 @@ const IDP = { full_name: 'Idp Full', given_name: 'Idp', family_name: 'Family' };
 beforeEach(() => {
   jest.clearAllMocks();
   mockEmulator.reset();
+  mockUsersReadError.current = false;
   mockSignOut.mockResolvedValue({ error: null });
 });
 
@@ -97,6 +105,16 @@ describe('C17: names fill blanks only', () => {
     storedUser({ display_name: null, first_name: null, last_name: null });
     const values = await acceptAndGetUpsert();
     expect(Object.keys(values).sort()).toEqual(['email', 'id', 'oauth_id', 'oauth_provider']);
+  });
+});
+
+describe('C17b: a failed read of the stored names writes no name fields', () => {
+  it('leaves stored names untouched (email/provider upsert only)', async () => {
+    signedIn(IDP);
+    storedUser({ display_name: 'ann', first_name: 'Ann', last_name: 'Lee' });
+    mockUsersReadError.current = true;
+    const values = await acceptAndGetUpsert();
+    expect(values).toEqual({ id: FIXTURE_USER_ID, email: EMAIL, oauth_provider: 'google', oauth_id: FIXTURE_USER_ID });
   });
 });
 

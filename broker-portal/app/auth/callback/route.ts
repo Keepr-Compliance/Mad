@@ -155,12 +155,15 @@ export async function GET(request: Request) {
         if (userEmail) {
           const provider = user.app_metadata?.provider || 'email';
           const oauthId = user.user_metadata?.provider_id || user.id;
-          const { data: storedNames } = await supabase
+          const { data: storedNames, error: storedNamesError } = await supabase
             .from('users')
             .select('display_name, first_name, last_name')
             .eq('id', user.id)
             .maybeSingle();
-          const nameFill = blankNameFill(storedNames, idpProfileNames(user.user_metadata));
+          // A failed read says nothing about what is stored: write no name fields.
+          const nameFill = storedNamesError
+            ? {}
+            : blankNameFill(storedNames, idpProfileNames(user.user_metadata));
           const { error: upsertError } = await supabase.from('users').upsert(
             {
               id: user.id,
