@@ -45,7 +45,7 @@ DECLARE
 BEGIN
   FOR r IN SELECT * FROM (VALUES
     ('public.guard_invite_acceptance()', '630480367fd00fbb23173e990ab6c494', '3219e9d919260b2c5ac537efb3a57581'),
-    ('public.accept_invitation(text,text)', '851f0b67ed7f31c99aecca5f557f60dc', 'b822b1a5f595b200b7363b47c40c266b'),
+    ('public.accept_invitation(text,text)', '851f0b67ed7f31c99aecca5f557f60dc', 'c418ef99a8b5a9c633f2a8054f436954'),
     ('public.caller_has_pending_invite()', '93d54ab5f4f1d9c81347dcb66a698cd2', '5fe92208a44700f75ab7553cf51df3aa'),
     ('public.public_validate_invitation_token(text)', '9501ad58da435df9c1ef142352ef267c', 'b5131a4dc978a10275b553123ea58e77')
   ) AS t(sig, old_md5, new_md5) LOOP
@@ -314,7 +314,11 @@ BEGIN
     UPDATE users
     SET first_name = COALESCE(NULLIF(btrim(first_name), ''), v_first),
         last_name = COALESCE(NULLIF(btrim(last_name), ''), v_last),
-        display_name = COALESCE(NULLIF(btrim(display_name), ''), NULLIF(concat_ws(' ', v_first, v_last), ''))
+        display_name = COALESCE(
+          NULLIF(btrim(display_name), ''),
+          NULLIF(concat_ws(' ', COALESCE(NULLIF(btrim(first_name), ''), v_first),
+                                COALESCE(NULLIF(btrim(last_name), ''), v_last)), '')
+        )
     WHERE id = v_user_id;
   END IF;
 
