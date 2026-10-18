@@ -50,11 +50,11 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('C6: OutOfLicensesNotice', () => {
-  it('admin: free a license or contact Keepr support (link to Support)', () => {
+  it('admin: free a license or contact Keepr support (PR-2f: a button that opens the support form)', () => {
     render(<OutOfLicensesNotice callerRole="admin" />);
     expect(screen.getByText("You're out of licenses")).toBeInTheDocument();
     expect(screen.getByText(ADMIN_TEXT)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'contact Keepr support' })).toHaveAttribute('href', '/dashboard/support');
+    expect(screen.getByRole('button', { name: 'contact Keepr support' })).toBeInTheDocument();
     expect(screen.queryByText(IT_ADMIN_TEXT)).toBeNull();
   });
 
@@ -63,6 +63,7 @@ describe('C6: OutOfLicensesNotice', () => {
     expect(screen.getByText("You're out of licenses")).toBeInTheDocument();
     expect(screen.getByText(IT_ADMIN_TEXT)).toBeInTheDocument();
     expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'contact Keepr support' })).toBeNull();
     expect(screen.queryByText(ADMIN_TEXT)).toBeNull();
   });
 });
