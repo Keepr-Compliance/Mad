@@ -23,6 +23,7 @@ import { PageHeader } from '@keepr/design-system';
 import { AlertBanner } from '@keepr/ui';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
 import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
+import { loadOrgHasFreeSeat } from '@/lib/users/seatAvailability';
 
 interface AccessCheckResult {
   allowed: true;
@@ -262,6 +263,9 @@ export default async function UsersPage() {
 
   const members = await getOrganizationMembers(access.organizationId);
   const organizationName = await getOrganizationName(access.organizationId);
+  // BACKLOG-3851 PR-2g: seat state for the Reactivate dialog, from the member
+  // rows already loaded above plus the organization's seat columns.
+  const orgHasFreeSeat = await loadOrgHasFreeSeat(await createClient(), access.organizationId, members);
 
   return (
     <div className="max-w-7xl mx-auto space-y-6 max-md:space-y-3 max-md:[&>:nth-child(2)]:!mt-0">
@@ -281,6 +285,7 @@ export default async function UsersPage() {
         currentUserRole={access.role}
         organizationId={access.organizationId}
         organizationName={organizationName}
+        orgHasFreeSeat={orgHasFreeSeat}
       />
     </div>
   );

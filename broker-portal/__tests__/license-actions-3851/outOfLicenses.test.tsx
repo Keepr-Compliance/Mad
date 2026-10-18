@@ -105,7 +105,7 @@ describe('C7: ReactivateUserModal', () => {
   it('seat_limit_reached -> notice in the modal, stays open, no refresh', async () => {
     mockSetMemberLicense.mockResolvedValue({ success: false, outOfSeats: true });
     const onClose = jest.fn();
-    render(<ReactivateUserModal isOpen onClose={onClose} memberId="m1" memberName="Ann" callerRole="admin" />);
+    render(<ReactivateUserModal isOpen onClose={onClose} memberId="m1" memberName="Ann" callerRole="admin" orgHasFreeSeat />);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Reactivate' }));
     });
@@ -118,7 +118,7 @@ describe('C7: ReactivateUserModal', () => {
   it('success -> refresh and close', async () => {
     mockSetMemberLicense.mockResolvedValue({ success: true, licenseStatus: 'active' });
     const onClose = jest.fn();
-    render(<ReactivateUserModal isOpen onClose={onClose} memberId="m1" memberName="Ann" callerRole="admin" />);
+    render(<ReactivateUserModal isOpen onClose={onClose} memberId="m1" memberName="Ann" callerRole="admin" orgHasFreeSeat={null} />);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Reactivate' }));
     });

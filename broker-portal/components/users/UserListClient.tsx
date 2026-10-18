@@ -47,6 +47,8 @@ interface UserListClientProps {
   organizationId: string;
   /** BACKLOG-3851 PR-2f: for the prefilled "more licenses" support request. */
   organizationName?: string | null;
+  /** BACKLOG-3851 PR-2g: the organization has a free licence (null = not known). */
+  orgHasFreeSeat?: boolean | null;
   readOnly?: boolean;
 }
 
@@ -56,6 +58,7 @@ export default function UserListClient({
   currentUserRole,
   organizationId,
   organizationName = null,
+  orgHasFreeSeat = null,
   readOnly = false,
 }: UserListClientProps) {
   const [searchQuery, setSearchQuery] = useState('');
@@ -413,6 +416,7 @@ export default function UserListClient({
           memberName={formatUserDisplayName(reactivateMember.user ?? null, reactivateMember.invited_email)}
           callerRole={currentUserRole}
           organizationName={organizationName}
+          orgHasFreeSeat={orgHasFreeSeat}
         />
       )}
       {unassignMember && (

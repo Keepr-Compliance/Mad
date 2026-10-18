@@ -14,6 +14,7 @@ import { ArrowLeft } from 'lucide-react';
 import UserDetailsCard, { type MemberDetailsData } from '@/components/users/UserDetailsCard';
 import type { Role } from '@/lib/types/users';
 import { getImpersonationSession } from '@/lib/impersonation';
+import { loadOrgHasFreeSeat } from '@/lib/users/seatAvailability';
 
 // ============================================================================
 // Types
@@ -30,6 +31,8 @@ interface UserDetailsResult {
   organizationId: string;
   /** BACKLOG-3851 PR-2f: for the prefilled "more licenses" support request. */
   organizationName: string | null;
+  /** BACKLOG-3851 PR-2g: seat state for the Reactivate dialog (null = not known). */
+  orgHasFreeSeat: boolean | null;
 }
 
 interface NotFoundResult {
@@ -139,6 +142,8 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
     .eq('id', currentMembership.organization_id)
     .maybeSingle();
 
+  const orgHasFreeSeat = await loadOrgHasFreeSeat(supabase, currentMembership.organization_id);
+
   return {
     member: {
       ...member,
@@ -149,6 +154,7 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
     currentUserRole: currentMembership.role as Role,
     organizationId: currentMembership.organization_id,
     organizationName: organization?.name ?? null,
+    orgHasFreeSeat,
   };
 }
 
@@ -247,6 +253,7 @@ export default async function UserDetailsPage({ params }: PageProps) {
         currentUserId={data.currentUserId}
         currentUserRole={data.currentUserRole}
         organizationName={data.organizationName}
+        orgHasFreeSeat={data.orgHasFreeSeat}
       />
     </div>
   );
