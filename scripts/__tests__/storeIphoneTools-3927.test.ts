@@ -2,9 +2,8 @@
  * BACKLOG-3927: the Microsoft Store build ships only the iPhone tools the app runs.
  *
  * resources/pinned/libimobiledevice.manifest.json lists every pinned file (`files`, the
- * website build's set, unchanged) and the Store subset (`store.files`). scripts/afterPack.js
- * selects the Store subset when electron-builder packages with
- * --config.extraMetadata.distributionChannel=store (release.yml's store run).
+ * committed repo folder) and the shipped subset (`store.files`). BACKLOG-3689: both the
+ * website and the Store build ship that subset; the repo folder keeps every file.
  *
  * The Store subset is not trusted as written: it must equal the tools the app spawns (the
  * getCommand("...") / getExecutablePath("...") call sites anywhere under electron/) plus every DLL they load, read from the real PE import and
@@ -115,6 +114,30 @@ describe("Store iPhone tools set (BACKLOG-3927)", () => {
     });
   });
 
+  describe("shipped set vs repo set (BACKLOG-3689)", () => {
+    it("both channels ship the same 11 files and no companions", () => {
+      expect(pinned.expectedFor(manifest, "website")).toEqual({ files: STORE_KEEP, companions: [] });
+      expect(pinned.expectedFor(manifest, "store")).toEqual({ files: STORE_KEEP, companions: [] });
+      expect(pinned.expectedFor(manifest)).toEqual(pinned.expectedFor(manifest, "store"));
+    });
+
+    it("the repo set stays every pinned file plus README.md (46, what the folder holds)", () => {
+      const repo = pinned.repoSet(manifest);
+      expect(repo.files).toHaveLength(45);
+      expect(repo.companions).toEqual(["README.md"]);
+      expect(sorted([...repo.files, ...repo.companions])).toEqual(sorted(readdirSync(TOOLS)));
+      expect(pinned.verifyRepo(TOOLS, manifest)).toEqual([]);
+    });
+
+    it("the website channel refuses libusb and driver files too", () => {
+      const d = folderWith([...STORE_KEEP, "libusb0.dll"]);
+      expect(pinned.verifyDir(d, manifest, "website")).toEqual([
+        "extra file not in manifest: libusb0.dll",
+        "forbidden in a website build: libusb0.dll",
+      ]);
+    });
+  });
+
   describe("verifyDir with channel store", () => {
     it("passes on exactly the keep-list", () => {
       expect(pinned.verifyDir(folderWith(STORE_KEEP), manifest, "store")).toEqual([]);
@@ -142,7 +165,7 @@ describe("Store iPhone tools set (BACKLOG-3927)", () => {
       expect(pinned.verifyDir(d, manifest, "store")).toEqual(["missing pinned file: usbmuxd.dll"]);
     });
 
-    it("goes red on the website set (README.md and the 34 unused files are extra)", () => {
+    it("goes red on the full repo folder (README.md and the 34 unused files are extra)", () => {
       const problems: string[] = pinned.verifyDir(TOOLS, manifest, "store");
       expect(problems).toHaveLength(35 + 2); // 35 extra + forbidden libusb0.dll and libusb-1.0.dll
       expect(problems).toContain("extra file not in manifest: README.md");
@@ -161,12 +184,10 @@ describe("Store iPhone tools set (BACKLOG-3927)", () => {
       expect(sorted(readdirSync(placed("store")))).toEqual(sorted(STORE_KEEP));
     });
 
-    it("website (default and explicit): every pinned file and companion, byte-identical to the repo", () => {
-      const all = sorted([...Object.keys(manifest.files), ...manifest.companions]);
-      expect(sorted(readdirSync(TOOLS))).toEqual(all);
+    it("website (default and explicit): exactly the keep-list, byte-identical to the repo", () => {
       for (const dest of [placed(), placed("website")]) {
-        expect(sorted(readdirSync(dest))).toEqual(all);
-        for (const f of all) expect(readFileSync(path.join(dest, f)).equals(readFileSync(path.join(TOOLS, f)))).toBe(true);
+        expect(sorted(readdirSync(dest))).toEqual(sorted(STORE_KEEP));
+        for (const f of STORE_KEEP) expect(readFileSync(path.join(dest, f)).equals(readFileSync(path.join(TOOLS, f)))).toBe(true);
       }
     });
 
@@ -220,10 +241,12 @@ describe("Store iPhone tools set (BACKLOG-3927)", () => {
       expect(sorted(readdirSync(toolsIn(r.appOutDir)))).toEqual(sorted(STORE_KEEP));
     });
 
-    it("an unmarked build places the full website set", () => {
+    it("an unmarked (website) build places the keep-list", () => {
       const r = runAfterPack({ extraMetadata: {} });
+      expect(r.stderr).toBe("");
       expect(r.status).toBe(0);
-      expect(r.stdout).toContain("Placed 45 pinned iPhone tool files (sha256-verified)");
+      expect(r.stdout).toContain("Placed 11 pinned iPhone tool files (sha256-verified)");
+      expect(sorted(readdirSync(toolsIn(r.appOutDir)))).toEqual(sorted(STORE_KEEP));
       expect(pinned.verifyDir(toolsIn(r.appOutDir), manifest)).toEqual([]);
     });
   });
@@ -238,14 +261,23 @@ describe("Store iPhone tools set (BACKLOG-3927)", () => {
       expect(r.stderr).toContain("forbidden in a Store build: libusb0.dll");
     });
 
-    it("--packaged with --channel website still checks the full set", () => {
+    it("--packaged with --channel website (and with no channel) checks the keep-list", () => {
       const app = tmp();
       const dest = path.join(app, "resources", "win", "libimobiledevice");
       mkdirSync(dest, { recursive: true });
       for (const f of STORE_KEEP) copyFileSync(path.join(TOOLS, f), path.join(dest, f));
+      expect(cli("--packaged", app, "--channel", "website").status).toBe(0);
+      expect(cli("--packaged", app).status).toBe(0);
+      rmSync(path.join(dest, "usbmuxd.dll"));
       const r = cli("--packaged", app, "--channel", "website");
       expect(r.status).toBe(1);
-      expect(r.stderr).toContain("missing pinned file: libusb0.dll");
+      expect(r.stderr).toContain("missing pinned file: usbmuxd.dll");
+    });
+
+    it("--repo checks the full repo folder and reports 45", () => {
+      const r = cli("--repo");
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("PINNED IPHONE TOOLS: OK — 45 files");
     });
 
     it("refuses an unknown channel and --repo with a channel", () => {
@@ -267,13 +299,22 @@ describe("Store iPhone tools set (BACKLOG-3927)", () => {
     });
   });
 
-  describe("the Store installer deletes what it does not ship (over a website install)", () => {
+  describe("both installers delete what no build ships (over an earlier install)", () => {
+    const nsh = readFileSync(path.join(REPO, "build", "installer.nsh"), "utf8");
+    const deleted = [...nsh.matchAll(/^\s*Delete "\$INSTDIR\\resources\\win\\libimobiledevice\\([^"]+)"\s*$/gm)].map((m) => m[1]);
+
     it("customInstall's Delete list is exactly (files + companions) - store.files", () => {
-      const nsh = readFileSync(path.join(REPO, "build", "installer.nsh"), "utf8");
-      const deleted = [...nsh.matchAll(/^\s*Delete "\$INSTDIR\\resources\\win\\libimobiledevice\\([^"]+)"\s*$/gm)].map((m) => m[1]);
       const expected = [...Object.keys(manifest.files), ...manifest.companions].filter((f) => !manifest.store.files.includes(f));
       expect(sorted(deleted)).toEqual(sorted(expected));
       expect(deleted.filter((f) => manifest.store.files.includes(f))).toEqual([]);
+    });
+
+    it("never names a file either channel ships (case-insensitive)", () => {
+      const del = new Set(deleted.map((f) => f.toLowerCase()));
+      for (const channel of ["website", "store"]) {
+        const { files, companions } = pinned.expectedFor(manifest, channel);
+        expect([...files, ...companions].filter((f: string) => del.has(f.toLowerCase()))).toEqual([]);
+      }
     });
   });
 });

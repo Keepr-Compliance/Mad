@@ -431,30 +431,38 @@
 !macroend
 
 ; ---------------------------------------------------------------------------
-; MICROSOFT STORE BUILD: NO APPLE DRIVER FOLDER (BACKLOG-3927)
-;
-; The Store package carries no resources\win\apple-drivers folder (release.yml
-; removes it before packaging; scripts/ci/check-packaged-drivers.mjs gates it).
-; A Store install over an earlier website install normally loses that folder
-; when the old uninstaller runs. When there is no old uninstaller to run, the
-; folder from the earlier install stays behind, so the Store installer removes
-; it itself.
-;
-; KEEPR_STORE_BUILD is defined ONLY by build/installer-store.nsh, which the
-; store run of release.yml selects with --config.nsis.include. The website build
-; includes this file directly, never sees the define, and so has no
-; customInstall macro at all: its installer is compiled exactly as before.
+; customInstall: FILES AN EARLIER INSTALL LEFT BEHIND (BACKLOG-3927, BACKLOG-3689)
 ;
 ; customInstall runs at installSection.nsh:81-82, after installApplicationFiles
-; (:66) has written the new files, so $INSTDIR is final and the only content in
-; this folder is stale.
+; (:66) has written the new files, so $INSTDIR is final and anything removed
+; here is stale.
+;
+; Normally there is nothing to remove: an upgrade runs the old uninstaller first
+; (installSection.nsh:52 uninstallOldVersion), which clears $INSTDIR. These
+; lines cover an install where no old uninstaller runs.
+;
+; BOTH BUILDS compile this macro. The website build includes this file directly
+; (package.json build.nsis.include); the Store build includes it through
+; build/installer-store.nsh, which defines KEEPR_STORE_BUILD first.
+;
+; 1. Store build only: no resources\win\apple-drivers folder. The Store package
+;    carries none (release.yml removes it before packaging;
+;    scripts/ci/check-packaged-drivers.mjs gates it). The website build still
+;    ships that folder, so the RMDir stays inside !ifdef KEEPR_STORE_BUILD.
+;    KEEPR_STORE_BUILD is defined ONLY by build/installer-store.nsh.
+;
+; 2. Both builds: the iPhone tool files no build ships any more. Exactly the
+;    pinned manifest's files and companions minus store.files, the set both
+;    builds ship (scripts/__tests__/storeIphoneTools-3927.test.ts checks the list
+;    and that no kept file is on it). One Delete per file, no wildcard.
+;
+; One macro only: a second customInstall inside the !ifdef would fail to compile
+; on the Store entry ("macro named customInstall already exists").
 ; ---------------------------------------------------------------------------
-!ifdef KEEPR_STORE_BUILD
 !macro customInstall
-  RMDir /r "$INSTDIR\resources\win\apple-drivers"
-  ; BACKLOG-3927: iPhone tool files the Store build does not ship, left behind when it
-  ; installs over a website build. Exactly the pinned manifest's files and companions
-  ; minus store.files (scripts/__tests__/storeIphoneTools-3927.test.ts).
+  !ifdef KEEPR_STORE_BUILD
+    RMDir /r "$INSTDIR\resources\win\apple-drivers"
+  !endif
   Delete "$INSTDIR\resources\win\libimobiledevice\bz2.dll"
   Delete "$INSTDIR\resources\win\libimobiledevice\iconv-2.dll"
   Delete "$INSTDIR\resources\win\libimobiledevice\ideviceactivation.dll"
@@ -491,4 +499,3 @@
   Delete "$INSTDIR\resources\win\libimobiledevice\zip.dll"
   Delete "$INSTDIR\resources\win\libimobiledevice\zlib1.dll"
 !macroend
-!endif

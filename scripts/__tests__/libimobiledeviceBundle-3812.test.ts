@@ -1,32 +1,26 @@
 /**
  * BACKLOG-3812: the iPhone tools folder ships what the app runs, and nothing it removed.
  *
- * The four tools the app spawns are read from the getCommand("...") call sites in
- * electron/services. Their DLL dependencies are read from the real PE import and
+ * The four tools the app spawns are read from the getCommand(...) / getExecutablePath(...)
+ * call sites anywhere under electron/ (either quote style; BACKLOG-3979 reuses the hardened
+ * scanner from helpers/peImports). Their DLL dependencies are read from the real PE import and
  * delay-import tables of the shipped binaries, followed recursively. Nothing here is a
  * hand-written dependency list, so a new import or a new spawned tool is seen.
  */
-import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
-import { peImports, SYSTEM_DLL } from "./helpers/peImports";
+import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "fs";
+import { peImports, spawnedTools as scanSpawnedTools, SYSTEM_DLL } from "./helpers/peImports";
 import os from "os";
 import path from "path";
 
 const REPO = path.resolve(__dirname, "..", "..");
 const TOOLS = path.join(REPO, "resources", "win", "libimobiledevice");
-const SERVICES = path.join(REPO, "electron", "services");
+const ELECTRON = path.join(REPO, "electron");
 
 /** Removed in BACKLOG-3812: nothing the app runs loads them. */
 const REMOVED = ["iproxy.exe", "usbmuxd.exe", "ideviceinstaller.exe", "ideviceactivation.exe", "readline.dll"];
 
-/** Tools the app spawns: every getCommand("name") in non-test electron/services sources. */
-function spawnedTools(): string[] {
-  const names = new Set<string>();
-  for (const f of readdirSync(SERVICES)) {
-    if (!f.endsWith(".ts") || f.endsWith(".test.ts")) continue;
-    for (const m of readFileSync(path.join(SERVICES, f), "utf8").matchAll(/getCommand\("([^"]+)"\)/g)) names.add(m[1]);
-  }
-  return [...names].sort();
-}
+/** Tools the app spawns, from the shared scanner (BACKLOG-3979). */
+const spawnedTools = (): string[] => scanSpawnedTools(ELECTRON);
 
 interface Report {
   closure: string[];

@@ -9,8 +9,12 @@
  * folder and scripts/afterPack.js calls placePinnedTools() instead. afterPack runs after
  * extraResources are copied and before signApp, which never walks resources/win.
  *
- * verifyDir() is the single rule used everywhere: the folder must hold exactly the
- * manifest's files plus its named companions, and every file's sha256 must match.
+ * Two sets, never mixed:
+ *   repoSet()          the committed folder: every manifest file plus its named companions
+ *                      (checked by verifyRepo(): --repo, and afterPack's source check).
+ *   expectedFor(ch)    what a packaged build ships (checked by verifyDir(): --packaged,
+ *                      --dir, and afterPack's destination check).
+ * Both require the folder to hold exactly the set, and every pinned file's sha256 to match.
  *
  * CLI (no dependencies, no secrets):
  *   node scripts/release/pinnedIphoneTools.js --repo
@@ -19,13 +23,14 @@
  *       checks the folder inside a packaged app
  *   node scripts/release/pinnedIphoneTools.js --dir <folder>
  *       checks an arbitrary folder
- *   Append `--channel store` to --packaged / --dir to check the Microsoft Store set instead.
+ *   Append `--channel store` to --packaged / --dir to check the Microsoft Store build.
  * Exit 0 = OK, 1 = any problem (each one printed).
  *
- * BACKLOG-3927: channels. "website" (the default everywhere) ships every manifest file plus
- * its companions, exactly as before. "store" ships only manifest.store.files (the tools the
- * app spawns and the DLLs they load), no companions, and never a libusb* library or a
- * .sys/.inf/.cat file.
+ * BACKLOG-3927: channels "website" (the default everywhere) and "store".
+ * BACKLOG-3689: both channels ship only manifest.store.files (the tools the app spawns and
+ * the DLLs they load), no companions, and never a libusb* library or a .sys/.inf/.cat file.
+ * The repo folder keeps every pinned file (repoSet), so the third-party notices check and
+ * the CI signature check of the committed binaries are unchanged.
  */
 "use strict";
 
@@ -58,14 +63,24 @@ function loadManifest(manifestPath = MANIFEST_PATH) {
 
 const CHANNELS = ["website", "store"];
 
-/** BACKLOG-3927: never in a Store build's tools folder (the exact-set check also catches these). */
+/**
+ * BACKLOG-3927: never in a shipped tools folder (the exact-set check also catches these).
+ * BACKLOG-3689: applies to both channels.
+ */
 const STORE_FORBIDDEN = [/^libusb/i, /\.(sys|inf|cat)$/i];
 
-/** The files a channel ships: { files: pinned names, companions: unpinned names }. */
+/** The committed folder's set: every pinned file plus its companions. Never what ships. */
+function repoSet(manifest) {
+  return { files: Object.keys(manifest.files), companions: [...(manifest.companions || [])] };
+}
+
+/**
+ * The files a channel ships: { files: pinned names, companions: unpinned names }.
+ * BACKLOG-3689: the same set for both channels; the channel is still validated.
+ */
 function expectedFor(manifest, channel = "website") {
   if (!CHANNELS.includes(channel)) throw new Error(`unknown channel: ${channel} (expected website or store)`);
-  if (channel === "store") return { files: [...manifest.store.files], companions: [] };
-  return { files: Object.keys(manifest.files), companions: [...(manifest.companions || [])] };
+  return { files: [...manifest.store.files], companions: [] };
 }
 
 /**
@@ -85,11 +100,11 @@ function sha256File(file) {
 }
 
 /**
- * Compare a folder with the manifest. Returns a list of problems; empty = OK.
+ * Compare a folder with an expected set. Returns a list of problems; empty = OK.
  * Names compare exactly (case-sensitive), so a renamed file is both missing and extra.
+ * `forbiddenIn` names the build in the forbidden-file message, or null to skip that rule.
  */
-function verifyDir(dir, manifest = loadManifest(), channel = "website") {
-  const expected = expectedFor(manifest, channel);
+function checkDir(dir, manifest, expected, forbiddenIn) {
   const pinnedSet = new Set(expected.files);
   const problems = [];
   let entries;
@@ -102,8 +117,8 @@ function verifyDir(dir, manifest = loadManifest(), channel = "website") {
   const present = new Set();
   for (const ent of entries) {
     present.add(ent.name);
-    if (channel === "store" && STORE_FORBIDDEN.some((re) => re.test(ent.name))) {
-      problems.push(`forbidden in a Store build: ${ent.name}`);
+    if (forbiddenIn && STORE_FORBIDDEN.some((re) => re.test(ent.name))) {
+      problems.push(`forbidden in a ${forbiddenIn} build: ${ent.name}`);
     }
     if (!ent.isFile()) {
       problems.push(`not a regular file: ${ent.name}`);
@@ -127,6 +142,17 @@ function verifyDir(dir, manifest = loadManifest(), channel = "website") {
   return problems.sort();
 }
 
+/** A packaged tools folder against what `channel` ships. */
+function verifyDir(dir, manifest = loadManifest(), channel = "website") {
+  const expected = expectedFor(manifest, channel);
+  return checkDir(dir, manifest, expected, channel === "store" ? "Store" : "website");
+}
+
+/** The committed folder (or afterPack's source) against the full pinned set. */
+function verifyRepo(dir, manifest = loadManifest()) {
+  return checkDir(dir, manifest, repoSet(manifest), null);
+}
+
 function fail(where, problems) {
   return new Error(`[pinned-iphone-tools] ${where}: ${problems.length} problem(s)\n  ${problems.join("\n  ")}`);
 }
@@ -138,11 +164,11 @@ function resourcesDirOf(appDir) {
 
 /**
  * afterPack step. `resourcesDir` is the packaged app's resources folder.
- * 1. The repo folder must match the manifest.
+ * 1. The source folder must hold the full pinned set (verifyRepo).
  * 2. The destination must NOT exist yet: if it does, electron-builder copied the folder
  *    itself, which means the package.json exclusion is gone and a signed build would have
  *    re-signed every file. Fails in unsigned builds too, so CI sees it without secrets.
- * 3. Copy, then check the destination against the manifest.
+ * 3. Copy the channel's set, then check the destination against it (verifyDir).
  */
 function placePinnedTools(
   resourcesDir,
@@ -151,7 +177,7 @@ function placePinnedTools(
   const expected = expectedFor(manifest, channel);
   const src = sourceDir || path.join(REPO, manifest.dir);
   // The source is always the full pinned folder; the channel only selects what is copied.
-  const srcProblems = verifyDir(src, manifest);
+  const srcProblems = verifyRepo(src, manifest);
   if (srcProblems.length) throw fail(`source ${src}`, srcProblems);
 
   const dest = path.join(resourcesDir, ...manifest.packagedDir.split("/"));
@@ -199,13 +225,13 @@ function main(argv) {
     console.error("--repo checks the full pinned folder; --channel applies to --packaged and --dir only");
     return 2;
   }
-  const problems = verifyDir(dir, manifest, channel);
+  const problems = flag === "--repo" ? verifyRepo(dir, manifest) : verifyDir(dir, manifest, channel);
   if (problems.length) {
     console.error(`::error::pinned iPhone tools differ from the manifest in ${dir}`);
     for (const p of problems) console.error(`  ${p}`);
     return 1;
   }
-  const n = expectedFor(manifest, channel).files.length;
+  const n = (flag === "--repo" ? repoSet(manifest) : expectedFor(manifest, channel)).files.length;
   console.log(`PINNED IPHONE TOOLS: OK — ${n} files match the manifest${channel === "store" ? " (Microsoft Store set)" : ""} in ${dir}`);
   return 0;
 }
@@ -215,8 +241,10 @@ module.exports = {
   CHANNELS,
   loadManifest,
   expectedFor,
+  repoSet,
   channelOf,
   verifyDir,
+  verifyRepo,
   placePinnedTools,
   resourcesDirOf,
   main,

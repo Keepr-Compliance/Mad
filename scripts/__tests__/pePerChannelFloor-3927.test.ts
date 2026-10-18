@@ -1,7 +1,7 @@
 /**
- * BACKLOG-3927: scripts/ci/check-pe-signatures.ps1 has a per-channel app-root floor.
- * website app floor 55 (59 measured), store app floor 21 (25 measured; the Store build
- * ships 34 fewer PE files in the iPhone tools folder).
+ * BACKLOG-3927 / BACKLOG-3689: scripts/ci/check-pe-signatures.ps1 app-root floor.
+ * Both channels now ship the same 11 iPhone tool files, so both app roots hold the same PE
+ * set (Store measured 25) and share one floor, 21. -Channel is still accepted.
  *
  * Runs the real script under pwsh with -HeaderOnly and a fake 7z that "unpacks" a synthetic
  * tree. -HeaderOnly always exits 1, so the assertion is on the floor error line, not the
@@ -60,12 +60,13 @@ describe("check-pe-signatures per-channel app floor (BACKLOG-3927)", () => {
   });
 
   (pwsh ? describe : describe.skip)("behaviour under pwsh", () => {
-    it("website (default) still requires 55: 54 fails, 55 passes the floor", () => {
-      expect(floorError(run(null, 54))).toBe("root 'app' has 54 PE files, floor is 55");
-      expect(floorError(run(null, 55))).toBeNull();
+    it("website (default): 21 passes, 20 fails with floor 21", () => {
+      expect(floorError(run(null, 21))).toBeNull();
+      expect(floorError(run(null, 20))).toBe("root 'app' has 20 PE files, floor is 21");
     });
     it("explicit website behaves as the default", () => {
-      expect(floorError(run("website", 25))).toBe("root 'app' has 25 PE files, floor is 55");
+      expect(floorError(run("website", 21))).toBeNull();
+      expect(floorError(run("website", 20))).toBe("root 'app' has 20 PE files, floor is 21");
     });
     it("store: 21 passes, 20 fails with floor 21", () => {
       expect(floorError(run("store", 21))).toBeNull();

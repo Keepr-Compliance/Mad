@@ -63,7 +63,7 @@
     "zlib1.dll": "039185c42fa73379adaad78bafff008011d61a22eab4b39b31f6dc3d69d03153"
   },
   "store": {
-    "$comment": "BACKLOG-3927. The Microsoft Store build ships only these files: the four tools the app spawns (getCommand call sites in electron/services) and every DLL they load, followed through the PE import and delay-import tables. No companions. Selected by distributionChannel \"store\" in scripts/afterPack.js; the website build ships every file above.",
+    "$comment": "BACKLOG-3927, BACKLOG-3689. Every build (website and Microsoft Store) ships only these files: the four tools the app spawns (getCommand / getExecutablePath call sites anywhere under electron/) and every DLL they load, followed through the PE import and delay-import tables. No companions. The repo folder keeps every file above; scripts/afterPack.js copies only this list.",
     "files": [
       "getopt.dll",
       "idevice_id.exe",
