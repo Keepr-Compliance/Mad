@@ -27,6 +27,21 @@ interface UserSyncData {
   subscription_tier?: SubscriptionTier;
 }
 
+/**
+ * BACKLOG-3991: the name columns sign-in may only fill when blank.
+ * `display_name` is deliberately not here (it is still refreshed every sign-in).
+ */
+export const SIGN_IN_FILL_BLANK_NAME_COLUMNS = ["first_name", "last_name"] as const;
+
+/**
+ * PostgREST filter that matches a row whose `column` is NULL, empty or
+ * whitespace-only. `match` is Postgres `~`; `^\s*$` also matches ''.
+ * Becomes `WHERE (<column> IS NULL OR <column> ~ '^\s*$')` server-side.
+ */
+export function blankNameFilter(column: (typeof SIGN_IN_FILL_BLANK_NAME_COLUMNS)[number]): string {
+  return `${column}.is.null,${column}.match.^\\s*$`;
+}
+
 // ---------------------------------------------------------------------------
 // Organization membership — BACKLOG-3364
 // ---------------------------------------------------------------------------
@@ -790,13 +805,28 @@ class SupabaseService {
       let result: User;
 
       if (existingUser) {
+        // BACKLOG-3991: sign-in only FILLS a blank first/last name; it never
+        // overwrites a stored one (founder rule on BACKLOG-3851), so a name an
+        // admin set survives the next sign-in. The blank test lives in each
+        // statement's WHERE clause (NULL, '' or whitespace-only), so check and
+        // write are one atomic UPDATE — no read-then-write from this client.
+        // No .single(): matching zero rows (name already set) is the normal case.
+        for (const column of SIGN_IN_FILL_BLANK_NAME_COLUMNS) {
+          const incoming = userData[column];
+          if (!incoming || incoming.trim() === "") continue;
+          const { error: fillError } = await client
+            .from("users")
+            .update({ [column]: incoming })
+            .eq("id", existingUser.id)
+            .or(blankNameFilter(column));
+          if (fillError) throw fillError;
+        }
+
         // Update existing user
         const { data, error } = await client
           .from("users")
           .update({
             email: userData.email,
-            first_name: userData.first_name,
-            last_name: userData.last_name,
             display_name: userData.display_name,
             avatar_url: userData.avatar_url,
             last_login_at: new Date().toISOString(),

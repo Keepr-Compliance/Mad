@@ -83,6 +83,7 @@ describe("SupabaseService", () => {
     delete: jest.fn().mockReturnThis(),
     upsert: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
+    or: jest.fn().mockReturnThis(),
     gte: jest.fn().mockReturnThis(),
     lte: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
@@ -389,11 +390,16 @@ describe("SupabaseService", () => {
 
         // First query: find existing user
         const findQuery = createQueryMock(existingUser);
-        // Second query: update user
+        // BACKLOG-3991: fill-blank-only updates for first_name, then last_name
+        const fillFirstQuery = createQueryMock(null);
+        const fillLastQuery = createQueryMock(null);
+        // Then: the unconditional sign-in update
         const updateQuery = createQueryMock(updatedUser);
 
         mockSupabaseClient.from
           .mockReturnValueOnce(findQuery)
+          .mockReturnValueOnce(fillFirstQuery)
+          .mockReturnValueOnce(fillLastQuery)
           .mockReturnValueOnce(updateQuery);
 
         mockSupabaseClient.rpc.mockResolvedValue({ data: null, error: null });
