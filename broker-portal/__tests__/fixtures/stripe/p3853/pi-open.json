@@ -1,0 +1,78 @@
+{
+  "id": "pi_3URdzhBg3cyTef3d1tLxCBoq",
+  "object": "payment_intent",
+  "allowed_payment_method_types": null,
+  "amount": 12495,
+  "amount_capturable": 0,
+  "amount_details": {
+    "tip": {}
+  },
+  "amount_received": 0,
+  "application": null,
+  "application_fee_amount": null,
+  "automatic_payment_methods": null,
+  "canceled_at": null,
+  "cancellation_reason": null,
+  "capture_method": "automatic",
+  "client_secret": "pi_3URdzhBg3cyTef3d1tLxCBoq_secret_PTjIgD6l85Utl6lfd0Ir9xrpZ",
+  "confirmation_method": "automatic",
+  "created": 1792268058,
+  "currency": "usd",
+  "customer": "cus_VSZ7P8iqRvHlbC",
+  "customer_account": null,
+  "description": "Subscription creation",
+  "excluded_payment_method_types": null,
+  "invoice": "in_1URdzABg3cyTef3dyKhMzjZn",
+  "last_payment_error": null,
+  "latest_charge": null,
+  "livemode": false,
+  "managed_payments": {
+    "enabled": false
+  },
+  "metadata": {},
+  "next_action": null,
+  "on_behalf_of": null,
+  "payment_details": {
+    "customer_reference": null,
+    "order_reference": "in_1URdzABg3cyTef3dyKhMzjZn"
+  },
+  "payment_method": null,
+  "payment_method_configuration_details": null,
+  "payment_method_options": {
+    "card": {
+      "installments": null,
+      "mandate_options": null,
+      "network": null,
+      "request_three_d_secure": "automatic"
+    },
+    "customer_balance": {
+      "bank_transfer": {
+        "type": "us_bank_transfer"
+      },
+      "funding_type": "bank_transfer"
+    },
+    "us_bank_account": {
+      "mandate_options": {},
+      "transaction_purpose": "unspecified",
+      "verification_method": "automatic"
+    }
+  },
+  "payment_method_types": [
+    "card",
+    "customer_balance",
+    "us_bank_account"
+  ],
+  "payment_record": null,
+  "processing": null,
+  "receipt_email": null,
+  "review": null,
+  "setup_future_usage": null,
+  "shared_payment_granted_token": null,
+  "shipping": null,
+  "source": null,
+  "statement_descriptor": null,
+  "statement_descriptor_suffix": null,
+  "status": "requires_payment_method",
+  "transfer_data": null,
+  "transfer_group": null
+}

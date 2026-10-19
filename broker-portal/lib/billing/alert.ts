@@ -31,7 +31,11 @@ export type BillingAlertName =
   | 'suspended_subscription_unpaused'
   | 'paused_subscription_licence_active'
   // BACKLOG-3934 (a paying Agent who is also a brokerage member; support cancels + refunds)
-  | 'agent_subscription_brokerage_member';
+  | 'agent_subscription_brokerage_member'
+  // BACKLOG-3853 PR-2 (brokerage subscription)
+  | 'brokerage_orphan_object'
+  | 'brokerage_refund_or_dispute'
+  | 'brokerage_no_account_manager';
 
 export function billingAlert(
   name: BillingAlertName,
