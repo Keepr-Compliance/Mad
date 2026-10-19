@@ -94,7 +94,12 @@ BEGIN
   IF p_unit_price_cents IS NULL OR p_unit_price_cents < 0 THEN
     RETURN jsonb_build_object('success', false, 'error', 'invalid_price');
   END IF;
-  IF p_account_manager_id IS NOT NULL AND NOT public.has_permission(p_account_manager_id, 'billing.manage') THEN
+  -- has_permission() answers for the caller only (BACKLOG-3946), so the account manager is
+  -- checked against the role grants directly.
+  IF p_account_manager_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.internal_roles ir2
+                   JOIN public.admin_role_permissions arp ON arp.role_id = ir2.role_id
+                   JOIN public.admin_permissions ap ON ap.id = arp.permission_id
+                  WHERE ir2.user_id = p_account_manager_id AND ap.key = 'billing.manage') THEN
     RETURN jsonb_build_object('success', false, 'error', 'invalid_account_manager');
   END IF;
 
@@ -200,7 +205,10 @@ BEGIN
                        ORDER BY coalesce(u.display_name, u.email))
         FROM public.internal_roles ir
         JOIN public.users u ON u.id = ir.user_id
-       WHERE public.has_permission(ir.user_id, 'billing.manage')), '[]'::jsonb),
+       WHERE EXISTS (SELECT 1 FROM public.internal_roles ir2
+                   JOIN public.admin_role_permissions arp ON arp.role_id = ir2.role_id
+                   JOIN public.admin_permissions ap ON ap.id = arp.permission_id
+                  WHERE ir2.user_id = ir.user_id AND ap.key = 'billing.manage')), '[]'::jsonb),
     'log', coalesce((
       SELECT jsonb_agg(jsonb_build_object('created_at', x.created_at, 'action', x.action, 'detail', x.detail,
                                           'actor', coalesce(u.display_name, u.email))

@@ -34,3 +34,13 @@ vitest (admin-portal/__tests__/billing-card-3853, 12 tests), each mutation exact
 | action_mode_hardcoded ('test' always sent)   | 1 failed: passes STRIPE_MODE=live |
 | readout_cap_floor                            | 1 failed: sweeps the boundary |
 Restored: 12 passed.
+
+FIX AFTER THE RUN ABOVE (not yet applied on keepr-test):
+has_permission(uuid,text) answers only when check_user_id = auth.uid() (BACKLOG-3946), so the
+account-manager check refused every manager except the caller and the manager list held only the
+caller. Both now read internal_roles -> admin_role_permissions -> admin_permissions directly.
+New file md5 801b5cfb8dc6a8c820ff883d00711c1a, length 11551. Controls updated: the Sales save names
+the Super Admin as manager (a non-caller) and the payload must list the Super Admin; new mutants
+am_check_caller_only and am_list_caller_only. The re-apply on keepr-test was refused by the MCP
+session ("Invalid or expired requestState"); keepr-test still holds the earlier body
+(ledger md5 36b07f4f, admin_save_deal d270b908). These controls are NOT RUN against the fix.

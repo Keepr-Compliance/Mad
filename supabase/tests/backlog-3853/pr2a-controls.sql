@@ -88,6 +88,12 @@ BEGIN
       $q$IF NOT public.has_permission(v_uid, 'billing.suspend') THEN$q$, 'IF false THEN');
     WHEN 'reinstate_no_perm' THEN RETURN pg_temp.mut_fn('public.admin_reinstate_org(uuid,text)',
       $q$IF NOT public.has_permission(v_uid, 'billing.suspend') THEN$q$, 'IF false THEN');
+    WHEN 'am_check_caller_only' THEN RETURN pg_temp.mut_fn(s,
+      'WHERE ir2.user_id = p_account_manager_id AND',
+      'WHERE ir2.user_id = p_account_manager_id AND p_account_manager_id = (SELECT auth.uid()) AND');
+    WHEN 'am_list_caller_only' THEN RETURN pg_temp.mut_fn('public.admin_get_org_billing(uuid)',
+      'WHERE ir2.user_id = ir.user_id AND',
+      'WHERE ir2.user_id = ir.user_id AND ir.user_id = (SELECT auth.uid()) AND');
     ELSE RAISE EXCEPTION 'unknown mode %', m;
     END CASE;
   END $b$$f$;
@@ -152,9 +158,10 @@ BEGIN
     r := r || jsonb_build_object('C_no_deal_after_input_refusals', CASE WHEN NOT EXISTS (SELECT 1 FROM public.org_deals WHERE organization_id = o_r) THEN 'PASS' ELSE 'FAIL deal written' END);
 
     -- ===== the Sales cap (list 2499; 2000 = 19.97% off, 1999 = 20.008% off) =====
-    s := pg_temp.call_as(u_sales, format(q_save, o_a, 'test', 5, 2000, 'Bea', 'bea@example.test', u_sales, 'signed at 2000', 'NULL'));
+    s := pg_temp.call_as(u_sales, format(q_save, o_a, 'test', 5, 2000, 'Bea', 'bea@example.test', u_super, 'signed at 2000', 'NULL'));
     r := r || jsonb_build_object('C_sales_within_cap_saved', CASE WHEN pg_temp.j(s) ->> 'success' = 'true'
-      AND (SELECT unit_price_cents FROM public.org_deal_lines WHERE organization_id = o_a) = 2000 THEN 'PASS' ELSE 'FAIL ' || s END);
+      AND (SELECT unit_price_cents FROM public.org_deal_lines WHERE organization_id = o_a) = 2000
+      AND (SELECT account_manager_id FROM public.org_deals WHERE organization_id = o_a) = u_super THEN 'PASS' ELSE 'FAIL ' || s END);
     r := r || jsonb_build_object('C_audit_row_with_reason', CASE WHEN EXISTS (SELECT 1 FROM public.admin_audit_logs
        WHERE action = 'billing.deal_saved' AND target_id = o_a::text AND actor_id = u_sales
          AND metadata ->> 'reason' = 'signed at 2000' AND (metadata ->> 'unit_price_cents')::int = 2000) THEN 'PASS' ELSE 'FAIL no audit row' END);
@@ -193,6 +200,7 @@ BEGIN
       AND NOT (pg_temp.j(s) -> 'deal' ? 'entitlement_prior')
       AND jsonb_array_length(pg_temp.j(s) -> 'log') >= 1
       AND EXISTS (SELECT 1 FROM jsonb_array_elements(pg_temp.j(s) -> 'account_managers') e WHERE e ->> 'id' = u_sales::text)
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(pg_temp.j(s) -> 'account_managers') e WHERE e ->> 'id' = u_super::text)
       AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(pg_temp.j(s) -> 'account_managers') e WHERE e ->> 'id' = u_exec::text)
       THEN 'PASS' ELSE 'FAIL ' || left(s, 120) END);
 
