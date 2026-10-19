@@ -9,6 +9,9 @@
 --    separator inside, or longer than 200 characters, is skipped (never an error, so
 --    it can never block a sign-in). No user-id parameter: only auth.uid()'s row. Never
 --    INSERTs (handle_new_user owns row creation). Skips the write when nothing changes.
+--    Skips the write for a claimed, non-deactivated member of an organization with
+--    scim_enabled, directory_sync_enabled or a live SCIM token: their names come from
+--    that directory sync only (supabase/functions/scim, supabase/functions/directory-sync).
 -- 2. public.org_names_directory_managed(p_org)
 --    true (names are not editable here) unless the caller is a claimed, active admin or
 --    it_admin of p_org AND the organization uses neither JIT (NULL counts as on, the
@@ -47,7 +50,7 @@ BEGIN
   END LOOP;
 
   FOR r IN SELECT * FROM (VALUES
-    ('public.sync_profile_names_from_idp(text,text,text)', '18ee571b4bb9dd485032c1b98a0dd904'),
+    ('public.sync_profile_names_from_idp(text,text,text)', '984dc45b04f369274a1f003344042cae'),
     ('public.org_names_directory_managed(uuid)',           '99e8d288115addafe005249f42e7d4b8'),
     ('public.set_member_name(uuid,text,text)',             'e6e1590f67f8c15f98fa32a6a94aeffb')
   ) AS t(sig, expected) LOOP
@@ -90,6 +93,24 @@ DECLARE
 BEGIN
   IF v_uid IS NULL THEN
     RETURN jsonb_build_object('success', false, 'error', 'not_authenticated');
+  END IF;
+
+  -- A claimed, non-deactivated member of a brokerage whose directory pushes names
+  -- (scim_enabled, directory_sync_enabled, or a live SCIM token) gets names from that
+  -- sync only: skip, never an error, so a sign-in is never blocked.
+  IF EXISTS (
+       SELECT 1 FROM public.organization_members m
+         JOIN public.organizations o ON o.id = m.organization_id
+        WHERE m.user_id = v_uid
+          AND NOT public.member_status_is_deactivated(m.license_status)
+          AND (COALESCE(o.scim_enabled, false)
+               OR COALESCE(o.directory_sync_enabled, false)
+               OR EXISTS (
+                    SELECT 1 FROM public.scim_tokens t
+                     WHERE t.organization_id = o.id
+                       AND t.revoked_at IS NULL
+                       AND (t.expires_at IS NULL OR t.expires_at > now())))) THEN
+    RETURN jsonb_build_object('success', true, 'updated', false, 'skipped', 'directory_managed');
   END IF;
 
   -- A rejected value is skipped, never raised: a sign-in must not fail on a name.

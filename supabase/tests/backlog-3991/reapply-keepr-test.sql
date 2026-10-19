@@ -1,3 +1,8 @@
+-- SUPERSEDED 2026-10-19 (BACKLOG-3991 SCIM-names skip). Historical record of the first
+-- keepr-test re-apply only: the file text and the sync_profile_names_from_idp pin embedded
+-- below are the pre-skip body (18ee571b). Do not run it. The skip was applied on keepr-test
+-- by CREATE OR REPLACE of that one function (live md5 984dc45b == the migration's pin) and
+-- the ledger statement was updated to the new file md5; see README.md Status.
 -- keepr-test only: re-apply 20261019050000 over a first apply whose stored bodies differ
 -- from the file (the first apply sent the trim set as \u escapes, which arrived as raw
 -- characters; the file now builds the set with chr()). Drops the three functions, deletes

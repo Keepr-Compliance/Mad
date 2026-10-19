@@ -7,7 +7,7 @@
 -- public.users row; the fixture then sets known names); unclaimed invite as
 -- broker-portal/lib/actions/inviteUser.ts (invited_email, 'pending', token, expiry).
 CREATE TEMP TABLE ids3991 (k text PRIMARY KEY, id uuid NOT NULL DEFAULT gen_random_uuid()) ON COMMIT DROP;
-INSERT INTO ids3991 (k) SELECT unnest(ARRAY['a', 'it', 'br', 'ag', 'ad', 't1', 't2', 't3', 't4', 't5', 't6', 'ga', 'tj', 'ya', 'po', 'pt', 'sa', 'sb', 'o_m', 'o_x', 'o_y', 'o_p', 'o_j', 'o_jn', 'o_s', 'o_d', 'o_tk', 'o_tr', 'o_te', 'o_tf', 'm_a', 'm_it', 'm_br', 'm_ag', 'm_ad', 'm_t1', 'm_t2', 'm_t3', 'm_t4', 'm_t5', 'm_t6', 'x_t5', 'x_t6', 'y_ya', 'p_po', 'p_pt', 'j_ga', 'j_tj', 'jn_ga', 's_ga', 'd_ga', 'tk_ga', 'tr_ga', 'te_ga', 'tf_ga', 'm_inv']);
+INSERT INTO ids3991 (k) SELECT unnest(ARRAY['a', 'it', 'br', 'ag', 'ad', 't1', 't2', 't3', 't4', 't5', 't6', 'ga', 'tj', 'ya', 'po', 'pt', 'sa', 'sb', 'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9', 'o_m', 'o_x', 'o_y', 'o_p', 'o_j', 'o_jn', 'o_s', 'o_d', 'o_tk', 'o_tr', 'o_te', 'o_tf', 'm_a', 'm_it', 'm_br', 'm_ag', 'm_ad', 'm_t1', 'm_t2', 'm_t3', 'm_t4', 'm_t5', 'm_t6', 'x_t5', 'x_t6', 'y_ya', 'p_po', 'p_pt', 'j_ga', 'j_tj', 'jn_ga', 's_ga', 'd_ga', 'tk_ga', 'tr_ga', 'te_ga', 'tf_ga', 's_k1', 'tk_k2', 'd_k3', 's_k4', 'te_k5', 'tr_k6', 's_k7', 'm_k7', 'tf_k8', 's_k9', 'm_inv']);
 CREATE TEMP TABLE guard3991 (txt text NOT NULL) ON COMMIT DROP;
 INSERT INTO guard3991 VALUES ($q$DO $pre$
 DECLARE
@@ -27,7 +27,7 @@ BEGIN
   END LOOP;
 
   FOR r IN SELECT * FROM (VALUES
-    ('public.sync_profile_names_from_idp(text,text,text)', '18ee571b4bb9dd485032c1b98a0dd904'),
+    ('public.sync_profile_names_from_idp(text,text,text)', '984dc45b04f369274a1f003344042cae'),
     ('public.org_names_directory_managed(uuid)',           '99e8d288115addafe005249f42e7d4b8'),
     ('public.set_member_name(uuid,text,text)',             'e6e1590f67f8c15f98fa32a6a94aeffb')
   ) AS t(sig, expected) LOOP
@@ -69,7 +69,7 @@ CREATE FUNCTION pg_temp.ln(ok boolean, nm text, det text) RETURNS text LANGUAGE 
 DO $fx$
 DECLARE n text;
 BEGIN
-  FOREACH n IN ARRAY ARRAY['a', 'it', 'br', 'ag', 'ad', 't1', 't2', 't3', 't4', 't5', 't6', 'ga', 'tj', 'ya', 'po', 'pt', 'sa', 'sb'] LOOP
+  FOREACH n IN ARRAY ARRAY['a', 'it', 'br', 'ag', 'ad', 't1', 't2', 't3', 't4', 't5', 't6', 'ga', 'tj', 'ya', 'po', 'pt', 'sa', 'sb', 'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9'] LOOP
     INSERT INTO auth.users (id, email, aud, role, raw_user_meta_data, raw_app_meta_data)
     VALUES (pg_temp.i(n), n || '-3991@example.test', 'authenticated', 'authenticated', '{}'::jsonb,
             '{"provider":"azure","providers":["azure"]}'::jsonb);
@@ -120,7 +120,17 @@ BEGIN
     (pg_temp.i('tk_ga'), pg_temp.i('o_tk'), pg_temp.i('ga'), 'admin', 'active', 'manual', now()),
     (pg_temp.i('tr_ga'), pg_temp.i('o_tr'), pg_temp.i('ga'), 'admin', 'active', 'manual', now()),
     (pg_temp.i('te_ga'), pg_temp.i('o_te'), pg_temp.i('ga'), 'admin', 'active', 'manual', now()),
-    (pg_temp.i('tf_ga'), pg_temp.i('o_tf'), pg_temp.i('ga'), 'admin', 'active', 'manual', now());
+    (pg_temp.i('tf_ga'), pg_temp.i('o_tf'), pg_temp.i('ga'), 'admin', 'active', 'manual', now()),
+    (pg_temp.i('s_k1'), pg_temp.i('o_s'), pg_temp.i('k1'), 'agent', 'active', 'manual', now()),
+    (pg_temp.i('tk_k2'), pg_temp.i('o_tk'), pg_temp.i('k2'), 'agent', 'active', 'manual', now()),
+    (pg_temp.i('d_k3'), pg_temp.i('o_d'), pg_temp.i('k3'), 'agent', 'active', 'manual', now()),
+    (pg_temp.i('s_k4'), pg_temp.i('o_s'), pg_temp.i('k4'), 'agent', 'suspended', 'manual', now()),
+    (pg_temp.i('te_k5'), pg_temp.i('o_te'), pg_temp.i('k5'), 'agent', 'active', 'manual', now()),
+    (pg_temp.i('tr_k6'), pg_temp.i('o_tr'), pg_temp.i('k6'), 'agent', 'active', 'manual', now()),
+    (pg_temp.i('s_k7'), pg_temp.i('o_s'), pg_temp.i('k7'), 'agent', 'active', 'manual', now()),
+    (pg_temp.i('m_k7'), pg_temp.i('o_m'), pg_temp.i('k7'), 'agent', 'active', 'manual', now()),
+    (pg_temp.i('tf_k8'), pg_temp.i('o_tf'), pg_temp.i('k8'), 'agent', 'active', 'manual', now()),
+    (pg_temp.i('s_k9'), pg_temp.i('o_s'), pg_temp.i('k9'), 'agent', 'unassigned', 'manual', now());
   INSERT INTO public.organization_members (id, organization_id, invited_email, role, license_status,
                                            invitation_token, invitation_expires_at, invited_at, provisioned_by,
                                            invited_first_name, invited_last_name)
@@ -245,7 +255,7 @@ BEGIN
     ) v(name, who, mem, pf, pl, ex, chk, xf, xl, xd, susp) LOOP
     nm := c.name;
     BEGIN
-      IF c.susp THEN UPDATE public.organizations SET is_test = true WHERE id = pg_temp.i('o_m'); INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_reason) VALUES (pg_temp.i('o_m'), 'test', 3, 'suspended', 'other'); END IF;
+      IF c.susp THEN UPDATE public.organizations SET is_test = true WHERE id = pg_temp.i('o_m'); INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_reason, version, suspended_at) VALUES (pg_temp.i('o_m'), 'test', 3, 'suspended', 'other', 1, now()); END IF;
       PERFORM pg_temp.asu(pg_temp.i(c.who));
       r := public.set_member_name(pg_temp.i(c.mem), c.pf, c.pl);
       PERFORM pg_temp.pgr();
@@ -389,7 +399,7 @@ BEGIN
   END;
   nm := $q$C19 suspended brokerage: invite edit succeeds$q$;
   BEGIN
-    UPDATE public.organizations SET is_test = true WHERE id = pg_temp.i('o_m'); INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_reason) VALUES (pg_temp.i('o_m'), 'test', 3, 'suspended', 'other');
+    UPDATE public.organizations SET is_test = true WHERE id = pg_temp.i('o_m'); INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_reason, version, suspended_at) VALUES (pg_temp.i('o_m'), 'test', 3, 'suspended', 'other', 1, now());
     PERFORM pg_temp.asu(pg_temp.i('a'));
     r := public.set_member_name(pg_temp.i('m_inv'), 'SusInv', 'Last');
     PERFORM pg_temp.pgr();
@@ -421,6 +431,231 @@ BEGIN
     PERFORM pg_temp.pgr();
     SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('t1'));
     rep := rep || pg_temp.ln((fn = 'Admin' AND ln = 'IdpLast' AND dn = 'Idp Full'), nm, (concat_ws(' / ', r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C40 scim_enabled member: sign-in skipped, names and row version unchanged$q$;
+  BEGIN
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k1'));
+    t := ct;
+    PERFORM pg_temp.asu(pg_temp.i('k1'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k1'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND r->>'skipped' = 'directory_managed' AND fn = 'F-k1' AND ln = 'L-k1' AND dn = 'D-k1' AND ct = t), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C40 same member after scim_enabled off: refreshed$q$;
+  BEGIN
+    PERFORM pg_temp.asu(pg_temp.i('k1'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k1'));
+    t := fn;
+    UPDATE public.organizations SET scim_enabled = false WHERE id = pg_temp.i('o_s');
+    PERFORM pg_temp.asu(pg_temp.i('k1'));
+    r2 := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k1'));
+    rep := rep || pg_temp.ln((r->>'skipped' = 'directory_managed' AND t = 'F-k1' AND (r2->>'success')::boolean AND (r2->>'updated')::boolean AND fn = 'New' AND ln = 'Name' AND dn = 'New Name'), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C41 live SCIM token (no expiry) member: sign-in skipped$q$;
+  BEGIN
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k2'));
+    t := ct;
+    PERFORM pg_temp.asu(pg_temp.i('k2'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k2'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND r->>'skipped' = 'directory_managed' AND fn = 'F-k2' AND ln = 'L-k2' AND dn = 'D-k2' AND ct = t), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C41 same member after the token is revoked: refreshed$q$;
+  BEGIN
+    PERFORM pg_temp.asu(pg_temp.i('k2'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k2'));
+    t := fn;
+    UPDATE public.scim_tokens SET revoked_at = now() WHERE organization_id = pg_temp.i('o_tk');
+    PERFORM pg_temp.asu(pg_temp.i('k2'));
+    r2 := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k2'));
+    rep := rep || pg_temp.ln((r->>'skipped' = 'directory_managed' AND t = 'F-k2' AND (r2->>'success')::boolean AND (r2->>'updated')::boolean AND fn = 'New' AND ln = 'Name' AND dn = 'New Name'), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C41 live SCIM token (future expiry) member: sign-in skipped$q$;
+  BEGIN
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k8'));
+    t := ct;
+    PERFORM pg_temp.asu(pg_temp.i('k8'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k8'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND r->>'skipped' = 'directory_managed' AND fn = 'F-k8' AND ln = 'L-k8' AND dn = 'D-k8' AND ct = t), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C42 directory_sync_enabled member: sign-in skipped$q$;
+  BEGIN
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k3'));
+    t := ct;
+    PERFORM pg_temp.asu(pg_temp.i('k3'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k3'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND r->>'skipped' = 'directory_managed' AND fn = 'F-k3' AND ln = 'L-k3' AND dn = 'D-k3' AND ct = t), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C42 same member after directory_sync_enabled off: refreshed$q$;
+  BEGIN
+    PERFORM pg_temp.asu(pg_temp.i('k3'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k3'));
+    t := fn;
+    UPDATE public.organizations SET directory_sync_enabled = false WHERE id = pg_temp.i('o_d');
+    PERFORM pg_temp.asu(pg_temp.i('k3'));
+    r2 := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k3'));
+    rep := rep || pg_temp.ln((r->>'skipped' = 'directory_managed' AND t = 'F-k3' AND (r2->>'success')::boolean AND (r2->>'updated')::boolean AND fn = 'New' AND ln = 'Name' AND dn = 'New Name'), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C43 JIT-org member: refreshed$q$;
+  BEGIN
+    PERFORM pg_temp.asu(pg_temp.i('tj'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('tj'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND (r->>'updated')::boolean AND r->>'skipped' IS NULL AND fn = 'New' AND ln = 'Name' AND dn = 'New Name'), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C43 manual-org member: refreshed$q$;
+  BEGIN
+    PERFORM pg_temp.asu(pg_temp.i('t1'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('t1'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND (r->>'updated')::boolean AND r->>'skipped' IS NULL AND fn = 'New' AND ln = 'Name' AND dn = 'New Name'), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C43 solo user (no brokerage): refreshed$q$;
+  BEGIN
+    PERFORM pg_temp.asu(pg_temp.i('sb'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('sb'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND (r->>'updated')::boolean AND r->>'skipped' IS NULL AND fn = 'New' AND ln = 'Name' AND dn = 'New Name'), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C44 deactivated (suspended) membership in a SCIM org: refreshed$q$;
+  BEGIN
+    PERFORM pg_temp.asu(pg_temp.i('k4'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k4'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND (r->>'updated')::boolean AND r->>'skipped' IS NULL AND fn = 'New' AND ln = 'Name' AND dn = 'New Name'), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C44 SCIM member after SCIM deprovision (suspended): refreshed$q$;
+  BEGIN
+    PERFORM pg_temp.asu(pg_temp.i('k1'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k1'));
+    t := fn;
+    UPDATE public.organization_members SET license_status = 'suspended' WHERE id = pg_temp.i('s_k1');
+    PERFORM pg_temp.asu(pg_temp.i('k1'));
+    r2 := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k1'));
+    rep := rep || pg_temp.ln((r->>'skipped' = 'directory_managed' AND t = 'F-k1' AND (r2->>'success')::boolean AND (r2->>'updated')::boolean AND fn = 'New' AND ln = 'Name' AND dn = 'New Name'), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C45 member whose only SCIM token is expired: refreshed$q$;
+  BEGIN
+    PERFORM pg_temp.asu(pg_temp.i('k5'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k5'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND (r->>'updated')::boolean AND r->>'skipped' IS NULL AND fn = 'New' AND ln = 'Name' AND dn = 'New Name'), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C45 member whose only SCIM token is revoked: refreshed$q$;
+  BEGIN
+    PERFORM pg_temp.asu(pg_temp.i('k6'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k6'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND (r->>'updated')::boolean AND r->>'skipped' IS NULL AND fn = 'New' AND ln = 'Name' AND dn = 'New Name'), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C46 member of a SCIM org and a manual org: sign-in skipped$q$;
+  BEGIN
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k7'));
+    t := ct;
+    PERFORM pg_temp.asu(pg_temp.i('k7'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k7'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND r->>'skipped' = 'directory_managed' AND fn = 'F-k7' AND ln = 'L-k7' AND dn = 'D-k7' AND ct = t), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C47 SCIM member, all-absent input: success, no error, unchanged$q$;
+  BEGIN
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k1'));
+    t := ct;
+    PERFORM pg_temp.asu(pg_temp.i('k1'));
+    r := public.sync_profile_names_from_idp(NULL, NULL, NULL);
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k1'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND r->>'error' IS NULL AND fn = 'F-k1' AND ct = t), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C48 unassigned SCIM member: sign-in skipped, row version unchanged$q$;
+  BEGIN
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k9'));
+    t := ct;
+    PERFORM pg_temp.asu(pg_temp.i('k9'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k9'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND r->>'skipped' = 'directory_managed' AND fn = 'F-k9' AND ln = 'L-k9' AND dn = 'D-k9' AND ct = t), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
     RAISE SQLSTATE 'P3991';
   EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
     WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
