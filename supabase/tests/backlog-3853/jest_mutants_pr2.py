@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
-"""BACKLOG-3853 PR-2 jest mutant runner. Exact-once replace (raise on 0 / 2+), numstat, jest --bail=0 --json,
-non-zero test count asserted, failed test names recorded, file restored with git checkout --."""
+"""BACKLOG-3853 PR-2 jest mutant runner.
+
+Guards (commit security review, BACKLOG-3853 PR-2):
+  1. Refuses to start unless REPO_ROOT is a git top level holding broker-portal/ and the tree is clean
+     (git status --porcelain empty): no uncommitted work can be touched or lost.
+  2. Each mutation is an exact-string replace that raises on 0 or 2+ matches; only tracked files under
+     broker-portal/lib or broker-portal/app may be mutated. MUTATION APPLIED + git numstat are printed.
+  3. Restore writes back the saved original bytes of the mutated files only (no git checkout, no reset),
+     in a finally block so a crash or Ctrl-C also restores; then git numstat for those files must be empty
+     and the whole tree must be clean again.
+  4. A run with 0 tests (jest --json numTotalTests) is a failure.
+Prefer running it in a scratch worktree: REPO_ROOT=<scratch worktree> python3 jest_mutants_pr2.py
+"""
 import json, os, subprocess, sys
 ROOT = os.environ.get('REPO_ROOT', os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
 TMP = os.environ.get('TMPDIR', '/tmp')
@@ -41,22 +52,43 @@ M = [
  ('M-3c charge ignores the brokerage block', [(CH, "  if (brokerageBlocked) {", "  if (false) {")], [PAY]),
  ('M-3b charge fails open on a check error', [(CH, "  if (brokerageBlocked === null) {", "  if (false) {")], [PAY]),
 ]
-only = sys.argv[1:] 
+def git(*a):
+    return subprocess.run(['git', '-C', ROOT] + list(a), capture_output=True, text=True, check=True).stdout
+
+
+top = git('rev-parse', '--show-toplevel').strip()
+if os.path.realpath(top) != os.path.realpath(ROOT) or not os.path.isdir(os.path.join(ROOT, 'broker-portal')):
+    raise SystemExit(f'REPO_ROOT {ROOT} is not the repository top level holding broker-portal/')
+if git('status', '--porcelain').strip():
+    raise SystemExit('working tree is not clean: commit or remove changes before running mutants')
+
+only = sys.argv[1:]
 out = []
 for name, reps, tests in M:
     if only and not any(name.startswith(o) for o in only): continue
     files = sorted({f for f, _, _ in reps})
-    for f, a, b in reps:
-        p = os.path.join(ROOT, f); t = open(p).read(); n = t.count(a)
-        if n != 1: raise SystemExit(f'MUTATION NOT APPLIED: {n} matches for {name} in {f}')
-        open(p, 'w').write(t.replace(a, b))
-    ns = subprocess.run(['git', '-C', ROOT, 'diff', '--numstat', '--'] + files, capture_output=True, text=True).stdout.strip().replace('\n', '; ')
-    print(f'MUTATION APPLIED {name} :: {ns}', flush=True)
-    jf = os.path.join(TMP, 'jest-3853-pr2.json')
-    subprocess.run(['npx', 'jest', '--config', 'broker-portal/jest.config.js', '--bail=0', '--silent', '--json', '--outputFile', jf] + tests, cwd=ROOT, capture_output=True, text=True)
-    subprocess.run(['git', '-C', ROOT, 'checkout', '--'] + files, check=True)
-    left = subprocess.run(['git', '-C', ROOT, 'diff', '--numstat'], capture_output=True, text=True).stdout.strip()
-    if left: raise SystemExit('restore failed: ' + left)
+    for f in files:
+        if not (f.startswith(BP + 'lib/') or f.startswith(BP + 'app/')):
+            raise SystemExit(f'refusing to mutate {f}: only broker-portal/lib and broker-portal/app')
+        if not git('ls-files', '--', f).strip():
+            raise SystemExit(f'refusing to mutate untracked file {f}')
+    saved = {f: open(os.path.join(ROOT, f), 'rb').read() for f in files}
+    try:
+        for f, a, b in reps:
+            p = os.path.join(ROOT, f); t = open(p).read(); n = t.count(a)
+            if n != 1: raise SystemExit(f'MUTATION NOT APPLIED: {n} matches for {name} in {f}')
+            open(p, 'w').write(t.replace(a, b))
+        ns = git('diff', '--numstat', '--', *files).strip().replace('\n', '; ')
+        if not ns: raise SystemExit(f'MUTATION NOT APPLIED: no diff for {name}')
+        print(f'MUTATION APPLIED {name} :: {ns}', flush=True)
+        jf = os.path.join(TMP, 'jest-3853-pr2.json')
+        if os.path.exists(jf): os.remove(jf)
+        subprocess.run(['npx', 'jest', '--config', 'broker-portal/jest.config.js', '--bail=0', '--silent', '--json', '--outputFile', jf] + tests, cwd=ROOT, capture_output=True, text=True)
+    finally:
+        for f, data in saved.items():
+            open(os.path.join(ROOT, f), 'wb').write(data)
+    if git('diff', '--numstat', '--', *files).strip() or git('status', '--porcelain').strip():
+        raise SystemExit('restore failed: tree not clean after restoring ' + ', '.join(files))
     r = json.load(open(jf))
     total, failed = r['numTotalTests'], r['numFailedTests']
     if total == 0: raise SystemExit(f'Tests: 0 total for {name}')
