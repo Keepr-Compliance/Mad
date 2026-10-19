@@ -135,7 +135,7 @@ describe('/dashboard (home)', () => {
     ['admin, billing on', 'admin', 'true', '/dashboard/billing'],
     ['it_admin, billing on', 'it_admin', 'true', '/dashboard/billing'],
     ['broker, billing off', 'broker', 'false', '/dashboard/account'],
-  ])('%s -> %s, before any submission is read', async (_n, role, flag, to) => {
+  ])('%s -> its landing, before any submission is read', async (_n, role, flag, to) => {
     process.env.BILLING_ENABLED = flag;
     given([brokerageMembership(role)], ACTIVE);
     expect(await run(() => DashboardPage())).toEqual({ redirect: to });
