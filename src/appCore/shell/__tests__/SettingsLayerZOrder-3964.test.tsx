@@ -158,6 +158,36 @@ describe("support form while Settings shows (BACKLOG-3964 slice 2 fix-up 2)", ()
   });
 });
 
+describe("Esc with the support form over Settings (BACKLOG-3964 slice 2 fix-up 3)", () => {
+  it("closes only the form; Settings stays open", async () => {
+    (window.api as unknown as Record<string, unknown>).support = {
+      collectDiagnostics: jest.fn().mockResolvedValue({ success: true, diagnostics: null }),
+      captureScreenshot: jest.fn().mockResolvedValue({ success: true, screenshot: null }),
+      getCategories: jest.fn().mockResolvedValue({ success: true, categories: [] }),
+      submitTicket: jest.fn().mockResolvedValue({ success: true, ticket_number: 1 }),
+    };
+    (window.api.auth as unknown as Record<string, unknown>).getCurrentUser = jest
+      .fn()
+      .mockResolvedValue({ success: true, user });
+    render(<Harness />);
+    act(() => modal.openSettings());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open support dialog" }));
+    });
+    expect(screen.getByTestId("support-ticket-dialog")).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Escape" });
+    });
+    expect(screen.queryByTestId("support-ticket-dialog")).toBeNull();
+    expect(screen.getByTestId("settings-layer")).toBeInTheDocument();
+    // Esc again, form gone: now it closes Settings.
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Escape" });
+    });
+    expect(screen.queryByTestId("settings-layer")).toBeNull();
+  });
+});
+
 describe("title-bar initials while Settings shows", () => {
   it("opens Profile and closes Settings, so Profile is not hidden underneath", () => {
     render(<Harness />);

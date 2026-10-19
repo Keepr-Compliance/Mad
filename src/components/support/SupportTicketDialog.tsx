@@ -15,6 +15,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { ResponsiveModal } from "../common/ResponsiveModal";
 import { Z_CLASS } from "../../constants/zLayers";
+import { useEscapeToClose } from "../../hooks/useEscapeToClose";
 import {
   useSupportTicket,
   type TicketPriority,
@@ -136,6 +137,9 @@ export function SupportTicketDialog({
     reset();
     onClose();
   };
+
+  // Esc closes this form only; the Settings layer defers to it (BACKLOG-3964).
+  useEscapeToClose(true, handleClose);
 
   // Success state
   if (success) {

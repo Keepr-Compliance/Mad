@@ -7,12 +7,14 @@
  *   Settings page layer .... z-[105]
  *   slice-3 account scrim .. z-[110]
  *   support "?" button ..... z-[115]   above Settings and the scrim
+ *   support-access banner .. z-[106]   visible over Settings (z-[105]); under scrim and dialogs
  *   support dialog ......... z-[118]   covers the "?" button and Settings; under toasts
  *   toasts ................. z-[120]   fired from inside Settings (General test notification)
  *   update notification .... z-[125]   keeps its place above toasts (same corner)
  */
 export const Z_CLASS = {
   settings: "z-[105]",
+  supportAccess: "z-[106]",
   support: "z-[115]",
   supportDialog: "z-[118]",
   toast: "z-[120]",

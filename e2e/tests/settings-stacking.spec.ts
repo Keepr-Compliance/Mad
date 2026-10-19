@@ -103,6 +103,8 @@ test.describe('Settings page stacking (BACKLOG-3964 S2 fix-up)', () => {
     await page.keyboard.press('Escape');
     await page.mouse.click(2, 2); // overlay click closes the form if Escape does not
     await expect(form).toBeHidden({ timeout: 5_000 });
+    // Esc closed only the form: Settings must still be open, or the check below proves nothing.
+    await expect(page.getByTestId('settings-page')).toBeVisible();
 
     // Title-bar initials while Settings shows: Settings closes, Profile is what the user sees.
     await page.getByTestId('nav-profile').click();

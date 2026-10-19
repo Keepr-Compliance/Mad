@@ -22,6 +22,12 @@ import { useEmailSettingsCallbacks } from "../hooks/useEmailSettingsCallbacks";
 import { useEscapeToClose } from "../../hooks/useEscapeToClose";
 import { Z_CLASS } from "../../constants/zLayers";
 
+/**
+ * The support form is mounted by SupportWidget at the app root, outside the
+ * Settings layer, but sits above it (Z_CLASS.supportDialog). Esc belongs to it.
+ */
+const SUPPORT_DIALOG = '[data-testid="support-ticket-dialog"]';
+
 /** Something open inside the page that should take Escape for itself. */
 const NESTED_OVERLAY =
   '[role="menu"], [role="dialog"], [aria-modal="true"], [aria-haspopup][aria-expanded="true"], .fixed.inset-0';
@@ -49,7 +55,9 @@ function OpenSettingsLayer({ app, user }: SettingsLayerProps & { user: NonNullab
   } = app;
   const rootRef = useRef<HTMLDivElement>(null);
 
-  useEscapeToClose(true, closeSettings, () => !!rootRef.current?.querySelector(NESTED_OVERLAY));
+  useEscapeToClose(true, closeSettings, () =>
+    !!rootRef.current?.querySelector(NESTED_OVERLAY) || !!document.querySelector(SUPPORT_DIALOG),
+  );
 
   const { handleEmailConnectedFromSettings, handleEmailDisconnectedFromSettings } =
     useEmailSettingsCallbacks({ userId: user.id });
