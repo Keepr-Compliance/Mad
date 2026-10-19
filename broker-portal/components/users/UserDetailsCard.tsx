@@ -20,6 +20,7 @@ import DeactivateUserModal from './DeactivateUserModal';
 import RemoveUserModal from './RemoveUserModal';
 import ReactivateUserModal from './ReactivateUserModal';
 import UnassignLicenseModal from './UnassignLicenseModal';
+import EditNameModal from './EditNameModal';
 import OutOfLicensesNotice from './OutOfLicensesNotice';
 import { setMemberLicense } from '@/lib/actions/memberLicense';
 import { MEMBER_LICENSE_ACTION_LABELS, memberRowActions } from '@/lib/users/memberLicenseActions';
@@ -27,6 +28,7 @@ import type { Role, MemberLicenseStatus, ProvisioningSource } from '@/lib/types/
 import { ROLE_LABELS, PROVISIONING_SOURCE_LABELS, memberStatusLabel } from '@/lib/types/users';
 import { formatUserDisplayName, getUserInitials, memberNameFields } from '@/lib/utils/userDisplay';
 import { formatDate } from '@/lib/utils';
+import { canShowEditName } from '@/lib/users/memberName';
 
 // ============================================================================
 // Types
@@ -94,6 +96,11 @@ interface UserDetailsCardProps {
   organizationName?: string | null;
   /** BACKLOG-3851 PR-2g: the organization has a free licence (null = not known). */
   orgHasFreeSeat?: boolean | null;
+  /**
+   * BACKLOG-3991: the database says this brokerage manages names by hand
+   * (org_names_directory_managed = false). False hides "Edit name".
+   */
+  namesEditable?: boolean;
 }
 
 // ============================================================================
@@ -143,6 +150,7 @@ export default function UserDetailsCard({
   currentUserRole,
   organizationName,
   orgHasFreeSeat = null,
+  namesEditable = false,
 }: UserDetailsCardProps) {
   const router = useRouter();
   const [showEditRole, setShowEditRole] = useState(false);
@@ -150,6 +158,7 @@ export default function UserDetailsCard({
   const [showRemove, setShowRemove] = useState(false);
   const [showReactivate, setShowReactivate] = useState(false);
   const [showUnassign, setShowUnassign] = useState(false);
+  const [showEditName, setShowEditName] = useState(false);
   const [assignOutOfSeats, setAssignOutOfSeats] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
 
@@ -162,6 +171,14 @@ export default function UserDetailsCard({
     isClaimed: !isPending,
     targetRole: member.role,
     callerRole: currentUserRole,
+  });
+
+  const showEditNameButton = canShowEditName({
+    namesEditable,
+    callerRole: currentUserRole,
+    targetRole: member.role,
+    isCurrentUser,
+    licenseStatus: member.license_status,
   });
 
   const handleAssign = async () => {
@@ -191,6 +208,7 @@ export default function UserDetailsCard({
     setShowRemove(false);
     setShowReactivate(false);
     setShowUnassign(false);
+    setShowEditName(false);
     if (shouldRefresh) {
       router.refresh();
     }
@@ -249,6 +267,11 @@ export default function UserDetailsCard({
               <Button onClick={() => setShowEditRole(true)}>
                 Change Role
               </Button>
+              {showEditNameButton && (
+                <Button variant="secondary" onClick={() => setShowEditName(true)}>
+                  Edit name
+                </Button>
+              )}
               {licenseAction && (
                 <Button variant="secondary" onClick={handleLicenseAction}>
                   {MEMBER_LICENSE_ACTION_LABELS[licenseAction]}
@@ -423,6 +446,13 @@ export default function UserDetailsCard({
         onClose={() => handleModalClose()}
         memberId={member.id}
         memberName={displayName}
+      />
+      <EditNameModal
+        isOpen={showEditName}
+        onClose={() => handleModalClose()}
+        memberId={member.id}
+        initialFirstName={isPending ? member.invited_first_name ?? null : member.user?.first_name ?? null}
+        initialLastName={isPending ? member.invited_last_name ?? null : member.user?.last_name ?? null}
       />
       <RemoveUserModal
         isOpen={showRemove}

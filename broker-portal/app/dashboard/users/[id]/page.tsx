@@ -33,6 +33,8 @@ interface UserDetailsResult {
   organizationName: string | null;
   /** BACKLOG-3851 PR-2g: seat state for the Reactivate dialog (null = not known). */
   orgHasFreeSeat: boolean | null;
+  /** BACKLOG-3991: the target's brokerage manages names by hand (false on any error). */
+  namesEditable: boolean;
 }
 
 interface NotFoundResult {
@@ -68,6 +70,7 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
     .from('organization_members')
     .select(`
       id,
+      organization_id,
       user_id,
       role,
       license_status,
@@ -144,6 +147,14 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
 
   const orgHasFreeSeat = await loadOrgHasFreeSeat(supabase, currentMembership.organization_id);
 
+  // BACKLOG-3991: the same database answer set_member_name uses, for the TARGET's
+  // organization. Only an explicit false shows "Edit name"; an error hides it.
+  const { data: directoryManaged, error: directoryManagedError } = await supabase.rpc(
+    'org_names_directory_managed',
+    { p_org: member.organization_id }
+  );
+  const namesEditable = !directoryManagedError && directoryManaged === false;
+
   return {
     member: {
       ...member,
@@ -155,6 +166,7 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
     organizationId: currentMembership.organization_id,
     organizationName: organization?.name ?? null,
     orgHasFreeSeat,
+    namesEditable,
   };
 }
 
@@ -254,6 +266,7 @@ export default async function UserDetailsPage({ params }: PageProps) {
         currentUserRole={data.currentUserRole}
         organizationName={data.organizationName}
         orgHasFreeSeat={data.orgHasFreeSeat}
+        namesEditable={data.namesEditable}
       />
     </div>
   );

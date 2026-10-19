@@ -518,6 +518,12 @@ const REFUSED_ACTIONS: Record<string, ActionEntry> = {
     memberId: TARGET_MEMBER_ID,
     action: 'assign',
   }),
+  // BACKLOG-3991: refused before set_member_name is called.
+  'lib/actions/memberName.ts#setMemberName': act(() => import('@/lib/actions/memberName'), 'setMemberName', {
+    memberId: TARGET_MEMBER_ID,
+    firstName: 'Audit',
+    lastName: 'Name',
+  }),
   'lib/actions/scim.ts#getScimFeatureStatus': act(scim, 'getScimFeatureStatus'),
   'lib/actions/scim.ts#generateScimToken': act(scim, 'generateScimToken', 'fixture'),
   'lib/actions/scim.ts#revokeScimToken': act(scim, 'revokeScimToken', 'token-3080'),
@@ -628,6 +634,7 @@ const REFUSALS: Record<string, Outcome | Record<Persona, Outcome>> = {
   'lib/actions/inviteUser.ts#inviteUser': failed('Not authorized to invite users'),
   'lib/actions/resendInvite.ts#resendInvite': { returned: { success: false, error: 'Not authorized' } },
   'lib/actions/memberLicense.ts#setMemberLicense': failed('Not authorized'),
+  'lib/actions/memberName.ts#setMemberName': failed('Not authorized'),
   'lib/actions/scim.ts#getScimFeatureStatus': { returned: { enabled: false } },
   'lib/actions/scim.ts#generateScimToken': NOT_AUTHORIZED_THROW,
   'lib/actions/scim.ts#revokeScimToken': NOT_AUTHORIZED_THROW,
@@ -682,6 +689,8 @@ const FLOOR_ACTIONS = [
   'lib/actions/mintDesktopSession.ts#mintDesktopSession',
   // BACKLOG-3543: verifies the access token it stores and binds the claim to its owner.
   'lib/actions/createTokenClaim.ts#createTokenClaim',
+  // BACKLOG-3991: verifies the access token and writes only that user's own names.
+  'lib/actions/syncDesktopIdpNames.ts#syncDesktopIdpNames',
 ];
 
 /**
@@ -950,7 +959,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(45); // BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
+    expect(actions.length).toBe(47); // BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 
