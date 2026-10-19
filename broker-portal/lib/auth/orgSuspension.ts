@@ -28,7 +28,7 @@ export const ORG_SUSPENSION_READ_FAILED = 'org_suspension_read_failed';
 export const BROKERAGE_SUSPENDED_ERROR = 'This brokerage account is suspended. Contact Keepr to restore it.';
 
 interface RpcReader {
-  rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: unknown }>;
+  rpc: (_fn: string, _args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: unknown }>;
 }
 
 /** The brokerage this access routes on, or null when it routes on none. */

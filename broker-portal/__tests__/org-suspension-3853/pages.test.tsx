@@ -7,14 +7,12 @@
  * answers true (scaffold copied from __tests__/suspended-3878/pages.test.tsx).
  */
 
-import { render } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import {
   ABSENT_COLUMN_ERROR,
   FIXTURE_USER_ID,
   brokerageMembership,
   createPostgrestEmulator,
-  personalMembership,
   type Row,
 } from '../helpers/postgrestEmulator';
 import { ORG_WITHOUT_PLAN_FEATURES } from '../fixtures/orgFeatures';
@@ -86,7 +84,6 @@ jest.mock('next/navigation', () => ({
 import DashboardLayout from '@/app/dashboard/layout';
 import DashboardPage from '@/app/dashboard/page';
 import ChecklistsPage from '@/app/dashboard/checklists/page';
-import OrgSettingsPage from '@/app/dashboard/settings/page';
 import UsersPage from '@/app/dashboard/users/page';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { requireFullPortalAccess } from '@/lib/auth/portalAccess';
