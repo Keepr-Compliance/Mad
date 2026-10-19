@@ -4,7 +4,7 @@ MUTATION APPLIED + the mutated line, git diff --numstat, jest run with a non-zer
 count, then the file is restored byte-for-byte and the restore is verified."""
 import json, subprocess, sys, re
 from pathlib import Path
-ROOT = Path('/Users/daniel/Developer/Mad-3991-portal')
+ROOT = Path(__file__).resolve().parents[3]
 BP = ROOT / 'broker-portal'
 SUITES = ['__tests__/member-name-3991', '__tests__/invite-without-license-3851/callback.test.ts']
 AUDIT = ['__tests__/agentFloor-3080/route-audit.test.tsx']
