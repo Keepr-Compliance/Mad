@@ -92,7 +92,6 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
   "electron/services/sealedLogSink.ts": { count: 3, reason: "BACKLOG-3819 — REDACTED plaintext fallback main.unsealed.log (append + crop) while the data key is not open: buffer overflow > 1 MB, exit before the key, or secure storage unavailable; sealed and deleted by the at-rest logs job at the next key-open. Plus rotation rename of a SEALED log. Sealed records are written by atRest/sealedLog" },
   "electron/handlers/diagnosticLogHandlers.ts": { count: 1, reason: `${EXPORT} — "Save diagnostic log": decrypted, redacted desktop log to a user-chosen file (BACKLOG-3819)` },
   "electron/services/logService.ts": { count: 2, reason: "PENDING S5 — app log file (redaction + retention, BACKLOG-3819)" },
-  "electron/outlookService.ts": { count: 1, reason: "MSAL token cache on the legacy Outlook path; design cut line 2.40.1 (dead MSAL path)" },
   // --- exports the user asked for -----------------------------------------------
   "electron/services/folderExport/folderExportService.ts": { count: 9, reason: `${EXPORT}; 2 calls are print-to-PDF temp HTML in os.tmpdir (S6 temp sweep); attachment copies are decryptToFile since S2` },
   "electron/services/enhancedExportService.ts": { count: 5, reason: EXPORT },
