@@ -136,6 +136,19 @@ describe('C-E1 (W4, RC2, RC5): the button opens the OLDEST OVERDUE invoice, on t
     expect(params.payment).toEqual({ kind: 'invoice', url: `https://invoice.stripe.test/REDACTED/${OLDEST}`, overdueCount: 1 });
   });
 
+  it.each([
+    [OLDEST_DUE - 1, 0],
+    [OLDEST_DUE, 0],
+    [OLDEST_DUE + 1, 1],
+    [NEWEST_DUE, 4],
+    [NEWEST_DUE + 1, 5],
+  ])('boundary: now %i -> %i overdue (due date strictly before now, as tryAutoReinstate)', async (now, count) => {
+    frozen = now;
+    given('non_payment');
+    const { params } = await sent();
+    expect(params.payment).toMatchObject({ kind: 'invoice', overdueCount: count });
+  });
+
   it('none overdue yet (clock at its start): falls back to the oldest open invoice, count 0', async () => {
     frozen = CLOCK_START;
     given('non_payment');
