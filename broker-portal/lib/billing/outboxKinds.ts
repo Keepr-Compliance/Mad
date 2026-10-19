@@ -114,6 +114,10 @@ function stableJson(v: unknown): string {
  *   - pause_agent_subscription / resume_agent_subscription
  *                            BACKLOG-3878, lib/billing/suspension.ts (enqueued by the
  *                            licences trigger and the nightly reconcile)
+ *   - sync_org_subscription  BACKLOG-3853, lib/billing/brokerageSync.ts (enqueued by the
+ *                            org_deals trigger, one row per deal version)
+ *   - notify_org_suspended / notify_account_manager
+ *                            BACKLOG-3853, lib/billing/brokerageNotify.ts (organization rows)
  */
 export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.freeze({
   agent_receipt: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
@@ -124,4 +128,10 @@ export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.f
     (await import('./suspension')).handlePauseRow(row, ctx),
   resume_agent_subscription: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
     (await import('./suspension')).handleResumeRow(row, ctx),
+  sync_org_subscription: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./brokerageSync')).handleSyncOrgSubscriptionRow(row, ctx),
+  notify_org_suspended: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./brokerageNotify')).handleNotifyOrgSuspendedRow(row, ctx),
+  notify_account_manager: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./brokerageNotify')).handleNotifyAccountManagerRow(row, ctx),
 });

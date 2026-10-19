@@ -931,3 +931,78 @@ describe('BACKLOG-3878 C2: desktop purchase routes refuse a suspended licence be
     expect(mockRpc.mock.calls.map((c) => c[0])).toContain('get_next_unlock_quote');
   });
 });
+
+// ---- BACKLOG-3853: a member of a suspended brokerage buys nothing ---------
+//
+// billing_purchase_blocked(p_user) (PR-1, service role) is true while the deal of the
+// organization that decides the user's billing is suspended. The refusal sits after the
+// licence check and before the quote, the customer and every Stripe call; a failed check
+// refuses too (fail closed, 503).
+
+describe('BACKLOG-3853 C-3 / C-3b / C-11: purchase routes refuse a member of a suspended brokerage', () => {
+  const ROUTES = [
+    ['checkout-session', '@/app/api/payments/checkout-session/route'],
+    ['charge', '@/app/api/payments/charge/route'],
+  ] as const;
+
+  function wire(blocked: { data: unknown; error: unknown }): void {
+    signedIn();
+    useDb({ organizations: [personalOrg(true)], stripe_customers: [], licenses: [{ id: 'LIC-1', user_id: 'USER-1', status: 'active' }] });
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'get_next_unlock_quote') {
+        return Promise.resolve({
+          data: [{ next_unit_index: 1, unit_price_cents: 1499, currency: 'usd', pricing_tier_id: 'TIER-1' }],
+          error: null,
+        });
+      }
+      if (fn === 'billing_purchase_blocked') return Promise.resolve(blocked);
+      return Promise.resolve({ data: null, error: null });
+    });
+  }
+  function nothingBought(): void {
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('get_next_unlock_quote');
+    expect(db.callsTo('stripe_customers', 'select')).toEqual([]);
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+    expect(mockCheckoutCreate).not.toHaveBeenCalled();
+    expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
+  }
+
+  it.each(ROUTES)('C-3 %s: brokerage suspended -> 403 account_suspended, nothing bought', async (_n, mod) => {
+    wire({ data: true, error: null });
+    const { POST } = await import(mod);
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(403);
+    expect(await (res as NextResponse).json()).toEqual({ error: 'account_suspended' });
+    expect(mockRpc.mock.calls.find((c) => c[0] === 'billing_purchase_blocked')?.[1]).toEqual({ p_user: 'USER-1' });
+    nothingBought();
+  });
+
+  it.each(ROUTES)('C-3b %s: the check fails -> 503, nothing bought', async (_n, mod) => {
+    wire({ data: null, error: { message: 'fixture: rpc failed' } });
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { POST } = await import(mod);
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(503);
+    expect(errSpy).toHaveBeenCalledWith('[payments] brokerage suspension check failed', { code: 'brokerage_block_read_failed' });
+    errSpy.mockRestore();
+    nothingBought();
+  });
+
+  it('C-11 control: not blocked -> checkout-session creates the customer and the session', async () => {
+    wire({ data: false, error: null });
+    mockCustomersCreate.mockResolvedValue({ id: 'cus_FX3853' });
+    mockCheckoutCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe/x', payment_intent: 'pi_1' });
+    const { POST } = await import('@/app/api/payments/checkout-session/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(200);
+    expect(mockCheckoutCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('C-11 control: not blocked -> charge reaches the saved-card check', async () => {
+    wire({ data: false, error: null });
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(409);
+    expect(mockRpc.mock.calls.map((c) => c[0])).toContain('get_next_unlock_quote');
+  });
+});

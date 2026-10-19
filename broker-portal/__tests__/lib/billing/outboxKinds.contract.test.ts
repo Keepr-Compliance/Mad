@@ -23,6 +23,9 @@ const EXPECTED_KINDS: string[] = [
   'agent_receipt', // BACKLOG-3848
   'pause_agent_subscription', // BACKLOG-3878
   'resume_agent_subscription', // BACKLOG-3878
+  'sync_org_subscription', // BACKLOG-3853
+  'notify_org_suspended', // BACKLOG-3853
+  'notify_account_manager', // BACKLOG-3853
 ];
 const DIR = path.join(__dirname, 'outboxKinds');
 

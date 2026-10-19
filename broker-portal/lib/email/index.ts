@@ -26,6 +26,8 @@ export { buildTicketReplyNotification } from './templates/ticket-reply-notificat
 export { buildTicketAssignmentNotification } from './templates/ticket-assignment-notification';
 export { buildTicketResolvedEmail } from './templates/ticket-resolved';
 export { buildSeatLimitReachedEmail } from './templates/seat-limit-reached';
+export { buildAccountSuspendedEmail } from './templates/account-suspended';
+export { buildAccountManagerAlertEmail } from './templates/account-manager-alert';
 
 // Types
 export type {
@@ -42,6 +44,8 @@ export type {
   TicketAssignmentNotificationParams,
   TicketResolvedParams,
   SeatLimitReachedParams,
+  AccountSuspendedParams,
+  AccountManagerAlertParams,
 } from './types';
 
 // Queue (BACKLOG-2009)
@@ -62,6 +66,8 @@ import { buildTicketReplyNotification } from './templates/ticket-reply-notificat
 import { buildTicketAssignmentNotification } from './templates/ticket-assignment-notification';
 import { buildSeatLimitReachedEmail } from './templates/seat-limit-reached';
 import { buildTicketResolvedEmail } from './templates/ticket-resolved';
+import { buildAccountSuspendedEmail } from './templates/account-suspended';
+import { buildAccountManagerAlertEmail } from './templates/account-manager-alert';
 import type {
   InviteEmailParams,
   DownloadInviteEmailParams,
@@ -72,6 +78,8 @@ import type {
   TicketAssignmentNotificationParams,
   TicketResolvedParams,
   SeatLimitReachedParams,
+  AccountSuspendedParams,
+  AccountManagerAlertParams,
   SendEmailResult,
 } from './types';
 
@@ -245,5 +253,51 @@ export async function sendSeatLimitReachedEmail(
     text,
     emailType: 'other',
     logMetadata: { kind: 'seat_limit_reached', seatKind: params.kind },
+  });
+}
+
+/**
+ * "Account suspended" email to a brokerage's billing contact (BACKLOG-3853 PR-2).
+ * Logged as email_type 'other' (the delivery log's type check allows no new value);
+ * metadata.kind + outboxKey let the outbox handler see a send it already made.
+ */
+export async function sendAccountSuspendedEmail(
+  params: AccountSuspendedParams,
+): Promise<SendEmailResult> {
+  const { subject, html, text } = buildAccountSuspendedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'account_suspended',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+      reason: params.reason,
+    },
+  });
+}
+
+/**
+ * Billing alert to a brokerage's Keepr account manager (BACKLOG-3853 PR-2).
+ */
+export async function sendAccountManagerAlertEmail(
+  params: AccountManagerAlertParams,
+): Promise<SendEmailResult> {
+  const { subject, html, text } = buildAccountManagerAlertEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'brokerage_account_manager_alert',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+      reason: params.reason,
+    },
   });
 }

@@ -237,3 +237,31 @@ export interface SeatLimitReachedParams {
   maxSeats: number | null;
   kind: 'add' | 'reactivate';
 }
+
+// ---------------------------------------------------------------------------
+// Brokerage billing emails (BACKLOG-3853 PR-2)
+// ---------------------------------------------------------------------------
+
+export interface AccountSuspendedParams {
+  /** The brokerage's billing contact */
+  recipientEmail: string;
+  brokerageName: string;
+  /** Why the account manager suspended the account */
+  reason: 'non_payment' | 'other';
+  /** Kept in the delivery log so a second run can see this email was sent */
+  outboxKey: string;
+  organizationId: string;
+}
+
+export type AccountManagerAlertReason = 'overdue' | 'payment_failed' | 'refund' | 'dispute';
+
+export interface AccountManagerAlertParams {
+  /** The account manager's sign-in email */
+  recipientEmail: string;
+  brokerageName: string;
+  reason: AccountManagerAlertReason;
+  /** Stripe object the alert is about (an invoice, charge or dispute id) */
+  stripeObjectId: string | null;
+  outboxKey: string;
+  organizationId: string;
+}

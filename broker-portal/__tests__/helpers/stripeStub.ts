@@ -46,6 +46,12 @@ const OPS = [
   'charges.retrieve',
   'charges.list',
   'paymentMethods.retrieve',
+  // BACKLOG-3853 PR-2 (brokerage subscription sync)
+  'products.retrieve',
+  'products.create',
+  'subscriptions.create',
+  'paymentIntents.retrieve',
+  'testHelpers.testClocks.retrieve',
 ] as const;
 
 export const clone = <T>(o: T): T => JSON.parse(JSON.stringify(o));
