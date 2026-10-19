@@ -7,7 +7,7 @@ Body md5 (`md5(prosrc)`) of this file's functions, pinned in its pre-check:
 
 | Function | md5 |
 |---|---|
-| `sync_profile_names_from_idp(text,text,text)` | `18ee571b4bb9dd485032c1b98a0dd904` |
+| `sync_profile_names_from_idp(text,text,text)` | `984dc45b04f369274a1f003344042cae` |
 | `org_names_directory_managed(uuid)` | `99e8d288115addafe005249f42e7d4b8` |
 | `set_member_name(uuid,text,text)` | `e6e1590f67f8c15f98fa32a6a94aeffb` |
 
@@ -22,11 +22,11 @@ After any body edit: `python3 pin_bodies.py` (re-pins), then `python3 compose.py
 - `mutants.sql`: the same fixtures. First the base run, then one subtransaction per mutant.
   Each mutant is an exact-once anchor replace of the live body, and its md5 must change. The
   report prints `MUTATION APPLIED` with both md5s and the red controls; then the subtransaction
-  is undone. There are 38 body mutants, 8 grant/definer mutants and 4 guard mutants.
+  is undone. There are 49 body mutants, 8 grant/definer mutants and 4 guard mutants.
   - A body mutant always turns `C11 second run` red, because the guard pins this file's bodies.
     That control is left out of each mutant's catch.
-- `reapply-keepr-test.sql`: keepr-test only. It drops, re-applies the file and re-writes the
-  ledger row in one transaction (see Status).
+- `reapply-keepr-test.sql`: SUPERSEDED, kept as the record of the first keepr-test re-apply
+  (pre-skip body). Do not run it.
 - `jest-mutants.py`: the portal jest mutants (exact-once replace, numstat, `--bail=0`,
   restore verified).
 
@@ -48,3 +48,22 @@ report in the error text.
 - Mutants, grant/definer (8) + guard (4): 12 / 12 applied and red. Applied is proven by the
   changed proacl / prosecdef, or the changed guard md5.
 - Total: 50 / 50 applied, 50 / 50 caught. Base 137 / 137 green before every batch.
+
+## SCIM-names skip (2026-10-19, founder decision pm_comments d48323db)
+
+`sync_profile_names_from_idp` now skips the write (`success:true, updated:false,
+skipped:'directory_managed'`) for a caller with a claimed, non-deactivated membership in an
+organization with `scim_enabled`, `directory_sync_enabled`, or a live SCIM token (not revoked,
+not expired). JIT, manual and solo users are unchanged. No JIT term, no caller-role term.
+
+- keepr-test: only the `CREATE OR REPLACE FUNCTION public.sync_profile_names_from_idp` statement
+  (plus its REVOKE/GRANT) was run. Live md5 `984dc45b` == this file's pin. Ledger statement for
+  `20261019050000` updated to the new file md5. Production: function absent, no ledger row.
+- New fixtures: k1 (scim_enabled org s), k2 (live token, no expiry, tk), k3 (directory sync, d),
+  k4 (suspended in s), k5 (expired token only, te), k6 (revoked token only, tr), k7 (s + manual m),
+  k8 (token with future expiry, tf). Controls C40-C47 (16).
+- C19 fixture: `org_deals` insert now sets `version` and `suspended_at`. 20261019090000
+  (`_billing_enqueue_org_work`) builds `billing_outbox.dedupe_key` from them; NULL was a 23502.
+- Results: BASE 153 / 153 green. Mutants K1-K11 (skip): 11 / 11 applied (md5 changed) and red.
+  Mutants S1a-S10 (existing sync mutants, re-run because the body changed): 13 / 13 applied and red.
+- `rollback.sql` is unchanged: it still removes the three functions and the ledger row.

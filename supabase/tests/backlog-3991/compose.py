@@ -47,7 +47,7 @@ def q(s: str) -> str:
 
 
 # ---------------------------------------------------------------- fixtures
-USERS = ['a', 'it', 'br', 'ag', 'ad', 't1', 't2', 't3', 't4', 't5', 't6', 'ga', 'tj', 'ya', 'po', 'pt', 'sa', 'sb']
+USERS = ['a', 'it', 'br', 'ag', 'ad', 't1', 't2', 't3', 't4', 't5', 't6', 'ga', 'tj', 'ya', 'po', 'pt', 'sa', 'sb', 'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8']
 ORGS = ['m', 'x', 'y', 'p', 'j', 'jn', 's', 'd', 'tk', 'tr', 'te', 'tf']
 MEMBERS = {
     # key: (org, user, role, status)
@@ -76,6 +76,17 @@ MEMBERS = {
     'tr_ga': ('tr', 'ga', 'admin', 'active'),
     'te_ga': ('te', 'ga', 'admin', 'active'),
     'tf_ga': ('tf', 'ga', 'admin', 'active'),
+    # SCIM-names skip (founder decision d48323db): one membership each, so a case can
+    # switch the org's directory off and see the same user refreshed.
+    's_k1': ('s', 'k1', 'agent', 'active'),
+    'tk_k2': ('tk', 'k2', 'agent', 'active'),
+    'd_k3': ('d', 'k3', 'agent', 'active'),
+    's_k4': ('s', 'k4', 'agent', 'suspended'),
+    'te_k5': ('te', 'k5', 'agent', 'active'),
+    'tr_k6': ('tr', 'k6', 'agent', 'active'),
+    's_k7': ('s', 'k7', 'agent', 'active'),
+    'm_k7': ('m', 'k7', 'agent', 'active'),
+    'tf_k8': ('tf', 'k8', 'agent', 'active'),
 }
 KEYS = USERS + ['o_' + o for o in ORGS] + list(MEMBERS) + ['m_inv']
 
@@ -308,9 +319,12 @@ SET_ROWS = ',\n'.join(
     for n, w, m, f, l, e, u, xf, xl, xd, s in SETS)
 # org_deals' guard_stripe_mode_is_test: a 'test' deal needs organizations.is_test = true
 # (measured on keepr-test: 42501 otherwise). Set inside the case, rolled back with it.
+# version, suspended_at: _billing_enqueue_org_work (20261019090000) builds the
+# billing_outbox.dedupe_key of its two rows from them; NULL is a NOT NULL violation
+# (23502, measured on keepr-test 2026-10-19).
 SUSPEND = ("UPDATE public.organizations SET is_test = true WHERE id = pg_temp.i('o_m'); "
-           "INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_reason) "
-           "VALUES (pg_temp.i('o_m'), 'test', 3, 'suspended', 'other')")
+           "INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_reason, version, suspended_at) "
+           "VALUES (pg_temp.i('o_m'), 'test', 3, 'suspended', 'other', 1, now())")
 SET_BLOCK = f"""  FOR c IN SELECT * FROM (VALUES
 {SET_ROWS}
     ) v(name, who, mem, pf, pl, ex, chk, xf, xl, xd, susp) LOOP
@@ -383,6 +397,61 @@ case('C31 admin edit, then sign-in with IdP first = null: admin first survives',
      AS(I('a')) + f"    r := public.set_member_name({I('m_t1')}, 'Admin', 'Set');\n"
      + AS(I('t1')) + "    r2 := public.sync_profile_names_from_idp(NULL, 'IdpLast', 'Idp Full');\n" + PG + names(I('t1')),
      "fn = 'Admin' AND ln = 'IdpLast' AND dn = 'Idp Full'", "concat_ws(' / ', r2::text, fn, ln, dn)")
+
+
+
+# C40-C48: SCIM / directory-sync members get names from the directory only (founder
+# decision d48323db). Sign-in sends ('New', 'Name', 'New Name'); the fixture names are
+# 'F-<key>' / 'L-<key>' / 'D-<key>'.
+SIGNIN = "    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');\n"
+SIGNIN2 = "    r2 := public.sync_profile_names_from_idp('New', 'Name', 'New Name');\n"
+
+
+def kept(u: str) -> str:
+    return f"(r->>'success')::boolean AND r->>'skipped' = 'directory_managed' AND fn = 'F-{u}' AND ln = 'L-{u}' AND dn = 'D-{u}' AND ct = t"
+
+
+REFRESHED = "(r->>'success')::boolean AND (r->>'updated')::boolean AND r->>'skipped' IS NULL AND fn = 'New' AND ln = 'Name' AND dn = 'New Name'"
+DET_K = "concat_ws(' / ', r::text, r2::text, fn, ln, dn)"
+
+
+def skip_case(name: str, u: str):
+    case(name, names(I(u)) + "    t := ct;\n" + AS(I(u)) + SIGNIN + PG + names(I(u)), kept(u), DET_K)
+
+
+def refresh_case(name: str, u: str):
+    case(name, AS(I(u)) + SIGNIN + PG + names(I(u)), REFRESHED, DET_K)
+
+
+def off_then_refresh(name: str, u: str, switch_off: str):
+    case(name, AS(I(u)) + SIGNIN + PG + names(I(u)) + "    t := fn;\n"
+         + f"    {switch_off};\n" + AS(I(u)) + SIGNIN2 + PG + names(I(u)),
+         f"r->>'skipped' = 'directory_managed' AND t = 'F-{u}' AND (r2->>'success')::boolean AND (r2->>'updated')::boolean AND fn = 'New' AND ln = 'Name' AND dn = 'New Name'",
+         DET_K)
+
+
+skip_case('C40 scim_enabled member: sign-in skipped, names and row version unchanged', 'k1')
+off_then_refresh('C40 same member after scim_enabled off: refreshed', 'k1',
+                 f"UPDATE public.organizations SET scim_enabled = false WHERE id = {I('o_s')}")
+skip_case('C41 live SCIM token (no expiry) member: sign-in skipped', 'k2')
+off_then_refresh('C41 same member after the token is revoked: refreshed', 'k2',
+                 f"UPDATE public.scim_tokens SET revoked_at = now() WHERE organization_id = {I('o_tk')}")
+skip_case('C41 live SCIM token (future expiry) member: sign-in skipped', 'k8')
+skip_case('C42 directory_sync_enabled member: sign-in skipped', 'k3')
+off_then_refresh('C42 same member after directory_sync_enabled off: refreshed', 'k3',
+                 f"UPDATE public.organizations SET directory_sync_enabled = false WHERE id = {I('o_d')}")
+refresh_case('C43 JIT-org member: refreshed', 'tj')
+refresh_case('C43 manual-org member: refreshed', 't1')
+refresh_case('C43 solo user (no brokerage): refreshed', 'sb')
+refresh_case('C44 deactivated (suspended) membership in a SCIM org: refreshed', 'k4')
+off_then_refresh('C44 SCIM member after SCIM deprovision (suspended): refreshed', 'k1',
+                 f"UPDATE public.organization_members SET license_status = 'suspended' WHERE id = {I('s_k1')}")
+refresh_case('C45 member whose only SCIM token is expired: refreshed', 'k5')
+refresh_case('C45 member whose only SCIM token is revoked: refreshed', 'k6')
+skip_case('C46 member of a SCIM org and a manual org: sign-in skipped', 'k7')
+case('C47 SCIM member, all-absent input: success, no error, unchanged',
+     names(I('k1')) + "    t := ct;\n" + AS(I('k1')) + "    r := public.sync_profile_names_from_idp(NULL, NULL, NULL);\n" + PG + names(I('k1')),
+     "(r->>'success')::boolean AND r->>'error' IS NULL AND fn = 'F-k1' AND ct = t", DET_K)
 
 
 # C11: drift guard (the guard text is read from guard3991 so guard mutants can edit it)
@@ -458,6 +527,19 @@ SET_WRITE = """    UPDATE public.users
        SET first_name = v_first, last_name = v_last, display_name = v_display, updated_at = now()
      WHERE id = v_target.user_id;"""
 
+SKIP_EXISTS = """  IF EXISTS (
+       SELECT 1 FROM public.organization_members m
+         JOIN public.organizations o ON o.id = m.organization_id
+        WHERE m.user_id = v_uid
+          AND NOT public.member_status_is_deactivated(m.license_status)
+          AND (COALESCE(o.scim_enabled, false)
+               OR COALESCE(o.directory_sync_enabled, false)
+               OR EXISTS (
+                    SELECT 1 FROM public.scim_tokens t
+                     WHERE t.organization_id = o.id
+                       AND t.revoked_at IS NULL
+                       AND (t.expires_at IS NULL OR t.expires_at > now())))) THEN"""
+
 # (id, function key, [(anchor, replacement), ...], what it models)
 MUTANTS = [
     ('S1a', 'sync', [('SET first_name   = COALESCE(v_first, u.first_name),', 'SET first_name   = v_first,')], 'first: blank on null (M1)'),
@@ -477,6 +559,30 @@ MUTANTS = [
     ('S10', 'sync', [('sync_profile_names_from_idp(p_first text, p_last text, p_display text)',
                       'sync_profile_names_from_idp(p_first text, p_last text, p_display text, p_user uuid DEFAULT NULL::uuid)'),
                      ('WHERE u.id = v_uid\n', 'WHERE u.id = COALESCE(p_user, v_uid)\n')], 'a 4th parameter p_user'),
+    ('K1', 'sync', [(SKIP_EXISTS, '  IF false THEN')], 'SCIM skip removed'),
+    ('K2', 'sync', [('''          AND (COALESCE(o.scim_enabled, false)
+               OR COALESCE(o.directory_sync_enabled, false)
+               OR EXISTS (
+                    SELECT 1 FROM public.scim_tokens t
+                     WHERE t.organization_id = o.id
+                       AND t.revoked_at IS NULL
+                       AND (t.expires_at IS NULL OR t.expires_at > now())))) THEN''',
+                     '          AND COALESCE(o.scim_enabled, false)) THEN')], 'skip on scim_enabled only (tokens and directory sync ignored)'),
+    ('K3', 'sync', [('          AND NOT public.member_status_is_deactivated(m.license_status)\n', '')], 'skip on any membership, deactivated included'),
+    ('K4', 'sync', [('          AND (COALESCE(o.scim_enabled, false)\n', '          AND (COALESCE(o.scim_enabled, false) OR COALESCE(o.jit_provisioning_enabled, true)\n')], 'JIT counted as directory-managed (gate copied)'),
+    ('K5', 'sync', [('               OR COALESCE(o.directory_sync_enabled, false)\n', '')], 'directory_sync_enabled not counted'),
+    ('K6', 'sync', [('''
+               OR EXISTS (
+                    SELECT 1 FROM public.scim_tokens t
+                     WHERE t.organization_id = o.id
+                       AND t.revoked_at IS NULL
+                       AND (t.expires_at IS NULL OR t.expires_at > now())))) THEN''', ')) THEN')], 'live-token term dropped'),
+    ('K7', 'sync', [('                       AND t.revoked_at IS NULL\n', '')], 'skip: revoked filter dropped'),
+    ('K8', 'sync', [('\n                       AND (t.expires_at IS NULL OR t.expires_at > now())))) THEN', '))) THEN')], 'skip: expiry filter dropped'),
+    ('K9', 'sync', [("RETURN jsonb_build_object('success', true, 'updated', false, 'skipped', 'directory_managed');",
+                     "RETURN jsonb_build_object('success', false, 'error', 'directory_managed');")], 'skip answered as an error'),
+    ('K10', 'sync', [('        WHERE m.user_id = v_uid\n          AND NOT', '        WHERE NOT')], 'skip not tied to the caller'),
+    ('K11', 'sync', [('                     WHERE t.organization_id = o.id\n', '                     WHERE true\n')], 'token not tied to the org'),
     ('G1', 'gate', [('COALESCE(o.jit_provisioning_enabled, true)', 'COALESCE(o.jit_provisioning_enabled, false)')], 'JIT NULL treated as off (SR-1)'),
     ('G2', 'gate', [('              AND NOT COALESCE(o.jit_provisioning_enabled, true)\n', '')], 'JIT term dropped'),
     ('G3', 'gate', [('              AND NOT COALESCE(o.scim_enabled, false)\n', '')], 'scim_enabled term dropped'),
@@ -623,9 +729,9 @@ DECLARE
   mu record; v_rep text := ''; v_def text; v_before text; v_after text; v_out text; v_nf int; v_np int; v_reds text;
 BEGIN
   v_out := pg_temp.run3991();
-  SELECT count(*) FILTER (WHERE l LIKE 'FAIL|%'), count(*) FILTER (WHERE l LIKE 'PASS|%')
-    INTO v_nf, v_np FROM regexp_split_to_table(v_out, E'\\n') l;
-  v_rep := 'BASE|red ' || v_nf || ' / green ' || v_np;
+  SELECT count(*) FILTER (WHERE l LIKE 'FAIL|%'), count(*) FILTER (WHERE l LIKE 'PASS|%'), string_agg(l, ' ;; ') FILTER (WHERE l LIKE 'FAIL|%')
+    INTO v_nf, v_np, v_reds FROM regexp_split_to_table(v_out, E'\\n') l;
+  v_rep := 'BASE|red ' || v_nf || ' / green ' || v_np || '|' || COALESCE(v_reds, '<none>');
 {''.join(blocks)}  RAISE EXCEPTION 'REPORT 3991 MUTANTS%', v_rep;
 END $mut$;
 """
