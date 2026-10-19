@@ -37,12 +37,13 @@ BEGIN
   VALUES (v, p_email, 'azure', 'ext-' || v, 'scim', true);
   RETURN v;
 END $f$;
--- Write a value with triggers off (models a value stored before this migration).
+-- Write a value with the email trigger off (models a value stored before this migration;
+-- the ALTER is undone with the control's subtransaction).
 CREATE FUNCTION pg_temp.raw_email(p_id uuid, p_email text) RETURNS void LANGUAGE plpgsql AS $f$
 BEGIN
-  PERFORM set_config('session_replication_role', 'replica', true);
+  ALTER TABLE public.users DISABLE TRIGGER users_email_from_auth;
   UPDATE public.users SET email = p_email WHERE id = p_id;
-  PERFORM set_config('session_replication_role', 'origin', true);
+  ALTER TABLE public.users ENABLE TRIGGER users_email_from_auth;
 END $f$;
 CREATE FUNCTION pg_temp.ae(p_id uuid) RETURNS text LANGUAGE sql STABLE AS $f$
   SELECT lower(btrim(email)) FROM auth.users WHERE id = p_id $f$;
@@ -410,8 +411,8 @@ BEGIN
   t := (SELECT concat_ws(',', status, provisioning_source, scim_external_id, is_managed, sso_only, jit_provisioned, subscription_tier, oauth_id)
           FROM public.users WHERE id = x);
   t2 := (SELECT concat_ws(',', status, provisioning_source, is_managed, jit_provisioned, oauth_id) FROM public.users WHERE id = y);
-  ok := t = 'suspended,scim,c19-ext,true,true,true,enterprise,c19-3998-ext'
-    AND t2 = 'suspended,jit,true,true,c19-3998-def';
+  ok := t = 'suspended,scim,c19-ext,t,t,t,enterprise,c19-3998-ext'
+    AND t2 = 'suspended,jit,t,t,c19-3998-def';
   r := pg_temp.res(ok, 'C19 ' || cname, t || ' | ' || t2);
 
     RAISE EXCEPTION USING ERRCODE = 'ZX998', MESSAGE = r;

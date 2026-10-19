@@ -25,7 +25,8 @@
 --      last_sso_provider, jit_provisioned, jit_provisioned_at, idp_claims.
 --    No error is raised: an installed desktop that sends these values keeps working.
 -- 4. public.users_own_oauth_pair(): the caller's (provider, provider_id) from
---    auth.identities (earliest identity), else ('email', <id>). If another public.users
+--    auth.identities (earliest identity whose provider users_oauth_provider_check
+--    accepts), else ('email', <id>). If another public.users
 --    row holds that pair, the id is used as oauth_id instead.
 -- 5. public.handle_new_user() (CREATE OR REPLACE): email = lower(btrim(auth email)), else
 --    '<id>@unknown.local' (no user-metadata fallback). A public.users row with the same
@@ -72,7 +73,7 @@ BEGIN
   FOR r IN SELECT * FROM (VALUES
     ('public.users_email_from_auth()',       'eb762a864ef17d09fa0e6351fbdd8468'),
     ('public.users_client_write_guard()',    '22a40e688af40dc838879df00f4e7133'),
-    ('public.users_own_oauth_pair()',        'd74b56a52d1e2df4344cb584be5a0fab'),
+    ('public.users_own_oauth_pair()',        '6d37e0a6759c880f2e2b7d3d1a3a9808'),
     ('public.user_id_for_auth_email(text)',  'a6eb9a7dedf1edfe381f544a16cc6f9a'),
     ('public.sync_email_from_auth()',        '8dde26ff3b2c18b19c4e27ecb424025e')
   ) AS t(sig, expected) LOOP
@@ -197,6 +198,7 @@ BEGIN
   SELECT i.provider, i.provider_id INTO v_provider, v_provider_id
     FROM auth.identities i
    WHERE i.user_id = v_uid
+     AND i.provider IN ('google', 'microsoft', 'azure', 'email')
    ORDER BY i.created_at, i.id
    LIMIT 1;
 

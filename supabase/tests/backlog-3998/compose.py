@@ -98,12 +98,13 @@ BEGIN
   VALUES (v, p_email, 'azure', 'ext-' || v, 'scim', true);
   RETURN v;
 END $f$;
--- Write a value with triggers off (models a value stored before this migration).
+-- Write a value with the email trigger off (models a value stored before this migration;
+-- the ALTER is undone with the control's subtransaction).
 CREATE FUNCTION pg_temp.raw_email(p_id uuid, p_email text) RETURNS void LANGUAGE plpgsql AS $f$
 BEGIN
-  PERFORM set_config('session_replication_role', 'replica', true);
+  ALTER TABLE public.users DISABLE TRIGGER users_email_from_auth;
   UPDATE public.users SET email = p_email WHERE id = p_id;
-  PERFORM set_config('session_replication_role', 'origin', true);
+  ALTER TABLE public.users ENABLE TRIGGER users_email_from_auth;
 END $f$;
 CREATE FUNCTION pg_temp.ae(p_id uuid) RETURNS text LANGUAGE sql STABLE AS $f$
   SELECT lower(btrim(email)) FROM auth.users WHERE id = p_id $f$;
@@ -435,8 +436,8 @@ ctl('C19', 'server writers keep the columns they set (service_role insert; defin
   t := (SELECT concat_ws(',', status, provisioning_source, scim_external_id, is_managed, sso_only, jit_provisioned, subscription_tier, oauth_id)
           FROM public.users WHERE id = x);
   t2 := (SELECT concat_ws(',', status, provisioning_source, is_managed, jit_provisioned, oauth_id) FROM public.users WHERE id = y);
-  ok := t = 'suspended,scim,c19-ext,true,true,true,enterprise,c19-3998-ext'
-    AND t2 = 'suspended,jit,true,true,c19-3998-def';
+  ok := t = 'suspended,scim,c19-ext,t,t,t,enterprise,c19-3998-ext'
+    AND t2 = 'suspended,jit,t,t,c19-3998-def';
   r := pg_temp.res(ok, 'C19 ' || cname, t || ' | ' || t2);
 """)
 
@@ -450,7 +451,7 @@ ctl('C20', 'reset values equal the column defaults (pg_attrdef)', r"""
 ctl('C21', 'two auth accounts with one address (one SSO): lookup NULL, admin_add_internal_user refuses (not P0002)', r"""
   i := pg_temp.internal('c21');
   a := pg_temp.mk('c21-3998-a@example.test');
-  b := pg_temp.mk('c21-3998-a@example.test', '{"provider":"sso:x"}', '{}', true);
+  b := pg_temp.mk('c21-3998-a@example.test', '{"provider":"azure"}', '{}', true);
   PERFORM pg_temp.assvc();
   x := public.user_id_for_auth_email('c21-3998-a@example.test');
   PERFORM pg_temp.asu(i);
@@ -539,6 +540,21 @@ ctl('C27', 'users_own_oauth_pair: own pair for the client, nothing for anon', r"
   r := pg_temp.res(t = 'email:' || a::text AND st = 'anon 42501', 'C27 ' || cname, COALESCE(t, 'none') || ' ' || st);
 """)
 
+ctl('C28', 'client insert whose only identity provider the users table does not accept: ok, pair email/own id', r"""
+  b := pg_temp.mk('c28-3998-b@example.test');
+  PERFORM pg_temp.mkid(b, 'github', 'c28-3998-gh');
+  DELETE FROM public.users WHERE id = b;
+  PERFORM pg_temp.asu(b);
+  BEGIN
+    INSERT INTO public.users (id, email, oauth_provider, oauth_id) VALUES (b, 'x', 'google', 'c28-3998-sent');
+    st := 'ok';
+  EXCEPTION WHEN OTHERS THEN st := SQLSTATE || ' ' || SQLERRM;
+  END;
+  PERFORM pg_temp.pg();
+  t := (SELECT oauth_provider || ':' || oauth_id FROM public.users WHERE id = b);
+  r := pg_temp.res(st = 'ok' AND t = 'email:' || b::text, 'C28 ' || cname, st || ' ' || COALESCE(t, 'none'));
+""")
+
 CIDS = [c[0] for c in C]
 assert len(set(CIDS)) == len(CIDS)
 
@@ -598,6 +614,8 @@ M = [
      'users_own_oauth_pair: no collision fallback', ['C18b']),
     ('M10', 'pair', "   ORDER BY i.created_at, i.id\n", "   ORDER BY i.created_at DESC, i.id\n",
      'users_own_oauth_pair: latest identity instead of earliest', ['C27']),
+    ('M23', 'pair', "     AND i.provider IN ('google', 'microsoft', 'azure', 'email')\n", "",
+     'users_own_oauth_pair: provider not filtered to accepted values', ['C28']),
     ('M11', 'hnu', "    v_oauth_id := NEW.id::text;\n  END IF;\n", "    NULL;\n  END IF;\n",
      'handle_new_user: no pair fallback', ['C16']),
     ('M12', 'hnu', "       AND NOT EXISTS (SELECT 1 FROM auth.users a WHERE a.id = u.id)\n  LOOP", "\n  LOOP",
