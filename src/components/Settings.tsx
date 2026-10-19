@@ -175,7 +175,7 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
             </div>
           ) : (
           <>
-            <AccountSettings {...account} />
+            <AccountSettings {...account} mailboxes={{ google: isGoogleConnected, microsoft: isMicrosoftConnected }} />
 
             <GeneralSettings userId={userId} initialPreferences={preferences} />
 

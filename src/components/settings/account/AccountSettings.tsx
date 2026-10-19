@@ -10,7 +10,6 @@
  */
 import React, { useEffect, useRef, useState } from "react";
 import { useLicense } from "@/contexts/LicenseContext";
-import { systemService } from "@/services";
 import { formatDbDate } from "@/utils/dateFormatters";
 import logger from "@/utils/logger";
 import { getAccountInitials } from "../../../appCore/shell/AccountButton";
@@ -30,6 +29,11 @@ export interface AccountSettingsProps {
   user: AccountUser;
   /** Sign-in provider ("google" | "microsoft"). */
   provider?: string | null;
+  /**
+   * Connected mailboxes, as the Email section reports them (Settings already
+   * holds this from EmailSettings' own check, so no second connection check).
+   */
+  mailboxes?: { google: boolean; microsoft: boolean };
 }
 
 const PROVIDER_NAMES: Record<string, string> = { google: "Google", microsoft: "Microsoft", azure: "Microsoft" };
@@ -43,7 +47,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-export function AccountSettings({ user, provider }: AccountSettingsProps) {
+export function AccountSettings({ user, provider, mailboxes = { google: false, microsoft: false } }: AccountSettingsProps) {
   const {
     licenseType,
     organizationId,
@@ -53,26 +57,8 @@ export function AccountSettings({ user, provider }: AccountSettingsProps) {
     transactionCount,
     transactionLimit,
   } = useLicense();
-  const [mailboxes, setMailboxes] = useState({ google: false, microsoft: false });
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    systemService
-      .checkAllConnections(user.id)
-      .then((result) => {
-        if (cancelled || !result.success) return;
-        setMailboxes({
-          google: result.data?.google?.connected === true,
-          microsoft: result.data?.microsoft?.connected === true,
-        });
-      })
-      .catch((error: unknown) => logger.error("[AccountSettings] connection check failed:", error));
-    return () => {
-      cancelled = true;
-    };
-  }, [user.id]);
 
   useEffect(() => () => {
     if (copiedTimer.current) clearTimeout(copiedTimer.current);

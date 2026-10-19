@@ -9,7 +9,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { AppRouter } from "../AppRouter";
 import type { AppStateMachine } from "../state/types";
@@ -30,10 +30,12 @@ jest.mock("../../components/Dashboard", () => {
     showSetupPrompt,
     onSyncPhone,
     onSyncAndroid,
+    onOpenSettings,
   }: {
     showSetupPrompt?: boolean;
     onSyncPhone?: () => void;
     onSyncAndroid?: () => void;
+    onOpenSettings?: (target?: string) => void;
   }) => (
     <div data-testid="dashboard-component">
       Dashboard
@@ -41,6 +43,8 @@ jest.mock("../../components/Dashboard", () => {
       {/* BACKLOG-2320: surface which sync entry points the router passed down */}
       {onSyncPhone && <div data-testid="dashboard-onSyncPhone" />}
       {onSyncAndroid && <div data-testid="dashboard-onSyncAndroid" />}
+      {/* BACKLOG-3964: the sync warning's "open Settings at the import filters" */}
+      <button data-testid="dashboard-open-settings-at" onClick={() => onOpenSettings?.("settings-import-filters")} />
     </div>
   );
   MockDashboard.displayName = "Dashboard";
@@ -309,6 +313,14 @@ describe("AppRouter", () => {
   });
 
   describe("Dashboard State", () => {
+    it("hands the Dashboard's Settings target through to openSettings (BACKLOG-3964)", () => {
+      const app = createAppStateMock({ currentStep: "dashboard" });
+      render(<AppRouter app={app} />);
+      fireEvent.click(screen.getByTestId("dashboard-open-settings-at"));
+      expect(app.openSettings).toHaveBeenCalledTimes(1);
+      expect(app.openSettings).toHaveBeenCalledWith("settings-import-filters");
+    });
+
     it("should render Dashboard when step is dashboard", () => {
       const app = createAppStateMock({ currentStep: "dashboard" });
       render(<AppRouter app={app} />);

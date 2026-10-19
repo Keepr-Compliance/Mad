@@ -22,7 +22,7 @@ import { useEscapeToClose } from "../../hooks/useEscapeToClose";
 
 /** Something open inside the page that should take Escape for itself. */
 const NESTED_OVERLAY =
-  '[role="menu"], [role="dialog"], [aria-modal="true"], [aria-haspopup][aria-expanded="true"], .fixed';
+  '[role="menu"], [role="dialog"], [aria-modal="true"], [aria-haspopup][aria-expanded="true"], .fixed.inset-0';
 
 interface SettingsLayerProps {
   app: AppStateMachine;
