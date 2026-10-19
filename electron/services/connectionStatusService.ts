@@ -8,8 +8,49 @@ import googleAuthService from "./googleAuthService";
 import microsoftAuthService from "./microsoftAuthService";
 import * as Sentry from "@sentry/electron/main";
 import logService from "./logService";
+import { net } from "electron";
 import { OAuthToken } from "../types/models";
-import { providerUnreachableMessage } from "./oauthRefreshFailure";
+import {
+  providerUnreachableHelp,
+  providerUnreachableMessage,
+  UNREACHABLE_STREAK_THRESHOLD,
+  type RefreshAccessTokenResult,
+} from "./oauthRefreshFailure";
+
+type MailboxProvider = "google" | "microsoft";
+
+/**
+ * BACKLOG-3954: consecutive refreshes that could not reach one provider.
+ * Kept in the main process so every caller of the connection check shares it
+ * and a renderer remount does not reset it. In memory only: a restart starts
+ * a new streak.
+ */
+interface UnreachableStreak {
+  /** The user the streak belongs to; a different user starts over. */
+  userId: string | null;
+  count: number;
+  /** Date.now() of the first failure in the streak. */
+  since: number | null;
+  /** The once-per-streak Sentry report has been sent. */
+  reported: boolean;
+}
+
+function emptyStreak(): UnreachableStreak {
+  return { userId: null, count: 0, since: null, reported: false };
+}
+
+/**
+ * BACKLOG-3954: while the computer reports no network at all, the offline
+ * banner already says so; the streak must not advance under it. Fails toward
+ * "online" when Electron cannot answer.
+ */
+function isNetOnline(): boolean {
+  try {
+    return typeof net?.isOnline === "function" ? net.isOnline() : true;
+  } catch {
+    return true;
+  }
+}
 
 /**
  * Connection error types
@@ -32,6 +73,12 @@ export interface ConnectionError {
   action: string;
   actionHandler: string;
   details?: string;
+  /**
+   * BACKLOG-3954: PROVIDER_UNREACHABLE only. True once the failure streak has
+   * passed UNREACHABLE_STREAK_THRESHOLD; the health banner shows the row only
+   * then. Settings -> Email shows the error on every failure, as before.
+   */
+  persistent?: boolean;
 }
 
 /**
@@ -80,11 +127,77 @@ class ConnectionStatusService {
     microsoft: ProviderConnectionStatus;
   };
 
+  private unreachableStreaks: Record<MailboxProvider, UnreachableStreak> = {
+    google: emptyStreak(),
+    microsoft: emptyStreak(),
+  };
+
   constructor() {
     this.connectionStatus = {
       google: { connected: false, lastCheck: null, error: null },
       microsoft: { connected: false, lastCheck: null, error: null },
     };
+  }
+
+  /** BACKLOG-3954: end the provider's failure streak (any outcome but unreachable). */
+  private resetStreak(provider: MailboxProvider): void {
+    this.unreachableStreaks[provider] = emptyStreak();
+  }
+
+  /**
+   * BACKLOG-3954: end every streak. Called on sign-out, so the next user on
+   * this profile starts from zero.
+   */
+  resetUnreachableStreaks(): void {
+    this.resetStreak("google");
+    this.resetStreak("microsoft");
+  }
+
+  /** BACKLOG-3954: a check for a different user than the streak's starts over. */
+  private beginCheck(provider: MailboxProvider, userId: string): void {
+    const streak = this.unreachableStreaks[provider];
+    if (streak.userId !== null && streak.userId !== userId) this.resetStreak(provider);
+  }
+
+  /**
+   * BACKLOG-3954: count one refresh that could not reach the provider, and say
+   * whether the streak is now long enough for the health banner. Sends one
+   * Sentry message when the streak first gets there.
+   */
+  private recordUnreachable(
+    provider: MailboxProvider,
+    userId: string,
+    result: RefreshAccessTokenResult,
+  ): boolean {
+    const online = isNetOnline();
+    const streak = this.unreachableStreaks[provider];
+    const now = Date.now();
+    if (online) {
+      if (streak.count === 0) {
+        streak.since = now;
+        streak.userId = userId;
+      }
+      streak.count += 1;
+    }
+    const persistent =
+      online &&
+      streak.since !== null &&
+      streak.count >= UNREACHABLE_STREAK_THRESHOLD.failures &&
+      now - streak.since >= UNREACHABLE_STREAK_THRESHOLD.minMs;
+    if (persistent && !streak.reported) {
+      streak.reported = true;
+      Sentry.captureMessage("Mailbox token refresh unreachable", {
+        level: "warning",
+        tags: {
+          service: "connection-status",
+          provider,
+          causeCode: result.cause?.causeCode ?? "OTHER",
+          tlsIntercept: result.cause?.tlsIntercept ?? false,
+        },
+        fingerprint: ["mailbox-refresh-unreachable", provider],
+      });
+    }
+    return persistent;
   }
 
   /**
@@ -118,6 +231,7 @@ class ConnectionStatusService {
   async checkGoogleConnection(
     userId: string,
   ): Promise<ProviderConnectionStatus> {
+    this.beginCheck("google", userId);
     try {
       // Get Google auth token from database
       const token: OAuthToken | null = await databaseService.getOAuthToken(
@@ -127,6 +241,7 @@ class ConnectionStatusService {
       );
 
       if (!token || !token.access_token) {
+        this.resetStreak("google");
         this.connectionStatus.google = {
           connected: false,
           lastCheck: Date.now(),
@@ -162,6 +277,7 @@ class ConnectionStatusService {
               "[ConnectionStatus] Google token refreshed successfully",
               "ConnectionStatus",
             );
+            this.resetStreak("google");
             this.connectionStatus.google = {
               connected: true,
               lastCheck: Date.now(),
@@ -179,6 +295,10 @@ class ConnectionStatusService {
               "ConnectionStatus",
               { error: refreshResult.error },
             );
+            // BACKLOG-3954: no reconnect handler — reconnecting does not fix an
+            // unreachable provider. `action` is the help text Settings -> Email
+            // shows under the title; the health banner builds its own row.
+            const persistent = this.recordUnreachable("google", userId, refreshResult);
             this.connectionStatus.google = {
               connected: true,
               lastCheck: Date.now(),
@@ -186,9 +306,10 @@ class ConnectionStatusService {
               error: {
                 type: "PROVIDER_UNREACHABLE",
                 userMessage: providerUnreachableMessage("Google"),
-                action: "",
-                actionHandler: "reconnect-google",
+                action: providerUnreachableHelp(),
+                actionHandler: "",
                 details: "Token refresh could not reach the provider",
+                persistent,
               },
               lastSyncAt,
             };
@@ -212,6 +333,7 @@ class ConnectionStatusService {
         }
 
         // Refresh failed, mark as expired but preserve email for UI
+        this.resetStreak("google");
         this.connectionStatus.google = {
           connected: false,
           lastCheck: Date.now(),
@@ -232,6 +354,7 @@ class ConnectionStatusService {
       }
 
       // Token is valid
+      this.resetStreak("google");
       this.connectionStatus.google = {
         connected: true,
         lastCheck: Date.now(),
@@ -250,6 +373,7 @@ class ConnectionStatusService {
         tags: { service: "connection-status", operation: "checkGoogleConnection" },
       });
 
+      this.resetStreak("google");
       this.connectionStatus.google = {
         connected: false,
         lastCheck: Date.now(),
@@ -273,6 +397,7 @@ class ConnectionStatusService {
   async checkMicrosoftConnection(
     userId: string,
   ): Promise<ProviderConnectionStatus> {
+    this.beginCheck("microsoft", userId);
     try {
       // Get Microsoft auth token from database
       const token: OAuthToken | null = await databaseService.getOAuthToken(
@@ -282,6 +407,7 @@ class ConnectionStatusService {
       );
 
       if (!token || !token.access_token) {
+        this.resetStreak("microsoft");
         this.connectionStatus.microsoft = {
           connected: false,
           lastCheck: Date.now(),
@@ -317,6 +443,7 @@ class ConnectionStatusService {
               "[ConnectionStatus] Microsoft token refreshed successfully",
               "ConnectionStatus",
             );
+            this.resetStreak("microsoft");
             this.connectionStatus.microsoft = {
               connected: true,
               lastCheck: Date.now(),
@@ -334,6 +461,10 @@ class ConnectionStatusService {
               "ConnectionStatus",
               { error: refreshResult.error },
             );
+            // BACKLOG-3954: no reconnect handler — reconnecting does not fix an
+            // unreachable provider. `action` is the help text Settings -> Email
+            // shows under the title; the health banner builds its own row.
+            const persistent = this.recordUnreachable("microsoft", userId, refreshResult);
             this.connectionStatus.microsoft = {
               connected: true,
               lastCheck: Date.now(),
@@ -341,9 +472,10 @@ class ConnectionStatusService {
               error: {
                 type: "PROVIDER_UNREACHABLE",
                 userMessage: providerUnreachableMessage("Microsoft"),
-                action: "",
-                actionHandler: "reconnect-microsoft",
+                action: providerUnreachableHelp(),
+                actionHandler: "",
                 details: "Token refresh could not reach the provider",
+                persistent,
               },
               lastSyncAt,
             };
@@ -367,6 +499,7 @@ class ConnectionStatusService {
         }
 
         // Refresh failed, mark as expired but preserve email for UI
+        this.resetStreak("microsoft");
         this.connectionStatus.microsoft = {
           connected: false,
           lastCheck: Date.now(),
@@ -387,6 +520,7 @@ class ConnectionStatusService {
       }
 
       // Token is valid
+      this.resetStreak("microsoft");
       this.connectionStatus.microsoft = {
         connected: true,
         lastCheck: Date.now(),
@@ -405,6 +539,7 @@ class ConnectionStatusService {
         tags: { service: "connection-status", operation: "checkMicrosoftConnection" },
       });
 
+      this.resetStreak("microsoft");
       this.connectionStatus.microsoft = {
         connected: false,
         lastCheck: Date.now(),
@@ -472,6 +607,9 @@ class ConnectionStatusService {
    * Clear connection cache
    */
   clearCache(): void {
+    // BACKLOG-3954: no production caller today (tests use it to isolate);
+    // sign-out resets the streaks through resetUnreachableStreaks().
+    this.resetUnreachableStreaks();
     this.connectionStatus = {
       google: { connected: false, lastCheck: null, error: null },
       microsoft: { connected: false, lastCheck: null, error: null },

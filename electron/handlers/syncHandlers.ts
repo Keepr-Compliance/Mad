@@ -37,6 +37,7 @@ import { reportBackupProblem } from "../services/atRest/backupProblemReport";
 import { iOSMessagesParser } from "../services/iosMessagesParser";
 import { macOSMessagesImportService } from "../services/macOSMessagesImportService/macOSMessagesImportService";
 import { validateTransactionId } from "../utils/validation";
+import { killAllIphoneTools } from "../services/iphoneToolProcess";
 import type { BackfillAvailability, BackfillResult } from "../types/iphoneBackfill";
 
 /**
@@ -884,6 +885,12 @@ export function setSyncUserId(userId: string | null): void {
  * delayed. Must be called before `cleanupSyncHandlers()`, which drops the orchestrator.
  */
 export function stopBackupForQuit(): Promise<unknown> | null {
+  // BACKLOG-3996: every short iPhone query still alive (device polling, pre-flight).
+  // An undetached child outlives the app otherwise. Not waited on.
+  const stoppedQueries = killAllIphoneTools("app-quit");
+  if (stoppedQueries > 0) {
+    log.info("[SyncHandlers] App quitting; stopped iPhone queries", { count: stoppedQueries });
+  }
   return orchestrator ? orchestrator.stopBackupForQuit() : null;
 }
 

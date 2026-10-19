@@ -51,7 +51,7 @@
  *   5. Contacts `Auto-discover` block stripped of its card -> "Contacts > has
  *      one card per block…".
  *   6. `<h4>Contacts</h4>` restored -> "Contacts > says Contacts once…".
- *  14. Android description deleted -> "Messages (Android) > has no panel card…".
+ *  14. (removed with the Android companion panel, BACKLOG-3969)
  *  15. macOS description deleted -> "Messages (macOS) > has no panel card…".
  *
  * THE HEADING ALLOWLIST (check 4) — every one of these PASSED under the old
@@ -59,7 +59,7 @@
  * found the first two; the rest are the same trick on the other three screens.
  *   A. `<h5>Import Filters</h5>` back inside a `rounded border` sub-box on the
  *      macOS panel -> "Messages (macOS) > has no panel card wrapping…".
- *   B. The same on the Android panel -> "Messages (Android) > …".
+ *   B. (removed with the Android companion panel, BACKLOG-3969)
  *   C. `<h4>Email History</h4>` inside a row on Emails -> "Emails > …".
  *   D. `<h4>Import Source</h4>` inside a row -> "Messages (the source picker)…".
  *   E. `<h4>Contacts</h4>` inside a row -> "Contacts > …".
@@ -90,8 +90,9 @@
  *      block one card whose first line is its own label".
  *  10. Contacts `Sources` label renamed   -> `ContactsImportSettings` "should
  *      render toggle switches and import button on macOS".
- *  13. `<AndroidMessagesSettings/>` replaced with `<div/>` -> `Settings.test`
- *      "does NOT render the inline guided wizard for an Android user".
+ *  13. (removed with the Android companion panel, BACKLOG-3969; an Android
+ *      user still sees Google Messages -> `Settings.test` "does NOT render the
+ *      inline guided wizard, or any Companion UI, for an Android user")
  *   8. BACKLOG-2986 alert moved back above the Sources card -> that suite's
  *      "renders above the toggle group, not above the whole section".
  */
@@ -102,7 +103,6 @@ import "@testing-library/jest-dom";
 import { EmailSettings } from "../EmailSettings";
 import { ImportSourceSettings } from "../ImportSourceSettings";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
-import { AndroidMessagesSettings } from "../AndroidMessagesSettings";
 import { ContactsSettings } from "../ContactsSettings";
 import { GoogleMessagesSettings } from "../GoogleMessagesSettings";
 import { IphoneSyncSettings } from "../IphoneSyncSettings";
@@ -694,43 +694,6 @@ describe("BACKLOG-3156 stage E — Messages (macOS)", () => {
   });
 });
 
-describe("BACKLOG-3156 stage E — Messages (Android)", () => {
-  it("has no panel card wrapping its blocks", async () => {
-    const { container } = render(<AndroidMessagesSettings userId="u" />);
-    await waitFor(() =>
-      expect(screen.getByTestId("android-block-actions")).toBeInTheDocument(),
-    );
-
-    recordStyles(
-      "Messages (Android)",
-      auditScreen(
-        "Messages (Android)",
-        container,
-        [
-          {
-            testId: "android-block-preferences",
-            label: "Import Preferences",
-            description:
-              "Sync SMS messages from your Android phone over WiFi using the Keepr Companion app.",
-          },
-        ],
-        "android-block-actions",
-        null,
-      ),
-    );
-  });
-
-  it("keeps the settings-android-companion anchor on the root", async () => {
-    const { container } = render(<AndroidMessagesSettings userId="u" />);
-    await screen.findByTestId("android-block-actions");
-
-    const root = container.querySelector("#settings-android-companion");
-    expect(root).not.toBeNull();
-    expect(isCard(root!)).toBe(false);
-    expect(root!.contains(screen.getByTestId("android-block-preferences"))).toBe(true);
-  });
-});
-
 describe("BACKLOG-3156 stage E — Contacts", () => {
   beforeEach(() => {
     Object.defineProperty(window, "api", {
@@ -1025,7 +988,6 @@ describe("BACKLOG-3156 stage E — the four screens agree", () => {
       "Contacts #2",
       "Emails #0",
       "Emails #1",
-      "Messages (Android) #0",
       "Messages (Google) #0",
       "Messages (Google) #1",
       "Messages (iPhone) #0",
@@ -1075,7 +1037,6 @@ describe("BACKLOG-3156 stage E — the four screens agree", () => {
     expect([...headersOutsideCards.keys()].sort()).toEqual([
       "Contacts",
       "Emails",
-      "Messages (Android)",
       "Messages (Google)",
       "Messages (iPhone)",
       "Messages (macOS)",

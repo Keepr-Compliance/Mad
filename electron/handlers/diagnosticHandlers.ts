@@ -28,6 +28,7 @@ import {
 } from "../utils/validation";
 import type { HealthIssue } from "../types/ipc/healthIssue";
 import type { ConnectionError } from "../services/connectionStatusService";
+import { providerUnreachableHelp } from "../services/oauthRefreshFailure";
 import {
   mailboxNotConnectedIssue,
   readRecordedEmailProviders,
@@ -65,6 +66,17 @@ function isBrokenTokenError(error: unknown): error is ConnectionError {
   if (typeof error !== "object" || error === null) return false;
   const type = (error as { type?: unknown }).type;
   return typeof type === "string" && BROKEN_TOKEN_TYPES.has(type);
+}
+
+/**
+ * BACKLOG-3954 — a provider that could not be reached for long enough that the
+ * health banner should say so. Outside BROKEN_TOKEN_TYPES on purpose: the
+ * connection is still good and "Reconnect" would be the wrong prompt.
+ */
+function isPersistentUnreachable(error: unknown): error is ConnectionError {
+  if (typeof error !== "object" || error === null) return false;
+  const e = error as { type?: unknown; persistent?: unknown };
+  return e.type === "PROVIDER_UNREACHABLE" && e.persistent === true;
 }
 
 // Type definitions
@@ -550,6 +562,20 @@ export function registerDiagnosticHandlers(): void {
               severity: "error",
               ...connError,
               ...(sinceMessage ? { message: sinceMessage } : {}),
+            });
+          } else if (isPersistentUnreachable(connError)) {
+            // BACKLOG-3954: the provider has been unreachable for a streak
+            // (see UNREACHABLE_STREAK_THRESHOLD). An amber row with NO button:
+            // reconnecting does not fix it. Built field by field on purpose —
+            // spreading connError would carry its `action` (help TEXT in
+            // Settings) into the row, and the banner renders `action` as a
+            // button. Does not set brokenTokenRaised: the connection is kept.
+            issues.push({
+              provider: providerName,
+              type: "PROVIDER_UNREACHABLE",
+              severity: "warning",
+              userMessage: connError.userMessage,
+              message: providerUnreachableHelp(),
             });
           }
         }

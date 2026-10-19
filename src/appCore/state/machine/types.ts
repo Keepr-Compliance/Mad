@@ -48,8 +48,7 @@ export type OnboardingStep =
   | "email-connect" // Email onboarding screen
   | "data-sync" // Sync checkpoint before permissions
   | "permissions" // macOS permissions
-  | "apple-driver" // Windows + iPhone driver setup
-  | "android-coming-soon"; // Android placeholder
+  | "apple-driver"; // Windows + iPhone driver setup
 
 // ============================================
 // PLATFORM INFO

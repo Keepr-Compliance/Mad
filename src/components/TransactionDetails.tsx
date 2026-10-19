@@ -434,6 +434,12 @@ function TransactionDetails({
   // Modal states
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
+  // BACKLOG-3339: one delete at a time. A second click while the first is in
+  // flight would reach a deal that is already gone and show "This deal no
+  // longer exists." after a successful delete. The ref blocks a click that
+  // lands before the button re-renders as disabled.
+  const deleteInFlightRef = useRef(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [showRejectReasonModal, setShowRejectReasonModal] = useState<boolean>(false);
   const [rejectReason, setRejectReason] = useState<string>("");
   const [showEditModal, setShowEditModal] = useState<boolean>(false);
@@ -855,14 +861,27 @@ function TransactionDetails({
   };
 
   const handleDelete = async (): Promise<void> => {
+    if (deleteInFlightRef.current) return;
+    deleteInFlightRef.current = true;
+    setIsDeleting(true);
     try {
-      await transactionService.delete(transaction.id);
+      const result = await transactionService.delete(transaction.id);
+      // BACKLOG-3339: a refused delete keeps the deal; say so instead of
+      // closing as if it were gone.
+      if (!result.success) {
+        setShowDeleteConfirm(false);
+        showError(result.error || "Failed to delete transaction. Please try again.");
+        return;
+      }
       setShowDeleteConfirm(false);
       onClose();
       onTransactionUpdated?.();
     } catch (err) {
       logger.error("Failed to delete transaction:", err);
       showError("Failed to delete transaction. Please try again.");
+    } finally {
+      deleteInFlightRef.current = false;
+      setIsDeleting(false);
     }
   };
 
@@ -968,12 +987,20 @@ function TransactionDetails({
         async ({ unlinkedIds: firstIds }) => {
           // Unlink additional constituents (if merged card had multiple threads).
           const allUnlinkedIds: string[] = [...(firstIds ?? [])];
+          // BACKLOG-3309: a constituent that fails is rolled back whole and comes
+          // back as success:false — count it so the toast says so.
+          let failedCount = 0;
           for (const cid of extraCommIds) {
             try {
               const r = await window.api.transactions.unlinkCommunication(cid);
-              if (r.success && r.unlinkedIds) allUnlinkedIds.push(...r.unlinkedIds);
+              if (r.success) {
+                if (r.unlinkedIds) allUnlinkedIds.push(...r.unlinkedIds);
+              } else {
+                failedCount += 1;
+              }
             } catch {
               // non-blocking: one constituent failing shouldn't break the whole action
+              failedCount += 1;
             }
           }
 
@@ -988,8 +1015,12 @@ function TransactionDetails({
             removedEmailContentIds.length > 0
               ? { label: "Undo", onClick: () => void undoRestoreEmails(removedEmailContentIds) }
               : undefined;
+          const failedNote =
+            failedCount > 0
+              ? ` — ${failedCount} conversation${failedCount === 1 ? "" : "s"} couldn't be removed`
+              : "";
           showSuccess(
-            n > 1 ? `${n} emails removed` : "Email unlinked from transaction",
+            (n > 1 ? `${n} emails removed` : "Email unlinked from transaction") + failedNote,
             { action: undoAction },
           );
           setShowUnlinkThread(null);
@@ -1658,6 +1689,7 @@ function TransactionDetails({
           propertyAddress={transaction.property_address}
           onCancel={() => setShowDeleteConfirm(false)}
           onDelete={handleDelete}
+          isDeleting={isDeleting}
         />
       )}
 

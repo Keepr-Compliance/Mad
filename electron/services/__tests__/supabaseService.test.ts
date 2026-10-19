@@ -1050,14 +1050,18 @@ describe("SupabaseService", () => {
         };
         mockSupabaseClient.from.mockReturnValue(errorQuery);
 
-        // batchInsertAuditLogs may throw or silently fail
-        try {
-          await supabaseService.batchInsertAuditLogs(entries);
-        } catch {
-          // Error thrown is acceptable
-        }
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const Sentry = require("@sentry/electron/main");
+        (Sentry.captureException as jest.Mock).mockClear();
+
+        await expect(
+          supabaseService.batchInsertAuditLogs(entries),
+        ).rejects.toBeDefined();
 
         expect(errorQuery.upsert).toHaveBeenCalled();
+        // BACKLOG-3987: the caller retries every minute and reports once per
+        // run of failures. A report here fired on every retry.
+        expect(Sentry.captureException).not.toHaveBeenCalled();
       });
     });
 

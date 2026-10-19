@@ -50,7 +50,7 @@ import {
 
 import { sendToMainWindow } from "../windowRegistry";
 import { handleBusy } from "../utils/busyIpc";
-import { rememberOpenablePath } from "../services/openablePaths";
+import { completeExport } from "../services/exportCompletion";
 
 interface ExportOptions {
   exportFormat?: string;
@@ -401,39 +401,17 @@ export function registerTransactionExportHandlers(
         },
       );
 
-      // BACKLOG-2549 — export tracking AND the BACKLOG-2013 freeze boundary in
-      // ONE statement, so a deal can never be `exported` while still editable.
-      // Write-once on the marker is enforced in SQL by COALESCE.
-      const enhancedExportedAt = new Date().toISOString();
-      databaseService.recordExportCompletion(validatedTransactionId, {
-        exportFormat: sanitizedOptions.exportFormat || "pdf",
-        exportedAt: enhancedExportedAt,
-        exportCount: (details.export_count || 0) + 1,
-        firstExportedAt: enhancedExportedAt,
-      });
-
-      // Audit log data export
-      await auditService.log({
-        userId: details.user_id,
-        action: "DATA_EXPORT",
-        resourceType: "EXPORT",
-        resourceId: validatedTransactionId,
-        metadata: {
-          format: sanitizedOptions.exportFormat || "pdf",
-          propertyAddress: details.property_address,
-          // BACKLOG-3367: the audit trail records what the artifact left out,
-          // not only that an export happened.
-          hiddenTextCount: enhancedPlan.hiddenTextCount,
-        },
-        success: true,
-      });
-
-      // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
-      await emitExportCompleted({
-        userId: details.user_id,
+      // BACKLOG-3303: record, audit, funnel and openable-path in one place.
+      await completeExport({
         transactionId: validatedTransactionId,
+        userId: details.user_id,
+        exportCount: details.export_count,
+        propertyAddress: details.property_address,
+        recordedFormat: sanitizedOptions.exportFormat || "pdf",
+        auditFormat: sanitizedOptions.exportFormat || "pdf",
+        hiddenTextCount: enhancedPlan.hiddenTextCount,
         mode: enhancedPrep.decision.mode,
-        format: sanitizedOptions.exportFormat || "pdf",
+        path: exportPath,
       });
 
       logService.info("Enhanced export successful", "Transactions", {
@@ -441,9 +419,6 @@ export function registerTransactionExportHandlers(
         format: sanitizedOptions.exportFormat || "pdf",
         path: exportPath,
       });
-
-      // BACKLOG-3808: the renderer may later ask to open this export.
-      await rememberOpenablePath(exportPath);
 
       return {
         success: true,
@@ -595,52 +570,26 @@ export function registerTransactionExportHandlers(
         },
       );
 
-      // BACKLOG-2549 — export tracking AND the BACKLOG-2013 freeze boundary in
-      // ONE statement (see the enhanced path above).
-      //
-      // `export_format` is OMITTED, not set to NULL: this path has never
-      // written the column, so whatever a previous export recorded survives.
-      // (The old comment here said the constraint excludes "folder" — it does
-      // not, schema.sql permits it. Recording "folder" would change what that
-      // column means to every reader of it, which is a product decision and not
-      // part of an atomicity fix.)
-      const folderExportedAt = new Date().toISOString();
-      databaseService.recordExportCompletion(validatedTransactionId, {
-        exportedAt: folderExportedAt,
-        exportCount: (details.export_count || 0) + 1,
-        firstExportedAt: folderExportedAt,
-      });
-
-      // Audit log data export
-      await auditService.log({
-        userId: details.user_id,
-        action: "DATA_EXPORT",
-        resourceType: "EXPORT",
-        resourceId: validatedTransactionId,
-        metadata: {
-          format: "folder",
-          propertyAddress: details.property_address,
-          // BACKLOG-3367: see the enhanced handler above.
-          hiddenTextCount: folderPlan.hiddenTextCount,
-        },
-        success: true,
-      });
-
-      // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
-      await emitExportCompleted({
-        userId: details.user_id,
+      // BACKLOG-3303: record, audit, funnel and openable-path in one place.
+      // `export_format` is OMITTED (recordedFormat undefined), not set to NULL:
+      // this path has never written the column, so whatever a previous export
+      // recorded survives. Recording "folder" would change what that column
+      // means to every reader of it (BACKLOG-2549 ruling).
+      await completeExport({
         transactionId: validatedTransactionId,
+        userId: details.user_id,
+        exportCount: details.export_count,
+        propertyAddress: details.property_address,
+        auditFormat: "folder",
+        hiddenTextCount: folderPlan.hiddenTextCount,
         mode: folderPrep.decision.mode,
-        format: "folder",
+        path: exportPath,
       });
 
       logService.info("Folder export successful", "Transactions", {
         transactionId: validatedTransactionId,
         path: exportPath,
       });
-
-      // BACKLOG-3808: the renderer may later ask to open this export.
-      await rememberOpenablePath(exportPath);
 
       return {
         success: true,

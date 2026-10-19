@@ -1,75 +1,26 @@
 /**
  * BACKLOG-3812: the iPhone tools folder ships what the app runs, and nothing it removed.
  *
- * The four tools the app spawns are read from the getCommand("...") call sites in
- * electron/services. Their DLL dependencies are read from the real PE import and
+ * The four tools the app spawns are read from the getCommand(...) / getExecutablePath(...)
+ * call sites anywhere under electron/ (either quote style; BACKLOG-3979 reuses the hardened
+ * scanner from helpers/peImports). Their DLL dependencies are read from the real PE import and
  * delay-import tables of the shipped binaries, followed recursively. Nothing here is a
  * hand-written dependency list, so a new import or a new spawned tool is seen.
  */
-import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "fs";
+import { peImports, spawnedTools as scanSpawnedTools, SYSTEM_DLL } from "./helpers/peImports";
 import os from "os";
 import path from "path";
 
 const REPO = path.resolve(__dirname, "..", "..");
 const TOOLS = path.join(REPO, "resources", "win", "libimobiledevice");
-const SERVICES = path.join(REPO, "electron", "services");
+const ELECTRON = path.join(REPO, "electron");
 
 /** Removed in BACKLOG-3812: nothing the app runs loads them. */
 const REMOVED = ["iproxy.exe", "usbmuxd.exe", "ideviceinstaller.exe", "ideviceactivation.exe", "readline.dll"];
 
-/** Windows system DLLs: provided by the OS, never shipped in the tools folder. */
-const SYSTEM_DLL = /^(api-ms-win-[a-z0-9-]+|kernel32|advapi32|bcrypt|crypt32|ole32|shell32|user32|ws2_32)\.dll$/;
-
-/** DLL names in a PE file's import and delay-import tables, lower-cased. */
-function peImports(file: string): string[] {
-  const d = readFileSync(file);
-  const pe = d.readUInt32LE(0x3c);
-  if (d.toString("latin1", pe, pe + 4) !== "PE\0\0") throw new Error(`not a PE file: ${file}`);
-  const coff = pe + 4;
-  const nSections = d.readUInt16LE(coff + 2);
-  const optSize = d.readUInt16LE(coff + 16);
-  const opt = coff + 20;
-  const dataDirs = opt + (d.readUInt16LE(opt) === 0x20b ? 112 : 96);
-  const sections: Array<{ va: number; size: number; raw: number }> = [];
-  for (let i = 0; i < nSections; i++) {
-    const s = opt + optSize + 40 * i;
-    sections.push({ va: d.readUInt32LE(s + 12), size: Math.max(d.readUInt32LE(s + 8), d.readUInt32LE(s + 16)), raw: d.readUInt32LE(s + 20) });
-  }
-  const off = (rva: number): number => {
-    const s = sections.find((x) => rva >= x.va && rva < x.va + x.size);
-    if (!s) throw new Error(`RVA 0x${rva.toString(16)} outside every section of ${file}`);
-    return rva - s.va + s.raw;
-  };
-  const cstr = (o: number): string => d.toString("latin1", o, d.indexOf(0, o)).toLowerCase();
-  const out = new Set<string>();
-  // Import directory (index 1): 20-byte descriptors, name RVA at +12, all-zero terminator.
-  const imp = d.readUInt32LE(dataDirs + 8);
-  if (imp) {
-    for (let o = off(imp); ; o += 20) {
-      if (d.readUInt32LE(o) === 0 && d.readUInt32LE(o + 12) === 0 && d.readUInt32LE(o + 16) === 0) break;
-      out.add(cstr(off(d.readUInt32LE(o + 12))));
-    }
-  }
-  // Delay-load import directory (index 13): 32-byte descriptors, name RVA at +4.
-  const delay = d.readUInt32LE(dataDirs + 8 * 13);
-  if (delay) {
-    for (let o = off(delay); ; o += 32) {
-      if (d.subarray(o, o + 32).every((b) => b === 0)) break;
-      out.add(cstr(off(d.readUInt32LE(o + 4))));
-    }
-  }
-  return [...out];
-}
-
-/** Tools the app spawns: every getCommand("name") in non-test electron/services sources. */
-function spawnedTools(): string[] {
-  const names = new Set<string>();
-  for (const f of readdirSync(SERVICES)) {
-    if (!f.endsWith(".ts") || f.endsWith(".test.ts")) continue;
-    for (const m of readFileSync(path.join(SERVICES, f), "utf8").matchAll(/getCommand\("([^"]+)"\)/g)) names.add(m[1]);
-  }
-  return [...names].sort();
-}
+/** Tools the app spawns, from the shared scanner (BACKLOG-3979). */
+const spawnedTools = (): string[] => scanSpawnedTools(ELECTRON);
 
 interface Report {
   closure: string[];

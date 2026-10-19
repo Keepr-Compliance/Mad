@@ -390,8 +390,12 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
     "BACKLOG-2550 @0dca6beb1 (:386, junction INSERT loop then one bulk messages UPDATE): junction rows with messages.transaction_id still NULL, so the message is re-offered as unlinked and the re-link is blocked only by the unique index",
   "electron/services/messageMatchingService.ts::autoLinkEmailsToTransaction":
     "BACKLOG-2550 @0dca6beb1 (:645, same shape on the email path): the pointer set with no junction row leaves the message invisible to every reader that joins through communications, while the messages table claims it is linked",
-  "electron/services/autoLinkService.ts::expandAttachedThreadsForUser":
-    "BACKLOG-2550 @0dca6beb1 (:1501, linkMessageToTransaction + createCommunicationReference): a thread expansion that half-ran leaves some messages of one attached conversation linked and the rest not, which reads to the user as a conversation that imported incompletely",
+  // `autoLinkService.ts::expandAttachedThreadsForUser` was removed by a
+  // wrapper refactor, NOT by the link fix. Its "2 writes" were the wrapper's
+  // two call sites of the non-exported helper `expandAttachedThreadsForUserOnce`
+  // (each local call counts as one write). This guard never sees the helper
+  // itself, so it cannot see the pointer/junction pair either. The proof of
+  // that fix is `expandAttachedThreads.linkAtomicity-2550.test.ts`.
 
   // --- BACKLOG-2845 (open): review queue approve/reject -------------------
   "electron/services/reviewStateService.ts::approveReviewItems":
@@ -412,8 +416,6 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // red and it cannot land; fixing a surfaced defect belongs to its own item.
   "electron/handlers/contactHandlers.ts::ipc:contacts:create":
     "BACKLOG-3259 @1cd39acd0 (:2547, createContact :2717 + backfillContactEmails :2774 + backfillContactPhones :2778, zero dbTransaction in the handler): reachable WITHOUT a crash — the catch arm at :2801-2815 returns { success: false } with no compensating delete, so an ordinary throw from either backfill (a malformed email or phone is enough) leaves the contact row committed and visible in Clients & Contacts holding the name and only some of the addresses the user typed, while the UI tells them it was not created; the user retries and gets a SECOND contact",
-  "electron/handlers/emailLinkingHandlers.ts::ipc:transactions:link-emails":
-    "BACKLOG-3221 @0dca6beb1 (:169, createCommunication + createEmail unwrapped): a communications junction row whose email_id points at an emails row that was never written, so the email is invisible to every reader that joins through it — or the inverse, an email row with no link, absent from the transaction it was just attached to",
   "electron/handlers/messageImportHandlers.ts::ipc:messages:import-macos":
     "BACKLOG-3222 @0dca6beb1 (:148, backfillContactCommunicationDates :278 + backfillPhoneLastMessageTable :302): contacts showing a refreshed last-communication date while phone_last_message still holds the pre-import value, so the contact list and the phone-keyed views disagree until the next successful import",
 
@@ -448,14 +450,8 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
     "BACKLOG-3306 — one token column updated and the other stale: a stored new refresh_token beside an expired access_token. Self-healing, which is why it is low: the next API call 401s, the refresh fires again and both are written.",
   "electron/services/providers/googleContactProvider.ts::fetchContacts":
     "BACKLOG-3306 — the same duplicated token-refresh callback as gmailFetchService above, writing the two UPDATEs in the opposite order; a crash leaves one token column updated and the other stale.",
-  "electron/services/localSyncService.ts::storeContacts":
-    "BACKLOG-3307 — every unchanged contact row keeps an older synced_at and reads as 'not present in the latest sync', so the identity crosswalk's reassignment guard is silently disabled for android_sync and a phone number that has moved between two people binds to the WRONG contact and is never flagged. Persists until the next full snapshot.",
   "electron/services/transactionService/transactionService.ts::_saveCommunications":
     "BACKLOG-3308 — an emails row with no communications row: the email is stored but not attached to the transaction, so it does not appear on it. Partially self-healing, but only if a scan re-runs and nothing schedules one on this condition.",
-  "electron/services/transactionService/transactionService.ts::unlinkCommunication":
-    "BACKLOG-3309 — the email is simultaneously still linked (the communications row survives) and suppressed (the ignored_communications row exists); the next auto-link scan keeps it linked while it also sits in the ignore set. The email twin of BACKLOG-2547, at a site 2547 does not name.",
-  "electron/services/transactionService/transactionService.ts::restoreRemovedEmailThread":
-    "BACKLOG-3310 — the email is neither ignored nor linked: it disappears from 'Show removed emails' AND does not reappear on the transaction, so the user's route back to it is gone and nothing re-derives it.",
 
   // ==========================================================================
   // BACKLOG-3232 — SURFACED BY THE CLASS WIDENING, ALREADY-FILED SITES
@@ -509,8 +505,6 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // shape. The bullet was split out of 2554's scope for exactly that reason.
   "electron/services/failureLogService.ts::pruneOldEntries":
     "BACKLOG-3319 — the age DELETE commits and the cap DELETE does not, so the failure log keeps rows above the 500-row cap until the next startup prunes again. Diagnostics only — no user-visible record is lost. That is why this is low despite inheriting from a critical batch.",
-  "electron/services/reviewStateService.ts::restoreRejectedToQueue":
-    "BACKLOG-3320 — a crash after the INSERT and before the DELETE leaves the item queued for review AND still listed as rejected: it appears twice, in two places that contradict each other. It loops per sibling, so a multi-email thread can end up part-restored. The MIRROR of BACKLOG-3310, not the same failure — that one writes in the opposite order and leaves NEITHER.",
 
   // ==========================================================================
   // BACKLOG-3239 — SURFACED BY THE BRANCH-EXCLUSIVITY FIX

@@ -350,7 +350,12 @@ export const transactionService = {
    */
   async delete(transactionId: string): Promise<ApiResult> {
     try {
-      await window.api.transactions.delete(transactionId);
+      // BACKLOG-3339: the handler reports a refused delete as
+      // `{ success: false, error }` (it does not throw), so read it.
+      const result = await window.api.transactions.delete(transactionId);
+      if (result && result.success === false) {
+        return { success: false, error: result.error };
+      }
       return { success: true };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";

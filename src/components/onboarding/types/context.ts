@@ -78,8 +78,10 @@ export interface OnboardingContext {
   /**
    * Authentication provider the user logged in with.
    * Used to determine primary email provider recommendation.
+   * BACKLOG-3956: null when the sign-in was not Google or Microsoft (e.g.
+   * email) or is not known yet — never guessed as either provider.
    */
-  authProvider: "google" | "microsoft";
+  authProvider: "google" | "microsoft" | null;
 
   /**
    * Whether this is a new user going through initial onboarding.

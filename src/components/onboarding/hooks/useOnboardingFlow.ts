@@ -46,7 +46,7 @@ export interface OnboardingAppState {
   /** Whether terms are accepted */
   termsAccepted: boolean;
   /** Authentication provider */
-  authProvider: "google" | "microsoft";
+  authProvider: "google" | "microsoft" | null;
   /** Whether user is new */
   isNewUser: boolean;
   /** Whether database is initialized */

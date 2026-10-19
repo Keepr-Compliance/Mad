@@ -39,6 +39,22 @@ export type AuditAction =
   | "MAILBOX_DISCONNECT";
 
 /**
+ * BACKLOG-3339: thrown by `recordInTransaction` when the audit INSERT itself
+ * fails. It is thrown inside the caller's transaction, so the change rolls
+ * back with it; the caller tells it apart from a failure of the change and
+ * shows the user a fixed message instead of the driver's text. The driver
+ * error is kept as `cause`.
+ */
+export class AuditNotRecordedError extends Error {
+  readonly cause: unknown;
+  constructor(cause: unknown) {
+    super("The audit entry could not be written");
+    this.name = "AuditNotRecordedError";
+    this.cause = cause;
+  }
+}
+
+/**
  * Resource types that can be audited
  */
 export type ResourceType =
@@ -149,6 +165,34 @@ export const AUDIT_PII_METADATA_KEYS = [
 ] as const;
 
 /**
+ * BACKLOG-3339: free-text fields of an audit entry that do not leave this
+ * machine outside a support-access window. Applies to every entry, live sends
+ * and the BACKLOG-3987 table backfill alike — both go through
+ * `stripPiiForCloud`, the one egress point.
+ *
+ * `errorMessage` is written from raw `err.message` at a dozen sites (provider
+ * errors, database errors); it can carry whatever the failing call put in it.
+ * The local row keeps it; the uploaded copy says only that the attempt failed
+ * (`success: false`) and what it was.
+ */
+export const AUDIT_FREE_TEXT_FIELDS = [
+  "errorMessage",
+  "ipAddress",
+  "userAgent",
+] as const;
+
+/**
+ * BACKLOG-3339: every metadata key stripped from the uploaded copy. The
+ * 3052 identity keys, plus `error`, which one producer fills with a raw
+ * error message (`microsoftAuthHandlers` LOGIN_FAILED). A fixed code at the
+ * producer is the way to keep a reason in the cloud.
+ */
+export const AUDIT_CLOUD_STRIPPED_METADATA_KEYS = [
+  ...AUDIT_PII_METADATA_KEYS,
+  "error",
+] as const;
+
+/**
  * BACKLOG-3052: the support-access grant, read at cloud-sync time.
  *
  * Injected rather than imported. `services/supportAccess` is a barrel that
@@ -173,7 +217,14 @@ export interface ISupportAccessGate {
  */
 interface IDatabaseService {
   insertAuditLog(entry: AuditLogEntry): Promise<void>;
-  getUnsyncedAuditLogs(limit?: number): Promise<AuditLogEntry[]>;
+  // BACKLOG-3339: the synchronous INSERT, for writes inside a transaction.
+  insertAuditLogSync(entry: AuditLogEntry): void;
+  // BACKLOG-3339: is a transaction open on the audit connection right now?
+  isInTransaction(): boolean;
+  // BACKLOG-3987: scoped to one user. The cloud insert policy only accepts
+  // rows whose user_id is the signed-in account, so a batch that mixes in
+  // another local account's row is rejected whole.
+  getUnsyncedAuditLogs(limit: number, userId: string): Promise<AuditLogEntry[]>;
   markAuditLogsSynced(ids: string[]): Promise<void>;
   // BACKLOG-2149: audit writes race DB init on the deep-link path — gate on this.
   isInitialized(): boolean;
@@ -184,6 +235,8 @@ interface IDatabaseService {
  */
 interface ISupabaseService {
   batchInsertAuditLogs(entries: AuditLogEntry[]): Promise<void>;
+  // BACKLOG-3987: who is signed in. Only that user's entries are sent.
+  getAuthSession(): Promise<{ userId: string } | null>;
 }
 
 // ============================================
@@ -193,6 +246,15 @@ interface ISupabaseService {
 class AuditService {
   private pendingSyncQueue: AuditLogEntry[] = [];
   private syncInProgress = false;
+  // BACKLOG-3987: true after a failed cloud send, until the next success.
+  // A failure is reported to Sentry once per run of failures, not per attempt.
+  private cloudSyncFailing = false;
+  // BACKLOG-3339: same shape for the LOCAL insert. A database that rejects
+  // every insert would otherwise send one Sentry event per audited action.
+  // Set on the first failure of a stretch, cleared by the next successful write.
+  private localInsertFailing = false;
+  // BACKLOG-3987: the send attempt in flight, if any (see syncBatch).
+  private currentSync: Promise<number> | null = null;
   private syncIntervalId: NodeJS.Timeout | null = null;
   private databaseService: IDatabaseService | null = null;
   private supabaseService: ISupabaseService | null = null;
@@ -208,6 +270,10 @@ class AuditService {
   // never comes up can't grow this without limit.
   private pendingLocalWrites: AuditLogEntry[] = [];
   private flushingPendingWrites = false;
+  // BACKLOG-3339: entries dropped from that buffer this run (it is bounded).
+  private droppedPendingWrites = 0;
+  // BACKLOG-3339: a post-commit cloud send is already scheduled.
+  private kickScheduled = false;
 
   private readonly SYNC_INTERVAL_MS = 60000; // 1 minute
   private readonly SYNC_BATCH_SIZE = 100;
@@ -358,57 +424,179 @@ class AuditService {
           userId: entry.userId ? entry.userId.substring(0, 8) + "..." : "unknown",
         },
       });
+      // BACKLOG-3339: a breadcrumb alone is only seen when some later error is
+      // reported, so local insert failures were never counted. Report them.
+      // log() never throws, so neither may its reporting.
+      // Once per stretch of consecutive failures (see localInsertFailing).
+      if (!this.localInsertFailing) {
+        this.localInsertFailing = true;
+        try {
+          Sentry.captureMessage("Audit log local INSERT failed", {
+            level: "error",
+            tags: { service: "audit-service", operation: "log", action: entry.action },
+          });
+        } catch {
+          // reporting is best-effort
+        }
+      }
     }
   }
 
   /**
-   * Audit wrapper for handlers - logs success or failure
-   * @param params - Audit parameters
-   * @param operation - The operation to wrap
-   * @returns The result of the operation
+   * BACKLOG-3339: write an audit entry INSIDE the caller's transaction, so the
+   * entry and the change it records commit together or not at all.
+   *
+   *     dbTransaction(() => {
+   *       const t = createTransactionSync(...);
+   *       auditService.recordInTransaction({ ..., resourceId: t.id });
+   *     });
+   *
+   * - Throws when no transaction is open on the audit connection. Called
+   *   outside one, the entry would be committed on its own and the pairing
+   *   this method exists for would silently not hold.
+   * - Does NOT catch. A failed INSERT throws into the transaction and rolls
+   *   the change back; that is the point.
+   * - Synchronous on purpose. An async insert inside a transaction body turns
+   *   the throw into a rejection after COMMIT, so the change commits without
+   *   its entry (the WRONG_B probe in auditInTransaction-3339.test.ts).
+   * - Does NOT add the entry to the in-memory cloud queue: if the transaction
+   *   rolls back, a queued copy would send an entry that does not exist. The
+   *   row itself is the outbox. A cloud send is scheduled for after the
+   *   current synchronous work (the commit) and reads unsynced rows from the
+   *   table (BACKLOG-3987), so the entry reaches the cloud within seconds
+   *   instead of waiting for the next 60 s tick or the next launch.
+   *
+   * Always a success entry. A failed attempt is recorded with `recordFailure`
+   * after the rollback.
    */
-  async withAudit<T>(
-    params: {
-      userId: string;
-      sessionId?: string;
-      action: AuditAction;
-      resourceType: ResourceType;
-      resourceId?: string;
-      metadata?: Record<string, unknown>;
-    },
-    operation: () => Promise<T>,
-  ): Promise<T> {
-    const { userId, sessionId, action, resourceType, resourceId, metadata } =
-      params;
-
-    try {
-      const result = await operation();
-
-      await this.log({
-        userId,
-        sessionId,
-        action,
-        resourceType,
-        resourceId,
-        metadata,
-        success: true,
-      });
-
-      return result;
-    } catch (error) {
-      await this.log({
-        userId,
-        sessionId,
-        action,
-        resourceType,
-        resourceId,
-        metadata,
-        success: false,
-        errorMessage: error instanceof Error ? error.message : "Unknown error",
-      });
-
-      throw error;
+  recordInTransaction(
+    entry: Omit<NewAuditLogEntry, "success" | "errorMessage">,
+  ): AuditLogEntry {
+    const db = this.databaseService;
+    if (!db) {
+      // An audit failure like any other: the change is cancelled and the user
+      // gets the fixed message, not this text.
+      throw new AuditNotRecordedError(
+        new Error("auditService.recordInTransaction: audit service is not initialized"),
+      );
     }
+    if (!db.isInTransaction()) {
+      throw new Error(
+        "auditService.recordInTransaction must be called inside a database transaction",
+      );
+    }
+
+    const fullEntry = this.buildEntry({ ...entry, success: true });
+    try {
+      db.insertAuditLogSync(fullEntry);
+    } catch (cause) {
+      // Still a throw inside the transaction, so the change rolls back.
+      throw new AuditNotRecordedError(cause);
+    }
+    this.scheduleKickAfterCommit();
+    return fullEntry;
+  }
+
+  /**
+   * BACKLOG-3339: record a FAILED attempt, as a separate write after the
+   * change's transaction has rolled back.
+   *
+   * Never throws: the caller is already handling the original error and must
+   * rethrow THAT one, not an audit error. If this write fails too, it is
+   * reported to Sentry and the log — the trail cannot record its own failure.
+   *
+   * Refuses to write inside a transaction: the entry would roll back with the
+   * change it is meant to outlive. That is reported, not thrown.
+   */
+  recordFailure(entry: Omit<NewAuditLogEntry, "success">): void {
+    const fullEntry = this.buildEntry({ ...entry, success: false });
+    const report = (error: unknown): void => {
+      logService.error("Failed to write audit failure entry", "AuditService", {
+        action: entry.action,
+        resourceType: entry.resourceType,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+      // Same stretch flag as log(): one report per run of failed local writes.
+      if (this.localInsertFailing) return;
+      this.localInsertFailing = true;
+      Sentry.captureException(error, {
+        tags: { service: "audit-service", operation: "recordFailure", action: entry.action },
+      });
+    };
+    try {
+      const db = this.databaseService;
+      if (db && db.isInitialized() && db.isInTransaction()) {
+        logService.error(
+          "recordFailure called inside a transaction; entry not written",
+          "AuditService",
+          { action: entry.action, resourceType: entry.resourceType },
+        );
+        Sentry.captureMessage("auditService.recordFailure called inside a transaction", {
+          level: "error",
+          tags: { service: "audit-service", operation: "recordFailure", action: entry.action },
+        });
+        return;
+      }
+    } catch (error) {
+      report(error);
+      return;
+    }
+    // Same path as log(): buffered while the database is not up, queued for
+    // the cloud once written. Unlike log(), a failed write is reported to
+    // Sentry, and nothing is returned for the caller to await or drop.
+    this.writeToLocal(fullEntry).then(
+      (written) => {
+        if (!written) return; // buffered; the flush queues it
+        this.pendingSyncQueue.push(fullEntry);
+        void this.kickSync();
+      },
+      report,
+    );
+  }
+
+  /**
+   * BACKLOG-3339: send unsynced entries now. Never rejects.
+   *
+   * Skipped while a transaction is open on the audit connection: marking rows
+   * synced writes on that connection, and a rollback of someone else's
+   * transaction would undo the marks (BACKLOG-2775). The 60 s tick and the
+   * next launch (BACKLOG-3987) still send the rows.
+   */
+  async kickSync(): Promise<void> {
+    try {
+      if (this.databaseService?.isInTransaction()) return;
+      await this.syncToCloud();
+    } catch {
+      // syncToCloud reports its own failures; retried on the next tick.
+    }
+  }
+
+  /**
+   * BACKLOG-3339: run `kickSync` once the current synchronous work is done.
+   * `recordInTransaction` is called from a synchronous transaction body, so by
+   * the time this callback runs the transaction has committed or rolled back.
+   * Several entries in one transaction schedule one send.
+   */
+  private scheduleKickAfterCommit(): void {
+    if (this.kickScheduled) return;
+    this.kickScheduled = true;
+    setTimeout(() => {
+      this.kickScheduled = false;
+      void this.kickSync();
+    }, 0);
+  }
+
+  /** id, timestamp and sanitised metadata, as `log()` builds them. */
+  private buildEntry(entry: NewAuditLogEntry): AuditLogEntry {
+    const fullEntry: AuditLogEntry = {
+      ...entry,
+      id: crypto.randomUUID(),
+      timestamp: new Date(),
+    };
+    if (fullEntry.metadata) {
+      fullEntry.metadata = this.sanitizeMetadata(fullEntry.metadata);
+    }
+    return fullEntry;
   }
 
   /**
@@ -424,7 +612,7 @@ class AuditService {
    * branch earlier and jumped straight over the buffer, so the entry was lost.
    * Both states now take the same route.
    */
-  private async writeToLocal(entry: AuditLogEntry): Promise<void> {
+  private async writeToLocal(entry: AuditLogEntry): Promise<boolean> {
     if (!this.databaseService) {
       // BACKLOG-3008: initialize() has not run yet. Every IPC handler is
       // registered and callable before the renderer asks for database init, and
@@ -438,7 +626,7 @@ class AuditService {
         { action: entry.action, resourceType: entry.resourceType },
       );
       this.bufferPendingWrite(entry);
-      return;
+      return false;
     }
 
     if (!this.databaseService.isInitialized()) {
@@ -451,13 +639,16 @@ class AuditService {
       );
       if (!result.ready) {
         this.bufferPendingWrite(entry);
-        return;
+        return false;
       }
     }
 
     await this.databaseService.insertAuditLog(entry);
+    // A successful local write ends a stretch of failures (BACKLOG-3339).
+    this.localInsertFailing = false;
     // A successful write means the DB is up — drain anything we buffered earlier.
     void this.flushPendingLocalWrites();
+    return true;
   }
 
   /**
@@ -469,11 +660,20 @@ class AuditService {
     this.pendingLocalWrites.push(entry);
     if (this.pendingLocalWrites.length > this.MAX_PENDING_LOCAL_WRITES) {
       const dropped = this.pendingLocalWrites.shift();
+      this.droppedPendingWrites++;
       logService.warn(
         "Audit pending-write buffer full, dropped oldest entry",
         "AuditService",
         { action: dropped?.action, resourceType: dropped?.resourceType },
       );
+      // BACKLOG-3339: a dropped entry is a lost audit record. Report the first
+      // drop of a run to Sentry; the counter says how many followed.
+      if (this.droppedPendingWrites === 1) {
+        Sentry.captureMessage("Audit pending-write buffer full; entries dropped", {
+          level: "error",
+          tags: { service: "audit-service", operation: "bufferPendingWrite" },
+        });
+      }
     }
     // Flush when the DB is ready (best-effort; never throws).
     void import("./initializationBroadcaster").then(
@@ -535,34 +735,78 @@ class AuditService {
   }
 
   /**
-   * Sync pending audit logs to cloud
+   * Sync pending audit logs to cloud.
+   *
+   * BACKLOG-3987: two sources, in order. First the in-memory queue (entries
+   * written this run). When that is empty, rows in the local table that were
+   * never marked synced: entries from a previous run whose send failed, or
+   * that were still queued when the app quit. The queue does not survive a
+   * restart, so before this fix those rows were never sent — the function
+   * returned early on an empty queue and the database branch could not run.
+   *
+   * Only the signed-in user's entries are sent. The cloud insert policy
+   * rejects a row whose user_id is not the session user, and it rejects the
+   * whole batch with it, so one other-account row at the head of the table
+   * would block every later row on every attempt.
    */
   async syncToCloud(): Promise<void> {
-    if (this.syncInProgress || this.pendingSyncQueue.length === 0) {
-      return;
+    await this.syncBatch();
+  }
+
+  /**
+   * One send attempt. Returns how many entries reached the cloud. A call made
+   * while an attempt is in flight joins that attempt instead of starting a
+   * second one, so `flushPendingLogs` waits for a send `log()` already kicked.
+   */
+  private syncBatch(): Promise<number> {
+    if (this.currentSync) return this.currentSync;
+    const run = this.runSyncBatch().finally(() => {
+      this.currentSync = null;
+    });
+    this.currentSync = run;
+    return run;
+  }
+
+  private async runSyncBatch(): Promise<number> {
+    if (this.syncInProgress) {
+      return 0;
     }
 
     if (!this.supabaseService || !this.databaseService) {
-      return;
+      return 0;
     }
 
     this.syncInProgress = true;
 
     try {
-      // Get entries to sync (from queue or database)
+      const session = await this.supabaseService.getAuthSession();
+      const userId = session?.userId;
+      if (!userId) {
+        // Not signed in: nothing can be accepted. Rows stay unsynced locally.
+        return 0;
+      }
+
+      // Entries for another account stay in the local table, unsynced, and
+      // are sent when that account signs in. They leave the queue so they
+      // cannot hold it.
+      this.pendingSyncQueue = this.pendingSyncQueue.filter(
+        (e) => e.userId === userId,
+      );
+
       let entriesToSync: AuditLogEntry[] = [];
 
       if (this.pendingSyncQueue.length > 0) {
         entriesToSync = this.pendingSyncQueue.slice(0, this.SYNC_BATCH_SIZE);
       } else {
-        // Check database for any unsynced entries
-        entriesToSync = await this.databaseService.getUnsyncedAuditLogs(
-          this.SYNC_BATCH_SIZE,
-        );
+        entriesToSync =
+          (await this.databaseService.getUnsyncedAuditLogs(
+            this.SYNC_BATCH_SIZE,
+            userId,
+          )) ?? [];
       }
 
       if (entriesToSync.length === 0) {
-        return;
+        return 0;
       }
 
       // Sync to cloud.
@@ -581,27 +825,47 @@ class AuditService {
       this.pendingSyncQueue = this.pendingSyncQueue.filter(
         (e) => !ids.includes(e.id),
       );
+      this.cloudSyncFailing = false;
 
       logService.info(
         `Synced ${entriesToSync.length} audit logs to cloud`,
         "AuditService",
       );
+      return entriesToSync.length;
     } catch (error) {
       // Will retry on next sync attempt
       logService.warn("Failed to sync audit logs to cloud", "AuditService", {
         error: error instanceof Error ? error.message : "Unknown error",
       });
+      // BACKLOG-3987: report the first failure of a run, not every retry.
+      // A machine whose connection to the cloud keeps failing retries every
+      // minute and on every new entry; reporting each attempt sent one user's
+      // retries to Sentry 1,416 times.
+      if (!this.cloudSyncFailing) {
+        this.cloudSyncFailing = true;
+        Sentry.captureException(error, {
+          tags: { service: "audit-service", operation: "syncToCloud" },
+        });
+      }
+      return 0;
     } finally {
       this.syncInProgress = false;
     }
   }
 
   /**
-   * Force sync all pending logs (useful before app shutdown)
+   * Send everything still unsynced for the signed-in user: the queue, then
+   * the local table (BACKLOG-3987). Stops at the first pass that sends
+   * nothing, so an offline machine returns instead of retrying forever.
    */
   async flushPendingLogs(): Promise<void> {
-    while (this.pendingSyncQueue.length > 0) {
-      await this.syncToCloud();
+    // Backstop against a backlog large enough to stall the caller.
+    const MAX_PASSES = 50;
+    // An attempt already in flight (kicked by log() or the interval) is
+    // waited out first; its result does not end the flush.
+    if (this.currentSync) await this.currentSync;
+    for (let pass = 0; pass < MAX_PASSES; pass++) {
+      if ((await this.syncBatch()) === 0) return;
     }
   }
 
@@ -671,18 +935,32 @@ class AuditService {
     }
 
     return entries.map((entry) => {
+      let out: AuditLogEntry = entry;
+
+      // BACKLOG-3339: raw free text. `errorMessage` is usually an error's
+      // `.message`, which can carry a name, an address or a provider's
+      // response; `ipAddress` and `userAgent` have no writer today and are
+      // stripped so a future one cannot leak by default. Kept on the local row.
+      for (const field of AUDIT_FREE_TEXT_FIELDS) {
+        if (out[field] !== undefined && out[field] !== null) {
+          if (out === entry) out = { ...entry };
+          delete out[field];
+        }
+      }
+
       const metadata = entry.metadata;
-      if (!metadata) return entry;
+      if (!metadata) return out;
 
       let stripped: Record<string, unknown> | null = null;
-      for (const key of AUDIT_PII_METADATA_KEYS) {
+      for (const key of AUDIT_CLOUD_STRIPPED_METADATA_KEYS) {
         if (Object.prototype.hasOwnProperty.call(metadata, key)) {
           if (!stripped) stripped = { ...metadata };
           delete stripped[key];
         }
       }
 
-      return stripped ? { ...entry, metadata: stripped } : entry;
+      if (!stripped) return out;
+      return { ...out, metadata: stripped };
     });
   }
 
@@ -719,6 +997,11 @@ class AuditService {
     }
 
     return sanitized;
+  }
+
+  /** BACKLOG-3339: entries dropped from the pre-init buffer this run. */
+  getDroppedPendingWriteCount(): number {
+    return this.droppedPendingWrites;
   }
 
   /**

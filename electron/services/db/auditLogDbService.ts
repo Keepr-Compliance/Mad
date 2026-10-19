@@ -16,10 +16,17 @@ import { dbAll, dbRun, ensureDb } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
 
 /**
- * Insert an audit log entry (append-only)
+ * Insert an audit log entry (append-only), synchronously.
  * Note: The audit_logs table has triggers that prevent UPDATE and DELETE
+ *
+ * BACKLOG-3339: the synchronous primitive, so an audit entry can be written
+ * INSIDE the transaction of the change it records (`auditService.recordInTransaction`).
+ * A throw here propagates into that transaction and rolls the change back.
+ * Never call the promise-returning `insertAuditLog` from a transaction body:
+ * its throw becomes a rejection after the COMMIT, so the change commits even
+ * though the audit entry was not written.
  */
-export async function insertAuditLog(entry: AuditLogEntry): Promise<void> {
+export function insertAuditLogSync(entry: AuditLogEntry): void {
   const statement = sql`
     INSERT INTO audit_logs (
       id, timestamp, user_id, session_id, action, resource_type,
@@ -46,17 +53,32 @@ export async function insertAuditLog(entry: AuditLogEntry): Promise<void> {
 }
 
 /**
- * Get audit logs that haven't been synced to cloud
+ * Insert an audit log entry (append-only). Promise-returning wrapper over
+ * `insertAuditLogSync`, for callers outside a transaction.
  */
-export async function getUnsyncedAuditLogs(limit: number = 100): Promise<AuditLogEntry[]> {
+export function insertAuditLog(entry: AuditLogEntry): Promise<void> {
+  return Promise.resolve(insertAuditLogSync(entry));
+}
+
+/**
+ * Get one user's audit logs that haven't been synced to cloud.
+ *
+ * BACKLOG-3987: scoped by user. The cloud accepts only the signed-in user's
+ * rows and rejects a mixed batch whole, so an unscoped oldest-first query lets
+ * one other-account row block the trail on every attempt.
+ */
+export async function getUnsyncedAuditLogs(
+  limit: number,
+  userId: string,
+): Promise<AuditLogEntry[]> {
   const statement = sql`
     SELECT * FROM audit_logs
-    WHERE synced_at IS NULL
+    WHERE synced_at IS NULL AND user_id = ?
     ORDER BY timestamp ASC
     LIMIT ?
   `;
 
-  const rows = dbAll<AuditLogDbRow>(statement, [limit]);
+  const rows = dbAll<AuditLogDbRow>(statement, [userId, limit]);
   return rows.map(mapAuditLogRowToEntry);
 }
 

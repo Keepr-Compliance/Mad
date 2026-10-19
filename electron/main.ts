@@ -218,8 +218,6 @@ import { registerPreAuthValidationHandler } from "./handlers/preAuthValidationHa
 import { registerSupportTicketHandlers } from "./handlers/supportTicketHandlers";
 import { registerSupportAccessHandlers } from "./handlers/supportAccessHandlers";
 import { initializeSupportAccess } from "./services/supportAccess";
-import { registerLocalSyncHandlers, cleanupLocalSyncHandlers } from "./handlers/localSyncHandlers";
-import { registerPairingHandlers, cleanupPairingHandlers } from "./handlers/pairingHandlers";
 import { LLMConfigService } from "./services/llm/llmConfigService";
 
 // Import license and device services for deep link auth validation (TASK-1507)
@@ -286,6 +284,8 @@ import {
 } from "./services/windowResponsivenessTracker";
 import { createWindowFreezeReporter, currentScreenName } from "./services/rendererFreezeProfiler";
 import { syncTimeline } from "./services/syncTimeline";
+import { normalizeOAuthProvider } from "./utils/normalizeOAuthProvider";
+import { buildDeepLinkAuthPayload } from "./utils/deepLinkAuthPayload";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
 // The Windows one-click installer migrates a prior per-machine install to
@@ -771,8 +771,8 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
 
       // TASK-1507D: Step 5.5 - Create local SQLite user
       // This is required for FK constraints (mailbox connection, audit logs, contacts)
-      const rawProvider = (user.app_metadata?.provider as string) || "google";
-      const provider = (rawProvider === "azure" ? "microsoft" : rawProvider) as OAuthProvider;
+      // BACKLOG-3956: one helper normalizes here AND for the renderer payload below.
+      const provider = (normalizeOAuthProvider(user.app_metadata?.provider) || "google") as OAuthProvider;
 
       // Map license type to subscription tier
       // licenseType: 'trial' | 'individual' | 'team' -> subscriptionTier: 'free' | 'pro' | 'enterprise'
@@ -897,20 +897,21 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       // TASK-1507F: Use local user ID instead of Supabase UUID for FK constraint compatibility
       // BACKLOG-546: Include isNewUser based on terms acceptance, not transaction count
       log.info("[DeepLink] Auth complete, sending success event for user:", redactId(localUserId));
-      sendToRenderer("auth:deep-link-callback", {
-        accessToken,
-        refreshToken,
-        userId: localUserId,
-        user: {
-          id: localUserId,
-          email: userEmail,
-          name: user.user_metadata?.full_name,
-        },
-        provider: user.app_metadata?.provider,
-        licenseStatus,
-        device: deviceResult.device,
-        isNewUser: needsTermsAcceptance, // BACKLOG-546: Based on terms, not transactions
-      });
+      // BACKLOG-3956: payload built by a tested helper; `provider` is normalized
+      // (azure -> microsoft) — the renderer's contact-source defaults compare to "microsoft".
+      sendToRenderer(
+        "auth:deep-link-callback",
+        buildDeepLinkAuthPayload({
+          accessToken,
+          refreshToken,
+          localUserId,
+          userEmail,
+          supabaseUser: user,
+          licenseStatus,
+          device: deviceResult.device,
+          isNewUser: needsTermsAcceptance, // BACKLOG-546: Based on terms, not transactions
+        }),
+      );
 
       focusMainWindow();
 
@@ -2006,10 +2007,6 @@ app.whenReady().then(async () => {
   void initializeSupportAccess().catch((error) => {
     log.warn(`[SupportAccess] Initialization failed: ${String(error)}`);
   });
-  registerLocalSyncHandlers();
-
-  // Android companion pairing (TASK-1428)
-  registerPairingHandlers();
 
   // DEV-ONLY: Manual deep link handler for testing when protocol handler fails
   // Usage from DevTools console: window.api.system.manualDeepLink("keepr://callback?access_token=...&refresh_token=...")
@@ -2142,10 +2139,6 @@ app.on("before-quit", (event) => {
   cleanupSyncHandlers();
   // Clean up transaction handlers (submission sync)
   cleanupTransactionHandlers();
-  // Clean up local sync server (TASK-1429: Android Companion)
-  cleanupLocalSyncHandlers();
-  // Clean up pairing sessions (TASK-1428)
-  cleanupPairingHandlers();
   // BACKLOG-3619: close the RCS import bridge.
   void stopRcsExtensionBridge();
   // BACKLOG-1831: stop the shadow delta sync poller timers (interval hygiene)

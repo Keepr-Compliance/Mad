@@ -80,7 +80,12 @@ jest.mock("../../services/transactionService", () => ({
 
 jest.mock("../../services/auditService", () => ({
   __esModule: true,
-  default: { log: jest.fn().mockResolvedValue(undefined) },
+  default: {
+    log: jest.fn().mockResolvedValue(undefined),
+    recordInTransaction: jest.fn(),
+    recordFailure: jest.fn(),
+  },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 
 jest.mock("../../services/logService", () => ({
@@ -99,9 +104,16 @@ jest.mock("../../services/db/core/dbConnection", () => ({
   dbGet: jest.fn(() => undefined),
   dbAll: jest.fn(() => []),
   dbRun: jest.fn(),
+  // BACKLOG-3339: the edit and its audit entry share one transaction.
+  dbTransaction: <T,>(fn: () => T): T => fn(),
 }));
 jest.mock("../../services/emailSyncService", () => ({ __esModule: true, default: {} }));
-jest.mock("../../services/databaseService", () => ({ __esModule: true, default: {} }));
+// BACKLOG-3339: transactions:update writes through the synchronous call inside
+// its audit transaction; routed to the same spy the suite already reads.
+jest.mock("../../services/databaseService", () => ({
+  __esModule: true,
+  default: { updateTransactionSync: (...a: unknown[]) => mockUpdateTransaction(...a) },
+}));
 
 jest.mock("../../services/transactionSyncTrigger", () => ({
   triggerTransactionSyncInBackground: jest.fn(),

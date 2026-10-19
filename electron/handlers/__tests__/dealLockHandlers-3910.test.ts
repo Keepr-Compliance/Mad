@@ -45,6 +45,8 @@ jest.mock("../../services/db/core/dbConnection", () => ({
   dbGet: jest.fn(),
   dbAll: jest.fn(() => []),
   dbRun: jest.fn(),
+  // BACKLOG-3339: a deal edit and its audit entry share one transaction.
+  dbTransaction: <T,>(fn: () => T): T => fn(),
 }));
 jest.mock("../../services/transactionService", () => ({
   __esModule: true,
@@ -55,7 +57,8 @@ jest.mock("../../services/transactionService", () => ({
     unlinkCommunication: jest.fn(() => Promise.resolve({ unlinkedIds: [] })),
     unlinkMessages: jest.fn(() => Promise.resolve()),
     linkMessages: jest.fn(() => Promise.resolve()),
-    getTransactionDetails: jest.fn(() => Promise.resolve(null)),
+    // BACKLOG-3339: the deal must exist (its owner is the audit entry's user).
+    getTransactionDetails: jest.fn((id: string) => Promise.resolve({ id, user_id: "user-3910" })),
     updateTransaction: jest.fn(() => Promise.resolve()),
   },
   getEarliestCommunicationDate: jest.fn(),
@@ -65,9 +68,15 @@ jest.mock("../../services/databaseService", () => ({
   default: {
     restoreContactToTransaction: jest.fn(() => Promise.resolve(false)),
     getTransactionById: jest.fn(() => Promise.resolve(null)),
+    // BACKLOG-3339: the write transactions:update makes, inside its audit transaction.
+    updateTransactionSync: jest.fn(),
   },
 }));
-jest.mock("../../services/auditService", () => ({ __esModule: true, default: { log: jest.fn() } }));
+jest.mock("../../services/auditService", () => ({
+  __esModule: true,
+  default: { log: jest.fn(), recordInTransaction: jest.fn(), recordFailure: jest.fn() },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
+}));
 jest.mock("../../services/emailSyncService", () => ({
   __esModule: true,
   default: { fetchAndAutoLinkForContact: jest.fn() },
@@ -148,14 +157,14 @@ const EDITS: Edit[] = [
     channel: "transactions:update",
     args: [DEAL, { started_at: "2026-01-15" }],
     refusedEdit: "edit-deal-details",
-    downstream: () => jest.mocked(transactionService.updateTransaction) as unknown as jest.Mock,
+    downstream: () => jest.mocked(databaseService.updateTransactionSync) as unknown as jest.Mock,
   },
   {
     name: "change another deal field (transactions:update, address)",
     channel: "transactions:update",
     args: [DEAL, { property_address: "6 Control Street" }],
     refusedEdit: "edit-deal-details",
-    downstream: () => jest.mocked(transactionService.updateTransaction) as unknown as jest.Mock,
+    downstream: () => jest.mocked(databaseService.updateTransactionSync) as unknown as jest.Mock,
   },
   {
     name: "hide a text from export (hide-text-from-export)",

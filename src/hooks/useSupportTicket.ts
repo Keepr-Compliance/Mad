@@ -38,14 +38,6 @@ export interface IphoneSyncDiagnostics {
     service_running: boolean;
     version: string | null;
   };
-  android_companion: {
-    paired: boolean;
-    connected: boolean;
-    device_count: number;
-    last_seen: string | null;
-    server_running: boolean;
-    last_sync_at: string | null;
-  };
   user_settings: {
     phone_type: string | null;
     contact_sources_configured: boolean;

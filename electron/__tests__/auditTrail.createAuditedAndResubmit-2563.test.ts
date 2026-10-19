@@ -121,6 +121,8 @@ jest.mock("electron", () => ({
 
 jest.mock("@sentry/electron/main", () => ({
   captureException: jest.fn(),
+  // BACKLOG-3339: auditService.log reports a failed local INSERT.
+  captureMessage: jest.fn(),
   setUser: jest.fn(),
   addBreadcrumb: jest.fn(),
   flush: jest.fn().mockResolvedValue(true),
@@ -316,55 +318,14 @@ const invoke = (channel: string, ...args: unknown[]) => {
 };
 
 // ===========================================================================
-describe("transactions:create-audited writes the creation event to audit_logs", () => {
-  it("writes exactly one TRANSACTION_CREATE row for the new transaction", async () => {
-    const result = await invoke("transactions:create-audited", USER, {
-      property_address: PROPERTY,
-    });
-
-    // The handler's own verdict is recorded but NOT relied on: it says `true`
-    // whether or not the row landed. The next assertion is the real one.
-    expect(result.success).toBe(true);
-
-    expect(auditRows(TRANSACTION)).toEqual([
-      {
-        action: "TRANSACTION_CREATE",
-        resource_type: "TRANSACTION",
-        resource_id: TRANSACTION,
-        user_id: USER,
-        success: 1,
-        reason: "audited_create",
-      },
-    ]);
-  });
-
-  it("carries the property address, so the export row identifies the deal", async () => {
-    await invoke("transactions:create-audited", USER, { property_address: PROPERTY });
-
-    const row = mockDb!
-      .prepare(
-        "SELECT json_extract(metadata, '$.propertyAddress') AS addr FROM audit_logs WHERE resource_id = ?",
-      )
-      .get(TRANSACTION) as { addr: string };
-    expect(row.addr).toBe(PROPERTY);
-  });
-
-  it("writes the trail BEFORE the background syncs are fired", async () => {
-    // The two triggers are fire-and-forget; if the audit write were sequenced
-    // after them, a background failure could reorder or drop the trail entry.
-    const { triggerTransactionSyncInBackground } =
-      jest.requireMock("../services/transactionSyncTrigger");
-    let rowsAtTriggerTime = -1;
-    (triggerTransactionSyncInBackground as jest.Mock).mockImplementation(() => {
-      rowsAtTriggerTime = auditRows(TRANSACTION).length;
-    });
-
-    await invoke("transactions:create-audited", USER, { property_address: PROPERTY });
-
-    expect(triggerTransactionSyncInBackground).toHaveBeenCalled();
-    expect(rowsAtTriggerTime).toBe(1);
-  });
-
+// BACKLOG-3339 slice 1: the creation entry is no longer written by the
+// handler. `transactionService.createAuditedTransaction` writes it in the same
+// database transaction as the deal, and this suite mocks that service. The
+// three row assertions that lived here (exactly one TRANSACTION_CREATE row,
+// the property address, written before the background syncs) moved to
+// `dealAuditInTransaction-3339.test.ts`, which drives the real handler and the
+// real service on the real driver. The one below still holds here.
+describe("transactions:create-audited writes no entry of its own", () => {
   it("writes nothing when the create itself fails", async () => {
     mockCreateAuditedTransaction.mockResolvedValue(undefined);
 
@@ -524,7 +485,7 @@ describe("the new rows reach the CCPA/SOC2 export, not just the table", () => {
   //
   // The REAL export query is used here, not a re-typed copy of it.
 
-  it("both new events come back through the export's own query, distinguishable", async () => {
+  it("submit and resubmit come back through the export's own query, distinguishable", async () => {
     mockSubmitTransaction.mockResolvedValue({
       success: true,
       submissionId: "sub-2563-0000-4000-8000-000000000001",
@@ -540,7 +501,8 @@ describe("the new rows reach the CCPA/SOC2 export, not just the table", () => {
       attachmentsFailed: 0,
     });
 
-    await invoke("transactions:create-audited", USER, { property_address: PROPERTY });
+    // BACKLOG-3339: the creation entry's export check moved to
+    // dealAuditInTransaction-3339.test.ts (see above).
     await invoke("transactions:submit", TRANSACTION);
     await invoke("transactions:resubmit", TRANSACTION);
 
@@ -553,7 +515,6 @@ describe("the new rows reach the CCPA/SOC2 export, not just the table", () => {
         .sort(),
     ).toEqual(
       [
-        ["TRANSACTION_CREATE", "audited_create"],
         ["TRANSACTION_SUBMIT", null],
         ["TRANSACTION_SUBMIT", "resubmit"],
       ].sort(),

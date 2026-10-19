@@ -431,26 +431,71 @@
 !macroend
 
 ; ---------------------------------------------------------------------------
-; MICROSOFT STORE BUILD: NO APPLE DRIVER FOLDER (BACKLOG-3927)
-;
-; The Store package carries no resources\win\apple-drivers folder (release.yml
-; removes it before packaging; scripts/ci/check-packaged-drivers.mjs gates it).
-; A Store install over an earlier website install normally loses that folder
-; when the old uninstaller runs. When there is no old uninstaller to run, the
-; folder from the earlier install stays behind, so the Store installer removes
-; it itself.
-;
-; KEEPR_STORE_BUILD is defined ONLY by build/installer-store.nsh, which the
-; store run of release.yml selects with --config.nsis.include. The website build
-; includes this file directly, never sees the define, and so has no
-; customInstall macro at all: its installer is compiled exactly as before.
+; customInstall: FILES AN EARLIER INSTALL LEFT BEHIND (BACKLOG-3927, BACKLOG-3689)
 ;
 ; customInstall runs at installSection.nsh:81-82, after installApplicationFiles
-; (:66) has written the new files, so $INSTDIR is final and the only content in
-; this folder is stale.
+; (:66) has written the new files, so $INSTDIR is final and anything removed
+; here is stale.
+;
+; Normally there is nothing to remove: an upgrade runs the old uninstaller first
+; (installSection.nsh:52 uninstallOldVersion), which clears $INSTDIR. These
+; lines cover an install where no old uninstaller runs.
+;
+; BOTH BUILDS compile this macro. The website build includes this file directly
+; (package.json build.nsis.include); the Store build includes it through
+; build/installer-store.nsh, which defines KEEPR_STORE_BUILD first.
+;
+; 1. Store build only: no resources\win\apple-drivers folder. The Store package
+;    carries none (release.yml removes it before packaging;
+;    scripts/ci/check-packaged-drivers.mjs gates it). The website build still
+;    ships that folder, so the RMDir stays inside !ifdef KEEPR_STORE_BUILD.
+;    KEEPR_STORE_BUILD is defined ONLY by build/installer-store.nsh.
+;
+; 2. Both builds: the iPhone tool files no build ships any more. Exactly the
+;    pinned manifest's files and companions minus store.files, the set both
+;    builds ship (scripts/__tests__/storeIphoneTools-3927.test.ts checks the list
+;    and that no kept file is on it). One Delete per file, no wildcard.
+;
+; One macro only: a second customInstall inside the !ifdef would fail to compile
+; on the Store entry ("macro named customInstall already exists").
 ; ---------------------------------------------------------------------------
-!ifdef KEEPR_STORE_BUILD
 !macro customInstall
-  RMDir /r "$INSTDIR\resources\win\apple-drivers"
+  !ifdef KEEPR_STORE_BUILD
+    RMDir /r "$INSTDIR\resources\win\apple-drivers"
+  !endif
+  Delete "$INSTDIR\resources\win\libimobiledevice\bz2.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\iconv-2.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\ideviceactivation.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicebackup.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicecrashreport.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicedate.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicedebug.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicedebugserverproxy.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicediagnostics.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\ideviceenterrecovery.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\ideviceimagemounter.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicename.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicenotificationproxy.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\ideviceprovision.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicerestore.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicescreenshot.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\idevicesyslog.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\imobiledevice-net-lighthouse.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\ios_webkit_debug_proxy.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\irecovery.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\irecovery.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\libcurl.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\libusb-1.0.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\libusb0.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\libxml2.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\lzma.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\pcre.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\pcreposix.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\plist_cmp.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\plist_test.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\plistutil.exe"
+  Delete "$INSTDIR\resources\win\libimobiledevice\pthreadVC3.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\README.md"
+  Delete "$INSTDIR\resources\win\libimobiledevice\zip.dll"
+  Delete "$INSTDIR\resources\win\libimobiledevice\zlib1.dll"
 !macroend
-!endif

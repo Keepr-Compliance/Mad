@@ -46,7 +46,7 @@ interface ElectronAPI {
     /** BACKLOG-1124: Lightweight count query for pending auto-detected transactions */
     getPendingCount: (userId: string) => Promise<{ success: boolean; count: number; error?: string }>;
     update: (id: string, data: unknown) => Promise<{ success: boolean }>;
-    delete: (id: string) => Promise<{ success: boolean }>;
+    delete: (id: string) => Promise<{ success: boolean; error?: string }>;
     bulkDelete: (transactionIds: string[]) => Promise<{ success: boolean; deletedCount?: number; error?: string }>;
     bulkUpdateStatus: (transactionIds: string[], status: "pending" | "active" | "closed" | "rejected") => Promise<{ success: boolean; updatedCount?: number; error?: string }>;
   };
@@ -96,6 +96,8 @@ interface ElectronAPI {
     onDisconnected: (callback: () => void) => (() => void) | undefined;
     onToolsMissing?: (cb: () => void) => () => void;
     onToolsAvailable?: (cb: () => void) => () => void;
+    /** BACKLOG-3953: an iPhone tool never started (Windows); carries the message to show. */
+    onToolsBlocked?: (cb: (data: { userError: { title: string; description: string; actionSuggestion: string; code: string } }) => void) => () => void;
   };
 
   // iOS Backup Management (Windows only)

@@ -176,10 +176,12 @@ afterEach(() => {
 beforeAll(() => {
   // The real service, wired to the real insertAuditLog over the in-memory connection.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { insertAuditLog } = require("../services/db/auditLogDbService");
+  const { insertAuditLog, insertAuditLogSync } = require("../services/db/auditLogDbService");
   auditService.initialize(
     {
       insertAuditLog,
+      insertAuditLogSync,
+      isInTransaction: () => false,
       getUnsyncedAuditLogs: async () => [],
       markAuditLogsSynced: async () => undefined,
       isInitialized: () => true,

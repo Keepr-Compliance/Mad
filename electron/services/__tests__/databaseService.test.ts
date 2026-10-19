@@ -1308,9 +1308,10 @@ describe("DatabaseService", () => {
 
         mockStatement.all.mockReturnValue(mockLogs);
 
-        const logs = await databaseService.getUnsyncedAuditLogs(100);
+        const logs = await databaseService.getUnsyncedAuditLogs(100, "user-123");
 
         expect(logs).toHaveLength(1);
+        expect(mockStatement.all).toHaveBeenCalledWith("user-123", 100);
         expect(logs[0].action).toBe("LOGIN");
       });
     });
@@ -1668,6 +1669,11 @@ describe("DatabaseService", () => {
 
         (freshFs.existsSync as jest.Mock).mockReturnValue(true);
         (freshFs.readdirSync as jest.Mock).mockReturnValue([]);
+        // BACKLOG-3975: "no backup" now means no backup written THIS launch.
+        // The pre-migration backup copy fails, so there is none.
+        (freshFs.copyFileSync as jest.Mock).mockImplementation((_src: string, dest: string) => {
+          if (String(dest).includes("-backup-")) throw new Error("ENOSPC");
+        });
 
         const sentryCapture = await getFreshSentry();
         const showMessageBox = await getFreshDialog();

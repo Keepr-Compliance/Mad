@@ -33,7 +33,7 @@ const MAC: PlatformInfo = { isMacOS: true, isWindows: false, hasIPhone: false };
 const WIN: PlatformInfo = { isMacOS: false, isWindows: true, hasIPhone: false };
 const STEPS: OnboardingStep[] = [
   "phone-type", "secure-storage", "account-verification", "contact-source",
-  "email-connect", "data-sync", "permissions", "apple-driver", "android-coming-soon",
+  "email-connect", "data-sync", "permissions", "apple-driver",
 ];
 const LEGACY = ["phone-type", "secure-storage", "email-connect", "permissions", "apple-driver"] as const;
 

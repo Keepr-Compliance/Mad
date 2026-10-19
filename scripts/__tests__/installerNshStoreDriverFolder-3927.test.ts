@@ -1,6 +1,8 @@
 /**
  * BACKLOG-3927: the Microsoft Store installer removes $INSTDIR\resources\win\apple-drivers
  * on install; the website installer must not.
+ * BACKLOG-3689: both installers compile one customInstall macro that removes the iPhone tool
+ * files no build ships; only the apple-drivers RMDir inside it is Store-only.
  *
  * The NSIS script is compiled per build, so the Store signal is a compile-time define:
  * release.yml's store run passes --config.nsis.include=build/installer-store.nsh, which
@@ -46,22 +48,34 @@ function storeIfdefSpan(): [number, number] {
   return [open, -1];
 }
 
-describe("installer.nsh: store-only customInstall (BACKLOG-3927)", () => {
-  it("customInstall removes the Apple driver folder", () => {
+describe("installer.nsh: customInstall for both builds, apple-drivers Store-only (BACKLOG-3927, BACKLOG-3689)", () => {
+  it("customInstall opens with the Store-only Apple driver removal, then only tool-file Deletes", () => {
     const start = NSH.indexOf("!macro customInstall");
     expect(start).toBeGreaterThanOrEqual(0);
     const end = NSH.findIndex((l, i) => i > start && l === "!macroend");
-    expect(NSH.slice(start + 1, end)).toEqual([REMOVAL]);
+    const body = NSH.slice(start + 1, end);
+    expect(body.slice(0, 3)).toEqual([`!ifdef ${DEFINE}`, REMOVAL, "!endif"]);
+    // The rest deletes the iPhone tool files no build ships; the exact list is checked
+    // against the manifest in storeIphoneTools-3927.test.ts.
+    const rest = body.slice(3);
+    expect(rest.length).toBeGreaterThan(0);
+    expect(rest.filter((l) => !/^Delete "\$INSTDIR\\resources\\win\\libimobiledevice\\[^"\\]+"$/.test(l))).toEqual([]);
   });
 
-  it("the whole customInstall macro sits inside !ifdef KEEPR_STORE_BUILD (website gets none)", () => {
+  it("one customInstall macro, outside any !ifdef (website gets it too); the RMDir is inside !ifdef KEEPR_STORE_BUILD", () => {
     const [open, close] = storeIfdefSpan();
     expect(open).toBeGreaterThanOrEqual(0);
     expect(close).toBeGreaterThan(open);
     const macros = NSH.map((l, i) => (l === "!macro customInstall" ? i : -1)).filter((i) => i >= 0);
     expect(macros).toHaveLength(1);
-    expect(macros[0]).toBeGreaterThan(open);
-    expect(macros[0]).toBeLessThan(close);
+    // Not nested in any conditional: every !if before the macro is closed before it.
+    let depth = 0;
+    for (const l of NSH.slice(0, macros[0])) {
+      if (/^!if/i.test(l)) depth++;
+      else if (/^!endif$/i.test(l)) depth--;
+    }
+    expect(depth).toBe(0);
+    expect(open).toBeGreaterThan(macros[0]);
     const removals = NSH.map((l, i) => (l === REMOVAL ? i : -1)).filter((i) => i >= 0);
     expect(removals).toHaveLength(1);
     expect(removals[0]).toBeGreaterThan(open);

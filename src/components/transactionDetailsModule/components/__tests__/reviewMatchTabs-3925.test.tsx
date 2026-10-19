@@ -177,7 +177,7 @@ describe("BACKLOG-3925 full Needs Review screen: tabs, pills on All, scoped bulk
     expect(onApprove.mock.calls[0][0]).toEqual(["pending:1"]);
   });
 
-  it("Reject all on All still rejects every item", async () => {
+  it("Reject all on All still rejects every email", async () => {
     const { onReject } = renderScreen();
     fireEvent.click(screen.getByText("Reject all"));
     await waitFor(() => expect(onReject).toHaveBeenCalledTimes(1));

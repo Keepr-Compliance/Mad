@@ -1,7 +1,11 @@
 import * as Sentry from "@sentry/electron/main";
 import axios, { AxiosError } from "axios";
 import http from "http";
-import { isTransientRefreshFailure } from "./oauthRefreshFailure";
+import {
+  isTransientRefreshFailure,
+  refreshFailureCause,
+  type RefreshAccessTokenResult,
+} from "./oauthRefreshFailure";
 import url from "url";
 import crypto from "crypto";
 import databaseService from "./databaseService";
@@ -549,7 +553,12 @@ class MicrosoftAuthService {
         "MicrosoftAuth",
         { error: axiosError.response?.data || axiosError.message }
       );
-      Sentry.captureException(error, { tags: { service: "microsoft-auth", operation: "refreshToken" } });
+      // BACKLOG-3954: a refresh that could not REACH the provider is counted by
+      // connectionStatusService, which reports once per streak. Only a real
+      // rejection is captured here, so a 2-minute poll no longer sends one event per poll.
+      if (!isTransientRefreshFailure(error)) {
+        Sentry.captureException(error, { tags: { service: "microsoft-auth", operation: "refreshToken" } });
+      }
       // BACKLOG-2127: preserve the HTTP status and OAuth error code (e.g.
       // invalid_grant on a dead refresh token) so isTokenExpiryError can
       // classify it — matching Google's raw-rethrow behaviour. Previously the
@@ -580,7 +589,7 @@ class MicrosoftAuthService {
    */
   async refreshAccessToken(
     userId: string,
-  ): Promise<{ success: boolean; error?: string; unreachable?: boolean }> {
+  ): Promise<RefreshAccessTokenResult> {
     try {
       logService.info("[MicrosoftAuth] Refreshing access token for user:", "MicrosoftAuth", { userId });
 
@@ -634,6 +643,8 @@ class MicrosoftAuthService {
         error: error instanceof Error ? error.message : "Unknown error",
         // BACKLOG-3799: network / TLS / 5xx — the grant is still good.
         unreachable: isTransientRefreshFailure(error),
+        // BACKLOG-3954: allow-listed network code for the once-per-streak report.
+        cause: refreshFailureCause(error),
       };
     }
   }

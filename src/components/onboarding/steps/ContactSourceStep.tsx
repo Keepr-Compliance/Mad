@@ -403,9 +403,12 @@ export function Content({
   // same value (useOnboardingQueue seeds the context from usePlatform), but
   // `meta.skip.onSkip` only has the context — routing both paths through one
   // input is what makes "skip === continue" structural rather than coincidental.
-  const [selected, setSelected] = useState<Record<string, boolean>>(() =>
-    getDefaultContactSourceSelection(toDefaultContext(context))
-  );
+  //
+  // BACKLOG-3956: `selected` holds ONLY the cards the user has toggled. Every
+  // untouched card reads the live rule default, so a sign-in provider that
+  // arrives after the step opened still updates its ticks, and a card the
+  // user did toggle keeps their choice.
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
 
   // Filter sources by platform, phone type, auth provider, and visibility
   const visibleSources = useMemo(
@@ -432,9 +435,12 @@ export function Content({
     [context.platform, context.phoneType, context.authProvider]
   );
 
-  const handleToggle = useCallback((key: string) => {
-    setSelected((prev) => ({ ...prev, [key]: !prev[key] }));
-  }, []);
+  const handleToggle = useCallback(
+    (key: string) => {
+      setSelected((prev) => ({ ...prev, [key]: !(prev[key] ?? (defaults as Record<string, boolean>)[key]) }));
+    },
+    [defaults]
+  );
 
   const handleContinue = useCallback(async () => {
     if (!context.userId) {

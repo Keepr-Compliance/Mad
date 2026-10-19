@@ -37,7 +37,9 @@ const mockWriteSync = jest.fn();
 const mockFsyncSync = jest.fn();
 const mockCloseSync = jest.fn();
 const mockUnlinkSync = jest.fn();
+const mockRenameSync = jest.fn();
 jest.mock("fs", () => ({
+  renameSync: mockRenameSync,
   existsSync: mockExistsSync,
   copyFileSync: mockCopyFileSync,
   mkdirSync: mockMkdirSync,
@@ -176,6 +178,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     service["db"] = null;
     service["dbPath"] = null;
     service["encryptionKey"] = null;
+    service["sameLaunchBackupPath"] = null;
 
     // Default mock setups
     mockGetPath.mockReturnValue("/mock/userData");
@@ -206,6 +209,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     // into ROUTE 4 and made it silently exercise route 3 instead -- it passed
     // its status assertions for the wrong reason. Caught by the setDb count.
     mockCopyFileSync.mockReset();
+    mockRenameSync.mockReset();
 
     // Database pragma mocking -- handle cipher_integrity_check
     mockDbPragma.mockImplementation((pragma: string) => {
@@ -306,6 +310,33 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       "MIGRATION_RECOVERY_FAILED",
     );
     return caught as MigrationRecoveryFailedError;
+  }
+
+  /**
+   * BACKLOG-3975 — a restore may only use a backup written THIS launch, and
+   * runMigrations() writes one only when a migration will run. With the chain
+   * parked, a baseline database is already current, so no backup is taken and
+   * nothing may be restored. Tests that mean to exercise a restore inject one
+   * future migration so the launch takes its pre-migration backup first.
+   * afterEach puts the parked chain back.
+   */
+  function armSameLaunchBackup(): void {
+    const klass = service.constructor as unknown as {
+      MIGRATIONS: Array<{ version: number; description: string; migrate: () => void }>;
+      BASELINE_VERSION: number;
+    };
+    klass.MIGRATIONS = [
+      {
+        version: klass.BASELINE_VERSION + 1,
+        description: "future test migration (arms the same-launch backup)",
+        migrate: () => undefined,
+      },
+    ];
+  }
+
+  /** copyFileSync calls whose DESTINATION is the live database (a restore). */
+  function copiesOntoLiveDb(): unknown[][] {
+    return mockCopyFileSync.mock.calls.filter((c) => c[1] === "/mock/userData/mad.db");
   }
 
   describe("Happy path (no migration failure)", () => {
@@ -441,6 +472,8 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
         "mad-backup-20260222T100000.db",
         "mad-backup-20260221T100000.db",
       ]);
+      // BACKLOG-3975: this launch writes its own pre-migration backup.
+      armSameLaunchBackup();
 
       // Track call count for mockDbExec to fail on schema.sql exec.
       // Call 1 = _ensureFailureLogTable() safety check (caught internally),
@@ -459,8 +492,45 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       const result = await service.initialize();
 
       expect(result).toBe(true);
-      // Backup was copied over the main db
-      expect(mockCopyFileSync).toHaveBeenCalled();
+      // BACKLOG-3952 R5: destination-specific. The pre-migration backup is
+      // also a copyFileSync, so "called at all" cannot tell the two apart.
+      // BACKLOG-3975: the source is the backup written THIS launch, not the
+      // newest file that was already in the folder.
+      const restores = copiesOntoLiveDb();
+      expect(restores).toHaveLength(1);
+      const backupWritten = mockCopyFileSync.mock.calls.find(
+        (c) => c[0] === "/mock/userData/mad.db" && String(c[1]).includes("-backup-"),
+      );
+      expect(backupWritten).toBeDefined();
+      expect(restores[0][0]).toBe(backupWritten![1]);
+      expect(restores[0][0]).not.toBe("/mock/userData/mad-backup-20260222T100000.db");
+    });
+
+    it("BACKLOG-3975: moves the current database aside (main, -wal, -shm) BEFORE copying, and never deletes it", async () => {
+      await service.initialize();
+
+      const renames = mockRenameSync.mock.calls.map((c) => [String(c[0]), String(c[1])]);
+      expect(renames.map((r) => r[0])).toEqual([
+        "/mock/userData/mad.db",
+        "/mock/userData/mad.db-wal",
+        "/mock/userData/mad.db-shm",
+      ]);
+      for (const [from, to] of renames) {
+        expect(to).toMatch(/^\/mock\/userData\/mad-pre-restore-\d{8}T\d{6}\.db(-wal|-shm)?$/);
+        expect(to.endsWith(from.slice("/mock/userData/mad.db".length))).toBe(true);
+      }
+      // The aside name must not match the rolling `-backup-` prune.
+      expect(renames.some((r) => r[1].includes("-backup-"))).toBe(false);
+      // Moved first, then copied.
+      const firstRename = mockRenameSync.mock.invocationCallOrder[0];
+      const restoreIdx = mockCopyFileSync.mock.calls.findIndex(
+        (c) => c[1] === "/mock/userData/mad.db",
+      );
+      expect(firstRename).toBeLessThan(mockCopyFileSync.mock.invocationCallOrder[restoreIdx]);
+      // The kept file is never unlinked.
+      expect(
+        mockUnlinkSync.mock.calls.some((c) => String(c[0]).includes("pre-restore")),
+      ).toBe(false);
     });
 
     it("should show warning dialog on successful restore", async () => {
@@ -581,9 +651,15 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       // manual recovery" -- deliberately NOT the cleanup scripts the
       // BACKLOG-2993 refusal points at, which would destroy data that may
       // still be recoverable -- and now names the file support will ask for.
+      // BACKLOG-3975: copy changed. Nothing was restored or moved, and it
+      // says so; it ends with the support line; it never says "restored".
       const dialogArg = mockShowMessageBox.mock.calls[0][0] as { detail: string };
-      expect(dialogArg.detail).toContain("manual recovery");
-      expect(dialogArg.detail).toContain("/mock/userData/mad.db");
+      expect(dialogArg.detail).toBe(
+        "Keepr did not replace or delete your data file.\n\n" +
+          "Database: /mock/userData/mad.db\n\n" +
+          "If this keeps happening, contact support.",
+      );
+      expect(dialogArg.detail).not.toMatch(/restored/i);
     });
 
     it("should report to Sentry with no_backup tag", async () => {
@@ -639,6 +715,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       mockReaddirSync.mockReturnValue([
         "mad-backup-20260222T100000.db",
       ]);
+      armSameLaunchBackup();
 
       // Make migration fail.
       // Call 1 = _ensureFailureLogTable() safety check (caught internally),
@@ -746,6 +823,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     /** Migration fails on the schema.sql exec (call 2), with a valid backup present. */
     function failMigrationWithGoodBackup(): void {
       mockReaddirSync.mockReturnValue(["mad-backup-20260222T100000.db"]);
+      armSameLaunchBackup();
       let execCallCount = 0;
       mockDbExec.mockImplementation(() => {
         execCallCount++;
@@ -994,7 +1072,11 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       });
     });
 
-    it("should pick the most recent backup when multiple exist", async () => {
+    // BACKLOG-3975 -- INVERTED IN PLACE (was: "should pick the most recent
+    // backup when multiple exist"). Picking the newest file in the folder is
+    // the rollback: on a launch with no migration it is an OLDER copy of the
+    // data. Older backups are now never restored.
+    it("BACKLOG-3975: never restores an older backup -- no same-launch backup means no restore", async () => {
       mockReaddirSync.mockReturnValue([
         "mad-backup-20260220T100000.db",
         "mad-backup-20260222T100000.db",
@@ -1007,14 +1089,62 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
         }
         return undefined;
       });
+      service["sameLaunchBackupPath"] = null;
+
+      const result = await service["_attemptAutoRestore"](new Error("test"));
+
+      expect(result).toEqual({
+        restored: false,
+        autoRestoreStatus: "no_backup",
+        backupIntegrity: "missing",
+        staleBackupsSkipped: 3,
+      });
+      expect(mockCopyFileSync).not.toHaveBeenCalled();
+      expect(mockRenameSync).not.toHaveBeenCalled();
+    });
+
+    it("BACKLOG-3975: restores the same-launch backup even when newer-named files exist", async () => {
+      mockReaddirSync.mockReturnValue(["mad-backup-20991231T235959.db"]);
+      mockExistsSync.mockReturnValue(true);
+      service["sameLaunchBackupPath"] = "/mock/userData/mad-backup-20260222T100000.db";
 
       await service["_attemptAutoRestore"](new Error("test"));
 
-      // Should have tried to copy the newest backup (20260222)
-      const copyCall = mockCopyFileSync.mock.calls.find(
-        (call: string[]) => call[0]?.includes("20260222")
+      expect(copiesOntoLiveDb()).toEqual([
+        ["/mock/userData/mad-backup-20260222T100000.db", "/mock/userData/mad.db"],
+      ]);
+    });
+
+    it("BACKLOG-3975: when the copy fails, the moved files are put back", async () => {
+      mockExistsSync.mockReturnValue(true);
+      service["sameLaunchBackupPath"] = "/mock/userData/mad-backup-20260222T100000.db";
+      mockCopyFileSync.mockImplementation(() => {
+        throw new Error("ENOSPC: no space left on device");
+      });
+
+      const result = await service["_attemptAutoRestore"](new Error("test"));
+
+      expect(result.restored).toBe(false);
+      expect(result.keptPreviousAs).toBeUndefined();
+      const calls = mockRenameSync.mock.calls.map((c) => [String(c[0]), String(c[1])]);
+      // three out, then the same three back in reverse order
+      expect(calls).toHaveLength(6);
+      expect(calls.slice(3)).toEqual(
+        calls.slice(0, 3).reverse().map(([from, to]) => [to, from]),
       );
-      expect(copyCall).toBeDefined();
+    });
+
+    it("BACKLOG-3975: when moving the database aside fails, nothing is copied", async () => {
+      mockExistsSync.mockReturnValue(true);
+      service["sameLaunchBackupPath"] = "/mock/userData/mad-backup-20260222T100000.db";
+      mockRenameSync.mockImplementation(() => {
+        throw new Error("EBUSY");
+      });
+
+      const result = await service["_attemptAutoRestore"](new Error("test"));
+
+      expect(result).toMatchObject({ restored: false, autoRestoreStatus: "failed" });
+      expect(mockCopyFileSync).not.toHaveBeenCalled();
     });
 
     it("should handle readdirSync failure gracefully", async () => {
@@ -1028,6 +1158,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
         restored: false,
         autoRestoreStatus: "no_backup",
         backupIntegrity: "missing",
+        staleBackupsSkipped: 0,
       });
     });
 
@@ -1045,6 +1176,8 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
         }
         return undefined;
       });
+
+      service["sameLaunchBackupPath"] = "/mock/userData/mad-backup-20260222T100000.db";
 
       // Should not throw despite close error
       const result = await service["_attemptAutoRestore"](new Error("test"));

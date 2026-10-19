@@ -59,6 +59,10 @@ import {
  *     measurement does not cover: page encryption, a cold cache, a busy Windows
  *     disk. `localSyncService.writeCost-2986.test.ts` asserts the measured write
  *     stays inside it, so the split cannot quietly stop holding.
+ *   - BACKLOG-3969: the desktop end of that budget (`localSyncService`) and
+ *     `localSyncService.writeCost-2986.test.ts` are removed with the companion
+ *     server. The phone caller is gone; the split now rests on the remaining
+ *     callers of this helper.
  *   - The read itself is a single-row primary-key `select` on
  *     `user_preferences`, so 6s is a very slow one, not a marginal one.
  *

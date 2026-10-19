@@ -246,8 +246,6 @@ function mapOnboardingStepToAppStep(step: OnboardingStep): AppStep {
       return "permissions";
     case "apple-driver":
       return "apple-driver-setup";
-    case "android-coming-soon":
-      return "android-coming-soon";
   }
 }
 
@@ -307,7 +305,6 @@ export function derivePageTitle(appStep: AppStep): string {
     case "email-onboarding":
     case "permissions":
     case "apple-driver-setup":
-    case "android-coming-soon":
       return "Setup";
     default:
       return "Keepr.";

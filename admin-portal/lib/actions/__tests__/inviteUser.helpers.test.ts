@@ -54,6 +54,22 @@ describe('buildDownloadInvitePayload', () => {
     expect(buildDownloadInvitePayload('user@example.com', '   ').downloadUrl).toBe(DEFAULT_DOWNLOAD_URL);
     expect(buildDownloadInvitePayload('user@example.com', null).downloadUrl).toBe(DEFAULT_DOWNLOAD_URL);
   });
+
+  // BACKLOG-3974: the invitee's name rides to the email's To display name.
+  it('joins a trimmed first and last name into recipientName', () => {
+    const payload = buildDownloadInvitePayload('user@example.com', null, { firstName: ' Pat ', lastName: ' Example ' });
+    expect(payload.recipientName).toBe('Pat Example');
+  });
+
+  it('uses whichever name part is present', () => {
+    expect(buildDownloadInvitePayload('user@example.com', null, { firstName: 'Pat', lastName: '  ' }).recipientName).toBe('Pat');
+    expect(buildDownloadInvitePayload('user@example.com', null, { lastName: 'Example' }).recipientName).toBe('Example');
+  });
+
+  it('omits recipientName when no name is given or it is blank', () => {
+    expect(buildDownloadInvitePayload('user@example.com')).not.toHaveProperty('recipientName');
+    expect(buildDownloadInvitePayload('user@example.com', null, { firstName: ' ', lastName: null })).not.toHaveProperty('recipientName');
+  });
 });
 
 describe('isValidEmail', () => {

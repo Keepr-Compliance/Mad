@@ -61,5 +61,21 @@
     "vcruntime140.dll": "c23933c7a2211e3b080c09d8d8c70834d77e0c8327f6ec0c2f66b94447c976ad",
     "zip.dll": "39d2b808106e0e8ee752eaee8430d2d307adf621359f48ef776dc4bd6b5fbfde",
     "zlib1.dll": "039185c42fa73379adaad78bafff008011d61a22eab4b39b31f6dc3d69d03153"
+  },
+  "store": {
+    "$comment": "BACKLOG-3927, BACKLOG-3689. Every build (website and Microsoft Store) ships only these files: the four tools the app spawns (getCommand / getExecutablePath call sites anywhere under electron/) and every DLL they load, followed through the PE import and delay-import tables. No companions. The repo folder keeps every file above; scripts/afterPack.js copies only this list.",
+    "files": [
+      "getopt.dll",
+      "idevice_id.exe",
+      "idevicebackup2.exe",
+      "ideviceinfo.exe",
+      "idevicepair.exe",
+      "imobiledevice.dll",
+      "libcrypto-1_1-x64.dll",
+      "libssl-1_1-x64.dll",
+      "plist.dll",
+      "usbmuxd.dll",
+      "vcruntime140.dll"
+    ]
   }
 }

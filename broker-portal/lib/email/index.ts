@@ -104,6 +104,7 @@ export async function sendDownloadInviteEmail(
   const { subject, html, text } = buildDownloadInviteEmail(params);
   return sendEmail({
     to: params.recipientEmail,
+    toName: params.recipientName,
     subject,
     html,
     text,

@@ -103,9 +103,18 @@ async function runQuery(opts: QueryOptions = {}) {
   const proc = new EventEmitter() as EventEmitter & {
     stdout: EventEmitter;
     stderr: EventEmitter;
+    pid: number;
+    exitCode: number | null;
+    signalCode: string | null;
+    kill: jest.Mock;
   };
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
+  // BACKLOG-3996 (SR R2): always-set on a real ChildProcess (null while alive).
+  proc.pid = 5002;
+  proc.exitCode = null;
+  proc.signalCode = null;
+  proc.kill = jest.fn(() => true);
   mockSpawn.mockReset().mockReturnValue(proc);
 
   const service = new DeviceDetectionService();

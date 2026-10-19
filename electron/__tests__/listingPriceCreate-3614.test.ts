@@ -110,6 +110,14 @@ describe("listing price entered at create is stored (BACKLOG-3614)", () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require("../services/transactionService");
     transactionService = mod.default ?? mod.transactionService ?? mod;
+
+    // BACKLOG-3339: creating a deal writes its audit entry inside the create's
+    // transaction. Not what this suite measures, and the audit service is not
+    // initialized here, so the entry is stubbed.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const audit = require("../services/auditService").default;
+    jest.spyOn(audit, "recordInTransaction").mockReturnValue({});
+    jest.spyOn(audit, "recordFailure").mockImplementation(() => undefined);
   });
 
   afterAll(() => {

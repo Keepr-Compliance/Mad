@@ -138,14 +138,6 @@ const onboardingStateAppleDriver: OnboardingState = {
   completedSteps: ["phone-type", "email-connect"],
 };
 
-const onboardingStateAndroidComingSoon: OnboardingState = {
-  status: "onboarding",
-  step: "android-coming-soon",
-  user: { id: "test-user", email: "test@example.com" },
-  platform: { isMacOS: true, isWindows: false, hasIPhone: false },
-  completedSteps: ["phone-type"],
-};
-
 const errorState: ErrorState = {
   status: "error",
   error: { code: "UNKNOWN_ERROR", message: "Test error" },
@@ -274,13 +266,6 @@ describe("useNavigationFlow - State Machine Path", () => {
           wrapper: createWrapper(onboardingStateAppleDriver),
         });
         expect(result.current.currentStep).toBe("apple-driver-setup");
-      });
-
-      it("maps android-coming-soon to android-coming-soon", () => {
-        const { result } = renderHook(() => useNavigationFlow(defaultOptions), {
-          wrapper: createWrapper(onboardingStateAndroidComingSoon),
-        });
-        expect(result.current.currentStep).toBe("android-coming-soon");
       });
     });
   });
@@ -467,7 +452,6 @@ describe("deriveAppStep mapping completeness", () => {
       { onboardingStep: "email-connect", expectedAppStep: "email-onboarding" },
       { onboardingStep: "permissions", expectedAppStep: "permissions" },
       { onboardingStep: "apple-driver", expectedAppStep: "apple-driver-setup" },
-      { onboardingStep: "android-coming-soon", expectedAppStep: "android-coming-soon" },
     ];
 
     stepMappings.forEach(({ onboardingStep, expectedAppStep }) => {

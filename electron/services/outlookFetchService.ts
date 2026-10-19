@@ -654,9 +654,13 @@ class OutlookFetchService {
               logService.error("Token refresh failed", "OutlookFetch", {
                 error: refreshError,
               });
-              Sentry.captureException(refreshError, {
-                tags: { service: "outlook-fetch", operation: "_graphRequest.tokenRefresh" },
-              });
+              // BACKLOG-3954: unreachable refreshes are reported once per streak
+              // by connectionStatusService, not once per failed request.
+              if (!isTransientRefreshFailure(refreshError)) {
+                Sentry.captureException(refreshError, {
+                  tags: { service: "outlook-fetch", operation: "_graphRequest.tokenRefresh" },
+                });
+              }
               // BACKLOG-3799: a refresh that could not REACH Microsoft (network,
               // antivirus TLS inspection, 5xx) is not an expired grant. Say so,
               // and keep this message clear of the token-expiry patterns so the
