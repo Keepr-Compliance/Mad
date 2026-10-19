@@ -6,6 +6,8 @@ import { Card } from '@keepr/design-system';
 import { MembersTable, type MemberRow } from './components/MembersTable';
 import { PendingInvitationsTable, type PendingInvitationRow } from './components/PendingInvitationsTable';
 import { PlanAssignment } from './components/PlanAssignment';
+import { BrokerageBillingCard } from './components/BrokerageBillingCard';
+import { shouldShowBillingCard, type OrgBilling } from '@/lib/billing/dealRules';
 import { formatDate } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -52,6 +54,19 @@ export default async function OrganizationDetailPage({
     check_user_id: adminUser.id,
     required_permission: 'plans.manage',
   });
+
+  // BACKLOG-3853 PR-2A: the brokerage Billing card. billing.view gates the read
+  // (admin_get_org_billing refuses without it); the card renders only while
+  // brokerage billing is switched on or the organization is a test organization.
+  const { data: canViewBilling } = await supabase.rpc('has_permission', {
+    check_user_id: adminUser.id,
+    required_permission: 'billing.view',
+  });
+  let billing: OrgBilling | null = null;
+  if (canViewBilling) {
+    const { data: billingData } = await supabase.rpc('admin_get_org_billing', { p_org: id });
+    billing = (billingData as OrgBilling | null) ?? null;
+  }
 
   // Fetch org details, members, and pending invitations in parallel
   const [orgResult, membersResult, pendingResult] = await Promise.all([
@@ -165,6 +180,11 @@ export default async function OrganizationDetailPage({
 
       {/* Plan assignment */}
       <PlanAssignment organizationId={org.id} canManage={!!canManagePlans} />
+
+      {/* Brokerage billing (BACKLOG-3853) */}
+      {shouldShowBillingCard(billing) && (
+        <BrokerageBillingCard organizationId={org.id} organizationName={org.name} planName={planName} billing={billing} />
+      )}
 
       {/* Pending invitations */}
       {pendingInvitations.length > 0 && (
