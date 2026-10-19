@@ -37,7 +37,7 @@ export interface GoogleNames {
 
 /** The minimum of a Supabase client this module uses: one rpc call. */
 export interface RpcClient {
-  rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { code?: string } | null }>;
+  rpc: (_fn: string, _args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { code?: string } | null }>;
 }
 
 /** The minimum of a Supabase user this module reads. */
