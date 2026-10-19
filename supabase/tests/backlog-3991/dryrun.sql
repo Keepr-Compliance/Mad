@@ -40,7 +40,6 @@ BEGIN
   FOR r IN SELECT * FROM (VALUES
     ('public.member_status_grants_access(text)',  'f9e7a2defaa0de6e96d4feee43527c3c'),
     ('public.member_status_is_deactivated(text)', 'f1cc92b7dd9b6c84778c86dbb89aafcf'),
-    ('public.handle_new_user()',                  '64c98e28c6916d1095fd70445e7812cf'),
     ('public.accept_invitation(text,text)',       '37ce05772d72d25439d5ef2bdd5a2d08')
   ) AS t(sig, expected) LOOP
     SELECT md5(p.prosrc) INTO v_md5 FROM pg_proc p WHERE p.oid = to_regprocedure(r.sig);
@@ -48,6 +47,12 @@ BEGIN
       RAISE EXCEPTION '3991 pre-check: % body md5 % is not the expected %', r.sig, v_md5, r.expected;
     END IF;
   END LOOP;
+
+  -- handle_new_user: the body before BACKLOG-3998 (20261016070000) or the body it installs.
+  SELECT md5(p.prosrc) INTO v_md5 FROM pg_proc p WHERE p.oid = to_regprocedure('public.handle_new_user()');
+  IF v_md5 IS NULL OR v_md5 NOT IN ('64c98e28c6916d1095fd70445e7812cf', 'd29adc102b649c9d53f754725feb66b3') THEN
+    RAISE EXCEPTION '3991 pre-check: public.handle_new_user() body md5 % is not an expected one', v_md5;
+  END IF;
 
   FOR r IN SELECT * FROM (VALUES
     ('public.sync_profile_names_from_idp(text,text,text)', '984dc45b04f369274a1f003344042cae'),
@@ -297,7 +302,6 @@ BEGIN
   FOR r IN SELECT * FROM (VALUES
     ('public.member_status_grants_access(text)',  'f9e7a2defaa0de6e96d4feee43527c3c'),
     ('public.member_status_is_deactivated(text)', 'f1cc92b7dd9b6c84778c86dbb89aafcf'),
-    ('public.handle_new_user()',                  '64c98e28c6916d1095fd70445e7812cf'),
     ('public.accept_invitation(text,text)',       '37ce05772d72d25439d5ef2bdd5a2d08')
   ) AS t(sig, expected) LOOP
     SELECT md5(p.prosrc) INTO v_md5 FROM pg_proc p WHERE p.oid = to_regprocedure(r.sig);
@@ -305,6 +309,12 @@ BEGIN
       RAISE EXCEPTION '3991 pre-check: % body md5 % is not the expected %', r.sig, v_md5, r.expected;
     END IF;
   END LOOP;
+
+  -- handle_new_user: the body before BACKLOG-3998 (20261016070000) or the body it installs.
+  SELECT md5(p.prosrc) INTO v_md5 FROM pg_proc p WHERE p.oid = to_regprocedure('public.handle_new_user()');
+  IF v_md5 IS NULL OR v_md5 NOT IN ('64c98e28c6916d1095fd70445e7812cf', 'd29adc102b649c9d53f754725feb66b3') THEN
+    RAISE EXCEPTION '3991 pre-check: public.handle_new_user() body md5 % is not an expected one', v_md5;
+  END IF;
 
   FOR r IN SELECT * FROM (VALUES
     ('public.sync_profile_names_from_idp(text,text,text)', '984dc45b04f369274a1f003344042cae'),
