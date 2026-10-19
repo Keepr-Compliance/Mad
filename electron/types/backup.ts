@@ -352,6 +352,11 @@ export type BackupErrorCode =
   // `detectToolBlock` (electron/services/iphoneToolBlock.ts); a tool that started and
   // then failed is never this code.
   | "TOOL_BLOCKED"
+  // BACKLOG-3996: a short iPhone query (the backup-encryption check before the backup
+  // starts) did not answer within its time limit and was stopped. Set only on the
+  // timed-out marker of that query — never for a watchdog stop (BACKUP_TIMEOUT) or a
+  // device that would not start its backup service (SERVICE_UNAVAILABLE).
+  | "IPHONE_TOOL_TIMEOUT"
   | "UNKNOWN_ERROR";
 
 /**
@@ -371,6 +376,13 @@ export interface BackupEncryptionInfo {
    * Present only then; `status` is "unknown" alongside it.
    */
   toolBlock?: ToolBlock;
+  /**
+   * BACKLOG-3996: the query did not answer within the time limit and was stopped.
+   * Present only then; `status` is "unknown" alongside it.
+   */
+  timedOut?: true;
+  /** BACKLOG-3996: the query was stopped by Cancel. `status` is "unknown" alongside it. */
+  cancelled?: true;
 }
 
 /**

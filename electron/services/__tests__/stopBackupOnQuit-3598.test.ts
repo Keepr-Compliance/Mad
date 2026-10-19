@@ -212,11 +212,37 @@ describe("BACKLOG-3598: BackupService.stopForQuit", () => {
     await flush();
 
     expect(outcome).toBe("killed");
+    // BACKLOG-3996 (SR R4): by its full System32 path, never a bare name.
     expect(spawnMock).toHaveBeenCalledWith(
-      "taskkill",
+      "C:\\Windows\\System32\\taskkill.exe",
       ["/PID", "4242", "/T", "/F"],
       expect.objectContaining({ windowsHide: true }),
     );
+  });
+
+  // BACKLOG-3996 (SR R8): a kill of the parent first (SIGTERM is TerminateProcess on
+  // Windows) leaves taskkill /T no tree to walk. taskkill must be spawned before ANY
+  // proc.kill, and it is spawned at once, not after the quit timeout.
+  it("on Windows, quit spawns taskkill before any other kill", () => {
+    jest.useFakeTimers();
+    setPlatform("win32");
+    const order: string[] = [];
+    spawnMock.mockImplementation(((cmd: string) => {
+      order.push(`spawn:${cmd}`);
+      return { on: jest.fn() };
+    }) as unknown as () => { on: jest.Mock });
+    const svc = new BackupService();
+    const proc = fakeProcess(false);
+    proc.kill.mockImplementation((signal?: string) => {
+      order.push(`kill:${signal ?? "default"}`);
+      return true;
+    });
+    setCurrent(svc, proc);
+
+    void svc.stopForQuit();
+    expect(order[0]).toBe("spawn:C:\\Windows\\System32\\taskkill.exe");
+    expect(order.filter((o) => o.startsWith("kill:"))).toEqual([]);
+    spawnMock.mockImplementation(() => ({ on: jest.fn() }));
   });
 
   it("no process: returns null, no error", () => {

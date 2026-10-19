@@ -10,7 +10,27 @@ export function isToolBlockedError(userError: UserFacingError | null | undefined
 }
 
 /**
- * BACKLOG-3953: the restore steps for a blocked iPhone tool. `actionSuggestion` carries
+ * BACKLOG-3996: the code main sends when a short iPhone query did not answer within its
+ * time limit. Mirrored from electron/services/diagnostics/userFacingErrors.ts (the
+ * renderer cannot value-import from electron/).
+ */
+export const IPHONE_TOOL_TIMEOUT_CODE = "IPHONE_TOOL_TIMEOUT";
+
+/** BACKLOG-3996: the sync error codes whose message is a title, numbered steps and a closing line. */
+const STEPS_NOTICE_CODES: ReadonlySet<string> = new Set([TOOL_BLOCKED_CODE, IPHONE_TOOL_TIMEOUT_CODE]);
+
+/**
+ * BACKLOG-3996: true for an error the sync screen shows as title + steps + closing line
+ * (the tool-blocked and the tool-timeout messages). The connection view still uses
+ * `isToolBlockedError` only: a time-out happens during a sync, not before one.
+ */
+export function isStepsNoticeError(userError: UserFacingError | null | undefined): userError is UserFacingError {
+  return userError !== null && userError !== undefined && STEPS_NOTICE_CODES.has(userError.code);
+}
+
+/**
+ * BACKLOG-3953: the restore steps for a blocked iPhone tool. BACKLOG-3996: also the
+ * steps for an iPhone query that timed out — same shape, its own words. `actionSuggestion` carries
  * one numbered step per line and ends with the contact-support line
  * (electron/services/diagnostics/userFacingErrors.ts formatToolBlockedError).
  */
