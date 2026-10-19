@@ -90,3 +90,9 @@ pr2a-controls.sql, 19 modes, one rolled-back call: base 33/33 PASS. Every mutant
 | get_no_perm                                     | ->bbfc66e3 | support view refused |
 | suspend_no_perm / reinstate_no_perm             | 7e29986a->b394284f / 2ed6e29d->6ba81c2c | exec/support suspend; exec reinstate |
 vitest: 13 tests (kept-price rule now needs same price and seats <= current; message names Sales or Super Admin).
+
+SR DELTA FIX-UP (test-only): added C_SR3_sales_raise_still_deep_refused (Super saves 1500c, Sales re-saves 1800c, refused, price stays 1500) and mode sr_price_ge (= -> >=).
+keepr-test, one rolled-back call, trimmed subset of pr2a-controls.sql (5 checks incl. the new control and 2 neighbours; the full file was not re-run):
+base 5/5 PASS. sr_price_ge fe991d06->da1e0482 (MUTATION APPLIED): 1 red, C_SR3_sales_raise_still_deep_refused only.
+keep_current_any ->85f5331f: 3 red (cannot_go_deeper, keeps_price_changes_contact, SR3 raise). no_keep_current ->802e7f6e: 1 red (keeps_price_changes_contact).
+vitest saveDeal: added c(1800,false,1500,4,4) -> needs_approval. 13 tests base green; checkPrice === -> >= (MUTATION APPLIED, numstat 1/1): 1 failed, 12 passed; restored, numstat 0.
