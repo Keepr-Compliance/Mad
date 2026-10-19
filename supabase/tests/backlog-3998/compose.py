@@ -563,7 +563,8 @@ END''')};
 """
 
 
-ALL_CONTROLS = ''.join(control_fn(*c) for c in C)
+def fns(ids):
+    return ''.join(control_fn(*c) for c in C if c[0] in ids)
 
 # --------------------------------------------------------------------------- mutants
 # Body mutants: (id, function key, anchor, replacement, what, controls expected red)
@@ -693,7 +694,7 @@ def header(title):
 
 def controls_batch(ids):
     run = '\n'.join(f"  rep := rep || E'\\n' || pg_temp.{c.lower()}();" for c in ids)
-    return header('controls ' + ','.join(ids)) + HELPERS + ALL_CONTROLS + f"""
+    return header('controls ' + ','.join(ids)) + HELPERS + fns(ids) + f"""
 DO $run$
 DECLARE rep text := '';
 BEGIN
@@ -755,7 +756,7 @@ def mutants_batch(items):
   EXCEPTION WHEN SQLSTATE 'ZX996' OR SQLSTATE 'ZX997' THEN rep := rep || E'\\n' || SQLERRM;
   END;""")
     ids = ','.join(t[0] for _, t in items)
-    return header('mutants ' + ids) + HELPERS + ALL_CONTROLS + f"""
+    return header('mutants ' + ids) + HELPERS + fns(ctl_ids) + f"""
 DO $run$
 DECLARE rep text := '';
 BEGIN
