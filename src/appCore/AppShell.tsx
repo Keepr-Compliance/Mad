@@ -2,7 +2,7 @@
  * AppShell Component
  *
  * Provides the main application layout structure including:
- * - Title bar with user menu (Electron only - hidden on web/mobile)
+ * - Title bar / mobile header (shell/TitleBar)
  * - Offline banner
  * - Scrollable content area
  * - Version info button and popup
@@ -10,7 +10,7 @@
 
 import React from "react";
 import type { AppStateMachine } from "./state/types";
-import { ShellBanners } from "./shell";
+import { ShellBanners, TitleBar } from "./shell";
 import SystemHealthMonitor from "../components/SystemHealthMonitor";
 import { isOnboardingStep } from "./routing";
 import { useSessionValidator } from "../hooks/useSessionValidator";
@@ -26,7 +26,6 @@ interface AppShellProps {
   app: AppStateMachine;
   children: React.ReactNode;
 }
-
 
 export function AppShell({ app, children }: AppShellProps) {
   const {
@@ -51,7 +50,7 @@ export function AppShell({ app, children }: AppShellProps) {
   // BACKLOG-3833: user input keeps the session alive; main signs out an idle one
   useSessionIdleTimeout({ isAuthenticated, onExpired: handleLogout });
 
-  // Detect Electron for title bar drag region
+  // Electron renders the full title bar; web/mobile renders the mobile header
   const runningInElectron = isElectron();
 
   // PRIMARY DATABASE INITIALIZATION GATE
@@ -74,70 +73,15 @@ export function AppShell({ app, children }: AppShellProps) {
 
   return (
     <div className="h-dvh h-screen flex flex-col bg-gray-50 overflow-hidden">
-      {/* Title Bar - Only show on Electron (desktop) and not on login screen.
-          On mobile/web platforms, there is no OS-level drag region needed.
-          BACKLOG-1790: this bar is intentionally NOT a drag-region — the single
-          global drag surface (WindowDragStrip in App.tsx) overlays its top 36px.
-          Interactive elements inside that band (profile button) keep
-          .no-drag-region to stay clickable. */}
-      {runningInElectron && currentStep !== "login" && (
-        <div className="flex-shrink-0 bg-gradient-to-b from-gray-100 to-gray-50 border-b border-gray-200 px-4 py-3 flex items-center justify-between select-none">
-          <div className="w-8" /> {/* Spacer for centering */}
-          <h1 className="text-sm font-semibold text-gray-700">
-            {getPageTitle()}
-          </h1>
-          {/* User Menu Button */}
-          {isAuthenticated && currentUser && (
-            <button
-              onClick={openProfile}
-              className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 hover:from-blue-500 hover:to-purple-600 flex items-center justify-center text-white text-sm font-bold shadow-md transition-all hover:shadow-lg no-drag-region"
-              title={`${currentUser.display_name || currentUser.email} - Click for account settings`}
-              data-tour="profile-button"
-              data-testid="nav-profile"
-            >
-              {currentUser.avatar_url ? (
-                <img
-                  src={currentUser.avatar_url}
-                  alt="Profile"
-                  className="w-8 h-8 rounded-full"
-                />
-              ) : (
-                currentUser.display_name?.[0]?.toUpperCase() ||
-                currentUser.email?.[0]?.toUpperCase() ||
-                "?"
-              )}
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Mobile Header - Show page title and profile on non-Electron platforms */}
-      {!runningInElectron && currentStep !== "login" && isAuthenticated && currentUser && (
-        <div className="flex-shrink-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between lg:hidden">
-          <h1 className="text-base font-semibold text-gray-900">
-            {getPageTitle()}
-          </h1>
-          <button
-            onClick={openProfile}
-            className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 hover:from-blue-500 hover:to-purple-600 flex items-center justify-center text-white text-sm font-bold shadow-md transition-all hover:shadow-lg"
-            title={`${currentUser.display_name || currentUser.email} - Click for account settings`}
-            data-tour="profile-button"
-            data-testid="nav-profile"
-          >
-            {currentUser.avatar_url ? (
-              <img
-                src={currentUser.avatar_url}
-                alt="Profile"
-                className="w-8 h-8 rounded-full"
-              />
-            ) : (
-              currentUser.display_name?.[0]?.toUpperCase() ||
-              currentUser.email?.[0]?.toUpperCase() ||
-              "?"
-            )}
-          </button>
-        </div>
-      )}
+      {/* Title bar (Electron) / mobile header — BACKLOG-3964: see shell/TitleBar */}
+      <TitleBar
+        runningInElectron={runningInElectron}
+        currentStep={currentStep}
+        isAuthenticated={isAuthenticated}
+        currentUser={currentUser}
+        title={getPageTitle()}
+        onOpenAccount={openProfile}
+      />
 
       <ShellBanners app={app} />
 
