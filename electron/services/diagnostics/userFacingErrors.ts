@@ -36,6 +36,8 @@ export type UserErrorCode =
   | "DEVICE_NOT_DETECTED"
   /** BACKLOG-3953: an iPhone tool never started (Windows). See iphoneToolBlock.ts. */
   | "SECURITY_SOFTWARE_BLOCKED"
+  /** BACKLOG-3996: a short iPhone query did not answer within its time limit. */
+  | "IPHONE_TOOL_TIMEOUT"
   | "SYNC_FAILED";
 
 /**
@@ -238,5 +240,35 @@ export function formatToolBlockedError(keeprFolder?: string | null): UserFacingE
       "Security software on this computer blocked one of the tools Keepr uses to connect to your iPhone.",
     actionSuggestion: [...steps.map((step, i) => `${i + 1}. ${step}`), SUPPORT_CLOSING_LINE].join("\n"),
     code: "SECURITY_SOFTWARE_BLOCKED",
+  };
+}
+
+/**
+ * BACKLOG-3996: a short iPhone query (the storage query or the backup-encryption check
+ * before a sync) did not answer within its time limit and was stopped.
+ *
+ * Shown ONLY on that query's timed-out marker. Never for a watchdog stop
+ * (BACKUP_TIMEOUT), a device that would not start its backup service
+ * (SERVICE_UNAVAILABLE), a passcode cancel, or a tool that never started
+ * (SECURITY_SOFTWARE_BLOCKED, which has its own message). Security software is offered
+ * as one possible cause, not a verdict.
+ *
+ * `actionSuggestion` holds the numbered steps, one per line, and ends with
+ * SUPPORT_CLOSING_LINE; the sync screen renders it line by line for this code.
+ *
+ * "Wait a moment" is deliberate: a sync started again at once is refused for 5 seconds.
+ */
+export function formatIphoneToolTimeoutError(): UserFacingError {
+  const steps = [
+    "Make sure your iPhone is unlocked and still connected.",
+    "If your antivirus is showing an alert about Keepr, choose to allow it.",
+    "Wait a moment, then select Try Again.",
+  ];
+  return {
+    title: "This is taking longer than expected",
+    description:
+      "Keepr stopped waiting for your iPhone after 90 seconds. Sometimes security software pauses Keepr's iPhone tools while it checks them.",
+    actionSuggestion: [...steps.map((step, i) => `${i + 1}. ${step}`), SUPPORT_CLOSING_LINE].join("\n"),
+    code: "IPHONE_TOOL_TIMEOUT",
   };
 }

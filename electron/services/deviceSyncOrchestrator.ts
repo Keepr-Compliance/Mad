@@ -69,6 +69,7 @@ import {
   formatStoreAppleDevicesNotRunningError,
   formatMsiServiceStoppedNeutralError,
   formatToolBlockedError,
+  formatIphoneToolTimeoutError,
 } from "./diagnostics/userFacingErrors";
 import { checkToolFilesForBlock, keeprInstallFolder } from "./iphoneToolBlock";
 import { checkAppleDrivers } from "./appleDriverService";
@@ -1613,12 +1614,24 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       }
 
       // Step 1: Get device storage info to estimate backup size
+      // BACKLOG-3996: the signal stops the query itself on Cancel (raceCancel alone only
+      // stopped waiting for it), and a query that never answered is stopped at the time
+      // limit and ends the sync with its own message.
+      let storageQueryTimedOut = false;
       const storageInfoOrCancel = await raceCancel(
         preflightSignal,
-        this.deviceService.getDeviceStorageInfo(options.udid),
+        this.deviceService.getDeviceStorageInfo(options.udid, {
+          signal: preflightSignal,
+          onTimeout: () => {
+            storageQueryTimedOut = true;
+          },
+        }),
       );
       if (storageInfoOrCancel === PREFLIGHT_CANCELLED) {
         return this.endCancelledPreflight(preflightSignal, "storage-query");
+      }
+      if (storageQueryTimedOut) {
+        return this.failForToolTimeout("storage-query");
       }
       const storageInfo = storageInfoOrCancel;
       // BACKLOG-2914 (FIX 4): what the phone itself is carrying. Already fetched for
@@ -1790,8 +1803,19 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // "Encrypt local backup" on stops here, before the at-rest pause is requested and
       // before anything is transferred. No password is asked for or used. "off" and
       // "unknown" go on; a backup that still lands encrypted stops after the transfer.
-      const phoneEncryption = await this.readPhoneBackupEncryption(options.udid);
-      if (preflightSignal.aborted) return this.endCancelledPreflight(preflightSignal, "encryption-check");
+      // BACKLOG-3996: Cancel reaches this query (signal) and ends the wait at once
+      // (raceCancel); before this it was a plain await that Cancel could not end.
+      const phoneEncryptionOrCancel = await raceCancel(
+        preflightSignal,
+        this.readPhoneBackupEncryption(options.udid, preflightSignal),
+      );
+      if (phoneEncryptionOrCancel === PREFLIGHT_CANCELLED || preflightSignal.aborted) {
+        return this.endCancelledPreflight(preflightSignal, "encryption-check");
+      }
+      if (phoneEncryptionOrCancel === "timed-out") {
+        return this.failForToolTimeout("encryption-check");
+      }
+      const phoneEncryption = phoneEncryptionOrCancel;
       if (phoneEncryption === "on") {
         log.info("[DeviceSyncOrchestrator] Backup encryption is on for this iPhone; not syncing");
         return this.stopForAppleEncryptedBackup();
@@ -2066,6 +2090,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
                 ? "watchdog"
                 : backupResult.errorCode === "TOOL_BLOCKED"
                   ? "tool-blocked"
+                  : backupResult.errorCode === "IPHONE_TOOL_TIMEOUT"
+                    ? "tool-timeout"
                   : isEncryptionReasonCode(backupResult.errorCode)
                     ? "backup-encryption"
                     : "device-error",
@@ -2093,6 +2119,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           // BACKLOG-3953: the steps reach the sync screen through the structured error.
           if (backupResult.errorCode === "TOOL_BLOCKED") {
             const userError = formatToolBlockedError(keeprInstallFolder());
+            this.emit("error", { message: userError.description, userError });
+          }
+          // BACKLOG-3996: startBackup's own encryption check timed out.
+          if (backupResult.errorCode === "IPHONE_TOOL_TIMEOUT") {
+            const userError = formatIphoneToolTimeoutError();
             this.emit("error", { message: userError.description, userError });
           }
           return this.errorResult(error, backupResult.errorCode);
@@ -3686,16 +3717,37 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * BACKLOG-3881: the phone's "Encrypt local backup" setting. A read that fails is
    * "unknown" — the sync goes on, and stops after the transfer if the backup is encrypted.
    */
-  private async readPhoneBackupEncryption(udid: string): Promise<"on" | "off" | "unknown"> {
+  private async readPhoneBackupEncryption(
+    udid: string,
+    signal?: AbortSignal,
+  ): Promise<"on" | "off" | "unknown" | "timed-out"> {
     let status: BackupEncryptionInfo["status"];
+    let timedOut = false;
     try {
-      status = (await this.backupService.checkEncryptionStatus(udid)).status;
+      const info = await this.backupService.checkEncryptionStatus(udid, { signal });
+      status = info.status;
+      // BACKLOG-3996: keyed ONLY on the query's own timed-out marker.
+      timedOut = info.timedOut === true;
     } catch {
       status = "unknown";
     }
     const reading = status === "on" || status === "off" ? status : "unknown";
     syncTimeline.setContext({ phoneBackupEncryption: reading });
-    return reading;
+    return timedOut ? "timed-out" : reading;
+  }
+
+  /**
+   * BACKLOG-3996: a pre-flight iPhone query did not answer within its time limit and
+   * was stopped. The sync ends here with its own message rather than going on: an
+   * unanswered query at pre-flight means the backup tool would be held the same way.
+   */
+  private failForToolTimeout(step: "storage-query" | "encryption-check"): SyncResult {
+    const userError = formatIphoneToolTimeoutError();
+    log.warn("[DeviceSyncOrchestrator] iPhone query timed out during pre-flight; stopping", { step });
+    syncTimeline.setContext({ endedBy: "tool-timeout", reasonCode: "IPHONE_TOOL_TIMEOUT" });
+    this.isRunning = false;
+    this.emit("error", { message: userError.description, userError });
+    return this.errorResult(userError.description, "IPHONE_TOOL_TIMEOUT");
   }
 
   /**

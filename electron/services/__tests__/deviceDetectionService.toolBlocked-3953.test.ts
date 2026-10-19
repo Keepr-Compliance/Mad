@@ -19,7 +19,10 @@ import path from "path";
 const mockSpawn = jest.fn();
 const mockExec = jest.fn();
 jest.mock("child_process", () => ({
-  spawn: (...args: unknown[]) => mockSpawn(...args),
+  // BACKLOG-3996: the --version probe is a spawn now; its answer still comes from mockExec.
+  spawn: (...args: unknown[]) =>
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("./helpers/versionProbeViaExec-3996").routeSpawn(args, mockSpawn, mockExec),
   exec: (...args: unknown[]) => mockExec(...args),
 }));
 let mockToolsDir = "";
@@ -47,6 +50,11 @@ import { thrownSpawnError, emittedSpawnError, WIN_ERRNO } from "./fixtures/windo
 class FakeProcess extends EventEmitter {
   stdout = new EventEmitter();
   stderr = new EventEmitter();
+  // BACKLOG-3996 (SR R2): always-set on a real ChildProcess (null while alive).
+  pid = 5001;
+  exitCode: number | null = null;
+  signalCode: string | null = null;
+  kill = jest.fn(() => true);
 }
 
 /** exec(cmd, cb): the `--version` probe answers, or fails like cmd.exe would. */
