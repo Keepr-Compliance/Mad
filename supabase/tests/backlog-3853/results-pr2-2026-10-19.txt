@@ -1,0 +1,41 @@
+BACKLOG-3853 PR-2 DB controls, keepr-test, 2026-10-19.
+
+Dry run first: migration (inline EXECUTE) + pr2-controls.sql base in one rolled-back call:
+base 39/39 controls true.
+
+Migration 20261019090000_backlog_3853_subscription_engine.sql applied: file + ledger row in one
+call (DO block: EXECUTE the file text, INSERT the same text into schema_migrations).
+Ledger md5(statements[1]) bc235c4ecd1dcb83083e70fd2dd0918d, length 19543 = md5 -q / wc -c of the file.
+After apply (md5 of pg_get_functiondef):
+  _billing_apply_org_subscription 3b5f4ae4 (was 77ae57bd)
+  _billing_auto_reinstate         ea14b070 (was a6f4f1c2)
+  admin_update_plan_feature       8df064d4 (was 4dd46d36); EXECUTE grants unchanged
+  _billing_enqueue_org_work 11182fa5, _billing_org_sync_lease 3e2a57b8,
+  _billing_org_sync_release 33a24f04, _billing_record_invoice_paid cf64d1a4
+
+Runs after apply (compose_pr2.py, two rolled-back calls; each mode: exact-once replace that raises
+on 0 or 2+ matches, or the prior body; md5 must change; MUTATION APPLIED printed):
+base 39/39 PASS. Cleanup verified: 0 P3853P2C orgs, 0 p3853p2c users, 0 outbox rows of the new
+kinds, 0 org_deals.
+
+| mode (likely wrong build)                       | md5 change         | red controls |
+| enqueue_insert_only (enqueue in the save path only) | trigger 11182fa5->1ecdf29e | C-E2, C-E4, C-E5, C-E6 |
+| enqueue_any_update (enqueue on every UPDATE OF)  | ->04aff797 | NONE: equivalent mutant. The sync dedupe key is per deal version, so an extra insert for an unchanged version is absorbed by ON CONFLICT DO NOTHING. The version check stays (SR 7c) as the stated intent. |
+| enqueue_any_status (draft / canceled deals sync) | ->917039ad | C-E6 |
+| no_notify (no suspended email row)               | ->d4337409 | C-E3, C-E3b, C-E5 |
+| pr1_apply (today's mirror writer, PR-1 body)     | apply 3b5f4ae4->77ae57bd | C-9n cursor, C-9n older event, C-9s, C-9s2, C-9c, C-9c2 |
+| cancel_unconditional                             | ->58f408d1 | C-9c2 |
+| null_branch_no_coalesce                          | ->f597cee8 | C-9i |
+| pr1_auto (today's auto-reinstate, PR-1 body)     | auto ea14b070->a6f4f1c2 | C-12e no payment, C-12e paid+active, C-R4 |
+| paid_boundary_lt (< instead of <=)               | ->063f16d1 | C-12e boundary, C-12e paid+active, C-R4 |
+| auto_no_reason_check                             | ->a342815b | C-12c |
+| auto_no_status_check                             | ->188370cd | C-12e paid+active, C-R4 |
+| paid_no_greatest                                 | paid cf64d1a4->3e7c9efd | C-RP, C-12e paid+active |
+| lease_no_guard                                   | lease 3e2a57b8->7de77ca5 | C-L1 B refused while A holds |
+| lease_short_ok (lease under 90 s allowed)        | ->00d6ac5b | C-L2 |
+| pf_before (today's plan-feature body)            | planfeat 8df064d4->4dd46d36 | C-P1, C-P2, C-P3 |
+| pf_enable_only (refuse only when enabling)       | ->bf4eeffe | C-P2, C-P3 |
+
+17 mutants: 16 red, 1 equivalent (explained above).
+The three prior-body mutants restored exactly the pre-migration md5s (77ae57bd, a6f4f1c2,
+4dd46d36), so the bodies in rollback-3853-pr2.sql are byte-exact.
