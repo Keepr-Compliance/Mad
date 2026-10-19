@@ -53,6 +53,8 @@ interface FakeOpts {
   authEmails?: Record<string, string>;
   /** Force an error on the next write to a table/op. */
   failWrite?: { table: string; op: 'insert' | 'update' | 'delete'; error: Err };
+  /** Make user_id_for_auth_email return this error. */
+  failLookup?: Err;
 }
 
 const ORG = 'org-1';
@@ -184,6 +186,7 @@ function makeDb(tables: Tables, opts: FakeOpts = {}) {
   async function rpc(fn: string, args: Record<string, unknown>) {
     rpcCalls.push({ fn, args });
     if (fn !== 'user_id_for_auth_email') return { data: null, error: null };
+    if (opts.failLookup) return { data: null, error: opts.failLookup };
     const e = String(args.p_email ?? '').trim().toLowerCase();
     const authIds = opts.authIds ?? [];
     const users = tables.users ?? [];
@@ -607,6 +610,15 @@ describe('POST existing person: lookup by sign-in email (BACKLOG-3998)', () => {
     expect(res.status).toBe(201);
     expect(db.rpcCalls).toEqual([{ fn: 'user_id_for_auth_email', args: { p_email: 'q@example.test' } }]);
     expect(memberWrites(db.writes)[0].payload).toMatchObject({ user_id: 'u-q' });
+  });
+
+  it('a failed lookup is a 500 and writes nothing: it is not read as \"no such person\"', async () => {
+    const db = makeDb(baseTables(), { failLookup: { code: '57014', message: 'canceling statement due to statement timeout' } });
+    const res = await handleCreateUser(postReq('new.person@example.test'), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(500);
+    expect(userWrites(db.writes)).toEqual([]);
+    expect(memberWrites(db.writes)).toEqual([]);
+    expect(db.writes.some((w) => w.table === 'scim_sync_log' && w.payload?.response_status === 500)).toBe(true);
   });
 
   it('a users row holding the address whose sign-in email differs is not that person', async () => {

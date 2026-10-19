@@ -555,6 +555,30 @@ ctl('C28', 'client insert whose only identity provider the users table does not 
   r := pg_temp.res(st = 'ok' AND t = 'email:' || b::text, 'C28 ' || cname, st || ' ' || COALESCE(t, 'none'));
 """)
 
+ctl('C29', 'client update of its own oauth pair leaves status / licence / provisioning columns as the server set them', r"""
+  a := pg_temp.mk('c29-3998-a@example.test');
+  UPDATE public.users SET status = 'suspended', subscription_tier = 'enterprise', is_managed = true,
+         provisioning_source = 'scim' WHERE id = a;
+  PERFORM pg_temp.asu(a);
+  BEGIN
+    UPDATE public.users SET oauth_provider = 'google', oauth_id = 'c29-3998-other' WHERE id = a;
+    st := 'ok';
+  EXCEPTION WHEN OTHERS THEN st := SQLSTATE || ' ' || SQLERRM;
+  END;
+  PERFORM pg_temp.pg();
+  t := (SELECT concat_ws(',', status, subscription_tier, is_managed, provisioning_source) FROM public.users WHERE id = a);
+  r := pg_temp.res(st = 'ok' AND t = 'suspended,enterprise,t,scim', 'C29 ' || cname, st || ' ' || COALESCE(t, 'none'));
+""")
+
+ctl('C30', 'user_id_for_auth_email: two unclaimed rows, one address in two casings -> NULL', r"""
+  a := pg_temp.noauth('c30-3998-dup@example.test');
+  b := pg_temp.noauth('C30-3998-Dup@Example.test');
+  PERFORM pg_temp.assvc();
+  x := public.user_id_for_auth_email('c30-3998-dup@example.test');
+  PERFORM pg_temp.pg();
+  r := pg_temp.res(x IS NULL, 'C30 ' || cname, 'lookup=' || COALESCE(x::text, 'NULL'));
+""")
+
 CIDS = [c[0] for c in C]
 assert len(set(CIDS)) == len(CIDS)
 
@@ -643,6 +667,12 @@ M = [
     ('M22', 'sync', "  BEGIN\n    UPDATE public.users SET email = NEW.email WHERE id = NEW.id;\n  EXCEPTION WHEN OTHERS THEN\n    RAISE WARNING 'sync_email_from_auth: % %', SQLSTATE, SQLERRM;\n  END;\n",
      "  UPDATE public.users SET email = NEW.email WHERE id = NEW.id;\n",
      'sync_email_from_auth: errors not caught', ['C13b']),
+    ('M24', 'guard', "    NEW.oauth_id := OLD.oauth_id;\n    RETURN NEW;\n  END IF;\n\n  SELECT p.provider, p.provider_id INTO v_provider, v_provider_id\n    FROM public.users_own_oauth_pair() p;\n  IF v_provider IS NOT NULL THEN",
+     "    NEW.oauth_id := OLD.oauth_id;\n  END IF;\n\n  SELECT p.provider, p.provider_id INTO v_provider, v_provider_id\n    FROM public.users_own_oauth_pair() p;\n  IF v_provider IS NOT NULL AND TG_OP = 'INSERT' THEN",
+     'guard: pair kept on update, but the 17-column reset also runs on client UPDATE', ['C29']),
+    ('M25', 'lookup', "  IF cardinality(v_ids) = 1 THEN\n    RETURN v_ids[1];",
+     "  IF cardinality(v_ids) >= 1 THEN\n    RETURN v_ids[1];",
+     'lookup: first of several unclaimed rows', ['C30']),
 ]
 
 RESET_COLS = ['status', 'suspended_at', 'suspension_reason', 'is_active', 'subscription_tier',
