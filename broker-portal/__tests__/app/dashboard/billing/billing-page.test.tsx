@@ -15,6 +15,7 @@
 import {
   FIXTURE_PERSONAL_ORG_ID,
   FIXTURE_USER_ID,
+  FIXTURE_BROKERAGE_ORG_ID,
   brokerageMembership,
   createPostgrestEmulator,
   personalMembership,
@@ -725,7 +726,8 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
     async (_n, row) => {
       seedCustomer();
       const r = await page([row]);
-      expect(mockSessionRpc).not.toHaveBeenCalled();
+      // BACKLOG-3853 PR-2B: the portal's own brokerage-suspension read is not a billing read.
+      expect(mockSessionRpc.mock.calls.filter((c) => c[0] !== 'org_billing_suspended')).toEqual([]);
       expect(mockServiceRpc).not.toHaveBeenCalled();
       expect(stripeCalls()).toBe(0);
       expect(mockBillingDb.callsTo('stripe_customers', 'select')).toEqual([]);
@@ -976,5 +978,77 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
     const r = await page();
     expect(r.credits).toContain('Credits cannot be used or bought while your account is suspended. They are kept.');
     expect(r.payment).toContain('Card on file');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3853 PR-2B (C-B1): a suspended BROKERAGE. Every member's licence is
+// active (_billing_suspend_org touches no licence); only org_billing_suspended
+// answers true. The page is where the broker, admin and IT admin land, so it
+// must NOT copy the licence-suspended redirect to /dashboard/account (W9).
+// ---------------------------------------------------------------------------
+
+describe('C-B1: a suspended brokerage (BACKLOG-3853)', () => {
+  const ORG = FIXTURE_BROKERAGE_ORG_ID;
+  function suspend(reason: 'non_payment' | 'other' | null, suspended = true): void {
+    mockSessionRpc.mockImplementation(async (fn: string) =>
+      fn === 'org_billing_suspended' ? { data: suspended, error: null } : { data: 0, error: null }
+    );
+    mockBillingDb = new BillingDb({
+      org_deals: [{ organization_id: ORG, status: suspended ? 'suspended' : 'active', suspended_reason: reason }],
+    });
+  }
+  async function banner(): Promise<string | null> {
+    const { container, unmount } = render(await BillingRoute({}));
+    const el = container.querySelector('[data-billing-banner="org_suspended"]');
+    const text = el ? (el.textContent ?? '') : null;
+    unmount();
+    return text;
+  }
+
+  it.each(['broker', 'admin'])('%s, non-payment: the page renders with the pay-from-the-email banner', async (role) => {
+    given([brokerageMembership(role)]);
+    suspend('non_payment');
+    expect(await run()).toEqual({ element: 'BillingPage' });
+    given([brokerageMembership(role)]);
+    const text = await banner();
+    expect(text).toContain('Your brokerage is suspended for an unpaid invoice.');
+    expect(text).toContain('Pay the overdue invoice from the link in the suspension email sent to your billing contact');
+    expect(text).toContain('once every overdue invoice is paid');
+    expect(text).not.toContain('Pay overdue invoice');
+  });
+
+  it('it_admin, non-payment: no pay sentence; a Broker or Admin can pay it', async () => {
+    given([brokerageMembership('it_admin')]);
+    suspend('non_payment');
+    const text = await banner();
+    expect(text).toContain('A Broker or Admin can pay it.');
+    expect(text).not.toContain('Pay the overdue invoice');
+  });
+
+  it('reason other: contact Keepr, no pay sentence', async () => {
+    given([brokerageMembership('admin')]);
+    suspend('other');
+    const text = await banner();
+    expect(text).toContain('Your brokerage account is suspended.');
+    expect(text).toContain('Contact Keepr to restore it.');
+    expect(text).not.toContain('unpaid invoice');
+    expect(text).not.toContain('Pay the overdue invoice');
+  });
+
+  it('control: the same broker with the brokerage active gets no banner', async () => {
+    given([brokerageMembership('broker')]);
+    suspend(null, false);
+    expect(await banner()).toBeNull();
+  });
+
+  it('the licence rule still wins: licence suspended -> /dashboard/account', async () => {
+    given([brokerageMembership('broker')]);
+    mockEmulator.set({
+      columnPresent: true,
+      rows: { organization_members: [brokerageMembership('broker')], licenses: [{ user_id: FIXTURE_USER_ID, status: 'suspended' }] },
+    });
+    suspend('non_payment');
+    expect(await run()).toEqual({ redirect: '/dashboard/account' });
   });
 });

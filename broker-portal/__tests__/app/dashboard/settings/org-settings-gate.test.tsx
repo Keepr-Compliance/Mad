@@ -114,7 +114,8 @@ describe('/dashboard/settings role gate', () => {
     // RPC means a refused caller learns nothing about the org's plan.
     const stub = signedInAs('agent');
     await expect(SettingsPage()).rejects.toThrow(REDIRECTED);
-    expect(stub.rpc).not.toHaveBeenCalled();
+    // BACKLOG-3853 PR-2B: the portal's own brokerage-suspension read is not a feature read.
+    expect(stub.rpc.mock.calls.filter((c: unknown[]) => c[0] !== 'org_billing_suspended')).toEqual([]);
   });
 });
 

@@ -85,6 +85,10 @@ interface Setup {
   /** A PostgREST error on the rpc call. */
   rpcError?: unknown;
   impersonating?: boolean;
+  /** BACKLOG-3853 PR-2B: what org_billing_suspended answers, per p_org. Unlisted = false. */
+  orgSuspended?: Record<string, unknown>;
+  /** BACKLOG-3853 PR-2B: a PostgREST error on org_billing_suspended only. */
+  orgRpcError?: unknown;
 }
 
 function setup(opts: Setup = {}) {
@@ -106,6 +110,12 @@ function setup(opts: Setup = {}) {
     return { data: null, error: { message: `unexpected rpc ${fn}` } };
   });
   const from = jest.fn((t: string) => emu.from(t));
+  const orgSuspended = opts.orgSuspended ?? {};
+  const orgRpc = jest.fn(async (_fn: string, args: { p_org: string }) =>
+    opts.orgRpcError
+      ? { data: null, error: opts.orgRpcError }
+      : { data: args.p_org in orgSuspended ? orgSuspended[args.p_org] : false, error: null }
+  );
   const client = {
     auth: {
       getUser: jest.fn(async () => ({
@@ -113,7 +123,10 @@ function setup(opts: Setup = {}) {
       })),
     },
     from,
-    rpc,
+    // BACKLOG-3853 PR-2B: org_billing_suspended is answered by orgRpc, so `rpc`
+    // keeps recording the checklist questions only.
+    rpc: (fn: string, args: Record<string, unknown>) =>
+      fn === 'org_billing_suspended' ? orgRpc(fn, args as { p_org: string }) : rpc(fn, args as { p_org_id: string }),
   };
   mockCreateClient.mockResolvedValue(client);
   mockGetImpersonationSession.mockResolvedValue(
@@ -121,7 +134,7 @@ function setup(opts: Setup = {}) {
       ? { session_id: 's', target_user_id: 't', admin_user_id: 'a', target_email: 'x@example.test', target_name: 'X', expires_at: '2999-01-01T00:00:00Z', started_at: '2026-01-01T00:00:00Z' }
       : null
   );
-  return { emu, rpc, from, client };
+  return { emu, rpc, orgRpc, from, client };
 }
 
 let errorSpy: jest.SpyInstance;
@@ -430,5 +443,36 @@ describe('BACKLOG-3618 — a brokerage member keeps their own checklists', () =>
   it('O8 isChecklistPageEnabled is true for an admitted agent', async () => {
     setup({ memberships: [brokerageMembership('agent')], canEdit: { [B]: false }, canOwn: { [B]: true } });
     await expect(isChecklistPageEnabled()).resolves.toBe(true);
+  });
+});
+
+// BACKLOG-3853 PR-2B: Checklists are hidden while the brokerage is suspended
+// (ruling a43c3e85). No database gate exists for it, so this gate fails closed.
+describe('BACKLOG-3853 — a suspended brokerage', () => {
+  it.each(['broker', 'admin', 'it_admin', 'agent'])('%s in a suspended brokerage is refused before any checklist question', async (role) => {
+    const { rpc, orgRpc } = setup({ memberships: [brokerageMembership(role)], canEdit: { [B]: true }, canOwn: { [B]: true }, orgSuspended: { [B]: true } });
+    await expect(requireChecklistAccess()).rejects.toThrow('Not authorized');
+    expect(orgRpc.mock.calls).toEqual([['org_billing_suspended', { p_org: B }]]);
+    expect(rpc).not.toHaveBeenCalled();
+    await expect(isChecklistPageEnabled()).resolves.toBe(false);
+  });
+
+  it('control: the same broker in an active brokerage is admitted', async () => {
+    setup({ memberships: [brokerageMembership('broker')], canEdit: { [B]: true }, orgSuspended: { [B]: false } });
+    await expect(requireChecklistAccess()).resolves.toMatchObject({ organizationId: B, canEditOrg: true });
+  });
+
+  it.each<[string, Setup]>([
+    ['an rpc error', { orgRpcError: { code: '57014', message: 'timeout' } }],
+    ['a null answer', { orgSuspended: { [B]: null } }],
+  ])('fails closed on %s', async (_l, opts) => {
+    setup({ memberships: [brokerageMembership('broker')], canEdit: { [B]: true }, ...opts });
+    await expect(requireChecklistAccess()).rejects.toThrow('Not authorized');
+  });
+
+  it('a personal organization is never asked', async () => {
+    const { orgRpc } = setup({ memberships: [personalMembership()], canEdit: { [P]: true } });
+    await expect(requireChecklistAccess()).resolves.toMatchObject({ organizationId: P });
+    expect(orgRpc).not.toHaveBeenCalled();
   });
 });

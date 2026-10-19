@@ -65,7 +65,9 @@ export async function checkOrgSettingsAccess(): Promise<OrgSettingsAccess> {
     access.kind !== 'full' ||
     !(ORG_SETTINGS_ROLES as readonly string[]).includes(access.role) ||
     // BACKLOG-3878: a suspended account keeps My Account and Support only.
-    portal.suspended === true
+    portal.suspended === true ||
+    // BACKLOG-3853 PR-2B: so does a suspended brokerage (Billing too).
+    portal.orgSuspended === true
   ) {
     return { allowed: false, reason: 'unauthorized' };
   }

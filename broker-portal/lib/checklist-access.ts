@@ -30,6 +30,10 @@
  *   `true` refuses.
  * - BACKLOG-3878: a suspended licence refuses, and so does a failed licence
  *   read (fail closed), before the organization is picked.
+ * - BACKLOG-3853 PR-2B: a suspended BROKERAGE refuses too (ruling a43c3e85:
+ *   Checklists are hidden while the brokerage is suspended). Checklists have no
+ *   database gate for this, so this one is FAIL-CLOSED like the licence read: a
+ *   failed org_billing_suspended read refuses. Asked for a brokerage row only.
  */
 
 import { createClient } from '@/lib/supabase/server';
@@ -115,6 +119,15 @@ export async function requireChecklistAccess(): Promise<ChecklistAccess> {
   // BACKLOG-3917: a row whose status does not grant access opens nothing,
   // and there is no fall-through to the personal organization.
   if (!memberStatusGrantsAccess(membership.license_status)) throw new Error('Not authorized');
+
+  // BACKLOG-3853 PR-2B: a suspended brokerage opens no checklist page and makes
+  // no checklist write. FAIL-CLOSED.
+  if (!isPersonalMembership(membership)) {
+    const { data: orgSuspended, error: orgError } = await supabase.rpc('org_billing_suspended', {
+      p_org: membership.organization_id,
+    });
+    if (orgError || orgSuspended !== false) throw new Error('Not authorized');
+  }
 
   // Boolean only: the route and every action refuse when the database
   // refuses. The sidebar's grayed entry (lib/checklist-nav.ts, BACKLOG-3477)

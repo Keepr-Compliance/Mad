@@ -128,6 +128,8 @@ function setup(opts: Setup = {}) {
     },
     rpc: async (fn: string, args: Record<string, unknown>) => {
       rpcLog.push({ fn, args });
+      // BACKLOG-3853 PR-2B: the brokerage is not suspended in this file.
+      if (fn === 'org_billing_suspended') return { data: false, error: null };
       if (fn === 'can_edit_checklist_templates') {
         // Stands in for the database (harness C4, C5, C41): editor role (or the
         // personal organization's owner) AND feature on.
