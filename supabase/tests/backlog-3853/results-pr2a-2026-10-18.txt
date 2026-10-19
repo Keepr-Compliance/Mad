@@ -66,3 +66,27 @@ pr2a-controls.sql, 16 modes, one rolled-back call: base 26/26 PASS. Every mutant
 | get_no_perm | admin_get_org_billing 99888431->bbfc66e3 | support view refused |
 | suspend_no_perm | admin_suspend_org 7e29986a->b394284f | exec/support suspend (+ Sales suspend, cascade) |
 | reinstate_no_perm | admin_reinstate_org 2ed6e29d->6ba81c2c | exec reinstate |
+
+FIX-UP ROUND (SR review + founder ruling: Sales keeps an approved deep price only at the same price
+and the same or fewer seats, and only on a deal that is not canceled):
+Re-applied on keepr-test with the ledger statements set to the file in one call: ledger md5
+656596838be0ad33f31ce904c6723fe2, length 12077 = file. admin_save_deal fe991d06, admin_get_org_billing
+99888431, _billing_save_deal 4471a965 (precondition and rollback md5 unchanged: PR-1 body not touched).
+pr2a-controls.sql, 19 modes, one rolled-back call: base 33/33 PASS. Every mutant red:
+| no_seats_check (seat increase allowed on a kept price) | fe991d06->968caa94 | Sales raises seats refused; Super raises seats (fixture moves) |
+| no_active_filter (canceled deal's price kept)  | ->285454c3 | canceled deal price not kept |
+| sr_int_division (100 instead of 100.0)         | ->d37db9c7 | 7 incl. Sales deeper than cap refused |
+| keep_current_any (price may drop on a kept deal) | ->85f5331f | Sales cannot go deeper; SR raise-then-lower; Super raises seats |
+| no_keep_current                                 | ->802e7f6e | 6 incl. keeps price + contact, keeps price + fewer seats |
+| no_cap / cap_floor                              | ->760e56b0 / ->be3358ec | 7 each |
+| no_approve_path                                 | ->a47f3124 | 10 |
+| no_manage_check                                 | ->41b68bac | 5 |
+| no_reason_check                                 | ->75f4c177 | 3 |
+| mode_hardcoded_test                             | ->2d1e3553 | live deal refused while dark |
+| live_unguarded                                  | _billing_save_deal 4471a965->0ed634d5 | live deal refused while dark |
+| no_audit                                        | ->56a6257c | audit row; super over_cap |
+| am_check_caller_only                            | ->bf17c19f | 7 |
+| am_list_caller_only                             | admin_get_org_billing 99888431->79a1d7e5 | view payload |
+| get_no_perm                                     | ->bbfc66e3 | support view refused |
+| suspend_no_perm / reinstate_no_perm             | 7e29986a->b394284f / 2ed6e29d->6ba81c2c | exec/support suspend; exec reinstate |
+vitest: 13 tests (kept-price rule now needs same price and seats <= current; message names Sales or Super Admin).
