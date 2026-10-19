@@ -138,6 +138,8 @@ describe("E: storage query (the incident)", () => {
     expect(proc.signalCode).toBe("SIGKILL");
     // 3422's instrument still records the killed process's close.
     expect(logLines.some((l) => l.includes("[STORAGE-QUERY]") && l.includes("signal=SIGKILL"))).toBe(true);
+    // ...and nothing else runs on that close: it is not read as a failed query.
+    expect(logLines.filter((l) => l.includes("Failed to get storage info"))).toEqual([]);
     expect(__liveIphoneToolCountForTests()).toBe(0);
   });
 
