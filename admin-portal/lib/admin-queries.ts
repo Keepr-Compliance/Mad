@@ -5,6 +5,7 @@
  */
 
 import { createClient } from '@/lib/supabase/client';
+import { withoutPlanEditorHiddenFeatures } from '@/lib/plan-constants';
 
 export interface AdminSearchUser {
   id: string;
@@ -250,7 +251,7 @@ export async function getPlanWithFeatures(
     data: {
       plan: planResult.data as Plan,
       features: (featuresResult.data ?? []) as unknown as PlanFeature[],
-      allFeatures: (allFeaturesResult.data ?? []) as FeatureDefinition[],
+      allFeatures: withoutPlanEditorHiddenFeatures((allFeaturesResult.data ?? []) as FeatureDefinition[]),
     },
     error: null,
   };

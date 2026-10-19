@@ -8,6 +8,7 @@ import { DeletePlanButton } from '../components/DeletePlanButton';
 import { PlanStatusToggle } from '../components/PlanStatusToggle';
 import { PlanTierEditor } from '../components/PlanTierEditor';
 import { formatDate } from '@/lib/format';
+import { withoutPlanEditorHiddenFeatures, withoutPlanEditorHiddenPlanFeatures } from '@/lib/plan-constants';
 import type { Plan, PlanFeature, FeatureDefinition, FeatureDependency } from '@/lib/admin-queries';
 
 export const dynamic = 'force-dynamic';
@@ -77,8 +78,8 @@ export default async function PlanDetailPage({
   }
 
   const plan = planResult.data as unknown as Plan;
-  const planFeatures = (planFeaturesResult.data ?? []) as unknown as PlanFeature[];
-  const allFeatures = (allFeaturesResult.data ?? []) as unknown as FeatureDefinition[];
+  const planFeatures = withoutPlanEditorHiddenPlanFeatures((planFeaturesResult.data ?? []) as unknown as PlanFeature[]);
+  const allFeatures = withoutPlanEditorHiddenFeatures((allFeaturesResult.data ?? []) as unknown as FeatureDefinition[]);
   const dependencies = (depsResult.data ?? []) as unknown as FeatureDependency[];
   const orgsOnPlan = (orgsOnPlanResult.data ?? []) as unknown as Array<{
     organization_id: string;
