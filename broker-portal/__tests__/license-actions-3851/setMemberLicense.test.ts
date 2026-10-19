@@ -198,3 +198,39 @@ describe('C2: function reply -> portal result', () => {
     expect(await setMemberLicense({ memberId: MEMBER, action: 'unassign' })).toEqual({ success: false, error });
   });
 });
+
+// BACKLOG-3853 PR-2B (C-A1): a suspended brokerage. The member trigger
+// _billing_guard_member_while_suspended raises out of set_member_license:
+//   RAISE EXCEPTION 'account_suspended' USING ERRCODE = 'P0001', HINT = '<the G5 text>'
+// (keepr-test catalog, 2026-10-19). PostgREST forwards SQLSTATE as `code`, the
+// message unchanged and the hint as `hint`. Provoked on keepr-test as the Beta
+// admin inside a rolled-back block (plan 2cafe0ef §5): ERR P0001 account_suspended.
+describe('C-A1: brokerage suspended (BACKLOG-3853)', () => {
+  const SUSPENDED = {
+    code: 'P0001',
+    message: 'account_suspended',
+    details: null,
+    hint: 'This brokerage account is suspended. Contact Keepr to restore it.',
+  };
+  it.each(['assign', 'unassign', 'reactivate'] as const)('%s -> the suspended message, not reported', async (action) => {
+    given({ userId: CALLER, callerRole: 'admin', rpcReply: { data: null, error: SUSPENDED } });
+    expect(await setMemberLicense({ memberId: MEMBER, action })).toEqual({
+      success: false,
+      error: 'This brokerage account is suspended. Contact Keepr to restore it.',
+    });
+    expect(mockCaptureException).not.toHaveBeenCalled();
+    expect(mockCaptureMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['same message, other code', { ...SUSPENDED, code: '42501' }],
+    ['same code, other message', { ...SUSPENDED, message: 'something_else' }],
+  ])('%s -> generic failure, reported', async (_n, err) => {
+    given({ userId: CALLER, callerRole: 'admin', rpcReply: { data: null, error: err } });
+    expect(await setMemberLicense({ memberId: MEMBER, action: 'assign' })).toEqual({
+      success: false,
+      error: MEMBER_LICENSE_ERRORS.failed,
+    });
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+  });
+});

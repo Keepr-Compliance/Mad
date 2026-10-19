@@ -268,3 +268,53 @@ describe('every exit deletes the invite cookie, on Path=/auth', () => {
     warnSpy.mockRestore();
   });
 });
+
+// BACKLOG-3853 PR-2B (RC1): a suspended brokerage refuses the acceptance. The
+// member trigger raises out of accept_invitation (which has no EXCEPTION WHEN
+// handler) and out of jit_join_organization's INSERT:
+//   RAISE EXCEPTION 'account_suspended' USING ERRCODE = 'P0001', HINT = '<the G5 text>'
+// PostgREST forwards SQLSTATE as `code` and the message unchanged.
+describe('brokerage suspended (BACKLOG-3853)', () => {
+  const SUSPENDED = {
+    code: 'P0001',
+    message: 'account_suspended',
+    details: null,
+    hint: 'This brokerage account is suspended. Contact Keepr to restore it.',
+  };
+
+  it('accept_invitation raises account_suspended -> signed out, brokerage_suspended', async () => {
+    signedIn();
+    given([pendingInvite(EMAIL, 'agent')]);
+    rpcs({ accept_invitation: { data: null, error: SUSPENDED } });
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { location, deleted } = await run(WITH_INVITE);
+    expect(location).toBe(`${ORIGIN}/login?error=brokerage_suspended`);
+    expect(mockSignOut.mock.calls).toEqual([[{ scope: 'local' }]]);
+    expect(deleted).toContain('keepr_invite');
+    expect(rpcNames()).toEqual(['accept_invitation']);
+    errorSpy.mockRestore();
+  });
+
+  it('same message under another code -> invite_failed as before', async () => {
+    signedIn();
+    given([]);
+    rpcs({ accept_invitation: { data: null, error: { ...SUSPENDED, code: '42501' } } });
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    expect((await run(WITH_INVITE)).location).toBe(`${ORIGIN}/login?error=invite_failed`);
+    errorSpy.mockRestore();
+  });
+
+  it('jit_join_organization raises account_suspended -> signed out, brokerage_suspended', async () => {
+    signedIn('azure');
+    given([]);
+    rpcs({
+      caller_has_pending_invite: { data: false, error: null },
+      jit_join_organization: { data: null, error: SUSPENDED },
+    });
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { location } = await run(SB);
+    expect(location).toBe(`${ORIGIN}/login?error=brokerage_suspended`);
+    expect(mockSignOut).toHaveBeenCalledTimes(1);
+    errorSpy.mockRestore();
+  });
+});
