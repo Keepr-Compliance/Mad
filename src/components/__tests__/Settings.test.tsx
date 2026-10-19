@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import Settings from "../Settings";
@@ -1974,6 +1974,138 @@ describe("Settings", () => {
         }),
       );
       expect(select.value).toBe("3");
+    });
+  });
+
+  /**
+   * BACKLOG-3964 slice 2: the Settings page — tabs, the Account tab, and
+   * opening at a section without a timer.
+   */
+  describe("Settings page (BACKLOG-3964)", () => {
+    const tabLabels = () =>
+      within(screen.getByTestId("settings-tabs")).getAllByRole("tab").map((t) => t.textContent);
+    let scrollSpy: jest.Mock;
+    const scrolledIds = () =>
+      (scrollSpy.mock.contexts as Element[]).map((el) => el.id || el.getAttribute("data-testid"));
+
+    beforeEach(() => {
+      scrollSpy = jest.fn();
+      Element.prototype.scrollIntoView = scrollSpy;
+    });
+
+    const renderPage = (extra: Partial<React.ComponentProps<typeof Settings>> = {}) => {
+      const ui = (props: Partial<React.ComponentProps<typeof Settings>>) => (
+        <NotificationProvider>
+          <PlatformProvider>
+            <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} {...props} />
+          </PlatformProvider>
+        </NotificationProvider>
+      );
+      const result = render(ui(extra));
+      return { ...result, rerenderWith: (props: Partial<React.ComponentProps<typeof Settings>>) => result.rerender(ui(props)) };
+    };
+
+    const holdPreferences = () => {
+      let release: () => void = () => {};
+      jest.mocked(window.api.preferences.get).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ success: true, preferences: { export: { defaultFormat: "combined-pdf" } } });
+          }) as ReturnType<typeof window.api.preferences.get>,
+      );
+      return () => act(async () => release());
+    };
+
+    it("tabs: Account first and selected on open; AI only with the add-on", async () => {
+      mockIsAllowed.mockReturnValue(false);
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      expect(tabLabels()).toEqual([
+        "Account", "General", "Email", "Messages", "Contacts", "Security",
+        "Data & Privacy", "Troubleshooting", "Support Access", "About",
+      ]);
+      expect(screen.getByRole("tab", { name: "Account" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("tabs: with the AI add-on the AI tab is listed after Contacts", async () => {
+      mockIsAllowed.mockReturnValue(true);
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      expect(tabLabels().slice(0, 6)).toEqual(["Account", "General", "Email", "Messages", "Contacts", "AI"]);
+    });
+
+    it("clicking a tab scrolls to that section", async () => {
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      await userEvent.click(screen.getByRole("tab", { name: "Security" }));
+      expect(scrolledIds()).toEqual(["settings-security"]);
+    });
+
+    it("Account tab: name, email, plan, full User ID with Copy; Billing reserved; no Sign out", async () => {
+      const writeText = jest.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const account = document.getElementById("settings-account") as HTMLElement;
+      expect(account).toBeInTheDocument();
+      const inAccount = within(account);
+      expect(inAccount.getByText("Avery Example")).toBeInTheDocument();
+      expect(inAccount.getByText("avery@example.com")).toBeInTheDocument();
+      expect(inAccount.getByText("Individual")).toBeInTheDocument();
+      expect(inAccount.getByTestId("account-user-id")).toHaveTextContent("user-123");
+      await userEvent.click(inAccount.getByTestId("account-copy-user-id"));
+      expect(writeText).toHaveBeenCalledWith("user-123");
+      await waitFor(() => expect(inAccount.getByTestId("account-copy-user-id")).toHaveTextContent("Copied"));
+      expect(inAccount.getByRole("button", { name: "Manage billing" })).toBeDisabled();
+      expect(inAccount.queryByText(/sign out/i)).toBeNull();
+      // Security keeps its own sign-out-everywhere action.
+      expect(within(document.getElementById("settings-security") as HTMLElement).getAllByText(/Sign Out All Devices/i).length).toBeGreaterThan(0);
+    });
+
+    it("deep link: waits for preferences (no scroll during the spinner, even past 500 ms), then lands once", async () => {
+      const release = holdPreferences();
+      const onSectionReached = jest.fn();
+      renderPage({ initialSection: "settings-security", onSectionReached });
+      expect(screen.getByText("Loading settings...")).toBeInTheDocument();
+      await act(() => new Promise((r) => setTimeout(r, 600)));
+      expect(scrollSpy).not.toHaveBeenCalled();
+      await release();
+      await waitFor(() => expect(scrolledIds()).toEqual(["settings-security"]));
+      expect(onSectionReached).toHaveBeenCalledTimes(1);
+    });
+
+    it("deep link while the page is already open and loaded lands at once; the same target again lands again", async () => {
+      const onSectionReached = jest.fn();
+      const { rerenderWith } = renderPage({ onSectionReached });
+      await waitFor(() => expect(screen.queryByText("Loading settings...")).toBeNull());
+      expect(scrollSpy).not.toHaveBeenCalled();
+      rerenderWith({ onSectionReached, initialSection: "settings-about" });
+      expect(scrolledIds()).toEqual(["settings-about"]);
+      rerenderWith({ onSectionReached, initialSection: null });
+      rerenderWith({ onSectionReached, initialSection: "settings-about" });
+      expect(scrolledIds()).toEqual(["settings-about", "settings-about"]);
+      expect(onSectionReached).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(["settings-account", "settings-email", "settings-contacts", "settings-data", "settings-support-access"])(
+      "deep link to %s lands on it",
+      async (id) => {
+        renderPage({ initialSection: id });
+        await waitFor(() => expect(scrolledIds()).toEqual([id]));
+      },
+    );
+
+    it("deep link to an element rendered after load (by data-testid) lands when it appears", async () => {
+      let releaseConnections: () => void = () => {};
+      jest.mocked(window.api.system.checkAllConnections).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            releaseConnections = () =>
+              resolve({ success: true, google: { connected: false }, microsoft: { connected: false } });
+          }) as ReturnType<typeof window.api.system.checkAllConnections>,
+      );
+      renderPage({ initialSection: "email-connection-microsoft-connect" });
+      await waitFor(() => expect(screen.queryByText("Loading settings...")).toBeNull());
+      expect(screen.queryByTestId("email-connection-microsoft-connect")).toBeNull();
+      expect(scrollSpy).not.toHaveBeenCalled();
+      await act(async () => releaseConnections());
+      await waitFor(() => expect(scrolledIds()).toEqual(["email-connection-microsoft-connect"]));
     });
   });
 });

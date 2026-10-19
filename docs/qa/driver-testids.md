@@ -46,8 +46,8 @@ silent miss or a false failure.
 | `nav-new-audit` | `components/Dashboard.tsx` | "New Audit" tile |
 | `nav-transactions` | `components/Dashboard.tsx` | "All Audits" / transactions tile |
 | `nav-clients-contacts` | `components/Dashboard.tsx` | "Clients & Contacts" tile |
-| `settings-page` | `components/Settings.tsx` | Settings modal is open (header) |
-| `settings-close` | `components/Settings.tsx` | Close/Back control that dismisses the Settings modal |
+| `settings-page` | `components/Settings.tsx` | Settings page is open (page root; BACKLOG-3964: a page, not a modal) |
+| `settings-close` | `components/settings/SettingsPageHeader.tsx` | The page's single "← Back" button (Esc does the same) |
 | `settings-tabs` | `components/settings/SettingsTabBar.tsx` | Settings tab bar container |
 | `settings-tab-{name}` | `components/settings/SettingsTabBar.tsx` | Individual tab, e.g. `settings-tab-general` |
 | `tx-list` | `components/TransactionList.tsx` | Transactions list container — **always present** on the transactions view |
