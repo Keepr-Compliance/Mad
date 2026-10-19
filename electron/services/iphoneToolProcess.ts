@@ -248,11 +248,16 @@ export function superviseIphoneTool(proc: ChildProcess, opts: SuperviseOptions):
   const onGone = () => {
     live.delete(proc);
     if (!killedByUs) noteExitedOnItsOwn(opts.tool);
-    cleanup();
   };
-  // 'close' too: some exits are only seen as 'close'. onGone is safe to run twice.
+  // 'exit' only forgets the process: the call site settles on 'close', which can arrive
+  // late or never (a grandchild holding stdio), so the time limit stays armed until the
+  // site settles (done) or the kill path runs. A kill after exit is a no-op (hasExited).
   proc.on("exit", onGone);
-  proc.on("close", onGone);
+  // 'close' too: some exits are only seen as 'close'. onGone is safe to run twice.
+  proc.on("close", () => {
+    onGone();
+    cleanup();
+  });
 
   const stop = (reason: string, then: (() => void) | undefined) => {
     if (finished) return;

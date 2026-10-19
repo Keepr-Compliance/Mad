@@ -183,9 +183,15 @@ describe("C8: the watchdog kills a STOPPED idevicebackup2 on macOS", () => {
     infoBehaviour = "off";
     const svc = newService();
     void svc.startBackup({ udid: UDID });
-    for (let i = 0; i < 10 && of("idevicebackup2").length === 0; i++) await flush();
+    // Wait on the spawn itself, not a turn count: the pre-spawn async steps take a
+    // variable number of turns on a slow runner (Windows CI flaked at 10).
+    let turns = 0;
+    while (of("idevicebackup2").length === 0 && turns < 500) {
+      await flush();
+      turns++;
+    }
     const backup = of("idevicebackup2")[0];
-    expect(backup).toBeDefined();
+    if (!backup) throw new Error(`idevicebackup2 was never spawned after ${turns} event-loop turns`);
 
     // No output at all: step the clock until the watchdog fires (past the 30 min window).
     let waited = 0;

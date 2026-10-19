@@ -165,6 +165,32 @@ describe("E: storage query (the incident)", () => {
     expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
     expect(onTimeout).not.toHaveBeenCalled();
   });
+
+  it("C9: the tool EXITS but 'close' never arrives: the query still settles at the limit", async () => {
+    held.add("ideviceinfo");
+    const onTimeout = jest.fn();
+    let settled = false;
+    let value: unknown = "pending";
+    void new DeviceDetectionService()
+      .getDeviceStorageInfo(UDID, { onTimeout })
+      .then((v) => {
+        settled = true;
+        value = v;
+      });
+    await flush();
+    const proc = child("ideviceinfo")!;
+    // A grandchild holds stdio open: 'exit' fires, 'close' does not.
+    proc.exitCode = 0;
+    proc.emit("exit", 0, null);
+    await flush();
+    expect(settled).toBe(false);
+    jest.advanceTimersByTime(IPHONE_QUERY_TIMEOUT_MS + 1000);
+    await flush();
+    expect(settled).toBe(true);
+    expect(value).toBeNull();
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(__liveIphoneToolCountForTests()).toBe(0);
+  });
 });
 
 describe("B: device listing", () => {
