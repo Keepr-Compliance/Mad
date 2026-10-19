@@ -64,11 +64,14 @@ jest.mock("../../contexts/NetworkContext", () => ({
 }));
 
 // Wrap Settings in PlatformProvider for tests
+// BACKLOG-3964: the Account tab's user (fictional fixture values).
+const ACCOUNT = { user: { id: "user-123", email: "avery@example.com", display_name: "Avery Example" }, provider: "google" };
+
 const renderSettings = async (props: { onClose: () => void; userId: string; onImportIphone?: () => void }) => {
   const result = render(
     <NotificationProvider>
       <PlatformProvider>
-        <Settings {...props} />
+        <Settings account={ACCOUNT} {...props} />
       </PlatformProvider>
     </NotificationProvider>
   );
@@ -172,11 +175,12 @@ describe("Settings", () => {
   });
 
   describe("Rendering", () => {
-    it("should render settings modal with title", async () => {
+    it("renders the Settings page (BACKLOG-3964: a page, one Back control, title in the app title bar)", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      // Responsive layout renders both mobile and desktop headers
-      expect(screen.getAllByText("Settings").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByTestId("settings-page")).toBeInTheDocument();
+      expect(screen.getAllByTestId("settings-close")).toHaveLength(1);
+      expect(screen.queryByRole("button", { name: /done/i })).toBeNull();
     });
 
     it("should show all settings sections", async () => {
@@ -833,7 +837,7 @@ describe("Settings", () => {
       render(
         <NotificationProvider>
           <PlatformProvider>
-            <Settings userId={mockUserId} onClose={mockOnClose} />
+            <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} />
           </PlatformProvider>
         </NotificationProvider>
       );
@@ -1044,7 +1048,7 @@ describe("Settings", () => {
       render(
         <NotificationProvider>
           <PlatformProvider>
-            <Settings userId={mockUserId} onClose={mockOnClose} />
+            <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} />
           </PlatformProvider>
         </NotificationProvider>
       );
@@ -1174,13 +1178,12 @@ describe("Settings", () => {
       }
     });
 
-    it("should call onClose when done button is clicked", async () => {
+    it("should call onClose when Back is clicked (BACKLOG-3964: replaces the Done footer)", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      const doneButton = screen.getByRole("button", { name: /done/i });
-      await userEvent.click(doneButton);
+      await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
-      expect(mockOnClose).toHaveBeenCalled();
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1231,9 +1234,9 @@ describe("Settings", () => {
 
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      // Should still render without crashing (responsive layout has mobile + desktop headers)
+      // Should still render without crashing
       await waitFor(() => {
-        expect(screen.getAllByText("Settings").length).toBeGreaterThanOrEqual(1);
+        expect(screen.getByTestId("settings-page")).toBeInTheDocument();
       });
     });
 
@@ -1293,7 +1296,7 @@ describe("Settings", () => {
     it("should have accessible buttons", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      expect(screen.getByRole("button", { name: /done/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
     });
   });
 
@@ -1612,7 +1615,7 @@ describe("Settings", () => {
         <NotificationProvider>
           <PlatformProvider>
             <IPhoneSyncProvider userId={mockUserId}>
-              <Settings userId={mockUserId} onClose={mockOnClose} />
+              <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} />
             </IPhoneSyncProvider>
           </PlatformProvider>
         </NotificationProvider>,
@@ -1770,7 +1773,7 @@ describe("Settings", () => {
       rerender(
         <NotificationProvider>
           <PlatformProvider>
-            <Settings userId={mockUserId} onClose={mockOnClose} />
+            <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} />
           </PlatformProvider>
         </NotificationProvider>
       );
@@ -1791,9 +1794,8 @@ describe("Settings", () => {
         expect(reindexButton).not.toBeDisabled();
       });
 
-      // Done button should remain enabled
-      const doneButton = screen.getByRole("button", { name: /done/i });
-      expect(doneButton).not.toBeDisabled();
+      // BACKLOG-3964: the "Done" footer is gone; Back closes the page and stays enabled offline.
+      expect(screen.getByTestId("settings-close")).not.toBeDisabled();
     });
   });
 
