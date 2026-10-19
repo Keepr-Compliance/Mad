@@ -217,9 +217,9 @@ export interface SuperviseOptions {
   timeoutMs?: number;
   /** Abort stops the tool at once (Cancel). */
   signal?: AbortSignal;
-  /** Called once, after the kill was issued, when the time limit ran out. */
+  /** Called once when the time limit ran out, just BEFORE the kill is issued. */
   onTimeout: () => void;
-  /** Called once, after the kill was issued, when `signal` aborted. */
+  /** Called once when `signal` aborted, just BEFORE the kill is issued. */
   onAbort?: () => void;
 }
 
@@ -258,8 +258,14 @@ export function superviseIphoneTool(proc: ChildProcess, opts: SuperviseOptions):
     if (finished) return;
     cleanup();
     killedByUs = true;
-    killIphoneToolTree(proc, { tool: opts.tool, reason });
-    then?.();
+    // The call site settles FIRST, then the kill goes out. The kill can make the
+    // process emit 'close' at once (and does, in jest fakes); the site must already
+    // count as settled so that close is ignored, not read as a failed run.
+    try {
+      then?.();
+    } finally {
+      killIphoneToolTree(proc, { tool: opts.tool, reason });
+    }
   };
 
   const onAbort = () => stop("cancel", opts.onAbort);
@@ -269,7 +275,7 @@ export function superviseIphoneTool(proc: ChildProcess, opts: SuperviseOptions):
   if (opts.signal) {
     if (opts.signal.aborted) {
       // Defer so the caller has its handlers attached before onAbort runs.
-      queueMicrotask(onAbort);
+      void Promise.resolve().then(onAbort);
     } else {
       opts.signal.addEventListener("abort", onAbort, { once: true });
     }
