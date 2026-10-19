@@ -44,3 +44,25 @@ the Super Admin as manager (a non-caller) and the payload must list the Super Ad
 am_check_caller_only and am_list_caller_only. The re-apply on keepr-test was refused by the MCP
 session ("Invalid or expired requestState"); keepr-test still holds the earlier body
 (ledger md5 36b07f4f, admin_save_deal d270b908). These controls are NOT RUN against the fix.
+
+RE-RUN AFTER THE FIX (founder "try again", same day):
+Re-applied the fixed file on keepr-test and set the 20261019030000 ledger statements to it in one call:
+ledger md5 801b5cfb8dc6a8c820ff883d00711c1a, length 11551 = file. admin_save_deal 1670cad5,
+admin_get_org_billing 99888431; _billing_save_deal 4471a965, admin_suspend_org 7e29986a,
+admin_reinstate_org 2ed6e29d unchanged.
+pr2a-controls.sql, 16 modes, one rolled-back call: base 26/26 PASS. Every mutant red:
+| am_check_caller_only | admin_save_deal 1670cad5->c0c228c7 | Sales save naming Super Admin as manager (+ audit, change log, payload, suspend/reinstate that depend on that deal) |
+| am_list_caller_only  | admin_get_org_billing 99888431->79a1d7e5 | view payload (Super Admin missing from the manager list) |
+| no_manage_check | ->8355af95 | nonstaff, support, exec saves; 2 no-deal checks |
+| no_cap | ->a99a62ff | Sales 1999; Sales deeper than approved; super over_cap |
+| cap_floor | ->0af58e82 | same three |
+| no_approve_path | ->d30409f2 | super 1999; Sales keeps approved; Sales deeper |
+| keep_current_any | ->b17b43a7 | Sales cannot go deeper than approved |
+| no_keep_current | ->0b15897b | Sales keeps approved price |
+| no_reason_check | ->ff7a8987 | reason null, blank, no-deal |
+| mode_hardcoded_test | ->c6ae4ab4 | live deal refused while dark |
+| live_unguarded | _billing_save_deal 4471a965->0ed634d5 | live deal refused while dark |
+| no_audit | ->2cf3cacb | audit row; super over_cap |
+| get_no_perm | admin_get_org_billing 99888431->bbfc66e3 | support view refused |
+| suspend_no_perm | admin_suspend_org 7e29986a->b394284f | exec/support suspend (+ Sales suspend, cascade) |
+| reinstate_no_perm | admin_reinstate_org 2ed6e29d->6ba81c2c | exec reinstate |
