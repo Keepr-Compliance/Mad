@@ -17,7 +17,8 @@ import type { AppStateMachine } from "../../state/types";
 import { NotificationProvider } from "../../../contexts/NotificationContext";
 import { useNotification } from "../../../hooks/useNotification";
 import { SupportWidget } from "../../../components/support/SupportWidget";
-import { zValue } from "../../../constants/zLayers";
+import { AboutSettings } from "../../../components/settings/AboutSettings";
+import { Z_CLASS, zValue } from "../../../constants/zLayers";
 
 jest.mock("../../../utils/platform", () => ({
   ...jest.requireActual("../../../utils/platform"),
@@ -40,6 +41,7 @@ jest.mock("../../hooks/useEmailSettingsCallbacks", () => ({
 /** Stub page: a button that raises a toast the way General's "test notification" does. */
 jest.mock("../../../components/Settings", () => {
   const React = jest.requireActual("react");
+  const { AboutSettings } = jest.requireActual("../../../components/settings/AboutSettings");
   const { useNotification: useNotif } = jest.requireActual("../../../hooks/useNotification");
   function StubSettings(props: { onClose: () => void }) {
     const { notify } = useNotif();
@@ -48,6 +50,7 @@ jest.mock("../../../components/Settings", () => {
         <button data-testid="settings-close" onClick={props.onClose}>
           Back
         </button>
+        <AboutSettings />
         <button data-testid="fire-toast" onClick={() => notify.success("Desktop notification sent!")}>
           test notification
         </button>
@@ -111,6 +114,47 @@ describe("Settings page stacking (BACKLOG-3964 slice 2 fix-up)", () => {
     expect(zOf(help)).toBeGreaterThan(zOf(screen.getByTestId("settings-layer")));
     expect(help).toBeVisible();
     expect(help.closest("[inert]")).toBeNull(); // not under the inert Dashboard container
+  });
+});
+
+describe("support form while Settings shows (BACKLOG-3964 slice 2 fix-up 2)", () => {
+  beforeEach(() => {
+    (window.api as unknown as Record<string, unknown>).support = {
+      collectDiagnostics: jest.fn().mockResolvedValue({ success: true, diagnostics: null }),
+      captureScreenshot: jest.fn().mockResolvedValue({ success: true, screenshot: null }),
+      getCategories: jest.fn().mockResolvedValue({ success: true, categories: [] }),
+      submitTicket: jest.fn().mockResolvedValue({ success: true, ticket_number: 1 }),
+    };
+    (window.api.auth as unknown as Record<string, unknown>).getCurrentUser = jest
+      .fn()
+      .mockResolvedValue({ success: true, user });
+  });
+
+  function expectFormAboveEverything(): void {
+    const form = screen.getByTestId("support-ticket-dialog");
+    const layer = screen.getByTestId("settings-layer");
+    const help = screen.getByRole("button", { name: "Open support dialog" });
+    expect(zOf(form)).toBeGreaterThan(zOf(layer));
+    expect(zOf(form)).toBeGreaterThan(zOf(help));
+    expect(zOf(form)).toBeLessThan(zValue(Z_CLASS.toast)); // a toast raised on submit still shows
+  }
+
+  it('opens above the Settings page and the "?" button when "?" is clicked', async () => {
+    render(<Harness />);
+    act(() => modal.openSettings());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open support dialog" }));
+    });
+    expectFormAboveEverything();
+  });
+
+  it("opens above the Settings page from Settings > About > Contact Support", async () => {
+    render(<Harness />);
+    act(() => modal.openSettings());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /contact support/i }));
+    });
+    expectFormAboveEverything();
   });
 });
 

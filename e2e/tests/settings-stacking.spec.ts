@@ -91,6 +91,19 @@ test.describe('Settings page stacking (BACKLOG-3964 S2 fix-up)', () => {
     ).toBe(true);
     await driver.screenshot('settings-toast-and-help');
 
+    // Click "?" while Settings shows: the support form opens and is topmost at its centre.
+    await page.locator(help).click();
+    const form = page.getByTestId('support-ticket-dialog');
+    await expect(form).toBeVisible({ timeout: 15_000 });
+    expect(
+      await isTopmostAtCentre(page, '[data-testid="support-ticket-dialog"]'),
+      'support form must not be covered by the Settings layer',
+    ).toBe(true);
+    await driver.screenshot('settings-support-form');
+    await page.keyboard.press('Escape');
+    await page.mouse.click(2, 2); // overlay click closes the form if Escape does not
+    await expect(form).toBeHidden({ timeout: 5_000 });
+
     // Title-bar initials while Settings shows: Settings closes, Profile is what the user sees.
     await page.getByTestId('nav-profile').click();
     await expect(page.getByTestId('settings-page')).toBeHidden();
