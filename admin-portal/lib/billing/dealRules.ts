@@ -88,9 +88,9 @@ export function checkPrice(args: {
   const pct = pctOff(listCents, priceCents);
   if (pct <= capPct) return { kind: 'within_cap', pct };
   if (canApprove) return { kind: 'approver', pct };
-  // Founder ruling: Sales may keep the exact deep price and lower the seats; raising the seats
-  // or lowering the price needs a Super Admin.
-  if (currentCents != null && priceCents === currentCents && currentSeats != null && seats <= currentSeats) {
+  // Founder ruling: Sales may keep an approved deep price or raise it toward list, and lower the
+  // seats; raising the seats or lowering the price needs a Super Admin.
+  if (currentCents != null && priceCents >= currentCents && currentSeats != null && seats <= currentSeats) {
     return { kind: 'kept', pct };
   }
   return { kind: 'needs_approval', pct };

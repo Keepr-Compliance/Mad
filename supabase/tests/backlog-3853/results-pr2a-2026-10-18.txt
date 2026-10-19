@@ -96,3 +96,19 @@ keepr-test, one rolled-back call, trimmed subset of pr2a-controls.sql (5 checks 
 base 5/5 PASS. sr_price_ge fe991d06->da1e0482 (MUTATION APPLIED): 1 red, C_SR3_sales_raise_still_deep_refused only.
 keep_current_any ->85f5331f: 3 red (cannot_go_deeper, keeps_price_changes_contact, SR3 raise). no_keep_current ->802e7f6e: 1 red (keeps_price_changes_contact).
 vitest saveDeal: added c(1800,false,1500,4,4) -> needs_approval. 13 tests base green; checkPrice === -> >= (MUTATION APPLIED, numstat 1/1): 1 failed, 12 passed; restored, numstat 0.
+
+SCOPE CHANGE (supersedes the test-only fix-up above): Sales may keep an approved deep price OR RAISE it toward list;
+lowering it, or raising the seats, still needs billing.approve. Keep-price match is now "new price >= approved price".
+Re-applied on keepr-test as CREATE OR REPLACE with the ledger statements set to the file in one call:
+ledger md5 131786ed52abc4d1825cd0627964b698, length 12133 = md5 -q / wc -c of the file; read back live. admin_save_deal f3ae35f5.
+New controls: C_SR3_sales_raise_still_deep_saved (1500c -> 1800c saved), C_SR3_sales_lower_deep_refused (1500c -> 1400c refused, price stays 1500).
+pr2a-controls.sql, 21 modes, one rolled-back call: base 37/37 PASS. Mutants (MUTATION APPLIED, md5 changed):
+| price_eq (>= -> =)            | f3ae35f5->405b1167 | C_SR3_sales_raise_still_deep_saved only |
+| price_le (>= -> <=)           | ->546887d9         | cannot_go_deeper, SR_raise_then_lower, SR3 lower, SR3 raise, super_raises_seats |
+| keep_current_any (check gone) | ->d4195536         | cannot_go_deeper, SR_raise_then_lower, SR3 lower, super_raises_seats |
+| no_keep_current               | ->8bc5d98e         | 7 |
+| no_seats_check                | ->671cd9d3         | raises_seats_refused, super_raises_seats |
+| no_active_filter              | ->88d04e38         | canceled_deal_price_not_kept |
+All other modes red as before (no_cap 8, cap_floor 7, sr_int_division 7, no_approve_path 14, no_manage_check 5, no_reason_check 3, no_audit 2,
+mode_hardcoded_test 1, live_unguarded 1, am_check_caller_only 7, am_list_caller_only 1, get_no_perm 1, suspend_no_perm 3, reinstate_no_perm 1).
+vitest billing-card-3853: 13/13 at the new code; checkPrice >= -> === : 1 failed (raise expects kept); >= -> <= : 1 failed (lower expects needs_approval); each restored, numstat 0.

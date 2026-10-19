@@ -87,7 +87,8 @@ describe('checkPrice mirrors the cap (list 2499, cap 20)', () => {
     expect(c(1999, false, 1999, 4, 5)).toBe('kept');            // same price, fewer seats
     expect(c(1999, false, 1999, 6, 5)).toBe('needs_approval');  // more seats
     expect(c(1998, false, 1999, 5, 5)).toBe('needs_approval');  // lower price
-    expect(c(1800, false, 1500, 4, 4)).toBe('needs_approval');  // raise, still past the cap
+    expect(c(1800, false, 1500, 4, 4)).toBe('kept');            // raise, still past the cap
+    expect(c(1400, false, 1500, 4, 4)).toBe('needs_approval');  // lower
     expect(c(2100, false, 1999, 5, 5)).toBe('within_cap');      // 15.97%, inside the cap anyway
     expect(c(1999, false, null, 5, null)).toBe('needs_approval'); // no live deal (or canceled)
     expect(c(1999, true, 1999, 9, 5)).toBe('approver');

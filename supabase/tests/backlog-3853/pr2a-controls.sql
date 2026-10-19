@@ -70,9 +70,11 @@ BEGIN
     WHEN 'no_approve_path' THEN RETURN pg_temp.mut_fn(s,
       $q$IF NOT public.has_permission(v_uid, 'billing.approve')$q$, 'IF true');
     WHEN 'keep_current_any' THEN RETURN pg_temp.mut_fn(s,
-      'p_unit_price_cents = v_current AND p_seats', 'p_unit_price_cents >= 0 AND p_seats');
-    WHEN 'sr_price_ge' THEN RETURN pg_temp.mut_fn(s,
-      'p_unit_price_cents = v_current AND p_seats', 'p_unit_price_cents >= v_current AND p_seats');
+      'p_unit_price_cents >= v_current AND p_seats', 'p_unit_price_cents >= 0 AND p_seats');
+    WHEN 'price_eq' THEN RETURN pg_temp.mut_fn(s,
+      'p_unit_price_cents >= v_current AND p_seats', 'p_unit_price_cents = v_current AND p_seats');
+    WHEN 'price_le' THEN RETURN pg_temp.mut_fn(s,
+      'p_unit_price_cents >= v_current AND p_seats', 'p_unit_price_cents <= v_current AND p_seats');
     WHEN 'no_keep_current' THEN RETURN pg_temp.mut_fn(s,
       'AND NOT (v_current IS NOT NULL AND', 'AND NOT (false AND');
     WHEN 'no_seats_check' THEN RETURN pg_temp.mut_fn(s,
@@ -116,7 +118,8 @@ BEGIN
     o_r uuid := gen_random_uuid();   -- is_test: reason / contact / account-manager refusals
     o_l uuid := gen_random_uuid();   -- NOT is_test: live deal while the switch is off
     o_c uuid := gen_random_uuid();   -- is_test: deep price on a deal that is then canceled
-    o_k uuid := gen_random_uuid();   -- is_test: approved 1500c, Sales tries 1800c (still past the cap)
+    o_k uuid := gen_random_uuid();   -- is_test: approved 1500c, Sales raises to 1800c (still past the cap) -> saved
+    o_m uuid := gen_random_uuid();   -- is_test: approved 1500c, Sales lowers to 1400c -> refused
     u_sales uuid := gen_random_uuid(); u_super uuid := gen_random_uuid(); u_exec uuid := gen_random_uuid();
     u_sup uuid := gen_random_uuid(); u_none uuid := gen_random_uuid();
     v_team uuid; s text; n int;
@@ -142,9 +145,10 @@ BEGIN
       (o_r, 'P3853A R', 'p3853a-r-' || left(o_r::text, 8), 10, true),
       (o_l, 'P3853A L', 'p3853a-l-' || left(o_l::text, 8), 10, false),
       (o_c, 'P3853A C', 'p3853a-c-' || left(o_c::text, 8), 10, true),
-      (o_k, 'P3853A K', 'p3853a-k-' || left(o_k::text, 8), 10, true);
+      (o_k, 'P3853A K', 'p3853a-k-' || left(o_k::text, 8), 10, true),
+      (o_m, 'P3853A M', 'p3853a-m-' || left(o_m::text, 8), 10, true);
     INSERT INTO public.organization_plans (organization_id, plan_id)
-    SELECT x, v_team FROM unnest(ARRAY[o_a, o_d, o_s, o_r, o_l, o_c, o_k]) x;
+    SELECT x, v_team FROM unnest(ARRAY[o_a, o_d, o_s, o_r, o_l, o_c, o_k, o_m]) x;
 
     -- ===== who may call =====
     s := pg_temp.call_as(u_none, format(q_save, o_r, 'test', 5, 2499, 'B', 'b@example.test', NULL, 'new deal', 'NULL'));
@@ -222,12 +226,18 @@ BEGIN
     r := r || jsonb_build_object('C_canceled_deal_price_not_kept', CASE WHEN pg_temp.j(s) ->> 'error' = 'discount_needs_approval'
       AND (SELECT status FROM public.org_deals WHERE organization_id = o_c) = 'canceled' THEN 'PASS' ELSE 'FAIL ' || s END);
 
-    -- Sales may not raise an approved deep price to one that is still past the cap (1500c = 39.98% off, 1800c = 27.97% off)
+    -- founder ruling: Sales may raise an approved deep price toward list even while still past the cap
+    -- (1500c = 39.98% off, 1800c = 27.97% off); lowering it needs approval
     s := pg_temp.call_as(u_super, format(q_save, o_k, 'test', 5, 1500, 'Cal', 'cal@example.test', NULL, 'approved deep', 'NULL'));
     r := r || jsonb_build_object('P0_raise_fixture_saved', CASE WHEN pg_temp.j(s) ->> 'success' = 'true' THEN 'PASS' ELSE 'FAIL ' || s END);
     s := pg_temp.call_as(u_sales, format(q_save, o_k, 'test', 5, 1800, 'Cal', 'cal@example.test', NULL, 'raise but still deep', '1'));
-    r := r || jsonb_build_object('C_SR3_sales_raise_still_deep_refused', CASE WHEN pg_temp.j(s) ->> 'error' = 'discount_needs_approval'
-      AND (SELECT unit_price_cents FROM public.org_deal_lines WHERE organization_id = o_k) = 1500 THEN 'PASS' ELSE 'FAIL ' || s END);
+    r := r || jsonb_build_object('C_SR3_sales_raise_still_deep_saved', CASE WHEN pg_temp.j(s) ->> 'success' = 'true'
+      AND (SELECT unit_price_cents FROM public.org_deal_lines WHERE organization_id = o_k) = 1800 THEN 'PASS' ELSE 'FAIL ' || s END);
+    s := pg_temp.call_as(u_super, format(q_save, o_m, 'test', 5, 1500, 'Cal', 'cal@example.test', NULL, 'approved deep', 'NULL'));
+    r := r || jsonb_build_object('P0_lower_fixture_saved', CASE WHEN pg_temp.j(s) ->> 'success' = 'true' THEN 'PASS' ELSE 'FAIL ' || s END);
+    s := pg_temp.call_as(u_sales, format(q_save, o_m, 'test', 5, 1400, 'Cal', 'cal@example.test', NULL, 'lower', '1'));
+    r := r || jsonb_build_object('C_SR3_sales_lower_deep_refused', CASE WHEN pg_temp.j(s) ->> 'error' = 'discount_needs_approval'
+      AND (SELECT unit_price_cents FROM public.org_deal_lines WHERE organization_id = o_m) = 1500 THEN 'PASS' ELSE 'FAIL ' || s END);
 
     -- ===== darkness: live deal while the switch is off =====
     s := pg_temp.call_as(u_super, format(q_save, o_l, 'live', 5, 2499, 'Bea', 'bea@example.test', NULL, 'live deal', 'NULL'));
