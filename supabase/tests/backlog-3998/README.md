@@ -39,16 +39,16 @@ After any body edit: `python3 pin_bodies.py` (re-pins this migration and the 399
 - Apply: migration + ledger row `20261016070000` + 3991 ledger statement. Live md5s equal the
   pins above. `users_own_oauth_pair` was then re-applied alone after its provider filter was
   added (ledger statement updated to file md5 `c991a57c`).
-- Controls: 29 / 29 green (C1, C2, C2b, C4-C8, C11, C11b, C12, C13, C13b, C15-C28).
+- Controls: 31 / 31 green (C1, C2, C2b, C4-C8, C11, C11b, C12, C13, C13b, C15-C30).
   First-run reds were harness defects, fixed: `session_replication_role` not settable (stale
   values are now written with the email trigger disabled inside the control's subtransaction);
   C19 compared booleans as `true` where `concat_ws` renders `t`; C21's SSO fixture used a
   provider the users table's check constraint refuses.
 - C14 (rollback, re-apply, read-back): md5s after re-apply equal the pins.
-- Body mutants: 40 applied; 39 red. M14 (metadata email restored in `handle_new_user`) stays
+- Body mutants: 42 applied; 41 red (M24: pair kept but the reset also runs on client UPDATE, reds only C29; M25: first of several unclaimed rows, reds only C30). M14 (metadata email restored in `handle_new_user`) stays
   green: the email trigger replaces the value on the same insert. Equivalent mutant.
 - State mutants: 8 applied; 6 red. S3 (update policy without WITH CHECK) stays green: with no
   WITH CHECK, Postgres applies the policy's USING expression to the new row, so the id move is
   refused either way; the explicit WITH CHECK states the same rule. S7 (email trigger without
   `OF id`) stays green: the id move is refused by the policy first.
-- Code mutants (`jest-mutants.py`): 7 / 7 applied and red.
+- Code mutants (`jest-mutants.py`): 8 / 8 applied and red (J8: SCIM lookup error not checked).

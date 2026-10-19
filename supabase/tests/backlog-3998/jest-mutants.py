@@ -23,9 +23,23 @@ MUTANTS = [
     ('J1', ROUTE, "  if (error.code !== 'P0002') {", "  if (!error.message?.includes('No user found')) {",
      'route: not-found recognised by message, not SQLSTATE', ROUTE_T),
     ('J2', ROUTE, "  if (error.code !== 'P0002') {", "  if (false) {", 'route: every RPC error becomes an invitation', ROUTE_T),
-    ('J3', SCIM, '''  const { data: existingId } = await supabaseAdmin.rpc("user_id_for_auth_email", {
-    p_email: email,
-  });
+    ('J3', SCIM, '''  const { data: existingId, error: lookupError } = await supabaseAdmin.rpc(
+    "user_id_for_auth_email",
+    { p_email: email },
+  );
+  if (lookupError) {
+    await logScimOperation(supabaseAdmin, {
+      organizationId: auth.orgId,
+      operation: "CREATE",
+      resourceType: "User",
+      externalId: externalId,
+      requestPayload: body,
+      responseStatus: 500,
+      errorMessage: "Failed to look up the person by sign-in email",
+      scimTokenId: auth.tokenId,
+    });
+    return scimError(500, "Failed to create user");
+  }
   const existingByEmail = typeof existingId === "string" ? { id: existingId } : null;
 ''', '''  const { data: existingByEmail } = await supabaseAdmin
     .from("users")
