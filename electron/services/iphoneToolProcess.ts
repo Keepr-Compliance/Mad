@@ -250,9 +250,9 @@ export function superviseIphoneTool(proc: ChildProcess, opts: SuperviseOptions):
     if (!killedByUs) noteExitedOnItsOwn(opts.tool);
     cleanup();
   };
-  // 'close' too: some exits are only seen as 'close'.
-  proc.once("exit", onGone);
-  proc.once("close", onGone);
+  // 'close' too: some exits are only seen as 'close'. onGone is safe to run twice.
+  proc.on("exit", onGone);
+  proc.on("close", onGone);
 
   const stop = (reason: string, then: (() => void) | undefined) => {
     if (finished) return;
