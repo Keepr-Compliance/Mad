@@ -14,7 +14,7 @@
  *  - Esc swallowed with Settings closed (listener attached unconditionally).
  *  - Dashboard reachable under Settings (no inert).
  */
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { AppShell } from "../../AppShell";
@@ -117,10 +117,7 @@ function Harness() {
     authProvider: "google",
     isTourActive: false,
     needsTermsAcceptance: false,
-    openProfile: jest.fn(),
     handleLogout: jest.fn(),
-    openAndroidSync: jest.fn(),
-    openIPhoneSync: jest.fn(),
     getPageTitle: () => "Dashboard",
     ...modal,
   } as unknown as AppStateMachine;

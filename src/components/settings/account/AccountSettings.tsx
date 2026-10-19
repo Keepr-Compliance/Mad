@@ -141,7 +141,7 @@ export function AccountSettings({ user, provider }: AccountSettingsProps) {
           </Row>
           {typeof transactionCount === "number" && (
             <Row label="Transactions">
-              {transactionCount} / {transactionLimit === Infinity || transactionLimit == null ? "Unlimited" : transactionLimit}
+              {transactionCount} / {transactionLimit === Infinity || typeof transactionLimit !== "number" ? "Unlimited" : transactionLimit}
             </Row>
           )}
           {onTrial && (

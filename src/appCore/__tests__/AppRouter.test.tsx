@@ -189,6 +189,7 @@ const createAppStateMock = (
   closeProfile: jest.fn(),
   openSettings: jest.fn(),
   closeSettings: jest.fn(),
+  clearSettingsTarget: jest.fn(),
   openTransactions: jest.fn(),
   closeTransactions: jest.fn(),
   openContacts: jest.fn(),
