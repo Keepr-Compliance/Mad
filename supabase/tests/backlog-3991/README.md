@@ -44,6 +44,7 @@ report in the error text.
     `proconfig = ARRAY['search_path=""']`.
 - After the fixes: base 137 / 137 green (measured as the BASE line of the first mutant batch).
 - Mutants, batch `S G` (21 body mutants): 21 / 21 applied and red.
-- Mutants, batch `N` + grant/definer + guard (29): NOT RUN. The call returned
-  `Invalid or expired requestState` and was not retried. `python3 compose.py N A- I- P- R- D`
-  writes it again.
+- Mutants, batch `N` (17 set_member_name body mutants): 17 / 17 applied and red.
+- Mutants, grant/definer (8) + guard (4): 12 / 12 applied and red. Applied is proven by the
+  changed proacl / prosecdef, or the changed guard md5.
+- Total: 50 / 50 applied, 50 / 50 caught. Base 137 / 137 green before every batch.
