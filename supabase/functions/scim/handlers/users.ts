@@ -340,11 +340,26 @@ export async function handleCreateUser(
     }
   }
 
-  const { data: existingByEmail } = await supabaseAdmin
-    .from("users")
-    .select("id")
-    .eq("email", email)
-    .maybeSingle();
+  // BACKLOG-3998: the account whose sign-in (auth.users) email matches; an account not
+  // yet signed in (provisioned row) by its stored email. NULL when ambiguous.
+  const { data: existingId, error: lookupError } = await supabaseAdmin.rpc(
+    "user_id_for_auth_email",
+    { p_email: email },
+  );
+  if (lookupError) {
+    await logScimOperation(supabaseAdmin, {
+      organizationId: auth.orgId,
+      operation: "CREATE",
+      resourceType: "User",
+      externalId: externalId,
+      requestPayload: body,
+      responseStatus: 500,
+      errorMessage: "Failed to look up the person by sign-in email",
+      scimTokenId: auth.tokenId,
+    });
+    return scimError(500, "Failed to create user");
+  }
+  const existingByEmail = typeof existingId === "string" ? { id: existingId } : null;
 
   if (existingByEmail) {
     // Check if this user is already a member of this org

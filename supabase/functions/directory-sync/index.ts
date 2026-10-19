@@ -36,6 +36,7 @@ import {
   resolveRole,
   extractGroupRoleMapping,
 } from "../_shared/groupRoleMapper.ts";
+import { placeDirectoryUser } from "./placement.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -821,12 +822,15 @@ async function syncOrganization(
         continue;
       }
 
-      // New user -- check if they exist in the users table by email
-      const { data: existingUser } = await supabaseAdmin
-        .from("users")
-        .select("id")
-        .eq("email", providerUser.email)
-        .maybeSingle();
+      // New member -- is this an existing Keepr person (by sign-in email)?
+      const placement = await placeDirectoryUser(supabaseAdmin, orgId, providerUser.email);
+      if (placement.kind === "skip") {
+        console.log(
+          `[directory-sync] Org ${orgId}: not adding ${providerUser.email}: ${placement.reason}`,
+        );
+        continue;
+      }
+      const existingUser = placement.kind === "add" ? { id: placement.userId } : null;
 
       if (existingUser) {
         // User exists but not in this org -- add membership
