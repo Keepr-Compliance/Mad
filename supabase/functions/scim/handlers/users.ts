@@ -340,11 +340,12 @@ export async function handleCreateUser(
     }
   }
 
-  const { data: existingByEmail } = await supabaseAdmin
-    .from("users")
-    .select("id")
-    .eq("email", email)
-    .maybeSingle();
+  // BACKLOG-3998: the account whose sign-in (auth.users) email matches; an account not
+  // yet signed in (provisioned row) by its stored email. NULL when ambiguous.
+  const { data: existingId } = await supabaseAdmin.rpc("user_id_for_auth_email", {
+    p_email: email,
+  });
+  const existingByEmail = typeof existingId === "string" ? { id: existingId } : null;
 
   if (existingByEmail) {
     // Check if this user is already a member of this org

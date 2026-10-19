@@ -46,6 +46,11 @@ interface FakeOpts {
   full?: boolean;
   /** Users ids that have an auth.users row (existing Keepr accounts). */
   authIds?: string[];
+  /**
+   * Sign-in (auth.users) email per user id, where it differs from users.email. An id in
+   * authIds without an entry here signs in with its users.email.
+   */
+  authEmails?: Record<string, string>;
   /** Force an error on the next write to a table/op. */
   failWrite?: { table: string; op: 'insert' | 'update' | 'delete'; error: Err };
 }
@@ -172,7 +177,31 @@ function makeDb(tables: Tables, opts: FakeOpts = {}) {
     return b;
   }
 
-  return { client: { from, rpc: async () => ({ data: null, error: null }) }, writes, tables };
+  // user_id_for_auth_email (migration 20261016070000), transcribed: the auth-backed
+  // account whose sign-in email matches (NULL if more than one); with none, a users row
+  // with no auth record whose stored email matches (NULL if more than one).
+  const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+  async function rpc(fn: string, args: Record<string, unknown>) {
+    rpcCalls.push({ fn, args });
+    if (fn !== 'user_id_for_auth_email') return { data: null, error: null };
+    const e = String(args.p_email ?? '').trim().toLowerCase();
+    const authIds = opts.authIds ?? [];
+    const users = tables.users ?? [];
+    const authHits = authIds.filter((id) => {
+      const signIn = opts.authEmails?.[id] ?? users.find((u) => u.id === id)?.email;
+      return typeof signIn === 'string' && signIn.trim().toLowerCase() === e;
+    });
+    if (authHits.length > 1) return { data: null, error: null };
+    if (authHits.length === 1) {
+      return { data: users.some((u) => u.id === authHits[0]) ? authHits[0] : null, error: null };
+    }
+    const rows = users.filter(
+      (u) => !authIds.includes(String(u.id)) && String(u.email ?? '').trim().toLowerCase() === e,
+    );
+    return { data: rows.length === 1 ? rows[0].id : null, error: null };
+  }
+
+  return { client: { from, rpc }, writes, tables, rpcCalls };
 }
 
 // ---------------------------------------------------------------------------
@@ -563,5 +592,28 @@ describe('DELETE', () => {
     const res = await handleDeleteUser('u-p', AUTH as never, db.client as never);
     expect(res.status).toBe(500);
     expect(t.users.find((u) => u.id === 'u-p')?.suspended_at).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3998: the existing person is found by sign-in email, not by users.email
+// ---------------------------------------------------------------------------
+
+describe('POST existing person: lookup by sign-in email (BACKLOG-3998)', () => {
+  it('asks user_id_for_auth_email with the userName and never filters users by email', async () => {
+    const t = baseTables({ users: [...baseTables().users.filter((u) => u.id !== 'u-p'), { id: 'u-q', email: 'q@example.test' }] });
+    const db = makeDb(t, { authIds: ['u-q'] });
+    const res = await handleCreateUser(postReq('Q@example.test'), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(201);
+    expect(db.rpcCalls).toEqual([{ fn: 'user_id_for_auth_email', args: { p_email: 'q@example.test' } }]);
+    expect(memberWrites(db.writes)[0].payload).toMatchObject({ user_id: 'u-q' });
+  });
+
+  it('a users row holding the address whose sign-in email differs is not that person', async () => {
+    const t = baseTables({ users: [...baseTables().users.filter((u) => u.id !== 'u-p'), { id: 'u-x', email: 'q@example.test' }] });
+    const db = makeDb(t, { authIds: ['u-x'], authEmails: { 'u-x': 'someone-else@example.test' } });
+    await handleCreateUser(postReq('q@example.test'), AUTH as never, db.client as never, BASE, deps().d);
+    expect(memberWrites(db.writes).some((w) => w.payload?.user_id === 'u-x')).toBe(false);
+    expect(userWrites(db.writes).some((w) => w.rows.some((r) => r.id === 'u-x'))).toBe(false);
   });
 });
