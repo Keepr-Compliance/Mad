@@ -1,0 +1,36 @@
+BACKLOG-3853 PR-2A controls, keepr-test, 2026-10-18.
+
+Migration 20261019030000_backlog_3853_admin_save_deal.sql applied: file + ledger row in one call.
+Ledger md5(statements[1]) 36b07f4ff1d2ffacb69611c3337dc34f, length 10924 = md5 -q / wc -c of the file.
+After apply: admin_save_deal d270b908, admin_get_org_billing 90abe742; PR-1 bodies unchanged
+(_billing_save_deal 4471a965, admin_suspend_org 7e29986a, admin_reinstate_org 2ed6e29d).
+EXECUTE on both new functions: authenticated + service_role only (no anon, no PUBLIC).
+
+Dry run first (migration + controls in one rolled-back call): base 26/26; 12 mutants red;
+mode_hardcoded_test did not apply (2 matches) -> mutant string widened to include the next line.
+
+Run after apply (pr2a-controls.sql, one rolled-back call, 14 modes, exact-once replace + md5 change):
+base 26/26 PASS, 0 fixture rows left (orgs P3853A*, users p3853a-*, org_deals all 0).
+
+| mutant (likely wrong build)                  | md5 change            | red |
+| no_manage_check (no billing.manage check)    | admin_save_deal d270b908->b537a7ea | nonstaff, support, exec saves; no-deal checks |
+| no_cap (cap not enforced)                    | ->d311a4ef | Sales 1999 refused; Sales deeper than approved; super over_cap flag |
+| cap_floor (floor(pct) > cap)                 | ->29537d89 | same three |
+| no_approve_path (Super Admin refused too)    | ->9b2e2da4 | Super Admin 1999; Sales keeps approved; Sales deeper |
+| keep_current_any (any price on an existing deal) | ->c9553bf4 | Sales cannot go deeper than approved |
+| no_keep_current (approved price blocks Sales edits) | ->e3fa133a | Sales keeps approved price |
+| no_reason_check                              | ->d183279e | reason null, reason blank, no-deal after input refusals |
+| mode_hardcoded_test (caller mode ignored)    | ->aeaed631 | live deal refused while dark |
+| live_unguarded (PR-1 live check removed)     | _billing_save_deal 4471a965->0ed634d5 | live deal refused while dark |
+| no_audit (no admin_audit_logs row)           | ->f041b04e | audit row with reason; super over_cap |
+| get_no_perm (read without billing.view)      | admin_get_org_billing 90abe742->ebf9977a | support view refused |
+| suspend_no_perm                              | admin_suspend_org 7e29986a->b394284f | exec/support suspend refused (+ Sales suspend: exec already suspended it) |
+| reinstate_no_perm                            | admin_reinstate_org 2ed6e29d->6ba81c2c | exec reinstate refused |
+
+vitest (admin-portal/__tests__/billing-card-3853, 12 tests), each mutation exact-once, git numstat 1 1, restored with git checkout after a commit:
+| page_gate_removed (card for any billing.view user) | 1 failed: hidden while off and not test |
+| visibility_live_only (is_test ignored)       | 1 failed: shown for a test org |
+| mode_defaults_test (missing STRIPE_MODE -> test) | 1 failed: refuses when STRIPE_MODE is missing |
+| action_mode_hardcoded ('test' always sent)   | 1 failed: passes STRIPE_MODE=live |
+| readout_cap_floor                            | 1 failed: sweeps the boundary |
+Restored: 12 passed.
