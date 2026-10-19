@@ -43,6 +43,8 @@ MUTANTS = [
      'directory sync: this organization counted as another', PLACE_T),
     ('J7', PLACE, '  if (orgError || otherOrgs.length !== otherOrgIds.length) {', '  if (orgError) {',
      'directory sync: missing organization row not treated as a failed read', PLACE_T),
+    ('J8', SCIM, '  if (lookupError) {\n    await logScimOperation(', '  if (false) {\n    await logScimOperation(',
+     'SCIM: lookup error not checked (read as no such person)', SCIM_T),
 ]
 
 
