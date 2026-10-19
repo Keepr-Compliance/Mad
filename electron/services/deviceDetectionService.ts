@@ -15,6 +15,10 @@ import { isWindowsArm64 } from "../utils/windowsArm64";
 import * as Sentry from "@sentry/electron/main";
 import { iOSDevice, DeviceStorageInfo } from "../types/device";
 import { getCommand, canUseLibimobiledevice } from "./libimobiledeviceService";
+import { checkToolFilesForBlock, detectToolBlock, keeprInstallFolder } from "./iphoneToolBlock";
+import { formatToolBlockedError } from "./diagnostics/userFacingErrors";
+import { superviseIphoneTool, IPHONE_QUERY_TIMEOUT_MS } from "./iphoneToolProcess";
+import type { ToolBlock } from "../types/backup";
 import { validateDeviceUdid, isValidDeviceUdid, ValidationError } from "../utils/validation";
 
 const execAsync = promisify(exec);
@@ -178,6 +182,8 @@ export class DeviceDetectionService extends EventEmitter {
   private autoPairAttempted: Set<string> = new Set();
   /** BACKLOG-1621: Whether we've already emitted tools-missing and backed off polling */
   private toolsMissingEmitted: boolean = false;
+  /** BACKLOG-3996: a timed-out device listing is logged once per session, not per poll. */
+  private listTimeoutLogged = false;
   /** BACKLOG-1621: Current polling interval (may be elevated when tools are missing) */
   private currentPollIntervalMs: number = MIN_POLL_INTERVAL_MS;
   /** BACKLOG-1627: Track trust-pending devices with last-attempt timestamp for back-off */
@@ -222,10 +228,28 @@ export class DeviceDetectionService extends EventEmitter {
       return false;
     }
 
+    // BACKLOG-3953: a removed tool file is named here. Through the shell below it read as
+    // "not recognized", which this method cached as "no tools" for the whole session.
+    const fileBlock = checkToolFilesForBlock("idevice_id");
+    if (fileBlock) {
+      this.handleToolBlock(fileBlock);
+      return false;
+    }
+
     try {
       const ideviceIdCmd = getCommand("idevice_id");
       log.info(`[DeviceDetection] Checking libimobiledevice at: ${ideviceIdCmd}`);
-      await execAsync(`"${ideviceIdCmd}" --version`);
+      // BACKLOG-3996: spawned directly, no shell (the shell made cmd.exe the child and
+      // idevice_id a grandchild), and under the time limit. A timed-out check is NOT
+      // cached: the next check runs it again.
+      const probe = await this.runVersionProbe(ideviceIdCmd);
+      if (probe === "timeout") {
+        log.warn(
+          `[DeviceDetection] idevice_id --version did not answer within ${IPHONE_QUERY_TIMEOUT_MS / 1000}s; treating tools as unavailable for this check only`,
+        );
+        return false;
+      }
+      if (probe !== "ok") throw probe;
       this.libimobiledeviceAvailable = true;
 
       // BACKLOG-1621: Tools became available after being missing — resume
@@ -246,6 +270,55 @@ export class DeviceDetectionService extends EventEmitter {
       );
       return false;
     }
+  }
+
+  /**
+   * BACKLOG-3996: `idevice_id --version`. "ok" on exit 0, "timeout" when it did not
+   * finish within the time limit (it is killed), otherwise the failure to rethrow.
+   */
+  private runVersionProbe(cmd: string): Promise<"ok" | "timeout" | Error> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (v: "ok" | "timeout" | Error) => {
+        if (settled) return;
+        settled = true;
+        supervision?.done();
+        resolve(v);
+      };
+      let proc: ReturnType<typeof spawn>;
+      try {
+        proc = spawn(cmd, ["--version"], { windowsHide: true });
+      } catch (spawnError) {
+        resolve(spawnError instanceof Error ? spawnError : new Error(String(spawnError)));
+        return;
+      }
+      const supervision = superviseIphoneTool(proc, {
+        tool: "idevice_id",
+        onTimeout: () => finish("timeout"),
+      });
+      proc.on("error", (err) => finish(err));
+      proc.on("close", (code) => {
+        finish(code === 0 ? "ok" : new Error(`idevice_id --version exited with code ${code}`));
+      });
+    });
+  }
+
+  /**
+   * BACKLOG-3953: an iPhone tool never started (Windows). Same back-off as tools-missing
+   * — `toolsMissingEmitted` makes the availability check run again on every slow poll,
+   * so restoring the files clears it through `tools-available` — but a different event,
+   * because "install Apple's tools" is the wrong advice for a removed file.
+   */
+  private handleToolBlock(block: ToolBlock): void {
+    this.libimobiledeviceAvailable = false;
+    if (this.toolsMissingEmitted) return;
+    this.toolsMissingEmitted = true;
+    log.warn(
+      `[DeviceDetection] iPhone tool blocked (${block.kind}, ${block.tool}). ` +
+        "Emitting tools-blocked and backing off polling.",
+    );
+    this.emit("tools-blocked", { userError: formatToolBlockedError(keeprInstallFolder()) });
+    this.backOffPolling();
   }
 
   /**
@@ -824,20 +897,61 @@ export class DeviceDetectionService extends EventEmitter {
     return new Promise((resolve) => {
       const ideviceIdCmd = getCommand("idevice_id");
       // Don't log every poll - too noisy (runs every 2 seconds)
-      const proc = spawn(ideviceIdCmd, ["-l"]);
+      // BACKLOG-3953: spawn() THROWS on Windows for EPERM / UNKNOWN; that used to be an
+      // unhandled rejection of this promise, with nothing shown to the user.
+      let proc: ReturnType<typeof spawn>;
+      try {
+        proc = spawn(ideviceIdCmd, ["-l"]);
+      } catch (spawnError) {
+        log.error("[DeviceDetection] Could not start idevice_id:", spawnError);
+        const block = detectToolBlock("idevice_id", { error: spawnError });
+        if (block) this.handleToolBlock(block);
+        resolve({ udids: [], ok: false });
+        return;
+      }
       let stdout = "";
       let stderr = "";
 
-      proc.stdout.on("data", (data) => {
+      // BACKLOG-3996: time limit. A listing that never answered used to hold the poll
+      // forever (`isPolling` never cleared, so detection stopped for the session). A
+      // timed-out listing is UNKNOWN (ok:false), never "no devices" — the unplug confirm
+      // reads ok:true with no UDIDs as "unplugged" and would cancel a running backup.
+      let spawnFailed = false;
+      let timedOut = false;
+      const supervision = superviseIphoneTool(proc, {
+        tool: "idevice_id",
+        onTimeout: () => {
+          timedOut = true;
+          if (!this.listTimeoutLogged) {
+            this.listTimeoutLogged = true;
+            log.warn(
+              `[DeviceDetection] idevice_id -l did not answer within ${IPHONE_QUERY_TIMEOUT_MS / 1000}s; stopped it (logged once per session)`,
+            );
+          }
+          resolve({ udids: [], ok: false });
+        },
+      });
+
+      proc.stdout?.on("data", (data) => {
         stdout += data.toString();
       });
 
-      proc.stderr.on("data", (data) => {
+      proc.stderr?.on("data", (data) => {
         stderr += data.toString();
       });
 
       proc.on("close", (code) => {
+        supervision.done();
+        if (spawnFailed || timedOut) {
+          // BACKLOG-3953: the 'error' handler below already resolved this poll.
+          // BACKLOG-3996: or the time limit did; the killed process's exit means nothing.
+          return;
+        }
         if (code !== 0) {
+          // BACKLOG-3953: only the DLL-not-found exit with a stat miss counts here;
+          // every other exit (including -1 "Unable to retrieve device list") does not.
+          const block = detectToolBlock("idevice_id", { exitCode: code });
+          if (block) this.handleToolBlock(block);
           if (stderr.trim()) {
             log.debug(`[DeviceDetection] idevice_id stderr: ${stderr.trim()}`);
             Sentry.addBreadcrumb({
@@ -903,6 +1017,9 @@ export class DeviceDetectionService extends EventEmitter {
       });
 
       proc.on("error", (err) => {
+        supervision.done();
+        if (timedOut) return;
+        spawnFailed = true;
         log.error("[DeviceDetection] Failed to spawn idevice_id:", err);
         Sentry.addBreadcrumb({
           category: "iphone.detection",
@@ -911,8 +1028,12 @@ export class DeviceDetectionService extends EventEmitter {
           data: { platform: process.platform },
         });
 
-        // BACKLOG-1621: Detect ENOENT (executable not found) and mark tools unavailable
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        // BACKLOG-3953: a removed file or a refused launch is named as a block (Windows).
+        const block = detectToolBlock("idevice_id", { error: err });
+        if (block) {
+          this.handleToolBlock(block);
+        } else if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          // BACKLOG-1621: Detect ENOENT (executable not found) and mark tools unavailable
           this.libimobiledeviceAvailable = false;
           if (!this.toolsMissingEmitted) {
             this.toolsMissingEmitted = true;
@@ -969,6 +1090,19 @@ export class DeviceDetectionService extends EventEmitter {
       const proc = spawn(ideviceinfoCmd, ["-u", validatedUdid]);
       let stdout = "";
       let stderr = "";
+      // BACKLOG-3996: time limit. The message deliberately carries none of the strings
+      // parseTrustError reads as a trust state.
+      let settled = false;
+      const supervision = superviseIphoneTool(proc, {
+        tool: "ideviceinfo",
+        onTimeout: () => {
+          settled = true;
+          log.warn(
+            `[DeviceDetection] ideviceinfo (device info) did not answer within ${IPHONE_QUERY_TIMEOUT_MS / 1000}s; stopped it`,
+          );
+          reject(new Error(`ideviceinfo timed out after ${IPHONE_QUERY_TIMEOUT_MS / 1000}s`));
+        },
+      });
 
       proc.stdout.on("data", (data) => {
         stdout += data.toString();
@@ -979,6 +1113,9 @@ export class DeviceDetectionService extends EventEmitter {
       });
 
       proc.on("close", (code) => {
+        supervision.done();
+        if (settled) return;
+        settled = true;
         if (code !== 0) {
           // BACKLOG-1354: Breadcrumb when ideviceinfo fails for a specific device
           Sentry.addBreadcrumb({
@@ -1007,6 +1144,9 @@ export class DeviceDetectionService extends EventEmitter {
       });
 
       proc.on("error", (err) => {
+        supervision.done();
+        if (settled) return;
+        settled = true;
         Sentry.addBreadcrumb({
           category: "iphone.detection",
           message: `Failed to spawn ideviceinfo: ${err.message}`,
@@ -1041,11 +1181,27 @@ export class DeviceDetectionService extends EventEmitter {
       const proc = spawn(idevicepairCmd, ["pair", "-u", validatedUdid]);
       let stdout = "";
       let stderr = "";
+      // BACKLOG-3996: time limit. `pair` returns at once with a trust message; it does
+      // not wait for the user to tap Trust.
+      let settled = false;
+      const supervision = superviseIphoneTool(proc, {
+        tool: "idevicepair",
+        onTimeout: () => {
+          settled = true;
+          log.warn(
+            `[DeviceDetection] idevicepair did not answer within ${IPHONE_QUERY_TIMEOUT_MS / 1000}s; stopped it`,
+          );
+          resolve({ success: false, needsTrust: false, error: "timeout" });
+        },
+      });
 
       proc.stdout.on("data", (data) => { stdout += data.toString(); });
       proc.stderr.on("data", (data) => { stderr += data.toString(); });
 
       proc.on("close", (code) => {
+        supervision.done();
+        if (settled) return;
+        settled = true;
         const output = (stdout + stderr).toLowerCase();
         if (code === 0 && output.includes("success")) {
           log.info(`[DeviceDetection] Pairing successful for device: ${validatedUdid}`);
@@ -1060,6 +1216,9 @@ export class DeviceDetectionService extends EventEmitter {
       });
 
       proc.on("error", (err) => {
+        supervision.done();
+        if (settled) return;
+        settled = true;
         log.error("[DeviceDetection] Failed to spawn idevicepair:", err);
         resolve({ success: false, needsTrust: false, error: err.message });
       });
@@ -1185,8 +1344,14 @@ export class DeviceDetectionService extends EventEmitter {
    *
    * SECURITY (TASK-601): UDID is validated before use in spawn() to prevent
    * command injection.
+   *
+   * BACKLOG-3996: the query has a time limit and stops when `options.signal` aborts
+   * (Cancel). Either way it resolves null; `onTimeout` says which null was a time-out.
    */
-  async getDeviceStorageInfo(udid: string): Promise<DeviceStorageInfo | null> {
+  async getDeviceStorageInfo(
+    udid: string,
+    options: { signal?: AbortSignal; onTimeout?: () => void } = {},
+  ): Promise<DeviceStorageInfo | null> {
     try {
       // SECURITY: Validate UDID before spawning process
       let validatedUdid: string;
@@ -1216,6 +1381,26 @@ export class DeviceDetectionService extends EventEmitter {
         // SECURITY: validatedUdid has been validated
         const startedAt = Date.now();
         const proc = spawn(ideviceinfoCmd, ["-u", validatedUdid, "-q", "com.apple.disk_usage"]);
+        // BACKLOG-3996: time limit + Cancel. Before this a held query was waited on for
+        // as long as it was held, and Cancel left it running.
+        let settled = false;
+        const supervision = superviseIphoneTool(proc, {
+          tool: "ideviceinfo",
+          signal: options.signal,
+          onTimeout: () => {
+            settled = true;
+            log.warn(
+              `[DeviceDetection] [STORAGE-QUERY] device=${deviceTag} timed out after ${IPHONE_QUERY_TIMEOUT_MS}ms firstByteMs=${firstByteMs ?? "none"}; stopped it`,
+            );
+            options.onTimeout?.();
+            resolve(null);
+          },
+          onAbort: () => {
+            settled = true;
+            log.info(`[DeviceDetection] [STORAGE-QUERY] device=${deviceTag} cancelled; stopped it`);
+            resolve(null);
+          },
+        });
         let stdout = "";
         let stderr = "";
         // BACKLOG-3422: byte counts come off the Buffer chunks, NOT off `stdout.length`,
@@ -1259,6 +1444,11 @@ export class DeviceDetectionService extends EventEmitter {
           log.info(
             `[DeviceDetection] [STORAGE-QUERY] device=${deviceTag} elapsedMs=${Date.now() - startedAt} firstByteMs=${firstByteMs ?? "none"} exitCode=${code} signal=${signal ?? "none"} stdoutBytes=${stdoutBytes} stderrBytes=${stderrBytes}`,
           );
+          supervision.done();
+          // BACKLOG-3996: already settled by the time limit or Cancel. The line above is
+          // still written (it records the kill); nothing else runs.
+          if (settled) return;
+          settled = true;
 
           if (code !== 0) {
             log.warn(`[DeviceDetection] Failed to get storage info: ${stderr}`);
@@ -1294,6 +1484,9 @@ export class DeviceDetectionService extends EventEmitter {
         });
 
         proc.on("error", (err) => {
+          supervision.done();
+          if (settled) return;
+          settled = true;
           log.error("[DeviceDetection] Failed to spawn ideviceinfo for storage:", err);
           resolve(null);
         });

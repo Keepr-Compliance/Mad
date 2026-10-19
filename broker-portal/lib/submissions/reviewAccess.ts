@@ -19,6 +19,8 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
+import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
+import { FULL_PORTAL_ROLES } from '@/lib/auth/membership';
 
 type ServerClient = Awaited<ReturnType<typeof createClient>>;
 
@@ -110,6 +112,9 @@ export async function requireSubmissionReviewer(submissionId: string): Promise<S
   if (!row?.organization_id) return null;
 
   if (!(await isReviewer(supabase, row.organization_id))) return null;
+  // BACKLOG-3917: status allow-list + licence on the caller's row in that
+  // organization. The RPC checks the status too; the licence is app-only.
+  if (!(await requireActiveOrgRole(supabase, user.id, row.organization_id, FULL_PORTAL_ROLES)).ok) return null;
 
   return {
     supabase,

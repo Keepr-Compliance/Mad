@@ -2,6 +2,9 @@
 -- committed PostgREST probe (run.sh apply). For the venue only -- never
 -- production.
 --
+-- 0. Refuses unless run.sh apply's marker (harness_3473.apply_marker, written by
+--    lib/apply-guard.sql together with file 1) exists: teardown runs only after
+--    a verified apply, so lib/rpc-before.sql is this venue's own pre-apply state.
 -- 1. Refuses when migration 3 has been applied here (its three dropped
 --    columns cannot be restored with their data), and when any of the seven
 --    new tables still holds rows (run probe-cleanup first; nothing here may
@@ -9,9 +12,11 @@
 -- 2. Drops the two triggers on organization_plans, restores the three read
 --    functions VERBATIM from lib/rpc-before.sql, drops the seven tables and
 --    the six new functions, the transaction_checklists feature and plan rows,
---    submission_attachments.local_attachment_id, and the two history rows.
+--    submission_attachments.local_attachment_id, the two history rows, and the
+--    apply marker.
 -- 3. Re-hashes the three read functions and raises (rolling everything back)
---    unless each equals production's md5(pg_get_functiondef) from 2026-09-21.
+--    unless each equals the pre-3473 md5(pg_get_functiondef) pins (production
+--    as of 2026-09-21; historical).
 -- Afterwards run.sh gate must re-match.
 
 BEGIN;
@@ -23,6 +28,12 @@ DECLARE
   t text;
   n bigint;
 BEGIN
+  IF to_regclass('harness_3473.apply_marker') IS NULL THEN
+    RAISE EXCEPTION 'teardown refused: no apply marker on this venue; teardown runs only after run.sh apply';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM harness_3473.apply_marker) THEN
+    RAISE EXCEPTION 'teardown refused: the apply marker table is empty';
+  END IF;
   IF (SELECT count(*) FROM information_schema.columns
        WHERE table_schema = 'public' AND table_name = 'organizations'
          AND column_name IN ('require_dual_approval', 'auto_reject_incomplete', 'minimum_attachment_types')) <> 3 THEN
@@ -70,6 +81,8 @@ ALTER TABLE public.submission_attachments DROP COLUMN IF EXISTS local_attachment
 
 DELETE FROM supabase_migrations.schema_migrations WHERE version IN ('20260921101756', '20260921101757');
 
+DROP SCHEMA harness_3473 CASCADE;
+
 DO $verify$
 DECLARE
   r record;
@@ -80,7 +93,7 @@ BEGIN
     ('public.broker_get_org_features(uuid)',   '60c63f216f5a10ab804e90f74d7d8284')
   ) v(sig, pin) LOOP
     IF md5(pg_get_functiondef(to_regprocedure(r.sig))) IS DISTINCT FROM r.pin THEN
-      RAISE EXCEPTION 'teardown: % restored as %, expected production %',
+      RAISE EXCEPTION 'teardown: % restored as %, expected pre-3473 %',
         r.sig, md5(pg_get_functiondef(to_regprocedure(r.sig))), r.pin;
     END IF;
   END LOOP;
@@ -88,7 +101,7 @@ BEGIN
               AND tgname IN ('reject_feature_override_above_tier', 'seed_checklists_on_plan_write')) THEN
     RAISE EXCEPTION 'teardown: a BACKLOG-3473 trigger is still on organization_plans';
   END IF;
-  RAISE NOTICE 'teardown verified: the three read functions hash to production''s bodies';
+  RAISE NOTICE 'teardown verified: the three read functions hash to the pre-3473 bodies';
 END
 $verify$;
 

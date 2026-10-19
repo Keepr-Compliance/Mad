@@ -192,6 +192,12 @@ export function registerDeviceHandlers(_mainWindow: BrowserWindow): void {
     sendToMainWindow("device:tools-missing");
   });
 
+  // BACKLOG-3953: Forward tools-blocked (an iPhone tool never started) with its message
+  deviceDetectionService.on("tools-blocked", (data: { userError: unknown }) => {
+    log.warn("[DeviceHandlers] Forwarding tools-blocked event to renderer");
+    sendToMainWindow("device:tools-blocked", data);
+  });
+
   // BACKLOG-1621: Forward tools-available event when tools are installed mid-session
   deviceDetectionService.on("tools-available", () => {
     log.info("[DeviceHandlers] Forwarding tools-available event to renderer");

@@ -18,6 +18,7 @@ import type { Role } from '@/lib/types/users';
 interface BulkEditRoleModalProps {
   isOpen: boolean;
   onClose: () => void;
+  organizationId: string;
   memberIds: string[];
   memberCount: number;
   currentUserRole: Role;
@@ -26,6 +27,7 @@ interface BulkEditRoleModalProps {
 export default function BulkEditRoleModal({
   isOpen,
   onClose,
+  organizationId,
   memberIds,
   memberCount,
   currentUserRole,
@@ -48,6 +50,7 @@ export default function BulkEditRoleModal({
 
     try {
       const result = await bulkUpdateRole({
+        organizationId,
         memberIds,
         newRole: selectedRole,
       });

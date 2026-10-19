@@ -83,6 +83,8 @@ export interface WindowApiDevice {
   ) => () => void;
   onToolsMissing?: (cb: () => void) => () => void;
   onToolsAvailable?: (cb: () => void) => () => void;
+  /** BACKLOG-3953: an iPhone tool never started (Windows); carries the message to show. */
+  onToolsBlocked?: (cb: (data: { userError: { title: string; description: string; actionSuggestion: string; code: string } }) => void) => () => void;
 }
 
 /**

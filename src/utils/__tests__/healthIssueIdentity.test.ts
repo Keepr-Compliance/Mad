@@ -114,3 +114,24 @@ describe("identityOf", () => {
     expect(new Set(identities).size).toBe(identities.length);
   });
 });
+
+describe("BACKLOG-3954 — the can't-reach row has its own identity", () => {
+  // Shape transcribed from diagnosticHandlers' PROVIDER_UNREACHABLE row
+  // (pinned end to end in electron/services/__tests__/refreshStreak-3954.test.ts).
+  const unreachable = (provider: "google" | "microsoft"): HealthIssue => ({
+    provider,
+    type: "PROVIDER_UNREACHABLE",
+    severity: "warning",
+    userMessage: "Can't reach Microsoft. Keepr will keep trying.",
+    message:
+      "If you use antivirus or a firewall, check that it isn't blocking Keepr, or restart your computer. If this keeps happening, contact support.",
+  });
+
+  it("C8 dismissing can't-reach never hides a later Reconnect row for the same mailbox", () => {
+    expect(identityOf(unreachable("microsoft"))).toBe("connection:microsoft:unreachable");
+    expect(identityOf(unreachable("microsoft"))).not.toBe(
+      identityOf(brokenMailbox("microsoft", "TOKEN_REFRESH_FAILED")),
+    );
+    expect(identityOf(unreachable("google"))).toBe("connection:google:unreachable");
+  });
+});

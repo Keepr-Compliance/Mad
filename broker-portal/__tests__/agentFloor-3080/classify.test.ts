@@ -165,11 +165,49 @@ describe('mayOpenDashboardPath', () => {
 });
 
 describe('lib/auth/membership.ts stays importable from the Edge runtime', () => {
-  it('has no import statements at all', () => {
+  // BACKLOG-3859: the classifier moved to packages/shared/src/billing/planRule.ts.
+  // membership.ts may now reach exactly one module, @keepr/shared, and every
+  // source file of that package must itself import nothing outside the package.
+  const SHARED_SRC = join(__dirname, '../../../packages/shared/src');
+
+  // Every module specifier a file can load: `import/export ... from 'x'`, a bare
+  // side-effect `import 'x'`, and a dynamic `import('x')` / `import(expr)`.
+  // A dynamic import with a non-literal argument is reported as '<dynamic>'.
+  function specifiers(source: string): string[] {
+    const fromSpecs = [...source.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+    const bareSpecs = [...source.matchAll(/^\s*import\s*['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+    const dynamicSpecs = [...source.matchAll(/\bimport\s*\(\s*(?:['"]([^'"]+)['"])?/g)].map((m) => m[1] ?? '<dynamic>');
+    return [...fromSpecs, ...bareSpecs, ...dynamicSpecs];
+  }
+
+  function sharedSources(dir: string): string[] {
+    const { readdirSync, statSync } = require('fs') as typeof import('fs');
+    return readdirSync(dir).flatMap((name: string) => {
+      const full = join(dir, name);
+      return statSync(full).isDirectory() ? sharedSources(full) : full.endsWith('.ts') ? [full] : [];
+    });
+  }
+
+  it('membership.ts reaches no module but @keepr/shared', () => {
     const source = readFileSync(join(__dirname, '../../lib/auth/membership.ts'), 'utf8');
     expect(source.length).toBeGreaterThan(1000);
-    expect(source).toContain('export function classifyPortalAccess');
-    expect(source.match(/^\s*import\s/gm)).toBeNull();
+    expect(source).toContain('classifyPortalAccess,');
+    const specs = specifiers(source);
+    expect(specs.length).toBeGreaterThan(0);
+    expect(new Set(specs)).toEqual(new Set(['@keepr/shared']));
     expect(source).not.toMatch(/\brequire\(/);
+  });
+
+  it('packages/shared source imports nothing outside the package', () => {
+    const files = sharedSources(SHARED_SRC);
+    expect(files.some((f) => f.endsWith(join('billing', 'planRule.ts')))).toBe(true);
+    for (const f of files) {
+      const source = readFileSync(f, 'utf8');
+      expect({ f, bad: specifiers(source).filter((s) => !s.startsWith('./') && !s.startsWith('../')) }).toEqual({ f, bad: [] });
+      expect({ f, require: /\brequire\(/.test(source) }).toEqual({ f, require: false });
+    }
+    const rule = readFileSync(join(SHARED_SRC, 'billing/planRule.ts'), 'utf8');
+    expect(rule).toContain('export function classifyPortalAccess');
+    expect(specifiers(rule)).toEqual([]);
   });
 });

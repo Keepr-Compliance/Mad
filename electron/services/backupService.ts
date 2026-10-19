@@ -35,8 +35,12 @@ import {
   BackupStatusReport,
   BackupFailureCause,
   ToolStartObservation,
+  ToolBlock,
 } from "../types/backup";
 import { validateDeviceUdid, ValidationError } from "../utils/validation";
+import { detectToolBlock } from "./iphoneToolBlock";
+import { formatToolBlockedError, formatIphoneToolTimeoutError } from "./diagnostics/userFacingErrors";
+import { superviseIphoneTool, killIphoneToolTree, hasExited, IPHONE_QUERY_TIMEOUT_MS } from "./iphoneToolProcess";
 
 /**
  * BACKLOG-2917: a short, log-safe description of a caught value.
@@ -821,6 +825,8 @@ export function classifyBackupFailure(
  */
 export class BackupService extends EventEmitter {
   private currentProcess: ChildProcess | null = null;
+  /** BACKLOG-3996: aborts the encryption check startBackup runs before spawning. */
+  private preSpawnAbort: AbortController | null = null;
   /** BACKLOG-3816: the size walk of the last finished backup, when deferred. */
   private deferredSize: { udid: string; size: DeferredBackupSize } | null = null;
   private isRunning: boolean = false;
@@ -1067,8 +1073,14 @@ export class BackupService extends EventEmitter {
    * SECURITY (TASK-601): UDID is validated before use in spawn() to prevent
    * command injection. The UDID flows from IPC (renderer process) and must be
    * treated as untrusted input.
+   *
+   * BACKLOG-3996: the query has a time limit and stops when `options.signal` aborts
+   * (Cancel). A time-out resolves "unknown" with `timedOut`; a cancel with `cancelled`.
    */
-  async checkEncryptionStatus(udid: string): Promise<BackupEncryptionInfo> {
+  async checkEncryptionStatus(
+    udid: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<BackupEncryptionInfo> {
     const unknown: BackupEncryptionInfo = { isEncrypted: false, needsPassword: false, status: "unknown" };
     try {
       // SECURITY: Validate UDID before spawning process
@@ -1082,16 +1094,49 @@ export class BackupService extends EventEmitter {
         // "WillEncrypt")). Queried without the domain it is not found, which read as "off".
         // BACKLOG-3814: timed from before spawn(), which a security scan can hold.
         const spawnRequestedAt = Date.now();
-        const proc = spawn(ideviceinfo, [
-          "-u",
-          validatedUdid,
-          "-q",
-          "com.apple.mobile.backup",
-          "-k",
-          "WillEncrypt",
-        ]);
+        // BACKLOG-3953: on Windows spawn() THROWS for EPERM / UNKNOWN (see
+        // iphoneToolBlock.ts). Inside this executor that became a rejection, and the
+        // surrounding try/catch never saw it: the sync failed with "spawn EPERM".
+        let proc: ChildProcess;
+        try {
+          proc = spawn(ideviceinfo, [
+            "-u",
+            validatedUdid,
+            "-q",
+            "com.apple.mobile.backup",
+            "-k",
+            "WillEncrypt",
+          ]);
+        } catch (spawnError) {
+          const toolBlock = detectToolBlock("ideviceinfo", { error: spawnError });
+          log.error("[BackupService] Could not start ideviceinfo for the encryption check:", spawnError);
+          if (toolBlock) {
+            resolve({ ...unknown, toolBlock });
+            return;
+          }
+          throw spawnError;
+        }
         let output = "";
         let errorOutput = "";
+        // BACKLOG-3996: time limit + Cancel. Before this a held WillEncrypt query held the
+        // sync with no way out: Cancel did not reach it.
+        let settled = false;
+        const supervision = superviseIphoneTool(proc, {
+          tool: "ideviceinfo",
+          signal: options.signal,
+          onTimeout: () => {
+            settled = true;
+            log.warn(
+              `[BackupService] Encryption check did not answer within ${IPHONE_QUERY_TIMEOUT_MS / 1000}s; stopped it`,
+            );
+            resolve({ ...unknown, timedOut: true });
+          },
+          onAbort: () => {
+            settled = true;
+            log.info("[BackupService] Encryption check cancelled; stopped it");
+            resolve({ ...unknown, cancelled: true });
+          },
+        });
 
         proc.stdout?.on("data", (data) => {
           output += data.toString();
@@ -1101,9 +1146,26 @@ export class BackupService extends EventEmitter {
           errorOutput += data.toString();
         });
 
+        let encryptionSpawnError: Error | null = null;
         proc.on("close", (code) => {
+          supervision.done();
+          // BACKLOG-3996: settled by the time limit or Cancel; the killed process's exit
+          // (exit 1 on Windows) must not be read as a blocked tool or a reading.
+          if (settled) return;
+          settled = true;
           const ranMs = Date.now() - spawnRequestedAt;
           if (ranMs >= TOOL_START_DELAYED_MS) logToolStartDelay("ideviceinfo", ranMs);
+          // BACKLOG-3953: the tool never started (file gone / launch refused).
+          if (code !== 0) {
+            const toolBlock = detectToolBlock(
+              "ideviceinfo",
+              encryptionSpawnError ? { error: encryptionSpawnError } : { exitCode: code },
+            );
+            if (toolBlock) {
+              resolve({ ...unknown, toolBlock });
+              return;
+            }
+          }
           const value = output.trim().toLowerCase();
           // An absent key (encryption never configured) prints nothing and exits 0.
           if (code === 0 && (value === "true" || value === "false" || value === "")) {
@@ -1124,8 +1186,13 @@ export class BackupService extends EventEmitter {
         });
 
         proc.on("error", (error) => {
+          supervision.done();
+          if (settled) return;
+          settled = true;
           log.error("[BackupService] Error checking encryption status:", error);
-          resolve(unknown);
+          encryptionSpawnError = error;
+          const toolBlock = detectToolBlock("ideviceinfo", { error });
+          resolve(toolBlock ? { ...unknown, toolBlock } : unknown);
         });
       });
     } catch (error) {
@@ -1194,7 +1261,37 @@ export class BackupService extends EventEmitter {
 
     // Check encryption status (TASK-007)
     // Note: checkEncryptionStatus also validates UDID, but we already validated above
-    const encryptionInfo = await this.checkEncryptionStatus(validatedUdid);
+    // BACKLOG-3996: Cancel (cancelBackup) and quit (stopForQuit) reach this query too.
+    const preSpawn = new AbortController();
+    this.preSpawnAbort = preSpawn;
+    let encryptionInfo: BackupEncryptionInfo;
+    try {
+      encryptionInfo = await this.checkEncryptionStatus(validatedUdid, { signal: preSpawn.signal });
+    } finally {
+      if (this.preSpawnAbort === preSpawn) this.preSpawnAbort = null;
+    }
+
+    // BACKLOG-3996: cancelled while the check ran. Nothing was spawned after it.
+    if (encryptionInfo.cancelled || preSpawn.signal.aborted) {
+      return this.preSpawnStopResult(options.udid, "BACKUP_CANCELLED", "Backup cancelled");
+    }
+
+    // BACKLOG-3996: the check did not answer. An unanswered ideviceinfo means
+    // idevicebackup2 (same device, same tools) would be held the same way, so the backup
+    // is NOT started on an "unknown" reading after a time-out.
+    if (encryptionInfo.timedOut) {
+      return this.preSpawnStopResult(
+        options.udid,
+        "IPHONE_TOOL_TIMEOUT",
+        formatIphoneToolTimeoutError().description,
+      );
+    }
+
+    // BACKLOG-3953: ideviceinfo never started, so idevicebackup2 (same folder, same
+    // DLLs) would not either. Stop here with the cause instead of an unnamed failure.
+    if (encryptionInfo.toolBlock) {
+      return this.toolBlockedResult(options.udid, encryptionInfo.toolBlock, 0);
+    }
 
     // BACKLOG-3881: Keepr does not read Apple-encrypted backups and never takes a password.
     // A phone with "Encrypt local backup" on is refused before anything is transferred.
@@ -1311,9 +1408,25 @@ export class BackupService extends EventEmitter {
         this.toolStartNoticeTimer = null;
       }
 
-      this.currentProcess = spawn(idevicebackup2, args, {
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      // BACKLOG-3953: spawn() THROWS on Windows for EPERM / UNKNOWN. isRunning is already
+      // true and no watchdog exists yet, so a throw here used to leave the service
+      // "Backup already in progress" for every later sync until the app restarted.
+      try {
+        this.currentProcess = spawn(idevicebackup2, args, {
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+      } catch (spawnError) {
+        this.isRunning = false;
+        this.currentDeviceUdid = null;
+        this.currentProcess = null;
+        log.error("[BackupService] Could not start idevicebackup2:", spawnError);
+        const toolBlock = detectToolBlock("idevicebackup2", { error: spawnError });
+        if (toolBlock) {
+          resolve(this.toolBlockedResult(options.udid, toolBlock, Date.now() - this.startTime));
+          return;
+        }
+        throw spawnError;
+      }
 
       // BACKLOG-2911 (FIX 2): ONE start path, here, covering the whole run.
       //
@@ -1519,8 +1632,12 @@ export class BackupService extends EventEmitter {
         }
       });
 
+      // BACKLOG-3953: kept for the close handler. A spawn ENOENT / EACCES arrives here
+      // and is followed by 'close' with a negative errno as the code.
+      let backupSpawnError: Error | null = null;
       this.currentProcess.on("error", (error: Error) => {
         log.error("[BackupService] Process error:", error);
+        backupSpawnError = error;
         this.emit("error", error);
       });
 
@@ -1739,14 +1856,25 @@ export class BackupService extends EventEmitter {
               exitCode: code,
             };
           } else {
-            const classification = this.classifyFailure(
-              code,
-              stdoutBuffer,
-              stderrBuffer,
+            // BACKLOG-3953: a tool that never started is named before anything reads
+            // its (empty) output. A tool that ran and failed is classified as before.
+            const toolBlock = detectToolBlock(
+              "idevicebackup2",
+              backupSpawnError ? { error: backupSpawnError } : { exitCode: code },
             );
-            errorMessage = classification.message;
-            errorCode = classification.errorCode;
-            failureCause = classification.cause;
+            if (toolBlock) {
+              errorMessage = formatToolBlockedError().description;
+              errorCode = "TOOL_BLOCKED";
+            } else {
+              const classification = this.classifyFailure(
+                code,
+                stdoutBuffer,
+                stderrBuffer,
+              );
+              errorMessage = classification.message;
+              errorCode = classification.errorCode;
+              failureCause = classification.cause;
+            }
           }
         }
 
@@ -1789,6 +1917,41 @@ export class BackupService extends EventEmitter {
     });
   }
 
+  /** BACKLOG-3996: the result for a backup stopped before idevicebackup2 was spawned. */
+  private preSpawnStopResult(
+    udid: string,
+    errorCode: "BACKUP_CANCELLED" | "IPHONE_TOOL_TIMEOUT",
+    error: string,
+  ): BackupResult {
+    return {
+      success: false,
+      backupPath: null,
+      error,
+      errorCode,
+      duration: 0,
+      deviceUdid: udid,
+      isIncremental: false,
+      backupSize: 0,
+      isEncrypted: false,
+    };
+  }
+
+  /** BACKLOG-3953: the result for a backup whose tool never started. */
+  private toolBlockedResult(udid: string, toolBlock: ToolBlock, duration: number): BackupResult {
+    return {
+      success: false,
+      backupPath: null,
+      error: formatToolBlockedError().description,
+      errorCode: "TOOL_BLOCKED",
+      duration,
+      deviceUdid: udid,
+      isIncremental: false,
+      backupSize: 0,
+      isEncrypted: false,
+      toolBlock,
+    };
+  }
+
   /**
    * Cancel an in-progress backup
    */
@@ -1798,19 +1961,16 @@ export class BackupService extends EventEmitter {
     // BACKLOG-1582: Clear watchdog on cancel
     this.clearWatchdog();
 
+    // BACKLOG-3996: Cancel also stops the encryption check that runs before spawn.
+    this.preSpawnAbort?.abort();
+
     const proc = this.currentProcess;
     if (proc) {
-      proc.kill("SIGTERM");
-
-      // Give it a moment, then force kill if needed. BACKLOG-3598: only the process
-      // this cancel was for. `currentProcess` is cleared when that process closes, and
-      // after a disconnect the user can start a new backup within 5 s — the timer must
-      // not kill that one.
-      setTimeout(() => {
-        if (this.currentProcess === proc) {
-          proc.kill("SIGKILL");
-        }
-      }, 5000);
+      // BACKLOG-3996: the whole tree (taskkill /T first on Windows). On POSIX SIGTERM,
+      // then SIGKILL at 5 s if THIS process has not exited — decided on exitCode /
+      // signalCode, never `.killed`. BACKLOG-3598: only the process this cancel was for;
+      // a new backup started within 5 s is a different object and is not touched.
+      killIphoneToolTree(proc, { tool: "idevicebackup2", reason: "cancel", graceMs: 5000 });
     }
 
     // Always reset state — even if process is null (race between spawn and cancel)
@@ -1908,7 +2068,9 @@ export class BackupService extends EventEmitter {
    * Sets watchdogFired flag so the close handler emits a BACKUP_TIMEOUT result.
    */
   private killZombieProcess(): void {
-    if (!this.currentProcess || this.currentProcess.killed) return;
+    // BACKLOG-3996: `.killed` is true once a signal was SENT, alive or not, so it is not
+    // a test for "already gone".
+    if (!this.currentProcess || hasExited(this.currentProcess)) return;
 
     this.watchdogFired = true;
     this.clearWatchdog();
@@ -1928,22 +2090,10 @@ export class BackupService extends EventEmitter {
       },
     });
 
-    try {
-      this.currentProcess.kill("SIGTERM");
-    } catch (err) {
-      log.error(`[BackupService] Watchdog: kill failed, pid=${pid}`, err);
-    }
-
-    // On macOS, give it 5s then SIGKILL. On Windows, SIGTERM already hard-kills.
-    if (process.platform !== "win32") {
-      setTimeout(() => {
-        try {
-          if (this.currentProcess && !this.currentProcess.killed) {
-            this.currentProcess.kill("SIGKILL");
-          }
-        } catch { /* process already dead */ }
-      }, 5000);
-    }
+    // BACKLOG-3996: the whole tree. On macOS SIGTERM, then SIGKILL at 5 s if the process
+    // has not exited. The SIGKILL used to be guarded by `!killed`, which the SIGTERM had
+    // already set, so a stopped idevicebackup2 was never SIGKILLed.
+    killIphoneToolTree(this.currentProcess, { tool: "idevicebackup2", reason: "watchdog", graceMs: 5000 });
 
     // Safety net: if close event never fires after kill, force-reset state
     setTimeout(() => {
@@ -1973,8 +2123,10 @@ export class BackupService extends EventEmitter {
   stopForQuit(
     timeoutMs: number = BackupService.QUIT_STOP_TIMEOUT_MS,
   ): Promise<"exited" | "killed"> | null {
+    // BACKLOG-3996: a quit during the encryption check stops it, and no backup follows.
+    this.preSpawnAbort?.abort();
     const proc = this.currentProcess;
-    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
+    if (!proc || hasExited(proc)) {
       // Nothing to stop: return synchronously so the quit is not deferred at all.
       return null;
     }
@@ -2002,22 +2154,18 @@ export class BackupService extends EventEmitter {
           `[BackupService] Backup process did not exit within ${timeoutMs} ms of quit; force-killing`,
         );
         finish("killed");
-        try {
-          if (process.platform === "win32" && proc.pid !== undefined) {
-            spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
-              stdio: "ignore",
-              windowsHide: true,
-            }).on("error", () => {
-              /* best effort: the app is exiting */
-            });
-          } else {
-            proc.kill("SIGKILL");
-          }
-        } catch {
-          /* already gone */
+        if (process.platform !== "win32") {
+          killIphoneToolTree(proc, { tool: "idevicebackup2", reason: "app-quit" });
         }
       }, timeoutMs);
 
+      // BACKLOG-3996: on Windows the tree kill goes FIRST. A SIGTERM there is
+      // TerminateProcess of the parent, after which taskkill /T finds no tree to walk.
+      // There is no graceful stop on Windows either way.
+      if (process.platform === "win32") {
+        killIphoneToolTree(proc, { tool: "idevicebackup2", reason: "app-quit" });
+        return;
+      }
       try {
         proc.kill("SIGTERM");
       } catch {

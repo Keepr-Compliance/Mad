@@ -164,6 +164,7 @@ type VerificationStatus = 'waiting-for-init' | 'verifying' | 'success' | 'error'
 /** Stage-appropriate messages shown while waiting for init to complete */
 const INIT_STAGE_MESSAGES: Record<string, string> = {
   'db-opening': 'Opening secure database...',
+  'db-waiting': 'Waiting for access to your data...', // BACKLOG-3952
   'migrating': 'Updating database...',
   'creating-user': 'Setting up your account...',
   'db-ready': 'Database ready...',

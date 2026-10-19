@@ -23,6 +23,19 @@ jest.mock("../outlookFetchService");
 jest.mock("../transactionExtractorService");
 jest.mock("../logService");
 
+// BACKLOG-3339: createAuditedTransaction writes the deal and its audit entry in
+// one transaction; the body runs synchronously, as better-sqlite3 runs it. The
+// audit entry itself is not what this suite measures.
+jest.mock("../db/core/dbConnection", () => ({
+  ...jest.requireActual("../db/core/dbConnection"),
+  dbTransaction: <T,>(fn: () => T): T => fn(),
+}));
+jest.mock("../auditService", () => ({
+  __esModule: true,
+  default: { log: jest.fn(), recordInTransaction: jest.fn(), recordFailure: jest.fn() },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
+}));
+
 // BACKLOG-506: Mock emailDbService for email content store
 jest.mock("../db/emailDbService", () => ({
   createEmail: jest.fn().mockResolvedValue({

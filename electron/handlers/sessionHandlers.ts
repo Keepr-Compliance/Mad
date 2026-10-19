@@ -31,6 +31,7 @@ import {
   SESSION_TOKEN_MAX_LENGTH,
 } from "../utils/validation";
 import { wrapHandler } from "../utils/wrapHandler";
+import { normalizeOAuthProvider } from "../utils/normalizeOAuthProvider";
 import { redactEmail } from "../utils/redactSensitive";
 
 // Import constants
@@ -46,12 +47,14 @@ export {
   resetContactLinkingOnLogout,
   resetFeatureGateOnLogout,
   resetChecklistTemplatesOnLogout,
+  resetMailboxReachabilityOnLogout,
 } from "./sessionSignOut";
 import {
   stopShadowDeltaSyncOnLogout,
   resetContactLinkingOnLogout,
   resetFeatureGateOnLogout,
   resetChecklistTemplatesOnLogout,
+  resetMailboxReachabilityOnLogout,
   signOutLocalSession,
   wasSignedOutHere,
 } from "./sessionSignOut";
@@ -94,7 +97,7 @@ interface SessionValidationResponse extends AuthResponse {
   user?: User;
 }
 
-interface CurrentUserResponse extends AuthResponse {
+export interface CurrentUserResponse extends AuthResponse {
   user?: User;
   sessionToken?: string;
   subscription?: import("../types/models").Subscription;
@@ -685,6 +688,32 @@ async function migrateUserToSupabaseId(
 /**
  * Get current user from saved session
  */
+/**
+ * The `auth:get-current-user` answer when the local DB cannot serve it, built
+ * from the Supabase session alone.
+ *
+ * BACKLOG-3956: carries `provider` (azure -> microsoft, everything else as-is).
+ * Without it the renderer's AuthContext held a null provider, and onboarding
+ * then defaulted the contact sources as if the user had signed in with Google.
+ */
+export function buildSupabaseFallbackUserResponse(supaUser: {
+  id: string;
+  email?: string;
+  user_metadata?: Record<string, unknown>;
+  app_metadata?: Record<string, unknown>;
+}): CurrentUserResponse {
+  const meta = (supaUser.user_metadata || {}) as Record<string, string | undefined>;
+  return {
+    success: true,
+    user: {
+      id: supaUser.id,
+      email: supaUser.email || meta.email || "",
+      display_name: meta.full_name || meta.name || supaUser.email || "",
+    } as never, // Partial user — only id/email/display_name available before DB init
+    provider: normalizeOAuthProvider(supaUser.app_metadata?.provider),
+  };
+}
+
 async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
   try {
     // Check if database is initialized first.
@@ -703,15 +732,7 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
         const client = supabaseService.getClient();
         const { data: { session: supaSession } } = await client.auth.getSession();
         if (supaSession?.user) {
-          const meta = supaSession.user.user_metadata || {};
-          return {
-            success: true,
-            user: {
-              id: supaSession.user.id,
-              email: supaSession.user.email || meta.email || "",
-              display_name: meta.full_name || meta.name || supaSession.user.email || "",
-            } as never,
-          };
+          return buildSupabaseFallbackUserResponse(supaSession.user);
         }
         return {
           success: false,
@@ -1047,15 +1068,7 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
       const client = supabaseService.getClient();
       const { data: { session: supaSession } } = await client.auth.getSession();
       if (supaSession?.user) {
-        const meta = supaSession.user.user_metadata || {};
-        return {
-          success: true,
-          user: {
-            id: supaSession.user.id,
-            email: supaSession.user.email || meta.email || "",
-            display_name: meta.full_name || meta.name || supaSession.user.email || "",
-          } as never, // Partial user — only id/email/display_name available before DB init
-        };
+        return buildSupabaseFallbackUserResponse(supaSession.user);
       }
     } catch {
       // Supabase session also unavailable
@@ -1128,6 +1141,7 @@ async function handleForceLogout(): Promise<AuthResponse> {
     resetContactLinkingOnLogout();
     resetFeatureGateOnLogout();
     resetChecklistTemplatesOnLogout();
+    resetMailboxReachabilityOnLogout();
 
     await logService.info("Force logout completed successfully", "AuthHandlers");
     return { success: true };
@@ -1210,6 +1224,7 @@ async function handleSignOutAllDevices(): Promise<AuthResponse> {
     stopShadowDeltaSyncOnLogout();
     resetFeatureGateOnLogout();
     resetChecklistTemplatesOnLogout();
+    resetMailboxReachabilityOnLogout();
 
     await logService.info("Global sign-out completed successfully", "SessionHandlers");
     return { success: true };

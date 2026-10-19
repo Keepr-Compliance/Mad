@@ -145,6 +145,10 @@ class FakeProcess extends EventEmitter {
   stdin = { write: jest.fn(), end: jest.fn() };
   killed = false;
   pid = 4242;
+  // BACKLOG-3996 (SR R2): always-set on a real ChildProcess (null while alive). The kill
+  // path reads these, not `.killed`; absent, the fake reads as already exited.
+  exitCode: number | null = null;
+  signalCode: string | null = null;
   kill = jest.fn(() => {
     this.killed = true;
     return true;

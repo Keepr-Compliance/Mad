@@ -43,6 +43,7 @@ jest.mock("../emailSyncService", () => ({
 import { setDb } from "../db/core/dbConnection";
 import * as autoLinkModule from "../autoLinkService";
 import transactionService from "../transactionService";
+import auditService, { type AuditLogEntry } from "../auditService";
 import * as reviewStateService from "../reviewStateService";
 import { ensureTransactionEmailsSynced, __resetSyncThrottleForTests } from "../transactionSyncTrigger";
 import { __resetFullSweepGuardForTests, __setInFlightWaitTimeoutForTests, runFullSweepOnce } from "../autoLinkSweepGuard";
@@ -119,6 +120,11 @@ function sorted(ids: string[]): string[] {
 
 maybe("BACKLOG-3883 — one full auto-link sweep per deal per input state", () => {
   beforeEach(() => {
+    // BACKLOG-3339: creating a deal writes its audit entry inside the create's
+    // transaction. Not what this suite measures, and the audit service is not
+    // initialized here, so the entry is stubbed.
+    jest.spyOn(auditService, "recordInTransaction").mockReturnValue({} as AuditLogEntry);
+    jest.spyOn(auditService, "recordFailure").mockImplementation(() => undefined);
     db = new (Database as NonNullable<typeof Database>)(":memory:");
     seed();
     setDb(db);

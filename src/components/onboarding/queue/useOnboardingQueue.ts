@@ -31,7 +31,7 @@ export interface OnboardingAppState {
   hasSecureStorage: boolean;
   driverSetupComplete: boolean;
   termsAccepted: boolean;
-  authProvider: "google" | "microsoft";
+  authProvider: "google" | "microsoft" | null;
   isNewUser: boolean;
   isDatabaseInitialized: boolean;
   userId: string | null;

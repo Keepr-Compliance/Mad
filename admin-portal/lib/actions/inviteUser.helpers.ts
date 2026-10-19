@@ -9,7 +9,7 @@
  *   - ORG invites (organizationId set)     → admin_invite_user RPC + /invite link.
  *   - INDIVIDUAL invites (no organization)  → branded "Get Keepr" download email;
  *                                             the invitee signs in on desktop and
- *                                             a trial is provisioned automatically.
+ *                                             a license is provisioned automatically.
  */
 
 /** Canonical Keepr download / landing page (mirrors the email template default). */
@@ -34,6 +34,8 @@ export function resolveInviteFlow(organizationId: string | null | undefined): In
 export interface DownloadInvitePayload {
   recipientEmail: string;
   downloadUrl: string;
+  /** Invitee's "First Last", for the To display name (BACKLOG-3974). Omitted when blank. */
+  recipientName?: string;
 }
 
 /**
@@ -44,9 +46,15 @@ export interface DownloadInvitePayload {
 export function buildDownloadInvitePayload(
   email: string,
   downloadUrl?: string | null,
+  name?: { firstName?: string | null; lastName?: string | null },
 ): DownloadInvitePayload {
+  const recipientName = [name?.firstName, name?.lastName]
+    .map((part) => part?.trim() ?? '')
+    .filter(Boolean)
+    .join(' ');
   return {
     recipientEmail: email.toLowerCase().trim(),
     downloadUrl: downloadUrl?.trim() || DEFAULT_DOWNLOAD_URL,
+    ...(recipientName ? { recipientName } : {}),
   };
 }

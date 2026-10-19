@@ -1,0 +1,66 @@
+== variant w1-revoke-anon-only
+     FAIL|d01 anon get_user_org_ids(other) closed|OK 1
+     FAIL|d01 anon is_org_admin(other) closed|OK true
+     FAIL|d01 signed-in get_user_org_ids(other) closed|OK 1
+     FAIL|d01 signed-in is_org_admin(other) closed|OK true
+     FAIL|d01 same-org admin get_user_org_ids(agent) closed|OK 1
+     FAIL|d01 same-org agent get_user_org_ids(admin) closed|OK 1
+     FAIL|d01 admin asks is_org_admin(fellow admin) closed|OK true
+     FAIL|d01 it_admin asks is_org_admin(fellow admin) closed|OK true
+     FAIL|d03 outsider refused (not_member)|OK <null>
+     FAIL|d03 outsider gets no features|OK false
+     FAIL|d06 get_user_org_ids(uuid) ACL equals production|{=X/postgres,postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+     FAIL|d06 is_org_admin(uuid,uuid) ACL equals production|{=X/postgres,postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+CONTROLS: pass=3 fail=3 error=0 checks=54 failed_checks=12
+KILLED|w1-revoke-anon-only
+== variant w2-revoke-public-anon
+     FAIL|d01 signed-in get_user_org_ids(other) closed|OK 1
+     FAIL|d01 signed-in is_org_admin(other) closed|OK true
+     FAIL|d01 same-org admin get_user_org_ids(agent) closed|OK 1
+     FAIL|d01 same-org agent get_user_org_ids(admin) closed|OK 1
+     FAIL|d01 admin asks is_org_admin(fellow admin) closed|OK true
+     FAIL|d01 it_admin asks is_org_admin(fellow admin) closed|OK true
+     FAIL|d02 anon organization_members read: 0 rows, no error|ERR 42501 permission denied for function get_user_org_ids
+     FAIL|d03 outsider refused (not_member)|OK <null>
+     FAIL|d03 outsider gets no features|OK false
+     FAIL|d06 get_user_org_ids(uuid) ACL equals production|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+     FAIL|d06 is_org_admin(uuid,uuid) ACL equals production|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+CONTROLS: pass=2 fail=4 error=0 checks=54 failed_checks=11
+KILLED|w2-revoke-public-anon
+== variant alt-revoke-and-retarget
+     FAIL|d06 get_user_org_ids(uuid) ACL equals production|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+     FAIL|d06 is_org_admin(uuid,uuid) ACL equals production|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+     FAIL|d06 organization_members_all_public still TO public|{authenticated}
+     FAIL|d06 organization_members_select_public still TO public|{authenticated}
+CONTROLS: pass=5 fail=1 error=0 checks=54 failed_checks=4
+KILLED|alt-revoke-and-retarget
+== variant x1-additive
+     FAIL|d04 brokerage admin insert refused|OK rows=1
+     FAIL|d04 non-internal insert naming an internal created_by refused|OK rows=1
+     FAIL|d04 brokerage admin delete refused|OK rows=1
+     FAIL|d04 brokerage admin update refused|OK rows=1
+     FAIL|d04 non-internal read: 0 rows|OK 1
+     FAIL|d05 links: exactly one policy|Admins can manage links,Authenticated users can read links,support_ticket_backlog_links_internal_all
+CONTROLS: pass=4 fail=2 error=0 checks=54 failed_checks=6
+KILLED|x1-additive
+== variant x2-using-only
+     FAIL|d04 brokerage admin insert refused|OK rows=1
+     FAIL|d04 non-internal insert naming an internal created_by refused|OK rows=1
+     FAIL|d04 internal insert lands|ERR 42501 new row violates row-level security policy for table "support_ticket_backlog_links"
+     FAIL|d05 links policy: ALL, authenticated, has_internal_role in USING and WITH CHECK|ALL {public} has_internal_role(( SELECT auth.uid() AS uid)) / (EXISTS ( SELECT 1
+     FAIL|d06 links policy TO authenticated FOR ALL|Admins can manage links ALL {public}
+CONTROLS: pass=3 fail=3 error=0 checks=54 failed_checks=5
+KILLED|x2-using-only
+== variant x3-write-only
+     FAIL|d04 non-internal read: 0 rows|OK 1
+     FAIL|d05 links: exactly one policy|Authenticated users can read links,support_ticket_backlog_links_internal_all
+CONTROLS: pass=4 fail=2 error=0 checks=54 failed_checks=2
+KILLED|x3-write-only
+== variant x4-insert-only
+     FAIL|d04 internal delete lands|OK rows=0
+     FAIL|d05 links: exactly one policy|support_ticket_backlog_links_internal_sel,support_ticket_backlog_links_internal_ins
+     FAIL|d05 links policy: ALL, authenticated, has_internal_role in USING and WITH CHECK|SELECT {authenticated} has_internal_role(( SELECT auth.uid() AS uid)) / ; INSERT {authenticated}  / has_internal_role(( SELECT auth.uid() AS uid))
+     FAIL|d06 links policy TO authenticated FOR ALL|support_ticket_backlog_links_internal_ins INSERT {authenticated}; support_ticket_backlog_links_internal_sel SELECT {authenticated}
+CONTROLS: pass=3 fail=3 error=0 checks=54 failed_checks=4
+KILLED|x4-insert-only
+VARIANTS: killed=7 survived=0

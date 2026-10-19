@@ -22,7 +22,6 @@ import type { AppState, OnboardingStep, PlatformInfo } from "../types";
  * - secure-storage: macOS only (Keychain setup)
  * - permissions: macOS only (Full Disk Access)
  * - apple-driver: Windows + iPhone only
- * - android-coming-soon: Android selection only
  */
 export const STEP_ORDER: readonly OnboardingStep[] = [
   "phone-type",
@@ -33,7 +32,6 @@ export const STEP_ORDER: readonly OnboardingStep[] = [
   "data-sync",
   "permissions",
   "apple-driver",
-  "android-coming-soon",
 ] as const;
 
 // =============================================================================
@@ -69,7 +67,6 @@ export function deriveCurrentStep(state: AppState): OnboardingStep | null {
  * - secure-storage: Skip if not macOS
  * - permissions: Skip if not macOS
  * - apple-driver: Skip if not Windows+iPhone
- * - android-coming-soon: Skip if not Android
  *
  * @param step - Step to check
  * @param platform - Platform information
@@ -93,10 +90,6 @@ export function shouldSkipStep(
     case "apple-driver":
       // Windows + iPhone only step
       return !(platform.isWindows && phoneType === "iphone");
-
-    case "android-coming-soon":
-      // Only show if Android was selected
-      return phoneType !== "android";
 
     // These steps are always shown
     case "phone-type":

@@ -37,6 +37,7 @@ jest.mock("../emailSyncService", () => ({
 
 import { setDb } from "../db/core/dbConnection";
 import transactionService from "../transactionService";
+import auditService, { type AuditLogEntry } from "../auditService";
 import { syncReviewQueueForTransaction } from "../reviewStateService";
 import { ensureTransactionEmailsSynced, __resetSyncThrottleForTests } from "../transactionSyncTrigger";
 import { __resetFullSweepGuardForTests } from "../autoLinkSweepGuard";
@@ -91,6 +92,11 @@ function addressPending(txn: string): string[] {
 
 describe("BACKLOG-3925 — address pass in creation and the covered trigger", () => {
   beforeEach(() => {
+    // BACKLOG-3339: creating a deal writes its audit entry inside the create's
+    // transaction. Not what this suite measures, and the audit service is not
+    // initialized here, so the entry is stubbed.
+    jest.spyOn(auditService, "recordInTransaction").mockReturnValue({} as AuditLogEntry);
+    jest.spyOn(auditService, "recordFailure").mockImplementation(() => undefined);
     db = new Database(":memory:");
     seed();
     setDb(db);

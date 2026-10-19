@@ -9,12 +9,15 @@ interface DeleteConfirmModalProps {
   propertyAddress: string;
   onCancel: () => void;
   onDelete: () => void;
+  /** BACKLOG-3339: a delete is in flight; the confirm button is disabled. */
+  isDeleting?: boolean;
 }
 
 export function DeleteConfirmModal({
   propertyAddress,
   onCancel,
   onDelete,
+  isDeleting = false,
 }: DeleteConfirmModalProps): React.ReactElement {
   return (
     <ResponsiveModal onClose={onCancel} zIndex="z-[70]" panelClassName="max-w-md p-6">
@@ -59,8 +62,9 @@ export function DeleteConfirmModal({
           </button>
           <button
             onClick={onDelete}
+            disabled={isDeleting}
             data-testid="delete-transaction-confirm"
-            className="px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-lg font-semibold transition-all"
+            className="px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-lg font-semibold transition-all disabled:opacity-50"
           >
             Delete Transaction
           </button>

@@ -13,6 +13,7 @@ import type {
   UpdateTransaction,
   Communication,
   NewCommunication,
+  NewIgnoredCommunication,
   MatchReason,
   OAuthProvider,
   Contact,
@@ -56,10 +57,14 @@ import {
 import { linkMessageToTransaction, unlinkMessageFromTransaction } from "../db/messageDbService";
 import {
   addIgnoredCommunicationSync,
+  createCommunicationSync,
   deleteCommunicationByMessageIdSync,
   deleteCommunicationByThreadSync,
+  deleteCommunicationSync,
+  removeIgnoredCommunicationSync,
 } from "../db/communicationDbService";
 import auditService from "../auditService";
+import { dealChangeFailureCode, dealChangeUserError } from "../dealChangeAudit";
 import { createEmail, getEmailByExternalId } from "../db/emailDbService";
 import emailAttachmentService from "../emailAttachmentService";
 import * as externalContactDb from "../db/externalContactDbService";
@@ -1168,46 +1173,73 @@ class TransactionService {
       // transaction: it is a long network-and-scan operation, and holding the
       // single SQLite write lock across it would block every other writer for
       // its duration. It is also re-runnable, where a half-written deal is not.
-      const transaction = databaseService.createTransactionWithContactsSync({
-        user_id: userId,
-        property_address,
-        property_street,
-        property_city,
-        property_state,
-        property_zip,
-        property_coordinates,
-        transaction_type,
-        status: "active",
-        started_at,
-        closed_at,
-        closing_deadline,
-        // BACKLOG-3614: optional; undefined (not entered) is skipped by the
-        // writer, so the column keeps its NULL default.
-        listing_price: listing_price ?? undefined,
-        // BACKLOG-2756: `false`, not `property_coordinates ? true : false`.
-        // Coordinates are a fact about the ADDRESS. This column means "a person
-        // confirmed the closing date", and the only thing that legitimately
-        // sets it is the export flow (ExportModal's `handleExport`), where the
-        // user is shown the dates and confirms them. Nothing has been confirmed
-        // at create time, so this states the same fact as the other creating
-        // paths. Stated rather than omitted: the value is a fact about this
-        // deal, not an absence.
-        closing_date_verified: false,
-        export_status: "not_exported",
-        export_count: 0,
-        communications_scanned: 0,
-        total_communications_count: 0,
-        offer_count: 0,
-        failed_offers_count: 0,
-      } as NewTransaction,
-      (contact_assignments ?? []).map((assignment) => ({
-        contact_id: assignment.contact_id,
-        role: assignment.role,
-        role_category: assignment.role_category,
-        specific_role: assignment.role,
-        is_primary: assignment.is_primary,
-        notes: assignment.notes,
-      })));
+      //
+      // BACKLOG-3339: the creation's audit entry is written in that same
+      // transaction (the inner one nests as a savepoint), so the deal exists
+      // only if its entry does. A failed entry cancels the create: the attempt
+      // is recorded after the rollback and the user gets a fixed message.
+      let transaction: Transaction;
+      try {
+        transaction = dbTransaction(() => {
+          const created = databaseService.createTransactionWithContactsSync({
+            user_id: userId,
+            property_address,
+            property_street,
+            property_city,
+            property_state,
+            property_zip,
+            property_coordinates,
+            transaction_type,
+            status: "active",
+            started_at,
+            closed_at,
+            closing_deadline,
+            // BACKLOG-3614: optional; undefined (not entered) is skipped by the
+            // writer, so the column keeps its NULL default.
+            listing_price: listing_price ?? undefined,
+            // BACKLOG-2756: `false`, not `property_coordinates ? true : false`.
+            // Coordinates are a fact about the ADDRESS. This column means "a person
+            // confirmed the closing date", and the only thing that legitimately
+            // sets it is the export flow (ExportModal's `handleExport`), where the
+            // user is shown the dates and confirms them. Nothing has been confirmed
+            // at create time, so this states the same fact as the other creating
+            // paths. Stated rather than omitted: the value is a fact about this
+            // deal, not an absence.
+            closing_date_verified: false,
+            export_status: "not_exported",
+            export_count: 0,
+            communications_scanned: 0,
+            total_communications_count: 0,
+            offer_count: 0,
+            failed_offers_count: 0,
+          } as NewTransaction,
+          (contact_assignments ?? []).map((assignment) => ({
+            contact_id: assignment.contact_id,
+            role: assignment.role,
+            role_category: assignment.role_category,
+            specific_role: assignment.role,
+            is_primary: assignment.is_primary,
+            notes: assignment.notes,
+          })));
+          auditService.recordInTransaction({
+            userId,
+            action: "TRANSACTION_CREATE",
+            resourceType: "TRANSACTION",
+            resourceId: created.id,
+            metadata: { propertyAddress: created.property_address, reason: "audited_create" },
+          });
+          return created;
+        });
+      } catch (error) {
+        auditService.recordFailure({
+          userId,
+          action: "TRANSACTION_CREATE",
+          resourceType: "TRANSACTION",
+          metadata: { reason: "audited_create" },
+          errorMessage: dealChangeFailureCode(error),
+        });
+        throw dealChangeUserError("create", error);
+      }
       const transactionId = transaction.id;
 
       if (contact_assignments && contact_assignments.length > 0) {
@@ -1544,9 +1576,10 @@ class TransactionService {
    * communications that share the same thread_id within the same
    * transaction. The user-visible action is "remove this conversation
    * from the transaction" — removing only one reply in a 5-message thread
-   * left the conversation broken with gaps. The expansion is atomic at
-   * the per-row level (we iterate inside a try/catch so a single failure
-   * does not silently leave a partial state).
+   * left the conversation broken with gaps.
+   *
+   * BACKLOG-3309: the whole conversation is removed in ONE transaction. Any
+   * failure rolls every sibling back and throws; there is no partial success.
    *
    * SMS messages do not use thread_id in the same conversational way, so
    * the expansion only triggers when (a) the communication is an email
@@ -1635,45 +1668,48 @@ class TransactionService {
       }
     }
 
-    let removed = 0;
-    let failed = 0;
-    // BACKLOG-1778: collect the communication ids actually removed so the
-    // renderer can drop exactly those rows in place (no full-list refetch,
-    // which reset the email list scroll position — the 1765 regression).
-    const unlinkedIds: string[] = [];
+    // BACKLOG-3309: two phases, the BACKLOG-2547 way.
+    //
+    // Phase 1 (reads only, may await): resolve every sibling and build its
+    // suppression row. A read failure for any sibling ABORTS the whole call —
+    // dropping one sibling here would split the conversation with no write
+    // failure at all. (The old per-sibling try/catch counted it as `failed` and
+    // still returned success.)
+    const planned: Array<{ id: string; ignoreRow: NewIgnoredCommunication }> = [];
     for (const id of idsToUnlink) {
-      try {
-        const sibling =
-          id === communicationId
-            ? communication
-            : await databaseService.getCommunicationById(id);
-        if (!sibling || !sibling.transaction_id) continue;
-        const siblingRec = sibling as Communication & {
-          email_id?: string;
-          thread_id?: string;
-        };
+      const sibling =
+        id === communicationId
+          ? communication
+          : await databaseService.getCommunicationById(id);
+      if (!sibling || !sibling.transaction_id) continue;
+      const siblingRec = sibling as Communication & {
+        email_id?: string;
+        thread_id?: string;
+      };
 
-        // BACKLOG-1585: Resolve email_id when null (older records or
-        // thread-based linking). Without email_id the ignored_communications
-        // row won't appear in "Show removed emails".
-        let resolvedEmailId = siblingRec.email_id || undefined;
-        if (!resolvedEmailId && siblingRec.thread_id) {
-          try {
-            const emailByThread = dbGet<{ id: string }>(
-              LATEST_EMAIL_IN_THREAD_SQL,
-              [siblingRec.thread_id],
-            );
-            if (emailByThread) resolvedEmailId = emailByThread.id;
-          } catch (err) {
-            await logService.warn(
-              "thread_id fallback failed during unlinkCommunication",
-              "TransactionService.unlinkCommunication",
-              { communicationId: id, thread_id: siblingRec.thread_id, err },
-            );
-          }
+      // BACKLOG-1585: Resolve email_id when null (older records or
+      // thread-based linking). Without email_id the ignored_communications
+      // row won't appear in "Show removed emails".
+      let resolvedEmailId = siblingRec.email_id || undefined;
+      if (!resolvedEmailId && siblingRec.thread_id) {
+        try {
+          const emailByThread = dbGet<{ id: string }>(
+            LATEST_EMAIL_IN_THREAD_SQL,
+            [siblingRec.thread_id],
+          );
+          if (emailByThread) resolvedEmailId = emailByThread.id;
+        } catch (err) {
+          await logService.warn(
+            "thread_id fallback failed during unlinkCommunication",
+            "TransactionService.unlinkCommunication",
+            { communicationId: id, thread_id: siblingRec.thread_id, err },
+          );
         }
+      }
 
-        await databaseService.addIgnoredCommunication({
+      planned.push({
+        id,
+        ignoreRow: {
           user_id: sibling.user_id,
           transaction_id: sibling.transaction_id,
           email_subject: sibling.subject,
@@ -1688,20 +1724,35 @@ class TransactionService {
           // returns the email to the correct section (address_missing → Needs
           // review; address_found / user_confirmed → Linked).
           match_reason: sibling.match_reason ?? undefined,
-        });
-
-        await databaseService.deleteCommunication(id);
-        removed++;
-        unlinkedIds.push(id);
-      } catch (err) {
-        failed++;
-        await logService.warn(
-          "Failed to unlink sibling communication in thread",
-          "TransactionService.unlinkCommunication",
-          { communicationId: id, err },
-        );
-      }
+        },
+      });
     }
+
+    // Phase 2 (writes): ONE transaction for the whole conversation. The body is
+    // synchronous, calls only `*Sync` primitives, and has NO try/catch inside —
+    // a caught statement error would leave the transaction alive and commit the
+    // rest (BACKLOG-2547). Any throw rolls back every sibling and propagates;
+    // the handler reports failure over an unchanged database.
+    try {
+      dbTransaction(() => {
+        for (const { id, ignoreRow } of planned) {
+          addIgnoredCommunicationSync(ignoreRow);
+          deleteCommunicationSync(id);
+        }
+      });
+    } catch (err) {
+      await logService.warn(
+        "Unlink rolled back; no communication in the conversation was removed",
+        "TransactionService.unlinkCommunication",
+        { communicationId, thread_id: resolvedThreadId || null, plannedCount: planned.length, err },
+      );
+      throw err;
+    }
+
+    // BACKLOG-1778: the communication ids actually removed, so the renderer can
+    // drop exactly those rows in place (no full-list refetch, which reset the
+    // email list scroll position — the 1765 regression).
+    const unlinkedIds = planned.map((p) => p.id);
 
     await logService.info(
       "Communication unlinked from transaction",
@@ -1711,8 +1762,7 @@ class TransactionService {
         transactionId: communication.transaction_id,
         threadId: resolvedThreadId || null,
         threadExpansion: isEmailThread,
-        removedCount: removed,
-        failedCount: failed,
+        removedCount: unlinkedIds.length,
         reason,
       },
     );
@@ -1795,58 +1845,66 @@ class TransactionService {
       }
     }
 
-    let restoredCount = 0;
-    for (const [, row] of rowsToRestore) {
-      const rowEmailId = row.email_id || emailId;
-      // Always clear the suppression row first, even if the link already exists,
-      // so an email can never remain in "Show removed" while it is linked.
-      await databaseService.removeIgnoredCommunication(row.id);
+    // BACKLOG-3310: the whole conversation is restored in ONE transaction. The
+    // body is synchronous (every read in it is `dbGet`), calls only `*Sync`
+    // primitives and has no try/catch inside, so a crash at any write leaves
+    // every row of the thread exactly as it was: still removed, never "neither
+    // removed nor linked".
+    const restoredCount = dbTransaction(() => {
+      let restored = 0;
+      for (const [, row] of rowsToRestore) {
+        const rowEmailId = row.email_id || emailId;
+        // Always clear the suppression row first, even if the link already exists,
+        // so an email can never remain in "Show removed" while it is linked.
+        removeIgnoredCommunicationSync(row.id);
 
-      // BACKLOG-2390 (restore idempotency): communications has a partial UNIQUE
-      // index on (email_id, transaction_id). A thread-aware restore can legitimately
-      // be reached more than once for the same email — a bulk/single Undo restores
-      // the whole conversation from one ignored row, so any other ignored row in the
-      // same thread (or a later manual "Show removed → restore" of an already-restored
-      // email) would re-INSERT a link that now already exists → the transient
-      // "UNIQUE constraint failed: communications.email_id, communications.transaction_id".
-      // Guard the re-insert: if the link already exists it is a benign no-op (still
-      // counted as restored), NOT a failure. Normal single restore is unaffected
-      // because unlinkCommunication DELETEs the communications row on removal, so the
-      // link genuinely does not exist and is re-inserted cleanly.
-      const alreadyLinked = rowEmailId
-        ? dbGet<{ id: string }>(
-            EMAIL_COMMUNICATION_EXISTS_SQL,
-            [rowEmailId, transactionId],
-          )
-        : null;
-      if (alreadyLinked) {
-        restoredCount++;
-        continue;
+        // BACKLOG-2390 (restore idempotency): communications has a partial UNIQUE
+        // index on (email_id, transaction_id). A thread-aware restore can legitimately
+        // be reached more than once for the same email — a bulk/single Undo restores
+        // the whole conversation from one ignored row, so any other ignored row in the
+        // same thread (or a later manual "Show removed → restore" of an already-restored
+        // email) would re-INSERT a link that now already exists → the transient
+        // "UNIQUE constraint failed: communications.email_id, communications.transaction_id".
+        // Guard the re-insert: if the link already exists it is a benign no-op (still
+        // counted as restored), NOT a failure. Normal single restore is unaffected
+        // because unlinkCommunication DELETEs the communications row on removal, so the
+        // link genuinely does not exist and is re-inserted cleanly.
+        const alreadyLinked = rowEmailId
+          ? dbGet<{ id: string }>(
+              EMAIL_COMMUNICATION_EXISTS_SQL,
+              [rowEmailId, transactionId],
+            )
+          : null;
+        if (alreadyLinked) {
+          restored++;
+          continue;
+        }
+
+        // BACKLOG-1718 (R5): include thread_id so the restored communications
+        // row has a populated thread_id column. Omitting it was the root cause
+        // of the remove→restore→remove cycle degradation: the next unlink's
+        // sibling query (WHERE thread_id = ?) found NULL rows and expanded to
+        // just one email instead of the full thread.
+        //
+        // BACKLOG-2319: preserve the removed link's classification. An
+        // address_missing email returns to Needs review; a confirmed / matched /
+        // legacy (NULL → treated as address_found) one returns to Linked.
+        createCommunicationSync({
+          user_id: userId,
+          transaction_id: transactionId,
+          email_id: rowEmailId,
+          thread_id: resolvedThreadId || undefined,
+          communication_type: "email",
+          link_source: "manual",
+          link_confidence: 1.0,
+          match_reason: (row.match_reason as MatchReason | null) ?? undefined,
+          has_attachments: false,
+          is_false_positive: false,
+        } as NewCommunication);
+        restored++;
       }
-
-      // BACKLOG-1718 (R5): include thread_id so the restored communications
-      // row has a populated thread_id column. Omitting it was the root cause
-      // of the remove→restore→remove cycle degradation: the next unlink's
-      // sibling query (WHERE thread_id = ?) found NULL rows and expanded to
-      // just one email instead of the full thread.
-      //
-      // BACKLOG-2319: preserve the removed link's classification. An
-      // address_missing email returns to Needs review; a confirmed / matched /
-      // legacy (NULL → treated as address_found) one returns to Linked.
-      await databaseService.createCommunication({
-        user_id: userId,
-        transaction_id: transactionId,
-        email_id: rowEmailId,
-        thread_id: resolvedThreadId || undefined,
-        communication_type: "email",
-        link_source: "manual",
-        link_confidence: 1.0,
-        match_reason: (row.match_reason as MatchReason | null) ?? undefined,
-        has_attachments: false,
-        is_false_positive: false,
-      } as NewCommunication);
-      restoredCount++;
-    }
+      return restored;
+    });
 
     await logService.info(
       "Removed email(s) restored",
@@ -2159,7 +2217,21 @@ class TransactionService {
   /**
    * Link messages to a transaction
    */
-  async linkMessages(messageIds: string[], transactionId: string): Promise<void> {
+  /**
+   * @param unignoreId BACKLOG-3310 — the `ignored_communications` row a restore
+   *   clears. It is deleted inside the LAST chunk's transaction, so for up to
+   *   `LINK_MESSAGES_CHUNK_SIZE` messages the restore is all-or-nothing. Above
+   *   that, a crash in an earlier chunk keeps the suppression row: the thread
+   *   stays on the Removed card and one retry completes it (linking is
+   *   idempotent). It is never cleared while part of the thread is unlinked.
+   *   With an empty `messageIds` no chunk runs and the row is NOT cleared; the
+   *   only caller that passes it (restore-removed-message) rejects an empty list.
+   */
+  async linkMessages(
+    messageIds: string[],
+    transactionId: string,
+    unignoreId?: string,
+  ): Promise<void> {
     // BACKLOG-3785: the transaction ROW only. This used to be
     // getTransactionDetails(), which also loads every linked communication with
     // its body — 75k rows on a large deal — to read two columns.
@@ -2183,8 +2255,10 @@ class TransactionService {
       for (let start = 0; start < messageIds.length; start += LINK_MESSAGES_CHUNK_SIZE) {
         if (start > 0) await yieldToEventLoop();
         const chunk = messageIds.slice(start, start + LINK_MESSAGES_CHUNK_SIZE);
+        const isLastChunk = start + LINK_MESSAGES_CHUNK_SIZE >= messageIds.length;
         linkedCount += dbTransaction(() => {
           let chunkLinked = 0;
+          if (isLastChunk && unignoreId) removeIgnoredCommunicationSync(unignoreId);
           for (const messageId of chunk) {
             linkMessageToTransaction(messageId, transactionId);
             const refId = createCommunicationReferenceSync(

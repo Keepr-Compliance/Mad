@@ -38,19 +38,40 @@ jest.mock("better-sqlite3-multiple-ciphers", () =>
 
 import { BackupService } from "../backupService";
 
-type FakeProcess = { kill: jest.Mock };
-const fakeProcess = (): FakeProcess => ({ kill: jest.fn() });
+// BACKLOG-3996 (SR R2): exitCode / signalCode are always-set fields on a real
+// ChildProcess (null while alive). The kill path now reads them, never `.killed`;
+// without them the fake reads as already exited. `exitsOnSigterm` sets signalCode the
+// way a real process that obeyed SIGTERM does.
+type FakeProcess = { kill: jest.Mock; pid: number; exitCode: number | null; signalCode: string | null };
+const fakeProcess = (exitsOnSigterm = false): FakeProcess => {
+  const p: FakeProcess = { kill: jest.fn(), pid: 4243, exitCode: null, signalCode: null };
+  p.kill.mockImplementation((signal: string) => {
+    if (exitsOnSigterm || signal === "SIGKILL") p.signalCode = signal;
+    return true;
+  });
+  return p;
+};
 const setCurrent = (svc: BackupService, p: FakeProcess | null) => {
   (svc as unknown as { currentProcess: FakeProcess | null }).currentProcess = p;
 };
 
-beforeEach(() => jest.useFakeTimers());
-afterEach(() => jest.useRealTimers());
+// BACKLOG-3996: SIGTERM then SIGKILL at 5 s is the POSIX path; on Windows cancel runs
+// taskkill /T /F (iphoneToolProcess-3996.test.ts). Pinned so these cases mean the same
+// on a Windows runner.
+const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+beforeEach(() => {
+  jest.useFakeTimers();
+  Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+});
+afterEach(() => {
+  jest.useRealTimers();
+  Object.defineProperty(process, "platform", originalPlatform);
+});
 
 describe("BACKLOG-3598: cancelBackup force-kill timer", () => {
   it("a new backup started inside 5 s of the cancel is NOT killed", () => {
     const svc = new BackupService();
-    const stopped = fakeProcess();
+    const stopped = fakeProcess(true);
     setCurrent(svc, stopped);
 
     svc.cancelBackup();

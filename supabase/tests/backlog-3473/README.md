@@ -19,6 +19,17 @@ CI runs only the text tripwire, `broker-portal/__tests__/migrations/transaction-
 (control C23). Nothing in this directory runs in CI. No file here has a `.test.` or
 `.spec.` infix (`scripts/ci/check-test-drift.mjs` would flag it).
 
+## Historical pins (BACKLOG-3945, 2026-10-14)
+
+Every "production" pin in this harness is production **as of 2026-09-21, before ledger
+20260921101756** (`gate-expected.txt`, `rpc-before.sql`, `venue-catalogue*.sql`).
+Production has moved on since; the pins are historical and are not a production-today
+check. The harness replays migrations 1–2 only onto a venue at that baseline:
+`run.sh apply` runs `lib/apply-guard.sql` in file 1's transaction and refuses
+otherwise, and `teardown` runs only after a verified apply (it requires the marker the
+guard writes). The gate also fails on any venue key absent from `gate-expected.txt`
+(UNKNOWN). Offline gate control, no database: `lib/stub-psql.sh` (usage in its header).
+
 ## Layout
 
 ```
@@ -26,13 +37,18 @@ run.sh                  every command; refuses any host that is not loopback or 
 lib/fixtures.sql        helpers + synthetic fixtures, loaded inside each control's transaction
 lib/fixtures-3474.sql   BACKLOG-3474 save helpers (t3474_*), loaded after the 3474 migration
 lib/ssh-psql.sh         PSQL stand-in for a venue that answers SSH but not its Postgres port
-lib/rpc-before.sql      production's three read functions, verbatim (md5 = production's)
+lib/rpc-before.sql      the three read functions as production defined them on 2026-09-21
+                        (historical), verbatim; teardown's restore source
+lib/apply-guard.sql     run by `apply` in file 1's transaction: pre-3473 baseline check + marker
+lib/stub-psql.sh        offline gate control: serves a captured catalogue to the real gate
 lib/catalog-snapshot.sql  C21's S1 / S2
-lib/gate-catalog.sql    venue fingerprint; gate-expected.txt is production's output (252 rows)
+lib/gate-catalog.sql    venue fingerprint; gate-expected.txt is production's output on
+                        2026-09-21 (252 rows; historical)
 lib/gate-accepted.txt   accepted venue differences (empty until the first gate run)
-lib/teardown.sql        takes migrations 1 and 2 back off the venue, verified by re-hash
-lib/venue-catalogue*.sql  production's plan / feature catalogue for a schema-only venue:
-                        seed, verify (re-hash vs production), teardown
+lib/teardown.sql        takes migrations 1 and 2 back off the venue, verified by re-hash;
+                        refuses without apply's marker
+lib/venue-catalogue*.sql  production's plan / feature catalogue on 2026-09-21 (historical)
+                        for a schema-only venue: seed, verify (re-hash vs that pin), teardown
 fixtures/               the probe's captured desktop read (postgrest-desktop-read.json)
 controls/*.sql          one control per file, each in its own rolled-back transaction
 mutants/generate.mjs    derives every mutant from the shipped migrations
@@ -50,7 +66,8 @@ every feature that carries a min_tier; there is no scope setting.
    first. It refuses unless the four catalogue tables are empty, and re-hashes what it
    wrote against production. Without it the gate reports 130 missing catalogue rows
    and the fixtures refuse to load.
-1. `run.sh "$URL" gate` — stop on any MISMATCH not in `gate-accepted.txt`.
+1. `run.sh "$URL" gate` — stop on any MISMATCH not in `gate-accepted.txt`, and on any
+   UNKNOWN key.
 2. `run.sh "$URL" apply-prod` — C21 (K3 order): files 1→2→3, admin toggle, S1, files
    1→2→3 again, S2, S1 = S2 both ways. All in one rolled-back transaction.
 3. `run.sh "$URL" apply-prod-mutants` — a01–a05: each must go RED.
@@ -58,11 +75,14 @@ every feature that carries a min_tier; there is no scope setting.
 5. `run.sh "$URL" mutants` — every mutant reds its targets (m39 and m48 must stay
    GREEN). `MATRIX=1` runs every mutant against every control.
 6. `node mutants/generate.mjs --check` first, so no mutant is stale.
-7. `run.sh "$URL" apply` — COMMITS files 1 and 2 (never 3) and reloads PostgREST.
+7. `run.sh "$URL" apply` — COMMITS files 1 and 2 (never 3) and reloads PostgREST. File 1
+   commits only behind `lib/apply-guard.sql`, which refuses a venue not at the pre-3473
+   baseline and writes the marker `teardown` requires.
 8. `run.sh "$URL" probe-seed`, then `run.sh "$URL" probe` (needs `SUPABASE_URL` and
    `SUPABASE_JWT_SECRET` in the environment), then `run.sh "$URL" probe-mutant`.
-9. `run.sh "$URL" probe-cleanup`, then `run.sh "$URL" teardown`, then `gate` again —
-   it must re-match (with the catalogue still present).
+9. `run.sh "$URL" probe-cleanup`, then `run.sh "$URL" teardown` (refuses without the
+   marker from step 7; removes it), then `gate` again — it must re-match (with the
+   catalogue still present).
 10. If step 0 ran: `run.sh "$URL" catalogue-teardown` — the venue is schema-only again.
 
 ## Reaching the NAS venue over SSH (BACKLOG-3474, 2026-09-24)
@@ -169,7 +189,8 @@ supabase/tests/backlog-3473/run.sh "$URL" gate                # every command as
   `pg_get_functiondef` text, byte-for-byte (its md5s equal production's). The gate
   refuses a venue whose three read functions differ from production — never accepted —
   so restoring from the file restores the venue's own bodies, and `teardown.sql`
-  re-hashes and raises on any difference.
+  re-hashes and raises on any difference. Since BACKLOG-3945 `apply` enforces the same
+  precondition itself (`lib/apply-guard.sql`), and `teardown` refuses without its marker.
 
 ## Results
 

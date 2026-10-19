@@ -16,7 +16,6 @@ export type AppStep =
   | "error" // TASK-2278: Error screen for DB init failures and other errors
   | "keychain-explanation"
   | "phone-type-selection"
-  | "android-coming-soon"
   | "apple-driver-setup"
   | "email-onboarding"
   | "permissions"

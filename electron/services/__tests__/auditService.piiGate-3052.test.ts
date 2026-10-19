@@ -69,6 +69,8 @@ const mockDatabaseService = {
 
 const mockSupabaseService = {
   batchInsertAuditLogs: jest.fn(),
+  // BACKLOG-3987: syncToCloud sends only the signed-in user's entries.
+  getAuthSession: jest.fn(async () => ({ userId: "user-1" })),
 };
 
 /** A contact's name, as `contactHandlers` writes it on CONTACT_CREATE. */
@@ -96,6 +98,7 @@ describe("auditService — third-party PII is gated on support access (BACKLOG-3
 
     (auditService as any).pendingSyncQueue = [];
     (auditService as any).syncInProgress = false;
+    (auditService as any).currentSync = null;
     (auditService as any).initialized = false;
     (auditService as any).databaseService = null;
     (auditService as any).supabaseService = null;
@@ -106,6 +109,9 @@ describe("auditService — third-party PII is gated on support access (BACKLOG-3
 
     mockDatabaseService.isInitialized.mockReturnValue(true);
     mockSupabaseService.batchInsertAuditLogs.mockResolvedValue(undefined);
+    // BACKLOG-3987: the table fallback is live; default it to empty.
+    mockDatabaseService.getUnsyncedAuditLogs.mockReset();
+    mockDatabaseService.getUnsyncedAuditLogs.mockResolvedValue([]);
 
     auditService.initialize(
       mockDatabaseService as any,
@@ -397,30 +403,17 @@ describe("auditService — third-party PII is gated on support access (BACKLOG-3
   });
 
   // -----------------------------------------------------------------------
-  // The gate has to cover every route to `batchInsertAuditLogs`. There is
-  // exactly one, which is not obvious from reading `syncToCloud`.
+  // The gate has to cover every route to `batchInsertAuditLogs`. There are
+  // two: the in-memory queue, and the fallback to `getUnsyncedAuditLogs()`
+  // for rows written on an earlier run.
   //
-  // It reads as two routes — the in-memory queue, and a fallback to
-  // `getUnsyncedAuditLogs()` for rows written on an earlier run. The fallback
-  // is DEAD. `syncToCloud` opens with
-  //
-  //     if (this.syncInProgress || this.pendingSyncQueue.length === 0) return;
-  //
-  // so by the time control reaches `if (this.pendingSyncQueue.length > 0)` that
-  // condition is always true and the `else` never runs. Measured, not read: the
-  // assertions below are what a queue-only gate would have missed if the branch
-  // were live, and they came from writing the test for the fallback and finding
-  // no upload at all.
-  //
-  // Left as it is. This item removes data from the upload; making the fallback
-  // live would ADD rows nobody asked to have uploaded, in a PR about not
-  // uploading things. Filed on BACKLOG-3052 as a separate finding.
-  //
-  // Pinned here so that whoever does revive it is sent back to the gate: this
-  // test goes red the moment the early return stops swallowing that path.
+  // Until BACKLOG-3987 the fallback was dead: `syncToCloud` returned early on
+  // an empty queue, so the `else` never ran (this block used to pin that).
+  // BACKLOG-3987 made it live, so rows recovered from the table now reach the
+  // upload and must be stripped exactly like queued ones.
   // -----------------------------------------------------------------------
   describe("the database fallback in syncToCloud", () => {
-    it("is unreachable, so the queue is the only route the gate must cover", async () => {
+    it("strips third-party PII from rows recovered from the table (BACKLOG-3987)", async () => {
       mockDatabaseService.getUnsyncedAuditLogs.mockResolvedValue([
         {
           id: "audit-recovered-1",
@@ -434,13 +427,92 @@ describe("auditService — third-party PII is gated on support access (BACKLOG-3
         } satisfies AuditLogEntry,
       ]);
 
-      // Nothing queued — the only state in which the fallback could ever run.
+      // Nothing queued — the restart state the fallback exists for.
       expect(auditService.getPendingSyncCount()).toBe(0);
 
       await auditService.syncToCloud();
 
-      expect(mockDatabaseService.getUnsyncedAuditLogs).not.toHaveBeenCalled();
-      expect(mockSupabaseService.batchInsertAuditLogs).not.toHaveBeenCalled();
+      expect(mockDatabaseService.getUnsyncedAuditLogs).toHaveBeenCalledTimes(1);
+      expect(mockSupabaseService.batchInsertAuditLogs).toHaveBeenCalledTimes(1);
+      const [uploaded] = mockSupabaseService.batchInsertAuditLogs.mock.calls[0][0];
+      expect(uploaded.id).toBe("audit-recovered-1");
+      expect(uploaded.metadata).toEqual({ source: "manual" });
+      expect(JSON.stringify(uploaded)).not.toContain(CONTACT_NAME);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // BACKLOG-3339: raw free text (error_message, and metadata.error) does not
+  // leave the machine outside a support window — live sends and the 3987
+  // table backfill alike. The real-driver backfill control is in
+  // db/__tests__/auditCloudStrip-3339.test.ts (S2).
+  // -----------------------------------------------------------------------
+  describe("free-text fields (BACKLOG-3339)", () => {
+    /** A raw error message of the shape a failed contact write produces. */
+    const RAW_ERROR = `Contact "${CONTACT_NAME}" at ${PROPERTY_ADDRESS} could not be saved`;
+
+    const logFailedLogin = async (): Promise<void> => {
+      await auditService.log({
+        userId: "user-1",
+        action: "LOGIN_FAILED" as AuditAction,
+        resourceType: "SESSION" as ResourceType,
+        metadata: { provider: "microsoft", error: RAW_ERROR },
+        success: false,
+        errorMessage: RAW_ERROR,
+      });
+      await auditService.syncToCloud();
+    };
+
+    it("live send: uploads the failed entry without error_message or metadata.error", async () => {
+      await logFailedLogin();
+      const [uploaded] = uploadedEntries();
+      expect(uploaded.action).toBe("LOGIN_FAILED");
+      expect(uploaded.userId).toBe("user-1");
+      expect(uploaded.success).toBe(false);
+      expect(uploaded.errorMessage).toBeUndefined();
+      expect(uploaded.metadata).toEqual({ provider: "microsoft" });
+      expect(JSON.stringify(uploaded)).not.toContain(CONTACT_NAME);
+    });
+
+    it("keeps error_message in the local audit record", async () => {
+      await logFailedLogin();
+      const local = mockDatabaseService.insertAuditLog.mock.calls[0][0] as AuditLogEntry;
+      expect(local.errorMessage).toBe(RAW_ERROR);
+      expect(local.metadata).toEqual({ provider: "microsoft", error: RAW_ERROR });
+    });
+
+    it("backfill: strips error_message from rows recovered from the table", async () => {
+      mockDatabaseService.getUnsyncedAuditLogs.mockResolvedValue([
+        {
+          id: "audit-recovered-err",
+          timestamp: new Date(T0),
+          userId: "user-1",
+          action: "CONTACT_CREATE" as AuditAction,
+          resourceType: "CONTACT" as ResourceType,
+          success: false,
+          errorMessage: RAW_ERROR,
+          ipAddress: "203.0.113.7",
+          userAgent: "fixture-agent",
+        } satisfies AuditLogEntry,
+      ]);
+      expect(auditService.getPendingSyncCount()).toBe(0);
+
+      await auditService.syncToCloud();
+
+      const [uploaded] = uploadedEntries();
+      expect(uploaded.id).toBe("audit-recovered-err");
+      expect(uploaded.success).toBe(false);
+      expect(uploaded.errorMessage).toBeUndefined();
+      expect(uploaded.ipAddress).toBeUndefined();
+      expect(uploaded.userAgent).toBeUndefined();
+      expect(JSON.stringify(uploaded)).not.toContain(CONTACT_NAME);
+    });
+
+    it("uploads error_message while a support-access window is open", async () => {
+      wireGate(await grant7d());
+      await logFailedLogin();
+      const [uploaded] = uploadedEntries();
+      expect(uploaded.errorMessage).toBe(RAW_ERROR);
     });
   });
 

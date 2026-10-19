@@ -1,5 +1,6 @@
 -- BACKLOG-3473: the venue's catalogue must equal production's, hashed the same
--- way on both sides (production read-only, 2026-09-21). Included by
+-- way on both sides (production read-only, 2026-09-21; HISTORICAL per BACKLOG-3945,
+-- 2026-10-14: production's catalogue has grown since; this is not a production-today check). Included by
 -- venue-catalogue.sql after it writes, and by venue-catalogue-teardown.sql
 -- before it deletes, so teardown removes only the set the seed wrote.
 -- Raises on any difference, which rolls the enclosing transaction back.

@@ -27,8 +27,6 @@ import type { IphoneSyncDiagnostic } from "./deviceDetectionService";
 import { checkAppleDrivers } from "./appleDriverService";
 import { getHostArchitecture } from "./diagnostics/hostArchitecture";
 import type { HostArchitecture } from "./diagnostics/hostArchitecture";
-import { pairingService } from "./pairingService";
-import localSyncService from "./localSyncService";
 import supabaseService from "./supabaseService";
 // BACKLOG-2394: contacts + storage facts. Five of nine tickets filed in one day
 // were answerable from these counts, and every one of them arrived with a
@@ -94,18 +92,6 @@ export interface IphoneSyncDiagnostics {
     installed_via_override?: true;
     /** BACKLOG-3927: Store build Apple Devices state; null on the website build. */
     apple_devices_state?: "not-installed" | "not-running" | "msi-service-stopped" | "usb-driver-missing" | "ready" | null;
-  };
-  /**
-   * Android WiFi-companion state. Populated best-effort for all users but most
-   * meaningful when phone_type === "android". In-memory only (not persisted).
-   */
-  android_companion: {
-    paired: boolean;
-    connected: boolean;
-    device_count: number;
-    last_seen: string | null;
-    server_running: boolean;
-    last_sync_at: string | null;
   };
   /** Supabase-synced user settings relevant to sync (from user_preferences). */
   user_settings: {
@@ -619,14 +605,6 @@ function defaultIphoneSyncDiagnostics(): IphoneSyncDiagnostics {
     trust_state: null,
     windows: null,
     apple_driver: { is_installed: false, service_running: false, version: null },
-    android_companion: {
-      paired: false,
-      connected: false,
-      device_count: 0,
-      last_seen: null,
-      server_running: false,
-      last_sync_at: null,
-    },
     user_settings: {
       phone_type: null,
       contact_sources_configured: false,
@@ -684,45 +662,6 @@ async function collectIphoneSyncDiagnostics(): Promise<IphoneSyncDiagnostics> {
       ...(driver.installedVia ? { installed_via: driver.installedVia } : {}),
       ...(driver.sourceOverridden ? { installed_via_override: true as const } : {}),
       ...(driver.appleDevices ? { apple_devices_state: driver.appleDevices.state } : {}),
-    };
-  } catch {
-    /* keep defaults */
-  }
-
-  // Android WiFi-companion state (in-memory; most meaningful for android users).
-  try {
-    const pairing = pairingService.getStatus();
-    const lastSeen = pairing.devices.reduce<string | null>((latest, d) => {
-      if (!d.lastSeen) return latest;
-      if (!latest || d.lastSeen > latest) return d.lastSeen;
-      return latest;
-    }, null);
-    // "connected" = a paired device was seen within the recency window.
-    const CONNECTED_RECENCY_MS = 60_000;
-    const connected =
-      lastSeen !== null &&
-      Date.now() - new Date(lastSeen).getTime() <= CONNECTED_RECENCY_MS;
-
-    let serverRunning = false;
-    let lastSyncAt: string | null = null;
-    try {
-      const sync = localSyncService.getStatus();
-      serverRunning = sync.running;
-      lastSyncAt =
-        typeof sync.lastSyncTimestamp === "number"
-          ? new Date(sync.lastSyncTimestamp).toISOString()
-          : null;
-    } catch {
-      /* companion server status optional */
-    }
-
-    section.android_companion = {
-      paired: pairing.isPaired,
-      connected,
-      device_count: pairing.devices.length,
-      last_seen: lastSeen,
-      server_running: serverRunning,
-      last_sync_at: lastSyncAt,
     };
   } catch {
     /* keep defaults */

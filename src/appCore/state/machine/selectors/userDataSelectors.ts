@@ -27,7 +27,6 @@ const STEP_ORDER: OnboardingStep[] = [
   "data-sync",
   "permissions",
   "apple-driver",
-  "android-coming-soon",
 ];
 
 /**

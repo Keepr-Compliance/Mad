@@ -17,6 +17,12 @@
   Per-root floors stop an empty or partial unpack from passing green. The
   measured counts for v2.38.1 are outer 7, app 64, uninst 4 (+1 installer).
   BACKLOG-3812 removed 5 PE files from the iPhone tools folder: app 64 -> 59.
+  BACKLOG-3927: the Store build trims the libimobiledevice folder from 45 files
+  to 11 (34 fewer PE files; see scripts/release/pinnedIphoneTools.js), so the
+  Store app root measures 25 against 59 for the website.
+  BACKLOG-3689: the website build ships the same 11 files, so both app roots hold
+  the same PE set: 25 (59 - 34; computed for the website until its first signed
+  build measures it). One app floor for both channels: 21, a margin of 4.
 
   Exit code: 0 = every file Valid and every floor met; 1 = anything else.
 
@@ -26,6 +32,9 @@
   Scratch directory for the unpacked trees. Must not exist or must be empty.
 .PARAMETER SevenZip
   7-Zip executable. Default "7z" (present on windows-latest runners).
+.PARAMETER Channel
+  "website" (default) or "store". Accepted so release.yml can pass it; it no
+  longer selects a floor (BACKLOG-3689: both channels use app 21).
 .PARAMETER HeaderOnly
   Skip Get-AuthenticodeSignature and report only whether each file carries a
   certificate table. For running the enumeration half off Windows. Never used
@@ -36,15 +45,17 @@ param(
   [Parameter(Mandatory = $true)][string]$Installer,
   [Parameter(Mandatory = $true)][string]$WorkDir,
   [string]$SevenZip = "7z",
-  [switch]$HeaderOnly
+  [switch]$HeaderOnly,
+  [ValidateSet("website", "store")][string]$Channel = "website"
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-# Minimum PE files each unpack root must contribute (v2.38.1 measured 7 / 64 / 4;
-# app is 59 after BACKLOG-3812).
-$Floors = [ordered]@{ outer = 7; app = 55; uninst = 4 }
+# Minimum PE files each unpack root must contribute (v2.38.1 measured 7 / 64 / 4).
+# app: 25 for both channels after BACKLOG-3927 / BACKLOG-3689 (Store measured 25),
+# floor 21 = 25 - 4. One value: $Channel does not change it.
+$Floors = [ordered]@{ outer = 7; app = 21; uninst = 4 }
 
 function Fail([string]$msg) {
   Write-Host "::error::$msg"

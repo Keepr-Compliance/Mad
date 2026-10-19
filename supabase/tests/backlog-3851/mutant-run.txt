@@ -1,0 +1,318 @@
+-- baseline: every control against the unmutated migrations
+CONTROLS: pass=13 fail=0 error=0 checks=464 failed_checks=0
+MUTATION APPLIED|R3_rewrite_on_update|1 edit(s)
+== R3_rewrite_on_update  MUTATION APPLIED: <   IF TG_OP = 'INSERT' AND public.member_origin_is_idp(NEW.provisioned_by) THEN >   IF public.member_origin_is_idp(NEW.provisioned_by) THEN 
+     c11-update-never-rewritten: FAIL|c11 assign a jit-origin unassigned member into a full org -> seat_limit_reached|OK <null>
+     c11-update-never-rewritten: FAIL|c11 RPC result success=false|
+     c11-update-never-rewritten: FAIL|c11 service_role UPDATE unassigned->active (jit origin) refused, not rewritten|OK rows=1
+     c11-update-never-rewritten: FAIL|c11 service_role UPDATE suspended->active (scim-style reactivate) refused|
+CONTROLS: pass=0 fail=1 error=0 checks=5 failed_checks=4
+KILLED|R3_rewrite_on_update|controls c11
+MUTATION APPLIED|W3_current_user_exempt|1 edit(s)
+== W3_current_user_exempt  MUTATION APPLIED: >   IF current_user NOT IN ('authenticated', 'anon') THEN RETURN NEW; END IF; 
+     c02-seat-refusal: FAIL|c02 service_role invite into a full org refused (P0001 seat_limit_reached)|
+     c02-seat-refusal: FAIL|c02 postgres UPDATE suspended->active in a full org refused|OK rows=1
+     c02-seat-refusal: FAIL|c02 assign set license_assigned_at|
+     c02-seat-refusal: FAIL|c02 active->active keeps license_assigned_at (not forgeable)|
+     c02-seat-refusal: FAIL|c02 ... and stored without it|
+     c02-seat-refusal: FAIL|c02 pending rows carry no license_assigned_at|
+     c02-seat-refusal: FAIL|c02 claimed row active with license_assigned_at|active
+CONTROLS: pass=0 fail=1 error=0 checks=21 failed_checks=7
+KILLED|W3_current_user_exempt|controls c02
+MUTATION APPLIED|W3b_service_exempt|1 edit(s)
+== W3b_service_exempt  MUTATION APPLIED: >   IF current_setting('request.jwt.claims', true)::jsonb ->> 'role' = 'service_role' THEN RETURN NEW; END IF; 
+     c03-idp-overflow: FAIL|c03 ... written unassigned|
+     c03-idp-overflow: FAIL|c03 ... written unassigned|
+     c03-idp-overflow: FAIL|c03 service_role manual-origin active INSERT into the full org refused|
+     c03-idp-overflow: FAIL|c03 service_role NULL-origin active INSERT into the full org refused|
+     c03-idp-overflow: FAIL|c03 seats still 4|6
+CONTROLS: pass=0 fail=1 error=0 checks=12 failed_checks=5
+KILLED|W3b_service_exempt|controls c03
+MUTATION APPLIED|R4_removed|1 edit(s)
+== R4_removed  MUTATION APPLIED: <   IF NEW.user_id IS NOT NULL AND NOT EXISTS ( <     SELECT 1 FROM public.organization_members m <      WHERE m.organization_id = NEW.organization_id <        AND m.id <> NEW.id 
+     c12-first-member: FAIL|c12 ... active with license_assigned_at (over the limit by one)|
+     c12-first-member: FAIL|c12 seats = max_seats + 1|2
+     c12-first-member: FAIL|c12 seats still max_seats + 1|
+     c12-first-member: FAIL|c12 w2_org (only a suspended claimed member): first /setup caller active|{"role": "agent", "success": true, "user_id": "{u_w3}", "organization_id": "{w2_org}"}
+CONTROLS: pass=0 fail=1 error=0 checks=8 failed_checks=4
+KILLED|R4_removed|controls c12
+MUTATION APPLIED|R4_any_member|1 edit(s)
+== R4_any_member  MUTATION APPLIED: <        AND public.member_status_grants_access(m.license_status) 
+     c12-first-member: FAIL|c12 w2_org (only a suspended claimed member): first /setup caller active|{"role": "agent", "success": true, "user_id": "{u_w3}", "organization_id": "{w2_org}"}
+CONTROLS: pass=0 fail=1 error=0 checks=8 failed_checks=1
+KILLED|R4_any_member|controls c12
+MUTATION APPLIED|IDP_origin_any|1 edit(s)
+== IDP_origin_any  MUTATION APPLIED: <   SELECT COALESCE(p_provisioned_by IN ('jit', 'scim', 'directory_sync'), false); >   SELECT COALESCE(p_provisioned_by IN ('jit', 'scim', 'directory_sync', 'manual', 'invite'), false); 
+     c03-idp-overflow: FAIL|c03 service_role manual-origin active INSERT into the full org refused|
+CONTROLS: pass=0 fail=1 error=0 checks=12 failed_checks=1
+KILLED|IDP_origin_any|controls c03
+MUTATION APPLIED|W13_no_expires_col|1 edit(s)
+== W13_no_expires_col  MUTATION APPLIED: <   BEFORE INSERT OR UPDATE OF license_status, organization_id, invitation_expires_at, user_id, license_assigned_at >   BEFORE INSERT OR UPDATE OF license_status, organization_id, user_id, license_assigned_at 
+     c16-resend-expired: FAIL|c16 client admin Resend of the expired invite -> seat_limit_reached|OK rows=1
+     c16-resend-expired: FAIL|c16 service_role Resend of the expired invite -> seat_limit_reached|
+CONTROLS: pass=1 fail=1 error=0 checks=14 failed_checks=2
+KILLED|W13_no_expires_col|controls c16
+MUTATION APPLIED|W13b_status_only_seat|1 edit(s)
+== W13b_status_only_seat  MUTATION APPLIED: <     p_license_status = 'active' <     OR (p_license_status = 'pending' <         AND (p_user_id IS NOT NULL OR p_invitation_expires_at IS NULL OR p_invitation_expires_at >= now())), >     p_license_status IN ('active', 'pending'), 
+     c16-resend-expired: FAIL|c16 client admin Resend of the expired invite -> seat_limit_reached|OK rows=1
+     c16-resend-expired: FAIL|c16 service_role Resend of the expired invite -> seat_limit_reached|
+     c16b-invite-after-expiry: FAIL|c16b portal invite (client admin) allowed|ERR 42501 Organization has reached maximum seats
+     c16b-invite-after-expiry: FAIL|c16b staff invite (admin_invite_user) allowed|OK {"error": "seat_limit_reached", "success": false}
+     c16b-invite-after-expiry: FAIL|c16b keep one portal invite|
+CONTROLS: pass=0 fail=2 error=0 checks=14 failed_checks=5
+KILLED|W13b_status_only_seat|controls c16
+MUTATION APPLIED|Q4_guard_old_count|1 edit(s)
+== Q4_guard_old_count  MUTATION APPLIED: <          AND public.member_row_holds_seat(m.license_status, m.invitation_expires_at, m.user_id); >          AND m.license_status IN ('active', 'pending'); 
+     c16b-invite-after-expiry: FAIL|c16b portal invite (client admin) allowed|ERR 42501 Organization has reached maximum seats
+     c16b-invite-after-expiry: FAIL|c16b keep one portal invite|
+     c16b-invite-after-expiry: FAIL|c16b next staff invite refused (now full)|
+CONTROLS: pass=0 fail=1 error=0 checks=6 failed_checks=3
+KILLED|Q4_guard_old_count|controls c16b
+MUTATION APPLIED|Q4_admin_invite_old_count|1 edit(s)
+== Q4_admin_invite_old_count  MUTATION APPLIED: <         AND public.member_row_holds_seat(license_status, invitation_expires_at, user_id); >         AND license_status IN ('active', 'pending'); 
+     c16b-invite-after-expiry: FAIL|c16b staff invite (admin_invite_user) allowed|OK {"error": "seat_limit_reached", "success": false}
+CONTROLS: pass=0 fail=1 error=0 checks=6 failed_checks=1
+KILLED|Q4_admin_invite_old_count|controls c16b
+MUTATION APPLIED|Q4_expiry_strict|1 edit(s)
+== Q4_expiry_strict  MUTATION APPLIED: <         AND (p_user_id IS NOT NULL OR p_invitation_expires_at IS NULL OR p_invitation_expires_at >= now())), >         AND (p_user_id IS NOT NULL OR p_invitation_expires_at IS NULL OR p_invitation_expires_at > now() + interval '1 day')), 
+     c07-helpers: FAIL|c07 row_holds_seat(pending, unclaimed, +1 hour)|got false
+CONTROLS: pass=0 fail=1 error=0 checks=40 failed_checks=1
+KILLED|Q4_expiry_strict|controls c07
+MUTATION APPLIED|PERSONAL_not_skipped|1 edit(s)
+== PERSONAL_not_skipped  MUTATION APPLIED: <   IF v_personal IS DISTINCT FROM false THEN >   IF false THEN 
+     c02-seat-refusal: FAIL|c02 personal org: second active member not refused|
+CONTROLS: pass=0 fail=1 error=0 checks=21 failed_checks=1
+KILLED|PERSONAL_not_skipped|controls c02
+MUTATION APPLIED|NOLIMIT_zero_counts|1 edit(s)
+== NOLIMIT_zero_counts  MUTATION APPLIED: <   IF v_max_seats IS NULL OR v_max_seats <= 0 THEN >   IF v_max_seats IS NULL THEN 
+     c02-seat-refusal: FAIL|c02 max_seats 0 = no limit|
+CONTROLS: pass=0 fail=1 error=0 checks=21 failed_checks=1
+KILLED|NOLIMIT_zero_counts|controls c02
+MUTATION APPLIED|R9_no_timestamp|1 edit(s)
+== R9_no_timestamp  MUTATION APPLIED: <     ELSE <       NEW.license_assigned_at := now(); 
+     c02-seat-refusal: FAIL|c02 assign set license_assigned_at|
+     c02-seat-refusal: FAIL|c02 active->active keeps license_assigned_at (not forgeable)|
+     c02-seat-refusal: FAIL|c02 claimed row active with license_assigned_at|active
+CONTROLS: pass=0 fail=1 error=0 checks=21 failed_checks=3
+KILLED|R9_no_timestamp|controls c02
+MUTATION APPLIED|R9_not_cleared|1 edit(s)
+== R9_not_cleared  MUTATION APPLIED: <   ELSE <     NEW.license_assigned_at := NULL; 
+     c02-seat-refusal: FAIL|c02 ... and stored without it|
+     c02-seat-refusal: FAIL|c02 pending rows carry no license_assigned_at|
+CONTROLS: pass=0 fail=1 error=0 checks=21 failed_checks=2
+KILLED|R9_not_cleared|controls c02
+MUTATION APPLIED|R9_forgeable|1 edit(s)
+== R9_forgeable  MUTATION APPLIED: <       NEW.license_assigned_at := OLD.license_assigned_at; >       NULL; 
+     c02-seat-refusal: FAIL|c02 active->active keeps license_assigned_at (not forgeable)|
+CONTROLS: pass=0 fail=1 error=0 checks=21 failed_checks=1
+KILLED|R9_forgeable|controls c02
+MUTATION APPLIED|R10_broker_reactivate|1 edit(s)
+== R10_broker_reactivate  MUTATION APPLIED: <      OR (p_action = 'reactivate' AND v_caller_role NOT IN ('admin', 'it_admin')) THEN >      OR (p_action = 'reactivate' AND v_caller_role NOT IN ('admin', 'it_admin', 'broker')) THEN 
+     c01-rpc-matrix: FAIL|c01 cell u_obr reactivate o_ad|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_obr reactivate o_tact|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_obr reactivate o_tbr|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_obr reactivate o_texp|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_obr reactivate o_tpen|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_obr reactivate o_tsus|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_obr reactivate o_tun|expected not_authorized got OK invalid_transition
+CONTROLS: pass=0 fail=1 error=0 checks=260 failed_checks=7
+KILLED|R10_broker_reactivate|controls c01
+MUTATION APPLIED|RPC_caller_status_ignored|1 edit(s)
+== RPC_caller_status_ignored  MUTATION APPLIED: <      AND m.user_id = v_uid <      AND public.member_status_grants_access(m.license_status); >      AND m.user_id = v_uid; 
+     c01-rpc-matrix: FAIL|c01 cell u_osad assign o_ad|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad reactivate o_ad|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad unassign o_ad|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_osad assign o_tact|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad reactivate o_tact|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad unassign o_tact|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_osad assign o_tbr|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad reactivate o_tbr|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad unassign o_tbr|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_osad assign o_texp|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad reactivate o_texp|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_osad unassign o_texp|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad assign o_tpen|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad reactivate o_tpen|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad unassign o_tpen|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad assign o_tsus|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad reactivate o_tsus|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_osad unassign o_tsus|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad assign o_tun|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_osad reactivate o_tun|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_osad unassign o_tun|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_ounc assign o_ad|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_ounc unassign o_ad|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_ounc assign o_tact|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_ounc unassign o_tact|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_ounc assign o_tbr|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_ounc unassign o_tbr|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_ounc assign o_texp|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_ounc unassign o_texp|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_ounc assign o_tpen|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_ounc unassign o_tpen|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_ounc assign o_tsus|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_ounc unassign o_tsus|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_ounc assign o_tun|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_ounc unassign o_tun|expected not_authorized got OK invalid_transition
+CONTROLS: pass=0 fail=1 error=0 checks=260 failed_checks=35
+KILLED|RPC_caller_status_ignored|controls c01
+MUTATION APPLIED|RPC_agent_allowed|1 edit(s)
+== RPC_agent_allowed  MUTATION APPLIED: <      OR v_caller_role NOT IN ('broker', 'admin', 'it_admin') >      OR v_caller_role NOT IN ('broker', 'admin', 'it_admin', 'agent') 
+     c01-rpc-matrix: FAIL|c01 cell u_oag assign o_ad|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oag unassign o_ad|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oag assign o_tact|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oag unassign o_tact|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oag assign o_tbr|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oag unassign o_tbr|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oag assign o_texp|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oag unassign o_texp|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oag assign o_tpen|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oag unassign o_tpen|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oag assign o_tsus|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oag unassign o_tsus|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oag assign o_tun|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oag unassign o_tun|expected not_authorized got OK invalid_transition
+CONTROLS: pass=0 fail=1 error=0 checks=260 failed_checks=14
+KILLED|RPC_agent_allowed|controls c01
+MUTATION APPLIED|RPC_own_row_allowed|1 edit(s)
+== RPC_own_row_allowed  MUTATION APPLIED: <   IF v_target.user_id = v_uid THEN >   IF false THEN 
+     c01-rpc-matrix: FAIL|c01 cell u_oad assign o_ad|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oad reactivate o_ad|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oad unassign o_ad|expected not_authorized got OK <null>
+CONTROLS: pass=0 fail=1 error=0 checks=260 failed_checks=3
+KILLED|RPC_own_row_allowed|controls c01
+MUTATION APPLIED|RPC_it_admin_target_open|1 edit(s)
+== RPC_it_admin_target_open  MUTATION APPLIED: <   IF v_target.role = 'it_admin' AND v_caller_role <> 'it_admin' THEN >   IF false THEN 
+     c01-rpc-matrix: FAIL|c01 cell u_oad assign o_tit|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oad reactivate o_tit|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oad unassign o_tit|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oad assign o_tunit|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oad reactivate o_tunit|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_oad unassign o_tunit|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_obr assign o_tit|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_obr unassign o_tit|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_obr assign o_tunit|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_obr unassign o_tunit|expected not_authorized got OK invalid_transition
+CONTROLS: pass=0 fail=1 error=0 checks=260 failed_checks=10
+KILLED|RPC_it_admin_target_open|controls c01
+MUTATION APPLIED|RPC_pending_assignable|2 edit(s)
+== RPC_pending_assignable  MUTATION APPLIED: <   IF v_personal IS DISTINCT FROM false OR v_target.user_id IS NULL THEN >   IF v_personal IS DISTINCT FROM false THEN <   IF p_action = 'assign' AND v_target.license_status = 'unassigned' THEN >   IF p_action = 'assign' AND v_target.licen
+     c01-rpc-matrix: FAIL|c01 cell u_oad assign o_tpen|expected invalid_transition got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_obr assign o_tpen|expected invalid_transition got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oit assign o_tpen|expected invalid_transition got OK <null>
+CONTROLS: pass=0 fail=1 error=0 checks=260 failed_checks=3
+KILLED|RPC_pending_assignable|controls c01
+MUTATION APPLIED|RPC_seat_error_swallowed|1 edit(s)
+== RPC_seat_error_swallowed  MUTATION APPLIED: <       RETURN jsonb_build_object('success', false, 'error', 'seat_limit_reached', 'action', p_action); >       RETURN jsonb_build_object('success', true, 'member_id', v_target.id, 'license_status', v_target.license_status); 
+     c11-update-never-rewritten: FAIL|c11 assign a jit-origin unassigned member into a full org -> seat_limit_reached|OK <null>
+     c11-update-never-rewritten: FAIL|c11 RPC result success=false|
+CONTROLS: pass=0 fail=1 error=0 checks=5 failed_checks=2
+KILLED|RPC_seat_error_swallowed|controls c11
+MUTATION APPLIED|RPC_reactivate_any|1 edit(s)
+== RPC_reactivate_any  MUTATION APPLIED: <   ELSIF p_action = 'reactivate' AND public.member_status_is_deactivated(v_target.license_status) THEN >   ELSIF p_action = 'reactivate' THEN 
+     c01-rpc-matrix: FAIL|c01 cell u_oad reactivate o_tact|expected invalid_transition got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oad reactivate o_tbr|expected invalid_transition got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oad reactivate o_tun|expected invalid_transition got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oit reactivate o_ad|expected invalid_transition got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oit reactivate o_tact|expected invalid_transition got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oit reactivate o_tbr|expected invalid_transition got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oit reactivate o_tit|expected invalid_transition got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oit reactivate o_tun|expected invalid_transition got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_oit reactivate o_tunit|expected invalid_transition got OK <null>
+CONTROLS: pass=0 fail=1 error=0 checks=260 failed_checks=9
+KILLED|RPC_reactivate_any|controls c01
+MUTATION APPLIED|RPC_other_org_caller|1 edit(s)
+== RPC_other_org_caller  MUTATION APPLIED: <    WHERE m.organization_id = v_org_id <      AND m.user_id = v_uid >    WHERE m.user_id = v_uid 
+     c01-rpc-matrix: FAIL|c01 cell u_fad assign o_ad|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad reactivate o_ad|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad unassign o_ad|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_fad assign o_tact|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad reactivate o_tact|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad unassign o_tact|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_fad assign o_tbr|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad reactivate o_tbr|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad unassign o_tbr|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_fad assign o_texp|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad reactivate o_texp|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_fad unassign o_texp|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad assign o_tpen|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad reactivate o_tpen|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad unassign o_tpen|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad assign o_tsus|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad reactivate o_tsus|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_fad unassign o_tsus|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad assign o_tun|expected not_authorized got OK <null>
+     c01-rpc-matrix: FAIL|c01 cell u_fad reactivate o_tun|expected not_authorized got OK invalid_transition
+     c01-rpc-matrix: FAIL|c01 cell u_fad unassign o_tun|expected not_authorized got OK invalid_transition
+CONTROLS: pass=0 fail=1 error=0 checks=260 failed_checks=21
+KILLED|RPC_other_org_caller|controls c01
+MUTATION APPLIED|W4_gof_not_narrowed|1 edit(s)
+== W4_gof_not_narrowed  MUTATION APPLIED: <       AND public.member_status_grants_access(license_status) 
+     c05-feature-lookups: FAIL|c05 get_org_features as u_otsus|OK <null>
+     c05-feature-lookups: FAIL|c05 get_org_features as u_otexp|OK <null>
+     c05-feature-lookups: FAIL|c05 get_org_features as u_otun|OK <null>
+CONTROLS: pass=0 fail=1 error=0 checks=14 failed_checks=3
+KILLED|W4_gof_not_narrowed|controls c05
+MUTATION APPLIED|W4b_cfa_not_narrowed|1 edit(s)
+== W4b_cfa_not_narrowed  MUTATION APPLIED: <       AND public.member_status_grants_access(license_status) 
+     c05-feature-lookups: FAIL|c05 check_feature_access as u_otsus|OK unknown_feature
+     c05-feature-lookups: FAIL|c05 check_feature_access as u_otexp|OK unknown_feature
+     c05-feature-lookups: FAIL|c05 check_feature_access as u_otun|OK unknown_feature
+CONTROLS: pass=0 fail=1 error=0 checks=14 failed_checks=3
+KILLED|W4b_cfa_not_narrowed|controls c05
+MUTATION APPLIED|W8_anon_exec_rpc|1 edit(s)
+== W8_anon_exec_rpc  MUTATION APPLIED: < REVOKE ALL ON FUNCTION public.set_member_license(uuid, text) FROM PUBLIC, anon; > REVOKE ALL ON FUNCTION public.set_member_license(uuid, text) FROM PUBLIC; > GRANT EXECUTE ON FUNCTION public.set_member_license(uuid, text) TO anon; 
+     c08-catalog: FAIL|c08 public.set_member_license(uuid,text) no PUBLIC / anon EXECUTE|{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+     c08-catalog: FAIL|c08 anon calling set_member_license is refused (42501)|
+CONTROLS: pass=0 fail=1 error=0 checks=69 failed_checks=2
+KILLED|W8_anon_exec_rpc|controls c08
+MUTATION APPLIED|W8b_public_exec_helper|1 edit(s)
+== W8b_public_exec_helper  MUTATION APPLIED: < REVOKE ALL ON FUNCTION public.member_row_holds_seat(text, timestamptz, uuid) FROM PUBLIC, anon; > REVOKE ALL ON FUNCTION public.member_row_holds_seat(text, timestamptz, uuid) FROM anon; 
+     c08-catalog: FAIL|c08 public.member_row_holds_seat(text,timestamp with time zone,uuid) no PUBLIC / anon EXECUTE|{=X/postgres,postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+CONTROLS: pass=0 fail=1 error=0 checks=69 failed_checks=1
+KILLED|W8b_public_exec_helper|controls c08
+MUTATION APPLIED|W8c_trigger_fn_authenticated|1 edit(s)
+== W8c_trigger_fn_authenticated  MUTATION APPLIED: < REVOKE ALL ON FUNCTION public._enforce_member_seat_limit() FROM PUBLIC, anon, authenticated; > REVOKE ALL ON FUNCTION public._enforce_member_seat_limit() FROM PUBLIC, anon; 
+     c08-catalog: FAIL|c08 public._enforce_member_seat_limit() authenticated EXECUTE = false|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+CONTROLS: pass=0 fail=1 error=0 checks=69 failed_checks=1
+KILLED|W8c_trigger_fn_authenticated|controls c08
+MUTATION APPLIED|CHECK_no_unassigned|1 edit(s)
+== CHECK_no_unassigned  MUTATION APPLIED: <   CHECK (license_status IN ('pending', 'active', 'suspended', 'expired', 'unassigned')); >   CHECK (license_status IN ('pending', 'active', 'suspended', 'expired', 'unassigned', 'bogus')); 
+     c08-catalog: FAIL|c08 license_status CHECK = pending, active, suspended, expired, unassigned|CHECK (((license_status)::text = ANY ((ARRAY['pending'::character varying, 'active'::character varying, 'suspended'::character varying, 'expired'::character varying, 'unassigned'::character varying, 'bogus'::character varying])::text[])))
+CONTROLS: pass=0 fail=1 error=0 checks=69 failed_checks=1
+KILLED|CHECK_no_unassigned|controls c08
+MUTATION APPLIED|W6_retire_not_extended|1 edit(s)
+== W6_retire_not_extended  MUTATION APPLIED: <   AFTER INSERT OR UPDATE OF user_id, organization_id, license_status ON public.organization_members >   AFTER INSERT OR UPDATE OF user_id, organization_id ON public.organization_members 
+     m06-paygo-revert: FAIL|m06 reactivation retired the personal membership|active
+CONTROLS: pass=0 fail=1 error=0 checks=13 failed_checks=1
+KILLED|W6_retire_not_extended|controls m06
+MUTATION APPLIED|W6b_retire_no_skip|1 edit(s)
+== W6b_retire_no_skip  MUTATION APPLIED: <   IF public.member_status_is_deactivated(NEW.license_status) THEN <     RETURN NULL; <   END IF; 
+     m06-paygo-revert: FAIL|m06 personal row survives suspended -> expired|<none>
+CONTROLS: pass=0 fail=1 error=0 checks=13 failed_checks=1
+KILLED|W6b_retire_no_skip|controls m06
+MUTATION APPLIED|W7_ensure_active_only|1 edit(s)
+== W7_ensure_active_only  MUTATION APPLIED: <       AND NOT public.member_status_is_deactivated(m.license_status) >       AND m.license_status = 'active' 
+     m06-paygo-revert: FAIL|m06 unassigned member: ensure_personal_organization -> has_membership|OK created
+CONTROLS: pass=0 fail=1 error=0 checks=13 failed_checks=1
+KILLED|W7_ensure_active_only|controls m06
+MUTATION APPLIED|W7b_ensure_unchanged|1 edit(s)
+== W7b_ensure_unchanged  MUTATION APPLIED: <       AND NOT public.member_status_is_deactivated(m.license_status) 
+     m06-paygo-revert: FAIL|m06 deactivated member now has an active personal membership|<none>
+     m06-paygo-revert: FAIL|m06 personal row survives suspended -> expired|<none>
+     m06-paygo-revert: FAIL|m06 deactivated member: ensure_personal_organization -> created|OK has_membership
+CONTROLS: pass=0 fail=1 error=0 checks=13 failed_checks=3
+KILLED|W7b_ensure_unchanged|controls m06
+MUTATION APPLIED|REVERT_trigger_dropped|1 edit(s)
+== REVERT_trigger_dropped  MUTATION APPLIED: < CREATE TRIGGER revert_deactivated_member <   AFTER UPDATE OF license_status ON public.organization_members <   FOR EACH ROW <   EXECUTE FUNCTION public._revert_deactivated_member_to_paygo(); 
+     m06-paygo-revert: FAIL|m06 deactivated member now has an active personal membership|<none>
+     m06-paygo-revert: FAIL|m06 personal row survives suspended -> expired|<none>
+CONTROLS: pass=0 fail=1 error=0 checks=13 failed_checks=2
+KILLED|REVERT_trigger_dropped|controls m06
+MUTATION APPLIED|R8_no_exception_guard|1 edit(s)
+== R8_no_exception_guard  MUTATION APPLIED: <   BEGIN <     PERFORM public._ensure_personal_organization_for(NEW.user_id); <   EXCEPTION WHEN OTHERS THEN <     RAISE WARNING 'revert_deactivated_member: personal organization not attached for member % (%: %)', 
+     m13-revert-never-blocks: FAIL|m13 deactivation commits although the revert raises|OK 1
+     m13-revert-never-blocks: FAIL|m13 row is suspended|active
+CONTROLS: pass=0 fail=1 error=0 checks=2 failed_checks=2
+KILLED|R8_no_exception_guard|controls m13
+MUTANTS: killed=37 survived=0 invalid=0

@@ -24,6 +24,7 @@ import { app, clipboard, ipcMain, shell } from "electron";
 import { hostWindows } from "../capabilities/windowsProvider";
 import { dbTransaction } from "../services/db/core/dbConnection";
 import databaseService from "../services/databaseService";
+import * as externalContactDb from "../services/db/externalContactDbService";
 import logService from "../services/logService";
 import { RcsExtensionBridge } from "../services/rcsExtensionBridge";
 import { sealBufferToFile } from "../services/atRest/attachmentWriter";
@@ -1247,6 +1248,22 @@ export function resetGoogleMessagesCacheRecords(userId: string): void {
 }
 
 /**
+ * BACKLOG-3969: the texts and contacts the retired Android companion app wrote
+ * (messages with metadata source "android_wifi_sync", external contacts with
+ * source "android_sync"). Moved here unchanged from the removed
+ * localSyncService.clearAndroidData, so old companion rows stay clearable.
+ */
+export function clearCompanionData(userId: string): { messagesDeleted: number; contactsDeleted: number } {
+  const messagesDeleted = databaseService.deleteMessagesByMetadataSource(userId, "android_wifi_sync");
+  const contactsDeleted = externalContactDb.deleteBySource(userId, "android_sync");
+  void logService.info(
+    `[RcsClear] Cleared Android companion data: ${messagesDeleted} messages, ${contactsDeleted} contacts`,
+    LOG_TAG,
+  );
+  return { messagesDeleted, contactsDeleted };
+}
+
+/**
  * BACKLOG-3657 (founder re-confirmed 2026-10-01): Android's Force re-import is
  * SHARED — from either Android section (Google Messages or the companion) it
  * clears both Android sources: the Google Messages texts (with their images,
@@ -1254,12 +1271,10 @@ export function resetGoogleMessagesCacheRecords(userId: string): void {
  * texts and contacts. iPhone and Mac data are never touched.
  */
 export async function clearAllAndroidTexts(userId: string): Promise<SharedForceClearResult & { gmweb?: RcsClearResult }> {
-  // Loaded on use: the companion service pulls in its HTTP server and cloud sync.
-  const { default: localSyncService } = await import("../services/localSyncService");
   let gmweb: RcsClearResult | undefined;
   const result = await runSharedForceClear({
     clearGmweb: async () => (gmweb = await clearGoogleMessagesWebTexts(userId)),
-    clearAndroid: () => localSyncService.clearAndroidData(userId),
+    clearAndroid: () => clearCompanionData(userId),
   });
   void logService.info(
     `[RcsClear] Android Force re-import: google messages ${result.gmwebCleared ? "cleared" : "not cleared"} (${result.gmwebMessagesDeleted}), ` +

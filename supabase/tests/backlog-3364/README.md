@@ -78,7 +78,8 @@ then re-run `controls` and `mutants` before recording anything.
 **→ Path A (full fidelity):** seed the storage pre-state as `postgres`, apply migration 1
 whole as `postgres`. No `supabase_admin`, no ssh, no stack configuration change.
 
-**Catalog fingerprint** (`lib/gate-catalog.sql`; production's output in `lib/gate-expected.txt`):
+**Catalog fingerprint** (`lib/gate-catalog.sql`; production's output in `lib/gate-expected.txt`,
+read 2026-09-15 before ledger 20260915160637 — historical, not production today (BACKLOG-3945)):
 86 rows — function bodies and ACLs, columns, policies, triggers, constraints, table ACLs,
 RLS flags, supautils settings, bucket.
 

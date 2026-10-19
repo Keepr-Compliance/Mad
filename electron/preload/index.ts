@@ -28,6 +28,4 @@ export { rcsImportBridge } from "./rcsImportBridge";
 export { entitlementBridge } from "./entitlementBridge";
 export { paymentBridge, paymentEventBridge } from "./paymentBridge";
 export { supportBridge } from "./supportBridge";
-export { pairingBridge } from "./pairingBridge";
-export { localSyncBridge } from "./localSyncBridge";
 export { atRestBridge } from "./atRestBridge";

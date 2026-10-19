@@ -18,8 +18,6 @@ import EmailConnectStep from "./EmailConnectStep";
 import DataSyncStep from "./DataSyncStep";
 import PermissionsStep from "./PermissionsStep";
 import AppleDriverStep from "./AppleDriverStep";
-import AndroidDownloadStep from "./AndroidDownloadStep";
-import AndroidComingSoonStep from "./AndroidComingSoonStep";
 import ContactSourceStep from "./ContactSourceStep";
 import DataSourceFloorStep from "./DataSourceFloorStep";
 
@@ -38,8 +36,6 @@ export const STEP_REGISTRY: Record<string, OnboardingStep> = {
   "data-sync": DataSyncStep,
   "permissions": PermissionsStep,
   "apple-driver": AppleDriverStep,
-  "android-download": AndroidDownloadStep,
-  "android-coming-soon": AndroidComingSoonStep,
   "contact-source": ContactSourceStep,
   "data-source-floor": DataSourceFloorStep,
 };

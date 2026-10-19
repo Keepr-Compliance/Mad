@@ -1,0 +1,82 @@
+== r01-rollback (M1 + M2, seed, rollback-3851.sql)
+PASS|r01 pin equals production: fn _ensure_personal_organization_for(uuid)|849314911f1e4622096bd0102723f793
+PASS|r01 pin equals production: fn _guard_personal_owner_user_id()|fa0dc8d6dc997822053021b15b3b05ea
+PASS|r01 pin equals production: fn _retire_personal_membership()|26f5fb802a0e8e8b217f0e33bf2490ee
+PASS|r01 pin equals production: fn admin_invite_user(uuid,text,text,uuid,text,uuid)|f760693925ff2a08a2595b19f27ed1cd
+PASS|r01 pin equals production: fn auto_provision_google_it_admin(text,text,text)|5e88920962967b861c5817aec328325e
+PASS|r01 pin equals production: fn auto_provision_it_admin(text,text,text)|11d8619f8dc65e22f53e668e8eade957
+PASS|r01 pin equals production: fn broker_get_org_features(uuid)|ea48082497e2d44ed912caf2cd71d011
+PASS|r01 pin equals production: fn check_feature_access(uuid,text)|b271dd9bf2187d58c425806276180b1f
+PASS|r01 pin equals production: fn claim_pending_invite()|f5a006ac110f1f6d817e0b01b9da12ea
+PASS|r01 pin equals production: fn ensure_personal_organization()|1f722dc8b511a40cc9e78f271b1d78a6
+PASS|r01 pin equals production: fn get_org_features(uuid)|37520ebbb0377d92d9fa0c0fc7e0231a
+PASS|r01 pin equals production: fn guard_invite_acceptance()|afde3e325917d53bf78a0fda2ca2d84e
+PASS|r01 pin equals production: fn guard_organization_client_update()|8c931ae0c7674fd65a51720d7f2376ac
+PASS|r01 pin equals production: fn jit_join_organization(text)|6b0f4c93bbd7671e916c05e214c40a5b
+PASS|r01 pin equals production: fn member_status_grants_access(text)|d407b02e2aa222e9af003f66506e2480
+PASS|r01 pin equals production: fn update_updated_at_column()|9e2677705d54938c11504cf340bae4e4
+PASS|r01 pin equals production: con organization_members_invitation_token_key|bd859f6b53564282feac2f0e7fee1056
+PASS|r01 pin equals production: con organization_members_invited_by_fkey|ec8bea94f39fae677581fcfd9b20c4c9
+PASS|r01 pin equals production: con organization_members_license_status_check|554e8c6407582c814514dd159038b296
+PASS|r01 pin equals production: con organization_members_organization_id_fkey|3c702b28ccc97a0ac52c0acefcdea477
+PASS|r01 pin equals production: con organization_members_organization_id_user_id_key|0522fd08870e800988ad0017c5465df8
+PASS|r01 pin equals production: con organization_members_pkey|4c6419b3704337bbfe50f018842a9ad3
+PASS|r01 pin equals production: con organization_members_provisioned_by_check|810b8cfd4f600c778e4589adc360c616
+PASS|r01 pin equals production: con organization_members_role_check|1001427b5b028f4c0c37b09d3e5deb80
+PASS|r01 pin equals production: con organization_members_user_id_fkey|85d8b2f5f0c0f6b4dcb854efb61a8cb1
+PASS|r01 pin equals production: con organization_members_user_id_public_users_fkey|e208476b0e6d80576b69508e9d165e3f
+PASS|r01 pin equals production: trg organization_members.update_org_members_updated_at|7f7cbe08356763dcf9c0110a2a20d150
+PASS|r01 pin equals production: trg organizations.update_organizations_updated_at|18d1ba39339173ebb60ab85e8f9af0dd
+PASS|r01 pin equals production: trg organizations.guard_personal_owner_user_id|817c707b844bba42b3fea695e44247c2
+PASS|r01 pin equals production: trg organizations.guard_organization_client_update|fe0492e0373d142a59a0f582aeaa1ddc
+PASS|r01 pin equals production: trg organization_members.guard_invite_acceptance|8b4b45054ed050e29fb1a4bc20932603
+PASS|r01 pin equals production: trg organization_members.retire_personal_membership|7114babde1c6464af54438a0824765d5
+PASS|r01 pin equals production: cols organizations|c193cc73f168cf8b3542444b537c9261
+PASS|r01 no object beyond production remains|
+PASS|r01 organization_members differs from production only by license_assigned_at|
+PASS|r01 no unassigned rows; the two seeded ones are suspended|
+PASS|r01 revert-attached personal row survives (R7d, stated in the header)|
+PASS|r01 seat trigger gone: an over-limit insert is no longer refused|
+CHECKS|r01-rollback|38
+== r02-rollback-m1-only (M1, seed, rollback-3851.sql)
+PASS|r02 pin equals production: fn _ensure_personal_organization_for(uuid)|849314911f1e4622096bd0102723f793
+PASS|r02 pin equals production: fn _guard_personal_owner_user_id()|fa0dc8d6dc997822053021b15b3b05ea
+PASS|r02 pin equals production: fn _retire_personal_membership()|26f5fb802a0e8e8b217f0e33bf2490ee
+PASS|r02 pin equals production: fn admin_invite_user(uuid,text,text,uuid,text,uuid)|f760693925ff2a08a2595b19f27ed1cd
+PASS|r02 pin equals production: fn auto_provision_google_it_admin(text,text,text)|5e88920962967b861c5817aec328325e
+PASS|r02 pin equals production: fn auto_provision_it_admin(text,text,text)|11d8619f8dc65e22f53e668e8eade957
+PASS|r02 pin equals production: fn broker_get_org_features(uuid)|ea48082497e2d44ed912caf2cd71d011
+PASS|r02 pin equals production: fn check_feature_access(uuid,text)|b271dd9bf2187d58c425806276180b1f
+PASS|r02 pin equals production: fn claim_pending_invite()|f5a006ac110f1f6d817e0b01b9da12ea
+PASS|r02 pin equals production: fn ensure_personal_organization()|1f722dc8b511a40cc9e78f271b1d78a6
+PASS|r02 pin equals production: fn get_org_features(uuid)|37520ebbb0377d92d9fa0c0fc7e0231a
+PASS|r02 pin equals production: fn guard_invite_acceptance()|afde3e325917d53bf78a0fda2ca2d84e
+PASS|r02 pin equals production: fn guard_organization_client_update()|8c931ae0c7674fd65a51720d7f2376ac
+PASS|r02 pin equals production: fn jit_join_organization(text)|6b0f4c93bbd7671e916c05e214c40a5b
+PASS|r02 pin equals production: fn member_status_grants_access(text)|d407b02e2aa222e9af003f66506e2480
+PASS|r02 pin equals production: fn update_updated_at_column()|9e2677705d54938c11504cf340bae4e4
+PASS|r02 pin equals production: con organization_members_invitation_token_key|bd859f6b53564282feac2f0e7fee1056
+PASS|r02 pin equals production: con organization_members_invited_by_fkey|ec8bea94f39fae677581fcfd9b20c4c9
+PASS|r02 pin equals production: con organization_members_license_status_check|554e8c6407582c814514dd159038b296
+PASS|r02 pin equals production: con organization_members_organization_id_fkey|3c702b28ccc97a0ac52c0acefcdea477
+PASS|r02 pin equals production: con organization_members_organization_id_user_id_key|0522fd08870e800988ad0017c5465df8
+PASS|r02 pin equals production: con organization_members_pkey|4c6419b3704337bbfe50f018842a9ad3
+PASS|r02 pin equals production: con organization_members_provisioned_by_check|810b8cfd4f600c778e4589adc360c616
+PASS|r02 pin equals production: con organization_members_role_check|1001427b5b028f4c0c37b09d3e5deb80
+PASS|r02 pin equals production: con organization_members_user_id_fkey|85d8b2f5f0c0f6b4dcb854efb61a8cb1
+PASS|r02 pin equals production: con organization_members_user_id_public_users_fkey|e208476b0e6d80576b69508e9d165e3f
+PASS|r02 pin equals production: trg organization_members.update_org_members_updated_at|7f7cbe08356763dcf9c0110a2a20d150
+PASS|r02 pin equals production: trg organizations.update_organizations_updated_at|18d1ba39339173ebb60ab85e8f9af0dd
+PASS|r02 pin equals production: trg organizations.guard_personal_owner_user_id|817c707b844bba42b3fea695e44247c2
+PASS|r02 pin equals production: trg organizations.guard_organization_client_update|fe0492e0373d142a59a0f582aeaa1ddc
+PASS|r02 pin equals production: trg organization_members.guard_invite_acceptance|8b4b45054ed050e29fb1a4bc20932603
+PASS|r02 pin equals production: trg organization_members.retire_personal_membership|7114babde1c6464af54438a0824765d5
+PASS|r02 pin equals production: cols organizations|c193cc73f168cf8b3542444b537c9261
+PASS|r02 no object beyond production remains|
+PASS|r02 organization_members differs from production only by license_assigned_at|
+PASS|r02 no unassigned rows; the two seeded ones are suspended|
+PASS|r02 seat trigger gone: an over-limit insert is no longer refused|
+CHECKS|r02-rollback-m1-only|37
+== negative: r01 with NO rollback applied (must go red)
+PASS|negative r01 red without the rollback
+ROLLBACK: OK

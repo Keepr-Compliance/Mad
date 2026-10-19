@@ -109,8 +109,8 @@ export function NeedsReviewScreen({
         : "text";
 
   // BACKLOG-3925: match-kind tabs (emails only). Pills show on All only. "Approve all" /
-  // "Reject all" act on the items of the SELECTED tab: All = every item (as before),
-  // Address match / Contact match = only the email threads of that reason.
+  // "Reject all" act on EMAILS only, never texts (founder, 2026-10-15): All = every
+  // email, a reason tab = that tab's email threads. No bulk buttons on the Texts tab.
   const [filter, setFilter] = useState<ReviewMatchFilter>("all");
   const [showInfo, setShowInfo] = useState(false);
   const emailGroups = useMemo(() => groupReviewItemsByThread(emails), [emails]);
@@ -124,7 +124,7 @@ export function NeedsReviewScreen({
     [filter, emails, emailGroups],
   );
   const shown = active === "email" ? filteredEmails : texts;
-  const bulkItems = activeFilter === "all" ? items : filteredEmails;
+  const bulkItems = active === "email" ? filteredEmails : [];
 
 
   // Acts on the WHOLE thread (contract rows T3/T4); `busyId` is the thread key,
@@ -186,7 +186,7 @@ export function NeedsReviewScreen({
         </button>
 
         <div className="flex items-center gap-2 sm:gap-4">
-          {items.length > 0 && (
+          {active === "email" && emails.length > 0 && (
             /* On-gradient action treatment, matching the Contacts header's
                review-duplicates button. flex-shrink-0 here + min-w-0 on the
                title block decide which side gives way on overflow

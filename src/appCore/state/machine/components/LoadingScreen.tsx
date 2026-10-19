@@ -62,6 +62,8 @@ const PHASE_MESSAGES: Record<LoadingPhase, string> = {
  */
 const INIT_STAGE_MESSAGES: Record<string, string> = {
   "db-opening": "Checking security...",
+  // BACKLOG-3952: the database is read-only for now; startup keeps retrying.
+  "db-waiting": "Waiting for access to your data. This can take a minute after an update...",
   "migrating": "Updating database...",
   "db-ready": "Database ready...",
   "creating-user": "Finalizing setup...",

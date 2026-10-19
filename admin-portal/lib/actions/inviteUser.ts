@@ -12,8 +12,9 @@
  *
  *   2. INDIVIDUAL invite (no organization) — sends a branded "Get Keepr"
  *      download email pointing at the canonical download page. The invitee
- *      downloads Keepr, signs in with their email, and a 14-day trial is
- *      provisioned automatically on first sign-in (create_trial_license).
+ *      downloads Keepr, signs in with their email, and an active individual
+ *      license is provisioned on first sign-in (create_active_individual_license,
+ *      BACKLOG-2180).
  *
  *      The old individual path wrote an `individual_invitations` row whose token
  *      the acceptance side never resolved (0/8 organic accepts — dead on
@@ -114,7 +115,7 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
 
   // Branch: org invite (RPC + link) vs individual download invite (email only).
   if (resolveInviteFlow(input.organizationId) === 'download') {
-    return sendIndividualDownloadInvite(input.email);
+    return sendIndividualDownloadInvite(input);
   }
 
   return sendOrgInvite(supabase, input, user);
@@ -234,8 +235,12 @@ async function sendOrgInvite(
 // INDIVIDUAL invite → branded "Get Keepr" download email (BACKLOG-1914)
 // ============================================================================
 
-async function sendIndividualDownloadInvite(email: string): Promise<InviteUserResult> {
-  const payload = buildDownloadInvitePayload(email);
+async function sendIndividualDownloadInvite(input: InviteUserInput): Promise<InviteUserResult> {
+  // BACKLOG-3974: the name rides along so the email's To line shows it.
+  const payload = buildDownloadInvitePayload(input.email, null, {
+    firstName: input.firstName,
+    lastName: input.lastName,
+  });
   let emailSent = false;
 
   try {

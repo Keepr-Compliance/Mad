@@ -75,10 +75,10 @@ const path = require("path");
 const os = require("os");
 
 // Loopback, plus every address THIS MACHINE owns. A connection to an address the
-// host itself is bound to is not a third-party call — localSyncService.startServer()
-// binds on the LAN interface and its suites then connect to the server they just
-// started. Measured: that is the ONLY reason any suite contacts a non-loopback
-// address, and with these folded in, zero existing suites go red.
+// host itself is bound to is not a third-party call. This was added for the Android
+// companion's LAN server (localSyncService), whose suites connected to the server
+// they had just started on the LAN interface. BACKLOG-3969 removed that server and
+// those suites; narrowing this allowance back to loopback is a separate item.
 const SELF = new Set(["127.0.0.1", "localhost", "::1", "0.0.0.0", "::"]);
 for (const addrs of Object.values(os.networkInterfaces() || {})) {
   for (const a of addrs || []) SELF.add(a.address);

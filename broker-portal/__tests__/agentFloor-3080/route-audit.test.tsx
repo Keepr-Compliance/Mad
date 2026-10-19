@@ -44,6 +44,14 @@ const mockGetUser = jest.fn();
  * The feature half is taken as ON, the same convention as the forced-ON
  * feature-gate mock below. Reads the fixture rows directly so the read log the
  * refusal rows assert on is unchanged. Every other RPC answers null.
+ *
+ * BACKLOG-3917: production's definitions of this function,
+ * can_create_own_checklist_templates and can_review_submission now also
+ * require member_status_grants_access(license_status) (migration
+ * 20261014002359). The three emulations below KEEP the earlier shape on
+ * purpose: the BACKLOG-3917 block at the end of this file proves the portal
+ * refuses a deactivated member on its own, which is only observable while the
+ * emulated database would still have said yes.
  */
 const CHECKLIST_EDITOR_ROLES = ['broker', 'admin', 'it_admin'];
 function canEditChecklistTemplates(orgId: unknown): boolean {
@@ -473,6 +481,7 @@ const submissionChecklists = () => import('@/lib/actions/submissionChecklists');
 /** Everything above the floor. 6 user-admin + 11 in scim.ts. */
 const REFUSED_ACTIONS: Record<string, ActionEntry> = {
   'lib/actions/bulkUpdateRole.ts#bulkUpdateRole': act(users, 'bulkUpdateRole', {
+    organizationId: FIXTURE_BROKERAGE_ORG_ID,
     memberIds: [TARGET_MEMBER_ID],
     newRole: 'broker',
   }),
@@ -1005,6 +1014,8 @@ describe('refused pages', () => {
     const outcome = await run(entry.invoke);
     expect(outcome).not.toEqual(entry.refused);
     expect(outcome).not.toHaveProperty('redirect');
+    expect(outcome).not.toHaveProperty('notFound');
+    expect(outcome).not.toHaveProperty('threw');
     expect(outcome).not.toHaveProperty('threw');
   });
 
@@ -1056,6 +1067,8 @@ describe('own-gate pages (D4)', () => {
     expect(outcome).not.toHaveProperty('notFound');
     expect(outcome).not.toHaveProperty('threw');
     expect(outcome).not.toHaveProperty('redirect');
+    expect(outcome).not.toHaveProperty('notFound');
+    expect(outcome).not.toHaveProperty('threw');
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
@@ -1183,6 +1196,8 @@ describe('plan-gated pages: My Transactions (BACKLOG-3080, R7)', () => {
     expect(outcome).not.toEqual(entry.refused);
     expect(outcome).not.toHaveProperty('threw');
     expect(outcome).not.toHaveProperty('redirect');
+    expect(outcome).not.toHaveProperty('notFound');
+    expect(outcome).not.toHaveProperty('threw');
     expect(tablesRead()).toContain('transaction_submissions');
     expect(mockEmulator.state.writes).toEqual([]);
   });
@@ -1281,5 +1296,154 @@ describe('Agent plan actions (BACKLOG-3847)', () => {
     const outcome = await run(BILLING_ACTIONS[name]);
     expect(outcome).not.toEqual(BILLING_ACTION_REFUSED);
     expect(outcome).not.toHaveProperty('threw');
+  });
+});
+
+// ===========================================================================
+// BACKLOG-3917: a brokerage member whose license_status does not grant access.
+// ===========================================================================
+//
+// The rows are the brokerage fixture rows with `license_status` as its writers
+// leave it: 'suspended' is written by lib/actions/deactivateUser.ts (service
+// client) and by directory-sync; 'expired' has NO writer today and is kept
+// because the rule is an allow-list (a deny-list on 'suspended' would admit it).
+//
+// The emulated RPCs above are the PRE-3917 definitions (no status term), so
+// every refusal below is the app's own: it holds even where the database would
+// still have said yes.
+//
+// Founder decision c55ba156: My Account and their own Support only — no
+// transactions, submissions, billing, checklists, admin or settings — and never
+// their personal plan.
+
+const deactivated = (role: string, status: string): Row => ({ ...brokerageMembership(role), license_status: status });
+
+const DEACTIVATED_PERSONAS = {
+  'suspended brokerage admin': [deactivated('admin', 'suspended')],
+  'expired brokerage admin': [deactivated('admin', 'expired')],
+  'suspended brokerage it_admin': [deactivated('it_admin', 'suspended')],
+  'suspended brokerage broker': [deactivated('broker', 'suspended')],
+  'suspended brokerage agent': [deactivated('agent', 'suspended')],
+  // The fall-through case (SR 43bbc1c1): a personal row listed FIRST.
+  '[personal-org owner, suspended brokerage admin]': [personalMembership(), deactivated('admin', 'suspended')],
+} as const;
+type DeactivatedPersona = keyof typeof DEACTIVATED_PERSONAS;
+const deactivatedNames = Object.keys(DEACTIVATED_PERSONAS) as DeactivatedPersona[];
+
+/** An ACTIVE brokerage admin whose own licence is suspended (BACKLOG-3878 scope add). */
+function givenLicenceSuspendedAdmin(): void {
+  given(ADMIN);
+  mockEmulator.state.rows.licenses = [{ user_id: FIXTURE_USER_ID, status: 'suspended' }];
+}
+
+describe('BACKLOG-3917: deactivated brokerage member', () => {
+  const OLD = process.env.BILLING_ENABLED;
+  const OLD_KEY = process.env.STRIPE_SECRET_KEY;
+  beforeAll(() => {
+    process.env.BILLING_ENABLED = 'true';
+    process.env.STRIPE_SECRET_KEY = 'sk_test_route_audit';
+  });
+  afterAll(() => {
+    if (OLD === undefined) delete process.env.BILLING_ENABLED;
+    else process.env.BILLING_ENABLED = OLD;
+    if (OLD_KEY === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = OLD_KEY;
+  });
+
+  const pageCases = (pages: Record<string, PageEntry>) =>
+    Object.entries(pages).flatMap(([page, entry]) => deactivatedNames.map((p) => [page, p, entry] as const));
+
+  it.each(pageCases(REFUSED_PAGES))('%s refuses the %s', async (_page, persona, entry) => {
+    given(DEACTIVATED_PERSONAS[persona]);
+    expect(await run(entry.invoke)).toEqual(entry.refused);
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+
+  it.each(pageCases(OWN_GATE_PAGES))('checklists: %s refuses the %s', async (_page, persona, entry) => {
+    given(DEACTIVATED_PERSONAS[persona]);
+    expect(await run(entry.invoke)).toEqual(entry.refused);
+    if (entry.invokeAsOwner) expect(await run(entry.invokeAsOwner)).toEqual(entry.refused);
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+
+  it.each(pageCases(PLAN_GATED_PAGES))('my transactions: %s refuses the %s', async (_page, persona, entry) => {
+    given(DEACTIVATED_PERSONAS[persona]);
+    expect(await run(entry.invoke)).toEqual(entry.refused);
+    expect(tablesRead().filter((t) => t !== 'licenses')).toEqual(['organization_members']);
+  });
+
+  it.each(pageCases(BILLING_PAGES))('billing: %s refuses the %s', async (_page, persona, entry) => {
+    given(DEACTIVATED_PERSONAS[persona]);
+    expect(await run(entry.invoke)).toEqual(entry.refused);
+  });
+
+  // support/[id] is a client component (useParams): no server gate to run here.
+  it.each(FLOOR_PAGES.filter((p) => p !== 'app/dashboard/support/[id]/page.tsx'))(
+    '%s is still open to a suspended brokerage admin (floor)',
+    async (page) => {
+      given(DEACTIVATED_PERSONAS['suspended brokerage admin']);
+      const mod = (await import(`@/${page.replace(/\.tsx$/, '')}`)) as { default: (a: unknown) => unknown };
+      const outcome = await run(() => mod.default(idParams('ticket-3917')));
+      expect(outcome).not.toHaveProperty('redirect');
+      expect(outcome).not.toHaveProperty('notFound');
+      expect(outcome).not.toHaveProperty('threw');
+    }
+  );
+
+  const actionCases = (names: string[]) => names.flatMap((name) => deactivatedNames.map((p) => [name, p] as const));
+
+  it.each(actionCases(Object.keys(REFUSED_ACTIONS)))('%s refuses the %s, and writes nothing', async (name, persona) => {
+    given(DEACTIVATED_PERSONAS[persona]);
+    expect(await run(REFUSED_ACTIONS[name])).toEqual(refusalFor(name, 'personal-org owner'));
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+
+  it.each(Object.keys(REFUSED_ACTIONS))('%s refuses an active admin whose licence is suspended', async (name) => {
+    givenLicenceSuspendedAdmin();
+    expect(await run(REFUSED_ACTIONS[name])).toEqual(refusalFor(name, 'personal-org owner'));
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+
+  it.each(actionCases(Object.keys(OWN_GATE_ACTIONS)))('checklists: %s refuses the %s', async (name, persona) => {
+    given(DEACTIVATED_PERSONAS[persona]);
+    expect(await run(OWN_GATE_ACTIONS[name])).toEqual(OWN_GATE_REFUSALS[name]);
+    expect(mockEmulator.state.writes).toEqual([]);
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_checklist_template');
+  });
+
+  const reviewerCases = actionCases(Object.keys(REVIEWER_ACTIONS));
+  it.each(reviewerCases)('review: %s refuses the %s, and writes nothing', async (name, persona) => {
+    given(DEACTIVATED_PERSONAS[persona]);
+    expect(await run(REVIEWER_ACTIONS[name])).toEqual(REVIEWER_REFUSED);
+    expect(mockEmulator.state.writes).toEqual([]);
+    const called = mockRpc.mock.calls.map((c) => c[0]);
+    for (const rpc of called) expect(rpc).toBe('can_review_submission');
+  });
+
+  it.each(Object.keys(REVIEWER_ACTIONS))('review: %s refuses an active admin whose licence is suspended', async (name) => {
+    givenLicenceSuspendedAdmin();
+    expect(await run(REVIEWER_ACTIONS[name])).toEqual(REVIEWER_REFUSED);
+    expect(mockRpc.mock.calls.map((c) => c[0]).filter((n) => n !== 'can_review_submission')).toEqual([]);
+  });
+
+  it.each(Object.keys(BILLING_ACTIONS))(
+    'billing: %s refuses a suspended brokerage admin who also owns a personal organization',
+    async (name) => {
+      given(DEACTIVATED_PERSONAS['[personal-org owner, suspended brokerage admin]']);
+      expect(await run(BILLING_ACTIONS[name])).toEqual(BILLING_ACTION_REFUSED);
+      expect(tablesRead()).toEqual(['licenses', 'organization_members']);
+      expect(mockEmulator.state.writes).toEqual([]);
+    }
+  );
+
+  // Positive twins: the same rows with license_status 'active' are admitted, so
+  // the refusals above are about the status and nothing else.
+  it.each(Object.keys(REFUSED_ACTIONS))('%s still admits an ACTIVE brokerage admin (twin)', async (name) => {
+    given([deactivated('admin', 'active')]);
+    expect(await run(REFUSED_ACTIONS[name])).not.toEqual(refusalFor(name, 'personal-org owner'));
+  });
+  it.each(Object.keys(REVIEWER_ACTIONS))('review: %s still admits an ACTIVE brokerage admin (twin)', async (name) => {
+    given([deactivated('admin', 'active')]);
+    expect(await run(REVIEWER_ACTIONS[name])).not.toEqual(REVIEWER_REFUSED);
   });
 });

@@ -9,7 +9,7 @@
  */
 
 import { hostErrorReporter } from "../capabilities/errorReporterProvider";
-import { dbAll, dbGet, dbRun, ensureDb } from "./db/core/dbConnection";
+import { dbAll, dbGet, dbRun, dbTransaction, ensureDb } from "./db/core/dbConnection";
 import {
   AUTOLINK_CONTACT_EMAILS_SQL,
   AUTOLINK_CONTACT_PHONES_SQL,
@@ -31,7 +31,7 @@ import {
 import logService from "./logService";
 import { exclusionAutolinkThreads, RCS_EXCLUSION_STOPS_AUTOLINK } from "./rcsExclusions";
 import { rcsExclusionHashes } from "./db/syncDbService";
-import { normalizePhone, createCommunicationReference } from "./messageMatchingService";
+import { normalizePhone, createCommunicationReferenceSync } from "./messageMatchingService";
 import { linkMessageToTransaction } from "./db/messageDbService";
 import {
   createThreadCommunicationReference,
@@ -1815,11 +1815,13 @@ export function expandAttachedThreadsForUser(userId: string): Promise<ExpandAtta
   expansionByUser.set(userId, entry);
   entry.promise = (async () => {
     try {
-      let last = await expandAttachedThreadsForUserOnce(userId);
-      while (entry.rerun) {
+      // One call site for the helper (BACKLOG-2550). `rerun` is false on entry, so this
+      // do/while runs exactly what the former call-then-while ran.
+      let last: ExpandAttachedThreadsResult;
+      do {
         entry.rerun = false;
         last = await expandAttachedThreadsForUserOnce(userId);
-      }
+      } while (entry.rerun);
       return last;
     } finally {
       expansionByUser.delete(userId);
@@ -2120,17 +2122,19 @@ async function expandAttachedThreadsForUserOnce(
             continue;
           }
 
-          // 4. Link EXACTLY the way manual attach does (transactionService.linkMessages):
-          //    set messages.transaction_id, then insert the per-message junction row.
+          // 4. Link: junction row and pointer commit together or not at all
+          //    (BACKLOG-2550). Junction FIRST, pointer only if the junction row was
+          //    written: the sync reference returns null on a deal locked since the
+          //    per-deal check (BACKLOG-3910) or an existing link, and a pointer with
+          //    no junction row would be permanent, because both candidate queries
+          //    filter on `transaction_id IS NULL`. No try/catch inside: a throw rolls
+          //    the whole message back and the catch below counts it.
           //    link_source is constrained to ('auto','manual','scan'), so reuse 'auto'.
-          linkMessageToTransaction(messageId, transactionId);
-          const refId = await createCommunicationReference(
-            messageId,
-            transactionId,
-            userId,
-            "auto",
-            0.9
-          );
+          const refId = dbTransaction(() => {
+            const id = createCommunicationReferenceSync(messageId, transactionId, userId, "auto", 0.9);
+            if (id) linkMessageToTransaction(messageId, transactionId);
+            return id;
+          });
 
           if (refId) {
             result.messagesLinked++;
@@ -2139,7 +2143,8 @@ async function expandAttachedThreadsForUserOnce(
               newPairs.push([transactionId, threadId, oneToOneTokenOf.get(threadId) ?? null]);
             }
           } else {
-            // Lost the idempotency race — the unique-index backstop rejected it.
+            // Nothing written: already linked (lost the idempotency race), or the deal
+            // was locked after the per-deal check (BACKLOG-3910). Counted as already-linked.
             result.skippedAlreadyLinked++;
           }
         } catch (error) {
