@@ -77,7 +77,14 @@ export function useModalFlow(): UseModalFlowReturn {
   const [androidSyncStart, setAndroidSyncStart] = useState<AndroidSyncStart>("default");
 
   // Semantic modal methods
-  const openProfile = useCallback(() => setShowProfile(true), []);
+  // BACKLOG-3964: the title-bar initials stay live while the Settings page
+  // shows. Profile renders beneath it, so close Settings first (as Profile's
+  // own Settings link closes Profile first). Slice 3 replaces this with the panel.
+  const openProfile = useCallback(() => {
+    setShowSettings(false);
+    setSettingsTarget(null);
+    setShowProfile(true);
+  }, []);
   const closeProfile = useCallback(() => setShowProfile(false), []);
 
   // BACKLOG-3964: the target used to be dropped here, and every "open Settings

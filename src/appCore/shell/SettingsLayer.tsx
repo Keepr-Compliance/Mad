@@ -5,7 +5,8 @@
  * Settings is a full page, not a popup. It is drawn over the routed screen
  * (the Dashboard stays mounted underneath and keeps its state) and over any
  * popup already open (z-[105]: above the popups' z-50..z-[100], below the
- * slice-3 account panel scrim at z-[110]). Opening it closes nothing, and Back
+ * slice-3 account panel scrim at z-[110]; toasts and the "?" button sit above
+ * it — src/constants/zLayers.ts). Opening it closes nothing, and Back
  * only closes Settings, so Back returns to whatever was showing before.
  *
  * Esc is Back. It is caught on window in the capture phase so a popup
@@ -19,6 +20,7 @@ import Settings from "../../components/Settings";
 import type { AppStateMachine } from "../state/types";
 import { useEmailSettingsCallbacks } from "../hooks/useEmailSettingsCallbacks";
 import { useEscapeToClose } from "../../hooks/useEscapeToClose";
+import { Z_CLASS } from "../../constants/zLayers";
 
 /** Something open inside the page that should take Escape for itself. */
 const NESTED_OVERLAY =
@@ -66,7 +68,7 @@ function OpenSettingsLayer({ app, user }: SettingsLayerProps & { user: NonNullab
   }, [closeSettings, openIPhoneSync]);
 
   return (
-    <div ref={rootRef} className="absolute inset-0 z-[105] bg-gray-50" data-testid="settings-layer">
+    <div ref={rootRef} className={`absolute inset-0 ${Z_CLASS.settings} bg-gray-50`} data-testid="settings-layer">
       <Settings
         userId={user.id}
         account={{ user, provider: authProvider }}
