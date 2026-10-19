@@ -22,7 +22,7 @@ After any body edit: `python3 pin_bodies.py` (re-pins), then `python3 compose.py
 - `mutants.sql`: the same fixtures. First the base run, then one subtransaction per mutant.
   Each mutant is an exact-once anchor replace of the live body, and its md5 must change. The
   report prints `MUTATION APPLIED` with both md5s and the red controls; then the subtransaction
-  is undone. There are 49 body mutants, 8 grant/definer mutants and 4 guard mutants.
+  is undone. There are 50 body mutants, 8 grant/definer mutants and 4 guard mutants.
   - A body mutant always turns `C11 second run` red, because the guard pins this file's bodies.
     That control is left out of each mutant's catch.
 - `reapply-keepr-test.sql`: SUPERSEDED, kept as the record of the first keepr-test re-apply
@@ -62,8 +62,14 @@ not expired). JIT, manual and solo users are unchanged. No JIT term, no caller-r
 - New fixtures: k1 (scim_enabled org s), k2 (live token, no expiry, tk), k3 (directory sync, d),
   k4 (suspended in s), k5 (expired token only, te), k6 (revoked token only, tr), k7 (s + manual m),
   k8 (token with future expiry, tf). Controls C40-C47 (16).
-- C19 fixture: `org_deals` insert now sets `version` and `suspended_at`. 20261019090000
-  (`_billing_enqueue_org_work`) builds `billing_outbox.dedupe_key` from them; NULL was a 23502.
-- Results: BASE 153 / 153 green. Mutants K1-K11 (skip): 11 / 11 applied (md5 changed) and red.
+- C19 fixture: `org_deals` insert now sets `suspended_at` (and `version`, which defaults to 1 and
+  was never the cause). 20261019090000 (`_billing_enqueue_org_work`) builds
+  `billing_outbox.dedupe_key` from `suspended_at`; NULL was a 23502.
+- Unassigned SCIM member (SR review d00133ea): fixture k9 (`unassigned`, member of s), control C48,
+  mutant K12 (skip only active members, i.e. `member_status_grants_access` in place of
+  `NOT member_status_is_deactivated`; md5 `984dc45b` -> `daec2e51`). Base 154 / 154 green; K12
+  applied and C48 is the only red (C11 second run excluded). K1-K11 not re-run: k9 is read only
+  by C48, and a mutant's other reds come from fixtures it does not share.
+- Results (before k9): BASE 153 / 153 green. Mutants K1-K11 (skip): 11 / 11 applied (md5 changed) and red.
   Mutants S1a-S10 (existing sync mutants, re-run because the body changed): 13 / 13 applied and red.
 - `rollback.sql` is unchanged: it still removes the three functions and the ledger row.

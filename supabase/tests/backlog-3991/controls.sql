@@ -7,7 +7,7 @@
 -- public.users row; the fixture then sets known names); unclaimed invite as
 -- broker-portal/lib/actions/inviteUser.ts (invited_email, 'pending', token, expiry).
 CREATE TEMP TABLE ids3991 (k text PRIMARY KEY, id uuid NOT NULL DEFAULT gen_random_uuid()) ON COMMIT DROP;
-INSERT INTO ids3991 (k) SELECT unnest(ARRAY['a', 'it', 'br', 'ag', 'ad', 't1', 't2', 't3', 't4', 't5', 't6', 'ga', 'tj', 'ya', 'po', 'pt', 'sa', 'sb', 'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'o_m', 'o_x', 'o_y', 'o_p', 'o_j', 'o_jn', 'o_s', 'o_d', 'o_tk', 'o_tr', 'o_te', 'o_tf', 'm_a', 'm_it', 'm_br', 'm_ag', 'm_ad', 'm_t1', 'm_t2', 'm_t3', 'm_t4', 'm_t5', 'm_t6', 'x_t5', 'x_t6', 'y_ya', 'p_po', 'p_pt', 'j_ga', 'j_tj', 'jn_ga', 's_ga', 'd_ga', 'tk_ga', 'tr_ga', 'te_ga', 'tf_ga', 's_k1', 'tk_k2', 'd_k3', 's_k4', 'te_k5', 'tr_k6', 's_k7', 'm_k7', 'tf_k8', 'm_inv']);
+INSERT INTO ids3991 (k) SELECT unnest(ARRAY['a', 'it', 'br', 'ag', 'ad', 't1', 't2', 't3', 't4', 't5', 't6', 'ga', 'tj', 'ya', 'po', 'pt', 'sa', 'sb', 'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9', 'o_m', 'o_x', 'o_y', 'o_p', 'o_j', 'o_jn', 'o_s', 'o_d', 'o_tk', 'o_tr', 'o_te', 'o_tf', 'm_a', 'm_it', 'm_br', 'm_ag', 'm_ad', 'm_t1', 'm_t2', 'm_t3', 'm_t4', 'm_t5', 'm_t6', 'x_t5', 'x_t6', 'y_ya', 'p_po', 'p_pt', 'j_ga', 'j_tj', 'jn_ga', 's_ga', 'd_ga', 'tk_ga', 'tr_ga', 'te_ga', 'tf_ga', 's_k1', 'tk_k2', 'd_k3', 's_k4', 'te_k5', 'tr_k6', 's_k7', 'm_k7', 'tf_k8', 's_k9', 'm_inv']);
 CREATE TEMP TABLE guard3991 (txt text NOT NULL) ON COMMIT DROP;
 INSERT INTO guard3991 VALUES ($q$DO $pre$
 DECLARE
@@ -69,7 +69,7 @@ CREATE FUNCTION pg_temp.ln(ok boolean, nm text, det text) RETURNS text LANGUAGE 
 DO $fx$
 DECLARE n text;
 BEGIN
-  FOREACH n IN ARRAY ARRAY['a', 'it', 'br', 'ag', 'ad', 't1', 't2', 't3', 't4', 't5', 't6', 'ga', 'tj', 'ya', 'po', 'pt', 'sa', 'sb', 'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8'] LOOP
+  FOREACH n IN ARRAY ARRAY['a', 'it', 'br', 'ag', 'ad', 't1', 't2', 't3', 't4', 't5', 't6', 'ga', 'tj', 'ya', 'po', 'pt', 'sa', 'sb', 'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9'] LOOP
     INSERT INTO auth.users (id, email, aud, role, raw_user_meta_data, raw_app_meta_data)
     VALUES (pg_temp.i(n), n || '-3991@example.test', 'authenticated', 'authenticated', '{}'::jsonb,
             '{"provider":"azure","providers":["azure"]}'::jsonb);
@@ -129,7 +129,8 @@ BEGIN
     (pg_temp.i('tr_k6'), pg_temp.i('o_tr'), pg_temp.i('k6'), 'agent', 'active', 'manual', now()),
     (pg_temp.i('s_k7'), pg_temp.i('o_s'), pg_temp.i('k7'), 'agent', 'active', 'manual', now()),
     (pg_temp.i('m_k7'), pg_temp.i('o_m'), pg_temp.i('k7'), 'agent', 'active', 'manual', now()),
-    (pg_temp.i('tf_k8'), pg_temp.i('o_tf'), pg_temp.i('k8'), 'agent', 'active', 'manual', now());
+    (pg_temp.i('tf_k8'), pg_temp.i('o_tf'), pg_temp.i('k8'), 'agent', 'active', 'manual', now()),
+    (pg_temp.i('s_k9'), pg_temp.i('o_s'), pg_temp.i('k9'), 'agent', 'unassigned', 'manual', now());
   INSERT INTO public.organization_members (id, organization_id, invited_email, role, license_status,
                                            invitation_token, invitation_expires_at, invited_at, provisioned_by,
                                            invited_first_name, invited_last_name)
@@ -642,6 +643,19 @@ BEGIN
     PERFORM pg_temp.pgr();
     SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k1'));
     rep := rep || pg_temp.ln(((r->>'success')::boolean AND r->>'error' IS NULL AND fn = 'F-k1' AND ct = t), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
+    RAISE SQLSTATE 'P3991';
+  EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
+    WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+  nm := $q$C48 unassigned SCIM member: sign-in skipped, row version unchanged$q$;
+  BEGIN
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k9'));
+    t := ct;
+    PERFORM pg_temp.asu(pg_temp.i('k9'));
+    r := public.sync_profile_names_from_idp('New', 'Name', 'New Name');
+    PERFORM pg_temp.pgr();
+    SELECT * INTO fn, ln, dn, ct FROM pg_temp.nm(pg_temp.i('k9'));
+    rep := rep || pg_temp.ln(((r->>'success')::boolean AND r->>'skipped' = 'directory_managed' AND fn = 'F-k9' AND ln = 'L-k9' AND dn = 'D-k9' AND ct = t), nm, (concat_ws(' / ', r::text, r2::text, fn, ln, dn))::text);
     RAISE SQLSTATE 'P3991';
   EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
     WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);

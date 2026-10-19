@@ -47,7 +47,7 @@ def q(s: str) -> str:
 
 
 # ---------------------------------------------------------------- fixtures
-USERS = ['a', 'it', 'br', 'ag', 'ad', 't1', 't2', 't3', 't4', 't5', 't6', 'ga', 'tj', 'ya', 'po', 'pt', 'sa', 'sb', 'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8']
+USERS = ['a', 'it', 'br', 'ag', 'ad', 't1', 't2', 't3', 't4', 't5', 't6', 'ga', 'tj', 'ya', 'po', 'pt', 'sa', 'sb', 'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9']
 ORGS = ['m', 'x', 'y', 'p', 'j', 'jn', 's', 'd', 'tk', 'tr', 'te', 'tf']
 MEMBERS = {
     # key: (org, user, role, status)
@@ -87,6 +87,7 @@ MEMBERS = {
     's_k7': ('s', 'k7', 'agent', 'active'),
     'm_k7': ('m', 'k7', 'agent', 'active'),
     'tf_k8': ('tf', 'k8', 'agent', 'active'),
+    's_k9': ('s', 'k9', 'agent', 'unassigned'),
 }
 KEYS = USERS + ['o_' + o for o in ORGS] + list(MEMBERS) + ['m_inv']
 
@@ -319,9 +320,10 @@ SET_ROWS = ',\n'.join(
     for n, w, m, f, l, e, u, xf, xl, xd, s in SETS)
 # org_deals' guard_stripe_mode_is_test: a 'test' deal needs organizations.is_test = true
 # (measured on keepr-test: 42501 otherwise). Set inside the case, rolled back with it.
-# version, suspended_at: _billing_enqueue_org_work (20261019090000) builds the
-# billing_outbox.dedupe_key of its two rows from them; NULL is a NOT NULL violation
-# (23502, measured on keepr-test 2026-10-19).
+# suspended_at: _billing_enqueue_org_work (20261019090000) builds the
+# billing_outbox.dedupe_key of its two rows from it; NULL is a NOT NULL violation
+# (23502, measured on keepr-test 2026-10-19). version is NOT NULL DEFAULT 1, so it was
+# never the cause (SR review pm_comments d00133ea); it is still set explicitly.
 SUSPEND = ("UPDATE public.organizations SET is_test = true WHERE id = pg_temp.i('o_m'); "
            "INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_reason, version, suspended_at) "
            "VALUES (pg_temp.i('o_m'), 'test', 3, 'suspended', 'other', 1, now())")
@@ -453,6 +455,8 @@ case('C47 SCIM member, all-absent input: success, no error, unchanged',
      names(I('k1')) + "    t := ct;\n" + AS(I('k1')) + "    r := public.sync_profile_names_from_idp(NULL, NULL, NULL);\n" + PG + names(I('k1')),
      "(r->>'success')::boolean AND r->>'error' IS NULL AND fn = 'F-k1' AND ct = t", DET_K)
 
+skip_case('C48 unassigned SCIM member: sign-in skipped, row version unchanged', 'k9')
+
 
 # C11: drift guard (the guard text is read from guard3991 so guard mutants can edit it)
 def guard_case(name: str, setup: str, expect_abort: bool):
@@ -583,6 +587,7 @@ MUTANTS = [
                      "RETURN jsonb_build_object('success', false, 'error', 'directory_managed');")], 'skip answered as an error'),
     ('K10', 'sync', [('        WHERE m.user_id = v_uid\n          AND NOT', '        WHERE NOT')], 'skip not tied to the caller'),
     ('K11', 'sync', [('                     WHERE t.organization_id = o.id\n', '                     WHERE true\n')], 'token not tied to the org'),
+    ('K12', 'sync', [('          AND NOT public.member_status_is_deactivated(m.license_status)\n', '          AND public.member_status_grants_access(m.license_status)\n')], 'skip only active members (gate copied)'),
     ('G1', 'gate', [('COALESCE(o.jit_provisioning_enabled, true)', 'COALESCE(o.jit_provisioning_enabled, false)')], 'JIT NULL treated as off (SR-1)'),
     ('G2', 'gate', [('              AND NOT COALESCE(o.jit_provisioning_enabled, true)\n', '')], 'JIT term dropped'),
     ('G3', 'gate', [('              AND NOT COALESCE(o.scim_enabled, false)\n', '')], 'scim_enabled term dropped'),
