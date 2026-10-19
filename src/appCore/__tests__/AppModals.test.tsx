@@ -189,6 +189,7 @@ const createAppStateMock = (
   closeProfile: jest.fn(),
   openSettings: jest.fn(),
   closeSettings: jest.fn(),
+  clearSettingsTarget: jest.fn(),
   openTransactions: jest.fn(),
   closeTransactions: jest.fn(),
   openContacts: jest.fn(),
@@ -343,28 +344,10 @@ describe("AppModals", () => {
     });
   });
 
-  describe("Settings Modal", () => {
-    it("should render Settings when showSettings is true and user exists", () => {
+  describe("Settings (BACKLOG-3964: a page, rendered by shell/SettingsLayer)", () => {
+    it("never renders Settings, even when showSettings is true", () => {
       const app = createAppStateMock({
         modalState: createModalState({ showSettings: true }),
-        currentUser: mockUser,
-      });
-      render(<AppModals app={app} />);
-      expect(screen.getByTestId("settings-modal")).toBeInTheDocument();
-    });
-
-    it("should not render Settings when showSettings is true but no currentUser", () => {
-      const app = createAppStateMock({
-        modalState: createModalState({ showSettings: true }),
-        currentUser: null,
-      });
-      render(<AppModals app={app} />);
-      expect(screen.queryByTestId("settings-modal")).not.toBeInTheDocument();
-    });
-
-    it("should not render Settings when showSettings is false", () => {
-      const app = createAppStateMock({
-        modalState: createModalState({ showSettings: false }),
         currentUser: mockUser,
       });
       render(<AppModals app={app} />);
@@ -600,7 +583,6 @@ describe("AppModals", () => {
       const app = createAppStateMock({
         modalState: createModalState({
           showMoveAppPrompt: true,
-          showSettings: true,
           showIPhoneSync: true,
         }),
         currentUser: mockUser,
@@ -608,7 +590,6 @@ describe("AppModals", () => {
       render(<AppModals app={app} />);
 
       expect(screen.getByTestId("move-app-prompt")).toBeInTheDocument();
-      expect(screen.getByTestId("settings-modal")).toBeInTheDocument();
       expect(screen.getByTestId("iphone-sync-modal")).toBeInTheDocument();
     });
 

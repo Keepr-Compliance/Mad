@@ -14,6 +14,7 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { SupportTicketDialog } from "./SupportTicketDialog";
 import { usePlatform } from "../../contexts";
+import { Z_CLASS } from "../../constants/zLayers";
 
 /** Detail payload for the 'open-support-widget' custom event (TASK-2319) */
 export interface OpenSupportWidgetDetail {
@@ -149,15 +150,15 @@ export function SupportWidget({
   return (
     <>
       {/* Floating "?" button - bottom-left, blue circle
-           BACKLOG-1341: z-[70] ensures visibility above all modal overlays
-           (Settings/Profile/WelcomeTerms use z-50, Transactions/Contacts/Details use z-[60]) */}
+           BACKLOG-1341: stays above all modal overlays; BACKLOG-3964: and above the
+           Settings page layer (z-[105]) — see src/constants/zLayers.ts */}
       {/* BACKLOG-1554: Windows frameless windows have 20px resize zones at corners
            that intercept clicks. Use bottom-8 left-8 (32px) on Windows to clear the
            resize zone; keep bottom-4 left-4 (16px) on macOS/Linux. */}
       <button
         onClick={handleOpen}
         data-support-widget
-        className={`fixed z-[70] w-10 h-10 rounded-full bg-blue-500 hover:bg-blue-600 text-white font-bold text-lg shadow-lg hover:shadow-xl transition-all flex items-center justify-center no-drag-region ${
+        className={`fixed ${Z_CLASS.support} w-10 h-10 rounded-full bg-blue-500 hover:bg-blue-600 text-white font-bold text-lg shadow-lg hover:shadow-xl transition-all flex items-center justify-center no-drag-region ${
           isWindows ? "bottom-8 left-8" : "bottom-4 left-4"
         }`}
         title="Contact Support"

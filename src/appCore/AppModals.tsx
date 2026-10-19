@@ -7,7 +7,6 @@
 
 import React, { useCallback, useState } from "react";
 import Profile from "../components/Profile";
-import Settings from "../components/Settings";
 import TransactionList from "../components/TransactionList";
 import Contacts from "../components/Contacts";
 import WelcomeTerms from "../components/WelcomeTerms";
@@ -17,8 +16,6 @@ import { IPhoneSyncModal } from "./modals/IPhoneSyncModal";
 import { AndroidSyncModal } from "./modals/AndroidSyncModal";
 import type { AppStateMachine } from "./state/types";
 import type { Transaction } from "@/types";
-import { useEmailSettingsCallbacks } from "./hooks/useEmailSettingsCallbacks";
-import { scrollToSettingsSection } from "../utils/scrollToSettingsSection";
 import { useGoogleMessagesSyncStatus } from "../hooks/useGoogleMessagesSyncStatus";
 import { useExtensionFolderRefresh } from "../hooks/useExtensionFolderRefresh";
 import { useSubmissionStatusNotice } from "./hooks/useSubmissionStatusNotice";
@@ -39,14 +36,11 @@ export function AppModals({ app }: AppModalsProps) {
     appPath,
     // Modal transitions
     closeProfile,
-    closeSettings,
     closeTransactions,
     closeContacts,
     closeAuditTransaction,
     openSettings,
     openTransactions,
-    openAndroidSync,
-    openIPhoneSync,
     // Handlers
     handleLogout,
     handleAcceptTerms,
@@ -90,23 +84,6 @@ export function AppModals({ app }: AppModalsProps) {
   // its "Open" action reuses the open-by-id path above.
   useSubmissionStatusNotice({ onOpenTransaction: handleOpenTransactionFromContact });
 
-  // Email connect/disconnect callbacks for Settings modal
-  const { handleEmailConnectedFromSettings, handleEmailDisconnectedFromSettings } =
-    useEmailSettingsCallbacks({ userId: currentUser?.id });
-
-  // Founder: Settings › Google Messages' Link / Relink — the same modal, at its link step.
-  const handleLinkGoogleMessagesFromSettings = useCallback(() => {
-    closeSettings();
-    openAndroidSync("link");
-  }, [closeSettings, openAndroidSync]);
-
-  // BACKLOG-3156 stage G: Settings › Messages › iPhone "Import from iPhone" — the
-  // same iPhone sync the dashboard's Sync iPhone card opens.
-  const handleImportIphoneFromSettings = useCallback(() => {
-    closeSettings();
-    openIPhoneSync();
-  }, [closeSettings, openIPhoneSync]);
-
   return (
     <>
       {/* Move App Prompt */}
@@ -131,18 +108,7 @@ export function AppModals({ app }: AppModalsProps) {
         />
       )}
 
-      {/* Settings Modal */}
-      {modalState.showSettings && currentUser && (
-        <Settings
-          userId={currentUser.id}
-          onClose={closeSettings}
-          onLogout={handleLogout}
-          onEmailConnected={handleEmailConnectedFromSettings}
-          onEmailDisconnected={handleEmailDisconnectedFromSettings}
-          onLinkGoogleMessages={handleLinkGoogleMessagesFromSettings}
-          onImportIphone={handleImportIphoneFromSettings}
-        />
-      )}
+      {/* Settings is a page, not a modal: shell/SettingsLayer (BACKLOG-3964). */}
 
       {/* Transactions View */}
       {modalState.showTransactions && currentUser && authProvider && isDatabaseInitialized && (
@@ -211,10 +177,7 @@ export function AppModals({ app }: AppModalsProps) {
           userId={currentUser.id}
           onClose={closeAndroidSync}
           startAtLink={modalState.androidSyncStart === "link"}
-          onOpenSettings={(target) => {
-            openSettings();
-            scrollToSettingsSection(target);
-          }}
+          onOpenSettings={openSettings}
         />
       )}
     </>

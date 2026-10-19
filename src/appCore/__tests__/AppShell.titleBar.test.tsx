@@ -52,6 +52,8 @@ const makeApp = (overrides: Partial<AppStateMachine> = {}): AppStateMachine =>
     openSettings: jest.fn(),
     handleLogout: jest.fn(),
     getPageTitle: jest.fn().mockReturnValue("Dashboard"),
+    // BACKLOG-3964: AppShell reads showSettings (title + Settings layer).
+    modalState: { showSettings: false },
     ...overrides,
   }) as unknown as AppStateMachine;
 

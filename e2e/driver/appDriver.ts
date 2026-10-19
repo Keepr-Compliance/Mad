@@ -308,12 +308,12 @@ export class KeeprAppDriver implements AppDriver {
       await cancel.click().catch(() => undefined);
       await this.page.waitForTimeout(300);
     }
+    // BACKLOG-3964: Settings is a page; Escape is its Back (unless a dialog inside it is open).
     await this.page.keyboard.press('Escape').catch(() => undefined);
     await this.page.waitForTimeout(200);
 
-    // NOTE: there are TWO settings-close buttons (mobile `sm:hidden` + desktop `hidden sm:flex`);
-    // `.first()` would pick the HIDDEN mobile one at a desktop viewport, so click the VISIBLE one.
-    const close = this.page.getByTestId(Testids.settingsClose).locator('visible=true').first();
+    // BACKLOG-3964: ONE settings-close button now (the page's "← Back").
+    const close = this.page.getByTestId(Testids.settingsClose);
     if (await close.isVisible().catch(() => false)) {
       await close.click().catch(() => undefined);
     }

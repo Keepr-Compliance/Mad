@@ -10,7 +10,7 @@
 
 import React from "react";
 import type { AppStateMachine } from "./state/types";
-import { ShellBanners, TitleBar } from "./shell";
+import { ShellBanners, ShellContent, TitleBar } from "./shell";
 import SystemHealthMonitor from "../components/SystemHealthMonitor";
 import { isOnboardingStep } from "./routing";
 import { useSessionValidator } from "../hooks/useSessionValidator";
@@ -40,6 +40,7 @@ export function AppShell({ app, children }: AppShellProps) {
     openSettings,
     handleLogout,
     getPageTitle,
+    modalState,
   } = app;
 
   // TASK-2062: Poll for remote session invalidation
@@ -79,7 +80,7 @@ export function AppShell({ app, children }: AppShellProps) {
         currentStep={currentStep}
         isAuthenticated={isAuthenticated}
         currentUser={currentUser}
-        title={getPageTitle()}
+        title={modalState.showSettings ? "Settings" : getPageTitle()}
         onOpenAccount={openProfile}
       />
 
@@ -132,10 +133,8 @@ export function AppShell({ app, children }: AppShellProps) {
           />
         )}
 
-      {/* Scrollable Content Area */}
-      <div className="flex-1 min-h-0 overflow-y-auto relative">
-        {children}
-      </div>
+      {/* Scrollable content area + the Settings page layer (BACKLOG-3964) */}
+      <ShellContent app={app}>{children}</ShellContent>
 
       {/* TASK-2282: SupportWidget moved to App.tsx to be visible on ALL screens */}
     </div>

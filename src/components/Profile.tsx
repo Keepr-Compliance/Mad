@@ -5,6 +5,7 @@ import { useLicense } from "@/contexts/LicenseContext";
 import { useFeatureGate } from "@/hooks/useFeatureGate";
 import logger from '../utils/logger';
 import { formatDbDate } from "@/utils/dateFormatters";
+import { formatPlanLabel } from "./settings/account/formatPlanLabel";
 
 interface User {
   id: string;
@@ -73,20 +74,6 @@ function Profile({
   } = useLicense();
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
-
-  // Format license type for display
-  const formatLicenseType = (type: string): string => {
-    switch (type) {
-      case "individual":
-        return "Individual";
-      case "team":
-        return "Team";
-      case "enterprise":
-        return "Enterprise";
-      default:
-        return type.charAt(0).toUpperCase() + type.slice(1);
-    }
-  };
 
   const handleLogoutClick = (): void => {
     setShowConfirmLogout(true);
@@ -320,7 +307,7 @@ function Profile({
                     ) : (
                       <>
                         <span className="text-sm text-gray-600">
-                          {formatLicenseType(licenseType)}
+                          {formatPlanLabel(licenseType)}
                         </span>
                         {hasAIAddon && (
                           <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">
