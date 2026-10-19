@@ -27,9 +27,9 @@ BEGIN
   END LOOP;
 
   FOR r IN SELECT * FROM (VALUES
-    ('public.sync_profile_names_from_idp(text,text,text)', '6227bbb62821db114ff14a1f1966c3e7'),
+    ('public.sync_profile_names_from_idp(text,text,text)', '18ee571b4bb9dd485032c1b98a0dd904'),
     ('public.org_names_directory_managed(uuid)',           '99e8d288115addafe005249f42e7d4b8'),
-    ('public.set_member_name(uuid,text,text)',             '1262516547ba548d2cc217824c18bb5b')
+    ('public.set_member_name(uuid,text,text)',             'e6e1590f67f8c15f98fa32a6a94aeffb')
   ) AS t(sig, expected) LOOP
     SELECT md5(p.prosrc) INTO v_md5 FROM pg_proc p WHERE p.oid = to_regprocedure(r.sig);
     IF v_md5 IS NOT NULL AND v_md5 <> r.expected THEN

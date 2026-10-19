@@ -10,6 +10,10 @@
  * 5. Admits the OWNER of a personal organization to the floor
  * 6. Otherwise signs this browser out and returns to login with an error
  *
+ * BACKLOG-3991: before any of that, the names Microsoft or Google gave at this
+ * sign-in go to sync_profile_names_from_idp (lib/auth/idpNames.ts), on every
+ * branch. A failure there never changes where the user lands.
+ *
  * BACKLOG-3080: every portal user now lands on `next`; middleware and the
  * dashboard decide what each of them may open. The desktop download page is no
  * longer a destination here.
@@ -20,7 +24,7 @@ import { NextResponse } from 'next/server';
 import { extractEmail } from '@/lib/auth/helpers';
 import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
 import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
-import { blankNameFill, idpProfileNames } from '@/lib/auth/profileNameFill';
+import { syncIdpNames } from '@/lib/auth/idpNames';
 import {
   PORTAL_MEMBERSHIP_SELECT,
   classifyPortalAccess,
@@ -73,7 +77,7 @@ export async function GET(request: Request) {
 
   if (code) {
     const supabase = await createClient();
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    const { data: exchanged, error } = await supabase.auth.exchangeCodeForSession(code);
 
     if (error) {
       console.error('Auth exchange error:', error);
@@ -86,6 +90,10 @@ export async function GET(request: Request) {
     } = await supabase.auth.getUser();
 
     if (user) {
+      // BACKLOG-3991: the identity provider's names, before any branch, on the
+      // USER client (the function writes auth.uid()'s own row). Never throws.
+      await syncIdpNames(supabase, user, exchanged?.session?.provider_token ?? null);
+
       // Check for an existing BROKERAGE membership.
       //
       // BACKLOG-3364: a solo user's own personal organization is not one. It
@@ -148,29 +156,19 @@ export async function GET(request: Request) {
           return refuse(request, supabase, origin, inviteRefusalFor(accepted?.error));
         }
         // accept_invitation wrote a minimal users row if there was none; fill in
-        // the profile fields. BACKLOG-3851 PR-2f: the identity provider's names
-        // fill BLANK fields only, so a stored name (from the invitation, or set by
-        // an admin) is never overwritten.
+        // the sign-in fields. Names are not written here: sync_profile_names_from_idp
+        // ran above (BACKLOG-3991), and accept_invitation fills blank names from
+        // the invitation.
         const userEmail = extractEmail(user);
         if (userEmail) {
           const provider = user.app_metadata?.provider || 'email';
           const oauthId = user.user_metadata?.provider_id || user.id;
-          const { data: storedNames, error: storedNamesError } = await supabase
-            .from('users')
-            .select('display_name, first_name, last_name')
-            .eq('id', user.id)
-            .maybeSingle();
-          // A failed read says nothing about what is stored: write no name fields.
-          const nameFill = storedNamesError
-            ? {}
-            : blankNameFill(storedNames, idpProfileNames(user.user_metadata));
           const { error: upsertError } = await supabase.from('users').upsert(
             {
               id: user.id,
               email: userEmail,
               oauth_provider: provider,
               oauth_id: oauthId,
-              ...nameFill,
             },
             { onConflict: 'id' }
           );

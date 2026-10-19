@@ -1,11 +1,9 @@
 /**
- * BACKLOG-3851 PR-2f C17 (SR R5): after accept_invitation, /auth/callback writes the
- * identity provider's names into public.users ONLY where the stored field is blank.
- *
- * Stored-row shape: handle_new_user (on auth.users insert) always sets display_name
- * (full_name, name, else the email's local part) and leaves first/last NULL; accept_invitation
- * (M4) then copies the invitation's names into blank first/last (measured on keepr-test,
- * supabase/tests/backlog-3851/pr2f, N1/N2).
+ * BACKLOG-3851 PR-2f C17, as changed by BACKLOG-3991: after accept_invitation,
+ * /auth/callback's users upsert writes the sign-in fields only. Names are written
+ * by sync_profile_names_from_idp before the branch (see
+ * __tests__/member-name-3991/callback.test.ts), and accept_invitation fills blank
+ * names from the invitation. The old "fill blank names" read is gone.
  *
  * Only the Supabase server client is mocked (the shared PostgREST emulator).
  *
@@ -18,26 +16,18 @@ import {
   createPostgrestEmulator,
   type Row,
 } from '../helpers/postgrestEmulator';
-import { blankNameFill, idpProfileNames } from '@/lib/auth/profileNameFill';
 
 const mockEmulator = createPostgrestEmulator();
 const mockGetUser = jest.fn();
 const mockExchangeCodeForSession = jest.fn();
 const mockSignOut = jest.fn();
 const mockRpc = jest.fn();
-const mockUsersReadError = { current: false };
 
 jest.mock('@/lib/supabase/server', () => ({
   createClient: jest.fn(async () => ({
     auth: { exchangeCodeForSession: mockExchangeCodeForSession, getUser: mockGetUser, signOut: mockSignOut },
     rpc: mockRpc,
-    from: (table: string) =>
-      table === 'users' && mockUsersReadError.current
-        ? {
-            select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'fixture read error' } }) }) }),
-            upsert: (...args: unknown[]) => (mockEmulator.from('users') as any).upsert(...args), // eslint-disable-line @typescript-eslint/no-explicit-any
-          }
-        : mockEmulator.from(table),
+    from: (table: string) => mockEmulator.from(table),
   })),
 }));
 
@@ -49,7 +39,7 @@ const TOKEN = 'fixture0token0for0backlog03851';
 const COOKIE = `sb-fixture-auth-token=abc; keepr_invite=invite.${TOKEN}`;
 
 function signedIn(userMetadata: Record<string, unknown>): void {
-  mockExchangeCodeForSession.mockResolvedValue({ error: null });
+  mockExchangeCodeForSession.mockResolvedValue({ data: { session: null }, error: null });
   mockGetUser.mockResolvedValue({
     data: { user: { id: FIXTURE_USER_ID, email: EMAIL, app_metadata: { provider: 'google' }, user_metadata: userMetadata } },
   });
@@ -66,7 +56,7 @@ async function acceptAndGetUpsert(): Promise<Record<string, unknown>> {
   mockRpc.mockImplementation(async (name: string) =>
     name === 'accept_invitation'
       ? { data: { success: true, organization_id: FIXTURE_BROKERAGE_ORG_ID, role: 'agent', license_status: 'unassigned' }, error: null }
-      : { data: null, error: null }
+      : { data: { success: true, updated: false }, error: null }
   );
   const res = await GET(new Request(`${ORIGIN}/auth/callback?code=fixture-code-3851`, { headers: { cookie: COOKIE } }));
   expect(res.headers.get('location')).toBe(`${ORIGIN}/dashboard`);
@@ -75,54 +65,21 @@ async function acceptAndGetUpsert(): Promise<Record<string, unknown>> {
   return upserts[0].values as Record<string, unknown>;
 }
 
-const IDP = { full_name: 'Idp Full', given_name: 'Idp', family_name: 'Family' };
-
 beforeEach(() => {
   jest.clearAllMocks();
   mockEmulator.reset();
-  mockUsersReadError.current = false;
   mockSignOut.mockResolvedValue({ error: null });
 });
 
-describe('C17: names fill blanks only', () => {
-  it('stored names (from the invitation or an admin) are kept: no name field is written', async () => {
-    signedIn(IDP);
-    storedUser({ display_name: 'ann', first_name: 'Ann', last_name: 'Lee' });
+describe('C17 (BACKLOG-3991): the accept upsert writes no name field', () => {
+  it.each([
+    ['stored names, provider names', { full_name: 'Idp Full', name: 'Idp Full' }, { display_name: 'ann', first_name: 'Ann', last_name: 'Lee' }],
+    ['blank stored names, provider names', { full_name: 'Idp Full' }, { display_name: null, first_name: null, last_name: '  ' }],
+    ['no provider names', {}, { display_name: null, first_name: null, last_name: null }],
+  ])('%s -> email / provider upsert only', async (_label, metadata, stored) => {
+    signedIn(metadata);
+    storedUser(stored);
     const values = await acceptAndGetUpsert();
     expect(values).toEqual({ id: FIXTURE_USER_ID, email: EMAIL, oauth_provider: 'google', oauth_id: FIXTURE_USER_ID });
-  });
-
-  it('blank first/last are filled from the identity provider; a set display_name is kept', async () => {
-    signedIn(IDP);
-    storedUser({ display_name: 'invitee-fixture-3851', first_name: null, last_name: '  ' });
-    const values = await acceptAndGetUpsert();
-    expect(values).toEqual(expect.objectContaining({ first_name: 'Idp', last_name: 'Family' }));
-    expect('display_name' in values).toBe(false);
-  });
-
-  it('the identity provider gives no names: nothing name-related is written', async () => {
-    signedIn({});
-    storedUser({ display_name: null, first_name: null, last_name: null });
-    const values = await acceptAndGetUpsert();
-    expect(Object.keys(values).sort()).toEqual(['email', 'id', 'oauth_id', 'oauth_provider']);
-  });
-});
-
-describe('C17b: a failed read of the stored names writes no name fields', () => {
-  it('leaves stored names untouched (email/provider upsert only)', async () => {
-    signedIn(IDP);
-    storedUser({ display_name: 'ann', first_name: 'Ann', last_name: 'Lee' });
-    mockUsersReadError.current = true;
-    const values = await acceptAndGetUpsert();
-    expect(values).toEqual({ id: FIXTURE_USER_ID, email: EMAIL, oauth_provider: 'google', oauth_id: FIXTURE_USER_ID });
-  });
-});
-
-describe('blankNameFill / idpProfileNames', () => {
-  it('maps metadata and fills only blank fields', () => {
-    expect(idpProfileNames({ name: 'N', given_name: 'G' })).toEqual({ display_name: 'N', first_name: 'G', last_name: null });
-    expect(blankNameFill({ display_name: 'D', first_name: '', last_name: null }, { display_name: 'X', first_name: 'G', last_name: 'F' }))
-      .toEqual({ first_name: 'G', last_name: 'F' });
-    expect(blankNameFill(null, { display_name: 'X', first_name: null, last_name: null })).toEqual({ display_name: 'X' });
   });
 });

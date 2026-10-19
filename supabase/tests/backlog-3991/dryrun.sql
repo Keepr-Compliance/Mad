@@ -47,9 +47,9 @@ BEGIN
   END LOOP;
 
   FOR r IN SELECT * FROM (VALUES
-    ('public.sync_profile_names_from_idp(text,text,text)', '6227bbb62821db114ff14a1f1966c3e7'),
+    ('public.sync_profile_names_from_idp(text,text,text)', '18ee571b4bb9dd485032c1b98a0dd904'),
     ('public.org_names_directory_managed(uuid)',           '99e8d288115addafe005249f42e7d4b8'),
-    ('public.set_member_name(uuid,text,text)',             '1262516547ba548d2cc217824c18bb5b')
+    ('public.set_member_name(uuid,text,text)',             'e6e1590f67f8c15f98fa32a6a94aeffb')
   ) AS t(sig, expected) LOOP
     SELECT md5(p.prosrc) INTO v_md5 FROM pg_proc p WHERE p.oid = to_regprocedure(r.sig);
     IF v_md5 IS NOT NULL AND v_md5 <> r.expected THEN
@@ -80,9 +80,9 @@ CREATE OR REPLACE FUNCTION public.sync_profile_names_from_idp(p_first text, p_la
 AS $function$
 DECLARE
   v_uid     uuid := auth.uid();
-  -- Space, tab, CR, LF, VT, FF, NBSP, U+2028, U+2029, zero-width space, BOM.
-  v_ws      constant text := E' \t\r\n\u000B\f\u00A0\u2028\u2029\u200B\uFEFF';
-  v_bad     constant text := E'[[:cntrl:]\u2028\u2029]';
+  -- Space, tab, CR, LF, FF, VT (11), NBSP (160), U+2028, U+2029, zero-width space, BOM.
+  v_ws      constant text := E' \t\r\n\f' || chr(11) || chr(160) || chr(8232) || chr(8233) || chr(8203) || chr(65279);
+  v_bad     constant text := '[[:cntrl:]' || chr(8232) || chr(8233) || ']';
   v_first   text := NULLIF(btrim(p_first, v_ws), '');
   v_last    text := NULLIF(btrim(p_last, v_ws), '');
   v_display text := NULLIF(btrim(p_display, v_ws), '');
@@ -168,8 +168,8 @@ CREATE OR REPLACE FUNCTION public.set_member_name(p_member_id uuid, p_first text
 AS $function$
 DECLARE
   v_uid         uuid := auth.uid();
-  v_ws          constant text := E' \t\r\n\u000B\f\u00A0\u2028\u2029\u200B\uFEFF';
-  v_bad         constant text := E'[[:cntrl:]\u2028\u2029]';
+  v_ws          constant text := E' \t\r\n\f' || chr(11) || chr(160) || chr(8232) || chr(8233) || chr(8203) || chr(65279);
+  v_bad         constant text := '[[:cntrl:]' || chr(8232) || chr(8233) || ']';
   v_org_id      uuid;
   v_personal    boolean;
   v_caller_role text;
@@ -286,9 +286,9 @@ BEGIN
   END LOOP;
 
   FOR r IN SELECT * FROM (VALUES
-    ('public.sync_profile_names_from_idp(text,text,text)', '6227bbb62821db114ff14a1f1966c3e7'),
+    ('public.sync_profile_names_from_idp(text,text,text)', '18ee571b4bb9dd485032c1b98a0dd904'),
     ('public.org_names_directory_managed(uuid)',           '99e8d288115addafe005249f42e7d4b8'),
-    ('public.set_member_name(uuid,text,text)',             '1262516547ba548d2cc217824c18bb5b')
+    ('public.set_member_name(uuid,text,text)',             'e6e1590f67f8c15f98fa32a6a94aeffb')
   ) AS t(sig, expected) LOOP
     SELECT md5(p.prosrc) INTO v_md5 FROM pg_proc p WHERE p.oid = to_regprocedure(r.sig);
     IF v_md5 IS NOT NULL AND v_md5 <> r.expected THEN

@@ -27,9 +27,9 @@ BEGIN
   END LOOP;
 
   FOR r IN SELECT * FROM (VALUES
-    ('public.sync_profile_names_from_idp(text,text,text)', '6227bbb62821db114ff14a1f1966c3e7'),
+    ('public.sync_profile_names_from_idp(text,text,text)', '18ee571b4bb9dd485032c1b98a0dd904'),
     ('public.org_names_directory_managed(uuid)',           '99e8d288115addafe005249f42e7d4b8'),
-    ('public.set_member_name(uuid,text,text)',             '1262516547ba548d2cc217824c18bb5b')
+    ('public.set_member_name(uuid,text,text)',             'e6e1590f67f8c15f98fa32a6a94aeffb')
   ) AS t(sig, expected) LOOP
     SELECT md5(p.prosrc) INTO v_md5 FROM pg_proc p WHERE p.oid = to_regprocedure(r.sig);
     IF v_md5 IS NOT NULL AND v_md5 <> r.expected THEN
@@ -507,8 +507,8 @@ BEGIN
       ('S1b', 'public.sync_profile_names_from_idp(text,text,text)', $q$last: blank on null (M1)$q$, $q$last_name    = COALESCE(v_last, u.last_name),$q$, $q$last_name    = v_last,$q$, $q$$q$, $q$$q$),
       ('S1c', 'public.sync_profile_names_from_idp(text,text,text)', $q$display: blank on null (M1)$q$, $q$display_name = COALESCE(v_display, u.display_name),$q$, $q$display_name = v_display,$q$, $q$$q$, $q$$q$),
       ('S3', 'public.sync_profile_names_from_idp(text,text,text)', $q$first: default btrim (M3)$q$, $q$v_first   text := NULLIF(btrim(p_first, v_ws), '');$q$, $q$v_first   text := NULLIF(btrim(p_first), '');$q$, $q$$q$, $q$$q$),
-      ('S3e', 'public.sync_profile_names_from_idp(text,text,text)', $q$trim set without the E prefix$q$, $q$v_ws      constant text := E'$q$, $q$v_ws      constant text := '$q$, $q$$q$, $q$$q$),
-      ('S3u', 'public.sync_profile_names_from_idp(text,text,text)', $q$trim set without NBSP/U+2028/U+2029/ZWSP/BOM$q$, $q$\f\u00A0\u2028\u2029\u200B\uFEFF';$q$, $q$\f';$q$, $q$$q$, $q$$q$),
+      ('S3e', 'public.sync_profile_names_from_idp(text,text,text)', $q$trim set written without the E prefix (backslash and the letters t r n f)$q$, $q$v_ws      constant text := E' \t\r\n\f'$q$, $q$v_ws      constant text := ' \t\r\n\f'$q$, $q$$q$, $q$$q$),
+      ('S3u', 'public.sync_profile_names_from_idp(text,text,text)', $q$trim set without NBSP/U+2028/U+2029/ZWSP/BOM$q$, $q$ || chr(160) || chr(8232) || chr(8233) || chr(8203) || chr(65279);$q$, $q$;$q$, $q$$q$, $q$$q$),
       ('S4', 'public.sync_profile_names_from_idp(text,text,text)', $q$first: length check dropped$q$, $q$IF v_first ~ v_bad OR char_length(v_first) > 200 THEN$q$, $q$IF v_first ~ v_bad THEN$q$, $q$$q$, $q$$q$),
       ('S5', 'public.sync_profile_names_from_idp(text,text,text)', $q$first: control-character check dropped$q$, $q$IF v_first ~ v_bad OR char_length(v_first) > 200 THEN$q$, $q$IF char_length(v_first) > 200 THEN$q$, $q$$q$, $q$$q$),
       ('S6', 'public.sync_profile_names_from_idp(text,text,text)', $q$auth.uid() check removed$q$, $q$  IF v_uid IS NULL THEN
