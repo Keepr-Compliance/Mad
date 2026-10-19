@@ -55,8 +55,18 @@ const setCurrent = (svc: BackupService, p: FakeProcess | null) => {
   (svc as unknown as { currentProcess: FakeProcess | null }).currentProcess = p;
 };
 
-beforeEach(() => jest.useFakeTimers());
-afterEach(() => jest.useRealTimers());
+// BACKLOG-3996: SIGTERM then SIGKILL at 5 s is the POSIX path; on Windows cancel runs
+// taskkill /T /F (iphoneToolProcess-3996.test.ts). Pinned so these cases mean the same
+// on a Windows runner.
+const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+beforeEach(() => {
+  jest.useFakeTimers();
+  Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+});
+afterEach(() => {
+  jest.useRealTimers();
+  Object.defineProperty(process, "platform", originalPlatform);
+});
 
 describe("BACKLOG-3598: cancelBackup force-kill timer", () => {
   it("a new backup started inside 5 s of the cancel is NOT killed", () => {

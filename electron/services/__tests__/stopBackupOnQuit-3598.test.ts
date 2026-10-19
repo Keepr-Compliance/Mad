@@ -167,6 +167,9 @@ afterEach(() => {
 
 describe("BACKLOG-3598: BackupService.stopForQuit", () => {
   it("SIGTERMs the process and resolves when it exits — no force-kill", async () => {
+    // BACKLOG-3996: the SIGTERM-first stop is the POSIX path; Windows tree-kills at once
+    // (tested below). Pinned so the case means the same on a Windows runner.
+    setPlatform("darwin");
     const svc = new BackupService();
     const proc = fakeProcess(true);
     setCurrent(svc, proc);
@@ -265,6 +268,9 @@ describe("BACKLOG-3598: BackupService.stopForQuit", () => {
 
 describe("BACKLOG-3598: the orchestrator stops ITS OWN backup, not the singleton's", () => {
   it("kills the process on the orchestrator's BackupService and records only endedBy=app-quit", async () => {
+    // BACKLOG-3996: the SIGTERM-first stop is the POSIX path; Windows tree-kills at once
+    // (tested below). Pinned so the case means the same on a Windows runner.
+    setPlatform("darwin");
     const orch = new DeviceSyncOrchestrator();
     const orchestratorProc = fakeProcess(true);
     const singletonProc = fakeProcess(true);
