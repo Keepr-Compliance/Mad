@@ -404,14 +404,14 @@ BEGIN
       ($q$empty keeps$q$, ('Ann')::text, ('')::text, ('Ann')::text),
       ($q$spaces keep$q$, ('Ann')::text, ('   ')::text, ('Ann')::text),
       ($q$tab-newline keeps (M3 case)$q$, ('Ann')::text, (E'\t\n')::text, ('Ann')::text),
-      ($q$CR VT FF keep$q$, ('Ann')::text, (E'\r\u000B\f')::text, ('Ann')::text),
+      ($q$CR VT FF keep$q$, ('Ann')::text, (E'\r' || chr(11) || E'\f')::text, ('Ann')::text),
       ($q$padded is trimmed$q$, ('Ann')::text, ('  Bob ')::text, ('Bob')::text),
       ($q$null stored + present$q$, (NULL)::text, ('Bob')::text, ('Bob')::text),
       ($q$null stored + null$q$, (NULL)::text, (NULL)::text, (NULL)::text),
-      ($q$control char inside keeps$q$, ('Ann')::text, (E'Bo\u0001b')::text, ('Ann')::text),
+      ($q$control char inside keeps$q$, ('Ann')::text, ('Bo' || chr(1) || 'b')::text, ('Ann')::text),
       ($q$newline inside keeps$q$, ('Ann')::text, (E'Bo\nb')::text, ('Ann')::text),
-      ($q$DEL inside keeps$q$, ('Ann')::text, (E'Bo\u007Fb')::text, ('Ann')::text),
-      ($q$U+2028 inside keeps$q$, ('Ann')::text, (E'Bo\u2028b')::text, ('Ann')::text),
+      ($q$DEL inside keeps$q$, ('Ann')::text, ('Bo' || chr(127) || 'b')::text, ('Ann')::text),
+      ($q$U+2028 inside keeps$q$, ('Ann')::text, ('Bo' || chr(8232) || 'b')::text, ('Ann')::text),
       ($q$201 chars keeps$q$, ('Ann')::text, (repeat('x', 201))::text, ('Ann')::text),
       ($q$200 chars overwrites$q$, ('Ann')::text, (repeat('x', 200))::text, (repeat('x', 200))::text),
       ($q$Trent unchanged (t edges)$q$, ('Ann')::text, ('Trent')::text, ('Trent')::text),
@@ -420,12 +420,12 @@ BEGIN
       ($q$Fran unchanged (n edge)$q$, ('Ann')::text, ('Fran')::text, ('Fran')::text),
       ($q$vera unchanged (v edge)$q$, ('Ann')::text, ('vera')::text, ('vera')::text),
       ($q$rob unchanged (r edge)$q$, ('Ann')::text, ('rob')::text, ('rob')::text),
-      ($q$NBSP only keeps$q$, ('Ann')::text, (E'\u00A0')::text, ('Ann')::text),
-      ($q$U+2028 only keeps$q$, ('Ann')::text, (E'\u2028')::text, ('Ann')::text),
-      ($q$U+2029 only keeps$q$, ('Ann')::text, (E'\u2029')::text, ('Ann')::text),
-      ($q$ZWSP only keeps$q$, ('Ann')::text, (E'\u200B')::text, ('Ann')::text),
-      ($q$BOM only keeps$q$, ('Ann')::text, (E'\uFEFF')::text, ('Ann')::text),
-      ($q$NBSP padded is trimmed$q$, ('Ann')::text, (E'\u00A0Bob\u00A0')::text, ('Bob')::text)
+      ($q$NBSP only keeps$q$, ('Ann')::text, (chr(160))::text, ('Ann')::text),
+      ($q$U+2028 only keeps$q$, ('Ann')::text, (chr(8232))::text, ('Ann')::text),
+      ($q$U+2029 only keeps$q$, ('Ann')::text, (chr(8233))::text, ('Ann')::text),
+      ($q$ZWSP only keeps$q$, ('Ann')::text, (chr(8203))::text, ('Ann')::text),
+      ($q$BOM only keeps$q$, ('Ann')::text, (chr(65279))::text, ('Ann')::text),
+      ($q$NBSP padded is trimmed$q$, ('Ann')::text, (chr(160) || 'Bob' || chr(160))::text, ('Bob')::text)
     ) v(label, st, pv, ex) LOOP
     nm := 'C21 ' || c.f || ': ' || c.label;
     BEGIN
@@ -498,13 +498,13 @@ BEGIN
       ($q$C10 100 chars -> success$q$, 'a', 'm_t4', (repeat('x', 100))::text, ('Ok')::text, 'success', 't4', ($q$xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx$q$)::text, ($q$Ok$q$)::text, ($q$xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx Ok$q$)::text, false),
       ($q$C10 '  Ann ' -> 'Ann'$q$, 'a', 'm_t4', ('  Ann ')::text, (NULL)::text, 'success', 't4', ($q$Ann$q$)::text, (NULL)::text, ($q$Ann$q$)::text, false),
       ($q$C10 newline inside -> invalid_name$q$, 'a', 'm_t4', (E'An\nn')::text, ('Ok')::text, 'invalid_name', 't4', ($q$F-t4$q$)::text, ($q$L-t4$q$)::text, ($q$D-t4$q$)::text, false),
-      ($q$C10 U+2028 inside -> invalid_name$q$, 'a', 'm_t4', (E'An\u2028n')::text, ('Ok')::text, 'invalid_name', 't4', ($q$F-t4$q$)::text, ($q$L-t4$q$)::text, ($q$D-t4$q$)::text, false),
-      ($q$C10 NBSP / ZWSP only -> invalid_name$q$, 'a', 'm_t4', (E'\u00A0')::text, (E'\u200B')::text, 'invalid_name', 't4', ($q$F-t4$q$)::text, ($q$L-t4$q$)::text, ($q$D-t4$q$)::text, false),
+      ($q$C10 U+2028 inside -> invalid_name$q$, 'a', 'm_t4', ('An' || chr(8232) || 'n')::text, ('Ok')::text, 'invalid_name', 't4', ($q$F-t4$q$)::text, ($q$L-t4$q$)::text, ($q$D-t4$q$)::text, false),
+      ($q$C10 NBSP / ZWSP only -> invalid_name$q$, 'a', 'm_t4', (chr(160))::text, (chr(8203))::text, 'invalid_name', 't4', ($q$F-t4$q$)::text, ($q$L-t4$q$)::text, ($q$D-t4$q$)::text, false),
       ($q$C19 suspended brokerage: claimed edit succeeds$q$, 'a', 'm_t1', ('Sus')::text, ('Pended')::text, 'success', 't1', ($q$Sus$q$)::text, ($q$Pended$q$)::text, ($q$Sus Pended$q$)::text, true)
     ) v(name, who, mem, pf, pl, ex, chk, xf, xl, xd, susp) LOOP
     nm := c.name;
     BEGIN
-      IF c.susp THEN INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_reason) VALUES (pg_temp.i('o_m'), 'test', 3, 'suspended', 'other'); END IF;
+      IF c.susp THEN UPDATE public.organizations SET is_test = true WHERE id = pg_temp.i('o_m'); INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_reason) VALUES (pg_temp.i('o_m'), 'test', 3, 'suspended', 'other'); END IF;
       PERFORM pg_temp.asu(pg_temp.i(c.who));
       r := public.set_member_name(pg_temp.i(c.mem), c.pf, c.pl);
       PERFORM pg_temp.pgr();
@@ -596,9 +596,10 @@ BEGIN
   nm := $q$C20 sync: anon no, PUBLIC no, authenticated yes, definer, search_path empty$q$;
   BEGIN
     SELECT has_function_privilege('anon', p.oid, 'EXECUTE'), has_function_privilege('authenticated', p.oid, 'EXECUTE'),
-           EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0), p.prosecdef, p.proconfig::text
+           EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0), p.prosecdef,
+           CASE WHEN p.proconfig = ARRAY['search_path=""'] THEN 'search_path empty' ELSE p.proconfig::text END
       INTO b, b2, b3, b4, t FROM pg_proc p WHERE p.oid = 'public.sync_profile_names_from_idp(text,text,text)'::regprocedure;
-    rep := rep || pg_temp.ln((NOT b AND b2 AND NOT b3 AND b4 AND t = '{search_path=""}'), nm, (concat_ws(' / ', b, b2, b3, b4, t))::text);
+    rep := rep || pg_temp.ln((NOT b AND b2 AND NOT b3 AND b4 AND t = 'search_path empty'), nm, (concat_ws(' / ', b, b2, b3, b4, t))::text);
     RAISE SQLSTATE 'P3991';
   EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
     WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
@@ -606,9 +607,10 @@ BEGIN
   nm := $q$C20 gate: anon no, PUBLIC no, authenticated yes, definer, search_path empty$q$;
   BEGIN
     SELECT has_function_privilege('anon', p.oid, 'EXECUTE'), has_function_privilege('authenticated', p.oid, 'EXECUTE'),
-           EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0), p.prosecdef, p.proconfig::text
+           EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0), p.prosecdef,
+           CASE WHEN p.proconfig = ARRAY['search_path=""'] THEN 'search_path empty' ELSE p.proconfig::text END
       INTO b, b2, b3, b4, t FROM pg_proc p WHERE p.oid = 'public.org_names_directory_managed(uuid)'::regprocedure;
-    rep := rep || pg_temp.ln((NOT b AND b2 AND NOT b3 AND b4 AND t = '{search_path=""}'), nm, (concat_ws(' / ', b, b2, b3, b4, t))::text);
+    rep := rep || pg_temp.ln((NOT b AND b2 AND NOT b3 AND b4 AND t = 'search_path empty'), nm, (concat_ws(' / ', b, b2, b3, b4, t))::text);
     RAISE SQLSTATE 'P3991';
   EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
     WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
@@ -616,9 +618,10 @@ BEGIN
   nm := $q$C20 set: anon no, PUBLIC no, authenticated yes, definer, search_path empty$q$;
   BEGIN
     SELECT has_function_privilege('anon', p.oid, 'EXECUTE'), has_function_privilege('authenticated', p.oid, 'EXECUTE'),
-           EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0), p.prosecdef, p.proconfig::text
+           EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0), p.prosecdef,
+           CASE WHEN p.proconfig = ARRAY['search_path=""'] THEN 'search_path empty' ELSE p.proconfig::text END
       INTO b, b2, b3, b4, t FROM pg_proc p WHERE p.oid = 'public.set_member_name(uuid,text,text)'::regprocedure;
-    rep := rep || pg_temp.ln((NOT b AND b2 AND NOT b3 AND b4 AND t = '{search_path=""}'), nm, (concat_ws(' / ', b, b2, b3, b4, t))::text);
+    rep := rep || pg_temp.ln((NOT b AND b2 AND NOT b3 AND b4 AND t = 'search_path empty'), nm, (concat_ws(' / ', b, b2, b3, b4, t))::text);
     RAISE SQLSTATE 'P3991';
   EXCEPTION WHEN SQLSTATE 'P3991' THEN NULL;
     WHEN OTHERS THEN PERFORM pg_temp.pgr(); rep := rep || pg_temp.ln(false, nm, 'ERR ' || SQLSTATE || ' ' || SQLERRM);
@@ -645,7 +648,7 @@ BEGIN
   END;
   nm := $q$C19 suspended brokerage: invite edit succeeds$q$;
   BEGIN
-    INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_reason) VALUES (pg_temp.i('o_m'), 'test', 3, 'suspended', 'other');
+    UPDATE public.organizations SET is_test = true WHERE id = pg_temp.i('o_m'); INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_reason) VALUES (pg_temp.i('o_m'), 'test', 3, 'suspended', 'other');
     PERFORM pg_temp.asu(pg_temp.i('a'));
     r := public.set_member_name(pg_temp.i('m_inv'), 'SusInv', 'Last');
     PERFORM pg_temp.pgr();
@@ -761,5 +764,5 @@ BEGIN
   v_out := pg_temp.run3991();
   SELECT count(*) FILTER (WHERE l LIKE 'FAIL|%'), count(*) FILTER (WHERE l LIKE 'PASS|%')
     INTO v_nf, v_np FROM regexp_split_to_table(v_out, E'\n') l;
-  RAISE EXCEPTION 'REPORT 3991 CONTROLS (bodies %) red % / green %%', v_md5, v_nf, v_np, v_out;
+  RAISE EXCEPTION 'REPORT 3991 CONTROLS (bodies %) red % / green % %', v_md5, v_nf, v_np, v_out;
 END $c$;

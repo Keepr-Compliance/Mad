@@ -186,14 +186,14 @@ C21 = [
     ('empty keeps', "'Ann'", "''", "'Ann'"),
     ('spaces keep', "'Ann'", "'   '", "'Ann'"),
     ('tab-newline keeps (M3 case)', "'Ann'", "E'\\t\\n'", "'Ann'"),
-    ('CR VT FF keep', "'Ann'", "E'\\r\\u000B\\f'", "'Ann'"),
+    ('CR VT FF keep', "'Ann'", "E'\\r' || chr(11) || E'\\f'", "'Ann'"),
     ('padded is trimmed', "'Ann'", "'  Bob '", "'Bob'"),
     ('null stored + present', 'NULL', "'Bob'", "'Bob'"),
     ('null stored + null', 'NULL', 'NULL', 'NULL'),
-    ('control char inside keeps', "'Ann'", "E'Bo\\u0001b'", "'Ann'"),
+    ('control char inside keeps', "'Ann'", "'Bo' || chr(1) || 'b'", "'Ann'"),
     ('newline inside keeps', "'Ann'", "E'Bo\\nb'", "'Ann'"),
-    ('DEL inside keeps', "'Ann'", "E'Bo\\u007Fb'", "'Ann'"),
-    ('U+2028 inside keeps', "'Ann'", "E'Bo\\u2028b'", "'Ann'"),
+    ('DEL inside keeps', "'Ann'", "'Bo' || chr(127) || 'b'", "'Ann'"),
+    ('U+2028 inside keeps', "'Ann'", "'Bo' || chr(8232) || 'b'", "'Ann'"),
     ('201 chars keeps', "'Ann'", "repeat('x', 201)", "'Ann'"),
     ('200 chars overwrites', "'Ann'", "repeat('x', 200)", "repeat('x', 200)"),
     ('Trent unchanged (t edges)', "'Ann'", "'Trent'", "'Trent'"),
@@ -202,12 +202,12 @@ C21 = [
     ('Fran unchanged (n edge)', "'Ann'", "'Fran'", "'Fran'"),
     ('vera unchanged (v edge)', "'Ann'", "'vera'", "'vera'"),
     ('rob unchanged (r edge)', "'Ann'", "'rob'", "'rob'"),
-    ('NBSP only keeps', "'Ann'", "E'\\u00A0'", "'Ann'"),
-    ('U+2028 only keeps', "'Ann'", "E'\\u2028'", "'Ann'"),
-    ('U+2029 only keeps', "'Ann'", "E'\\u2029'", "'Ann'"),
-    ('ZWSP only keeps', "'Ann'", "E'\\u200B'", "'Ann'"),
-    ('BOM only keeps', "'Ann'", "E'\\uFEFF'", "'Ann'"),
-    ('NBSP padded is trimmed', "'Ann'", "E'\\u00A0Bob\\u00A0'", "'Bob'"),
+    ('NBSP only keeps', "'Ann'", "chr(160)", "'Ann'"),
+    ('U+2028 only keeps', "'Ann'", "chr(8232)", "'Ann'"),
+    ('U+2029 only keeps', "'Ann'", "chr(8233)", "'Ann'"),
+    ('ZWSP only keeps', "'Ann'", "chr(8203)", "'Ann'"),
+    ('BOM only keeps', "'Ann'", "chr(65279)", "'Ann'"),
+    ('NBSP padded is trimmed', "'Ann'", "chr(160) || 'Bob' || chr(160)", "'Bob'"),
 ]
 C21_ROWS = ',\n'.join(f"      ({q(l)}, ({s})::text, ({p})::text, ({e})::text)" for l, s, p, e in C21)
 LOOP_TAIL = """      RAISE SQLSTATE 'P3991';
@@ -293,8 +293,8 @@ SETS = [
     ('C10 100 chars -> success', 'a', 'm_t4', "repeat('x', 100)", "'Ok'", 'success', 't4', 'x' * 100, 'Ok', 'x' * 100 + ' Ok', False),
     ("C10 '  Ann ' -> 'Ann'", 'a', 'm_t4', "'  Ann '", 'NULL', 'success', 't4', 'Ann', None, 'Ann', False),
     ('C10 newline inside -> invalid_name', 'a', 'm_t4', "E'An\\nn'", "'Ok'", 'invalid_name', 't4', 'F-t4', 'L-t4', 'D-t4', False),
-    ('C10 U+2028 inside -> invalid_name', 'a', 'm_t4', "E'An\\u2028n'", "'Ok'", 'invalid_name', 't4', 'F-t4', 'L-t4', 'D-t4', False),
-    ('C10 NBSP / ZWSP only -> invalid_name', 'a', 'm_t4', "E'\\u00A0'", "E'\\u200B'", 'invalid_name', 't4', 'F-t4', 'L-t4', 'D-t4', False),
+    ('C10 U+2028 inside -> invalid_name', 'a', 'm_t4', "'An' || chr(8232) || 'n'", "'Ok'", 'invalid_name', 't4', 'F-t4', 'L-t4', 'D-t4', False),
+    ('C10 NBSP / ZWSP only -> invalid_name', 'a', 'm_t4', "chr(160)", "chr(8203)", 'invalid_name', 't4', 'F-t4', 'L-t4', 'D-t4', False),
     ('C19 suspended brokerage: claimed edit succeeds', 'a', 'm_t1', "'Sus'", "'Pended'", 'success', 't1', 'Sus', 'Pended', 'Sus Pended', True),
 ]
 
@@ -306,7 +306,10 @@ def lit(v):
 SET_ROWS = ',\n'.join(
     f"      ({q(n)}, '{w}', '{m}', ({f})::text, ({l})::text, '{e}', '{u}', ({lit(xf)})::text, ({lit(xl)})::text, ({lit(xd)})::text, {str(s).lower()})"
     for n, w, m, f, l, e, u, xf, xl, xd, s in SETS)
-SUSPEND = ("INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_reason) "
+# org_deals' guard_stripe_mode_is_test: a 'test' deal needs organizations.is_test = true
+# (measured on keepr-test: 42501 otherwise). Set inside the case, rolled back with it.
+SUSPEND = ("UPDATE public.organizations SET is_test = true WHERE id = pg_temp.i('o_m'); "
+           "INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_reason) "
            "VALUES (pg_temp.i('o_m'), 'test', 3, 'suspended', 'other')")
 SET_BLOCK = f"""  FOR c IN SELECT * FROM (VALUES
 {SET_ROWS}
@@ -355,9 +358,10 @@ case('C23 all three absent -> updated:false, no new row version',
 for key, sig in SIGS.items():
     case(f'C20 {key}: anon no, PUBLIC no, authenticated yes, definer, search_path empty',
          f"    SELECT has_function_privilege('anon', p.oid, 'EXECUTE'), has_function_privilege('authenticated', p.oid, 'EXECUTE'),\n"
-         f"           EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0), p.prosecdef, p.proconfig::text\n"
+         f"           EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0), p.prosecdef,\n"
+         f"           CASE WHEN p.proconfig = ARRAY['search_path=\"\"'] THEN 'search_path empty' ELSE p.proconfig::text END\n"
          f"      INTO b, b2, b3, b4, t FROM pg_proc p WHERE p.oid = '{sig}'::regprocedure;\n",
-         "NOT b AND b2 AND NOT b3 AND b4 AND t = '{search_path=\"\"}'", "concat_ws(' / ', b, b2, b3, b4, t)")
+         "NOT b AND b2 AND NOT b3 AND b4 AND t = 'search_path empty'", "concat_ws(' / ', b, b2, b3, b4, t)")
 case('C20 sync: service_role has no EXECUTE',
      f"    b := has_function_privilege('service_role', '{SIGS['sync']}', 'EXECUTE');\n", 'NOT b', 'b::text')
 # C8 / C19 invite / C31
@@ -635,7 +639,7 @@ BEGIN
   v_out := pg_temp.run3991();
   SELECT count(*) FILTER (WHERE l LIKE 'FAIL|%'), count(*) FILTER (WHERE l LIKE 'PASS|%')
     INTO v_nf, v_np FROM regexp_split_to_table(v_out, E'\\n') l;
-  RAISE EXCEPTION 'REPORT 3991 CONTROLS (bodies %) red % / green %%', v_md5, v_nf, v_np, v_out;
+  RAISE EXCEPTION 'REPORT 3991 CONTROLS (bodies %) red % / green % %', v_md5, v_nf, v_np, v_out;
 END $c$;
 """
 

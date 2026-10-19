@@ -33,13 +33,17 @@ After any body edit: `python3 pin_bodies.py` (re-pins), then `python3 compose.py
 Run each `.sql` on keepr-test (`xiaobikzagpyubjcrcpb`) through `execute_sql` and read the
 report in the error text.
 
-## Status (2026-10-19)
+## Status (2026-10-19, keepr-test)
 
-- First keepr-test apply: done. The file and its ledger row went in one call. The body md5s
-  were `73d9e667…` (sync), `99e8d288…` (gate) and `1dfeac62…` (set).
-  - The trim set had been sent as `\u` escapes. In transit they became raw characters.
-  - Behaviour is the same, but the bodies did not match the file.
-  - The file now builds the set with `chr()`, so every channel sends the same body.
-- Re-apply (`reapply-keepr-test.sql`): NOT RUN. The call came back
-  `Invalid or expired requestState` and was not retried.
-- `controls.sql` / `mutants.sql`: NOT RUN on keepr-test yet. They wait on the re-apply.
+- Re-apply (`reapply-keepr-test.sql`): DONE. Live body md5s now match the file
+  (sync `18ee571b`, gate `99e8d288`, set `e6e1590f`), ledger row `20261019050000` present.
+- `controls.sql`, first run: 132 / 137. The 5 reds were harness defects, not function defects:
+  - C19 x2: a `stripe_mode 'test'` org_deals row needs `organizations.is_test = true`
+    (trigger guard_stripe_mode_is_test, 42501). The case now sets it inside the rolled-back case.
+  - C20 x3: `proconfig::text` renders as `{"search_path=\"\""}`. The check now compares
+    `proconfig = ARRAY['search_path=""']`.
+- After the fixes: base 137 / 137 green (measured as the BASE line of the first mutant batch).
+- Mutants, batch `S G` (21 body mutants): 21 / 21 applied and red.
+- Mutants, batch `N` + grant/definer + guard (29): NOT RUN. The call returned
+  `Invalid or expired requestState` and was not retried. `python3 compose.py N A- I- P- R- D`
+  writes it again.
