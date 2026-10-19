@@ -94,11 +94,11 @@ BEGIN
   -- The columns authenticated may INSERT but not UPDATE are the measured 23, and the 17
   -- this file resets have the defaults users_client_write_guard writes.
   SELECT count(*) INTO v_n
-    FROM information_schema.columns c
-   WHERE c.table_schema = 'public' AND c.table_name = 'users'
-     AND has_column_privilege('authenticated', 'public.users', c.column_name, 'INSERT')
-     AND NOT has_column_privilege('authenticated', 'public.users', c.column_name, 'UPDATE')
-     AND c.column_name NOT IN ('status', 'suspended_at', 'suspension_reason', 'is_active',
+    FROM pg_attribute at
+   WHERE at.attrelid = 'public.users'::regclass AND at.attnum > 0 AND NOT at.attisdropped
+     AND has_column_privilege('authenticated', 'public.users'::regclass, at.attnum, 'INSERT')
+     AND NOT has_column_privilege('authenticated', 'public.users'::regclass, at.attnum, 'UPDATE')
+     AND at.attname NOT IN ('status', 'suspended_at', 'suspension_reason', 'is_active',
        'subscription_tier', 'subscription_status', 'subscription_started_at', 'trial_ends_at',
        'provisioning_source', 'scim_external_id', 'is_managed', 'sso_only', 'last_sso_login_at',
        'last_sso_provider', 'jit_provisioned', 'jit_provisioned_at', 'idp_claims',
@@ -119,12 +119,13 @@ BEGIN
       ('last_sso_provider', NULL), ('jit_provisioned', 'false'), ('jit_provisioned_at', NULL),
       ('idp_claims', NULL)
     ) AS e(col, dflt)
-    LEFT JOIN information_schema.columns c
-      ON c.table_schema = 'public' AND c.table_name = 'users' AND c.column_name = e.col
-   WHERE c.column_name IS NULL
-      OR c.column_default IS DISTINCT FROM e.dflt
-      OR NOT has_column_privilege('authenticated', 'public.users', e.col, 'INSERT')
-      OR has_column_privilege('authenticated', 'public.users', e.col, 'UPDATE');
+    LEFT JOIN pg_attribute at
+      ON at.attrelid = 'public.users'::regclass AND at.attname = e.col AND at.attnum > 0 AND NOT at.attisdropped
+    LEFT JOIN pg_attrdef d ON d.adrelid = at.attrelid AND d.adnum = at.attnum
+   WHERE at.attnum IS NULL
+      OR pg_get_expr(d.adbin, d.adrelid) IS DISTINCT FROM e.dflt
+      OR NOT has_column_privilege('authenticated', 'public.users'::regclass, at.attnum, 'INSERT')
+      OR has_column_privilege('authenticated', 'public.users'::regclass, at.attnum, 'UPDATE');
   IF v_n <> 0 THEN
     RAISE EXCEPTION '3998 pre-check: % reset column(s) missing, client-updatable, or with a different default', v_n;
   END IF;
