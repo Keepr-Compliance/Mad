@@ -12,6 +12,7 @@ import { createClient } from '@/lib/supabase/server';
 import { randomBytes } from 'crypto';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
+import { BROKERAGE_SUSPENDED_ERROR, isBrokerageSuspendedError } from '@/lib/auth/orgSuspension';
 import { sendInviteEmail } from '@/lib/email';
 
 interface ResendInviteInput {
@@ -81,6 +82,8 @@ export async function resendInvite(input: ResendInviteInput): Promise<ResendInvi
     if (updateError.code === 'P0001' && updateError.message === 'seat_limit_reached') {
       return { success: false, outOfSeats: true };
     }
+    // BACKLOG-3853 PR-2B: the brokerage is suspended; the member trigger refused.
+    if (isBrokerageSuspendedError(updateError)) return { success: false, error: BROKERAGE_SUSPENDED_ERROR };
     Sentry.captureException(updateError, {
       tags: { action: 'resend_invite' },
       extra: { memberId: input.memberId, organizationId: input.organizationId },

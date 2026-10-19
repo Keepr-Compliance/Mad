@@ -18,6 +18,7 @@ import * as Sentry from '@sentry/nextjs';
 import { createClient } from '@/lib/supabase/server';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
+import { BROKERAGE_SUSPENDED_ERROR, isBrokerageSuspendedError } from '@/lib/auth/orgSuspension';
 import { MEMBER_LICENSE_ERRORS } from '@/lib/users/memberLicenseActions';
 import type { MemberLicenseAction } from '@/lib/users/memberLicenseActions';
 
@@ -68,6 +69,8 @@ export async function setMemberLicense(input: SetMemberLicenseInput): Promise<Se
   });
 
   if (error) {
+    // BACKLOG-3853 PR-2B: the brokerage is suspended; the member trigger refused.
+    if (isBrokerageSuspendedError(error)) return { success: false, error: BROKERAGE_SUSPENDED_ERROR };
     Sentry.captureException(error, {
       tags: { action: 'set_member_license' },
       extra: { memberId: input.memberId, licenseAction: input.action },

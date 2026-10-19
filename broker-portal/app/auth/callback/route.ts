@@ -25,6 +25,7 @@ import { extractEmail } from '@/lib/auth/helpers';
 import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
 import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
 import { syncIdpNames } from '@/lib/auth/idpNames';
+import { isBrokerageSuspendedError } from '@/lib/auth/orgSuspension';
 import {
   PORTAL_MEMBERSHIP_SELECT,
   classifyPortalAccess,
@@ -149,6 +150,10 @@ export async function GET(request: Request) {
           p_token: inviteToken,
         });
         if (acceptError) {
+          // BACKLOG-3853 PR-2B: the brokerage is suspended; the member trigger refused.
+          if (isBrokerageSuspendedError(acceptError)) {
+            return refuse(request, supabase, origin, 'brokerage_suspended');
+          }
           console.error('accept_invitation RPC failed:', acceptError.message);
           return refuse(request, supabase, origin, 'invite_failed');
         }
@@ -247,8 +252,13 @@ export async function GET(request: Request) {
         if (jitError) {
           console.error('JIT join RPC failed:', jitError);
         }
-        // Determine appropriate error for user
-        jitErrorCode = jitResult?.error === 'jit_disabled' ? 'jit_disabled' : 'org_not_setup';
+        // Determine appropriate error for user. BACKLOG-3853 PR-2B: the member
+        // trigger refuses a join into a suspended brokerage.
+        jitErrorCode = isBrokerageSuspendedError(jitError)
+          ? 'brokerage_suspended'
+          : jitResult?.error === 'jit_disabled'
+            ? 'jit_disabled'
+            : 'org_not_setup';
       }
 
       // BACKLOG-3080: the owner of a personal organization gets the floor.
