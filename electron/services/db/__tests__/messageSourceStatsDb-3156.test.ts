@@ -218,7 +218,9 @@ maybe("BACKLOG-3156 stage G: messages stored per source (real encrypted DB)", ()
         last = now;
       }, 1);
       const t0 = performance.now();
-      const rows = await pool.queryContacts("messageSourceStats", USER, 30_000);
+      const pending = pool.queryContacts("messageSourceStats", USER, 30_000);
+      readMessageSourceStatsOn(db, USER); // CONTROL MUTATION: the read on the main thread
+      const rows = await pending;
       const total = performance.now() - t0;
       clearInterval(beat);
 
