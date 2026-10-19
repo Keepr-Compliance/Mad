@@ -40,7 +40,7 @@ kinds, 0 org_deals.
 The three prior-body mutants restored exactly the pre-migration md5s (77ae57bd, a6f4f1c2,
 4dd46d36), so the bodies in rollback-3853-pr2.sql are byte-exact.
 
-JEST CONTROLS (broker-portal), 2026-10-19. Fix committed first (87ba69577, e8d75fc94).
+JEST CONTROLS (broker-portal), 2026-10-19. Fix committed first (87ba69577 and e8d75fc94 before the rebase onto int-portal/billing e600092fb; now 1c53460b8 and 47a6b5d6a).
 Runner: supabase/tests/backlog-3853/jest_mutants_pr2.py. Each mutant: exact-once replace (raises on 0 or 2+
 matches), git diff --numstat printed, jest --bail=0 --json, non-zero test count asserted, file restored with
 git checkout -- and the tree checked clean.
@@ -83,3 +83,9 @@ M-3b charge fails open on a check error | numstat 1	1	broker-portal/app/api/paym
   email; a deal that is not suspended but keeps suspended_at has no writer, so no fixture can show it.
 C-12f (no invoice.paid since the suspension -> not reinstated) has no TypeScript mutant: the rule lives in
 SQL (SQL mutant pr1_auto is red above).
+
+Note: after these runs the three lease holder ids in pr2-controls.sql changed from fixed literals to
+gen_random_uuid() (the public-repo PII guard refuses bare UUID literals). Only distinctness matters to
+C-L1, so the runs above stand for the committed text.
+Rebased onto int-portal/billing e600092fb (BACKLOG-3991 merged there; no shared files or functions):
+broker-portal jest 209 suites, 5061 tests, 0 failed.
