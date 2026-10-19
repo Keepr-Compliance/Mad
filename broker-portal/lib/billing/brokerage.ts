@@ -36,6 +36,7 @@ import { billingAlert } from './alert';
 import { enqueueOutbox } from './outboxEnqueue';
 import { NOTIFY_ACCOUNT_MANAGER_KIND } from './brokerageNotify';
 import { type BillingContext, stripeId } from './sync';
+import { listOpenInvoices, overdueOf, stripeNow } from './overdue';
 
 export const BROKERAGE_EVENT_TYPES: ReadonlySet<string> = new Set([
   'customer.subscription.created',
@@ -126,23 +127,11 @@ async function rpc<T>(ctx: BillingContext, fn: string, args: Record<string, unkn
   return data as T;
 }
 
-/** Seconds "now" for due-date comparisons: the customer's test clock time when it has one. */
-export async function stripeNow(ctx: BillingContext, customerId: string): Promise<number> {
-  const customer = await ctx.stripe.customers.retrieve(customerId);
-  const clockId = stripeId((customer as unknown as { test_clock?: string | { id: string } | null }).test_clock ?? null);
-  if (clockId) {
-    const clock = await ctx.stripe.testHelpers.testClocks.retrieve(clockId);
-    return clock.frozen_time;
-  }
-  return Math.floor(Date.now() / 1000);
-}
+export { stripeNow } from './overdue';
 
-/** Open invoices whose due date has passed, oldest due first. */
+/** Open invoices whose due date has passed, oldest due first (the rule lives in ./overdue.ts). */
 async function overdueInvoices(ctx: BillingContext, customerId: string, now: number): Promise<Stripe.Invoice[]> {
-  const list = await ctx.stripe.invoices.list({ customer: customerId, status: 'open', limit: 100 });
-  return list.data
-    .filter((i) => typeof i.due_date === 'number' && i.due_date < now)
-    .sort((a, b) => (a.due_date ?? 0) - (b.due_date ?? 0));
+  return overdueOf(await listOpenInvoices(ctx, customerId), now);
 }
 
 async function notifyAccountManager(

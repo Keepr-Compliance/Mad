@@ -51,7 +51,7 @@
       "ending_balance": 0,
       "footer": null,
       "from_invoice": null,
-      "hosted_invoice_url": "[REDACTED hosted URL]",
+      "hosted_invoice_url": "https://invoice.stripe.test/REDACTED/in_1URe2FBg3cyTef3dddMb2Oqn",
       "invoice_pdf": "[REDACTED hosted URL]",
       "issuer": {
         "type": "self"
@@ -310,7 +310,7 @@
       "ending_balance": 0,
       "footer": null,
       "from_invoice": null,
-      "hosted_invoice_url": "[REDACTED hosted URL]",
+      "hosted_invoice_url": "https://invoice.stripe.test/REDACTED/in_1URe1zBg3cyTef3d1IAHGbgz",
       "invoice_pdf": "[REDACTED hosted URL]",
       "issuer": {
         "type": "self"
@@ -569,7 +569,7 @@
       "ending_balance": 0,
       "footer": null,
       "from_invoice": null,
-      "hosted_invoice_url": "[REDACTED hosted URL]",
+      "hosted_invoice_url": "https://invoice.stripe.test/REDACTED/in_1URe1nBg3cyTef3dJCaNYVXj",
       "invoice_pdf": "[REDACTED hosted URL]",
       "issuer": {
         "type": "self"
@@ -828,7 +828,7 @@
       "ending_balance": 0,
       "footer": null,
       "from_invoice": null,
-      "hosted_invoice_url": "[REDACTED hosted URL]",
+      "hosted_invoice_url": "https://invoice.stripe.test/REDACTED/in_1URe1bBg3cyTef3dTQ9Ghi7p",
       "invoice_pdf": "[REDACTED hosted URL]",
       "issuer": {
         "type": "self"
@@ -1087,7 +1087,7 @@
       "ending_balance": 0,
       "footer": null,
       "from_invoice": null,
-      "hosted_invoice_url": "[REDACTED hosted URL]",
+      "hosted_invoice_url": "https://invoice.stripe.test/REDACTED/in_1URdzABg3cyTef3dyKhMzjZn",
       "invoice_pdf": "[REDACTED hosted URL]",
       "issuer": {
         "type": "self"

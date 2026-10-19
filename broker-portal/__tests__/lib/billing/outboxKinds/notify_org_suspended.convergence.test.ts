@@ -74,6 +74,9 @@ describe('notify_org_suspended', () => {
       recipientEmail: 'billing-3853@example.test',
       brokerageName: 'Brokerage 3853 N',
       reason: 'non_payment',
+      // BACKLOG-3853 PR-2B: no org_billing_stripe row in this file -> no Pay button
+      // (the button is tested in __tests__/org-suspension-3853/suspendedEmail.test.ts).
+      payment: { kind: 'none' },
       outboxKey: row().dedupe_key,
       organizationId: ORG,
     });
