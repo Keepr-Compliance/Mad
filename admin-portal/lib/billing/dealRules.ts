@@ -77,15 +77,22 @@ export function checkPrice(args: {
   priceCents: number;
   capPct: number;
   canApprove: boolean;
+  /** Seat price already on the deal, or null when there is no deal or it is canceled. */
   currentCents: number | null;
+  seats: number;
+  currentSeats: number | null;
 }): PriceCheck {
-  const { listCents, priceCents, capPct, canApprove, currentCents } = args;
+  const { listCents, priceCents, capPct, canApprove, currentCents, seats, currentSeats } = args;
   if (priceCents === listCents) return { kind: 'at_list' };
   if (priceCents > listCents) return { kind: 'above_list' };
   const pct = pctOff(listCents, priceCents);
   if (pct <= capPct) return { kind: 'within_cap', pct };
   if (canApprove) return { kind: 'approver', pct };
-  if (currentCents != null && priceCents >= currentCents) return { kind: 'kept', pct };
+  // Founder ruling: Sales may keep the exact deep price and lower the seats; raising the seats
+  // or lowering the price needs a Super Admin.
+  if (currentCents != null && priceCents === currentCents && currentSeats != null && seats <= currentSeats) {
+    return { kind: 'kept', pct };
+  }
   return { kind: 'needs_approval', pct };
 }
 
@@ -93,7 +100,7 @@ const MESSAGES: Record<string, string> = {
   reason_required: 'Enter a reason. Every deal change is logged with who and why.',
   billing_contact_required: 'Enter the billing contact email. Invoices are sent there.',
   invalid_price: 'Enter a price per seat.',
-  invalid_account_manager: 'The account manager must be a Keepr Sales user.',
+  invalid_account_manager: 'The account manager must be a Keepr Sales or Super Admin user.',
   discount_needs_approval: 'This price is deeper than the Sales cap. A Super Admin has to save it.',
   no_price: 'The price book has no seat price. Nothing was saved.',
   billing_not_live: 'Brokerage billing is not switched on yet. Only test organizations can have a deal.',

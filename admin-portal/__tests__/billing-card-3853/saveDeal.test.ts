@@ -75,16 +75,26 @@ describe('saveDealAction mode (BACKLOG-3853 PR-2A)', () => {
 describe('checkPrice mirrors the cap (list 2499, cap 20)', () => {
   it('sweeps the boundary', async () => {
     const { checkPrice } = await import('@/lib/billing/dealRules');
-    const c = (priceCents: number, canApprove = false, currentCents: number | null = null) =>
-      checkPrice({ listCents: 2499, priceCents, capPct: 20, canApprove, currentCents }).kind;
+    const c = (priceCents: number, canApprove = false, currentCents: number | null = null, seats = 5, currentSeats: number | null = null) =>
+      checkPrice({ listCents: 2499, priceCents, capPct: 20, canApprove, currentCents, seats, currentSeats }).kind;
     expect(c(2499)).toBe('at_list');
     expect(c(2600)).toBe('above_list');
     expect(c(2001)).toBe('within_cap');
     expect(c(2000)).toBe('within_cap');   // 19.97%
     expect(c(1999)).toBe('needs_approval'); // 20.01%
     expect(c(1999, true)).toBe('approver');
-    expect(c(1999, false, 1999)).toBe('kept');
-    expect(c(1998, false, 1999)).toBe('needs_approval');
+    expect(c(1999, false, 1999, 5, 5)).toBe('kept');            // same price, same seats
+    expect(c(1999, false, 1999, 4, 5)).toBe('kept');            // same price, fewer seats
+    expect(c(1999, false, 1999, 6, 5)).toBe('needs_approval');  // more seats
+    expect(c(1998, false, 1999, 5, 5)).toBe('needs_approval');  // lower price
+    expect(c(2100, false, 1999, 5, 5)).toBe('within_cap');      // 15.97%, inside the cap anyway
+    expect(c(1999, false, null, 5, null)).toBe('needs_approval'); // no live deal (or canceled)
+    expect(c(1999, true, 1999, 9, 5)).toBe('approver');
+  });
+
+  it('names both roles in the account-manager refusal', async () => {
+    const { dealErrorMessage } = await import('@/lib/billing/dealRules');
+    expect(dealErrorMessage('invalid_account_manager')).toBe('The account manager must be a Keepr Sales or Super Admin user.');
   });
 
   it('parses dollar input', async () => {

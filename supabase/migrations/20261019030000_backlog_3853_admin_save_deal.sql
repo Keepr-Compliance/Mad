@@ -3,8 +3,11 @@
 -- admin_save_deal     - the admin-portal entry point over _billing_save_deal (PR-1, service role
 --                       only). Needs billing.manage. Every save needs a reason. A seat price more
 --                       than the Sales cap below list needs billing.approve (Super Admin);
---                       otherwise it is refused, unless it is not lower than the price already
---                       on the deal. No approval queue: a refusal is the whole flow.
+--                       otherwise it is refused. On a deal that already carries such a price
+--                       (and is not canceled), Sales may keep that exact price and change the
+--                       contact, the account manager or lower the seats; raising the seats or
+--                       lowering the price needs billing.approve. No approval queue: a refusal
+--                       is the whole flow.
 -- admin_get_org_billing - what the Billing card shows. Needs billing.view.
 -- billing_limits      - numeric billing settings. sales_discount_cap_pct = 20 (founder B13).
 --                       A missing row counts as a cap of 0 (fail closed).
@@ -77,6 +80,7 @@ DECLARE
   v_pct numeric;
   v_over boolean := false;
   v_current integer;
+  v_current_seats integer;
   v_res jsonb;
 BEGIN
   IF v_uid IS NULL THEN
@@ -115,14 +119,18 @@ BEGIN
   SELECT bl.value INTO v_cap FROM public.billing_limits bl WHERE bl.key = 'sales_discount_cap_pct';
   v_cap := coalesce(v_cap, 0);
   v_pct := round(100.0 * (v_list - p_unit_price_cents) / v_list, 2);
-  -- A price already on the deal (saved earlier by someone allowed to) may be kept: Sales can
-  -- change seats or contacts on an approved deal, but not go deeper than its current price.
-  SELECT l.unit_price_cents INTO v_current FROM public.org_deal_lines l
-   WHERE l.organization_id = p_org AND l.item_key = 'brokerage_seat';
+  -- A deep price already on a deal that is not canceled (saved by someone allowed to) may be
+  -- kept exactly: Sales can change the contact or the manager and lower the seats on it, but
+  -- raising the seats or lowering the price needs billing.approve (founder ruling).
+  SELECT l.unit_price_cents, d.seats INTO v_current, v_current_seats
+    FROM public.org_deal_lines l
+    JOIN public.org_deals d ON d.organization_id = l.organization_id
+   WHERE l.organization_id = p_org AND l.item_key = 'brokerage_seat'
+     AND d.status <> 'canceled';
   IF v_pct > v_cap THEN
     v_over := true;
     IF NOT public.has_permission(v_uid, 'billing.approve')
-       AND (v_current IS NULL OR p_unit_price_cents < v_current) THEN
+       AND NOT (v_current IS NOT NULL AND p_unit_price_cents = v_current AND p_seats <= v_current_seats) THEN
       RETURN jsonb_build_object('success', false, 'error', 'discount_needs_approval',
                                 'pct_off', v_pct, 'cap_pct', v_cap, 'list_price_cents', v_list);
     END IF;

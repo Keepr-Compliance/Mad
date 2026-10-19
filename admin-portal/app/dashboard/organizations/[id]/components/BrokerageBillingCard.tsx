@@ -209,7 +209,9 @@ function DealEditor({
 }) {
   const deal = billing.deal;
   const list = billing.list_price_cents;
-  const current = billing.seat_line?.unit_price_cents ?? null;
+  // A canceled deal's price is not kept (founder ruling): it is measured against the cap again.
+  const current = deal && deal.status !== 'canceled' ? billing.seat_line?.unit_price_cents ?? null : null;
+  const currentSeats = deal && deal.status !== 'canceled' ? deal.seats : null;
   const [seats, setSeats] = useState(String(deal?.seats ?? Math.max(billing.assigned_seats, 1)));
   const [priceText, setPriceText] = useState(((current ?? list ?? 0) / 100).toFixed(2));
   const [contactName, setContactName] = useState(deal?.billing_contact_name ?? '');
@@ -220,9 +222,12 @@ function DealEditor({
   const [saving, setSaving] = useState(false);
 
   const priceCents = centsFromDollars(priceText);
+  const seatCount = Number(seats);
   const check = useMemo(
-    () => (priceCents != null && list ? checkPrice({ listCents: list, priceCents, capPct: Number(billing.cap_pct), canApprove: billing.can_approve, currentCents: current }) : null),
-    [priceCents, list, billing.cap_pct, billing.can_approve, current]
+    () => (priceCents != null && list
+      ? checkPrice({ listCents: list, priceCents, capPct: Number(billing.cap_pct), canApprove: billing.can_approve, currentCents: current, seats: seatCount, currentSeats })
+      : null),
+    [priceCents, list, billing.cap_pct, billing.can_approve, current, seatCount, currentSeats]
   );
 
   const submit = async () => {
@@ -314,7 +319,7 @@ function priceReadout(check: ReturnType<typeof checkPrice> | null, list: number 
     case 'within_cap': return `${check.pct}% off list ${formatCents(list)}. Within the Sales cap of ${cap}%.`;
     case 'kept': return `${check.pct}% off list. Deeper than the Sales cap of ${cap}%, but it is the price already on this deal.`;
     case 'approver': return `${check.pct}% off list. Deeper than the Sales cap of ${cap}%; you can save it as Super Admin.`;
-    case 'needs_approval': return `${check.pct}% off list, deeper than the Sales cap of ${cap}%. A Super Admin has to save this price.`;
+    case 'needs_approval': return `${check.pct}% off list, deeper than the Sales cap of ${cap}%. A Super Admin has to save this price or add seats at it.`;
   }
 }
 
