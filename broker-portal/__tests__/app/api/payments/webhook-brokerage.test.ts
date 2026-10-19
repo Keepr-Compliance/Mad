@@ -299,6 +299,7 @@ describe('auto-reinstate (non-payment suspensions only, after a payment)', () =>
     serve(INV_PAID, SUB_ACTIVE);
     await deliver(paidEnvelope());
     expect(deal().status).toBe('suspended');
+    expect(fake.callsTo('_billing_auto_reinstate')).toEqual([]);
   });
 
   it('C-12f: subscription.updated -> active with no invoice.paid since the suspension -> not reinstated', async () => {

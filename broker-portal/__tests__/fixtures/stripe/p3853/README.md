@@ -9,6 +9,7 @@ Transcribed from the PR-0 spike captures (docs/billing/3853-stripe-spike.md, clo
 - Email addresses `@example.com` -> `@example.test`.
 - Hosted invoice, PDF and microdeposit-verification URLs replaced with `[REDACTED hosted URL]` (they embed the account id).
 - `idempotency-error.json`: `request_log_url` removed (embeds the account id).
+- `pi-open.json`, `pi-requires-action.json`: `client_secret` replaced with `pi_FIXTURE_secret_REDACTED`.
 
 | File | Source capture | State |
 |---|---|---|

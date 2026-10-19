@@ -84,6 +84,8 @@ BEGIN
       $q$CASE WHEN p_fields ? 'cancel_at_period_end'
                                 THEN EXCLUDED.cancel_at_period_end ELSE s.cancel_at_period_end END$q$,
       'EXCLUDED.cancel_at_period_end');
+    WHEN 'sr_apply_strict_gt' THEN RETURN pg_temp.mut_fn(s_app,
+      'EXCLUDED.last_event_created >= s.last_event_created', 'EXCLUDED.last_event_created > s.last_event_created');
     WHEN 'null_branch_no_coalesce' THEN RETURN pg_temp.mut_fn(s_app,
       $q$      stripe_customer_id = coalesce(EXCLUDED.stripe_customer_id, s.stripe_customer_id),
       stripe_subscription_id = coalesce(EXCLUDED.stripe_subscription_id, s.stripe_subscription_id),
@@ -209,6 +211,10 @@ BEGIN
     PERFORM public._billing_apply_org_subscription(o_m, 'test', '{"status":"active"}'::jsonb, NULL);
     SELECT status INTO s FROM public.org_billing_stripe WHERE organization_id = o_m AND stripe_mode = 'test';
     r := r || jsonb_build_object('C-9s2 past_due survives NULL status write', s = 'past_due');
+    -- SR-EQ: a second event stamped with the same second (cursor 200) is applied, not dropped
+    PERFORM public._billing_apply_org_subscription(o_m, 'test', '{"status":"active"}'::jsonb, 200);
+    SELECT status INTO s FROM public.org_billing_stripe WHERE organization_id = o_m AND stripe_mode = 'test';
+    r := r || jsonb_build_object('SR-EQ same-second event applied', s = 'active');
 
     -- ===== C-12e: non_payment suspension lifts only with a payment after it =====
     PERFORM public._billing_save_deal(o_s, jsonb_build_object('stripe_mode','test','seats',5), u_super, 'ctl', NULL);
