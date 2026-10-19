@@ -149,6 +149,16 @@ describe('C-E1 (W4, RC2, RC5): the button opens the OLDEST OVERDUE invoice, on t
     expect(params.payment).toMatchObject({ kind: 'invoice', overdueCount: count });
   });
 
+  it('two overdue invoices share a due date: the button opens the older-created one (Stripe lists the newer first)', async () => {
+    given('non_payment');
+    const base = fx('inv-list-open').data[0] as Obj; // a transcribed invoice; id/created/url edited below [EDITED]
+    const older: Obj = { ...base, id: 'in_TIE_OLDER', created: 1000, due_date: OLDEST_DUE, hosted_invoice_url: 'https://invoice.stripe.test/REDACTED/in_TIE_OLDER' };
+    const newer: Obj = { ...base, id: 'in_TIE_NEWER', created: 2000, due_date: OLDEST_DUE, hosted_invoice_url: 'https://invoice.stripe.test/REDACTED/in_TIE_NEWER' };
+    stripe.invoices.list.mockImplementation(async () => ({ data: [newer, older] })); // newest first, as Stripe lists
+    const { params } = await sent();
+    expect(params.payment).toEqual({ kind: 'invoice', url: 'https://invoice.stripe.test/REDACTED/in_TIE_OLDER', overdueCount: 2 });
+  });
+
   it('none overdue yet (clock at its start): falls back to the oldest open invoice, count 0', async () => {
     frozen = CLOCK_START;
     given('non_payment');

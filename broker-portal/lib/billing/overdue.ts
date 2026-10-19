@@ -37,7 +37,7 @@ export async function listOpenInvoices(ctx: StripeReader, customerId: string): P
 export function overdueOf(invoices: readonly Stripe.Invoice[], now: number): Stripe.Invoice[] {
   return invoices
     .filter((i) => typeof i.due_date === 'number' && i.due_date < now)
-    .sort((a, b) => (a.due_date ?? 0) - (b.due_date ?? 0));
+    .sort((a, b) => (a.due_date ?? 0) - (b.due_date ?? 0) || a.created - b.created);
 }
 
 /** The oldest of these invoices by due date (then by created). Stripe lists newest first. */
