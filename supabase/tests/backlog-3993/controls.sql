@@ -49,6 +49,10 @@ BEGIN
     (v_org_a, 'Happyhomey Test 3993 A', 'happyhomey-test-3993-a', 10),
     (v_org_b, 'Happyhomey Test 3993 B', 'happyhomey-test-3993-b', 10);
 
+  -- Neutralise leftover unclaimed invites on the shared test database, so no control
+  -- depends on what earlier runs or other work left behind (rolled back with the rest).
+  DELETE FROM public.organization_members WHERE user_id IS NULL AND license_status IN ('pending', 'unassigned');
+
   -- Each control: optional row in org A (state), then the call, then the expectation.
   --   state: none | pending | unassigned | pending_expired | unassigned_expired
   --          | claimed_unassigned | unassigned_revoked
@@ -65,7 +69,9 @@ BEGIN
     ('C7 unassigned in A, individual path -> duplicate_invitation',             'unassigned',         'c7-3993@example.test',  'c7-3993@example.test',      'IND', 'duplicate_invitation'),
     ('C8 pending in A, individual path -> duplicate_invitation',                'pending',            'c8-3993@example.test',  'c8-3993@example.test',      'IND', 'duplicate_invitation'),
     ('C9 fresh address, individual path -> success (plumbing)',                 'none',               'c9-3993@example.test',  'c9-3993@example.test',      'IND', 'success'),
-    ('C10 claimed member in A (unassigned, user set), individual path -> success','claimed_unassigned', 'c3-3993@example.test',  'c3-3993@example.test',      'IND', 'success')
+    ('C10 claimed member in A (unassigned, user set), individual path -> success','claimed_unassigned', 'c3-3993@example.test',  'c3-3993@example.test',      'IND', 'success'),
+    ('C11 unclaimed unassigned invite in A for a DIFFERENT address, fresh address to B -> success', 'bystander', 'c11-other-3993@example.test', 'c11-3993@example.test', 'B',   'success'),
+    ('C11i same bystander in A, fresh address, individual path -> success',     'bystander',          'c11-other-3993@example.test', 'c11-3993@example.test', 'IND', 'success')
   ) AS t(name, state, stored, asked, target, expect) LOOP
     BEGIN
       IF c.state IN ('pending', 'unassigned', 'pending_expired', 'unassigned_expired', 'unassigned_revoked') THEN
@@ -79,6 +85,11 @@ BEGIN
         IF c.state = 'unassigned_revoked' THEN
           DELETE FROM public.organization_members WHERE organization_id = v_org_a AND invited_email = c.stored;
         END IF;
+      ELSIF c.state = 'bystander' THEN
+        INSERT INTO public.organization_members (organization_id, invited_email, role, license_status,
+                                                 invitation_token, invitation_expires_at, invited_by, invited_at, provisioned_by)
+        VALUES (v_org_a, c.stored, 'agent', 'unassigned', 'tok-3993-' || md5(c.name), now() + interval '3 days',
+                v_staff, now() - interval '8 days', 'invite');
       ELSIF c.state = 'claimed_unassigned' THEN
         INSERT INTO public.organization_members (organization_id, invited_email, user_id, role, license_status,
                                                  invitation_token, invitation_expires_at, invited_by, invited_at,

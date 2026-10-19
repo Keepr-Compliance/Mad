@@ -7,6 +7,8 @@
 --   M1b individual path: predicate back to license_status = 'pending'
 --   M2  org path:        drop "AND om.user_id IS NULL"
 --   M2b individual path: drop "AND om.user_id IS NULL"
+--   M3  org path:        the new predicate without its outer parentheses
+--   M3b individual path: the new predicate without its outer parentheses
 -- mutate.py does the same exact-once check against the repo body offline.
 DO $mutants$
 DECLARE
@@ -47,11 +49,17 @@ BEGIN
     (v_org_a, 'Happyhomey Test 3993 A', 'happyhomey-test-3993-a', 10),
     (v_org_b, 'Happyhomey Test 3993 B', 'happyhomey-test-3993-b', 10);
 
+  -- Neutralise leftover unclaimed invites on the shared test database, so no control
+  -- depends on what earlier runs or other work left behind (rolled back with the rest).
+  DELETE FROM public.organization_members WHERE user_id IS NULL AND license_status IN ('pending', 'unassigned');
+
   FOR mu IN SELECT * FROM (VALUES
     ('M1',  'org', E'AND (om.license_status = ''pending'')'),
     ('M1b', 'ind', E'AND (om.license_status = ''pending'')'),
     ('M2',  'org', E'AND (om.license_status = ''pending''\n           OR (om.license_status = ''unassigned''))'),
-    ('M2b', 'ind', E'AND (om.license_status = ''pending''\n           OR (om.license_status = ''unassigned''))')
+    ('M2b', 'ind', E'AND (om.license_status = ''pending''\n           OR (om.license_status = ''unassigned''))'),
+    ('M3',  'org', E'AND om.license_status = ''pending''\n           OR (om.license_status = ''unassigned'' AND om.user_id IS NULL)'),
+    ('M3b', 'ind', E'AND om.license_status = ''pending''\n           OR (om.license_status = ''unassigned'' AND om.user_id IS NULL)')
   ) AS t(name, site, pred) LOOP
     BEGIN
       v_def := pg_get_functiondef('public.admin_invite_user(uuid,text,text,uuid,text,uuid)'::regprocedure);
@@ -63,6 +71,7 @@ BEGIN
       END IF;
       EXECUTE replace(v_def, v_o, v_m);
       v_after := md5(pg_get_functiondef('public.admin_invite_user(uuid,text,text,uuid,text,uuid)'::regprocedure));
+      IF v_after <> md5(replace(v_def, v_o, v_m)) THEN RAISE EXCEPTION 'mutant %: live md5 % <> intended %', mu.name, v_after, md5(replace(v_def, v_o, v_m)); END IF;
       IF v_after = v_before THEN RAISE EXCEPTION 'mutant %: md5 unchanged', mu.name; END IF;
       v_report := v_report || E'\n' || 'MUTATION APPLIED ' || mu.name || ' (md5 ' || v_before || ' -> ' || v_after || ')';
 
@@ -78,7 +87,9 @@ BEGIN
         ('C7',  'unassigned',         'c7-3993@example.test',  'c7-3993@example.test',    'IND', 'duplicate_invitation'),
         ('C8',  'pending',            'c8-3993@example.test',  'c8-3993@example.test',    'IND', 'duplicate_invitation'),
         ('C9',  'none',               'c9-3993@example.test',  'c9-3993@example.test',    'IND', 'success'),
-        ('C10', 'claimed_unassigned', 'c3-3993@example.test',  'c3-3993@example.test',    'IND', 'success')
+        ('C10', 'claimed_unassigned', 'c3-3993@example.test',  'c3-3993@example.test',    'IND', 'success'),
+        ('C11', 'bystander',          'c11-other-3993@example.test', 'c11-3993@example.test', 'B',   'success'),
+        ('C11i','bystander',          'c11-other-3993@example.test', 'c11-3993@example.test', 'IND', 'success')
       ) AS t(name, state, stored, asked, target, expect) LOOP
         BEGIN
           IF c.state IN ('pending', 'unassigned', 'pending_expired', 'unassigned_expired', 'unassigned_revoked') THEN
@@ -92,6 +103,11 @@ BEGIN
             IF c.state = 'unassigned_revoked' THEN
               DELETE FROM public.organization_members WHERE organization_id = v_org_a AND invited_email = c.stored;
             END IF;
+          ELSIF c.state = 'bystander' THEN
+            INSERT INTO public.organization_members (organization_id, invited_email, role, license_status,
+                                                     invitation_token, invitation_expires_at, invited_by, invited_at, provisioned_by)
+            VALUES (v_org_a, c.stored, 'agent', 'unassigned', 'tok-3993-' || md5(c.name), now() + interval '3 days',
+                    v_staff, now() - interval '8 days', 'invite');
           ELSIF c.state = 'claimed_unassigned' THEN
             INSERT INTO public.organization_members (organization_id, invited_email, user_id, role, license_status,
                                                      invitation_token, invitation_expires_at, invited_by, invited_at,

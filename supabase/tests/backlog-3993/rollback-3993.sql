@@ -3,7 +3,7 @@
 -- CREATE OR REPLACE only, same signature; ACL unchanged. Pre-check: the current body is
 -- 3993's or the old one. Run in one transaction (BEGIN; \i rollback-3993.sql; COMMIT;)
 -- or with \set ON_ERROR_STOP on. Under execute_sql one call is one transaction.
--- Also delete the ledger row: DELETE FROM supabase_migrations.schema_migrations WHERE version = '20261019010000';
+-- The last block deletes the 20261019010000 ledger row (only if the ledger table exists), in the same transaction.
 
 DO $pre$
 DECLARE v_md5 text;
@@ -191,3 +191,10 @@ BEGIN
     RAISE EXCEPTION '3993 rollback post-check: admin_invite_user md5 % is not the expected %', v_md5, '6c7f379eab8423c17ca23e4f44b99ad6';
   END IF;
 END $post$;
+
+DO $ledger$
+BEGIN
+  IF to_regclass('supabase_migrations.schema_migrations') IS NOT NULL THEN
+    DELETE FROM supabase_migrations.schema_migrations WHERE version = '20261019010000';
+  END IF;
+END $ledger$;
