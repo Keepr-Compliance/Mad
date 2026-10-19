@@ -57,7 +57,7 @@ M-OD dedupe per subscription, not per invoice | numstat 1	1	broker-portal/lib/bi
 M-OD2 wall clock instead of the test clock | numstat 1	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 5 | reds: ['C-1: past_due -> mirror past_due + one overdue row for the oldest overdue invoice; nothing suspends', 'C-OD2: "now" is the test clock: wall time is before every due date, the clock is past the first', 'C-OD: redelivery and a second past_due event for the same invoice -> still one row', 'C-OD3: once the oldest is paid, the next overdue invoice gets its own row', 'C-12: an open invoice still past due -> not reinstated']
 M-12 reinstate while an invoice is still past due | numstat 1	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 1 | reds: ['C-12: an open invoice still past due -> not reinstated']
 M-12b reinstate from invoice.paid only | numstat 0	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 1 | reds: ['C-12b: invoice.paid while the re-fetch still reads past_due -> stays suspended; then ->active reinstates']
-M-12c TS reason check removed (SQL still holds it) | numstat 1	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 0 | reds: NONE
+M-12c TS reason check removed (SQL still holds it) | numstat 1	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 1 | reds: ['C-12c: a suspension for "other" never lifts on payment']
 M-PF email on every payment_failed | numstat 1	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 1 | reds: ['C-PF: PaymentIntent requires_action (ACH verification) -> no email']
 M-ENQ organization rows written as user rows | numstat 1	1	broker-portal/lib/billing/outboxEnqueue.ts | tests 18, failed 1 | reds: ['C-D: dispute on a brokerage payment -> alert + account-manager row, never suspend_account_for_dispute']
 M-6 lease not enforced | numstat 0	1	broker-portal/lib/billing/brokerageSync.ts | tests 11, failed 1 | reds: ['C-6: two runs for one organization at once -> one customer, one subscription (lease)']
@@ -74,11 +74,10 @@ M-3 checkout-session ignores the brokerage block | numstat 1	1	broker-portal/app
 M-3c charge ignores the brokerage block | numstat 1	1	broker-portal/app/api/payments/charge/route.ts | tests 54, failed 1 | reds: ['C-3 charge: brokerage suspended -> 403 account_suspended, nothing bought']
 M-3b charge fails open on a check error | numstat 1	1	broker-portal/app/api/payments/charge/route.ts | tests 54, failed 1 | reds: ['C-3b charge: the check fails -> 503, nothing bought']
 
-26 mutants: 23 red, 3 survive. The 3 are equivalent mutants:
+26 mutants: 24 red, 2 survive. The 2 are equivalent mutants:
 - M-C5c-gate: resolveTarget resolves only the seven brokerage types, so removing the type set alone changes
   nothing. The realistic wrong build (M-C5c: dispatch resolves PaymentIntent events too) is red.
-- M-12c: the TypeScript reason check is a pre-check; _billing_auto_reinstate refuses any reason other than
-  non_payment (SQL mutant auto_no_reason_check is red above).
+- M-12c (formerly listed here): C-12c now also asserts _billing_auto_reinstate is never called; the mutant is red (tests 18, failed 1).
 - M-N: a reinstate always clears suspended_at (_billing_reinstate_org), so the epoch check also stops the
   email; a deal that is not suspended but keeps suspended_at has no writer, so no fixture can show it.
 C-12f (no invoice.paid since the suspension -> not reinstated) has no TypeScript mutant: the rule lives in
@@ -89,3 +88,10 @@ gen_random_uuid() (the public-repo PII guard refuses bare UUID literals). Only d
 C-L1, so the runs above stand for the committed text.
 Rebased onto int-portal/billing e600092fb (BACKLOG-3991 merged there; no shared files or functions):
 broker-portal jest 209 suites, 5061 tests, 0 failed.
+
+SR review round (7b7f886c2 -> fix-up), keepr-test, 2026-10-19, one rolled-back call (prior-body modes omitted):
+New control SR-EQ same-second event applied (apply {"status":"active"} at cursor 200 after C-9s2 -> status active).
+base 40/40 PASS (apply md5 3b5f4ae4).
+| mode (likely wrong build)                      | md5 change             | red controls |
+| sr_apply_strict_gt (>= swapped for > in the mirror writer) | apply 3b5f4ae4->eec6df26 (MUTATION APPLIED) | SR-EQ only (39 pass, 1 fail) |
+Fixtures: pi-open.json, pi-requires-action.json client_secret replaced with a placeholder (README edit list).
