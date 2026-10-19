@@ -1,4 +1,4 @@
-BACKLOG-3853 PR-1 DB controls, keepr-test (xiaobikzagpyubjcrcpb), M1 20261018230000 applied
+BACKLOG-3853 PR-1 DB controls, keepr-test, M1 20261018230000 applied
 (ledger md5(statements) 2fb04bf3d9fde3658fb200d97b43056c = file). One call, 26 modes, each in its
 own subtransaction, whole call ended in RAISE (rolled back). Composed: compose.py <modes> --placeholders placeholders.json
 
@@ -44,3 +44,27 @@ Rollback control (one call, rolled back by the closing RAISE):
   users_can_create_comments -/2f869c09, storage upload -/d1d5a426); 0 functions, 0 tables, 0 trigger,
   0 billing.* / account_suspended keys left.
 After both calls: M1 still in force (unlock_transaction b312f686, trigger present), 0 P3853 orgs / users, 0 org_deals.
+
+== Fix-up round (2026-10-18, PR review changes; migration unchanged) ==
+keepr-test, M1 20261018230000 in force. One call, 5 modes, each in its own subtransaction, whole call
+ended in RAISE (rolled back). Composed: compose.py <modes> --placeholders placeholders.json
+
+Controls added: reviewer fixture (the broker also holds an active membership in a second, earlier,
+non-suspended org, so billing_deciding_org(broker) is that org); A7up (admin approves own 'uploading'
+row, refused); C13_reinstate_needs_billing_suspend (brokerage admin reinstates own org, 42501 and still
+suspended); Xm (member row moved into the suspended org, account_suspended); two pre-suspension
+non-vacuity probes (P0_admin_approves_own_uploading_row, P0_member_row_move_possible).
+
+base: 52 checks, 52 PASS, 0 FAIL  (47 before + 5)
+
+mode                    mutation (md5 before->after)                                   reds
+sr_crs_caller_org       can_review_submission d8f86fd1->82c78cea                       A6 (subs=3 comments=1), CG3r
+sr_reviewer_check_only  update_public.check 9f56c6cf->b65fc913 (USING kept)            A7up only
+sr_reinstate_no_perm    admin_reinstate_org 2ed6e29d->6ba81c2c                         C13_reinstate_needs_billing_suspend only
+sr_no_move_branch       member trigger cbbb7229->45ab7ec7                              Xm only
+
+After: unlock_transaction b312f686, finalize_submission 6b2896ac, can_review_submission d8f86fd1,
+admin_reinstate_org 2ed6e29d, member trigger cbbb7229; policies (qual/with_check)
+agents_can_create_submissions -/f6ae9fb2, update_public 030ef0a2/9f56c6cf, users_can_create_comments
+-/622e6086, storage upload -/000b9376 = the post-migration values; 0 P3853 orgs, 0 p3853 users,
+0 org_deals, 0 p3853 member rows, 0 p3853 submissions.

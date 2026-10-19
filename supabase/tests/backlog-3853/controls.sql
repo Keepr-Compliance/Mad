@@ -1,4 +1,4 @@
--- BACKLOG-3853 PR-1 DB controls. Venue: keepr-test (cloud, xiaobikzagpyubjcrcpb), ONE call,
+-- BACKLOG-3853 PR-1 DB controls. Venue: keepr-test, ONE call,
 -- ONE transaction that ends in RAISE, so nothing persists.
 -- Run after M1 (20261018230000) is applied, or compose M1 + this file into one call.
 -- __MODES__ is replaced by the runner with a comma list of quoted mode names, e.g. 'base','no_unlock_gate'.
@@ -85,6 +85,11 @@ BEGIN
     -- G3 / G4
     WHEN 'no_crs_gate' THEN RETURN pg_temp.mut_fn('public.can_review_submission(uuid)',
       'AND NOT public.org_billing_suspended(p_org_id)', '');
+    WHEN 'sr_crs_caller_org' THEN RETURN pg_temp.mut_fn('public.can_review_submission(uuid)',
+      'AND NOT public.org_billing_suspended(p_org_id)',
+      'AND NOT public.org_billing_suspended(public.billing_deciding_org((SELECT auth.uid())))');
+    WHEN 'sr_reviewer_check_only' THEN RETURN pg_temp.mut_pol('public', 'transaction_submissions', 'transaction_submissions_update_public', 'check',
+      __REVIEWER_CHECK_FROM__, '');
     WHEN 'no_reviewer_clause' THEN RETURN pg_temp.mut_pol('public', 'transaction_submissions', 'transaction_submissions_update_public', 'qual',
       __REVIEWER_USING_FROM__, '') || ' + ' || pg_temp.mut_pol('public', 'transaction_submissions', 'transaction_submissions_update_public', 'check',
       __REVIEWER_CHECK_FROM__, '');
@@ -126,6 +131,11 @@ BEGIN
       $q$IF v_mode = 'live' AND NOT public._billing_brokerage_live() THEN$q$, 'IF false THEN');
     WHEN 'r14_suspend_unguarded' THEN RETURN pg_temp.mut_fn('public._billing_suspend_org(uuid,text,text,uuid)',
       $q$IF v_deal.stripe_mode = 'live' AND NOT public._billing_brokerage_live() THEN$q$, 'IF false THEN');
+    WHEN 'sr_reinstate_no_perm' THEN RETURN pg_temp.mut_fn('public.admin_reinstate_org(uuid,text)',
+      $q$IF NOT public.has_permission(v_uid, 'billing.suspend') THEN$q$, 'IF false THEN');
+    WHEN 'sr_no_move_branch' THEN RETURN pg_temp.mut_fn('public._billing_guard_member_while_suspended()',
+      $q$
+     OR (TG_OP = 'UPDATE' AND NEW.organization_id IS DISTINCT FROM OLD.organization_id)$q$, '');
     WHEN 'admin_rpc_no_permission' THEN RETURN pg_temp.mut_fn('public.admin_suspend_org(uuid,text,text)',
       $q$IF NOT public.has_permission(v_uid, 'billing.suspend') THEN$q$, 'IF false THEN');
     ELSE RAISE EXCEPTION 'unknown mode %', m;
@@ -145,6 +155,8 @@ BEGIN
     u_inp uuid := gen_random_uuid(); u_inu uuid := gen_random_uuid();
     v_team uuid; v_ind uuid; m_agt uuid; m_ag3 uuid; m_inp uuid;
     s_sub uuid; s_up uuid; s_adm uuid; v_item uuid; v_cl uuid;
+    o_2 uuid := gen_random_uuid();   -- is_test, NOT suspended, no deal: the reviewer's earlier second org (R-1)
+    s_adm_up uuid; s_adm_up0 uuid; m_mv uuid; m_mv0 uuid;
     v jsonb; s text; n int; n2 int; f jsonb; v_before text; v_after text;
   BEGIN
     SELECT id INTO v_team FROM public.plans WHERE name = 'Team';
@@ -167,9 +179,10 @@ BEGIN
       (o_l, 'P3853 L', 'p3853-l-' || left(o_l::text, 8), 10, false),
       (o_l2, 'P3853 L2', 'p3853-l2-' || left(o_l2::text, 8), 10, false),
       (o_c, 'P3853 C', 'p3853-c-' || left(o_c::text, 8), 10, true),
-      (o_n, 'P3853 N', 'p3853-n-' || left(o_n::text, 8), 10, true);
+      (o_n, 'P3853 N', 'p3853-n-' || left(o_n::text, 8), 10, true),
+      (o_2, 'P3853 SECOND', 'p3853-2-' || left(o_2::text, 8), 10, true);
     INSERT INTO public.organization_plans (organization_id, plan_id)
-    SELECT x, v_team FROM unnest(ARRAY[o_b, o_l, o_l2, o_c, o_n]) x;
+    SELECT x, v_team FROM unnest(ARRAY[o_b, o_l, o_l2, o_c, o_n, o_2]) x;
     -- a support grant present before billing takes the key (C-7 prior restore)
     UPDATE public.organization_plans SET feature_overrides = '{"broker_submission":{"enabled":true,"source":"support"},"transaction_checklists":{"enabled":true,"source":"support"}}'::jsonb
      WHERE organization_id = o_b;
@@ -177,6 +190,10 @@ BEGIN
     INSERT INTO public.organization_members (organization_id, user_id, role, license_status, joined_at, provisioned_by) VALUES
       (o_b, u_adm, 'admin', 'active', now(), 'manual'),
       (o_b, u_brk, 'broker', 'active', now(), 'manual');
+    -- Reviewer fixture (SR required change 1): the broker also holds an ACTIVE membership in a second,
+    -- NOT suspended org whose membership row is older, so billing_deciding_org(broker) = o_2, not o_b.
+    INSERT INTO public.organization_members (organization_id, user_id, role, license_status, joined_at, provisioned_by, created_at)
+      VALUES (o_2, u_brk, 'broker', 'active', now(), 'manual', now() - interval '2 days');
     INSERT INTO public.organization_members (organization_id, user_id, role, license_status, joined_at, provisioned_by)
       VALUES (o_b, u_agt, 'agent', 'active', now(), 'manual') RETURNING id INTO m_agt;
     INSERT INTO public.organization_members (organization_id, user_id, role, license_status, joined_at, provisioned_by)
@@ -197,6 +214,15 @@ BEGIN
       VALUES (o_b, u_agt, 'p3853-up', 'p3853 address 2', 'uploading') RETURNING id INTO s_up;
     INSERT INTO public.transaction_submissions (organization_id, submitted_by, local_transaction_id, property_address, status)
       VALUES (o_b, u_adm, 'p3853-adm', 'p3853 address 3', 'submitted') RETURNING id INTO s_adm;
+    INSERT INTO public.transaction_submissions (organization_id, submitted_by, local_transaction_id, property_address, status)
+      VALUES (o_b, u_adm, 'p3853-admup', 'p3853 address 6', 'uploading') RETURNING id INTO s_adm_up;
+    INSERT INTO public.transaction_submissions (organization_id, submitted_by, local_transaction_id, property_address, status)
+      VALUES (o_b, u_adm, 'p3853-admup0', 'p3853 address 7', 'uploading') RETURNING id INTO s_adm_up0;
+    -- member rows with no user, in a non-suspended org, to be moved (SR required change 4)
+    INSERT INTO public.organization_members (organization_id, invited_email, role, license_status, invitation_token, invitation_expires_at, invited_by, invited_at, provisioned_by)
+      VALUES (o_n, 'p3853-mv@example.test', 'agent', 'pending', 'p3853-tok-mv', now() + interval '7 days', u_adm, now(), 'invite') RETURNING id INTO m_mv;
+    INSERT INTO public.organization_members (organization_id, invited_email, role, license_status, invitation_token, invitation_expires_at, invited_by, invited_at, provisioned_by)
+      VALUES (o_n, 'p3853-mv0@example.test', 'agent', 'pending', 'p3853-tok-mv0', now() + interval '7 days', u_adm, now(), 'invite') RETURNING id INTO m_mv0;
     INSERT INTO public.submission_checklists (submission_id, template_name) VALUES (s_sub, 'p3853 list') RETURNING id INTO v_cl;
     INSERT INTO public.submission_checklist_items (submission_id, submission_checklist_id, title, is_required)
       VALUES (s_sub, v_cl, 'p3853 item', false) RETURNING id INTO v_item;
@@ -236,6 +262,18 @@ BEGIN
       EXECUTE 'RESET ROLE';
       r := r || jsonb_build_object('P0_agent_comment_upload_insert', 'PASS');
     EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; r := r || jsonb_build_object('P0_agent_comment_upload_insert', 'FAIL ' || SQLSTATE || ' ' || left(SQLERRM, 80)); END;
+
+    -- non-vacuity for the two new refusals below: before suspension both actions succeed
+    BEGIN
+      PERFORM pg_temp.as_user(u_adm, 'p3853-adm@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
+      WITH u AS (UPDATE public.transaction_submissions SET status = 'approved' WHERE id = s_adm_up0 RETURNING 1) SELECT count(*) INTO n FROM u;
+      EXECUTE 'RESET ROLE'; s := n::text;
+    EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; s := SQLSTATE; END;
+    r := r || jsonb_build_object('P0_admin_approves_own_uploading_row', CASE WHEN s = '1' THEN 'PASS' ELSE 'FAIL ' || s END);
+    BEGIN
+      UPDATE public.organization_members SET organization_id = o_c WHERE id = m_mv0; s := 'moved';
+    EXCEPTION WHEN OTHERS THEN s := SQLERRM; END;
+    r := r || jsonb_build_object('P0_member_row_move_possible', CASE WHEN s = 'moved' THEN 'PASS' ELSE 'FAIL ' || s END);
 
     SELECT string_agg(license_status || '/' || (user_id IS NULL)::text, ',' ORDER BY id) INTO v_before
       FROM public.organization_members WHERE organization_id = o_b;
@@ -341,6 +379,15 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; s := SQLSTATE; END;
     r := r || jsonb_build_object('A7self_admin_approves_own_refused', CASE WHEN s IN ('0', '42501') THEN 'PASS' ELSE 'FAIL rows=' || s END);
 
+    -- SR required change 2: the 'uploading' row is admitted by the submitter USING branch, so the
+    -- reviewer WITH CHECK clause is the only gate on a reviewer-status write.
+    BEGIN
+      PERFORM pg_temp.as_user(u_adm, 'p3853-adm@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
+      WITH u AS (UPDATE public.transaction_submissions SET status = 'approved' WHERE id = s_adm_up RETURNING 1) SELECT count(*) INTO n FROM u;
+      EXECUTE 'RESET ROLE'; s := n::text;
+    EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; s := SQLSTATE; END;
+    r := r || jsonb_build_object('A7up_admin_approves_own_uploading_refused', CASE WHEN s IN ('0', '42501') THEN 'PASS' ELSE 'FAIL rows=' || s END);
+
     BEGIN
       PERFORM pg_temp.as_user(u_brk, 'p3853-brk@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
       PERFORM public.set_submission_checklist_reviewer_check(v_item, false);
@@ -406,6 +453,12 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; s := SQLERRM; END;
     r := r || jsonb_build_object('CG5r_resend_refused', CASE WHEN s = 'account_suspended' THEN 'PASS' ELSE 'FAIL ' || s END);
 
+    -- SR required change 4: a direct write of organization_id pointing a member row at the suspended org
+    BEGIN
+      UPDATE public.organization_members SET organization_id = o_b WHERE id = m_mv; s := 'moved';
+    EXCEPTION WHEN OTHERS THEN s := SQLERRM; END;
+    r := r || jsonb_build_object('Xm_member_row_move_into_suspended_refused', CASE WHEN s = 'account_suspended' THEN 'PASS' ELSE 'FAIL ' || s END);
+
     BEGIN
       UPDATE public.organization_members SET license_status = 'suspended' WHERE id = m_agt; s := 'ok';
     EXCEPTION WHEN OTHERS THEN s := SQLERRM; END;
@@ -455,6 +508,19 @@ BEGIN
       EXECUTE 'RESET ROLE'; s := v::text;
     EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; s := SQLSTATE; END;
     r := r || jsonb_build_object('C13_suspend_needs_billing_suspend', CASE WHEN s = '42501' THEN 'PASS' ELSE 'FAIL ' || s END);
+
+    -- SR required change 3: a brokerage admin (no billing.suspend) cannot reinstate their own org
+    BEGIN
+      PERFORM pg_temp.as_user(u_adm, 'p3853-adm@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
+      v := public.admin_reinstate_org(o_b, 'p3853 self');
+      EXECUTE 'RESET ROLE'; s := v::text;
+    EXCEPTION WHEN OTHERS THEN EXECUTE 'RESET ROLE'; s := SQLSTATE; END;
+    r := r || jsonb_build_object('C13_reinstate_needs_billing_suspend', CASE WHEN s = '42501' AND public.org_billing_suspended(o_b) THEN 'PASS' ELSE 'FAIL ' || left(s, 60) || ' suspended=' || public.org_billing_suspended(o_b)::text END);
+    IF NOT public.org_billing_suspended(o_b) THEN  -- keep the fixture suspended for the checks that follow
+      PERFORM pg_temp.as_user(u_staff, 'p3853-staff@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
+      PERFORM public.admin_suspend_org(o_b, 'non_payment', 'p3853');
+      EXECUTE 'RESET ROLE';
+    END IF;
 
     -- ===== C-8 catalog =====
     SELECT count(*) INTO n FROM unnest(ARRAY['public.billing_settings', 'public.price_book_items', 'public.price_book_prices', 'public.org_deals',
