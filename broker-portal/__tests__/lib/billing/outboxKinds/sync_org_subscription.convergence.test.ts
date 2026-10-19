@@ -167,6 +167,12 @@ describe('sync_org_subscription', () => {
     const [m] = fake.db.rows('org_billing_stripe');
     expect(m).toMatchObject({ stripe_customer_id: 'cus_3853_1', stripe_subscription_id: 'sub_3853_2' });
     expect(m.status).toBeUndefined(); // the drain never writes status (SR plan review item 1)
+    // Every drain write to the mirror carries ids only and no event time.
+    for (const a of fake.callsTo('_billing_apply_org_subscription')) {
+      expect(a.p_event_created).toBeNull();
+      expect(Object.keys(a.p_fields as Obj).sort()).toEqual(expect.arrayContaining(['stripe_customer_id']));
+      expect(a.p_fields).not.toHaveProperty('status');
+    }
     expect(leaseHeld()).toBe(false);
   });
 
