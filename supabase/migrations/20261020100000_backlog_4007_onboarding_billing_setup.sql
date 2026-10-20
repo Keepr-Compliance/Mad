@@ -212,11 +212,12 @@ CREATE TABLE IF NOT EXISTS public.org_terms_acceptances (
   accepted_at         timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE public.org_terms_acceptances ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.org_terms_acceptances FROM PUBLIC, anon, authenticated;
+-- service_role included: Supabase default privileges grant it every right at create time.
+REVOKE ALL ON public.org_terms_acceptances FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT, INSERT ON public.org_terms_acceptances TO service_role;
 CREATE INDEX IF NOT EXISTS org_terms_acceptances_org_idx ON public.org_terms_acceptances (organization_id, deal_version);
 COMMENT ON TABLE public.org_terms_acceptances IS
-  'BACKLOG-4007: who accepted the Terms of Service and this order, when, for which deal version and price. Append-only (no UPDATE/DELETE grant).';
+  'BACKLOG-4007: who accepted the Terms of Service and this order, when, for which deal version and price. Append-only for every role that is not the table owner (UPDATE, DELETE, TRUNCATE revoked from service_role too).';
 
 -- =====================================================================================
 -- 4. Deal columns

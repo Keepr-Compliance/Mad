@@ -160,13 +160,23 @@ BEGIN
       EXECUTE 'DROP INDEX public.org_contacts_one_billing_idx';
       IF to_regclass('public.org_contacts_one_billing_idx') IS NOT NULL THEN RAISE EXCEPTION 'MUTATION NOT APPLIED: index still there'; END IF;
       RETURN 'MUTATION APPLIED DROP INDEX org_contacts_one_billing_idx';
+    WHEN 'sr_accept_no_version_check' THEN RETURN pg_temp.mut_fn('public.broker_accept_terms(uuid,integer,text,text)',
+      $q$  IF p_expected_version IS DISTINCT FROM v_deal.version THEN$q$, '  IF false THEN');
+    WHEN 'sr_terms_any_user' THEN RETURN pg_temp.mut_fn(cs,
+      $q$WHERE a.organization_id = p_org AND a.user_id = v_uid$q$, $q$WHERE a.organization_id = p_org$q$);
+    WHEN 'sr_lock_only_active' THEN RETURN pg_temp.mut_fn(sd,
+      $q$      IF v_deal.status <> 'draft' THEN$q$, $q$      IF v_deal.status = 'active' THEN$q$);
+    WHEN 'sr_service_role_mutable' THEN
+      EXECUTE 'GRANT UPDATE, DELETE, TRUNCATE ON public.org_terms_acceptances TO service_role';
+      IF NOT has_table_privilege('service_role', 'public.org_terms_acceptances', 'UPDATE') THEN RAISE EXCEPTION 'MUTATION NOT APPLIED: grant missing'; END IF;
+      RETURN 'MUTATION APPLIED GRANT UPDATE, DELETE, TRUNCATE ON org_terms_acceptances TO service_role';
     ELSE RAISE EXCEPTION 'unknown mode %', m;
     END CASE;
   END $b$$f$;
 
   EXECUTE $f$CREATE FUNCTION pg_temp.run() RETURNS jsonb LANGUAGE plpgsql AS $b$
   DECLARE
-    r jsonb := '{}'::jsonb;
+    r jsonb := '{}'::jsonb; v_upd text; v_del text;
     o1 uuid := gen_random_uuid();  -- main flow: draft -> edit -> terms -> complete
     o2 uuid := gen_random_uuid();  -- other brokerage (its admin must be refused on o1)
     o3 uuid := gen_random_uuid();  -- start-date rules, past start + completion
@@ -343,6 +353,9 @@ BEGIN
     s := pg_temp.call_as(u_b4, format(qc, o4, 1, me, co, 'false'));
     r := r || jsonb_build_object('C_S6_stale_version_refused', CASE WHEN pg_temp.j(s)->>'error' = 'version_conflict'
       AND (SELECT status FROM public.org_deals WHERE organization_id = o4) = 'draft' THEN 'PASS' ELSE 'FAIL ' || s END);
+    s := pg_temp.call_as(u_b4, format(qt, o4, 1, tv, tu));
+    r := r || jsonb_build_object('SR_A_stale_accept_refused', CASE WHEN pg_temp.j(s)->>'error' = 'version_conflict'
+      AND NOT EXISTS (SELECT 1 FROM public.org_terms_acceptances a WHERE a.organization_id = o4 AND a.deal_version = 2) THEN 'PASS' ELSE 'FAIL ' || s END);
     -- ===== C-TA3 acceptance for an older version does not count =====
     s := pg_temp.call_as(u_b4, format(qc, o4, 2, me, co, 'false'));
     r := r || jsonb_build_object('C_TA3_old_version_acceptance_refused', CASE WHEN pg_temp.j(s)->>'error' = 'terms_not_accepted' THEN 'PASS' ELSE 'FAIL ' || s END);
@@ -375,6 +388,14 @@ BEGIN
     s := pg_temp.call_as(u_super, format($q$SELECT public.admin_invite_user(%L::uuid, 'p4007-rem6@example.test', 'admin', %L::uuid, 'trial', NULL)$q$, o6, u_super));
     r := r || jsonb_build_object('C_R4_active_deal_invite_no_reminders', CASE WHEN pg_temp.j(s)->>'success' = 'true' AND pg_temp.rem_rows(o6) = 0 THEN 'PASS' ELSE 'FAIL ' || left(s, 60) || ' ' || pg_temp.rem_rows(o6) END);
 
+    INSERT INTO public.organization_members (organization_id, user_id, role, license_status, joined_at) VALUES (o5, u_b6, 'admin', 'active', now());
+    s := pg_temp.call_as(u_b5, format(qt, o5, 1, tv, tu));
+    s := pg_temp.call_as(u_b6, format(qc, o5, 1, me, co, 'false'));
+    r := r || jsonb_build_object('SR_B_other_users_acceptance_does_not_count', CASE WHEN pg_temp.j(s)->>'error' = 'terms_not_accepted' THEN 'PASS' ELSE 'FAIL ' || left(s, 80) END);
+    -- proposed control 3: start date locked on a canceled deal too (o6 completed above)
+    UPDATE public.org_deals SET status = 'canceled' WHERE organization_id = o6;
+    s := pg_temp.call_as(u_sales, format(q10, o6, 'test', 5, 2499, NULL, NULL, 'move', (SELECT version FROM public.org_deals WHERE organization_id = o6), quote_literal((bd + 30)::text) || '::date'));
+    r := r || jsonb_build_object('SR_C_start_locked_when_canceled', CASE WHEN pg_temp.j(s)->>'error' = 'start_date_locked' THEN 'PASS' ELSE 'FAIL ' || left(s, 80) END);
     -- ===== C-M1b migrated deals (Alpha/Beta on keepr-test) read as active, contact backfilled =====
     FOR d IN SELECT dd.organization_id FROM public.org_deals dd JOIN public.organizations oo ON oo.id = dd.organization_id
               WHERE oo.name IN ('Test Brokerage Alpha', 'Test Brokerage Beta') LOOP
@@ -408,6 +429,26 @@ BEGIN
       AND has_function_privilege('anon', p.oid, 'EXECUTE')) THEN 'PASS' ELSE 'FAIL' END);
     r := r || jsonb_build_object('C_8_internals_not_authenticated', CASE WHEN NOT has_function_privilege('authenticated', 'public._org_billing_contact_set(uuid,text,text,text,uuid)', 'EXECUTE')
       AND NOT has_function_privilege('authenticated', 'public._billing_save_deal(uuid,jsonb,uuid,text,integer)', 'EXECUTE') THEN 'PASS' ELSE 'FAIL' END);
+    -- SR required change 2: terms acceptances are append-only for service_role too
+    r := r || jsonb_build_object('C_8_terms_append_only_service_role_privs', CASE WHEN has_table_privilege('service_role', 'public.org_terms_acceptances', 'SELECT')
+      AND has_table_privilege('service_role', 'public.org_terms_acceptances', 'INSERT')
+      AND NOT has_table_privilege('service_role', 'public.org_terms_acceptances', 'UPDATE')
+      AND NOT has_table_privilege('service_role', 'public.org_terms_acceptances', 'DELETE')
+      AND NOT has_table_privilege('service_role', 'public.org_terms_acceptances', 'TRUNCATE') THEN 'PASS' ELSE 'FAIL' END);
+    v_upd := 'not refused'; v_del := 'not refused';
+    BEGIN
+      SET LOCAL ROLE service_role;
+      UPDATE public.org_terms_acceptances SET seats = seats WHERE false;
+    EXCEPTION WHEN insufficient_privilege THEN v_upd := 'refused';
+    END;
+    RESET ROLE;
+    BEGIN
+      SET LOCAL ROLE service_role;
+      DELETE FROM public.org_terms_acceptances WHERE false;
+    EXCEPTION WHEN insufficient_privilege THEN v_del := 'refused';
+    END;
+    RESET ROLE;
+    r := r || jsonb_build_object('C_8_terms_service_role_update_delete_refused', CASE WHEN v_upd = 'refused' AND v_del = 'refused' THEN 'PASS' ELSE 'FAIL ' || v_upd || '/' || v_del END);
     -- SR change 1: the 10th argument has no default, so a 9-named-argument call has one candidate
     r := r || jsonb_build_object('C_1_overloads_unambiguous', CASE WHEN
       (SELECT pronargdefaults FROM pg_proc WHERE oid = 'public.admin_save_deal(uuid,text,integer,integer,text,text,uuid,text,integer,date)'::regprocedure) = 0

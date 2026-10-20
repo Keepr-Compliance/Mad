@@ -18,8 +18,8 @@ runs in its own subtransaction; a mutation is an exact-once text replacement of
 
 ## Results (keepr-test, 2026-10-19, migration applied) — `results-2026-10-19.txt`
 
-- base: 48 / 48 pass.
-- 25 mutants, every one applied (md5 changed), every one red. Per-mode reds are in the results file.
+- base: 53 / 53 pass.
+- 29 mutants (25 + 4 from SR review: terms accepted without a deal-version check, completion on another user's acceptance, start date locked only on active deals, service_role able to update/delete terms acceptances), every one applied (md5 or ACL change checked), every one red. Per-mode reds are in the results file.
 - `C_S5_complete_active_bump_one_sync` also reds under the two UTC-date mutants, but only in the
   evening window when the UTC and Pacific dates differ. `C_T2` / `C_T3` pin the date helper and red
   at any hour.
