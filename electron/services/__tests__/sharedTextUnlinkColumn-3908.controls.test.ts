@@ -91,6 +91,7 @@ jest.mock("../logService", () => {
 
 import transactionService from "../transactionService";
 import {
+  createCommunicationSync,
   createThreadCommunicationReference,
   isThreadLinkedToTransaction,
 } from "../db/communicationDbService";
@@ -98,11 +99,15 @@ import { getMessagesByContact } from "../db/messageDbService";
 import { MESSAGE_ROSTER_SQL } from "../db/messageRosterDb";
 import { candidateMessageThreadsSql } from "../db/autoLinkSql";
 import { linkedTextMessageIdsForThreads } from "../db/transactionTextPagingMainDb";
+import { getMessageTransactionIds } from "../dealLockState";
 
 const SCHEMA_PATH = path.join(__dirname, "..", "..", "database", "schema.sql");
 const USER = "5b0c2e71-9d34-4a86-b1f7-3e6a8c0d2f19"; // pii-allow-uuid: invented for this fixture, not from any live row
 const TX_A = "9e3d1a40-7c26-4f85-a0b9-1d4e7f2c6a83"; // pii-allow-uuid: invented for this fixture, not from any live row
 const TX_B = "c2f86b17-4e90-4d3a-8b25-6a1f0e9d7c54"; // pii-allow-uuid: invented for this fixture, not from any live row
+const TX_C = "4a7e0d93-1b58-4c62-9f3a-e8d5c2b1a076"; // pii-allow-uuid: invented for this fixture, not from any live row
+const OTHER_USER = "d81f4b26-6c03-4e97-a5b8-0f2e9c7d3a14"; // pii-allow-uuid: invented for this fixture, not from any live row
+const TX_OTHER = "7b2c9e05-3d81-4fa6-b047-5e1a8d6c9f32"; // pii-allow-uuid: invented for this fixture, not from any live row
 const THREAD = "thread-3908";
 const PHONE = "+15550101";
 const IDS = ["m-3908-1", "m-3908-2"];
@@ -116,6 +121,7 @@ function seed(db: TestDb): void {
   for (const [tx, addr] of [
     [TX_A, "1 Example Way, Springfield"],
     [TX_B, "2 Example Way, Springfield"],
+    [TX_C, "3 Example Way, Springfield"],
   ]) {
     db.prepare(
       "INSERT INTO transactions (id, user_id, property_address, status, message_count) VALUES (?, ?, ?, 'active', 0)",
@@ -239,5 +245,64 @@ describe("BACKLOG-3908 controls — unlink re-points the column to a remaining l
     expect(junction(TX_B).n).toBe(before);
     expect(ignoredFor(TX_B).n).toBe(0);
     expect(column()).toEqual([TX_A, TX_A]);
+  });
+
+  // SR change 1: with TWO remaining deals the column must name the MOST RECENT
+  // remaining link. The deal-lock check reads this column when no deal is named
+  // (dealLockState.ts getMessageTransactionIds, MESSAGE_TRANSACTION_ID_SQL).
+  // A's per-message rows are written first, C's thread row second, B last.
+  // linked_at is CURRENT_TIMESTAMP (second resolution), so A is backdated to
+  // keep the two orderings apart on linked_at as well as rowid.
+  it("C6 three deals: removed from B while A and C remain -> column names C (most recent), not A (earliest)", async () => {
+    await transactionService.linkMessages(IDS, TX_A);
+    realDb!
+      .prepare("UPDATE communications SET linked_at = '2026-01-01 09:00:00' WHERE transaction_id = ?")
+      .run(TX_A);
+    await createThreadCommunicationReference(THREAD, TX_C, USER, "auto", 0.9);
+    await transactionService.linkMessages(IDS, TX_B);
+    expect(column()).toEqual([TX_B, TX_B]);
+    await removeConversationFromB();
+    expect(perMessageLinksA()).toEqual(IDS);
+    expect(junction(TX_C).n).toBe(1);
+    expect(column()).toEqual([TX_C, TX_C]);
+    expect(getMessageTransactionIds(IDS)).toEqual([TX_C, TX_C]);
+  });
+
+  // SR change 2: the thread arm of the re-point reads TEXT thread rows only.
+  // An email link row carries message_id NULL and a thread_id (the provider's
+  // conversation id); if that id ever equals a text thread id, it must not be
+  // taken as a link of the text.
+  it("C7 thread arm ignores email link rows: an email row with the same thread_id in C -> column NULL", async () => {
+    realDb!
+      .prepare("INSERT INTO emails (id, user_id, subject, thread_id) VALUES (?, ?, ?, ?)")
+      .run("e-3908-1", USER, "subject", THREAD);
+    createCommunicationSync({
+      user_id: USER,
+      transaction_id: TX_C,
+      email_id: "e-3908-1",
+      thread_id: THREAD,
+      link_source: "manual",
+    } as any);
+    await transactionService.linkMessages(IDS, TX_B);
+    await removeConversationFromB();
+    expect(junction(TX_C).n).toBe(1);
+    expect(column()).toEqual([null, null]);
+  });
+
+  // SR change 2: the thread arm of the re-point reads THIS user's rows only.
+  it("C8 thread arm is scoped to the message's user: another user's thread row with the same thread_id -> column NULL", async () => {
+    realDb!
+      .prepare("INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, ?, 'google', ?)")
+      .run(OTHER_USER, "other@example.com", "oauth-3908-other");
+    realDb!
+      .prepare(
+        "INSERT INTO transactions (id, user_id, property_address, status, message_count) VALUES (?, ?, ?, 'active', 0)",
+      )
+      .run(TX_OTHER, OTHER_USER, "9 Example Way, Springfield");
+    await createThreadCommunicationReference(THREAD, TX_OTHER, OTHER_USER, "auto", 0.9);
+    await transactionService.linkMessages(IDS, TX_B);
+    await removeConversationFromB();
+    expect(junction(TX_OTHER).n).toBe(1);
+    expect(column()).toEqual([null, null]);
   });
 });
