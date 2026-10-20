@@ -110,6 +110,12 @@ export interface BackupResult {
 
   /** BACKLOG-3953: present only with errorCode "TOOL_BLOCKED". */
   toolBlock?: ToolBlock;
+  /**
+   * BACKLOG-4002 (SR R7): on a watchdog stop (BACKUP_TIMEOUT), true when the "backup tool
+   * is suspended" notice was showing at the moment the watchdog fired (Windows). Picks
+   * the antivirus variant of the BACKUP_TIMEOUT message. Absent on every other result.
+   */
+  toolSuspendedAtTimeout?: boolean;
 }
 
 /** BACKLOG-3814: spawn requested -> first output byte (or exit, if none). */

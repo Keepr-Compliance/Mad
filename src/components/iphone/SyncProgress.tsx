@@ -3,6 +3,7 @@ import type { SyncProgressProps } from "../../types/iphone";
 import logger from "../../utils/logger";
 import { SYNC_KEEP_UNLOCKED_HINT } from "../../constants/appleDevicesStoreCopy";
 import { formatBytesAtUnit, MB_UNIT_INDEX } from "../../utils/transferByteUnit";
+import { ToolBlockedNotice } from "./ToolBlockedNotice";
 
 /**
  * SyncProgress Component
@@ -15,6 +16,7 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
   progress,
   onCancel,
   isWaitingForPasscode = false,
+  toolSuspendedNotice = null,
 }) => {
   useEffect(() => {
     logger.info("[SyncProgress] Mounted", { phase: progress.phase, percent: progress.percent });
@@ -94,7 +96,13 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
   const hasStartedTransfer = bytesProcessed > 0 || (progress.processedFiles ?? 0) > 0;
 
   // Show passcode waiting warning (special state with detailed instructions)
-  const showPasscodeWarning = isWaitingForPasscode;
+  /**
+   * BACKLOG-4002 (Windows): the backup tool is suspended. Its notice replaces BOTH the
+   * amber "please don't disconnect or cancel" panel and the gray "keep your iPhone
+   * connected" panel, so neither tells the user to wait while nothing can happen.
+   */
+  const showToolSuspendedNotice = !!toolSuspendedNotice && !isComplete && !isError;
+  const showPasscodeWarning = isWaitingForPasscode && !showToolSuspendedNotice;
 
   /**
    * BACKLOG-2907: the prior-backup signal has THREE states, and only one of them
@@ -264,6 +272,13 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
         </div>
       )}
 
+      {/* BACKLOG-4002: the backup tool is suspended (Windows) */}
+      {showToolSuspendedNotice && toolSuspendedNotice && (
+        <div className="flex justify-center mt-4" data-testid="tool-suspended-notice">
+          <ToolBlockedNotice userError={toolSuspendedNotice} />
+        </div>
+      )}
+
       {/* Passcode Waiting Warning - detailed instructions when waiting for passcode */}
       {showPasscodeWarning && (
         <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg mt-4">
@@ -344,7 +359,7 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
       )}
 
       {/* Don't Disconnect Warning - shown during backup (but NOT when waiting for passcode, that has its own message) */}
-      {!isComplete && !isError && (isBackingUp || isPreparing) && !isWaitingForPasscode && (
+      {!isComplete && !isError && (isBackingUp || isPreparing) && !isWaitingForPasscode && !showToolSuspendedNotice && (
         <div className="flex items-start gap-2 p-3 bg-gray-50 border border-gray-200 rounded-lg mt-3">
           <svg
             className="w-5 h-5 text-gray-500 flex-shrink-0 mt-0.5"

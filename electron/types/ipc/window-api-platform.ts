@@ -297,6 +297,13 @@ export interface WindowApiSync {
   onComplete: (callback: (result: unknown) => void) => () => void;
   onWaitingForPasscode: (callback: () => void) => () => void;
   onPasscodeEntered: (callback: () => void) => () => void;
+  /** BACKLOG-4002 (Windows): the backup tool is suspended, or running again. */
+  onToolSuspended?: (
+    callback: (payload: {
+      suspended: boolean;
+      userError?: { code: string; title: string; description: string; actionSuggestion: string };
+    }) => void,
+  ) => () => void;
   /** BACKLOG-3892 S5: "Get older texts" from the iPhone backup kept on this computer. */
   backfillAvailability?: (transactionId: string) => Promise<BackfillAvailability>;
   backfillOlder?: (transactionId: string) => Promise<BackfillResult>;
