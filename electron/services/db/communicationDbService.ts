@@ -331,8 +331,12 @@ export function confirmEmailLinksByEmailIds(
   emailIds: string[],
   transactionId: string,
 ): Promise<number> {
+  return Promise.resolve(confirmEmailLinksByEmailIdsSync(emailIds, transactionId));
+}
+
+export function confirmEmailLinksByEmailIdsSync(emailIds: string[], transactionId: string): number {
   const ids = emailIds.filter((id): id is string => typeof id === "string" && id.length > 0);
-  if (ids.length === 0) return Promise.resolve(0);
+  if (ids.length === 0) return 0;
 
   const placeholders = placeholderList(ids.length);
   const statement = sql`
@@ -341,7 +345,7 @@ export function confirmEmailLinksByEmailIds(
      WHERE transaction_id = ?
        AND email_id IN (${placeholders})
   `;
-  return Promise.resolve(dbRun(statement, [transactionId, ...ids]).changes ?? 0);
+  return dbRun(statement, [transactionId, ...ids]).changes ?? 0;
 }
 
 /**
@@ -1085,13 +1089,17 @@ export async function getTransactionsForMessage(
  * @returns The created communication ID, or null when refused because the deal is
  *   locked and the link is automatic (BACKLOG-3910)
  */
-export async function createThreadCommunicationReference(
+export function createThreadCommunicationReference(
   threadId: string,
   transactionId: string,
   userId: string,
   linkSource: 'auto' | 'manual' | 'scan' = 'auto',
   linkConfidence: number = 0.9,
 ): Promise<string | null> {
+  return Promise.resolve(createThreadCommunicationReferenceSync(threadId, transactionId, userId, linkSource, linkConfidence));
+}
+
+export function createThreadCommunicationReferenceSync(threadId: string, transactionId: string, userId: string, linkSource: 'auto' | 'manual' | 'scan' = 'auto', linkConfidence: number = 0.9): string | null {
   // BACKLOG-3910: backstop. An AUTOMATIC text link never lands on a locked deal
   // (with the broker, or sealed). "manual" is the user's own act and is allowed.
   if (linkSource !== "manual") {

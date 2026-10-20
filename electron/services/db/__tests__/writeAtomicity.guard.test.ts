@@ -397,11 +397,15 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // itself, so it cannot see the pointer/junction pair either. The proof of
   // that fix is `expandAttachedThreads.linkAtomicity-2550.test.ts`.
 
-  // --- BACKLOG-2845 (open): review queue approve/reject -------------------
-  "electron/services/reviewStateService.ts::approveReviewItems":
-    "BACKLOG-2845 @0dca6beb1 (:1018, confirmEmailLinksByEmailIds + resolveLegacyTwins + createThreadCommunicationReference, in a for loop over itemIds): a crash part-way through approving a selection leaves some emails promoted and the rest still queued, with the pending_review row deleted for only some of them",
-  "electron/services/reviewStateService.ts::rejectReviewItems":
-    "BACKLOG-2845 @0dca6beb1 (:1071, addIgnoredCommunication + resolveLegacyTwins): a failure after the suppression row is written leaves the legacy address_missing link alive — the email is hidden from future discovery but still counted by getReviewState(), so the Complete gate never clears",
+  // `reviewStateService.ts::approveReviewItems` / `::rejectReviewItems`
+  // (BACKLOG-2845) were removed when every write of one approve or reject call
+  // moved into one `dbTransaction` (`approveReviewItemsSync` /
+  // `rejectReviewItemsSync`). READ THIS BEFORE TRUSTING THE DELETION: this guard
+  // cannot prove it. The async wrappers now hold one call each, so the guard
+  // stops seeing them whether or not the writes are inside the transaction (an
+  // empty `dbTransaction(() => {})`, or the link written before it, also clears
+  // both entries: measured). The proof of that fix is
+  // `reviewStateService.approveRejectAtomicity-2845.test.ts`.
 
   // --- Filed by BACKLOG-2584 itself, before being listed here -------------
   // `electron/handlers/contactHandlers.ts::ipc:contacts:import` (BACKLOG-3220)
