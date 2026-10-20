@@ -155,7 +155,7 @@ describe('sync_org_subscription', () => {
     ]);
     expect(stripe.callsTo('customers.update')[0][1]).toEqual({ email: 'billing-3853@example.test', name: 'Brokerage 3853 S' });
     const [[params, opts]] = stripe.callsTo('subscriptions.create');
-    expect(opts).toEqual({ idempotencyKey: `brokerage:${ORG}:test:subscription:v1` });
+    expect(opts).toEqual({ idempotencyKey: `brokerage:${ORG}:test:subscription:v1:none` });
     expect(params).toMatchObject({
       collection_method: 'send_invoice',
       days_until_due: 15,
@@ -214,7 +214,7 @@ describe('sync_org_subscription', () => {
     expect(stripe.calls).toEqual([]);
     await handleSyncOrgSubscriptionRow(row(2), ctx());
     expect(stripe.callsTo('subscriptions.create')).toHaveLength(1);
-    expect(stripe.callsTo('subscriptions.create')[0][1]).toEqual({ idempotencyKey: `brokerage:${ORG}:test:subscription:v2` });
+    expect(stripe.callsTo('subscriptions.create')[0][1]).toEqual({ idempotencyKey: `brokerage:${ORG}:test:subscription:v2:none` });
     expect(world.subs.size).toBe(1);
   });
 
@@ -285,5 +285,124 @@ describe('sync_org_subscription', () => {
     await handleSyncOrgSubscriptionRow(row(1), ctx());
     expect(stripe.calls).toEqual([]);
     expect(mutations()).toEqual([]);
+  });
+});
+
+/**
+ * BACKLOG-4007 PR-3 — billing start (trial_end decided when the row runs) and customer details.
+ * Deal shape from broker_complete_billing_setup (supabase/migrations/20261020100000…:861-870):
+ * status 'active', version + 1, billing_starts_on = greatest(Pacific business date, start_date).
+ */
+describe('sync_org_subscription — 4007 billing start and customer details', () => {
+  const at = (iso: string) => jest.spyOn(Date, 'now').mockReturnValue(Date.parse(iso));
+  const noon = (d: string) => Date.parse(`${d}T12:00:00Z`) / 1000;
+  afterEach(() => jest.restoreAllMocks());
+
+  it('C-P1a: a future billing start -> trial_end = that date 12:00 UTC; the key carries it', async () => {
+    at('2026-10-20T18:00:00Z');
+    deal().billing_starts_on = '2026-10-30';
+    await handleSyncOrgSubscriptionRow(row(1), ctx());
+    const [[params, opts]] = stripe.callsTo('subscriptions.create');
+    expect(params.trial_end).toBe(noon('2026-10-30'));
+    expect(opts).toEqual({ idempotencyKey: `brokerage:${ORG}:test:subscription:v1:${noon('2026-10-30')}` });
+  });
+
+  it('C-P1b: billing starts today (Pacific), completed at 19:00 PT -> no trial_end, bill now', async () => {
+    at('2026-10-21T02:00:00Z'); // 2026-10-20 19:00 America/Los_Angeles
+    deal().billing_starts_on = '2026-10-20';
+    await handleSyncOrgSubscriptionRow(row(1), ctx());
+    const [[params, opts]] = stripe.callsTo('subscriptions.create');
+    expect(params).not.toHaveProperty('trial_end');
+    expect(opts.idempotencyKey).toBe(`brokerage:${ORG}:test:subscription:v1:none`);
+  });
+
+  it('C-P1c: a late retry (drain ran 30 min before the start noon) -> no trial_end', async () => {
+    at('2026-10-30T11:30:00Z');
+    deal().billing_starts_on = '2026-10-30';
+    await handleSyncOrgSubscriptionRow(row(1), ctx());
+    expect(stripe.callsTo('subscriptions.create')[0][0]).not.toHaveProperty('trial_end');
+  });
+
+  it('C-P1d: boundary sweep of the 1 h lead', async () => {
+    const { trialEndFor, TRIAL_END_MIN_LEAD_SECONDS } = await import('@/lib/billing/brokerageSync');
+    const n = noon('2026-10-30');
+    for (const lead of [-86400, -1, 0, 1, TRIAL_END_MIN_LEAD_SECONDS - 1]) {
+      expect(trialEndFor('2026-10-30', (n - lead) * 1000)).toBeNull();
+    }
+    for (const lead of [TRIAL_END_MIN_LEAD_SECONDS, TRIAL_END_MIN_LEAD_SECONDS + 1, 86400 * 30]) {
+      expect(trialEndFor('2026-10-30', (n - lead) * 1000)).toBe(n);
+    }
+    expect(trialEndFor(null, 0)).toBeNull();
+    expect(trialEndFor('not-a-date', 0)).toBeNull();
+  });
+
+  it('C-P1e: no billing_starts_on (deals saved before 4007, e.g. Alpha/Beta) -> no trial_end', async () => {
+    at('2026-10-20T18:00:00Z');
+    await handleSyncOrgSubscriptionRow(row(1), ctx());
+    expect(stripe.callsTo('subscriptions.create')[0][0]).not.toHaveProperty('trial_end');
+  });
+
+  it('C-P1f: one row run on both sides of the cutoff -> two different keys, still one subscription (adopt)', async () => {
+    deal().billing_starts_on = '2026-10-30';
+    const orig = fake.service.rpc;
+    let applies = 0;
+    fake.service.rpc = async (fn, args) => {
+      if (fn === '_billing_apply_org_subscription' && ++applies === 2) {
+        return { data: null, error: { code: 'PGRST000', message: 'fixture: crash before persist' } };
+      }
+      return orig(fn, args);
+    };
+    at('2026-10-29T12:00:00Z');
+    await expect(handleSyncOrgSubscriptionRow(row(1), ctx())).rejects.toThrow('_billing_apply_org_subscription failed');
+    at('2026-10-30T11:30:00Z');
+    await handleSyncOrgSubscriptionRow(row(1, { attempts: 2 }), ctx());
+    expect(stripe.callsTo('subscriptions.create')).toHaveLength(1);
+    expect(world.subs.size).toBe(1);
+  });
+
+  it('C-C1: company, phone and PO go on the Stripe customer; a second run changes nothing', async () => {
+    deal().billing_contact_id = 'CONTACT-1';
+    fake.db.rows('org_contacts').push({ id: 'CONTACT-1', organization_id: ORG, phone: '+12065550100' });
+    fake.db.rows('org_billing_profile').push({
+      organization_id: ORG,
+      legal_name: 'Brokerage 3853 S LLC',
+      address_line1: '1 Main St',
+      address_line2: null,
+      city: 'Seattle',
+      region: 'WA',
+      postal_code: '98101',
+      country: 'US',
+      po_number: 'PO-77',
+    });
+    await handleSyncOrgSubscriptionRow(row(1), ctx());
+    expect(stripe.callsTo('customers.update')[0][1]).toEqual({
+      email: 'billing-3853@example.test',
+      name: 'Brokerage 3853 S LLC',
+      phone: '+12065550100',
+      address: { line1: '1 Main St', line2: '', city: 'Seattle', state: 'WA', postal_code: '98101', country: 'US' },
+      invoice_settings: { custom_fields: [{ name: 'PO number', value: 'PO-77' }] },
+    });
+    const before = stripe.callsTo('customers.update').length;
+    await handleSyncOrgSubscriptionRow(row(1, { attempts: 2 }), ctx());
+    expect(stripe.callsTo('customers.update')).toHaveLength(before);
+  });
+
+  it('C-C2: PO removed -> the custom field is cleared; other custom fields are kept', async () => {
+    fake.db.rows('org_billing_profile').push({
+      organization_id: ORG, legal_name: 'B LLC', address_line1: '1 Main St', address_line2: null,
+      city: 'Seattle', region: 'WA', postal_code: '98101', country: 'US', po_number: null,
+    });
+    await handleSyncOrgSubscriptionRow(row(1), ctx());
+    const c = [...world.customers.values()][0];
+    c.invoice_settings = { custom_fields: [{ name: 'PO number', value: 'OLD' }, { name: 'Tax ID', value: 'T1' }] };
+    saveDeal({});
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    const last = stripe.callsTo('customers.update').at(-1)!;
+    expect(last[1]).toEqual({ invoice_settings: { custom_fields: [{ name: 'Tax ID', value: 'T1' }] } });
+  });
+
+  it('C-C3: no company details yet -> name falls back to the organization, PO untouched', async () => {
+    await handleSyncOrgSubscriptionRow(row(1), ctx());
+    expect(stripe.callsTo('customers.update')[0][1]).toEqual({ email: 'billing-3853@example.test', name: 'Brokerage 3853 S' });
   });
 });
