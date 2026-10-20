@@ -55,7 +55,7 @@ describe('BillingStep', () => {
       organizationId: ORG,
       expectedVersion: SETUP_VIEW_WAITING.version,
       acceptTerms: true,
-      contact: { who: 'me', phone: '2065550100' },
+      contact: { who: 'me', phone: '(206) 555-0100' },
       company: { legal_name: 'Realty LLC', city: 'Seattle', region: 'WA', postal_code: '98101', country: 'US' },
     });
     expect(JSON.stringify(arg)).not.toMatch(/price|seats|total/i);
