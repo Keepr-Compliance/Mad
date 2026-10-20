@@ -112,7 +112,13 @@ jest.mock("../../services/folderExportService", () => ({
 }));
 jest.mock("../../services/auditService", () => ({
   __esModule: true,
-  default: { log: jest.fn().mockResolvedValue(undefined) },
+  // BACKLOG-3339: completeExport writes its entry with recordInTransaction.
+  default: {
+    log: jest.fn().mockResolvedValue(undefined),
+    recordInTransaction: jest.fn(),
+    recordFailure: jest.fn(),
+  },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 jest.mock("../../services/submissionService", () => ({ __esModule: true, default: {} }));
 jest.mock("../../services/submissionSyncService", () => ({
