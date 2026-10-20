@@ -1,6 +1,6 @@
 BACKLOG-4007 PR-4 fix-up — SQL controls on keepr-test, 2026-10-20 (founder e8571c1f; SR F1, F3).
 Migration 20261020180000 amended; file md5 c5ba340976d6569a9a41721c76bf8623. Each run: compose.py --with-migration, one rolled-back call.
-After the re-apply: base on the applied DB 93/93; 0 organizations named P4007C% afterwards.
+After the re-apply: base on the applied DB 93/93 (94/94 with the last control); 0 organizations named P4007C% afterwards.
 PR-1 harness (../backlog-4007) base on top of this migration: 53/53.
 
 base: 93 pass / 0 fail (was 54; + 30 People matrix cells C_M_<caller>_<op>, C_M_* named checks, C_F3_*, C_C1_other_org_it_admin_refused; C_C1_it_admin_cannot_list removed, C_C1_it_admin_agent_refused now C_C1_agent_refused).
@@ -44,6 +44,9 @@ Original mutants re-run on the amended migration (fail, pass, mutation):
   grant_anon_access_check (1, 91, 'MUTATION APPLIED GRANT EXECUTE org_billing_contact_login TO ')
   disable_deletes_licensed (1, 91, 'MUTATION APPLIED public.org_billing_login_set(uuid,boolean) ')
 
-access_ignores_removed is now 0 red. The F3 fix deletes the old contact's billing-only login when the contact
-changes, so no RPC path leaves a removed billing row linked to an unassigned member any more. The removed_at
-term in org_billing_contact_login is kept as defence in depth; it is latent, not load-bearing.
+access_ignores_removed went to 0 red after F3 (the deletion removed the only path in the harness). A licensed
+login is kept on a contact change, and set_member_license 'unassign' (broker/admin/IT admin) can make it
+'unassigned' again while the removed contact row still links it. Control C_F3_unassigned_again_old_contact_no_billing
+was added for that path: base 94/94, access_ignores_removed 1 red (that control). So the removed_at term is
+load-bearing. Re-run on the 94-check harness: contact_change_keeps_login 2 red, it_admin_as_broker 10 red,
+login_set_any_kind 2 red; 0 P4007C organizations afterwards.

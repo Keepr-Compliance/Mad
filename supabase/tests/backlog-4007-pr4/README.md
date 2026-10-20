@@ -29,6 +29,6 @@ md5 must change, or the mode reports `MUTATION NOT APPLIED`.
   an `it_admin` kind; the billing contact and the billing-only login stay staff/broker/admin;
   `_org_billing_contact_set` is replaced (deletes the old contact's billing-only login on a change) and
   its pre-check accepts the PR-1 body or this file's. The rollback restores both PR-1 bodies.
-- base: 93 / 93, including the People matrix (6 callers x 5 operations, each cell rolled back).
-- 9 new SQL mutants, each applied and red; `access_ignores_removed` is now 0 red (latent after F3, see
-  the results file).
+- base: 94 / 94, including the People matrix (6 callers x 5 operations, each cell rolled back).
+- 9 new SQL mutants, each applied and red. `access_ignores_removed` reds through the new
+  C_F3_unassigned_again_old_contact_no_billing (a kept, licensed login un-licensed later).

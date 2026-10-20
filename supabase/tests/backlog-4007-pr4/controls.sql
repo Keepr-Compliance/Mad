@@ -503,11 +503,18 @@ BEGIN
       AND (SELECT count(*) FROM public.organization_members m WHERE m.organization_id = o1
             AND m.provisioning_metadata ->> 'billing_only' = 'true') = 1 THEN 'PASS' ELSE 'FAIL ' || s || ' | ' || s2 END);
     -- a licensed member linked from the old contact is kept on a change (not billing-only any more)
-    UPDATE public.organization_members SET license_status = 'active' WHERE organization_id = o1 AND lower(invited_email) = payer;
-    SELECT m.id INTO v_mem FROM public.organization_members m WHERE m.organization_id = o1 AND lower(m.invited_email) = payer;
+    SELECT m.id, m.invitation_token INTO v_mem, v_tok FROM public.organization_members m WHERE m.organization_id = o1 AND lower(m.invited_email) = payer;
+    s := pg_temp.call_as(u_bo, format('SELECT public.accept_invitation(%L)', v_tok));
+    UPDATE public.organization_members SET license_status = 'active' WHERE id = v_mem;
     s := pg_temp.call_as(u_b, format(qs, o1, '{"role":"billing","name":"P4007C New Payer","email":"p4007c-newpayer@example.test","phone":"202-555-0127"}'));
     r := r || jsonb_build_object('C_F3_licensed_member_kept_on_change', CASE WHEN pg_temp.j(s)->>'success' = 'true'
-      AND EXISTS (SELECT 1 FROM public.organization_members WHERE id = v_mem) THEN 'PASS' ELSE 'FAIL ' || s END);
+      AND EXISTS (SELECT 1 FROM public.organization_members WHERE id = v_mem AND user_id = u_bo) THEN 'PASS' ELSE 'FAIL ' || s END);
+    -- that member's license taken away later (set_member_license 'unassign', the real path): the
+    -- removed contact row still links it, and Billing stays closed (the removed_at term)
+    s := pg_temp.call_as(u_b, format($q$SELECT public.set_member_license(%L::uuid, 'unassign')$q$, v_mem));
+    r := r || jsonb_build_object('C_F3_unassigned_again_old_contact_no_billing', CASE WHEN pg_temp.j(s)->>'success' = 'true'
+      AND (SELECT license_status FROM public.organization_members WHERE id = v_mem) = 'unassigned'
+      AND pg_temp.call_as(u_bo, format(qa, o1)) = 'false' THEN 'PASS' ELSE 'FAIL ' || s || ' ' || pg_temp.call_as(u_bo, format(qa, o1)) END);
 
     -- ===== gates: draft, suspended, duplicate =====
     s := pg_temp.call_as(u_b4, format('SELECT public.org_billing_login_set(%L::uuid, true)', o4));
