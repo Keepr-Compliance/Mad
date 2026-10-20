@@ -16,6 +16,8 @@ const mockInsert = jest.fn();
 const mockCaptureMessage = jest.fn();
 const mockCaptureException = jest.fn();
 
+import { inspect } from 'util';
+
 jest.mock('@sentry/nextjs', () => ({
   addBreadcrumb: jest.fn(),
   captureMessage: (...args: unknown[]) => mockCaptureMessage(...args),
@@ -69,6 +71,9 @@ afterAll(() => {
   process.env = ORIGINAL_ENV;
 });
 
+// util.inspect renders an Error's message and stack; JSON.stringify renders it as {}.
+const dump = (calls: unknown): string => inspect(calls, { depth: 10, breakLength: Infinity });
+
 const send = () =>
   sendEmail({ to: RECIPIENT, subject: 'Your Keepr receipt', html: '<p>x</p>', text: 'x', emailType: 'receipt' });
 
@@ -95,8 +100,8 @@ describe('logEmailDelivery reports a refused insert (BACKLOG-4001)', () => {
 
     await send();
 
-    const sentry = JSON.stringify([mockCaptureMessage.mock.calls, mockCaptureException.mock.calls]);
-    const consoleOut = JSON.stringify((console.error as jest.Mock).mock.calls);
+    const sentry = dump([mockCaptureMessage.mock.calls, mockCaptureException.mock.calls]);
+    const consoleOut = dump((console.error as jest.Mock).mock.calls);
     for (const out of [sentry, consoleOut]) {
       expect(out).not.toContain(RECIPIENT);
       expect(out).not.toContain('Failing row');
@@ -126,7 +131,7 @@ describe('logEmailDelivery reports a refused insert (BACKLOG-4001)', () => {
       level: 'error',
       tags: { email_type: 'receipt', email_log_status: 'sent' },
     });
-    expect(JSON.stringify(mockCaptureMessage.mock.calls)).not.toContain(RECIPIENT);
-    expect(JSON.stringify((console.error as jest.Mock).mock.calls)).not.toContain(RECIPIENT);
+    expect(dump(mockCaptureMessage.mock.calls)).not.toContain(RECIPIENT);
+    expect(dump((console.error as jest.Mock).mock.calls)).not.toContain(RECIPIENT);
   });
 });
