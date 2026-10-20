@@ -50,6 +50,11 @@ describe('tables and notices', () => {
     expect(out).toContain('No organization');
   });
 
+  it('sorts users by Exports, most first, by default', () => {
+    const order = [...html().matchAll(/data-user-row="([^"]+)"/g)].map((m) => m[1]);
+    expect(order).toEqual(['user-1', 'user-2', 'user-3', 'user-4']);
+  });
+
   it('a failed lookup says Unknown organization and never No organization', () => {
     const out = html(EXPORT_ROWS, { users: [], memberships: [], orgs: [], failed: true });
     expect(out).toContain('Unknown organization');

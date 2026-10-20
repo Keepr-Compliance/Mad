@@ -147,6 +147,16 @@ describe('saved views', () => {
     expect(tile(container, 'exports')).toBe(11);
   });
 
+  it('a card keeps its own filters when the page is filtered by hand', async () => {
+    const api = fakeApi([uniqueFolder]);
+    const { container } = mount(api);
+    await waitFor(() => expect(container.querySelector('[data-card-value="v-unique-folder"]')).not.toBeNull());
+    pick('User', 'Agent One');
+    expect(tile(container, 'exports')).toBe(5);
+    // Folder unique over the whole period is user-1/D1 and user-2/D3; the page filter must not narrow it.
+    expect(container.querySelector('[data-card-value="v-unique-folder"]')?.textContent).toBe('2');
+  });
+
   it('saving without touching Column saves count of Exports with only the four filter keys', async () => {
     const api = fakeApi([]);
     mount(api);
