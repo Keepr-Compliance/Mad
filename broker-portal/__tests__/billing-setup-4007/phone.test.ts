@@ -18,6 +18,8 @@ const DB: Array<[string, string | null]> = [
   ['0551234567', null], // area code starts 0
   ['1551234567', null], // 10 digits starting 1
   ['555abc4567', null], // letters
+  ['555123abcd4567', null], // letters inside an otherwise valid 10 digits
+  ['555123456a', null], // letter after 9 digits
   ['+1 (555) 123-4567', '+15551234567'], // pasted
   ['+15551234567', '+15551234567'],
   ['+4420712345', '+4420712345'], // 10 digits intl
