@@ -81,4 +81,24 @@ describe('BillingStep', () => {
     expect(mockAsk).toHaveBeenCalledWith(ORG);
     expect(screen.getByRole('button', { name: /confirm and finish/i })).toBeTruthy();
   });
+
+  it('a new order version clears the Terms box and disables Confirm; the price-changed message stays', async () => {
+    mockComplete.mockResolvedValue({ success: false, code: 'version_conflict', error: 'Your Keepr account manager changed this order.', reload: true });
+    const { rerender } = render(<BillingStep organizationId={ORG} view={SETUP_VIEW_WAITING} />);
+    fill();
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: /confirm and finish/i }));
+    await screen.findByText('Your Keepr account manager changed this order.');
+    // router.refresh() re-renders the same component with the new order
+    rerender(
+      <BillingStep
+        organizationId={ORG}
+        view={{ ...SETUP_VIEW_WAITING, version: 2, unit_price_cents: 3999, monthly_total_cents: 19995 }}
+      />
+    );
+    expect(screen.getByText('$39.99 / month')).toBeTruthy();
+    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByRole('button', { name: /confirm and finish/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Your Keepr account manager changed this order.')).toBeTruthy();
+  });
 });

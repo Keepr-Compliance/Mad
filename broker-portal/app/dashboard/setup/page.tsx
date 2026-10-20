@@ -15,7 +15,7 @@
 import { notFound, redirect } from 'next/navigation';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
-import { readBillingSetup, setupRoleOf } from '@/lib/billing/setupState';
+import { readBillingSetup, setupGuideApplies, setupRoleOf } from '@/lib/billing/setupState';
 import { setupStepFor } from '@/lib/billing/setupSteps';
 import { NothingToSetUp, SetupGuide } from '@/components/setup/SetupGuide';
 
@@ -29,7 +29,7 @@ export default async function SetupGuideRoute({ searchParams }: { searchParams?:
   if (!who) redirect('/dashboard');
 
   const view = await readBillingSetup(portal.supabase, who.organizationId);
-  if (!view) return <NothingToSetUp />;
+  if (!view || !setupGuideApplies(view)) return <NothingToSetUp />;
 
   const { data: org } = await portal.supabase
     .from('organizations')

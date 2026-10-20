@@ -49,6 +49,13 @@ export function BillingStep({ organizationId, view }: BillingStepProps) {
   const [other, setOther] = useState({ name: '', email: '' });
   const [phone, setPhone] = useState(view.contact?.phone ?? '');
   const [agreed, setAgreed] = useState(false);
+  // The order changed (version_conflict -> router.refresh()): consent given to the old order does
+  // not carry over. The refusal message stays visible.
+  const [seenVersion, setSeenVersion] = useState(view.version);
+  if (seenVersion !== view.version) {
+    setSeenVersion(view.version);
+    setAgreed(false);
+  }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [asked, setAsked] = useState<'idle' | 'sent' | 'failed'>('idle');

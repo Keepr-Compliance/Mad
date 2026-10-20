@@ -68,6 +68,15 @@ export async function readBillingSetup(
   }
 }
 
+/**
+ * Whether the setup guide has anything to show for this deal: it is waiting for setup, or it is
+ * active with a billing start date. Canceled, suspended, canceling and dateless deals show
+ * "nothing to set up".
+ */
+export function setupGuideApplies(view: Pick<BillingSetupView, 'state' | 'billing_starts_on'>): boolean {
+  return view.state === 'waiting_for_setup' || (view.state === 'active' && !!view.billing_starts_on);
+}
+
 /** True only when the deal is known to be waiting for this broker/admin. Fails closed to false. */
 export async function billingSetupPending(
   supabase: Pick<SupabaseClient, 'rpc'>,
