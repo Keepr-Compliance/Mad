@@ -81,11 +81,16 @@ describe('a pinned card with a non-count metric', () => {
 });
 
 describe('saving without touching Column or Function', () => {
-  it('saves count of runs', async () => {
+  it('shows the iPhone filter sentence and saves count of runs', async () => {
     const api = fakeApi([]);
     mount(api);
     fireEvent.click(screen.getByRole('button', { name: /^Views/ }));
     fireEvent.click(await screen.findByRole('button', { name: /Save current view as a card/ }));
+    expect(
+      screen.getByText(
+        'Saves the Type, Outcome, Platform, search and Stalled filters you have now — not the period. The card follows whichever period is selected.'
+      )
+    ).toBeTruthy();
     fireEvent.change(screen.getByLabelText('View name'), { target: { value: 'Everything' } });
     fireEvent.click(screen.getByRole('button', { name: /Save and pin/ }));
     await waitFor(() => expect(api.save).toHaveBeenCalledTimes(1));
