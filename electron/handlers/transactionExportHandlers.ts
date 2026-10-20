@@ -405,7 +405,6 @@ export function registerTransactionExportHandlers(
       await completeExport({
         transactionId: validatedTransactionId,
         userId: details.user_id,
-        exportCount: details.export_count,
         propertyAddress: details.property_address,
         recordedFormat: sanitizedOptions.exportFormat || "pdf",
         auditFormat: sanitizedOptions.exportFormat || "pdf",
@@ -578,7 +577,6 @@ export function registerTransactionExportHandlers(
       await completeExport({
         transactionId: validatedTransactionId,
         userId: details.user_id,
-        exportCount: details.export_count,
         propertyAddress: details.property_address,
         auditFormat: "folder",
         hiddenTextCount: folderPlan.hiddenTextCount,

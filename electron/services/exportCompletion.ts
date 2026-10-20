@@ -23,8 +23,6 @@ type ExportMode = Parameters<typeof emitExportCompleted>[0]["mode"];
 export interface ExportCompletionInput {
   transactionId: string;
   userId: string;
-  /** The count read before the export ran; the recorded count is this + 1. */
-  exportCount: number | null | undefined;
   propertyAddress: string | null | undefined;
   /** `export_format` column value. Undefined leaves the column as it is. */
   recordedFormat?: string;
@@ -42,7 +40,6 @@ export async function completeExport(input: ExportCompletionInput): Promise<void
   databaseService.recordExportCompletion(input.transactionId, {
     ...(input.recordedFormat !== undefined ? { exportFormat: input.recordedFormat } : {}),
     exportedAt,
-    exportCount: (input.exportCount || 0) + 1,
     firstExportedAt: exportedAt,
   });
 

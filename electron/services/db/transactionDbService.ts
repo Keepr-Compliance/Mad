@@ -1256,8 +1256,6 @@ export interface ExportCompletionParams {
   exportFormat?: string | null;
   /** ISO timestamp -> `last_exported_on`. */
   exportedAt: string;
-  /** Caller-computed, unchanged from the pre-BACKLOG-2549 handlers. */
-  exportCount: number;
   /** ISO timestamp -> `first_exported_at`, applied only when it is still NULL. */
   firstExportedAt: string;
 }
@@ -1292,12 +1290,8 @@ export function recordExportCompletion(
   transactionId: string,
   params: ExportCompletionParams,
 ): void {
-  const columns: TransactionColumn[] = [
-    "export_status",
-    "last_exported_on",
-    "export_count",
-  ];
-  const values: unknown[] = ["exported", params.exportedAt, params.exportCount];
+  const columns: TransactionColumn[] = ["export_status", "last_exported_on"];
+  const values: unknown[] = ["exported", params.exportedAt];
 
   if (params.exportFormat !== undefined && params.exportFormat !== null) {
     columns.push("export_format");
@@ -1306,7 +1300,12 @@ export function recordExportCompletion(
 
   values.push(params.firstExportedAt, transactionId);
 
+  // BACKLOG-3236: the count is incremented HERE, in SQL, never bound from a
+  // value the caller read earlier. Two exports of one deal used to read the
+  // same count before their slow export ran, and both wrote count + 1.
   const statement = sql`UPDATE transactions SET ${assignmentList(columns)}, ${columnList([
+    "export_count",
+  ])} = COALESCE(${columnList(["export_count"])}, 0) + 1, ${columnList([
     "first_exported_at",
   ])} = COALESCE(${columnList(["first_exported_at"])}, ?) WHERE id = ?`;
   const result = dbRun(statement, values);
