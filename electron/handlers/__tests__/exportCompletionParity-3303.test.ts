@@ -93,7 +93,14 @@ jest.mock("../../services/folderExportService", () => ({
 }));
 jest.mock("../../services/auditService", () => ({
   __esModule: true,
-  default: { log: jest.fn().mockResolvedValue(undefined) },
+  // BACKLOG-3339: completeExport writes its entry with recordInTransaction,
+  // and tells an audit failure apart by AuditNotRecordedError.
+  default: {
+    log: jest.fn().mockResolvedValue(undefined),
+    recordInTransaction: jest.fn(),
+    recordFailure: jest.fn(),
+  },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 jest.mock("../../services/submissionService", () => ({ __esModule: true, default: {} }));
 jest.mock("../../services/submissionSyncService", () => ({
@@ -248,7 +255,8 @@ async function capture(channel: string, frozen: boolean): Promise<Capture> {
   jest.clearAllMocks();
   const res = await invoke(channel, cfg.options);
   const r = row();
-  const audits = (auditService.log as jest.Mock).mock.calls
+  // BACKLOG-3339: the entry is written in the export's transaction.
+  const audits = (auditService.recordInTransaction as jest.Mock).mock.calls
     .map((c) => c[0] as { action: string; metadata: { format: unknown; hiddenTextCount: unknown } })
     .filter((a) => a.action === "DATA_EXPORT");
   return {

@@ -62,17 +62,17 @@ const SCAN_ROOT = path.join(REPO_ROOT, "electron");
 const AUDIT_SERVICE_FILE = "electron/services/auditService.ts";
 
 /**
- * Audit sites written with `auditService.log` today: 37 (BACKLOG-3339 plan,
+ * Audit sites written with `auditService.log` today: 38 (BACKLOG-3339 plan,
  * pm_comments 7e81dd50, re-counted by this walk; 39 until the unused
- * `transactions:create` and `contacts:delete` channels were removed). `log` calls plus
+ * `transactions:create` and `contacts:delete` channels were removed, then 37;
+ * 38 since Settings "Export My Data" writes an entry). `log` calls plus
  * `recordInTransaction` calls must add up to this. A conversion moves a site
  * from one side to the other; a NEW audited site changes the total and must
  * update this number on purpose.
  */
-const AUDITED_SITES_TOTAL = 37;
+const AUDITED_SITES_TOTAL = 38;
 
 type Reason = string;
-const R_EXPORT = "BACKLOG-3339 export slice; waits on the founder's export ruling";
 const R_SLICE2 = "BACKLOG-3339 slice 2 converts (deal detail toggles); seam check pending";
 const R_SLICE3 = "BACKLOG-3339 slice 3 converts (contacts, settings)";
 const R_REMOTE =
@@ -86,7 +86,6 @@ const R_UNREACHABLE = "no UI caller; waits on the founder's wire/delete ruling (
 const ALLOWLIST: Record<string, { count: number; reason: Reason }> = {
   // A — deal / compliance
   "electron/handlers/transactionCrudHandlers.ts::transactions:restore-contact::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE2 },
-  "electron/services/exportCompletion.ts::completeExport::DATA_EXPORT": { count: 1, reason: R_EXPORT },
   "electron/handlers/hiddenTextHandlers.ts::transactions:hide-text-from-export::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE2 },
   "electron/handlers/hiddenTextHandlers.ts::transactions:unhide-text-from-export::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE2 },
   "electron/handlers/checklistHandlers.ts::auditChecklistAct::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE2 },

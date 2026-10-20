@@ -180,6 +180,8 @@ export interface WindowApiPrivacy {
     success: boolean;
     filePath?: string;
     error?: string;
+    /** BACKLOG-3339: the file at `filePath` was saved but the export was not recorded. */
+    notRecorded?: boolean;
   }>;
   /** BACKLOG-3801: read the "Send crash reports" switch */
   getCrashReporting?: () => Promise<CrashReportingResult>;
