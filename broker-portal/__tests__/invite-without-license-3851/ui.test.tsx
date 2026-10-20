@@ -57,7 +57,7 @@ import { SupportWidget } from '@/app/dashboard/components/SupportWidget';
 import UserTableRow from '@/components/users/UserTableRow';
 import UserCard from '@/components/users/UserCard';
 import InviteAcceptPage from '@/app/invite/[token]/page';
-import { openSupportRequest, moreLicensesSupportPreset } from '@/lib/support/openSupportRequest';
+import { openSupportRequest, moreLicensesSupportPreset, orgSuspendedSupportPreset } from '@/lib/support/openSupportRequest';
 import { INVITED_NO_LICENSE_LABEL, memberStatusLabel } from '@/lib/types/users';
 import type { OrganizationMember } from '@/lib/types/users';
 
@@ -122,6 +122,15 @@ describe('C10: SupportWidget preset', () => {
     expect((screen.getByLabelText('Subcategory') as HTMLSelectElement).value).toBe('sub-seat');
     expect(screen.getByDisplayValue('We need more licenses for Fixture Org')).toBeInTheDocument();
     expect(screen.getByDisplayValue('More licenses needed')).toBeInTheDocument();
+  });
+
+  it('BACKLOG-3853: the suspended-brokerage preset sets Priority to Urgent', async () => {
+    render(<SupportWidget />);
+    await act(async () => { openSupportRequest(orgSuspendedSupportPreset('Fixture Org')); });
+    await waitFor(() => expect(category().value).toBe('cat-billing'));
+    expect((screen.getByLabelText('Subcategory') as HTMLSelectElement).value).toBe('sub-invoice');
+    expect((screen.getByLabelText('Priority') as HTMLSelectElement).value).toBe('urgent');
+    expect(screen.getByDisplayValue('Our brokerage account (Fixture Org) is suspended. Please help us get it reinstated.')).toBeInTheDocument();
   });
 
   it('categories that resolve AFTER the open still get the preset', async () => {

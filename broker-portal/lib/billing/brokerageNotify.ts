@@ -1,11 +1,12 @@
 /**
  * Brokerage billing emails — BACKLOG-3853 PR-2. Two billing_outbox kinds:
  *
- *  - notify_org_suspended: "account suspended" to the deal's billing contact. Enqueued by the
+ *  - notify_org_suspended: "account suspended" to the deal's billing contact AND every claimed,
+ *    non-deactivated Broker/Admin of the brokerage (one send each, see suspensionRecipients). Enqueued by the
  *    org_deals trigger when a deal becomes suspended (payload carries suspended_at_epoch).
  *    At run time the deal must still be suspended with that same suspended_at; a reinstate,
  *    or a later re-suspension (which has its own row), makes this row do nothing (converge).
- *    No billing contact -> NonRetryable 'no_recipient' (parked + outbox alert).
+ *    No recipient at all -> NonRetryable 'no_recipient' (parked + outbox alert).
  *  - notify_account_manager: an internal alert to the deal's account manager (overdue,
  *    payment failed, refund, dispute). Enqueued by the brokerage webhook (./brokerage.ts).
  *    No account manager, or one without a sign-in email -> alert 'brokerage_no_account_manager'
@@ -71,6 +72,41 @@ async function orgName(service: ServiceClient, org: string): Promise<string> {
   const { data, error } = await service.from('organizations').select('name').eq('id', org).maybeSingle();
   if (error) throw new Error(`organizations read failed: ${error.code ?? 'unknown'}`);
   return ((data as { name?: string | null } | null)?.name ?? '').trim() || 'your brokerage';
+}
+
+function normalEmail(email: string | null | undefined): string | null {
+  const e = email?.trim().toLowerCase();
+  return e ? e : null;
+}
+
+/**
+ * Who gets the "account suspended" email: the deal's billing contact first, then every claimed,
+ * non-deactivated Broker or Admin of the brokerage (not IT admins, not agents), de-duplicated
+ * case-insensitively. "Claimed" = organization_members.user_id is set; "deactivated" =
+ * license_status 'suspended' (lib/actions/deactivateUser.ts). Member addresses are the sign-in
+ * emails (auth), as the account-manager email does.
+ */
+async function suspensionRecipients(service: ServiceClient, org: string, billingContact: string | null): Promise<string[]> {
+  const out: string[] = [];
+  const add = (email: string | null | undefined) => {
+    const e = normalEmail(email);
+    if (e && !out.includes(e)) out.push(e);
+  };
+  add(billingContact);
+  const { data, error } = await service
+    .from('organization_members')
+    .select('user_id, role, license_status')
+    .eq('organization_id', org)
+    .in('role', ['broker', 'admin'])
+    .not('user_id', 'is', null)
+    .not('license_status', 'eq', 'suspended');
+  if (error) throw new Error(`organization_members read failed: ${error.code ?? 'unknown'}`);
+  for (const m of (data as Array<{ user_id: string }> | null) ?? []) {
+    const { data: u, error: uErr } = await service.auth.admin.getUserById(m.user_id);
+    if (uErr) throw new Error('member email lookup failed');
+    add(u?.user?.email);
+  }
+  return out;
 }
 
 async function alreadySent(service: ServiceClient, kind: string, outboxKey: string): Promise<boolean> {
@@ -166,25 +202,44 @@ export const handleNotifyOrgSuspendedRow: OutboxHandler = async (row, ctx) => {
     console.info(`[billing/brokerage-notify] ${row.id}: a newer suspension has its own row; nothing to send`);
     return;
   }
-  if (await alreadySent(ctx.service, 'account_suspended', row.dedupe_key)) return;
-  const recipientEmail = deal.billing_contact_email?.trim();
-  if (!recipientEmail) throw new NonRetryableOutboxError('no_recipient');
+  const recipients = await suspensionRecipients(ctx.service, org, deal.billing_contact_email);
+  if (recipients.length === 0) throw new NonRetryableOutboxError('no_recipient');
+  // One send per recipient, each with its own idempotency key. The billing contact keeps the
+  // row's own key (a send made before members were added still counts); the others append the
+  // address, so a retry sends only to those not yet sent to.
+  const pending: Array<{ email: string; key: string }> = [];
+  for (const [i, email] of recipients.entries()) {
+    const key = i === 0 && recipients[0] === normalEmail(deal.billing_contact_email) ? row.dedupe_key : `${row.dedupe_key}:${email}`;
+    if (!(await alreadySent(ctx.service, 'account_suspended', key))) pending.push({ email, key });
+  }
+  if (pending.length === 0) return;
 
   const reason = deal.suspended_reason === 'non_payment' ? 'non_payment' : 'other';
   // Founder 1e164f56 Q1: the Pay button is for a Non-payment suspension only; an Other
   // suspension makes no Stripe call.
   const payment: AccountSuspendedPayment = reason === 'non_payment' ? await suspendedPayment(row, ctx, org) : { kind: 'none' };
+  const brokerageName = await orgName(ctx.service, org);
 
-  outcome(
-    await sendAccountSuspendedEmail({
-      recipientEmail,
-      brokerageName: await orgName(ctx.service, org),
-      reason,
-      payment,
-      outboxKey: row.dedupe_key,
-      organizationId: org,
-    })
-  );
+  // Attempt every recipient; a failure for one never stops the rest. The first failure is
+  // rethrown afterwards so the row retries (only the unsent recipients send again).
+  let failure: unknown = null;
+  for (const { email, key } of pending) {
+    try {
+      outcome(
+        await sendAccountSuspendedEmail({
+          recipientEmail: email,
+          brokerageName,
+          reason,
+          payment,
+          outboxKey: key,
+          organizationId: org,
+        })
+      );
+    } catch (err) {
+      failure ??= err;
+    }
+  }
+  if (failure) throw failure;
 };
 
 export const handleNotifyAccountManagerRow: OutboxHandler = async (row, ctx) => {

@@ -39,6 +39,8 @@ import { formatPrice, getAgentPlanView, getAgentPrices, type AgentPrice } from '
 import { getPersonalBillingView } from '@/lib/billing/personalBilling';
 import { createClient } from '@/lib/supabase/server';
 import { suspendedForDispute } from '@/lib/billing/suspensionCause';
+import { oldestOverdueInvoiceUrl } from '@/lib/billing/orgPayLink';
+import { ORG_PAYER_ROLES } from '@/components/billing/orgPayerRoles';
 import type { OrgSuspensionReason } from '@/components/billing/OrgSuspendedBanner';
 
 const SITUATION_3844 = {
@@ -90,6 +92,16 @@ async function orgSuspensionReason(organizationId: string): Promise<OrgSuspensio
   }
 }
 
+/** BACKLOG-3853: the brokerage's name for the prefilled support request; null when the read fails. */
+async function orgName(organizationId: string): Promise<string | null> {
+  try {
+    const { data } = await createServiceClient().from('organizations').select('name').eq('id', organizationId).maybeSingle();
+    return (data as { name?: string | null } | null)?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export default async function BillingRoute({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   if (!billingEnabled()) notFound();
   if (await getImpersonationSession()) notFound();
@@ -117,11 +129,22 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
       });
       if (!orgCaps) notFound();
       const reason = await orgSuspensionReason(portal.access.organizationId);
+      const organizationName = await orgName(portal.access.organizationId);
+      // "Pay overdue invoice": non-payment only, for the roles that can pay; Stripe trouble hides it.
+      const stripe = reason === 'non_payment' && ORG_PAYER_ROLES.includes(portal.access.role) ? stripeOrNull() : null;
+      const payUrl = stripe
+        ? await oldestOverdueInvoiceUrl({
+            service: createServiceClient(),
+            stripe,
+            mode: currentStripeMode(),
+            organizationId: portal.access.organizationId,
+          })
+        : null;
       return (
         <BillingPage
           caps={orgCaps}
           orgBillingSetUp={SITUATION_3844.orgBillingSetUp}
-          orgSuspension={{ reason, role: portal.access.role }}
+          orgSuspension={{ reason, role: portal.access.role, organizationName, payUrl }}
         />
       );
     }

@@ -286,3 +286,108 @@ describe('C-E2 (W5) and RC6: a Stripe failure retries, but never ends with no em
     expect(mockSend).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3853: the email goes to the billing contact AND every claimed,
+// non-deactivated Broker/Admin (not it_admin, not agents), de-duplicated
+// case-insensitively against the contact, one idempotent send per recipient.
+// organization_members columns as in 20260122_b2b_broker_portal.sql:
+// user_id NULL until the invite is accepted; license_status 'suspended' = deactivated.
+// ---------------------------------------------------------------------------
+describe('C-R: recipients of the account-suspended email', () => {
+  const CONTACT = 'billing-3853@example.test';
+  const AUTH: Record<string, string> = {
+    'U-admin-1': 'Admin.One@Example.test',
+    'U-admin-2': 'admin.two@example.test',
+    'U-broker': 'broker@example.test',
+    'U-agent': 'agent@example.test',
+    'U-it': 'it@example.test',
+    'U-deactivated': 'deactivated-admin@example.test',
+    'U-same': 'BILLING-3853@example.test', // an admin whose sign-in email is the contact, in other case
+  };
+  const members = (): Array<Record<string, unknown>> => [
+    { organization_id: ORG, user_id: 'U-admin-1', role: 'admin', license_status: 'active' },
+    { organization_id: ORG, user_id: 'U-admin-2', role: 'admin', license_status: 'pending' },
+    { organization_id: ORG, user_id: 'U-broker', role: 'broker', license_status: 'active' },
+    { organization_id: ORG, user_id: 'U-agent', role: 'agent', license_status: 'active' },
+    { organization_id: ORG, user_id: 'U-it', role: 'it_admin', license_status: 'active' },
+    { organization_id: ORG, user_id: 'U-deactivated', role: 'admin', license_status: 'suspended' },
+    { organization_id: ORG, user_id: 'U-same', role: 'admin', license_status: 'active' },
+    { organization_id: ORG, user_id: null, role: 'admin', license_status: 'pending' }, // unclaimed invite
+    { organization_id: 'OTHER-ORG', user_id: 'U-other', role: 'admin', license_status: 'active' },
+  ];
+  function seedMembers(extraLog: Array<Record<string, unknown>> = []): void {
+    given('non_payment');
+    fake.db.rows('organization_members').push(...members());
+    fake.db.rows('email_delivery_log').push(...extraLog);
+    fake.service.auth.admin.getUserById.mockImplementation(async (id: string) => ({
+      data: { user: { id, email: AUTH[id] ?? null } },
+      error: null,
+    }));
+  }
+  const sentTo = (): string[] => mockSend.mock.calls.map((c) => (c[0] as AccountSuspendedParams).recipientEmail);
+
+  it('contact + 2 admins + broker; not the agent, it_admin, deactivated admin, unclaimed invite, another org; the contact-address admin is not sent twice', async () => {
+    seedMembers();
+    await handleNotifyOrgSuspendedRow(row(), ctx());
+    expect(sentTo()).toEqual([CONTACT, 'admin.one@example.test', 'admin.two@example.test', 'broker@example.test']);
+  });
+
+  it('same content per recipient: the Pay button for all (non-payment)', async () => {
+    seedMembers();
+    await handleNotifyOrgSuspendedRow(row(), ctx());
+    const payments = mockSend.mock.calls.map((c) => (c[0] as AccountSuspendedParams).payment);
+    expect(payments).toHaveLength(4);
+    for (const p of payments) expect(p).toEqual({ kind: 'invoice', url: `https://invoice.stripe.test/REDACTED/${OLDEST}`, overdueCount: 5 });
+    expect(stripe.invoices.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('each recipient has its own key; the contact keeps the row key', async () => {
+    seedMembers();
+    await handleNotifyOrgSuspendedRow(row(), ctx());
+    const keys = mockSend.mock.calls.map((c) => (c[0] as AccountSuspendedParams).outboxKey);
+    expect(keys).toEqual([
+      row().dedupe_key,
+      `${row().dedupe_key}:admin.one@example.test`,
+      `${row().dedupe_key}:admin.two@example.test`,
+      `${row().dedupe_key}:broker@example.test`,
+    ]);
+  });
+
+  it('a retry sends only to those not yet sent to (no duplicates)', async () => {
+    const k = row().dedupe_key;
+    seedMembers([
+      { status: 'sent', metadata: { kind: 'account_suspended', outboxKey: k } },
+      { status: 'sent', metadata: { kind: 'account_suspended', outboxKey: `${k}:admin.one@example.test` } },
+    ]);
+    await handleNotifyOrgSuspendedRow(row({ attempts: 2 }), ctx());
+    expect(sentTo()).toEqual(['admin.two@example.test', 'broker@example.test']);
+  });
+
+  it('everyone already sent to: nothing sent, no Stripe call', async () => {
+    const k = row().dedupe_key;
+    seedMembers(
+      [k, `${k}:admin.one@example.test`, `${k}:admin.two@example.test`, `${k}:broker@example.test`].map((key) => ({
+        status: 'sent',
+        metadata: { kind: 'account_suspended', outboxKey: key },
+      }))
+    );
+    await handleNotifyOrgSuspendedRow(row({ attempts: 2 }), ctx());
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(stripe.invoices.list).not.toHaveBeenCalled();
+  });
+
+  it('one failed send does not stop the others; the row then retries', async () => {
+    seedMembers();
+    mockSend.mockImplementationOnce(async () => ({ success: false, outcome: 'failed' }));
+    await expect(handleNotifyOrgSuspendedRow(row(), ctx())).rejects.toThrow('email send failed');
+    expect(sentTo()).toEqual([CONTACT, 'admin.one@example.test', 'admin.two@example.test', 'broker@example.test']);
+  });
+
+  it('no billing contact but a Broker/Admin: still sent', async () => {
+    seedMembers();
+    fake.db.rows('org_deals')[0].billing_contact_email = null;
+    await handleNotifyOrgSuspendedRow(row(), ctx());
+    expect(sentTo()).toEqual(['admin.one@example.test', 'admin.two@example.test', 'broker@example.test', 'billing-3853@example.test']);
+  });
+});
