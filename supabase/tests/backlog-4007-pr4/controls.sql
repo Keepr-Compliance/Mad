@@ -85,6 +85,32 @@ BEGIN
     END;
   END $b$$f$;
 
+  -- One matrix cell: run q as u, then roll its effects back. 'allowed' (any result that is not a
+  -- refusal), 'denied' (42501), or 'ERR ...' for anything else.
+  EXECUTE $f$CREATE FUNCTION pg_temp.cell(u uuid, q text) RETURNS text LANGUAGE plpgsql AS $b$
+  DECLARE v jsonb; d text;
+  BEGIN
+    BEGIN
+      PERFORM pg_temp.as_user(u);
+      EXECUTE 'SET LOCAL ROLE authenticated';
+      EXECUTE q INTO v;
+      EXECUTE 'RESET ROLE';
+      RAISE EXCEPTION 'CELL_DONE' USING DETAIL = coalesce(v::text, 'null');
+    EXCEPTION WHEN OTHERS THEN
+      EXECUTE 'RESET ROLE';
+      IF SQLERRM = 'CELL_DONE' THEN
+        GET STACKED DIAGNOSTICS d = PG_EXCEPTION_DETAIL;
+        IF d::jsonb ? 'success' AND d::jsonb ->> 'success' = 'false'
+           AND d::jsonb ->> 'error' NOT IN ('billing_login_exists', 'no_billing_login') THEN
+          RETURN 'ERR refusal ' || left(d, 60);
+        END IF;
+        RETURN 'allowed';
+      END IF;
+      IF SQLSTATE = '42501' THEN RETURN 'denied'; END IF;
+      RETURN 'ERR ' || SQLSTATE || ' ' || left(SQLERRM, 60);
+    END;
+  END $b$$f$;
+
   EXECUTE $f$CREATE FUNCTION pg_temp.apply_mode(m text) RETURNS text LANGUAGE plpgsql AS $b$
   DECLARE
     lc text := 'public._org_billing_login_create(uuid,uuid)';
@@ -135,7 +161,14 @@ BEGIN
       $q$IF v_status IS NULL OR v_status = 'draft' THEN$q$, 'IF v_status IS NULL THEN');
     -- caller check: a broker/admin of ANY brokerage may edit this one
     WHEN 'caller_any_org' THEN RETURN pg_temp.mut_fn(cl,
-      $q$WHERE m.organization_id = p_org AND m.user_id = auth.uid()$q$, $q$WHERE m.user_id = auth.uid()$q$);
+      $q$WHERE m.organization_id = p_org AND m.user_id = auth.uid()
+                    AND m.license_status = 'active' AND m.role IN ('broker', 'admin'))$q$, $q$WHERE m.user_id = auth.uid()
+                    AND m.license_status = 'active' AND m.role IN ('broker', 'admin'))$q$);
+    -- the same for the IT admin branch: an IT admin of ANY brokerage may edit this one's people
+    WHEN 'caller_any_org_it' THEN RETURN pg_temp.mut_fn(cl,
+      $q$WHERE m.organization_id = p_org AND m.user_id = auth.uid()
+                    AND m.license_status = 'active' AND m.role = 'it_admin')$q$, $q$WHERE m.user_id = auth.uid()
+                    AND m.license_status = 'active' AND m.role = 'it_admin')$q$);
     -- caller check: IT admin and agents may edit contacts (3855: billing details Broker/Admin only)
     WHEN 'caller_any_role' THEN RETURN pg_temp.mut_fn(cl,
       $q$AND m.license_status = 'active' AND m.role IN ('broker', 'admin')) THEN 'broker'$q$,
@@ -169,6 +202,30 @@ BEGIN
       EXECUTE 'CREATE POLICY p4007c_mut ON public.org_contacts FOR SELECT TO authenticated USING (true)';
       IF NOT has_table_privilege('authenticated', 'public.org_contacts', 'SELECT') THEN RAISE EXCEPTION 'MUTATION NOT APPLIED: grant missing'; END IF;
       RETURN 'MUTATION APPLIED GRANT SELECT ON org_contacts TO authenticated (+ open policy)';
+    -- BACKLOG-4007 PR-4 fix-up (founder e8571c1f). WRONG BUILD 6: an IT admin treated as a broker
+    -- (may set the billing contact and the billing-only login)
+    WHEN 'it_admin_as_broker' THEN RETURN pg_temp.mut_fn(cl,
+      $q$m.role IN ('broker', 'admin')) THEN 'broker'$q$, $q$m.role IN ('broker', 'admin', 'it_admin')) THEN 'broker'$q$);
+    -- a broker (role 'broker') refused People
+    WHEN 'broker_refused' THEN RETURN pg_temp.mut_fn(cl,
+      $q$m.role IN ('broker', 'admin')) THEN 'broker'$q$, $q$m.role IN ('admin')) THEN 'broker'$q$);
+    -- an agent admitted with the IT admin's rights
+    WHEN 'agent_admitted' THEN RETURN pg_temp.mut_fn(cl,
+      $q$m.role = 'it_admin') THEN 'it_admin'$q$, $q$m.role IN ('it_admin', 'agent')) THEN 'it_admin'$q$);
+    -- the billing branch of save does not check the caller kind
+    WHEN 'save_billing_any_kind' THEN RETURN pg_temp.mut_fn(sv,
+      $q$IF v_role = 'billing' AND v_caller NOT IN ('staff', 'broker') THEN$q$, $q$IF false THEN$q$);
+    -- the billing-only login on/off does not check the caller kind
+    WHEN 'login_set_any_kind' THEN RETURN pg_temp.mut_fn(ls,
+      $q$IF v_caller IS NULL OR v_caller NOT IN ('staff', 'broker') THEN$q$, $q$IF v_caller IS NULL THEN$q$);
+    -- an IT admin reads the billing contact's email
+    WHEN 'it_admin_sees_billing_email' THEN RETURN pg_temp.mut_fn('public.org_contacts_list(uuid)',
+      $q$'email', CASE WHEN c.role = 'billing' AND v_caller = 'it_admin' THEN NULL ELSE c.email END,$q$, $q$'email', c.email,$q$);
+    -- F3: a contact change leaves the old billing-only login behind
+    WHEN 'contact_change_keeps_login' THEN RETURN pg_temp.mut_fn('public._org_billing_contact_set(uuid,text,text,text,uuid)',
+      $q$           AND m.license_status = 'unassigned'
+           AND coalesce$q$, $q$           AND false
+           AND coalesce$q$);
     ELSE RAISE EXCEPTION 'unknown mode %', m;
     END CASE;
   END $b$$f$;
@@ -185,6 +242,8 @@ BEGIN
     u_ag uuid := gen_random_uuid(); u_un uuid := gen_random_uuid(); u_x uuid := gen_random_uuid();
     u_solo uuid := gen_random_uuid(); u_bo uuid := gen_random_uuid(); u_b3 uuid := gen_random_uuid();
     u_b4 uuid := gen_random_uuid(); u_b5 uuid := gen_random_uuid(); u_super uuid := gen_random_uuid();
+    u_br uuid := gen_random_uuid(); u_itx uuid := gen_random_uuid();  -- u_itx: IT admin of o2  -- role 'broker' in o1 (founder e8571c1f: People is open to brokers)
+    v_who record; v_op record; v_got text;
     v_team uuid; s text; s2 text; n int; n2 int; d record; v_mem uuid; v_tok text; v_cid uuid; v_seats int;
     payer text := 'p4007c-payer-' || left(gen_random_uuid()::text, 6) || '@example.test';
     payer3 text := 'p4007c-payer3-' || left(gen_random_uuid()::text, 6) || '@example.test';
@@ -201,13 +260,13 @@ BEGIN
     INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
     SELECT x, 'p4007c-' || left(x::text, 8) || '@example.test', 'authenticated', 'authenticated',
            '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now()
-      FROM unnest(ARRAY[u_sales, u_b, u_it, u_ag, u_un, u_x, u_solo, u_b3, u_b4, u_b5, u_super]) x;
+      FROM unnest(ARRAY[u_sales, u_b, u_it, u_ag, u_un, u_x, u_solo, u_b3, u_b4, u_b5, u_super, u_br, u_itx]) x;
     -- the payer signs up with the invited address
     INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
     VALUES (u_bo, payer, 'authenticated', 'authenticated', '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now());
     INSERT INTO public.users (id, email, oauth_provider, oauth_id, display_name)
     SELECT x, 'p4007c-' || left(x::text, 8) || '@example.test', 'email', x::text, 'P4007C ' || left(x::text, 4)
-      FROM unnest(ARRAY[u_sales, u_b, u_it, u_ag, u_un, u_x, u_solo, u_b3, u_b4, u_b5, u_super]) x
+      FROM unnest(ARRAY[u_sales, u_b, u_it, u_ag, u_un, u_x, u_solo, u_b3, u_b4, u_b5, u_super, u_br, u_itx]) x
     ON CONFLICT (id) DO NOTHING;
     INSERT INTO public.internal_roles (user_id, role_id)
     SELECT x.u, ar.id FROM (VALUES (u_sales, 'sales'), (u_super, 'super-admin')) x(u, slug) JOIN public.admin_roles ar ON ar.slug = x.slug;
@@ -216,8 +275,8 @@ BEGIN
     INSERT INTO public.organization_plans (organization_id, plan_id) SELECT x, v_team FROM unnest(ARRAY[o1, o2, o3, o4, o5]) x;
     INSERT INTO public.organization_members (organization_id, user_id, role, license_status, joined_at) VALUES
       (o1, u_b, 'admin', 'active', now()), (o1, u_it, 'it_admin', 'active', now()), (o1, u_ag, 'agent', 'active', now()),
-      (o1, u_un, 'agent', 'unassigned', now()),
-      (o2, u_x, 'admin', 'active', now()), (o3, u_b3, 'admin', 'active', now()), (o4, u_b4, 'admin', 'active', now()),
+      (o1, u_un, 'agent', 'unassigned', now()), (o1, u_br, 'broker', 'active', now()),
+      (o2, u_x, 'admin', 'active', now()), (o2, u_itx, 'it_admin', 'active', now()), (o3, u_b3, 'admin', 'active', now()), (o4, u_b4, 'admin', 'active', now()),
       (o5, u_b5, 'admin', 'active', now());
     -- one submission in o1, so a reader that should see nothing has something to see
     INSERT INTO public.transaction_submissions (organization_id, submitted_by, local_transaction_id, property_address)
@@ -303,6 +362,55 @@ BEGIN
     r := r || jsonb_build_object('C_8_access_check_not_anon', CASE WHEN NOT has_function_privilege('anon', 'public.org_billing_contact_login(uuid)', 'EXECUTE')
       THEN 'PASS' ELSE 'FAIL' END);
 
+    -- ===== C-M who may do what in People (founder e8571c1f; BACKLOG-4007 PR-4 fix-up) =====
+    -- State here: o1 active, billing contact = payer, billing-only login claimed by u_bo.
+    -- Each cell runs as the caller and is rolled back. Expected: People (list, save IT/office/MSP)
+    -- = admin, broker, IT admin. Billing contact and the login (on, off) = admin, broker.
+    FOR v_who IN SELECT * FROM (VALUES
+        ('admin', u_b, true, true), ('broker', u_br, true, true), ('it_admin', u_it, true, false),
+        ('agent', u_ag, false, false), ('unlicensed', u_un, false, false), ('billing_login', u_bo, false, false)
+      ) t(k, u, people, billing) LOOP
+      FOR v_op IN SELECT * FROM (VALUES
+          ('list', format('SELECT public.org_contacts_list(%L::uuid)', o1), false),
+          ('save_contact', format(qs, o1, '{"role":"it","name":"P4007C Cell IT","email":"p4007c-cell-it@example.test"}'), false),
+          ('save_billing', format(qs, o1, json_build_object('role', 'billing', 'name', 'P4007C Payer', 'email', payer, 'phone', '202-555-0126')::text), true),
+          ('login_on', format('SELECT public.org_billing_login_set(%L::uuid, true)', o1), true),
+          ('login_off', format('SELECT public.org_billing_login_set(%L::uuid, false)', o1), true)
+        ) t(op, q, billing_op) LOOP
+        v_got := pg_temp.cell(v_who.u, v_op.q);
+        r := r || jsonb_build_object('C_M_' || v_who.k || '_' || v_op.op,
+          CASE WHEN v_got = CASE WHEN (CASE WHEN v_op.billing_op THEN v_who.billing ELSE v_who.people END) THEN 'allowed' ELSE 'denied' END
+               THEN 'PASS' ELSE 'FAIL ' || v_got END);
+      END LOOP;
+    END LOOP;
+    -- the cells left nothing behind
+    r := r || jsonb_build_object('C_M_cells_rolled_back', CASE WHEN pg_temp.call_as(u_bo, format(qa, o1)) = 'true'
+      AND NOT EXISTS (SELECT 1 FROM public.org_contacts WHERE organization_id = o1 AND email = 'p4007c-cell-it@example.test')
+      THEN 'PASS' ELSE 'FAIL' END);
+    -- what an IT admin reads: the billing contact's name, not its email or phone; can_edit_billing false
+    s := pg_temp.call_as(u_it, format('SELECT public.org_contacts_list(%L::uuid)', o1));
+    r := r || jsonb_build_object('C_M_it_admin_list_billing_without_details', CASE WHEN pg_temp.j(s)->>'can_edit' = 'true'
+      AND pg_temp.j(s)->>'can_edit_billing' = 'false'
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(pg_temp.j(s)->'contacts') e WHERE e->>'role' = 'billing'
+                   AND e->>'name' = 'P4007C Payer' AND e->>'email' IS NULL AND e->>'phone' IS NULL)
+      THEN 'PASS' ELSE 'FAIL ' || left(s, 80) END);
+    s := pg_temp.call_as(u_br, format('SELECT public.org_contacts_list(%L::uuid)', o1));
+    r := r || jsonb_build_object('C_M_broker_list_billing_with_details', CASE WHEN pg_temp.j(s)->>'can_edit_billing' = 'true'
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(pg_temp.j(s)->'contacts') e WHERE e->>'role' = 'billing'
+                   AND e->>'email' = payer AND e->>'phone' = '+12025550126')
+      THEN 'PASS' ELSE 'FAIL ' || left(s, 80) END);
+    -- named controls (brief): a broker adds an IT contact (kept; removed again below)
+    s := pg_temp.call_as(u_br, format(qs, o1, '{"role":"it","name":"P4007C Broker IT","email":"p4007c-broker-it@example.test"}'));
+    v_cid := (pg_temp.j(s)->>'id')::uuid;
+    r := r || jsonb_build_object('C_M_broker_adds_it_contact', CASE WHEN EXISTS (SELECT 1 FROM public.org_contacts c
+      WHERE c.id = v_cid AND c.role = 'it' AND c.created_by = u_br AND c.removed_at IS NULL) THEN 'PASS' ELSE 'FAIL ' || s END);
+    s := pg_temp.call_as(u_it, format('SELECT public.org_contact_remove(%L::uuid, %L::uuid)', o1, v_cid));
+    r := r || jsonb_build_object('C_M_it_admin_removes_it_contact', CASE WHEN pg_temp.j(s)->>'success' = 'true' THEN 'PASS' ELSE 'FAIL ' || s END);
+    -- an IT admin cannot set the billing contact: refused, and the contact is unchanged
+    s := pg_temp.call_as(u_it, format(qs, o1, '{"role":"billing","name":"P4007C IT Payer","email":"p4007c-itpayer@example.test","phone":"202-555-0132"}'));
+    r := r || jsonb_build_object('C_M_it_admin_cannot_set_billing_contact', CASE WHEN s LIKE 'ERR 42501%'
+      AND (SELECT billing_contact_email FROM public.org_deals WHERE organization_id = o1) = payer THEN 'PASS' ELSE 'FAIL ' || left(s, 60) END);
+
     -- ===== RLS: what the billing-only login can read directly =====
     r := r || jsonb_build_object('C_RLS_contacts_deals_log_refused', CASE WHEN
       pg_temp.count_as(u_bo, 'SELECT 1 FROM public.org_contacts') = -1
@@ -378,6 +486,29 @@ BEGIN
     s := pg_temp.call_as(u_b, format('SELECT public.org_contact_remove(%L::uuid, %L::uuid)', o1, d.billing_contact_id));
     r := r || jsonb_build_object('C_W4_billing_contact_not_removable', CASE WHEN pg_temp.j(s)->>'error' = 'billing_contact_required' THEN 'PASS' ELSE 'FAIL ' || s END);
 
+    -- ===== F3: the contact change above took the old billing-only login with it =====
+    r := r || jsonb_build_object('C_F3_old_login_deleted_on_change', CASE WHEN
+      NOT EXISTS (SELECT 1 FROM public.organization_members m WHERE m.organization_id = o1
+                   AND (m.user_id = u_bo OR lower(m.invited_email) = payer))
+      AND (SELECT count(*) FROM public.organization_members m WHERE m.organization_id = o1
+            AND m.provisioning_metadata ->> 'billing_only' = 'true') = 0
+      AND EXISTS (SELECT 1 FROM public.billing_change_log l WHERE l.organization_id = o1
+                   AND l.action = 'billing_login_removed' AND l.detail ->> 'reason' = 'contact_changed')
+      THEN 'PASS' ELSE 'FAIL' END);
+    -- the contact back to the first person: the login can be given again
+    s := pg_temp.call_as(u_b, format(qs, o1, json_build_object('role', 'billing', 'name', 'P4007C Payer', 'email', payer, 'phone', '202-555-0126')::text));
+    s2 := pg_temp.call_as(u_b, format('SELECT public.org_billing_login_set(%L::uuid, true)', o1));
+    r := r || jsonb_build_object('C_F3_login_given_again_after_return', CASE WHEN pg_temp.j(s)->>'success' = 'true'
+      AND pg_temp.j(s2)->>'success' = 'true'
+      AND (SELECT count(*) FROM public.organization_members m WHERE m.organization_id = o1
+            AND m.provisioning_metadata ->> 'billing_only' = 'true') = 1 THEN 'PASS' ELSE 'FAIL ' || s || ' | ' || s2 END);
+    -- a licensed member linked from the old contact is kept on a change (not billing-only any more)
+    UPDATE public.organization_members SET license_status = 'active' WHERE organization_id = o1 AND lower(invited_email) = payer;
+    SELECT m.id INTO v_mem FROM public.organization_members m WHERE m.organization_id = o1 AND lower(m.invited_email) = payer;
+    s := pg_temp.call_as(u_b, format(qs, o1, '{"role":"billing","name":"P4007C New Payer","email":"p4007c-newpayer@example.test","phone":"202-555-0127"}'));
+    r := r || jsonb_build_object('C_F3_licensed_member_kept_on_change', CASE WHEN pg_temp.j(s)->>'success' = 'true'
+      AND EXISTS (SELECT 1 FROM public.organization_members WHERE id = v_mem) THEN 'PASS' ELSE 'FAIL ' || s END);
+
     -- ===== gates: draft, suspended, duplicate =====
     s := pg_temp.call_as(u_b4, format('SELECT public.org_billing_login_set(%L::uuid, true)', o4));
     r := r || jsonb_build_object('C_G1_no_login_before_setup', CASE WHEN pg_temp.j(s)->>'error' IN ('billing_setup_incomplete')
@@ -404,14 +535,16 @@ BEGIN
       AND pg_temp.seats(o2) = (SELECT max_seats FROM public.organizations WHERE id = o2) THEN 'PASS' ELSE 'FAIL ' || s END);
 
     -- ===== contacts: who may edit =====
-    s := pg_temp.call_as(u_it, format(qs, o1, '{"role":"it","name":"P4007C IT","email":"p4007c-it@example.test"}'));
+    -- (an IT admin may now: founder e8571c1f; see C_M_*)
     s2 := pg_temp.call_as(u_ag, format(qs, o1, '{"role":"it","name":"P4007C IT","email":"p4007c-it@example.test"}'));
-    r := r || jsonb_build_object('C_C1_it_admin_agent_refused', CASE WHEN s LIKE 'ERR 42501%' AND s2 LIKE 'ERR 42501%' THEN 'PASS' ELSE 'FAIL ' || left(s, 40) || ' | ' || left(s2, 40) END);
+    r := r || jsonb_build_object('C_C1_agent_refused', CASE WHEN s2 LIKE 'ERR 42501%' THEN 'PASS' ELSE 'FAIL ' || left(s2, 40) END);
     s := pg_temp.call_as(u_x, format(qs, o1, '{"role":"it","name":"P4007C IT","email":"p4007c-it@example.test"}'));
     s2 := pg_temp.call_as(u_x, format('SELECT public.org_contacts_list(%L::uuid)', o1));
+    s2 := pg_temp.call_as(u_itx, format(qs, o1, '{"role":"it","name":"P4007C IT","email":"p4007c-it@example.test"}'));
+    r := r || jsonb_build_object('C_C1_other_org_it_admin_refused', CASE WHEN s2 LIKE 'ERR 42501%'
+      AND pg_temp.call_as(u_itx, format('SELECT public.org_contacts_list(%L::uuid)', o1)) LIKE 'ERR 42501%' THEN 'PASS' ELSE 'FAIL ' || left(s2, 60) END);
+    s2 := pg_temp.call_as(u_x, format('SELECT public.org_contacts_list(%L::uuid)', o1));
     r := r || jsonb_build_object('C_C1_other_org_admin_refused', CASE WHEN s LIKE 'ERR 42501%' AND s2 LIKE 'ERR 42501%' THEN 'PASS' ELSE 'FAIL ' || left(s, 60) END);
-    s := pg_temp.call_as(u_it, format('SELECT public.org_contacts_list(%L::uuid)', o1));
-    r := r || jsonb_build_object('C_C1_it_admin_cannot_list', CASE WHEN s LIKE 'ERR 42501%' THEN 'PASS' ELSE 'FAIL ' || left(s, 60) END);
 
     -- ===== contacts: create new =====
     s := pg_temp.call_as(u_b, format(qs, o1, '{"role":"it","name":"P4007C IT","email":"P4007C-IT@example.test","phone":"(202) 555-0131"}'));

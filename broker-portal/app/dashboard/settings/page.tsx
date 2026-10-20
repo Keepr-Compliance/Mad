@@ -45,9 +45,6 @@ export default async function SettingsPage() {
 
   const features = await resolveOrgSettingsFeatures(access.organizationId);
 
-  // BACKLOG-4007 PR-4: People (contacts and the billing-only login) for an admin. The database
-  // refuses everyone else too (org_contacts_list: broker or admin of this brokerage).
-  const people = access.role === 'admin' ? { organizationId: access.organizationId } : null;
-
-  return <OrgSettingsClient features={features} people={people} />;
+  // BACKLOG-4007 PR-4: People is its own route (/dashboard/people), open to brokers too.
+  return <OrgSettingsClient features={features} />;
 }

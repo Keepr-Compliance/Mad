@@ -23,7 +23,8 @@ export interface OrgPeopleContact {
   id: string;
   role: OrgContactRole;
   name: string;
-  email: string;
+  /** null for the billing contact when the caller is an IT admin (3855: Broker/Admin only). */
+  email: string | null;
   phone: string | null;
   company_name: string | null;
   member_id: string | null;
@@ -41,7 +42,13 @@ export interface OrgPeopleMember {
 }
 
 export interface OrgPeopleView {
+  /** May add, change and remove IT, office and MSP contacts. */
   can_edit: boolean;
+  /**
+   * May change the billing contact and the billing-only login (staff, broker, admin; not an IT
+   * admin — founder e8571c1f). Absent = same as can_edit (the database sends it).
+   */
+  can_edit_billing?: boolean;
   deal_status: string | null;
   contacts: OrgPeopleContact[];
   members: OrgPeopleMember[];
@@ -158,6 +165,8 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, readOnly = fal
   const [phoneTouched, setPhoneTouched] = useState(false);
 
   const editable = view.can_edit && !readOnly;
+  const editableBilling = editable && view.can_edit_billing !== false;
+  const rowEditable = (role: OrgContactRole) => (role === 'billing' ? editableBilling : editable);
   const waiting = view.deal_status === 'draft';
   const byRole = useMemo(() => {
     const out: Record<OrgContactRole, OrgPeopleContact[]> = { billing: [], it: [], office: [], msp: [] };
@@ -228,12 +237,15 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, readOnly = fal
         {ROLES.map((r) => {
           const people = byRole[r.key];
           const shown = expanded[r.key] ? people : people.slice(0, SHOW);
-          const canAdd = editable && (r.key !== 'billing' ? r.multi || people.length === 0 : !waiting);
+          const canAdd = rowEditable(r.key) && (r.key !== 'billing' ? r.multi || people.length === 0 : !waiting);
           return (
             <li key={r.key} className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between" data-role={r.key}>
               <div className="min-w-0 sm:w-1/3">
                 <p className="text-sm font-semibold text-gray-900">{r.label}</p>
                 <p className="text-xs text-gray-500">{r.key === 'billing' && waiting ? 'Set in the setup guide.' : r.sub}</p>
+                {r.key === 'billing' && editable && !editableBilling ? (
+                  <p className="text-xs text-gray-500">Only a broker or admin can change it.</p>
+                ) : null}
               </div>
               <div className="min-w-0 flex-1 space-y-2">
                 {people.length === 0 ? <p className="text-sm italic text-gray-500">No one added</p> : null}
@@ -251,7 +263,7 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, readOnly = fal
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       {loginBadge(c)}
-                      {editable ? (
+                      {rowEditable(c.role) ? (
                         <>
                           <Button
                             size="sm"
@@ -263,7 +275,7 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, readOnly = fal
                                 id: c.id,
                                 mode: 'new',
                                 name: c.name,
-                                email: c.email,
+                                email: c.email ?? '',
                                 phone: c.phone ?? '',
                                 company: c.company_name ?? '',
                                 userId: '',
@@ -287,7 +299,7 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, readOnly = fal
                     Show more ({people.length - SHOW})
                   </button>
                 ) : null}
-                {r.key === 'billing' && billing && editable ? (
+                {r.key === 'billing' && billing && editableBilling ? (
                   <div className="pt-1">
                     {billing.login === 'billing_only' ? (
                       <Button size="sm" variant="secondary" disabled={busy} onClick={() => void run(() => actions.setBillingLogin(false))}>

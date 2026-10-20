@@ -40,7 +40,13 @@ export async function listOrgContactsAction(organizationId: string): Promise<Org
   const { data, error } = await supabase.rpc('org_contacts_list', { p_org: organizationId });
   if (error || !(data as { success?: boolean } | null)?.success) return null;
   const v = data as OrgPeopleView;
-  return { can_edit: v.can_edit, deal_status: v.deal_status, contacts: v.contacts ?? [], members: v.members ?? [] };
+  return {
+    can_edit: v.can_edit,
+    can_edit_billing: v.can_edit_billing === true,
+    deal_status: v.deal_status,
+    contacts: v.contacts ?? [],
+    members: v.members ?? [],
+  };
 }
 
 export async function searchUsersForContactAction(organizationId: string, query: string): Promise<OrgPeopleUserHit[]> {

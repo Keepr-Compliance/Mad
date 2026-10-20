@@ -1,5 +1,5 @@
--- BACKLOG-4007 PR-4 rollback: restores broker_complete_billing_setup to the 4007 PR-1 body
--- (verbatim from 20261020100000) and checks its md5, drops every function this PR added, and
+-- BACKLOG-4007 PR-4 rollback: restores broker_complete_billing_setup and _org_billing_contact_set
+-- to the 4007 PR-1 bodies (verbatim from 20261020100000) and checks their md5s, drops every function this PR added, and
 -- removes the ledger row. org_contacts rows written by PR-4 (IT / office / MSP contacts) are
 -- kept as data; billing-only login member rows are kept (they are ordinary 'unassigned' members).
 
@@ -149,6 +149,63 @@ BEGIN
   IF md5(pg_get_functiondef('public.broker_complete_billing_setup(uuid,integer,jsonb,jsonb,boolean)'::regprocedure))
      <> 'aeb580b568e706b950e759b309df784d' THEN
     RAISE EXCEPTION 'rollback-4007-pr4: broker_complete_billing_setup md5 is not the PR-1 body';
+  END IF;
+END $chk$;
+
+-- _org_billing_contact_set back to the 4007 PR-1 body (verbatim from 20261020100000).
+CREATE OR REPLACE FUNCTION public._org_billing_contact_set(
+  p_org uuid, p_name text, p_email text, p_phone text, p_actor uuid)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+DECLARE
+  v_email text := nullif(btrim(coalesce(p_email, '')), '');
+  v_name text := nullif(btrim(coalesce(p_name, '')), '');
+  v_cur public.org_contacts%ROWTYPE;
+  v_id uuid;
+BEGIN
+  IF v_email IS NULL THEN
+    RAISE EXCEPTION '_org_billing_contact_set: email required';
+  END IF;
+  SELECT * INTO v_cur FROM public.org_contacts c
+   WHERE c.organization_id = p_org AND c.role = 'billing' AND c.removed_at IS NULL FOR UPDATE;
+  IF FOUND AND lower(v_cur.email) = lower(v_email) THEN
+    UPDATE public.org_contacts SET
+      full_name = coalesce(v_name, full_name),
+      email = v_email,
+      phone = coalesce(p_phone, phone),
+      updated_by = p_actor,
+      updated_at = now()
+    WHERE id = v_cur.id
+    RETURNING id INTO v_id;
+  ELSE
+    IF FOUND THEN
+      UPDATE public.org_contacts SET removed_at = now(), updated_by = p_actor, updated_at = now()
+       WHERE id = v_cur.id;
+    END IF;
+    INSERT INTO public.org_contacts (organization_id, role, full_name, email, phone, created_by, updated_by)
+    VALUES (p_org, 'billing', coalesce(v_name, v_email), v_email, p_phone, p_actor, p_actor)
+    RETURNING id INTO v_id;
+  END IF;
+  -- Not version or status: the 3853 enqueue trigger (UPDATE OF version, status) does not fire.
+  UPDATE public.org_deals d SET
+    billing_contact_id = v_id,
+    billing_contact_name = c.full_name,
+    billing_contact_email = c.email
+  FROM public.org_contacts c
+  WHERE d.organization_id = p_org AND c.id = v_id;
+  RETURN v_id;
+END
+$function$;
+REVOKE EXECUTE ON FUNCTION public._org_billing_contact_set(uuid, text, text, text, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._org_billing_contact_set(uuid, text, text, text, uuid) TO service_role;
+DO $chk$
+BEGIN
+  IF md5(pg_get_functiondef('public._org_billing_contact_set(uuid,text,text,text,uuid)'::regprocedure))
+     <> '767b797cbdc3ce12ec5754b771da3ac7' THEN
+    RAISE EXCEPTION 'rollback-4007-pr4: _org_billing_contact_set md5 is not the PR-1 body';
   END IF;
 END $chk$;
 

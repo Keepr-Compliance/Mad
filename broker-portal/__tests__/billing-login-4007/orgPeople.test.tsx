@@ -167,13 +167,14 @@ describe('OrgPeoplePanel', () => {
 });
 
 describe('broker People actions', () => {
-  it('refused before any RPC for anyone but a broker/admin of the brokerage', async () => {
+  it('refused before any RPC for anyone the gate refuses (lists: peopleRoles.test.tsx)', async () => {
     mockGate.mockResolvedValue({ ok: false });
     expect(await listOrgContacts('ORG-1')).toEqual({ ok: false, error: 'not_authorized' });
     expect(await saveOrgContact('ORG-1', { role: 'it', name: 'x', email: 'x@example.test' })).toEqual({ ok: false, error: 'not_authorized' });
     expect(await setOrgBillingLogin('ORG-1', true)).toEqual({ ok: false, error: 'not_authorized' });
     expect(mockRpc).not.toHaveBeenCalled();
-    expect(mockGate).toHaveBeenCalledWith(expect.anything(), 'u-1', 'ORG-1', ['broker', 'admin']);
+    expect(mockGate).toHaveBeenCalledWith(expect.anything(), 'u-1', 'ORG-1', ['admin', 'it_admin', 'broker']);
+    expect(mockGate).toHaveBeenCalledWith(expect.anything(), 'u-1', 'ORG-1', ['admin', 'broker']);
   });
 
   it('only the documented keys travel', async () => {

@@ -68,6 +68,7 @@ const EXPECTED: Record<string, string> = {
   '/dashboard/submissions/s-1': 'Submission',
   '/dashboard/billing': 'Billing',
   '/dashboard/setup': 'Account Setup',
+  '/dashboard/people': 'People',
 };
 
 function pageRoutes(dir = DASH, rel = ''): string[] {

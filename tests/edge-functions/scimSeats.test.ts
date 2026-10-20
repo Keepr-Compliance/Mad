@@ -403,6 +403,37 @@ describe('POST existing person', () => {
     expect(t.organization_members.filter((m) => m.user_id === 'u-q')).toHaveLength(1);
   });
 
+  // BACKLOG-4007 PR-4 (SR F2): the billing-only login is an 'unassigned' agent invitation with
+  // provisioning_metadata {billing_only: true} (shape from _org_billing_login_create on
+  // keepr-test). SCIM never claims it: claiming writes 'active' and the login would take a seat.
+  const BILLING_ONLY_INVITE = { ...UNLICENSED_INVITE, id: 'm-bo', role: 'agent', provisioned_by: 'invite',
+    provisioning_metadata: { billing_only: true } };
+
+  it('F2 free seat: the billing-only invitation is not claimed, it stays unassigned and unclaimed', async () => {
+    const t = qTables();
+    t.organization_members.push({ ...BILLING_ONLY_INVITE });
+    const db = makeDb(t, { authIds: ['u-q'] });
+    const res = await handleCreateUser(postReq('q@example.test'), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(201);
+    expect(t.organization_members.find((m) => m.id === 'm-bo')).toMatchObject({
+      user_id: null, license_status: 'unassigned', invitation_token: 'tok-unl', provisioned_by: 'invite' });
+    // the person is provisioned as an ordinary SCIM member, beside the invitation
+    const mw = memberWrites(db.writes);
+    expect(mw.map((w) => w.op)).toEqual(['insert']);
+    expect(mw[0].rows[0]).toMatchObject({ user_id: 'u-q', license_status: 'active', provisioned_by: 'scim' });
+  });
+
+  it('F2 full org: 403 seat refusal, the billing-only invitation is untouched', async () => {
+    const t = qTables();
+    t.organization_members.push({ ...BILLING_ONLY_INVITE });
+    const before = t.organization_members.length;
+    const db = makeDb(t, { full: true, authIds: ['u-q'] });
+    const res = await handleCreateUser(postReq('q@example.test'), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(403);
+    expect(t.organization_members).toHaveLength(before);
+    expect(t.organization_members.find((m) => m.id === 'm-bo')).toMatchObject({ user_id: null, license_status: 'unassigned' });
+  });
+
   it('an EXPIRED invite in a full org is a seat refusal (403), the invite stays unclaimed', async () => {
     const t = baseTables({ users: [...baseTables().users.filter((u) => u.id !== 'u-p'), { id: 'u-q', email: 'q@example.test' }] });
     t.organization_members.push({ id: 'm-inv', organization_id: ORG, user_id: null, role: 'agent', license_status: 'pending',

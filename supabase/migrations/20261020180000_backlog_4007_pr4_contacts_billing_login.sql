@@ -3,7 +3,12 @@
 --
 -- 1. _org_contact_caller          who is calling for this brokerage: 'staff' (billing.view /
 --                                  billing.manage), 'broker' (active broker or admin member of
---                                  the brokerage), or NULL. IT admins and agents get NULL.
+--                                  the brokerage), 'it_admin' (active IT admin), or NULL (agents,
+--                                  everyone else). Founder e8571c1f: People is open to admin,
+--                                  IT admin and broker; the billing contact and the billing-only
+--                                  login stay staff / broker / admin (3855). IT admins list the
+--                                  billing contact without its email and phone.
+--                                  The portal mirror is broker-portal/lib/people-access.ts.
 -- 2. org_contacts_list            the brokerage's live contacts, plus its members for "Select
 --                                  existing user" (staff and broker/admin).
 -- 3. admin_search_users_for_contact  staff only: Keepr users by name or email, each marked
@@ -28,13 +33,18 @@
 --                                  active, creates the login for "Someone else". A refusal (an
 --                                  open invitation elsewhere, the person is already a member)
 --                                  is reported and setup still completes.
+-- 10. _org_billing_contact_set    (replaced, same signature) when the billing contact moves to
+--                                  another email, the old contact's billing-only login (still
+--                                  'unassigned', provisioning_metadata.billing_only) is deleted,
+--                                  as "Remove billing-only login" does.
 -- 9. org_billing_contact_login    true only when the CALLER is the member linked from the live
 --                                  billing contact of p_org and that member is still
 --                                  'unassigned'. The portal's Billing gate asks this.
 --
 -- Every change writes billing_change_log. New functions: REVOKE PUBLIC, anon; the public ones
 -- GRANT authenticated (auth.uid() checked inside), the helpers service_role only.
--- Pre-check: broker_complete_billing_setup is the 4007 PR-1 body (or this file's).
+-- Pre-check: broker_complete_billing_setup and _org_billing_contact_set are the 4007 PR-1
+-- bodies (or this file's).
 -- Rollback: supabase/tests/backlog-4007-pr4/rollback-4007-pr4.sql
 
 DO $pre$
@@ -47,9 +57,10 @@ BEGIN
   IF v_md5 IS NULL OR (v_md5 <> 'aeb580b568e706b950e759b309df784d' AND v_src NOT LIKE '%BACKLOG-4007 PR-4%') THEN
     RAISE EXCEPTION '4007 PR-4 pre-check: broker_complete_billing_setup is not the 4007 PR-1 body (md5 %)', v_md5;
   END IF;
-  SELECT md5(pg_get_functiondef(oid)) INTO v_md5 FROM pg_proc
+  v_md5 := NULL; v_src := NULL;
+  SELECT md5(pg_get_functiondef(oid)), prosrc INTO v_md5, v_src FROM pg_proc
    WHERE oid = to_regprocedure('public._org_billing_contact_set(uuid,text,text,text,uuid)');
-  IF v_md5 IS DISTINCT FROM '767b797cbdc3ce12ec5754b771da3ac7' THEN
+  IF v_md5 IS NULL OR (v_md5 <> '767b797cbdc3ce12ec5754b771da3ac7' AND v_src NOT LIKE '%BACKLOG-4007 PR-4%') THEN
     RAISE EXCEPTION '4007 PR-4 pre-check: _org_billing_contact_set is not the 4007 PR-1 body (md5 %)', v_md5;
   END IF;
   IF to_regclass('public.org_contacts') IS NULL OR to_regclass('public.billing_change_log') IS NULL THEN
@@ -74,6 +85,9 @@ AS $function$
     WHEN EXISTS (SELECT 1 FROM public.organization_members m
                   WHERE m.organization_id = p_org AND m.user_id = auth.uid()
                     AND m.license_status = 'active' AND m.role IN ('broker', 'admin')) THEN 'broker'
+    WHEN EXISTS (SELECT 1 FROM public.organization_members m
+                  WHERE m.organization_id = p_org AND m.user_id = auth.uid()
+                    AND m.license_status = 'active' AND m.role = 'it_admin') THEN 'it_admin'
     ELSE NULL
   END
 $function$;
@@ -120,10 +134,15 @@ BEGIN
   RETURN jsonb_build_object(
     'success', true,
     'can_edit', public._org_contact_caller(p_org, true) IS NOT NULL,
+    -- The billing contact and the billing-only login: staff, broker, admin (3855).
+    'can_edit_billing', coalesce(public._org_contact_caller(p_org, true) IN ('staff', 'broker'), false),
     'deal_status', (SELECT d.status FROM public.org_deals d WHERE d.organization_id = p_org),
     'contacts', coalesce((
       SELECT jsonb_agg(jsonb_build_object(
-               'id', c.id, 'role', c.role, 'name', c.full_name, 'email', c.email, 'phone', c.phone,
+               'id', c.id, 'role', c.role, 'name', c.full_name,
+               -- An IT admin sees who the billing contact is, not how to reach them (3855).
+               'email', CASE WHEN c.role = 'billing' AND v_caller = 'it_admin' THEN NULL ELSE c.email END,
+               'phone', CASE WHEN c.role = 'billing' AND v_caller = 'it_admin' THEN NULL ELSE c.phone END,
                'company_name', c.company_name, 'member_id', c.member_id,
                'login', CASE WHEN m.id IS NULL THEN NULL
                              WHEN c.role = 'billing' AND m.license_status = 'unassigned' THEN 'billing_only'
@@ -229,6 +248,10 @@ BEGIN
   END IF;
   IF v_role IS NULL OR v_role NOT IN ('it', 'office', 'msp', 'billing') THEN
     RETURN jsonb_build_object('success', false, 'error', 'invalid_role');
+  END IF;
+  -- The billing contact: staff, broker, admin. Not an IT admin (founder e8571c1f, 3855).
+  IF v_role = 'billing' AND v_caller NOT IN ('staff', 'broker') THEN
+    RAISE EXCEPTION 'Not authorized' USING ERRCODE = '42501';
   END IF;
 
   -- Select existing user: name and email come from the account.
@@ -478,7 +501,8 @@ BEGIN
   IF v_uid IS NULL THEN
     RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';
   END IF;
-  IF v_caller IS NULL THEN
+  -- On and off: staff, broker, admin. Not an IT admin (founder e8571c1f, 3855).
+  IF v_caller IS NULL OR v_caller NOT IN ('staff', 'broker') THEN
     RAISE EXCEPTION 'Not authorized' USING ERRCODE = '42501';
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('org_contacts:' || p_org::text, 0));
@@ -656,6 +680,78 @@ END
 $function$;
 REVOKE EXECUTE ON FUNCTION public.broker_complete_billing_setup(uuid, integer, jsonb, jsonb, boolean) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.broker_complete_billing_setup(uuid, integer, jsonb, jsonb, boolean) TO authenticated, service_role;
+
+-- =====================================================================================
+-- 10. _org_billing_contact_set (replaced, same signature) — BACKLOG-4007 PR-4
+-- =====================================================================================
+
+-- The 4007 PR-1 body, plus: when the contact moves to another email, the old contact's
+-- billing-only login goes, if it is still billing-only ('unassigned' and
+-- provisioning_metadata.billing_only). The same rule as "Remove billing-only login". A member
+-- given a license since stays. Without this the brokerage kept a stale unlicensed row, and
+-- the old person could not be given the login again (already_member).
+CREATE OR REPLACE FUNCTION public._org_billing_contact_set(
+  p_org uuid, p_name text, p_email text, p_phone text, p_actor uuid)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+DECLARE
+  v_email text := nullif(btrim(coalesce(p_email, '')), '');
+  v_name text := nullif(btrim(coalesce(p_name, '')), '');
+  v_cur public.org_contacts%ROWTYPE;
+  v_id uuid;
+  v_gone uuid;
+BEGIN
+  IF v_email IS NULL THEN
+    RAISE EXCEPTION '_org_billing_contact_set: email required';
+  END IF;
+  SELECT * INTO v_cur FROM public.org_contacts c
+   WHERE c.organization_id = p_org AND c.role = 'billing' AND c.removed_at IS NULL FOR UPDATE;
+  IF FOUND AND lower(v_cur.email) = lower(v_email) THEN
+    UPDATE public.org_contacts SET
+      full_name = coalesce(v_name, full_name),
+      email = v_email,
+      phone = coalesce(p_phone, phone),
+      updated_by = p_actor,
+      updated_at = now()
+    WHERE id = v_cur.id
+    RETURNING id INTO v_id;
+  ELSE
+    IF FOUND THEN
+      UPDATE public.org_contacts SET removed_at = now(), updated_by = p_actor, updated_at = now()
+       WHERE id = v_cur.id;
+      -- BACKLOG-4007 PR-4: the old contact's billing-only login goes with it.
+      IF v_cur.member_id IS NOT NULL THEN
+        DELETE FROM public.organization_members m
+         WHERE m.id = v_cur.member_id AND m.organization_id = p_org
+           AND m.license_status = 'unassigned'
+           AND coalesce(m.provisioning_metadata ->> 'billing_only', '') = 'true'
+        RETURNING m.id INTO v_gone;
+        IF v_gone IS NOT NULL THEN
+          INSERT INTO public.billing_change_log (organization_id, actor_id, action, detail)
+          VALUES (p_org, p_actor, 'billing_login_removed',
+                  jsonb_build_object('contact_id', v_cur.id, 'member_id', v_gone, 'reason', 'contact_changed'));
+        END IF;
+      END IF;
+    END IF;
+    INSERT INTO public.org_contacts (organization_id, role, full_name, email, phone, created_by, updated_by)
+    VALUES (p_org, 'billing', coalesce(v_name, v_email), v_email, p_phone, p_actor, p_actor)
+    RETURNING id INTO v_id;
+  END IF;
+  -- Not version or status: the 3853 enqueue trigger (UPDATE OF version, status) does not fire.
+  UPDATE public.org_deals d SET
+    billing_contact_id = v_id,
+    billing_contact_name = c.full_name,
+    billing_contact_email = c.email
+  FROM public.org_contacts c
+  WHERE d.organization_id = p_org AND c.id = v_id;
+  RETURN v_id;
+END
+$function$;
+REVOKE EXECUTE ON FUNCTION public._org_billing_contact_set(uuid, text, text, text, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._org_billing_contact_set(uuid, text, text, text, uuid) TO service_role;
 
 -- =====================================================================================
 -- 9. May the caller open Billing as this brokerage's billing-only login?
