@@ -996,6 +996,7 @@ describe('C-B1: a suspended brokerage (BACKLOG-3853)', () => {
     );
     mockBillingDb = new BillingDb({
       org_deals: [{ organization_id: ORG, status: suspended ? 'suspended' : 'active', suspended_reason: reason }],
+      organizations: [{ id: ORG, name: 'Fixture Realty' }],
     });
   }
   async function banner(): Promise<string | null> {
@@ -1038,6 +1039,27 @@ describe('C-B1: a suspended brokerage (BACKLOG-3853)', () => {
     );
     expect(text).not.toContain('unpaid invoice');
     expect(text).not.toContain('Pay from the link');
+  });
+
+  it('Contact support opens the support form preset: Invoice/payment issue, Urgent, with the brokerage name', async () => {
+    given([brokerageMembership('broker')]);
+    suspend('non_payment');
+    const { container, unmount } = render(await BillingRoute({}));
+    const seen: unknown[] = [];
+    const listener = (e: Event) => seen.push((e as CustomEvent).detail);
+    window.addEventListener('open-support-widget', listener);
+    fireEvent.click(container.querySelector('[data-billing-action="contact_support"]') as HTMLElement);
+    window.removeEventListener('open-support-widget', listener);
+    unmount();
+    expect(seen).toEqual([
+      {
+        categorySlug: 'billing-subscription',
+        subcategorySlug: 'invoice-payment-issue',
+        subject: 'Our brokerage account is suspended',
+        description: 'Our brokerage account (Fixture Realty) is suspended. Please help us get it reinstated.',
+        priority: 'urgent',
+      },
+    ]);
   });
 
   it('control: the same broker with the brokerage active gets no banner', async () => {

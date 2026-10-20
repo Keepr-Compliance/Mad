@@ -58,7 +58,7 @@ export interface BillingPageProps {
   /** Personal page only. */
   personal?: PersonalPlanData;
   /** BACKLOG-3853 PR-2B: the brokerage is suspended. Organization page only. */
-  orgSuspension?: { reason: OrgSuspensionReason; role: string } | null;
+  orgSuspension?: { reason: OrgSuspensionReason; role: string; organizationName?: string | null } | null;
 }
 
 function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
@@ -107,7 +107,7 @@ export function BillingPage({ caps, orgBillingSetUp, personal, orgSuspension }: 
       ) : null}
       {/* BACKLOG-3878: one banner; a suspension outranks a failed payment. */}
       {caps.kind === 'organization' && orgSuspension ? (
-        <OrgSuspendedBanner reason={orgSuspension.reason} role={orgSuspension.role} />
+        <OrgSuspendedBanner reason={orgSuspension.reason} role={orgSuspension.role} organizationName={orgSuspension.organizationName} />
       ) : caps.kind === 'personal' && suspended ? (
         <SuspendedBanner dispute={personal?.suspendedForDispute === true} />
       ) : b && personal?.state === 'payment_failed' ? (

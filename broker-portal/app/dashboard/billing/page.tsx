@@ -90,6 +90,16 @@ async function orgSuspensionReason(organizationId: string): Promise<OrgSuspensio
   }
 }
 
+/** BACKLOG-3853: the brokerage's name for the prefilled support request; null when the read fails. */
+async function orgName(organizationId: string): Promise<string | null> {
+  try {
+    const { data } = await createServiceClient().from('organizations').select('name').eq('id', organizationId).maybeSingle();
+    return (data as { name?: string | null } | null)?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export default async function BillingRoute({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   if (!billingEnabled()) notFound();
   if (await getImpersonationSession()) notFound();
@@ -117,11 +127,12 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
       });
       if (!orgCaps) notFound();
       const reason = await orgSuspensionReason(portal.access.organizationId);
+      const organizationName = await orgName(portal.access.organizationId);
       return (
         <BillingPage
           caps={orgCaps}
           orgBillingSetUp={SITUATION_3844.orgBillingSetUp}
-          orgSuspension={{ reason, role: portal.access.role }}
+          orgSuspension={{ reason, role: portal.access.role, organizationName }}
         />
       );
     }

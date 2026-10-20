@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * Billing page banner for a suspended BROKERAGE — BACKLOG-3853 PR-2B.
  *
@@ -9,7 +11,7 @@
  * Not the 3878 SuspendedBanner: that one is about the person's own licence.
  */
 
-import { SuspendedSupportLink } from './SuspendedBanner';
+import { orgSuspendedSupportPreset, openSupportRequest } from '@/lib/support/openSupportRequest';
 
 export type OrgSuspensionReason = 'non_payment' | 'other' | null;
 
@@ -27,7 +29,21 @@ export function orgSuspendedBannerText(reason: OrgSuspensionReason, role: string
   return { lead: 'Your brokerage is suspended for an unpaid invoice.', body: `${PAUSED} ${close}` };
 }
 
-export function OrgSuspendedBanner({ reason, role }: { reason: OrgSuspensionReason; role: string }) {
+/** "Contact support": opens the in-app support form preset for a suspended brokerage (Urgent priority). */
+function OrgSuspendedSupportButton({ organizationName }: { organizationName?: string | null }) {
+  return (
+    <button
+      type="button"
+      data-billing-action="contact_support"
+      onClick={() => openSupportRequest(orgSuspendedSupportPreset(organizationName))}
+      className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50"
+    >
+      Contact support
+    </button>
+  );
+}
+
+export function OrgSuspendedBanner({ reason, role, organizationName }: { reason: OrgSuspensionReason; role: string; organizationName?: string | null }) {
   const { lead, body } = orgSuspendedBannerText(reason, role);
   return (
     <div
@@ -38,7 +54,7 @@ export function OrgSuspendedBanner({ reason, role }: { reason: OrgSuspensionReas
       <p className="min-w-0 flex-1 basis-72">
         <strong>{lead}</strong> {body}
       </p>
-      <SuspendedSupportLink />
+      <OrgSuspendedSupportButton organizationName={organizationName} />
     </div>
   );
 }

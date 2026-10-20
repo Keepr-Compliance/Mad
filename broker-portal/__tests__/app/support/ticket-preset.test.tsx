@@ -57,7 +57,6 @@ import {
   presetCategoryIds,
   resolveTicketPreset,
 } from '@/lib/support/ticketPresets';
-import { OrgSuspendedBanner } from '@/components/billing/OrgSuspendedBanner';
 import { TicketForm } from '@/app/support/components/TicketForm';
 import DashboardNewTicketPage from '@/app/dashboard/support/new/page';
 import PublicNewTicketPage from '@/app/support/new/page';
@@ -147,19 +146,6 @@ describe('resolveTicketPreset (C-M12)', () => {
     expect(resolveTicketPreset({ preset: 'billing-suspended' })).toMatchObject({
       categorySlug: 'billing-subscription',
       subcategorySlug: 'invoice-payment-issue',
-      priority: 'urgent',
-    });
-  });
-
-  it('the suspended banner Contact support link carries that preset (topic and priority)', () => {
-    const { container, unmount } = render(<OrgSuspendedBanner reason="non_payment" role="broker" />);
-    const href = container.querySelector('[data-billing-action="contact_support"]')?.getAttribute('href') ?? '';
-    unmount();
-    const key = new URL(href, 'http://x').searchParams.get('preset');
-    expect(resolveTicketPreset({ preset: key ?? undefined })).toMatchObject({
-      categorySlug: 'billing-subscription',
-      subcategorySlug: 'invoice-payment-issue',
-      priority: 'urgent',
     });
   });
 });
@@ -198,16 +184,6 @@ describe('TicketForm with a preset', () => {
     await waitFor(() => expect(field('category').value).toBe(BILLING_ID));
     expect(field('subject').value).toBe(FIXED.subject);
     expect(document.body.innerHTML).not.toContain('EVIL');
-  });
-
-  it('a preset with a priority sets the Priority select; one without leaves Normal', async () => {
-    const { unmount } = render(<TicketForm preset={TICKET_PRESETS['billing-suspended']} />);
-    await waitFor(() => expect(field('category').value).toBe(BILLING_ID));
-    expect(field('priority').value).toBe('urgent');
-    unmount();
-    render(<TicketForm preset={FIXED} />);
-    await waitFor(() => expect(field('category').value).toBe(BILLING_ID));
-    expect(field('priority').value).toBe('normal');
   });
 
   it('every field stays editable', async () => {

@@ -54,6 +54,8 @@ export function SupportWidget() {
   // BACKLOG-3851 PR-2f: a category preset from openSupportRequest(), applied by slug once
   // the categories for this open have loaded.
   const presetRef = useRef<SupportRequestPreset | null>(null);
+  // True while a preset set the priority, so closing the form puts it back to normal.
+  const presetPriorityRef = useRef(false);
 
   // Load categories and auth on first open
   useEffect(() => {
@@ -134,6 +136,10 @@ export function SupportWidget() {
         presetRef.current = preset;
         if (preset.subject !== undefined) setSubject(preset.subject);
         if (preset.description !== undefined) setDescription(preset.description);
+        if (preset.priority !== undefined) {
+          setPriority(preset.priority);
+          presetPriorityRef.current = true;
+        }
       }
       handleOpen();
     };
@@ -143,6 +149,10 @@ export function SupportWidget() {
 
   const handleClose = useCallback(() => {
     presetRef.current = null;
+    if (presetPriorityRef.current) {
+      presetPriorityRef.current = false;
+      setPriority('normal');
+    }
     setOpen(false);
     setError(null);
     setSuccess(false);

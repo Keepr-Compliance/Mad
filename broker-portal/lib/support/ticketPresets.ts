@@ -12,18 +12,14 @@
  * to ids from the categories the form already loads. A slug that is missing
  * or inactive leaves the select blank; the text fields are still filled.
  *
- * Pure and client-safe: a type-only import, erased at build.
+ * Pure and client-safe: no imports.
  */
-
-import type { TicketPriority } from '@/lib/support-types';
 
 export interface TicketPreset {
   categorySlug: string;
   subcategorySlug: string;
   subject: string;
   description: string;
-  /** Optional; the form's own default (normal) applies when absent. One of low | normal | high | urgent. */
-  priority?: TicketPriority;
 }
 
 export const MY_TRANSACTIONS_UPGRADE_PRESET = 'my-transactions-upgrade';
@@ -47,8 +43,6 @@ export const TICKET_PRESETS: Readonly<Record<string, TicketPreset>> = Object.fre
     subcategorySlug: 'invoice-payment-issue',
     subject: 'My account is suspended',
     description: 'My Keepr account is suspended. Please help me get it reinstated.',
-    // The form's highest priority (lib/support-types.ts TicketPriority; PRIORITY_LABELS shows it as Urgent).
-    priority: 'urgent',
   }),
 });
 
