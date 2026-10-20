@@ -10,7 +10,7 @@
 import transactionService from "../transactionService";
 import databaseService from "../databaseService";
 import logService from "../logService";
-import type { Transaction, NewTransaction } from "../../types";
+import type { Transaction } from "../../types";
 
 // Mock the dependencies
 jest.mock("../databaseService");
@@ -123,59 +123,6 @@ describe("TransactionService - Database Method Fixes", () => {
 
       expect(result).toEqual([]);
       expect(databaseService.getTransactions).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  describe("createManualTransaction", () => {
-    it("should include user_id in transaction data object", async () => {
-      const transactionData: Partial<NewTransaction> = {
-        property_address: "123 Test St",
-        transaction_type: "purchase",
-        status: "active",
-      };
-
-      (databaseService.createTransaction as jest.Mock).mockResolvedValue(
-        mockTransaction,
-      );
-
-      const result = await transactionService.createManualTransaction(
-        mockUserId,
-        transactionData,
-      );
-
-      expect(databaseService.createTransaction).toHaveBeenCalledWith(
-        expect.objectContaining({
-          user_id: mockUserId,
-          property_address: "123 Test St",
-          transaction_type: "purchase",
-          status: "active",
-        }),
-      );
-      expect(result).toEqual(mockTransaction);
-    });
-
-    it("should use default values when not provided", async () => {
-      const transactionData: Partial<NewTransaction> = {
-        property_address: "456 Oak Ave",
-      };
-
-      (databaseService.createTransaction as jest.Mock).mockResolvedValue(
-        mockTransaction,
-      );
-
-      await transactionService.createManualTransaction(
-        mockUserId,
-        transactionData,
-      );
-
-      expect(databaseService.createTransaction).toHaveBeenCalledWith(
-        expect.objectContaining({
-          user_id: mockUserId,
-          property_address: "456 Oak Ave",
-          status: "active",
-          closing_date_verified: false,
-        }),
-      );
     });
   });
 

@@ -612,14 +612,6 @@ export interface WindowApiTransactions {
     contacts?: Array<Record<string, unknown>>;
     error?: string;
   }>;
-  create: (
-    userId: string,
-    transactionData: Record<string, unknown>,
-  ) => Promise<{
-    success: boolean;
-    transaction?: Transaction;
-    error?: string;
-  }>;
   createAudited: (
     userId: string,
     transactionData: Record<string, unknown>,

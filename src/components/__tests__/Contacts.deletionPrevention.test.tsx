@@ -27,7 +27,7 @@ import type { Contact } from "../../../electron/types/models";
 import type { ContactBlockingTransaction } from "../../../electron/types/ipc/window-api-contacts";
 
 /**
- * Real response shape of `contacts.delete` / `contacts.remove` on the BLOCKED
+ * Real response shape of `contacts.remove` on the BLOCKED
  * path. `electron/types/ipc/window-api-contacts.ts` only declares
  * `{ success, error }`, but `contactHandlers.ts` also returns
  * `canDelete` / `transactions` / `count` when the contact is still linked to
@@ -349,33 +349,6 @@ describe("Contacts - Deletion Prevention", () => {
   });
 
   describe("Delete API behavior", () => {
-    it("should block deletion via delete API when contact has transactions", async () => {
-      // Casts: see BlockedDeleteResponse above — the IPC declaration for
-      // contacts.delete is narrower than what contactHandlers.ts actually
-      // returns on the blocked path.
-      jest.mocked(window.api.contacts.delete).mockResolvedValue({
-        success: false,
-        error: "Cannot delete contact with associated transactions",
-        canDelete: false,
-        transactions: [
-          {
-            id: "txn-1",
-            property_address: "123 Main St",
-            roles: ["Buyer Agent"],
-          },
-        ],
-        count: 1,
-      } as BlockedDeleteResponse);
-
-      const result = (await window.api.contacts.delete(
-        "contact-1",
-      )) as BlockedDeleteResponse;
-
-      expect(result.success).toBe(false);
-      expect(result.canDelete).toBe(false);
-      expect(result.transactions).toBeDefined();
-    });
-
     it("should block deletion via remove API when contact has transactions", async () => {
       // Casts: see BlockedDeleteResponse above — the IPC declaration for
       // contacts.remove is narrower than what contactHandlers.ts actually
@@ -400,16 +373,6 @@ describe("Contacts - Deletion Prevention", () => {
 
       expect(result.success).toBe(false);
       expect(result.canDelete).toBe(false);
-    });
-
-    it("should allow deletion via delete API when contact has no transactions", async () => {
-      jest.mocked(window.api.contacts.delete).mockResolvedValue({
-        success: true,
-      });
-
-      const result = await window.api.contacts.delete("contact-1");
-
-      expect(result.success).toBe(true);
     });
 
     it("should allow removal via remove API when contact has no transactions", async () => {
@@ -511,7 +474,6 @@ describe("Contacts - Deletion Prevention", () => {
       expect(window.api.contacts.getAll).toBeDefined();
       expect(window.api.contacts.create).toBeDefined();
       expect(window.api.contacts.update).toBeDefined();
-      expect(window.api.contacts.delete).toBeDefined();
       expect(window.api.contacts.remove).toBeDefined();
       expect(window.api.contacts.checkCanDelete).toBeDefined();
       expect(window.api.contacts.getSortedByActivity).toBeDefined();

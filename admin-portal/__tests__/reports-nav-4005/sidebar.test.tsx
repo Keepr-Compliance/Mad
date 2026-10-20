@@ -153,6 +153,7 @@ describe('C6 Reports page shows Analytics and Funnel cards beside the reports', 
       '/dashboard/reports/iphone-sync',
       '/dashboard/reports/google-messages-sync',
       '/dashboard/reports/submissions',
+      '/dashboard/reports/exports',
     ]);
     expect(screen.getByRole('heading', { name: 'Analytics' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Paywall Funnel' })).toBeTruthy();

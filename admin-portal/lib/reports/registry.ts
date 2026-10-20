@@ -45,6 +45,14 @@ export const REPORTS: ReportEntry[] = [
     source: 'submission_attempts',
     permission: PERMISSIONS.ANALYTICS_VIEW,
   },
+  {
+    slug: 'exports',
+    title: 'Exports',
+    description:
+      'How many exports each user ran in the period, how many were unique deals, in which formats, and when.',
+    source: 'analytics_events (export-completed)',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
 ];
 
 export function reportHref(slug: string): string {

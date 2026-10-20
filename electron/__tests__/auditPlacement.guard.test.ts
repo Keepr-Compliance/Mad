@@ -62,13 +62,14 @@ const SCAN_ROOT = path.join(REPO_ROOT, "electron");
 const AUDIT_SERVICE_FILE = "electron/services/auditService.ts";
 
 /**
- * Audit sites written with `auditService.log` today: 39 (BACKLOG-3339 plan,
- * pm_comments 7e81dd50, re-counted by this walk). `log` calls plus
+ * Audit sites written with `auditService.log` today: 37 (BACKLOG-3339 plan,
+ * pm_comments 7e81dd50, re-counted by this walk; 39 until the unused
+ * `transactions:create` and `contacts:delete` channels were removed). `log` calls plus
  * `recordInTransaction` calls must add up to this. A conversion moves a site
  * from one side to the other; a NEW audited site changes the total and must
  * update this number on purpose.
  */
-const AUDITED_SITES_TOTAL = 39;
+const AUDITED_SITES_TOTAL = 37;
 
 type Reason = string;
 const R_EXPORT = "BACKLOG-3339 export slice; waits on the founder's export ruling";
@@ -113,10 +114,8 @@ const ALLOWLIST: Record<string, { count: number; reason: Reason }> = {
   "electron/handlers/sessionSignOut.ts::signOutLocalSession::LOGOUT": { count: 1, reason: R_SESSION },
   "electron/handlers/attachmentHandlers.ts::auditAttachmentAccess::DATA_ACCESS": { count: 1, reason: R_READ },
   // F — no UI caller
-  "electron/handlers/transactionCrudHandlers.ts::transactions:create::TRANSACTION_CREATE": { count: 1, reason: R_UNREACHABLE },
   "electron/handlers/transactionExportHandlers.ts::transactions:export-pdf::DATA_EXPORT": { count: 1, reason: R_UNREACHABLE },
   "electron/services/transactionService/transactionService.ts::adminUnfreezeTransaction::TRANSACTION_UPDATE": { count: 1, reason: R_UNREACHABLE },
-  "electron/handlers/contactHandlers.ts::contacts:delete::CONTACT_DELETE": { count: 1, reason: R_UNREACHABLE },
 };
 
 // ---------------------------------------------------------------------------

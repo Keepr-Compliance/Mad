@@ -1109,38 +1109,6 @@ class TransactionService {
   }
 
   /**
-   * Create manual transaction (user-entered)
-   */
-  async createManualTransaction(
-    userId: string,
-    transactionData: Partial<NewTransaction>,
-  ): Promise<Transaction> {
-    const transaction = await databaseService.createTransaction({
-      user_id: userId,
-      property_address: transactionData.property_address!,
-      property_street: transactionData.property_street,
-      property_city: transactionData.property_city,
-      property_state: transactionData.property_state,
-      property_zip: transactionData.property_zip,
-      transaction_type: transactionData.transaction_type,
-      status: transactionData.status || "active",
-      started_at: transactionData.started_at,
-      closed_at: transactionData.closed_at,
-      closing_date_verified: false,
-      representation_start_confidence: undefined,
-      closing_date_confidence: undefined,
-      export_status: "not_exported",
-      export_count: 0,
-      communications_scanned: 0,
-      total_communications_count: 0,
-      offer_count: 0,
-      failed_offers_count: 0,
-    } as NewTransaction);
-
-    return transaction;
-  }
-
-  /**
    * Create audited transaction with contact assignments
    */
   async createAuditedTransaction(
