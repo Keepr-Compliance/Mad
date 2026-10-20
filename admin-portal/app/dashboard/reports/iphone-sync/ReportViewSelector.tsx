@@ -19,12 +19,12 @@ import { useRef, useState } from 'react';
 import { Bookmark, ChevronDown, Pin, PinOff, Save, X } from 'lucide-react';
 import { useClickOutside } from '@/hooks/useClickOutside';
 import {
+  FALLBACK_METRIC,
   functionsFor,
   METRIC_COLUMNS,
   METRIC_FUNCTIONS,
   MAX_PINNED,
   type MetricColumn,
-  type MetricFunction,
   type ReportSavedView,
   type ViewMetric,
 } from '@/lib/reports/report-views';
@@ -32,9 +32,32 @@ import {
 const FIELD_CLASS =
   'text-sm border border-gray-300 rounded px-2 py-1 text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500';
 
-export interface ReportViewSelectorProps {
+/** What the dropdown needs from a view. Every report's saved view has these. */
+export interface SelectableView {
+  id: string;
+  name: string;
+  pinned: boolean;
+}
+
+export interface MetricChoice {
+  col: string;
+  fn: string;
+}
+
+export interface MetricOption {
+  value: string;
+  label: string;
+}
+
+const IPHONE_SAVE_HINT =
+  'Saves the Type, Outcome, Platform, search and Stalled filters you have now — not the period. The card follows whichever period is selected.';
+
+export interface ReportViewSelectorProps<
+  V extends SelectableView = ReportSavedView,
+  M extends MetricChoice = ViewMetric,
+> {
   /** Null when the views could not be read — see the file header. */
-  views: ReportSavedView[] | null;
+  views: V[] | null;
   loading: boolean;
   /** Which view, if any, the page's current filters match. */
   activeViewId: string | null;
@@ -44,13 +67,29 @@ export interface ReportViewSelectorProps {
    * the refusal again, and that must be a type error rather than a silence.
    */
   writeError: string | null;
-  onApply: (view: ReportSavedView) => void;
-  onTogglePin: (view: ReportSavedView) => void;
-  onDelete: (view: ReportSavedView) => void;
-  onSave: (name: string, metric: ViewMetric, pinned: boolean) => void;
+  onApply: (view: V) => void;
+  onTogglePin: (view: V) => void;
+  onDelete: (view: V) => void;
+  onSave: (name: string, metric: M, pinned: boolean) => void;
+  /**
+   * The metric picker (BACKLOG-4004). Every one defaults to the iPhone Sync
+   * report's own columns, functions and starting metric; a second report
+   * passes its own.
+   */
+  columns?: MetricOption[];
+  functions?: MetricOption[];
+  functionsForColumn?: (col: string) => string[];
+  defaultMetric?: M;
+  /** The sentence under the picker saying which filters a view keeps. */
+  saveHint?: string;
 }
 
-export function ReportViewSelector({
+const iphoneFunctionsFor = (col: string) => functionsFor(col as MetricColumn);
+
+export function ReportViewSelector<
+  V extends SelectableView = ReportSavedView,
+  M extends MetricChoice = ViewMetric,
+>({
   views,
   loading,
   activeViewId,
@@ -59,12 +98,17 @@ export function ReportViewSelector({
   onTogglePin,
   onDelete,
   onSave,
-}: ReportViewSelectorProps) {
+  columns = METRIC_COLUMNS,
+  functions = METRIC_FUNCTIONS,
+  functionsForColumn = iphoneFunctionsFor,
+  defaultMetric = FALLBACK_METRIC as M,
+  saveHint = IPHONE_SAVE_HINT,
+}: ReportViewSelectorProps<V, M>) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState('');
-  const [col, setCol] = useState<MetricColumn>('runs');
-  const [fn, setFn] = useState<MetricFunction>('count');
+  const [col, setCol] = useState<string>(defaultMetric.col);
+  const [fn, setFn] = useState<string>(defaultMetric.fn);
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -77,12 +121,12 @@ export function ReportViewSelector({
   const message = error ?? writeError;
   const list = views ?? [];
   const pinnedCount = list.filter((v) => v.pinned).length;
-  const allowedFunctions = functionsFor(col);
+  const allowedFunctions = functionsForColumn(col);
 
-  function chooseColumn(next: MetricColumn) {
+  function chooseColumn(next: string) {
     setCol(next);
     // `runs` offers count only, so a stale "average" would be unreachable.
-    const allowed = functionsFor(next);
+    const allowed = functionsForColumn(next);
     if (!allowed.includes(fn)) setFn(allowed[0]);
   }
 
@@ -97,12 +141,12 @@ export function ReportViewSelector({
       return;
     }
     setError(null);
-    onSave(trimmed, { col, fn }, true);
+    onSave(trimmed, { col, fn } as M, true);
     setName('');
     setSaving(false);
   }
 
-  function handleTogglePin(view: ReportSavedView) {
+  function handleTogglePin(view: V) {
     if (!view.pinned && pinnedCount >= MAX_PINNED) {
       setError(`At most ${MAX_PINNED} pinned cards. Unpin one first.`);
       return;
@@ -215,10 +259,10 @@ export function ReportViewSelector({
                     <select
                       aria-label="Column"
                       value={col}
-                      onChange={(e) => chooseColumn(e.target.value as MetricColumn)}
+                      onChange={(e) => chooseColumn(e.target.value)}
                       className={`${FIELD_CLASS} flex-1`}
                     >
-                      {METRIC_COLUMNS.map((option) => (
+                      {columns.map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
                         </option>
@@ -227,20 +271,17 @@ export function ReportViewSelector({
                     <select
                       aria-label="Function"
                       value={fn}
-                      onChange={(e) => setFn(e.target.value as MetricFunction)}
+                      onChange={(e) => setFn(e.target.value)}
                       className={`${FIELD_CLASS} flex-1`}
                     >
-                      {METRIC_FUNCTIONS.filter((f) => allowedFunctions.includes(f.value)).map((f) => (
+                      {functions.filter((f) => allowedFunctions.includes(f.value)).map((f) => (
                         <option key={f.value} value={f.value}>
                           {f.label}
                         </option>
                       ))}
                     </select>
                   </div>
-                  <p className="px-0.5 text-xs text-gray-500">
-                    Saves the Type, Outcome, Platform, search and Stalled filters you have now — not
-                    the period. The card follows whichever period is selected.
-                  </p>
+                  <p className="px-0.5 text-xs text-gray-500">{saveHint}</p>
                   <div className="flex justify-end gap-2">
                     <button
                       type="button"
