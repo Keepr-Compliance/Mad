@@ -27,7 +27,7 @@ vi.mock('@/lib/supabase/server', () => ({
 
 const INPUT = {
   organizationId: 'o1', seats: 5, unitPriceCents: 2000, billingContactName: 'B', billingContactEmail: 'b@example.test',
-  accountManagerId: null, reason: '', expectedVersion: 3,
+  accountManagerId: null, reason: '', expectedVersion: 3, startDate: null,
 };
 
 // Shape of admin_get_org_billing (supabase/migrations/20261019030000_*), as in billing-card-3853/cardVisibility.test.tsx.
@@ -35,10 +35,12 @@ const DEAL: OrgDeal = {
   organization_id: 'o1', stripe_mode: 'test', status: 'active', seats: 5, start_date: '2026-10-01',
   account_manager_id: null, billing_contact_name: 'B', billing_contact_email: 'b@example.test',
   suspended_at: null, suspended_reason: null, suspended_note: null, version: 3,
+  billing_starts_on: null, setup_completed_at: null, billing_contact_id: null,
 };
 const BILLING: OrgBilling = {
   billing_live: false, is_test: true, list_price_cents: 2499, cap_pct: 20,
   can_manage: true, can_approve: false, can_suspend: true, assigned_seats: 0,
+  business_date: '2026-10-19', state: null, contact: null, company: null, terms_accepted: null,
   deal: null, seat_line: null, stripe: null, account_managers: [], log: [],
 };
 

@@ -3,8 +3,9 @@
 /**
  * BrokerageBillingCard - staff deal setup for one brokerage (BACKLOG-3853 PR-2A).
  *
- * Shows the deal (seats, price per seat, billing contact, account manager), the Stripe
- * status and any suspension. Sales and Super Admin set up or edit the deal, and suspend
+ * Shows the deal (seats, price per seat, start date, billing contact, account manager), the
+ * deal state, the Stripe subscription and any suspension. BACKLOG-4007: a new deal waits for
+ * customer setup ('draft'); its start date is chosen here and locks once setup is done. Sales and Super Admin set up or edit the deal, and suspend
  * or reinstate the brokerage. The database checks every permission and the Sales cap;
  * this card only mirrors the cap for the readout under the price.
  *
@@ -31,10 +32,16 @@ import {
 } from '@keepr/design-system';
 import { formatDate } from '@/lib/format';
 import {
+  DEAL_STATUS_BADGE,
   centsFromDollars,
   checkPrice,
+  checkStartDate,
+  dealErrorMessage,
   formatCents,
+  formatDay,
   resolveDealReason,
+  startDateEditable,
+  subscriptionLine,
   visibleChangeLog,
   type OrgBilling,
 } from '@/lib/billing/dealRules';
@@ -47,16 +54,9 @@ interface BrokerageBillingCardProps {
   billing: OrgBilling;
 }
 
-const STATUS_BADGE: Record<string, { label: string; hue: 'green' | 'red' | 'amber' | 'gray' }> = {
-  active: { label: 'Billing active', hue: 'green' },
-  suspended: { label: 'Suspended', hue: 'red' },
-  canceling: { label: 'Cancel pending', hue: 'amber' },
-  canceled: { label: 'Canceled', hue: 'gray' },
-  draft: { label: 'Draft', hue: 'gray' },
-};
-
 const ACTION_LABEL: Record<string, string> = {
   deal_saved: 'Deal saved',
+  setup_completed: 'Billing setup completed',
   suspended: 'Suspended',
   reinstated: 'Reinstated',
 };
@@ -70,7 +70,9 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
   const [logExpanded, setLogExpanded] = useState(false);
   const { visible: visibleLog, hidden: hiddenLog } = visibleChangeLog(billing.log, logExpanded);
 
-  const status = deal ? STATUS_BADGE[deal.status] ?? { label: deal.status, hue: 'gray' as const } : { label: 'No billing set up', hue: 'gray' as const };
+  const status = deal ? DEAL_STATUS_BADGE[deal.status] ?? { label: deal.status, hue: 'gray' as const } : { label: 'No billing set up', hue: 'gray' as const };
+  const subscription = subscriptionLine(billing);
+  const contact = billing.contact;
   const manager = billing.account_managers.find((m) => m.id === deal?.account_manager_id);
   const price = billing.seat_line?.unit_price_cents ?? null;
   const list = billing.list_price_cents;
@@ -94,7 +96,7 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
           </div>
           <p className="mt-1 text-sm text-gray-500">
             {deal ? `Stripe invoice, net-15, ${deal.stripe_mode === 'test' ? 'test mode' : 'live mode'}.` : `${organizationName} has a plan but no deal and no invoices.`}
-            {billing.stripe?.status ? ` Stripe subscription: ${billing.stripe.status.replace('_', ' ')}.` : ''}
+            {deal?.status === 'draft' ? ' Becomes Active when the broker finishes billing setup.' : ''}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -127,9 +129,24 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
             value={`${formatCents(price)} / month`}
             help={price != null && list != null ? priceHelp(list, price) : undefined}
           />
-          <Field label="Started" value={formatDate(deal.start_date)} />
-          <Field label="Billing contact" value={deal.billing_contact_name || deal.billing_contact_email || 'Not set'} help={deal.billing_contact_name ? deal.billing_contact_email ?? undefined : undefined} />
+          <Field label="Start date" value={formatDay(deal.start_date)} />
+          {subscription && <Field label="Stripe subscription" value={subscription.value} help={subscription.help} />}
+          <Field
+            label="Billing contact"
+            value={contact ? contact.name || contact.email : deal.status === 'draft' ? 'Not set yet. The broker sets it in setup.' : 'Not set'}
+            help={contact ? [contact.email, contact.phone ?? 'Phone not set', contact.has_login ? 'billing-only login' : null].filter(Boolean).join(' · ') : undefined}
+          />
           <Field label="Account manager" value={manager?.name ?? 'Not assigned'} />
+          {billing.company?.legal_name && (
+            <Field
+              label="Company"
+              value={billing.company.legal_name}
+              help={[billing.company.city, billing.company.region, billing.company.po_number ? `PO ${billing.company.po_number}` : null].filter(Boolean).join(' · ') || undefined}
+            />
+          )}
+          {billing.terms_accepted && (
+            <Field label="Terms accepted" value={formatDate(billing.terms_accepted.at)} help={billing.terms_accepted.by ?? undefined} />
+          )}
         </dl>
       )}
 
@@ -234,6 +251,10 @@ export function DealEditor({
   const [priceText, setPriceText] = useState(((current ?? list ?? 0) / 100).toFixed(2));
   const [contactName, setContactName] = useState(deal?.billing_contact_name ?? '');
   const [contactEmail, setContactEmail] = useState(deal?.billing_contact_email ?? '');
+  // BACKLOG-4007: the broker sets the billing contact in setup, so a new or waiting deal has no contact fields.
+  const showContact = !!deal && deal.status !== 'draft';
+  const dateEditable = startDateEditable(deal);
+  const [startDate, setStartDate] = useState(deal?.start_date ?? billing.business_date);
   const [managerId, setManagerId] = useState(deal?.account_manager_id ?? '');
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -253,7 +274,10 @@ export function DealEditor({
     const n = Number(seats);
     if (!Number.isInteger(n) || n < 1) return setError('Enter at least 1 seat.');
     if (priceCents == null) return setError('Enter a price per seat.');
-    if (!contactEmail.trim()) return setError('Enter the billing contact email. Invoices are sent there.');
+    if (dateEditable) {
+      const dateError = checkStartDate(startDate, billing.business_date, deal?.start_date ?? null);
+      if (dateError) return setError(dealErrorMessage(dateError));
+    }
     const dealReason = resolveDealReason(!!deal, reason);
     if (dealReason == null) return setError('Enter a reason. Every deal change is logged with who and why.');
     setSaving(true);
@@ -261,11 +285,12 @@ export function DealEditor({
       organizationId,
       seats: n,
       unitPriceCents: priceCents,
-      billingContactName: contactName,
-      billingContactEmail: contactEmail,
+      billingContactName: showContact ? contactName : '',
+      billingContactEmail: showContact ? contactEmail : '',
       accountManagerId: managerId || null,
       reason: dealReason,
       expectedVersion: deal?.version ?? null,
+      startDate: dateEditable ? startDate : null,
     });
     setSaving(false);
     if (!res.ok) return setError(res.error);
@@ -282,8 +307,19 @@ export function DealEditor({
             <FieldHelp>Change the plan in the Plan card.</FieldHelp>
           </div>
           <div>
-            <Label>Start date</Label>
-            <p className="mt-1 text-sm text-gray-900">{deal ? formatDate(deal.start_date) : 'Today, when you save'}</p>
+            {dateEditable ? (
+              <>
+                <Label htmlFor="deal-start-date" required>Start date</Label>
+                <Input id="deal-start-date" type="date" min={billing.business_date} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+                <FieldHelp>Today or later. Billing starts on this date or when the broker finishes setup, whichever is later.</FieldHelp>
+              </>
+            ) : (
+              <>
+                <Label>Start date</Label>
+                <p className="mt-1 text-sm text-gray-900">{formatDay(deal?.start_date)}</p>
+                <FieldHelp>Locked after customer setup.</FieldHelp>
+              </>
+            )}
           </div>
           <div>
             <Label htmlFor="deal-seats" required>Seats</Label>
@@ -295,15 +331,19 @@ export function DealEditor({
             <Input id="deal-price" inputMode="decimal" value={priceText} onChange={(e) => setPriceText(e.target.value)} />
             <FieldHelp>{priceReadout(check, list, Number(billing.cap_pct))}</FieldHelp>
           </div>
-          <div>
-            <Label htmlFor="deal-contact-name">Billing contact name</Label>
-            <Input id="deal-contact-name" value={contactName} onChange={(e) => setContactName(e.target.value)} />
-          </div>
-          <div>
-            <Label htmlFor="deal-contact-email" required>Billing contact email</Label>
-            <Input id="deal-contact-email" type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
-            <FieldHelp>Invoices and reminders go here.</FieldHelp>
-          </div>
+          {showContact && (
+            <>
+              <div>
+                <Label htmlFor="deal-contact-name">Billing contact name</Label>
+                <Input id="deal-contact-name" value={contactName} onChange={(e) => setContactName(e.target.value)} />
+              </div>
+              <div>
+                <Label htmlFor="deal-contact-email">Billing contact email</Label>
+                <Input id="deal-contact-email" type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
+                <FieldHelp>Invoices and reminders go here.</FieldHelp>
+              </div>
+            </>
+          )}
           <div>
             <Label htmlFor="deal-manager">Account manager</Label>
             <Select id="deal-manager" value={managerId} onChange={(e) => setManagerId(e.target.value)}>

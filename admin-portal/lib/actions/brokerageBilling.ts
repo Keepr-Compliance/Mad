@@ -29,6 +29,12 @@ export interface SaveDealInput {
   reason: string;
   /** null when the organization has no deal yet. */
   expectedVersion: number | null;
+  /**
+   * BACKLOG-4007: yyyy-mm-dd start date, or null to keep the deal's date (today on a new deal).
+   * Always sent as p_start_date: without the key PostgREST resolves the 9-arg wrapper,
+   * which ignores any chosen date.
+   */
+  startDate: string | null;
 }
 
 type RpcResult = { success?: boolean; error?: string; pct_off?: number; cap_pct?: number; assigned?: number } | null;
@@ -63,6 +69,7 @@ export async function saveDealAction(input: SaveDealInput): Promise<ActionResult
     p_account_manager_id: input.accountManagerId,
     p_reason: input.reason,
     p_expected_version: input.expectedVersion,
+    p_start_date: input.startDate,
   });
   const result = fromRpc(data as RpcResult, error);
   if (result.ok) revalidatePath(`/dashboard/organizations/${input.organizationId}`);

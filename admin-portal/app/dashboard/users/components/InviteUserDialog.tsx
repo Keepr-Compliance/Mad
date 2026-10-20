@@ -9,11 +9,14 @@
  *
  * BACKLOG-1492: Admin invite users
  * BACKLOG-1533: Organization optional for individual users
+ * BACKLOG-4007: no License Status field (the license comes from the brokerage's deal).
+ *   Opened from an organization page, the organization is prefilled and locked.
  */
 
 import { useState, useEffect, useRef, useId, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Button, Input, Select, Label } from '@keepr/design-system';
+import { Lock } from 'lucide-react';
+import { Button, FieldHelp, Input, Select, Label } from '@keepr/design-system';
 import { createClient } from '@/lib/supabase/client';
 import { inviteUser } from '@/lib/actions/inviteUser';
 
@@ -28,18 +31,23 @@ interface Organization {
   name: string;
 }
 
+type InviteRole = (typeof ROLE_OPTIONS)[number]['value'];
+
 interface InviteUserDialogProps {
   onClose: () => void;
   onInvited: () => void;
+  /** Set when opened from an organization page: the organization cannot be changed. */
+  lockedOrganization?: Organization;
+  /** Role preselected when the dialog opens (default Agent). */
+  defaultRole?: InviteRole;
 }
 
-export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) {
+export function InviteUserDialog({ onClose, onInvited, lockedOrganization, defaultRole = 'agent' }: InviteUserDialogProps) {
   const [email, setEmail] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
-  const [organizationId, setOrganizationId] = useState('');
-  const [role, setRole] = useState<'agent' | 'broker' | 'admin'>('agent');
-  const [licenseStatus, setLicenseStatus] = useState<'trial' | 'active'>('trial');
+  const [organizationId, setOrganizationId] = useState(lockedOrganization?.id ?? '');
+  const [role, setRole] = useState<InviteRole>(defaultRole);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isDuplicateError, setIsDuplicateError] = useState(false);
@@ -55,14 +63,15 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
   // Organization search state
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [orgSearch, setOrgSearch] = useState('');
-  const [orgsLoading, setOrgsLoading] = useState(true);
+  const [orgsLoading, setOrgsLoading] = useState(!lockedOrganization);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const router = useRouter();
 
-  // Load organizations on mount
+  // Load organizations on mount (not needed when the organization is locked)
   useEffect(() => {
+    if (lockedOrganization) return;
     async function loadOrgs() {
       const supabase = createClient();
       const { data } = await supabase
@@ -73,7 +82,7 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
       setOrgsLoading(false);
     }
     loadOrgs();
-  }, []);
+  }, [lockedOrganization]);
 
   useEffect(() => {
     dialogRef.current?.focus();
@@ -97,8 +106,9 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
   }, [organizations, orgSearch]);
 
   const selectedOrgName = useMemo(() => {
+    if (lockedOrganization) return lockedOrganization.name;
     return organizations.find((o) => o.id === organizationId)?.name ?? '';
-  }, [organizations, organizationId]);
+  }, [organizations, organizationId, lockedOrganization]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -123,8 +133,7 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
       firstName: firstName.trim(),
       lastName: lastName.trim(),
       role,
-      organizationId: organizationId || null,
-      licenseStatus,
+      organizationId: lockedOrganization?.id ?? (organizationId || null),
       planId: null,
     });
 
@@ -248,8 +257,9 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
           Invite User
         </h3>
         <p className="mt-1 text-sm text-gray-500">
-          Select an organization to invite a member, or leave it empty to send an
-          individual download invite.
+          {lockedOrganization
+            ? `Invite a member of ${lockedOrganization.name}.`
+            : 'Select an organization to invite a member, or leave it empty to send an individual download invite.'}
         </p>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
@@ -298,7 +308,18 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
             />
           </div>
 
-          {/* Organization (searchable, optional) */}
+          {/* Organization: locked when opened from an organization page */}
+          {lockedOrganization ? (
+            <div>
+              <Label htmlFor="invite-org-locked">Organization</Label>
+              <div className="relative">
+                <Input id="invite-org-locked" type="text" value={lockedOrganization.name} readOnly disabled className="pr-9" />
+                <Lock className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" aria-hidden="true" />
+              </div>
+              <FieldHelp>Set from the organization page.</FieldHelp>
+            </div>
+          ) : (
+          /* Organization (searchable, optional) */
           <div>
             <Label htmlFor="invite-org">
               Organization <span className="font-normal text-gray-400">(optional)</span>
@@ -355,6 +376,7 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
               </>
             )}
           </div>
+          )}
 
           {/* Role (only shown when organization is selected) */}
           {organizationId && (
@@ -365,7 +387,7 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
               <Select
                 id="invite-role"
                 value={role}
-                onChange={(e) => setRole(e.target.value as 'agent' | 'broker' | 'admin')}
+                onChange={(e) => setRole(e.target.value as InviteRole)}
                 disabled={isLoading}
               >
                 {ROLE_OPTIONS.map((r) => (
@@ -374,6 +396,9 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
                   </option>
                 ))}
               </Select>
+              {lockedOrganization && defaultRole === 'admin' && (
+                <FieldHelp>Admin is the default for the first invite.</FieldHelp>
+              )}
             </div>
           )}
 
@@ -387,24 +412,6 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
                 The invitee downloads Keepr, signs in with this email, and a 14-day
                 trial starts automatically — no plan or acceptance link needed.
               </p>
-            </div>
-          )}
-
-          {/* License Status (org invites only — trial is auto-provisioned for individuals) */}
-          {organizationId && (
-            <div>
-              <Label htmlFor="invite-license-status">
-                License Status
-              </Label>
-              <Select
-                id="invite-license-status"
-                value={licenseStatus}
-                onChange={(e) => setLicenseStatus(e.target.value as 'trial' | 'active')}
-                disabled={isLoading}
-              >
-                <option value="trial">Trial</option>
-                <option value="active">Active</option>
-              </Select>
             </div>
           )}
 
