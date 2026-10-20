@@ -13,7 +13,6 @@ import type {
   CommunicationFilters,
   ContactFilters,
   NewContact,
-  NewTransaction,
   OAuthProvider,
   ExportFormat,
 } from "../models";
@@ -68,10 +67,6 @@ export interface IpcChannels {
   "transactions:get-by-id": {
     request: { transactionId: string };
     response: Transaction | null;
-  };
-  "transactions:create": {
-    request: { userId: string; transactionData: NewTransaction };
-    response: Transaction;
   };
   "transactions:update": {
     request: { transactionId: string; updates: Partial<Transaction> };
@@ -145,10 +140,6 @@ export interface IpcChannels {
   };
   "contacts:update": {
     request: { contactId: string; updates: Partial<Contact> };
-    response: { success: boolean };
-  };
-  "contacts:delete": {
-    request: { contactId: string };
     response: { success: boolean };
   };
   "contacts:remove": {
