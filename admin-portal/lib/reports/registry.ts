@@ -2,7 +2,7 @@
  * Report registry (BACKLOG-3441)
  *
  * The one place a new report is registered. Adding a report means adding a row
- * here and a folder under `app/dashboard/analytics/reports/<slug>/` — the
+ * here and a folder under `app/dashboard/reports/<slug>/` — the
  * sidebar never changes again.
  */
 
@@ -18,7 +18,7 @@ export interface ReportEntry {
   permission: PermissionKey;
 }
 
-export const REPORTS_BASE_PATH = '/dashboard/analytics/reports';
+export const REPORTS_BASE_PATH = '/dashboard/reports';
 
 export const REPORTS: ReportEntry[] = [
   {
