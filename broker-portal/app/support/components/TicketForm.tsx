@@ -47,7 +47,7 @@ export function TicketForm({ preset = null }: TicketFormProps = {}) {
   const [email, setEmail] = useState('');
   const [subject, setSubject] = useState(preset?.subject ?? '');
   const [description, setDescription] = useState(preset?.description ?? '');
-  const [priority, setPriority] = useState<TicketPriority>('normal');
+  const [priority, setPriority] = useState<TicketPriority>(preset?.priority ?? 'normal');
   const [categoryId, setCategoryId] = useState('');
   const [subcategoryId, setSubcategoryId] = useState('');
   const [files, setFiles] = useState<PendingFile[]>([]);

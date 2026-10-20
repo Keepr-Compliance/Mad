@@ -13,19 +13,18 @@ import { SuspendedSupportLink } from './SuspendedBanner';
 
 export type OrgSuspensionReason = 'non_payment' | 'other' | null;
 
-const PAUSED =
-  'submissions, approvals and invites are paused and Checklists are hidden. Your agents can still see their own past submissions, read-only, but cannot export or submit from the Keepr desktop app. Billing, Support and My Account stay available.';
+const PAUSED = 'Submissions, approvals and invites are paused. Agents can still view their own past submissions.';
 
 /** The banner's text for this reason and role. Exported for the tests. */
 export function orgSuspendedBannerText(reason: OrgSuspensionReason, role: string): { lead: string; body: string } {
   if (reason !== 'non_payment') {
-    return { lead: 'Your brokerage account is suspended.', body: `Contact Keepr to restore it. Until then, ${PAUSED}` };
+    return { lead: 'Your brokerage account is suspended.', body: `${PAUSED} Contact Keepr to restore it.` };
   }
   const payer = role === 'broker' || role === 'admin';
   const close = payer
-    ? 'Invoices keep being issued. Pay the overdue invoice from the link in the suspension email sent to your billing contact; access comes back by itself once every overdue invoice is paid.'
-    : 'Invoices keep being issued. A Broker or Admin can pay it. Access comes back by itself once every overdue invoice is paid.';
-  return { lead: 'Your brokerage is suspended for an unpaid invoice.', body: `Until it is paid, ${PAUSED} ${close}` };
+    ? 'Pay from the link in the suspension email; access returns once every overdue invoice is paid.'
+    : 'A Broker or Admin can pay it; access returns once every overdue invoice is paid.';
+  return { lead: 'Your brokerage is suspended for an unpaid invoice.', body: `${PAUSED} ${close}` };
 }
 
 export function OrgSuspendedBanner({ reason, role }: { reason: OrgSuspensionReason; role: string }) {

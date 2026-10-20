@@ -1013,8 +1013,9 @@ describe('C-B1: a suspended brokerage (BACKLOG-3853)', () => {
     given([brokerageMembership(role)]);
     const text = await banner();
     expect(text).toContain('Your brokerage is suspended for an unpaid invoice.');
-    expect(text).toContain('Pay the overdue invoice from the link in the suspension email sent to your billing contact');
-    expect(text).toContain('once every overdue invoice is paid');
+    expect(text).toBe(
+      'Your brokerage is suspended for an unpaid invoice. Submissions, approvals and invites are paused. Agents can still view their own past submissions. Pay from the link in the suspension email; access returns once every overdue invoice is paid.Contact support'
+    );
     expect(text).not.toContain('Pay overdue invoice');
   });
 
@@ -1022,18 +1023,21 @@ describe('C-B1: a suspended brokerage (BACKLOG-3853)', () => {
     given([brokerageMembership('it_admin')]);
     suspend('non_payment');
     const text = await banner();
-    expect(text).toContain('A Broker or Admin can pay it.');
-    expect(text).not.toContain('Pay the overdue invoice');
+    expect(text).toBe(
+      'Your brokerage is suspended for an unpaid invoice. Submissions, approvals and invites are paused. Agents can still view their own past submissions. A Broker or Admin can pay it; access returns once every overdue invoice is paid.Contact support'
+    );
+    expect(text).not.toContain('Pay from the link');
   });
 
   it('reason other: contact Keepr, no pay sentence', async () => {
     given([brokerageMembership('admin')]);
     suspend('other');
     const text = await banner();
-    expect(text).toContain('Your brokerage account is suspended.');
-    expect(text).toContain('Contact Keepr to restore it.');
+    expect(text).toBe(
+      'Your brokerage account is suspended. Submissions, approvals and invites are paused. Agents can still view their own past submissions. Contact Keepr to restore it.Contact support'
+    );
     expect(text).not.toContain('unpaid invoice');
-    expect(text).not.toContain('Pay the overdue invoice');
+    expect(text).not.toContain('Pay from the link');
   });
 
   it('control: the same broker with the brokerage active gets no banner', async () => {
