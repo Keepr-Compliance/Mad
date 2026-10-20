@@ -10,6 +10,7 @@ import { BrokerageBillingCard } from './components/BrokerageBillingCard';
 import { OrgInviteButton } from './components/OrgInviteButton';
 import { shouldShowBillingCard, type OrgBilling } from '@/lib/billing/dealRules';
 import { formatDate } from '@/lib/format';
+import { pickOrgPlanRow, type OrgPlanEmbed } from '@/lib/orgPlanEmbed';
 
 export const dynamic = 'force-dynamic';
 
@@ -103,9 +104,8 @@ export default async function OrganizationDetailPage({
 
   const org = orgResult.data;
 
-  // Extract plan from organization_plans join (same pattern as user detail page)
-  const orgPlans = org.organization_plans as unknown as { plan_id: string; plans: { id: string; name: string; tier: string } | null }[] | null;
-  const activePlan = orgPlans?.[0]?.plans ?? null;
+  // Extract plan from the organization_plans embed (object or array, see lib/orgPlanEmbed.ts)
+  const activePlan = pickOrgPlanRow(org.organization_plans as unknown as OrgPlanEmbed)?.plans ?? null;
   const planName = activePlan?.name ?? 'None';
 
   // Transform members to include user info
