@@ -10,15 +10,11 @@ import type { IpcMainInvokeEvent } from "electron";
 // Import services
 import databaseService from "../services/databaseService";
 import microsoftAuthService from "../services/microsoftAuthService";
-import OutlookService from "../outlookService";
 import logService from "../services/logService";
 import { getValidUserId } from "../utils/userIdHelper";
 
 // Track registration to prevent duplicate handlers
 let handlersRegistered = false;
-
-// Outlook service instance - shared across handlers
-let outlookService: OutlookService | null = null;
 
 // Note: getValidUserId imported from ../utils/userIdHelper (BACKLOG-615: removed duplicate)
 
@@ -35,9 +31,6 @@ export function registerOutlookHandlers(_mainWindow: BrowserWindow): void {
     return;
   }
   handlersRegistered = true;
-
-  // Initialize outlook service
-  outlookService = new OutlookService();
 
   // ===== OUTLOOK INTEGRATION IPC HANDLERS =====
   // Now using redirect-based OAuth (no device code required!)
@@ -198,26 +191,8 @@ export function registerOutlookHandlers(_mainWindow: BrowserWindow): void {
     }
   );
 
-  // Sign out from Outlook
+  // Sign out from Outlook (no-op, kept for compatibility; mailbox tokens live in the database)
   ipcMain.handle("outlook-signout", async () => {
-    try {
-      if (outlookService) {
-        await outlookService.signOut();
-      }
-      return { success: true };
-    } catch (error) {
-      logService.error("Error signing out", "OutlookHandlers", { error });
-      return {
-        success: false,
-        error: (error as Error).message,
-      };
-    }
+    return { success: true };
   });
-}
-
-/**
- * Get the Outlook service instance (for use by other handlers if needed)
- */
-export function getOutlookService(): OutlookService | null {
-  return outlookService;
 }
