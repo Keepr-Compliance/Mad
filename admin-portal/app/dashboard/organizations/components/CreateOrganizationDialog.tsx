@@ -3,13 +3,15 @@
 /**
  * CreateOrganizationDialog - Modal dialog for creating a new organization.
  *
- * Collects name, max seats, and optional plan assignment.
+ * Collects name and optional plan assignment. BACKLOG-4007: no Max Seats and no Default
+ * License Status. Seats are entered once, on the deal; until a deal exists the database
+ * default (admin_create_organization p_max_seats DEFAULT 5) applies.
  * Uses admin_create_organization RPC, then optionally admin_assign_org_plan.
  * Does NOT set the legacy `plan` column on organizations.
  */
 
 import { useState, useEffect, useId } from 'react';
-import { Button, FieldError, FieldHelp, Input, Label, Modal, Select } from '@keepr/design-system';
+import { Button, FieldError, Input, Label, Modal, Select } from '@keepr/design-system';
 import { createOrganization, assignOrgPlan, getActivePlansForOrgs, type Plan } from '@/lib/admin-queries';
 
 interface CreateOrganizationDialogProps {
@@ -19,9 +21,7 @@ interface CreateOrganizationDialogProps {
 
 export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizationDialogProps) {
   const [name, setName] = useState('');
-  const [maxSeats, setMaxSeats] = useState(5);
   const [selectedPlanId, setSelectedPlanId] = useState('');
-  const [defaultLicenseStatus, setDefaultLicenseStatus] = useState<'trial' | 'active'>('trial');
   const [plans, setPlans] = useState<Plan[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingPlans, setIsLoadingPlans] = useState(true);
@@ -51,7 +51,7 @@ export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizat
     setError(null);
 
     // Step 1: Create the organization
-    const result = await createOrganization(name.trim(), maxSeats);
+    const result = await createOrganization(name.trim());
 
     if (result.error) {
       setError(result.error.message);
@@ -81,7 +81,7 @@ export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizat
         Create Organization
       </h3>
       <p className="mt-1 text-sm text-gray-500">
-        Set up a new organization with a name and seat limit.
+        Seats are set on the deal, after the organization exists.
       </p>
 
       <form onSubmit={handleSubmit} className="mt-4 space-y-4">
@@ -96,20 +96,6 @@ export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizat
             placeholder="e.g. Acme Realty"
             disabled={isLoading}
             autoFocus
-          />
-        </div>
-
-        {/* Max Seats */}
-        <div>
-          <Label htmlFor="org-max-seats">Max Seats</Label>
-          <Input
-            id="org-max-seats"
-            type="number"
-            min={1}
-            max={1000}
-            value={maxSeats}
-            onChange={(e) => setMaxSeats(Math.max(1, parseInt(e.target.value) || 1))}
-            disabled={isLoading}
           />
         </div>
 
@@ -129,23 +115,6 @@ export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizat
               </option>
             ))}
           </Select>
-        </div>
-
-        {/* Default License Status */}
-        <div>
-          <Label htmlFor="org-license-status">Default License Status</Label>
-          <Select
-            id="org-license-status"
-            value={defaultLicenseStatus}
-            onChange={(e) => setDefaultLicenseStatus(e.target.value as 'trial' | 'active')}
-            disabled={isLoading}
-          >
-            <option value="trial">Trial</option>
-            <option value="active">Active</option>
-          </Select>
-          <FieldHelp>
-            License status applied to members who join this organization.
-          </FieldHelp>
         </div>
 
         {/* Error */}

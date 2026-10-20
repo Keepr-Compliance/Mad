@@ -7,6 +7,7 @@ import { MembersTable, type MemberRow } from './components/MembersTable';
 import { PendingInvitationsTable, type PendingInvitationRow } from './components/PendingInvitationsTable';
 import { PlanAssignment } from './components/PlanAssignment';
 import { BrokerageBillingCard } from './components/BrokerageBillingCard';
+import { OrgInviteButton } from './components/OrgInviteButton';
 import { shouldShowBillingCard, type OrgBilling } from '@/lib/billing/dealRules';
 import { formatDate } from '@/lib/format';
 
@@ -53,6 +54,12 @@ export default async function OrganizationDetailPage({
   const { data: canManagePlans } = await supabase.rpc('has_permission', {
     check_user_id: adminUser.id,
     required_permission: 'plans.manage',
+  });
+
+  // BACKLOG-4007: Invite on this page needs the same permission as the Users page invite.
+  const { data: canInvite } = await supabase.rpc('has_permission', {
+    check_user_id: adminUser.id,
+    required_permission: 'users.edit',
   });
 
   // BACKLOG-3853 PR-2A: the brokerage Billing card. billing.view gates the read
@@ -145,6 +152,14 @@ export default async function OrganizationDetailPage({
             <h1 className="text-2xl font-bold text-gray-900">{org.name}</h1>
             <p className="text-sm text-gray-500 mt-0.5">{org.slug}</p>
           </div>
+          <OrgInviteButton
+            organizationId={org.id}
+            organizationName={org.name}
+            canInvite={!!canInvite}
+            canViewBilling={!!canViewBilling}
+            hasDeal={!!billing?.deal}
+            isFirstInvite={members.length === 0 && pendingInvitations.length === 0}
+          />
         </div>
 
         <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">

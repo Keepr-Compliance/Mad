@@ -509,18 +509,18 @@ export async function updatePlanTier(
 /**
  * Create a new organization via admin_create_organization RPC.
  *
+ * BACKLOG-4007: no seat count is sent. Seats are set on the deal (_billing_save_deal writes
+ * organizations.max_seats); until then the RPC default (p_max_seats DEFAULT 5) applies.
+ *
  * @param name - Organization name
- * @param maxSeats - Maximum seats (default 5)
  */
 export async function createOrganization(
-  name: string,
-  maxSeats: number = 5
+  name: string
 ): Promise<RpcResult<{ success: boolean; id: string; slug: string }>> {
   const supabase = createClient();
 
   const { data, error } = await supabase.rpc('admin_create_organization', {
     p_name: name,
-    p_max_seats: maxSeats,
   });
 
   if (error) {

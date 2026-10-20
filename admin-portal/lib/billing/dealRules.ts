@@ -15,7 +15,14 @@ export interface OrgBilling {
   can_approve: boolean;
   can_suspend: boolean;
   assigned_seats: number;
+  /** BACKLOG-4007: the one business date (Pacific) every "today" rule uses, yyyy-mm-dd. */
+  business_date: string;
   deal: OrgDeal | null;
+  /** From deal status only: 'draft' -> 'waiting_for_setup'. null when there is no deal. */
+  state: 'waiting_for_setup' | 'active' | 'suspended' | 'canceling' | 'canceled' | null;
+  contact: OrgBillingContact | null;
+  company: OrgBillingCompany | null;
+  terms_accepted: { at: string; deal_version: number; terms_version: string; by: string | null } | null;
   seat_line: { unit_price_cents: number; list_price_cents_at_save: number | null; pct_off: number | null } | null;
   stripe: { stripe_mode: string; status: string | null; current_period_end: string | null; cancel_at_period_end: boolean } | null;
   account_managers: Array<{ id: string; name: string | null; email: string | null }>;
@@ -35,6 +42,79 @@ export interface OrgDeal {
   suspended_reason: 'non_payment' | 'other' | null;
   suspended_note: string | null;
   version: number;
+  /** Day Stripe billing starts; set when the broker finishes setup. */
+  billing_starts_on: string | null;
+  setup_completed_at: string | null;
+  billing_contact_id: string | null;
+}
+
+export interface OrgBillingContact {
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  has_login: boolean;
+}
+
+export interface OrgBillingCompany {
+  legal_name: string | null;
+  address_line1: string | null;
+  address_line2: string | null;
+  city: string | null;
+  region: string | null;
+  postal_code: string | null;
+  country: string | null;
+  po_number: string | null;
+}
+
+/** Badge for the deal state. Keyed on deal.status (never on setup_completed_at). */
+export const DEAL_STATUS_BADGE: Record<OrgDeal['status'], { label: string; hue: 'green' | 'red' | 'amber' | 'gray' }> = {
+  draft: { label: 'Waiting for customer setup', hue: 'amber' },
+  active: { label: 'Active', hue: 'green' },
+  suspended: { label: 'Suspended', hue: 'red' },
+  canceling: { label: 'Cancel pending', hue: 'amber' },
+  canceled: { label: 'Canceled', hue: 'gray' },
+};
+
+/** "2026-10-24" -> "Oct 24, 2026". A date with no time: never shifted by the viewer's time zone. */
+export function formatDay(day: string | null | undefined, fallback = 'Not set'): string {
+  const m = day ? /^(\d{4})-(\d{2})-(\d{2})/.exec(day) : null;
+  if (!m) return fallback;
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
+  });
+}
+
+/** The start date can be chosen on a new deal and changed while it waits for customer setup. */
+export function startDateEditable(deal: OrgDeal | null): boolean {
+  return !deal || deal.status === 'draft';
+}
+
+/**
+ * Client mirror of _billing_save_deal's start-date rule: today (business date) or later.
+ * A waiting deal whose date is unchanged is not re-checked (the database skips it too).
+ * Returns an error code or null. Dates are yyyy-mm-dd strings and compare as strings.
+ */
+export function checkStartDate(value: string, businessDate: string, existing: string | null): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'invalid_start_date';
+  if (existing != null && value === existing) return null;
+  if (value < businessDate) return 'start_date_past';
+  return null;
+}
+
+/** The Stripe subscription line on the Billing card. */
+export function subscriptionLine(b: OrgBilling): { value: string; help?: string } | null {
+  const deal = b.deal;
+  if (!deal) return null;
+  if (deal.status === 'draft') {
+    return { value: 'Not started', help: `Starts when the broker finishes billing setup, or ${formatDay(deal.start_date)} if later.` };
+  }
+  const status = b.stripe?.status ?? null;
+  if (status === 'trialing') {
+    return { value: `Billing starts ${formatDay(deal.billing_starts_on ?? deal.start_date)}` };
+  }
+  if (!status) return { value: 'Not created yet' };
+  return { value: status.charAt(0).toUpperCase() + status.slice(1).replace('_', ' ') };
 }
 
 /**
@@ -98,7 +178,10 @@ export function checkPrice(args: {
 
 const MESSAGES: Record<string, string> = {
   reason_required: 'Enter a reason. Every deal change is logged with who and why.',
-  billing_contact_required: 'Enter the billing contact email. Invoices are sent there.',
+  billing_contact_required: 'Enter a valid billing contact email.',
+  start_date_past: 'Pick today or a later start date.',
+  start_date_locked: 'The start date is locked once the customer has finished setup.',
+  invalid_start_date: 'Enter a start date.',
   invalid_price: 'Enter a price per seat.',
   invalid_account_manager: 'The account manager must be a Keepr Sales or Super Admin user.',
   discount_needs_approval: 'This price is deeper than the Sales cap. A Super Admin has to save it.',

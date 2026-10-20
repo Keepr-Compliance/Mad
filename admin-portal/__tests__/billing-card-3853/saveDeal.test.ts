@@ -19,7 +19,7 @@ vi.mock('@/lib/supabase/server', () => ({
 
 const INPUT = {
   organizationId: 'o1', seats: 5, unitPriceCents: 2000, billingContactName: 'B', billingContactEmail: 'b@example.test',
-  accountManagerId: null, reason: 'signed', expectedVersion: null,
+  accountManagerId: null, reason: 'signed', expectedVersion: null, startDate: null,
 };
 
 describe('saveDealAction mode (BACKLOG-3853 PR-2A)', () => {
