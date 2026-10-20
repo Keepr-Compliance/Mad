@@ -18,6 +18,7 @@ import { extractEmail } from '@/lib/auth/helpers';
 import { PORTAL_MEMBERSHIP_SELECT, memberStatusGrantsAccess, pickBrokerageMembership } from '@/lib/auth/membership';
 import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
 import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
+import { setupLanding } from '@/lib/billing/setupState';
 
 // Microsoft consumer tenant ID (personal Outlook/Hotmail accounts)
 const CONSUMER_TENANT_ID = '9188040d-6c67-4c5b-b112-36a304b66dad';
@@ -169,6 +170,16 @@ export async function GET(request: Request) {
       return finish(`${origin}/dashboard`);
     }
 
+    // BACKLOG-4007 PR-3: Billing comes before connecting Microsoft (founder 88a1f065). While the
+    // brokerage waits for the Billing step, a broker/admin goes to the setup guide and no tenant
+    // is linked here.
+    const guide = await setupLanding(supabase, {
+      organizationId: membership.organization_id,
+      role: membership.role,
+      licenseStatus: membership.license_status,
+    });
+    if (guide) return finish(`${origin}${guide}`);
+
     // If IT admin and consent not yet granted, redirect to consent page
     if (canGrantAdminConsent(membership.role)) {
       const { data: org } = await supabase
@@ -245,6 +256,18 @@ export async function GET(request: Request) {
       `Setup complete: org=${data.organization_id}, user=${data.user_id}, role=${data.role}`
     );
   }
+
+  // BACKLOG-4007 PR-3: an invited broker/admin of a brokerage that waits for the Billing step
+  // finishes billing before the consent page (founder 88a1f065).
+  // Only an accepted invitation places anyone here (auto_provision_it_admin places nobody).
+  const guide = inviteToken
+    ? await setupLanding(supabase, {
+        organizationId: data.organization_id,
+        role: data.role,
+        licenseStatus: data.license_status ?? null,
+      })
+    : null;
+  if (guide) return finish(`${origin}${guide}`);
 
   // The role is the invitation's role (BACKLOG-3851; first-user-wins, 3096,
   // is gone). Only an admin can complete a tenant-wide Microsoft admin-consent

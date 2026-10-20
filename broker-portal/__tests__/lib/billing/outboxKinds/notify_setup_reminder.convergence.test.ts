@@ -65,7 +65,7 @@ function invite(over: Obj = {}): Obj {
     ...over,
   };
 }
-const amRows = () => fake.db.rows('billing_outbox').filter((r) => r.kind === 'notify_account_manager');
+const amRows = () => fake.db.rows('billing_outbox').filter((r) => r.kind === 'notify_account_manager') as Obj[];
 const sentTo = () => mockSend.mock.calls.map((c) => [c[0].variant, c[0].recipientEmail, c[0].url]);
 
 function seed(members: Obj[], deal: Obj = { status: 'draft' }) {

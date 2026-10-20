@@ -1,0 +1,84 @@
+/**
+ * BACKLOG-4007 PR-3: the Billing step form. The order is read-only; Confirm sends the version shown
+ * and never a price; it stays disabled until the Terms box is ticked. Fixture: ./fixtures.ts.
+ */
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { SETUP_VIEW_WAITING } from './fixtures';
+
+const mockComplete = jest.fn();
+const mockAsk = jest.fn();
+const mockPush = jest.fn();
+const mockRefresh = jest.fn();
+jest.mock('next/navigation', () => ({ useRouter: () => ({ push: mockPush, refresh: mockRefresh }) }));
+jest.mock('@/lib/actions/billingSetup', () => ({
+  completeBillingSetup: (...a: unknown[]) => mockComplete(...a),
+  askAboutPrice: (...a: unknown[]) => mockAsk(...a),
+}));
+
+import { BillingStep } from '@/components/setup/BillingStep';
+
+const ORG = 'ORG-4007-UI';
+
+function fill() {
+  const set = (id: string, value: string) => fireEvent.change(document.getElementById(id)!, { target: { value } });
+  set('bs-legal', 'Realty LLC');
+  set('bs-line1', '1 Main St');
+  set('bs-city', 'Seattle');
+  set('bs-region', 'WA');
+  set('bs-postal', '98101');
+  set('bs-phone', '2065550100');
+}
+
+beforeEach(() => jest.clearAllMocks());
+
+describe('BillingStep', () => {
+  it('shows the order staff set, read-only: seats, price per seat, monthly total, billing start', () => {
+    render(<BillingStep organizationId={ORG} view={SETUP_VIEW_WAITING} />);
+    expect(screen.getByText('Team')).toBeTruthy();
+    expect(screen.getByText('$24.99 / month')).toBeTruthy();
+    expect(screen.getByText('$124.95')).toBeTruthy();
+    expect(screen.getByText('October 20, 2026')).toBeTruthy();
+  });
+
+  it('Confirm is disabled until the Terms box is ticked; then sends the version shown and no price', async () => {
+    mockComplete.mockResolvedValue({ success: true, billingStartsOn: '2026-10-20' });
+    render(<BillingStep organizationId={ORG} view={SETUP_VIEW_WAITING} />);
+    fill();
+    const confirm = screen.getByRole('button', { name: /confirm and finish/i }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mockComplete).toHaveBeenCalledTimes(1));
+    const arg = mockComplete.mock.calls[0][0];
+    expect(arg).toMatchObject({
+      organizationId: ORG,
+      expectedVersion: SETUP_VIEW_WAITING.version,
+      acceptTerms: true,
+      contact: { who: 'me', phone: '2065550100' },
+      company: { legal_name: 'Realty LLC', city: 'Seattle', region: 'WA', postal_code: '98101', country: 'US' },
+    });
+    expect(JSON.stringify(arg)).not.toMatch(/price|seats|total/i);
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard/setup'));
+  });
+
+  it('a refusal shows its sentence; version_conflict reloads the page', async () => {
+    mockComplete.mockResolvedValue({ success: false, code: 'version_conflict', error: 'Your Keepr account manager changed this order.', reload: true });
+    render(<BillingStep organizationId={ORG} view={SETUP_VIEW_WAITING} />);
+    fill();
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: /confirm and finish/i }));
+    await screen.findByText('Your Keepr account manager changed this order.');
+    expect(mockRefresh).toHaveBeenCalled();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('"Question about this price?" asks the account manager; setup can continue', async () => {
+    mockAsk.mockResolvedValue({ success: true });
+    render(<BillingStep organizationId={ORG} view={SETUP_VIEW_WAITING} />);
+    fireEvent.click(screen.getByRole('button', { name: /question about this price/i }));
+    await screen.findByText(/will contact you/i);
+    expect(mockAsk).toHaveBeenCalledWith(ORG);
+    expect(screen.getByRole('button', { name: /confirm and finish/i })).toBeTruthy();
+  });
+});

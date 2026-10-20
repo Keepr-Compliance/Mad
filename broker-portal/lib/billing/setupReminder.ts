@@ -26,11 +26,11 @@ import { enqueueOutbox } from './outboxEnqueue';
 import { NOTIFY_ACCOUNT_MANAGER_KIND } from './brokerageNotify';
 import { NonRetryableOutboxError, type OutboxHandler, type OutboxRow } from './outboxKinds';
 import type { createServiceClient } from '@/lib/supabase/service';
+import { SETUP_GUIDE_PATH } from './setupState';
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
 export const NOTIFY_SETUP_REMINDER_KIND = 'notify_setup_reminder';
-export const SETUP_GUIDE_PATH = '/dashboard/setup';
 
 function baseUrl(): string {
   return process.env.NEXT_PUBLIC_APP_URL || 'https://app.keeprcompliance.com';

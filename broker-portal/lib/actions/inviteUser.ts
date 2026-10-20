@@ -15,6 +15,8 @@ import { randomBytes } from 'crypto';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
 import { BROKERAGE_SUSPENDED_ERROR, isBrokerageSuspendedError } from '@/lib/auth/orgSuspension';
+import { isBillingSetupIncompleteError } from '@/lib/auth/jitIdentity';
+import { BILLING_SETUP_INCOMPLETE_ERROR } from '@/lib/billing/setupCopy';
 import { sendInviteEmail } from '@/lib/email';
 import { inviteNameTooLong, normalizeInviteName } from '@/lib/users/inviteNames';
 import {
@@ -226,6 +228,8 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
     }
     // BACKLOG-3853 PR-2B: the brokerage is suspended; the member trigger refused.
     if (isBrokerageSuspendedError(insertError)) return { success: false, error: BROKERAGE_SUSPENDED_ERROR };
+    // BACKLOG-4007: the brokerage has not finished the Billing step of setup (founder e4d40740 Q3).
+    if (isBillingSetupIncompleteError(insertError)) return { success: false, error: BILLING_SETUP_INCOMPLETE_ERROR };
     Sentry.captureException(insertError, {
       tags: { action: 'invite_user' },
       extra: { email: normalizedEmail, organizationId: input.organizationId },

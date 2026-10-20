@@ -27,6 +27,7 @@ import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
 import { syncIdpNames } from '@/lib/auth/idpNames';
 import { isBrokerageSuspendedError } from '@/lib/auth/orgSuspension';
 import { isBillingSetupIncompleteError, jitTargetFor } from '@/lib/auth/jitIdentity';
+import { setupLanding } from '@/lib/billing/setupState';
 import {
   PORTAL_MEMBERSHIP_SELECT,
   classifyPortalAccess,
@@ -113,6 +114,12 @@ export async function GET(request: Request) {
       const access = classifyPortalAccess(memberships as PortalMembershipRow[] | null, user.id);
 
       if (access.kind === 'full') {
+        // BACKLOG-4007 PR-3: a broker/admin whose brokerage waits for the Billing step goes to
+        // the setup guide first. Billing comes before connecting Microsoft (founder 88a1f065),
+        // so this runs before the consent redirect below.
+        const guide = await setupLanding(supabase, { organizationId: access.organizationId, role: access.role });
+        if (guide) return finish(`${origin}${guide}`);
+
         // If IT admin, check if org needs admin consent for desktop app permissions
         if (access.role === 'it_admin' || access.role === 'admin') {
           const { data: org } = await supabase
@@ -183,8 +190,15 @@ export async function GET(request: Request) {
           }
         }
 
-        // Every accepted member lands on `next`; middleware floors an agent.
-        return finish(`${origin}${next}`);
+        // BACKLOG-4007 PR-3: the broker/admin who accepted the one onboarding invitation goes
+        // straight to the setup guide while the brokerage waits for the Billing step.
+        const guide = await setupLanding(supabase, {
+          organizationId: accepted.organization_id,
+          role: accepted.role,
+          licenseStatus: accepted.license_status,
+        });
+        // Every other accepted member lands on `next`; middleware floors an agent.
+        return finish(`${origin}${guide ?? next}`);
       }
 
       // No link: a pending invitation for this account is not accepted here.
