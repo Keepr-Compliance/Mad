@@ -144,6 +144,8 @@ export interface InviteEmailParams {
   isResend?: boolean;
   /** BACKLOG-3851 PR-2f: the invitation carries no license. */
   withoutLicense?: boolean;
+  /** BACKLOG-4007 PR-4: the brokerage's billing-only login (Billing and Support only, no seat). */
+  billingOnly?: boolean;
   /** BACKLOG-3851 PR-2f: first name typed on the invite; greets "Hi <first>,". */
   recipientFirstName?: string;
 }

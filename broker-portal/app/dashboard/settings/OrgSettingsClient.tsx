@@ -41,6 +41,7 @@ import {
 } from '@keepr/design-system';
 import { AlertBanner, Button } from '@keepr/ui';
 import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
+import { PeopleCard } from '@/components/settings/PeopleCard';
 
 interface ConsentInfo {
   organizationId: string;
@@ -70,9 +71,11 @@ const RETENTION_OPTIONS = [
 export interface OrgSettingsClientProps {
   /** How each gated card renders, resolved server-side. */
   features: OrgSettingsFeatureView;
+  /** BACKLOG-4007 PR-4: the People card, for an admin (null/absent: not shown). */
+  people?: { organizationId: string } | null;
 }
 
-export default function OrgSettingsClient({ features }: OrgSettingsClientProps) {
+export default function OrgSettingsClient({ features, people = null }: OrgSettingsClientProps) {
   const { isImpersonating } = useImpersonation();
   const [consent, setConsent] = useState<ConsentInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -160,6 +163,8 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
       {isImpersonating && (
         <AlertBanner variant="warning">Read-only during support session</AlertBanner>
       )}
+
+      {people ? <PeopleCard organizationId={people.organizationId} /> : null}
 
       {/* Desktop App Permissions.
           Org-level by definition: one grant covers the whole tenant and it

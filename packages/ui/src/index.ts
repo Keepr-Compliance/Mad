@@ -89,3 +89,18 @@ export {
 
 // Phone kit (BACKLOG-3895) — phone-width components; see DESIGN-SYSTEM.md "Phone".
 export * from './components/phone';
+
+// BACKLOG-4007 PR-4: a brokerage's people (billing / IT / office / MSP), shared by both portals.
+export { OrgPeoplePanel, orgPeopleErrorMessage } from './components/org-people';
+export type {
+  OrgContactRole,
+  OrgPeopleContact,
+  OrgPeopleMember,
+  OrgPeopleView,
+  OrgPeopleUserHit,
+  OrgPeopleSaveInput,
+  OrgPeopleResult,
+  OrgPeopleActions,
+  OrgPeoplePhoneRule,
+  OrgPeoplePanelProps,
+} from './components/org-people';

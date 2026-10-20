@@ -48,6 +48,8 @@ export function BillingStep({ organizationId, view }: BillingStepProps) {
   });
   const [who, setWho] = useState<'me' | 'other'>('me');
   const [other, setOther] = useState({ name: '', email: '' });
+  // BACKLOG-4007 PR-4: optional billing-only login for "Someone else" (one per brokerage, no seat).
+  const [billingLogin, setBillingLogin] = useState(false);
   const [phone, setPhone] = useState(view.contact?.phone ?? '');
   // One phone field serves both "Me" and "Someone else". The error shows after the user leaves the
   // field and clears the moment the value is valid.
@@ -78,9 +80,11 @@ export function BillingStep({ organizationId, view }: BillingStepProps) {
       acceptTerms: agreed,
       contact: who === 'me' ? { who: 'me', phone } : { who: 'other', name: other.name, email: other.email, phone },
       company,
+      billingLogin: who === 'other' && billingLogin,
     });
     if (res.success) {
-      router.push('/dashboard/setup');
+      // The login's outcome is shown on the Done step; setup is complete either way.
+      router.push(res.billingLogin ? `/dashboard/setup?login=${encodeURIComponent(res.billingLogin)}` : '/dashboard/setup');
       router.refresh();
       return;
     }
@@ -217,6 +221,15 @@ export function BillingStep({ organizationId, view }: BillingStepProps) {
             ) : null}
           </div>
         </div>
+        {who === 'other' ? (
+          <div className="mt-4">
+            <label className="flex items-start gap-2 text-sm text-gray-900">
+              <Checkbox id="bs-billing-login" checked={billingLogin} onChange={(e) => setBillingLogin(e.target.checked)} />
+              <span>Give them a billing-only login</span>
+            </label>
+            <FieldHelp>They see Billing and Support only. They get their own invitation. It does not use a seat.</FieldHelp>
+          </div>
+        ) : null}
       </Card>
 
       <Card>

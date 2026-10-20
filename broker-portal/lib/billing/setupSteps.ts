@@ -29,3 +29,20 @@ export function setupStepFor(i: SetupStepInput): SetupStep {
   if (i.requested === 'done') return 'done';
   return canConnectMicrosoft(i) ? 'microsoft' : 'done';
 }
+
+/**
+ * BACKLOG-4007 PR-4 (SR F3 on PR-3): which provider decides the Microsoft step. Supabase's
+ * `app_metadata.provider` is the account's FIRST provider, so a Google-first admin who later
+ * signs in with Microsoft read as 'google' and was never offered "Connect Microsoft". An account
+ * with ANY Microsoft identity reads 'azure' (it can complete the Microsoft flow); otherwise the
+ * first provider, as before.
+ */
+export function signInProviderOf(user: {
+  app_metadata?: { provider?: unknown; providers?: unknown } | null;
+  identities?: Array<{ provider?: string | null }> | null;
+}): string | null {
+  const providers = Array.isArray(user.app_metadata?.providers) ? (user.app_metadata?.providers as unknown[]) : [];
+  const identities = (user.identities ?? []).map((i) => i?.provider);
+  if (providers.includes('azure') || identities.includes('azure')) return 'azure';
+  return typeof user.app_metadata?.provider === 'string' ? user.app_metadata.provider : null;
+}

@@ -23,6 +23,8 @@ export default defineConfig({
       // Same reason: render THIS checkout's design-system, not the main checkout's.
       '@keepr/design-system': path.resolve(__dirname, '../packages/design-system/src'),
       '@keepr/shared': path.resolve(__dirname, '../packages/shared/src'),
+      // BACKLOG-4007 PR-4: and this checkout's @keepr/ui (the shared People panel).
+      '@keepr/ui': path.resolve(__dirname, '../packages/ui'),
     },
   },
 });

@@ -8,6 +8,7 @@ import { PendingInvitationsTable, type PendingInvitationRow } from './components
 import { PlanAssignment } from './components/PlanAssignment';
 import { BrokerageBillingCard } from './components/BrokerageBillingCard';
 import { OrgInviteButton } from './components/OrgInviteButton';
+import { OrgPeopleCard } from './components/OrgPeopleCard';
 import { shouldShowBillingCard, type OrgBilling } from '@/lib/billing/dealRules';
 import { formatDate } from '@/lib/format';
 import { pickOrgPlanRow, type OrgPlanEmbed } from '@/lib/orgPlanEmbed';
@@ -207,6 +208,9 @@ export default async function OrganizationDetailPage({
       {shouldShowBillingCard(billing) && (
         <BrokerageBillingCard organizationId={org.id} organizationName={org.name} planName={planName} billing={billing} />
       )}
+
+      {/* Brokerage people (BACKLOG-4007 PR-4): next to the Billing card, same gate */}
+      {shouldShowBillingCard(billing) && <OrgPeopleCard organizationId={org.id} />}
 
       {/* Pending invitations */}
       {pendingInvitations.length > 0 && (

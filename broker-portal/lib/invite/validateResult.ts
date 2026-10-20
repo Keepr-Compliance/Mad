@@ -45,3 +45,5 @@ export function mapValidInvitation(result: ValidateInvitationRpcResult): InviteL
 
 /** Shown on the landing page and in the invite email for an invitation without a license. */
 export const UNLICENSED_INVITE_LINE = "You'll join without a license until your admin assigns one.";
+/** BACKLOG-4007 PR-4: the line the billing-only login's invitation email carries. */
+export const BILLING_ONLY_INVITE_LINE = "This login opens your brokerage's Billing and Support pages only. It does not use a seat.";

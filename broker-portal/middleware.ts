@@ -15,6 +15,7 @@ import {
   PORTAL_MEMBERSHIP_SELECT,
   classifyPortalAccess,
   mayOpenDashboardPath,
+  BILLING_PATHS,
   maySuspendedOpenPath,
   suspendedLanding,
   mayOrgSuspendedOpenPath,
@@ -24,6 +25,7 @@ import {
 import { LICENCE_READ_FAILED, readOwnLicenceSuspended } from '@/lib/auth/suspension';
 import { billingEnabled } from '@/lib/billing/flag';
 import { ORG_SUSPENSION_READ_FAILED, readOrgBillingSuspended } from '@/lib/auth/orgSuspension';
+import { readBillingContactLogin } from '@/lib/auth/billingContact';
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
@@ -182,8 +184,14 @@ export async function middleware(request: NextRequest) {
         }
       }
 
+      // BACKLOG-4007 PR-4: the billing-only login may also open Billing. Asked only for an
+      // unlicensed member on a Billing path; a failed read is false (the floor stays).
+      const billingContact =
+        BILLING_PATHS.some((base) => pathname === base || pathname.startsWith(`${base}/`)) &&
+        (await readBillingContactLogin(supabase, access));
+
       // A path above this person's access goes back to the dashboard.
-      if (!mayOpenDashboardPath(access, pathname)) {
+      if (!mayOpenDashboardPath(access, pathname, { billingContact })) {
         return NextResponse.redirect(new URL('/dashboard', request.url));
       }
     }

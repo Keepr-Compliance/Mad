@@ -20,6 +20,7 @@ import {
 } from '@/lib/auth/membership';
 import { LICENCE_READ_FAILED, readOwnLicenceSuspended } from '@/lib/auth/suspension';
 import { ORG_SUSPENSION_READ_FAILED, readOrgBillingSuspended } from '@/lib/auth/orgSuspension';
+import { readBillingContactLogin } from '@/lib/auth/billingContact';
 
 type ServerClient = Awaited<ReturnType<typeof createClient>>;
 
@@ -40,6 +41,11 @@ export interface PortalAccessResult {
    * null = the read failed; pages treat it as not suspended (fail open, logged).
    */
   orgSuspended: boolean | null;
+  /**
+   * BACKLOG-4007 PR-4: this person is the brokerage's billing-only login (lib/auth/billingContact.ts).
+   * Asked only for floor via 'unlicensed'; false for everyone else and when the read fails.
+   */
+  billingContact: boolean;
 }
 
 /**
@@ -72,7 +78,9 @@ export async function getPortalAccess(): Promise<PortalAccessResult | null> {
   const orgSuspended = suspended === true ? false : await readOrgBillingSuspended(supabase, access);
   if (orgSuspended === null) console.warn('[portalAccess] brokerage suspension check skipped', { code: ORG_SUSPENSION_READ_FAILED });
 
-  return { supabase, user, access, suspended, orgSuspended };
+  const billingContact = await readBillingContactLogin(supabase, access);
+
+  return { supabase, user, access, suspended, orgSuspended, billingContact };
 }
 
 /** Full-portal access with its role and organization, or null. */

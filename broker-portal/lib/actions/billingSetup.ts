@@ -22,6 +22,7 @@ import { enqueueOutbox } from '@/lib/billing/outboxEnqueue';
 import { NOTIFY_ACCOUNT_MANAGER_KIND } from '@/lib/billing/brokerageNotify';
 import { SETUP_ROLES } from '@/lib/billing/setupState';
 import { TERMS_URL, TERMS_VERSION, billingSetupErrorMessage } from '@/lib/billing/setupCopy';
+import { isBillingLoginCreated, sendBillingLoginInvite } from '@/lib/billing/billingLoginInvite';
 
 export interface BillingSetupContactInput {
   who: 'me' | 'other';
@@ -47,13 +48,22 @@ export interface CompleteBillingSetupInput {
   acceptTerms: boolean;
   contact: BillingSetupContactInput;
   company: BillingSetupCompanyInput;
+  /** BACKLOG-4007 PR-4: give "Someone else" the billing-only login (Billing and Support, no seat). */
+  billingLogin?: boolean;
 }
 
+/**
+ * BACKLOG-4007 PR-4: what happened to the billing-only login. Setup is complete either way.
+ * 'sent' = created and the invitation emailed; 'created' = created, email not sent; otherwise
+ * the database's refusal code (billingLoginErrorMessage words it).
+ */
+export type BillingLoginResult = 'sent' | 'created' | string;
+
 export type BillingSetupResult =
-  | { success: true; billingStartsOn: string }
+  | { success: true; billingStartsOn: string; billingLogin?: BillingLoginResult }
   | { success: false; error: string; code: string; reload?: boolean };
 
-type RpcResult = { success?: boolean; error?: string; billing_starts_on?: string } | null;
+type RpcResult = { success?: boolean; error?: string; billing_starts_on?: string; billing_login?: unknown } | null;
 
 function fail(code: string): BillingSetupResult {
   return { success: false, code, error: billingSetupErrorMessage(code), reload: code === 'version_conflict' || code === 'not_waiting' };
@@ -108,14 +118,25 @@ export async function completeBillingSetup(input: CompleteBillingSetupInput): Pr
     p_expected_version: input.expectedVersion,
     p_contact: contactPayload(input.contact),
     p_company: companyPayload(input.company),
-    p_billing_login: false,
+    // Only for "Someone else"; the database refuses it for "Me" before any write.
+    p_billing_login: input.billingLogin === true && input.contact.who === 'other',
   });
   if (doneErr) return fail(doneErr.code === '42501' ? 'not_authorized' : 'failed');
   const r = done as RpcResult;
   if (!r?.success || !r.billing_starts_on) return fail(r?.error ?? 'failed');
 
+  let billingLogin: BillingLoginResult | undefined;
+  if (input.billingLogin === true && input.contact.who === 'other') {
+    if (isBillingLoginCreated(r.billing_login)) {
+      const sent = await sendBillingLoginInvite(r.billing_login, user.email ?? 'Your broker');
+      billingLogin = sent ? 'sent' : 'created';
+    } else {
+      billingLogin = (r.billing_login as { error?: string } | null)?.error ?? 'billing_login_failed';
+    }
+  }
+
   revalidatePath('/dashboard', 'layout');
-  return { success: true, billingStartsOn: r.billing_starts_on };
+  return { success: true, billingStartsOn: r.billing_starts_on, billingLogin };
 }
 
 export async function askAboutPrice(organizationId: string): Promise<{ success: boolean; error?: string }> {

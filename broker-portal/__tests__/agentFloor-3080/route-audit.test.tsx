@@ -552,6 +552,15 @@ const REFUSED_ACTIONS: Record<string, ActionEntry> = {
     company: { legal_name: 'Audit LLC', address_line1: '1 Main', city: 'Seattle', region: 'WA', postal_code: '98101', country: 'US' },
   }),
   'lib/actions/billingSetup.ts#askAboutPrice': act(() => import('@/lib/actions/billingSetup'), 'askAboutPrice', FIXTURE_BROKERAGE_ORG_ID),
+  // BACKLOG-4007 PR-4: Org Settings > People; broker/admin of the organization only.
+  'lib/actions/orgContacts.ts#listOrgContacts': act(() => import('@/lib/actions/orgContacts'), 'listOrgContacts', FIXTURE_BROKERAGE_ORG_ID),
+  'lib/actions/orgContacts.ts#saveOrgContact': act(() => import('@/lib/actions/orgContacts'), 'saveOrgContact', FIXTURE_BROKERAGE_ORG_ID, {
+    role: 'office',
+    name: 'Audit Office',
+    email: 'office-3080@fixture.example.test',
+  }),
+  'lib/actions/orgContacts.ts#removeOrgContact': act(() => import('@/lib/actions/orgContacts'), 'removeOrgContact', FIXTURE_BROKERAGE_ORG_ID, TARGET_MEMBER_ID),
+  'lib/actions/orgContacts.ts#setOrgBillingLogin': act(() => import('@/lib/actions/orgContacts'), 'setOrgBillingLogin', FIXTURE_BROKERAGE_ORG_ID, true),
 };
 
 /**
@@ -661,6 +670,10 @@ const REFUSALS: Record<string, Outcome | Record<Persona, Outcome>> = {
     },
   },
   'lib/actions/billingSetup.ts#askAboutPrice': failed('Only a broker or admin of this brokerage can finish billing setup.'),
+  'lib/actions/orgContacts.ts#listOrgContacts': { returned: { ok: false, error: 'not_authorized' } },
+  'lib/actions/orgContacts.ts#saveOrgContact': { returned: { ok: false, error: 'not_authorized' } },
+  'lib/actions/orgContacts.ts#removeOrgContact': { returned: { ok: false, error: 'not_authorized' } },
+  'lib/actions/orgContacts.ts#setOrgBillingLogin': { returned: { ok: false, error: 'not_authorized' } },
   'lib/actions/scim.ts#getScimFeatureStatus': { returned: { enabled: false } },
   'lib/actions/scim.ts#generateScimToken': NOT_AUTHORIZED_THROW,
   'lib/actions/scim.ts#revokeScimToken': NOT_AUTHORIZED_THROW,
@@ -985,7 +998,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(49); // BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
+    expect(actions.length).toBe(53); // BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 

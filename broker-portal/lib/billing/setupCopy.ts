@@ -28,6 +28,7 @@ const MESSAGES: Record<string, string> = {
   invalid_terms: 'Something went wrong. Please try again.',
   not_authenticated: 'Your session ended. Sign in again.',
   not_authorized: 'Only a broker or admin of this brokerage can finish billing setup.',
+  billing_login_needs_someone_else: 'A billing-only login is for someone else. Choose "Someone else" or untick it.',
 };
 
 export function billingSetupErrorMessage(code: string): string {
