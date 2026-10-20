@@ -38,7 +38,7 @@ const VIEW: OrgPeopleView = {
   can_edit: true,
   deal_status: 'active',
   contacts: [contact('b1', 'billing', { phone: '+12025550123' })],
-  members: [{ user_id: 'u-ag', member_id: 'm-ag', role: 'agent', name: 'Agent Person', email: 'agent@example.test' }],
+  members: [{ user_id: 'u-ag', member_id: 'm-ag', role: 'agent', name: 'agent one', email: 'agent@example.test' }],
 };
 
 function actions(over: Partial<OrgPeopleActions> = {}): OrgPeopleActions {
@@ -131,16 +131,16 @@ describe('OrgPeoplePanel', () => {
   it('Select existing user (staff): search; a user in another brokerage cannot be picked', async () => {
     const a = actions({
       searchUsers: jest.fn(async () => [
-        { user_id: 'u-x', name: 'Other Person', email: 'other@example.test', status: 'other_brokerage' as const },
-        { user_id: 'u-s', name: 'Solo Person', email: 'solo@example.test', status: 'no_brokerage' as const },
+        { user_id: 'u-x', name: 'other user', email: 'other@example.test', status: 'other_brokerage' as const },
+        { user_id: 'u-s', name: 'solo user', email: 'solo@example.test', status: 'no_brokerage' as const },
       ]),
     });
     render(<OrgPeoplePanel view={VIEW} actions={a} phone={PHONE} onChanged={jest.fn()} />);
     fireEvent.click(within(row('office')).getByText('Add person'));
     fireEvent.click(screen.getByRole('tab', { name: 'Select existing user' }));
     await act(async () => fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'pe' } }));
-    await waitFor(() => expect(screen.getByRole('option', { name: /Other Person/ })).toBeDisabled());
-    expect(screen.getByRole('option', { name: /Solo Person/ })).not.toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('option', { name: /other user/ })).toBeDisabled());
+    expect(screen.getByRole('option', { name: /solo user/ })).not.toBeDisabled();
   });
 
   it('one IT contact: Change, no Add; office lists 5 then Show more', () => {
@@ -189,7 +189,7 @@ describe('broker People actions', () => {
   it('a created login is emailed (billing-only invite); the result notes it', async () => {
     mockGate.mockResolvedValue({ ok: true });
     mockRpc.mockResolvedValue({
-      data: { name: 'Payer Person', email: 'payer@example.test', token: 'b'.repeat(64), success: true, org_name: 'Fixture Realty' },
+      data: { name: 'payer team', email: 'payer@example.test', token: 'b'.repeat(64), success: true, org_name: 'fixture realty' },
       error: null,
     });
     mockSendInvite.mockResolvedValue({ success: true, outcome: 'sent' });

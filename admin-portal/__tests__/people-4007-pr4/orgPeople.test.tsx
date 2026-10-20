@@ -42,7 +42,7 @@ function table(name: string) {
 
 vi.mock('@/lib/supabase/server', () => ({
   getAuthenticatedUser: async () => ({
-    user: { id: 'staff-1', email: 'staff@example.test', user_metadata: { first_name: 'Staff', last_name: 'Person' } },
+    user: { id: 'staff-1', email: 'staff@example.test', user_metadata: { first_name: 'staff', last_name: 'member' } },
     supabase: {
       from: (n: string) => table(n),
       rpc: async (fn: string, args: Record<string, unknown>) => {
@@ -113,7 +113,7 @@ describe('staff People actions', () => {
   it('a created billing-only login is emailed as billing-only through the broker portal', async () => {
     const { setOrgBillingLoginAction } = await import('@/lib/actions/orgContacts');
     mockRpc.mockResolvedValue({
-      data: { name: 'Payer Person', email: 'payer@example.test', token: 'c'.repeat(64), success: true, org_name: 'Org' },
+      data: { name: 'payer team', email: 'payer@example.test', token: 'c'.repeat(64), success: true, org_name: 'Org' },
       error: null,
     });
     fetchSpy.mockResolvedValue({ json: async () => ({ success: true }) });
@@ -122,7 +122,7 @@ describe('staff People actions', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const [url, init] = fetchSpy.mock.calls[0];
     expect(url).toBe('https://broker.example.test/api/email/send-invite');
-    expect(JSON.parse(init.body)).toMatchObject({ recipientEmail: 'payer@example.test', billingOnly: true, role: 'Billing only', inviterName: 'Staff Person' });
+    expect(JSON.parse(init.body)).toMatchObject({ recipientEmail: 'payer@example.test', billingOnly: true, role: 'Billing only', inviterName: 'staff member' });
     expect(r).toEqual({ ok: true, note: 'We emailed the billing contact an invitation to their billing-only login.' });
   });
 

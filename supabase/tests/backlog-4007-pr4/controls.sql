@@ -152,6 +152,13 @@ BEGIN
     -- broker may pick any Keepr user (user directory exposed to a brokerage)
     WHEN 'broker_picks_any_user' THEN RETURN pg_temp.mut_fn(sv,
       $q$IF v_caller <> 'staff' OR NOT EXISTS$q$, $q$IF NOT EXISTS$q$);
+    -- 4012 path: a JIT sign-in that upgrades an existing member (the billing-only login would gain a seat)
+    WHEN 'jit_upgrades_existing' THEN RETURN pg_temp.mut_fn('public.jit_join_organization(text,text)',
+      $q$  IF FOUND THEN
+    RETURN jsonb_build_object('success', true, 'organization_id', v_org.id, 'role', v_existing, 'already_member', true);$q$,
+      $q$  IF FOUND THEN
+    UPDATE public.organization_members SET license_status = 'active' WHERE organization_id = v_org.id AND user_id = v_uid;
+    RETURN jsonb_build_object('success', true, 'organization_id', v_org.id, 'role', v_existing, 'already_member', true);$q$);
     -- catalog: the access check readable by anon / org_contacts readable by authenticated
     WHEN 'grant_anon_access_check' THEN
       EXECUTE 'GRANT EXECUTE ON FUNCTION public.org_billing_contact_login(uuid) TO anon';
@@ -259,6 +266,33 @@ BEGIN
     r := r || jsonb_build_object('C_S4_accept_keeps_unassigned', CASE WHEN pg_temp.j(s)->>'license_status' = 'unassigned'
       AND (SELECT user_id FROM public.organization_members WHERE id = v_mem) = u_bo AND pg_temp.seats(o1) = v_seats
       THEN 'PASS' ELSE 'FAIL ' || left(s, 80) END);
+
+    -- ===== 4012 join guard: the billing-only login signs in with Microsoft in the brokerage's tenant =====
+    -- JIT finds the existing member row and changes nothing (no seat, still billing-only).
+    UPDATE public.organizations SET microsoft_tenant_id = 'p4007c-tid-' || left(o1::text, 8), jit_provisioning_enabled = true,
+           default_member_role = 'agent' WHERE id = o1;
+    UPDATE public.organization_plans SET feature_overrides = coalesce(feature_overrides, '{}'::jsonb) || '{"jit_provisioning":{"enabled":true}}'::jsonb
+     WHERE organization_id = o1;
+    INSERT INTO auth.identities (provider_id, user_id, identity_data, provider, created_at, updated_at)
+    VALUES ('p4007c-oid-' || left(u_bo::text, 8), u_bo, jsonb_build_object('sub', 'p4007c', 'custom_claims',
+            jsonb_build_object('tid', 'p4007c-tid-' || left(o1::text, 8))), 'azure', now(), now());
+    INSERT INTO auth.sessions (id, user_id, created_at, updated_at, aal) VALUES (gen_random_uuid(), u_bo, now(), now(), 'aal1');
+    INSERT INTO auth.mfa_amr_claims (id, session_id, created_at, updated_at, authentication_method)
+    SELECT gen_random_uuid(), s3.id, now(), now(), 'oauth' FROM auth.sessions s3 WHERE s3.user_id = u_bo;
+    BEGIN
+      PERFORM set_config('request.jwt.claims', json_build_object('sub', u_bo, 'role', 'authenticated',
+        'session_id', (SELECT s3.id FROM auth.sessions s3 WHERE s3.user_id = u_bo LIMIT 1))::text, true);
+      PERFORM set_config('request.jwt.claim.sub', u_bo::text, true);
+      SET LOCAL ROLE authenticated;
+      s := (public.jit_join_organization('azure_ad', 'p4007c-tid-' || left(o1::text, 8)))::text;
+      RESET ROLE;
+    EXCEPTION WHEN OTHERS THEN
+      RESET ROLE;
+      s := 'ERR ' || SQLSTATE || ' ' || left(SQLERRM, 80);
+    END;
+    r := r || jsonb_build_object('C_J1_jit_leaves_billing_login_alone', CASE WHEN pg_temp.j(s)->>'already_member' = 'true'
+      AND (SELECT license_status FROM public.organization_members WHERE id = v_mem) = 'unassigned'
+      AND pg_temp.seats(o1) = v_seats AND pg_temp.call_as(u_bo, format(qa, o1)) = 'true' THEN 'PASS' ELSE 'FAIL ' || s END);
 
     -- ===== C-A1 the Billing gate =====
     r := r || jsonb_build_object('C_A1_linked_billing_login_true', CASE WHEN pg_temp.call_as(u_bo, format(qa, o1)) = 'true' THEN 'PASS' ELSE 'FAIL ' || pg_temp.call_as(u_bo, format(qa, o1)) END);

@@ -44,11 +44,11 @@ import { BILLING_ONLY_INVITE_LINE, UNLICENSED_INVITE_LINE } from '@/lib/invite/v
 import { SETUP_VIEW_WAITING } from '../billing-setup-4007/fixtures';
 
 const CREATED = {
-  name: 'Payer Person',
+  name: 'payer team',
   email: 'payer@example.test',
   token: 'a'.repeat(64),
   success: true,
-  org_name: 'Fixture Realty',
+  org_name: 'fixture realty',
 };
 
 function input(over: Partial<CompleteBillingSetupInput> = {}): CompleteBillingSetupInput {
@@ -56,7 +56,7 @@ function input(over: Partial<CompleteBillingSetupInput> = {}): CompleteBillingSe
     organizationId: 'ORG-1',
     expectedVersion: 1,
     acceptTerms: true,
-    contact: { who: 'other', name: 'Payer Person', email: 'payer@example.test', phone: '202-555-0123' },
+    contact: { who: 'other', name: 'payer team', email: 'payer@example.test', phone: '202-555-0123' },
     company: { legal_name: 'Realty LLC', address_line1: '1 Main St', city: 'Seattle', region: 'WA', postal_code: '98101', country: 'US' },
     billingLogin: true,
     ...over,
@@ -87,7 +87,7 @@ describe('completeBillingSetup with the billing-only login', () => {
     expect(mockSendInvite).toHaveBeenCalledTimes(1);
     expect(mockSendInvite.mock.calls[0][0]).toMatchObject({
       recipientEmail: 'payer@example.test',
-      organizationName: 'Fixture Realty',
+      organizationName: 'fixture realty',
       role: 'Billing only',
       billingOnly: true,
       withoutLicense: true,
@@ -159,7 +159,7 @@ describe('SR F3: Microsoft step from any Microsoft identity', () => {
 });
 
 describe('invite email for the billing-only login', () => {
-  const base = { recipientEmail: 'payer@example.test', organizationName: 'Fixture Realty', inviterName: 'Broker', role: 'Billing only', inviteLink: 'https://app.example.test/invite/x', expiresInDays: 7 };
+  const base = { recipientEmail: 'payer@example.test', organizationName: 'fixture realty', inviterName: 'Broker', role: 'Billing only', inviteLink: 'https://app.example.test/invite/x', expiresInDays: 7 };
   it('says what the login opens, not "until your admin assigns one"', () => {
     const e = buildInviteEmail({ ...base, withoutLicense: true, billingOnly: true });
     expect(e.text).toContain(BILLING_ONLY_INVITE_LINE);
