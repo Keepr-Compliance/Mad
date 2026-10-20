@@ -187,6 +187,23 @@ describe("BACKLOG-3908 repro — shared text removed from deal B", () => {
     expect(picker()).toEqual([]);
     expect(roster()).toEqual([]);
     expect(candidatesFor(TX_A)).toEqual([]);
+    // Per-message rows carry no thread_id, so the auto-link thread guard is false for
+    // A even BEFORE the unlink: the column arm of the candidate read did all the exclusion.
+    expect(await isThreadLinkedToTransaction(THREAD, TX_A)).toBe(false);
+    // And that column arm is what let B's auto-link pick up A's thread in the first place.
+    expect(candidatesFor(TX_B)).toEqual([]); // already thread-linked to B here
+  });
+
+  it("REACH: after linkMessages(A) alone, B's auto-link candidate read returns A's thread", async () => {
+    await transactionService.linkMessages(IDS, TX_A);
+    expect(candidatesFor(TX_B)).toEqual([THREAD]);
+  });
+
+  it("PRE-EXISTING: a thread linked to A only by auto-link (thread row) never sets the column", async () => {
+    await createThreadCommunicationReference(THREAD, TX_A, USER, "auto", 0.9);
+    expect(column()).toEqual([null, null]);
+    expect(picker()).toEqual(IDS);
+    expect(candidatesFor(TX_A)).toEqual([]); // the thread-row arm excludes it here
   });
 
   it("AFTER unlink from B: A keeps its links, but the column is NULL and the text reappears", async () => {
