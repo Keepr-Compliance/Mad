@@ -168,6 +168,9 @@ async function start(opts: { hold?: boolean; probe?: jest.Mock; pid?: number | u
 const byte = (run: Run) => run.proc.stderr.emit("data", Buffer.from(IDLE_LINE));
 const advance = (ms: number) => jest.advanceTimersByTimeAsync(ms);
 const suspendedSentry = () => mockCaptureMessage.mock.calls.filter((c) => c[0] === "iPhone backup tool suspended");
+/** Killed by either path: proc.kill (macOS) or taskkill /T, which goes first on Windows (BACKLOG-3996). */
+const killed = (run: Run) =>
+  run.proc.kill.mock.calls.length > 0 || mockSpawn.mock.calls.some((c) => String(c[0]).toLowerCase().includes("taskkill"));
 const backupSpawns = () => mockSpawn.mock.calls.filter((c) => String(c[0]).includes("idevicebackup2"));
 
 async function finish(run: Run, code: number | null = 1): Promise<BackupResult> {
@@ -210,7 +213,7 @@ describe("N1: detection", () => {
       "[BackupService] idevicebackup2: all 6 threads suspended in 3 samples over 60s; showing the antivirus notice",
     );
     // KEPT: no kill, no tree kill.
-    expect(run.proc.kill).not.toHaveBeenCalled();
+    expect(killed(run)).toBe(false);
     expect(mockSpawn.mock.calls.some((c) => String(c[0]).toLowerCase().includes("taskkill"))).toBe(false);
     expect(backupSpawns()).toHaveLength(1);
     await finish(run);
@@ -225,7 +228,7 @@ describe("N2: the real device wait is not a suspension (most likely wrong implem
     expect(run.probe.mock.calls.length).toBeGreaterThan(10);
     expect(run.suspended).toEqual([]);
     expect(suspendedSentry()).toHaveLength(0);
-    expect(run.proc.kill).not.toHaveBeenCalled();
+    expect(killed(run)).toBe(false);
     await finish(run);
   });
 
@@ -398,7 +401,7 @@ describe("N8: when the probe must never run", () => {
     const run = await start({ probe: jest.fn(async () => RUNNING) });
     byte(run);
     await advance(30 * 60_000 + 1_000); // the watchdog fires at 30 min
-    expect(run.proc.kill).toHaveBeenCalled();
+    expect(killed(run)).toBe(true);
     const before = run.probe.mock.calls.length;
     await advance(5_000); // inside the kill's 10 s grace, the tool not yet closed
     expect(run.probe.mock.calls.length).toBe(before);
@@ -424,7 +427,7 @@ describe("N9: a real 1,140 s wait survives", () => {
     await advance(1_140_000);
     run.proc.stdout.emit("data", Buffer.from(PROGRESS_BAR));
     await advance(1_000);
-    expect(run.proc.kill).not.toHaveBeenCalled();
+    expect(killed(run)).toBe(false);
     expect(logLines.some((l) => l.includes("Watchdog: no progress"))).toBe(false);
     expect(run.suspended).toEqual([]);
     const r = await finish(run, 1);
