@@ -22,3 +22,13 @@ md5 must change, or the mode reports `MUTATION NOT APPLIED`.
 - 18 JS mutants (broker jest 138 tests per run, admin vitest 6), each applied, each red.
 - The PR-1 harness (`../backlog-4007`) still passes 53 / 53 on top of this migration, and its
   completion mutants still red. Its `C_BL1` now expects `billing_login_needs_someone_else`.
+
+## Fix-up 2026-10-20 (founder e8571c1f; SR F1, F2, F3) — `results-2026-10-20-fixup.txt`, `js-mutations-2026-10-20-fixup.txt`
+
+- The migration was amended in place (keepr-test only, never on production): `_org_contact_caller` gains
+  an `it_admin` kind; the billing contact and the billing-only login stay staff/broker/admin;
+  `_org_billing_contact_set` is replaced (deletes the old contact's billing-only login on a change) and
+  its pre-check accepts the PR-1 body or this file's. The rollback restores both PR-1 bodies.
+- base: 93 / 93, including the People matrix (6 callers x 5 operations, each cell rolled back).
+- 9 new SQL mutants, each applied and red; `access_ignores_removed` is now 0 red (latent after F3, see
+  the results file).
