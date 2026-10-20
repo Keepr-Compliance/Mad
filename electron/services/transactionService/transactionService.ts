@@ -52,9 +52,9 @@ import {
 // layer. `unlinkMessages` calls these from inside a `dbTransaction` body, where
 // a promise-returning wrapper would be an atomicity hole dressed as a fix: the
 // callback returns, the transaction commits, and the failure arrives later as
-// an unhandled rejection. `repointMessageTransactionSync` (BACKLOG-3908) is sync
+// an unhandled rejection. `repointMessageTransaction` (BACKLOG-3908) is sync
 // for the same reason.
-import { linkMessageToTransaction, repointMessageTransactionSync } from "../db/messageDbService";
+import { linkMessageToTransaction, repointMessageTransaction } from "../db/messageDbService";
 import {
   addIgnoredCommunicationSync,
   createCommunicationSync,
@@ -2481,7 +2481,7 @@ class TransactionService {
         for (const messageId of messageIds) {
           const message = messagesById.get(messageId) ?? null;
           if (message?.transaction_id) {
-            repointMessageTransactionSync(messageId);
+            repointMessageTransaction(messageId);
           }
         }
 

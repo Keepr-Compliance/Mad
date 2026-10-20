@@ -319,13 +319,8 @@ export const REPOINT_MESSAGE_TRANSACTION_SQL = sql`UPDATE messages SET transacti
       LIMIT 1
     ) WHERE id = ?`;
 
-export function repointMessageTransactionSync(messageId: string): void {
+export function repointMessageTransaction(messageId: string): void {
   dbRun(REPOINT_MESSAGE_TRANSACTION_SQL, [messageId]);
-}
-
-/** Promise-returning wrapper over the sync twin (BACKLOG-2960 naming rule). */
-export function repointMessageTransaction(messageId: string): Promise<void> {
-  return Promise.resolve(repointMessageTransactionSync(messageId));
 }
 
 /**
