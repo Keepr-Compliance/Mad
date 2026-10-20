@@ -8,8 +8,34 @@
 // Core send types
 // ---------------------------------------------------------------------------
 
+/**
+ * Email types written to email_delivery_log.email_type.
+ *
+ * BACKLOG-4001: the table's check constraint must allow exactly these values
+ * (supabase/migrations/20261020120000_backlog_4001_email_log_type_status_checks.sql).
+ * Adding a type here needs a migration; __tests__/migrations/email-log-checks-4001.test.ts
+ * fails until both lists match.
+ */
+export const EMAIL_TYPES = [
+  'invite',
+  'ticket_notification',
+  'ticket_confirmation',
+  'ticket_reply',
+  'ticket_resolved',
+  'receipt',
+  'other',
+] as const;
+
 /** Email type for delivery logging */
-export type EmailType = 'invite' | 'ticket_notification' | 'ticket_confirmation' | 'ticket_reply' | 'ticket_resolved' | 'receipt' | 'other';
+export type EmailType = (typeof EMAIL_TYPES)[number];
+
+/**
+ * Statuses written to email_delivery_log.status (send-email.ts logEmailDelivery).
+ * The check constraint also allows the legacy 'attempted', which nothing writes.
+ */
+export const EMAIL_LOG_STATUSES = ['sent', 'failed', 'skipped', 'queued'] as const;
+
+export type EmailLogStatus = (typeof EMAIL_LOG_STATUSES)[number];
 
 export interface SendEmailParams {
   /** Recipient email address or array of addresses */
