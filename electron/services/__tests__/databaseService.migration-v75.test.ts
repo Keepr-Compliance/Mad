@@ -106,12 +106,14 @@ describe("migration v75 — BACKLOG-3764, a v74 database on the real upgrade pat
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("is in the chain as v75, the last entry", () => {
+  it("in the chain, with no gap (v76, BACKLOG-4018, follows it)", () => {
     const svc = loadService();
     const versions = (svc.constructor as { MIGRATIONS: Array<{ version: number }> }).MIGRATIONS.map(
       (m) => m.version,
     );
-    expect(versions[versions.length - 1]).toBe(75);
+    expect(versions).toContain(75);
+    expect(versions.indexOf(75)).toBe(versions.indexOf(74) + 1);
+    expect(versions.indexOf(76)).toBe(versions.indexOf(75) + 1);
   });
 
   it("C11: a v74 database with a link opens, gains the column, and keeps the link with 0", async () => {
@@ -167,7 +169,11 @@ describe("migration v75 — BACKLOG-3764, a v74 database on the real upgrade pat
       cid: expect.any(Number),
       pk: 0,
     });
-    expect(version(db)).toBe(75);
+    // The whole chain ran: the head is read from MIGRATIONS, so a later version
+    // does not need to edit this line again.
+    const chainHead = (second.constructor as { MIGRATIONS: Array<{ version: number }> }).MIGRATIONS.at(-1)!.version;
+    expect(chainHead).toBeGreaterThanOrEqual(75);
+    expect(version(db)).toBe(chainHead);
     expect(
       db.prepare("SELECT id, include_outside_dates FROM transaction_checklist_links").all(),
     ).toEqual([{ id: "l-3764", include_outside_dates: 0 }]);
