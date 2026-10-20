@@ -11,7 +11,7 @@
  * field. The first invite into an organization with nobody in it defaults to Admin.
  */
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@keepr/design-system';
 import { InviteUserDialog } from '@/app/dashboard/users/components/InviteUserDialog';
@@ -40,16 +40,17 @@ export function inviteBlockedReason(p: Pick<OrgInviteButtonProps, 'canViewBillin
 export function OrgInviteButton({ organizationId, organizationName, canInvite, canViewBilling, hasDeal, showBillingCard, isFirstInvite }: OrgInviteButtonProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const blockedId = `org-invite-blocked-${useId()}`;
   if (!canInvite || !showBillingCard) return null;
   const blocked = inviteBlockedReason({ canViewBilling, hasDeal });
 
   return (
     <div className="flex flex-col items-end gap-1">
-      <Button size="sm" onClick={() => setOpen(true)} disabled={blocked !== null} aria-describedby={blocked ? 'org-invite-blocked' : undefined}>
+      <Button size="sm" onClick={() => setOpen(true)} disabled={blocked !== null} aria-describedby={blocked ? blockedId : undefined}>
         Invite
       </Button>
       {blocked && (
-        <p id="org-invite-blocked" className="text-xs text-gray-500">{blocked}</p>
+        <p id={blockedId} className="text-xs text-gray-500">{blocked}</p>
       )}
       {open && (
         <InviteUserDialog
