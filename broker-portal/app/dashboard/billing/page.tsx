@@ -14,6 +14,9 @@
  *   5. BACKLOG-3878: a suspended brokerage member (organization page)
  *      -> /dashboard/account. The brokerage's bill is not theirs. A suspended
  *      personal owner IS shown the page: it is where they land.
+ *   BACKLOG-3853 PR-2B: a suspended BROKERAGE (org_deals, not the licence) is
+ *   NOT refused: Billing is where its broker, admin and IT admin land. The page
+ *   shows the suspended banner and offers nothing to buy or manage.
  *
  * Each step runs before any billing data is read. BACKLOG-3847 reads the
  * personal owner's Agent plan (mirror row, support grant) and the Agent prices
@@ -36,6 +39,7 @@ import { formatPrice, getAgentPlanView, getAgentPrices, type AgentPrice } from '
 import { getPersonalBillingView } from '@/lib/billing/personalBilling';
 import { createClient } from '@/lib/supabase/server';
 import { suspendedForDispute } from '@/lib/billing/suspensionCause';
+import type { OrgSuspensionReason } from '@/components/billing/OrgSuspendedBanner';
 
 const SITUATION_3844 = {
   agentPlan: 'none',
@@ -70,6 +74,22 @@ function stripeOrNull() {
   }
 }
 
+/** BACKLOG-3853 PR-2B: why the deal is suspended, or null when the read fails (the banner then says "contact Keepr"). */
+async function orgSuspensionReason(organizationId: string): Promise<OrgSuspensionReason> {
+  try {
+    const { data, error } = await createServiceClient()
+      .from('org_deals')
+      .select('suspended_reason')
+      .eq('organization_id', organizationId)
+      .maybeSingle();
+    if (error) return null;
+    const reason = (data as { suspended_reason?: string | null } | null)?.suspended_reason;
+    return reason === 'non_payment' || reason === 'other' ? reason : null;
+  } catch {
+    return null;
+  }
+}
+
 export default async function BillingRoute({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   if (!billingEnabled()) notFound();
   if (await getImpersonationSession()) notFound();
@@ -86,6 +106,25 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
   if (!caps) notFound();
   if (caps.kind !== 'personal' && portal.suspended === true) redirect('/dashboard/account');
   if (caps.kind !== 'personal') {
+    if (portal.orgSuspended === true && portal.access.kind === 'full') {
+      // BACKLOG-3853 PR-2B: read after admission. The reason is service-side only.
+      const orgCaps = billingCapabilities({
+        access: portal.access,
+        isImpersonating: false,
+        enabled: true,
+        ...SITUATION_3844,
+        orgSuspended: true,
+      });
+      if (!orgCaps) notFound();
+      const reason = await orgSuspensionReason(portal.access.organizationId);
+      return (
+        <BillingPage
+          caps={orgCaps}
+          orgBillingSetUp={SITUATION_3844.orgBillingSetUp}
+          orgSuspension={{ reason, role: portal.access.role }}
+        />
+      );
+    }
     return <BillingPage caps={caps} orgBillingSetUp={SITUATION_3844.orgBillingSetUp} />;
   }
 

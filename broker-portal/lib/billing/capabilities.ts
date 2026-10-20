@@ -58,6 +58,13 @@ export interface BillingSituation {
   accountSuspended: boolean;
   /** The organization has a billing deal on record (org_deals, 3853). */
   orgBillingSetUp: boolean;
+  /**
+   * BACKLOG-3853 PR-2B: the organization's deal is suspended (org_billing_suspended).
+   * Not `accountSuspended` (the person's own licence, 3878): nothing can be
+   * bought, no seat or licence is managed, and there is no primary action (the
+   * Pay button is BACKLOG-3855's). Organization pages only.
+   */
+  orgSuspended?: boolean;
 }
 
 export interface BillingCapabilities {
@@ -122,7 +129,8 @@ function organization(role: string, s: BillingSituation): BillingCapabilities {
   const payer = (ORG_PAYER_ROLES as readonly string[]).includes(role);
   // Money only for a payer whose organization has billing set up.
   const money = payer && s.orgBillingSetUp;
-  const canPurchase = money && !s.accountSuspended;
+  const orgSuspended = s.orgSuspended === true;
+  const canPurchase = money && !s.accountSuspended && !orgSuspended;
   return {
     kind: 'organization',
     blocks: money ? ['plan', 'seats', 'payment', 'invoices'] : ['plan', 'seats'],
@@ -133,10 +141,11 @@ function organization(role: string, s: BillingSituation): BillingCapabilities {
     canEndPlanNow: false,
     canSeeInvoices: money,
     canPurchase,
-    canManageLicenses: true,
+    canManageLicenses: !orgSuspended,
     canAddSeats: canPurchase,
-    showManageUsersLink: role === 'admin' || role === 'it_admin',
-    primaryAction: money ? (s.accountSuspended ? 'contact_support' : 'add_seats') : null,
+    // The Users page is closed while the brokerage is suspended.
+    showManageUsersLink: !orgSuspended && (role === 'admin' || role === 'it_admin'),
+    primaryAction: orgSuspended ? null : money ? (s.accountSuspended ? 'contact_support' : 'add_seats') : null,
   };
 }
 

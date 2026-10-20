@@ -17,10 +17,13 @@ import {
   mayOpenDashboardPath,
   maySuspendedOpenPath,
   suspendedLanding,
+  mayOrgSuspendedOpenPath,
+  orgSuspendedLanding,
   type PortalMembershipRow,
 } from '@/lib/auth/membership';
 import { LICENCE_READ_FAILED, readOwnLicenceSuspended } from '@/lib/auth/suspension';
 import { billingEnabled } from '@/lib/billing/flag';
+import { ORG_SUSPENSION_READ_FAILED, readOrgBillingSuspended } from '@/lib/auth/orgSuspension';
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
@@ -159,6 +162,23 @@ export async function middleware(request: NextRequest) {
         const billingOn = billingEnabled();
         if (!maySuspendedOpenPath(access, pathname, billingOn)) {
           return NextResponse.redirect(new URL(suspendedLanding(access, billingOn), request.url));
+        }
+      }
+
+      // BACKLOG-3853 PR-2B: a suspended BROKERAGE (org_deals), read only for a
+      // person routed on one and only when the licence rule above let them
+      // through (the licence rule wins). Sequential: it needs the organization
+      // from the memberships. A failed read lets this request through (every
+      // data path is refused in the database) and logs a static code only.
+      if (suspended !== true) {
+        const orgSuspended = await readOrgBillingSuspended(supabase, access);
+        if (orgSuspended === null) {
+          console.warn('[middleware] brokerage suspension check skipped', { code: ORG_SUSPENSION_READ_FAILED });
+        } else if (orgSuspended) {
+          const billingOn = billingEnabled();
+          if (!mayOrgSuspendedOpenPath(access, pathname, billingOn)) {
+            return NextResponse.redirect(new URL(orgSuspendedLanding(access, billingOn), request.url));
+          }
         }
       }
 

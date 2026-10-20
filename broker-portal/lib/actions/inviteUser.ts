@@ -14,6 +14,7 @@ import { createClient } from '@/lib/supabase/server';
 import { randomBytes } from 'crypto';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
+import { BROKERAGE_SUSPENDED_ERROR, isBrokerageSuspendedError } from '@/lib/auth/orgSuspension';
 import { sendInviteEmail } from '@/lib/email';
 import { inviteNameTooLong, normalizeInviteName } from '@/lib/users/inviteNames';
 import {
@@ -223,6 +224,8 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
     if (withoutLicense && isUnlicensedInviteUnsupported(insertError)) {
       return { success: false, error: INVITE_WITHOUT_LICENSE_UNAVAILABLE };
     }
+    // BACKLOG-3853 PR-2B: the brokerage is suspended; the member trigger refused.
+    if (isBrokerageSuspendedError(insertError)) return { success: false, error: BROKERAGE_SUSPENDED_ERROR };
     Sentry.captureException(insertError, {
       tags: { action: 'invite_user' },
       extra: { email: normalizedEmail, organizationId: input.organizationId },

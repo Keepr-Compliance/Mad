@@ -197,3 +197,43 @@ describe('C12: resend', () => {
     expect(mockSendInviteEmail).toHaveBeenCalledTimes(1);
   });
 });
+
+// BACKLOG-3853 PR-2B (C-A2, C-A3): a suspended brokerage. The member trigger
+// raises P0001 'account_suspended' on the invite INSERT and on the resend UPDATE
+// (keepr-test, rolled-back block as the Beta admin, plan 2cafe0ef §5; trigger
+// source: RAISE EXCEPTION 'account_suspended' USING ERRCODE = 'P0001', HINT = ...).
+const ORG_SUSPENDED = {
+  code: 'P0001',
+  message: 'account_suspended',
+  details: null,
+  hint: 'This brokerage account is suspended. Contact Keepr to restore it.',
+};
+const SUSPENDED_TEXT = 'This brokerage account is suspended. Contact Keepr to restore it.';
+
+describe('C-A2: invite, brokerage suspended (BACKLOG-3853)', () => {
+  it('-> the suspended message, not reported, no email', async () => {
+    given({ writeError: ORG_SUSPENDED });
+    expect(await invite()).toEqual({ success: false, error: SUSPENDED_TEXT });
+    expect(mockCaptureException).not.toHaveBeenCalled();
+    expect(mockSendInviteEmail).not.toHaveBeenCalled();
+  });
+  it('same message under another code -> generic, reported', async () => {
+    given({ writeError: { ...ORG_SUSPENDED, code: '42501' } });
+    expect(await invite()).toEqual({ success: false, error: 'Failed to create invitation' });
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('C-A3: resend, brokerage suspended (BACKLOG-3853)', () => {
+  it('-> the suspended message, not reported, no email', async () => {
+    given({ writeError: ORG_SUSPENDED });
+    expect(await resend()).toEqual({ success: false, error: SUSPENDED_TEXT });
+    expect(mockCaptureException).not.toHaveBeenCalled();
+    expect(mockSendInviteEmail).not.toHaveBeenCalled();
+  });
+  it('same code, other message -> generic, reported', async () => {
+    given({ writeError: { ...ORG_SUSPENDED, message: 'other' } });
+    expect(await resend()).toEqual({ success: false, error: 'Failed to regenerate invitation' });
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+  });
+});

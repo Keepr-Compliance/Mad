@@ -12,6 +12,7 @@ import { useSearchParams } from 'next/navigation';
 import { Alert, Spinner } from '@keepr/design-system';
 import { AppMark } from '@keepr/ui';
 import { Loader2, XCircle } from 'lucide-react';
+import { BROKERAGE_SUSPENDED_ERROR } from '@/lib/auth/orgSuspension';
 
 // Error messages for auth failure states
 const ERROR_MESSAGES: Record<string, string> = {
@@ -31,6 +32,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   already_placed:
     "You're already a member of a Keepr brokerage, so this invitation was not accepted. To join a different brokerage, ask your current brokerage admin to remove you first, then open the invitation link again.",
   invite_failed: "We couldn't accept your invitation. Open the invitation link again and try once more.",
+  // BACKLOG-3853 PR-2B: the brokerage's account is suspended (plan v2 G5 text).
+  brokerage_suspended: BROKERAGE_SUSPENDED_ERROR,
 };
 
 // Option A brand palette (matches the app mark + landing; not in the sky-blue

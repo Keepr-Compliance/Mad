@@ -16,6 +16,7 @@ import { InvoicesBlock } from './InvoicesBlock';
 import { PaymentFailedBanner } from './PaymentFailedBanner';
 import { CardUpdateReturn } from './BillingCardControls';
 import { SuspendedBanner } from './SuspendedBanner';
+import { OrgSuspendedBanner, type OrgSuspensionReason } from './OrgSuspendedBanner';
 import type { PersonalBillingData } from '@/lib/billing/personalBilling';
 
 export interface PlanPrice {
@@ -56,6 +57,8 @@ export interface BillingPageProps {
   orgBillingSetUp: boolean;
   /** Personal page only. */
   personal?: PersonalPlanData;
+  /** BACKLOG-3853 PR-2B: the brokerage is suspended. Organization page only. */
+  orgSuspension?: { reason: OrgSuspensionReason; role: string } | null;
 }
 
 function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
@@ -64,7 +67,7 @@ function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
   return orgBillingSetUp ? 'Organization plan' : 'Managed by Keepr';
 }
 
-export function BillingPage({ caps, orgBillingSetUp, personal }: BillingPageProps) {
+export function BillingPage({ caps, orgBillingSetUp, personal, orgSuspension }: BillingPageProps) {
   // Blocks 4–6 are filled for a personal page only; organization pages keep the frame (3855).
   const b = caps.kind === 'personal' ? personal?.billing : undefined;
   const suspended = personal?.suspended === true;
@@ -103,7 +106,9 @@ export function BillingPage({ caps, orgBillingSetUp, personal }: BillingPageProp
         <p role="status" className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-700">Your card was not changed.</p>
       ) : null}
       {/* BACKLOG-3878: one banner; a suspension outranks a failed payment. */}
-      {caps.kind === 'personal' && suspended ? (
+      {caps.kind === 'organization' && orgSuspension ? (
+        <OrgSuspendedBanner reason={orgSuspension.reason} role={orgSuspension.role} />
+      ) : caps.kind === 'personal' && suspended ? (
         <SuspendedBanner dispute={personal?.suspendedForDispute === true} />
       ) : b && personal?.state === 'payment_failed' ? (
         <PaymentFailedBanner card={b.card} invoice={b.failedInvoice} canUpdateCard={caps.canUpdateCard && b.customer === 'present'} />

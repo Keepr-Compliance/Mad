@@ -72,7 +72,10 @@ const FEATURE_OFF = withFeature(ORG_WITHOUT_PLAN_FEATURES, CHECKLIST_FEATURE_KEY
 const DB_EDITOR_ROLES = ['broker', 'admin', 'it_admin'];
 const canEditRpc = (role: string, features: unknown, personal = false) =>
   jest.fn(async (fn: string) =>
-    fn === 'can_edit_checklist_templates'
+    // BACKLOG-3853 PR-2B: the brokerage is not suspended in this file.
+    fn === 'org_billing_suspended'
+      ? { data: false, error: null }
+      : fn === 'can_edit_checklist_templates'
       ? { data: (personal || DB_EDITOR_ROLES.includes(role)) && features !== FEATURE_OFF, error: null }
       : fn === 'can_create_own_checklist_templates'
         ? // BACKLOG-3618 (migration 20261001054306 §2): any member AND feature on.

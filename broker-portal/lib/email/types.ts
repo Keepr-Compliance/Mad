@@ -248,10 +248,27 @@ export interface AccountSuspendedParams {
   brokerageName: string;
   /** Why the account manager suspended the account */
   reason: 'non_payment' | 'other';
+  /**
+   * BACKLOG-3853 PR-2B: how a non-payment suspension is paid. Ignored for 'other'
+   * (no button: paying does not lift an Other suspension, founder 1e164f56 Q1).
+   */
+  payment: AccountSuspendedPayment;
   /** Kept in the delivery log so a second run can see this email was sent */
   outboxKey: string;
   organizationId: string;
 }
+
+/**
+ * - invoice: the "Pay overdue invoice" button opens `url` (Stripe's hosted invoice
+ *   page of the oldest overdue invoice); `overdueCount` open invoices are past due.
+ * - stripe_email: the invoice lookup could not be made (last try, or the Stripe
+ *   customer is gone); no button, pay from Stripe's invoice email.
+ * - none: no open invoice / no Stripe customer on record; contact the account manager.
+ */
+export type AccountSuspendedPayment =
+  | { kind: 'invoice'; url: string; overdueCount: number }
+  | { kind: 'stripe_email' }
+  | { kind: 'none' };
 
 export type AccountManagerAlertReason = 'overdue' | 'payment_failed' | 'refund' | 'dispute';
 

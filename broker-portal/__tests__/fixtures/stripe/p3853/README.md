@@ -8,6 +8,9 @@ Transcribed from the PR-0 spike captures (docs/billing/3853-stripe-spike.md, clo
   The spike deliberately set no `kind`; PR-2's sync handler is the producer of that metadata.
 - Email addresses `@example.com` -> `@example.test`.
 - Hosted invoice, PDF and microdeposit-verification URLs replaced with `[REDACTED hosted URL]` (they embed the account id).
+- BACKLOG-3853 PR-2B: in `inv-list-open.json` only, each `hosted_invoice_url` re-redacted to
+  `https://invoice.stripe.test/REDACTED/<that invoice's id>`, so a test on the email's Pay link can tell
+  which invoice was chosen (all five were the same string before).
 - `idempotency-error.json`: `request_log_url` removed (embeds the account id).
 - `pi-open.json`, `pi-requires-action.json`: `client_secret` replaced with `pi_FIXTURE_secret_REDACTED`.
 

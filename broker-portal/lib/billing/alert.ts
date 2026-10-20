@@ -35,7 +35,10 @@ export type BillingAlertName =
   // BACKLOG-3853 PR-2 (brokerage subscription)
   | 'brokerage_orphan_object'
   | 'brokerage_refund_or_dispute'
-  | 'brokerage_no_account_manager';
+  | 'brokerage_no_account_manager'
+  // BACKLOG-3853 PR-2B ("account suspended" email: the Pay button could not be built)
+  | 'brokerage_suspended_no_invoice'
+  | 'brokerage_suspended_invoice_lookup_failed';
 
 export function billingAlert(
   name: BillingAlertName,

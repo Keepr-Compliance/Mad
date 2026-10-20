@@ -92,7 +92,10 @@ function canReviewSubmission(orgId: unknown): boolean {
   );
 }
 const mockRpc = jest.fn(async (name: string, args?: Record<string, unknown>) =>
-  name === 'can_edit_checklist_templates'
+  // BACKLOG-3853 PR-2B: no brokerage in this file is suspended.
+  name === 'org_billing_suspended'
+    ? { data: false, error: null }
+    : name === 'can_edit_checklist_templates'
     ? { data: canEditChecklistTemplates(args?.p_org_id), error: null }
     : name === 'can_create_own_checklist_templates'
       ? { data: canCreateOwnChecklistTemplates(args?.p_org_id), error: null }

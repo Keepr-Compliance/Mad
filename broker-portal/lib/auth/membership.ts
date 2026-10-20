@@ -181,3 +181,48 @@ export function maySuspendedOpenPath(access: PortalAccess, pathname: string, bil
 export function suspendedLanding(access: PortalAccess, billingOn: boolean): string {
   return suspendedSeesBilling(access, billingOn) ? '/dashboard/billing' : '/dashboard/account';
 }
+
+// ===========================================================================
+// Suspended BROKERAGE — BACKLOG-3853 PR-2B.
+// ===========================================================================
+//
+// The brokerage's deal is suspended (lib/auth/orgSuspension.ts reads it). Not
+// the 3878 rule above: nobody's licence changed. Middleware applies the 3878
+// rule first; a person whose own licence is suspended never reaches these.
+//
+//   - broker, admin, it_admin (full): Billing (while billing is on), Support and
+//     My Account (founder 1e164f56: the IT admin keeps Support too).
+//   - an agent (floor via brokerage): what the floor gives them, minus Checklists
+//     (ruling a43c3e85). They keep /dashboard and My Transactions (Q7 a).
+//   - anyone else: never asked (no brokerage read), so never here.
+
+/** Paths every person in a suspended brokerage may open (agents add their floor). */
+export const ORG_SUSPENDED_PATHS = ['/dashboard/account', '/dashboard/support'] as const;
+
+/** May this access open this path while its brokerage is suspended? */
+export function mayOrgSuspendedOpenPath(access: PortalAccess, pathname: string, billingOn: boolean): boolean {
+  if (access.kind === 'floor') {
+    for (const base of OWN_GATE_PATHS) {
+      if (isUnder(pathname, base)) return false;
+    }
+    return mayOpenDashboardPath(access, pathname);
+  }
+  for (const base of ORG_SUSPENDED_PATHS) {
+    if (isUnder(pathname, base)) return true;
+  }
+  if (billingOn && access.kind === 'full') {
+    for (const base of BILLING_PATHS) {
+      if (isUnder(pathname, base)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Where a person in a suspended brokerage lands. Always a path
+ * {@link mayOrgSuspendedOpenPath} admits for the same arguments.
+ */
+export function orgSuspendedLanding(access: PortalAccess, billingOn: boolean): string {
+  if (access.kind === 'floor') return '/dashboard';
+  return billingOn && access.kind === 'full' ? '/dashboard/billing' : '/dashboard/account';
+}

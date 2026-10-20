@@ -276,6 +276,7 @@ export async function sendAccountSuspendedEmail(
       outboxKey: params.outboxKey,
       organizationId: params.organizationId,
       reason: params.reason,
+      payment: params.reason === 'non_payment' ? params.payment.kind : null,
     },
   });
 }

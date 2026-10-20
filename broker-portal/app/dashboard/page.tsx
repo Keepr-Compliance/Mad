@@ -17,7 +17,7 @@ import {
 } from '@/lib/utils/userDisplay';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
-import { suspendedLanding } from '@/lib/auth/membership';
+import { orgSuspendedLanding, suspendedLanding } from '@/lib/auth/membership';
 import { billingEnabled } from '@/lib/billing/flag';
 import { FloorDashboard } from './components/FloorDashboard';
 import { DashboardStatCards } from '@/components/dashboard/DashboardStatCards';
@@ -98,6 +98,11 @@ export default async function DashboardPage() {
     // impersonation branch: a support session keeps its view.
     if (portal?.suspended === true) {
       redirect(suspendedLanding(portal.access, billingEnabled()));
+    }
+    // BACKLOG-3853 PR-2B: a suspended brokerage's broker, admin and IT admin
+    // have no dashboard home either. An agent keeps it (Q7 a).
+    if (portal?.orgSuspended === true && portal.access.kind === 'full') {
+      redirect(orgSuspendedLanding(portal.access, billingEnabled()));
     }
     if (portal) {
       authUser = portal.user;

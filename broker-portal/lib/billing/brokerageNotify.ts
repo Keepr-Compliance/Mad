@@ -12,14 +12,30 @@
  *    and done. Overdue NEVER suspends (founder ruling): the account manager decides.
  *
  * Both check email_delivery_log for their own outboxKey first, so a run that sent and then lost
- * its lease does not send twice. Neither calls Stripe.
+ * its lease does not send twice.
+ *
+ * BACKLOG-3853 PR-2B: a Non-payment "account suspended" email carries a "Pay overdue invoice"
+ * button (founder 64e00066, 1e164f56 Q1: Non-payment only). The invoice is read from Stripe at
+ * send time with the row's own client and mode (nothing stores invoice URLs):
+ *   - reason 'other' -> no Stripe call, no button.
+ *   - no org_billing_stripe row / no customer -> no button, "contact your account manager" + alert.
+ *   - the oldest OVERDUE open invoice (./overdue.ts, the rule tryAutoReinstate waits on), else the
+ *     oldest open one. "Now" is the customer's test clock time in TEST.
+ *   - no open invoice at all -> contradictory state: alert + "contact your account manager".
+ *   - a Stripe error throws (the row retries with backoff; never a buttonless send, which the
+ *     alreadySent dedupe would freeze), EXCEPT on the last try or when the Stripe customer is
+ *     gone: then send without the button ("pay from Stripe's invoice email") + alert, so the
+ *     billing contact is never left with no email.
  */
 
 import type { createServiceClient } from '@/lib/supabase/service';
 import { sendAccountManagerAlertEmail, sendAccountSuspendedEmail } from '@/lib/email';
 import type { AccountManagerAlertReason } from '@/lib/email/types';
 import { billingAlert } from './alert';
-import { NonRetryableOutboxError, type OutboxHandler, type OutboxRow } from './outboxKinds';
+import { NonRetryableOutboxError, type OutboxHandler, type OutboxHandlerContext, type OutboxRow } from './outboxKinds';
+import { OUTBOX_MAX_ATTEMPTS } from './outbox';
+import { listOpenInvoices, oldestOf, overdueOf, stripeNow } from './overdue';
+import type { AccountSuspendedPayment } from '@/lib/email/types';
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
@@ -81,6 +97,63 @@ function outcome(result: { outcome?: string }): void {
   throw new Error('email send failed');
 }
 
+function pastDeadline(deadline: Date): void {
+  if (Date.now() >= deadline.getTime()) throw new Error('outbox deadline reached');
+}
+
+function isMissing(err: unknown): boolean {
+  const e = err as { code?: string; statusCode?: number };
+  return e?.code === 'resource_missing' || e?.statusCode === 404;
+}
+
+async function stripeCustomerOf(ctx: OutboxHandlerContext, org: string): Promise<string | null> {
+  const { data, error } = await ctx.service
+    .from('org_billing_stripe')
+    .select('stripe_customer_id')
+    .eq('organization_id', org)
+    .eq('stripe_mode', ctx.mode)
+    .maybeSingle();
+  if (error) throw new Error(`org_billing_stripe read failed: ${error.code ?? 'unknown'}`);
+  return (data as { stripe_customer_id?: string | null } | null)?.stripe_customer_id ?? null;
+}
+
+/** How the billing contact pays a non-payment suspension. See the header for each branch. */
+async function suspendedPayment(row: OutboxRow, ctx: OutboxHandlerContext, org: string): Promise<AccountSuspendedPayment> {
+  const customerId = await stripeCustomerOf(ctx, org);
+  if (!customerId) {
+    billingAlert('brokerage_suspended_no_invoice', ctx.mode, { organization_id: org, cause: 'no_customer' });
+    return { kind: 'none' };
+  }
+  try {
+    pastDeadline(ctx.deadline);
+    const now = await stripeNow(ctx, customerId);
+    pastDeadline(ctx.deadline);
+    const open = await listOpenInvoices(ctx, customerId);
+    const overdue = overdueOf(open, now);
+    const chosen = overdue[0] ?? oldestOf(open);
+    const url = chosen?.hosted_invoice_url ?? null;
+    if (!chosen || !url || !url.startsWith('https://')) {
+      billingAlert('brokerage_suspended_no_invoice', ctx.mode, {
+        organization_id: org,
+        cause: chosen ? 'no_hosted_url' : 'no_open_invoice',
+      });
+      return { kind: 'none' };
+    }
+    return { kind: 'invoice', url, overdueCount: overdue.length };
+  } catch (err) {
+    const missing = isMissing(err);
+    if (missing || row.attempts >= OUTBOX_MAX_ATTEMPTS) {
+      billingAlert('brokerage_suspended_invoice_lookup_failed', ctx.mode, {
+        organization_id: org,
+        cause: missing ? 'resource_missing' : 'last_try',
+        attempts: row.attempts,
+      });
+      return { kind: 'stripe_email' };
+    }
+    throw err;
+  }
+}
+
 export const handleNotifyOrgSuspendedRow: OutboxHandler = async (row, ctx) => {
   const org = orgOf(row);
   const wantEpoch = typeof row.payload?.suspended_at_epoch === 'number' ? row.payload.suspended_at_epoch : null;
@@ -97,11 +170,17 @@ export const handleNotifyOrgSuspendedRow: OutboxHandler = async (row, ctx) => {
   const recipientEmail = deal.billing_contact_email?.trim();
   if (!recipientEmail) throw new NonRetryableOutboxError('no_recipient');
 
+  const reason = deal.suspended_reason === 'non_payment' ? 'non_payment' : 'other';
+  // Founder 1e164f56 Q1: the Pay button is for a Non-payment suspension only; an Other
+  // suspension makes no Stripe call.
+  const payment: AccountSuspendedPayment = reason === 'non_payment' ? await suspendedPayment(row, ctx, org) : { kind: 'none' };
+
   outcome(
     await sendAccountSuspendedEmail({
       recipientEmail,
       brokerageName: await orgName(ctx.service, org),
-      reason: deal.suspended_reason === 'non_payment' ? 'non_payment' : 'other',
+      reason,
+      payment,
       outboxKey: row.dedupe_key,
       organizationId: org,
     })

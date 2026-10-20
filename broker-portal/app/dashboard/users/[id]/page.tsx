@@ -59,7 +59,13 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
 
   // Not a full-portal admin or it_admin
   // BACKLOG-3878: a suspended account keeps My Account and Support only.
-  if (access.kind !== 'full' || !['admin', 'it_admin'].includes(access.role) || portal.suspended === true) {
+  // BACKLOG-3853 PR-2B: and so does a suspended brokerage (Billing too).
+  if (
+    access.kind !== 'full' ||
+    !['admin', 'it_admin'].includes(access.role) ||
+    portal.suspended === true ||
+    portal.orgSuspended === true
+  ) {
     return null;
   }
   const currentMembership = { role: access.role, organization_id: access.organizationId };
