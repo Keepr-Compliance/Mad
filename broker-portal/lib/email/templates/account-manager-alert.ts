@@ -24,6 +24,18 @@ const REASON_TEXT: Record<AccountManagerAlertReason, { subject: string; line: st
     subject: 'payment disputed',
     line: 'The customer disputed a payment on an invoice. Respond to the dispute in Stripe. The account is NOT suspended.',
   },
+  setup_not_completed: {
+    subject: 'setup not finished',
+    line: 'The broker has not finished the Billing step 7 days after the invitation. Billing has not started. Follow up with them.',
+  },
+  setup_no_recipient: {
+    subject: 'setup reminder not sent',
+    line: 'A setup reminder had nobody to go to: the invitation was removed or has expired. Send a new invitation from the organization page.',
+  },
+  price_question: {
+    subject: 'question about the price',
+    line: 'The broker has a question about the price shown in billing setup. Contact them before they confirm.',
+  },
 };
 
 export function buildAccountManagerAlertEmail(params: AccountManagerAlertParams): EmailContent {
@@ -33,6 +45,7 @@ export function buildAccountManagerAlertEmail(params: AccountManagerAlertParams)
     r.line,
     `Brokerage: ${params.brokerageName}`,
     ...(params.stripeObjectId ? [`Stripe reference: ${params.stripeObjectId}`] : []),
+    ...(params.detail ? [params.detail] : []),
   ];
 
   const html = baseLayout({

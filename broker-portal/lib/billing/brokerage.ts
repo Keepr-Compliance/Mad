@@ -23,6 +23,8 @@
  *     _billing_auto_reinstate also requires a payment after the suspension began.
  *   - invoice.payment_failed with the PaymentIntent in requires_action (ACH needs verification)
  *     is not a failure: log only.
+ *   - BACKLOG-4007 PR-3: a $0 invoice.paid (trial invoices) records no payment; the subscription
+ *     is still mirrored.
  *   - Refund or dispute on a brokerage payment: alert + account-manager email; never a suspension.
  *   - "Now" for due dates is the customer's test clock time when it has one (SR plan review
  *     item 5); due_date is clock time, event.created is wall time.
@@ -256,7 +258,15 @@ export async function dispatchBrokerageEvent(ctx: BillingContext, objectId: stri
           log(ctx, `invoice ${inv.id} re-fetched as ${inv.status}; nothing to do`);
           return true;
         }
-        await rpc(ctx, '_billing_record_invoice_paid', { p_org: org, p_mode: ctx.mode, p_event_created: ctx.event.created });
+        // BACKLOG-4007 PR-3: a $0 invoice (the trial's subscription_create / seat-change invoices,
+        // auto-paid by Stripe) is not a payment and must never count toward the "paid since
+        // suspension" rule of auto-reinstate. Keyed on total, not amount_paid: an invoice settled
+        // from customer balance or a credit note has amount_paid 0 and IS a payment (SR 2c75ace8 #12).
+        if (inv.total === 0) {
+          log(ctx, `invoice ${inv.id} totals $0; not recorded as a payment`);
+        } else {
+          await rpc(ctx, '_billing_record_invoice_paid', { p_org: org, p_mode: ctx.mode, p_event_created: ctx.event.created });
+        }
         const subId = invoiceSubscriptionId(inv);
         if (!subId) return true;
         const sub = await ctx.stripe.subscriptions.retrieve(subId);

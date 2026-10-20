@@ -379,6 +379,11 @@ const REFUSED_PAGES: Record<string, PageEntry> = {
     invoke: async () => (await import('@/app/dashboard/settings/scim/page')).default(),
     refused: { notFound: true },
   },
+  // BACKLOG-4007 PR-3: the setup guide is for a brokerage's broker/admin only.
+  'app/dashboard/setup/page.tsx': {
+    invoke: async () => (await import('@/app/dashboard/setup/page')).default({ searchParams: Promise.resolve({}) }),
+    refused: { redirect: '/dashboard' },
+  },
 };
 
 /** The floor: open to every portal user. Scoping of their data is covered elsewhere. */
@@ -538,6 +543,15 @@ const REFUSED_ACTIONS: Record<string, ActionEntry> = {
   'lib/actions/scim.ts#getJitStatus': act(scim, 'getJitStatus'),
   'lib/actions/scim.ts#updateJitStatus': act(scim, 'updateJitStatus', true),
   'lib/actions/scim.ts#listScimSyncLogs': act(scim, 'listScimSyncLogs'),
+  // BACKLOG-4007 PR-3: the Billing step; broker/admin of the organization only.
+  'lib/actions/billingSetup.ts#completeBillingSetup': act(() => import('@/lib/actions/billingSetup'), 'completeBillingSetup', {
+    organizationId: FIXTURE_BROKERAGE_ORG_ID,
+    expectedVersion: 1,
+    acceptTerms: true,
+    contact: { who: 'me', phone: '2065550100' },
+    company: { legal_name: 'Audit LLC', address_line1: '1 Main', city: 'Seattle', region: 'WA', postal_code: '98101', country: 'US' },
+  }),
+  'lib/actions/billingSetup.ts#askAboutPrice': act(() => import('@/lib/actions/billingSetup'), 'askAboutPrice', FIXTURE_BROKERAGE_ORG_ID),
 };
 
 /**
@@ -638,6 +652,15 @@ const REFUSALS: Record<string, Outcome | Record<Persona, Outcome>> = {
   'lib/actions/resendInvite.ts#resendInvite': { returned: { success: false, error: 'Not authorized' } },
   'lib/actions/memberLicense.ts#setMemberLicense': failed('Not authorized'),
   'lib/actions/memberName.ts#setMemberName': failed('Not authorized'),
+  'lib/actions/billingSetup.ts#completeBillingSetup': {
+    returned: {
+      success: false,
+      code: 'not_authorized',
+      error: 'Only a broker or admin of this brokerage can finish billing setup.',
+      reload: false,
+    },
+  },
+  'lib/actions/billingSetup.ts#askAboutPrice': failed('Only a broker or admin of this brokerage can finish billing setup.'),
   'lib/actions/scim.ts#getScimFeatureStatus': { returned: { enabled: false } },
   'lib/actions/scim.ts#generateScimToken': NOT_AUTHORIZED_THROW,
   'lib/actions/scim.ts#revokeScimToken': NOT_AUTHORIZED_THROW,
@@ -923,7 +946,7 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(17);
+    expect(pages.length).toBe(18); // BACKLOG-4007 PR-3: + setup
   });
 
   it('finds route handlers, keyed POSIX on any OS (R8)', () => {
@@ -962,7 +985,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(47); // BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
+    expect(actions.length).toBe(49); // BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 

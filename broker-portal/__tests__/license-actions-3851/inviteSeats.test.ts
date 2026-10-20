@@ -237,3 +237,28 @@ describe('C-A3: resend, brokerage suspended (BACKLOG-3853)', () => {
     expect(mockCaptureException).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * BACKLOG-4007 (founder e4d40740 Q3): the invite trigger refuses while the brokerage waits for the
+ * Billing step. Shape: code P0001, message 'billing_setup_incomplete', hint as RAISEd
+ * (migration 20261020100000 §11); provoked on keepr-test 2026-10-20
+ * (supabase/tests/backlog-4007-pr3/results-2026-10-20.txt, E2).
+ */
+describe('4007: invite while billing setup is unfinished', () => {
+  const SETUP_PENDING = {
+    code: 'P0001',
+    message: 'billing_setup_incomplete',
+    details: null,
+    hint: 'Finish the Billing step of your account setup before inviting people.',
+  };
+
+  it('-> its own sentence, not reported, no email', async () => {
+    given({ writeError: SETUP_PENDING });
+    expect(await invite()).toEqual({
+      success: false,
+      error: 'Finish the Billing step of your account setup before inviting people.',
+    });
+    expect(mockCaptureException).not.toHaveBeenCalled();
+    expect(mockSendInviteEmail).not.toHaveBeenCalled();
+  });
+});

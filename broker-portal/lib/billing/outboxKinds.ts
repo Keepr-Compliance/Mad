@@ -118,6 +118,8 @@ function stableJson(v: unknown): string {
  *                            org_deals trigger, one row per deal version)
  *   - notify_org_suspended / notify_account_manager
  *                            BACKLOG-3853, lib/billing/brokerageNotify.ts (organization rows)
+ *   - notify_setup_reminder  BACKLOG-4007, lib/billing/setupReminder.ts (enqueued by the
+ *                            organization_members trigger, +3 d / +7 d after a broker/admin invite)
  */
 export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.freeze({
   agent_receipt: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
@@ -134,4 +136,6 @@ export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.f
     (await import('./brokerageNotify')).handleNotifyOrgSuspendedRow(row, ctx),
   notify_account_manager: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
     (await import('./brokerageNotify')).handleNotifyAccountManagerRow(row, ctx),
+  notify_setup_reminder: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./setupReminder')).handleNotifySetupReminderRow(row, ctx),
 });

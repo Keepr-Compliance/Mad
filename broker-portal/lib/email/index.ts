@@ -46,6 +46,7 @@ export type {
   SeatLimitReachedParams,
   AccountSuspendedParams,
   AccountManagerAlertParams,
+  SetupReminderParams,
 } from './types';
 
 // Queue (BACKLOG-2009)
@@ -68,6 +69,7 @@ import { buildSeatLimitReachedEmail } from './templates/seat-limit-reached';
 import { buildTicketResolvedEmail } from './templates/ticket-resolved';
 import { buildAccountSuspendedEmail } from './templates/account-suspended';
 import { buildAccountManagerAlertEmail } from './templates/account-manager-alert';
+import { buildSetupReminderEmail } from './templates/setup-reminder';
 import type {
   InviteEmailParams,
   DownloadInviteEmailParams,
@@ -80,6 +82,7 @@ import type {
   SeatLimitReachedParams,
   AccountSuspendedParams,
   AccountManagerAlertParams,
+  SetupReminderParams,
   SendEmailResult,
 } from './types';
 
@@ -299,6 +302,28 @@ export async function sendAccountManagerAlertEmail(
       outboxKey: params.outboxKey,
       organizationId: params.organizationId,
       reason: params.reason,
+    },
+  });
+}
+
+/**
+ * "Finish your Keepr setup" reminder (BACKLOG-4007 PR-3), sent by the billing outbox
+ * (kind notify_setup_reminder). metadata.kind + outboxKey let the handler see a send it already made.
+ */
+export async function sendSetupReminderEmail(params: SetupReminderParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildSetupReminderEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'setup_reminder',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+      variant: params.variant,
+      day: params.day,
     },
   });
 }

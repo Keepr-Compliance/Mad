@@ -448,7 +448,8 @@ describe('BACKLOG-3851 — /setup completes an invitation', () => {
     placedMember('admin', 'active', TENANT_ID);
 
     expect(await callbackRedirect()).toContain('/setup/consent');
-    expect(mockRpc).not.toHaveBeenCalled();
+    // No provisioning call. BACKLOG-4007 PR-3 adds only the read-only setup-state read.
+    expect(mockRpc.mock.calls.filter(([fn]) => fn !== 'broker_get_billing_setup')).toEqual([]);
   });
 
   it.each([

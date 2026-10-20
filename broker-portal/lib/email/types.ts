@@ -296,7 +296,15 @@ export type AccountSuspendedPayment =
   | { kind: 'stripe_email' }
   | { kind: 'none' };
 
-export type AccountManagerAlertReason = 'overdue' | 'payment_failed' | 'refund' | 'dispute';
+export type AccountManagerAlertReason =
+  | 'overdue'
+  | 'payment_failed'
+  | 'refund'
+  | 'dispute'
+  // BACKLOG-4007 PR-3: onboarding (billing setup) alerts.
+  | 'setup_not_completed'
+  | 'setup_no_recipient'
+  | 'price_question';
 
 export interface AccountManagerAlertParams {
   /** The account manager's sign-in email */
@@ -305,6 +313,20 @@ export interface AccountManagerAlertParams {
   reason: AccountManagerAlertReason;
   /** Stripe object the alert is about (an invoice, charge or dispute id) */
   stripeObjectId: string | null;
+  /** BACKLOG-4007 PR-3: one extra line (e.g. who asked a price question). */
+  detail?: string | null;
   outboxKey: string;
   organizationId: string;
+}
+
+/** BACKLOG-4007 PR-3: "finish your setup" reminder (outbox kind notify_setup_reminder). */
+export interface SetupReminderParams {
+  recipientEmail: string;
+  brokerageName: string;
+  /** finish = has an account (opens the setup guide); accept = invitation not accepted yet. */
+  variant: 'finish' | 'accept';
+  url: string;
+  outboxKey: string;
+  organizationId: string;
+  day: number;
 }

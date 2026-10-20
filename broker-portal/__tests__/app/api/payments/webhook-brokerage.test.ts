@@ -310,3 +310,39 @@ describe('auto-reinstate (non-payment suspensions only, after a payment)', () =>
     expect(deal().status).toBe('suspended');
   });
 });
+
+/**
+ * BACKLOG-4007 PR-3 (C-W1): a trial subscription's $0 invoices fire invoice.paid (Stripe TEST probe 2,
+ * plan-4007 §3: invoice.created/finalized/paid, no invoice.sent). They are not payments.
+ * Fixture: inv-paid.json with total / amount_due / amount_paid set to 0 [EDITED]; the balance case
+ * keeps total and sets amount_paid 0 [EDITED] (paid from customer balance / a credit note).
+ */
+describe('4007: $0 invoices are not payments', () => {
+  const SUSPENDED_AT = new Date((EV_PASTDUE.created - 3600) * 1000).toISOString();
+  const ZERO = { ...clone(INV_PAID), id: 'in_4007_zero', total: 0, amount_due: 0, amount_paid: 0 };
+  const BALANCE = { ...clone(INV_PAID), id: 'in_4007_balance', amount_paid: 0 };
+  const paid = (id: string) => envelope('invoice.paid', id, EV_PASTDUE.created + 120, `evt_4007_${id}`);
+  const activeEnvelope = () => envelope('customer.subscription.updated', SUB_ACTIVE.id, EV_PASTDUE.created + 130, 'evt_4007_active');
+
+  beforeEach(() => {
+    openInvoices = [];
+    seed({ deal: { status: 'suspended', suspended_reason: 'non_payment', suspended_at: SUSPENDED_AT } });
+  });
+
+  it('C-W1: a $0 invoice.paid records no payment, so a later ->active does not reinstate', async () => {
+    serve(ZERO, SUB_ACTIVE);
+    const res = await deliver(paid(ZERO.id));
+    expect(res.status).toBe(200);
+    expect(fake.callsTo('_billing_record_invoice_paid')).toEqual([]);
+    expect(mirror().last_invoice_paid_event_created ?? null).toBeNull();
+    await deliver(activeEnvelope());
+    expect(deal().status).toBe('suspended');
+  });
+
+  it('C-W1b: an invoice with a total, paid from balance (amount_paid 0), IS a payment', async () => {
+    serve(BALANCE, SUB_ACTIVE);
+    await deliver(paid(BALANCE.id));
+    expect(fake.callsTo('_billing_record_invoice_paid')).toHaveLength(1);
+    expect(deal().status).toBe('active');
+  });
+});

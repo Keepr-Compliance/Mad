@@ -11,6 +11,8 @@
  *    payment failed, refund, dispute). Enqueued by the brokerage webhook (./brokerage.ts).
  *    No account manager, or one without a sign-in email -> alert 'brokerage_no_account_manager'
  *    and done. Overdue NEVER suspends (founder ruling): the account manager decides.
+ *    BACKLOG-4007 PR-3 adds the onboarding reasons setup_not_completed, setup_no_recipient and
+ *    price_question; payload.detail (optional) is printed as one extra line.
  *
  * Both check email_delivery_log for their own outboxKey first, so a run that sent and then lost
  * its lease does not send twice.
@@ -42,7 +44,17 @@ type ServiceClient = ReturnType<typeof createServiceClient>;
 
 export const NOTIFY_ORG_SUSPENDED_KIND = 'notify_org_suspended';
 export const NOTIFY_ACCOUNT_MANAGER_KIND = 'notify_account_manager';
-const AM_REASONS = new Set<AccountManagerAlertReason>(['overdue', 'payment_failed', 'refund', 'dispute']);
+const AM_REASONS = new Set<AccountManagerAlertReason>([
+  'overdue',
+  'payment_failed',
+  'refund',
+  'dispute',
+  // BACKLOG-4007 PR-3: enqueued by the setup reminder (./setupReminder.ts) and the Billing step's
+  // "Question about this price?" (lib/actions/billingSetup.ts).
+  'setup_not_completed',
+  'setup_no_recipient',
+  'price_question',
+]);
 
 interface DealRow {
   status: string;
@@ -247,6 +259,7 @@ export const handleNotifyAccountManagerRow: OutboxHandler = async (row, ctx) => 
   const reason = row.payload?.reason as AccountManagerAlertReason;
   if (!AM_REASONS.has(reason)) throw new NonRetryableOutboxError('bad_payload');
   const objectId = typeof row.payload?.stripe_object_id === 'string' ? row.payload.stripe_object_id : null;
+  const detail = typeof row.payload?.detail === 'string' ? row.payload.detail : null;
 
   const deal = await readDeal(ctx.service, org);
   if (!deal) throw new NonRetryableOutboxError('no_deal');
@@ -269,6 +282,7 @@ export const handleNotifyAccountManagerRow: OutboxHandler = async (row, ctx) => 
       brokerageName: await orgName(ctx.service, org),
       reason,
       stripeObjectId: objectId,
+      ...(detail ? { detail } : {}),
       outboxKey: row.dedupe_key,
       organizationId: org,
     })

@@ -19,6 +19,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
 import { orgSuspendedLanding, suspendedLanding } from '@/lib/auth/membership';
 import { billingEnabled } from '@/lib/billing/flag';
+import { billingSetupPending, SETUP_GUIDE_PATH } from '@/lib/billing/setupState';
+import { Alert } from '@keepr/design-system';
 import { FloorDashboard } from './components/FloorDashboard';
 import { DashboardStatCards } from '@/components/dashboard/DashboardStatCards';
 import { buildStatCards, type StatCardData } from '@/lib/dashboard/statCards';
@@ -89,6 +91,8 @@ export default async function DashboardPage() {
   // BACKLOG-3080: only a full-portal user gets the brokerage overview.
   // Everyone else gets the floor, decided BEFORE any submission is read.
   let isFullPortal = false;
+  // BACKLOG-4007 PR-3: "Finish setup" banner while the brokerage waits for the Billing step.
+  let setupPending = false;
 
   // IT admins only manage users — redirect to Users page (skip during impersonation)
   if (!impersonation) {
@@ -111,6 +115,7 @@ export default async function DashboardPage() {
         if (portal.access.role === 'it_admin') {
           redirect('/dashboard/users');
         }
+        setupPending = await billingSetupPending(portal.supabase, portal.access);
       }
     }
   }
@@ -141,6 +146,17 @@ export default async function DashboardPage() {
       <PageHeader phoneHideTitle phoneHideSubtitle title={headerTitle} subtitle="Overview of transaction submissions" />
 
       <div className="space-y-6">
+        {setupPending ? (
+          <Alert variant="warning">
+            <p>
+              Finish your account setup. Confirm the billing details before you invite your team.{' '}
+              <Link href={SETUP_GUIDE_PATH} className="font-medium underline">
+                Finish setup
+              </Link>
+            </p>
+          </Alert>
+        ) : null}
+
         {/* Stats Grid */}
         <DashboardStatCards
           cards={statCards}
