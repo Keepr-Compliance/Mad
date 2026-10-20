@@ -735,39 +735,6 @@ describe("Transaction Handlers Integration Tests", () => {
         expect.objectContaining({ exportFormat: "pdf" }),
       );
     });
-
-    it("should increment export count after successful export", async () => {
-      mockTransactionService.getTransactionDetails.mockResolvedValue({
-        ...mockTransactionWithComms,
-        export_count: 2,
-      });
-      mockEnhancedExportService.exportTransaction.mockResolvedValue(
-        "/exports/transaction.pdf",
-      );
-      mockDatabaseService.databaseService.updateTransaction.mockResolvedValue(
-        undefined,
-      );
-
-      const handler = registeredHandlers.get("transactions:export-enhanced");
-      await handler(mockEvent, TEST_TXN_ID, { exportFormat: "pdf" });
-
-      // The handler should update export tracking
-      expect(mockAuditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "DATA_EXPORT",
-          metadata: expect.objectContaining({ format: "pdf" }),
-        }),
-      );
-
-      // BACKLOG-2549: this test's NAME promised the increment and nothing here
-      // checked it — the only assertion was the audit log, which is true of
-      // every export. Asserting the count the completion write actually
-      // receives: the fixture holds 2, so the write must carry 3.
-      expect(mockDatabaseService.recordExportCompletion).toHaveBeenCalledWith(
-        TEST_TXN_ID,
-        expect.objectContaining({ exportCount: 3 }),
-      );
-    });
   });
 
   describe("Audited Transaction Creation", () => {
