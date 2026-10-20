@@ -32,8 +32,22 @@
  * take it.
  *
  * They are deliberately NOT named `*Sync`. That suffix belongs to a twin a
- * transaction body calls, and this file contains no transaction body — neither
- * core is a twin, and the name would say it was.
+ * transaction body calls — neither core is a twin, and the name would say it was.
+ *
+ * BACKLOG-3226 — TWO SEAMS OWN THEIR TRANSACTION. `createCommunication` and
+ * `createThreadCommunicationReference` each run their `*Sync` twin inside
+ * `dbTransaction`, so the junction write and the deal's `text_thread_count`
+ * recount commit or roll back together. These are the file's only two
+ * transaction bodies. The twins are unchanged: a caller that already holds a
+ * transaction keeps calling the twin, and a seam called inside an outer
+ * transaction runs as a SAVEPOINT and still throws synchronously. Asserted on
+ * the real driver in
+ * `db/__tests__/communicationDbService.threadCountAtomicity-3226.test.ts`.
+ *
+ * NOT wrapped, deliberately: `createCommunicationReference` and the three async
+ * delete seams (`deleteCommunication`, `deleteCommunicationByMessageId`,
+ * `deleteCommunicationByThread`) have no production caller; what to do with
+ * them is an open decision on BACKLOG-3226.
  */
 
 import crypto from "crypto";
@@ -52,7 +66,7 @@ import type {
   CommunicationRow,
   TransactionId,
 } from "../../types/ids";
-import { dbGet, dbAll, dbRun } from "./core/dbConnection";
+import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
 import { validateFields, type ColumnOf } from "../../utils/sqlFieldWhitelist";
 import { isTextMessage } from "../../utils/channelHelpers";
@@ -182,7 +196,7 @@ export function createCommunicationSync(
 export function createCommunication(
   communicationData: NewCommunication,
 ): Promise<CommunicationRow> {
-  return Promise.resolve(createCommunicationSync(communicationData));
+  return Promise.resolve(dbTransaction(() => createCommunicationSync(communicationData)));
 }
 
 /**
@@ -1096,7 +1110,11 @@ export function createThreadCommunicationReference(
   linkSource: 'auto' | 'manual' | 'scan' = 'auto',
   linkConfidence: number = 0.9,
 ): Promise<string | null> {
-  return Promise.resolve(createThreadCommunicationReferenceSync(threadId, transactionId, userId, linkSource, linkConfidence));
+  return Promise.resolve(
+    dbTransaction(() =>
+      createThreadCommunicationReferenceSync(threadId, transactionId, userId, linkSource, linkConfidence),
+    ),
+  );
 }
 
 export function createThreadCommunicationReferenceSync(threadId: string, transactionId: string, userId: string, linkSource: 'auto' | 'manual' | 'scan' = 'auto', linkConfidence: number = 0.9): string | null {
