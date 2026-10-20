@@ -16,19 +16,41 @@
 import { Gauge } from 'lucide-react';
 import { formatMetricValue, metricLabel, type ReportSavedView } from '@/lib/reports/report-views';
 
-export interface PinnedCard {
-  view: ReportSavedView;
+/** What a card needs from a view. Every report's saved view has these. */
+export interface PinnableView {
+  id: string;
+  name: string;
+}
+
+export interface PinnedCard<V extends PinnableView = ReportSavedView> {
+  view: V;
   value: number | null;
   active: boolean;
 }
 
-export interface PinnedViewCardsProps {
-  cards: PinnedCard[];
+export interface PinnedViewCardsProps<V extends PinnableView = ReportSavedView> {
+  cards: PinnedCard<V>[];
   periodLabel: string;
-  onToggle: (view: ReportSavedView) => void;
+  onToggle: (view: V) => void;
+  /**
+   * The card's value and its label line (BACKLOG-4004). Both default to the
+   * iPhone Sync metric's formatter and label; a second report passes its own.
+   */
+  formatValue?: (value: number | null, view: V) => string;
+  describeMetric?: (view: V) => string;
 }
 
-export function PinnedViewCards({ cards, periodLabel, onToggle }: PinnedViewCardsProps) {
+const iphoneFormatValue = (value: number | null, view: PinnableView) =>
+  formatMetricValue(value, (view as ReportSavedView).metric);
+const iphoneDescribeMetric = (view: PinnableView) => metricLabel((view as ReportSavedView).metric);
+
+export function PinnedViewCards<V extends PinnableView = ReportSavedView>({
+  cards,
+  periodLabel,
+  onToggle,
+  formatValue = iphoneFormatValue,
+  describeMetric = iphoneDescribeMetric,
+}: PinnedViewCardsProps<V>) {
   if (cards.length === 0) return null;
 
   return (
@@ -58,10 +80,10 @@ export function PinnedViewCards({ cards, periodLabel, onToggle }: PinnedViewCard
                 data-card-value={view.id}
                 className="text-2xl font-semibold tabular-nums text-gray-900"
               >
-                {formatMetricValue(value, view.metric)}
+                {formatValue(value, view)}
               </p>
             </div>
-            <p className="mt-2 truncate text-xs text-gray-400">{metricLabel(view.metric)}</p>
+            <p className="mt-2 truncate text-xs text-gray-400">{describeMetric(view)}</p>
           </button>
         ))}
       </div>
