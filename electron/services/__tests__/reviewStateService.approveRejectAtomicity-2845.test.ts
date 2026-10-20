@@ -66,7 +66,36 @@
  * MUTATION APPLIED printed with the mutated line, tsc clean, a non-zero test
  * count asserted, file restored and compared byte-for-byte. Counts are failed /
  * total for this suite; full output in pm_comments on BACKLOG-2845.
-@@CONTROLS@@
+ *   V0.  code before the fix (627593e49)                         — 29 / 37 red
+ *        every baseline (writes outside any transaction), every
+ *        mid-path crash, batch @2-@6 both verbs, both handlers.
+ *   P1.  one transaction per ITEM, outer per-call one removed     —  6 / 37 red
+ *        batch @4-@6 both verbs only (card split: item 1 kept).
+ *        Expected: it is the shape the per-call ruling rejects.
+ *   P2.  per-item transaction NESTED in the per-call one, throw   —  0 / 37
+ *        propagates. EQUIVALENT MUTANT, not a control: the nested
+ *        one is a savepoint and the outer rollback covers it.
+ *   P2c. per-item savepoint PLUS catch-and-continue (the way to   — 29 / 37 red
+ *        get "one bad item should not roll back the others").
+ *        Every crash case and both handlers. Encodes D1.
+ *   W1.  approve: link written by the async linkEmailToTransaction — 9 / 37 red
+ *        BEFORE the transaction (the most likely wrong fix).
+ *        approve-pending baseline (per-write inTransaction check),
+ *        @2 @3, batch approve baseline and @2-@6.
+ *   W1r. reject: suppression row written BEFORE the transaction   — 16 / 37 red
+ *        every reject baseline and post-write-1 crash, the named
+ *        control, batch reject, handler reject.
+ *   W2b. `void linkEmailToTransaction(...)` inside the body with  — 11 / 37 red
+ *        `await import("uuid")` left in the link path (INSERT lands
+ *        after COMMIT).
+ *   W4.  try/catch per item inside the transaction, no savepoint  — 29 / 37 red
+ *        (returns success over half-writes).
+ *   W5.  broadcast moved inside the transaction                   —  8 / 37 red
+ *        all 6 baselines + both batch baselines.
+ *   W7.  reject: twin DELETE run AFTER the transaction            —  8 / 37 red
+ *        reject pending/twin baselines and @3, the named control,
+ *        batch reject baseline and @5 @6.
+ *   Fix (unmutated)                                               —  0 / 37
  */
 
 import type { Database as DatabaseType, Statement } from "better-sqlite3";
