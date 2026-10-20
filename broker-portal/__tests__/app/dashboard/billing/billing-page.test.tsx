@@ -1101,6 +1101,37 @@ describe('C-B1: a suspended brokerage (BACKLOG-3853)', () => {
     unmount();
   });
 
+  it('copy follows the button: with Pay shown the banner says "below"; without it, the email wording', async () => {
+    suspend('non_payment');
+    seedPay(1805122801);
+    given([brokerageMembership('broker')]);
+    const withBtn = await banner();
+    expect(withBtn).toContain('Pay the overdue invoice below; access returns once every overdue invoice is paid.');
+    expect(withBtn).not.toContain('suspension email');
+    suspend('non_payment');
+    seedPay(1794754799); // nothing overdue -> no button
+    given([brokerageMembership('broker')]);
+    const withoutBtn = await banner();
+    expect(withoutBtn).toContain('Pay from the link in the suspension email; access returns once every overdue invoice is paid.');
+    expect(withoutBtn).not.toContain('Pay the overdue invoice below');
+  });
+
+  it('Stripe hangs: the page renders without the button inside the time limit', async () => {
+    suspend('non_payment');
+    seedPay(1805122801);
+    mockStripe.invoicesList.mockReturnValue(new Promise(() => {})); // never settles
+    given([brokerageMembership('broker')]);
+    const started = Date.now();
+    const { container, unmount } = render(await BillingRoute({}));
+    const elapsed = Date.now() - started;
+    expect(container.querySelector('[data-billing-action="pay_overdue_invoice"]')).toBeNull();
+    expect(container.querySelector('[data-billing-action="contact_support"]')).not.toBeNull();
+    expect(container.textContent).toContain('Pay from the link in the suspension email');
+    unmount();
+    expect(elapsed).toBeGreaterThanOrEqual(2900);
+    expect(elapsed).toBeLessThan(4500);
+  }, 15000);
+
   it('an agent never sees it (the component refuses the role even when handed a URL)', () => {
     const { container, unmount } = render(<OrgSuspendedBanner reason="non_payment" role="agent" payUrl={OLDEST_PAY_URL} />);
     expect(container.querySelector('[data-billing-action="pay_overdue_invoice"]')).toBeNull();

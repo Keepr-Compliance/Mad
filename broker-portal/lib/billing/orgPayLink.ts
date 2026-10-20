@@ -12,7 +12,30 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { listOpenInvoices, overdueOf, stripeNow } from './overdue';
 import type { StripeMode } from './mode';
 
+/** The Stripe reads get this long in total; past it the button is simply not shown. */
+export const PAY_LINK_TIMEOUT_MS = 3000;
+
 export async function oldestOverdueInvoiceUrl(deps: {
+  service: SupabaseClient;
+  stripe: Stripe;
+  mode: StripeMode;
+  organizationId: string;
+}): Promise<string | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      console.error('[billing/page] overdue invoice link timed out');
+      resolve(null);
+    }, PAY_LINK_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([lookup(deps), timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function lookup(deps: {
   service: SupabaseClient;
   stripe: Stripe;
   mode: StripeMode;

@@ -19,13 +19,17 @@ export type OrgSuspensionReason = 'non_payment' | 'other' | null;
 const PAUSED = 'Submissions, approvals and invites are paused. Agents can still view their own past submissions.';
 
 /** The banner's text for this reason and role. Exported for the tests. */
-export function orgSuspendedBannerText(reason: OrgSuspensionReason, role: string): { lead: string; body: string } {
+export function orgSuspendedBannerText(
+  reason: OrgSuspensionReason,
+  role: string,
+  payButtonShown = false
+): { lead: string; body: string } {
   if (reason !== 'non_payment') {
     return { lead: 'Your brokerage account is suspended.', body: `${PAUSED} Contact Keepr to restore it.` };
   }
   const payer = ORG_PAYER_ROLES.includes(role);
   const close = payer
-    ? 'Pay from the link in the suspension email; access returns once every overdue invoice is paid.'
+    ? `${payButtonShown ? 'Pay the overdue invoice below' : 'Pay from the link in the suspension email'}; access returns once every overdue invoice is paid.`
     : 'A Broker or Admin can pay it; access returns once every overdue invoice is paid.';
   return { lead: 'Your brokerage is suspended for an unpaid invoice.', body: `${PAUSED} ${close}` };
 }
@@ -55,9 +59,9 @@ export function OrgSuspendedBanner({
   organizationName?: string | null;
   payUrl?: string | null;
 }) {
-  const { lead, body } = orgSuspendedBannerText(reason, role);
   // Non-payment only, and only for the roles that can pay.
   const showPay = reason === 'non_payment' && ORG_PAYER_ROLES.includes(role) && !!payUrl;
+  const { lead, body } = orgSuspendedBannerText(reason, role, showPay);
   return (
     <div
       role="alert"
