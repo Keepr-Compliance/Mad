@@ -17,6 +17,7 @@ import { Alert, Button, Card, Checkbox, FieldHelp, Input, Label, Select } from '
 import type { BillingSetupView } from '@/lib/billing/setupState';
 import { askAboutPrice, completeBillingSetup } from '@/lib/actions/billingSetup';
 import { TERMS_URL, formatCents, formatDateOnly } from '@/lib/billing/setupCopy';
+import { PHONE_ERROR, formatBillingPhoneInput, isValidBillingPhone } from '@/lib/billing/phone';
 
 export interface BillingStepProps {
   organizationId: string;
@@ -48,6 +49,10 @@ export function BillingStep({ organizationId, view }: BillingStepProps) {
   const [who, setWho] = useState<'me' | 'other'>('me');
   const [other, setOther] = useState({ name: '', email: '' });
   const [phone, setPhone] = useState(view.contact?.phone ?? '');
+  // One phone field serves both "Me" and "Someone else". The error shows after the user leaves the
+  // field and clears the moment the value is valid.
+  const [phoneTouched, setPhoneTouched] = useState(false);
+  const phoneValid = isValidBillingPhone(phone);
   const [agreed, setAgreed] = useState(false);
   // The order changed (version_conflict -> router.refresh()): consent given to the old order does
   // not carry over. The refusal message stays visible.
@@ -195,7 +200,21 @@ export function BillingStep({ organizationId, view }: BillingStepProps) {
           ) : null}
           <div>
             <Label htmlFor="bs-phone" required>Phone</Label>
-            <Input id="bs-phone" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} required />
+            <Input
+              id="bs-phone"
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(formatBillingPhoneInput(e.target.value))}
+              onBlur={() => setPhoneTouched(true)}
+              aria-invalid={phoneTouched && !phoneValid}
+              aria-describedby={phoneTouched && !phoneValid ? 'bs-phone-error' : undefined}
+              required
+            />
+            {phoneTouched && !phoneValid ? (
+              <p id="bs-phone-error" role="alert" className="mt-1 text-sm text-red-600">
+                {PHONE_ERROR}
+              </p>
+            ) : null}
           </div>
         </div>
       </Card>
@@ -217,7 +236,7 @@ export function BillingStep({ organizationId, view }: BillingStepProps) {
           </Alert>
         ) : null}
         <div className="mt-6">
-          <Button type="submit" disabled={busy || !agreed}>
+          <Button type="submit" disabled={busy || !agreed || !phoneValid}>
             {busy ? 'Confirming…' : 'Confirm and finish billing setup'}
           </Button>
         </div>
